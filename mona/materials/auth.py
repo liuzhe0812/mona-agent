@@ -7,11 +7,12 @@
 - services 进程启动时调用 ``get_services_token()``：优先取环境变量
   ``MONA_SERVICES_TOKEN``，否则读取/生成 app data 目录下的
   ``services.token`` 文件并立即持久化；
-- Rust 本地 HTTP 桥（``local_http_request``）为 ``/api/materials/*`` 请求
+- Rust 本地 HTTP 桥（``local_http_request``）为受保护 services 请求
   自动读取同一 ``services.token`` 文件并附带 ``X-Mona-Token`` 头，
   前端无需感知令牌。
 
-只校验 ``/api/materials/*`` 路由；email/schedule 等业务路由维持现状。
+校验 ``/api/materials/*`` 以及会触发外部数据抓取和上下文写入的
+``POST /api/stock/research/preflight``；其它 stock、email、schedule 路由维持现状。
 """
 
 from __future__ import annotations
@@ -31,6 +32,7 @@ _TOKEN_FILE_NAME = "services.token"
 
 # 受保护的路由前缀
 _PROTECTED_PREFIX = "/api/materials"
+_PROTECTED_EXACT_PATHS = {"/api/stock/research/preflight"}
 
 
 def _token_file_path() -> Path:
@@ -78,15 +80,19 @@ def is_valid_services_token(token: str | None) -> bool:
     return hmac.compare_digest(token, get_services_token())
 
 
+def _requires_services_token(path: str) -> bool:
+    return path.startswith(_PROTECTED_PREFIX) or path in _PROTECTED_EXACT_PATHS
+
+
 @web.middleware
 async def materials_auth_middleware(request: web.Request, handler) -> web.StreamResponse:
-    """校验 /api/materials/* 请求的 X-Mona-Token 头。
+    """校验受保护 services 请求的 X-Mona-Token 头。
 
     OPTIONS 预检请求不携带自定义头，直接放行由 CORS 中间件处理。
     """
     if request.method == "OPTIONS":
         return await handler(request)
-    if request.path.startswith(_PROTECTED_PREFIX):
+    if _requires_services_token(request.path):
         if not is_valid_services_token(request.headers.get(SERVICES_TOKEN_HEADER)):
             raise web.HTTPUnauthorized(reason="invalid services token")
     return await handler(request)

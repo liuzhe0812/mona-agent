@@ -86,6 +86,7 @@ fn default_sidebar_modules() -> Vec<SidebarModuleConfig> {
         SidebarModuleConfig { key: "db".to_string(), visible: true, order: 6 },
         SidebarModuleConfig { key: "system".to_string(), visible: true, order: 7 },
         SidebarModuleConfig { key: "profile".to_string(), visible: true, order: 8 },
+        SidebarModuleConfig { key: "stock".to_string(), visible: true, order: 9 },
     ]
 }
 

@@ -366,6 +366,29 @@ class ScheduleService:
         self._pending_notifications = []
         return pending
 
+    def push_notification(
+        self,
+        title: str,
+        body: str,
+        *,
+        click_action: str | None = None,
+        click_data: dict[str, Any] | None = None,
+    ) -> None:
+        """Enqueue an externally-triggered system notification.
+
+        Used by the gateway process (stock-module review cron, T20) via
+        ``POST /api/schedule/notifications/push`` so cross-process
+        notifications ride the same Tauri polling channel as schedule
+        reminders. ``click_action``/``click_data`` let the notification
+        window route the click (e.g. ``open-stock`` with ``{"runId": …}``).
+        """
+        entry: dict[str, Any] = {"title": title, "body": body}
+        if click_action:
+            entry["click_action"] = click_action
+        if click_data is not None:
+            entry["click_data"] = click_data
+        self._pending_notifications.append(entry)
+
 
 def create_schedule_item_id() -> str:
     return f"schedule-{uuid.uuid4()}"

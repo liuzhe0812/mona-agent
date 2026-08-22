@@ -1319,7 +1319,10 @@ class OpenAICompatProvider(LLMProvider):
                         reasoning_effort, tool_choice,
                     )
                     body["stream"] = True
-                    stream = await self._client.responses.create(**body)
+                    stream = await asyncio.wait_for(
+                        self._client.responses.create(**body),
+                        timeout=idle_timeout_s,
+                    )
 
                     async def _timed_stream():
                         stream_iter = stream.__aiter__()
@@ -1373,7 +1376,10 @@ class OpenAICompatProvider(LLMProvider):
                 kwargs.setdefault("extra_body", {})["tool_stream"] = True
             kwargs["stream"] = True
             kwargs["stream_options"] = {"include_usage": True}
-            stream = await self._client.chat.completions.create(**kwargs)
+            stream = await asyncio.wait_for(
+                self._client.chat.completions.create(**kwargs),
+                timeout=idle_timeout_s,
+            )
             chunks: list[Any] = []
             stream_iter = stream.__aiter__()
             while True:

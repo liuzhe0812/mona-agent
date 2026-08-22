@@ -227,9 +227,9 @@ async fn validate_step(
     }
     let session_id = detail.task.session_id.clone();
     let client = match state.manager.get_handle(&session_id).await {
-        Some(SessionHandle::Ssh(c)) => c,
+        Some(SessionHandle::Ssh(c)) | Some(SessionHandle::Desktop(c)) => c,
         Some(_) => {
-            return Err("只有 SSH 会话支持结构化维护执行（Local Shell 暂未实现）".to_string())
+            return Err("只有 SSH 和桌面会话支持结构化维护执行（Local Shell 暂未实现）".to_string())
         }
         None => return Err(format!("终端会话 {} 已断开", session_id)),
     };
@@ -393,7 +393,14 @@ async fn execute_step_inner(
     let started = Instant::now();
     let exec = match v
         .client
-        .exec_command_structured(command, timeout, token)
+        .exec_command_structured(command, timeout, token, |chunk| {
+            echo_to_terminal(
+                app_handle,
+                &v.client,
+                &v.session_id,
+                &chunk.replace('\n', "\r\n"),
+            );
+        })
         .await
     {
         Ok(r) => r,
@@ -418,13 +425,6 @@ async fn execute_step_inner(
         .write()
         .await
         .remove(task_id);
-
-    if !exec.stdout.is_empty() {
-        echo_to_terminal(app_handle, &v.client, &v.session_id, &exec.stdout.replace('\n', "\r\n"));
-    }
-    if !exec.stderr.is_empty() {
-        echo_to_terminal(app_handle, &v.client, &v.session_id, &exec.stderr.replace('\n', "\r\n"));
-    }
 
     // Only a real exit status of 0 counts as success — timeout, cancel,
     // missing exit code and non-zero exits all fail the step.

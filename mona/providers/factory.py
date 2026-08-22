@@ -105,7 +105,10 @@ def _make_provider_core(
             extra_headers=p.extra_headers if p else None,
             spec=spec,
             extra_body=p.extra_body if p else None,
-            no_auth=not spec.api_key_required if spec else False,
+            # Optional-key endpoints (including custom Cindy endpoints) still
+            # need their Authorization header when the user supplied a key;
+            # only keyless free providers should strip auth.
+            no_auth=(not spec.api_key_required and not api_key) if spec else False,
         )
 
     provider.generation = resolved.to_generation_settings()

@@ -299,15 +299,29 @@ fn open_services_log(port: u16) -> Option<std::fs::File> {
 /// 探测目标端口，返回 (port, external)。
 ///
 /// - 端口可绑定：`(port, false)`，调用方需 spawn 新 services。
-/// - 端口被占但跑着一个健康 services（GET /health 返回 200）：`(port, true)`，调用方复用。
+/// - 端口被兼容的 services 占用：`(port, true)`，调用方复用。
+/// - 端口被旧 services 占用：先优雅关闭，再启动当前版本。
 /// - 端口被占且不是 services：报错。
 fn probe_services_port(start_port: u16) -> Result<(u16, bool), String> {
     if is_port_available(start_port) {
         return Ok((start_port, false));
     }
-    // 端口被占：判断占用者是不是一个可用的 Mona services。
-    if http_health_ok(start_port) {
+    if http_services_compatible(start_port) {
         return Ok((start_port, true));
+    }
+    if http_health_ok(start_port) {
+        log::warn!("Outdated Mona services on port {}, restarting it", start_port);
+        http_post_shutdown(start_port);
+        for _ in 0..20 {
+            std::thread::sleep(std::time::Duration::from_millis(100));
+            if is_port_available(start_port) {
+                return Ok((start_port, false));
+            }
+        }
+        return Err(format!(
+            "Outdated Mona services on port {} did not stop. Close it and retry.",
+            start_port
+        ));
     }
     Err(format!(
         "Services port {} is already in use by a non-services process. \
@@ -327,6 +341,19 @@ fn http_health_ok(port: u16) -> bool {
         // 响应体应包含 {"status":"ok"}；只做宽松包含判断以兼容空白差异。
         body.contains("\"ok\"") || body.contains("ok")
     })
+}
+
+fn http_services_compatible(port: u16) -> bool {
+    http_request(port, "GET", "/health")
+        .map_or(false, |response| services_health_response_compatible(&response))
+}
+
+fn services_health_response_compatible(response: &str) -> bool {
+    response
+        .lines()
+        .next()
+        .map_or(false, |line| line.contains(" 200 "))
+        && response.contains("\"stock-v1\"")
 }
 
 /// 同步 POST /shutdown，通知外部 services 优雅退出。
@@ -374,7 +401,22 @@ fn proc_is_alive(proc: &ServicesProcess) -> bool {
     if !proc.external {
         return false;
     }
-    http_health_ok(proc.port)
+    http_services_compatible(proc.port)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::services_health_response_compatible;
+
+    #[test]
+    fn services_health_requires_current_capability() {
+        assert!(services_health_response_compatible(
+            "HTTP/1.1 200 OK\r\n\r\n{\"status\":\"ok\",\"capabilities\":[\"stock-v1\"]}"
+        ));
+        assert!(!services_health_response_compatible(
+            "HTTP/1.1 200 OK\r\n\r\n{\"status\":\"ok\"}"
+        ));
+    }
 }
 
 /// Strip environment variables that can interfere with the packaged services.

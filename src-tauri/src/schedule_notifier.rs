@@ -22,6 +22,12 @@ struct NotificationsResponse {
 struct NotificationEntry {
     title: String,
     body: String,
+    /// Optional click routing pushed by cross-process producers (stock-module
+    /// review cron). Absent means the legacy schedule behavior.
+    #[serde(default)]
+    click_action: Option<String>,
+    #[serde(default)]
+    click_data: Option<serde_json::Value>,
 }
 
 /// Start a background polling task that fires notification windows for
@@ -43,8 +49,11 @@ pub fn start_polling(app: tauri::AppHandle, port: u16) {
                                 icon: "schedule".to_string(),
                                 actions: vec![],
                                 auto_close_ms: 8000,
-                                click_action: Some("open-schedule".to_string()),
-                                click_data: None,
+                                click_action: Some(
+                                    n.click_action
+                                        .unwrap_or_else(|| "open-schedule".to_string()),
+                                ),
+                                click_data: n.click_data,
                             };
                             if let Err(e) =
                                 notification_window::show_notification_inner(&app, payload)

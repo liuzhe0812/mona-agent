@@ -13,9 +13,12 @@ Every entry writes out all fields so you can copy-paste as a template.
 from __future__ import annotations
 
 from dataclasses import dataclass
+import re
 from typing import Any
 
 from pydantic.alias_generators import to_snake
+
+from mona.providers.cindy_catalog import CINDY_CHAT_PROVIDERS
 
 
 @dataclass(frozen=True)
@@ -45,6 +48,7 @@ class ProviderSpec:
 
     # gateway / local detection
     is_gateway: bool = False  # routes any model (OpenRouter, AiHubMix)
+    chat_only: bool = False  # Cindy catalog entries are not media providers
     is_local: bool = False  # local deployment (vLLM, Ollama)
     detect_by_key_prefix: str = ""  # match api_key prefix, e.g. "sk-or-"
     detect_by_base_keyword: str = ""  # match substring in api_base URL
@@ -620,16 +624,63 @@ PROVIDERS: tuple[ProviderSpec, ...] = (
     ),
 )
 
+# Cindy chat presets are OpenAI-compatible runtime providers.  Keep them in
+# the same registry so default-provider selection and the factory can resolve
+# them, while their hyphenated IDs are persisted in ``providers.cindy``.
+PROVIDERS = PROVIDERS + tuple(
+    ProviderSpec(
+        name=provider.id,
+        keywords=(provider.id, provider.name.lower()),
+        env_key="OPENAI_API_KEY",
+        display_name=provider.name,
+        backend="openai_compat",
+        is_gateway=True,
+        chat_only=True,
+        api_key_required=provider.api_key_required,
+        default_api_base=provider.api_base,
+    )
+    for provider in CINDY_CHAT_PROVIDERS
+)
+
 
 # ---------------------------------------------------------------------------
 # Lookup helpers
 # ---------------------------------------------------------------------------
 
 
+_CUSTOM_PROVIDER_NAME_RE = re.compile(r"^custom-[a-z0-9]+(?:-[a-z0-9]+)*$")
+
+
+def is_custom_provider_name(name: str) -> bool:
+    """Return whether *name* is a Mona-managed custom chat provider ID."""
+    return bool(_CUSTOM_PROVIDER_NAME_RE.fullmatch(name.strip()))
+
+
+def custom_provider_spec(
+    name: str,
+    *,
+    keywords: tuple[str, ...] | None = None,
+) -> ProviderSpec | None:
+    """Build the runtime spec for a persisted custom OpenAI-compatible endpoint."""
+    if not is_custom_provider_name(name):
+        return None
+    return ProviderSpec(
+        name=name,
+        keywords=keywords or (name,),
+        env_key="",
+        display_name=name,
+        backend="openai_compat",
+        chat_only=True,
+        api_key_required=False,
+        is_direct=True,
+    )
+
+
 def find_by_name(name: str) -> ProviderSpec | None:
     """Find a provider spec by config field name, e.g. "dashscope"."""
-    normalized = to_snake(name.replace("-", "_"))
+    raw = name.strip()
+    normalized = to_snake(raw.replace("-", "_"))
     for spec in PROVIDERS:
-        if spec.name == normalized:
+        if spec.name == raw or spec.name == normalized:
             return spec
-    return None
+    return custom_provider_spec(raw)

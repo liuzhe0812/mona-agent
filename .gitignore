@@ -23,10 +23,11 @@ FLOWCHART_OPTIMIZATION_SOLUTION.md
 TERMINAL_AI_MAINTENANCE_DEVELOPMENT_PLAN.md
 
 # 清理：屏蔽非核心目录（配置、文档、测试、素材、硬件相关）
+# tests/ 锚定根目录：仅忽略 Python tests/，不误伤 webui/src/tests/ 前端测试
 mona-auth/
 scripts/
 design-assets/
-tests/
+/tests/
 hardware/
 
 # docs/ 默认忽略；为多 Agent 交付文档保留版本管理例外
@@ -38,8 +39,16 @@ docs/design/*
 docs/plans/*
 !docs/design/multi-agent-functional-design.md
 !docs/design/multi-agent-development-guide.md
+!docs/design/2026-08-20-mona-brand-ui-redesign-proposal.md
+!docs/design/session-list-ui-redesign.md
+!docs/design/2026-08-22-mona-app-brand-ui-update-plan.md
+!docs/design/stock-deep-research-v2-functional-design.md
+!docs/design/stock-deep-research-v2-source-matrix.md
 !docs/plans/multi-agent-completion-plan.md
 !docs/plans/im-ui-interaction-dev-plan.md
+!docs/plans/agent-conversation-management-dev-plan.md
+!docs/plans/stock-deep-research-v2-dev-plan.md
+!docs/plans/academic-research-agent-functional-design.md
 
 # 多 Agent 开发临时产物（baseline 对比目录、patch/scratch 中转，禁止入库）
 .baseline_check/

@@ -18,7 +18,7 @@ from loguru import logger
 
 from mona.config.paths import get_webui_dir
 
-WEBUI_SIDEBAR_STATE_SCHEMA_VERSION = 2
+WEBUI_SIDEBAR_STATE_SCHEMA_VERSION = 5
 _MAX_STATE_FILE_BYTES = 256 * 1024
 _MAX_LIST_ITEMS = 2_000
 _MAX_MAP_ITEMS = 2_000
@@ -151,12 +151,12 @@ def normalize_webui_sidebar_state(
     *,
     session_preview_at: Mapping[str, str] | None = None,
 ) -> dict[str, Any]:
-    """Return a schema-v2 sidebar state from any older/partial input.
+    """Return a schema-v5 sidebar state from any older/partial input.
 
-    v1 → v2 migration (IM plan 12.4): pinned/archived/renamed data carries
-    over untouched; ``last_read_at_by_key`` is seeded from each existing
-    session's current ``preview_at`` so upgrading does not flip every
-    historical session to unread.
+    v1 → v2 migration (IM plan 12.4) introduced ``last_read_at_by_key`` seeded
+    from each existing session's current ``preview_at``. Schema v5 repairs
+    markers lost when large states were sent in an oversized request URL;
+    existing markers always win and only missing keys are seeded.
     """
     if not isinstance(raw, dict):
         raw = {}
@@ -169,18 +169,14 @@ def normalize_webui_sidebar_state(
     state["view"] = _clean_view(raw.get("view"))
     updated_at = raw.get("updated_at")
     state["updated_at"] = updated_at if isinstance(updated_at, str) else None
-    if "last_read_at_by_key" in raw:
-        # Present markers always win, even when the writer omitted the schema
-        # version — otherwise a stale client write would wipe read state.
-        state["last_read_at_by_key"] = _clean_last_read_at_by_key(
-            raw.get("last_read_at_by_key")
-        )
-    elif raw.get("schema_version") == WEBUI_SIDEBAR_STATE_SCHEMA_VERSION:
-        state["last_read_at_by_key"] = {}
-    else:
-        # Fresh installs pass no seed data and simply start with no markers;
-        # new sessions are initialized as read by the client on creation.
-        state["last_read_at_by_key"] = _clean_last_read_at_by_key(session_preview_at)
+    markers = _clean_last_read_at_by_key(raw.get("last_read_at_by_key"))
+    if raw.get("schema_version") != WEBUI_SIDEBAR_STATE_SCHEMA_VERSION:
+        # Upgrade boundary: preserve genuine read markers and seed only
+        # missing historical sessions. This runs once for v4 installs whose
+        # large marker map never reached disk because the request URL overflowed.
+        for key, timestamp in _clean_last_read_at_by_key(session_preview_at).items():
+            markers.setdefault(key, timestamp)
+    state["last_read_at_by_key"] = markers
     return state
 
 

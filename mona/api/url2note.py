@@ -14,6 +14,8 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import urlparse
 
+import httpx
+
 from mona.api.video_runtime import VideoRuntime
 from mona.providers.transcription import GroqTranscriptionProvider, OpenAITranscriptionProvider
 from mona.security.network import validate_url_target
@@ -26,6 +28,7 @@ _FRAME_TIMEOUT = 60
 _TIMESTAMP_PATTERN = re.compile(
     r"^(?:(?:[0-9]{1,2}:)?[0-5]?[0-9]:)?[0-5]?[0-9](?:\.\d+)?$"
 )
+_TOUTIAO_ARTICLE_PATTERN = re.compile(r"^/article/(\d+)(?:/|$)")
 
 
 class Url2NoteError(RuntimeError):
@@ -99,6 +102,12 @@ class Url2NoteExtractor:
         return await self._extract_article(url)
 
     async def _extract_article(self, url: str) -> Url2NoteSource:
+        article_id = _toutiao_article_id(url)
+        if article_id:
+            source = await self._extract_toutiao_article(url, article_id)
+            if source:
+                return source
+
         raw = await self._web_fetcher.execute(url, extract_mode="markdown")
         if not isinstance(raw, str):
             raise Url2NoteError("Unable to extract readable page content")
@@ -109,7 +118,7 @@ class Url2NoteExtractor:
         if payload.get("error"):
             raise Url2NoteError(str(payload["error"]))
         text = str(payload.get("text") or "").strip()
-        if not text:
+        if not text or not _has_article_content(text):
             raise Url2NoteError("The page has no readable text")
         return Url2NoteSource(
             _title_from_text(text, url),
@@ -117,6 +126,32 @@ class Url2NoteExtractor:
             "article",
             text,
         )
+
+    async def _extract_toutiao_article(
+        self, url: str, article_id: str
+    ) -> Url2NoteSource | None:
+        # ponytail: 桌面页是 JS 验证壳，直接读取同站移动端正文数据。
+        try:
+            async with httpx.AsyncClient(
+                proxy=getattr(self._web_fetcher, "proxy", None), timeout=20.0
+            ) as client:
+                response = await client.get(
+                    f"https://m.toutiao.com/i{article_id}/info/",
+                    headers={
+                        "User-Agent": getattr(
+                            self._web_fetcher, "user_agent", "Mozilla/5.0"
+                        )
+                    },
+                )
+                response.raise_for_status()
+            data = response.json().get("data") or {}
+            title = str(data.get("title") or "").strip()
+            content = _html_to_text(str(data.get("content") or ""))
+            if title and content:
+                return Url2NoteSource(title, url, "article", f"# {title}\n\n{content}")
+        except Exception:
+            return None
+        return None
 
     async def _extract_video(self, url: str) -> Url2NoteSource:
         ytdlp = await self._ensure_component("yt_dlp")
@@ -330,8 +365,40 @@ def _title_from_url(url: str) -> str:
     return urlparse(url).hostname or "网页笔记"
 
 
+def _toutiao_article_id(url: str) -> str | None:
+    parsed = urlparse(url)
+    if (parsed.hostname or "").lower() not in {
+        "toutiao.com",
+        "www.toutiao.com",
+        "m.toutiao.com",
+    }:
+        return None
+    match = _TOUTIAO_ARTICLE_PATTERN.match(parsed.path)
+    return match.group(1) if match else None
+
+
+def _html_to_text(content: str) -> str:
+    content = re.sub(r"<br\s*/?>|</(?:p|div|h[1-6]|li)\s*>", "\n", content, flags=re.I)
+    content = re.sub(r"<[^>]+>", "", content)
+    content = html.unescape(content).replace("\xa0", " ")
+    content = re.sub(r"[ \t]+\n", "\n", content)
+    return re.sub(r"\n{3,}", "\n\n", content).strip()
+
+
+def _has_article_content(text: str) -> bool:
+    meaningful = "\n".join(
+        line
+        for line in text.splitlines()
+        if not line.startswith("[External content")
+        and line.strip().casefold() != "# [no-title]"
+    )
+    return bool(meaningful.strip())
+
+
 def _title_from_text(text: str, url: str) -> str:
     for line in text.splitlines():
-        if line.startswith("# ") and line[2:].strip():
-            return line[2:].strip()
+        if line.startswith("# "):
+            title = line[2:].strip()
+            if title and title.casefold() != "[no-title]":
+                return title
     return _title_from_url(url)

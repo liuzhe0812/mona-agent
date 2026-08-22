@@ -103,3 +103,29 @@ class ScheduleServiceClient:
             "POST", f"/api/schedule/items/{item_id}/remove"
         )
         return status == 200
+
+    async def push_notification(
+        self,
+        title: str,
+        body: str,
+        *,
+        click_action: str | None = None,
+        click_data: dict[str, Any] | None = None,
+    ) -> None:
+        """Enqueue a system notification on the services process.
+
+        The Tauri side pops it via ``GET /api/schedule/notifications`` and
+        fires a native notification window (stock-module T20).
+        """
+        payload: dict[str, Any] = {"title": title, "body": body}
+        if click_action:
+            payload["click_action"] = click_action
+        if click_data is not None:
+            payload["click_data"] = click_data
+        status, resp = await self._request(
+            "POST", "/api/schedule/notifications/push", json_body=payload
+        )
+        if status >= 400:
+            raise ScheduleServiceUnavailableError(
+                f"推送通知失败: {(resp or {}).get('error') or status}"
+            )

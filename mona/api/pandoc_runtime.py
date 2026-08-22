@@ -10,6 +10,7 @@ Windows is the primary target; other platforms rely on a system install.
 
 from __future__ import annotations
 
+import hashlib
 import shutil
 import sys
 import zipfile
@@ -25,13 +26,14 @@ if TYPE_CHECKING:
 
 __all__ = ("PANDOC_DOWNLOAD_MB", "PandocRuntime")
 
-PANDOC_VERSION = "3.6.4"
+PANDOC_VERSION = "3.10.1"
 PANDOC_ZIP_URL = (
-    "https://github.com/jgm/pandoc/releases/download/"
-    f"{PANDOC_VERSION}/pandoc-{PANDOC_VERSION}-windows-x86_64.zip"
+    "https://dl.mona.lzfun.vip/pandoc/"
+    f"v{PANDOC_VERSION}/pandoc-{PANDOC_VERSION}-windows-x86_64.zip"
 )
+PANDOC_ZIP_SHA256 = "4725a1883e2171c2e181e6fd45003acb59ca4e9cbe031fdd3b79ef0d697d36aa"
 # Approximate zip size, surfaced in the first-download confirmation dialog.
-PANDOC_DOWNLOAD_MB = 36
+PANDOC_DOWNLOAD_MB = 40
 
 
 class PandocRuntime:
@@ -41,7 +43,7 @@ class PandocRuntime:
         self.root = runtime_root or RESOURCE_ROOT
 
     def _cached_pandoc_exe(self) -> Path | None:
-        pandoc_dir = self.root / "pandoc"
+        pandoc_dir = self.root / "pandoc" / f"pandoc-{PANDOC_VERSION}"
         if not pandoc_dir.exists():
             return None
         for name in ("pandoc.exe", "pandoc"):
@@ -88,7 +90,7 @@ class PandocRuntime:
         if sys.platform != "win32":
             return {
                 "ok": False,
-                "error": "当前平台暂不支持自动下载 Pandoc，请手动安装后重试",
+                "error": "当前平台暂不支持自动下载文档解析组件，请手动安装后重试",
             }
         dest = self.root / "pandoc"
         dest.mkdir(parents=True, exist_ok=True)
@@ -96,12 +98,22 @@ class PandocRuntime:
         try:
             # 复用 VideoRuntime 的下载实现（SSRF 校验 + 分块写入 + 进度回调）
             await VideoRuntime(self.root)._download(PANDOC_ZIP_URL, zip_path, progress_cb)
+            if _sha256(zip_path) != PANDOC_ZIP_SHA256:
+                return {"ok": False, "error": "文档解析组件校验失败，请重试"}
             with zipfile.ZipFile(zip_path) as zf:
                 zf.extractall(dest)
         finally:
             zip_path.unlink(missing_ok=True)
         exe = self._cached_pandoc_exe()
         if not exe:
-            return {"ok": False, "error": "pandoc executable not found after extraction"}
+            return {"ok": False, "error": "文档解析组件安装失败，请重试"}
         logger.info("Pandoc provisioned at {}", exe)
         return {"ok": True, "path": str(exe)}
+
+
+def _sha256(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as file:
+        for chunk in iter(lambda: file.read(1 << 20), b""):
+            digest.update(chunk)
+    return digest.hexdigest()

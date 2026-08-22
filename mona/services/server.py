@@ -62,7 +62,6 @@ from mona.api.server import (
     handle_email_set_flag,
     handle_email_sync,
     handle_email_test_connection,
-    handle_health,
     handle_hoard_add,
     handle_hoard_delete_by_url,
     handle_materials_create_directory,
@@ -102,11 +101,23 @@ from mona.api.server import (
     handle_schedule_create,
     handle_schedule_get,
     handle_schedule_list,
+    handle_schedule_notification_push,
     handle_schedule_notifications,
     handle_schedule_remove,
     handle_schedule_toggle,
     handle_schedule_update,
     handle_shutdown,
+    handle_stock_kline,
+    handle_stock_quote,
+    handle_stock_research_context,
+    handle_stock_research_preflight,
+    handle_stock_search,
+    handle_stock_watchlist_add,
+    handle_stock_watchlist_focus,
+    handle_stock_watchlist_import,
+    handle_stock_watchlist_list,
+    handle_stock_watchlist_remove,
+    handle_stock_watchlist_reorder,
     handle_todo_briefing,
     handle_todo_create,
     handle_todo_from_email,
@@ -146,6 +157,33 @@ from mona.materials.compile import (
     handle_materials_wiki_compile_start,
     handle_materials_wiki_compile_status,
 )
+from mona.services.stock.api import (
+    cleanup_stock_intraday,
+    handle_stock_intraday,
+    handle_stock_intraday_stream,
+    handle_stock_material_bind,
+    handle_stock_material_confirm,
+    handle_stock_material_preview,
+    handle_stock_materials,
+    handle_stock_outcomes,
+    handle_stock_outcomes_refresh,
+    handle_stock_screen_compare,
+    handle_stock_screen_history,
+    handle_stock_screen_opportunity_source,
+    handle_stock_screen_outcomes,
+    handle_stock_screen_outcomes_refresh,
+    handle_stock_screen_results,
+    handle_stock_screen_strategies,
+    handle_stock_screen_strategy_delete,
+    handle_stock_screen_templates,
+)
+
+
+async def handle_services_health(request: web.Request) -> web.Response:
+    """Identify a compatible services process, not merely a live HTTP server."""
+    return web.json_response(
+        {"status": "ok", "service": "mona-services", "capabilities": ["stock-v1"]}
+    )
 
 
 def create_services_app(
@@ -176,8 +214,9 @@ def create_services_app(
     app["shutdown_event"] = asyncio.Event()
     app["schedule_service"] = schedule_service
     app["todo_service"] = todo_service
+    app["workspace"] = workspace
 
-    app.router.add_get("/health", handle_health)
+    app.router.add_get("/health", handle_services_health)
     app.router.add_post("/shutdown", handle_shutdown)
 
     # Email routes (IMAP pool + IDLE live in this process only)
@@ -231,6 +270,9 @@ def create_services_app(
     app.router.add_post("/api/schedule/items/{id}/remove", handle_schedule_remove)
     app.router.add_post("/api/schedule/items/{id}/toggle", handle_schedule_toggle)
     app.router.add_get("/api/schedule/notifications", handle_schedule_notifications)
+    app.router.add_post(
+        "/api/schedule/notifications/push", handle_schedule_notification_push
+    )
 
     # Todo routes (unified planning center)
     app.router.add_get("/api/schedule/todos", handle_todo_list)
@@ -271,6 +313,43 @@ def create_services_app(
     # Hoard routes (Agent URL memory: browser star sync)
     app.router.add_post("/api/hoard", handle_hoard_add)
     app.router.add_delete("/api/hoard-by-url", handle_hoard_delete_by_url)
+
+    # Stock module data API (design §10.1/P5): market data plus explicit,
+    # local outcome tracking reads/refreshes under the configured workspace.
+    app.router.add_get("/api/stock/watchlist", handle_stock_watchlist_list)
+    app.router.add_post("/api/stock/watchlist", handle_stock_watchlist_add)
+    app.router.add_delete("/api/stock/watchlist", handle_stock_watchlist_remove)
+    app.router.add_post("/api/stock/watchlist/import", handle_stock_watchlist_import)
+    app.router.add_post("/api/stock/watchlist/focus", handle_stock_watchlist_focus)
+    app.router.add_post("/api/stock/watchlist/order", handle_stock_watchlist_reorder)
+    app.router.add_get("/api/stock/search", handle_stock_search)
+    app.router.add_get("/api/stock/quote", handle_stock_quote)
+    app.router.add_get("/api/stock/kline", handle_stock_kline)
+    app.router.add_get("/api/stock/intraday", handle_stock_intraday)
+    app.router.add_get("/api/stock/intraday/stream", handle_stock_intraday_stream)
+    app.router.add_get("/api/stock/materials", handle_stock_materials)
+    app.router.add_get("/api/stock/materials/preview", handle_stock_material_preview)
+    app.router.add_post("/api/stock/materials/bind", handle_stock_material_bind)
+    app.router.add_post("/api/stock/materials/confirm", handle_stock_material_confirm)
+    app.router.add_get("/api/stock/outcomes", handle_stock_outcomes)
+    app.router.add_post("/api/stock/outcomes/refresh", handle_stock_outcomes_refresh)
+    app.router.add_get("/api/stock/screen/outcomes", handle_stock_screen_outcomes)
+    app.router.add_post(
+        "/api/stock/screen/outcomes/refresh", handle_stock_screen_outcomes_refresh
+    )
+    app.router.add_get("/api/stock/research-context", handle_stock_research_context)
+    app.router.add_post("/api/stock/research/preflight", handle_stock_research_preflight)
+    app.router.add_get("/api/stock/screen/templates", handle_stock_screen_templates)
+    app.router.add_get("/api/stock/screen/strategies", handle_stock_screen_strategies)
+    app.router.add_post("/api/stock/screen/strategies", handle_stock_screen_strategies)
+    app.router.add_delete("/api/stock/screen/strategies", handle_stock_screen_strategy_delete)
+    app.router.add_get("/api/stock/screen/results", handle_stock_screen_results)
+    app.router.add_get(
+        "/api/stock/screen/opportunity/source",
+        handle_stock_screen_opportunity_source,
+    )
+    app.router.add_get("/api/stock/screen/history", handle_stock_screen_history)
+    app.router.add_post("/api/stock/screen/compare", handle_stock_screen_compare)
 
     # Profile (user distillation) routes
     app.router.add_get("/api/profile", handle_profile_get)
@@ -365,6 +444,7 @@ def create_services_app(
     async def _on_cleanup(_app: web.Application) -> None:
         _idle_manager.stop_all()
         await asyncio.to_thread(imap_pool_manager.close_all)
+        await cleanup_stock_intraday()
 
     app.on_cleanup.append(_on_cleanup)
 

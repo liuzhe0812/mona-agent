@@ -386,9 +386,11 @@ async fn local_http_request(
         .build()
         .map_err(|e| format!("Failed to create local HTTP client: {}", e))?;
 
-    // 受保护的 services 路由（/api/materials/*）自动附带本地令牌，
+    // 受保护的 services 路由自动附带本地令牌：资料库前缀，以及会
+    // 触发外部抓取和写入预检上下文的精确股票预检路径。
     // 与 mona/materials/auth.py 的 X-Mona-Token 校验对应。
-    let needs_token = parsed.path().starts_with("/api/materials")
+    let needs_token = (parsed.path().starts_with("/api/materials")
+        || parsed.path() == "/api/stock/research/preflight")
         && !headers.iter().any(|(n, _)| n.eq_ignore_ascii_case("x-mona-token"));
 
     let mut request = client.request(method, parsed);
@@ -581,6 +583,9 @@ pub fn run() {
     browser::configure_webview2_cdp();
 
     let gateway_state = GatewayState::new();
+    let services_state = ServicesState::new();
+    let gateway_state_for_exit = gateway_state.clone();
+    let services_state_for_exit = services_state.clone();
     let terminal_state = terminal::TerminalState::new();
     let db_state = db::DbState::new();
     let email_state = email::EmailState::new();
@@ -629,7 +634,7 @@ pub fn run() {
                 .build())
         .plugin(tauri_plugin_notification::init())
         .manage(gateway_state.clone())
-        .manage(ServicesState::new())
+        .manage(services_state.clone())
         .manage(terminal_state)
         .manage(db_state)
         .manage(email_state)
@@ -801,6 +806,7 @@ pub fn run() {
             db::commands::db_load_connections,
             email::email_list_accounts,
             email::email_add_account,
+            email::email_reorder_accounts,
             email::email_update_account_settings,
             email::email_delete_account,
             email::email_get_messages,
@@ -1210,6 +1216,7 @@ pub fn run() {
 
             let window = app.get_webview_window("main").unwrap();
             let gateway_state_for_close = gateway_state.clone();
+            let services_state_for_close = services_state.clone();
             window.clone().on_window_event(move |event| {
                 if let tauri::WindowEvent::CloseRequested { api, .. } = event {
                     let current_settings = settings::load_settings();
@@ -1220,6 +1227,7 @@ pub fn run() {
                     } else {
                         log::debug!("[window] CloseRequested: closing app (run_in_background=false)");
                         let _ = gateway_state_for_close.stop();
+                        let _ = services_state_for_close.stop();
                     }
                 }
             });
@@ -1237,5 +1245,7 @@ pub fn run() {
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
 
+    let _ = gateway_state_for_exit.stop();
+    let _ = services_state_for_exit.stop();
     ipc_bridge::remove_port_file();
 }

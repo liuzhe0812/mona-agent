@@ -1212,10 +1212,9 @@ pub async fn terminal_get_output(
         .ok_or_else(|| TerminalError::SessionNotFound(session_id.clone()).to_string())?;
 
     match handle {
-        SessionHandle::Ssh(client) => Ok(client.get_buffer()),
+        SessionHandle::Ssh(client) | SessionHandle::Desktop(client) => Ok(client.get_buffer()),
         SessionHandle::Local(shell) => Ok(shell.get_buffer()),
         SessionHandle::Sftp(_) => Err("SFTP session has no terminal output".into()),
-        SessionHandle::Desktop(_) => Err("Desktop session has no terminal output".into()),
         SessionHandle::Vnc => Err("VNC session has no terminal output".into()),
     }
 }

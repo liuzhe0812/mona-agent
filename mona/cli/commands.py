@@ -7,6 +7,7 @@ import signal
 import sys
 from collections.abc import Callable
 from contextlib import nullcontext, suppress
+from datetime import datetime
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
@@ -81,7 +82,7 @@ class SafeFileHistory(FileHistory):
         super().store_string(_sanitize_surrogates(string))
 from mona.cli.stream import StreamRenderer, ThinkingSpinner
 from mona.config.migrate_workspace_output import run_startup_migrations
-from mona.config.paths import get_workspace_path, is_default_workspace
+from mona.config.paths import get_stock_projects_dir, get_workspace_path, is_default_workspace
 from mona.config.schema import Config
 from mona.utils.restart import (
     consume_restart_notice_from_env,
@@ -481,7 +482,7 @@ def onboard(
 
     # Run consolidated startup migrations: global resources → global templates
     # → shared output dir → loose artifact migration.
-    run_startup_migrations()
+    run_startup_migrations(workspace_path)
 
     agent_cmd = 'mona agent -m "Hello!"'
     gateway_cmd = "mona gateway"
@@ -645,7 +646,7 @@ def serve(
     timeout = timeout if timeout is not None else api_cfg.timeout
     # Run consolidated startup migrations: global resources → global templates
     # → shared output dir → loose artifact migration.
-    run_startup_migrations()
+    run_startup_migrations(runtime_config.workspace_path)
     bus = MessageBus()
     session_manager = SessionManager(runtime_config.workspace_path)
     try:
@@ -766,6 +767,213 @@ async def _run_partner_dream(
     await partner_dream.run()
 
 
+async def _maybe_catch_up_stock_review(
+    config,
+    *,
+    subagents,
+    session_manager,
+    now=None,
+) -> bool:
+    """Run the day's missed review at gateway start (stock design §11).
+
+    Fires only when the configured ``review_time`` has passed and no
+    ``daily_review`` digest exists for today. Reuses the cron execution
+    path, so the trading-day gate, watchlist injection and one-active-run
+    guard all apply unchanged. Returns whether the catch-up dispatched.
+    """
+    from mona.agent.pack_bootstrap import stock_review_cron_job
+    from mona.cron.service import CronSkip
+    from mona.services.stock import review as stock_review
+
+    if not (config.stock.enabled and config.stock.auto_review_enabled):
+        return False
+    try:
+        window_open = stock_review.should_catch_up_review(
+            now=now,
+            review_time=config.stock.review_time,
+            stock_output_dir=get_stock_projects_dir(config.workspace_path),
+        )
+    except Exception:
+        logger.exception("Stock review catch-up window check failed")
+        return False
+    if not window_open:
+        return False
+    # Local pre-check: an empty watchlist would only hit the network-bound
+    # trading-calendar gate below to be skipped — skip it here for free.
+    symbols = stock_review.review_watchlist_symbols(scope=config.stock.review_scope)
+    if not symbols:
+        logger.info("Stock review catch-up skipped: watchlist is empty")
+        return False
+    try:
+        await _execute_workflow_run_cron(
+            stock_review_cron_job(config.stock),
+            subagents=subagents,
+            session_manager=session_manager,
+            config=config,
+        )
+    except CronSkip as exc:
+        logger.info("Stock review catch-up skipped: {}", exc)
+    except Exception:
+        logger.exception("Stock review catch-up dispatch failed")
+        return False
+    return True
+
+
+async def _execute_workflow_run_cron(
+    job: "CronJob",
+    *,
+    subagents: Any,
+    session_manager: Any,
+    config: Any | None = None,
+) -> None:
+    """Dispatch a ``workflow_run`` cron payload (multi-agent phase 4, guide 7.7).
+
+    Stock-module T4: when the payload carries ``template_ref``, the packaged
+    template definition is loaded via :mod:`mona.agent.pack_templates` and
+    used directly — the room's active revision is never read. Without
+    ``template_ref`` the then-active revision is used (legacy behavior).
+    Either way the room must still exist and be a collaboration room, and
+    one-active-run-per-room still applies (recorded as an explicit skip,
+    never a queue).
+
+    Stock-module T20: the daily-review cron (``template_ref`` pointing at
+    the packaged daily-review template, ``config`` present) additionally
+    gates on the trading calendar and injects the current watchlist as
+    ``inputs.symbols`` — both via :mod:`mona.services.stock.review`. A
+    succeeded run fans out desktop/email notifications per ``StockConfig``.
+    """
+    from mona.agent.pack_bootstrap import (
+        DAILY_REVIEW_TEMPLATE_REF,
+        STOCK_SELECTION_TEMPLATE_REF,
+    )
+    from mona.agent.pack_templates import load_pack_template
+    from mona.cron.service import CronSkip
+    from mona.services.stock.api import _provider
+    from mona.services.stock.evidence import TradingCalendarUnavailableError
+    from mona.services.stock import review as stock_review
+
+    room_id = (job.payload.room_id or "").strip()
+    if not room_id:
+        raise CronSkip("workflow_run payload missing room_id")
+    template_ref = (job.payload.template_ref or "").strip()
+    is_stock_review = (
+        bool(template_ref)
+        and template_ref == DAILY_REVIEW_TEMPLATE_REF
+        and config is not None
+    )
+    is_stock_selection = bool(template_ref) and template_ref == STOCK_SELECTION_TEMPLATE_REF
+    if is_stock_review and not (
+        config.stock.enabled and config.stock.auto_review_enabled
+    ):
+        raise CronSkip("daily review skipped: automatic review is disabled")
+
+    # Selection cron payloads are always bound to a persisted strategy.  Parse
+    # this before the idempotency check below so a prior run can be compared
+    # without touching an uninitialised ``inputs`` local.
+    inputs: dict[str, Any] | None = None
+    symbols: list[str] = []
+    strategy_id: str | None = None
+    if is_stock_selection:
+        metadata = job.payload.channel_meta or {}
+        strategy_id = metadata.get("strategy_id")
+        if not isinstance(strategy_id, str) or not strategy_id.strip():
+            raise CronSkip("stock selection cron payload missing strategy_id")
+        strategy_id = strategy_id.strip()
+        inputs = {"strategy_id": strategy_id}
+
+        # A weekday cron is not sufficient for A-share data: statutory
+        # holidays can fall on weekdays.  Refuse to run against a stale
+        # snapshot when the shared trading calendar says the market is closed
+        # or cannot be checked.
+        try:
+            trading = await stock_review.is_trading_day(_provider())
+        except TradingCalendarUnavailableError as exc:
+            raise CronSkip(
+                f"stock selection skipped: trading calendar unavailable ({exc})"
+            ) from exc
+        if not trading:
+            raise CronSkip("stock selection skipped: non-trading day")
+
+    if template_ref:
+        workflow = load_pack_template(template_ref)
+    else:
+        workflow = subagents.workflow_store_for_room(room_id).get_active(room_id)
+        if workflow is None:
+            raise CronSkip(f"room {room_id!r} has no active workflow")
+    runner = subagents.workflow_runner_for_room(room_id)
+    if runner.active_run_for_room(room_id) is not None:
+        raise CronSkip(f"room {room_id!r} already has an active run")
+    if is_stock_selection:
+        run_store = subagents.run_store_for_room(room_id)
+        today = datetime.now().date()
+        for prior in run_store.list_for_room(room_id):
+            if (
+                prior.trigger_type == "cron"
+                and prior.inputs.get("strategy_id") == strategy_id
+                and prior.started_at.date() == today
+            ):
+                raise CronSkip(
+                    f"stock selection strategy {strategy_id!r} already ran today"
+                )
+    session = session_manager.get_or_create(f"websocket:{room_id}")
+    conversation = session.conversation_metadata
+    if conversation.type != "room":
+        raise CronSkip(f"chat {room_id!r} is no longer a collaboration room")
+
+    if is_stock_review:
+        # Trading-day gate + watchlist injection (T20). CronSkip propagates:
+        # non-trading day, calendar unavailable, or empty watchlist. The
+        # scope follows StockConfig.review_scope: all vs focus-only (§11).
+        symbols = await stock_review.guard_review_run(
+            scope=config.stock.review_scope
+        )
+        inputs = {"symbols": symbols}
+        logger.info(
+            "Stock review cron dispatch: {} symbols, {} jobs",
+            len(symbols),
+            len(workflow.steps),
+        )
+    elif is_stock_selection:
+        # The strategy id and input were validated before the idempotency
+        # check.  Never run this packaged workflow without that binding: an
+        # empty input could silently become an unbounded full-market scan.
+        logger.info("Stock selection cron dispatch: strategy {}", strategy_id)
+
+    async def _drive_workflow_run() -> None:
+        from mona.agent.partners import AgentRegistry
+        from mona.agent.workflow import RunConflictError
+
+        try:
+            run = await runner.run(
+                room_id=room_id,
+                workflow=workflow,
+                trigger_type="cron",
+                started_by="cron",
+                conversation=conversation,
+                registry=AgentRegistry(),
+                inputs=inputs,
+            )
+            if is_stock_review and run.status == "succeeded":
+                await stock_review.notify_review_complete(
+                    config, run_id=run.id, symbols=symbols
+                )
+            elif is_stock_review and run.status == "failed":
+                # Design §11: a failed review must surface too — the user
+                # never silently misses a trading day's digest.
+                await stock_review.notify_review_failed(
+                    config, run_id=run.id, symbols=symbols
+                )
+        except RunConflictError:
+            logger.info(
+                "Cron workflow run skipped: room {} already has an active run",
+                room_id,
+            )
+        except Exception:
+            logger.exception("Cron workflow run failed for room {}", room_id)
+
+    asyncio.create_task(_drive_workflow_run())
+
+
 def _run_gateway(
     config: Config,
     *,
@@ -794,7 +1002,7 @@ def _run_gateway(
     # sync_workspace_templates + migrate_global_resources pair is superseded
     # by this single call which writes templates to ~/.mona/ (not workspace)
     # and uses move semantics for the migration.
-    run_startup_migrations()
+    run_startup_migrations(config.workspace_path)
     bus = MessageBus()
     try:
         provider_snapshot = build_provider_snapshot(config)
@@ -839,6 +1047,25 @@ def _run_gateway(
         ),
         provider_signature=provider_snapshot.signature,
     )
+
+    # Stock pack bootstrap (stock-module T21): create the hidden research
+    # room, install the deep-research template and register the review cron.
+    # Idempotent; a failure here must never block the gateway itself.
+    try:
+        from mona.agent.pack_bootstrap import STOCK_ROOM_ID, ensure_stock_pack
+        from mona.agent.partners import AgentRegistry
+
+        ensure_stock_pack(
+            session_manager,
+            agent.subagents.workflow_store_for_room(STOCK_ROOM_ID),
+            cron,
+            AgentRegistry(),
+            review_time=config.stock.review_time,
+            enabled=config.stock.enabled,
+            auto_review_enabled=config.stock.auto_review_enabled,
+        )
+    except Exception:
+        logger.exception("Stock pack bootstrap failed")
 
     from mona.agent.loop import UNIFIED_SESSION_KEY
     from mona.bus.events import OutboundMessage
@@ -922,49 +1149,17 @@ def _run_gateway(
                 logger.exception("Distill cron job '{}' failed", job.name)
             return None
 
-        # Room workflow trigger (multi-agent phase 4, guide 7.7). The payload
-        # only pins the room; execution reads the then-active revision. An
-        # active run in the room records an explicit skip — never a queue.
+        # Room workflow trigger (multi-agent phase 4, guide 7.7). Extracted
+        # into a module-level helper so the template_ref branch (stock-module
+        # T4) is unit-testable. Awaited so the stock review branch (T20) can
+        # run its async trading-day gate before dispatching.
         if job.payload.kind == "workflow_run":
-            from mona.cron.service import CronSkip
-
-            room_id = (job.payload.room_id or "").strip()
-            if not room_id:
-                raise CronSkip("workflow_run payload missing room_id")
-            manager = agent.subagents
-            active = manager.workflow_store_for_room(room_id).get_active(room_id)
-            if active is None:
-                raise CronSkip(f"room {room_id!r} has no active workflow")
-            runner = manager.workflow_runner_for_room(room_id)
-            if runner.active_run_for_room(room_id) is not None:
-                raise CronSkip(f"room {room_id!r} already has an active run")
-            session = session_manager.get_or_create(f"websocket:{room_id}")
-            conversation = session.conversation_metadata
-            if conversation.type != "room":
-                raise CronSkip(f"chat {room_id!r} is no longer a collaboration room")
-
-            async def _drive_workflow_run() -> None:
-                from mona.agent.partners import AgentRegistry
-                from mona.agent.workflow import RunConflictError
-
-                try:
-                    await runner.run(
-                        room_id=room_id,
-                        workflow=active,
-                        trigger_type="cron",
-                        started_by="cron",
-                        conversation=conversation,
-                        registry=AgentRegistry(),
-                    )
-                except RunConflictError:
-                    logger.info(
-                        "Cron workflow run skipped: room {} already has an active run",
-                        room_id,
-                    )
-                except Exception:
-                    logger.exception("Cron workflow run failed for room {}", room_id)
-
-            asyncio.create_task(_drive_workflow_run())
+            await _execute_workflow_run_cron(
+                job,
+                subagents=agent.subagents,
+                session_manager=session_manager,
+                config=config,
+            )
             return None
 
         from mona.utils.evaluator import evaluate_response
@@ -1247,6 +1442,18 @@ def _run_gateway(
         try:
             await cron.start()
             await heartbeat.start()
+            # Missed-review catch-up (stock-module design §11): a machine
+            # powered off at review_time recovers the day's review here.
+            # All cron guards (trading day, watchlist, active run) apply.
+            if config.stock.enabled and config.stock.auto_review_enabled:
+                try:
+                    await _maybe_catch_up_stock_review(
+                        config,
+                        subagents=agent.subagents,
+                        session_manager=session_manager,
+                    )
+                except Exception:
+                    logger.exception("Stock review catch-up failed")
             tasks = [
                 agent.run(),
                 channels.start_all(),
@@ -1330,7 +1537,7 @@ def _run_services(config: Config, *, port: int | None = None) -> None:
     port = port if port is not None else config.services.port
     host = config.services.host or "127.0.0.1"
     console.print(f"{__logo__} Starting mona services version {__version__} on port {port}...")
-    run_startup_migrations()
+    run_startup_migrations(config.workspace_path)
 
     schedule_dir = config.workspace_path / "schedule"
     cron = CronService(schedule_dir / "cron_jobs.json")
@@ -1463,7 +1670,7 @@ def agent(
     config = _load_runtime_config(config, workspace)
     # Run consolidated startup migrations: global resources → global templates
     # → shared output dir → loose artifact migration.
-    run_startup_migrations()
+    run_startup_migrations(config.workspace_path)
 
     bus = MessageBus()
 

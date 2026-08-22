@@ -410,12 +410,16 @@ impl SshClient {
     /// Execute a command on an independent channel with exit-status capture,
     /// timeout and cancellation. This is the only execution path for AI
     /// maintenance steps.
-    pub async fn exec_command_structured(
+    pub async fn exec_command_structured<F>(
         &self,
         command: &str,
         timeout: Duration,
         cancel: tokio_util::sync::CancellationToken,
-    ) -> Result<StructuredExecResult, TerminalError> {
+        mut on_output: F,
+    ) -> Result<StructuredExecResult, TerminalError>
+    where
+        F: FnMut(&str),
+    {
         let started = std::time::Instant::now();
         let mut channel = self
             .handle
@@ -444,10 +448,14 @@ impl SshClient {
                 msg = channel.wait() => {
                     match msg {
                         Some(ChannelMsg::Data { data }) => {
+                            let chunk = String::from_utf8_lossy(&data);
+                            on_output(&chunk);
                             stdout.extend_from_slice(&data);
                         }
                         Some(ChannelMsg::ExtendedData { data, ext }) => {
                             if ext == 1 {
+                                let chunk = String::from_utf8_lossy(&data);
+                                on_output(&chunk);
                                 stderr.extend_from_slice(&data);
                             }
                         }

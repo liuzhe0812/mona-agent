@@ -56,6 +56,19 @@ from mona.materials.api import (
     handle_materials_write_wiki_page,
 )
 from mona.security.network import validate_host
+from mona.services.stock.api import (
+    handle_stock_kline,
+    handle_stock_quote,
+    handle_stock_research_preflight,
+    handle_stock_research_context,
+    handle_stock_search,
+    handle_stock_watchlist_add,
+    handle_stock_watchlist_focus,
+    handle_stock_watchlist_import,
+    handle_stock_watchlist_list,
+    handle_stock_watchlist_remove,
+    handle_stock_watchlist_reorder,
+)
 from mona.system_agent import handle_system_diagnose, handle_system_plan
 from mona.utils.helpers import safe_filename
 from mona.utils.media_decode import (
@@ -87,6 +100,7 @@ __all__ = (
     "handle_materials_get_raw_binary",
     "handle_materials_get_text",
     "handle_materials_get_wiki_page",
+    "handle_materials_lint",
     "handle_materials_list_files",
     "handle_materials_list_wiki",
     "handle_materials_llm_config",
@@ -95,6 +109,17 @@ __all__ = (
     "handle_materials_search",
     "handle_materials_status",
     "handle_materials_write_wiki_page",
+    "handle_stock_kline",
+    "handle_stock_quote",
+    "handle_stock_research_preflight",
+    "handle_stock_research_context",
+    "handle_stock_search",
+    "handle_stock_watchlist_add",
+    "handle_stock_watchlist_focus",
+    "handle_stock_watchlist_import",
+    "handle_stock_watchlist_list",
+    "handle_stock_watchlist_remove",
+    "handle_stock_watchlist_reorder",
 )
 
 
@@ -828,6 +853,26 @@ async def handle_project_remove(request: web.Request) -> web.Response:
             _session_set_workspace_impl(session_manager, s["key"], None)
             cleared += 1
     return web.json_response({"ok": True, "cleared": cleared})
+
+
+async def handle_webui_sidebar_state_update(request: web.Request) -> web.Response:
+    """Persist sidebar state from a JSON body without request-URL size limits."""
+    from mona.webui.sidebar_state import write_webui_sidebar_state
+
+    try:
+        body = await request.json()
+    except Exception:
+        return web.json_response({"error": "invalid json"}, status=400)
+    if not isinstance(body, dict):
+        return web.json_response({"error": "state must be an object"}, status=400)
+    try:
+        state = write_webui_sidebar_state(body)
+    except ValueError as exc:
+        return web.json_response({"error": str(exc)}, status=400)
+    except OSError:
+        logger.exception("failed to write webui sidebar state")
+        return web.json_response({"error": "failed to write sidebar state"}, status=500)
+    return web.json_response(state)
 
 
 # ---------------------------------------------------------------------------
@@ -4715,6 +4760,36 @@ async def handle_schedule_notifications(request: web.Request) -> web.Response:
     return web.json_response({"notifications": pending})
 
 
+async def handle_schedule_notification_push(request: web.Request) -> web.Response:
+    """POST /api/schedule/notifications/push - enqueue a system notification.
+
+    Cross-process producers (stock-module review cron in the gateway, T20)
+    push onto the same queue the Tauri side polls, so their notifications
+    get the identical native window. Optional ``click_action``/``click_data``
+    route the click (e.g. ``open-stock`` with ``{"runId": …}``).
+    """
+    svc = _require_schedule_service(request)
+    try:
+        body = await request.json()
+    except Exception:
+        return web.json_response({"error": "Invalid JSON body"}, status=400)
+    if not isinstance(body, dict):
+        return web.json_response({"error": "Invalid JSON body"}, status=400)
+    title = str(body.get("title", "") or "").strip()
+    text = str(body.get("body", "") or "").strip()
+    if not title or not text:
+        return web.json_response({"error": "title and body are required"}, status=400)
+    click_action = body.get("click_action")
+    click_data = body.get("click_data")
+    svc.push_notification(
+        title,
+        text,
+        click_action=str(click_action) if click_action else None,
+        click_data=click_data if isinstance(click_data, dict) else None,
+    )
+    return web.json_response({"status": "ok"})
+
+
 # ---------------------------------------------------------------------------
 # Todo routes (/api/schedule/todos/*, /api/schedule/briefing)
 # ---------------------------------------------------------------------------
@@ -5600,6 +5675,41 @@ async def handle_url2note_extract(request: web.Request) -> web.Response:
     except Exception:
         logger.exception("url2note extraction error")
         return web.json_response({"error": "URL extraction failed"}, status=500)
+
+
+async def handle_note_generate(request: web.Request) -> web.Response:
+    """POST /api/notes/generate - generate Markdown without Agent tools."""
+    try:
+        body = await request.json()
+    except Exception:
+        return web.json_response({"error": "Invalid JSON body"}, status=400)
+    prompt = str(body.get("prompt") or "").strip() if isinstance(body, dict) else ""
+    if not prompt:
+        return web.json_response({"error": "prompt is required"}, status=400)
+
+    provider = _resolve_llm_provider(request)
+    if provider is None:
+        return web.json_response({"error": "LLM provider 不可用"}, status=503)
+    agent_loop = request.app.get("agent_loop")
+    model = getattr(agent_loop, "model", None) or provider.get_default_model()
+    try:
+        response = await asyncio.wait_for(
+            provider.chat_with_retry(
+                messages=[{"role": "user", "content": prompt}],
+                model=model,
+                temperature=0.2,
+            ),
+            timeout=float(request.app.get("request_timeout", 120.0)),
+        )
+        content = _response_text(response).strip()
+        if not content:
+            return web.json_response({"error": "AI 未返回笔记内容"}, status=502)
+        return web.json_response({"content": content})
+    except TimeoutError:
+        return web.json_response({"error": "AI 生成超时"}, status=504)
+    except Exception:
+        logger.exception("note generation error")
+        return web.json_response({"error": "AI 生成笔记失败"}, status=500)
 
 
 async def handle_doc2note_status(request: web.Request) -> web.Response:
@@ -7709,6 +7819,7 @@ def create_app(
 
     # --- Agent runtime routes ---
     app.router.add_post("/v1/chat/completions", handle_chat_completions)
+    app.router.add_post("/api/notes/generate", handle_note_generate)
     app.router.add_get("/v1/models", handle_models)
     app.router.add_post("/v1/audio/transcriptions", handle_audio_transcriptions)
     app.router.add_post("/v1/audio/speech", handle_audio_speech)
@@ -7741,5 +7852,6 @@ def create_app(
     app.router.add_post("/api/sessions/{key}/clear-workspace", handle_session_clear_workspace)
     app.router.add_get("/api/projects", handle_projects_list)
     app.router.add_post("/api/projects/remove", handle_project_remove)
+    app.router.add_post("/api/webui/sidebar-state/update", handle_webui_sidebar_state_update)
 
     return app

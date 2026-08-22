@@ -268,7 +268,8 @@ impl IpcBridge {
                     .await
                     .ok_or(format!("Session not found: {}", session_id))?;
                 match handle {
-                    crate::terminal::session::SessionHandle::Ssh(client) => {
+                    crate::terminal::session::SessionHandle::Ssh(client)
+                    | crate::terminal::session::SessionHandle::Desktop(client) => {
                         Ok(Value::String(client.get_buffer()))
                     }
                     crate::terminal::session::SessionHandle::Local(shell) => {

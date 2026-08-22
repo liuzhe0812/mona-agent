@@ -1313,7 +1313,8 @@ impl EmailState {
                 last_synced_uid TEXT,
                 from_name TEXT,
                 carddav_url TEXT,
-                eas_url TEXT
+                eas_url TEXT,
+                sort_order INTEGER NOT NULL DEFAULT 0
             );
             CREATE TABLE IF NOT EXISTS messages (
                 uid TEXT NOT NULL,
@@ -1528,6 +1529,39 @@ impl EmailState {
                 [],
             )
             .map_err(|e| e.to_string())?;
+        }
+        // 迁移：账号显示顺序；旧账号按原显示名顺序初始化
+        let has_account_sort_order: bool = conn
+            .query_row(
+                "SELECT COUNT(*) > 0 FROM pragma_table_info('accounts') WHERE name='sort_order'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap_or(false);
+        if !has_account_sort_order {
+            conn.execute(
+                "ALTER TABLE accounts ADD COLUMN sort_order INTEGER NOT NULL DEFAULT 0",
+                [],
+            )
+            .map_err(|e| e.to_string())?;
+            let ids: Vec<String> = {
+                let mut stmt = conn
+                    .prepare("SELECT id FROM accounts ORDER BY display_name, id")
+                    .map_err(|e| e.to_string())?;
+                let rows = stmt
+                    .query_map([], |row| row.get(0))
+                    .map_err(|e| e.to_string())?
+                    .collect::<Result<_, _>>()
+                    .map_err(|e| e.to_string())?;
+                rows
+            };
+            for (index, id) in ids.iter().enumerate() {
+                conn.execute(
+                    "UPDATE accounts SET sort_order = ?2 WHERE id = ?1",
+                    params![id, index as i64],
+                )
+                .map_err(|e| e.to_string())?;
+            }
         }
         // 迁移：messages 表添加 body_fetched 列
         // 默认值 1 表示旧数据已认为正文已拉取（兼容已同步的邮件）
@@ -1971,7 +2005,7 @@ pub async fn email_list_accounts(
                     smtp_host, smtp_port, smtp_username, smtp_password, from_address,
                     from_name, last_synced_uid, carddav_url, eas_url, imap_use_ssl, smtp_use_ssl,
                     signatures
-             FROM accounts ORDER BY display_name",
+             FROM accounts ORDER BY sort_order, display_name, id",
         )
         .map_err(|e| e.to_string())?;
     let accounts = stmt
@@ -2012,12 +2046,19 @@ pub async fn email_add_account(
     let conn = state.conn()?;
     let enc_imap = encrypt_password(&account.imap_password)?;
     let enc_smtp = encrypt_password(&account.smtp_password)?;
+    let next_sort_order: i64 = conn
+        .query_row(
+            "SELECT COALESCE(MAX(sort_order), -1) + 1 FROM accounts",
+            [],
+            |row| row.get(0),
+        )
+        .map_err(|e| e.to_string())?;
     conn.execute(
         "INSERT OR REPLACE INTO accounts
          (id, display_name, imap_host, imap_port, imap_username, imap_password,
           smtp_host, smtp_port, smtp_username, smtp_password, from_address, from_name,
-          last_synced_uid, carddav_url, eas_url, imap_use_ssl, smtp_use_ssl, signatures)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18)",
+          last_synced_uid, carddav_url, eas_url, imap_use_ssl, smtp_use_ssl, signatures, sort_order)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19)",
         params![
             account.id,
             account.display_name,
@@ -2037,10 +2078,44 @@ pub async fn email_add_account(
             account.imap_use_ssl as i32,
             account.smtp_use_ssl as i32,
             serde_json::to_string(&account.signatures).unwrap_or_else(|_| "[]".to_string()),
+            next_sort_order,
         ],
     )
     .map_err(|e| e.to_string())?;
     Ok(())
+}
+
+#[tauri::command]
+pub async fn email_reorder_accounts(
+    state: tauri::State<'_, EmailState>,
+    account_ids: Vec<String>,
+) -> Result<(), String> {
+    let mut conn = state.conn()?;
+    let existing_ids: Vec<String> = {
+        let mut stmt = conn
+            .prepare("SELECT id FROM accounts ORDER BY id")
+            .map_err(|e| e.to_string())?;
+        let rows = stmt
+            .query_map([], |row| row.get(0))
+            .map_err(|e| e.to_string())?
+            .collect::<Result<_, _>>()
+            .map_err(|e| e.to_string())?;
+        rows
+    };
+    let mut requested_ids = account_ids.clone();
+    requested_ids.sort();
+    if requested_ids != existing_ids {
+        return Err("账号顺序列表与当前账号不匹配".to_string());
+    }
+    let tx = conn.transaction().map_err(|e| e.to_string())?;
+    for (index, id) in account_ids.iter().enumerate() {
+        tx.execute(
+            "UPDATE accounts SET sort_order = ?2 WHERE id = ?1",
+            params![id, index as i64],
+        )
+        .map_err(|e| e.to_string())?;
+    }
+    tx.commit().map_err(|e| e.to_string())
 }
 
 #[tauri::command]
@@ -2964,6 +3039,7 @@ pub async fn email_get_unified_inbox(
 #[tauri::command]
 pub async fn email_mark_read(
     state: tauri::State<'_, EmailState>,
+    window: WebviewWindow,
     gateway_url: String,
     req: SetFlagRequest,
 ) -> Result<(), String> {
@@ -2982,6 +3058,20 @@ pub async fn email_mark_read(
             meta.is_read = req.add;
             let _ = write_meta_json(&meta);
         }
+    }
+
+    // 独立预览窗口与主窗口的 Zustand 实例互不共享，通知主窗口刷新未读统计。
+    if window.label() != "main" {
+        let _ = window.app_handle().emit_to(
+            "main",
+            "email-read-changed",
+            serde_json::json!({
+                "accountId": &req.account_id,
+                "folder": &req.mailbox,
+                "uid": &req.uid,
+                "isRead": req.add,
+            }),
+        );
     }
 
     // 后台同步到 IMAP 服务器（fire-and-forget，不阻塞前端）
@@ -4610,7 +4700,7 @@ async fn run_bg_sync_cycle(
                         smtp_host, smtp_port, smtp_username, smtp_password, from_address,
                         from_name, last_synced_uid, carddav_url, eas_url, imap_use_ssl,
                         smtp_use_ssl, signatures
-                 FROM accounts ORDER BY display_name",
+                 FROM accounts ORDER BY sort_order, display_name, id",
             )
             .map_err(|e| e.to_string())?;
         let rows = stmt
@@ -7166,45 +7256,41 @@ pub async fn email_fetch_body(
     if let Some(obj) = body.as_object_mut() {
         obj.remove("rawBytes");
     }
-    let mut cached = false;
+    // 网络回退时 gateway 响应不含 header：从 RFC822 字节解析注入，
+    // 供独立预览窗口显示主题/发件人/收件人/日期（主窗口用消息列表字段，不依赖此）
+    let mut parsed_eml: Option<Vec<u8>> = None;
     if !raw_b64.is_empty() {
-        match base64::engine::general_purpose::STANDARD.decode(&raw_b64) {
-            Ok(bytes) => match write_eml_file(&account_id, &mailbox, &resolved_uid, &bytes) {
-                Ok(rel) => {
-                    match state.conn() {
-                        Ok(conn) => {
-                            if let Err(e) = conn.execute(
-                                "UPDATE messages SET body_fetched = 1, eml_path = ?1
-                                 WHERE uid = ?2 AND account_id = ?3 AND folder = ?4",
-                                params![rel, &resolved_uid, &account_id, &mailbox],
-                            ) {
-                                log::warn!(
-                                    "[email-fetch-body] 更新 body_fetched 失败 account={} uid={}: {}",
-                                    account_id,
-                                    resolved_uid,
-                                    e
-                                );
-                            } else {
-                                cached = true;
-                            }
-                        }
-                        Err(e) => {
-                            log::warn!("[email-fetch-body] 打开数据库失败: {}", e);
-                        }
+        if let Ok(bytes) = base64::engine::general_purpose::STANDARD.decode(&raw_b64) {
+            parsed_eml = Some(bytes);
+        }
+    }
+    let mut cached = false;
+    if let Some(bytes) = &parsed_eml {
+        match write_eml_file(&account_id, &mailbox, &resolved_uid, bytes) {
+            Ok(rel) => match state.conn() {
+                Ok(conn) => {
+                    if let Err(e) = conn.execute(
+                        "UPDATE messages SET body_fetched = 1, eml_path = ?1
+                         WHERE uid = ?2 AND account_id = ?3 AND folder = ?4",
+                        params![rel, &resolved_uid, &account_id, &mailbox],
+                    ) {
+                        log::warn!(
+                            "[email-fetch-body] 更新 body_fetched 失败 account={} uid={}: {}",
+                            account_id,
+                            resolved_uid,
+                            e
+                        );
+                    } else {
+                        cached = true;
                     }
                 }
                 Err(e) => {
-                    log::warn!(
-                        "[email-fetch-body] 落盘 .eml 失败 account={} uid={}: {}",
-                        account_id,
-                        resolved_uid,
-                        e
-                    );
+                    log::warn!("[email-fetch-body] 打开数据库失败: {}", e);
                 }
             },
             Err(e) => {
                 log::warn!(
-                    "[email-fetch-body] 解码 rawBytes 失败 account={} uid={}: {}",
+                    "[email-fetch-body] 落盘 .eml 失败 account={} uid={}: {}",
                     account_id,
                     resolved_uid,
                     e
@@ -7232,7 +7318,50 @@ pub async fn email_fetch_body(
         }
     }
 
-    // 5. 如果自动修复换了 uid，在响应中返回新 uid，让前端 store 更新本地记录的 uid
+    // 5. 注入 header（网络回退路径 gateway 不返回 header；本地命中路径在第 2 步已返回）
+    //    优先用刚落盘的 RFC822 字节解析；没有字节时（回退落盘成功）从本地 .eml 重读解析
+    let eml_for_header: Option<Vec<u8>> = match parsed_eml {
+        Some(bytes) => Some(bytes),
+        None => {
+            let (cached_eml_path, cached_body_fetched): (String, bool) = state
+                .conn()
+                .ok()
+                .and_then(|conn| {
+                    conn.query_row(
+                        "SELECT eml_path, body_fetched FROM messages
+                         WHERE uid = ?1 AND account_id = ?2 AND folder = ?3",
+                        params![&resolved_uid, &account_id, &mailbox],
+                        |row| Ok((row.get::<_, String>(0)?, row.get::<_, bool>(1)?)),
+                    )
+                    .ok()
+                })
+                .unwrap_or_default();
+            if !cached_eml_path.is_empty() && cached_body_fetched {
+                read_eml_file(&cached_eml_path)
+            } else {
+                None
+            }
+        }
+    };
+    if let Some(bytes) = eml_for_header {
+        let (h_subject, h_from_addr, h_from_name, h_to, h_cc, h_date, _mid, _att) =
+            parse_eml_header(&bytes);
+        if let Some(obj) = body.as_object_mut() {
+            obj.insert(
+                "header".to_string(),
+                serde_json::json!({
+                    "subject": h_subject,
+                    "fromAddress": h_from_addr,
+                    "fromName": h_from_name,
+                    "toAddresses": h_to,
+                    "ccAddresses": h_cc,
+                    "date": h_date,
+                }),
+            );
+        }
+    }
+
+    // 6. 如果自动修复换了 uid，在响应中返回新 uid，让前端 store 更新本地记录的 uid
     if resolved_uid != uid {
         if let Some(obj) = body.as_object_mut() {
             obj.insert("_resolvedUid".to_string(), serde_json::Value::String(resolved_uid));

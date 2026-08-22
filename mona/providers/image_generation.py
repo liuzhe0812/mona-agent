@@ -13,6 +13,7 @@ from typing import Any
 import httpx
 from loguru import logger
 
+from mona.config.schema import ProviderConfig
 from mona.providers.registry import find_by_name
 from mona.utils.helpers import detect_image_mime
 
@@ -166,7 +167,7 @@ def image_gen_provider_configs(config: Any) -> dict[str, Any]:
         if field_name in result:
             continue
         pc = getattr(providers_cfg, field_name, None)
-        if pc is not None and (pc.api_key or pc.api_base):
+        if isinstance(pc, ProviderConfig) and (pc.api_key or pc.api_base):
             result[field_name] = pc
     return result
 

@@ -132,9 +132,12 @@ pub fn setup_tray(app: &App) -> Result<(), Box<dyn std::error::Error>> {
                 let _ = app.emit("tray-new-note", ());
             }
             "restart_gateway" => {
+                let settings = crate::settings::load_settings();
+                if let Some(services) = app.try_state::<crate::ServicesState>() {
+                    let _ = services.stop();
+                }
                 if let Some(gateway) = app.try_state::<crate::GatewayState>() {
                     let _ = gateway.stop();
-                    let settings = crate::settings::load_settings();
                     match gateway.start(&settings, app) {
                         Ok(port) => {
                             log::info!("Gateway restarted on port {port}");
@@ -142,6 +145,17 @@ pub fn setup_tray(app: &App) -> Result<(), Box<dyn std::error::Error>> {
                         }
                         Err(e) => {
                             log::error!("Failed to restart gateway: {e}");
+                        }
+                    }
+                }
+                if let Some(services) = app.try_state::<crate::ServicesState>() {
+                    match services.start(&settings, app) {
+                        Ok(port) => {
+                            log::info!("Services restarted on port {port}");
+                            let _ = app.emit("services-restarted", port);
+                        }
+                        Err(e) => {
+                            log::error!("Failed to restart services: {e}");
                         }
                     }
                 }

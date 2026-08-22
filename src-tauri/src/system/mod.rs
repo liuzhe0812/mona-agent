@@ -1644,7 +1644,7 @@ pub async fn system_reveal_in_explorer(path: String) -> Result<bool, String> {
         }
         // /select,<path> 让资源管理器打开父目录并选中该项
         std::process::Command::new("explorer.exe")
-            .arg(format!("/select,{}", path))
+            .args(["/select,", &path])
             .spawn()
             .map_err(|e| format!("打开资源管理器失败: {e}"))?;
         Ok(true)

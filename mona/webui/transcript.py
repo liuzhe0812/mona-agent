@@ -528,6 +528,39 @@ def replay_transcript_to_ui_messages(
                 attach_or_queue_delivered_files([f for f in raw_files if isinstance(f, dict)])
             continue
 
+        if ev == "workflow_run_updated":
+            # Room workflow run card (guide 5.3: structured status payload,
+            # not natural language). Every transition appends a fresh
+            # snapshot; replay keeps the latest one per run, rendered in
+            # place at the position where the run first appeared.
+            run_id = rec.get("id")
+            if not isinstance(run_id, str) or not run_id:
+                continue
+            run_payload = {
+                k: v for k, v in rec.items() if k not in ("event", "chat_id")
+            }
+            for i in range(len(messages) - 1, -1, -1):
+                candidate = messages[i]
+                if (
+                    candidate.get("kind") == "workflowRun"
+                    and candidate.get("workflowRunId") == run_id
+                ):
+                    messages[i] = {**candidate, "payload": run_payload}
+                    break
+            else:
+                messages.append(
+                    {
+                        "id": _new_id("wfr", idx),
+                        "role": "assistant",
+                        "kind": "workflowRun",
+                        "content": "",
+                        "workflowRunId": run_id,
+                        "payload": run_payload,
+                        "createdAt": _ts_base + idx,
+                    },
+                )
+            continue
+
         if ev == "delta":
             if suppress_until_turn_end:
                 continue
@@ -679,6 +712,15 @@ def replay_transcript_to_ui_messages(
                 if isinstance(rec_message_type, str) and rec_message_type
                 else "message"
             )
+            rec_workflow_run_id = rec.get("workflow_run_id")
+            if isinstance(rec_workflow_run_id, str) and rec_workflow_run_id:
+                extra["workflowRunId"] = rec_workflow_run_id
+            rec_job_id = rec.get("job_id")
+            if isinstance(rec_job_id, str) and rec_job_id:
+                extra["jobId"] = rec_job_id
+            rec_tool_events = rec.get("tool_events")
+            if isinstance(rec_tool_events, list) and rec_tool_events:
+                extra["toolEvents"] = rec_tool_events
             if media:
                 extra["media"] = media
             lat = rec.get("latency_ms")
@@ -769,14 +811,15 @@ def _resolve_legacy_artifact_paths(messages: list[dict[str, Any]]) -> None:
         except Exception:
             return
         file["absolute_path"] = str(new_path)
-        # Update relative `path` too if it matches the old basename and the
-        # new location is inside the shared output dir.
+        # Update relative `path` for the final owner root when possible. Old
+        # manifests can have a two-hop path map; the absolute path above is
+        # still authoritative if a legacy product path has no Agent root.
         rel = file.get("path")
         if isinstance(rel, str) and rel and not Path(rel).is_absolute():
             try:
-                from mona.config.paths import get_shared_output_dir, get_workspace_path
-                shared_root = get_shared_output_dir(get_workspace_path())
-                file["path"] = str(new_path.relative_to(shared_root))
+                from mona.config.paths import get_agent_output_dir, get_workspace_path
+                agent_root = get_agent_output_dir(get_workspace_path(), "mona")
+                file["path"] = new_path.relative_to(agent_root).as_posix()
             except Exception:
                 # Leave the relative path alone; absolute path is sufficient.
                 pass

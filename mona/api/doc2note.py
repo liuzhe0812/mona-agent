@@ -1,7 +1,8 @@
 """Document-to-note extraction: parse local documents into text.
 
-Office formats (docx/pptx/xlsx/odt/rtf/epub) are converted to Markdown by
-the Pandoc binary, which is downloaded on demand (see pandoc_runtime.py).
+Office formats (docx/pptx/odt/rtf/epub) are converted to Markdown by the
+Pandoc binary, which is downloaded on demand (see pandoc_runtime.py). XLSX
+uses Mona's bundled spreadsheet parser.
 PDF is handled by the bundled pypdf. Plain text formats are read directly.
 """
 
@@ -25,10 +26,10 @@ __all__ = (
 _MAX_FILE_BYTES = 50 * 1024 * 1024
 _EXTRACT_TIMEOUT = 60
 
-_PANDOC_FORMATS = frozenset({".docx", ".pptx", ".xlsx", ".odt", ".rtf", ".epub"})
+_PANDOC_FORMATS = frozenset({".docx", ".pptx", ".odt", ".rtf", ".epub"})
 _TEXT_FORMATS = frozenset({".txt", ".md"})
 
-SUPPORTED_EXTENSIONS = sorted(_PANDOC_FORMATS | _TEXT_FORMATS | {".pdf"})
+SUPPORTED_EXTENSIONS = sorted(_PANDOC_FORMATS | _TEXT_FORMATS | {".pdf", ".xlsx"})
 
 
 class Doc2NoteError(RuntimeError):
@@ -61,6 +62,8 @@ async def extract_document(file_path: str) -> DocumentSource:
         return _extract_text(path)
     if suffix == ".pdf":
         return await _extract_pdf(path)
+    if suffix == ".xlsx":
+        return await _extract_xlsx(path)
     if suffix in _PANDOC_FORMATS:
         return await _extract_with_pandoc(path, suffix)
     supported = "/".join(ext.lstrip(".") for ext in SUPPORTED_EXTENSIONS)
@@ -94,10 +97,29 @@ async def _extract_pdf(path: Path) -> DocumentSource:
     return DocumentSource(path.stem, "pdf", text)
 
 
+async def _extract_xlsx(path: Path) -> DocumentSource:
+    from mona.utils.document import extract_text
+
+    try:
+        text = (
+            await asyncio.wait_for(
+                asyncio.to_thread(extract_text, path), _EXTRACT_TIMEOUT
+            )
+            or ""
+        ).strip()
+    except TimeoutError as exc:
+        raise Doc2NoteError("文档解析超时") from exc
+    if not text:
+        raise Doc2NoteError("文档中未提取到文本内容")
+    if text.startswith("[error:"):
+        raise Doc2NoteError("文档解析失败")
+    return DocumentSource(path.stem, "xlsx", text)
+
+
 async def _extract_with_pandoc(path: Path, suffix: str) -> DocumentSource:
     pandoc = PandocRuntime().get_pandoc_path()
     if not pandoc:
-        raise PandocMissingError("Pandoc 组件未安装")
+        raise PandocMissingError("文档解析组件未安装")
     fmt = suffix.lstrip(".")
     command = PandocRuntime.wrap_cmd(
         [pandoc, "-f", fmt, "-t", "gfm", "--wrap=none", str(path)]
@@ -109,7 +131,7 @@ async def _extract_with_pandoc(path: Path, suffix: str) -> DocumentSource:
             stderr=asyncio.subprocess.PIPE,
         )
     except FileNotFoundError as exc:
-        raise PandocMissingError("Pandoc 组件不可用") from exc
+        raise PandocMissingError("文档解析组件不可用") from exc
     try:
         stdout, stderr = await asyncio.wait_for(
             process.communicate(), timeout=_EXTRACT_TIMEOUT

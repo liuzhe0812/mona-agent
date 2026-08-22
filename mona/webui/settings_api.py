@@ -6,18 +6,29 @@ settings payload shape and the allowlisted config mutations exposed to WebUI.
 
 from __future__ import annotations
 
+import json
 import os
+import re
+import unicodedata
 from pathlib import Path
 from typing import Any
+from urllib.parse import urlparse
 from zoneinfo import ZoneInfo
 
 import httpx
 from loguru import logger
 
 from mona.config.loader import get_config_path, load_config, save_config
+from mona.config.schema import ProviderConfig
 from mona.providers.capabilities import resolve_capabilities
+from mona.providers.cindy_catalog import CINDY_CHAT_PROVIDERS, CINDY_CHAT_PROVIDER_BY_ID
 from mona.providers.image_generation import get_image_gen_provider
-from mona.providers.registry import PROVIDERS, find_by_name
+from mona.providers.registry import (
+    PROVIDERS,
+    custom_provider_spec,
+    find_by_name,
+    is_custom_provider_name,
+)
 from mona.providers.video_generation import get_video_gen_provider
 from mona.security.network import validate_url_target
 
@@ -76,6 +87,32 @@ def _mask_secret_hint(secret: str | None) -> str | None:
     if len(secret) <= 8:
         return "••••"
     return f"{secret[:4]}••••{secret[-4:]}"
+
+
+def _validate_custom_api_base(value: str | None) -> str:
+    """Validate the user-entered HTTP endpoint without making a request."""
+    base = (value or "").strip().rstrip("/")
+    parsed = urlparse(base)
+    if parsed.scheme not in {"http", "https"} or not parsed.netloc:
+        raise WebUISettingsError("API Base 必须是合法的 http/https 地址")
+    if parsed.username or parsed.password:
+        raise WebUISettingsError("API Base 不得包含用户名或密码")
+    return base
+
+
+def _custom_provider_id(display_name: str, existing: set[str]) -> str:
+    """Allocate a stable, non-overwriting ID for a new custom provider."""
+    normalized = unicodedata.normalize("NFKD", display_name).encode(
+        "ascii", "ignore"
+    ).decode("ascii")
+    slug = re.sub(r"[^a-z0-9]+", "-", normalized.lower()).strip("-") or "provider"
+    candidate = f"custom-{slug}"
+    suffix = 2
+    static_ids = {spec.name for spec in PROVIDERS}
+    while candidate in existing or candidate in static_ids:
+        candidate = f"custom-{slug}-{suffix}"
+        suffix += 1
+    return candidate
 
 
 def _provider_requires_api_key(spec: Any) -> bool:
@@ -142,10 +179,11 @@ def _is_under(path: Path, directory: Path) -> bool:
 
 
 def _migrate_workspace_data(old_ws: Path, new_ws: Path) -> None:
-    """Copy non-destructively sessions/ and output/ from old workspace to new.
+    """Copy workspace-scoped data to a new workspace without overwriting.
 
     Per shared-output-workspace-execution-plan §8.5:
-    - Copy ``sessions/`` and ``output/`` only.
+    - Copy sessions, legacy output, Agent outputs and product projects.
+    - Never copy runtime state; Job/Workflow/Run data is instance-scoped.
     - Do NOT copy ``memory/`` or ``skills/`` — they are now global resources
       stored under ``~/.mona/`` and migrating them between workspaces would
       duplicate or overwrite global state.
@@ -179,10 +217,20 @@ def _migrate_workspace_data(old_ws: Path, new_ws: Path) -> None:
     # 1. Migrate sessions directory (only .jsonl files).
     _copy_dir_non_destructive(old_ws / "sessions", new_ws / "sessions", suffix_filter=".jsonl")
 
-    # 2. Migrate shared output directory (recursive, all files).
+    # 2. Keep legacy output readable while old sessions are being migrated.
     _copy_dir_non_destructive(old_ws / "output", new_ws / "output")
 
-    # NOTE: memory/ and skills/ are intentionally NOT copied — they are global
+    # 3. Copy final user-visible ownership roots. Runtime directories are
+    # intentionally absent from this list.
+    for name in (
+        "agent-workspaces",
+        "stock_projects",
+        "ppt_projects",
+        "video_projects",
+    ):
+        _copy_dir_non_destructive(old_ws / name, new_ws / name)
+
+    # memory/ and skills/ are intentionally NOT copied — they are global
     # resources under ~/.mona/ and not workspace-scoped.
 
 
@@ -196,9 +244,9 @@ def _image_generation_provider_rows(config: Any) -> list[dict[str, Any]]:
     """
     rows: list[dict[str, Any]] = []
     for spec in PROVIDERS:
-        if spec.is_oauth or spec.is_local:
+        if spec.is_oauth or spec.is_local or spec.chat_only:
             continue
-        provider_config = getattr(config.providers, spec.name, None)
+        provider_config = _provider_config(config, spec.name)
         configured = (
             _provider_configured_for_settings(spec, provider_config)
             if provider_config is not None
@@ -233,9 +281,9 @@ def _video_generation_provider_rows(config: Any) -> list[dict[str, Any]]:
     """
     rows: list[dict[str, Any]] = []
     for spec in PROVIDERS:
-        if spec.is_oauth or spec.is_local:
+        if spec.is_oauth or spec.is_local or spec.chat_only:
             continue
-        provider_config = getattr(config.providers, spec.name, None)
+        provider_config = _provider_config(config, spec.name)
         configured = (
             _provider_configured_for_settings(spec, provider_config)
             if provider_config is not None
@@ -385,7 +433,6 @@ def update_channel_settings(query: QueryParams) -> dict[str, Any]:
         setattr(config.channels, channel_name, section)
 
     changed = False
-
     enabled_raw = _query_first(query, "enabled")
     if enabled_raw is not None:
         enabled = _parse_bool(enabled_raw, "enabled")
@@ -476,8 +523,8 @@ def settings_payload(*, requires_restart: bool = False) -> dict[str, Any]:
 
     providers = []
     for spec in PROVIDERS:
-        provider_config = getattr(config.providers, spec.name, None)
-        if provider_config is None or spec.is_oauth:
+        provider_config = _provider_config(config, spec.name)
+        if provider_config is None or spec.is_oauth or spec.chat_only:
             continue
         # Skip providers whose configured model is an image/video-only model —
         # they are set up for media generation, not LLM chat completions.
@@ -573,6 +620,7 @@ def settings_payload(*, requires_restart: bool = False) -> dict[str, Any]:
         )
 
     exec_config = config.tools.exec
+    chat_providers = _chat_provider_rows(config)
     return {
         "agent": {
             "model": effective_preset.model,
@@ -591,6 +639,7 @@ def settings_payload(*, requires_restart: bool = False) -> dict[str, Any]:
         },
         "model_presets": model_presets,
         "providers": providers,
+        "chat_providers": chat_providers,
         "web_search": {
             "provider": search_provider,
             "api_key_hint": _mask_secret_hint(search_config.api_key),
@@ -664,6 +713,15 @@ def settings_payload(*, requires_restart: bool = False) -> dict[str, Any]:
         },
         "channels": _channels_payload(config),
         "tts": _tts_payload(config),
+        "stock": {
+            "enabled": config.stock.enabled,
+            "auto_review_enabled": config.stock.auto_review_enabled,
+            "review_time": config.stock.review_time,
+            "review_scope": config.stock.review_scope,
+            "push_notification": config.stock.push_notification,
+            "push_email": config.stock.push_email,
+            "quote_refresh_sec": config.stock.quote_refresh_sec,
+        },
         "requires_restart": requires_restart,
     }
 
@@ -700,12 +758,19 @@ def update_agent_settings(query: QueryParams) -> dict[str, Any]:
         spec = find_by_name(provider)
         if spec is None:
             raise WebUISettingsError("unknown provider")
-        provider_config = getattr(config.providers, provider, None)
+        provider_config = _provider_config(config, provider)
         if (
             provider_config is None
             or (
                 spec.api_key_required
                 and not _provider_configured_for_settings(spec, provider_config)
+            )
+            or (
+                is_custom_provider_name(spec.name)
+                and (
+                    not provider_config.api_base
+                    or not provider_config.enabled_models
+                )
             )
         ):
             raise WebUISettingsError("provider is not configured")
@@ -725,7 +790,7 @@ def update_agent_settings(query: QueryParams) -> dict[str, Any]:
     if provider_model is not None:
         provider_model = provider_model.strip()
         active_provider = provider or defaults.provider
-        provider_config = getattr(config.providers, active_provider, None)
+        provider_config = _provider_config(config, active_provider)
         if provider_config is not None and provider_config.model != provider_model:
             provider_config.model = provider_model
             changed = True
@@ -804,22 +869,131 @@ def update_agent_settings(query: QueryParams) -> dict[str, Any]:
 
 
 def update_provider_settings(query: QueryParams) -> dict[str, Any]:
-    provider_name = (_query_first(query, "provider") or "").strip()
-    if not provider_name:
+    raw_provider_name = (_query_first(query, "provider") or "").strip()
+    if not raw_provider_name:
         raise WebUISettingsError("provider is required")
-    spec = find_by_name(provider_name)
-    if spec is None or spec.is_oauth:
-        raise WebUISettingsError("unknown provider")
-
     config = load_config()
-    provider_config = getattr(config.providers, spec.name, None)
+    custom_name = _query_first_alias(query, "custom_name", "customName")
+    creating_custom = raw_provider_name == "custom" and custom_name is not None
+
+    if creating_custom:
+        display_name = (custom_name or "").strip()
+        if not display_name:
+            raise WebUISettingsError("显示名称不能为空")
+        if len(display_name) > 120:
+            raise WebUISettingsError("显示名称过长")
+        existing_ids = set(config.providers.cindy) | {
+            registry_spec.name for registry_spec in PROVIDERS
+        }
+        provider_name = _custom_provider_id(display_name, existing_ids)
+        spec = custom_provider_spec(provider_name)
+        if spec is None:
+            raise WebUISettingsError("invalid custom provider")
+        catalog_entry = None
+        custom_entry = True
+        provider_config = ProviderConfig(display_name=display_name)
+    else:
+        spec = find_by_name(raw_provider_name)
+        if spec is None or spec.is_oauth:
+            raise WebUISettingsError("unknown provider")
+        provider_name = spec.name
+        custom_entry = is_custom_provider_name(provider_name)
+        catalog_entry = CINDY_CHAT_PROVIDER_BY_ID.get(provider_name)
+        if custom_entry and provider_name not in config.providers.cindy:
+            raise WebUISettingsError("unknown provider")
+        provider_config = None
+
+    delete_requested = (catalog_entry is not None or custom_entry) and _parse_bool(
+        _query_first(query, "delete") or "false", "delete"
+    )
+    legacy_config = getattr(config.providers, provider_name, None)
+    if delete_requested:
+        was_default = config.agents.defaults.provider == provider_name
+        if not was_default and config.agents.defaults.provider == "auto":
+            try:
+                was_default = (
+                    config.get_provider_name(config.agents.defaults.model)
+                    == provider_name
+                )
+            except Exception:
+                was_default = False
+        config.providers.cindy.pop(provider_name, None)
+        # Clear a legacy fixed-field entry with the same public ID as well;
+        # otherwise a deleted Cindy provider would reappear as configured.
+        if isinstance(legacy_config, ProviderConfig):
+            setattr(config.providers, provider_name, ProviderConfig())
+        if was_default:
+            remaining = [
+                row
+                for row in _chat_provider_rows(config)
+                if row["name"] != provider_name and row["configured"]
+            ]
+            order = {entry.id: index for index, entry in enumerate(CINDY_CHAT_PROVIDERS)}
+            remaining.sort(
+                key=lambda row: (
+                    row.get("region") != "cn",
+                    row.get("name", "").startswith("custom-"),
+                    order.get(row["name"], len(order)),
+                )
+            )
+            if remaining:
+                replacement = remaining[0]
+                enabled_models = [
+                    model["id"] for model in replacement["models"] if model["enabled"]
+                ]
+                saved_model = replacement.get("model")
+                config.agents.defaults.provider = replacement["name"]
+                available_model_ids = enabled_models or [
+                    model["id"] for model in replacement["models"]
+                ]
+                config.agents.defaults.model = (
+                    saved_model
+                    if saved_model in available_model_ids
+                    else (available_model_ids[0] if available_model_ids else "")
+                )
+            else:
+                # Zen resolves its free_default_model when model is empty.
+                config.agents.defaults.provider = "zen"
+                config.agents.defaults.model = ""
+        save_config(config)
+        return settings_payload()
+
+    # Cindy IDs are persisted in their keyed map even when a legacy fixed
+    # provider with the same public name exists (for example ``deepseek``).
     if provider_config is None:
-        raise WebUISettingsError("unknown provider")
+        provider_config = (
+            config.providers.cindy.get(provider_name)
+            if catalog_entry is not None or custom_entry
+            else _provider_config(config, spec.name)
+        )
+    if provider_config is None:
+        if catalog_entry is None:
+            raise WebUISettingsError("unknown provider")
+        # Copy legacy credentials on first edit so existing Mona configs keep
+        # working while all new Cindy state uses the dynamic map.
+        provider_config = (
+            legacy_config.model_copy(deep=True)
+            if isinstance(legacy_config, ProviderConfig)
+            else ProviderConfig()
+        )
+        config.providers.cindy[provider_name] = provider_config
 
     changed = False
+    models_updated = False
+    if (
+        catalog_entry is not None
+        and not catalog_entry.api_base_editable
+        and provider_config.api_base
+        and provider_config.api_base.rstrip("/") != catalog_entry.api_base.rstrip("/")
+    ):
+        provider_config.api_base = None
+        changed = True
+
     if "api_key" in query or "apiKey" in query:
         api_key = _query_first_alias(query, "api_key", "apiKey")
         api_key = (api_key or "").strip() or None
+        if custom_entry and api_key is None and provider_config.api_key:
+            api_key = provider_config.api_key
         if provider_config.api_key != api_key:
             provider_config.api_key = api_key
             changed = True
@@ -827,15 +1001,210 @@ def update_provider_settings(query: QueryParams) -> dict[str, Any]:
     if "api_base" in query or "apiBase" in query:
         api_base = _query_first_alias(query, "api_base", "apiBase")
         api_base = (api_base or "").strip() or None
+        if custom_entry:
+            if not api_base and creating_custom:
+                raise WebUISettingsError("API Base 不能为空")
+            if api_base:
+                api_base = _validate_custom_api_base(api_base)
+        if catalog_entry is not None and not catalog_entry.api_base_editable:
+            if api_base and api_base.rstrip("/") != catalog_entry.api_base.rstrip("/"):
+                raise WebUISettingsError("该 Cindy 供应商的 API Base 不可编辑")
+            api_base = None
         if provider_config.api_base != api_base:
             provider_config.api_base = api_base
             changed = True
+
+    if custom_entry and custom_name is not None and not creating_custom:
+        display_name = (custom_name or "").strip()
+        if not display_name:
+            raise WebUISettingsError("显示名称不能为空")
+        if len(display_name) > 120:
+            raise WebUISettingsError("显示名称过长")
+        if provider_config.display_name != display_name:
+            provider_config.display_name = display_name
+            changed = True
+
+    if custom_entry and creating_custom and not provider_config.api_base:
+        raise WebUISettingsError("API Base 不能为空")
 
     model = _query_first_alias(query, "model", "model")
     if model is not None:
         model = model.strip() or None
         if provider_config.model != model:
             provider_config.model = model
+            changed = True
+    if custom_entry and creating_custom and model is None:
+        raise WebUISettingsError("模型不能为空")
+    if custom_entry and creating_custom and not (
+        "enabled_models" in query or "enabledModels" in query
+    ):
+        raise WebUISettingsError("enabled_models must not be empty")
+
+    if (catalog_entry is not None or custom_entry) and (
+        "enabled_models" in query or "enabledModels" in query
+    ):
+        raw_enabled = _query_first_alias(query, "enabled_models", "enabledModels")
+        try:
+            enabled = json.loads(raw_enabled or "[]")
+        except json.JSONDecodeError:
+            raise WebUISettingsError("enabled_models must be a JSON array") from None
+        if not isinstance(enabled, list) or not all(
+            isinstance(item, str) for item in enabled
+        ):
+            raise WebUISettingsError("enabled_models must be a JSON array of strings")
+        if not enabled:
+            raise WebUISettingsError("enabled_models must not be empty")
+        known_models = {item.id for item in catalog_entry.models} if catalog_entry else set()
+        known_models.update(
+            str(item.get("id"))
+            for item in (provider_config.discovered_models or [])
+            if isinstance(item, dict) and item.get("id")
+        )
+        raw_discovered_for_validation = _query_first_alias(
+            query, "discovered_models", "discoveredModels"
+        )
+        if raw_discovered_for_validation:
+            try:
+                raw_items = json.loads(raw_discovered_for_validation)
+            except json.JSONDecodeError:
+                raw_items = []
+            if isinstance(raw_items, list):
+                known_models.update(
+                    str(item.get("id"))
+                    for item in raw_items
+                    if isinstance(item, dict) and item.get("id")
+                )
+        if any(item not in known_models for item in enabled):
+            raise WebUISettingsError("enabled_models contains an unknown model")
+        normalized_enabled = list(dict.fromkeys(enabled))
+        if provider_config.enabled_models != normalized_enabled:
+            provider_config.enabled_models = normalized_enabled
+            changed = True
+        models_updated = True
+
+    if (catalog_entry is not None or custom_entry) and (
+        "discovered_models" in query or "discoveredModels" in query
+    ):
+        raw_discovered = _query_first_alias(
+            query, "discovered_models", "discoveredModels"
+        )
+        try:
+            discovered = json.loads(raw_discovered or "[]")
+        except json.JSONDecodeError:
+            raise WebUISettingsError("discovered_models must be a JSON array") from None
+        if not isinstance(discovered, list):
+            raise WebUISettingsError("discovered_models must be a JSON array")
+        normalized_discovered: list[dict[str, Any]] = []
+        seen_discovered: set[str] = set()
+        for item in discovered:
+            if not isinstance(item, dict):
+                raise WebUISettingsError("discovered_models contains an invalid model")
+            model_id = str(item.get("id") or "").strip()
+            if not model_id:
+                continue
+            context_window = item.get("contextWindow")
+            if context_window is not None and (
+                isinstance(context_window, bool) or not isinstance(context_window, int)
+            ):
+                raise WebUISettingsError(
+                    "discovered_models.contextWindow must be an integer"
+                )
+            if model_id in seen_discovered:
+                continue
+            seen_discovered.add(model_id)
+            normalized_discovered.append(
+                {
+                    "id": model_id,
+                    "name": str(item.get("name") or model_id),
+                    **(
+                        {"context_window": context_window}
+                        if context_window is not None
+                        else {}
+                    ),
+                }
+            )
+        existing_discovered = list(provider_config.discovered_models or [])
+        existing_ids = {
+            str(item.get("id"))
+            for item in existing_discovered
+            if isinstance(item, dict) and item.get("id")
+        }
+        merged_discovered = existing_discovered + [
+            item for item in normalized_discovered if item["id"] not in existing_ids
+        ]
+        if provider_config.discovered_models != merged_discovered:
+            provider_config.discovered_models = merged_discovered
+            changed = True
+
+        if provider_config.enabled_models is not None:
+            known_models = {item.id for item in catalog_entry.models} if catalog_entry else set()
+            known_models.update(
+                str(item.get("id"))
+                for item in merged_discovered
+                if isinstance(item, dict) and item.get("id")
+            )
+            reconciled_enabled = [
+                model_id
+                for model_id in provider_config.enabled_models
+                if model_id in known_models
+            ]
+            if not reconciled_enabled:
+                fallback_model = (
+                    catalog_entry.models[0].id
+                    if catalog_entry and catalog_entry.models
+                    else next((item["id"] for item in merged_discovered), None)
+                )
+                if fallback_model is None:
+                    raise WebUISettingsError("至少需要一个模型")
+                reconciled_enabled = [fallback_model]
+            if provider_config.enabled_models != reconciled_enabled:
+                provider_config.enabled_models = reconciled_enabled
+                changed = True
+            models_updated = True
+
+    if creating_custom:
+        # Only expose a new provider in the config map after all required
+        # scalar fields and model payload syntax have passed validation.
+        config.providers.cindy[provider_name] = provider_config
+
+    if (catalog_entry is not None or custom_entry) and models_updated and provider_config.enabled_models:
+        enabled_models = provider_config.enabled_models
+        if provider_config.model and provider_config.model not in enabled_models:
+            provider_config.model = enabled_models[0]
+            changed = True
+
+        defaults = config.agents.defaults
+        defaults_use_provider = defaults.provider == provider_name
+        if not defaults_use_provider and defaults.provider == "auto":
+            try:
+                defaults_use_provider = (
+                    config.get_provider_name(defaults.model) == provider_name
+                )
+            except Exception:
+                defaults_use_provider = False
+        if defaults_use_provider and defaults.model and defaults.model not in enabled_models:
+            defaults.model = enabled_models[0]
+            changed = True
+
+    if custom_entry:
+        if not provider_config.display_name:
+            raise WebUISettingsError("显示名称不能为空")
+        if not provider_config.api_base:
+            raise WebUISettingsError("API Base 不能为空")
+        if not provider_config.enabled_models:
+            raise WebUISettingsError("enabled_models must not be empty")
+        known_models = {
+            str(item.get("id"))
+            for item in (provider_config.discovered_models or [])
+            if isinstance(item, dict) and item.get("id")
+        }
+        if any(model_id not in known_models for model_id in provider_config.enabled_models):
+            raise WebUISettingsError("enabled_models contains an unknown model")
+        if not provider_config.model:
+            provider_config.model = provider_config.enabled_models[0]
+            changed = True
+        elif provider_config.model not in provider_config.enabled_models:
+            provider_config.model = provider_config.enabled_models[0]
             changed = True
 
     if changed:
@@ -950,7 +1319,7 @@ def update_image_generation_settings(query: QueryParams) -> dict[str, Any]:
         if get_image_gen_provider(provider_name) is None:
             raise WebUISettingsError("unknown image generation provider")
         # Verify the provider has a config entry.
-        if getattr(config.providers, provider_name, None) is None:
+        if _provider_config(config, provider_name) is None:
             raise WebUISettingsError("provider is not available in configuration")
         if image_config.provider != provider_name:
             image_config.provider = provider_name
@@ -1050,7 +1419,7 @@ def update_video_generation_settings(query: QueryParams) -> dict[str, Any]:
             raise WebUISettingsError("video generation provider is required")
         if get_video_gen_provider(provider_name) is None:
             raise WebUISettingsError("unknown video generation provider")
-        if getattr(config.providers, provider_name, None) is None:
+        if _provider_config(config, provider_name) is None:
             raise WebUISettingsError("provider is not available in configuration")
         if video_config.provider != provider_name:
             video_config.provider = provider_name
@@ -1183,6 +1552,233 @@ def update_tts_settings(query: QueryParams) -> dict[str, Any]:
     return settings_payload(requires_restart=False)
 
 
+_STOCK_REVIEW_TIME_PATTERN = re.compile(r"^([01]\d|2[0-3]):[0-5]\d$")
+
+
+def update_stock_settings(
+    query: QueryParams,
+    *,
+    cron_service: Any | None = None,
+    bootstrap: Any | None = None,
+) -> dict[str, Any]:
+    """Update the stock module section (design §13, dev plan T17).
+
+    When ``cron_service`` is given, the daily-review job is synced to the
+    resulting config: it exists only when both the module and automatic
+    review are enabled. The sync runs only after a successful save, so a
+    rejected validation never touches cron state.
+
+    When ``bootstrap`` is given and the module ends up enabled, it is
+    invoked with the saved :class:`StockConfig` so the caller can run the
+    idempotent pack bootstrap (hidden room + templates) without the gateway
+    needing a restart (dev plan T21).
+    """
+    from mona.agent.pack_bootstrap import sync_stock_review_cron
+
+    config = load_config()
+    stock = config.stock
+    changed = False
+
+    enabled = _query_first(query, "enabled")
+    if enabled is not None:
+        value = _parse_bool(enabled, "enabled")
+        if stock.enabled != value:
+            stock.enabled = value
+            changed = True
+
+    auto_review_enabled = _query_first_alias(
+        query, "auto_review_enabled", "autoReviewEnabled"
+    )
+
+    if auto_review_enabled is not None:
+        value = _parse_bool(auto_review_enabled, "autoReviewEnabled")
+        if stock.auto_review_enabled != value:
+            stock.auto_review_enabled = value
+            changed = True
+
+    review_time = _query_first_alias(query, "review_time", "reviewTime")
+    if review_time is not None:
+        review_time = review_time.strip()
+        if not _STOCK_REVIEW_TIME_PATTERN.fullmatch(review_time):
+            raise WebUISettingsError("reviewTime must be HH:MM (00:00-23:59)")
+        if stock.review_time != review_time:
+            stock.review_time = review_time
+            changed = True
+
+    review_scope = _query_first_alias(query, "review_scope", "reviewScope")
+    if review_scope is not None:
+        review_scope = review_scope.strip()
+        if review_scope not in ("all", "focus"):
+            raise WebUISettingsError("reviewScope must be 'all' or 'focus'")
+        if stock.review_scope != review_scope:
+            stock.review_scope = review_scope
+            changed = True
+
+    push_notification = _query_first_alias(query, "push_notification", "pushNotification")
+    if push_notification is not None:
+        value = _parse_bool(push_notification, "pushNotification")
+        if stock.push_notification != value:
+            stock.push_notification = value
+            changed = True
+
+    push_email = _query_first_alias(query, "push_email", "pushEmail")
+    if push_email is not None:
+        value = _parse_bool(push_email, "pushEmail")
+        if stock.push_email != value:
+            stock.push_email = value
+            changed = True
+
+    quote_refresh = _query_first_alias(query, "quote_refresh_sec", "quoteRefreshSec")
+    if quote_refresh is not None:
+        try:
+            value = int(quote_refresh.strip())
+        except ValueError:
+            raise WebUISettingsError("quoteRefreshSec must be an integer") from None
+        if not (5 <= value <= 3600):
+            raise WebUISettingsError("quoteRefreshSec must be between 5 and 3600")
+        if stock.quote_refresh_sec != value:
+            stock.quote_refresh_sec = value
+            changed = True
+
+    if changed:
+        save_config(config)
+        if cron_service is not None:
+            sync_stock_review_cron(cron_service, stock)
+        if stock.enabled and bootstrap is not None:
+            bootstrap(stock)
+    return settings_payload(requires_restart=False)
+
+
+def _provider_config(config: Any, provider_name: str) -> Any:
+    """Resolve fixed-schema and Cindy dynamic provider configs uniformly."""
+    providers = config.providers
+    getter = getattr(providers, "get_provider_config", None)
+    return getter(provider_name) if getter else getattr(providers, provider_name, None)
+
+
+def _chat_provider_config(config: Any, provider_name: str) -> Any:
+    """Resolve only the Cindy chat-provider entry for a catalog ID."""
+    dynamic = config.providers.cindy.get(provider_name)
+    if dynamic is not None:
+        return dynamic
+    # Read legacy fixed fields for backwards compatibility; first mutation
+    # above migrates a copy into the Cindy map.
+    return getattr(config.providers, provider_name, None)
+
+
+def _chat_provider_rows(config: Any) -> list[dict[str, Any]]:
+    """Return Cindy's chat catalog with persisted state and no secrets."""
+    rows: list[dict[str, Any]] = []
+    for entry in CINDY_CHAT_PROVIDERS:
+        provider_config = _chat_provider_config(config, entry.id)
+        configured = bool(provider_config) and (
+            bool(provider_config.api_key) or not entry.api_key_required
+        )
+        selected = list(provider_config.enabled_models or []) if provider_config else []
+        catalog_models: list[dict[str, Any]] = [
+            {
+                "id": model.id,
+                "name": model.name,
+                "context_window": model.context_window,
+            }
+            for model in entry.models
+        ]
+        seen_ids = {model["id"] for model in catalog_models}
+        for model in (provider_config.discovered_models if provider_config else None) or []:
+            model_id = str(model.get("id") or "").strip()
+            if not model_id or model_id in seen_ids:
+                continue
+            seen_ids.add(model_id)
+            catalog_models.append(
+                {
+                    "id": model_id,
+                    "name": str(model.get("name") or model_id),
+                    "context_window": model.get("context_window"),
+                }
+            )
+        rows.append(
+            {
+                "name": entry.id,
+                "label": entry.name,
+                "configured": configured,
+                "api_key_required": entry.api_key_required,
+                "api_key_hint": _mask_secret_hint(
+                    provider_config.api_key if provider_config else None
+                ),
+                "api_base": (
+                    provider_config.api_base
+                    if provider_config and entry.api_base_editable
+                    else None
+                )
+                or entry.api_base,
+                "default_api_base": entry.api_base,
+                "model": provider_config.model if provider_config else None,
+                "models": [
+                    {
+                        **model,
+                        "enabled": (not selected or model["id"] in selected),
+                        "recommended": index == 0,
+                    }
+                    for index, model in enumerate(catalog_models)
+                ],
+                "models_url": entry.models_url,
+                "region": entry.region,
+                "api_base_editable": entry.api_base_editable,
+                "is_custom": False,
+            }
+        )
+    for provider_name, provider_config in config.providers.cindy.items():
+        if not is_custom_provider_name(provider_name):
+            continue
+        discovered_models: list[dict[str, Any]] = []
+        seen_ids: set[str] = set()
+        for model in provider_config.discovered_models or []:
+            if not isinstance(model, dict):
+                continue
+            model_id = str(model.get("id") or "").strip()
+            if not model_id or model_id in seen_ids:
+                continue
+            seen_ids.add(model_id)
+            discovered_models.append(
+                {
+                    "id": model_id,
+                    "name": str(model.get("name") or model_id),
+                    "context_window": model.get("context_window"),
+                }
+            )
+        selected = list(provider_config.enabled_models or [])
+        rows.append(
+            {
+                "name": provider_name,
+                "label": provider_config.display_name or provider_name,
+                "configured": bool(
+                    provider_config.display_name
+                    and provider_config.api_base
+                    and selected
+                    and discovered_models
+                ),
+                "api_key_required": False,
+                "api_key_hint": _mask_secret_hint(provider_config.api_key),
+                "api_base": provider_config.api_base or "",
+                "default_api_base": provider_config.api_base or "",
+                "model": provider_config.model,
+                "models": [
+                    {
+                        **model,
+                        "enabled": model["id"] in selected,
+                        "recommended": index == 0,
+                    }
+                    for index, model in enumerate(discovered_models)
+                ],
+                "models_url": None,
+                "region": None,
+                "api_base_editable": True,
+                "is_custom": True,
+            }
+        )
+    return rows
+
+
 _ZEN_MODELS_URL = "https://opencode.ai/zen/v1/models"
 
 
@@ -1304,23 +1900,49 @@ async def probe_provider_models(
     spec = find_by_name(provider_name)
     if spec is None:
         raise WebUISettingsError("unknown provider")
+    catalog_entry = CINDY_CHAT_PROVIDER_BY_ID.get(spec.name)
 
     # OAuth / non-HTTP providers (Codex, Copilot, Bedrock) can't be probed.
     if spec.is_oauth or spec.backend in ("openai_codex", "github_copilot", "bedrock", "azure_openai"):
         raise WebUISettingsError("该服务商不支持自动拉取模型列表，请手动填写")
 
     config = load_config()
-    provider_config = getattr(config.providers, spec.name, None)
+    provider_config = _provider_config(config, spec.name)
     if provider_config is None:
-        raise WebUISettingsError("unknown provider")
+        if catalog_entry is None:
+            raise WebUISettingsError("unknown provider")
+        provider_config = ProviderConfig()
 
-    effective_base = (api_base or provider_config.api_base or spec.default_api_base or "").strip()
+    if catalog_entry and not catalog_entry.api_base_editable:
+        if api_base and api_base.rstrip("/") != catalog_entry.api_base.rstrip("/"):
+            raise WebUISettingsError("该 Cindy 供应商的 API Base 不可编辑")
+        effective_base = catalog_entry.api_base
+    else:
+        effective_base = (
+            api_base
+            or provider_config.api_base
+            or (catalog_entry.api_base if catalog_entry else None)
+            or spec.default_api_base
+            or ""
+        ).strip()
     if not effective_base:
         raise WebUISettingsError("请先填写 API Base 后再拉取模型")
 
-    effective_key = (api_key or provider_config.api_key or "").strip()
+    # ``custom`` is the create-form sentinel, not a persisted provider.  Do
+    # not borrow the legacy fixed ``providers.custom`` key for a new endpoint;
+    # only an explicitly supplied request key may be used.  Persisted
+    # ``custom-*`` providers retain the normal saved-key fallback for edits.
+    effective_key = (
+        (api_key or "").strip()
+        if provider_name.strip() == "custom"
+        else (api_key or provider_config.api_key or "").strip()
+    )
 
-    url = _models_url_for(spec.backend, effective_base, spec.name)
+    url = (
+        catalog_entry.models_url
+        if catalog_entry and catalog_entry.models_url
+        else _models_url_for(spec.backend, effective_base, spec.name)
+    )
     if not url:
         raise WebUISettingsError("该服务商不支持自动拉取模型列表，请手动填写")
 
