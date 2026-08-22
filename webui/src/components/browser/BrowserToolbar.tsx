@@ -25,6 +25,7 @@ import {
 import { isTauri } from "@/lib/tauri";
 import { browserShowDownloads, browserToggleDownloads, browserHideDownloads, type DownloadPopupAnchor } from "@/lib/browser-ipc";
 import { useDownloads } from "@/hooks/useDownloads";
+import { normalizeUrlOrSearch } from "./browser-navigation";
 
 interface ChromeBookmarkNode {
   type?: string;
@@ -36,8 +37,6 @@ interface ChromeBookmarkNode {
 interface ChromeBookmarksJson {
   roots?: Record<string, ChromeBookmarkNode | undefined>;
 }
-
-const DEFAULT_SEARCH_ENGINE = "https://www.google.com/search?q=";
 
 /** 下载按钮上的环形进度：progress 为 null 时无限旋转（总大小未知） */
 function DownloadProgressRing({ progress }: { progress: number | null }) {
@@ -65,28 +64,6 @@ function DownloadProgressRing({ progress }: { progress: number | null }) {
       />
     </svg>
   );
-}
-
-function isLikelyUrl(input: string): boolean {
-  // 包含协议
-  if (/^https?:\/\//i.test(input)) return true;
-  // 看起来像域名（example.com, sub.example.co.uk）
-  if (/^[a-z0-9-]+(\.[a-z0-9-]+)+(\/.*)?$/i.test(input)) return true;
-  // localhost
-  if (/^localhost(:\d+)?(\/.*)?$/i.test(input)) return true;
-  // IP 地址
-  if (/^\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}(:\d+)?(\/.*)?$/.test(input)) return true;
-  return false;
-}
-
-function normalizeUrlOrSearch(input: string): string {
-  const trimmed = input.trim();
-  if (!trimmed) return "";
-  if (isLikelyUrl(trimmed)) {
-    return trimmed.includes("://") ? trimmed : `https://${trimmed}`;
-  }
-  // 当作搜索查询
-  return `${DEFAULT_SEARCH_ENGINE}${encodeURIComponent(trimmed)}`;
 }
 
 interface BrowserToolbarProps {

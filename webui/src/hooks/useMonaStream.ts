@@ -17,16 +17,74 @@ import type {
 interface StreamBuffer {
   /** ID of the assistant message currently receiving deltas (cleared on ``stream_end``). */
   messageId: string;
+  /** Backend stream/job identity. Undefined for legacy chat-scoped streams. */
+  streamKey?: string;
+  authorId?: string;
+  jobId?: string;
 }
 
 interface ActiveAssistantCursor {
   id: string;
   index: number;
+  streamKey?: string;
+  authorId?: string;
+  jobId?: string;
 }
 
 type PendingStreamEvent =
-  | { kind: "delta"; text: string; authorId?: string }
-  | { kind: "reasoning"; text: string; authorId?: string };
+  | { kind: "delta"; text: string; authorId?: string; streamKey?: string; jobId?: string }
+  | { kind: "reasoning"; text: string; authorId?: string; streamKey?: string; jobId?: string };
+
+type RuntimeInboundEvent = InboundEvent & {
+  message_id?: unknown;
+  messageId?: unknown;
+  id?: unknown;
+  stream_id?: unknown;
+  job_id?: unknown;
+  workflow_run_id?: unknown;
+  author_id?: unknown;
+};
+
+interface EventIdentity {
+  messageId?: string;
+  streamId?: string;
+  jobId?: string;
+  workflowRunId?: string;
+  authorId?: string;
+  streamKey?: string;
+}
+
+function nonEmptyString(value: unknown): string | undefined {
+  return typeof value === "string" && value.length > 0 ? value : undefined;
+}
+
+function eventIdentity(event: InboundEvent): EventIdentity {
+  const raw = event as RuntimeInboundEvent;
+  const streamId = nonEmptyString(raw.stream_id);
+  const jobId = nonEmptyString(raw.job_id);
+  const workflowRunId = nonEmptyString(raw.workflow_run_id);
+  const authorId = nonEmptyString(raw.author_id);
+  const messageId =
+    nonEmptyString(raw.message_id)
+    ?? nonEmptyString(raw.messageId)
+    ?? nonEmptyString(raw.id);
+  const streamKey = streamId
+    ? `stream:${streamId}`
+    : jobId
+      ? `job:${jobId}`
+      : workflowRunId
+        ? undefined
+        : authorId
+          ? `agent:${authorId}`
+          : undefined;
+  return { messageId, streamId, jobId, workflowRunId, authorId, streamKey };
+}
+
+function findMessageIndexById(messages: UIMessage[], id: string | undefined): number | null {
+  if (!id) return null;
+  const index = messages.findIndex((message) => message.id === id);
+  return index === -1 ? null : index;
+}
 
 /** Find a still-open streamed assistant turn. Closed stream segments stay visible
  * as streaming until ``turn_end`` for visual continuity, but they must not
@@ -395,6 +453,10 @@ export function useMonaStream(
   const [streamError, setStreamError] = useState<StreamError | null>(null);
   const buffer = useRef<StreamBuffer | null>(null);
   const activeAssistantRef = useRef<ActiveAssistantCursor | null>(null);
+  /** Open streamed bubbles indexed by backend stream/job identity. */
+  const streamMessageIdsRef = useRef<Map<string, string>>(new Map());
+  /** Completed message identities used to make duplicate complete frames idempotent. */
+  const messageIdentityIdsRef = useRef<Map<string, string>>(new Map());
   const closedAssistantStreamIdsRef = useRef<Set<string>>(new Set());
   const activitySegmentRef = useRef<string | null>(null);
   const fileEditSegmentRef = useRef<string | null>(null);
@@ -454,12 +516,26 @@ export function useMonaStream(
     fileEditSegmentRef.current = null;
   }, []);
 
-  const closeActiveAssistantStream = useCallback(() => {
-    const closedStreamId = buffer.current?.messageId ?? activeAssistantRef.current?.id;
-    if (closedStreamId) closedAssistantStreamIdsRef.current.add(closedStreamId);
-    buffer.current = null;
-    activeAssistantRef.current = null;
+  const forgetStreamMessage = useCallback((messageId: string) => {
+    for (const [key, id] of streamMessageIdsRef.current) {
+      if (id === messageId) streamMessageIdsRef.current.delete(key);
+    }
   }, []);
+
+  const closeAssistantStream = useCallback((streamKey?: string) => {
+    const active = activeAssistantRef.current;
+    const messageId = streamKey
+      ? streamMessageIdsRef.current.get(streamKey)
+        ?? (active?.streamKey === streamKey ? active.id : undefined)
+      : buffer.current?.messageId ?? active?.id;
+    if (messageId) {
+      closedAssistantStreamIdsRef.current.add(messageId);
+      forgetStreamMessage(messageId);
+    }
+    if (streamKey) streamMessageIdsRef.current.delete(streamKey);
+    if (!streamKey || buffer.current?.messageId === messageId) buffer.current = null;
+    if (!streamKey || active?.id === messageId) activeAssistantRef.current = null;
+  }, [forgetStreamMessage]);
 
   const resolveActiveAssistantIndex = useCallback((prev: UIMessage[]): number | null => {
     const cursor = activeAssistantRef.current;
@@ -478,8 +554,34 @@ export function useMonaStream(
       activeAssistantRef.current = null;
       return null;
     }
-    activeAssistantRef.current = { id: cursor.id, index: idx };
+    activeAssistantRef.current = {
+      id: cursor.id,
+      index: idx,
+      ...(cursor.streamKey ? { streamKey: cursor.streamKey } : {}),
+      ...(cursor.authorId ? { authorId: cursor.authorId } : {}),
+      ...(cursor.jobId ? { jobId: cursor.jobId } : {}),
+    };
     return idx;
+  }, []);
+
+  const resolveStreamAssistantIndex = useCallback((prev: UIMessage[], streamKey?: string): number | null => {
+    if (!streamKey) return null;
+    const messageId = streamMessageIdsRef.current.get(streamKey);
+    const index = findMessageIndexById(prev, messageId);
+    if (index === null) {
+      streamMessageIdsRef.current.delete(streamKey);
+      return null;
+    }
+    const message = prev[index];
+    if (
+      message.role !== "assistant"
+      || message.kind === "trace"
+      || closedAssistantStreamIdsRef.current.has(message.id)
+    ) {
+      streamMessageIdsRef.current.delete(streamKey);
+      return null;
+    }
+    return index;
   }, []);
 
   const applyPendingStreamEvents = useCallback(
@@ -491,22 +593,29 @@ export function useMonaStream(
       for (let i = 0; i < events.length;) {
         const kind = events[i].kind;
         const authorId = events[i].authorId;
+        const streamKey = events[i].streamKey;
+        const jobId = events[i].jobId;
         let text = "";
         while (
           i < events.length
           && events[i].kind === kind
           && (events[i].authorId ?? null) === (authorId ?? null)
+          && (events[i].streamKey ?? null) === (streamKey ?? null)
+          && (events[i].jobId ?? null) === (jobId ?? null)
         ) {
           text += events[i].text;
           i += 1;
         }
         if (kind === "delta") {
           // Inline appendAnswerChunk: find target, mutate draft in-place
-          let targetIndex = resolveActiveAssistantIndex(draft);
-          if (targetIndex === null) {
+          let targetIndex = resolveStreamAssistantIndex(draft, streamKey);
+          if (targetIndex === null && (!streamKey || activeAssistantRef.current?.streamKey === streamKey)) {
+            targetIndex = resolveActiveAssistantIndex(draft);
+          }
+          if (targetIndex === null && !streamKey) {
             targetIndex = findActiveAssistantPlaceholderIndex(draft);
           }
-          if (targetIndex === null) {
+          if (targetIndex === null && !streamKey) {
             targetIndex = findStreamingAssistantIndex(draft, closedAssistantStreamIdsRef.current);
           }
           if (targetIndex === null) {
@@ -531,50 +640,76 @@ export function useMonaStream(
               : {}),
           };
           closedAssistantStreamIdsRef.current.delete(merged.id);
-          activeAssistantRef.current = { id: merged.id, index: targetIndex };
-          buffer.current = { messageId: merged.id };
+          activeAssistantRef.current = {
+            id: merged.id,
+            index: targetIndex,
+            ...(streamKey ? { streamKey } : {}),
+            ...(authorId ? { authorId } : {}),
+            ...(jobId ? { jobId } : {}),
+          };
+          buffer.current = {
+            messageId: merged.id,
+            ...(streamKey ? { streamKey } : {}),
+            ...(authorId ? { authorId } : {}),
+            ...(jobId ? { jobId } : {}),
+          };
+          if (streamKey) streamMessageIdsRef.current.set(streamKey, merged.id);
           draft[targetIndex] = merged;
         } else {
           // Inline attachReasoningChunk: find target, mutate draft in-place
           let found = false;
-          for (let j = draft.length - 1; j >= 0; j -= 1) {
-            const candidate = draft[j];
-            if (candidate.role === "user") break;
-            if (candidate.kind === "trace") break;
-            if (candidate.role !== "assistant") continue;
+          const keyedReasoningIndex = resolveStreamAssistantIndex(draft, streamKey);
+          if (keyedReasoningIndex !== null) {
+            const candidate = draft[keyedReasoningIndex];
             const activitySegmentId = candidate.activitySegmentId ?? ensureActivitySegmentId();
-            const hasAnswer = candidate.content.length > 0;
-            if (
-              candidate.reasoningStreaming
-              || candidate.reasoning !== undefined
-              || hasAnswer
-              || candidate.isStreaming
-            ) {
-              draft[j] = {
-                ...candidate,
-                reasoning: (candidate.reasoning ?? "") + text,
-                reasoningStreaming: true,
-                ...(activitySegmentId ? { activitySegmentId } : {}),
-              };
-              found = true;
+            draft[keyedReasoningIndex] = {
+              ...candidate,
+              reasoning: (candidate.reasoning ?? "") + text,
+              reasoningStreaming: true,
+              ...(activitySegmentId ? { activitySegmentId } : {}),
+            };
+            found = true;
+          } else if (!streamKey) {
+            for (let j = draft.length - 1; j >= 0; j -= 1) {
+              const candidate = draft[j];
+              if (candidate.role === "user") break;
+              if (candidate.kind === "trace") break;
+              if (candidate.role !== "assistant") continue;
+              const activitySegmentId = candidate.activitySegmentId ?? ensureActivitySegmentId();
+              const hasAnswer = candidate.content.length > 0;
+              if (
+                candidate.reasoningStreaming
+                || candidate.reasoning !== undefined
+                || hasAnswer
+                || candidate.isStreaming
+              ) {
+                draft[j] = {
+                  ...candidate,
+                  reasoning: (candidate.reasoning ?? "") + text,
+                  reasoningStreaming: true,
+                  ...(activitySegmentId ? { activitySegmentId } : {}),
+                };
+                found = true;
+                break;
+              }
+              if (!hasAnswer && candidate.isStreaming) {
+                draft[j] = {
+                  ...candidate,
+                  reasoning: text,
+                  reasoningStreaming: true,
+                  ...(activitySegmentId ? { activitySegmentId } : {}),
+                };
+                found = true;
+                break;
+              }
               break;
             }
-            if (!hasAnswer && candidate.isStreaming) {
-              draft[j] = {
-                ...candidate,
-                reasoning: text,
-                reasoningStreaming: true,
-                ...(activitySegmentId ? { activitySegmentId } : {}),
-              };
-              found = true;
-              break;
-            }
-            break;
           }
           if (!found) {
             const activitySegmentId = ensureActivitySegmentId();
+            const id = crypto.randomUUID();
             draft.push({
-              id: crypto.randomUUID(),
+              id,
               role: "assistant",
               content: "",
               isStreaming: true,
@@ -583,31 +718,50 @@ export function useMonaStream(
               ...(activitySegmentId ? { activitySegmentId } : {}),
               createdAt: Date.now(),
             });
+            if (streamKey) {
+              streamMessageIdsRef.current.set(streamKey, id);
+              activeAssistantRef.current = {
+                id,
+                index: draft.length - 1,
+                streamKey,
+                ...(authorId ? { authorId } : {}),
+                ...(jobId ? { jobId } : {}),
+              };
+              buffer.current = {
+                messageId: id,
+                streamKey,
+                ...(authorId ? { authorId } : {}),
+                ...(jobId ? { jobId } : {}),
+              };
+            }
           }
         }
       }
       return draft;
     },
-    [resolveActiveAssistantIndex, ensureActivitySegmentId],
+    [resolveActiveAssistantIndex, resolveStreamAssistantIndex, ensureActivitySegmentId],
   );
 
-  const flushPendingStreamEvents = useCallback((options?: { closeAnswerSegment?: boolean }) => {
+  const flushPendingStreamEvents = useCallback((options?: {
+    closeAnswerSegment?: boolean;
+    streamKey?: string;
+  }) => {
     if (streamFrameRef.current !== null) {
       window.cancelAnimationFrame(streamFrameRef.current);
       streamFrameRef.current = null;
     }
     const events = pendingStreamEventsRef.current;
     if (events.length === 0) {
-      if (options?.closeAnswerSegment) closeActiveAssistantStream();
+      if (options?.closeAnswerSegment) closeAssistantStream(options.streamKey);
       return;
     }
     pendingStreamEventsRef.current = [];
     setMessages((prev) => {
       const next = applyPendingStreamEvents(prev, events);
-      if (options?.closeAnswerSegment) closeActiveAssistantStream();
+      if (options?.closeAnswerSegment) closeAssistantStream(options.streamKey);
       return next;
     });
-  }, [applyPendingStreamEvents, closeActiveAssistantStream]);
+  }, [applyPendingStreamEvents, closeAssistantStream]);
 
   const schedulePendingStreamFlush = useCallback(() => {
     if (streamFrameRef.current !== null) return;
@@ -635,6 +789,8 @@ export function useMonaStream(
     setGoalState(chatId && client ? client.getGoalState(chatId) : undefined);
     buffer.current = null;
     activeAssistantRef.current = null;
+    streamMessageIdsRef.current.clear();
+    messageIdentityIdsRef.current.clear();
     closedAssistantStreamIdsRef.current.clear();
     pendingDeliveredFilesRef.current = [];
     clearActivitySegment();
@@ -655,6 +811,7 @@ export function useMonaStream(
     if (!chatId || !client) return;
 
     const handle = (ev: InboundEvent) => {
+      const identity = eventIdentity(ev);
       // Any incoming event while the debounce timer is alive means the model
       // is still working (e.g. tool result arrived, more text to stream).
       // Cancel the pending "stream ended" timer so we don't hide the spinner.
@@ -672,7 +829,9 @@ export function useMonaStream(
         pendingStreamEventsRef.current.push({
           kind: "delta",
           text: chunk,
-          ...(ev.author_id ? { authorId: ev.author_id } : {}),
+          ...(identity.authorId ? { authorId: identity.authorId } : {}),
+          ...(identity.streamKey ? { streamKey: identity.streamKey } : {}),
+          ...(identity.jobId ? { jobId: identity.jobId } : {}),
         });
         schedulePendingStreamFlush();
         return;
@@ -684,13 +843,19 @@ export function useMonaStream(
         if (!chunk) return;
         if (fileEditSegmentRef.current) clearActivitySegment();
         setIsStreaming(true);
-        pendingStreamEventsRef.current.push({ kind: "reasoning", text: chunk });
+        pendingStreamEventsRef.current.push({
+          kind: "reasoning",
+          text: chunk,
+          ...(identity.authorId ? { authorId: identity.authorId } : {}),
+          ...(identity.streamKey ? { streamKey: identity.streamKey } : {}),
+          ...(identity.jobId ? { jobId: identity.jobId } : {}),
+        });
         schedulePendingStreamFlush();
         return;
       }
 
       if (ev.event === "stream_end") {
-        flushPendingStreamEvents({ closeAnswerSegment: true });
+        flushPendingStreamEvents({ closeAnswerSegment: true, streamKey: identity.streamKey });
         if (suppressStreamUntilTurnEndRef.current) return;
         // stream_end only means the text segment finished — the model may
         // still be executing tools.  Do NOT reset isStreaming here; the
@@ -746,6 +911,7 @@ export function useMonaStream(
           }
           buffer.current = null;
           activeAssistantRef.current = null;
+          streamMessageIdsRef.current.clear();
           clearActivitySegment();
           closedAssistantStreamIdsRef.current.clear();
           return finalized;
@@ -843,30 +1009,115 @@ export function useMonaStream(
         // flight, drop the placeholder so we don't render the text twice.
         // Do NOT reset isStreaming here — only ``turn_end`` signals that
         // the full turn (all tool calls + final text) is complete.
-        clearActivitySegment();
+        // A job/workflow result is its own stream. It may arrive while Mona
+        // (or another agent) is still streaming, so it must not clear that
+        // stream's cursor. A plain message remains the legacy Mona turn.
+        const active = activeAssistantRef.current;
+        const mappedStreamMessageId = identity.streamKey
+          ? streamMessageIdsRef.current.get(identity.streamKey)
+          : undefined;
+        const sameActiveStream = Boolean(
+          active
+          && (
+            mappedStreamMessageId === active.id
+            || (identity.jobId && active.jobId === identity.jobId)
+            || (
+              !identity.jobId
+              && !identity.workflowRunId
+              && identity.authorId
+              && active.authorId
+              && identity.authorId === active.authorId
+            )
+          ),
+        );
+        const isIndependentAgentMessage = Boolean(
+          (identity.jobId || identity.workflowRunId) && !sameActiveStream
+          || (
+            identity.authorId
+            && active?.authorId
+            && identity.authorId !== active.authorId
+          ),
+        );
+        if (!isIndependentAgentMessage) {
+          clearActivitySegment();
+        }
         setMessages((prev) => {
-          const activeId = buffer.current?.messageId;
-          buffer.current = null;
-          activeAssistantRef.current = null;
-          const filtered = activeId ? prev.filter((m) => m.id !== activeId) : prev;
+          const identityKey = identity.messageId
+            ? `message:${identity.messageId}`
+            : identity.jobId
+              ? `job:${identity.jobId}`
+              : undefined;
+          const existingIdentityId = identityKey
+            ? messageIdentityIdsRef.current.get(identityKey)
+            : undefined;
+          const existingIdentityIndex = findMessageIndexById(prev, existingIdentityId);
+          const activeId = isIndependentAgentMessage
+            ? undefined
+            : mappedStreamMessageId
+              ?? buffer.current?.messageId;
+          if (!isIndependentAgentMessage) {
+            buffer.current = null;
+            activeAssistantRef.current = null;
+          }
           const content = ev.text;
           const lat =
             typeof ev.latency_ms === "number" && ev.latency_ms >= 0
               ? Math.round(ev.latency_ms)
               : undefined;
-          let next = absorbCompleteAssistantMessage(filtered, {
+          const completeMessage: Omit<UIMessage, "id" | "role" | "createdAt"> = {
             content,
             ...(hasMedia ? { media } : {}),
             ...(lat !== undefined ? { latencyMs: lat } : {}),
-            ...(ev.author_id
-              ? { authorId: ev.author_id, authorType: "agent" as const }
+            ...(identity.authorId
+              ? { authorId: identity.authorId, authorType: "agent" as const }
               : {}),
             ...(ev.message_type && ev.message_type !== "message"
               ? { messageType: ev.message_type }
               : {}),
-            ...(ev.job_id ? { jobId: ev.job_id } : {}),
-            ...(ev.workflow_run_id ? { workflowRunId: ev.workflow_run_id } : {}),
-          });
+            ...(identity.jobId ? { jobId: identity.jobId } : {}),
+            ...(identity.workflowRunId ? { workflowRunId: identity.workflowRunId } : {}),
+            ...(Array.isArray(ev.tool_events) && ev.tool_events.length > 0
+              ? { toolEvents: ev.tool_events }
+              : {}),
+            isStreaming: false,
+            reasoningStreaming: false,
+          };
+
+          // Replay/duplicate complete frames update the original bubble.
+          if (existingIdentityIndex !== null) {
+            const existing = prev[existingIdentityIndex];
+            forgetStreamMessage(existing.id);
+            const next = replaceMessageAt(prev, existingIdentityIndex, {
+              ...existing,
+              ...completeMessage,
+            });
+            return next;
+          }
+
+          let next: UIMessage[];
+          if (isIndependentAgentMessage) {
+            // Never use absorbCompleteAssistantMessage here: the last item
+            // may be another agent's reasoning placeholder.
+            const id = crypto.randomUUID();
+            next = [
+              ...prev,
+              {
+                id,
+                role: "assistant",
+                createdAt: Date.now(),
+                ...completeMessage,
+              },
+            ];
+            if (identityKey) messageIdentityIdsRef.current.set(identityKey, id);
+          } else {
+            const filtered = activeId ? prev.filter((m) => m.id !== activeId) : prev;
+            if (activeId) forgetStreamMessage(activeId);
+            next = absorbCompleteAssistantMessage(filtered, completeMessage);
+            if (identityKey) {
+              const inserted = next[next.length - 1];
+              if (inserted?.role === "assistant") messageIdentityIdsRef.current.set(identityKey, inserted.id);
+            }
+          }
           if (pendingDeliveredFilesRef.current.length > 0) {
             next = appendDeliveredFilesToLastAssistant(next, pendingDeliveredFilesRef.current);
             pendingDeliveredFilesRef.current = [];
@@ -961,6 +1212,8 @@ export function useMonaStream(
       unsub();
       buffer.current = null;
       activeAssistantRef.current = null;
+      streamMessageIdsRef.current.clear();
+      messageIdentityIdsRef.current.clear();
       closedAssistantStreamIdsRef.current.clear();
       pendingDeliveredFilesRef.current = [];
       clearActivitySegment();
@@ -995,6 +1248,8 @@ export function useMonaStream(
       setMessages((prev) => {
         buffer.current = null;
         activeAssistantRef.current = null;
+        streamMessageIdsRef.current.clear();
+        messageIdentityIdsRef.current.clear();
         closedAssistantStreamIdsRef.current.clear();
         pendingDeliveredFilesRef.current = [];
         clearActivitySegment();
@@ -1070,6 +1325,8 @@ export function useMonaStream(
     setMessages((prev) => {
       buffer.current = null;
       activeAssistantRef.current = null;
+      streamMessageIdsRef.current.clear();
+      messageIdentityIdsRef.current.clear();
       closedAssistantStreamIdsRef.current.clear();
       pendingDeliveredFilesRef.current = [];
       clearActivitySegment();

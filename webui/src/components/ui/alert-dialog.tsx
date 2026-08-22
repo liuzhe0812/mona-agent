@@ -14,6 +14,7 @@ const AlertDialog = ({
     if (!open) {
       [50, 200, 400, 600].forEach((delay) => {
         window.setTimeout(() => {
+          if (typeof document === "undefined") return;
           if (document.body.style.pointerEvents === "none") {
             document.body.style.pointerEvents = "";
           }

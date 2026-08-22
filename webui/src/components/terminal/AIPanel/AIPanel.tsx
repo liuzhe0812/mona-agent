@@ -7,14 +7,16 @@ import { MaintenanceHistory } from "./MaintenanceHistory";
 import { MaintenanceTaskCard } from "./MaintenanceTaskCard";
 import { useTerminalStore } from "../store/terminalStore";
 import { terminalMaintenanceGetActive } from "../ipc";
+import type { SessionType } from "../types/terminal";
 
 interface Props {
   sessionId: string | null;
+  sessionType?: SessionType;
 }
 
 type PanelTab = "task" | "history";
 
-export function AIPanel({ sessionId }: Props) {
+export function AIPanel({ sessionId, sessionType }: Props) {
   const [tab, setTab] = useState<PanelTab>("task");
   const [messageKey, setMessageKey] = useState(0);
   const setAiStreaming = useTerminalStore((s) => s.setAiStreaming);
@@ -50,7 +52,7 @@ export function AIPanel({ sessionId }: Props) {
   );
 
   return (
-    <div className="flex h-full w-full flex-col bg-background">
+    <div className="flex h-full w-full flex-col bg-background text-black">
       <div className="flex h-10 shrink-0 items-center justify-between border-b border-border/65 px-3">
         <h2 className="truncate text-caption font-semibold text-foreground">Mona</h2>
         <Button
@@ -91,6 +93,7 @@ export function AIPanel({ sessionId }: Props) {
               <AIChat
                 key={messageKey}
                 sessionId={sessionId}
+                sessionTypeOverride={sessionType}
                 onStreamingChange={handleStreamingChange}
               />
             </div>

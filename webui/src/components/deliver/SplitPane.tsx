@@ -1,4 +1,4 @@
-import { useCallback, useRef, type ReactNode } from "react";
+import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
 import { cn } from "@/lib/utils";
 
 interface SplitPaneProps {
@@ -15,6 +15,10 @@ interface SplitPaneProps {
 const MIN_RATIO = 0.2;
 const MAX_RATIO = 0.85;
 const DIVIDER_WIDTH = 6;
+/** Pixel floors: ratio bounds alone let narrow windows crush a pane below a
+ *  usable width (right panel forms break, conversation column over-wraps). */
+const MIN_LEFT_PX = 360;
+const MIN_RIGHT_PX = 280;
 
 export function SplitPane({
   left,
@@ -25,6 +29,31 @@ export function SplitPane({
 }: SplitPaneProps) {
   const containerRef = useRef<HTMLDivElement>(null);
   const dragging = useRef(false);
+  const [containerWidth, setContainerWidth] = useState(0);
+
+  useEffect(() => {
+    const el = containerRef.current;
+    if (!el || typeof ResizeObserver === "undefined") return;
+    const observer = new ResizeObserver((entries) => {
+      const next = entries[0]?.contentRect.width ?? 0;
+      setContainerWidth((prev) => (Math.abs(prev - next) < 1 ? prev : next));
+    });
+    observer.observe(el);
+    return () => observer.disconnect();
+  }, [rightVisible]);
+
+  const clampRatio = useCallback((next: number, width: number) => {
+    let minR = MIN_RATIO;
+    let maxR = MAX_RATIO;
+    if (width > 0) {
+      minR = Math.max(minR, MIN_LEFT_PX / width);
+      maxR = Math.min(maxR, 1 - MIN_RIGHT_PX / width);
+      // Too narrow for both floors: keep the right pane usable and let the
+      // conversation column take whatever remains.
+      if (minR > maxR) minR = 0;
+    }
+    return Math.min(maxR, Math.max(minR, next));
+  }, []);
 
   const onPointerDown = useCallback((e: React.PointerEvent) => {
     e.preventDefault();
@@ -38,9 +67,9 @@ export function SplitPane({
       const rect = containerRef.current?.getBoundingClientRect();
       if (!rect) return;
       const next = (e.clientX - rect.left) / rect.width;
-      onRatioChange(Math.min(MAX_RATIO, Math.max(MIN_RATIO, next)));
+      onRatioChange(clampRatio(next, rect.width));
     },
-    [onRatioChange],
+    [clampRatio, onRatioChange],
   );
 
   const onPointerUp = useCallback(() => {
@@ -51,6 +80,8 @@ export function SplitPane({
     return <>{left}</>;
   }
 
+  const effectiveRatio = clampRatio(ratio, containerWidth);
+
   return (
     <div
       ref={containerRef}
@@ -59,15 +90,15 @@ export function SplitPane({
       onPointerUp={onPointerUp}
     >
       <div
-        style={{ width: `${ratio * 100}%` }}
+        style={{ width: `${effectiveRatio * 100}%` }}
         className="flex min-w-0 flex-col overflow-hidden"
       >
         {left}
       </div>
       <Divider onPointerDown={onPointerDown} />
       <div
-        style={{ width: `${(1 - ratio) * 100}%` }}
-        className="flex min-w-0 flex-col overflow-hidden"
+        style={{ width: `${(1 - effectiveRatio) * 100}%` }}
+        className="flex min-w-0 shrink-0 flex-col overflow-hidden"
       >
         {right}
       </div>

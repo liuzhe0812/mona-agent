@@ -53,11 +53,6 @@ function AgentRow({ agent, selected, onToggle, compact }: AgentRowProps) {
         <span className="block truncate text-ui font-medium text-foreground">
           {agent.displayName}
         </span>
-        {!compact && agent.description ? (
-          <span className="block truncate text-caption text-muted-foreground">
-            {agent.description}
-          </span>
-        ) : null}
       </span>
       <Checkbox
         checked={selected}

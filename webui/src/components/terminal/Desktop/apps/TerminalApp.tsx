@@ -12,6 +12,7 @@ import {
 } from "../../ipc";
 import type { UnlistenFn } from "../../ipc";
 import { useDesktopPortal } from "../DesktopMode";
+import { AIPanel } from "../../AIPanel/AIPanel";
 import {
   FolderOpen,
   Search,
@@ -34,6 +35,7 @@ import {
   Trash2,
   Check,
   Loader2,
+  Bot,
 } from "lucide-react";
 import {
   Tooltip,
@@ -122,12 +124,13 @@ const predefinedCommands: CommandItem[] = [
 
 interface TerminalAppProps {
   sessionId: string;
+  aiEnabled: boolean;
 }
 
 const generateTerminalSessionId = () =>
   `desktop_term_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
 
-export function TerminalApp({ sessionId }: TerminalAppProps) {
+export function TerminalApp({ sessionId, aiEnabled }: TerminalAppProps) {
   const portalTarget = useDesktopPortal();
   const containerRef = useRef<HTMLDivElement>(null);
   const terminalRef = useRef<Terminal | null>(null);
@@ -140,6 +143,7 @@ export function TerminalApp({ sessionId }: TerminalAppProps) {
   const [isConnecting, setIsConnecting] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [showSidebar, setShowSidebar] = useState(false);
+  const [showAiSidebar, setShowAiSidebar] = useState(false);
   const [activeTab, setActiveTab] = useState<"history" | "command">("history");
   const [searchQuery, setSearchQuery] = useState("");
   const [selectedCategory, setSelectedCategory] = useState<string | null>(null);
@@ -207,7 +211,10 @@ export function TerminalApp({ sessionId }: TerminalAppProps) {
         setError(null);
 
         const unlisten = await onTerminalOutput((event) => {
-          if (event.sessionId === terminalSessionId) {
+          if (
+            event.sessionId === terminalSessionId ||
+            event.sessionId === sessionId
+          ) {
             term.write(event.data);
           }
         });
@@ -304,7 +311,7 @@ export function TerminalApp({ sessionId }: TerminalAppProps) {
       }, 300);
       return () => clearTimeout(id);
     }
-  }, [showSidebar, sessionId]);
+  }, [showSidebar, showAiSidebar, sessionId]);
 
   const sendCommand = useCallback(
     (cmd: string) => {
@@ -401,7 +408,7 @@ export function TerminalApp({ sessionId }: TerminalAppProps) {
     <div className="h-full flex flex-col relative overflow-hidden">
       <div className="flex-1 flex overflow-hidden relative">
         <div
-          className="flex-1 relative h-full bg-[#0c0c0c]"
+          className="relative h-full min-w-0 flex-1 bg-[#0c0c0c]"
           onContextMenu={handleContextMenu}
           onClick={() => terminalRef.current?.focus()}
         >
@@ -662,6 +669,21 @@ export function TerminalApp({ sessionId }: TerminalAppProps) {
             )}
           </div>
         </div>
+
+        {showAiSidebar && (
+          <div className="relative z-30 h-full w-[400px] shrink-0 border-l border-white/10 shadow-2xl">
+            <AIPanel sessionId={sessionId} sessionType="desktop" />
+            <button
+              type="button"
+              onClick={() => setShowAiSidebar(false)}
+              className="absolute right-9 top-2 text-muted-foreground hover:text-foreground"
+              aria-label="关闭 AI 侧栏"
+              title="关闭 AI 侧栏"
+            >
+              <X className="h-4 w-4" />
+            </button>
+          </div>
+        )}
       </div>
 
       <div className="h-8 bg-[#1e1e1e] border-t border-white/5 flex items-center px-3 gap-4 shrink-0 z-20">
@@ -717,11 +739,31 @@ export function TerminalApp({ sessionId }: TerminalAppProps) {
           </Tooltip>
         </div>
 
+        {aiEnabled && (
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <button
+                type="button"
+                onClick={() => {
+                  setShowAiSidebar((visible) => !visible);
+                  setShowSidebar(false);
+                }}
+                className={`transition-colors ${showAiSidebar ? "text-white" : "text-white/60 hover:text-white/80"}`}
+                aria-label={showAiSidebar ? "关闭 AI 助手" : "打开 AI 助手"}
+              >
+                <Bot className="h-4 w-4" />
+              </button>
+            </TooltipTrigger>
+            <TooltipContent>AI 助手</TooltipContent>
+          </Tooltip>
+        )}
+
         <Tooltip>
           <TooltipTrigger asChild>
             <button
               onClick={() => {
                 setShowSidebar(!showSidebar);
+                setShowAiSidebar(false);
                 setActiveTab("command");
               }}
               className={`transition-colors ${showSidebar ? "text-white" : "text-white/60 hover:text-white/80"}`}

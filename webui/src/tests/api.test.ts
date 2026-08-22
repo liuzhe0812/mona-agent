@@ -2,6 +2,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import {
   deleteSession,
+  fetchProviderModels,
   fetchSidebarState,
   fetchWebuiThread,
   listSessions,
@@ -10,6 +11,7 @@ import {
   updateImageGenerationSettings,
   updateProviderSettings,
   updateSettings,
+  updateStockSettings,
   updateVideoGenerationSettings,
   updateWebSearchSettings,
 } from "@/lib/api";
@@ -70,7 +72,7 @@ describe("webui API helpers", () => {
     );
   });
 
-  it("serializes provider settings updates without returning secrets", async () => {
+  it("sends provider keys in a header instead of the URL", async () => {
     await updateProviderSettings("tok", {
       provider: "openrouter",
       apiKey: "sk-or-test",
@@ -78,9 +80,46 @@ describe("webui API helpers", () => {
     });
 
     expect(fetch).toHaveBeenCalledWith(
-      "/api/settings/provider/update?provider=openrouter&api_key=sk-or-test&api_base=https%3A%2F%2Fopenrouter.ai%2Fapi%2Fv1",
+      "/api/settings/provider/update?provider=openrouter&api_base=https%3A%2F%2Fopenrouter.ai%2Fapi%2Fv1",
       expect.objectContaining({
-        headers: { Authorization: "Bearer tok" },
+        headers: {
+          Authorization: "Bearer tok",
+          "X-Mona-Provider-Key": "sk-or-test",
+        },
+      }),
+    );
+
+    await fetchProviderModels("tok", {
+      provider: "deepseek",
+      apiKey: "sk-deepseek",
+      apiBase: "https://api.deepseek.com",
+    });
+    expect(fetch).toHaveBeenLastCalledWith(
+      "/api/settings/provider/models?provider=deepseek&api_base=https%3A%2F%2Fapi.deepseek.com",
+      expect.objectContaining({
+        headers: {
+          Authorization: "Bearer tok",
+          "X-Mona-Provider-Key": "sk-deepseek",
+        },
+      }),
+    );
+  });
+
+  it("serializes a custom provider name separately from its secret", async () => {
+    await updateProviderSettings("tok", {
+      provider: "custom",
+      customName: "本地 Relay",
+      apiBase: "https://relay.example/v1",
+      apiKey: "custom-secret",
+    });
+
+    expect(fetch).toHaveBeenCalledWith(
+      "/api/settings/provider/update?provider=custom&custom_name=%E6%9C%AC%E5%9C%B0+Relay&api_base=https%3A%2F%2Frelay.example%2Fv1",
+      expect.objectContaining({
+        headers: {
+          Authorization: "Bearer tok",
+          "X-Mona-Provider-Key": "custom-secret",
+        },
       }),
     );
   });
@@ -138,11 +177,18 @@ describe("webui API helpers", () => {
   });
 
   it("reads and writes persisted sidebar state", async () => {
+    const lastReadAtByKey = Object.fromEntries(
+      Array.from({ length: 300 }, (_, index) => [
+        `websocket:chat-${index}`,
+        "2026-08-18T08:30:00Z",
+      ]),
+    );
     const state = {
-      schema_version: 1,
+      schema_version: 5,
       pinned_keys: ["websocket:chat-1"],
       archived_keys: ["websocket:old"],
       title_overrides: { "websocket:chat-1": "Release" },
+      last_read_at_by_key: lastReadAtByKey,
       tags_by_key: {},
       collapsed_groups: {},
       view: {
@@ -170,15 +216,19 @@ describe("webui API helpers", () => {
 
     await updateSidebarState("tok", state);
     const [url, init] = vi.mocked(fetch).mock.calls.at(-1)!;
-    expect(String(url).startsWith("/api/webui/sidebar-state/update?")).toBe(true);
+    expect(String(url)).toBe("/api/webui/sidebar-state/update");
     expect(init).toEqual(expect.objectContaining({
-      headers: { Authorization: "Bearer tok" },
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: "Bearer tok",
+      },
     }));
-    const encodedState = new URLSearchParams(String(url).split("?", 2)[1]).get("state");
-    expect(encodedState).toBeTruthy();
-    expect(JSON.parse(encodedState ?? "{}")).toMatchObject({
+    expect(String(init?.body).length).toBeGreaterThan(8_192);
+    expect(JSON.parse(String(init?.body))).toMatchObject({
       pinned_keys: ["websocket:chat-1"],
       title_overrides: { "websocket:chat-1": "Release" },
+      last_read_at_by_key: lastReadAtByKey,
     });
   });
 
@@ -263,6 +313,35 @@ describe("webui API helpers", () => {
       waitingApproval: false,
       scheduled: false,
     });
+  });
+
+  it("serializes stock settings updates", async () => {
+    await updateStockSettings("tok", {
+      enabled: true,
+      autoReviewEnabled: false,
+      reviewTime: "16:00",
+      pushNotification: false,
+      pushEmail: true,
+      quoteRefreshSec: 60,
+    });
+
+    expect(fetch).toHaveBeenCalledWith(
+      "/api/settings/stock/update?enabled=true&autoReviewEnabled=false&reviewTime=16%3A00&pushNotification=false&pushEmail=true&quoteRefreshSec=60",
+      expect.objectContaining({
+        headers: { Authorization: "Bearer tok" },
+      }),
+    );
+  });
+
+  it("serializes partial stock settings updates", async () => {
+    await updateStockSettings("tok", { reviewTime: "09:30" });
+
+    expect(fetch).toHaveBeenCalledWith(
+      "/api/settings/stock/update?reviewTime=09%3A30",
+      expect.objectContaining({
+        headers: { Authorization: "Bearer tok" },
+      }),
+    );
   });
 
   it("maps slash command metadata from the commands endpoint", async () => {

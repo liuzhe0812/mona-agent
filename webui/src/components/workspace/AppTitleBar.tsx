@@ -1,6 +1,7 @@
 import type { ReactNode } from "react";
-import { Maximize2, Minus, Plus, X } from "lucide-react";
+import { Globe2, Maximize2, Minus, X } from "lucide-react";
 import { getCurrentWindow } from "@tauri-apps/api/window";
+import { useTranslation } from "react-i18next";
 
 import { Button } from "@/components/ui/button";
 import { ConnectionBadge } from "@/components/ConnectionBadge";
@@ -53,13 +54,18 @@ export function AppTitleBar({
   onSaveMdAsNote,
   onRevealMdInExplorer,
 }: AppTitleBarProps) {
+  const { t } = useTranslation();
   return (
     <header
       data-tauri-drag-region="deep"
       className="flex h-9 shrink-0 items-center bg-transparent text-sidebar-foreground"
     >
       {/* 标签栏 */}
-      <div className="flex items-center gap-0.5 overflow-x-auto px-2 scrollbar-none">
+      <div
+        role="tablist"
+        aria-label={t("rail.workspaceTabs")}
+        className="flex items-center gap-0.5 overflow-x-auto px-2 scrollbar-none"
+      >
         {tabs.map((tab) => (
           <BrowserTabItem
             key={tab.id}
@@ -82,9 +88,11 @@ export function AppTitleBar({
           variant="ghost"
           size="icon"
           onClick={onNewTab}
+          aria-label={t("rail.newBrowserTab")}
+          title={t("rail.newBrowserTab")}
           className="h-6 w-6 rounded-md text-muted-foreground hover:bg-[hsl(var(--sidebar-hover-surface)/0.04)] hover:text-foreground"
         >
-          <Plus className="h-3 w-3" />
+          <Globe2 className="h-3.5 w-3.5" />
         </Button>
       </div>
 

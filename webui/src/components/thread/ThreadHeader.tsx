@@ -1,32 +1,37 @@
-import { Menu, Moon, Sun, Users } from "lucide-react";
+import { Menu, Users } from "lucide-react";
 import { useTranslation } from "react-i18next";
 
 import { Button } from "@/components/ui/button";
+import { RightSidebarToggleIcon } from "@/components/notes/RightSidebarToggleIcon";
 import { cn } from "@/lib/utils";
 import type { ConversationMeta } from "@/lib/types";
 
 interface ThreadHeaderProps {
   title: string;
   onToggleSidebar: () => void;
-  theme: "light" | "dark";
-  onToggleTheme: () => void;
   hideSidebarToggleOnDesktop?: boolean;
   minimal?: boolean;
   /** Multi-agent phase 2d: conversation shape of the active session. Rooms
    *  surface a member-count badge that toggles the room context panel. */
   conversation?: ConversationMeta | null;
   onToggleRoomPanel?: () => void;
+  /** 右侧面板收起/展开（从边缘浮动按钮移至标题行常驻）。 */
+  workspaceOpen?: boolean;
+  onToggleWorkspace?: () => void;
+  /** 右侧面板是否有内容（无内容时隐藏切换按钮）。 */
+  workspaceHasContent?: boolean;
 }
 
 export function ThreadHeader({
   title,
   onToggleSidebar,
-  theme,
-  onToggleTheme,
   hideSidebarToggleOnDesktop = false,
   minimal = false,
   conversation = null,
   onToggleRoomPanel,
+  workspaceOpen = false,
+  onToggleWorkspace,
+  workspaceHasContent = false,
 }: ThreadHeaderProps) {
   const { t } = useTranslation();
   if (minimal) {
@@ -44,12 +49,18 @@ export function ThreadHeader({
         >
           <Menu className="h-3.5 w-3.5" />
         </Button>
-        <ThemeButton
-          theme={theme}
-          onToggleTheme={onToggleTheme}
-          label={t("thread.header.toggleTheme")}
-          className="ml-auto"
-        />
+        {workspaceHasContent && onToggleWorkspace ? (
+          <Button
+            variant="ghost"
+            size="icon"
+            aria-label={workspaceOpen ? "收起工作区" : "展开工作区"}
+            title={workspaceOpen ? "收起工作区" : "展开工作区"}
+            onClick={onToggleWorkspace}
+            className="h-7 w-7 rounded-md text-muted-foreground hover:bg-accent hover:text-foreground"
+          >
+            <RightSidebarToggleIcon open={workspaceOpen} className="h-3.5 w-3.5" />
+          </Button>
+        ) : null}
       </div>
     );
   }
@@ -89,45 +100,20 @@ export function ThreadHeader({
         ) : null}
       </div>
 
-      <ThemeButton
-        theme={theme}
-        onToggleTheme={onToggleTheme}
-        label={t("thread.header.toggleTheme")}
-        className="ml-auto shrink-0"
-      />
+      {workspaceHasContent && onToggleWorkspace ? (
+        <Button
+          variant="ghost"
+          size="icon"
+          aria-label={workspaceOpen ? "收起工作区" : "展开工作区"}
+          title={workspaceOpen ? "收起工作区" : "展开工作区"}
+          onClick={onToggleWorkspace}
+          className="h-7 w-7 shrink-0 rounded-md text-muted-foreground hover:bg-accent hover:text-foreground"
+        >
+          <RightSidebarToggleIcon open={workspaceOpen} className="h-3.5 w-3.5" />
+        </Button>
+      ) : null}
 
       <div aria-hidden className="pointer-events-none absolute inset-x-0 top-full h-4" />
     </div>
-  );
-}
-
-function ThemeButton({
-  theme,
-  onToggleTheme,
-  label,
-  className,
-}: {
-  theme: "light" | "dark";
-  onToggleTheme: () => void;
-  label: string;
-  className?: string;
-}) {
-  return (
-    <Button
-      variant="ghost"
-      size="icon"
-      aria-label={label}
-      onClick={onToggleTheme}
-      className={cn(
-        "h-8 w-8 rounded-full text-muted-foreground/85 hover:bg-accent hover:text-foreground",
-        className,
-      )}
-    >
-      {theme === "dark" ? (
-        <Sun className="h-4 w-4" />
-      ) : (
-        <Moon className="h-4 w-4" />
-      )}
-    </Button>
   );
 }

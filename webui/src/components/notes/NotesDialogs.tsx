@@ -46,7 +46,6 @@ export function PromptDialog({
     const trimmed = value.trim();
     if (!trimmed) return;
     onConfirm(trimmed);
-    if (!loading) onOpenChange(false);
   };
 
   const handleKeyDown = (e: React.KeyboardEvent) => {

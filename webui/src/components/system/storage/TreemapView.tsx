@@ -250,6 +250,7 @@ export function TreemapView({
                   className={clickable ? "cursor-pointer" : "cursor-default"}
                   onClick={() => clickable && onDrillDown(tile.data.path)}
                 >
+                  <title>{tile.data.path}</title>
                   <rect
                     x={tile.x0}
                     y={tile.y0}

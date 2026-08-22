@@ -19,6 +19,8 @@ import {
   Star,
   Folder,
   Pencil,
+  ArrowUp,
+  ArrowDown,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
@@ -122,6 +124,7 @@ export function FolderTree({ gatewayUrl, view = "mail", onViewChange }: FolderTr
   const selectUnifiedInbox = useEmailStore((s) => s.selectUnifiedInbox);
   const loadFolders = useEmailStore((s) => s.loadFolders);
   const loadMessages = useEmailStore((s) => s.loadMessages);
+  const reorderAccounts = useEmailStore((s) => s.reorderAccounts);
   const syncMail = useEmailStore((s) => s.syncMail);
   const markAllReadAction = useEmailStore((s) => s.markAllRead);
   const emptyFolderAction = useEmailStore((s) => s.emptyFolder);
@@ -251,6 +254,19 @@ export function FolderTree({ gatewayUrl, view = "mail", onViewChange }: FolderTr
     }
   };
 
+  const handleMoveAccount = async (accountId: string, direction: -1 | 1) => {
+    const index = accounts.findIndex((account) => account.id === accountId);
+    const targetIndex = index + direction;
+    if (index < 0 || targetIndex < 0 || targetIndex >= accounts.length) return;
+    const next = [...accounts];
+    [next[index], next[targetIndex]] = [next[targetIndex], next[index]];
+    try {
+      await reorderAccounts(next.map((account) => account.id));
+    } catch (e) {
+      window.alert(`调整邮箱顺序失败：${e instanceof Error ? e.message : String(e)}`);
+    }
+  };
+
   return (
     <div className="flex h-full flex-col bg-sidebar">
       <div className="flex h-10 shrink-0 items-center justify-between border-b border-border bg-sidebar-accent/40 px-3">
@@ -322,7 +338,7 @@ export function FolderTree({ gatewayUrl, view = "mail", onViewChange }: FolderTr
               )}
             </div>
             <div className="mx-1.5 my-0.5 border-t border-border/50" />
-            {accounts.map((account) => {
+            {accounts.map((account, accountIndex) => {
               const isExpanded = expanded.has(account.id);
               const isSelected = account.id === selectedAccountId;
               const Chevron = isExpanded ? ChevronDown : ChevronRight;
@@ -363,6 +379,23 @@ export function FolderTree({ gatewayUrl, view = "mail", onViewChange }: FolderTr
                         <Download className="mr-2 h-3.5 w-3.5" />
                         收取
                       </ContextMenuItem>
+                      <ContextMenuItem
+                        className="text-caption"
+                        disabled={accountIndex === 0}
+                        onClick={() => void handleMoveAccount(account.id, -1)}
+                      >
+                        <ArrowUp className="mr-2 h-3.5 w-3.5" />
+                        上移
+                      </ContextMenuItem>
+                      <ContextMenuItem
+                        className="text-caption"
+                        disabled={accountIndex === accounts.length - 1}
+                        onClick={() => void handleMoveAccount(account.id, 1)}
+                      >
+                        <ArrowDown className="mr-2 h-3.5 w-3.5" />
+                        下移
+                      </ContextMenuItem>
+                      <ContextMenuSeparator />
                       <ContextMenuItem
                         className="text-caption"
                         disabled={!gatewayUrl}
@@ -477,7 +510,7 @@ export function FolderTree({ gatewayUrl, view = "mail", onViewChange }: FolderTr
                                     </span>
                                   )}
                                   {!isRenaming && folder.unreadCount && folder.unreadCount > 0 ? (
-                                    <span className="shrink-0 rounded-full bg-warning px-1.5 py-0.5 text-caption font-medium text-background">
+                                    <span className="flex h-4 min-w-[16px] shrink-0 items-center justify-center rounded-full bg-primary px-1 text-[10px] font-medium text-primary-foreground">
                                       {folder.unreadCount > 99 ? "99+" : folder.unreadCount}
                                     </span>
                                   ) : null}

@@ -9,7 +9,7 @@ import { cn } from "@/lib/utils";
 
 /**
  * 伙伴视图（阶段 4.5）：左侧已安装 Agent 列表列（Mona 固定第一），
- * 右侧伙伴详情主区（简介 + 开始私聊 / 创建房间操作）。
+ * 右侧伙伴详情主区（开始私聊 / 创建房间操作）。
  * 布局与 SessionListPanel + 对话区同构，遵循企微三栏壳层。
  */
 interface PartnersViewProps {
@@ -21,7 +21,11 @@ interface PartnersViewProps {
 export function PartnersView({ agents, onStartDirect, onCreateRoom }: PartnersViewProps) {
   const { t } = useTranslation();
   const sorted = useMemo(() => {
-    const enabled = agents.filter((a) => a.enabled);
+    // Stock-module design §4.4: ``internal`` agents only exist inside their
+    // pack's room; the global partner list never shows them.
+    const enabled = agents.filter(
+      (a) => a.enabled && a.visibility !== "internal",
+    );
     return [...enabled].sort((a, b) => {
       if (a.id === MONA_AGENT_ID) return -1;
       if (b.id === MONA_AGENT_ID) return 1;
@@ -74,11 +78,6 @@ export function PartnersView({ agents, onStartDirect, onCreateRoom }: PartnersVi
                         <span className="block truncate text-[13px] font-medium text-sidebar-foreground">
                           {agent.displayName}
                         </span>
-                        {agent.description ? (
-                          <span className="block truncate text-xs text-muted-foreground">
-                            {agent.description}
-                          </span>
-                        ) : null}
                       </span>
                     </button>
                   </li>
@@ -104,9 +103,6 @@ export function PartnersView({ agents, onStartDirect, onCreateRoom }: PartnersVi
             <h1 className="mt-4 truncate text-lg font-semibold text-foreground">
               {selected.displayName}
             </h1>
-            <p className="mt-2 whitespace-pre-line text-[13px] leading-relaxed text-muted-foreground">
-              {selected.description || t("partners.noDescription")}
-            </p>
             <div className="mt-6 flex items-center gap-2.5">
               <Button className="gap-2" onClick={() => onStartDirect(selected.id)}>
                 <MessageSquarePlus className="h-4 w-4" />

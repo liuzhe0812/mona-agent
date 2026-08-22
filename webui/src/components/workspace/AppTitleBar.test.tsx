@@ -1,4 +1,4 @@
-import { fireEvent, render } from "@testing-library/react";
+import { fireEvent, render, screen } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const startDragging = vi.fn().mockResolvedValue(undefined);
@@ -45,5 +45,19 @@ describe("AppTitleBar", () => {
     fireEvent.mouseDown(container.querySelector("header > div")!, { button: 0 });
 
     expect(startDragging).not.toHaveBeenCalled();
+  });
+
+  it("names the browser-tab creation control", () => {
+    render(
+      <AppTitleBar
+        tabs={[]}
+        activeTabId="mona"
+        onTabClick={vi.fn()}
+        onTabClose={vi.fn()}
+        onNewTab={vi.fn()}
+      />,
+    );
+
+    expect(screen.getByRole("button", { name: "New browser tab" })).toBeInTheDocument();
   });
 });

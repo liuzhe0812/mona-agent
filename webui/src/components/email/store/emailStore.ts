@@ -43,7 +43,8 @@ async function notifyNewMail(
       title,
       body,
       icon: "mail",
-      autoCloseMs: 6000,
+      // 0 = 不自动隐藏，常驻显示直到用户点击打开或手动关闭
+      autoCloseMs: 0,
       clickAction: "open-email",
       // 点击通知时携带邮件标识，监听方据此打开独立预览窗口（而非主窗口）
       // 多封新邮件时只打开最新一封的预览，符合通知 body 中展示的是"最新: xxx"
@@ -110,6 +111,7 @@ interface EmailState {
 
   loadAccounts: () => Promise<void>;
   addAccount: (account: EmailAccount) => Promise<void>;
+  reorderAccounts: (accountIds: string[]) => Promise<void>;
   updateAccount: (account: EmailAccount, newPassword?: string | null) => Promise<void>;
   removeAccount: (accountId: string) => Promise<void>;
   selectAccount: (accountId: string) => void;
@@ -177,6 +179,45 @@ void (async () => {
         bodyLoadingStage: { ...state.bodyLoadingStage, [cacheKey]: "network" },
       }));
     });
+  } catch {
+    // 非桌面环境无 listen API，静默忽略
+  }
+})();
+
+interface EmailReadChange {
+  accountId: string;
+  folder: string;
+  uid: string;
+  isRead: boolean;
+}
+
+export function syncEmailReadChange(p: EmailReadChange): void {
+  if (!p.accountId || !p.folder || !p.uid) return;
+  useEmailStore.setState((state) => ({
+    messages: state.messages.map((message) =>
+      message.accountId === p.accountId &&
+      message.folder === p.folder &&
+      message.uid === p.uid
+        ? { ...message, isRead: p.isRead }
+        : message,
+    ),
+    selectedMessage:
+      state.selectedMessage?.accountId === p.accountId &&
+      state.selectedMessage.folder === p.folder &&
+      state.selectedMessage.uid === p.uid
+        ? { ...state.selectedMessage, isRead: p.isRead }
+        : state.selectedMessage,
+  }));
+  void useEmailStore.getState().refreshUnreadCounts(p.accountId);
+}
+
+// 独立邮件预览窗口标记已读后，同步主窗口列表、导航角标和托盘图标。
+void (async () => {
+  try {
+    const { listen } = await import("@tauri-apps/api/event");
+    await listen<EmailReadChange>("email-read-changed", (event) =>
+      syncEmailReadChange(event.payload),
+    );
   } catch {
     // 非桌面环境无 listen API，静默忽略
   }
@@ -264,6 +305,24 @@ export const useEmailStore = create<EmailState>((set, get) => ({
       await api.addAccount(account);
       const accounts = [...get().accounts, account];
       set({ accounts, selectedAccountId: account.id });
+    } catch (e) {
+      set({ error: String(e) });
+      throw e;
+    }
+  },
+
+  reorderAccounts: async (accountIds) => {
+    set({ error: null });
+    const current = get().accounts;
+    const byId = new Map(current.map((account) => [account.id, account]));
+    const reordered = accountIds.map((id) => byId.get(id)).filter((account): account is EmailAccount => !!account);
+    if (reordered.length !== current.length) {
+      set({ error: "邮箱顺序更新失败：账号列表已变化" });
+      throw new Error("邮箱顺序更新失败：账号列表已变化");
+    }
+    try {
+      await api.reorderAccounts(accountIds);
+      set({ accounts: reordered });
     } catch (e) {
       set({ error: String(e) });
       throw e;

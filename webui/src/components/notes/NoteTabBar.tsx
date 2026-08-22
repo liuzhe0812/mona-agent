@@ -84,7 +84,7 @@ export function NoteTabBar({
                 variant="ghost"
                 onClick={() => onSelect(note.id)}
                 className={cn(
-                  "group relative h-7 w-[124px] shrink-0 justify-start gap-1 self-end rounded-none border-r border-border/40 px-2 text-caption font-normal leading-4",
+                  "group relative h-7 w-[124px] shrink-0 justify-start gap-1 self-end rounded-none border-r border-border/40 px-2 notes-tab-title font-normal leading-4",
                   isActive
                     ? "bg-background text-foreground hover:bg-background hover:text-foreground"
                     : "bg-transparent text-muted-foreground hover:bg-accent hover:text-foreground",

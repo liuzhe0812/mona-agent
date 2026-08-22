@@ -157,8 +157,11 @@ describe("ThreadShell", () => {
       file: null,
       scope: "shared",
       sessionKey: null,
+      roomId: null,
       workspaceCollapsed: false,
       fullscreen: false,
+      treeCollapsedByOwner: {},
+      treeExpansionInitializedByOwner: {},
       artifactBaseline: null,
       viewedArtifactPaths: new Set(),
       deletedArtifactPaths: new Set(),
@@ -1087,11 +1090,10 @@ describe("ThreadShell", () => {
     const expand = await screen.findByTitle("展开工作区");
     fireEvent.click(expand);
 
-    await waitFor(() =>
-      expect(
-        screen.getByText("还没有产物。AI 创建的文件会出现在这里。"),
-      ).toBeInTheDocument(),
-    );
+    await waitFor(() => {
+      expect(screen.getByText("当前会话还没有明确交付的文件")).toBeInTheDocument();
+      expect(screen.getByText("工作区暂无其他产物。")).toBeInTheDocument();
+    });
   });
 
   it("shows this session's delivered files in a dedicated section above the scan tree", async () => {
@@ -1151,7 +1153,7 @@ describe("ThreadShell", () => {
     await waitFor(() =>
       expect(screen.getByText("scan-file.md")).toBeInTheDocument(),
     );
-    expect(screen.queryByText("本次会话")).not.toBeInTheDocument();
+    expect(screen.getByText("会话产物")).toBeInTheDocument();
 
     await act(async () => {
       client._emitChat("chat-session-files", {
@@ -1170,7 +1172,7 @@ describe("ThreadShell", () => {
       });
     });
 
-    const sectionHeader = await screen.findByText("本次会话");
+    const sectionHeader = await screen.findByText("会话产物");
     const sessionRow = within(sectionHeader.parentElement!).getByText("live.png");
     const treeRow = screen.getByText("scan-file.md");
     expect(
@@ -1436,7 +1438,7 @@ describe("ThreadShell", () => {
       ),
     );
     // Wait for the empty state so "not found" is not just "not loaded yet".
-    await screen.findByText(/还没有产物/);
+    await screen.findByText("当前会话还没有明确交付的文件");
     expect(screen.queryByText("a.png")).not.toBeInTheDocument();
   });
 
@@ -1515,13 +1517,19 @@ describe("ThreadShell", () => {
     useWorkspaceStore.setState({ workspacePath: "/ws" });
     const nested = {
       path: "docs/report.md",
-      absolute_path: "/ws/output/docs/report.md",
+      absolute_path: "/ws/agent-workspaces/mona/output/docs/report.md",
       name: "report.md",
       size: 1,
       size_human: "1 B",
       mime: "text/markdown",
     };
-    let artifactFiles: unknown[] = [nested];
+    const workspaceOnly = {
+      ...nested,
+      path: "docs/workspace-note.md",
+      absolute_path: "/ws/agent-workspaces/mona/output/docs/workspace-note.md",
+      name: "workspace-note.md",
+    };
+    let artifactFiles: unknown[] = [nested, workspaceOnly];
     vi.stubGlobal(
       "fetch",
       vi.fn(async (input: RequestInfo | URL) => {
@@ -1565,6 +1573,7 @@ describe("ThreadShell", () => {
     );
 
     await screen.findByText("report.md");
+    await screen.findByText("workspace-note.md");
     artifactFiles = [];
     fireEvent.contextMenu(screen.getByText("docs"));
     fireEvent.click(await screen.findByRole("menuitem", { name: "删除" }));
@@ -1574,7 +1583,9 @@ describe("ThreadShell", () => {
 
     const { moveToTrash } = await import("@/lib/tauri");
     await waitFor(() =>
-      expect(vi.mocked(moveToTrash)).toHaveBeenCalledWith("/ws/output/docs"),
+      expect(vi.mocked(moveToTrash)).toHaveBeenCalledWith(
+        "/ws/agent-workspaces/mona/output/docs",
+      ),
     );
     await waitFor(() =>
       expect(screen.queryByText("report.md")).not.toBeInTheDocument(),
@@ -1593,7 +1604,7 @@ describe("ThreadShell", () => {
         />,
       ),
     );
-    await screen.findByText(/还没有产物/);
+    await screen.findByText("当前会话还没有明确交付的文件");
     expect(screen.queryByText("report.md")).not.toBeInTheDocument();
   });
 

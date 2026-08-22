@@ -5,11 +5,13 @@ import type { AgentSummary, ConversationMeta } from "@/lib/types";
 /** Reserved ID of the built-in main assistant (mirrors ``mona/agent/partners.py``). */
 export const MONA_AGENT_ID = "mona";
 
+/** Static brand mark for Mona's default avatar in the session list. */
+export const MONA_AVATAR_IMAGE = "/brand/mona_avatar_white.png";
+
 /** Minimal identity needed to render an agent avatar/name. */
 export interface AgentIdentity {
   id: string;
   displayName: string;
-  description?: string;
 }
 
 /** Deterministic accent palette for partner agents (Mona keeps its brand logo). */
@@ -50,22 +52,32 @@ export function resolveAgentDisplayName(
 interface AgentAvatarProps {
   agentId: string;
   displayName?: string;
+  avatarUrl?: string | null;
   className?: string;
 }
 
-/** Small circular avatar for an agent. Mona renders the brand owl; partner
+/** Small circular avatar for an agent. Mona renders its animated face; partner
  *  agents render an initial on a deterministic accent tint until agent
  *  packages expose HTTP-loadable avatars. */
-export function AgentAvatar({ agentId, displayName, className }: AgentAvatarProps) {
+export function AgentAvatar({ agentId, displayName, avatarUrl, className }: AgentAvatarProps) {
+  if (avatarUrl) {
+    return (
+      <img
+        src={avatarUrl}
+        alt=""
+        className={cn("inline-flex shrink-0 rounded-full object-cover", className)}
+      />
+    );
+  }
   if (agentId === MONA_AGENT_ID) {
     return (
       <span
         className={cn(
-          "inline-flex shrink-0 items-center justify-center overflow-hidden rounded-full",
+          "inline-flex shrink-0 items-center justify-center overflow-hidden rounded-full bg-muted/40",
           className,
         )}
       >
-        <AgentLogo state="welcome" className="h-full w-full" />
+        <AgentLogo state="welcome" variant="avatar" className="h-full w-full" />
       </span>
     );
   }
@@ -93,6 +105,8 @@ interface ConversationAvatarProps {
   conversation?: ConversationMeta | null;
   agentsById?: ReadonlyMap<string, AgentSummary>;
   className?: string;
+  /** Mona task title; shown as a quiet initial instead of repeating the brand avatar. */
+  taskTitle?: string;
   /** Per-member avatar classes; defaults to the compact ``h-4 w-4``. */
   avatarClassName?: string;
 }
@@ -103,6 +117,7 @@ export function ConversationAvatar({
   conversation,
   agentsById,
   className,
+  taskTitle,
   avatarClassName,
 }: ConversationAvatarProps) {
   const agents = agentsById ?? EMPTY_AGENTS;
@@ -112,12 +127,13 @@ export function ConversationAvatar({
     const visible = memberIds.slice(0, 2);
     const overflow = memberIds.length - visible.length;
     return (
-      <span className={cn("flex shrink-0 items-center", className)} aria-hidden>
+      <span className={cn("flex shrink-0 items-center bg-muted/35", className)} aria-hidden>
         {visible.map((id, index) => (
           <AgentAvatar
             key={id}
             agentId={id}
             displayName={resolveAgentDisplayName(agents, id)}
+            avatarUrl={agents.get(id)?.avatarUrl ?? (id === MONA_AGENT_ID ? MONA_AVATAR_IMAGE : null)}
             className={cn(
               memberCls,
               "ring-1 ring-background",
@@ -134,10 +150,30 @@ export function ConversationAvatar({
     );
   }
   const directId = conversation?.directAgentId ?? MONA_AGENT_ID;
+  if (directId === MONA_AGENT_ID && taskTitle) {
+    return (
+      <span
+        role="img"
+        aria-label="Mona"
+        className={cn(
+          "relative inline-flex shrink-0 select-none items-center justify-center bg-muted/55 text-sm font-medium text-muted-foreground",
+          className,
+        )}
+      >
+        {Array.from(taskTitle.trim())[0]?.toUpperCase() ?? "M"}
+        <AgentAvatar
+          agentId={MONA_AGENT_ID}
+          avatarUrl={MONA_AVATAR_IMAGE}
+          className="absolute bottom-0.5 right-0.5 h-4 w-4 rounded-sm bg-background ring-1 ring-background"
+        />
+      </span>
+    );
+  }
   return (
     <AgentAvatar
       agentId={directId}
       displayName={resolveAgentDisplayName(agents, directId)}
+      avatarUrl={agents.get(directId)?.avatarUrl ?? (directId === MONA_AGENT_ID ? MONA_AVATAR_IMAGE : null)}
       className={cn(memberCls, className)}
     />
   );

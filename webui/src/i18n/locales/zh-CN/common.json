@@ -62,7 +62,7 @@
   "rail": {
     "navigation": "主导航",
     "home": "首页",
-    "messages": "消息",
+    "messages": "会话",
     "partners": "伙伴",
     "more": "更多",
     "settings": "设置",
@@ -71,6 +71,8 @@
     "logout": "退出登录",
     "login": "登录",
     "updateAvailable": "有新版本可用",
+    "workspaceTabs": "工作区标签页",
+    "newBrowserTab": "新建浏览器标签页",
     "modules": {
       "note": "笔记",
       "doc": "AI文档",
@@ -79,7 +81,20 @@
       "schedule": "计划",
       "db": "数据库",
       "system": "系统",
-      "profile": "画像"
+      "profile": "画像",
+      "stock": "股票"
+    }
+  },
+  "browser": {
+    "newTab": {
+      "title": "开始浏览",
+      "hint": "搜索网页或输入网址",
+      "incognitoHint": "无痕搜索或输入网址",
+      "placeholder": "搜索或输入网址",
+      "history": "历史记录",
+      "downloads": "下载内容",
+      "localBadge": "新标签页已准备好",
+      "incognitoBadge": "无痕模式已开启"
     }
   },
   "partners": {
@@ -87,14 +102,12 @@
     "detailAria": "伙伴详情",
     "noDescription": "这个伙伴还没有简介。",
     "startDirect": "开始私聊",
-    "createRoom": "创建房间",
-    "newDirectTitle": "新建私聊",
-    "newDirectHint": "选择一个伙伴开始一对一对话。",
-    "newRoomTitle": "新建协作房间",
-    "newRoomHint": "选择参与协作的伙伴，并设置房间标题与目标。",
-    "roomTitleLabel": "房间标题",
-    "roomTitlePlaceholder": "房间标题（留空按成员自动生成）",
-    "roomGoalLabel": "房间目标",
+    "createRoom": "创建协作群",
+    "newRoomTitle": "新建协作群",
+    "newRoomHint": "选择参与协作的伙伴，并设置群聊标题与目标。",
+    "roomTitleLabel": "群聊标题",
+    "roomTitlePlaceholder": "留空按成员自动生成",
+    "roomGoalLabel": "群聊目标",
     "roomGoalPlaceholder": "这次协作要达成什么目标？（可选）"
   },
   "nav": {
@@ -115,15 +128,8 @@
     "home": "首页",
     "newChat": "新建对话",
     "searchAria": "搜索",
-    "viewOptions": "视图",
-    "compactList": "紧凑列表",
-    "showPreviews": "显示预览",
-    "showTimestamps": "显示时间",
-    "sortLabel": "排序",
-    "sortUpdated": "最近更新",
-    "sortCreated": "最近创建",
-    "sortTitle": "标题 A-Z",
     "searchPlaceholder": "搜索",
+    "clearSearch": "清除搜索",
     "searchResults": "搜索结果",
     "noSearchResults": "没有匹配的会话。",
     "recent": "最近对话",
@@ -323,6 +329,7 @@
       "totalProviders": "共 {{count}} 个可用",
       "webSearch": "网页搜索",
       "imageGeneration": "图片生成",
+      "videoGeneration": "视频生成",
       "workspace": "工作区"
     },
     "providers": {
@@ -350,8 +357,13 @@
     "actions": "“{{title}}” 的会话操作",
     "activity": {
       "running": "Agent 正在运行",
-      "complete": "Agent 已完成"
+      "complete": "Agent 已完成",
+      "waitingApproval": "等待审批",
+      "failed": "运行失败",
+      "scheduled": "已启用定时"
     },
+    "unread": "未读",
+    "markAllRead": "全部标记已读",
     "pin": "置顶",
     "unpin": "取消置顶",
     "rename": "重命名",
@@ -365,9 +377,10 @@
     "hideArchived": "隐藏归档",
     "delete": "删除",
     "newChat": "新建对话",
+    "agentSettings": "Agent 设置",
     "createMenu": "创建",
     "newDirect": "新建私聊",
-    "newRoom": "新建房间",
+    "newRoom": "新建协作群",
     "groups": {
       "pinned": "置顶",
       "conversations": "会话",
@@ -375,7 +388,8 @@
       "today": "今天",
       "yesterday": "昨天",
       "earlier": "更早",
-      "archived": "已归档"
+      "archived": "已归档",
+      "rooms": "群组"
     },
     "moveToProject": "移动到项目…",
     "newProjectChat": "在项目中新建对话",
@@ -399,13 +413,19 @@
     "header": {
       "members": "成员（{{count}}）"
     },
+    "emptyHint": "像群聊一样发送消息开始协作；工作流的执行过程也会显示在这里。",
     "panel": {
-      "title": "协作房间",
+      "title": "协作群",
       "partner": "伙伴",
       "collapse": "收起面板",
+      "info": "信息",
       "goal": "目标",
-      "goalEmpty": "尚未设置房间目标。",
+      "goalEmpty": "尚未设置群聊目标。",
       "members": "成员",
+      "builtin": "团队内置",
+      "artifacts": "产物",
+      "artifactsEmpty": "这个群聊还没有产物。成员产出的文件会出现在这里。",
+      "refresh": "刷新",
       "workflow": "工作流"
     },
     "workflow": {
@@ -413,14 +433,26 @@
       "edit": "编辑",
       "editNewVersion": "编辑新版本",
       "activate": "激活",
-      "run": "运行",
+      "runAction": "运行",
       "cancelRun": "取消运行",
+      "runFailed": "工作流运行失败：{{detail}}",
+      "runError": {
+        "run_conflict": "已有正在运行的工作流。",
+        "run_failed": "工作流运行失败。"
+      },
       "draft": "草稿",
       "active": "当前版本",
       "revision": "版本 {{revision}}",
       "stepsCount": "{{count}} 个步骤",
       "empty": "尚未配置工作流。",
       "hint": "也可以直接在对话里让 Mona 帮你编排。",
+      "canvas": {
+        "members": "添加步骤",
+        "config": "步骤配置",
+        "selectNode": "在画布上选择节点进行编辑，或从左侧添加新步骤。",
+        "emptyHint": "点击左侧成员，添加第一个步骤。",
+        "autoLayout": "自动布局"
+      },
       "editor": {
         "goal": "流程目标",
         "goalPlaceholder": "这次协作要产出什么？",
@@ -478,6 +510,8 @@
           "skipped": "已跳过"
         },
         "approval": "审批",
+        "retryStep": "重试此步骤",
+        "cancelStep": "取消此步骤",
         "revision": "基于版本 {{revision}}"
       },
       "approval": {
@@ -688,6 +722,8 @@
     "agentActivityLiveSummary": "进行中… · {{reasoning}} 步 · {{tools}} 次工具调用",
     "agentActivityLiveToolsOnly": "进行中… · {{tools}} 次工具调用",
     "imageAttachment": "图片附件",
+    "showAll": "显示全部",
+    "collapse": "收起",
     "copyReply": "复制回复",
     "copiedReply": "已复制回复",
     "saveAsNote": "保存为笔记",
@@ -708,6 +744,21 @@
     "copyAria": "复制代码",
     "copy": "复制",
     "copied": "已复制"
+  },
+  "chart": {
+    "untitled": "数据图表",
+    "export": "导出",
+    "exportPng": "导出 PNG 图片",
+    "exportSvg": "导出 SVG 矢量图",
+    "exportCsv": "导出 CSV 数据",
+    "errors": {
+      "invalidJson": "图表数据不是有效的 JSON。",
+      "unsupportedType": "不支持该图表类型。支持柱状图、折线图、面积图、饼图和散点图。",
+      "emptyData": "图表没有可渲染的数据。",
+      "invalidData": "图表数据格式无效或包含非数值字段。",
+      "invalidScatter": "散点图的每个数据点都必须包含数值 x 和 y。",
+      "invalidPie": "饼图需要至少一个大于 0 的数值。"
+    }
   },
   "common": {
     "dismiss": "关闭",

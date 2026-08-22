@@ -1,18 +1,27 @@
 import { useLayoutEffect, useRef, useState, type ReactNode } from "react";
 import {
+  CalendarDays,
+  Database,
+  Download,
+  FileText,
   LogIn,
   LogOut,
+  Mail,
   MessageSquareText,
+  MonitorCog,
+  Moon,
   MoreHorizontal,
+  NotebookPen,
+  ScanFace,
   Settings,
-  Sparkles,
+  SquareTerminal,
+  Sun,
+  TrendingUp,
   User,
   UserCog,
-  Users,
 } from "lucide-react";
 import { useTranslation } from "react-i18next";
 
-import { AgentLogo } from "@/components/AgentLogo";
 import { mergeSidebarModules, MODULE_DEFS } from "@/components/Sidebar";
 import { useEmailStore } from "@/components/email/store/emailStore";
 import { useTodoStore } from "@/components/schedule/todoStore";
@@ -37,15 +46,14 @@ import { cn } from "@/lib/utils";
 
 /**
  * 企业微信式窄功能栏（阶段 4.5）：固定 64px，无展开/折叠态。
- * 头像置顶，消息/伙伴在前，其余模块跟随其后，账号置底。
+ * 头像置顶，会话/伙伴在前，其余模块跟随其后，账号置底。
  * 高度不足时模块从尾部收进「更多」，底部区域 shrink-0 永不压缩。
  */
 interface AppRailProps {
-  /** 当前主视图 id（chat / partners / note / email / ...）。 */
+  /** 当前主视图 id（chat / note / email / ...）。 */
   activeView: string;
   onGoHome: () => void;
   onOpenMessages: () => void;
-  onOpenPartners: () => void;
   onOpenNote: () => void;
   onOpenDoc: () => void;
   onOpenSSH: () => void;
@@ -54,13 +62,20 @@ interface AppRailProps {
   onOpenSchedule: () => void;
   onOpenSystem: () => void;
   onOpenProfile: () => void;
+  onOpenStock: () => void;
   onOpenSettings: (section?: string) => void;
   onOpenLogin?: () => void;
   onOpenSubscribe?: () => void;
   onStartUpdate?: () => void;
   updateAvailable?: boolean;
+  messageAttentionCount?: number;
   runningChatIds?: string[];
   modules?: SidebarModuleConfig[];
+  /** 功能开关门控（如股票模块 enabled=false 时隐藏入口）；缺省视为可用。 */
+  moduleAvailability?: Record<string, boolean>;
+  /** 主题切换（从会话窗口头部移至用户菜单）。 */
+  theme?: "light" | "dark";
+  onToggleTheme?: () => void;
 }
 
 function isMacOS() {
@@ -69,8 +84,20 @@ function isMacOS() {
   return platform.includes("mac") || platform.includes("iphone") || platform.includes("ipad");
 }
 
-// 单项槽位高度：py-1.5(12) + 图标 h-5(20) + gap-1(4) + 10px 标签 + 列表 gap-0.5(2)
-const RAIL_ITEM_PITCH_PX = 48;
+// 单槽位高度随标签字号/行高演变，不再硬编码，运行时从首个槽位实测（见 useLayoutEffect）
+const FALLBACK_ITEM_PITCH_PX = 56;
+
+const MODULE_ICONS: Record<string, ReactNode> = {
+  note: <NotebookPen className="h-5 w-5" />,
+  doc: <FileText className="h-5 w-5" />,
+  ssh: <SquareTerminal className="h-5 w-5" />,
+  email: <Mail className="h-5 w-5" />,
+  schedule: <CalendarDays className="h-5 w-5" />,
+  db: <Database className="h-5 w-5" />,
+  system: <MonitorCog className="h-5 w-5" />,
+  profile: <ScanFace className="h-5 w-5" />,
+  stock: <TrendingUp className="h-5 w-5" />,
+};
 
 function RailItem({
   label,
@@ -92,13 +119,19 @@ function RailItem({
       aria-current={active ? "page" : undefined}
       onClick={onClick}
       className={cn(
-        "relative flex w-full flex-col items-center gap-1 rounded-lg px-1 py-1.5 transition-colors",
+        "relative flex w-full flex-col items-center gap-1 rounded-lg px-1 py-1.5 transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring",
         active
-          ? "bg-[hsl(var(--sidebar-active-surface)/0.07)] text-primary"
+          ? "bg-[hsl(var(--sidebar-active-surface)/0.07)] text-sidebar-foreground"
           : "text-sidebar-foreground/80 hover:bg-[hsl(var(--sidebar-hover-surface)/0.04)] hover:text-sidebar-foreground",
       )}
     >
-      <span className="relative flex h-5 w-5 items-center justify-center" aria-hidden>
+      <span
+        className={cn(
+          "relative flex h-5 w-5 items-center justify-center",
+          active && "text-theme",
+        )}
+        aria-hidden
+      >
         {icon}
         {badge !== undefined && badge > 0 && (
           <span className="absolute -right-2 -top-1.5 flex h-3.5 min-w-3.5 items-center justify-center rounded-full bg-destructive px-0.5 text-[8px] font-semibold leading-none text-white">
@@ -118,8 +151,6 @@ export function AppRail(props: AppRailProps) {
   const planInboxCount = useTodoStore((s) => s.inboxCount);
   const [overflowOpen, setOverflowOpen] = useState(false);
 
-  const agentLogoState = props.runningChatIds?.length ? "working" : "idle";
-
   const moduleHandlers: Record<string, () => void> = {
     note: props.onOpenNote,
     doc: props.onOpenDoc,
@@ -129,20 +160,28 @@ export function AppRail(props: AppRailProps) {
     schedule: props.onOpenSchedule,
     system: props.onOpenSystem,
     profile: props.onOpenProfile,
+    stock: props.onOpenStock,
   };
-  // 「消息」替代原 chat 模块入口，chat 不再重复出现在模块列表
+  const moduleBadge = (key: string) => {
+    if (key === "email" && emailUnreadCount > 0) return emailUnreadCount;
+    if (key === "schedule" && planInboxCount > 0) return planInboxCount;
+    return undefined;
+  };
+  // 「会话」替代原 chat 模块入口，chat 不再重复出现在模块列表
   const merged = mergeSidebarModules(props.modules).filter((m) => m.key !== "chat");
   const defMap = new Map(MODULE_DEFS.map((d) => [d.key, d]));
   const visible = merged
     .filter((m) => m.visible)
     .map((m) => defMap.get(m.key))
     .filter((d): d is NonNullable<typeof d> => Boolean(d))
-    .filter((d) => !isMacOS() || !d.windowsOnly);
+    .filter((d) => !isMacOS() || !d.windowsOnly)
+    .filter((d) => props.moduleAvailability?.[d.key] !== false);
 
-  // 直出槽位容量 = 中间区可用高度 ÷ 单槽位高度。中间区 flex-1 min-h-0，
-  // 其 clientHeight 即真实可用高度，用 ResizeObserver 跟踪（窗口缩放、
-  // 底部区域内容变化都会触发）。useLayoutEffect 保证首帧绘制前完成首测，
-  // 无「先全直出再收敛」的闪烁。无布局环境（jsdom，高度为 0）不收敛，全部直出。
+  // 直出槽位容量 = 中间区可用高度 ÷ 单槽位高度（运行时实测：首槽位 offsetHeight
+  // + 列表 rowGap，避免样式演进后硬编码失配）。中间区 flex-1 min-h-0，其
+  // clientHeight 即真实可用高度，用 ResizeObserver 跟踪。useLayoutEffect 保证
+  // 首帧绘制前完成首测，无「先全直出再收敛」的闪烁。无布局环境（jsdom，高度为 0）
+  // 不收敛，全部直出。
   const UNLIMITED = Number.MAX_SAFE_INTEGER;
   const middleRef = useRef<HTMLDivElement>(null);
   const [slotCapacity, setSlotCapacity] = useState(UNLIMITED);
@@ -155,7 +194,11 @@ export function AppRail(props: AppRailProps) {
         setSlotCapacity(UNLIMITED);
         return;
       }
-      setSlotCapacity(Math.max(2, Math.floor(h / RAIL_ITEM_PITCH_PX)));
+      const first = el.querySelector<HTMLElement>(":scope > button");
+      const gap = parseFloat(getComputedStyle(el).rowGap) || 0;
+      const pitch = (first?.offsetHeight ?? 0) + gap || FALLBACK_ITEM_PITCH_PX;
+      // N 项总高 = N×pitch − gap（末项无间距）≤ h
+      setSlotCapacity(Math.max(2, Math.floor((h + gap) / pitch)));
     };
     update();
     const observer = new ResizeObserver(update);
@@ -163,12 +206,17 @@ export function AppRail(props: AppRailProps) {
     return () => observer.disconnect();
   }, []);
 
-  // 槽位分配：「消息/伙伴」固定 2 槽，其余给模块；放不下时留 1 槽给「更多」
-  const moduleCapacity = Math.max(0, slotCapacity - 2);
+  // 槽位分配：会话固定 1 槽，其余给模块；Agent 从会话列表管理，避免重复入口。
+  const moduleCapacity = Math.max(0, slotCapacity - 1);
   const primaryCount =
     visible.length > moduleCapacity ? Math.max(0, moduleCapacity - 1) : visible.length;
   const primary = visible.slice(0, primaryCount);
   const secondary = visible.slice(primaryCount);
+  const secondaryBadgeTotal = secondary.reduce(
+    (total, item) => total + (moduleBadge(item.key) ?? 0),
+    0,
+  );
+  const secondaryActive = secondary.some((item) => item.key === props.activeView);
 
   return (
     <TooltipProvider delayDuration={0}>
@@ -176,46 +224,21 @@ export function AppRail(props: AppRailProps) {
         aria-label={t("rail.navigation")}
         className="flex h-full w-16 shrink-0 flex-col items-center bg-transparent pb-2 pt-2 text-sidebar-foreground"
       >
-        <Tooltip>
-          <TooltipTrigger asChild>
-            <button
-              type="button"
-              aria-label={t("rail.home")}
-              onClick={props.onGoHome}
-              className="flex h-10 w-10 shrink-0 items-center justify-center overflow-hidden rounded-full transition-colors hover:bg-[hsl(var(--sidebar-hover-surface)/0.04)]"
-            >
-              <AgentLogo state={agentLogoState} className="h-9 w-9" />
-            </button>
-          </TooltipTrigger>
-          <TooltipContent side="right">{t("rail.home")}</TooltipContent>
-        </Tooltip>
-
         <div ref={middleRef} className="mt-3 flex min-h-0 w-full flex-1 flex-col gap-0.5 overflow-hidden px-2">
           <RailItem
             label={t("rail.messages")}
             icon={<MessageSquareText className="h-5 w-5" />}
             active={props.activeView === "chat"}
+            badge={props.messageAttentionCount}
             onClick={props.onOpenMessages}
-          />
-          <RailItem
-            label={t("rail.partners")}
-            icon={<Users className="h-5 w-5" />}
-            active={props.activeView === "partners"}
-            onClick={props.onOpenPartners}
           />
           {primary.map((item) => (
             <RailItem
               key={item.key}
               label={t(`rail.modules.${item.key}`, item.label)}
-              icon={item.icon}
+              icon={MODULE_ICONS[item.key] ?? item.icon}
               active={props.activeView === item.key}
-              badge={
-                item.key === "email" && emailUnreadCount > 0
-                  ? emailUnreadCount
-                  : item.key === "schedule" && planInboxCount > 0
-                    ? planInboxCount
-                    : undefined
-              }
+              badge={moduleBadge(item.key)}
               onClick={moduleHandlers[item.key] ?? (() => {})}
             />
           ))}
@@ -225,10 +248,27 @@ export function AppRail(props: AppRailProps) {
                 <button
                   type="button"
                   aria-label={t("rail.more")}
-                  className="relative flex w-full flex-col items-center gap-1 rounded-lg px-1 py-1.5 text-sidebar-foreground/80 transition-colors hover:bg-[hsl(var(--sidebar-hover-surface)/0.04)] hover:text-sidebar-foreground"
+                  aria-current={secondaryActive ? "page" : undefined}
+                  className={cn(
+                    "relative flex w-full flex-col items-center gap-1 rounded-lg px-1 py-1.5 transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring",
+                    secondaryActive
+                      ? "bg-[hsl(var(--sidebar-active-surface)/0.07)] text-sidebar-foreground"
+                      : "text-sidebar-foreground/80 hover:bg-[hsl(var(--sidebar-hover-surface)/0.04)] hover:text-sidebar-foreground",
+                  )}
                 >
-                  <span className="flex h-5 w-5 items-center justify-center" aria-hidden>
+                  <span
+                    className={cn(
+                      "relative flex h-5 w-5 items-center justify-center",
+                      secondaryActive && "text-theme",
+                    )}
+                    aria-hidden
+                  >
                     <MoreHorizontal className="h-5 w-5" />
+                    {secondaryBadgeTotal > 0 ? (
+                      <span className="absolute -right-2 -top-1.5 flex h-3.5 min-w-3.5 items-center justify-center rounded-full bg-destructive px-0.5 text-[8px] font-semibold leading-none text-white">
+                        {secondaryBadgeTotal > 99 ? "99+" : secondaryBadgeTotal}
+                      </span>
+                    ) : null}
                   </span>
                   <span className="text-[10px] leading-none">{t("rail.more")}</span>
                 </button>
@@ -237,13 +277,27 @@ export function AppRail(props: AppRailProps) {
                 {secondary.map((item) => (
                   <DropdownMenuItem
                     key={item.key}
-                    className="gap-2 px-2.5 py-1.5 text-[13px]"
+                    className={cn(
+                      "gap-2 px-2.5 py-1.5 text-[13px]",
+                      props.activeView === item.key && "bg-accent",
+                    )}
                     onSelect={() => (moduleHandlers[item.key] ?? (() => {}))()}
                   >
-                    <span className="flex h-4 w-4 items-center justify-center [&_img]:h-4 [&_img]:w-4" aria-hidden>
-                      {item.icon}
+                    <span
+                      className={cn(
+                        "flex h-4 w-4 items-center justify-center [&_svg]:h-4 [&_svg]:w-4",
+                        props.activeView === item.key && "text-theme",
+                      )}
+                      aria-hidden
+                    >
+                      {MODULE_ICONS[item.key] ?? item.icon}
                     </span>
                     <span>{t(`rail.modules.${item.key}`, item.label)}</span>
+                    {moduleBadge(item.key) ? (
+                      <span className="ml-auto rounded-full bg-destructive px-1.5 py-0.5 text-[9px] font-semibold leading-none text-white">
+                        {(moduleBadge(item.key) ?? 0) > 99 ? "99+" : moduleBadge(item.key)}
+                      </span>
+                    ) : null}
                   </DropdownMenuItem>
                 ))}
               </DropdownMenuContent>
@@ -259,9 +313,9 @@ export function AppRail(props: AppRailProps) {
                   type="button"
                   aria-label={t("rail.updateAvailable")}
                   onClick={() => props.onStartUpdate?.()}
-                  className="relative flex h-8 w-8 items-center justify-center rounded-lg text-blue-500 transition-colors hover:bg-[hsl(var(--sidebar-hover-surface)/0.04)]"
+                  className="relative flex h-8 w-8 items-center justify-center rounded-lg text-blue-500 transition-colors hover:bg-[hsl(var(--sidebar-hover-surface)/0.04)] focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
                 >
-                  <Sparkles className="h-4 w-4 animate-pulse [animation-duration:2s]" />
+                  <Download className="h-4 w-4 animate-pulse [animation-duration:2s]" />
                   <span className="absolute right-1 top-1 h-1.5 w-1.5 rounded-full bg-blue-500" />
                 </button>
               </TooltipTrigger>
@@ -274,7 +328,7 @@ export function AppRail(props: AppRailProps) {
                 <button
                   type="button"
                   aria-label={licenseInfo?.account ?? licenseInfo?.email ?? t("rail.account")}
-                  className="mt-0.5 flex h-9 w-9 items-center justify-center rounded-full bg-muted text-sidebar-foreground/85 transition-colors hover:bg-[hsl(var(--sidebar-hover-surface)/0.08)]"
+                  className="mt-0.5 flex h-9 w-9 items-center justify-center rounded-full bg-muted text-sidebar-foreground/85 transition-colors hover:bg-[hsl(var(--sidebar-hover-surface)/0.08)] focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
                 >
                   <User className="h-4 w-4" />
                 </button>
@@ -302,17 +356,30 @@ export function AppRail(props: AppRailProps) {
                 <DropdownMenuSeparator />
                 <DropdownMenuItem
                   className="gap-2 px-2.5 py-1.5 text-[13px]"
-                  onSelect={() => props.onOpenLogin?.()}
-                >
-                  <UserCog className="h-4 w-4" />
-                  <span>{t("rail.manageAccount")}</span>
-                </DropdownMenuItem>
-                <DropdownMenuItem
-                  className="gap-2 px-2.5 py-1.5 text-[13px]"
                   onSelect={() => props.onOpenSettings()}
                 >
                   <Settings className="h-4 w-4" />
                   <span>{t("rail.settings")}</span>
+                </DropdownMenuItem>
+                <DropdownMenuSeparator />
+                <DropdownMenuItem
+                  className="gap-2 px-2.5 py-1.5 text-[13px]"
+                  onSelect={() => props.onToggleTheme?.()}
+                >
+                  {props.theme === "dark" ? (
+                    <Sun className="h-4 w-4" />
+                  ) : (
+                    <Moon className="h-4 w-4" />
+                  )}
+                  <span>{props.theme === "dark" ? "切换为浅色" : "切换为深色"}</span>
+                </DropdownMenuItem>
+                <DropdownMenuSeparator />
+                <DropdownMenuItem
+                  className="gap-2 px-2.5 py-1.5 text-[13px]"
+                  onSelect={() => props.onOpenLogin?.()}
+                >
+                  <UserCog className="h-4 w-4" />
+                  <span>{t("rail.manageAccount")}</span>
                 </DropdownMenuItem>
                 <DropdownMenuSeparator />
                 <DropdownMenuItem

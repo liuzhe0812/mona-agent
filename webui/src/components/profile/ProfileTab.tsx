@@ -1,9 +1,12 @@
 /** 人物画像 Tab：话题投入与关系总览看板（真实后端数据，可追溯到原始计数）。 */
 
+import { useState } from "react";
 import {
   AlertTriangle,
   BadgeCheck,
   CalendarDays,
+  ChevronDown,
+  ChevronUp,
   CircleHelp,
   Lightbulb,
   MessageSquareText,
@@ -41,6 +44,7 @@ export function ProfileTab({
   loading,
   onAskMona,
 }: ProfileTabProps) {
+  const [painOpen, setPainOpen] = useState(true);
   if (loading) {
     return (
       <div className="flex h-full items-center justify-center text-body text-muted-foreground">
@@ -148,35 +152,59 @@ export function ProfileTab({
 
       {(painPoints.length > 0 || openQuestions.length > 0) && (
         <Panel className="p-4">
-          <SectionTitle icon={<AlertTriangle className="h-4 w-4" />} title="近期痛点与开放问题" hint="由蒸馏从对话中提炼" color={PROFILE_COLORS.coral} />
-          <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
-            {painPoints.map((p) => (
-              <PainPointCard key={p.topic} point={p} onAskMona={onAskMona} />
-            ))}
-            {openQuestions.map((q) => (
-              <div key={q} className="flex gap-3 rounded-lg border bg-background/60 p-3">
-                <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full" style={{ background: `${PROFILE_COLORS.cyan}18`, color: PROFILE_COLORS.cyan }}>
-                  <CircleHelp className="h-4 w-4" />
+          <button
+            type="button"
+            className={cn(
+              "flex w-full items-center justify-between gap-3 rounded-md px-1 text-left transition-colors hover:bg-accent",
+              painOpen && "mb-3",
+            )}
+            onClick={() => setPainOpen((v) => !v)}
+            aria-expanded={painOpen}
+          >
+            <h3 className="flex items-center gap-1.5 text-body font-semibold">
+              <span style={{ color: PROFILE_COLORS.coral }}>
+                <AlertTriangle className="h-4 w-4" />
+              </span>
+              近期痛点与开放问题
+              <span className="rounded-full bg-muted px-1.5 py-0.5 text-[10px] text-muted-foreground">
+                {painPoints.length + openQuestions.length}
+              </span>
+            </h3>
+            <span className="flex items-center gap-2 text-muted-foreground">
+              <span className="truncate text-caption">由蒸馏从对话中提炼</span>
+              {painOpen ? <ChevronUp className="h-4 w-4" /> : <ChevronDown className="h-4 w-4" />}
+            </span>
+          </button>
+          {painOpen && (
+            <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
+              {painPoints.map((p) => (
+                <PainPointCard key={p.topic} point={p} onAskMona={onAskMona} />
+              ))}
+              {openQuestions.map((q) => (
+                <div key={q} className="flex gap-3 rounded-lg border bg-background/60 p-3">
+                  <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full" style={{ background: `${PROFILE_COLORS.cyan}18`, color: PROFILE_COLORS.cyan }}>
+                    <CircleHelp className="h-4 w-4" />
+                  </div>
+                  <div className="min-w-0 flex-1">
+                    <p className="text-caption leading-5 text-foreground">{q}</p>
+                    {onAskMona && (
+                      <Button
+                        type="button"
+                        variant="ghost"
+                        size="xs"
+                        className="mt-2 h-auto gap-1 rounded-full px-2 py-0.5 text-micro"
+                        style={{ color: PROFILE_COLORS.cyan }}
+                        onClick={() => onAskMona(`我正在探索这个问题：${q}。请结合你的工作记忆，帮我分析一下现状和可能的解法。`)}
+                      >
+                        <MessageSquareText className="h-3 w-3" />
+                        和 Mona 探讨
+                      </Button>
+                    )}
+                  </div>
                 </div>
-                <div className="min-w-0 flex-1">
-                  <p className="text-caption leading-5 text-foreground">{q}</p>
-                  {onAskMona && (
-                    <Button
-                      type="button"
-                      variant="ghost"
-                      size="xs"
-                      className="mt-2 h-auto gap-1 rounded-full px-2 py-0.5 text-micro"
-                      style={{ color: PROFILE_COLORS.cyan }}
-                      onClick={() => onAskMona(`我正在探索这个问题：${q}。请结合你的工作记忆，帮我分析一下现状和可能的解法。`)}
-                    >
-                      <MessageSquareText className="h-3 w-3" />
-                      和 Mona 探讨
-                    </Button>
-                  )}
-                </div>
-              </div>
-            ))}
-          </div>
+              ))}
+            </div>
+          )}
         </Panel>
       )}
 

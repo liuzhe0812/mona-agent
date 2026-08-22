@@ -4,8 +4,10 @@ import { DesktopMode } from "./Desktop/DesktopMode";
 import { useTerminalStore } from "./store/terminalStore";
 import { shellSpawn, sshConnect, desktopConnect } from "./ipc";
 import type { SessionType } from "./types/terminal";
+import { useLicense } from "@/hooks/useLicense";
 
 export function StandaloneTerminalWindow() {
+  const { licenseActive } = useLicense();
   const params = new URLSearchParams(window.location.search);
   const configId = params.get("configId") ?? "";
   const sessionType = (params.get("sessionType") ?? "local") as SessionType;
@@ -80,7 +82,7 @@ export function StandaloneTerminalWindow() {
   if (isDesktop && sessionId) {
     return (
       <div className="flex h-full flex-col bg-[#1b1440]">
-        <DesktopMode sessionId={sessionId} />
+        <DesktopMode sessionId={sessionId} aiEnabled={licenseActive} />
       </div>
     );
   }

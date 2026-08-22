@@ -1,6 +1,5 @@
 /** Segmented control for switching calendar view mode (month / week / day). */
 
-import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 
 export type CalendarViewMode = "month" | "week" | "day";
@@ -25,21 +24,19 @@ export function ViewSwitcher({
   return (
     <div className="flex items-center rounded-full bg-muted p-0.5">
       {MODES.map((m) => (
-        <Button
+        <button
           key={m.value}
           type="button"
-          variant="ghost"
-          size="xs"
           onClick={() => onChange(m.value)}
           className={cn(
-            "rounded-full px-2.5",
+            "inline-flex h-7 items-center justify-center whitespace-nowrap rounded-full px-2 text-caption font-medium transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring disabled:pointer-events-none disabled:opacity-50",
             mode === m.value
-              ? "bg-background font-medium text-foreground shadow-sm hover:bg-background hover:text-foreground"
+              ? "bg-background text-foreground shadow-sm hover:bg-background hover:text-foreground"
               : "text-muted-foreground hover:bg-transparent hover:text-foreground",
           )}
         >
           {m.label}
-        </Button>
+        </button>
       ))}
     </div>
   );

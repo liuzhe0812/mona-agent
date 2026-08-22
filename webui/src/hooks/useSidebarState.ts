@@ -8,7 +8,7 @@ import {
 import type { ChatSummary, SidebarStatePayload } from "@/lib/types";
 
 export const DEFAULT_SIDEBAR_STATE: SidebarStatePayload = {
-  schema_version: 2,
+  schema_version: 5,
   pinned_keys: [],
   archived_keys: [],
   title_overrides: {},
@@ -87,7 +87,7 @@ export function normalizeSidebarState(raw: unknown): SidebarStatePayload {
     ? view.sort
     : "updated_desc";
   return {
-    schema_version: 2,
+    schema_version: 5,
     pinned_keys: uniqueStrings(value.pinned_keys),
     archived_keys: uniqueStrings(value.archived_keys),
     title_overrides: stringMap(value.title_overrides),
@@ -169,6 +169,22 @@ export function markSessionRead(
   };
 }
 
+export function markAllSessionsRead(
+  state: SidebarStatePayload,
+  sessions: ChatSummary[],
+): SidebarStatePayload {
+  const markers = { ...state.last_read_at_by_key };
+  let changed = false;
+  for (const session of sessions) {
+    const previewAt = session.previewAt;
+    const current = markers[session.key];
+    if (!previewAt || (current && current >= previewAt)) continue;
+    markers[session.key] = previewAt;
+    changed = true;
+  }
+  return changed ? { ...state, last_read_at_by_key: markers } : state;
+}
+
 export function useSidebarState(
   sessions: ChatSummary[],
   sessionsLoaded: boolean,
@@ -183,15 +199,20 @@ export function useSidebarState(
   const tokenRef = useRef(token);
   const stateRef = useRef(DEFAULT_SIDEBAR_STATE);
   const persistVersionRef = useRef(0);
+  const loadPromiseRef = useRef<Promise<void> | null>(null);
   const [state, setState] = useState<SidebarStatePayload>(DEFAULT_SIDEBAR_STATE);
   const [loading, setLoading] = useState(true);
   tokenRef.current = token;
   stateRef.current = state;
 
   useEffect(() => {
+    // 等待 runtime token 就绪再拉取：界面先于运行时显示，空 token 必然
+    // 401，会把内存态误判为空标记表（所有会话显示未读），后续写入再以
+    // DEFAULT 覆盖磁盘上已有的已读标记。
+    if (!token) return;
     let cancelled = false;
     setLoading(true);
-    (async () => {
+    const load = (async () => {
       try {
         const loaded = normalizeSidebarState(await fetchSidebarState(tokenRef.current));
         if (cancelled) return;
@@ -205,13 +226,16 @@ export function useSidebarState(
         if (!cancelled) setLoading(false);
       }
     })();
+    loadPromiseRef.current = load;
     return () => {
       cancelled = true;
     };
-  }, []);
+  }, [token]);
 
   const update = useCallback(
     async (updater: (current: SidebarStatePayload) => SidebarStatePayload) => {
+      // 首次磁盘加载完成前不得写入，否则未加载的 DEFAULT 会覆盖服务端标记。
+      await loadPromiseRef.current;
       const next = normalizeSidebarState(updater(stateRef.current));
       const version = persistVersionRef.current + 1;
       persistVersionRef.current = version;

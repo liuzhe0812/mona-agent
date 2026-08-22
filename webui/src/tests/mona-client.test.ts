@@ -461,6 +461,158 @@ describe("MonaClient", () => {
     });
   });
 
+  it("sends retry_workflow_step and surfaces server error codes", async () => {
+    const client = new MonaClient({
+      url: "ws://test",
+      reconnect: false,
+      socketFactory: (url) => new FakeSocket(url) as unknown as WebSocket,
+    });
+    client.connect();
+    lastSocket().fakeOpen();
+
+    const okPromise = client.retryWorkflowStep("room1", "run_1", "failed");
+    const sent = JSON.parse(lastSocket().sent.at(-1) as string);
+    expect(sent).toMatchObject({
+      type: "retry_workflow_step",
+      chat_id: "room1",
+      run_id: "run_1",
+      step_id: "failed",
+    });
+    lastSocket().fakeMessage({
+      event: "retry_workflow_step_result",
+      ok: true,
+      chat_id: "room1",
+      request_id: sent.request_id,
+      run_id: "run_1",
+      step_id: "failed",
+    });
+    await okPromise;
+
+    const failPromise = client.retryWorkflowStep("room1", "run_1", "failed");
+    const sent2 = JSON.parse(lastSocket().sent.at(-1) as string);
+    lastSocket().fakeMessage({
+      event: "retry_workflow_step_result",
+      ok: false,
+      code: "step_not_retryable",
+      detail: "step is not retryable",
+      chat_id: "room1",
+      request_id: sent2.request_id,
+    });
+    await expect(failPromise).rejects.toMatchObject({
+      name: "RoomCommandError",
+      code: "step_not_retryable",
+    });
+  });
+
+  it("sends run_workflow with optional run inputs (stock-module design §4.2)", async () => {
+    const client = new MonaClient({
+      url: "ws://test",
+      reconnect: false,
+      socketFactory: (url) => new FakeSocket(url) as unknown as WebSocket,
+    });
+    client.connect();
+    lastSocket().fakeOpen();
+
+    // No inputs → the field is omitted entirely (legacy behavior).
+    const plainPromise = client.runWorkflow("room1");
+    const plain = JSON.parse(lastSocket().sent.at(-1) as string);
+    expect(plain).toMatchObject({ type: "run_workflow", chat_id: "room1" });
+    expect("inputs" in plain).toBe(false);
+    lastSocket().fakeMessage({
+      event: "run_workflow_result",
+      ok: true,
+      chat_id: "room1",
+      request_id: plain.request_id,
+    });
+    await plainPromise;
+
+    // With inputs → the object rides along verbatim.
+    const inputsPromise = client.runWorkflow("room1", {
+      symbols: ["XSHG:600519"],
+    });
+    const withInputs = JSON.parse(lastSocket().sent.at(-1) as string);
+    expect(withInputs).toMatchObject({
+      type: "run_workflow",
+      chat_id: "room1",
+      inputs: { symbols: ["XSHG:600519"] },
+    });
+    lastSocket().fakeMessage({
+      event: "run_workflow_result",
+      ok: true,
+      chat_id: "room1",
+      request_id: withInputs.request_id,
+    });
+    await inputsPromise;
+
+    const selectionPromise = client.runWorkflow(
+      "room1",
+      { mode: "stock_selection", strategy_id: "quality_growth" },
+      "package://com.mona.a-share-team/workflows/stock-selection.json",
+    );
+    const selectionSent = JSON.parse(lastSocket().sent.at(-1) as string);
+    expect(selectionSent).toMatchObject({
+      type: "run_workflow",
+      chat_id: "room1",
+      template_ref: "package://com.mona.a-share-team/workflows/stock-selection.json",
+    });
+    lastSocket().fakeMessage({
+      event: "run_workflow_result",
+      ok: true,
+      chat_id: "room1",
+      request_id: selectionSent.request_id,
+    });
+    await selectionPromise;
+
+    // Server-side rejection (e.g. run_conflict) rejects the promise.
+    const conflictPromise = client.runWorkflow("room1", { symbols: [] });
+    const conflictSent = JSON.parse(lastSocket().sent.at(-1) as string);
+    lastSocket().fakeMessage({
+      event: "run_workflow_result",
+      ok: false,
+      code: "run_conflict",
+      detail: "room already has an active run",
+      chat_id: "room1",
+      request_id: conflictSent.request_id,
+    });
+    await expect(conflictPromise).rejects.toMatchObject({
+      name: "RoomCommandError",
+      code: "run_conflict",
+    });
+  });
+
+  it("synchronizes stock selection schedules and exposes unavailable status", async () => {
+    const client = new MonaClient({
+      url: "ws://test",
+      reconnect: false,
+      socketFactory: (url) => new FakeSocket(url) as unknown as WebSocket,
+    });
+    client.connect();
+    lastSocket().fakeOpen();
+
+    const syncPromise = client.syncStockScreenSchedule("stock_research", "quality_growth", {
+      mode: "daily_after_close",
+      enabled: true,
+      time: "15:30",
+      timezone: "Asia/Shanghai",
+    });
+    const sent = JSON.parse(lastSocket().sent.at(-1) as string);
+    expect(sent).toMatchObject({
+      type: "sync_stock_selection_schedule",
+      chat_id: "stock_research",
+      strategy_id: "quality_growth",
+      schedule: { mode: "daily_after_close", enabled: true, time: "15:30" },
+    });
+    lastSocket().fakeMessage({
+      event: "sync_stock_selection_schedule_result",
+      ok: true,
+      chat_id: "stock_research",
+      request_id: sent.request_id,
+      status: "unavailable",
+      code: "cron_service_unavailable",
+    });
+    await expect(syncPromise).resolves.toMatchObject({ status: "unavailable", code: "cron_service_unavailable" });
+  });
+
   it("dispatches approval_requested broadcasts to subscribers", () => {
     const client = new MonaClient({
       url: "ws://test",

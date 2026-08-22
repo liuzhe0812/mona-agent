@@ -3,22 +3,28 @@ import {
   useCallback,
   useEffect,
   useMemo,
+  useRef,
   useState,
 } from "react";
+import type { PointerEvent as ReactPointerEvent } from "react";
 import {
   Archive,
   ArchiveRestore,
+  ChevronDown,
+  ChevronRight,
   CircleAlert,
+  CheckCheck,
   Clock3,
-  Folder,
-  FolderOpen,
-  MoreHorizontal,
   Pencil,
   Pin,
   PinOff,
   Plus,
+  Folder,
+  FolderOpen,
+  Settings2,
   TriangleAlert,
   Trash2,
+  UsersRound,
 } from "lucide-react";
 import { useTranslation } from "react-i18next";
 
@@ -26,41 +32,53 @@ import {
   ContextMenu,
   ContextMenuContent,
   ContextMenuItem,
+  ContextMenuSeparator,
   ContextMenuTrigger,
 } from "@/components/ui/context-menu";
 import {
-  DropdownMenu,
-  DropdownMenuContent,
-  DropdownMenuItem,
-  DropdownMenuTrigger,
-} from "@/components/ui/dropdown-menu";
-import {
+  AgentAvatar,
   ConversationAvatar,
   MONA_AGENT_ID,
+  MONA_AVATAR_IMAGE,
   resolveAgentDisplayName,
 } from "@/components/room/AgentAvatar";
 import { useAgents } from "@/components/room/useAgents";
 import { conversationListStatus } from "@/hooks/useSessions";
-import { deriveTitle, relativeTime } from "@/lib/format";
+import { deriveTitle, sessionListTime } from "@/lib/format";
+import { cleanSessionPreview, isGenericMonaTitle } from "@/lib/session-preview";
 import { cn } from "@/lib/utils";
 import type {
+  AgentSummary,
   ChatSummary,
   ConversationListStatus,
-  SidebarDensity,
-  SidebarSortMode,
 } from "@/lib/types";
 import { useClientContextOrNull } from "@/providers/ClientProvider";
 
 interface ChatSection {
   label: string;
   sessions: ChatSummary[];
-  isDefault?: boolean;
-  isProject?: boolean;
+  kind: "pinned" | "project" | "agent" | "rooms" | "archived";
+  agentId?: string;
   workspace?: string;
 }
 
 const INITIAL_VISIBLE_SESSIONS = 160;
 const VISIBLE_SESSIONS_INCREMENT = 160;
+const MIN_OVERLAY_THUMB_HEIGHT = 32;
+
+export function overlayScrollbarGeometry(
+  viewportHeight: number,
+  scrollHeight: number,
+  scrollTop: number,
+): { height: number; offset: number } | null {
+  if (scrollHeight <= viewportHeight || viewportHeight <= 0) return null;
+  const height = Math.max(
+    MIN_OVERLAY_THUMB_HEIGHT,
+    viewportHeight * viewportHeight / scrollHeight,
+  );
+  const offset = scrollTop / (scrollHeight - viewportHeight) * (viewportHeight - height);
+  return { height, offset };
+}
 
 interface ChatListProps {
   sessions: ChatSummary[];
@@ -70,16 +88,12 @@ interface ChatListProps {
   onTogglePin: (key: string) => void;
   onRequestRename: (key: string, label: string) => void;
   onToggleArchive: (key: string) => void;
+  onMarkAllRead?: () => void;
   pinnedKeys?: string[];
   archivedKeys?: string[];
   titleOverrides?: Record<string, string>;
   runningChatIds?: string[];
-  completedChatIds?: string[];
   unreadKeys?: string[];
-  density?: SidebarDensity;
-  showPreviews?: boolean;
-  showTimestamps?: boolean;
-  sort?: SidebarSortMode;
   showArchived?: boolean;
   actionMenuPortalContainer?: HTMLElement | null;
   loading?: boolean;
@@ -92,6 +106,14 @@ interface ChatListProps {
   onRemoveProject?: (workspace: string) => void;
   /** Called when the user creates a new task/chat in a project. */
   onCreateTask?: (workspace: string) => void;
+  /** Opens the selected Agent's management surface. */
+  onSelectAgent?: (agentId: string) => void;
+  /** Starts a new direct conversation from an Agent group header. */
+  onStartDirect?: (agentId: string) => void;
+  /** Creates a new room from the rooms group header. */
+  onNewRoom?: () => void;
+  /** Search result mode deliberately suppresses empty Agent groups. */
+  searchMode?: boolean;
 }
 
 export const ChatList = memo(function ChatList({
@@ -102,100 +124,180 @@ export const ChatList = memo(function ChatList({
   onTogglePin,
   onRequestRename,
   onToggleArchive,
+  onMarkAllRead,
   pinnedKeys = [],
   archivedKeys = [],
   titleOverrides = {},
   runningChatIds = [],
-  completedChatIds = [],
   unreadKeys = [],
-  density = "comfortable",
-  sort = "updated_desc",
   showArchived = false,
+  defaultProjectExpanded = true,
   loading,
   emptyLabel,
-  defaultProjectExpanded = true,
-  onOpenProjectFolder: _onOpenProjectFolder,
-  onRemoveProject,
+  onSelectAgent,
+  onStartDirect,
+  onNewRoom,
   onCreateTask,
+  searchMode = false,
 }: ChatListProps) {
   const [visibleLimit, setVisibleLimit] = useState(INITIAL_VISIBLE_SESSIONS);
-  const [expandedProjects, setExpandedProjects] = useState<Set<string>>(() =>
-    new Set(defaultProjectExpanded ? ["__all__"] : [])
+  const [expandedGroups, setExpandedGroups] = useState<Set<string>>(
+    () => new Set(["mona", "rooms"]),
+  );
+  const [projectExpansionOverrides, setProjectExpansionOverrides] = useState<Set<string>>(
+    () => new Set(),
   );
   const { t } = useTranslation();
   const clientCtx = useClientContextOrNull();
   const agentsById = useAgents(clientCtx?.token ?? null);
   const labels = useMemo(() => ({
     pinned: t("chat.groups.pinned"),
-    conversations: t("chat.groups.conversations"),
     archived: t("chat.groups.archived"),
-    fallbackTitle: t("chat.newChat"),
+    rooms: t("chat.groups.rooms"),
   }), [t]);
-  const { defaultGroup, projectGroups, archivedGroup, pinnedGroup } = useMemo(
-    () => groupSessions(sessions, labels, {
+  const groups = useMemo(
+    () => groupAgentSessions(sessions, labels, agentsById, {
       pinnedKeys,
       archivedKeys,
-      titleOverrides,
       showArchived,
-      sort,
+      includeEmptyAgents: !searchMode,
     }),
     [
       archivedKeys,
+      agentsById,
       labels,
       pinnedKeys,
+      searchMode,
       sessions,
       showArchived,
-      sort,
-      titleOverrides,
     ],
-  );
-  const groups = useMemo(
-    () => [pinnedGroup, ...projectGroups, defaultGroup, archivedGroup].filter((g): g is ChatSection => !!g),
-    [defaultGroup, projectGroups, pinnedGroup, archivedGroup],
   );
   const limitedGroups = useMemo(
     () => limitGroups(groups, visibleLimit, activeKey),
     [activeKey, groups, visibleLimit],
   );
 
-  const toggleProject = useCallback((workspace: string) => {
-    setExpandedProjects((prev) => {
+  const toggleGroup = useCallback((groupKey: string, project = false) => {
+    if (project) {
+      setProjectExpansionOverrides((prev) => {
+        const next = new Set(prev);
+        if (next.has(groupKey)) next.delete(groupKey);
+        else next.add(groupKey);
+        return next;
+      });
+      return;
+    }
+    setExpandedGroups((prev) => {
       const next = new Set(prev);
-      if (next.has(workspace)) {
-        next.delete(workspace);
+      if (next.has(groupKey)) {
+        next.delete(groupKey);
       } else {
-        next.add(workspace);
+        next.add(groupKey);
       }
       return next;
     });
   }, []);
   const totalSessionCount = useMemo(
-    () => [defaultGroup, ...projectGroups, pinnedGroup, archivedGroup]
-      .filter(Boolean)
-      .reduce((total, group) => total + (group?.sessions.length ?? 0), 0),
-    [defaultGroup, projectGroups, pinnedGroup, archivedGroup],
+    () => groups.reduce((total, group) => total + group.sessions.length, 0),
+    [groups],
   );
   const visibleSessionCount = useMemo(
     () => limitedGroups.reduce((total, group) => total + group.sessions.length, 0),
     [limitedGroups],
   );
   const hiddenSessionCount = Math.max(0, totalSessionCount - visibleSessionCount);
+  const scrollViewportRef = useRef<HTMLDivElement>(null);
+  const scrollThumbRef = useRef<HTMLSpanElement>(null);
+  const scrollFrameRef = useRef<number | null>(null);
+  const scrollDragRef = useRef<{ pointerId: number; startY: number; startScrollTop: number; thumbHeight: number } | null>(null);
+
+  const handleThumbPointerDown = useCallback((event: ReactPointerEvent<HTMLSpanElement>) => {
+    const viewport = scrollViewportRef.current;
+    const thumb = scrollThumbRef.current;
+    if (!viewport || !thumb) return;
+    event.preventDefault();
+    event.currentTarget.setPointerCapture(event.pointerId);
+    scrollDragRef.current = {
+      pointerId: event.pointerId,
+      startY: event.clientY,
+      startScrollTop: viewport.scrollTop,
+      thumbHeight: thumb.offsetHeight,
+    };
+  }, []);
+
+  const handleThumbPointerMove = useCallback((event: ReactPointerEvent<HTMLSpanElement>) => {
+    const viewport = scrollViewportRef.current;
+    const drag = scrollDragRef.current;
+    if (!viewport || !drag || drag.pointerId !== event.pointerId) return;
+    const maxScrollTop = viewport.scrollHeight - viewport.clientHeight;
+    const maxThumbOffset = viewport.clientHeight - drag.thumbHeight;
+    if (maxScrollTop <= 0 || maxThumbOffset <= 0) return;
+    const nextScrollTop = drag.startScrollTop + (event.clientY - drag.startY) * maxScrollTop / maxThumbOffset;
+    viewport.scrollTop = Math.max(0, Math.min(maxScrollTop, nextScrollTop));
+  }, []);
+
+  const handleThumbPointerUp = useCallback((event: ReactPointerEvent<HTMLSpanElement>) => {
+    if (scrollDragRef.current?.pointerId !== event.pointerId) return;
+    scrollDragRef.current = null;
+    if (event.currentTarget.hasPointerCapture(event.pointerId)) {
+      event.currentTarget.releasePointerCapture(event.pointerId);
+    }
+  }, []);
+
+  const syncOverlayScrollbar = useCallback(() => {
+    const viewport = scrollViewportRef.current;
+    const thumb = scrollThumbRef.current;
+    if (!viewport || !thumb) return;
+    const geometry = overlayScrollbarGeometry(
+      viewport.clientHeight,
+      viewport.scrollHeight,
+      viewport.scrollTop,
+    );
+    thumb.style.display = geometry ? "block" : "none";
+    if (!geometry) return;
+    thumb.style.height = `${geometry.height}px`;
+    thumb.style.transform = `translateY(${geometry.offset}px)`;
+  }, []);
+
+  const scheduleOverlayScrollbarSync = useCallback(() => {
+    if (scrollFrameRef.current !== null) return;
+    scrollFrameRef.current = window.requestAnimationFrame(() => {
+      scrollFrameRef.current = null;
+      syncOverlayScrollbar();
+    });
+  }, [syncOverlayScrollbar]);
 
   useEffect(() => {
     setVisibleLimit(INITIAL_VISIBLE_SESSIONS);
-  }, [showArchived, sort]);
+  }, [showArchived]);
+
+  useEffect(() => {
+    syncOverlayScrollbar();
+    const viewport = scrollViewportRef.current;
+    if (!viewport || typeof ResizeObserver === "undefined") return;
+    const observer = new ResizeObserver(syncOverlayScrollbar);
+    observer.observe(viewport);
+    if (viewport.firstElementChild) observer.observe(viewport.firstElementChild);
+    return () => {
+      observer.disconnect();
+      if (scrollFrameRef.current !== null) {
+        window.cancelAnimationFrame(scrollFrameRef.current);
+        scrollFrameRef.current = null;
+      }
+    };
+  }, [expandedGroups, limitedGroups, syncOverlayScrollbar]);
 
   if (loading && sessions.length === 0) {
     return (
-      <div className="px-3 py-6 text-[12px] text-muted-foreground">
+      <div className="px-5 py-6 text-caption text-muted-foreground">
         {t("chat.loading")}
       </div>
     );
   }
 
-  if (sessions.length === 0) {
+  if (sessions.length === 0 && (searchMode || agentsById.size === 0)) {
     return (
-      <div className="px-3 py-6 text-[12px] leading-5 text-muted-foreground/80">
+      <div className="px-5 py-6 text-caption leading-5 text-muted-foreground/80">
         {emptyLabel ?? t("chat.noSessions")}
       </div>
     );
@@ -204,186 +306,261 @@ export const ChatList = memo(function ChatList({
   const pinned = new Set(pinnedKeys);
   const archived = new Set(archivedKeys);
   const running = new Set(runningChatIds);
-  const completed = new Set(completedChatIds);
   const unread = new Set(unreadKeys);
-  const compact = density === "compact";
 
   return (
-    <div className="scrollbar-hover h-full min-h-0 min-w-0 overflow-x-hidden overflow-y-auto overscroll-contain">
-      <div className="min-w-0 space-y-3 px-2 py-1.5">
+    <div className="group/session-list relative h-full min-h-0 min-w-0">
+      <div
+        ref={scrollViewportRef}
+        onScroll={scheduleOverlayScrollbarSync}
+        className="session-list-scrollbar h-full min-h-0 min-w-0 overflow-x-hidden overflow-y-auto overscroll-contain"
+      >
+      <div className="min-w-0 space-y-2 py-1.5">
         {limitedGroups.map((group) => {
-          const isProject = group.isProject && group.workspace;
-          const expanded = isProject ? expandedProjects.has(group.workspace!) : true;
+          const groupKey = group.workspace ? `project:${group.workspace}` : group.agentId ?? group.kind;
+          const collapsible = group.kind === "project" || group.kind === "agent" || group.kind === "rooms" || group.kind === "archived";
+          const projectExpanded = defaultProjectExpanded
+            ? !projectExpansionOverrides.has(groupKey)
+            : projectExpansionOverrides.has(groupKey);
+          const expanded = group.kind === "project"
+            ? projectExpanded
+            : !collapsible || expandedGroups.has(groupKey);
+          const agent = group.agentId ? agentsById.get(group.agentId) : null;
           return (
-          <section key={group.label} aria-label={group.label}>
-            <ContextMenu>
-              <ContextMenuTrigger asChild>
-            <div
-              className={cn(
-                "group/header flex items-center gap-1 px-2 pb-1 text-[12px] font-medium text-muted-foreground/65",
-                isProject && "cursor-pointer select-none hover:text-muted-foreground",
+          <section key={groupKey} aria-label={group.label}>
+            <div className="group/header flex min-h-9 items-center gap-1 px-3 pb-1 pt-1 text-caption font-medium text-muted-foreground/75">
+              {group.kind === "agent" && group.agentId ? (
+                <button
+                  type="button"
+                  onClick={() => toggleGroup(groupKey)}
+                  aria-expanded={expanded}
+                  className="flex min-w-0 flex-1 items-center gap-1 rounded-md px-1 py-1 text-left hover:bg-[hsl(var(--sidebar-hover-surface)/0.04)] hover:text-sidebar-foreground"
+                  aria-label={group.label}
+                >
+                  {expanded ? <ChevronDown className="h-3.5 w-3.5 shrink-0" /> : <ChevronRight className="h-3.5 w-3.5 shrink-0" />}
+                  <AgentAvatar agentId={group.agentId} displayName={agent?.displayName ?? group.label} avatarUrl={agent?.avatarUrl ?? (group.agentId === MONA_AGENT_ID ? MONA_AVATAR_IMAGE : null)} className="h-5 w-5" />
+                  <span className="min-w-0 shrink truncate">{group.label}</span>
+                  {group.sessions.filter((session) => unread.has(session.key)).length > 0 ? (
+                    <span className="shrink-0 rounded-full bg-destructive px-1.5 text-[10px] leading-4 text-white">
+                      {group.sessions.filter((session) => unread.has(session.key)).length}
+                    </span>
+                  ) : null}
+                  {agent?.enabled === false ? <span className="text-micro text-muted-foreground/65">{t("common.disabled", "已停用")}</span> : null}
+                </button>
+              ) : (
+                <button
+                  type="button"
+                  onClick={() => collapsible && toggleGroup(groupKey, group.kind === "project")}
+                  className={cn(
+                    "flex min-w-0 flex-1 items-center gap-1 rounded-md px-1 py-1 text-left",
+                    collapsible && "hover:bg-[hsl(var(--sidebar-hover-surface)/0.04)] hover:text-sidebar-foreground",
+                  )}
+                  aria-expanded={collapsible ? expanded : undefined}
+                >
+                  {collapsible ? (
+                    expanded ? <ChevronDown className="h-3.5 w-3.5 shrink-0" /> : <ChevronRight className="h-3.5 w-3.5 shrink-0" />
+                  ) : null}
+                  {group.kind === "project" ? (
+                    expanded
+                      ? <FolderOpen className="h-3.5 w-3.5 shrink-0" />
+                      : <Folder className="h-3.5 w-3.5 shrink-0" />
+                  ) : null}
+                  {group.kind === "rooms" ? <UsersRound className="h-3.5 w-3.5 shrink-0" /> : null}
+                  <span className="min-w-0 flex-1 truncate">{group.label}</span>
+                </button>
               )}
-              onClick={() => isProject && group.workspace && toggleProject(group.workspace)}
-              role={isProject ? "button" : undefined}
-              tabIndex={isProject ? 0 : undefined}
-              aria-expanded={isProject ? expanded : undefined}
-            >
-              {isProject ? (
-                expanded ? (
-                  <FolderOpen className="mr-1 h-3.5 w-3.5 shrink-0" />
-                ) : (
-                  <Folder className="mr-1 h-3.5 w-3.5 shrink-0" />
-                )
+              {group.kind === "agent" && group.agentId && agent?.enabled !== false ? (
+                <>
+                  <button
+                    type="button"
+                    onClick={() => onSelectAgent?.(group.agentId!)}
+                    aria-label={t("chat.agentSettings", "Agent 设置")}
+                    title={t("chat.agentSettings", "Agent 设置")}
+                    className="grid h-7 w-7 shrink-0 place-items-center rounded-md text-muted-foreground opacity-0 transition-opacity hover:bg-[hsl(var(--sidebar-hover-surface)/0.06)] hover:text-sidebar-foreground group-hover/header:opacity-100 focus-visible:opacity-100"
+                  >
+                    <Settings2 className="h-3.5 w-3.5" />
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => onStartDirect?.(group.agentId!)}
+                    aria-label={t("chat.newChat")}
+                    className="grid h-7 w-7 shrink-0 place-items-center rounded-md text-muted-foreground opacity-0 transition-opacity hover:bg-[hsl(var(--sidebar-hover-surface)/0.06)] hover:text-sidebar-foreground group-hover/header:opacity-100 focus-visible:opacity-100"
+                  >
+                    <Plus className="h-3.5 w-3.5" />
+                  </button>
+                </>
               ) : null}
-              <span className="min-w-0 flex-1 truncate">{group.label}</span>
-              {isProject && group.workspace ? (
-                <DropdownMenu>
-                  <DropdownMenuTrigger asChild>
-                    <button
-                      type="button"
-                      onClick={(e) => e.stopPropagation()}
-                      className="ml-auto flex h-5 w-5 shrink-0 items-center justify-center rounded text-muted-foreground/60 opacity-0 transition-opacity hover:bg-[hsl(var(--sidebar-hover-surface)/0.04)] hover:text-sidebar-foreground group-hover/header:opacity-100"
-                      aria-label={t("common.more", "更多")}
-                    >
-                      <MoreHorizontal className="h-3.5 w-3.5" />
-                    </button>
-                  </DropdownMenuTrigger>
-                  <DropdownMenuContent align="end" onCloseAutoFocus={(e) => e.preventDefault()}>
-                    <DropdownMenuItem onSelect={() => onCreateTask?.(group.workspace!)}>
-                      <Plus className="mr-2 h-4 w-4" />
-                      {t("chat.newTask", "创建新任务")}
-                    </DropdownMenuItem>
-                    <DropdownMenuItem
-                      onSelect={() => onRemoveProject?.(group.workspace!)}
-                      className="text-destructive focus:text-destructive"
-                    >
-                      <Trash2 className="mr-2 h-4 w-4" />
-                      {t("common.delete", "删除")}
-                    </DropdownMenuItem>
-                  </DropdownMenuContent>
-                </DropdownMenu>
+              {group.kind === "rooms" ? (
+                <button
+                  type="button"
+                  onClick={() => onNewRoom?.()}
+                  aria-label={t("chat.newRoom")}
+                  title={t("chat.newRoom")}
+                  className="grid h-7 w-7 shrink-0 place-items-center rounded-md text-muted-foreground opacity-0 transition-opacity hover:bg-[hsl(var(--sidebar-hover-surface)/0.06)] hover:text-sidebar-foreground group-hover/header:opacity-100 focus-visible:opacity-100"
+                >
+                  <Plus className="h-3.5 w-3.5" />
+                </button>
+              ) : null}
+              {group.kind === "project" && group.workspace ? (
+                <button
+                  type="button"
+                  onClick={() => onCreateTask?.(group.workspace!)}
+                  aria-label={t("chat.newProjectChat")}
+                  title={t("chat.newProjectChat")}
+                  className="grid h-7 w-7 shrink-0 place-items-center rounded-md text-muted-foreground opacity-0 transition-opacity hover:bg-[hsl(var(--sidebar-hover-surface)/0.06)] hover:text-sidebar-foreground group-hover/header:opacity-100 focus-visible:opacity-100"
+                >
+                  <Plus className="h-3.5 w-3.5" />
+                </button>
               ) : null}
             </div>
-              </ContextMenuTrigger>
-              {isProject && group.workspace ? (
-                <ContextMenuContent onCloseAutoFocus={(e) => e.preventDefault()}>
-                  <ContextMenuItem onSelect={() => onCreateTask?.(group.workspace!)}>
-                    <Plus className="mr-2 h-4 w-4" />
-                    {t("chat.newTask", "创建新任务")}
-                  </ContextMenuItem>
-                  <ContextMenuItem
-                    onSelect={() => onRemoveProject?.(group.workspace!)}
-                    className="text-destructive focus:text-destructive"
-                  >
-                    <Trash2 className="mr-2 h-4 w-4" />
-                    {t("common.delete", "删除")}
-                  </ContextMenuItem>
-                </ContextMenuContent>
-              ) : null}
-            </ContextMenu>
             {expanded ? (
-            <ul className="space-y-0.5">
+            <ul>
               {group.sessions.map((s) => {
                 const active = s.key === activeKey;
-                const fallbackTitle = t("chat.fallbackTitle", {
-                  id: s.chatId.slice(0, 6),
-                });
                 const generatedTitle = s.title?.trim() || "";
-                const title = displayTitle(s, titleOverrides, t("chat.newChat"));
-                const tooltipTitle =
-                  titleOverrides[s.key]?.trim() ||
-                  generatedTitle ||
-                  deriveTitle(s.preview, fallbackTitle);
                 const isPinned = pinned.has(s.key);
                 const isArchived = archived.has(s.key);
                 const isUnread = unread.has(s.key);
-                const preview = s.preview.trim();
-                const timestamp = relativeTime(s.previewAt ?? s.updatedAt ?? s.createdAt);
+                const cleanedPreview = cleanSessionPreview(s.preview);
+                const timestamp = sessionListTime(s.previewAt ?? s.updatedAt ?? s.createdAt);
                 const persistedStatus = conversationListStatus(s);
+                // 已完成不保留永久状态图标（§8.2），行内只展示进行态
                 const activityState = persistedStatus ?? (
-                  running.has(s.chatId)
-                    ? "running"
-                    : completed.has(s.chatId)
-                      ? "complete"
-                      : null
+                  running.has(s.chatId) ? "running" : null
                 );
-                // 企业微信式列表项：私聊/房间显示大头像 + 「显示标题 + 消息预览」
-                // 两行；无 conversation 的旧会话按 Mona 私聊处理。显示标题优先级
-                // （IM 规范 10.3）：手动重命名 → 房间标题 → 会话生成标题 →
-                // Agent 显示名称 → 兜底标题。
+                // 显示标题优先级（§6.4）：手动重命名 → 房间名称 → 会话生成
+                // 标题（任务主题）→ Agent 显示名称 → 首条有效消息 → 兜底标题。
+                // 无 conversation 的旧会话按 Mona 私聊处理。
                 const conv = s.conversation ?? null;
-                const agentName =
-                  conv?.type === "room"
-                    ? ""
-                    : resolveAgentDisplayName(agentsById, conv?.directAgentId ?? MONA_AGENT_ID);
+                const isRoom = conv?.type === "room";
+                const agentName = isRoom
+                  ? ""
+                  : resolveAgentDisplayName(agentsById, conv?.directAgentId ?? MONA_AGENT_ID);
+                const isMonaTask = !isRoom
+                  && (conv?.directAgentId ?? MONA_AGENT_ID) === MONA_AGENT_ID;
+                const taskTitle = !isRoom && (
+                  isGenericMonaTitle(generatedTitle, agentName)
+                  || generatedTitle.trim().toLocaleLowerCase() === agentName.trim().toLocaleLowerCase()
+                )
+                  ? ""
+                  : generatedTitle;
                 const rowTitle =
                   titleOverrides[s.key]?.trim() ||
-                  (conv?.type === "room" ? conv.title?.trim() || "" : "") ||
-                  generatedTitle ||
-                  agentName ||
-                  title;
-                const showRowPreview = Boolean(preview && preview !== rowTitle);
+                  (isRoom ? conv?.title?.trim() || "" : "") ||
+                  taskTitle ||
+                  deriveTitle(cleanedPreview, t("chat.newChat"));
+                const tooltipTitle = rowTitle;
+                // 私聊头像已经表达身份，只有协作房间需要最后发言者前缀。
+                let speakerPrefix = "";
+                if (isRoom) {
+                  const authorId = s.previewAuthorId;
+                  if (authorId && s.previewAuthorType !== "user") {
+                    speakerPrefix = `${resolveAgentDisplayName(agentsById, authorId)}：`;
+                  }
+                }
+                const statusLabel = activityState
+                  ? t(`chat.activity.${activityState === "waiting_approval" ? "waitingApproval" : activityState}`)
+                  : "";
+                const projectPrefix = s.workspace ? `${workspaceLabel(s.workspace)} · ` : "";
+                const summaryTextWithStatus = activityState
+                  ? [statusLabel, cleanedPreview].filter(Boolean).join(" · ")
+                  : `${projectPrefix}${speakerPrefix}${cleanedPreview}`;
+                const summaryText = summaryTextWithStatus.trim() === rowTitle.trim()
+                  ? ""
+                  : summaryTextWithStatus;
                 return (
-                  <li key={s.key} className="min-w-0">
+                  <li key={s.key} className="min-w-0 px-2">
                     <ContextMenu>
                       <ContextMenuTrigger asChild>
-                        <div
+                        <button
+                          type="button"
+                          onClick={() => onSelect(s.key)}
+                          title={tooltipTitle}
+                          aria-current={active ? "page" : undefined}
                           className={cn(
-                            "group flex min-w-0 max-w-full items-center gap-2 rounded-xl px-2 text-[13px] transition-colors",
-                            rowTitle ? "min-h-11 gap-2.5" : compact ? "min-h-7" : "min-h-8",
+                            "group relative flex h-16 w-full min-w-0 items-center gap-3 px-2 text-left transition-colors duration-150 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/45",
                             active
-                              ? "bg-[hsl(var(--sidebar-active-surface)/0.07)] text-sidebar-foreground"
-                              : "text-sidebar-foreground/82 hover:bg-[hsl(var(--sidebar-hover-surface)/0.04)] hover:text-sidebar-foreground",
+                              ? "rounded-md bg-[hsl(var(--sidebar-active-surface)/0.09)] text-sidebar-foreground"
+                              : "text-sidebar-foreground/82 hover:rounded-md hover:bg-[hsl(var(--sidebar-hover-surface)/0.04)] hover:text-sidebar-foreground",
                           )}
                         >
-                      {rowTitle ? (
-                        <span className="relative shrink-0 self-center">
+                      {/* 极浅底部分隔线：与头像左沿对齐，悬停/选中时隐藏。 */}
+                      <span
+                        aria-hidden
+                        className={cn(
+                          "pointer-events-none absolute bottom-0 left-2 right-2 h-px bg-sidebar-border/50",
+                          "group-hover:opacity-0",
+                          active && "opacity-0",
+                        )}
+                      />
+                      {isRoom || group.kind === "pinned" ? (
+                        <span className="relative flex h-10 w-10 shrink-0 self-center rounded-md">
                           <ConversationAvatar
                             conversation={conv}
                             agentsById={agentsById}
-                            avatarClassName="h-9 w-9 text-xs"
+                            taskTitle={isMonaTask ? rowTitle : undefined}
+                            className="h-10 w-10 justify-center overflow-hidden rounded-md"
+                            avatarClassName="h-6 w-6 rounded-md text-micro"
                           />
                           {isUnread ? (
                             <span
                               aria-label={t("chat.unread")}
                               title={t("chat.unread")}
-                              className="absolute -right-0.5 -top-0.5 h-2.5 w-2.5 rounded-full border-2 border-background bg-destructive"
+                              className={cn(
+                                "absolute -right-0.5 -top-0.5 h-2 w-2 rounded-full border bg-destructive",
+                                "border-background",
+                              )}
                             />
                           ) : null}
                         </span>
-                      ) : null}
-                      <button
-                        type="button"
-                        onClick={() => onSelect(s.key)}
-                        title={tooltipTitle}
-                        className={cn(
-                          "min-w-0 flex-1 overflow-hidden text-left",
-                          compact && !rowTitle ? "py-1" : "py-1.5",
-                        )}
-                      >
-                        <span className={cn(
-                          "block w-full truncate leading-5",
-                          isUnread ? "font-semibold text-sidebar-foreground" : "font-medium",
-                        )}>
-                          {rowTitle}
+                      ) : <span className="h-8 w-1 shrink-0" aria-hidden />}
+                      <span className="flex h-full min-w-0 flex-1 flex-col justify-center overflow-hidden py-2 text-left">
+                        <span className="flex w-full items-baseline gap-2">
+                          <span className={cn(
+                            "min-w-0 flex-1 truncate !text-body",
+                            isUnread ? "font-medium" : "font-normal",
+                            isUnread && "text-sidebar-foreground",
+                          )}>
+                            {rowTitle}
+                          </span>
+                          {timestamp ? (
+                            <span className={cn(
+                              "shrink-0 !text-micro",
+                              "text-muted-foreground/70",
+                            )}>
+                              {timestamp}
+                            </span>
+                          ) : null}
                         </span>
-                        {showRowPreview ? (
-                          <span className="block w-full truncate text-[11.5px] leading-4 text-muted-foreground/72">
-                            {preview}
+                        {summaryText ? (
+                          <span className={cn(
+                            "flex w-full items-center gap-1 truncate !text-caption",
+                            "text-muted-foreground/75",
+                          )}>
+                            {activityState ? (
+                              <ActivityStatusIcon state={activityState} />
+                            ) : null}
+                            <span className="min-w-0 truncate">{summaryText}</span>
                           </span>
                         ) : null}
-                      </button>
-                      <SessionActivityIndicator state={activityState} />
-                      {timestamp ? (
-                        <span className="shrink-0 text-[11px] leading-4 text-muted-foreground/58">
-                          {timestamp}
-                        </span>
-                      ) : null}
-                        </div>
+                      </span>
+                        </button>
                       </ContextMenuTrigger>
                     <ContextMenuContent
                       onCloseAutoFocus={(event) => event.preventDefault()}
                     >
+                      {onMarkAllRead ? (
+                        <>
+                          <ContextMenuItem
+                            disabled={unread.size === 0}
+                            onSelect={onMarkAllRead}
+                          >
+                            <CheckCheck className="mr-2 h-4 w-4" />
+                            {t("chat.markAllRead")}
+                          </ContextMenuItem>
+                          <ContextMenuSeparator />
+                        </>
+                      ) : null}
                       <ContextMenuItem
                         onSelect={() => onTogglePin(s.key)}
                       >
@@ -395,7 +572,7 @@ export const ChatList = memo(function ChatList({
                         {isPinned ? t("chat.unpin") : t("chat.pin")}
                       </ContextMenuItem>
                       <ContextMenuItem
-                        onSelect={() => onRequestRename(s.key, title)}
+                        onSelect={() => onRequestRename(s.key, rowTitle)}
                       >
                         <Pencil className="mr-2 h-4 w-4" />
                         {t("chat.rename")}
@@ -412,7 +589,7 @@ export const ChatList = memo(function ChatList({
                       </ContextMenuItem>
                       <ContextMenuItem
                         onSelect={() => {
-                          window.setTimeout(() => onRequestDelete(s.key, title), 0);
+                          window.setTimeout(() => onRequestDelete(s.key, rowTitle), 0);
                         }}
                         className="text-destructive focus:text-destructive"
                       >
@@ -438,179 +615,156 @@ export const ChatList = memo(function ChatList({
                   Math.min(totalSessionCount, limit + VISIBLE_SESSIONS_INCREMENT),
                 )
               }
-              className="h-8 w-full rounded-full text-[12px] font-medium text-muted-foreground transition-colors hover:bg-[hsl(var(--sidebar-hover-surface)/0.04)] hover:text-sidebar-foreground"
+              className="h-8 w-full rounded-full text-caption font-medium text-muted-foreground transition-colors hover:bg-[hsl(var(--sidebar-hover-surface)/0.04)] hover:text-sidebar-foreground"
             >
               {t("chat.showMore", { count: hiddenSessionCount })}
             </button>
           </div>
         ) : null}
       </div>
+      </div>
+      <span
+        ref={scrollThumbRef}
+        aria-hidden
+        onPointerDown={handleThumbPointerDown}
+        onPointerMove={handleThumbPointerMove}
+        onPointerUp={handleThumbPointerUp}
+        onPointerCancel={handleThumbPointerUp}
+        className="session-list-scrollbar-thumb pointer-events-auto absolute right-3 top-0 z-20 hidden w-1 touch-none select-none rounded-full bg-muted-foreground/40 opacity-0 transition-opacity duration-75 group-hover/session-list:opacity-100"
+      />
     </div>
   );
 });
 
-function SessionActivityIndicator({
+/** 第二行摘要区的任务状态图标（§8.2）：执行中为主题色旋转图标。 */
+function ActivityStatusIcon({
   state,
 }: {
-  state: ConversationListStatus | "complete";
+  state: ConversationListStatus;
 }) {
-  const { t } = useTranslation();
-
   if (state === "running") {
-    const label = t("chat.activity.running");
     return (
       <span
-        aria-label={label}
-        title={label}
-        className="grid h-4 w-4 shrink-0 place-items-center"
-      >
-        <span className="h-3 w-3 animate-spin rounded-full border border-blue-500/25 border-t-blue-500 [animation-duration:1.4s] motion-reduce:animate-none dark:border-blue-400/25 dark:border-t-blue-400" />
-      </span>
+        aria-hidden
+        className="h-3 w-3 shrink-0 animate-spin rounded-full border border-theme/25 border-t-theme [animation-duration:1.4s] motion-reduce:animate-none"
+      />
     );
   }
-
-  if (state === "complete") {
-    const label = t("chat.activity.complete");
-    return (
-      <span
-        aria-label={label}
-        title={label}
-        className="grid h-4 w-4 shrink-0 place-items-center"
-      >
-        <span className="h-1.5 w-1.5 rounded-full bg-blue-500 shadow-[0_0_0_3px_rgba(59,130,246,0.14)] dark:bg-blue-400 dark:shadow-[0_0_0_3px_rgba(96,165,250,0.18)]" />
-      </span>
-    );
-  }
-
   if (state === "waiting_approval") {
-    const label = t("chat.activity.waitingApproval");
-    return (
-      <span aria-label={label} title={label} className="grid h-4 w-4 shrink-0 place-items-center text-amber-500">
-        <CircleAlert className="h-3.5 w-3.5" aria-hidden />
-      </span>
-    );
+    return <CircleAlert aria-hidden className="h-3.5 w-3.5 shrink-0 text-amber-500" />;
   }
-
   if (state === "failed") {
-    const label = t("chat.activity.failed");
-    return (
-      <span aria-label={label} title={label} className="grid h-4 w-4 shrink-0 place-items-center text-destructive">
-        <TriangleAlert className="h-3.5 w-3.5" aria-hidden />
-      </span>
-    );
+    return <TriangleAlert aria-hidden className="h-3.5 w-3.5 shrink-0 text-destructive" />;
   }
-
   if (state === "scheduled") {
-    const label = t("chat.activity.scheduled");
-    return (
-      <span aria-label={label} title={label} className="grid h-4 w-4 shrink-0 place-items-center text-muted-foreground">
-        <Clock3 className="h-3.5 w-3.5" aria-hidden />
-      </span>
-    );
+    return <Clock3 aria-hidden className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />;
   }
-
-  return <span className="h-4 w-4 shrink-0" aria-hidden="true" />;
+  return null;
 }
 
-interface GroupSessionsResult {
-  defaultGroup: ChatSection;
-  projectGroups: ChatSection[];
-  archivedGroup: ChatSection | null;
-  pinnedGroup: ChatSection | null;
-}
-
-function groupSessions(
+function groupAgentSessions(
   sessions: ChatSummary[],
   labels: {
     pinned: string;
-    conversations: string;
     archived: string;
-    fallbackTitle: string;
+    rooms: string;
   },
+  agentsById: ReadonlyMap<string, AgentSummary>,
   options: {
     pinnedKeys: string[];
     archivedKeys: string[];
-    titleOverrides: Record<string, string>;
     showArchived: boolean;
-    sort: SidebarSortMode;
+    includeEmptyAgents: boolean;
   },
-): GroupSessionsResult {
+): ChatSection[] {
   const pinned = new Set(options.pinnedKeys);
   const archived = new Set(options.archivedKeys);
-
   const pinnedSessions: ChatSummary[] = [];
+  const projectBuckets = new Map<string, ChatSummary[]>();
   const archivedSessions: ChatSummary[] = [];
-
-  // Partition non-pinned, non-archived sessions by workspace.
-  // Default workspace (null/empty) → "会话" section.
-  // Project workspace → "{basename} · {fullpath}" section.
-  const workspaceOrder: string[] = [];
-  const workspaceBuckets = new Map<string, ChatSummary[]>();
-  const DEFAULT_KEY = "__default__";
-
-  const bucketOf = (ws: string | null | undefined): string =>
-    ws && ws.trim() ? ws : DEFAULT_KEY;
-
-  const ensureBucket = (key: string) => {
-    if (!workspaceBuckets.has(key)) {
-      workspaceBuckets.set(key, []);
-      workspaceOrder.push(key);
-    }
-  };
+  const directBuckets = new Map<string, ChatSummary[]>();
+  const roomSessions: ChatSummary[] = [];
 
   for (const session of sessions) {
     if (archived.has(session.key)) {
       if (options.showArchived) archivedSessions.push(session);
       continue;
     }
+    const workspace = session.workspace?.trim();
+    if (workspace) {
+      const rows = projectBuckets.get(workspace) ?? [];
+      rows.push(session);
+      projectBuckets.set(workspace, rows);
+      continue;
+    }
     if (pinned.has(session.key)) {
       pinnedSessions.push(session);
       continue;
     }
-    const bucketKey = bucketOf(session.workspace);
-    ensureBucket(bucketKey);
-    workspaceBuckets.get(bucketKey)!.push(session);
+    const conversation = session.conversation;
+    if (conversation?.type === "room") {
+      roomSessions.push(session);
+      continue;
+    }
+    const agentId = conversation?.directAgentId ?? MONA_AGENT_ID;
+    const rows = directBuckets.get(agentId) ?? [];
+    rows.push(session);
+    directBuckets.set(agentId, rows);
   }
 
-  // Ensure the default "会话" section always exists.
-  ensureBucket(DEFAULT_KEY);
-
-  const defaultGroup: ChatSection = {
-    label: labels.conversations,
-    isDefault: true,
-    sessions: sortSessions(workspaceBuckets.get(DEFAULT_KEY) ?? [], options.sort, options.titleOverrides),
-  };
-
-  const projectGroups: ChatSection[] = [];
-  for (const bucketKey of workspaceOrder) {
-    if (bucketKey === DEFAULT_KEY) continue;
-    const list = workspaceBuckets.get(bucketKey) ?? [];
-    projectGroups.push({
-      label: workspaceLabel(bucketKey),
-      isProject: true,
-      workspace: bucketKey,
-      sessions: sortSessions(list, options.sort, options.titleOverrides),
+  const visibleAgents = [...agentsById.values()]
+    .filter((agent) => agent.visibility !== "internal")
+    .sort((left, right) => {
+      if (left.id === MONA_AGENT_ID) return -1;
+      if (right.id === MONA_AGENT_ID) return 1;
+      return left.displayName.localeCompare(right.displayName);
+    });
+  if (!visibleAgents.some((agent) => agent.id === MONA_AGENT_ID)) {
+    visibleAgents.unshift({
+      id: MONA_AGENT_ID,
+      displayName: "Mona",
+      enabled: true,
     });
   }
 
-  const pinnedGroup: ChatSection | null = pinnedSessions.length
-    ? {
-        label: labels.pinned,
-        sessions: sortSessions(pinnedSessions, options.sort, options.titleOverrides),
-      }
-    : null;
-
-  const archivedGroup: ChatSection | null = archivedSessions.length
-    ? {
-        label: labels.archived,
-        sessions: sortSessions(archivedSessions, options.sort, options.titleOverrides),
-      }
-    : null;
-
-  return { defaultGroup, projectGroups, archivedGroup, pinnedGroup };
+  const groups: ChatSection[] = [];
+  if (pinnedSessions.length) {
+    groups.push({ label: labels.pinned, kind: "pinned", sessions: sortSessions(pinnedSessions) });
+  }
+  for (const [workspace, rows] of projectBuckets) {
+    groups.push({
+      label: workspaceLabel(workspace),
+      kind: "project",
+      workspace,
+      sessions: sortSessions(rows),
+    });
+  }
+  for (const agent of visibleAgents) {
+    const rows = directBuckets.get(agent.id) ?? [];
+    if (!options.includeEmptyAgents && rows.length === 0) continue;
+    groups.push({
+      label: agent.displayName,
+      kind: "agent",
+      agentId: agent.id,
+      sessions: sortSessions(rows),
+    });
+    directBuckets.delete(agent.id);
+  }
+  // A package can be removed after a conversation was created. Keep those
+  // sessions reachable rather than silently dropping them from the sidebar.
+  for (const [agentId, rows] of directBuckets) {
+    groups.push({ kind: "agent", agentId, label: agentId, sessions: sortSessions(rows) });
+  }
+  if (roomSessions.length) {
+    groups.push({ label: labels.rooms, kind: "rooms", sessions: sortSessions(roomSessions) });
+  }
+  if (archivedSessions.length) {
+    groups.push({ label: labels.archived, kind: "archived", sessions: sortSessions(archivedSessions) });
+  }
+  return groups;
 }
 
-/** Render a workspace path as ``{basename} · {fullpath}`` for the section header. */
+/** Render a workspace path as its basename for the section header. */
 function workspaceLabel(workspacePath: string): string {
   // Normalize Windows backslashes.
   const normalized = workspacePath.replace(/\\/g, "/");
@@ -635,7 +789,7 @@ function limitGroups(
     if (activeKey && visible.some((session) => session.key === activeKey)) {
       activeVisible = true;
     }
-    if (visible.length > 0) {
+    if (visible.length > 0 || group.kind === "agent") {
       out.push({ ...group, sessions: visible });
     }
   }
@@ -657,57 +811,16 @@ function limitGroups(
   return out;
 }
 
-function sortSessions(
-  sessions: ChatSummary[],
-  sort: SidebarSortMode,
-  titleOverrides: Record<string, string>,
-): ChatSummary[] {
+/** 固定按最近有效活动时间倒序（§3.1）：最后一条用户可见消息时间，
+ *  缺失时依次回退到更新时间和创建时间。 */
+function sortSessions(sessions: ChatSummary[]): ChatSummary[] {
   const copy = [...sessions];
-  copy.sort((a, b) => {
-    if (sort === "title_asc") {
-      const titleOrder = titleForSort(a, titleOverrides).localeCompare(
-        titleForSort(b, titleOverrides),
-        "en",
-        { numeric: true, sensitivity: "base" },
-      );
-      if (titleOrder !== 0) return titleOrder;
-      return sessionTime(b, "updatedAt") - sessionTime(a, "updatedAt");
-    }
-    const aTime = sessionTime(a, sort === "created_desc" ? "createdAt" : "updatedAt");
-    const bTime = sessionTime(b, sort === "created_desc" ? "createdAt" : "updatedAt");
-    return bTime - aTime;
-  });
+  copy.sort((a, b) => activityTime(b) - activityTime(a));
   return copy;
 }
 
-function titleForSort(
-  session: ChatSummary,
-  titleOverrides: Record<string, string>,
-): string {
-  return (
-    titleOverrides[session.key]?.trim() ||
-    session.title?.trim() ||
-    deriveTitle(session.preview, "new chat")
-  ).toLocaleLowerCase("en");
-}
-
-function displayTitle(
-  session: ChatSummary,
-  titleOverrides: Record<string, string>,
-  fallbackTitle: string,
-): string {
-  return (
-    titleOverrides[session.key]?.trim() ||
-    session.title?.trim() ||
-    deriveTitle(session.preview, fallbackTitle)
-  );
-}
-
-function sessionTime(
-  session: ChatSummary,
-  field: "createdAt" | "updatedAt",
-): number {
-  const primary = Date.parse(session[field] ?? "");
+function activityTime(session: ChatSummary): number {
+  const primary = Date.parse(session.previewAt ?? "");
   if (Number.isFinite(primary)) return primary;
   const fallback = Date.parse(session.updatedAt ?? session.createdAt ?? "");
   return Number.isFinite(fallback) ? fallback : 0;

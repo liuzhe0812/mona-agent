@@ -36,6 +36,7 @@ import sidebarEmailIcon from "@/assets/icons/sidebar-email.png";
 import sidebarScheduleIcon from "@/assets/icons/sidebar-schedule.png";
 import sidebarSystemIcon from "@/assets/icons/sidebar-system.png";
 import sidebarProfileIcon from "@/assets/icons/sidebar-profile.png";
+import sidebarStockIcon from "@/assets/icons/sidebar-stock.png";
 
 import { Button } from "@/components/ui/button";
 import {
@@ -84,6 +85,7 @@ interface SidebarProps {
   onOpenSchedule?: () => void;
   onOpenSystem?: () => void;
   onOpenProfile?: () => void;
+  onOpenStock?: () => void;
   onOpenSearch: () => void;
   onToggleArchived: () => void;
   onUpdateView: (view: Partial<SidebarViewState>) => void;
@@ -98,13 +100,13 @@ interface SidebarProps {
   archivedKeys?: string[];
   titleOverrides?: Record<string, string>;
   runningChatIds?: string[];
-  completedChatIds?: string[];
   viewState?: SidebarViewState;
   showArchived?: boolean;
   archivedCount?: number;
   onRemoveProject?: (workspace: string) => void;
   onCreateTask?: (workspace: string) => void;
   modules?: SidebarModuleConfig[];
+  moduleAvailability?: Record<string, boolean>;
 }
 
 export function Sidebar(props: SidebarProps) {
@@ -175,10 +177,12 @@ export function Sidebar(props: SidebarProps) {
         onOpenSchedule={props.onOpenSchedule ?? (() => {})}
         onOpenSystem={props.onOpenSystem ?? (() => {})}
         onOpenProfile={props.onOpenProfile ?? (() => {})}
+        onOpenStock={props.onOpenStock ?? (() => {})}
         onGoHome={props.onGoHome ?? (() => {})}
         emailUnreadCount={emailUnreadCount}
         planInboxCount={planInboxCount}
         modules={props.modules}
+        moduleAvailability={props.moduleAvailability}
       />
       <Separator className="mx-2 mb-2 bg-sidebar-border/50" />
 
@@ -237,11 +241,6 @@ export function Sidebar(props: SidebarProps) {
             archivedKeys={props.archivedKeys}
             titleOverrides={props.titleOverrides}
             runningChatIds={props.runningChatIds}
-            completedChatIds={props.completedChatIds}
-            density={props.viewState?.density}
-            showPreviews={props.viewState?.show_previews}
-            showTimestamps={props.viewState?.show_timestamps}
-            sort={props.viewState?.sort}
             showArchived={props.showArchived}
             actionMenuPortalContainer={
               props.containActionMenus ? menuPortalContainer : undefined
@@ -460,12 +459,13 @@ export const MODULE_DEFS: ToolboxItem[] = [
   { key: "ssh", label: "终端", icon: <img src={sidebarTerminalIcon} className="h-5 w-5 object-contain" alt="" draggable={false} /> },
   { key: "email", label: "邮件", icon: <img src={sidebarEmailIcon} className="h-5 w-5 object-contain" alt="" draggable={false} /> },
   { key: "schedule", label: "计划", icon: <img src={sidebarScheduleIcon} className="h-5 w-5 object-contain" alt="" draggable={false} /> },
+  { key: "stock", label: "股票", icon: <img src={sidebarStockIcon} className="h-5 w-5 object-contain" alt="" draggable={false} /> },
   { key: "db", label: "数据库", icon: <img src={sidebarDatabaseIcon} className="h-5 w-5 object-contain" alt="" draggable={false} /> },
   { key: "system", label: "系统", icon: <img src={sidebarSystemIcon} className="h-5 w-5 object-contain" alt="" draggable={false} />, windowsOnly: true },
   { key: "profile", label: "画像", icon: <img src={sidebarProfileIcon} className="h-5 w-5 object-contain" alt="" draggable={false} /> },
 ];
 
-// 默认顺序与可见性（与后端 default_sidebar_modules 对齐）
+// 默认顺序与可见性（用户配置持久化在桌面设置 sidebar_modules 中）
 export const DEFAULT_SIDEBAR_MODULES: SidebarModuleConfig[] = MODULE_DEFS.map((m, i) => ({
   key: m.key,
   visible: true,
@@ -476,7 +476,8 @@ export const DEFAULT_SIDEBAR_MODULES: SidebarModuleConfig[] = MODULE_DEFS.map((m
 const LOCKED_MODULE_KEYS = new Set(["chat"]);
 
 // 主区域直接展示的最多模块数；超出收纳到「更多」菜单
-const PRIMARY_MAX = 6;
+// 股票是交付即用的核心模块（设计 §13 默认开启），必须一级可见
+const PRIMARY_MAX = 7;
 
 // 将用户配置与默认值合并，补齐缺失模块，过滤未知 key
 export function mergeSidebarModules(
@@ -513,6 +514,7 @@ function getToolboxHandler(key: string, handlers: {
   onOpenSchedule: () => void;
   onOpenSystem: () => void;
   onOpenProfile: () => void;
+  onOpenStock: () => void;
   onGoHome: () => void;
 }): () => void {
   switch (key) {
@@ -525,6 +527,7 @@ function getToolboxHandler(key: string, handlers: {
     case "schedule": return handlers.onOpenSchedule;
     case "system": return handlers.onOpenSystem;
     case "profile": return handlers.onOpenProfile;
+    case "stock": return handlers.onOpenStock;
     default: return handlers.onGoHome;
   }
 }
@@ -540,10 +543,12 @@ function ToolboxNavigation({
   onOpenSchedule,
   onOpenSystem,
   onOpenProfile,
+  onOpenStock,
   onGoHome,
   emailUnreadCount,
   planInboxCount,
   modules,
+  moduleAvailability,
 }: {
   collapsed: boolean;
   onNewChat: () => void;
@@ -555,10 +560,12 @@ function ToolboxNavigation({
   onOpenSchedule: () => void;
   onOpenSystem: () => void;
   onOpenProfile: () => void;
+  onOpenStock: () => void;
   onGoHome: () => void;
   emailUnreadCount: number;
   planInboxCount: number;
   modules?: SidebarModuleConfig[];
+  moduleAvailability?: Record<string, boolean>;
 }) {
   const { licenseActive } = useLicense();
   const LICENSE_REQUIRED = new Set(["doc"]);
@@ -572,16 +579,18 @@ function ToolboxNavigation({
     onOpenSchedule,
     onOpenSystem,
     onOpenProfile,
+    onOpenStock,
     onGoHome,
   };
   const merged = mergeSidebarModules(modules);
   const defMap = new Map(MODULE_DEFS.map((d) => [d.key, d]));
-  // 应用运行时过滤：macOS 不显示 windowsOnly 模块
+  // 应用运行时过滤：macOS 不显示 windowsOnly 模块；功能开关关闭的模块不显示
   const filtered = merged
     .filter((m) => m.visible)
     .map((m) => defMap.get(m.key))
     .filter((d): d is ToolboxItem => Boolean(d))
-    .filter((d) => !isMacOS() || !d.windowsOnly);
+    .filter((d) => !isMacOS() || !d.windowsOnly)
+    .filter((d) => moduleAvailability?.[d.key] !== false);
   const visiblePrimary = filtered.slice(0, PRIMARY_MAX);
   const visibleSecondary = filtered.slice(PRIMARY_MAX);
 

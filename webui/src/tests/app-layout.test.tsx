@@ -280,16 +280,23 @@ describe("App layout", () => {
     };
     vi.stubGlobal(
       "fetch",
-      vi.fn().mockImplementation(async (url: string | URL | Request) => {
+      vi.fn().mockImplementation(async (
+        url: string | URL | Request,
+        init?: RequestInit,
+      ) => {
         const href = String(url);
         if (href === "/api/webui/sidebar-state") {
-          return { ok: true, json: async () => initialState };
-        }
-        if (href.startsWith("/api/webui/sidebar-state/update?")) {
-          const encoded = new URLSearchParams(href.split("?", 2)[1]).get("state");
           return {
             ok: true,
-            json: async () => JSON.parse(encoded ?? "{}"),
+            headers: { get: () => "application/json" },
+            json: async () => initialState,
+          };
+        }
+        if (href === "/api/webui/sidebar-state/update") {
+          return {
+            ok: true,
+            headers: { get: () => "application/json" },
+            json: async () => JSON.parse(String(init?.body ?? "{}")),
           };
         }
         return { ok: false, status: 404 };
@@ -311,12 +318,10 @@ describe("App layout", () => {
       expect(within(sidebar).getByText("Archived")).toBeInTheDocument(),
     );
     expect(within(sidebar).getByRole("button", { name: /^First chat$/ })).toBeInTheDocument();
-    const updateUrl = vi.mocked(fetch).mock.calls
-      .map(([url]) => String(url))
-      .find((url) => url.startsWith("/api/webui/sidebar-state/update?"));
-    expect(updateUrl).toBeTruthy();
-    const encoded = new URLSearchParams(updateUrl?.split("?", 2)[1]).get("state");
-    expect(JSON.parse(encoded ?? "{}").view.show_archived).toBe(true);
+    const updateBodies = () => vi.mocked(fetch).mock.calls
+      .filter(([url]) => String(url) === "/api/webui/sidebar-state/update")
+      .map(([, init]) => JSON.parse(String(init?.body ?? "{}")));
+    expect(updateBodies().at(-1)?.view.show_archived).toBe(true);
 
     fireEvent.pointerDown(within(sidebar).getByRole("button", { name: "View" }), {
       button: 0,
@@ -324,22 +329,12 @@ describe("App layout", () => {
     });
     fireEvent.click(await screen.findByText("Compact list"));
     await waitFor(() => {
-      const lastUpdateUrl = vi.mocked(fetch).mock.calls
-        .map(([url]) => String(url))
-        .filter((url) => url.startsWith("/api/webui/sidebar-state/update?"))
-        .at(-1);
-      const lastEncoded = new URLSearchParams(lastUpdateUrl?.split("?", 2)[1]).get("state");
-      expect(JSON.parse(lastEncoded ?? "{}").view.density).toBe("compact");
+      expect(updateBodies().at(-1)?.view.density).toBe("compact");
     });
 
     fireEvent.click(screen.getByText("Title A-Z"));
     await waitFor(() => {
-      const lastUpdateUrl = vi.mocked(fetch).mock.calls
-        .map(([url]) => String(url))
-        .filter((url) => url.startsWith("/api/webui/sidebar-state/update?"))
-        .at(-1);
-      const lastEncoded = new URLSearchParams(lastUpdateUrl?.split("?", 2)[1]).get("state");
-      expect(JSON.parse(lastEncoded ?? "{}").view.sort).toBe("title_asc");
+      expect(updateBodies().at(-1)?.view.sort).toBe("title_asc");
     });
   });
 

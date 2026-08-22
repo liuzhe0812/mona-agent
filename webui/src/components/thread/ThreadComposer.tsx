@@ -928,11 +928,6 @@ export function ThreadComposer({
                     <span className="block truncate text-sm font-medium">
                       {agent.displayName}
                     </span>
-                    {agent.description ? (
-                      <span className="block truncate text-xs text-muted-foreground">
-                        {agent.description}
-                      </span>
-                    ) : null}
                   </span>
                 </button>
               );
@@ -1029,6 +1024,12 @@ export function ThreadComposer({
             setValue(e.target.value);
             setSlashMenuDismissed(false);
             trackMention(e.target.value, e.target.selectionStart);
+          }}
+          onSelect={(e) => {
+            trackMention(e.currentTarget.value, e.currentTarget.selectionStart);
+          }}
+          onClick={(e) => {
+            trackMention(e.currentTarget.value, e.currentTarget.selectionStart);
           }}
           onInput={onInput}
           onKeyDown={onKeyDown}

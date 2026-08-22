@@ -17,6 +17,7 @@ import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
 import { Select } from "@/components/ui/select";
 import { Textarea } from "@/components/ui/textarea";
+import type { SessionType } from "../types/terminal";
 
 /** Same MIME whitelist as ThreadComposer (mirrors server-side). */
 const ACCEPT_ATTR = "image/png,image/jpeg,image/webp,image/gif";
@@ -29,6 +30,7 @@ function formatBytes(n: number): string {
 
 interface Props {
   sessionId: string | null;
+  sessionTypeOverride?: SessionType;
   onStreamingChange?: (streaming: boolean) => void;
 }
 
@@ -38,7 +40,7 @@ interface ReportInfo {
   fileName: string;
 }
 
-export function AIChat({ sessionId, onStreamingChange }: Props) {
+export function AIChat({ sessionId, sessionTypeOverride, onStreamingChange }: Props) {
   const [draft, setDraft] = useState("");
   const [chatId, setChatId] = useState<string | null>(null);
   const [creatingChat, setCreatingChat] = useState(false);
@@ -48,11 +50,12 @@ export function AIChat({ sessionId, onStreamingChange }: Props) {
   const registry = useTerminalStore((s) => s.terminalRegistry);
   const execMode = useTerminalStore((s) => s.terminalExecMode);
   const setExecMode = useTerminalStore((s) => s.setTerminalExecMode);
-  const sessionType = useTerminalStore(
+  const storedSessionType = useTerminalStore(
     (s) => s.sessions.find((sess) => sess.id === sessionId)?.type ?? null,
   );
-  // Only SSH and local terminals expose executable maintenance to the agent.
-  const canExec = sessionType === "ssh" || sessionType === "local";
+  const sessionType = sessionTypeOverride ?? storedSessionType;
+  const canExec =
+    sessionType === "ssh" || sessionType === "local" || sessionType === "desktop";
   const effectiveSessionId = canExec ? sessionId : null;
   const pendingPromptRef = useRef<string | null>(null);
   const pendingSendOptsRef = useRef<SendOptions | null>(null);
@@ -238,7 +241,7 @@ export function AIChat({ sessionId, onStreamingChange }: Props) {
 
   return (
     <div className="flex h-full flex-col">
-      <div ref={scrollRef} className="flex-1 overflow-y-auto overflow-x-hidden p-3 space-y-3">
+      <div ref={scrollRef} className="flex-1 overflow-y-auto overflow-x-hidden p-3 space-y-3 text-black">
         {messages.length === 0 && reports.length === 0 && (
           <p className="text-center text-caption text-muted-foreground py-8">
             输入问题，AI 将基于终端上下文回答
@@ -316,7 +319,7 @@ export function AIChat({ sessionId, onStreamingChange }: Props) {
               onKeyDown={handleKeyDown}
               onPaste={onPaste}
               placeholder="输入问题，AI 将基于终端上下文回答..."
-              className="min-h-[36px] flex-1 resize-none rounded-none border-0 bg-transparent px-0 py-0 text-caption leading-5 shadow-none focus-visible:ring-0"
+              className="min-h-[36px] flex-1 resize-none rounded-none border-0 bg-transparent px-0 py-0 text-caption text-black caret-black leading-5 shadow-none focus-visible:ring-0"
               rows={2}
             />
             <input
@@ -431,14 +434,15 @@ function AttachmentChip({ image, formatError, onRemove }: AttachmentChipProps) {
   );
 }
 
-function enrichWithTerminalContext(
+export function enrichWithTerminalContext(
   message: string,
   sessionId: string | null,
   registry: { getBuffer: (id: string) => string },
 ): string {
   if (!sessionId) return message;
   const data = registry.getBuffer(sessionId);
-  if (!data || data.trim().length === 0) return message;
+  const binding = `[当前终端会话：${sessionId}]\n涉及命令时必须使用 terminal_task、terminal_exec 和 terminal_output；禁止使用 exec，它运行在 Mona 所在的本机，不是当前 SSH 桌面终端。`;
+  if (!data || data.trim().length === 0) return `${binding}\n\n${message}`;
   const tail = data.length > 4000 ? data.slice(-4000) : data;
-  return `[终端上下文]\n\`\`\`\n${tail}\n\`\`\`\n\n${message}`;
+  return `${binding}\n\n[终端上下文]\n\`\`\`\n${tail}\n\`\`\`\n\n${message}`;
 }

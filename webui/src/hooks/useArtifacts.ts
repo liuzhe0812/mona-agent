@@ -4,6 +4,7 @@ import type { DeliveredFile } from "@/lib/types";
 
 interface UseArtifactsResult {
   files: DeliveredFile[];
+  sessionFiles: DeliveredFile[];
   loading: boolean;
   error: string | null;
   truncated: boolean;
@@ -12,12 +13,15 @@ interface UseArtifactsResult {
 }
 
 export interface ArtifactSource {
-  /** ``shared`` scans ``<workspace>/output/``; ``project`` scans the
-   *  session's bound workspace directory (all project files). */
-  scope?: "shared" | "project";
-  /** Required when ``scope === "project"``: the websocket session key whose
-   *  ``metadata.workspace`` is the scan root. */
+  /** ``shared`` scans the active Agent output; ``project`` scans the
+   *  session's bound workspace directory (all project files); ``room``
+   *  returns the room's flat explicit-reference projection. */
+  scope?: "shared" | "project" | "room";
+  /** Required for shared/project scopes: the websocket session key used to
+   *  resolve the Agent-owned workspace (or project root). */
   sessionKey?: string | null;
+  /** Required when ``scope === "room"``: the room id. */
+  room?: string | null;
 }
 
 /** Stream the artifact list from the server (``GET /api/artifacts`` for
@@ -39,8 +43,9 @@ export function useArtifacts(
   refreshSignal?: unknown,
   source: ArtifactSource = {},
 ): UseArtifactsResult {
-  const { scope = "shared", sessionKey = null } = source;
+  const { scope = "shared", sessionKey = null, room = null } = source;
   const [files, setFiles] = useState<DeliveredFile[]>([]);
+  const [sessionFiles, setSessionFiles] = useState<DeliveredFile[]>([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [truncated, setTruncated] = useState(false);
@@ -51,7 +56,8 @@ export function useArtifacts(
 
   useEffect(() => {
     if (!token) return;
-    if (scope === "project" && !sessionKey) return;
+    if (scope !== "room" && !sessionKey) return;
+    if (scope === "room" && !room) return;
     const control = controlRef.current;
     if (control.running) {
       control.pending = true;
@@ -66,9 +72,12 @@ export function useArtifacts(
         const result =
           scope === "project"
             ? await listProjectFiles(token, sessionKey!)
-            : await listArtifacts(token);
+            : scope === "room"
+              ? await listArtifacts(token, undefined, room!)
+              : await listArtifacts(token, undefined, undefined, sessionKey!);
         if (cancelled) return;
         setFiles(result.files);
+        setSessionFiles(result.session_files ?? []);
         setTruncated(result.truncated);
       } catch (err) {
         if (cancelled) return;
@@ -85,7 +94,7 @@ export function useArtifacts(
     return () => {
       cancelled = true;
     };
-  }, [token, refreshTick, refreshSignal, scope, sessionKey]);
+  }, [token, refreshTick, refreshSignal, scope, sessionKey, room]);
 
-  return { files, loading, error, truncated, refresh };
+  return { files, sessionFiles, loading, error, truncated, refresh };
 }

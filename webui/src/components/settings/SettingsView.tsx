@@ -57,6 +57,7 @@ import {
   Star,
   Triangle,
   Trash2,
+  TrendingUp,
   Video,
   Waves,
   Zap,
@@ -102,6 +103,7 @@ import {
   updateImageGenerationSettings,
   updateProviderSettings,
   updateSettings,
+  updateStockSettings,
   updateTtsSettings,
   updateVideoGenerationSettings,
   updateWebSearchSettings,
@@ -145,6 +147,7 @@ import type {
 } from "@/lib/types";
 import { SkillManagementPanel } from "@/components/settings/SkillManagementPanel";
 import { McpManagementPanel } from "@/components/settings/McpManagementPanel";
+import { ChatProvidersSettings } from "@/components/settings/ChatProvidersSettings";
 import { PageHeader, SubsectionLabel } from "@/components/ui/page-header";
 import { StatusNotice } from "@/components/ui/status-notice";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
@@ -156,6 +159,7 @@ type SettingsSectionKey =
   | "image"
   | "web"
   | "channels"
+  | "stock"
   | "runtime"
   | "desktop"
   | "shortcuts"
@@ -227,14 +231,12 @@ export function SettingsView({
   onRestart,
   isRestarting = false,
   initialSection,
-  onTriggerAgent,
 }: SettingsViewProps) {
   const { t } = useTranslation();
   const { token } = useClientOptional();
   const [settings, setSettings] = useState<SettingsPayload | null>(null);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
-  const [providerSaving, setProviderSaving] = useState<string | null>(null);
   const [webSearchSaving, setWebSearchSaving] = useState(false);
   const [imageGenerationSaving, setImageGenerationSaving] = useState(false);
   const [videoGenerationSaving, setVideoGenerationSaving] = useState(false);
@@ -242,16 +244,11 @@ export function SettingsView({
   const [imageKeyVisible, setImageKeyVisible] = useState(false);
   const [videoApiKeyDraft, setVideoApiKeyDraft] = useState("");
   const [videoKeyVisible, setVideoKeyVisible] = useState(false);
+  const [, setHighlightProvider] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [activeSection, setActiveSection] = useState<SettingsSectionKey>(
     (initialSection as SettingsSectionKey | undefined) ?? "overview",
   );
-  const [expandedProvider, setExpandedProvider] = useState<string | null>(null);
-  const [providerQuery, setProviderQuery] = useState("");
-  const [providerForms, setProviderForms] = useState<Record<string, { apiKey: string; apiBase: string; model: string }>>({});
-  const [visibleProviderKeys, setVisibleProviderKeys] = useState<Record<string, boolean>>({});
-  const [editingProviderKeys, setEditingProviderKeys] = useState<Record<string, boolean>>({});
-  const [highlightProvider, setHighlightProvider] = useState<string | null>(null);
   const [pendingRestartSections, setPendingRestartSections] = useState<PendingRestartSections>(
     EMPTY_PENDING_RESTART_SECTIONS,
   );
@@ -381,21 +378,6 @@ export function SettingsView({
       cancelled = true;
     };
   }, [applyPayload, token]);
-
-  useEffect(() => {
-    if (!settings) return;
-    setProviderForms((prev) => {
-      const next = { ...prev };
-      for (const provider of settings.providers) {
-        next[provider.name] = {
-          apiKey: next[provider.name]?.apiKey ?? "",
-          apiBase: next[provider.name]?.apiBase ?? provider.api_base ?? provider.default_api_base ?? "",
-          model: next[provider.name]?.model ?? provider.model ?? "",
-        };
-      }
-      return next;
-    });
-  }, [settings]);
 
   const runtimeDirty = useMemo(() => {
     if (!settings) return false;
@@ -547,98 +529,6 @@ export function SettingsView({
     }
   };
 
-  const saveProvider = async (providerName: string) => {
-    if (providerSaving) return;
-    const provider = settings?.providers.find((item) => item.name === providerName);
-    if (!provider) return;
-    const providerForm = providerForms[providerName] ?? { apiKey: "", apiBase: "", model: "" };
-    const apiKey = providerForm.apiKey.trim();
-    const apiBase = providerForm.apiBase.trim();
-    const model = providerForm.model.trim();
-    const apiKeyRequired = provider.api_key_required ?? true;
-    if (!provider.configured && apiKeyRequired && !apiKey) {
-      setError(t("settings.byok.apiKeyRequired"));
-      return;
-    }
-    setProviderSaving(providerName);
-    try {
-      const payload = await updateProviderSettings(token, {
-        provider: providerName,
-        // apiKey 为空表示"未输入/不修改"，传 undefined 让 api.ts 不发送该字段，
-        // 避免空字符串覆盖后端已有密钥（用户主动清除应走 deleteProvider）。
-        apiKey: apiKey || undefined,
-        apiBase,
-        model: model || undefined,
-      });
-      applyPayload(payload);
-      if (payload.requires_restart) {
-        setPendingRestartSections((prev) => ({ ...prev, providers: true }));
-      }
-      setProviderForms((prev) => ({
-        ...prev,
-        [providerName]: {
-          apiKey: "",
-          apiBase,
-          model,
-        },
-      }));
-      setVisibleProviderKeys((prev) => ({ ...prev, [providerName]: false }));
-      setEditingProviderKeys((prev) => ({ ...prev, [providerName]: false }));
-      setError(null);
-    } catch (err) {
-      setError((err as Error).message);
-    } finally {
-      setProviderSaving(null);
-    }
-  };
-
-  const deleteProvider = async (providerName: string) => {
-    if (providerSaving) return;
-    setProviderSaving(providerName);
-    try {
-      const payload = await updateProviderSettings(token, {
-        provider: providerName,
-        apiKey: "",
-        apiBase: "",
-      });
-      applyPayload(payload);
-      if (payload.requires_restart) {
-        setPendingRestartSections((prev) => ({ ...prev, providers: true }));
-      }
-      setProviderForms((prev) => ({
-        ...prev,
-        [providerName]: { apiKey: "", apiBase: "", model: "" },
-      }));
-      setVisibleProviderKeys((prev) => ({ ...prev, [providerName]: false }));
-      setEditingProviderKeys((prev) => ({ ...prev, [providerName]: false }));
-      setExpandedProvider(null);
-      setError(null);
-    } catch (err) {
-      setError((err as Error).message);
-    } finally {
-      setProviderSaving(null);
-    }
-  };
-
-  const setDefaultProvider = async (providerName: string) => {
-    if (providerSaving) return;
-    const provider = settings?.providers.find((p) => p.name === providerName);
-    const model = provider?.model ?? "";
-    if (!model) return;
-    try {
-      const payload = await updateSettings(token, {
-        provider: providerName,
-        model,
-        providerModel: model,
-      });
-      applyPayload(payload);
-      onModelNameChange?.(payload.agent.model || null);
-      setError(null);
-    } catch (err) {
-      setError((err as Error).message);
-    }
-  };
-
   const saveWebSearch = async () => {
     if (!settings || webSearchSaving) return;
     const provider = settings.web_search.providers.find((item) => item.name === webSearchForm.provider);
@@ -695,26 +585,6 @@ export function SettingsView({
     }
   };
 
-  const resetProviderDraft = useCallback((providerName: string) => {
-    const provider = settings?.providers.find((item) => item.name === providerName);
-    if (!provider) return;
-    setProviderForms((prev) => ({
-      ...prev,
-      [providerName]: {
-        apiKey: "",
-        apiBase: provider.api_base ?? provider.default_api_base ?? "",
-        model: provider.model ?? "",
-      },
-    }));
-    setVisibleProviderKeys((prev) => ({ ...prev, [providerName]: false }));
-    setEditingProviderKeys((prev) => ({ ...prev, [providerName]: false }));
-  }, [settings]);
-
-  const handleToggleProvider = useCallback((providerName: string) => {
-    if (expandedProvider) resetProviderDraft(expandedProvider);
-    setExpandedProvider(expandedProvider === providerName ? null : providerName);
-  }, [expandedProvider, resetProviderDraft]);
-
   const resetWebSearchDraft = useCallback(() => {
     if (!settings) return;
     setWebSearchForm({
@@ -742,29 +612,6 @@ export function SettingsView({
     setWebSearchKeyVisible(false);
     setWebSearchKeyEditing(false);
   }, [settings]);
-
-  const toggleProviderKeyVisibility = (providerName: string) => {
-    const isVisible = visibleProviderKeys[providerName];
-    setVisibleProviderKeys((prev) => ({ ...prev, [providerName]: !isVisible }));
-  };
-
-  const toggleProviderKeyEditing = (providerName: string) => {
-    setEditingProviderKeys((prev) => {
-      const nextEditing = !prev[providerName];
-      if (!nextEditing) {
-        setProviderForms((forms) => ({
-          ...forms,
-          [providerName]: {
-            apiKey: "",
-            apiBase: forms[providerName]?.apiBase ?? "",
-            model: forms[providerName]?.model ?? "",
-          },
-        }));
-        setVisibleProviderKeys((visible) => ({ ...visible, [providerName]: false }));
-      }
-      return { ...prev, [providerName]: nextEditing };
-    });
-  };
 
   const handleSelectSection = (section: SettingsSectionKey) => {
     setActiveSection(section);
@@ -794,34 +641,9 @@ export function SettingsView({
         return (
           <AiModelsSettings
             settings={settings}
-            // chat tab props
-            expandedProvider={expandedProvider}
-            providerForms={providerForms}
-            visibleProviderKeys={visibleProviderKeys}
-            editingProviderKeys={editingProviderKeys}
-            providerSaving={providerSaving}
-            providerQuery={providerQuery}
-            onProviderQueryChange={setProviderQuery}
-            onToggleProvider={handleToggleProvider}
-            onToggleProviderKey={toggleProviderKeyVisibility}
-            onToggleProviderKeyEditing={toggleProviderKeyEditing}
-            onChangeProviderForm={(provider, value) =>
-              setProviderForms((prev) => ({
-                ...prev,
-                [provider]: {
-                  apiKey: prev[provider]?.apiKey ?? "",
-                  apiBase: prev[provider]?.apiBase ?? "",
-                  model: prev[provider]?.model ?? "",
-                  ...value,
-                },
-              }))
-            }
-            onSaveProvider={saveProvider}
-            onDeleteProvider={deleteProvider}
-            onResetProviderDraft={resetProviderDraft}
-            onSetDefaultProvider={setDefaultProvider}
-            highlightProvider={highlightProvider}
-            onHighlightConsumed={() => setHighlightProvider(null)}
+            token={token}
+            onSettingsChanged={applyPayload}
+            onChatModelNameChange={onModelNameChange}
             onSetHighlightProvider={setHighlightProvider}
             // image tab props
             imageForm={imageGenerationForm}
@@ -856,7 +678,6 @@ export function SettingsView({
             onToggleTtsKeyVisible={() => setTtsKeyVisible((v) => !v)}
             onRestart={onRestart}
             isRestarting={isRestarting}
-            onTriggerAgent={onTriggerAgent}
           />
         );
       case "web":
@@ -899,6 +720,14 @@ export function SettingsView({
             onRestart={onRestart}
             isRestarting={isRestarting}
             requiresRestartPending={pendingRestartSections.channels}
+          />
+        );
+      case "stock":
+        return (
+          <StockSettings
+            settings={settings}
+            token={token}
+            onSettingsChanged={(payload) => applyPayload(payload)}
           />
         );
       case "runtime":
@@ -975,6 +804,7 @@ const SETTINGS_NAV_ITEMS: Array<{ key: SettingsSectionKey; icon: LucideIcon; fal
   { key: "models_providers", icon: SlidersHorizontal, fallback: "模型设置" },
   { key: "web", icon: Search, fallback: "搜索" },
   { key: "channels", icon: Radio, fallback: "频道" },
+  { key: "stock", icon: TrendingUp, fallback: "股票" },
   { key: "runtime", icon: Server, fallback: "Runtime" },
   { key: "desktop", icon: Monitor, fallback: "桌面", desktopOnly: true },
   { key: "shortcuts", icon: Keyboard, fallback: "快捷键", desktopOnly: true },
@@ -1509,25 +1339,9 @@ function SidebarModulesSettings() {
 
 function AiModelsSettings({
   settings,
-  // chat tab
-  expandedProvider,
-  providerForms,
-  visibleProviderKeys,
-  editingProviderKeys,
-  providerSaving,
-  providerQuery,
-  onProviderQueryChange,
-  onToggleProvider,
-  onToggleProviderKey,
-  onToggleProviderKeyEditing,
-  onChangeProviderForm,
-  onSaveProvider,
-  onDeleteProvider,
-  onResetProviderDraft,
-  onSetDefaultProvider,
-  highlightProvider,
-  onHighlightConsumed,
-  onSetHighlightProvider,
+  token,
+  onSettingsChanged,
+  onChatModelNameChange,
   // image tab
   imageForm,
   imageDirty,
@@ -1560,30 +1374,14 @@ function AiModelsSettings({
   ttsKeyVisible,
   onToggleTtsKeyVisible,
   // shared
+  onSetHighlightProvider,
   onRestart,
   isRestarting,
-  onTriggerAgent,
 }: {
   settings: SettingsPayload;
-  // chat tab
-  expandedProvider: string | null;
-  providerForms: Record<string, { apiKey: string; apiBase: string; model: string }>;
-  visibleProviderKeys: Record<string, boolean>;
-  editingProviderKeys: Record<string, boolean>;
-  providerSaving: string | null;
-  providerQuery: string;
-  onProviderQueryChange: (query: string) => void;
-  onToggleProvider: (provider: string) => void;
-  onToggleProviderKey: (provider: string) => void;
-  onToggleProviderKeyEditing: (provider: string) => void;
-  onChangeProviderForm: (provider: string, value: Partial<{ apiKey: string; apiBase: string; model: string }>) => void;
-  onSaveProvider: (provider: string) => void;
-  onDeleteProvider: (provider: string) => void;
-  onResetProviderDraft: (provider: string) => void;
-  onSetDefaultProvider: (provider: string) => void;
-  highlightProvider?: string | null;
-  onHighlightConsumed?: () => void;
-  onSetHighlightProvider?: (provider: string | null) => void;
+  token: string;
+  onSettingsChanged: (payload: SettingsPayload) => void;
+  onChatModelNameChange: (modelName: string | null) => void;
   // image tab
   imageForm: ImageGenerationSettingsUpdate;
   imageDirty: boolean;
@@ -1616,9 +1414,9 @@ function AiModelsSettings({
   ttsKeyVisible: boolean;
   onToggleTtsKeyVisible: () => void;
   // shared
+  onSetHighlightProvider?: (provider: string | null) => void;
   onRestart?: () => void;
   isRestarting?: boolean;
-  onTriggerAgent?: (prompt: string) => void;
 }) {
   const { t } = useTranslation();
   const tx = (key: string, fallback: string) => t(key, { defaultValue: fallback });
@@ -1634,29 +1432,11 @@ function AiModelsSettings({
       </TabsList>
 
       <TabsContent value="chat">
-        <ModelsProvidersSettings
+        <ChatProvidersSettings
           settings={settings}
-          expandedProvider={expandedProvider}
-          providerForms={providerForms}
-          visibleProviderKeys={visibleProviderKeys}
-          editingProviderKeys={editingProviderKeys}
-          providerSaving={providerSaving}
-          query={providerQuery}
-          onQueryChange={onProviderQueryChange}
-          onToggleProvider={onToggleProvider}
-          onToggleProviderKey={onToggleProviderKey}
-          onToggleProviderKeyEditing={onToggleProviderKeyEditing}
-          onChangeProviderForm={onChangeProviderForm}
-          onSaveProvider={onSaveProvider}
-          onDeleteProvider={onDeleteProvider}
-          onResetProviderDraft={onResetProviderDraft}
-          onSetDefaultProvider={onSetDefaultProvider}
-          providersRestartPending={imageProviderRestartPending}
-          onRestart={onRestart}
-          isRestarting={isRestarting}
-          highlightProvider={highlightProvider}
-          onHighlightConsumed={onHighlightConsumed}
-          onTriggerAgent={onTriggerAgent}
+          token={token}
+          onSettingsChanged={onSettingsChanged}
+          onModelNameChange={onChatModelNameChange}
         />
       </TabsContent>
 
@@ -1722,7 +1502,7 @@ function AiModelsSettings({
   );
 }
 
-function ModelsProvidersSettings({
+export function ModelsProvidersSettings({
   settings,
   expandedProvider,
   providerForms,
@@ -4015,6 +3795,249 @@ function ToggleSwitch({
         )}
       />
     </Button>
+  );
+}
+
+function StockSettings({
+  settings,
+  token,
+  onSettingsChanged,
+}: {
+  settings: SettingsPayload;
+  token: string;
+  onSettingsChanged: (payload: SettingsPayload) => void;
+}) {
+  const { t } = useTranslation();
+  const tx = (key: string, fallback: string) => t(key, { defaultValue: fallback });
+  const [enabled, setEnabled] = useState(settings.stock.enabled);
+  const [autoReviewEnabled, setAutoReviewEnabled] = useState(
+    settings.stock.auto_review_enabled,
+  );
+  const [reviewTime, setReviewTime] = useState(settings.stock.review_time);
+  const [reviewScope, setReviewScope] = useState<"all" | "focus">(
+    settings.stock.review_scope,
+  );
+  const [pushNotification, setPushNotification] = useState(settings.stock.push_notification);
+  const [pushEmail, setPushEmail] = useState(settings.stock.push_email);
+  const [quoteRefreshSec, setQuoteRefreshSec] = useState(settings.stock.quote_refresh_sec);
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  const reviewTimeValid = /^([01]\d|2[0-3]):[0-5]\d$/.test(reviewTime.trim());
+  const dirty =
+    enabled !== settings.stock.enabled ||
+    autoReviewEnabled !== settings.stock.auto_review_enabled ||
+    reviewTime.trim() !== settings.stock.review_time ||
+    reviewScope !== settings.stock.review_scope ||
+    pushNotification !== settings.stock.push_notification ||
+    pushEmail !== settings.stock.push_email ||
+    quoteRefreshSec !== settings.stock.quote_refresh_sec;
+
+  const save = async () => {
+    if (!dirty || saving || (autoReviewEnabled && !reviewTimeValid)) return;
+    setSaving(true);
+    try {
+      const payload = await updateStockSettings(token, {
+        enabled,
+        autoReviewEnabled,
+        reviewTime: reviewTime.trim(),
+        reviewScope,
+        pushNotification,
+        pushEmail,
+        quoteRefreshSec,
+      });
+      onSettingsChanged(payload);
+      // 通知外壳（AppRail/StockView 门控）股票模块开关与行情轮询间隔已变更
+      window.dispatchEvent(
+        new CustomEvent("mona-stock-settings-changed", {
+          detail: {
+            enabled: payload.stock.enabled,
+            autoReviewEnabled: payload.stock.auto_review_enabled,
+            quoteRefreshSec: payload.stock.quote_refresh_sec,
+            reviewTime: payload.stock.review_time,
+            reviewScope: payload.stock.review_scope,
+          },
+        }),
+      );
+      setError(null);
+    } catch (err) {
+      setError((err as Error).message);
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  return (
+    <div className="space-y-7">
+      <section>
+        <SubsectionLabel className="mb-2 px-1">
+          {tx("settings.stock.section", "股票模块")}
+        </SubsectionLabel>
+        <SettingsGroup>
+          <SettingsRow
+            title={tx("settings.stock.enable", "启用股票模块")}
+            description={tx(
+              "settings.stock.enableHelp",
+              "启用后侧边栏显示股票工作台。自动复盘由下方开关单独控制。",
+            )}
+          >
+            <ToggleSwitch
+              checked={enabled}
+              disabled={saving}
+              onChange={setEnabled}
+              aria-label={tx("settings.stock.enable", "启用股票模块")}
+            />
+          </SettingsRow>
+          <SettingsRow
+            title={tx("settings.stock.autoReview", "自动生成每日复盘")}
+            description={tx(
+              "settings.stock.autoReviewHelp",
+              "关闭后不按时间自动运行；已有复盘仍可查看。",
+            )}
+          >
+            <ToggleSwitch
+              checked={autoReviewEnabled}
+              disabled={saving || !enabled}
+              onChange={setAutoReviewEnabled}
+              aria-label={tx("settings.stock.autoReview", "自动生成每日复盘")}
+            />
+          </SettingsRow>
+        </SettingsGroup>
+      </section>
+
+      {enabled && autoReviewEnabled ? (
+        <section>
+          <SubsectionLabel className="mb-2 px-1">
+            {tx("settings.stock.reviewSection", "每日复盘")}
+          </SubsectionLabel>
+          <SettingsGroup>
+            <SettingsRow
+              title={tx("settings.stock.reviewTime", "复盘时间")}
+              description={tx(
+                "settings.stock.reviewTimeHelp",
+                "每个交易日（北京时间）按此时间运行复盘；默认仅处理重点标的。",
+              )}
+            >
+              <Input
+                value={reviewTime}
+                onChange={(event) => setReviewTime(event.target.value)}
+                placeholder="15:30"
+                className="h-8 w-[120px] rounded-full text-ui"
+                disabled={saving}
+              />
+            </SettingsRow>
+            <SettingsRow
+              title={tx("settings.stock.reviewScope", "复盘范围")}
+              description={tx(
+                "settings.stock.reviewScopeHelp",
+                "「仅重点标的」只复盘自选列表中标星的股票；星标在股票工作台左侧列表切换。",
+              )}
+            >
+              <div
+                role="radiogroup"
+                aria-label={tx("settings.stock.reviewScope", "复盘范围")}
+                className="inline-flex overflow-hidden rounded-full border"
+              >
+                {(
+                  [
+                    ["all", "全部自选"],
+                    ["focus", "仅重点标的"],
+                  ] as const
+                ).map(([value, label]) => (
+                  <Button
+                    key={value}
+                    type="button"
+                    variant="ghost"
+                    role="radio"
+                    aria-checked={reviewScope === value}
+                    disabled={saving}
+                    onClick={() => setReviewScope(value)}
+                    className={cn(
+                      "h-8 rounded-none px-3 text-ui hover:bg-transparent",
+                      reviewScope === value
+                        ? "bg-accent text-accent-foreground"
+                        : "text-muted-foreground hover:text-foreground",
+                    )}
+                  >
+                    {label}
+                  </Button>
+                ))}
+              </div>
+            </SettingsRow>
+            <SettingsRow
+              title={tx("settings.stock.pushNotification", "桌面通知")}
+              description={tx(
+                "settings.stock.pushNotificationHelp",
+                "复盘简报生成后发送桌面通知。",
+              )}
+            >
+              <ToggleSwitch
+                checked={pushNotification}
+                disabled={saving}
+                onChange={setPushNotification}
+                aria-label={tx("settings.stock.pushNotification", "桌面通知")}
+              />
+            </SettingsRow>
+            <SettingsRow
+              title={tx("settings.stock.pushEmail", "邮件推送")}
+              description={tx(
+                "settings.stock.pushEmailHelp",
+                "复盘简报生成后同时发送到邮箱。",
+              )}
+            >
+              <ToggleSwitch
+                checked={pushEmail}
+                disabled={saving}
+                onChange={setPushEmail}
+                aria-label={tx("settings.stock.pushEmail", "邮件推送")}
+              />
+            </SettingsRow>
+          </SettingsGroup>
+        </section>
+      ) : null}
+
+      {enabled ? (
+        <section>
+          <SubsectionLabel className="mb-2 px-1">
+            {tx("settings.stock.quoteSection", "行情")}
+          </SubsectionLabel>
+          <SettingsGroup>
+            <SettingsRow
+              title={tx("settings.stock.quoteRefresh", "行情刷新间隔")}
+              description={tx(
+                "settings.stock.quoteRefreshHelp",
+                "股票工作台行情快照的轮询间隔（5–3600 秒）。",
+              )}
+            >
+              <NumberInput
+                value={quoteRefreshSec}
+                min={5}
+                max={3600}
+                onChange={setQuoteRefreshSec}
+                suffix={tx("settings.stock.quoteRefreshUnit", "秒")}
+              />
+            </SettingsRow>
+          </SettingsGroup>
+        </section>
+      ) : null}
+
+      <section>
+        <SettingsGroup>
+          <RestartSettingsFooter
+            dirty={dirty}
+            saving={saving}
+            pendingRestart={false}
+            disabled={autoReviewEnabled && !reviewTimeValid}
+            message={
+              autoReviewEnabled && !reviewTimeValid
+                ? tx("settings.stock.invalidReviewTime", "复盘时间需为 HH:MM（00:00–23:59）。")
+                : error ?? undefined
+            }
+            onSave={save}
+          />
+        </SettingsGroup>
+      </section>
+    </div>
   );
 }
 

@@ -167,6 +167,116 @@ describe("useMonaStream", () => {
     requestFrame.mockRestore();
   });
 
+  it("keeps a Mona stream intact when a partner job completes between deltas", async () => {
+    const fake = fakeClient();
+    const { result } = renderHook(() => useMonaStream("chat-room-streams", EMPTY_MESSAGES), {
+      wrapper: wrap(fake.client),
+    });
+
+    act(() => {
+      fake.emit("chat-room-streams", {
+        event: "delta",
+        chat_id: "chat-room-streams",
+        text: "Mona 前半段",
+        stream_id: "mona-stream-1",
+        author_id: "mona",
+      });
+    });
+    await flushStreamFrame();
+
+    act(() => {
+      fake.emit("chat-room-streams", {
+        event: "message",
+        chat_id: "chat-room-streams",
+        text: "A 股分析师的回答",
+        author_id: "com.mona.a-share-analyst",
+        job_id: "job-a-share-1",
+      });
+      fake.emit("chat-room-streams", {
+        event: "delta",
+        chat_id: "chat-room-streams",
+        text: "Mona 后半段",
+        stream_id: "mona-stream-1",
+        author_id: "mona",
+      });
+      fake.emit("chat-room-streams", {
+        event: "stream_end",
+        chat_id: "chat-room-streams",
+        stream_id: "mona-stream-1",
+      });
+    });
+    await flushStreamFrame();
+
+    const assistantMessages = result.current.messages.filter((message) => message.role === "assistant");
+    expect(assistantMessages).toHaveLength(2);
+    expect(assistantMessages).toEqual(expect.arrayContaining([
+      expect.objectContaining({ authorId: "mona", content: "Mona 前半段Mona 后半段" }),
+      expect.objectContaining({
+        authorId: "com.mona.a-share-analyst",
+        jobId: "job-a-share-1",
+        content: "A 股分析师的回答",
+      }),
+    ]));
+  });
+
+  it("upserts a replayed partner complete frame by job_id", () => {
+    const fake = fakeClient();
+    const { result } = renderHook(() => useMonaStream("chat-room-replay", EMPTY_MESSAGES), {
+      wrapper: wrap(fake.client),
+    });
+
+    const partnerMessage: InboundEvent = {
+      event: "message",
+      chat_id: "chat-room-replay",
+      text: "第一次结果",
+      author_id: "com.mona.a-share-analyst",
+      job_id: "job-replay-1",
+    };
+    act(() => {
+      fake.emit("chat-room-replay", partnerMessage);
+      fake.emit("chat-room-replay", { ...partnerMessage, text: "同一结果重放" });
+    });
+
+    const assistantMessages = result.current.messages.filter((message) => message.role === "assistant");
+    expect(assistantMessages).toHaveLength(1);
+    expect(assistantMessages[0]).toMatchObject({
+      authorId: "com.mona.a-share-analyst",
+      jobId: "job-replay-1",
+      content: "同一结果重放",
+    });
+  });
+
+  it("keeps separate workflow step messages in the same run", () => {
+    const fake = fakeClient();
+    const { result } = renderHook(() => useMonaStream("chat-workflow-steps", EMPTY_MESSAGES), {
+      wrapper: wrap(fake.client),
+    });
+
+    act(() => {
+      fake.emit("chat-workflow-steps", {
+        event: "message",
+        chat_id: "chat-workflow-steps",
+        text: "步骤一结果",
+        author_id: "agent-one",
+        workflow_run_id: "run-shared",
+      });
+      fake.emit("chat-workflow-steps", {
+        event: "message",
+        chat_id: "chat-workflow-steps",
+        text: "步骤二结果",
+        author_id: "agent-two",
+        workflow_run_id: "run-shared",
+      });
+    });
+
+    const assistantMessages = result.current.messages.filter((message) => message.role === "assistant");
+    expect(assistantMessages).toHaveLength(2);
+    expect(assistantMessages).toEqual(expect.arrayContaining([
+      expect.objectContaining({ authorId: "agent-one", content: "步骤一结果" }),
+      expect.objectContaining({ authorId: "agent-two", content: "步骤二结果" }),
+    ]));
+  });
+
   it("flushes pending delta text before turn_end finalizes the turn", () => {
     const fake = fakeClient();
     const { result } = renderHook(() => useMonaStream("chat-flush", EMPTY_MESSAGES), {

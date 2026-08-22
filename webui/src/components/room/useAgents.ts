@@ -8,6 +8,13 @@ import type { AgentSummary } from "@/lib/types";
  *  is static while the gateway runs; a restart reloads the page anyway. */
 let cachedAgents: AgentSummary[] | null = null;
 let inflight: Promise<AgentSummary[]> | null = null;
+const invalidationListeners = new Set<() => void>();
+
+/** Clear the shared registry cache after a management change. */
+export function invalidateAgents(): void {
+  cachedAgents = null;
+  for (const listener of invalidationListeners) listener();
+}
 
 function loadAgents(token: string): Promise<AgentSummary[]> {
   if (cachedAgents) return Promise.resolve(cachedAgents);
@@ -37,6 +44,16 @@ export function useAgents(token: string | null): ReadonlyMap<string, AgentSummar
     });
     return () => {
       cancelled = true;
+    };
+  }, [token]);
+  useEffect(() => {
+    const reload = () => {
+      if (!token) return;
+      void loadAgents(token).then(setAgents);
+    };
+    invalidationListeners.add(reload);
+    return () => {
+      invalidationListeners.delete(reload);
     };
   }, [token]);
   return useMemo(

@@ -50,7 +50,7 @@
   "rail": {
     "navigation": "Primary navigation",
     "home": "Home",
-    "messages": "Messages",
+    "messages": "Sessions",
     "partners": "Partners",
     "more": "More",
     "settings": "Settings",
@@ -59,6 +59,8 @@
     "logout": "Log out",
     "login": "Log in",
     "updateAvailable": "Update available",
+    "workspaceTabs": "Workspace tabs",
+    "newBrowserTab": "New browser tab",
     "modules": {
       "note": "Notes",
       "doc": "AI Docs",
@@ -67,7 +69,20 @@
       "schedule": "Plan",
       "db": "Database",
       "system": "System",
-      "profile": "Profile"
+      "profile": "Profile",
+      "stock": "Stocks"
+    }
+  },
+  "browser": {
+    "newTab": {
+      "title": "Start browsing",
+      "hint": "Search the web or enter a URL",
+      "incognitoHint": "Search privately or enter a URL",
+      "placeholder": "Search or enter address",
+      "history": "History",
+      "downloads": "Downloads",
+      "localBadge": "Your new tab is ready",
+      "incognitoBadge": "Incognito mode is on"
     }
   },
   "partners": {
@@ -75,14 +90,12 @@
     "detailAria": "Partner details",
     "noDescription": "This partner has no description yet.",
     "startDirect": "Start direct chat",
-    "createRoom": "Create room",
-    "newDirectTitle": "New direct chat",
-    "newDirectHint": "Pick a partner to start a one-on-one conversation.",
-    "newRoomTitle": "New collaboration room",
-    "newRoomHint": "Choose the partners to collaborate with and set a room title and goal.",
-    "roomTitleLabel": "Room title",
-    "roomTitlePlaceholder": "Room title (auto-generated from members if empty)",
-    "roomGoalLabel": "Room goal",
+    "createRoom": "Create group",
+    "newRoomTitle": "New group chat",
+    "newRoomHint": "Choose the partners to include and set a group chat title and goal.",
+    "roomTitleLabel": "Group chat title",
+    "roomTitlePlaceholder": "Auto-generated from members if empty",
+    "roomGoalLabel": "Group chat goal",
     "roomGoalPlaceholder": "What should this collaboration achieve? (optional)"
   },
   "nav": {
@@ -103,15 +116,8 @@
     "home": "Home",
     "newChat": "New chat",
     "searchAria": "Search",
-    "viewOptions": "View",
-    "compactList": "Compact list",
-    "showPreviews": "Show previews",
-    "showTimestamps": "Show time",
-    "sortLabel": "Sort",
-    "sortUpdated": "Recently updated",
-    "sortCreated": "Recently created",
-    "sortTitle": "Title A-Z",
     "searchPlaceholder": "Search",
+    "clearSearch": "Clear search",
     "searchResults": "Results",
     "noSearchResults": "No matching chats.",
     "recent": "Recent",
@@ -309,6 +315,7 @@
       "totalProviders": "{{count}} available",
       "webSearch": "Web search",
       "imageGeneration": "Image generation",
+      "videoGeneration": "Video generation",
       "workspace": "Workspace"
     },
     "providers": {
@@ -335,8 +342,13 @@
     "actions": "Chat actions for {{title}}",
     "activity": {
       "running": "Agent running",
-      "complete": "Agent finished"
+      "complete": "Agent finished",
+      "waitingApproval": "Waiting for approval",
+      "failed": "Run failed",
+      "scheduled": "Scheduled"
     },
+    "unread": "Unread",
+    "markAllRead": "Mark all as read",
     "pin": "Pin",
     "unpin": "Unpin",
     "rename": "Rename",
@@ -350,9 +362,10 @@
     "hideArchived": "Hide archived",
     "delete": "Delete",
     "newChat": "New chat",
+    "agentSettings": "Agent Settings",
     "createMenu": "Create",
-    "newDirect": "New direct chat",
-    "newRoom": "New room",
+    "chatWith": "Chat with {{name}}",
+    "newRoom": "New group chat",
     "groups": {
       "pinned": "Pinned",
       "conversations": "Conversations",
@@ -360,7 +373,8 @@
       "today": "Today",
       "yesterday": "Yesterday",
       "earlier": "Earlier",
-      "archived": "Archived"
+      "archived": "Archived",
+      "rooms": "Rooms"
     },
     "moveToProject": "Move to project…",
     "newProjectChat": "New chat in project",
@@ -384,13 +398,19 @@
     "header": {
       "members": "Members ({{count}})"
     },
+    "emptyHint": "Send a message to start collaborating, just like a group chat. Workflow progress also appears here.",
     "panel": {
-      "title": "Collaboration room",
+      "title": "Group chat",
       "partner": "Partner",
       "collapse": "Collapse panel",
+      "info": "Info",
       "goal": "Goal",
-      "goalEmpty": "No room goal yet.",
+      "goalEmpty": "No group chat goal yet.",
       "members": "Members",
+      "builtin": "Built-in",
+      "artifacts": "Artifacts",
+      "artifactsEmpty": "No artifacts yet. Files produced by group members appear here.",
+      "refresh": "Refresh",
       "workflow": "Workflow"
     },
     "workflow": {
@@ -398,14 +418,26 @@
       "edit": "Edit",
       "editNewVersion": "Edit new revision",
       "activate": "Activate",
-      "run": "Run",
+      "runAction": "Run",
       "cancelRun": "Cancel run",
+      "runFailed": "Workflow run failed: {{detail}}",
+      "runError": {
+        "run_conflict": "A workflow run is already active.",
+        "run_failed": "Workflow run failed."
+      },
       "draft": "Draft",
       "active": "Active",
       "revision": "Revision {{revision}}",
       "stepsCount": "{{count}} steps",
       "empty": "No workflow configured yet.",
       "hint": "You can also ask Mona to draft one in the conversation.",
+      "canvas": {
+        "members": "Add step",
+        "config": "Step settings",
+        "selectNode": "Select a node on the canvas to edit it, or add steps from the left panel.",
+        "emptyHint": "Click a member on the left to add the first step.",
+        "autoLayout": "Auto layout"
+      },
       "editor": {
         "goal": "Workflow goal",
         "goalPlaceholder": "What should this collaboration deliver?",
@@ -436,7 +468,7 @@
         "duplicateId": "Duplicate step id: {{step}}",
         "invalidId": "Step ids may only contain letters, digits, - and _: {{step}}",
         "missingAgent": "Step {{step}} has no agent selected.",
-        "nonMember": "Step {{step}} uses an agent that is not a room member.",
+        "nonMember": "Step {{step}} uses an agent that is not a group member.",
         "missingTask": "Step {{step}} is missing a task.",
         "missingMessage": "Approval step {{step}} is missing a prompt.",
         "unknownDep": "Step {{step}} depends on unknown step {{detail}}.",
@@ -463,6 +495,8 @@
           "skipped": "Skipped"
         },
         "approval": "Approval",
+        "retryStep": "Retry this step",
+        "cancelStep": "Cancel this step",
         "revision": "Based on revision {{revision}}"
       },
       "approval": {
@@ -673,6 +707,8 @@
     "agentActivityLiveSummary": "Working… · {{reasoning}} steps · {{tools}} tool calls",
     "agentActivityLiveToolsOnly": "Working… · {{tools}} tool calls",
     "imageAttachment": "Image attachment",
+    "showAll": "Show all",
+    "collapse": "Collapse",
     "copyReply": "Copy reply",
     "copiedReply": "Copied reply",
     "saveAsNote": "Save as note",
@@ -693,6 +729,21 @@
     "copyAria": "Copy code",
     "copy": "Copy",
     "copied": "Copied"
+  },
+  "chart": {
+    "untitled": "Data chart",
+    "export": "Export",
+    "exportPng": "Export PNG image",
+    "exportSvg": "Export SVG image",
+    "exportCsv": "Export CSV data",
+    "errors": {
+      "invalidJson": "The chart data is not valid JSON.",
+      "unsupportedType": "This chart type is not supported. Use bar, line, area, pie, or scatter.",
+      "emptyData": "The chart has no data to render.",
+      "invalidData": "The chart data is invalid or contains non-numeric values.",
+      "invalidScatter": "Every scatter point must contain numeric x and y values.",
+      "invalidPie": "A pie chart needs at least one value greater than zero."
+    }
   },
   "common": {
     "dismiss": "Dismiss",

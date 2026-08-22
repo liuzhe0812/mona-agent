@@ -135,7 +135,10 @@ export function TerminalView({ onOpenSubscribe }: { onOpenSubscribe?: () => void
                       className="h-full"
                       style={{ display: isActive ? "block" : "none" }}
                     >
-                      <DesktopMode sessionId={session.id} />
+                      <DesktopMode
+                        sessionId={session.id}
+                        aiEnabled={licenseActive}
+                      />
                     </div>
                   );
                 }
@@ -190,7 +193,10 @@ export function TerminalView({ onOpenSubscribe }: { onOpenSubscribe?: () => void
         </div>
         <StatusBar sessionId={activeSessionId} />
       </div>
-      {licenseActive && aiPanelVisible && activeSession?.type !== "batch" && (
+      {licenseActive &&
+        aiPanelVisible &&
+        activeSession?.type !== "batch" &&
+        activeSession?.type !== "desktop" && (
         <>
           <div
             onMouseDown={handleDragStart}

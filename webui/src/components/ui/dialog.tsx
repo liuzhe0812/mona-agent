@@ -180,7 +180,9 @@ const DialogContent = React.forwardRef<
         <DialogPrimitive.Content
           ref={ref}
           className={cn(
-            "grid w-full max-w-lg origin-center gap-4 border bg-background p-6 shadow-lg duration-200 data-[state=open]:animate-in data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=open]:fade-in-0 data-[state=closed]:zoom-out-95 data-[state=open]:zoom-in-95 sm:rounded-2xl",
+            // grid-cols-1 = minmax(0, 1fr)：约束隐式列不超过容器宽度，
+            // 否则含 truncate 长文本的内容会按 max-content 把列顶出 max-w 边界。
+            "grid w-full max-w-lg origin-center grid-cols-1 gap-4 border bg-background p-6 shadow-lg duration-200 data-[state=open]:animate-in data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=open]:fade-in-0 data-[state=closed]:zoom-out-95 data-[state=open]:zoom-in-95 sm:rounded-2xl",
             className,
           )}
           {...props}

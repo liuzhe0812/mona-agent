@@ -2,7 +2,7 @@ export type Role = "user" | "assistant" | "tool" | "system";
 
 /** "trace" rows are intermediate agent breadcrumbs (tool-call hints,
  * progress pings) that should not be rendered as conversational replies. */
-export type MessageKind = "message" | "trace";
+export type MessageKind = "message" | "trace" | "workflowRun";
 
 /** Multi-agent author kinds (phase 0, multi-agent-development-guide 5.3). */
 export type AuthorType = "user" | "agent" | "system";
@@ -26,6 +26,9 @@ export interface ConversationMeta {
   activeWorkflowId?: string | null;
   activeWorkflowRevision?: number | null;
   archived?: boolean;
+  /** System-managed execution container (stock-module design §5.1): hidden
+   *  from every conversation list, never user-visible. */
+  hidden?: boolean;
 }
 
 /** Agent listing entry (``GET /api/agents``). */
@@ -33,15 +36,114 @@ export interface AgentSummary {
   id: string;
   displayName: string;
   avatarUrl?: string;
-  description: string;
   enabled: boolean;
+  /** Product visibility (stock-module design §4.4): ``internal`` agents only
+   *  exist inside their pack's room and never appear in the global partner
+   *  list. Absent means ``partner``. */
+  visibility?: "partner" | "internal";
+  packageId?: string;
+  packageVersion?: string;
+  configRevision?: number;
+}
+
+export interface AgentUserConfigPayload {
+  schemaVersion?: number;
+  revision: number;
+  enabled: boolean;
+  displayName?: string | null;
+  avatar?: string | null;
+  modelPreset?: string | null;
+  reasoningEffort?: string | null;
+  temperature?: number | null;
+  maxTokens?: number | null;
+  grantedTools?: string[] | null;
+  disabledSkills: string[];
+  delegationEnabled: boolean;
+  scriptEnabledSkills?: string[];
+  updatedAt?: string | null;
+}
+
+export interface EffectiveAgentConfigPayload {
+  agentId: string;
+  enabled: boolean;
+  displayName: string;
+  avatar?: string | null;
+  modelPreset?: string | null;
+  reasoningEffort?: string | null;
+  temperature?: number | null;
+  maxTokens?: number | null;
+  allowedTools?: string[] | null;
+  disabledSkills: string[];
+  delegationEnabled: boolean;
+  scriptEnabledSkills?: string[];
+}
+
+export interface AgentDetailPayload {
+  agent: AgentSummary;
+  definition: {
+    id: string;
+    model: string;
+    toolAllowlist: string[];
+    canDelegate: boolean;
+    skills: string[];
+    packageId: string;
+    packageVersion: string;
+  };
+  config: AgentUserConfigPayload;
+  effective: EffectiveAgentConfigPayload;
+  data: {
+    memoryFiles: number;
+    memoryBytes: number;
+    memoryUpdatedAt?: string | null;
+    skillFiles: number;
+    skillBytes: number;
+    skillUpdatedAt?: string | null;
+  };
+}
+
+export interface AgentInstruction {
+  key: "soul" | "agents" | "user" | "memory";
+  filename: string;
+  content: string;
+  contentHash: string;
+  updatedAt?: string | null;
+}
+
+export interface AgentInstructionHistoryItem {
+  sha: string;
+  message: string;
+  timestamp: string;
+}
+
+export interface AgentSkill {
+  name: string;
+  source: "private" | "package" | "platform" | string;
+  enabled: boolean;
+  archived: boolean;
+  hasScripts: boolean;
+  scriptsEnabled: boolean;
+  contentHash: string;
+}
+
+export interface AgentChangeProposal {
+  id: string;
+  agentId: string;
+  kind: "instruction_patch" | "skill_install";
+  status: "pending" | "approved" | "rejected" | "expired" | "failed";
+  preview: Record<string, unknown>;
+  expectedHash?: string | null;
+  createdAt: string;
+  expiresAt: string;
+  resolvedAt?: string | null;
+  error?: string;
+  /** Returned only through the authenticated Agent-management channel. */
+  token?: string;
 }
 
 /** One member entry inside a room state payload. */
 export interface RoomAgentInfo {
   id: string;
   displayName: string;
-  description: string;
 }
 
 /** Room state returned by ``create_room`` / ``update_room`` / ``get_room_state``
@@ -118,6 +220,8 @@ export interface WorkflowStep {
   /** Approval steps only: prompt shown to the approver. */
   message?: string;
   dependsOn?: string[];
+  /** Canvas node coordinates; absent = auto-layout. */
+  position?: { x: number; y: number } | null;
 }
 
 export type WorkflowStatus = "draft" | "active" | "archived";
@@ -156,10 +260,12 @@ export type WorkflowStepStatus =
  *  only set on approval steps (phase 4). */
 export interface WorkflowStepRun {
   status: WorkflowStepStatus;
+  /** Durable execution attempt; legacy run payloads omit it and default to 1. */
+  attempt?: number;
   jobId?: string | null;
   startedAt?: string | null;
   finishedAt?: string | null;
-  output?: { summary?: string; artifacts?: string[] } | null;
+  output?: { summary?: string; artifacts?: Array<string | ArtifactRef> } | null;
   error?: string | null;
   approvalToken?: string | null;
   approvalExpiresAt?: string | null;
@@ -182,6 +288,8 @@ export interface WorkflowRun {
   startedAt: string;
   finishedAt?: string | null;
   steps: Record<string, WorkflowStepRun>;
+  /** Structured run inputs supplied at start (stock-module design §4.2). */
+  inputs?: Record<string, unknown>;
 }
 
 /** Shared envelope of the workflow ``*_result`` events. On ``ok: false``
@@ -228,6 +336,17 @@ export interface WorkflowUpdatedPayload {
   activeRevision?: number | null;
 }
 
+/** ``workflow_step_activity`` broadcast payload (normalized by MonaClient):
+ *  the live tool-activity accumulator of one step job; each frame is a full
+ *  snapshot, replacing whatever was seen before for the same step. */
+export interface WorkflowStepActivityPayload {
+  runId: string;
+  stepId: string;
+  jobId?: string | null;
+  authorId: string;
+  toolEvents: ToolProgressEvent[];
+}
+
 /** One image attached to a UIMessage.
  *
  * ``url`` can arrive in three different shapes, which the bubble renders
@@ -265,6 +384,26 @@ export interface DeliveredFile {
   /** ISO 8601 timestamp from the shared-output scan. May be absent on
    *  deliver_file/file_edit events that don't carry mtime. */
   modified_at?: string;
+  missing?: boolean;
+  artifact_ref?: ArtifactRef;
+}
+
+export interface ArtifactRef {
+  id: string;
+  owner_kind: "agent" | "product";
+  owner_id: string;
+  relative_path: string;
+  created_by_agent_id: string;
+  created_at: string;
+  product?: string | null;
+  session_id?: string | null;
+  room_id?: string | null;
+  job_id?: string | null;
+  workflow_run_id?: string | null;
+  workflow_step_id?: string | null;
+  size?: number | null;
+  modified_at?: string | null;
+  mime?: string | null;
 }
 
 export interface UIMessage {
@@ -315,6 +454,9 @@ export interface UIMessage {
   jobId?: string;
   /** Workflow run this message belongs to (``workflow_run`` / ``approval``). */
   workflowRunId?: string;
+  /** Tool-activity trail of a workflow step, persisted with the step's
+   *  result message so the room can show "how the agent worked" on replay. */
+  toolEvents?: ToolProgressEvent[];
   /** Structured payload for non-``message`` kinds (job snapshot, run summary…). */
   payload?: unknown;
 }
@@ -358,6 +500,7 @@ export interface UIFileEdit {
   binary?: boolean;
   error?: string;
   pending?: boolean;
+  artifact_ref?: ArtifactRef;
 }
 
 export interface ChatSummary {
@@ -419,7 +562,7 @@ export interface SidebarStatePayload {
   pinned_keys: string[];
   archived_keys: string[];
   title_overrides: Record<string, string>;
-  /** IM unread derivation (schema v2, IM plan 12.4): last-read marker per
+    /** IM unread derivation (schema v5): last-read marker per
    *  session key, compared against ``ChatSummary.previewAt``. */
   last_read_at_by_key: Record<string, string>;
   tags_by_key: Record<string, string[]>;
@@ -481,6 +624,27 @@ export interface SettingsPayload {
     model?: string | null;
     backend?: string;
     probe_supported?: boolean;
+  }>;
+  chat_providers?: Array<{
+    name: string;
+    label: string;
+    is_custom?: boolean;
+    configured: boolean;
+    api_key_required: boolean;
+    api_key_hint?: string | null;
+    api_base: string;
+    default_api_base: string;
+    model?: string | null;
+    models: Array<{
+      id: string;
+      name: string;
+      context_window?: number | null;
+      enabled: boolean;
+      recommended: boolean;
+    }>;
+    models_url?: string | null;
+    region?: string | null;
+    api_base_editable: boolean;
   }>;
   web_search: {
     provider: string;
@@ -582,6 +746,15 @@ export interface SettingsPayload {
     api_key_configured: boolean;
     api_key_hint: string | null;
   };
+  stock: {
+    enabled: boolean;
+    auto_review_enabled: boolean;
+    review_time: string;
+    review_scope: "all" | "focus";
+    push_notification: boolean;
+    push_email: boolean;
+    quote_refresh_sec: number;
+  };
   requires_restart: boolean;
   restart_required_sections?: Array<"runtime" | "web" | "providers" | "channels">;
 }
@@ -631,9 +804,13 @@ export interface SettingsUpdate {
 
 export interface ProviderSettingsUpdate {
   provider: string;
+  customName?: string;
   apiKey?: string;
   apiBase?: string;
   model?: string;
+  enabledModels?: string[];
+  discoveredModels?: Array<{ id: string; name?: string; contextWindow?: number | null }>;
+  delete?: boolean;
 }
 
 export interface WebSearchSettingsUpdate {
@@ -671,6 +848,20 @@ export interface TtsSettingsUpdate {
   apiKey?: string;
   /** Remove the stored API key. */
   clearKey?: boolean;
+}
+
+export interface StockSettingsUpdate {
+  enabled?: boolean;
+  /** Whether the daily review scheduler is enabled independently of the stock module. */
+  autoReviewEnabled?: boolean;
+  /** ``HH:MM`` in Asia/Shanghai — the daily review trigger time. */
+  reviewTime?: string;
+  /** Daily-review coverage: all watchlist items or focus-marked only. */
+  reviewScope?: "all" | "focus";
+  pushNotification?: boolean;
+  pushEmail?: boolean;
+  /** Quote polling interval in seconds (5–3600). */
+  quoteRefreshSec?: number;
 }
 
 export interface SlashCommand {
@@ -779,7 +970,7 @@ export type InboundEvent =
       goal_state: GoalStateWsPayload;
     }
   | { event: "session_updated"; chat_id: string; scope?: "metadata" | "thread" | string }
-  | { event: "artifacts_changed" }
+  | { event: "artifacts_changed"; chat_id?: string }
   | { event: "video_project_changed"; name?: string; hint?: string }
   | { event: "error"; chat_id?: string; detail?: string }
   | {
@@ -834,6 +1025,37 @@ export type InboundEvent =
       agents: RoomAgentInfo[];
     }
   | {
+      event: "agents_updated" | "agent_instructions_updated" | "agent_skills_updated";
+      agent_id: string;
+      key?: string;
+    }
+  | {
+      event: "agent_change_proposal_created" | "agent_change_proposal_resolved";
+      agent_id: string;
+      proposal_id: string;
+      kind?: AgentChangeProposal["kind"];
+      status?: AgentChangeProposal["status"];
+    }
+  | ({
+      event:
+        | "agent_config_update_result"
+        | "agent_instruction_save_result"
+        | "agent_instruction_restore_result"
+        | "agent_skill_stage_result"
+        | "agent_skill_action_result"
+        | "resolve_agent_change_result";
+      ok: boolean;
+      request_id?: string;
+      agent_id?: string;
+      detail?: string;
+      config?: AgentUserConfigPayload;
+      agent?: AgentSummary;
+      instruction?: AgentInstruction;
+      proposal?: AgentChangeProposal;
+      name?: string;
+      action?: string;
+    })
+  | {
       event: "cancel_agent_job_result";
       ok: boolean;
       chat_id?: string;
@@ -853,6 +1075,7 @@ export type InboundEvent =
   | ({ event: "workflow_state_result" } & WorkflowCommandResult)
   | ({ event: "run_workflow_result" } & WorkflowCommandResult)
   | ({ event: "cancel_workflow_run_result" } & WorkflowCommandResult)
+  | ({ event: "retry_workflow_step_result" } & WorkflowCommandResult)
   | ({ event: "workflow_run_state_result" } & WorkflowCommandResult)
   | ({ event: "resolve_workflow_approval_result" } & WorkflowCommandResult)
   | {
@@ -874,7 +1097,16 @@ export type InboundEvent =
       /** Present (with ``detail``) on run-conflict frames instead of a run. */
       error?: string;
       detail?: string;
-    } & Partial<WorkflowRun>);
+    } & Partial<WorkflowRun>)
+  | {
+      event: "workflow_step_activity";
+      chat_id: string;
+      run_id?: string;
+      step_id?: string;
+      job_id?: string | null;
+      author_id?: string;
+      tool_events?: ToolProgressEvent[];
+    };
 
 /** Base64-encoded image attached to an outbound ``message`` envelope.
  *
@@ -993,12 +1225,63 @@ export type Outbound =
       run_id?: string;
       request_id?: string;
     }
+  | {
+      type: "retry_workflow_step";
+      chat_id: string;
+      run_id: string;
+      step_id: string;
+      request_id?: string;
+    }
   | { type: "get_workflow_run"; chat_id: string; run_id?: string; request_id?: string }
   | {
       type: "resolve_workflow_approval";
       chat_id: string;
       run_id: string;
       step_id: string;
+      token: string;
+      approve: boolean;
+      request_id?: string;
+    }
+  | {
+      type: "agent_config_update";
+      agent_id: string;
+      config: Record<string, unknown>;
+      expected_revision?: number;
+      request_id?: string;
+    }
+  | {
+      type: "agent_instruction_save";
+      agent_id: string;
+      key: AgentInstruction["key"];
+      content: string;
+      request_id?: string;
+    }
+  | {
+      type: "agent_instruction_restore";
+      agent_id: string;
+      key: AgentInstruction["key"];
+      commit: string;
+      request_id?: string;
+    }
+  | {
+      type: "agent_skill_stage";
+      agent_id: string;
+      name: string;
+      content?: string;
+      files?: Record<string, string>;
+      request_id?: string;
+    }
+  | {
+      type: "agent_skill_action";
+      agent_id: string;
+      name: string;
+      action: "enable" | "disable" | "archive" | "restore" | "enable_scripts" | "disable_scripts";
+      request_id?: string;
+    }
+  | {
+      type: "resolve_agent_change";
+      agent_id: string;
+      proposal_id: string;
       token: string;
       approve: boolean;
       request_id?: string;

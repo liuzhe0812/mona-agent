@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
+import { createPortal } from "react-dom";
 import {
   ChevronDown,
   ChevronLeft,
@@ -61,6 +62,128 @@ function isHtml(file: DeliveredFile): boolean {
   return HTML_EXTS.has(extOf(file.name));
 }
 
+const HTML_RESOURCE_ATTRS: Record<string, string> = {
+  img: "src",
+  object: "data",
+  script: "src",
+  link: "href",
+  source: "src",
+  video: "poster",
+};
+
+function resolveRelativeResource(htmlPath: string, rawUrl: string): string | null {
+  const value = rawUrl.trim();
+  if (
+    !value ||
+    value.startsWith("#") ||
+    value.startsWith("/") ||
+    /^(?:[a-z][a-z\d+.-]*:|\\\\)/i.test(value)
+  ) {
+    return null;
+  }
+  const clean = value.split(/[?#]/, 1)[0];
+  const parts: string[] = [];
+  const base = htmlPath.replaceAll("\\", "/").split("/");
+  base.pop();
+  for (const part of [...base, ...clean.split("/")]) {
+    if (!part || part === ".") continue;
+    if (part === "..") {
+      if (!parts.length) return null;
+      parts.pop();
+    } else {
+      parts.push(part);
+    }
+  }
+  return parts.join("/") || null;
+}
+
+async function blobAsDataUrl(blob: Blob, mime: string): Promise<string> {
+  const bytes = new Uint8Array(await blob.arrayBuffer());
+  let binary = "";
+  const chunkSize = 0x8000;
+  for (let offset = 0; offset < bytes.length; offset += chunkSize) {
+    binary += String.fromCharCode(...bytes.subarray(offset, offset + chunkSize));
+  }
+  return `data:${mime || blob.type || "application/octet-stream"};base64,${btoa(binary)}`;
+}
+
+async function inlineCssResources(
+  css: string,
+  cssPath: string,
+  token: string,
+  params: Parameters<typeof fetchFilePreviewBlob>[1],
+): Promise<string> {
+  const urls = new Set<string>();
+  for (const match of css.matchAll(/url\(\s*["']?([^"')]+)["']?\s*\)/gi)) {
+    urls.add(match[1]);
+  }
+  const replacements = new Map<string, string>();
+  await Promise.all(
+    [...urls].map(async (url) => {
+      const path = resolveRelativeResource(cssPath, url);
+      if (!path) return;
+      try {
+        const { blob, mime } = await fetchFilePreviewBlob(token, {
+          ...params,
+          path,
+          artifactId: null,
+        });
+        replacements.set(url, await blobAsDataUrl(blob, mime));
+      } catch {
+        // Keep the original URL when an optional font/image is unavailable.
+      }
+    }),
+  );
+  return css.replace(
+    /url\(\s*(["']?)([^"')]+)\1\s*\)/gi,
+    (full, _quote: string, url: string) => {
+      const replacement = replacements.get(url);
+      return replacement ? `url(${replacement})` : full;
+    },
+  );
+}
+
+async function inlineHtmlResources(
+  html: string,
+  token: string,
+  params: Parameters<typeof fetchFilePreviewBlob>[1],
+): Promise<string> {
+  if (typeof DOMParser === "undefined") return html;
+  const document = new DOMParser().parseFromString(html, "text/html");
+  const resources = Object.entries(HTML_RESOURCE_ATTRS).flatMap(([tag, attr]) =>
+    Array.from(document.querySelectorAll(`${tag}[${attr}]`)).map((element) => ({
+      element,
+      attr,
+      url: element.getAttribute(attr) ?? "",
+    })),
+  );
+  await Promise.all(
+    Array.from(document.querySelectorAll("style")).map(async (style) => {
+      style.textContent = await inlineCssResources(style.textContent ?? "", params.path, token, params);
+    }),
+  );
+  await Promise.all(
+    resources.map(async ({ element, attr, url }) => {
+      const path = resolveRelativeResource(params.path, url);
+      if (!path) return;
+      try {
+        const { blob, mime } = await fetchFilePreviewBlob(token, {
+          ...params,
+          path,
+          artifactId: null,
+        });
+        const resource = mime.includes("text/css")
+          ? await inlineCssResources(await blob.text(), path, token, params)
+          : await blobAsDataUrl(blob, mime);
+        element.setAttribute(attr, await blobAsDataUrl(new Blob([resource]), mime));
+      } catch {
+        // Keep the original URL when an optional asset is unavailable.
+      }
+    }),
+  );
+  return `<!doctype html>${document.documentElement.outerHTML}`;
+}
+
 function FileIcon({ file }: { file: DeliveredFile }) {
   const ext = extOf(file.name);
   if (IMAGE_EXTS.has(ext)) return <ImageIcon className="h-4 w-4" />;
@@ -73,6 +196,7 @@ export function FilePreviewPanel({ files = [] }: { files?: DeliveredFile[] }) {
   const file = useFilePreviewStore((s) => s.file);
   const scope = useFilePreviewStore((s) => s.scope);
   const sessionKey = useFilePreviewStore((s) => s.sessionKey);
+  const roomId = useFilePreviewStore((s) => s.roomId);
   const close = useFilePreviewStore((s) => s.close);
   const open = useFilePreviewStore((s) => s.open);
   const fullscreen = useFilePreviewStore((s) => s.fullscreen);
@@ -107,17 +231,22 @@ export function FilePreviewPanel({ files = [] }: { files?: DeliveredFile[] }) {
 
     (async () => {
       try {
-        const { blob, mime } = await fetchFilePreviewBlob(token, {
+        const previewParams = {
           scope,
           path: file.path,
-          sessionKey: scope === "project" ? sessionKey : null,
-        });
+          sessionKey: scope === "project" || scope === "shared" ? sessionKey : null,
+          room: scope === "room" ? roomId : null,
+          artifactId: file.artifact_ref?.id ?? null,
+        } as const;
+        const { blob, mime } = await fetchFilePreviewBlob(token, previewParams);
         if (cancelled) return;
         // HTML / Markdown / 文本走 textSource；其他二进制走 Blob URL
         if (isHtml(file)) {
           const text = await blob.text();
           if (cancelled) return;
-          setTextSource(text);
+          const prepared = await inlineHtmlResources(text, token, previewParams);
+          if (cancelled) return;
+          setTextSource(prepared);
           setBlobUrl(null);
         } else if (isMarkdown(file)) {
           const text = await blob.text();
@@ -153,7 +282,7 @@ export function FilePreviewPanel({ files = [] }: { files?: DeliveredFile[] }) {
     return () => {
       cancelled = true;
     };
-  }, [file, scope, sessionKey, token]);
+  }, [file, scope, sessionKey, roomId, token]);
 
   // Revoke the lingering Blob URL on unmount.
   useEffect(() => {
@@ -187,7 +316,7 @@ export function FilePreviewPanel({ files = [] }: { files?: DeliveredFile[] }) {
   const navTo = (delta: number) => {
     if (!canNav) return;
     const next = files[(navIndex + delta + files.length) % files.length];
-    open(next, scope, sessionKey);
+    open(next, scope, sessionKey, roomId);
   };
 
   const header = (
@@ -253,7 +382,9 @@ export function FilePreviewPanel({ files = [] }: { files?: DeliveredFile[] }) {
           const { blob } = await fetchFilePreviewBlob(token, {
             scope,
             path: file.path,
-            sessionKey: scope === "project" ? sessionKey : null,
+            sessionKey: scope === "project" || scope === "shared" ? sessionKey : null,
+            room: scope === "room" ? roomId : null,
+            artifactId: file.artifact_ref?.id ?? null,
           });
           return blob.arrayBuffer();
         }}
@@ -305,11 +436,12 @@ export function FilePreviewPanel({ files = [] }: { files?: DeliveredFile[] }) {
   );
 
   if (fullscreen) {
-    return (
+    return createPortal(
       <div className="fixed inset-0 z-50 flex flex-col bg-background animate-in fade-in-0 duration-150">
         {header}
         {body}
-      </div>
+      </div>,
+      document.body,
     );
   }
 

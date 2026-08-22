@@ -136,6 +136,11 @@ export default {
           DEFAULT: "hsl(var(--warning))",
           hover: "hsl(var(--warning-hover))",
         },
+        // A 股涨跌色（数据可视化例外）：text-stock-up / text-stock-down
+        stock: {
+          up: "hsl(var(--stock-up))",
+          down: "hsl(var(--stock-down))",
+        },
         sidebar: {
           DEFAULT: "hsl(var(--sidebar))",
           foreground: "hsl(var(--sidebar-foreground))",

@@ -8,6 +8,7 @@ import remarkBreaks from "remark-breaks";
 import remarkGfm from "remark-gfm";
 import remarkMath from "remark-math";
 
+import { ChatChart } from "@/components/ChatChart";
 import { CodeBlock } from "@/components/CodeBlock";
 import { FileReferenceChip, isLikelyFilePath } from "@/components/FileReferenceChip";
 import { isTauri, openPathWithSystemApp, openExternalUrl, revealItemInDir } from "@/lib/tauri";
@@ -67,6 +68,9 @@ export default function MarkdownTextRenderer({
         const match = /language-(\w+)/.exec(cls || "");
         if (match) {
           const code = String(kids).replace(/\n$/, "");
+          if (match[1].toLowerCase() === "chart" && highlightCode) {
+            return <ChatChart source={code} />;
+          }
           return (
             <CodeBlock
               language={match[1]}
@@ -112,7 +116,11 @@ export default function MarkdownTextRenderer({
         const kids = Children.toArray(markdownChildren);
         const lone = kids.length === 1 ? kids[0] : null;
         /** Highlighted fences render ``CodeBlock`` (block shell); skip invalid ``<pre><div>``. */
-        if (lone != null && isValidElement(lone) && lone.type === CodeBlock) {
+        if (
+          lone != null
+          && isValidElement(lone)
+          && (lone.type === CodeBlock || lone.type === ChatChart)
+        ) {
           return <>{markdownChildren}</>;
         }
         return (

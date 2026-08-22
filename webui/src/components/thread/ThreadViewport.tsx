@@ -14,16 +14,20 @@ import { ThreadMessages } from "@/components/thread/ThreadMessages";
 import { isAgentActivityMember } from "@/components/thread/AgentActivityCluster";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
-import type { UIMessage } from "@/lib/types";
+import type { ToolProgressEvent, UIMessage } from "@/lib/types";
 
 interface ThreadViewportProps {
   messages: UIMessage[];
   isStreaming: boolean;
+  /** Rooms render assistant turns as a group-chat conversation. */
+  isGroupChat?: boolean;
   composer: ReactNode;
   emptyState?: ReactNode;
   scrollToBottomSignal?: number;
   conversationKey?: string | null;
   showScrollToBottomButton?: boolean;
+  /** Live workflow-step tool activity, keyed ``runId:stepId`` (rooms only). */
+  stepActivities?: Record<string, ToolProgressEvent[]>;
 }
 
 const NEAR_BOTTOM_PX = 48;
@@ -48,11 +52,13 @@ export function windowMessages(messages: UIMessage[], visibleCount: number): UIM
 export function ThreadViewport({
   messages,
   isStreaming,
+  isGroupChat = false,
   composer,
   emptyState,
   scrollToBottomSignal = 0,
   conversationKey = null,
   showScrollToBottomButton = true,
+  stepActivities,
 }: ThreadViewportProps) {
   const { t } = useTranslation();
   const scrollRef = useRef<HTMLDivElement>(null);
@@ -247,8 +253,10 @@ export function ThreadViewport({
                 <ThreadMessages
                   messages={visibleMessages}
                   isStreaming={isStreaming}
+                  isGroupChat={isGroupChat}
                   hiddenMessageCount={hiddenMessageCount}
                   onLoadEarlier={loadEarlierMessages}
+                  stepActivities={stepActivities}
                 />
               </div>
             </div>

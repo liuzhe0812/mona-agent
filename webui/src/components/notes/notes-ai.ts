@@ -446,7 +446,7 @@ export function buildAgentActionPrompt(
         "- 标题用 Noto Serif SC，正文用 Noto Sans SC",
         "",
         "根据笔记内容自动划分章节、生成目录、设计封面。",
-        "生成完成后，使用 write_file 工具将 HTML 内容保存到 .mona/output/ 目录，文件名使用笔记标题（去除特殊字符）加 .html 后缀。",
+        "生成完成后，使用 write_file 工具将 HTML 内容保存到当前工作区的 notes/ 子目录，文件名使用笔记标题（去除特殊字符）加 .html 后缀。",
         "不要在回复中输出 HTML 代码，只通过 write_file 工具保存文件即可。",
       ].join("\n");
     }
@@ -502,7 +502,7 @@ export function buildAgentActionPrompt(
       context,
       "",
       "根据笔记内容自动划分章节、生成目录、设计封面。",
-      "生成完成后，使用 write_file 工具将 HTML 内容保存到 .mona/output/ 目录，文件名使用笔记标题（去除特殊字符）加 .html 后缀。",
+      "生成完成后，使用 write_file 工具将 HTML 内容保存到当前工作区的 notes/ 子目录，文件名使用笔记标题（去除特殊字符）加 .html 后缀。",
       "不要在回复中输出 HTML 代码，只通过 write_file 工具保存文件即可。",
     ].join("\n");
   }

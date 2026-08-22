@@ -19,10 +19,19 @@ import type {
 
 const EMPTY_MESSAGES: UIMessage[] = [];
 
+/** Client-side fallback for system-managed hidden rooms (stock-module design
+ *  §5.1): even if the server ever leaks a ``hidden`` conversation row, the
+ *  sidebar must never render it. Applied to every server refresh. */
+export function filterVisibleSessions(rows: ChatSummary[]): ChatSummary[] {
+  return rows.filter((row) => row.conversation?.hidden !== true);
+}
+
 /** Sidebar state: fetches the full session list and exposes create / delete actions. */
 export function useSessions(): {
   sessions: ChatSummary[];
   loading: boolean;
+  /** True only after an authoritative session-list response has arrived. */
+  loaded: boolean;
   error: string | null;
   refresh: () => Promise<void>;
   createChat: (workspace?: string | null) => Promise<string>;
@@ -32,6 +41,7 @@ export function useSessions(): {
   const { client, token } = useClientOptional();
   const [sessions, setSessions] = useState<ChatSummary[]>([]);
   const [loading, setLoading] = useState(true);
+  const [loaded, setLoaded] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const tokenRef = useRef(token);
   const optimisticKeysRef = useRef<Set<string>>(new Set());
@@ -57,7 +67,7 @@ export function useSessions(): {
         refreshPendingRef.current = false;
         try {
           setLoading(true);
-          const rows = await listSessions(tokenRef.current);
+          const rows = filterVisibleSessions(await listSessions(tokenRef.current));
           const serverKeys = new Set(rows.map((row) => row.key));
           setSessions((prev) => [
             ...rows,
@@ -67,6 +77,7 @@ export function useSessions(): {
                 !serverKeys.has(session.key),
             ),
           ]);
+          setLoaded(true);
           for (const key of Array.from(optimisticKeysRef.current)) {
             if (serverKeys.has(key)) optimisticKeysRef.current.delete(key);
           }
@@ -141,7 +152,7 @@ export function useSessions(): {
     [],
   );
 
-  return { sessions, loading, error, refresh, createChat, deleteChat, updateWorkspace };
+  return { sessions, loading, loaded, error, refresh, createChat, deleteChat, updateWorkspace };
 }
 
 /** Lazy-load a session's on-disk messages the first time the UI displays it. */

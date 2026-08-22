@@ -8,7 +8,6 @@ import {
   Image as ImageIcon,
   FileCode,
   Package,
-  PanelRightClose,
   RefreshCw,
   AlertTriangle,
   FolderOpen as FolderOpenIcon,
@@ -49,8 +48,8 @@ interface WorkspacePanelProps {
    *  events). Rendered as a dedicated flat section above the full artifact
    *  tree so the user can answer "what did THIS conversation produce". */
   sessionFiles?: DeliveredFile[];
-  /** Preview scope passed through to file cards so previews resolve
-   *  against the right root (``<workspace>/output/`` vs session project). */
+  /** Preview scope passed through to file cards so previews resolve against
+   *  the active Agent owner or session project. */
   scope?: PreviewScope;
   /** Required when ``scope === "project"``. */
   sessionKey?: string | null;
@@ -66,10 +65,12 @@ interface WorkspacePanelProps {
    *  return a promise; rejections are shown inside the confirmation dialog
    *  so the user can retry or cancel. */
   onDelete?: (file: DeliveredFile) => void | Promise<void>;
-  /** Absolute path of the panel's root directory (shared output dir or the
-   *  project workspace). Enables the "open directory" affordances and the
+  /** Absolute path of the panel's root directory (Agent output or project
+   *  workspace). Enables the "open directory" affordances and the
    *  directory context menu. */
   outputDir?: string | null;
+  /** Stable Agent/project/room owner key for directory expansion state. */
+  ownerKey?: string;
   className?: string;
 }
 
@@ -87,6 +88,7 @@ const CODE_EXTS = new Set([
   ".py", ".js", ".ts", ".tsx", ".jsx", ".rs", ".go", ".java", ".c", ".cpp",
   ".html", ".css", ".scss", ".json", ".yaml", ".yml", ".toml", ".sql",
 ]);
+const EMPTY_COLLAPSED_PATHS: string[] = [];
 
 function extOf(name: string): string {
   const dot = name.lastIndexOf(".");
@@ -194,6 +196,16 @@ function buildFileTree(files: DeliveredFile[]): TreeNode[] {
   return root.children!;
 }
 
+function collectDirectoryPaths(nodes: TreeNode[]): string[] {
+  const paths: string[] = [];
+  for (const node of nodes) {
+    if (!node.isDir) continue;
+    paths.push(node.path);
+    if (node.children) paths.push(...collectDirectoryPaths(node.children));
+  }
+  return paths;
+}
+
 /** Flatten the panel's visual order — session section first (flat), then
  *  the sorted artifact tree depth-first — into a single navigation list.
  *  Used by the preview panel's prev/next cycling so "next" matches the
@@ -235,9 +247,9 @@ export function WorkspacePanel({
   onRefresh,
   onDelete,
   outputDir = null,
+  ownerKey = "default",
   className,
 }: WorkspacePanelProps) {
-  const toggleCollapsed = useFilePreviewStore((s) => s.toggleWorkspaceCollapsed);
   const previewFile = useFilePreviewStore((s) => s.file);
   const closePreview = useFilePreviewStore((s) => s.close);
   const artifactBaseline = useFilePreviewStore((s) => s.artifactBaseline);
@@ -248,7 +260,26 @@ export function WorkspacePanel({
   const markArtifactsViewed = useFilePreviewStore((s) => s.markArtifactsViewed);
 
   const tree = useMemo(() => buildFileTree(files), [files]);
-  const [collapsed, setCollapsed] = useState<Set<string>>(new Set());
+  const directoryPaths = useMemo(() => collectDirectoryPaths(tree), [tree]);
+  const collapsedPaths = useFilePreviewStore(
+    (s) => s.treeCollapsedByOwner[ownerKey] ?? EMPTY_COLLAPSED_PATHS,
+  );
+  const initializedDirectoryPaths = useFilePreviewStore(
+    (s) => s.treeExpansionInitializedByOwner[ownerKey] ?? EMPTY_COLLAPSED_PATHS,
+  );
+  const collapsed = useMemo(() => {
+    const next = new Set(collapsedPaths);
+    const initialized = new Set(initializedDirectoryPaths);
+    for (const path of directoryPaths) {
+      if (!initialized.has(path)) next.add(path);
+    }
+    return next;
+  }, [collapsedPaths, directoryPaths, initializedDirectoryPaths]);
+  const toggleTreeDirectory = useFilePreviewStore((s) => s.toggleTreeDirectory);
+  const initializeTreeDirectories = useFilePreviewStore((s) => s.initializeTreeDirectories);
+  useEffect(() => {
+    initializeTreeDirectories(ownerKey, directoryPaths);
+  }, [directoryPaths, initializeTreeDirectories, ownerKey]);
   const [deleteTarget, setDeleteTarget] = useState<{
     file: DeliveredFile;
     isDir: boolean;
@@ -312,14 +343,7 @@ export function WorkspacePanel({
     return out;
   }, [allKeys, artifactBaseline, viewedArtifactPaths]);
 
-  const toggle = (path: string) => {
-    setCollapsed((prev) => {
-      const next = new Set(prev);
-      if (next.has(path)) next.delete(path);
-      else next.add(path);
-      return next;
-    });
-  };
+  const toggle = (path: string) => toggleTreeDirectory(ownerKey, path);
 
   const handleOpenOutputDir = () => {
     if (!isTauri() || !outputDir) return;
@@ -327,6 +351,7 @@ export function WorkspacePanel({
   };
 
   const handleDeleteRequest = (file: DeliveredFile, isDir = false) => {
+    if (file.missing) return;
     setDeleteError(null);
     setDeleteTarget({ file, isDir });
   };
@@ -392,16 +417,6 @@ export function WorkspacePanel({
             <RefreshCw className={cn("h-3.5 w-3.5", loading && "animate-spin")} />
           </Button>
         )}
-        <Button
-          type="button"
-          variant="ghost"
-          onClick={toggleCollapsed}
-          title="折叠工作区"
-          aria-label="折叠工作区"
-          className="h-6 w-6 rounded-sm p-0 text-muted-foreground hover:bg-muted hover:text-foreground"
-        >
-          <PanelRightClose className="h-4 w-4" />
-        </Button>
       </div>
 
       {error ? (
@@ -419,66 +434,54 @@ export function WorkspacePanel({
             </Button>
           )}
         </div>
-      ) : isEmpty ? (
+      ) : scope !== "shared" && isEmpty ? (
         <EmptyState
           className="h-full py-6"
           icon={<FolderOpenIcon className="h-6 w-6 opacity-40" />}
-          title={
-            scope === "shared"
-              ? "还没有产物。AI 创建的文件会出现在这里。"
-              : "项目目录里还没有文件。"
-          }
-          action={
-            isTauri() && scope === "shared" && outputDir ? (
-              <Button
-                type="button"
-                variant="outline"
-                size="sm"
-                onClick={handleOpenOutputDir}
-              >
-                打开 output 目录
-              </Button>
-            ) : undefined
-          }
+          title="项目目录里还没有文件。"
         />
       ) : (
         <>
-          {sessionFiles.length > 0 && (
+          {scope === "shared" && (
             <div className="shrink-0 border-b border-border/60 px-2 py-1.5">
               <div className="px-1 pb-1 text-micro font-medium text-muted-foreground">
-                本次会话
+                会话产物
               </div>
-              <ul className="flex flex-col text-ui">
-                {sessionFiles.map((f) => {
-                  const key = fileKey(f);
-                  return (
-                    <TreeRow
-                      key={`s-${key}`}
-                      node={{ name: f.name, path: key, isDir: false, file: f }}
-                      depth={0}
-                      collapsed={collapsed}
-                      onToggle={toggle}
-                      scope={scope}
-                      sessionKey={sessionKey}
-                      activePath={previewFile?.absolute_path ?? null}
-                      canDelete={canDelete}
-                      onDelete={handleDeleteRequest}
-                      newKeys={newKeys}
-                      rootDir={outputDir}
-                    />
-                  );
-                })}
-              </ul>
-            </div>
-          )}
-          {tree.length > 0 && (
-            <div className="shrink-0 px-2 pt-1.5 pb-1">
-              <div className="px-1 text-micro font-medium text-muted-foreground">
-                {scope === "shared" ? "全部产物" : "全部文件"}
-              </div>
+              {sessionFiles.length > 0 ? (
+                <ul className="flex flex-col text-ui">
+                  {sessionFiles.map((f) => {
+                    const key = fileKey(f);
+                    return (
+                      <TreeRow
+                        key={`s-${key}`}
+                        node={{ name: f.name, path: key, isDir: false, file: f }}
+                        depth={0}
+                        collapsed={collapsed}
+                        onToggle={toggle}
+                        scope={scope}
+                        sessionKey={sessionKey}
+                        activePath={previewFile?.absolute_path ?? null}
+                        canDelete={canDelete}
+                        onDelete={handleDeleteRequest}
+                        newKeys={newKeys}
+                        rootDir={outputDir}
+                      />
+                    );
+                  })}
+                </ul>
+              ) : (
+                <p className="px-1 py-1 text-micro text-muted-foreground/70">
+                  当前会话还没有明确交付的文件
+                </p>
+              )}
             </div>
           )}
           <div className="flex-1 overflow-y-auto scrollbar-hover py-1">
+            <div className="px-2 pt-1.5 pb-1">
+              <div className="px-1 text-micro font-medium text-muted-foreground">
+                {scope === "shared" ? "工作区产物" : "全部文件"}
+              </div>
+            </div>
             <ul className="flex flex-col text-ui">
               {tree.map((node) => (
                 <TreeRow
@@ -497,6 +500,22 @@ export function WorkspacePanel({
                 />
               ))}
             </ul>
+            {scope === "shared" && tree.length === 0 ? (
+              <div className="px-3 py-3 text-micro text-muted-foreground/70">
+                工作区暂无其他产物。
+                {isTauri() && outputDir && (
+                  <Button
+                    type="button"
+                    variant="link"
+                    size="xs"
+                    onClick={handleOpenOutputDir}
+                    className="ml-1 h-auto p-0 text-micro"
+                  >
+                    打开目录
+                  </Button>
+                )}
+              </div>
+            ) : null}
             {truncated && (
               <div className="mt-2 rounded-md border border-border/50 bg-muted/30 px-2 py-1.5 text-micro text-muted-foreground">
                 仅显示最近 1000 个文件。
@@ -703,20 +722,25 @@ function TreeRow({
   const isNew = newKeys.has(fileKey(file));
 
   const handleClick = () => {
+    if (file.missing) return;
     openPreview(file, scope, sessionKey);
   };
   const handleDoubleClick = () => {
+    if (file.missing) return;
     // Single click stays on in-pane preview; double click hands the file
     // to the OS default app (file-manager muscle memory).
     if (isTauri()) void openPathWithSystemApp(file.absolute_path);
   };
   const handleOpenWithSystem = () => {
+    if (file.missing) return;
     if (isTauri()) void openPathWithSystemApp(file.absolute_path);
   };
   const handleRevealInDir = () => {
+    if (file.missing) return;
     if (isTauri()) void revealItemInDir(file.absolute_path);
   };
   const handleDelete = () => {
+    if (file.missing) return;
     onDelete(file);
   };
 
@@ -727,9 +751,11 @@ function TreeRow({
         variant="ghost"
         onClick={handleClick}
         onDoubleClick={handleDoubleClick}
+        disabled={file.missing}
         className={cn(
           "h-auto w-full justify-start gap-1.5 rounded-sm py-1 pr-2 text-left font-normal",
           "hover:bg-muted/60 hover:text-foreground",
+          file.missing && "cursor-default opacity-60",
           isActive && "bg-primary/8",
         )}
         style={{ paddingLeft: indent + 18 }}
@@ -758,11 +784,15 @@ function TreeRow({
         >
           {file.name}
         </span>
-        {file.size_human && (
+        {file.missing ? (
+          <span className="shrink-0 text-micro text-muted-foreground">
+            文件已移除
+          </span>
+        ) : file.size_human ? (
           <span className="shrink-0 text-micro text-muted-foreground">
             {file.size_human}
           </span>
-        )}
+        ) : null}
       </Button>
     </li>
   );
@@ -775,18 +805,24 @@ function TreeRow({
     <ContextMenu>
       <ContextMenuTrigger asChild>{row}</ContextMenuTrigger>
       <ContextMenuContent className="w-48">
-        <ContextMenuItem onClick={handleClick}>预览</ContextMenuItem>
-        <ContextMenuItem onClick={handleOpenWithSystem}>
+        <ContextMenuItem onClick={handleClick} disabled={file.missing}>
+          预览
+        </ContextMenuItem>
+        <ContextMenuItem
+          onClick={handleOpenWithSystem}
+          disabled={file.missing}
+        >
           系统程序打开
         </ContextMenuItem>
-        <ContextMenuItem onClick={handleRevealInDir}>
+        <ContextMenuItem onClick={handleRevealInDir} disabled={file.missing}>
           打开所在目录
         </ContextMenuItem>
-        {canDelete && (
+        {canDelete && !file.missing && (
           <>
             <ContextMenuSeparator />
             <ContextMenuItem
               onClick={handleDelete}
+              disabled={file.missing}
               className="text-destructive focus:text-destructive"
             >
               <Trash2 className="mr-2 h-4 w-4" />

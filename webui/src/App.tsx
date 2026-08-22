@@ -2,19 +2,17 @@ import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } fro
 import { invoke } from "@tauri-apps/api/core";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { useTranslation } from "react-i18next";
-import { Check, Copy, FileText, X } from "lucide-react";
+import { Check, Copy, FileText, Menu, X } from "lucide-react";
 import { DeleteConfirm } from "@/components/DeleteConfirm";
 import { RenameChatDialog } from "@/components/RenameChatDialog";
-import { Sidebar } from "@/components/Sidebar";
 import { AppRail } from "@/components/shell/AppRail";
 import { SessionListPanel } from "@/components/shell/SessionListPanel";
-import { PartnersView } from "@/components/shell/PartnersView";
+import { AgentManagementView } from "@/components/agents/AgentManagementView";
 import {
-  NewDirectDialog,
   NewRoomDialog,
 } from "@/components/shell/ConversationDialogs";
 import { MONA_AGENT_ID } from "@/components/room/AgentAvatar";
-import { useAgents } from "@/components/room/useAgents";
+import { invalidateAgents, useAgents } from "@/components/room/useAgents";
 import { useMaterialsOpenStore } from "@/lib/materials-open-store";
 import { SessionSearchDialog } from "@/components/SessionSearchDialog";
 import { QuickAskWindow } from "@/components/quick/QuickAskWindow";
@@ -40,7 +38,12 @@ import { useMdReaderStore } from "@/components/md-reader/mdReaderStore";
 
 import { useSessions } from "@/hooks/useSessions";
 import { useDeferredTitleRefresh } from "@/hooks/useDeferredTitleRefresh";
-import { useSidebarState } from "@/hooks/useSidebarState";
+import {
+  isSessionUnread,
+  markAllSessionsRead,
+  markSessionRead,
+  useSidebarState,
+} from "@/hooks/useSidebarState";
 import { ThemeProvider, useTheme } from "@/hooks/useTheme";
 import { LicenseProvider, useLicense } from "@/hooks/useLicense";
 import { LoginDialog } from "@/components/LoginDialog";
@@ -55,7 +58,7 @@ import {
   resetGatewayBaseUrl,
   saveSecret,
 } from "@/lib/bootstrap";
-import { removeProject, resetApiBase } from "@/lib/api";
+import { fetchSettings, removeProject, resetApiBase } from "@/lib/api";
 import { browserHideTabsExcept } from "@/lib/browser-ipc";
 import { deriveTitle } from "@/lib/format";
 import { MonaClient } from "@/lib/mona-client";
@@ -80,10 +83,9 @@ type BootState =
 const SIDEBAR_STORAGE_KEY = "mona-webui.sidebar";
 const COMPLETED_RUNS_STORAGE_KEY = "mona-webui.sidebar.completed-runs.v1";
 const RESTART_STARTED_KEY = "mona-webui.restartStartedAt";
-const SIDEBAR_WIDTH = 220;
 const TOKEN_REFRESH_MARGIN_MS = 30_000;
 const TOKEN_REFRESH_MIN_DELAY_MS = 5_000;
-type ShellView = "chat" | "partners" | "settings" | "note" | "ssh" | "db" | "doc" | "email" | "schedule" | "system" | "profile";
+type ShellView = "chat" | "settings" | "note" | "ssh" | "db" | "doc" | "email" | "schedule" | "system" | "profile" | "stock";
 
 export function openNewBrowserTab(
   setView: (view: ShellView) => void,
@@ -137,6 +139,12 @@ const PlanningView = lazy(() =>
 const ProfileView = lazy(() =>
   import("@/components/profile/ProfileView").then((module) => ({
     default: module.ProfileView,
+  })),
+);
+
+const StockView = lazy(() =>
+  import("@/components/stock/StockView").then((module) => ({
+    default: module.StockView,
   })),
 );
 
@@ -558,20 +566,33 @@ function Shell({
     setPromoClosed(true);
     try { localStorage.setItem(promoKey, "1"); } catch { /* ignore */ }
   };
-  const { sessions, loading, refresh, createChat, deleteChat } = useSessions();
-  const { state: sidebarState, update: updateSidebarState } =
-    useSidebarState(sessions, !loading);
+  const { sessions, loading, loaded: sessionsLoaded, refresh, createChat, deleteChat } = useSessions();
+  const {
+    state: sidebarState,
+    loading: sidebarStateLoading,
+    update: updateSidebarState,
+  } =
+    useSidebarState(sessions, sessionsLoaded);
   const agentsById = useAgents(token);
   const partnerAgents = useMemo(() => [...agentsById.values()], [agentsById]);
-  const [directDialogOpen, setDirectDialogOpen] = useState(false);
+  useEffect(() => {
+    if (!client) return;
+    return client.onAgentsUpdated(() => invalidateAgents());
+  }, [client]);
   const [roomDialogOpen, setRoomDialogOpen] = useState(false);
   const [roomInitialAgents, setRoomInitialAgents] = useState<string[] | undefined>(undefined);
   const [creatingConversation, setCreatingConversation] = useState(false);
   const [activeKey, setActiveKey] = useState<string | null>(null);
+  const [managedAgentId, setManagedAgentId] = useState<string | null>(null);
   const [createNoteOnOpen, setCreateNoteOnOpen] = useState(false);
   const [view, setView] = useState<ShellView>(
     new URLSearchParams(window.location.search).get("noteId") ? "note" : "chat",
   );
+  // 首次进入 note 后保持挂载，让网页转笔记可在切换模块后继续完成。
+  const [noteMounted, setNoteMounted] = useState(view === "note");
+  useEffect(() => {
+    if (view === "note") setNoteMounted(true);
+  }, [view]);
   // 首次进入 system 后保持挂载，避免存储扫描过程中切走再切回丢失状态
   const [systemMounted, setSystemMounted] = useState(view === "system");
   useEffect(() => {
@@ -646,6 +667,19 @@ function Shell({
   const [updateAvailable, setUpdateAvailable] = useState<UpdateCheckResult | null>(null);
   const [updateDialogTrigger, setUpdateDialogTrigger] = useState(0);
   const [sidebarModules, setSidebarModules] = useState<SidebarModuleConfig[] | null>(null);
+  // 股票模块开关（StockConfig.enabled）：null=未加载；关闭时隐藏导航入口与 StockView
+  const [stockEnabled, setStockEnabled] = useState<boolean | null>(null);
+  // 行情轮询间隔（StockConfig.quote_refresh_sec，秒）：null=未加载用默认 30s
+  const [stockQuoteRefreshSec, setStockQuoteRefreshSec] = useState<number | null>(null);
+  // 自动复盘配置（与股票模块开关独立）
+  const [stockAutoReviewEnabled, setStockAutoReviewEnabled] = useState(false);
+  // 复盘时间/范围（StockConfig.review_time/review_scope，股票工作台 Hero 展示）
+  const [stockReviewTime, setStockReviewTime] = useState<string | null>(null);
+  const [stockReviewScope, setStockReviewScope] = useState<"all" | "focus" | null>(null);
+  // 复盘通知点击聚焦的 runId（T20）：StockView 消费后清空
+  const [stockFocusRunId, setStockFocusRunId] = useState<string | null>(null);
+  // 私聊确认卡带入的标的（T22d）：StockView 自选命中后自动启动深度投研
+  const [stockAutoRunSymbol, setStockAutoRunSymbol] = useState<string | null>(null);
   const runningChatIdsRef = useRef<Set<string>>(new Set());
   const sidebarShortcutsRef = useRef<SidebarShortcuts>({
     mona: "Alt+1",
@@ -869,7 +903,62 @@ function Shell({
     };
   }, [sessions, activeKey]);
   const runningChatIdList = useMemo(() => Array.from(runningChatIds), [runningChatIds]);
-  const completedChatIdList = useMemo(() => Array.from(completedChatIds), [completedChatIds]);
+  const unreadSessionKeys = useMemo(
+    () => sessions
+      .filter((session) => isSessionUnread(
+        session,
+        sidebarState.last_read_at_by_key[session.key],
+      ))
+      .map((session) => session.key),
+    [sessions, sidebarState.last_read_at_by_key],
+  );
+  const onMarkAllRead = useCallback(() => {
+    void updateSidebarState((current) => markAllSessionsRead(current, sessions));
+  }, [sessions, updateSidebarState]);
+  const messageAttentionCount = useMemo(() => {
+    const attentionKeys = new Set(unreadSessionKeys);
+    for (const session of sessions) {
+      if (session.waitingApproval) attentionKeys.add(session.key);
+    }
+    return attentionKeys.size;
+  }, [sessions, unreadSessionKeys]);
+
+  useEffect(() => {
+    if (
+      sidebarStateLoading
+      || !activeSession?.previewAt
+      || activeBrowserTab.type !== "mona"
+      || view !== "chat"
+      || !isSessionUnread(
+        activeSession,
+        sidebarState.last_read_at_by_key[activeSession.key],
+      )
+    ) {
+      return;
+    }
+
+    const markIfVisible = () => {
+      if (document.visibilityState !== "visible" || !document.hasFocus()) return;
+      void updateSidebarState((current) =>
+        markSessionRead(current, activeSession.key, activeSession.previewAt),
+      );
+    };
+
+    markIfVisible();
+    window.addEventListener("focus", markIfVisible);
+    document.addEventListener("visibilitychange", markIfVisible);
+    return () => {
+      window.removeEventListener("focus", markIfVisible);
+      document.removeEventListener("visibilitychange", markIfVisible);
+    };
+  }, [
+    activeBrowserTab.type,
+    activeSession,
+    sidebarState.last_read_at_by_key,
+    sidebarStateLoading,
+    updateSidebarState,
+    view,
+  ]);
 
   useEffect(() => {
     if (loading) return;
@@ -913,10 +1002,6 @@ function Shell({
     });
   }, [client, loading, sessions]);
 
-  const closeMobileSidebar = useCallback(() => {
-    setMobileSidebarOpen(false);
-  }, []);
-
   const toggleSidebar = useCallback(() => {
     const isDesktop =
       typeof window !== "undefined" &&
@@ -938,6 +1023,7 @@ function Shell({
   }, [switchBrowserTab]);
 
   const onGoHome = useCallback(() => {
+    setManagedAgentId(null);
     setView("chat");
     switchToMonaTab();
     setMobileSidebarOpen(false);
@@ -1038,8 +1124,8 @@ function Shell({
     setMobileSidebarOpen(false);
   }, [switchToMonaTab]);
 
-  const onOpenPartners = useCallback(() => {
-    setView("partners");
+  const onOpenStock = useCallback(() => {
+    setView("stock");
     switchToMonaTab();
     setMobileSidebarOpen(false);
   }, [switchToMonaTab]);
@@ -1082,6 +1168,7 @@ function Shell({
   );
 
   const onNewChat = useCallback(() => {
+    setManagedAgentId(null);
     setActiveKey(null);
     setView("chat");
     switchToMonaTab();
@@ -1093,7 +1180,6 @@ function Shell({
     async (agentId: string) => {
       if (creatingConversation) return;
       if (agentId === MONA_AGENT_ID) {
-        setDirectDialogOpen(false);
         onNewChat();
         return;
       }
@@ -1104,7 +1190,7 @@ function Shell({
         if (!chatId) return;
         await client.createDirectConversation(chatId, agentId);
         await refresh();
-        setDirectDialogOpen(false);
+        setManagedAgentId(null);
       } catch (e) {
         console.error("Failed to create direct conversation", e);
       } finally {
@@ -1139,6 +1225,14 @@ function Shell({
     setRoomDialogOpen(true);
   }, []);
 
+  const onSelectAgent = useCallback((agentId: string) => {
+    setManagedAgentId(agentId);
+    setActiveKey(null);
+    setView("chat");
+    switchToMonaTab();
+    setMobileSidebarOpen(false);
+  }, [switchToMonaTab]);
+
   const onSelectChat = useCallback(
     (key: string) => {
       const selectedChatId = sessions.find((session) => session.key === key)?.chatId;
@@ -1150,6 +1244,7 @@ function Shell({
           return next;
         });
       }
+      setManagedAgentId(null);
       setActiveKey(key);
       setView("chat");
       switchToMonaTab();
@@ -1256,19 +1351,6 @@ function Shell({
     [token, refresh],
   );
 
-  const onUpdateSidebarView = useCallback(
-    (viewUpdate: Partial<typeof sidebarState.view>) => {
-      void updateSidebarState((current) => ({
-        ...current,
-        view: {
-          ...current.view,
-          ...viewUpdate,
-        },
-      }));
-    },
-    [updateSidebarState],
-  );
-
   const onOpenSessionSearch = useCallback(() => {
     setMobileSidebarOpen(false);
     setSessionSearchOpen(true);
@@ -1301,13 +1383,86 @@ function Shell({
       // 启动默认模块：仅在初次启动且没有 ?noteId 深链时应用
       if (!new URLSearchParams(window.location.search).get("noteId")) {
         const dv = typeof s.default_view === "string" ? s.default_view : "";
-        const VALID_VIEWS: ShellView[] = ["chat", "partners", "note", "doc", "ssh", "email", "schedule", "db", "system", "profile", "settings"];
+        const VALID_VIEWS: ShellView[] = ["chat", "note", "doc", "ssh", "email", "schedule", "db", "system", "profile", "stock", "settings"];
         if (dv && VALID_VIEWS.includes(dv as ShellView)) {
           setView(dv as ShellView);
         }
       }
     }).catch(() => {});
   }, []);
+
+  // 股票模块开关 + 行情轮询间隔：启动时拉取一次，并订阅设置页保存后的变更事件
+  useEffect(() => {
+    if (!token) return;
+    let cancelled = false;
+    fetchSettings(token)
+      .then((payload) => {
+        if (cancelled) return;
+        setStockEnabled(Boolean(payload.stock?.enabled));
+        if (typeof payload.stock?.quote_refresh_sec === "number") {
+          setStockQuoteRefreshSec(payload.stock.quote_refresh_sec);
+        }
+        setStockAutoReviewEnabled(Boolean(payload.stock?.auto_review_enabled));
+        if (typeof payload.stock?.review_time === "string") {
+          setStockReviewTime(payload.stock.review_time);
+        }
+        if (payload.stock?.review_scope === "all" || payload.stock?.review_scope === "focus") {
+          setStockReviewScope(payload.stock.review_scope);
+        }
+      })
+      .catch(() => {
+        if (!cancelled) setStockEnabled(false);
+      });
+    const onStockSettingsChanged = (
+      event: Event,
+    ) => {
+      const detail = (
+        event as CustomEvent<{
+          enabled?: boolean;
+          quoteRefreshSec?: number;
+          reviewTime?: string;
+          reviewScope?: "all" | "focus";
+          autoReviewEnabled?: boolean;
+        }>
+      ).detail;
+      setStockEnabled(Boolean(detail?.enabled));
+      if (typeof detail?.quoteRefreshSec === "number") {
+        setStockQuoteRefreshSec(detail.quoteRefreshSec);
+      }
+      if (typeof detail?.reviewTime === "string") {
+        setStockReviewTime(detail.reviewTime);
+      }
+      if (detail?.reviewScope === "all" || detail?.reviewScope === "focus") {
+        setStockReviewScope(detail.reviewScope);
+      }
+      if (typeof detail?.autoReviewEnabled === "boolean") {
+        setStockAutoReviewEnabled(detail.autoReviewEnabled);
+      }
+    };
+    window.addEventListener("mona-stock-settings-changed", onStockSettingsChanged);
+    return () => {
+      cancelled = true;
+      window.removeEventListener("mona-stock-settings-changed", onStockSettingsChanged);
+    };
+  }, [token]);
+
+  // 模块被关闭后仍停留在 stock 视图时（如残留的 default_view）回退到会话
+  useEffect(() => {
+    if (stockEnabled === false && view === "stock") setView("chat");
+  }, [stockEnabled, view]);
+
+  // 私聊确认卡（T22d）：跳转股票工作台并自动启动单股深度投研
+  useEffect(() => {
+    const onOpenStockEvent = (event: Event) => {
+      const detail = (event as CustomEvent<{ symbol?: string }>).detail;
+      if (detail?.symbol) setStockAutoRunSymbol(detail.symbol);
+      onOpenStock();
+    };
+    window.addEventListener("mona-open-stock", onOpenStockEvent);
+    return () => {
+      window.removeEventListener("mona-open-stock", onOpenStockEvent);
+    };
+  }, [onOpenStock]);
 
   useEffect(() => {
     if (!isTauri()) return;
@@ -1381,7 +1536,7 @@ function Shell({
           }
           return;
         }
-        if (action === "open-email" || action === "open-schedule") {
+        if (action === "open-email" || action === "open-schedule" || action === "open-stock") {
           try {
             const { getCurrentWindow } = await import("@tauri-apps/api/window");
             const mainWin = getCurrentWindow();
@@ -1393,6 +1548,11 @@ function Shell({
           }
           if (action === "open-email") onOpenEmail();
           else if (action === "open-schedule") onOpenSchedule();
+          else if (action === "open-stock") {
+            // 股票复盘通知（T20）：携带 runId 时聚焦对应复盘简报。
+            setStockFocusRunId((data as { runId?: string } | undefined)?.runId ?? null);
+            onOpenStock();
+          }
         }
       });
       if (cancelled) {
@@ -1409,7 +1569,7 @@ function Shell({
       cancelled = true;
       unlisteners.forEach((fn) => fn());
     };
-  }, [onOpenNote, onOpenSSHAndNew, refresh, addMdReaderTab, onOpenEmail, onOpenSchedule]);
+  }, [onOpenNote, onOpenSSHAndNew, refresh, addMdReaderTab, onOpenEmail, onOpenSchedule, onOpenStock]);
 
   // 监听浏览器 WebView 内的 Ctrl+J/Ctrl+H 快捷键，打开下载/历史记录页面
   useEffect(() => {
@@ -1614,47 +1774,43 @@ function Shell({
       : t("app.documentTitle.base");
   }, [activeSession, headerTitle, i18n.resolvedLanguage, t, view]);
 
-  const sidebarProps = {
+  const sessionListProps = {
     sessions,
     activeKey,
     loading,
-    onNewChat,
     onSelect: onSelectChat,
+    onSelectAgent,
     onRequestDelete: (key: string, label: string) =>
       setPendingDelete({ key, label }),
     onTogglePin,
     onRequestRename,
     onToggleArchive,
-    onOpenSettings,
-    onOpenLogin,
-    onOpenSubscribe,
-    onOpenSearch: onOpenSessionSearch,
-    onGoHome,
-    onOpenNote,
-    onOpenDoc,
-    onOpenSSH,
-    onOpenDb,
-    onOpenEmail,
-    onOpenSchedule,
-    onOpenSystem,
-    onOpenProfile,
+    onMarkAllRead,
     onToggleArchived,
-    onUpdateView: onUpdateSidebarView,
     pinnedKeys: sidebarState.pinned_keys,
     archivedKeys: sidebarState.archived_keys,
     titleOverrides: sidebarState.title_overrides,
     runningChatIds: runningChatIdList,
-    completedChatIds: completedChatIdList,
-    viewState: sidebarState.view,
-    updateAvailable: !!updateAvailable,
-    onStartUpdate: () => setUpdateDialogTrigger((n) => n + 1),
+    unreadKeys: unreadSessionKeys,
     showArchived: sidebarState.view.show_archived,
     archivedCount: sidebarState.archived_keys.length,
     onRemoveProject,
     onCreateTask,
-    modules: sidebarModules ?? undefined,
+    onNewChat: () => {
+      setMobileSidebarOpen(false);
+      onNewChat();
+    },
+    onStartDirect: (agentId: string) => {
+      setMobileSidebarOpen(false);
+      void onStartDirect(agentId);
+    },
+    onNewRoom: () => {
+      setMobileSidebarOpen(false);
+      onOpenNewRoom();
+    },
   };
   const showMainSidebar = true;
+  const showSessionList = showMainSidebar && !isBrowserTabActive;
 
   return (
     <ThemeProvider theme={theme}>
@@ -1714,7 +1870,6 @@ function Shell({
                 activeView={view}
                 onGoHome={onGoHome}
                 onOpenMessages={onGoHome}
-                onOpenPartners={onOpenPartners}
                 onOpenNote={onOpenNote}
                 onOpenDoc={onOpenDoc}
                 onOpenSSH={onOpenSSH}
@@ -1723,20 +1878,25 @@ function Shell({
                 onOpenSchedule={onOpenSchedule}
                 onOpenSystem={onOpenSystem}
                 onOpenProfile={onOpenProfile}
+                onOpenStock={onOpenStock}
                 onOpenSettings={onOpenSettings}
                 onOpenLogin={onOpenLogin}
                 onOpenSubscribe={onOpenSubscribe}
                 onStartUpdate={() => setUpdateDialogTrigger((n) => n + 1)}
                 updateAvailable={!!updateAvailable}
+                messageAttentionCount={messageAttentionCount}
                 runningChatIds={runningChatIdList}
                 modules={sidebarModules ?? undefined}
+                moduleAvailability={{ stock: stockEnabled === true }}
+                theme={theme}
+                onToggleTheme={toggle}
               />
             </aside>
           ) : null}
 
-          {/* 消息会话列表列 / 伙伴视图移入主内容圆角卡片内（见下方 surface） */}
+          {/* 消息会话列表列 */}
 
-          {!browserFullscreen && showMainSidebar ? (
+          {!browserFullscreen && showSessionList ? (
             <Sheet
               open={mobileSidebarOpen}
               onOpenChange={(open) => setMobileSidebarOpen(open)}
@@ -1745,15 +1905,10 @@ function Shell({
                 side="left"
                 showCloseButton={false}
                 aria-describedby={undefined}
-                className="p-0 lg:hidden"
-                style={{ width: SIDEBAR_WIDTH, maxWidth: SIDEBAR_WIDTH }}
+                className="w-[min(320px,100vw)] max-w-[100vw] p-0 lg:hidden"
               >
                 <SheetTitle className="sr-only">{t("sidebar.navigation")}</SheetTitle>
-                <Sidebar
-                  {...sidebarProps}
-                  onCollapse={closeMobileSidebar}
-                  containActionMenus
-                />
+                <SessionListPanel {...sessionListProps} className="w-full border-r-0" />
               </SheetContent>
             </Sheet>
           ) : null}
@@ -1767,57 +1922,32 @@ function Shell({
               )}
             >
               {/* 消息 Tab 的会话列表列（仅 chat 视图显示，包在圆角卡片内） */}
-              {!browserFullscreen && showMainSidebar && view === "chat" ? (
+              {!browserFullscreen && showSessionList && view === "chat" ? (
                 <SessionListPanel
-                  sessions={sessions}
-                  activeKey={activeKey}
-                  loading={loading}
-                  onSelect={onSelectChat}
-                  onRequestDelete={(key, label) => setPendingDelete({ key, label })}
-                  onTogglePin={onTogglePin}
-                  onRequestRename={onRequestRename}
-                  onToggleArchive={onToggleArchive}
-                  pinnedKeys={sidebarState.pinned_keys}
-                  archivedKeys={sidebarState.archived_keys}
-                  titleOverrides={sidebarState.title_overrides}
-                  runningChatIds={runningChatIdList}
-                  completedChatIds={completedChatIdList}
-                  viewState={sidebarState.view}
-                  showArchived={sidebarState.view.show_archived}
-                  archivedCount={sidebarState.archived_keys.length}
-                  onToggleArchived={onToggleArchived}
-                  onRemoveProject={onRemoveProject}
-                  onCreateTask={onCreateTask}
-                  onOpenSearch={onOpenSessionSearch}
-                  onNewChat={onNewChat}
-                  onNewDirect={() => setDirectDialogOpen(true)}
-                  onNewRoom={() => onOpenNewRoom()}
-                />
-              ) : null}
-
-              {/* 伙伴视图：列表列 + 详情主区（包在圆角卡片内） */}
-              {!browserFullscreen && view === "partners" ? (
-                <PartnersView
-                  agents={partnerAgents}
-                  onStartDirect={(agentId) => void onStartDirect(agentId)}
-                  onCreateRoom={(agentId) => onOpenNewRoom(agentId)}
+                  {...sessionListProps}
+                  className="hidden lg:flex"
                 />
               ) : null}
 
               <main
                 className={cn(
                   "relative isolate flex h-full min-w-0 flex-1 flex-col overflow-hidden bg-background",
-                  view === "partners" && !browserFullscreen && "hidden",
                 )}
               >
               <div
                 className={cn(
                   "absolute inset-0 flex flex-col bg-background",
-                  (view === "settings" || view === "note" || view === "ssh" || view === "db" || view === "doc" || view === "email" || view === "schedule" || view === "system" || view === "profile" || view === "partners" || activeBrowserTab.type !== "mona") &&
+                  (view === "settings" || view === "note" || view === "ssh" || view === "db" || view === "doc" || view === "email" || view === "schedule" || view === "system" || view === "profile" || view === "stock" || activeBrowserTab.type !== "mona") &&
                     "invisible pointer-events-none",
                 )}
               >
-                {client ? (
+                {managedAgentId ? (
+                  <AgentManagementView
+                    agentId={managedAgentId}
+                    onBack={() => setManagedAgentId(null)}
+                    onStartDirect={() => void onStartDirect(managedAgentId)}
+                  />
+                ) : client ? (
                   <ThreadShell
                     session={activeSession}
                     title={headerTitle}
@@ -1832,23 +1962,38 @@ function Shell({
                     onTurnEnd={onTurnEnd}
                     queuedPrompt={queuedAgentPrompt}
                     onQueuedPromptConsumed={() => setQueuedAgentPrompt(null)}
-                    theme={theme}
-                    onToggleTheme={toggle}
                     hideSidebarToggleOnDesktop
-                    showHeader={false}
+                    showHeader
                     onModelNameChange={onModelNameChange}
                     onOpenSettings={onOpenSettings}
                   />
                 ) : (
-                  <RuntimePlaceholder
-                    status={runtimeStatus}
-                    message={runtimeError}
-                    onRetry={onRetryConnection}
-                  />
+                  <div className="flex h-full min-h-0 flex-col">
+                    <div className="flex h-12 shrink-0 items-center gap-2 border-b border-border/40 px-3 lg:hidden">
+                      <Button
+                        variant="ghost"
+                        size="icon"
+                        aria-label={t("thread.header.toggleSidebar")}
+                        onClick={toggleSidebar}
+                        className="h-8 w-8 rounded-lg text-muted-foreground"
+                      >
+                        <Menu className="h-4 w-4" />
+                      </Button>
+                      <span className="truncate text-[13px] font-medium">{headerTitle}</span>
+                    </div>
+                    <RuntimePlaceholder
+                      status={runtimeStatus}
+                      message={runtimeError}
+                      onRetry={onRetryConnection}
+                    />
+                  </div>
                 )}
               </div>
-              {view === "note" ? (
-                <div className={cn("absolute inset-0 flex flex-col", isBrowserTabActive && "hidden")}>
+              {noteMounted && (
+                <div className={cn(
+                  "absolute inset-0 flex flex-col",
+                  (view !== "note" || isBrowserTabActive) && "invisible pointer-events-none",
+                )}>
                   <Suspense fallback={<ModuleLoading title="正在打开笔记" />}>
                     <NotesView
                       onOpenSubscribe={onOpenSubscribe}
@@ -1858,7 +2003,7 @@ function Shell({
                     />
                   </Suspense>
                 </div>
-              ) : null}
+              )}
               {view === "settings" && (
                 <div className={cn("absolute inset-0 flex flex-col", isBrowserTabActive && "hidden")}>
                   <SettingsView
@@ -1930,6 +2075,27 @@ function Shell({
                 <div className={cn("absolute inset-0 flex flex-col", isBrowserTabActive && "hidden")}>
                   <Suspense fallback={<ModuleLoading title="正在打开用户画像" />}>
                     <ProfileView onAskMona={onTriggerAgent} />
+                  </Suspense>
+                </div>
+              )}
+              {view === "stock" && stockEnabled === true && (
+                <div className={cn("absolute inset-0 flex flex-col", isBrowserTabActive && "hidden")}>
+                  <Suspense fallback={<ModuleLoading title="正在打开股票工作台" />}>
+                    <StockView
+                      focusRunId={stockFocusRunId}
+                      onConsumeFocusRun={() => setStockFocusRunId(null)}
+                      autoRunSymbol={stockAutoRunSymbol}
+                      onConsumeAutoRun={() => setStockAutoRunSymbol(null)}
+                      quoteRefreshSecMs={
+                        stockQuoteRefreshSec != null
+                          ? stockQuoteRefreshSec * 1000
+                          : undefined
+                      }
+                      reviewTime={stockReviewTime ?? undefined}
+                      reviewScope={stockReviewScope ?? undefined}
+                      autoReviewEnabled={stockAutoReviewEnabled}
+                      onOpenSettings={() => onOpenSettings("stock")}
+                    />
                   </Suspense>
                 </div>
               )}
@@ -2064,13 +2230,6 @@ function Shell({
           title={pendingRename?.label ?? ""}
           onCancel={() => setPendingRename(null)}
           onConfirm={onConfirmRename}
-        />
-        <NewDirectDialog
-          open={directDialogOpen}
-          onOpenChange={setDirectDialogOpen}
-          agents={partnerAgents}
-          submitting={creatingConversation}
-          onSubmit={(agentId) => void onStartDirect(agentId)}
         />
         <NewRoomDialog
           open={roomDialogOpen}

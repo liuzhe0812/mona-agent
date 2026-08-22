@@ -11,6 +11,7 @@ import { useTranslation } from "react-i18next";
 import { ImageLightbox } from "@/components/ImageLightbox";
 import { MarkdownText, preloadMarkdownText } from "@/components/MarkdownText";
 import { DeliveredFileCardList } from "@/components/deliver/DeliveredFileCard";
+import { Button } from "@/components/ui/button";
 import {
   ContextMenu,
   ContextMenuContent,
@@ -58,12 +59,83 @@ interface MessageBubbleProps {
   message: UIMessage;
   /** When false, hide the assistant reply copy button (mid-turn text before more agent activity). Default true. */
   showAssistantCopyAction?: boolean;
+  /** Render assistant turns as left-aligned IM bubbles for collaboration groups. */
+  isGroupChat?: boolean;
+}
+
+const LONG_REPLY_CHAR_THRESHOLD = 1_600;
+const LONG_REPLY_LINE_THRESHOLD = 24;
+
+/** 确认卡标记行协议（T22d，design §10.4）：
+ *  `[[stock-deep-research XSHG:600519 名称?]]`，A股分析师在私聊中
+ *  输出该标记行，客户端渲染为「启动深度投研」确认卡。 */
+const STOCK_CONFIRM_RE =
+  /^\[\[stock-deep-research (XSHG|XSHE|BJSE):(\d{6})(?:\s+([^\]\n]+?))?\]\]$/;
+
+type StockConfirmSegment =
+  | { type: "text"; text: string }
+  | { type: "card"; instrumentId: string; name: string };
+
+function parseStockConfirmSegments(content: string): StockConfirmSegment[] {
+  const segments: StockConfirmSegment[] = [];
+  let buf: string[] = [];
+  for (const line of content.split("\n")) {
+    const match = STOCK_CONFIRM_RE.exec(line.trim());
+    if (match) {
+      if (buf.length > 0) {
+        segments.push({ type: "text", text: buf.join("\n") });
+        buf = [];
+      }
+      segments.push({
+        type: "card",
+        instrumentId: `${match[1]}:${match[2]}`,
+        name: match[3]?.trim() || `${match[1]}:${match[2]}`,
+      });
+    } else {
+      buf.push(line);
+    }
+  }
+  if (buf.length > 0) segments.push({ type: "text", text: buf.join("\n") });
+  return segments;
+}
+
+/** 「启动深度投研」确认卡：点击经 mona-open-stock 事件跳转股票工作台
+ *  并自动启动单股研究（与 mona-stock-settings-changed 同模式）。 */
+function StockConfirmCard({
+  instrumentId,
+  name,
+}: {
+  instrumentId: string;
+  name: string;
+}) {
+  return (
+    <div className="my-2 flex items-center gap-3 rounded-lg border px-3 py-2.5">
+      <div className="min-w-0 flex-1">
+        <div className="text-ui">{name}</div>
+        <div className="text-micro text-muted-foreground">
+          将由 6 个 Agent 协作完成深度研究（3 位分析师 → 多空辩论 → 主席汇总）
+        </div>
+      </div>
+      <Button
+        size="sm"
+        onClick={() =>
+          window.dispatchEvent(
+            new CustomEvent("mona-open-stock", {
+              detail: { symbol: instrumentId },
+            }),
+          )
+        }
+      >
+        启动深度投研
+      </Button>
+    </div>
+  );
 }
 
 /**
  * Render a single message. Following agent-chat-ui: user turns are a rounded
- * "pill" right-aligned with a muted fill; assistant turns render as bare
- * markdown so prose/code read like a document rather than a chat bubble.
+ * "pill" right-aligned with a muted fill; direct assistant turns render as
+ * bare markdown while group-chat turns use a neutral left-aligned bubble.
  * Each turn fades+slides in for a touch of motion polish.
  *
  * Trace rows (tool-call hints, progress breadcrumbs) render as a subdued
@@ -72,13 +144,19 @@ interface MessageBubbleProps {
 export function MessageBubble({
   message,
   showAssistantCopyAction = true,
+  isGroupChat = false,
 }: MessageBubbleProps) {
   const { t } = useTranslation();
   const [copied, setCopied] = useState(false);
   const [saved, setSaved] = useState(false);
   const copyResetRef = useRef<number | null>(null);
   const saveResetRef = useRef<number | null>(null);
+  const [expanded, setExpanded] = useState(false);
   const baseAnim = "animate-in fade-in-0 slide-in-from-bottom-1 duration-300";
+
+  useEffect(() => {
+    setExpanded(false);
+  }, [message.id, message.isStreaming]);
 
   useEffect(() => {
     return () => {
@@ -187,8 +265,59 @@ export function MessageBubble({
     && !message.isStreaming
     && (!empty || hasReasoning || media.length > 0);
   const showAssistantFooterRow = showCopyButton || showSaveButton || showLatencyFooter;
+  const stockConfirmSegments = message.content.includes("[[stock-deep-research")
+    ? parseStockConfirmSegments(message.content)
+    : null;
+  const hasStockConfirmCard = stockConfirmSegments?.some((segment) => segment.type === "card") ?? false;
+  const canCollapseReply =
+    isGroupChat
+    && message.role === "assistant"
+    && !message.isStreaming
+    && !empty
+    && !hasStockConfirmCard
+    && (
+      message.content.length > LONG_REPLY_CHAR_THRESHOLD
+      || message.content.split(/\r?\n/).length > LONG_REPLY_LINE_THRESHOLD
+    );
+  const replyCollapsed = canCollapseReply && !expanded;
+  const renderedContent = stockConfirmSegments ? (
+    stockConfirmSegments.map((seg, i) =>
+      seg.type === "card" ? (
+        <StockConfirmCard
+          key={`card-${i}`}
+          instrumentId={seg.instrumentId}
+          name={seg.name}
+        />
+      ) : seg.text.trim() ? (
+        <MarkdownText key={`text-${i}`} streaming={!!message.isStreaming}>
+          {seg.text}
+        </MarkdownText>
+      ) : null,
+    )
+  ) : (
+    <MarkdownText streaming={!!message.isStreaming}>{message.content}</MarkdownText>
+  );
   return (
-    <div className={cn("w-full min-w-0 text-[15px]", baseAnim)} style={{ lineHeight: "var(--cjk-line-height)" }}>
+    <div
+      className={cn(
+        "w-full min-w-0 text-[15px]",
+        isGroupChat && "w-fit max-w-[min(85%,48rem)] self-start",
+        baseAnim,
+      )}
+      style={{ lineHeight: "var(--cjk-line-height)" }}
+    >
+      <div
+        className={cn(
+          isGroupChat && "relative rounded-2xl rounded-tl-md border border-border/70 bg-card/80 px-4 py-3 shadow-sm",
+        )}
+      >
+      {isGroupChat ? (
+        <span
+          aria-hidden
+          data-testid="group-bubble-tail"
+          className="pointer-events-none absolute -left-1.5 top-3 h-3 w-3 rotate-45 border-b border-l border-border/70 bg-card/80"
+        />
+      ) : null}
       {hasReasoning ? (
         <ReasoningBubble text={reasoning} streaming={reasoningStreaming} hasBodyBelow={!empty} />
       ) : null}
@@ -196,7 +325,18 @@ export function MessageBubble({
         <TypingDots />
       ) : empty && message.isStreaming ? null : (
         <>
-          <MarkdownText streaming={!!message.isStreaming}>{message.content}</MarkdownText>
+          <div className={cn("relative", replyCollapsed && "max-h-96 overflow-hidden")}>
+            {renderedContent}
+            {replyCollapsed ? (
+              <div
+                aria-hidden
+                className={cn(
+                  "pointer-events-none absolute inset-x-0 bottom-0 h-16 bg-gradient-to-t from-background via-background/90 to-transparent",
+                  isGroupChat && "from-card via-card/90",
+                )}
+              />
+            ) : null}
+          </div>
           {showDeliveredFiles ? (
             <DeliveredFileCardList
               files={message.deliveredFiles!}
@@ -204,6 +344,16 @@ export function MessageBubble({
             />
           ) : null}
           {media.length > 0 ? <MessageMedia media={media} align="left" /> : null}
+          {canCollapseReply ? (
+            <button
+              type="button"
+              aria-expanded={!replyCollapsed}
+              onClick={() => setExpanded((value) => !value)}
+              className="mt-2 rounded-md px-1.5 py-1 text-xs font-medium text-muted-foreground transition-colors hover:bg-muted/60 hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+            >
+              {replyCollapsed ? t("message.showAll") : t("message.collapse")}
+            </button>
+          ) : null}
           {showAssistantFooterRow ? (
             <div className="mt-2 flex min-h-8 flex-wrap items-center gap-x-2 gap-y-1 text-muted-foreground">
               {showCopyButton ? (
@@ -258,6 +408,7 @@ export function MessageBubble({
           ) : null}
         </>
       )}
+      </div>
     </div>
   );
 }

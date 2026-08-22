@@ -34,7 +34,7 @@ function KindIcon({ name }: { name: string }) {
 
 interface DeliveredFileCardProps {
   file: DeliveredFile;
-  /** Preview scope: ``shared`` resolves under ``<workspace>/output/``;
+  /** Preview scope: ``shared`` resolves under the active Agent output;
    *  ``project`` resolves under the session's bound workspace. */
   scope?: PreviewScope;
   /** Required when ``scope === "project"``. */

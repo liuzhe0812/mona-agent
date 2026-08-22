@@ -1,4 +1,4 @@
-﻿import i18n, { currentLocale } from "@/i18n";
+import i18n, { currentLocale } from "@/i18n";
 
 const LOW_INFORMATION_TITLE_PREVIEWS = new Set([
   "hi",
@@ -99,6 +99,48 @@ export function fmtDateTime(
 ): string {
   const date = parseDate(value);
   return date ? dateTimeFormatter(activeLocale(locale)).format(date) : "";
+}
+
+const SESSION_LIST_MINUTE_MS = 60_000;
+const SESSION_LIST_HOUR_MS = 60 * SESSION_LIST_MINUTE_MS;
+const SESSION_LIST_DAY_MS = 24 * SESSION_LIST_HOUR_MS;
+
+/** Session-list timestamp (session-list redesign §11): exactly one rule
+ *  matches at a time — under 1h "12分钟前", today "14:30", yesterday "昨天",
+ *  within 7 days "星期三", earlier this year "7/30", older "2025/12/31".
+ *  Never mixes granularities like "5天前"/"2周前". */
+export function sessionListTime(
+  value: string | number | null | undefined,
+  locale?: string,
+): string {
+  const date = parseDate(value);
+  if (!date) return "";
+  const ts = date.getTime();
+  const loc = activeLocale(locale);
+  const now = new Date();
+  const diff = now.getTime() - ts;
+  if (diff >= 0 && diff < SESSION_LIST_HOUR_MS) {
+    const minutes = Math.max(1, Math.floor(diff / SESSION_LIST_MINUTE_MS));
+    return new Intl.RelativeTimeFormat(loc, { numeric: "always" }).format(-minutes, "minute");
+  }
+  const startOfToday = new Date(now.getFullYear(), now.getMonth(), now.getDate()).getTime();
+  if (ts >= startOfToday) {
+    return new Intl.DateTimeFormat(loc, {
+      hour: "2-digit",
+      minute: "2-digit",
+      hourCycle: "h23",
+    }).format(date);
+  }
+  if (ts >= startOfToday - SESSION_LIST_DAY_MS) {
+    return relativeTimeFormatter(loc).format(-1, "day");
+  }
+  if (diff < 7 * SESSION_LIST_DAY_MS) {
+    return new Intl.DateTimeFormat(loc, { weekday: "long" }).format(date);
+  }
+  const month = date.getMonth() + 1;
+  const day = date.getDate();
+  if (date.getFullYear() === now.getFullYear()) return `${month}/${day}`;
+  return `${date.getFullYear()}/${month}/${day}`;
 }
 
 /** Human-readable turn duration (wall-clock), locale-aware via ``Intl`` (seconds/minutes). */

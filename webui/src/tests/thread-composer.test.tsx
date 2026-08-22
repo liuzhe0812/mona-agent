@@ -2,7 +2,7 @@ import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { ThreadComposer } from "@/components/thread/ThreadComposer";
-import type { SlashCommand } from "@/lib/types";
+import type { RoomAgentInfo, SlashCommand } from "@/lib/types";
 
 const COMMANDS: SlashCommand[] = [
   {
@@ -18,6 +18,10 @@ const COMMANDS: SlashCommand[] = [
     icon: "history",
     argHint: "[n]",
   },
+];
+const MENTION_AGENTS: RoomAgentInfo[] = [
+  { id: "com.mona.a-share-analyst", displayName: "A-share analyst" },
+  { id: "com.mona.reviewer", displayName: "Reviewer" },
 ];
 const ORIGINAL_INNER_HEIGHT = window.innerHeight;
 
@@ -161,6 +165,38 @@ describe("ThreadComposer", () => {
     expect(input).toHaveValue("/history ");
     expect(onSend).not.toHaveBeenCalled();
     expect(screen.queryByRole("listbox", { name: "Slash commands" })).not.toBeInTheDocument();
+  });
+
+  it("filters @ candidates by name or stable id and keeps keyboard selection usable", () => {
+    render(
+      <ThreadComposer
+        onSend={vi.fn()}
+        placeholder="Type your message..."
+        mentionableAgents={MENTION_AGENTS}
+      />,
+    );
+    const input = screen.getByLabelText("Message input");
+
+    fireEvent.change(input, { target: { value: "@" } });
+    expect(screen.getByRole("option", { name: /A-share analyst/ })).toHaveAttribute(
+      "aria-selected",
+      "true",
+    );
+    expect(screen.getByRole("option", { name: /Reviewer/ })).toBeInTheDocument();
+
+    fireEvent.change(input, { target: { value: "@review" } });
+    expect(screen.queryByRole("option", { name: /A-share analyst/ })).not.toBeInTheDocument();
+    expect(screen.getByRole("option", { name: /Reviewer/ })).toHaveAttribute(
+      "aria-selected",
+      "true",
+    );
+
+    fireEvent.change(input, { target: { value: "@com.mona.a-share" } });
+    expect(screen.getByRole("option", { name: /A-share analyst/ })).toBeInTheDocument();
+    expect(screen.queryByRole("option", { name: /Reviewer/ })).not.toBeInTheDocument();
+
+    fireEvent.keyDown(input, { key: "Enter" });
+    expect(input).toHaveValue("@A-share analyst ");
   });
 
   it("opens the slash command palette downward when there is more room below", async () => {

@@ -1,26 +1,64 @@
 import { useEffect, useMemo, useState } from "react";
-import { PanelRightClose, Target, Users, Workflow } from "lucide-react";
+import {
+  FileCode,
+  FileImage,
+  FileText,
+  Info,
+  Package,
+  RefreshCw,
+  Target,
+  Users,
+  Workflow,
+} from "lucide-react";
 import { useTranslation } from "react-i18next";
 
 import { AgentAvatar, resolveAgentDisplayName, type AgentIdentity } from "@/components/room/AgentAvatar";
 import { useAgents } from "@/components/room/useAgents";
+import { useFilePreviewStore } from "@/components/deliver/filePreviewStore";
+import { useArtifacts } from "@/hooks/useArtifacts";
 import { WorkflowPanel } from "@/components/workflow/WorkflowPanel";
 import { cn } from "@/lib/utils";
-import type { ConversationMeta, RoomState } from "@/lib/types";
+import type { ConversationMeta, DeliveredFile, RoomState } from "@/lib/types";
 import { useClient } from "@/providers/ClientProvider";
 
 interface RoomContextPanelProps {
   chatId: string;
   conversation: ConversationMeta;
-  /** Collapse the whole right-hand pane (shared with the workspace panel). */
-  onCollapse: () => void;
   className?: string;
 }
 
+/** Lightweight artifact row for the room info tab. */
+function RoomArtifactRow({ file, onOpen }: { file: DeliveredFile; onOpen: () => void }) {
+  const ext = (file.name.split(".").pop() ?? "").toLowerCase();
+  const Icon = file.mime.startsWith("image/")
+    ? FileImage
+    : [".py", ".js", ".ts", ".tsx", ".jsx", ".rs", ".go", ".json"].includes(`.${ext}`)
+      ? FileCode
+      : FileText;
+  return (
+    <button
+      type="button"
+      onClick={file.missing ? undefined : onOpen}
+      disabled={file.missing}
+      className="flex w-full items-center gap-2 rounded-lg px-1.5 py-1 text-left transition-colors hover:bg-accent/60 disabled:cursor-default disabled:opacity-60"
+    >
+      <Icon className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
+      <span className="min-w-0 flex-1 truncate text-[12px] leading-5">{file.name}</span>
+      <span className="shrink-0 text-micro text-muted-foreground">
+        {file.missing ? "文件已移除" : file.size_human}
+      </span>
+    </button>
+  );
+}
+
 /**
- * Room context sidebar (multi-agent phase 2d): room goal, member roster and
- * a read-only workflow placeholder. Direct chats with a partner agent show
- * the partner profile instead of the workflow block.
+ * Room context sidebar: icon-tabbed panel — the info tab holds the room
+ * goal, member roster and this room's flat artifact projection (references
+ * from all room members are shown together), the
+ * workflow tab holds the orchestration summary and the compact run
+ * progress. Canvas editing lives in the full-screen dialog opened from the
+ * workflow tab. Direct chats with a partner agent show the partner profile
+ * instead (no tabs).
  *
  * Live state comes from ``get_room_state`` plus ``room_updated`` pushes; the
  * session-carried ``conversation`` prop is the render fallback until the
@@ -29,7 +67,6 @@ interface RoomContextPanelProps {
 export function RoomContextPanel({
   chatId,
   conversation,
-  onCollapse,
   className,
 }: RoomContextPanelProps) {
   const { t } = useTranslation();
@@ -37,6 +74,24 @@ export function RoomContextPanel({
   const agentsById = useAgents(token);
   const isRoom = conversation.type === "room";
   const [room, setRoom] = useState<RoomState | null>(null);
+  const [tab, setTab] = useState<"info" | "workflow">("info");
+  const [artifactsTick, setArtifactsTick] = useState(0);
+  const openPreview = useFilePreviewStore((s) => s.open);
+
+  // Room artifacts refresh on server broadcasts plus a manual refresh button.
+  useEffect(
+    () => client.onArtifactsChanged((updatedChatId) => {
+      if (!updatedChatId || updatedChatId === chatId) {
+        setArtifactsTick((n) => n + 1);
+      }
+    }),
+    [chatId, client],
+  );
+
+  const artifacts = useArtifacts(token, artifactsTick, {
+    scope: "room",
+    room: chatId,
+  });
 
   useEffect(() => {
     setRoom(null);
@@ -77,7 +132,6 @@ export function RoomContextPanel({
     id: directAgentId,
     displayName: resolveAgentDisplayName(agentsById, directAgentId),
   };
-  const directDescription = agentsById.get(directAgentId)?.description ?? "";
 
   return (
     <div className={cn("flex h-full min-h-0 flex-col bg-background", className)}>
@@ -92,74 +146,142 @@ export function RoomContextPanel({
           </span>
         ) : null}
         <div className="flex-1" />
-        <button
-          type="button"
-          onClick={onCollapse}
-          title={t("room.panel.collapse")}
-          aria-label={t("room.panel.collapse")}
-          className="rounded-sm p-0.5 text-muted-foreground hover:bg-muted hover:text-foreground"
-        >
-          <PanelRightClose className="h-4 w-4" />
-        </button>
+        {isRoom ? (
+          <div className="flex items-center gap-0.5" role="tablist">
+            <button
+              type="button"
+              role="tab"
+              aria-selected={tab === "info"}
+              onClick={() => setTab("info")}
+              title={t("room.panel.info")}
+              aria-label={t("room.panel.info")}
+              className={cn(
+                "rounded-md p-1 transition-colors",
+                tab === "info"
+                  ? "bg-muted text-foreground"
+                  : "text-muted-foreground hover:bg-muted/60 hover:text-foreground",
+              )}
+            >
+              <Info className="h-4 w-4" />
+            </button>
+            <button
+              type="button"
+              role="tab"
+              aria-selected={tab === "workflow"}
+              onClick={() => setTab("workflow")}
+              title={t("room.panel.workflow")}
+              aria-label={t("room.panel.workflow")}
+              className={cn(
+                "rounded-md p-1 transition-colors",
+                tab === "workflow"
+                  ? "bg-muted text-foreground"
+                  : "text-muted-foreground hover:bg-muted/60 hover:text-foreground",
+              )}
+            >
+              <Workflow className="h-4 w-4" />
+            </button>
+          </div>
+        ) : null}
       </div>
 
       <div className="min-h-0 flex-1 overflow-y-auto scrollbar-hover">
         {isRoom ? (
-          <>
-            <section className="border-b border-border/45 px-3 py-2.5">
-              <div className="flex items-center gap-1.5 text-xs font-medium text-muted-foreground">
-                <Target className="h-3.5 w-3.5" />
-                {t("room.panel.goal")}
-              </div>
-              <p
-                className={cn(
-                  "mt-1.5 whitespace-pre-wrap break-words text-[13px] leading-relaxed",
-                  goal ? "text-foreground" : "text-muted-foreground/70",
-                )}
-              >
-                {goal || t("room.panel.goalEmpty")}
-              </p>
-            </section>
+          tab === "info" ? (
+            <>
+              <section className="border-b border-border/45 px-3 py-2.5">
+                <div className="flex items-center gap-1.5 text-xs font-medium text-muted-foreground">
+                  <Target className="h-3.5 w-3.5" />
+                  {t("room.panel.goal")}
+                </div>
+                <p
+                  className={cn(
+                    "mt-1.5 whitespace-pre-wrap break-words text-[13px] leading-relaxed",
+                    goal ? "text-foreground" : "text-muted-foreground/70",
+                  )}
+                >
+                  {goal || t("room.panel.goalEmpty")}
+                </p>
+              </section>
 
-            <section className="border-b border-border/45 px-3 py-2.5">
-              <div className="flex items-center gap-1.5 text-xs font-medium text-muted-foreground">
-                <Users className="h-3.5 w-3.5" />
-                {t("room.panel.members")}
-              </div>
-              <ul className="mt-1.5 space-y-0.5">
-                {members.map((member) => (
-                  <li
-                    key={member.id}
-                    className="flex items-start gap-2 rounded-lg px-1.5 py-1.5"
-                  >
-                    <AgentAvatar
-                      agentId={member.id}
-                      displayName={member.displayName}
-                      className="mt-0.5 h-5 w-5"
-                    />
-                    <div className="min-w-0">
-                      <div className="truncate text-[13px] font-medium leading-5">
-                        {member.displayName}
-                      </div>
-                      {member.description ? (
-                        <div className="line-clamp-2 text-[11px] leading-4 text-muted-foreground/80">
-                          {member.description}
+              <section className="border-b border-border/45 px-3 py-2.5">
+                <div className="flex items-center gap-1.5 text-xs font-medium text-muted-foreground">
+                  <Users className="h-3.5 w-3.5" />
+                  {t("room.panel.members")}
+                </div>
+                <ul className="mt-1.5 space-y-0.5">
+                  {members.map((member) => (
+                    <li
+                      key={member.id}
+                      className="flex items-start gap-2 rounded-lg px-1.5 py-1.5"
+                    >
+                      <AgentAvatar
+                        agentId={member.id}
+                        displayName={member.displayName}
+                        className="mt-0.5 h-5 w-5"
+                      />
+                      <div className="min-w-0">
+                        <div className="truncate text-[13px] font-medium leading-5">
+                          {member.displayName}
+                          {agentsById.get(member.id)?.visibility === "internal" ? (
+                            <span className="ml-1.5 rounded-full bg-muted px-1.5 py-0.5 align-middle text-micro text-muted-foreground">
+                              {t("room.panel.builtin")}
+                            </span>
+                          ) : null}
                         </div>
-                      ) : null}
-                    </div>
-                  </li>
-                ))}
-              </ul>
-            </section>
+                      </div>
+                    </li>
+                  ))}
+                </ul>
+              </section>
 
+              <section className="px-3 py-2.5">
+                <div className="flex items-center gap-1.5 text-xs font-medium text-muted-foreground">
+                  <Package className="h-3.5 w-3.5" />
+                  {t("room.panel.artifacts")}
+                  {artifacts.files.length > 0 ? (
+                    <span className="rounded-full bg-muted px-1.5 py-0.5 text-micro text-muted-foreground">
+                      {artifacts.files.length}
+                    </span>
+                  ) : null}
+                  <div className="flex-1" />
+                  <button
+                    type="button"
+                    onClick={artifacts.refresh}
+                    disabled={artifacts.loading}
+                    title={t("room.panel.refresh")}
+                    aria-label={t("room.panel.refresh")}
+                    className="rounded-sm p-0.5 text-muted-foreground hover:bg-muted hover:text-foreground disabled:opacity-40"
+                  >
+                    <RefreshCw
+                      className={cn("h-3.5 w-3.5", artifacts.loading && "animate-spin")}
+                    />
+                  </button>
+                </div>
+                {artifacts.error ? (
+                  <p className="mt-1.5 text-[11px] text-destructive">{artifacts.error}</p>
+                ) : artifacts.files.length === 0 && !artifacts.loading ? (
+                  <p className="mt-1.5 text-[12px] leading-relaxed text-muted-foreground/70">
+                    {t("room.panel.artifactsEmpty")}
+                  </p>
+                ) : (
+                  <ul className="mt-1 max-h-64 space-y-0.5 overflow-y-auto scrollbar-hover">
+                    {artifacts.files.map((file) => (
+                      <li key={file.absolute_path || file.path}>
+                        <RoomArtifactRow
+                          file={file}
+                          onOpen={() => openPreview(file, "room", null, chatId)}
+                        />
+                      </li>
+                    ))}
+                  </ul>
+                )}
+              </section>
+            </>
+          ) : (
             <section className="px-3 py-2.5">
-              <div className="flex items-center gap-1.5 text-xs font-medium text-muted-foreground">
-                <Workflow className="h-3.5 w-3.5" />
-                {t("room.panel.workflow")}
-              </div>
-              <WorkflowPanel chatId={chatId} members={members} className="mt-1.5" />
+              <WorkflowPanel chatId={chatId} members={members} />
             </section>
-          </>
+          )
         ) : (
           <section className="px-3 py-3">
             <div className="flex items-start gap-2.5">
@@ -172,11 +294,6 @@ export function RoomContextPanel({
                 <div className="truncate text-[13px] font-medium leading-5">
                   {directAgent.displayName}
                 </div>
-                {directDescription ? (
-                  <p className="mt-1 text-[12px] leading-relaxed text-muted-foreground/85">
-                    {directDescription}
-                  </p>
-                ) : null}
               </div>
             </div>
           </section>

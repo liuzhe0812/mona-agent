@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
-import { PanelRightOpen } from "lucide-react";
+import { Users } from "lucide-react";
 
 import { AgentLogo } from "@/components/AgentLogo";
 import { RoomContextPanel } from "@/components/room/RoomContextPanel";
@@ -19,7 +19,7 @@ import { usePendingQueue } from "@/hooks/usePendingQueue";
 import { useSessionHistory } from "@/hooks/useSessions";
 import { useArtifacts } from "@/hooks/useArtifacts";
 import { fetchSettings, fetchZenFreeModels, listSlashCommands, updateSettings } from "@/lib/api";
-import type { ChatSummary, DeliveredFile, RoomAgentInfo, SlashCommand, UIMessage } from "@/lib/types";
+import type { ChatSummary, DeliveredFile, RoomAgentInfo, SlashCommand, ToolProgressEvent, UIMessage, WorkflowRun } from "@/lib/types";
 import { useWorkspaceStore } from "@/lib/workspace-store";
 import { normalizeLegacyLongTaskMessages } from "@/lib/thread-display-compat";
 import { scrubSubagentUiMessages } from "@/lib/subagent-channel-display";
@@ -27,7 +27,6 @@ import { useClient } from "@/providers/ClientProvider";
 import { useScheduleStore } from "@/components/schedule/scheduleStore";
 import { useEmailStore } from "@/components/email/store/emailStore";
 import { deriveTitle } from "@/lib/format";
-import { cn } from "@/lib/utils";
 
 function projectWebuiThreadMessages(messages: UIMessage[]): UIMessage[] {
   return scrubSubagentUiMessages(normalizeLegacyLongTaskMessages(messages));
@@ -48,6 +47,27 @@ function isWorkspaceDeliverable(fileName: string): boolean {
   const dot = fileName.lastIndexOf(".");
   if (dot < 0) return false;
   return WORKSPACE_DELIVERABLE_EXTS.has(fileName.slice(dot).toLowerCase());
+}
+
+function artifactIdentity(file: DeliveredFile): string {
+  return (
+    file.artifact_ref?.relative_path ||
+    file.path ||
+    file.absolute_path ||
+    file.name
+  );
+}
+
+/** Build the user-visible output root without changing valid dotted Agent IDs. */
+export function buildSharedOutputDir(
+  workspacePath: string,
+  directAgentId?: string | null,
+): string | null {
+  const ws = workspacePath.replace(/\\/g, "/").replace(/\/+$/, "");
+  if (!ws) return null;
+  const rawAgentId = directAgentId?.trim() || "mona";
+  const agentId = rawAgentId.toLowerCase().replace(/[^a-z0-9._-]/g, "-");
+  return `${ws}/agent-workspaces/${agentId}/output`;
 }
 
 function preserveDeliveredFiles(oldMessages: UIMessage[], newMessages: UIMessage[]): UIMessage[] {
@@ -76,6 +96,35 @@ function preserveDeliveredFiles(oldMessages: UIMessage[], newMessages: UIMessage
   return result;
 }
 
+/** Merge a live ``workflow_run_updated`` snapshot into the message list: the
+ *  run card stays at the position where the run first appeared and re-renders
+ *  in place, like a pinned status message in a group chat. */
+function upsertWorkflowRunMessage(
+  messages: UIMessage[],
+  run: WorkflowRun,
+): UIMessage[] {
+  const index = messages.findIndex(
+    (m) => m.kind === "workflowRun" && m.workflowRunId === run.id,
+  );
+  if (index >= 0) {
+    const next = [...messages];
+    next[index] = { ...next[index], payload: run };
+    return next;
+  }
+  return [
+    ...messages,
+    {
+      id: `workflow-run-${run.id}`,
+      role: "assistant",
+      kind: "workflowRun",
+      content: "",
+      workflowRunId: run.id,
+      payload: run,
+      createdAt: Date.now(),
+    },
+  ];
+}
+
 interface ThreadShellProps {
   session: ChatSummary | null;
   title: string;
@@ -91,8 +140,6 @@ interface ThreadShellProps {
   onTurnEnd?: () => void;
   queuedPrompt?: QueuedPrompt | null;
   onQueuedPromptConsumed?: (id: string) => void;
-  theme?: "light" | "dark";
-  onToggleTheme?: () => void;
   hideSidebarToggleOnDesktop?: boolean;
   showHeader?: boolean;
   onModelNameChange?: (modelName: string | null) => void;
@@ -132,8 +179,6 @@ export function ThreadShell({
   onTurnEnd,
   queuedPrompt,
   onQueuedPromptConsumed,
-  theme = "light",
-  onToggleTheme = () => {},
   hideSidebarToggleOnDesktop = false,
   showHeader = true,
   onModelNameChange,
@@ -449,7 +494,6 @@ export function ThreadShell({
       return {
         id,
         displayName: summary?.displayName ?? id,
-        description: summary?.description ?? "",
       };
     });
   }, [session?.conversation, agentsById]);
@@ -605,9 +649,26 @@ export function ThreadShell({
     weekday: "long",
   }).format(clockNow);
 
+  // Rooms land directly on the conversation page (IM group-chat parity):
+  // no Mona home dashboard, just the room identity and a composer hint.
+  const conversation = session?.conversation ?? null;
+  const isRoomEmptyState = conversation?.type === "room";
+
   const emptyState = loading ? (
     <div className="flex h-full items-center justify-center text-sm text-muted-foreground">
       {t("thread.loadingConversation")}
+    </div>
+  ) : isRoomEmptyState ? (
+    <div className="flex w-full flex-col items-center justify-center py-16 text-center">
+      <div className="flex h-12 w-12 items-center justify-center rounded-2xl bg-muted">
+        <Users className="h-6 w-6 text-muted-foreground" />
+      </div>
+      <div className="mt-4 text-[15px] font-medium text-foreground">
+        {conversation.title?.trim() || t("room.panel.title")}
+      </div>
+      <p className="mt-1.5 max-w-[26rem] text-[13px] leading-relaxed text-muted-foreground">
+        {t("room.emptyHint")}
+      </p>
     </div>
   ) : (
     <div className="relative w-full">
@@ -655,29 +716,48 @@ export function ThreadShell({
   const splitRatio = useFilePreviewStore((s) => s.splitRatio);
   const setSplitRatio = useFilePreviewStore((s) => s.setSplitRatio);
   const workspaceCollapsed = useFilePreviewStore((s) => s.workspaceCollapsed);
-  const toggleWorkspaceCollapsed = useFilePreviewStore(
-    (s) => s.toggleWorkspaceCollapsed,
-  );
   const setWorkspaceCollapsed = useFilePreviewStore(
     (s) => s.setWorkspaceCollapsed,
   );
   const workspacePath = useWorkspaceStore((s) => s.workspacePath);
 
-  // Session type: project sessions read the bound ``metadata.workspace`` as
-  // their effective workspace; non-project sessions (and the home screen)
-  // operate against the shared ``<workspace>/output/`` directory.
-  const isProjectSession = !!session?.workspace;
+  // Rooms are a separate projection: they never fall back to an Agent's
+  // workspace. Project sessions keep their bound root; ordinary Agent
+  // sessions use the active Agent's durable output directory.
+  const isRoomSession = conversation?.type === "room";
+  const isProjectSession = !isRoomSession && !!session?.workspace;
   const sessionKey = session?.key ?? null;
   const isHome = !session;
-  const workspaceScope: PreviewScope = isProjectSession ? "project" : "shared";
+  const workspaceScope: PreviewScope = isRoomSession
+    ? "room"
+    : isProjectSession
+      ? "project"
+      : "shared";
 
-  // Authoritative on-disk scan: shared sessions scan ``<workspace>/output/``;
+  // Preview state is global so the split pane can survive a list/preview
+  // round-trip. It must nevertheless be scoped to the active conversation;
+  // otherwise switching sessions while a file is open can preview the prior
+  // Agent's file under the new session's owner.
+  useEffect(() => {
+    const state = useFilePreviewStore.getState();
+    if (!state.file) return;
+    const ownerMatches = conversation?.type === "room"
+      ? state.scope === "room" && state.roomId === chatId
+      : state.scope === workspaceScope && state.sessionKey === sessionKey;
+    if (!ownerMatches) state.close();
+  }, [chatId, conversation?.type, historyKey, sessionKey, workspaceScope]);
+
+  // Authoritative on-disk scan: shared sessions scan the active Agent output;
   // project sessions scan the bound project directory (all files — project
   // sessions have no "artifact" concept, the directory IS the list).
   const artifacts = useArtifacts(
     !isHome ? token : null,
     `${historyKey ?? "home"}-${artifactsRefreshSignal}`,
-    { scope: workspaceScope, sessionKey: isProjectSession ? sessionKey : null },
+    {
+      scope: workspaceScope,
+      sessionKey: isRoomSession ? null : sessionKey,
+      room: isRoomSession ? chatId : null,
+    },
   );
 
   // Rescan when the server pushes ``artifacts_changed`` — the shared output
@@ -685,9 +765,9 @@ export function ThreadShell({
   // tracks reality without a manual refresh click.
   const { refresh: refreshArtifacts } = artifacts;
   useEffect(() => {
-    if (isProjectSession || isHome) return;
+    if (isProjectSession || isRoomSession || isHome) return;
     return client.onArtifactsChanged(() => refreshArtifacts());
-  }, [client, isProjectSession, isHome, refreshArtifacts]);
+  }, [client, isProjectSession, isRoomSession, isHome, refreshArtifacts]);
 
   // Aggregate all delivered files produced during the session.
   // Includes both explicit deliver_file calls and files written/edited by AI
@@ -699,7 +779,7 @@ export function ThreadShell({
     const out: DeliveredFile[] = [];
     const seen = new Set<string>();
     const push = (file: DeliveredFile) => {
-      const key = file.absolute_path || file.path || file.name;
+      const key = artifactIdentity(file);
       if (seen.has(key)) return;
       seen.add(key);
       out.push(file);
@@ -721,6 +801,7 @@ export function ThreadShell({
             size: 0,
             size_human: "",
             mime: "",
+            artifact_ref: edit.artifact_ref,
           });
         }
       }
@@ -735,56 +816,104 @@ export function ThreadShell({
   // the authoritative scan can still revive a path the agent re-created.
   const deletedArtifactPaths = useFilePreviewStore((s) => s.deletedArtifactPaths);
   const markArtifactDeleted = useFilePreviewStore((s) => s.markArtifactDeleted);
+  const resetArtifactInventory = useFilePreviewStore((s) => s.resetArtifactInventory);
+  const artifactOwnerKey = isRoomSession
+    ? `room:${chatId ?? ""}`
+    : isProjectSession
+      ? `project:${sessionKey ?? ""}`
+      : `agent:${conversation?.directAgentId?.trim().toLowerCase() || "mona"}:session:${sessionKey ?? ""}`;
+  useEffect(() => {
+    // New-file markers belong to the active owner. Deletion tombstones stay
+    // global so an immutable session delivery cannot resurrect after a list
+    // remount, while each Agent/session starts with a fresh inventory view.
+    resetArtifactInventory();
+  }, [artifactOwnerKey, resetArtifactInventory]);
   const scanKeys = useMemo(() => {
     const keys = new Set<string>();
     for (const f of artifacts.files) {
-      keys.add(normalizeArtifactPath(f.absolute_path || f.path || f.name));
+      keys.add(normalizeArtifactPath(artifactIdentity(f)));
     }
     return keys;
   }, [artifacts.files]);
   const visibleMessageFiles = useMemo(() => {
+    if (isRoomSession) return [];
     if (deletedArtifactPaths.size === 0) return messageFiles;
     return messageFiles.filter((f) => {
-      const key = f.absolute_path || f.path || f.name;
-      if (!isArtifactTombstoned(key, deletedArtifactPaths)) return true;
+      const keys = [artifactIdentity(f), f.absolute_path, f.path].filter(
+        (value): value is string => !!value,
+      );
+      if (!keys.some((key) => isArtifactTombstoned(key, deletedArtifactPaths))) {
+        return true;
+      }
       // Scan-authoritative revival: the latest scan sees the file again, so
       // it exists on disk and must not stay hidden by the tombstone.
-      return scanKeys.has(normalizeArtifactPath(key));
+      return keys.some((key) => scanKeys.has(normalizeArtifactPath(key)));
     });
-  }, [messageFiles, deletedArtifactPaths, scanKeys]);
+  }, [isRoomSession, messageFiles, deletedArtifactPaths, scanKeys]);
 
-  // Pick the authoritative data source for the workspace panel.
-  // - Shared: merge scan results with live events (scan wins on dedup so its
-  //   richer metadata — size, mtime, mime — is preferred).
-  // - Project: the project directory scan IS the list; message events are
-  //   not artifacts and never shown.
+  // Pick the authoritative data source for the workspace panel. The server
+  // separates persisted session references from the Agent scan; live message
+  // events are only a short-lived supplement until the next refresh.
   const workspaceFiles = useMemo(() => {
+    if (isRoomSession) return artifacts.files;
     if (isProjectSession) return artifacts.files;
     const out: DeliveredFile[] = [];
     const seen = new Set<string>();
     const push = (file: DeliveredFile) => {
-      const key = file.absolute_path || file.path || file.name;
+      const key = artifactIdentity(file);
       if (seen.has(key)) return;
       seen.add(key);
       out.push(file);
     };
-    // Scan first so its metadata (size, mtime) wins over the sparse
-    // file_edit shape when both reference the same absolute path.
-    for (const f of artifacts.files) push(f);
-    for (const f of visibleMessageFiles) push(f);
-    return out;
-  }, [isProjectSession, artifacts.files, visibleMessageFiles]);
-
-  // Session section rows: the scan wins on dedup — a file present in the
-  // latest scan renders in the tree with its richer metadata (size, mtime),
-  // not as a sparse session row.
-  const sessionFilesForPanel = useMemo(() => {
-    if (isProjectSession) return undefined;
-    return visibleMessageFiles.filter(
-      (f) =>
-        !scanKeys.has(normalizeArtifactPath(f.absolute_path || f.path || f.name)),
+    const sessionKeys = new Set(
+      [...artifacts.sessionFiles, ...visibleMessageFiles].map((f) =>
+        normalizeArtifactPath(
+          f.artifact_ref?.relative_path || f.path || f.absolute_path || f.name,
+        ),
+      ),
     );
-  }, [isProjectSession, visibleMessageFiles, scanKeys]);
+    for (const f of artifacts.files) push(f);
+    // Older servers may still return session files in ``files``; hide them
+    // by identity so the UI never duplicates a delivered row.
+    if (sessionKeys.size > 0) {
+      const filtered = out.filter(
+        (f) =>
+          !sessionKeys.has(
+            normalizeArtifactPath(
+              f.artifact_ref?.relative_path || f.path || f.absolute_path || f.name,
+            ),
+          ),
+      );
+      return filtered;
+    }
+    return out;
+  }, [isRoomSession, isProjectSession, artifacts.files, artifacts.sessionFiles, visibleMessageFiles]);
+
+  // Session references remain visible even after the file also appears in the
+  // workspace scan. Merge scan metadata into the reference row when possible.
+  const sessionFilesForPanel = useMemo(() => {
+    if (isRoomSession || isProjectSession) return undefined;
+    const byPath = new Map(
+      artifacts.files.map((f) => [
+        normalizeArtifactPath(
+          f.artifact_ref?.relative_path || f.path || f.absolute_path || f.name,
+        ),
+        f,
+      ]),
+    );
+    const out: DeliveredFile[] = [];
+    const seen = new Set<string>();
+    for (const f of [...artifacts.sessionFiles, ...visibleMessageFiles]) {
+      const key = normalizeArtifactPath(
+        f.artifact_ref?.relative_path || f.path || f.absolute_path || f.name,
+      );
+      if (seen.has(key)) continue;
+      seen.add(key);
+      const scanned = byPath.get(key);
+      out.push(scanned ? { ...scanned, artifact_ref: f.artifact_ref ?? scanned.artifact_ref } : f);
+    }
+    return out;
+  }, [isRoomSession, isProjectSession, artifacts.files, artifacts.sessionFiles, visibleMessageFiles]);
 
   const hasFiles = workspaceFiles.length > 0;
   // Preview prev/next cycles in the same visual order the workspace panel
@@ -792,10 +921,10 @@ export function ThreadShell({
   const previewNavFiles = useMemo(
     () =>
       flattenFilesForDisplay(
-        artifacts.files,
-        isProjectSession ? [] : visibleMessageFiles,
+        workspaceFiles,
+        isRoomSession || isProjectSession ? [] : sessionFilesForPanel ?? [],
       ),
-    [isProjectSession, artifacts.files, visibleMessageFiles],
+    [isRoomSession, isProjectSession, workspaceFiles, sessionFilesForPanel],
   );
   // Right panel shows the file list by default, or the in-pane preview
   // when a file is selected. Sessions with zero artifact activity hide the
@@ -806,7 +935,10 @@ export function ThreadShell({
   const [emptyPanelExpanded, setEmptyPanelExpanded] = useState(false);
   useEffect(() => setEmptyPanelExpanded(false), [historyKey]);
   const hasPreviewTarget =
-    hasFiles || !!previewFile || messageFiles.length > 0;
+    hasFiles ||
+    (sessionFilesForPanel?.length ?? 0) > 0 ||
+    !!previewFile ||
+    messageFiles.length > 0;
   const rightVisible =
     !isHome && !workspaceCollapsed && (hasPreviewTarget || emptyPanelExpanded);
 
@@ -814,50 +946,59 @@ export function ThreadShell({
   // workflow summary) sharing the right-hand pane with the workspace panel.
   // It opens by default when a room is entered so the collaboration state
   // stays discoverable; closing it falls back to the workspace panel rules.
-  const conversation = session?.conversation ?? null;
-  const isRoomSession = conversation?.type === "room";
   const [roomPanelOpen, setRoomPanelOpen] = useState(false);
   useEffect(() => {
     setRoomPanelOpen(conversation?.type === "room");
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [historyKey, conversation?.type]);
   const showRoomPanel = !!isRoomSession && roomPanelOpen && !previewFile;
-  const showWorkspaceToggle = !isHome && !rightVisible && !showRoomPanel;
 
-  // New-artifact feedback while collapsed: when the deliverable count
-  // grows and the panel is hidden, highlight the edge button until the
-  // user expands the panel again. Session switches reset the baseline so
-  // a different chat's inventory is not mistaken for new deliveries.
-  const [edgeHighlight, setEdgeHighlight] = useState(false);
-  const prevWorkspaceCountRef = useRef({ key: historyKey, count: 0 });
-  useEffect(() => {
-    const count = workspaceFiles.length;
-    const prev = prevWorkspaceCountRef.current;
-    if (prev.key !== historyKey) {
-      prevWorkspaceCountRef.current = { key: historyKey, count };
-      setEdgeHighlight(false);
-      return;
-    }
-    if (count > prev.count && !rightVisible) setEdgeHighlight(true);
-    prevWorkspaceCountRef.current = { key: historyKey, count };
-  }, [workspaceFiles.length, rightVisible, historyKey]);
-  useEffect(() => {
-    if (rightVisible) setEdgeHighlight(false);
-  }, [rightVisible]);
+  // 标题行常驻切换：仅在有产物或正在预览时显示；房间会话由房间面板按钮替代。
 
-  // Absolute path of the shared output directory (``<workspace>/output``),
-  // used by the workspace panel's "open output directory" affordances.
-  const sharedOutputDir = useMemo(() => {
-    const ws = workspacePath.replace(/\\/g, "/").replace(/\/+$/, "");
-    return ws ? `${ws}/output` : null;
-  }, [workspacePath]);
+  // Workflow runs surface inside the room conversation (IM group-chat
+  // parity): each broadcast snapshot updates the run card in place, while
+  // step results arrive as ordinary agent messages via the stream handler.
+  useEffect(() => {
+    if (!chatId || !isRoomSession) return;
+    return client.onWorkflowRunUpdated((updatedChatId, run) => {
+      if (updatedChatId !== chatId || !run) return;
+      setMessages((prev) => upsertWorkflowRunMessage(prev, run));
+    });
+  }, [chatId, isRoomSession, client, setMessages]);
+
+  // Live tool activity of step jobs, keyed ``runId:stepId``. Each frame is a
+  // full snapshot of the step's accumulator, so the latest one wins; the
+  // map resets on session switch so cards never show another room's trail.
+  const [stepActivities, setStepActivities] = useState<Record<string, ToolProgressEvent[]>>({});
+  useEffect(() => {
+    setStepActivities({});
+  }, [historyKey]);
+  useEffect(() => {
+    if (!chatId || !isRoomSession) return;
+    return client.onWorkflowStepActivity((updatedChatId, payload) => {
+      if (updatedChatId !== chatId) return;
+      setStepActivities((prev) => ({
+        ...prev,
+        [`${payload.runId}:${payload.stepId}`]: payload.toolEvents,
+      }));
+    });
+  }, [chatId, isRoomSession, client]);
+
+  // Absolute path of the active Agent output directory, used by the
+  // workspace panel's "open output directory" affordances.
+  const sharedOutputDir = useMemo(
+    () => buildSharedOutputDir(workspacePath, conversation?.directAgentId),
+    [conversation?.directAgentId, workspacePath],
+  );
 
   // Delete a shared-output artifact from disk and trigger a scan refresh so
   // the workspace panel re-reads the directory and drops the row.
   const handleDeleteArtifact = useCallback(
     async (file: DeliveredFile) => {
-      const target = file.absolute_path || file.path;
-      if (!target) return;
+      const target = file.absolute_path?.trim();
+      if (!target || !(/^(?:[A-Za-z]:[\\/]|[\\/]{1,2})/.test(target))) {
+        throw new Error("无法删除没有绝对路径的产物");
+      }
       // 删除一律进系统回收站（可恢复）；失败时抛给 WorkspacePanel 在确认
       // 弹窗中展示原因，绝不静默回退为永久删除。
       const { moveToTrash } = await import("@/lib/tauri");
@@ -877,52 +1018,43 @@ export function ThreadShell({
             <ThreadHeader
               title={title}
               onToggleSidebar={onToggleSidebar}
-              theme={theme}
-              onToggleTheme={onToggleTheme}
               hideSidebarToggleOnDesktop={hideSidebarToggleOnDesktop}
               minimal={!session && !loading}
               conversation={conversation}
               onToggleRoomPanel={
                 isRoomSession ? () => setRoomPanelOpen((open) => !open) : undefined
               }
+              workspaceOpen={isRoomSession ? showRoomPanel || !!previewFile : rightVisible}
+              onToggleWorkspace={
+                isRoomSession
+                  ? () => setRoomPanelOpen((open) => !open)
+                  : () => {
+                      if (rightVisible) {
+                        setWorkspaceCollapsed(true);
+                      } else {
+                        if (hasPreviewTarget) {
+                          setWorkspaceCollapsed(false);
+                        } else {
+                          setEmptyPanelExpanded(true);
+                          setWorkspaceCollapsed(false);
+                        }
+                      }
+                    }
+              }
+              workspaceHasContent={isRoomSession ? true : hasPreviewTarget || !!previewFile}
             />
           ) : null}
           <ThreadViewport
             messages={transcriptMessages}
             isStreaming={isStreaming}
+            isGroupChat={isRoomSession}
             emptyState={emptyState}
             composer={composer}
             scrollToBottomSignal={scrollToBottomSignal}
             conversationKey={historyKey}
             showScrollToBottomButton={!!session}
+            stepActivities={stepActivities}
           />
-          {showWorkspaceToggle ? (
-            <button
-              type="button"
-              onClick={() => {
-                if (hasPreviewTarget) {
-                  toggleWorkspaceCollapsed();
-                } else {
-                  setEmptyPanelExpanded(true);
-                  setWorkspaceCollapsed(false);
-                }
-              }}
-              title="展开工作区"
-              className={cn(
-                "absolute right-0 top-1/2 z-10 -translate-y-1/2",
-                "flex flex-col items-center gap-1 rounded-l-md",
-                "border border-r-0 border-border/60 bg-popover/95 px-1.5 py-2 shadow-md",
-                "text-muted-foreground hover:bg-muted hover:text-foreground",
-                "transition-colors",
-                edgeHighlight && "text-primary",
-              )}
-            >
-              <PanelRightOpen className="h-4 w-4" />
-              {workspaceFiles.length > 0 ? (
-                <span className="text-[10px] font-medium">{workspaceFiles.length}</span>
-              ) : null}
-            </button>
-          ) : null}
         </section>
       }
       right={
@@ -932,14 +1064,14 @@ export function ThreadShell({
           <RoomContextPanel
             chatId={chatId}
             conversation={conversation}
-            onCollapse={() => setRoomPanelOpen(false)}
           />
-        ) : (
+        ) : isRoomSession ? null : (
           <WorkspacePanel
-            files={artifacts.files}
+            files={workspaceFiles}
             sessionFiles={sessionFilesForPanel}
             scope={workspaceScope}
-            sessionKey={isProjectSession ? sessionKey : null}
+            sessionKey={sessionKey}
+            ownerKey={artifactOwnerKey}
             loading={artifacts.loading}
             error={artifacts.error}
             truncated={artifacts.truncated}
@@ -953,7 +1085,7 @@ export function ThreadShell({
       }
       ratio={splitRatio}
       onRatioChange={setSplitRatio}
-      rightVisible={rightVisible || showRoomPanel}
+      rightVisible={isRoomSession ? showRoomPanel || !!previewFile : rightVisible || showRoomPanel}
     />
   );
 }

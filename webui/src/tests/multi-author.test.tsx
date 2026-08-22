@@ -19,6 +19,13 @@ describe("fallbackAgentName", () => {
 });
 
 describe("ConversationAvatar", () => {
+  it("pairs the task initial with a small Mona identity badge", () => {
+    const { container } = render(<ConversationAvatar taskTitle="制作新能源报告" />);
+    expect(container.textContent).toBe("制");
+    const badge = container.querySelector('img[src="/brand/mona_avatar_white.png"]');
+    expect(badge).toBeTruthy();
+  });
+
   it("renders a stacked cluster with overflow count for rooms", () => {
     const conversation: ConversationMeta = {
       type: "room",
@@ -65,6 +72,55 @@ describe("ThreadMessages multi-author projection", () => {
     );
     // Registry unavailable in tests → derived fallback name from the id.
     expect(screen.getByText("A-share-analyst")).toBeTruthy();
+  });
+
+  it("shows Mona and partner identities in a group chat", () => {
+    render(
+      <ThreadMessages
+        messages={[
+          { ...base, id: "mona-1", content: "Mona 的汇总。", authorId: "mona", authorType: "agent" },
+          {
+            ...base,
+            id: "analyst-1",
+            content: "分析师的补充。",
+            authorId: "com.mona.a-share-analyst",
+            authorType: "agent",
+          },
+        ]}
+        isStreaming={false}
+        isGroupChat
+      />,
+    );
+
+    expect(screen.getByText("Mona")).toBeInTheDocument();
+    expect(screen.getByText("A-share-analyst")).toBeInTheDocument();
+    expect(screen.getByText("Mona 的汇总。")).toBeInTheDocument();
+    expect(screen.getByText("分析师的补充。")).toBeInTheDocument();
+  });
+
+  it("uses a left avatar column and weak time divider for spaced group replies", () => {
+    const { container } = render(
+      <ThreadMessages
+        messages={[
+          { ...base, id: "first", createdAt: 0, authorId: "mona", authorType: "agent" },
+          {
+            ...base,
+            id: "second",
+            createdAt: 6 * 60 * 1000,
+            authorId: "com.mona.a-share-analyst",
+            authorType: "agent",
+          },
+        ]}
+        isStreaming={false}
+        isGroupChat
+      />,
+    );
+
+    expect(container.querySelector(".h-9.w-9")).toBeInTheDocument();
+    expect(container.querySelector(".rounded-tl-md")).toBeInTheDocument();
+    const divider = container.querySelector('div[aria-label]');
+    expect(divider).toBeInTheDocument();
+    expect(divider?.textContent).toBeTruthy();
   });
 
   it("omits the author header for Mona and legacy messages", () => {

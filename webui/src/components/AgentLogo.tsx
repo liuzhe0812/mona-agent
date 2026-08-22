@@ -6,6 +6,8 @@ type AgentLogoState = "working" | "idle" | "welcome";
 
 interface AgentLogoProps {
   state: AgentLogoState;
+  /** Compact crop used where Mona is an identity, rather than a status illustration. */
+  variant?: "scene" | "avatar";
   className?: string;
   title?: string;
 }
@@ -194,7 +196,7 @@ const AGENT_LOGO_STYLES = `
   }
 `;
 
-export function AgentLogo({ state, className, title }: AgentLogoProps) {
+export function AgentLogo({ state, variant = "scene", className, title }: AgentLogoProps) {
   const rawId = useId().replace(/[^a-zA-Z0-9_-]/g, "");
   const ids = {
     eye: `mona-agent-eye-${rawId}`,
@@ -218,7 +220,7 @@ export function AgentLogo({ state, className, title }: AgentLogoProps) {
         stateClass,
         className,
       )}
-      viewBox="0 0 128 128"
+      viewBox={variant === "avatar" ? "16 0 96 96" : "0 0 128 128"}
       role={title ? "img" : undefined}
       aria-label={title}
       aria-hidden={title ? undefined : true}

@@ -189,7 +189,7 @@ export function Toolbar({ onOpenSubscribe }: { onOpenSubscribe?: () => void }) {
           </Button>
         </>
       )}
-      {licenseActive ? (
+      {activeSession?.type !== "desktop" && (licenseActive ? (
         <Button
           variant="ghost"
           size="icon"
@@ -214,7 +214,7 @@ export function Toolbar({ onOpenSubscribe }: { onOpenSubscribe?: () => void }) {
         >
           <LockKeyhole className="h-4 w-4" />
         </Button>
-      )}
+      ))}
       <SessionManagerDialog
         open={sessionManagerOpen}
         onOpenChange={setSessionManagerOpen}

@@ -143,6 +143,8 @@ export function BrowserTabItem({
     <Button
       type="button"
       variant="ghost"
+      role="tab"
+      aria-selected={active}
       onClick={onClick}
       draggable={tab.type !== "mona"}
       onDragStart={handleDragStart}

@@ -11,7 +11,7 @@ import {
   ContextMenuTrigger,
 } from "@/components/ui/context-menu";
 import { getServicesStatus, openPathWithSystemApp, isTauri } from "@/lib/tauri";
-import { fetchEmailBody, listAccounts, downloadAttachmentToFile } from "./lib/emailApi";
+import { fetchEmailBody, listAccounts, markRead, downloadAttachmentToFile } from "./lib/emailApi";
 import type { EmailAccount, EmailAttachment, EmailMessage } from "./lib/types";
 import { SafeHtmlFrame } from "./MailView";
 
@@ -135,7 +135,7 @@ export function MailPreviewWindow() {
               fromName: body.header?.fromName ?? "",
               toAddresses: body.header?.toAddresses ?? "",
               ccAddresses: body.header?.ccAddresses ?? "",
-              date: "",
+              date: body.header?.date ?? "",
               hasAttachments: (body.attachments?.length ?? 0) > 0,
               isRead: true,
               isStarred: false,
@@ -146,6 +146,14 @@ export function MailPreviewWindow() {
               bodyHtml: body.bodyHtml,
               bodyFetched: true,
             }));
+            // 打开即视为已读（与主窗口选中邮件行为一致）
+            // 本地优先：Rust 侧先更新 SQLite，IMAP \Seen 标志后台同步，不阻塞显示
+            const acc = accounts.find((a) => a.id === params.accountId);
+            if (acc) {
+              void markRead(url, acc, params.folder, params.uid, true).catch((e) => {
+                console.warn("[MailPreviewWindow] 标记已读失败:", e);
+              });
+            }
           }
         } catch (e) {
           if (!cancelled) {

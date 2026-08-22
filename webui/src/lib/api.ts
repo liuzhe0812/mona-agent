@@ -1,4 +1,9 @@
 import type {
+  AgentChangeProposal,
+  AgentDetailPayload,
+  AgentInstruction,
+  AgentInstructionHistoryItem,
+  AgentSkill,
   AgentSummary,
   AuthorType,
   ChatSummary,
@@ -13,6 +18,7 @@ import type {
   SettingsUpdate,
   SidebarStatePayload,
   SlashCommand,
+  StockSettingsUpdate,
   TtsSettingsUpdate,
   VideoGenerationSettingsUpdate,
   WebSearchSettingsUpdate,
@@ -107,6 +113,10 @@ export function resetApiBase(): void {
   _servicesHttpBase = null;
 }
 
+export function resetServicesHttpBase(): void {
+  _servicesHttpBase = null;
+}
+
 /** Return the cached API base synchronously (empty string if not yet resolved).
  *
  * Useful for resolving relative media URLs (e.g. ``/api/media/…``) in
@@ -129,7 +139,15 @@ async function request<T>(
     },
   });
   if (!res.ok) {
-    throw new ApiError(res.status, `HTTP ${res.status}`);
+    let message = `HTTP ${res.status}`;
+    try {
+      const payload = await res.json() as { error?: string | { message?: string } };
+      const error = payload.error;
+      message = typeof error === "string" ? error : (error?.message ?? message);
+    } catch {
+      // Keep the HTTP fallback when the server did not return JSON.
+    }
+    throw new ApiError(res.status, message);
   }
   const contentType = res.headers.get("content-type") ?? "";
   if (contentType.includes("text/html")) {
@@ -200,6 +218,71 @@ export async function listAgents(
     token,
   );
   return body.agents;
+}
+
+export async function getAgentDetail(
+  token: string,
+  agentId: string,
+  base?: string,
+): Promise<AgentDetailPayload> {
+  const effectiveBase = base ?? (await getApiBase());
+  return request<AgentDetailPayload>(
+    `${effectiveBase}/api/agents/${encodeURIComponent(agentId)}`,
+    token,
+  );
+}
+
+export async function listAgentInstructions(
+  token: string,
+  agentId: string,
+  base?: string,
+): Promise<AgentInstruction[]> {
+  const effectiveBase = base ?? (await getApiBase());
+  const body = await request<{ instructions: AgentInstruction[] }>(
+    `${effectiveBase}/api/agents/${encodeURIComponent(agentId)}/instructions`,
+    token,
+  );
+  return body.instructions;
+}
+
+export async function listAgentInstructionHistory(
+  token: string,
+  agentId: string,
+  key: AgentInstruction["key"],
+  base?: string,
+): Promise<AgentInstructionHistoryItem[]> {
+  const effectiveBase = base ?? (await getApiBase());
+  const body = await request<{ history: AgentInstructionHistoryItem[] }>(
+    `${effectiveBase}/api/agents/${encodeURIComponent(agentId)}/instructions/${key}/history`,
+    token,
+  );
+  return body.history;
+}
+
+export async function listAgentSkills(
+  token: string,
+  agentId: string,
+  base?: string,
+): Promise<AgentSkill[]> {
+  const effectiveBase = base ?? (await getApiBase());
+  const body = await request<{ skills: AgentSkill[] }>(
+    `${effectiveBase}/api/agents/${encodeURIComponent(agentId)}/skills`,
+    token,
+  );
+  return body.skills;
+}
+
+export async function listAgentChangeProposals(
+  token: string,
+  agentId: string,
+  base?: string,
+): Promise<AgentChangeProposal[]> {
+  const effectiveBase = base ?? (await getApiBase());
+  const body = await request<{ proposals: AgentChangeProposal[] }>(
+    `${effectiveBase}/api/agents/${encodeURIComponent(agentId)}/proposals`,
+    token,
+  );
+  return body.proposals;
 }
 
 export async function fetchWebuiThread(
@@ -327,11 +410,14 @@ export async function fetchProviderModels(
   const effectiveBase = base ?? (await getApiBase());
   const query = new URLSearchParams();
   query.set("provider", params.provider);
-  if (params.apiKey !== undefined) query.set("api_key", params.apiKey);
   if (params.apiBase !== undefined) query.set("api_base", params.apiBase);
+  const headers = params.apiKey === undefined
+    ? undefined
+    : { "X-Mona-Provider-Key": params.apiKey };
   return request<ProviderModelsResult>(
     `${effectiveBase}/api/settings/provider/models?${query}`,
     token,
+    headers ? { headers } : undefined,
   );
 }
 
@@ -372,12 +458,15 @@ export async function updateSidebarState(
   state: SidebarStatePayload,
   base?: string,
 ): Promise<SidebarStatePayload> {
-  const effectiveBase = base ?? (await getApiBase());
-  const query = new URLSearchParams();
-  query.set("state", JSON.stringify(state));
+  const effectiveBase = base ?? (await getGatewayHttpBase());
   return request<SidebarStatePayload>(
-    `${effectiveBase}/api/webui/sidebar-state/update?${query}`,
+    `${effectiveBase}/api/webui/sidebar-state/update`,
     token,
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(state),
+    },
   );
 }
 
@@ -412,12 +501,23 @@ export async function updateProviderSettings(
   const effectiveBase = base ?? (await getApiBase());
   const query = new URLSearchParams();
   query.set("provider", update.provider);
-  if (update.apiKey !== undefined) query.set("api_key", update.apiKey);
+  if (update.customName !== undefined) query.set("custom_name", update.customName);
   if (update.apiBase !== undefined) query.set("api_base", update.apiBase);
   if (update.model !== undefined) query.set("model", update.model);
+  if (update.enabledModels !== undefined) {
+    query.set("enabled_models", JSON.stringify(update.enabledModels));
+  }
+  if (update.discoveredModels !== undefined) {
+    query.set("discovered_models", JSON.stringify(update.discoveredModels));
+  }
+  if (update.delete !== undefined) query.set("delete", String(update.delete));
+  const headers = update.apiKey === undefined
+    ? undefined
+    : { "X-Mona-Provider-Key": update.apiKey };
   return request<SettingsPayload>(
     `${effectiveBase}/api/settings/provider/update?${query}`,
     token,
+    headers ? { headers } : undefined,
   );
 }
 
@@ -494,6 +594,32 @@ export async function updateTtsSettings(
   if (update.clearKey) query.set("clearKey", "true");
   return request<SettingsPayload>(
     `${effectiveBase}/api/settings/tts/update?${query}`,
+    token,
+  );
+}
+
+export async function updateStockSettings(
+  token: string,
+  update: StockSettingsUpdate,
+  base?: string,
+): Promise<SettingsPayload> {
+  const effectiveBase = base ?? (await getApiBase());
+  const query = new URLSearchParams();
+  if (update.enabled !== undefined) query.set("enabled", String(update.enabled));
+  if (update.autoReviewEnabled !== undefined) {
+    query.set("autoReviewEnabled", String(update.autoReviewEnabled));
+  }
+  if (update.reviewTime !== undefined) query.set("reviewTime", update.reviewTime);
+  if (update.reviewScope !== undefined) query.set("reviewScope", update.reviewScope);
+  if (update.pushNotification !== undefined) {
+    query.set("pushNotification", String(update.pushNotification));
+  }
+  if (update.pushEmail !== undefined) query.set("pushEmail", String(update.pushEmail));
+  if (update.quoteRefreshSec !== undefined) {
+    query.set("quoteRefreshSec", String(update.quoteRefreshSec));
+  }
+  return request<SettingsPayload>(
+    `${effectiveBase}/api/settings/stock/update?${query}`,
     token,
   );
 }
@@ -1105,6 +1231,24 @@ export async function extractUrl2Note(
       body: JSON.stringify({ url }),
     },
   );
+}
+
+export async function generateNote(
+  token: string,
+  prompt: string,
+  base?: string,
+): Promise<string> {
+  const effectiveBase = base ?? (await getGatewayHttpBase());
+  const result = await request<{ content: string }>(
+    `${effectiveBase}/api/notes/generate`,
+    token,
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ prompt }),
+    },
+  );
+  return result.content;
 }
 
 export interface Doc2NoteStatus {
@@ -1797,20 +1941,26 @@ export async function rewriteVideoScene(
 
 export interface ArtifactListResponse {
   files: DeliveredFile[];
+  session_files?: DeliveredFile[];
   truncated: boolean;
 }
 
-/** List all shared-output artifacts under ``<workspace>/output/``.
- *
- *  The directory root is fixed by the server; clients cannot pass an
- *  arbitrary root. Files are returned sorted by mtime desc. */
+/** List an Agent workspace plus explicit session references, or one room's
+ *  flat explicit-reference projection when ``room`` is given. The directory
+ *  root is fixed by the server; clients cannot pass an arbitrary root. */
 export async function listArtifacts(
   token: string,
   base?: string,
+  room?: string,
+  sessionKey?: string,
 ): Promise<ArtifactListResponse> {
   const effectiveBase = base ?? (await getApiBase());
+  const params = new URLSearchParams();
+  if (room) params.set("room", room);
+  if (sessionKey) params.set("session_key", sessionKey);
+  const query = params.toString() ? `?${params}` : "";
   return request<ArtifactListResponse>(
-    `${effectiveBase}/api/artifacts`,
+    `${effectiveBase}/api/artifacts${query}`,
     token,
   );
 }
@@ -1834,15 +1984,20 @@ export async function listProjectFiles(
 }
 
 export interface FilePreviewParams {
-  /** ``shared`` resolves against ``<workspace>/output/``; ``project``
-   *  resolves against the session's bound workspace directory. */
-  scope: "shared" | "project";
+  /** ``shared`` resolves against the active Agent output; ``project``
+   *  resolves against the session's bound workspace directory; ``room``
+   *  resolves through the room's explicit ArtifactRef owner. */
+  scope: "shared" | "project" | "room";
   /** Relative path under the scope root. Must not be empty, absolute,
    *  or contain ``..``. */
   path: string;
-  /** Required when ``scope === "project"``: the websocket session key
-   *  whose ``metadata.workspace`` is the preview root. */
+  /** Session key that identifies the active Agent/project owner. */
   sessionKey?: string | null;
+  /** Required when ``scope === "room"``: the room id. */
+  room?: string | null;
+  /** Structured owner reference id when the row came from an explicit
+   *  session/room delivery. */
+  artifactId?: string | null;
 }
 
 /** Fetch a file preview as a Blob using an authenticated request.
@@ -1862,6 +2017,8 @@ export async function fetchFilePreviewBlob(
   query.set("scope", params.scope);
   query.set("path", params.path);
   if (params.sessionKey) query.set("session_key", params.sessionKey);
+  if (params.room) query.set("room", params.room);
+  if (params.artifactId) query.set("artifact_id", params.artifactId);
   const url = `${effectiveBase}/api/file-preview?${query.toString()}`;
   const res = await httpFetch(url, {
     headers: { Authorization: `Bearer ${token}` },

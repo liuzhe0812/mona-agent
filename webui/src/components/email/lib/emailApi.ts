@@ -116,6 +116,10 @@ export async function addAccount(account: EmailAccount): Promise<void> {
   return invoke("email_add_account", { account });
 }
 
+export async function reorderAccounts(accountIds: string[]): Promise<void> {
+  return invoke("email_reorder_accounts", { accountIds });
+}
+
 /**
  * 更新账号设置（不会双重加密密码）。
  *
@@ -480,6 +484,8 @@ export interface FetchEmailBodyResult {
     fromName: string;
     toAddresses: string;
     ccAddresses: string;
+    /** 邮件日期（网络回退路径注入；本地命中路径无此字段） */
+    date?: string;
   };
 }
 

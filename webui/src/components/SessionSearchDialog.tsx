@@ -9,8 +9,11 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { deriveTitle } from "@/lib/format";
+import { filterSessionsByQuery } from "@/lib/session-search";
 import { cn } from "@/lib/utils";
 import type { ChatSummary } from "@/lib/types";
+import { useAgents } from "@/components/room/useAgents";
+import { useClientContextOrNull } from "@/providers/ClientProvider";
 
 interface SessionSearchDialogProps {
   open: boolean;
@@ -35,16 +38,14 @@ export function SessionSearchDialog({
   const inputRef = useRef<HTMLInputElement>(null);
   const [query, setQuery] = useState("");
   const [highlightedIndex, setHighlightedIndex] = useState(0);
+  const clientContext = useClientContextOrNull();
+  const agentsById = useAgents(clientContext?.token ?? null);
 
   const normalizedQuery = query.trim().toLowerCase();
   const sessionResults = useMemo(() => {
     if (!open) return [];
-    if (!normalizedQuery) return sessions;
-    const terms = normalizedQuery.split(/\s+/).filter(Boolean);
-    return sessions.filter((session) =>
-      sessionMatchesTerms(session, terms, titleOverrides[session.key]),
-    );
-  }, [normalizedQuery, open, sessions, titleOverrides]);
+    return filterSessionsByQuery(sessions, normalizedQuery, titleOverrides, agentsById);
+  }, [agentsById, normalizedQuery, open, sessions, titleOverrides]);
   const itemCount = sessionResults.length;
   const shortcutLabel = useMemo(getSearchShortcutLabel, []);
 
@@ -203,23 +204,6 @@ export function SessionSearchDialog({
       </DialogContent>
     </Dialog>
   );
-}
-
-function sessionMatchesTerms(
-  session: ChatSummary,
-  terms: string[],
-  titleOverride?: string,
-) {
-  const haystack = [
-    titleOverride,
-    session.title,
-    session.preview,
-  ]
-    .filter(Boolean)
-    .join(" ")
-    .toLowerCase();
-
-  return terms.every((term) => haystack.includes(term));
 }
 
 function getSearchShortcutLabel() {

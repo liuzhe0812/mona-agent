@@ -524,6 +524,8 @@ export function CalendarWeek({
                       onPointerMove={handleDragMove}
                       onPointerUp={handleDragEnd}
                       onPointerCancel={cancelDrag}
+                      // 阻止 click 冒泡到日列，避免打开编辑弹窗后又被列的 onClick 覆盖成新建
+                      onClick={(e) => e.stopPropagation()}
                       className={cn(
                         "absolute cursor-grab touch-none overflow-hidden rounded-lg border border-info/15 border-l-2 border-l-info bg-info/[0.08] px-2 py-1 shadow-surface",
                         (ev.item.done || !ev.item.enabled) && "opacity-50",

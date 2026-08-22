@@ -38,7 +38,7 @@
   "rail": {
     "navigation": "主導覽",
     "home": "首頁",
-    "messages": "訊息",
+    "messages": "會話",
     "partners": "夥伴",
     "more": "更多",
     "settings": "設定",
@@ -47,6 +47,8 @@
     "logout": "登出",
     "login": "登入",
     "updateAvailable": "有新版本可用",
+    "workspaceTabs": "工作區標籤頁",
+    "newBrowserTab": "新增瀏覽器標籤頁",
     "modules": {
       "note": "筆記",
       "doc": "AI文件",
@@ -55,7 +57,20 @@
       "schedule": "計畫",
       "db": "資料庫",
       "system": "系統",
-      "profile": "畫像"
+      "profile": "畫像",
+      "stock": "股票"
+    }
+  },
+  "browser": {
+    "newTab": {
+      "title": "開始瀏覽",
+      "hint": "搜尋網頁或輸入網址",
+      "incognitoHint": "無痕搜尋或輸入網址",
+      "placeholder": "搜尋或輸入網址",
+      "history": "歷史記錄",
+      "downloads": "下載內容",
+      "localBadge": "新分頁已準備好",
+      "incognitoBadge": "無痕模式已開啟"
     }
   },
   "partners": {
@@ -63,14 +78,12 @@
     "detailAria": "夥伴詳情",
     "noDescription": "這個夥伴還沒有簡介。",
     "startDirect": "開始私聊",
-    "createRoom": "建立房間",
-    "newDirectTitle": "新增私聊",
-    "newDirectHint": "選擇一個夥伴開始一對一對話。",
-    "newRoomTitle": "新增協作房間",
-    "newRoomHint": "選擇參與協作的夥伴，並設定房間標題與目標。",
-    "roomTitleLabel": "房間標題",
-    "roomTitlePlaceholder": "房間標題（留空依成員自動產生）",
-    "roomGoalLabel": "房間目標",
+    "createRoom": "建立協作群組",
+    "newRoomTitle": "新增協作群組",
+    "newRoomHint": "選擇參與協作的夥伴，並設定群組聊天標題與目標。",
+    "roomTitleLabel": "群組聊天標題",
+    "roomTitlePlaceholder": "留空依成員自動產生",
+    "roomGoalLabel": "群組聊天目標",
     "roomGoalPlaceholder": "這次協作要達成什麼目標？（可選）"
   },
   "nav": {
@@ -87,14 +100,6 @@
     "collapse": "收合側邊欄",
     "toggleTheme": "切換主題",
     "newChat": "新增對話",
-    "viewOptions": "檢視",
-    "compactList": "緊湊列表",
-    "showPreviews": "顯示預覽",
-    "showTimestamps": "顯示時間",
-    "sortLabel": "排序",
-    "sortUpdated": "最近更新",
-    "sortCreated": "最近建立",
-    "sortTitle": "標題 A-Z",
     "recent": "最近對話",
     "refreshSessions": "重新整理會話",
     "settings": "設定",
@@ -106,6 +111,7 @@
     },
     "searchAria": "搜尋",
     "searchPlaceholder": "搜尋",
+    "clearSearch": "清除搜尋",
     "searchResults": "搜尋結果",
     "noSearchResults": "沒有符合的對話。"
   },
@@ -268,6 +274,7 @@
       "configuredCount": "{{count}} configured",
       "totalProviders": "{{count}} available",
       "webSearch": "Web search",
+      "videoGeneration": "影片生成",
       "workspace": "Workspace"
     },
     "providers": {
@@ -283,8 +290,13 @@
     "actions": "「{{title}}」的會話操作",
     "activity": {
       "running": "Agent 正在執行",
-      "complete": "Agent 已完成"
+      "complete": "Agent 已完成",
+      "waitingApproval": "等待審批",
+      "failed": "執行失敗",
+      "scheduled": "已啟用排程"
     },
+    "unread": "未讀",
+    "markAllRead": "全部標示為已讀",
     "pin": "置頂",
     "unpin": "取消置頂",
     "rename": "重新命名",
@@ -298,9 +310,10 @@
     "hideArchived": "隱藏封存",
     "delete": "刪除",
     "newChat": "新增對話",
+    "agentSettings": "Agent 設定",
     "createMenu": "建立",
-    "newDirect": "新增私聊",
-    "newRoom": "新增房間",
+    "chatWith": "與 {{name}} 聊聊",
+    "newRoom": "新增協作群組",
     "groups": {
       "pinned": "置頂",
       "conversations": "會話",
@@ -308,7 +321,8 @@
       "today": "今天",
       "yesterday": "昨天",
       "earlier": "更早",
-      "archived": "已封存"
+      "archived": "已封存",
+      "rooms": "群組"
     },
     "moveToProject": "移動到專案…",
     "newProjectChat": "在專案中新建會話",
@@ -332,13 +346,19 @@
     "header": {
       "members": "成員（{{count}}）"
     },
+    "emptyHint": "像群組聊天一樣傳送訊息開始協作；工作流程的執行過程也會顯示在這裡。",
     "panel": {
-      "title": "協作房間",
+      "title": "協作群組",
       "partner": "夥伴",
       "collapse": "收合面板",
+      "info": "資訊",
       "goal": "目標",
-      "goalEmpty": "尚未設定房間目標。",
+      "goalEmpty": "尚未設定群組聊天目標。",
       "members": "成員",
+      "builtin": "團隊內建",
+      "artifacts": "產物",
+      "artifactsEmpty": "這個群組聊天還沒有產物。成員產出的檔案會出現在這裡。",
+      "refresh": "重新整理",
       "workflow": "工作流程"
     },
     "workflow": {
@@ -346,14 +366,26 @@
       "edit": "編輯",
       "editNewVersion": "編輯新版本",
       "activate": "啟用",
-      "run": "執行",
+      "runAction": "執行",
       "cancelRun": "取消執行",
+      "runFailed": "工作流程執行失敗：{{detail}}",
+      "runError": {
+        "run_conflict": "已有正在執行的工作流程。",
+        "run_failed": "工作流程執行失敗。"
+      },
       "draft": "草稿",
       "active": "目前版本",
       "revision": "版本 {{revision}}",
       "stepsCount": "{{count}} 個步驟",
       "empty": "尚未設定工作流程。",
       "hint": "也可以直接在對話裡讓 Mona 幫你編排。",
+      "canvas": {
+        "members": "新增步驟",
+        "config": "步驟設定",
+        "selectNode": "在畫布上選取節點進行編輯，或從左側新增步驟。",
+        "emptyHint": "點擊左側成員，新增第一個步驟。",
+        "autoLayout": "自動版面"
+      },
       "editor": {
         "goal": "流程目標",
         "goalPlaceholder": "這次協作要產出什麼？",
@@ -411,6 +443,8 @@
           "skipped": "已略過"
         },
         "approval": "審批",
+        "retryStep": "重試此步驟",
+        "cancelStep": "取消此步驟",
         "revision": "基於版本 {{revision}}"
       },
       "approval": {
@@ -624,6 +658,8 @@
     "agentActivityLiveSummary": "進行中… · {{reasoning}} 步 · {{tools}} 次工具呼叫",
     "agentActivityLiveToolsOnly": "進行中… · {{tools}} 次工具呼叫",
     "imageAttachment": "圖片附件",
+    "showAll": "顯示全部",
+    "collapse": "收合",
     "saveAsNote": "儲存為筆記",
     "savedAsNote": "已儲存為筆記",
     "downloadImage": "下載圖片",
@@ -642,6 +678,21 @@
     "copyAria": "複製程式碼",
     "copy": "複製",
     "copied": "已複製"
+  },
+  "chart": {
+    "untitled": "資料圖表",
+    "export": "匯出",
+    "exportPng": "匯出 PNG 圖片",
+    "exportSvg": "匯出 SVG 向量圖",
+    "exportCsv": "匯出 CSV 資料",
+    "errors": {
+      "invalidJson": "圖表資料不是有效的 JSON。",
+      "unsupportedType": "不支援此圖表類型。支援長條圖、折線圖、面積圖、圓餅圖和散點圖。",
+      "emptyData": "圖表沒有可呈現的資料。",
+      "invalidData": "圖表資料格式無效或包含非數值欄位。",
+      "invalidScatter": "散點圖的每個資料點都必須包含數值 x 和 y。",
+      "invalidPie": "圓餅圖需要至少一個大於 0 的數值。"
+    }
   },
   "common": {
     "dismiss": "關閉",

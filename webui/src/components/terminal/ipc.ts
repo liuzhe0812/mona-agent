@@ -21,6 +21,8 @@ function isTauri(): boolean {
   return !!(window as unknown as Record<string, unknown>).__TAURI_INTERNALS__;
 }
 
+let terminalOutputReady: Promise<void> | undefined;
+
 export type { ConnectionConfig, AuthConfig, FileInfo };
 
 export async function sftpBatchUpload(
@@ -128,6 +130,7 @@ export async function sshResize(
 }
 
 export async function shellSpawn(cols: number, rows: number): Promise<string> {
+  await terminalOutputReady;
   return invoke<string>("shell_spawn", { cols, rows });
 }
 
@@ -398,12 +401,11 @@ export interface TerminalOutputEvent {
 export function onTerminalOutput(
   handler: (event: TerminalOutputEvent) => void,
 ): Promise<UnlistenFn> {
-  if (!isTauri()) {
-    return Promise.resolve(() => {});
-  }
-  return listen<TerminalOutputEvent>("terminal-output", (e) =>
-    handler(e.payload),
-  );
+  const registration = isTauri()
+    ? listen<TerminalOutputEvent>("terminal-output", (e) => handler(e.payload))
+    : Promise.resolve(() => {});
+  terminalOutputReady ??= registration.then(() => undefined, () => undefined);
+  return registration;
 }
 
 export async function terminalRespondExec(

@@ -1,4 +1,7 @@
 import type {
+  AgentChangeProposal,
+  AgentInstruction,
+  AgentUserConfigPayload,
   AgentJobSummary,
   ApprovalRequestedPayload,
   ConnectionStatus,
@@ -13,6 +16,7 @@ import type {
   WorkflowDefinition,
   WorkflowRun,
   WorkflowStep,
+  WorkflowStepActivityPayload,
   WorkflowTrigger,
   WorkflowUpdatedPayload,
 } from "./types";
@@ -70,9 +74,14 @@ type RunStatusHandler = (chatId: string, startedAt: number | null) => void;
 type RoomUpdatedHandler = (chatId: string, state: RoomState) => void;
 type AgentJobUpdatedHandler = (chatId: string, job: AgentJobSummary) => void;
 type WorkflowUpdatedHandler = (chatId: string, payload: WorkflowUpdatedPayload) => void;
-/** ``run`` is null on run-conflict error frames (``error`` carries the code). */
-type WorkflowRunUpdatedHandler = (chatId: string, run: WorkflowRun | null, error?: string) => void;
+/** ``run`` is null on run-conflict/run-failed error frames (``error`` carries
+ *  the code, ``detail`` the human-readable cause). */
+type WorkflowRunUpdatedHandler = (chatId: string, run: WorkflowRun | null, error?: string, detail?: string) => void;
+/** Live tool-activity snapshot of one workflow step job (full accumulator,
+ *  not a delta — replace any previously seen list for the same step). */
+type WorkflowStepActivityHandler = (chatId: string, payload: WorkflowStepActivityPayload) => void;
 type ApprovalRequestedHandler = (payload: ApprovalRequestedPayload) => void;
+type AgentsUpdatedHandler = (agentId: string, event: "agents_updated" | "agent_instructions_updated" | "agent_skills_updated" | "agent_change_proposal_created" | "agent_change_proposal_resolved") => void;
 /** Room-scoped command results share one pending map; workflow commands add
  *  their optional payload fields via this intersection. */
 type AnyRoomCommandResult = RoomCommandResult & WorkflowCommandResult;
@@ -141,7 +150,7 @@ export class MonaClient {
   private statusHandlers = new Set<StatusHandler>();
   private runtimeModelHandlers = new Set<RuntimeModelHandler>();
   private sessionUpdateHandlers = new Set<SessionUpdateHandler>();
-  private artifactsChangedHandlers = new Set<() => void>();
+  private artifactsChangedHandlers = new Set<(chatId?: string) => void>();
   private pptPhaseChangedHandlers = new Set<(payload: { projectName: string; phase: string }) => void>();
   private videoProjectChangedHandlers = new Set<(payload: { projectName: string; hint: string }) => void>();
   private runStatusHandlers = new Set<RunStatusHandler>();
@@ -149,7 +158,9 @@ export class MonaClient {
   private agentJobUpdatedHandlers = new Set<AgentJobUpdatedHandler>();
   private workflowUpdatedHandlers = new Set<WorkflowUpdatedHandler>();
   private workflowRunUpdatedHandlers = new Set<WorkflowRunUpdatedHandler>();
+  private workflowStepActivityHandlers = new Set<WorkflowStepActivityHandler>();
   private approvalRequestedHandlers = new Set<ApprovalRequestedHandler>();
+  private agentsUpdatedHandlers = new Set<AgentsUpdatedHandler>();
   private errorHandlers = new Set<ErrorHandler>();
   private pptUploadHandlers = new Set<(result: { ok: boolean; files?: { name: string; path: string }[]; error?: string }) => void>();
   private pptSaveBrandHandlers = new Set<(result: { ok: boolean; brandId?: string; error?: string }) => void>();
@@ -241,9 +252,9 @@ export class MonaClient {
     };
   }
 
-  /** Subscribe to server-pushed ``artifacts_changed`` broadcasts: the shared
-   *  output directory changed on disk, listeners should rescan it. */
-  onArtifactsChanged(handler: () => void): Unsubscribe {
+  /** Subscribe to artifact change hints. ``chatId`` is present for an
+   *  explicit delivery event and absent for a global filesystem watcher. */
+  onArtifactsChanged(handler: (chatId?: string) => void): Unsubscribe {
     this.artifactsChangedHandlers.add(handler);
     return () => {
       this.artifactsChangedHandlers.delete(handler);
@@ -470,11 +481,27 @@ export class MonaClient {
     };
   }
 
+  /** Subscribe to live step tool-activity streams (``workflow_step_activity``). */
+  onWorkflowStepActivity(handler: WorkflowStepActivityHandler): Unsubscribe {
+    this.workflowStepActivityHandlers.add(handler);
+    return () => {
+      this.workflowStepActivityHandlers.delete(handler);
+    };
+  }
+
   /** Subscribe to approval request broadcasts (``approval_requested``). */
   onApprovalRequested(handler: ApprovalRequestedHandler): Unsubscribe {
     this.approvalRequestedHandlers.add(handler);
     return () => {
       this.approvalRequestedHandlers.delete(handler);
+    };
+  }
+
+  /** Subscribe to Agent management updates so cached agent data can refresh. */
+  onAgentsUpdated(handler: AgentsUpdatedHandler): Unsubscribe {
+    this.agentsUpdatedHandlers.add(handler);
+    return () => {
+      this.agentsUpdatedHandlers.delete(handler);
     };
   }
 
@@ -505,6 +532,108 @@ export class MonaClient {
       agent_id: agentId,
       request_id: requestId,
     })).then(() => undefined);
+  }
+
+  updateAgentConfig(
+    agentId: string,
+    config: Record<string, unknown>,
+    expectedRevision?: number,
+  ): Promise<AgentUserConfigPayload> {
+    return this.sendAgentCommandRaw("agent_config_update_result", (requestId) => ({
+      type: "agent_config_update",
+      agent_id: agentId,
+      config,
+      ...(expectedRevision !== undefined ? { expected_revision: expectedRevision } : {}),
+      request_id: requestId,
+    })).then((result) => {
+      const configResult = (result as { config?: AgentUserConfigPayload }).config;
+      if (!configResult) throw new Error("malformed agent_config_update_result");
+      return configResult;
+    });
+  }
+
+  saveAgentInstruction(
+    agentId: string,
+    key: AgentInstruction["key"],
+    content: string,
+  ): Promise<AgentInstruction> {
+    return this.sendAgentCommandRaw("agent_instruction_save_result", (requestId) => ({
+      type: "agent_instruction_save",
+      agent_id: agentId,
+      key,
+      content,
+      request_id: requestId,
+    })).then((result) => {
+      const instruction = (result as { instruction?: AgentInstruction }).instruction;
+      if (!instruction) throw new Error("malformed agent_instruction_save_result");
+      return instruction;
+    });
+  }
+
+  restoreAgentInstruction(
+    agentId: string,
+    key: AgentInstruction["key"],
+    commit: string,
+  ): Promise<AgentInstruction> {
+    return this.sendAgentCommandRaw("agent_instruction_restore_result", (requestId) => ({
+      type: "agent_instruction_restore",
+      agent_id: agentId,
+      key,
+      commit,
+      request_id: requestId,
+    })).then((result) => {
+      const instruction = (result as { instruction?: AgentInstruction }).instruction;
+      if (!instruction) throw new Error("malformed agent_instruction_restore_result");
+      return instruction;
+    });
+  }
+
+  stageAgentSkill(agentId: string, name: string, content: string): Promise<AgentChangeProposal> {
+    return this.sendAgentCommandRaw("agent_skill_stage_result", (requestId) => ({
+      type: "agent_skill_stage",
+      agent_id: agentId,
+      name,
+      content,
+      request_id: requestId,
+    })).then((result) => {
+      const proposal = (result as { proposal?: AgentChangeProposal }).proposal;
+      if (!proposal) throw new Error("malformed agent_skill_stage_result");
+      return proposal;
+    });
+  }
+
+  actOnAgentSkill(
+    agentId: string,
+    name: string,
+    action: "enable" | "disable" | "archive" | "restore" | "enable_scripts" | "disable_scripts",
+  ): Promise<void> {
+    return this.sendAgentCommandRaw("agent_skill_action_result", (requestId) => ({
+      type: "agent_skill_action",
+      agent_id: agentId,
+      name,
+      action,
+      request_id: requestId,
+    })).then(() => undefined);
+  }
+
+  resolveAgentChange(
+    agentId: string,
+    proposalId: string,
+    token: string,
+    approve: boolean,
+  ): Promise<AgentChangeProposal> {
+    return this.sendAgentCommandRaw("resolve_agent_change_result", (requestId) => ({
+      type: "resolve_agent_change",
+      agent_id: agentId,
+      proposal_id: proposalId,
+      token,
+      approve,
+      request_id: requestId,
+    })).then((result) => {
+      const proposal = (result as { proposal?: AgentChangeProposal }).proposal;
+      if (!proposal) throw new Error("malformed resolve_agent_change_result");
+      return proposal;
+    });
   }
 
   /** Edit room title / goal / membership. */
@@ -603,13 +732,59 @@ export class MonaClient {
   }
 
   /** Start a run of the room's active workflow. Run state arrives via
-   *  ``workflow_run_updated`` pushes. */
-  runWorkflow(chatId: string): Promise<void> {
+   *  ``workflow_run_updated`` pushes. Optional ``inputs`` ride along
+   *  verbatim as the run's structured input (stock-module design §4.2).
+   *  ``templateRef`` is an optional installed-package template selector;
+   *  omitting it preserves the legacy active-workflow behavior. */
+  runWorkflow(
+    chatId: string,
+    inputs?: Record<string, unknown>,
+    templateRef?: string,
+  ): Promise<void> {
     return this.sendRoomCommandRaw("run_workflow_result", (requestId) => ({
       type: "run_workflow",
       chat_id: chatId,
+      ...(inputs !== undefined ? { inputs } : {}),
+      ...(templateRef !== undefined ? { template_ref: templateRef } : {}),
       request_id: requestId,
     })).then(() => undefined);
+  }
+
+  /** Synchronize the persisted stock-selection schedule with the gateway
+   * cron service.  This is deliberately separate from the HTTP strategy save:
+   * a successful save must not be presented as a registered schedule. */
+  syncStockScreenSchedule(
+    chatId: string,
+    strategyId: string,
+    schedule: Record<string, unknown>,
+  ): Promise<{ status: "registered" | "disabled" | "unavailable" | string; code?: string; detail?: string; job_id?: string }> {
+    return this.sendRoomCommandRaw("sync_stock_selection_schedule_result", (requestId) => ({
+      type: "sync_stock_selection_schedule",
+      chat_id: chatId,
+      strategy_id: strategyId,
+      schedule,
+      request_id: requestId,
+    } as unknown as Outbound)).then((result) => {
+      const payload = result as unknown as {
+        status?: string;
+        registered?: boolean;
+        unavailable?: boolean;
+        code?: string;
+        detail?: string;
+        job_id?: string;
+      };
+      if (!payload.status && payload.registered === undefined && payload.unavailable === undefined) {
+        throw new Error("malformed sync_stock_selection_schedule_result");
+      }
+      const status = payload.status
+        ?? (payload.registered === true ? "registered" : payload.unavailable === true ? "unavailable" : "disabled");
+      return {
+        status,
+        code: payload.code,
+        detail: payload.detail,
+        job_id: payload.job_id,
+      };
+    });
   }
 
   /** Cancel a non-terminal run (defaults to the room's active run);
@@ -626,6 +801,18 @@ export class MonaClient {
       }
       return result.run_id;
     });
+  }
+
+  /** Retry one failed agent step; the server acknowledges after resetting the
+   * step and resumes the run asynchronously. */
+  retryWorkflowStep(chatId: string, runId: string, stepId: string): Promise<void> {
+    return this.sendRoomCommandRaw("retry_workflow_step_result", (requestId) => ({
+      type: "retry_workflow_step",
+      chat_id: chatId,
+      run_id: runId,
+      step_id: stepId,
+      request_id: requestId,
+    })).then(() => undefined);
   }
 
   /** Fetch a workflow run (defaults to the room's latest). */
@@ -864,8 +1051,9 @@ export class MonaClient {
     }
 
     if (parsed.event === "artifacts_changed") {
+      const chatId = typeof parsed.chat_id === "string" ? parsed.chat_id : undefined;
       for (const handler of this.artifactsChangedHandlers) {
-        handler();
+        handler(chatId);
       }
       return;
     }
@@ -969,10 +1157,31 @@ export class MonaClient {
       parsed.event === "workflow_state_result" ||
       parsed.event === "run_workflow_result" ||
       parsed.event === "cancel_workflow_run_result" ||
+      parsed.event === "retry_workflow_step_result" ||
       parsed.event === "workflow_run_state_result" ||
-      parsed.event === "resolve_workflow_approval_result"
+      parsed.event === "resolve_workflow_approval_result" ||
+      (parsed as unknown as { event?: string }).event === "sync_stock_selection_schedule_result" ||
+      parsed.event === "agent_config_update_result" ||
+      parsed.event === "agent_instruction_save_result" ||
+      parsed.event === "agent_instruction_restore_result" ||
+      parsed.event === "agent_skill_stage_result" ||
+      parsed.event === "agent_skill_action_result" ||
+      parsed.event === "resolve_agent_change_result"
     ) {
       this.handleRoomCommandResult(parsed);
+      return;
+    }
+
+    if (
+      parsed.event === "agents_updated" ||
+      parsed.event === "agent_instructions_updated" ||
+      parsed.event === "agent_skills_updated" ||
+      parsed.event === "agent_change_proposal_created" ||
+      parsed.event === "agent_change_proposal_resolved"
+    ) {
+      for (const handler of this.agentsUpdatedHandlers) {
+        handler(parsed.agent_id, parsed.event);
+      }
       return;
     }
 
@@ -1010,7 +1219,34 @@ export class MonaClient {
       // error frames carry ``error``/``detail`` instead of ``id``.
       const run = parsed.id ? (parsed as unknown as WorkflowRun) : null;
       for (const handler of this.workflowRunUpdatedHandlers) {
-        handler(parsed.chat_id, run, parsed.error ?? parsed.detail);
+        handler(parsed.chat_id, run, parsed.error, parsed.detail);
+      }
+      return;
+    }
+
+    if (parsed.event === "workflow_step_activity") {
+      const frame = parsed as {
+        chat_id: string;
+        run_id?: string;
+        step_id?: string;
+        job_id?: string | null;
+        author_id?: string;
+        tool_events?: unknown;
+      };
+      if (typeof frame.run_id !== "string" || typeof frame.step_id !== "string") {
+        return;
+      }
+      const toolEvents = Array.isArray(frame.tool_events)
+        ? (frame.tool_events as WorkflowStepActivityPayload["toolEvents"])
+        : [];
+      for (const handler of this.workflowStepActivityHandlers) {
+        handler(frame.chat_id, {
+          runId: frame.run_id,
+          stepId: frame.step_id,
+          jobId: typeof frame.job_id === "string" ? frame.job_id : null,
+          authorId: typeof frame.author_id === "string" && frame.author_id ? frame.author_id : "mona",
+          toolEvents,
+        });
       }
       return;
     }
@@ -1060,6 +1296,13 @@ export class MonaClient {
       this.pendingRoomCommands.set(requestId, { resolve, reject, timer });
       this.queueSend(build(requestId));
     });
+  }
+
+  private sendAgentCommandRaw(
+    resultEvent: string,
+    build: (requestId: string) => Outbound,
+  ): Promise<AnyRoomCommandResult> {
+    return this.sendRoomCommandRaw(resultEvent, build);
   }
 
   private handleRoomCommandResult(ev: InboundEvent): void {

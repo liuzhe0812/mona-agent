@@ -66,6 +66,28 @@ describe("useSessions", () => {
     vi.mocked(api.fetchWebuiThread).mockReset();
   });
 
+  it("does not report the session list loaded before an authoritative response", async () => {
+    let resolve: ((rows: import("@/lib/types").ChatSummary[]) => void) | undefined;
+    vi.mocked(api.listSessions).mockImplementationOnce(
+      () => new Promise((done) => { resolve = done; }),
+    );
+
+    const { result } = renderHook(() => useSessions(), {
+      wrapper: wrap(fakeClient()),
+    });
+
+    await waitFor(() => expect(api.listSessions).toHaveBeenCalledTimes(1));
+    expect(result.current.loading).toBe(true);
+    expect(result.current.loaded).toBe(false);
+
+    await act(async () => {
+      resolve?.([]);
+    });
+
+    await waitFor(() => expect(result.current.loaded).toBe(true));
+    expect(result.current.loading).toBe(false);
+  });
+
   it("does not use low-information greetings as fallback session titles", () => {
     expect(sessionTitle({
       key: "websocket:chat-hi",
@@ -132,7 +154,8 @@ describe("useSessions", () => {
         chatId: "chat-a",
         createdAt: "2026-04-16T10:00:00Z",
         updatedAt: "2026-04-16T10:00:00Z",
-        preview: "",
+        preview: "第一条回复",
+        previewAt: "2026-04-16T10:00:00Z",
       },
       ])
       .mockResolvedValueOnce([
@@ -143,7 +166,10 @@ describe("useSessions", () => {
           createdAt: "2026-04-16T10:00:00Z",
           updatedAt: "2026-04-16T10:01:00Z",
           title: "生成的小标题",
-          preview: "用户第一句话",
+          preview: "第二条专业 Agent 回复",
+          previewAt: "2026-04-16T10:01:00Z",
+          previewAuthorType: "agent",
+          previewAuthorId: "com.mona.a-share-analyst",
         },
       ]);
     const client = fakeClient();
@@ -159,6 +185,8 @@ describe("useSessions", () => {
     });
 
     await waitFor(() => expect(result.current.sessions[0]?.title).toBe("生成的小标题"));
+    expect(result.current.sessions[0]?.preview).toBe("第二条专业 Agent 回复");
+    expect(result.current.sessions[0]?.previewAuthorId).toBe("com.mona.a-share-analyst");
     expect(api.listSessions).toHaveBeenCalledTimes(2);
   });
 
