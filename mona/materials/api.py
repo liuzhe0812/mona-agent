@@ -361,6 +361,47 @@ def _read_text_status(
 # ---------------------------------------------------------------------------
 
 
+def _wiki_ingest_states(root: Path) -> dict[str, str]:
+    """返回 raw 相对路径对应的入库状态。"""
+    refs: dict[str, dict[str, Any]] = {}
+    wiki_root = root / "wiki"
+    if not wiki_root.exists():
+        return {}
+    for page in wiki_root.rglob("*.md"):
+        try:
+            fm, _ = _parse_frontmatter(page.read_text(encoding="utf-8"))
+        except OSError:
+            continue
+        sources = fm.get("sources")
+        if not isinstance(sources, list):
+            continue
+        hashes = fm.get("sourceHashes")
+        hashes = set(hashes) if isinstance(hashes, list) else set()
+        for source in sources:
+            if not isinstance(source, str):
+                continue
+            raw_rel = source.replace("\\", "/").removeprefix("raw/")
+            if not raw_rel:
+                continue
+            ref = refs.setdefault(raw_rel, {"hashes": set(), "stale": False})
+            ref["hashes"].update(hashes)
+            ref["stale"] = ref["stale"] or fm.get("stale") is True
+
+    states: dict[str, str] = {}
+    for raw_rel, ref in refs.items():
+        state = "stale" if ref["stale"] else "ingested"
+        text_path = _text_path_for_raw(raw_rel, root)
+        try:
+            text_fm, _ = _parse_frontmatter(text_path.read_text(encoding="utf-8"))
+        except OSError:
+            text_fm = {}
+        current_hash = text_fm.get("sha256")
+        if current_hash and ref["hashes"] and current_hash not in ref["hashes"]:
+            state = "stale"
+        states[raw_rel] = state
+    return states
+
+
 async def handle_materials_list_files(req: web.Request) -> web.Response:
     """GET /api/materials/files — 递归列出 raw/ 下的文件和目录树。
 
@@ -378,6 +419,7 @@ async def handle_materials_list_files(req: web.Request) -> web.Response:
     if not target.exists():
         return web.json_response({"entries": []})
 
+    ingest_states = _wiki_ingest_states(root)
     entries: list[dict[str, Any]] = []
     for child in sorted(target.iterdir(), key=lambda p: (not p.is_dir(), p.name.lower())):
         rel = _relative_to_materials(child, root)
@@ -404,6 +446,7 @@ async def handle_materials_list_files(req: web.Request) -> web.Response:
                 "size": stat.st_size,
                 "mtime": int(stat.st_mtime),
                 "extractStatus": status,
+                "ingestStatus": ingest_states.get(raw_rel, "not_ingested"),
             })
 
     return web.json_response({"entries": entries})

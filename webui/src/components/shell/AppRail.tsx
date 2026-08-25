@@ -31,7 +31,6 @@ import {
   DropdownMenuContent,
   DropdownMenuItem,
   DropdownMenuLabel,
-  DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import {
@@ -119,9 +118,9 @@ function RailItem({
       aria-current={active ? "page" : undefined}
       onClick={onClick}
       className={cn(
-        "relative flex w-full flex-col items-center gap-1 rounded-lg px-1 py-1.5 transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring",
+        "relative flex w-full flex-col items-center gap-1 rounded-lg px-1 py-1.5 transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring before:absolute before:left-0 before:top-1/2 before:h-4 before:w-0.5 before:-translate-y-1/2 before:rounded-r before:bg-transparent before:content-['']",
         active
-          ? "bg-[hsl(var(--sidebar-active-surface)/0.07)] text-sidebar-foreground"
+          ? "bg-transparent text-sidebar-foreground before:bg-[hsl(var(--brand-red))]"
           : "text-sidebar-foreground/80 hover:bg-[hsl(var(--sidebar-hover-surface)/0.04)] hover:text-sidebar-foreground",
       )}
     >
@@ -250,9 +249,9 @@ export function AppRail(props: AppRailProps) {
                   aria-label={t("rail.more")}
                   aria-current={secondaryActive ? "page" : undefined}
                   className={cn(
-                    "relative flex w-full flex-col items-center gap-1 rounded-lg px-1 py-1.5 transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring",
+                    "relative flex w-full flex-col items-center gap-1 rounded-lg px-1 py-1.5 transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring before:absolute before:left-0 before:top-1/2 before:h-4 before:w-0.5 before:-translate-y-1/2 before:rounded-r before:bg-transparent before:content-['']",
                     secondaryActive
-                      ? "bg-[hsl(var(--sidebar-active-surface)/0.07)] text-sidebar-foreground"
+                      ? "bg-transparent text-sidebar-foreground before:bg-[hsl(var(--brand-red))]"
                       : "text-sidebar-foreground/80 hover:bg-[hsl(var(--sidebar-hover-surface)/0.04)] hover:text-sidebar-foreground",
                   )}
                 >
@@ -313,10 +312,10 @@ export function AppRail(props: AppRailProps) {
                   type="button"
                   aria-label={t("rail.updateAvailable")}
                   onClick={() => props.onStartUpdate?.()}
-                  className="relative flex h-8 w-8 items-center justify-center rounded-lg text-blue-500 transition-colors hover:bg-[hsl(var(--sidebar-hover-surface)/0.04)] focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
+                  className="relative flex h-8 w-8 items-center justify-center rounded-lg text-info transition-colors hover:bg-[hsl(var(--sidebar-hover-surface)/0.04)] focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
                 >
                   <Download className="h-4 w-4 animate-pulse [animation-duration:2s]" />
-                  <span className="absolute right-1 top-1 h-1.5 w-1.5 rounded-full bg-blue-500" />
+                  <span className="absolute right-1 top-1 h-1.5 w-1.5 rounded-full bg-info" />
                 </button>
               </TooltipTrigger>
               <TooltipContent side="right">{t("rail.updateAvailable")}</TooltipContent>
@@ -336,7 +335,7 @@ export function AppRail(props: AppRailProps) {
               <DropdownMenuContent side="top" align="center" sideOffset={8} className="min-w-[200px]">
                 <DropdownMenuLabel className="px-2.5 py-2 font-normal">
                   <div className="flex items-center gap-2.5">
-                    <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-blue-500/15 text-blue-600 dark:text-blue-400">
+                    <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-muted text-muted-foreground">
                       <User className="h-4 w-4" />
                     </span>
                     <div className="min-w-0 flex-1">
@@ -353,7 +352,6 @@ export function AppRail(props: AppRailProps) {
                     </div>
                   </div>
                 </DropdownMenuLabel>
-                <DropdownMenuSeparator />
                 <DropdownMenuItem
                   className="gap-2 px-2.5 py-1.5 text-[13px]"
                   onSelect={() => props.onOpenSettings()}
@@ -361,7 +359,6 @@ export function AppRail(props: AppRailProps) {
                   <Settings className="h-4 w-4" />
                   <span>{t("rail.settings")}</span>
                 </DropdownMenuItem>
-                <DropdownMenuSeparator />
                 <DropdownMenuItem
                   className="gap-2 px-2.5 py-1.5 text-[13px]"
                   onSelect={() => props.onToggleTheme?.()}
@@ -373,7 +370,6 @@ export function AppRail(props: AppRailProps) {
                   )}
                   <span>{props.theme === "dark" ? "切换为浅色" : "切换为深色"}</span>
                 </DropdownMenuItem>
-                <DropdownMenuSeparator />
                 <DropdownMenuItem
                   className="gap-2 px-2.5 py-1.5 text-[13px]"
                   onSelect={() => props.onOpenLogin?.()}
@@ -381,7 +377,6 @@ export function AppRail(props: AppRailProps) {
                   <UserCog className="h-4 w-4" />
                   <span>{t("rail.manageAccount")}</span>
                 </DropdownMenuItem>
-                <DropdownMenuSeparator />
                 <DropdownMenuItem
                   className="gap-2 px-2.5 py-1.5 text-[13px] text-destructive focus:text-destructive"
                   onSelect={() => void logout()}

@@ -146,18 +146,19 @@ export function NotificationWindow() {
 
   return (
     <div
+      data-testid="notification-window"
       className={cn(
-        "h-full w-full select-none overflow-hidden rounded-2xl",
+        "h-full w-full select-none overflow-hidden rounded-xl",
         closing
-          ? "animate-out fade-out-0 slide-out-to-right-full duration-300"
-          : "animate-in fade-in-0 slide-in-from-right-full duration-300",
+          ? "animate-out fade-out-0 slide-out-to-right-full duration-fast"
+          : "animate-in fade-in-0 slide-in-from-right-full duration-standard",
       )}
       onMouseEnter={handleMouseEnter}
       onMouseLeave={handleMouseLeave}
     >
       <div
         className={cn(
-          "relative flex h-full w-full flex-col gap-1.5 overflow-hidden rounded-2xl border border-border/60 bg-popover/95 p-3.5 shadow-lg backdrop-blur-xl dark:border-white/10",
+          "relative flex h-full w-full flex-col gap-1.5 overflow-hidden rounded-xl border border-border/60 bg-popover/95 p-3.5 shadow-lg backdrop-blur-xl dark:border-white/10",
           payload.clickAction && "cursor-pointer hover:bg-popover",
         )}
         onClick={handleCardClick}
@@ -205,8 +206,11 @@ export function NotificationWindow() {
             ))}
           </div>
         ) : null}
-        {/* 底部渐变装饰条 */}
-        <div className="absolute inset-x-0 bottom-0 h-0.5 bg-gradient-to-r from-blue-500/0 via-blue-500/40 to-blue-500/0" />
+        <div
+          aria-hidden
+          data-testid="notification-signal"
+          className="absolute inset-x-0 bottom-0 h-0.5 bg-[hsl(var(--brand-red))]"
+        />
       </div>
     </div>
   );

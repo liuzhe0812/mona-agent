@@ -456,7 +456,7 @@ export function VideoMakerView() {
       <div className="flex min-h-0 flex-1">
         {sidebarCollapsed ? (
           <TooltipProvider delayDuration={100}>
-            <div className="flex w-12 shrink-0 flex-col items-center border-r border-border/70 bg-muted/30 py-3">
+            <div className="flex w-12 shrink-0 flex-col items-center border-r border-border/70 bg-card py-3">
               <Tooltip>
                 <TooltipTrigger asChild>
                   <button
@@ -503,13 +503,13 @@ export function VideoMakerView() {
           </TooltipProvider>
         ) : (
           <aside
-            className="relative flex shrink-0 flex-col border-r border-border/70 bg-muted/30"
+            className="relative flex shrink-0 flex-col border-r border-border/70 bg-card"
             style={{ width: sidebarWidth }}
           >
             {/* 顶部标题栏：模块标识 + 收起按钮 */}
             <div className="flex shrink-0 items-center justify-between border-b border-border/70 px-3 py-2.5">
               <div className="flex items-center gap-2">
-                <div className="flex h-6 w-6 items-center justify-center rounded-md bg-primary/10 text-primary">
+                <div className="flex h-6 w-6 items-center justify-center rounded-md bg-muted text-foreground">
                   <Clapperboard className="h-3.5 w-3.5" />
                 </div>
                 <span className="text-[13px] font-semibold text-foreground">视频</span>
@@ -589,7 +589,7 @@ export function VideoMakerView() {
                     <div
                       className={cn(
                         "mx-2 h-px w-5",
-                        getStepStatus(i - 1, phase) !== "pending" ? "bg-primary/40" : "bg-border",
+                        getStepStatus(i - 1, phase) !== "pending" ? "bg-foreground/30" : "bg-border",
                       )}
                     />
                   )}
@@ -676,7 +676,7 @@ export function VideoMakerView() {
                           className={cn(
                             "rounded-md px-1.5 py-1.5 text-[13px] font-medium transition-all",
                             ratio === r.value
-                              ? "bg-background text-foreground shadow"
+                              ? "bg-card text-foreground"
                               : "text-muted-foreground hover:text-foreground",
                           )}
                           onClick={() => setRatio(r.value)}
@@ -699,7 +699,7 @@ export function VideoMakerView() {
                         className={cn(
                           "rounded-full px-2.5 py-0.5 text-[12px] font-medium transition-colors",
                           narrationEnabled
-                            ? "bg-primary/10 text-foreground"
+                            ? "bg-muted text-foreground"
                             : "text-muted-foreground hover:text-foreground hover:bg-muted/50",
                         )}
                         onClick={() => setNarrationEnabled((v) => !v)}
@@ -723,7 +723,7 @@ export function VideoMakerView() {
                                 className={cn(
                                   "rounded-md px-1 py-1.5 text-[13px] font-medium transition-all",
                                   ttsProvider === p.value
-                                    ? "bg-background text-foreground shadow"
+                                    ? "bg-card text-foreground"
                                     : "text-muted-foreground hover:text-foreground",
                                 )}
                                 onClick={() => {

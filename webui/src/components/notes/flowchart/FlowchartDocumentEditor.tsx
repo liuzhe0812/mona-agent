@@ -2287,7 +2287,7 @@ export function FlowchartDocumentEditor({
 
   return (
     <TooltipProvider delayDuration={300}>
-    <div className="flex h-full min-w-0 flex-1 flex-col">
+    <div className="flex h-full min-w-0 flex-1 flex-col bg-editor-surface">
       {/* 工具栏 */}
       <div className="flex flex-wrap items-center gap-1 border-b border-border/60 px-3 py-1.5">
         {toolbarLeading ? (

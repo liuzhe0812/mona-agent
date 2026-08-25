@@ -1,0 +1,99 @@
+{
+  "schema_version": 1,
+  "fixture_version": "1",
+  "license": "Synthetic materials created for Mona tests; no third-party paper text.",
+  "providers": {
+    "openalex": {
+      "response": "providers/openalex-search.json",
+      "expected_source_ids": ["doi_fce18994955c518e09ed118795646b6ad64dffe8d2af0b3ff77cf6b1502d88e3"]
+    },
+    "crossref": {
+      "response": "providers/crossref-metadata.json",
+      "expected_doi": "10.0000/synthetic.1"
+    },
+    "europe_pmc": {
+      "response": "providers/europe-pmc-search.json",
+      "expected_pmid": "99999999"
+    },
+    "arxiv": {
+      "response": "providers/arxiv-search.xml",
+      "expected_arxiv_id": "2601.00001"
+    },
+    "clinicaltrials": {
+      "response": "providers/clinicaltrials-study.json",
+      "expected_nct_id": "NCT09999999"
+    }
+  },
+  "papers": {
+    "paper": "papers/synthetic-paper.md",
+    "pdfs": [
+      "papers/synthetic-paper.pdf",
+      "papers/synthetic-paper-text.pdf",
+      "papers/synthetic-paper-layout.pdf"
+    ],
+    "expected": {
+      "research_question": "Does a fixed seed make a toy evaluation repeatable?",
+      "method": "Run the same deterministic program twice.",
+      "result": "Both runs report accuracy 0.75.",
+      "limitation": "The fixture does not establish performance outside the toy data.",
+      "page": 2,
+      "figure": "Figure 1",
+      "table": "Table 1"
+    }
+  },
+  "data": {
+    "csv": "data/synthetic.csv",
+    "json": "data/synthetic.json",
+    "xlsx": "data/synthetic.xlsx",
+    "expected_rows": 4,
+    "expected_mean_score": 0.75
+  },
+  "algorithm": {
+    "directory": "algorithm",
+    "entrypoint": "run.py",
+    "baseline_command": "python run.py --mode baseline",
+    "candidate_command": "python run.py --mode candidate",
+    "metric": "accuracy",
+    "baseline": 0.75,
+    "candidate": 0.875,
+    "seed": 7
+  },
+  "failure_fixtures": {
+    "provider_malformed": "providers/malformed.json",
+    "paper_abstract_only": "papers/abstract-only.md",
+    "data_missing_field": "data/missing-score.csv",
+    "algorithm_no_improvement": "algorithm/no-improvement.py",
+    "writing_invalid_ledger": "writing/invalid-ledger.json"
+  },
+  "writing": {
+    "evidence": "writing/evidence-ledger.json",
+    "paper_template": "writing/paper-template.md",
+    "grant_requirements": "writing/grant-requirements.md",
+    "reviews": "writing/review-comments.json"
+  },
+  "hashes": {
+    "README.md": "f36a58e86326f5df7456d5bef6113b1f7ce81ba370a1cf108b5e6cfa355251c1",
+    "algorithm/run.py": "009d03a1050a9f773d90f8d8c8487e40947a35039a816ac5790f791fcaca1fb4",
+    "algorithm/no-improvement.py": "d5654eb9dbe6bafb777ab84eda506b3be0290676ecf9e118b8462df0c35e9527",
+    "data/missing-score.csv": "db9cfdba9435256b04dafb3edda3f06fbb586f681d51e11131cbfbc3610a87ff",
+    "data/synthetic.csv": "92af7f3f0db9d91fc8bd28676a755738145dd7b944b73628555aa9dc7d21ea4a",
+    "data/synthetic.json": "665904e612ffd4b833972abe9d18aab324df39d94d43d6be3813774450605cee",
+    "data/synthetic.xlsx": "1d9bc3ad533fd18b0689a61f1b34005581f29d7dde544a2992a76d22e374d149",
+    "papers/synthetic-paper.md": "a06b2bd1683ad4b7b3b5532121d3360c9a98458ecc3ddf7f5b973748ea7ced04",
+    "papers/abstract-only.md": "7bdf6c591bae17b798d59c90f5784587649d190db08aab395c5f7581862a11b5",
+    "papers/synthetic-paper.pdf": "ac88f89f27d4657aec573cc06655d4f9a4d30acac7339710ae132441d5534885",
+    "papers/synthetic-paper-text.pdf": "84d67faa1618bcf64830764d9883b593de8df9cbd2d63f3d41714ed2e3d8ef34",
+    "papers/synthetic-paper-layout.pdf": "5fefef13fafd1a7e5bf2e4723648391924fe5347f5f8d2977ecb9417aa0f1cc3",
+    "providers/arxiv-search.xml": "576eeee1e71f3dd7e99452eba3750e35f85c67e1afa2b921c512e4e823211433",
+    "providers/clinicaltrials-study.json": "af270c6c49a70e1238aa9f8c1029ba47457739ab897154a462ce120bfdcd3ff0",
+    "providers/crossref-metadata.json": "d8f01f9dd72c0932f09b03525905e25a43f4d693d6bc8f4219a080fe731557b7",
+    "providers/europe-pmc-search.json": "a4372e9ce950c6b78ee5d71d754471299f70bb1799645a9a9414900e24a49c56",
+    "providers/openalex-search.json": "fb5d442a85c988e113a8d57906bfb7311df8216f0c1ad63216f189f7b30ebb70",
+    "providers/malformed.json": "837596b0cbd454c5a540d1e2eb0461cb1b28b9f9d5ae992ae3fcfdd6abc22b67",
+    "writing/evidence-ledger.json": "a3cd9ca41beae91047e96e9ecde29164f167823ccfc999618371a19e783b1199",
+    "writing/grant-requirements.md": "0e832deb6204b735575f08c887ec724fd5d71e6ef4c353109e7f0dc69d3fb38e",
+    "writing/invalid-ledger.json": "f7fe4a1db5e9d53f65a624647e87b640a2136b3dc5a153b335b4a6bccc948f57",
+    "writing/paper-template.md": "d9e0657b7773357d805c2df7ce530ec5ae436594e8f6572bbcd919d39e1610f4",
+    "writing/review-comments.json": "e7ed1551acdd377b7c5b71b0c77adaa42d63c5f31a415204b06db8d4af711557"
+  }
+}

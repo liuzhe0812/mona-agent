@@ -10,6 +10,12 @@ import { fetchFilePreviewBlob } from "@/lib/api";
 
 vi.mock("@/lib/api", () => ({
   fetchFilePreviewBlob: vi.fn(async (_token: string, params: { path: string }) => {
+    if (params.path.endsWith(".mp4")) {
+      return {
+        blob: new Blob(["video"], { type: "text/plain" }),
+        mime: "text/plain",
+      };
+    }
     if (params.path.endsWith(".html")) {
       return {
         blob: new Blob([
@@ -166,5 +172,18 @@ describe("FilePreviewPanel", () => {
 
     const overlay = document.querySelector("body > .fixed.inset-0");
     expect(overlay).toBeTruthy();
+  });
+
+  it("plays video artifacts inline", async () => {
+    const video: DeliveredFile = {
+      ...artifact("clip.mp4"),
+      mime: "video/mp4",
+    };
+    previewWith(video);
+    render(wrap(<FilePreviewPanel files={[video]} />));
+
+    const player = await screen.findByLabelText("视频预览：clip.mp4");
+    expect(player.tagName).toBe("VIDEO");
+    expect(player).toHaveAttribute("controls");
   });
 });

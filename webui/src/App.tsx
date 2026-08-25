@@ -64,7 +64,7 @@ import { deriveTitle } from "@/lib/format";
 import { MonaClient } from "@/lib/mona-client";
 import { ClientProvider, useClientOptional, type RuntimeStatus } from "@/providers/ClientProvider";
 import type { ChatSummary } from "@/lib/types";
-import { isTauri, getGatewayStatus, startGateway, getServicesStatus, startServices, getDesktopSettings, readGatewayLog, createNoteFromChat, revealItemInDir, type GatewayLog, type SidebarShortcuts, type SidebarModuleConfig, type UpdateCheckResult } from "@/lib/tauri";
+import { isTauri, getGatewayStatus, startGateway, getServicesStatus, startServices, getDesktopSettings, readGatewayLog, createNoteFromChat, revealItemInDir, openPathWithSystemApp, type GatewayLog, type SidebarShortcuts, type SidebarModuleConfig, type UpdateCheckResult } from "@/lib/tauri";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 
@@ -583,6 +583,7 @@ function Shell({
   const [roomInitialAgents, setRoomInitialAgents] = useState<string[] | undefined>(undefined);
   const [creatingConversation, setCreatingConversation] = useState(false);
   const [activeKey, setActiveKey] = useState<string | null>(null);
+  const [pendingDirectAgentId, setPendingDirectAgentId] = useState<string | null>(null);
   const [managedAgentId, setManagedAgentId] = useState<string | null>(null);
   const [createNoteOnOpen, setCreateNoteOnOpen] = useState(false);
   const [view, setView] = useState<ShellView>(
@@ -1169,35 +1170,54 @@ function Shell({
 
   const onNewChat = useCallback(() => {
     setManagedAgentId(null);
+    setPendingDirectAgentId(null);
     setActiveKey(null);
     setView("chat");
     switchToMonaTab();
     setMobileSidebarOpen(false);
   }, []);
 
-  /** 开始私聊：新建会话并标记为目标 agent 的私聊（Mona 私聊即普通新会话）。 */
+  /** Open a direct-agent draft. The actual chat is created on first send. */
   const onStartDirect = useCallback(
-    async (agentId: string) => {
+    (agentId: string) => {
       if (creatingConversation) return;
       if (agentId === MONA_AGENT_ID) {
         onNewChat();
         return;
       }
-      if (!client) return;
+      setManagedAgentId(null);
+      setPendingDirectAgentId(agentId);
+      setActiveKey(null);
+      setView("chat");
+      switchToMonaTab();
+      setMobileSidebarOpen(false);
+    },
+    [creatingConversation, onNewChat, switchToMonaTab],
+  );
+
+  const onCreateDirectChat = useCallback(
+    async (agentId: string, workspace?: string | null) => {
+      if (creatingConversation || !client) return null;
       setCreatingConversation(true);
       try {
-        const chatId = await onCreateChat();
-        if (!chatId) return;
+        const chatId = await createChat(workspace);
         await client.createDirectConversation(chatId, agentId);
         await refresh();
+        setActiveKey(`websocket:${chatId}`);
+        setView("chat");
+        switchToMonaTab();
+        setMobileSidebarOpen(false);
+        setPendingDirectAgentId(null);
         setManagedAgentId(null);
+        return chatId;
       } catch (e) {
         console.error("Failed to create direct conversation", e);
+        return null;
       } finally {
         setCreatingConversation(false);
       }
     },
-    [client, creatingConversation, onCreateChat, onNewChat, refresh],
+    [client, creatingConversation, createChat, refresh, switchToMonaTab],
   );
 
   /** 创建协作房间：新建会话后调用 createRoom 命令。 */
@@ -1227,6 +1247,7 @@ function Shell({
 
   const onSelectAgent = useCallback((agentId: string) => {
     setManagedAgentId(agentId);
+    setPendingDirectAgentId(null);
     setActiveKey(null);
     setView("chat");
     switchToMonaTab();
@@ -1245,6 +1266,7 @@ function Shell({
         });
       }
       setManagedAgentId(null);
+      setPendingDirectAgentId(null);
       setActiveKey(key);
       setView("chat");
       switchToMonaTab();
@@ -1275,14 +1297,28 @@ function Shell({
     setPendingRename({ key, label });
   }, []);
 
+  const onRequestProjectRename = useCallback((workspace: string, label: string) => {
+    setPendingRename({ key: `project:${workspace}`, label });
+  }, []);
+
   const onConfirmRename = useCallback(
     (title: string) => {
       if (!pendingRename) return;
       const key = pendingRename.key;
       setPendingRename(null);
+      const cleaned = title.trim();
+      if (key.startsWith("project:")) {
+        const workspace = key.slice("project:".length);
+        void updateSidebarState((current) => {
+          const project_names = { ...current.project_names };
+          if (cleaned) project_names[workspace] = cleaned;
+          else delete project_names[workspace];
+          return { ...current, project_names };
+        });
+        return;
+      }
       void updateSidebarState((current) => {
         const titleOverrides = { ...current.title_overrides };
-        const cleaned = title.trim();
         if (cleaned) {
           titleOverrides[key] = cleaned;
         } else {
@@ -1343,13 +1379,22 @@ function Shell({
     async (workspace: string) => {
       try {
         await removeProject(workspace, token);
+        await updateSidebarState((current) => {
+          const project_names = { ...current.project_names };
+          delete project_names[workspace];
+          return { ...current, project_names };
+        });
         await refresh();
       } catch (e) {
         console.error("Failed to remove project", e);
       }
     },
-    [token, refresh],
+    [token, refresh, updateSidebarState],
   );
+
+  const onOpenProjectFolder = useCallback((workspace: string) => {
+    void openPathWithSystemApp(workspace);
+  }, []);
 
   const onOpenSessionSearch = useCallback(() => {
     setMobileSidebarOpen(false);
@@ -1796,6 +1841,9 @@ function Shell({
     archivedCount: sidebarState.archived_keys.length,
     onRemoveProject,
     onCreateTask,
+    projectNames: sidebarState.project_names,
+    onRequestProjectRename,
+    onOpenProjectFolder,
     onNewChat: () => {
       setMobileSidebarOpen(false);
       onNewChat();
@@ -1918,7 +1966,7 @@ function Shell({
               className={cn(
                 "flex min-h-0 flex-1 overflow-hidden bg-background",
                 showContentSurface &&
-                  "m-px mr-2 mb-2 rounded-2xl border border-border/60 shadow-sm",
+                  "m-px mr-2 mb-2 rounded-xl border border-border/60",
               )}
             >
               {/* 消息 Tab 的会话列表列（仅 chat 视图显示，包在圆角卡片内） */}
@@ -1959,6 +2007,8 @@ function Shell({
                     recentSessions={sessions.filter((session) => !sidebarState.archived_keys.includes(session.key))}
                     onSelectSession={onSelectChat}
                     onCreateChat={onCreateChat}
+                    pendingDirectAgentId={pendingDirectAgentId}
+                    onCreateDirectChat={onCreateDirectChat}
                     onTurnEnd={onTurnEnd}
                     queuedPrompt={queuedAgentPrompt}
                     onQueuedPromptConsumed={() => setQueuedAgentPrompt(null)}

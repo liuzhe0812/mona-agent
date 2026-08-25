@@ -499,12 +499,12 @@ function MailListItem({
           className={cn(
             "flex cursor-pointer flex-col gap-0.5 border-b border-border/60 border-l-2 px-3 py-2 transition-colors",
             selected
-              ? "border-l-info bg-info/15"
+              ? "border-l-foreground/60 bg-foreground/5"
               : active
-                ? "border-l-info bg-info/10"
+                ? "border-l-foreground/60 bg-foreground/5"
                 : message.isRead
-                  ? "border-l-transparent hover:bg-accent"
-                  : "border-l-info/60 hover:bg-accent",
+                  ? "border-l-transparent hover:bg-foreground/5"
+                  : "border-l-info/60 hover:bg-foreground/5",
           )}
           onClick={onClick}
         >
@@ -514,7 +514,7 @@ function MailListItem({
                 className={cn(
                   "flex h-3.5 w-3.5 shrink-0 items-center justify-center rounded border",
                   selected
-                    ? "border-info bg-info text-white"
+                    ? "border-foreground bg-foreground text-action-foreground"
                     : "border-muted-foreground/40 bg-transparent",
                 )}
               >

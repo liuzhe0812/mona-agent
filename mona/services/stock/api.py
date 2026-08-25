@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import math
 import re
 import uuid
 from datetime import datetime
@@ -24,6 +25,11 @@ from typing import Any, Iterator
 from aiohttp import web
 from pydantic import ValidationError
 
+from mona.services.stock.diagnosis import (
+    DiagnosisNotFoundError,
+    DiagnosisService,
+    DiagnosisStateError,
+)
 from mona.services.stock.evidence import EvidenceService
 from mona.services.stock.failover import FailoverProvider, IntradayFailoverProvider
 from mona.services.stock.indicators import (
@@ -55,6 +61,7 @@ from mona.services.stock.outcomes import (
     calculate_selection_outcome_observations,
     ensure_outcome_tracking_snapshot,
     ensure_selection_outcome_tracking_snapshot,
+    evaluate_decision_conditions,
     read_latest_outcome_observations,
     read_latest_selection_outcome_observations,
 )
@@ -69,6 +76,11 @@ from mona.services.stock.provider import (
     Quote,
 )
 from mona.services.stock.provider_tencent import TencentProvider
+from mona.services.stock.risk_profile import (
+    LocalRiskProfileStore,
+    RiskProfileStorageError,
+    risk_profile_path,
+)
 from mona.services.stock.screening import (
     ScreeningValidationError,
     StockScreeningService,
@@ -78,6 +90,14 @@ from mona.services.stock.storage import (
     WatchlistItem,
     WatchlistStore,
     infer_exchange,
+)
+from mona.services.stock.v6_tracking import (
+    V6_TRACKING_FILE,
+    aggregate_v6_observations,
+    append_v6_observation,
+    calculate_v6_observations,
+    ensure_v6_tracking_snapshot,
+    latest_v6_observations,
 )
 
 _MAX_QUOTE_IDS = 50
@@ -92,6 +112,48 @@ _INTRADAY_PROVIDER: IntradayFailoverProvider | None = None
 _INTRADAY_SERVICE: IntradayService | None = None
 _SCREENING_SERVICE: StockScreeningService | None = None
 _SCREENING_WORKSPACE: Path | None = None
+
+
+def _diagnosis_workspace(request: web.Request) -> Path:
+    workspace = request.app.get("workspace")
+    return Path(workspace).expanduser() if workspace else Path.home() / ".mona" / "workspace"
+
+
+def _diagnosis_service(request: web.Request) -> DiagnosisService:
+    """Resolve an injectable standard-diagnosis service for this app."""
+    configured = request.app.get("stock_diagnosis_service")
+    if configured is not None and all(
+        callable(getattr(configured, name, None))
+        for name in ("create", "execute", "get", "list", "cancel", "fail", "retry")
+    ):
+        return configured
+    factory = request.app.get("stock_diagnosis_service_factory")
+    if callable(factory):
+        service = factory(request)
+        if service is not None and all(
+            callable(getattr(service, name, None))
+            for name in ("create", "execute", "get", "list", "cancel", "fail", "retry")
+        ):
+            return service
+    workspace = _diagnosis_workspace(request)
+    provider = request.app.get("stock_diagnosis_provider") or _provider()
+    evidence_service = request.app.get("stock_evidence_service")
+    evidence_factory = request.app.get("stock_evidence_service_factory")
+    if evidence_service is None and callable(evidence_factory):
+        evidence_service = evidence_factory(request)
+    if evidence_service is None:
+        evidence_service = EvidenceService(
+            workspace=workspace,
+            provider=provider,
+            research_provider=GovernmentResearchProvider(),
+            cache_root=Path.home() / ".mona" / "stock" / "cache",
+        )
+    return DiagnosisService(
+        workspace,
+        evidence_service=evidence_service,
+        provider=provider,
+        cache_root=Path.home() / ".mona" / "stock" / "cache",
+    )
 
 
 def _store() -> WatchlistStore:
@@ -188,6 +250,100 @@ def _watchlist_by_id() -> dict[str, WatchlistItem]:
     return {item.id: item for item in _store().list()}
 
 
+def _risk_profile_store(request: web.Request) -> LocalRiskProfileStore:
+    workspace = request.app.get("workspace")
+    if workspace is None:
+        workspace = Path.home() / ".mona" / "workspace"
+    return LocalRiskProfileStore(risk_profile_path(workspace))
+
+
+def _risk_profile_payload(store: LocalRiskProfileStore) -> dict[str, Any]:
+    profile = store.get_risk_profile().model_dump(mode="json")
+    level_labels = {
+        "conservative": "保守",
+        "balanced": "稳健",
+        "aggressive": "积极",
+    }
+    return {
+        "profile": profile,
+        "configured": bool(profile.get("configured")),
+        "riskLevelLabel": level_labels.get(profile.get("risk_level"), "保守"),
+        "displayMetadata": store.display_metadata(),
+        "storage": {"localOnly": True, "brokerConnected": False},
+    }
+
+
+def _portfolio_context_payload(instrument_id: str, context: Any) -> dict[str, Any]:
+    raw = context.model_dump(mode="json")
+    exact_value_configured = raw.get("portfolio_value_yuan") is not None
+    raw["portfolio_value_configured"] = exact_value_configured
+    return {
+        "instrumentId": instrument_id,
+        "context": raw,
+        "configured": context.holding_state == "holding" or exact_value_configured,
+        "storage": {"localOnly": True, "brokerConnected": False},
+    }
+
+
+async def handle_stock_risk_profile(request: web.Request) -> web.Response:
+    """Read or save the local risk profile; no broker/account access."""
+    store = _risk_profile_store(request)
+    try:
+        if request.method == "GET":
+            return web.json_response(_risk_profile_payload(store))
+        data = await _json_body(request)
+        profile = data.get("profile") if isinstance(data.get("profile"), dict) else data
+        saved = store.save_risk_profile(profile)
+        payload = _risk_profile_payload(store)
+        payload["profile"] = saved.model_dump(mode="json")
+        payload["configured"] = True
+        return web.json_response(payload)
+    except RiskProfileStorageError as exc:
+        return _error(500, "risk_profile_store_error", str(exc))
+    except (ValueError, TypeError) as exc:
+        return _error(400, "risk_profile_invalid", str(exc))
+
+
+async def handle_stock_risk_profile_delete(request: web.Request) -> web.Response:
+    try:
+        profile = _risk_profile_store(request).clear_risk_profile()
+        return web.json_response(
+            {
+                "profile": profile.model_dump(mode="json"),
+                "configured": False,
+                "storage": {"localOnly": True, "brokerConnected": False},
+            }
+        )
+    except RiskProfileStorageError as exc:
+        return _error(500, "risk_profile_store_error", str(exc))
+    except (ValueError, TypeError) as exc:
+        return _error(400, "risk_profile_invalid", str(exc))
+
+
+async def handle_stock_portfolio_context(request: web.Request) -> web.Response:
+    store = _risk_profile_store(request)
+    raw_id = request.query.get("instrumentId") or request.query.get("instrument_id")
+    body: dict[str, Any] = {}
+    if request.method in {"PUT", "DELETE"}:
+        body = await _json_body(request)
+        raw_id = raw_id or body.get("instrumentId") or body.get("instrument_id")
+    try:
+        instrument = _parse_instrument_id(str(raw_id or ""))
+        instrument_id = instrument.id
+        if request.method == "GET":
+            context = store.get_portfolio_context(instrument_id)
+        elif request.method == "DELETE":
+            context = store.delete_portfolio_context(instrument_id)
+        else:
+            context_payload = body.get("context") if isinstance(body.get("context"), dict) else body
+            context = store.save_portfolio_context(instrument_id, context_payload)
+        return web.json_response(_portfolio_context_payload(instrument_id, context))
+    except RiskProfileStorageError as exc:
+        return _error(500, "portfolio_context_store_error", str(exc))
+    except (ValueError, TypeError) as exc:
+        return _error(400, "portfolio_context_invalid", str(exc))
+
+
 def _item_payload(item: WatchlistItem) -> dict:
     """CamelCase dump plus the synthetic ``instrumentId`` (a property)."""
     payload = item.model_dump(by_alias=True)
@@ -205,6 +361,180 @@ async def _json_body(request: web.Request) -> dict:
     except Exception:
         return {}
     return data if isinstance(data, dict) else {}
+
+
+# --- standard AI diagnosis -------------------------------------------------
+
+
+_DIAGNOSIS_CREATE_FIELDS = {
+    "instrumentId",
+    "evidenceContextId",
+    "holdingState",
+    "execute",
+}
+
+
+def _diagnosis_wire(record: dict[str, Any], *, include_report: bool = True) -> dict[str, Any]:
+    """Project durable snake_case run state to the stock HTTP contract."""
+    result = {
+        "diagnosisId": record.get("diagnosis_id"),
+        "workflowId": record.get("workflow_id"),
+        "status": record.get("status"),
+        "instrument": record.get("instrument"),
+        "evidenceContextId": record.get("evidence_context_id"),
+        "createdAt": record.get("created_at"),
+        "updatedAt": record.get("updated_at"),
+        "attempt": record.get("attempt", 1),
+        "agentSteps": record.get("agent_steps") or [],
+        "agentStepCount": record.get("agent_step_count", 0),
+        "llmAgentSteps": record.get("llm_agent_steps", 0),
+        "inputHash": record.get("input_hash"),
+        "holdingState": record.get("holding_state", "not_holding"),
+        "error": record.get("error"),
+        "errorCode": record.get("error_code"),
+    }
+    if include_report and record.get("report") is not None:
+        result["report"] = record.get("report")
+        result["markdown"] = record.get("markdown") or ""
+    return result
+
+
+def _diagnosis_input(data: dict[str, Any]) -> dict[str, Any]:
+    unknown = sorted(set(data) - _DIAGNOSIS_CREATE_FIELDS)
+    if unknown:
+        raise ValueError("unknown diagnosis fields: " + ", ".join(unknown))
+    raw_instrument = data.get("instrumentId")
+    if not isinstance(raw_instrument, str) or not raw_instrument.strip():
+        raise ValueError("missing instrumentId")
+    instrument_ref = _resolve_instrument(raw_instrument, _watchlist_by_id())
+    instrument = {
+        "symbol": instrument_ref.symbol,
+        "exchange": instrument_ref.exchange,
+        "instrument_type": instrument_ref.instrument_type,
+        "name": "",
+    }
+    holding_state = data.get("holdingState", "not_holding")
+    if holding_state not in {"holding", "not_holding"}:
+        raise ValueError("holdingState must be holding or not_holding")
+    context_id = data.get("evidenceContextId")
+    if context_id is not None and (not isinstance(context_id, str) or not context_id.strip()):
+        raise ValueError("evidenceContextId must be a non-empty string")
+    normalized = {
+        "instrument": instrument,
+        "evidence_context_id": context_id.strip() if isinstance(context_id, str) else None,
+        "holding_state": holding_state,
+    }
+    execute = data.get("execute", True)
+    if not isinstance(execute, bool):
+        raise ValueError("execute must be boolean")
+    normalized["execute"] = execute
+    return normalized
+
+
+async def handle_stock_diagnosis_create(request: web.Request) -> web.Response:
+    data = await _json_body(request)
+    try:
+        payload = _diagnosis_input(data)
+        execute = payload.pop("execute")
+        service = _diagnosis_service(request)
+        prepare_context = getattr(service, "prepare_context", None)
+        if callable(prepare_context) and (
+            not isinstance(service, DiagnosisService)
+            or getattr(service, "evidence_service", None) is not None
+        ):
+            prepared = await prepare_context(
+                instrument=payload["instrument"],
+                evidence_context_id=payload.get("evidence_context_id"),
+            )
+            context_id = prepared[0] if isinstance(prepared, tuple) else prepared
+            if not isinstance(context_id, str) or not context_id.strip():
+                raise ValueError("evidence context preparation returned no context id")
+            payload["evidence_context_id"] = context_id
+        diagnosis_id = payload.pop("diagnosis_id", None)
+        record = service.create(diagnosis_id=diagnosis_id, **payload)
+        if execute:
+            record = await service.execute(str(record["diagnosis_id"]))
+    except (ValueError, ValidationError) as exc:
+        return _error(400, "invalid_diagnosis", str(exc))
+    except DiagnosisStateError as exc:
+        return _error(409, "diagnosis_conflict", str(exc))
+    status = 201 if record.get("status") in {"succeeded", "failed", "cancelled"} else 202
+    return web.json_response(_diagnosis_wire(record), status=status)
+
+
+async def handle_stock_diagnosis_list(request: web.Request) -> web.Response:
+    raw_limit = request.query.get("limit", "50")
+    try:
+        limit = max(1, min(int(raw_limit), 200))
+    except ValueError:
+        return _error(400, "invalid_params", "invalid limit")
+    instrument_id = request.query.get("instrumentId") or request.query.get("instrument_id")
+    status = request.query.get("status")
+    if status and status not in {"queued", "running", "succeeded", "failed", "cancelled"}:
+        return _error(400, "invalid_params", "invalid diagnosis status")
+    service = _diagnosis_service(request)
+    items = [_diagnosis_wire(item, include_report=False) for item in service.list(instrument_id=instrument_id, status=status, limit=limit)]
+    return web.json_response({"items": items})
+
+
+async def handle_stock_diagnosis_get(request: web.Request) -> web.Response:
+    diagnosis_id = request.match_info.get("diagnosis_id", "")
+    try:
+        record = _diagnosis_service(request).get(diagnosis_id)
+    except (ValueError, DiagnosisNotFoundError):
+        return _error(404, "diagnosis_not_found", "诊股记录不存在")
+    return web.json_response(_diagnosis_wire(record))
+
+
+async def handle_stock_diagnosis_cancel(request: web.Request) -> web.Response:
+    diagnosis_id = request.match_info.get("diagnosis_id", "")
+    data = await _json_body(request)
+    reason = str(data.get("reason") or "cancelled by user")
+    try:
+        record = _diagnosis_service(request).cancel(diagnosis_id, reason=reason)
+    except DiagnosisNotFoundError:
+        return _error(404, "diagnosis_not_found", "诊股记录不存在")
+    except (ValueError, DiagnosisStateError) as exc:
+        return _error(409, "diagnosis_state_conflict", str(exc))
+    return web.json_response(_diagnosis_wire(record))
+
+
+async def handle_stock_diagnosis_fail(request: web.Request) -> web.Response:
+    diagnosis_id = request.match_info.get("diagnosis_id", "")
+    data = await _json_body(request)
+    reason = data.get("reason") or data.get("error")
+    if not isinstance(reason, str) or not reason.strip():
+        return _error(400, "invalid_params", "failure reason is required")
+    try:
+        record = _diagnosis_service(request).fail(
+            diagnosis_id,
+            reason=reason,
+            code=str(data.get("code") or "diagnosis_failed"),
+        )
+    except DiagnosisNotFoundError:
+        return _error(404, "diagnosis_not_found", "诊股记录不存在")
+    except (ValueError, DiagnosisStateError) as exc:
+        return _error(409, "diagnosis_state_conflict", str(exc))
+    return web.json_response(_diagnosis_wire(record))
+
+
+async def handle_stock_diagnosis_retry(request: web.Request) -> web.Response:
+    diagnosis_id = request.match_info.get("diagnosis_id", "")
+    data = await _json_body(request)
+    execute = data.get("execute", data.get("start", True))
+    if not isinstance(execute, bool):
+        return _error(400, "invalid_params", "execute must be boolean")
+    try:
+        service = _diagnosis_service(request)
+        record = service.retry(diagnosis_id)
+        if execute:
+            record = await service.execute(diagnosis_id)
+    except DiagnosisNotFoundError:
+        return _error(404, "diagnosis_not_found", "诊股记录不存在")
+    except (ValueError, DiagnosisStateError) as exc:
+        return _error(409, "diagnosis_state_conflict", str(exc))
+    status = 201 if record.get("status") in {"succeeded", "failed", "cancelled"} else 202
+    return web.json_response(_diagnosis_wire(record), status=status)
 
 
 # --- outcome tracking ---
@@ -267,6 +597,20 @@ def _is_v4_report(document: dict[str, Any]) -> bool:
     )
 
 
+def _find_decision_report(
+    root: Path, report_id: str
+) -> tuple[Path, dict[str, Any], bool] | None:
+    """Find a valid current V5 or legacy V4 report for decision queries."""
+    from mona.services.stock.reports import is_v5_report
+
+    for run_dir, stem, document in _iter_stock_documents(root):
+        if stem != "report" or document.get("report_id") != report_id:
+            continue
+        if _is_v4_report(document) or is_v5_report(document):
+            return run_dir, document, _is_v4_report(document)
+    return None
+
+
 def _load_or_build_tracking(
     run_dir: Path, report: dict[str, Any], *, persist_missing: bool
 ) -> dict[str, Any]:
@@ -292,6 +636,53 @@ def _iter_v4_reports(
             continue
         tracking = _load_or_build_tracking(run_dir, document, persist_missing=True)
         yield run_dir, document, tracking
+
+
+def _find_v6_outcome_report(
+    root: Path, report_id: str
+) -> tuple[Path, dict[str, Any]] | None:
+    from mona.services.stock.reports import is_v6_report
+
+    for run_dir, stem, document in _iter_stock_documents(root):
+        if stem == "report" and document.get("report_id") == report_id and is_v6_report(document):
+            return run_dir, document
+    return None
+
+
+def _load_v6_tracking(run_dir: Path, report: dict[str, Any]) -> dict[str, Any]:
+    path = run_dir / V6_TRACKING_FILE
+    if path.is_file():
+        tracking = _read_json(path)
+        if tracking is None:
+            raise ValueError("V6 outcome tracking is unreadable")
+        return tracking
+    return ensure_v6_tracking_snapshot(run_dir, report)
+
+
+def _v6_outcome_payload(
+    run_dir: Path,
+    report: dict[str, Any],
+    tracking: dict[str, Any],
+    *,
+    pending: list[dict[str, Any]] | None = None,
+    updated: bool = False,
+    append_count: int = 0,
+) -> dict[str, Any]:
+    tracking_id = tracking.get("trackingId")
+    observations = latest_v6_observations(run_dir, tracking_id)
+    return {
+        "version": 6,
+        "reportId": report.get("report_id"),
+        "tracking": tracking,
+        "observations": observations,
+        "pending": pending or [],
+        "aggregate": aggregate_v6_observations(observations),
+        "samples": observations,
+        "sampleCount": len(observations),
+        "updated": updated,
+        "appendCount": append_count,
+        "publicMarketBenchmark": dict(tracking.get("benchmark") or {}),
+    }
 
 
 def _outcome_payload(
@@ -359,6 +750,343 @@ def _target_instrument(report: dict[str, Any]) -> InstrumentRef:
     )
 
 
+def _decision_metric(value: float | None, source_id: str | None, as_of: str | None) -> dict[str, Any]:
+    return {
+        "value": value,
+        "source_ids": [source_id] if source_id else [],
+        "as_of": as_of,
+    }
+
+
+def _evidence_source_ids(value: Any) -> list[str]:
+    if not isinstance(value, dict):
+        return []
+    raw = value.get("source_ids") or value.get("sourceIds")
+    if isinstance(raw, str):
+        raw = [raw]
+    return list(dict.fromkeys(item.strip() for item in (raw or []) if isinstance(item, str) and item.strip()))
+
+
+def _evidence_time(value: Any, fallback: str | None) -> str | None:
+    if not isinstance(value, dict):
+        return fallback
+    return value.get("observed_at") or value.get("as_of") or value.get("valid_at") or fallback
+
+
+def _frozen_evidence_metrics(bundle: dict[str, Any]) -> dict[str, Any]:
+    """Flatten only numeric values from the immutable run Evidence bundle."""
+    metrics: dict[str, Any] = {}
+    kline_source_ids = [
+        source.get("id")
+        for source in bundle.get("sources") or []
+        if isinstance(source, dict)
+        and isinstance(source.get("id"), str)
+        and "date" in (source.get("fields") or [])
+    ]
+    fallback_as_of = bundle.get("market_as_of") or bundle.get("research_cutoff_at")
+
+    def walk(value: Any, prefix: str, inherited_sources: list[str], inherited_as_of: str | None) -> None:
+        if isinstance(value, dict):
+            local_sources = _evidence_source_ids(value) or inherited_sources
+            local_as_of = _evidence_time(value, inherited_as_of)
+            if "value" in value and isinstance(value.get("value"), (int, float)) and not isinstance(value.get("value"), bool):
+                if prefix:
+                    metrics[prefix] = _decision_metric(value["value"], local_sources[0] if local_sources else None, local_as_of)
+                    metrics[prefix]["source_ids"] = local_sources
+            for key, child in value.items():
+                if key in {"source_ids", "source", "value", "as_of", "observed_at", "valid_at"}:
+                    continue
+                child_prefix = f"{prefix}.{key}" if prefix else str(key)
+                child_sources = local_sources
+                if child_prefix.startswith("indicators.") and not child_sources:
+                    child_sources = kline_source_ids
+                walk(child, child_prefix, child_sources, local_as_of)
+            return
+        if isinstance(value, (int, float)) and not isinstance(value, bool) and prefix:
+            sources = inherited_sources
+            if prefix.startswith("indicators.") and not sources:
+                sources = kline_source_ids
+            metrics[prefix] = _decision_metric(value, sources[0] if sources else None, inherited_as_of)
+
+    walk(bundle, "", [], fallback_as_of)
+    return metrics
+
+
+def _merge_current_metric(
+    metrics: dict[str, Any],
+    reference: str,
+    current: dict[str, Any],
+    previous_value: float | None = None,
+) -> None:
+    frozen = metrics.get(reference)
+    if isinstance(frozen, dict):
+        frozen["observed_value"] = current.get("value")
+        frozen["observed_source_ids"] = current.get("source_ids") or []
+        frozen["observed_as_of"] = current.get("as_of")
+        frozen["observed_previous_value"] = previous_value
+        return
+    metrics[reference] = {
+        **current,
+        "current_only": True,
+        "observed_previous_value": previous_value,
+    }
+
+
+def _previous_close_before_quote(series: Any, quote_as_of: str | None) -> float | None:
+    quote_time = parse_asia_datetime(quote_as_of)
+    if quote_time is None:
+        return None
+    bars = []
+    for bar in getattr(series, "bars", []) or []:
+        bar_time = parse_asia_datetime(getattr(bar, "date", None))
+        if bar_time is not None and bar_time <= quote_time:
+            bars.append((bar_time, bar.close))
+    bars.sort(key=lambda item: item[0])
+    if not bars:
+        return None
+    if bars[-1][0].date() == quote_time.date():
+        bars.pop()
+    return bars[-1][1] if bars else None
+
+
+async def _decision_metrics(report: dict[str, Any], run_dir: Path | None = None) -> dict[str, Any]:
+    """Read current observed data and frozen references from the run Evidence."""
+    instrument = _target_instrument(report)
+    metrics: dict[str, Any] = {}
+    if run_dir is not None:
+        evidence = _read_json(run_dir / "evidence.json")
+        symbols = evidence.get("symbols") if isinstance(evidence, dict) else None
+        bundle = symbols.get(instrument.id) if isinstance(symbols, dict) else None
+        if isinstance(bundle, dict):
+            metrics = _frozen_evidence_metrics(bundle)
+    quote_as_of: str | None = None
+    try:
+        quote = await _provider().quote(instrument)
+    except ProviderError:
+        quote = None
+    if quote is not None:
+        source_id = getattr(quote.source, "id", None)
+        as_of = quote.as_of or getattr(quote.source, "published_at", None)
+        quote_as_of = as_of
+        price = _decision_metric(quote.price, source_id, as_of)
+        _merge_current_metric(metrics, "quote.price", price)
+        _merge_current_metric(metrics, "quote.close", price)
+        _merge_current_metric(metrics, "quote.change_pct", _decision_metric(quote.change_pct, source_id, as_of))
+
+    try:
+        series = await _provider().kline(instrument, limit=60, klt=101)
+    except ProviderError:
+        series = None
+    if series is not None:
+        source_id = getattr(series.source, "id", None)
+        as_of = getattr(series.source, "fetched_at", None) or quote_as_of
+        closes = [bar.close for bar in series.bars]
+        previous_close = _previous_close_before_quote(series, quote_as_of)
+        if previous_close is None and len(closes) > 1:
+            previous_close = closes[-2]
+        if quote is not None:
+            current_quote = _decision_metric(quote.price, getattr(quote.source, "id", None), quote_as_of)
+            _merge_current_metric(metrics, "quote.price", current_quote, previous_close)
+            _merge_current_metric(metrics, "quote.close", current_quote, previous_close)
+        for window in (5, 10, 20, 60):
+            values = sma(closes, window)
+            _merge_current_metric(
+                metrics,
+                f"indicators.ma{window}",
+                _decision_metric(values[-1] if values else None, source_id, as_of),
+                values[-2] if len(values) > 1 else None,
+            )
+        swing = swing_high_low(
+            [bar.high for bar in series.bars],
+            [bar.low for bar in series.bars],
+        )
+        previous_swing = swing_high_low(
+            [bar.high for bar in series.bars[:-1]],
+            [bar.low for bar in series.bars[:-1]],
+        )
+        _merge_current_metric(
+            metrics,
+            "indicators.swing.support",
+            _decision_metric(swing.get("support"), source_id, as_of),
+            previous_swing.get("support"),
+        )
+        _merge_current_metric(
+            metrics,
+            "indicators.swing.resistance",
+            _decision_metric(swing.get("resistance"), source_id, as_of),
+            previous_swing.get("resistance"),
+        )
+    return metrics
+
+
+def _decision_payload(result: dict[str, Any]) -> dict[str, Any]:
+    horizon_aliases = {
+        "short_term": "shortTerm",
+        "medium_term": "mediumTerm",
+        "long_term": "longTerm",
+    }
+    horizons: dict[str, Any] = {}
+    for horizon, value in (result.get("horizons") or {}).items():
+        if not isinstance(value, dict):
+            continue
+        conditions = []
+        for condition in value.get("conditions") or []:
+            if not isinstance(condition, dict):
+                continue
+            group = str(condition.get("group") or "")
+            group = group.removesuffix("_conditions")
+            conditions.append(
+                {
+                    "group": group,
+                    "groupLabel": condition.get("group_label", "条件"),
+                    "text": condition.get("text", ""),
+                    "sourceIds": condition.get("source_ids", []),
+                    "status": condition.get("status", "not_evaluable"),
+                    "statusLabel": condition.get("status_label", "暂无法判断"),
+                    "evaluatedAt": condition.get("evaluated_at"),
+                    "methodVersion": condition.get("method_version"),
+                    "reason": condition.get("reason", "当前无法判断条件是否满足"),
+                }
+            )
+        risk_reward = value.get("risk_reward") if isinstance(value.get("risk_reward"), dict) else {}
+        horizons[horizon_aliases.get(horizon, horizon)] = {
+            "conditions": conditions,
+            "riskReward": {
+                "status": risk_reward.get("status", "not_evaluable"),
+                "statusLabel": risk_reward.get("status_label", "暂无法判断"),
+                "ratio": risk_reward.get("ratio"),
+                "direction": risk_reward.get("direction", "unknown"),
+                "evaluatedAt": risk_reward.get("evaluated_at"),
+                "methodVersion": risk_reward.get("method_version"),
+                "reason": risk_reward.get("reason", "暂无法计算风险收益比"),
+            },
+        }
+    return {
+        "reportId": result.get("report_id"),
+        "evaluatedAt": result.get("evaluated_at"),
+        "methodVersion": result.get("method_version"),
+        "horizons": horizons,
+    }
+
+
+def _v5_condition_status(group: str, price: float, plan: dict[str, Any], index: int) -> str:
+    if group == "entry":
+        return "triggered" if price >= plan["reference_buy_high"] else "not_triggered"
+    if group == "exit":
+        return "triggered" if price <= plan["stop_loss"] else "not_triggered"
+    targets = (plan["first_take_profit"], plan["second_take_profit"])
+    target = targets[min(index, len(targets) - 1)]
+    return "triggered" if price >= target else "not_triggered"
+
+
+def _v5_decision_conditions(
+    report: dict[str, Any], quote: Quote, *, market_as_of: str
+) -> dict[str, Any]:
+    aliases = {
+        "short_term": "shortTerm",
+        "medium_term": "mediumTerm",
+        "long_term": "longTerm",
+    }
+    group_labels = {
+        "entry": "参与条件",
+        "exit": "退出/止损条件",
+        "take_profit": "止盈条件",
+    }
+    horizons: dict[str, Any] = {}
+    for source_key, public_key in aliases.items():
+        decision = report["horizon_decisions"][source_key]
+        plan = decision["trading_plan"]
+        output_conditions: list[dict[str, Any]] = []
+        for group, field in (
+            ("entry", "entry_conditions"),
+            ("exit", "exit_conditions"),
+            ("take_profit", "take_profit_conditions"),
+        ):
+            conditions = plan[field]
+            if group == "take_profit":
+                conditions = [
+                    {
+                        "description": f"价格达到第一止盈参考 {plan['first_take_profit']:.2f} 元"
+                    },
+                    {
+                        "description": f"价格达到第二止盈参考 {plan['second_take_profit']:.2f} 元"
+                    },
+                ]
+            rows: list[dict[str, Any]] = []
+            for index, condition in enumerate(conditions):
+                rows.append(
+                    {
+                        "group": group,
+                        "groupLabel": group_labels[group],
+                        "text": condition["description"],
+                        "status": _v5_condition_status(group, quote.price, plan, index),
+                        "evaluatedAt": market_as_of,
+                        "currentPrice": quote.price,
+                    }
+                )
+            output_conditions.extend(rows)
+        horizons[public_key] = {
+            "conditions": output_conditions,
+            "riskReward": {
+                "first": plan["risk_reward_first"],
+                "second": plan["risk_reward_second"],
+            },
+        }
+    return {
+        "reportId": report["report_id"],
+        "schemaVersion": 5,
+        "evaluatedAt": datetime.now(CN_TZ).isoformat(),
+        "marketAsOf": market_as_of,
+        "currentPrice": quote.price,
+        "horizons": horizons,
+    }
+
+
+async def handle_stock_decision_conditions(request: web.Request) -> web.Response:
+    """Read a report and current market metrics without persisting or refreshing."""
+    report_id = request.query.get("reportId", "").strip()
+    if not report_id or not re.fullmatch(r"^[a-z0-9_]+$", report_id):
+        return _error(400, "invalid_params", "报告编号格式无效")
+    found = _find_decision_report(_stock_projects_root(request), report_id)
+    if found is None:
+        return _error(404, "report_not_found", "投研报告不存在")
+    run_dir, report, is_v4 = found
+    if not is_v4:
+        try:
+            quote = await _provider().quote(_target_instrument(report))
+        except ProviderError as exc:
+            return _error(502, "market_data_unavailable", f"当前行情获取失败：{exc}")
+        price = getattr(quote, "price", None) if quote is not None else None
+        if (
+            isinstance(price, bool)
+            or not isinstance(price, (int, float))
+            or not math.isfinite(price)
+            or price <= 0
+        ):
+            return _error(502, "market_data_unavailable", "当前行情获取失败，请稍后重试")
+        source = getattr(quote, "source", None)
+        market_as_of = (
+            getattr(quote, "as_of", None)
+            or getattr(source, "published_at", None)
+            or getattr(source, "fetched_at", None)
+        )
+        if not isinstance(market_as_of, str) or parse_asia_datetime(market_as_of) is None:
+            return _error(502, "market_data_unavailable", "当前行情缺少有效时间，请稍后重试")
+        return web.json_response(
+            _v5_decision_conditions(report, quote, market_as_of=market_as_of)
+        )
+    try:
+        metrics = await _decision_metrics(report, run_dir)
+    except (AttributeError, ProviderError, TypeError, ValueError):
+        metrics = {}
+    result = evaluate_decision_conditions(
+        report,
+        metrics,
+        evaluated_at=datetime.now(CN_TZ),
+    )
+    return web.json_response(_decision_payload(result))
+
+
 def _post_report_dates(snapshot: dict[str, Any], bars: Any) -> set[str]:
     """Return the available benchmark calendar after the report date."""
     report_value = (
@@ -400,13 +1128,24 @@ def _is_mature_observation(row: dict[str, Any], benchmark_dates: set[str]) -> bo
 
 
 async def handle_stock_outcomes(request: web.Request) -> web.Response:
-    """Read local V4 tracking/observations; never fetch market data."""
+    """Read local V4/V6 tracking/observations; never fetch market data."""
     report_id = request.query.get("reportId", "").strip() or None
     root = _stock_projects_root(request)
     selected = None
     if report_id is not None:
         if not re.fullmatch(r"^[a-z0-9_]+$", report_id):
             return _error(400, "invalid_params", "malformed report id")
+        v6_found = _find_v6_outcome_report(root, report_id)
+        if v6_found is not None:
+            run_dir, report = v6_found
+            try:
+                tracking = _load_v6_tracking(run_dir, report)
+            except (OSError, ValueError) as exc:
+                return _error(500, "tracking_unavailable", str(exc))
+            try:
+                return web.json_response(_v6_outcome_payload(run_dir, report, tracking))
+            except (OSError, ValueError) as exc:
+                return _error(500, "tracking_corrupt", str(exc))
         found = _find_outcome_report(root, report_id)
         if found is None:
             return _error(404, "report_not_found", f"report {report_id!r} not found")
@@ -418,17 +1157,66 @@ async def handle_stock_outcomes(request: web.Request) -> web.Response:
         except ValueError as exc:
             return _error(500, "tracking_unavailable", str(exc))
     try:
-        return web.json_response(_outcome_payload(request, selected=selected))
+        payload = _outcome_payload(request, selected=selected)
+        v6_samples: list[dict[str, Any]] = []
+        for run_dir, stem, report in _iter_stock_documents(root):
+            if stem != "report" or not _find_v6_outcome_report(root, report.get("report_id", "")):
+                continue
+            try:
+                tracking = _load_v6_tracking(run_dir, report)
+            except (OSError, ValueError) as exc:
+                return _error(500, "tracking_corrupt", str(exc))
+            v6_samples.extend(latest_v6_observations(run_dir, tracking.get("trackingId")))
+        payload["v6"] = {
+            "observations": v6_samples,
+            "aggregate": aggregate_v6_observations(v6_samples),
+            "sampleCount": len(v6_samples),
+        }
+        return web.json_response(payload)
     except (OSError, ValueError) as exc:
         return _error(500, "tracking_unavailable", str(exc))
 
 
 async def handle_stock_outcomes_refresh(request: web.Request) -> web.Response:
-    """Explicitly refresh one V4 report's mature outcome windows."""
+    """Explicitly refresh one V4 or V6 report's mature outcome windows."""
     data = await _json_body(request)
     report_id = str(data.get("reportId") or data.get("report_id") or "").strip()
     if not report_id or not re.fullmatch(r"^[a-z0-9_]+$", report_id):
         return _error(400, "invalid_params", "malformed or missing reportId")
+    v6_found = _find_v6_outcome_report(_stock_projects_root(request), report_id)
+    if v6_found is not None:
+        run_dir, report = v6_found
+        try:
+            target = _target_instrument(report)
+            snapshot = _load_v6_tracking(run_dir, report)
+            target_series = await _provider().kline(target, limit=640, klt=101)
+            benchmark = InstrumentRef(exchange="XSHG", symbol="000985", instrument_type="index")
+            benchmark_series = await _provider().kline(benchmark, limit=640, klt=101)
+            calculated = calculate_v6_observations(
+                snapshot,
+                target_series.bars,
+                benchmark_series.bars,
+                calculated_at=datetime.now(CN_TZ).isoformat(),
+            )
+            pending = [row for row in calculated if row.get("status") != "available"]
+            append_count = sum(
+                int(append_v6_observation(run_dir, row))
+                for row in calculated
+            )
+        except ProviderError as exc:
+            return _error(502, "upstream_unavailable", str(exc))
+        except (OSError, ValueError, TypeError) as exc:
+            return _error(500, "outcome_calculation_failed", str(exc))
+        return web.json_response(
+            _v6_outcome_payload(
+                run_dir,
+                report,
+                snapshot,
+                pending=pending,
+                updated=append_count > 0,
+                append_count=append_count,
+            )
+        )
     found = _find_outcome_report(_stock_projects_root(request), report_id)
     if found is None:
         return _error(404, "report_not_found", f"report {report_id!r} not found")
@@ -1260,6 +2048,62 @@ def _preflight_workspace(request: web.Request) -> Path:
     return Path(workspace) if workspace else Path.home() / ".mona" / "workspace"
 
 
+def _preflight_core_research_gap(bundle: dict[str, Any]) -> list[str]:
+    """Return only hard core gaps that make a basic research run impossible.
+
+    Industry, policy, sentiment and opinion coverage are valuable enhancements
+    but are not prerequisites for a short-term research answer.  The check is
+    performed before the user confirms the six-agent workflow, so a failed
+    preflight cannot spend agent tokens.
+    """
+    readiness = bundle.get("decision_readiness")
+    if not isinstance(readiness, dict):
+        return ["决策数据准备结果"]
+    core = readiness.get("core")
+    if isinstance(core, dict) and core.get("status") in {"failed", "insufficient_data"}:
+        missing = core.get("missing") or []
+        labels = {
+            "quote": "实时行情（价格）",
+            "kline": "至少60根历史日线",
+            "technical_indicators": "技术指标与波动/支撑计算",
+        }
+        return [labels.get(item, str(item)) for item in missing]
+
+    # Real EvidenceBundle objects always carry these keys, even when their
+    # values are null.  Older test/integration seams only expose readiness;
+    # preserve those seams when they explicitly report a ready research gate.
+    concrete_bundle = any(
+        key in bundle for key in ("quote", "kline_ref", "derived_decision_metrics")
+    )
+    if not concrete_bundle:
+        research = readiness.get("research_ready")
+        if isinstance(research, dict) and research.get("status") in {"ready", "available"}:
+            return []
+        if readiness.get("status") in {"ready", "available"}:
+            return []
+        return ["核心行情、历史日线或技术指标"]
+
+    gaps: list[str] = []
+    quote = bundle.get("quote")
+    price = quote.get("price") if isinstance(quote, dict) else None
+    if isinstance(price, bool) or not isinstance(price, (int, float)) or price <= 0:
+        gaps.append("实时行情（价格）")
+    kline_ref = bundle.get("kline_ref")
+    try:
+        bars = int(kline_ref.get("bars") or 0) if isinstance(kline_ref, dict) else 0
+    except (TypeError, ValueError):
+        bars = 0
+    if bars < 60:
+        gaps.append("至少60根历史日线")
+    derived = bundle.get("derived_decision_metrics")
+    required_technical = ("atr20", "trend", "volatility", "swing", "stop_distance")
+    if not isinstance(derived, dict) or any(
+        not isinstance(derived.get(name), dict) for name in required_technical
+    ):
+        gaps.append("技术指标与波动/支撑计算")
+    return gaps
+
+
 def _preflight_payload(context_id: str, bundle: dict[str, Any]) -> dict[str, Any]:
     coverage = bundle.get("evidence_coverage")
     if not isinstance(coverage, dict):
@@ -1272,11 +2116,91 @@ def _preflight_payload(context_id: str, bundle: dict[str, Any]) -> dict[str, Any
     instrument_payload = dict(instrument) if isinstance(instrument, dict) else {}
     if "instrument_type" in instrument_payload:
         instrument_payload["instrumentType"] = instrument_payload.pop("instrument_type")
+    readiness = bundle.get("decision_readiness")
+    if not isinstance(readiness, dict):
+        raise ValueError("决策数据预检缺少准备结果")
+    horizons = readiness.get("horizons")
+    if not isinstance(horizons, dict):
+        raise ValueError("决策数据预检缺少三周期准备结果")
+
+    core_gaps = _preflight_core_research_gap(bundle)
+    if core_gaps:
+        raise ValueError(
+            "核心研究数据未准备完成，未启动投研：" + "、".join(core_gaps)
+        )
+
+    research_gate = readiness.get("research_ready")
+    trade_gate = readiness.get("trade_ready")
+    research_horizons = research_gate.get("horizons") if isinstance(research_gate, dict) else None
+    if not isinstance(research_horizons, dict):
+        research_horizons = {}
+    if research_horizons:
+        research_statuses = [
+            (research_horizons.get(name) or {}).get("status")
+            for name in ("short_term", "medium_term", "long_term")
+        ]
+        research_ready = any(status in {"ready", "available"} for status in research_statuses)
+    elif isinstance(research_gate, dict):
+        research_ready = research_gate.get("status") in {"ready", "available"}
+    else:
+        research_ready = any(
+            isinstance(horizons.get(name), dict)
+            and horizons[name].get("status") in {"ready", "available"}
+            for name in ("short_term", "medium_term", "long_term")
+        )
+        if not research_ready:
+            research_ready = readiness.get("status") in {"ready", "available"}
+    # The hard preflight above is the permission boundary.  A valid short-term
+    # core is enough to launch research even when optional industry/policy/
+    # sentiment sections are unavailable; those sections remain visible as
+    # degraded coverage in the response.
+    if not research_ready:
+        research_ready = not core_gaps
+    if not research_ready:
+        raise ValueError("核心研究数据未准备完成，未启动投研")
+
+    def public_horizon(value: Any) -> dict[str, Any]:
+        if not isinstance(value, dict):
+            return {"status": "failed", "required": [], "available": [], "missing": []}
+        return {
+            "status": value.get("status"),
+            "required": value.get("required") or [],
+            "available": value.get("available") or [],
+            "missing": value.get("missing") or [],
+        }
+
+    public_readiness = {
+        "status": readiness.get("status"),
+        "horizons": {
+            name: public_horizon(horizons.get(name))
+            for name in ("short_term", "medium_term", "long_term")
+        },
+    }
+    if isinstance(research_gate, dict):
+        public_readiness["researchReady"] = {
+            "status": research_gate.get("status"),
+            "horizons": {
+                name: public_horizon(research_horizons.get(name))
+                for name in ("short_term", "medium_term", "long_term")
+            },
+        }
+    if isinstance(trade_gate, dict):
+        trade_horizons = trade_gate.get("horizons")
+        public_readiness["tradeReady"] = {
+            "status": trade_gate.get("status"),
+            "horizons": {
+                name: public_horizon(
+                    trade_horizons.get(name) if isinstance(trade_horizons, dict) else None
+                )
+                for name in ("short_term", "medium_term", "long_term")
+            },
+        }
     return {
         "contextId": context_id,
         "instrument": instrument_payload,
         "researchCutoffAt": bundle.get("research_cutoff_at"),
         "marketAsOf": bundle.get("market_as_of"),
+        "decisionReadiness": public_readiness,
         "evidenceCoverage": {
             key: coverage.get(key, {"status": "insufficient_data", "missing_sections": [], "degraded_sections": []})
             for key in ("short_term", "medium_term", "long_term")
@@ -1327,7 +2251,11 @@ async def handle_stock_research_preflight(request: web.Request) -> web.Response:
             raise ValueError(f"preflight context {context_id!r} has no instrument evidence")
     except Exception as exc:
         return _error(502, "preflight_failed", f"数据预检失败：{exc}")
-    return web.json_response(_preflight_payload(context_id, bundle))
+    try:
+        payload = _preflight_payload(context_id, bundle)
+    except ValueError as exc:
+        return _error(502, "preflight_failed", f"数据预检失败：{exc}")
+    return web.json_response(payload)
 
 
 # --- opportunity discovery / deterministic screening ---

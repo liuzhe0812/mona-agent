@@ -33,11 +33,16 @@ import type { MaterialsSelection, TreeNode } from "./types";
 // Helpers
 // ---------------------------------------------------------------------------
 
-function statusLabel(status?: MaterialsExtractStatus): string {
+function statusLabel(
+  status?: MaterialsExtractStatus,
+  ingestStatus?: MaterialsFileEntry["ingestStatus"],
+): string {
   if (!status) return "";
   switch (status.status) {
     case "ok":
-      return status.truncated ? "已截断" : "可搜索";
+      if (ingestStatus === "ingested") return "已入库";
+      if (ingestStatus === "stale") return "待更新";
+      return "未入库";
     case "queued":
       return "排队中";
     case "running":
@@ -47,17 +52,20 @@ function statusLabel(status?: MaterialsExtractStatus): string {
     case "unsupported":
       return "不支持";
     case "stale":
-      return "已过期";
+      return "待更新";
     default:
       return "";
   }
 }
 
-function statusColor(status?: MaterialsExtractStatus): string {
+function statusColor(
+  status?: MaterialsExtractStatus,
+  ingestStatus?: MaterialsFileEntry["ingestStatus"],
+): string {
   if (!status) return "text-muted-foreground";
   switch (status.status) {
     case "ok":
-      return "text-emerald-600";
+      return ingestStatus === "ingested" ? "text-emerald-600" : "text-amber-600";
     case "queued":
     case "running":
     case "stale":
@@ -234,8 +242,11 @@ export function TreeRow(props: TreeRowProps) {
             )}
             <span className="min-w-0 flex-1 truncate">{node.entry.name}</span>
             {!isDir && node.entry.extractStatus ? (
-              <span className={cn("shrink-0 text-[10px]", statusColor(node.entry.extractStatus))}>
-                {statusLabel(node.entry.extractStatus)}
+              <span className={cn(
+                "shrink-0 text-[10px]",
+                statusColor(node.entry.extractStatus, node.entry.ingestStatus),
+              )}>
+                {statusLabel(node.entry.extractStatus, node.entry.ingestStatus)}
               </span>
             ) : null}
             {isDir && node.entry.fileCount != null ? (
@@ -266,7 +277,7 @@ export function TreeRow(props: TreeRowProps) {
           )}
           <ContextMenuItem onClick={() => props.onCompile(node.entry.path)}>
             <Sparkles className="mr-2 h-3.5 w-3.5" />
-            编译为 Wiki
+            入库
           </ContextMenuItem>
           <ContextMenuSeparator />
           <ContextMenuItem onClick={() => props.onMove(node.entry.path)}>

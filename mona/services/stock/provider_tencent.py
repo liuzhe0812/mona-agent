@@ -58,13 +58,18 @@ _QUOTE_LINE_RE = re.compile(r'v_([a-z]{2}\d{6})="([^"]*)"')
 # Quote payload layout (Tencent public field order; stable for a decade).
 _F_NAME = 1
 _F_PRICE = 3
+_F_PREVIOUS_CLOSE = 4
 _F_VOLUME = 6
+_F_LIMIT_UP = 47
+_F_LIMIT_DOWN = 48
+_F_AMOUNT = 37  # upstream unit: ten-thousand CNY
+_F_TURNOVER_RATE = 38
 _F_TIME = 30
 _F_CHANGE_PCT = 32
 _F_PE = 39
 _F_MARKET_CAP = 45
 _F_PB = 46
-_F_MIN_LEN = 33
+_F_MIN_LEN = 49
 
 _KLINE_MAX_COUNT = 640  # upstream fqkline ceiling per request
 
@@ -155,7 +160,11 @@ class TencentProvider:
                 provider=self.name,
                 url=final_url,
                 body=body,
-                fields=["price", "change_pct", "volume", "pe", "pb", "market_cap"],
+                fields=[
+                    "price", "change_pct", "volume", "amount", "previous_close",
+                    "turnover_rate", "limit_up", "limit_down", "pe", "pb",
+                    "market_cap",
+                ],
                 published_at=as_of,
             )
             results[inst.id] = Quote(
@@ -165,6 +174,15 @@ class TencentProvider:
                 price=price,
                 change_pct=change_pct,
                 volume=volume,
+                amount=(
+                    value * 10_000
+                    if (value := _optional_float(fields, _F_AMOUNT)) is not None
+                    else None
+                ),
+                previous_close=_optional_float(fields, _F_PREVIOUS_CLOSE),
+                turnover_rate=_optional_float(fields, _F_TURNOVER_RATE),
+                limit_up=_optional_float(fields, _F_LIMIT_UP),
+                limit_down=_optional_float(fields, _F_LIMIT_DOWN),
                 pe=_optional_float(fields, _F_PE),
                 pb=_optional_float(fields, _F_PB),
                 market_cap=(

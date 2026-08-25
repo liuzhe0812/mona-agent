@@ -16,7 +16,7 @@ describe("InstrumentStage report comparison", () => {
       shortTerm: { stance: "insufficient_data", status: "insufficient_data" },
       mediumTerm: { stance: "insufficient_data", status: "insufficient_data" },
       longTerm: { stance: "insufficient_data", status: "insufficient_data" },
-    })).toBe("三周期均数据不足");
+    })).toBe("三周期均研究待更新");
     expect(horizonBrief({
       shortTerm: { stance: "positive", status: "available" },
       mediumTerm: { stance: "neutral", status: "available" },

@@ -160,9 +160,9 @@ def generated_image_tool_result(artifacts: list[dict[str, Any]]) -> str:
             "artifacts": artifacts,
             "next_step": (
                 "Use these artifact paths as reference_images for follow-up edits. "
-                "Call the message tool with the artifact paths in the media parameter "
-                "to deliver the images to the user. Keep raw paths internal unless the "
-                "user asks for debug details."
+                "Generated images are automatically delivered as chat previews and "
+                "session artifacts. Keep raw paths internal unless the user asks for "
+                "debug details."
             ),
         },
         ensure_ascii=False,
@@ -235,9 +235,9 @@ def generated_video_tool_result(artifacts: list[dict[str, Any]]) -> str:
         {
             "artifacts": artifacts,
             "next_step": (
-                "Call the message tool with the artifact paths in the media parameter "
-                "to deliver the videos to the user. Keep raw paths internal unless the "
-                "user asks for debug details."
+                "Generated videos are automatically delivered as chat previews and "
+                "session artifacts. Keep raw paths internal unless the user asks for "
+                "debug details."
             ),
         },
         ensure_ascii=False,

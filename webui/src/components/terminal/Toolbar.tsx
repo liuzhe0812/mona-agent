@@ -108,7 +108,7 @@ export function Toolbar({ onOpenSubscribe }: { onOpenSubscribe?: () => void }) {
   };
 
   return (
-    <div className="flex h-9 shrink-0 items-center gap-1 border-b px-2">
+    <div className="flex h-9 shrink-0 items-center gap-1 border-b border-border bg-card px-2">
       <Button
         variant="ghost"
         size="sm"
@@ -165,8 +165,8 @@ export function Toolbar({ onOpenSubscribe }: { onOpenSubscribe?: () => void }) {
             variant="ghost"
             size="icon"
             className={cn(
-              "h-7 w-7",
-              fileTreeVisible && "bg-accent text-accent-foreground",
+              "h-7 w-7 text-muted-foreground hover:bg-foreground/5 hover:text-foreground",
+              fileTreeVisible && "text-foreground",
             )}
             onClick={toggleFileTree}
             aria-label={fileTreeVisible ? "隐藏文件树" : "显示文件树"}
@@ -178,8 +178,8 @@ export function Toolbar({ onOpenSubscribe }: { onOpenSubscribe?: () => void }) {
             variant="ghost"
             size="icon"
             className={cn(
-              "h-7 w-7",
-              systemMonitorVisible && "bg-accent text-accent-foreground",
+              "h-7 w-7 text-muted-foreground hover:bg-foreground/5 hover:text-foreground",
+              systemMonitorVisible && "text-foreground",
             )}
             onClick={toggleSystemMonitor}
             aria-label={systemMonitorVisible ? "隐藏系统监控" : "显示系统监控"}

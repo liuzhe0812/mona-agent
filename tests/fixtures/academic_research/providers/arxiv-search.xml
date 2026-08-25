@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<feed xmlns="http://www.w3.org/2005/Atom">
+  <title>ArXiv Query: synthetic</title>
+  <id>https://arxiv.org/api/query?search_query=all:synthetic</id>
+  <updated>2026-01-02T00:00:00Z</updated>
+  <entry>
+    <id>http://arxiv.org/abs/2601.00001v1</id>
+    <title>A Synthetic Algorithm Note</title>
+    <summary>A synthetic abstract for offline testing.</summary>
+    <published>2026-01-02T00:00:00Z</published>
+    <author><name>Example A</name></author>
+    <link title="pdf" href="https://example.invalid/2601.00001.pdf" />
+  </entry>
+</feed>

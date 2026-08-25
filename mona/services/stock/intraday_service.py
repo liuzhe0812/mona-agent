@@ -185,7 +185,7 @@ class IntradayService:
                 update={"stale": True, "quality": "stale", "error": str(failure)}
             )
             projected_stale = self._project_status(stale)
-            previous = self._project_status(cached)
+            previous = cached
             self._cache[instrument.id] = projected_stale
             self._updated[instrument.id] = asyncio.get_running_loop().time()
             if _signature(projected_stale) != _signature(previous):
@@ -195,7 +195,7 @@ class IntradayService:
         self.store.upsert(fresh)
         previous = self._cache.get(instrument.id)
         projected_fresh = self._project_status(fresh)
-        if previous is None or _signature(self._project_status(previous)) != _signature(projected_fresh):
+        if previous is None or _signature(previous) != _signature(projected_fresh):
             self._notify(instrument.id, "snapshot", projected_fresh)
         self._cache[instrument.id] = projected_fresh
         self._updated[instrument.id] = asyncio.get_running_loop().time()
@@ -259,6 +259,10 @@ class IntradayService:
                 await asyncio.sleep(delay)
                 if not self._subscribers.get(instrument.id):
                     return
+                # Give clock updates a turn before starting the next upstream
+                # request.  This closes the boundary race where a session
+                # ends between the status check and the forced refresh.
+                await asyncio.sleep(0)
                 if _clock_status(self._now()) == "closed":
                     continue
                 try:

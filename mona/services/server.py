@@ -159,6 +159,13 @@ from mona.materials.compile import (
 )
 from mona.services.stock.api import (
     cleanup_stock_intraday,
+    handle_stock_decision_conditions,
+    handle_stock_diagnosis_cancel,
+    handle_stock_diagnosis_create,
+    handle_stock_diagnosis_fail,
+    handle_stock_diagnosis_get,
+    handle_stock_diagnosis_list,
+    handle_stock_diagnosis_retry,
     handle_stock_intraday,
     handle_stock_intraday_stream,
     handle_stock_material_bind,
@@ -167,6 +174,9 @@ from mona.services.stock.api import (
     handle_stock_materials,
     handle_stock_outcomes,
     handle_stock_outcomes_refresh,
+    handle_stock_portfolio_context,
+    handle_stock_risk_profile,
+    handle_stock_risk_profile_delete,
     handle_stock_screen_compare,
     handle_stock_screen_history,
     handle_stock_screen_opportunity_source,
@@ -327,12 +337,31 @@ def create_services_app(
     app.router.add_get("/api/stock/kline", handle_stock_kline)
     app.router.add_get("/api/stock/intraday", handle_stock_intraday)
     app.router.add_get("/api/stock/intraday/stream", handle_stock_intraday_stream)
+    app.router.add_post("/api/stock/diagnosis", handle_stock_diagnosis_create)
+    app.router.add_get("/api/stock/diagnosis", handle_stock_diagnosis_list)
+    app.router.add_get("/api/stock/diagnosis/{diagnosis_id}", handle_stock_diagnosis_get)
+    app.router.add_post(
+        "/api/stock/diagnosis/{diagnosis_id}/cancel", handle_stock_diagnosis_cancel
+    )
+    app.router.add_post(
+        "/api/stock/diagnosis/{diagnosis_id}/fail", handle_stock_diagnosis_fail
+    )
+    app.router.add_post(
+        "/api/stock/diagnosis/{diagnosis_id}/retry", handle_stock_diagnosis_retry
+    )
+    app.router.add_get("/api/stock/decision-conditions", handle_stock_decision_conditions)
     app.router.add_get("/api/stock/materials", handle_stock_materials)
     app.router.add_get("/api/stock/materials/preview", handle_stock_material_preview)
     app.router.add_post("/api/stock/materials/bind", handle_stock_material_bind)
     app.router.add_post("/api/stock/materials/confirm", handle_stock_material_confirm)
     app.router.add_get("/api/stock/outcomes", handle_stock_outcomes)
     app.router.add_post("/api/stock/outcomes/refresh", handle_stock_outcomes_refresh)
+    app.router.add_get("/api/stock/risk-profile", handle_stock_risk_profile)
+    app.router.add_put("/api/stock/risk-profile", handle_stock_risk_profile)
+    app.router.add_delete("/api/stock/risk-profile", handle_stock_risk_profile_delete)
+    app.router.add_get("/api/stock/portfolio-context", handle_stock_portfolio_context)
+    app.router.add_put("/api/stock/portfolio-context", handle_stock_portfolio_context)
+    app.router.add_delete("/api/stock/portfolio-context", handle_stock_portfolio_context)
     app.router.add_get("/api/stock/screen/outcomes", handle_stock_screen_outcomes)
     app.router.add_post(
         "/api/stock/screen/outcomes/refresh", handle_stock_screen_outcomes_refresh

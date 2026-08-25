@@ -9,6 +9,7 @@ import type {
   OutboundMedia,
   GoalStateWsPayload,
   DeliveredFile,
+  UIMediaAttachment,
   UIImage,
   UIFileEdit,
   UIMessage,
@@ -211,11 +212,27 @@ function mergeDeliveredFiles(
   return next;
 }
 
+function mergeMedia(
+  existing: UIMediaAttachment[] | undefined,
+  incoming: UIMediaAttachment[],
+): UIMediaAttachment[] {
+  const next = [...(existing ?? [])];
+  const seen = new Set(next.map((item) => `${item.kind}|${item.name || item.url || ""}`));
+  for (const item of incoming) {
+    const key = `${item.kind}|${item.name || item.url || ""}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    next.push(item);
+  }
+  return next;
+}
+
 function appendDeliveredFilesToLastAssistant(
   prev: UIMessage[],
   files: DeliveredFile[],
+  media: UIMediaAttachment[] = [],
 ): UIMessage[] {
-  if (files.length === 0) return prev;
+  if (files.length === 0 && media.length === 0) return prev;
   for (let i = prev.length - 1; i >= 0; i -= 1) {
     const message = prev[i];
     if (message.role === "user") break;
@@ -223,6 +240,7 @@ function appendDeliveredFilesToLastAssistant(
       return replaceMessageAt(prev, i, {
         ...message,
         deliveredFiles: mergeDeliveredFiles(message.deliveredFiles, files),
+        media: mergeMedia(message.media, media),
       });
     }
   }
@@ -233,6 +251,7 @@ function appendDeliveredFilesToLastAssistant(
       role: "assistant",
       content: "",
       deliveredFiles: files,
+      media,
       createdAt: Date.now(),
     },
   ];
@@ -400,6 +419,8 @@ export interface SendImage {
 
 export interface SendOptions {
   displayContent?: string;
+  /** Workspace-relative documents returned by the document upload endpoint. */
+  docPaths?: string[];
   terminalSessionId?: string;
   terminalExecMode?: string;
   dbConnectionId?: string;
@@ -463,6 +484,7 @@ export function useMonaStream(
   const activitySegmentCounterRef = useRef(0);
   const pendingStreamEventsRef = useRef<PendingStreamEvent[]>([]);
   const pendingDeliveredFilesRef = useRef<DeliveredFile[]>([]);
+  const pendingDeliveredMediaRef = useRef<UIMediaAttachment[]>([]);
   const streamFrameRef = useRef<number | null>(null);
   const suppressStreamUntilTurnEndRef = useRef(false);
   /** Timer that defers ``isStreaming = false`` after ``stream_end``.
@@ -793,6 +815,7 @@ export function useMonaStream(
     messageIdentityIdsRef.current.clear();
     closedAssistantStreamIdsRef.current.clear();
     pendingDeliveredFilesRef.current = [];
+    pendingDeliveredMediaRef.current = [];
     clearActivitySegment();
     clearPendingStreamWork();
     suppressStreamUntilTurnEndRef.current = false;
@@ -885,6 +908,13 @@ export function useMonaStream(
         return;
       }
 
+      // Direct @Agent requests are acknowledged before their background jobs
+      // finish, so they do not emit the normal turn_end frame.
+      if (ev.event === "agent_mentions_routed") {
+        setIsStreaming(false);
+        return;
+      }
+
       if (ev.event === "turn_end") {
         if ("goal_state" in ev && ev.goal_state != null && typeof ev.goal_state === "object") {
           setGoalState(ev.goal_state);
@@ -903,8 +933,10 @@ export function useMonaStream(
             finalized = appendDeliveredFilesToLastAssistant(
               finalized,
               pendingDeliveredFilesRef.current,
+              pendingDeliveredMediaRef.current,
             );
             pendingDeliveredFilesRef.current = [];
+            pendingDeliveredMediaRef.current = [];
           }
           if (typeof ev.latency_ms === "number" && ev.latency_ms >= 0) {
             finalized = stampLastAssistantLatency(finalized, Math.round(ev.latency_ms));
@@ -1119,8 +1151,13 @@ export function useMonaStream(
             }
           }
           if (pendingDeliveredFilesRef.current.length > 0) {
-            next = appendDeliveredFilesToLastAssistant(next, pendingDeliveredFilesRef.current);
+            next = appendDeliveredFilesToLastAssistant(
+              next,
+              pendingDeliveredFilesRef.current,
+              pendingDeliveredMediaRef.current,
+            );
             pendingDeliveredFilesRef.current = [];
+            pendingDeliveredMediaRef.current = [];
           }
           return next;
         });
@@ -1177,6 +1214,7 @@ export function useMonaStream(
       if (ev.event === "deliver_files") {
         const files = Array.isArray(ev.files) ? ev.files : [];
         if (files.length === 0) return;
+        const media = ev.media_urls?.map((item) => toMediaAttachment(item)) ?? [];
         setMessages((prev) => {
           let targetIdx: number | null = null;
           for (let i = prev.length - 1; i >= 0; i--) {
@@ -1191,13 +1229,21 @@ export function useMonaStream(
             const target = prev[targetIdx];
             return [
               ...prev.slice(0, targetIdx),
-              { ...target, deliveredFiles: mergeDeliveredFiles(target.deliveredFiles, files) },
+              {
+                ...target,
+                deliveredFiles: mergeDeliveredFiles(target.deliveredFiles, files),
+                media: mergeMedia(target.media, media),
+              },
               ...prev.slice(targetIdx + 1),
             ];
           }
           pendingDeliveredFilesRef.current = mergeDeliveredFiles(
             pendingDeliveredFilesRef.current,
             files,
+          );
+          pendingDeliveredMediaRef.current = mergeMedia(
+            pendingDeliveredMediaRef.current,
+            media,
           );
           return prev;
         });
@@ -1216,6 +1262,7 @@ export function useMonaStream(
       messageIdentityIdsRef.current.clear();
       closedAssistantStreamIdsRef.current.clear();
       pendingDeliveredFilesRef.current = [];
+      pendingDeliveredMediaRef.current = [];
       clearActivitySegment();
       clearPendingStreamWork();
       if (streamEndTimerRef.current !== null) {
@@ -1239,9 +1286,10 @@ export function useMonaStream(
     (content: string, images?: SendImage[], options?: SendOptions) => {
       if (!chatId || !client) return;
       const hasImages = !!images && images.length > 0;
+      const hasDocuments = !!options?.docPaths?.length;
       // Text is optional when images are attached — the agent will still see
       // the image blocks via ``media`` paths.
-      if (!hasImages && !content.trim()) return;
+      if (!hasImages && !hasDocuments && !content.trim()) return;
 
       flushPendingStreamEvents();
       const previews = hasImages ? images!.map((i) => i.preview) : undefined;
@@ -1252,6 +1300,7 @@ export function useMonaStream(
         messageIdentityIdsRef.current.clear();
         closedAssistantStreamIdsRef.current.clear();
         pendingDeliveredFilesRef.current = [];
+        pendingDeliveredMediaRef.current = [];
         clearActivitySegment();
         return [
           ...pruneReasoningOnlyPlaceholders(prev),
@@ -1285,6 +1334,7 @@ export function useMonaStream(
           dbLastError: options.dbLastError,
           browserPageUrl: options.browserPageUrl,
           browserPageTitle: options.browserPageTitle,
+          docPaths: options.docPaths,
           targetAgentIds: options.targetAgentIds,
         });
       } else {
@@ -1329,6 +1379,7 @@ export function useMonaStream(
       messageIdentityIdsRef.current.clear();
       closedAssistantStreamIdsRef.current.clear();
       pendingDeliveredFilesRef.current = [];
+      pendingDeliveredMediaRef.current = [];
       clearActivitySegment();
       return prev.map((m) => (m.isStreaming ? { ...m, isStreaming: false } : m));
     });

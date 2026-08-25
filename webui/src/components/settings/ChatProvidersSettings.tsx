@@ -374,7 +374,12 @@ export function ChatProvidersSettings({
     const next = model.enabled
       ? enabledModels.filter((id) => id !== model.id)
       : [...enabledModels, model.id];
-    if (!next.length) {
+    const anotherProviderHasEnabledModel = providers.some((provider) =>
+      provider.name !== selected.name
+      && provider.configured
+      && provider.models.some((item) => item.enabled),
+    );
+    if (!next.length && !anotherProviderHasEnabledModel) {
       setError("请至少保留一个可用模型");
       return;
     }
@@ -518,9 +523,9 @@ export function ChatProvidersSettings({
                 <Button type="button" variant="ghost" size="icon" onClick={refreshModels} disabled={refreshing || saving} title="刷新模型" aria-label="刷新模型">
                   {refreshing ? <Loader2 className="h-4 w-4 animate-spin" /> : <RefreshCw className="h-4 w-4" />}
                 </Button>
-                <Button type="button" variant="ghost" size="icon" onClick={deleteSelected} disabled={saving} title="删除供应商" aria-label="删除供应商">
+                {!selected.is_builtin ? <Button type="button" variant="ghost" size="icon" onClick={deleteSelected} disabled={saving} title="删除供应商" aria-label="删除供应商">
                   <Trash2 className="h-4 w-4 text-destructive" />
-                </Button>
+                </Button> : null}
               </header>
               <div className="flex items-center gap-3 border-b border-border/60 p-4">
                 <span className="shrink-0 text-ui font-medium">可用模型</span>

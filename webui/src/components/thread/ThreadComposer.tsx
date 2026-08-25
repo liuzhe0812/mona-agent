@@ -5,6 +5,7 @@ import {
   useMemo,
   useRef,
   useState,
+  useId,
   type KeyboardEvent as ReactKeyboardEvent,
   type ReactNode,
 } from "react";
@@ -15,6 +16,7 @@ import {
   ArrowUp,
   AtSign,
   BookOpen,
+  Check,
   ChevronDown,
   ChevronUp,
   CircleHelp,
@@ -39,10 +41,13 @@ import {
 import { useTranslation } from "react-i18next";
 
 import { Button } from "@/components/ui/button";
+import { OfficeDocChip } from "@/components/doc/office/OfficeDocChip";
 import {
   DropdownMenu,
   DropdownMenuContent,
+  DropdownMenuGroup,
   DropdownMenuItem,
+  DropdownMenuLabel,
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
@@ -56,12 +61,11 @@ import { useClipboardAndDrop } from "@/hooks/useClipboardAndDrop";
 import type { SendImage, SendOptions } from "@/hooks/useMonaStream";
 import type { PendingMessage } from "@/hooks/usePendingQueue";
 import type { RoomAgentInfo, SlashCommand, GoalStateWsPayload } from "@/lib/types";
+import { isTauri } from "@/lib/tauri";
 import { cn } from "@/lib/utils";
 import { PendingQueueStrip } from "@/components/thread/PendingQueueStrip";
 
-/** ``<input accept>``: aligned with the server's MIME whitelist. SVG is
- * deliberately excluded to avoid an embedded-script XSS surface. */
-const ACCEPT_ATTR = "image/png,image/jpeg,image/webp,image/gif";
+const IMAGE_ACCEPT_ATTR = "image/png,image/jpeg,image/webp,image/gif";
 
 function formatBytes(n: number): string {
   if (n < 1024) return `${n} B`;
@@ -69,14 +73,24 @@ function formatBytes(n: number): string {
   return `${(n / (1024 * 1024)).toFixed(1)} MB`;
 }
 
+export interface ComposerModelOption {
+  provider: string;
+  providerLabel: string;
+  model: string;
+  label: string;
+  free: boolean;
+  active: boolean;
+}
+
+export type ComposerAttachment = File | { name: string; localPath: string };
+
 interface ThreadComposerProps {
   onSend: (content: string, images?: SendImage[], options?: SendOptions) => void;
   disabled?: boolean;
   placeholder?: string;
   isStreaming?: boolean;
   modelLabel?: string | null;
-  modelOptions?: Array<{ name: string; label: string; free_default_model?: string | null; model?: string | null }>;
-  zenFreeModels?: string[];
+  modelOptions?: ComposerModelOption[];
   onModelSwitch?: (provider: string, model: string) => void;
   /** Server-resolved capability of the active preset. When false, image
    * attach/paste/drop is rejected with an inline hint. Default true. */
@@ -92,6 +106,7 @@ interface ThreadComposerProps {
   /** Project workspace bound to a new-chat composer. Only shown in hero mode. */
   workspace?: string | null;
   onWorkspaceChange?: (workspace: string | null) => void;
+  showHeroPromptChips?: boolean;
   onOpenSettings?: (section?: string) => void;
   /** Pending message queue for mid-turn staging. */
   pendingMessages?: PendingMessage[];
@@ -102,6 +117,11 @@ interface ThreadComposerProps {
   /** Room members offered by the ``@`` picker (multi-agent guide 7.5). When
    * empty the picker is disabled (direct chats). */
   mentionableAgents?: RoomAgentInfo[];
+  documents?: Array<{ name: string; path: string; size?: number }>;
+  documentsUploading?: boolean;
+  documentUploadError?: string | null;
+  onAddDocuments?: (files: ComposerAttachment[]) => void;
+  onRemoveDocument?: (path: string) => void;
 }
 
 const COMMAND_ICONS: Record<string, LucideIcon> = {
@@ -209,6 +229,50 @@ function buildGoalMarkdownBody(summary: string, objective: string): string {
   const o = objective.trim();
   if (s && o) return `${s}\n\n---\n\n${o}`;
   return o || s;
+}
+
+function FlowingActivityIcon({ className }: { className?: string }) {
+  const gradientId = `mona-ai-activity-${useId().replace(/:/g, "")}`;
+  return (
+    <svg
+      viewBox="0 0 24 24"
+      fill="none"
+      className={className}
+      aria-hidden
+    >
+      <defs>
+        <linearGradient
+          id={gradientId}
+          gradientUnits="userSpaceOnUse"
+          x1="-48"
+          y1="0"
+          x2="0"
+          y2="0"
+        >
+          <stop offset="0%" stopColor="hsl(var(--theme))" />
+          <stop offset="45%" stopColor="hsl(var(--ai-cyan))" />
+          <stop offset="55%" stopColor="hsl(var(--success-indicator))" />
+          <stop offset="100%" stopColor="hsl(var(--theme))" />
+          <animateTransform
+            className="ai-activity-sweep"
+            attributeName="gradientTransform"
+            type="translate"
+            from="0 0"
+            to="48 0"
+            dur="1.8s"
+            repeatCount="indefinite"
+          />
+        </linearGradient>
+      </defs>
+      <path
+        d="M22 12h-4l-3 9L9 3l-3 9H2"
+        stroke={`url(#${gradientId})`}
+        strokeWidth="2"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+      />
+    </svg>
+  );
 }
 
 function RunElapsedStrip({
@@ -363,7 +427,7 @@ function RunElapsedStrip({
         aria-label={ariaLabel}
       >
         {showTimer ? (
-          <Activity className="h-4 w-4 shrink-0 text-primary/80" aria-hidden />
+          <FlowingActivityIcon className="ai-activity-gradient h-4 w-4 shrink-0" />
         ) : (
           <Target className="h-4 w-4 shrink-0 text-primary/75" aria-hidden />
         )}
@@ -414,7 +478,6 @@ export function ThreadComposer({
   isStreaming = false,
   modelLabel = null,
   modelOptions = [],
-  zenFreeModels = [],
   onModelSwitch,
   imageInputEnabled = true,
   variant = "thread",
@@ -429,10 +492,17 @@ export function ThreadComposer({
   isPendingFull = false,
   workspace,
   onWorkspaceChange,
+  showHeroPromptChips = true,
   onOpenSettings,
   mentionableAgents = [],
+  documents = [],
+  documentsUploading = false,
+  documentUploadError = null,
+  onAddDocuments,
+  onRemoveDocument,
 }: ThreadComposerProps) {
   const { t } = useTranslation();
+  const attachLabel = t(onAddDocuments ? "thread.composer.attachFile" : "thread.composer.attachImage");
   const [value, setValue] = useState("");
   const [inlineError, setInlineError] = useState<string | null>(null);
   const [slashMenuDismissed, setSlashMenuDismissed] = useState(false);
@@ -447,8 +517,18 @@ export function ThreadComposer({
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const formRef = useRef<HTMLFormElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const [nativeDragging, setNativeDragging] = useState(false);
   const chipRefs = useRef(new Map<string, HTMLButtonElement>());
   const isHero = variant === "hero";
+  const groupedModelOptions = useMemo(() => {
+    const groups = new Map<string, { label: string; options: ComposerModelOption[] }>();
+    for (const option of modelOptions) {
+      const group = groups.get(option.provider);
+      if (group) group.options.push(option);
+      else groups.set(option.provider, { label: option.providerLabel, options: [option] });
+    }
+    return [...groups.entries()];
+  }, [modelOptions]);
   const resolvedPlaceholder = isStreaming
     ? t("thread.composer.placeholderStreaming")
     : placeholder ?? t("thread.composer.placeholderThread");
@@ -481,6 +561,23 @@ export function ThreadComposer({
     [enqueue, formatRejection, imageInputEnabled, t],
   );
 
+  const addAttachments = useCallback(
+    (files: File[]) => {
+      if (files.length === 0 || disabled || documentsUploading) return;
+      if (!onAddDocuments) {
+        addFiles(files);
+        return;
+      }
+      const images = imageInputEnabled
+        ? files.filter((file) => file.type.startsWith("image/"))
+        : [];
+      const attachments = files.filter((file) => !images.includes(file));
+      if (images.length > 0) addFiles(images);
+      if (attachments.length > 0) onAddDocuments(attachments);
+    },
+    [addFiles, disabled, documentsUploading, imageInputEnabled, onAddDocuments],
+  );
+
   const {
     isDragging,
     onPaste,
@@ -488,7 +585,56 @@ export function ThreadComposer({
     onDragOver,
     onDragLeave,
     onDrop,
-  } = useClipboardAndDrop(addFiles);
+  } = useClipboardAndDrop(addAttachments, { acceptAllFiles: Boolean(onAddDocuments) });
+
+  const desktopFileDropEnabled = Boolean(onAddDocuments) && isTauri();
+
+  useEffect(() => {
+    if (!desktopFileDropEnabled || !onAddDocuments) return;
+    let active = true;
+    let unlisten: (() => void) | null = null;
+    const isInsideComposer = (position: { x: number; y: number }) => {
+      const rect = formRef.current?.getBoundingClientRect();
+      if (!rect) return false;
+      const dpr = window.devicePixelRatio || 1;
+      const x = position.x / dpr;
+      const y = position.y / dpr;
+      return x >= rect.left && x <= rect.right && y >= rect.top && y <= rect.bottom;
+    };
+
+    void import("@tauri-apps/api/webview")
+      .then(({ getCurrentWebview }) => getCurrentWebview().onDragDropEvent((event) => {
+        if (!active) return;
+        switch (event.payload.type) {
+          case "enter":
+          case "over":
+            if ("position" in event.payload) setNativeDragging(isInsideComposer(event.payload.position));
+            break;
+          case "leave":
+            setNativeDragging(false);
+            break;
+          case "drop":
+            setNativeDragging(false);
+            if (!("paths" in event.payload) || !("position" in event.payload)) return;
+            if (!isInsideComposer(event.payload.position) || event.payload.paths.length === 0) return;
+            onAddDocuments(event.payload.paths.map((localPath) => ({
+              localPath,
+              name: localPath.replace(/\\/g, "/").split("/").at(-1) || localPath,
+            })));
+            break;
+        }
+      }))
+      .then((fn) => {
+        if (active) unlisten = fn;
+        else fn();
+      })
+      .catch(() => undefined);
+
+    return () => {
+      active = false;
+      unlisten?.();
+    };
+  }, [desktopFileDropEnabled, onAddDocuments]);
 
   useEffect(() => {
     if (disabled) return;
@@ -509,8 +655,9 @@ export function ThreadComposer({
   const canSend =
     !disabled
     && !encoding
+    && !documentsUploading
     && !hasErrors
-    && (value.trim().length > 0 || readyImages.length > 0);
+    && (value.trim().length > 0 || readyImages.length > 0 || documents.length > 0);
 
   const slashQuery = useMemo(() => {
     if (disabled || slashMenuDismissed || !value.startsWith("/")) return null;
@@ -823,8 +970,27 @@ export function ThreadComposer({
   const onFilePick: React.ChangeEventHandler<HTMLInputElement> = (e) => {
     const files = Array.from(e.target.files ?? []);
     e.target.value = "";
-    addFiles(files);
+    addAttachments(files);
   };
+
+  const openAttachmentPicker = useCallback(async () => {
+    if (!onAddDocuments || !isTauri()) {
+      fileInputRef.current?.click();
+      return;
+    }
+    try {
+      const { open } = await import("@tauri-apps/plugin-dialog");
+      const selected = await open({ multiple: true, directory: false, title: "添加文件" });
+      const paths = Array.isArray(selected) ? selected : selected ? [selected] : [];
+      if (paths.length === 0) return;
+      onAddDocuments(paths.map((localPath) => ({
+        localPath,
+        name: localPath.replace(/\\/g, "/").split("/").at(-1) || localPath,
+      })));
+    } catch (error) {
+      setInlineError(error instanceof Error ? error.message : "选择文件失败");
+    }
+  }, [onAddDocuments]);
 
   const removeChip = useCallback(
     (id: string) => {
@@ -857,7 +1023,7 @@ export function ThreadComposer({
     [removeChip],
   );
 
-  const attachButtonDisabled = disabled || full || !imageInputEnabled;
+  const attachButtonDisabled = disabled || documentsUploading || (full && !onAddDocuments) || (!imageInputEnabled && !onAddDocuments);
   const showStopButton = isStreaming && !!onStop;
 
   return (
@@ -867,10 +1033,10 @@ export function ThreadComposer({
         e.preventDefault();
         submit();
       }}
-      onDragEnter={onDragEnter}
-      onDragOver={onDragOver}
-      onDragLeave={onDragLeave}
-      onDrop={onDrop}
+      onDragEnter={desktopFileDropEnabled ? undefined : onDragEnter}
+      onDragOver={desktopFileDropEnabled ? undefined : onDragOver}
+      onDragLeave={desktopFileDropEnabled ? undefined : onDragLeave}
+      onDrop={desktopFileDropEnabled ? undefined : onDrop}
       className={cn("relative w-full", isHero ? "px-0" : "px-1 pb-1.5 pt-1 sm:px-0")}
     >
       {showSlashMenu ? (
@@ -935,7 +1101,7 @@ export function ThreadComposer({
           </div>
         </div>
       ) : null}
-      {isHero ? (
+      {isHero && showHeroPromptChips ? (
         <div className="mx-auto mb-2.5 flex w-full max-w-[58rem] flex-wrap gap-2">
           {HERO_PROMPT_CHIPS.map((chip) => {
             const Icon = chip.Icon;
@@ -962,19 +1128,19 @@ export function ThreadComposer({
         className={cn(
           "relative mx-auto flex w-full flex-col overflow-visible transition-all duration-200",
           isHero
-            ? "max-w-[58rem] rounded-2xl border border-border/60 bg-card shadow-sm dark:border-white/10"
-            : "max-w-[49.5rem] rounded-2xl border border-border/60 bg-card shadow-sm dark:border-white/10",
+            ? "max-w-[58rem] rounded-2xl border border-border/60 bg-card dark:border-white/10"
+            : "max-w-[49.5rem] rounded-2xl border border-border/60 bg-card dark:border-white/10",
           "focus-within:ring-1 focus-within:ring-foreground/8",
           disabled && "opacity-60",
-          isDragging && "ring-2 ring-primary/40 motion-reduce:ring-0 motion-reduce:border-primary",
+          (isDragging || nativeDragging) && "ring-2 ring-primary/40 motion-reduce:ring-0 motion-reduce:border-primary",
           goalState?.active &&
             "goal-shell-glow ring-1 ring-sky-400/35 motion-reduce:ring-sky-400/25 dark:ring-sky-400/45",
         )}
       >
-        {images.length > 0 ? (
+        {images.length > 0 || documents.length > 0 ? (
           <div
             className="flex flex-wrap gap-2 px-3 pt-3"
-            aria-label={t("thread.composer.attachImage")}
+            aria-label={attachLabel}
           >
             {images.map((img) => (
               <AttachmentChip
@@ -995,6 +1161,14 @@ export function ThreadComposer({
                   if (el) chipRefs.current.set(img.id, el);
                   else chipRefs.current.delete(img.id);
                 }}
+              />
+            ))}
+            {documents.map((document) => (
+              <OfficeDocChip
+                key={document.path}
+                name={document.name}
+                size={document.size}
+                onRemove={onRemoveDocument ? () => onRemoveDocument(document.path) : undefined}
               />
             ))}
           </div>
@@ -1048,7 +1222,7 @@ export function ThreadComposer({
             "disabled:cursor-not-allowed",
           )}
         />
-        {inlineError ? (
+        {inlineError || documentUploadError ? (
           <div
             role="alert"
             className={cn(
@@ -1056,7 +1230,7 @@ export function ThreadComposer({
               "text-[11.5px] font-medium text-destructive",
             )}
           >
-            {inlineError}
+            {inlineError ?? documentUploadError}
           </div>
         ) : null}
         <div
@@ -1069,7 +1243,7 @@ export function ThreadComposer({
             <input
               ref={fileInputRef}
               type="file"
-              accept={ACCEPT_ATTR}
+              accept={onAddDocuments ? undefined : IMAGE_ACCEPT_ATTR}
               multiple
               hidden
               onChange={onFilePick}
@@ -1079,13 +1253,13 @@ export function ThreadComposer({
               size="icon"
               variant="ghost"
               disabled={attachButtonDisabled}
-              aria-label={t("thread.composer.attachImage")}
+              aria-label={attachLabel}
               title={
-                imageInputEnabled
-                  ? t("thread.composer.attachImage")
-                  : t("thread.composer.imageNotSupported")
+                !imageInputEnabled && !onAddDocuments
+                  ? t("thread.composer.imageNotSupported")
+                  : attachLabel
               }
-              onClick={() => fileInputRef.current?.click()}
+              onClick={() => void openAttachmentPicker()}
               className={cn(
                 "rounded-full text-muted-foreground hover:text-foreground",
                 isHero
@@ -1129,49 +1303,32 @@ export function ThreadComposer({
                       <ChevronDown className={cn("flex-none opacity-50", isHero ? "h-3 w-3" : "h-2.5 w-2.5")} />
                     </button>
                   </DropdownMenuTrigger>
-                  <DropdownMenuContent align="end" side="top" className="min-w-[180px]">
-                    {modelOptions.map((opt) => {
-                      if (opt.free_default_model && zenFreeModels.length > 0) {
-                        return zenFreeModels.map((model) => (
+                  <DropdownMenuContent align="end" side="top" className="max-h-[min(60vh,420px)] min-w-[240px] overflow-y-auto">
+                    {groupedModelOptions.map(([provider, group]) => (
+                      <DropdownMenuGroup key={provider}>
+                        <DropdownMenuLabel className="pb-1 text-[11px] font-medium text-muted-foreground">
+                          {group.label}
+                        </DropdownMenuLabel>
+                        {group.options.map((option) => (
                           <DropdownMenuItem
-                            key={`${opt.name}/${model}`}
+                            key={`${option.provider}/${option.model}`}
                             className="flex items-center gap-2 text-[13px]"
-                            onSelect={() => onModelSwitch(opt.name, model)}
+                            onSelect={() => onModelSwitch(option.provider, option.model)}
                           >
                             <span
                               aria-hidden
-                              className="h-1.5 w-1.5 flex-none rounded-full bg-blue-500/80"
+                              className={cn(
+                                "h-1.5 w-1.5 flex-none rounded-full",
+                                option.free ? "bg-[hsl(var(--brand-blue)/0.8)]" : "bg-emerald-500/80",
+                              )}
                             />
-                            <span className="truncate">{model.replace(/-free$/, "")}</span>
-                            <span className="ml-auto text-[10px] text-muted-foreground">Free</span>
+                            <span className="min-w-0 flex-1 truncate">{option.label}</span>
+                            {option.free ? <span className="text-[10px] text-muted-foreground">免费</span> : null}
+                            {option.active ? <Check className="h-3.5 w-3.5 shrink-0 text-primary" aria-label="当前模型" /> : null}
                           </DropdownMenuItem>
-                        ));
-                      }
-                      const modelLeaf = opt.model
-                        ? (opt.model.split("/").pop() ?? opt.model)
-                        : null;
-                      return (
-                        <DropdownMenuItem
-                          key={opt.name}
-                          className="flex items-center gap-2 text-[13px]"
-                          onSelect={() => {
-                            const model = opt.model || "";
-                            onModelSwitch(opt.name, model);
-                          }}
-                        >
-                          <span
-                            aria-hidden
-                            className={cn(
-                              "h-1.5 w-1.5 flex-none rounded-full",
-                              modelLeaf ? "bg-emerald-500/80" : "bg-muted-foreground/40",
-                            )}
-                          />
-                          <span className={cn("truncate", !modelLeaf && "text-muted-foreground")}>
-                            {modelLeaf ?? `${opt.label}（未设置）`}
-                          </span>
-                        </DropdownMenuItem>
-                      );
-                    })}
+                        ))}
+                      </DropdownMenuGroup>
+                    ))}
                     {onOpenSettings ? (
                       <>
                         <DropdownMenuSeparator />

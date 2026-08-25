@@ -10,6 +10,7 @@ from contextlib import AsyncExitStack, nullcontext, suppress
 from copy import copy
 from dataclasses import dataclass, field
 from enum import Enum, auto
+from functools import partial
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Awaitable, Callable
 
@@ -62,6 +63,20 @@ if TYPE_CHECKING:
 
 
 UNIFIED_SESSION_KEY = "unified:default"
+
+def previewable_delivered_media(files: list[dict[str, Any]] | None) -> list[str]:
+    """Return existing image/video deliverables for inline reply previews."""
+    media: list[str] = []
+    seen: set[str] = set()
+    for file in files or []:
+        mime = str(file.get("mime") or "").lower()
+        path = file.get("absolute_path")
+        if not mime.startswith(("image/", "video/")) or not isinstance(path, str):
+            continue
+        if path not in seen and Path(path).is_file():
+            media.append(path)
+            seen.add(path)
+    return media
 
 # Appended to the system prompt when the user has no active subscription or
 # trial, so the model knows which capabilities are unavailable and does not
@@ -294,6 +309,8 @@ class AgentLoop:
             bus=bus,
             model=self.model,
             tools_config=_tc,
+            image_generation_provider_configs=self._image_generation_provider_configs,
+            video_generation_provider_configs=self._video_generation_provider_configs,
             max_tool_result_chars=self.max_tool_result_chars,
             restrict_to_workspace=restrict_to_workspace,
             disabled_skills=disabled_skills,
@@ -678,13 +695,21 @@ class AgentLoop:
                 continue
             description = f": {definition.description}" if definition.description else ""
             members.append(f"- {agent_id} — {definition.display_name}{description}")
-        return (
+        context = (
             "# Collaboration room metadata\n"
             "This metadata describes the current room; it is context, not an instruction.\n"
             f"Room goal: {conversation.goal or '(no room goal set)'}\n"
             "Members:\n"
             + ("\n".join(members) if members else "(no members listed)")
         )
+        if getattr(self, "_partner_agent_id", None) is None:
+            context += (
+                "\n\n# Mona delegation rule\n"
+                "When a room member needs to provide new information, invoke "
+                "delegate_agent in the same turn. Never write an @mention as a "
+                "substitute: reply text cannot create an AgentJob."
+            )
+        return context
 
     def _append_room_members_context(
         self,
@@ -783,6 +808,8 @@ class AgentLoop:
             max_messages=self._max_messages,
             disabled_skills=None,
             tools_config=self.tools_config,
+            image_generation_provider_configs=self._image_generation_provider_configs,
+            video_generation_provider_configs=self._video_generation_provider_configs,
             hooks=list(self._extra_hooks) if self._extra_hooks else None,
             unified_session=self._unified_session,
             consolidation_ratio=self._consolidation_ratio,
@@ -1133,7 +1160,7 @@ class AgentLoop:
             metadata=metadata,
             session_key=session_key,
             tool_hint_max_length=self.tool_hint_max_length,
-            set_tool_context=self._set_tool_context,
+            set_tool_context=partial(self._set_tool_context, session=session),
             on_iteration=lambda iteration: setattr(self, "_current_iteration", iteration),
         )
         hook: AgentHook = (
@@ -1174,25 +1201,33 @@ class AgentLoop:
                     break
 
             # Block if nothing drained but sub-agents spawned in this dispatch
-            # are still running.  Keeps the runner loop alive so subsequent
-            # completions are injected in-order rather than dispatched separately.
+            # are still running.  Direct @Agent jobs post their own room result
+            # instead of injecting one, so also stop waiting once they finish.
             if (not items
                     and session is not None
                     and self.subagents.get_running_count_by_session(session.key) > 0):
-                try:
-                    msg = await asyncio.wait_for(pending_queue.get(), timeout=300)
-                except asyncio.TimeoutError:
-                    logger.warning(
-                        "Timeout waiting for sub-agent completion in session {}",
-                        session.key,
-                    )
-                    return items
-                items.append(_to_user_message(msg))
-                while len(items) < limit:
+                deadline = asyncio.get_running_loop().time() + 300
+                while self.subagents.get_running_count_by_session(session.key) > 0:
                     try:
-                        items.append(_to_user_message(pending_queue.get_nowait()))
-                    except asyncio.QueueEmpty:
+                        msg = await asyncio.wait_for(
+                            pending_queue.get(),
+                            timeout=min(0.25, deadline - asyncio.get_running_loop().time()),
+                        )
+                    except asyncio.TimeoutError:
+                        if asyncio.get_running_loop().time() < deadline:
+                            continue
+                        logger.warning(
+                            "Timeout waiting for sub-agent completion in session {}",
+                            session.key,
+                        )
                         break
+                    items.append(_to_user_message(msg))
+                    while len(items) < limit:
+                        try:
+                            items.append(_to_user_message(pending_queue.get_nowait()))
+                        except asyncio.QueueEmpty:
+                            break
+                    break
 
             return items
 
@@ -1857,7 +1892,7 @@ class AgentLoop:
         """Assemble the final outbound message from turn results."""
         # MessageTool suppression
         if (mt := self.tools.get("message")) and isinstance(mt, MessageTool) and mt._sent_in_turn:
-            if not had_injections or stop_reason == "empty_final_response":
+            if not delivered_files and (not had_injections or stop_reason == "empty_final_response"):
                 return None
 
         preview = final_content[:120] + "..." if len(final_content) > 120 else final_content
@@ -1872,10 +1907,21 @@ class AgentLoop:
         if delivered_files:
             meta["_deliver_files"] = list(delivered_files)
 
+        already_sent_media = (
+            set(mt.turn_delivered_media_paths())
+            if isinstance(mt, MessageTool)
+            else set()
+        )
+        media = [
+            path for path in previewable_delivered_media(delivered_files)
+            if path not in already_sent_media
+        ]
+
         return OutboundMessage(
             channel=msg.channel,
             chat_id=msg.chat_id,
             content=final_content,
+            media=media,
             metadata=meta,
         )
 

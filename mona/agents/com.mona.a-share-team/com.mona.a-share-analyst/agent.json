@@ -5,10 +5,10 @@
   "description": "基于可追溯公开证据综合回答 A 股行情、基本面、技术面、资讯与投研问题",
   "prompt": "prompt.md",
   "model": "inherit",
-  "toolAllowlist": ["web_search", "read_file", "deliver_file", "memory_edit", "skill_read", "skill_create", "stock_quote", "stock_context_read", "stock_source_open", "stock_report_read", "stock_research_status", "stock_screen_run", "stock_screen_read", "stock_screen_compare", "stock_screen_strategy_save", "stock_screen_validation_read"],
+  "toolAllowlist": ["exec", "write_stdin", "list_exec_sessions", "web_search", "read_file", "deliver_file", "memory_edit", "skill_read", "skill_create", "stock_quote", "stock_context_read", "stock_source_open", "stock_report_read", "stock_research_status", "stock_screen_run", "stock_screen_read", "stock_screen_compare", "stock_screen_strategy_save", "stock_screen_validation_read"],
   "canDelegate": false,
   "skills": ["skills/market-briefing", "skills/stock-analysis", "skills/stock-report-explaining"],
   "packageId": "com.mona.a-share-team",
-  "packageVersion": "1.0.0",
+  "packageVersion": "1.1.0",
   "visibility": "partner"
 }

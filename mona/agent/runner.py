@@ -64,6 +64,7 @@ _MICROCOMPACT_MIN_CHARS = 500
 # ponytail: fixed web-only budget; make it configurable only if real tasks need it.
 _MAX_WEB_LOOKUP_STREAK = 12
 _WEB_LOOKUP_TOOLS = frozenset({"web_search", "web_fetch"})
+_GENERATED_MEDIA_TOOLS = frozenset({"generate_image", "generate_video"})
 _LOOP_DETECTED_MESSAGE = (
     "I stopped a repeating tool loop and could not produce a reliable final answer "
     "from the results collected so far."
@@ -170,6 +171,50 @@ class AgentRunner:
 
     def __init__(self, provider: LLMProvider):
         self.provider = provider
+
+    @staticmethod
+    def _generated_media_paths(result: Any) -> list[str]:
+        payload = result if isinstance(result, dict) else None
+        if payload is None and isinstance(result, str):
+            try:
+                payload, _ = json.JSONDecoder().raw_decode(result.lstrip())
+            except (TypeError, ValueError, json.JSONDecodeError):
+                return []
+        if not isinstance(payload, dict):
+            return []
+        artifacts = payload.get("artifacts") or payload.get("output_files") or []
+        if not isinstance(artifacts, list):
+            return []
+        paths: list[str] = []
+        for artifact in artifacts:
+            if not isinstance(artifact, dict):
+                continue
+            path = artifact.get("path") or artifact.get("local_path") or artifact.get("saved_to")
+            if isinstance(path, str) and path and path not in paths:
+                paths.append(path)
+        return paths
+
+    async def _register_generated_media(
+        self,
+        spec: AgentRunSpec,
+        tool_name: str,
+        result: Any,
+    ) -> None:
+        if tool_name not in _GENERATED_MEDIA_TOOLS:
+            return
+        paths = self._generated_media_paths(result)
+        if not paths:
+            return
+        try:
+            deliver_file = spec.tools.get("deliver_file")
+            if deliver_file is None:
+                logger.warning("Generated media could not be registered: deliver_file is unavailable")
+                return
+            delivery = await deliver_file.execute(paths=paths)
+            if isinstance(delivery, str) and delivery.startswith("Error"):
+                logger.warning("Generated media could not be registered: {}", delivery)
+        except Exception:
+            logger.exception("Generated media registration failed")
 
     @staticmethod
     def _merge_message_content(left: Any, right: Any) -> str | list[dict[str, Any]]:
@@ -1178,6 +1223,8 @@ class AgentRunner:
                     params if isinstance(params, dict) else None,
                 ) for file_edit_tracker in file_edit_trackers],
             )
+
+        await self._register_generated_media(spec, tool_call.name, result)
 
         detail = "" if result is None else str(result)
         detail = detail.replace("\n", " ").strip()

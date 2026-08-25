@@ -273,7 +273,7 @@ export function BookmarkBar({ onNavigate, visible }: BookmarkBarProps) {
     <>
       <div
         className={cn(
-          "flex h-6 items-center gap-0.5 overflow-x-auto border-b border-border/40 bg-muted/30 px-2 scrollbar-none transition-colors",
+          "flex h-6 items-center gap-0.5 overflow-x-auto border-b border-border/40 bg-card px-2 scrollbar-none transition-colors",
           rootDragOver && "ring-1 ring-inset ring-primary/50 bg-accent/40",
         )}
         onDragOver={(e) => {

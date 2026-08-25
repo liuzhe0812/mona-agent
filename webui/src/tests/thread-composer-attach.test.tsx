@@ -51,6 +51,35 @@ beforeEach(() => {
 });
 
 describe("ThreadComposer — image attachments", () => {
+  it("routes a picked file of any format to the document uploader", () => {
+    const onAddDocuments = vi.fn();
+    const file = new File(["video"], "clip.mp4", { type: "video/mp4" });
+    render(<ThreadComposer onSend={vi.fn()} onAddDocuments={onAddDocuments} />);
+
+    const fileInput = screen
+      .getByLabelText(/message input/i)
+      .closest("form")!
+      .querySelector('input[type="file"]') as HTMLInputElement;
+    fireEvent.change(fileInput, { target: { files: [file] } });
+
+    expect(fileInput).not.toHaveAttribute("accept");
+    expect(onAddDocuments).toHaveBeenCalledWith([file]);
+    expect(encodeImage).not.toHaveBeenCalled();
+  });
+
+  it("routes a dropped video to the document uploader", () => {
+    const onAddDocuments = vi.fn();
+    const file = new File(["video"], "clip.mp4", { type: "video/mp4" });
+    render(<ThreadComposer onSend={vi.fn()} onAddDocuments={onAddDocuments} />);
+
+    const form = screen.getByLabelText(/message input/i).closest("form")!;
+    fireEvent.dragEnter(form, { dataTransfer: { files: [file], types: ["Files"] } });
+    fireEvent.drop(form, { dataTransfer: { files: [file], types: ["Files"] } });
+
+    expect(onAddDocuments).toHaveBeenCalledWith([file]);
+    expect(encodeImage).not.toHaveBeenCalled();
+  });
+
   it("attaches a picked image and includes its data url on send", async () => {
     const file = pngFile("a.png");
     encodeImage.mockResolvedValueOnce(resolveReady(file));

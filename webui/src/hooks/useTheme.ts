@@ -32,8 +32,8 @@ function applyTheme(theme: Theme): void {
 /** 同步主窗口背景色到当前主题，避免拖动调整大小时露出对比色残影。 */
 function syncWindowBackground(theme: Theme): void {
   if (!isTauri()) return;
-  // 深色主题用 #1a1a1a 匹配 index.html 的 body 背景；浅色主题用 #ffffff
-  const color = theme === "dark" ? [26, 26, 26, 255] : [255, 255, 255, 255];
+  // Match the neutral Cindy-inspired shell surfaces in index.html.
+  const color = theme === "dark" ? [24, 24, 24, 255] : [242, 242, 237, 255];
   void setWindowBackgroundColor(color[0], color[1], color[2], color[3]).catch(
     () => {
       // 主题切换时窗口背景同步失败不影响 UI

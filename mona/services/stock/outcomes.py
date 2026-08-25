@@ -14,11 +14,11 @@ import os
 import re
 from collections import defaultdict
 from copy import deepcopy
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 from pathlib import Path
 from typing import Any, Iterable, Mapping
 
-from mona.services.stock.provenance import parse_asia_datetime
+from mona.services.stock.provenance import CN_TZ, parse_asia_datetime
 
 PUBLIC_MARKET_BENCHMARK = {
     "name": "中证全指",
@@ -67,9 +67,62 @@ _CONDITION_GROUPS = (
     "confirmation_conditions",
     "watch_conditions",
     "invalidation_conditions",
+    "stop_loss_conditions",
+    "take_profit_conditions",
 )
 _PRICE_FIELDS = frozenset({"open", "close", "high", "low", "price", "volume"})
 _OPERATORS = frozenset({"gt", "gte", "lt", "lte", "crosses_above", "crosses_below"})
+
+DECISION_EVALUATION_VERSION = "decision-conditions-v1"
+DECISION_EVALUATION_MAX_AGE_SECONDS = 24 * 60 * 60
+_DECISION_CONDITION_GROUPS = (
+    ("participation_conditions", "参与条件"),
+    ("confirmation_conditions", "确认条件"),
+    ("invalidation_conditions", "退出条件"),
+    ("stop_loss_conditions", "止损条件"),
+    ("take_profit_conditions", "止盈条件"),
+)
+_DECISION_STATUS_LABELS = {
+    "matched": "已满足",
+    "not_matched": "未满足",
+    "not_evaluable": "暂无法判断",
+}
+
+# V5 price/position plans are deterministic products of frozen Evidence.
+# Keep these versions explicit so a later calibration can replace the method
+# without changing the meaning of an existing report.
+V5_DERIVED_DECISION_METHOD = "risk-controlled-reference-plan"
+V5_DERIVED_DECISION_VERSION = "risk-controlled-reference-plan-v1"
+V5_INDICATOR_METHOD_VERSION = "evidence-derived-indicators-v1"
+V5_CONDITION_METHOD_VERSION = "price-threshold-condition-v1"
+V5_POSITION_METHOD_VERSION = "fixed-fractional-risk-product-single-stock-cap-v1"
+V5_PRODUCT_SINGLE_STOCK_CAP_PCT = 30.0
+
+_V5_HORIZON_PLAN_SPECS: dict[str, dict[str, float | int]] = {
+    # The short horizon's 10 trading days are represented by 14 calendar days;
+    # the disclosure is returned in review_trigger and method_versions.
+    "short_term": {
+        "entry_atr": 0.25,
+        "pullback_atr": 0.75,
+        "stop_atr": 1.0,
+        "valid_calendar_days": 14,
+        "position_cap_pct": 20.0,
+    },
+    "medium_term": {
+        "entry_atr": 0.50,
+        "pullback_atr": 1.25,
+        "stop_atr": 1.50,
+        "valid_calendar_days": 90,
+        "position_cap_pct": 30.0,
+    },
+    "long_term": {
+        "entry_atr": 0.75,
+        "pullback_atr": 1.75,
+        "stop_atr": 2.00,
+        "valid_calendar_days": 365,
+        "position_cap_pct": 40.0,
+    },
+}
 
 
 def _plain(value: Any) -> Any:
@@ -428,6 +481,354 @@ def _metric_field(ref: Any) -> str | None:
     if field not in _PRICE_FIELDS:
         return None
     return "close" if field == "price" else field
+
+
+def _decision_field(value: Mapping[str, Any], name: str, default: Any = None) -> Any:
+    if name in value:
+        return value[name]
+    parts = name.split("_")
+    alias = parts[0] + "".join(part.capitalize() for part in parts[1:])
+    return value.get(alias, default)
+
+
+def _decision_source_ids(value: Mapping[str, Any]) -> list[str]:
+    raw = _decision_field(value, "source_ids", [])
+    if not raw:
+        raw = _decision_field(value, "source_id", [])
+    if isinstance(raw, str):
+        raw = [raw]
+    if not isinstance(raw, (list, tuple)):
+        return []
+    return list(dict.fromkeys(item.strip() for item in raw if isinstance(item, str) and item.strip()))
+
+
+def _decision_timestamp(value: Any) -> datetime | None:
+    return parse_asia_datetime(value)
+
+
+def _decision_metric(
+    metrics: Mapping[str, Any],
+    reference: Any,
+    *,
+    role: str = "any",
+) -> dict[str, Any] | None:
+    if not isinstance(reference, str) or not reference.strip():
+        return None
+    raw = metrics.get(reference)
+    if not isinstance(raw, Mapping):
+        return None
+    current_only = bool(raw.get("current_only"))
+    if role in {"threshold", "reference"} and current_only:
+        return None
+    value_key = "observed_value" if role == "observed" and "observed_value" in raw else "value"
+    value = _number(raw.get(value_key))
+    source_ids = _decision_source_ids(raw)
+    if role == "observed" and "observed_source_ids" in raw:
+        source_ids = list(raw.get("observed_source_ids") or [])
+    source = raw.get("source") if isinstance(raw.get("source"), Mapping) else {}
+    if not source_ids and isinstance(source, Mapping):
+        source_id = source.get("id")
+        if isinstance(source_id, str) and source_id.strip():
+            source_ids = [source_id.strip()]
+    as_of = (
+        _decision_field(raw, "as_of")
+        or _decision_field(raw, "observed_at")
+        or _decision_field(raw, "valid_at")
+        or _decision_field(raw, "effective_at")
+        or _decision_field(raw, "timestamp")
+    )
+    if as_of is None and isinstance(source, Mapping):
+        as_of = source.get("published_at") or source.get("fetched_at")
+    if role == "observed" and "observed_as_of" in raw:
+        as_of = raw.get("observed_as_of")
+    parsed_as_of = _decision_timestamp(as_of)
+    if value is None or not source_ids or parsed_as_of is None:
+        return None
+    return {
+        "value": value,
+        "source_ids": source_ids,
+        "as_of": parsed_as_of,
+        "previous_value": _number(
+            raw.get("observed_previous_value", _decision_field(raw, "previous_value"))
+            if role == "observed"
+            else _decision_field(raw, "previous_value")
+        ),
+    }
+
+
+def _decision_report_cutoff(report: Mapping[str, Any]) -> datetime | None:
+    for field in ("research_cutoff_at", "market_as_of", "as_of"):
+        parsed = _decision_timestamp(_decision_field(report, field))
+        if parsed is not None:
+            return parsed
+    return None
+
+
+def _decision_gate_reason(
+    condition: Mapping[str, Any],
+    observed: dict[str, Any] | None,
+    threshold: dict[str, Any] | None,
+    report_cutoff: datetime | None,
+    evaluated_at: datetime,
+    *,
+    max_age_seconds: int,
+) -> str | None:
+    if not _decision_source_ids(condition):
+        return "缺少可核验来源"
+    if observed is None:
+        return "缺少当前指标数据或来源时点"
+    if threshold is None:
+        return "缺少阈值指标数据或来源时点"
+    if threshold["as_of"] > observed["as_of"]:
+        return "阈值有效时点晚于当前观察值"
+    if observed["as_of"] > evaluated_at or threshold["as_of"] > evaluated_at:
+        return "指标有效时点晚于当前评估时点"
+    if report_cutoff is not None and threshold["as_of"] > report_cutoff:
+        return "阈值有效时点晚于报告截止时间"
+    condition_as_of = (
+        _decision_field(condition, "as_of")
+        or _decision_field(condition, "observed_at")
+        or _decision_field(condition, "valid_at")
+        or _decision_field(condition, "effective_at")
+    )
+    if condition_as_of is not None:
+        parsed_condition_as_of = _decision_timestamp(condition_as_of)
+        if parsed_condition_as_of is None:
+            return "条件有效时点无法解析"
+        if parsed_condition_as_of != threshold["as_of"]:
+            return "条件与指标有效时点不一致"
+    valid_until = _decision_timestamp(
+        _decision_field(condition, "valid_until") or _decision_field(condition, "expires_at")
+    )
+    if valid_until is not None and valid_until < evaluated_at:
+        return "条件已过期"
+    if report_cutoff is not None and (evaluated_at - report_cutoff).total_seconds() > max_age_seconds:
+        return "报告已过期"
+    if (evaluated_at - observed["as_of"]).total_seconds() > max_age_seconds:
+        return "引用数据已过期"
+    return None
+
+
+def _decision_operator_result(
+    operator: Any,
+    observed: float,
+    threshold: float,
+    previous: float | None,
+) -> bool | None:
+    if operator == "gt":
+        return observed > threshold
+    if operator == "gte":
+        return observed >= threshold
+    if operator == "lt":
+        return observed < threshold
+    if operator == "lte":
+        return observed <= threshold
+    if operator == "crosses_above":
+        return None if previous is None else previous <= threshold < observed
+    if operator == "crosses_below":
+        return None if previous is None else previous >= threshold > observed
+    return None
+
+
+def _decision_condition_result(
+    horizon: str,
+    group: str,
+    group_label: str,
+    condition: Mapping[str, Any],
+    metrics: Mapping[str, Any],
+    report_cutoff: datetime | None,
+    evaluated_at: datetime,
+    *,
+    max_age_seconds: int,
+) -> dict[str, Any]:
+    text = condition.get("text") if isinstance(condition.get("text"), str) else ""
+    base = {
+        "horizon": horizon,
+        "group": group,
+        "group_label": group_label,
+        "text": text,
+        "source_ids": _decision_source_ids(condition),
+        "evaluated_at": evaluated_at.isoformat(),
+        "method_version": DECISION_EVALUATION_VERSION,
+        "condition": _plain(condition),
+    }
+    if condition.get("kind") == "manual":
+        return {
+            **base,
+            "status": "not_evaluable",
+            "status_label": _DECISION_STATUS_LABELS["not_evaluable"],
+            "reason": "人工条件不能由当前行情自动判断",
+        }
+    if condition.get("kind") != "trigger":
+        return {
+            **base,
+            "status": "not_evaluable",
+            "status_label": _DECISION_STATUS_LABELS["not_evaluable"],
+            "reason": "条件类型无法判断",
+        }
+    observed_ref = _decision_field(condition, "observed_metric_ref")
+    threshold_ref = _decision_field(condition, "threshold_metric_ref")
+    operator = _decision_field(condition, "operator")
+    observed = _decision_metric(metrics, observed_ref, role="observed")
+    threshold = _decision_metric(metrics, threshold_ref, role="threshold")
+    reason = _decision_gate_reason(
+        condition,
+        observed,
+        threshold,
+        report_cutoff,
+        evaluated_at,
+        max_age_seconds=max_age_seconds,
+    )
+    if reason is not None:
+        return {**base, "status": "not_evaluable", "status_label": _DECISION_STATUS_LABELS["not_evaluable"], "reason": reason}
+    if operator not in _OPERATORS:
+        return {**base, "status": "not_evaluable", "status_label": _DECISION_STATUS_LABELS["not_evaluable"], "reason": "缺少可识别的条件操作符"}
+    result = _decision_operator_result(
+        operator,
+        observed["value"],
+        threshold["value"],
+        observed.get("previous_value"),
+    )
+    if result is None:
+        return {**base, "status": "not_evaluable", "status_label": _DECISION_STATUS_LABELS["not_evaluable"], "reason": "缺少前一时点数据，无法判断穿越条件"}
+    return {
+        **base,
+        "status": "matched" if result else "not_matched",
+        "status_label": _DECISION_STATUS_LABELS["matched" if result else "not_matched"],
+        "reason": "当前数据已满足条件" if result else "当前数据未满足条件",
+        "observed_value": observed["value"],
+        "threshold_value": threshold["value"],
+    }
+
+
+def _decision_condition_reference(view: Mapping[str, Any], group: str, metrics: Mapping[str, Any]) -> dict[str, Any] | None:
+    conditions = _decision_field(view, group, [])
+    if not isinstance(conditions, (list, tuple)):
+        return None
+    for condition in conditions:
+        if isinstance(condition, Mapping) and condition.get("kind") == "trigger":
+            reference = _decision_field(condition, "threshold_metric_ref")
+            resolved = _decision_metric(metrics, reference, role="reference")
+            if resolved is not None:
+                return resolved
+    return None
+
+
+def _decision_risk_reward(
+    view: Mapping[str, Any],
+    metrics: Mapping[str, Any],
+    report_cutoff: datetime | None,
+    evaluated_at: datetime,
+    *,
+    max_age_seconds: int,
+) -> dict[str, Any]:
+    stance = view.get("stance")
+    declared_direction = _decision_field(view, "direction")
+    direction = (
+        declared_direction
+        if declared_direction in {"long", "short"}
+        else "long" if stance == "positive" else "short" if stance == "negative" else None
+    )
+    base = {
+        "status": "not_evaluable",
+        "status_label": _DECISION_STATUS_LABELS["not_evaluable"],
+        "ratio": None,
+        "direction": direction or "unknown",
+        "evaluated_at": evaluated_at.isoformat(),
+        "method_version": DECISION_EVALUATION_VERSION,
+    }
+    if direction is None:
+        return {**base, "reason": "方向不明确，无法计算风险收益比"}
+    entry = (
+        _decision_condition_reference(view, "participation_conditions", metrics)
+        or _decision_condition_reference(view, "confirmation_conditions", metrics)
+    )
+    stop = _decision_condition_reference(view, "stop_loss_conditions", metrics)
+    take = _decision_condition_reference(view, "take_profit_conditions", metrics)
+    if entry is None or stop is None or take is None:
+        return {**base, "reason": "缺少计划入场、止损或止盈参考"}
+    if not entry["source_ids"] or not stop["source_ids"] or not take["source_ids"]:
+        return {**base, "reason": "计划入场、止损或止盈参考缺少来源"}
+    if len({entry["as_of"], stop["as_of"], take["as_of"]}) != 1:
+        return {**base, "reason": "计划入场、止损和止盈有效时点不一致"}
+    if report_cutoff is not None and (evaluated_at - report_cutoff).total_seconds() > max_age_seconds:
+        return {**base, "reason": "报告已过期"}
+    if (evaluated_at - entry["as_of"]).total_seconds() > max_age_seconds:
+        return {**base, "reason": "计划价格引用已过期"}
+    entry_value, stop_value, take_value = entry["value"], stop["value"], take["value"]
+    if direction == "long":
+        numerator, denominator = take_value - entry_value, entry_value - stop_value
+    else:
+        numerator, denominator = entry_value - take_value, stop_value - entry_value
+    if denominator <= 0:
+        return {**base, "reason": "计划入场与止损参考无法形成正向风险区间"}
+    if numerator <= 0:
+        return {**base, "reason": "计划止盈参考与方向不一致"}
+    return {
+        **base,
+        "status": "matched",
+        "status_label": _DECISION_STATUS_LABELS["matched"],
+        "ratio": round(numerator / denominator, 6),
+        "reason": "风险收益比已按计划入场参考计算",
+    }
+
+
+def evaluate_decision_conditions(
+    report: Mapping[str, Any] | Any,
+    metrics: Mapping[str, Any] | None = None,
+    *,
+    evaluated_at: Any | None = None,
+    max_age_seconds: int = DECISION_EVALUATION_MAX_AGE_SECONDS,
+) -> dict[str, Any]:
+    """Evaluate current decision conditions without filling or model calls."""
+    document = _plain(report)
+    if not isinstance(document, Mapping):
+        document = {}
+    metric_values = metrics if isinstance(metrics, Mapping) else {}
+    parsed_evaluated_at = _decision_timestamp(evaluated_at) or datetime.now(CN_TZ)
+    report_cutoff = _decision_report_cutoff(document)
+    views = document.get("horizon_views")
+    if not isinstance(views, Mapping):
+        views = document.get("horizons") if isinstance(document.get("horizons"), Mapping) else {}
+    horizons: dict[str, Any] = {}
+    for horizon in _HORIZONS:
+        view = views.get(horizon) if isinstance(views, Mapping) else None
+        view = view if isinstance(view, Mapping) else {}
+        conditions: list[dict[str, Any]] = []
+        for group, group_label in _DECISION_CONDITION_GROUPS:
+            raw_conditions = _decision_field(view, group, [])
+            if not isinstance(raw_conditions, (list, tuple)):
+                continue
+            conditions.extend(
+                _decision_condition_result(
+                    horizon,
+                    group,
+                    group_label,
+                    condition,
+                    metric_values,
+                    report_cutoff,
+                    parsed_evaluated_at,
+                    max_age_seconds=max_age_seconds,
+                )
+                for condition in raw_conditions
+                if isinstance(condition, Mapping)
+            )
+        horizons[horizon] = {
+            "conditions": conditions,
+            "risk_reward": _decision_risk_reward(
+                view,
+                metric_values,
+                report_cutoff,
+                parsed_evaluated_at,
+                max_age_seconds=max_age_seconds,
+            ),
+        }
+    return {
+        "report_id": document.get("report_id"),
+        "evaluated_at": parsed_evaluated_at.isoformat(),
+        "method_version": DECISION_EVALUATION_VERSION,
+        "horizons": horizons,
+    }
 
 
 def replay_report_conditions(
@@ -833,6 +1234,468 @@ def read_latest_selection_outcome_observations(
     return list(latest.values())
 
 
+def _v5_required_mapping(value: Any, field_name: str) -> Mapping[str, Any]:
+    if not isinstance(value, Mapping):
+        raise ValueError(f"{field_name} must be an object")
+    return value
+
+
+def _v5_required_number(value: Any, field_name: str, *, positive: bool = False) -> float:
+    number = _number(value)
+    if number is None or (positive and number <= 0):
+        requirement = "positive " if positive else "finite "
+        raise ValueError(f"{field_name} must be a {requirement}number")
+    return number
+
+
+def _v5_required_sources(value: Any, field_name: str) -> list[str]:
+    if not isinstance(value, (list, tuple)):
+        raise ValueError(f"{field_name} must be a non-empty list")
+    sources = list(dict.fromkeys(
+        item.strip() for item in value if isinstance(item, str) and item.strip()
+    ))
+    if not sources or len(sources) != len(value):
+        raise ValueError(f"{field_name} must contain only non-empty source ids")
+    return sources
+
+
+def _v5_required_timestamp(value: Any, field_name: str) -> tuple[str, datetime]:
+    if not isinstance(value, (str, datetime)):
+        raise ValueError(f"{field_name} must be a timestamp")
+    parsed = parse_asia_datetime(value)
+    if parsed is None or parsed.tzinfo is None:
+        raise ValueError(f"{field_name} must be a valid timezone-aware timestamp")
+    return parsed.isoformat(), parsed
+
+
+def _v5_metric(
+    derived: Mapping[str, Any], name: str, all_sources: list[str]
+) -> Mapping[str, Any]:
+    metric = _v5_required_mapping(_decision_field(derived, name), f"derived_decision_metrics.{name}")
+    sources = _v5_required_sources(
+        _decision_field(metric, "source_ids"),
+        f"derived_decision_metrics.{name}.source_ids",
+    )
+    _v5_required_timestamp(
+        _decision_field(metric, "as_of"),
+        f"derived_decision_metrics.{name}.as_of",
+    )
+    for source_id in sources:
+        if source_id not in all_sources:
+            all_sources.append(source_id)
+    return metric
+
+
+def _v5_price(value: float) -> float:
+    rounded = round(float(value), 2)
+    if not math.isfinite(rounded) or rounded <= 0:
+        raise ValueError("V5 price plan produced a non-positive price")
+    return rounded
+
+
+def _v5_floor_percentage(value: float, places: int = 6) -> float:
+    factor = 10**places
+    return math.floor(value * factor + 1e-12) / factor
+
+
+def build_v5_derived_decision_metrics(
+    bundle: Mapping[str, Any],
+    *,
+    generated_at: str | datetime | None = None,
+    eligible_horizons: Iterable[str] | None = None,
+) -> dict[str, Any]:
+    """Build the deterministic V5 price and position plans from frozen Evidence.
+
+    This function deliberately consumes only ``derived_decision_metrics`` and
+    ``decision_readiness``.  It does not call providers, inspect narratives or
+    invoke an LLM.  ``generated_at`` is optional for callers that need a
+    reproducible result: when omitted, the frozen research cutoff is used.
+    """
+    if not isinstance(bundle, Mapping):
+        raise ValueError("V5 decision bundle must be an object")
+    derived = _v5_required_mapping(
+        _decision_field(bundle, "derived_decision_metrics"),
+        "derived_decision_metrics",
+    )
+    readiness = _v5_required_mapping(
+        _decision_field(bundle, "decision_readiness"),
+        "decision_readiness",
+    )
+    market_as_of, market_dt = _v5_required_timestamp(
+        _decision_field(derived, "as_of"), "derived_decision_metrics.as_of"
+    )
+    research_cutoff, research_cutoff_dt = _v5_required_timestamp(
+        _decision_field(bundle, "research_cutoff_at"), "research_cutoff_at"
+    )
+    if research_cutoff_dt < market_dt:
+        raise ValueError("research_cutoff_at must not precede market_as_of")
+    _, readiness_dt = _v5_required_timestamp(
+        _decision_field(readiness, "as_of"), "decision_readiness.as_of"
+    )
+    if readiness_dt != market_dt:
+        raise ValueError("decision_readiness.as_of must match derived_decision_metrics.as_of")
+    partial = eligible_horizons is not None
+    selected_horizons = tuple(
+        dict.fromkeys(eligible_horizons if eligible_horizons is not None else _HORIZONS)
+    )
+    if any(horizon not in _HORIZONS for horizon in selected_horizons):
+        raise ValueError("eligible_horizons contains an unsupported horizon")
+    if not partial and _decision_field(readiness, "status") != "ready":
+        raise ValueError("decision_readiness is not ready")
+
+    all_sources = _v5_required_sources(
+        _decision_field(derived, "source_ids"),
+        "derived_decision_metrics.source_ids",
+    )
+    readiness_sources = _v5_required_sources(
+        _decision_field(readiness, "source_ids"),
+        "decision_readiness.source_ids",
+    )
+    for source_id in readiness_sources:
+        if source_id not in all_sources:
+            all_sources.append(source_id)
+
+    readiness_horizons = _v5_required_mapping(
+        _decision_field(readiness, "horizons"), "decision_readiness.horizons"
+    )
+    for horizon in selected_horizons:
+        status = _decision_field(
+            _v5_required_mapping(
+                _decision_field(readiness_horizons, horizon),
+                f"decision_readiness.horizons.{horizon}",
+            ),
+            "status",
+        )
+        if status != "ready":
+            raise ValueError(f"decision_readiness.horizons.{horizon} is not ready")
+
+    price = _v5_required_number(
+        _decision_field(derived, "price"),
+        "derived_decision_metrics.price",
+        positive=True,
+    )
+    momentum = _v5_metric(derived, "momentum", all_sources)
+    _v5_required_number(
+        _decision_field(momentum, "momentum20_pct"),
+        "derived_decision_metrics.momentum.momentum20_pct",
+    )
+    _v5_required_number(
+        _decision_field(momentum, "momentum60_pct"),
+        "derived_decision_metrics.momentum.momentum60_pct",
+    )
+    atr_metric = _v5_metric(derived, "atr20", all_sources)
+    atr = _v5_required_number(
+        _decision_field(atr_metric, "value"),
+        "derived_decision_metrics.atr20.value",
+        positive=True,
+    )
+    trend = _v5_metric(derived, "trend", all_sources)
+    trend_value = _decision_field(trend, "value")
+    if not isinstance(trend_value, str) or not trend_value.strip():
+        raise ValueError("derived_decision_metrics.trend.value must be non-empty")
+    ma20 = _v5_required_number(
+        _decision_field(trend, "ma20"), "derived_decision_metrics.trend.ma20", positive=True
+    )
+    ma60 = _v5_required_number(
+        _decision_field(trend, "ma60"), "derived_decision_metrics.trend.ma60", positive=True
+    )
+    volatility = _v5_metric(derived, "volatility", all_sources)
+    atr20_pct = _v5_required_number(
+        _decision_field(volatility, "atr20_pct"),
+        "derived_decision_metrics.volatility.atr20_pct",
+        positive=True,
+    )
+    return_std20_pct = _number(_decision_field(volatility, "return_std20_pct")) or 0.0
+    swing = _v5_metric(derived, "swing", all_sources)
+    support = _v5_required_number(
+        _decision_field(swing, "support"), "derived_decision_metrics.swing.support", positive=True
+    )
+    resistance = _v5_required_number(
+        _decision_field(swing, "resistance"), "derived_decision_metrics.swing.resistance", positive=True
+    )
+    if support >= resistance:
+        raise ValueError("derived_decision_metrics.swing support must be below resistance")
+    stop_distance = _v5_metric(derived, "stop_distance", all_sources)
+    provided_stop = _v5_required_number(
+        _decision_field(stop_distance, "stop_loss"),
+        "derived_decision_metrics.stop_distance.stop_loss",
+        positive=True,
+    )
+    _v5_required_number(
+        _decision_field(stop_distance, "value_pct"),
+        "derived_decision_metrics.stop_distance.value_pct",
+        positive=True,
+    )
+
+    raw_generated_at = generated_at if generated_at is not None else research_cutoff
+    generated_text, generated_dt = _v5_required_timestamp(raw_generated_at, "generated_at")
+    if generated_dt < research_cutoff_dt:
+        raise ValueError("generated_at must not precede research_cutoff_at")
+
+    # The anchor blends the frozen quote and moving averages, then remains
+    # inside the observed swing range.  Each horizon changes only its ATR
+    # bandwidth and holding window; no narrative or prediction enters here.
+    anchor = max(support, min(resistance, (price + ma20 + ma60) / 3.0))
+    volatility_adjustment = max(
+        0.25,
+        min(1.0, 1.0 / (1.0 + max(atr20_pct, return_std20_pct) / 5.0)),
+    )
+    enhanced = _decision_field(readiness, "enhanced")
+    enhanced_available = (
+        isinstance(enhanced, Mapping)
+        and _decision_field(enhanced, "status") == "available"
+    )
+    evidence_strength = "strong" if enhanced_available else "medium"
+
+    from mona.services.stock.schemas import V5PositionPlan, V5TradingCondition, V5TradingPlan
+
+    horizons: dict[str, dict[str, Any]] = {}
+    for horizon in selected_horizons:
+        spec = _V5_HORIZON_PLAN_SPECS[horizon]
+        entry_band = max(0.01, atr * float(spec["entry_atr"]))
+        pullback_band = max(0.01, atr * float(spec["pullback_atr"]))
+        entry_low = _v5_price(max(0.01, anchor - entry_band))
+        entry_high = _v5_price(anchor + entry_band)
+        if entry_high <= entry_low:
+            entry_high = _v5_price(entry_low + 0.01)
+        pullback_high = _v5_price(max(0.01, anchor - entry_band * 0.25))
+        pullback_low = _v5_price(max(0.01, pullback_high - pullback_band))
+        if pullback_high < pullback_low:
+            pullback_low, pullback_high = pullback_high, pullback_low
+        entry_midpoint = (entry_low + entry_high) / 2.0
+
+        stop_candidates = [
+            provided_stop,
+            support - atr * float(spec["stop_atr"]),
+            ma20 - atr * float(spec["stop_atr"]) * 0.5,
+        ]
+        valid_candidates = [
+            candidate
+            for candidate in stop_candidates
+            if 0 < candidate < entry_midpoint
+        ]
+        stop_raw = max(valid_candidates) if valid_candidates else 0.0
+        if stop_raw <= 0 or stop_raw >= entry_midpoint:
+            stop_raw = entry_midpoint - max(atr * float(spec["stop_atr"]), entry_midpoint * 0.02)
+        stop_loss = _v5_price(max(0.01, stop_raw))
+        if stop_loss >= entry_midpoint:
+            stop_loss = _v5_price(entry_midpoint - 0.01)
+        if stop_loss >= entry_midpoint:
+            raise ValueError(f"{horizon} cannot produce a positive stop distance")
+
+        risk = entry_midpoint - stop_loss
+        first_take_profit = _v5_price(entry_midpoint + 2.0 * risk)
+        second_take_profit = _v5_price(entry_midpoint + 3.0 * risk)
+        if first_take_profit <= entry_midpoint:
+            first_take_profit = _v5_price(entry_midpoint + 0.01)
+        if second_take_profit <= first_take_profit:
+            second_take_profit = _v5_price(first_take_profit + 0.01)
+        risk_reward_first = round(
+            (first_take_profit - entry_midpoint) / (entry_midpoint - stop_loss), 10
+        )
+        risk_reward_second = round(
+            (second_take_profit - entry_midpoint) / (entry_midpoint - stop_loss), 10
+        )
+        threshold_root = (
+            "derived_decision_metrics.horizons."
+            f"{horizon}.trading_plan"
+        )
+
+        def condition(
+            description: str,
+            threshold_name: str,
+            operator: str,
+            status: str,
+        ) -> dict[str, Any]:
+            return V5TradingCondition(
+                kind="price_trigger",
+                description=description,
+                observed_metric_ref="quote.price",
+                operator=operator,
+                threshold_metric_ref=f"{threshold_root}.{threshold_name}",
+                status=status,
+                market_as_of=market_as_of,
+                source_ids=list(all_sources),
+            ).model_dump(mode="json")
+
+        entry_status = "triggered" if price >= entry_high else "not_triggered"
+        stop_status = "triggered" if price <= stop_loss else "not_triggered"
+        take_status = "triggered" if price >= first_take_profit else "not_triggered"
+        plan = V5TradingPlan(
+            reference_buy_low=entry_low,
+            reference_buy_high=entry_high,
+            pullback_buy_low=pullback_low,
+            pullback_buy_high=pullback_high,
+            stop_loss=stop_loss,
+            first_take_profit=first_take_profit,
+            first_reduce_fraction=1.0 / 3.0,
+            second_take_profit=second_take_profit,
+            second_reduce_fraction=1.0 / 3.0,
+            risk_reward_first=risk_reward_first,
+            risk_reward_second=risk_reward_second,
+            currency="CNY",
+            calculation_method=V5_DERIVED_DECISION_METHOD,
+            calculation_version=f"{V5_DERIVED_DECISION_VERSION}-{horizon}",
+            source_ids=list(all_sources),
+            market_as_of=market_as_of,
+            entry_conditions=[
+                condition(
+                    f"价格达到参考买入区间上沿 {entry_high:.2f} 元",
+                    "reference_buy_high",
+                    "gte",
+                    entry_status,
+                )
+            ],
+            exit_conditions=[
+                condition(
+                    f"价格跌至止损参考 {stop_loss:.2f} 元",
+                    "stop_loss",
+                    "lte",
+                    stop_status,
+                )
+            ],
+            take_profit_conditions=[
+                condition(
+                    f"价格达到第一止盈参考 {first_take_profit:.2f} 元",
+                    "first_take_profit",
+                    "gte",
+                    take_status,
+                )
+            ],
+        )
+        # Persist the rounded distance first; every downstream sizing value,
+        # including the theoretical limit, must use this exact saved value.
+        stop_distance_pct = round(
+            (entry_midpoint - stop_loss) / entry_midpoint * 100.0, 6
+        )
+        if stop_distance_pct <= 0:
+            raise ValueError(f"{horizon} produced an invalid saved stop distance")
+        theoretical_position = round(1.0 / stop_distance_pct * 100.0, 12)
+        saved_volatility_adjustment = round(volatility_adjustment, 6)
+        period_cap = float(spec["position_cap_pct"])
+        max_position = _v5_floor_percentage(
+            min(
+                theoretical_position * saved_volatility_adjustment,
+                V5_PRODUCT_SINGLE_STOCK_CAP_PCT,
+                period_cap,
+            )
+        )
+        # Keep the persisted percentage strictly within the Schema's
+        # recomputed fixed-fractional-risk ceiling after decimal truncation.
+        max_position = min(max_position, _v5_floor_percentage(theoretical_position))
+        if max_position <= 0:
+            raise ValueError(f"{horizon} cannot produce a positive position limit")
+        initial_position = _v5_floor_percentage(max_position / 2.0)
+        if initial_position <= 0:
+            initial_position = max_position
+        position = V5PositionPlan(
+            risk_budget_pct=1.0,
+            initial_position_pct=initial_position,
+            max_position_pct=max_position,
+            stop_distance_pct=stop_distance_pct,
+            volatility_adjustment=saved_volatility_adjustment,
+            liquidity_cap_pct=V5_PRODUCT_SINGLE_STOCK_CAP_PCT,
+            calculation_method="fixed_fractional_risk",
+            calculation_version=f"{V5_POSITION_METHOD_VERSION}-{horizon}",
+        )
+        valid_until = (
+            generated_dt + timedelta(days=int(spec["valid_calendar_days"]))
+        ).isoformat()
+        review_trigger = (
+            "10个交易日（按14个自然日近似）后，或价格触发条件变化时重新评估"
+            if horizon == "short_term"
+            else "计划有效期到期或价格触发条件变化时重新评估"
+        )
+        horizons[horizon] = {
+            "trading_plan": plan.model_dump(mode="json"),
+            "position_plan": position.model_dump(mode="json"),
+            "valid_until": valid_until,
+            "review_trigger": review_trigger,
+            "evidence_strength": evidence_strength,
+            "source_ids": list(all_sources),
+        }
+
+    return {
+        "schema_version": 1,
+        "generated_at": generated_text,
+        "method_versions": {
+            "decision": V5_DERIVED_DECISION_VERSION,
+            "indicators": V5_INDICATOR_METHOD_VERSION,
+            "conditions": V5_CONDITION_METHOD_VERSION,
+        },
+        "source_ids": list(all_sources),
+        "horizons": horizons,
+    }
+
+
+def build_v6_derived_decision_metrics(
+    bundle: Mapping[str, Any], *, generated_at: str | datetime | None = None
+) -> dict[str, Any]:
+    """Build independent V6 plans for only trade-eligible horizons.
+
+    V5 remains all-or-nothing through ``build_v5_derived_decision_metrics``.
+    V6 reuses that exact formula with a selected horizon set and records the
+    eligibility boundary explicitly, so an unavailable medium/long horizon
+    cannot erase an otherwise executable short plan.
+    """
+    if not isinstance(bundle, Mapping):
+        raise ValueError("V6 decision bundle must be an object")
+    readiness = _v5_required_mapping(
+        _decision_field(bundle, "decision_readiness"),
+        "decision_readiness",
+    )
+    readiness_horizons = _v5_required_mapping(
+        _decision_field(readiness, "horizons"),
+        "decision_readiness.horizons",
+    )
+    eligible = [
+        horizon
+        for horizon in _HORIZONS
+        if _decision_field(
+            _v5_required_mapping(
+                _decision_field(readiness_horizons, horizon),
+                f"decision_readiness.horizons.{horizon}",
+            ),
+            "status",
+        )
+        == "ready"
+    ]
+    # A V6 plan is still an executable trading artifact.  Without the short
+    # horizon's quote/K-line/technical core, do not let a longer research
+    # horizon create an isolated plan.
+    if not eligible or "short_term" not in eligible:
+        eligible = []
+    raw_generated_at = generated_at if generated_at is not None else _decision_field(bundle, "research_cutoff_at")
+    generated_text, _ = _v5_required_timestamp(raw_generated_at, "generated_at")
+    derived = _decision_field(bundle, "derived_decision_metrics")
+    source_ids = list(_decision_field(readiness, "source_ids") or [])
+    if isinstance(derived, Mapping):
+        source_ids = list(dict.fromkeys([*(_decision_field(derived, "source_ids") or []), *source_ids]))
+    method_versions = {
+        "decision": V5_DERIVED_DECISION_VERSION,
+        "indicators": V5_INDICATOR_METHOD_VERSION,
+        "conditions": V5_CONDITION_METHOD_VERSION,
+    }
+    if not eligible:
+        return {
+            "schema_version": 1,
+            "generated_at": generated_text,
+            "method_versions": method_versions,
+            "source_ids": list(dict.fromkeys(source_ids)),
+            "eligible_horizons": [],
+            "generated_horizons": [],
+            "horizons": {},
+        }
+    plan = build_v5_derived_decision_metrics(
+        bundle,
+        generated_at=generated_text,
+        eligible_horizons=eligible,
+    )
+    plan["eligible_horizons"] = list(eligible)
+    plan["generated_horizons"] = list(plan.get("horizons") or {})
+    return plan
+
+
 def _selection_observation_row(
     snapshot: Mapping[str, Any],
     candidate: Mapping[str, Any],
@@ -1034,6 +1897,20 @@ def aggregate_selection_outcome_observations(
 
 # Short aliases for callers that prefer the domain nouns without the long
 # storage-oriented names.
+def assess_a_share_execution(*args: Any, **kwargs: Any) -> Any:
+    """Compatibility export for the V6 execution layer."""
+    from mona.services.stock.execution import assess_a_share_execution as _assess
+
+    return _assess(*args, **kwargs)
+
+
+def materialize_v6_trading_plan(*args: Any, **kwargs: Any) -> Any:
+    """Compatibility export for the V6 direction-aware materializer."""
+    from mona.services.stock.execution import materialize_v6_trading_plan as _materialize
+
+    return _materialize(*args, **kwargs)
+
+
 create_tracking_snapshot = build_outcome_tracking_snapshot
 append_observation = append_outcome_observation
 read_latest_observations = read_latest_outcome_observations

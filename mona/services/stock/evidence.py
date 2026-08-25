@@ -25,8 +25,10 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import json
+import math
 import os
 import re
+import statistics
 from datetime import datetime, time, timedelta
 from pathlib import Path
 from typing import Any, Callable
@@ -35,6 +37,7 @@ from filelock import FileLock
 from filelock import Timeout as FileLockTimeout
 from loguru import logger
 
+from mona.services.stock.fundamental_factors import build_fundamental_factors
 from mona.services.stock.indicators import (
     macd,
     rsi,
@@ -42,8 +45,16 @@ from mona.services.stock.indicators import (
     swing_high_low,
     volume_change_pct,
 )
+from mona.services.stock.market_intelligence import (
+    build_market_sentiment,
+    build_public_opinion_state,
+    load_local_public_opinion_snapshot,
+)
 from mona.services.stock.material_evidence import MaterialBindingStore
-from mona.services.stock.outcomes import PUBLIC_MARKET_BENCHMARK
+from mona.services.stock.outcomes import (
+    PUBLIC_MARKET_BENCHMARK,
+    build_v6_derived_decision_metrics,
+)
 from mona.services.stock.provenance import (
     CN_TZ,
     SourceRecord,
@@ -52,10 +63,16 @@ from mona.services.stock.provenance import (
     parse_asia_datetime,
 )
 from mona.services.stock.provider import (
+    Fundamentals,
     InstrumentRef,
     MarketSnapshotCapture,
     MarketSnapshotIncompleteError,
 )
+from mona.services.stock.valuation import (
+    build_valuation_result,
+    is_policy_sensitive_industry,
+)
+from mona.services.stock.westock_provider import WESTOCK_COMMANDS
 
 SCHEMA_VERSION = 2
 DEFAULT_BATCH_CAPACITY = 20
@@ -152,6 +169,8 @@ _STRUCTURED_EVENT_WINDOW_DAYS = 7
 
 V2_SECTIONS = (
     "market_regime",
+    "market_sentiment",
+    "public_opinion",
     "industry_context",
     "policy_context",
     "cycle_context",
@@ -168,6 +187,200 @@ PUBLIC_BENCHMARK = InstrumentRef(
 BENCHMARK_WINDOWS = (5, 20, 60, 120)
 BENCHMARK_KLINE_LIMIT = 130
 MARKET_SNAPSHOT_CACHE_VERSION = "market-snapshot-v1"
+DECISION_READINESS_VERSION = "decision-readiness-v5-b2"
+DERIVED_DECISION_METRICS_VERSION = "decision-derived-v5-b2"
+MIN_DECISION_KLINE_BARS = 60
+
+
+def _finite_number(value: Any) -> float | None:
+    number = numeric_value(value)
+    return number if number is not None and math.isfinite(number) else None
+
+
+def _bar_observed_at(bar: Any) -> datetime | None:
+    raw = getattr(bar, "date", None)
+    parsed = parse_asia_datetime(raw)
+    if parsed is not None and len(str(raw).strip()) <= 10:
+        parsed = parsed.replace(
+            hour=CLOSE_TIME.hour,
+            minute=CLOSE_TIME.minute,
+            second=0,
+            microsecond=0,
+        )
+    return parsed
+
+
+def _true_range_values(bars: list[Any]) -> list[float] | None:
+    values: list[float] = []
+    previous_close: float | None = None
+    for bar in bars:
+        high = _finite_number(getattr(bar, "high", None))
+        low = _finite_number(getattr(bar, "low", None))
+        close = _finite_number(getattr(bar, "close", None))
+        if high is None or low is None or close is None or high < low:
+            return None
+        if previous_close is None:
+            values.append(high - low)
+        else:
+            values.append(max(high - low, abs(high - previous_close), abs(low - previous_close)))
+        previous_close = close
+    return values
+
+
+def _derived_decision_metrics(
+    bars: list[Any],
+    quote: Any,
+    *,
+    source_ids: list[str],
+    research_cutoff: str,
+) -> dict[str, Any] | None:
+    """Build immutable, deterministic inputs for the V5 price plan.
+
+    This function consumes the already-fetched bundle inputs only.  It never
+    infers values from news or substitutes a missing technical field.
+    """
+    if len(bars) < MIN_DECISION_KLINE_BARS:
+        return None
+    closes = [_finite_number(getattr(bar, "close", None)) for bar in bars]
+    highs = [_finite_number(getattr(bar, "high", None)) for bar in bars]
+    lows = [_finite_number(getattr(bar, "low", None)) for bar in bars]
+    volumes = [_finite_number(getattr(bar, "volume", None)) for bar in bars]
+    price = _finite_number(getattr(quote, "price", None))
+    if (
+        price is None
+        or price <= 0
+        or any(value is None or value <= 0 for value in closes)
+        or any(value is None or value < 0 for value in volumes)
+        or any(value is None for value in highs)
+        or any(value is None for value in lows)
+    ):
+        return None
+    close_values = [float(value) for value in closes]
+    high_values = [float(value) for value in highs]
+    low_values = [float(value) for value in lows]
+    true_ranges = _true_range_values(bars)
+    if true_ranges is None or len(true_ranges) < MIN_DECISION_KLINE_BARS:
+        return None
+    atr20 = sum(true_ranges[-20:]) / 20
+    ma20_series = sma(close_values, 20)
+    ma60_series = sma(close_values, 60)
+    ma20 = ma20_series[-1]
+    ma60 = ma60_series[-1]
+    previous_ma20 = sma(close_values[:-1], 20)[-1]
+    if ma20 is None or ma60 is None or previous_ma20 is None or atr20 <= 0:
+        return None
+    swing = swing_high_low(high_values, low_values, SWING_WINDOW)
+    support = _finite_number(swing.get("support"))
+    resistance = _finite_number(swing.get("resistance"))
+    if support is None or resistance is None:
+        return None
+    returns = [
+        close_values[index] / close_values[index - 1] - 1
+        for index in range(1, len(close_values))
+        if close_values[index - 1] > 0
+    ]
+    return_std20_pct = statistics.pstdev(returns[-20:]) * 100 if len(returns) >= 20 else None
+    atr20_pct = atr20 / price * 100
+    ma20_slope_pct = (ma20 / previous_ma20 - 1) * 100 if previous_ma20 else None
+    if price > ma20 and ma20 >= ma60 and ma20_slope_pct >= 0:
+        trend_value = "up"
+    elif price < ma20 and ma20 <= ma60 and ma20_slope_pct <= 0:
+        trend_value = "down"
+    else:
+        trend_value = "sideways"
+    stop_candidates = [level for level in (support, ma20) if level < price]
+    stop_reference = max(stop_candidates) if stop_candidates else price - (2 * atr20)
+    stop_loss = stop_reference - atr20 * 0.5
+    stop_distance_pct = (price - stop_loss) / price * 100
+    if stop_loss <= 0 or stop_distance_pct <= 0 or not math.isfinite(stop_distance_pct):
+        return None
+    quote_observed_at = parse_asia_datetime(
+        getattr(quote, "as_of", None)
+        or getattr(getattr(quote, "source", None), "published_at", None)
+    )
+    kline_observed_at = _bar_observed_at(bars[-1])
+    cutoff_at = parse_asia_datetime(research_cutoff)
+    if cutoff_at is not None:
+        if quote_observed_at is not None and quote_observed_at > cutoff_at:
+            quote_observed_at = None
+        if kline_observed_at is not None and kline_observed_at > cutoff_at:
+            kline_observed_at = None
+    price_as_of = quote_observed_at.isoformat() if quote_observed_at is not None else None
+    kline_as_of = kline_observed_at.isoformat() if kline_observed_at is not None else None
+    available_times = [value for value in (quote_observed_at, kline_observed_at) if value is not None]
+    as_of = max(available_times).isoformat() if available_times else research_cutoff
+    sources = sorted(set(source_ids))
+
+    def metric(payload: dict[str, Any], method_version: str) -> dict[str, Any]:
+        return {
+            **payload,
+            "source_ids": sources,
+            "as_of": as_of,
+            "price_as_of": price_as_of,
+            "kline_as_of": kline_as_of,
+            "method_version": method_version,
+        }
+
+    return {
+        "schema_version": 1,
+        "method_version": DERIVED_DECISION_METRICS_VERSION,
+        "source_ids": sources,
+        "as_of": as_of,
+        "price_as_of": price_as_of,
+        "kline_as_of": kline_as_of,
+        "price": price,
+        "momentum": metric(
+            {
+                "momentum20_pct": (price / close_values[-21] - 1) * 100,
+                # 60 bars provide 59 completed return intervals; do not
+                # invent a 61st bar merely to label this observation.
+                "momentum60_pct": (price / close_values[0] - 1) * 100,
+            },
+            "momentum-close-return-v1",
+        ),
+        "atr20": metric(
+            {
+                "value": atr20,
+                "period": 20,
+                "method": "true-range-simple-average",
+            },
+            "atr20-v1",
+        ),
+        "trend": metric(
+            {
+                "value": trend_value,
+                "price": price,
+                "ma20": ma20,
+                "ma60": ma60,
+                "ma20_slope_pct": ma20_slope_pct,
+            },
+            "trend-ma20-ma60-v1",
+        ),
+        "volatility": metric(
+            {
+                "atr20_pct": atr20_pct,
+                "return_std20_pct": return_std20_pct,
+            },
+            "volatility-atr-return-std-v1",
+        ),
+        "swing": metric(
+            {
+                "support": support,
+                "resistance": resistance,
+                "window": SWING_WINDOW,
+                "method": swing.get("method"),
+            },
+            "swing-high-low-v1",
+        ),
+        "stop_distance": metric(
+            {
+                "stop_loss": stop_loss,
+                "value_pct": stop_distance_pct,
+                "reference": "swing_support_or_ma20_minus_half_atr",
+            },
+            "stop-distance-atr-buffer-v1",
+        ),
+    }
 
 
 def numeric_value(value: Any) -> float | None:
@@ -369,6 +582,8 @@ class EvidenceService:
         provider: Any,
         *,
         research_provider: Any | None = None,
+        supplement_provider: Any | None = None,
+        westock_provider: Any | None = None,
         cache_root: Path | None = None,
         batch_capacity: int = DEFAULT_BATCH_CAPACITY,
         news_limit: int = DEFAULT_NEWS_LIMIT,
@@ -380,6 +595,12 @@ class EvidenceService:
         self.workspace = Path(workspace)
         self.provider = provider
         self.research_provider = research_provider
+        # Optional external supplements are an explicit seam.  Keep the
+        # existing Tencent/EastMoney provider as the primary source and never
+        # let an Agent/tool obtain this object directly.
+        self.supplement_provider = (
+            supplement_provider if supplement_provider is not None else westock_provider
+        )
         self.cache_root = (
             Path(cache_root)
             if cache_root is not None
@@ -650,6 +871,50 @@ class EvidenceService:
         except (OSError, ValueError, TypeError, json.JSONDecodeError) as exc:
             logger.warning("ignoring invalid market snapshot cache {}: {}", path, exc)
             return None
+
+    def _read_latest_prior_market_snapshot_cache(
+        self,
+        observation_date: str | None,
+    ) -> MarketSnapshotCapture | None:
+        """Return the newest valid completed capture not newer than cutoff.
+
+        Exact-day cache remains the preferred path.  This fallback is only
+        used after a live provider failure and is marked stale by callers, so
+        a prior close cannot be presented as the current market state.
+        """
+        cache_dir = self.cache_root / "market_snapshot"
+        if not cache_dir.is_dir():
+            return None
+        cutoff = parse_asia_datetime(observation_date) if observation_date else None
+        candidates: list[str] = []
+        for path in cache_dir.glob("*.json"):
+            parsed = parse_asia_datetime(path.stem)
+            if parsed is None or (cutoff is not None and parsed.date() > cutoff.date()):
+                continue
+            candidates.append(parsed.date().isoformat())
+        for candidate in sorted(set(candidates), reverse=True):
+            capture = self._read_market_snapshot_cache(candidate)
+            if capture is not None:
+                return capture
+        return None
+
+    def _mark_stale_market_snapshot(
+        self,
+        capture: MarketSnapshotCapture,
+        *,
+        fallback_reason: str,
+    ) -> MarketSnapshotCapture:
+        """Make cache age visible in deterministic section readiness."""
+        capture.complete = False
+        observation_date = self._snapshot_rows_observation_date(list(capture))
+        capture.cache_info = self._snapshot_cache_info(
+            "fallback",
+            observation_date,
+            list(capture),
+            freshness="prior_trading_day",
+            fallback_reason=fallback_reason,
+        )
+        return capture
 
     def _write_market_snapshot_cache(
         self,
@@ -1272,6 +1537,409 @@ class EvidenceService:
             return None
         return series
 
+    @staticmethod
+    def _westock_result_data(result: Any) -> tuple[dict[str, Any] | list[Any] | None, Any, str | None]:
+        """Read one adapter result without depending on its concrete class."""
+        if hasattr(result, "model_dump"):
+            result = result.model_dump()
+        if not isinstance(result, dict):
+            return None, None, None
+        data = result.get("data")
+        if not isinstance(data, (dict, list)):
+            return None, None, None
+        return data, result.get("source"), result.get("data_as_of") or result.get("as_of")
+
+    @staticmethod
+    def _trim_westock_data(command: str, data: Any) -> Any:
+        """Keep structured signals while excluding report/news text tables."""
+        if command in {"report", "notice"}:
+            rows = data if isinstance(data, list) else [data]
+            allowed = {
+                "title",
+                "url",
+                "published_at",
+                "publish_time",
+                "notice_date",
+                "report_period",
+                "period_end",
+                "issuer",
+                "category",
+                "document_id",
+                "event_type",
+            }
+            return [
+                {key: row[key] for key in allowed if key in row}
+                for row in rows
+                if isinstance(row, dict)
+            ][:20]
+        if isinstance(data, list):
+            return [item for item in data[:100] if isinstance(item, (dict, str, int, float, bool))]
+        if isinstance(data, dict):
+            return {
+                key: value
+                for key, value in list(data.items())[:100]
+                if key not in {"text", "content", "body", "raw", "summary", "html"}
+            }
+        return data
+
+    async def _fetch_westock_supplements(
+        self,
+        inst: InstrumentRef,
+        *,
+        research_cutoff: str,
+        keep_source: Callable[[Any], None],
+        data_quality: dict[str, Any],
+    ) -> dict[str, dict[str, Any]]:
+        """Fetch only through the explicit optional supplement seam.
+
+        A failed optional command is recorded as a fallback reason and never
+        raises out of Evidence.  Future or timestamp-unknown rows are not
+        promoted into the immutable bundle.
+        """
+        provider = self.supplement_provider
+        if provider is None:
+            return {}
+        fetch = getattr(provider, "fetch", None) or getattr(provider, "query", None)
+        if not callable(fetch):
+            data_quality.setdefault("westock", {})["status"] = "unavailable"
+            data_quality["westock"]["reason"] = "provider_missing_fetch"
+            return {}
+        output: dict[str, dict[str, Any]] = {}
+        status_by_command: dict[str, Any] = {}
+        for command in sorted(WESTOCK_COMMANDS):
+            try:
+                result = await fetch(command, inst)
+            except Exception as exc:
+                status_by_command[command] = {
+                    "status": "fallback",
+                    "reason": type(exc).__name__,
+                }
+                continue
+            data, source, data_as_of = self._westock_result_data(result)
+            if data is None or source is None:
+                status_by_command[command] = {
+                    "status": "fallback",
+                    "reason": "invalid_adapter_result",
+                }
+                continue
+            source_id = getattr(source, "id", None)
+            if isinstance(source, dict):
+                try:
+                    source = SourceRecord.model_validate(source)
+                    source_id = source.id
+                except Exception:
+                    source_id = None
+            if not isinstance(source, SourceRecord) or not source_id:
+                status_by_command[command] = {
+                    "status": "fallback",
+                    "reason": "missing_source_record",
+                }
+                continue
+            relation = compare_asia_datetime(data_as_of, research_cutoff)
+            if relation is False:
+                data_quality.setdefault("excluded_future", []).append(
+                    {
+                        "section": f"westock_{command}",
+                        "field": "data_as_of",
+                        "value": data_as_of,
+                        "reason": "after_research_cutoff",
+                    }
+                )
+                status_by_command[command] = {
+                    "status": "fallback",
+                    "reason": "after_research_cutoff",
+                }
+                continue
+            if relation is None:
+                data_quality.setdefault("unknown_availability", []).append(
+                    {
+                        "section": f"westock_{command}",
+                        "field": "data_as_of",
+                        "value": data_as_of,
+                        "reason": "unparseable_or_missing_public_time",
+                    }
+                )
+                status_by_command[command] = {
+                    "status": "fallback",
+                    "reason": "unknown_public_time",
+                }
+                continue
+            keep_source(source)
+            payload = result if isinstance(result, dict) else result.model_dump()
+            output[command] = {
+                "status": "available",
+                "data": self._trim_westock_data(command, data),
+                "data_as_of": normalize_asia_datetime(data_as_of),
+                "source_ids": [source.id],
+                "source": source.model_dump(),
+                "package_name": payload.get("package_name", "westock-data-skillhub"),
+                "package_version": payload.get("package_version"),
+                "contract_version": payload.get("contract_version"),
+                "raw_output_hash": payload.get("raw_output_hash"),
+                "validation_mode": payload.get("validation_mode", "unknown"),
+            }
+            status_by_command[command] = {
+                "status": "available",
+                "source_ids": [source.id],
+                "data_as_of": normalize_asia_datetime(data_as_of),
+            }
+        data_quality["westock"] = {
+            "status": "available" if output else "fallback",
+            "commands": status_by_command,
+            "capability_matrix": (
+                provider.capability_matrix() if callable(getattr(provider, "capability_matrix", None)) else {}
+            ),
+        }
+        return output
+
+    @staticmethod
+    def _westock_fundamental_rows(
+        result: dict[str, Any], inst: InstrumentRef
+    ) -> list[Fundamentals]:
+        """Convert a validated asfund supplement only when the primary is absent."""
+        data = result.get("data")
+        source_ids = result.get("source_ids") or []
+        source = result.get("source")
+        if isinstance(source, dict):
+            try:
+                source = SourceRecord.model_validate(source)
+            except Exception:
+                source = None
+        if not isinstance(source, SourceRecord) or not source_ids:
+            return []
+        raw_rows = data if isinstance(data, list) else [data]
+        out: list[Fundamentals] = []
+        for row in raw_rows:
+            if not isinstance(row, dict):
+                continue
+            metrics = {
+                key: value
+                for key, value in row.items()
+                if key
+                in {
+                    "eps",
+                    "roe",
+                    "roic",
+                    "gross_margin",
+                    "net_margin",
+                    "revenue",
+                    "revenue_yoy",
+                    "net_profit",
+                    "profit_yoy",
+                    "operating_cashflow",
+                    "debt_ratio",
+                    "capex",
+                    "pe",
+                    "pb",
+                    "cashflow_to_profit",
+                }
+            }
+            if not metrics:
+                continue
+            report_period = row.get("report_period") or row.get("period_end")
+            out.append(
+                Fundamentals(
+                    instrument_id=inst.id,
+                    instrument_type=inst.instrument_type,
+                    report_period=str(report_period)[:10] if report_period else None,
+                    metrics=metrics,
+                    source=source,
+                )
+            )
+        return out
+
+    async def _fetch_westock_profile(self, inst: InstrumentRef) -> dict[str, Any] | None:
+        provider = self.supplement_provider
+        fetch = getattr(provider, "fetch", None) if provider is not None else None
+        if not callable(fetch):
+            return None
+        try:
+            result = await fetch("profile", inst)
+        except Exception as exc:
+            logger.warning("stock WeStock profile unavailable for {}: {}", inst.id, exc)
+            return None
+        data, source, data_as_of = self._westock_result_data(result)
+        if isinstance(data, list):
+            data = data[0] if data else None
+        if not isinstance(data, dict) or source is None:
+            return None
+        if isinstance(source, dict):
+            try:
+                source = SourceRecord.model_validate(source)
+            except Exception:
+                return None
+        if not isinstance(source, SourceRecord):
+            return None
+        industry = data.get("industry") or data.get("industry_name") or data.get("sector")
+        observed_at = data_as_of or data.get("observed_at") or data.get("as_of") or source.published_at
+        if not isinstance(industry, str) or not industry.strip() or parse_asia_datetime(observed_at) is None:
+            return None
+        return {
+            "instrument_id": inst.id,
+            "symbol": inst.symbol,
+            "exchange": inst.exchange,
+            "instrument_type": inst.instrument_type,
+            "name": data.get("name") or data.get("security_name") or "",
+            "company_name": data.get("company_name"),
+            "industry": industry.strip(),
+            "industry_code": data.get("industry_code"),
+            "classification_scheme": data.get("classification_scheme") or "westock",
+            "main_business": data.get("main_business") or data.get("business_scope"),
+            "listing_date": data.get("listing_date"),
+            "board": data.get("board"),
+            "observed_at": normalize_asia_datetime(observed_at),
+            "as_of": normalize_asia_datetime(observed_at),
+            "source_ids": [source.id],
+            "source": source,
+        }
+
+    async def _fetch_instrument_profile(self, inst: InstrumentRef) -> dict[str, Any] | None:
+        """Read static instrument metadata through an optional provider seam.
+
+        Classification is not a property of a live market breadth request.
+        Providers may supply an independently cached profile (industry and
+        business metadata) without changing the evidence fetch contract.
+        """
+        method = getattr(self.provider, "instrument_profile", None)
+        if not callable(method):
+            return await self._fetch_westock_profile(inst)
+        try:
+            raw = await method(inst)
+        except Exception as exc:
+            logger.warning("stock instrument profile unavailable for {}: {}", inst.id, exc)
+            return await self._fetch_westock_profile(inst)
+        if hasattr(raw, "model_dump"):
+            raw = raw.model_dump()
+        if not isinstance(raw, dict):
+            return await self._fetch_westock_profile(inst)
+        industry = raw.get("industry")
+        source = raw.get("source")
+        if not isinstance(industry, str) or not industry.strip():
+            return await self._fetch_westock_profile(inst)
+        if isinstance(source, dict):
+            try:
+                source = SourceRecord.model_validate(source)
+            except Exception:
+                return await self._fetch_westock_profile(inst)
+        if not isinstance(source, SourceRecord) or not source.id:
+            return await self._fetch_westock_profile(inst)
+        observed_at = raw.get("observed_at") or raw.get("as_of") or source.published_at
+        if parse_asia_datetime(observed_at) is None:
+            return await self._fetch_westock_profile(inst)
+        return {
+            "instrument_id": inst.id,
+            "symbol": inst.symbol,
+            "exchange": inst.exchange,
+            "instrument_type": inst.instrument_type,
+            "industry": industry.strip(),
+            "industry_code": raw.get("industry_code"),
+            "classification_scheme": raw.get("classification_scheme"),
+            "industry_member_coverage": raw.get("industry_member_coverage"),
+            "industry_benchmark": raw.get("industry_benchmark"),
+            "listing_date": raw.get("listing_date"),
+            "board": raw.get("board"),
+            "observed_at": normalize_asia_datetime(observed_at),
+            "as_of": normalize_asia_datetime(observed_at),
+            "source_ids": [source.id],
+            "source": source,
+        }
+
+    async def _fetch_industry_valuation(self, inst: InstrumentRef) -> dict[str, Any] | None:
+        """Fetch independent same-industry valuation facts when supported."""
+        method = getattr(self.provider, "industry_valuation", None)
+        if not callable(method):
+            return None
+        try:
+            raw = await method(inst)
+        except Exception as exc:
+            logger.warning("stock industry valuation unavailable for {}: {}", inst.id, exc)
+            return None
+        if hasattr(raw, "model_dump"):
+            raw = raw.model_dump()
+        if not isinstance(raw, dict):
+            return None
+        source = raw.get("source")
+        if isinstance(source, dict):
+            try:
+                source = SourceRecord.model_validate(source)
+            except Exception:
+                return None
+        observed_at = raw.get("observed_at") or getattr(source, "published_at", None)
+        if not isinstance(source, SourceRecord) or not source.id or parse_asia_datetime(observed_at) is None:
+            return None
+        peers = raw.get("peers")
+        if not isinstance(peers, list):
+            return None
+        return {
+            **raw,
+            "peers": [item for item in peers if isinstance(item, dict)],
+            "observed_at": normalize_asia_datetime(observed_at),
+            "source": source,
+        }
+
+    def _read_screening_snapshot_cache(self) -> list[Any]:
+        """Read the existing screening snapshot database as a stale backup."""
+        try:
+            from mona.services.stock.screening import ScreeningStore
+
+            store = ScreeningStore(self.cache_root.parent)
+            rows = []
+            for snapshot, source in store.latest_snapshots_with_sources():
+                if not isinstance(source, SourceRecord):
+                    continue
+                payload = snapshot.model_copy(
+                    update={
+                        "source": source,
+                        "source_ids": sorted(set(snapshot.source_ids + [source.id])),
+                    }
+                )
+                rows.append(payload)
+            return rows
+        except (OSError, RuntimeError, TypeError, ValueError) as exc:
+            logger.warning("ignoring screening snapshot cache: {}", exc)
+            return []
+
+    def _screening_snapshot_fallback(
+        self,
+        *,
+        fallback_reason: str,
+    ) -> MarketSnapshotCapture | None:
+        rows = self._read_screening_snapshot_cache()
+        if not rows:
+            return None
+        capture = MarketSnapshotCapture(
+            rows,
+            expected_count=None,
+            page_size=len(rows),
+            complete=False,
+            error="screening_snapshot_cache",
+            requested_limit=5000,
+        )
+        observation_date = self._snapshot_rows_observation_date(rows)
+        capture.cache_info = self._snapshot_cache_info(
+            "fallback",
+            observation_date,
+            rows,
+            freshness="screening_cache",
+            fallback_reason=fallback_reason,
+        )
+        return capture
+
+    def _save_screening_snapshot_cache(
+        self,
+        rows: list[Any],
+        *,
+        observation_date: str | None,
+    ) -> None:
+        if not rows or observation_date is None:
+            return
+        try:
+            from mona.services.stock.screening import ScreeningStore
+
+            ScreeningStore(self.cache_root.parent).save_snapshots(rows, observation_date)
+        except (OSError, RuntimeError, TypeError, ValueError) as exc:
+            logger.warning("screening snapshot cache write failed: {}", exc)
+
     async def _fetch_market_snapshot(
         self,
         *,
@@ -1292,6 +1960,17 @@ class EvidenceService:
 
         method = getattr(self.provider, "market_snapshot", None)
         if method is None:
+            fallback = self._screening_snapshot_fallback(
+                fallback_reason="provider_missing_screening_cache"
+            )
+            if fallback is not None:
+                return fallback
+            fallback = self._read_latest_prior_market_snapshot_cache(requested_date)
+            if fallback is not None:
+                return self._mark_stale_market_snapshot(
+                    fallback,
+                    fallback_reason="provider_missing_prior_cache",
+                )
             capture = MarketSnapshotCapture(
                 [], expected_count=None, page_size=0, complete=False,
                 error="provider_missing_market_snapshot",
@@ -1324,6 +2003,17 @@ class EvidenceService:
                     fallback_reason="provider_partial",
                 )
                 return fallback
+            fallback = self._read_latest_prior_market_snapshot_cache(requested_date)
+            if fallback is not None:
+                return self._mark_stale_market_snapshot(
+                    fallback,
+                    fallback_reason="provider_partial_prior_cache",
+                )
+            fallback = self._screening_snapshot_fallback(
+                fallback_reason="provider_partial_screening_cache"
+            )
+            if fallback is not None:
+                return fallback
             partial.cache_info = self._snapshot_cache_info(
                 "miss",
                 fallback_date,
@@ -1343,6 +2033,17 @@ class EvidenceService:
                     freshness="same_trading_day",
                     fallback_reason="provider_failure",
                 )
+                return fallback
+            fallback = self._read_latest_prior_market_snapshot_cache(requested_date)
+            if fallback is not None:
+                return self._mark_stale_market_snapshot(
+                    fallback,
+                    fallback_reason="provider_failure_prior_cache",
+                )
+            fallback = self._screening_snapshot_fallback(
+                fallback_reason="provider_failure_screening_cache"
+            )
+            if fallback is not None:
                 return fallback
             capture = MarketSnapshotCapture(
                 [], expected_count=None, page_size=0, complete=False,
@@ -1370,6 +2071,17 @@ class EvidenceService:
                         fallback_reason="provider_partial",
                     )
                     return fallback
+                fallback = self._read_latest_prior_market_snapshot_cache(requested_date)
+                if fallback is not None:
+                    return self._mark_stale_market_snapshot(
+                        fallback,
+                        fallback_reason="provider_partial_prior_cache",
+                    )
+                fallback = self._screening_snapshot_fallback(
+                    fallback_reason="provider_partial_screening_cache"
+                )
+                if fallback is not None:
+                    return fallback
                 rows.cache_info = self._snapshot_cache_info(
                     "miss",
                     fallback_date,
@@ -1380,6 +2092,9 @@ class EvidenceService:
                 return rows
             cache_date = self._write_market_snapshot_cache(rows)
             observation_date = cache_date or self._snapshot_rows_observation_date(list(rows))
+            self._save_screening_snapshot_cache(
+                list(rows), observation_date=observation_date
+            )
             rows.cache_info = self._snapshot_cache_info(
                 "live",
                 observation_date,
@@ -1474,13 +2189,16 @@ class EvidenceService:
                 raise ValueError("clock returned an unknown research cutoff")
             legacy_as_of = _legacy_as_of or await self.resolve_as_of()
             historical_replay = False
+            realtime_collection = True
+        if research_cutoff_at is not None or as_of is not None:
+            realtime_collection = False
         requested = sections or {"quote", "kline", "fundamentals", "news"}
         unknown = requested - {"quote", "kline", "fundamentals", "news"}
         if unknown:
             raise ValueError(f"unknown evidence sections: {sorted(unknown)}")
         effective_market_snapshot_date = self._effective_market_snapshot_date(
             as_of=as_of,
-            research_cutoff_at=research_cutoff_at,
+            research_cutoff_at=(research_cutoff if realtime_collection else research_cutoff_at),
             legacy_as_of=legacy_as_of,
         )
         market_capture = (
@@ -1499,6 +2217,13 @@ class EvidenceService:
             )
         )
         market_snapshot = list(market_capture)
+        instrument_profile = await self._fetch_instrument_profile(inst)
+        industry_valuation = await self._fetch_industry_valuation(inst)
+        if instrument_profile is not None:
+            # Keep the profile in the same deterministic row path so the
+            # industry classification carries its own source and timestamp;
+            # it contributes no market breadth values.
+            market_snapshot.append(instrument_profile)
         missing: list[str] = []
         omitted = [kind for kind in ("quote", "kline", "fundamentals", "news") if kind not in requested]
         data_quality = {
@@ -1532,6 +2257,13 @@ class EvidenceService:
                 if fundamentals is not None:
                     fundamentals_history = [fundamentals]
         news = await self._section("news", missing, inst) if "news" in requested else None
+        # A live capture may take long enough for a quote to be stamped after
+        # the initial clock read. Freeze the evidence only after all primary
+        # sections have been fetched; explicit historical cutoffs stay strict.
+        if realtime_collection:
+            research_cutoff = normalize_asia_datetime(self._clock())
+            if research_cutoff is None:
+                raise ValueError("clock returned an unknown research cutoff")
         structured_events: list[dict[str, Any]] = []
         structured_event_coverage: dict[str, Any] = {"status": "not_requested", "source": "structured_market_events"}
         if "news" in requested:
@@ -1574,6 +2306,31 @@ class EvidenceService:
                 }
             )
 
+        westock_supplements: dict[str, dict[str, Any]] = {}
+        if self.supplement_provider is not None:
+            westock_supplements = await self._fetch_westock_supplements(
+                inst,
+                research_cutoff=research_cutoff,
+                keep_source=keep,
+                data_quality=data_quality,
+            )
+            # WeStock is a supplement, but a missing primary fundamentals
+            # section may safely use its validated finance rows as a fallback.
+            # An existing provider result is never overwritten.
+            if (
+                inst.instrument_type != "etf"
+                and "fundamentals" in requested
+                and not fundamentals_history
+                and westock_supplements.get("asfund", {}).get("status") == "available"
+            ):
+                fundamentals_history = self._westock_fundamental_rows(
+                    westock_supplements["asfund"], inst
+                )
+                if fundamentals_history:
+                    data_quality.setdefault("fallbacks", []).append(
+                        {"section": "fundamentals", "provider": "westock", "reason": "primary_unavailable"}
+                    )
+
         bundle: dict[str, Any] = {
             "instrument": {
                 "symbol": inst.symbol,
@@ -1588,6 +2345,7 @@ class EvidenceService:
             "indicators": None,
             "fundamentals": None,
             "fundamentals_history": [],
+            "valuation": None,
             "policy_documents": [],
             "macro_policy_documents": [],
             "macro_documents": [],
@@ -1595,8 +2353,15 @@ class EvidenceService:
             "event_capture": structured_event_coverage,
             "_structured_events": structured_events,
             "_structured_event_coverage": structured_event_coverage,
+            **(
+                {"westock_supplements": westock_supplements}
+                if self.supplement_provider is not None
+                else {}
+            ),
             "kline_ref": None,
             "relative_benchmarks": None,
+            "derived_decision_metrics": None,
+            "decision_readiness": None,
             "sources": [],
             "data_quality": data_quality,
         }
@@ -1622,6 +2387,11 @@ class EvidenceService:
                 "price": quote.price,
                 "change_pct": quote.change_pct,
                 "volume": quote.volume,
+                "amount": quote.amount,
+                "previous_close": quote.previous_close,
+                "turnover_rate": quote.turnover_rate,
+                "limit_up": quote.limit_up,
+                "limit_down": quote.limit_down,
                 "pe": quote.pe,
                 "pb": quote.pb,
                 "market_cap": quote.market_cap,
@@ -1671,6 +2441,15 @@ class EvidenceService:
                 )
                 bundle["indicators"] = self._indicator_summary(completed_bars)
                 bundle["kline_ref"] = self._cache_kline(inst, completed_series)
+                source_ids = [series.source.id]
+                if quote is not None:
+                    source_ids.append(quote.source.id)
+                bundle["derived_decision_metrics"] = _derived_decision_metrics(
+                    completed_bars,
+                    quote,
+                    source_ids=source_ids,
+                    research_cutoff=research_cutoff,
+                ) if quote is not None else None
                 if last_bar_time is not None:
                     market_observation_times.append(last_bar_time)
             else:
@@ -1863,14 +2642,82 @@ class EvidenceService:
         v2_sections = self._build_v2_sections(
                 inst=inst,
                 bundle=bundle,
-                market_snapshot=market_snapshot,
-                market_capture=market_capture,
-                research_cutoff=research_cutoff,
+            market_snapshot=market_snapshot,
+            market_capture=market_capture,
+            instrument_profile=instrument_profile,
+            industry_valuation=industry_valuation,
+            research_cutoff=research_cutoff,
                 sources=sources,
                 keep_source=keep,
                 data_quality=data_quality,
+        )
+        public_opinion_snapshot = load_local_public_opinion_snapshot(
+            self.cache_root / "public_opinion" / "latest.json"
+        )
+        if isinstance(public_opinion_snapshot, dict):
+            local_source = public_opinion_snapshot.get("source") or public_opinion_snapshot.get(
+                "source_record"
             )
+            if isinstance(local_source, dict) and local_source.get("id") and all(
+                local_source.get(field)
+                for field in ("provider", "url", "fetched_at", "content_hash", "fields")
+            ):
+                sources.setdefault(str(local_source["id"]), dict(local_source))
+        known_source_ids = set(sources)
+        market_sentiment = build_market_sentiment(
+            market_regime=v2_sections.get("market_regime"),
+            relative_benchmarks=bundle.get("relative_benchmarks"),
+            research_cutoff_at=research_cutoff,
+            known_source_ids=known_source_ids,
+        )
+        data_quality["excluded_future"].extend(market_sentiment.get("excluded_future") or [])
+        public_opinion = build_public_opinion_state(
+            snapshot=public_opinion_snapshot,
+            research_cutoff_at=research_cutoff,
+            known_source_ids=known_source_ids,
+        )
+        if public_opinion.get("excluded_future"):
+            data_quality["excluded_future"].extend(public_opinion["excluded_future"])
+        v2_sections["market_sentiment"] = market_sentiment
+        v2_sections["public_opinion"] = public_opinion
+        v2_sections["evidence_coverage"] = self._coverage(
+            bundle,
+            {
+                name: section
+                for name, section in v2_sections.items()
+                if name != "evidence_coverage"
+            },
+        )
         bundle.update(v2_sections)
+        derived_sections = {
+            name: section
+            for name, section in v2_sections.items()
+            if name != "evidence_coverage" and isinstance(section, dict)
+        }
+        optional_derived = {"public_opinion"}
+        derived_missing = sorted(
+            name
+            for name, section in derived_sections.items()
+            if name not in optional_derived and section.get("status") == "missing"
+        )
+        derived_degraded = sorted(
+            name
+            for name, section in derived_sections.items()
+            if name not in optional_derived and section.get("status") == "degraded"
+        )
+        data_quality["optional_derived_missing"] = [
+            name
+            for name in optional_derived
+            if (derived_sections.get(name) or {}).get("status") != "available"
+        ]
+        data_quality["derived_missing"] = derived_missing
+        data_quality["derived_degraded"] = derived_degraded
+        data_quality["missing"] = sorted(set(missing) | set(derived_missing))
+        data_quality["status"] = (
+            "degraded"
+            if data_quality["missing"] or derived_degraded
+            else "complete"
+        )
         # Structured events are consumed by the deterministic V2 calendar;
         # keep only the coverage metadata in the public bundle.
         bundle.pop("_structured_events", None)
@@ -1888,7 +2735,400 @@ class EvidenceService:
                 material_binding_ids,
                 research_cutoff_at=research_cutoff,
             )
+        bundle["fundamental_factors"] = build_fundamental_factors(
+            bundle,
+            research_cutoff_at=research_cutoff,
+        )
+        bundle["valuation"] = build_valuation_result(bundle)
+        bundle["decision_readiness"] = self._decision_readiness(bundle)
+        if isinstance(bundle["decision_readiness"].get("research_ready"), dict):
+            try:
+                deterministic_plan = build_v6_derived_decision_metrics(
+                    bundle,
+                    generated_at=research_cutoff,
+                )
+            except (TypeError, ValueError, KeyError) as exc:
+                logger.warning(
+                    "stock V5 decision plan derivation failed for {}: {}",
+                    inst.id,
+                    exc,
+                )
+                readiness = bundle["decision_readiness"]
+                readiness["status"] = "failed"
+                readiness["failure_reasons"] = list(
+                    dict.fromkeys(
+                        [
+                            *(readiness.get("failure_reasons") or []),
+                            "decision_plan_derivation_failed",
+                        ]
+                    )
+                )
+                trade_ready = readiness.get("trade_ready")
+                if isinstance(trade_ready, dict):
+                    trade_ready["status"] = "failed"
+                    trade_ready["failure_reasons"] = list(
+                        dict.fromkeys(
+                            [
+                                *(trade_ready.get("failure_reasons") or []),
+                                "decision_plan_derivation_failed",
+                            ]
+                        )
+                    )
+                for horizon in readiness.get("horizons", {}).values():
+                    if not isinstance(horizon, dict):
+                        continue
+                    horizon["status"] = "failed"
+                    horizon["missing"] = list(
+                        dict.fromkeys([*(horizon.get("missing") or []), "trading_plan"])
+                    )
+                    horizon["failure_reasons"] = list(
+                        dict.fromkeys(
+                            [
+                                *(horizon.get("failure_reasons") or []),
+                                "decision_plan_derivation_failed",
+                            ]
+                        )
+                    )
+                # Do not leave a partial deterministic plan in Evidence.
+                raw_metrics = bundle.get("derived_decision_metrics")
+                if isinstance(raw_metrics, dict):
+                    raw_metrics.pop("generated_at", None)
+                    raw_metrics.pop("method_versions", None)
+                    raw_metrics.pop("horizons", None)
+                    raw_metrics.pop("eligible_horizons", None)
+                    raw_metrics.pop("generated_horizons", None)
+                    raw_metrics["eligible_horizons"] = []
+                    raw_metrics["generated_horizons"] = []
+            else:
+                raw_metrics = bundle.get("derived_decision_metrics")
+                if not isinstance(deterministic_plan, dict):
+                    raise ValueError("V6 decision plan derivation returned an invalid object")
+                if set(deterministic_plan.get("horizons") or {}) != {
+                    *deterministic_plan.get("eligible_horizons", [])
+                }:
+                    raise ValueError("V6 decision plan derivation did not match eligible horizons")
+                # Keep the auditable technical inputs alongside the full V5
+                # plan so later validation can replay both layers.
+                if not isinstance(raw_metrics, dict):
+                    raw_metrics = {}
+                    bundle["derived_decision_metrics"] = raw_metrics
+                raw_metrics.update(deterministic_plan)
         return bundle
+
+    @staticmethod
+    def _decision_readiness(bundle: dict[str, Any]) -> dict[str, Any]:
+        """Separate research availability from executable trade readiness."""
+        quote = bundle.get("quote")
+        kline_ref = bundle.get("kline_ref")
+        derived = bundle.get("derived_decision_metrics")
+        short_missing: list[str] = []
+        short_failure_reasons: list[str] = []
+        if not isinstance(quote, dict) or _finite_number(quote.get("price")) is None or _finite_number(quote.get("price")) <= 0:
+            short_missing.append("quote")
+            short_failure_reasons.append("quote_unavailable")
+        try:
+            kline_bars = int(kline_ref.get("bars") or 0) if isinstance(kline_ref, dict) else 0
+        except (TypeError, ValueError):
+            kline_bars = 0
+        if kline_bars < MIN_DECISION_KLINE_BARS:
+            short_missing.append("kline")
+            short_failure_reasons.append("kline_history_under_60_bars")
+        technical_ready = isinstance(derived, dict) and all(
+            isinstance(derived.get(name), dict)
+            for name in ("atr20", "trend", "volatility", "swing", "stop_distance")
+        )
+        if not technical_ready:
+            short_missing.append("technical_indicators")
+            short_failure_reasons.append("derived_indicators_unavailable")
+
+        fundamentals = bundle.get("fundamentals")
+        fundamentals_metrics = fundamentals.get("metrics") if isinstance(fundamentals, dict) else None
+        fundamentals_ready = bool(
+            isinstance(fundamentals, dict)
+            and isinstance(fundamentals.get("report_period"), str)
+            and fundamentals.get("report_period")
+            and isinstance(fundamentals.get("published_at"), str)
+            and parse_asia_datetime(fundamentals.get("published_at")) is not None
+            and isinstance(fundamentals.get("source_ids"), list)
+            and bool(fundamentals.get("source_ids"))
+            and isinstance(fundamentals_metrics, dict)
+            and any(_finite_number(value) is not None for value in fundamentals_metrics.values())
+        )
+        company_quality = bundle.get("company_quality")
+        company_quality_ready = bool(
+            fundamentals_ready
+            and isinstance(company_quality, dict)
+            and isinstance(company_quality.get("source_ids"), list)
+            and bool(company_quality.get("source_ids"))
+        )
+        fundamentals_history = bundle.get("fundamentals_history") or []
+        multi_period_ready = bool(
+            fundamentals_ready
+            and isinstance(fundamentals_history, list)
+            and len(
+                {
+                    item.get("report_period")
+                    for item in fundamentals_history
+                    if isinstance(item, dict) and item.get("report_period")
+                }
+            ) >= 4
+        )
+        cashflow_rows = (company_quality or {}).get("cashflow_quality") if isinstance(company_quality, dict) else None
+        cashflow_ready = bool(
+            isinstance(cashflow_rows, list)
+            and len(
+                [
+                    item
+                    for item in cashflow_rows
+                    if isinstance(item, dict)
+                    and _finite_number(item.get("operating_cashflow")) is not None
+                    and _finite_number(item.get("net_profit")) is not None
+                    and item.get("source_ids")
+                ]
+            ) >= 2
+        )
+        valuation = bundle.get("valuation")
+        valuation_ready = bool(
+            isinstance(valuation, dict)
+            and valuation.get("trade_ready") is True
+            and int(valuation.get("usable_method_count") or 0) >= 2
+            and isinstance(valuation.get("cross_range"), dict)
+            and valuation["cross_range"].get("status") == "available"
+            and int(valuation["cross_range"].get("method_count") or 0) >= 2
+        )
+
+        industry_context = bundle.get("industry_context")
+        industry = (
+            str(industry_context.get("target_industry") or "")
+            if isinstance(industry_context, dict)
+            else ""
+        )
+        industry_ready = isinstance(industry_context, dict) and industry_context.get("status") == "available"
+        policy_context = bundle.get("policy_context")
+        policy_ready = isinstance(policy_context, dict) and policy_context.get("status") == "available"
+        cycles = (bundle.get("cycle_context") or {}).get("cycles") if isinstance(bundle.get("cycle_context"), dict) else None
+        cycles = cycles if isinstance(cycles, dict) else {}
+        industry_cycle = cycles.get("industry_supply_demand")
+        earnings_cycle = cycles.get("company_earnings")
+        lifecycle = cycles.get("industry_lifecycle")
+        if lifecycle is None and isinstance(industry_cycle, dict):
+            lifecycle = industry_cycle.get("industry_lifecycle")
+        industry_cycle_ready = isinstance(industry_cycle, dict) and industry_cycle.get("status") == "available"
+        earnings_cycle_ready = isinstance(earnings_cycle, dict) and earnings_cycle.get("status") == "available"
+        lifecycle_ready = isinstance(lifecycle, dict) and lifecycle.get("status") == "available"
+        medium_cycle_ready = industry_cycle_ready and earnings_cycle_ready
+
+        medium_missing = list(short_missing)
+        medium_reasons = list(short_failure_reasons)
+        if not fundamentals_ready:
+            medium_missing.append("fundamentals")
+            medium_reasons.append("medium_fundamentals_missing")
+        if not industry_ready:
+            medium_missing.append("industry_context")
+            medium_reasons.append("medium_industry_context_missing")
+        if not medium_cycle_ready:
+            medium_missing.append("cycle_context")
+            medium_reasons.append("medium_cycle_context_missing")
+        if is_policy_sensitive_industry(industry) and not policy_ready:
+            medium_missing.append("policy_context")
+            medium_reasons.append("medium_policy_context_missing")
+        long_missing = list(medium_missing)
+        long_reasons = list(medium_reasons)
+        if not multi_period_ready:
+            long_missing.append("multi_period_financials")
+            long_reasons.append("long_multi_period_financials_missing")
+        if not company_quality_ready:
+            long_missing.append("company_quality")
+            long_reasons.append("long_company_quality_missing")
+        if not cashflow_ready:
+            long_missing.append("cashflow_quality")
+            long_reasons.append("long_cashflow_quality_missing")
+        if not valuation_ready:
+            long_missing.append("valuation_basis")
+            long_reasons.append("long_valuation_basis_missing")
+        if not lifecycle_ready:
+            long_missing.append("industry_lifecycle")
+            long_reasons.append("long_industry_lifecycle_missing")
+
+        def horizon(
+            required: list[str], missing: list[str], reasons: list[str]
+        ) -> dict[str, Any]:
+            status = "ready" if not missing else "failed"
+            return {
+                "status": status,
+                "required": required,
+                "available": [item for item in required if item not in missing],
+                "missing": list(dict.fromkeys(missing)),
+                "failure_reasons": list(dict.fromkeys(reasons)),
+            }
+
+        horizons = {
+            "short_term": horizon(
+                ["quote", "kline", "technical_indicators"],
+                short_missing,
+                short_failure_reasons,
+            ),
+            "medium_term": horizon(
+                [
+                    "quote",
+                    "kline",
+                    "technical_indicators",
+                    "fundamentals",
+                    "industry_context",
+                    "cycle_context",
+                    *(["policy_context"] if is_policy_sensitive_industry(industry) else []),
+                ],
+                medium_missing,
+                medium_reasons,
+            ),
+            "long_term": horizon(
+                [
+                    "quote",
+                    "kline",
+                    "technical_indicators",
+                    "fundamentals",
+                    "company_quality",
+                    "multi_period_financials",
+                    "cashflow_quality",
+                    "valuation_basis",
+                    "industry_lifecycle",
+                ],
+                long_missing,
+                long_reasons,
+            ),
+        }
+        core_status = horizons["short_term"]["status"]
+        trade_failure_reasons = list(
+            dict.fromkeys(
+                reason
+                for item in horizons.values()
+                for reason in item.get("failure_reasons") or []
+            )
+        )
+        research_medium_missing: list[str] = []
+        research_medium_reasons: list[str] = []
+        if not fundamentals_ready:
+            research_medium_missing.append("fundamentals")
+            research_medium_reasons.append("research_medium_fundamentals_missing")
+        industry_research_ready = bool(
+            isinstance(industry_context, dict)
+            and industry_context.get("target_industry")
+            and industry_context.get("source_ids")
+        )
+        if not industry_research_ready:
+            research_medium_missing.append("industry_context")
+            research_medium_reasons.append("research_medium_industry_input_missing")
+        cycle_research_ready = bool(
+            isinstance(bundle.get("cycle_context"), dict)
+            and cycles
+            and any(
+                isinstance(item, dict) and item.get("source_ids")
+                for item in cycles.values()
+            )
+        )
+        if not cycle_research_ready:
+            research_medium_missing.append("cycle_context")
+            research_medium_reasons.append("research_medium_cycle_input_missing")
+        research_long_missing: list[str] = []
+        research_long_reasons: list[str] = []
+        if not fundamentals_ready:
+            research_long_missing.append("fundamentals")
+            research_long_reasons.append("research_long_fundamentals_missing")
+        if not company_quality_ready:
+            research_long_missing.append("company_quality")
+            research_long_reasons.append("research_long_company_quality_missing")
+
+        research_horizons = {
+            "short_term": horizon(
+                ["quote", "kline", "technical_indicators"],
+                short_missing,
+                short_failure_reasons,
+            ),
+            "medium_term": horizon(
+                ["fundamentals", "industry_context", "cycle_context"],
+                research_medium_missing,
+                research_medium_reasons,
+            ),
+            "long_term": horizon(
+                ["fundamentals", "company_quality"],
+                research_long_missing,
+                research_long_reasons,
+            ),
+        }
+        available_research_horizons = [
+            horizon_name
+            for horizon_name in ("short_term", "medium_term", "long_term")
+            if research_horizons[horizon_name]["status"] == "ready"
+        ]
+        research_status = "ready" if available_research_horizons else "failed"
+        research_failure_reasons = list(
+            dict.fromkeys(
+                reason
+                for item in research_horizons.values()
+                for reason in item.get("failure_reasons") or []
+            )
+        )
+        enhanced_sections = (
+            "market_regime",
+            "industry_context",
+            "tradeability",
+            "policy_context",
+            "cycle_context",
+            "capital_positioning",
+            "event_calendar",
+            "relative_benchmarks",
+        )
+        enhanced_available: list[str] = []
+        enhanced_degraded: list[str] = []
+        for section in enhanced_sections:
+            value = bundle.get(section)
+            status = value.get("status") if isinstance(value, dict) else None
+            if status == "available":
+                enhanced_available.append(section)
+            else:
+                enhanced_degraded.append(section)
+        source_ids = list((derived or {}).get("source_ids") or []) if isinstance(derived, dict) else []
+        source_ids.extend((fundamentals or {}).get("source_ids") or [] if isinstance(fundamentals, dict) else [])
+        source_ids.extend((company_quality or {}).get("source_ids") or [] if isinstance(company_quality, dict) else [])
+        source_ids.extend((valuation or {}).get("source_ids") or [] if isinstance(valuation, dict) else [])
+        as_of = (derived or {}).get("as_of") if isinstance(derived, dict) else None
+        trade_status = "ready" if not trade_failure_reasons else "failed"
+        return {
+            # V5 callers treat the top-level status as the permission to
+            # create an executable plan; keep it equivalent to trade_ready.
+            "status": trade_status,
+            "method_version": DECISION_READINESS_VERSION,
+            "as_of": as_of or bundle.get("market_as_of") or bundle.get("research_cutoff_at"),
+            "source_ids": sorted(set(source_ids)),
+            "core": {
+                "status": core_status,
+                "required": ["quote", "kline", "technical_indicators"],
+                "available": [
+                    item for item in ("quote", "kline", "technical_indicators")
+                    if item not in short_missing
+                ],
+                "missing": short_missing,
+                "failure_reasons": short_failure_reasons,
+            },
+            "horizons": horizons,
+            "research_ready": {
+                "status": research_status,
+                "failure_reasons": research_failure_reasons,
+                "available_horizons": available_research_horizons,
+                "horizons": research_horizons,
+            },
+            "trade_ready": {
+                "status": trade_status,
+                "failure_reasons": trade_failure_reasons,
+                "horizons": horizons,
+            },
+            "enhanced": {
+                "status": "available" if not enhanced_degraded else "degraded",
+                "purpose": "only_affects_evidence_strength",
+                "available": enhanced_available,
+                "missing": enhanced_degraded,
+            },
+        }
 
     @staticmethod
     def _bar_time(bar: Any) -> datetime | None:
@@ -2086,7 +3326,9 @@ class EvidenceService:
         bundle: dict[str, Any],
         market_snapshot: list[Any],
         market_capture: MarketSnapshotCapture | None,
+        instrument_profile: Any | None,
         research_cutoff: datetime,
+        industry_valuation: dict[str, Any] | None = None,
         sources: dict[str, dict],
         keep_source: Callable[..., None],
         data_quality: dict[str, Any],
@@ -2157,7 +3399,84 @@ class EvidenceService:
 
         all_snapshot_ids = sorted({sid for _, _, ids in rows for sid in ids})
         target_entries = [entry for entry in rows if cls._snapshot_value(entry[0], "instrument_id") == inst.id]
-        target = target_entries[0][0] if target_entries else None
+        # The independent instrument profile is appended to the snapshot for
+        # industry context.  It is not a market quote row, so keep the two
+        # roles separate when the breadth snapshot is unavailable.
+        eligible_profile = (
+            instrument_profile
+            if any(entry[0] is instrument_profile for entry in rows)
+            else None
+        )
+        target = next(
+            (
+                entry[0]
+                for entry in target_entries
+                if eligible_profile is None or entry[0] is not eligible_profile
+            ),
+            None,
+        )
+        profile = eligible_profile
+
+        industry_valuation_source = None
+        industry_valuation_observed = None
+        if isinstance(industry_valuation, dict):
+            candidate_source = industry_valuation.get("source")
+            candidate_observed = industry_valuation.get("observed_at")
+            relation = compare_asia_datetime(candidate_observed, research_cutoff)
+            if relation is True and isinstance(candidate_source, SourceRecord):
+                industry_valuation_source = candidate_source
+                industry_valuation_observed = normalize_asia_datetime(candidate_observed)
+                keep_source(candidate_source, published_at=industry_valuation_observed)
+            elif relation is False:
+                data_quality["excluded_future"].append(
+                    {
+                        "section": "industry_valuation",
+                        "field": "observed_at",
+                        "value": candidate_observed,
+                        "reason": "after_research_cutoff",
+                    }
+                )
+            elif candidate_observed is not None:
+                data_quality["unknown_availability"].append(
+                    {
+                        "section": "industry_valuation",
+                        "field": "observed_at",
+                        "value": candidate_observed,
+                        "reason": "unparseable_or_missing_public_time",
+                    }
+                )
+
+        valuation_peer_values = {"pe": [], "pb": []}
+        valuation_peer_companies: list[dict[str, Any]] = []
+        if industry_valuation_source is not None and isinstance(industry_valuation, dict):
+            for peer in industry_valuation.get("peers") or []:
+                if not isinstance(peer, dict):
+                    continue
+                code = str(peer.get("symbol") or "")
+                pe = numeric_value(peer.get("pe_ttm"))
+                pb = numeric_value(peer.get("pb_mrq"))
+                if (
+                    not re.fullmatch(r"\d{6}", code)
+                    or code == inst.symbol
+                    or pe is None
+                    or pe <= 0
+                    or pb is None
+                    or pb <= 0
+                ):
+                    continue
+                valuation_peer_values["pe"].append(pe)
+                valuation_peer_values["pb"].append(pb)
+                valuation_peer_companies.append(
+                    {
+                        "instrument_id": peer.get("instrument_id"),
+                        "symbol": code,
+                        "name": peer.get("name") or "",
+                        "pe_ttm": pe,
+                        "pb_mrq": pb,
+                        "report_period": peer.get("report_period"),
+                        "source_ids": [industry_valuation_source.id],
+                    }
+                )
 
         def numeric(row: Any, *keys: str) -> float | None:
             for key in keys:
@@ -2251,7 +3570,11 @@ class EvidenceService:
                 ] + ([] if capture.complete else ["market_snapshot_complete"]),
             }
 
-        target_industry = cls._snapshot_value(target, "industry") if target is not None else None
+        target_industry = (
+            cls._snapshot_value(target, "industry")
+            if target is not None and cls._snapshot_value(target, "industry") is not None
+            else cls._snapshot_value(profile, "industry")
+        )
         industry_rows = [
             item for item in rows
             if target_industry and cls._snapshot_value(item[0], "industry") == target_industry
@@ -2277,12 +3600,21 @@ class EvidenceService:
                 "missing_fields": ["industry_classification", "industry_members", "relative_change_pct"],
             }
         else:
-            classification_scheme = cls._snapshot_value(target, "classification_scheme")
-            industry_code = cls._snapshot_value(target, "industry_code")
+            classification_scheme = (
+                cls._snapshot_value(target, "classification_scheme")
+                or cls._snapshot_value(profile, "classification_scheme")
+            )
+            industry_code = (
+                cls._snapshot_value(target, "industry_code")
+                or cls._snapshot_value(profile, "industry_code")
+            )
             industry_member_coverage = cls._snapshot_value(
                 target, "industry_member_coverage"
+            ) or cls._snapshot_value(profile, "industry_member_coverage")
+            industry_benchmark = (
+                cls._snapshot_value(target, "industry_benchmark")
+                or cls._snapshot_value(profile, "industry_benchmark")
             )
-            industry_benchmark = cls._snapshot_value(target, "industry_benchmark")
             industry_core_missing = [
                 field
                 for field, value in {
@@ -2464,32 +3796,71 @@ class EvidenceService:
                         "source_ids": item.get("source_ids") or [],
                     }
                 )
-            target_pe = numeric(target, "pe") if target is not None else numeric_value((bundle.get("quote") or {}).get("pe"))
-            target_pb = numeric(target, "pb") if target is not None else numeric_value((bundle.get("quote") or {}).get("pb"))
+            provider_target_pe = (
+                numeric_value(industry_valuation.get("target_pe_ttm"))
+                if industry_valuation_source is not None and isinstance(industry_valuation, dict)
+                else None
+            )
+            provider_target_pb = (
+                numeric_value(industry_valuation.get("target_pb_mrq"))
+                if industry_valuation_source is not None and isinstance(industry_valuation, dict)
+                else None
+            )
+            target_pe = (
+                numeric(target, "pe")
+                if target is not None
+                else numeric_value((bundle.get("quote") or {}).get("pe"))
+            ) or provider_target_pe
+            target_pb = (
+                numeric(target, "pb")
+                if target is not None
+                else numeric_value((bundle.get("quote") or {}).get("pb"))
+            ) or provider_target_pb
             valuation_peer_rows = [
                 (row, observed, ids)
                 for row, observed, ids in industry_rows
                 if cls._snapshot_value(row, "instrument_id") != inst.id
             ]
-            peer_pe = [
-                value for row, _, _ in valuation_peer_rows
-                if (value := numeric(row, "pe")) is not None and value > 0
-            ]
-            peer_pb = [
-                value for row, _, _ in valuation_peer_rows
-                if (value := numeric(row, "pb")) is not None and value > 0
-            ]
+            peer_pe = list(valuation_peer_values["pe"])
+            peer_pb = list(valuation_peer_values["pb"])
+            if not peer_pe and not peer_pb:
+                peer_pe = [
+                    value for row, _, _ in valuation_peer_rows
+                    if (value := numeric(row, "pe")) is not None and value > 0
+                ]
+                peer_pb = [
+                    value for row, _, _ in valuation_peer_rows
+                    if (value := numeric(row, "pb")) is not None and value > 0
+                ]
+            valuation_source_ids = (
+                [industry_valuation_source.id]
+                if industry_valuation_source is not None
+                else []
+            )
+            peer_sample_required = 3 if valuation_source_ids else 2
             valuation = {
                 "status": "available" if (
-                    (target_pe is not None and target_pe > 0 and len(peer_pe) >= 2)
-                    or (target_pb is not None and target_pb > 0 and len(peer_pb) >= 2)
+                    (target_pe is not None and target_pe > 0 and len(peer_pe) >= peer_sample_required)
+                    or (target_pb is not None and target_pb > 0 and len(peer_pb) >= peer_sample_required)
                 ) else "missing",
-                "method": "same-industry-current-snapshot-percentile-v1",
-                "basis": "目标 PE/PB 与研究截止前同一行业、排除目标公司的其他正值同行样本比较",
+                "method": (
+                    "same-industry-f10-current-percentile-v1"
+                    if valuation_source_ids
+                    else "same-industry-current-snapshot-percentile-v1"
+                ),
+                "basis": (
+                    "目标 PE/PB 与独立行业估值端点返回的排除目标、ST和非正值同行样本比较"
+                    if valuation_source_ids
+                    else "目标 PE/PB 与研究截止前同一行业、排除目标公司的其他正值同行样本比较"
+                ),
                 "pe": distribution(target_pe, peer_pe),
                 "pb": distribution(target_pb, peer_pb),
-                "as_of": industry_context.get("observed_at") or market_regime.get("observed_at"),
-                "source_ids": sorted(set(industry_ids + _quote_source_ids(sources))),
+                # Preserve the observed peer multiples for the V6 valuation
+                # engine; the public compatibility fields above remain unchanged.
+                "peer_values": {"pe": sorted(peer_pe), "pb": sorted(peer_pb)},
+                "peer_companies": valuation_peer_companies,
+                "as_of": industry_valuation_observed or industry_context.get("observed_at") or market_regime.get("observed_at"),
+                "source_ids": sorted(set(industry_ids + valuation_source_ids + _quote_source_ids(sources))),
             }
             missing_fields = [
                 "capital_expenditure", "governance", "dilution_history", "audit_or_restatement_status",
@@ -2628,15 +3999,55 @@ class EvidenceService:
             for source_id, source in sources.items()
             if "date" in (source.get("fields") or [])
         )
-        target_amount = numeric(target, "amount", "turnover") if target is not None else None
-        target_turnover_rate = numeric(target, "turnover_rate") if target is not None else None
-        target_volume = numeric(target, "volume") if target is not None else numeric_value(target_quote.get("volume"))
-        target_price = numeric(target, "price") if target is not None else numeric_value(target_quote.get("price"))
+        def snapshot_or_quote(*snapshot_keys: str, quote_key: str) -> float | None:
+            value = numeric(target, *snapshot_keys) if target is not None else None
+            return value if value is not None else numeric_value(target_quote.get(quote_key))
+
+        target_amount = snapshot_or_quote("amount", "turnover", quote_key="amount")
+        target_turnover_rate = snapshot_or_quote("turnover_rate", quote_key="turnover_rate")
+        target_volume = snapshot_or_quote("volume", quote_key="volume")
+        target_price = snapshot_or_quote("price", quote_key="price")
         target_suspended = (
-            bool(cls._snapshot_value(target, "is_suspended"))
-            if target is not None
-            else target_price is None
+            cls._snapshot_value(target, "is_suspended") if target is not None else None
         )
+        target_change_pct = snapshot_or_quote("change_pct", quote_key="change_pct")
+        explicit_active_member = cls._snapshot_value(target, "active_universe_member") if target is not None else None
+        active_member = explicit_active_member
+        active_member_method = cls._snapshot_value(target, "status_method") if target is not None else None
+        if active_member is None and capture.complete and target is not None and target_price is not None and target_price > 0:
+            active_member = True
+            active_member_method = "complete-market-capture-current-quote-v1"
+        risk_warning = cls._snapshot_value(target, "is_st") if target is not None else None
+        is_delisting = cls._snapshot_value(target, "is_delisting") if target is not None else None
+        status_method = cls._snapshot_value(target, "status_method") if target is not None else None
+        name_status_proxy = cls._snapshot_value(target, "name_status_proxy") if target is not None else None
+        listing_days = cls._snapshot_value(target, "listing_days") if target is not None else None
+        listing_date = (
+            cls._snapshot_value(target, "listing_date")
+            if target is not None and cls._snapshot_value(target, "listing_date") is not None
+            else cls._snapshot_value(profile, "listing_date")
+        )
+        listing_lower_bound = None
+        listing_lower_bound_method = None
+        kline_ref = bundle.get("kline_ref")
+        try:
+            kline_bar_count = int(kline_ref.get("bars") or 0) if isinstance(kline_ref, dict) else 0
+        except (TypeError, ValueError):
+            kline_bar_count = 0
+        if listing_days is None and kline_bar_count >= 6:
+            listing_lower_bound = kline_bar_count
+            listing_lower_bound_method = "completed-kline-session-count-v1"
+        previous_close = snapshot_or_quote("previous_close", quote_key="previous_close")
+        previous_close_method = (
+            "provided-market-or-quote-v1" if previous_close is not None else None
+        )
+        if previous_close is None and target_price is not None and target_change_pct is not None:
+            denominator = 1.0 + target_change_pct / 100.0
+            if denominator > 0 and target_change_pct != -100:
+                candidate_previous_close = target_price / denominator
+                if math.isfinite(candidate_previous_close) and candidate_previous_close > 0:
+                    previous_close = candidate_previous_close
+                    previous_close_method = "price-change-reverse-v1"
         capital_positioning = {
             "status": "degraded" if target is not None or target_quote else "missing",
             "claim_type": "inference",
@@ -2644,13 +4055,17 @@ class EvidenceService:
             "method": "public-capital-signals-v1",
             "version": "1",
             "source_ids": sorted(set(target_ids + quote_ids + kline_ids)),
-            "observed_at": cls._snapshot_value(target, "observed_at") if target is not None else bundle.get("market_as_of"),
+            "observed_at": (
+                cls._snapshot_value(target, "observed_at")
+                if target is not None and cls._snapshot_value(target, "observed_at") is not None
+                else target_quote.get("as_of") or bundle.get("market_as_of")
+            ),
             "published_at": None,
             "period_end": None,
             "turnover": target_amount,
             "turnover_rate": target_turnover_rate,
             "volume": target_volume,
-            "price_change_pct": numeric(target, "change_pct") if target is not None else numeric_value(target_quote.get("change_pct")),
+            "price_change_pct": target_change_pct,
             "volume_change_pct_5d": (bundle.get("indicators") or {}).get("volume_change_pct"),
             "public_signals": [],
             "disclosure_signals": [
@@ -2711,16 +4126,59 @@ class EvidenceService:
         if target is None and not target_quote:
             capital_positioning["status"] = "missing"
 
-        tradeability_missing = [
+        exchange = (
+            cls._snapshot_value(target, "exchange")
+            if target is not None and cls._snapshot_value(target, "exchange") is not None
+            else inst.exchange
+        )
+        board = (
+            cls._snapshot_value(target, "board")
+            if target is not None and cls._snapshot_value(target, "board") is not None
+            else cls._snapshot_value(target, "board_type") if target is not None else None
+        ) or cls._snapshot_value(profile, "board")
+        limit_up = snapshot_or_quote("limit_up", quote_key="limit_up")
+        limit_down = snapshot_or_quote("limit_down", quote_key="limit_down")
+        price_limit_rule = cls._snapshot_value(target, "price_limit_rule") if target is not None else None
+        price_limit_rule_method = "provided-market-snapshot-v1" if price_limit_rule is not None else None
+        if price_limit_rule is None and limit_up is not None and limit_down is not None:
+            price_limit_rule = {
+                "status": "confirmed",
+                "upper_limit_price": limit_up,
+                "lower_limit_price": limit_down,
+                "method": "quote-trading-bounds-v1",
+                "source_ids": quote_ids,
+            }
+            price_limit_rule_method = "quote-trading-bounds-v1"
+        t_plus_one = cls._snapshot_value(target, "t_plus_one") if target is not None else None
+        t_plus_one_method = "provided-market-snapshot-v1" if t_plus_one is not None else None
+        if (
+            t_plus_one is None
+            and inst.instrument_type == "equity"
+            and exchange in {"XSHG", "XSHE", "BJSE"}
+        ):
+            # A-share equities follow the exchange T+1 delivery rule.  Keep
+            # ETFs and other instruments unknown unless their provider gives
+            # an explicit rule; their settlement/trading rules differ.
+            t_plus_one = "restricted"
+            t_plus_one_method = "a-share-equity-t-plus-one-rule-v1"
+        execution_rule_missing = [
+            field for field, value in {
+                "price_limit_rule": price_limit_rule,
+                "t_plus_one": t_plus_one,
+            }.items() if value is None
+        ]
+        execution_data_missing = [
             field for field, value in {
                 "price": target_price,
                 "volume": target_volume,
                 "amount": target_amount,
                 "turnover_rate": target_turnover_rate,
             }.items() if value is None
-        ] + ["order_book_depth", "realized_slippage", "tick_trade_data", "price_limit_rule", "t_plus_one"]
-        price_limit_rule = cls._snapshot_value(target, "price_limit_rule")
-        t_plus_one = cls._snapshot_value(target, "t_plus_one")
+        ]
+        execution_optional_missing = [
+            "order_book_depth", "realized_slippage", "tick_trade_data"
+        ]
+        tradeability_missing = execution_data_missing + execution_optional_missing + execution_rule_missing
         tradeability_required_missing = [
             field
             for field, value in {
@@ -2750,11 +4208,13 @@ class EvidenceService:
                 "method": "turnover-amount-presence-v1",
                 "basis": "仅作为成交额存在性代理，未推断实际滑点",
             }
+        trade_source_ids = sorted(set(target_ids + quote_ids + kline_ids))
+        has_trade_data = bool(target is not None or target_quote)
         tradeability = {
             "status": (
-                "available"
-                if not tradeability_required_missing
-                else ("degraded" if target is not None or target_quote else "missing")
+                "degraded"
+                if has_trade_data and (tradeability_required_missing or execution_optional_missing)
+                else ("available" if has_trade_data else "missing")
             ),
             "claim_type": "inference",
             "basis": "使用可核验快照的价格、成交量、成交额、换手和停牌字段；订单簿与实际滑点没有来源",
@@ -2762,8 +4222,8 @@ class EvidenceService:
             "version": "1",
             "observed_at": (
                 cls._snapshot_value(target, "observed_at")
-                if target is not None
-                else target_quote.get("as_of")
+                if target is not None and cls._snapshot_value(target, "observed_at") is not None
+                else target_quote.get("as_of") or cls._snapshot_value(profile, "observed_at")
             ),
             "published_at": None,
             "period_end": None,
@@ -2771,12 +4231,90 @@ class EvidenceService:
             "volume": target_volume,
             "amount": target_amount,
             "turnover_rate": target_turnover_rate,
+            "turnover_rate_pct": target_turnover_rate,
+            "limit_up": limit_up,
+            "limit_down": limit_down,
+            "upper_limit_price": limit_up,
+            "lower_limit_price": limit_down,
+            "exchange": exchange,
+            "board": board,
+            "risk_warning": risk_warning,
+            "is_st": risk_warning,
+            "risk_warning_method": status_method,
+            "name_status_proxy": name_status_proxy,
+            "active_universe_member": active_member,
+            "active_universe_member_method": active_member_method,
+            "listing_days": listing_days,
+            "listing_date": listing_date,
+            "listing_age_lower_bound_sessions": listing_lower_bound,
+            "listing_age_lower_bound_method": listing_lower_bound_method,
             "is_suspended": target_suspended,
+            "suspended": target_suspended,
+            # These fields require an explicit provider fact; absence stays
+            # unknown and is never inferred from a code or missing quote.
+            "delisted": cls._snapshot_value(target, "delisted") if target is not None else None,
+            "delisting": (
+                cls._snapshot_value(target, "delisting")
+                if target is not None and cls._snapshot_value(target, "delisting") is not None
+                else is_delisting
+            ),
+            "is_delisting": is_delisting,
+            "registration_listing": cls._snapshot_value(target, "registration_listing") if target is not None else None,
             "price_limit_rule": price_limit_rule,
+            "price_limit_rule_method": price_limit_rule_method,
             "t_plus_one": t_plus_one,
+            "t_plus_one_method": t_plus_one_method,
+            "t_plus_one_rule": (
+                {
+                    "status": "confirmed",
+                    "value": t_plus_one,
+                    "applies_to": "A股股票",
+                    "method": t_plus_one_method,
+                }
+                if t_plus_one is not None
+                else None
+            ),
+            "previous_close": previous_close,
+            "previous_close_method": previous_close_method,
+            "previous_close_source_ids": sorted(set(target_ids + quote_ids)) if previous_close is not None else [],
             "liquidity_proxy": liquidity_proxy,
-            "source_ids": sorted(set(target_ids + quote_ids)),
+            "source_ids": trade_source_ids,
             "missing_fields": tradeability_missing,
+        }
+        tradeability["execution_facts_projection"] = {
+            key: tradeability.get(key)
+            for key in (
+                "exchange",
+                "board",
+                "risk_warning",
+                "suspended",
+                "is_suspended",
+                "delisted",
+                "delisting",
+                "is_delisting",
+                "listing_days",
+                "listing_date",
+                "listing_age_lower_bound_sessions",
+                "price",
+                "previous_close",
+                "amount",
+                "turnover_rate_pct",
+                "limit_up",
+                "limit_down",
+                "source_ids",
+            )
+        }
+        tradeability["proxy_methods"] = {
+            key: value
+            for key, value in {
+                "active_universe_member": active_member_method,
+                "risk_warning": status_method,
+                "listing_age_lower_bound_sessions": listing_lower_bound_method,
+                "previous_close": previous_close_method,
+                "price_limit_rule": price_limit_rule_method,
+                "t_plus_one": t_plus_one_method,
+            }.items()
+            if value
         }
 
         market_style = {
@@ -2898,11 +4436,30 @@ class EvidenceService:
             "source_ids": sorted(set(industry_ids + policy_ids)),
             "missing_fields": ["inventory", "capacity_utilization", "product_price", "industry_demand"],
         }
+        lifecycle_raw = cls._snapshot_value(target, "industry_lifecycle") if target is not None else None
+        lifecycle_source_ids = sorted(set(target_ids + industry_ids))
+        if isinstance(lifecycle_raw, dict):
+            lifecycle_stage = lifecycle_raw.get("stage") or lifecycle_raw.get("value")
+            lifecycle_source_ids = sorted(
+                set(lifecycle_source_ids + [item for item in lifecycle_raw.get("source_ids") or [] if isinstance(item, str)])
+            )
+        else:
+            lifecycle_stage = lifecycle_raw if isinstance(lifecycle_raw, str) else None
+        industry_lifecycle = {
+            "status": "available" if lifecycle_stage and lifecycle_source_ids else "missing",
+            "claim_type": "fact",
+            "stage": lifecycle_stage,
+            "method": "provided-industry-lifecycle-v1",
+            "version": "1",
+            "source_ids": lifecycle_source_ids,
+            "missing_fields": [] if lifecycle_stage and lifecycle_source_ids else ["industry_lifecycle"],
+        }
         cycles = {
             "macro_liquidity": macro_liquidity,
             "industry_supply_demand": industry_supply_demand,
             "company_earnings": company_cycle,
             "market_style": market_style,
+            "industry_lifecycle": industry_lifecycle,
         }
         cycle_statuses = {item["status"] for item in cycles.values()}
         cycle_context = {
@@ -3197,6 +4754,7 @@ class EvidenceService:
             "ma5": sma(closes, 5)[-1],
             "ma10": sma(closes, 10)[-1],
             "ma20": sma(closes, 20)[-1],
+            "ma60": sma(closes, 60)[-1],
             "macd": {"dif": dif[-1], "dea": dea[-1], "hist": hist[-1]},
             "rsi14": rsi(closes, 14)[-1],
             "volume_change_pct": volume_change_pct(volumes, 5),

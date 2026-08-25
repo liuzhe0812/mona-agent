@@ -71,7 +71,7 @@ export function SystemView({ initialTab = "overview" }: { initialTab?: SystemTab
                 </span>
               ) : null}
               {activeTab === tab.id ? (
-                <span className="absolute inset-x-3 bottom-0 h-px bg-info" />
+                <span className="absolute inset-x-3 bottom-0 h-0.5 rounded-full bg-[hsl(var(--brand-red))]" />
               ) : null}
             </button>
           ))}

@@ -301,7 +301,11 @@ export function ThreadMessages({
           : "";
 
         return (
-          <div key={unitKey(unit, index)} className={marginTop}>
+          <div
+            key={unitKey(unit, index)}
+            id={unit.type === "single" ? `thread-message-${unit.message.id}` : undefined}
+            className={marginTop}
+          >
             {isGroupChat && showTimeDivider[index] && unit.type === "single" ? (
               <div
                 className="my-2 flex items-center gap-3 px-2 text-[10.5px] text-muted-foreground/55"

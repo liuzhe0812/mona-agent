@@ -27,8 +27,8 @@ class EmailScheduleConfig(Base):
     folders: list[str] = []
 
     # 创建模式：
-    #   "auto"    —— LLM 解析成功后直接创建日程
-    #   "confirm" —— 弹通知让用户确认后再创建
+    #   "auto"    —— 不进入收集箱，LLM 解析成功后直接创建日程
+    #   "confirm" —— 进入计划收集箱，待用户确认后再创建日程
     create_mode: Literal["auto", "confirm"] = "confirm"
 
     # 提醒提前量（分钟）。仅对 personal 类型日程生效。

@@ -547,6 +547,8 @@
       "send": "送出訊息",
       "stop": "停止回覆",
       "attachImage": "附加圖片",
+      "attachFile": "附加檔案",
+      "fileRejected": "僅支援圖片與常用文件格式",
       "imageMode": {
         "label": "圖片生成",
         "toggle": "切換圖片生成模式",

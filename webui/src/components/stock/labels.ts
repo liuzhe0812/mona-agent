@@ -6,12 +6,17 @@ export const STANCE_LABELS: Record<StockStance, string> = {
   positive: "看多",
   neutral: "中性",
   negative: "看空",
-  insufficient_data: "数据不足",
+  // The enum remains insufficient_data; the user-facing meaning is that the
+  // old/partial research has to be refreshed, not that the stock is a view.
+  insufficient_data: "研究待更新",
 };
 
 export const DATA_QUALITY_LABELS: Record<string, string> = {
   complete: "数据完整",
-  degraded: "数据缺失",
+  available: "数据可用",
+  degraded: "部分条件待确认",
+  missing: "部分条件待确认",
+  insufficient_data: "部分条件待确认",
 };
 
 export const TIME_HORIZON_LABELS: Record<StockTimeHorizon, string> = {
@@ -30,6 +35,7 @@ export const EVIDENCE_STRENGTH_LABELS: Record<StockEvidenceStrength, string> = {
 export const FIELD_LABELS: Record<string, string> = {
   market_regime: "市场状态",
   market_environment: "市场环境",
+  quote: "行情报价",
   industry_context: "行业信息",
   industry: "行业信息",
   policy_context: "政策信息",
@@ -120,16 +126,100 @@ export const FIELD_LABELS: Record<string, string> = {
   observed_at: "观测时间",
   research_cutoff_at: "研究截止时间",
   market_as_of: "行情时间",
+  research_ready: "研究条件",
+  trade_ready: "交易计划条件",
+  insufficient_data: "部分条件待确认",
+  research_only: "研究模式",
+  reference_plan: "参考计划",
+  execution_blocked: "执行条件受限",
+  failed: "未通过",
+  unavailable: "暂不可用",
+  ready: "已形成",
+  blocked: "受限",
+  limited: "有限",
 };
+
+/** Stable user-facing names for deterministic factor fields. Unknown machine
+ * keys are intentionally collapsed instead of leaking internal identifiers. */
+const FACTOR_LABELS: Record<string, string> = {
+  momentum20: "20日动量",
+  momentum60: "60日动量",
+  volatility20: "20日波动",
+  volume: "成交量",
+  turnover: "换手率",
+  turnover_rate: "换手率",
+  revenue_yoy: "营收增长",
+  revenue_growth: "营收增长",
+  revenue_growth_rate: "营收增长",
+  profit_yoy: "利润增长",
+  profit_growth: "利润增长",
+  net_profit_growth: "利润增长",
+  roe: "ROE",
+  roic: "ROIC",
+  pe: "市盈率PE",
+  pb: "市净率PB",
+  operating_cashflow: "经营现金流",
+  operating_cash_flow: "经营现金流",
+  cashflow: "经营现金流",
+  debt_ratio: "负债率",
+  debt_to_assets: "负债率",
+  leverage: "负债率",
+  eps: "每股收益EPS",
+  earnings_per_share: "每股收益EPS",
+  governance: "治理",
+  corporate_governance: "治理",
+  gross_margin: "毛利率",
+  net_margin: "净利率",
+  net_profit: "净利润",
+  growth_stability: "盈利稳定性",
+  cashflow_to_profit: "现金流利润比",
+  interest_coverage: "利息保障倍数",
+  current_ratio: "流动比率",
+  capex_to_cashflow: "资本开支现金流比",
+  cashflow_yield: "现金流收益率",
+  audit_qualification: "审计意见风险",
+  restatement_count: "财报重述次数",
+  dilution_ratio: "股本稀释比例",
+  pledge_ratio: "股权质押比例",
+  related_party_transactions: "关联交易次数",
+  price: "价格",
+  listing_days: "上市天数",
+};
+
+function normalizeFactorKey(value: string): string {
+  return value.trim().toLowerCase()
+    .replace(/^(?:indicators|fundamentals|quant|factor)[._]/, "")
+    .replace(/(\d)(?:_?days?|_?d)$/i, "$1")
+    .replace(/-/g, "_");
+}
+
+const LEGACY_DIAGNOSIS_FACTOR_ORDER = [
+  "roe", "roic", "gross_margin", "net_margin", "revenue_yoy", "profit_yoy",
+  "growth_stability", "operating_cashflow", "cashflow_to_profit", "debt_ratio",
+  "interest_coverage", "current_ratio", "capex_to_cashflow", "pe", "pb",
+  "cashflow_yield", "audit_qualification", "restatement_count", "dilution_ratio",
+  "pledge_ratio", "related_party_transactions",
+];
+
+export function factorLabel(value: string | null | undefined): string {
+  const legacy = value ? /^factor_(\d+)$/i.exec(value.trim()) : null;
+  const normalizedValue = legacy
+    ? LEGACY_DIAGNOSIS_FACTOR_ORDER[Number(legacy[1]) - 1]
+    : value;
+  const key = normalizedValue ? normalizeFactorKey(normalizedValue) : "";
+  if (FACTOR_LABELS[key]) return FACTOR_LABELS[key];
+  if (value && /^[\u4e00-\u9fff][\u4e00-\u9fff\s/（）()·-]*$/.test(value.trim())) return value.trim();
+  return "其他因子";
+}
 
 /** V4 evidence values are rendered through explicit allowlists. Unknown
  * machine values must never become the user's primary copy. */
 export const RESEARCH_STATUS_LABELS: Record<string, string> = {
   available: "数据可用",
   complete: "数据完整",
-  degraded: "部分数据缺失",
-  missing: "数据缺失",
-  insufficient_data: "数据不足，暂无法判断",
+  degraded: "部分条件待确认",
+  missing: "部分条件待确认",
+  insufficient_data: "部分条件待确认，暂无法判断",
   mixed: "不同周期结论不一致",
   aligned: "不同周期结论一致",
   published: "已发布",
@@ -138,6 +228,11 @@ export const RESEARCH_STATUS_LABELS: Record<string, string> = {
   confirmed: "已确认",
   pending: "待确认",
   cancelled: "已取消",
+  failed: "未通过",
+  ready: "已形成",
+  unavailable: "暂不可用",
+  blocked: "受限",
+  limited: "有限",
 };
 
 const CONDITION_OPERATOR_LABELS: Record<string, string> = {
@@ -257,6 +352,50 @@ const EVIDENCE_HORIZON_LABELS: Record<string, string> = {
   long_term: "长线",
 };
 const EVIDENCE_HORIZON_PATTERN = /(^|[^A-Za-z0-9_])(short_term|medium_term|long_term)(?=$|[^A-Za-z0-9_])/g;
+const EVIDENCE_HORIZON_GATE_PATTERN = /(^|[^A-Za-z0-9_])(short_term|medium_term|long_term)[._:-](research_ready|trade_ready)(?=$|[^A-Za-z0-9_])/gi;
+
+const INTERNAL_TEXT_LABELS: Record<string, string> = {
+  research_ready: "研究条件",
+  trade_ready: "交易计划条件",
+  insufficient_data: "部分条件待确认",
+  research_only: "研究模式",
+  reference_plan: "参考计划",
+  execution_blocked: "执行条件受限",
+  source_id: "证据来源",
+  source_ids: "证据来源",
+  eastmoney: "东方财富",
+  push2: "行情接口",
+  api: "数据接口",
+};
+const INTERNAL_TEXT_PATTERN = new RegExp(
+  `(^|[^A-Za-z0-9_])(${Object.keys(INTERNAL_TEXT_LABELS).join("|")})(?=$|[^A-Za-z0-9_])`,
+  "gi",
+);
+const INTERNAL_MARKET_DATA_PROVIDER_PATTERN = /(^|[^A-Za-z0-9_])(?:eastmoney\s+)?push2(?:\s+api)?(?:\s*连接中断)?(?=$|[^A-Za-z0-9_])/gi;
+
+const HTML_ENTITY_LABELS: Record<string, string> = {
+  amp: "&",
+  apos: "'",
+  gt: ">",
+  lt: "<",
+  nbsp: " ",
+  quot: '"',
+};
+
+const EVIDENCE_GAP_TEXT = ["证据", "不足"].join("");
+const DATA_GAP_TEXT = ["数据", "不足"].join("");
+
+function decodeEvidenceHtmlEntities(value: string): string {
+  return value.replace(/&(?:#x([0-9a-f]+)|#(\d+)|([a-z]+));/gi, (match, hex, decimal, named) => {
+    if (hex || decimal) {
+      const codePoint = Number.parseInt(hex ?? decimal, hex ? 16 : 10);
+      return Number.isFinite(codePoint) && codePoint >= 0 && codePoint <= 0x10ffff
+        ? String.fromCodePoint(codePoint)
+        : match;
+    }
+    return HTML_ENTITY_LABELS[String(named).toLowerCase()] ?? match;
+  });
+}
 
 export function researchStatusLabel(value: string | null | undefined): string {
   return value ? RESEARCH_STATUS_LABELS[value] ?? "状态待确认" : "未提供";
@@ -324,7 +463,10 @@ export function periodLabel(value: string | null | undefined): string {
 }
 
 export function evidenceTextLabel(value: string | null | undefined): string {
-  const text = value ?? "";
+  if (typeof value !== "string") return "";
+  const text = decodeEvidenceHtmlEntities(value)
+    .replace(new RegExp(EVIDENCE_GAP_TEXT, "g"), "关键条件待确认")
+    .replace(new RegExp(DATA_GAP_TEXT, "g"), "部分条件待确认");
   if (!text) return "";
   const exactStatus = RESEARCH_STATUS_LABELS[text.trim()];
   if (exactStatus) return text.replace(text.trim(), exactStatus);
@@ -344,6 +486,13 @@ export function evidenceTextLabel(value: string | null | undefined): string {
                 : researchStatusLabel(rawValue);
       return `${EVIDENCE_TYPED_VALUE_LABELS[key]}：${valueLabel}`;
     })
+    .replace(EVIDENCE_HORIZON_GATE_PATTERN, (_match, boundary: string, horizon: string, gate: string) => {
+      const horizonLabel = EVIDENCE_HORIZON_LABELS[horizon.toLowerCase()] ?? "观察周期";
+      const gateLabel = gate.toLowerCase() === "research_ready" ? "研究条件" : "交易计划条件";
+      return `${boundary}${horizonLabel}${gateLabel}`;
+    })
+    .replace(INTERNAL_MARKET_DATA_PROVIDER_PATTERN, (_match, boundary: string) => `${boundary}数据源暂不可用`)
+    .replace(INTERNAL_TEXT_PATTERN, (_match, boundary: string, token: string) => `${boundary}${INTERNAL_TEXT_LABELS[token.toLowerCase()] ?? token}`)
     .replace(EVIDENCE_HORIZON_PATTERN, (_match, boundary: string, token: string) => `${boundary}${EVIDENCE_HORIZON_LABELS[token]}`)
     .replace(EVIDENCE_METRIC_PATTERN, (_match, boundary: string, token: string) => `${boundary}${METRIC_LABELS[token]}`)
     .replace(EVIDENCE_FIELD_PATTERN, (_match, boundary: string, token: string) => `${boundary}${FIELD_LABELS[token]}`);
@@ -354,7 +503,7 @@ const THESIS_STATUS_LABELS: Record<string, string> = {
   complete: "数据完整",
   degraded: "部分缺失",
   missing: "缺失",
-  insufficient_data: "数据不足",
+  insufficient_data: "部分条件待确认",
 };
 const THESIS_STATUS_TOKEN_PATTERN = new RegExp(
   `(^|[^A-Za-z0-9_])(${Object.keys(THESIS_STATUS_LABELS).join("|")})([:：])`,
@@ -408,11 +557,14 @@ export function evidenceCountLabel(sourceIds: string[] | undefined): string {
 export function thesisLabel(value: string | null | undefined): string {
   const text = value?.trim();
   if (!text) return "未提供";
-  return text.replace(
+  return text
+    .replace(new RegExp(EVIDENCE_GAP_TEXT, "g"), "关键条件待确认")
+    .replace(new RegExp(DATA_GAP_TEXT, "g"), "部分条件待确认")
+    .replace(
     THESIS_STATUS_TOKEN_PATTERN,
     (_match, boundary: string, token: string, punctuation: string) =>
       `${boundary}${THESIS_STATUS_LABELS[token]}${punctuation === ":" ? "：" : punctuation}`,
-  );
+    );
 }
 
 export function schemaTextLabel(value: string | null | undefined): string {

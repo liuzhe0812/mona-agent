@@ -172,6 +172,30 @@ describe("ChatProvidersSettings", () => {
     expect(screen.getByRole("switch", { name: /Shared model/ })).toBeInTheDocument();
   });
 
+  it("allows disabling a provider's final model when another provider remains enabled", async () => {
+    const deepseek = provider("deepseek", "DeepSeek", true, [{ id: "deepseek-v4-pro", name: "DeepSeek V4 Pro" }]);
+    const zhipu = provider("zhipu-glm-cn", "智谱 GLM", true, [{ id: "glm-5.2", name: "GLM-5.2" }]);
+    updateProviderSettings.mockResolvedValueOnce(settingsWith([
+      provider("deepseek", "DeepSeek", true, [{ id: "deepseek-v4-pro", name: "DeepSeek V4 Pro", enabled: false }]),
+      zhipu,
+    ]));
+    render(
+      <ChatProvidersSettings
+        settings={settingsWith([deepseek, zhipu])}
+        token="token"
+        onSettingsChanged={noop}
+        onModelNameChange={noop}
+      />,
+    );
+
+    fireEvent.click(screen.getByRole("switch", { name: "DeepSeek V4 Pro 关闭" }));
+
+    await waitFor(() => expect(updateProviderSettings).toHaveBeenCalledWith(
+      "token",
+      { provider: "deepseek", enabledModels: [] },
+    ));
+  });
+
   it("edits a configured provider with enabled models preselected and preserves a blank key", async () => {
     const zhipu = provider(
       "zhipu-glm-cn",

@@ -79,7 +79,7 @@ export function QuickAskWindow() {
 
   const actionClass = cn(
     "h-9 rounded-full border border-border/65 bg-card px-3 text-[12px] font-medium",
-    "text-foreground/80 hover:bg-accent hover:text-foreground",
+    "text-foreground/80 hover:bg-foreground/[0.06] hover:text-foreground",
     "disabled:pointer-events-none disabled:opacity-55",
   );
 
@@ -120,7 +120,7 @@ export function QuickAskWindow() {
                 disabled={submitting}
                 onClick={() => void quickAskOpenNote()}
               >
-                <FileText className="mr-1.5 h-4 w-4 text-[#eba45d]" aria-hidden />
+                <FileText className="mr-1.5 h-4 w-4 text-muted-foreground" aria-hidden />
                 笔记
               </Button>
             </>
@@ -129,7 +129,7 @@ export function QuickAskWindow() {
         {error ? (
           <div
             role="alert"
-            className="mx-auto mt-2 max-w-[58rem] rounded-full border border-destructive/30 bg-background/90 px-3 py-1.5 text-center text-[12px] font-medium text-destructive shadow-sm"
+            className="mx-auto mt-2 max-w-[58rem] rounded-full border border-destructive/30 bg-background/90 px-3 py-1.5 text-center text-[12px] font-medium text-destructive"
           >
             {error}
           </div>

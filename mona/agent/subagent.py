@@ -138,6 +138,8 @@ class SubagentManager:
         max_tool_result_chars: int,
         model: str | None = None,
         tools_config: ToolsConfig | None = None,
+        image_generation_provider_configs: dict[str, Any] | None = None,
+        video_generation_provider_configs: dict[str, Any] | None = None,
         restrict_to_workspace: bool = False,
         disabled_skills: list[str] | None = None,
         max_iterations: int | None = None,
@@ -151,6 +153,12 @@ class SubagentManager:
         self.bus = bus
         self.model = model or provider.get_default_model()
         self.tools_config = tools_config or ToolsConfig()
+        self._image_generation_provider_configs = dict(
+            image_generation_provider_configs or {}
+        )
+        self._video_generation_provider_configs = dict(
+            video_generation_provider_configs or {}
+        )
         self.max_tool_result_chars = max_tool_result_chars
         self.restrict_to_workspace = restrict_to_workspace
         self.disabled_skills = set(disabled_skills or [])
@@ -747,14 +755,17 @@ class SubagentManager:
     def _run_initializer_for_room(self, room_id: str):
         """Per-room workflow-run initializer hook (stock-module T21).
 
-        Only the stock hidden room needs one: it builds the evidence bundle
+        The two stock hidden rooms need one: it builds the evidence bundle
         for ``run.inputs["symbols"]`` before the first step executes, so
-        every analyst reads prepared data instead of fetching its own.
+        every stock Agent reads prepared data instead of fetching its own.
         Other rooms get ``None`` and the runner skips the hook entirely.
         """
-        from mona.agent.pack_bootstrap import STOCK_ROOM_ID
+        from mona.agent.pack_bootstrap import (
+            STOCK_DIAGNOSIS_ROOM_ID,
+            STOCK_ROOM_ID,
+        )
 
-        if room_id != STOCK_ROOM_ID:
+        if room_id not in {STOCK_ROOM_ID, STOCK_DIAGNOSIS_ROOM_ID}:
             return None
 
         async def _init(run: WorkflowRun) -> None:
@@ -946,8 +957,11 @@ class SubagentManager:
                 logger.exception("Cannot resolve workspace for room {}", room_id)
         ws_token = None
         try:
-            from mona.agent.pack_bootstrap import STOCK_ROOM_ID
-            if room_id == STOCK_ROOM_ID:
+            from mona.agent.pack_bootstrap import (
+                STOCK_DIAGNOSIS_ROOM_ID,
+                STOCK_ROOM_ID,
+            )
+            if room_id in {STOCK_ROOM_ID, STOCK_DIAGNOSIS_ROOM_ID}:
                 from mona.config.paths import get_stock_project_dir
 
                 step_workspace = get_stock_project_dir(agent_root, run.id)
@@ -1023,11 +1037,16 @@ class SubagentManager:
             definition, load_agent_user_config(definition.id)
         )
         registry = ToolRegistry()
+        named_tools_config = self._subagent_tools_config()
+        named_tools_config.image_generation = self.tools_config.image_generation
+        named_tools_config.video_generation = self.tools_config.video_generation
         ctx = ToolContext(
-            config=self._subagent_tools_config(),
+            config=named_tools_config,
             workspace=str(root.resolve()),
             bus=self.bus,
             file_state_store=FileStates(),
+            image_generation_provider_configs=self._image_generation_provider_configs,
+            video_generation_provider_configs=self._video_generation_provider_configs,
             agent_id=definition.id,
             conversation_id=job.room_id,
             room_id=job.room_id,

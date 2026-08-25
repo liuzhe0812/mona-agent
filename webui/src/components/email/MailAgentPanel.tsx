@@ -311,7 +311,7 @@ export function MailAgentPanel() {
   }, [actionSuggestion, gatewayUrl, accounts]);
 
   return (
-    <div className="flex h-full flex-col bg-background">
+    <div className="flex h-full flex-col bg-card">
       {/* 顶部工具栏 */}
       <div className="flex h-10 shrink-0 items-center justify-between border-b border-border/70 px-2.5">
         <div className="flex items-center gap-1.5">
@@ -457,7 +457,7 @@ export function MailAgentPanel() {
         {notice ? (
           <div className="mb-1.5 text-micro text-muted-foreground">{notice}</div>
         ) : null}
-        <div className="flex min-h-9 items-end gap-1.5 rounded-lg border border-border/75 bg-background px-2.5 py-1.5 shadow-sm">
+        <div className="flex min-h-9 items-end gap-1.5 rounded-lg border border-border/75 bg-background px-2.5 py-1.5">
           <Textarea
             value={draft}
             onChange={(event) => setDraft(event.target.value)}

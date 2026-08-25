@@ -96,6 +96,7 @@ import {
   cancelWeixinLogin,
   fetchProviderModels,
   fetchSettings,
+  fetchZenFreeModels,
   getWeixinLoginStatus,
   logoutWeixin,
   startWeixinLogin,
@@ -148,7 +149,7 @@ import type {
 import { SkillManagementPanel } from "@/components/settings/SkillManagementPanel";
 import { McpManagementPanel } from "@/components/settings/McpManagementPanel";
 import { ChatProvidersSettings } from "@/components/settings/ChatProvidersSettings";
-import { PageHeader, SubsectionLabel } from "@/components/ui/page-header";
+import { SubsectionLabel } from "@/components/ui/page-header";
 import { StatusNotice } from "@/components/ui/status-notice";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 
@@ -297,12 +298,6 @@ export function SettingsView({
     workspace: "",
   });
 
-  const text = useCallback(
-    (key: string, fallback: string, options?: Record<string, unknown>) =>
-      t(key, { defaultValue: fallback, ...(options ?? {}) }),
-    [t],
-  );
-
   const applyPayload = useCallback((payload: SettingsPayload) => {
     const fallbackDefault = defaultPreset(payload);
     setSettings(payload);
@@ -378,6 +373,22 @@ export function SettingsView({
       cancelled = true;
     };
   }, [applyPayload, token]);
+
+  useEffect(() => {
+    if (activeSection !== "models_providers") return;
+    let cancelled = false;
+    fetchZenFreeModels(token)
+      .then(() => fetchSettings(token))
+      .then((payload) => {
+        if (!cancelled) applyPayload(payload);
+      })
+      .catch(() => {
+        // Keep the last persisted free-model catalog when the upstream is unavailable.
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [activeSection, applyPayload, token]);
 
   const runtimeDirty = useMemo(() => {
     if (!settings) return false;
@@ -769,14 +780,8 @@ export function SettingsView({
 
       <main className="min-w-0 flex-1 overflow-y-auto [scrollbar-gutter:stable]">
         <div className="mx-auto w-full max-w-[920px] px-5 py-8 sm:px-8 lg:py-12">
-          <PageHeader
-            className="mb-7"
-            title={text(`settings.nav.${activeSection}`, titleForSection(activeSection))}
-            description={t("settings.sidebar.title")}
-          />
-
           {loading ? (
-            <div className="flex h-48 items-center justify-center rounded-lg border border-border/60 bg-card text-body text-muted-foreground">
+            <div className="flex h-48 items-center justify-center text-body text-muted-foreground">
               <Loader2 className="mr-2 h-4 w-4 animate-spin" />
               {t("settings.status.loading")}
             </div>
@@ -812,10 +817,6 @@ const SETTINGS_NAV_ITEMS: Array<{ key: SettingsSectionKey; icon: LucideIcon; fal
   { key: "mcp", icon: Plug, fallback: "MCP", desktopOnly: true },
   { key: "about", icon: Info, fallback: "关于" },
 ];
-
-function titleForSection(section: SettingsSectionKey): string {
-  return SETTINGS_NAV_ITEMS.find((item) => item.key === section)?.fallback ?? "Settings";
-}
 
 function SettingsSidebar({
   activeSection,
@@ -860,8 +861,8 @@ function SettingsSidebar({
               className={cn(
                 "h-9 w-auto shrink-0 justify-start gap-2 rounded-full px-3 text-left text-ui font-medium md:w-full md:rounded-md md:px-2.5",
                 active
-                  ? "bg-accent text-foreground hover:bg-accent"
-                  : "text-muted-foreground hover:text-foreground",
+                  ? "relative text-foreground hover:bg-transparent active:bg-transparent before:absolute before:inset-y-2 before:left-0 before:w-0.5 before:rounded-full before:bg-[hsl(var(--brand-red))]"
+                  : "text-muted-foreground hover:bg-accent hover:text-foreground",
               )}
             >
               <Icon className="h-4 w-4 shrink-0" strokeWidth={2} aria-hidden />
@@ -889,7 +890,8 @@ function OverviewSettings({
 }) {
   const { t } = useTranslation();
   const tx = (key: string, fallback: string) => t(key, { defaultValue: fallback });
-  const configuredCount = settings.providers.filter((provider) => provider.configured).length;
+  const chatProviders = settings.chat_providers ?? [];
+  const configuredCount = chatProviders.filter((provider) => provider.configured).length;
   const activePreset = settings.agent.model_preset || "default";
   const activeProvider = settings.agent.resolved_provider ?? settings.agent.provider;
   const webStatus = settings.web.enable
@@ -914,7 +916,7 @@ function OverviewSettings({
   return (
     <div className="space-y-7">
       <section>
-        <div className="overflow-hidden rounded-lg border border-border/60 bg-card shadow-sm">
+        <div className="overflow-hidden rounded-lg border border-border/60 bg-card">
           <div className="flex flex-col gap-4 px-5 py-5 sm:flex-row sm:items-center sm:justify-between">
             <div className="flex min-w-0 items-center gap-3">
               <span className="grid h-12 w-12 shrink-0 place-items-center rounded-lg bg-muted text-foreground/82 dark:bg-muted/70">
@@ -976,7 +978,7 @@ function OverviewSettings({
             )}
             caption={tx("settings.overview.totalProviders", "{{count}} available").replace(
               "{{count}}",
-              String(settings.providers.length),
+              String(chatProviders.length),
             )}
             onClick={() => onSelectSection("models_providers")}
           />
@@ -1064,7 +1066,7 @@ function AppearanceSettings({
               <span
                 className={cn(
                   "rounded-full px-3 py-1 transition-colors",
-                  theme === "light" && "bg-background text-foreground shadow-sm",
+                  theme === "light" && "bg-background text-foreground",
                 )}
               >
                 {t("settings.values.light")}
@@ -1072,7 +1074,7 @@ function AppearanceSettings({
               <span
                 className={cn(
                   "rounded-full px-3 py-1 transition-colors",
-                  theme === "dark" && "bg-background text-foreground shadow-sm",
+                  theme === "dark" && "bg-background text-foreground",
                 )}
               >
                 {t("settings.values.dark")}
@@ -1672,7 +1674,7 @@ export function ModelsProvidersSettings({
   }, [highlightProvider]);
 
   const renderProviderRow = (provider: SettingsPayload["providers"][number]) => {
-    const expanded = expandedProvider === provider.name && !provider.free_default_model;
+    const expanded = expandedProvider === provider.name;
     const highlighted = highlightProvider === provider.name;
     const form = providerForms[provider.name] ?? {
       apiKey: "",
@@ -1701,10 +1703,10 @@ export function ModelsProvidersSettings({
         <Button
           type="button"
           variant="ghost"
-          onClick={() => !provider.free_default_model && onToggleProvider(provider.name)}
+          onClick={() => onToggleProvider(provider.name)}
           className={cn(
             "h-auto min-h-[70px] w-full justify-between gap-4 rounded-none px-4 py-3 text-left sm:px-5",
-            provider.free_default_model ? "cursor-default hover:bg-transparent" : "hover:bg-accent",
+            "hover:bg-accent",
           )}
         >
           <span className="flex min-w-0 items-center gap-3">
@@ -1727,11 +1729,9 @@ export function ModelsProvidersSettings({
                   </span>
                 ) : null}
               </span>
-              {!provider.free_default_model && (
-                <span className="block truncate text-caption text-muted-foreground">
-                  {provider.api_base || provider.default_api_base || provider.name}
-                </span>
-              )}
+              <span className="block truncate text-caption text-muted-foreground">
+                {provider.api_base || provider.default_api_base || provider.name}
+              </span>
             </span>
           </span>
           <StatusPill
@@ -5095,7 +5095,7 @@ function ByokSectionHeader({ title, count }: { title: string; count: number }) {
 
 function ByokEmptyState({ children }: { children: ReactNode }) {
   return (
-    <div className="rounded-2xl border border-dashed border-border/65 bg-card/45 px-4 py-5 text-ui text-muted-foreground">
+    <div className="rounded-lg border border-dashed border-border/65 bg-card/45 px-4 py-5 text-ui text-muted-foreground">
       {children}
     </div>
   );

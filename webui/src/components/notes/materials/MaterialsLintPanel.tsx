@@ -24,7 +24,11 @@ import { ThreadMessages } from "@/components/thread/ThreadMessages";
 import { Button } from "@/components/ui/button";
 import { useMonaStream } from "@/hooks/useMonaStream";
 import { useSessionHistory } from "@/hooks/useSessions";
-import type { MaterialsLintIssue, MaterialsLintReport } from "@/lib/materials-api";
+import {
+  extractMaterialsText,
+  type MaterialsLintIssue,
+  type MaterialsLintReport,
+} from "@/lib/materials-api";
 import { cn } from "@/lib/utils";
 import { useClientOptional } from "@/providers/ClientProvider";
 
@@ -44,13 +48,38 @@ interface MaterialsLintPanelProps {
   onStreamingChange?: (streaming: boolean) => void;
 }
 
-/** 把 lint 报告转为 Agent 修复任务 prompt（工作目录 = vault 根目录）。 */
-function buildLintFixPrompt(report: MaterialsLintReport): string {
-  const lines = report.issues.map(
+/** 把确定性可重试的提取错误与需要判断的 Wiki 问题分开。 */
+export function classifyMaterialsLintIssues(issues: MaterialsLintIssue[]): {
+  autoFixable: MaterialsLintIssue[];
+  needsReview: MaterialsLintIssue[];
+} {
+  const autoFixable: MaterialsLintIssue[] = [];
+  const needsReview: MaterialsLintIssue[] = [];
+  for (const issue of issues) {
+    const source = issue.details.source;
+    if (
+      issue.rule === "text-extract-error" &&
+      issue.details.status === "error" &&
+      typeof source === "string" &&
+      source.trim().length > 0
+    ) {
+      autoFixable.push(issue);
+    } else {
+      needsReview.push(issue);
+    }
+  }
+  return { autoFixable, needsReview };
+}
+
+/** 把需确认的问题转为 Agent 修复任务 prompt（工作目录 = vault 根目录）。 */
+function buildLintFixPrompt(issues: MaterialsLintIssue[]): string {
+  const errors = issues.filter((issue) => issue.severity === "error").length;
+  const warnings = issues.length - errors;
+  const lines = issues.map(
     (i) => `- [${i.severity}] ${i.label} | ${i.path} | ${i.message}`,
   );
   return [
-    `资料库 lint 检查发现 ${report.issues.length} 个问题（${report.summary.errors} 个错误，${report.summary.warnings} 个警告），请直接编辑文件逐一修复。`,
+    `资料库健康检查发现 ${issues.length} 个需 AI/人工确认的问题（${errors} 个错误，${warnings} 个警告），请直接编辑文件逐一修复。`,
     "",
     "路径基准（当前工作目录即笔记仓库根目录）：",
     "- Wiki 页面：.mona/materials/wiki/<path>",
@@ -58,16 +87,18 @@ function buildLintFixPrompt(report: MaterialsLintReport): string {
     "- 提取文本：.mona/materials/text/<path>",
     "",
     "修复规则：",
-    "- frontmatter-schema：补齐/修正 frontmatter。id 需 wiki- 前缀（可用 wiki-<uuid>）；type 取 source/entity/concept；created/updated 用 YYYY-MM-DD；sources 为字符串数组。",
+    "- frontmatter-schema：补齐/修正 frontmatter。id 需 wiki- 前缀（可用 wiki-<uuid>）；type 取 source/entity/concept；created/updated 用 YYYY-MM-DD；sources 只能引用实际存在的 raw 文件，无法追溯时保留页面并在总结中说明。",
     "- broken-wikilink：把正文里的 [[链接]] 改为存在的页面标题；目标内容确实不存在的，移除链接语法保留文本。",
     "- dangling-source：sources 中引用的 raw 文件已不存在，从 sources 列表移除该条目（不要删除页面本身）。",
-    "- duplicate-title：同一标题的多个页面合并为一个（保留信息更全的），删除多余页面，并把指向被删页面的 [[链接]] 改指保留页。",
-    "- orphan-page：在相关页面正文中自然地补充指向该页的 [[链接]]；确实无价值的页面可删除。",
-    "- thin-page：根据该页 sources 对应的 .mona/materials/text/ 提取文本补充实质内容；无法补充则删除该页。",
+    "- duplicate-title：比较重复页面并合并可安全合并的内容；需要删除的页面只在总结中列出，不要删除。",
+    "- orphan-page：在相关页面正文中自然地补充指向该页的 [[链接]]；确实无价值时只在总结中建议删除。",
+    "- thin-page：根据该页 sources 对应的 .mona/materials/text/ 提取文本补充实质内容；无法补充时保留页面并说明原因。",
     "- text-extract-error：提取失败的文件无法修复时跳过，在总结中说明。",
+    "- stale-page：原始资料仍存在时根据最新提取文本重建页面并移除 stale；来源已不存在且无法追溯时保留页面并在总结中说明。",
     "",
     "约束：",
     "- 用 write_file/edit_file 直接修改文件，不要只输出建议。",
+    "- 禁止删除任何资料或 Wiki 页面；需要删除的只列出建议，等待用户确认。",
     "- 修改 frontmatter 时保留已有 id、created 与人工添加的字段。",
     "- 全部处理后，简要总结每项改动。",
     "",
@@ -92,6 +123,10 @@ export function MaterialsLintPanel({
   const [chatId, setChatId] = useState<string | null>(null);
   const [creatingChat, setCreatingChat] = useState(false);
   const [notice, setNotice] = useState<string | null>(null);
+  const [autoRepairing, setAutoRepairing] = useState(false);
+  const [autoSubmitted, setAutoSubmitted] = useState(false);
+  const [autoProgress, setAutoProgress] = useState<{ completed: number; total: number } | null>(null);
+  const [autoNotice, setAutoNotice] = useState<string | null>(null);
   const [draft, setDraft] = useState("");
   const pendingPromptRef = useRef<{ prompt: string; displayContent: string } | null>(null);
   const bottomRef = useRef<HTMLDivElement>(null);
@@ -104,6 +139,16 @@ export function MaterialsLintPanel({
     send,
     stop,
   } = useMonaStream(chatId, historical, false);
+
+  const issues = report?.issues ?? [];
+  const summary = report?.summary;
+  const { autoFixable, needsReview } = classifyMaterialsLintIssues(issues);
+
+  useEffect(() => {
+    setAutoSubmitted(false);
+    setAutoProgress(null);
+    setAutoNotice(null);
+  }, [report]);
 
   useEffect(() => {
     onStreamingChange?.(isStreaming);
@@ -123,7 +168,7 @@ export function MaterialsLintPanel({
   }, [chatId, send]);
 
   const startFix = useCallback(async () => {
-    if (!report || report.issues.length === 0) return;
+    if (!report || needsReview.length === 0) return;
     if (isStreaming || creatingChat) return;
     if (!client) {
       setNotice("运行时未就绪，请稍后再试");
@@ -134,8 +179,9 @@ export function MaterialsLintPanel({
       return;
     }
     setNotice(null);
-    const prompt = buildLintFixPrompt(report);
-    const displayContent = `修复资料库 lint 报告（${report.summary.errors} 个错误 / ${report.summary.warnings} 个警告）`;
+    const prompt = buildLintFixPrompt(needsReview);
+    const reviewErrors = needsReview.filter((issue) => issue.severity === "error").length;
+    const displayContent = `修复资料库健康检查（${reviewErrors} 个错误 / ${needsReview.length - reviewErrors} 个警告）`;
     setMode("chat");
     if (chatId) {
       send(prompt, undefined, { displayContent });
@@ -145,7 +191,7 @@ export function MaterialsLintPanel({
     pendingPromptRef.current = { prompt, displayContent };
     try {
       // workspace 绑定 vault：Agent 的文件工具直接作用于 .mona/materials/
-      const nextChatId = await client.newChat(5_000, false, vaultRoot);
+      const nextChatId = await client.newChat(5_000, true, vaultRoot);
       setChatId(nextChatId);
     } catch (err) {
       pendingPromptRef.current = null;
@@ -154,7 +200,38 @@ export function MaterialsLintPanel({
     } finally {
       setCreatingChat(false);
     }
-  }, [report, isStreaming, creatingChat, client, vaultRoot, chatId, send]);
+  }, [report, needsReview, isStreaming, creatingChat, client, vaultRoot, chatId, send]);
+
+  const submitAutoFixes = useCallback(async () => {
+    if (autoFixable.length === 0 || autoRepairing || autoSubmitted) return;
+    const sources = Array.from(
+      new Set(autoFixable.map((issue) => (issue.details.source as string).trim())),
+    );
+    setAutoRepairing(true);
+    setAutoProgress({ completed: 0, total: sources.length });
+    setAutoNotice(null);
+    let processed = 0;
+    let submitted = 0;
+    const failures: string[] = [];
+    try {
+      for (const source of sources) {
+        try {
+          await extractMaterialsText(source);
+          submitted += 1;
+        } catch {
+          failures.push(source);
+        }
+        processed += 1;
+        setAutoProgress({ completed: processed, total: sources.length });
+      }
+      setAutoSubmitted(true);
+      setAutoNotice(failures.length === 0
+        ? "已提交后台处理，请稍后重新检查"
+        : `已提交 ${submitted}/${sources.length} 个，${failures.length} 个提交失败；请稍后重新检查后重试`);
+    } finally {
+      setAutoRepairing(false);
+    }
+  }, [autoFixable, autoRepairing, autoSubmitted]);
 
   const sendDraft = useCallback(() => {
     const trimmed = draft.trim();
@@ -162,9 +239,6 @@ export function MaterialsLintPanel({
     setDraft("");
     send(trimmed);
   }, [chatId, draft, isStreaming, send]);
-
-  const issues = report?.issues ?? [];
-  const summary = report?.summary;
 
   return (
     <aside
@@ -189,7 +263,7 @@ export function MaterialsLintPanel({
           <ShieldCheck className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
         )}
         <span className="min-w-0 flex-1 truncate text-[12.5px] font-medium">
-          {mode === "chat" ? "Mona 修复中" : "质量检查"}
+          {mode === "chat" ? "Mona 修复中" : "资料库健康检查"}
         </span>
         {mode === "report" && summary ? (
           <span className="flex shrink-0 items-center gap-1 text-[11px] text-muted-foreground">
@@ -235,7 +309,7 @@ export function MaterialsLintPanel({
 
       {mode === "report" ? (
         <>
-          {/* 报告列表 */}
+          {/* 检查结果 */}
           <div className="min-h-0 flex-1 overflow-y-auto scrollbar-hover">
             {running && !report ? (
               <div className="flex items-center gap-1.5 p-3 text-[12px] text-muted-foreground">
@@ -251,51 +325,93 @@ export function MaterialsLintPanel({
               <div className="flex flex-col items-center gap-1.5 px-4 py-10 text-center">
                 <ShieldCheck className="h-5 w-5 text-muted-foreground" />
                 <p className="text-[12.5px] text-muted-foreground">
-                  未发现问题，资料库状态良好。
+                  {summary?.wikiPages === 0
+                    ? "还没有入库内容。请先上传资料并点击“全部入库”。"
+                    : "未发现问题，资料库状态良好。"}
                 </p>
               </div>
             ) : (
-              <ul className="py-1">
-                {issues.map((issue, index) => (
-                  <li key={`${issue.rule}:${issue.path}:${index}`}>
-                    <button
-                      type="button"
-                      onClick={() => onOpenIssue(issue)}
-                      className="flex w-full items-start gap-2 px-3 py-1.5 text-left hover:bg-accent"
-                    >
-                      {issue.severity === "error" ? (
-                        <AlertCircle className="mt-0.5 h-3.5 w-3.5 shrink-0 text-destructive" />
-                      ) : (
-                        <AlertTriangle className="mt-0.5 h-3.5 w-3.5 shrink-0 text-amber-500" />
-                      )}
-                      <span className="min-w-0 flex-1">
-                        <span className="flex items-center gap-1.5">
-                          <span className="rounded-full bg-muted px-1.5 py-0.5 text-[10px] font-medium text-muted-foreground">
-                            {issue.label}
-                          </span>
-                          <span className="min-w-0 truncate text-[11px] text-muted-foreground">
-                            {issue.path}
-                          </span>
-                        </span>
-                        <span className="mt-0.5 block break-words text-[12px] leading-5 text-foreground">
-                          {issue.message}
-                        </span>
-                      </span>
-                    </button>
-                  </li>
+              <>
+                {[
+                  { title: "可自动处理", items: autoFixable, empty: "暂无可自动处理的问题" },
+                  { title: "需 AI/人工确认", items: needsReview, empty: "暂无需确认的问题" },
+                ].map((group) => (
+                  <section key={group.title} className="border-b border-border/50 last:border-b-0">
+                    <div className="flex items-center justify-between px-3 py-2 text-[11px] font-medium text-foreground">
+                      <span>{group.title}</span>
+                      <span className="text-muted-foreground">{group.items.length}</span>
+                    </div>
+                    {group.items.length === 0 ? (
+                      <p className="px-3 pb-2 text-[11px] text-muted-foreground">{group.empty}</p>
+                    ) : (
+                      <ul className="pb-1">
+                        {group.items.map((issue, index) => (
+                          <li key={`${issue.rule}:${issue.path}:${index}`}>
+                            <button
+                              type="button"
+                              onClick={() => onOpenIssue(issue)}
+                              className="flex w-full items-start gap-2 px-3 py-1.5 text-left hover:bg-accent"
+                            >
+                              {issue.severity === "error" ? (
+                                <AlertCircle className="mt-0.5 h-3.5 w-3.5 shrink-0 text-destructive" />
+                              ) : (
+                                <AlertTriangle className="mt-0.5 h-3.5 w-3.5 shrink-0 text-amber-500" />
+                              )}
+                              <span className="min-w-0 flex-1">
+                                <span className="flex items-center gap-1.5">
+                                  <span className="rounded-full bg-muted px-1.5 py-0.5 text-[10px] font-medium text-muted-foreground">
+                                    {issue.label}
+                                  </span>
+                                  <span className="min-w-0 truncate text-[11px] text-muted-foreground">
+                                    {issue.path}
+                                  </span>
+                                </span>
+                                <span className="mt-0.5 block break-words text-[12px] leading-5 text-foreground">
+                                  {issue.message}
+                                </span>
+                              </span>
+                            </button>
+                          </li>
+                        ))}
+                      </ul>
+                    )}
+                  </section>
                 ))}
-              </ul>
+              </>
             )}
           </div>
 
-          {/* 底部：让 Mona 修复 */}
+          {/* 底部：自动处理与人工确认 */}
           <div className="shrink-0 border-t border-border/70 p-2.5">
+            {autoNotice ? (
+              <p className="mb-1.5 text-[11px] text-muted-foreground">{autoNotice}</p>
+            ) : null}
             {notice ? (
               <p className="mb-1.5 text-[11px] text-destructive">{notice}</p>
             ) : null}
             <Button
               type="button"
-              disabled={issues.length === 0 || running || creatingChat || isStreaming}
+              variant="outline"
+              disabled={autoFixable.length === 0 || running || autoRepairing || autoSubmitted}
+              onClick={() => void submitAutoFixes()}
+              className="mb-1.5 h-8 w-full rounded-md text-[13px]"
+            >
+              {autoRepairing ? (
+                <Loader2 className="mr-1.5 h-3.5 w-3.5 animate-spin" />
+              ) : (
+                <RotateCcw className="mr-1.5 h-3.5 w-3.5" />
+              )}
+              {autoRepairing
+                ? `正在提交后台处理（${autoProgress?.completed ?? 0}/${autoProgress?.total ?? autoFixable.length}）`
+                : autoSubmitted
+                  ? "已提交，请稍后重新检查"
+                  : autoFixable.length === 0
+                    ? "无需自动处理"
+                    : "处理全部可自动修复"}
+            </Button>
+            <Button
+              type="button"
+              disabled={needsReview.length === 0 || running || creatingChat || isStreaming || autoRepairing}
               onClick={() => void startFix()}
               className="h-8 w-full rounded-md text-[13px]"
             >
@@ -304,7 +420,7 @@ export function MaterialsLintPanel({
               ) : (
                 <Wand2 className="mr-1.5 h-3.5 w-3.5" />
               )}
-              让 Mona 修复
+              {needsReview.length === 0 ? "无需 AI/人工确认" : "让 Mona 修复"}
             </Button>
           </div>
         </>

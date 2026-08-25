@@ -207,7 +207,6 @@ function PaneLeafView({
   leaf,
   notes,
   notebooks,
-  isActive,
   editorMode,
   noteTitles,
   saveStatus,
@@ -248,11 +247,11 @@ function PaneLeafView({
 
   return (
     <div
-      className={cn("flex min-w-0 min-h-0 flex-col flex-1", isActive && "bg-background")}
+      className="flex min-w-0 min-h-0 flex-col flex-1 bg-editor-surface"
       onMouseDownCapture={onActivate}
     >
       <div className="flex shrink-0 items-stretch border-b border-border/55">
-        <div className="flex h-8 min-w-0 flex-1 items-stretch overflow-x-auto bg-background/50 scrollbar-thin">
+        <div className="flex h-8 min-w-0 flex-1 items-stretch overflow-x-auto bg-card scrollbar-thin">
           <NoteTabBar
             tabs={tabs}
             activeNoteId={leaf.graphOpen ? null : leaf.activeTabId}
@@ -271,9 +270,12 @@ function PaneLeafView({
               variant="ghost"
               title="关系图谱"
               aria-label="关系图谱"
-              className="group relative h-full w-[140px] shrink-0 justify-start gap-1.5 rounded-none border-r border-border/40 bg-background px-3 text-caption font-normal text-foreground hover:bg-background hover:text-foreground"
+              className="group relative h-full w-[140px] shrink-0 justify-start gap-1.5 rounded-none border-r border-border/40 bg-transparent px-3 text-caption font-normal text-foreground"
             >
-              <span className="absolute inset-x-0 top-0 h-[2px] bg-primary" />
+              <span
+                aria-hidden="true"
+                className="pointer-events-none absolute inset-x-0 bottom-0 h-0.5 bg-[hsl(var(--brand-red))]"
+              />
               <GitFork className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
               <span className="min-w-0 flex-1 truncate text-left">关系图谱</span>
               <span
@@ -283,7 +285,7 @@ function PaneLeafView({
                   e.stopPropagation();
                   onToggleGraph();
                 }}
-                className="grid h-4 w-4 shrink-0 place-items-center rounded hover:bg-accent"
+                className="grid h-4 w-4 shrink-0 place-items-center rounded hover:bg-foreground/[0.06]"
               >
                 <X className="h-3 w-3" />
               </span>
@@ -294,7 +296,7 @@ function PaneLeafView({
           <div className="flex shrink-0 items-center">{toolbarTrailing}</div>
         )}
       </div>
-      <div className="relative flex min-w-0 min-h-0 flex-1">
+      <div className="relative flex min-w-0 min-h-0 flex-1 bg-editor-surface">
         {leaf.graphOpen ? (
           <GraphViewDialog
             open={true}

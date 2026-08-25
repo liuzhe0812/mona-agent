@@ -219,7 +219,7 @@ export function DbAgentPanel({
 
   return (
     <aside
-      className="flex h-full shrink-0 flex-col border-l border-border/70 bg-background"
+      className="flex h-full shrink-0 flex-col border-l border-border/70 bg-card"
       style={{ width }}
     >
       <div className="flex h-10 shrink-0 items-center justify-between border-b border-border/65 px-3">
@@ -303,7 +303,7 @@ export function DbAgentPanel({
       </div>
 
       <div className="shrink-0 p-2">
-        <div className="flex min-h-[52px] items-end gap-1.5 rounded-xl border border-border/75 bg-background px-2.5 py-1.5 shadow-sm">
+        <div className="flex min-h-[52px] items-end gap-1.5 rounded-xl border border-border/75 bg-background px-2.5 py-1.5">
           <Textarea
             value={draft}
             onChange={(event) => setDraft(event.target.value)}

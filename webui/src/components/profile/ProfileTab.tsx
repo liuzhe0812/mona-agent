@@ -99,11 +99,11 @@ export function ProfileTab({
 
   return (
     <div className="mx-auto flex w-full max-w-7xl flex-col gap-3">
-      <Panel className="border-info/20 bg-info/[0.025] p-5">
+      <Panel className="border-border bg-card p-5">
         <div className="grid gap-5 lg:grid-cols-[1fr_220px]">
           <div className="flex min-w-0 items-center gap-4">
             <div
-              className="relative flex h-16 w-16 shrink-0 items-center justify-center rounded-xl border border-info/20 bg-info/[0.08] text-info"
+              className="relative flex h-16 w-16 shrink-0 items-center justify-center rounded-xl border border-border bg-muted text-foreground"
             >
               <UserRound className="h-8 w-8" />
               <span className="absolute right-2 top-2 h-3 w-3 rounded-full border-2 border-background bg-success-indicator" />
@@ -113,7 +113,7 @@ export function ProfileTab({
                 <h2 className="truncate text-title tracking-tight">
                   {identity.primary_role || "尚未确定角色"}
                 </h2>
-                <span className="rounded-full border border-info/25 bg-info/[0.07] px-2 py-0.5 text-caption font-medium text-info">
+                <span className="rounded-full border border-border bg-muted px-2 py-0.5 text-caption font-medium text-muted-foreground">
                   主角色
                 </span>
               </div>

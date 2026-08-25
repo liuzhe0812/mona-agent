@@ -3,6 +3,7 @@ import { fireEvent, render, screen, within } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
 
 import { ChatList, overlayScrollbarGeometry } from "./ChatList";
+import { SessionListPanel } from "./shell/SessionListPanel";
 
 describe("overlayScrollbarGeometry", () => {
   it("tracks a proportional overlay thumb and hides it without overflow", () => {
@@ -96,7 +97,51 @@ describe("ChatList context menu", () => {
     fireEvent.click(within(projects).getByRole("button", { name: "New chat in project" }));
     expect(onCreateTask).toHaveBeenCalledWith("D:\\work\\AlphaProject");
 
-    fireEvent.click(within(projects).getByRole("button", { name: "AlphaProject" }));
+    fireEvent.contextMenu(screen.getByRole("button", { name: "AlphaProject" }));
+    expect(screen.getByRole("menuitem", { name: "置顶" })).toBeInTheDocument();
+    expect(screen.getByRole("menuitem", { name: "重命名" })).toBeInTheDocument();
+    expect(screen.getByRole("menuitem", { name: "在资源管理器中打开" })).toBeInTheDocument();
+    expect(screen.getByRole("menuitem", { name: "归档项目" })).toBeInTheDocument();
+    expect(screen.getByRole("menuitem", { name: "移除项目" })).toBeInTheDocument();
+
+    fireEvent.keyDown(document, { key: "Escape" });
+    fireEvent.click(within(projects).getAllByLabelText("AlphaProject")[0]);
     expect(within(projects).queryByTitle("Project task")).not.toBeInTheDocument();
+  });
+});
+
+describe("SessionListPanel project actions", () => {
+  it("forwards project removal from the project menu", async () => {
+    const onRemoveProject = vi.fn();
+    render(createElement(SessionListPanel, {
+      sessions: [{
+        key: "websocket:lint-fix",
+        channel: "websocket",
+        chatId: "lint-fix",
+        createdAt: "2026-08-24T10:00:00Z",
+        updatedAt: "2026-08-24T10:00:00Z",
+        preview: "Fixing lint issues",
+        workspace: "D:\\notes\\mona_notes",
+      }],
+      activeKey: null,
+      loading: false,
+      onSelect: vi.fn(),
+      onRequestDelete: vi.fn(),
+      onTogglePin: vi.fn(),
+      onRequestRename: vi.fn(),
+      onToggleArchive: vi.fn(),
+      onMarkAllRead: vi.fn(),
+      onToggleArchived: vi.fn(),
+      onRemoveProject,
+      onNewChat: vi.fn(),
+      onStartDirect: vi.fn(),
+      onSelectAgent: vi.fn(),
+      onNewRoom: vi.fn(),
+    }));
+
+    fireEvent.contextMenu(screen.getByRole("button", { name: "mona_notes" }));
+    fireEvent.click(await screen.findByRole("menuitem", { name: "移除项目" }));
+
+    expect(onRemoveProject).toHaveBeenCalledWith("D:\\notes\\mona_notes");
   });
 });

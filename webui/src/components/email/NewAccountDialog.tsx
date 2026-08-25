@@ -30,6 +30,7 @@ const PRESETS: PresetConfig[] = [
   { label: "Gmail", imapHost: "imap.gmail.com", imapPort: 993, smtpHost: "smtp.gmail.com", smtpPort: 587 },
   { label: "Outlook", imapHost: "outlook.office365.com", imapPort: 993, smtpHost: "smtp.office365.com", smtpPort: 587 },
   { label: "QQ", imapHost: "imap.qq.com", imapPort: 993, smtpHost: "smtp.qq.com", smtpPort: 465 },
+  { label: "腾讯企业邮箱", imapHost: "imap.exmail.qq.com", imapPort: 993, smtpHost: "smtp.exmail.qq.com", smtpPort: 465 },
   { label: "163", imapHost: "imap.163.com", imapPort: 993, smtpHost: "smtp.163.com", smtpPort: 465 },
 ];
 
@@ -212,7 +213,6 @@ export function NewAccountDialog({
   return (
     <div
       className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 dark:bg-black/60 backdrop-blur-sm"
-      onClick={handleClose}
     >
       <div
         className="w-full max-w-[460px] rounded-2xl border border-border bg-background p-5 shadow-lg"
@@ -356,15 +356,6 @@ export function NewAccountDialog({
         </div>
 
         <div className="mt-5 flex justify-end gap-2">
-          <Button
-            type="button"
-            variant="outline"
-            size="sm"
-            className="h-8 px-3 text-caption"
-            onClick={handleClose}
-          >
-            取消
-          </Button>
           <Button
             type="button"
             variant="outline"

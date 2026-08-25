@@ -1,0 +1,12 @@
+{
+  "status": "ok",
+  "message": {
+    "DOI": "10.0000/synthetic.1",
+    "title": ["A Synthetic Study of Repeatable Toy Evaluation"],
+    "author": [{"given": "A.", "family": "Example"}],
+    "published": {"date-parts": [[2026, 1, 2]]},
+    "container-title": ["Synthetic Journal"],
+    "type": "journal-article",
+    "URL": "https://example.invalid/paper"
+  }
+}

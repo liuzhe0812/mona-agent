@@ -23,7 +23,7 @@ from typing import Any, Literal
 
 import yaml
 
-from mona.agent.partners import AgentRegistry, normalize_agent_id
+from mona.agent.partners import MONA_AGENT_ID, AgentDefinition, AgentRegistry, normalize_agent_id
 from mona.agent.skills import SkillsLoader
 from mona.agent.user_config import load_agent_user_config, save_agent_user_config
 from mona.config.paths import get_agent_memory_dir, get_agent_skills_dir, get_workspace_path
@@ -144,6 +144,61 @@ def agent_data_summary(agent_id: str) -> dict[str, Any]:
         "skillBytes": skill_bytes,
         "skillUpdatedAt": skill_updated,
     }
+
+
+def agent_tool_catalog(
+    definition: AgentDefinition,
+    *,
+    workspace: Path,
+    bus: Any = None,
+    subagent_manager: Any = None,
+    sessions: Any = None,
+) -> list[dict[str, Any]]:
+    """Return the current Agent's configurable tool ceiling and availability."""
+    from mona.agent.tools.context import ToolContext
+    from mona.agent.tools.loader import ToolLoader
+    from mona.agent.tools.registry import ToolRegistry
+    from mona.config.loader import load_config
+    from mona.providers.image_generation import image_gen_provider_configs
+    from mona.providers.video_generation import video_gen_provider_configs
+
+    config = load_config()
+    runtime_tools = ToolRegistry()
+    is_mona = definition.id == MONA_AGENT_ID
+    ToolLoader().load(
+        ToolContext(
+            config=config.tools,
+            workspace=str(workspace),
+            bus=bus,
+            subagent_manager=subagent_manager,
+            cron_service=getattr(subagent_manager, "cron_service", None),
+            sessions=sessions,
+            image_generation_provider_configs=image_gen_provider_configs(config),
+            video_generation_provider_configs=video_gen_provider_configs(config),
+            timezone=config.agents.defaults.timezone,
+            agent_id=definition.id,
+        ),
+        runtime_tools,
+        scope="core" if is_mona else "subagent",
+        tool_allowlist=None if is_mona else definition.tool_allowlist,
+    )
+    if is_mona:
+        configured = load_agent_user_config(definition.id).granted_tools or []
+        names = list(dict.fromkeys([*runtime_tools.tool_names, *configured]))
+    else:
+        names = list(definition.tool_allowlist)
+    rows: list[dict[str, Any]] = []
+    for name in names:
+        tool = runtime_tools.get(name)
+        rows.append(
+            {
+                "name": name,
+                "description": tool.description if tool else "当前运行配置下不可用",
+                "available": tool is not None,
+                "readOnly": tool.read_only if tool else None,
+            }
+        )
+    return rows
 
 
 def write_instruction(agent_id: str, key: str, content: str, *, message: str) -> dict[str, Any]:
@@ -617,6 +672,7 @@ __all__ = [
     "INSTRUCTION_FILES",
     "SkillManager",
     "agent_data_summary",
+    "agent_tool_catalog",
     "get_change_proposal",
     "instruction_history",
     "is_skill_script_enabled",

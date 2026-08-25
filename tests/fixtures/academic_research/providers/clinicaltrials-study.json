@@ -1,0 +1,17 @@
+{
+  "studies": [
+    {
+      "protocolSection": {
+        "identificationModule": {
+          "nctId": "NCT09999999",
+          "briefTitle": "Synthetic Observational Study"
+        },
+        "statusModule": {
+          "overallStatus": "NOT_YET_RECRUITING",
+          "studyFirstPostDateStruct": {"date": "2026-01-02"}
+        },
+        "designModule": {"studyType": "OBSERVATIONAL"}
+      }
+    }
+  ]
+}

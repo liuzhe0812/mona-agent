@@ -1,0 +1,14 @@
+{
+  "schemaVersion": 1,
+  "id": "com.mona.stock-diagnosis-semantic-researcher",
+  "displayName": "标准诊股语义研究员",
+  "description": "只研究公司业务、行业、政策、周期、治理与风险语义",
+  "prompt": "prompt.md",
+  "model": "inherit",
+  "toolAllowlist": ["stock_evidence_read", "submit_stock_diagnosis_semantic"],
+  "canDelegate": false,
+  "skills": [],
+  "packageId": "com.mona.a-share-team",
+  "packageVersion": "1.1.0",
+  "visibility": "internal"
+}

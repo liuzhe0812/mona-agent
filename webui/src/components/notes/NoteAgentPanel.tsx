@@ -381,7 +381,7 @@ export function NoteAgentPanel({
 
   return (
     <>
-    <aside className="flex h-full shrink-0 flex-col border-l border-border/70 bg-background" style={{ width }}>
+    <aside className="flex h-full shrink-0 flex-col border-l border-border/70 bg-card" style={{ width }}>
       <div className="flex h-12 shrink-0 items-center justify-between border-b border-border/65 px-3">
         <div className="flex min-w-0 items-center gap-2">
           <h2 className="truncate text-ui font-semibold text-foreground">Mona</h2>
@@ -399,7 +399,7 @@ export function NoteAgentPanel({
                 setMessages([]);
                 onClearChat?.();
               }}
-              className="h-7 w-7 rounded-lg p-0 text-muted-foreground hover:bg-accent hover:text-foreground"
+              className="h-7 w-7 rounded-lg p-0 text-muted-foreground hover:bg-foreground/[0.06] hover:text-foreground"
             >
               <RotateCcw className="h-3.5 w-3.5" />
             </Button>
@@ -441,7 +441,7 @@ export function NoteAgentPanel({
       </div>
 
       <div className="shrink-0 p-2">
-        <div className="flex min-h-[52px] items-end gap-1.5 rounded-xl border border-border/75 bg-background px-2.5 py-1.5 shadow-sm">
+        <div className="flex min-h-[52px] items-end gap-1.5 rounded-xl border border-border/75 bg-background px-2.5 py-1.5">
           <Textarea
             value={draft}
             onChange={(event) => setDraft(event.target.value)}
@@ -681,7 +681,7 @@ function QuickActionSection({
   onAction: (actionId: Exclude<NoteAiActionId, "freeform">) => void;
 }) {
   const btnClass =
-    "h-9 justify-start gap-2 rounded-lg border-border/70 px-2.5 text-left text-micro font-medium text-foreground/82 hover:bg-accent hover:text-foreground";
+    "h-9 justify-start gap-2 rounded-lg border-border/70 px-2.5 text-left text-micro font-medium text-foreground/82 hover:bg-foreground/[0.06] hover:text-foreground";
 
   return (
     <div className="shrink-0 border-b border-border/65 px-2.5 py-2.5">
@@ -740,7 +740,7 @@ function TransformationSection({
           type="button"
           variant="ghost"
           onClick={onManage}
-          className="h-8 w-full gap-1.5 rounded-lg border border-dashed border-border/70 text-micro font-normal text-muted-foreground hover:bg-accent hover:text-foreground"
+          className="h-8 w-full gap-1.5 rounded-lg border border-dashed border-border/70 text-micro font-normal text-muted-foreground hover:bg-foreground/[0.06] hover:text-foreground"
         >
           <Wand2 className="h-3.5 w-3.5" />
           <span>自定义 AI 模板</span>
@@ -761,7 +761,7 @@ function TransformationSection({
           onClick={onManage}
           aria-label="管理模板"
           title="管理模板"
-          className="h-5 w-5 rounded-md p-0 text-muted-foreground hover:bg-accent hover:text-foreground"
+          className="h-5 w-5 rounded-md p-0 text-muted-foreground hover:bg-foreground/[0.06] hover:text-foreground"
         >
           <Settings2 className="h-3 w-3" />
         </Button>
@@ -775,7 +775,7 @@ function TransformationSection({
             disabled={disabled}
             onClick={() => onRun(transformation)}
             title={transformation.description || transformation.name}
-            className="h-8 justify-start gap-2 rounded-lg border-border/70 px-2.5 text-left text-micro font-medium text-foreground/82 hover:bg-accent hover:text-foreground"
+            className="h-8 justify-start gap-2 rounded-lg border-border/70 px-2.5 text-left text-micro font-medium text-foreground/82 hover:bg-foreground/[0.06] hover:text-foreground"
           >
             <Wand2 className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
             <span className="min-w-0 truncate">{transformation.name}</span>
@@ -836,7 +836,7 @@ function TransformationManagerDialog({
               {transformations.map((transformation) => (
                 <li
                   key={transformation.id}
-                  className="group flex items-start gap-2 px-3 py-2 hover:bg-accent"
+                  className="group flex items-start gap-2 px-3 py-2 hover:bg-foreground/[0.06]"
                 >
                   <div className="min-w-0 flex-1">
                     <div className="flex items-center gap-2">
@@ -857,7 +857,7 @@ function TransformationManagerDialog({
                       variant="ghost"
                       aria-label="编辑"
                       onClick={() => onEdit(transformation)}
-                      className="h-6 w-6 rounded-md p-0 text-muted-foreground hover:bg-accent hover:text-foreground"
+                      className="h-6 w-6 rounded-md p-0 text-muted-foreground hover:bg-foreground/[0.06] hover:text-foreground"
                     >
                       <Pencil className="h-3 w-3" />
                     </Button>
@@ -959,7 +959,7 @@ function TransformationEditorDialog({
                   variant="outline"
                   onClick={() => insertVariable(variable.token)}
                   title={variable.description}
-                  className="h-auto rounded-md border-border/60 bg-muted/30 px-1.5 py-0.5 text-micro font-normal text-muted-foreground hover:bg-accent hover:text-foreground"
+                  className="h-auto rounded-md border-border/60 bg-muted/30 px-1.5 py-0.5 text-micro font-normal text-muted-foreground hover:bg-foreground/[0.06] hover:text-foreground"
                 >
                   {variable.label}
                 </Button>
@@ -1116,7 +1116,7 @@ function MiniAction({
       variant="outline"
       disabled={disabled}
       onClick={onClick}
-      className="h-7 gap-1 rounded-md border-border/70 bg-muted/25 px-2 text-micro font-medium text-muted-foreground hover:bg-accent hover:text-foreground disabled:opacity-55"
+      className="h-7 gap-1 rounded-md border-border/70 bg-muted/25 px-2 text-micro font-medium text-muted-foreground hover:bg-foreground/[0.06] hover:text-foreground disabled:opacity-55"
     >
       {children}
       {label}

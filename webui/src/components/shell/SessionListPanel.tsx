@@ -34,6 +34,9 @@ interface SessionListPanelProps {
   onToggleArchived: () => void;
   onRemoveProject?: (workspace: string) => void;
   onCreateTask?: (workspace: string) => void;
+  projectNames?: Record<string, string>;
+  onRequestProjectRename?: (workspace: string, label: string) => void;
+  onOpenProjectFolder?: (workspace: string) => void;
   onNewChat: () => void;
   /** 直接发起与指定 agent 的私聊。 */
   onStartDirect: (agentId: string) => void;
@@ -111,6 +114,10 @@ export function SessionListPanel(props: SessionListPanelProps) {
           onStartDirect={props.onStartDirect}
           onNewRoom={props.onNewRoom}
           onCreateTask={props.onCreateTask}
+          onRemoveProject={props.onRemoveProject}
+          projectNames={props.projectNames}
+          onRequestProjectRename={props.onRequestProjectRename}
+          onOpenProjectFolder={props.onOpenProjectFolder}
           searchMode={hasQuery}
         />
       </div>

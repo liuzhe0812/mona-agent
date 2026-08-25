@@ -1,0 +1,18 @@
+{
+  "version": "6.9",
+  "hitCount": 1,
+  "resultList": {
+    "result": [
+      {
+        "id": "99999999",
+        "pmid": "99999999",
+        "title": "A Synthetic Biomedical Record",
+        "authorString": "Example A",
+        "journalTitle": "Synthetic Medicine",
+        "pubYear": "2026",
+        "abstractText": "Synthetic abstract for offline testing.",
+        "doi": "10.0000/synthetic.biomed"
+      }
+    ]
+  }
+}

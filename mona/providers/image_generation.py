@@ -808,6 +808,9 @@ _OPENAI_GPT_IMAGE_ASPECT_RATIO_SIZES = {
     "3:4": "1024x1536",
     "4:3": "1536x1024",
 }
+_AGNES_IMAGE_ASPECT_RATIO_SIZES = {
+    "3:4": "768x1024",
+}
 
 
 class OpenAIImageGenerationClient(ImageGenerationProvider):
@@ -1150,6 +1153,8 @@ def _openai_is_gpt_image_model(model: str) -> bool:
 
 def _openai_size_options(model: str) -> tuple[dict[str, str], set[str] | None]:
     normalized = model.lower()
+    if normalized.startswith("agnes-image-"):
+        return _AGNES_IMAGE_ASPECT_RATIO_SIZES, None
     if normalized.startswith("dall-e-2"):
         return _OPENAI_DALLE2_ASPECT_RATIO_SIZES, _OPENAI_DALLE2_SUPPORTED_SIZES
     if normalized.startswith("dall-e-3"):

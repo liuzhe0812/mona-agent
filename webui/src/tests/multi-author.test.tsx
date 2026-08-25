@@ -5,6 +5,7 @@ import {
   ConversationAvatar,
   fallbackAgentName,
 } from "@/components/room/AgentAvatar";
+import { AgentLogo } from "@/components/AgentLogo";
 import { ThreadMessages } from "@/components/thread/ThreadMessages";
 import type { ConversationMeta, UIMessage } from "@/lib/types";
 
@@ -15,6 +16,27 @@ describe("fallbackAgentName", () => {
 
   it("keeps the Mona brand name", () => {
     expect(fallbackAgentName("mona")).toBe("Mona");
+  });
+});
+
+describe("AgentLogo", () => {
+  it("uses the raster Mona mark and keeps state on the outer wrapper", () => {
+    const { container } = render(<AgentLogo state="working" />);
+    const logo = container.querySelector(".mona-agent-logo");
+
+    expect(logo?.className).toContain("mona-agent-logo--working");
+    expect(logo?.querySelector('img[src="/brand/mona_app_icon.png"]')).toBeTruthy();
+    expect(logo?.querySelector("svg")).toBeNull();
+    expect(logo?.querySelector("style")?.textContent).toContain("prefers-reduced-motion");
+  });
+
+  it("keeps the compact avatar variant on the same raster identity", () => {
+    const { container } = render(<AgentLogo state="idle" variant="avatar" />);
+
+    expect(container.querySelector('img[src="/brand/mona_avatar_white.png"]')).toBeTruthy();
+    expect(container.querySelector("style")?.textContent).not.toContain(
+      "mona-agent-logo--welcome",
+    );
   });
 });
 

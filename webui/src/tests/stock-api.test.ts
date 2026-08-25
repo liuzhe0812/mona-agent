@@ -10,8 +10,14 @@ import {
   createStockMaterialBinding,
   confirmStockMaterialBinding,
   fetchStockOutcomes,
+  fetchStockDecisionConditions,
   fetchStockQuotes,
   fetchStockResearchContext,
+  fetchStockDiagnoses,
+  fetchStockDiagnosis,
+  createStockDiagnosis,
+  cancelStockDiagnosis,
+  retryStockDiagnosis,
   fetchStockScreenHistory,
   fetchStockScreenOutcomes,
   fetchStockScreenResult,
@@ -22,8 +28,14 @@ import {
   saveStockScreenStrategy,
   fetchStockReport,
   fetchStockReports,
+  fetchStockPortfolioContext,
+  fetchStockRiskProfile,
   fetchStockWatchlist,
   importStockWatchlist,
+  isStockReportV5Document,
+  isStockReportV5Projection,
+  isStockReportV6Document,
+  isStockReportV6Projection,
   isStockViewPoint,
   openStockIntradayStream,
   removeStockWatchlist,
@@ -31,10 +43,16 @@ import {
   refreshStockScreenOutcomes,
   searchStocks,
   setStockWatchlistFocus,
+  saveStockPortfolioContext,
+  saveStockRiskProfile,
+  deleteStockPortfolioContext,
+  deleteStockRiskProfile,
   STOCK_ROOM_CHAT_ID,
+  STOCK_DIAGNOSIS_ROOM_CHAT_ID,
   StockApiError,
   stockClaimText,
 } from "@/lib/stock-api";
+import type { StockHorizonCondition, StockReportV4Document } from "@/lib/stock-api";
 
 const httpFetch = vi.fn();
 const resetServicesHttpBase = vi.fn();
@@ -73,6 +91,146 @@ beforeEach(() => {
 });
 
 describe("stock-api services routes", () => {
+  it("keeps standard diagnosis routes and the single-agent room separate from deep research", async () => {
+    expect(STOCK_DIAGNOSIS_ROOM_CHAT_ID).toBe("stock_ai_diagnosis");
+    expect(STOCK_ROOM_CHAT_ID).toBe("stock_research");
+    const run = { diagnosisId: "diagnosis_12345678", workflowId: "stock-ai-diagnosis", status: "succeeded", report: { schema_version: 1, kind: "ai_diagnosis" } };
+    httpFetch
+      .mockResolvedValueOnce(jsonResponse({ items: [run] }))
+      .mockResolvedValueOnce(jsonResponse(run))
+      .mockResolvedValueOnce(jsonResponse(run))
+      .mockResolvedValueOnce(jsonResponse(run))
+      .mockResolvedValueOnce(jsonResponse(run));
+    await expect(fetchStockDiagnoses("XSHG:600519")).resolves.toEqual([run]);
+    await expect(fetchStockDiagnosis(run.diagnosisId)).resolves.toEqual(run);
+    await createStockDiagnosis("XSHG:600519", { execute: false });
+    await cancelStockDiagnosis(run.diagnosisId);
+    await retryStockDiagnosis(run.diagnosisId);
+    expect(httpFetch).toHaveBeenNthCalledWith(1, "http://services/api/stock/diagnosis?instrumentId=XSHG%3A600519", expect.objectContaining({ method: "GET" }));
+    expect(httpFetch).toHaveBeenNthCalledWith(3, "http://services/api/stock/diagnosis", expect.objectContaining({ method: "POST", body: expect.stringContaining('"execute":false') }));
+    expect(httpFetch).toHaveBeenNthCalledWith(4, "http://services/api/stock/diagnosis/diagnosis_12345678/cancel", expect.objectContaining({ method: "POST" }));
+    expect(httpFetch).toHaveBeenNthCalledWith(5, "http://services/api/stock/diagnosis/diagnosis_12345678/retry", expect.objectContaining({ method: "POST" }));
+  });
+
+  it("reads and saves the local risk profile through the real endpoints", async () => {
+    const profileResponse = {
+      profile: {
+        profile_name: "conservative_default",
+        configured: true,
+        risk_level: "balanced",
+        max_drawdown_tolerance_pct: 10,
+        total_funds_range: "100k_500k",
+        risk_budget_pct: 1,
+        max_single_position_pct: 20,
+        max_industry_exposure_pct: 30,
+        max_correlated_exposure_pct: 50,
+      },
+      configured: true,
+    };
+    httpFetch
+      .mockResolvedValueOnce(jsonResponse(profileResponse))
+      .mockResolvedValueOnce(jsonResponse(profileResponse))
+      .mockResolvedValueOnce(jsonResponse({ ...profileResponse, configured: false }));
+
+    const loaded = await fetchStockRiskProfile();
+    expect(loaded.profile.risk_level).toBe("balanced");
+    expect(httpFetch).toHaveBeenLastCalledWith("http://services/api/stock/risk-profile", expect.objectContaining({ method: "GET" }));
+    await saveStockRiskProfile({
+      risk_level: "balanced",
+      max_drawdown_tolerance_pct: 10,
+      total_funds_range: "100k_500k",
+      risk_budget_pct: 1,
+      max_single_position_pct: 20,
+      max_industry_exposure_pct: 30,
+      max_correlated_exposure_pct: 50,
+    });
+    expect(httpFetch).toHaveBeenLastCalledWith("http://services/api/stock/risk-profile", expect.objectContaining({ method: "PUT", body: expect.stringContaining('"risk_level":"balanced"') }));
+    await deleteStockRiskProfile();
+    expect(httpFetch).toHaveBeenLastCalledWith("http://services/api/stock/risk-profile", expect.objectContaining({ method: "DELETE" }));
+  });
+
+  it("reads, saves and deletes the instrument portfolio context with an encoded id", async () => {
+    const contextResponse = {
+      instrumentId: "XSHE:002709",
+      context: {
+        holding_state: "holding",
+        position_input_mode: "assets_shares",
+        holding_quantity: 100,
+        portfolio_value_yuan: 3520,
+        current_position_pct: 10,
+        industry_exposure_pct: 5,
+        correlated_exposure_pct: 2,
+        today_bought_quantity: 100,
+        holding_cost: 35.2,
+      },
+      configured: true,
+    };
+    httpFetch
+      .mockResolvedValueOnce(jsonResponse(contextResponse))
+      .mockResolvedValueOnce(jsonResponse(contextResponse))
+      .mockResolvedValueOnce(jsonResponse(contextResponse));
+    const id = "XSHE:002709";
+    const loaded = await fetchStockPortfolioContext(id);
+    expect(loaded.context.today_bought_quantity).toBe(100);
+    expect(loaded.context.position_input_mode).toBe("assets_shares");
+    expect(loaded.context.holding_quantity).toBe(100);
+    expect(loaded.context.portfolio_value_yuan).toBe(3520);
+    expect(httpFetch).toHaveBeenLastCalledWith("http://services/api/stock/portfolio-context?instrumentId=XSHE%3A002709", expect.objectContaining({ method: "GET" }));
+    await saveStockPortfolioContext(id, contextResponse.context);
+    expect(httpFetch).toHaveBeenLastCalledWith("http://services/api/stock/portfolio-context?instrumentId=XSHE%3A002709", expect.objectContaining({ method: "PUT", body: expect.stringContaining('"position_input_mode":"assets_shares"') }));
+    await deleteStockPortfolioContext(id);
+    expect(httpFetch).toHaveBeenLastCalledWith("http://services/api/stock/portfolio-context?instrumentId=XSHE%3A002709", expect.objectContaining({ method: "DELETE" }));
+  });
+
+  it("fetches decision-condition evaluation with a safe camelCase shape", async () => {
+    httpFetch.mockResolvedValue(jsonResponse({
+      reportId: "report-4",
+      evaluatedAt: "2026-08-22T10:00:00+08:00",
+      methodVersion: "decision-conditions-v1",
+      horizons: {
+        mediumTerm: {
+          conditions: [{
+            group: "participation",
+            groupLabel: "参与条件",
+            text: "收盘价高于20日均线",
+            sourceIds: ["source-1"],
+            status: "matched",
+            statusLabel: "已满足",
+            evaluatedAt: "2026-08-22T10:00:00+08:00",
+            methodVersion: "decision-conditions-v1",
+            reason: "当前数据已满足条件",
+            internal_field: "must-not-leak",
+          }],
+          riskReward: { status: "matched", statusLabel: "已满足", ratio: 1.8 },
+        },
+        unknownHorizon: { conditions: [{ text: "内部字段不应出现" }] },
+      },
+    }));
+
+    const evaluation = await fetchStockDecisionConditions("token-1", "report-4");
+    expect(httpFetch).toHaveBeenCalledWith(
+      "http://services/api/stock/decision-conditions?reportId=report-4",
+      expect.objectContaining({ method: "GET" }),
+    );
+    expect(evaluation.horizons.mediumTerm?.conditions[0]).toMatchObject({
+      group: "participation",
+      text: "收盘价高于20日均线",
+      status: "matched",
+      statusLabel: "已满足",
+    });
+    expect(evaluation.horizons.unknownHorizon).toBeUndefined();
+    expect(JSON.stringify(evaluation)).not.toContain("must-not-leak");
+  });
+
+  it("surfaces decision-condition API errors", async () => {
+    httpFetch.mockResolvedValue(jsonResponse({ error: { code: "report_not_found", message: "投研报告不存在" } }, false, 404));
+
+    await expect(fetchStockDecisionConditions("token-1", "missing-report")).rejects.toMatchObject({
+      code: "report_not_found",
+      status: 404,
+    });
+  });
+
   it("fetches the watchlist via GET /api/stock/watchlist", async () => {
     httpFetch.mockResolvedValue(
       jsonResponse({
@@ -543,6 +701,233 @@ describe("stock-api services routes", () => {
 });
 
 describe("stock-api report routes (WS port, bearer token)", () => {
+  it("guards the public V6 detail and list contracts", () => {
+    const horizon = (direction: "positive" | "neutral" | "negative" | "avoid", action: "wait" | "avoid") => ({
+      direction,
+      action,
+      thesis: "结构化研究结论",
+      keyReasons: ["研究理由"],
+      keyRisks: ["研究风险"],
+      researchStatus: "ready" as const,
+      tradeStatus: "unavailable" as const,
+      materializedPlan: null,
+    });
+    const detail = {
+      schemaVersion: 6,
+      resultStatus: "completed",
+      reportId: "report-v6",
+      runId: "run-v6",
+      kind: "deep_research",
+      instrument: { instrumentId: "XSHE:002709", symbol: "002709", exchange: "XSHE", name: "天赐材料", instrumentType: "equity" },
+      decisionMode: "research_only",
+      researchStatus: "ready",
+      tradeStatus: "unavailable",
+      summary: "三周期研究结论",
+      researchCutoffAt: "2026-08-21T15:00:00+08:00",
+      marketAsOf: "2026-08-21T15:00:00+08:00",
+      generatedAt: "2026-08-21T15:05:00+08:00",
+      horizonDecisions: {
+        shortTerm: horizon("positive", "wait"),
+        mediumTerm: horizon("neutral", "wait"),
+        longTerm: horizon("avoid", "avoid"),
+      },
+    };
+    const projection = {
+      schemaVersion: 6,
+      resultStatus: "completed",
+      decisionMode: "research_only",
+      researchStatus: "ready",
+      tradeStatus: "unavailable",
+      horizonDecisions: {
+        shortTerm: { direction: "positive", action: "wait", researchStatus: "ready", tradeStatus: "unavailable" },
+        mediumTerm: { direction: "neutral", action: "wait", researchStatus: "ready", tradeStatus: "unavailable" },
+        longTerm: { direction: "avoid", action: "avoid", researchStatus: "ready", tradeStatus: "unavailable" },
+      },
+      researchCutoffAt: detail.researchCutoffAt,
+      marketAsOf: detail.marketAsOf,
+      stance: null,
+      dataQuality: null,
+    };
+    expect(isStockReportV6Document(detail)).toBe(true);
+    expect(isStockReportV6Projection(projection)).toBe(true);
+    expect(isStockReportV6Document({ ...detail, decisionMode: "bad" })).toBe(false);
+    expect(isStockReportV6Projection({ ...projection, horizonDecisions: { ...projection.horizonDecisions, shortTerm: { ...projection.horizonDecisions.shortTerm, direction: "bullish" } } })).toBe(false);
+  });
+
+  const v5Horizon = (direction: "positive" | "neutral" | "negative", action: "conditional_participation" | "wait" | "hold" | "reduce", expired = false) => ({
+    direction,
+    action,
+    thesis: "确定性交易计划",
+    notHoldingAction: action === "conditional_participation" ? "participate" : "wait",
+    holdingAction: action === "hold" ? "hold" : "reduce",
+    tradingPlan: {
+      referenceBuyLow: 36.8,
+      referenceBuyHigh: 37.2,
+      pullbackBuyLow: 35.8,
+      pullbackBuyHigh: 36.2,
+      stopLoss: 35.2,
+      firstTakeProfit: 39.8,
+      firstReduceFraction: 0.33,
+      secondTakeProfit: 41.2,
+      secondReduceFraction: 0.33,
+      riskRewardFirst: 3.5,
+      riskRewardSecond: 5.5,
+      currency: "元",
+    },
+    positionPlan: { riskBudgetPct: 1, initialPositionPct: 10, maxPositionPct: 20, stopDistancePct: 4 },
+    validUntil: "2026-09-01T15:00:00+08:00",
+    reviewTrigger: "跌破止损参考后重新评估",
+    keyReasons: ["趋势保持完整"],
+    keyRisks: ["行业需求变化"],
+    evidenceStrength: "strong",
+    marketAsOf: "2026-08-21T15:00:00+08:00",
+    generatedAt: "2026-08-21T15:05:00+08:00",
+    isExpired: expired,
+  });
+  const v5Detail = {
+    schemaVersion: 5,
+    resultStatus: "completed",
+    reportId: "report-v5",
+    runId: "run-v5",
+    kind: "deep_research",
+    instrument: { instrumentId: "XSHE:000001", symbol: "000001", exchange: "XSHE", name: "平安银行", instrumentType: "equity" },
+    summary: "三周期交易计划",
+    researchCutoffAt: "2026-08-21T15:00:00+08:00",
+    marketAsOf: "2026-08-21T15:00:00+08:00",
+    generatedAt: "2026-08-21T15:05:00+08:00",
+    isExpired: false,
+    hasExpiredHorizon: false,
+    horizonDecisions: {
+      shortTerm: v5Horizon("positive", "conditional_participation"),
+      mediumTerm: v5Horizon("neutral", "wait"),
+      longTerm: v5Horizon("negative", "reduce"),
+    },
+  };
+
+  it("parses the public V5 camelCase projection and detail without decisionPlan", async () => {
+    const projection = {
+      reportId: "report-v5",
+      runId: "run-v5",
+      kind: "deep_research" as const,
+      instrument: v5Detail.instrument,
+      symbols: ["XSHE:000001"],
+      asOf: v5Detail.marketAsOf,
+      modifiedAt: "2026-08-21T15:05:00+08:00",
+      schemaVersion: 5 as const,
+      resultStatus: "completed" as const,
+      horizonDecisions: {
+        shortTerm: { direction: "positive" as const, action: "conditional_participation" as const, validUntil: "2026-09-01T15:00:00+08:00", isExpired: false },
+        mediumTerm: { direction: "neutral" as const, action: "wait" as const, validUntil: "2026-10-01T15:00:00+08:00", isExpired: false },
+        longTerm: { direction: "negative" as const, action: "reduce" as const, validUntil: "2027-01-01T15:00:00+08:00", isExpired: false },
+      },
+      researchCutoffAt: v5Detail.researchCutoffAt,
+      marketAsOf: v5Detail.marketAsOf,
+      generatedAt: v5Detail.generatedAt,
+      isExpired: false,
+      hasExpiredHorizon: false,
+      stance: null,
+      dataQuality: null,
+    };
+    expect(isStockReportV5Projection(projection)).toBe(true);
+    expect(isStockReportV5Projection({ ...projection, horizonDecisions: undefined })).toBe(false);
+    expect(isStockReportV5Projection({
+      ...projection,
+      horizonDecisions: { ...projection.horizonDecisions, shortTerm: { ...projection.horizonDecisions.shortTerm, direction: "bullish" } },
+    })).toBe(false);
+    expect(isStockReportV5Document({
+      ...v5Detail,
+      horizonDecisions: {
+        ...v5Detail.horizonDecisions,
+        shortTerm: { ...v5Detail.horizonDecisions.shortTerm, tradingPlan: { ...v5Detail.horizonDecisions.shortTerm.tradingPlan, referenceBuyLow: Number.NaN } },
+      },
+    })).toBe(false);
+    expect(isStockReportV5Document({
+      ...v5Detail,
+      horizonDecisions: {
+        ...v5Detail.horizonDecisions,
+        mediumTerm: { ...v5Detail.horizonDecisions.mediumTerm, action: "bullish" },
+      },
+    })).toBe(false);
+    expect(isStockReportV5Document({
+      ...v5Detail,
+      horizonDecisions: {
+        ...v5Detail.horizonDecisions,
+        longTerm: { ...v5Detail.horizonDecisions.longTerm, action: "hold", holdingAction: "hold" },
+      },
+    })).toBe(false);
+    expect(isStockReportV5Document({
+      ...v5Detail,
+      horizonDecisions: {
+        ...v5Detail.horizonDecisions,
+        longTerm: { ...v5Detail.horizonDecisions.longTerm, tradingPlan: { ...v5Detail.horizonDecisions.longTerm.tradingPlan, currency: "CNY" } },
+      },
+    })).toBe(false);
+    httpFetch
+      .mockResolvedValueOnce(jsonResponse({ reports: [projection] }))
+      .mockResolvedValueOnce(jsonResponse({ report: v5Detail, markdown: "# V5" }))
+      .mockResolvedValueOnce(jsonResponse({ items: [{ instrumentId: "XSHE:000001", name: "平安银行", instrumentType: "equity", focus: true, latest: projection }] }));
+
+    const [listed] = await fetchStockReports("tok");
+    expect(listed.schemaVersion).toBe(5);
+    if (listed.schemaVersion === 5) {
+      expect(listed.horizonDecisions.shortTerm.action).toBe("conditional_participation");
+      expect(listed.horizonDecisions.longTerm.direction).toBe("negative");
+    }
+    const detail = await fetchStockReport("tok", "report-v5");
+    expect(isStockReportV5Document(detail.report)).toBe(true);
+    if (isStockReportV5Document(detail.report)) {
+      expect(detail.report.horizonDecisions.shortTerm.tradingPlan.referenceBuyLow).toBe(36.8);
+      expect(detail.report.horizonDecisions.mediumTerm.positionPlan.maxPositionPct).toBe(20);
+      expect((detail.report as Record<string, unknown>).decisionPlan).toBeUndefined();
+    }
+    const [dashboard] = await fetchStockDashboard("tok");
+    expect(dashboard.latest?.schemaVersion).toBe(5);
+  });
+
+  it("keeps optional P6 horizon condition fields and legacy omissions", async () => {
+    const legacyCondition: StockHorizonCondition = {
+      kind: "manual",
+      text: "观察条件",
+      source_ids: ["src-legacy-condition"],
+    };
+    const stopCondition: StockHorizonCondition = {
+      kind: "trigger",
+      text: "跌破止损参考",
+      claim_type: "fact",
+      observed_metric_ref: "quote.close",
+      operator: "lte",
+      threshold_metric_ref: "valuation.stop_loss_reference",
+      source_ids: ["src-stop"],
+    };
+    const takeCondition: StockHorizonCondition = {
+      kind: "manual",
+      text: "达到止盈参考",
+      claim_type: "inference",
+      source_ids: ["src-take"],
+    };
+    httpFetch.mockResolvedValueOnce(jsonResponse({
+      report: {
+        schema_version: 4,
+        horizon_views: {
+          short_term: {
+            participation_conditions: [legacyCondition],
+            stop_loss_conditions: [stopCondition],
+            take_profit_conditions: [takeCondition],
+          },
+        },
+      },
+      markdown: "",
+    }));
+
+    const result = await fetchStockReport("tok", "report-p6");
+    if (result.report.schema_version === 4) {
+      expect(result.report.horizon_views.short_term.participation_conditions[0].claim_type).toBeUndefined();
+      expect(result.report.horizon_views.short_term.stop_loss_conditions?.[0]).toEqual(stopCondition);
+      expect(result.report.horizon_views.short_term.take_profit_conditions?.[0]).toEqual(takeCondition);
+      expect(result.report.horizon_views.medium_term).toBeUndefined();
+    }
+  });
+
   it("lists reports with the bearer token", async () => {
     httpFetch.mockResolvedValue(jsonResponse({ reports: [] }));
     await fetchStockReports("tok");
@@ -599,6 +984,40 @@ describe("stock-api report routes (WS port, bearer token)", () => {
       stance: null,
       dataQuality: null,
     };
+    const quantValidation: NonNullable<StockReportV4Document["quant_validation"]> = {
+      selection_run_id: "run_selection",
+      report_id: "stock_report_v4",
+      strategy_id: "quality_growth",
+      as_of: "2026-08-18T15:00:00+08:00",
+      factor_algorithm_version: "screening-factor-v1",
+      rank_algorithm_version: "percentile-rank-v1",
+      validation_status: "uncalibrated",
+      quant_signal: "insufficient_data",
+      horizons: {
+        short_term: {
+          status: "uncalibrated",
+          signal: "insufficient_data",
+          factor_observations: [{
+            field: "momentum20",
+            raw_value: 4.2,
+            percentile_or_rank: 0.8,
+            direction: "desc",
+            scope: "market",
+            sample_count: 100,
+            missing_count: 0,
+            as_of: "2026-08-18T15:00:00+08:00",
+            source_ids: ["src-v4"],
+            method_version: "percentile-rank-v1",
+            validation_status: "uncalibrated",
+          }],
+        },
+        medium_term: { status: "insufficient_data", signal: "insufficient_data", factor_observations: [] },
+        long_term: { status: "insufficient_data", signal: "insufficient_data", factor_observations: [] },
+      },
+      source_ids: ["src-v4"],
+      snapshot_hash: "sha256:quant-v4",
+      reason: "量化因子尚未经过历史校准",
+    };
     const rawV4 = {
       schema_version: 4,
       report_id: "stock_report_v4",
@@ -622,6 +1041,7 @@ describe("stock-api report routes (WS port, bearer token)", () => {
         selection_as_of: "2026-08-18T15:00:00+08:00",
         usage_note: "这是选股阶段的先验线索，不是深度投研事实；必须使用本次投研证据重新核验。",
       },
+      quant_validation: quantValidation,
       research_cutoff_at: projection.researchCutoffAt,
       market_as_of: projection.marketAsOf,
       horizon_views: { short_term: { stance: "positive", status: "available" } },
@@ -719,12 +1139,24 @@ describe("stock-api report routes (WS port, bearer token)", () => {
       expect(detail.report.sources?.[0].period_end).toBe("2026-06-30");
       expect(detail.report.dimension_views?.market_environment.market_breadth?.turnover_amount).toBe(123456789);
       expect(detail.report.dimension_views?.capital_positioning.public_activity?.disclosure_signals?.[0].event_type).toBe("share_unlock");
+      expect(detail.report.quant_validation?.validation_status).toBe("uncalibrated");
+      expect(detail.report.quant_validation?.quant_signal).toBe("insufficient_data");
+      expect(detail.report.quant_validation?.horizons.short_term.factor_observations[0].field).toBe("momentum20");
+      expect(detail.report.quant_validation?.snapshot_hash).toBe("sha256:quant-v4");
     }
 
     const [dashboard] = await fetchStockDashboard("tok");
     expect(dashboard.latest?.schemaVersion).toBe(4);
     expect(dashboard.latest?.stance).toBeNull();
     expect(dashboard.latest?.dataQuality).toBeNull();
+
+    const { quant_validation: _quantValidation, ...legacyV4 } = rawV4;
+    httpFetch.mockResolvedValueOnce(jsonResponse({ report: legacyV4, markdown: "# old V4" }));
+    const oldDetail = await fetchStockReport("tok", "stock_report_v4_old");
+    expect(oldDetail.report.schema_version).toBe(4);
+    if (oldDetail.report.schema_version === 4) {
+      expect(oldDetail.report.quant_validation).toBeUndefined();
+    }
   });
 
   it("guards and renders V3 string versus V4 structured claims without conversion", () => {
@@ -833,6 +1265,55 @@ describe("stock-api opportunity discovery routes", () => {
       missing_fields: [],
     });
     expect((valuation as Record<string, unknown>).valuationContext).toBeUndefined();
+  });
+
+  it("normalizes quantitative snapshot and three-horizon observation aliases", async () => {
+    httpFetch.mockResolvedValueOnce(jsonResponse({
+      reportId: "report_quant",
+      workflowRunId: "run_quant",
+      strategy: { strategyId: "quality_growth", name: "业绩成长", source: "builtin" },
+      quantSnapshot: {
+        schemaVersion: 1,
+        asOf: "2026-08-19T15:00:00+08:00",
+        validationStatus: "uncalibrated",
+        universe: { enrichedCount: 4, unprocessedAfterCap: 2 },
+        dataQuality: { pointInTime: { status: "verified" } },
+      },
+      candidates: [{
+        instrumentId: "XSHG:600519",
+        name: "贵州茅台",
+        selectionReasons: [],
+        riskFlags: [],
+        dataQuality: "available",
+        quantValidation: {
+          validationStatus: "uncalibrated",
+          quantSignal: "insufficient_data",
+          horizons: {
+            short_term: {
+              validationStatus: "uncalibrated",
+              factorObservations: [{ field: "momentum20", rawValue: 4.2, percentileOrRank: 0.8, sourceIds: ["src_kline"] }],
+            },
+            medium_term: { validationStatus: "insufficient_data", factorObservations: [] },
+            long_term: { validationStatus: "insufficient_data", factorObservations: [] },
+          },
+        },
+      }],
+    }));
+
+    const result = await fetchStockScreenResult("run_quant");
+    expect(result.quant_snapshot).toMatchObject({
+      schema_version: 1,
+      as_of: "2026-08-19T15:00:00+08:00",
+      validation_status: "uncalibrated",
+      universe: { enriched_count: 4, unprocessed_after_cap: 2 },
+      data_quality: { point_in_time: { status: "verified" } },
+    });
+    expect(result.candidates[0].quant_validation?.horizons?.short_term?.factor_observations?.[0]).toMatchObject({
+      field: "momentum20",
+      raw_value: 4.2,
+      percentile_or_rank: 0.8,
+      source_ids: ["src_kline"],
+    });
   });
 
   it("normalizes v2 opportunity horizon views and their nested claim arrays", async () => {

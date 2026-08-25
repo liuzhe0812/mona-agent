@@ -18,9 +18,11 @@ Two payload families:
 
 from __future__ import annotations
 
+from datetime import datetime
+from math import isfinite
 from typing import Literal
 
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field, StrictInt, model_validator
 
 STANCES = ("positive", "neutral", "negative", "insufficient_data")
 DATA_QUALITIES = ("complete", "degraded")
@@ -72,7 +74,20 @@ ANALYSIS_DIMENSION_KEYS = (
 
 VIEW_SCHEMA_VERSION = 3
 REPORT_SCHEMA_VERSION = 4
+DECISION_REPORT_SCHEMA_VERSION = 5
 DIGEST_SCHEMA_VERSION = 3
+
+V5_FORBIDDEN_TERMS = (
+    "insufficient_data",
+    "unknown",
+    "not_evaluable",
+    "数据不足",
+    "证据不足",
+    "数据缺失",
+    "暂不判断",
+    "暂无法判断",
+    "未提供",
+)
 
 
 class Payload(BaseModel):
@@ -423,6 +438,7 @@ class HorizonCondition(Payload):
 
     kind: ConditionKind
     text: str = ""
+    claim_type: ClaimType | None = None
     observed_metric_ref: str | None = None
     operator: ConditionOperator | None = None
     threshold_metric_ref: str | None = None
@@ -500,6 +516,8 @@ class HorizonView(Payload):
     confirmation_conditions: list[HorizonCondition] = Field(default_factory=list)
     watch_conditions: list[HorizonCondition] = Field(default_factory=list)
     invalidation_conditions: list[HorizonCondition] = Field(default_factory=list)
+    stop_loss_conditions: list[HorizonCondition] = Field(default_factory=list)
+    take_profit_conditions: list[HorizonCondition] = Field(default_factory=list)
     time_stop: str = Field(min_length=1)
     tradeability_risks: list[ViewPoint] = Field(default_factory=list)
     blind_spots: list[ViewPoint] = Field(default_factory=list)
@@ -536,6 +554,17 @@ class HorizonView(Payload):
                 )
         if len(set(self.dimension_keys)) != len(self.dimension_keys):
             raise ValueError("horizon dimension_keys must be unique")
+        for field_name in ("stop_loss_conditions", "take_profit_conditions"):
+            conditions = getattr(self, field_name)
+            if any(
+                condition.claim_type not in ("fact", "inference")
+                or not condition.source_ids
+                or any(not source_id.strip() for source_id in condition.source_ids)
+                for condition in conditions
+            ):
+                raise ValueError(
+                    f"{field_name} require non-empty claim_type and source_ids"
+                )
         return self
 
     def all_source_ids(self) -> list[str]:
@@ -556,6 +585,8 @@ class HorizonView(Payload):
             self.confirmation_conditions,
             self.watch_conditions,
             self.invalidation_conditions,
+            self.stop_loss_conditions,
+            self.take_profit_conditions,
         ):
             for condition in group:
                 for source_id in condition.source_ids:
@@ -842,6 +873,1031 @@ class CrossHorizonConflict(Payload):
     source_ids: list[str] = Field(default_factory=list)
 
 
+V5Direction = Literal["positive", "neutral", "negative"]
+V5Action = Literal[
+    "conditional_participation",
+    "wait",
+    "hold",
+    "reduce",
+    "exit",
+    "avoid",
+]
+V5NotHoldingAction = Literal["participate", "wait", "avoid"]
+V5HoldingAction = Literal["hold", "reduce", "exit"]
+V5EvidenceStrength = Literal["strong", "medium", "weak"]
+V5ConditionKind = Literal["price_trigger", "event_trigger", "scheduled_review"]
+V5ConditionStatus = Literal[
+    "triggered",
+    "not_triggered",
+    "waiting_event",
+    "confirmed",
+    "invalidated",
+    "scheduled",
+    "due",
+]
+
+
+def _v5_datetime(value: str, field_name: str) -> datetime:
+    if not isinstance(value, str) or not value.strip():
+        raise ValueError(f"{field_name} must be a non-empty ISO 8601 timestamp")
+    try:
+        parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except ValueError as exc:
+        raise ValueError(f"{field_name} must be a valid ISO 8601 timestamp") from exc
+    if parsed.tzinfo is None:
+        raise ValueError(f"{field_name} must include a timezone")
+    return parsed
+
+
+def _v5_price(value: float, field_name: str) -> float:
+    if isinstance(value, bool) or not isinstance(value, (int, float)) or not isfinite(value):
+        raise ValueError(f"{field_name} must be a finite number")
+    if value <= 0:
+        raise ValueError(f"{field_name} must be positive")
+    if abs(float(value) - round(float(value), 2)) > 1e-8:
+        raise ValueError(f"{field_name} must use A-share two-decimal precision")
+    return float(value)
+
+
+def _v5_validate_claims(points: list[ViewPoint], field_name: str) -> None:
+    if any(
+        point.claim_type not in ("fact", "inference") or not point.source_ids
+        for point in points
+    ):
+        raise ValueError(f"V5 {field_name} must contain sourced fact or inference claims")
+
+
+class V5TradingCondition(Payload):
+    """A condition injected by the deterministic decision layer.
+
+    The model-facing submission deliberately has no field of this type.  Its
+    status and all numeric thresholds are therefore never LLM-controlled.
+    """
+
+    kind: V5ConditionKind
+    description: str = Field(min_length=1)
+    observed_metric_ref: str | None = Field(default=None, min_length=1)
+    operator: ConditionOperator | None = None
+    threshold_metric_ref: str | None = Field(default=None, min_length=1)
+    status: V5ConditionStatus
+    market_as_of: str
+    source_ids: list[str] = Field(min_length=1)
+
+    @model_validator(mode="after")
+    def _validate_kind_status_and_time(self) -> "V5TradingCondition":
+        _v5_datetime(self.market_as_of, "market_as_of")
+        if any(not source_id.strip() for source_id in self.source_ids):
+            raise ValueError("V5 condition source_ids must not contain blanks")
+        if self.kind == "price_trigger":
+            if not self.observed_metric_ref or self.operator is None or not self.threshold_metric_ref:
+                raise ValueError(
+                    "price_trigger requires observed_metric_ref, operator and threshold_metric_ref"
+                )
+            if self.observed_metric_ref == self.threshold_metric_ref:
+                raise ValueError("price_trigger metric references must be distinct")
+            if self.status not in {"triggered", "not_triggered"}:
+                raise ValueError("price_trigger has an invalid status")
+        elif self.kind == "event_trigger":
+            if self.status not in {"waiting_event", "confirmed", "invalidated"}:
+                raise ValueError("event_trigger has an invalid status")
+            if self.observed_metric_ref is not None or self.operator is not None or self.threshold_metric_ref is not None:
+                raise ValueError("event_trigger cannot carry price trigger fields")
+        else:
+            if self.status not in {"scheduled", "due"}:
+                raise ValueError("scheduled_review has an invalid status")
+            if self.observed_metric_ref is not None or self.operator is not None or self.threshold_metric_ref is not None:
+                raise ValueError("scheduled_review cannot carry price trigger fields")
+        return self
+
+
+class V5TradingPlan(Payload):
+    """Deterministically calculated price and trigger plan for one horizon."""
+
+    reference_buy_low: float
+    reference_buy_high: float
+    pullback_buy_low: float
+    pullback_buy_high: float
+    stop_loss: float
+    first_take_profit: float
+    first_reduce_fraction: float
+    second_take_profit: float
+    second_reduce_fraction: float
+    risk_reward_first: float
+    risk_reward_second: float
+    currency: Literal["CNY"]
+    calculation_method: str = Field(min_length=1)
+    calculation_version: str = Field(min_length=1)
+    source_ids: list[str] = Field(min_length=1)
+    market_as_of: str
+    entry_conditions: list[V5TradingCondition] = Field(min_length=1)
+    exit_conditions: list[V5TradingCondition] = Field(min_length=1)
+    take_profit_conditions: list[V5TradingCondition] = Field(min_length=1)
+
+    @model_validator(mode="after")
+    def _validate_price_plan(self) -> "V5TradingPlan":
+        prices = (
+            "reference_buy_low",
+            "reference_buy_high",
+            "pullback_buy_low",
+            "pullback_buy_high",
+            "stop_loss",
+            "first_take_profit",
+            "second_take_profit",
+        )
+        for field_name in prices:
+            _v5_price(getattr(self, field_name), field_name)
+        _v5_datetime(self.market_as_of, "market_as_of")
+        if self.reference_buy_low > self.reference_buy_high:
+            raise ValueError("reference buy interval is reversed")
+        if self.pullback_buy_low > self.pullback_buy_high:
+            raise ValueError("pullback buy interval is reversed")
+        entry = (self.reference_buy_low + self.reference_buy_high) / 2
+        if self.stop_loss >= entry:
+            raise ValueError("stop_loss must be below the reference buy midpoint")
+        if self.first_take_profit <= entry or self.second_take_profit <= self.first_take_profit:
+            raise ValueError("take-profit prices must increase above the reference buy midpoint")
+        for field_name in ("first_reduce_fraction", "second_reduce_fraction"):
+            value = getattr(self, field_name)
+            if isinstance(value, bool) or not isinstance(value, (int, float)) or not isfinite(value) or not 0 < value <= 1:
+                raise ValueError(f"{field_name} must be between 0 and 1")
+        if self.first_reduce_fraction + self.second_reduce_fraction > 1 + 1e-8:
+            raise ValueError("reduce fractions cannot exceed the full position")
+        denominator = entry - self.stop_loss
+        expected_first = (self.first_take_profit - entry) / denominator
+        expected_second = (self.second_take_profit - entry) / denominator
+        for field_name, expected in (
+            ("risk_reward_first", expected_first),
+            ("risk_reward_second", expected_second),
+        ):
+            actual = getattr(self, field_name)
+            if isinstance(actual, bool) or not isinstance(actual, (int, float)) or not isfinite(actual) or actual <= 0:
+                raise ValueError(f"{field_name} must be a positive finite number")
+            if abs(float(actual) - expected) > 1e-6:
+                raise ValueError(f"{field_name} must match the deterministic price-plan formula")
+        if any(not source_id.strip() for source_id in self.source_ids):
+            raise ValueError("V5 trading plan source_ids must not contain blanks")
+        all_conditions = self.entry_conditions + self.exit_conditions + self.take_profit_conditions
+        condition_keys = [
+            (
+                condition.kind,
+                condition.observed_metric_ref,
+                condition.operator,
+                condition.threshold_metric_ref,
+            )
+            for condition in all_conditions
+        ]
+        if len(condition_keys) != len(set(condition_keys)):
+            raise ValueError("V5 trading plan conditions must not be duplicated")
+        return self
+
+
+class V5PositionPlan(Payload):
+    """Deterministic percentage position sizing; no account amount or shares."""
+
+    risk_budget_pct: float
+    initial_position_pct: float
+    max_position_pct: float
+    stop_distance_pct: float
+    volatility_adjustment: float
+    liquidity_cap_pct: float
+    calculation_method: Literal["fixed_fractional_risk"]
+    calculation_version: str = Field(min_length=1)
+
+    @model_validator(mode="after")
+    def _validate_position_math(self) -> "V5PositionPlan":
+        names = (
+            "risk_budget_pct",
+            "initial_position_pct",
+            "max_position_pct",
+            "stop_distance_pct",
+            "volatility_adjustment",
+            "liquidity_cap_pct",
+        )
+        for name in names:
+            value = getattr(self, name)
+            if isinstance(value, bool) or not isinstance(value, (int, float)) or not isfinite(value) or value < 0 or value > 100:
+                raise ValueError(f"{name} must be a finite percentage from 0 to 100")
+        if self.risk_budget_pct <= 0 or self.stop_distance_pct <= 0:
+            raise ValueError("risk_budget_pct and stop_distance_pct must be positive")
+        if self.initial_position_pct <= 0 or self.max_position_pct <= 0:
+            raise ValueError("initial_position_pct and max_position_pct must be positive")
+        if self.liquidity_cap_pct <= 0:
+            raise ValueError("liquidity_cap_pct must be positive")
+        if self.volatility_adjustment <= 0 or self.volatility_adjustment > 1:
+            raise ValueError("volatility_adjustment must be a factor from 0 to 1")
+        if self.initial_position_pct > self.max_position_pct:
+            raise ValueError("initial_position_pct cannot exceed max_position_pct")
+        theoretical = self.risk_budget_pct / self.stop_distance_pct * 100
+        maximum = min(theoretical * self.volatility_adjustment, self.liquidity_cap_pct)
+        if self.max_position_pct > maximum + 1e-8:
+            raise ValueError("max_position_pct exceeds volatility or liquidity limit")
+        return self
+
+
+# V6 execution/risk contracts are additive.  Historical V5 payloads remain
+# readable; only the new deterministic materializer emits these models.
+V6Board = Literal["main", "chinext", "star", "bse", "unknown"]
+V6Exchange = Literal["XSHG", "XSHE", "BJSE"]
+V6RiskLevel = Literal["conservative", "balanced", "aggressive"]
+V6FundsRange = Literal["under_100k", "100k_500k", "500k_2m", "over_2m"]
+V6Direction = Literal["positive", "neutral", "negative", "avoid"]
+V6PositionInputMode = Literal["percentage", "assets_shares"]
+V6HoldingState = Literal["not_holding", "holding"]
+V6ExecutionStatus = Literal["proxy", "limited", "blocked"]
+V6RuleStatus = Literal["confirmed", "limited"]
+V6LiquidityStatus = Literal["proxy", "limited"]
+V6OrderStatus = Literal["proxy", "limited", "blocked", "not_applicable"]
+V6TPlusOneStatus = Literal["allowed", "restricted", "not_applicable", "unknown"]
+V6CurrentAction = Literal[
+    "participate", "wait", "hold", "reduce", "exit", "avoid", "execution_blocked"
+]
+V6PlanType = Literal["alpha_calibrated", "rule_reference"]
+V6AlphaCalibrationStatus = Literal["calibrated", "research_only"]
+
+
+def _v6_optional_price(value: float | None, field_name: str) -> None:
+    if value is None:
+        return
+    _v5_price(value, field_name)
+
+
+class V6ExecutionFacts(Payload):
+    """Observable A-share execution inputs; no order-book data is implied."""
+
+    board: V6Board = "unknown"
+    exchange: V6Exchange | None = None
+    risk_warning: bool | None = None
+    registration_listing: bool | None = None
+    suspended: bool | None = None
+    delisted: bool | None = None
+    delisting: bool | None = None
+    listing_days: int | None = Field(default=None, ge=1)
+    listing_age_lower_bound_sessions: int | None = Field(default=None, ge=1)
+    listing_days_is_lower_bound: bool = False
+    status_methods: dict[str, str] = Field(default_factory=dict)
+    price: float | None = None
+    previous_close: float | None = None
+    amount_yuan: float | None = Field(default=None, ge=0)
+    turnover_rate_pct: float | None = Field(default=None, ge=0, le=100)
+    atr20_pct: float | None = Field(default=None, ge=0)
+    has_order_book: bool = False
+    observed_at: str
+    source_ids: list[str] = Field(default_factory=list)
+
+    @model_validator(mode="after")
+    def _validate_facts(self) -> "V6ExecutionFacts":
+        _v5_datetime(self.observed_at, "observed_at")
+        _v6_optional_price(self.price, "price")
+        _v6_optional_price(self.previous_close, "previous_close")
+        if any(not source_id.strip() for source_id in self.source_ids):
+            raise ValueError("V6 execution source_ids must not contain blanks")
+        return self
+
+
+class V6RiskProfile(Payload):
+    """Local risk budget; never represents a broker/account connection."""
+
+    profile_name: str = "conservative_default"
+    configured: bool = False
+    risk_level: V6RiskLevel = "conservative"
+    max_drawdown_tolerance_pct: float = Field(default=10.0, gt=0, le=60)
+    total_funds_range: V6FundsRange | None = None
+    risk_budget_pct: float = Field(default=1.0, gt=0, le=100)
+    max_single_position_pct: float = Field(default=20.0, gt=0, le=100)
+    max_industry_exposure_pct: float = Field(default=30.0, gt=0, le=100)
+    max_correlated_exposure_pct: float = Field(default=50.0, gt=0, le=100)
+
+    @classmethod
+    def conservative_default(cls) -> "V6RiskProfile":
+        return cls()
+
+    @model_validator(mode="after")
+    def _validate_risk_contract(self) -> "V6RiskProfile":
+        level_limits = {
+            "conservative": 20.0,
+            "balanced": 40.0,
+            "aggressive": 60.0,
+        }
+        if self.max_drawdown_tolerance_pct > level_limits[self.risk_level]:
+            raise ValueError("max_drawdown_tolerance_pct exceeds risk_level limit")
+        if self.risk_budget_pct > self.max_drawdown_tolerance_pct:
+            raise ValueError("risk_budget_pct cannot exceed max_drawdown_tolerance_pct")
+        return self
+
+
+class V6PortfolioContext(Payload):
+    """Optional local portfolio context supplied by the user, not a broker."""
+
+    # ``holding_state`` remains readable for old reports/files; the local store
+    # derives it from ``current_position_pct`` when saving user input.
+    holding_state: V6HoldingState = "not_holding"
+    position_input_mode: V6PositionInputMode = "percentage"
+    portfolio_value_yuan: float | None = Field(default=None, gt=0)
+    current_position_pct: float = Field(default=0.0, ge=0, le=100)
+    holding_quantity: StrictInt | None = Field(default=None, ge=0)
+    industry_exposure_pct: float = Field(default=0.0, ge=0, le=100)
+    correlated_exposure_pct: float = Field(default=0.0, ge=0, le=100)
+    today_bought_quantity: int | None = Field(default=None, ge=0)
+    holding_cost: float | None = None
+
+    @model_validator(mode="after")
+    def _validate_context(self) -> "V6PortfolioContext":
+        _v6_optional_price(self.holding_cost, "holding_cost")
+        return self
+
+
+class V6CostAssumptions(Payload):
+    """Versioned conservative cost assumptions for post-cost risk/reward."""
+
+    commission_pct: float = Field(default=0.03, ge=0, le=100)
+    stamp_tax_pct: float = Field(default=0.05, ge=0, le=100)
+    transfer_fee_pct: float = Field(default=0.001, ge=0, le=100)
+    method_version: str = "a-share-cost-assumptions-v1"
+
+
+class V6ExecutionAssessment(Payload):
+    """Rule and proxy result; status never claims an immediate fill."""
+
+    execution_status: V6ExecutionStatus
+    rules_status: V6RuleStatus
+    liquidity_status: V6LiquidityStatus
+    board: V6Board
+    exchange: V6Exchange | None = None
+    risk_warning: bool | None
+    price_limit_pct: float | None = None
+    upper_limit_price: float | None = None
+    lower_limit_price: float | None = None
+    buy_status: V6OrderStatus
+    sell_status: V6OrderStatus
+    t_plus_one_status: V6TPlusOneStatus
+    min_order_quantity: int = Field(ge=1)
+    order_quantity_increment: int = Field(ge=1)
+    immediate_execution_allowed: Literal[False] = False
+    execution_mode: Literal["research_only"] = "research_only"
+    estimated_slippage_pct: float | None = None
+    capacity_notional_yuan: float | None = None
+    method_version: str = "a-share-execution-constraints-v1"
+    rule_version: str = "a-share-price-rules-2026-v1"
+    quantity_rule_version: str = "a-share-order-size-rules-v1"
+    slippage_method_version: str = "turnover-amount-atr-proxy-v1"
+    warnings: list[str] = Field(default_factory=list)
+    source_ids: list[str] = Field(default_factory=list)
+
+    @model_validator(mode="after")
+    def _validate_assessment(self) -> "V6ExecutionAssessment":
+        for name in (
+            "price_limit_pct",
+            "upper_limit_price",
+            "lower_limit_price",
+            "estimated_slippage_pct",
+            "capacity_notional_yuan",
+        ):
+            value = getattr(self, name)
+            if value is not None and (not isfinite(value) or value < 0):
+                raise ValueError(f"{name} must be a finite non-negative number")
+        if any(not source_id.strip() for source_id in self.source_ids):
+            raise ValueError("V6 execution source_ids must not contain blanks")
+        if self.execution_status == "blocked" and all(
+            status != "blocked" for status in (self.buy_status, self.sell_status)
+        ):
+            raise ValueError("blocked execution must block at least one order side")
+        return self
+
+
+class V6MaterializedTradingPlan(Payload):
+    """Direction/holding-aware plan that can be consumed by a later API layer."""
+
+    schema_version: Literal[6] = 6
+    direction: V6Direction
+    action: V5Action
+    holding_state: V6HoldingState
+    current_action: V6CurrentAction
+    plan_status: V6ExecutionStatus
+    plan_type: V6PlanType = "alpha_calibrated"
+    alpha_calibration_status: V6AlphaCalibrationStatus = "calibrated"
+    execution: V6ExecutionAssessment
+    buy_low: float | None = None
+    buy_high: float | None = None
+    pullback_low: float | None = None
+    pullback_high: float | None = None
+    confirmation_price: float | None = None
+    invalidation_price: float | None = None
+    exit_price: float | None = None
+    reentry_confirmation_price: float | None = None
+    stop_loss: float | None = None
+    first_take_profit: float | None = None
+    second_take_profit: float | None = None
+    initial_position_pct: float = Field(default=0, ge=0, le=100)
+    max_position_pct: float = Field(default=0, ge=0, le=100)
+    target_max_position_pct: float = Field(default=0, ge=0, le=100)
+    additional_position_pct: float = Field(default=0, ge=0, le=100)
+    liquidity_cap_pct: float | None = Field(default=None, ge=0, le=100)
+    risk_budget_pct: float = Field(default=0, ge=0, le=100)
+    risk_reward_first_after_cost: float | None = None
+    risk_reward_second_after_cost: float | None = None
+    risk_profile_name: str = "conservative_default"
+    risk_profile_configured: bool = False
+    position_cap_reasons: list[str] = Field(default_factory=list)
+    calculation_method: str = "direction-aware-a-share-plan"
+    calculation_version: str = "direction-aware-a-share-plan-v1"
+    execution_mode: Literal["research_only"] = "research_only"
+    cost_assumptions: dict[str, object] = Field(default_factory=dict)
+    source_ids: list[str] = Field(default_factory=list)
+
+    @model_validator(mode="after")
+    def _validate_direction_shape(self) -> "V6MaterializedTradingPlan":
+        for name in (
+            "buy_low",
+            "buy_high",
+            "pullback_low",
+            "pullback_high",
+            "confirmation_price",
+            "invalidation_price",
+            "exit_price",
+            "reentry_confirmation_price",
+            "stop_loss",
+            "first_take_profit",
+            "second_take_profit",
+        ):
+            _v6_optional_price(getattr(self, name), name)
+        if self.initial_position_pct > self.max_position_pct:
+            raise ValueError("initial_position_pct cannot exceed max_position_pct")
+        if abs(self.max_position_pct - self.target_max_position_pct) > 1e-8:
+            raise ValueError("max_position_pct must equal target_max_position_pct")
+        if self.initial_position_pct > self.additional_position_pct + 1e-8:
+            raise ValueError("initial_position_pct cannot exceed additional_position_pct")
+        if self.plan_type == "rule_reference" and self.max_position_pct > 10.0 + 1e-8:
+            raise ValueError("rule_reference plan cannot exceed the conservative 10% position cap")
+        if self.direction != "positive" and any(
+            getattr(self, name) is not None
+            for name in ("buy_low", "buy_high", "pullback_low", "pullback_high")
+        ):
+            raise ValueError("neutral, negative and avoid plans cannot carry buy ranges")
+        if self.direction == "neutral" and (
+            self.confirmation_price is None or self.invalidation_price is None
+        ):
+            raise ValueError("neutral plans require confirmation and invalidation prices")
+        if self.direction == "neutral" and self.action == "reduce":
+            if self.holding_state != "holding" or self.exit_price is None:
+                raise ValueError("neutral reduce plans require a holding and exit boundary")
+        if self.direction in {"negative", "avoid"} and self.holding_state == "not_holding":
+            if self.exit_price is not None:
+                raise ValueError("not-held negative or avoid plans cannot carry an exit price")
+        if self.direction in {"negative", "avoid"} and self.reentry_confirmation_price is None:
+            raise ValueError("negative and avoid plans require a re-entry confirmation price")
+        return self
+
+
+V6ResearchStatus = Literal["ready", "unavailable"]
+V6TradeStatus = Literal["ready", "unavailable"]
+V6DecisionMode = Literal["research_only", "reference_plan"]
+
+
+class V6DisagreementMatrix(Payload):
+    """Structured qualitative disagreement; no numeric or execution fields."""
+
+    issue: str = Field(min_length=1)
+    bull_basis: list[ViewPoint] = Field(default_factory=list)
+    bear_basis: list[ViewPoint] = Field(default_factory=list)
+    ruling: list[ViewPoint] = Field(default_factory=list)
+    retained_risks: list[ViewPoint] = Field(default_factory=list)
+    change_conditions: list[HorizonCondition] = Field(default_factory=list)
+    source_ids: list[str] = Field(default_factory=list)
+
+    def all_source_ids(self) -> list[str]:
+        ids = list(dict.fromkeys(self.source_ids))
+        for point in (
+            *self.bull_basis,
+            *self.bear_basis,
+            *self.ruling,
+            *self.retained_risks,
+        ):
+            for source_id in point.source_ids:
+                if source_id not in ids:
+                    ids.append(source_id)
+        for condition in self.change_conditions:
+            for source_id in condition.source_ids:
+                if source_id not in ids:
+                    ids.append(source_id)
+        return ids
+
+
+class V6HorizonDecisionSubmission(Payload):
+    """Model-facing V6 qualitative decision; all deterministic fields are absent."""
+
+    direction: V6Direction
+    action: V5Action
+    thesis: str = Field(min_length=1)
+    not_holding_action: V5NotHoldingAction
+    holding_action: V5HoldingAction
+    key_reasons: list[ViewPoint] = Field(default_factory=list, max_length=3)
+    key_risks: list[ViewPoint] = Field(default_factory=list, max_length=2)
+    disagreement_matrix: V6DisagreementMatrix | None = None
+    source_ids: list[str] = Field(default_factory=list)
+
+    @model_validator(mode="after")
+    def _validate_action_alignment(self) -> "V6HorizonDecisionSubmission":
+        if self.direction == "positive" and self.action in {"reduce", "exit", "avoid"}:
+            raise ValueError("positive direction cannot reduce, exit or avoid")
+        if self.direction == "negative" and self.action in {"conditional_participation", "hold"}:
+            raise ValueError("negative direction cannot conditionally participate or hold")
+        if self.direction == "avoid" and self.action not in {"avoid", "reduce", "exit"}:
+            raise ValueError("avoid direction only allows avoid, reduce or exit")
+        if self.direction == "positive" and self.not_holding_action == "avoid":
+            raise ValueError("positive direction cannot avoid when not holding")
+        if self.direction == "negative" and self.not_holding_action == "participate":
+            raise ValueError("negative direction cannot participate when not holding")
+        if self.direction == "negative" and self.holding_action == "hold":
+            raise ValueError("negative direction cannot hold")
+        if self.direction == "positive" and self.holding_action == "exit":
+            raise ValueError("positive direction cannot exit")
+        if any(not source_id.strip() for source_id in self.source_ids):
+            raise ValueError("V6 horizon source_ids must not contain blanks")
+        if self.key_reasons:
+            _v5_validate_claims(self.key_reasons, "key_reasons")
+        if self.key_risks:
+            _v5_validate_claims(self.key_risks, "key_risks")
+        return self
+
+    def all_source_ids(self) -> list[str]:
+        ids = list(dict.fromkeys(self.source_ids))
+        for point in self.key_reasons + self.key_risks:
+            for source_id in point.source_ids:
+                if source_id not in ids:
+                    ids.append(source_id)
+        if self.disagreement_matrix is not None:
+            for source_id in self.disagreement_matrix.all_source_ids():
+                if source_id not in ids:
+                    ids.append(source_id)
+        return ids
+
+
+class V6HorizonDecisionsSubmission(Payload):
+    short_term: V6HorizonDecisionSubmission | None = None
+    medium_term: V6HorizonDecisionSubmission | None = None
+    long_term: V6HorizonDecisionSubmission | None = None
+
+    def all_source_ids(self) -> list[str]:
+        ids: list[str] = []
+        for horizon in (self.short_term, self.medium_term, self.long_term):
+            if horizon is None:
+                continue
+            for source_id in horizon.all_source_ids():
+                if source_id not in ids:
+                    ids.append(source_id)
+        return ids
+
+
+class V6HorizonDecision(Payload):
+    """One persisted V6 decision after system gate/plan materialization."""
+
+    direction: V6Direction
+    action: V5Action
+    thesis: str = Field(min_length=1)
+    not_holding_action: V5NotHoldingAction
+    holding_action: V5HoldingAction
+    key_reasons: list[ViewPoint] = Field(min_length=1, max_length=3)
+    key_risks: list[ViewPoint] = Field(min_length=1, max_length=2)
+    disagreement_matrix: V6DisagreementMatrix | None = None
+    research_status: V6ResearchStatus
+    trade_status: V6TradeStatus
+    materialized_plan: V6MaterializedTradingPlan | None = None
+    valid_until: str | None = None
+    review_trigger: str = Field(min_length=1)
+    source_ids: list[str] = Field(default_factory=list)
+
+    @model_validator(mode="after")
+    def _validate_decision(self) -> "V6HorizonDecision":
+        if self.research_status == "unavailable":
+            if self.action not in {"wait", "reduce", "exit", "avoid"}:
+                raise ValueError("unavailable research must use wait, reduce, exit or avoid")
+            if self.materialized_plan is not None:
+                raise ValueError("unavailable research cannot carry a materialized plan")
+        if self.trade_status != "ready" and self.materialized_plan is not None:
+            raise ValueError("non-trade-ready horizon cannot carry a materialized plan")
+        if self.valid_until is not None:
+            _v5_datetime(self.valid_until, "valid_until")
+        if self.materialized_plan is not None:
+            if self.materialized_plan.direction != self.direction:
+                raise ValueError("materialized plan direction must match decision direction")
+            if self.materialized_plan.action != self.action:
+                raise ValueError("materialized plan action must match decision action")
+            if self.valid_until is None:
+                raise ValueError("materialized V6 plan requires valid_until")
+        if any(not source_id.strip() for source_id in self.source_ids):
+            raise ValueError("V6 horizon source_ids must not contain blanks")
+        if self.research_status == "ready":
+            _v5_validate_claims(self.key_reasons, "key_reasons")
+            _v5_validate_claims(self.key_risks, "key_risks")
+        elif any(
+            point.claim_type != "hypothesis"
+            for point in self.key_reasons + self.key_risks
+        ):
+            raise ValueError("unavailable V6 research may only use system hypotheses")
+        return self
+
+    def all_source_ids(self) -> list[str]:
+        ids = list(dict.fromkeys(self.source_ids))
+        for point in self.key_reasons + self.key_risks:
+            for source_id in point.source_ids:
+                if source_id not in ids:
+                    ids.append(source_id)
+        if self.disagreement_matrix is not None:
+            for source_id in self.disagreement_matrix.all_source_ids():
+                if source_id not in ids:
+                    ids.append(source_id)
+        if self.materialized_plan is not None:
+            for source_id in self.materialized_plan.source_ids:
+                if source_id not in ids:
+                    ids.append(source_id)
+            ids.extend(
+                source_id
+                for source_id in self.materialized_plan.execution.source_ids
+                if source_id not in ids
+            )
+        return list(dict.fromkeys(ids))
+
+
+class V6HorizonDecisions(Payload):
+    short_term: V6HorizonDecision
+    medium_term: V6HorizonDecision
+    long_term: V6HorizonDecision
+
+    def all_source_ids(self) -> list[str]:
+        ids: list[str] = []
+        for decision in (self.short_term, self.medium_term, self.long_term):
+            for source_id in decision.all_source_ids():
+                if source_id not in ids:
+                    ids.append(source_id)
+        return ids
+
+
+class DecisionReportV6(Payload):
+    """Strict V6 report; a research result may exist without trade plans."""
+
+    schema_version: Literal[6]
+    kind: Literal["deep_research"]
+    result_status: Literal["completed"]
+    report_id: str = Field(min_length=1)
+    workflow_run_id: str = Field(min_length=1)
+    instrument: InstrumentTag
+    research_cutoff_at: str
+    market_as_of: str
+    generated_at: str
+    current_price: float | None = None
+    benchmark_price: float | None = None
+    price_source_ids: list[str] = Field(default_factory=list)
+    summary: str = Field(min_length=1)
+    decision_mode: V6DecisionMode
+    research_status: V6ResearchStatus
+    trade_status: V6TradeStatus
+    horizon_decisions: V6HorizonDecisions
+    research_ready: dict[str, object] = Field(default_factory=dict)
+    trade_ready: dict[str, object] = Field(default_factory=dict)
+    # The deterministic factor observations are separate from the promotion
+    # gate.  Keeping the full payload here lets the report explain what was
+    # measured even when the model is not yet eligible for trading.
+    quant_validation: dict[str, object] | None = None
+    quant_promotion: dict[str, object] = Field(default_factory=dict)
+    valuation: dict[str, object] = Field(default_factory=dict)
+    # These two deterministic sections are copied from the immutable Evidence
+    # bundle.  They are never accepted from an Agent submission.
+    market_sentiment: dict[str, object] = Field(default_factory=dict)
+    public_opinion: dict[str, object] = Field(default_factory=dict)
+    execution_qualification: dict[str, object] = Field(default_factory=dict)
+    risk_profile_configured: bool = False
+    risk_level: V6RiskLevel = "conservative"
+    holding_state: V6HoldingState = "not_holding"
+    method_versions: dict[str, str]
+    source_ids: list[str] = Field(default_factory=list)
+    sources: list[dict[str, object]] = Field(default_factory=list)
+    disclaimer: Literal[DISCLAIMER]
+
+    @model_validator(mode="after")
+    def _validate_report(self) -> "DecisionReportV6":
+        cutoff = _v5_datetime(self.research_cutoff_at, "research_cutoff_at")
+        market = _v5_datetime(self.market_as_of, "market_as_of")
+        generated = _v5_datetime(self.generated_at, "generated_at")
+        if market > cutoff or cutoff > generated:
+            raise ValueError("V6 report timestamps are out of order")
+        _v6_optional_price(self.current_price, "current_price")
+        _v6_optional_price(self.benchmark_price, "benchmark_price")
+        if any(not source_id.strip() for source_id in self.price_source_ids):
+            raise ValueError("V6 price_source_ids must not contain blanks")
+        decisions = (
+            self.horizon_decisions.short_term,
+            self.horizon_decisions.medium_term,
+            self.horizon_decisions.long_term,
+        )
+        if not any(item.research_status == "ready" for item in decisions):
+            raise ValueError("V6 report requires at least one research-ready horizon")
+        for horizon, item in zip(
+            ("short_term", "medium_term", "long_term"), decisions
+        ):
+            if item.valid_until is not None and _v5_datetime(item.valid_until, f"{horizon}.valid_until") <= generated:
+                raise ValueError(f"{horizon}.valid_until must be later than generated_at")
+        if self.decision_mode == "reference_plan" and not any(
+            item.materialized_plan is not None for item in decisions
+        ):
+            raise ValueError("reference_plan requires at least one materialized plan")
+        if self.decision_mode == "research_only" and any(
+            item.materialized_plan is not None for item in decisions
+        ):
+            raise ValueError("research_only cannot carry materialized plans")
+        if self.trade_status == "unavailable" and any(
+            phrase in self.summary.lower()
+            for phrase in ("交易可用", "交易已可用", "可直接交易")
+        ):
+            raise ValueError("summary cannot claim trading is available when trade_status is unavailable")
+        if not any(
+            item.action in {"conditional_participation", "reduce", "exit", "avoid"}
+            or (
+                item.materialized_plan is not None
+                and any(
+                    getattr(item.materialized_plan, field) is not None
+                    for field in (
+                        "buy_low",
+                        "buy_high",
+                        "confirmation_price",
+                        "invalidation_price",
+                        "exit_price",
+                        "reentry_confirmation_price",
+                        "stop_loss",
+                        "first_take_profit",
+                        "second_take_profit",
+                    )
+                )
+            )
+            for item in decisions
+        ):
+            raise ValueError("V6 report requires at least one user action or executable boundary")
+        if any(
+            item.materialized_plan is not None and item.trade_status != "ready"
+            for item in decisions
+        ):
+            raise ValueError("materialized plan requires trade_status=ready")
+        required_sources = set(self.horizon_decisions.all_source_ids())
+
+        def nested_source_ids(value: object):
+            if isinstance(value, dict):
+                for key, child in value.items():
+                    if key == "source_ids" and isinstance(child, list):
+                        yield from (item for item in child if isinstance(item, str))
+                    else:
+                        yield from nested_source_ids(child)
+            elif isinstance(value, list):
+                for child in value:
+                    yield from nested_source_ids(child)
+
+        for section in (
+            self.quant_validation,
+            self.valuation,
+            self.market_sentiment,
+            self.public_opinion,
+            self.execution_qualification,
+        ):
+            required_sources.update(nested_source_ids(section))
+        required_sources.update(self.price_source_ids)
+        if not required_sources <= set(self.source_ids):
+            raise ValueError("V6 report source_ids must include all cited horizon sources")
+        source_record_ids = {
+            source.get("id")
+            for source in self.sources
+            if isinstance(source, dict) and isinstance(source.get("id"), str)
+        }
+        if not set(self.source_ids) <= source_record_ids:
+            raise ValueError("V6 report sources must close every source_id")
+        if not self.method_versions or any(
+            not isinstance(value, str) or not value.strip()
+            for value in self.method_versions.values()
+        ):
+            raise ValueError("V6 method_versions must be non-empty")
+        return self
+
+
+# Public V6 aliases for callers using the shorter product vocabulary.
+HorizonDecisionV6Submission = V6HorizonDecisionSubmission
+HorizonDecisionsV6Submission = V6HorizonDecisionsSubmission
+HorizonDecisionV6 = V6HorizonDecision
+HorizonDecisionsV6 = V6HorizonDecisions
+
+
+class V5HorizonDecisionSubmission(Payload):
+    """Only qualitative fields the referee may submit; deterministic fields are absent."""
+
+    direction: V5Direction
+    action: V5Action
+    thesis: str = Field(min_length=1)
+    not_holding_action: V5NotHoldingAction
+    holding_action: V5HoldingAction
+    key_reasons: list[ViewPoint] = Field(min_length=1, max_length=3)
+    key_risks: list[ViewPoint] = Field(min_length=1, max_length=2)
+    source_ids: list[str] = Field(min_length=1)
+
+    @model_validator(mode="after")
+    def _validate_action_alignment(self) -> "V5HorizonDecisionSubmission":
+        if self.direction == "positive" and self.action in {"reduce", "exit", "avoid"}:
+            raise ValueError("positive direction cannot reduce, exit or avoid")
+        if self.direction == "negative" and self.action in {"conditional_participation", "hold"}:
+            raise ValueError("negative direction cannot conditionally participate or hold")
+        if self.direction == "positive" and self.not_holding_action == "avoid":
+            raise ValueError("positive direction cannot avoid when not holding")
+        if self.direction == "negative" and self.not_holding_action == "participate":
+            raise ValueError("negative direction cannot participate when not holding")
+        if self.direction == "negative" and self.holding_action == "hold":
+            raise ValueError("negative direction cannot hold")
+        if self.direction == "positive" and self.holding_action == "exit":
+            raise ValueError("positive direction cannot exit")
+        if any(not source_id.strip() for source_id in self.source_ids):
+            raise ValueError("V5 horizon source_ids must not contain blanks")
+        _v5_validate_claims(self.key_reasons, "key_reasons")
+        _v5_validate_claims(self.key_risks, "key_risks")
+        return self
+
+
+class V5HorizonDecisionsSubmission(Payload):
+    short_term: V5HorizonDecisionSubmission
+    medium_term: V5HorizonDecisionSubmission
+    long_term: V5HorizonDecisionSubmission
+
+    def all_source_ids(self) -> list[str]:
+        ids: list[str] = []
+        for decision in (self.short_term, self.medium_term, self.long_term):
+            for source_id in decision.source_ids + [
+                source_id
+                for point in decision.key_reasons + decision.key_risks
+                for source_id in point.source_ids
+            ]:
+                if source_id not in ids:
+                    ids.append(source_id)
+        return ids
+
+
+class V5HorizonDecision(Payload):
+    """Complete persisted V5 decision after deterministic injection."""
+
+    direction: V5Direction
+    action: V5Action
+    thesis: str = Field(min_length=1)
+    not_holding_action: V5NotHoldingAction
+    holding_action: V5HoldingAction
+    trading_plan: V5TradingPlan
+    position_plan: V5PositionPlan
+    valid_until: str
+    review_trigger: str = Field(min_length=1)
+    key_reasons: list[ViewPoint] = Field(min_length=1, max_length=3)
+    key_risks: list[ViewPoint] = Field(min_length=1, max_length=2)
+    evidence_strength: V5EvidenceStrength
+    source_ids: list[str] = Field(min_length=1)
+
+    @model_validator(mode="after")
+    def _validate_complete_decision(self) -> "V5HorizonDecision":
+        _v5_datetime(self.valid_until, "valid_until")
+        if any(term in self.thesis or term in self.review_trigger for term in V5_FORBIDDEN_TERMS):
+            raise ValueError("V5 decision contains a forbidden missing-state placeholder")
+        if any(not source_id.strip() for source_id in self.source_ids):
+            raise ValueError("V5 horizon source_ids must not contain blanks")
+        if self.direction == "positive" and self.action in {"reduce", "exit", "avoid"}:
+            raise ValueError("positive direction cannot reduce, exit or avoid")
+        if self.direction == "negative" and self.action in {"conditional_participation", "hold"}:
+            raise ValueError("negative direction cannot conditionally participate or hold")
+        if self.direction == "positive" and self.not_holding_action == "avoid":
+            raise ValueError("positive direction cannot avoid when not holding")
+        if self.direction == "negative" and self.not_holding_action == "participate":
+            raise ValueError("negative direction cannot participate when not holding")
+        if self.direction == "negative" and self.holding_action == "hold":
+            raise ValueError("negative direction cannot hold")
+        if self.direction == "positive" and self.holding_action == "exit":
+            raise ValueError("positive direction cannot exit")
+        _v5_validate_claims(self.key_reasons, "key_reasons")
+        _v5_validate_claims(self.key_risks, "key_risks")
+        return self
+
+    def all_source_ids(self) -> list[str]:
+        ids = list(dict.fromkeys(self.source_ids + self.trading_plan.source_ids))
+        for condition in (
+            *self.trading_plan.entry_conditions,
+            *self.trading_plan.exit_conditions,
+            *self.trading_plan.take_profit_conditions,
+        ):
+            for source_id in condition.source_ids:
+                if source_id not in ids:
+                    ids.append(source_id)
+        for point in self.key_reasons + self.key_risks:
+            for source_id in point.source_ids:
+                if source_id not in ids:
+                    ids.append(source_id)
+        return ids
+
+
+class V5HorizonDecisions(Payload):
+    short_term: V5HorizonDecision
+    medium_term: V5HorizonDecision
+    long_term: V5HorizonDecision
+
+    def all_source_ids(self) -> list[str]:
+        ids: list[str] = []
+        for decision in (self.short_term, self.medium_term, self.long_term):
+            for source_id in decision.all_source_ids():
+                if source_id not in ids:
+                    ids.append(source_id)
+        return ids
+
+
+class DecisionReportV5(Payload):
+    """Complete, user-facing deep-research decision report."""
+
+    schema_version: Literal[5]
+    kind: Literal["deep_research"]
+    result_status: Literal["completed"]
+    report_id: str = Field(min_length=1)
+    workflow_run_id: str = Field(min_length=1)
+    instrument: InstrumentTag
+    research_cutoff_at: str
+    market_as_of: str
+    generated_at: str
+    summary: str = Field(min_length=1)
+    horizon_decisions: V5HorizonDecisions
+    source_ids: list[str] = Field(min_length=1)
+    method_versions: dict[str, str]
+    disclaimer: Literal[DISCLAIMER]
+
+    @model_validator(mode="after")
+    def _validate_report_contract(self) -> "DecisionReportV5":
+        market_as_of = _v5_datetime(self.market_as_of, "market_as_of")
+        research_cutoff_at = _v5_datetime(self.research_cutoff_at, "research_cutoff_at")
+        generated_at = _v5_datetime(self.generated_at, "generated_at")
+        if market_as_of > research_cutoff_at:
+            raise ValueError("market_as_of must not be later than research_cutoff_at")
+        if research_cutoff_at > generated_at:
+            raise ValueError("research_cutoff_at must not be later than generated_at")
+        for horizon in ("short_term", "medium_term", "long_term"):
+            valid_until = _v5_datetime(
+                getattr(self.horizon_decisions, horizon).valid_until,
+                f"horizon_decisions.{horizon}.valid_until",
+            )
+            if valid_until <= generated_at:
+                raise ValueError(
+                    f"horizon_decisions.{horizon}.valid_until must be later than generated_at"
+                )
+        if not self.method_versions or any(
+            key not in self.method_versions or not isinstance(value, str) or not value.strip()
+            for key in ("decision", "indicators", "conditions")
+            for value in (self.method_versions.get(key),)
+        ):
+            raise ValueError("V5 method_versions must include decision, indicators and conditions")
+        if any(not source_id.strip() for source_id in self.source_ids):
+            raise ValueError("V5 report source_ids must not contain blanks")
+        required_sources = set(self.horizon_decisions.all_source_ids())
+        if not required_sources <= set(self.source_ids):
+            raise ValueError("V5 report source_ids must include all cited horizon sources")
+        serialized = self.model_dump(mode="json")
+        text_values: list[str] = []
+        def collect(value: object) -> None:
+            if isinstance(value, str):
+                text_values.append(value)
+            elif isinstance(value, dict):
+                for item in value.values():
+                    collect(item)
+            elif isinstance(value, list):
+                for item in value:
+                    collect(item)
+        collect(serialized)
+        if any(term in value for value in text_values for term in V5_FORBIDDEN_TERMS):
+            raise ValueError("V5 report contains a forbidden missing-state placeholder")
+        return self
+
+
+class DecisionReportV5Submission(Payload):
+    """Model-facing V5 input; numeric/deterministic fields are intentionally absent."""
+
+    schema_version: Literal[5]
+    summary: str = Field(min_length=1)
+    instrument: InstrumentTag
+    horizon_decisions: V5HorizonDecisionsSubmission
+
+    def all_source_ids(self) -> list[str]:
+        return self.horizon_decisions.all_source_ids()
+
+
+# Public names follow the plan's ``*V5`` terminology; the prefixed classes
+# keep the model-facing and persisted contracts visually distinct above.
+TradingConditionV5 = V5TradingCondition
+TradingPlanV5 = V5TradingPlan
+PositionPlanV5 = V5PositionPlan
+HorizonDecisionV5Submission = V5HorizonDecisionSubmission
+HorizonDecisionsV5Submission = V5HorizonDecisionsSubmission
+HorizonDecisionV5 = V5HorizonDecision
+HorizonDecisionsV5 = V5HorizonDecisions
+
+# Short public aliases for the V6 execution layer.
+ExecutionFacts = V6ExecutionFacts
+RiskProfile = V6RiskProfile
+PortfolioContext = V6PortfolioContext
+ExecutionAssessment = V6ExecutionAssessment
+MaterializedTradingPlan = V6MaterializedTradingPlan
+
+
 class ReportSubmission(Payload):
     """Payload for ``submit_stock_report``.
 
@@ -851,9 +1907,12 @@ class ReportSubmission(Payload):
     """
 
     as_of: str | None = None
+    schema_version: Literal[5, 6] | None = None
     summary: str = Field(min_length=1)
     source_ids: list[str] = Field(default_factory=list)
     instrument: InstrumentTag | None = None
+    horizon_decisions: V5HorizonDecisionsSubmission | V6HorizonDecisionsSubmission | None = None
+    horizon_decisions_v6: V6HorizonDecisionsSubmission | None = None
     versions: dict[str, str] = Field(default_factory=dict)
     horizon_views: HorizonViews | None = None
     dimension_views: DimensionViews | None = None
@@ -870,6 +1929,66 @@ class ReportSubmission(Payload):
 
     @model_validator(mode="after")
     def _check_mode(self) -> "ReportSubmission":
+        if self.schema_version == 6 or self.horizon_decisions_v6 is not None:
+            if self.schema_version != 6:
+                raise ValueError("V6 deep-research mode requires schema_version=6")
+            if self.items is not None:
+                raise ValueError("V6 deep-research mode cannot carry daily digest items")
+            if self.instrument is None:
+                raise ValueError("V6 deep-research mode requires instrument")
+            if self.horizon_decisions is None and self.horizon_decisions_v6 is None:
+                raise ValueError("V6 deep-research mode requires horizon decisions")
+            legacy_fields = {
+                "as_of",
+                "versions",
+                "horizon_views",
+                "dimension_views",
+                "debate_resolution",
+                "cycle_states",
+                "market_regime_summary",
+                "industry_policy_summary",
+                "scenario_sets",
+                "cross_horizon_conflict",
+                "risks",
+                "catalysts",
+                "open_questions",
+            }
+            provided = legacy_fields.intersection(self.model_fields_set)
+            if provided:
+                raise ValueError(
+                    "V6 deep-research mode cannot carry V4 fields: "
+                    + ", ".join(sorted(provided))
+                )
+            return self
+        if self.schema_version == 5 or self.horizon_decisions is not None:
+            if self.schema_version != 5 or self.horizon_decisions is None:
+                raise ValueError("V5 deep-research mode requires schema_version=5 and horizon_decisions")
+            if self.items is not None:
+                raise ValueError("V5 deep-research mode cannot carry daily digest items")
+            if self.instrument is None:
+                raise ValueError("V5 deep-research mode requires instrument")
+            legacy_fields = {
+                "as_of",
+                "versions",
+                "horizon_views",
+                "dimension_views",
+                "debate_resolution",
+                "cycle_states",
+                "market_regime_summary",
+                "industry_policy_summary",
+                "scenario_sets",
+                "cross_horizon_conflict",
+                "risks",
+                "catalysts",
+                "open_questions",
+            }
+            provided = legacy_fields.intersection(self.model_fields_set)
+            if provided:
+                raise ValueError(
+                    "V5 deep-research mode cannot carry V4 fields: "
+                    + ", ".join(sorted(provided))
+                )
+            return self
         if self.items is not None:
             if not self.items:
                 raise ValueError("items must be a non-empty list in digest mode")
@@ -922,8 +2041,42 @@ class ReportSubmission(Payload):
     def is_digest(self) -> bool:
         return self.items is not None
 
+    @property
+    def is_v5(self) -> bool:
+        return self.schema_version == 5 and self.horizon_decisions is not None
+
+    @property
+    def is_v6(self) -> bool:
+        return self.schema_version == 6 and (
+            self.horizon_decisions is not None or self.horizon_decisions_v6 is not None
+        )
+
+    @property
+    def v6_horizon_decisions(self) -> V6HorizonDecisionsSubmission | None:
+        if self.horizon_decisions_v6 is not None:
+            return self.horizon_decisions_v6
+        if isinstance(self.horizon_decisions, V6HorizonDecisionsSubmission):
+            return self.horizon_decisions
+        if self.horizon_decisions is None:
+            return None
+        return V6HorizonDecisionsSubmission.model_validate(
+            self.horizon_decisions.model_dump(mode="json")
+        )
+
     def all_source_ids(self) -> list[str]:
         ids = list(dict.fromkeys(self.source_ids))
+        if self.is_v5:
+            for source_id in self.horizon_decisions.all_source_ids():
+                if source_id not in ids:
+                    ids.append(source_id)
+            return ids
+        if self.is_v6:
+            decisions = self.v6_horizon_decisions
+            if decisions is not None:
+                for source_id in decisions.all_source_ids():
+                    if source_id not in ids:
+                        ids.append(source_id)
+            return ids
         if self.items is not None:
             return ids
         for value in (
@@ -948,3 +2101,347 @@ class ReportSubmission(Payload):
                 if source_id not in ids:
                     ids.append(source_id)
         return ids
+
+
+# ---------------------------------------------------------------------------
+# Standard AI diagnosis (schema v1)
+# ---------------------------------------------------------------------------
+#
+# The models below intentionally live beside the deep-research submission
+# models, but are not subclasses/aliases of them.  ``deep_research`` remains
+# the six-agent V4/V5/V6 contract; a standard diagnosis is a separate,
+# deterministic report kind.  In particular, the semantic-agent submission
+# does not expose any field through which a model can smuggle prices,
+# positions, technical indicators or quantitative scores.
+
+DiagnosisDirection = Literal["positive", "neutral", "negative", "unavailable"]
+DiagnosisAction = Literal[
+    "conditional_participation",
+    "wait",
+    "hold",
+    "reduce",
+    "exit",
+    "avoid",
+]
+DiagnosisValidationStatus = Literal[
+    "descriptive", "calibrated", "rejected", "unavailable"
+]
+DiagnosisAvailability = Literal["available", "degraded", "unavailable"]
+DiagnosisHoldingState = Literal["not_holding", "holding"]
+
+
+class DiagnosisClaim(Payload):
+    """A source-backed semantic claim returned by the one allowed Agent."""
+
+    text: str = Field(min_length=1)
+    source_ids: list[str] = Field(default_factory=list)
+    claim_type: Literal["fact", "inference", "hypothesis"] = "inference"
+
+    @model_validator(mode="after")
+    def _source_for_claim(self) -> "DiagnosisClaim":
+        if self.claim_type in {"fact", "inference"} and not self.source_ids:
+            raise ValueError("fact and inference diagnosis claims require source_ids")
+        return self
+
+
+class DiagnosisSemanticSubmission(Payload):
+    """Single-Agent submission contract for company/industry semantics.
+
+    This is deliberately narrower than :class:`StockDiagnosisV1`.  Trusted
+    identity and run fields are injected by the service, and all numeric
+    trading fields are absent by design.  ``extra=forbid`` is inherited from
+    :class:`Payload`, so ``price``, ``position``, ``quant_factors`` and other
+    internal fields are rejected rather than silently ignored.
+    """
+
+    schema_version: Literal[1] = 1
+    # These are optional on the model-facing payload: the trusted service may
+    # inject them from the current run/Evidence context.  If supplied, the
+    # service checks them against that context before persistence.
+    instrument: InstrumentTag | None = None
+    evidence_context_id: str | None = Field(default=None, min_length=1)
+    source_ids: list[str] = Field(default_factory=list)
+    business_understandable: bool | None = None
+    company_understanding: str | None = None
+    business_model: str | None = None
+    business_model_summary: str | None = None
+    revenue_sources: list[str] = Field(default_factory=list)
+    competitive_advantages: list[DiagnosisClaim] = Field(default_factory=list)
+    competitive_advantage: list[DiagnosisClaim] = Field(default_factory=list)
+    competitive_counterevidence: list[DiagnosisClaim] = Field(default_factory=list)
+    competitive_advantage_counterevidence: list[DiagnosisClaim] = Field(default_factory=list)
+    management_governance: list[DiagnosisClaim] = Field(default_factory=list)
+    governance: list[DiagnosisClaim] = Field(default_factory=list)
+    industry_supply_demand: list[DiagnosisClaim] = Field(default_factory=list)
+    industry_context: list[DiagnosisClaim] = Field(default_factory=list)
+    policy_transmission: list[DiagnosisClaim] = Field(default_factory=list)
+    policy_context: list[DiagnosisClaim] = Field(default_factory=list)
+    cycle_position: list[DiagnosisClaim] = Field(default_factory=list)
+    cycle_context: list[DiagnosisClaim] = Field(default_factory=list)
+    key_assumptions: list[DiagnosisClaim] = Field(default_factory=list)
+    risks: list[DiagnosisClaim] = Field(default_factory=list)
+    conclusion_change_conditions: list[DiagnosisClaim] = Field(default_factory=list)
+    change_conditions: list[DiagnosisClaim] = Field(default_factory=list)
+
+    @model_validator(mode="after")
+    def _claims_in_source_closure(self) -> "DiagnosisSemanticSubmission":
+        source_ids = set(self.source_ids)
+        for field_name in (
+            "competitive_advantages",
+            "competitive_advantage",
+            "competitive_counterevidence",
+            "competitive_advantage_counterevidence",
+            "management_governance",
+            "governance",
+            "industry_supply_demand",
+            "industry_context",
+            "policy_transmission",
+            "policy_context",
+            "cycle_position",
+            "cycle_context",
+            "key_assumptions",
+            "risks",
+            "conclusion_change_conditions",
+            "change_conditions",
+        ):
+            for claim in getattr(self, field_name):
+                if not set(claim.source_ids) <= source_ids:
+                    raise ValueError(
+                        f"{field_name} source_ids must be included in source_ids"
+                    )
+        return self
+
+
+# Descriptive aliases used by integrations which refer to the Agent as a
+# semantic researcher rather than a submitter.  They are aliases, not a
+# second contract.
+StockDiagnosisAgentSubmission = DiagnosisSemanticSubmission
+StockDiagnosisSemanticSubmission = DiagnosisSemanticSubmission
+StandardDiagnosisSemanticSubmission = DiagnosisSemanticSubmission
+DiagnosisAgentSubmission = DiagnosisSemanticSubmission
+
+
+class DiagnosisDataQuality(Payload):
+    status: Literal["complete", "available", "degraded", "unavailable"]
+    confidence: Literal["high", "medium", "low"]
+    missing_fields: list[str] = Field(default_factory=list)
+    degraded_fields: list[str] = Field(default_factory=list)
+    sample_counts: dict[str, int] = Field(default_factory=dict)
+
+
+class DiagnosisFundamentalResearch(Payload):
+    status: DiagnosisAvailability
+    business_understandable: bool | None = None
+    company_understanding: str | None = None
+    business_model: str | None = None
+    business_model_summary: str | None = None
+    revenue_sources: list[str] = Field(default_factory=list)
+    competitive_advantages: list[DiagnosisClaim] = Field(default_factory=list)
+    competitive_advantage: list[DiagnosisClaim] = Field(default_factory=list)
+    competitive_counterevidence: list[DiagnosisClaim] = Field(default_factory=list)
+    competitive_advantage_counterevidence: list[DiagnosisClaim] = Field(default_factory=list)
+    management_governance: list[DiagnosisClaim] = Field(default_factory=list)
+    governance: list[DiagnosisClaim] = Field(default_factory=list)
+    industry_supply_demand: list[DiagnosisClaim] = Field(default_factory=list)
+    industry_context: list[DiagnosisClaim] = Field(default_factory=list)
+    policy_transmission: list[DiagnosisClaim] = Field(default_factory=list)
+    policy_context: list[DiagnosisClaim] = Field(default_factory=list)
+    cycle_position: list[DiagnosisClaim] = Field(default_factory=list)
+    cycle_context: list[DiagnosisClaim] = Field(default_factory=list)
+    key_assumptions: list[DiagnosisClaim] = Field(default_factory=list)
+    risks: list[DiagnosisClaim] = Field(default_factory=list)
+    conclusion_change_conditions: list[DiagnosisClaim] = Field(default_factory=list)
+    change_conditions: list[DiagnosisClaim] = Field(default_factory=list)
+    source_ids: list[str] = Field(default_factory=list)
+
+
+class DiagnosisFactor(Payload):
+    name: str = Field(min_length=1)
+    value: float | None = None
+    percentile: float | None = Field(default=None, ge=0, le=1)
+    direction: Literal["positive", "neutral", "negative", "unavailable"] | None = None
+    weight: float | None = None
+    contribution: float | None = None
+    source_ids: list[str] = Field(default_factory=list)
+
+
+class DiagnosisFactorHorizon(Payload):
+    status: DiagnosisAvailability = "unavailable"
+    validation_status: DiagnosisValidationStatus = "unavailable"
+    factor_score: float | None = Field(default=None, ge=0, le=1)
+    market_percentile: float | None = Field(default=None, ge=0, le=1)
+    industry_percentile: float | None = Field(default=None, ge=0, le=1)
+    rank: int | None = Field(default=None, ge=1)
+    sample_count: int | None = Field(default=None, ge=0)
+    industry_sample_count: int | None = Field(default=None, ge=0)
+    missing_count: int | None = Field(default=None, ge=0)
+    fallback_scope: Literal["none", "market", "unavailable"] = "none"
+    factors: list[DiagnosisFactor] = Field(default_factory=list)
+    factor_contributions: dict[str, float] = Field(default_factory=dict)
+    method_version: str = "unavailable"
+    source_ids: list[str] = Field(default_factory=list)
+
+
+class DiagnosisFactorSnapshot(Payload):
+    short_term: DiagnosisFactorHorizon
+    medium_term: DiagnosisFactorHorizon
+    long_term: DiagnosisFactorHorizon
+    snapshot_as_of: str | None = None
+    universe_definition: str | None = None
+    content_hash: str | None = None
+    sample_count: int | None = Field(default=None, ge=0)
+    missing_count: int | None = Field(default=None, ge=0)
+    source_ids: list[str] = Field(default_factory=list)
+
+
+class DiagnosisMaterializedPlan(Payload):
+    """Execution values are copied only from deterministic execution output."""
+
+    reference_entry: float | None = None
+    pullback_entry: float | None = None
+    stop_loss: float | None = None
+    first_take_profit: float | None = None
+    second_take_profit: float | None = None
+    value_status: Literal["available", "partial", "unavailable"] = "unavailable"
+    unavailable_fields: list[str] = Field(default_factory=list)
+    invalidation: list[str] = Field(default_factory=list)
+    boundaries: list[str] = Field(default_factory=list)
+    max_risk_pct: float | None = None
+    source_ids: list[str] = Field(default_factory=list)
+
+
+class DiagnosisPositionPlan(Payload):
+    reference_position_pct: float | None = Field(default=None, ge=0, le=100)
+    max_position_pct: float | None = Field(default=None, ge=0, le=100)
+    risk_budget_pct: float | None = Field(default=None, ge=0, le=100)
+    value_status: Literal["available", "partial", "unavailable"] = "unavailable"
+    source_ids: list[str] = Field(default_factory=list)
+
+
+class DiagnosisHorizonDecision(Payload):
+    direction: DiagnosisDirection
+    action: DiagnosisAction
+    factor_score: float | None = Field(default=None, ge=0, le=1)
+    market_percentile: float | None = Field(default=None, ge=0, le=1)
+    industry_percentile: float | None = Field(default=None, ge=0, le=1)
+    factor_contributions: dict[str, float] = Field(default_factory=dict)
+    validation_status: DiagnosisValidationStatus
+    not_holding_action: DiagnosisAction
+    holding_action: DiagnosisAction
+    materialized_plan: DiagnosisMaterializedPlan
+    position_plan: DiagnosisPositionPlan
+    review_trigger: str = "暂无可确认的复评条件"
+    valid_until: str | None = None
+    key_reasons: list[DiagnosisClaim] = Field(default_factory=list)
+    key_risks: list[DiagnosisClaim] = Field(default_factory=list)
+    confidence: Literal["high", "medium", "low"]
+    source_ids: list[str] = Field(default_factory=list)
+
+
+class DiagnosisHorizonDecisions(Payload):
+    short_term: DiagnosisHorizonDecision
+    medium_term: DiagnosisHorizonDecision
+    long_term: DiagnosisHorizonDecision
+
+
+class DiagnosisDecisionBasisRow(Payload):
+    key: Literal["fundamental", "quant", "sentiment", "risk"]
+    label: str = Field(min_length=1)
+    stance: Literal["positive", "neutral", "cautious", "negative", "strict"]
+    stance_label: str = Field(min_length=1)
+    summary: str = Field(min_length=1)
+    source_ids: list[str] = Field(default_factory=list)
+
+
+class DiagnosisDecisionRadar(Payload):
+    current_decision: DiagnosisHorizonDecision | None = None
+    basis_rows: list[DiagnosisDecisionBasisRow] = Field(default_factory=list)
+    short_term: DiagnosisHorizonDecision
+    medium_term: DiagnosisHorizonDecision
+    long_term: DiagnosisHorizonDecision
+    holding_state: DiagnosisHoldingState = "not_holding"
+    overall_confidence: Literal["high", "medium", "low"]
+    deterministic: bool = True
+
+
+class DiagnosisTechnicalExecution(Payload):
+    status: DiagnosisAvailability
+    source_ids: list[str] = Field(default_factory=list)
+    # The calculation layer may add deterministic fields in this map.  The
+    # report contract only exposes the values required for the plan and keeps
+    # the map strict at the top level.
+    horizons: dict[str, DiagnosisMaterializedPlan] = Field(default_factory=dict)
+    position: dict[str, DiagnosisPositionPlan] = Field(default_factory=dict)
+    review_triggers: dict[str, str] = Field(default_factory=dict)
+    valid_until: dict[str, str | None] = Field(default_factory=dict)
+
+
+class StockDiagnosisV1(Payload):
+    """Persisted deterministic standard-diagnosis report.
+
+    ``kind`` is a discriminator rather than a cosmetic label.  Deep research
+    V4/V5/V6 reports remain ``kind=deep_research`` and are validated by their
+    existing models; this contract cannot validate or represent those reports.
+    """
+
+    schema_version: Literal[1]
+    kind: Literal["ai_diagnosis"]
+    diagnosis_id: str = Field(pattern=r"^[A-Za-z0-9_-]{1,128}$")
+    instrument: InstrumentTag
+    research_cutoff_at: str = Field(min_length=1)
+    market_as_of: str | None = None
+    generated_at: str = Field(min_length=1)
+    evidence_context_id: str = Field(min_length=1)
+    source_ids: list[str] = Field(default_factory=list)
+    data_quality: DiagnosisDataQuality
+    fundamental_research: DiagnosisFundamentalResearch
+    fundamental_factors: DiagnosisFactorSnapshot
+    quant_factors: DiagnosisFactorSnapshot
+    technical_execution: DiagnosisTechnicalExecution
+    horizon_decisions: DiagnosisHorizonDecisions
+    decision_radar: DiagnosisDecisionRadar
+    method_versions: dict[str, str] = Field(default_factory=dict)
+
+    @model_validator(mode="after")
+    def _separate_from_deep_research(self) -> "StockDiagnosisV1":
+        if self.kind != "ai_diagnosis" or self.schema_version != 1:
+            raise ValueError("standard diagnosis requires kind=ai_diagnosis and schema_version=1")
+        nested_source_ids: set[str] = set()
+        for value in (
+            self.fundamental_research,
+            self.fundamental_factors,
+            self.quant_factors,
+            self.technical_execution,
+            self.horizon_decisions,
+        ):
+            serialized = value.model_dump(mode="python")
+            nested_source_ids.update(_diagnosis_source_ids(serialized))
+        if not nested_source_ids <= set(self.source_ids):
+            missing = sorted(nested_source_ids - set(self.source_ids))
+            raise ValueError(f"diagnosis source_ids missing nested sources: {missing}")
+        return self
+
+
+def _diagnosis_source_ids(value: object) -> set[str]:
+    """Collect source ids for the v1 report closure validator."""
+
+    if isinstance(value, dict):
+        found: set[str] = set()
+        raw = value.get("source_ids")
+        if isinstance(raw, list):
+            found.update(item for item in raw if isinstance(item, str) and item)
+        for child in value.values():
+            found.update(_diagnosis_source_ids(child))
+        return found
+    if isinstance(value, list):
+        found: set[str] = set()
+        for child in value:
+            found.update(_diagnosis_source_ids(child))
+        return found
+    return set()
+
+
+# Short names make the boundary discoverable to tool and API code without
+# exposing the deep-research ``ReportSubmission`` as a compatibility alias.
+DiagnosisReportV1 = StockDiagnosisV1
+StockDiagnosisSubmission = DiagnosisSemanticSubmission

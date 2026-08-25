@@ -21,7 +21,7 @@ from loguru import logger
 from mona.config.loader import get_config_path, load_config, save_config
 from mona.config.schema import ProviderConfig
 from mona.providers.capabilities import resolve_capabilities
-from mona.providers.cindy_catalog import CINDY_CHAT_PROVIDERS, CINDY_CHAT_PROVIDER_BY_ID
+from mona.providers.cindy_catalog import CINDY_CHAT_PROVIDER_BY_ID, CINDY_CHAT_PROVIDERS
 from mona.providers.image_generation import get_image_gen_provider
 from mona.providers.registry import (
     PROVIDERS,
@@ -774,6 +774,14 @@ def update_agent_settings(query: QueryParams) -> dict[str, Any]:
             )
         ):
             raise WebUISettingsError("provider is not configured")
+        chat_provider = next(
+            (row for row in _chat_provider_rows(config) if row["name"] == provider),
+            None,
+        )
+        if model is not None and chat_provider is not None and model not in {
+            item["id"] for item in chat_provider["models"] if item["enabled"]
+        }:
+            raise WebUISettingsError("model is not enabled for this provider")
         if defaults.provider != provider:
             defaults.provider = provider
             changed = True
@@ -926,7 +934,7 @@ def update_provider_settings(query: QueryParams) -> dict[str, Any]:
             remaining = [
                 row
                 for row in _chat_provider_rows(config)
-                if row["name"] != provider_name and row["configured"]
+                if row["name"] != provider_name and row["configured"] and not row.get("is_builtin")
             ]
             order = {entry.id: index for index, entry in enumerate(CINDY_CHAT_PROVIDERS)}
             remaining.sort(
@@ -1040,7 +1048,7 @@ def update_provider_settings(query: QueryParams) -> dict[str, Any]:
     ):
         raise WebUISettingsError("enabled_models must not be empty")
 
-    if (catalog_entry is not None or custom_entry) and (
+    if (catalog_entry is not None or custom_entry or spec.free_default_model) and (
         "enabled_models" in query or "enabledModels" in query
     ):
         raw_enabled = _query_first_alias(query, "enabled_models", "enabledModels")
@@ -1052,9 +1060,11 @@ def update_provider_settings(query: QueryParams) -> dict[str, Any]:
             isinstance(item, str) for item in enabled
         ):
             raise WebUISettingsError("enabled_models must be a JSON array of strings")
-        if not enabled:
+        if not enabled and creating_custom:
             raise WebUISettingsError("enabled_models must not be empty")
         known_models = {item.id for item in catalog_entry.models} if catalog_entry else set()
+        if spec.free_default_model:
+            known_models.add(spec.free_default_model)
         known_models.update(
             str(item.get("id"))
             for item in (provider_config.discovered_models or [])
@@ -1076,13 +1086,15 @@ def update_provider_settings(query: QueryParams) -> dict[str, Any]:
                 )
         if any(item not in known_models for item in enabled):
             raise WebUISettingsError("enabled_models contains an unknown model")
+        if spec.free_default_model and any(not item.endswith("-free") for item in enabled):
+            raise WebUISettingsError("内置免费供应商仅支持免费模型")
         normalized_enabled = list(dict.fromkeys(enabled))
         if provider_config.enabled_models != normalized_enabled:
             provider_config.enabled_models = normalized_enabled
             changed = True
         models_updated = True
 
-    if (catalog_entry is not None or custom_entry) and (
+    if (catalog_entry is not None or custom_entry or spec.free_default_model) and (
         "discovered_models" in query or "discoveredModels" in query
     ):
         raw_discovered = _query_first_alias(
@@ -1102,6 +1114,8 @@ def update_provider_settings(query: QueryParams) -> dict[str, Any]:
             model_id = str(item.get("id") or "").strip()
             if not model_id:
                 continue
+            if spec.free_default_model and not model_id.endswith("-free"):
+                raise WebUISettingsError("内置免费供应商仅支持免费模型")
             context_window = item.get("contextWindow")
             if context_window is not None and (
                 isinstance(context_window, bool) or not isinstance(context_window, int)
@@ -1138,6 +1152,8 @@ def update_provider_settings(query: QueryParams) -> dict[str, Any]:
 
         if provider_config.enabled_models is not None:
             known_models = {item.id for item in catalog_entry.models} if catalog_entry else set()
+            if spec.free_default_model:
+                known_models.add(spec.free_default_model)
             known_models.update(
                 str(item.get("id"))
                 for item in merged_discovered
@@ -1148,11 +1164,11 @@ def update_provider_settings(query: QueryParams) -> dict[str, Any]:
                 for model_id in provider_config.enabled_models
                 if model_id in known_models
             ]
-            if not reconciled_enabled:
+            if provider_config.enabled_models and not reconciled_enabled:
                 fallback_model = (
                     catalog_entry.models[0].id
                     if catalog_entry and catalog_entry.models
-                    else next((item["id"] for item in merged_discovered), None)
+                    else (spec.free_default_model or next((item["id"] for item in merged_discovered), None))
                 )
                 if fallback_model is None:
                     raise WebUISettingsError("至少需要一个模型")
@@ -1167,7 +1183,7 @@ def update_provider_settings(query: QueryParams) -> dict[str, Any]:
         # scalar fields and model payload syntax have passed validation.
         config.providers.cindy[provider_name] = provider_config
 
-    if (catalog_entry is not None or custom_entry) and models_updated and provider_config.enabled_models:
+    if (catalog_entry is not None or custom_entry or spec.free_default_model) and models_updated and provider_config.enabled_models:
         enabled_models = provider_config.enabled_models
         if provider_config.model and provider_config.model not in enabled_models:
             provider_config.model = enabled_models[0]
@@ -1191,21 +1207,24 @@ def update_provider_settings(query: QueryParams) -> dict[str, Any]:
             raise WebUISettingsError("显示名称不能为空")
         if not provider_config.api_base:
             raise WebUISettingsError("API Base 不能为空")
-        if not provider_config.enabled_models:
+        if creating_custom and not provider_config.enabled_models:
             raise WebUISettingsError("enabled_models must not be empty")
         known_models = {
             str(item.get("id"))
             for item in (provider_config.discovered_models or [])
             if isinstance(item, dict) and item.get("id")
         }
-        if any(model_id not in known_models for model_id in provider_config.enabled_models):
+        if any(model_id not in known_models for model_id in provider_config.enabled_models or []):
             raise WebUISettingsError("enabled_models contains an unknown model")
-        if not provider_config.model:
+        if provider_config.enabled_models and not provider_config.model:
             provider_config.model = provider_config.enabled_models[0]
             changed = True
-        elif provider_config.model not in provider_config.enabled_models:
+        elif provider_config.enabled_models and provider_config.model not in provider_config.enabled_models:
             provider_config.model = provider_config.enabled_models[0]
             changed = True
+
+    if models_updated:
+        changed = _ensure_enabled_model_default(config) or changed
 
     if changed:
         save_config(config)
@@ -1674,7 +1693,11 @@ def _chat_provider_rows(config: Any) -> list[dict[str, Any]]:
         configured = bool(provider_config) and (
             bool(provider_config.api_key) or not entry.api_key_required
         )
-        selected = list(provider_config.enabled_models or []) if provider_config else []
+        selected = (
+            list(provider_config.enabled_models)
+            if provider_config and provider_config.enabled_models is not None
+            else None
+        )
         catalog_models: list[dict[str, Any]] = [
             {
                 "id": model.id,
@@ -1716,7 +1739,7 @@ def _chat_provider_rows(config: Any) -> list[dict[str, Any]]:
                 "models": [
                     {
                         **model,
-                        "enabled": (not selected or model["id"] in selected),
+                        "enabled": selected is None or model["id"] in selected,
                         "recommended": index == 0,
                     }
                     for index, model in enumerate(catalog_models)
@@ -1726,6 +1749,41 @@ def _chat_provider_rows(config: Any) -> list[dict[str, Any]]:
                 "api_base_editable": entry.api_base_editable,
                 "is_custom": False,
             }
+        )
+    zen = find_by_name("zen")
+    if zen and zen.free_default_model:
+        provider_config = _provider_config(config, zen.name)
+        selected = (
+            list(provider_config.enabled_models)
+            if provider_config and provider_config.enabled_models is not None
+            else None
+        )
+        models = [{"id": zen.free_default_model, "name": zen.free_default_model}]
+        seen_ids = {zen.free_default_model}
+        for model in (provider_config.discovered_models if provider_config else None) or []:
+            model_id = str(model.get("id") or "").strip()
+            if not model_id or not model_id.endswith("-free") or model_id in seen_ids:
+                continue
+            seen_ids.add(model_id)
+            models.append({"id": model_id, "name": str(model.get("name") or model_id)})
+        rows.insert(
+            0,
+            {
+                "name": zen.name,
+                "label": zen.display_name,
+                "configured": True,
+                "api_key_required": False,
+                "api_base": zen.default_api_base,
+                "default_api_base": zen.default_api_base,
+                "model": (provider_config.model if provider_config and provider_config.model else zen.free_default_model),
+                "models": [
+                    {**model, "enabled": selected is None or model["id"] in selected, "recommended": index == 0}
+                    for index, model in enumerate(models)
+                ],
+                "models_url": _ZEN_MODELS_URL,
+                "api_base_editable": False,
+                "is_builtin": True,
+            },
         )
     for provider_name, provider_config in config.providers.cindy.items():
         if not is_custom_provider_name(provider_name):
@@ -1754,7 +1812,6 @@ def _chat_provider_rows(config: Any) -> list[dict[str, Any]]:
                 "configured": bool(
                     provider_config.display_name
                     and provider_config.api_base
-                    and selected
                     and discovered_models
                 ),
                 "api_key_required": False,
@@ -1779,6 +1836,51 @@ def _chat_provider_rows(config: Any) -> list[dict[str, Any]]:
     return rows
 
 
+def _ensure_enabled_model_default(config: Any) -> bool:
+    """Keep one chat model enabled globally and rehome an invalid default."""
+    rows = _chat_provider_rows(config)
+    choices = [
+        (row, [model["id"] for model in row["models"] if model["enabled"]])
+        for row in rows
+        if row["configured"]
+    ]
+    choices = [(row, models) for row, models in choices if models]
+    if not choices:
+        raise WebUISettingsError("至少需要保留一个可用模型")
+
+    defaults = config.agents.defaults
+    current_provider = defaults.provider
+    if current_provider == "auto":
+        try:
+            current_provider = config.get_provider_name(defaults.model)
+        except Exception:
+            current_provider = ""
+    current_model = defaults.model
+    if current_provider == "zen" and not current_model:
+        zen = find_by_name("zen")
+        current_model = zen.free_default_model if zen else ""
+    if any(
+        row["name"] == current_provider
+        and current_model in models
+        for row, models in choices
+    ):
+        return False
+
+    preferred = [choice for choice in choices if not choice[0].get("is_builtin")]
+    order = {entry.id: index for index, entry in enumerate(CINDY_CHAT_PROVIDERS)}
+    preferred.sort(
+        key=lambda choice: (
+            choice[0].get("region") != "cn",
+            choice[0]["name"].startswith("custom-"),
+            order.get(choice[0]["name"], len(order)),
+        )
+    )
+    replacement, models = (preferred or choices)[0]
+    defaults.provider = replacement["name"]
+    defaults.model = replacement["model"] if replacement.get("model") in models else models[0]
+    return True
+
+
 _ZEN_MODELS_URL = "https://opencode.ai/zen/v1/models"
 
 
@@ -1799,6 +1901,52 @@ async def fetch_zen_free_models() -> list[str]:
     except Exception:
         logger.exception("Failed to fetch Zen free models")
         return []
+
+
+def sync_zen_free_models(models: list[str]) -> bool:
+    """Persist the live Zen catalog without changing an explicit model selection."""
+    model_ids = list(dict.fromkeys(model.strip() for model in models if model.strip().endswith("-free")))
+    if not model_ids:
+        return False
+
+    config = load_config()
+    spec = find_by_name("zen")
+    provider_config = _provider_config(config, "zen")
+    if spec is None or provider_config is None or not spec.free_default_model:
+        return False
+
+    discovered = [
+        {"id": model_id, "name": model_id}
+        for model_id in model_ids
+        if model_id != spec.free_default_model
+    ]
+    changed = provider_config.discovered_models != discovered
+    if changed:
+        provider_config.discovered_models = discovered
+
+    known_models = {spec.free_default_model, *model_ids}
+    if provider_config.enabled_models is not None:
+        enabled = [model_id for model_id in provider_config.enabled_models if model_id in known_models]
+        if provider_config.enabled_models and not enabled:
+            enabled = [spec.free_default_model]
+        if provider_config.enabled_models != enabled:
+            provider_config.enabled_models = enabled
+            changed = True
+
+    enabled_models = provider_config.enabled_models
+    if enabled_models is not None and provider_config.model not in enabled_models:
+        next_model = enabled_models[0] if enabled_models else None
+        if provider_config.model != next_model:
+            provider_config.model = next_model
+            changed = True
+    elif provider_config.model and provider_config.model not in known_models:
+        provider_config.model = spec.free_default_model
+        changed = True
+
+    changed = _ensure_enabled_model_default(config) or changed
+    if changed:
+        save_config(config)
+    return changed
 
 
 # ─── Provider model probing ───────────────────────────────────────────
@@ -1995,6 +2143,8 @@ async def probe_provider_models(
         raise WebUISettingsError("endpoint 返回内容格式无法识别")
 
     models = _parse_models_payload(payload)
+    if spec.free_default_model:
+        models = [model for model in models if model.endswith("-free")]
     if not models and isinstance(payload, dict) and payload.get("error"):
         err_msg = str(payload["error"])[:200]
         raise WebUISettingsError(f"endpoint 返回错误: {err_msg}")

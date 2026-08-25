@@ -178,6 +178,8 @@ export const MaterialsSidebar = forwardRef<MaterialsSidebarHandle, MaterialsSide
     async (targetDir: string) => {
       if (!isTauri()) return;
       try {
+        setError(null);
+        setCompileTask(null);
         const { open } = await import("@tauri-apps/plugin-dialog");
         const selected = await open({
           multiple: true,
@@ -332,7 +334,7 @@ export const MaterialsSidebar = forwardRef<MaterialsSidebarHandle, MaterialsSide
   const runCompile = useCallback(
     async (paths: string[]) => {
       if (paths.length === 0) {
-        setError("没有可编译的资料。请先上传文件。");
+        setError("没有可入库的资料。请先上传文件。");
         return;
       }
       setCompiling(true);
@@ -347,7 +349,7 @@ export const MaterialsSidebar = forwardRef<MaterialsSidebarHandle, MaterialsSide
           if (status.state !== "running") {
             if (status.errors.length > 0 && status.state !== "cancelled") {
               setError(
-                `编译完成，但有 ${status.errors.length} 个错误：\n${status.errors.slice(0, 3).join("\n")}${status.errors.length > 3 ? `\n…（共 ${status.errors.length} 个）` : ""}`,
+                `入库完成，但有 ${status.errors.length} 个错误：\n${status.errors.slice(0, 3).join("\n")}${status.errors.length > 3 ? `\n…（共 ${status.errors.length} 个）` : ""}`,
               );
             }
             break;
@@ -359,11 +361,10 @@ export const MaterialsSidebar = forwardRef<MaterialsSidebarHandle, MaterialsSide
       } finally {
         compileTaskIdRef.current = null;
         setCompiling(false);
-        setCompileTask(null);
-        await refreshWiki();
+        await Promise.all([refreshRaw(), refreshWiki()]);
       }
     },
-    [refreshWiki],
+    [refreshRaw, refreshWiki],
   );
 
   const handleCompile = useCallback(async () => {
@@ -371,6 +372,10 @@ export const MaterialsSidebar = forwardRef<MaterialsSidebarHandle, MaterialsSide
       const entries = await listMaterialsFiles();
       // 传根目录全部条目（含目录），后端递归展开，修复旧流程只编译根目录文件的问题
       const paths = entries.map((e) => e.path.replace(/^raw\//, "")).filter(Boolean);
+      if (paths.length === 0) {
+        setError("当前资料库没有原始资料。请先上传文件，再点击“全部入库”。");
+        return;
+      }
       await runCompile(paths);
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
@@ -513,25 +518,42 @@ export const MaterialsSidebar = forwardRef<MaterialsSidebarHandle, MaterialsSide
         ) : null}
       </div>
 
-      {compiling && compileTask ? (
-        <div className="border-b border-border/70 px-3 py-1.5 text-[11.5px] text-muted-foreground">
+      {compileTask ? (
+        <div
+          className={cn(
+            "border-b border-border/70 px-3 py-1.5 text-[11.5px] text-muted-foreground",
+            compileTask.state === "error" && "text-destructive",
+          )}
+        >
           <div className="flex items-center gap-1.5">
-            <Loader2 className="h-3 w-3 animate-spin" />
+            {compileTask.state === "running" ? (
+              <Loader2 className="h-3 w-3 animate-spin" />
+            ) : null}
             <span className="min-w-0 flex-1 truncate">
-              {compileTask.currentFile || "处理中..."}
+              {compileTask.state === "running"
+                ? compileTask.currentFile || "正在入库..."
+                : compileTask.state === "done"
+                  ? `入库完成：处理 ${compileTask.completedFiles} 个资料，生成 ${compileTask.pagesWritten} 个 Wiki 页面`
+                  : compileTask.state === "cancelled"
+                    ? "入库已取消"
+                    : "入库失败"}
             </span>
-            <button
-              type="button"
-              onClick={handleCancelCompile}
-              className="shrink-0 rounded px-1 py-0.5 text-[10.5px] text-muted-foreground hover:bg-accent hover:text-foreground"
-            >
-              取消
-            </button>
+            {compileTask.state === "running" ? (
+              <button
+                type="button"
+                onClick={handleCancelCompile}
+                className="shrink-0 rounded px-1 py-0.5 text-[10.5px] text-muted-foreground hover:bg-accent hover:text-foreground"
+              >
+                取消
+              </button>
+            ) : null}
           </div>
-          <div className="mt-0.5 text-[10.5px]">
-            已完成 {compileTask.completedFiles} / {compileTask.totalFiles} · 生成{" "}
-            {compileTask.pagesWritten} 页
-          </div>
+          {compileTask.state === "running" ? (
+            <div className="mt-0.5 text-[10.5px]">
+              已完成 {compileTask.completedFiles} / {compileTask.totalFiles} · 生成{" "}
+              {compileTask.pagesWritten} 页
+            </div>
+          ) : null}
         </div>
       ) : null}
 

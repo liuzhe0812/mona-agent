@@ -162,7 +162,7 @@ function OverviewMetric({
   color: string;
 }) {
   return (
-    <section className="min-w-0 rounded-lg border border-border/70 bg-card p-3.5 shadow-sm">
+    <section className="min-w-0 rounded-lg border border-border/70 bg-card p-3.5">
       <div className="flex items-center justify-between gap-3">
         <div className="min-w-0">
           <p className="text-caption text-muted-foreground">{label}</p>
@@ -315,7 +315,7 @@ export function OverviewPanel({ onNavigate, onStartStorageScan, onAcknowledgeSta
       <h2 className="sr-only">电脑状态概览</h2>
 
       {issues.length > 0 && (
-        <section className="rounded-lg border border-border/70 bg-card shadow-sm">
+        <section className="rounded-lg border border-border/70 bg-card">
           <div className="border-b border-border/60 px-4 py-3">
             <h2 className="text-body font-semibold">现在值得处理</h2>
             <p className="mt-1 text-micro text-muted-foreground">基于本机实时证据，为你排序 {issues.length} 个可执行问题</p>

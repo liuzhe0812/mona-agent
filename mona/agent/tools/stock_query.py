@@ -58,7 +58,16 @@ _BASE_EVIDENCE_SECTIONS = (
     "relative_benchmarks",
     "materials",
 )
-_EVIDENCE_SECTION_KEYS = ("evidence_coverage",) + _V2_EVIDENCE_SECTIONS + _BASE_EVIDENCE_SECTIONS
+_EVIDENCE_SECTION_KEYS = (
+    "decision_readiness",
+    "evidence_coverage",
+    "valuation",
+    "quant_validation",
+    "quant_promotion",
+    "execution_qualification",
+    *_V2_EVIDENCE_SECTIONS,
+    *_BASE_EVIDENCE_SECTIONS,
+)
 _COMPACT_EVIDENCE_AGENT_IDS = frozenset(
     {
         "com.mona.stock-bull-researcher",
@@ -171,6 +180,134 @@ def _compact_evidence_coverage(value: Any) -> Any:
     return compact
 
 
+def _compact_decision_readiness(value: Any) -> Any:
+    """Expose only the readiness gates needed by an analyst.
+
+    The deterministic price plan is deliberately kept out of the agent read
+    path.  Agents only need to know whether each horizon is ready and which
+    required inputs are present; source ids and derived metrics remain trusted
+    system data rather than model context.
+    """
+    if not isinstance(value, dict):
+        return value
+    compact: dict[str, Any] = {}
+    if "status" in value:
+        compact["status"] = value["status"]
+    horizons = value.get("horizons")
+    if isinstance(horizons, dict):
+        compact["horizons"] = {}
+        for horizon in ("short_term", "medium_term", "long_term"):
+            item = horizons.get(horizon)
+            if not isinstance(item, dict):
+                continue
+            compact["horizons"][horizon] = {
+                key: item[key]
+                for key in ("status", "required", "available")
+                if key in item
+            }
+    enhanced = value.get("enhanced")
+    if isinstance(enhanced, dict) and "status" in enhanced:
+        compact["enhanced"] = {"status": enhanced["status"]}
+    for gate_name in ("research_ready", "trade_ready"):
+        gate = value.get(gate_name)
+        if not isinstance(gate, dict):
+            continue
+        compact[gate_name] = {"status": gate.get("status")}
+        gate_horizons = gate.get("horizons")
+        if isinstance(gate_horizons, dict):
+            compact[gate_name]["horizons"] = {
+                horizon: {
+                    key: item[key]
+                    for key in ("status", "required", "available")
+                    if key in item
+                }
+                for horizon, item in gate_horizons.items()
+                if horizon in {"short_term", "medium_term", "long_term"}
+                and isinstance(item, dict)
+            }
+    return compact
+
+
+def _compact_valuation(value: Any) -> Any:
+    if not isinstance(value, dict):
+        return value
+    result = {
+        key: value[key]
+        for key in ("status", "trade_ready", "usable_method_count", "method_version")
+        if key in value
+    }
+    cross = value.get("cross_range")
+    if isinstance(cross, dict):
+        result["cross_range"] = {
+            key: cross[key]
+            for key in ("status", "method_count", "low", "high")
+            if key in cross
+        }
+    horizons = value.get("horizons")
+    if isinstance(horizons, dict):
+        result["horizons"] = {
+            horizon: {
+                key: item[key]
+                for key in ("status", "tradeReady", "usableMethodCount", "reason")
+                if key in item
+            }
+            for horizon, item in horizons.items()
+            if horizon in {"short_term", "medium_term", "long_term"}
+            and isinstance(item, dict)
+        }
+    return result
+
+
+def _compact_quant_validation(value: Any) -> Any:
+    if not isinstance(value, dict):
+        return value
+    result = {
+        key: value[key]
+        for key in (
+            "status", "promotionStatus", "promotion_status", "validationStatus",
+            "validation_status", "eligibleForTrading", "eligible_for_trading",
+            "reason", "methodVersion", "method_version",
+        )
+        if key in value
+    }
+    horizons = value.get("horizons")
+    if isinstance(horizons, dict):
+        result["horizons"] = {
+            horizon: {
+                key: item[key]
+                for key in (
+                    "status", "validationStatus", "validation_status",
+                    "promotionStatus", "promotion_status",
+                    "eligibleForTrading", "eligible_for_trading",
+                )
+                if key in item
+            }
+            for horizon, item in horizons.items()
+            if horizon in {"short_term", "medium_term", "long_term"}
+            and isinstance(item, dict)
+        }
+    return result
+
+
+def _compact_execution_qualification(value: Any) -> Any:
+    if not isinstance(value, dict):
+        return value
+    result = {"status": value.get("status")}
+    horizons = value.get("horizons")
+    if isinstance(horizons, dict):
+        result["horizons"] = {
+            horizon: {
+                key: item[key]
+                for key in ("status", "executionStatus")
+                if key in item
+            }
+            for horizon, item in horizons.items()
+            if horizon in {"short_term", "medium_term", "long_term"}
+            and isinstance(item, dict)
+        }
+    return result
+
+
 def _compact_sources(sources: list[Any]) -> list[Any]:
     compact: list[Any] = []
     for source in sources:
@@ -222,7 +359,38 @@ def _select_evidence_bundle(
         )
     partitions: dict[str, Any] = {}
     for key in sorted(selected):
-        if key == "kline":
+        if key == "decision_readiness":
+            partitions[key] = (
+                _compact_decision_readiness(bundle.get(key))
+                if compact
+                else bundle.get(key)
+            )
+        elif key == "valuation":
+            partitions[key] = (
+                _compact_valuation(bundle.get(key))
+                if compact
+                else bundle.get(key)
+            )
+        elif key == "quant_validation":
+            partitions[key] = (
+                _compact_quant_validation(bundle.get(key))
+                if compact
+                else bundle.get(key)
+            )
+        elif key == "quant_promotion":
+            raw_quant = bundle.get("quant_promotion") or bundle.get("quant_validation")
+            partitions[key] = (
+                _compact_quant_validation(raw_quant)
+                if compact
+                else raw_quant
+            )
+        elif key == "execution_qualification":
+            partitions[key] = (
+                _compact_execution_qualification(bundle.get(key))
+                if compact
+                else bundle.get(key)
+            )
+        elif key == "kline":
             # The raw bars live in the bounded cache referenced by kline_ref;
             # indicators and the cache reference are the complete K-line
             # partition exposed to agents.
@@ -250,6 +418,11 @@ def _select_evidence_bundle(
                 "evidence_coverage",
                 "data_quality",
                 "sources",
+                "decision_readiness",
+                "valuation",
+                "quant_validation",
+                "quant_promotion",
+                "execution_qualification",
             }:
                 continue
             response[key] = _compact_evidence_value(response[key])
@@ -441,11 +614,15 @@ class StockEvidenceReadTool(Tool):
         return (
             "Read the prepared V2 evidence bundle for an instrument in the "
             "current workflow run. It includes the eight deterministic "
-            "sections (market regime, industry, policy, four cycles, company "
-            "quality, public capital signals, events and tradeability), their "
+            "sections (decision readiness, valuation, quant promotion, execution "
+            "qualification, market regime, industry, policy, "
+            "four cycles, company quality, public capital signals, events and "
+            "tradeability), their "
             "source_ids, research_cutoff_at and missing_fields, plus quote, "
             "indicators, fundamentals, news and source records. Read "
-            "evidence_coverage before forming a horizon view. Optionally pass "
+            "Read decision_readiness before forming a horizon view; it is the "
+            "trusted gate for V3 submissions. Read evidence_coverage for legacy "
+            "provenance only. Optionally pass "
             "up to four sections (technical: market_regime/capital_positioning/"
             "tradeability/kline; fundamental: company_quality/fundamentals/"
             "fundamentals_history; news: industry_context/policy_context/"

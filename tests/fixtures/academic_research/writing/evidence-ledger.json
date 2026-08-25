@@ -1,0 +1,11 @@
+{
+  "sources": [
+    {"source_id": "src-paper-1", "title": "A Synthetic Study of Repeatable Toy Evaluation", "locator": "page 2"}
+  ],
+  "claims": [
+    {"claim_id": "claim-1", "claim_type": "fact", "claim_text": "Both runs report accuracy 0.75.", "source_ids": ["src-paper-1"], "locator": {"kind": "page", "value": "2"}}
+  ],
+  "experiments": [
+    {"run_id": "run-1", "status": "succeeded", "metric": "accuracy", "value": 0.75}
+  ]
+}

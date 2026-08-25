@@ -332,7 +332,7 @@ export function MindMapAgentPanel({
   }
 
   return (
-    <aside className="flex h-full shrink-0 flex-col border-l border-border/70 bg-background" style={{ width }}>
+    <aside className="flex h-full shrink-0 flex-col border-l border-border/70 bg-card" style={{ width }}>
       <div className="flex h-12 shrink-0 items-center justify-between border-b border-border/65 px-3">
         <div className="flex min-w-0 items-center gap-2">
           <h2 className="truncate text-[13px] font-semibold text-foreground">Mona</h2>
@@ -351,7 +351,7 @@ export function MindMapAgentPanel({
                 preparedMessageIdsRef.current = new Set();
                 onClearChat?.();
               }}
-              className="grid h-7 w-7 place-items-center rounded-lg text-muted-foreground hover:bg-accent hover:text-foreground disabled:pointer-events-none disabled:opacity-50"
+              className="grid h-7 w-7 place-items-center rounded-lg text-muted-foreground hover:bg-foreground/[0.06] hover:text-foreground disabled:pointer-events-none disabled:opacity-50"
             >
               <RotateCcw className="h-3.5 w-3.5" />
             </button>
@@ -477,7 +477,7 @@ function MindMapPatchCard({
           aria-label="忽略"
           title="忽略"
           onClick={onIgnore}
-          className="grid h-5 w-5 place-items-center rounded text-muted-foreground hover:bg-accent hover:text-foreground"
+          className="grid h-5 w-5 place-items-center rounded text-muted-foreground hover:bg-foreground/[0.06] hover:text-foreground"
         >
           <X className="h-3 w-3" />
         </button>

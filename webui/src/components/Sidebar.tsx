@@ -294,7 +294,7 @@ export function Sidebar(props: SidebarProps) {
                           e.stopPropagation();
                           props.onStartUpdate?.();
                         }}
-                        className="absolute -right-0.5 -top-0.5 flex h-3 w-3 items-center justify-center rounded-full bg-blue-500 text-white shadow-sm ring-2 ring-sidebar transition-colors hover:bg-blue-600"
+                        className="absolute -right-0.5 -top-0.5 flex h-3 w-3 items-center justify-center rounded-full bg-[hsl(var(--brand-red))] text-white shadow-sm ring-2 ring-sidebar transition-colors hover:bg-[hsl(var(--brand-red)/0.86)]"
                         aria-label="发现新版本，点击立即更新"
                       >
                         <Download className="h-2 w-2" />
@@ -311,7 +311,7 @@ export function Sidebar(props: SidebarProps) {
               >
                 <DropdownMenuLabel className="px-2.5 py-2 font-normal">
                   <div className="flex items-center gap-2.5">
-                    <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-blue-500/15 text-blue-600 dark:text-blue-400">
+                    <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-muted text-muted-foreground">
                       <User className="h-4 w-4" />
                     </span>
                     <div className="min-w-0 flex-1">
@@ -320,7 +320,7 @@ export function Sidebar(props: SidebarProps) {
                           {licenseInfo?.account ?? licenseInfo?.email ?? t("sidebar.account", "账号")}
                         </span>
                         {licenseActive && !serverTrial && (
-                          <span className="shrink-0 rounded-full bg-gradient-to-r from-amber-500 to-orange-500 px-1 py-px text-[8px] font-bold leading-tight text-white">
+                          <span className="shrink-0 rounded-full bg-[hsl(var(--brand-red))] px-1 py-px text-[8px] font-bold leading-tight text-white">
                             Pro
                           </span>
                         )}
@@ -343,18 +343,14 @@ export function Sidebar(props: SidebarProps) {
                   <Settings className="h-4 w-4" />
                   <span>设置</span>
                 </DropdownMenuItem>
-                <DropdownMenuSeparator />
                 {(!licenseActive || serverTrial) && (
-                  <>
-                    <DropdownMenuItem
-                      className="gap-2 px-2.5 py-1.5 text-[13px]"
-                      onSelect={() => (props.onOpenSubscribe ?? props.onOpenLogin)?.()}
-                    >
-                      <Sparkles className="h-4 w-4 text-amber-500" />
-                      <span>升级 Pro</span>
-                    </DropdownMenuItem>
-                    <DropdownMenuSeparator />
-                  </>
+                  <DropdownMenuItem
+                    className="gap-2 px-2.5 py-1.5 text-[13px]"
+                    onSelect={() => (props.onOpenSubscribe ?? props.onOpenLogin)?.()}
+                  >
+                    <Sparkles className="h-4 w-4 text-[hsl(var(--brand-red))]" />
+                    <span>升级 Pro</span>
+                  </DropdownMenuItem>
                 )}
                 <DropdownMenuItem
                   className="gap-2 px-2.5 py-1.5 text-[13px] text-destructive focus:text-destructive"
@@ -369,7 +365,7 @@ export function Sidebar(props: SidebarProps) {
               <button
                 type="button"
                 onClick={() => props.onStartUpdate?.()}
-                className="group flex h-5 shrink-0 items-center gap-1 rounded-full bg-gradient-to-r from-blue-500 to-blue-400 px-2 text-[10px] font-medium text-white shadow-sm transition-colors hover:from-blue-600 hover:to-blue-500"
+                className="group flex h-5 shrink-0 items-center gap-1 rounded-full bg-action px-2 text-[10px] font-medium text-action-foreground shadow-sm transition-colors hover:bg-action-hover"
               >
                 <Sparkles className="h-2.5 w-2.5 animate-pulse [animation-duration:2s] [animation-timing-function:ease-in-out]" />
                 更新
@@ -850,7 +846,7 @@ function CollapsedChatList({
                     {isRunning && (
                       <svg
                         aria-hidden
-                        className="pointer-events-none absolute inset-0 h-full w-full animate-spin text-blue-500 [animation-duration:1.4s] motion-reduce:animate-none dark:text-blue-400"
+                        className="pointer-events-none absolute inset-0 h-full w-full animate-spin text-[hsl(var(--ai-cyan))] [animation-duration:1.4s] motion-reduce:animate-none"
                         viewBox="0 0 36 36"
                         fill="none"
                       >

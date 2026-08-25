@@ -84,7 +84,7 @@ export function ConnectionTree() {
   const isConnected = (id: string) => activeConnections.some((c) => c.id === id);
 
   return (
-    <div className="flex h-full flex-col bg-sidebar text-sidebar-foreground">
+    <div className="flex h-full flex-col bg-card text-foreground">
       <div className="flex items-center justify-between border-b border-sidebar-border px-3 py-2">
         <span className="text-caption font-semibold uppercase tracking-wider text-muted-foreground">
           连接

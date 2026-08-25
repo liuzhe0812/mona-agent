@@ -13,7 +13,10 @@ import type {
   StockReportDetail,
   StockReportListItem,
   StockSelectionOrigin,
+  StockDecisionEvaluation,
   StockWatchlistAddInput,
+  StockDiagnosisRun,
+  StockDiagnosisV1,
 } from "@/lib/stock-api";
 import {
   addStockWatchlist,
@@ -22,6 +25,10 @@ import {
   fetchStockKline,
   fetchStockQuotes,
   fetchStockResearchContext,
+  fetchStockDiagnoses,
+  fetchStockDiagnosis,
+  fetchStockDecisionConditions,
+  isStockReportV5Document,
   preflightStockResearch,
   fetchStockReport,
   fetchStockReports,
@@ -29,6 +36,7 @@ import {
   reorderStockWatchlist,
   searchStocks,
   setStockWatchlistFocus,
+  STOCK_DIAGNOSIS_ROOM_CHAT_ID,
   STOCK_ROOM_CHAT_ID,
 } from "@/lib/stock-api";
 import type { ToolProgressEvent, WorkflowRun } from "@/lib/types";
@@ -58,6 +66,7 @@ import {
  *  WebSocket 端口。 */
 
 const TERMINAL_RUN_STATUSES = new Set(["succeeded", "failed", "cancelled"]);
+const ACTIVE_RUN_STATUSES = new Set(["queued", "running", "waiting_approval"]);
 /** 行情轮询间隔兜底值；实际取 StockConfig.quote_refresh_sec（经 props 注入）。 */
 const DEFAULT_QUOTE_POLL_MS = 30_000;
 /** 自选列表信号窗口：近 30 个交易日。 */
@@ -162,7 +171,7 @@ function watchSignal(resp: StockKlineResponse): StockWatchSignal {
     volumeChange == null
       ? "量能待更新"
       : Math.abs(volumeChange) < 10
-        ? "量能平稳"
+        ? "平稳"
         : volumeChange > 0
           ? "成交放量"
           : "成交缩量";
@@ -213,12 +222,17 @@ export function StockView({
   const [reports, setReports] = useState<StockReportListItem[]>([]);
   const [activeReport, setActiveReport] = useState<StockReportDetail | null>(null);
   const [contextReport, setContextReport] = useState<StockReportDetail | null>(null);
+  const [decisionEvaluation, setDecisionEvaluation] = useState<StockDecisionEvaluation | null>(null);
   const [researchContext, setResearchContext] = useState<StockResearchContext | null>(null);
   const [run, setRun] = useState<WorkflowRun | null>(null);
+  const [diagnosisRun, setDiagnosisRun] = useState<WorkflowRun | null>(null);
+  const [diagnosisReports, setDiagnosisReports] = useState<StockDiagnosisRun[]>([]);
+  const [diagnosisReport, setDiagnosisReport] = useState<StockDiagnosisV1 | null>(null);
   const [stepActivities, setStepActivities] = useState<
     Record<string, ToolProgressEvent[]>
   >({});
   const [starting, setStarting] = useState(false);
+  const [diagnosisStarting, setDiagnosisStarting] = useState(false);
   const [bootState, setBootState] = useState<BootState>("loading");
   /** 行情轮询失败：保留旧报价并提示，恢复后自动消失（非阻断）。 */
   const [quotesStale, setQuotesStale] = useState(false);
@@ -226,14 +240,46 @@ export function StockView({
   const [quotesLoading, setQuotesLoading] = useState(false);
   /** 写操作（添加/移除/星标/删除/启动）失败提示，可手动关闭。 */
   const [actionError, setActionError] = useState<string | null>(null);
-  /** 关注雷达面板开关：切换按钮在顶栏（MarketTickerBar）。 */
+  /** 决策雷达面板开关：切换按钮在顶栏（MarketTickerBar）。 */
   const [decisionSummaryOpen, setDecisionSummaryOpen] = useState(true);
   const [watchGridCollapsed, setWatchGridCollapsed] = useState(false);
+  const [stageTabRequest, setStageTabRequest] = useState<{ revision: number; tab: "market" | "news" } | null>(null);
   const [stockMode, setStockMode] = useState<"watch" | "opportunity">("watch");
   const mounted = useRef(true);
+  const decisionEvaluationRequestId = useRef(0);
+  const diagnosisRequestId = useRef(0);
   const autoRunStarted = useRef<string | null>(null);
   const cancellingRunId = useRef<string | null>(null);
+  const diagnosisCancellingRunId = useRef<string | null>(null);
   const [cancellingRun, setCancellingRun] = useState(false);
+  const [diagnosisCancellingRun, setDiagnosisCancellingRun] = useState(false);
+  const finishCancellation = useCallback(() => {
+    cancellingRunId.current = null;
+    if (mounted.current) setCancellingRun(false);
+  }, []);
+  const finishDiagnosisCancellation = useCallback(() => {
+    if (mounted.current) setDiagnosisCancellingRun(false);
+  }, []);
+
+  const refreshDecisionEvaluation = useCallback((reportId: string | null) => {
+    const requestId = ++decisionEvaluationRequestId.current;
+    if (!reportId) {
+      setDecisionEvaluation(null);
+      return;
+    }
+    setDecisionEvaluation(null);
+    void fetchStockDecisionConditions(token, reportId)
+      .then((evaluation) => {
+        if (mounted.current && requestId === decisionEvaluationRequestId.current) {
+          setDecisionEvaluation(evaluation);
+        }
+      })
+      .catch(() => {
+        if (mounted.current && requestId === decisionEvaluationRequestId.current) {
+          setDecisionEvaluation(null);
+        }
+      });
+  }, [token]);
 
   useEffect(() => {
     mounted.current = true;
@@ -286,6 +332,55 @@ export function StockView({
     if (request) apply(await request);
   }, [token]);
 
+  const refreshDiagnoses = useCallback(async (instrumentId: string | null) => {
+    const requestId = ++diagnosisRequestId.current;
+    if (!instrumentId) {
+      setDiagnosisReports([]);
+      setDiagnosisReport(null);
+      return;
+    }
+    const retryDelays = [0, 250, 750];
+    for (let attempt = 0; attempt < retryDelays.length; attempt += 1) {
+      if (retryDelays[attempt] > 0) {
+        await new Promise((resolve) => setTimeout(resolve, retryDelays[attempt]));
+      }
+      if (!mounted.current || requestId !== diagnosisRequestId.current) return;
+      try {
+        const diagnosisItems = await fetchStockDiagnoses(instrumentId);
+        if (!mounted.current || requestId !== diagnosisRequestId.current) return;
+        const latest = diagnosisItems.find((item) => item.status === "succeeded") ?? null;
+        let latestReport = latest?.report ?? null;
+        if (latest && !latestReport) {
+          const detail = await fetchStockDiagnosis(latest.diagnosisId);
+          latestReport = detail.report ?? null;
+        }
+        if (!mounted.current || requestId !== diagnosisRequestId.current) return;
+        setDiagnosisReports(diagnosisItems);
+        setDiagnosisReport(latestReport);
+        return;
+      } catch {
+        if (attempt < retryDelays.length - 1) continue;
+      }
+    }
+    if (mounted.current && requestId === diagnosisRequestId.current) {
+      setDiagnosisReports([]);
+      setDiagnosisReport(null);
+    }
+  }, []);
+
+  const handleOpenDiagnosis = useCallback(async (diagnosisId: string) => {
+    try {
+      const detail = await fetchStockDiagnosis(diagnosisId);
+      if (mounted.current) setDiagnosisReport(detail.report ?? null);
+    } catch {
+      if (mounted.current) setActionError("AI诊股历史详情打开失败，请稍后重试");
+    }
+  }, []);
+
+  useEffect(() => {
+    void refreshDiagnoses(selectedId);
+  }, [selectedId, refreshDiagnoses]);
+
   // 首屏：自选 + 报告并行加载，失败给出可重试的错误态（商用可用性）。
   const loadBoot = useCallback(async () => {
     setBootState("loading");
@@ -309,6 +404,12 @@ export function StockView({
       .getWorkflowRun(STOCK_ROOM_CHAT_ID)
       .then((existing) => {
         if (mounted.current && existing && existing.inputs?.mode !== "stock_selection") setRun(existing);
+      })
+      .catch(() => undefined);
+    void client
+      .getWorkflowRun(STOCK_DIAGNOSIS_ROOM_CHAT_ID)
+      .then((existing) => {
+        if (mounted.current && existing) setDiagnosisRun(existing);
       })
       .catch(() => undefined);
   }, [client]);
@@ -486,37 +587,54 @@ export function StockView({
   // 运行进度与研究助手实时活动推送（仅隐形股票房间）。
   useEffect(() => {
     const unsubscribeRun = client.onWorkflowRunUpdated((chatId, pushed, error, detail) => {
-      if (chatId !== STOCK_ROOM_CHAT_ID) return;
+      if (chatId !== STOCK_ROOM_CHAT_ID && chatId !== STOCK_DIAGNOSIS_ROOM_CHAT_ID) return;
+      const diagnosisEvent = chatId === STOCK_DIAGNOSIS_ROOM_CHAT_ID;
       if (error) {
-        setStarting(false);
-        setActionError(`投研运行失败：${detail || error}`);
+        if (diagnosisEvent) setDiagnosisStarting(false);
+        else setStarting(false);
+        setActionError((diagnosisEvent ? "AI诊股" : "投研") + "运行失败：" + (detail || error));
         return;
       }
       if (!pushed) return;
       // OpportunityDiscovery owns the selection workflow state. Keep it out
       // of the deep-research timeline so switching views cannot mix runs.
       if (pushed.inputs?.mode === "stock_selection") return;
-      setStarting(false);
-      setRun(pushed);
+      if (diagnosisEvent) {
+        setDiagnosisStarting(false);
+        setDiagnosisRun(pushed);
+      } else {
+        setStarting(false);
+        setRun(pushed);
+      }
       if (TERMINAL_RUN_STATUSES.has(pushed.status)) {
-        if (pushed.status === "succeeded") reportCache.clear();
-        void refreshDashboard(true).catch(() => undefined);
-        void refreshReports(true).catch(() => undefined);
+        if (diagnosisEvent) {
+          if (diagnosisCancellingRunId.current === pushed.id) {
+            diagnosisCancellingRunId.current = null;
+            finishDiagnosisCancellation();
+          }
+          void refreshDiagnoses(selectedId);
+        } else {
+          if (cancellingRunId.current === pushed.id) finishCancellation();
+          if (pushed.status === "succeeded") reportCache.clear();
+          void refreshDashboard(true).catch(() => undefined);
+          void refreshReports(true).catch(() => undefined);
+        }
       }
     });
     const unsubscribeActivity = client.onWorkflowStepActivity((chatId, payload) => {
-      if (chatId !== STOCK_ROOM_CHAT_ID) return;
+      if (chatId !== STOCK_ROOM_CHAT_ID && chatId !== STOCK_DIAGNOSIS_ROOM_CHAT_ID) return;
       setStepActivities((current) => ({
         ...current,
         [`${payload.runId}:${payload.stepId}`]: payload.toolEvents,
       }));
     });
     client.attach(STOCK_ROOM_CHAT_ID);
+    client.attach(STOCK_DIAGNOSIS_ROOM_CHAT_ID);
     return () => {
       unsubscribeRun();
       unsubscribeActivity();
     };
-  }, [client, refreshDashboard, refreshReports]);
+  }, [client, finishCancellation, finishDiagnosisCancellation, refreshDashboard, refreshReports, refreshDiagnoses, selectedId]);
 
   const handleAdd = useCallback(
     async (input: StockWatchlistAddInput) => {
@@ -589,6 +707,7 @@ export function StockView({
       const previousRunId = run?.id ?? null;
       const selectionContext = origin ?? null;
       setSelectedId(instrumentId);
+      refreshDecisionEvaluation(null);
       setActionError(null);
       setStarting(true);
       try {
@@ -617,13 +736,65 @@ export function StockView({
         if (mounted.current) setStarting(false);
       }
     },
-    [client, items, run?.id],
+    [client, items, refreshDecisionEvaluation, run?.id],
   );
 
   const handleStartRun = useCallback(async () => {
     if (!selectedId) return;
     await requestPreflight(selectedId);
   }, [selectedId, requestPreflight]);
+
+  const handleStartDiagnosis = useCallback(async () => {
+    if (!selectedId || diagnosisStarting) return;
+    const previousRunId = diagnosisRun?.id ?? null;
+    setActionError(null);
+    setDiagnosisStarting(true);
+    try {
+      const item = items.find((entry) => entry.instrumentId === selectedId);
+      const result = await preflightStockResearch(selectedId, item?.name);
+      await client.runWorkflow(STOCK_DIAGNOSIS_ROOM_CHAT_ID, {
+        symbols: [selectedId],
+        evidence_context_id: result.contextId,
+      });
+      const startedRun = await client.getWorkflowRun(STOCK_DIAGNOSIS_ROOM_CHAT_ID);
+      if (!mounted.current) return;
+      if (startedRun && startedRun.id !== previousRunId) setDiagnosisRun(startedRun);
+      else setActionError("AI诊股任务已提交，但运行状态暂未同步，请稍后重试");
+    } catch (err) {
+      if (!mounted.current) return;
+      const message = err instanceof Error ? err.message : "";
+      setActionError(`AI诊股启动失败：${/^[\u4e00-\u9fff\s，。！？、]+$/.test(message) ? message : "研究资料准备失败，请稍后重试"}`);
+    } finally {
+      if (mounted.current) setDiagnosisStarting(false);
+    }
+  }, [client, diagnosisRun?.id, diagnosisStarting, items, selectedId]);
+
+  const handleCancelDiagnosis = useCallback(async () => {
+    const activeRun = diagnosisRun;
+    if (!activeRun || !ACTIVE_RUN_STATUSES.has(activeRun.status) || diagnosisCancellingRun || diagnosisCancellingRunId.current === activeRun.id) return;
+    diagnosisCancellingRunId.current = activeRun.id;
+    const cancellingId = activeRun.id;
+    setDiagnosisCancellingRun(true);
+    setActionError(null);
+    try {
+      const cancelledRunId = await client.cancelWorkflowRun(STOCK_DIAGNOSIS_ROOM_CHAT_ID, activeRun.id);
+      if (cancelledRunId !== cancellingId) throw new Error("取消请求返回的运行编号不一致");
+      const serverRun = await client.getWorkflowRun(STOCK_DIAGNOSIS_ROOM_CHAT_ID, cancelledRunId);
+      if (!mounted.current || diagnosisCancellingRunId.current !== cancellingId) return;
+      setDiagnosisRun(serverRun);
+      setDiagnosisStarting(false);
+      if (!serverRun || TERMINAL_RUN_STATUSES.has(serverRun.status)) {
+        diagnosisCancellingRunId.current = null;
+        finishDiagnosisCancellation();
+      }
+    } catch (err) {
+      if (!mounted.current) return;
+      const message = err instanceof Error ? err.message : "";
+      setActionError(`取消AI诊股失败：${/^[\u4e00-\u9fff\s，。！？、]+$/.test(message) ? message : "取消请求失败，请稍后重试"}`);
+      diagnosisCancellingRunId.current = null;
+      finishDiagnosisCancellation();
+    }
+  }, [client, diagnosisCancellingRun, diagnosisRun, finishDiagnosisCancellation]);
 
   const handleCancelRun = useCallback(async () => {
     const activeRun = run;
@@ -635,18 +806,25 @@ export function StockView({
     ) return;
 
     cancellingRunId.current = activeRun.id;
+    const cancellingId = activeRun.id;
     setCancellingRun(true);
     setActionError(null);
     try {
       const cancelledRunId = await client.cancelWorkflowRun(STOCK_ROOM_CHAT_ID, activeRun.id);
-      if (cancelledRunId !== activeRun.id) {
+      if (cancelledRunId !== cancellingId) {
         throw new Error("取消请求返回的运行编号不一致");
       }
       const serverRun = await client.getWorkflowRun(STOCK_ROOM_CHAT_ID, cancelledRunId);
       if (!mounted.current) return;
+      // A terminal push may have won the race while the GET was in flight;
+      // never overwrite it with this stale snapshot.
+      if (cancellingRunId.current !== cancellingId) return;
       // 以服务端重新读取的状态为准；没有活动运行也表示取消已生效。
       setRun(serverRun);
       setStarting(false);
+      if (!serverRun || TERMINAL_RUN_STATUSES.has(serverRun.status)) {
+        finishCancellation();
+      }
     } catch (err) {
       if (!mounted.current) return;
       const message = err instanceof Error ? err.message : "";
@@ -654,11 +832,9 @@ export function StockView({
         ? message
         : "取消请求失败，请稍后重试";
       setActionError(`取消投研失败：${reason}`);
-    } finally {
-      cancellingRunId.current = null;
-      if (mounted.current) setCancellingRun(false);
+      finishCancellation();
     }
-  }, [cancellingRun, client, run]);
+  }, [cancellingRun, client, finishCancellation, run]);
 
   const loadReport = useCallback(
     async (reportId: string) => {
@@ -698,10 +874,11 @@ export function StockView({
       if (!mounted.current) return;
       reportCache.delete(`${token}:${reportId}`);
       setActiveReport(null);
+      if (decisionEvaluation?.reportId === reportId) refreshDecisionEvaluation(null);
       void refreshReports(true).catch(() => undefined);
       void refreshDashboard(true).catch(() => undefined);
     },
-    [token, refreshReports, refreshDashboard],
+    [decisionEvaluation?.reportId, refreshDashboard, refreshDecisionEvaluation, refreshReports, token],
   );
 
   // 复盘通知点击进入（T20）：报告列表刷新后命中 runId 即打开简报。
@@ -713,7 +890,7 @@ export function StockView({
     onConsumeFocusRun?.();
   }, [focusRunId, reports, handleOpenReport, onConsumeFocusRun]);
 
-  // 私聊确认卡进入（T22d）：标的存在于自选列表即自动启动深度投研。
+  // 私聊入口只选中标的，不自动启动任何股票工作流；用户必须在对应 Tab 主动确认。
   useEffect(() => {
     if (!autoRunSymbol) {
       autoRunStarted.current = null;
@@ -722,9 +899,9 @@ export function StockView({
     if (!items.some((i) => i.instrumentId === autoRunSymbol)) return;
     if (autoRunStarted.current === autoRunSymbol) return;
     autoRunStarted.current = autoRunSymbol;
+    setSelectedId(autoRunSymbol);
     onConsumeAutoRun?.();
-    void requestPreflight(autoRunSymbol);
-  }, [autoRunSymbol, items, requestPreflight, onConsumeAutoRun]);
+  }, [autoRunSymbol, items, onConsumeAutoRun]);
 
   const selectedItem = items.find((i) => i.instrumentId === selectedId) ?? null;
   const selectedQuote = selectedId ? quotes[selectedId] : undefined;
@@ -765,6 +942,30 @@ export function StockView({
       stale = true;
     };
   }, [contextReportId, loadReport, token]);
+
+  const contextDocument = contextReport?.report;
+  const v5ContextReport = isStockReportV5Document(contextDocument)
+    ? contextDocument
+    : null;
+  const v4ContextReport = contextDocument?.schema_version === 4
+    && "report_id" in contextDocument
+    && typeof contextDocument.report_id === "string"
+    ? contextDocument
+    : null;
+  const decisionReportId =
+    selectedItem?.latest?.kind === "deep_research"
+      && selectedItem.latest.reportId === (v5ContextReport?.reportId ?? v4ContextReport?.report_id)
+      ? v5ContextReport?.reportId ?? v4ContextReport?.report_id ?? null
+      : null;
+
+  useEffect(() => {
+    refreshDecisionEvaluation(decisionReportId);
+  }, [decisionReportId, refreshDecisionEvaluation, selectedId]);
+
+  const handleManualRefresh = useCallback(() => {
+    void refreshQuotes(quoteIdsKey.split(","), true);
+    if (decisionReportId) refreshDecisionEvaluation(decisionReportId);
+  }, [decisionReportId, quoteIdsKey, refreshDecisionEvaluation, refreshQuotes]);
 
   const handleRetryKline = useCallback(() => {
     if (selectedId) {
@@ -815,7 +1016,7 @@ export function StockView({
             activeView={stockMode}
             onViewChange={setStockMode}
             refreshing={quotesLoading}
-            onRefresh={() => void refreshQuotes(quoteIdsKey.split(","), true)}
+            onRefresh={handleManualRefresh}
             onOpenSettings={() => onOpenSettings?.()}
             decisionSummaryOpen={decisionSummaryOpen}
             onToggleDecisionSummary={() => setDecisionSummaryOpen((open) => !open)}
@@ -886,6 +1087,11 @@ export function StockView({
                   selectedId={selectedId}
                   onSelect={(instrumentId) => {
                     setSelectedId(instrumentId);
+                    setStageTabRequest((request) => ({ revision: (request?.revision ?? 0) + 1, tab: "market" }));
+                  }}
+                  onOpenNews={(instrumentId) => {
+                    setSelectedId(instrumentId);
+                    setStageTabRequest((request) => ({ revision: (request?.revision ?? 0) + 1, tab: "news" }));
                   }}
                   onToggleFocus={(id, focus) => void handleToggleFocus(id, focus)}
                   onRemove={(id) => void handleRemove(id)}
@@ -898,6 +1104,7 @@ export function StockView({
 
                 {selectedItem ? (
                   <InstrumentStage
+                    key={`${selectedItem.instrumentId}:${stageTabRequest?.revision ?? 0}`}
                     token={token}
                     item={selectedItem}
                     quote={selectedQuote}
@@ -907,17 +1114,27 @@ export function StockView({
                     onPeriodChange={setPeriod}
                     onRetryKline={handleRetryKline}
                     run={run}
+                    diagnosisRun={diagnosisRun}
+                    diagnosisReport={diagnosisReport}
+                    diagnosisReports={diagnosisReports}
                     stepActivities={stepActivities}
                     starting={starting}
+                    diagnosisStarting={diagnosisStarting}
                     cancellingRun={cancellingRun}
+                    diagnosisCancellingRun={diagnosisCancellingRun}
                     onStartRun={() => void handleStartRun()}
                     onCancelRun={() => void handleCancelRun()}
+                    onStartDiagnosis={() => void handleStartDiagnosis()}
+                    onCancelDiagnosis={() => void handleCancelDiagnosis()}
+                    onOpenDiagnosis={(id) => void handleOpenDiagnosis(id)}
                     reports={selectedReports}
                     reportDetail={contextReport}
+                    decisionEvaluation={decisionEvaluation}
                     researchContext={researchContext}
                     onOpenReport={(id) => void handleOpenReport(id)}
                     onDeleteReport={(id) => void handleDeleteReport(id)}
                     decisionSummaryOpen={decisionSummaryOpen}
+                    initialTab={stageTabRequest?.tab}
                   />
                 ) : (
                   <div className="flex min-h-64 items-center justify-center text-caption text-muted-foreground">

@@ -530,7 +530,7 @@ export function BrowserToolbar({
   };
 
   return (
-    <div className="relative z-50 flex h-8 items-center gap-1.5 border-b border-border/50 bg-background/95 px-2">
+    <div className="relative z-50 flex h-8 items-center gap-1.5 border-b border-border/50 bg-card px-2">
       <Button variant="ghost" size="icon" className="h-6 w-6" title="后退" onClick={onGoBack}>
         <ArrowLeft className="h-3 w-3" />
       </Button>

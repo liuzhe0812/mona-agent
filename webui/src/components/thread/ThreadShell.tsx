@@ -3,13 +3,15 @@ import { useTranslation } from "react-i18next";
 import { Users } from "lucide-react";
 
 import { AgentLogo } from "@/components/AgentLogo";
+import { AgentAvatar } from "@/components/room/AgentAvatar";
 import { RoomContextPanel } from "@/components/room/RoomContextPanel";
 import { useAgents } from "@/components/room/useAgents";
-import { ThreadComposer } from "@/components/thread/ThreadComposer";
+import { ThreadComposer, type ComposerAttachment, type ComposerModelOption } from "@/components/thread/ThreadComposer";
 import { ThreadHeader } from "@/components/thread/ThreadHeader";
 import { StreamErrorNotice } from "@/components/thread/StreamErrorNotice";
 import { ThreadViewport } from "@/components/thread/ThreadViewport";
 import { NewChatDashboard } from "@/components/thread/NewChatDashboard";
+import { readFileAsDataUrl } from "@/components/doc/office/useDocDrop";
 import { SplitPane } from "@/components/deliver/SplitPane";
 import { FilePreviewPanel } from "@/components/deliver/FilePreviewPanel";
 import { WorkspacePanel, flattenFilesForDisplay } from "@/components/deliver/WorkspacePanel";
@@ -19,7 +21,7 @@ import { usePendingQueue } from "@/hooks/usePendingQueue";
 import { useSessionHistory } from "@/hooks/useSessions";
 import { useArtifacts } from "@/hooks/useArtifacts";
 import { fetchSettings, fetchZenFreeModels, listSlashCommands, updateSettings } from "@/lib/api";
-import type { ChatSummary, DeliveredFile, RoomAgentInfo, SlashCommand, ToolProgressEvent, UIMessage, WorkflowRun } from "@/lib/types";
+import type { ChatSummary, DeliveredFile, RoomAgentInfo, SettingsPayload, SlashCommand, ToolProgressEvent, UIMessage, WorkflowRun } from "@/lib/types";
 import { useWorkspaceStore } from "@/lib/workspace-store";
 import { normalizeLegacyLongTaskMessages } from "@/lib/thread-display-compat";
 import { scrubSubagentUiMessages } from "@/lib/subagent-channel-display";
@@ -27,9 +29,30 @@ import { useClient } from "@/providers/ClientProvider";
 import { useScheduleStore } from "@/components/schedule/scheduleStore";
 import { useEmailStore } from "@/components/email/store/emailStore";
 import { deriveTitle } from "@/lib/format";
+import { cn } from "@/lib/utils";
 
 function projectWebuiThreadMessages(messages: UIMessage[]): UIMessage[] {
   return scrubSubagentUiMessages(normalizeLegacyLongTaskMessages(messages));
+}
+
+export function buildComposerProviderOptions(settings: SettingsPayload): ComposerModelOption[] {
+  return (settings.chat_providers ?? [])
+    .filter((provider) => provider.configured)
+    .slice()
+    .sort((a, b) =>
+      Number(b.name === settings.agent.provider) - Number(a.name === settings.agent.provider)
+      || Number(Boolean(a.is_builtin)) - Number(Boolean(b.is_builtin)),
+    )
+    .flatMap((provider) => provider.models
+      .filter((model) => model.enabled)
+      .map((model) => ({
+        provider: provider.name,
+        providerLabel: provider.label,
+        model: model.id,
+        label: provider.is_builtin ? model.name.replace(/-free$/, "") : model.name,
+        free: Boolean(provider.is_builtin),
+        active: provider.name === settings.agent.provider && model.id === settings.agent.model,
+      })));
 }
 
 const WORKSPACE_DELIVERABLE_EXTS = new Set([
@@ -137,6 +160,9 @@ interface ThreadShellProps {
   recentSessions?: ChatSummary[];
   onSelectSession?: (key: string) => void;
   onCreateChat?: (workspace?: string | null) => Promise<string | null>;
+  /** Direct Agent selected before a chat exists; persisted on first send. */
+  pendingDirectAgentId?: string | null;
+  onCreateDirectChat?: (agentId: string, workspace?: string | null) => Promise<string | null>;
   onTurnEnd?: () => void;
   queuedPrompt?: QueuedPrompt | null;
   onQueuedPromptConsumed?: (id: string) => void;
@@ -165,6 +191,12 @@ interface QueuedPrompt {
   content: string;
 }
 
+interface AttachedDocument {
+  name: string;
+  path: string;
+  size?: number;
+}
+
 export function ThreadShell({
   session,
   title,
@@ -176,6 +208,8 @@ export function ThreadShell({
   recentSessions = [],
   onSelectSession,
   onCreateChat,
+  pendingDirectAgentId = null,
+  onCreateDirectChat,
   onTurnEnd,
   queuedPrompt,
   onQueuedPromptConsumed,
@@ -201,16 +235,18 @@ export function ThreadShell({
     version: historyVersion,
   } = useSessionHistory(historyKey);
   const { client, modelName, token } = useClient();
+  const conversation = session?.conversation ?? null;
   const [booting, setBooting] = useState(false);
+  const [attachedDocuments, setAttachedDocuments] = useState<AttachedDocument[]>([]);
+  const [documentsUploading, setDocumentsUploading] = useState(false);
+  const [documentUploadError, setDocumentUploadError] = useState<string | null>(null);
   const [slashCommands, setSlashCommands] = useState<SlashCommand[]>([]);
-  const [providerOptions, setProviderOptions] = useState<
-    Array<{ name: string; label: string; free_default_model?: string | null; model?: string | null }>
-  >([]);
+  const [providerOptions, setProviderOptions] = useState<ComposerModelOption[]>([]);
   // Whether the active model preset accepts image input. ``supports_vision``
   // is tri-state server-side; only an explicit ``false`` disables upload.
   const [imageInputEnabled, setImageInputEnabled] = useState(true);
-  const [zenFreeModels, setZenFreeModels] = useState<string[]>([]);
   const [scrollToBottomSignal, setScrollToBottomSignal] = useState(0);
+  const [focusMessage, setFocusMessage] = useState<{ id: string; requestId: number } | null>(null);
   const pendingFirstRef = useRef<PendingFirstMessage | null>(null);
   const consumedQueuedPromptRef = useRef<string | null>(null);
   const messageCacheRef = useRef<Map<string, UIMessage[]>>(new Map());
@@ -250,6 +286,50 @@ export function ThreadShell({
 
   const pendingQueue = usePendingQueue();
 
+  useEffect(() => {
+    setAttachedDocuments([]);
+    setDocumentUploadError(null);
+    setDocumentsUploading(false);
+  }, [chatId]);
+  useEffect(() => setFocusMessage(null), [historyKey]);
+
+  useEffect(() => client.onDocUploadResult((result) => {
+    if (result.chatId !== chatId) return;
+    setDocumentsUploading(false);
+    if (!result.ok) {
+      setDocumentUploadError(result.error ?? "文件上传失败");
+      return;
+    }
+    setAttachedDocuments((current) => [
+      ...current,
+      ...(result.files ?? []).map((file) => ({
+        name: file.name,
+        path: file.path,
+        size: file.size,
+      })),
+    ]);
+    setDocumentUploadError(null);
+  }), [chatId, client]);
+
+  const addDocuments = useCallback(async (files: ComposerAttachment[]) => {
+    if (!chatId || files.length === 0) return;
+    setDocumentsUploading(true);
+    setDocumentUploadError(null);
+    try {
+      client.sendDocUpload(chatId, await Promise.all(files.map(async (file) => {
+        if ("localPath" in file) return { name: file.name, local_path: file.localPath };
+        const localPath = (file as File & { path?: unknown }).path;
+        if (typeof localPath === "string" && /^(?:[A-Za-z]:[\\/]|\/)/.test(localPath)) {
+          return { name: file.name, local_path: localPath };
+        }
+        return { name: file.name, data_url: await readFileAsDataUrl(file) };
+      })));
+    } catch (error) {
+      setDocumentsUploading(false);
+      setDocumentUploadError(error instanceof Error ? error.message : "文件读取失败");
+    }
+  }, [chatId, client]);
+
   const activeModelOptions = useMemo(() => providerOptions, [providerOptions]);
 
   useEffect(() => {
@@ -268,6 +348,9 @@ export function ThreadShell({
       ),
     [displayMessages],
   );
+  const jumpToMessage = useCallback((id: string) => {
+    setFocusMessage((current) => ({ id, requestId: (current?.requestId ?? 0) + 1 }));
+  }, []);
 
   const showHeroComposer = messages.length === 0 && !loading;
   const scheduleItems = useScheduleStore((s) => s.items);
@@ -407,19 +490,24 @@ export function ThreadShell({
       try {
         const settings = await fetchSettings(token);
         if (!cancelled) {
-          const options = settings.providers
-            .filter((p) => p.configured)
-            .map((p) => ({
-              name: p.name,
-              label: p.label,
-              free_default_model: p.free_default_model,
-              model: p.model,
-            }));
+          const options = buildComposerProviderOptions(settings);
           setProviderOptions(options);
           const activePreset = settings.model_presets.find((p) => p.active);
           setImageInputEnabled(activePreset?.capabilities?.supports_vision !== false);
           if (settings.runtime?.workspace_path) {
             setWorkspacePath(settings.runtime.workspace_path);
+          }
+          try {
+            await fetchZenFreeModels(token);
+            const refreshed = await fetchSettings(token);
+            if (!cancelled) {
+              setProviderOptions(buildComposerProviderOptions(refreshed));
+              const refreshedPreset = refreshed.model_presets.find((preset) => preset.active);
+              setImageInputEnabled(refreshedPreset?.capabilities?.supports_vision !== false);
+              onModelNameChange?.(refreshed.agent.model || null);
+            }
+          } catch (error) {
+            console.error("Failed to refresh built-in free models:", error);
           }
         }
       } catch {
@@ -429,25 +517,7 @@ export function ThreadShell({
     return () => {
       cancelled = true;
     };
-  }, [token, setWorkspacePath]);
-
-  useEffect(() => {
-    if (providerOptions.length === 0 || zenFreeModels.length > 0 || !token) return;
-    const hasZen = providerOptions.some((opt) => opt.free_default_model);
-    if (!hasZen) return;
-    let cancelled = false;
-    (async () => {
-      try {
-        const result = await fetchZenFreeModels(token);
-        if (!cancelled) setZenFreeModels(result.models);
-      } catch (e) {
-        console.error("Failed to fetch Zen free models:", e);
-      }
-    })();
-    return () => {
-      cancelled = true;
-    };
-  }, [providerOptions, token]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [token, setWorkspacePath, onModelNameChange]);
 
   const handleModelSwitch = useCallback(
     async (provider: string, model: string) => {
@@ -455,6 +525,7 @@ export function ThreadShell({
         const payload = await updateSettings(token, {
           provider,
           model: model || undefined,
+          providerModel: model || undefined,
         });
         const newModel = payload.agent.model || null;
         onModelNameChange?.(newModel);
@@ -462,22 +533,12 @@ export function ThreadShell({
           (p: { active: boolean }) => p.active,
         );
         setImageInputEnabled(activePreset?.capabilities?.supports_vision !== false);
-        // Refresh provider options from the updated settings so the dropdown
-        // stays in sync (e.g. the previously-active provider now shows its
-        // stored model instead of the old active-model fallback).
-        if (payload.providers) {
-          const options = payload.providers
-            .filter((p: { configured: boolean }) => p.configured)
-            .map((p: { name: string; label: string; free_default_model?: string | null; model?: string | null }) => ({
-              name: p.name,
-              label: p.label,
-              free_default_model: p.free_default_model,
-              model: p.model,
-            }));
+        if (payload.chat_providers) {
+          const options = buildComposerProviderOptions(payload);
           setProviderOptions(options);
         }
-      } catch {
-        // silently ignore switch errors
+      } catch (error) {
+        console.error("Failed to switch chat model:", error);
       }
     },
     [token, onModelNameChange],
@@ -486,6 +547,12 @@ export function ThreadShell({
   // Multi-agent: room members offered by the composer ``@`` picker. The
   // registry provides display names; unknown ids degrade to the raw id.
   const agentsById = useAgents(token);
+  const directAgentId = conversation?.type === "direct"
+    ? conversation.directAgentId?.trim() || null
+    : pendingDirectAgentId?.trim() || null;
+  const isPartnerNewChat = showHeroComposer && !!directAgentId && directAgentId !== "mona";
+  const partnerAgent = directAgentId ? agentsById.get(directAgentId) : undefined;
+  const partnerAgentName = partnerAgent?.displayName ?? directAgentId ?? "Mona";
   const mentionableAgents = useMemo<RoomAgentInfo[]>(() => {
     const conv = session?.conversation;
     if (!conv || conv.type !== "room") return [];
@@ -503,7 +570,9 @@ export function ThreadShell({
       if (booting) return;
       setBooting(true);
       pendingFirstRef.current = { content, images, options };
-      const newId = await onCreateChat?.(selectedWorkspace);
+      const newId = directAgentId && directAgentId !== "mona"
+        ? await onCreateDirectChat?.(directAgentId, selectedWorkspace)
+        : await onCreateChat?.(selectedWorkspace);
       if (!newId) {
         pendingFirstRef.current = null;
         setBooting(false);
@@ -511,7 +580,7 @@ export function ThreadShell({
       // Clear the transient workspace selection after creating the chat.
       setSelectedWorkspace(null);
     },
-    [booting, onCreateChat, selectedWorkspace],
+    [booting, directAgentId, onCreateChat, onCreateDirectChat, selectedWorkspace],
   );
 
   const handleThreadSend = useCallback(
@@ -521,9 +590,16 @@ export function ThreadShell({
         return;
       }
       setScrollToBottomSignal((value) => value + 1);
-      send(content, _images, _options);
+      const docPaths = attachedDocuments.map((document) => document.path);
+      send(content, _images, docPaths.length > 0 ? {
+        ..._options,
+        docPaths,
+        displayContent: _options?.displayContent
+          ?? `${content}\n\n[已附文件: ${attachedDocuments.map((document) => document.name).join(", ")}]`,
+      } : _options);
+      setAttachedDocuments([]);
     },
-    [isStreaming, pendingQueue, send],
+    [attachedDocuments, isStreaming, pendingQueue, send],
   );
 
   const handlePendingAppend = useCallback(
@@ -555,7 +631,13 @@ export function ThreadShell({
     : composerPlaceholder;
 
   const composer = (
-    <>
+    <div
+      data-testid={showHeroComposer ? "mona-hero-composer" : "mona-composer"}
+      className={cn(
+        "relative",
+        showHeroComposer && "[&_button[type=submit]]:border-action [&_button[type=submit]]:bg-action [&_button[type=submit]]:text-action-foreground [&_button[type=submit]]:hover:bg-action-hover [&_button[type=submit]]:focus-visible:ring-2 [&_button[type=submit]]:focus-visible:ring-action/40",
+      )}
+    >
       {streamError ? (
         <StreamErrorNotice
           error={streamError}
@@ -570,10 +652,10 @@ export function ThreadShell({
           placeholder={composerPlaceholder}
           modelLabel={toModelBadgeLabel(modelName)}
           modelOptions={activeModelOptions}
-          zenFreeModels={zenFreeModels}
           onModelSwitch={handleModelSwitch}
           imageInputEnabled={imageInputEnabled}
           variant={showHeroComposer ? "hero" : "thread"}
+          showHeroPromptChips={!isPartnerNewChat}
           slashCommands={slashCommands}
           onStop={stop}
           runStartedAt={runStartedAt}
@@ -585,6 +667,11 @@ export function ThreadShell({
           isPendingFull={pendingQueue.messages.length >= 3}
           mentionableAgents={mentionableAgents}
           onOpenSettings={onOpenSettings}
+          documents={attachedDocuments}
+          documentsUploading={documentsUploading}
+          documentUploadError={documentUploadError}
+          onAddDocuments={addDocuments}
+          onRemoveDocument={(path) => setAttachedDocuments((current) => current.filter((document) => document.path !== path))}
         />
       ) : (
         <ThreadComposer
@@ -594,7 +681,6 @@ export function ThreadShell({
           placeholder={openingPlaceholder}
           modelLabel={toModelBadgeLabel(modelName)}
           modelOptions={activeModelOptions}
-          zenFreeModels={zenFreeModels}
           onModelSwitch={handleModelSwitch}
           imageInputEnabled={imageInputEnabled}
           variant="hero"
@@ -608,10 +694,11 @@ export function ThreadShell({
           isPendingFull={pendingQueue.messages.length >= 3}
           workspace={selectedWorkspace}
           onWorkspaceChange={setSelectedWorkspace}
+          showHeroPromptChips={!isPartnerNewChat}
           onOpenSettings={onOpenSettings}
         />
       )}
-    </>
+    </div>
   );
 
   const [clockNow, setClockNow] = useState(() => new Date());
@@ -651,7 +738,6 @@ export function ThreadShell({
 
   // Rooms land directly on the conversation page (IM group-chat parity):
   // no Mona home dashboard, just the room identity and a composer hint.
-  const conversation = session?.conversation ?? null;
   const isRoomEmptyState = conversation?.type === "room";
 
   const emptyState = loading ? (
@@ -670,26 +756,51 @@ export function ThreadShell({
         {t("room.emptyHint")}
       </p>
     </div>
+  ) : isPartnerNewChat ? (
+    <div data-testid="partner-agent-welcome" className="flex w-full flex-col items-center justify-center py-16 text-center">
+      <AgentAvatar
+        agentId={directAgentId!}
+        displayName={partnerAgentName}
+        avatarUrl={partnerAgent?.avatarUrl}
+        className="h-16 w-16"
+      />
+      <h1 className="mt-5 text-title font-medium tracking-tight text-foreground">{partnerAgentName}</h1>
+      <p className="mt-2 max-w-[28rem] text-[14px] leading-relaxed text-muted-foreground">
+        你好，我是{partnerAgentName}，有什么可以帮你？
+      </p>
+    </div>
   ) : (
-    <div className="relative w-full">
-      <div aria-hidden className="pointer-events-none absolute -top-32 left-1/2 h-[28rem] w-[52rem] -translate-x-1/2">
-        <div className="absolute inset-0 bg-[radial-gradient(closest-side_at_50%_36%,hsl(var(--theme)/0.09),transparent_72%)]" />
-        <div className="absolute inset-0 bg-[radial-gradient(closest-side_at_30%_58%,rgba(16,185,129,0.07),transparent_70%)]" />
-        <div className="absolute inset-0 bg-[radial-gradient(closest-side_at_71%_60%,rgba(235,164,93,0.09),transparent_70%)]" />
+    <div
+      data-testid="mona-welcome-shell"
+      className="relative w-full overflow-hidden rounded-xl bg-card/80 px-5 py-6 [clip-path:polygon(0_0,calc(100%_-_12px)_0,100%_12px,100%_100%,0_100%)] md:px-9 md:py-8"
+    >
+      <div className="relative z-10 mb-8 flex items-center justify-between gap-4">
+        <div className="flex items-center gap-2">
+          <span
+            aria-hidden
+            data-testid="mona-brand-marker"
+            className="h-0.5 w-6 rounded-full bg-[hsl(var(--brand-red))]"
+          />
+          <span className="text-micro font-semibold tracking-widest text-foreground/80">
+            MONA
+          </span>
+          <span className="text-micro tracking-widest text-muted-foreground/65">
+            WORKSPACE
+          </span>
+        </div>
       </div>
-      <div className="relative grid w-full grid-cols-1 gap-y-10 md:grid-cols-[minmax(0,5fr)_minmax(0,6fr)]">
-        <div className="flex animate-in fill-mode-backwards fade-in-0 slide-in-from-bottom-3 flex-col items-start text-left duration-500 md:pr-14">
-          <div className="relative animate-in fill-mode-backwards zoom-in-95 duration-700">
-            <div aria-hidden className="absolute left-1/2 top-1/2 h-24 w-24 -translate-x-1/2 -translate-y-1/2 rounded-full bg-[radial-gradient(closest-side,hsl(var(--theme)/0.15),transparent)]" />
-            <AgentLogo state="welcome" className="relative h-12 w-12" />
+      <div className="relative z-10 grid w-full grid-cols-1 gap-y-10 md:grid-cols-[minmax(0,5fr)_minmax(0,6fr)]">
+        <div className="flex motion-safe:animate-in fill-mode-backwards fade-in-0 slide-in-from-bottom-3 flex-col items-start text-left duration-arrival md:pr-14">
+          <div className="relative motion-safe:animate-in fill-mode-backwards zoom-in-95 duration-arrival">
+            <AgentLogo state={isStreaming ? "working" : "welcome"} className="h-16 w-16" />
           </div>
-          <div className="mt-7 text-[54px] font-extralight leading-none tracking-[-0.03em] tabular-nums text-foreground">
+          <div className="mt-7 text-clock font-extralight leading-none tracking-tight tabular-nums text-foreground">
             {clockLine}
           </div>
-          <p className="mt-3 text-[13px] tracking-[0.08em] text-muted-foreground">
+          <p className="mt-3 text-ui tracking-wider text-muted-foreground">
             {dateLine} · {weekdayLine}
           </p>
-          <h1 className="mt-9 text-[24px] font-medium tracking-[-0.01em] text-foreground">
+          <h1 className="mt-9 text-title font-medium tracking-tight text-foreground">
             {t(`thread.empty.daypart.${daypartKey}`)}
           </h1>
           <p className="mt-2 text-[14px] leading-relaxed text-muted-foreground">
@@ -1042,6 +1153,8 @@ export function ThreadShell({
                     }
               }
               workspaceHasContent={isRoomSession ? true : hasPreviewTarget || !!previewFile}
+              messages={transcriptMessages}
+              onJumpToMessage={jumpToMessage}
             />
           ) : null}
           <ThreadViewport
@@ -1051,6 +1164,7 @@ export function ThreadShell({
             emptyState={emptyState}
             composer={composer}
             scrollToBottomSignal={scrollToBottomSignal}
+            focusMessage={focusMessage}
             conversationKey={historyKey}
             showScrollToBottomButton={!!session}
             stepActivities={stepActivities}
@@ -1072,10 +1186,10 @@ export function ThreadShell({
             scope={workspaceScope}
             sessionKey={sessionKey}
             ownerKey={artifactOwnerKey}
-            loading={artifacts.loading}
             error={artifacts.error}
             truncated={artifacts.truncated}
             onRefresh={artifacts.refresh}
+            onCollapse={() => setWorkspaceCollapsed(true)}
             onDelete={handleDeleteArtifact}
             outputDir={
               isProjectSession ? session?.workspace ?? null : sharedOutputDir

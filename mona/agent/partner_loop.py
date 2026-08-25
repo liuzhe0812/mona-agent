@@ -143,6 +143,8 @@ class PartnerAgentLoop(AgentLoop):
             bus=self.bus,
             subagent_manager=self.subagents,
             sessions=self.sessions,
+            image_generation_provider_configs=self._image_generation_provider_configs,
+            video_generation_provider_configs=self._video_generation_provider_configs,
             timezone=self.context.timezone or "UTC",
             agent_id=self._partner_agent_id,
         )

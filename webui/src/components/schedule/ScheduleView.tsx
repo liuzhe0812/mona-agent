@@ -124,9 +124,9 @@ export function ScheduleView({ onOpenInbox }: ScheduleViewProps) {
   );
 
   return (
-    <div className="flex h-full w-full bg-background">
+    <div className="flex h-full w-full bg-editor-surface">
       {/* Calendar area */}
-      <div className="flex-1 flex flex-col min-w-0">
+      <div className="flex min-w-0 flex-1 flex-col bg-editor-surface">
         {error && (
           <StatusNotice
             tone="danger"
@@ -160,7 +160,7 @@ export function ScheduleView({ onOpenInbox }: ScheduleViewProps) {
       </div>
 
       {/* Right panel: day plan */}
-      <div className="w-[320px] flex-shrink-0 border-l border-border/40 flex flex-col hidden md:flex">
+      <div className="hidden w-[320px] flex-shrink-0 flex-col border-l border-border/40 bg-card md:flex">
         <DayPlanPanel
           date={selectedDate}
           scheduleItems={items}

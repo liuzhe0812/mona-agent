@@ -216,10 +216,9 @@ export function SystemOptimizationPanel() {
 
   return (
     <div className="space-y-3 pb-4">
-      <section className="relative overflow-hidden rounded-2xl border border-info/15 bg-gradient-to-r from-info/[0.08] via-card to-primary/[0.06] px-5 py-4 shadow-sm">
-        <div className="pointer-events-none absolute -right-8 -top-16 h-36 w-36 rounded-full bg-info/15 blur-3xl" />
+      <section className="px-1 py-2">
         <div className="relative flex flex-wrap items-center gap-3">
-          <span className="flex h-11 w-11 items-center justify-center rounded-lg bg-action text-white"><SlidersHorizontal className="h-5 w-5" /></span>
+          <span className="flex h-11 w-11 items-center justify-center rounded-lg bg-action text-action-foreground"><SlidersHorizontal className="h-5 w-5" /></span>
           <div>
             <h2 className="text-title-sm tracking-tight">系统优化</h2>
             <p className="mt-1 text-caption text-muted-foreground">集中管理性能、界面、网络、安全和应用行为。</p>
@@ -234,7 +233,7 @@ export function SystemOptimizationPanel() {
         <StatusNotice tone={notice.tone === "error" ? "danger" : "success"}>{notice.text}</StatusNotice>
       )}
 
-      <section className="overflow-hidden rounded-2xl border border-border/70 bg-card shadow-sm">
+      <section className="overflow-hidden rounded-lg border border-border/70 bg-card">
         {showCatalogSettings && (
           <div className="flex flex-wrap items-center gap-2 border-b border-border/60 px-4 py-3">
             <div className="relative min-w-[220px] flex-1">
@@ -248,15 +247,15 @@ export function SystemOptimizationPanel() {
         )}
 
         <div className="flex gap-1 overflow-x-auto border-b border-border/60 px-3 py-2 lg:hidden">
-          {["全部设置", ...categories].map((label) => <button key={label} type="button" aria-label={`${label}（紧凑导航）`} onClick={() => setCategory(label)} className={`whitespace-nowrap rounded-lg px-2.5 py-1.5 text-caption ${category === label ? "bg-info-soft text-info" : "text-muted-foreground hover:bg-accent"}`}>{label}</button>)}
+          {["全部设置", ...categories].map((label) => <button key={label} type="button" aria-label={`${label}（紧凑导航）`} onClick={() => setCategory(label)} className={`relative whitespace-nowrap rounded-lg px-2.5 py-1.5 text-caption transition-colors hover:bg-transparent ${category === label ? "text-foreground before:absolute before:inset-y-1.5 before:left-0 before:w-0.5 before:rounded-full before:bg-[hsl(var(--brand-red))]" : "text-muted-foreground hover:text-foreground"}`}>{label}</button>)}
         </div>
 
         <div className="grid min-h-[470px] lg:grid-cols-[190px_minmax(0,1fr)]">
-          <nav aria-label="Windows 设置分类" className="hidden border-r border-border/60 bg-muted/[0.18] p-2 lg:block">
+          <nav aria-label="Windows 设置分类" className="hidden border-r border-border/60 bg-card p-2 lg:block">
             {["全部设置", ...categories].map((label) => {
               const Icon = label === "全部设置" ? SlidersHorizontal : (categoryIcons[label] ?? CircleHelp);
               const count = label === "全部设置" ? items.length : catalogCategories.has(label) ? (categoryCounts.get(label) ?? items.filter((item) => item.category === label).length) : null;
-              return <button key={label} type="button" aria-label={label} onClick={() => setCategory(label)} className={`mb-0.5 flex w-full items-center gap-2 rounded-lg px-2.5 py-2 text-left text-caption transition ${category === label ? "bg-info-soft text-info" : "text-muted-foreground hover:bg-accent hover:text-foreground"}`}><Icon className="h-3.5 w-3.5 shrink-0" /><span className="min-w-0 flex-1 truncate">{label}</span>{count !== null && <span className={`text-micro ${category === label ? "text-info/70" : "text-muted-foreground/70"}`}>{count}</span>}</button>;
+              return <button key={label} type="button" aria-label={label} onClick={() => setCategory(label)} className={`relative mb-0.5 flex w-full items-center gap-2 rounded-lg px-2.5 py-2 text-left text-caption transition ${category === label ? "text-foreground before:absolute before:inset-y-2 before:left-0 before:w-0.5 before:rounded-full before:bg-[hsl(var(--brand-red))]" : "text-muted-foreground hover:bg-accent hover:text-foreground"}`}><Icon className="h-3.5 w-3.5 shrink-0" /><span className="min-w-0 flex-1 truncate">{label}</span>{count !== null && <span className={`text-micro ${category === label ? "text-foreground/70" : "text-muted-foreground/70"}`}>{count}</span>}</button>;
             })}
           </nav>
 
@@ -266,13 +265,13 @@ export function SystemOptimizationPanel() {
             {showCatalogSettings && !loading && error && <StatusNotice tone="danger">无法读取 Windows 设置：{error}</StatusNotice>}
             {showCatalogSettings && !loading && !error && shownCount === 0 && <div className="rounded-lg border border-dashed border-border/70 py-16 text-center text-caption text-muted-foreground">没有符合当前条件的设置</div>}
             {showCatalogSettings && !loading && !error && shownCount > 0 && (
-              <div className="space-y-2">
+              <div className="divide-y divide-border/60">
                 {visibleGroups.map((group) => {
                   const groupItems = group.values.flatMap((value) => value.featureIds.map((id) => itemById.get(id))).filter(Boolean) as ConfigurationAuditItem[];
                   const disabled = groupItems.every((item) => !item.canApply);
                   const current = group.activeFeatureId ?? "";
                   const groupRiskValue = groupRisk(group, itemById);
-                  return <article key={group.id} className="group rounded-lg border border-border/65 bg-background/70 px-3.5 py-3 transition hover:bg-accent">
+                  return <article key={group.id} className="group px-3.5 py-3 transition-colors hover:bg-foreground/5">
                     <div className="flex flex-wrap items-center gap-3">
           <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-info-soft text-info"><SlidersHorizontal className="h-4 w-4" /></span>
                       <div className="min-w-[180px] flex-1"><div className="flex items-center gap-2"><h3 className="text-caption font-semibold">{groupTitle(group.id, group.label)}</h3><StatusPill tone={riskMeta[groupRiskValue].tone}>{riskMeta[groupRiskValue].label}</StatusPill></div><p className="mt-1 truncate text-micro text-muted-foreground">从互斥选项中选择一个 Windows 行为</p></div>
@@ -283,7 +282,7 @@ export function SystemOptimizationPanel() {
                 {visibleItems.map((item) => {
                   const meta = statusMeta[item.status];
                   const riskInfo = riskMeta[item.risk];
-                  return <article key={item.id} tabIndex={0} role="button" onClick={() => setDetails(item)} onKeyDown={(event) => { if (event.key === "Enter") setDetails(item); }} className={`group rounded-lg border px-3.5 py-3 transition hover:bg-accent focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 ${item.status === "unavailable" ? "border-border/50 bg-muted/20 opacity-70" : "border-border/65 bg-background/70"}`}>
+                  return <article key={item.id} tabIndex={0} role="button" onClick={() => setDetails(item)} onKeyDown={(event) => { if (event.key === "Enter") setDetails(item); }} className={`group px-3.5 py-3 transition-colors hover:bg-foreground/5 focus-visible:ring-1 focus-visible:ring-ring focus-visible:ring-offset-1 ${item.status === "unavailable" ? "opacity-70" : ""}`}>
                     <div className="flex items-center gap-3">
               <span className={`flex h-8 w-8 shrink-0 items-center justify-center rounded-lg ${item.risk === "high" ? "bg-destructive/10 text-destructive" : item.status === "configured" ? "bg-success/10 text-success" : "bg-info-soft text-info"}`}>{item.status === "configured" ? <Check className="h-4 w-4" /> : <SlidersHorizontal className="h-4 w-4" />}</span>
                       <div className="min-w-0 flex-1"><div className="flex flex-wrap items-center gap-1.5"><h3 className="truncate text-caption font-semibold">{featureTitle(item.id, item.title)}</h3><StatusPill tone={meta.tone}>{meta.label}</StatusPill><StatusPill tone={riskInfo.tone}>{riskInfo.label}</StatusPill>{item.requiresRestart && <StatusPill tone="violet">需重启</StatusPill>}{item.requiresAdministrator && <StatusPill tone="orange">管理员</StatusPill>}</div><p className="mt-1 truncate text-micro text-muted-foreground">{displayDescription(item)}</p></div>
@@ -305,7 +304,7 @@ export function SystemOptimizationPanel() {
       <Sheet open={Boolean(details)} onOpenChange={(open) => { if (!open) setDetails(null); }}>
         <SheetContent side="right" className="w-[440px] max-w-[92vw] overflow-y-auto p-0 sm:max-w-[440px]">
           {details && <>
-            <div className="border-b border-border/60 bg-gradient-to-br from-info/[0.08] to-primary/[0.05] p-5"><SheetHeader><SheetTitle className="pr-8 text-left text-body-lg">{featureTitle(details.id, details.title)}</SheetTitle></SheetHeader><div className="mt-3 flex flex-wrap gap-1.5"><StatusPill tone={statusMeta[details.status].tone}>{statusMeta[details.status].label}</StatusPill><StatusPill tone={riskMeta[details.risk].tone}>{riskMeta[details.risk].label}</StatusPill>{details.requiresAdministrator && <StatusPill tone="orange">需要管理员权限</StatusPill>}{details.requiresRestart && <StatusPill tone="violet">重启后生效</StatusPill>}</div></div>
+             <div className="border-b border-border/60 p-5"><SheetHeader><SheetTitle className="pr-8 text-left text-body-lg">{featureTitle(details.id, details.title)}</SheetTitle></SheetHeader><div className="mt-3 flex flex-wrap gap-1.5"><StatusPill tone={statusMeta[details.status].tone}>{statusMeta[details.status].label}</StatusPill><StatusPill tone={riskMeta[details.risk].tone}>{riskMeta[details.risk].label}</StatusPill>{details.requiresAdministrator && <StatusPill tone="orange">需要管理员权限</StatusPill>}{details.requiresRestart && <StatusPill tone="violet">重启后生效</StatusPill>}</div></div>
             <div className="space-y-4 p-5 text-caption leading-5">
               <section><h4 className="font-semibold">当前状态</h4><p className="mt-1 rounded-lg border border-border/60 bg-muted/25 px-3 py-2 text-muted-foreground">{details.currentValue}</p></section>
               <section><h4 className="font-semibold">功能影响</h4><p className="mt-1 text-muted-foreground">{featureImpact(details.id) || displayDescription(details)}</p></section>
@@ -323,7 +322,7 @@ export function SystemOptimizationPanel() {
           <AlertDialogHeader><AlertDialogTitle>{pending?.mode === "restore" ? "恢复 Windows 默认设置？" : `应用“${pending ? featureTitle(pending.item.id, pending.item.title) : ""}”？`}</AlertDialogTitle><AlertDialogDescription>{pending?.item ? `${displayDescription(pending.item)}${pending.item.requiresAdministrator ? " Windows 可能要求管理员权限。" : ""}${pending.item.requiresRestart ? " 完成后需要重启。" : ""}${!pending.item.reversible ? " 此项目无法由 Mona 自动恢复。" : ""}` : ""}</AlertDialogDescription></AlertDialogHeader>
           {actionError && <StatusNotice tone="danger">{actionError}</StatusNotice>}
           {pending?.item.risk === "high" && <label className="flex cursor-pointer items-start gap-2 rounded-lg border border-destructive/30 bg-destructive/5 p-3 text-caption leading-5"><Checkbox className="mt-1" checked={acknowledged} onCheckedChange={(value) => setAcknowledged(value === true)} /><span><strong className="text-destructive">我已了解这是高风险设置</strong><br /><span className="text-muted-foreground">可能影响系统组件、安全策略或恢复能力，我确认继续。</span></span></label>}
-          <AlertDialogFooter><AlertDialogCancel disabled={applying}>取消</AlertDialogCancel><AlertDialogAction disabled={applying || (pending?.item.risk === "high" && !acknowledged)} onClick={(event) => { event.preventDefault(); void confirm(); }} className={pending?.item.risk === "high" ? "bg-destructive text-destructive-foreground hover:bg-destructive/90" : "bg-action text-white hover:bg-action-hover hover:text-white"}>{applying && <Loader2 className="mr-1.5 h-3.5 w-3.5 animate-spin" />}{pending?.mode === "restore" ? "确认恢复" : "确认应用"}</AlertDialogAction></AlertDialogFooter>
+          <AlertDialogFooter><AlertDialogCancel disabled={applying}>取消</AlertDialogCancel><AlertDialogAction disabled={applying || (pending?.item.risk === "high" && !acknowledged)} onClick={(event) => { event.preventDefault(); void confirm(); }} className={pending?.item.risk === "high" ? "bg-destructive text-destructive-foreground hover:bg-destructive/90" : "bg-action text-action-foreground hover:bg-action-hover hover:text-action-foreground"}>{applying && <Loader2 className="mr-1.5 h-3.5 w-3.5 animate-spin" />}{pending?.mode === "restore" ? "确认恢复" : "确认应用"}</AlertDialogAction></AlertDialogFooter>
         </AlertDialogContent>
       </AlertDialog>
     </div>

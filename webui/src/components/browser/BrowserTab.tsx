@@ -107,6 +107,7 @@ export function BrowserTabItem({
   onRevealInExplorer,
 }: BrowserTabProps) {
   const [isDragOver, setIsDragOver] = useState(false);
+  const isMonaTab = tab.type === "mona";
   const faviconUrl = tab.type === "browser" && tab.url ? getFaviconUrl(tab.url) : null;
   const isPinned = tab.isPinned;
 
@@ -153,12 +154,16 @@ export function BrowserTabItem({
       onDrop={handleDrop}
       className={cn(
         "group flex h-7 items-center justify-start gap-1.5 rounded-md px-2 text-caption font-normal transition-colors",
-        "hover:bg-[hsl(var(--sidebar-hover-surface)/0.04)] hover:text-foreground active:bg-[hsl(var(--sidebar-hover-surface)/0.04)]",
+        isMonaTab
+          ? "text-foreground/80 hover:bg-transparent hover:text-foreground/80 active:bg-transparent active:text-foreground/80"
+          : "hover:bg-[hsl(var(--sidebar-hover-surface)/0.04)] hover:text-foreground active:bg-[hsl(var(--sidebar-hover-surface)/0.04)]",
         isPinned ? "max-w-[40px] justify-center" : "max-w-[180px]",
-        active
+        isMonaTab
+          ? "font-medium"
+          : active
           ? "bg-[hsl(var(--sidebar-active-surface)/0.07)] text-foreground font-medium"
           : "text-muted-foreground",
-        isDragOver && "ring-2 ring-primary/40 ring-offset-1"
+        !isMonaTab && isDragOver && "ring-2 ring-primary/40 ring-offset-1"
       )}
       title={isPinned ? tab.title : undefined}
     >

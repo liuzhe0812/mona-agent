@@ -215,6 +215,10 @@ class WorkflowStep(Base):
     expected_output: str = ""
     message: str = ""  # approval prompt shown to the user
     depends_on: list[str] = Field(default_factory=list)
+    # Optional postcondition for agent-produced artifacts.  The runner only
+    # checks registered artifact basenames; content/schema validation belongs
+    # to the producing step's own contract.
+    required_artifacts: list[str] = Field(default_factory=list)
     # Canvas node coordinates ({"x": .., "y": ..}); None = auto-layout.
     position: dict[str, float] | None = None
 
@@ -243,6 +247,22 @@ class WorkflowStep(Base):
                 deduped.append(candidate)
         return deduped
 
+    @field_validator("required_artifacts")
+    @classmethod
+    def _check_required_artifacts(cls, value: list[str]) -> list[str]:
+        deduped: list[str] = []
+        for entry in value:
+            candidate = entry.strip()
+            if not candidate:
+                raise ValueError("required_artifacts entries must be non-empty")
+            if "/" in candidate or "\\" in candidate:
+                raise ValueError(
+                    "required_artifacts entries must be artifact basenames"
+                )
+            if candidate not in deduped:
+                deduped.append(candidate)
+        return deduped
+
     @model_validator(mode="after")
     def _check_shape(self) -> WorkflowStep:
         if self.type == STEP_TYPE_AGENT:
@@ -255,6 +275,10 @@ class WorkflowStep(Base):
                 raise ValueError("approval steps must not set agent_id")
             if not self.message.strip():
                 raise ValueError("approval steps must set a non-empty message")
+            if self.required_artifacts:
+                raise ValueError(
+                    "approval steps must not set required_artifacts"
+                )
         return self
 
 
@@ -1062,6 +1086,25 @@ def validate_run_inputs(raw: Any) -> dict[str, Any]:
     return raw
 
 
+def _missing_required_artifacts(
+    required: list[str], artifacts: list[dict[str, Any]],
+) -> list[str]:
+    """Return declared artifact basenames that this step did not register."""
+    if not required:
+        return []
+    from mona.agent.artifacts import coerce_artifact_ref
+
+    registered: set[str] = set()
+    for raw in artifacts:
+        ref = coerce_artifact_ref(raw)
+        if ref is None:
+            continue
+        # ArtifactRef paths are stored with forward slashes, but normalize a
+        # legacy Windows path too so the contract stays basename-only.
+        registered.add(ref.relative_path.replace("\\", "/").rsplit("/", 1)[-1])
+    return [name for name in required if name not in registered]
+
+
 class WorkflowRunner:
     """Executes a WorkflowRun: serial/parallel scheduling, failure, cancel.
 
@@ -1413,15 +1456,55 @@ class WorkflowRunner:
                 runs = self._runs
                 runs.transition_step(run.id, step_id, STEP_STATUS_RUNNING)
                 self._notify(self._runs.load(run.id))
+                if cancel_event.is_set():
+                    try:
+                        runs.transition_step(
+                            run.id,
+                            step_id,
+                            STEP_STATUS_CANCELLED,
+                            error="Cancelled by user.",
+                        )
+                    except WorkflowTransitionError:
+                        pass
+                    self._notify(self._runs.load(run.id))
+                    return
                 upstream = outputs_of(step.depends_on)
                 run_artifacts.begin(run.id, step_id)
                 try:
                     summary = await self._execute(run, step, upstream)
                 except asyncio.CancelledError:
                     run_artifacts.discard(run.id, step_id)
+                    # A workflow cancellation deliberately cancels the
+                    # underlying AgentJob task.  Treat that cancellation as
+                    # a normal workflow outcome; external task cancellation
+                    # still propagates so shutdown semantics are unchanged.
+                    if cancel_event.is_set():
+                        try:
+                            runs.transition_step(
+                                run.id,
+                                step_id,
+                                STEP_STATUS_CANCELLED,
+                                error="Cancelled by user.",
+                            )
+                        except WorkflowTransitionError:
+                            pass
+                        self._notify(self._runs.load(run.id))
+                        return
                     raise
                 except StepExecutionError as exc:
                     run_artifacts.discard(run.id, step_id)
+                    if cancel_event.is_set():
+                        try:
+                            runs.transition_step(
+                                run.id,
+                                step_id,
+                                STEP_STATUS_CANCELLED,
+                                error="Cancelled by user.",
+                            )
+                        except WorkflowTransitionError:
+                            pass
+                        self._notify(self._runs.load(run.id))
+                        return
                     failed[step_id] = str(exc)
                     try:
                         runs.transition_step(
@@ -1443,6 +1526,22 @@ class WorkflowRunner:
                         pass
                     self._notify(self._runs.load(run.id))
                     return
+                artifacts = run_artifacts.collect(run.id, step_id)
+                missing = _missing_required_artifacts(
+                    step.required_artifacts, artifacts
+                )
+                if missing:
+                    run_artifacts.discard(run.id, step_id)
+                    reason = "missing required artifact(s): " + ", ".join(missing)
+                    failed[step_id] = reason
+                    try:
+                        runs.transition_step(
+                            run.id, step_id, STEP_STATUS_FAILED, error=reason
+                        )
+                    except WorkflowTransitionError:
+                        pass
+                    self._notify(self._runs.load(run.id))
+                    return
                 try:
                     runs.transition_step(
                         run.id,
@@ -1450,7 +1549,7 @@ class WorkflowRunner:
                         STEP_STATUS_SUCCEEDED,
                         output={
                             "summary": summary,
-                            "artifacts": run_artifacts.collect(run.id, step_id),
+                            "artifacts": artifacts,
                         },
                     )
                 except WorkflowTransitionError:
@@ -1477,7 +1576,13 @@ class WorkflowRunner:
                 )
             except WorkflowTransitionError:
                 pass
-        return self._runs.transition(run_id, RUN_STATUS_CANCELLED)
+        try:
+            return self._runs.transition(run_id, RUN_STATUS_CANCELLED)
+        except WorkflowTransitionError:
+            # A completion or another cancellation may have won the run CAS
+            # while the step loop was unwinding.  Preserve that terminal
+            # outcome instead of surfacing a spurious workflow failure.
+            return self._runs.load(run_id)
 
     def _skip_downstream(self, run_id: str, *, failed_step: str) -> None:
         """Mark steps that transitively depend on *failed_step* as skipped."""

@@ -68,7 +68,7 @@ export function PanelCard({
   action?: ReactNode;
 }) {
   return (
-    <section className={cn("min-w-0 rounded-lg border border-border/70 bg-card shadow-sm", className)}>
+    <section className={cn("min-w-0 rounded-lg border border-border/70 bg-card", className)}>
       <div className="flex min-h-11 items-center justify-between border-b border-border/60 px-4 py-2.5">
         <h2 className="text-body font-semibold">{title}</h2>
         {action}

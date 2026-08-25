@@ -867,7 +867,7 @@ export function MarkdownEditor({
   return (
     <section
       data-note-editor="true"
-      className={cn("flex min-h-0 min-w-0 flex-1 flex-col bg-background", className)}
+      className={cn("flex min-h-0 min-w-0 flex-1 flex-col bg-editor-surface", className)}
     >
       <div className="flex h-10 shrink-0 items-center justify-between border-b border-border/65 px-3">
         {showToolbar ? <EditorToolbar editor={editor} leadingExtra={toolbarLeadingExtra} /> : <div />}

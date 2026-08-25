@@ -174,6 +174,90 @@ export interface StockValuationContext {
   missing_fields?: string[];
 }
 
+/** Quantitative observations are descriptive until P7 calibration is enabled. */
+export type StockQuantValidationStatus =
+  | "uncalibrated"
+  | "support"
+  | "unconfirmed"
+  | "oppose"
+  | "insufficient_data";
+export type StockQuantSignal = "positive" | "neutral" | "negative" | "insufficient_data";
+export type StockQuantHorizon = "short_term" | "medium_term" | "long_term";
+
+export interface StockQuantFactorObservation {
+  field: string;
+  raw_value?: number | null;
+  percentile_or_rank?: number | null;
+  direction?: "asc" | "desc";
+  scope?: "industry" | "market_fallback" | "market" | "mixed";
+  sample_count?: number;
+  missing_count?: number;
+  as_of?: string | null;
+  source_ids?: string[];
+  method_version?: string;
+  validation_status?: StockQuantValidationStatus;
+}
+
+export interface StockQuantHorizonValidation {
+  validation_status?: StockQuantValidationStatus;
+  quant_signal?: StockQuantSignal;
+  factor_observations?: StockQuantFactorObservation[];
+}
+
+export interface StockQuantCandidateValidation {
+  validation_status?: StockQuantValidationStatus;
+  quant_signal?: StockQuantSignal;
+  horizons?: Partial<Record<StockQuantHorizon, StockQuantHorizonValidation>>;
+}
+
+export interface StockQuantPointInTimeQuality {
+  status?: "not_requested" | "verified" | "incompatible" | "unknown" | string;
+  requested_as_of?: string | null;
+  latest_observed_at?: string | null;
+  missing_observed_at?: number;
+}
+
+export interface StockQuantDataQuality {
+  status?: StockScreenDataQualityStatus;
+  quant_validation_status?: StockQuantValidationStatus;
+  reason?: string;
+  point_in_time?: StockQuantPointInTimeQuality;
+  missing_factor_fields?: string[];
+}
+
+export interface StockQuantUniverse {
+  universe_count?: number;
+  hard_filter_count?: number;
+  cheap_count?: number;
+  enriched_count?: number;
+  unprocessed_after_cap?: number;
+  preselection_basis?: string | null;
+}
+
+export interface StockQuantFactorScope {
+  scope?: "industry" | "market_fallback" | "market" | "mixed";
+  sample_count?: number;
+  missing_count?: number;
+  direction?: "asc" | "desc";
+  weight?: number;
+}
+
+export interface StockQuantSnapshot {
+  schema_version?: number;
+  strategy_id?: string;
+  strategy_fingerprint?: string;
+  as_of?: string | null;
+  factor_algorithm_version?: string;
+  rank_algorithm_version?: string;
+  validation_status?: StockQuantValidationStatus;
+  reason?: string;
+  universe?: StockQuantUniverse;
+  factor_scopes?: Record<string, StockQuantFactorScope>;
+  candidate_ids_hash?: string;
+  source_ids?: string[];
+  data_quality?: StockQuantDataQuality;
+}
+
 export interface StockScreenCandidate {
   instrument_id: string;
   symbol?: string;
@@ -197,6 +281,7 @@ export interface StockScreenCandidate {
   catalyst_events?: StockCatalystEvent[];
   change_state?: StockScreenChangeState;
   valuation_context?: StockValuationContext | null;
+  quant_validation?: StockQuantCandidateValidation | null;
   [key: string]: unknown;
 }
 
@@ -345,6 +430,7 @@ export interface StockScreenReport {
   error?: { code?: string; message?: string } | null;
   catalyst_capture?: StockCatalystCapture | null;
   event_capture?: StockCatalystCapture | null;
+  quant_snapshot?: StockQuantSnapshot | null;
   stale?: boolean;
   /** Nullable second-layer AI research. Old selection-only reports omit it. */
   opportunity_research?: StockOpportunityResearch | null;
@@ -759,9 +845,315 @@ interface StockV4ReportProjection {
   dataQuality: null;
 }
 
+/** Public V5 list/dashboard projection returned by the report routes.
+ *
+ * The API intentionally keeps the list payload compact: the full transaction
+ * and position plans are only returned by the detail route.  Keep these
+ * camelCase names aligned with `mona.services.stock.reports._report_projection`.
+ */
+export interface StockReportV5HorizonProjection {
+  direction: StockReportV5Direction;
+  action: StockReportV5Action;
+  validUntil: string;
+  isExpired: boolean;
+}
+
+export interface StockReportV5ListProjection {
+  schemaVersion: 5;
+  resultStatus: "completed";
+  horizonDecisions: {
+    shortTerm: StockReportV5HorizonProjection;
+    mediumTerm: StockReportV5HorizonProjection;
+    longTerm: StockReportV5HorizonProjection;
+  };
+  researchCutoffAt: string;
+  marketAsOf: string;
+  generatedAt: string;
+  isExpired: boolean;
+  hasExpiredHorizon: boolean;
+  stance: null;
+  dataQuality: null;
+}
+
+export type StockReportV5Direction = "positive" | "neutral" | "negative";
+export type StockReportV5Action =
+  | "conditional_participation"
+  | "wait"
+  | "hold"
+  | "reduce"
+  | "exit"
+  | "avoid";
+export type StockReportV5NotHoldingAction = "participate" | "wait" | "avoid";
+export type StockReportV5HoldingAction = "hold" | "reduce" | "exit";
+export type StockReportV5EvidenceStrength = "strong" | "medium" | "weak";
+
+export interface StockReportV5TradingPlan {
+  referenceBuyLow: number;
+  referenceBuyHigh: number;
+  pullbackBuyLow: number;
+  pullbackBuyHigh: number;
+  stopLoss: number;
+  firstTakeProfit: number;
+  firstReduceFraction: number;
+  secondTakeProfit: number;
+  secondReduceFraction: number;
+  riskRewardFirst: number;
+  riskRewardSecond: number;
+  currency: "元";
+}
+
+export interface StockReportV5PositionPlan {
+  riskBudgetPct: number;
+  initialPositionPct: number;
+  maxPositionPct: number;
+  stopDistancePct: number;
+}
+
+export interface StockReportV5HorizonDecision {
+  direction: StockReportV5Direction;
+  action: StockReportV5Action;
+  thesis: string;
+  notHoldingAction: StockReportV5NotHoldingAction;
+  holdingAction: StockReportV5HoldingAction;
+  tradingPlan: StockReportV5TradingPlan;
+  positionPlan: StockReportV5PositionPlan;
+  validUntil: string;
+  reviewTrigger: string;
+  keyReasons: string[];
+  keyRisks: string[];
+  evidenceStrength: StockReportV5EvidenceStrength;
+  marketAsOf: string;
+  generatedAt: string;
+  isExpired: boolean;
+}
+
+/** User-facing V5 detail projection.  It is deliberately separate from the
+ * persisted snake_case report and contains no agent/provenance internals. */
+export interface StockReportV5Document {
+  schemaVersion: 5;
+  resultStatus: "completed";
+  reportId: string;
+  runId: string;
+  kind: "deep_research";
+  instrument: StockReportInstrument;
+  summary: string;
+  researchCutoffAt: string;
+  marketAsOf: string;
+  generatedAt: string;
+  isExpired: boolean;
+  hasExpiredHorizon: boolean;
+  horizonDecisions: {
+    shortTerm: StockReportV5HorizonDecision;
+    mediumTerm: StockReportV5HorizonDecision;
+    longTerm: StockReportV5HorizonDecision;
+  };
+  /** Compatibility properties intentionally do not exist in V5. */
+  schema_version?: never;
+  as_of?: never;
+  research_stance?: never;
+  data_quality?: never;
+  source_ids?: never;
+  open_questions?: never;
+  technical_levels?: never;
+  time_horizon?: never;
+  evidence_strength?: never;
+  decision_conditions?: never;
+  report_id?: never;
+  workflow_run_id?: never;
+  analyst_views?: never;
+  debate?: never;
+  risks?: never;
+  catalysts?: never;
+  bull_case_summary?: never;
+  bear_case_summary?: never;
+}
+
+export type StockReportV6Direction = "positive" | "neutral" | "negative" | "avoid";
+export type StockReportV6DecisionMode = "research_only" | "reference_plan";
+export type StockReportV6ResearchStatus = "ready" | "unavailable";
+export type StockReportV6TradeStatus = "ready" | "unavailable";
+export type StockReportV6PlanStatus = "proxy" | "limited" | "blocked";
+export type StockReportV6CurrentAction =
+  | "participate"
+  | "wait"
+  | "hold"
+  | "reduce"
+  | "exit"
+  | "avoid"
+  | "execution_blocked";
+
+/** Compact status projection used by V6 list/dashboard responses. */
+export interface StockReportV6HorizonProjection {
+  direction: StockReportV6Direction;
+  action: StockReportV5Action;
+  researchStatus: StockReportV6ResearchStatus;
+  tradeStatus: StockReportV6TradeStatus;
+}
+
+export interface StockReportV6ListProjection {
+  schemaVersion: 6;
+  resultStatus: "completed";
+  decisionMode: StockReportV6DecisionMode;
+  researchStatus: StockReportV6ResearchStatus;
+  tradeStatus: StockReportV6TradeStatus;
+  horizonDecisions: {
+    shortTerm: StockReportV6HorizonProjection;
+    mediumTerm: StockReportV6HorizonProjection;
+    longTerm: StockReportV6HorizonProjection;
+  };
+  researchCutoffAt: string;
+  marketAsOf: string;
+  valuation?: StockReportV6ConclusionSection | Record<string, unknown>;
+  marketSentiment?: StockReportV6MarketSentiment | null;
+  publicOpinion?: StockReportV6PublicOpinion | null;
+  stance: null;
+  dataQuality: null;
+}
+
+export interface StockReportV6ExecutionAssessment {
+  executionStatus?: "proxy" | "limited" | "blocked";
+  rulesStatus?: "confirmed" | "limited";
+  liquidityStatus?: "proxy" | "limited";
+  buyStatus?: "proxy" | "limited" | "blocked" | "not_applicable";
+  sellStatus?: "proxy" | "limited" | "blocked" | "not_applicable";
+  tPlusOneStatus?: "allowed" | "restricted" | "not_applicable" | "unknown";
+  immediateExecutionAllowed?: false;
+  executionMode?: "research_only";
+  warnings?: string[];
+  [key: string]: unknown;
+}
+
+/** Public V6 plan. All numeric fields are optional because research-only and
+ * direction-aware plans intentionally expose only the applicable boundaries. */
+export interface StockReportV6MaterializedPlan {
+  direction?: StockReportV6Direction;
+  action?: StockReportV5Action;
+  holdingState?: "not_holding" | "holding";
+  currentAction?: StockReportV6CurrentAction;
+  planStatus?: StockReportV6PlanStatus;
+  execution?: StockReportV6ExecutionAssessment;
+  buyLow?: number | null;
+  buyHigh?: number | null;
+  pullbackLow?: number | null;
+  pullbackHigh?: number | null;
+  confirmationPrice?: number | null;
+  invalidationPrice?: number | null;
+  exitPrice?: number | null;
+  reentryConfirmationPrice?: number | null;
+  stopLoss?: number | null;
+  firstTakeProfit?: number | null;
+  secondTakeProfit?: number | null;
+  initialPositionPct?: number;
+  maxPositionPct?: number;
+  targetMaxPositionPct?: number;
+  additionalPositionPct?: number;
+  liquidityCapPct?: number | null;
+  riskBudgetPct?: number;
+  riskRewardFirstAfterCost?: number | null;
+  riskRewardSecondAfterCost?: number | null;
+  riskProfileName?: string;
+  riskProfileConfigured?: boolean;
+  positionCapReasons?: string[];
+  executionMode?: "research_only";
+  [key: string]: unknown;
+}
+
+export interface StockReportV6ConclusionSection {
+  status?: string;
+  summary?: string;
+  conclusion?: string;
+  label?: string;
+  reason?: string;
+  [key: string]: unknown;
+}
+
+export interface StockReportV6MarketSentiment {
+  status?: string | null;
+  direction?: "偏多" | "偏空" | "震荡" | "暂不判断" | null;
+  strength?: string | null;
+  asOf?: string | null;
+  decisionImpact?: string | null;
+}
+
+export interface StockReportV6PublicOpinion {
+  status?: string | null;
+  direction?: "偏多" | "偏空" | "分歧" | null;
+  asOf?: string | null;
+  coverageAccountCount?: number | null;
+  redfoxIndex?: number | null;
+  decisionImpact?: string | null;
+}
+
+export interface StockReportV6HorizonDecision {
+  direction: StockReportV6Direction;
+  action: StockReportV5Action;
+  thesis: string;
+  keyReasons: string[];
+  keyRisks: string[];
+  researchStatus: StockReportV6ResearchStatus;
+  tradeStatus: StockReportV6TradeStatus;
+  materializedPlan: StockReportV6MaterializedPlan | null;
+  validUntil?: string | null;
+  reviewTrigger?: string | null;
+  disagreementMatrix?: Record<string, unknown> | null;
+}
+
+export interface StockReportV6Document {
+  schemaVersion: 6;
+  resultStatus: "completed";
+  reportId: string;
+  runId: string;
+  kind: "deep_research";
+  instrument: StockReportInstrument;
+  decisionMode: StockReportV6DecisionMode;
+  researchStatus: StockReportV6ResearchStatus;
+  tradeStatus: StockReportV6TradeStatus;
+  summary: string;
+  researchCutoffAt: string;
+  marketAsOf: string;
+  generatedAt: string;
+  currentPrice?: number | null;
+  benchmarkPrice?: number | null;
+  sourceCount?: number;
+  horizonDecisions: {
+    shortTerm: StockReportV6HorizonDecision;
+    mediumTerm: StockReportV6HorizonDecision;
+    longTerm: StockReportV6HorizonDecision;
+  };
+  researchReady?: StockReportV6ConclusionSection | Record<string, unknown>;
+  tradeReady?: StockReportV6ConclusionSection | Record<string, unknown>;
+  quantValidation?: StockReportV6QuantValidation | StockReportQuantValidation | null;
+  quantPromotion?: StockReportV6ConclusionSection | Record<string, unknown>;
+  valuation?: StockReportV6ConclusionSection | Record<string, unknown>;
+  marketSentiment?: StockReportV6MarketSentiment | null;
+  publicOpinion?: StockReportV6PublicOpinion | null;
+  executionQualification?: StockReportV6ConclusionSection | Record<string, unknown>;
+  /** V6 public detail never uses the historical snake_case report shape. */
+  schema_version?: never;
+  report_id?: never;
+  workflow_run_id?: never;
+  as_of?: never;
+  research_stance?: never;
+  data_quality?: never;
+  source_ids?: never;
+  risks?: never;
+  catalysts?: never;
+  open_questions?: never;
+  analyst_views?: never;
+  debate?: never;
+  technical_levels?: never;
+  time_horizon?: never;
+  evidence_strength?: never;
+  decision_conditions?: never;
+  bull_case_summary?: never;
+  bear_case_summary?: never;
+}
+
 export type StockReportProjection =
   | StockLegacyReportProjection
-  | StockV4ReportProjection;
+  | StockV4ReportProjection
+  | StockReportV5ListProjection
+  | StockReportV6ListProjection;
 
 interface StockReportListFields {
   reportId: string;
@@ -775,7 +1167,9 @@ interface StockReportListFields {
 
 export type StockReportListItem = StockReportListFields & StockReportProjection;
 
-export type StockDashboardLatest = Omit<StockReportListFields, "instrument" | "symbols" | "modifiedAt"> & StockReportProjection;
+export type StockDashboardLatest = Omit<StockReportListFields, "instrument" | "symbols" | "modifiedAt"> &
+  Partial<Pick<StockReportListFields, "modifiedAt">> &
+  StockReportProjection;
 
 /** Raw report instrument in persisted snake_case documents. */
 export interface StockRawReportInstrument {
@@ -812,12 +1206,60 @@ export interface StockViewPoint {
 export interface StockHorizonCondition {
   kind: StockConditionKind;
   text: string;
+  /** Optional on legacy conditions; required by new stop/take conditions. */
+  claim_type?: StockClaimType | null;
   observed_metric_ref?: string | null;
   operator?: StockConditionOperator | null;
   threshold_metric_ref?: string | null;
   /** @deprecated V4 conditions must use threshold_metric_ref. Kept only so old documents remain readable. */
   threshold?: number | null;
   source_ids: string[];
+}
+
+export type StockDecisionConditionStatus = "matched" | "not_matched" | "not_evaluable";
+export type StockDecisionConditionGroup =
+  | "participation"
+  | "confirmation"
+  | "watch"
+  | "invalidation"
+  | "stop_loss"
+  | "take_profit"
+  | "other";
+export type StockDecisionHorizonKey = "shortTerm" | "mediumTerm" | "longTerm";
+
+export interface StockDecisionConditionEvaluation {
+  group: StockDecisionConditionGroup;
+  groupLabel: string;
+  text: string;
+  sourceIds: string[];
+  status: StockDecisionConditionStatus;
+  statusLabel: "已满足" | "未满足" | "暂无法判断";
+  evaluatedAt: string | null;
+  methodVersion: string | null;
+  reason: string | null;
+}
+
+export interface StockDecisionRiskRewardEvaluation {
+  status: StockDecisionConditionStatus;
+  statusLabel: "已满足" | "未满足" | "暂无法判断";
+  ratio: number | null;
+  direction: "long" | "short" | "unknown";
+  evaluatedAt: string | null;
+  methodVersion: string | null;
+  reason: string | null;
+}
+
+export interface StockDecisionHorizonEvaluation {
+  conditions: StockDecisionConditionEvaluation[];
+  riskReward: StockDecisionRiskRewardEvaluation;
+}
+
+export interface StockDecisionEvaluation {
+  reportId: string | null;
+  evaluatedAt: string | null;
+  methodVersion: string;
+  horizons: Partial<Record<StockDecisionHorizonKey, StockDecisionHorizonEvaluation>> &
+    Record<string, unknown>;
 }
 
 export interface StockBenchmark {
@@ -848,6 +1290,9 @@ export interface StockHorizonView {
   confirmation_conditions: StockHorizonCondition[];
   watch_conditions: StockHorizonCondition[];
   invalidation_conditions: StockHorizonCondition[];
+  /** Optional so old V4 JSON without P6 fields remains readable. */
+  stop_loss_conditions?: StockHorizonCondition[];
+  take_profit_conditions?: StockHorizonCondition[];
   time_stop: string;
   tradeability_risks: StockViewPoint[];
   blind_spots: StockViewPoint[];
@@ -1098,6 +1543,117 @@ export type StockDigestDocument = StockLegacyReportFields & {
   [key: string]: unknown;
 };
 
+/** Quantitative verification embedded in a trusted V4 deep-research report.
+ * This is intentionally separate from the selection-result quant snapshot. */
+export type StockReportQuantValidationStatus =
+  | "uncalibrated"
+  | "support"
+  | "unconfirmed"
+  | "oppose"
+  | "insufficient_data";
+export type StockReportQuantSignal = "positive" | "neutral" | "negative" | "insufficient_data";
+
+export interface StockReportQuantFactorObservation {
+  field: string;
+  raw_value: number | null;
+  percentile_or_rank: number | null;
+  direction: "asc" | "desc";
+  scope: "industry" | "market_fallback" | "market" | "mixed";
+  sample_count: number;
+  missing_count: number;
+  as_of: string | null;
+  source_ids: string[];
+  source_count?: number;
+  method_version: string;
+  validation_status: StockReportQuantValidationStatus;
+}
+
+export interface StockReportQuantHorizon {
+  status: StockReportQuantValidationStatus;
+  signal: StockReportQuantSignal;
+  factor_observations: StockReportQuantFactorObservation[];
+  /** Optional metadata from the deterministic horizon method registry. */
+  method_id?: string | null;
+  method_version?: string | null;
+  target_window_sessions?: number | null;
+  target_definition?: string | null;
+}
+
+export interface StockReportQuantValidation {
+  selection_run_id?: string;
+  report_id?: string;
+  strategy_id: string;
+  as_of: string | null;
+  factor_algorithm_version: string;
+  rank_algorithm_version: string;
+  validation_status: StockReportQuantValidationStatus;
+  quant_signal: StockReportQuantSignal;
+  horizons: {
+    short_term: StockReportQuantHorizon;
+    medium_term: StockReportQuantHorizon;
+    long_term: StockReportQuantHorizon;
+  };
+  source_ids: string[];
+  snapshot_hash?: string;
+  reason: string;
+  promotion_status?: "research_only" | "calibrated" | "rejected";
+  promotion_reason?: string;
+  eligible_for_trading?: boolean;
+  validation_metrics?: Record<string, unknown>;
+  method_registry?: Record<string, Record<string, unknown>>;
+  target_windows?: Record<string, {
+    sessions?: number | null;
+    definition?: string | null;
+  }>;
+  target_window_sessions?: number | null;
+  target_definition?: string | null;
+}
+
+/** Public V6 quantitative contract returned by the report detail route. */
+export interface StockReportV6QuantFactorObservation {
+  field: string;
+  rawValue: number | null;
+  percentileOrRank: number | null;
+  direction: "asc" | "desc";
+  scope: "industry" | "market_fallback" | "market" | "mixed";
+  sampleCount: number;
+  missingCount: number;
+  asOf: string | null;
+  methodVersion: string;
+  validationStatus: StockReportQuantValidationStatus;
+  sourceCount: number;
+}
+
+export interface StockReportV6QuantHorizon {
+  status: StockReportQuantValidationStatus | null;
+  signal: StockReportQuantSignal | null;
+  factorObservations: StockReportV6QuantFactorObservation[];
+  methodId?: string | null;
+  methodVersion?: string | null;
+  targetWindowSessions?: number | null;
+  targetDefinition?: string | null;
+}
+
+export interface StockReportV6QuantValidation {
+  strategyId: string;
+  asOf: string | null;
+  factorAlgorithmVersion: string;
+  rankAlgorithmVersion: string;
+  validationStatus: StockReportQuantValidationStatus;
+  quantSignal: StockReportQuantSignal;
+  horizons: {
+    shortTerm: StockReportV6QuantHorizon;
+    mediumTerm: StockReportV6QuantHorizon;
+    longTerm: StockReportV6QuantHorizon;
+  };
+  promotionStatus?: "research_only" | "calibrated" | "rejected" | null;
+  eligibleForTrading?: boolean | null;
+  targetWindowSessions?: number | null;
+  targetDefinition?: string | null;
+  targetWindows?: Record<string, { sessions?: number | null; definition?: string | null }>;
+  methodRegistry?: Record<string, Record<string, unknown>>;
+}
+
 /** V4 deep-research document. It has independent horizon views and no
  * composite research_stance/time_horizon fields. */
 export interface StockReportV4Document {
@@ -1130,6 +1686,8 @@ export interface StockReportV4Document {
   risks: StockViewPoint[];
   catalysts: StockViewPoint[];
   open_questions: StockViewPoint[];
+  /** Optional P7 quantitative verification; old V4 reports omit it. */
+  quant_validation?: StockReportQuantValidation | null;
   source_ids: string[];
   sources: StockRawReportSource[];
   selection_origin?: StockSelectionOrigin | null;
@@ -1152,7 +1710,242 @@ export interface StockReportV4Document {
 export type StockReportDocument =
   | StockReportV3Document
   | StockReportV4Document
+  | StockReportV5Document
+  | StockReportV6Document
   | StockDigestDocument;
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return Boolean(value && typeof value === "object" && !Array.isArray(value));
+}
+
+const V5_HORIZON_KEYS = ["shortTerm", "mediumTerm", "longTerm"] as const;
+const V5_DIRECTIONS = ["positive", "neutral", "negative"] as const;
+const V5_ACTIONS = ["conditional_participation", "wait", "hold", "reduce", "exit", "avoid"] as const;
+const V5_NOT_HOLDING_ACTIONS = ["participate", "wait", "avoid"] as const;
+const V5_HOLDING_ACTIONS = ["hold", "reduce", "exit"] as const;
+const V5_EVIDENCE_STRENGTHS = ["strong", "medium", "weak"] as const;
+const V5_INSTRUMENT_TYPES = ["equity", "etf", "index"] as const;
+
+function isNonEmptyString(value: unknown): value is string {
+  return typeof value === "string" && value.trim().length > 0;
+}
+
+function isDateString(value: unknown): value is string {
+  return isNonEmptyString(value) && Number.isFinite(Date.parse(value));
+}
+
+function isFiniteNumber(value: unknown): value is number {
+  return typeof value === "number" && Number.isFinite(value);
+}
+
+function isStringArray(value: unknown, minLength = 1, maxLength = Number.POSITIVE_INFINITY): value is string[] {
+  return Array.isArray(value) && value.length >= minLength && value.length <= maxLength && value.every(isNonEmptyString);
+}
+
+function isOneOf<T extends readonly string[]>(value: unknown, values: T): value is T[number] {
+  return typeof value === "string" && values.includes(value);
+}
+
+function isPublicInstrument(value: unknown): value is StockReportInstrument {
+  if (!isRecord(value)) return false;
+  const symbol = value.symbol;
+  const exchange = value.exchange;
+  const instrumentType = value.instrumentType;
+  return (
+    typeof value.instrumentId === "string" &&
+    typeof symbol === "string" &&
+    /^\d{6}$/.test(symbol) &&
+    (exchange === "XSHG" || exchange === "XSHE" || exchange === "BJSE") &&
+    value.instrumentId === `${exchange}:${symbol}` &&
+    typeof value.name === "string" &&
+    isOneOf(instrumentType, V5_INSTRUMENT_TYPES)
+  );
+}
+
+function isV5TradingPlan(value: unknown): value is StockReportV5TradingPlan {
+  if (!isRecord(value) || value.currency !== "元") return false;
+  const numericFields = [
+    "referenceBuyLow", "referenceBuyHigh", "pullbackBuyLow", "pullbackBuyHigh",
+    "stopLoss", "firstTakeProfit", "firstReduceFraction", "secondTakeProfit",
+    "secondReduceFraction", "riskRewardFirst", "riskRewardSecond",
+  ];
+  if (!numericFields.every((key) => isFiniteNumber(value[key]))) return false;
+  const entry = ((value.referenceBuyLow as number) + (value.referenceBuyHigh as number)) / 2;
+  return (
+    (value.referenceBuyLow as number) > 0 &&
+    (value.referenceBuyLow as number) <= (value.referenceBuyHigh as number) &&
+    (value.pullbackBuyLow as number) > 0 &&
+    (value.pullbackBuyLow as number) <= (value.pullbackBuyHigh as number) &&
+    (value.stopLoss as number) > 0 &&
+    (value.stopLoss as number) < entry &&
+    (value.firstTakeProfit as number) > entry &&
+    (value.secondTakeProfit as number) > (value.firstTakeProfit as number) &&
+    (value.firstReduceFraction as number) > 0 &&
+    (value.firstReduceFraction as number) <= 1 &&
+    (value.secondReduceFraction as number) > 0 &&
+    (value.secondReduceFraction as number) <= 1 &&
+    (value.firstReduceFraction as number) + (value.secondReduceFraction as number) <= 1 + 1e-8
+  );
+}
+
+function isV5PositionPlan(value: unknown): value is StockReportV5PositionPlan {
+  if (!isRecord(value)) return false;
+  const numericFields = ["riskBudgetPct", "initialPositionPct", "maxPositionPct", "stopDistancePct"];
+  if (!numericFields.every((key) => isFiniteNumber(value[key]))) return false;
+  return (
+    (value.riskBudgetPct as number) > 0 &&
+    (value.initialPositionPct as number) > 0 &&
+    (value.maxPositionPct as number) > 0 &&
+    (value.stopDistancePct as number) > 0 &&
+    (value.initialPositionPct as number) <= (value.maxPositionPct as number)
+  );
+}
+
+function isV5HorizonDecision(value: unknown): value is StockReportV5HorizonDecision {
+  if (!isRecord(value)) return false;
+  const validShape = (
+    isOneOf(value.direction, V5_DIRECTIONS) &&
+    isOneOf(value.action, V5_ACTIONS) &&
+    isNonEmptyString(value.thesis) &&
+    isOneOf(value.notHoldingAction, V5_NOT_HOLDING_ACTIONS) &&
+    isOneOf(value.holdingAction, V5_HOLDING_ACTIONS) &&
+    isV5TradingPlan(value.tradingPlan) &&
+    isV5PositionPlan(value.positionPlan) &&
+    isDateString(value.validUntil) &&
+    isNonEmptyString(value.reviewTrigger) &&
+    isStringArray(value.keyReasons, 1, 3) &&
+    isStringArray(value.keyRisks, 1, 2) &&
+    isOneOf(value.evidenceStrength, V5_EVIDENCE_STRENGTHS) &&
+    isDateString(value.marketAsOf) &&
+    isDateString(value.generatedAt) &&
+    typeof value.isExpired === "boolean"
+  );
+  if (!validShape) return false;
+  if (value.direction === "positive" && ["reduce", "exit", "avoid"].includes(value.action as string)) return false;
+  if (value.direction === "negative" && ["conditional_participation", "hold"].includes(value.action as string)) return false;
+  if (value.direction === "positive" && value.notHoldingAction === "avoid") return false;
+  if (value.direction === "negative" && value.notHoldingAction === "participate") return false;
+  if (value.direction === "negative" && value.holdingAction === "hold") return false;
+  if (value.direction === "positive" && value.holdingAction === "exit") return false;
+  return true;
+}
+
+/** Runtime guard for the exact camelCase V5 report detail contract. */
+export function isStockReportV5Document(value: unknown): value is StockReportV5Document {
+  if (!isRecord(value) || value.schemaVersion !== 5 || value.resultStatus !== "completed") return false;
+  const decisions = value.horizonDecisions;
+  return (
+    isNonEmptyString(value.reportId) &&
+    isNonEmptyString(value.runId) &&
+    value.kind === "deep_research" &&
+    isPublicInstrument(value.instrument) &&
+    isNonEmptyString(value.summary) &&
+    isDateString(value.researchCutoffAt) &&
+    isDateString(value.marketAsOf) &&
+    isDateString(value.generatedAt) &&
+    typeof value.isExpired === "boolean" &&
+    typeof value.hasExpiredHorizon === "boolean" &&
+    isRecord(decisions) &&
+    V5_HORIZON_KEYS.every((key) => isV5HorizonDecision(decisions[key]))
+  );
+}
+
+/** Runtime guard for the compact V5 list/dashboard projection. */
+export function isStockReportV5Projection(value: unknown): value is StockReportV5ListProjection {
+  if (!isRecord(value) || value.schemaVersion !== 5 || value.resultStatus !== "completed") return false;
+  const decisions = value.horizonDecisions;
+  if (!isDateString(value.researchCutoffAt) || !isDateString(value.marketAsOf) || !isDateString(value.generatedAt)) return false;
+  if (typeof value.isExpired !== "boolean" || typeof value.hasExpiredHorizon !== "boolean" || !isRecord(decisions)) return false;
+  return V5_HORIZON_KEYS.every((key) => {
+    const decision = decisions[key];
+    return isRecord(decision) && isOneOf(decision.direction, V5_DIRECTIONS) && isOneOf(decision.action, V5_ACTIONS) && isDateString(decision.validUntil) && typeof decision.isExpired === "boolean";
+  });
+}
+
+const V6_DIRECTIONS = ["positive", "neutral", "negative", "avoid"] as const;
+const V6_DECISION_MODES = ["research_only", "reference_plan"] as const;
+const V6_RESEARCH_STATUSES = ["ready", "unavailable"] as const;
+const V6_TRADE_STATUSES = ["ready", "unavailable"] as const;
+const V6_ACTIONS = ["conditional_participation", "wait", "hold", "reduce", "exit", "avoid"] as const;
+const V6_HOLDING_STATES = ["not_holding", "holding"] as const;
+const V6_CURRENT_ACTIONS = ["participate", "wait", "hold", "reduce", "exit", "avoid", "execution_blocked"] as const;
+const V6_PLAN_STATUSES = ["proxy", "limited", "blocked"] as const;
+const V6_EXECUTION_STATUSES = ["proxy", "limited", "blocked"] as const;
+
+function isV6Plan(value: unknown): value is StockReportV6MaterializedPlan | null {
+  if (value === null) return true;
+  if (!isRecord(value)) return false;
+  const numericFields = [
+    "buyLow", "buyHigh", "pullbackLow", "pullbackHigh", "confirmationPrice",
+    "invalidationPrice", "exitPrice", "reentryConfirmationPrice", "stopLoss",
+    "firstTakeProfit", "secondTakeProfit", "initialPositionPct", "maxPositionPct",
+    "targetMaxPositionPct", "additionalPositionPct", "liquidityCapPct", "riskBudgetPct",
+    "riskRewardFirstAfterCost", "riskRewardSecondAfterCost",
+  ];
+  return (
+    (value.direction == null || isOneOf(value.direction, V6_DIRECTIONS)) &&
+    (value.action == null || isOneOf(value.action, V6_ACTIONS)) &&
+    (value.holdingState == null || isOneOf(value.holdingState, V6_HOLDING_STATES)) &&
+    (value.currentAction == null || isOneOf(value.currentAction, V6_CURRENT_ACTIONS)) &&
+    (value.planStatus == null || isOneOf(value.planStatus, V6_PLAN_STATUSES)) &&
+    numericFields.every((key) => value[key] == null || isFiniteNumber(value[key])) &&
+    (value.riskProfileConfigured == null || typeof value.riskProfileConfigured === "boolean") &&
+    (value.positionCapReasons == null || isStringArray(value.positionCapReasons, 0)) &&
+    (value.executionMode == null || value.executionMode === "research_only") &&
+    (value.execution == null || (isRecord(value.execution) && (value.execution.executionStatus == null || isOneOf(value.execution.executionStatus, V6_EXECUTION_STATUSES))))
+  );
+}
+
+function isV6HorizonDecision(value: unknown): value is StockReportV6HorizonDecision {
+  if (!isRecord(value)) return false;
+  return (
+    isOneOf(value.direction, V6_DIRECTIONS) &&
+    isOneOf(value.action, V6_ACTIONS) &&
+    isNonEmptyString(value.thesis) &&
+    isStringArray(value.keyReasons, 1, 3) &&
+    isStringArray(value.keyRisks, 1, 2) &&
+    isOneOf(value.researchStatus, V6_RESEARCH_STATUSES) &&
+    isOneOf(value.tradeStatus, V6_TRADE_STATUSES) &&
+    isV6Plan(value.materializedPlan) &&
+    (value.validUntil == null || isDateString(value.validUntil)) &&
+    (value.reviewTrigger == null || isNonEmptyString(value.reviewTrigger))
+  );
+}
+
+/** Runtime guard for the public V6 detail projection. */
+export function isStockReportV6Document(value: unknown): value is StockReportV6Document {
+  if (!isRecord(value) || value.schemaVersion !== 6 || value.resultStatus !== "completed") return false;
+  const decisions = value.horizonDecisions;
+  return (
+    isNonEmptyString(value.reportId) &&
+    isNonEmptyString(value.runId) &&
+    value.kind === "deep_research" &&
+    isPublicInstrument(value.instrument) &&
+    isOneOf(value.decisionMode, V6_DECISION_MODES) &&
+    isOneOf(value.researchStatus, V6_RESEARCH_STATUSES) &&
+    isOneOf(value.tradeStatus, V6_TRADE_STATUSES) &&
+    isNonEmptyString(value.summary) &&
+    isDateString(value.researchCutoffAt) &&
+    isDateString(value.marketAsOf) &&
+    isDateString(value.generatedAt) &&
+    (value.currentPrice == null || isFiniteNumber(value.currentPrice)) &&
+    (value.benchmarkPrice == null || isFiniteNumber(value.benchmarkPrice)) &&
+    isRecord(decisions) &&
+    V5_HORIZON_KEYS.every((key) => isV6HorizonDecision(decisions[key]))
+  );
+}
+
+/** Runtime guard for the compact V6 list/dashboard projection. */
+export function isStockReportV6Projection(value: unknown): value is StockReportV6ListProjection {
+  if (!isRecord(value) || value.schemaVersion !== 6 || value.resultStatus !== "completed") return false;
+  const decisions = value.horizonDecisions;
+  if (!isOneOf(value.decisionMode, V6_DECISION_MODES) || !isOneOf(value.researchStatus, V6_RESEARCH_STATUSES) || !isOneOf(value.tradeStatus, V6_TRADE_STATUSES)) return false;
+  if (!isDateString(value.researchCutoffAt) || !isDateString(value.marketAsOf) || !isRecord(decisions)) return false;
+  return V5_HORIZON_KEYS.every((key) => {
+    const decision = decisions[key];
+    return isRecord(decision) && isOneOf(decision.direction, V6_DIRECTIONS) && isOneOf(decision.action, V6_ACTIONS) && isOneOf(decision.researchStatus, V6_RESEARCH_STATUSES) && isOneOf(decision.tradeStatus, V6_TRADE_STATUSES);
+  });
+}
 
 /** Type guard shared by structured V4 surfaces without converting V3 strings. */
 export function isStockViewPoint(value: unknown): value is StockViewPoint {
@@ -1191,6 +1984,215 @@ export interface StockDigestItem {
 export interface StockReportDetail {
   report: StockReportDocument;
   markdown: string;
+}
+
+/** Standard single-agent diagnosis contract (StockDiagnosisV1).  It is kept
+ * separate from the deep-research report types so the two histories cannot be
+ * rendered as one product. */
+export type StockDiagnosisStatus = "queued" | "running" | "succeeded" | "failed" | "cancelled";
+export type StockDiagnosisDirection = "positive" | "neutral" | "negative" | "unavailable";
+export type StockDiagnosisAction = "conditional_participation" | "wait" | "hold" | "reduce" | "exit" | "avoid";
+export type StockDiagnosisValidationStatus = "descriptive" | "calibrated" | "rejected" | "unavailable";
+
+export interface StockDiagnosisClaim {
+  text?: string;
+  claim?: string;
+  source_ids?: string[];
+  claim_type?: "fact" | "inference" | "hypothesis" | string;
+}
+
+export interface StockDiagnosisFactor {
+  name: string;
+  value?: number | null;
+  percentile?: number | null;
+  direction?: StockDiagnosisDirection | null;
+  weight?: number | null;
+  contribution?: number | null;
+  source_ids?: string[];
+}
+
+export interface StockDiagnosisFactorHorizon {
+  status?: "available" | "degraded" | "unavailable";
+  validation_status?: StockDiagnosisValidationStatus;
+  factor_score?: number | null;
+  market_percentile?: number | null;
+  industry_percentile?: number | null;
+  rank?: number | null;
+  sample_count?: number | null;
+  industry_sample_count?: number | null;
+  missing_count?: number | null;
+  fallback_scope?: "none" | "market" | "unavailable";
+  factors?: StockDiagnosisFactor[];
+  factor_contributions?: Record<string, number>;
+  method_version?: string;
+  source_ids?: string[];
+}
+
+export interface StockDiagnosisFactorSnapshot {
+  short_term: StockDiagnosisFactorHorizon;
+  medium_term: StockDiagnosisFactorHorizon;
+  long_term: StockDiagnosisFactorHorizon;
+  snapshot_as_of?: string | null;
+  universe_definition?: string | null;
+  content_hash?: string | null;
+  sample_count?: number | null;
+  missing_count?: number | null;
+  source_ids?: string[];
+}
+
+export interface StockDiagnosisMaterializedPlan {
+  reference_entry?: number | null;
+  pullback_entry?: number | null;
+  stop_loss?: number | null;
+  first_take_profit?: number | null;
+  second_take_profit?: number | null;
+  value_status?: "available" | "partial" | "unavailable";
+  unavailable_fields?: string[];
+  invalidation?: string[];
+  boundaries?: string[];
+  max_risk_pct?: number | null;
+  source_ids?: string[];
+}
+
+export interface StockDiagnosisPositionPlan {
+  reference_position_pct?: number | null;
+  max_position_pct?: number | null;
+  risk_budget_pct?: number | null;
+  value_status?: "available" | "partial" | "unavailable";
+  source_ids?: string[];
+}
+
+export interface StockDiagnosisHorizonDecision {
+  direction: StockDiagnosisDirection;
+  action: StockDiagnosisAction;
+  factor_score?: number | null;
+  market_percentile?: number | null;
+  industry_percentile?: number | null;
+  factor_contributions?: Record<string, number>;
+  validation_status: StockDiagnosisValidationStatus;
+  not_holding_action: StockDiagnosisAction;
+  holding_action: StockDiagnosisAction;
+  materialized_plan: StockDiagnosisMaterializedPlan;
+  position_plan: StockDiagnosisPositionPlan;
+  review_trigger?: string;
+  valid_until?: string | null;
+  key_reasons?: StockDiagnosisClaim[];
+  key_risks?: StockDiagnosisClaim[];
+  confidence?: "high" | "medium" | "low";
+  source_ids?: string[];
+}
+
+export interface StockDiagnosisFundamentalResearch {
+  status: "available" | "degraded" | "unavailable";
+  business_understandable?: boolean | null;
+  company_understanding?: string | null;
+  business_model?: string | null;
+  business_model_summary?: string | null;
+  revenue_sources?: string[];
+  competitive_advantages?: StockDiagnosisClaim[];
+  competitive_advantage?: StockDiagnosisClaim[];
+  competitive_counterevidence?: StockDiagnosisClaim[];
+  competitive_advantage_counterevidence?: StockDiagnosisClaim[];
+  management_governance?: StockDiagnosisClaim[];
+  governance?: StockDiagnosisClaim[];
+  industry_supply_demand?: StockDiagnosisClaim[];
+  industry_context?: StockDiagnosisClaim[];
+  policy_transmission?: StockDiagnosisClaim[];
+  policy_context?: StockDiagnosisClaim[];
+  cycle_position?: StockDiagnosisClaim[];
+  cycle_context?: StockDiagnosisClaim[];
+  key_assumptions?: StockDiagnosisClaim[];
+  risks?: StockDiagnosisClaim[];
+  conclusion_change_conditions?: StockDiagnosisClaim[];
+  change_conditions?: StockDiagnosisClaim[];
+  source_ids?: string[];
+}
+
+export interface StockDiagnosisDecisionBasisRow {
+  key: "fundamental" | "quant" | "sentiment" | "risk";
+  label: string;
+  stance: "positive" | "neutral" | "cautious" | "negative" | "strict";
+  stance_label: string;
+  summary: string;
+  source_ids?: string[];
+}
+
+export interface StockDiagnosisV1 {
+  schema_version: 1;
+  kind: "ai_diagnosis";
+  diagnosis_id: string;
+  instrument: StockRawReportInstrument;
+  research_cutoff_at: string;
+  market_as_of?: string | null;
+  generated_at: string;
+  evidence_context_id: string;
+  source_ids: string[];
+  data_quality: {
+    status: "complete" | "available" | "degraded" | "unavailable";
+    confidence: "high" | "medium" | "low";
+    missing_fields?: string[];
+    degraded_fields?: string[];
+    sample_counts?: Record<string, number>;
+  };
+  fundamental_research: StockDiagnosisFundamentalResearch;
+  fundamental_factors: StockDiagnosisFactorSnapshot;
+  quant_factors: StockDiagnosisFactorSnapshot;
+  technical_execution: {
+    status: "available" | "degraded" | "unavailable";
+    horizons?: Record<string, StockDiagnosisMaterializedPlan>;
+    position?: Record<string, StockDiagnosisPositionPlan>;
+    review_triggers?: Record<string, string>;
+    valid_until?: Record<string, string | null>;
+    source_ids?: string[];
+  };
+  horizon_decisions: {
+    short_term: StockDiagnosisHorizonDecision;
+    medium_term: StockDiagnosisHorizonDecision;
+    long_term: StockDiagnosisHorizonDecision;
+  };
+  decision_radar: {
+    current_decision?: StockDiagnosisHorizonDecision | null;
+    basis_rows?: StockDiagnosisDecisionBasisRow[];
+    short_term: StockDiagnosisHorizonDecision;
+    medium_term: StockDiagnosisHorizonDecision;
+    long_term: StockDiagnosisHorizonDecision;
+    holding_state?: "not_holding" | "holding";
+    overall_confidence?: "high" | "medium" | "low";
+    deterministic?: boolean;
+  };
+  method_versions?: Record<string, string>;
+}
+
+export interface StockDiagnosisRun {
+  diagnosisId: string;
+  workflowId: string;
+  status: StockDiagnosisStatus;
+  instrument: StockRawReportInstrument;
+  evidenceContextId?: string | null;
+  createdAt?: string;
+  updatedAt?: string;
+  attempt?: number;
+  agentSteps?: Array<Record<string, unknown>>;
+  agentStepCount?: number;
+  llmAgentSteps?: number;
+  inputHash?: string | null;
+  holdingState?: "not_holding" | "holding";
+  error?: string | null;
+  errorCode?: string | null;
+  report?: StockDiagnosisV1;
+  markdown?: string;
+}
+
+export const STOCK_DIAGNOSIS_ROOM_CHAT_ID = "stock_ai_diagnosis";
+
+export function isStockDiagnosisV1Document(value: unknown): value is StockDiagnosisV1 {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return false;
+  const record = value as Record<string, unknown>;
+  return record.schema_version === 1 && record.kind === "ai_diagnosis"
+    && typeof record.diagnosis_id === "string"
+    && typeof record.research_cutoff_at === "string"
+    && typeof record.generated_at === "string"
+    && record.horizon_decisions != null;
 }
 
 export type StockOutcomeHorizon = "short_term" | "medium_term" | "long_term";
@@ -1375,6 +2377,53 @@ export interface StockDashboardItem {
   latest: StockDashboardLatest | null;
 }
 
+export type StockRiskLevel = "conservative" | "balanced" | "aggressive";
+export type StockFundsRange = "under_100k" | "100k_500k" | "500k_2m" | "over_2m";
+
+export interface StockRiskProfile {
+  profile_name: string;
+  configured: boolean;
+  risk_level: StockRiskLevel;
+  max_drawdown_tolerance_pct: number;
+  total_funds_range: StockFundsRange | null;
+  risk_budget_pct: number;
+  max_single_position_pct: number;
+  max_industry_exposure_pct: number;
+  max_correlated_exposure_pct: number;
+}
+
+export interface StockRiskProfileResponse {
+  profile: StockRiskProfile;
+  configured: boolean;
+  riskLevelLabel?: string;
+  displayMetadata?: Record<string, unknown>;
+  storage?: { localOnly?: boolean; brokerConnected?: boolean };
+}
+
+export type StockHoldingState = "not_holding" | "holding";
+export type StockPositionInputMode = "percentage" | "assets_shares";
+
+export interface StockPortfolioContext {
+  holding_state: StockHoldingState;
+  /** New UI input mode; omitted by older stored contexts. */
+  position_input_mode?: StockPositionInputMode;
+  holding_quantity?: number | null;
+  portfolio_value_yuan?: number | null;
+  current_position_pct: number;
+  industry_exposure_pct: number;
+  correlated_exposure_pct: number;
+  today_bought_quantity: number | null;
+  holding_cost: number | null;
+  portfolio_value_configured?: boolean;
+}
+
+export interface StockPortfolioContextResponse {
+  instrumentId: string;
+  context: StockPortfolioContext;
+  configured: boolean;
+  storage?: { localOnly?: boolean; brokerConnected?: boolean };
+}
+
 /** Structured run input for the deep-research template (design §4.2). */
 export interface StockRunInputs {
   symbols: string[];
@@ -1427,6 +2476,103 @@ async function servicesFetch<T>(path: string, init?: RequestInit): Promise<T> {
   return parseResponse<T>(res);
 }
 
+const DECISION_HORIZON_KEYS: StockDecisionHorizonKey[] = ["shortTerm", "mediumTerm", "longTerm"];
+const DECISION_GROUP_LABELS: Record<StockDecisionConditionGroup, string> = {
+  participation: "参与条件",
+  confirmation: "确认条件",
+  watch: "观察条件",
+  invalidation: "退出条件",
+  stop_loss: "止损条件",
+  take_profit: "止盈条件",
+  other: "其他条件",
+};
+const DECISION_STATUS_LABELS: Record<StockDecisionConditionStatus, "已满足" | "未满足" | "暂无法判断"> = {
+  matched: "已满足",
+  not_matched: "未满足",
+  not_evaluable: "暂无法判断",
+};
+
+function safeDecisionReason(value: unknown): string | null {
+  if (typeof value !== "string") return null;
+  const text = value.trim();
+  return text && !/[A-Za-z_]{2,}/.test(text) ? text : null;
+}
+
+function normalizeDecisionCondition(value: unknown): StockDecisionConditionEvaluation | null {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return null;
+  const raw = value as Record<string, unknown>;
+  const rawGroup = typeof raw.group === "string" ? raw.group.replace(/_conditions$/, "") : "";
+  const group = (Object.prototype.hasOwnProperty.call(DECISION_GROUP_LABELS, rawGroup)
+    ? rawGroup
+    : "other") as StockDecisionConditionGroup;
+  const text = typeof raw.text === "string" ? raw.text.trim() : "";
+  if (!text) return null;
+  const status = raw.status === "matched" || raw.status === "not_matched" || raw.status === "not_evaluable"
+    ? raw.status
+    : "not_evaluable";
+  return {
+    group,
+    groupLabel: DECISION_GROUP_LABELS[group],
+    text,
+    sourceIds: Array.isArray(raw.sourceIds)
+      ? raw.sourceIds.filter((item): item is string => typeof item === "string" && item.length > 0)
+      : [],
+    status,
+    statusLabel: DECISION_STATUS_LABELS[status],
+    evaluatedAt: typeof raw.evaluatedAt === "string" ? raw.evaluatedAt : null,
+    methodVersion: typeof raw.methodVersion === "string" ? raw.methodVersion : null,
+    reason: safeDecisionReason(raw.reason),
+  };
+}
+
+function normalizeDecisionRiskReward(value: unknown): StockDecisionRiskRewardEvaluation {
+  const raw = value && typeof value === "object" && !Array.isArray(value)
+    ? value as Record<string, unknown>
+    : {};
+  const status = raw.status === "matched" || raw.status === "not_matched" || raw.status === "not_evaluable"
+    ? raw.status
+    : "not_evaluable";
+  const ratio = typeof raw.ratio === "number" && Number.isFinite(raw.ratio) ? raw.ratio : null;
+  const direction = raw.direction === "long" || raw.direction === "short" ? raw.direction : "unknown";
+  return {
+    status,
+    statusLabel: DECISION_STATUS_LABELS[status],
+    ratio,
+    direction,
+    evaluatedAt: typeof raw.evaluatedAt === "string" ? raw.evaluatedAt : null,
+    methodVersion: typeof raw.methodVersion === "string" ? raw.methodVersion : null,
+    reason: safeDecisionReason(raw.reason),
+  };
+}
+
+function normalizeDecisionEvaluation(value: unknown): StockDecisionEvaluation {
+  const raw = value && typeof value === "object" && !Array.isArray(value)
+    ? value as Record<string, unknown>
+    : {};
+  const rawHorizons = raw.horizons && typeof raw.horizons === "object" && !Array.isArray(raw.horizons)
+    ? raw.horizons as Record<string, unknown>
+    : {};
+  const horizons: StockDecisionEvaluation["horizons"] = {};
+  for (const key of DECISION_HORIZON_KEYS) {
+    const rawHorizon = rawHorizons[key];
+    if (!rawHorizon || typeof rawHorizon !== "object" || Array.isArray(rawHorizon)) continue;
+    const horizon = rawHorizon as Record<string, unknown>;
+    const conditions = Array.isArray(horizon.conditions)
+      ? horizon.conditions.map(normalizeDecisionCondition).filter((item): item is StockDecisionConditionEvaluation => item != null)
+      : [];
+    horizons[key] = {
+      conditions,
+      riskReward: normalizeDecisionRiskReward(horizon.riskReward),
+    };
+  }
+  return {
+    reportId: typeof raw.reportId === "string" ? raw.reportId : null,
+    evaluatedAt: typeof raw.evaluatedAt === "string" ? raw.evaluatedAt : null,
+    methodVersion: typeof raw.methodVersion === "string" ? raw.methodVersion : "",
+    horizons,
+  };
+}
+
 async function wsFetch<T>(token: string, path: string): Promise<T> {
   const base = await getApiBase();
   const res = await httpFetch(`${base}${path}`, {
@@ -1444,6 +2590,45 @@ function jsonInit(method: string, body: unknown): RequestInit {
 }
 
 // --- watchlist (services port) ---
+
+export async function fetchStockRiskProfile(): Promise<StockRiskProfileResponse> {
+  return servicesFetch<StockRiskProfileResponse>("/api/stock/risk-profile", { method: "GET" });
+}
+
+export async function saveStockRiskProfile(profile: Omit<StockRiskProfile, "configured" | "profile_name"> & Partial<Pick<StockRiskProfile, "profile_name">>): Promise<StockRiskProfileResponse> {
+  return servicesFetch<StockRiskProfileResponse>(
+    "/api/stock/risk-profile",
+    jsonInit("PUT", { profile }),
+  );
+}
+
+export async function deleteStockRiskProfile(): Promise<StockRiskProfileResponse> {
+  return servicesFetch<StockRiskProfileResponse>("/api/stock/risk-profile", { method: "DELETE" });
+}
+
+export async function fetchStockPortfolioContext(instrumentId: string): Promise<StockPortfolioContextResponse> {
+  return servicesFetch<StockPortfolioContextResponse>(
+    `/api/stock/portfolio-context?instrumentId=${encodeURIComponent(instrumentId)}`,
+    { method: "GET" },
+  );
+}
+
+export async function saveStockPortfolioContext(
+  instrumentId: string,
+  context: StockPortfolioContext,
+): Promise<StockPortfolioContextResponse> {
+  return servicesFetch<StockPortfolioContextResponse>(
+    `/api/stock/portfolio-context?instrumentId=${encodeURIComponent(instrumentId)}`,
+    jsonInit("PUT", { instrumentId, context }),
+  );
+}
+
+export async function deleteStockPortfolioContext(instrumentId: string): Promise<StockPortfolioContextResponse> {
+  return servicesFetch<StockPortfolioContextResponse>(
+    `/api/stock/portfolio-context?instrumentId=${encodeURIComponent(instrumentId)}`,
+    { method: "DELETE" },
+  );
+}
 
 export async function fetchStockWatchlist(): Promise<StockWatchlistItem[]> {
   const data = await servicesFetch<{ items: StockWatchlistItem[] }>(
@@ -1559,6 +2744,17 @@ export async function fetchStockOutcomes(
   );
 }
 
+export async function fetchStockDecisionConditions(
+  _token: string,
+  reportId: string,
+): Promise<StockDecisionEvaluation> {
+  const data = await servicesFetch<unknown>(
+    `/api/stock/decision-conditions?reportId=${encodeURIComponent(reportId)}`,
+    { method: "GET" },
+  );
+  return normalizeDecisionEvaluation(data);
+}
+
 export async function refreshStockOutcomes(
   reportId: string,
 ): Promise<StockOutcomesResponse> {
@@ -1663,6 +2859,73 @@ export async function preflightStockResearch(
   return servicesFetch<StockResearchPreflight>(
     "/api/stock/research/preflight",
     jsonInit("POST", { instrumentId, ...(name ? { name } : {}) }),
+  );
+}
+
+// --- standard AI diagnosis (services port) ---
+
+export async function fetchStockDiagnoses(
+  instrumentId?: string,
+  status?: StockDiagnosisStatus,
+): Promise<StockDiagnosisRun[]> {
+  const query = new URLSearchParams();
+  if (instrumentId) query.set("instrumentId", instrumentId);
+  if (status) query.set("status", status);
+  const suffix = query.toString() ? `?${query.toString()}` : "";
+  const data = await servicesFetch<{ items?: StockDiagnosisRun[] }>(
+    `/api/stock/diagnosis${suffix}`,
+    { method: "GET" },
+  );
+  return Array.isArray(data.items) ? data.items : [];
+}
+
+export async function fetchStockDiagnosis(
+  diagnosisId: string,
+): Promise<StockDiagnosisRun> {
+  return servicesFetch<StockDiagnosisRun>(
+    `/api/stock/diagnosis/${encodeURIComponent(diagnosisId)}`,
+    { method: "GET" },
+  );
+}
+
+/** Direct standard-diagnosis API entry point for callers that do not use the
+ * hidden workflow. The stock workbench uses the hidden workflow for the
+ * cancellable run and reads its StockDiagnosisV1 result through this API. */
+export async function createStockDiagnosis(
+  instrumentId: string,
+  options: {
+    evidenceContextId?: string;
+    holdingState?: "not_holding" | "holding";
+    execute?: boolean;
+  } = {},
+): Promise<StockDiagnosisRun> {
+  return servicesFetch<StockDiagnosisRun>(
+    "/api/stock/diagnosis",
+    jsonInit("POST", {
+      instrumentId,
+      ...(options.evidenceContextId ? { evidenceContextId: options.evidenceContextId } : {}),
+      holdingState: options.holdingState ?? "not_holding",
+      execute: options.execute ?? true,
+    }),
+  );
+}
+
+export async function cancelStockDiagnosis(
+  diagnosisId: string,
+): Promise<StockDiagnosisRun> {
+  return servicesFetch<StockDiagnosisRun>(
+    `/api/stock/diagnosis/${encodeURIComponent(diagnosisId)}/cancel`,
+    jsonInit("POST", { reason: "用户取消AI诊股" }),
+  );
+}
+
+export async function retryStockDiagnosis(
+  diagnosisId: string,
+  execute = true,
+): Promise<StockDiagnosisRun> {
+  return servicesFetch<StockDiagnosisRun>(
+    `/api/stock/diagnosis/${encodeURIComponent(diagnosisId)}/retry`,
+    jsonInit("POST", { execute }),
   );
 }
 

@@ -2,7 +2,7 @@ import { useEffect, useMemo, useState } from "react";
 import { Check, Loader2, X } from "lucide-react";
 
 import { fetchFilePreviewBlob } from "@/lib/api";
-import { stockClaimText, type StockReportDocument } from "@/lib/stock-api";
+import { isStockReportV6Document, stockClaimText, type StockReportDocument } from "@/lib/stock-api";
 import type {
   ArtifactRef,
   ToolProgressEvent,
@@ -11,7 +11,7 @@ import type {
   WorkflowStepStatus,
 } from "@/lib/types";
 import { cn } from "@/lib/utils";
-import { stanceLabel } from "./labels";
+import { evidenceTextLabel, stanceLabel } from "./labels";
 
 const STEP_IDS = [
   "technical",
@@ -89,9 +89,40 @@ function visibleStanceLabel(value: string | null | undefined): string {
   return "观点待确认";
 }
 
+function researchProgressText({
+  succeeded,
+  failed,
+  settled,
+  active,
+}: {
+  succeeded: number;
+  failed: number;
+  settled: number;
+  active: boolean;
+}): string {
+  if (failed > 0) return `成功${succeeded} · 失败${failed}`;
+  if (!active && succeeded === STEP_IDS.length) return `已完成${STEP_IDS.length}/6`;
+  return `已结束${settled}/6`;
+}
+
 function reportClaimPoint(prefix: string, value: Parameters<typeof stockClaimText>[0]): { claim: string } | null {
-  const text = stockClaimText(value).trim();
+  const text = visibleOpinionText(stockClaimText(value)).trim();
   return text ? { claim: `${prefix}${text}` } : null;
+}
+
+const INTERNAL_ROLE_LABELS: Record<string, string> = {
+  technical: "技术分析",
+  fundamental: "基本面分析",
+  news: "资讯分析",
+  bull: "多头论证",
+  bear: "空头论证",
+  referee: "主审",
+};
+
+function visibleOpinionText(value: string | null | undefined): string {
+  return evidenceTextLabel(value)
+    .replace(/\b(technical|fundamental|news|bull|bear|referee)\b/gi, (token) => INTERNAL_ROLE_LABELS[token.toLowerCase()] ?? token)
+    .replace(/\bsource_ids?\b/gi, "证据来源");
 }
 
 function StatusDot({ status }: { status: WorkflowStepStatus }) {
@@ -153,7 +184,7 @@ function StepCard({
     <div className="mt-2">
       {opinion?.summary ? (
         <p className={cn("select-text break-words leading-relaxed text-muted-foreground", overview ? "text-ui" : "text-caption")}>
-          {opinion.summary}
+          {visibleOpinionText(opinion.summary)}
         </p>
       ) : (
         <p className="text-caption text-muted-foreground">
@@ -166,8 +197,8 @@ function StepCard({
             <li key={`${point.claim}-${index}`} className="flex gap-1.5">
               <span className="mt-1 h-1 w-1 shrink-0 rounded-full bg-muted-foreground/60" />
               <span className="min-w-0 select-text break-words">
-                {point.claim}
-                {point.evidence && <span className="mt-0.5 block text-muted-foreground/80">{point.evidence}</span>}
+                {visibleOpinionText(point.claim)}
+                {point.evidence && <span className="mt-0.5 block text-muted-foreground/80">{visibleOpinionText(point.evidence)}</span>}
               </span>
             </li>
           ))}
@@ -309,7 +340,7 @@ export function StepTimeline({
   const refereeOpinion: StructuredOpinion | undefined = report?.summary
     ? {
         stance: report.research_stance ?? undefined,
-        summary: report.summary,
+        summary: visibleOpinionText(report.summary),
         points: [
           ...(overview ? report.risks ?? [] : (report.risks ?? []).slice(0, 1)).map((claim) => reportClaimPoint("风险：", claim)),
           ...(overview ? report.catalysts ?? [] : (report.catalysts ?? []).slice(0, 1)).map((claim) => reportClaimPoint("催化：", claim)),
@@ -324,12 +355,15 @@ export function StepTimeline({
       ? "succeeded"
       : "queued";
   });
+  const succeeded = statuses.filter((status) => status === "succeeded").length;
+  const failed = statuses.filter((status) => status === "failed" || status === "cancelled").length;
   const settled = statuses.filter((status) =>
     status === "succeeded" || status === "failed" || status === "skipped" || status === "cancelled",
   ).length;
   const runningSteps = STEP_IDS.filter((stepId) => run?.steps[stepId]?.status === "running");
   const processActive = preparing || run?.status === "queued" || run?.status === "running" || run?.status === "waiting_approval";
   const processComplete = !processActive && Boolean(report || run);
+  const progressText = researchProgressText({ succeeded, failed, settled, active: processActive });
   const processSections = (
     <div className="space-y-5" data-testid="research-process-sections">
       <section>
@@ -364,11 +398,11 @@ export function StepTimeline({
 
   return (
     <div className={cn(overview ? "space-y-4 pb-2" : "space-y-3", !processActive && "text-muted-foreground")} data-testid="research-process">
-      {!(processComplete && report?.schema_version === 4) && (
+      {!(processComplete && report?.schema_version === 4 && failed === 0) && (
         <div data-testid="research-process-progress">
           <div className={cn("flex items-center justify-between text-muted-foreground", overview ? "text-caption" : "text-micro")}>
             <span>{preparing ? "正在准备研究资料并创建投研任务" : runningSteps.length > 1 ? "多项分析正在并行进行" : runningSteps.length === 1 ? `${STEP_LABELS[runningSteps[0]]}正在工作` : run?.status === "queued" || run?.status === "running" ? "投研任务已建立，等待分析开始" : report ? "本次投研已归档" : run ? "投研流程已结束" : "等待启动深度投研"}</span>
-            <span>已完成 {settled}/6 个研究步骤</span>
+            <span>{progressText}</span>
           </div>
           <div className="mt-1.5 h-1 overflow-hidden rounded-full bg-muted">
             <div className={cn("h-full rounded-full bg-info transition-[width]", preparing && "w-1/3 animate-pulse")} style={preparing ? undefined : { width: `${settled / 6 * 100}%` }} />
@@ -384,7 +418,7 @@ export function StepTimeline({
       {processComplete ? (
         <details data-testid="research-process-details">
           <summary className="cursor-pointer text-caption font-medium text-foreground">
-            {report?.schema_version === 4 ? "查看各分析角色结论" : `查看研究过程（已完成 ${settled}/6 个研究步骤）`}
+            {isStockReportV6Document(report) ? `查看各研究角色依据（${progressText}）` : report?.schema_version === 4 ? `查看各分析角色结论（${progressText}）` : `查看研究过程（${progressText}）`}
           </summary>
           <div className="mt-3">{processSections}</div>
         </details>

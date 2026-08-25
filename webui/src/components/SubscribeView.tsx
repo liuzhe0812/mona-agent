@@ -154,7 +154,11 @@ export function SubscribeView({
   const content = (
     <div className="flex w-full flex-col gap-4">
       {pricingConfig.promotionalBanner && (
-        <div className="rounded-lg bg-gradient-to-r from-amber-500 to-orange-500 px-4 py-2 text-center text-sm font-medium text-white">
+        <div className="relative rounded-lg border border-border bg-card px-4 py-2 text-center text-sm font-medium text-foreground">
+          <span
+            aria-hidden="true"
+            className="absolute bottom-2 left-0 top-2 w-0.5 bg-[hsl(var(--brand-red))]"
+          />
           {pricingConfig.promotionalBanner}
         </div>
       )}
@@ -185,7 +189,7 @@ export function SubscribeView({
               onClick={() => setSelectedPlanId(plan.id)}
               className={`relative flex flex-col gap-1 rounded-xl border p-4 text-left transition-colors ${
                 selectedPlanId === plan.id
-                  ? "border-primary bg-primary/5"
+                  ? "border-[hsl(var(--brand-red))] bg-foreground/5"
                   : "border-border hover:bg-muted/50"
               }`}
             >
@@ -208,7 +212,9 @@ export function SubscribeView({
               <div className="mt-2 flex items-center gap-1.5 text-xs text-muted-foreground">
                 <span
                   className={`h-3.5 w-3.5 rounded-full border ${
-                    selectedPlanId === plan.id ? "border-info bg-info" : "border-muted-foreground"
+                    selectedPlanId === plan.id
+                      ? "border-foreground bg-foreground"
+                      : "border-muted-foreground"
                   }`}
                 />
                 选择

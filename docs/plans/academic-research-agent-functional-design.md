@@ -651,8 +651,9 @@ tests/fixtures/academic_research/
 
 ```text
 mona/agents/com.mona.academic-researcher/**     # Agent 与四个 Skill
+mona/academic/**                                # 科研记录、来源适配与工作区存储
 mona/agent/tools/academic.py                    # 三个科研工具
-mona/agent/tools/registry.py                    # 注册工具
+mona/agent/tools/long_task.py                   # 允许直属伙伴 Agent 使用长目标
 pyproject.toml                                  # 仅在验收需要时增加可选依赖
 tests/tools/test_academic_*.py                  # 工具测试
 tests/agent/test_academic_research*.py          # Agent 与黑盒验收

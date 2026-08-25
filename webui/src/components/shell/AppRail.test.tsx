@@ -79,6 +79,14 @@ describe("AppRail", () => {
     expect(onOpenStock).toHaveBeenCalledTimes(1);
   });
 
+  it("uses the Mona signal instead of a filled active background", () => {
+    renderRail({ activeView: "note" });
+
+    const notes = screen.getByRole("button", { name: "Notes" });
+    expect(notes).toHaveClass("before:bg-[hsl(var(--brand-red))]");
+    expect(notes).not.toHaveClass("bg-[hsl(var(--sidebar-active-surface)/0.07)]");
+  });
+
   it("hides the stock module when moduleAvailability marks it unavailable", () => {
     renderRail({ moduleAvailability: { stock: false } });
 

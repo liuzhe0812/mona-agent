@@ -1722,6 +1722,22 @@ export function NotesView({
     [notes],
   );
 
+  const computeNoteFilePath = useCallback(
+    async (note: OperationNote): Promise<string | null> => {
+      if (!vaultPath) return null;
+      const safeTitle = note.title
+        .replace(/[\\/:*?"<>|]/g, "")
+        .trim()
+        .slice(0, 80) || "untitled";
+      const fileName = `${safeTitle}.md`;
+      const { join } = await import("@tauri-apps/api/path");
+      const notebook = notebooks.find((nb) => nb.id === note.notebookId);
+      if (notebook) return join(vaultPath, notebook.name, fileName);
+      return join(vaultPath, fileName);
+    },
+    [vaultPath, notebooks],
+  );
+
   const copyNoteMarkdown = useCallback(async (note: OperationNote) => {
     try {
       await navigator.clipboard.writeText(note.contentMarkdown);
@@ -1731,14 +1747,17 @@ export function NotesView({
   }, []);
 
   const copyNotePath = useCallback(async (note: OperationNote) => {
-    const notebook = notebooks.find((nb) => nb.id === note.notebookId);
-    const path = notebook ? `${notebook.name}/${note.title || "未命名笔记"}` : note.title || "未命名笔记";
+    const path = await computeNoteFilePath(note);
+    if (!path) {
+      notifyError("未找到笔记仓库路径");
+      return;
+    }
     try {
       await navigator.clipboard.writeText(path);
     } catch {
       notifyError("复制失败");
     }
-  }, [notebooks]);
+  }, [computeNoteFilePath]);
 
   const duplicateNote = useCallback((note: OperationNote) => {
     let nextNoteId: string;
@@ -1827,24 +1846,6 @@ export function NotesView({
       notifyError("无法创建新窗口");
     }
   }, []);
-
-  const computeNoteFilePath = useCallback(
-    async (note: OperationNote): Promise<string | null> => {
-      if (!vaultPath) return null;
-      const safeTitle = note.title
-        .replace(/[\\/:*?"<>|]/g, "")
-        .trim()
-        .slice(0, 80) || "untitled";
-      const fileName = `${safeTitle}.md`;
-      const { join } = await import("@tauri-apps/api/path");
-      const notebook = notebooks.find((nb) => nb.id === note.notebookId);
-      if (notebook) {
-        return join(vaultPath, notebook.name, fileName);
-      }
-      return join(vaultPath, fileName);
-    },
-    [vaultPath, notebooks],
-  );
 
   const openNoteWithDefaultApp = useCallback(
     async (note: OperationNote) => {
@@ -2267,7 +2268,7 @@ export function NotesView({
               <div className="flex min-h-0 flex-1">
               <aside
                 className={cn(
-                  "relative hidden w-[260px] shrink-0 flex-col border-r border-border/70 bg-sidebar/35",
+                  "relative hidden w-[260px] shrink-0 flex-col border-r border-border/70 bg-card",
                   leftSidebarOpen ? "md:flex" : "md:hidden",
                 )}
                 onDragEnter={handleSidebarDragEnter}
@@ -2276,7 +2277,7 @@ export function NotesView({
                 onDrop={handleSidebarDrop}
               >
                 <div className="flex h-11 shrink-0 items-center gap-2 border-b border-border/55 px-2">
-                  <div className="flex items-center rounded-lg border bg-background p-0.5">
+                  <div className="flex items-center gap-0.5">
                     {([
                       { key: "notes", label: "笔记", Icon: FileText },
                       { key: "canvas", label: "画布", Icon: Workflow },
@@ -2291,10 +2292,10 @@ export function NotesView({
                           title={label}
                           onClick={() => setModuleView(key)}
                           className={cn(
-                            "flex h-6 items-center rounded-md py-0.5 notes-tab-title font-normal leading-4 transition-colors duration-fast",
+                            "relative flex h-6 items-center rounded-md bg-transparent py-0.5 notes-tab-title font-normal leading-4 transition-colors duration-fast hover:bg-transparent active:bg-transparent",
                             active
-                              ? "bg-muted px-2.5 text-foreground hover:bg-muted"
-                              : "px-1.5 text-muted-foreground opacity-70 hover:bg-muted hover:text-foreground hover:opacity-100",
+                              ? "px-2.5 text-foreground hover:text-foreground before:pointer-events-none before:absolute before:bottom-0 before:left-1/2 before:h-0.5 before:w-5 before:-translate-x-1/2 before:rounded-full before:bg-[hsl(var(--brand-red))]"
+                              : "px-1.5 text-muted-foreground opacity-70 hover:text-foreground hover:opacity-100",
                           )}
                         >
                           <Icon className="h-3.5 w-3.5 shrink-0" />
@@ -2465,14 +2466,14 @@ export function NotesView({
                           <FolderPlus className="h-3.5 w-3.5" />
                         </IconButton>
                         <IconButton
-                          label="生成 Wiki"
+                          label="全部入库"
                           disabled={materialsCompiling}
                           onClick={() => materialsSidebarRef.current?.compile()}
                         >
                           <Sparkles className={cn("h-3.5 w-3.5", materialsCompiling && "animate-pulse")} />
                         </IconButton>
                         <IconButton
-                          label="质量检查"
+                          label="健康检查"
                           active={lintOpen}
                           disabled={lintRunning}
                           onClick={() => void runMaterialsLint()}
@@ -2913,8 +2914,8 @@ export function NotesView({
                         aria-label="关系图"
                         onClick={toggleGraphInActiveLeaf}
                         className={cn(
-                          "hover:bg-accent hover:text-foreground",
-                          activeLeafGraphOpen ? "bg-accent text-foreground" : "text-muted-foreground",
+                          "bg-transparent hover:bg-transparent hover:text-foreground",
+                          activeLeafGraphOpen ? "text-foreground" : "text-muted-foreground",
                         )}
                       >
                         <GitFork className="h-4 w-4" />
@@ -2927,8 +2928,8 @@ export function NotesView({
                         aria-label={leftSidebarOpen ? "收起左侧面板" : "展开左侧面板"}
                         onClick={() => setLeftSidebarOpen((v) => !v)}
                         className={cn(
-                          "hover:bg-accent hover:text-foreground",
-                          leftSidebarOpen ? "bg-accent text-foreground" : "text-muted-foreground",
+                          "bg-transparent hover:bg-transparent hover:text-foreground",
+                          leftSidebarOpen ? "text-foreground" : "text-muted-foreground",
                         )}
                       >
                         <LeftSidebarToggleIcon open={leftSidebarOpen} className="h-4 w-4" />
@@ -2941,8 +2942,8 @@ export function NotesView({
                         aria-label={rightSidebarOpen ? "收起右侧面板" : "展开右侧面板"}
                         onClick={() => setRightSidebarOpen((v) => !v)}
                         className={cn(
-                          "hover:bg-accent hover:text-foreground",
-                          rightSidebarOpen ? "bg-accent text-foreground" : "text-muted-foreground",
+                          "bg-transparent hover:bg-transparent hover:text-foreground",
+                          rightSidebarOpen ? "text-foreground" : "text-muted-foreground",
                         )}
                       >
                         <RightSidebarToggleIcon open={rightSidebarOpen} className="h-4 w-4" />
@@ -2956,8 +2957,8 @@ export function NotesView({
                           aria-label={agentPanelCollapsed ? "展开 Agent 联动" : "收起 Agent 联动"}
                           onClick={() => setAgentPanelCollapsed((current) => !current)}
                           className={cn(
-                            "hover:bg-accent hover:text-foreground",
-                            !agentPanelCollapsed ? "bg-accent text-foreground" : "text-muted-foreground",
+                            "bg-transparent hover:bg-transparent hover:text-foreground",
+                            !agentPanelCollapsed ? "text-foreground" : "text-muted-foreground",
                           )}
                         >
                           <AgentLogo state={agentStreaming ? "working" : "idle"} className="h-4 w-4" />
@@ -2970,7 +2971,7 @@ export function NotesView({
                           title="升级 Pro 解锁 AI"
                           aria-label="升级 Pro 解锁 AI"
                           onClick={onOpenSubscribe}
-                          className="text-muted-foreground hover:bg-accent hover:text-foreground"
+                          className="bg-transparent text-muted-foreground hover:bg-transparent hover:text-foreground"
                         >
                           <LockKeyhole className="h-4 w-4" />
                         </Button>
@@ -2993,7 +2994,7 @@ export function NotesView({
                           title={editorMode === "visual" ? "切换为 MD 源码" : "切换为可视化编辑"}
                           aria-label={editorMode === "visual" ? "切换为 MD 源码" : "切换为可视化编辑"}
                           onClick={() => setEditorMode((mode) => (mode === "visual" ? "markdown" : "visual"))}
-                          className="h-7 w-7 rounded-md text-muted-foreground hover:bg-accent hover:text-foreground"
+                          className="h-7 w-7 rounded-md bg-transparent text-muted-foreground hover:bg-transparent hover:text-foreground"
                         >
                           {editorMode === "visual" ? (
                             <FileCode2 className="h-4 w-4" />
@@ -3009,7 +3010,7 @@ export function NotesView({
                               size="icon"
                               title="更多"
                               aria-label="更多"
-                              className="h-7 w-7 rounded-md text-muted-foreground hover:bg-accent hover:text-foreground"
+                              className="h-7 w-7 rounded-md bg-transparent text-muted-foreground hover:bg-transparent hover:text-foreground"
                             >
                               <MoreHorizontal className="h-4 w-4" />
                             </Button>

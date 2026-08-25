@@ -2,9 +2,9 @@
 
 Enabling the A-share pack performs a one-time idempotent bootstrap:
 
-1. Create the deterministic hidden room ``stock_research`` — a system-level
-   execution container (type=room, hidden=True) whose members are the visible
-   A-share analyst plus the six internal pack agents.
+1. Create the deterministic hidden rooms ``stock_research`` and
+   ``stock_ai_diagnosis`` — system-level execution containers for the six-agent
+   deep-research workflow and the one-agent standard diagnosis workflow.
 2. Install the packaged deep-research template as the room's active workflow
    revision (the only revision chain entry; the daily-review template never
    enters the chain — it stays a read-only package resource).
@@ -37,6 +37,8 @@ from mona.cron.types import CronJob, CronPayload, CronSchedule
 STOCK_PACK_ID = "com.mona.a-share-team"
 STOCK_ROOM_ID = "stock_research"
 STOCK_ROOM_TITLE = "股票研究室"
+STOCK_DIAGNOSIS_ROOM_ID = "stock_ai_diagnosis"
+STOCK_DIAGNOSIS_ROOM_TITLE = "AI诊股"
 
 STOCK_PARTNER_AGENT_ID = "com.mona.a-share-analyst"
 STOCK_INTERNAL_AGENT_IDS = [
@@ -49,6 +51,8 @@ STOCK_INTERNAL_AGENT_IDS = [
     "com.mona.stock-selection-analyst",
 ]
 STOCK_ROOM_AGENT_IDS = [STOCK_PARTNER_AGENT_ID, *STOCK_INTERNAL_AGENT_IDS]
+STOCK_DIAGNOSIS_AGENT_ID = "com.mona.stock-diagnosis-semantic-researcher"
+STOCK_DIAGNOSIS_ROOM_AGENT_IDS = [STOCK_DIAGNOSIS_AGENT_ID]
 
 DEEP_RESEARCH_TEMPLATE_REF = (
     f"package://{STOCK_PACK_ID}/workflows/deep-research.json"
@@ -58,6 +62,9 @@ DAILY_REVIEW_TEMPLATE_REF = (
 )
 STOCK_SELECTION_TEMPLATE_REF = (
     f"package://{STOCK_PACK_ID}/workflows/stock-selection.json"
+)
+DIAGNOSIS_TEMPLATE_REF = (
+    f"package://{STOCK_PACK_ID}/workflows/ai-diagnosis.json"
 )
 
 REVIEW_CRON_TZ = "Asia/Shanghai"
@@ -143,6 +150,16 @@ def ensure_stock_pack(
         workflow_store.activate(STOCK_ROOM_ID)
         logger.info("Stock pack: installed deep-research template as active")
 
+    # 2b. Standard AI-diagnosis gets its own hidden room and workflow chain.
+    # It deliberately does not add the semantic Agent to the six-agent room.
+    ensure_stock_diagnosis_room(
+        session_manager,
+        workflow_store,
+        registry,
+        builtin_dir=builtin_dir,
+        installed_dir=installed_dir,
+    )
+
     # 3. Independent daily-review cron (register_system_job replaces by id,
     # so re-registration never duplicates).
     if cron_service is not None:
@@ -156,6 +173,57 @@ def ensure_stock_pack(
         )
         sync_all_stock_selection_crons(cron_service)
     return STOCK_ROOM_ID
+
+
+def ensure_stock_diagnosis_room(
+    session_manager,
+    workflow_store: WorkflowStore,
+    registry: AgentRegistry,
+    *,
+    builtin_dir: Path | None = None,
+    installed_dir: Path | None = None,
+) -> str:
+    """Idempotently create the hidden room for standard AI diagnosis."""
+    session = session_manager.get_or_create(f"websocket:{STOCK_DIAGNOSIS_ROOM_ID}")
+    conversation = session.conversation_metadata
+    desired = ConversationMetadata.room(
+        STOCK_DIAGNOSIS_ROOM_AGENT_IDS,
+        title=STOCK_DIAGNOSIS_ROOM_TITLE,
+        hidden=True,
+    )
+    if (
+        conversation.type != "room"
+        or not conversation.hidden
+        or conversation.agent_ids != desired.agent_ids
+    ):
+        session.metadata[CONVERSATION_METADATA_KEY] = desired.to_session_metadata()
+        session_manager.save(session)
+        logger.info("Stock pack: created hidden room {}", STOCK_DIAGNOSIS_ROOM_ID)
+    conversation = session.conversation_metadata
+
+    template = load_pack_template(
+        DIAGNOSIS_TEMPLATE_REF,
+        builtin_dir=builtin_dir,
+        installed_dir=installed_dir,
+    )
+    active = workflow_store.get_active(STOCK_DIAGNOSIS_ROOM_ID)
+    if (
+        active is None
+        or active.goal != template.goal
+        or active.steps != template.steps
+    ):
+        workflow_store.save_draft(
+            STOCK_DIAGNOSIS_ROOM_ID,
+            goal=template.goal,
+            trigger=template.trigger,
+            steps=template.steps,
+            created_by=f"pack:{STOCK_PACK_ID}",
+            conversation=conversation,
+            registry=registry,
+        )
+        workflow_store.activate(STOCK_DIAGNOSIS_ROOM_ID)
+        logger.info("Stock pack: installed standard AI-diagnosis template as active")
+    return STOCK_DIAGNOSIS_ROOM_ID
 
 
 def stock_review_cron_job(stock: StockConfig) -> CronJob:

@@ -73,7 +73,7 @@ function focusState(item: ScheduleItem, nextItem: ScheduleItem | null): "done" |
   return item.id === nextItem?.id ? "next" : "upcoming";
 }
 
-const sectionClass = "border-t border-border/50 py-5 first:border-t-0 first:pt-0";
+const sectionClass = "py-5 first:pt-0";
 const sectionTitleClass = "text-[12px] font-semibold tracking-[0.16em] text-muted-foreground/75";
 
 export function NewChatDashboard({
@@ -99,7 +99,7 @@ export function NewChatDashboard({
   const recentExcerpt = recentSession?.preview?.replace(/\s+/g, " ").trim() ?? "";
 
   return (
-    <div className="w-full animate-in fill-mode-backwards fade-in-0 slide-in-from-bottom-2 text-left duration-500 [animation-delay:140ms] md:border-l md:border-border/40 md:pl-14">
+    <div className="w-full motion-safe:animate-in fill-mode-backwards fade-in-0 slide-in-from-bottom-2 text-left duration-arrival [animation-delay:140ms] md:pl-14">
       <section className={sectionClass}>
         <header className="flex items-baseline justify-between gap-3">
           <h2 className={sectionTitleClass}>今日焦点</h2>
@@ -228,7 +228,7 @@ export function NewChatDashboard({
         </div>
       </section>
 
-      <div className="flex items-center gap-1.5 border-t border-border/50 pt-4">
+      <div className="flex items-center gap-1.5 pt-4">
         <QuietAction label="连接主机" icon={<TerminalSquare className="h-3.5 w-3.5" />} onClick={onConnectHost} disabled={disabled} />
         <QuietAction label="连接数据库" icon={<Database className="h-3.5 w-3.5" />} onClick={onConnectDatabase} disabled={disabled} />
         <QuietAction label="新建笔记" icon={<FilePenLine className="h-3.5 w-3.5" />} onClick={onCreateNote} disabled={disabled} />
@@ -253,7 +253,7 @@ function QuietAction({
       type="button"
       onClick={onClick}
       disabled={!onClick || disabled}
-      className="group inline-flex h-8 items-center gap-2 rounded-full pl-2 pr-3 text-[12.5px] font-medium text-muted-foreground transition-colors hover:bg-accent hover:text-foreground disabled:pointer-events-none disabled:opacity-45"
+      className="group inline-flex h-8 items-center gap-2 rounded-full pl-2 pr-3 text-[12.5px] font-medium text-muted-foreground transition-colors hover:bg-foreground/[0.06] hover:text-foreground disabled:pointer-events-none disabled:opacity-45"
     >
       <span className="flex h-5 w-5 items-center justify-center opacity-70 transition-transform group-hover:scale-110">
         {icon}

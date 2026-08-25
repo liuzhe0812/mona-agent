@@ -296,8 +296,15 @@ describe("SystemView", () => {
     render(<SystemView initialTab="optimization" />);
 
     expect(await screen.findByRole("heading", { name: "系统优化" })).toBeTruthy();
+    const systemTab = within(screen.getByRole("tablist", { name: "系统模块导航" })).getByRole("tab", { name: "系统优化" });
+    expect(systemTab).toHaveClass("text-foreground");
+    expect(systemTab.querySelector("span")?.className).toContain("bg-[hsl(var(--brand-red))]");
     expect(screen.getByRole("button", { name: "隐私与建议内容" })).toBeTruthy();
     expect(screen.getByRole("button", { name: "Windows 更新" })).toBeTruthy();
+    const activeCategory = within(screen.getByRole("navigation", { name: "Windows 设置分类" })).getByRole("button", { name: "全部设置" });
+    expect(activeCategory).toHaveClass("text-foreground");
+    expect(activeCategory.className).toContain("before:bg-[hsl(var(--brand-red))]");
+    expect(activeCategory).not.toHaveClass("bg-info-soft");
     expect(screen.getByRole("switch", { name: "应用跨应用广告标识" }).getAttribute("aria-checked")).toBe("false");
     expect(screen.queryByRole("tab", { name: "网络" })).toBeNull();
     expect(screen.queryByRole("tab", { name: "高级优化" })).toBeNull();

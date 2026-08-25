@@ -112,12 +112,12 @@ function Divider({ onPointerDown }: { onPointerDown: (e: React.PointerEvent) => 
       onPointerDown={onPointerDown}
       className={cn(
         "z-10 flex shrink-0 cursor-col-resize items-center justify-center",
-        "bg-border/40 hover:bg-primary/25 active:bg-primary/35",
+        "bg-transparent hover:bg-primary/10 active:bg-primary/20",
         "transition-colors",
       )}
       style={{ width: DIVIDER_WIDTH }}
     >
-      <div className="h-8 w-0.5 rounded-full bg-muted-foreground/30" />
+      <div className="h-full w-px bg-border/60" />
     </div>
   );
 }

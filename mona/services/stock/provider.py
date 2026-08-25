@@ -23,6 +23,7 @@ import json
 import re
 from dataclasses import dataclass
 from datetime import datetime
+from pathlib import Path
 from typing import Any, Awaitable, Callable, Literal
 from urllib.parse import quote as urlquote
 from urllib.parse import urlencode, urljoin, urlparse
@@ -45,6 +46,7 @@ ALLOWED_HOSTS = frozenset(
         "push2.eastmoney.com",  # realtime quote
         "push2his.eastmoney.com",  # kline history
         "datacenter.eastmoney.com",  # F10 fundamentals
+        "emweb.securities.eastmoney.com",  # F10 company survey/static profile
         "np-anotice-stock.eastmoney.com",  # announcements
         "searchapi.eastmoney.com",  # instrument suggest (code / pinyin / name)
     }
@@ -122,6 +124,11 @@ class Quote(Base):
     price: float
     change_pct: float
     volume: float
+    amount: float | None = None  # CNY
+    previous_close: float | None = None
+    turnover_rate: float | None = None  # percent
+    limit_up: float | None = None
+    limit_down: float | None = None
     pe: float | None = None
     pb: float | None = None
     market_cap: float | None = None  # CNY
@@ -160,6 +167,61 @@ class NewsItem(Base):
     url: str
     published_at: str | None
     summary: str = ""
+    source: SourceRecord
+
+
+class InstrumentProfile(Base):
+    """Static instrument facts fetched independently of market breadth.
+
+    ``observed_at`` is the provider observation time, not the listing date.
+    Fields that the public endpoint does not return remain ``None``.
+    """
+
+    instrument_id: str
+    instrument_type: str
+    name: str = ""
+    company_name: str | None = None
+    industry: str | None = None
+    industry_path: str | None = None
+    industry_code: str | None = None
+    classification_scheme: str | None = None
+    main_business: str | None = None
+    business_scope: str | None = None
+    company_profile: str | None = None
+    listing_date: str | None = None
+    board: str | None = None
+    observed_at: str
+    as_of: str | None = None
+    cache_status: Literal["live", "fresh_cache", "stale_cache"] = "live"
+    source: SourceRecord
+
+
+class IndustryValuationPeer(Base):
+    """One real peer row from the independent F10 valuation endpoint."""
+
+    instrument_id: str
+    symbol: str
+    exchange: str
+    name: str = ""
+    pe_ttm: float
+    pb_mrq: float
+    report_period: str | None = None
+
+
+class IndustryValuation(Base):
+    """Current peer valuation facts kept separate from market breadth."""
+
+    instrument_id: str
+    target_pe_ttm: float | None = None
+    target_pb_mrq: float | None = None
+    industry_average_pe_ttm: float | None = None
+    industry_median_pe_ttm: float | None = None
+    industry_average_pb_mrq: float | None = None
+    industry_median_pb_mrq: float | None = None
+    peers: list[IndustryValuationPeer] = Field(default_factory=list)
+    report_period: str | None = None
+    observed_at: str
+    cache_status: Literal["live", "fresh_cache", "stale_cache"] = "live"
     source: SourceRecord
 
 
@@ -339,6 +401,30 @@ def _optional_float(value: Any) -> float | None:
         return float(value)
     except (TypeError, ValueError):
         return None
+
+
+def _clean_text(value: Any) -> str | None:
+    if value in (None, ""):
+        return None
+    text = html.unescape(str(value)).strip()
+    return text or None
+
+
+def _date_only(value: Any) -> str | None:
+    text = _clean_text(value)
+    if not text:
+        return None
+    parsed = parse_asia_datetime(text)
+    return parsed.date().isoformat() if parsed is not None else text[:10]
+
+
+def _extract_main_business(value: Any) -> str | None:
+    """Extract only the explicitly labelled sentence from the profile."""
+    text = _clean_text(value)
+    if not text:
+        return None
+    match = re.search(r"主营业务为([^。；;]+)", text)
+    return match.group(1).strip() if match else None
 
 
 def _public_time(row: dict[str, Any]) -> str | None:
@@ -691,6 +777,7 @@ class EastMoneyProvider:
         backoff_base: float = DEFAULT_BACKOFF_BASE,
         transport: httpx.BaseTransport | None = None,
         sleep: Callable[[float], Awaitable[Any]] | None = None,
+        profile_cache_path: str | Path | None = None,
     ):
         self._timeout = timeout
         self._max_body = max_body_bytes
@@ -698,6 +785,21 @@ class EastMoneyProvider:
         self._backoff_base = backoff_base
         self._transport = transport
         self._sleep = sleep or asyncio.sleep
+        # Static company metadata changes infrequently.  Keep a process-local
+        # last-known record so a transient F10 outage does not erase a valid
+        # industry classification; the source record remains unchanged.
+        self._instrument_profile_cache: dict[str, InstrumentProfile] = {}
+        self._instrument_profile_cache_ttl_seconds = 24 * 60 * 60
+        self._instrument_profile_cache_path = Path(
+            profile_cache_path
+            if profile_cache_path is not None
+            else Path.home() / ".mona" / "stock" / "cache" / "instrument_profiles.json"
+        )
+        self._industry_valuation_cache: dict[str, IndustryValuation] = {}
+        self._industry_valuation_cache_ttl_seconds = 24 * 60 * 60
+        self._industry_valuation_cache_path = self._instrument_profile_cache_path.with_name(
+            "industry_valuations.json"
+        )
 
     # --- fetch plumbing (delegates to the shared secure pipeline) ---
 
@@ -729,7 +831,10 @@ class EastMoneyProvider:
     # --- endpoints ---
 
     async def quote(self, inst: InstrumentRef) -> Quote:
-        fields = "f43,f44,f45,f46,f47,f57,f58,f59,f60,f116,f162,f167,f169,f170,f124"
+        fields = (
+            "f43,f44,f45,f46,f47,f48,f51,f52,f57,f58,f59,f60,f116,f162,"
+            "f167,f168,f169,f170,f124,f127,f198"
+        )
         url = f"https://push2.eastmoney.com/api/qt/stock/get?secid={inst.secid}&fields={fields}"
         payload, body, final_url = await self._fetch_json(url)
         data = payload.get("data") if isinstance(payload, dict) else None
@@ -750,7 +855,11 @@ class EastMoneyProvider:
             provider=self.name,
             url=final_url,
             body=body,
-            fields=["price", "change_pct", "volume", "pe", "pb", "market_cap"],
+            fields=[
+                "price", "change_pct", "volume", "amount", "previous_close",
+                "turnover_rate", "limit_up", "limit_down", "pe", "pb",
+                "market_cap", "industry", "industry_code",
+            ],
             published_at=as_of,
         )
         return Quote(
@@ -760,8 +869,37 @@ class EastMoneyProvider:
             price=price_raw / scale,
             change_pct=change_raw / 100,
             volume=volume,
-            pe=_optional_float(data.get("f162")),
-            pb=_optional_float(data.get("f167")),
+            amount=_optional_float(data.get("f48")),
+            previous_close=(
+                _optional_float(data.get("f60")) / scale
+                if _optional_float(data.get("f60")) is not None
+                else None
+            ),
+            turnover_rate=(
+                _optional_float(data.get("f168")) / 100
+                if _optional_float(data.get("f168")) is not None
+                else None
+            ),
+            limit_up=(
+                _optional_float(data.get("f51")) / scale
+                if _optional_float(data.get("f51")) is not None
+                else None
+            ),
+            limit_down=(
+                _optional_float(data.get("f52")) / scale
+                if _optional_float(data.get("f52")) is not None
+                else None
+            ),
+            pe=(
+                _optional_float(data.get("f162")) / 100
+                if _optional_float(data.get("f162")) is not None
+                else None
+            ),
+            pb=(
+                _optional_float(data.get("f167")) / 100
+                if _optional_float(data.get("f167")) is not None
+                else None
+            ),
             market_cap=_optional_float(data.get("f116")),
             as_of=as_of,
             source=source,
@@ -779,6 +917,293 @@ class EastMoneyProvider:
 
         results = await asyncio.gather(*(one(inst) for inst in insts))
         return dict(zip((inst.id for inst in insts), results))
+
+    def _load_cached_instrument_profile(self, inst: InstrumentRef) -> InstrumentProfile | None:
+        if inst.id in self._instrument_profile_cache:
+            return self._instrument_profile_cache[inst.id]
+        try:
+            raw = json.loads(self._instrument_profile_cache_path.read_text(encoding="utf-8"))
+            candidate = raw.get(inst.id) if isinstance(raw, dict) else None
+            profile = InstrumentProfile.model_validate(candidate) if isinstance(candidate, dict) else None
+        except (OSError, TypeError, ValueError):
+            profile = None
+        if profile is not None:
+            self._instrument_profile_cache[inst.id] = profile
+        return profile
+
+    def _save_cached_instrument_profile(self, profile: InstrumentProfile) -> None:
+        path = self._instrument_profile_cache_path
+        try:
+            current = json.loads(path.read_text(encoding="utf-8")) if path.exists() else {}
+            if not isinstance(current, dict):
+                current = {}
+            current[profile.instrument_id] = profile.model_dump(mode="json")
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text(
+                json.dumps(current, ensure_ascii=False, sort_keys=True),
+                encoding="utf-8",
+            )
+        except (OSError, TypeError, ValueError):
+            # The live result remains valid when a local cache directory is
+            # unavailable; cache persistence is an optimization only.
+            return
+
+    def _load_cached_industry_valuation(
+        self, inst: InstrumentRef
+    ) -> IndustryValuation | None:
+        if inst.id in self._industry_valuation_cache:
+            return self._industry_valuation_cache[inst.id]
+        path = self._industry_valuation_cache_path
+        try:
+            raw = json.loads(path.read_text(encoding="utf-8"))
+            candidate = raw.get(inst.id) if isinstance(raw, dict) else None
+            valuation = (
+                IndustryValuation.model_validate(candidate)
+                if isinstance(candidate, dict)
+                else None
+            )
+        except (OSError, TypeError, ValueError):
+            valuation = None
+        if valuation is not None:
+            self._industry_valuation_cache[inst.id] = valuation
+        return valuation
+
+    def _save_cached_industry_valuation(self, valuation: IndustryValuation) -> None:
+        path = self._industry_valuation_cache_path
+        try:
+            current = json.loads(path.read_text(encoding="utf-8")) if path.exists() else {}
+            if not isinstance(current, dict):
+                current = {}
+            current[valuation.instrument_id] = valuation.model_dump(mode="json")
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text(
+                json.dumps(current, ensure_ascii=False, sort_keys=True),
+                encoding="utf-8",
+            )
+        except (OSError, TypeError, ValueError):
+            return
+
+    async def industry_valuation(self, inst: InstrumentRef) -> IndustryValuation:
+        """Fetch current same-industry PE/PB peers independently of breadth.
+
+        The endpoint also returns an industry average/median and a reporting
+        period.  The former are retained as context; the latter is stored as
+        ``period_end`` and never used as the market observation timestamp.
+        """
+        cached = self._load_cached_industry_valuation(inst)
+        if cached is not None:
+            observed = parse_asia_datetime(cached.observed_at)
+            if observed is not None:
+                age = (datetime.now(CN_TZ) - observed).total_seconds()
+                if age <= self._industry_valuation_cache_ttl_seconds:
+                    return cached.model_copy(update={"cache_status": "fresh_cache"})
+
+        url = (
+            "https://emweb.securities.eastmoney.com/PC_HSF10/IndustryAnalysis/PageAjax"
+            f"?code={inst.em_code}"
+        )
+        try:
+            payload, body, final_url = await secure_fetch_json(
+                url,
+                allowed_hosts=ALLOWED_HOSTS,
+                timeout=self._timeout,
+                max_body_bytes=self._max_body,
+                max_retries=self._max_retries,
+                backoff_base=self._backoff_base,
+                transport=self._transport,
+                sleep=self._sleep,
+            )
+            rows = payload.get("gzbj") if isinstance(payload, dict) else None
+            if not isinstance(rows, list) or not rows:
+                raise ProviderError(f"invalid industry valuation data from {final_url}")
+
+            def code_of(row: dict[str, Any]) -> str:
+                raw = row.get("CORRE_SECURITY_CODE") or row.get("SECURITY_CODE")
+                value = _clean_text(raw) or ""
+                return value if re.fullmatch(r"\d{6}", value) else ""
+
+            def exchange_of(row: dict[str, Any], code: str) -> str:
+                raw = _clean_text(row.get("CORRE_SECUCODE")) or ""
+                suffix = raw.rsplit(".", 1)[-1].upper() if "." in raw else ""
+                if suffix == "SH":
+                    return "XSHG"
+                if suffix == "BJ":
+                    return "BJSE"
+                if suffix == "SZ":
+                    return "XSHE"
+                return infer_exchange(code)
+
+            aggregate: dict[str, float | None] = {}
+            peers: list[IndustryValuationPeer] = []
+            target_pe_ttm = None
+            target_pb_mrq = None
+            report_period = None
+            seen_codes: set[str] = set()
+            for row in rows:
+                if not isinstance(row, dict):
+                    continue
+                label = _clean_text(row.get("CORRE_SECURITY_CODE")) or ""
+                pe = _optional_float(row.get("PE_TTM"))
+                pb = _optional_float(row.get("PB_MRQ"))
+                period = _date_only(row.get("REPORT_DATE"))
+                report_period = report_period or period
+                code = code_of(row)
+                if not code:
+                    if "行业平均" in label:
+                        aggregate["average_pe_ttm"] = pe
+                        aggregate["average_pb_mrq"] = pb
+                    elif "行业中值" in label:
+                        aggregate["median_pe_ttm"] = pe
+                        aggregate["median_pb_mrq"] = pb
+                    continue
+                if code == inst.symbol:
+                    target_pe_ttm = pe if pe is not None and pe > 0 else None
+                    target_pb_mrq = pb if pb is not None and pb > 0 else None
+                    continue
+                name = _clean_text(row.get("CORRE_SECURITY_NAME")) or ""
+                if code in seen_codes or "ST" in name.upper() or "退市" in name:
+                    continue
+                # Keep only peers for which both multiples are positive.  A
+                # peer missing either input cannot enter either robust range.
+                if pe is None or pe <= 0 or pb is None or pb <= 0:
+                    continue
+                seen_codes.add(code)
+                peers.append(
+                    IndustryValuationPeer(
+                        instrument_id=f"{exchange_of(row, code)}:{code}",
+                        symbol=code,
+                        exchange=exchange_of(row, code),
+                        name=name,
+                        pe_ttm=pe,
+                        pb_mrq=pb,
+                        report_period=period,
+                    )
+                )
+            if len(peers) < 3:
+                raise ProviderError(
+                    f"industry valuation has fewer than 3 real peers for {inst.id}"
+                )
+            now = datetime.now(CN_TZ).isoformat()
+            source = SourceRecord.create(
+                provider=self.name,
+                url=final_url,
+                body=body,
+                fields=[
+                    "target_pe_ttm", "target_pb_mrq", "peer_pe_ttm", "peer_pb_mrq",
+                    "peer_instrument_id", "industry_average_pe_ttm",
+                    "industry_median_pe_ttm", "industry_average_pb_mrq",
+                    "industry_median_pb_mrq", "report_period", "observed_at",
+                ],
+                published_at=now,
+                period_end=report_period,
+            )
+            valuation = IndustryValuation(
+                instrument_id=inst.id,
+                target_pe_ttm=target_pe_ttm,
+                target_pb_mrq=target_pb_mrq,
+                industry_average_pe_ttm=aggregate.get("average_pe_ttm"),
+                industry_median_pe_ttm=aggregate.get("median_pe_ttm"),
+                industry_average_pb_mrq=aggregate.get("average_pb_mrq"),
+                industry_median_pb_mrq=aggregate.get("median_pb_mrq"),
+                peers=peers,
+                report_period=report_period,
+                observed_at=now,
+                source=source,
+            )
+        except ProviderError:
+            if cached is not None:
+                return cached.model_copy(update={"cache_status": "stale_cache"})
+            raise
+
+        self._industry_valuation_cache[inst.id] = valuation
+        self._save_cached_industry_valuation(valuation)
+        return valuation
+
+    async def instrument_profile(self, inst: InstrumentRef) -> InstrumentProfile:
+        """Fetch static F10 metadata without touching the full-market feed.
+
+        The company-survey endpoint is a per-security public East Money
+        endpoint.  Its industry path, company name/profile and listing date
+        are kept separate from the breadth snapshot, so a breadth outage does
+        not remove the target's industry mapping.
+        """
+        cached = self._load_cached_instrument_profile(inst)
+        if cached is not None:
+            observed = parse_asia_datetime(cached.observed_at)
+            if observed is not None:
+                age = (datetime.now(CN_TZ) - observed).total_seconds()
+                if age <= self._instrument_profile_cache_ttl_seconds:
+                    return cached.model_copy(update={"cache_status": "fresh_cache"})
+
+        url = (
+            "https://emweb.securities.eastmoney.com/PC_HSF10/CompanySurvey/PageAjax"
+            f"?code={inst.em_code}"
+        )
+        try:
+            payload, body, final_url = await secure_fetch_json(
+                url,
+                allowed_hosts=ALLOWED_HOSTS,
+                timeout=self._timeout,
+                max_body_bytes=self._max_body,
+                max_retries=self._max_retries,
+                backoff_base=self._backoff_base,
+                transport=self._transport,
+                sleep=self._sleep,
+            )
+            jbzl = payload.get("jbzl") if isinstance(payload, dict) else None
+            fxxg = payload.get("fxxg") if isinstance(payload, dict) else None
+            basic = jbzl[0] if isinstance(jbzl, list) and jbzl and isinstance(jbzl[0], dict) else None
+            issue = fxxg[0] if isinstance(fxxg, list) and fxxg and isinstance(fxxg[0], dict) else {}
+            if basic is None:
+                raise ProviderError(f"invalid instrument profile data from {final_url}")
+
+            industry_path = _clean_text(basic.get("EM2016"))
+            if not industry_path:
+                industry_path = _clean_text(basic.get("INDUSTRYCSRC1"))
+            industry = industry_path.rsplit("-", 1)[-1] if industry_path else None
+            if not industry:
+                raise ProviderError(f"instrument profile has no industry for {inst.id}")
+
+            now = datetime.now(CN_TZ).isoformat()
+            fields = [
+                "name", "company_name", "industry", "industry_path",
+                "classification_scheme", "company_profile", "business_scope",
+                "listing_date", "board", "observed_at",
+            ]
+            profile_source = SourceRecord.create(
+                provider=self.name,
+                url=final_url,
+                body=body,
+                fields=fields,
+                published_at=now,
+            )
+            profile = InstrumentProfile(
+                instrument_id=inst.id,
+                instrument_type=inst.instrument_type,
+                name=_clean_text(basic.get("SECURITY_NAME_ABBR")) or "",
+                company_name=_clean_text(basic.get("ORG_NAME")),
+                industry=industry,
+                industry_path=industry_path,
+                industry_code=None,
+                classification_scheme="东方财富行业分类",
+                main_business=_clean_text(basic.get("MAIN_BUSINESS"))
+                or _extract_main_business(basic.get("ORG_PROFILE")),
+                business_scope=_clean_text(basic.get("BUSINESS_SCOPE")),
+                company_profile=_clean_text(basic.get("ORG_PROFILE")),
+                listing_date=_date_only(issue.get("LISTING_DATE") or basic.get("LISTING_DATE")),
+                board=_clean_text(basic.get("SECURITY_TYPE")) or _clean_text(basic.get("TRADE_MARKET")),
+                observed_at=now,
+                as_of=now,
+                source=profile_source,
+            )
+        except ProviderError:
+            if cached is not None:
+                return cached.model_copy(update={"cache_status": "stale_cache"})
+            raise
+
+        self._instrument_profile_cache[inst.id] = profile
+        self._save_cached_instrument_profile(profile)
+        return profile
 
     async def market_snapshot(self, *, limit: int = 5000):
         """Fetch a lightweight A-share universe snapshot.
@@ -883,6 +1308,7 @@ class EastMoneyProvider:
                 fields=[
                     "price", "change_pct", "volume", "turnover", "amount",
                     "turnover_rate", "market_cap", "pe", "pb", "industry",
+                    "name", "is_st", "is_delisting", "status_method", "name_status_proxy",
                     "observed_at", "page", "page_size", "expected_count",
                 ],
                 published_at=observed_at,
@@ -905,6 +1331,8 @@ class EastMoneyProvider:
                 price = _optional_float(entry.get("f2"))
                 change_pct = _optional_float(entry.get("f3"))
                 name = str(entry.get("f14") or "")
+                name_status_proxy = bool(name)
+                is_delisting = any(marker in name for marker in ("退市整理", "退市")) if name else None
                 out.append(
                     MarketSnapshot(
                         instrument_id=instrument_id,
@@ -923,6 +1351,9 @@ class EastMoneyProvider:
                         pb=_optional_float(entry.get("f23")),
                         is_st="ST" in name.upper(),
                         is_suspended=price is None,
+                        is_delisting=is_delisting,
+                        status_method="name-status-proxy" if name_status_proxy else None,
+                        name_status_proxy=name_status_proxy if name_status_proxy else None,
                         as_of=observed_at,
                         observed_at=observed_at,
                         source_ids=[source.id],

@@ -45,15 +45,42 @@ const INSTRUCTION_LABELS: Record<AgentInstruction["key"], string> = {
   memory: "MEMORY.md · 长期记忆",
 };
 
-function commaList(value: string): string[] {
-  return value.split(",").map((item) => item.trim()).filter(Boolean);
-}
+const MANAGEMENT_TAB_CLASS =
+  "relative after:pointer-events-none after:absolute after:inset-x-2 after:-bottom-1 after:h-0.5 after:rounded-full after:bg-transparent after:content-[''] data-[state=active]:!bg-transparent data-[state=active]:text-foreground data-[state=active]:!shadow-none data-[state=active]:after:bg-[hsl(var(--brand-red))]";
 
 function formatBytes(bytes: number): string {
   if (bytes < 1024) return `${bytes} B`;
   if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
   return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
 }
+
+const TOOL_LABELS: Record<string, string> = {
+  generate_image: "图片生成",
+  generate_video: "视频生成",
+  web_search: "网页搜索",
+  web_fetch: "读取网页",
+  browser_open: "打开浏览器页面",
+  browser_navigate: "浏览器跳转",
+  browser_read: "读取浏览器页面",
+  browser_snapshot: "浏览器结构快照",
+  browser_screenshot: "浏览器截图",
+  browser_click: "浏览器点击",
+  browser_type: "浏览器输入",
+  read_file: "读取文件",
+  write_file: "写入文件",
+  edit_file: "编辑文件",
+  deliver_file: "交付文件",
+  memory_read: "读取记忆",
+  memory_edit: "编辑记忆",
+  memory_search: "搜索记忆",
+  skill_read: "读取技能",
+  skill_reference_read: "读取技能参考",
+  skill_asset_copy: "复制技能素材",
+  skill_script_run: "运行技能脚本",
+  exec: "执行命令",
+  delegate_agent: "委派 Agent",
+  spawn: "创建子任务",
+};
 
 function ConfigFields({
   detail,
@@ -138,7 +165,7 @@ function ConfigFields({
       </div>
       <label className="flex items-center gap-2 text-ui">
         <input type="checkbox" checked={enabled} onChange={(event) => setEnabled(event.target.checked)} />
-        启用此 Agent（停用后保留会话、记忆和 Skills）
+         启用此 Agent（停用后保留会话、记忆和技能）
       </label>
       <div><Button onClick={() => void save()} disabled={saving}>{saving ? "保存中…" : "保存基本设置"}</Button></div>
     </div>
@@ -193,40 +220,50 @@ function PermissionFields({
   detail: AgentDetailPayload;
   onSave: (update: Record<string, unknown>) => Promise<void>;
 }) {
-  const [inheritTools, setInheritTools] = useState(detail.config.grantedTools === null);
-  const [tools, setTools] = useState((detail.config.grantedTools ?? detail.effective.allowedTools ?? []).join(", "));
-  const [delegation, setDelegation] = useState(detail.config.delegationEnabled);
+  const catalog = detail.toolCatalog ?? [];
+  const [selectedTools, setSelectedTools] = useState<string[]>(
+    detail.config.grantedTools ?? detail.effective.allowedTools ?? catalog.map((tool) => tool.name),
+  );
   const [saving, setSaving] = useState(false);
-  const allowed = detail.definition.toolAllowlist;
-  const actualTools = detail.effective.allowedTools ?? null;
-  const save = async () => {
+  const toggleTool = async (name: string, checked: boolean) => {
+    if (saving) return;
+    const previous = selectedTools;
+    const next = checked
+      ? [...new Set([...previous, name])]
+      : previous.filter((item) => item !== name);
+    setSelectedTools(next);
     setSaving(true);
     try {
-      await onSave({ granted_tools: inheritTools ? null : commaList(tools), delegation_enabled: delegation });
+      await onSave({ granted_tools: next });
+    } catch {
+      setSelectedTools(previous);
     } finally {
       setSaving(false);
     }
   };
   return (
-    <div className="grid max-w-2xl gap-4">
-      <div className="rounded-lg border border-border/65 bg-muted/25 p-3 text-caption leading-5 text-muted-foreground">
-        Agent 的实际工具始终受平台安全规则和 Agent 包上限约束。这里只能进一步收窄，不能新增包未声明的工具。
-      </div>
-      <label className="flex items-center gap-2 text-ui">
-        <input type="checkbox" checked={inheritTools} onChange={(event) => setInheritTools(event.target.checked)} />
-        继承 Agent 包与平台允许的工具
-      </label>
-      <label className="grid gap-1.5 text-ui">
-        <span className="text-caption text-muted-foreground">允许工具（逗号分隔；取消继承后，留空即不允许任何工具）</span>
-        <Textarea value={tools} disabled={inheritTools} onChange={(event) => setTools(event.target.value)} rows={3} placeholder={allowed.join(", ")} />
-      </label>
-      <p className="text-caption text-muted-foreground">实际范围：{actualTools === null ? "继承平台当前可用工具" : actualTools.length ? actualTools.join(", ") : "无工具"}</p>
-      <p className="text-caption text-muted-foreground">包声明上限：{allowed.length ? allowed.join(", ") : detail.agent.id === "mona" ? "平台内置工具" : "无"}</p>
-      <label className="flex items-center gap-2 text-ui">
-        <input type="checkbox" checked={delegation} disabled={!detail.definition.canDelegate} onChange={(event) => setDelegation(event.target.checked)} />
-        允许委派子任务 {detail.definition.canDelegate ? "" : "（此 Agent 包未允许）"}
-      </label>
-      <div><Button onClick={() => void save()} disabled={saving}>{saving ? "保存中…" : "保存能力设置"}</Button></div>
+    <div className="grid max-w-3xl grid-cols-1 gap-x-10 sm:grid-cols-2">
+      {catalog.map((tool) => {
+        const checked = selectedTools.includes(tool.name);
+        const label = TOOL_LABELS[tool.name] ?? tool.name.replaceAll("_", " ");
+        return (
+          <div key={tool.name} className="flex h-10 min-w-0 items-center justify-between gap-3 px-1 hover:bg-muted/35">
+            <span className="truncate text-ui">{label}</span>
+            <button
+              type="button"
+              role="switch"
+              aria-label={`${label}工具`}
+              aria-checked={checked}
+              disabled={saving}
+              onClick={() => void toggleTool(tool.name, !checked)}
+              className={`relative h-5 w-9 shrink-0 rounded-full transition-colors ${checked ? "bg-info" : "bg-muted-foreground/25"} disabled:opacity-55`}
+            >
+              <span className={`absolute top-0.5 h-4 w-4 rounded-full bg-background shadow-sm transition-transform ${checked ? "translate-x-4" : "translate-x-0.5"}`} />
+            </button>
+          </div>
+        );
+      })}
+      {catalog.length === 0 ? <p className="text-caption text-muted-foreground">暂无工具</p> : null}
     </div>
   );
 }
@@ -245,7 +282,7 @@ function ProposalCards({
       {proposals.map((proposal) => {
         const preview = proposal.preview;
         const title = proposal.kind === "skill_install"
-          ? `安装 Skill：${String(preview.skillName ?? "")}`
+          ? `安装技能：${String(preview.skillName ?? "")}`
           : `修改 ${String(preview.filename ?? "指令文件")}`;
         return (
           <article key={proposal.id} className="rounded-lg border border-amber-500/35 bg-amber-500/5 p-3">
@@ -286,8 +323,6 @@ export function AgentManagementView({
   const [history, setHistory] = useState<AgentInstructionHistoryItem[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
-  const [skillName, setSkillName] = useState("");
-  const [skillContent, setSkillContent] = useState("---\nname: example-skill\ndescription: Explain what this skill does.\n---\n\n# Instructions\n");
 
   const token = context?.token ?? "";
   const client = context?.client ?? null;
@@ -360,12 +395,6 @@ export function AgentManagementView({
     if (!client) return;
     try { await client.actOnAgentSkill(agentId, name, action); await reload(); } catch (cause) { setError(cause instanceof Error ? cause.message : "更新 Skill 失败"); }
   };
-  const stageSkill = async () => {
-    if (!client || !skillName.trim()) return;
-    const name = skillName.trim();
-    const content = skillContent.replace(/^name:\s*example-skill\s*$/m, `name: ${name}`);
-    try { await client.stageAgentSkill(agentId, name, content); setSkillName(""); await reload(); } catch (cause) { setError(cause instanceof Error ? cause.message : "暂存 Skill 失败"); }
-  };
   const resolveProposal = async (proposal: AgentChangeProposal, approve: boolean) => {
     if (!client || !proposal.token) { setError("该变更缺少确认令牌，请刷新后重试"); return; }
     try { await client.resolveAgentChange(agentId, proposal.id, proposal.token, approve); await reload(); } catch (cause) { setError(cause instanceof Error ? cause.message : "处理变更失败"); }
@@ -384,16 +413,16 @@ export function AgentManagementView({
       </header>
       {error ? <div className="mx-5 mt-3 flex items-center justify-between rounded-md border border-destructive/35 bg-destructive/5 px-3 py-2 text-caption text-destructive"><span>{error}</span><button type="button" onClick={() => setError(null)} aria-label="关闭"><X className="h-3.5 w-3.5" /></button></div> : null}
       <Tabs value={tab} onValueChange={(value) => setTab(value as Tab)} className="flex min-h-0 flex-1 flex-col">
-        <div className="shrink-0 overflow-x-auto border-b border-border/45 px-5 py-2"><TabsList className="h-8"><TabsTrigger value="overview">概览</TabsTrigger><TabsTrigger value="identity">个性与规则</TabsTrigger><TabsTrigger value="runtime">模型与运行</TabsTrigger><TabsTrigger value="permissions">能力与权限</TabsTrigger><TabsTrigger value="skills">Skills 与数据</TabsTrigger></TabsList></div>
+         <div className="shrink-0 overflow-x-auto border-b border-border/45 px-5 py-2"><TabsList className="h-8 !bg-transparent p-0"><TabsTrigger className={MANAGEMENT_TAB_CLASS} value="overview">概览</TabsTrigger><TabsTrigger className={MANAGEMENT_TAB_CLASS} value="identity">个性与规则</TabsTrigger><TabsTrigger className={MANAGEMENT_TAB_CLASS} value="runtime">模型与运行</TabsTrigger><TabsTrigger className={MANAGEMENT_TAB_CLASS} value="permissions">工具</TabsTrigger><TabsTrigger className={MANAGEMENT_TAB_CLASS} value="skills">技能</TabsTrigger></TabsList></div>
         <TabsContent value="overview" className="m-0 min-h-0 flex-1 overflow-auto p-6">
           <div className="mx-auto max-w-3xl"><ConfigFields key={`${agentId}:${detail.config.revision}`} detail={detail} onSave={saveConfig} /><section className="mt-8 rounded-lg border border-border/65 p-4"><h2 className="text-ui font-medium">来源</h2><dl className="mt-3 grid gap-2 text-caption sm:grid-cols-2"><div><dt className="text-muted-foreground">包</dt><dd>{detail.definition.packageId || "Mona 平台"}</dd></div><div><dt className="text-muted-foreground">版本</dt><dd>{detail.definition.packageVersion || "—"}</dd></div></dl></section><section className="mt-4 rounded-lg border border-border/65 p-4"><h2 className="text-ui font-medium">私有数据</h2><p className="mt-1 text-caption text-muted-foreground">停用不会删除这些数据；记忆可在“个性与规则”中查看、编辑和恢复历史。</p><dl className="mt-3 grid gap-2 text-caption sm:grid-cols-2"><div><dt className="text-muted-foreground">记忆</dt><dd>{detail.data.memoryFiles} 个文件 · {formatBytes(detail.data.memoryBytes)}</dd></div><div><dt className="text-muted-foreground">Skills</dt><dd>{detail.data.skillFiles} 个文件 · {formatBytes(detail.data.skillBytes)}</dd></div></dl></section></div>
         </TabsContent>
         <TabsContent value="identity" className="m-0 min-h-0 flex-1 overflow-auto p-6">
-          <div className="mx-auto grid max-w-5xl gap-5 lg:grid-cols-[12rem_minmax(0,1fr)]"><aside className="flex flex-col gap-1">{(Object.keys(INSTRUCTION_LABELS) as AgentInstruction["key"][]).map((key) => <button key={key} type="button" onClick={() => setSelectedInstruction(key)} className={`rounded-md px-3 py-2 text-left text-ui ${selectedInstruction === key ? "bg-accent text-foreground" : "text-muted-foreground hover:bg-muted/60"}`}>{INSTRUCTION_LABELS[key]}</button>)}</aside><div><div className="mb-3 flex items-center justify-between"><div><h2 className="text-ui font-medium">{INSTRUCTION_LABELS[selectedInstruction]}</h2><p className="text-caption text-muted-foreground">手动保存会记录版本；AI 修改会先生成待确认变更。</p></div><Button size="sm" className="gap-1.5" onClick={() => void saveInstruction()}><Save className="h-3.5 w-3.5" />保存</Button></div><Textarea value={draftInstruction} onChange={(event) => setDraftInstruction(event.target.value)} className="min-h-[22rem] font-mono text-caption" /><section className="mt-5"><h3 className="mb-2 flex items-center gap-1.5 text-ui font-medium"><FileClock className="h-4 w-4" />版本历史</h3><div className="grid gap-1">{history.length ? history.map((item) => <div key={item.sha} className="flex items-center gap-2 rounded-md border border-border/55 px-3 py-2 text-caption"><span className="min-w-0 flex-1 truncate">{item.message}</span><span className="shrink-0 text-muted-foreground">{item.timestamp}</span><Button size="sm" variant="ghost" onClick={() => void restoreInstruction(item.sha)}>恢复</Button></div>) : <p className="text-caption text-muted-foreground">保存后将显示版本历史。</p>}</div></section><ProposalCards proposals={proposals.filter((proposal) => proposal.kind === "instruction_patch")} onResolve={resolveProposal} /></div></div>
+          <div className="mx-auto grid max-w-5xl gap-5 lg:grid-cols-[12rem_minmax(0,1fr)]"><aside className="flex flex-col gap-1">{(Object.keys(INSTRUCTION_LABELS) as AgentInstruction["key"][]).map((key) => <button key={key} type="button" onClick={() => setSelectedInstruction(key)} className={`relative rounded-md px-3 py-2 text-left text-ui before:pointer-events-none before:absolute before:left-0 before:top-1/2 before:h-4 before:w-0.5 before:-translate-y-1/2 before:rounded-r before:bg-transparent before:content-[''] ${selectedInstruction === key ? "bg-transparent text-foreground before:bg-[hsl(var(--brand-red))]" : "text-muted-foreground hover:bg-muted/60 hover:text-foreground"}`}>{INSTRUCTION_LABELS[key]}</button>)}</aside><div><div className="mb-3 flex items-center justify-between"><div><h2 className="text-ui font-medium">{INSTRUCTION_LABELS[selectedInstruction]}</h2><p className="text-caption text-muted-foreground">手动保存会记录版本；AI 修改会先生成待确认变更。</p></div><Button size="sm" className="gap-1.5" onClick={() => void saveInstruction()}><Save className="h-3.5 w-3.5" />保存</Button></div><Textarea value={draftInstruction} onChange={(event) => setDraftInstruction(event.target.value)} className="min-h-[22rem] font-mono text-caption" /><section className="mt-5"><h3 className="mb-2 flex items-center gap-1.5 text-ui font-medium"><FileClock className="h-4 w-4" />版本历史</h3><div className="grid gap-1">{history.length ? history.map((item) => <div key={item.sha} className="flex items-center gap-2 rounded-md border border-border/55 px-3 py-2 text-caption"><span className="min-w-0 flex-1 truncate">{item.message}</span><span className="shrink-0 text-muted-foreground">{item.timestamp}</span><Button size="sm" variant="ghost" onClick={() => void restoreInstruction(item.sha)}>恢复</Button></div>) : <p className="text-caption text-muted-foreground">保存后将显示版本历史。</p>}</div></section><ProposalCards proposals={proposals.filter((proposal) => proposal.kind === "instruction_patch")} onResolve={resolveProposal} /></div></div>
         </TabsContent>
         <TabsContent value="runtime" className="m-0 min-h-0 flex-1 overflow-auto p-6"><div className="mx-auto max-w-3xl"><RuntimeFields key={`${agentId}:${detail.config.revision}`} detail={detail} onSave={saveConfig} /></div></TabsContent>
         <TabsContent value="permissions" className="m-0 min-h-0 flex-1 overflow-auto p-6"><div className="mx-auto max-w-3xl"><PermissionFields key={`${agentId}:${detail.config.revision}`} detail={detail} onSave={saveConfig} /></div></TabsContent>
-        <TabsContent value="skills" className="m-0 min-h-0 flex-1 overflow-auto p-6"><div className="mx-auto grid max-w-4xl gap-6"><section className="rounded-lg border border-border/65 p-4"><h2 className="text-ui font-medium">添加专属 Skill</h2><p className="mt-1 text-caption text-muted-foreground">Skill 先暂存并显示确认卡片，批准前不会被 Agent 加载。</p><div className="mt-4 grid gap-3"><Input value={skillName} onChange={(event) => setSkillName(event.target.value)} placeholder="skill 名称，例如 valuation-check" /><Textarea value={skillContent} onChange={(event) => setSkillContent(event.target.value)} rows={10} className="font-mono text-caption" /><div><Button onClick={() => void stageSkill()} disabled={!skillName.trim()}>暂存并请求确认</Button></div></div></section><section><h2 className="mb-3 text-ui font-medium">已安装 Skills</h2><div className="grid gap-2">{skills.map((skill) => <article key={`${skill.source}:${skill.name}:${skill.archived}`} className="flex flex-wrap items-center gap-2 rounded-lg border border-border/60 p-3"><div className="min-w-0 flex-1"><p className="truncate text-ui font-medium">{skill.name}</p><p className="text-caption text-muted-foreground">{skill.source}{skill.archived ? " · 已归档" : skill.enabled ? " · 已启用" : " · 已停用"}{skill.hasScripts ? skill.scriptsEnabled ? " · 脚本已允许" : " · 脚本未允许" : ""}</p></div>{skill.source === "private" && !skill.archived ? <Button size="sm" variant="ghost" onClick={() => void actOnSkill(skill.name, "archive")}><Archive className="h-3.5 w-3.5" /></Button> : null}{skill.source === "private" && skill.archived ? <Button size="sm" variant="ghost" onClick={() => void actOnSkill(skill.name, "restore")}><ArchiveRestore className="h-3.5 w-3.5" /></Button> : null}{!skill.archived ? <Button size="sm" variant="outline" onClick={() => void actOnSkill(skill.name, skill.enabled ? "disable" : "enable")}>{skill.enabled ? "停用" : "启用"}</Button> : null}{skill.source === "private" && skill.hasScripts && !skill.archived ? <Button size="sm" variant="outline" className="gap-1" onClick={() => void actOnSkill(skill.name, skill.scriptsEnabled ? "disable_scripts" : "enable_scripts")}><Play className="h-3.5 w-3.5" />{skill.scriptsEnabled ? "禁止脚本" : "允许脚本"}</Button> : null}</article>)}</div></section><ProposalCards proposals={proposals.filter((proposal) => proposal.kind === "skill_install")} onResolve={resolveProposal} /><section className="rounded-lg border border-border/60 bg-muted/20 p-4 text-caption leading-5 text-muted-foreground"><ShieldCheck className="mb-2 h-4 w-4 text-theme" />安装 Skill 不会自动增加工具、连接或密钥权限。包含脚本的私有 Skill 即使安装成功，脚本仍需要在这里单独允许。</section></div></TabsContent>
+        <TabsContent value="skills" className="m-0 min-h-0 flex-1 overflow-auto p-6"><div className="mx-auto grid max-w-4xl gap-6"><section><h2 className="mb-3 text-ui font-medium">已安装技能</h2><div className="grid gap-2">{skills.map((skill) => <article key={`${skill.source}:${skill.name}:${skill.archived}`} className="flex flex-wrap items-center gap-2 rounded-lg border border-border/60 p-3"><div className="min-w-0 flex-1"><p className="truncate text-ui font-medium">{skill.name}</p><p className="text-caption text-muted-foreground">{skill.source}{skill.archived ? " · 已归档" : skill.enabled ? " · 已启用" : " · 已停用"}{skill.hasScripts ? skill.scriptsEnabled ? " · 脚本已允许" : " · 脚本未允许" : ""}</p></div>{skill.source === "private" && !skill.archived ? <Button size="sm" variant="ghost" onClick={() => void actOnSkill(skill.name, "archive")}><Archive className="h-3.5 w-3.5" /></Button> : null}{skill.source === "private" && skill.archived ? <Button size="sm" variant="ghost" onClick={() => void actOnSkill(skill.name, "restore")}><ArchiveRestore className="h-3.5 w-3.5" /></Button> : null}{!skill.archived ? <Button size="sm" variant="outline" onClick={() => void actOnSkill(skill.name, skill.enabled ? "disable" : "enable")}>{skill.enabled ? "停用" : "启用"}</Button> : null}{skill.source === "private" && skill.hasScripts && !skill.archived ? <Button size="sm" variant="outline" className="gap-1" onClick={() => void actOnSkill(skill.name, skill.scriptsEnabled ? "disable_scripts" : "enable_scripts")}><Play className="h-3.5 w-3.5" />{skill.scriptsEnabled ? "禁止脚本" : "允许脚本"}</Button> : null}</article>)}</div></section><ProposalCards proposals={proposals.filter((proposal) => proposal.kind === "skill_install")} onResolve={resolveProposal} /><section className="rounded-lg border border-border/60 bg-muted/20 p-4 text-caption leading-5 text-muted-foreground"><ShieldCheck className="mb-2 h-4 w-4 text-theme" />安装技能不会自动增加工具、连接或密钥权限。包含脚本的私有技能即使安装成功，脚本仍需要在这里单独允许。</section></div></TabsContent>
       </Tabs>
     </section>
   );

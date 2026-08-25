@@ -99,6 +99,10 @@ describe("NewChatDashboard", () => {
     expect(screen.getByText("今日焦点")).toBeInTheDocument();
     expect(screen.getByText("客户方案调研")).toBeInTheDocument();
     expect(screen.getByText("待处理邮件").closest("section")).toHaveTextContent("12 封未读");
+    const dashboard = screen.getByText("今日焦点").closest("section")?.parentElement;
+    expect(dashboard).not.toHaveClass("md:border-l");
+    expect(screen.getByText("今日焦点").closest("section")).not.toHaveClass("border-t");
+    expect(screen.getByRole("button", { name: "连接主机" }).parentElement).not.toHaveClass("border-t");
 
     fireEvent.click(screen.getByRole("button", { name: "继续" }));
     fireEvent.click(screen.getByRole("button", { name: "连接主机" }));

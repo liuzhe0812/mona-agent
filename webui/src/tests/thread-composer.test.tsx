@@ -73,6 +73,20 @@ describe("ThreadComposer", () => {
     expect(input.parentElement?.className).toContain("max-w-[58rem]");
   });
 
+  it("can hide global hero prompt chips for a dedicated agent", () => {
+    render(
+      <ThreadComposer
+        onSend={vi.fn()}
+        modelLabel="qwen3.7-plus"
+        variant="hero"
+        showHeroPromptChips={false}
+      />,
+    );
+
+    expect(screen.queryByText("网页生成笔记")).not.toBeInTheDocument();
+    expect(screen.queryByText("邮件整理今日待办")).not.toBeInTheDocument();
+  });
+
   it("keeps the thread composer compact while matching the hero style", () => {
     render(
       <ThreadComposer
@@ -87,9 +101,49 @@ describe("ThreadComposer", () => {
     expect(input.className).toContain("min-h-[50px]");
     expect(input.parentElement?.className).toContain("max-w-[49.5rem]");
     expect(input.parentElement?.className).toContain("rounded-2xl");
-    expect(input.parentElement?.className).toContain("shadow-sm");
+    expect(input.parentElement?.className).not.toContain("shadow-sm");
+    expect(input.parentElement?.className).toContain("focus-within:ring-foreground/8");
     expect(screen.getByRole("button", { name: "Attach image" }).className).toContain("bg-card");
     expect(screen.getByRole("button", { name: "Send message" }).className).toContain("bg-foreground");
+  });
+
+  it("groups enabled chat models by provider and switches the selected model", async () => {
+    const onModelSwitch = vi.fn();
+    render(
+      <ThreadComposer
+        onSend={vi.fn()}
+        modelLabel="qwen3.7-plus"
+        modelOptions={[
+          {
+            provider: "aliyun-bailian-coding",
+            providerLabel: "阿里云百炼 Coding Plan（包月）",
+            model: "qwen3.7-plus",
+            label: "Qwen 3.7 Plus",
+            free: false,
+            active: true,
+          },
+          {
+            provider: "zen",
+            providerLabel: "内置供应商",
+            model: "hy3-free",
+            label: "hy3",
+            free: true,
+            active: false,
+          },
+        ]}
+        onModelSwitch={onModelSwitch}
+      />,
+    );
+
+    fireEvent.pointerDown(screen.getByRole("button", { name: "qwen3.7-plus" }), {
+      button: 0,
+      ctrlKey: false,
+    });
+    expect(await screen.findByText("阿里云百炼 Coding Plan（包月）")).toBeInTheDocument();
+    expect(screen.getByText("内置供应商")).toBeInTheDocument();
+    expect(screen.getByText("免费")).toBeInTheDocument();
+    fireEvent.click(screen.getByText("hy3"));
+    expect(onModelSwitch).toHaveBeenCalledWith("zen", "hy3-free");
   });
 
   it("shows turn run timer when runStartedAt is set", () => {

@@ -616,6 +616,8 @@
       "send": "发送消息",
       "stop": "停止响应",
       "attachImage": "添加图片",
+      "attachFile": "添加文件",
+      "fileRejected": "仅支持图片和常用文档格式",
       "workspace": {
         "placeholder": "工作区",
         "clear": "清除文件夹选择"

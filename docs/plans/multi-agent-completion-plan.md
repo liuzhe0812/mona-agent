@@ -3,7 +3,7 @@
 > 文档日期：2026-08-15  
 > 面向对象：继续完成多 Agent V1、IM 产品交互、股票六 Agent 与后续 Agent 商店的开发人员  
 > 当前代码基线：本地 `master`，HEAD `8a219e43`  
-> 关联文档：`../design/multi-agent-functional-design.md`、`../design/multi-agent-development-guide.md`、`./im-ui-interaction-dev-plan.md`、`../design/stock-module-design.md`
+> 关联文档：`../design/multi-agent-functional-design.md`、`../design/multi-agent-development-guide.md`、`./im-ui-interaction-dev-plan.md`、`./stock-research-best-practice-v6-development-plan.md`
 
 ---
 
@@ -1022,4 +1022,3 @@ Package 阶段需要实现：
 8. 涉及隔离时提供跨 Agent 负向测试结果。
 
 如果某项未验证，必须明确写“未验证”和原因，不能用“应该可以”代替。
-

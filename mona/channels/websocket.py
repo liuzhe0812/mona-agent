@@ -53,6 +53,7 @@ from mona.webui.settings_api import (
     fetch_zen_free_models,
     probe_provider_models,
     settings_payload,
+    sync_zen_free_models,
     update_agent_settings,
     update_channel_settings,
     update_image_generation_settings,
@@ -344,21 +345,8 @@ _PPT_DOC_MIME_ALLOWED: frozenset[str] = frozenset({
 })
 _PPT_DOC_MAX_BYTES = 20 * 1024 * 1024
 
-# Document MIME whitelist for the "文档加工" workbench (doc_upload envelope).
-# Superset of _PPT_DOC_MIME_ALLOWED: adds Excel (xlsx/xls) and legacy PPT.
-_DOC_MIME_ALLOWED: frozenset[str] = frozenset({
-    "application/pdf",
-    "text/plain",
-    "text/markdown",
-    "text/csv",
-    "application/json",
-    "application/msword",
-    "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-    "application/vnd.ms-excel",
-    "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-    "application/vnd.ms-powerpoint",
-    "application/vnd.openxmlformats-officedocument.presentationml.presentation",
-})
+# Conversation attachments are persisted as workspace files and then passed to
+# the Agent by path. Their format is intentionally unrestricted.
 _DOC_MAX_BYTES = 20 * 1024 * 1024
 
 _DATA_URL_MIME_RE = re.compile(r"^data:([^;]+);base64,", re.DOTALL)
@@ -1277,7 +1265,7 @@ class WebSocketChannel(BaseChannel):
         suffix = parts[4:]
         try:
             if not suffix:
-                from mona.agent.agent_management import agent_data_summary
+                from mona.agent.agent_management import agent_data_summary, agent_tool_catalog
                 from mona.agent.user_config import (
                     load_agent_user_config,
                     resolve_effective_agent_config,
@@ -1298,6 +1286,13 @@ class WebSocketChannel(BaseChannel):
                     "config": config.model_dump(by_alias=True),
                     "effective": resolve_effective_agent_config(definition, config).model_dump(by_alias=True),
                     "data": agent_data_summary(agent_id),
+                    "toolCatalog": agent_tool_catalog(
+                        definition,
+                        workspace=self.workspace,
+                        bus=self.bus,
+                        subagent_manager=self._subagent_manager,
+                        sessions=self._session_manager,
+                    ),
                 })
             if suffix == ["instructions"]:
                 from mona.agent.agent_management import list_instructions
@@ -1346,6 +1341,7 @@ class WebSocketChannel(BaseChannel):
         if not self._check_api_token(request):
             return _http_error(401, "Unauthorized")
         models = await fetch_zen_free_models()
+        sync_zen_free_models(models)
         return _http_json_response({"models": models})
 
     def _with_settings_restart_state(
@@ -3049,12 +3045,44 @@ class WebSocketChannel(BaseChannel):
         seen: set[str] = set()
         records = read_transcript_lines(session_key)
         for record in records:
-            if record.get("event") not in {"deliver_files", "file_edit"}:
+            event = record.get("event")
+            if event in {"deliver_files", "file_edit"}:
+                raw_files = record.get("files")
+                if not isinstance(raw_files, list):
+                    edits = record.get("edits")
+                    raw_files = edits if isinstance(edits, list) else []
+            elif event == "message":
+                raw_files = []
+                tool_events = record.get("tool_events")
+                for tool_event in tool_events if isinstance(tool_events, list) else []:
+                    if (
+                        not isinstance(tool_event, dict)
+                        or tool_event.get("name") not in {"generate_image", "generate_video"}
+                        or tool_event.get("error")
+                    ):
+                        continue
+                    result = tool_event.get("result")
+                    payload = result if isinstance(result, dict) else None
+                    if payload is None and isinstance(result, str):
+                        try:
+                            payload, _ = json.JSONDecoder().raw_decode(result.lstrip())
+                        except (TypeError, ValueError, json.JSONDecodeError):
+                            continue
+                    outputs = payload.get("artifacts") if isinstance(payload, dict) else None
+                    for output in outputs if isinstance(outputs, list) else []:
+                        if not isinstance(output, dict):
+                            continue
+                        path = output.get("path") or output.get("local_path") or output.get("saved_to")
+                        if not isinstance(path, str) or not path:
+                            continue
+                        raw_files.append({
+                            "path": path,
+                            "absolute_path": path,
+                            "name": str(output.get("name") or Path(path).name),
+                            "mime": output.get("mime"),
+                        })
+            else:
                 continue
-            raw_files = record.get("files")
-            if not isinstance(raw_files, list):
-                edits = record.get("edits")
-                raw_files = edits if isinstance(edits, list) else []
             for item in raw_files:
                 raw_ref = item.get("artifact_ref") if isinstance(item, dict) else None
                 ref = coerce_artifact_ref(raw_ref)
@@ -3349,6 +3377,8 @@ class WebSocketChannel(BaseChannel):
                 "application/json", "application/xml", "text/xml",
                 "text/markdown", "text/csv",
                 "image/png", "image/jpeg", "image/gif", "image/webp", "image/svg+xml",
+                "video/mp4", "video/webm", "video/quicktime", "video/x-msvideo",
+                "video/x-matroska", "video/3gpp",
             }
             if mime not in safe_mimes:
                 mime = "text/plain"
@@ -3475,7 +3505,7 @@ class WebSocketChannel(BaseChannel):
         """
         if not self._check_api_token(request):
             return _http_error(401, "Unauthorized")
-        from mona.config.paths import get_stock_projects_dir, get_workspace_path
+        from mona.config.paths import get_stock_projects_dir
         from mona.services.stock.reports import scan_reports
 
         stock_dir = get_stock_projects_dir(self.workspace)
@@ -3490,20 +3520,24 @@ class WebSocketChannel(BaseChannel):
         """Return one report's JSON document plus its markdown rendering."""
         if not self._check_api_token(request):
             return _http_error(401, "Unauthorized")
-        from mona.services.stock.reports import load_report, valid_report_id
+        from mona.services.stock.reports import (
+            load_report,
+            public_report_detail,
+            valid_report_id,
+        )
 
         # The id is matched against document content (never joined into a
         # path), but reject anything outside the id alphabet anyway.
         if not valid_report_id(report_id):
             return _http_error(400, "invalid report id")
-        from mona.config.paths import get_stock_projects_dir, get_workspace_path
+        from mona.config.paths import get_stock_projects_dir
 
         stock_dir = get_stock_projects_dir(self.workspace)
         result = load_report(stock_dir, report_id)
         if result is None:
             return _http_error(404, "report not found")
         doc, markdown = result
-        return _http_json_response({"report": doc, "markdown": markdown})
+        return _http_json_response(public_report_detail(doc, markdown))
 
     def _handle_stock_report_delete(self, request: WsRequest) -> Response:
         """Delete one report's run directory (manual cleanup, design §9)."""
@@ -3514,7 +3548,7 @@ class WebSocketChannel(BaseChannel):
         report_id = _query_first(_parse_query(request.path), "id") or ""
         if not valid_report_id(report_id):
             return _http_error(400, "invalid report id")
-        from mona.config.paths import get_stock_projects_dir, get_workspace_path
+        from mona.config.paths import get_stock_projects_dir
 
         stock_dir = get_stock_projects_dir(self.workspace)
         if not delete_report(stock_dir, report_id):
@@ -3525,7 +3559,7 @@ class WebSocketChannel(BaseChannel):
         """Global watchlist × latest report in the current workspace."""
         if not self._check_api_token(request):
             return _http_error(401, "Unauthorized")
-        from mona.config.paths import get_stock_projects_dir, get_workspace_path
+        from mona.config.paths import get_stock_projects_dir
         from mona.services.stock import reports as stock_reports
         from mona.services.stock.storage import WatchlistCorruptError
 
@@ -4223,7 +4257,8 @@ class WebSocketChannel(BaseChannel):
     ) -> None:
         """Handle document uploads for the "文档加工" workbench.
 
-        Envelope shape: {type: "doc_upload", chat_id: str, files: [{name, data_url}]}
+        Envelope shape: {type: "doc_upload", chat_id: str,
+        files: [{name, data_url} | {name, local_path}]}
         Files are written to ``workspace/uploads/<chat_id>/`` and the relative
         paths are returned to the caller. The original user file is never
         modified — only the working copy under uploads/ is written.
@@ -4250,30 +4285,45 @@ class WebSocketChannel(BaseChannel):
                     continue
                 name = item.get("name")
                 data_url = item.get("data_url")
-                if not isinstance(name, str) or not isinstance(data_url, str):
-                    continue
-                mime = _extract_data_url_mime(data_url)
-                if mime is None or mime not in _DOC_MIME_ALLOWED:
-                    continue
-                try:
-                    raw = _decode_data_url_payload(data_url, _DOC_MAX_BYTES)
-                except FileSizeExceeded:
-                    continue
-                except Exception:
-                    continue
-                if raw is None:
+                local_path = item.get("local_path")
+                if not isinstance(name, str):
                     continue
                 safe_name = safe_filename(name)
                 # Prefix with a short uuid to avoid collisions when the same
                 # filename is uploaded twice in the same chat session.
                 short_id = uuid.uuid4().hex[:8]
                 dest = uploads_dir / f"{short_id}-{safe_name}"
-                dest.write_bytes(raw)
+                if isinstance(local_path, str) and local_path:
+                    source = Path(local_path).expanduser()
+                    if not source.is_absolute() or not source.is_file():
+                        continue
+                    try:
+                        shutil.copy2(source, dest)
+                    except OSError:
+                        continue
+                    raw_size = dest.stat().st_size
+                    mime = mimetypes.guess_type(source.name)[0] or "application/octet-stream"
+                else:
+                    if not isinstance(data_url, str):
+                        continue
+                    mime = _extract_data_url_mime(data_url)
+                    if mime is None:
+                        continue
+                    try:
+                        raw = _decode_data_url_payload(data_url, _DOC_MAX_BYTES)
+                    except FileSizeExceeded:
+                        continue
+                    except Exception:
+                        continue
+                    if raw is None:
+                        continue
+                    dest.write_bytes(raw)
+                    raw_size = len(raw)
                 rel = dest.relative_to(workspace)
                 added.append({
                     "name": safe_name,
                     "path": str(rel).replace("\\", "/"),
-                    "size": len(raw),
+                    "size": raw_size,
                     "mime": mime,
                 })
 
@@ -5770,6 +5820,7 @@ class WebSocketChannel(BaseChannel):
     async def _handle_cancel_workflow_run_envelope(
         self, connection: Any, envelope: dict[str, Any]
     ) -> None:
+        from mona.agent.jobs import JobNotFoundError, JobTransitionError
         from mona.agent.workflow import (
             TERMINAL_RUN_STATUSES,
             TERMINAL_STEP_STATUSES,
@@ -5825,8 +5876,49 @@ class WebSocketChannel(BaseChannel):
             return
         runner = self._workflow_runner_for(chat_id)
         if runner.active_run_for_room(chat_id) == run_id:
-            # Live loop: signal; the runner cancels remaining steps and the run.
+            # Live loop: signal first, then cancel every currently linked
+            # AgentJob.  The signal makes the runner own the run-level CAS;
+            # cancelling the jobs makes an in-flight LLM task stop promptly.
             runner.cancel_run(run_id)
+            job_ids = list(dict.fromkeys(
+                step.job_id
+                for step in run.steps.values()
+                if step.status not in TERMINAL_STEP_STATUSES
+                and isinstance(step.job_id, str)
+                and step.job_id
+            ))
+
+            async def _cancel_job(job_id: str) -> None:
+                try:
+                    await self._subagent_manager.cancel_job(
+                        job_id,
+                        room_id=chat_id,
+                        reason="Cancelled by user.",
+                    )
+                except (JobNotFoundError, JobTransitionError, ValueError):
+                    # Missing/terminal jobs are normal completion races.  The
+                    # room id check in cancel_job also prevents cross-room
+                    # job ids from being touched.
+                    return
+                except Exception:
+                    logger.exception(
+                        "Workflow run {}: unable to cancel job {}",
+                        run_id,
+                        job_id,
+                    )
+
+            if job_ids:
+                await asyncio.gather(*(_cancel_job(job_id) for job_id in job_ids))
+
+            # Let the runner observe the event and finish its CAS transitions
+            # without a wall-clock sleep.  Several turns cover a TaskGroup
+            # cancellation plus the observer callback, while the push below
+            # remains authoritative if the runner is still unwinding.
+            for _ in range(4):
+                await asyncio.sleep(0)
+                run = run_store.load(run_id)
+                if run.status in TERMINAL_RUN_STATUSES:
+                    break
         else:
             # Paused (waiting_approval) or orphaned run: CAS directly.
             reason = "Cancelled by user."
@@ -5841,9 +5933,10 @@ class WebSocketChannel(BaseChannel):
                 run = run_store.transition(run_id, "cancelled")
             except WorkflowTransitionError:
                 pass
+            run = run_store.load(run_id)
         await self._send_event(
             connection, "cancel_workflow_run_result", ok=True, chat_id=chat_id,
-            request_id=request_id, run_id=run_id,
+            request_id=request_id, run_id=run_id, run=serialize_run(run),
         )
         await self.send_workflow_run_updated(
             chat_id, serialize_run(run_store.load(run_id))
@@ -6443,13 +6536,21 @@ class WebSocketChannel(BaseChannel):
         chat_id: str,
         files: list[dict[str, Any]],
         conns: list[Any],
+        *,
+        include_media: bool = True,
     ) -> None:
         payload: dict[str, Any] = {
             "event": "deliver_files",
             "chat_id": chat_id,
             "files": files,
         }
-        self._try_append_webui_transcript(chat_id, payload)
+        if not include_media:
+            payload["inline_media"] = False
+        self._try_append_webui_transcript(chat_id, dict(payload))
+        if include_media:
+            media_urls = self._delivered_file_media(files)
+            if media_urls:
+                payload["media_urls"] = media_urls
         # The room panel is a reference projection rather than a filesystem
         # scan. Carry the source chat id so it can refresh only when this room
         # receives an explicit delivery; ordinary global watcher hints remain
@@ -6462,6 +6563,24 @@ class WebSocketChannel(BaseChannel):
         )
         for connection in conns:
             await self._safe_send_to(connection, raw, label=" ")
+
+    def _delivered_file_media(self, files: list[dict[str, Any]]) -> list[dict[str, str]]:
+        media: list[dict[str, str]] = []
+        for file in files:
+            if not isinstance(file, dict):
+                continue
+            path_value = file.get("absolute_path")
+            if not isinstance(path_value, str) or not path_value:
+                continue
+            path = Path(path_value)
+            mime = str(file.get("mime") or mimetypes.guess_type(path.name)[0] or "")
+            kind = "video" if mime.startswith("video/") else "image" if mime.startswith("image/") else ""
+            if not kind:
+                continue
+            attachment = self._sign_or_stage_media_path(path)
+            if attachment is not None:
+                media.append({**attachment, "kind": kind})
+        return media
 
     def _attach_file_edit_artifact_refs(
         self,
@@ -6626,7 +6745,12 @@ class WebSocketChannel(BaseChannel):
         deliver_files_raw = msg.metadata.get("_deliver_files")
         deliver_files = deliver_files_raw if isinstance(deliver_files_raw, list) else []
         if deliver_files and not msg.content and not msg.media:
-            await self._send_deliver_files_event(msg.chat_id, deliver_files, conns)
+            await self._send_deliver_files_event(
+                msg.chat_id,
+                deliver_files,
+                conns,
+                include_media=not bool(msg.media),
+            )
             return
         text = msg.content
         payload: dict[str, Any] = {
@@ -6688,7 +6812,12 @@ class WebSocketChannel(BaseChannel):
         for connection in conns:
             await self._safe_send_to(connection, raw, label=" ")
         if deliver_files:
-            await self._send_deliver_files_event(msg.chat_id, deliver_files, conns)
+            await self._send_deliver_files_event(
+                msg.chat_id,
+                deliver_files,
+                conns,
+                include_media=not bool(msg.media),
+            )
 
     async def send_reasoning_delta(
         self,

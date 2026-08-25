@@ -19,10 +19,10 @@ from mona.agent.partners import (
     ConversationMetadata,
 )
 from mona.agent.subagent import SubagentManager
-from mona.bus.queue import MessageBus
 from mona.bus.events import OutboundMessage
+from mona.bus.queue import MessageBus
 from mona.channels.websocket import WebSocketChannel
-from mona.providers.base import LLMProvider, LLMResponse
+from mona.providers.base import LLMProvider, LLMResponse, ToolCallRequest
 from mona.session.manager import SessionManager
 from mona.webui.transcript import replay_transcript_to_ui_messages
 
@@ -103,6 +103,7 @@ def test_room_model_context_includes_goal_and_all_members(tmp_path: Path) -> Non
     assert "完成一份可核验的报告" in context
     assert AGENT_A in context and "分析师 A" in context
     assert AGENT_B in context and "分析师 B" in context
+    assert "delegate_agent in the same turn" in context
 
 
 def test_room_snapshot_for_agent_b_contains_agent_a_answer(tmp_path: Path) -> None:
@@ -182,6 +183,99 @@ async def test_user_mention_result_is_authored_and_does_not_wake_mona(
     assert sidebar_refresh.chat_id == ROOM_ID
     assert sidebar_refresh.metadata["_session_updated"] is True
     assert sidebar_refresh.metadata["_session_update_scope"] == "thread"
+
+
+@pytest.mark.asyncio
+async def test_parent_turn_ends_when_direct_mentions_do_not_inject_results(tmp_path: Path) -> None:
+    from mona.agent.runner import AgentRunResult
+
+    provider = MagicMock()
+    provider.get_default_model.return_value = "test-model"
+    loop = AgentLoop(bus=MessageBus(), provider=provider, workspace=tmp_path)
+    running = True
+
+    class _Subagents:
+        max_iterations = 0
+
+        @staticmethod
+        def get_running_count_by_session(_session_key: str) -> int:
+            return int(running)
+
+    loop.subagents = _Subagents()
+
+    async def run(spec):
+        nonlocal running
+
+        async def finish_job() -> None:
+            nonlocal running
+            await asyncio.sleep(0.01)
+            running = False
+
+        task = asyncio.create_task(finish_job())
+        try:
+            assert await spec.injection_callback() == []
+        finally:
+            await task
+        return AgentRunResult(final_content="done", messages=[])
+
+    loop.runner.run = run
+    session = loop.sessions.get_or_create(f"websocket:{ROOM_ID}")
+    result, *_ = await asyncio.wait_for(
+        loop._run_agent_loop([], session=session, pending_queue=asyncio.Queue()),
+        timeout=1,
+    )
+
+    assert result == "done"
+
+
+@pytest.mark.asyncio
+async def test_delegate_tool_remains_visible_after_another_tool_call(tmp_path: Path) -> None:
+    provider = MagicMock()
+    provider.get_default_model.return_value = "test-model"
+    visible_tools: list[set[str]] = []
+
+    async def chat_with_retry(**kwargs):
+        visible_tools.append({
+            schema["function"]["name"]
+            for schema in kwargs["tools"]
+            if "function" in schema
+        })
+        if len(visible_tools) == 1:
+            return LLMResponse(
+                content="先检查工作区",
+                tool_calls=[
+                    ToolCallRequest(
+                        id="call-list",
+                        name="list_dir",
+                        arguments={"path": "."},
+                    )
+                ],
+            )
+        return LLMResponse(content="完成")
+
+    provider.chat_with_retry = chat_with_retry
+    loop = AgentLoop(bus=MessageBus(), provider=provider, workspace=tmp_path)
+    _room_session(loop.sessions)
+    session = loop.sessions.get_or_create(f"websocket:{ROOM_ID}")
+    loop._set_tool_context(
+        "websocket",
+        ROOM_ID,
+        session_key=f"websocket:{ROOM_ID}",
+        session=session,
+    )
+
+    result, *_ = await loop._run_agent_loop(
+        [],
+        session=session,
+        channel="websocket",
+        chat_id=ROOM_ID,
+        session_key=f"websocket:{ROOM_ID}",
+    )
+
+    assert result == "完成"
+    assert len(visible_tools) == 2
+    assert "delegate_agent" in visible_tools[0]
+    assert "delegate_agent" in visible_tools[1]
 
 
 @pytest.mark.asyncio
@@ -269,6 +363,35 @@ async def test_closed_room_persists_one_authored_result_for_replay() -> None:
     assert len(replayed) == 1
     assert replayed[0]["authorId"] == AGENT_A
     assert replayed[0]["jobId"] == "job-a"
+
+
+def test_delivered_video_replays_as_session_artifact_and_inline_media() -> None:
+    video = {
+        "name": "clip.mp4",
+        "path": "generated/clip.mp4",
+        "absolute_path": "C:/workspace/generated/clip.mp4",
+        "mime": "video/mp4",
+    }
+    replayed = replay_transcript_to_ui_messages(
+        [
+            {
+                "event": "deliver_files",
+                "chat_id": "chat-video",
+                "files": [video],
+            },
+            {"event": "message", "chat_id": "chat-video", "text": "done"},
+            {"event": "turn_end", "chat_id": "chat-video"},
+        ],
+        augment_user_media=lambda paths: [
+            {"kind": "video", "url": "/api/media/signed/clip", "name": "clip.mp4"}
+            for _path in paths
+        ],
+    )
+
+    assert replayed[0]["deliveredFiles"] == [video]
+    assert replayed[0]["media"] == [
+        {"kind": "video", "url": "/api/media/signed/clip", "name": "clip.mp4"}
+    ]
 
 
 class _Provider(LLMProvider):

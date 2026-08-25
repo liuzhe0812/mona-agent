@@ -142,8 +142,8 @@ export function MdFileView({ filePath }: MdFileViewProps) {
                 className={cn(
                   "h-7 w-7 rounded-md p-0",
                   aiPanelOpen
-                    ? "bg-accent text-foreground"
-                    : "text-muted-foreground hover:bg-accent hover:text-foreground",
+                    ? "text-foreground"
+                    : "text-muted-foreground hover:bg-foreground/5 hover:text-foreground",
                 )}
               >
                 <AgentLogo state={aiStreaming ? "working" : "idle"} className="h-4 w-4" />
@@ -157,8 +157,8 @@ export function MdFileView({ filePath }: MdFileViewProps) {
                 className={cn(
                   "h-7 w-7 rounded-md p-0",
                   outlineOpen
-                    ? "bg-accent text-foreground"
-                    : "text-muted-foreground hover:bg-accent hover:text-foreground",
+                    ? "text-foreground"
+                    : "text-muted-foreground hover:bg-foreground/5 hover:text-foreground",
                 )}
               >
                 <PanelRight className="h-4 w-4" />

@@ -360,7 +360,10 @@ export class MonaClient {
    * paths should be passed back via ``sendMessage``'s ``doc_paths`` field so
    * the backend can extract their text into the user message.
    */
-  sendDocUpload(chatId: string, files: { name: string; data_url: string }[]): void {
+  sendDocUpload(
+    chatId: string,
+    files: Array<{ name: string; data_url: string } | { name: string; local_path: string }>,
+  ): void {
     this.queueSend({ type: "doc_upload", chat_id: chatId, files });
   }
 

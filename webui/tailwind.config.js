@@ -116,6 +116,7 @@ export default {
         border: "hsl(var(--border))",
         input: "hsl(var(--input))",
         ring: "hsl(var(--ring))",
+        "editor-surface": "hsl(var(--editor-surface))",
         theme: "hsl(var(--theme))",
         action: {
           DEFAULT: "hsl(var(--action))",

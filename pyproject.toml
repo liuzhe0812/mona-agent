@@ -1,6 +1,6 @@
 [project]
 name = "mona-ai"
-version = "1.4.3"
+version = "1.4.4"
 description = "A lightweight personal AI assistant framework"
 readme = { file = "LICENSE", content-type = "text/plain" }
 requires-python = ">=3.11"
@@ -147,6 +147,7 @@ include = [
     "mona/skills/**/*.txt",
     "mona/agents/**/*.json",
     "mona/agents/**/*.md",
+    "mona/agents/**/*.png",
     "mona/skills/**/*.xml",
     "mona/skills/**/*.xsd",
     "mona/web/dist/**/*",

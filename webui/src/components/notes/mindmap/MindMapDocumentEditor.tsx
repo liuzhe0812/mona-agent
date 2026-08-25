@@ -2324,7 +2324,7 @@ export const MindMapDocumentEditor = forwardRef<MindMapDocumentEditorHandle, Min
   }, [mindMapBridge, handleSelectNode]);
 
   return (
-    <div className="flex min-h-0 flex-1 flex-col">
+    <div className="flex min-h-0 flex-1 flex-col bg-editor-surface">
       {/* 工具栏 */}
       <div className="flex shrink-0 items-center gap-1 border-b border-border/60 px-3 py-1.5">
         {toolbarLeading ? (
@@ -2470,7 +2470,7 @@ export const MindMapDocumentEditor = forwardRef<MindMapDocumentEditorHandle, Min
           <ContextMenuTrigger asChild>
             <div
               ref={containerRef}
-              className={`mindmap-container absolute inset-0 overflow-auto bg-background scrollbar-hover ${marqueeState.active ? "mindmap-marquee-active" : ""}`}
+              className={`mindmap-container absolute inset-0 overflow-auto bg-editor-surface scrollbar-hover ${marqueeState.active ? "mindmap-marquee-active" : ""}`}
             />
           </ContextMenuTrigger>
           <ContextMenuContent>

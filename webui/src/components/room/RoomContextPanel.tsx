@@ -134,7 +134,7 @@ export function RoomContextPanel({
   };
 
   return (
-    <div className={cn("flex h-full min-h-0 flex-col bg-background", className)}>
+    <div className={cn("flex h-full min-h-0 flex-col bg-card", className)}>
       <div className="flex items-center gap-2 border-b border-border/60 px-3 py-2">
         <Users className="h-4 w-4 text-muted-foreground" />
         <span className="text-sm font-medium">
@@ -156,10 +156,10 @@ export function RoomContextPanel({
               title={t("room.panel.info")}
               aria-label={t("room.panel.info")}
               className={cn(
-                "rounded-md p-1 transition-colors",
+                "relative rounded-md p-1 transition-colors after:pointer-events-none after:absolute after:inset-x-0 after:-bottom-1 after:h-0.5 after:rounded-full after:bg-transparent after:content-['']",
                 tab === "info"
-                  ? "bg-muted text-foreground"
-                  : "text-muted-foreground hover:bg-muted/60 hover:text-foreground",
+                  ? "text-foreground after:bg-[hsl(var(--brand-red))]"
+                  : "text-muted-foreground hover:text-foreground",
               )}
             >
               <Info className="h-4 w-4" />
@@ -172,10 +172,10 @@ export function RoomContextPanel({
               title={t("room.panel.workflow")}
               aria-label={t("room.panel.workflow")}
               className={cn(
-                "rounded-md p-1 transition-colors",
+                "relative rounded-md p-1 transition-colors after:pointer-events-none after:absolute after:inset-x-0 after:-bottom-1 after:h-0.5 after:rounded-full after:bg-transparent after:content-['']",
                 tab === "workflow"
-                  ? "bg-muted text-foreground"
-                  : "text-muted-foreground hover:bg-muted/60 hover:text-foreground",
+                  ? "text-foreground after:bg-[hsl(var(--brand-red))]"
+                  : "text-muted-foreground hover:text-foreground",
               )}
             >
               <Workflow className="h-4 w-4" />
@@ -250,7 +250,7 @@ export function RoomContextPanel({
                     disabled={artifacts.loading}
                     title={t("room.panel.refresh")}
                     aria-label={t("room.panel.refresh")}
-                    className="rounded-sm p-0.5 text-muted-foreground hover:bg-muted hover:text-foreground disabled:opacity-40"
+                    className="rounded-sm p-0.5 text-muted-foreground hover:bg-foreground/[0.05] hover:text-foreground disabled:opacity-40"
                   >
                     <RefreshCw
                       className={cn("h-3.5 w-3.5", artifacts.loading && "animate-spin")}

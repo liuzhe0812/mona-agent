@@ -79,6 +79,66 @@ function queueOpportunityResult(
   });
 }
 
+function queueQuantResult(validationStatus: string = "uncalibrated") {
+  fetchHistory.mockResolvedValueOnce([
+    { run_id: "run_quant_ui", report_id: "report_quant_ui", strategy_id: "quality_growth", strategy_name: "业绩成长", status: "completed", candidate_count: 1 },
+  ]);
+  fetchResult.mockResolvedValueOnce({
+    report_id: "report_quant_ui",
+    workflow_run_id: "run_quant_ui",
+    as_of: "2026-08-19T15:00:00+08:00",
+    strategy: { strategy_id: "quality_growth", name: "业绩成长", source: "builtin" },
+    quant_snapshot: {
+      schema_version: 1,
+      as_of: "2026-08-19T15:00:00+08:00",
+      validation_status: validationStatus,
+      reason: validationStatus === "uncalibrated" ? "量化因子尚未经过历史校准" : "部分排序因子缺少可核验数据",
+      universe: { universe_count: 100, hard_filter_count: 80, cheap_count: 50, enriched_count: 4, unprocessed_after_cap: 2 },
+      factor_scopes: { roe: { scope: "industry", sample_count: 2, missing_count: 0, direction: "desc", weight: 0.4 } },
+      data_quality: { status: "available", quant_validation_status: validationStatus, point_in_time: { status: "verified" } },
+    },
+    candidates: [{
+      instrument_id: "XSHG:600519",
+      name: "贵州茅台",
+      selection_reasons: ["确定性条件命中"],
+      risk_flags: [],
+      data_quality: "available",
+      rank: 1,
+      quant_validation: {
+        validation_status: validationStatus,
+        quant_signal: validationStatus === "support" ? "positive" : "insufficient_data",
+        horizons: {
+          short_term: {
+            validation_status: "uncalibrated",
+            quant_signal: "insufficient_data",
+            factor_observations: [
+              { field: "momentum20", raw_value: 4.2, percentile_or_rank: 0.8, direction: "desc", scope: "market", sample_count: 100, missing_count: 0, as_of: "2026-08-19T15:00:00+08:00", source_ids: ["src_kline"], method_version: "percentile-rank-v1", validation_status: "uncalibrated" },
+              { field: "volume", raw_value: 126000, percentile_or_rank: 0.6, direction: "desc", scope: "market", sample_count: 100, missing_count: 0, as_of: "2026-08-19T15:00:00+08:00", source_ids: ["src_quote"], method_version: "percentile-rank-v1", validation_status: "uncalibrated" },
+              { field: "turnover", raw_value: 126000, percentile_or_rank: 0.7, direction: "desc", scope: "market", sample_count: 100, missing_count: 0, as_of: "2026-08-19T15:00:00+08:00", source_ids: ["src_quote"], method_version: "percentile-rank-v1", validation_status: "uncalibrated" },
+            ],
+          },
+          medium_term: {
+            validation_status: validationStatus === "uncalibrated" ? "uncalibrated" : "insufficient_data",
+            quant_signal: "insufficient_data",
+            factor_observations: [
+              { field: "roe", raw_value: 12.3, percentile_or_rank: 0.7, direction: "desc", scope: "industry", sample_count: 2, missing_count: 0, as_of: "2026-08-19T15:00:00+08:00", source_ids: ["src_fundamentals"], method_version: "percentile-rank-v1", validation_status: "uncalibrated" },
+              { field: "profit_yoy", raw_value: null, percentile_or_rank: null, direction: "desc", scope: "industry", sample_count: 1, missing_count: 1, as_of: "2026-08-19T15:00:00+08:00", source_ids: ["src_fundamentals"], method_version: "percentile-rank-v1", validation_status: "insufficient_data" },
+            ],
+          },
+          long_term: {
+            validation_status: "uncalibrated",
+            quant_signal: "insufficient_data",
+            factor_observations: [
+              { field: "pe", raw_value: 20, percentile_or_rank: 0.4, direction: "asc", scope: "industry", sample_count: 2, missing_count: 0, as_of: "2026-08-19T15:00:00+08:00", source_ids: ["src_quote"], method_version: "percentile-rank-v1", validation_status: "uncalibrated" },
+              { field: "custom_metric", raw_value: 4.2, percentile_or_rank: 0.4, direction: "desc", scope: "market", sample_count: 100, missing_count: 0, as_of: "2026-08-19T15:00:00+08:00", source_ids: ["src_custom"], method_version: "custom-v1", validation_status: "uncalibrated" },
+            ],
+          },
+        },
+      },
+    }],
+  });
+}
+
 beforeEach(() => {
   vi.clearAllMocks();
   fetchTemplates.mockResolvedValue([]);
@@ -442,11 +502,98 @@ describe("OpportunityDiscovery", () => {
     expect(document.body.textContent ?? "").not.toMatch(/short_term|swing|medium_term|long_term|operating_cashflow|momentum20|volatility20|partial|stale|unavailable|ctx_/);
   });
 
+  it("renders only descriptive uncalibrated quantitative observations", async () => {
+    queueQuantResult();
+    render(<OpportunityDiscovery client={makeClient()} onAddWatchlist={vi.fn()} onDeepResearch={vi.fn()} />);
+    fireEvent.click(await screen.findByRole("tab", { name: "历史" }));
+    fireEvent.click(await screen.findByRole("button", { name: "查看" }));
+
+    expect((await screen.findAllByText("量化未校准")).length).toBeGreaterThan(0);
+    expect(screen.getByTestId("quant-observation-panel")).toBeTruthy();
+    expect(screen.getByText("因子计算覆盖")).toBeTruthy();
+    expect(screen.getByText("处理 4 只 / 未处理 2 只")).toBeTruthy();
+    expect(screen.getByText("中线可用因子")).toBeTruthy();
+    expect(screen.getByText("仅展示确定性因子观察，尚未经过样本外校准，不构成支持或反对结论")).toBeTruthy();
+
+    fireEvent.click(screen.getByText("查看量化因子详情"));
+    expect(screen.getByText("20日价格动量")).toBeTruthy();
+    expect(screen.getByText("净资产收益率")).toBeTruthy();
+    expect(screen.getByText("市盈率")).toBeTruthy();
+    expect(screen.getAllByText("同行业比较").length).toBeGreaterThan(0);
+    expect(screen.getAllByText("当前分位数排序版本").length).toBeGreaterThan(0);
+    expect(document.body.textContent ?? "").not.toMatch(/quant_signal|source_ids|method_version|strategy_fingerprint|上涨概率/);
+  });
+
+  it("adds units and readable scaling to raw quantitative values", async () => {
+    queueQuantResult();
+    render(<OpportunityDiscovery client={makeClient()} onAddWatchlist={vi.fn()} onDeepResearch={vi.fn()} />);
+    fireEvent.click(await screen.findByRole("tab", { name: "历史" }));
+    fireEvent.click(await screen.findByRole("button", { name: "查看" }));
+    await screen.findByTestId("quant-observation-panel");
+    fireEvent.click(screen.getByText("查看量化因子详情"));
+
+    expect(screen.getByText("4.2%")).toBeTruthy();
+    expect(screen.getByText("12.6万股")).toBeTruthy();
+    expect(screen.getByText("12.6万元")).toBeTruthy();
+    expect(screen.getByText("20倍")).toBeTruthy();
+    expect(screen.getByText("4.2（单位未提供）")).toBeTruthy();
+    expect(document.body.textContent ?? "").not.toMatch(/custom_metric/);
+  });
+
+  it("shows data insufficiency without filling missing quantitative values", async () => {
+    queueQuantResult("insufficient_data");
+    render(<OpportunityDiscovery client={makeClient()} onAddWatchlist={vi.fn()} onDeepResearch={vi.fn()} />);
+    fireEvent.click(await screen.findByRole("tab", { name: "历史" }));
+    fireEvent.click(await screen.findByRole("button", { name: "查看" }));
+
+    expect((await screen.findAllByText("尚未形成量化结论")).length).toBeGreaterThan(0);
+    fireEvent.click(screen.getByText("查看量化因子详情"));
+    expect(screen.getByText("暂无可核验数值")).toBeInTheDocument();
+    expect(screen.getByText("暂无可核验分位")).toBeInTheDocument();
+    expect(screen.queryByText("支持")).toBeNull();
+    expect(screen.queryByText("反对")).toBeNull();
+  });
+
+  it.each(["support", "oppose", "unconfirmed"])("downgrades uncalibrated UI for hostile quant status %s", async (status) => {
+    queueQuantResult(status);
+    render(<OpportunityDiscovery client={makeClient()} onAddWatchlist={vi.fn()} onDeepResearch={vi.fn()} />);
+    fireEvent.click(await screen.findByRole("tab", { name: "历史" }));
+    fireEvent.click(await screen.findByRole("button", { name: "查看" }));
+
+    expect((await screen.findAllByText("量化状态待验证")).length).toBeGreaterThan(0);
+    expect(screen.queryByText("量化支持")).toBeNull();
+    expect(screen.queryByText("量化反对")).toBeNull();
+  });
+
+  it("keeps old selection results free of an empty quantitative card and preserves actions", async () => {
+    const onAddWatchlist = vi.fn().mockResolvedValue(undefined);
+    const onDeepResearch = vi.fn();
+    fetchHistory.mockResolvedValueOnce([
+      { run_id: "run_old_quant", report_id: "report_old_quant", strategy_id: "quality_growth", strategy_name: "业绩成长", status: "completed", candidate_count: 1 },
+    ]);
+    fetchResult.mockResolvedValueOnce({
+      report_id: "report_old_quant",
+      workflow_run_id: "run_old_quant",
+      strategy: { strategy_id: "quality_growth", name: "业绩成长", source: "builtin", horizon: "medium_term" },
+      candidates: [{ instrument_id: "XSHG:600519", name: "贵州茅台", selection_reasons: ["条件命中"], risk_flags: [], data_quality: "available", rank: 1 }],
+    });
+    render(<OpportunityDiscovery client={makeClient()} onAddWatchlist={onAddWatchlist} onDeepResearch={onDeepResearch} />);
+    fireEvent.click(await screen.findByRole("tab", { name: "历史" }));
+    fireEvent.click(await screen.findByRole("button", { name: "查看" }));
+    expect((await screen.findAllByText("贵州茅台")).length).toBeGreaterThan(0);
+    expect(screen.queryByTestId("quant-observation-panel")).toBeNull();
+    expect(screen.queryByText("量化未校准")).toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: "加入自选" }));
+    fireEvent.click(screen.getByRole("button", { name: "深度投研" }));
+    await waitFor(() => expect(onAddWatchlist).toHaveBeenCalledTimes(1));
+    expect(onDeepResearch).toHaveBeenCalledTimes(1);
+  });
+
   it.each([
     ["高优先级", "high", [], "可进入深度投研", null],
     ["中优先级", "medium", [], "可继续研究", null],
     ["低优先级有具体缺口", "low", [{ text: "缺少未来盈利预期", claim_type: "unknown", source_ids: [] }], "暂不形成买卖建议", "暂不形成买卖建议：缺少未来盈利预期"],
-    ["低优先级无具体缺口", "low", [], "暂不形成买卖建议", "暂不形成买卖建议：关键证据不足"],
+    ["低优先级无具体缺口", "low", [], "暂不形成买卖建议", "暂不形成买卖建议：关键条件待确认"],
     ["未知优先级", "unknown", [], "尚不能形成买卖建议", null],
   ] as const)("shows a user-facing research priority and low-priority reason (%s)", async (_case, priority, dataGaps, priorityText, lowPriorityText) => {
     fetchHistory.mockResolvedValueOnce([
@@ -510,7 +657,7 @@ describe("OpportunityDiscovery", () => {
       pe: { value: null, peer_count: 0, median: null, percentile: null },
       pb: { value: null, peer_count: 0, median: null, percentile: null },
       missing_fields: ["current_pe", "current_pb", "peer_valuation"],
-    }, "估值数据缺失"],
+    }, "估值暂不判断"],
   ] as const)("renders %s valuation reference in the selected candidate detail", async (_status, valuation, statusLabel) => {
     fetchHistory.mockResolvedValueOnce([
       { run_id: `run_valuation_${_status}`, report_id: `report_valuation_${_status}`, strategy_id: "quality_growth", strategy_name: "业绩成长", status: "succeeded", candidate_count: 1 },
@@ -546,7 +693,7 @@ describe("OpportunityDiscovery", () => {
       expect(screen.getByText("0%")).toBeTruthy();
       expect(screen.getByText("100%")).toBeTruthy();
     } else if (_status === "partial") {
-      expect(screen.getAllByText("同行样本不足，不能判断相对高低").length).toBeGreaterThan(0);
+      expect(screen.getAllByText("同行比较待确认，暂不能判断相对高低").length).toBeGreaterThan(0);
       expect(screen.getByText("估值参考暂不完整，缺少：当前市净率、同行市盈率样本、同行市净率样本、同行估值比较")).toBeTruthy();
     } else {
       expect(screen.getByText("无法形成估值参考，缺少：当前市盈率、当前市净率、同行估值比较")).toBeTruthy();
@@ -616,9 +763,9 @@ describe("OpportunityDiscovery", () => {
     expect(screen.getByText("回答：预期是否持续上修或下修")).toBeTruthy();
     expect(screen.getByText("回答：价值与竞争力能否持续")).toBeTruthy();
     expect(screen.getAllByText("证据可用")).toHaveLength(2);
-    expect(screen.getByText("证据不足")).toBeTruthy();
+    expect(screen.getByText("当前周期待确认")).toBeTruthy();
     expect(screen.getByText("短线核心判断")).toBeTruthy();
-    expect(screen.getByText(/当前证据不足，不能形成中线判断：缺少未来盈利预期和政策兑现证据；缺少未来盈利预期；政策兑现信息不足/)).toBeTruthy();
+    expect(screen.getByText(/当前无法形成中线判断，原因：缺少未来盈利预期和政策兑现证据；缺少未来盈利预期；政策兑现信息不足/)).toBeTruthy();
     expect(screen.getByText("长线核心判断")).toBeTruthy();
     expect(screen.getByText("缺少未来盈利预期")).toBeTruthy();
     expect(screen.getByText("政策兑现信息不足")).toBeTruthy();
@@ -674,8 +821,8 @@ describe("OpportunityDiscovery", () => {
     fireEvent.click(await screen.findByRole("tab", { name: "历史" }));
     fireEvent.click(await screen.findByRole("button", { name: "查看" }));
 
-    expect(await screen.findByText("事件传导证据不足")).toBeTruthy();
-    expect(screen.getByText(/当前证据不足，不能形成事件影响传导判断：缺少事件来源与公司业务敞口证据；缺少收入确认时间表/)).toBeTruthy();
+    expect(await screen.findByRole("heading", { name: "事件传导待确认" })).toBeTruthy();
+    expect(screen.getByText(/当前无法形成事件影响传导判断，原因：缺少事件来源与公司业务敞口证据；缺少收入确认时间表/)).toBeTruthy();
     expect(screen.getByText("还缺什么")).toBeTruthy();
     expect(screen.getByText("缺少收入确认时间表")).toBeTruthy();
     expect(screen.queryByText("1. 可核验事件")).toBeNull();

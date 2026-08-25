@@ -28,6 +28,15 @@ import {
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from "@/components/ui/alert-dialog";
+import {
   ContextMenu,
   ContextMenuContent,
   ContextMenuItem,
@@ -40,6 +49,12 @@ import {
   DropdownMenuItem,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
+import {
+  Tooltip,
+  TooltipContent,
+  TooltipProvider,
+  TooltipTrigger,
+} from "@/components/ui/tooltip";
 import { useEmailStore, resolveSenderDisplay } from "./store/emailStore";
 import type { EmailAnalysis, EmailAttachment, EmailKeyInfo, EmailMessage } from "./lib/types";
 import { getFolderDisplayName, sortFolders } from "./lib/folderUtils";
@@ -143,6 +158,10 @@ export function MailView() {
   const [exporting, setExporting] = useState(false);
   // 提取日程中（手动触发单封邮件 AI 日程提取）
   const [extractingSchedule, setExtractingSchedule] = useState(false);
+  const [scheduleExtractResult, setScheduleExtractResult] = useState<{
+    title: string;
+    description: string;
+  } | null>(null);
   // 附件系统图标缓存：key = filename，value = dataUrl（系统默认应用图标）
   const [attIcons, setAttIcons] = useState<Record<string, string>>({});
   // 邮件正文图片：左键点击直接打开预览
@@ -279,7 +298,7 @@ export function MailView() {
     if (selectedUids.size > 1) {
       const moveTargets = sortFolders(folders);
       return (
-        <div className="flex h-full flex-col items-center justify-center gap-4 bg-muted/10">
+        <div className="flex h-full flex-col items-center justify-center gap-4 bg-editor-surface">
           <div className="text-center">
             <Check className="mx-auto h-10 w-10 text-info" />
             <p className="mt-2 text-body font-medium text-foreground">
@@ -381,7 +400,7 @@ export function MailView() {
       );
     }
     return (
-      <div className="flex h-full flex-col items-center justify-center gap-3 bg-muted/10 text-muted-foreground">
+      <div className="flex h-full flex-col items-center justify-center gap-3 bg-editor-surface text-muted-foreground">
         <MailOpen className="h-10 w-10 opacity-30" />
         <span className="text-ui">选择一封邮件查看</span>
       </div>
@@ -531,7 +550,10 @@ export function MailView() {
     try {
       const base = await getServicesHttpBase();
       if (!base) {
-        window.alert("Gateway 未就绪，请稍后重试");
+        setScheduleExtractResult({
+          title: "提取日程失败",
+          description: "Gateway 未就绪，请稍后重试",
+        });
         return;
       }
       const url = `${base}/email/schedule/extract-manual`;
@@ -552,24 +574,25 @@ export function MailView() {
         } catch {
           // ignore
         }
-        window.alert(`提取失败：${msg}`);
+        setScheduleExtractResult({ title: "提取日程失败", description: msg });
         return;
       }
       const data = (await resp.json()) as { result: string };
       const result = data.result;
-      const message =
+      const resultInfo =
         result === "created"
-          ? "已创建日程"
+          ? { title: "日程已创建", description: "已从邮件创建日程" }
           : result === "pending"
-            ? "已加入待确认"
+            ? { title: "已加入待确认", description: "请前往计划收集箱确认日程" }
             : result === "skipped"
-              ? "未识别到日程"
-              : "提取失败";
-      window.alert(message);
+              ? { title: "未识别到日程", description: "这封邮件中没有可提取的日程信息" }
+              : { title: "提取日程失败", description: "请稍后重试" };
+      setScheduleExtractResult(resultInfo);
     } catch (e) {
-      window.alert(
-        `提取失败：${e instanceof Error ? e.message : String(e)}`,
-      );
+      setScheduleExtractResult({
+        title: "提取日程失败",
+        description: e instanceof Error ? e.message : String(e),
+      });
     } finally {
       setExtractingSchedule(false);
     }
@@ -701,74 +724,92 @@ export function MailView() {
   };
 
   return (
-    <div className="flex h-full flex-col bg-background">
-      <div className="shrink-0 border-b border-border bg-muted/20 px-4 py-3">
+    <div className="flex h-full flex-col bg-editor-surface">
+      <div className="shrink-0 border-b border-border bg-card px-4 py-3">
         <div className="flex items-start justify-between gap-3">
           <h2 className="min-w-0 flex-1 text-body-lg font-semibold text-foreground">
             {m.subject || "(无主题)"}
           </h2>
-          <div className="flex shrink-0 items-center gap-1">
-            <Button
-              type="button"
-              variant="ghost"
-              size="icon"
-              className="h-7 w-7 text-muted-foreground hover:text-foreground"
-              onClick={() => void toggleRead(gatewayUrl, m)}
-              aria-label={m.isRead ? "标记为未读" : "标记为已读"}
-              title={m.isRead ? "标记为未读" : "标记为已读"}
-            >
-              <MailOpen className="h-3.5 w-3.5" />
-            </Button>
-            <Button
-              type="button"
-              variant="ghost"
-              size="icon"
-              className="h-7 w-7 text-muted-foreground hover:text-foreground"
-              onClick={() => void toggleStarred(gatewayUrl, m)}
-              aria-label={m.isStarred ? "取消星标" : "星标"}
-              title={m.isStarred ? "取消星标" : "星标"}
-            >
-              <Star
-                className={
-                  m.isStarred
-                    ? "h-3.5 w-3.5 fill-warning text-warning"
-                    : "h-3.5 w-3.5"
-                }
-              />
-            </Button>
-            <Button
-              type="button"
-              variant="ghost"
-              size="icon"
-              className="h-7 w-7 text-muted-foreground hover:text-foreground"
-              disabled={exporting}
-              onClick={() => void handleExportEml()}
-              aria-label="导出为 .eml"
-              title="导出为 .eml"
-            >
-              {exporting ? (
-                <Loader2 className="h-3.5 w-3.5 animate-spin" />
-              ) : (
-                <FileDown className="h-3.5 w-3.5" />
-              )}
-            </Button>
-            <Button
-              type="button"
-              variant="ghost"
-              size="icon"
-              className="h-7 w-7 text-muted-foreground hover:text-foreground"
-              disabled={extractingSchedule}
-              onClick={() => void handleExtractSchedule()}
-              aria-label="提取日程"
-              title="提取日程"
-            >
-              {extractingSchedule ? (
-                <Loader2 className="h-3.5 w-3.5 animate-spin" />
-              ) : (
-                <CalendarPlus className="h-3.5 w-3.5" />
-              )}
-            </Button>
-          </div>
+          <TooltipProvider delayDuration={300}>
+            <div className="flex shrink-0 items-center gap-1">
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <Button
+                    type="button"
+                    variant="ghost"
+                    size="icon"
+                    className="h-7 w-7 text-muted-foreground hover:text-foreground"
+                    onClick={() => void toggleRead(gatewayUrl, m)}
+                    aria-label={m.isRead ? "标记为未读" : "标记为已读"}
+                  >
+                    <MailOpen className="h-3.5 w-3.5" />
+                  </Button>
+                </TooltipTrigger>
+                <TooltipContent>{m.isRead ? "标记为未读" : "标记为已读"}</TooltipContent>
+              </Tooltip>
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <Button
+                    type="button"
+                    variant="ghost"
+                    size="icon"
+                    className="h-7 w-7 text-muted-foreground hover:text-foreground"
+                    onClick={() => void toggleStarred(gatewayUrl, m)}
+                    aria-label={m.isStarred ? "取消星标" : "星标"}
+                  >
+                    <Star
+                      className={
+                        m.isStarred
+                          ? "h-3.5 w-3.5 fill-warning text-warning"
+                          : "h-3.5 w-3.5"
+                      }
+                    />
+                  </Button>
+                </TooltipTrigger>
+                <TooltipContent>{m.isStarred ? "取消星标" : "星标"}</TooltipContent>
+              </Tooltip>
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <Button
+                    type="button"
+                    variant="ghost"
+                    size="icon"
+                    className="h-7 w-7 text-muted-foreground hover:text-foreground"
+                    disabled={exporting}
+                    onClick={() => void handleExportEml()}
+                    aria-label="导出为 .eml"
+                  >
+                    {exporting ? (
+                      <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                    ) : (
+                      <FileDown className="h-3.5 w-3.5" />
+                    )}
+                  </Button>
+                </TooltipTrigger>
+                <TooltipContent>导出为 .eml</TooltipContent>
+              </Tooltip>
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <Button
+                    type="button"
+                    variant="ghost"
+                    size="icon"
+                    className="h-7 w-7 text-muted-foreground hover:text-foreground"
+                    disabled={extractingSchedule}
+                    onClick={() => void handleExtractSchedule()}
+                    aria-label="提取日程"
+                  >
+                    {extractingSchedule ? (
+                      <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                    ) : (
+                      <CalendarPlus className="h-3.5 w-3.5" />
+                    )}
+                  </Button>
+                </TooltipTrigger>
+                <TooltipContent>提取日程</TooltipContent>
+              </Tooltip>
+            </div>
+          </TooltipProvider>
         </div>
         <div className="mt-2 flex flex-col gap-0.5 text-caption text-muted-foreground">
           <div className="flex gap-2">
@@ -884,7 +925,7 @@ export function MailView() {
           )}
         </div>
       </div>
-      <div className="min-h-0 flex-1 overflow-y-auto px-4 py-3 scrollbar-hover">
+      <div className="min-h-0 flex-1 overflow-y-auto bg-editor-surface px-4 py-3 scrollbar-hover">
         {m.bodyError ? (
           <div className="flex h-full min-h-[200px] flex-col items-center justify-center gap-2 text-muted-foreground">
             <span className="text-ui text-destructive">正文加载失败</span>
@@ -930,6 +971,24 @@ export function MailView() {
           onRun={handleRunAnalysis}
         />
       ) : null}
+      <AlertDialog
+        open={!!scheduleExtractResult}
+        onOpenChange={(open) => {
+          if (!open) setScheduleExtractResult(null);
+        }}
+      >
+        <AlertDialogContent className="max-w-md">
+          <AlertDialogHeader>
+            <AlertDialogTitle>{scheduleExtractResult?.title}</AlertDialogTitle>
+            <AlertDialogDescription className="whitespace-pre-line text-ui">
+              {scheduleExtractResult?.description}
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogAction className="h-8 text-caption">知道了</AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
       {imagePreviewSrc && (
         <BodyImagePreviewModal src={imagePreviewSrc} onClose={() => setImagePreviewSrc(null)} />
       )}

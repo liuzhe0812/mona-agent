@@ -215,7 +215,7 @@ describe("ResearchEvidenceDetail", () => {
     expect(screen.getByTestId("research-dimension-market_environment")).toBeInTheDocument();
     expect(screen.getByTestId("research-dimension-company_quality")).toBeInTheDocument();
     expect(screen.getByTestId("research-dimension-event_risk")).toBeInTheDocument();
-    expect(screen.getByTestId("research-dimension-valuation")).toHaveTextContent("估值数据缺失");
+    expect(screen.getByTestId("research-dimension-valuation")).toHaveTextContent("估值暂不判断");
     expect(screen.getByTestId("research-dimension-valuation")).not.toHaveTextContent("市场风格与筹码周期阶段");
     expect(screen.getByTestId("research-event-calendar")).toHaveTextContent("业绩说明会");
     expect(screen.getByTestId("research-event-calendar")).toHaveTextContent("无日期公告");
@@ -397,7 +397,7 @@ describe("ResearchEvidenceDetail", () => {
     const valuation = screen.getByTestId("research-valuation-analysis");
     expect(valuation).toHaveTextContent("当前值：26.37");
     expect(valuation).toHaveTextContent("当前值：4.09");
-    expect(valuation).toHaveTextContent("同行比较数据不足，不能判断相对高低");
+    expect(valuation).toHaveTextContent("同行比较待确认，暂不能判断相对高低");
     expect(valuation).not.toHaveTextContent("中性");
   });
 
@@ -412,7 +412,7 @@ describe("ResearchEvidenceDetail", () => {
     render(<ResearchEvidenceDetail report={report} />);
 
     const valuation = screen.getByTestId("research-valuation-analysis");
-    expect(valuation).toHaveTextContent("估值数据缺失");
+    expect(valuation).toHaveTextContent("估值暂不判断");
     expect(valuation).toHaveTextContent("市盈率（PE）当前值");
     expect(valuation).toHaveTextContent("市净率（PB）当前值");
     expect(valuation).toHaveTextContent("同行估值比较");

@@ -40,6 +40,7 @@ def default_webui_sidebar_state() -> dict[str, Any]:
         "pinned_keys": [],
         "archived_keys": [],
         "title_overrides": {},
+        "project_names": {},
         # IM unread derivation (IM plan 12.4): last-read marker per session key,
         # compared against the session ``preview_at`` on the client.
         "last_read_at_by_key": {},
@@ -164,6 +165,7 @@ def normalize_webui_sidebar_state(
     state["pinned_keys"] = _clean_string_list(raw.get("pinned_keys"))
     state["archived_keys"] = _clean_string_list(raw.get("archived_keys"))
     state["title_overrides"] = _clean_title_overrides(raw.get("title_overrides"))
+    state["project_names"] = _clean_title_overrides(raw.get("project_names"))
     state["tags_by_key"] = _clean_tags_by_key(raw.get("tags_by_key"))
     state["collapsed_groups"] = _clean_bool_map(raw.get("collapsed_groups"))
     state["view"] = _clean_view(raw.get("view"))

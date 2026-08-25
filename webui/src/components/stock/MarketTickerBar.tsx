@@ -41,7 +41,7 @@ interface MarketTickerBarProps {
   refreshing: boolean;
   onRefresh: () => void;
   onOpenSettings: () => void;
-  /** 关注雷达面板开关与切换（原面板头部按钮上移到顶栏）。 */
+  /** 决策雷达面板开关与切换（原面板头部按钮上移到顶栏）。 */
   decisionSummaryOpen: boolean;
   onToggleDecisionSummary: () => void;
 }
@@ -163,8 +163,8 @@ export function MarketTickerBar({
         <Button
           variant="ghost"
           size="icon"
-          aria-label={decisionSummaryOpen ? "收起关注雷达" : "展开关注雷达"}
-          title={decisionSummaryOpen ? "收起关注雷达" : "展开关注雷达"}
+          aria-label={decisionSummaryOpen ? "收起决策雷达" : "展开决策雷达"}
+          title={decisionSummaryOpen ? "收起决策雷达" : "展开决策雷达"}
           aria-expanded={decisionSummaryOpen}
           aria-controls={DECISION_SUMMARY_PANEL_ID}
           onClick={onToggleDecisionSummary}

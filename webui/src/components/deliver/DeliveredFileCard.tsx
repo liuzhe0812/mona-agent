@@ -68,9 +68,9 @@ export function DeliveredFileCard({
       variant="ghost"
       onClick={handleClick}
       className={cn(
-        "h-auto justify-start gap-2 rounded-lg border border-border/60 bg-muted/30",
+        "h-auto justify-start gap-2 rounded-lg bg-muted/30",
         "px-3 py-2 text-left font-normal",
-        "hover:bg-muted/60 hover:border-border hover:text-foreground",
+        "hover:bg-muted/60 hover:text-foreground",
         className,
       )}
     >

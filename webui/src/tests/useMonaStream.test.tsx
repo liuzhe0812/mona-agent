@@ -99,12 +99,12 @@ describe("useMonaStream", () => {
     });
 
     const file = {
-      path: "report.md",
-      absolute_path: "C:/work/report.md",
-      name: "report.md",
+      path: "clip.mp4",
+      absolute_path: "C:/work/clip.mp4",
+      name: "clip.mp4",
       size: 12,
       size_human: "12 B",
-      mime: "text/markdown",
+      mime: "video/mp4",
     };
 
     act(() => {
@@ -112,6 +112,11 @@ describe("useMonaStream", () => {
         event: "deliver_files",
         chat_id: "chat-deliver",
         files: [file],
+        media_urls: [{
+          kind: "video",
+          url: "/api/media/sig/video",
+          name: "clip.mp4",
+        }],
       });
     });
 
@@ -130,6 +135,11 @@ describe("useMonaStream", () => {
       role: "assistant",
       content: "done",
       deliveredFiles: [file],
+      media: [{
+        kind: "video",
+        url: "/api/media/sig/video",
+        name: "clip.mp4",
+      }],
     });
   });
 
@@ -1201,6 +1211,24 @@ describe("useMonaStream", () => {
     expect(result.current.messages[0].content).toBe("fine");
   });
 
+  it("sends uploaded document paths without requiring message text", () => {
+    const fake = fakeClient();
+    const { result } = renderHook(() => useMonaStream("chat-doc", EMPTY_MESSAGES), {
+      wrapper: wrap(fake.client),
+    });
+
+    act(() => {
+      result.current.send("", undefined, { docPaths: ["uploads/chat-doc/report.xlsx"] });
+    });
+
+    expect(fake.client.sendMessage).toHaveBeenCalledWith(
+      "chat-doc",
+      "",
+      undefined,
+      expect.objectContaining({ docPaths: ["uploads/chat-doc/report.xlsx"] }),
+    );
+  });
+
   it("attaches assistant media_urls to complete messages", () => {
     const fake = fakeClient();
     const { result } = renderHook(() => useMonaStream("chat-m", EMPTY_MESSAGES), {
@@ -1281,6 +1309,30 @@ describe("useMonaStream", () => {
     expect(result.current.isStreaming).toBe(false);
     expect(result.current.messages).toHaveLength(1);
     expect(result.current.messages[0].content).toBe("long task");
+  });
+
+  it("ends the local loading state after direct agent mentions are accepted", () => {
+    const fake = fakeClient();
+    const { result } = renderHook(() => useMonaStream("chat-mentions", EMPTY_MESSAGES), {
+      wrapper: wrap(fake.client),
+    });
+
+    act(() => {
+      result.current.send("@甲 @乙 请分别回答", undefined, {
+        targetAgentIds: ["agent-a", "agent-b"],
+      });
+    });
+    expect(result.current.isStreaming).toBe(true);
+
+    act(() => {
+      fake.emit("chat-mentions", {
+        event: "agent_mentions_routed",
+        chat_id: "chat-mentions",
+        agents: ["agent-a", "agent-b"],
+      });
+    });
+
+    expect(result.current.isStreaming).toBe(false);
   });
 
   it("keeps streaming alive across stream_end and completes on turn_end", async () => {

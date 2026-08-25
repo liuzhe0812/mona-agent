@@ -7,6 +7,7 @@ import {
   fetchWebuiThread,
   listSessions,
   listSlashCommands,
+  removeProject,
   updateSidebarState,
   updateImageGenerationSettings,
   updateProviderSettings,
@@ -101,6 +102,22 @@ describe("webui API helpers", () => {
           Authorization: "Bearer tok",
           "X-Mona-Provider-Key": "sk-deepseek",
         },
+      }),
+    );
+  });
+
+  it("sends project removal as JSON", async () => {
+    await removeProject("C:\\notes\\mona_notes", "tok");
+
+    expect(fetch).toHaveBeenCalledWith(
+      "/api/projects/remove",
+      expect.objectContaining({
+        method: "POST",
+        headers: {
+          Authorization: "Bearer tok",
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({ workspace: "C:\\notes\\mona_notes" }),
       }),
     );
   });

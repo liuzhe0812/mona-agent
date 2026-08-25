@@ -91,6 +91,12 @@ export interface AgentDetailPayload {
   };
   config: AgentUserConfigPayload;
   effective: EffectiveAgentConfigPayload;
+  toolCatalog: Array<{
+    name: string;
+    description: string;
+    available: boolean;
+    readOnly: boolean | null;
+  }>;
   data: {
     memoryFiles: number;
     memoryBytes: number;
@@ -562,6 +568,7 @@ export interface SidebarStatePayload {
   pinned_keys: string[];
   archived_keys: string[];
   title_overrides: Record<string, string>;
+  project_names: Record<string, string>;
     /** IM unread derivation (schema v5): last-read marker per
    *  session key, compared against ``ChatSummary.previewAt``. */
   last_read_at_by_key: Record<string, string>;
@@ -629,6 +636,7 @@ export interface SettingsPayload {
     name: string;
     label: string;
     is_custom?: boolean;
+    is_builtin?: boolean;
     configured: boolean;
     api_key_required: boolean;
     api_key_hint?: string | null;
@@ -919,6 +927,8 @@ export type InboundEvent =
       event: "deliver_files";
       chat_id: string;
       files: DeliveredFile[];
+      media_urls?: Array<{ url: string; name?: string; kind?: UIMediaKind }>;
+      inline_media?: boolean;
     }
   | {
       event: "delta";
@@ -968,6 +978,15 @@ export type InboundEvent =
       event: "goal_state";
       chat_id: string;
       goal_state: GoalStateWsPayload;
+    }
+  | {
+      /** Direct ``@Agent`` jobs were accepted and continue in the background. */
+      event: "agent_mentions_routed";
+      chat_id: string;
+      agents: string[];
+      failures?: string[] | null;
+      mode?: string;
+      collaboration_id?: string;
     }
   | { event: "session_updated"; chat_id: string; scope?: "metadata" | "thread" | string }
   | { event: "artifacts_changed"; chat_id?: string }
@@ -1175,7 +1194,7 @@ export type Outbound =
   | {
       type: "doc_upload";
       chat_id: string;
-      files: { name: string; data_url: string }[];
+      files: Array<{ name: string; data_url: string } | { name: string; local_path: string }>;
     }
   | {
       type: "create_room";

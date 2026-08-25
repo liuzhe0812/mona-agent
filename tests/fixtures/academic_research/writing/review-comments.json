@@ -1,0 +1,4 @@
+[
+  {"id": "R1", "comment": "Clarify the evaluation protocol and its limitation."},
+  {"id": "R2", "comment": "Explain whether the result is reproducible."}
+]

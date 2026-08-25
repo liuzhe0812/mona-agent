@@ -86,12 +86,15 @@ export function NoteTabBar({
                 className={cn(
                   "group relative h-7 w-[124px] shrink-0 justify-start gap-1 self-end rounded-none border-r border-border/40 px-2 notes-tab-title font-normal leading-4",
                   isActive
-                    ? "bg-background text-foreground hover:bg-background hover:text-foreground"
-                    : "bg-transparent text-muted-foreground hover:bg-accent hover:text-foreground",
+                    ? "bg-transparent text-foreground"
+                    : "bg-transparent text-muted-foreground hover:bg-foreground/[0.06] hover:text-foreground",
                 )}
               >
                 {isActive ? (
-                  <span className="absolute inset-x-0 top-0 h-px bg-info" />
+                  <span
+                    aria-hidden="true"
+                    className="pointer-events-none absolute inset-x-0 bottom-0 h-0.5 bg-[hsl(var(--brand-red))]"
+                  />
                 ) : null}
                 <span className="min-w-0 flex-1 truncate text-left">{note.title || "未命名笔记"}</span>
                 <span
@@ -101,7 +104,7 @@ export function NoteTabBar({
                     e.stopPropagation();
                     onClose(note.id);
                   }}
-                  className="grid h-4 w-4 shrink-0 place-items-center rounded hover:bg-accent"
+                  className="grid h-4 w-4 shrink-0 place-items-center rounded hover:bg-foreground/[0.06]"
                 >
                   <X className="h-3 w-3" />
                 </span>

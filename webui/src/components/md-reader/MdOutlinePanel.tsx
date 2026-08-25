@@ -75,7 +75,7 @@ export function MdOutlinePanel({ content, editorContainerRef, width }: MdOutline
 
   return (
     <div
-      className="flex h-full shrink-0 flex-col border-l border-border/60 bg-background"
+      className="flex h-full shrink-0 flex-col border-l border-border/60 bg-card"
       style={{ width }}
     >
       <div className="flex h-10 shrink-0 items-center gap-1.5 border-b border-border/60 px-3 text-caption font-medium text-muted-foreground">

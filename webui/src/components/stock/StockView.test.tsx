@@ -1,8 +1,8 @@
-import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import { clearStockViewCache, StockView } from "./StockView";
-import { STOCK_ROOM_CHAT_ID } from "@/lib/stock-api";
+import { STOCK_DIAGNOSIS_ROOM_CHAT_ID, STOCK_ROOM_CHAT_ID } from "@/lib/stock-api";
 import type { WorkflowRun, WorkflowStepActivityPayload } from "@/lib/types";
 
 // --- stock-api mocks (client itself is covered by stock-api.test.ts) ---
@@ -12,9 +12,12 @@ const fetchStockKline = vi.fn();
 const fetchStockIntraday = vi.fn();
 const openStockIntradayStream = vi.fn();
 const fetchStockResearchContext = vi.fn();
+const fetchStockDiagnoses = vi.fn();
+const fetchStockDiagnosis = vi.fn();
 const preflightStockResearch = vi.fn();
 const fetchStockReports = vi.fn();
 const fetchStockReport = vi.fn();
+const fetchStockDecisionConditions = vi.fn();
 const addStockWatchlist = vi.fn();
 const reorderStockWatchlist = vi.fn();
 const removeStockWatchlist = vi.fn();
@@ -40,9 +43,12 @@ vi.mock("@/lib/stock-api", async (importOriginal) => {
     fetchStockIntraday: (...args: unknown[]) => fetchStockIntraday(...args),
     openStockIntradayStream: (...args: unknown[]) => openStockIntradayStream(...args),
     fetchStockResearchContext: (...args: unknown[]) => fetchStockResearchContext(...args),
+    fetchStockDiagnoses: (...args: unknown[]) => fetchStockDiagnoses(...args),
+    fetchStockDiagnosis: (...args: unknown[]) => fetchStockDiagnosis(...args),
     preflightStockResearch: (...args: unknown[]) => preflightStockResearch(...args),
     fetchStockReports: (...args: unknown[]) => fetchStockReports(...args),
     fetchStockReport: (...args: unknown[]) => fetchStockReport(...args),
+    fetchStockDecisionConditions: (...args: unknown[]) => fetchStockDecisionConditions(...args),
     addStockWatchlist: (...args: unknown[]) => addStockWatchlist(...args),
     removeStockWatchlist: (...args: unknown[]) => removeStockWatchlist(...args),
     setStockWatchlistFocus: (...args: unknown[]) => setStockWatchlistFocus(...args),
@@ -186,11 +192,132 @@ function makeRunPush(): WorkflowRun {
   };
 }
 
+function makeV5Report(reportId = "stock_report_v5") {
+  const decision = (
+    direction: "positive" | "neutral" | "negative",
+    action: "conditional_participation" | "wait" | "hold",
+    label: string,
+  ) => ({
+    direction,
+    action,
+    thesis: `${label}交易计划由确定性模型计算`,
+    notHoldingAction: action === "conditional_participation" ? "participate" : "wait",
+    holdingAction: action === "hold" ? "hold" : "reduce",
+    tradingPlan: {
+      referenceBuyLow: 36.8,
+      referenceBuyHigh: 37.2,
+      pullbackBuyLow: 35.8,
+      pullbackBuyHigh: 36.2,
+      stopLoss: 35.2,
+      firstTakeProfit: 39.8,
+      firstReduceFraction: 0.33,
+      secondTakeProfit: 41.2,
+      secondReduceFraction: 0.33,
+      riskRewardFirst: 3.5,
+      riskRewardSecond: 5.5,
+      currency: "元",
+    },
+    positionPlan: {
+      riskBudgetPct: 1,
+      initialPositionPct: 10,
+      maxPositionPct: 20,
+      stopDistancePct: 4,
+    },
+    validUntil: "2026-09-01T15:00:00+08:00",
+    reviewTrigger: "跌破止损参考后重新评估",
+    keyReasons: ["趋势保持完整"],
+    keyRisks: ["行业需求变化"],
+    evidenceStrength: "strong",
+    marketAsOf: "2026-08-21T15:00:00+08:00",
+    generatedAt: "2026-08-21T15:05:00+08:00",
+    isExpired: false,
+  });
+  return {
+    schemaVersion: 5,
+    resultStatus: "completed",
+    reportId,
+    runId: "run_v5",
+    kind: "deep_research",
+    instrument: {
+      instrumentId: "XSHE:000001",
+      symbol: "000001",
+      exchange: "XSHE",
+      name: "平安银行",
+      instrumentType: "equity",
+    },
+    summary: "三周期交易计划",
+    researchCutoffAt: "2026-08-21T15:00:00+08:00",
+    marketAsOf: "2026-08-21T15:00:00+08:00",
+    generatedAt: "2026-08-21T15:05:00+08:00",
+    isExpired: false,
+    hasExpiredHorizon: false,
+    horizonDecisions: {
+      shortTerm: decision("positive", "conditional_participation", "短线"),
+      mediumTerm: decision("neutral", "wait", "中线"),
+      longTerm: decision("negative", "wait", "长线"),
+    },
+  };
+}
+
+function makeDiagnosisReport() {
+  const decision = (direction: "positive" | "neutral" | "negative") => ({
+    direction,
+    action: "conditional_participation",
+    factor_score: 0.7,
+    market_percentile: 0.8,
+    industry_percentile: 0.6,
+    factor_contributions: { momentum: 0.1 },
+    validation_status: "descriptive",
+    not_holding_action: "conditional_participation",
+    holding_action: "hold",
+    materialized_plan: { value_status: "unavailable", boundaries: [] },
+    position_plan: { value_status: "unavailable" },
+    review_trigger: "盈利假设变化时复评",
+    key_reasons: [{ text: "现金流改善", source_ids: ["source-1"] }],
+    key_risks: [{ text: "行业需求变化", source_ids: ["source-1"] }],
+    confidence: "medium",
+    source_ids: ["source-1"],
+  });
+  return {
+    schema_version: 1,
+    kind: "ai_diagnosis",
+    diagnosis_id: "diagnosis_12345678",
+    instrument: { symbol: "600519", exchange: "XSHG", name: "贵州茅台", instrument_type: "equity" },
+    research_cutoff_at: "2026-08-25T15:00:00+08:00",
+    market_as_of: "2026-08-25T15:00:00+08:00",
+    generated_at: "2026-08-25T15:01:00+08:00",
+    evidence_context_id: "ctx-1",
+    source_ids: ["source-1"],
+    data_quality: { status: "available", confidence: "medium" },
+    fundamental_research: { status: "available", business_model_summary: "主营业务清晰", source_ids: ["source-1"] },
+    fundamental_factors: { short_term: { status: "unavailable", validation_status: "unavailable", factors: [] }, medium_term: { status: "unavailable", validation_status: "unavailable", factors: [] }, long_term: { status: "unavailable", validation_status: "unavailable", factors: [] } },
+    quant_factors: { short_term: { status: "available", validation_status: "descriptive", factor_score: 0.7, market_percentile: 0.8, industry_percentile: 0.6, sample_count: 35, factors: [{ name: "动量", contribution: 0.1, percentile: 0.8 }] }, medium_term: { status: "available", validation_status: "descriptive", factor_score: 0.7, market_percentile: 0.8, industry_percentile: 0.6, sample_count: 35, factors: [] }, long_term: { status: "unavailable", validation_status: "unavailable", factors: [] } },
+    technical_execution: { status: "unavailable" },
+    horizon_decisions: { short_term: decision("positive"), medium_term: decision("neutral"), long_term: decision("negative") },
+    decision_radar: { short_term: decision("positive"), medium_term: decision("neutral"), long_term: decision("negative"), deterministic: true },
+    method_versions: {},
+  };
+}
+
 beforeEach(() => {
   vi.clearAllMocks();
   clearStockViewCache();
+  // Clear queued one-shot implementations as well as call history; tests
+  // intentionally script the same async client methods in different orders.
+  for (const mock of [
+    runWorkflow,
+    cancelWorkflowRun,
+    getWorkflowRun,
+    preflightStockResearch,
+    fetchStockDashboard,
+    fetchStockReports,
+    fetchStockReport,
+    fetchStockDiagnoses,
+    fetchStockDiagnosis,
+  ]) mock.mockReset();
   runWorkflow.mockResolvedValue(undefined);
   getWorkflowRun.mockResolvedValue(null);
+  preflightStockResearch.mockResolvedValue({ contextId: "ctx_preflightabc123" });
   runUpdatedHandler = null;
   stepActivityHandler = null;
   fetchStockDashboard.mockResolvedValue(DASHBOARD);
@@ -223,10 +350,13 @@ beforeEach(() => {
     news: { status: "available", items: [], error: null },
   });
   fetchStockReports.mockResolvedValue([]);
+  fetchStockDiagnoses.mockResolvedValue([]);
+  fetchStockDiagnosis.mockRejectedValue(new Error("no diagnosis"));
   fetchStockReport.mockResolvedValue({
     report: { report_id: "stock_report_a", kind: "deep_research" },
     markdown: "# 贵州茅台研究报告",
   });
+  fetchStockDecisionConditions.mockResolvedValue(null);
   addStockWatchlist.mockResolvedValue(undefined);
   removeStockWatchlist.mockResolvedValue(undefined);
   setStockWatchlistFocus.mockResolvedValue(undefined);
@@ -380,7 +510,7 @@ describe("StockView", () => {
     expect(screen.getByRole("button", { name: "展开自选观察" })).toBeTruthy();
   });
 
-  it("projects V4 watchlist conclusions without inventing a composite stance", async () => {
+  it("renders a V4 report date without a synthetic watchlist opinion", async () => {
     fetchStockDashboard.mockResolvedValueOnce([
       {
         ...DASHBOARD[0],
@@ -410,9 +540,21 @@ describe("StockView", () => {
     const legacyRow = container.querySelector('[data-instrument-id="XSHE:000001"]');
     expect(row).not.toBeNull();
     expect(legacyRow).not.toBeNull();
-    expect(row).toHaveTextContent("短看多 · 中中性 · 长看空");
-    expect(row).not.toHaveTextContent("待更新");
-    expect(legacyRow).toHaveTextContent("待更新");
+    expect(row).toHaveTextContent("08-18");
+    expect(row).not.toHaveTextContent("短看多 · 中中性 · 长看空");
+    expect(row).not.toHaveTextContent("观点");
+    expect(row).not.toHaveTextContent("中性");
+    expect(legacyRow).toHaveTextContent("—");
+  });
+
+  it("opens the news tab when the latest-event date is clicked", async () => {
+    render(<StockView />);
+
+    fireEvent.click(await screen.findByRole("button", { name: "查看贵州茅台资讯公告" }));
+
+    await waitFor(() => {
+      expect(screen.getByRole("tab", { name: "资讯公告" })).toHaveAttribute("aria-selected", "true");
+    });
   });
 
   it("renders scalar volume change and swing levels from the kline response", async () => {
@@ -427,7 +569,8 @@ describe("StockView", () => {
   it("starts a deep-research run with the selected instrument as inputs", async () => {
     render(<StockView />);
     fireEvent.click(await screen.findByText("平安银行"));
-    const button = await screen.findByRole("button", { name: "启动深度投研" });
+    fireEvent.click(screen.getByRole("tab", { name: "专家团论证" }));
+    const button = await screen.findByRole("button", { name: "启动专家团论证" });
     await waitFor(() => expect(button.hasAttribute("disabled")).toBe(false));
     await act(async () => {
       fireEvent.click(button);
@@ -444,7 +587,8 @@ describe("StockView", () => {
     preflightStockResearch.mockRejectedValueOnce(new Error("Failed to fetch"));
     render(<StockView />);
     fireEvent.click(await screen.findByText("平安银行"));
-    fireEvent.click(await screen.findByRole("button", { name: "启动深度投研" }));
+    fireEvent.click(screen.getByRole("tab", { name: "专家团论证" }));
+    fireEvent.click(await screen.findByRole("button", { name: "启动专家团论证" }));
 
     const error = await screen.findByText("投研启动失败：研究资料准备失败，请稍后重试");
     expect(error).toBeInTheDocument();
@@ -457,7 +601,8 @@ describe("StockView", () => {
     preflightStockResearch.mockRejectedValueOnce(new Error("industry_context 缺失"));
     render(<StockView />);
     fireEvent.click(await screen.findByText("平安银行"));
-    fireEvent.click(await screen.findByRole("button", { name: "启动深度投研" }));
+    fireEvent.click(screen.getByRole("tab", { name: "专家团论证" }));
+    fireEvent.click(await screen.findByRole("button", { name: "启动专家团论证" }));
 
     const error = await screen.findByText("投研启动失败：研究资料准备失败，请稍后重试");
     expect(error).toBeInTheDocument();
@@ -467,7 +612,8 @@ describe("StockView", () => {
   it("does not load financial-material selection during research startup", async () => {
     render(<StockView />);
     fireEvent.click(await screen.findByText("平安银行"));
-    fireEvent.click(await screen.findByRole("button", { name: "启动深度投研" }));
+    fireEvent.click(screen.getByRole("tab", { name: "专家团论证" }));
+    fireEvent.click(await screen.findByRole("button", { name: "启动专家团论证" }));
     await waitFor(() => expect(runWorkflow).toHaveBeenCalledWith(STOCK_ROOM_CHAT_ID, {
       symbols: ["XSHE:000001"],
       evidence_context_id: "ctx_preflightabc123",
@@ -487,18 +633,18 @@ describe("StockView", () => {
     );
     render(<StockView />);
     fireEvent.click(await screen.findByText("平安银行"));
-    fireEvent.click(await screen.findByRole("button", { name: "启动深度投研" }));
+    fireEvent.click(screen.getByRole("tab", { name: "专家团论证" }));
+    fireEvent.click(await screen.findByRole("button", { name: "启动专家团论证" }));
 
-    expect(screen.getByRole("button", { name: "正在准备投研" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "准备中" })).toBeDisabled();
     expect(screen.queryByText("正在准备最新资料并启动投研")).not.toBeInTheDocument();
-    expect(screen.getByRole("tab", { name: "投研" }).getAttribute("aria-selected")).toBe("true");
-    expect(screen.getByText("正在准备研究资料并创建投研任务")).toBeTruthy();
+    expect(screen.getByRole("tab", { name: "专家团论证" }).getAttribute("aria-selected")).toBe("true");
+    expect(screen.getByRole("heading", { name: "专家团论证" })).toBeTruthy();
     expect(screen.queryByText(/六位研究助手|证据包/)).not.toBeInTheDocument();
-    expect(screen.getByText("技术分析师")).toBeTruthy();
     getWorkflowRun.mockResolvedValueOnce({ ...makeRunPush(), inputs: { symbols: ["XSHE:000001"] } });
     await act(async () => release?.());
-    expect((await screen.findAllByText(/已完成 0\/6/)).length).toBeGreaterThan(0);
-    expect(screen.getByRole("tab", { name: "投研" })).toHaveAttribute("aria-selected", "true");
+    expect(await screen.findByTestId("expert-panel")).toBeInTheDocument();
+    expect(screen.getByRole("tab", { name: "专家团论证" })).toHaveAttribute("aria-selected", "true");
     const radar = screen.getByTestId("decision-radar");
     expect(within(radar).queryByText(/报告后变化|新增事件与未来催化|已完成.*\/6/)).not.toBeInTheDocument();
   });
@@ -513,7 +659,8 @@ describe("StockView", () => {
       runUpdatedHandler?.(STOCK_ROOM_CHAT_ID, makeRunPush());
     });
 
-    const cancel = await screen.findByRole("button", { name: "取消投研" });
+    fireEvent.click(screen.getByRole("tab", { name: "专家团论证" }));
+    const cancel = await screen.findByRole("button", { name: "取消论证" });
     let releaseCancel: ((runId: string) => void) | undefined;
     cancelWorkflowRun.mockImplementationOnce(
       () => new Promise<string>((resolve) => {
@@ -528,9 +675,36 @@ describe("StockView", () => {
 
     await act(async () => releaseCancel?.("run_1"));
     await waitFor(() =>
-      expect(screen.queryByRole("button", { name: "取消投研" })).not.toBeInTheDocument(),
+      expect(screen.queryByRole("button", { name: "取消论证" })).not.toBeInTheDocument(),
     );
     expect(getWorkflowRun).toHaveBeenLastCalledWith(STOCK_ROOM_CHAT_ID, "run_1");
+  });
+
+  it("keeps cancellation pending when the acknowledgement GET is still running", async () => {
+    render(<StockView />);
+    await screen.findAllByText("贵州茅台");
+    await waitFor(() => expect(getWorkflowRun).toHaveBeenCalledWith(STOCK_ROOM_CHAT_ID));
+    act(() => {
+      runUpdatedHandler?.(STOCK_ROOM_CHAT_ID, makeRunPush());
+    });
+
+    fireEvent.click(screen.getByRole("tab", { name: "专家团论证" }));
+    const runningRun = makeRunPush();
+    getWorkflowRun.mockResolvedValueOnce(runningRun);
+    cancelWorkflowRun.mockResolvedValueOnce("run_1");
+    fireEvent.click(await screen.findByRole("button", { name: "取消论证" }));
+
+    await waitFor(() => expect(screen.getByRole("button", { name: "取消中" })).toBeDisabled());
+    await waitFor(() => expect(getWorkflowRun).toHaveBeenLastCalledWith(STOCK_ROOM_CHAT_ID, "run_1"));
+    expect(screen.getByRole("button", { name: "取消中" })).toBeDisabled();
+
+    act(() => {
+      runUpdatedHandler?.(STOCK_ROOM_CHAT_ID, {
+        ...runningRun,
+        status: "cancelled",
+      });
+    });
+    await waitFor(() => expect(screen.queryByRole("button", { name: "取消中" })).not.toBeInTheDocument());
   });
 
   it("keeps the active run and shows a Chinese error when cancellation fails", async () => {
@@ -542,9 +716,10 @@ describe("StockView", () => {
       runUpdatedHandler?.(STOCK_ROOM_CHAT_ID, makeRunPush());
     });
 
-    fireEvent.click(await screen.findByRole("button", { name: "取消投研" }));
+    fireEvent.click(screen.getByRole("tab", { name: "专家团论证" }));
+    fireEvent.click(await screen.findByRole("button", { name: "取消论证" }));
     expect(await screen.findByText("取消投研失败：取消请求失败，请稍后重试")).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "取消投研" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "取消论证" })).toBeInTheDocument();
     expect(cancelWorkflowRun).toHaveBeenCalledWith(STOCK_ROOM_CHAT_ID, "run_1");
   });
 
@@ -565,7 +740,8 @@ describe("StockView", () => {
   it("shows a warning when the accepted run has no synchronized state", async () => {
     render(<StockView />);
     fireEvent.click(await screen.findByText("平安银行"));
-    fireEvent.click(await screen.findByRole("button", { name: "启动深度投研" }));
+    fireEvent.click(screen.getByRole("tab", { name: "专家团论证" }));
+    fireEvent.click(await screen.findByRole("button", { name: "启动专家团论证" }));
     expect(await screen.findByText(/运行状态暂未同步/)).toBeTruthy();
   });
 
@@ -580,19 +756,78 @@ describe("StockView", () => {
     );
 
     await act(async () => {
-      fireEvent.click(screen.getByRole("tab", { name: "投研" }));
+      fireEvent.click(screen.getByRole("tab", { name: "AI诊股" }));
     });
-    expect(screen.getAllByRole("button", { name: /深度投研/ })).toHaveLength(1);
+    expect(screen.getByRole("button", { name: "开始AI诊股" })).toBeInTheDocument();
+    expect(screen.getByText("尚未生成 AI 诊股结论")).toBeInTheDocument();
+    expect(screen.queryByTestId("decision-radar-prototype-panel")).not.toBeInTheDocument();
+  });
+
+  it("wires a V5 report into the real radar without showing prototype data", async () => {
+    const v5Report = makeV5Report();
+    fetchStockDashboard.mockResolvedValueOnce([
+      DASHBOARD[0],
+      {
+        ...DASHBOARD[1],
+        latest: {
+          reportId: "stock_report_v5",
+          runId: "run_v5",
+          kind: "deep_research",
+          instrument: {
+            instrumentId: "XSHE:000001",
+            symbol: "000001",
+            exchange: "XSHE",
+            name: "平安银行",
+            instrumentType: "equity",
+          },
+          symbols: ["XSHE:000001"],
+          asOf: "2026-08-21T15:00:00+08:00",
+          modifiedAt: "2026-08-21T15:05:00Z",
+          schemaVersion: 5,
+          resultStatus: "completed",
+          horizonDecisions: {
+            shortTerm: { direction: "positive", action: "conditional_participation", validUntil: "2026-09-01T15:00:00+08:00", isExpired: false },
+            mediumTerm: { direction: "neutral", action: "wait", validUntil: "2026-10-01T15:00:00+08:00", isExpired: false },
+            longTerm: { direction: "negative", action: "wait", validUntil: "2027-01-01T15:00:00+08:00", isExpired: false },
+          },
+          researchCutoffAt: "2026-08-21T15:00:00+08:00",
+          marketAsOf: "2026-08-21T15:00:00+08:00",
+          generatedAt: "2026-08-21T15:05:00+08:00",
+          isExpired: false,
+          hasExpiredHorizon: false,
+          stance: null,
+          dataQuality: null,
+        },
+      },
+    ]);
+    fetchStockReport.mockImplementation(async (_token: string, reportId: string) => ({
+      report: reportId === "stock_report_v5"
+        ? v5Report
+        : { report_id: "stock_report_a", kind: "deep_research" },
+      markdown: "",
+    }));
+
+    render(<StockView />);
+    fireEvent.click(await screen.findByText("平安银行"));
+    fireEvent.click(screen.getByRole("tab", { name: "专家团论证" }));
+
+    expect(await screen.findByTestId("expert-panel")).toBeInTheDocument();
+    expect(screen.getByTestId("expert-role-list")).toHaveTextContent("技术分析师");
+    expect(screen.getByTestId("expert-role-list")).toHaveTextContent("主审");
+    expect(screen.queryByTestId("decision-radar-prototype-panel")).not.toBeInTheDocument();
+    expect(screen.queryByText("示例数据，仅用于原型展示")).not.toBeInTheDocument();
   });
 
   it("confirms before starting a new run when a report already exists", async () => {
     render(<StockView />);
-    const button = await screen.findByRole("button", { name: "重新投研" });
+    await screen.findAllByText("贵州茅台");
+    fireEvent.click(screen.getByRole("tab", { name: "专家团论证" }));
+    const button = await screen.findByRole("button", { name: "重新论证" });
     fireEvent.click(button);
 
-    expect(await screen.findByText("重新研究贵州茅台？")).toBeTruthy();
+    expect(await screen.findByText("重新论证贵州茅台？")).toBeTruthy();
     expect(runWorkflow).not.toHaveBeenCalled();
-    fireEvent.click(screen.getByRole("button", { name: "确认重新投研" }));
+    fireEvent.click(screen.getByRole("button", { name: "确认重新论证" }));
     await waitFor(() => expect(preflightStockResearch).toHaveBeenCalledWith("XSHG:600519", "贵州茅台"));
     await waitFor(() =>
       expect(runWorkflow).toHaveBeenCalledWith(STOCK_ROOM_CHAT_ID, {
@@ -611,8 +846,8 @@ describe("StockView", () => {
     act(() => {
       runUpdatedHandler?.(STOCK_ROOM_CHAT_ID, makeRunPush());
     });
-    fireEvent.click(await screen.findByRole("tab", { name: "投研" }));
-    expect(await screen.findByText("技术分析师")).toBeTruthy();
+    fireEvent.click(await screen.findByRole("tab", { name: "专家团论证" }));
+    expect(await screen.findByTestId("expert-role-technical")).toBeTruthy();
     // A run push from another room must not leak into the stock view.
     act(() => {
       runUpdatedHandler?.("websocket:other", {
@@ -635,12 +870,8 @@ describe("StockView", () => {
     render(<StockView autoRunSymbol="XSHG:600519" onConsumeAutoRun={consumed} />);
     await screen.findAllByText("贵州茅台");
     expect(consumed).toHaveBeenCalledTimes(1);
-    await waitFor(() => expect(preflightStockResearch).toHaveBeenCalledWith("XSHG:600519", "贵州茅台"));
-    await waitFor(() => expect(runWorkflow).toHaveBeenCalledTimes(1));
-    expect(runWorkflow).toHaveBeenCalledWith(STOCK_ROOM_CHAT_ID, {
-      symbols: ["XSHG:600519"],
-      evidence_context_id: "ctx_preflightabc123",
-    });
+    await waitFor(() => expect(preflightStockResearch).not.toHaveBeenCalled());
+    expect(runWorkflow).not.toHaveBeenCalled();
     expect(screen.queryByRole("alertdialog")).not.toBeInTheDocument();
   });
 
@@ -651,17 +882,19 @@ describe("StockView", () => {
       runUpdatedHandler?.(STOCK_ROOM_CHAT_ID, makeRunPush());
     });
     await waitFor(() =>
-      expect(screen.getByRole("tab", { name: "投研" })).toHaveAttribute("aria-selected", "true"),
+      expect(screen.getByRole("tab", { name: "专家团论证" })).toHaveAttribute("aria-selected", "true"),
     );
-    expect(await screen.findByText("技术分析师")).toBeTruthy();
+    expect(await screen.findByTestId("expert-role-technical")).toBeTruthy();
   });
 
   it("opens the complete research process from the central research tab", async () => {
     render(<StockView />);
     await screen.findAllByText("贵州茅台");
-    fireEvent.click(screen.getByRole("tab", { name: "投研" }));
-    expect(screen.getByText("尚无投研结论")).toBeTruthy();
-    expect(screen.getByRole("button", { name: "重新投研" })).toBeTruthy();
+    fireEvent.click(await screen.findByText("平安银行"));
+    fireEvent.click(screen.getByRole("tab", { name: "AI诊股" }));
+    expect(screen.getByText("尚未生成 AI 诊股结论")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "开始AI诊股" })).toBeTruthy();
+    expect(screen.queryByTestId("decision-radar-prototype-panel")).not.toBeInTheDocument();
     expect(screen.queryByText("研究委员会主席")).toBeNull();
     expect(screen.queryByRole("button", { name: "查看完整观点" })).toBeNull();
   });
@@ -684,8 +917,8 @@ describe("StockView", () => {
         ],
       });
     });
-    fireEvent.click(await screen.findByRole("tab", { name: "投研" }));
-    expect(await screen.findByTestId("research-step-technical")).toHaveTextContent("正在核对价格与趋势");
+    fireEvent.click(await screen.findByRole("tab", { name: "专家团论证" }));
+    expect(await screen.findByTestId("expert-role-technical")).toHaveTextContent("进行中");
   });
 
   it("expands a completed research card on demand", async () => {
@@ -701,8 +934,8 @@ describe("StockView", () => {
       markdown: "# 贵州茅台研究报告",
     });
     render(<StockView />);
-    fireEvent.click(await screen.findByRole("tab", { name: "投研" }));
-    expect(screen.queryByRole("button", { name: "查看完整观点" })).toBeNull();
+    fireEvent.click(await screen.findByRole("tab", { name: "专家团论证" }));
+    expect(screen.getByTestId("expert-panel")).toBeInTheDocument();
   });
 
   it("shows a visible failure when evidence preparation stops a run", async () => {
@@ -715,8 +948,8 @@ describe("StockView", () => {
         steps: { technical: { status: "queued" } },
       });
     });
-    fireEvent.click(screen.getByRole("tab", { name: "投研" }));
-    expect(await screen.findByText(/投研运行失败；已完成的分析仍保留/)).toBeTruthy();
+    fireEvent.click(screen.getByRole("tab", { name: "专家团论证" }));
+    expect(await screen.findByText(/本次专家团论证失败/)).toBeTruthy();
   });
 
   it("loads the kline of the newly selected instrument", async () => {
@@ -815,7 +1048,8 @@ describe("StockView", () => {
       "行情",
       "基本面",
       "资讯公告",
-      "投研",
+      "AI诊股",
+      "专家团论证",
     ]);
   });
 
@@ -835,29 +1069,17 @@ describe("StockView", () => {
       markdown: "# 贵州茅台研究报告",
     });
     render(<StockView />);
-    fireEvent.click(await screen.findByRole("tab", { name: "投研" }));
-
-    expect(await screen.findByText("研究总览")).toBeTruthy();
-    expect(screen.getAllByText("研究倾向").length).toBeGreaterThan(0);
-    expect(screen.getAllByText("看多").length).toBeGreaterThan(0);
-    expect(screen.getByText("截至日期")).toBeTruthy();
-    expect(screen.getAllByText("2026-08-14").length).toBeGreaterThan(0);
-    expect(screen.getByText("数据质量")).toBeTruthy();
-    expect(screen.getByText("数据完整")).toBeTruthy();
-    expect(screen.getByText("主审摘要")).toBeTruthy();
-    expect(screen.getByText("结论失效条件")).toBeTruthy();
-    expect(screen.getAllByText("该历史报告未提供判断条件").length).toBeGreaterThan(0);
-    expect(screen.queryByText(/结构化条件/)).not.toBeInTheDocument();
-    const questions = screen.getByText("尚未确认（1）");
-    expect((questions.closest("details") as HTMLDetailsElement).open).toBe(false);
-    expect(screen.getByRole("button", { name: "查看完整证据链" })).toBeTruthy();
+    fireEvent.click(await screen.findByRole("tab", { name: "专家团论证" }));
+    expect(await screen.findByTestId("expert-panel")).toBeInTheDocument();
+    expect(screen.getByTestId("expert-role-list")).toHaveTextContent("主审");
+    expect(screen.queryByTestId("ai-diagnosis-result")).not.toBeInTheDocument();
   });
 
   it("restores an active run on mount via getWorkflowRun", async () => {
     getWorkflowRun.mockResolvedValueOnce(makeRunPush());
     render(<StockView />);
-    fireEvent.click(await screen.findByRole("tab", { name: "投研" }));
-    expect(await screen.findByText("技术分析师")).toBeTruthy();
+    fireEvent.click(await screen.findByRole("tab", { name: "专家团论证" }));
+    expect(await screen.findByTestId("expert-role-technical")).toBeTruthy();
     expect(getWorkflowRun).toHaveBeenCalledWith(STOCK_ROOM_CHAT_ID);
   });
 
@@ -883,8 +1105,8 @@ describe("StockView", () => {
     ]);
     render(<StockView />);
     await screen.findAllByText("贵州茅台");
-    fireEvent.click(screen.getByRole("tab", { name: "投研" }));
-    expect(screen.getByRole("tab", { name: "投研" })).toHaveAttribute("aria-selected", "true");
+    fireEvent.click(screen.getByRole("tab", { name: "AI诊股" }));
+    expect(screen.getByRole("tab", { name: "AI诊股" })).toHaveAttribute("aria-selected", "true");
     expect(screen.queryByRole("button", { name: /完整投研/ })).not.toBeInTheDocument();
   });
 
@@ -909,7 +1131,7 @@ describe("StockView", () => {
       },
     ]);
     render(<StockView />);
-    fireEvent.click(await screen.findByRole("tab", { name: "投研" }));
+    fireEvent.click(await screen.findByRole("tab", { name: "专家团论证" }));
     const history = await screen.findByText("历史版本（1）");
     expect((history.closest("details") as HTMLDetailsElement).open).toBe(false);
     fireEvent.click(history);
@@ -939,7 +1161,7 @@ describe("StockView", () => {
       modifiedAt: "2026-08-14T07:10:00Z",
     }]);
     render(<StockView />);
-    fireEvent.click(await screen.findByRole("tab", { name: "投研" }));
+    fireEvent.click(await screen.findByRole("tab", { name: "专家团论证" }));
     const history = await screen.findByText("历史版本（1）");
     fireEvent.click(history);
     fireEvent.click(await screen.findByRole("button", { name: /深度投研 看多/ }));
@@ -969,7 +1191,7 @@ describe("StockView", () => {
       modifiedAt: "2026-08-14T07:10:00Z",
     }]);
     render(<StockView />);
-    fireEvent.click(await screen.findByRole("tab", { name: "投研" }));
+    fireEvent.click(await screen.findByRole("tab", { name: "专家团论证" }));
     fireEvent.click(await screen.findByText("历史版本（1）"));
     const card = await screen.findByRole("button", { name: /深度投研 看多/ });
 
@@ -1262,5 +1484,76 @@ describe("StockView", () => {
     await waitFor(() =>
       expect(fetchStockQuotes.mock.calls.length).toBeGreaterThan(1),
     );
+  });
+
+  it("starts AI diagnosis only in stock_ai_diagnosis and keeps the expert workflow idle", async () => {
+    render(<StockView />);
+    await screen.findAllByText("贵州茅台");
+    fireEvent.click(screen.getByRole("tab", { name: "AI诊股" }));
+    fireEvent.click(screen.getByRole("button", { name: "开始AI诊股" }));
+    await waitFor(() => expect(runWorkflow).toHaveBeenCalledWith(STOCK_DIAGNOSIS_ROOM_CHAT_ID, expect.objectContaining({ symbols: ["XSHG:600519"] })));
+    expect(runWorkflow).not.toHaveBeenCalledWith(STOCK_ROOM_CHAT_ID, expect.anything());
+  });
+
+  it("starts the six-agent expert workflow only after its own tab action", async () => {
+    render(<StockView />);
+    await screen.findAllByText("贵州茅台");
+    expect(runWorkflow).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByRole("tab", { name: "专家团论证" }));
+    fireEvent.click(screen.getByRole("button", { name: /启动专家团论证|重新论证/ }));
+    const confirm = screen.queryByRole("button", { name: "确认重新论证" });
+    if (confirm) fireEvent.click(confirm);
+    await waitFor(() => expect(runWorkflow).toHaveBeenCalledWith(STOCK_ROOM_CHAT_ID, expect.objectContaining({ symbols: ["XSHG:600519"] })));
+    expect(runWorkflow).not.toHaveBeenCalledWith(STOCK_DIAGNOSIS_ROOM_CHAT_ID, expect.anything());
+  });
+
+  it("renders a successful StockDiagnosisV1 result and keeps deep history in the expert tab", async () => {
+    fetchStockDiagnoses.mockResolvedValueOnce([{ diagnosisId: "diagnosis_12345678", workflowId: "stock-ai-diagnosis", status: "succeeded", instrument: { symbol: "600519", exchange: "XSHG" } }]);
+    fetchStockDiagnosis.mockResolvedValueOnce({ report: makeDiagnosisReport(), markdown: "" });
+    fetchStockReports.mockResolvedValueOnce([{ reportId: "deep-1", runId: "deep-run", kind: "deep_research", instrument: { instrumentId: "XSHG:600519" }, symbols: ["XSHG:600519"], asOf: "2026-08-25", modifiedAt: "2026-08-25", schemaVersion: 5, resultStatus: "completed", horizonDecisions: {} }]);
+    render(<StockView />);
+    await screen.findAllByText("贵州茅台");
+    fireEvent.click(screen.getByRole("tab", { name: "AI诊股" }));
+    expect(await screen.findByTestId("ai-diagnosis-result")).toHaveTextContent("四步决策依据");
+    expect(screen.queryByText("深度投研")).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole("tab", { name: "专家团论证" }));
+    expect(await screen.findByText(/专家团历史记录/)).toBeInTheDocument();
+  });
+
+  it("retries initial diagnosis loading and shows the latest result without starting a new run", async () => {
+    fetchStockDiagnoses
+      .mockRejectedValueOnce(new Error("service warming up"))
+      .mockResolvedValueOnce([{ diagnosisId: "diagnosis_12345678", workflowId: "stock-ai-diagnosis", status: "succeeded", instrument: { symbol: "600519", exchange: "XSHG" } }]);
+    fetchStockDiagnosis.mockResolvedValueOnce({ report: makeDiagnosisReport(), markdown: "" });
+
+    render(<StockView />);
+    await screen.findAllByText("贵州茅台");
+    fireEvent.click(screen.getByRole("tab", { name: "AI诊股" }));
+
+    expect(await screen.findByTestId("ai-diagnosis-result")).toBeInTheDocument();
+    expect(fetchStockDiagnoses).toHaveBeenCalledTimes(2);
+    expect(runWorkflow).not.toHaveBeenCalled();
+  });
+
+  it("cancels AI and expert runs through their own workflow room", async () => {
+    render(<StockView />);
+    await screen.findAllByText("贵州茅台");
+    const baseRun = makeRunPush();
+    const aiRun = { ...baseRun, id: "diagnosis-run", roomId: STOCK_DIAGNOSIS_ROOM_CHAT_ID, workflow: { ...baseRun.workflow, roomId: STOCK_DIAGNOSIS_ROOM_CHAT_ID }, inputs: { symbols: ["XSHG:600519"] } } as WorkflowRun;
+    act(() => runUpdatedHandler?.(STOCK_DIAGNOSIS_ROOM_CHAT_ID, aiRun));
+    cancelWorkflowRun.mockResolvedValueOnce("diagnosis-run");
+    getWorkflowRun.mockResolvedValueOnce({ ...aiRun, status: "cancelled" });
+    fireEvent.click(await screen.findByRole("button", { name: "取消AI诊股" }));
+    await waitFor(() => expect(cancelWorkflowRun).toHaveBeenCalledWith(STOCK_DIAGNOSIS_ROOM_CHAT_ID, "diagnosis-run"));
+    cleanup();
+    render(<StockView />);
+    await screen.findAllByText("贵州茅台");
+    const expertRun = makeRunPush();
+    act(() => runUpdatedHandler?.(STOCK_ROOM_CHAT_ID, expertRun));
+    cancelWorkflowRun.mockResolvedValueOnce("run_1");
+    getWorkflowRun.mockResolvedValueOnce({ ...expertRun, status: "cancelled" });
+    fireEvent.click(screen.getByRole("tab", { name: "专家团论证" }));
+    fireEvent.click(await screen.findByRole("button", { name: "取消论证" }));
+    await waitFor(() => expect(cancelWorkflowRun).toHaveBeenCalledWith(STOCK_ROOM_CHAT_ID, "run_1"));
   });
 });

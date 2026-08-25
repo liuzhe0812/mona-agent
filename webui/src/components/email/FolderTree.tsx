@@ -268,8 +268,8 @@ export function FolderTree({ gatewayUrl, view = "mail", onViewChange }: FolderTr
   };
 
   return (
-    <div className="flex h-full flex-col bg-sidebar">
-      <div className="flex h-10 shrink-0 items-center justify-between border-b border-border bg-sidebar-accent/40 px-3">
+    <div className="flex h-full flex-col bg-card">
+      <div className="flex h-10 shrink-0 items-center justify-between border-b border-border bg-card px-3">
         <span className="text-caption font-semibold text-foreground">邮箱</span>
         <Button
           type="button"
@@ -584,7 +584,7 @@ export function FolderTree({ gatewayUrl, view = "mail", onViewChange }: FolderTr
 
       {/* 底部导航：通讯录入口 */}
       {onViewChange && (
-        <div className="shrink-0 border-t border-border bg-sidebar-accent/30 p-1.5">
+        <div className="shrink-0 border-t border-border bg-card p-1.5">
           <Button
             type="button"
             variant="ghost"

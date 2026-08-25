@@ -256,7 +256,7 @@ export function EmailClientView({ onOpenSubscribe }: { onOpenSubscribe?: () => v
   return (
     <div className="flex h-full flex-col overflow-hidden bg-background">
       {/* Foxmail 风格工具栏 */}
-      <div className="flex h-9 shrink-0 items-center gap-1 border-b border-border bg-muted/30 px-2">
+      <div className="flex h-9 shrink-0 items-center gap-1 border-b border-border bg-card px-2">
         <ToolbarButton
           icon={Inbox}
           label="收取"
@@ -347,7 +347,7 @@ export function EmailClientView({ onOpenSubscribe }: { onOpenSubscribe?: () => v
               <MailView />
             </div>
             {licenseActive && agentPanelVisible && (
-              <div className="w-[320px] shrink-0 border-l border-border bg-muted/20">
+              <div className="w-[320px] shrink-0 border-l border-border bg-card">
                 <MailAgentPanel />
               </div>
             )}

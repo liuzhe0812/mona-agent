@@ -31,7 +31,7 @@ export function NewTabPage({
   };
 
   return (
-    <div className="flex h-full min-h-0 items-center justify-center overflow-auto bg-background px-6 py-10">
+    <div className="flex h-full min-h-0 items-center justify-center overflow-auto bg-editor-surface px-6 py-10">
       <div className="flex w-full max-w-2xl flex-col items-center text-center">
         <AgentLogo state="welcome" className="h-16 w-16" />
         <h1 className="mt-5 text-2xl font-medium tracking-tight text-foreground">
@@ -52,7 +52,7 @@ export function NewTabPage({
             onChange={(event) => setQuery(event.target.value)}
             placeholder={t("browser.newTab.placeholder")}
             aria-label={t("browser.newTab.placeholder")}
-            className="h-12 rounded-2xl border-border/70 bg-card pl-12 pr-4 text-base shadow-sm focus-visible:ring-2"
+            className="h-12 rounded-xl border-border/70 bg-card pl-12 pr-4 text-base focus-visible:ring-2"
           />
         </form>
 
@@ -60,7 +60,7 @@ export function NewTabPage({
           <Button
             type="button"
             variant="outline"
-            className="h-11 justify-center gap-2 rounded-xl"
+            className="h-11 justify-center gap-2 rounded-lg"
             onClick={onOpenHistory}
             disabled={!onOpenHistory}
           >
@@ -70,7 +70,7 @@ export function NewTabPage({
           <Button
             type="button"
             variant="outline"
-            className="h-11 justify-center gap-2 rounded-xl"
+            className="h-11 justify-center gap-2 rounded-lg"
             onClick={onOpenDownloads}
             disabled={!onOpenDownloads}
           >

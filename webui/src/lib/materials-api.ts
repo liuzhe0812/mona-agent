@@ -43,6 +43,8 @@ export interface MaterialsFileEntry {
   fileCount?: number;
   /** 提取状态（仅 file） */
   extractStatus?: MaterialsExtractStatus;
+  /** Wiki 入库状态（仅 file） */
+  ingestStatus?: "not_ingested" | "ingested" | "stale";
 }
 
 export interface MaterialsTextContent {
@@ -98,7 +100,7 @@ export interface MaterialsStatus {
 
 export interface MaterialsLintIssue {
   /** 规则 ID：frontmatter-schema / broken-wikilink / dangling-source /
-   *  duplicate-title / orphan-page / thin-page / text-extract-error */
+   *  duplicate-title / orphan-page / thin-page / text-extract-error / stale-page */
   rule: string;
   severity: "error" | "warning";
   /** wiki 问题为相对 wiki/ 的路径；提取问题为 text/ 前缀路径 */

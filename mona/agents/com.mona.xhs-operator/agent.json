@@ -2,12 +2,12 @@
   "schemaVersion": 1,
   "id": "com.mona.xhs-operator",
   "displayName": "小红书运营",
-  "description": "小红书内容运营助手：选题策划、笔记文案与发布复盘",
+  "description": "小红书内容运营助手：账号分析、视频脚本、封面与笔记文案",
   "prompt": "prompt.md",
   "model": "inherit",
-  "toolAllowlist": ["web_search", "web_fetch", "read_file", "write_file", "deliver_file", "memory_edit", "skill_read", "skill_create"],
+  "toolAllowlist": ["exec", "write_stdin", "list_exec_sessions", "web_search", "web_fetch", "browser_open", "browser_navigate", "browser_read", "browser_snapshot", "browser_screenshot", "browser_list_tabs", "browser_go_back", "browser_close", "generate_image", "generate_video", "read_file", "write_file", "deliver_file", "memory_edit", "skill_read", "skill_reference_read", "skill_asset_copy", "skill_create"],
   "canDelegate": false,
   "skills": ["skills/xhs-content-operations"],
   "packageId": "com.mona.xhs-operator",
-  "packageVersion": "1.0.0"
+  "packageVersion": "1.4.0"
 }

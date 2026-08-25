@@ -650,7 +650,7 @@ export function PptMakerView() {
       <div className="flex min-h-0 flex-1">
         {sidebarCollapsed ? (
           <TooltipProvider delayDuration={100}>
-            <div className="flex w-12 shrink-0 flex-col items-center border-r border-border/70 bg-muted/30 py-3">
+            <div className="flex w-12 shrink-0 flex-col items-center border-r border-border/70 bg-card py-3">
               <Tooltip>
                 <TooltipTrigger asChild>
                   <button
@@ -697,13 +697,13 @@ export function PptMakerView() {
           </TooltipProvider>
         ) : (
           <aside
-            className="relative flex shrink-0 flex-col border-r border-border/70 bg-muted/30"
+            className="relative flex shrink-0 flex-col border-r border-border/70 bg-card"
             style={{ width: sidebarWidth }}
           >
             {/* 顶部标题栏：模块标识 + 收起按钮 */}
             <div className="flex shrink-0 items-center justify-between border-b border-border/70 px-3 py-2.5">
               <div className="flex items-center gap-2">
-                <div className="flex h-6 w-6 items-center justify-center rounded-md bg-primary/10 text-primary">
+                <div className="flex h-6 w-6 items-center justify-center rounded-md bg-muted text-foreground">
                   <FolderOpen className="h-3.5 w-3.5" />
                 </div>
                 <span className="text-[13px] font-semibold text-foreground">PPT</span>
@@ -772,7 +772,7 @@ export function PptMakerView() {
                     <div
                       className={cn(
                         "mx-2 h-px w-5",
-                        getStepStatus(i - 1, phase) !== "pending" ? "bg-primary/40" : "bg-border",
+                        getStepStatus(i - 1, phase) !== "pending" ? "bg-foreground/30" : "bg-border",
                       )}
                     />
                   )}
@@ -839,7 +839,7 @@ export function PptMakerView() {
                 />
               }
             >
-              <div className="flex min-h-0 flex-1 items-center justify-center bg-muted/20">
+              <div className="flex min-h-0 flex-1 items-center justify-center bg-editor-surface">
                 <div className="flex flex-col items-center gap-3 text-[13px] text-muted-foreground">
                   <Loader2 className="h-6 w-6 animate-spin text-primary" />
                   <span className="font-medium">正在处理</span>
@@ -903,7 +903,7 @@ export function PptMakerView() {
                 />
               }
             >
-              <div className="flex min-h-0 flex-1 items-center justify-center bg-muted/20">
+              <div className="flex min-h-0 flex-1 items-center justify-center bg-editor-surface">
                 <div className="flex flex-col items-center gap-3 text-[13px] text-muted-foreground">
                   <Loader2 className="h-6 w-6 animate-spin text-primary" />
                   <span className="font-medium">正在处理</span>

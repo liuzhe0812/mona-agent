@@ -106,6 +106,8 @@ interface ChatListProps {
   onRemoveProject?: (workspace: string) => void;
   /** Called when the user creates a new task/chat in a project. */
   onCreateTask?: (workspace: string) => void;
+  projectNames?: Record<string, string>;
+  onRequestProjectRename?: (workspace: string, label: string) => void;
   /** Opens the selected Agent's management surface. */
   onSelectAgent?: (agentId: string) => void;
   /** Starts a new direct conversation from an Agent group header. */
@@ -138,6 +140,10 @@ export const ChatList = memo(function ChatList({
   onStartDirect,
   onNewRoom,
   onCreateTask,
+  onRemoveProject,
+  projectNames = {},
+  onRequestProjectRename,
+  onOpenProjectFolder,
   searchMode = false,
 }: ChatListProps) {
   const [visibleLimit, setVisibleLimit] = useState(INITIAL_VISIBLE_SESSIONS);
@@ -326,15 +332,27 @@ export const ChatList = memo(function ChatList({
             ? projectExpanded
             : !collapsible || expandedGroups.has(groupKey);
           const agent = group.agentId ? agentsById.get(group.agentId) : null;
+          const projectLabel = group.workspace
+            ? projectNames[group.workspace]?.trim() || group.label
+            : group.label;
+          const allProjectPinned = group.kind === "project"
+            && group.sessions.length > 0
+            && group.sessions.every((session) => pinned.has(session.key));
+          const isProjectGroup = group.kind === "project" && Boolean(group.workspace);
           return (
-          <section key={groupKey} aria-label={group.label}>
-            <div className="group/header flex min-h-9 items-center gap-1 px-3 pb-1 pt-1 text-caption font-medium text-muted-foreground/75">
+          <section key={groupKey} aria-label={projectLabel}>
+            <ContextMenu>
+              <ContextMenuTrigger asChild disabled={!isProjectGroup}>
+            <div className={cn(
+              "group/header flex min-h-9 items-center gap-1 px-3 pb-1 pt-1 text-caption font-medium text-muted-foreground/75",
+              group.kind === "agent" && "mx-2 rounded-md transition-colors hover:bg-[hsl(var(--sidebar-hover-surface)/0.04)] hover:text-sidebar-foreground",
+            )}>
               {group.kind === "agent" && group.agentId ? (
                 <button
                   type="button"
                   onClick={() => toggleGroup(groupKey)}
                   aria-expanded={expanded}
-                  className="flex min-w-0 flex-1 items-center gap-1 rounded-md px-1 py-1 text-left hover:bg-[hsl(var(--sidebar-hover-surface)/0.04)] hover:text-sidebar-foreground"
+                  className="flex min-w-0 flex-1 items-center gap-1 rounded-md px-1 py-1 text-left"
                   aria-label={group.label}
                 >
                   {expanded ? <ChevronDown className="h-3.5 w-3.5 shrink-0" /> : <ChevronRight className="h-3.5 w-3.5 shrink-0" />}
@@ -356,6 +374,7 @@ export const ChatList = memo(function ChatList({
                     collapsible && "hover:bg-[hsl(var(--sidebar-hover-surface)/0.04)] hover:text-sidebar-foreground",
                   )}
                   aria-expanded={collapsible ? expanded : undefined}
+                  aria-label={group.kind === "project" ? projectLabel : undefined}
                 >
                   {collapsible ? (
                     expanded ? <ChevronDown className="h-3.5 w-3.5 shrink-0" /> : <ChevronRight className="h-3.5 w-3.5 shrink-0" />
@@ -366,7 +385,7 @@ export const ChatList = memo(function ChatList({
                       : <Folder className="h-3.5 w-3.5 shrink-0" />
                   ) : null}
                   {group.kind === "rooms" ? <UsersRound className="h-3.5 w-3.5 shrink-0" /> : null}
-                  <span className="min-w-0 flex-1 truncate">{group.label}</span>
+                  <span className="min-w-0 flex-1 truncate">{projectLabel}</span>
                 </button>
               )}
               {group.kind === "agent" && group.agentId && agent?.enabled !== false ? (
@@ -413,6 +432,35 @@ export const ChatList = memo(function ChatList({
                 </button>
               ) : null}
             </div>
+              </ContextMenuTrigger>
+              {group.kind === "project" && group.workspace ? (
+                <ContextMenuContent className="w-52" onCloseAutoFocus={(event) => event.preventDefault()}>
+                  <ContextMenuItem onSelect={() => {
+                    const shouldPin = !allProjectPinned;
+                    for (const session of group.sessions) {
+                      if (pinned.has(session.key) !== shouldPin) onTogglePin(session.key);
+                    }
+                  }}>
+                    {allProjectPinned ? <PinOff className="mr-2 h-4 w-4" /> : <Pin className="mr-2 h-4 w-4" />}
+                    {allProjectPinned ? "取消置顶" : "置顶"}
+                  </ContextMenuItem>
+                  <ContextMenuItem onSelect={() => onRequestProjectRename?.(group.workspace!, projectLabel)}>
+                    <Pencil className="mr-2 h-4 w-4" />重命名
+                  </ContextMenuItem>
+                  <ContextMenuItem onSelect={() => onOpenProjectFolder?.(group.workspace!)}>
+                    <FolderOpen className="mr-2 h-4 w-4" />在资源管理器中打开
+                  </ContextMenuItem>
+                  <ContextMenuItem onSelect={() => {
+                    for (const session of group.sessions) onToggleArchive(session.key);
+                  }}>
+                    <Archive className="mr-2 h-4 w-4" />归档项目
+                  </ContextMenuItem>
+                  <ContextMenuItem onSelect={() => onRemoveProject?.(group.workspace!)} className="text-destructive focus:text-destructive">
+                    <Trash2 className="mr-2 h-4 w-4" />移除项目
+                  </ContextMenuItem>
+                </ContextMenuContent>
+              ) : null}
+            </ContextMenu>
             {expanded ? (
             <ul>
               {group.sessions.map((s) => {

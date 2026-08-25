@@ -145,7 +145,7 @@ export function DayPlanPanel({
   };
 
   return (
-    <div className="flex flex-col h-full">
+    <div className="flex h-full flex-col bg-card">
       {/* Date header */}
       <div className="px-4 py-3 border-b border-border/40">
         <div className="text-body font-semibold">

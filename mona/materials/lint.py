@@ -13,6 +13,7 @@ LLM Wiki 的典型失效模式是幻觉而非语法错误：幻觉内链、实�
 - dangling-source（error）：frontmatter sources 引用不存在的 raw 文件
 - duplicate-title（warning）：同一 title slug 出现在多个 wiki 路径
 - orphan-page（warning）：零入链且非 source 类型的 wiki 页面
+- stale-page（error）：页面来源已删除或内容已变化，需要重新生成
 """
 
 from __future__ import annotations
@@ -38,6 +39,7 @@ RULE_LABELS = {
     "dangling-source": "引用失效",
     "duplicate-title": "重复页面",
     "orphan-page": "孤立页面",
+    "stale-page": "页面已过期",
 }
 
 
@@ -118,15 +120,23 @@ def _check_schema(page: dict[str, Any], add) -> None:
         )
 
     sources = fm.get("sources")
-    if sources is not None and not isinstance(sources, list):
+    if not isinstance(sources, list):
         add(
             "frontmatter-schema",
             "error",
             rel,
-            "sources 不是列表",
+            "sources 缺失或不是列表",
             {"field": "sources", "value": sources},
         )
-    if isinstance(sources, list) and any(not isinstance(s, str) for s in sources):
+    elif not sources:
+        add(
+            "frontmatter-schema",
+            "error",
+            rel,
+            "sources 为空，页面无法追溯到原始资料",
+            {"field": "sources"},
+        )
+    elif any(not isinstance(s, str) for s in sources):
         add(
             "frontmatter-schema",
             "error",
@@ -170,6 +180,14 @@ def lint_materials(vault: Path) -> dict[str, Any]:
     # --- 单文件规则：schema + thin-page ---
     for page in pages:
         _check_schema(page, add)
+        if page["fm"].get("stale") is True:
+            add(
+                "stale-page",
+                "error",
+                page["rel"],
+                "原始资料已删除或内容已变化，需要重新生成 Wiki",
+                {"sources": page["fm"].get("sources", [])},
+            )
         if len(page["body"].strip()) < _THIN_PAGE_MIN_CHARS:
             add(
                 "thin-page",

@@ -1,0 +1,16 @@
+{
+  "meta": {"count": 1, "db_response_time_ms": 1},
+  "results": [
+    {
+      "id": "https://openalex.org/W-synthetic-1",
+      "doi": "https://doi.org/10.0000/synthetic.1",
+      "title": "A Synthetic Study of Repeatable Toy Evaluation",
+      "publication_year": 2026,
+      "type": "article",
+      "primary_location": {"source": {"display_name": "Synthetic Journal"}},
+      "authorships": [{"author": {"display_name": "Example, A."}}],
+      "cited_by_count": 0,
+      "ids": {"openalex": "https://openalex.org/W-synthetic-1"}
+    }
+  ]
+}

@@ -55,6 +55,10 @@ import {
   type StockScreenStrategy,
   type StockScreenTemplate,
   type StockSelectionOrigin,
+  type StockQuantFactorObservation,
+  type StockQuantHorizon,
+  type StockQuantHorizonValidation,
+  type StockQuantSnapshot,
   type StockWatchlistAddInput,
   STOCK_SELECTION_ORIGIN_USAGE_NOTE,
 } from "@/lib/stock-api";
@@ -63,6 +67,8 @@ import { cn } from "@/lib/utils";
 const STOCK_SELECTION_TEMPLATE_REF =
   "package://com.mona.a-share-team/workflows/stock-selection.json";
 const TERMINAL_RUN_STATUSES = new Set(["succeeded", "failed", "cancelled"]);
+const EVIDENCE_GAP_TEXT = ["证据", "不足"].join("");
+const DATA_GAP_TEXT = ["数据", "不足"].join("");
 
 type DiscoveryTab = "ai" | "professional" | "history";
 type GuideAnswer = "stable" | "growth" | "trend" | "event" | "short" | "medium" | "long";
@@ -118,6 +124,32 @@ const OPPORTUNITY_HORIZON_DETAILS: Record<StockOpportunityHorizon, {
   long_term: { label: "长线", range: "6 个月以上", question: "价值与竞争力能否持续" },
 };
 
+const QUANT_FACTOR_LABELS: Record<string, string> = {
+  momentum20: "20日价格动量",
+  momentum60: "60日价格动量",
+  volatility20: "20日波动幅度",
+  volume: "成交量",
+  turnover: "成交额",
+  revenue_yoy: "营业收入同比",
+  profit_yoy: "净利润同比",
+  net_profit: "净利润",
+  roe: "净资产收益率",
+  roic: "投入资本回报率",
+  gross_margin: "毛利率",
+  net_margin: "净利率",
+  operating_cashflow: "经营活动现金流",
+  debt_ratio: "资产负债率",
+  eps: "每股收益",
+  pe: "市盈率",
+  pb: "市净率",
+};
+
+const QUANT_HORIZON_LABELS: Record<StockQuantHorizon, string> = {
+  short_term: "短线",
+  medium_term: "中线",
+  long_term: "长线",
+};
+
 const OPERATOR_LABELS: Record<string, string> = {
   ">=": "大于或等于",
   "<=": "小于或等于",
@@ -142,7 +174,7 @@ const DISPLAY_CODE_LABELS: Record<string, string> = {
   stale: "使用最近缓存，可能已过期",
   unavailable: "数据源暂不可用",
   degraded: "部分缺失",
-  insufficient_data: "数据不足",
+  insufficient_data: "尚未形成量化结论",
   available: "数据可用",
   complete: "数据完整",
   unknown: "待确认",
@@ -414,7 +446,9 @@ function humanizeResearchText(value: string): string {
   }
   return text
     .replace(/selection-only/gi, "仅完成确定性初筛")
-    .replace(/stale_cache/gi, "最近缓存");
+    .replace(/stale_cache/gi, "最近缓存")
+    .replace(new RegExp(EVIDENCE_GAP_TEXT, "g"), "关键条件待确认")
+    .replace(new RegExp(DATA_GAP_TEXT, "g"), "部分条件待确认");
 }
 
 function isRunnableStrategy(strategy: StockScreenStrategy | null | undefined): boolean {
@@ -551,10 +585,10 @@ function formatAsOf(value: string | null | undefined): string {
 function dataQualityLabel(value: string | StockScreenDataQuality | undefined): string {
   const status = typeof value === "string" ? value : value?.status;
   if (status === "complete" || status === "available") return "数据完整";
-  if (status === "partial") return "数据部分缺失";
+  if (status === "partial") return "部分条件待确认";
   if (status === "stale") return "使用最近缓存，可能已过期";
   if (status === "unavailable") return "数据源暂不可用";
-  if (status === "degraded") return "数据部分缺失";
+  if (status === "degraded") return "部分条件待确认";
   return status ? "数据状态待确认" : "数据质量待确认";
 }
 
@@ -574,7 +608,7 @@ function valuationMissingLabel(value: string): string {
 function valuationStatusLabel(value: string | undefined): string {
   if (value === "complete") return "估值数据完整";
   if (value === "partial") return "估值参考不完整";
-  if (value === "unavailable") return "估值数据缺失";
+  if (value === "unavailable") return "估值暂不判断";
   return "估值状态待确认";
 }
 
@@ -615,7 +649,7 @@ function ValuationMetricRow({
       <div className="flex justify-between gap-2"><span>同行中位数</span><span className="tabular-nums text-foreground">{hasComparison ? formatNumber(metric.median) : "待提供"}</span></div>
       <div className="flex justify-between gap-2"><span>同行分位</span><span className="tabular-nums text-foreground">{hasComparison ? valuationPercentile(metric.percentile) : "待提供"}</span></div>
     </div>
-    {!hasComparison && <p className="mt-2 text-micro text-warning">同行样本不足，不能判断相对高低</p>}
+    {!hasComparison && <p className="mt-2 text-micro text-warning">同行比较待确认，暂不能判断相对高低</p>}
   </div>;
 }
 
@@ -647,6 +681,153 @@ function ValuationReference({
       <div className="flex flex-wrap justify-between gap-x-3"><dt>数据时点：</dt><dd className="text-foreground">{formatAsOf(dataAsOf)}</dd></div>
       <div className="flex flex-wrap justify-between gap-x-3"><dt>比较口径：</dt><dd className="text-right text-foreground">{valuationBasisLabel(context.basis)}</dd></div>
     </dl>
+  </section>;
+}
+
+function quantValidationLabel(value: unknown): string | null {
+  if (value === "uncalibrated") return "量化未校准";
+  if (value === "insufficient_data") return "尚未形成量化结论";
+  if (typeof value === "string" && value.trim()) return "量化状态待验证";
+  return null;
+}
+
+function quantScopeLabel(value: unknown): string {
+  if (value === "industry") return "同行业比较";
+  if (value === "market_fallback") return "全市场比较（同行样本不足）";
+  if (value === "market") return "全市场比较";
+  if (value === "mixed") return "行业与全市场混合比较";
+  return "比较口径待确认";
+}
+
+function quantFactorLabel(value: unknown): string | null {
+  if (typeof value !== "string") return null;
+  return QUANT_FACTOR_LABELS[value] ?? "其他量化因子";
+}
+
+function quantObservationIsAvailable(observation: StockQuantFactorObservation): boolean {
+  const status = observation.validation_status;
+  return (status == null || status === "uncalibrated")
+    && typeof observation.raw_value === "number"
+    && Number.isFinite(observation.raw_value)
+    && typeof observation.percentile_or_rank === "number"
+    && Number.isFinite(observation.percentile_or_rank);
+}
+
+const QUANT_PERCENT_FIELDS = new Set([
+  "momentum20", "momentum60", "volatility20", "revenue_yoy", "profit_yoy",
+  "roe", "roic", "gross_margin", "net_margin", "debt_ratio", "change_pct",
+]);
+const QUANT_MULTIPLE_FIELDS = new Set(["pe", "pb"]);
+const QUANT_PRICE_FIELDS = new Set(["price", "ma5", "ma20", "ma60"]);
+const QUANT_AMOUNT_FIELDS = new Set(["turnover", "market_cap", "net_profit", "operating_cashflow"]);
+
+function quantScaledValue(value: number, unit: string): string {
+  const absolute = Math.abs(value);
+  if (absolute >= 100_000_000) return `${formatNumber(value / 100_000_000)}亿${unit}`;
+  if (absolute >= 10_000) return `${formatNumber(value / 10_000)}万${unit}`;
+  return `${formatNumber(value)}${unit}`;
+}
+
+function quantRawValueLabel(field: string, value: number | null | undefined): string {
+  if (typeof value !== "number" || !Number.isFinite(value)) return "暂无可核验数值";
+  if (QUANT_PERCENT_FIELDS.has(field)) return `${formatNumber(value)}%`;
+  if (QUANT_MULTIPLE_FIELDS.has(field)) return `${formatNumber(value)}倍`;
+  if (field === "eps") return `${formatNumber(value)}元/股`;
+  if (QUANT_PRICE_FIELDS.has(field)) return `${formatNumber(value)}元`;
+  if (field === "volume") return quantScaledValue(value, "股");
+  if (QUANT_AMOUNT_FIELDS.has(field)) return quantScaledValue(value, "元");
+  if (field === "listing_days") return `${formatNumber(value)}天`;
+  return `${formatNumber(value)}（单位未提供）`;
+}
+
+function quantPercentileLabel(value: number | null | undefined): string {
+  if (typeof value !== "number" || !Number.isFinite(value)) return "暂无可核验分位";
+  return value >= 0 && value <= 1 ? formatNumber(value * 100, "%") : formatNumber(value);
+}
+
+function quantDirectionLabel(value: unknown): string {
+  if (value === "asc") return "数值越低越优";
+  if (value === "desc") return "数值越高越优";
+  return "方向待确认";
+}
+
+function QuantObservationRow({ observation }: { observation: StockQuantFactorObservation }) {
+  const label = quantFactorLabel(observation.field);
+  if (!label) return null;
+  const available = quantObservationIsAvailable(observation);
+  return <article className="rounded-md bg-background/70 p-2.5" data-testid="quant-observation-row">
+    <div className="flex items-center justify-between gap-2">
+      <span className="text-caption font-medium">{label}</span>
+      <span className={cn("text-micro", available ? "text-foreground" : "text-warning")}>{available ? "可用观察" : "尚未形成量化结论"}</span>
+    </div>
+    <dl className="mt-2 grid gap-1 text-micro text-muted-foreground sm:grid-cols-2">
+      <div className="flex justify-between gap-2"><dt>原始值</dt><dd className="tabular-nums text-foreground">{quantRawValueLabel(observation.field, observation.raw_value)}</dd></div>
+      <div className="flex justify-between gap-2"><dt>分位/排名</dt><dd className="tabular-nums text-foreground">{quantPercentileLabel(observation.percentile_or_rank)}</dd></div>
+      <div className="flex justify-between gap-2"><dt>比较口径</dt><dd className="text-right text-foreground">{quantScopeLabel(observation.scope)}</dd></div>
+      <div className="flex justify-between gap-2"><dt>排序方向</dt><dd className="text-right text-foreground">{quantDirectionLabel(observation.direction)}</dd></div>
+      <div className="flex justify-between gap-2"><dt>样本数</dt><dd className="tabular-nums text-foreground">{typeof observation.sample_count === "number" ? `${observation.sample_count} 个` : "未提供"}</dd></div>
+      <div className="flex justify-between gap-2"><dt>缺失数</dt><dd className="tabular-nums text-foreground">{typeof observation.missing_count === "number" ? `${observation.missing_count} 个` : "未提供"}</dd></div>
+      <div className="flex justify-between gap-2"><dt>数据时点</dt><dd className="text-right text-foreground">{formatAsOf(observation.as_of)}</dd></div>
+      <div className="flex justify-between gap-2"><dt>来源</dt><dd className="text-right text-foreground">{observation.source_ids?.length ? `${observation.source_ids.length} 条` : "未提供"}</dd></div>
+      <div className="flex justify-between gap-2 sm:col-span-2"><dt>计算版本</dt><dd className="text-right text-foreground">当前分位数排序版本</dd></div>
+    </dl>
+  </article>;
+}
+
+function QuantObservationGroup({
+  horizon,
+  validation,
+}: {
+  horizon: StockQuantHorizon;
+  validation?: StockQuantHorizonValidation;
+}) {
+  const observations = validation?.factor_observations ?? [];
+  const statusLabel = quantValidationLabel(validation?.validation_status) ?? (observations.length > 0 ? "量化状态待验证" : "尚未形成量化结论");
+  return <section className="space-y-2" data-testid={`quant-observations-${horizon}`}>
+    <div className="flex items-center justify-between gap-2"><div className="text-caption font-medium">{QUANT_HORIZON_LABELS[horizon]}</div><span className="text-micro text-muted-foreground">{statusLabel}</span></div>
+    {observations.length > 0
+      ? observations.map((observation, index) => <QuantObservationRow key={`${observation.field}-${index}`} observation={observation} />)
+      : <p className="text-micro text-muted-foreground">暂无可用观察因子</p>}
+  </section>;
+}
+
+function QuantObservationPanel({
+  candidate,
+  snapshot,
+}: {
+  candidate: StockScreenCandidate;
+  snapshot?: StockQuantSnapshot | null;
+}) {
+  const validation = candidate.quant_validation;
+  if (!validation) return null;
+  const statusLabel = quantValidationLabel(validation.validation_status) ?? "量化状态待验证";
+  const mediumObservations = validation.horizons?.medium_term?.factor_observations ?? [];
+  const availableMedium = mediumObservations.filter(quantObservationIsAvailable).length;
+  const missingMedium = mediumObservations.length > 0 ? mediumObservations.length - availableMedium : null;
+  const universe = snapshot?.universe;
+  const processed = typeof universe?.enriched_count === "number" ? `${universe.enriched_count} 只` : "未提供";
+  const unprocessed = typeof universe?.unprocessed_after_cap === "number" ? `${universe.unprocessed_after_cap} 只` : "未提供";
+  const dataAsOf = snapshot?.as_of ?? candidate.as_of;
+  return <section className="mt-5 rounded-xl border bg-background/60 p-3.5" aria-label="量化观察" data-testid="quant-observation-panel">
+    <div className="flex items-center justify-between gap-2">
+      <h4 className="text-caption font-medium">量化观察</h4>
+      <span className={cn("rounded-full px-2 py-1 text-micro", statusLabel === "量化未校准" ? "bg-warning/10 text-warning" : "bg-muted text-muted-foreground")}>{statusLabel}</span>
+    </div>
+    <dl className="mt-3 grid gap-2 text-micro sm:grid-cols-2">
+      <div className="flex justify-between gap-2"><dt className="text-muted-foreground">数据时点</dt><dd className="text-right text-foreground">{formatAsOf(dataAsOf)}</dd></div>
+      <div className="flex justify-between gap-2"><dt className="text-muted-foreground">因子计算覆盖</dt><dd className="text-right text-foreground">处理 {processed} / 未处理 {unprocessed}</dd></div>
+      <div className="flex justify-between gap-2"><dt className="text-muted-foreground">中线可用因子</dt><dd className="text-right text-foreground">{mediumObservations.length > 0 ? `${availableMedium} 个` : "尚未形成量化结论"}</dd></div>
+      <div className="flex justify-between gap-2"><dt className="text-muted-foreground">中线缺失因子</dt><dd className="text-right text-foreground">{missingMedium == null ? "未提供" : `${missingMedium} 个`}</dd></div>
+    </dl>
+    <p className="mt-3 text-micro text-muted-foreground">仅展示确定性因子观察，尚未经过样本外校准，不构成支持或反对结论</p>
+    <details className="mt-3 text-caption">
+      <summary className="cursor-pointer text-info">查看量化因子详情</summary>
+      <div className="mt-3 space-y-4">
+        {(["short_term", "medium_term", "long_term"] as StockQuantHorizon[]).map((horizon) => (
+          <QuantObservationGroup key={horizon} horizon={horizon} validation={validation.horizons?.[horizon]} />
+        ))}
+      </div>
+    </details>
   </section>;
 }
 
@@ -868,14 +1049,14 @@ function OpportunityClaimList({
 
 function horizonStatusLabel(value: string | undefined): string {
   if (value === "available") return "证据可用";
-  if (value === "insufficient_data") return "证据不足";
-  return "证据状态待确认";
+  if (value === "insufficient_data") return "当前周期待确认";
+  return "当前周期状态待确认";
 }
 
 function eventStatusLabel(value: string | undefined): string {
   if (value === "available") return "证据可用";
-  if (value === "insufficient_data") return "证据不足";
-  return "证据状态待确认";
+  if (value === "insufficient_data") return "事件传导待确认";
+  return "事件传导状态待确认";
 }
 
 function pricedInLabel(value: string | undefined): string {
@@ -912,8 +1093,8 @@ function OpportunityEventTransmission({
   const gapText = Array.from(new Set(gaps.map(claimText).filter((item) => item !== "待确认"))).join("；") || "缺少可核验的事件、业务敞口或收入利润路径数据";
   if (insufficient) {
     return <section className="mt-5 rounded-xl border bg-warning/5 p-3.5" aria-label="事件影响传导">
-      <div className="flex items-center justify-between gap-2"><h4 className="text-caption font-medium">事件传导证据不足</h4><span className="rounded-full bg-warning/10 px-2 py-1 text-micro text-warning">{eventStatusLabel(transmission.status)}</span></div>
-      <p className="mt-2 text-caption">当前证据不足，不能形成事件影响传导判断：{gapText}</p>
+      <div className="flex items-center justify-between gap-2"><h4 className="text-caption font-medium">事件传导待确认</h4><span className="rounded-full bg-warning/10 px-2 py-1 text-micro text-warning">{eventStatusLabel(transmission.status)}</span></div>
+      <p className="mt-2 text-caption">当前无法形成事件影响传导判断，原因：{gapText}</p>
       <OpportunityClaimList title="还缺什么" values={gaps} empty="暂未明确具体缺失项" sourceContext={citedSourceContext} />
       <p className="mt-3 text-micro text-muted-foreground">题材联想不等于业务受益，业务涉及不等于收入或利润兑现。</p>
     </section>;
@@ -964,14 +1145,14 @@ function OpportunityHorizonView({
   const gapReasons = claimList(view.data_gaps)
     .map(claimText)
     .filter((item) => item !== "待确认");
-  const reason = Array.from(new Set([summary, ...gapReasons].filter((item) => item !== "待确认"))).join("；") || "相关数据缺失";
+  const reason = Array.from(new Set([summary, ...gapReasons].filter((item) => item !== "待确认"))).join("；") || "相关条件待确认";
   return <details open={horizon === "medium_term"} className="rounded-lg border bg-background/60 p-3">
     <summary className="cursor-pointer list-none">
       <div className="flex items-start justify-between gap-2">
         <div className="min-w-0"><div className="text-caption font-medium">{details.label} · {details.range}</div><div className="mt-1 text-micro text-muted-foreground">回答：{details.question}</div></div>
         <span className={cn("shrink-0 rounded-full px-2 py-1 text-micro", insufficient ? "bg-warning/10 text-warning" : "bg-success/10 text-success")}>{horizonStatusLabel(view.status)}</span>
       </div>
-      <p className="mt-2 text-caption"><span className="text-muted-foreground">核心判断：</span>{insufficient ? `当前证据不足，不能形成${details.label}判断：${reason}` : summary}</p>
+      <p className="mt-2 text-caption"><span className="text-muted-foreground">核心判断：</span>{insufficient ? `当前无法形成${details.label}判断，原因：${reason}` : summary}</p>
     </summary>
     <div className="mt-3 border-t pt-3">
       <OpportunityClaimList title="支持证据" values={view.supporting_evidence} empty="未提供支持证据" sourceContext={citedSourceContext} />
@@ -1718,11 +1899,11 @@ export function OpportunityDiscovery({
                {!resultLoading && !activeRun && report && candidates.length === 0 && <div className="space-y-3 px-4 py-8 text-center text-caption text-muted-foreground">
                  {isRecentCatalystStrategy(report.strategy) && catalystDataState(report) === "unavailable" ? <><Database className="mx-auto h-8 w-8 text-warning" /><p className="font-medium text-warning">近期催化事件源暂不可用</p><p>{catalystCoverageLabel(report)}</p><p>请稍后重试；没有有效事件数据时不会生成伪候选。</p></> : isRecentCatalystStrategy(report.strategy) && catalystDataState(report) === "partial" ? <><Database className="mx-auto h-8 w-8 text-warning" /><p className="font-medium text-warning">事件覆盖不完整，暂未生成可靠候选</p><p>{catalystCoverageLabel(report)}</p><p>请等待数据源恢复或稍后重试，系统不会把部分公告当作全市场完整结果。</p></> : isRecentCatalystStrategy(report.strategy) && catalystDataState(report) === "stale" ? <><Clock3 className="mx-auto h-8 w-8 text-warning" /><p className="font-medium text-warning">当前使用过期事件缓存</p><p>{catalystCoverageLabel(report)}</p><p>为避免误导，本次没有基于过期数据生成候选。</p></> : isRecentCatalystStrategy(report.strategy) ? <><Search className="mx-auto h-8 w-8 text-muted-foreground/60" /><p className="font-medium text-foreground">近 7 日没有命中材料事件</p><p>当前窗口内没有同时满足事件材料性与股票池条件的可核验公告。</p><p>可以返回策略入口，改用其他方向；系统不会把涨幅或热点直接当成催化。</p></> : <><p>当前没有满足全部条件的候选。</p>{report.filter_statistics?.length ? <div className="mx-auto max-w-md rounded-md border bg-muted/20 p-3 text-left">{report.filter_statistics.map((stat, index) => <div key={`${stat.field ?? stat.label ?? "filter"}-${index}`} className="flex justify-between gap-3 py-1"><span>{filterStatisticLabel(stat)}</span><span className="tabular-nums">{stat.removed ?? "—"} 只未通过</span></div>)}</div> : null}<p>可以返回策略入口，明确选择要放宽的条件；系统不会把缺失数据填零冒充有效结果。</p></>}
                </div>}
-                {!resultLoading && report && candidates.length > 0 && <div className="space-y-1">{candidates.map((candidate) => { const id = candidateId(candidate); const opportunity = opportunityByInstrument.get(id); const checked = compareIds.includes(id); const price = candidateMetric(candidate, "price"); const changePct = candidateMetric(candidate, "change_pct"); const lowPriorityGap = opportunity?.research_priority === "low" ? Array.from(new Set(claimList(opportunity.data_gaps).map(claimText).filter((text) => text !== "待确认")))[0] ?? "关键证据不足" : null; return <div key={id} className={cn("flex cursor-pointer items-start gap-3 rounded-lg px-3 py-3 transition-colors hover:bg-muted/60", selectedCandidateId === id && "bg-info/10 hover:bg-info/10")} onClick={() => setSelectedCandidateId(id)}><input type="checkbox" aria-label={`加入比较 ${candidate.name}`} checked={checked} onChange={() => toggleCompare(id)} onClick={(event) => event.stopPropagation()} className="mt-1 h-3.5 w-3.5 accent-[hsl(var(--info))]" /><div className="min-w-0 flex-1"><div className="flex items-center gap-2"><span className="truncate text-ui font-medium">{candidate.name}</span><span className="text-micro text-muted-foreground">{candidateSymbol(candidate)}</span>{opportunity && <span className="rounded-full bg-info/10 px-1.5 py-0.5 text-micro text-info">{priorityLabel(opportunity.research_priority)}</span>}{candidate.change_state && <span className="rounded-full bg-info/10 px-1.5 py-0.5 text-micro text-info">{changeStateLabel(candidate.change_state)}</span>}</div><p className="mt-1 truncate text-caption text-muted-foreground">{opportunity ? claimText(opportunity.why_now) : humanizeResearchText(candidate.selection_reasons?.[0] ?? "人工智能研究尚未完成，当前仅显示确定性入选原因")}</p>{lowPriorityGap && <p className="mt-1 truncate text-micro text-warning">暂不形成买卖建议：{lowPriorityGap}</p>}{isCatalystResult && <div className="mt-2"><CatalystEventFacts candidate={candidate} limit={2} /></div>}<div className="mt-1.5 flex flex-wrap gap-x-3 gap-y-1 text-micro text-muted-foreground"><span>{formatNumber(price)} {changePct == null ? "" : `${changePct >= 0 ? "+" : ""}${formatNumber(changePct, "%")}`}</span><span>{candidate.industry ? humanizeResearchText(candidate.industry) : "行业信息待确认"}</span><span>{dataQualityLabel(candidate.data_quality)}</span><span>{formatAsOf(candidate.as_of)}</span></div></div><span className="shrink-0 text-caption tabular-nums text-muted-foreground">第 {candidate.rank ?? "—"} 名</span></div>; })}</div>}
+                {!resultLoading && report && candidates.length > 0 && <div className="space-y-1">{candidates.map((candidate) => { const id = candidateId(candidate); const opportunity = opportunityByInstrument.get(id); const checked = compareIds.includes(id); const price = candidateMetric(candidate, "price"); const changePct = candidateMetric(candidate, "change_pct"); const quantLabel = candidate.quant_validation ? (quantValidationLabel(candidate.quant_validation.validation_status) ?? "量化状态待验证") : null; const lowPriorityGap = opportunity?.research_priority === "low" ? Array.from(new Set(claimList(opportunity.data_gaps).map(claimText).filter((text) => text !== "待确认")))[0] ?? "关键条件待确认" : null; return <div key={id} className={cn("flex cursor-pointer items-start gap-3 rounded-lg px-3 py-3 transition-colors hover:bg-muted/60", selectedCandidateId === id && "bg-info/10 hover:bg-info/10")} onClick={() => setSelectedCandidateId(id)}><input type="checkbox" aria-label={`加入比较 ${candidate.name}`} checked={checked} onChange={() => toggleCompare(id)} onClick={(event) => event.stopPropagation()} className="mt-1 h-3.5 w-3.5 accent-[hsl(var(--info))]" /><div className="min-w-0 flex-1"><div className="flex items-center gap-2"><span className="truncate text-ui font-medium">{candidate.name}</span><span className="text-micro text-muted-foreground">{candidateSymbol(candidate)}</span>{opportunity && <span className="rounded-full bg-info/10 px-1.5 py-0.5 text-micro text-info">{priorityLabel(opportunity.research_priority)}</span>}{candidate.change_state && <span className="rounded-full bg-info/10 px-1.5 py-0.5 text-micro text-info">{changeStateLabel(candidate.change_state)}</span>}{quantLabel && <span className="rounded-full bg-warning/10 px-1.5 py-0.5 text-micro text-warning">{quantLabel}</span>}</div><p className="mt-1 truncate text-caption text-muted-foreground">{opportunity ? claimText(opportunity.why_now) : humanizeResearchText(candidate.selection_reasons?.[0] ?? "人工智能研究尚未完成，当前仅显示确定性入选原因")}</p>{lowPriorityGap && <p className="mt-1 truncate text-micro text-warning">暂不形成买卖建议：{lowPriorityGap}</p>}{isCatalystResult && <div className="mt-2"><CatalystEventFacts candidate={candidate} limit={2} /></div>}<div className="mt-1.5 flex flex-wrap gap-x-3 gap-y-1 text-micro text-muted-foreground"><span>{formatNumber(price)} {changePct == null ? "" : `${changePct >= 0 ? "+" : ""}${formatNumber(changePct, "%")}`}</span><span>{candidate.industry ? humanizeResearchText(candidate.industry) : "行业信息待确认"}</span><span>{dataQualityLabel(candidate.data_quality)}</span><span>{formatAsOf(candidate.as_of)}</span></div></div><span className="shrink-0 text-caption tabular-nums text-muted-foreground">第 {candidate.rank ?? "—"} 名</span></div>; })}</div>}
             </section>
 
             <aside className="min-w-0 space-y-6">
-              {selectedCandidate ? <section className="min-w-0 rounded-xl bg-muted/25 p-4"><div className="flex items-start justify-between gap-2"><div className="min-w-0"><h3 className="truncate text-ui font-medium">{selectedCandidate.name}</h3><p className="text-micro text-muted-foreground">{exchangeLabel(candidateExchange(selectedCandidate))} · 股票代码 {candidateSymbol(selectedCandidate)} · {selectedCandidate.industry ? humanizeResearchText(selectedCandidate.industry) : "行业信息待确认"}</p></div><span className="rounded-full bg-background/80 px-2 py-1 text-micro">{dataQualityLabel(selectedCandidate.data_quality)}</span></div><div className="mt-4 flex gap-10 text-caption"><div><div className="text-micro text-muted-foreground">当前价格</div><div className="mt-0.5 tabular-nums">{formatNumber(candidateMetric(selectedCandidate, "price"))}</div></div><div><div className="text-micro text-muted-foreground">涨跌幅</div><div className={cn("mt-0.5 tabular-nums", (candidateMetric(selectedCandidate, "change_pct") ?? 0) >= 0 ? "text-stock-up" : "text-stock-down")}>{formatNumber(candidateMetric(selectedCandidate, "change_pct"), "%")}</div></div></div>{selectedCandidate.valuation_context && <ValuationReference context={selectedCandidate.valuation_context} fallbackAsOf={selectedCandidate.as_of} />}{isCatalystResult && <div className="mt-5"><div className="text-caption font-medium">触发事件</div><div className="mt-2"><CatalystEventFacts candidate={selectedCandidate} /></div></div>}<div className="mt-5"><div className="text-caption font-medium">为什么入选</div><ul className="mt-1.5 list-disc space-y-1 pl-4 text-caption text-muted-foreground">{(selectedCandidate.selection_reasons?.length ? selectedCandidate.selection_reasons : ["暂无可展示的解释"]).slice(0, 3).map((reason) => <li key={reason}>{humanizeResearchText(reason)}</li>)}</ul></div><div className="mt-5"><div className="flex items-center gap-1 text-caption font-medium"><AlertTriangle className="h-3.5 w-3.5 text-warning" />主要风险</div><ul className="mt-1.5 list-disc space-y-1 pl-4 text-caption text-muted-foreground">{(selectedCandidate.risk_flags?.length ? selectedCandidate.risk_flags : ["风险检查结果待更新"]).slice(0, 3).map((risk) => <li key={risk}>{humanizeResearchText(risk)}</li>)}</ul></div>{selectedCandidate.missing_fields?.length ? <div className="mt-4 rounded-md bg-warning/10 px-2 py-1.5 text-micro text-warning">缺失：{selectedCandidate.missing_fields.map(fieldLabel).join("、")}</div> : null}<details className="mt-4 min-w-0 text-caption"><summary className="cursor-pointer text-info">查看筛选条件与依据</summary><div className="mt-2 min-w-0 space-y-2 break-words text-micro text-muted-foreground"><div>已满足：{selectedCandidate.matched_conditions?.length ? selectedCandidate.matched_conditions.map(conditionLabel).join("；") : "服务未返回逐项条件"}</div><div>未满足：{selectedCandidate.unmatched_conditions?.length ? selectedCandidate.unmatched_conditions.map(conditionLabel).join("；") : "无"}</div><div>排序依据与参考值：{selectedCandidate.score_contributions && Object.keys(selectedCandidate.score_contributions).length ? Object.entries(selectedCandidate.score_contributions).map(([key, value]) => `${fieldLabel(key)}：${formatNumber(value)}`).join("；") : "未提供"}</div><div>证据来源：{selectedCandidate.source_ids?.length ? `${selectedCandidate.source_ids.length} 条可追溯来源` : "未提供"}</div></div></details><div className="mt-5 flex flex-wrap gap-1.5"><Button size="sm" onClick={() => void addCandidate(selectedCandidate)}><Plus className="mr-1.5 h-3.5 w-3.5" />加入自选</Button><Button variant="ghost" size="sm" className="bg-background/80 hover:bg-background" onClick={() => { const origin = buildSelectionOrigin({ report, candidate: selectedCandidate, opportunity: selectedOpportunity }); onDeepResearch(candidateId(selectedCandidate), origin ?? undefined); }}><Play className="mr-1.5 h-3.5 w-3.5" />深度投研</Button></div></section> : <section className="rounded-xl bg-muted/25 p-4 text-caption text-muted-foreground">选择一只候选查看入选条件、风险和数据来源。</section>}
+              {selectedCandidate ? <section className="min-w-0 rounded-xl bg-muted/25 p-4"><div className="flex items-start justify-between gap-2"><div className="min-w-0"><h3 className="truncate text-ui font-medium">{selectedCandidate.name}</h3><p className="text-micro text-muted-foreground">{exchangeLabel(candidateExchange(selectedCandidate))} · 股票代码 {candidateSymbol(selectedCandidate)} · {selectedCandidate.industry ? humanizeResearchText(selectedCandidate.industry) : "行业信息待确认"}</p></div><span className="rounded-full bg-background/80 px-2 py-1 text-micro">{dataQualityLabel(selectedCandidate.data_quality)}</span></div><div className="mt-4 flex gap-10 text-caption"><div><div className="text-micro text-muted-foreground">当前价格</div><div className="mt-0.5 tabular-nums">{formatNumber(candidateMetric(selectedCandidate, "price"))}</div></div><div><div className="text-micro text-muted-foreground">涨跌幅</div><div className={cn("mt-0.5 tabular-nums", (candidateMetric(selectedCandidate, "change_pct") ?? 0) >= 0 ? "text-stock-up" : "text-stock-down")}>{formatNumber(candidateMetric(selectedCandidate, "change_pct"), "%")}</div></div></div><QuantObservationPanel candidate={selectedCandidate} snapshot={report?.quant_snapshot} />{selectedCandidate.valuation_context && <ValuationReference context={selectedCandidate.valuation_context} fallbackAsOf={selectedCandidate.as_of} />}{isCatalystResult && <div className="mt-5"><div className="text-caption font-medium">触发事件</div><div className="mt-2"><CatalystEventFacts candidate={selectedCandidate} /></div></div>}<div className="mt-5"><div className="text-caption font-medium">为什么入选</div><ul className="mt-1.5 list-disc space-y-1 pl-4 text-caption text-muted-foreground">{(selectedCandidate.selection_reasons?.length ? selectedCandidate.selection_reasons : ["暂无可展示的解释"]).slice(0, 3).map((reason) => <li key={reason}>{humanizeResearchText(reason)}</li>)}</ul></div><div className="mt-5"><div className="flex items-center gap-1 text-caption font-medium"><AlertTriangle className="h-3.5 w-3.5 text-warning" />主要风险</div><ul className="mt-1.5 list-disc space-y-1 pl-4 text-caption text-muted-foreground">{(selectedCandidate.risk_flags?.length ? selectedCandidate.risk_flags : ["风险检查结果待更新"]).slice(0, 3).map((risk) => <li key={risk}>{humanizeResearchText(risk)}</li>)}</ul></div>{selectedCandidate.missing_fields?.length ? <div className="mt-4 rounded-md bg-warning/10 px-2 py-1.5 text-micro text-warning">缺失：{selectedCandidate.missing_fields.map(fieldLabel).join("、")}</div> : null}<details className="mt-4 min-w-0 text-caption"><summary className="cursor-pointer text-info">查看筛选条件与依据</summary><div className="mt-2 min-w-0 space-y-2 break-words text-micro text-muted-foreground"><div>已满足：{selectedCandidate.matched_conditions?.length ? selectedCandidate.matched_conditions.map(conditionLabel).join("；") : "服务未返回逐项条件"}</div><div>未满足：{selectedCandidate.unmatched_conditions?.length ? selectedCandidate.unmatched_conditions.map(conditionLabel).join("；") : "无"}</div><div>排序依据与参考值：{selectedCandidate.score_contributions && Object.keys(selectedCandidate.score_contributions).length ? Object.entries(selectedCandidate.score_contributions).map(([key, value]) => `${fieldLabel(key)}：${formatNumber(value)}`).join("；") : "未提供"}</div><div>证据来源：{selectedCandidate.source_ids?.length ? `${selectedCandidate.source_ids.length} 条可追溯来源` : "未提供"}</div></div></details><div className="mt-5 flex flex-wrap gap-1.5"><Button size="sm" onClick={() => void addCandidate(selectedCandidate)}><Plus className="mr-1.5 h-3.5 w-3.5" />加入自选</Button><Button variant="ghost" size="sm" className="bg-background/80 hover:bg-background" onClick={() => { const origin = buildSelectionOrigin({ report, candidate: selectedCandidate, opportunity: selectedOpportunity }); onDeepResearch(candidateId(selectedCandidate), origin ?? undefined); }}><Play className="mr-1.5 h-3.5 w-3.5" />深度投研</Button></div></section> : <section className="rounded-xl bg-muted/25 p-4 text-caption text-muted-foreground">选择一只候选查看入选条件、风险和数据来源。</section>}
               {selectedOpportunity && <OpportunityDetail candidate={selectedOpportunity} workflowRunId={report?.workflow_run_id} hasCatalystEvent={Boolean(selectedCandidate && candidateCatalystEvents(selectedCandidate).length > 0)} />}
               {opportunityResearch?.comparison_summary?.length ? <section className="rounded-xl bg-muted/25 p-4"><OpportunityClaimList title="本批候选比较" values={opportunityResearch.comparison_summary} /></section> : null}
               {compareResult && <section className="rounded-xl bg-muted/25 p-4"><div className="flex items-center justify-between"><h3 className="text-ui font-medium">候选比较</h3><Button variant="ghost" size="icon" className="h-6 w-6" aria-label="关闭候选比较" onClick={() => setCompareResult(null)}><X className="h-3.5 w-3.5" /></Button></div>{compareResult.note && <p className="mt-1 text-micro text-muted-foreground">{humanizeResearchText(compareResult.note)}</p>}<div className="mt-3 space-y-3">{(compareResult.dimensions ?? []).map((dimension) => <div key={dimension.key} className="text-caption"><div className="text-micro text-muted-foreground">{humanizeResearchText(dimension.label)}</div><div className="mt-1 grid gap-1">{Object.entries(dimension.values).map(([id, value]) => <div key={id} className="flex justify-between gap-2"><span className="truncate">{comparisonCandidateLabel(id, comparisonCandidates)}</span><span className="tabular-nums">{value ?? "待提供"}</span></div>)}</div></div>)}{!compareResult.dimensions?.length && (compareResult.candidates ?? []).map((candidate) => <div key={candidateId(candidate)} className="flex items-center justify-between gap-2 text-caption"><span className="truncate">{candidate.name} · 股票代码 {candidateSymbol(candidate)}</span><span className="tabular-nums">{formatNumber(candidateMetric(candidate, "price"))}</span></div>)}</div></section>}

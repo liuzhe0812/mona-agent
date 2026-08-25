@@ -264,7 +264,7 @@ export function SessionTabBar() {
 
   return (
     <>
-      <div className="flex h-8 shrink-0 items-end border-b border-border bg-sidebar/50 px-1">
+      <div className="flex h-8 shrink-0 items-end border-b border-border bg-card px-1">
         {sessions.map((session, index) => {
           const isActive = session.id === activeSessionId;
           const isSsh = session.type === "ssh";
@@ -286,7 +286,7 @@ export function SessionTabBar() {
                 >
                   {isActive && (
                     <span
-                      className="absolute bottom-0 left-0 right-0 h-px bg-info"
+                      className="absolute bottom-0 left-0 right-0 h-px bg-foreground/60"
                     />
                   )}
                   <span

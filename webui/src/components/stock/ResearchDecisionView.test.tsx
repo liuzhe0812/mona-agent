@@ -1,7 +1,7 @@
 import { cleanup, fireEvent, render, screen, within } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
 
-import type { StockReportV4Document } from "@/lib/stock-api";
+import type { StockDiagnosisV1, StockReportQuantValidation, StockReportV4Document, StockReportV6Document, StockReportV6QuantValidation } from "@/lib/stock-api";
 import { evidenceTextLabel, thesisLabel } from "./labels";
 import { ResearchDecisionView } from "./ResearchDecisionView";
 
@@ -119,6 +119,64 @@ const REPORT: StockReportV4Document = {
   disclaimer: "仅供研究",
 };
 
+const V6_REPORT: StockReportV6Document = {
+  schemaVersion: 6,
+  resultStatus: "completed",
+  reportId: "report-v6",
+  runId: "run-v6",
+  kind: "deep_research",
+  instrument: { instrumentId: "XSHE:002709", symbol: "002709", exchange: "XSHE", name: "天赐材料", instrumentType: "equity" },
+  decisionMode: "research_only",
+  researchStatus: "ready",
+  tradeStatus: "unavailable",
+  summary: "三周期研究结论",
+  researchCutoffAt: "2026-08-21T15:00:00+08:00",
+  marketAsOf: "2026-08-21T15:00:00+08:00",
+  generatedAt: "2026-08-21T15:05:00+08:00",
+  horizonDecisions: {
+    shortTerm: { direction: "positive", action: "wait", thesis: "短线趋势等待确认", keyReasons: ["量价结构改善。", "量价结构改善；"], keyRisks: ["突破失败"], researchStatus: "ready", tradeStatus: "unavailable", materializedPlan: null },
+    mediumTerm: { direction: "neutral", action: "wait", thesis: "行业与政策仍需确认", keyReasons: ["行业供需正在修复。", "行业供需正在修复；"], keyRisks: ["需求恢复不及预期"], researchStatus: "ready", tradeStatus: "unavailable", materializedPlan: null },
+    longTerm: { direction: "negative", action: "avoid", thesis: "长期估值等待交叉验证", keyReasons: ["估值仍需比较。", "估值仍需比较；"], keyRisks: ["竞争格局变化"], researchStatus: "ready", tradeStatus: "unavailable", materializedPlan: null },
+  },
+  quantPromotion: { status: "unavailable", reason: "量化模型尚未晋级" },
+  valuation: { status: "unavailable", reason: "估值待交叉验证" },
+};
+
+const QUANT_VALIDATION: StockReportQuantValidation = {
+  selection_run_id: "selection-run",
+  report_id: "report-4",
+  strategy_id: "quality_growth",
+  as_of: "2026-08-19T15:00:00+08:00",
+  factor_algorithm_version: "screening-factor-v1",
+  rank_algorithm_version: "percentile-rank-v1",
+  validation_status: "uncalibrated",
+  quant_signal: "insufficient_data",
+  horizons: {
+    short_term: {
+      status: "uncalibrated",
+      signal: "insufficient_data",
+      factor_observations: [{
+        field: "momentum20",
+        raw_value: 4.2,
+        percentile_or_rank: 0.8,
+        direction: "desc",
+        scope: "market",
+        sample_count: 100,
+        missing_count: 0,
+        as_of: "2026-08-19T15:00:00+08:00",
+        source_ids: ["source-1"],
+        method_version: "percentile-rank-v1",
+        validation_status: "uncalibrated",
+      }],
+    },
+    medium_term: { status: "insufficient_data", signal: "insufficient_data", factor_observations: [] },
+    long_term: { status: "insufficient_data", signal: "insufficient_data", factor_observations: [] },
+  },
+  source_ids: ["source-1"],
+  snapshot_hash: "sha256:quant-test",
+  reason: "量化因子尚未经过历史校准",
+};
+
 const withDimensionProjections = (
   marketBreadth: Record<string, unknown>,
   publicActivity: Record<string, unknown>,
@@ -138,6 +196,129 @@ const withDimensionProjections = (
 }) as unknown as StockReportV4Document;
 
 describe("ResearchDecisionView", () => {
+  it("renders V6 conclusion-first output and delegates role drill-down to the lower timeline", () => {
+    render(<ResearchDecisionView report={V6_REPORT} />);
+
+    expect(screen.getByTestId("research-decision-v6")).toBeInTheDocument();
+    expect(screen.getByTestId("research-v6-summary")).toHaveTextContent("三周期研究结论");
+    expect(screen.getByTestId("research-v6-horizon-conclusions")).toHaveTextContent("短线看涨");
+    expect(screen.getByTestId("research-v6-horizon-conclusions")).toHaveTextContent("中线中性");
+    expect(screen.getByTestId("research-v6-conclusion-dimensions")).toHaveTextContent("行业供需正在修复");
+    expect(screen.getByTestId("research-v6-conclusion-dimensions")).toHaveTextContent("估值仍需比较");
+    expect(screen.getByTestId("research-v6-conclusion-dimensions")).toHaveTextContent("量化模型尚未晋级");
+    expect(screen.getByTestId("research-v6-conclusion-dimensions")).toHaveTextContent("短线：突破失败");
+    const dimensionsText = screen.getByTestId("research-v6-conclusion-dimensions").textContent ?? "";
+    expect(dimensionsText.match(/行业供需正在修复/g)?.length).toBe(1);
+    expect(dimensionsText.match(/估值仍需比较/g)?.length).toBe(1);
+    expect(dimensionsText).not.toContain("。；");
+    expect(dimensionsText).not.toContain("；；");
+    expect(screen.getByTestId("research-v6-summary")).toHaveTextContent("交易条件未通过，仅显示研究结论");
+    expect(screen.getByTestId("research-v6-role-handoff")).toHaveTextContent("各研究角色依据见下方");
+    expect(screen.queryByText("该角色结论已纳入三周期研判")).not.toBeInTheDocument();
+    expect(screen.queryByTestId("research-v6-role-conclusions")).not.toBeInTheDocument();
+  });
+
+  it("shows market sentiment impact and only the aggregate opinion coverage", () => {
+    const report: StockReportV6Document = {
+      ...V6_REPORT,
+      marketSentiment: {
+        status: "available",
+        direction: "偏多",
+        decisionImpact: "市场环境偏强，仅作为环境参考",
+      },
+      publicOpinion: {
+        status: "available",
+        direction: "分歧",
+        coverageAccountCount: 30,
+        asOf: "2026-08-21T14:00:00+08:00",
+      },
+      valuation: {
+        status: "ready",
+        assessment: {
+          view: "合理",
+          pe: { view: "合理", percentile: 0.5 },
+          pb: { view: "高估", percentile: 0.8 },
+        },
+      },
+    };
+    render(<ResearchDecisionView report={report} />);
+
+    expect(screen.getByTestId("research-v6-market-sentiment")).toHaveTextContent("市场情绪：偏多");
+    expect(screen.getByTestId("research-v6-market-sentiment")).toHaveTextContent("影响：市场环境偏强");
+    expect(screen.getByTestId("research-v6-public-opinion")).toHaveTextContent("市场舆论风向：分歧 · 覆盖 30 个账号");
+    expect(screen.getByTestId("research-v6-public-opinion")).toHaveTextContent("2026-08-21 14:00");
+    expect(screen.getByTestId("research-v6-conclusion-dimensions")).toHaveTextContent("估值合理");
+    expect(screen.getByTestId("research-v6-conclusion-dimensions")).toHaveTextContent("PE第50百分位");
+    expect(screen.getByTestId("research-v6-conclusion-dimensions")).not.toHaveTextContent("source_ids");
+  });
+
+  it("keeps the opinion conclusion explicit when no source is covered", () => {
+    render(<ResearchDecisionView report={{ ...V6_REPORT, publicOpinion: { status: "unavailable" } }} />);
+    expect(screen.getByTestId("research-v6-public-opinion")).toHaveTextContent("暂无覆盖，不参与决策");
+    expect(screen.getByTestId("research-v6-public-opinion")).not.toHaveTextContent("数据不足");
+  });
+
+  it("shows V6 quantitative basis by horizon without exposing internal names", () => {
+    const report = {
+      ...V6_REPORT,
+      quantValidation: {
+        ...QUANT_VALIDATION,
+        target_windows: {
+          short_term: { sessions: 10, definition: "未来10个交易日相对基准收益" },
+          medium_term: { sessions: 60, definition: "未来60个交易日相对基准收益" },
+          long_term: { sessions: 120, definition: "未来120个交易日相对基准收益" },
+        },
+      },
+    } as StockReportV6Document;
+    render(<ResearchDecisionView report={report} />);
+
+    const quant = screen.getByTestId("research-quant-observation");
+    expect(quant).toHaveTextContent("量化依据");
+    expect(quant).toHaveTextContent("短线：20日动量");
+    expect(quant).toHaveTextContent("1/1 项因子可用");
+    expect(quant).toHaveTextContent("目标窗口：10 个交易日");
+    expect(quant).toHaveTextContent("尚未经过历史样本外验证");
+    expect(quant.textContent).not.toMatch(/momentum20|source-1|sha256|method_version|quant_signal/);
+  });
+
+  it("renders the camelCase V6 quantitative API contract", () => {
+    const quantValidation: StockReportV6QuantValidation = {
+      strategyId: "quality_growth",
+      asOf: "2026-08-19T15:00:00+08:00",
+      factorAlgorithmVersion: "screening-factor-v1",
+      rankAlgorithmVersion: "percentile-rank-v1",
+      validationStatus: "uncalibrated",
+      quantSignal: "insufficient_data",
+      horizons: {
+        shortTerm: {
+          status: "uncalibrated",
+          signal: "insufficient_data",
+          targetWindowSessions: 10,
+          factorObservations: [{
+            field: "momentum20",
+            rawValue: 4.2,
+            percentileOrRank: 0.8,
+            direction: "desc",
+            scope: "market",
+            sampleCount: 100,
+            missingCount: 0,
+            asOf: "2026-08-19T15:00:00+08:00",
+            methodVersion: "percentile-rank-v1",
+            validationStatus: "uncalibrated",
+            sourceCount: 1,
+          }],
+        },
+        mediumTerm: { status: "insufficient_data", signal: "insufficient_data", factorObservations: [] },
+        longTerm: { status: "insufficient_data", signal: "insufficient_data", factorObservations: [] },
+      },
+    };
+    render(<ResearchDecisionView report={{ ...V6_REPORT, quantValidation }} />);
+    const quant = screen.getByTestId("research-quant-observation");
+    expect(quant).toHaveTextContent("短线：20日动量");
+    expect(quant).toHaveTextContent("1/1 项因子可用");
+    expect(quant).not.toHaveTextContent("sourceCount");
+  });
+
   it("renders the selection origin as Chinese clues separate from deep-research conclusions", () => {
     const report = {
       ...REPORT,
@@ -176,12 +357,90 @@ describe("ResearchDecisionView", () => {
     expect(screen.queryByTestId("selection-origin-report")).not.toBeInTheDocument();
   });
 
+  it("keeps quantitative observation inside the closed full report and humanizes factor details", () => {
+    render(<ResearchDecisionView report={{ ...REPORT, quant_validation: QUANT_VALIDATION }} />);
+
+    const fullReport = screen.getByTestId("research-full-analysis");
+    const quant = screen.getByTestId("research-quant-observation");
+    expect(fullReport).not.toHaveAttribute("open");
+    expect(quant).toHaveTextContent("量化观察");
+    expect(quant).toHaveTextContent("状态：未校准");
+    expect(quant).toHaveTextContent("数据时点：2026年8月19日 15:00");
+    expect(quant).toHaveTextContent("策略：业绩成长");
+    expect(quant).toHaveTextContent("横截面分位排名");
+    expect(quant).toHaveTextContent("短线");
+    expect(quant).toHaveTextContent("1 个可用 / 0 个缺失");
+    expect(quant).toHaveTextContent("中线");
+    expect(quant).toHaveTextContent("因子数据待确认");
+    expect(quant).toHaveTextContent("未经过样本外校准，不构成支持或反对结论");
+    expect(quant).not.toHaveTextContent(/momentum20|source-1|sha256|method_version|score|上涨概率|quant_signal/);
+
+    fireEvent.click(screen.getByTestId("quant-horizon-details-short_term").querySelector("summary")!);
+    const details = screen.getByTestId("quant-horizon-details-short_term");
+    expect(details).toHaveTextContent("20日动量");
+    expect(details).toHaveTextContent("原始值：4.2%");
+    expect(details).toHaveTextContent("分位/排名：80%");
+    expect(details).toHaveTextContent("比较口径：全市场横截面");
+    expect(details).toHaveTextContent("样本数：100");
+    expect(details).toHaveTextContent("来源数量：1");
+    expect(details).not.toHaveTextContent(/momentum20|source-1|sha256|method_version|score|上涨概率/);
+  });
+
+  it("shows factor-aware units without exposing raw factor names", () => {
+    const observation = (field: string, raw_value: number) => ({
+      field,
+      raw_value,
+      percentile_or_rank: 0.5,
+      direction: "desc" as const,
+      scope: "market" as const,
+      sample_count: 10,
+      missing_count: 0,
+      as_of: "2026-08-19T15:00:00+08:00",
+      source_ids: ["source-1"],
+      method_version: "percentile-rank-v1",
+      validation_status: "uncalibrated" as const,
+    });
+    const report = {
+      ...REPORT,
+      quant_validation: {
+        ...QUANT_VALIDATION,
+        horizons: {
+          ...QUANT_VALIDATION.horizons,
+          short_term: {
+            ...QUANT_VALIDATION.horizons.short_term,
+            factor_observations: [
+              observation("roe", 12.3),
+              observation("pe", 20),
+              observation("eps", 0.82),
+              observation("price", 12.5),
+              observation("turnover", 1_000_000_000_000),
+              observation("listing_days", 120),
+              observation("custom_factor", 7),
+            ],
+          },
+        },
+      },
+    } as StockReportV4Document;
+    render(<ResearchDecisionView report={report} />);
+    fireEvent.click(screen.getByTestId("quant-horizon-details-short_term").querySelector("summary")!);
+    const details = screen.getByTestId("quant-horizon-details-short_term");
+    expect(details).toHaveTextContent("原始值：12.3%");
+    expect(details).toHaveTextContent("原始值：20倍");
+    expect(details).toHaveTextContent("原始值：0.82元/股");
+    expect(details).toHaveTextContent("原始值：12.5元");
+    expect(details).toHaveTextContent("原始值：1万亿元");
+    expect(details).toHaveTextContent("原始值：120天");
+    expect(details).toHaveTextContent("原始值：7（单位未提供）");
+    expect(details).not.toHaveTextContent(/custom_factor|source-1|method_version/);
+  });
+
   it("maps inline status tokens only when followed by a colon", () => {
     expect(thesisLabel("中线证据覆盖degraded: 盈利数据缺失")).toBe("中线证据覆盖部分缺失： 盈利数据缺失");
-    expect(thesisLabel("短线insufficient_data：市场证据不足")).toBe("短线数据不足：市场证据不足");
+    expect(thesisLabel("短线insufficient_data：市场证据不足")).toBe("短线部分条件待确认：市场关键条件待确认");
     expect(thesisLabel("ordinary degraded prose")).toBe("ordinary degraded prose");
     expect(evidenceTextLabel("short_term / medium_term / long_term")).toBe("短线 / 中线 / 长线");
     expect(evidenceTextLabel("short_termish medium_term_value long_termly")).toBe("short_termish medium_term_value long_termly");
+    expect(evidenceTextLabel("指标可用&#x20;但暂不能形成短线结论&#x20;&amp;&#x20;交易计划")).toBe("指标可用 但暂不能形成短线结论 & 交易计划");
   });
 
   it("renders independent horizons, defaults to medium, and switches scenarios", () => {
@@ -189,7 +448,7 @@ describe("ResearchDecisionView", () => {
 
     expect(screen.getByTestId("research-decision-view")).toBeInTheDocument();
     expect(screen.getByRole("heading", { name: "投研结论" })).toBeInTheDocument();
-    expect(screen.getByTestId("horizon-card-short_term")).toHaveTextContent("数据不足");
+    expect(screen.getByTestId("horizon-card-short_term")).toHaveTextContent("研究待更新");
     expect(screen.getByTestId("horizon-card-medium_term")).toHaveTextContent("看涨");
     expect(screen.getByTestId("horizon-card-long_term")).toHaveTextContent("看跌");
     expect(screen.getByTestId("horizon-card-medium_term").querySelector("button[aria-controls='research-horizon-medium_term-body']")).toHaveAttribute("aria-expanded", "true");
@@ -223,6 +482,8 @@ describe("ResearchDecisionView", () => {
           participation_conditions: [condition("参与条件一"), condition("参与条件二"), condition("参与条件三"), condition("参与条件四")],
           confirmation_conditions: [],
           invalidation_conditions: [condition("退出条件一"), condition("退出条件二"), condition("退出条件三"), condition("退出条件四")],
+          stop_loss_conditions: [condition("止损条件一"), condition("止损条件二"), condition("止损条件三"), condition("止损条件四")],
+          take_profit_conditions: [condition("止盈条件一"), condition("止盈条件二"), condition("止盈条件三"), condition("止盈条件四")],
         },
         long_term: {
           ...REPORT.horizon_views.long_term,
@@ -253,7 +514,59 @@ describe("ResearchDecisionView", () => {
       expect(ordered[index - 1].compareDocumentPosition(ordered[index]) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
     }
     expect(within(screen.getByTestId("horizon-participation-medium_term")).getAllByRole("listitem")).toHaveLength(3);
+    expect(within(screen.getByTestId("horizon-stop-loss-medium_term")).getAllByRole("listitem")).toHaveLength(3);
     expect(within(screen.getByTestId("horizon-exit-medium_term")).getAllByRole("listitem")).toHaveLength(3);
+    expect(within(screen.getByTestId("horizon-take-profit-medium_term")).getAllByRole("listitem")).toHaveLength(3);
+    expect(medium).not.toHaveTextContent("声明：");
+    expect(medium).not.toHaveTextContent("系统可计算条件");
+  });
+
+  it("joins mapped direction tokens with the following Chinese 助词", () => {
+    const report = {
+      ...REPORT,
+      horizon_views: {
+        ...REPORT.horizon_views,
+        medium_term: {
+          ...REPORT.horizon_views.medium_term,
+          thesis: "positive 的周期判断",
+        },
+      },
+    } as StockReportV4Document;
+    render(<ResearchDecisionView report={report} />);
+
+    expect(screen.getByTestId("horizon-summary-medium_term")).toHaveTextContent("核心命题：看涨的周期判断");
+  });
+
+  it("falls back to logical exit and shows no executable take profit for old V4", () => {
+    render(<ResearchDecisionView report={REPORT} />);
+
+    expect(screen.queryByTestId("horizon-stop-loss-medium_term")).not.toBeInTheDocument();
+    expect(screen.getByTestId("horizon-exit-medium_term")).toHaveTextContent("逻辑失效/退出条件");
+    expect(screen.getByTestId("horizon-take-profit-medium_term")).toHaveTextContent("暂无可执行止盈条件");
+    expect(screen.queryByText("目标价")).not.toBeInTheDocument();
+  });
+
+  it("keeps new condition provenance in the closed full report only", () => {
+    const report = {
+      ...REPORT,
+      horizon_views: {
+        ...REPORT.horizon_views,
+        medium_term: {
+          ...REPORT.horizon_views.medium_term,
+          stop_loss_conditions: [{ ...condition("止损来源条件"), claim_type: "fact" as const }],
+          take_profit_conditions: [{ ...condition("止盈来源条件"), claim_type: "inference" as const }],
+        },
+      },
+    } as StockReportV4Document;
+    render(<ResearchDecisionView report={report} />);
+
+    const full = screen.getByTestId("research-full-analysis");
+    expect(full).not.toHaveAttribute("open");
+    expect(screen.getByTestId("research-condition-trace")).toHaveTextContent("条件证据追溯");
+    expect(screen.getByTestId("research-condition-trace")).toHaveTextContent("声明：事实");
+    expect(screen.getByTestId("research-condition-trace")).toHaveTextContent("声明：推断");
+    expect(screen.getByTestId("horizon-stop-loss-medium_term")).not.toHaveTextContent("声明：");
+    expect(screen.getByTestId("horizon-take-profit-medium_term")).not.toHaveTextContent("声明：");
   });
 
   it("puts user decisions before supporting context and uses separators instead of nested cards", () => {
@@ -349,7 +662,7 @@ describe("ResearchDecisionView", () => {
     render(<ResearchDecisionView report={report} />);
 
     const valuation = within(screen.getByTestId("research-dimension-overview")).getByTestId("research-dimension-valuation");
-    expect(valuation).toHaveTextContent("估值数据缺失");
+    expect(valuation).toHaveTextContent("估值暂不判断");
     expect(valuation).toHaveTextContent("市盈率（PE）当前值");
     expect(valuation).toHaveTextContent("市净率（PB）当前值");
     expect(valuation).toHaveTextContent("同行估值比较");
@@ -587,5 +900,72 @@ describe("ResearchDecisionView", () => {
     const conflict = screen.getByTestId("research-cross-horizon-conflict");
     expect(conflict).toHaveTextContent("依据：1 条证据");
     expect(conflict).not.toHaveTextContent("source-1");
+  });
+
+  it("renders StockDiagnosisV1 as standard conclusions without deep-research process", () => {
+    const horizon = (direction: "positive" | "neutral" | "negative") => ({
+      direction,
+      action: "conditional_participation" as const,
+      factor_score: 0.72,
+      market_percentile: 0.8,
+      industry_percentile: 0.6,
+      factor_contributions: { momentum20: 0.12, operating_cashflow: 0.08 },
+      validation_status: "descriptive" as const,
+      not_holding_action: "conditional_participation" as const,
+      holding_action: "hold" as const,
+      materialized_plan: { reference_entry: null, pullback_entry: null, stop_loss: null, first_take_profit: null, second_take_profit: null, value_status: "unavailable" as const, boundaries: [] },
+      position_plan: { reference_position_pct: null, max_position_pct: null, risk_budget_pct: null, value_status: "unavailable" as const },
+      review_trigger: "盈利假设变化时复评",
+      valid_until: null,
+      key_reasons: [{ text: "现金流质量改善", source_ids: ["source-1"] }],
+      key_risks: [{ text: "行业需求变化", source_ids: ["source-1"] }],
+      confidence: "medium" as const,
+      source_ids: ["source-1"],
+    });
+    const report = {
+      schema_version: 1,
+      kind: "ai_diagnosis",
+      diagnosis_id: "diagnosis_12345678",
+      instrument: { symbol: "002709", exchange: "XSHE", name: "天赐材料", instrument_type: "equity" },
+      research_cutoff_at: "2026-08-25T15:00:00+08:00",
+      market_as_of: "2026-08-25T15:00:00+08:00",
+      generated_at: "2026-08-25T15:01:00+08:00",
+      evidence_context_id: "ctx-1",
+      source_ids: ["source-1"],
+      data_quality: { status: "available", confidence: "medium" },
+      fundamental_research: { status: "available", business_model_summary: "主营业务清晰", source_ids: ["source-1"] },
+      fundamental_factors: { short_term: { status: "available", validation_status: "descriptive", factor_score: 0.6, sample_count: 5, factors: [{ name: "factor_1", value: 12, direction: "positive" }, { name: "factor_10", value: 68, direction: "negative" }, { name: "factor_7", value: 0.5, direction: "neutral" }, { name: "factor_11", value: null, direction: "unavailable" }] }, medium_term: { status: "available", validation_status: "descriptive", factor_score: 0.7, sample_count: 5, factors: [] }, long_term: { status: "unavailable", validation_status: "unavailable", sample_count: 0, factors: [] } },
+      quant_factors: { short_term: { status: "available", validation_status: "descriptive", factor_score: 0.72, market_percentile: 0.8, industry_percentile: 0.6, sample_count: 35, factors: [{ name: "momentum20", value: 8, direction: "positive", contribution: 0.12, percentile: 0.8 }, { name: "operating_cashflow", value: 0.66, direction: "negative", contribution: 0.08, percentile: 0.7 }] }, medium_term: { status: "available", validation_status: "descriptive", factor_score: 0.72, market_percentile: 0.8, industry_percentile: 0.6, sample_count: 35, factors: [] }, long_term: { status: "unavailable", validation_status: "unavailable", sample_count: 0, factors: [] } },
+      technical_execution: { status: "unavailable" },
+      horizon_decisions: { short_term: horizon("positive"), medium_term: horizon("neutral"), long_term: horizon("negative") },
+      decision_radar: { short_term: horizon("positive"), medium_term: horizon("neutral"), long_term: horizon("negative"), deterministic: true, basis_rows: [
+        { key: "fundamental", label: "基本面", stance: "neutral", stance_label: "中性", summary: "盈利修复，现金流偏弱" },
+        { key: "quant", label: "量化验证", stance: "negative", stance_label: "偏空", summary: "估值偏高，短期动量走弱" },
+        { key: "sentiment", label: "情绪与预期", stance: "cautious", stance_label: "谨慎", summary: "暂无反转信号，不提高仓位" },
+        { key: "risk", label: "风控纪律", stance: "strict", stance_label: "严格", summary: "回避新增，持仓优先降风险" },
+      ] },
+      method_versions: {},
+    } as StockDiagnosisV1;
+    render(<ResearchDecisionView report={report} />);
+    expect(screen.getByTestId("ai-diagnosis-result")).toHaveTextContent("AI诊股结论");
+    expect(screen.getByTestId("diagnosis-four-step")).toHaveTextContent("四步决策依据");
+    expect(screen.getByTestId("diagnosis-four-step")).toHaveTextContent("盈利修复，现金流偏弱");
+    expect(screen.getByTestId("diagnosis-four-step")).toHaveTextContent("估值偏高，短期动量走弱");
+    expect(screen.getByTestId("diagnosis-quant-factors")).toHaveTextContent("第80百分位");
+    expect(screen.getByTestId("diagnosis-quant-factors")).toHaveTextContent("20日动量");
+    expect(screen.getByTestId("diagnosis-quant-factors")).toHaveTextContent("经营现金流");
+    const fundamentalFactors = screen.getByTestId("diagnosis-fundamental-factors");
+    expect(fundamentalFactors).toHaveTextContent("ROE：12.00 · 偏强");
+    expect(fundamentalFactors).toHaveTextContent("负债率：68.00 · 偏弱");
+    expect(fundamentalFactors).toHaveTextContent("盈利稳定性：0.50 · 中性");
+    expect(fundamentalFactors).not.toHaveTextContent("利息保障倍数");
+    expect(within(fundamentalFactors).getByText("偏强")).toHaveClass("text-stock-up");
+    expect(within(fundamentalFactors).getByText("偏弱")).toHaveClass("text-stock-down");
+    expect(within(fundamentalFactors).getByText("中性")).toHaveClass("text-muted-foreground");
+    expect(screen.getByTestId("diagnosis-horizon-conclusions")).toHaveTextContent("现金流质量改善");
+    expect(screen.getByTestId("diagnosis-horizon-conclusions")).toHaveTextContent("当前结论");
+    expect(within(screen.getByTestId("diagnosis-horizon-conclusions")).queryByRole("heading", { name: "中线" })).not.toBeInTheDocument();
+    expect(within(screen.getByTestId("diagnosis-horizon-conclusions")).queryByRole("heading", { name: "长线" })).not.toBeInTheDocument();
+    expect(screen.queryByText(/Agent|LLM|semantic_research|source_ids|momentum20|operating_cashflow/)).not.toBeInTheDocument();
   });
 });

@@ -82,7 +82,7 @@ export function CalendarMonth({
   };
 
   return (
-    <div className="flex flex-col h-full">
+    <div className="flex h-full flex-col bg-editor-surface">
       {/* Toolbar */}
       <div className="flex items-center justify-between px-3 py-1.5 border-b border-border/40">
         <div className="flex items-center gap-1">

@@ -94,29 +94,29 @@ describe("InstrumentStage attention radar collapse", () => {
     const { rerenderOpen } = renderStage(true);
     await waitFor(() => expect(openStockIntradayStream).toHaveBeenCalled());
 
-    const panel = screen.getByRole("complementary", { name: "关注雷达" });
+    const panel = screen.getByRole("complementary", { name: "决策雷达" });
     const rootGrid = panel.parentElement;
     expect(rootGrid).toHaveClass("lg:grid-cols-[minmax(0,1fr)_336px]");
-    expect(screen.getByRole("heading", { name: "关注雷达" })).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "启动深度投研" })).toBeInTheDocument();
-    expect(screen.getByText("尚无投研结论")).toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: "决策雷达" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "开始AI诊股" })).toBeInTheDocument();
+    expect(screen.getByTestId("decision-radar-empty-state")).toHaveTextContent("尚无AI诊股结论");
 
     rerenderOpen(false);
 
-    expect(screen.queryByRole("complementary", { name: "关注雷达" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("complementary", { name: "决策雷达" })).not.toBeInTheDocument();
     expect(rootGrid).not.toHaveClass("lg:grid-cols-[minmax(0,1fr)_336px]");
     expect(rootGrid).toHaveClass("grid-cols-1");
-    expect(screen.queryByRole("heading", { name: "关注雷达" })).not.toBeInTheDocument();
-    expect(screen.queryByRole("button", { name: "启动深度投研" })).not.toBeInTheDocument();
-    expect(screen.queryByText("尚无投研结论")).not.toBeInTheDocument();
-    expect(screen.queryByRole("button", { name: "展开关注雷达" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("heading", { name: "决策雷达" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "开始AI诊股" })).not.toBeInTheDocument();
+    expect(screen.queryByTestId("decision-radar-empty-state")).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "展开决策雷达" })).not.toBeInTheDocument();
 
     rerenderOpen(true);
 
     expect(rootGrid).toHaveClass("lg:grid-cols-[minmax(0,1fr)_336px]");
-    expect(screen.getByRole("heading", { name: "关注雷达" })).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "启动深度投研" })).toBeInTheDocument();
-    expect(screen.getByText("尚无投研结论")).toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: "决策雷达" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "开始AI诊股" })).toBeInTheDocument();
+    expect(screen.getByTestId("decision-radar-empty-state")).toHaveTextContent("尚无AI诊股结论");
   });
 
   it("only shows a more action when the card has a real destination", async () => {
@@ -132,10 +132,9 @@ describe("InstrumentStage attention radar collapse", () => {
     renderStage(true);
     await waitFor(() => expect(openStockIntradayStream).toHaveBeenCalled());
 
-    fireEvent.click(screen.getByRole("tab", { name: "投研" }));
-    expect(screen.getByText(/可通过右侧操作启动深度投研/)).toBeInTheDocument();
-    expect(screen.queryByText(/六位研究助手|证据包|六 Agent/)).not.toBeInTheDocument();
-    expect(screen.queryByText(/Agent/)).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole("tab", { name: "AI诊股" }));
+    expect(screen.getByText(/尚未生成 AI 诊股结论/)).toBeInTheDocument();
+    expect(screen.queryByText(/六位研究助手|证据包|六 Agent|Agent/)).not.toBeInTheDocument();
   });
 
   it("does not expose bare moving-average or volume abbreviations", async () => {
@@ -164,10 +163,8 @@ describe("InstrumentStage attention radar collapse", () => {
     });
     await waitFor(() => expect(openStockIntradayStream).toHaveBeenCalled());
 
-    fireEvent.click(screen.getByRole("tab", { name: "投研" }));
-    expect(screen.getAllByText("该历史报告未提供判断条件")).toHaveLength(2);
-    expect(screen.getByRole("heading", { name: "确认与观察条件" })).toBeInTheDocument();
-    expect(screen.queryByText("确认 / 观察条件")).not.toBeInTheDocument();
-    expect(screen.queryByText(/结构化条件/)).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole("tab", { name: "专家团论证" }));
+    expect(screen.getByTestId("expert-panel")).toBeInTheDocument();
+    expect(screen.queryByTestId("ai-diagnosis-result")).not.toBeInTheDocument();
   });
 });

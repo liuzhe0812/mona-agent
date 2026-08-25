@@ -43,8 +43,8 @@ import type {
 /** Border/ring accent per live step status (run mode). */
 const STATUS_RING: Record<WorkflowStepStatus, string> = {
   queued: "border-border/60",
-  running: "border-primary shadow-[0_0_0_3px_hsl(var(--primary)/0.15)]",
-  waiting_approval: "border-amber-500 shadow-[0_0_0_3px_rgb(245_158_11/0.15)]",
+  running: "border-[hsl(var(--ai-cyan))]",
+  waiting_approval: "border-[hsl(var(--brand-amber))]",
   succeeded: "border-emerald-500",
   failed: "border-destructive",
   cancelled: "border-border/40 opacity-70",
@@ -54,9 +54,9 @@ const STATUS_RING: Record<WorkflowStepStatus, string> = {
 function StepStatusBadge({ status }: { status: WorkflowStepStatus }) {
   switch (status) {
     case "running":
-      return <Loader2 className="h-3.5 w-3.5 animate-spin text-primary" />;
+      return <Loader2 className="h-3.5 w-3.5 animate-spin text-[hsl(var(--ai-cyan))]" />;
     case "waiting_approval":
-      return <UserCheck className="h-3.5 w-3.5 text-amber-500" />;
+      return <UserCheck className="h-3.5 w-3.5 text-[hsl(var(--brand-amber))]" />;
     case "succeeded":
       return <CheckCircle2 className="h-3.5 w-3.5 text-emerald-500" />;
     case "failed":
@@ -78,20 +78,20 @@ function WorkflowStepNode({ data, selected }: NodeProps<WorkflowFlowNode>) {
   return (
     <div
       className={cn(
-        "flex h-full w-full flex-col rounded-lg border bg-background px-2.5 py-2 transition-colors",
+        "flex h-full w-full flex-col rounded-lg border bg-card px-2.5 py-2 transition-colors",
         status ? STATUS_RING[status] : "border-border/60",
-        selected && "ring-2 ring-primary/60",
+        selected && "ring-2 ring-foreground/40",
       )}
     >
       <Handle
         type="target"
         position={Position.Left}
-        className="!h-2.5 !w-2.5 !border-2 !border-border !bg-background"
+        className="!h-2.5 !w-2.5 !border-2 !border-editor-surface !bg-card"
       />
       <Handle
         type="source"
         position={Position.Right}
-        className="!h-2.5 !w-2.5 !border-2 !border-border !bg-background"
+        className="!h-2.5 !w-2.5 !border-2 !border-editor-surface !bg-card"
       />
       <div className="flex min-w-0 items-center gap-2">
         {step.type === "agent" ? (
@@ -101,8 +101,8 @@ function WorkflowStepNode({ data, selected }: NodeProps<WorkflowFlowNode>) {
             className="h-6 w-6 shrink-0"
           />
         ) : (
-          <span className="flex h-6 w-6 shrink-0 items-center justify-center rounded-md bg-amber-500/10">
-            <UserCheck className="h-3.5 w-3.5 text-amber-500" />
+          <span className="flex h-6 w-6 shrink-0 items-center justify-center rounded-md bg-[hsl(var(--brand-amber)/0.1)]">
+            <UserCheck className="h-3.5 w-3.5 text-[hsl(var(--brand-amber))]" />
           </span>
         )}
         <div className="min-w-0 flex-1">
@@ -125,11 +125,21 @@ function WorkflowStepNode({ data, selected }: NodeProps<WorkflowFlowNode>) {
 const nodeTypes = { workflowStep: WorkflowStepNode };
 
 const EDGE_STYLE = { stroke: "hsl(var(--border))", strokeWidth: 1.5 } as const;
+const RUNNING_EDGE_STYLE = {
+  stroke: "hsl(var(--ai-cyan))",
+  strokeWidth: 1.5,
+} as const;
 const EDGE_MARKER = {
   type: MarkerType.ArrowClosed,
   width: 14,
   height: 14,
   color: "hsl(var(--border))",
+} as const;
+const RUNNING_EDGE_MARKER = {
+  type: MarkerType.ArrowClosed,
+  width: 14,
+  height: 14,
+  color: "hsl(var(--ai-cyan))",
 } as const;
 
 interface WorkflowCanvasProps {
@@ -173,13 +183,23 @@ export function WorkflowCanvas({
   }, [steps, agentNameOf, runStates, selectedStepId]);
 
   const edges = useMemo<Edge[]>(
-    () =>
-      stepsToEdges(steps).map((edge) => ({
-        ...edge,
-        style: EDGE_STYLE,
-        markerEnd: EDGE_MARKER,
-      })),
-    [steps],
+    () => {
+      const runningStepIds = new Set(
+        Object.entries(runStates ?? {})
+          .filter(([, state]) => state.status === "running")
+          .map(([stepId]) => stepId),
+      );
+      return stepsToEdges(steps).map((edge) => {
+        const running = runningStepIds.has(edge.source) || runningStepIds.has(edge.target);
+        return {
+          ...edge,
+          animated: running,
+          style: running ? RUNNING_EDGE_STYLE : EDGE_STYLE,
+          markerEnd: running ? RUNNING_EDGE_MARKER : EDGE_MARKER,
+        };
+      });
+    },
+    [runStates, steps],
   );
 
   const onNodesChange = useCallback(
@@ -229,7 +249,7 @@ export function WorkflowCanvas({
 
   return (
     <div
-      className={cn("workflow-canvas h-full w-full", className)}
+      className={cn("workflow-canvas h-full w-full bg-editor-surface", className)}
       style={{ minHeight: 120 }}
     >
       <ReactFlow

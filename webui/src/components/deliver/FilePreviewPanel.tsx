@@ -10,6 +10,7 @@ import {
   File,
   Maximize2,
   Minimize2,
+  PlaySquare,
 } from "lucide-react";
 import { useFilePreviewStore } from "./filePreviewStore";
 import { isTauri, openPathWithSystemApp, revealItemInDir } from "@/lib/tauri";
@@ -29,6 +30,7 @@ const PREVIEWABLE_TEXT_EXTS = new Set([
 ]);
 
 const IMAGE_EXTS = new Set([".png", ".jpg", ".jpeg", ".gif", ".webp", ".bmp", ".svg"]);
+const VIDEO_EXTS = new Set([".mp4", ".webm", ".mov", ".m4v", ".avi", ".mkv", ".3gp"]);
 const HTML_EXTS = new Set([".html", ".htm"]);
 const MARKDOWN_EXTS = new Set([".md", ".markdown"]);
 
@@ -56,6 +58,10 @@ function isMarkdown(file: DeliveredFile): boolean {
 
 function isPreviewableImage(file: DeliveredFile): boolean {
   return IMAGE_EXTS.has(extOf(file.name)) || file.mime.startsWith("image/");
+}
+
+function isPreviewableVideo(file: DeliveredFile): boolean {
+  return VIDEO_EXTS.has(extOf(file.name)) || file.mime.startsWith("video/");
 }
 
 function isHtml(file: DeliveredFile): boolean {
@@ -187,6 +193,7 @@ async function inlineHtmlResources(
 function FileIcon({ file }: { file: DeliveredFile }) {
   const ext = extOf(file.name);
   if (IMAGE_EXTS.has(ext)) return <ImageIcon className="h-4 w-4" />;
+  if (VIDEO_EXTS.has(ext)) return <PlaySquare className="h-4 w-4" />;
   if ([".py", ".js", ".ts", ".tsx", ".jsx", ".rs", ".go"].includes(ext))
     return <FileCode className="h-4 w-4" />;
   return <FileText className="h-4 w-4" />;
@@ -253,7 +260,11 @@ export function FilePreviewPanel({ files = [] }: { files?: DeliveredFile[] }) {
           if (cancelled) return;
           setTextSource(text);
           setBlobUrl(null);
-        } else if (mime.startsWith("text/") || mime === "application/json") {
+        } else if (
+          !isPreviewableImage(file)
+          && !isPreviewableVideo(file)
+          && (mime.startsWith("text/") || mime === "application/json")
+        ) {
           const text = await blob.text();
           if (cancelled) return;
           setTextSource(text);
@@ -422,6 +433,16 @@ export function FilePreviewPanel({ files = [] }: { files?: DeliveredFile[] }) {
             className="max-h-full max-w-full object-contain"
           />
         </div>
+      ) : isPreviewableVideo(file) && blobUrl ? (
+        <div className="flex h-full items-center justify-center bg-black p-4">
+          <video
+            src={blobUrl}
+            controls
+            preload="metadata"
+            aria-label={`视频预览：${file.name}`}
+            className="max-h-full max-w-full"
+          />
+        </div>
       ) : blobUrl ? (
         <iframe
           src={blobUrl}
@@ -437,7 +458,7 @@ export function FilePreviewPanel({ files = [] }: { files?: DeliveredFile[] }) {
 
   if (fullscreen) {
     return createPortal(
-      <div className="fixed inset-0 z-50 flex flex-col bg-background animate-in fade-in-0 duration-150">
+      <div className="fixed inset-0 z-50 flex flex-col bg-editor-surface animate-in fade-in-0 duration-150">
         {header}
         {body}
       </div>,
@@ -446,7 +467,7 @@ export function FilePreviewPanel({ files = [] }: { files?: DeliveredFile[] }) {
   }
 
   return (
-    <div className="flex h-full flex-col bg-background">
+    <div className="flex h-full flex-col bg-editor-surface">
       {header}
       {body}
     </div>

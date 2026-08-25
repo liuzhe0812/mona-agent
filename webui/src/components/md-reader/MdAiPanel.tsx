@@ -192,7 +192,7 @@ export function MdAiPanel({
 
   return (
     <aside
-      className="flex h-full shrink-0 flex-col border-l border-border/70 bg-background"
+      className="flex h-full shrink-0 flex-col border-l border-border/70 bg-card"
       style={{ width }}
     >
       {/* Header */}

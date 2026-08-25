@@ -291,6 +291,11 @@ def extract_documents(
             extracted = extract_text(p)
             if extracted and not extracted.startswith("[error:"):
                 doc_texts.append(f"[File: {p.name}]\n{extracted}")
+            elif extracted is None:
+                doc_texts.append(
+                    f"[File: {p.name}]\nPath: {p}\n"
+                    "This file format is attached and available by path, but has no automatic text extraction."
+                )
 
     if doc_texts:
         text = text + "\n\n" + "\n\n".join(doc_texts)

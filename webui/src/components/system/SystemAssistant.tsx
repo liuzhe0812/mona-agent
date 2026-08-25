@@ -212,7 +212,7 @@ export function SystemAssistant({
       aria-label="Mona 系统管家"
       aria-hidden={collapsed}
       className={cn(
-        "flex min-h-0 flex-col border-l border-border/60 bg-background",
+        "flex min-h-0 flex-col border-l border-border/60 bg-card",
         collapsed && "hidden",
       )}
     >
@@ -283,7 +283,7 @@ export function SystemAssistant({
                               key={id}
                               type="button"
                               onClick={() => onNavigate("overview")}
-                              className="rounded-full bg-muted px-2 py-0.5 text-micro text-muted-foreground hover:bg-accent hover:text-foreground"
+                              className="rounded-full bg-muted px-2 py-0.5 text-micro text-muted-foreground hover:bg-foreground/[0.06] hover:text-foreground"
                             >
                               {diagnosticLabel(id)}
                             </button>

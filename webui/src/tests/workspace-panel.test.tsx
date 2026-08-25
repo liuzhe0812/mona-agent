@@ -102,13 +102,48 @@ describe("WorkspacePanel", () => {
       />,
     );
 
-    expect(screen.getByText("会话产物")).toBeInTheDocument();
+    expect(screen.getByText("本次会话产物")).toBeInTheDocument();
     const sessionRow = screen.getByText("img_session.png");
+    fireEvent.click(screen.getByText("docs"));
     const treeRow = screen.getByText("report.md");
     expect(
       sessionRow.compareDocumentPosition(treeRow) &
         Node.DOCUMENT_POSITION_FOLLOWING,
     ).toBeTruthy();
+  });
+
+  it("collapses the session and workspace sections independently", () => {
+    render(
+      <WorkspacePanel
+        files={[artifact("tree.md")]}
+        sessionFiles={[artifact("session.md")]}
+        scope="shared"
+      />,
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "本次会话产物" }));
+    expect(screen.queryByText("session.md")).not.toBeInTheDocument();
+    expect(screen.getByText("tree.md")).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: "工作区产物" }));
+    expect(screen.queryByText("tree.md")).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: "本次会话产物" }));
+    expect(screen.getByText("session.md")).toBeInTheDocument();
+  });
+
+  it("hides the technical generated wrapper while keeping date folders", () => {
+    render(
+      <WorkspacePanel
+        files={[{ ...artifact("generated/2026-08-21/report.md"), name: "report.md" }]}
+        scope="shared"
+      />,
+    );
+
+    expect(screen.queryByText("generated")).not.toBeInTheDocument();
+    expect(screen.getByText("2026-08-21")).toBeInTheDocument();
+    fireEvent.click(screen.getByText("2026-08-21"));
+    expect(screen.getByText("report.md")).toBeInTheDocument();
   });
 
   it("dedupes session files by absolute path and skips the empty state", () => {
@@ -124,7 +159,7 @@ describe("WorkspacePanel", () => {
   it("keeps the session section visible when there are no session files", () => {
     render(<WorkspacePanel files={[artifact("a.png")]} scope="shared" />);
 
-    expect(screen.getByText("会话产物")).toBeInTheDocument();
+    expect(screen.getByText("本次会话产物")).toBeInTheDocument();
   });
 
   it("opens a file with the system app on double click", () => {
@@ -192,6 +227,15 @@ describe("WorkspacePanel", () => {
 
     expect(screen.getByText("工作区产物")).toBeInTheDocument();
     expect(screen.queryByText("工作区文件")).not.toBeInTheDocument();
+  });
+
+  it("uses the header action slot to collapse the artifact panel instead of refreshing", () => {
+    const onCollapse = vi.fn();
+    render(<WorkspacePanel files={[artifact("a.png")]} scope="shared" onCollapse={onCollapse} onRefresh={vi.fn()} />);
+
+    expect(screen.queryByRole("button", { name: "刷新" })).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "收起产物区" }));
+    expect(onCollapse).toHaveBeenCalledTimes(1);
   });
 
   it("labels the panel as project files for project scope, never 产物", () => {

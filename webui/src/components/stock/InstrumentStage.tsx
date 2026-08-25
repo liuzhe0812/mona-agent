@@ -28,6 +28,7 @@ import {
   ContextMenuTrigger,
 } from "@/components/ui/context-menu";
 import {
+  STOCK_DIAGNOSIS_ROOM_CHAT_ID,
   STOCK_ROOM_CHAT_ID,
   fetchStockIntraday,
   openStockIntradayStream,
@@ -42,7 +43,12 @@ import {
   type StockResearchContext,
   type StockReportDetail,
   type StockReportListItem,
+  type StockReportV5ListProjection,
+  type StockReportV6ListProjection,
+  type StockDiagnosisRun,
+  type StockDiagnosisV1,
   type StockHorizonStances,
+  type StockDecisionEvaluation,
 } from "@/lib/stock-api";
 import type { ToolProgressEvent, WorkflowRun } from "@/lib/types";
 import { isTauri, openExternalUrl } from "@/lib/tauri";
@@ -58,7 +64,8 @@ import { IntradayChart, type IntradayChartState } from "./IntradayChart";
 import { StepTimeline } from "./StepTimeline";
 import { DecisionRadar, summarizeHorizonComparison, type HorizonComparison } from "./DecisionRadar";
 import { ResearchDecisionView } from "./ResearchDecisionView";
-import { dataQualityLabel, evidenceStrengthLabel, periodLabel, stanceLabel, timeHorizonLabel } from "./labels";
+import { ExpertPanel } from "./ExpertPanel";
+import { dataQualityLabel, evidenceTextLabel, periodLabel, stanceLabel } from "./labels";
 
 /** 标的工作台：中央行情/研究区 + 右侧决策上下文。 */
 
@@ -245,11 +252,23 @@ interface InstrumentStageProps {
   researchContext: StockResearchContext | null;
   onOpenReport: (reportId: string) => void;
   onDeleteReport: (reportId: string) => void;
-  /** 关注雷达面板开关：由顶栏按钮控制（StockView 持有状态），收起时不渲染右列。 */
+  /** Standard AI diagnosis state is deliberately independent from the deep run. */
+  diagnosisRun?: WorkflowRun | null;
+  diagnosisReport?: StockDiagnosisV1 | null;
+  diagnosisReports?: StockDiagnosisRun[];
+  diagnosisStarting?: boolean;
+  diagnosisCancellingRun?: boolean;
+  onStartDiagnosis?: () => void;
+  onCancelDiagnosis?: () => void;
+  onOpenDiagnosis?: (diagnosisId: string) => void;
+  decisionEvaluation?: StockDecisionEvaluation | null;
+  /** 决策雷达面板开关：由顶栏按钮控制（StockView 持有状态），收起时不渲染右列。 */
   decisionSummaryOpen?: boolean;
+  /** 自选列表跳转时指定初始页签。 */
+  initialTab?: StageTab;
 }
 
-type StageTab = "market" | "fundamentals" | "news" | "report";
+type StageTab = "market" | "fundamentals" | "news" | "diagnosis" | "expert";
 type MarketView = "intraday" | "kline";
 
 export function isCurrentIntradayEvent(
@@ -289,7 +308,7 @@ function visibleDataQualityLabel(value: string | null | undefined): string {
   return value == null ? "数据质量待确认" : "数据质量待确认";
 }
 
-export function horizonBrief(value: StockReportListItem["horizonStances"] | undefined): string | null {
+export function horizonBrief(value: StockHorizonStances | undefined): string | null {
   if (!value) return null;
   const labels = [
     visibleStanceLabel(value.shortTerm.stance),
@@ -299,6 +318,12 @@ export function horizonBrief(value: StockReportListItem["horizonStances"] | unde
   return value.shortTerm.stance === value.mediumTerm.stance && value.mediumTerm.stance === value.longTerm.stance
     ? `三周期均${labels[0]}`
     : `短${labels[0]} · 中${labels[1]} · 长${labels[2]}`;
+}
+
+function v5HorizonBrief(value: StockReportV5ListProjection["horizonDecisions"] | StockReportV6ListProjection["horizonDecisions"] | undefined): string | null {
+  if (!value) return null;
+  const label = (direction: string) => direction === "positive" ? "看涨" : direction === "negative" ? "看跌" : "中性";
+  return `短${label(value.shortTerm.direction)} · 中${label(value.mediumTerm.direction)} · 长${label(value.longTerm.direction)}`;
 }
 
 function reportHorizonStances(entry: StockReportListItem | null | undefined): StockHorizonStances | null {
@@ -346,18 +371,6 @@ function userFacingError(message: string | null | undefined, fallback: string): 
   return text && !/[A-Za-z_]{2,}/.test(text) ? text : fallback;
 }
 
-function EmptyResearchState() {
-  return (
-    <div className="flex min-h-56 flex-col items-center justify-center px-6 text-center">
-      <FileText className="mb-2 h-5 w-5 text-muted-foreground" aria-hidden />
-      <p className="text-ui">尚未生成深度投研报告</p>
-      <p className="mt-1 max-w-md text-caption text-muted-foreground">
-        可通过右侧操作启动深度投研；完成后将显示主审摘要、结论失效条件、后续观察信号和引用证据。
-      </p>
-    </div>
-  );
-}
-
 export function InstrumentStage({
   token,
   item,
@@ -378,7 +391,17 @@ export function InstrumentStage({
   researchContext,
   onOpenReport,
   onDeleteReport,
+  diagnosisRun = null,
+  diagnosisReport = null,
+  diagnosisReports = [],
+  diagnosisStarting = false,
+  diagnosisCancellingRun = false,
+  onStartDiagnosis = () => undefined,
+  onCancelDiagnosis = () => undefined,
+  onOpenDiagnosis = () => undefined,
+  decisionEvaluation = null,
   decisionSummaryOpen = true,
+  initialTab = "market",
 }: InstrumentStageProps) {
   const pct = quote?.changePct;
   const runSymbols = Array.isArray(run?.inputs?.symbols)
@@ -388,8 +411,15 @@ export function InstrumentStage({
     ? run
     : null;
   const runActive = visibleRun != null && ACTIVE_RUN_STATUSES.has(visibleRun.status);
+  const diagnosisSymbols = Array.isArray(diagnosisRun?.inputs?.symbols)
+    ? diagnosisRun.inputs.symbols.filter((value): value is string => typeof value === "string")
+    : [];
+  const visibleDiagnosisRun = diagnosisRun?.roomId === STOCK_DIAGNOSIS_ROOM_CHAT_ID && diagnosisSymbols.includes(item.instrumentId)
+    ? diagnosisRun
+    : null;
+  const diagnosisRunActive = visibleDiagnosisRun != null && ACTIVE_RUN_STATUSES.has(visibleDiagnosisRun.status);
   const [showMacd, setShowMacd] = useState(true);
-  const [activeTab, setActiveTab] = useState<StageTab>("market");
+  const [activeTab, setActiveTab] = useState<StageTab>(initialTab);
   const [marketView, setMarketView] = useState<MarketView>("intraday");
   const [intraday, setIntraday] = useState<StockIntradaySeries | null>(null);
   const [intradayState, setIntradayState] = useState<IntradayState>("idle");
@@ -412,8 +442,9 @@ export function InstrumentStage({
     setKlineView({ offset: totalBars - count, count });
   }, [item.instrumentId, period, totalBars]);
   useEffect(() => {
-    if (starting || runActive) setActiveTab("report");
-  }, [starting, runActive]);
+    if (starting || runActive) setActiveTab("expert");
+    if (diagnosisStarting || diagnosisRunActive) setActiveTab("diagnosis");
+  }, [starting, runActive, diagnosisStarting, diagnosisRunActive]);
   useEffect(() => {
     setMarketView("intraday");
     setIntraday(null);
@@ -592,8 +623,11 @@ export function InstrumentStage({
   const latest = item.latest;
   const report = reportDetail?.report ?? null;
   const reportStance = report?.research_stance ?? latest?.stance;
-  const latestHorizonBrief = latest && "horizonStances" in latest ? horizonBrief(latest.horizonStances) : null;
-  const reportAsOf = report?.as_of ?? latest?.asOf;
+  const latestHorizonBrief = latest && "horizonStances" in latest
+    ? horizonBrief(latest.horizonStances)
+    : latest && "horizonDecisions" in latest
+      ? v5HorizonBrief(latest.horizonDecisions)
+      : null;
   const reportDataQuality = report?.data_quality ?? latest?.dataQuality;
   const requestStartRun = () => {
     if (report) setConfirmRerunOpen(true);
@@ -657,31 +691,19 @@ export function InstrumentStage({
   const horizonComparison = reportHorizonComparison(deepReports);
   const comparison = summarizeReportComparison(deepReports);
   const sourceCount = report?.source_ids?.length ?? 0;
-  const questions = (report?.open_questions ?? []).map((value) =>
-    typeof value === "string" ? value : value.claim,
-  );
   const fundamentals = researchContext?.fundamentals;
   const news = researchContext?.news;
   const runStepIds = ["technical", "fundamental", "news", "bull", "bear", "referee"] as const;
-  const runStepLabels: Record<(typeof runStepIds)[number], string> = {
-    technical: "技术分析师",
-    fundamental: "基本面分析师",
-    news: "资讯分析师",
-    bull: "多头研究员",
-    bear: "空头研究员",
-    referee: "主审",
-  };
   const runSettled = visibleRun
     ? runStepIds.filter((id) => ["succeeded", "failed", "skipped", "cancelled"].includes(visibleRun.steps[id]?.status ?? "")).length
     : 0;
-  const runningStep = visibleRun ? runStepIds.find((id) => ["running", "waiting_approval"].includes(visibleRun.steps[id]?.status ?? "")) : undefined;
-  const runFailed = visibleRun?.status === "failed";
 
   const tabs: { key: StageTab; label: string }[] = [
     { key: "market", label: "行情" },
     { key: "fundamentals", label: "基本面" },
     { key: "news", label: "资讯公告" },
-    { key: "report", label: "投研" },
+    { key: "diagnosis", label: "AI诊股" },
+    { key: "expert", label: "专家团论证" },
   ];
 
   return (
@@ -896,7 +918,7 @@ export function InstrumentStage({
               <section className="rounded-md border">
                 <div className="flex h-8 items-center border-b px-2.5 text-caption font-medium">
                   <FileText className="mr-1.5 h-3.5 w-3.5" aria-hidden />基本面快照
-                  <span className="ml-2 text-muted-foreground">{fundamentals?.status === "available" ? "数据可用" : fundamentals?.status === "not_applicable" ? "交易型开放式指数基金（ETF）不适用" : fundamentals?.status === "unavailable" ? "部分数据缺失" : "数据状态待确认"}</span>
+                  <span className="ml-2 text-muted-foreground">{fundamentals?.status === "available" ? "数据可用" : fundamentals?.status === "not_applicable" ? "交易型开放式指数基金（ETF）不适用" : fundamentals?.status === "unavailable" ? "部分条件待确认" : "数据状态待确认"}</span>
                   <Button
                     type="button"
                     variant="ghost"
@@ -992,7 +1014,7 @@ export function InstrumentStage({
                     <Newspaper className="mt-0.5 h-4 w-4 shrink-0 text-muted-foreground group-hover:text-info" aria-hidden />
                     <span className="min-w-0 flex-1">
                       <span className="block truncate text-ui font-medium">{entry.title}</span>
-                      <span className="mt-1 line-clamp-2 block text-caption text-muted-foreground">{entry.summary || "暂无摘要"}</span>
+                      <span className="mt-1 line-clamp-2 block text-caption text-muted-foreground">{evidenceTextLabel(entry.summary) || "暂无摘要"}</span>
                     </span>
                     <time className="shrink-0 text-caption text-muted-foreground">{shortDate(entry.publishedAt)}</time>
                   </a>
@@ -1007,61 +1029,71 @@ export function InstrumentStage({
           </div>
         )}
 
-        {activeTab === "report" && (
-          starting && !visibleRun ? (
-            <div className="space-y-4 px-4 py-4" role="status">
-              <p className="text-caption text-muted-foreground">正在准备投研任务，分析完成后先展示三周期结论。</p>
-              <StepTimeline run={null} token={token} report={null} variant="overview" preparing />
+        {activeTab === "diagnosis" && (
+          <>
+          {diagnosisStarting && !visibleDiagnosisRun ? (
+            <div className="space-y-4 px-4 py-4" role="status" data-testid="ai-diagnosis-running">
+              <p className="text-caption text-muted-foreground">正在准备 AI 诊股，完成后显示标准结论。</p>
+              <Loader2 className="h-4 w-4 animate-spin text-muted-foreground" aria-label="正在准备" />
             </div>
-          ) : report?.schema_version === 4 ? (
-            <div className="space-y-5 px-4 py-4" data-testid="research-report-content">
-              <ResearchDecisionView report={report} />
-              <StepTimeline run={visibleRun} token={token} stepActivities={stepActivities} report={visibleRun && latest?.runId !== visibleRun.id ? null : report} variant="overview" />
+          ) : diagnosisReport ? (
+            <div className="space-y-5 px-4 py-4" data-testid="ai-diagnosis-content">
+              <ResearchDecisionView report={diagnosisReport} />
             </div>
-          ) : report ? (
-            <div className="space-y-5 px-4 py-4" data-testid="research-report-content">
-              <section className="rounded-md border bg-muted/10 px-3 py-3">
-                <h3 className="text-ui font-medium">研究总览</h3>
-                <div className="mt-2 grid gap-2 text-caption md:grid-cols-3">
-                  <div><div className="text-muted-foreground">研究倾向</div><div className="mt-0.5 font-medium">{visibleStanceLabel(reportStance)}</div></div>
-                  <div><div className="text-muted-foreground">适用周期</div><div className="mt-0.5 font-medium">{timeHorizonLabel(report.time_horizon)}</div></div>
-                  <div><div className="text-muted-foreground">证据强度</div><div className="mt-0.5 font-medium">{evidenceStrengthLabel(report.evidence_strength)}</div></div>
-                  <div><div className="text-muted-foreground">截至日期</div><div className="mt-0.5 font-medium">{shortDate(reportAsOf)}</div></div>
-                  <div><div className="text-muted-foreground">数据质量</div><div className="mt-0.5 font-medium">{visibleDataQualityLabel(reportDataQuality)}</div></div>
-                </div>
-              </section>
-              <section>
-                <h3 className="text-ui font-medium">主审摘要</h3>
-                <p className="mt-1 select-text text-body text-muted-foreground">{report.summary ?? "报告未提供摘要"}</p>
-              </section>
-              <div className="grid gap-4 md:grid-cols-2">
-                <section>
-                  <h3 className="text-caption font-medium">结论失效条件</h3>
-                  {report.decision_conditions ? (report.decision_conditions.invalidation?.length ? <ul className="mt-1 list-disc space-y-1 pl-4 text-caption text-muted-foreground">{report.decision_conditions.invalidation.map((value) => <li key={value}>{value}</li>)}</ul> : <p className="mt-1 text-caption text-muted-foreground">未提供</p>) : <p className="mt-1 text-caption text-muted-foreground">该历史报告未提供判断条件</p>}
-                </section>
-                <section>
-                  <h3 className="text-caption font-medium">确认与观察条件</h3>
-                  {report.decision_conditions ? ((report.decision_conditions.confirmation?.length || report.decision_conditions.watch?.length) ? <ul className="mt-1 list-disc space-y-1 pl-4 text-caption text-muted-foreground">{[...(report.decision_conditions.confirmation ?? []), ...(report.decision_conditions.watch ?? [])].map((value) => <li key={value}>{value}</li>)}</ul> : <p className="mt-1 text-caption text-muted-foreground">未提供</p>) : <p className="mt-1 text-caption text-muted-foreground">该历史报告未提供判断条件</p>}
-                </section>
+          ) : visibleDiagnosisRun ? (
+            <div className="space-y-4 px-4 py-4" data-testid="ai-diagnosis-running">
+              <p className="text-caption text-muted-foreground">AI 诊股正在生成标准结论，请稍候。</p>
+              <div className="rounded border bg-muted/10 px-3 py-3 text-caption">当前状态：{visibleDiagnosisRun.status === "queued" ? "排队中" : "分析中"}</div>
+            </div>
+          ) : (
+            <div className="flex min-h-56 flex-col items-center justify-center px-6 text-center" data-testid="ai-diagnosis-empty">
+              <FileText className="mb-2 h-5 w-5 text-muted-foreground" aria-hidden />
+              <p className="text-ui">尚未生成 AI 诊股结论</p>
+              <p className="mt-1 max-w-md text-caption text-muted-foreground">AI 诊股使用一次语义研究和确定性因子计算，专家团论证不会在此自动启动。</p>
+            </div>
+          )}
+          {diagnosisReports.length > 0 && (
+            <details className="border-t px-4 py-3" data-testid="ai-diagnosis-history">
+              <summary className="cursor-pointer text-caption font-medium">AI诊股历史（{diagnosisReports.length}）</summary>
+              <div className="mt-2 divide-y">
+                {diagnosisReports.map((entry) => (
+                  <Button key={entry.diagnosisId} type="button" variant="ghost" onClick={() => onOpenDiagnosis(entry.diagnosisId)} className="h-auto w-full justify-start gap-3 rounded-none px-0 py-2 text-left">
+                    <span className="w-16 shrink-0 text-caption">AI诊股</span>
+                    <span className="min-w-0 flex-1 truncate text-caption text-muted-foreground">{entry.status === "succeeded" ? "已完成" : entry.status === "failed" ? "失败" : entry.status === "cancelled" ? "已取消" : "进行中"}</span>
+                    <time className="text-micro text-muted-foreground">{shortDate(entry.updatedAt ?? entry.createdAt)}</time>
+                    <ArrowRight className="h-3.5 w-3.5 text-muted-foreground" aria-hidden />
+                  </Button>
+                ))}
               </div>
-              {(report.bull_case_summary || report.bear_case_summary) && <section className="grid gap-4 md:grid-cols-2"><div><h3 className="text-caption font-medium">多方核心摘要</h3><p className="mt-1 text-caption text-muted-foreground">{report.bull_case_summary || "未提供"}</p></div><div><h3 className="text-caption font-medium">空方核心反证</h3><p className="mt-1 text-caption text-muted-foreground">{report.bear_case_summary || "未提供"}</p></div></section>}
-              {questions.length > 0 && (
-                <details>
-                  <summary className="cursor-pointer text-caption font-medium">尚未确认（{questions.length}）</summary>
-                  <ul className="mt-1 list-disc space-y-1 pl-4 text-caption text-muted-foreground">{questions.map((value) => <li key={value}>{value}</li>)}</ul>
-                </details>
-                )}
-              <StepTimeline run={visibleRun} token={token} stepActivities={stepActivities} report={visibleRun && latest?.runId !== visibleRun.id ? null : report} variant="overview" />
-              {latest?.kind === "deep_research" && <Button variant="outline" size="sm" onClick={() => onOpenReport(latest.reportId)}>查看完整证据链</Button>}
-            </div>
-          ) : visibleRun ? (
-            <div className="space-y-4 px-4 py-4">
-              <StepTimeline run={visibleRun} token={token} stepActivities={stepActivities} report={null} variant="overview" />
-            </div>
-          ) : <EmptyResearchState />
+            </details>
+          )}
+          </>
         )}
 
-        {activeTab === "report" && deepReports.length > 0 && (
+        {activeTab === "expert" && (
+          <>
+            <ExpertPanel
+              run={visibleRun}
+              report={report}
+              starting={starting}
+              cancellingRun={cancellingRun}
+              onStart={requestStartRun}
+              onCancel={onCancelRun}
+              historyCount={deepReports.length}
+            />
+            {report && (
+              <details className="mx-4 mb-4 border-t pt-3" data-testid="expert-full-report">
+                <summary className="cursor-pointer text-caption font-medium">查看结构化完整结论</summary>
+                <div className="mt-4 space-y-5">
+                  <ResearchDecisionView report={report} />
+                  {visibleRun && <StepTimeline run={visibleRun} token={token} stepActivities={stepActivities} report={null} variant="overview" />}
+                </div>
+              </details>
+            )}
+          </>
+        )}
+
+        {activeTab === "expert" && deepReports.length > 0 && (
           <details className="border-t px-4 py-3">
             <summary className="cursor-pointer text-caption font-medium">历史版本（{deepReports.length}）</summary>
             <div className="mt-2 divide-y">
@@ -1091,16 +1123,20 @@ export function InstrumentStage({
         <aside
           id={DECISION_SUMMARY_PANEL_ID}
           className="scrollbar-hover min-h-0 overflow-hidden border-t bg-muted/10 lg:border-l lg:border-t-0"
-          aria-label="关注雷达"
+          aria-label="决策雷达"
         >
           <DecisionRadar
-            starting={starting}
-            cancellingRun={cancellingRun}
-            runActive={runActive}
-            runFailed={runFailed}
+            instrumentId={item.instrumentId}
+            decisionEvaluation={decisionEvaluation}
+            starting={diagnosisStarting}
+            cancellingRun={diagnosisCancellingRun}
+            runActive={diagnosisRunActive}
+            runFailed={visibleDiagnosisRun?.status === "failed"}
             runSettled={runSettled}
-            runningStepLabel={runningStep ? runStepLabels[runningStep] : undefined}
+            runningStepLabel={undefined}
             report={report}
+            diagnosisReport={diagnosisReport}
+            diagnosisMode
             reportStance={reportStance}
             reportDataQuality={reportDataQuality}
             comparison={comparison}
@@ -1118,9 +1154,9 @@ export function InstrumentStage({
             latestNews={news?.items[0] ?? null}
             fundamentalsPeriod={fundamentals?.data?.reportPeriod ?? null}
             sourceCount={sourceCount}
-            onStartRun={requestStartRun}
-            onCancelRun={onCancelRun}
-            onNavigate={(tab) => setActiveTab(tab)}
+            onStartRun={onStartDiagnosis}
+            onCancelRun={onCancelDiagnosis}
+            onNavigate={(tab) => setActiveTab(tab === "report" ? "expert" : tab)}
           />
         </aside>
       )}
@@ -1130,9 +1166,9 @@ export function InstrumentStage({
       <AlertDialog open={confirmRerunOpen} onOpenChange={setConfirmRerunOpen}>
         <AlertDialogContent className="max-w-sm">
           <AlertDialogHeader>
-            <AlertDialogTitle>重新研究{item.name}？</AlertDialogTitle>
+            <AlertDialogTitle>重新论证{item.name}？</AlertDialogTitle>
             <AlertDialogDescription>
-              将使用最新行情、公告、财务和行业资料更新研究结论，历史报告会保留。
+              将使用最新行情、公告、财务和行业资料更新专家团论证，历史报告会保留。
             </AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>
@@ -1143,7 +1179,7 @@ export function InstrumentStage({
                 onStartRun();
               }}
             >
-              确认重新投研
+              确认重新论证
             </AlertDialogAction>
           </AlertDialogFooter>
         </AlertDialogContent>

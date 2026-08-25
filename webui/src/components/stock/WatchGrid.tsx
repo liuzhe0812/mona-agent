@@ -19,7 +19,6 @@ import type {
 import { cn } from "@/lib/utils";
 import { LeftSidebarToggleIcon } from "@/components/notes/LeftSidebarToggleIcon";
 import { Sparkline } from "./Sparkline";
-import { stanceLabel } from "./labels";
 
 /** 自选观察列表：首屏用于扫描价格、量能、技术趋势和最近研究动态。 */
 
@@ -36,6 +35,7 @@ interface WatchGridProps {
   signals: Record<string, StockWatchSignal>;
   selectedId: string | null;
   onSelect: (instrumentId: string) => void;
+  onOpenNews: (instrumentId: string) => void;
   onToggleFocus: (instrumentId: string, focus: boolean) => void;
   onRemove: (instrumentId: string) => void;
   onAdd: (input: StockWatchlistAddInput) => void;
@@ -54,10 +54,18 @@ function formatPrice(v: number | undefined): string {
   });
 }
 
-function horizonBrief(latest: StockDashboardItem["latest"]): string | null {
-  if (!latest || latest.schemaVersion !== 4 || !latest.horizonStances) return null;
-  const { shortTerm, mediumTerm, longTerm } = latest.horizonStances;
-  return `短${stanceLabel(shortTerm.stance)} · 中${stanceLabel(mediumTerm.stance)} · 长${stanceLabel(longTerm.stance)}`;
+function formatEventDate(value: string | null | undefined): string | null {
+  if (!value) return null;
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return null;
+  const parts = new Intl.DateTimeFormat("en-CA", {
+    timeZone: "Asia/Shanghai",
+    month: "2-digit",
+    day: "2-digit",
+  }).formatToParts(date);
+  const month = parts.find((part) => part.type === "month")?.value;
+  const day = parts.find((part) => part.type === "day")?.value;
+  return month && day ? `${month}-${day}` : null;
 }
 
 export function WatchGrid({
@@ -66,6 +74,7 @@ export function WatchGrid({
   signals,
   selectedId,
   onSelect,
+  onOpenNews,
   onToggleFocus,
   onRemove,
   onAdd,
@@ -121,14 +130,13 @@ export function WatchGrid({
         </Button>
       </div>
       {!collapsed && (
-        <div className="grid h-9 shrink-0 grid-cols-[minmax(68px,1fr)_48px_64px_40px_60px_64px_56px] items-center gap-x-1 border-b px-2 text-caption text-muted-foreground">
+        <div className="grid h-9 shrink-0 grid-cols-[minmax(68px,1fr)_48px_64px_40px_60px_48px] items-center gap-x-1 border-b px-2 text-caption text-muted-foreground">
           <span>名称/代码</span>
           <span className="text-right">现价</span>
           <span className="text-right">涨跌幅</span>
-          <span className="text-center">量能</span>
+          <span className="whitespace-nowrap text-center">量能</span>
           <span className="text-center">30日趋势</span>
           <span className="text-center">最新事件</span>
-          <span className="text-right">观点</span>
         </div>
       )}
       <div
@@ -152,6 +160,7 @@ export function WatchGrid({
                 : null
             }
             onSelect={() => onSelect(item.instrumentId)}
+            onOpenNews={() => onOpenNews(item.instrumentId)}
             onToggleFocus={() =>
               onToggleFocus(item.instrumentId, !item.focus)
             }
@@ -217,6 +226,7 @@ function WatchRow({
   dragging,
   dropEdge,
   onSelect,
+  onOpenNews,
   onToggleFocus,
   onRemove,
   onDragStart,
@@ -233,6 +243,7 @@ function WatchRow({
   /** 拖动悬停时的插入指示：目标行上方/下方一条线；null 不显示。 */
   dropEdge: "before" | "after" | null;
   onSelect: () => void;
+  onOpenNews: () => void;
   onToggleFocus: () => void;
   onRemove: () => void;
   onDragStart: (e: React.DragEvent<HTMLDivElement>) => void;
@@ -243,11 +254,7 @@ function WatchRow({
 }) {
   const pct = quote?.changePct;
   const trend = pct == null ? "flat" : pct >= 0 ? "up" : "down";
-  const latestDate = item.latest?.asOf?.slice(5, 10) ?? null;
-  const latestHorizonBrief = horizonBrief(item.latest);
-  const latestActivity = item.latest
-    ? `${item.latest.kind === "daily_review" ? "复盘" : "报告"}${latestDate ? `·${latestDate}` : ""}`
-    : "无新事件";
+  const latestDate = formatEventDate(item.latest?.modifiedAt ?? item.latest?.asOf);
   return (
     <div
       role="button"
@@ -272,7 +279,7 @@ function WatchRow({
         "group relative h-14 cursor-pointer border-b text-left text-caption transition-colors duration-instant",
         collapsed
           ? "flex items-center justify-center px-1"
-          : "grid grid-cols-[minmax(68px,1fr)_48px_64px_40px_60px_64px_56px] items-center gap-x-1 px-2",
+          : "grid grid-cols-[minmax(68px,1fr)_48px_64px_40px_60px_48px] items-center gap-x-1 px-2",
         selected ? "bg-info-strong/[0.09]" : "hover:bg-accent/55",
         dragging && "opacity-40",
       )}
@@ -318,13 +325,26 @@ function WatchRow({
               )}
             />
           </div>
-          <div className="truncate text-center text-muted-foreground" title={latestActivity}>{latestActivity}</div>
-          <div className={cn("whitespace-nowrap text-right", latestHorizonBrief || item.latest?.stance ? "text-info" : "text-muted-foreground")}>
-            {latestHorizonBrief ?? (item.latest?.stance ? stanceLabel(item.latest.stance) : "待更新")}
+          <div className="truncate text-center">
+            {latestDate ? (
+              <button
+                type="button"
+                className="text-info hover:underline"
+                aria-label={`查看${item.name}资讯公告`}
+                onClick={(e) => {
+                  e.stopPropagation();
+                  onOpenNews();
+                }}
+              >
+                {latestDate}
+              </button>
+            ) : (
+              <span className="text-muted-foreground">—</span>
+            )}
           </div>
         </>
       )}
-      {!collapsed && <div className="absolute right-1 top-1 hidden items-center gap-0.5 rounded bg-background/90 p-0.5 shadow-surface group-hover:flex group-focus-within:flex">
+      {!collapsed && <div className="absolute -top-2 right-1 z-20 hidden items-center gap-0.5 rounded bg-background/90 p-0.5 shadow-surface group-hover:flex group-focus-within:flex">
         <Button
           variant="ghost"
           size="icon"

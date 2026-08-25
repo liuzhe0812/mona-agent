@@ -308,7 +308,7 @@ export function MessageBubble({
     >
       <div
         className={cn(
-          isGroupChat && "relative rounded-2xl rounded-tl-md border border-border/70 bg-card/80 px-4 py-3 shadow-sm",
+          isGroupChat && "relative rounded-2xl rounded-tl-md border border-border/70 bg-card/80 px-4 py-3",
         )}
       >
       {isGroupChat ? (

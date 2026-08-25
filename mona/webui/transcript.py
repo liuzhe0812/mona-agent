@@ -170,6 +170,7 @@ def replay_transcript_to_ui_messages(
     active_file_edit_segment_id: str | None = None
     activity_segment_counter = 0
     pending_delivered_files: list[dict[str, Any]] = []
+    pending_delivered_media: list[dict[str, Any]] = []
     _ts_base = int(time.time() * 1000)
 
     def _new_id(prefix: str, idx: int) -> str:
@@ -314,8 +315,32 @@ def replay_transcript_to_ui_messages(
             out.append(dict(file))
         return out
 
-    def append_delivered_files_to_last_assistant(files: list[dict[str, Any]], idx: int) -> None:
-        if not files:
+    def merge_media(
+        existing: list[dict[str, Any]] | None,
+        incoming: list[dict[str, Any]],
+    ) -> list[dict[str, Any]]:
+        out = list(existing or [])
+        seen = {
+            (str(item.get("kind") or ""), str(item.get("name") or item.get("url") or ""))
+            for item in out
+            if isinstance(item, dict)
+        }
+        for item in incoming:
+            if not isinstance(item, dict):
+                continue
+            key = (str(item.get("kind") or ""), str(item.get("name") or item.get("url") or ""))
+            if key in seen:
+                continue
+            seen.add(key)
+            out.append(dict(item))
+        return out
+
+    def append_delivered_files_to_last_assistant(
+        files: list[dict[str, Any]],
+        idx: int,
+        media: list[dict[str, Any]] | None = None,
+    ) -> None:
+        if not files and not media:
             return
         for i in range(len(messages) - 1, -1, -1):
             message = messages[i]
@@ -330,6 +355,10 @@ def replay_transcript_to_ui_messages(
                         else None,
                         files,
                     ),
+                    "media": merge_media(
+                        message.get("media") if isinstance(message.get("media"), list) else None,
+                        media or [],
+                    ),
                 }
                 return
         messages.append(
@@ -338,29 +367,42 @@ def replay_transcript_to_ui_messages(
                 "role": "assistant",
                 "content": "",
                 "deliveredFiles": merge_delivered_files(None, files),
+                "media": merge_media(None, media or []),
                 "createdAt": _ts_base + idx,
             },
         )
 
-    def queue_delivered_files(files: list[dict[str, Any]]) -> None:
-        nonlocal pending_delivered_files
+    def queue_delivered_files(
+        files: list[dict[str, Any]],
+        media: list[dict[str, Any]] | None = None,
+    ) -> None:
+        nonlocal pending_delivered_files, pending_delivered_media
         pending_delivered_files = merge_delivered_files(pending_delivered_files, files)
+        pending_delivered_media = merge_media(pending_delivered_media, media or [])
 
     def flush_pending_delivered_files(idx: int) -> None:
-        nonlocal pending_delivered_files
-        if not pending_delivered_files:
+        nonlocal pending_delivered_files, pending_delivered_media
+        if not pending_delivered_files and not pending_delivered_media:
             return
-        append_delivered_files_to_last_assistant(pending_delivered_files, idx)
+        append_delivered_files_to_last_assistant(
+            pending_delivered_files,
+            idx,
+            pending_delivered_media,
+        )
         pending_delivered_files = []
+        pending_delivered_media = []
 
-    def attach_or_queue_delivered_files(files: list[dict[str, Any]]) -> None:
+    def attach_or_queue_delivered_files(
+        files: list[dict[str, Any]],
+        media: list[dict[str, Any]] | None = None,
+    ) -> None:
         for i in range(len(messages) - 1, -1, -1):
             message = messages[i]
             if message.get("role") == "user":
                 break
             if message.get("role") == "assistant" and message.get("kind") != "trace":
                 if message.get("isStreaming"):
-                    queue_delivered_files(files)
+                    queue_delivered_files(files, media)
                 else:
                     messages[i] = {
                         **message,
@@ -370,9 +412,13 @@ def replay_transcript_to_ui_messages(
                             else None,
                             files,
                         ),
+                        "media": merge_media(
+                            message.get("media") if isinstance(message.get("media"), list) else None,
+                            media or [],
+                        ),
                     }
                 return
-        queue_delivered_files(files)
+        queue_delivered_files(files, media)
 
     def absorb_complete(extra: dict[str, Any], idx: int) -> None:
         nonlocal active_activity_segment_id, active_file_edit_segment_id
@@ -525,7 +571,18 @@ def replay_transcript_to_ui_messages(
         if ev == "deliver_files":
             raw_files = rec.get("files")
             if isinstance(raw_files, list):
-                attach_or_queue_delivered_files([f for f in raw_files if isinstance(f, dict)])
+                files = [f for f in raw_files if isinstance(f, dict)]
+                media: list[dict[str, Any]] = []
+                if rec.get("inline_media") is not False and augment_user_media is not None:
+                    paths = [
+                        str(file.get("absolute_path"))
+                        for file in files
+                        if file.get("absolute_path")
+                        and _infer_media_kind(str(file.get("name") or ""), "") in {"image", "video"}
+                    ]
+                    if paths:
+                        media = augment_user_media(paths)
+                attach_or_queue_delivered_files(files, media)
             continue
 
         if ev == "workflow_run_updated":
@@ -686,9 +743,12 @@ def replay_transcript_to_ui_messages(
             buffer_parts = []
             text = rec.get("text")
             content_s = text if isinstance(text, str) else ""
-            media_urls = rec.get("media_urls")
             media: list[dict[str, Any]] = []
-            if isinstance(media_urls, list):
+            raw_media = rec.get("media")
+            if isinstance(raw_media, list) and augment_user_media is not None:
+                media = augment_user_media([str(path) for path in raw_media if path])
+            media_urls = rec.get("media_urls")
+            if not media and isinstance(media_urls, list):
                 for m in media_urls:
                     if isinstance(m, dict) and m.get("url"):
                         media.append(

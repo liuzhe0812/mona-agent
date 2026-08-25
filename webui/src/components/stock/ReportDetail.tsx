@@ -17,9 +17,12 @@ import type {
   StockDigestItem,
   StockReportDetail,
   StockReportKind,
+  StockReportV6Document,
 } from "@/lib/stock-api";
-import { dataQualityLabel, stanceLabel } from "./labels";
+import { isStockReportV6Document } from "@/lib/stock-api";
+import { dataQualityLabel, evidenceTextLabel, stanceLabel } from "./labels";
 import { ResearchEvidenceDetail } from "./ResearchEvidenceDetail";
+import { ResearchDecisionView } from "./ResearchDecisionView";
 
 /** 报告阅读覆盖层（design §12 阅读态）：覆盖整个工作台，返回键退出。
  *  从 StockView 渲染，供 Hero 简报、投研卡、报告时间线共用。 */
@@ -118,6 +121,21 @@ interface ReportDetailProps {
   onDeepResearch: (instrumentId: string) => void;
 }
 
+function V6ReportSummary({ report }: { report: StockReportV6Document }) {
+  return (
+    <section className="space-y-4" data-testid="v6-report-summary">
+      <div className="border-b pb-3">
+        <h1 className="text-title font-semibold">{report.instrument.name}（{report.instrument.symbol}）投研结论</h1>
+        <p className="mt-2 text-body text-muted-foreground">{evidenceTextLabel(report.summary)}</p>
+        <p className="mt-2 text-micro text-muted-foreground">
+          依据来源：{typeof report.sourceCount === "number" ? `${report.sourceCount} 条` : "待确认"}
+        </p>
+      </div>
+      <ResearchDecisionView report={report} />
+    </section>
+  );
+}
+
 export function ReportDetail({
   activeReport,
   onClose,
@@ -125,7 +143,13 @@ export function ReportDetail({
   onDeepResearch,
 }: ReportDetailProps) {
   const [confirmDelete, setConfirmDelete] = useState(false);
-  const reportId = String(activeReport.report.report_id ?? "");
+  const v6Report = isStockReportV6Document(activeReport.report)
+    ? activeReport.report
+    : null;
+  const isV6 = v6Report !== null;
+  const reportId = v6Report
+    ? v6Report.reportId
+    : String(activeReport.report.report_id ?? "");
 
   return (
     <div className="flex h-full flex-col">
@@ -138,15 +162,17 @@ export function ReportDetail({
           {activeReport.report.kind ? KIND_LABELS[activeReport.report.kind] : ""}
         </span>
         <div className="ml-auto flex items-center gap-1">
-          <Button
-            variant="ghost"
-            size="xs"
-            className="gap-1"
-            onClick={() => void exportReportMarkdown(reportId, activeReport.markdown)}
-          >
-            <Download className="h-3.5 w-3.5" />
-            导出
-          </Button>
+          {!isV6 && (
+            <Button
+              variant="ghost"
+              size="xs"
+              className="gap-1"
+              onClick={() => void exportReportMarkdown(reportId, activeReport.markdown)}
+            >
+              <Download className="h-3.5 w-3.5" />
+              导出
+            </Button>
+          )}
           <Button
             variant="ghost"
             size="xs"
@@ -166,7 +192,9 @@ export function ReportDetail({
               onDeepResearch={onDeepResearch}
             />
           )}
-        {activeReport.report.schema_version === 4 ? (
+        {v6Report ? (
+          <V6ReportSummary report={v6Report} />
+        ) : activeReport.report.schema_version === 4 ? (
           <>
             <ResearchEvidenceDetail report={activeReport.report} />
             <details className="mt-3 rounded-lg border bg-card px-3 py-2">

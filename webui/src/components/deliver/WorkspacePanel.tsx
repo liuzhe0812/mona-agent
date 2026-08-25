@@ -1,6 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import {
-  ChevronDown,
   ChevronRight,
   FileText,
   Folder,
@@ -8,7 +7,6 @@ import {
   Image as ImageIcon,
   FileCode,
   Package,
-  RefreshCw,
   AlertTriangle,
   FolderOpen as FolderOpenIcon,
   Trash2,
@@ -32,6 +30,7 @@ import {
 } from "@/components/ui/alert-dialog";
 import { Button } from "@/components/ui/button";
 import { EmptyState } from "@/components/ui/empty-state";
+import { RightSidebarToggleIcon } from "@/components/notes/RightSidebarToggleIcon";
 import { useFilePreviewStore, type PreviewScope } from "./filePreviewStore";
 import { isTauri, openPathWithSystemApp, revealItemInDir } from "@/lib/tauri";
 import {
@@ -53,14 +52,14 @@ interface WorkspacePanelProps {
   scope?: PreviewScope;
   /** Required when ``scope === "project"``. */
   sessionKey?: string | null;
-  /** True while the artifact scan is in flight (shared mode only). */
-  loading?: boolean;
   /** Error message from the artifact scan, if any. */
   error?: string | null;
   /** Whether the server hit its 1000-file return cap. */
   truncated?: boolean;
   /** Manual refresh callback. */
   onRefresh?: () => void;
+  /** Collapse the entire right-side artifact panel. */
+  onCollapse?: () => void;
   /** Move an artifact (file or directory) to the system recycle bin. May
    *  return a promise; rejections are shown inside the confirmation dialog
    *  so the user can retry or cancel. */
@@ -196,6 +195,13 @@ function buildFileTree(files: DeliveredFile[]): TreeNode[] {
   return root.children!;
 }
 
+/** Hide the technical generated/ wrapper while keeping its real paths. */
+function flattenGeneratedDirectory(nodes: TreeNode[]): TreeNode[] {
+  return nodes.flatMap((node) =>
+    node.isDir && node.name.toLowerCase() === "generated" ? node.children ?? [] : [node],
+  );
+}
+
 function collectDirectoryPaths(nodes: TreeNode[]): string[] {
   const paths: string[] = [];
   for (const node of nodes) {
@@ -241,10 +247,10 @@ export function WorkspacePanel({
   sessionFiles: sessionFilesProp,
   scope = "shared",
   sessionKey = null,
-  loading = false,
   error = null,
   truncated = false,
   onRefresh,
+  onCollapse,
   onDelete,
   outputDir = null,
   ownerKey = "default",
@@ -259,7 +265,7 @@ export function WorkspacePanel({
   );
   const markArtifactsViewed = useFilePreviewStore((s) => s.markArtifactsViewed);
 
-  const tree = useMemo(() => buildFileTree(files), [files]);
+  const tree = useMemo(() => flattenGeneratedDirectory(buildFileTree(files)), [files]);
   const directoryPaths = useMemo(() => collectDirectoryPaths(tree), [tree]);
   const collapsedPaths = useFilePreviewStore(
     (s) => s.treeCollapsedByOwner[ownerKey] ?? EMPTY_COLLAPSED_PATHS,
@@ -286,6 +292,8 @@ export function WorkspacePanel({
   } | null>(null);
   const [deleteError, setDeleteError] = useState<string | null>(null);
   const [deletePending, setDeletePending] = useState(false);
+  const [sessionExpanded, setSessionExpanded] = useState(true);
+  const [workspaceExpanded, setWorkspaceExpanded] = useState(true);
 
   // Session deliveries may repeat the same file across turns (dedupe by
   // absolute path); the scan tree below stays the authoritative full list.
@@ -391,7 +399,7 @@ export function WorkspacePanel({
   const panelLabel = scope === "shared" ? "产物" : "项目文件";
 
   return (
-    <div className={cn("flex h-full flex-col bg-background", className)}>
+    <div className={cn("flex h-full flex-col bg-card", className)}>
       <div className="flex items-center gap-2 border-b border-border/60 px-3 py-2">
         <Package className="h-4 w-4 text-muted-foreground" />
         <span className="text-body font-medium">{panelLabel}</span>
@@ -401,20 +409,18 @@ export function WorkspacePanel({
           </span>
         )}
         <div className="flex-1" />
-        {onRefresh && (
+        {onCollapse && (
           <Button
             type="button"
             variant="ghost"
-            onClick={onRefresh}
-            disabled={loading}
-            title="刷新"
-            aria-label="刷新"
+            onClick={onCollapse}
+            title="收起产物区"
+            aria-label="收起产物区"
             className={cn(
               "h-6 w-6 rounded-sm p-0 text-muted-foreground hover:bg-muted hover:text-foreground",
-              "disabled:opacity-40 disabled:hover:bg-transparent",
             )}
           >
-            <RefreshCw className={cn("h-3.5 w-3.5", loading && "animate-spin")} />
+            <RightSidebarToggleIcon open className="h-3.5 w-3.5" />
           </Button>
         )}
       </div>
@@ -443,11 +449,17 @@ export function WorkspacePanel({
       ) : (
         <>
           {scope === "shared" && (
-            <div className="shrink-0 border-b border-border/60 px-2 py-1.5">
-              <div className="px-1 pb-1 text-micro font-medium text-muted-foreground">
-                会话产物
-              </div>
-              {sessionFiles.length > 0 ? (
+            <section className="shrink-0 px-2 py-1.5">
+              <button
+                type="button"
+                className="flex w-full items-center gap-1 px-1 text-left text-micro font-medium text-muted-foreground hover:text-foreground"
+                aria-expanded={sessionExpanded}
+                onClick={() => setSessionExpanded((expanded) => !expanded)}
+              >
+                <ChevronRight className={cn("h-3.5 w-3.5 transition-transform", sessionExpanded && "rotate-90")} />
+                本次会话产物
+              </button>
+              {sessionExpanded ? sessionFiles.length > 0 ? (
                 <ul className="flex flex-col text-ui">
                   {sessionFiles.map((f) => {
                     const key = fileKey(f);
@@ -473,15 +485,22 @@ export function WorkspacePanel({
                 <p className="px-1 py-1 text-micro text-muted-foreground/70">
                   当前会话还没有明确交付的文件
                 </p>
-              )}
-            </div>
+              ) : null}
+            </section>
           )}
           <div className="flex-1 overflow-y-auto scrollbar-hover py-1">
-            <div className="px-2 pt-1.5 pb-1">
-              <div className="px-1 text-micro font-medium text-muted-foreground">
+            <button
+              type="button"
+              className="flex w-full items-center gap-1 px-3 pt-1.5 pb-1 text-left text-micro font-medium text-muted-foreground hover:text-foreground"
+              aria-expanded={workspaceExpanded}
+              onClick={() => setWorkspaceExpanded((expanded) => !expanded)}
+            >
+              <ChevronRight className={cn("h-3.5 w-3.5 transition-transform", workspaceExpanded && "rotate-90")} />
+              <span>
                 {scope === "shared" ? "工作区产物" : "全部文件"}
-              </div>
-            </div>
+              </span>
+            </button>
+            {workspaceExpanded ? <>
             <ul className="flex flex-col text-ui">
               {tree.map((node) => (
                 <TreeRow
@@ -533,6 +552,7 @@ export function WorkspacePanel({
                 )}
               </div>
             )}
+            </> : null}
           </div>
         </>
       )}
@@ -632,11 +652,6 @@ function TreeRow({
         )}
         style={{ paddingLeft: indent }}
       >
-        {isCollapsed ? (
-          <ChevronRight className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
-        ) : (
-          <ChevronDown className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
-        )}
         {isCollapsed ? (
           <Folder className="h-4 w-4 shrink-0 text-amber-500" />
         ) : (
@@ -753,10 +768,10 @@ function TreeRow({
         onDoubleClick={handleDoubleClick}
         disabled={file.missing}
         className={cn(
-          "h-auto w-full justify-start gap-1.5 rounded-sm py-1 pr-2 text-left font-normal",
+          "relative h-auto w-full justify-start gap-1.5 rounded-sm py-1 pr-2 text-left font-normal",
           "hover:bg-muted/60 hover:text-foreground",
           file.missing && "cursor-default opacity-60",
-          isActive && "bg-primary/8",
+          isActive && "bg-foreground/5 text-foreground hover:bg-foreground/5 before:absolute before:inset-y-1.5 before:left-0 before:w-0.5 before:rounded-full before:bg-[hsl(var(--brand-red))]",
         )}
         style={{ paddingLeft: indent + 18 }}
       >
@@ -779,7 +794,7 @@ function TreeRow({
         <span
           className={cn(
             "min-w-0 flex-1 truncate text-foreground",
-            isActive && "text-primary",
+            isActive && "text-foreground",
           )}
         >
           {file.name}

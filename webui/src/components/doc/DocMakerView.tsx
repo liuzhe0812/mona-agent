@@ -64,12 +64,23 @@ export function DocMakerView() {
         {VISIBLE_TABS.map((tab) => (
           <Button
             key={tab.key}
-            variant={activeTab === tab.key ? "secondary" : "ghost"}
+            variant="ghost"
             size="sm"
-            className="h-7 rounded-full px-3 text-caption"
+            className={cn(
+              "relative h-7 rounded-none px-3 text-caption",
+              activeTab === tab.key
+                ? "text-foreground"
+                : "text-muted-foreground hover:bg-foreground/5 hover:text-foreground",
+            )}
             onClick={() => setActiveTab(tab.key)}
           >
             {tab.label}
+            {activeTab === tab.key && (
+              <span
+                aria-hidden="true"
+                className="absolute inset-x-2 bottom-0 h-0.5 bg-[hsl(var(--brand-red))]"
+              />
+            )}
           </Button>
         ))}
       </div>

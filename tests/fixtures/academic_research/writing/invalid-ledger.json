@@ -1,0 +1,5 @@
+{
+  "claims": [
+    {"claim_id": "claim-fake", "claim_type": "fact", "claim_text": "An invented result", "source_ids": ["src-missing"], "locator": {"kind": "page", "value": "99"}}
+  ]
+}

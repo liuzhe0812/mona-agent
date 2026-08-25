@@ -10,6 +10,7 @@ never fabricates a backtest.
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import json
 import math
 import os
@@ -18,12 +19,18 @@ import sqlite3
 import uuid
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
-from typing import Any, Iterable, Literal
+from typing import Any, Iterable, Literal, Mapping
 
 from loguru import logger
 from pydantic import Field, field_validator, model_validator
 
 from mona.config.schema import Base
+from mona.services.stock.calibration_cohort import (
+    VALIDATION_WINDOWS,
+    CalibrationCohortStore,
+    build_validation_records,
+    make_cohort_payload,
+)
 from mona.services.stock.provenance import SourceRecord
 from mona.services.stock.provider import (
     Fundamentals,
@@ -31,6 +38,11 @@ from mona.services.stock.provider import (
     KlineSeries,
     ProviderError,
     Quote,
+)
+from mona.services.stock.quant_validation import (
+    PromotionGate,
+    TransactionCost,
+    validate_strategy,
 )
 from mona.services.stock.storage import infer_exchange
 
@@ -87,6 +99,94 @@ _EVENT_FRESH_SECONDS = 30 * 60
 _EVENT_STALE_SECONDS = 24 * 60 * 60
 _VALUATION_COMPARISON_SCOPE = "same_industry_current_snapshot"
 _VALUATION_MIN_PEER_COUNT = 2
+_RANK_ALGORITHM_VERSION = "percentile-rank-v1"
+
+# These are display/trace groups only.  They do not create a second score or
+# infer fields that the deterministic selector did not calculate.
+_QUANT_HORIZON_FACTOR_FIELDS = {
+    "short_term": frozenset(
+        {"momentum20", "momentum60", "volatility20", "volume", "turnover"}
+    ),
+    "medium_term": frozenset(
+        {
+            "revenue_yoy",
+            "profit_yoy",
+            "net_profit",
+            "roe",
+            "roic",
+            "gross_margin",
+            "net_margin",
+            "operating_cashflow",
+            "debt_ratio",
+            "eps",
+            "momentum20",
+            "momentum60",
+        }
+    ),
+    "long_term": frozenset(
+        {
+            "pe",
+            "pb",
+            "roe",
+            "roic",
+            "gross_margin",
+            "net_margin",
+            "operating_cashflow",
+            "debt_ratio",
+            "eps",
+        }
+    ),
+}
+
+_QUANT_METHOD_REGISTRY: dict[str, dict[str, Any]] = {
+    "short_term": {
+        "methodId": "short-term-volume-price-v1",
+        "horizon": "short_term",
+        "inputFactors": sorted(_QUANT_HORIZON_FACTOR_FIELDS["short_term"]),
+        "directions": {"momentum20": "desc", "momentum60": "desc", "volatility20": "asc", "volume": "desc", "turnover": "desc"},
+        "version": "short-term-volume-price-v1",
+        "targetWindowSessions": 10,
+        "targetDefinition": "未来10个交易日相对基准收益",
+        "marketStates": ["all"],
+    },
+    "medium_term": {
+        "methodId": "medium-term-quality-growth-v1",
+        "horizon": "medium_term",
+        "inputFactors": sorted(_QUANT_HORIZON_FACTOR_FIELDS["medium_term"]),
+        "directions": {"revenue_yoy": "desc", "profit_yoy": "desc", "roe": "desc", "roic": "desc", "momentum20": "desc", "momentum60": "desc"},
+        "version": "medium-term-quality-growth-v1",
+        "targetWindowSessions": 60,
+        "targetDefinition": "未来60个交易日相对基准收益",
+        "marketStates": ["all"],
+    },
+    "long_term": {
+        "methodId": "long-term-quality-value-v1",
+        "horizon": "long_term",
+        "inputFactors": sorted(_QUANT_HORIZON_FACTOR_FIELDS["long_term"]),
+        "directions": {"pe": "asc", "pb": "asc", "roe": "desc", "roic": "desc", "operating_cashflow": "desc", "debt_ratio": "asc", "eps": "desc"},
+        "version": "long-term-quality-value-v1",
+        "targetWindowSessions": 120,
+        "targetDefinition": "未来120个交易日相对基准收益",
+        "marketStates": ["all"],
+    },
+}
+_MIN_QUANT_UNIQUE_SCORES = 5
+
+
+def stable_json_hash(value: Any) -> str:
+    """Hash canonical JSON; never use process-randomized Python ``hash``."""
+    payload = json.dumps(
+        value,
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+    )
+    return hashlib.sha256(payload.encode("utf-8")).hexdigest()
+
+
+def _stable_hash(value: Any) -> str:
+    """Backward-compatible private alias for the public canonical hash."""
+    return stable_json_hash(value)
 
 # The provider is deliberately free to use its own upstream taxonomy.  These
 # aliases keep the deterministic selector stable while accepting the common
@@ -239,8 +339,13 @@ class MarketSnapshot(Base):
     market_cap: float | None = None
     pe: float | None = None
     pb: float | None = None
+    board: str | None = None
     is_st: bool = False
     is_suspended: bool = False
+    is_delisting: bool | None = None
+    active_universe_member: bool | None = None
+    status_method: str | None = None
+    name_status_proxy: bool | None = None
     listing_days: int | None = None
     as_of: str | None = None
     observed_at: str | None = None
@@ -275,6 +380,107 @@ class ValuationContext(Base):
     missing_fields: list[str] = Field(default_factory=list)
 
 
+QuantValidationStatus = Literal[
+    "uncalibrated", "support", "unconfirmed", "oppose", "insufficient_data"
+]
+QuantSignal = Literal["positive", "neutral", "negative", "insufficient_data"]
+QuantHorizon = Literal["short_term", "medium_term", "long_term"]
+QuantPromotionStatus = Literal["research_only", "calibrated", "rejected"]
+
+
+class QuantFactorObservation(Base):
+    field: str
+    raw_value: float | None = None
+    percentile_or_rank: float | None = None
+    # Current cross-sectional rank is descriptive only.  It is not an OOS
+    # Alpha forecast and cannot promote a plan to trading.
+    rank: int | None = Field(default=None, ge=1)
+    direction: Literal["asc", "desc"]
+    scope: Literal["industry", "market_fallback", "market"]
+    sample_count: int = Field(default=0, ge=0)
+    missing_count: int = Field(default=0, ge=0)
+    as_of: str | None = None
+    source_ids: list[str] = Field(default_factory=list)
+    method_version: str
+    validation_status: QuantValidationStatus = "uncalibrated"
+
+
+class QuantHorizonValidation(Base):
+    validation_status: QuantValidationStatus
+    quant_signal: QuantSignal = "insufficient_data"
+    factor_observations: list[QuantFactorObservation] = Field(default_factory=list)
+
+
+class QuantCandidateValidation(Base):
+    validation_status: QuantValidationStatus
+    quant_signal: QuantSignal = "insufficient_data"
+    horizons: dict[QuantHorizon, QuantHorizonValidation]
+    source_closure_missing: list[str] = Field(default_factory=list)
+    promotion_status: QuantPromotionStatus = "research_only"
+    promotion_reason: str = "当前策略仅用于研究观察"
+    eligible_for_trading: bool = False
+    strategy_horizon: StrategyHorizon | None = None
+    calibrated_horizon: StrategyHorizon | None = None
+    validation_metrics: dict[str, Any] = Field(default_factory=dict)
+
+
+class QuantPointInTimeQuality(Base):
+    status: Literal["not_requested", "verified", "incompatible", "unknown"]
+    requested_as_of: str | None = None
+    latest_observed_at: str | None = None
+    missing_observed_at: int = Field(default=0, ge=0)
+
+
+class QuantDataQuality(Base):
+    status: Literal["available", "partial", "stale", "unavailable", "unknown"]
+    quant_validation_status: QuantValidationStatus
+    reason: str
+    point_in_time: QuantPointInTimeQuality
+    missing_factor_fields: list[str] = Field(default_factory=list)
+    source_closure_missing: list[str] = Field(default_factory=list)
+
+
+class QuantUniverse(Base):
+    universe_count: int = Field(default=0, ge=0)
+    hard_filter_count: int = Field(default=0, ge=0)
+    cheap_count: int = Field(default=0, ge=0)
+    enriched_count: int = Field(default=0, ge=0)
+    unprocessed_after_cap: int = Field(default=0, ge=0)
+    preselection_basis: str | None = None
+
+
+class QuantFactorScope(Base):
+    scope: Literal["industry", "market_fallback", "market", "mixed"]
+    sample_count: int = Field(default=0, ge=0)
+    missing_count: int = Field(default=0, ge=0)
+    direction: Literal["asc", "desc"]
+    weight: float = Field(ge=0)
+
+
+class QuantSnapshot(Base):
+    schema_version: Literal[1] = 1
+    strategy_id: str
+    strategy_fingerprint: str
+    as_of: str | None = None
+    factor_algorithm_version: str
+    rank_algorithm_version: str
+    validation_status: QuantValidationStatus
+    reason: str
+    universe: QuantUniverse
+    factor_scopes: dict[str, QuantFactorScope] = Field(default_factory=dict)
+    candidate_ids_hash: str
+    source_ids: list[str] = Field(default_factory=list)
+    data_quality: QuantDataQuality
+    source_closure_missing: list[str] = Field(default_factory=list)
+    promotion_status: QuantPromotionStatus = "research_only"
+    promotion_reason: str = "当前策略仅用于研究观察"
+    eligible_for_trading: bool = False
+    strategy_horizon: StrategyHorizon | None = None
+    calibrated_horizon: StrategyHorizon | None = None
+    method_registry: dict[str, Any] = Field(default_factory=dict)
+    validation_metrics: dict[str, Any] = Field(default_factory=dict)
+
+
 class StockSelectionCandidate(Base):
     instrument_id: str
     symbol: str
@@ -295,6 +501,10 @@ class StockSelectionCandidate(Base):
     source_ids: list[str] = Field(default_factory=list)
     change_state: Literal["new", "continued", "reentered", "unchanged"] = "new"
     valuation_context: ValuationContext | None = None
+    # Quantitative observations are immutable context only.  They are not a
+    # calibrated direction signal and therefore cannot change deterministic
+    # selection rank.
+    quant_validation: QuantCandidateValidation | None = None
 
 
 class StockSelectionReport(Base):
@@ -314,6 +524,7 @@ class StockSelectionReport(Base):
     source_ids: list[str] = Field(default_factory=list)
     status: Literal["completed", "unavailable", "failed"] = "completed"
     error: dict[str, str] | None = None
+    quant_snapshot: QuantSnapshot | None = None
 
 
 OpportunityClaimType = Literal["fact", "inference", "unknown"]
@@ -854,10 +1065,16 @@ class ScreeningStore:
         return conn
 
     def _init(self) -> None:
-        with self._connect() as conn:
-            conn.executescript(
+        conn = self._connect()
+        try:
+            with conn:
+                conn.executescript(
                 """
                 CREATE TABLE IF NOT EXISTS instrument_snapshot (
+                  instrument_id TEXT NOT NULL, as_of TEXT NOT NULL, payload TEXT NOT NULL,
+                  PRIMARY KEY(instrument_id, as_of)
+                );
+                CREATE TABLE IF NOT EXISTS instrument_snapshot_source (
                   instrument_id TEXT NOT NULL, as_of TEXT NOT NULL, payload TEXT NOT NULL,
                   PRIMARY KEY(instrument_id, as_of)
                 );
@@ -878,14 +1095,31 @@ class ScreeningStore:
                   fetched_at TEXT NOT NULL, payload TEXT NOT NULL, created_at TEXT NOT NULL
                 );
                 """
-            )
+                )
+        finally:
+            conn.close()
 
     def save_snapshots(self, snapshots: Iterable[MarketSnapshot], as_of: str) -> None:
+        snapshots = list(snapshots)
         rows = [(item.instrument_id, as_of, item.model_dump_json()) for item in snapshots]
         if not rows:
             return
-        with self._connect() as conn:
-            conn.executemany("INSERT OR REPLACE INTO instrument_snapshot VALUES (?, ?, ?)", rows)
+        source_rows = [
+            (item.instrument_id, as_of, item.source.model_dump_json())
+            for item in snapshots
+            if isinstance(item.source, SourceRecord)
+        ]
+        conn = self._connect()
+        try:
+            with conn:
+                conn.executemany("INSERT OR REPLACE INTO instrument_snapshot VALUES (?, ?, ?)", rows)
+                if source_rows:
+                    conn.executemany(
+                        "INSERT OR REPLACE INTO instrument_snapshot_source VALUES (?, ?, ?)",
+                        source_rows,
+                    )
+        finally:
+            conn.close()
 
     def save_factors(self, instrument_id: str, as_of: str, factors: dict[str, Any], algorithm_version: str) -> None:
         with self._connect() as conn:
@@ -894,15 +1128,112 @@ class ScreeningStore:
                 (instrument_id, as_of, algorithm_version, json.dumps(factors, ensure_ascii=False)),
             )
 
+    def latest_factor_snapshots(
+        self,
+        as_of: str | None = None,
+        algorithm_version: str | None = None,
+    ) -> dict[str, dict[str, Any]]:
+        """Return the newest cached factor observation per instrument.
+
+        Direct research uses this as a read-only cross-sectional cache.  It is
+        deliberately separate from selection promotion: these rows provide
+        current factor values and provenance context, never historical Alpha
+        validation or trading eligibility.
+        """
+        conn = self._connect()
+        try:
+            rows = conn.execute(
+                "SELECT instrument_id, as_of, algorithm_version, payload "
+                "FROM factor_snapshot ORDER BY as_of DESC, instrument_id ASC"
+            ).fetchall()
+        finally:
+            conn.close()
+        result: dict[str, dict[str, Any]] = {}
+        for instrument_id, observed_as_of, version, payload in rows:
+            if not isinstance(instrument_id, str) or instrument_id in result:
+                continue
+            if as_of is not None and str(observed_as_of) > as_of:
+                continue
+            if algorithm_version is not None and version != algorithm_version:
+                continue
+            try:
+                factors = json.loads(payload)
+            except (TypeError, json.JSONDecodeError):
+                continue
+            if not isinstance(factors, dict):
+                continue
+            result[instrument_id] = {
+                "as_of": observed_as_of,
+                "algorithm_version": version,
+                "factors": factors,
+            }
+        return result
+
     def latest_snapshots(self, as_of: str | None = None) -> list[MarketSnapshot]:
-        with self._connect() as conn:
+        conn = self._connect()
+        try:
             if as_of:
                 rows = conn.execute("SELECT payload FROM instrument_snapshot WHERE as_of = ?", (as_of,)).fetchall()
             else:
                 rows = conn.execute(
                     "SELECT s.payload FROM instrument_snapshot s JOIN (SELECT instrument_id, MAX(as_of) as a FROM instrument_snapshot GROUP BY instrument_id) x ON x.instrument_id=s.instrument_id AND x.a=s.as_of"
                 ).fetchall()
+        finally:
+            conn.close()
         return [MarketSnapshot.model_validate_json(row[0]) for row in rows]
+
+    def latest_snapshots_with_sources(
+        self, as_of: str | None = None
+    ) -> list[tuple[MarketSnapshot, SourceRecord | None]]:
+        """Return reusable snapshots with their optional original source.
+
+        Screening payloads intentionally omit source bodies.  The side table
+        keeps provenance available to EvidenceService without changing the
+        public screening report shape.
+        """
+        conn = self._connect()
+        try:
+            if as_of:
+                rows = conn.execute(
+                    "SELECT instrument_id, as_of, payload FROM instrument_snapshot WHERE as_of = ?",
+                    (as_of,),
+                ).fetchall()
+            else:
+                rows = conn.execute(
+                    "SELECT s.instrument_id, s.as_of, s.payload FROM instrument_snapshot s "
+                    "JOIN (SELECT instrument_id, MAX(as_of) as a FROM instrument_snapshot GROUP BY instrument_id) x "
+                    "ON x.instrument_id=s.instrument_id AND x.a=s.as_of"
+                ).fetchall()
+            source_rows = conn.execute(
+                "SELECT instrument_id, as_of, payload FROM instrument_snapshot_source"
+            ).fetchall()
+        finally:
+            conn.close()
+        sources: dict[tuple[str, str], SourceRecord] = {}
+        for row in source_rows:
+            try:
+                sources[(row[0], row[1])] = SourceRecord.model_validate_json(row[2])
+            except (TypeError, ValueError):
+                continue
+        out: list[tuple[MarketSnapshot, SourceRecord | None]] = []
+        for row in rows:
+            try:
+                snapshot = MarketSnapshot.model_validate_json(row[2])
+            except (TypeError, ValueError):
+                continue
+            # Older provider payloads omitted timestamps even though the
+            # SQLite primary key retained the immutable observation stamp.
+            # Restore that stored point-in-time metadata on read so bounded
+            # cache reuse never mistakes a dated row for an undated value.
+            if not snapshot.as_of or not snapshot.observed_at:
+                snapshot = snapshot.model_copy(
+                    update={
+                        "as_of": snapshot.as_of or row[1],
+                        "observed_at": snapshot.observed_at or row[1],
+                    }
+                )
+            out.append((snapshot, sources.get((row[0], row[1]))))
+        return out
 
     def save_strategy(self, strategy: SelectionStrategy) -> None:
         now = strategy.updated_at or _now()
@@ -930,7 +1261,7 @@ class ScreeningStore:
         summary_payload["_candidate_ids"] = [item.instrument_id for item in report.candidates]
         with self._connect() as conn:
             conn.execute(
-                "INSERT OR REPLACE INTO selection_evaluation VALUES (?, ?, ?, ?, ?, ?)",
+                "INSERT OR IGNORE INTO selection_evaluation VALUES (?, ?, ?, ?, ?, ?)",
                 (report.workflow_run_id, report.strategy.strategy_id, report.as_of, report.status, json.dumps(summary_payload, ensure_ascii=False), _now()),
             )
 
@@ -938,6 +1269,132 @@ class ScreeningStore:
         with self._connect() as conn:
             rows = conn.execute("SELECT payload FROM selection_evaluation ORDER BY created_at DESC LIMIT ?", (max(1, min(limit, 200)),)).fetchall()
         return [json.loads(row[0]) for row in rows]
+
+    def read_validation_records(
+        self, workspace: str | Path | None, strategy_id: str
+    ) -> list[dict[str, Any]]:
+        """Read only mature append-only selection outcomes for one strategy.
+
+        Each record retains the immutable selection snapshot hash and factor
+        version from its originating report.  Incomplete or pending outcome
+        rows are ignored; this method never fetches data or rewrites files.
+        """
+        if workspace is None:
+            return []
+        root = Path(workspace).expanduser() / "stock_projects"
+        if not root.is_dir():
+            return []
+        records: list[dict[str, Any]] = []
+        for run_dir in sorted(root.iterdir()):
+            if not run_dir.is_dir():
+                continue
+            report_path = run_dir / "selection.json"
+            observations_path = run_dir / "selection_outcome_observations.jsonl"
+            if not report_path.is_file() or not observations_path.is_file():
+                continue
+            try:
+                report = json.loads(report_path.read_text(encoding="utf-8"))
+            except (OSError, json.JSONDecodeError):
+                continue
+            if not isinstance(report, dict):
+                continue
+            strategy = report.get("strategy") or {}
+            report_strategy_id = strategy.get("strategy_id") or strategy.get("strategyId")
+            if report_strategy_id != strategy_id:
+                continue
+            quant_snapshot = report.get("quantSnapshot") or report.get("quant_snapshot")
+            if not isinstance(quant_snapshot, dict):
+                continue
+            snapshot_hash = stable_json_hash(quant_snapshot)
+            factor_version = quant_snapshot.get("factorAlgorithmVersion") or quant_snapshot.get("factor_algorithm_version")
+            strategy_fingerprint = quant_snapshot.get("strategyFingerprint") or quant_snapshot.get("strategy_fingerprint")
+            if not isinstance(factor_version, str) or not factor_version.strip():
+                continue
+            if not isinstance(strategy_fingerprint, str) or not strategy_fingerprint.strip():
+                continue
+            snapshot_source_ids = quant_snapshot.get("sourceIds") or quant_snapshot.get("source_ids") or []
+            candidates = {
+                item.get("instrumentId") or item.get("instrument_id"): item
+                for item in report.get("candidates") or []
+                if isinstance(item, dict)
+            }
+            report_id = report.get("reportId") or report.get("report_id")
+            run_id = report.get("workflowRunId") or report.get("workflow_run_id") or run_dir.name
+            as_of = report.get("asOf") or report.get("as_of")
+            if not isinstance(report_id, str) or not isinstance(as_of, str):
+                continue
+            universe = quant_snapshot.get("universe") or {}
+            universe_count = universe.get("universeCount") or universe.get("universe_count")
+            observed_count = len(candidates)
+            if not isinstance(universe_count, int) or universe_count <= 0:
+                continue
+            best_observations: dict[str, dict[str, Any]] = {}
+            for line in observations_path.read_text(encoding="utf-8").splitlines():
+                try:
+                    observation = json.loads(line)
+                except json.JSONDecodeError:
+                    continue
+                if not isinstance(observation, dict) or observation.get("status") != "complete":
+                    continue
+                if observation.get("data_status") not in {None, "available"}:
+                    continue
+                instrument_id = observation.get("instrument_id")
+                candidate = candidates.get(instrument_id)
+                if not isinstance(candidate, dict):
+                    continue
+                factor = candidate.get("score")
+                forward_return = observation.get("relative_return_pct")
+                candidate_source_ids = candidate.get("sourceIds") or candidate.get("source_ids") or snapshot_source_ids
+                if (
+                    _as_float(factor) is None
+                    or _as_float(forward_return) is None
+                    or not isinstance(candidate_source_ids, list)
+                    or any(not isinstance(source_id, str) or not source_id for source_id in candidate_source_ids)
+                ):
+                    continue
+                exit_date = observation.get("exit_date")
+                if not isinstance(exit_date, str) or not exit_date:
+                    continue
+                window = int(observation.get("window") or 0)
+                current = best_observations.get(instrument_id)
+                if current is None or window > int(current["window"]):
+                    best_observations[instrument_id] = {
+                        "as_of": as_of,
+                        "outcome_as_of": exit_date,
+                        "instrument_id": instrument_id,
+                        "factor": float(factor),
+                        "forward_return": float(forward_return) / 100.0,
+                        "snapshot_hash": snapshot_hash,
+                        "factor_version": factor_version,
+                        "strategy_fingerprint": strategy_fingerprint,
+                        "report_id": report_id,
+                        "workflow_run_id": run_id,
+                        "factor_id": "composite_score",
+                        "factor_direction": "desc",
+                        "source_ids": sorted(set(candidate_source_ids)),
+                        "outcome_snapshot_hash": stable_json_hash(
+                            {
+                                "report_id": report_id,
+                                "instrument_id": instrument_id,
+                                "window": window,
+                                "relative_return_pct": float(forward_return),
+                                "source_ids": sorted(set(candidate_source_ids)),
+                            }
+                        ),
+                        "sample_scope": "selected_candidates",
+                        "universe_count": universe_count,
+                        "observed_count": observed_count,
+                        "window": window,
+                    }
+            records.extend(
+                {
+                    key: value
+                    for key, value in item.items()
+                    if key != "window"
+                }
+                for item in best_observations.values()
+            )
+        return records
 
     def save_event_capture(self, payload: dict[str, Any]) -> None:
         """Persist the latest bounded event window atomically by cache key."""
@@ -983,6 +1440,7 @@ class StockScreeningService:
     """
 
     FACTOR_VERSION = "screening-factor-v1"
+    RANK_ALGORITHM_VERSION = _RANK_ALGORITHM_VERSION
 
     def __init__(self, provider: Any | None = None, *, root: str | Path | None = None, workspace: str | Path | None = None, store: ScreeningStore | None = None):
         self.provider = provider
@@ -1067,10 +1525,11 @@ class StockScreeningService:
                 stamp = max((item.as_of or "" for item in cached), default="")
                 return cached, stamp, "stale"
             return [], as_of or _now(), "unavailable"
+        capture_complete = getattr(rows, "complete", True)
         snapshots = [item if isinstance(item, MarketSnapshot) else MarketSnapshot.model_validate(item) for item in rows]
         stamp = as_of or next((item.as_of for item in snapshots if item.as_of), None) or _now()
         self.store.save_snapshots(snapshots, stamp)
-        return snapshots, stamp, "available"
+        return snapshots, stamp, "available" if capture_complete else "partial"
 
     @staticmethod
     def _snapshot_values(snapshot: MarketSnapshot, factors: dict[str, Any], fundamentals: dict[str, Any] | None = None) -> dict[str, Any]:
@@ -1096,18 +1555,39 @@ class StockScreeningService:
             return False, ["成交额"]
         return True, reasons
 
-    async def _enrich(self, row: MarketSnapshot, fields: set[str]) -> tuple[dict[str, Any], list[str], list[str]]:
+    async def _enrich(
+        self, row: MarketSnapshot, fields: set[str]
+    ) -> tuple[
+        dict[str, Any],
+        list[str],
+        list[str],
+        dict[str, list[str]],
+        dict[str, list[SourceRecord]],
+    ]:
         values: dict[str, Any] = {}
         missing: list[str] = []
         source_ids = list(row.source_ids)
+        row_source = row.source if isinstance(row.source, SourceRecord) else None
+        if row_source is not None and not source_ids:
+            source_ids.append(row_source.id)
+        factor_sources: dict[str, list[str]] = {}
+        factor_source_records: dict[str, list[SourceRecord]] = {}
         inst = InstrumentRef(exchange=row.exchange, symbol=row.symbol, instrument_type=row.instrument_type)
         if fields & {"ma5", "ma20", "ma60", "momentum20", "momentum60", "volatility20"}:
             try:
                 if self.provider is None:
                     raise ProviderError("provider unavailable")
                 series = await self.provider.kline(inst, limit=120)
-                values.update(_kline_factors(series))
-                source_ids.append(series.source.id)
+                kline_factors = _kline_factors(series)
+                values.update(kline_factors)
+                series_source = series.source if isinstance(series.source, SourceRecord) else None
+                source_id = getattr(series.source, "id", None)
+                if isinstance(source_id, str) and source_id:
+                    source_ids.append(source_id)
+                for field in fields & set(kline_factors):
+                    factor_sources[field] = [source_id] if source_id else []
+                    if series_source is not None and series_source.id == source_id:
+                        factor_source_records[field] = [series_source]
             except Exception:
                 missing.extend(sorted(fields & {"ma5", "ma20", "ma60", "momentum20", "momentum60", "volatility20"}))
         fundamental_fields = fields & {"roe", "roic", "gross_margin", "net_margin", "revenue_yoy", "profit_yoy", "net_profit", "operating_cashflow", "debt_ratio", "eps"}
@@ -1117,10 +1597,74 @@ class StockScreeningService:
                     raise ProviderError("provider unavailable")
                 fundamentals: Fundamentals = await self.provider.fundamentals(inst)
                 values.update(fundamentals.metrics)
-                source_ids.append(fundamentals.source.id)
+                fundamentals_source = fundamentals.source if isinstance(fundamentals.source, SourceRecord) else None
+                source_id = getattr(fundamentals.source, "id", None)
+                if isinstance(source_id, str) and source_id:
+                    source_ids.append(source_id)
+                for field in fundamental_fields:
+                    if field in fundamentals.metrics:
+                        factor_sources[field] = [source_id] if source_id else []
+                        if fundamentals_source is not None and fundamentals_source.id == source_id:
+                            factor_source_records[field] = [fundamentals_source]
             except Exception:
                 missing.extend(sorted(fundamental_fields))
-        return values, sorted(set(missing)), sorted(set(source_ids))
+        return (
+            values,
+            sorted(set(missing)),
+            sorted(set(source_ids)),
+            factor_sources,
+            factor_source_records,
+        )
+
+    async def build_diagnosis_cross_section(
+        self,
+        *,
+        as_of: str | None = None,
+        universe: Iterable[MarketSnapshot | dict[str, Any]] | None = None,
+    ) -> dict[str, Any]:
+        """Build the reusable eligible market/factor snapshot for diagnosis.
+
+        This deliberately shares ``_universe``, ``_hard_filter`` and
+        ``_enrich`` with selection.  It writes only the same snapshot/factor
+        cache used by selection; it does not create a selection report or a
+        calibration cohort.  The diagnosis layer can therefore request a
+        same-day cross-section when no prior selection run exists.
+        """
+        rows, stamp, quality = await self._universe(universe, as_of)
+        strategy = SelectionStrategy(
+            strategy_id="diagnosis_cross_section",
+            name="AI诊股横截面",
+            source="builtin",
+        )
+        eligible = [row for row in rows if self._hard_filter(strategy, row)[0]]
+        fields = {
+            "momentum20", "momentum60", "volatility20",
+            "revenue_yoy", "profit_yoy", "roe", "roic",
+            "pe", "pb", "operating_cashflow", "debt_ratio", "eps",
+        }
+        semaphore = asyncio.Semaphore(_ENRICHMENT_CONCURRENCY)
+
+        async def enrich_one(row: MarketSnapshot):
+            async with semaphore:
+                return row, await self._enrich(row, fields)
+
+        enriched = await asyncio.gather(*(enrich_one(row) for row in eligible))
+        factors: dict[str, dict[str, Any]] = {}
+        for row, (values, missing, _sources, _factor_sources, _records) in enriched:
+            self.store.save_factors(row.instrument_id, stamp, values, self.FACTOR_VERSION)
+            factors[row.instrument_id] = {
+                "as_of": stamp,
+                "algorithm_version": self.FACTOR_VERSION,
+                "factors": values,
+                "missing_fields": missing,
+            }
+        return {
+            "rows": eligible,
+            "factors": factors,
+            "as_of": stamp,
+            "quality": quality,
+            "universe_definition": "screening_default_eligible_universe",
+        }
 
     @staticmethod
     def _catalyst_window(as_of: str | None) -> tuple[str, str]:
@@ -1242,9 +1786,15 @@ class StockScreeningService:
         rows: list[MarketSnapshot],
         stamp: str,
         market_quality: str,
+        validation_records: Iterable[Mapping[str, Any]] | None = None,
     ) -> dict[str, Any]:
         capture, capture_status = await self._recent_catalyst_capture(as_of=stamp)
         if capture is None:
+            promotion = self._promotion_result(
+                selected,
+                validation_records,
+                current_snapshot_incomplete=True,
+            )
             report = StockSelectionReport(
                 report_id=f"stock_selection_{workflow_run_id}",
                 workflow_run_id=workflow_run_id,
@@ -1256,6 +1806,7 @@ class StockScreeningService:
                     "status": "unavailable",
                     "reason": "近期公告事件源不可用，且没有24小时内可复用的事件缓存",
                     "event_capture": {"status": capture_status, "window_days": _CATALYST_WINDOW_DAYS},
+                    "quantPromotion": promotion,
                 },
                 validation={"status": "unavailable", "reason": "缺少可核验的近期事件 capture"},
                 error={"code": "event_data_unavailable", "message": "近期公告事件源不可用，无法可靠筛选近期催化"},
@@ -1340,6 +1891,11 @@ class StockScreeningService:
             )
             report_sources.update(source_ids)
         report_quality = "stale" if capture_status == "stale_cache" else ("partial" if not capture.get("complete", True) else market_quality)
+        promotion = self._promotion_result(
+            selected,
+            validation_records,
+            current_snapshot_incomplete=report_quality != "available",
+        )
         event_meta = {
             key: capture.get(key)
             for key in ("window_start", "window_end", "data_cutoff_at", "expected_count", "loaded_count", "complete", "fetched_at", "provider", "cache_status", "error")
@@ -1362,6 +1918,7 @@ class StockScreeningService:
                 "status": report_quality,
                 "reason": "当前窗口无命中材料事件" if not candidates else None,
                 "event_capture": event_meta,
+                "quantPromotion": promotion,
             },
             missing_fields=["full_event_window_coverage"] if not capture.get("complete", True) else [],
             source_ids=sorted(report_sources),
@@ -1377,13 +1934,18 @@ class StockScreeningService:
         workflow_run_id: str,
         rows: list[MarketSnapshot],
         stamp: str,
+        validation_records: Iterable[Mapping[str, Any]] | None = None,
     ) -> dict[str, Any]:
         """Union selected directions, then rank the shared candidate pool once."""
         reports: list[StockSelectionReport] = []
-        for strategy_id in selected.included_strategy_ids:
+        for direction_index, strategy_id in enumerate(selected.included_strategy_ids):
+            # A combined report owns the public workflow id.  Directional
+            # sub-runs need private ids so immutable selection.json handling
+            # does not make the first direction shadow the final union.
+            direction_run_id = f"{workflow_run_id[:80]}_d{direction_index}"
             payload = await self.run(
                 strategy_id,
-                run_id=workflow_run_id,
+                run_id=direction_run_id,
                 universe=rows,
                 as_of=stamp,
             )
@@ -1464,6 +2026,30 @@ class StockScreeningService:
         combined_quality = max(direction_quality, key=lambda value: quality_order.get(value, 1))
         if available_reports and len(available_reports) != len(reports):
             combined_quality = "partial"
+        promotion = self._promotion_result(
+            selected,
+            validation_records,
+            current_snapshot_incomplete=combined_quality != "available",
+        )
+        candidates = [
+            candidate.model_copy(
+                update={
+                    "quant_validation": candidate.quant_validation.model_copy(
+                        update={
+                            "promotion_status": promotion["promotionStatus"],
+                            "promotion_reason": promotion["reason"],
+                            "eligible_for_trading": promotion["eligibleForTrading"],
+                            "strategy_horizon": promotion.get("strategyHorizon"),
+                            "calibrated_horizon": promotion.get("calibratedHorizon"),
+                            "validation_metrics": promotion.get("metrics") or {},
+                        }
+                    )
+                    if candidate.quant_validation is not None
+                    else None
+                }
+            )
+            for candidate in candidates
+        ]
         report = StockSelectionReport(
             report_id=f"stock_selection_{workflow_run_id}",
             workflow_run_id=workflow_run_id,
@@ -1482,6 +2068,7 @@ class StockScreeningService:
                 "status": combined_quality,
                 "directions": [item.data_quality for item in reports],
                 "event_capture": catalyst_capture,
+                "quantPromotion": promotion,
             },
             missing_fields=sorted({field for item in candidates for field in item.missing_fields}),
             source_ids=sorted({source_id for item in candidates for source_id in item.source_ids}),
@@ -1500,6 +2087,8 @@ class StockScreeningService:
         universe: Iterable[MarketSnapshot | dict[str, Any]] | None = None,
         symbols: list[str] | None = None,
         as_of: str | None = None,
+        validation_records: Iterable[Mapping[str, Any]] | None = None,
+        calibration_benchmark_reference: Mapping[str, Any] | None = None,
     ) -> dict[str, Any]:
         if strategy is None:
             strategy = strategy_id
@@ -1507,6 +2096,16 @@ class StockScreeningService:
             raise ScreeningValidationError("strategy or strategy_id is required")
         selected = self.resolve_strategy(strategy)
         workflow_run_id = _safe_run_id(run_id)
+        if validation_records is None:
+            validation_records = self.store.read_validation_records(
+                self.workspace, selected.strategy_id
+            )
+        existing_report = self.read_report(workflow_run_id)
+        if existing_report is not None:
+            # A run id identifies one immutable selection input.  Retries
+            # must return the persisted report before touching providers or
+            # replacing the SQLite summary.
+            return existing_report
         if selected.availability == "unavailable":
             report = StockSelectionReport(
                 report_id=f"stock_selection_{workflow_run_id}",
@@ -1546,9 +2145,22 @@ class StockScreeningService:
             return report.model_dump(by_alias=True)
         self.store.save_snapshots(rows, stamp)
         if selected.strategy_id == "combined_discovery":
-            return await self._run_combined(selected, workflow_run_id, rows, stamp)
+            return await self._run_combined(
+                selected,
+                workflow_run_id,
+                rows,
+                stamp,
+                validation_records,
+            )
         if selected.strategy_id == "recent_catalyst":
-            return await self._run_recent_catalyst(selected, workflow_run_id, rows, stamp, quality)
+            return await self._run_recent_catalyst(
+                selected,
+                workflow_run_id,
+                rows,
+                stamp,
+                quality,
+                validation_records,
+            )
 
         hard_rows: list[MarketSnapshot] = []
         stats: list[dict[str, Any]] = []
@@ -1602,7 +2214,18 @@ class StockScreeningService:
             })
         else:
             candidate_rows = cheap_rows
-        enriched: list[tuple[MarketSnapshot, dict[str, Any], list[dict[str, Any]], list[dict[str, Any]], list[str], list[str]]] = []
+        enriched: list[
+            tuple[
+                MarketSnapshot,
+                dict[str, Any],
+                list[dict[str, Any]],
+                list[dict[str, Any]],
+                list[str],
+                list[str],
+                dict[str, list[str]],
+                dict[str, list[SourceRecord]],
+            ]
+        ] = []
         semaphore = asyncio.Semaphore(_ENRICHMENT_CONCURRENCY)
 
         async def enrich_one(row: MarketSnapshot):
@@ -1610,9 +2233,19 @@ class StockScreeningService:
                 return row, await self._enrich(row, enrichment_fields)
 
         enriched_inputs = await asyncio.gather(*(enrich_one(row) for row in candidate_rows))
-        for row, (factors, missing, sources) in enriched_inputs:
+        for row, (factors, missing, sources, factor_sources, factor_source_records) in enriched_inputs:
             self.store.save_factors(row.instrument_id, stamp, factors, self.FACTOR_VERSION)
             values = self._snapshot_values(row, factors)
+            row_source = row.source if isinstance(row.source, SourceRecord) else None
+            snapshot_source_ids = list(row.source_ids)
+            if row_source is not None and not snapshot_source_ids:
+                snapshot_source_ids = [row_source.id]
+            for field in fields & _SNAPSHOT_FIELDS:
+                factor_sources.setdefault(field, snapshot_source_ids)
+                if row_source is not None and (
+                    not row.source_ids or row_source.id in row.source_ids
+                ):
+                    factor_source_records.setdefault(field, [row_source])
             matched: list[dict[str, Any]] = []
             unmatched: list[dict[str, Any]] = []
             for condition in selected.filters:
@@ -1621,47 +2254,246 @@ class StockScreeningService:
                 (matched if result is True else unmatched).append(item)
             if unmatched:
                 continue
-            enriched.append((row, values, matched, unmatched, missing, sources))
+            enriched.append(
+                (
+                    row,
+                    values,
+                    matched,
+                    unmatched,
+                    missing,
+                    sources,
+                    factor_sources,
+                    factor_source_records,
+                )
+            )
         stats.append({"stage": "conditions", "before": len(candidate_rows), "after": len(enriched)})
 
         rankings: list[tuple[float, tuple[Any, ...], int]] = []
         ranking_contributions: dict[int, dict[str, float]] = {}
+        ranking_observations: dict[int, dict[str, dict[str, Any]]] = {}
+        source_records_by_id: dict[str, dict[str, Any]] = {}
+        source_record_conflicts: set[str] = set()
+        source_closure_missing_by_index: dict[int, set[str]] = {}
+        factor_scope_records: dict[str, list[dict[str, Any]]] = {}
         normalization_modes: dict[str, str] = {}
-        for index, (_row, values, _matched, _unmatched, _missing, _sources) in enumerate(enriched):
+        for index, (
+            _row,
+            values,
+            _matched,
+            _unmatched,
+            _missing,
+            _sources,
+            factor_sources,
+            factor_source_records,
+        ) in enumerate(enriched):
             score = 0.0
             contributions: dict[str, float] = {}
+            observations: dict[str, dict[str, Any]] = {}
             total_weight = sum(item.weight for item in selected.ranking) or 1.0
             for factor in selected.ranking:
                 actual = _as_float(values.get(factor.field))
                 peer_rows = enriched
+                scope = "market"
                 if factor.field in {"pe", "pb", "roe", "roic", "gross_margin", "net_margin", "revenue_yoy", "profit_yoy", "debt_ratio", "operating_cashflow"} and values.get("industry"):
                     industry_rows = [item for item in enriched if item[1].get("industry") == values.get("industry")]
                     if len(industry_rows) >= 2:
                         peer_rows = industry_rows
+                        scope = "industry"
                         normalization_modes[factor.field] = "industry"
                     else:
+                        scope = "market_fallback"
                         normalization_modes.setdefault(factor.field, "market_fallback")
+                else:
+                    normalization_modes.setdefault(factor.field, "market")
                 peer_values = [_as_float(item[1].get(factor.field)) for item in peer_rows]
                 numeric = [item for item in peer_values if item is not None]
-                if actual is None or not numeric:
+                percentile = _percentile(numeric, actual) if actual is not None and numeric else None
+                raw_source_ids = sorted(set(factor_sources.get(factor.field) or []))
+                source_ids, source_missing = self._resolve_factor_sources(
+                    raw_source_ids,
+                    factor_source_records.get(factor.field) or [],
+                    source_records_by_id,
+                    source_record_conflicts,
+                )
+                if source_missing and (
+                    values.get(factor.field) is not None
+                    or raw_source_ids
+                    or factor_source_records.get(factor.field)
+                ):
+                    source_closure_missing_by_index.setdefault(index, set()).add(
+                        factor.field
+                    )
+                observation = {
+                    "field": factor.field,
+                    "raw_value": values.get(factor.field),
+                    "percentile_or_rank": percentile,
+                    "direction": factor.direction,
+                    "scope": scope,
+                    "sample_count": len(numeric),
+                    "missing_count": len(peer_values) - len(numeric),
+                    "as_of": values.get("as_of") or stamp,
+                    "source_ids": source_ids,
+                    "method_version": self.RANK_ALGORITHM_VERSION,
+                    "validation_status": (
+                        "uncalibrated"
+                        if percentile is not None and source_ids
+                        else "insufficient_data"
+                    ),
+                }
+                observations[factor.field] = observation
+                factor_scope_records.setdefault(factor.field, []).append(
+                    {
+                        "scope": scope,
+                        "sample_count": len(numeric),
+                        "missing_count": len(peer_values) - len(numeric),
+                    }
+                )
+                if percentile is None:
                     continue
-                percentile = _percentile(numeric, actual)
                 contribution = (percentile if factor.direction == "desc" else 1.0 - percentile) * factor.weight / total_weight
                 score += contribution
                 contributions[factor.field] = round(contribution, 6)
             ranking_contributions[index] = contributions
+            ranking_observations[index] = observations
             rankings.append((score, tuple(values.get(f.field) for f in selected.ranking), index))
-        rankings.sort(key=lambda item: (-item[0], item[2]))
+        if source_record_conflicts:
+            for index, observations in ranking_observations.items():
+                for field, observation in observations.items():
+                    if source_record_conflicts.intersection(observation.get("source_ids") or []):
+                        observation["source_ids"] = []
+                        observation["validation_status"] = "insufficient_data"
+                        source_closure_missing_by_index.setdefault(index, set()).add(field)
+        rankings.sort(key=lambda item: (-item[0], enriched[item[2]][0].instrument_id))
         previous_ids = self._previous_candidate_ids(selected.strategy_id)
+        point_in_time = self._point_in_time_quality(rows, as_of)
+        missing_factor_fields = sorted(
+            {
+                field
+                for observations in ranking_observations.values()
+                for field, observation in observations.items()
+                if observation.get("validation_status") != "uncalibrated"
+            }
+        )
+        source_closure_missing = sorted(
+            f"{enriched[index][0].instrument_id}:{field}"
+            for index, fields_missing in source_closure_missing_by_index.items()
+            for field in sorted(fields_missing)
+        )
+        mapped_factor_fields = {
+            factor.field
+            for factor in selected.ranking
+            if any(
+                factor.field in horizon_fields
+                for horizon_fields in _QUANT_HORIZON_FACTOR_FIELDS.values()
+            )
+        }
+        core_missing = (
+            point_in_time["status"] in {"incompatible", "unknown"}
+            or quality != "available"
+            or skipped_for_cap > 0
+            or bool(missing_factor_fields)
+            or bool(source_closure_missing)
+            or not selected.ranking
+            or not mapped_factor_fields
+        )
+        if point_in_time["status"] == "incompatible":
+            quant_reason = "请求的历史时点早于实际行情观测时间，当前数据不能作为点时量化快照"
+        elif point_in_time["status"] == "unknown":
+            quant_reason = "未提供完整的股票池观测时点，不能确认量化快照的时间口径"
+        elif quality != "available":
+            quant_reason = f"股票池数据质量为{quality}，不能形成完整量化快照"
+        elif skipped_for_cap > 0:
+            quant_reason = "仅处理部分候选，未处理股票不能用于完整量化验证"
+        elif source_closure_missing:
+            quant_reason = "量化因子来源闭包缺失：" + "、".join(source_closure_missing)
+        elif missing_factor_fields:
+            quant_reason = f"排序因子缺少可核验数据：{'、'.join(missing_factor_fields)}"
+        elif not selected.ranking:
+            quant_reason = "当前策略没有排序因子，不能形成量化观察"
+        elif not mapped_factor_fields:
+            quant_reason = "当前排序因子没有可映射的周期观察，不能形成量化结论"
+        else:
+            quant_reason = "量化因子尚未经过历史校准，不能形成方向信号"
+        quant_status = "insufficient_data" if core_missing else "uncalibrated"
+        cohort_records = await self._update_calibration_cohorts(
+            selected,
+            stamp,
+            enriched,
+            rankings,
+            rows,
+            skipped_for_cap=skipped_for_cap,
+            quality=quality,
+            benchmark_reference=calibration_benchmark_reference,
+        )
+        if cohort_records:
+            validation_records = cohort_records
+        current_score_diverse = len({round(float(item[0]), 10) for item in rankings}) >= _MIN_QUANT_UNIQUE_SCORES
+        current_snapshot_reason = (
+            "当前因子无区分度，不能形成交易推荐"
+            if not current_score_diverse
+            else None
+        )
+        promotion = self._promotion_result(
+            selected,
+            validation_records,
+            current_snapshot_incomplete=core_missing or not current_score_diverse,
+            current_snapshot_reason=current_snapshot_reason,
+        )
+
+        factor_scopes: dict[str, dict[str, Any]] = {}
+        for factor in selected.ranking:
+            records = factor_scope_records.get(factor.field, [])
+            observed_scopes = {str(item.get("scope")) for item in records}
+            scope = (
+                next(iter(observed_scopes))
+                if len(observed_scopes) == 1
+                else "mixed"
+                if observed_scopes
+                else normalization_modes.get(factor.field, "market")
+            )
+            factor_scopes[factor.field] = {
+                "scope": scope,
+                "sample_count": (
+                    min(int(item.get("sample_count") or 0) for item in records)
+                    if records
+                    else 0
+                ),
+                "missing_count": max(
+                    (int(item.get("missing_count") or 0) for item in records),
+                    default=0,
+                ),
+                "direction": factor.direction,
+                "weight": factor.weight,
+            }
         candidates: list[StockSelectionCandidate] = []
         report_sources: set[str] = set()
         for rank, (score, _key, index) in enumerate(rankings[: selected.limit], start=1):
-            row, values, matched, unmatched, missing, sources = enriched[index]
+            (
+                row,
+                values,
+                matched,
+                unmatched,
+                missing,
+                sources,
+                _factor_sources,
+                _factor_source_records,
+            ) = enriched[index]
             contributions = ranking_contributions.get(index, {})
             reasons = self._reasons(row, values, selected)
             risks = self._risks(row, values, missing)
             quality_value = "partial" if missing else quality
             state = "continued" if row.instrument_id in previous_ids else "new"
+            quant_validation = self._quant_validation(
+                ranking_observations.get(index, {}),
+                (factor.field for factor in selected.ranking),
+                snapshot_status=quant_status,
+                source_closure_missing=source_closure_missing_by_index.get(index, set()),
+                promotion_status=promotion["promotionStatus"],
+                promotion_reason=promotion["reason"],
+                validation_metrics=promotion.get("metrics") or {},
+                strategy_horizon=promotion.get("strategyHorizon"),
+                calibrated_horizon=promotion.get("calibratedHorizon"),
+            )
             candidates.append(StockSelectionCandidate(
                 instrument_id=row.instrument_id, symbol=row.symbol, exchange=row.exchange,
                 name=row.name, industry=row.industry, snapshot={
@@ -1673,25 +2505,76 @@ class StockScreeningService:
                 risk_flags=risks, data_quality=quality_value, missing_fields=missing,
                 as_of=values.get("as_of") or stamp, source_ids=sources, change_state=state,
                 valuation_context=_valuation_context(row, rows, stamp),
+                quant_validation=quant_validation,
             ))
             report_sources.update(sources)
+        report_data_quality = {
+            "status": "partial" if skipped_for_cap else quality,
+            "factor_algorithm_version": self.FACTOR_VERSION,
+            "enrichment_cap": _MAX_ENRICHMENT_ROWS if enrichment_fields else None,
+            "unprocessed_after_cap": skipped_for_cap,
+            "preselection_basis": "turnover_desc,market_cap_desc,instrument_id_asc" if enrichment_fields else None,
+            "normalization": normalization_modes,
+            "source_closure_missing": source_closure_missing,
+            "promotion_status": promotion["promotionStatus"],
+            "promotion_reason": promotion["reason"],
+            "eligible_for_trading": promotion["eligibleForTrading"],
+            "strategy_horizon": promotion.get("strategyHorizon"),
+            "calibrated_horizon": promotion.get("calibratedHorizon"),
+            "method_registry": self._quant_method_registry(),
+            "validation_metrics": promotion.get("metrics") or {},
+        }
+        quant_snapshot = {
+            "schema_version": 1,
+            "strategy_id": selected.strategy_id,
+            "strategy_fingerprint": stable_json_hash(
+                selected.model_dump(mode="json", exclude={"created_at", "updated_at"})
+            ),
+            "as_of": stamp,
+            "factor_algorithm_version": self.FACTOR_VERSION,
+            "rank_algorithm_version": self.RANK_ALGORITHM_VERSION,
+            "validation_status": quant_status,
+            "reason": quant_reason,
+            "universe": {
+                "universe_count": len(rows),
+                "hard_filter_count": len(hard_rows),
+                "cheap_count": len(cheap_rows),
+                "enriched_count": len(enriched),
+                "unprocessed_after_cap": skipped_for_cap,
+                "preselection_basis": report_data_quality["preselection_basis"],
+            },
+            "factor_scopes": factor_scopes,
+            "candidate_ids_hash": stable_json_hash([item.instrument_id for item in candidates]),
+            "source_ids": sorted(report_sources),
+            "data_quality": {
+                "status": quality,
+                "quant_validation_status": quant_status,
+                "reason": quant_reason,
+                "point_in_time": point_in_time,
+                "missing_factor_fields": missing_factor_fields,
+                "source_closure_missing": source_closure_missing,
+            },
+            "source_closure_missing": source_closure_missing,
+            "promotion_status": promotion["promotionStatus"],
+            "promotion_reason": promotion["reason"],
+            "eligible_for_trading": promotion["eligibleForTrading"],
+            "strategy_horizon": promotion.get("strategyHorizon"),
+            "calibrated_horizon": promotion.get("calibratedHorizon"),
+            "method_registry": self._quant_method_registry(),
+            "validation_metrics": promotion.get("metrics") or {},
+        }
         report = StockSelectionReport(
             report_id=f"stock_selection_{workflow_run_id}", workflow_run_id=workflow_run_id,
             strategy=selected, as_of=stamp, universe_count=len(rows), filtered_count=len(enriched),
             candidates=candidates, filter_statistics=stats,
             validation={"status": "unavailable", "reason": "缺少有时间点一致的历史股票池、行情和财务数据"},
-            data_quality={
-                "status": "partial" if skipped_for_cap else quality,
-                "factor_algorithm_version": self.FACTOR_VERSION,
-                "enrichment_cap": _MAX_ENRICHMENT_ROWS if enrichment_fields else None,
-                "unprocessed_after_cap": skipped_for_cap,
-                "preselection_basis": "turnover_desc,market_cap_desc,instrument_id_asc" if enrichment_fields else None,
-                "normalization": normalization_modes,
-            },
+            data_quality=report_data_quality,
             missing_fields=sorted({field for item in candidates for field in item.missing_fields}),
-            source_ids=sorted(report_sources), status="completed",
+            source_ids=sorted(report_sources), status="completed", quant_snapshot=quant_snapshot,
         )
+        quant_evidence = self._quant_evidence_payload(report, source_records_by_id)
         self.store.save_run(report)
+        self._write_quant_evidence(quant_evidence)
         self._write_report(report)
         return report.model_dump(by_alias=True)
 
@@ -1775,6 +2658,490 @@ class StockScreeningService:
             risks.append("部分因子缺失")
         return risks or ["未发现已执行规则中的风险标记"]
 
+    @staticmethod
+    def _point_in_time_quality(
+        rows: Iterable[MarketSnapshot], requested_as_of: str | None
+    ) -> dict[str, Any]:
+        """Describe whether the supplied universe can represent ``as_of``.
+
+        The screening provider currently returns a live snapshot.  This
+        metadata prevents a caller asking for a historical ``as_of`` from
+        mistaking that live snapshot for point-in-time data.
+        """
+        if not requested_as_of:
+            return {
+                "status": "not_requested",
+                "requested_as_of": None,
+                "latest_observed_at": None,
+                "missing_observed_at": 0,
+            }
+        requested = _parse_event_time(requested_as_of)
+        raw_rows = list(rows)
+        observed = [
+            _parse_event_time(item.observed_at or item.as_of)
+            for item in raw_rows
+        ]
+        parsed = [item for item in observed if item is not None]
+        missing = len(observed) - len(parsed)
+        if requested is None:
+            return {
+                "status": "unknown",
+                "requested_as_of": requested_as_of,
+                "latest_observed_at": None,
+                "missing_observed_at": missing,
+            }
+        date_only = len(str(requested_as_of).strip()) <= 10
+        future = any(
+            (item.date() > requested.date()) if date_only else item > requested
+            for item in parsed
+        )
+        if future:
+            status = "incompatible"
+        elif missing:
+            status = "unknown"
+        else:
+            status = "verified"
+        return {
+            "status": status,
+            "requested_as_of": requested_as_of,
+            "latest_observed_at": max(parsed).isoformat() if parsed else None,
+            "missing_observed_at": missing,
+        }
+
+    @staticmethod
+    def _quant_method_registry() -> dict[str, dict[str, Any]]:
+        return {
+            horizon: {
+                **method,
+                "inputFactors": list(method["inputFactors"]),
+                "directions": dict(method["directions"]),
+                "marketStates": list(method["marketStates"]),
+            }
+            for horizon, method in _QUANT_METHOD_REGISTRY.items()
+        }
+
+    @staticmethod
+    def _promotion_result(
+        strategy: SelectionStrategy,
+        validation_records: Iterable[Mapping[str, Any]] | None,
+        *,
+        current_snapshot_incomplete: bool,
+        current_snapshot_reason: str | None = None,
+    ) -> dict[str, Any]:
+        result = validate_strategy(
+            validation_records,
+            # The selection score is always sorted descending after weighted
+            # contributions are combined.  A first factor's asc/desc is not
+            # the direction of that composite score.
+            direction="desc",
+            factor_id="composite_score",
+            factor_direction="desc",
+            strategy_horizon=strategy.horizon,
+            cost=TransactionCost(),
+            gate=PromotionGate(),
+        )
+        if current_snapshot_incomplete and result.get("promotionStatus") == "calibrated":
+            result = {
+                **result,
+                "status": "research_only",
+                "promotionStatus": "research_only",
+                "eligibleForTrading": False,
+                "reason": current_snapshot_reason or "当前选股快照未满足数据完整性门槛，仅保留研究排序",
+            }
+        return result
+
+    def _calibration_cohort_store(self) -> CalibrationCohortStore | None:
+        return CalibrationCohortStore(self.workspace) if self.workspace is not None else None
+
+    async def _update_calibration_cohorts(
+        self,
+        strategy: SelectionStrategy,
+        stamp: str,
+        rows: list[tuple[Any, dict[str, Any], Any, Any, Any, Any, Any, Any]],
+        rankings: list[tuple[float, tuple[Any, ...], int]],
+        market_snapshot: list[MarketSnapshot],
+        *,
+        skipped_for_cap: int,
+        quality: str,
+        benchmark_reference: Mapping[str, Any] | None = None,
+    ) -> list[dict[str, Any]]:
+        """Persist full eligible cohorts and return only mature OOS records."""
+        store = self._calibration_cohort_store()
+        if store is None:
+            return []
+        current_rows: list[dict[str, Any]] = []
+        for score, _key, index in rankings:
+            row, values, _matched, _unmatched, _missing, sources, _factor_sources, _records = rows[index]
+            price = _as_float(values.get("price") or row.price)
+            if price is None or price <= 0 or not sources:
+                continue
+            current_rows.append(
+                {
+                    "instrument_id": row.instrument_id,
+                    "composite_score": round(float(score), 10),
+                    "reference_price": price,
+                    "source_ids": sorted(set(sources)),
+                }
+            )
+        current_rows.sort(key=lambda item: item["instrument_id"])
+        score_diverse = len({row["composite_score"] for row in current_rows}) >= _MIN_QUANT_UNIQUE_SCORES
+        complete_market_snapshot = (
+            quality == "available"
+            and skipped_for_cap == 0
+            and bool(market_snapshot)
+        )
+        benchmark_bars: list[dict[str, Any]] = []
+        if complete_market_snapshot and benchmark_reference is None and self.provider is not None and hasattr(self.provider, "kline"):
+            try:
+                reference_series = await self.provider.kline(
+                    InstrumentRef(exchange="XSHG", symbol="000985", instrument_type="index"),
+                    limit=640,
+                )
+                benchmark_bars = [
+                    {"date": getattr(bar, "date", None), "close": getattr(bar, "close", None)}
+                    for bar in getattr(reference_series, "bars", []) or []
+                ]
+                stamp_date = str(stamp)[:10]
+                reference_bar = next(
+                    (bar for bar in benchmark_bars if str(bar.get("date"))[:10] == stamp_date),
+                    None,
+                )
+                if reference_bar is not None:
+                    benchmark_reference = {
+                        "price": reference_bar.get("close"),
+                        "as_of": stamp,
+                        "source_ids": [
+                            source_id
+                            for source_id in [getattr(getattr(reference_series, "source", None), "id", "")]
+                            if source_id
+                        ],
+                    }
+            except Exception:
+                benchmark_reference = None
+        strategy_fingerprint = stable_json_hash(
+            strategy.model_dump(mode="json", exclude={"created_at", "updated_at"})
+        )
+        strategy_window = int(
+            _QUANT_METHOD_REGISTRY.get(strategy.horizon, {}).get(
+                "targetWindowSessions", 10
+            )
+        )
+        cohorts = store.list(strategy.strategy_id)
+        if complete_market_snapshot:
+            current_snapshot_hash = stable_json_hash(
+                {
+                    "as_of": stamp,
+                    "strategy": strategy_fingerprint,
+                    "rows": [
+                        {
+                            "instrument_id": row.instrument_id,
+                            "price": row.price,
+                            "source_ids": sorted(set(row.source_ids)),
+                        }
+                        for row in sorted(market_snapshot, key=lambda item: item.instrument_id)
+                    ],
+                }
+            )
+            current_by_id = {
+                row.instrument_id: {
+                    "reference_price": _as_float(row.price),
+                    "source_ids": sorted(set(row.source_ids)),
+                }
+                for row in market_snapshot
+                if _as_float(row.price) is not None and _as_float(row.price) > 0
+            }
+            for cohort in cohorts:
+                if cohort.get("as_of") == stamp:
+                    continue
+                observations = [
+                    {
+                        "instrument_id": instrument_id,
+                        "as_of": stamp,
+                        "price": current_by_id[instrument_id]["reference_price"],
+                        "source_ids": current_by_id[instrument_id]["source_ids"],
+                        "snapshot_hash": current_snapshot_hash,
+                        "universe_count": cohort.get("universe_count"),
+                        "observed_count": cohort.get("observed_count"),
+                        "sample_scope": "full_eligible_universe",
+                    }
+                    for instrument_id in (
+                        row.get("instrument_id") for row in cohort.get("rows") or []
+                    )
+                    if instrument_id in current_by_id
+                ]
+                store.append_observations(cohort["cohort_id"], observations)
+            if score_diverse and current_rows and len(current_rows) == len(rankings):
+                store.create(
+                    make_cohort_payload(
+                        strategy_id=strategy.strategy_id,
+                        strategy_fingerprint=strategy_fingerprint,
+                        as_of=stamp,
+                        factor_version=self.FACTOR_VERSION,
+                        rank_version=self.RANK_ALGORITHM_VERSION,
+                        rows=current_rows,
+                        universe_count=len(current_rows),
+                        observed_count=len(current_rows),
+                        validation_window=strategy_window,
+                        validation_windows=VALIDATION_WINDOWS,
+                        benchmark_reference=benchmark_reference,
+                    )
+                )
+            cohorts = store.list(strategy.strategy_id)
+        older_cohorts = [cohort for cohort in cohorts if cohort.get("as_of") != stamp]
+        if not older_cohorts or self.provider is None or not hasattr(self.provider, "kline"):
+            return []
+        try:
+            benchmark_series = await self.provider.kline(
+                InstrumentRef(exchange="XSHG", symbol="000985", instrument_type="index"),
+                limit=640,
+            )
+        except Exception:
+            return []
+        benchmark_bars = [
+            {"date": getattr(bar, "date", None), "close": getattr(bar, "close", None)}
+            for bar in getattr(benchmark_series, "bars", []) or []
+        ]
+        benchmark_source_id = getattr(getattr(benchmark_series, "source", None), "id", None)
+        cohort_instruments = sorted(
+            {
+                str(row.get("instrument_id"))
+                for cohort in older_cohorts
+                for row in cohort.get("rows") or []
+                if isinstance(row, Mapping) and isinstance(row.get("instrument_id"), str)
+            }
+        )
+        target_bars: dict[str, list[dict[str, Any]]] = {}
+        semaphore = asyncio.Semaphore(_ENRICHMENT_CONCURRENCY)
+
+        async def load_target_bars(instrument_id: str) -> tuple[str, list[dict[str, Any]]]:
+            exchange, symbol = instrument_id.split(":", 1)
+            async with semaphore:
+                try:
+                    series = await self.provider.kline(
+                        InstrumentRef(exchange=exchange, symbol=symbol, instrument_type="equity"),
+                        limit=640,
+                    )
+                except Exception:
+                    return instrument_id, []
+            source_id = getattr(getattr(series, "source", None), "id", None)
+            return instrument_id, [
+                {
+                    "date": getattr(bar, "date", None),
+                    "close": getattr(bar, "close", None),
+                    "source_ids": [source_id] if source_id else [],
+                }
+                for bar in getattr(series, "bars", []) or []
+            ]
+
+        loaded_targets = await asyncio.gather(
+            *(load_target_bars(instrument_id) for instrument_id in cohort_instruments)
+        )
+        target_bars.update(loaded_targets)
+        records: list[dict[str, Any]] = []
+        for cohort in older_cohorts:
+            result = build_validation_records(
+                cohort,
+                benchmark_bars=benchmark_bars,
+                source_ids=[benchmark_source_id] if benchmark_source_id else [],
+                instrument_bars=target_bars,
+            )
+            if result["status"] == "complete":
+                # The cohort stores all three horizons, but a rolling
+                # validator must receive one target window per strategy;
+                # otherwise the same factor-date/instrument appears three
+                # times and is correctly rejected as a duplicate sample.
+                records.extend(
+                    row for row in result["records"] if row.get("window") == strategy_window
+                )
+        return records
+
+    @staticmethod
+    def _resolve_factor_sources(
+        source_ids: Iterable[str],
+        records: Iterable[SourceRecord],
+        registry: dict[str, dict[str, Any]],
+        conflicts: set[str],
+    ) -> tuple[list[str], bool]:
+        """Return source ids whose complete records are present and consistent.
+
+        A source id alone is not a provenance record.  The sidecar only treats
+        a factor as closed when every declared id has an exact SourceRecord;
+        conflicting records for one id are also considered unresolved.
+        """
+        declared = sorted({item for item in source_ids if isinstance(item, str) and item})
+        payloads: dict[str, dict[str, Any]] = {}
+        for record in records:
+            if not isinstance(record, SourceRecord) or not record.id:
+                continue
+            payload = record.model_dump(mode="json")
+            existing = registry.get(record.id)
+            if existing is not None and existing != payload:
+                conflicts.add(record.id)
+            else:
+                registry.setdefault(record.id, payload)
+            payloads[record.id] = payload
+
+        if not declared:
+            declared = sorted(payloads)
+        if not declared or any(item not in payloads for item in declared):
+            return [], True
+        if any(item in conflicts for item in declared):
+            return [], True
+        return declared, False
+
+    @staticmethod
+    def _quant_validation(
+        observations: dict[str, dict[str, Any]],
+        ranking_fields: Iterable[str],
+        *,
+        snapshot_status: str,
+        source_closure_missing: Iterable[str] = (),
+        promotion_status: QuantPromotionStatus = "research_only",
+        promotion_reason: str = "当前策略仅用于研究观察",
+        validation_metrics: dict[str, Any] | None = None,
+        strategy_horizon: StrategyHorizon | None = None,
+        calibrated_horizon: StrategyHorizon | None = None,
+    ) -> QuantCandidateValidation:
+        by_horizon: dict[str, list[dict[str, Any]]] = {
+            "short_term": [],
+            "medium_term": [],
+            "long_term": [],
+        }
+        for field in ranking_fields:
+            observation = observations.get(field)
+            if observation is None:
+                continue
+            for horizon, fields in _QUANT_HORIZON_FACTOR_FIELDS.items():
+                if field in fields:
+                    by_horizon[horizon].append(dict(observation))
+        horizons: dict[str, QuantHorizonValidation] = {}
+        for horizon, raw_observations in by_horizon.items():
+            horizon_status: QuantValidationStatus = (
+                "uncalibrated"
+                if raw_observations
+                and all(
+                    item.get("validation_status") == "uncalibrated"
+                    for item in raw_observations
+                )
+                else "insufficient_data"
+            )
+            horizons[horizon] = QuantHorizonValidation.model_validate(
+                {
+                    "validation_status": horizon_status,
+                    "factor_observations": raw_observations,
+                }
+            )
+        candidate_status: QuantValidationStatus = (
+            "insufficient_data"
+            if snapshot_status == "insufficient_data"
+            or any(
+                item.validation_status == "insufficient_data"
+                for item in horizons.values()
+            )
+            or bool(source_closure_missing)
+            else "uncalibrated"
+        )
+        return QuantCandidateValidation.model_validate(
+            {
+                "validation_status": candidate_status,
+                "horizons": horizons,
+                "source_closure_missing": sorted(set(source_closure_missing)),
+                "promotion_status": promotion_status,
+                "promotion_reason": promotion_reason,
+                "eligible_for_trading": promotion_status == "calibrated",
+                "strategy_horizon": strategy_horizon,
+                "calibrated_horizon": calibrated_horizon,
+                "validation_metrics": validation_metrics or {},
+            }
+        )
+
+    @staticmethod
+    def _quant_evidence_payload(
+        report: StockSelectionReport,
+        source_records_by_id: dict[str, dict[str, Any]],
+    ) -> dict[str, Any] | None:
+        """Build the private provenance sidecar for a quant snapshot."""
+        report_payload = report.model_dump(by_alias=True)
+        quant_snapshot = report_payload.get("quantSnapshot")
+        if not isinstance(quant_snapshot, dict):
+            return None
+        candidates: dict[str, dict[str, Any]] = {}
+        used_source_ids: set[str] = set()
+        for candidate in report.candidates:
+            validation = candidate.quant_validation
+            if validation is None:
+                continue
+            validation_payload = validation.model_dump(mode="json")
+            factor_source_ids: dict[str, list[str]] = {}
+            for horizon in validation_payload.get("horizons", {}).values():
+                for observation in horizon.get("factor_observations", []):
+                    field = observation.get("field")
+                    source_ids = sorted(
+                        {
+                            item
+                            for item in observation.get("source_ids", [])
+                            if isinstance(item, str) and item
+                        }
+                    )
+                    if not isinstance(field, str) or not field:
+                        continue
+                    factor_source_ids[field] = source_ids
+                    used_source_ids.update(source_ids)
+                    if any(item not in source_records_by_id for item in source_ids):
+                        raise ScreeningValidationError(
+                            f"quant evidence source closure failed for {candidate.instrument_id}:{field}"
+                        )
+            candidates[candidate.instrument_id] = {
+                "quant_validation": validation_payload,
+                "factor_source_ids": factor_source_ids,
+            }
+        return {
+            "schema_version": 1,
+            "run_id": report.workflow_run_id,
+            "report_id": report.report_id,
+            "strategy_fingerprint": quant_snapshot.get("strategyFingerprint"),
+            "quant_snapshot_hash": stable_json_hash(quant_snapshot),
+            "candidates": candidates,
+            "sources": [
+                source_records_by_id[source_id]
+                for source_id in sorted(used_source_ids)
+            ],
+        }
+
+    def _quant_evidence_path(self, run_id: str) -> Path:
+        report_path = self._report_path(run_id)
+        if self.workspace is None:
+            return report_path.with_name(f"{run_id}.quant_evidence.json")
+        return report_path.with_name("quant_evidence.json")
+
+    def _write_quant_evidence(self, payload: dict[str, Any] | None) -> None:
+        if payload is None:
+            return
+        run_id = payload.get("run_id")
+        if not isinstance(run_id, str) or not run_id:
+            raise ScreeningValidationError("quant evidence run_id is missing")
+        path = self._quant_evidence_path(run_id)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        if path.is_file():
+            try:
+                existing = json.loads(path.read_text(encoding="utf-8"))
+            except (OSError, json.JSONDecodeError) as exc:
+                raise ScreeningValidationError(
+                    f"quant evidence is unreadable for {run_id}"
+                ) from exc
+            if existing != payload:
+                raise ScreeningValidationError(
+                    f"quant evidence {run_id} is immutable; start a new run"
+                )
+            return
+        temporary = path.with_name(path.name + ".tmp")
+        with temporary.open("w", encoding="utf-8") as handle:
+            json.dump(payload, handle, ensure_ascii=False, indent=2, sort_keys=True)
+            handle.write("\n")
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.replace(temporary, path)
+
     def _report_path(self, run_id: str) -> Path:
         if self.workspace is not None:
             from mona.config.paths import get_stock_project_dir
@@ -1792,6 +3159,11 @@ class StockScreeningService:
     def _write_report(self, report: StockSelectionReport) -> None:
         path = self._report_path(report.workflow_run_id)
         path.parent.mkdir(parents=True, exist_ok=True)
+        # A workflow run is an immutable input to later outcome replay.  A
+        # retry with the same run id must not replace its quant snapshot with
+        # newer provider data; start a new run to create a new snapshot.
+        if path.is_file():
+            return
         tmp = path.with_name(path.name + ".tmp")
         with open(tmp, "w", encoding="utf-8") as handle:
             json.dump(report.model_dump(by_alias=True), handle, ensure_ascii=False, indent=2)

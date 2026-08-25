@@ -12,6 +12,7 @@ from __future__ import annotations
 
 from mona.services.stock.provider import (
     Fundamentals,
+    IndustryValuation,
     InstrumentRef,
     InstrumentSearchResult,
     KlineSeries,
@@ -74,6 +75,46 @@ class FailoverProvider:
             except ProviderError:
                 continue
         raise ProviderError("no configured provider exposes a market snapshot")
+
+    async def instrument_profile(self, inst: InstrumentRef):
+        """Delegate independently cached static metadata when configured."""
+        configured = False
+        last_error: ProviderError | None = None
+        for provider in (self.primary, self.fallback):
+            method = getattr(provider, "instrument_profile", None)
+            if not callable(method):
+                continue
+            configured = True
+            try:
+                result = await method(inst)
+                if result is not None:
+                    return result
+            except ProviderError as exc:
+                last_error = exc
+        if not configured:
+            return None
+        raise ProviderError(f"instrument profile unavailable: {last_error}") from last_error
+
+    async def industry_valuation(self, inst: InstrumentRef) -> IndustryValuation:
+        """Use an independently available peer-valuation capability."""
+        configured = False
+        last_error: ProviderError | None = None
+        for provider in (self.primary, self.fallback):
+            method = getattr(provider, "industry_valuation", None)
+            if not callable(method):
+                continue
+            configured = True
+            try:
+                result = await method(inst)
+                if result is not None:
+                    return result
+            except ProviderError as exc:
+                last_error = exc
+        if not configured:
+            raise ProviderError("no configured provider exposes industry valuation")
+        raise ProviderError(
+            f"industry valuation unavailable from configured providers: {last_error}"
+        ) from last_error
 
     async def kline(self, inst: InstrumentRef, *, limit: int = 120, klt: int = 101) -> KlineSeries:
         try:

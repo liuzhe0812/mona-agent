@@ -75,6 +75,7 @@ class VideoGenerationToolConfig(Base):
 class VideoGenerationTool(Tool):
     """Generate persistent video artifacts through the configured video provider."""
 
+    _scopes = {"core", "subagent"}
     config_key = "video_generation"
 
     @classmethod

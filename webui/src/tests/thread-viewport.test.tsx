@@ -147,6 +147,37 @@ describe("ThreadViewport", () => {
     expect(screen.getByRole("button", { name: "Load earlier messages" })).toBeInTheDocument();
   });
 
+  it("expands hidden history and scrolls to a message selected from the header", async () => {
+    const scrollTo = vi.fn();
+    const originalScrollTo = HTMLElement.prototype.scrollTo;
+    HTMLElement.prototype.scrollTo = scrollTo;
+
+    try {
+      const { container } = render(
+        <ThreadViewport
+          messages={makeLongMessages(300)}
+          isStreaming={false}
+          composer={<div />}
+          focusMessage={{ id: "m0", requestId: 1 }}
+        />,
+      );
+      const scroller = container.firstElementChild?.firstElementChild as HTMLElement;
+      Object.defineProperties(scroller, {
+        clientHeight: { configurable: true, value: 500 },
+        scrollTop: { configurable: true, value: 100 },
+      });
+      scroller.getBoundingClientRect = () => ({ top: 100 } as DOMRect);
+
+      const target = await screen.findByText("message 0");
+      const targetRow = target.closest("#thread-message-m0") as HTMLElement;
+      expect(targetRow).toBeInTheDocument();
+      targetRow.getBoundingClientRect = () => ({ top: 900 } as DOMRect);
+      await waitFor(() => expect(scrollTo).toHaveBeenCalledWith({ top: 750, behavior: "smooth" }));
+    } finally {
+      HTMLElement.prototype.scrollTo = originalScrollTo;
+    }
+  });
+
   it("loads earlier history in fixed increments without rendering the whole transcript", () => {
     const longMessages = makeLongMessages(300);
 

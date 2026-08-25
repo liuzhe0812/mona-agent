@@ -369,7 +369,7 @@ function ValuationMetricRow({
       </div>
       <div className="mt-1">
         同行分位：{peerComparable ? valuationPercentile(percentile) : "未提供"}
-        {peerComparable ? "（数值越高表示相对同行估值越高）" : "；同行比较数据不足，不能判断相对高低"}
+        {peerComparable ? "（数值越高表示相对同行估值越高）" : "；同行比较待确认，暂不能判断相对高低"}
       </div>
     </div>
   );
@@ -383,7 +383,7 @@ export function ValuationAnalysis({ section }: { section: StockSummarySection })
       : "当前估值和同行比较数据均未提供";
     return (
       <div className="mt-2 rounded border border-dashed px-2 py-1.5 text-micro text-muted-foreground" data-testid="research-valuation-analysis">
-        估值数据缺失：{missing}
+        估值暂不判断：{missing}
       </div>
     );
   }
@@ -417,7 +417,7 @@ export function ValuationAnalysis({ section }: { section: StockSummarySection })
         />
       </div>
       {!comparisonComplete ? (
-        <div className="mt-2 text-muted-foreground">同行比较数据不足，不能判断相对高低</div>
+        <div className="mt-2 text-muted-foreground">同行比较待确认，暂不能判断相对高低</div>
       ) : null}
       {missingReasons.length > 0 ? (
         <div className="mt-1 text-muted-foreground">缺少信息：{missingReasons.join("；")}</div>

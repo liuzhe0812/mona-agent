@@ -3,6 +3,7 @@ import type { ReactNode } from "react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import { ThreadShell } from "@/components/thread/ThreadShell";
+import { invalidateAgents } from "@/components/room/useAgents";
 import { useFilePreviewStore } from "@/components/deliver/filePreviewStore";
 import { ClientProvider } from "@/providers/ClientProvider";
 import type { UIMessage } from "@/lib/types";
@@ -78,6 +79,7 @@ function makeClient() {
         artifactsChangedHandlers.delete(handler);
       };
     },
+    onDocUploadResult: () => () => {},
     _emitError(err: { kind: string }) {
       for (const h of errorHandlers) h(err);
     },
@@ -94,6 +96,7 @@ function makeClient() {
       for (const h of artifactsChangedHandlers) h();
     },
     sendMessage: vi.fn(),
+    sendDocUpload: vi.fn(),
     newChat: vi.fn(),
     attach: vi.fn(),
     connect: vi.fn(),
@@ -444,6 +447,115 @@ describe("ThreadShell", () => {
         "把这个网页转成笔记：",
         undefined,
       ),
+    );
+  });
+
+  it("uses the selected agent welcome instead of Mona's dashboard for a new direct chat", async () => {
+    const client = makeClient();
+    const onCreateDirectChat = vi.fn().mockResolvedValue("partner-chat");
+    invalidateAgents();
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (input: RequestInfo | URL) => {
+        if (String(input).includes("/api/agents")) {
+          return httpJson({ agents: [{ id: "com.mona.xiaohongshu", displayName: "小红书运营", enabled: true }] });
+        }
+        return { ok: false, status: 404, json: async () => ({}) };
+      }),
+    );
+
+    render(wrap(
+      client,
+      <ThreadShell
+        session={null}
+        title="新建对话"
+        onToggleSidebar={() => {}}
+        onNewChat={() => {}}
+        pendingDirectAgentId="com.mona.xiaohongshu"
+        onCreateDirectChat={onCreateDirectChat}
+      />,
+    ));
+
+    expect(await screen.findByTestId("partner-agent-welcome")).toHaveTextContent("小红书运营");
+    expect(screen.queryByTestId("mona-welcome-shell")).not.toBeInTheDocument();
+    expect(screen.queryByText("网页生成笔记")).not.toBeInTheDocument();
+    fireEvent.change(screen.getByLabelText("Message input"), { target: { value: "帮我写一篇小红书文案" } });
+    fireEvent.click(screen.getByRole("button", { name: "Send message" }));
+    await waitFor(() => expect(onCreateDirectChat).toHaveBeenCalledWith("com.mona.xiaohongshu", null));
+  });
+
+  it("keeps the empty landing branded without an AI status label", async () => {
+    const client = makeClient();
+
+    render(
+      wrap(
+        client,
+        <ThreadShell
+          session={session("chat-brand")}
+          title="Chat chat-brand"
+          onToggleSidebar={() => {}}
+          onNewChat={() => {}}
+        />,
+      ),
+    );
+
+    await waitFor(() =>
+      expect(screen.getByTestId("mona-welcome-shell")).toBeInTheDocument(),
+    );
+
+    expect(screen.getByTestId("mona-brand-marker")).toHaveClass(
+      "bg-[hsl(var(--brand-red))]",
+    );
+    expect(screen.queryByRole("status", { name: "Mona AI ready" })).not.toBeInTheDocument();
+    expect(screen.getByTestId("mona-welcome-shell")).toHaveClass(
+      "[clip-path:polygon(0_0,calc(100%_-_12px)_0,100%_12px,100%_100%,0_100%)]",
+    );
+    expect(screen.getByTestId("mona-welcome-shell")).not.toHaveClass(
+      "border",
+      "shadow-surface",
+    );
+    expect(screen.getByTestId("mona-hero-composer")).toHaveClass(
+      "[&_button[type=submit]]:bg-action",
+      "[&_button[type=submit]]:text-action-foreground",
+    );
+  });
+
+  it("animates the activity icon without a top working line", async () => {
+    const client = makeClient();
+
+    render(
+      wrap(
+        client,
+        <ThreadShell
+          session={session("chat-working")}
+          title="Chat chat-working"
+          onToggleSidebar={() => {}}
+          onNewChat={() => {}}
+        />,
+      ),
+    );
+
+    expect(screen.queryByTestId("mona-composer-working-line")).not.toBeInTheDocument();
+
+    await act(async () => {
+      client._emitChat("chat-working", {
+        event: "delta",
+        chat_id: "chat-working",
+        text: "正在处理",
+      });
+    });
+
+    expect(screen.queryByTestId("mona-composer-working-line")).not.toBeInTheDocument();
+
+    await act(async () => {
+      client._emitChat("chat-working", {
+        event: "turn_end",
+        chat_id: "chat-working",
+      });
+    });
+
+    await waitFor(() =>
+      expect(screen.queryByTestId("mona-composer-working-line")).not.toBeInTheDocument(),
     );
   });
 
@@ -1153,7 +1265,7 @@ describe("ThreadShell", () => {
     await waitFor(() =>
       expect(screen.getByText("scan-file.md")).toBeInTheDocument(),
     );
-    expect(screen.getByText("会话产物")).toBeInTheDocument();
+    expect(screen.getByText("本次会话产物")).toBeInTheDocument();
 
     await act(async () => {
       client._emitChat("chat-session-files", {
@@ -1172,7 +1284,7 @@ describe("ThreadShell", () => {
       });
     });
 
-    const sectionHeader = await screen.findByText("会话产物");
+    const sectionHeader = await screen.findByText("本次会话产物");
     const sessionRow = within(sectionHeader.parentElement!).getByText("live.png");
     const treeRow = screen.getByText("scan-file.md");
     expect(

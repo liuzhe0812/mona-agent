@@ -602,6 +602,8 @@
       "send": "Send message",
       "stop": "Stop response",
       "attachImage": "Attach image",
+      "attachFile": "Attach files",
+      "fileRejected": "Only images and common document formats are supported",
       "workspace": {
         "placeholder": "Select folder (optional)",
         "clear": "Clear folder selection"

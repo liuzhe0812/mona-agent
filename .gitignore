@@ -28,6 +28,53 @@ mona-auth/
 scripts/
 design-assets/
 /tests/
+# Academic research implementation tests/fixtures are opt-in; keep unrelated
+# local tests ignored.
+!/tests/
+/tests/*
+!/tests/tools/
+/tests/tools/*
+!tests/tools/test_research_record.py
+!tests/tools/test_academic_search.py
+!tests/tools/test_scientific_tool.py
+!tests/tools/test_scientific_backend.py
+!/tests/agent/
+/tests/agent/*
+!tests/agent/test_academic_researcher.py
+!tests/agent/test_academic_research_acceptance.py
+!tests/agent/test_academic_algorithm_acceptance.py
+!tests/agent/test_academic_live_acceptance.py
+!tests/agent/test_academic_data_acceptance.py
+!tests/agent/test_academic_algorithm_live_acceptance.py
+!tests/agent/test_tool_loader_scopes.py
+!tests/agent/tools/
+/tests/agent/tools/*
+!tests/agent/tools/test_long_task.py
+!tests/agent/tools/test_stock_semantic_guard.py
+!tests/agent/tools/test_stock_diagnosis_submit.py
+!tests/e2e/
+/tests/e2e/*
+!tests/e2e/test_stock_module_e2e.py
+!tests/e2e/test_stock_module_v6_delivery_e2e.py
+!tests/e2e/test_stock_semantic_integrity_e2e.py
+!/tests/services/
+/tests/services/*
+!/tests/services/stock/
+/tests/services/stock/*
+!tests/services/stock/test_evidence.py
+!tests/services/stock/test_risk_profile.py
+!tests/services/stock/test_api.py
+!tests/services/stock/test_provider_profiles.py
+!tests/services/stock/test_provider_tencent.py
+!tests/services/stock/test_quant_alpha_operational_e2e.py
+!tests/services/stock/test_diagnosis.py
+!tests/services/stock/test_diagnosis_quant.py
+!tests/services/stock/test_fundamental_factors.py
+!tests/services/stock/test_westock_provider.py
+!/tests/fixtures/
+/tests/fixtures/*
+!/tests/fixtures/academic_research/
+!tests/fixtures/academic_research/**
 hardware/
 
 # docs/ 默认忽略；为多 Agent 交付文档保留版本管理例外
@@ -42,13 +89,17 @@ docs/plans/*
 !docs/design/2026-08-20-mona-brand-ui-redesign-proposal.md
 !docs/design/session-list-ui-redesign.md
 !docs/design/2026-08-22-mona-app-brand-ui-update-plan.md
-!docs/design/stock-deep-research-v2-functional-design.md
-!docs/design/stock-deep-research-v2-source-matrix.md
+!docs/design/mona-ui-design-system.md
+!docs/design/stock-data-source-compliance-matrix.md
 !docs/plans/multi-agent-completion-plan.md
+!docs/plans/2026-08-23-mona-brand-ui-v2-implementation-plan.md
 !docs/plans/im-ui-interaction-dev-plan.md
 !docs/plans/agent-conversation-management-dev-plan.md
-!docs/plans/stock-deep-research-v2-dev-plan.md
+!docs/plans/stock-research-best-practice-v6-development-plan.md
+!docs/plans/stock-research-best-practice-v6-acceptance-report.md
 !docs/plans/academic-research-agent-functional-design.md
+!docs/plans/academic-research-agent-development-plan.md
+!docs/plans/academic-research-agent-acceptance-report.md
 
 # 多 Agent 开发临时产物（baseline 对比目录、patch/scratch 中转，禁止入库）
 .baseline_check/

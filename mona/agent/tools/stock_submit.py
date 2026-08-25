@@ -20,10 +20,12 @@ import hashlib
 import json
 import math
 import os
+import re
 import threading
 from copy import deepcopy
+from decimal import Decimal, InvalidOperation
 from pathlib import Path
-from typing import Annotated, Any
+from typing import Annotated, Any, Mapping
 
 from pydantic import Field, TypeAdapter, ValidationError
 
@@ -32,17 +34,25 @@ from mona.agent.artifacts import ArtifactRef
 from mona.agent.tools.base import Tool, tool_parameters
 from mona.agent.workflow import WorkflowRunStore
 from mona.services.stock.evidence import EvidenceService
+from mona.services.stock.execution import assess_a_share_execution, materialize_v6_trading_plan
 from mona.services.stock.outcomes import ensure_outcome_tracking_snapshot
-from mona.services.stock.provenance import compare_asia_datetime
+from mona.services.stock.provenance import SourceRecord, compare_asia_datetime
+from mona.services.stock.risk_profile import (
+    LocalRiskProfileStore,
+    RiskProfileStorageError,
+    risk_profile_path,
+)
 from mona.services.stock.schemas import (
     ANALYSIS_DIMENSION_KEYS,
     DATA_QUALITIES,
+    DECISION_REPORT_SCHEMA_VERSION,
     DIGEST_SCHEMA_VERSION,
     DISCLAIMER,
     EXCHANGES,
     INSTRUMENT_TYPES,
     REPORT_SCHEMA_VERSION,
     STANCES,
+    V5_FORBIDDEN_TERMS,
     VIEW_SCHEMA_VERSION,
     AnalysisDimension,
     BatchViewSubmission,
@@ -51,6 +61,8 @@ from mona.services.stock.schemas import (
     CycleStates,
     DebateResolution,
     DebateResolutions,
+    DecisionReportV5,
+    DecisionReportV6,
     DigestItem,
     DimensionViews,
     FundamentalViewSubmission,
@@ -64,8 +76,15 @@ from mona.services.stock.schemas import (
     ScenarioSets,
     SummarySection,
     TechnicalViewSubmission,
+    V5HorizonDecision,
+    V5HorizonDecisionSubmission,
+    V5PositionPlan,
+    V5TradingPlan,
+    V6HorizonDecision,
+    V6HorizonDecisionSubmission,
     ViewPoint,
 )
+from mona.services.stock.v6_tracking import ensure_v6_tracking_snapshot
 
 _HORIZON_DIMENSIONS = {
     "short_term": (
@@ -123,6 +142,10 @@ _EVENT_FIELDS = (
     "source_ids",
 )
 _REPORT_WRITE_LOCK = threading.Lock()
+_STOCK_RESEARCH_ROOM_ID = "stock_research"
+_STOCK_DEEP_RESEARCH_STEP_IDS = frozenset(
+    {"technical", "fundamental", "news", "bull", "bear", "referee"}
+)
 
 _INSTRUMENT_SCHEMA = {
     "type": "object",
@@ -258,13 +281,73 @@ _DIGEST_ITEM_SCHEMA = {
     },
     "required": ["instrument", "stance", "one_liner", "data_quality"],
 }
+_V5_SUBMISSION_DECISION_SCHEMA = {
+    "type": "object",
+    "additionalProperties": False,
+    "properties": {
+        "direction": {"type": "string", "enum": ["positive", "neutral", "negative"]},
+        "action": {
+            "type": "string",
+            "enum": ["conditional_participation", "wait", "hold", "reduce", "exit", "avoid"],
+        },
+        "thesis": {"type": "string"},
+        "not_holding_action": {"type": "string", "enum": ["participate", "wait", "avoid"]},
+        "holding_action": {"type": "string", "enum": ["hold", "reduce", "exit"]},
+        "key_reasons": {"type": "array", "items": _POINT_SCHEMA},
+        "key_risks": {"type": "array", "items": _POINT_SCHEMA},
+        "source_ids": {"type": "array", "items": {"type": "string"}},
+    },
+    "required": [
+        "direction",
+        "action",
+        "thesis",
+        "not_holding_action",
+        "holding_action",
+        "key_reasons",
+        "key_risks",
+        "source_ids",
+    ],
+}
+_V6_SUBMISSION_DECISION_SCHEMA = {
+    **_V5_SUBMISSION_DECISION_SCHEMA,
+    "properties": {
+        **_V5_SUBMISSION_DECISION_SCHEMA["properties"],
+        "direction": {"type": "string", "enum": ["positive", "neutral", "negative", "avoid"]},
+        "disagreement_matrix": {
+            "type": "object",
+            "description": "Structured qualitative disagreement; no numeric or execution fields",
+        },
+    },
+}
 _REPORT_PARAMS = {
     "type": "object",
     "properties": {
         "as_of": {"type": ["string", "null"]},
+        "schema_version": {"type": ["integer", "null"], "enum": [5, 6, None]},
         "summary": {"type": "string"},
         "source_ids": {"type": "array", "items": {"type": "string"}},
         "instrument": _INSTRUMENT_SCHEMA,
+        "horizon_decisions": {
+            "type": "object",
+            "additionalProperties": False,
+            "properties": {
+                "short_term": _V5_SUBMISSION_DECISION_SCHEMA,
+                "medium_term": _V5_SUBMISSION_DECISION_SCHEMA,
+                "long_term": _V5_SUBMISSION_DECISION_SCHEMA,
+            },
+            "required": ["short_term", "medium_term", "long_term"],
+            "description": "V5 qualitative decisions; price, position and condition fields are system-injected",
+        },
+        "horizon_decisions_v6": {
+            "type": "object",
+            "additionalProperties": False,
+            "properties": {
+                "short_term": _V6_SUBMISSION_DECISION_SCHEMA,
+                "medium_term": _V6_SUBMISSION_DECISION_SCHEMA,
+                "long_term": _V6_SUBMISSION_DECISION_SCHEMA,
+            },
+            "description": "V6 qualitative decisions; research/trade gates and plans are system-injected",
+        },
         "versions": {"type": "object"},
         "horizon_views": {
             "type": "object",
@@ -331,12 +414,18 @@ _REPORT_PARAMS = {
         },
     },
     "required": ["summary"],
+    "additionalProperties": False,
     "$defs": {
         "condition": {
             "type": "object",
             "properties": {
                 "kind": {"type": "string", "enum": ["manual", "trigger"]},
                 "text": {"type": "string"},
+                "claim_type": {
+                    "type": ["string", "null"],
+                    "enum": ["fact", "inference", "hypothesis", None],
+                    "description": "Required with a non-empty source_ids list for stop-loss and take-profit conditions; legacy conditions may omit it",
+                },
                 "observed_metric_ref": {"type": ["string", "null"]},
                 "operator": {
                     "type": ["string", "null"],
@@ -406,6 +495,16 @@ _REPORT_PARAMS = {
                 },
                 "invalidation_conditions": {
                     "type": "array", "items": {"$ref": "#/$defs/condition"}
+                },
+                "stop_loss_conditions": {
+                    "type": "array",
+                    "items": {"$ref": "#/$defs/condition"},
+                    "description": "Optional evidence-traceable exit/stop-loss conditions; use an empty array when evidence is insufficient",
+                },
+                "take_profit_conditions": {
+                    "type": "array",
+                    "items": {"$ref": "#/$defs/condition"},
+                    "description": "Optional evidence-traceable take-profit conditions; never invent target prices",
                 },
                 "time_stop": {"type": "string"},
                 "tradeability_risks": {"type": "array", "items": _POINT_SCHEMA},
@@ -609,6 +708,8 @@ def _iter_report_conditions(payload: Any):
         yield from view.confirmation_conditions
         yield from view.watch_conditions
         yield from view.invalidation_conditions
+        yield from getattr(view, "stop_loss_conditions", []) or []
+        yield from getattr(view, "take_profit_conditions", []) or []
     for cycle in (
         payload.cycle_states.policy,
         payload.cycle_states.industry,
@@ -1392,6 +1493,1290 @@ def _complete_report_source_closure(
     return all_source_ids, sources, None
 
 
+def _quant_snapshot_digest(snapshot: Mapping[str, Any]) -> str:
+    """Hash the immutable quant snapshot used by direct research."""
+    canonical = json.dumps(
+        snapshot,
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+    )
+    return f"sha256:{hashlib.sha256(canonical.encode('utf-8')).hexdigest()}"
+
+
+def _trusted_quant_validation(bundle: dict[str, Any]) -> dict[str, Any] | None:
+    """Accept only the system-generated quant payload copied by run_init.
+
+    Selection-origin evidence already carries the normalized provenance
+    contract. Direct research carries the candidate validation beside its
+    immutable ``quant_snapshot``; the missing identity/method fields are
+    filled only from that snapshot, never from the chairman's submission.
+    """
+    raw_quant = bundle.get("quant_validation")
+    if not isinstance(raw_quant, dict):
+        return None
+    quant = deepcopy(raw_quant)
+    snapshot = bundle.get("quant_snapshot")
+    has_selection_identity = any(
+        field in quant for field in ("selection_run_id", "selection_report_id")
+    )
+    if has_selection_identity and not all(
+        isinstance(quant.get(field), str) and quant.get(field)
+        for field in ("selection_run_id", "selection_report_id")
+    ):
+        return None
+    if not has_selection_identity:
+        if not isinstance(snapshot, dict):
+            return None
+        for field in (
+            "strategy_id",
+            "as_of",
+            "factor_algorithm_version",
+            "rank_algorithm_version",
+        ):
+            if field not in quant:
+                quant[field] = snapshot.get(field)
+        quant.setdefault("snapshot_hash", _quant_snapshot_digest(snapshot))
+        quant.setdefault("reason", quant.get("promotion_reason") or snapshot.get("reason"))
+        nested_ids = set(_iter_nested_source_ids(quant))
+        snapshot_ids = snapshot.get("source_ids")
+        raw_source_ids = quant.get("source_ids")
+        if raw_source_ids is not None and (
+            not isinstance(raw_source_ids, list)
+            or any(not isinstance(item, str) or not item for item in raw_source_ids)
+        ):
+            return None
+        if snapshot_ids is not None and (
+            not isinstance(snapshot_ids, list)
+            or any(not isinstance(item, str) or not item for item in snapshot_ids)
+        ):
+            return None
+        quant["source_ids"] = sorted(
+            {
+                source_id
+                for source_id in [*(quant.get("source_ids") or []), *(snapshot_ids or [])]
+                if isinstance(source_id, str) and source_id
+            }
+            | nested_ids
+        )
+    if isinstance(snapshot, dict):
+        registry = snapshot.get("method_registry")
+        if isinstance(registry, dict):
+            quant.setdefault("method_registry", deepcopy(registry))
+            horizons = quant.get("horizons")
+            if isinstance(horizons, dict):
+                for horizon, item in list(horizons.items()):
+                    method = registry.get(horizon)
+                    if not isinstance(item, dict) or not isinstance(method, dict):
+                        continue
+                    enriched = dict(item)
+                    enriched.setdefault("method_id", method.get("methodId"))
+                    enriched.setdefault("method_version", method.get("version"))
+                    enriched.setdefault("target_window_sessions", method.get("targetWindowSessions"))
+                    enriched.setdefault("target_definition", method.get("targetDefinition"))
+                    horizons[horizon] = enriched
+    allowed = {
+        "selection_run_id",
+        "selection_report_id",
+        "strategy_id",
+        "as_of",
+        "factor_algorithm_version",
+        "rank_algorithm_version",
+        "validation_status",
+        "quant_signal",
+        "horizons",
+        "source_ids",
+        "snapshot_hash",
+        "reason",
+        "source_closure_missing",
+        "promotion_status",
+        "promotion_reason",
+        "eligible_for_trading",
+        "validation_metrics",
+        "strategy_horizon",
+        "calibrated_horizon",
+        "method_registry",
+        "target_windows",
+        "target_window_sessions",
+        "target_definition",
+    }
+    if set(quant) - allowed:
+        return None
+    required_text_fields = (
+        "strategy_id",
+        "factor_algorithm_version",
+        "rank_algorithm_version",
+        "snapshot_hash",
+        "reason",
+    )
+    if any(not isinstance(quant.get(field), str) or not quant.get(field) for field in required_text_fields):
+        return None
+    if has_selection_identity and any(
+        not isinstance(quant.get(field), str) or not quant.get(field)
+        for field in ("selection_run_id", "selection_report_id")
+    ):
+        return None
+    if quant.get("as_of") is not None and not isinstance(quant.get("as_of"), str):
+        return None
+    horizons = quant.get("horizons")
+    if not isinstance(horizons, dict) or not horizons or not set(horizons) <= set(_V5_HORIZONS):
+        return None
+    scoped_horizon = quant.get("strategy_horizon") or quant.get("calibrated_horizon")
+    if scoped_horizon is None and set(horizons) != set(_V5_HORIZONS):
+        return None
+    if scoped_horizon is not None and (
+        scoped_horizon not in _V5_HORIZONS
+        or scoped_horizon not in horizons
+        or quant.get("strategy_horizon") != quant.get("calibrated_horizon")
+    ):
+        return None
+    if quant.get("source_closure_missing") is not None and (
+        not isinstance(quant.get("source_closure_missing"), list)
+        or any(
+            not isinstance(item, str)
+            for item in quant.get("source_closure_missing") or []
+        )
+    ):
+        return None
+    source_ids = quant.get("source_ids")
+    if not isinstance(source_ids, list) or any(
+        not isinstance(item, str) or not item for item in source_ids
+    ):
+        return None
+    source_by_id: dict[str, dict[str, Any]] = {}
+    for source in bundle.get("sources") or []:
+        if not isinstance(source, dict) or not isinstance(source.get("id"), str):
+            continue
+        try:
+            normalized_source = SourceRecord.model_validate(source).model_dump(mode="json")
+        except (TypeError, ValueError):
+            return None
+        source_id = source["id"]
+        previous = source_by_id.get(source_id)
+        if previous is not None and previous != normalized_source:
+            return None
+        source_by_id[source_id] = normalized_source
+    if not set(source_ids) <= set(source_by_id):
+        return None
+    nested_source_ids = set(_iter_nested_source_ids(quant))
+    if not nested_source_ids <= set(source_by_id):
+        return None
+    if quant.get("validation_status") not in {
+        "uncalibrated",
+        "support",
+        "unconfirmed",
+        "oppose",
+        "insufficient_data",
+    }:
+        return None
+    if quant.get("quant_signal") not in {
+        "positive",
+        "neutral",
+        "negative",
+        "insufficient_data",
+    }:
+        return None
+    if any(
+        field in quant
+        for field in (
+            "promotion_status",
+            "promotion_reason",
+            "eligible_for_trading",
+            "validation_metrics",
+        )
+    ):
+        if quant.get("promotion_status") not in {"research_only", "calibrated", "rejected"}:
+            return None
+        if not isinstance(quant.get("promotion_reason"), str) or not quant.get("promotion_reason"):
+            return None
+        if not isinstance(quant.get("eligible_for_trading"), bool):
+            return None
+        metrics = quant.get("validation_metrics")
+        if not isinstance(metrics, dict):
+            return None
+        if quant.get("promotion_status") == "calibrated":
+            scope = metrics.get("sampleScope", metrics.get("sample_scope"))
+            coverage = metrics.get(
+                "universeCoverage",
+                metrics.get("universe_coverage", metrics.get("coverage")),
+            )
+            coverage_status = metrics.get("status", metrics.get("coverageStatus"))
+            if scope not in {
+                "full_universe",
+                "complete_eligible_universe",
+                "full_eligible_universe",
+            }:
+                return None
+            if not isinstance(coverage, (int, float)) or isinstance(coverage, bool) or coverage < 0.8:
+                return None
+            if coverage_status in {"rejected", "not_evaluable", "unavailable"}:
+                return None
+            if quant.get("eligible_for_trading") is not True:
+                return None
+            for field in ("strategy_horizon", "calibrated_horizon"):
+                value = quant.get(field)
+                if value is not None and value not in _V5_HORIZONS:
+                    return None
+            if (
+                (quant.get("strategy_horizon") is not None or quant.get("calibrated_horizon") is not None)
+                and quant.get("strategy_horizon") != quant.get("calibrated_horizon")
+            ):
+                return None
+    return deepcopy(quant)
+
+
+def _trusted_quant_promotion_sidecar(bundle: Mapping[str, Any]) -> dict[str, Any] | None:
+    """Validate a scoped promotion sidecar without inventing factor observations."""
+    raw = bundle.get("quant_validation")
+    if not isinstance(raw, Mapping):
+        return None
+    required = ("promotion_status", "promotion_reason", "eligible_for_trading", "validation_metrics")
+    if any(field not in raw for field in required):
+        return None
+    status = raw.get("promotion_status")
+    reason = raw.get("promotion_reason")
+    eligible = raw.get("eligible_for_trading")
+    metrics = raw.get("validation_metrics")
+    if status not in {"research_only", "calibrated", "rejected"}:
+        return None
+    if not isinstance(reason, str) or not reason.strip() or not isinstance(eligible, bool):
+        return None
+    if eligible != (status == "calibrated") or not isinstance(metrics, Mapping):
+        return None
+    strategy_horizon = raw.get("strategy_horizon")
+    calibrated_horizon = raw.get("calibrated_horizon")
+    if strategy_horizon is not None and strategy_horizon not in _V5_HORIZONS:
+        return None
+    if calibrated_horizon is not None and calibrated_horizon not in _V5_HORIZONS:
+        return None
+    if strategy_horizon != calibrated_horizon:
+        return None
+    source_ids = raw.get("source_ids", [])
+    if not isinstance(source_ids, list) or any(not isinstance(item, str) or not item for item in source_ids):
+        return None
+    target_source_ids = {
+        source.get("id")
+        for source in bundle.get("sources") or []
+        if isinstance(source, Mapping) and isinstance(source.get("id"), str)
+    }
+    if not set(source_ids) <= target_source_ids:
+        return None
+    return {
+        "promotion_status": status,
+        "promotion_reason": reason,
+        "eligible_for_trading": eligible,
+        "validation_metrics": dict(metrics),
+        "strategy_horizon": strategy_horizon,
+        "calibrated_horizon": calibrated_horizon,
+        "source_ids": list(dict.fromkeys(source_ids)),
+    }
+
+
+_V5_HORIZONS = ("short_term", "medium_term", "long_term")
+
+
+def _v5_submission_gap_error(payload: Any) -> str | None:
+    """Reject incomplete-state wording with the exact model field path."""
+    def forbidden_term(value: Any) -> str | None:
+        if not isinstance(value, str):
+            return None
+        folded = value.casefold()
+        return next(
+            (term for term in V5_FORBIDDEN_TERMS if term.casefold() in folded),
+            None,
+        )
+
+    checks: list[tuple[str, Any]] = [("summary", payload.summary)]
+    for horizon in _V5_HORIZONS:
+        decision = getattr(payload.horizon_decisions, horizon)
+        prefix = f"horizon_decisions.{horizon}"
+        checks.append((f"{prefix}.thesis", decision.thesis))
+        for field in ("key_reasons", "key_risks"):
+            for index, point in enumerate(getattr(decision, field)):
+                for text_field in ("claim", "evidence", "basis"):
+                    value = getattr(point, text_field, None)
+                    if value is not None:
+                        checks.append(
+                            (f"{prefix}.{field}[{index}].{text_field}", value)
+                        )
+    for path, value in checks:
+        term = forbidden_term(value)
+        if term is not None:
+            return (
+                f"Error: V5 forbidden gap term {term!r} at {path}; "
+                "replace it with a complete conclusion."
+            )
+    return None
+
+
+def _v6_submission_gap_error(payload: Any) -> str | None:
+    decisions = payload.v6_horizon_decisions
+    if decisions is None:
+        return "Error: V6 horizon decisions are missing."
+    checks: list[tuple[str, Any]] = [("summary", payload.summary)]
+    for horizon in _V5_HORIZONS:
+        decision = getattr(decisions, horizon)
+        if decision is None:
+            continue
+        prefix = f"horizon_decisions.{horizon}"
+        checks.append((f"{prefix}.thesis", decision.thesis))
+        for field in ("key_reasons", "key_risks"):
+            for index, point in enumerate(getattr(decision, field)):
+                for text_field in ("claim", "evidence", "basis"):
+                    value = getattr(point, text_field, None)
+                    if value is not None:
+                        checks.append((f"{prefix}.{field}[{index}].{text_field}", value))
+    for path, value in checks:
+        if not isinstance(value, str):
+            continue
+        folded = value.casefold()
+        term = next(
+            (candidate for candidate in V5_FORBIDDEN_TERMS if candidate.casefold() in folded),
+            None,
+        )
+        if term is not None:
+            return f"Error: V6 forbidden gap term {term!r} at {path}; replace it with a complete conclusion."
+    return None
+
+
+def _v6_required_for_stock_run(
+    workspace: Path, run_id: str, room_id: str | None,
+) -> tuple[bool, str | None]:
+    """Return the V6 contract for a persisted stock deep-research run.
+
+    The workflow snapshot is the trust boundary: the active pack may change
+    after a run starts, but a run must never silently change report schema.
+    Non-stock and legacy test runs remain compatible with their historical
+    submission contracts.
+    """
+    if room_id != _STOCK_RESEARCH_ROOM_ID:
+        return False, None
+    try:
+        run_dir = WorkflowRunStore.default_dir(workspace)
+        run = WorkflowRunStore(run_dir).load(run_id)
+    except Exception as exc:
+        return True, (
+            "错误：无法确认本次股票深度投研的报告版本，已阻止提交；"
+            f"请重试本次投研（{exc}）。"
+        )
+    step_ids = {step.id for step in run.workflow.steps}
+    if not _STOCK_DEEP_RESEARCH_STEP_IDS.issubset(step_ids):
+        # Daily review and stock selection use this room too, but are not
+        # deep-research reports and must retain their own submission modes.
+        return False, None
+    return True, None
+
+
+def _trusted_v5_derived_metrics(
+    bundle: dict[str, Any],
+) -> tuple[dict[str, Any] | None, str | None]:
+    """Validate the deterministic V5 injection boundary from Evidence."""
+    derived = bundle.get("derived_decision_metrics")
+    if not isinstance(derived, dict):
+        return None, "Error: current Evidence has no derived_decision_metrics for V5."
+    methods = derived.get("method_versions")
+    if not isinstance(methods, dict) or any(
+        not isinstance(methods.get(key), str) or not methods.get(key)
+        for key in ("decision", "indicators", "conditions")
+    ):
+        return None, "Error: derived_decision_metrics.method_versions is incomplete."
+    generated_at = derived.get("generated_at")
+    if not isinstance(generated_at, str) or not generated_at:
+        return None, "Error: derived_decision_metrics.generated_at is required."
+    try:
+        source_ids = derived.get("source_ids")
+        if not isinstance(source_ids, list) or not source_ids or any(
+            not isinstance(source_id, str) or not source_id for source_id in source_ids
+        ):
+            return None, "Error: derived_decision_metrics.source_ids is incomplete."
+        horizons = derived.get("horizons")
+        if not isinstance(horizons, dict):
+            return None, "Error: derived_decision_metrics.horizons is required."
+        validated: dict[str, Any] = {
+            "schema_version": derived.get("schema_version", 1),
+            "generated_at": generated_at,
+            "method_versions": dict(methods),
+            "source_ids": list(dict.fromkeys(source_ids)),
+            "horizons": {},
+        }
+        for horizon in _V5_HORIZONS:
+            item = horizons.get(horizon)
+            if not isinstance(item, dict):
+                return None, f"Error: derived_decision_metrics.horizons.{horizon} is required."
+            if set(item) - {
+                "trading_plan",
+                "position_plan",
+                "valid_until",
+                "review_trigger",
+                "evidence_strength",
+                "source_ids",
+            }:
+                return None, f"Error: derived_decision_metrics.{horizon} has unknown fields."
+            trading_plan = V5TradingPlan.model_validate(item.get("trading_plan"))
+            position_plan = V5PositionPlan.model_validate(item.get("position_plan"))
+            valid_until = item.get("valid_until")
+            review_trigger = item.get("review_trigger")
+            evidence_strength = item.get("evidence_strength")
+            horizon_source_ids = item.get("source_ids") or []
+            if not isinstance(valid_until, str) or not valid_until:
+                return None, f"Error: derived_decision_metrics.{horizon}.valid_until is required."
+            if not isinstance(review_trigger, str) or not review_trigger.strip():
+                return None, f"Error: derived_decision_metrics.{horizon}.review_trigger is required."
+            if evidence_strength not in {"strong", "medium", "weak"}:
+                return None, f"Error: derived_decision_metrics.{horizon}.evidence_strength is invalid."
+            if not isinstance(horizon_source_ids, list) or any(
+                not isinstance(source_id, str) or not source_id for source_id in horizon_source_ids
+            ):
+                return None, f"Error: derived_decision_metrics.{horizon}.source_ids is invalid."
+            validated["horizons"][horizon] = {
+                "trading_plan": trading_plan.model_dump(mode="json"),
+                "position_plan": position_plan.model_dump(mode="json"),
+                "valid_until": valid_until,
+                "review_trigger": review_trigger,
+                "evidence_strength": evidence_strength,
+                "source_ids": list(dict.fromkeys(horizon_source_ids)),
+            }
+        return validated, None
+    except (TypeError, ValueError, ValidationError) as exc:
+        return None, f"Error: invalid derived_decision_metrics: {exc}"
+
+
+def _build_v5_report(
+    workspace: Path,
+    run_id: str,
+    payload: Any,
+) -> tuple[dict[str, Any] | None, str | None]:
+    instrument_id = f"{payload.instrument.exchange}:{payload.instrument.symbol}"
+    bundle, error = _load_report_bundle(workspace, run_id, instrument_id)
+    if error is not None or bundle is None:
+        return None, error or "Error: instrument Evidence is unavailable."
+    derived, error = _trusted_v5_derived_metrics(bundle)
+    if error is not None or derived is None:
+        return None, error or "Error: deterministic V5 metrics are unavailable."
+    target_sources = {
+        source.get("id"): source
+        for source in bundle.get("sources") or []
+        if isinstance(source, dict) and isinstance(source.get("id"), str)
+    }
+    submitted_source_ids = payload.all_source_ids()
+    derived_source_ids = list(derived["source_ids"])
+    for item in derived["horizons"].values():
+        derived_source_ids.extend(item["source_ids"])
+        plan = item["trading_plan"]
+        derived_source_ids.extend(plan["source_ids"])
+        for group in ("entry_conditions", "exit_conditions", "take_profit_conditions"):
+            for condition in plan[group]:
+                derived_source_ids.extend(condition["source_ids"])
+    all_source_ids = list(dict.fromkeys(submitted_source_ids + derived_source_ids))
+    missing_source_ids = sorted(set(all_source_ids) - set(target_sources))
+    if missing_source_ids:
+        return None, (
+            "Error: V5 source_ids must belong to the target instrument Evidence: "
+            + ", ".join(missing_source_ids)
+        )
+    final_horizons: dict[str, Any] = {}
+    for horizon in _V5_HORIZONS:
+        submitted = getattr(payload.horizon_decisions, horizon)
+        item = derived["horizons"][horizon]
+        final_data = submitted.model_dump(mode="json")
+        final_data.update(
+            {
+                "trading_plan": item["trading_plan"],
+                "position_plan": item["position_plan"],
+                "valid_until": item["valid_until"],
+                "review_trigger": item["review_trigger"],
+                "evidence_strength": item["evidence_strength"],
+                "source_ids": list(dict.fromkeys(
+                    final_data["source_ids"] + item["source_ids"]
+                )),
+            }
+        )
+        try:
+            final_horizons[horizon] = V5HorizonDecision.model_validate(final_data).model_dump(mode="json")
+        except (TypeError, ValueError, ValidationError) as exc:
+            return None, f"Error: invalid V5 {horizon} decision: {exc}"
+    research_cutoff_at = bundle.get("research_cutoff_at")
+    market_as_of = bundle.get("market_as_of")
+    if not isinstance(research_cutoff_at, str) or not isinstance(market_as_of, str):
+        return None, "Error: V5 Evidence requires research_cutoff_at and market_as_of."
+    doc = {
+        "schema_version": DECISION_REPORT_SCHEMA_VERSION,
+        "report_id": f"stock_report_v5_{run_id.removeprefix('run_')}",
+        "kind": "deep_research",
+        "result_status": "completed",
+        "workflow_run_id": run_id,
+        "instrument": payload.instrument.model_dump(mode="json"),
+        "research_cutoff_at": research_cutoff_at,
+        "market_as_of": market_as_of,
+        "generated_at": derived["generated_at"],
+        "summary": payload.summary,
+        "horizon_decisions": final_horizons,
+        "source_ids": all_source_ids,
+        "method_versions": derived["method_versions"],
+        "disclaimer": DISCLAIMER,
+    }
+    try:
+        validated = DecisionReportV5.model_validate(doc)
+    except (TypeError, ValueError, ValidationError) as exc:
+        return None, f"Error: invalid V5 report: {exc}"
+    return validated.model_dump(mode="json"), None
+
+
+_V6_SAFE_ACTIONS = {"conditional_participation", "wait", "reduce", "exit", "avoid"}
+
+
+def _v6_status(value: Any) -> str:
+    if isinstance(value, Mapping):
+        value = value.get("status")
+    if value in {"ready", "available", "complete", "passed", True}:
+        return "ready"
+    return "unavailable"
+
+
+def _v6_horizon_statuses(
+    readiness: Mapping[str, Any], section: str
+) -> dict[str, str]:
+    values: Any = readiness.get(section)
+    if isinstance(values, Mapping) and isinstance(values.get("horizons"), Mapping):
+        values = values["horizons"]
+    if not isinstance(values, Mapping) or not any(
+        horizon in values for horizon in _V5_HORIZONS
+    ):
+        values = readiness.get("horizons")
+    if not isinstance(values, Mapping):
+        values = {}
+    return {
+        horizon: _v6_status(values.get(horizon))
+        for horizon in _V5_HORIZONS
+    }
+
+
+def _v6_compact_gate(value: Any) -> dict[str, Any]:
+    if not isinstance(value, Mapping):
+        return {"status": "unavailable", "horizons": {}}
+    horizons = value.get("horizons")
+    compact_horizons = {}
+    if isinstance(horizons, Mapping):
+        for horizon in _V5_HORIZONS:
+            item = horizons.get(horizon)
+            if not isinstance(item, Mapping):
+                continue
+            compact_horizons[horizon] = {
+                key: item[key]
+                for key in ("status", "required", "available")
+                if key in item
+            }
+    return {
+        "status": value.get("status"),
+        "horizons": compact_horizons,
+        **(
+            {"failure_reasons": list(value.get("failure_reasons") or [])[:8]}
+            if value.get("failure_reasons")
+            else {}
+        ),
+    }
+
+
+def _v6_quant_gate(bundle: Mapping[str, Any]) -> dict[str, Any]:
+    raw = (
+        bundle.get("quant_validation")
+        or bundle.get("quant_promotion")
+        or bundle.get("quantPromotion")
+    )
+    if not isinstance(raw, Mapping):
+        return {
+            "status": "research_only",
+            "eligibleForTrading": False,
+            "reason": "当前股票没有已校准量化晋级结果",
+        }
+    eligible = raw.get("eligibleForTrading")
+    if eligible is None:
+        eligible = raw.get("eligible_for_trading")
+    promotion = raw.get("promotionStatus") or raw.get("promotion_status")
+    status = raw.get("status") or raw.get("validationStatus") or raw.get("validation_status")
+    metrics = raw.get("validation_metrics") or raw.get("validationMetrics")
+    if not isinstance(metrics, Mapping):
+        metrics = {}
+    scope = metrics.get("sampleScope", metrics.get("sample_scope"))
+    coverage = metrics.get(
+        "universeCoverage",
+        metrics.get("universe_coverage", metrics.get("coverage")),
+    )
+    coverage_status = metrics.get("status", metrics.get("coverageStatus"))
+    evidence_closed = (
+        scope in {
+            "full_universe",
+            "complete_eligible_universe",
+            "full_eligible_universe",
+        }
+        and isinstance(coverage, (int, float))
+        and not isinstance(coverage, bool)
+        and coverage >= 0.8
+        and coverage_status not in {"rejected", "not_evaluable", "unavailable"}
+    )
+    # Legacy uncalibrated payloads stay research-only.  A trading promotion
+    # must carry the sidecar's complete-universe validation metadata.
+    qualified = eligible is True and promotion == "calibrated" and evidence_closed
+    return {
+        "status": "calibrated" if qualified else "research_only",
+        "eligibleForTrading": qualified,
+        "promotionStatus": promotion,
+        "validationStatus": status,
+        "reason": raw.get("reason") or raw.get("promotion_reason") or "量化策略未通过交易晋级门槛",
+        "methodVersion": raw.get("methodVersion") or raw.get("factor_algorithm_version"),
+        "strategyHorizon": raw.get("strategy_horizon") or raw.get("strategyHorizon"),
+        "calibratedHorizon": raw.get("calibrated_horizon") or raw.get("calibratedHorizon"),
+    }
+
+
+def _v6_quant_gate_for_horizon(
+    bundle: Mapping[str, Any], horizon: str
+) -> dict[str, Any]:
+    raw = (
+        bundle.get("quant_validation")
+        or bundle.get("quant_promotion")
+        or bundle.get("quantPromotion")
+    )
+    if isinstance(raw, Mapping):
+        strategy_horizon = raw.get("strategy_horizon") or raw.get("strategyHorizon")
+        calibrated_horizon = raw.get("calibrated_horizon") or raw.get("calibratedHorizon")
+        if strategy_horizon is not None or calibrated_horizon is not None:
+            if strategy_horizon != horizon or calibrated_horizon != horizon:
+                return {
+                    "status": "research_only",
+                    "eligibleForTrading": False,
+                    "promotionStatus": raw.get("promotionStatus") or raw.get("promotion_status"),
+                    "reason": "量化晋级仅覆盖其他周期，不能扩散到本周期",
+                }
+            return _v6_quant_gate(bundle)
+        horizons = raw.get("horizons")
+        scoped = horizons.get(horizon) if isinstance(horizons, Mapping) else None
+        if isinstance(scoped, Mapping) and any(
+            key in scoped
+            for key in (
+                "eligibleForTrading",
+                "eligible_for_trading",
+                "promotionStatus",
+                "promotion_status",
+                "validationMetrics",
+                "validation_metrics",
+            )
+        ):
+            merged = dict(raw)
+            merged.update(scoped)
+            return _v6_quant_gate({"quant_validation": merged})
+        return {
+            "status": "research_only",
+            "eligibleForTrading": False,
+            "promotionStatus": raw.get("promotionStatus") or raw.get("promotion_status"),
+            "reason": "量化晋级结果未按周期提供，不能推断本周期具备交易资格",
+        }
+    return _v6_quant_gate(bundle)
+
+
+def _v6_valuation_gate(bundle: Mapping[str, Any]) -> dict[str, Any]:
+    raw = bundle.get("valuation")
+    if not isinstance(raw, Mapping):
+        return {"status": "unavailable", "tradeReady": False, "reason": "估值依据未完成"}
+    qualified = raw.get("trade_ready", raw.get("tradeReady")) is True
+    relative_positions = raw.get("relative_positions")
+    relative_positions = relative_positions if isinstance(relative_positions, Mapping) else {}
+
+    def metric_assessment(name: str) -> dict[str, Any]:
+        item = relative_positions.get(name)
+        item = item if isinstance(item, Mapping) else {}
+        view = item.get("view")
+        if view not in {"低估", "合理", "高估", "暂不判断"}:
+            view = "暂不判断"
+        percentile = item.get("percentile")
+        if (
+            isinstance(percentile, bool)
+            or not isinstance(percentile, (int, float))
+            or not math.isfinite(percentile)
+            or not 0 <= percentile <= 1
+        ):
+            percentile = None
+        return {"view": view, "percentile": percentile}
+
+    metrics_assessment = {name: metric_assessment(name) for name in ("pe", "pb")}
+    views = {
+        item["view"]
+        for item in metrics_assessment.values()
+        if item["view"] != "暂不判断"
+    }
+    assessment_view = views.pop() if len(views) == 1 else "暂不判断"
+    return {
+        "status": "ready" if qualified else "unavailable",
+        "tradeReady": qualified,
+        "usableMethodCount": raw.get("usable_method_count", raw.get("usableMethodCount")),
+        "crossRangeStatus": (
+            (raw.get("cross_range") or raw.get("crossRange") or {}).get("status")
+            if isinstance(raw.get("cross_range") or raw.get("crossRange"), Mapping)
+            else None
+        ),
+        "assessment": {
+            "view": assessment_view,
+            "pe": metrics_assessment["pe"],
+            "pb": metrics_assessment["pb"],
+        },
+        "reason": "估值交叉验证通过" if qualified else "估值交叉验证未通过",
+    }
+
+
+def _v6_valuation_gate_for_horizon(
+    bundle: Mapping[str, Any], horizon: str
+) -> dict[str, Any]:
+    if horizon == "short_term":
+        return {
+            "status": "not_required",
+            "tradeReady": True,
+            "reason": "短线不以估值作为交易硬门槛",
+        }
+    global_gate = _v6_valuation_gate(bundle)
+    raw = bundle.get("valuation")
+    if horizon == "medium_term" and isinstance(raw, Mapping):
+        usable = raw.get("usable_method_count", raw.get("usableMethodCount"))
+        if isinstance(usable, int) and usable >= 1:
+            return {
+                **global_gate,
+                "status": "ready",
+                "tradeReady": True,
+                "reason": "中线至少有一种估值方法可用",
+            }
+    return global_gate
+
+
+def _v6_execution_facts(bundle: Mapping[str, Any]) -> dict[str, Any]:
+    instrument = bundle.get("instrument") if isinstance(bundle.get("instrument"), Mapping) else {}
+    quote = bundle.get("quote") if isinstance(bundle.get("quote"), Mapping) else {}
+    tradeability = bundle.get("tradeability") if isinstance(bundle.get("tradeability"), Mapping) else {}
+    projection = bundle.get("execution_facts_projection") or bundle.get("executionFactsProjection")
+    projection = projection if isinstance(projection, Mapping) else {}
+    derived = bundle.get("derived_decision_metrics") if isinstance(bundle.get("derived_decision_metrics"), Mapping) else {}
+    volatility = derived.get("volatility") if isinstance(derived.get("volatility"), Mapping) else {}
+    symbol = str(instrument.get("symbol") or "")
+    exchange = instrument.get("exchange")
+    board = tradeability.get("board") or tradeability.get("board_type")
+    if board is not None:
+        board = str(board).strip().lower()
+    elif symbol.startswith("688"):
+        board = "star"
+    elif symbol.startswith(("300", "301")):
+        board = "chinext"
+    elif symbol.startswith(("4", "8")):
+        board = "bse"
+    else:
+        board = "main"
+    source_ids = list(
+        dict.fromkeys(
+            [
+                *(
+                    tradeability.get("source_ids") or []
+                    if isinstance(tradeability.get("source_ids"), list)
+                    else []
+                ),
+                *(
+                    quote.get("source_ids") or []
+                    if isinstance(quote.get("source_ids"), list)
+                    else []
+                ),
+                *(
+                    derived.get("source_ids") or []
+                    if isinstance(derived.get("source_ids"), list)
+                    else []
+                ),
+            ]
+        )
+    )
+
+    def first(*names: str) -> Any:
+        for name in names:
+            value = projection.get(name)
+            if value is not None:
+                return value
+            value = tradeability.get(name)
+            if value is not None:
+                return value
+            value = quote.get(name)
+            if value is not None:
+                return value
+        return None
+
+    def ashare_price(value: Any) -> float | None:
+        # Do not round a source value into a fabricated tick.  If a provider
+        # returns more precision than an A-share quote can verify, omit it so
+        # execution qualification degrades to a visible limited state.
+        if isinstance(value, bool) or not isinstance(value, (int, float)):
+            return None
+        try:
+            decimal = Decimal(str(value))
+        except (InvalidOperation, ValueError):
+            return None
+        if not decimal.is_finite() or decimal.quantize(Decimal("0.01")) != decimal:
+            return None
+        return float(value)
+
+    lower_bound = first("listing_age_lower_bound_sessions", "listingAgeLowerBoundSessions")
+    exact_listing_days = first("listing_days", "days_since_listing")
+    active_membership = first("active_membership", "activeMembership")
+    delisted = first("delisted", "is_delisted")
+    if delisted is None and isinstance(active_membership, bool):
+        delisted = not active_membership
+    return {
+        "board": board,
+        "exchange": exchange,
+        "risk_warning": first("risk_warning", "is_st", "st"),
+        "registration_listing": first("registration_listing", "is_registration_listing"),
+        "suspended": first("suspended", "is_suspended"),
+        "delisted": delisted,
+        "delisting": first("delisting", "is_delisting"),
+        "listing_days": exact_listing_days or lower_bound,
+        "listing_age_lower_bound_sessions": lower_bound,
+        "listing_days_is_lower_bound": exact_listing_days is None and lower_bound is not None,
+        "status_methods": dict(projection.get("status_methods") or projection.get("statusMethods") or {}),
+        "price": ashare_price(quote.get("price")),
+        "previous_close": ashare_price(first("previous_close", "pre_close", "prev_close")),
+        "amount_yuan": first("amount_yuan", "amount", "turnover_amount"),
+        "turnover_rate_pct": first("turnover_rate_pct", "turnover_rate", "turnover"),
+        "atr20_pct": volatility.get("atr20_pct"),
+        "has_order_book": False,
+        "observed_at": derived.get("as_of") or bundle.get("market_as_of") or bundle.get("research_cutoff_at"),
+        "source_ids": source_ids,
+    }
+
+
+def _v6_system_point(claim: str) -> dict[str, Any]:
+    return {
+        "claim": claim,
+        "evidence": "系统根据当前研究门槛生成",
+        "claim_type": "hypothesis",
+        "source_ids": [],
+    }
+
+
+def _v6_frozen_prices(bundle: Mapping[str, Any]) -> tuple[float | None, float | None, list[str]]:
+    quote = bundle.get("quote") if isinstance(bundle.get("quote"), Mapping) else {}
+    current_price = quote.get("price")
+    if isinstance(current_price, bool) or not isinstance(current_price, (int, float)):
+        current_price = None
+    relative = bundle.get("relative_benchmarks")
+    relative = relative if isinstance(relative, Mapping) else {}
+    benchmark = relative.get("benchmark")
+    benchmark = benchmark if isinstance(benchmark, Mapping) else {}
+    benchmark_price = next(
+        (
+            value
+            for value in (
+                benchmark.get("price"),
+                benchmark.get("current_price"),
+                benchmark.get("latest_close"),
+                benchmark.get("close"),
+                relative.get("benchmark_price"),
+                relative.get("current_price"),
+                relative.get("latest_benchmark_close"),
+            )
+            if isinstance(value, (int, float)) and not isinstance(value, bool)
+        ),
+        None,
+    )
+    source_ids = list(
+        dict.fromkeys(
+            [
+                *(quote.get("source_ids") or [] if isinstance(quote.get("source_ids"), list) else []),
+                *(relative.get("source_ids") or [] if isinstance(relative.get("source_ids"), list) else []),
+                *(benchmark.get("source_ids") or [] if isinstance(benchmark.get("source_ids"), list) else []),
+            ]
+        )
+    )
+    return current_price, benchmark_price, source_ids
+
+
+def _trusted_evidence_section(bundle: Mapping[str, Any], name: str) -> dict[str, Any]:
+    """Copy one deterministic section without accepting Agent-supplied data."""
+    value = bundle.get(name)
+    return deepcopy(dict(value)) if isinstance(value, Mapping) else {}
+
+
+def _v6_safe_actions(
+    direction: str, decision: Any | None
+) -> tuple[str, str, str]:
+    if decision is None:
+        return "avoid", "avoid", "exit"
+    action = decision.action
+    not_holding = decision.not_holding_action
+    holding = decision.holding_action
+    if action not in _V6_SAFE_ACTIONS:
+        action = "wait" if direction in {"positive", "neutral"} else "avoid"
+    if direction == "positive":
+        action = "wait" if action not in _V6_SAFE_ACTIONS else action
+        not_holding = "wait"
+        holding = "hold"
+    elif direction == "neutral":
+        action = "wait" if action not in _V6_SAFE_ACTIONS else action
+        not_holding = "wait"
+        holding = "hold"
+    else:
+        action = "avoid" if action not in {"reduce", "exit", "avoid"} else action
+        not_holding = "avoid"
+        holding = "exit"
+    return action, not_holding, holding
+
+
+def _v6_plan_has_boundary(plan: Any) -> bool:
+    return any(
+        getattr(plan, field, None) is not None
+        for field in (
+            "buy_low",
+            "buy_high",
+            "confirmation_price",
+            "invalidation_price",
+            "exit_price",
+            "reentry_confirmation_price",
+            "stop_loss",
+            "first_take_profit",
+            "second_take_profit",
+        )
+    )
+
+
+def _trusted_v6_derived_metrics(
+    bundle: Mapping[str, Any],
+) -> tuple[dict[str, Any] | None, str | None]:
+    """Validate an Evidence V6 plan containing zero or more horizons."""
+    derived = bundle.get("derived_decision_metrics")
+    if not isinstance(derived, Mapping):
+        return None, "Error: current Evidence has no V6 derived_decision_metrics."
+    methods = derived.get("method_versions")
+    generated_at = derived.get("generated_at")
+    horizons = derived.get("horizons")
+    source_ids = derived.get("source_ids")
+    if not isinstance(methods, Mapping) or not all(isinstance(methods.get(key), str) and methods.get(key) for key in ("decision", "indicators", "conditions")):
+        return None, "Error: V6 derived_decision_metrics.method_versions is incomplete."
+    if not isinstance(generated_at, str) or not isinstance(horizons, Mapping) or not isinstance(source_ids, list):
+        return None, "Error: V6 derived_decision_metrics is incomplete."
+    validated: dict[str, Any] = {
+        "schema_version": derived.get("schema_version", 1),
+        "generated_at": generated_at,
+        "method_versions": dict(methods),
+        "source_ids": list(dict.fromkeys(item for item in source_ids if isinstance(item, str) and item)),
+        "horizons": {},
+    }
+    for horizon, item in horizons.items():
+        if horizon not in _V5_HORIZONS or not isinstance(item, Mapping):
+            return None, f"Error: V6 derived_decision_metrics.horizons.{horizon} is invalid."
+        try:
+            trading_plan = V5TradingPlan.model_validate(item.get("trading_plan"))
+            position_plan = V5PositionPlan.model_validate(item.get("position_plan"))
+        except (TypeError, ValueError, ValidationError) as exc:
+            return None, f"Error: invalid V6 derived_decision_metrics.{horizon}: {exc}"
+        valid_until = item.get("valid_until")
+        review_trigger = item.get("review_trigger")
+        if not isinstance(valid_until, str) or not isinstance(review_trigger, str) or not review_trigger.strip():
+            return None, f"Error: V6 derived_decision_metrics.{horizon} timing is incomplete."
+        validated["horizons"][horizon] = {
+            "trading_plan": trading_plan.model_dump(mode="json"),
+            "position_plan": position_plan.model_dump(mode="json"),
+            "valid_until": valid_until,
+            "review_trigger": review_trigger,
+            "evidence_strength": item.get("evidence_strength") or "medium",
+            "source_ids": list(dict.fromkeys(item.get("source_ids") or [])),
+        }
+    return validated, None
+
+
+def _build_v6_report(
+    workspace: Path,
+    run_id: str,
+    payload: Any,
+) -> tuple[dict[str, Any] | None, str | None]:
+    instrument_id = f"{payload.instrument.exchange}:{payload.instrument.symbol}"
+    bundle, error = _load_report_bundle(workspace, run_id, instrument_id)
+    if error is not None or bundle is None:
+        return None, error or "Error: instrument Evidence is unavailable."
+    readiness = bundle.get("decision_readiness")
+    if not isinstance(readiness, Mapping):
+        return None, "Error: V6 Evidence has no decision_readiness."
+    try:
+        risk_store = LocalRiskProfileStore(risk_profile_path(workspace))
+        risk_profile = risk_store.get_risk_profile()
+        portfolio_context = risk_store.get_portfolio_context(instrument_id)
+    except (RiskProfileStorageError, ValueError, TypeError) as exc:
+        return None, f"Error: V6 risk profile/context is unavailable: {exc}"
+    research_statuses = _v6_horizon_statuses(readiness, "research_ready")
+    if not any(status == "ready" for status in research_statuses.values()):
+        return None, "Error: V6 research_ready has no research-ready horizon."
+    trade_statuses = _v6_horizon_statuses(readiness, "trade_ready")
+    quant_gate = _v6_quant_gate(bundle)
+    trusted_quant_validation = _trusted_quant_validation(bundle)
+    trusted_quant_promotion = _trusted_quant_promotion_sidecar(bundle)
+    if (
+        isinstance(bundle.get("quant_validation"), dict)
+        and trusted_quant_validation is None
+        and trusted_quant_promotion is None
+    ):
+        return None, "Error: Evidence quant_validation is invalid or its source closure is incomplete."
+    valuation_gate = _v6_valuation_gate(bundle)
+    market_sentiment = _trusted_evidence_section(bundle, "market_sentiment")
+    public_opinion = _trusted_evidence_section(bundle, "public_opinion")
+    current_price, benchmark_price, price_source_ids = _v6_frozen_prices(bundle)
+    derived, _derived_error = _trusted_v6_derived_metrics(bundle)
+    derived = derived or {"horizons": {}, "source_ids": [], "method_versions": {}}
+    decisions_input = payload.v6_horizon_decisions
+    if decisions_input is None:
+        return None, "Error: V6 horizon decisions are missing."
+    target_source_ids = {
+        source.get("id")
+        for source in bundle.get("sources") or []
+        if isinstance(source, Mapping) and isinstance(source.get("id"), str)
+    }
+    submitted_source_ids = payload.all_source_ids()
+    missing_submitted = sorted(set(submitted_source_ids) - target_source_ids)
+    if missing_submitted:
+        return None, "Error: V6 source_ids must belong to target Evidence: " + ", ".join(missing_submitted)
+    facts = _v6_execution_facts(bundle)
+    try:
+        baseline_execution = assess_a_share_execution(
+            facts,
+            holding_state=portfolio_context.holding_state,
+            today_bought_quantity=portfolio_context.today_bought_quantity,
+        )
+    except (TypeError, ValueError, ValidationError) as exc:
+        return None, f"Error: V6 execution facts are invalid: {exc}"
+    execution_qualification: dict[str, Any] = {
+        "status": baseline_execution.execution_status,
+        "assessment": baseline_execution.model_dump(mode="json"),
+        "horizons": {},
+    }
+    quant_horizon_gates: dict[str, Any] = {}
+    valuation_horizon_gates: dict[str, Any] = {}
+    final_horizons: dict[str, Any] = {}
+    plan_count = 0
+    for horizon in _V5_HORIZONS:
+        research_status = research_statuses[horizon]
+        trade_status = trade_statuses[horizon]
+        submitted = getattr(decisions_input, horizon)
+        derived_item = derived.get("horizons", {}).get(horizon)
+        if research_status != "ready":
+            final_horizons[horizon] = {
+                "direction": "avoid",
+                "action": "avoid",
+                "thesis": "当前周期暂无可核验结论，暂不参与。",
+                "not_holding_action": "avoid",
+                "holding_action": "exit",
+                "key_reasons": [_v6_system_point("当前周期研究门槛未通过")],
+                "key_risks": [_v6_system_point("补齐核心数据后结论可能改变")],
+                "disagreement_matrix": None,
+                "research_status": "unavailable",
+                "trade_status": "unavailable",
+                "materialized_plan": None,
+                "valid_until": None,
+                "review_trigger": "补齐该周期核心数据后重新评估",
+                "source_ids": [],
+            }
+            execution_qualification["horizons"][horizon] = {
+                "status": baseline_execution.execution_status,
+                "executionStatus": baseline_execution.execution_status,
+                "reason": "研究门槛未通过；执行资格仅表示当前A股规则与流动性事实",
+                "reasons": ["研究门槛未通过"],
+            }
+            continue
+        if submitted is None:
+            return None, f"Error: V6 horizon_decisions.{horizon} is required for a research-ready horizon."
+        if not submitted.key_reasons or not submitted.key_risks or not submitted.source_ids:
+            return None, f"Error: V6 horizon_decisions.{horizon} requires sourced reasons, risks and source_ids."
+        direction = submitted.direction
+        action = submitted.action
+        not_holding_action = submitted.not_holding_action
+        holding_action = submitted.holding_action
+        materialized: dict[str, Any] | None = None
+        execution_status = baseline_execution.execution_status
+        reasons: list[str] = []
+        gate_trade = trade_status == "ready"
+        scoped_quant_gate = _v6_quant_gate_for_horizon(bundle, horizon)
+        scoped_valuation_gate = _v6_valuation_gate_for_horizon(bundle, horizon)
+        quant_horizon_gates[horizon] = scoped_quant_gate
+        valuation_horizon_gates[horizon] = scoped_valuation_gate
+        gate_quant = scoped_quant_gate["eligibleForTrading"]
+        gate_valuation = scoped_valuation_gate["tradeReady"]
+        if not gate_trade:
+            reasons.append("周期交易门槛未通过")
+        if not gate_quant:
+            reasons.append("量化策略未晋级交易")
+        if not gate_valuation:
+            reasons.append("估值资格未通过")
+        requested_side = (
+            "buy"
+            if direction == "positive"
+            and (
+                portfolio_context.holding_state == "not_holding"
+                or action == "conditional_participation"
+            )
+            else "sell"
+            if direction in {"negative", "avoid"}
+            and portfolio_context.holding_state == "holding"
+            else None
+        )
+        try:
+            assessment = assess_a_share_execution(
+                facts,
+                holding_state=portfolio_context.holding_state,
+                today_bought_quantity=portfolio_context.today_bought_quantity,
+                requested_side=requested_side,
+            )
+            execution_status = assessment.execution_status
+        except (TypeError, ValueError, ValidationError) as exc:
+            return None, f"Error: V6 execution qualification failed for {horizon}: {exc}"
+        if isinstance(derived_item, Mapping) and assessment.execution_status != "blocked":
+            try:
+                reference_plan = not (gate_trade and gate_quant and gate_valuation)
+                candidate = materialize_v6_trading_plan(
+                    derived_item,
+                    direction=direction,
+                    action=action,
+                    holding_state=portfolio_context.holding_state,
+                    execution_facts=facts,
+                    portfolio=portfolio_context,
+                    risk_profile=risk_profile,
+                    alpha_calibrated=gate_quant,
+                    plan_type="rule_reference" if reference_plan else "alpha_calibrated",
+                )
+                if candidate.plan_status in {"proxy", "limited"} and _v6_plan_has_boundary(candidate):
+                    materialized = candidate.model_dump(mode="json")
+                    materialized["cost_assumptions"] = {
+                        "commission_pct": 0.03,
+                        "stamp_tax_pct": 0.05,
+                        "transfer_fee_pct": 0.001,
+                        "method_version": "a-share-cost-assumptions-v1",
+                        "source": "system_default",
+                    }
+                    plan_count += 1
+                else:
+                    reasons.append(
+                        "执行资格未通过"
+                        if candidate.plan_status == "blocked"
+                        else "缺少可执行价格或风控边界"
+                    )
+            except (TypeError, ValueError, ValidationError) as exc:
+                reasons.append(f"执行计划生成失败：{exc}")
+        elif not isinstance(derived_item, Mapping):
+            reasons.append("缺少该周期确定性交易计划")
+        else:
+            reasons.append("执行资格未通过")
+        if gate_trade and gate_quant and gate_valuation is False:
+            reasons.append("估值资格未通过，当前仅生成规则参考计划")
+        execution_qualification["horizons"][horizon] = {
+            "status": assessment.execution_status,
+            "executionStatus": execution_status,
+            "reasons": reasons,
+        }
+        if materialized is None:
+            action, not_holding_action, holding_action = _v6_safe_actions(direction, submitted)
+        final = submitted.model_dump(mode="json")
+        final.update(
+            {
+                "action": action,
+                "not_holding_action": not_holding_action,
+                "holding_action": holding_action,
+                "research_status": "ready",
+                "trade_status": "ready" if materialized is not None else "unavailable",
+                "materialized_plan": materialized,
+                "valid_until": (
+                    derived_item.get("valid_until")
+                    if materialized is not None and isinstance(derived_item, Mapping)
+                    else None
+                ),
+                "review_trigger": (
+                    derived_item.get("review_trigger")
+                    if materialized is not None and isinstance(derived_item, Mapping)
+                    else "交易门槛或关键数据发生变化时重新评估"
+                ),
+                "source_ids": list(dict.fromkeys(submitted.source_ids + (materialized or {}).get("source_ids", []))),
+            }
+        )
+        try:
+            final_horizons[horizon] = V6HorizonDecision.model_validate(final).model_dump(mode="json")
+        except (TypeError, ValueError, ValidationError) as exc:
+            return None, f"Error: invalid V6 horizon_decisions.{horizon}: {exc}"
+    mode = "reference_plan" if plan_count else "research_only"
+    report_sources = list(
+        dict.fromkeys(
+            submitted_source_ids
+            + list(derived.get("source_ids") or [])
+            + list(price_source_ids)
+            + list(baseline_execution.source_ids)
+        )
+    )
+    for decision in final_horizons.values():
+        report_sources.extend(decision.get("source_ids") or [])
+    if trusted_quant_validation is not None:
+        report_sources.extend(_iter_nested_source_ids(trusted_quant_validation))
+    if trusted_quant_promotion is not None:
+        report_sources.extend(_iter_nested_source_ids(trusted_quant_promotion))
+    report_sources.extend(_iter_nested_source_ids(market_sentiment))
+    report_sources.extend(_iter_nested_source_ids(public_opinion))
+    report_sources = list(dict.fromkeys(report_sources))
+    missing_sources = sorted(set(report_sources) - target_source_ids)
+    if missing_sources:
+        return None, "Error: V6 generated source_ids must belong to target Evidence: " + ", ".join(missing_sources)
+    research_public = _v6_compact_gate(readiness.get("research_ready") or readiness)
+    trade_public = _v6_compact_gate(readiness.get("trade_ready") or readiness)
+    research_public["horizons"] = {
+        horizon: {"status": research_statuses[horizon]}
+        for horizon in _V5_HORIZONS
+    }
+    trade_public["horizons"] = {
+        horizon: {"status": trade_statuses[horizon]}
+        for horizon in _V5_HORIZONS
+    }
+    document = {
+        "schema_version": 6,
+        "report_id": f"stock_report_v6_{run_id.removeprefix('run_')}",
+        "kind": "deep_research",
+        "result_status": "completed",
+        "workflow_run_id": run_id,
+        "instrument": payload.instrument.model_dump(mode="json"),
+        "research_cutoff_at": bundle.get("research_cutoff_at"),
+        "market_as_of": bundle.get("market_as_of"),
+        "generated_at": bundle.get("research_cutoff_at") or bundle.get("market_as_of"),
+        "current_price": current_price,
+        "benchmark_price": benchmark_price,
+        "price_source_ids": price_source_ids,
+        "summary": payload.summary,
+        "decision_mode": mode,
+        "research_status": "ready",
+        "trade_status": "ready" if plan_count else "unavailable",
+        "horizon_decisions": final_horizons,
+        "research_ready": research_public,
+        "trade_ready": trade_public,
+        "quant_promotion": {**quant_gate, "horizons": quant_horizon_gates},
+        "valuation": {**valuation_gate, "horizons": valuation_horizon_gates},
+        "market_sentiment": market_sentiment,
+        "public_opinion": public_opinion,
+        "execution_qualification": execution_qualification,
+        "risk_profile_configured": risk_profile.configured,
+        "risk_level": risk_profile.risk_level,
+        "holding_state": portfolio_context.holding_state,
+        "method_versions": {
+            **dict(derived.get("method_versions") or {}),
+            "report": "decision-report-v6",
+        },
+        "source_ids": report_sources,
+        "sources": [
+            source
+            for source in bundle.get("sources") or []
+            if isinstance(source, Mapping) and source.get("id") in set(report_sources)
+        ],
+        "disclaimer": DISCLAIMER,
+    }
+    if trusted_quant_validation is not None:
+        document["quant_validation"] = trusted_quant_validation
+    try:
+        validated = DecisionReportV6.model_validate(document)
+    except (TypeError, ValueError, ValidationError) as exc:
+        return None, f"Error: invalid V6 report: {exc}"
+    return validated.model_dump(mode="json"), None
+
+
 def _run_context(tool_ctx: Any) -> tuple[str, str] | str:
     """Trusted ``(run_id, job_id)`` from the ToolContext, or an error."""
     run_id = getattr(tool_ctx, "workflow_run_id", None) or None
@@ -1437,10 +2822,43 @@ _ANALYST_GATES = {
 }
 
 
+def _decision_readiness_horizon_status(
+    bundle: dict[str, Any], horizon: str
+) -> str | None:
+    """Return the trusted *research* readiness status for one horizon.
+
+    V6 has separate research and trade gates.  Upstream Agent artifacts only
+    need research evidence; trade qualification is applied when the system
+    materializes a V6 plan.  Runs without the V6 research gate keep the legacy
+    horizon projection for compatibility.
+    """
+    readiness = bundle.get("decision_readiness")
+    if not isinstance(readiness, dict):
+        return None
+    research_gate = readiness.get("research_ready")
+    if isinstance(research_gate, dict):
+        horizons = research_gate.get("horizons")
+        if not isinstance(horizons, dict):
+            horizons = readiness.get("horizons")
+    else:
+        horizons = readiness.get("horizons")
+    if not isinstance(horizons, dict):
+        return None
+    item = horizons.get(horizon)
+    if not isinstance(item, dict):
+        return None
+    status = item.get("status")
+    if status in {"ready", "available"}:
+        return "ready"
+    if status in {"failed", "unavailable", "insufficient_data", "missing"}:
+        return "failed"
+    return None
+
+
 def _validate_analyst_gate(
     workspace: Path, run_id: str, instrument_id: str, artifact_name: str, stance: str
 ) -> str | None:
-    """Keep deterministic Evidence coverage from being softened by a prompt."""
+    """Gate V3 views on the trusted readiness horizon, not stale coverage."""
     horizon = _ANALYST_GATES.get(artifact_name)
     if horizon is None or stance == "insufficient_data":
         return None
@@ -1448,12 +2866,285 @@ def _validate_analyst_gate(
     bundle = (data.get("symbols") or {}).get(instrument_id)
     if not isinstance(bundle, dict):
         return f"Error: instrument Evidence {instrument_id!r} not found in run {run_id}."
-    status = ((bundle.get("evidence_coverage") or {}).get(horizon) or {}).get("status")
-    if status == "insufficient_data":
+    readiness_status = _decision_readiness_horizon_status(bundle, horizon)
+    if readiness_status == "ready":
+        return None
+    if readiness_status is None:
         return (
-            f"Error: {artifact_name} {horizon} coverage is insufficient_data; "
+            f"Error: {artifact_name} {horizon} decision_readiness is missing or invalid; "
             "submit stance=insufficient_data."
         )
+    return (
+        f"Error: {artifact_name} {horizon} decision_readiness is {readiness_status}; "
+        "submit stance=insufficient_data."
+    )
+
+
+_RESEARCH_HORIZON_LABELS = {
+    "short_term": "短线",
+    "medium_term": "中线",
+    "long_term": "长线",
+}
+_READINESS_FACT_LABELS = {
+    "quote": "行情",
+    "kline": "历史价格",
+    "technical_indicators": "技术指标",
+    "fundamentals": "财务数据",
+    "industry_context": "行业信息",
+    "cycle_context": "周期信息",
+    "policy_context": "政策信息",
+    "company_quality": "公司质量",
+    "multi_period_financials": "多期财务数据",
+    "cashflow_quality": "现金流质量",
+    "valuation_basis": "估值依据",
+    "industry_lifecycle": "行业生命周期",
+}
+_USER_TEXT_KEYS = frozenset({
+    "summary",
+    "claim",
+    "basis",
+    "evidence",
+    "thesis",
+    "key_reasons",
+    "key_risks",
+    "risks",
+    "bull_case",
+    "bear_case",
+    "verdict",
+    "ruling",
+    "retained_risks",
+    "change_conditions",
+    "issue",
+    "one_liner",
+})
+_PUBLIC_TEXT_FORBIDDEN = (
+    re.compile(r"&(?:#(?:x[0-9a-f]+|[0-9]+)|[a-z][a-z0-9]+);", re.IGNORECASE),
+    re.compile(r"\b[a-z][a-z0-9]*(?:_[a-z0-9]+)+\b", re.IGNORECASE),
+    re.compile(r"\bsource[ _-]?ids?\b", re.IGNORECASE),
+    re.compile(
+        r"\b(?:insufficient_data|available|unavailable|missing|degraded|"
+        r"research_ready|trade_ready|not_applicable|unknown|positive|negative|"
+        r"neutral|conditional_participation|participate|observe|hold|avoid|"
+        r"exit|reduce|wait)\b",
+        re.IGNORECASE,
+    ),
+    re.compile(
+        r"\b(?:eastmoney|push2|tushare|akshare|baostock|yfinance|provider|"
+        r"endpoint|api|http(?:s)?|websocket|socket|request|retry|timeout)\b",
+        re.IGNORECASE,
+    ),
+    re.compile(r"\b(?:quote|kline|tradeability)\b", re.IGNORECASE),
+)
+_NUMBER_LITERAL = re.compile(
+    r"(?<![A-Za-z_])(?P<number>[+-]?(?:\d+(?:\.\d+)?|\.\d+))"
+    r"(?P<unit>亿元|万元|万手|亿手|万|亿|倍|%|％|元)?"
+)
+_PARAMETER_CONTEXT = re.compile(
+    r"(?:MA|RSI|ATR)\s*[\[(]?$|"
+    r"(?:日均线|日线|日K|周K|月K|交易日|R\s*(?:/|$))",
+    re.IGNORECASE,
+)
+_INDUSTRY_POSITIVE_CLAIM = re.compile(
+    r"行业(?:供需|景气|周期|趋势|信息)?[^。\n]{0,12}"
+    r"(?:已确认|确认|复苏中段|改善|回暖|上行)",
+    re.IGNORECASE,
+)
+
+
+def _iter_user_texts(value: Any, path: str = "", scope: bool = False,
+                     source_ids: tuple[str, ...] = ()):
+    """Yield user-facing narrative fields without exposing source metadata."""
+    if isinstance(value, Mapping):
+        declared_source_ids = value.get("source_ids", _MISSING)
+        own_source_ids = (
+            tuple(item for item in declared_source_ids if isinstance(item, str) and item)
+            if isinstance(declared_source_ids, list)
+            else source_ids
+        )
+        for key, child in value.items():
+            if key in {"sources", "source_ids"}:
+                continue
+            child_path = f"{path}.{key}" if path else str(key)
+            child_scope = scope or key in _USER_TEXT_KEYS
+            if isinstance(child, str) and child_scope:
+                yield child_path, child, own_source_ids
+            else:
+                yield from _iter_user_texts(child, child_path, child_scope, own_source_ids)
+    elif isinstance(value, list):
+        for index, child in enumerate(value):
+            child_path = f"{path}[{index}]"
+            yield from _iter_user_texts(child, child_path, scope, source_ids)
+
+
+def _public_text_error(value: Mapping[str, Any]) -> str | None:
+    for path, text, _source_ids in _iter_user_texts(value):
+        for pattern in _PUBLIC_TEXT_FORBIDDEN:
+            match = pattern.search(text)
+            if match:
+                return (
+                    f"Error: user-facing text at {path} contains forbidden internal "
+                    f"term {match.group(0)!r}; rewrite it in plain Chinese."
+                )
+    return None
+
+
+def _number_literals(text: str) -> list[tuple[float, str | None]]:
+    literals: list[tuple[float, str | None]] = []
+    for match in _NUMBER_LITERAL.finditer(text):
+        raw_number = match.group("number")
+        unit = match.group("unit")
+        start, end = match.span()
+        context_before = text[max(0, start - 12):start]
+        context_after = text[end:min(len(text), end + 12)]
+        # Bare numerals are usually indicator windows or dates in model prose;
+        # only explicit business units are closed against Evidence values.
+        if unit is None:
+            continue
+        if _PARAMETER_CONTEXT.search(context_before) or _PARAMETER_CONTEXT.search(context_after):
+            continue
+        try:
+            literals.append((float(raw_number), unit))
+        except ValueError:
+            continue
+    return literals
+
+
+def _iter_evidence_numbers(value: Any, source_ids: tuple[str, ...] = ()):
+    if isinstance(value, Mapping):
+        declared_source_ids = value.get("source_ids", _MISSING)
+        own_source_ids = (
+            tuple(item for item in declared_source_ids if isinstance(item, str) and item)
+            if isinstance(declared_source_ids, list)
+            else source_ids
+        )
+        derived = value.get("derived_decision_metrics")
+        derived_source_ids = tuple(
+            item for item in (derived.get("source_ids", []) if isinstance(derived, Mapping) else [])
+            if isinstance(item, str) and item
+        )
+        for key, child in value.items():
+            if key in {"sources", "source_ids"}:
+                continue
+            child_source_ids = (
+                derived_source_ids
+                if key == "indicators" and derived_source_ids
+                else own_source_ids
+            )
+            if _finite_number(child):
+                if key not in {"year", "month", "day", "quarter"} and child_source_ids:
+                    yield float(child), child_source_ids
+            else:
+                yield from _iter_evidence_numbers(child, child_source_ids)
+    elif isinstance(value, list):
+        for child in value:
+            yield from _iter_evidence_numbers(child, source_ids)
+
+
+def _number_candidates(value: float, unit: str | None) -> tuple[float, ...]:
+    if unit in {"%", "％"}:
+        return value, value / 100.0
+    if unit in {"万", "万元", "万手"}:
+        return value, value * 10_000.0
+    if unit in {"亿", "亿元", "亿手"}:
+        return value, value * 100_000_000.0
+    return (value,)
+
+
+def _number_matches(value: float, unit: str | None, available: list[float]) -> bool:
+    for candidate in _number_candidates(value, unit):
+        tolerance = max(0.01, abs(candidate) * 0.005)
+        if any(abs(candidate - actual) <= tolerance for actual in available):
+            return True
+    return False
+
+
+def _numeric_closure_error(value: Mapping[str, Any], bundle: Mapping[str, Any]) -> str | None:
+    available_by_source: dict[str, list[float]] = {}
+    for number, source_ids in _iter_evidence_numbers(bundle):
+        for source_id in source_ids:
+            available_by_source.setdefault(source_id, []).append(number)
+    for path, text, source_ids in _iter_user_texts(value):
+        for number, unit in _number_literals(text):
+            if not source_ids:
+                return f"Error: numeric closure failed at {path}: {number:g} requires source_ids."
+            available = [
+                number_value
+                for source_id in source_ids
+                for number_value in available_by_source.get(source_id, [])
+            ]
+            if not _number_matches(number, unit, available):
+                suffix = unit or ""
+                return (
+                    f"Error: numeric closure failed at {path}: {number:g}{suffix} "
+                    "is not present in Evidence values for its cited sources; "
+                    "replace it with a sourced value or remove the number."
+                )
+    return None
+
+
+def _readiness_horizon(bundle: Mapping[str, Any], horizon: str) -> Mapping[str, Any] | None:
+    readiness = bundle.get("decision_readiness")
+    if not isinstance(readiness, Mapping):
+        return None
+    research_ready = readiness.get("research_ready")
+    horizons = research_ready.get("horizons") if isinstance(research_ready, Mapping) else None
+    if not isinstance(horizons, Mapping):
+        horizons = readiness.get("horizons")
+    item = horizons.get(horizon) if isinstance(horizons, Mapping) else None
+    return item if isinstance(item, Mapping) else None
+
+
+def _unavailable_horizon_summary(
+    bundle: Mapping[str, Any], horizon: str, role: str,
+) -> str:
+    item = _readiness_horizon(bundle, horizon) or {}
+    available = [
+        _READINESS_FACT_LABELS[name]
+        for name in item.get("available", []) or []
+        if name in _READINESS_FACT_LABELS
+    ]
+    prefix = _RESEARCH_HORIZON_LABELS.get(horizon, "该周期")
+    if available:
+        facts = "、".join(dict.fromkeys(available))
+        prefix = f"{prefix}已核验{facts}"
+    else:
+        prefix = f"{prefix}关键资料尚未形成完整核验"
+    if role in {"bull", "bear"}:
+        stance = "多头" if role == "bull" else "空头"
+        return f"{prefix}，当前不能形成可核验的{stance}情景。"
+    return f"{prefix}，当前不能形成可靠结论或交易计划。"
+
+
+def _publicize_unavailable_artifact(
+    artifact: dict[str, Any], bundle: Mapping[str, Any], artifact_name: str,
+) -> dict[str, Any]:
+    """Replace unavailable model prose with deterministic, public wording."""
+    result = deepcopy(artifact)
+    if artifact_name in _ANALYST_GATES and result.get("stance") == "insufficient_data":
+        horizon = _ANALYST_GATES[artifact_name]
+        item = _readiness_horizon(bundle, horizon)
+        if item is None or item.get("status") not in {"ready", "available"}:
+            result["summary"] = _unavailable_horizon_summary(bundle, horizon, artifact_name)
+    if artifact_name in {"bull", "bear"}:
+        cases = result.get("horizon_cases")
+        if isinstance(cases, Mapping):
+            for horizon, case in cases.items():
+                if isinstance(case, dict) and case.get("status") == "insufficient_data":
+                    case["summary"] = _unavailable_horizon_summary(bundle, horizon, artifact_name)
+    return result
+
+
+def _v6_industry_claim_error(value: Mapping[str, Any], bundle: Mapping[str, Any]) -> str | None:
+    industry = bundle.get("industry_context")
+    if isinstance(industry, Mapping) and industry.get("status") == "available" and industry.get("source_ids"):
+        return None
+    for path, text, _source_ids in _iter_user_texts(value):
+        match = _INDUSTRY_POSITIVE_CLAIM.search(text)
+        if match:
+            return (
+                f"Error: {path} contains unsupported industry conclusion {match.group(0)!r}; "
+                "industry evidence is not available, so state the limitation instead."
+            )
     return None
 
 
@@ -1467,24 +3158,30 @@ def _validate_debate_coverage_gate(
     artifact_name: str,
     horizon_cases: Any,
 ) -> str | None:
-    """Do not let a debate case mark an Evidence-missing horizon available."""
+    """Gate V3 debate cases on trusted readiness before legacy coverage."""
     if artifact_name not in {"bull", "bear"}:
         return None
     data = EvidenceService(workspace=workspace, provider=None).read(run_id) or {}
     bundle = (data.get("symbols") or {}).get(instrument_id)
     if not isinstance(bundle, dict):
         return f"Error: instrument Evidence {instrument_id!r} not found in run {run_id}."
-    coverage = bundle.get("evidence_coverage") or {}
     for horizon in _DEBATE_HORIZONS:
-        status = ((coverage.get(horizon) or {}).get("status"))
-        if status != "insufficient_data":
+        readiness_status = _decision_readiness_horizon_status(bundle, horizon)
+        if readiness_status == "ready":
             continue
         case = getattr(horizon_cases, horizon, None)
-        if case is None or case.status != "insufficient_data":
-            return (
-                f"Error: {artifact_name} {horizon} coverage is insufficient_data; "
-                "submit horizon case status=insufficient_data."
-            )
+        if readiness_status is None:
+            if case is None or case.status != "insufficient_data":
+                return (
+                    f"Error: {artifact_name} {horizon} decision_readiness is missing or invalid; "
+                    "submit horizon case status=insufficient_data."
+                )
+        else:
+            if case is None or case.status != "insufficient_data":
+                return (
+                    f"Error: {artifact_name} {horizon} decision_readiness is {readiness_status}; "
+                    "submit horizon case status=insufficient_data."
+                )
         non_empty = [
             field
             for field in ("points", "confirmation", "invalidation")
@@ -1492,7 +3189,7 @@ def _validate_debate_coverage_gate(
         ]
         if non_empty:
             return (
-                f"Error: {artifact_name} {horizon} coverage is insufficient_data; "
+                f"Error: {artifact_name} {horizon} decision_readiness is failed; "
                 f"submit empty {', '.join(non_empty)}."
             )
     return None
@@ -1624,6 +3321,26 @@ class _BaseViewSubmitTool(Tool):
             artifact["items"] = [item.model_dump() for item in payload.items]
         else:
             artifact.update(payload.model_dump())
+            evidence = EvidenceService(workspace=self._workspace, provider=None).read(run_id) or {}
+            instrument_id = f"{payload.instrument.exchange}:{payload.instrument.symbol}"
+            bundle = (evidence.get("symbols") or {}).get(instrument_id)
+            if isinstance(bundle, Mapping):
+                artifact = _publicize_unavailable_artifact(
+                    artifact, bundle, self._artifact_name
+                )
+                industry_error = _v6_industry_claim_error(artifact, bundle)
+                if industry_error is not None:
+                    return industry_error
+                text_error = _public_text_error(artifact)
+                if text_error is not None:
+                    return text_error
+                numeric_error = _numeric_closure_error(artifact, bundle)
+                if numeric_error is not None:
+                    return numeric_error
+        if isinstance(payload, BatchViewSubmission):
+            text_error = _public_text_error(artifact)
+            if text_error is not None:
+                return text_error
         artifact["sources"] = sources
         from mona.config.paths import get_stock_project_dir
 
@@ -1742,20 +3459,97 @@ class SubmitStockReportTool(Tool):
         return (
             "Submit the final research report (deep research) or review "
             "digest (daily batch) as a structured artifact plus a markdown "
-            "rendering. Deep research uses independent short_term, medium_term "
-            "and long_term views plus eight required dimension_views; trusted timestamps, coverage and tracking id "
-            "come from the current run's Evidence. Cite only current-run source ids."
+            "rendering. New stock deep research must submit schema_version=6 "
+            "through submit_stock_report_staged(section=deep_v6), with "
+            "qualitative three-horizon decisions only; prices, positions, "
+            "risk-reward values, condition states and validity are injected "
+            "from Evidence.derived_decision_metrics. Missing deterministic "
+            "metrics fail finalize without writing report.json. V5 is kept "
+            "only for historical non-stock callers and is blocked for the "
+            "stock research room. Cite only current-run source ids."
         )
 
     async def execute(self, **kwargs: Any) -> str:
         ctx = _run_context(self._tool_ctx)
         if isinstance(ctx, str):
             return ctx
+        model_generated_quant_fields = {
+            "quant_validation",
+            "quantValidation",
+            "quant_snapshot",
+            "quantSnapshot",
+            "quant_signal",
+            "quantSignal",
+            "fusion_action",
+            "fusionAction",
+            "materialized_plan",
+            "materializedPlan",
+            "decision_mode",
+            "decisionMode",
+            "research_status",
+            "researchStatus",
+            "trade_status",
+            "tradeStatus",
+            "research_ready",
+            "researchReady",
+            "trade_ready",
+            "tradeReady",
+            "quant_promotion",
+            "quantPromotion",
+            "valuation",
+            "execution_qualification",
+        }
+        attempted_quant_fields = sorted(model_generated_quant_fields.intersection(kwargs))
+        if attempted_quant_fields:
+            return (
+                "Error: invalid payload: "
+                "quantification fields are generated by the system and cannot be submitted by the model: "
+                + ", ".join(attempted_quant_fields)
+            )
         run_id, job_id = ctx
         try:
             payload = ReportSubmission.model_validate(kwargs)
         except ValidationError as exc:
             return f"Error: invalid payload: {exc}"
+        v6_required, version_error = _v6_required_for_stock_run(
+            self._workspace,
+            run_id,
+            getattr(self._tool_ctx, "room_id", None),
+        )
+        if version_error is not None:
+            return version_error
+        if payload.is_v5:
+            if v6_required:
+                return (
+                    "错误：当前六 Agent 深度投研已升级为 V6，不能提交旧版 V5 报告；"
+                    "请调用 submit_stock_report_staged(section=deep_v6)，"
+                    "保存三周期结论后再调用 section=finalize。"
+                )
+            gap_error = _v5_submission_gap_error(payload)
+            if gap_error is not None:
+                return gap_error
+        if payload.is_v6:
+            gap_error = _v6_submission_gap_error(payload)
+            if gap_error is not None:
+                return gap_error
+        if payload.is_v5 or payload.is_v6:
+            instrument_id = f"{payload.instrument.exchange}:{payload.instrument.symbol}"
+            bundle, bundle_error = _load_report_bundle(
+                self._workspace, run_id, instrument_id
+            )
+            if bundle_error is not None or bundle is None:
+                return bundle_error or "Error: instrument Evidence is unavailable."
+            report_payload = payload.model_dump(mode="json")
+            text_error = _public_text_error(report_payload)
+            if text_error is not None:
+                return text_error
+            numeric_error = _numeric_closure_error(report_payload, bundle)
+            if numeric_error is not None:
+                return numeric_error
+            if payload.is_v6:
+                industry_error = _v6_industry_claim_error(report_payload, bundle)
+                if industry_error is not None:
+                    return industry_error
         cited = payload.all_source_ids()
         sources, error = _resolve_sources(self._workspace, run_id, cited)
         if error is not None:
@@ -1764,6 +3558,120 @@ class SubmitStockReportTool(Tool):
         from mona.config.paths import get_stock_project_dir
 
         run_dir = get_stock_project_dir(self._workspace, run_id)
+        if payload.is_v6:
+            doc, v6_error = _build_v6_report(self._workspace, run_id, payload)
+            if v6_error is not None or doc is None:
+                return v6_error or "Error: V6 report could not be built."
+            markdown = _render_v6_md(doc)
+            report_path = run_dir / "report.json"
+            markdown_path = run_dir / "report.md"
+            idempotent = False
+            with _REPORT_WRITE_LOCK:
+                if report_path.is_file():
+                    try:
+                        existing_doc = json.loads(report_path.read_text(encoding="utf-8"))
+                    except (OSError, json.JSONDecodeError) as exc:
+                        return f"Error: immutable report is unreadable: {exc}"
+                    if existing_doc != doc:
+                        return (
+                            f"Error: report {doc['report_id']} is immutable; "
+                            "submit an identical payload for an idempotent retry."
+                        )
+                    if markdown_path.is_file():
+                        if markdown_path.read_text(encoding="utf-8") != markdown:
+                            return f"Error: report {doc['report_id']} markdown is immutable; submit an identical payload."
+                    elif markdown_path.exists():
+                        return f"Error: report {doc['report_id']} markdown is not a file."
+                    else:
+                        _atomic_write(markdown_path, markdown)
+                    idempotent = True
+                if markdown_path.is_file() and not idempotent:
+                    return f"Error: report {doc['report_id']} has a companion markdown without report.json; refusing to overwrite."
+                if not idempotent:
+                    try:
+                        ensure_v6_tracking_snapshot(run_dir, doc)
+                    except (OSError, ValueError) as exc:
+                        return f"Error: V6 outcome tracking snapshot: {exc}"
+                    _atomic_write_json(report_path, doc)
+                    _atomic_write(markdown_path, markdown)
+                else:
+                    try:
+                        ensure_v6_tracking_snapshot(run_dir, doc)
+                    except (OSError, ValueError) as exc:
+                        return f"Error: V6 outcome tracking snapshot: {exc}"
+            ref = ArtifactRef.for_path(
+                owner_kind="product",
+                owner_id=run_id,
+                product="stock",
+                root=run_dir,
+                path=report_path,
+                created_by_agent_id=getattr(self._tool_ctx, "agent_id", "mona"),
+                job_id=job_id,
+                workflow_run_id=run_id,
+                room_id=getattr(self._tool_ctx, "room_id", None),
+            )
+            run_artifacts.append(job_id, ref)
+            suffix = " (idempotent)" if idempotent else ""
+            return f"Submitted {doc['report_id']}: {ref.relative_path}{suffix}"
+        if payload.is_v5:
+            doc, v5_error = _build_v5_report(
+                self._workspace, run_id, payload
+            )
+            if v5_error is not None or doc is None:
+                return v5_error or "Error: V5 report could not be built."
+            markdown = _render_v5_md(doc)
+            report_path = run_dir / "report.json"
+            markdown_path = run_dir / "report.md"
+            idempotent = False
+            with _REPORT_WRITE_LOCK:
+                if report_path.is_file():
+                    try:
+                        existing_doc = json.loads(report_path.read_text(encoding="utf-8"))
+                    except (OSError, json.JSONDecodeError) as exc:
+                        return f"Error: immutable report is unreadable: {exc}"
+                    if existing_doc != doc:
+                        return (
+                            f"Error: report {doc['report_id']} is immutable; "
+                            "submit an identical payload for an idempotent retry."
+                        )
+                    if markdown_path.is_file():
+                        try:
+                            existing_markdown = markdown_path.read_text(encoding="utf-8")
+                        except OSError as exc:
+                            return f"Error: immutable report is unreadable: {exc}"
+                        if existing_markdown != markdown:
+                            return (
+                                f"Error: report {doc['report_id']} markdown is immutable; "
+                                "submit an identical payload for an idempotent retry."
+                            )
+                    elif markdown_path.exists():
+                        return f"Error: report {doc['report_id']} markdown is not a file."
+                    else:
+                        _atomic_write(markdown_path, markdown)
+                    idempotent = True
+                if markdown_path.is_file():
+                    if not idempotent:
+                        return (
+                            f"Error: report {doc['report_id']} has a companion markdown "
+                            "without report.json; refusing to overwrite."
+                        )
+                if not idempotent:
+                    _atomic_write_json(report_path, doc)
+                    _atomic_write(markdown_path, markdown)
+            ref = ArtifactRef.for_path(
+                owner_kind="product",
+                owner_id=run_id,
+                product="stock",
+                root=run_dir,
+                path=report_path,
+                created_by_agent_id=getattr(self._tool_ctx, "agent_id", "mona"),
+                job_id=job_id,
+                workflow_run_id=run_id,
+                room_id=getattr(self._tool_ctx, "room_id", None),
+            )
+            run_artifacts.append(job_id, ref)
+            suffix = " (idempotent)" if idempotent else ""
+            return f"Submitted {doc['report_id']}: {ref.relative_path}{suffix}"
         if payload.is_digest:
             doc: dict[str, Any] = {
                 "schema_version": DIGEST_SCHEMA_VERSION,
@@ -1816,6 +3724,7 @@ class SubmitStockReportTool(Tool):
                     else:
                         sources.append(source)
                         source_positions[source_id] = len(sources) - 1
+            trusted_quant_validation = _trusted_quant_validation(bundle)
             research_cutoff_at = bundle.get("research_cutoff_at")
             market_as_of = bundle.get("market_as_of")
             doc = {
@@ -1853,6 +3762,8 @@ class SubmitStockReportTool(Tool):
                 "versions": payload.versions,
                 "disclaimer": DISCLAIMER,
             }
+            if trusted_quant_validation is not None:
+                doc["quant_validation"] = trusted_quant_validation
             if selection_origin is not None:
                 doc["selection_origin"] = selection_origin
             if trusted_event_calendar is not None:
@@ -1937,6 +3848,16 @@ class SubmitStockReportTool(Tool):
 
 
 _STAGED_SECTION_FIELDS: dict[str, tuple[str, ...]] = {
+    "deep_v6": (
+        "summary",
+        "instrument",
+        "horizon_decisions_v6",
+    ),
+    "deep_v5": (
+        "summary",
+        "instrument",
+        "horizon_decisions_v5",
+    ),
     "deep_dimensions": (
         "as_of",
         "summary",
@@ -1966,6 +3887,8 @@ _STAGED_DEEP_SECTIONS = frozenset(
     {"deep_dimensions", "deep_decision", "deep_context"}
 )
 _STAGED_NESTED_KEYS: dict[str, tuple[str, ...]] = {
+    "horizon_decisions_v6": ("short_term", "medium_term", "long_term"),
+    "horizon_decisions_v5": ("short_term", "medium_term", "long_term"),
     "dimension_views": tuple(ANALYSIS_DIMENSION_KEYS),
     "horizon_views": ("short_term", "medium_term", "long_term"),
     "debate_resolution": ("short_term", "medium_term", "long_term"),
@@ -1973,6 +3896,18 @@ _STAGED_NESTED_KEYS: dict[str, tuple[str, ...]] = {
     "scenario_sets": ("short_term", "medium_term", "long_term"),
 }
 _STAGED_REQUIRED_FIELDS: dict[str, tuple[str, ...]] = {
+    "deep_v6": (
+        "summary",
+        "instrument",
+        "horizon_decisions_v6",
+    ),
+    "deep_v5": (
+        "summary",
+        "instrument",
+        "horizon_decisions_v5.short_term",
+        "horizon_decisions_v5.medium_term",
+        "horizon_decisions_v5.long_term",
+    ),
     "deep_dimensions": ("summary", "instrument", "dimension_views"),
     "deep_decision": (
         "horizon_views.short_term",
@@ -1997,6 +3932,8 @@ _STAGED_REQUIRED_FIELDS: dict[str, tuple[str, ...]] = {
     "daily_digest": ("as_of", "items"),
 }
 _STAGED_NESTED_ADAPTERS: dict[str, TypeAdapter] = {
+    "horizon_decisions_v6": TypeAdapter(V6HorizonDecisionSubmission),
+    "horizon_decisions_v5": TypeAdapter(V5HorizonDecisionSubmission),
     "dimension_views": TypeAdapter(AnalysisDimension),
     "horizon_views": TypeAdapter(HorizonView),
     "debate_resolution": TypeAdapter(DebateResolution),
@@ -2155,11 +4092,11 @@ class SubmitStockReportStagedTool(Tool):
     @property
     def description(self) -> str:
         return (
-            "Incrementally stage Report V4 fields in memory, then call finalize "
-            "to run the complete trusted submit_stock_report validation. Use "
-            "partial deep_dimensions, deep_decision, deep_context maps in order "
-            "for deep research, or daily_digest for daily review; finalize has "
-            "no payload."
+            "Incrementally stage V6 deep-research fields in memory, then call "
+            "finalize to run the complete trusted submit_stock_report validation. "
+            "Use deep_v6 for the three-horizon qualitative decisions, or "
+            "daily_digest for daily review; finalize has no payload. Historical "
+            "V5 staging is blocked for the stock research room."
         )
 
     def _draft_key(self, ctx: tuple[str, str]) -> tuple[str, str]:
@@ -2239,6 +4176,33 @@ class SubmitStockReportStagedTool(Tool):
             return [
                 key for key in _STAGED_REQUIRED_FIELDS["daily_digest"] if key not in data
             ]
+        if mode == "deep_v6":
+            data = sections.get("deep_v6")
+            if data is None:
+                return ["deep_v6"]
+            missing: list[str] = []
+            for key in ("summary", "instrument"):
+                if key not in data:
+                    missing.append(f"deep_v6.{key}")
+            if not any(
+                data.get("horizon_decisions_v6", {}).get(horizon) is not None
+                for horizon in _V5_HORIZONS
+            ):
+                missing.append("deep_v6.horizon_decisions_v6.at_least_one_horizon")
+            return missing
+        if mode == "deep_v5":
+            data = sections.get("deep_v5")
+            if data is None:
+                return ["deep_v5"]
+            missing: list[str] = []
+            for key in _STAGED_REQUIRED_FIELDS["deep_v5"]:
+                if "." in key:
+                    field, nested = key.split(".", 1)
+                    if nested not in (data.get(field) or {}):
+                        missing.append(f"deep_v5.{key}")
+                elif key not in data:
+                    missing.append(f"deep_v5.{key}")
+            return missing
         if mode != "deep":
             return list(_STAGED_DEEP_SECTIONS)
         missing: list[str] = []
@@ -2314,6 +4278,18 @@ class SubmitStockReportStagedTool(Tool):
         if isinstance(ctx, str):
             return ctx
         key = self._draft_key(ctx)
+        v6_required, version_error = _v6_required_for_stock_run(
+            self._workspace,
+            ctx[0],
+            getattr(self._tool_ctx, "room_id", None),
+        )
+        if version_error is not None:
+            return version_error
+        if section == "deep_v5" and v6_required:
+            return self._error(
+                "当前六 Agent 深度投研已升级为 V6，不能暂存旧版 V5 报告；"
+                "请使用 section=deep_v6。"
+            )
         if section == "finalize":
             if "payload" in kwargs:
                 return self._error("finalize does not accept payload")
@@ -2322,7 +4298,35 @@ class SubmitStockReportStagedTool(Tool):
                 return self._error("no staged sections to finalize")
             mode = draft["mode"]
             sections = draft["sections"]
-            if mode == "deep":
+            if mode == "deep_v6":
+                missing = self._missing_keys(draft)
+                if missing:
+                    return self._error(
+                        "V6 deep research finalize is missing keys: "
+                        + ", ".join(missing)
+                    )
+                v6_data = deepcopy(sections["deep_v6"])
+                merged = {
+                    "schema_version": 6,
+                    "summary": v6_data["summary"],
+                    "instrument": v6_data["instrument"],
+                    "horizon_decisions_v6": v6_data["horizon_decisions_v6"],
+                }
+            elif mode == "deep_v5":
+                missing = self._missing_keys(draft)
+                if missing:
+                    return self._error(
+                        "V5 deep research finalize is missing keys: "
+                        + ", ".join(missing)
+                    )
+                v5_data = deepcopy(sections["deep_v5"])
+                merged = {
+                    "schema_version": 5,
+                    "summary": v5_data["summary"],
+                    "instrument": v5_data["instrument"],
+                    "horizon_decisions": v5_data["horizon_decisions_v5"],
+                }
+            elif mode == "deep":
                 missing = self._missing_keys(draft)
                 if missing:
                     return self._error(
@@ -2378,7 +4382,15 @@ class SubmitStockReportStagedTool(Tool):
             key,
             {"mode": None, "sections": {}},
         )
-        mode = "daily" if section == "daily_digest" else "deep"
+        mode = (
+            "daily"
+            if section == "daily_digest"
+            else "deep_v6"
+            if section == "deep_v6"
+            else "deep_v5"
+            if section == "deep_v5"
+            else "deep"
+        )
         if draft["mode"] is not None and draft["mode"] != mode:
             return self._error("cannot mix deep research and daily review sections")
         draft["mode"] = mode
@@ -2388,6 +4400,109 @@ class SubmitStockReportStagedTool(Tool):
             payload,
         )
         return self._progress_response(section, draft)
+
+
+def _render_v6_md(doc: dict) -> str:
+    labels = {"short_term": "短线", "medium_term": "中线", "long_term": "长线"}
+    direction_labels = {"positive": "看涨", "neutral": "震荡", "negative": "看跌", "avoid": "回避"}
+    action_labels = {
+        "conditional_participation": "满足条件参与",
+        "wait": "等待",
+        "hold": "继续持有",
+        "reduce": "减仓",
+        "exit": "退出",
+        "avoid": "回避",
+    }
+    lines = [
+        f"# {doc['instrument'].get('name') or doc['instrument']['symbol']}交易结论",
+        "",
+        f"- 决策模式：{'参考计划' if doc['decision_mode'] == 'reference_plan' else '研究模式'}",
+        f"- 研究截止：{doc['research_cutoff_at']}",
+        f"- 行情截至：{doc['market_as_of']}",
+        "",
+        "## 研究总结",
+        doc["summary"],
+        "",
+    ]
+    for horizon in _V5_HORIZONS:
+        decision = doc["horizon_decisions"][horizon]
+        lines.extend(
+            [
+                f"## {labels[horizon]}",
+                f"- 方向：{direction_labels[decision['direction']]}",
+                f"- 当前操作：{action_labels[decision['action']]}",
+                f"- 研究状态：{'可形成结论' if decision['research_status'] == 'ready' else '该周期暂不形成结论'}",
+                f"- 交易状态：{'具备参考计划资格' if decision['trade_status'] == 'ready' else '仅保留研究结论'}",
+                f"- 核心判断：{decision['thesis']}",
+                f"- 有效期：{decision.get('valid_until') or '补齐数据后重新评估'}",
+                f"- 复评条件：{decision['review_trigger']}",
+            ]
+        )
+        plan = decision.get("materialized_plan")
+        if isinstance(plan, dict):
+            if plan.get("buy_low") is not None:
+                lines.append(f"- 参考参与区间：{plan['buy_low']:.2f}—{plan['buy_high']:.2f}元")
+            if plan.get("stop_loss") is not None:
+                lines.append(f"- 止损参考：{plan['stop_loss']:.2f}元")
+            if plan.get("first_take_profit") is not None:
+                lines.append(f"- 第一止盈：{plan['first_take_profit']:.2f}元")
+        else:
+            lines.append("- 交易计划：当前不生成参考价格或仓位")
+        lines.append("")
+    return "\n".join(lines)
+
+
+def _render_v5_md(doc: dict) -> str:
+    inst = doc["instrument"]
+    label = f"{inst.get('name') or inst['symbol']}（{inst['symbol']}）"
+    lines = [
+        f"# {label}交易计划",
+        "",
+        f"- 研究截止：{doc['research_cutoff_at']}",
+        f"- 行情截至：{doc['market_as_of']}",
+        f"- 生成时间：{doc['generated_at']}",
+        "",
+        "## 研究结论",
+        doc["summary"],
+        "",
+    ]
+    labels = {"short_term": "短线", "medium_term": "中线", "long_term": "长线"}
+    direction_labels = {"positive": "看涨", "neutral": "震荡", "negative": "看跌"}
+    action_labels = {
+        "conditional_participation": "满足条件参与",
+        "wait": "等待",
+        "hold": "继续持有",
+        "reduce": "减仓",
+        "exit": "退出",
+        "avoid": "回避",
+    }
+    not_holding_labels = {"participate": "按条件参与", "wait": "等待", "avoid": "回避"}
+    holding_labels = {"hold": "继续持有", "reduce": "减仓", "exit": "退出"}
+    currency_labels = {"CNY": "元"}
+    for horizon in _V5_HORIZONS:
+        decision = doc["horizon_decisions"][horizon]
+        plan = decision["trading_plan"]
+        position = decision["position_plan"]
+        lines.extend(
+            [
+                f"## {labels[horizon]}",
+                f"- 方向：{direction_labels[decision['direction']]}",
+                f"- 当前操作：{action_labels[decision['action']]}",
+                f"- 未持有：{not_holding_labels[decision['not_holding_action']]}",
+                f"- 已持有：{holding_labels[decision['holding_action']]}",
+                f"- 核心判断：{decision['thesis']}",
+                f"- 参考买入：{plan['reference_buy_low']:.2f}—{plan['reference_buy_high']:.2f}{currency_labels[plan['currency']]}",
+                f"- 回踩买入：{plan['pullback_buy_low']:.2f}—{plan['pullback_buy_high']:.2f}{currency_labels[plan['currency']]}",
+                f"- 止损参考：{plan['stop_loss']:.2f}{currency_labels[plan['currency']]}",
+                f"- 第一止盈：{plan['first_take_profit']:.2f}{currency_labels[plan['currency']]}",
+                f"- 第二止盈：{plan['second_take_profit']:.2f}{currency_labels[plan['currency']]}",
+                f"- 首仓/最大仓位：{position['initial_position_pct']:.2f}%/{position['max_position_pct']:.2f}%",
+                f"- 有效期：{decision['valid_until']}",
+                f"- 复评条件：{decision['review_trigger']}",
+                "",
+            ]
+        )
+    return "\n".join(lines)
 
 
 def _render_report_md(doc: dict) -> str:
@@ -2497,6 +4612,8 @@ def _render_report_md(doc: dict) -> str:
         _append_conditions(lines, "确认条件", view.get("confirmation_conditions"))
         _append_conditions(lines, "观察条件", view.get("watch_conditions"))
         _append_conditions(lines, "失效条件", view.get("invalidation_conditions"))
+        _append_conditions(lines, "止损条件", view.get("stop_loss_conditions"))
+        _append_conditions(lines, "止盈条件", view.get("take_profit_conditions"))
         _append_claims(lines, "可交易性风险", view.get("tradeability_risks"))
         _append_claims(lines, "数据盲区", view.get("blind_spots"))
         if view.get("missing_fields"):

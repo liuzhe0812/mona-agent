@@ -129,7 +129,7 @@ export const NoteEditor = forwardRef<NoteEditorHandle, NoteEditorProps>(function
 
   if (note.type === "mindmap") {
     return (
-      <div className="flex h-full min-w-0 flex-1 flex-col">
+      <div className="flex h-full min-w-0 flex-1 flex-col bg-editor-surface">
         <MindMapDocumentEditor
           ref={mindMapRef}
           note={note}
@@ -142,7 +142,7 @@ export const NoteEditor = forwardRef<NoteEditorHandle, NoteEditorProps>(function
 
   if (note.type === "flowchart") {
     return (
-      <div className="flex h-full min-w-0 flex-1 flex-col">
+      <div className="flex h-full min-w-0 flex-1 flex-col bg-editor-surface">
         <FlowchartDocumentEditor
           note={note}
           onContentChange={handleContentChange}
@@ -159,7 +159,7 @@ export const NoteEditor = forwardRef<NoteEditorHandle, NoteEditorProps>(function
   if (note.type === "diagram") {
     // 旧版图表格式：不再提供编辑器，引导用户迁移为流程图
     return (
-      <div className="flex h-full min-w-0 flex-1 flex-col">
+      <div className="flex h-full min-w-0 flex-1 flex-col bg-editor-surface">
         <DiagramMigrationView
           note={note}
           onMigrate={(newNote, updatedOldNote) => onMigrateDiagram?.(newNote, updatedOldNote)}

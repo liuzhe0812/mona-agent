@@ -97,7 +97,7 @@ export function ResultPanel() {
           </span>
         )}
       </div>
-      <div className="flex-1 overflow-auto relative">
+      <div className="relative flex-1 overflow-auto bg-editor-surface">
         {isExecuting && (
           <div className="absolute inset-x-0 top-0 z-20 flex items-center justify-center bg-background/60 py-1">
             <span className="relative flex h-2 w-2">
@@ -203,11 +203,11 @@ function ResultTable({
       <ContextMenuTrigger className="block">
         <table className="w-full border-collapse text-caption">
           <thead>
-            <tr>
+            <tr className="h-9 border-b border-border">
               <th
                 className={cn(
-                  "sticky top-0 z-10 w-10 px-2.5 py-1.5 text-right text-micro font-semibold text-muted-foreground transition-colors",
-                  selectedCell ? "bg-info/15" : "bg-card",
+                  "sticky top-0 z-10 h-9 w-10 px-3 py-0 text-right text-micro font-semibold text-muted-foreground transition-colors",
+                  selectedCell ? "bg-foreground/5" : "bg-editor-surface",
                 )}
               >
                 #
@@ -218,10 +218,10 @@ function ResultTable({
                   <th
                     key={col.name}
                     className={cn(
-                      "sticky top-0 z-10 px-2.5 py-1.5 text-left text-micro font-semibold uppercase tracking-wider transition-colors",
+                      "sticky top-0 z-10 h-9 px-3 py-0 text-left text-micro font-semibold uppercase tracking-wider transition-colors",
                       isColSelected
-                        ? "bg-info/15 text-info"
-                        : "bg-card text-muted-foreground",
+                        ? "bg-foreground/5 text-foreground"
+                        : "bg-editor-surface text-muted-foreground",
                     )}
                   >
                     {col.name}
@@ -242,15 +242,16 @@ function ResultTable({
                 <tr
                   key={rowIdx}
                   className={cn(
-                    "border-b border-border/50 transition-colors",
+                    "h-10 border-b border-border/50 transition-colors hover:bg-foreground/5",
+                    isRowSelected && !isRowDirty && !isInsertedRow && "bg-foreground/5",
                     isRowDirty && "bg-warning/5",
                     isInsertedRow && "bg-success/5",
                   )}
                 >
                   <td
                     className={cn(
-                      "px-2.5 py-1 text-right text-micro text-muted-foreground transition-colors",
-                      !isRowDirty && !isInsertedRow && isRowSelected && "bg-info/10 text-info",
+                      "h-10 px-3 py-0 text-right text-micro text-muted-foreground transition-colors",
+                      !isRowDirty && !isInsertedRow && isRowSelected && "border-l-2 border-foreground/60 text-foreground",
                       isInsertedRow && "text-success font-bold",
                     )}
                   >
@@ -358,7 +359,7 @@ function EditableCell({
 
   if (editing) {
     return (
-      <td className="max-w-[300px] px-0.5 py-0.5">
+      <td className="h-10 max-w-[300px] px-3 py-0.5">
         <Input
           ref={inputRef}
           className={cn(
@@ -391,12 +392,12 @@ function EditableCell({
   return (
     <td
       className={cn(
-        "max-w-[300px] cursor-text truncate px-2.5 py-1 transition-colors",
-        isNumeric && "text-right",
+        "h-10 max-w-[300px] cursor-text truncate px-3 py-0 transition-colors hover:bg-foreground/5",
+        isNumeric ? "text-right" : "text-left",
         (isNull || isEditedNull) && "italic text-muted-foreground",
         isDirty && "bg-warning/20 text-warning font-medium",
-        !isDirty && isSelected && "bg-info/20 ring-1 ring-inset ring-info-strong",
-        !isDirty && !isSelected && isRowSelected && "bg-info/10",
+        !isDirty && isSelected && "bg-foreground/5 ring-1 ring-inset ring-foreground/40",
+        !isDirty && !isSelected && isRowSelected && "bg-foreground/5",
       )}
       onClick={onCellClick}
       onPointerDown={onCellPointerDown}

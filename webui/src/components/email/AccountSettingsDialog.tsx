@@ -936,28 +936,28 @@ export function AccountSettingsDialog({
                       variant="outline"
                       onClick={() => updateScheduleField("createMode", "auto")}
                       className={cn(
-                        "h-auto flex-col items-start gap-0 rounded-md px-2 py-1.5 text-left text-caption font-normal transition-colors",
+                        "h-auto min-w-0 flex-col items-start gap-0 whitespace-normal rounded-md px-2 py-1.5 text-left text-caption font-normal transition-colors",
                         scheduleConfig.createMode === "auto"
                           ? "border-primary bg-primary/10 text-foreground hover:bg-primary/10 hover:text-foreground"
                           : "border-border bg-background text-muted-foreground hover:bg-muted/40 hover:text-muted-foreground"
                       )}
                     >
                       <div className="font-medium">直接创建</div>
-                      <div className="text-micro text-muted-foreground">AI 解析成功后自动创建</div>
+                      <div className="min-w-0 break-words text-micro text-muted-foreground">不进入收集箱，AI 解析成功后直接创建日程</div>
                     </Button>
                     <Button
                       type="button"
                       variant="outline"
                       onClick={() => updateScheduleField("createMode", "confirm")}
                       className={cn(
-                        "h-auto flex-col items-start gap-0 rounded-md px-2 py-1.5 text-left text-caption font-normal transition-colors",
+                        "h-auto min-w-0 flex-col items-start gap-0 whitespace-normal rounded-md px-2 py-1.5 text-left text-caption font-normal transition-colors",
                         scheduleConfig.createMode === "confirm"
                           ? "border-primary bg-primary/10 text-foreground hover:bg-primary/10 hover:text-foreground"
                           : "border-border bg-background text-muted-foreground hover:bg-muted/40 hover:text-muted-foreground"
                       )}
                     >
                       <div className="font-medium">确认后创建</div>
-                      <div className="text-micro text-muted-foreground">弹通知让你确认</div>
+                      <div className="min-w-0 break-words text-micro text-muted-foreground">进入计划收集箱，等待你确认后再创建</div>
                     </Button>
                   </div>
                 </div>

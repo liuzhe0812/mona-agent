@@ -94,7 +94,10 @@ describe("MessageBubble", () => {
 
     expect(container.firstElementChild).toHaveClass("w-fit", "max-w-[min(85%,48rem)]");
     expect(container.querySelector(".self-start")).toBeInTheDocument();
-    expect(container.querySelector(".rounded-tl-md")).toBeInTheDocument();
+    const groupBubble = container.querySelector(".rounded-tl-md");
+    expect(groupBubble).toBeInTheDocument();
+    expect(groupBubble).toHaveClass("border", "bg-card/80");
+    expect(groupBubble).not.toHaveClass("shadow-sm");
     expect(screen.getByTestId("group-bubble-tail")).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Show all" })).not.toBeInTheDocument();
   });

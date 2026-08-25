@@ -24,6 +24,9 @@ interface ThreadViewportProps {
   composer: ReactNode;
   emptyState?: ReactNode;
   scrollToBottomSignal?: number;
+  /** Message selected from header search/history. The request id permits
+   * jumping to the same message repeatedly. */
+  focusMessage?: { id: string; requestId: number } | null;
   conversationKey?: string | null;
   showScrollToBottomButton?: boolean;
   /** Live workflow-step tool activity, keyed ``runId:stepId`` (rooms only). */
@@ -56,6 +59,7 @@ export function ThreadViewport({
   composer,
   emptyState,
   scrollToBottomSignal = 0,
+  focusMessage = null,
   conversationKey = null,
   showScrollToBottomButton = true,
   stepActivities,
@@ -161,6 +165,32 @@ export function ThreadViewport({
     userReadingHistoryRef.current = false;
     scrollToBottom(false, 8);
   }, [scrollToBottomSignal, scrollToBottom]);
+
+  useEffect(() => {
+    if (!focusMessage) return;
+    userReadingHistoryRef.current = true;
+    setAtBottom(false);
+    if (visibleMessageCount < messages.length) {
+      setVisibleMessageCount(messages.length);
+      return;
+    }
+    let secondFrame = 0;
+    const firstFrame = window.requestAnimationFrame(() => {
+      secondFrame = window.requestAnimationFrame(() => {
+        const scroller = scrollRef.current;
+        const target = document.getElementById(`thread-message-${focusMessage.id}`);
+        if (!scroller || !target) return;
+        const targetTop = target.getBoundingClientRect().top;
+        const containerTop = scroller.getBoundingClientRect().top;
+        const top = scroller.scrollTop + targetTop - containerTop - scroller.clientHeight * 0.3;
+        scroller.scrollTo({ top: Math.max(0, top), behavior: "smooth" });
+      });
+    });
+    return () => {
+      window.cancelAnimationFrame(firstFrame);
+      window.cancelAnimationFrame(secondFrame);
+    };
+  }, [focusMessage?.id, focusMessage?.requestId, messages.length, visibleMessageCount]);
 
   useLayoutEffect(() => {
     if (lastConversationKeyRef.current === conversationKey) return;

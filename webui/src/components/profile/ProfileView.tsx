@@ -97,7 +97,7 @@ export function ProfileView({ onAskMona }: ProfileViewProps) {
   const lastDistilled = data?.last_distilled_at ?? null;
 
   return (
-    <Tabs value={tab} onValueChange={setTab} className="flex h-full w-full flex-col bg-background">
+    <Tabs value={tab} onValueChange={setTab} className="flex h-full w-full flex-col bg-editor-surface">
       <ProfileStyles />
       {/* 顶部栏：Tab 居中 + 操作按钮两端对齐，单行紧凑布局 */}
       <PageToolbar
@@ -122,8 +122,8 @@ export function ProfileView({ onAskMona }: ProfileViewProps) {
             </Button>
             <Button
               variant="default"
-              size="sm"
-              className="gap-1"
+              size="xs"
+              className="h-7 gap-1 px-2"
               disabled={distilling}
               onClick={() => void handleDistill()}
             >
@@ -133,10 +133,10 @@ export function ProfileView({ onAskMona }: ProfileViewProps) {
           </>
         }
       >
-        <TabsList className="h-7 p-0.5">
-          <TabsTrigger value="profile" className="h-6 px-2.5 text-caption">人物画像</TabsTrigger>
-          <TabsTrigger value="trajectory" className="h-6 px-2.5 text-caption">成长轨迹</TabsTrigger>
-          <TabsTrigger value="work-pattern" className="h-6 px-2.5 text-caption">工作模式</TabsTrigger>
+        <TabsList className="h-7 rounded-none bg-transparent p-0 text-muted-foreground">
+          <TabsTrigger value="profile" className="relative h-7 rounded-none !bg-transparent px-2.5 text-caption text-muted-foreground shadow-none transition-colors hover:!bg-transparent hover:text-foreground data-[state=active]:!bg-transparent data-[state=active]:text-foreground data-[state=active]:!shadow-none data-[state=active]:after:absolute data-[state=active]:after:inset-x-2 data-[state=active]:after:bottom-0 data-[state=active]:after:h-0.5 data-[state=active]:after:rounded-full data-[state=active]:after:bg-[hsl(var(--brand-red))]">人物画像</TabsTrigger>
+          <TabsTrigger value="trajectory" className="relative h-7 rounded-none !bg-transparent px-2.5 text-caption text-muted-foreground shadow-none transition-colors hover:!bg-transparent hover:text-foreground data-[state=active]:!bg-transparent data-[state=active]:text-foreground data-[state=active]:!shadow-none data-[state=active]:after:absolute data-[state=active]:after:inset-x-2 data-[state=active]:after:bottom-0 data-[state=active]:after:h-0.5 data-[state=active]:after:rounded-full data-[state=active]:after:bg-[hsl(var(--brand-red))]">成长轨迹</TabsTrigger>
+          <TabsTrigger value="work-pattern" className="relative h-7 rounded-none !bg-transparent px-2.5 text-caption text-muted-foreground shadow-none transition-colors hover:!bg-transparent hover:text-foreground data-[state=active]:!bg-transparent data-[state=active]:text-foreground data-[state=active]:!shadow-none data-[state=active]:after:absolute data-[state=active]:after:inset-x-2 data-[state=active]:after:bottom-0 data-[state=active]:after:h-0.5 data-[state=active]:after:rounded-full data-[state=active]:after:bg-[hsl(var(--brand-red))]">工作模式</TabsTrigger>
         </TabsList>
       </PageToolbar>
 
