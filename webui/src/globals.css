@@ -269,6 +269,148 @@ span[class*="rounded"][class*="px-"] {
 }
 
 @layer utilities {
+  /* Brand boot scene: only the logo perimeter, scan line and status signal move. */
+  .mona-startup-scene {
+    isolation: isolate;
+    background:
+      radial-gradient(circle at 50% 42%, hsl(var(--ai-cyan) / 0.08), transparent 28rem),
+      hsl(var(--background));
+  }
+
+  .mona-startup-grid {
+    position: absolute;
+    inset: 0;
+    pointer-events: none;
+    opacity: 0.28;
+    background-image:
+      linear-gradient(hsl(var(--foreground) / 0.045) 1px, transparent 1px),
+      linear-gradient(90deg, hsl(var(--foreground) / 0.045) 1px, transparent 1px);
+    background-size: 42px 42px;
+    mask-image: linear-gradient(to bottom, transparent, black 20%, black 80%, transparent);
+  }
+
+  .mona-startup-content {
+    position: relative;
+    z-index: 1;
+    animation: mona-startup-enter var(--motion-arrival) var(--ease-entrance) both;
+  }
+
+  .mona-startup-kicker {
+    color: hsl(var(--brand-red));
+  }
+
+  .mona-startup-kicker-signal {
+    width: 18px;
+    height: 2px;
+    background: hsl(var(--brand-red));
+  }
+
+  .mona-startup-logo-wrap {
+    position: relative;
+    display: grid;
+    width: 148px;
+    height: 148px;
+    margin-top: 34px;
+    place-items: center;
+  }
+
+  .mona-startup-logo {
+    position: relative;
+    z-index: 1;
+    width: 116px;
+    height: 116px;
+    border: 1px solid hsl(var(--foreground) / 0.14);
+    border-radius: 24px;
+    object-fit: cover;
+    box-shadow: 0 0 28px hsl(var(--ai-cyan) / 0.14);
+  }
+
+  .mona-startup-orbit {
+    position: absolute;
+    inset: 3px;
+    border: 1px solid hsl(var(--ai-cyan) / 0.48);
+    border-left-color: hsl(var(--brand-red) / 0.76);
+    border-radius: 999px;
+    animation: mona-startup-orbit 9s linear infinite;
+  }
+
+  .mona-startup-orbit::after {
+    position: absolute;
+    top: 7px;
+    left: 50%;
+    width: 5px;
+    height: 5px;
+    border-radius: 999px;
+    background: hsl(var(--brand-red));
+    content: "";
+    transform: translateX(-50%);
+  }
+
+  .mona-startup-scan {
+    position: absolute;
+    z-index: 2;
+    width: 108px;
+    height: 2px;
+    background: hsl(var(--ai-cyan) / 0.85);
+    box-shadow: 0 0 12px hsl(var(--ai-cyan) / 0.5);
+    animation: mona-startup-scan 2.4s ease-in-out infinite;
+  }
+
+  .mona-startup-status-line {
+    width: 24px;
+    height: 2px;
+    background: hsl(var(--ai-cyan));
+    animation: mona-startup-signal 1.8s ease-in-out infinite;
+  }
+
+  @keyframes mona-startup-enter {
+    from {
+      opacity: 0;
+      transform: translateY(8px);
+    }
+    to {
+      opacity: 1;
+      transform: translateY(0);
+    }
+  }
+
+  @keyframes mona-startup-orbit {
+    to {
+      transform: rotate(360deg);
+    }
+  }
+
+  @keyframes mona-startup-scan {
+    0%,
+    100% {
+      opacity: 0.24;
+      transform: translateY(-38px);
+    }
+    50% {
+      opacity: 0.95;
+      transform: translateY(38px);
+    }
+  }
+
+  @keyframes mona-startup-signal {
+    0%,
+    100% {
+      opacity: 0.42;
+    }
+    50% {
+      opacity: 1;
+    }
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    .mona-startup-content,
+    .mona-startup-orbit,
+    .mona-startup-scan,
+    .mona-startup-status-line {
+      animation: none;
+    }
+  }
+
   .shadow-inner-right {
     box-shadow: inset -9px 0 6px -1px rgb(0 0 0 / 0.02);
   }

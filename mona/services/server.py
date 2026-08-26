@@ -162,6 +162,7 @@ from mona.services.stock.api import (
     handle_stock_decision_conditions,
     handle_stock_diagnosis_cancel,
     handle_stock_diagnosis_create,
+    handle_stock_diagnosis_delete,
     handle_stock_diagnosis_fail,
     handle_stock_diagnosis_get,
     handle_stock_diagnosis_list,
@@ -340,6 +341,9 @@ def create_services_app(
     app.router.add_post("/api/stock/diagnosis", handle_stock_diagnosis_create)
     app.router.add_get("/api/stock/diagnosis", handle_stock_diagnosis_list)
     app.router.add_get("/api/stock/diagnosis/{diagnosis_id}", handle_stock_diagnosis_get)
+    app.router.add_delete(
+        "/api/stock/diagnosis/{diagnosis_id}", handle_stock_diagnosis_delete
+    )
     app.router.add_post(
         "/api/stock/diagnosis/{diagnosis_id}/cancel", handle_stock_diagnosis_cancel
     )

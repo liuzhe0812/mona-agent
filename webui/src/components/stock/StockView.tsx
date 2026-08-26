@@ -4,6 +4,7 @@ import { Loader2 } from "lucide-react";
 import { useClient } from "@/providers/ClientProvider";
 import { Button } from "@/components/ui/button";
 import { StatusNotice } from "@/components/ui/status-notice";
+import { fetchSettings, updateStockSettings } from "@/lib/api";
 import { cn } from "@/lib/utils";
 import type {
   StockDashboardItem,
@@ -20,6 +21,7 @@ import type {
 } from "@/lib/stock-api";
 import {
   addStockWatchlist,
+  deleteStockDiagnosis,
   deleteStockReport,
   fetchStockDashboard,
   fetchStockKline,
@@ -39,7 +41,7 @@ import {
   STOCK_DIAGNOSIS_ROOM_CHAT_ID,
   STOCK_ROOM_CHAT_ID,
 } from "@/lib/stock-api";
-import type { ToolProgressEvent, WorkflowRun } from "@/lib/types";
+import type { SettingsPayload, ToolProgressEvent, WorkflowRun } from "@/lib/types";
 import {
   INDEX_IDS,
   MarketTickerBar,
@@ -67,7 +69,7 @@ import {
 
 const TERMINAL_RUN_STATUSES = new Set(["succeeded", "failed", "cancelled"]);
 const ACTIVE_RUN_STATUSES = new Set(["queued", "running", "waiting_approval"]);
-/** 行情轮询间隔兜底值；实际取 StockConfig.quote_refresh_sec（经 props 注入）。 */
+/** 行情轮询间隔兜底值；进入工作台后从已保存设置读取。 */
 const DEFAULT_QUOTE_POLL_MS = 30_000;
 /** 自选列表信号窗口：近 30 个交易日。 */
 const SPARKLINE_LIMIT = 30;
@@ -185,16 +187,6 @@ interface StockViewProps {
   /** 私聊确认卡（T22d）带入的标的：进入工作台后自动选中并启动深度投研。 */
   autoRunSymbol?: string | null;
   onConsumeAutoRun?: () => void;
-  /** 行情轮询间隔毫秒（StockConfig.quote_refresh_sec × 1000，设置页可改）。 */
-  quoteRefreshSecMs?: number;
-  /** 复盘时间（StockConfig.review_time，Hero 未复盘态展示）。 */
-  reviewTime?: string;
-  /** 复盘范围（StockConfig.review_scope）。 */
-  reviewScope?: "all" | "focus";
-  /** 自动每日复盘开关；与股票模块开关独立。 */
-  autoReviewEnabled?: boolean;
-  /** 打开设置页股票分区（顶栏齿轮）。 */
-  onOpenSettings?: () => void;
 }
 
 export function StockView({
@@ -202,11 +194,6 @@ export function StockView({
   onConsumeFocusRun,
   autoRunSymbol,
   onConsumeAutoRun,
-  quoteRefreshSecMs = DEFAULT_QUOTE_POLL_MS,
-  reviewTime = "15:30",
-  reviewScope = "focus",
-  autoReviewEnabled = false,
-  onOpenSettings,
 }: StockViewProps) {
   const { client, token } = useClient();
   const [items, setItems] = useState<StockDashboardItem[]>([]);
@@ -245,6 +232,10 @@ export function StockView({
   const [watchGridCollapsed, setWatchGridCollapsed] = useState(false);
   const [stageTabRequest, setStageTabRequest] = useState<{ revision: number; tab: "market" | "news" } | null>(null);
   const [stockMode, setStockMode] = useState<"watch" | "opportunity">("watch");
+  const [quoteRefreshSecMs, setQuoteRefreshSecMs] = useState(DEFAULT_QUOTE_POLL_MS);
+  const [autoReviewEnabled, setAutoReviewEnabled] = useState(false);
+  const [reviewTime, setReviewTime] = useState("15:30");
+  const [reviewScope, setReviewScope] = useState<"all" | "focus">("focus");
   const mounted = useRef(true);
   const decisionEvaluationRequestId = useRef(0);
   const diagnosisRequestId = useRef(0);
@@ -287,6 +278,31 @@ export function StockView({
       mounted.current = false;
     };
   }, []);
+
+  const applyStockSettings = useCallback((stock: SettingsPayload["stock"]) => {
+    setQuoteRefreshSecMs(stock.quote_refresh_sec * 1000);
+    setAutoReviewEnabled(stock.auto_review_enabled);
+    setReviewTime(stock.review_time);
+    setReviewScope(stock.review_scope);
+  }, []);
+
+  // 行情刷新间隔属于股票工作台自身：进入模块后读取，不阻塞应用壳或侧栏入口。
+  useEffect(() => {
+    let cancelled = false;
+    void fetchSettings(token)
+      .then((payload) => {
+        if (!cancelled) applyStockSettings(payload.stock);
+      })
+      .catch(() => undefined);
+    return () => {
+      cancelled = true;
+    };
+  }, [applyStockSettings, token]);
+
+  const updateQuoteRefreshSec = useCallback(async (seconds: number) => {
+    const payload = await updateStockSettings(token, { quoteRefreshSec: seconds });
+    if (mounted.current) applyStockSettings(payload.stock);
+  }, [applyStockSettings, token]);
 
   const refreshDashboard = useCallback(async (force = false) => {
     if (force) dashboardCache.delete(token);
@@ -376,6 +392,17 @@ export function StockView({
       if (mounted.current) setActionError("AI诊股历史详情打开失败，请稍后重试");
     }
   }, []);
+
+  const handleDeleteDiagnosis = useCallback(async (diagnosisId: string) => {
+    try {
+      await deleteStockDiagnosis(diagnosisId);
+      if (!mounted.current) return;
+      setDiagnosisReport((current) => current?.diagnosis_id === diagnosisId ? null : current);
+      await refreshDiagnoses(selectedId);
+    } catch {
+      if (mounted.current) setActionError("AI诊股历史删除失败，请稍后重试");
+    }
+  }, [refreshDiagnoses, selectedId]);
 
   useEffect(() => {
     void refreshDiagnoses(selectedId);
@@ -1017,7 +1044,8 @@ export function StockView({
             onViewChange={setStockMode}
             refreshing={quotesLoading}
             onRefresh={handleManualRefresh}
-            onOpenSettings={() => onOpenSettings?.()}
+            quoteRefreshSec={quoteRefreshSecMs / 1000}
+            onQuoteRefreshSecChange={updateQuoteRefreshSec}
             decisionSummaryOpen={decisionSummaryOpen}
             onToggleDecisionSummary={() => setDecisionSummaryOpen((open) => !open)}
           />
@@ -1127,6 +1155,7 @@ export function StockView({
                     onStartDiagnosis={() => void handleStartDiagnosis()}
                     onCancelDiagnosis={() => void handleCancelDiagnosis()}
                     onOpenDiagnosis={(id) => void handleOpenDiagnosis(id)}
+                    onDeleteDiagnosis={(id) => void handleDeleteDiagnosis(id)}
                     reports={selectedReports}
                     reportDetail={contextReport}
                     decisionEvaluation={decisionEvaluation}

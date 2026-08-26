@@ -29,6 +29,7 @@ from mona.services.stock.diagnosis import (
     DiagnosisNotFoundError,
     DiagnosisService,
     DiagnosisStateError,
+    DiagnosisStorageError,
 )
 from mona.services.stock.evidence import EvidenceService
 from mona.services.stock.failover import FailoverProvider, IntradayFailoverProvider
@@ -124,7 +125,7 @@ def _diagnosis_service(request: web.Request) -> DiagnosisService:
     configured = request.app.get("stock_diagnosis_service")
     if configured is not None and all(
         callable(getattr(configured, name, None))
-        for name in ("create", "execute", "get", "list", "cancel", "fail", "retry")
+        for name in ("create", "execute", "get", "list", "cancel", "fail", "retry", "delete")
     ):
         return configured
     factory = request.app.get("stock_diagnosis_service_factory")
@@ -132,7 +133,7 @@ def _diagnosis_service(request: web.Request) -> DiagnosisService:
         service = factory(request)
         if service is not None and all(
             callable(getattr(service, name, None))
-            for name in ("create", "execute", "get", "list", "cancel", "fail", "retry")
+            for name in ("create", "execute", "get", "list", "cancel", "fail", "retry", "delete")
         ):
             return service
     workspace = _diagnosis_workspace(request)
@@ -484,6 +485,19 @@ async def handle_stock_diagnosis_get(request: web.Request) -> web.Response:
     except (ValueError, DiagnosisNotFoundError):
         return _error(404, "diagnosis_not_found", "诊股记录不存在")
     return web.json_response(_diagnosis_wire(record))
+
+
+async def handle_stock_diagnosis_delete(request: web.Request) -> web.Response:
+    diagnosis_id = request.match_info.get("diagnosis_id", "")
+    try:
+        record = _diagnosis_service(request).delete(diagnosis_id)
+    except (ValueError, DiagnosisNotFoundError):
+        return _error(404, "diagnosis_not_found", "诊股记录不存在")
+    except DiagnosisStateError:
+        return _error(409, "diagnosis_state_conflict", "诊股仍在进行中，暂时不能删除")
+    except DiagnosisStorageError:
+        return _error(500, "diagnosis_delete_failed", "诊股记录删除失败")
+    return web.json_response({"deleted": record["diagnosis_id"]})
 
 
 async def handle_stock_diagnosis_cancel(request: web.Request) -> web.Response:

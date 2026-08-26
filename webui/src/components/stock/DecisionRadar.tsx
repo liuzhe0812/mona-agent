@@ -22,6 +22,7 @@ import {
   type StockStance,
 } from "@/lib/stock-api";
 import { cn } from "@/lib/utils";
+import { diagnosisActionLabel, diagnosisCurrentActionLabel } from "./labels";
 
 export type DecisionRadarTab = "market" | "fundamentals" | "news" | "report";
 
@@ -693,7 +694,7 @@ function RadarBasisList({ rows }: { rows: RadarBasisRow[] }) {
   const toneClass = (tone: RadarBasisRow["tone"]): string => tone === "positive" ? "text-stock-up" : tone === "negative" ? "text-stock-down" : tone === "warning" ? "text-warning" : "text-foreground";
   return (
     <section className="pt-4" data-testid="decision-radar-four-step">
-      <h3 className="text-title-sm font-semibold">四步决策依据</h3>
+      <h3 className="text-title-sm font-semibold">四层分析</h3>
       <div className="mt-2 divide-y divide-border/60">
         {rows.map((row) => (
           <div key={row.label} className="grid grid-cols-[minmax(0,5.5rem)_minmax(0,3.5rem)_minmax(0,1fr)] gap-2 py-2 text-body">
@@ -755,32 +756,8 @@ function HorizonTabs({ activeHorizon, onChange }: { activeHorizon: HorizonKey; o
   return <div className="flex border-b border-border/60" role="tablist" aria-label="研究周期">{HORIZONS.map(({ key, label }) => <button key={key} type="button" role="tab" aria-selected={activeHorizon === key} className={cn("flex-1 border-b-2 px-2 py-2 text-caption", activeHorizon === key ? "border-info font-medium text-foreground" : "border-transparent text-muted-foreground")} onClick={() => onChange(key)}>{label}</button>)}</div>;
 }
 
-function diagnosisLabel(value: string): string {
-  const labels: Record<string, string> = {
-    positive: "看涨",
-    neutral: "中性",
-    negative: "看跌",
-    unavailable: "暂无方向",
-    conditional_participation: "满足条件再参与",
-    wait: "等待确认",
-    hold: "继续持有",
-    reduce: "减仓",
-    exit: "退出",
-    avoid: "回避",
-  };
-  return labels[value] ?? "待确认";
-}
-
 function diagnosisValue(value: number | null | undefined, suffix = ""): string {
   return typeof value === "number" && Number.isFinite(value) ? `${value.toFixed(2)}${suffix}` : "本次未形成";
-}
-
-function diagnosisCurrentAction(decision: StockDiagnosisHorizonDecision): string {
-  if (decision.not_holding_action === "avoid" && ["reduce", "exit"].includes(decision.holding_action)) {
-    return decision.holding_action === "exit" ? "暂不买入 / 退出" : "暂不买入 / 减仓";
-  }
-  if (decision.not_holding_action === "wait" && decision.holding_action === "hold") return "等待买入 / 继续持有";
-  return diagnosisLabel(decision.action);
 }
 
 const LEGACY_FUNDAMENTAL_FACTOR_ORDER = [
@@ -848,10 +825,10 @@ function DiagnosisRadarPanel({ decision, report }: { decision: StockDiagnosisHor
     <section className="space-y-5 pt-4" data-testid="decision-radar-ai-diagnosis">
       <div className="rounded-xl bg-muted/30 px-4 py-4">
         <div className="text-body font-medium">当前综合建议</div>
-        <div className="mt-1 text-display-sm font-semibold">{diagnosisCurrentAction(decision)}</div>
-        <div className="mt-3 space-y-1 text-body"><p>未持有：{diagnosisLabel(decision.not_holding_action)}</p><p>已持有：{diagnosisLabel(decision.holding_action)}</p></div>
+        <div className="mt-1 text-display-sm font-semibold">{diagnosisCurrentActionLabel(decision)}</div>
+        <div className="mt-3 space-y-1 text-body"><p>未持有：{diagnosisActionLabel(decision.not_holding_action)}</p><p>已持有：{diagnosisActionLabel(decision.holding_action)}</p></div>
       </div>
-      <section data-testid="decision-radar-four-step"><h3 className="text-title-sm font-semibold">四步决策依据</h3><div className="mt-2 divide-y divide-border/60 text-body">{basisRows.map((row) => <div key={row.key} className="grid grid-cols-[5.5rem_3.5rem_minmax(0,1fr)] gap-2 py-2"><span>{row.label}</span><span className={cn("font-medium", diagnosisBasisTone(row.stance))}>{row.stance_label}</span><span>{row.summary}</span></div>)}</div></section>
+      <section data-testid="decision-radar-four-step"><h3 className="text-title-sm font-semibold">四层分析</h3><div className="mt-2 divide-y divide-border/60 text-body">{basisRows.map((row) => <div key={row.key} className="grid grid-cols-[5.5rem_3.5rem_minmax(0,1fr)] gap-2 py-2"><span>{row.label}</span><span className={cn("font-medium", diagnosisBasisTone(row.stance))}>{row.stance_label}</span><span>{row.summary}</span></div>)}</div></section>
       <section data-testid="decision-radar-ai-trading-plan"><h3 className="text-title-sm font-semibold">交易计划</h3><dl className="mt-3 grid grid-cols-[minmax(0,0.9fr)_minmax(0,1.5fr)] gap-x-3 gap-y-2 text-body"><dt className="text-muted-foreground">参考买入</dt><dd>{canEnter ? diagnosisValue(plan.reference_entry, " 元") : "当前不建议买入"}</dd><dt className="text-muted-foreground">回踩参与</dt><dd>{canEnter ? diagnosisValue(plan.pullback_entry, " 元") : "暂不参与"}</dd><dt className="text-muted-foreground">止损参考</dt><dd>{typeof plan.stop_loss === "number" ? diagnosisValue(plan.stop_loss, " 元") : "未设置固定止损价"}</dd><dt className="text-muted-foreground">第一止盈</dt><dd>{typeof plan.first_take_profit === "number" ? diagnosisValue(plan.first_take_profit, " 元") : "未设置固定止盈价"}</dd><dt className="text-muted-foreground">第二止盈</dt><dd>{typeof plan.second_take_profit === "number" ? diagnosisValue(plan.second_take_profit, " 元") : "未设置固定止盈价"}</dd></dl></section>
       <section data-testid="decision-radar-ai-position"><h3 className="text-title-sm font-semibold">参考仓位</h3><div className="mt-3 grid grid-cols-2 gap-4 text-center"><div><div className="text-body text-muted-foreground">参考仓位</div><div className="mt-1 text-title font-semibold">{diagnosisValue(position.reference_position_pct, "%")}</div></div><div><div className="text-body text-muted-foreground">最大仓位</div><div className="mt-1 text-title font-semibold">{diagnosisValue(position.max_position_pct, "%")}</div></div></div><p className="mt-2 text-body text-muted-foreground">风险预算：{diagnosisValue(position.risk_budget_pct, "%")}</p></section>
       <section data-testid="decision-radar-ai-boundary"><h3 className="text-title-sm font-semibold">计划边界</h3><dl className="mt-3 grid grid-cols-[minmax(0,0.9fr)_minmax(0,1.5fr)] gap-x-3 gap-y-2 text-body"><dt className="text-muted-foreground">有效期</dt><dd>{decision.valid_until ? `至 ${decision.valid_until.slice(0, 10)}` : "价格或基本面变化时复评"}</dd><dt className="text-muted-foreground">计划失效</dt><dd>{plan.invalidation?.join("；") || decision.review_trigger}</dd><dt className="text-muted-foreground">单笔风险预算</dt><dd>{diagnosisValue(plan.max_risk_pct ?? position.risk_budget_pct, "%")}</dd></dl></section>

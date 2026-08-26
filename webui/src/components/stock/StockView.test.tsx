@@ -14,6 +14,7 @@ const openStockIntradayStream = vi.fn();
 const fetchStockResearchContext = vi.fn();
 const fetchStockDiagnoses = vi.fn();
 const fetchStockDiagnosis = vi.fn();
+const deleteStockDiagnosis = vi.fn();
 const preflightStockResearch = vi.fn();
 const fetchStockReports = vi.fn();
 const fetchStockReport = vi.fn();
@@ -32,6 +33,8 @@ const fetchStockMaterials = vi.fn();
 const createStockMaterialBinding = vi.fn();
 const confirmStockMaterialBinding = vi.fn();
 const fetchStockMaterialPage = vi.fn();
+const fetchSettings = vi.fn();
+const updateStockSettings = vi.fn();
 
 vi.mock("@/lib/stock-api", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@/lib/stock-api")>();
@@ -45,6 +48,7 @@ vi.mock("@/lib/stock-api", async (importOriginal) => {
     fetchStockResearchContext: (...args: unknown[]) => fetchStockResearchContext(...args),
     fetchStockDiagnoses: (...args: unknown[]) => fetchStockDiagnoses(...args),
     fetchStockDiagnosis: (...args: unknown[]) => fetchStockDiagnosis(...args),
+    deleteStockDiagnosis: (...args: unknown[]) => deleteStockDiagnosis(...args),
     preflightStockResearch: (...args: unknown[]) => preflightStockResearch(...args),
     fetchStockReports: (...args: unknown[]) => fetchStockReports(...args),
     fetchStockReport: (...args: unknown[]) => fetchStockReport(...args),
@@ -314,6 +318,7 @@ beforeEach(() => {
     fetchStockReport,
     fetchStockDiagnoses,
     fetchStockDiagnosis,
+    deleteStockDiagnosis,
   ]) mock.mockReset();
   runWorkflow.mockResolvedValue(undefined);
   getWorkflowRun.mockResolvedValue(null);
@@ -352,6 +357,7 @@ beforeEach(() => {
   fetchStockReports.mockResolvedValue([]);
   fetchStockDiagnoses.mockResolvedValue([]);
   fetchStockDiagnosis.mockRejectedValue(new Error("no diagnosis"));
+  deleteStockDiagnosis.mockResolvedValue(undefined);
   fetchStockReport.mockResolvedValue({
     report: { report_id: "stock_report_a", kind: "deep_research" },
     markdown: "# 贵州茅台研究报告",
@@ -371,6 +377,31 @@ beforeEach(() => {
   createStockMaterialBinding.mockResolvedValue(null);
   confirmStockMaterialBinding.mockResolvedValue(null);
   fetchStockMaterialPage.mockResolvedValue({ material_name: "", page: 1, page_count: null, text: "" });
+  fetchSettings.mockResolvedValue({
+    stock: {
+      quote_refresh_sec: 30,
+      auto_review_enabled: false,
+      review_time: "15:30",
+      review_scope: "focus",
+    },
+  });
+  updateStockSettings.mockImplementation(async (_token: string, update: { quoteRefreshSec?: number }) => ({
+    stock: {
+      quote_refresh_sec: update.quoteRefreshSec ?? 30,
+      auto_review_enabled: false,
+      review_time: "15:30",
+      review_scope: "focus",
+    },
+  }));
+});
+
+vi.mock("@/lib/api", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@/lib/api")>();
+  return {
+    ...actual,
+    fetchSettings: (...args: unknown[]) => fetchSettings(...args),
+    updateStockSettings: (...args: unknown[]) => updateStockSettings(...args),
+  };
 });
 
 afterEach(() => {
@@ -1453,15 +1484,44 @@ describe("StockView", () => {
     expect(screen.getByTestId("volume-readout").textContent).toBe("成交量 1,000手");
   });
 
-  it("uses the quoteRefreshSecMs prop as the polling interval", async () => {
+  it("uses the saved refresh interval as the polling interval", async () => {
     vi.useFakeTimers({ shouldAdvanceTime: true });
-    render(<StockView quoteRefreshSecMs={5_000} />);
+    fetchSettings.mockResolvedValueOnce({
+      stock: {
+        quote_refresh_sec: 5,
+        auto_review_enabled: false,
+        review_time: "15:30",
+        review_scope: "focus",
+      },
+    });
+    render(<StockView />);
     await screen.findAllByText("贵州茅台");
+    await act(async () => {
+      await Promise.resolve();
+    });
     expect(fetchStockQuotes).toHaveBeenCalledTimes(1);
     await act(async () => {
       await vi.advanceTimersByTimeAsync(5_000);
     });
     expect(fetchStockQuotes).toHaveBeenCalledTimes(2);
+  });
+
+  it("auto-saves the refresh interval from the stock settings menu", async () => {
+    render(<StockView />);
+    await screen.findAllByText("贵州茅台");
+
+    fireEvent.pointerDown(screen.getByRole("button", { name: "股票设置" }), {
+      button: 0,
+      ctrlKey: false,
+    });
+    const input = await screen.findByRole("spinbutton", { name: "行情刷新间隔（秒）" });
+    fireEvent.change(input, { target: { value: "60" } });
+    fireEvent.blur(input);
+
+    await waitFor(() =>
+      expect(updateStockSettings).toHaveBeenCalledWith("tok", { quoteRefreshSec: 60 }),
+    );
+    expect(screen.queryByRole("button", { name: "保存" })).toBeNull();
   });
 
   it("stops polling while the page is hidden and resumes on visibility", async () => {
@@ -1514,10 +1574,28 @@ describe("StockView", () => {
     render(<StockView />);
     await screen.findAllByText("贵州茅台");
     fireEvent.click(screen.getByRole("tab", { name: "AI诊股" }));
-    expect(await screen.findByTestId("ai-diagnosis-result")).toHaveTextContent("四步决策依据");
+    expect(await screen.findByTestId("ai-diagnosis-result")).toHaveTextContent("四层分析");
     expect(screen.queryByText("深度投研")).not.toBeInTheDocument();
     fireEvent.click(screen.getByRole("tab", { name: "专家团论证" }));
     expect(await screen.findByText(/专家团历史记录/)).toBeInTheDocument();
+  });
+
+  it("deletes a terminal AI diagnosis from the history context menu", async () => {
+    fetchStockDiagnoses.mockResolvedValueOnce([{ diagnosisId: "diagnosis_12345678", workflowId: "stock-ai-diagnosis", status: "succeeded", instrument: { symbol: "600519", exchange: "XSHG" }, createdAt: "2026-08-25T15:00:00+08:00", updatedAt: "2026-08-25T15:01:00+08:00" }]);
+    fetchStockDiagnosis.mockResolvedValueOnce({ report: makeDiagnosisReport(), markdown: "" });
+    render(<StockView />);
+    await screen.findAllByText("贵州茅台");
+    fireEvent.click(screen.getByRole("tab", { name: "AI诊股" }));
+    await screen.findByTestId("ai-diagnosis-result");
+
+    const history = screen.getByTestId("ai-diagnosis-history");
+    fireEvent.click(within(history).getByText(/AI诊股历史/));
+    fireEvent.contextMenu(within(history).getByRole("button", { name: /AI诊股.*已完成/ }));
+    fireEvent.click(await screen.findByText("删除诊股记录"));
+    fireEvent.click(screen.getByRole("button", { name: "确认删除" }));
+
+    await waitFor(() => expect(deleteStockDiagnosis).toHaveBeenCalledWith("diagnosis_12345678"));
+    await waitFor(() => expect(fetchStockDiagnoses).toHaveBeenCalledTimes(2));
   });
 
   it("retries initial diagnosis loading and shows the latest result without starting a new run", async () => {

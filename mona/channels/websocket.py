@@ -3180,6 +3180,13 @@ class WebSocketChannel(BaseChannel):
         mime = item.get("mime") if isinstance(item.get("mime"), str) else None
         try:
             return ArtifactRef(
+                id=(
+                    "artifact_legacy_"
+                    + uuid.uuid5(
+                        uuid.NAMESPACE_URL,
+                        f"{session_key}\0{agent_id}\0{relative_path}",
+                    ).hex
+                ),
                 owner_kind="agent",
                 owner_id=agent_id,
                 relative_path=relative_path,
@@ -3299,11 +3306,19 @@ class WebSocketChannel(BaseChannel):
                 return _http_error(404, "session not found")
             base, agent_id = owner
             if artifact_id:
+                session_refs = self._artifact_refs_from_session(decoded_key)
                 ref = next(
-                    (item for item in self._artifact_refs_from_session(decoded_key)
-                     if getattr(item, "id", None) == artifact_id),
+                    (item for item in session_refs if getattr(item, "id", None) == artifact_id),
                     None,
                 )
+                if ref is None:
+                    # Historical generated-media refs used random IDs on each
+                    # list request. Recover only by an exact session-owned
+                    # relative path so stale UI rows remain previewable.
+                    ref = next(
+                        (item for item in session_refs if item.relative_path == path),
+                        None,
+                    )
                 if ref is None or ref.owner_kind != "agent" or ref.owner_id != agent_id:
                     return _http_error(404, "artifact not found")
                 path = ref.relative_path

@@ -9,7 +9,9 @@ from pydantic import ValidationError
 
 import mona.services.stock.diagnosis as diagnosis_module
 from mona.services.stock.diagnosis import (
+    DiagnosisNotFoundError,
     DiagnosisService,
+    DiagnosisStateError,
     _decision_basis_rows,
     build_factor_snapshot,
     standard_diagnosis_workflow,
@@ -294,6 +296,24 @@ def test_service_persists_report_and_enforces_one_agent(tmp_path) -> None:
     assert report["schema_version"] == 1
     assert report["horizon_decisions"]["short_term"]["materialized_plan"]["value_status"] == "unavailable"
     assert service.list()[0]["diagnosis_id"] == result["diagnosis_id"]
+
+
+def test_service_deletes_only_terminal_diagnoses(tmp_path) -> None:
+    service = DiagnosisService(tmp_path)
+    active = service.create(
+        instrument={"exchange": "XSHG", "symbol": "600519"},
+        evidence_context_id="direct_input",
+    )
+    with pytest.raises(DiagnosisStateError, match="active diagnosis"):
+        service.delete(active["diagnosis_id"])
+
+    service.cancel(active["diagnosis_id"])
+    deleted = service.delete(active["diagnosis_id"])
+
+    assert deleted["diagnosis_id"] == active["diagnosis_id"]
+    assert service.list() == []
+    with pytest.raises(DiagnosisNotFoundError):
+        service.get(active["diagnosis_id"])
 
 
 def test_workflow_has_one_agent_and_deterministic_final_step() -> None:

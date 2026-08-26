@@ -11,6 +11,9 @@ import { fetchFilePreviewBlob } from "@/lib/api";
 vi.mock("@/lib/api", () => ({
   fetchFilePreviewBlob: vi.fn(async (_token: string, params: { path: string }) => {
     if (params.path.endsWith(".mp4")) {
+      if ((params as { artifactId?: string | null }).artifactId) {
+        throw new Error("HTTP 404");
+      }
       return {
         blob: new Blob(["video"], { type: "text/plain" }),
         mime: "text/plain",
@@ -178,6 +181,14 @@ describe("FilePreviewPanel", () => {
     const video: DeliveredFile = {
       ...artifact("clip.mp4"),
       mime: "video/mp4",
+      artifact_ref: {
+        id: "stale-artifact-id",
+        owner_kind: "agent",
+        owner_id: "mona",
+        relative_path: "clip.mp4",
+        created_by_agent_id: "mona",
+        created_at: "2026-08-26T00:00:00Z",
+      },
     };
     previewWith(video);
     render(wrap(<FilePreviewPanel files={[video]} />));
@@ -185,5 +196,9 @@ describe("FilePreviewPanel", () => {
     const player = await screen.findByLabelText("视频预览：clip.mp4");
     expect(player.tagName).toBe("VIDEO");
     expect(player).toHaveAttribute("controls");
+    expect(vi.mocked(fetchFilePreviewBlob)).toHaveBeenLastCalledWith(
+      "tok",
+      expect.objectContaining({ path: "clip.mp4", artifactId: null }),
+    );
   });
 });

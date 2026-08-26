@@ -100,7 +100,7 @@ function parseStockConfirmSegments(content: string): StockConfirmSegment[] {
 }
 
 /** 「启动深度投研」确认卡：点击经 mona-open-stock 事件跳转股票工作台
- *  并自动启动单股研究（与 mona-stock-settings-changed 同模式）。 */
+ *  并自动启动单股研究。 */
 function StockConfirmCard({
   instrumentId,
   name,

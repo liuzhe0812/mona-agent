@@ -1,6 +1,30 @@
 /** 股票模块展示文案映射（stance / data_quality → 中文标签）。 */
 
-import type { StockStance, StockTimeHorizon, StockEvidenceStrength } from "@/lib/stock-api";
+import type { StockDiagnosisHorizonDecision, StockEvidenceStrength, StockStance, StockTimeHorizon } from "@/lib/stock-api";
+
+export function diagnosisActionLabel(value: string): string {
+  const labels: Record<string, string> = {
+    positive: "看涨",
+    neutral: "中性",
+    negative: "看跌",
+    unavailable: "暂无方向",
+    conditional_participation: "满足条件再参与",
+    wait: "等待确认",
+    hold: "继续持有",
+    reduce: "减仓",
+    exit: "退出",
+    avoid: "回避",
+  };
+  return labels[value] ?? "待确认";
+}
+
+export function diagnosisCurrentActionLabel(decision: StockDiagnosisHorizonDecision): string {
+  if (decision.not_holding_action === "avoid" && ["reduce", "exit"].includes(decision.holding_action)) {
+    return decision.holding_action === "exit" ? "暂不买入 / 退出" : "暂不买入 / 减仓";
+  }
+  if (decision.not_holding_action === "wait" && decision.holding_action === "hold") return "等待买入 / 继续持有";
+  return diagnosisActionLabel(decision.action);
+}
 
 export const STANCE_LABELS: Record<StockStance, string> = {
   positive: "看多",

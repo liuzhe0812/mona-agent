@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { dataQualityLabel, evidenceTextLabel, factorLabel, stanceLabel, thesisLabel } from "./labels";
+import { dataQualityLabel, diagnosisCurrentActionLabel, evidenceTextLabel, factorLabel, stanceLabel, thesisLabel } from "./labels";
 
 describe("evidenceTextLabel", () => {
   it("cleans the run_958 historical analyst wording into business Chinese", () => {
@@ -31,6 +31,14 @@ describe("evidenceTextLabel", () => {
 });
 
 describe("business-facing stock labels", () => {
+  it("uses one diagnosis action headline across the main view and radar", () => {
+    expect(diagnosisCurrentActionLabel({
+      action: "avoid",
+      not_holding_action: "avoid",
+      holding_action: "exit",
+    } as never)).toBe("暂不买入 / 退出");
+  });
+
   it("maps deterministic factor keys and hides unknown internal names", () => {
     expect(factorLabel("momentum20")).toBe("20日动量");
     expect(factorLabel("fundamentals.operating_cashflow")).toBe("经营现金流");

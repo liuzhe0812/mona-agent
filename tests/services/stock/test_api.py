@@ -176,6 +176,8 @@ async def client(store, provider, monkeypatch):
     app.router.add_get("/api/stock/search", stock_api.handle_stock_search)
     app.router.add_get("/api/stock/quote", stock_api.handle_stock_quote)
     app.router.add_get("/api/stock/kline", stock_api.handle_stock_kline)
+    app.router.add_get("/api/stock/diagnosis/{diagnosis_id}", stock_api.handle_stock_diagnosis_get)
+    app.router.add_delete("/api/stock/diagnosis/{diagnosis_id}", stock_api.handle_stock_diagnosis_delete)
     app.router.add_get("/api/stock/research-context", stock_api.handle_stock_research_context)
     app.router.add_post("/api/stock/research/preflight", stock_api.handle_stock_research_preflight)
     app.router.add_get("/api/stock/risk-profile", stock_api.handle_stock_risk_profile)
@@ -195,6 +197,22 @@ async def test_watchlist_list_empty(client):
     resp = await client.get("/api/stock/watchlist")
     assert resp.status == 200
     assert (await resp.json()) == {"items": []}
+
+
+async def test_diagnosis_delete_removes_terminal_record(client, store):
+    service = stock_api.DiagnosisService(store.root.parent)
+    record = service.create(
+        instrument={"exchange": "XSHG", "symbol": "600519"},
+        evidence_context_id="direct_input",
+    )
+    service.cancel(record["diagnosis_id"])
+
+    response = await client.delete(f"/api/stock/diagnosis/{record['diagnosis_id']}")
+
+    assert response.status == 200
+    assert await response.json() == {"deleted": record["diagnosis_id"]}
+    missing = await client.get(f"/api/stock/diagnosis/{record['diagnosis_id']}")
+    assert missing.status == 404
 
 
 async def test_watchlist_add_bare_code_infers_exchange(client):

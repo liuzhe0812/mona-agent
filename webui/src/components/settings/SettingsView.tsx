@@ -57,7 +57,6 @@ import {
   Star,
   Triangle,
   Trash2,
-  TrendingUp,
   Video,
   Waves,
   Zap,
@@ -104,7 +103,6 @@ import {
   updateImageGenerationSettings,
   updateProviderSettings,
   updateSettings,
-  updateStockSettings,
   updateTtsSettings,
   updateVideoGenerationSettings,
   updateWebSearchSettings,
@@ -160,7 +158,6 @@ type SettingsSectionKey =
   | "image"
   | "web"
   | "channels"
-  | "stock"
   | "runtime"
   | "desktop"
   | "shortcuts"
@@ -733,14 +730,6 @@ export function SettingsView({
             requiresRestartPending={pendingRestartSections.channels}
           />
         );
-      case "stock":
-        return (
-          <StockSettings
-            settings={settings}
-            token={token}
-            onSettingsChanged={(payload) => applyPayload(payload)}
-          />
-        );
       case "runtime":
         return (
           <RuntimeSettings
@@ -809,7 +798,6 @@ const SETTINGS_NAV_ITEMS: Array<{ key: SettingsSectionKey; icon: LucideIcon; fal
   { key: "models_providers", icon: SlidersHorizontal, fallback: "模型设置" },
   { key: "web", icon: Search, fallback: "搜索" },
   { key: "channels", icon: Radio, fallback: "频道" },
-  { key: "stock", icon: TrendingUp, fallback: "股票" },
   { key: "runtime", icon: Server, fallback: "Runtime" },
   { key: "desktop", icon: Monitor, fallback: "桌面", desktopOnly: true },
   { key: "shortcuts", icon: Keyboard, fallback: "快捷键", desktopOnly: true },
@@ -3795,249 +3783,6 @@ function ToggleSwitch({
         )}
       />
     </Button>
-  );
-}
-
-function StockSettings({
-  settings,
-  token,
-  onSettingsChanged,
-}: {
-  settings: SettingsPayload;
-  token: string;
-  onSettingsChanged: (payload: SettingsPayload) => void;
-}) {
-  const { t } = useTranslation();
-  const tx = (key: string, fallback: string) => t(key, { defaultValue: fallback });
-  const [enabled, setEnabled] = useState(settings.stock.enabled);
-  const [autoReviewEnabled, setAutoReviewEnabled] = useState(
-    settings.stock.auto_review_enabled,
-  );
-  const [reviewTime, setReviewTime] = useState(settings.stock.review_time);
-  const [reviewScope, setReviewScope] = useState<"all" | "focus">(
-    settings.stock.review_scope,
-  );
-  const [pushNotification, setPushNotification] = useState(settings.stock.push_notification);
-  const [pushEmail, setPushEmail] = useState(settings.stock.push_email);
-  const [quoteRefreshSec, setQuoteRefreshSec] = useState(settings.stock.quote_refresh_sec);
-  const [saving, setSaving] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-
-  const reviewTimeValid = /^([01]\d|2[0-3]):[0-5]\d$/.test(reviewTime.trim());
-  const dirty =
-    enabled !== settings.stock.enabled ||
-    autoReviewEnabled !== settings.stock.auto_review_enabled ||
-    reviewTime.trim() !== settings.stock.review_time ||
-    reviewScope !== settings.stock.review_scope ||
-    pushNotification !== settings.stock.push_notification ||
-    pushEmail !== settings.stock.push_email ||
-    quoteRefreshSec !== settings.stock.quote_refresh_sec;
-
-  const save = async () => {
-    if (!dirty || saving || (autoReviewEnabled && !reviewTimeValid)) return;
-    setSaving(true);
-    try {
-      const payload = await updateStockSettings(token, {
-        enabled,
-        autoReviewEnabled,
-        reviewTime: reviewTime.trim(),
-        reviewScope,
-        pushNotification,
-        pushEmail,
-        quoteRefreshSec,
-      });
-      onSettingsChanged(payload);
-      // 通知外壳（AppRail/StockView 门控）股票模块开关与行情轮询间隔已变更
-      window.dispatchEvent(
-        new CustomEvent("mona-stock-settings-changed", {
-          detail: {
-            enabled: payload.stock.enabled,
-            autoReviewEnabled: payload.stock.auto_review_enabled,
-            quoteRefreshSec: payload.stock.quote_refresh_sec,
-            reviewTime: payload.stock.review_time,
-            reviewScope: payload.stock.review_scope,
-          },
-        }),
-      );
-      setError(null);
-    } catch (err) {
-      setError((err as Error).message);
-    } finally {
-      setSaving(false);
-    }
-  };
-
-  return (
-    <div className="space-y-7">
-      <section>
-        <SubsectionLabel className="mb-2 px-1">
-          {tx("settings.stock.section", "股票模块")}
-        </SubsectionLabel>
-        <SettingsGroup>
-          <SettingsRow
-            title={tx("settings.stock.enable", "启用股票模块")}
-            description={tx(
-              "settings.stock.enableHelp",
-              "启用后侧边栏显示股票工作台。自动复盘由下方开关单独控制。",
-            )}
-          >
-            <ToggleSwitch
-              checked={enabled}
-              disabled={saving}
-              onChange={setEnabled}
-              aria-label={tx("settings.stock.enable", "启用股票模块")}
-            />
-          </SettingsRow>
-          <SettingsRow
-            title={tx("settings.stock.autoReview", "自动生成每日复盘")}
-            description={tx(
-              "settings.stock.autoReviewHelp",
-              "关闭后不按时间自动运行；已有复盘仍可查看。",
-            )}
-          >
-            <ToggleSwitch
-              checked={autoReviewEnabled}
-              disabled={saving || !enabled}
-              onChange={setAutoReviewEnabled}
-              aria-label={tx("settings.stock.autoReview", "自动生成每日复盘")}
-            />
-          </SettingsRow>
-        </SettingsGroup>
-      </section>
-
-      {enabled && autoReviewEnabled ? (
-        <section>
-          <SubsectionLabel className="mb-2 px-1">
-            {tx("settings.stock.reviewSection", "每日复盘")}
-          </SubsectionLabel>
-          <SettingsGroup>
-            <SettingsRow
-              title={tx("settings.stock.reviewTime", "复盘时间")}
-              description={tx(
-                "settings.stock.reviewTimeHelp",
-                "每个交易日（北京时间）按此时间运行复盘；默认仅处理重点标的。",
-              )}
-            >
-              <Input
-                value={reviewTime}
-                onChange={(event) => setReviewTime(event.target.value)}
-                placeholder="15:30"
-                className="h-8 w-[120px] rounded-full text-ui"
-                disabled={saving}
-              />
-            </SettingsRow>
-            <SettingsRow
-              title={tx("settings.stock.reviewScope", "复盘范围")}
-              description={tx(
-                "settings.stock.reviewScopeHelp",
-                "「仅重点标的」只复盘自选列表中标星的股票；星标在股票工作台左侧列表切换。",
-              )}
-            >
-              <div
-                role="radiogroup"
-                aria-label={tx("settings.stock.reviewScope", "复盘范围")}
-                className="inline-flex overflow-hidden rounded-full border"
-              >
-                {(
-                  [
-                    ["all", "全部自选"],
-                    ["focus", "仅重点标的"],
-                  ] as const
-                ).map(([value, label]) => (
-                  <Button
-                    key={value}
-                    type="button"
-                    variant="ghost"
-                    role="radio"
-                    aria-checked={reviewScope === value}
-                    disabled={saving}
-                    onClick={() => setReviewScope(value)}
-                    className={cn(
-                      "h-8 rounded-none px-3 text-ui hover:bg-transparent",
-                      reviewScope === value
-                        ? "bg-accent text-accent-foreground"
-                        : "text-muted-foreground hover:text-foreground",
-                    )}
-                  >
-                    {label}
-                  </Button>
-                ))}
-              </div>
-            </SettingsRow>
-            <SettingsRow
-              title={tx("settings.stock.pushNotification", "桌面通知")}
-              description={tx(
-                "settings.stock.pushNotificationHelp",
-                "复盘简报生成后发送桌面通知。",
-              )}
-            >
-              <ToggleSwitch
-                checked={pushNotification}
-                disabled={saving}
-                onChange={setPushNotification}
-                aria-label={tx("settings.stock.pushNotification", "桌面通知")}
-              />
-            </SettingsRow>
-            <SettingsRow
-              title={tx("settings.stock.pushEmail", "邮件推送")}
-              description={tx(
-                "settings.stock.pushEmailHelp",
-                "复盘简报生成后同时发送到邮箱。",
-              )}
-            >
-              <ToggleSwitch
-                checked={pushEmail}
-                disabled={saving}
-                onChange={setPushEmail}
-                aria-label={tx("settings.stock.pushEmail", "邮件推送")}
-              />
-            </SettingsRow>
-          </SettingsGroup>
-        </section>
-      ) : null}
-
-      {enabled ? (
-        <section>
-          <SubsectionLabel className="mb-2 px-1">
-            {tx("settings.stock.quoteSection", "行情")}
-          </SubsectionLabel>
-          <SettingsGroup>
-            <SettingsRow
-              title={tx("settings.stock.quoteRefresh", "行情刷新间隔")}
-              description={tx(
-                "settings.stock.quoteRefreshHelp",
-                "股票工作台行情快照的轮询间隔（5–3600 秒）。",
-              )}
-            >
-              <NumberInput
-                value={quoteRefreshSec}
-                min={5}
-                max={3600}
-                onChange={setQuoteRefreshSec}
-                suffix={tx("settings.stock.quoteRefreshUnit", "秒")}
-              />
-            </SettingsRow>
-          </SettingsGroup>
-        </section>
-      ) : null}
-
-      <section>
-        <SettingsGroup>
-          <RestartSettingsFooter
-            dirty={dirty}
-            saving={saving}
-            pendingRestart={false}
-            disabled={autoReviewEnabled && !reviewTimeValid}
-            message={
-              autoReviewEnabled && !reviewTimeValid
-                ? tx("settings.stock.invalidReviewTime", "复盘时间需为 HH:MM（00:00–23:59）。")
-                : error ?? undefined
-            }
-            onSave={save}
-          />
-        </SettingsGroup>
-      </section>
-    </div>
   );
 }
 

@@ -261,6 +261,7 @@ interface InstrumentStageProps {
   onStartDiagnosis?: () => void;
   onCancelDiagnosis?: () => void;
   onOpenDiagnosis?: (diagnosisId: string) => void;
+  onDeleteDiagnosis?: (diagnosisId: string) => void;
   decisionEvaluation?: StockDecisionEvaluation | null;
   /** 决策雷达面板开关：由顶栏按钮控制（StockView 持有状态），收起时不渲染右列。 */
   decisionSummaryOpen?: boolean;
@@ -399,6 +400,7 @@ export function InstrumentStage({
   onStartDiagnosis = () => undefined,
   onCancelDiagnosis = () => undefined,
   onOpenDiagnosis = () => undefined,
+  onDeleteDiagnosis = () => undefined,
   decisionEvaluation = null,
   decisionSummaryOpen = true,
   initialTab = "market",
@@ -428,6 +430,7 @@ export function InstrumentStage({
   const intradayGeneration = useRef(0);
   const [confirmRerunOpen, setConfirmRerunOpen] = useState(false);
   const [deleteReportId, setDeleteReportId] = useState<string | null>(null);
+  const [deleteDiagnosisId, setDeleteDiagnosisId] = useState<string | null>(null);
   /** 主图十字光标悬停的可见区下标（副图联动读数/高亮）。 */
   const [hoverVisibleIdx, setHoverVisibleIdx] = useState<number | null>(null);
   // K线视口（缩放/拖动状态）：标的/周期切换或数据重取后回到最近 120 根。
@@ -1056,14 +1059,31 @@ export function InstrumentStage({
             <details className="border-t px-4 py-3" data-testid="ai-diagnosis-history">
               <summary className="cursor-pointer text-caption font-medium">AI诊股历史（{diagnosisReports.length}）</summary>
               <div className="mt-2 divide-y">
-                {diagnosisReports.map((entry) => (
-                  <Button key={entry.diagnosisId} type="button" variant="ghost" onClick={() => onOpenDiagnosis(entry.diagnosisId)} className="h-auto w-full justify-start gap-3 rounded-none px-0 py-2 text-left">
-                    <span className="w-16 shrink-0 text-caption">AI诊股</span>
-                    <span className="min-w-0 flex-1 truncate text-caption text-muted-foreground">{entry.status === "succeeded" ? "已完成" : entry.status === "failed" ? "失败" : entry.status === "cancelled" ? "已取消" : "进行中"}</span>
-                    <time className="text-micro text-muted-foreground">{shortDate(entry.updatedAt ?? entry.createdAt)}</time>
-                    <ArrowRight className="h-3.5 w-3.5 text-muted-foreground" aria-hidden />
-                  </Button>
-                ))}
+                {diagnosisReports.map((entry) => {
+                  const terminal = entry.status === "succeeded" || entry.status === "failed" || entry.status === "cancelled";
+                  return (
+                    <ContextMenu key={entry.diagnosisId}>
+                      <ContextMenuTrigger asChild>
+                        <Button type="button" variant="ghost" onClick={() => onOpenDiagnosis(entry.diagnosisId)} className="h-auto w-full justify-start gap-3 rounded-none px-0 py-2 text-left hover:bg-accent/50">
+                          <span className="w-16 shrink-0 text-caption">AI诊股</span>
+                          <span className="min-w-0 flex-1 truncate text-caption text-muted-foreground">{entry.status === "succeeded" ? "已完成" : entry.status === "failed" ? "失败" : entry.status === "cancelled" ? "已取消" : "进行中"}</span>
+                          <time className="text-micro text-muted-foreground">{shortDate(entry.updatedAt ?? entry.createdAt)}</time>
+                          <ArrowRight className="h-3.5 w-3.5 text-muted-foreground" aria-hidden />
+                        </Button>
+                      </ContextMenuTrigger>
+                      <ContextMenuContent className="w-44">
+                        <ContextMenuItem
+                          disabled={!terminal}
+                          className="text-destructive focus:text-destructive"
+                          onSelect={() => { if (terminal) setDeleteDiagnosisId(entry.diagnosisId); }}
+                        >
+                          <Trash2 className="mr-2 h-3.5 w-3.5" />
+                          {terminal ? "删除诊股记录" : "诊股进行中，不能删除"}
+                        </ContextMenuItem>
+                      </ContextMenuContent>
+                    </ContextMenu>
+                  );
+                })}
               </div>
             </details>
           )}
@@ -1193,6 +1213,18 @@ export function InstrumentStage({
           <AlertDialogFooter>
             <AlertDialogCancel>取消</AlertDialogCancel>
             <AlertDialogAction onClick={() => { if (deleteReportId) onDeleteReport(deleteReportId); setDeleteReportId(null); }}>确认删除</AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+      <AlertDialog open={deleteDiagnosisId != null} onOpenChange={(open) => { if (!open) setDeleteDiagnosisId(null); }}>
+        <AlertDialogContent className="max-w-sm">
+          <AlertDialogHeader>
+            <AlertDialogTitle>删除诊股记录？</AlertDialogTitle>
+            <AlertDialogDescription>将删除本次 AI 诊股结论和分析详情，此操作不可恢复。</AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>取消</AlertDialogCancel>
+            <AlertDialogAction onClick={() => { if (deleteDiagnosisId) onDeleteDiagnosis(deleteDiagnosisId); setDeleteDiagnosisId(null); }}>确认删除</AlertDialogAction>
           </AlertDialogFooter>
         </AlertDialogContent>
       </AlertDialog>

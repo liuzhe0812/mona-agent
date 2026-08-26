@@ -15,6 +15,7 @@ import {
   fetchStockResearchContext,
   fetchStockDiagnoses,
   fetchStockDiagnosis,
+  deleteStockDiagnosis,
   createStockDiagnosis,
   cancelStockDiagnosis,
   retryStockDiagnosis,
@@ -100,16 +101,19 @@ describe("stock-api services routes", () => {
       .mockResolvedValueOnce(jsonResponse(run))
       .mockResolvedValueOnce(jsonResponse(run))
       .mockResolvedValueOnce(jsonResponse(run))
-      .mockResolvedValueOnce(jsonResponse(run));
+      .mockResolvedValueOnce(jsonResponse(run))
+      .mockResolvedValueOnce(jsonResponse({ deleted: run.diagnosisId }));
     await expect(fetchStockDiagnoses("XSHG:600519")).resolves.toEqual([run]);
     await expect(fetchStockDiagnosis(run.diagnosisId)).resolves.toEqual(run);
     await createStockDiagnosis("XSHG:600519", { execute: false });
     await cancelStockDiagnosis(run.diagnosisId);
     await retryStockDiagnosis(run.diagnosisId);
+    await deleteStockDiagnosis(run.diagnosisId);
     expect(httpFetch).toHaveBeenNthCalledWith(1, "http://services/api/stock/diagnosis?instrumentId=XSHG%3A600519", expect.objectContaining({ method: "GET" }));
     expect(httpFetch).toHaveBeenNthCalledWith(3, "http://services/api/stock/diagnosis", expect.objectContaining({ method: "POST", body: expect.stringContaining('"execute":false') }));
     expect(httpFetch).toHaveBeenNthCalledWith(4, "http://services/api/stock/diagnosis/diagnosis_12345678/cancel", expect.objectContaining({ method: "POST" }));
     expect(httpFetch).toHaveBeenNthCalledWith(5, "http://services/api/stock/diagnosis/diagnosis_12345678/retry", expect.objectContaining({ method: "POST" }));
+    expect(httpFetch).toHaveBeenNthCalledWith(6, "http://services/api/stock/diagnosis/diagnosis_12345678", expect.objectContaining({ method: "DELETE" }));
   });
 
   it("reads and saves the local risk profile through the real endpoints", async () => {

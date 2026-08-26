@@ -354,7 +354,7 @@ describe("DecisionRadar", () => {
     const panel = screen.getByTestId("decision-radar-cycle-output");
     expect(panel).toHaveTextContent("短线看涨");
     expect(panel).toHaveTextContent("价格达到 37.20 元后，等待回踩 35.80–36.20 元参与");
-    expect(panel).toHaveTextContent("四步决策依据");
+    expect(panel).toHaveTextContent("四层分析");
     expect(panel).toHaveTextContent("参考买入");
     expect(panel).toHaveTextContent("第一止盈39.80 元 · 减仓 1/3");
     expect(panel).toHaveTextContent("第二止盈41.20 元 · 再减仓 1/3");
@@ -412,7 +412,7 @@ describe("DecisionRadar", () => {
     expect(panel).toHaveTextContent("参考买入36.80–37.20 元");
     expect(panel).toHaveTextContent("第一止盈39.80 元");
     expect(panel).toHaveTextContent("第二止盈41.20 元");
-    expect(panel).toHaveTextContent("四步决策依据");
+    expect(panel).toHaveTextContent("四层分析");
     expect(panel).toHaveTextContent("量化验证");
     expect(panel).not.toHaveTextContent(/decisionMode|reference_plan|executionStatus|source_ids|Agent|LLM/);
     expect(screen.getByRole("tab", { name: "中线" })).toBeInTheDocument();

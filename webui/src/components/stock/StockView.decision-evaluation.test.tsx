@@ -22,6 +22,8 @@ const setStockWatchlistFocus = vi.fn();
 const reorderStockWatchlist = vi.fn();
 const deleteStockReport = vi.fn();
 const preflightStockResearch = vi.fn();
+const fetchSettings = vi.fn();
+const updateStockSettings = vi.fn();
 
 vi.mock("@/lib/stock-api", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@/lib/stock-api")>();
@@ -45,6 +47,15 @@ vi.mock("@/lib/stock-api", async (importOriginal) => {
     reorderStockWatchlist: (...args: unknown[]) => reorderStockWatchlist(...args),
     deleteStockReport: (...args: unknown[]) => deleteStockReport(...args),
     preflightStockResearch: (...args: unknown[]) => preflightStockResearch(...args),
+  };
+});
+
+vi.mock("@/lib/api", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@/lib/api")>();
+  return {
+    ...actual,
+    fetchSettings: (...args: unknown[]) => fetchSettings(...args),
+    updateStockSettings: (...args: unknown[]) => updateStockSettings(...args),
   };
 });
 
@@ -148,6 +159,22 @@ beforeEach(() => {
   fetchStockIntraday.mockResolvedValue(null);
   openStockIntradayStream.mockResolvedValue({ close: vi.fn() });
   preflightStockResearch.mockResolvedValue({ contextId: "ctx_test" });
+  fetchSettings.mockResolvedValue({
+    stock: {
+      quote_refresh_sec: 30,
+      auto_review_enabled: false,
+      review_time: "15:30",
+      review_scope: "focus",
+    },
+  });
+  updateStockSettings.mockResolvedValue({
+    stock: {
+      quote_refresh_sec: 30,
+      auto_review_enabled: false,
+      review_time: "15:30",
+      review_scope: "focus",
+    },
+  });
 });
 
 describe("StockView decision evaluation integration", () => {

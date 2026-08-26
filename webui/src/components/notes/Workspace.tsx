@@ -250,7 +250,7 @@ function PaneLeafView({
       className="flex min-w-0 min-h-0 flex-col flex-1 bg-editor-surface"
       onMouseDownCapture={onActivate}
     >
-      <div className="flex shrink-0 items-stretch border-b border-border/55">
+      <div className="flex shrink-0 items-stretch border-b border-border/55 bg-card">
         <div className="flex h-8 min-w-0 flex-1 items-stretch overflow-x-auto bg-card scrollbar-thin">
           <NoteTabBar
             tabs={tabs}

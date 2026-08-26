@@ -18,6 +18,7 @@ import { SessionSearchDialog } from "@/components/SessionSearchDialog";
 import { QuickAskWindow } from "@/components/quick/QuickAskWindow";
 import { SettingsView } from "@/components/settings/SettingsView";
 import { ThreadShell } from "@/components/thread/ThreadShell";
+import { StartupScene } from "@/components/StartupScene";
 import { Sheet, SheetContent, SheetTitle } from "@/components/ui/sheet";
 import {
   Dialog,
@@ -58,7 +59,7 @@ import {
   resetGatewayBaseUrl,
   saveSecret,
 } from "@/lib/bootstrap";
-import { fetchSettings, removeProject, resetApiBase } from "@/lib/api";
+import { removeProject, resetApiBase } from "@/lib/api";
 import { browserHideTabsExcept } from "@/lib/browser-ipc";
 import { deriveTitle } from "@/lib/format";
 import { MonaClient } from "@/lib/mona-client";
@@ -668,15 +669,6 @@ function Shell({
   const [updateAvailable, setUpdateAvailable] = useState<UpdateCheckResult | null>(null);
   const [updateDialogTrigger, setUpdateDialogTrigger] = useState(0);
   const [sidebarModules, setSidebarModules] = useState<SidebarModuleConfig[] | null>(null);
-  // 股票模块开关（StockConfig.enabled）：null=未加载；关闭时隐藏导航入口与 StockView
-  const [stockEnabled, setStockEnabled] = useState<boolean | null>(null);
-  // 行情轮询间隔（StockConfig.quote_refresh_sec，秒）：null=未加载用默认 30s
-  const [stockQuoteRefreshSec, setStockQuoteRefreshSec] = useState<number | null>(null);
-  // 自动复盘配置（与股票模块开关独立）
-  const [stockAutoReviewEnabled, setStockAutoReviewEnabled] = useState(false);
-  // 复盘时间/范围（StockConfig.review_time/review_scope，股票工作台 Hero 展示）
-  const [stockReviewTime, setStockReviewTime] = useState<string | null>(null);
-  const [stockReviewScope, setStockReviewScope] = useState<"all" | "focus" | null>(null);
   // 复盘通知点击聚焦的 runId（T20）：StockView 消费后清空
   const [stockFocusRunId, setStockFocusRunId] = useState<string | null>(null);
   // 私聊确认卡带入的标的（T22d）：StockView 自选命中后自动启动深度投研
@@ -1436,66 +1428,6 @@ function Shell({
     }).catch(() => {});
   }, []);
 
-  // 股票模块开关 + 行情轮询间隔：启动时拉取一次，并订阅设置页保存后的变更事件
-  useEffect(() => {
-    if (!token) return;
-    let cancelled = false;
-    fetchSettings(token)
-      .then((payload) => {
-        if (cancelled) return;
-        setStockEnabled(Boolean(payload.stock?.enabled));
-        if (typeof payload.stock?.quote_refresh_sec === "number") {
-          setStockQuoteRefreshSec(payload.stock.quote_refresh_sec);
-        }
-        setStockAutoReviewEnabled(Boolean(payload.stock?.auto_review_enabled));
-        if (typeof payload.stock?.review_time === "string") {
-          setStockReviewTime(payload.stock.review_time);
-        }
-        if (payload.stock?.review_scope === "all" || payload.stock?.review_scope === "focus") {
-          setStockReviewScope(payload.stock.review_scope);
-        }
-      })
-      .catch(() => {
-        if (!cancelled) setStockEnabled(false);
-      });
-    const onStockSettingsChanged = (
-      event: Event,
-    ) => {
-      const detail = (
-        event as CustomEvent<{
-          enabled?: boolean;
-          quoteRefreshSec?: number;
-          reviewTime?: string;
-          reviewScope?: "all" | "focus";
-          autoReviewEnabled?: boolean;
-        }>
-      ).detail;
-      setStockEnabled(Boolean(detail?.enabled));
-      if (typeof detail?.quoteRefreshSec === "number") {
-        setStockQuoteRefreshSec(detail.quoteRefreshSec);
-      }
-      if (typeof detail?.reviewTime === "string") {
-        setStockReviewTime(detail.reviewTime);
-      }
-      if (detail?.reviewScope === "all" || detail?.reviewScope === "focus") {
-        setStockReviewScope(detail.reviewScope);
-      }
-      if (typeof detail?.autoReviewEnabled === "boolean") {
-        setStockAutoReviewEnabled(detail.autoReviewEnabled);
-      }
-    };
-    window.addEventListener("mona-stock-settings-changed", onStockSettingsChanged);
-    return () => {
-      cancelled = true;
-      window.removeEventListener("mona-stock-settings-changed", onStockSettingsChanged);
-    };
-  }, [token]);
-
-  // 模块被关闭后仍停留在 stock 视图时（如残留的 default_view）回退到会话
-  useEffect(() => {
-    if (stockEnabled === false && view === "stock") setView("chat");
-  }, [stockEnabled, view]);
-
   // 私聊确认卡（T22d）：跳转股票工作台并自动启动单股深度投研
   useEffect(() => {
     const onOpenStockEvent = (event: Event) => {
@@ -1888,6 +1820,8 @@ function Shell({
           />
         )}
 
+        {runtimeStatus === "connecting" ? <StartupScene /> : null}
+
         {/* 活动走马灯（关闭后不再显示） */}
         {promoVisible && (
           <>
@@ -1935,7 +1869,6 @@ function Shell({
                 messageAttentionCount={messageAttentionCount}
                 runningChatIds={runningChatIdList}
                 modules={sidebarModules ?? undefined}
-                moduleAvailability={{ stock: stockEnabled === true }}
                 theme={theme}
                 onToggleTheme={toggle}
               />
@@ -2128,7 +2061,7 @@ function Shell({
                   </Suspense>
                 </div>
               )}
-              {view === "stock" && stockEnabled === true && (
+              {view === "stock" && (
                 <div className={cn("absolute inset-0 flex flex-col", isBrowserTabActive && "hidden")}>
                   <Suspense fallback={<ModuleLoading title="正在打开股票工作台" />}>
                     <StockView
@@ -2136,15 +2069,6 @@ function Shell({
                       onConsumeFocusRun={() => setStockFocusRunId(null)}
                       autoRunSymbol={stockAutoRunSymbol}
                       onConsumeAutoRun={() => setStockAutoRunSymbol(null)}
-                      quoteRefreshSecMs={
-                        stockQuoteRefreshSec != null
-                          ? stockQuoteRefreshSec * 1000
-                          : undefined
-                      }
-                      reviewTime={stockReviewTime ?? undefined}
-                      reviewScope={stockReviewScope ?? undefined}
-                      autoReviewEnabled={stockAutoReviewEnabled}
-                      onOpenSettings={() => onOpenSettings("stock")}
                     />
                   </Suspense>
                 </div>
@@ -2332,19 +2256,6 @@ function RuntimePlaceholder({
   const { t } = useTranslation();
   const [logOpen, setLogOpen] = useState(false);
 
-  // 连接中：显示简洁的连接提示，避免聊天区空白造成"应用卡住"的错觉
-  if (status === "connecting") {
-    return (
-      <div className="flex h-full w-full items-center justify-center px-4 text-center">
-        <div className="flex flex-col items-center gap-3">
-          <div className="h-2 w-2 animate-pulse rounded-full bg-amber-500" />
-          <p className="text-sm text-muted-foreground">
-            {t("app.loading.connecting")}
-          </p>
-        </div>
-      </div>
-    );
-  }
   if (status !== "error") return null;
   return (
     <div className="flex h-full w-full items-center justify-center px-4 text-center">

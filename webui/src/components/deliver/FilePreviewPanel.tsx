@@ -245,7 +245,17 @@ export function FilePreviewPanel({ files = [] }: { files?: DeliveredFile[] }) {
           room: scope === "room" ? roomId : null,
           artifactId: file.artifact_ref?.id ?? null,
         } as const;
-        const { blob, mime } = await fetchFilePreviewBlob(token, previewParams);
+        let preview;
+        try {
+          preview = await fetchFilePreviewBlob(token, previewParams);
+        } catch (error) {
+          if (!previewParams.artifactId) throw error;
+          preview = await fetchFilePreviewBlob(token, {
+            ...previewParams,
+            artifactId: null,
+          });
+        }
+        const { blob, mime } = preview;
         if (cancelled) return;
         // HTML / Markdown / 文本走 textSource；其他二进制走 Blob URL
         if (isHtml(file)) {

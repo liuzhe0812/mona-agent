@@ -938,7 +938,7 @@ describe("ResearchDecisionView", () => {
       quant_factors: { short_term: { status: "available", validation_status: "descriptive", factor_score: 0.72, market_percentile: 0.8, industry_percentile: 0.6, sample_count: 35, factors: [{ name: "momentum20", value: 8, direction: "positive", contribution: 0.12, percentile: 0.8 }, { name: "operating_cashflow", value: 0.66, direction: "negative", contribution: 0.08, percentile: 0.7 }] }, medium_term: { status: "available", validation_status: "descriptive", factor_score: 0.72, market_percentile: 0.8, industry_percentile: 0.6, sample_count: 35, factors: [] }, long_term: { status: "unavailable", validation_status: "unavailable", sample_count: 0, factors: [] } },
       technical_execution: { status: "unavailable" },
       horizon_decisions: { short_term: horizon("positive"), medium_term: horizon("neutral"), long_term: horizon("negative") },
-      decision_radar: { short_term: horizon("positive"), medium_term: horizon("neutral"), long_term: horizon("negative"), deterministic: true, basis_rows: [
+      decision_radar: { short_term: horizon("positive"), medium_term: horizon("neutral"), long_term: horizon("negative"), current_decision: { ...horizon("negative"), action: "avoid", not_holding_action: "avoid", holding_action: "exit" }, deterministic: true, basis_rows: [
         { key: "fundamental", label: "基本面", stance: "neutral", stance_label: "中性", summary: "盈利修复，现金流偏弱" },
         { key: "quant", label: "量化验证", stance: "negative", stance_label: "偏空", summary: "估值偏高，短期动量走弱" },
         { key: "sentiment", label: "情绪与预期", stance: "cautious", stance_label: "谨慎", summary: "暂无反转信号，不提高仓位" },
@@ -948,7 +948,10 @@ describe("ResearchDecisionView", () => {
     } as StockDiagnosisV1;
     render(<ResearchDecisionView report={report} />);
     expect(screen.getByTestId("ai-diagnosis-result")).toHaveTextContent("AI诊股结论");
-    expect(screen.getByTestId("diagnosis-four-step")).toHaveTextContent("四步决策依据");
+    expect(screen.getByTestId("diagnosis-horizon-conclusions")).toHaveTextContent("暂不买入 / 退出");
+    expect(screen.getByTestId("diagnosis-horizon-conclusions")).not.toHaveTextContent("看跌 · 回避");
+    expect(screen.getByTestId("diagnosis-plan-当前综合建议")).toHaveTextContent("当前不建议买入");
+    expect(screen.getByTestId("diagnosis-four-step")).toHaveTextContent("四层分析");
     expect(screen.getByTestId("diagnosis-four-step")).toHaveTextContent("盈利修复，现金流偏弱");
     expect(screen.getByTestId("diagnosis-four-step")).toHaveTextContent("估值偏高，短期动量走弱");
     expect(screen.getByTestId("diagnosis-quant-factors")).toHaveTextContent("第80百分位");
@@ -963,7 +966,9 @@ describe("ResearchDecisionView", () => {
     expect(within(fundamentalFactors).getByText("偏弱")).toHaveClass("text-stock-down");
     expect(within(fundamentalFactors).getByText("中性")).toHaveClass("text-muted-foreground");
     expect(screen.getByTestId("diagnosis-horizon-conclusions")).toHaveTextContent("现金流质量改善");
-    expect(screen.getByTestId("diagnosis-horizon-conclusions")).toHaveTextContent("当前结论");
+    expect(screen.getByTestId("diagnosis-horizon-conclusions")).toHaveTextContent("当前综合建议");
+    expect(screen.getByTestId("diagnosis-analysis-details")).not.toHaveAttribute("open");
+    expect(screen.getByTestId("diagnosis-horizon-conclusions").compareDocumentPosition(screen.getByTestId("diagnosis-four-step")) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
     expect(within(screen.getByTestId("diagnosis-horizon-conclusions")).queryByRole("heading", { name: "中线" })).not.toBeInTheDocument();
     expect(within(screen.getByTestId("diagnosis-horizon-conclusions")).queryByRole("heading", { name: "长线" })).not.toBeInTheDocument();
     expect(screen.queryByText(/Agent|LLM|semantic_research|source_ids|momentum20|operating_cashflow/)).not.toBeInTheDocument();

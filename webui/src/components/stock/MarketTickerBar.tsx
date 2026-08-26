@@ -1,13 +1,20 @@
+import { useEffect, useState, type ReactNode } from "react";
 import { RefreshCw, Settings2 } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
+import { Input } from "@/components/ui/input";
 import { RightSidebarToggleIcon } from "@/components/notes/RightSidebarToggleIcon";
 import type { StockQuote } from "@/lib/stock-api";
 import { cn } from "@/lib/utils";
 import { DECISION_SUMMARY_PANEL_ID } from "./InstrumentStage";
 
 /** 顶栏（design §12 工作台第一区）：模块标题 + 大盘指数行情条，
- *  让自选股涨跌有参照系；右侧给复盘设置入口与自选数量。 */
+ *  让自选股涨跌有参照系；右侧提供行情刷新与刷新间隔设置。 */
 
 /** 指数 id 固定（quote API 支持指数 secid；搜索过滤不影响行情查询）。 */
 const INDEX_DEFS = [
@@ -32,6 +39,23 @@ function formatPct(v: number | undefined): string {
   return `${v >= 0 ? "+" : ""}${v.toFixed(2)}%`;
 }
 
+function StockSettingRow({
+  title,
+  children,
+}: {
+  title: string;
+  children: ReactNode;
+}) {
+  return (
+    <div className="flex items-center justify-between gap-4 px-2 py-2.5">
+      <div className="min-w-0">
+        <p className="text-ui font-medium">{title}</p>
+      </div>
+      {children}
+    </div>
+  );
+}
+
 interface MarketTickerBarProps {
   quotes: Record<string, StockQuote>;
   watchCount: number;
@@ -40,7 +64,8 @@ interface MarketTickerBarProps {
   /** 行情请求进行中：刷新图标旋转提示。 */
   refreshing: boolean;
   onRefresh: () => void;
-  onOpenSettings: () => void;
+  quoteRefreshSec: number;
+  onQuoteRefreshSecChange: (seconds: number) => Promise<void>;
   /** 决策雷达面板开关与切换（原面板头部按钮上移到顶栏）。 */
   decisionSummaryOpen: boolean;
   onToggleDecisionSummary: () => void;
@@ -53,14 +78,49 @@ export function MarketTickerBar({
   onViewChange,
   refreshing,
   onRefresh,
-  onOpenSettings,
+  quoteRefreshSec,
+  onQuoteRefreshSecChange,
   decisionSummaryOpen,
   onToggleDecisionSummary,
 }: MarketTickerBarProps) {
+  const [settingsOpen, setSettingsOpen] = useState(false);
+  const [draftQuoteRefreshSec, setDraftQuoteRefreshSec] = useState(String(quoteRefreshSec));
+  const [savingQuoteRefresh, setSavingQuoteRefresh] = useState(false);
+  const [quoteRefreshError, setQuoteRefreshError] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (!settingsOpen) {
+      setDraftQuoteRefreshSec(String(quoteRefreshSec));
+      setQuoteRefreshError(null);
+    }
+  }, [quoteRefreshSec, settingsOpen]);
+
   const latestAsOf = INDEX_DEFS.map((def) => quotes[def.id]?.asOf)
     .filter((value): value is string => Boolean(value))
     .sort()
     .at(-1);
+
+  const saveQuoteRefresh = async () => {
+    if (savingQuoteRefresh) return;
+    const seconds = Number(draftQuoteRefreshSec);
+    if (!Number.isInteger(seconds) || seconds < 5 || seconds > 3600) {
+      setQuoteRefreshError("请输入 5–3600 之间的整数秒数");
+      return;
+    }
+    if (seconds === quoteRefreshSec) {
+      setQuoteRefreshError(null);
+      return;
+    }
+    setSavingQuoteRefresh(true);
+    try {
+      await onQuoteRefreshSecChange(seconds);
+      setSettingsOpen(false);
+    } catch (error) {
+      setQuoteRefreshError(error instanceof Error ? error.message : "刷新间隔保存失败");
+    } finally {
+      setSavingQuoteRefresh(false);
+    }
+  };
 
   return (
     <header className="flex h-12 shrink-0 items-center gap-5 border-b bg-background px-4">
@@ -151,15 +211,52 @@ export function MarketTickerBar({
             aria-hidden
           />
         </Button>
-        <Button
-          variant="ghost"
-          size="icon"
-          aria-label="复盘设置"
-          onClick={onOpenSettings}
-          className="h-7 w-7"
-        >
-          <Settings2 className="h-3.5 w-3.5" />
-        </Button>
+        <DropdownMenu open={settingsOpen} onOpenChange={setSettingsOpen}>
+          <DropdownMenuTrigger asChild>
+            <Button
+              variant="ghost"
+              size="icon"
+              aria-label="股票设置"
+              title="股票设置"
+              className="h-7 w-7"
+            >
+              <Settings2 className="h-3.5 w-3.5" />
+            </Button>
+          </DropdownMenuTrigger>
+          <DropdownMenuContent align="end" className="w-72 p-2">
+            <div className="divide-y divide-border/60">
+              <StockSettingRow
+                title="行情刷新间隔"
+              >
+                <div className="flex shrink-0 items-center gap-1.5">
+                  <Input
+                    type="number"
+                    min={5}
+                    max={3600}
+                    step={1}
+                    value={draftQuoteRefreshSec}
+                    onChange={(event) => setDraftQuoteRefreshSec(event.target.value)}
+                    onBlur={() => void saveQuoteRefresh()}
+                    onKeyDown={(event) => {
+                      if (event.key === "Enter") {
+                        event.preventDefault();
+                        void saveQuoteRefresh();
+                      }
+                      event.stopPropagation();
+                    }}
+                    aria-label="行情刷新间隔（秒）"
+                    disabled={savingQuoteRefresh}
+                    className="h-8 w-20 px-2 text-right"
+                  />
+                  <span className="text-caption text-muted-foreground">秒</span>
+                </div>
+              </StockSettingRow>
+              {quoteRefreshError ? (
+                <p role="alert" className="px-2 py-1.5 text-micro text-destructive">{quoteRefreshError}</p>
+              ) : null}
+            </div>
+          </DropdownMenuContent>
+        </DropdownMenu>
         <Button
           variant="ghost"
           size="icon"

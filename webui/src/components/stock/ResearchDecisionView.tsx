@@ -32,7 +32,7 @@ import type {
 import { isStockReportV6Document } from "@/lib/stock-api";
 import { fmtDateTime } from "@/lib/format";
 import { cn } from "@/lib/utils";
-import { evidenceCountLabel, evidenceStrengthLabel, evidenceTextLabel, factorLabel, fieldLabel, missingFieldsLabel, stanceLabel, thesisLabel } from "./labels";
+import { diagnosisActionLabel, diagnosisCurrentActionLabel, evidenceCountLabel, evidenceStrengthLabel, evidenceTextLabel, factorLabel, fieldLabel, missingFieldsLabel, stanceLabel, thesisLabel } from "./labels";
 import { DebateResolutionPanel, ResearchEvidenceDetail, ValuationAnalysis } from "./ResearchEvidenceDetail";
 import { OutcomeCalibrationPanel } from "./OutcomeCalibrationPanel";
 
@@ -103,22 +103,6 @@ function diagnosisClaims(values: unknown): string[] {
   return Array.isArray(values) ? values.map(diagnosisClaim).filter(Boolean).slice(0, 4) : [];
 }
 
-function diagnosisDirection(value: string): string {
-  return value === "positive" ? "看涨" : value === "negative" ? "看跌" : value === "neutral" ? "中性" : "暂无方向";
-}
-
-function diagnosisAction(value: string): string {
-  const labels: Record<string, string> = {
-    conditional_participation: "满足条件再参与",
-    wait: "等待确认",
-    hold: "继续持有",
-    reduce: "减仓",
-    exit: "退出",
-    avoid: "回避",
-  };
-  return labels[value] ?? "暂不参与";
-}
-
 function diagnosisValidation(value: string | undefined): string {
   if (value === "descriptive") return "当前相对强弱（仅描述性排名）";
   if (value === "calibrated") return "历史效果已验证";
@@ -181,7 +165,7 @@ function DiagnosisFactorBlock({ title, snapshot }: { title: string; snapshot: St
     ["short_term", isFundamental ? "综合基本面" : "当前量化验证"],
   ];
   return (
-    <section className="rounded border px-3 py-3" data-testid={`diagnosis-${title === "量化因子" ? "quant" : "fundamental"}-factors`}>
+    <section className="py-3" data-testid={`diagnosis-${title === "量化因子" ? "quant" : "fundamental"}-factors`}>
       <h2 className="text-caption font-semibold">{title}</h2>
       <div className="mt-2 space-y-3">
         {horizons.map(([key, label]) => {
@@ -212,28 +196,34 @@ function DiagnosisDecisionCard({ label, decision }: { label: string; decision: S
   const position = decision.position_plan;
   const reasons = diagnosisClaims(decision.key_reasons);
   const risks = diagnosisClaims(decision.key_risks);
+  const canEnter = decision.not_holding_action === "conditional_participation";
   return (
-    <section className="rounded border px-3 py-3" data-testid={`diagnosis-horizon-${label}`}>
-      <div className="flex items-center justify-between gap-2"><h2 className="text-ui font-semibold">{label}</h2><span className="text-caption">{diagnosisDirection(decision.direction)} · {diagnosisAction(decision.action)}</span></div>
-      <p className="mt-2 text-caption">未持有：{diagnosisAction(decision.not_holding_action)} · 已持有：{diagnosisAction(decision.holding_action)}</p>
-      <div className="mt-2 grid gap-x-4 gap-y-1 text-caption sm:grid-cols-2">
-        <div>因子评分：{diagnosisNumber(decision.factor_score)}</div>
-        <div>市场分位：{diagnosisPercentile(decision.market_percentile)}</div>
-        <div>行业分位：{diagnosisPercentile(decision.industry_percentile)}</div>
-        <div>量化状态：{diagnosisValidation(decision.validation_status)}</div>
+    <section className="rounded-xl bg-muted/30 px-5 py-5" data-testid={`diagnosis-horizon-${label}`}>
+      <p className="text-caption text-muted-foreground">{label}</p>
+      <h2 className="mt-1 text-display-sm font-semibold">{diagnosisCurrentActionLabel(decision)}</h2>
+      <div className="mt-4 grid gap-3 text-ui sm:grid-cols-2">
+        <p><span className="text-muted-foreground">未持有：</span>{diagnosisActionLabel(decision.not_holding_action)}</p>
+        <p><span className="text-muted-foreground">已持有：</span>{diagnosisActionLabel(decision.holding_action)}</p>
       </div>
-      <dl className="mt-3 grid grid-cols-[minmax(0,1fr)_minmax(0,1.3fr)] gap-x-3 gap-y-1 text-caption" data-testid={`diagnosis-plan-${label}`}>
-        <dt className="text-muted-foreground">参考买入</dt><dd>{diagnosisNumber(plan.reference_entry, " 元")}</dd>
-        <dt className="text-muted-foreground">回踩参与</dt><dd>{diagnosisNumber(plan.pullback_entry, " 元")}</dd>
-        <dt className="text-muted-foreground">止损参考</dt><dd>{diagnosisNumber(plan.stop_loss, " 元")}</dd>
-        <dt className="text-muted-foreground">第一止盈</dt><dd>{diagnosisNumber(plan.first_take_profit, " 元")}</dd>
-        <dt className="text-muted-foreground">第二止盈</dt><dd>{diagnosisNumber(plan.second_take_profit, " 元")}</dd>
-        <dt className="text-muted-foreground">参考仓位</dt><dd>{diagnosisNumber(position.reference_position_pct, "%")} / 最大 {diagnosisNumber(position.max_position_pct, "%")}</dd>
-        <dt className="text-muted-foreground">计划边界</dt><dd>{plan.boundaries?.join("；") || "暂无可确认边界"}</dd>
-      </dl>
-      <p className="mt-2 text-micro text-muted-foreground">复评条件：{decision.review_trigger || "暂无可确认的复评条件"}{decision.valid_until ? ` · 有效至 ${decision.valid_until.slice(0, 10)}` : ""}</p>
-      {reasons.length > 0 && <p className="mt-2 text-micro">主要依据：{reasons.join("；")}</p>}
-      {risks.length > 0 && <p className="mt-1 text-micro text-warning">主要风险：{risks.join("；")}</p>}
+      <div className="mt-5 border-t border-border/60 pt-4" data-testid={`diagnosis-plan-${label}`}>
+        <h3 className="text-caption font-semibold">交易计划</h3>
+        <dl className="mt-3 grid grid-cols-[minmax(0,1fr)_minmax(0,1.3fr)] gap-x-4 gap-y-2 text-caption sm:grid-cols-4">
+          <dt className="text-muted-foreground">参考买入</dt><dd>{canEnter ? diagnosisNumber(plan.reference_entry, " 元") : "当前不建议买入"}</dd>
+          <dt className="text-muted-foreground">回踩参与</dt><dd>{canEnter ? diagnosisNumber(plan.pullback_entry, " 元") : "暂不参与"}</dd>
+          <dt className="text-muted-foreground">止损参考</dt><dd>{typeof plan.stop_loss === "number" ? diagnosisNumber(plan.stop_loss, " 元") : "未设置固定止损价"}</dd>
+          <dt className="text-muted-foreground">第一止盈</dt><dd>{typeof plan.first_take_profit === "number" ? diagnosisNumber(plan.first_take_profit, " 元") : "未设置固定止盈价"}</dd>
+          <dt className="text-muted-foreground">第二止盈</dt><dd>{typeof plan.second_take_profit === "number" ? diagnosisNumber(plan.second_take_profit, " 元") : "未设置固定止盈价"}</dd>
+          <dt className="text-muted-foreground">参考仓位</dt><dd>{diagnosisNumber(position.reference_position_pct, "%")} / 最大 {diagnosisNumber(position.max_position_pct, "%")}</dd>
+          <dt className="text-muted-foreground">计划边界</dt><dd className="sm:col-span-3">{plan.boundaries?.join("；") || decision.review_trigger || "价格或基本面变化时复评"}</dd>
+        </dl>
+      </div>
+      <p className="mt-3 text-micro text-muted-foreground">复评条件：{decision.review_trigger || "暂无可确认的复评条件"}{decision.valid_until ? ` · 有效至 ${decision.valid_until.slice(0, 10)}` : ""}</p>
+      {(reasons.length > 0 || risks.length > 0) && (
+        <div className="mt-3 border-t border-border/60 pt-3 text-micro">
+          {reasons.length > 0 && <p>主要依据：{reasons.join("；")}</p>}
+          {risks.length > 0 && <p className="mt-1 text-warning">主要风险：{risks.join("；")}</p>}
+        </div>
+      )}
     </section>
   );
 }
@@ -254,16 +244,23 @@ function DiagnosisDecisionView({ report }: { report: StockDiagnosisV1 }) {
     <div className="space-y-4" data-testid="ai-diagnosis-result">
       <header>
         <h1 className="text-title font-semibold">AI诊股结论</h1>
-        <p className="mt-1 text-caption text-muted-foreground">研究截至：{report.research_cutoff_at || "未提供"} · 行情截至：{report.market_as_of || "未提供"}</p>
+        <p className="mt-1 text-caption text-muted-foreground">研究截至：{fmtDateTime(report.research_cutoff_at) || "未提供"} · 行情截至：{fmtDateTime(report.market_as_of) || "未提供"}</p>
       </header>
-      <section className="rounded border bg-muted/10 px-3 py-3" data-testid="diagnosis-four-step">
-        <h2 className="text-caption font-semibold">四步决策依据</h2>
-        <div className="mt-2 divide-y divide-border/60 text-caption">{basisRows.map((row) => <div key={row.key} className="grid grid-cols-[5.5rem_3.5rem_minmax(0,1fr)] gap-2 py-2"><span>{row.label}</span><span className={cn("font-medium", diagnosisBasisTone(row.stance))}>{row.stance_label}</span><span>{row.summary}</span></div>)}</div>
+      <section className="space-y-2" data-testid="diagnosis-horizon-conclusions">
+        <DiagnosisDecisionCard label="当前综合建议" decision={currentDecision} />
       </section>
-      {semantic.length > 0 && <section className="rounded border px-3 py-3" data-testid="diagnosis-fundamental-research"><h2 className="text-caption font-semibold">基本面语义</h2><ul className="mt-2 space-y-1 text-caption">{semantic.map((value) => <li key={value}>{value}</li>)}</ul></section>}
-      <DiagnosisFactorBlock title="基本面因子" snapshot={report.fundamental_factors} />
-      <DiagnosisFactorBlock title="量化因子" snapshot={report.quant_factors} />
-      <section className="space-y-2" data-testid="diagnosis-horizon-conclusions"><h2 className="text-caption font-semibold">当前结论</h2><DiagnosisDecisionCard label="当前" decision={currentDecision} /></section>
+      <section className="py-2" data-testid="diagnosis-four-step">
+        <h2 className="text-ui font-semibold">四层分析</h2>
+        <div className="mt-2 divide-y divide-border/60 text-caption">{basisRows.map((row) => <div key={row.key} className="grid grid-cols-[5.5rem_3.5rem_minmax(0,1fr)] gap-2 py-2.5"><span>{row.label}</span><span className={cn("font-medium", diagnosisBasisTone(row.stance))}>{row.stance_label}</span><span>{row.summary}</span></div>)}</div>
+      </section>
+      <details className="border-t border-border/60 pt-3" data-testid="diagnosis-analysis-details">
+        <summary className="cursor-pointer text-caption font-medium">查看分析详情</summary>
+        <div className="mt-3 divide-y divide-border/60">
+          {semantic.length > 0 && <section className="pb-3" data-testid="diagnosis-fundamental-research"><h2 className="text-caption font-semibold">公司与行业分析</h2><ul className="mt-2 space-y-1 text-caption text-muted-foreground">{semantic.map((value) => <li key={value}>{value}</li>)}</ul></section>}
+          <DiagnosisFactorBlock title="基本面因子" snapshot={report.fundamental_factors} />
+          <DiagnosisFactorBlock title="量化因子" snapshot={report.quant_factors} />
+        </div>
+      </details>
       <p className="text-micro text-muted-foreground">数据质量：{report.data_quality.status === "complete" || report.data_quality.status === "available" ? "可用" : report.data_quality.status === "degraded" ? "部分可用" : "暂无"} · 结论由确定性规则生成</p>
     </div>
   );

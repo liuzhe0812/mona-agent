@@ -2888,6 +2888,15 @@ export async function fetchStockDiagnosis(
   );
 }
 
+export async function deleteStockDiagnosis(
+  diagnosisId: string,
+): Promise<void> {
+  await servicesFetch<{ deleted: string }>(
+    `/api/stock/diagnosis/${encodeURIComponent(diagnosisId)}`,
+    { method: "DELETE" },
+  );
+}
+
 /** Direct standard-diagnosis API entry point for callers that do not use the
  * hidden workflow. The stock workbench uses the hidden workflow for the
  * cancellable run and reads its StockDiagnosisV1 result through this API. */

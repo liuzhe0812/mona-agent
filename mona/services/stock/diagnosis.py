@@ -18,6 +18,7 @@ import inspect
 import json
 import os
 import re
+import shutil
 import uuid
 from collections.abc import Awaitable, Callable, Mapping
 from datetime import datetime, timedelta, timezone
@@ -974,6 +975,20 @@ class DiagnosisStore:
         values.sort(key=lambda item: str(item.get("updated_at") or item.get("created_at") or ""), reverse=True)
         return values[: max(1, min(int(limit), 200))]
 
+    def delete(self, diagnosis_id: str) -> dict[str, Any]:
+        record = self.require(diagnosis_id)
+        if record.get("status") not in {"succeeded", "failed", "cancelled"}:
+            raise DiagnosisStateError("cannot delete an active diagnosis")
+        directory = self._dir(diagnosis_id).resolve()
+        root = self.root.resolve()
+        if directory.parent != root:
+            raise DiagnosisStorageError("diagnosis directory is outside the storage root")
+        try:
+            shutil.rmtree(directory)
+        except OSError as exc:
+            raise DiagnosisStorageError(f"cannot delete diagnosis {diagnosis_id!r}: {exc}") from exc
+        return record
+
 
 class DiagnosisService:
     """Create, execute and manage standard diagnosis runs."""
@@ -1195,6 +1210,9 @@ class DiagnosisService:
 
     def list(self, **kwargs: Any) -> list[dict[str, Any]]:
         return self.store.list(**kwargs)
+
+    def delete(self, diagnosis_id: str) -> dict[str, Any]:
+        return self.store.delete(diagnosis_id)
 
     def _update(self, record: dict[str, Any], **updates: Any) -> dict[str, Any]:
         updated = dict(record)
