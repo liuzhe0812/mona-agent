@@ -1,6 +1,6 @@
 [project]
 name = "mona-ai"
-version = "1.4.4"
+version = "1.5.0"
 description = "A lightweight personal AI assistant framework"
 readme = { file = "LICENSE", content-type = "text/plain" }
 requires-python = ">=3.11"
