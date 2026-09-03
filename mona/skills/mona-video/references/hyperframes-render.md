@@ -4,14 +4,15 @@
 
 - Node.js 22+
 - FFmpeg
-- Chromium(系统 Edge 或 Chrome Headless Shell)
+- 系统安装的 Microsoft Edge 或 Google Chrome
 
 ## Browser Detection
 
-`scripts/check_edge.py` 检测系统 Edge/Chrome:
+`scripts/check_edge.py` 检测系统 Edge/Chrome：
 1. Windows: `C:\Program Files (x86)\Microsoft\Edge\Application\msedge.exe`
 2. macOS: `/Applications/Google Chrome.app/Contents/MacOS/Google Chrome`
-3. Fallback: `<userData>/runtime/chrome-headless-shell/`
+
+Mona 不再单独下载 Chrome；缺少系统浏览器时，视频导出会提示用户先安装 Edge 或 Chrome。
 
 ## Render Command
 

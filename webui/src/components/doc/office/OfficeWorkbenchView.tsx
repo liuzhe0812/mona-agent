@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { AlertCircle, CheckCircle2, FileText, Loader2, Upload } from "lucide-react";
+import { FileText, Loader2, Upload } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -14,11 +14,6 @@ import {
   readFileAsDataUrl,
   useDocDrop,
 } from "@/components/doc/office/useDocDrop";
-import {
-  downloadOfficeRuntime,
-  fetchOfficeHealth,
-  type OfficeHealthStatus,
-} from "@/lib/api";
 import type { DeliveredFile } from "@/lib/types";
 
 interface UploadedDoc {
@@ -38,48 +33,13 @@ function formatSize(bytes?: number): string {
 const DOC_ACCEPT_ATTR = DOC_EXTENSIONS.join(",");
 
 export function OfficeWorkbenchView() {
-  const { client, token } = useClient();
+  const { client } = useClient();
   const [chatId, setChatId] = useState<string | null>(null);
   const [chatIdCreating, setChatIdCreating] = useState(false);
   const [docs, setDocs] = useState<UploadedDoc[]>([]);
   const [uploading, setUploading] = useState(false);
   const [uploadError, setUploadError] = useState<string | null>(null);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
-
-  // OfficeCLI runtime health (for AI-driven document modification).
-  const [officeHealth, setOfficeHealth] = useState<OfficeHealthStatus | null>(null);
-  const [officeInstalling, setOfficeInstalling] = useState(false);
-
-  useEffect(() => {
-    let cancelled = false;
-    void (async () => {
-      try {
-        const status = await fetchOfficeHealth(token);
-        if (!cancelled) setOfficeHealth(status);
-      } catch {
-        // Silently ignore — health check is best-effort. The agent will
-        // surface a clear error if OfficeCLI is needed but missing.
-      }
-    })();
-    return () => { cancelled = true; };
-  }, [token]);
-
-  const installOfficeRuntime = useCallback(async () => {
-    setOfficeInstalling(true);
-    try {
-      const result = await downloadOfficeRuntime(token);
-      if (result.ok) {
-        const status = await fetchOfficeHealth(token);
-        setOfficeHealth(status);
-      } else {
-        setUploadError(result.error ?? "OfficeCLI 安装失败");
-      }
-    } catch (err) {
-      setUploadError(err instanceof Error ? err.message : "OfficeCLI 安装失败");
-    } finally {
-      setOfficeInstalling(false);
-    }
-  }, [token]);
 
   // Ensure a chat session exists before the user can upload or send.
   const ensureChat = useCallback(async (): Promise<string | null> => {
@@ -216,9 +176,6 @@ export function OfficeWorkbenchView() {
           uploadError={uploadError}
           isDragging={isDragging}
           onPick={() => fileInputRef.current?.click()}
-          officeHealth={officeHealth}
-          officeInstalling={officeInstalling}
-          onInstallOffice={installOfficeRuntime}
         />
       ) : (
         <div className="flex min-h-0 flex-1 flex-col">
@@ -309,9 +266,6 @@ interface OfficeWorkbenchEmptyProps {
   uploadError: string | null;
   isDragging: boolean;
   onPick: () => void;
-  officeHealth: OfficeHealthStatus | null;
-  officeInstalling: boolean;
-  onInstallOffice: () => void;
 }
 
 function OfficeWorkbenchEmpty({
@@ -319,9 +273,6 @@ function OfficeWorkbenchEmpty({
   uploadError,
   isDragging,
   onPick,
-  officeHealth,
-  officeInstalling,
-  onInstallOffice,
 }: OfficeWorkbenchEmptyProps) {
   const examples = useMemo(
     () => [
@@ -387,70 +338,7 @@ function OfficeWorkbenchEmpty({
           </div>
         </div>
 
-        {/* OfficeCLI dependency detection (lazy check on first visit). */}
-        <div className="mt-3">
-          <OfficeRuntimeBanner
-            health={officeHealth}
-            installing={officeInstalling}
-            onInstall={onInstallOffice}
-          />
-        </div>
       </div>
-    </div>
-  );
-}
-
-function OfficeRuntimeBanner({
-  health,
-  installing,
-  onInstall,
-}: {
-  health: OfficeHealthStatus | null;
-  installing: boolean;
-  onInstall: () => void;
-}) {
-  // Still loading — show a subtle placeholder to reserve space.
-  if (health === null) {
-    return (
-      <div className="flex items-center gap-1.5 rounded-md border border-border/40 bg-muted/20 px-2.5 py-1.5 text-caption text-muted-foreground">
-        <Loader2 className="h-3 w-3 animate-spin" />
-        <span>正在检测文档编辑依赖...</span>
-      </div>
-    );
-  }
-  // Installed and working — keep quiet.
-  if (health.ok) return null;
-  // Platform not supported — show a read-only warning.
-  if (!health.supported) {
-    return (
-      <div className="flex items-center gap-1.5 rounded-md border border-border/40 bg-muted/30 px-2.5 py-1.5 text-caption text-muted-foreground">
-        <AlertCircle className="h-3 w-3 shrink-0" />
-        <span>AI 修改文档功能不支持当前系统，仍可拖入文档提问</span>
-      </div>
-    );
-  }
-  // Not installed — offer one-click install.
-  return (
-    <div className="flex items-center justify-between gap-2 rounded-md border border-primary/20 bg-primary/5 px-2.5 py-1.5">
-      <div className="flex items-center gap-1.5 text-caption text-foreground/70">
-        <AlertCircle className="h-3 w-3 shrink-0 text-primary" />
-        <span>安装 OfficeCLI 后可让 AI 直接修改 Word/Excel/PPT 文档</span>
-      </div>
-      <Button
-        type="button"
-        variant="outline"
-        size="sm"
-        className="h-6 gap-1 rounded-md px-2 text-caption"
-        disabled={installing}
-        onClick={onInstall}
-      >
-        {installing ? (
-          <Loader2 className="h-3 w-3 animate-spin" />
-        ) : (
-          <CheckCircle2 className="h-3 w-3" />
-        )}
-        {installing ? "安装中..." : "安装"}
-      </Button>
     </div>
   );
 }

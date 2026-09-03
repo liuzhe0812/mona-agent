@@ -726,7 +726,6 @@ async def _run_partner_dream(
     *,
     agent: AgentLoop,
     dream_cfg: Any,
-    disabled_skills: list[str],
 ) -> None:
     """Run a partner agent's private Dream for a ``dream-<agent_id>`` job.
 
@@ -752,6 +751,9 @@ async def _run_partner_dream(
         model = manifest_model
     else:
         model = dream_cfg.model_override or agent.model
+    from mona.agent.user_config import load_agent_user_config
+
+    disabled_skills = list(load_agent_user_config(partner_id).disabled_skills)
     partner_dream = Dream(
         store=MemoryStore(agent.workspace, agent_id=partner_id),
         provider=agent.provider,
@@ -981,6 +983,7 @@ def _run_gateway(
     open_browser_url: str | None = None,
 ) -> None:
     """Shared gateway runtime; ``open_browser_url`` opens a tab once channels are up."""
+    os.environ["MONA_PROCESS_ROLE"] = "gateway"
     from mona.agent.tools.cron import CronTool
     from mona.agent.tools.message import MessageTool
     from mona.bus.queue import MessageBus
@@ -1129,9 +1132,6 @@ def _run_gateway(
                         job,
                         agent=agent,
                         dream_cfg=dream_cfg,
-                        disabled_skills=list(
-                            config.agents.defaults.disabled_skills or []
-                        ),
                     )
                 logger.info("Dream cron job '{}' completed", job.name)
             except Exception:
@@ -1379,7 +1379,10 @@ def _run_gateway(
     agent.dream.skill_prune_enabled = dream_cfg.skill_prune_enabled
     agent.dream.archive_after_days = dream_cfg.archive_after_days
     agent.dream.max_active_user_skills = dream_cfg.max_active_user_skills
-    agent.dream.disabled_skills = list(config.agents.defaults.disabled_skills or [])
+    from mona.agent.partners import MONA_AGENT_ID
+    from mona.agent.user_config import load_agent_user_config
+
+    agent.dream.disabled_skills = list(load_agent_user_config(MONA_AGENT_ID).disabled_skills)
     from mona.cron.types import CronJob, CronPayload
     cron.register_system_job(CronJob(
         id="dream",
@@ -1393,7 +1396,7 @@ def _run_gateway(
     # history.jsonl is consolidated into its own MEMORY.md on the same
     # schedule (multi-agent phase 3). Idempotent on restart like Mona's job;
     # agents installed later pick up their job at the next gateway start.
-    from mona.agent.partners import MONA_AGENT_ID, AgentRegistry
+    from mona.agent.partners import AgentRegistry
     partner_dream_ids: list[str] = []
     for definition in AgentRegistry().list_agents():
         if definition.id == MONA_AGENT_ID:
@@ -1526,6 +1529,7 @@ def _run_services(config: Config, *, port: int | None = None) -> None:
     AI tasks execute by calling the gateway's /v1/chat/completions as a
     regular API client — no private protocol between the two processes.
     """
+    os.environ["MONA_PROCESS_ROLE"] = "services"
     import httpx
 
     from mona.cron.service import CronService
@@ -2297,6 +2301,8 @@ def doctor():
         ("lark_oapi", "Feishu/Lark channel"),
         ("lark_oapi.api.im.v1", "Feishu/Lark channel — IM API"),
         ("fitz", "PDF reading (PyMuPDF)"),
+        ("trafilatura", "Local web page extraction"),
+        ("curl_cffi", "Browser-like local web fetching"),
         ("boto3", "AWS Bedrock provider"),
         ("botocore", "AWS Bedrock provider"),
     ]

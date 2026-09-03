@@ -150,15 +150,16 @@
     },
     "nav": {
       "general": "通用",
+      "resources": "功能资源",
       "byok": "BYOK",
-      "overview": "概览",
+      "billing": "余额与充值",
+      "usage": "用量统计",
       "appearance": "外观",
       "models": "模型",
       "providers": "提供商",
       "image": "图片",
       "models_providers": "模型设置",
-      "web": "搜索",
-      "runtime": "运行时"
+      "advanced": "高级"
     },
     "aiModels": {
       "tabsAria": "模型设置类型",
@@ -166,6 +167,66 @@
       "image": "图片模型",
       "video": "视频模型",
       "tts": "语音合成"
+    },
+    "shortcuts": {
+      "messageInput": "消息输入",
+      "sendMessage": "发送消息",
+      "sendMessageHelp": "选择在消息输入框中用于发送的按键。",
+      "enterToSend": "Enter",
+      "ctrlEnterToSend": "Ctrl + Enter"
+    },
+    "automation": {
+      "title": "自动化能力",
+      "loading": "正在读取自动化能力状态…",
+      "loadError": "自动化能力状态暂时不可用",
+      "updateError": "无法更新自动化设置",
+      "cancelError": "无法取消电脑操作自动化驱动下载",
+      "permissionError": "无法完成系统授权",
+      "computerError": "电脑操作自动化暂时不可用",
+      "browser": {
+        "title": "浏览器自动操作",
+        "description": "允许 Mona 在内置浏览器中读取页面并执行点击、输入等操作。",
+        "toggle": "浏览器自动操作"
+      },
+      "computer": {
+        "title": "电脑操作自动化",
+        "description": "允许 Mona 观察并操作电脑上的其他应用。首次启用需要下载驱动并完成系统授权。",
+        "driverSize": "（驱动约 {{size}}）",
+        "toggle": "电脑操作自动化",
+        "downloading": "正在下载电脑操作自动化驱动",
+        "progress": "电脑操作自动化驱动下载进度"
+      },
+      "cancel": "取消下载",
+      "unsupported": {
+        "title": "当前系统不支持电脑操作自动化",
+        "description": "此设备暂时无法使用通用电脑操作。"
+      },
+      "degraded": {
+        "title": "部分操作能力受限",
+        "description": "基础电脑操作仍可使用；部分依赖辅助功能的精细操作暂时不可用。"
+      },
+      "authorization": {
+        "title": "需要系统授权",
+        "description": "请在系统设置中允许屏幕录制和辅助功能权限，然后点击授权。"
+      },
+      "authorize": "授权",
+      "error": {
+        "title": "电脑操作自动化异常"
+      },
+      "retry": "重试",
+      "notInstalled": {
+        "title": "电脑操作自动化尚未安装",
+        "description": "首次启用需要下载约 {{size}}。"
+      },
+      "download": "下载驱动",
+      "states": {
+        "disabled": "已关闭",
+        "notInstalled": "未安装",
+        "downloading": "下载中",
+        "pendingAuthorization": "待授权",
+        "available": "可用",
+        "error": "异常"
+      }
     },
     "sections": {
       "interface": "界面",
@@ -176,9 +237,7 @@
       "imageGeneration": "图片生成",
       "imageDefaults": "默认值",
       "webSearch": "网页搜索",
-      "webBehavior": "行为",
-      "identity": "身份",
-      "safety": "安全",
+      "runtimeParameters": "运行参数",
       "capabilities": "能力"
     },
     "rows": {
@@ -187,10 +246,6 @@
       "provider": "提供商",
       "model": "模型",
       "restart": "重启 mona",
-      "configPath": "配置路径",
-      "gateway": "网关",
-      "restartState": "重启状态",
-      "pendingChanges": "待处理更改",
       "density": "密度",
       "activityMode": "活动细节",
       "codeWrap": "代码换行",
@@ -206,18 +261,9 @@
       "defaultImageSize": "默认尺寸",
       "maxImagesPerTurn": "每轮最多图片数",
       "imageSaveDir": "保存目录",
-      "botName": "Bot 名称",
-      "botIcon": "Bot 图标",
       "timezone": "时区",
       "toolHintMaxLength": "工具提示长度",
       "workspacePath": "工作区路径",
-      "heartbeat": "Heartbeat",
-      "dream": "Dream",
-      "unifiedSession": "统一会话",
-      "restrictWorkspace": "限制在工作区内",
-      "execTool": "Exec 工具",
-      "execSandbox": "Exec 沙箱",
-      "ssrfWhitelist": "SSRF 白名单",
       "mcpServers": "MCP 服务器",
       "pathAppend": "PATH 追加",
       "configurationDocs": "配置文档"
@@ -227,7 +273,6 @@
       "language": "选择 WebUI 使用的语言。",
       "provider": "选择新模型请求使用的服务商。",
       "model": "设置 mona 默认使用的模型名称。",
-      "configPath": "当前网关正在使用的配置文件。",
       "density": "仅保存在当前浏览器。",
       "activityMode": "选择默认显示多少 agent 活动细节。",
       "codeWrap": "让较小屏幕上的长代码行更易读。",
@@ -241,8 +286,6 @@
       "defaultAspectRatio": "当提示词没有选择比例时使用。",
       "defaultImageSize": "发送给支持该能力的服务商的尺寸提示。",
       "maxImagesPerTurn": "单次 generate_image 请求允许的图片上限。",
-      "botName": "显示在使用 bot 身份的运行时界面里。",
-      "botIcon": "显示在 bot 名称旁的短 emoji 或文本。",
       "timezone": "运行时上下文和计划任务使用的 IANA 时区。",
       "toolHintMaxLength": "工具进度提示显示的最大字符数。"
     },
@@ -377,12 +420,19 @@
     "hideArchived": "隐藏归档",
     "delete": "删除",
     "newChat": "新建对话",
+    "createConversation": "创建会话",
+    "chooseAgent": "选择 Agent",
+    "searchAgents": "搜索 Agent",
+    "noMatchingAgents": "没有匹配的 Agent",
     "agentSettings": "Agent 设置",
+    "agentSettingsFor": "Agent 设置：{{name}}",
+    "expertLibrary": "召唤专家",
     "createMenu": "创建",
     "newDirect": "新建私聊",
     "newRoom": "新建协作群",
     "groups": {
       "pinned": "置顶",
+      "recent": "最近",
       "conversations": "会话",
       "all": "对话",
       "today": "今天",
@@ -394,6 +444,113 @@
     "moveToProject": "移动到项目…",
     "newProjectChat": "在项目中新建对话",
     "bindProjectFolder": "绑定项目目录…"
+  },
+  "managedRuntime": {
+    "title": "功能资源",
+    "description": "各项功能所需的资源都在这里统一管理，默认在需要时下载。",
+    "refresh": "刷新",
+    "loading": "正在读取功能资源状态…",
+    "loadError": "运行环境状态暂时不可用",
+    "installError": "功能资源准备失败",
+    "cancelError": "无法取消资源下载",
+    "updateError": "无法更新下载设置",
+    "cleanupError": "无法清理功能资源",
+    "installed": "已安装 {{version}}",
+    "installing": "正在下载并校验 · {{percent}}%",
+    "install": "安装",
+    "update": "更新",
+    "repair": "修复",
+    "continue": "继续",
+    "cancel": "取消",
+    "cleanup": "清理缓存",
+    "cleanupLegacy": "清理旧资源",
+    "cleaning": "正在清理…",
+    "autoDownload": "需要时自动下载",
+    "autoDownloadDescription": "首次使用功能时自动准备所需资源",
+    "migration": {
+      "completed": "旧资源已整理完成，可清理约 {{size}}。",
+      "partial": "仍在使用旧资源，下次启动会继续整理。",
+      "repair": "部分功能资源需要修复。"
+    },
+    "ready": "可用",
+    "components": {
+      "python": {
+        "name": "Python",
+        "description": "Agent 共享 Python 工作环境；用户项目仍使用自己的 .venv"
+      },
+    "node": {
+      "name": "Node.js",
+      "description": "Agent 共享 Node.js；用户项目仍使用自己的 node_modules"
+    },
+    "ffmpeg": {
+      "name": "视频处理",
+      "description": "用于视频转码、音频处理和重点帧提取"
+    },
+    "yt_dlp": {
+      "name": "在线视频读取",
+      "description": "用于读取支持的视频页面和媒体内容"
+    },
+    "asr": {
+      "name": "语音转写",
+      "description": "视频没有字幕时，在本机生成文字稿"
+    },
+    "pandoc": {
+      "name": "文档解析",
+      "description": "用于导入 Word、PPT、ODT、RTF 和 EPUB"
+    },
+    "computer_use": {
+      "name": "电脑操作",
+      "description": "用于观察并操作电脑上的其他应用"
+    },
+    "westock": {
+      "name": "股票数据支持",
+      "description": "用于补充股票研究所需的结构化数据"
+    }
+    }
+  },
+  "experts": {
+    "title": "召唤专家",
+    "description": "选择适合当前任务的专家，所需能力会按需准备。",
+    "search": "搜索专家",
+    "loading": "正在获取专家列表…",
+    "empty": "没有匹配的官方专家",
+    "offlineCache": "网络不可用，正在显示最近一次获取的专家列表。",
+    "catalogError": "暂时无法获取专家列表",
+    "unavailable": "暂无可用的官方专家",
+    "custom": "自定义专家",
+    "customDescription": "设置专家的名称、擅长领域和工作要求。",
+    "customAction": "新建",
+    "customTitle": "自定义专家",
+    "customName": "专家名称",
+    "customNamePlaceholder": "例如：合同审阅专家",
+    "customExpertise": "擅长领域",
+    "customExpertisePlaceholder": "简要说明这个专家擅长处理什么",
+    "customInstructions": "工作要求",
+    "customInstructionsPlaceholder": "说明它应该如何分析、回答以及需要遵守的规则",
+    "customCreating": "正在创建…",
+    "customCreateAndSummon": "创建并召唤",
+    "customCreateError": "无法创建自定义专家",
+    "installError": "专家安装失败",
+    "cancelError": "无法取消安装",
+    "retry": "重试",
+    "installed": "已安装",
+    "packageInfo": "专家包 {{size}} · 需准备 {{count}} 项扩展能力",
+    "install": "下载并使用",
+    "update": "更新",
+    "start": "开始对话",
+    "cancel": "取消",
+    "historyNeedsInstall": "此历史会话的专家尚未安装；记忆与个人配置仍然保留。",
+    "reinstall": "重新安装",
+    "stages": {
+      "queued": "等待安装",
+      "catalog": "正在核对版本",
+      "downloading": "正在下载专家包",
+      "verifying": "正在校验文件",
+      "runtime": "正在准备扩展能力",
+      "ready": "安装完成",
+      "failed": "安装失败",
+      "cancelled": "已取消"
+    }
   },
   "deleteConfirm": {
     "title": "删除这个对话？",
@@ -414,6 +571,59 @@
       "members": "成员（{{count}}）"
     },
     "emptyHint": "像群聊一样发送消息开始协作；工作流的执行过程也会显示在这里。",
+    "discussion": {
+      "launch": "发起议题",
+      "title": "发起议题",
+      "description": "让群聊成员围绕同一议题轮流辩论或自由讨论。",
+      "topic": "议题",
+      "topicPlaceholder": "例如：新产品应该优先追求增长，还是先控制成本？",
+      "mode": "讨论方式",
+      "debate": "观点辩论",
+      "debateHint": "为每位 Agent 指定立场，按顺序交锋。",
+      "discussion": "自由讨论",
+      "discussionHint": "成员从各自专业角色出发补充和回应。",
+      "participants": "参与成员",
+      "positionPlaceholder": "为 {{agent}} 指定立场",
+      "rounds": "最大轮次",
+      "roundsHint": "一轮表示所有参与成员各发言一次，最多 99 轮。",
+      "judgeAgent": "裁判 Agent（选填）",
+      "noJudge": "不设置裁判",
+      "summaryAgent": "总结成员",
+      "modelHint": "每位 Agent 使用其设置中绑定的模型。",
+      "styleAria": "{{agent}} 的辩论风格",
+      "styles": {
+        "free": "自由发挥",
+        "sharp_punchline": "犀利金句",
+        "sharp_punchlineHint": "节奏紧凑，直击逻辑漏洞，用短句完成收束。",
+        "value_reframe": "价值重构",
+        "value_reframeHint": "重新解释关键词，将争论带到价值排序和底层动机。",
+        "rational_empathy": "学理共情",
+        "rational_empathyHint": "先结构化论证，再用具体情境和情感完成说服。",
+        "everyday_spicy": "生活麻辣",
+        "everyday_spicyHint": "用日常场景、口语类比和克制幽默推进观点。",
+        "concept_deconstruction": "概念拆解",
+        "concept_deconstructionHint": "定义概念、检查前提，用反例拆解逻辑链。",
+        "simple_analogy": "朴素类比",
+        "simple_analogyHint": "用简单具体的场景解释复杂问题。"
+      },
+      "start": "开始讨论",
+      "cancel": "取消",
+      "end": "结束议题",
+      "ending": "正在结束…",
+      "roundProgress": "第 {{current}} / {{total}} 轮",
+      "userMessage": "发起议题：{{topic}}\n{{mode}} · {{rounds}} 轮 · {{participants}}",
+      "status": {
+        "succeeded": "讨论完成",
+        "failed": "讨论中断",
+        "cancelled": "已提前结束"
+      },
+      "validation": {
+        "topic": "请输入议题。",
+        "participants": "请至少选择两位参与成员。",
+        "positions": "观点辩论需要为每位参与成员指定立场。",
+        "summary": "请选择负责总结的成员。"
+      }
+    },
     "panel": {
       "title": "协作群",
       "partner": "伙伴",
@@ -421,6 +631,16 @@
       "info": "信息",
       "goal": "目标",
       "goalEmpty": "尚未设置群聊目标。",
+      "currentTask": {
+        "title": "当前任务",
+        "empty": "当前没有正在进行的任务。",
+        "workflow": "工作流",
+        "stepProgress": "已完成 {{completed}} / {{total}} 个步骤",
+        "roundProgress": "第 {{current}} / {{total}} 轮",
+        "judging": "裁判正在评估双方表现",
+        "summarizing": "正在整理讨论结论",
+        "currentAgent": "{{agent}} 正在处理"
+      },
       "members": "成员",
       "builtin": "团队内置",
       "artifacts": "产物",
@@ -430,6 +650,9 @@
     },
     "workflow": {
       "new": "新建工作流",
+      "compactEmpty": "添加工作流",
+      "compactActive": "工作流 · {{count}} 个步骤",
+      "compactDraft": "工作流草稿 · {{count}} 个步骤",
       "edit": "编辑",
       "editNewVersion": "编辑新版本",
       "activate": "激活",
@@ -615,6 +838,7 @@
       "goalStateSheetTitle": "目标",
       "send": "发送消息",
       "stop": "停止响应",
+      "stopping": "正在停止",
       "attachImage": "添加图片",
       "attachFile": "添加文件",
       "fileRejected": "仅支持图片和常用文档格式",
@@ -701,6 +925,7 @@
         "deleteAria": "删除消息",
         "empty": "暂存消息将在 agent 完成后发送",
         "full": "队列已满（最多 3 条）",
+        "images": "{{count}} 张图片",
         "injectedBadge": "已作为补充信息发送"
       }
     },

@@ -1,9 +1,13 @@
 ---
 name: mona-office
-description: "AI-driven inspection and modification of Office documents (.docx, .xlsx, .pptx) via the `office` tool backed by OfficeCLI. Use this skill when the user asks to edit, restructure, or analyze an Office document's structure — e.g. 'add a row to the Excel', 'change the heading on slide 2', 'replace all occurrences of X in the Word doc'."
+description: "Legacy OfficeCLI compatibility for already-installed environments. Do not use for new Office editing tasks; Mona no longer distributes OfficeCLI."
 ---
 
 # Mona Office Document Collaboration
+
+> Legacy compatibility only. Do not start new tasks with this Skill and do not ask
+> users to install OfficeCLI. Existing tasks may finish only when the binary is
+> already present.
 
 ## Overview
 

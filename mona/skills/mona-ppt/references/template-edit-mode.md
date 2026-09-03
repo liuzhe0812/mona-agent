@@ -1,5 +1,8 @@
 # Template Edit Mode (officecli Track)
 
+> Retired compatibility reference. Mona no longer distributes OfficeCLI. Do not
+> start new template-edit tasks from this workflow.
+
 Use only when the user provides a `.pptx` template file and asks to build a
 presentation **from that template** (template edit mode). This track edits the
 template directly with `officecli` and preserves its masters, layouts, theme

@@ -2,9 +2,14 @@
 
 from __future__ import annotations
 
+import os
 from pathlib import Path
 
+from loguru import logger
+
 from mona.utils.helpers import ensure_dir
+
+_managed_runtime_roots: dict[tuple[Path, Path], Path] = {}
 
 
 def get_config_path() -> Path:
@@ -14,6 +19,7 @@ def get_config_path() -> Path:
     that importing this module never triggers a circular import during startup.
     """
     from mona.config.loader import get_config_path as _loader_get_config_path
+
     return _loader_get_config_path()
 
 
@@ -25,6 +31,16 @@ def get_data_dir() -> Path:
 def get_runtime_subdir(name: str) -> Path:
     """Return a named runtime subdirectory under the instance data dir."""
     return ensure_dir(get_data_dir() / name)
+
+
+def get_user_profile_dir() -> Path:
+    """Return the user-owned profile store, independent of any Agent.
+
+    Agent memory remains private under ``agents/<agent_id>/memory``.  The
+    distilled user profile is shared platform state and therefore must not use
+    Mona's private memory directory as its canonical location.
+    """
+    return ensure_dir(get_data_dir() / "profile")
 
 
 def get_media_dir(channel: str | None = None) -> Path:
@@ -128,9 +144,22 @@ def get_workflow_runs_dir() -> Path:
 
 def is_default_workspace(workspace: str | Path | None) -> bool:
     """Return whether a workspace resolves to mona's default workspace path."""
-    current = Path(workspace).expanduser() if workspace is not None else Path.home() / ".mona" / "workspace"
+    current = (
+        Path(workspace).expanduser()
+        if workspace is not None
+        else Path.home() / ".mona" / "workspace"
+    )
     default = Path.home() / ".mona" / "workspace"
     return current.resolve(strict=False) == default.resolve(strict=False)
+
+
+def is_agent_workspace(workspace: str | Path | None) -> bool:
+    """Return whether a path belongs to Mona's non-project Agent workspace."""
+    current = Path(workspace).expanduser() if workspace is not None else get_workspace_path()
+    default = get_workspace_path()
+    resolved = current.resolve(strict=False)
+    root = default.resolve(strict=False)
+    return resolved == root or root in resolved.parents
 
 
 def get_cli_history_path() -> Path:
@@ -153,9 +182,68 @@ def get_agents_dir() -> Path:
     return ensure_dir(get_data_dir() / "agents")
 
 
+def get_packages_dir() -> Path:
+    """Return the rebuildable downloaded-package root."""
+    return ensure_dir(get_data_dir() / "packages")
+
+
+def get_agent_packages_dir() -> Path:
+    """Return the versioned downloaded Agent package store."""
+    return ensure_dir(get_packages_dir() / "agents")
+
+
+def get_legacy_managed_runtimes_dir() -> Path:
+    """Return the pre-migration managed runtime root without creating it."""
+    return (get_data_dir() / "runtimes").resolve()
+
+
+def get_target_managed_runtimes_dir() -> Path:
+    """Return the OS-local target for rebuildable managed runtimes without creating it."""
+    if os.name == "nt":
+        local_app_data = Path(
+            os.environ.get("LOCALAPPDATA") or Path.home() / "AppData" / "Local"
+        )
+        return (local_app_data / "Mona" / "runtimes").resolve()
+    return (get_data_dir() / "runtimes").resolve()
+
+
+def get_managed_runtimes_dir() -> Path:
+    """Migrate active components before returning the managed runtime root."""
+    legacy_root = get_legacy_managed_runtimes_dir()
+    target_root = get_target_managed_runtimes_dir()
+    cache_key = (legacy_root, target_root)
+    cached = _managed_runtime_roots.get(cache_key)
+    if cached is not None:
+        return cached
+    if legacy_root == target_root:
+        selected = ensure_dir(target_root)
+        _managed_runtime_roots[cache_key] = selected
+        return selected
+    try:
+        from mona.runtime.migration import migrate_managed_runtime_root
+
+        status = migrate_managed_runtime_root(legacy_root, target_root)
+    except Exception as exc:
+        logger.warning("Managed runtime migration deferred: {}", exc)
+        if not legacy_root.exists():
+            raise
+        _managed_runtime_roots[cache_key] = legacy_root
+        return legacy_root
+    if status["state"] == "partial" and legacy_root.exists():
+        logger.warning(
+            "Managed runtime migration incomplete: {}",
+            "; ".join(str(error) for error in status.get("errors", [])),
+        )
+        _managed_runtime_roots[cache_key] = legacy_root
+        return legacy_root
+    _managed_runtime_roots[cache_key] = target_root
+    return target_root
+
+
 def get_agent_dir(agent_id: str) -> Path:
     """Return the per-agent root directory (~/.mona/agents/<agent_id>/)."""
     from mona.agent.partners import normalize_agent_id
+
     return ensure_dir(get_agents_dir() / normalize_agent_id(agent_id))
 
 
@@ -226,6 +314,7 @@ def get_memory_dir() -> Path:
     directory; the legacy ``~/.mona/memory/`` is migrated on startup.
     """
     from mona.agent.partners import MONA_AGENT_ID
+
     return get_agent_memory_dir(MONA_AGENT_ID)
 
 
@@ -247,6 +336,7 @@ def get_skills_dir() -> Path:
     directory; the legacy ``~/.mona/skills/`` is migrated on startup.
     """
     from mona.agent.partners import MONA_AGENT_ID
+
     return get_agent_skills_dir(MONA_AGENT_ID)
 
 

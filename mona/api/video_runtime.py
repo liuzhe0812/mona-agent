@@ -1,30 +1,21 @@
-"""Video runtime dependency detection and download manager.
+"""Video runtime dependency detection and managed provisioning.
 
-Detects Node.js 22+, FFmpeg, Chrome, and yt-dlp; lazily downloads missing
-components to Mona's per-user resources directory.
-
-Windows is the primary target: Node and FFmpeg ship as zip archives that
-are extracted in place. Chrome is provisioned through
-``npx hyperframes browser ensure`` (requires Node first).
+Detects Node.js 22+, FFmpeg, a system Edge/Chrome browser, and yt-dlp. Missing
+components are requested from Mona's unified runtime manager. Existing legacy
+installs remain readable during migration. Video rendering uses a system browser.
 """
 
 from __future__ import annotations
 
-import asyncio
 import os
 import re
 import shutil
 import subprocess
 import sys
-import zipfile
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
-import aiohttp
-from loguru import logger
 from pydantic import BaseModel
-
-from mona.security.network import validate_url_target
 
 if TYPE_CHECKING:
     from collections.abc import Callable
@@ -37,18 +28,10 @@ RESOURCE_ROOT = Path(
     os.environ.get("LOCALAPPDATA") or (Path.home() / "AppData" / "Local")
 ) / "Mona" / "resources"
 
-# Fixed download sources (Windows builds).
-NODE_URL = "https://nodejs.org/dist/v22.11.0/node-v22.11.0-win-x64.zip"
-FFMPEG_URL = (
-    "https://github.com/BtbN/FFmpeg-Builds/releases/download/latest/"
-    "ffmpeg-master-latest-win64-gpl.zip"
-)
-YTDLP_URL = "https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp.exe"
+FUNASR_MODEL_ASSET = "sensevoice-small-q8.gguf"
+FUNASR_VAD_ASSET = "fsmn-vad.gguf"
 
 NODE_MIN_MAJOR = 22
-
-# Chunk size for streaming downloads.
-_DOWNLOAD_CHUNK = 1 << 16  # 64 KiB
 
 
 class ComponentStatus(BaseModel):
@@ -118,6 +101,38 @@ class VideoRuntime:
                 return exe
         return None
 
+    @staticmethod
+    def _managed_entrypoint(component_id: str, name: str) -> Path | None:
+        try:
+            from mona.config.paths import get_managed_runtimes_dir
+            from mona.runtime.manager import RuntimeComponentStore
+
+            active = RuntimeComponentStore(get_managed_runtimes_dir()).active(component_id)
+        except Exception:
+            return None
+        if active is None:
+            return None
+        manifest, root = active
+        relative = manifest.entrypoints.get(name)
+        if not relative:
+            return None
+        executable = root / Path(relative)
+        return executable if executable.is_file() else None
+
+    @classmethod
+    def _managed_node_exe(cls) -> Path | None:
+        return cls._managed_entrypoint("node-base", "node")
+
+    def _cached_ffprobe_exe(self) -> Path | None:
+        ff_dir = self._component_dir("ffmpeg")
+        if not ff_dir.exists():
+            return None
+        for name in ("ffprobe.exe", "ffprobe"):
+            for executable in ff_dir.rglob(name):
+                if executable.is_file():
+                    return executable
+        return None
+
     def _cached_ytdlp_exe(self) -> Path | None:
         ytdlp_dir = self._component_dir("yt-dlp")
         if not ytdlp_dir.exists():
@@ -128,20 +143,28 @@ class VideoRuntime:
                     return executable
         return None
 
-    def _cached_chrome_exe(self) -> Path | None:
-        ch_dir = self._component_dir("chrome")
-        if not ch_dir.exists():
+    def _cached_asr_exe(self) -> Path | None:
+        asr_dir = self._component_dir("asr")
+        if not asr_dir.exists():
             return None
-        for name in ("chrome.exe", "msedge.exe", "headless_shell.exe", "chrome"):
-            for exe in ch_dir.rglob(name):
-                if exe.is_file():
-                    return exe
+        for name in ("llama-funasr-sensevoice.exe", "llama-funasr-sensevoice"):
+            for executable in asr_dir.rglob(name):
+                if executable.is_file():
+                    return executable
         return None
+
+    def _cached_asr_model(self) -> Path | None:
+        candidate = self._component_dir("asr") / FUNASR_MODEL_ASSET
+        return candidate if candidate.is_file() else None
+
+    def _cached_asr_vad(self) -> Path | None:
+        candidate = self._component_dir("asr") / FUNASR_VAD_ASSET
+        return candidate if candidate.is_file() else None
 
     @staticmethod
     def _system_chrome_candidates() -> list[Path]:
         if sys.platform == "win32":
-            return [
+            candidates = [
                 Path(
                     r"C:\Program Files (x86)\Microsoft\Edge\Application\msedge.exe"
                 ),
@@ -151,6 +174,16 @@ class VideoRuntime:
                     r"C:\Program Files (x86)\Google\Chrome\Application\chrome.exe"
                 ),
             ]
+            local_app_data = os.environ.get("LOCALAPPDATA")
+            if local_app_data:
+                local = Path(local_app_data)
+                candidates.extend(
+                    [
+                        local / "Microsoft" / "Edge" / "Application" / "msedge.exe",
+                        local / "Google" / "Chrome" / "Application" / "chrome.exe",
+                    ]
+                )
+            return candidates
         if sys.platform == "darwin":
             return [
                 Path(
@@ -175,31 +208,73 @@ class VideoRuntime:
         system = shutil.which("node")
         if system:
             return system
+        managed = self._managed_node_exe()
+        if managed:
+            return str(managed)
         cached = self._cached_node_exe()
         return str(cached) if cached else None
 
     def get_ffmpeg_path(self) -> str | None:
         """Return the ffmpeg executable path (system install or cache)."""
+        managed = self._managed_entrypoint("ffmpeg", "ffmpeg")
+        if managed:
+            return str(managed)
         system = shutil.which("ffmpeg")
         if system:
             return system
         cached = self._cached_ffmpeg_exe()
         return str(cached) if cached else None
 
+    def get_ffprobe_path(self) -> str | None:
+        """Return the ffprobe executable path (system install or cache)."""
+
+        managed = self._managed_entrypoint("ffmpeg", "ffprobe")
+        if managed:
+            return str(managed)
+        system = shutil.which("ffprobe")
+        if system:
+            return system
+        cached = self._cached_ffprobe_exe()
+        return str(cached) if cached else None
+
     def get_ytdlp_path(self) -> str | None:
         """Return the cached yt-dlp executable, or a system installation."""
+        managed = self._managed_entrypoint("yt-dlp", "yt_dlp")
+        if managed:
+            return str(managed)
         cached = self._cached_ytdlp_exe()
         if cached:
             return str(cached)
         return shutil.which("yt-dlp")
+
+    def get_asr_paths(self) -> dict[str, str] | None:
+        """Return the cached local-ASR executable and weights when complete."""
+        managed_executable = self._managed_entrypoint("asr-sensevoice", "transcribe")
+        managed_model = self._managed_entrypoint("asr-sensevoice", "model")
+        managed_vad = self._managed_entrypoint("asr-sensevoice", "vad")
+        if managed_executable and managed_model and managed_vad:
+            return {
+                "path": str(managed_executable),
+                "modelPath": str(managed_model),
+                "vadPath": str(managed_vad),
+            }
+        executable = self._cached_asr_exe()
+        model = self._cached_asr_model()
+        vad = self._cached_asr_vad()
+        if not executable or not model or not vad:
+            return None
+        return {
+            "path": str(executable),
+            "modelPath": str(model),
+            "vadPath": str(vad),
+        }
 
     def get_chrome_path(self) -> str | None:
         """Return a Chromium-based browser executable path."""
         for cand in self._system_chrome_candidates():
             if cand.exists() and cand.is_file():
                 return str(cand)
-        cached = self._cached_chrome_exe()
-        return str(cached) if cached else None
+        return None
 
     def get_npx_path(self) -> str | None:
         """Return the path to npx-cli.js alongside the resolved Node.
@@ -220,9 +295,9 @@ class VideoRuntime:
         """Build a child-process environment with runtime PATH prepended."""
         env = os.environ.copy()
         paths: list[str] = []
-        node_exe = self._cached_node_exe()
-        if node_exe:
-            paths.append(str(node_exe.parent))
+        node_path = self.get_node_path()
+        if node_path:
+            paths.append(str(Path(node_path).parent))
         ff_exe = self._cached_ffmpeg_exe()
         if ff_exe:
             paths.append(str(ff_exe.parent))
@@ -270,6 +345,16 @@ class VideoRuntime:
         if code != 0:
             return ComponentStatus(
                 ok=False, path=ff_path, error="ffmpeg -version failed"
+            )
+        probe_path = self.get_ffprobe_path()
+        if not probe_path:
+            return ComponentStatus(
+                ok=False, path=ff_path, error="FFprobe not found"
+            )
+        probe_code, _, _ = _run_sync([probe_path, "-version"])
+        if probe_code != 0:
+            return ComponentStatus(
+                ok=False, path=ff_path, error="ffprobe -version failed"
             )
         first_line = out.splitlines()[0] if out else ""
         return ComponentStatus(ok=True, version=first_line, path=ff_path)
@@ -323,6 +408,22 @@ class VideoRuntime:
     # Download / provisioning
     # ------------------------------------------------------------------
 
+    async def _ensure_managed_resource(
+        self,
+        resource: str,
+        progress_cb: "Callable[[int, int], None] | None",
+    ) -> None:
+        from mona.runtime.official import ensure_official_runtime_resource
+
+        await ensure_official_runtime_resource(
+            resource,
+            (
+                (lambda _ref, current, total: progress_cb(current, total))
+                if progress_cb
+                else None
+            ),
+        )
+
     async def ensure_runtime(
         self,
         component: str,
@@ -331,7 +432,7 @@ class VideoRuntime:
         """Download and extract a component into Mona's resources directory.
 
         Args:
-            component: One of ``"node"``, ``"ffmpeg"``, ``"chrome"``, ``"yt_dlp"``.
+            component: One of ``"node"``, ``"ffmpeg"``, ``"yt_dlp"``, ``"asr"``.
             progress_cb: Optional callback ``(downloaded_bytes, total_bytes)``.
 
         Returns a dict with ``ok`` and either ``path`` or ``error``.
@@ -340,47 +441,48 @@ class VideoRuntime:
             return await self._ensure_node(progress_cb)
         if component == "ffmpeg":
             return await self._ensure_ffmpeg(progress_cb)
-        if component == "chrome":
-            return await self._ensure_chrome(progress_cb)
         if component == "yt_dlp":
             return await self._ensure_ytdlp(progress_cb)
+        if component == "asr":
+            return await self._ensure_asr(progress_cb)
         return {"ok": False, "error": f"Unknown component: {component}"}
 
     async def _ensure_node(
         self, progress_cb: "Callable[[int, int], None] | None"
     ) -> dict:
-        existing = self._cached_node_exe()
+        existing = self.get_node_path()
         if existing:
             return {"ok": True, "path": str(existing), "cached": True}
-        dest = self._component_dir("node")
-        dest.mkdir(parents=True, exist_ok=True)
-        zip_path = dest / "node.zip"
-        await self._download(NODE_URL, zip_path, progress_cb)
-        self._extract_zip(zip_path, dest)
-        zip_path.unlink(missing_ok=True)
-        exe = self._cached_node_exe()
-        if not exe:
-            return {"ok": False, "error": "node executable not found after extraction"}
-        logger.info("Node.js provisioned at {}", exe)
-        return {"ok": True, "path": str(exe)}
+        try:
+            await self._ensure_managed_resource("node", progress_cb)
+        except Exception as exc:
+            return {"ok": False, "error": str(exc)}
+        managed = self._managed_node_exe()
+        if managed:
+            return {"ok": True, "path": str(managed)}
+        return {"ok": False, "error": "Node.js 组件安装后不可用，请在功能资源中修复"}
 
     async def _ensure_ffmpeg(
         self, progress_cb: "Callable[[int, int], None] | None"
     ) -> dict:
         existing = self._cached_ffmpeg_exe()
-        if existing:
-            return {"ok": True, "path": str(existing), "cached": True}
-        dest = self._component_dir("ffmpeg")
-        dest.mkdir(parents=True, exist_ok=True)
-        zip_path = dest / "ffmpeg.zip"
-        await self._download(FFMPEG_URL, zip_path, progress_cb)
-        self._extract_zip(zip_path, dest)
-        zip_path.unlink(missing_ok=True)
-        exe = self._cached_ffmpeg_exe()
-        if not exe:
-            return {"ok": False, "error": "ffmpeg executable not found after extraction"}
-        logger.info("FFmpeg provisioned at {}", exe)
-        return {"ok": True, "path": str(exe)}
+        existing_probe = self._cached_ffprobe_exe()
+        if existing and existing_probe:
+            return {
+                "ok": True,
+                "path": str(existing),
+                "ffprobePath": str(existing_probe),
+                "cached": True,
+            }
+        try:
+            await self._ensure_managed_resource("ffmpeg", progress_cb)
+        except Exception as exc:
+            return {"ok": False, "error": str(exc)}
+        managed = self.get_ffmpeg_path()
+        managed_probe = self.get_ffprobe_path()
+        if managed and managed_probe:
+            return {"ok": True, "path": managed, "ffprobePath": managed_probe}
+        return {"ok": False, "error": "视频处理组件安装后不可用，请在功能资源中修复"}
 
     async def _ensure_ytdlp(
         self, progress_cb: "Callable[[int, int], None] | None"
@@ -388,82 +490,29 @@ class VideoRuntime:
         existing = self.get_ytdlp_path()
         if existing:
             return {"ok": True, "path": existing, "cached": True}
-        dest = self._component_dir("yt-dlp")
-        dest.mkdir(parents=True, exist_ok=True)
-        executable = dest / ("yt-dlp.exe" if sys.platform == "win32" else "yt-dlp")
-        await self._download(YTDLP_URL, executable, progress_cb)
-        if sys.platform != "win32":
-            executable.chmod(executable.stat().st_mode | 0o111)
-        if not executable.is_file():
-            return {"ok": False, "error": "yt-dlp executable not found after download"}
-        logger.info("yt-dlp provisioned at {}", executable)
-        return {"ok": True, "path": str(executable)}
+        try:
+            await self._ensure_managed_resource("yt_dlp", progress_cb)
+        except Exception as exc:
+            return {"ok": False, "error": str(exc)}
+        managed = self.get_ytdlp_path()
+        if managed:
+            return {"ok": True, "path": managed}
+        return {"ok": False, "error": "视频解析组件安装后不可用，请在功能资源中修复"}
 
-    async def _ensure_chrome(
+    async def _ensure_asr(
         self, progress_cb: "Callable[[int, int], None] | None"
     ) -> dict:
-        existing = self._cached_chrome_exe()
+        existing = self.get_asr_paths()
         if existing:
-            return {"ok": True, "path": str(existing), "cached": True}
-        node_path = self.get_node_path()
-        if not node_path:
-            return {"ok": False, "error": "Node.js required to provision Chrome"}
-        npx_js = self.get_npx_path()
-        if not npx_js:
-            return {"ok": False, "error": "npx-cli.js not found alongside Node"}
-        dest = self._component_dir("chrome")
-        dest.mkdir(parents=True, exist_ok=True)
-        if progress_cb:
-            progress_cb(0, 0)
-        env = self.build_env()
-        proc = await asyncio.create_subprocess_exec(
-            node_path,
-            npx_js,
-            "hyperframes",
-            "browser",
-            "ensure",
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.PIPE,
-            env=env,
-            cwd=str(dest),
-        )
-        stdout, stderr = await proc.communicate()
-        if proc.returncode != 0:
-            return {
-                "ok": False,
-                "error": (stderr or b"").decode("utf-8", "replace"),
-                "stdout": (stdout or b"").decode("utf-8", "replace"),
-            }
-        if progress_cb:
-            progress_cb(1, 1)
-        exe = self._cached_chrome_exe()
-        logger.info("Chrome provisioned at {}", exe)
-        return {"ok": True, "path": str(exe) if exe else None}
+            return {"ok": True, **existing, "cached": True}
+        if sys.platform != "win32":
+            return {"ok": False, "error": "本地语音转写暂仅支持 Windows x64"}
 
-    async def _download(
-        self,
-        url: str,
-        dest: Path,
-        progress_cb: "Callable[[int, int], None] | None",
-    ) -> None:
-        ok, err = validate_url_target(url)
-        if not ok:
-            raise RuntimeError(f"URL blocked by SSRF guard: {err}")
-        timeout = aiohttp.ClientTimeout(total=600)
-        async with aiohttp.ClientSession(timeout=timeout) as session:
-            async with session.get(url, allow_redirects=True) as resp:
-                resp.raise_for_status()
-                total = int(resp.headers.get("Content-Length", "0"))
-                downloaded = 0
-                with open(dest, "wb") as f:
-                    async for chunk in resp.content.iter_chunked(_DOWNLOAD_CHUNK):
-                        f.write(chunk)
-                        downloaded += len(chunk)
-                        if progress_cb:
-                            progress_cb(downloaded, total)
-        logger.debug("Downloaded {} -> {}", url, dest)
-
-    @staticmethod
-    def _extract_zip(zip_path: Path, dest: Path) -> None:
-        with zipfile.ZipFile(zip_path) as zf:
-            zf.extractall(dest)
+        try:
+            await self._ensure_managed_resource("asr", progress_cb)
+        except Exception as exc:
+            return {"ok": False, "error": str(exc)}
+        managed = self.get_asr_paths()
+        if managed:
+            return {"ok": True, **managed}
+        return {"ok": False, "error": "本地语音转写组件安装后不完整，请在功能资源中修复"}

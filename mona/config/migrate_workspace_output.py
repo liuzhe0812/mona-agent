@@ -37,13 +37,14 @@ from mona.config.migrate_global import (
     _save_manifest,
 )
 from mona.config.paths import (
-    get_agent_output_dir,
     get_agent_jobs_dir,
+    get_agent_output_dir,
+    get_managed_runtimes_dir,
     get_shared_output_dir,
     get_stock_projects_dir,
-    get_workspace_path,
     get_workflow_runs_dir,
     get_workflows_dir,
+    get_workspace_path,
 )
 
 # Reserved top-level entries that must NOT be moved into output/.
@@ -359,11 +360,12 @@ def run_startup_migrations(
        out of workspace into Mona's agent-private dirs).
     2.5. Copy legacy global ``~/.mona/memory`` and ``~/.mona/skills`` into
        Mona's agent-private dirs (multi-agent phase 1).
-    3. Fill in missing global templates under ~/.mona/ via
+    3. Migrate active managed runtimes into the OS-local store.
+    4. Fill in missing global templates under ~/.mona/ via
        ``sync_global_templates()``.
-    4. Create ``<workspace>/output/``.
-    5. Run one-time loose artifact migration into ``output/``.
-    6. (caller starts SessionManager, AgentLoop and channels.)
+    5. Create ``<workspace>/output/``.
+    6. Run one-time loose artifact migration into ``output/``.
+    7. (caller starts SessionManager, AgentLoop and channels.)
 
     All steps are idempotent. ``skip_loose_artifacts`` is used by callers
     that operate on a non-default workspace (e.g. project workspaces) where
@@ -390,26 +392,41 @@ def run_startup_migrations(
     except Exception:
         logger.exception("Agent resource migration failed; continuing startup")
 
-    # 3. Sync global templates into ~/.mona/ (memory/, skills/, AGENTS.md, ...).
+    try:
+        from mona.agent.skill_usage import migrate_legacy_self_evolution
+
+        migrated = migrate_legacy_self_evolution()
+        if migrated:
+            logger.info("Marked {} legacy Mona skills as self-evolution", len(migrated))
+    except Exception:
+        logger.exception("Legacy self-evolution provenance migration failed; continuing startup")
+
+    # 3. Managed runtimes: copy verified active components and keep the old root.
+    try:
+        get_managed_runtimes_dir()
+    except Exception:
+        logger.exception("Managed runtime migration failed; continuing startup")
+
+    # 4. Sync global templates into ~/.mona/ (memory/, skills/, AGENTS.md, ...).
     try:
         sync_global_templates(silent=True)
     except Exception:
         logger.exception("sync_global_templates failed; continuing startup")
 
-    # 4. Ensure <workspace>/output/ exists.
+    # 5. Ensure <workspace>/output/ exists.
     try:
         get_shared_output_dir(workspace)
     except Exception:
         logger.exception("Failed to create shared output dir; continuing startup")
 
-    # 5. Legacy loose-artifact migration (kept as an interruption-safe first
+    # 6. Legacy loose-artifact migration (kept as an interruption-safe first
     # pass for existing manifests).
     if not skip_loose_artifacts:
         try:
             migrate_workspace_output(workspace)
         except Exception:
             logger.exception("Loose artifact migration failed; continuing startup")
-        # 6. Final ownership migration. This pass is what establishes the
+        # 7. Final ownership migration. This pass is what establishes the
         # current contract: Agent output, product runs and runtime state are
         # physically separate.
         try:

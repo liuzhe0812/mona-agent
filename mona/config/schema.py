@@ -11,6 +11,9 @@ from pydantic_settings import BaseSettings
 
 from mona.cron.types import CronSchedule
 
+MONA_BOT_NAME = "Mona"
+MONA_BOT_ICON = ""
+
 if TYPE_CHECKING:
     from mona.agent.tools.chart import ChartToolConfig
     from mona.agent.tools.crypto import CryptoToolConfig
@@ -138,10 +141,8 @@ class AgentDefaults(Base):
 
     workspace: str = "~/.mona/workspace"
     model_preset: str | None = None  # Active preset name — takes precedence over fields below
-    model: str = ""  # Empty → resolved at runtime from provider's free_default_model
-    provider: str = (
-        "zen"  # Provider name (e.g. "anthropic", "openrouter") or "auto" for auto-detection
-    )
+    model: str = "deepseek-v4-flash"
+    provider: str = "auto"  # Provider name (e.g. "anthropic", "openrouter") or "auto" for auto-detection
     max_tokens: int = 8192
     context_window_tokens: int = 65_536
     context_block_limit: int | None = None
@@ -160,8 +161,6 @@ class AgentDefaults(Base):
     )  # Max characters for tool hint display (e.g. "$ cd …/project && npm test")
     reasoning_effort: str | None = None  # low / medium / high / adaptive / none — LLM thinking effort; None preserves the provider default
     timezone: str = "UTC"  # IANA timezone, e.g. "Asia/Shanghai", "America/New_York"
-    bot_name: str = "mona"  # Display name shown in CLI prompts (e.g. "{name} is thinking...")
-    bot_icon: str = "🐈"  # Short icon (emoji or text) shown next to the bot name in CLI; "" to omit
     unified_session: bool = False  # Share one session across all channels (single-user multi-device)
     disabled_skills: list[str] = Field(default_factory=list)  # Skill names to exclude from loading (e.g. ["summarize", "skill-creator"])
     session_ttl_minutes: int = Field(
@@ -183,6 +182,13 @@ class AgentDefaults(Base):
     )  # Consolidation target ratio (0.5 = 50% of budget retained after compression)
     dream: DreamConfig = Field(default_factory=DreamConfig)
 
+    @property
+    def bot_name(self) -> str:
+        return MONA_BOT_NAME
+
+    @property
+    def bot_icon(self) -> str:
+        return MONA_BOT_ICON
 
 class AgentsConfig(Base):
     """Agent configuration."""
@@ -217,6 +223,7 @@ class ProvidersConfig(Base):
     """Configuration for LLM providers."""
 
     custom: ProviderConfig = Field(default_factory=ProviderConfig)  # Any OpenAI-compatible endpoint
+    mona_managed: ProviderConfig = Field(default_factory=ProviderConfig)
     azure_openai: ProviderConfig = Field(default_factory=ProviderConfig)  # Azure OpenAI (model = deployment name)
     bedrock: BedrockProviderConfig = Field(default_factory=BedrockProviderConfig)  # AWS Bedrock Converse
     anthropic: ProviderConfig = Field(default_factory=ProviderConfig)
@@ -255,7 +262,6 @@ class ProvidersConfig(Base):
     github_copilot: ProviderConfig = Field(default_factory=ProviderConfig, exclude=True)  # Github Copilot (OAuth)
     qianfan: ProviderConfig = Field(default_factory=ProviderConfig)  # Qianfan (百度千帆)
     nvidia: ProviderConfig = Field(default_factory=ProviderConfig)  # NVIDIA NIM (nvapi- keys)
-    zen: ProviderConfig = Field(default_factory=ProviderConfig)  # OpenCode Zen (free, no API key)
     # Cindy presets use hyphenated IDs, so they live in a keyed map instead of
     # becoming one Python field per preset.
     cindy: dict[str, ProviderConfig] = Field(default_factory=dict)
@@ -325,6 +331,20 @@ class ServicesConfig(Base):
 
     host: str = "127.0.0.1"  # Safer default: local-only bind.
     port: int = 17174
+
+
+class RuntimeConfig(Base):
+    """Preferences for downloading managed runtime components."""
+
+    auto_download: bool = True
+
+
+class VideoModuleConfig(Base):
+    """Video production engine rollout and fallback controls."""
+
+    render_engine: Literal["legacy", "hyperframes", "auto"] = "auto"
+    allow_render_fallback: bool = True
+    hyperframes_version: str = "0.8.16"
 
 
 class MCPServerConfig(Base):
@@ -475,6 +495,8 @@ class Config(BaseSettings):
     api: ApiConfig = Field(default_factory=ApiConfig)
     gateway: GatewayConfig = Field(default_factory=GatewayConfig)
     services: ServicesConfig = Field(default_factory=ServicesConfig)
+    runtime: RuntimeConfig = Field(default_factory=RuntimeConfig)
+    video: VideoModuleConfig = Field(default_factory=VideoModuleConfig)
     tools: ToolsConfig = Field(default_factory=ToolsConfig)
     stock: StockConfig = Field(default_factory=StockConfig)
     model_presets: dict[str, ModelPresetConfig] = Field(
@@ -497,15 +519,8 @@ class Config(BaseSettings):
     def resolve_default_preset(self) -> ModelPresetConfig:
         """Return the implicit `default` preset from agents.defaults fields."""
         d = self.agents.defaults
-        model = d.model
-        if not model:
-            # Empty model → fall back to the provider's free_default_model
-            from mona.providers.registry import find_by_name
-            spec = find_by_name(d.provider)
-            if spec and spec.free_default_model:
-                model = spec.free_default_model
         return ModelPresetConfig(
-            model=model, provider=d.provider, max_tokens=d.max_tokens,
+            model=d.model, provider=d.provider, max_tokens=d.max_tokens,
             context_window_tokens=d.context_window_tokens,
             temperature=d.temperature, reasoning_effort=d.reasoning_effort,
         )
@@ -609,6 +624,8 @@ class Config(BaseSettings):
         # OAuth providers are NOT valid fallbacks — they require explicit model selection
         for spec in registry_specs:
             if spec.is_oauth:
+                continue
+            if not spec.allow_auto_fallback:
                 continue
             p = self.providers.get_provider_config(spec.name)
             if p and (p.api_key or not spec.api_key_required):

@@ -1,32 +1,23 @@
 """OfficeCLI runtime detection and download manager.
 
-OfficeCLI powers the PPT template-edit track (fill user-provided .pptx
-templates). The binary is not bundled into the installer (~33 MB); it is
-downloaded lazily on first use from Mona's Qiniu CDN into the per-user
-resources directory.
+OfficeCLI is retained only so existing tasks can find an already-installed
+binary. Mona no longer distributes or downloads new OfficeCLI binaries.
 
 Windows is the primary target; macOS (arm64) is also provisioned.
 """
 
 from __future__ import annotations
 
-import hashlib
 import os
 import platform
 import shutil
 import subprocess
 import sys
+from collections.abc import Callable
 from pathlib import Path
-from typing import TYPE_CHECKING, Any
+from typing import Any
 
-import aiohttp
-from loguru import logger
 from pydantic import BaseModel
-
-from mona.security.network import validate_url_target
-
-if TYPE_CHECKING:
-    from collections.abc import Callable
 
 __all__ = ("OfficeCliRuntime",)
 
@@ -36,24 +27,7 @@ RESOURCE_ROOT = Path(
     os.environ.get("LOCALAPPDATA") or (Path.home() / "AppData" / "Local")
 ) / "Mona" / "resources"
 
-# Pinned upstream release (iOfficeAI/OfficeCLI), mirrored on Mona's CDN.
 OFFICECLI_VERSION = "1.0.141"
-_CDN_BASE = f"https://dl.mona.lzfun.vip/officecli/v{OFFICECLI_VERSION}"
-
-# sha256 of the mirrored binaries, verified against upstream SHA256SUMS.
-# Filled per platform key: (asset_name, sha256).
-_ASSETS: dict[str, tuple[str, str]] = {
-    "windows-amd64": (
-        "officecli-win-x64.exe",
-        "65d119912147b47d102224715df2288813a2fea56520bfc4313b2fa0bf4672c7",
-    ),
-    "darwin-arm64": (
-        "officecli-mac-arm64",
-        "a9639df060513d73b125849e4c630383f7a80f70e61911ef486dd24ec2208e37",
-    ),
-}
-
-_DOWNLOAD_CHUNK = 1 << 16  # 64 KiB
 
 
 class OfficeCliStatus(BaseModel):
@@ -143,75 +117,10 @@ class OfficeCliRuntime:
         self,
         progress_cb: "Callable[[int, int], None] | None" = None,
     ) -> dict:
-        """Download the pinned officecli binary into the resources directory."""
-        existing = self._cached_exe()
-        if existing:
-            return {"ok": True, "path": str(existing), "cached": True}
-
-        key = _platform_key()
-        if key is None:
-            return {
-                "ok": False,
-                "error": f"Unsupported platform: {sys.platform}/{platform.machine()}",
-            }
-        asset_name, expected_sha = _ASSETS[key]
-        url = f"{_CDN_BASE}/{asset_name}"
-
-        dest_dir = self._component_dir()
-        dest_dir.mkdir(parents=True, exist_ok=True)
-        final_name = "officecli.exe" if sys.platform == "win32" else "officecli"
-        dest = dest_dir / final_name
-        tmp = dest_dir / f"{final_name}.download"
-
-        try:
-            await self._download(url, tmp, progress_cb)
-            actual_sha = self._sha256(tmp)
-            if actual_sha != expected_sha:
-                tmp.unlink(missing_ok=True)
-                logger.error(
-                    "officecli sha256 mismatch: expected {}, got {}",
-                    expected_sha,
-                    actual_sha,
-                )
-                return {"ok": False, "error": "下载文件校验失败，请重试"}
-            tmp.replace(dest)
-            if sys.platform != "win32":
-                dest.chmod(dest.stat().st_mode | 0o111)
-        except Exception as exc:
-            tmp.unlink(missing_ok=True)
-            logger.exception("officecli download failed")
-            return {"ok": False, "error": str(exc)}
-
-        logger.info("officecli provisioned at {}", dest)
-        return {"ok": True, "path": str(dest)}
-
-    async def _download(
-        self,
-        url: str,
-        dest: Path,
-        progress_cb: "Callable[[int, int], None] | None",
-    ) -> None:
-        ok, err = validate_url_target(url)
-        if not ok:
-            raise RuntimeError(f"URL blocked by SSRF guard: {err}")
-        timeout = aiohttp.ClientTimeout(total=600)
-        async with aiohttp.ClientSession(timeout=timeout) as session:
-            async with session.get(url, allow_redirects=True) as resp:
-                resp.raise_for_status()
-                total = int(resp.headers.get("Content-Length", "0"))
-                downloaded = 0
-                with open(dest, "wb") as f:
-                    async for chunk in resp.content.iter_chunked(_DOWNLOAD_CHUNK):
-                        f.write(chunk)
-                        downloaded += len(chunk)
-                        if progress_cb:
-                            progress_cb(downloaded, total)
-        logger.debug("Downloaded {} -> {}", url, dest)
-
-    @staticmethod
-    def _sha256(path: Path) -> str:
-        h = hashlib.sha256()
-        with open(path, "rb") as f:
-            for chunk in iter(lambda: f.read(1 << 20), b""):
-                h.update(chunk)
-        return h.hexdigest()
+        """Keep the legacy API stable without distributing new OfficeCLI binaries."""
+        _ = progress_cb
+        return {
+            "ok": False,
+            "code": "OFFICECLI_REMOVED",
+            "error": "旧 OfficeCLI 能力已停止分发",
+        }

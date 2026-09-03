@@ -38,7 +38,7 @@ from mona.services.stock.provider import InstrumentRef, ProviderError
 # reject any runtime drift instead of guessing which schema is in use.
 WESTOCK_PACKAGE_NAME = "westock-data-skillhub"
 WESTOCK_PACKAGE_VERSION = "1.0.5"
-WESTOCK_CONTRACT_VERSION = "westock-contract-v1"
+WESTOCK_CONTRACT_VERSION = "westock-contract-v2"
 WESTOCK_COMMANDS = frozenset(
     {"profile", "asfund", "sector", "macro", "report", "notice", "chip", "technical"}
 )
@@ -960,6 +960,8 @@ class WeStockSupplementProvider:
             if cached is not None:
                 self._memory_cache[cache_key] = cached
         if cached is not None:
+            if cached.validation_mode == "real_canary":
+                self.canary_verified[canonical] = True
             if cached.get("cache_status") != "fresh_cache":
                 cached = WeStockResult(
                     command=cached.command,
@@ -1035,6 +1037,8 @@ class WeStockSupplementProvider:
                     else ("fixture" if metadata.get("validation_mode") == "fixture" else self.validation_mode)
                 ),
             )
+            if result.validation_mode == "real_canary":
+                self.canary_verified[canonical] = True
             self._memory_cache[cache_key] = result
             if self.cache_root is not None:
                 self._write_cache(result, day)

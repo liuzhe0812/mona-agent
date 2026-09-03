@@ -9,15 +9,57 @@ import { resources } from "@/i18n";
 const QUICK_ACTION_KEYS = ["plan", "analyze", "brainstorm", "code", "summarize", "more"];
 const IMAGE_QUICK_ACTION_KEYS = ["icon", "sticker", "poster", "product", "portrait", "edit"];
 const SETTINGS_NAV_KEYS = [
-  "overview",
+  "billing",
+  "usage",
+  "general",
+  "resources",
   "appearance",
   "models",
   "providers",
   "image",
-  "web",
-  "runtime",
   "advanced",
 ];
+const AUTOMATION_KEY_PATHS = [
+  "title",
+  "loading",
+  "loadError",
+  "updateError",
+  "cancelError",
+  "permissionError",
+  "computerError",
+  "browser.title",
+  "browser.description",
+  "browser.toggle",
+  "computer.title",
+  "computer.description",
+  "computer.toggle",
+  "computer.downloading",
+  "computer.progress",
+  "cancel",
+  "unsupported.title",
+  "unsupported.description",
+  "authorization.title",
+  "authorization.description",
+  "authorize",
+  "error.title",
+  "retry",
+  "notInstalled.title",
+  "notInstalled.description",
+  "download",
+  "states.disabled",
+  "states.notInstalled",
+  "states.downloading",
+  "states.pendingAuthorization",
+  "states.available",
+  "states.error",
+];
+
+function readPath(value: unknown, path: string): unknown {
+  return path.split(".").reduce<unknown>((current, key) => {
+    if (typeof current !== "object" || current === null) return undefined;
+    return (current as Record<string, unknown>)[key];
+  }, value);
+}
 
 describe("webui i18n", () => {
   it("switches UI copy and document locale through the language switcher", async () => {
@@ -85,6 +127,7 @@ describe("webui i18n", () => {
         expect(common.settings.nav[key as keyof typeof common.settings.nav]).toBeTruthy();
       }
       expect(common.settings.rows.theme).toBeTruthy();
+      expect(common.settings.sections.runtimeParameters).toBeTruthy();
       expect(common.settings.status.loading).toBeTruthy();
       expect(common.settings.actions.save).toBeTruthy();
       expect(common.settings.actions.edit).toBeTruthy();
@@ -95,16 +138,38 @@ describe("webui i18n", () => {
       expect(common.settings.byok.showApiKey).toBeTruthy();
       expect(common.settings.byok.hideApiKey).toBeTruthy();
       expect(common.settings.byok.configuredKeyHint).toBeTruthy();
+      expect(common.settings.shortcuts.messageInput).toBeTruthy();
+      expect(common.settings.shortcuts.sendMessage).toBeTruthy();
+      expect(common.settings.shortcuts.sendMessageHelp).toBeTruthy();
+      expect(common.settings.shortcuts.enterToSend).toBeTruthy();
+      expect(common.settings.shortcuts.ctrlEnterToSend).toBeTruthy();
     }
   });
 
-  it("keeps Simplified Chinese settings overview copy localized", () => {
+  it("keeps automation settings localized for every registered locale", () => {
+    for (const resource of Object.values(resources)) {
+      for (const key of AUTOMATION_KEY_PATHS) {
+        expect(readPath(resource.common.settings, `automation.${key}`)).toBeTruthy();
+      }
+    }
+  });
+
+  it("keeps Simplified Chinese settings copy localized", () => {
     const settings = resources["zh-CN"].common.settings;
 
-    expect(settings.nav.web).toBe("网页");
+    expect(settings.nav.general).toBe("通用");
     expect(settings.sections.webSearch).toBe("网页搜索");
     expect(settings.byok.tabs.webSearch).toBe("网页搜索");
-    expect(settings.overview.webSearch).toBe("网页搜索");
-    expect(settings.overview.workspace).toBe("工作区");
+    expect(settings.shortcuts.messageInput).toBe("消息输入");
+    expect(settings.shortcuts.sendMessage).toBe("发送消息");
+  });
+
+  it("uses the billing navigation copy for English and Simplified Chinese", () => {
+    expect(resources.en.common.settings.nav.general).toBe("General");
+    expect(resources.en.common.settings.nav.billing).toBe("Balance & billing");
+    expect(resources.en.common.settings.nav.usage).toBe("Usage");
+    expect(resources["zh-CN"].common.settings.nav.general).toBe("通用");
+    expect(resources["zh-CN"].common.settings.nav.billing).toBe("余额与充值");
+    expect(resources["zh-CN"].common.settings.nav.usage).toBe("用量统计");
   });
 });

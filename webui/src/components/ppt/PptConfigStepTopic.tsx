@@ -17,11 +17,10 @@ export function PptConfigStepTopic({ config, setConfig, readOnly }: PptConfigSte
       {/* 制作方式 */}
       <section>
         <h3 className="mb-2 text-[12px] font-medium text-foreground">制作方式</h3>
-        <div className="grid grid-cols-2 gap-1">
+        <div className="grid grid-cols-1 gap-1">
           {(
             [
               { value: "design", label: "从内容生成", title: "输入主题或上传素材，AI 从 0 生成高质量 PPT，可选内置版式" },
-              { value: "template", label: "沿用现有 PPT", title: "上传 .pptx，保留原有母版样式填充内容" },
             ] as Array<{ value: PptMode; label: string; title: string }>
           ).map((item) => (
             <button
@@ -43,6 +42,22 @@ export function PptConfigStepTopic({ config, setConfig, readOnly }: PptConfigSte
           ))}
         </div>
       </section>
+
+      {isTemplateMode ? (
+        <div role="status" className="rounded-lg border border-border/70 bg-muted/30 px-3 py-2 text-[11px] text-muted-foreground">
+          <p className="text-foreground">旧版 PPT 模板编辑模式已停止。</p>
+          <p className="mt-0.5">请明确切换到“从内容生成”；系统不会自动替换模板内容。</p>
+          {!readOnly ? (
+            <button
+              type="button"
+              className="mt-2 rounded-md border border-border/70 px-2 py-1 text-foreground hover:bg-muted"
+              onClick={() => setConfig((prev) => ({ ...prev, mode: "design" }))}
+            >
+              切换到“从内容生成”
+            </button>
+          ) : null}
+        </div>
+      ) : null}
 
       {/* 主题 */}
       <section>

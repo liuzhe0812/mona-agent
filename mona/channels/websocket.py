@@ -41,6 +41,7 @@ from mona.command.builtin import builtin_command_palette
 from mona.config.paths import get_data_dir, get_media_dir
 from mona.config.schema import Base
 from mona.session.goal_state import goal_state_ws_blob
+from mona.session.task_plan import reset_task_plan, task_plan_ws_blob
 from mona.session.webui_turns import websocket_turn_wall_started_at
 from mona.utils.helpers import safe_filename
 from mona.utils.media_decode import (
@@ -50,10 +51,8 @@ from mona.utils.media_decode import (
 from mona.utils.subagent_channel_display import scrub_subagent_messages_for_channel
 from mona.webui.settings_api import (
     WebUISettingsError,
-    fetch_zen_free_models,
     probe_provider_models,
     settings_payload,
-    sync_zen_free_models,
     update_agent_settings,
     update_channel_settings,
     update_image_generation_settings,
@@ -73,6 +72,16 @@ from mona.webui.transcript import append_transcript_object, build_webui_thread_r
 
 if TYPE_CHECKING:
     from mona.session.manager import SessionManager
+
+
+async def _has_subscription_access() -> bool:
+    try:
+        from mona.agent.tools.tauri_ipc import check_subscription_access
+
+        return bool(await asyncio.to_thread(check_subscription_access))
+    except Exception as exc:
+        logger.debug("subscription access check failed, failing closed: {}", exc)
+        return False
 
 
 def _strip_trailing_slash(path: str) -> str:
@@ -189,16 +198,18 @@ def publish_runtime_model_update(
     model_preset: str | None,
 ) -> None:
     """Enqueue a runtime model snapshot for websocket subscribers (fan-out in-channel)."""
-    bus.outbound.put_nowait(OutboundMessage(
-        channel="websocket",
-        chat_id="*",
-        content="",
-        metadata={
-            "_runtime_model_updated": True,
-            "model": model,
-            "model_preset": model_preset,
-        },
-    ))
+    bus.outbound.put_nowait(
+        OutboundMessage(
+            channel="websocket",
+            chat_id="*",
+            content="",
+            metadata={
+                "_runtime_model_updated": True,
+                "model": model,
+                "model_preset": model_preset,
+            },
+        )
+    )
 
 
 def _default_model_name_from_config() -> str | None:
@@ -315,34 +326,51 @@ _MAX_VIDEO_BYTES = 20 * 1024 * 1024
 # Shared output directory watch cadence: the signature scan is metadata-
 # only (path + mtime + size), so a 2s poll is cheap and still feels live.
 _ARTIFACT_WATCH_INTERVAL_S = 2.0
+_ARTIFACT_TASK_STATE_KEY = "artifact_task"
+_ARTIFACT_TASK_SKIP_DIRS = frozenset(
+    {
+        "node_modules",
+        "__pycache__",
+        "dist",
+        "build",
+        "target",
+        "venv",
+    }
+)
 
 # Image MIME whitelist — matches the Composer's ``accept`` list. SVG is
 # explicitly excluded to avoid the XSS surface inside embedded scripts.
-_IMAGE_MIME_ALLOWED: frozenset[str] = frozenset({
-    "image/png",
-    "image/jpeg",
-    "image/webp",
-    "image/gif",
-})
+_IMAGE_MIME_ALLOWED: frozenset[str] = frozenset(
+    {
+        "image/png",
+        "image/jpeg",
+        "image/webp",
+        "image/gif",
+    }
+)
 
-_VIDEO_MIME_ALLOWED: frozenset[str] = frozenset({
-    "video/mp4",
-    "video/webm",
-    "video/quicktime",
-})
+_VIDEO_MIME_ALLOWED: frozenset[str] = frozenset(
+    {
+        "video/mp4",
+        "video/webm",
+        "video/quicktime",
+    }
+)
 
 _UPLOAD_MIME_ALLOWED: frozenset[str] = _IMAGE_MIME_ALLOWED | _VIDEO_MIME_ALLOWED
 
-_PPT_DOC_MIME_ALLOWED: frozenset[str] = frozenset({
-    "application/pdf",
-    "text/plain",
-    "text/markdown",
-    "text/csv",
-    "application/json",
-    "application/msword",
-    "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-    "application/vnd.openxmlformats-officedocument.presentationml.presentation",
-})
+_PPT_DOC_MIME_ALLOWED: frozenset[str] = frozenset(
+    {
+        "application/pdf",
+        "text/plain",
+        "text/markdown",
+        "text/csv",
+        "application/json",
+        "application/msword",
+        "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+        "application/vnd.openxmlformats-officedocument.presentationml.presentation",
+    }
+)
 _PPT_DOC_MAX_BYTES = 20 * 1024 * 1024
 
 # Conversation attachments are persisted as workspace files and then passed to
@@ -409,8 +437,6 @@ def _is_localhost(connection: Any) -> bool:
     return host in _LOCALHOSTS
 
 
-
-
 def _http_response(
     body: bytes,
     *,
@@ -471,20 +497,21 @@ def _b64url_decode(s: str) -> bytes:
     return base64.urlsafe_b64decode(s + pad)
 
 
-
 # Allowed MIME types we actually serve from the media endpoint. Anything
 # outside this set is degraded to ``application/octet-stream`` so an
 # attacker who somehow gets a signed URL for an unexpected file type can't
 # trick the browser into sniffing executable content.
-_MEDIA_ALLOWED_MIMES: frozenset[str] = frozenset({
-    "image/png",
-    "image/jpeg",
-    "image/webp",
-    "image/gif",
-    "video/mp4",
-    "video/webm",
-    "video/quicktime",
-})
+_MEDIA_ALLOWED_MIMES: frozenset[str] = frozenset(
+    {
+        "image/png",
+        "image/jpeg",
+        "image/webp",
+        "image/gif",
+        "video/mp4",
+        "video/webm",
+        "video/quicktime",
+    }
+)
 
 _MEDIA_SECRET_FILE = "media_secret.key"
 _MEDIA_SECRET_SIZE = 32
@@ -540,25 +567,17 @@ def _get_ppt_project_status(project_dir: Path) -> dict:
     images_dir = project_dir / "images"
     visual_plan = project_dir / "page_visual_plan.json"
 
-    svg_count = (
-        len(list(svg_output_dir.glob("*.svg"))) if svg_output_dir.is_dir() else 0
-    )
-    svg_final_count = (
-        len(list(svg_final_dir.glob("*.svg"))) if svg_final_dir.is_dir() else 0
-    )
+    svg_count = len(list(svg_output_dir.glob("*.svg"))) if svg_output_dir.is_dir() else 0
+    svg_final_count = len(list(svg_final_dir.glob("*.svg"))) if svg_final_dir.is_dir() else 0
     # New pipeline: output/output.pptx
     output_pptx = output_dir / "output.pptx"
     has_output_pptx = output_pptx.is_file()
     # New pipeline: preview images in output/preview/ (e.g. slide_1.png)
     preview_dir = output_dir / "preview"
-    output_image_count = (
-        len(list(preview_dir.glob("slide_*.png"))) if preview_dir.is_dir() else 0
-    )
+    output_image_count = len(list(preview_dir.glob("slide_*.png"))) if preview_dir.is_dir() else 0
     # Also check output/ directly for legacy preview images
     if output_image_count == 0:
-        output_image_count = (
-            len(list(output_dir.glob("slide_*.png"))) if output_dir.is_dir() else 0
-        )
+        output_image_count = len(list(output_dir.glob("slide_*.png"))) if output_dir.is_dir() else 0
     pptx_files = (
         sorted(
             export_dir.glob("*.pptx"),
@@ -635,9 +654,9 @@ def _get_ppt_project_status(project_dir: Path) -> dict:
         "hasSvgOutput": svg_count > 0 or svg_final_count > 0,
         "hasPptxOutput": has_output_pptx,
         "hasSpecLock": spec_lock.exists(),
-        "exportFile": pptx_files[0].name if pptx_files else (
-            "output.pptx" if has_output_pptx else None
-        ),
+        "exportFile": pptx_files[0].name
+        if pptx_files
+        else ("output.pptx" if has_output_pptx else None),
         "pipelineStage": pipeline_stage,
         "svgOutputCount": svg_count,
         "svgFinalCount": svg_final_count,
@@ -689,12 +708,11 @@ class WebSocketChannel(BaseChannel):
         self._subagent_manager = subagent_manager
         if subagent_manager is not None:
             # Tool-proposed workflow drafts surface as workflow_updated pushes.
-            subagent_manager.workflow_draft_observer = (
-                self._on_workflow_draft_proposed
-            )
+            subagent_manager.workflow_draft_observer = self._on_workflow_draft_proposed
             # Run state changes surface as workflow_run_updated pushes; the
             # hook also emits approval_requested for pending approval steps.
             subagent_manager.workflow_run_observer = self._on_workflow_run_updated
+            subagent_manager.session_activity_observer = self._on_subagent_session_activity
         self._static_dist_path: Path | None = (
             static_dist_path.resolve() if static_dist_path is not None else None
         )
@@ -757,16 +775,86 @@ class WebSocketChannel(BaseChannel):
         await self.send_goal_state(chat_id, blob)
 
     async def _maybe_push_turn_run_wall_clock(self, chat_id: str) -> None:
-        """Replay ``goal_status: running`` when a turn is still active (same-process refresh)."""
-        t0 = websocket_turn_wall_started_at(chat_id)
-        if t0 is None:
+        """Replay running state for a main turn or room/direct-chat agent job."""
+        await self._send_combined_goal_status(chat_id, "running")
+
+    def _on_subagent_session_activity(
+        self,
+        session_key: str,
+        running: bool,
+        started_at: float | None,
+    ) -> None:
+        prefix = "websocket:"
+        if not session_key.startswith(prefix):
             return
-        await self.send_goal_status(chat_id, "running", started_at=t0)
+        chat_id = session_key[len(prefix) :]
+        try:
+            asyncio.get_running_loop()
+        except RuntimeError:
+            return
+        asyncio.create_task(
+            self._send_combined_goal_status(
+                chat_id,
+                "running" if running else "idle",
+                started_at=started_at,
+            )
+        )
+
+    async def _send_combined_goal_status(
+        self,
+        chat_id: str,
+        status: str,
+        *,
+        started_at: float | None = None,
+    ) -> None:
+        main_started = websocket_turn_wall_started_at(chat_id)
+        session_key = f"websocket:{chat_id}"
+        subagent_started = None
+        subagents_running = 0
+        if self._subagent_manager is not None:
+            get_count = getattr(self._subagent_manager, "get_running_count_by_session", None)
+            get_started = getattr(self._subagent_manager, "get_session_started_at", None)
+            if callable(get_count):
+                subagents_running = int(get_count(session_key) or 0)
+            if callable(get_started):
+                subagent_started = get_started(session_key)
+
+        active_starts = [
+            value
+            for value in (main_started, subagent_started, started_at)
+            if isinstance(value, (int, float))
+        ]
+        if status == "running":
+            if not active_starts:
+                return
+            await self.send_goal_status(chat_id, "running", started_at=min(active_starts))
+            return
+        if main_started is not None or subagents_running > 0:
+            return
+        await self.send_goal_status(chat_id, "idle")
+
+    async def _maybe_push_artifact_task(self, chat_id: str) -> None:
+        state = self._artifact_task_state(f"websocket:{chat_id}")
+        task_id = state.get("id") if state else None
+        if isinstance(task_id, str) and task_id:
+            await self.send_artifact_task_started(chat_id, task_id)
+
+    async def _maybe_push_task_plan(self, chat_id: str) -> None:
+        if self._session_manager is None:
+            return
+        row = self._session_manager.read_session_file(f"websocket:{chat_id}")
+        metadata = row.get("metadata", {}) if isinstance(row, dict) else {}
+        blob = task_plan_ws_blob(metadata if isinstance(metadata, dict) else {})
+        if blob is not None:
+            await self.send_task_plan(chat_id, blob)
 
     async def _hydrate_after_subscribe(self, chat_id: str) -> None:
         """Replay goal/run strip state after subscribe (same-process refresh)."""
         await self._maybe_push_active_goal_state(chat_id)
         await self._maybe_push_turn_run_wall_clock(chat_id)
+        await self._maybe_push_artifact_task(chat_id)
+        await self._maybe_push_task_plan(chat_id)
+        await self.send_artifacts_changed(chat_id=chat_id)
 
     async def _send_event(self, connection: Any, event: str, **fields: Any) -> None:
         """Send a control event (attached, error, ...) to a single connection."""
@@ -845,9 +933,7 @@ class WebSocketChannel(BaseChannel):
         token_value = f"nbwt_{secrets.token_urlsafe(32)}"
         self._issued_tokens[token_value] = time.monotonic() + float(self.config.token_ttl_s)
 
-        return _http_json_response(
-            {"token": token_value, "expires_in": self.config.token_ttl_s}
-        )
+        return _http_json_response({"token": token_value, "expires_in": self.config.token_ttl_s})
 
     # -- HTTP dispatch ------------------------------------------------------
 
@@ -856,7 +942,9 @@ class WebSocketChannel(BaseChannel):
         got, query = _parse_request_path(request.path)
         return await self._dispatch_http_inner(connection, request, got, query)
 
-    async def _dispatch_http_inner(self, connection: Any, request: WsRequest, got: str, query: list[tuple[str, str]]) -> Any:
+    async def _dispatch_http_inner(
+        self, connection: Any, request: WsRequest, got: str, query: list[tuple[str, str]]
+    ) -> Any:
 
         # 1. Token issue endpoint (legacy, optional, gated by configured secret).
         if self.config.token_issue_path:
@@ -878,14 +966,44 @@ class WebSocketChannel(BaseChannel):
         if got.startswith("/api/agents/"):
             return self._handle_agent_management_get(request, got)
 
+        if got == "/api/experts/catalog":
+            return await self._handle_expert_catalog(request)
+
+        if got == "/api/experts/install/start":
+            return self._handle_expert_install_start(request)
+
+        if got == "/api/experts/install/status":
+            return self._handle_expert_install_status(request)
+
+        if got == "/api/experts/install/cancel":
+            return await self._handle_expert_install_cancel(request)
+
+        if got == "/api/runtimes/status":
+            return await self._handle_runtime_status(request)
+
+        if got == "/api/runtimes/install/start":
+            return await self._handle_runtime_install_start(request)
+
+        if got == "/api/runtimes/install/required":
+            return await self._handle_runtime_install_required(request)
+
+        if got == "/api/runtimes/install/status":
+            return self._handle_runtime_install_status(request)
+
+        if got == "/api/runtimes/install/cancel":
+            return await self._handle_runtime_install_cancel(request)
+
+        if got == "/api/runtimes/settings/update":
+            return self._handle_runtime_settings_update(request)
+
+        if got == "/api/runtimes/cleanup":
+            return self._handle_runtime_cleanup(request)
+
         if got.startswith("/api/agent-change-proposals/"):
             return self._handle_agent_change_proposal_get(request, got)
 
         if got == "/api/settings":
             return self._handle_settings(request)
-
-        if got == "/api/zen/models":
-            return await self._handle_zen_models(request)
 
         if got == "/api/commands":
             return self._handle_commands(request)
@@ -934,6 +1052,18 @@ class WebSocketChannel(BaseChannel):
 
         if got == "/api/channels/weixin/logout":
             return self._handle_weixin_logout(request)
+
+        pro_document_http = (
+            got.startswith("/api/ppt") and got != "/api/ppt/broadcast-phase"
+        ) or got in {"/api/video/download", "/api/video/delete-project"}
+        if pro_document_http and not await _has_subscription_access():
+            return _http_json_response(
+                {
+                    "error": "membership_required",
+                    "detail": "AI文档需要有效的 Mona Pro 订阅或试用",
+                },
+                status=403,
+            )
 
         if got == "/api/ppt/templates":
             return self._handle_ppt_templates(request)
@@ -1036,15 +1166,16 @@ class WebSocketChannel(BaseChannel):
         if got == "/api/artifacts":
             return self._handle_artifacts_list(request)
 
+        if got == "/api/artifact-rename":
+            return self._handle_artifact_rename(request)
+
         # Stock module report queries (design §10.2, dev plan T16). Detail
         # matches by document content, never by path — see reports.py.
         if got == "/api/stock/reports":
             return self._handle_stock_reports(request)
 
         if got.startswith("/api/stock/reports/"):
-            return self._handle_stock_report_detail(
-                request, got[len("/api/stock/reports/") :]
-            )
+            return self._handle_stock_report_detail(request, got[len("/api/stock/reports/") :])
 
         # Manual report cleanup (design §9). A GET here follows the channel's
         # process_request constraint (no reliable POST body), same as the
@@ -1056,9 +1187,7 @@ class WebSocketChannel(BaseChannel):
             return self._handle_stock_dashboard(request)
 
         if got == "/api/project-files":
-            return self._handle_project_files_list(
-                request, _query_first(query, "key") or ""
-            )
+            return self._handle_project_files_list(request, _query_first(query, "key") or "")
 
         # 4. WebSocket upgrade (the channel's primary purpose). Only run the
         # handshake gate on requests that actually ask to upgrade; otherwise
@@ -1086,9 +1215,7 @@ class WebSocketChannel(BaseChannel):
     def _check_api_token(self, request: WsRequest) -> bool:
         """Validate a request against the API token pool (multi-use, TTL-bound)."""
         self._purge_expired_api_tokens()
-        token = _bearer_token(request.headers) or _query_first(
-            _parse_query(request.path), "token"
-        )
+        token = _bearer_token(request.headers) or _query_first(_parse_query(request.path), "token")
         if not token:
             return False
         expiry = self._api_tokens.get(token)
@@ -1227,6 +1354,216 @@ class WebSocketChannel(BaseChannel):
         agents = [self._agent_summary(definition) for definition in registry.list_agents()]
         return _http_json_response({"agents": agents})
 
+    def _expert_install_job_manager(self) -> Any:
+        manager = getattr(self, "_expert_jobs", None)
+        if manager is None:
+            from mona.agent.official_experts import build_official_expert_jobs
+
+            manager = build_official_expert_jobs(
+                registry=self._room_agent_registry(),
+                workspace=self.workspace,
+                bus=self.bus,
+                subagent_manager=self._subagent_manager,
+                sessions=self._session_manager,
+            )
+            self._expert_jobs = manager
+        return manager
+
+    async def _handle_expert_catalog(self, request: WsRequest) -> Response:
+        if not self._check_api_token(request):
+            return _http_error(401, "Unauthorized")
+        try:
+            payload = await self._expert_install_job_manager().catalog_payload()
+        except Exception as exc:
+            self.logger.warning("expert catalog unavailable: {}", exc)
+            return _http_json_response(
+                {
+                    "schemaVersion": 1,
+                    "generatedAt": None,
+                    "source": "unavailable",
+                    "stale": False,
+                    "installEnabled": False,
+                    "installUnavailableReason": "official_catalog_unavailable",
+                    "experts": [],
+                }
+            )
+        return _http_json_response(payload)
+
+    def _handle_expert_install_start(self, request: WsRequest) -> Response:
+        if not self._check_api_token(request):
+            return _http_error(401, "Unauthorized")
+        query = _parse_query(request.path)
+        expert_id = (_query_first(query, "expert_id") or "").strip()
+        version = (_query_first(query, "version") or "").strip() or None
+        try:
+            job = self._expert_install_job_manager().start(expert_id, version)
+        except ValueError as exc:
+            return _http_error(400, str(exc))
+        except Exception as exc:
+            from mona.agent.expert_jobs import ExpertInstallUnavailableError
+
+            if isinstance(exc, ExpertInstallUnavailableError):
+                return _http_error(503, str(exc))
+            self.logger.exception("failed to start expert install")
+            return _http_error(500, "无法启动专家安装")
+        return _http_json_response(
+            {"ok": True, "job": job.model_dump(by_alias=True, mode="json")},
+            status=202,
+        )
+
+    def _handle_expert_install_status(self, request: WsRequest) -> Response:
+        if not self._check_api_token(request):
+            return _http_error(401, "Unauthorized")
+        job_id = (_query_first(_parse_query(request.path), "job_id") or "").strip()
+        manager = self._expert_install_job_manager()
+        try:
+            if job_id:
+                job = manager.get(job_id)
+                return _http_json_response({"job": job.model_dump(by_alias=True, mode="json")})
+            return _http_json_response(
+                {"jobs": [job.model_dump(by_alias=True, mode="json") for job in manager.list()]}
+            )
+        except KeyError:
+            return _http_error(404, "expert install job not found")
+
+    async def _handle_expert_install_cancel(self, request: WsRequest) -> Response:
+        if not self._check_api_token(request):
+            return _http_error(401, "Unauthorized")
+        job_id = (_query_first(_parse_query(request.path), "job_id") or "").strip()
+        if not job_id:
+            return _http_error(400, "job_id is required")
+        try:
+            job = await self._expert_install_job_manager().cancel(job_id)
+        except KeyError:
+            return _http_error(404, "expert install job not found")
+        except ValueError as exc:
+            return _http_error(409, str(exc))
+        return _http_json_response({"ok": True, "job": job.model_dump(by_alias=True, mode="json")})
+
+    def _runtime_install_job_manager(self) -> Any:
+        manager = getattr(self, "_runtime_jobs", None)
+        if manager is None:
+            from mona.runtime.official import get_official_runtime_jobs
+
+            manager = get_official_runtime_jobs()
+            self._runtime_jobs = manager
+        return manager
+
+    async def _handle_runtime_status(self, request: WsRequest) -> Response:
+        if not self._check_api_token(request):
+            return _http_error(401, "Unauthorized")
+        try:
+            payload = await self._runtime_install_job_manager().status_payload()
+        except Exception as exc:
+            self.logger.warning("runtime catalog unavailable: {}", exc)
+            return _http_error(503, "运行环境目录暂时不可用，请检查网络后重试")
+        return _http_json_response(payload)
+
+    async def _handle_runtime_install_start(self, request: WsRequest) -> Response:
+        if not self._check_api_token(request):
+            return _http_error(401, "Unauthorized")
+        query = _parse_query(request.path)
+        component = (_query_first(query, "component") or "").strip()
+        repair = (_query_first(query, "repair") or "false").strip().lower() in {
+            "1",
+            "true",
+            "yes",
+            "on",
+        }
+        try:
+            job = await self._runtime_install_job_manager().start(component, repair=repair)
+        except ValueError as exc:
+            return _http_error(400, str(exc))
+        except Exception as exc:
+            from mona.runtime.jobs import RuntimeInstallUnavailableError
+
+            if isinstance(exc, RuntimeInstallUnavailableError):
+                return _http_error(503, str(exc))
+            self.logger.exception("failed to start runtime install")
+            return _http_error(500, "无法启动运行环境安装")
+        return _http_json_response(
+            {"ok": True, "job": job.model_dump(by_alias=True, mode="json")},
+            status=202,
+        )
+
+    async def _handle_runtime_install_required(self, request: WsRequest) -> Response:
+        """Start a feature-required download on the Gateway-owned manager."""
+        if not self._check_api_token(request):
+            return _http_error(401, "Unauthorized")
+        component = (_query_first(_parse_query(request.path), "component") or "").strip()
+        try:
+            job = await self._runtime_install_job_manager().start_required(component)
+        except ValueError as exc:
+            return _http_error(400, str(exc))
+        except Exception as exc:
+            from mona.runtime.jobs import (
+                RuntimeAutoDownloadDisabledError,
+                RuntimeInstallUnavailableError,
+            )
+
+            if isinstance(exc, RuntimeAutoDownloadDisabledError):
+                return _http_error(409, str(exc))
+            if isinstance(exc, RuntimeInstallUnavailableError):
+                return _http_error(503, str(exc))
+            self.logger.exception("failed to start required runtime install")
+            return _http_error(500, "无法启动功能资源下载")
+        return _http_json_response(
+            {"ok": True, "job": job.model_dump(by_alias=True, mode="json")},
+            status=202,
+        )
+
+    def _handle_runtime_install_status(self, request: WsRequest) -> Response:
+        if not self._check_api_token(request):
+            return _http_error(401, "Unauthorized")
+        job_id = (_query_first(_parse_query(request.path), "job_id") or "").strip()
+        manager = self._runtime_install_job_manager()
+        try:
+            if job_id:
+                job = manager.get(job_id)
+                return _http_json_response({"job": job.model_dump(by_alias=True, mode="json")})
+            return _http_json_response(
+                {"jobs": [job.model_dump(by_alias=True, mode="json") for job in manager.list()]}
+            )
+        except KeyError:
+            return _http_error(404, "runtime install job not found")
+
+    async def _handle_runtime_install_cancel(self, request: WsRequest) -> Response:
+        if not self._check_api_token(request):
+            return _http_error(401, "Unauthorized")
+        job_id = (_query_first(_parse_query(request.path), "job_id") or "").strip()
+        if not job_id:
+            return _http_error(400, "job_id is required")
+        try:
+            job = await self._runtime_install_job_manager().cancel(job_id)
+        except KeyError:
+            return _http_error(404, "runtime install job not found")
+        except ValueError as exc:
+            return _http_error(409, str(exc))
+        return _http_json_response({"ok": True, "job": job.model_dump(by_alias=True, mode="json")})
+
+    def _handle_runtime_settings_update(self, request: WsRequest) -> Response:
+        if not self._check_api_token(request):
+            return _http_error(401, "Unauthorized")
+        query = _parse_query(request.path)
+        if "auto_download" not in query and "autoDownload" not in query:
+            return _http_error(400, "auto_download is required")
+        try:
+            payload = update_agent_settings(query)
+        except WebUISettingsError as exc:
+            return _http_error(exc.status, exc.message)
+        return _http_json_response(
+            {"ok": True, "autoDownload": payload["runtime"]["auto_download"]}
+        )
+
+    def _handle_runtime_cleanup(self, request: WsRequest) -> Response:
+        if not self._check_api_token(request):
+            return _http_error(401, "Unauthorized")
+        try:
+            result = self._runtime_install_job_manager().cleanup()
+        except ValueError as exc:
+            return _http_error(409, str(exc))
+        return _http_json_response({"ok": True, **result})
+
     @staticmethod
     def _agent_summary(definition: Any) -> dict[str, Any]:
         from mona.agent.user_config import load_agent_user_config, resolve_effective_agent_config
@@ -1272,28 +1609,32 @@ class WebSocketChannel(BaseChannel):
                 )
 
                 config = load_agent_user_config(agent_id)
-                return _http_json_response({
-                    "agent": self._agent_summary(definition),
-                    "definition": {
-                        "id": definition.id,
-                        "model": definition.model,
-                        "toolAllowlist": definition.tool_allowlist,
-                        "canDelegate": definition.can_delegate,
-                        "skills": definition.skills,
-                        "packageId": definition.package_id,
-                        "packageVersion": definition.package_version,
-                    },
-                    "config": config.model_dump(by_alias=True),
-                    "effective": resolve_effective_agent_config(definition, config).model_dump(by_alias=True),
-                    "data": agent_data_summary(agent_id),
-                    "toolCatalog": agent_tool_catalog(
-                        definition,
-                        workspace=self.workspace,
-                        bus=self.bus,
-                        subagent_manager=self._subagent_manager,
-                        sessions=self._session_manager,
-                    ),
-                })
+                return _http_json_response(
+                    {
+                        "agent": self._agent_summary(definition),
+                        "definition": {
+                            "id": definition.id,
+                            "model": definition.model,
+                            "toolAllowlist": definition.tool_allowlist,
+                            "canDelegate": definition.can_delegate,
+                            "skills": definition.skills,
+                            "packageId": definition.package_id,
+                            "packageVersion": definition.package_version,
+                        },
+                        "config": config.model_dump(by_alias=True),
+                        "effective": resolve_effective_agent_config(definition, config).model_dump(
+                            by_alias=True
+                        ),
+                        "data": agent_data_summary(agent_id),
+                        "toolCatalog": agent_tool_catalog(
+                            definition,
+                            workspace=self.workspace,
+                            bus=self.bus,
+                            subagent_manager=self._subagent_manager,
+                            sessions=self._session_manager,
+                        ),
+                    }
+                )
             if suffix == ["instructions"]:
                 from mona.agent.agent_management import list_instructions
 
@@ -1309,7 +1650,15 @@ class WebSocketChannel(BaseChannel):
             if suffix == ["skills"]:
                 from mona.agent.agent_management import SkillManager
 
-                return _http_json_response({"skills": SkillManager(agent_id, registry=registry).list()})
+                return _http_json_response(
+                    {"skills": SkillManager(agent_id, registry=registry).list()}
+                )
+            if len(suffix) == 2 and suffix[0] == "skills":
+                from mona.agent.agent_management import SkillManager
+
+                return _http_json_response(
+                    {"skill": SkillManager(agent_id, registry=registry).read(suffix[1])}
+                )
             if suffix == ["proposals"]:
                 from mona.agent.agent_management import list_change_proposals
 
@@ -1336,13 +1685,6 @@ class WebSocketChannel(BaseChannel):
         if not self._check_api_token(request):
             return _http_error(401, "Unauthorized")
         return _http_json_response(self._with_settings_restart_state(settings_payload()))
-
-    async def _handle_zen_models(self, request: WsRequest) -> Response:
-        if not self._check_api_token(request):
-            return _http_error(401, "Unauthorized")
-        models = await fetch_zen_free_models()
-        sync_zen_free_models(models)
-        return _http_json_response({"models": models})
 
     def _with_settings_restart_state(
         self,
@@ -1423,9 +1765,7 @@ class WebSocketChannel(BaseChannel):
             payload = update_agent_settings(query)
         except WebUISettingsError as e:
             return _http_error(e.status, e.message)
-        return _http_json_response(
-            self._with_settings_restart_state(payload, section="runtime")
-        )
+        return _http_json_response(self._with_settings_restart_state(payload, section="runtime"))
 
     def _handle_settings_provider_update(self, request: WsRequest) -> Response:
         if not self._check_api_token(request):
@@ -1548,9 +1888,7 @@ class WebSocketChannel(BaseChannel):
                 logger.exception("Stock pack bootstrap failed")
 
         try:
-            payload = update_stock_settings(
-                query, cron_service=cron_service, bootstrap=_bootstrap
-            )
+            payload = update_stock_settings(query, cron_service=cron_service, bootstrap=_bootstrap)
         except WebUISettingsError as e:
             return _http_error(e.status, e.message)
         return _http_json_response(self._with_settings_restart_state(payload))
@@ -1595,10 +1933,12 @@ class WebSocketChannel(BaseChannel):
         if session is None:
             from mona.webui.weixin_login import WeixinLoginSession
 
-            return _http_json_response({
-                "state": "idle",
-                "logged_in": WeixinLoginSession.has_saved_token(),
-            })
+            return _http_json_response(
+                {
+                    "state": "idle",
+                    "logged_in": WeixinLoginSession.has_saved_token(),
+                }
+            )
         status = session.get_status()
         # Augment with on-disk login state for convenience.
         from mona.webui.weixin_login import WeixinLoginSession
@@ -1644,26 +1984,26 @@ class WebSocketChannel(BaseChannel):
             layouts_index = (
                 skill_dir / "scripts" / "templates_full" / "layouts" / "layouts_index.json"
             )
-            brands_index = (
-                skill_dir / "scripts" / "templates_full" / "brands" / "brands_index.json"
-            )
+            brands_index = skill_dir / "scripts" / "templates_full" / "brands" / "brands_index.json"
 
             templates = []
             if layouts_index.exists():
                 raw = json.loads(layouts_index.read_text(encoding="utf-8"))
                 for key, info in raw.items():
-                    templates.append({
-                        "key": key,
-                        "kind": "layout",
-                        "group": "通用",
-                        "name": info.get("name", key),
-                        "summary": info.get("summary", ""),
-                        "pageCount": info.get("page_count", 0),
-                        "canvasFormat": info.get("canvas_format", "ppt169"),
-                        "coverSvgUrl": (
-                            f"/api/ppt/template-svg?kind=layout&key={quote(key, safe='')}&file=01_cover.svg"
-                        ),
-                    })
+                    templates.append(
+                        {
+                            "key": key,
+                            "kind": "layout",
+                            "group": "通用",
+                            "name": info.get("name", key),
+                            "summary": info.get("summary", ""),
+                            "pageCount": info.get("page_count", 0),
+                            "canvasFormat": info.get("canvas_format", "ppt169"),
+                            "coverSvgUrl": (
+                                f"/api/ppt/template-svg?kind=layout&key={quote(key, safe='')}&file=01_cover.svg"
+                            ),
+                        }
+                    )
 
             if brands_index.exists():
                 raw = json.loads(brands_index.read_text(encoding="utf-8"))
@@ -1679,23 +2019,23 @@ class WebSocketChannel(BaseChannel):
                                     f"&key={quote(key, safe='')}&file=01_cover{ext}"
                                 )
                                 break
-                    templates.append({
-                        "key": key,
-                        "kind": "brand",
-                        "group": "品牌预设",
-                        "name": info.get("name", key),
-                        "summary": info.get("summary", ""),
-                        "pageCount": info.get("page_count", 0),
-                        "canvasFormat": info.get("canvas_format", "ppt169"),
-                        "primaryColor": info.get("primary_color", ""),
-                        "coverSvgUrl": cover_url,
-                        "userCreated": info.get("userCreated", False),
-                    })
+                    templates.append(
+                        {
+                            "key": key,
+                            "kind": "brand",
+                            "group": "品牌预设",
+                            "name": info.get("name", key),
+                            "summary": info.get("summary", ""),
+                            "pageCount": info.get("page_count", 0),
+                            "canvasFormat": info.get("canvas_format", "ppt169"),
+                            "primaryColor": info.get("primary_color", ""),
+                            "coverSvgUrl": cover_url,
+                            "userCreated": info.get("userCreated", False),
+                        }
+                    )
 
             # --- Native templates ---
-            native_index = (
-                skill_dir / "scripts" / "templates_full" / "native" / "native_index.json"
-            )
+            native_index = skill_dir / "scripts" / "templates_full" / "native" / "native_index.json"
             if native_index.exists():
                 raw = json.loads(native_index.read_text(encoding="utf-8"))
                 for key, info in raw.items():
@@ -1708,18 +2048,20 @@ class WebSocketChannel(BaseChannel):
                                 f"/api/ppt/template-svg?kind=native"
                                 f"&key={quote(key, safe='')}&file=01_cover.png"
                             )
-                    templates.append({
-                        "key": key,
-                        "kind": "native",
-                        "group": "自定义模板",
-                        "name": info.get("name", key),
-                        "summary": info.get("summary", ""),
-                        "pageCount": info.get("page_count", 0),
-                        "canvasFormat": info.get("canvas_format", "ppt169"),
-                        "primaryColor": info.get("primary_color", ""),
-                        "coverSvgUrl": cover_url,
-                        "userCreated": info.get("userCreated", False),
-                    })
+                    templates.append(
+                        {
+                            "key": key,
+                            "kind": "native",
+                            "group": "自定义模板",
+                            "name": info.get("name", key),
+                            "summary": info.get("summary", ""),
+                            "pageCount": info.get("page_count", 0),
+                            "canvasFormat": info.get("canvas_format", "ppt169"),
+                            "primaryColor": info.get("primary_color", ""),
+                            "coverSvgUrl": cover_url,
+                            "userCreated": info.get("userCreated", False),
+                        }
+                    )
 
             canvas_formats = [
                 {
@@ -1773,10 +2115,12 @@ class WebSocketChannel(BaseChannel):
                 },
             ]
 
-            return _http_json_response({
-                "templates": templates,
-                "canvasFormats": canvas_formats,
-            })
+            return _http_json_response(
+                {
+                    "templates": templates,
+                    "canvasFormats": canvas_formats,
+                }
+            )
         except Exception as e:
             logger.exception("ppt templates error")
             return _http_error(500, str(e))
@@ -1815,9 +2159,7 @@ class WebSocketChannel(BaseChannel):
                 stem = Path(file).stem
                 for ext in (".svg", ".png", ".jpg", ".jpeg"):
                     candidate = (base_dir / (stem + ext)).resolve()
-                    if candidate.exists() and str(candidate).startswith(
-                        str(base_dir.resolve())
-                    ):
+                    if candidate.exists() and str(candidate).startswith(str(base_dir.resolve())):
                         file_path = candidate
                         break
 
@@ -1845,9 +2187,20 @@ class WebSocketChannel(BaseChannel):
             logger.exception("ppt template svg error")
             return _http_error(500, str(e))
 
-    _PPT_SOURCE_SUFFIXES = frozenset({
-        ".md", ".txt", ".pdf", ".doc", ".docx", ".pptx", ".csv", ".json", ".xls", ".xlsx",
-    })
+    _PPT_SOURCE_SUFFIXES = frozenset(
+        {
+            ".md",
+            ".txt",
+            ".pdf",
+            ".doc",
+            ".docx",
+            ".pptx",
+            ".csv",
+            ".json",
+            ".xls",
+            ".xlsx",
+        }
+    )
 
     def _handle_ppt_add_sources(self, request: WsRequest) -> Response:
         if not self._check_api_token(request):
@@ -1873,10 +2226,12 @@ class WebSocketChannel(BaseChannel):
                         dest = sources_dir / src.name
                         shutil.copy2(src, dest)
                         rel = dest.relative_to(workspace)
-                        added.append({
-                            "name": src.name,
-                            "path": str(rel).replace("\\", "/"),
-                        })
+                        added.append(
+                            {
+                                "name": src.name,
+                                "path": str(rel).replace("\\", "/"),
+                            }
+                        )
                 elif src.is_dir():
                     for fp in sorted(src.rglob("*")):
                         if not fp.is_file():
@@ -1888,10 +2243,12 @@ class WebSocketChannel(BaseChannel):
                         dest.parent.mkdir(parents=True, exist_ok=True)
                         shutil.copy2(fp, dest)
                         rel = dest.relative_to(workspace)
-                        added.append({
-                            "name": rel_src.as_posix(),
-                            "path": str(rel).replace("\\", "/"),
-                        })
+                        added.append(
+                            {
+                                "name": rel_src.as_posix(),
+                                "path": str(rel).replace("\\", "/"),
+                            }
+                        )
 
             return _http_json_response({"files": added})
         except Exception as e:
@@ -1906,6 +2263,7 @@ class WebSocketChannel(BaseChannel):
             import subprocess
 
             from mona.agent.skills import BUILTIN_SKILLS_DIR
+
             query = _parse_query(request.path)
             url = _query_first(query, "url") or ""
             project_name = _query_first(query, "project") or ""
@@ -1916,13 +2274,7 @@ class WebSocketChannel(BaseChannel):
                 return _http_error(400, "url must start with http:// or https://")
 
             workspace = self.workspace
-            script = (
-                BUILTIN_SKILLS_DIR
-                / "mona-ppt"
-                / "scripts"
-                / "source_to_md"
-                / "web_to_md.py"
-            )
+            script = BUILTIN_SKILLS_DIR / "mona-ppt" / "scripts" / "source_to_md" / "web_to_md.py"
 
             if not script.exists():
                 return _http_error(500, "web_to_md.py not found")
@@ -1955,17 +2307,21 @@ class WebSocketChannel(BaseChannel):
                         file_path = str(rel_path).replace("\\", "/")
                     except ValueError:
                         file_path = str(md_files[0])
-                    return _http_json_response({
-                        "ok": True,
-                        "file": file_path,
-                        "output": result.stdout.strip(),
-                    })
+                    return _http_json_response(
+                        {
+                            "ok": True,
+                            "file": file_path,
+                            "output": result.stdout.strip(),
+                        }
+                    )
                 return _http_json_response({"ok": True, "output": result.stdout.strip()})
             else:
-                return _http_json_response({
-                    "ok": False,
-                    "error": result.stderr.strip() or result.stdout.strip() or "fetch failed",
-                })
+                return _http_json_response(
+                    {
+                        "ok": False,
+                        "error": result.stderr.strip() or result.stdout.strip() or "fetch failed",
+                    }
+                )
         except subprocess.TimeoutExpired:
             return _http_json_response({"ok": False, "error": "fetch timed out"})
         except Exception as e:
@@ -2001,19 +2357,21 @@ class WebSocketChannel(BaseChannel):
                     if chat_id_file.exists()
                     else None
                 )
-                projects.append({
-                    "name": d.name,
-                    "createdAt": stat.st_ctime,
-                    "format": "ppt169",
-                    "slideCount": status_info["slideCount"],
-                    "hasExport": status_info["hasExport"],
-                    "hasSvgOutput": status_info["hasSvgOutput"],
-                    "hasPptxOutput": status_info["hasPptxOutput"],
-                    "hasSpecLock": status_info["hasSpecLock"],
-                    "status": status_info["status"],
-                    "phase": status_info.get("phase"),
-                    "chatId": chat_id,
-                })
+                projects.append(
+                    {
+                        "name": d.name,
+                        "createdAt": stat.st_ctime,
+                        "format": "ppt169",
+                        "slideCount": status_info["slideCount"],
+                        "hasExport": status_info["hasExport"],
+                        "hasSvgOutput": status_info["hasSvgOutput"],
+                        "hasPptxOutput": status_info["hasPptxOutput"],
+                        "hasSpecLock": status_info["hasSpecLock"],
+                        "status": status_info["status"],
+                        "phase": status_info.get("phase"),
+                        "chatId": chat_id,
+                    }
+                )
 
             return _http_json_response({"projects": projects})
         except Exception as e:
@@ -2115,7 +2473,8 @@ class WebSocketChannel(BaseChannel):
                 # Fallback: prefix match for renamed directories (e.g. init
                 # script appended _ppt169_YYYYMMDD to a pre-created placeholder).
                 candidates = [
-                    d for d in projects_dir.iterdir()
+                    d
+                    for d in projects_dir.iterdir()
                     if d.is_dir() and d.name.startswith(f"{project_name}_")
                 ]
                 if len(candidates) == 1:
@@ -2124,19 +2483,21 @@ class WebSocketChannel(BaseChannel):
                     return _http_json_response({"status": "not_found"})
 
             status_info = _get_ppt_project_status(project_dir)
-            return _http_json_response({
-                "status": status_info["status"],
-                "phase": status_info["phase"],
-                "slideCount": status_info["slideCount"],
-                "hasExport": status_info["hasExport"],
-                "hasSvgOutput": status_info["hasSvgOutput"],
-                "hasPptxOutput": status_info["hasPptxOutput"],
-                "hasSpecLock": status_info["hasSpecLock"],
-                "exportFile": status_info["exportFile"],
-                "pipelineStage": status_info["pipelineStage"],
-                "svgOutputCount": status_info["svgOutputCount"],
-                "svgFinalCount": status_info["svgFinalCount"],
-            })
+            return _http_json_response(
+                {
+                    "status": status_info["status"],
+                    "phase": status_info["phase"],
+                    "slideCount": status_info["slideCount"],
+                    "hasExport": status_info["hasExport"],
+                    "hasSvgOutput": status_info["hasSvgOutput"],
+                    "hasPptxOutput": status_info["hasPptxOutput"],
+                    "hasSpecLock": status_info["hasSpecLock"],
+                    "exportFile": status_info["exportFile"],
+                    "pipelineStage": status_info["pipelineStage"],
+                    "svgOutputCount": status_info["svgOutputCount"],
+                    "svgFinalCount": status_info["svgFinalCount"],
+                }
+            )
         except Exception as e:
             logger.exception("ppt export status error")
             return _http_error(500, str(e))
@@ -2155,22 +2516,21 @@ class WebSocketChannel(BaseChannel):
     async def _handle_ppt_officecli_download(self, request: WsRequest) -> Response:
         if not self._check_api_token(request):
             return _http_error(401, "Unauthorized")
-        try:
-            from mona.api.officecli_runtime import OfficeCliRuntime
-
-            result = await OfficeCliRuntime().ensure()
-            if not result.get("ok"):
-                return _http_json_response(result, status=500)
-            return _http_json_response(result)
-        except Exception as e:
-            logger.exception("ppt officecli-download error")
-            return _http_error(500, str(e))
+        return _http_json_response(
+            {
+                "ok": False,
+                "code": "OFFICECLI_REMOVED",
+                "error": "旧 PPT 模板编辑能力已停止分发",
+            },
+            status=410,
+        )
 
     def _handle_ppt_generate_preview(self, request: WsRequest) -> Response:
         if not self._check_api_token(request):
             return _http_error(401, "Unauthorized")
         try:
             from mona.agent.skills import BUILTIN_SKILLS_DIR
+
             query = _parse_query(request.path)
             project_name = _query_first(query, "project") or ""
             if (
@@ -2200,16 +2560,16 @@ class WebSocketChannel(BaseChannel):
 
             if result.returncode == 0:
                 slide_count = (
-                    len(list(preview_dir.glob("slide_*.png")))
-                    if preview_dir.exists()
-                    else 0
+                    len(list(preview_dir.glob("slide_*.png"))) if preview_dir.exists() else 0
                 )
                 return _http_json_response({"ok": True, "slideCount": slide_count})
             else:
-                return _http_json_response({
-                    "ok": False,
-                    "error": result.stderr.strip() or result.stdout.strip() or "unknown error",
-                })
+                return _http_json_response(
+                    {
+                        "ok": False,
+                        "error": result.stderr.strip() or result.stdout.strip() or "unknown error",
+                    }
+                )
         except subprocess.TimeoutExpired:
             return _http_json_response({"ok": False, "error": "preview generation timed out"})
         except Exception as e:
@@ -2244,12 +2604,7 @@ class WebSocketChannel(BaseChannel):
         query = _parse_query(request.path)
         project_name = _query_first(query, "project") or ""
         phase = _query_first(query, "phase") or ""
-        if (
-            not project_name
-            or "/" in project_name
-            or "\\" in project_name
-            or ".." in project_name
-        ):
+        if not project_name or "/" in project_name or "\\" in project_name or ".." in project_name:
             return _http_error(400, "invalid project name")
         if phase not in _PPT_PHASES:
             return _http_error(400, "invalid phase")
@@ -2271,12 +2626,7 @@ class WebSocketChannel(BaseChannel):
         query = _parse_query(request.path)
         project_name = _query_first(query, "name") or ""
         hint = _query_first(query, "hint") or ""
-        if (
-            not project_name
-            or "/" in project_name
-            or "\\" in project_name
-            or ".." in project_name
-        ):
+        if not project_name or "/" in project_name or "\\" in project_name or ".." in project_name:
             return _http_error(400, "invalid project name")
         if hint not in ("", "scenes", "phase", "progress", "status"):
             return _http_error(400, "invalid hint")
@@ -2393,6 +2743,31 @@ class WebSocketChannel(BaseChannel):
             workspace = self.workspace
             project_dir = workspace / "video_projects" / project_name
 
+            artifact = (_query_first(query, "artifact") or "mp4").strip().lower()
+            artifact_files = {
+                "package": ("delivery.zip", "application/zip"),
+                "srt": ("subtitles.srt", "text/plain; charset=utf-8"),
+                "vtt": ("subtitles.vtt", "text/vtt; charset=utf-8"),
+                "cover": ("cover.png", "image/png"),
+                "audio": ("audio.m4a", "audio/mp4"),
+                "report": ("quality-report.json", "application/json; charset=utf-8"),
+            }
+            if artifact != "mp4":
+                target = artifact_files.get(artifact)
+                if target is None:
+                    return _http_error(400, "invalid video artifact")
+                chosen = project_dir / "renders" / target[0]
+                if not chosen.is_file():
+                    return _http_error(404, "video artifact not found")
+                return _http_response(
+                    chosen.read_bytes(),
+                    content_type=target[1],
+                    extra_headers=[
+                        ("Content-Disposition", f'attachment; filename="{chosen.name}"'),
+                        ("Cache-Control", "no-cache"),
+                    ],
+                )
+
             # Prefer renders/output.mp4 (new pipeline), fallback to any mp4 in output/.
             candidates = [project_dir / "renders" / "output.mp4"]
             output_dir = project_dir / "output"
@@ -2500,27 +2875,31 @@ class WebSocketChannel(BaseChannel):
                 for f in sorted(preview_dir.glob("slide_*.png")):
                     if f.name not in seen:
                         seen.add(f.name)
-                        slides.append({
-                            "name": f.name,
-                            "type": "image",
-                            "url": (
-                                f"/api/ppt/project-file?project={quote(project_name, safe='')}"
-                                f"&path=output/preview/{quote(f.name, safe='')}"
-                            ),
-                        })
+                        slides.append(
+                            {
+                                "name": f.name,
+                                "type": "image",
+                                "url": (
+                                    f"/api/ppt/project-file?project={quote(project_name, safe='')}"
+                                    f"&path=output/preview/{quote(f.name, safe='')}"
+                                ),
+                            }
+                        )
             # Also check output/ directly for legacy preview images
             if output_dir.is_dir():
                 for f in sorted(output_dir.glob("slide_*.png")):
                     if f.name not in seen:
                         seen.add(f.name)
-                        slides.append({
-                            "name": f.name,
-                            "type": "image",
-                            "url": (
-                                f"/api/ppt/project-file?project={quote(project_name, safe='')}"
-                                f"&path=output/{quote(f.name, safe='')}"
-                            ),
-                        })
+                        slides.append(
+                            {
+                                "name": f.name,
+                                "type": "image",
+                                "url": (
+                                    f"/api/ppt/project-file?project={quote(project_name, safe='')}"
+                                    f"&path=output/{quote(f.name, safe='')}"
+                                ),
+                            }
+                        )
 
             # Legacy pipeline: svg_final (self-contained), fall back to svg_output
             svg_final_dir = project_dir / "svg_final"
@@ -2531,28 +2910,32 @@ class WebSocketChannel(BaseChannel):
                 for f in sorted(svg_final_dir.glob("*.svg")):
                     if f.name not in seen:
                         seen.add(f.name)
-                        slides.append({
-                            "name": f.name,
-                            "type": "svg",
-                            "url": (
-                                f"/api/ppt/project-svg?project={quote(project_name, safe='')}"
-                                f"&file={quote(f.name, safe='')}&dir=final"
-                            ),
-                        })
+                        slides.append(
+                            {
+                                "name": f.name,
+                                "type": "svg",
+                                "url": (
+                                    f"/api/ppt/project-svg?project={quote(project_name, safe='')}"
+                                    f"&file={quote(f.name, safe='')}&dir=final"
+                                ),
+                            }
+                        )
 
             # svg_output files not already in svg_final
             if svg_output_dir.is_dir():
                 for f in sorted(svg_output_dir.glob("*.svg")):
                     if f.name not in seen:
                         seen.add(f.name)
-                        slides.append({
-                            "name": f.name,
-                            "type": "svg",
-                            "url": (
-                                f"/api/ppt/project-svg?project={quote(project_name, safe='')}"
-                                f"&file={quote(f.name, safe='')}&dir=output"
-                            ),
-                        })
+                        slides.append(
+                            {
+                                "name": f.name,
+                                "type": "svg",
+                                "url": (
+                                    f"/api/ppt/project-svg?project={quote(project_name, safe='')}"
+                                    f"&file={quote(f.name, safe='')}&dir=output"
+                                ),
+                            }
+                        )
 
             return _http_json_response({"slides": slides})
         except Exception:
@@ -2600,9 +2983,7 @@ class WebSocketChannel(BaseChannel):
             # project-file API so the browser can resolve images/icons.
             # Must happen BEFORE _sanitize_svg_xml, because _rewrite_svg_refs
             # introduces '&' in URL query params that need XML escaping.
-            if svg_dir == "output" or (
-                not svg_dir and svg_path.parent.name == "svg_output"
-            ):
+            if svg_dir == "output" or (not svg_dir and svg_path.parent.name == "svg_output"):
                 content = self._rewrite_svg_refs(content, project_name)
 
             # Sanitize XML after all transformations: AI-generated SVGs
@@ -2641,9 +3022,7 @@ class WebSocketChannel(BaseChannel):
 
         # XML builtin entities and numeric refs must be preserved verbatim.
         xml_builtin = {"amp", "lt", "gt", "quot", "apos"}
-        entity_re = re.compile(
-            r"&([A-Za-z_][A-Za-z0-9_]*|#[0-9]+|#x[0-9A-Fa-f]+);"
-        )
+        entity_re = re.compile(r"&([A-Za-z_][A-Za-z0-9_]*|#[0-9]+|#x[0-9A-Fa-f]+);")
 
         def _fix_entity(m: re.Match) -> str:
             ref = m.group(1)
@@ -2858,12 +3237,22 @@ class WebSocketChannel(BaseChannel):
         session_key: str | None = None,
         is_dm: bool = False,
     ) -> None:
-        meta = metadata or {}
+        meta = dict(metadata or {})
+        task_started = False
         if meta.get("webui"):
+            raw_task_id = meta.get("task_id")
+            task_id = (
+                raw_task_id.strip()
+                if isinstance(raw_task_id, str) and _API_KEY_RE.fullmatch(raw_task_id.strip())
+                else f"task_{uuid.uuid4().hex}"
+            )
+            meta["task_id"] = task_id
+            task_started = self._start_artifact_task(chat_id, task_id, content)
             user_obj: dict[str, Any] = {
                 "event": "user",
                 "chat_id": chat_id,
                 "text": content,
+                "task_id": task_id,
             }
             # IMPORTANT: persist display_content so history replay shows the
             # short label (e.g. "健康巡检") instead of the full enriched prompt.
@@ -2874,12 +3263,16 @@ class WebSocketChannel(BaseChannel):
             if media:
                 user_obj["media_paths"] = list(media)
             self._try_append_webui_transcript(chat_id, user_obj)
+        if task_started:
+            await self.send_artifact_task_started(chat_id, meta["task_id"])
+            await self._maybe_push_task_plan(chat_id)
+            await self.send_artifacts_changed(chat_id=chat_id)
         await super()._handle_message(
             sender_id,
             chat_id,
             content,
             media,
-            metadata,
+            meta,
             session_key,
             is_dm,
         )
@@ -2930,9 +3323,7 @@ class WebSocketChannel(BaseChannel):
         except (OSError, ValueError):
             return None
         payload = _b64url_encode(rel.as_posix().encode("utf-8"))
-        mac = hmac.new(
-            self._media_secret, payload.encode("ascii"), hashlib.sha256
-        ).digest()[:16]
+        mac = hmac.new(self._media_secret, payload.encode("ascii"), hashlib.sha256).digest()[:16]
         return f"/api/media/{_b64url_encode(mac)}/{payload}"
 
     def _sign_or_stage_media_path(self, path: Path) -> dict[str, str] | None:
@@ -3036,54 +3427,75 @@ class WebSocketChannel(BaseChannel):
                 "artifact_ref": artifact.model_dump(mode="json"),
             }
 
+    def _artifact_task_state(
+        self,
+        session_key: str,
+        task_id: str | None = None,
+    ) -> dict[str, Any] | None:
+        if self._session_manager is None:
+            return None
+        session = self._session_manager.get_or_create(session_key)
+        state = session.metadata.get(_ARTIFACT_TASK_STATE_KEY)
+        if not isinstance(state, dict):
+            return None
+        current_id = state.get("id")
+        if not isinstance(current_id, str) or not current_id:
+            return None
+        if task_id and current_id != task_id:
+            return None
+        return state
+
+    def _start_artifact_task(
+        self,
+        chat_id: str,
+        task_id: str,
+        user_message: str = "",
+    ) -> bool:
+        """Persist a workspace baseline for a new user-controlled task."""
+        if self._session_manager is None:
+            return False
+        session_key = f"websocket:{chat_id}"
+        session = self._session_manager.get_or_create(session_key)
+        current = session.metadata.get(_ARTIFACT_TASK_STATE_KEY)
+        if isinstance(current, dict) and current.get("id") == task_id:
+            return False
+
+        baseline: dict[str, list[Any]] = {}
+        # Owner resolution reads persisted session metadata; materialize a
+        # newly created chat before resolving its Agent output root.
+        self._session_manager.save(session)
+        owner = self._session_artifact_owner(session_key)
+        if owner is not None:
+            from mona.config.paths import get_agent_output_dir
+            from mona.utils.artifact_listing import list_artifacts
+
+            base, agent_id = owner
+            try:
+                listing = list_artifacts(get_agent_output_dir(base, agent_id))
+                baseline = {item.path: [item.size, item.modified_at] for item in listing.files}
+            except Exception:
+                logger.exception("Failed to capture artifact task baseline for {}", chat_id)
+
+        session.metadata[_ARTIFACT_TASK_STATE_KEY] = {
+            "id": task_id,
+            "started_at": time.time(),
+            "baseline": baseline,
+        }
+        reset_task_plan(session.metadata, task_id, user_message)
+        self._session_manager.save(session)
+        return True
+
     def _artifact_refs_from_session(self, session_key: str) -> list[Any]:
         """Read explicit delivery references from the session projection."""
         from mona.agent.artifacts import coerce_artifact_ref
         from mona.webui.transcript import read_transcript_lines
 
         refs: list[Any] = []
-        seen: set[str] = set()
+        seen_paths: set[tuple[str, str, str]] = set()
         records = read_transcript_lines(session_key)
-        for record in records:
-            event = record.get("event")
-            if event in {"deliver_files", "file_edit"}:
-                raw_files = record.get("files")
-                if not isinstance(raw_files, list):
-                    edits = record.get("edits")
-                    raw_files = edits if isinstance(edits, list) else []
-            elif event == "message":
-                raw_files = []
-                tool_events = record.get("tool_events")
-                for tool_event in tool_events if isinstance(tool_events, list) else []:
-                    if (
-                        not isinstance(tool_event, dict)
-                        or tool_event.get("name") not in {"generate_image", "generate_video"}
-                        or tool_event.get("error")
-                    ):
-                        continue
-                    result = tool_event.get("result")
-                    payload = result if isinstance(result, dict) else None
-                    if payload is None and isinstance(result, str):
-                        try:
-                            payload, _ = json.JSONDecoder().raw_decode(result.lstrip())
-                        except (TypeError, ValueError, json.JSONDecodeError):
-                            continue
-                    outputs = payload.get("artifacts") if isinstance(payload, dict) else None
-                    for output in outputs if isinstance(outputs, list) else []:
-                        if not isinstance(output, dict):
-                            continue
-                        path = output.get("path") or output.get("local_path") or output.get("saved_to")
-                        if not isinstance(path, str) or not path:
-                            continue
-                        raw_files.append({
-                            "path": path,
-                            "absolute_path": path,
-                            "name": str(output.get("name") or Path(path).name),
-                            "mime": output.get("mime"),
-                        })
-            else:
-                continue
-            for item in raw_files:
+
+        def add_refs(raw_files: list[Any]) -> None:
+            for item in reversed(raw_files):
                 raw_ref = item.get("artifact_ref") if isinstance(item, dict) else None
                 ref = coerce_artifact_ref(raw_ref)
                 if ref is None and isinstance(item, dict):
@@ -3092,10 +3504,88 @@ class WebSocketChannel(BaseChannel):
                     # memory, bounded by the session's resolved Agent root;
                     # never persist or trust the legacy absolute path.
                     ref = self._legacy_session_artifact_ref(session_key, item)
-                if ref is None or ref.id in seen:
+                if ref is None:
                     continue
-                seen.add(ref.id)
+                key = (ref.owner_kind, ref.owner_id, ref.relative_path)
+                if key in seen_paths:
+                    continue
+                seen_paths.add(key)
                 refs.append(ref)
+
+        # Explicit delivery is authoritative. File edits are process records,
+        # not user deliverables, so they never enter the session artifact list.
+        for record in reversed(records):
+            if record.get("event") != "deliver_files":
+                continue
+            raw_files = record.get("files")
+            if isinstance(raw_files, list):
+                add_refs(raw_files)
+
+        # Recover turns where deliver_file succeeded during a streamed reply
+        # but the old dispatcher dropped the final delivery-only frame.
+        for record in reversed(records):
+            if record.get("event") != "message":
+                continue
+            tool_events = record.get("tool_events")
+            if not isinstance(tool_events, list):
+                continue
+            for event in tool_events:
+                if not isinstance(event, dict) or event.get("name") != "deliver_file":
+                    continue
+                if event.get("phase") == "error" or event.get("error"):
+                    continue
+                arguments = event.get("arguments")
+                paths = arguments.get("paths") if isinstance(arguments, dict) else None
+                if isinstance(paths, list):
+                    add_refs(
+                        [
+                            {
+                                "path": path,
+                                "absolute_path": path,
+                                "name": Path(path).name,
+                            }
+                            for path in paths
+                            if isinstance(path, str) and path
+                        ]
+                    )
+
+        # Backfill old image/video transcripts that predate automatic
+        # deliver_files registration, without overriding an explicit delivery.
+        for record in reversed(records):
+            if record.get("event") != "message":
+                continue
+            raw_files: list[Any] = []
+            tool_events = record.get("tool_events")
+            for tool_event in tool_events if isinstance(tool_events, list) else []:
+                if (
+                    not isinstance(tool_event, dict)
+                    or tool_event.get("name") not in {"generate_image", "generate_video"}
+                    or tool_event.get("error")
+                ):
+                    continue
+                result = tool_event.get("result")
+                payload = result if isinstance(result, dict) else None
+                if payload is None and isinstance(result, str):
+                    try:
+                        payload, _ = json.JSONDecoder().raw_decode(result.lstrip())
+                    except (TypeError, ValueError, json.JSONDecodeError):
+                        continue
+                outputs = payload.get("artifacts") if isinstance(payload, dict) else None
+                for output in outputs if isinstance(outputs, list) else []:
+                    if not isinstance(output, dict):
+                        continue
+                    path = output.get("path") or output.get("local_path") or output.get("saved_to")
+                    if not isinstance(path, str) or not path:
+                        continue
+                    raw_files.append(
+                        {
+                            "path": path,
+                            "absolute_path": path,
+                            "name": str(output.get("name") or Path(path).name),
+                            "mime": output.get("mime"),
+                        }
+                    )
+            add_refs(raw_files)
         return refs
 
     def _legacy_session_artifact_ref(
@@ -3208,7 +3698,11 @@ class WebSocketChannel(BaseChannel):
             return None
         metadata = data.get("metadata") or {}
         workspace = metadata.get("workspace")
-        base = Path(workspace).expanduser() if isinstance(workspace, str) and workspace.strip() else None
+        base = (
+            Path(workspace).expanduser()
+            if isinstance(workspace, str) and workspace.strip()
+            else None
+        )
         if base is None:
             base = self.workspace
         conversation = metadata.get("conversation")
@@ -3328,11 +3822,18 @@ class WebSocketChannel(BaseChannel):
         elif scope == "room":
             if not room:
                 return _http_error(400, "missing room id")
-            ref = next(
-                (item for item in self._artifact_refs_for_room(room)
-                 if artifact_id and getattr(item, "id", None) == artifact_id),
-                None,
-            ) if artifact_id else self._room_artifact_ref(room, path)
+            ref = (
+                next(
+                    (
+                        item
+                        for item in self._artifact_refs_for_room(room)
+                        if artifact_id and getattr(item, "id", None) == artifact_id
+                    ),
+                    None,
+                )
+                if artifact_id
+                else self._room_artifact_ref(room, path)
+            )
             if ref is None:
                 return _http_error(404, "room not found")
             try:
@@ -3388,12 +3889,26 @@ class WebSocketChannel(BaseChannel):
             if not mime:
                 mime = "application/octet-stream"
             safe_mimes = {
-                "text/plain", "text/html", "text/css", "text/javascript",
-                "application/json", "application/xml", "text/xml",
-                "text/markdown", "text/csv",
-                "image/png", "image/jpeg", "image/gif", "image/webp", "image/svg+xml",
-                "video/mp4", "video/webm", "video/quicktime", "video/x-msvideo",
-                "video/x-matroska", "video/3gpp",
+                "text/plain",
+                "text/html",
+                "text/css",
+                "text/javascript",
+                "application/json",
+                "application/xml",
+                "text/xml",
+                "text/markdown",
+                "text/csv",
+                "image/png",
+                "image/jpeg",
+                "image/gif",
+                "image/webp",
+                "image/svg+xml",
+                "video/mp4",
+                "video/webm",
+                "video/quicktime",
+                "video/x-msvideo",
+                "video/x-matroska",
+                "video/3gpp",
             }
             if mime not in safe_mimes:
                 mime = "text/plain"
@@ -3418,6 +3933,9 @@ class WebSocketChannel(BaseChannel):
         query = _parse_query(request.path)
         room_id = _query_first(query, "room") or ""
         session_key = _query_first(query, "session_key") or ""
+        requested_task_id = _query_first(query, "task_id") or ""
+        if requested_task_id and not _API_KEY_RE.fullmatch(requested_task_id):
+            return _http_error(400, "invalid task_id")
         if room_id:
             owner = self._session_artifact_owner(f"websocket:{room_id}")
             if owner is None:
@@ -3468,7 +3986,8 @@ class WebSocketChannel(BaseChannel):
                 for f in result.files
             }
             session_refs = [
-                ref for ref in self._artifact_refs_from_session(decoded_key)
+                ref
+                for ref in self._artifact_refs_from_session(decoded_key)
                 if ref.owner_kind == "agent" and ref.owner_id == agent_id
             ]
             session_files: list[dict[str, Any]] = []
@@ -3481,11 +4000,42 @@ class WebSocketChannel(BaseChannel):
                     continue
                 session_paths.add(ref.relative_path)
                 if ref.relative_path in scanned:
-                    item = {**scanned[ref.relative_path], "artifact_ref": ref.model_dump(mode="json")}
+                    item = {
+                        **scanned[ref.relative_path],
+                        "artifact_ref": ref.model_dump(mode="json"),
+                    }
                 session_files.append(item)
+            task_state = self._artifact_task_state(
+                decoded_key,
+                requested_task_id or None,
+            )
+            active_task_id = (
+                str(task_state.get("id")) if task_state is not None else requested_task_id or None
+            )
+            baseline = task_state.get("baseline") if task_state is not None else None
+            baseline = baseline if isinstance(baseline, dict) else {}
+            task_files: list[dict[str, Any]] = []
+            task_paths: set[str] = set()
+            if task_state is not None:
+                for path, item in scanned.items():
+                    if path in session_paths:
+                        continue
+                    if any(part in _ARTIFACT_TASK_SKIP_DIRS for part in Path(path).parts[:-1]):
+                        continue
+                    signature = [item.get("size"), item.get("modified_at")]
+                    if baseline.get(path) == signature:
+                        continue
+                    task_paths.add(path)
+                    task_files.append(item)
             payload = {
-                "files": [item for path, item in scanned.items() if path not in session_paths],
+                "files": [
+                    item
+                    for path, item in scanned.items()
+                    if path not in session_paths and path not in task_paths
+                ],
                 "session_files": session_files,
+                "task_files": task_files,
+                "task_id": active_task_id,
                 "truncated": result.truncated,
             }
         body = json.dumps(payload, ensure_ascii=False).encode("utf-8")
@@ -3494,6 +4044,108 @@ class WebSocketChannel(BaseChannel):
             content_type="application/json; charset=utf-8",
             extra_headers=[("Cache-Control", "no-store")],
         )
+
+    def _handle_artifact_rename(self, request: WsRequest) -> Response:
+        """Rename one shared/project workspace entry without leaving its root."""
+        if not self._check_api_token(request):
+            return _http_error(401, "Unauthorized")
+        from mona.config.paths import get_agent_output_dir
+
+        query = _parse_query(request.path)
+        scope = _query_first(query, "scope") or ""
+        session_key = _query_first(query, "session_key") or ""
+        path = _query_first(query, "path") or ""
+        new_name = (_query_first(query, "new_name") or "").strip()
+        if (
+            not path
+            or not new_name
+            or new_name in {".", ".."}
+            or "/" in new_name
+            or "\\" in new_name
+        ):
+            return _http_error(400, "invalid rename target")
+        decoded_key = _decode_api_key(session_key)
+        if decoded_key is None or not self._is_websocket_channel_session_key(decoded_key):
+            return _http_error(404, "session not found")
+
+        agent_id: str | None = None
+        if scope == "shared":
+            owner = self._session_artifact_owner(decoded_key)
+            if owner is None:
+                return _http_error(404, "session not found")
+            base, agent_id = owner
+            root = get_agent_output_dir(base, agent_id)
+        elif scope == "project":
+            if self._session_manager is None:
+                return _http_error(404, "session not found")
+            data = self._session_manager.read_session_file(decoded_key)
+            metadata = data.get("metadata") if isinstance(data, dict) else None
+            workspace = metadata.get("workspace") if isinstance(metadata, dict) else None
+            if not isinstance(workspace, str) or not workspace:
+                return _http_error(404, "session not found")
+            root = Path(workspace).expanduser()
+        else:
+            return _http_error(400, "invalid scope")
+
+        try:
+            root = root.resolve()
+            source = (root / path).resolve()
+            source.relative_to(root)
+            destination = source.with_name(new_name)
+            destination.relative_to(root)
+        except (OSError, ValueError):
+            return _http_error(400, "invalid path")
+        if not source.exists():
+            return _http_error(404, "file not found")
+        if destination.exists():
+            return _http_error(409, "a file with that name already exists")
+        try:
+            source.rename(destination)
+        except OSError as exc:
+            return _http_error(500, f"rename failed: {exc}")
+
+        relative_path = destination.relative_to(root).as_posix()
+        if scope == "shared" and agent_id and destination.is_file():
+            from mona.agent.artifacts import ArtifactRef
+
+            old_ref = next(
+                (
+                    ref
+                    for ref in self._artifact_refs_from_session(decoded_key)
+                    if ref.owner_kind == "agent"
+                    and ref.owner_id == agent_id
+                    and ref.relative_path == path.replace("\\", "/")
+                ),
+                None,
+            )
+            if old_ref is not None:
+                new_ref = ArtifactRef.for_path(
+                    owner_kind="agent",
+                    owner_id=agent_id,
+                    root=root,
+                    path=destination,
+                    created_by_agent_id=old_ref.created_by_agent_id,
+                    session_id=decoded_key,
+                    room_id=old_ref.room_id,
+                    job_id=old_ref.job_id,
+                    workflow_run_id=old_ref.workflow_run_id,
+                    workflow_step_id=old_ref.workflow_step_id,
+                )
+                self._try_append_webui_transcript(
+                    decoded_key.removeprefix("websocket:"),
+                    {
+                        "event": "deliver_files",
+                        "chat_id": decoded_key.removeprefix("websocket:"),
+                        "files": [
+                            {
+                                **new_ref.as_file(base),
+                                "absolute_path": str(destination),
+                            }
+                        ],
+                    },
+                )
+
+        return _http_json_response({"path": relative_path, "name": new_name})
 
     def _room_root_for_artifacts(self, room_id: str) -> Path | None:
         """Resolve a room's artifacts root: the room session's workspace
@@ -3941,7 +4593,9 @@ class WebSocketChannel(BaseChannel):
         image_count = 0
         video_count = 0
         for item in media:
-            mime = _extract_data_url_mime(item.get("data_url", "")) if isinstance(item, dict) else None
+            mime = (
+                _extract_data_url_mime(item.get("data_url", "")) if isinstance(item, dict) else None
+            )
             if mime in _VIDEO_MIME_ALLOWED:
                 video_count += 1
             elif mime in _IMAGE_MIME_ALLOWED:
@@ -3959,9 +4613,7 @@ class WebSocketChannel(BaseChannel):
                 try:
                     Path(p).unlink(missing_ok=True)
                 except OSError as exc:
-                    self.logger.warning(
-                        "failed to unlink partial media {}: {}", p, exc
-                    )
+                    self.logger.warning("failed to unlink partial media {}: {}", p, exc)
             return [], reason
 
         for item in media:
@@ -3979,7 +4631,9 @@ class WebSocketChannel(BaseChannel):
             max_bytes = _MAX_VIDEO_BYTES if is_video else _MAX_IMAGE_BYTES
             try:
                 saved = save_base64_data_url(
-                    data_url, media_dir, max_bytes=max_bytes,
+                    data_url,
+                    media_dir,
+                    max_bytes=max_bytes,
                 )
             except FileSizeExceeded:
                 return _abort("size")
@@ -4000,7 +4654,10 @@ class WebSocketChannel(BaseChannel):
         file_info = envelope.get("file")
         if not isinstance(file_info, dict):
             await self._send_event(
-                connection, "ppt_import_native_result", ok=False, error="no file",
+                connection,
+                "ppt_import_native_result",
+                ok=False,
+                error="no file",
             )
             return
         name = file_info.get("name", "")
@@ -4008,7 +4665,10 @@ class WebSocketChannel(BaseChannel):
         mime = _extract_data_url_mime(data_url)
         if mime != "application/vnd.openxmlformats-officedocument.presentationml.presentation":
             await self._send_event(
-                connection, "ppt_import_native_result", ok=False, error="not a pptx file",
+                connection,
+                "ppt_import_native_result",
+                ok=False,
+                error="not a pptx file",
             )
             return
 
@@ -4016,17 +4676,26 @@ class WebSocketChannel(BaseChannel):
             raw = _decode_data_url_payload(data_url, _PPT_DOC_MAX_BYTES)
         except FileSizeExceeded:
             await self._send_event(
-                connection, "ppt_import_native_result", ok=False, error="file too large",
+                connection,
+                "ppt_import_native_result",
+                ok=False,
+                error="file too large",
             )
             return
         except Exception:
             await self._send_event(
-                connection, "ppt_import_native_result", ok=False, error="decode failed",
+                connection,
+                "ppt_import_native_result",
+                ok=False,
+                error="decode failed",
             )
             return
         if raw is None:
             await self._send_event(
-                connection, "ppt_import_native_result", ok=False, error="decode failed",
+                connection,
+                "ppt_import_native_result",
+                ok=False,
+                error="decode failed",
             )
             return
 
@@ -4047,11 +4716,17 @@ class WebSocketChannel(BaseChannel):
                 output_dir = Path(tmp_dir) / "native_output"
                 result = subprocess.run(
                     [
-                        "python", str(inspect_script), str(tmp_path),
-                        "-o", str(output_dir),
-                        "--name", Path(name).stem if name else "template",
+                        "python",
+                        str(inspect_script),
+                        str(tmp_path),
+                        "-o",
+                        str(output_dir),
+                        "--name",
+                        Path(name).stem if name else "template",
                     ],
-                    capture_output=True, text=True, timeout=120,
+                    capture_output=True,
+                    text=True,
+                    timeout=120,
                 )
                 if result.returncode != 0:
                     await self._send_event(
@@ -4163,16 +4838,17 @@ class WebSocketChannel(BaseChannel):
             or ".." in template_id
         ):
             await self._send_event(
-                connection, "ppt_delete_native_result", ok=False, error="invalid templateId",
+                connection,
+                "ppt_delete_native_result",
+                ok=False,
+                error="invalid templateId",
             )
             return
 
         from mona.agent.skills import BUILTIN_SKILLS_DIR
 
         skill_dir = BUILTIN_SKILLS_DIR / "mona-ppt"
-        primary_index = (
-            skill_dir / "scripts" / "templates_full" / "native" / "native_index.json"
-        )
+        primary_index = skill_dir / "scripts" / "templates_full" / "native" / "native_index.json"
         fallback_index = skill_dir / "templates" / "native" / "native_index.json"
 
         index_data: dict[str, Any] = {}
@@ -4185,7 +4861,10 @@ class WebSocketChannel(BaseChannel):
         info = index_data.get(template_id)
         if not isinstance(info, dict):
             await self._send_event(
-                connection, "ppt_delete_native_result", ok=False, error="template not found",
+                connection,
+                "ppt_delete_native_result",
+                ok=False,
+                error="template not found",
             )
             return
         if info.get("userCreated") is not True:
@@ -4215,7 +4894,10 @@ class WebSocketChannel(BaseChannel):
                 )
 
         await self._send_event(
-            connection, "ppt_delete_native_result", ok=True, templateId=template_id,
+            connection,
+            "ppt_delete_native_result",
+            ok=True,
+            templateId=template_id,
         )
 
     async def _handle_ppt_upload_envelope(
@@ -4258,7 +4940,10 @@ class WebSocketChannel(BaseChannel):
                 added.append({"name": safe_name, "path": str(rel).replace("\\", "/")})
 
             await self._send_event(
-                connection, "ppt_upload_result", ok=len(added) > 0, files=added,
+                connection,
+                "ppt_upload_result",
+                ok=len(added) > 0,
+                files=added,
                 error=None if added else "no valid files",
             )
         except Exception as e:
@@ -4284,7 +4969,9 @@ class WebSocketChannel(BaseChannel):
             return
         chat_id = envelope.get("chat_id")
         if not _is_valid_chat_id(chat_id):
-            await self._send_event(connection, "doc_upload_result", ok=False, error="invalid chat_id")
+            await self._send_event(
+                connection, "doc_upload_result", ok=False, error="invalid chat_id"
+            )
             return
         try:
             workspace = self.workspace
@@ -4335,15 +5022,20 @@ class WebSocketChannel(BaseChannel):
                     dest.write_bytes(raw)
                     raw_size = len(raw)
                 rel = dest.relative_to(workspace)
-                added.append({
-                    "name": safe_name,
-                    "path": str(rel).replace("\\", "/"),
-                    "size": raw_size,
-                    "mime": mime,
-                })
+                added.append(
+                    {
+                        "name": safe_name,
+                        "path": str(rel).replace("\\", "/"),
+                        "size": raw_size,
+                        "mime": mime,
+                    }
+                )
 
             await self._send_event(
-                connection, "doc_upload_result", ok=len(added) > 0, files=added,
+                connection,
+                "doc_upload_result",
+                ok=len(added) > 0,
+                files=added,
                 chat_id=chat_id,
                 error=None if added else "no valid files",
             )
@@ -4363,9 +5055,7 @@ class WebSocketChannel(BaseChannel):
             self._room_registry = registry
         return registry
 
-    def _validate_room_agent_ids(
-        self, raw: Any
-    ) -> tuple[list[str] | None, str | None, str | None]:
+    def _validate_room_agent_ids(self, raw: Any) -> tuple[list[str] | None, str | None, str | None]:
         """Validate a client-supplied room member list.
 
         Returns ``(agent_ids, None, None)`` on success or ``(None, code,
@@ -4409,10 +5099,12 @@ class WebSocketChannel(BaseChannel):
         for agent_id in conversation.agent_ids:
             definition = registry.get(agent_id)
             summary = self._agent_summary(definition) if definition else None
-            agents.append({
-                "id": agent_id,
-                "displayName": summary["displayName"] if summary else agent_id,
-            })
+            agents.append(
+                {
+                    "id": agent_id,
+                    "displayName": summary["displayName"] if summary else agent_id,
+                }
+            )
         return {
             "conversation": conversation.to_session_metadata(),
             "agents": agents,
@@ -4423,24 +5115,31 @@ class WebSocketChannel(BaseChannel):
         request_id = envelope.get("request_id")
         return request_id if isinstance(request_id, str) and request_id else None
 
-    async def _handle_create_room_envelope(
-        self, connection: Any, envelope: dict[str, Any]
-    ) -> None:
+    async def _handle_create_room_envelope(self, connection: Any, envelope: dict[str, Any]) -> None:
         from mona.agent.partners import CONVERSATION_METADATA_KEY, ConversationMetadata
 
         request_id = self._room_request_id(envelope)
         chat_id = envelope.get("chat_id")
         if not _is_valid_chat_id(chat_id):
             await self._send_event(
-                connection, "create_room_result", ok=False,
-                code="invalid_chat_id", detail="invalid chat_id", request_id=request_id,
+                connection,
+                "create_room_result",
+                ok=False,
+                code="invalid_chat_id",
+                detail="invalid chat_id",
+                request_id=request_id,
             )
             return
         agent_ids, code, detail = self._validate_room_agent_ids(envelope.get("agent_ids"))
         if agent_ids is None:
             await self._send_event(
-                connection, "create_room_result", ok=False,
-                code=code, detail=detail, chat_id=chat_id, request_id=request_id,
+                connection,
+                "create_room_result",
+                ok=False,
+                code=code,
+                detail=detail,
+                chat_id=chat_id,
+                request_id=request_id,
             )
             return
         title = envelope.get("title")
@@ -4451,25 +5150,37 @@ class WebSocketChannel(BaseChannel):
             goal = None
         if self._session_manager is None:
             await self._send_event(
-                connection, "create_room_result", ok=False,
-                code="unavailable", detail="session manager unavailable",
-                chat_id=chat_id, request_id=request_id,
+                connection,
+                "create_room_result",
+                ok=False,
+                code="unavailable",
+                detail="session manager unavailable",
+                chat_id=chat_id,
+                request_id=request_id,
             )
             return
         session = self._session_manager.get_or_create(f"websocket:{chat_id}")
         if session.conversation_metadata.type == "room":
             await self._send_event(
-                connection, "create_room_result", ok=False,
-                code="already_a_room", detail="chat is already a collaboration room",
-                chat_id=chat_id, request_id=request_id,
+                connection,
+                "create_room_result",
+                ok=False,
+                code="already_a_room",
+                detail="chat is already a collaboration room",
+                chat_id=chat_id,
+                request_id=request_id,
             )
             return
         conversation = ConversationMetadata.room(agent_ids, title=title.strip(), goal=goal)
         session.metadata[CONVERSATION_METADATA_KEY] = conversation.to_session_metadata()
         self._session_manager.save(session)
         await self._send_event(
-            connection, "create_room_result", ok=True, chat_id=chat_id,
-            request_id=request_id, **self._room_state_payload(conversation),
+            connection,
+            "create_room_result",
+            ok=True,
+            chat_id=chat_id,
+            request_id=request_id,
+            **self._room_state_payload(conversation),
         )
         await self.send_room_updated(chat_id, self._room_state_payload(conversation))
 
@@ -4493,8 +5204,12 @@ class WebSocketChannel(BaseChannel):
         chat_id = envelope.get("chat_id")
         if not _is_valid_chat_id(chat_id):
             await self._send_event(
-                connection, "create_direct_conversation_result", ok=False,
-                code="invalid_chat_id", detail="invalid chat_id", request_id=request_id,
+                connection,
+                "create_direct_conversation_result",
+                ok=False,
+                code="invalid_chat_id",
+                detail="invalid chat_id",
+                request_id=request_id,
             )
             return
         raw_agent_id = envelope.get("agent_id")
@@ -4505,34 +5220,50 @@ class WebSocketChannel(BaseChannel):
         registry = self._room_agent_registry()
         if agent_id is None or registry.get(agent_id) is None:
             await self._send_event(
-                connection, "create_direct_conversation_result", ok=False,
-                code="unknown_agent", detail="agent is not installed",
-                chat_id=chat_id, request_id=request_id,
+                connection,
+                "create_direct_conversation_result",
+                ok=False,
+                code="unknown_agent",
+                detail="agent is not installed",
+                chat_id=chat_id,
+                request_id=request_id,
             )
             return
         from mona.agent.user_config import load_agent_user_config
 
         if not load_agent_user_config(agent_id).enabled:
             await self._send_event(
-                connection, "create_direct_conversation_result", ok=False,
-                code="agent_disabled", detail="agent is disabled",
-                chat_id=chat_id, request_id=request_id,
+                connection,
+                "create_direct_conversation_result",
+                ok=False,
+                code="agent_disabled",
+                detail="agent is disabled",
+                chat_id=chat_id,
+                request_id=request_id,
             )
             return
         if self._session_manager is None:
             await self._send_event(
-                connection, "create_direct_conversation_result", ok=False,
-                code="unavailable", detail="session manager unavailable",
-                chat_id=chat_id, request_id=request_id,
+                connection,
+                "create_direct_conversation_result",
+                ok=False,
+                code="unavailable",
+                detail="session manager unavailable",
+                chat_id=chat_id,
+                request_id=request_id,
             )
             return
         session = self._session_manager.get_or_create(f"websocket:{chat_id}")
         existing = session.conversation_metadata
         if existing.type == "room":
             await self._send_event(
-                connection, "create_direct_conversation_result", ok=False,
-                code="already_a_room", detail="chat is already a collaboration room",
-                chat_id=chat_id, request_id=request_id,
+                connection,
+                "create_direct_conversation_result",
+                ok=False,
+                code="already_a_room",
+                detail="chat is already a collaboration room",
+                chat_id=chat_id,
+                request_id=request_id,
             )
             return
         # Idempotent only for the same agent: rebinding an existing partner
@@ -4543,10 +5274,13 @@ class WebSocketChannel(BaseChannel):
             existing.direct_agent_id != agent_id
         ):
             await self._send_event(
-                connection, "create_direct_conversation_result", ok=False,
+                connection,
+                "create_direct_conversation_result",
+                ok=False,
                 code="agent_mismatch",
                 detail="chat is already a direct conversation with another agent",
-                chat_id=chat_id, request_id=request_id,
+                chat_id=chat_id,
+                request_id=request_id,
             )
             return
         definition = registry.get(agent_id)
@@ -4557,8 +5291,11 @@ class WebSocketChannel(BaseChannel):
         session.metadata[CONVERSATION_METADATA_KEY] = conversation.to_session_metadata()
         self._session_manager.save(session)
         await self._send_event(
-            connection, "create_direct_conversation_result", ok=True,
-            chat_id=chat_id, request_id=request_id,
+            connection,
+            "create_direct_conversation_result",
+            ok=True,
+            chat_id=chat_id,
+            request_id=request_id,
             conversation=conversation.to_session_metadata(),
         )
 
@@ -4592,9 +5329,14 @@ class WebSocketChannel(BaseChannel):
                 raise ValueError("script permissions must be changed from a skill action")
             granted = update.get("granted_tools")
             if definition.id != MONA_AGENT_ID and isinstance(granted, list):
-                unknown = sorted(set(granted) - set(definition.tool_allowlist))
+                from mona.agent.user_config import configurable_agent_tools
+
+                configurable = configurable_agent_tools(definition) or []
+                unknown = sorted(set(granted) - set(configurable))
                 if unknown:
-                    raise ValueError(f"tools exceed the agent package boundary: {', '.join(unknown)}")
+                    raise ValueError(
+                        "tools exceed the configurable agent boundary: " + ", ".join(unknown)
+                    )
             preset = update.get("model_preset")
             if isinstance(preset, str) and preset.strip():
                 from mona.agent import model_presets
@@ -4618,8 +5360,49 @@ class WebSocketChannel(BaseChannel):
             await self._broadcast_agent_event("agents_updated", agent_id=agent_id)
         except Exception as exc:
             await self._send_event(
-                connection, "agent_config_update_result", ok=False,
-                request_id=request_id, detail=str(exc),
+                connection,
+                "agent_config_update_result",
+                ok=False,
+                request_id=request_id,
+                detail=str(exc),
+            )
+
+    async def _handle_custom_agent_create_envelope(
+        self, connection: Any, envelope: dict[str, Any]
+    ) -> None:
+        request_id = self._room_request_id(envelope)
+        try:
+            from mona.agent.agent_management import create_custom_agent
+
+            name = envelope.get("display_name")
+            description = envelope.get("description", "")
+            instructions = envelope.get("instructions", "")
+            if not all(isinstance(value, str) for value in (name, description, instructions)):
+                raise ValueError("display_name, description, and instructions must be text")
+            definition = create_custom_agent(
+                name,
+                description=description,
+                instructions=instructions,
+            )
+            registry = self._room_agent_registry()
+            registry.reload()
+            installed = registry.require(definition.id)
+            await self._send_event(
+                connection,
+                "custom_agent_create_result",
+                ok=True,
+                request_id=request_id,
+                agent_id=installed.id,
+                agent=self._agent_summary(installed),
+            )
+            await self._broadcast_agent_event("agents_updated", agent_id=installed.id)
+        except Exception as exc:
+            await self._send_event(
+                connection,
+                "custom_agent_create_result",
+                ok=False,
+                request_id=request_id,
+                detail=str(exc),
             )
 
     async def _handle_agent_instruction_save_envelope(
@@ -4639,14 +5422,23 @@ class WebSocketChannel(BaseChannel):
                 raise ValueError("key and content are required")
             instruction = write_instruction(agent_id, key, content, message=f"manual edit: {key}")
             await self._send_event(
-                connection, "agent_instruction_save_result", ok=True,
-                agent_id=agent_id, instruction=instruction, request_id=request_id,
+                connection,
+                "agent_instruction_save_result",
+                ok=True,
+                agent_id=agent_id,
+                instruction=instruction,
+                request_id=request_id,
             )
-            await self._broadcast_agent_event("agent_instructions_updated", agent_id=agent_id, key=key)
+            await self._broadcast_agent_event(
+                "agent_instructions_updated", agent_id=agent_id, key=key
+            )
         except Exception as exc:
             await self._send_event(
-                connection, "agent_instruction_save_result", ok=False,
-                request_id=request_id, detail=str(exc),
+                connection,
+                "agent_instruction_save_result",
+                ok=False,
+                request_id=request_id,
+                detail=str(exc),
             )
 
     async def _handle_agent_instruction_restore_envelope(
@@ -4666,14 +5458,23 @@ class WebSocketChannel(BaseChannel):
                 raise ValueError("key and commit are required")
             instruction = restore_instruction(agent_id, key, commit)
             await self._send_event(
-                connection, "agent_instruction_restore_result", ok=True,
-                agent_id=agent_id, instruction=instruction, request_id=request_id,
+                connection,
+                "agent_instruction_restore_result",
+                ok=True,
+                agent_id=agent_id,
+                instruction=instruction,
+                request_id=request_id,
             )
-            await self._broadcast_agent_event("agent_instructions_updated", agent_id=agent_id, key=key)
+            await self._broadcast_agent_event(
+                "agent_instructions_updated", agent_id=agent_id, key=key
+            )
         except Exception as exc:
             await self._send_event(
-                connection, "agent_instruction_restore_result", ok=False,
-                request_id=request_id, detail=str(exc),
+                connection,
+                "agent_instruction_restore_result",
+                ok=False,
+                request_id=request_id,
+                detail=str(exc),
             )
 
     async def _handle_agent_skill_stage_envelope(
@@ -4699,7 +5500,9 @@ class WebSocketChannel(BaseChannel):
                 files = {"SKILL.md": content}
             if not isinstance(files, dict):
                 raise ValueError("skill files must be an object")
-            if not all(isinstance(path, str) and isinstance(text, str) for path, text in files.items()):
+            if not all(
+                isinstance(path, str) and isinstance(text, str) for path, text in files.items()
+            ):
                 raise ValueError("skill files must contain text values")
             proposal = SkillManager(agent_id, registry=registry).stage(
                 name=name,
@@ -4707,17 +5510,26 @@ class WebSocketChannel(BaseChannel):
                 source="user:webui",
             )
             await self._send_event(
-                connection, "agent_skill_stage_result", ok=True,
-                agent_id=agent_id, proposal=proposal, request_id=request_id,
+                connection,
+                "agent_skill_stage_result",
+                ok=True,
+                agent_id=agent_id,
+                proposal=proposal,
+                request_id=request_id,
             )
             await self._broadcast_agent_event(
-                "agent_change_proposal_created", agent_id=agent_id,
-                proposal_id=proposal["id"], kind="skill_install",
+                "agent_change_proposal_created",
+                agent_id=agent_id,
+                proposal_id=proposal["id"],
+                kind="skill_install",
             )
         except Exception as exc:
             await self._send_event(
-                connection, "agent_skill_stage_result", ok=False,
-                request_id=request_id, detail=str(exc),
+                connection,
+                "agent_skill_stage_result",
+                ok=False,
+                request_id=request_id,
+                detail=str(exc),
             )
 
     async def _handle_agent_skill_action_envelope(
@@ -4733,16 +5545,90 @@ class WebSocketChannel(BaseChannel):
             action = envelope.get("action")
             if not isinstance(name, str) or not isinstance(action, str):
                 raise ValueError("skill name and action are required")
-            SkillManager(agent_id, registry=self._room_agent_registry()).action(name, action)
+            manager = SkillManager(agent_id, registry=self._room_agent_registry())
+            if action == "enable_scripts":
+                from mona.config.paths import (
+                    get_agent_skills_dir,
+                    get_managed_runtimes_dir,
+                )
+                from mona.runtime.agent_env import AgentEnvironmentManager
+                from mona.runtime.skill_env import runtime_spec_from_skill_markdown
+
+                skill_dir = get_agent_skills_dir(agent_id) / name
+                skill_content = (skill_dir / "SKILL.md").read_text(encoding="utf-8")
+                await AgentEnvironmentManager(get_managed_runtimes_dir()).prepare_all(
+                    skill_dir,
+                    runtime_spec_from_skill_markdown(skill_content),
+                )
+            manager.action(name, action)
             await self._send_event(
-                connection, "agent_skill_action_result", ok=True,
-                agent_id=agent_id, name=name, action=action, request_id=request_id,
+                connection,
+                "agent_skill_action_result",
+                ok=True,
+                agent_id=agent_id,
+                name=name,
+                action=action,
+                request_id=request_id,
             )
             await self._broadcast_agent_event("agent_skills_updated", agent_id=agent_id)
         except Exception as exc:
             await self._send_event(
-                connection, "agent_skill_action_result", ok=False,
-                request_id=request_id, detail=str(exc),
+                connection,
+                "agent_skill_action_result",
+                ok=False,
+                request_id=request_id,
+                detail=str(exc),
+            )
+
+    async def _handle_agent_skill_update_envelope(
+        self, connection: Any, envelope: dict[str, Any]
+    ) -> None:
+        request_id = self._room_request_id(envelope)
+        try:
+            from mona.agent.agent_management import SkillManager
+            from mona.agent.partners import normalize_agent_id
+
+            agent_id = normalize_agent_id(str(envelope.get("agent_id", "")))
+            name = envelope.get("name")
+            content = envelope.get("content")
+            expected_hash = envelope.get("expected_hash")
+            if not isinstance(name, str) or not isinstance(content, str):
+                raise ValueError("skill name and content are required")
+            if expected_hash is not None and not isinstance(expected_hash, str):
+                raise ValueError("expected_hash must be text")
+            from mona.config.paths import (
+                get_agent_skills_dir,
+                get_managed_runtimes_dir,
+            )
+            from mona.runtime.agent_env import AgentEnvironmentManager
+            from mona.runtime.skill_env import runtime_spec_from_skill_markdown
+
+            skill_dir = get_agent_skills_dir(agent_id) / name
+            await AgentEnvironmentManager(get_managed_runtimes_dir()).prepare_all(
+                skill_dir,
+                runtime_spec_from_skill_markdown(content),
+            )
+            skill = SkillManager(agent_id, registry=self._room_agent_registry()).update_private(
+                name,
+                content,
+                expected_hash=expected_hash,
+            )
+            await self._send_event(
+                connection,
+                "agent_skill_update_result",
+                ok=True,
+                agent_id=agent_id,
+                skill=skill,
+                request_id=request_id,
+            )
+            await self._broadcast_agent_event("agent_skills_updated", agent_id=agent_id)
+        except Exception as exc:
+            await self._send_event(
+                connection,
+                "agent_skill_update_result",
+                ok=False,
+                request_id=request_id,
+                detail=str(exc),
             )
 
     async def _handle_resolve_agent_change_envelope(
@@ -4750,70 +5636,121 @@ class WebSocketChannel(BaseChannel):
     ) -> None:
         request_id = self._room_request_id(envelope)
         try:
-            from mona.agent.agent_management import resolve_change_proposal
+            from mona.agent.agent_management import (
+                get_staged_skill_for_approval,
+                resolve_change_proposal,
+            )
             from mona.agent.partners import normalize_agent_id
 
             agent_id = normalize_agent_id(str(envelope.get("agent_id", "")))
             proposal_id = envelope.get("proposal_id")
             token = envelope.get("token")
             approve = envelope.get("approve")
-            if not isinstance(proposal_id, str) or not isinstance(token, str) or not isinstance(approve, bool):
+            if (
+                not isinstance(proposal_id, str)
+                or not isinstance(token, str)
+                or not isinstance(approve, bool)
+            ):
                 raise ValueError("proposal_id, token and approve are required")
+            if approve:
+                staged = get_staged_skill_for_approval(
+                    agent_id,
+                    proposal_id,
+                    token=token,
+                )
+                if staged is not None:
+                    from mona.config.paths import get_managed_runtimes_dir
+                    from mona.runtime.agent_env import AgentEnvironmentManager
+
+                    skill_dir, runtime_spec = staged
+                    await AgentEnvironmentManager(get_managed_runtimes_dir()).prepare_all(
+                        skill_dir, runtime_spec
+                    )
             proposal = resolve_change_proposal(
-                agent_id, proposal_id, token=token, approve=approve,
+                agent_id,
+                proposal_id,
+                token=token,
+                approve=approve,
             )
             await self._send_event(
-                connection, "resolve_agent_change_result", ok=True,
-                agent_id=agent_id, proposal=proposal, request_id=request_id,
+                connection,
+                "resolve_agent_change_result",
+                ok=True,
+                agent_id=agent_id,
+                proposal=proposal,
+                request_id=request_id,
             )
-            event = "agent_instructions_updated" if proposal.get("kind") == "instruction_patch" else "agent_skills_updated"
+            event = (
+                "agent_instructions_updated"
+                if proposal.get("kind") == "instruction_patch"
+                else "agent_skills_updated"
+            )
             await self._broadcast_agent_event(event, agent_id=agent_id)
             await self._broadcast_agent_event(
-                "agent_change_proposal_resolved", agent_id=agent_id,
-                proposal_id=proposal_id, status=proposal.get("status"),
+                "agent_change_proposal_resolved",
+                agent_id=agent_id,
+                proposal_id=proposal_id,
+                status=proposal.get("status"),
             )
         except Exception as exc:
             await self._send_event(
-                connection, "resolve_agent_change_result", ok=False,
-                request_id=request_id, detail=str(exc),
+                connection,
+                "resolve_agent_change_result",
+                ok=False,
+                request_id=request_id,
+                detail=str(exc),
             )
 
-    async def _handle_update_room_envelope(
-        self, connection: Any, envelope: dict[str, Any]
-    ) -> None:
+    async def _handle_update_room_envelope(self, connection: Any, envelope: dict[str, Any]) -> None:
         from mona.agent.partners import CONVERSATION_METADATA_KEY
 
         request_id = self._room_request_id(envelope)
         chat_id = envelope.get("chat_id")
         if not _is_valid_chat_id(chat_id):
             await self._send_event(
-                connection, "update_room_result", ok=False,
-                code="invalid_chat_id", detail="invalid chat_id", request_id=request_id,
+                connection,
+                "update_room_result",
+                ok=False,
+                code="invalid_chat_id",
+                detail="invalid chat_id",
+                request_id=request_id,
             )
             return
         if self._session_manager is None:
             await self._send_event(
-                connection, "update_room_result", ok=False,
-                code="unavailable", detail="session manager unavailable",
-                chat_id=chat_id, request_id=request_id,
+                connection,
+                "update_room_result",
+                ok=False,
+                code="unavailable",
+                detail="session manager unavailable",
+                chat_id=chat_id,
+                request_id=request_id,
             )
             return
         session = self._session_manager.get_or_create(f"websocket:{chat_id}")
         conversation = session.conversation_metadata
         if conversation.type != "room":
             await self._send_event(
-                connection, "update_room_result", ok=False,
-                code="not_a_room", detail="chat is not a collaboration room",
-                chat_id=chat_id, request_id=request_id,
+                connection,
+                "update_room_result",
+                ok=False,
+                code="not_a_room",
+                detail="chat is not a collaboration room",
+                chat_id=chat_id,
+                request_id=request_id,
             )
             return
         # Hidden rooms (stock-module design §4.4) are system-managed execution
         # containers — the UI must not rename/re-member them.
         if conversation.hidden:
             await self._send_event(
-                connection, "update_room_result", ok=False,
-                code="hidden_room", detail="hidden rooms are system-managed",
-                chat_id=chat_id, request_id=request_id,
+                connection,
+                "update_room_result",
+                ok=False,
+                code="hidden_room",
+                detail="hidden rooms are system-managed",
+                chat_id=chat_id,
+                request_id=request_id,
             )
             return
         raw_agents = envelope.get("agent_ids")
@@ -4821,8 +5758,13 @@ class WebSocketChannel(BaseChannel):
             agent_ids, code, detail = self._validate_room_agent_ids(raw_agents)
             if agent_ids is None:
                 await self._send_event(
-                    connection, "update_room_result", ok=False,
-                    code=code, detail=detail, chat_id=chat_id, request_id=request_id,
+                    connection,
+                    "update_room_result",
+                    ok=False,
+                    code=code,
+                    detail=detail,
+                    chat_id=chat_id,
+                    request_id=request_id,
                 )
                 return
             conversation.agent_ids = agent_ids
@@ -4835,8 +5777,12 @@ class WebSocketChannel(BaseChannel):
         session.metadata[CONVERSATION_METADATA_KEY] = conversation.to_session_metadata()
         self._session_manager.save(session)
         await self._send_event(
-            connection, "update_room_result", ok=True, chat_id=chat_id,
-            request_id=request_id, **self._room_state_payload(conversation),
+            connection,
+            "update_room_result",
+            ok=True,
+            chat_id=chat_id,
+            request_id=request_id,
+            **self._room_state_payload(conversation),
         )
         await self.send_room_updated(chat_id, self._room_state_payload(conversation))
 
@@ -4847,29 +5793,45 @@ class WebSocketChannel(BaseChannel):
         chat_id = envelope.get("chat_id")
         if not _is_valid_chat_id(chat_id):
             await self._send_event(
-                connection, "room_state_result", ok=False,
-                code="invalid_chat_id", detail="invalid chat_id", request_id=request_id,
+                connection,
+                "room_state_result",
+                ok=False,
+                code="invalid_chat_id",
+                detail="invalid chat_id",
+                request_id=request_id,
             )
             return
         if self._session_manager is None:
             await self._send_event(
-                connection, "room_state_result", ok=False,
-                code="unavailable", detail="session manager unavailable",
-                chat_id=chat_id, request_id=request_id,
+                connection,
+                "room_state_result",
+                ok=False,
+                code="unavailable",
+                detail="session manager unavailable",
+                chat_id=chat_id,
+                request_id=request_id,
             )
             return
         session = self._session_manager.get_or_create(f"websocket:{chat_id}")
         conversation = session.conversation_metadata
         if conversation.type != "room":
             await self._send_event(
-                connection, "room_state_result", ok=False,
-                code="not_a_room", detail="chat is not a collaboration room",
-                chat_id=chat_id, request_id=request_id,
+                connection,
+                "room_state_result",
+                ok=False,
+                code="not_a_room",
+                detail="chat is not a collaboration room",
+                chat_id=chat_id,
+                request_id=request_id,
             )
             return
         await self._send_event(
-            connection, "room_state_result", ok=True, chat_id=chat_id,
-            request_id=request_id, **self._room_state_payload(conversation),
+            connection,
+            "room_state_result",
+            ok=True,
+            chat_id=chat_id,
+            request_id=request_id,
+            **self._room_state_payload(conversation),
         )
 
     async def _handle_cancel_agent_job_envelope(
@@ -4890,100 +5852,182 @@ class WebSocketChannel(BaseChannel):
         chat_id = envelope.get("chat_id")
         if not _is_valid_chat_id(chat_id):
             await self._send_event(
-                connection, "cancel_agent_job_result", ok=False,
-                code="invalid_chat_id", detail="invalid chat_id", request_id=request_id,
+                connection,
+                "cancel_agent_job_result",
+                ok=False,
+                code="invalid_chat_id",
+                detail="invalid chat_id",
+                request_id=request_id,
             )
             return
         job_id = envelope.get("job_id")
         if not isinstance(job_id, str) or not job_id:
             await self._send_event(
-                connection, "cancel_agent_job_result", ok=False,
-                code="invalid_job_id", detail="invalid job_id",
-                chat_id=chat_id, request_id=request_id,
+                connection,
+                "cancel_agent_job_result",
+                ok=False,
+                code="invalid_job_id",
+                detail="invalid job_id",
+                chat_id=chat_id,
+                request_id=request_id,
             )
             return
         if self._session_manager is None:
             await self._send_event(
-                connection, "cancel_agent_job_result", ok=False,
-                code="unavailable", detail="session manager unavailable",
-                chat_id=chat_id, request_id=request_id,
+                connection,
+                "cancel_agent_job_result",
+                ok=False,
+                code="unavailable",
+                detail="session manager unavailable",
+                chat_id=chat_id,
+                request_id=request_id,
             )
             return
         session = self._session_manager.get_or_create(f"websocket:{chat_id}")
         conversation = session.conversation_metadata
         if conversation.type != "room":
             await self._send_event(
-                connection, "cancel_agent_job_result", ok=False,
-                code="not_a_room", detail="chat is not a collaboration room",
-                chat_id=chat_id, request_id=request_id,
+                connection,
+                "cancel_agent_job_result",
+                ok=False,
+                code="not_a_room",
+                detail="chat is not a collaboration room",
+                chat_id=chat_id,
+                request_id=request_id,
             )
             return
         requester = envelope.get("agent_id")
         if requester is not None:
             if not isinstance(requester, str):
                 await self._send_event(
-                    connection, "cancel_agent_job_result", ok=False,
-                    code="invalid_agent_id", detail="invalid agent_id",
-                    chat_id=chat_id, request_id=request_id,
+                    connection,
+                    "cancel_agent_job_result",
+                    ok=False,
+                    code="invalid_agent_id",
+                    detail="invalid agent_id",
+                    chat_id=chat_id,
+                    request_id=request_id,
                 )
                 return
             try:
                 requester = normalize_agent_id(requester)
             except ValueError:
                 await self._send_event(
-                    connection, "cancel_agent_job_result", ok=False,
-                    code="invalid_agent_id", detail="invalid agent_id",
-                    chat_id=chat_id, request_id=request_id,
+                    connection,
+                    "cancel_agent_job_result",
+                    ok=False,
+                    code="invalid_agent_id",
+                    detail="invalid agent_id",
+                    chat_id=chat_id,
+                    request_id=request_id,
                 )
                 return
             if requester not in conversation.agent_ids:
                 await self._send_event(
-                    connection, "cancel_agent_job_result", ok=False,
+                    connection,
+                    "cancel_agent_job_result",
+                    ok=False,
                     code="not_a_member",
                     detail=f"agent {requester!r} is not a room member",
-                    chat_id=chat_id, request_id=request_id,
+                    chat_id=chat_id,
+                    request_id=request_id,
                 )
                 return
         if self._subagent_manager is None:
             await self._send_event(
-                connection, "cancel_agent_job_result", ok=False,
-                code="unavailable", detail="subagent manager unavailable",
-                chat_id=chat_id, request_id=request_id,
+                connection,
+                "cancel_agent_job_result",
+                ok=False,
+                code="unavailable",
+                detail="subagent manager unavailable",
+                chat_id=chat_id,
+                request_id=request_id,
             )
             return
         reason = envelope.get("reason")
         if not isinstance(reason, str) or not reason.strip():
             reason = None
         try:
-            job = await self._subagent_manager.cancel_job(
-                job_id, room_id=chat_id, reason=reason
-            )
+            job = await self._subagent_manager.cancel_job(job_id, room_id=chat_id, reason=reason)
         except JobNotFoundError:
             await self._send_event(
-                connection, "cancel_agent_job_result", ok=False,
-                code="job_not_found", detail="job not found in this room",
-                chat_id=chat_id, request_id=request_id,
+                connection,
+                "cancel_agent_job_result",
+                ok=False,
+                code="job_not_found",
+                detail="job not found in this room",
+                chat_id=chat_id,
+                request_id=request_id,
             )
             return
         except JobTransitionError:
             await self._send_event(
-                connection, "cancel_agent_job_result", ok=False,
+                connection,
+                "cancel_agent_job_result",
+                ok=False,
                 code="job_not_cancellable",
                 detail="job is already in a terminal state",
-                chat_id=chat_id, request_id=request_id,
+                chat_id=chat_id,
+                request_id=request_id,
             )
             return
         except ValueError:
             await self._send_event(
-                connection, "cancel_agent_job_result", ok=False,
-                code="invalid_job_id", detail="invalid job_id",
-                chat_id=chat_id, request_id=request_id,
+                connection,
+                "cancel_agent_job_result",
+                ok=False,
+                code="invalid_job_id",
+                detail="invalid job_id",
+                chat_id=chat_id,
+                request_id=request_id,
             )
             return
         await self._send_event(
-            connection, "cancel_agent_job_result", ok=True, chat_id=chat_id,
-            job_id=job.id, request_id=request_id, job=serialize_job(job),
+            connection,
+            "cancel_agent_job_result",
+            ok=True,
+            chat_id=chat_id,
+            job_id=job.id,
+            request_id=request_id,
+            job=serialize_job(job),
         )
+
+    async def _handle_start_discussion_envelope(
+        self,
+        connection: Any,
+        *,
+        sender_id: str,
+        envelope: dict[str, Any],
+    ) -> None:
+        """Start a topic discussion through its dedicated wire command."""
+        chat_id = envelope.get("chat_id")
+        content = envelope.get("content")
+        if not _is_valid_chat_id(chat_id):
+            await self._send_event(connection, "error", detail="invalid chat_id")
+            return
+        if not isinstance(content, str) or not content.strip():
+            await self._send_event(connection, "error", detail="discussion topic is required")
+            return
+        metadata: dict[str, Any] = {"webui": envelope.get("webui") is True}
+        display_content = envelope.get("display_content")
+        if isinstance(display_content, str) and display_content:
+            metadata["display_content"] = display_content
+        routed = await self._route_room_agent_mentions(
+            connection,
+            sender_id=sender_id,
+            chat_id=chat_id,
+            content=content,
+            media_paths=[],
+            metadata=metadata,
+            raw_targets=envelope.get("target_agent_ids"),
+            raw_discussion=envelope.get("discussion"),
+        )
+        if not routed:
+            await self._send_event(
+                connection,
+                "error",
+                detail="discussion requires at least two room Agent participants",
+            )
 
     async def _route_room_agent_mentions(
         self,
@@ -4995,6 +6039,7 @@ class WebSocketChannel(BaseChannel):
         media_paths: list[str],
         metadata: dict[str, Any],
         raw_targets: Any,
+        raw_discussion: Any = None,
     ) -> bool:
         """Route structured ``@Agent`` targets in a room to AgentJobs (guide 7.5).
 
@@ -5004,19 +6049,15 @@ class WebSocketChannel(BaseChannel):
         partner targets — e.g. only Mona was mentioned, so she also answers).
         """
         from mona.agent.partners import MONA_AGENT_ID
-        from mona.agent.room import RoomError, resolve_target_agents
+        from mona.agent.room import RoomError, require_room_member, resolve_target_agents
 
-        if not isinstance(raw_targets, list) or any(
-            not isinstance(t, str) for t in raw_targets
-        ):
+        if not isinstance(raw_targets, list) or any(not isinstance(t, str) for t in raw_targets):
             await self._send_event(connection, "error", detail="invalid target_agent_ids")
             return True
         if not raw_targets:
             return False
         if self._session_manager is None:
-            await self._send_event(
-                connection, "error", detail="session manager unavailable"
-            )
+            await self._send_event(connection, "error", detail="session manager unavailable")
             return True
         session = self._session_manager.get_or_create(f"websocket:{chat_id}")
         conversation = session.conversation_metadata
@@ -5034,14 +6075,27 @@ class WebSocketChannel(BaseChannel):
         mona_targeted = MONA_AGENT_ID in targets
         from mona.agent import collaboration
 
+        discussion_payload: dict[str, Any] | None = None
+        discussion_mode: collaboration.DiscussionMode | None = None
+        if raw_discussion is not None:
+            if not isinstance(raw_discussion, dict):
+                await self._send_event(connection, "error", detail="discussion must be an object")
+                return True
+            discussion_payload = raw_discussion
+            try:
+                discussion_mode = collaboration.DiscussionMode(
+                    str(discussion_payload.get("mode", "discussion")).strip().lower()
+                )
+            except ValueError as exc:
+                await self._send_event(connection, "error", detail=str(exc))
+                return True
+            collaboration_mode = collaboration.CollaborationMode.PARALLEL
         # A single direct mention keeps the legacy direct-job path.  Natural
         # language collaboration modes require at least two structured
         # targets; the collaboration planner owns that bound and validation.
-        if len(targets) >= 2:
+        elif len(targets) >= 2:
             try:
-                collaboration_mode = collaboration.infer_collaboration_mode(
-                    content, targets
-                )
+                collaboration_mode = collaboration.infer_collaboration_mode(content, targets)
             except ValueError as exc:
                 await self._send_event(connection, "error", detail=str(exc))
                 return True
@@ -5051,17 +6105,15 @@ class WebSocketChannel(BaseChannel):
         # A summary is a coordinated Mona turn.  Without Mona explicitly
         # targeted, keep the existing independent partner fan-out semantics;
         # words such as "总结" in a partner-only request must not change it.
-        if (
-            collaboration_mode is collaboration.CollaborationMode.SUMMARY
-            and not mona_targeted
-        ):
+        if collaboration_mode is collaboration.CollaborationMode.SUMMARY and not mona_targeted:
             collaboration_mode = collaboration.CollaborationMode.PARALLEL
 
-        if collaboration_mode is not collaboration.CollaborationMode.PARALLEL:
+        if (
+            discussion_payload is not None
+            or collaboration_mode is not collaboration.CollaborationMode.PARALLEL
+        ):
             if self._subagent_manager is None:
-                await self._send_event(
-                    connection, "error", detail="agent routing unavailable"
-                )
+                await self._send_event(connection, "error", detail="agent routing unavailable")
                 return True
 
             # Collaboration workflows receive the same room message snapshot
@@ -5104,12 +6156,35 @@ class WebSocketChannel(BaseChannel):
             from mona.agent.workflow import RunConflictError, WorkflowValidationError
 
             try:
-                workflow = collaboration.build_collaboration_workflow(
-                    room_id=chat_id,
-                    content=collaboration_content,
-                    ordered_target_ids=targets,
-                    mode=collaboration_mode,
-                )
+                routed_mode = collaboration_mode.value
+                if discussion_payload is not None and discussion_mode is not None:
+                    raw_summary_agent = discussion_payload.get(
+                        "summary_agent_id", MONA_AGENT_ID
+                    )
+                    if raw_summary_agent is None:
+                        summary_agent = None
+                    elif isinstance(raw_summary_agent, str):
+                        summary_agent = require_room_member(conversation, raw_summary_agent)
+                    else:
+                        raise ValueError("summary_agent_id must be a string or null")
+                    workflow = collaboration.build_discussion_workflow(
+                        room_id=chat_id,
+                        topic=collaboration_content,
+                        ordered_target_ids=targets,
+                        mode=discussion_mode,
+                        max_rounds=discussion_payload.get("max_rounds"),
+                        positions=discussion_payload.get("positions"),
+                        styles=discussion_payload.get("styles"),
+                        summary_agent_id=summary_agent,
+                    )
+                    routed_mode = discussion_mode.value
+                else:
+                    workflow = collaboration.build_collaboration_workflow(
+                        room_id=chat_id,
+                        content=collaboration_content,
+                        ordered_target_ids=targets,
+                        mode=collaboration_mode,
+                    )
                 launch_id = await self._subagent_manager.launch_collaboration(
                     room_id=chat_id,
                     goal=collaboration_content,
@@ -5117,6 +6192,20 @@ class WebSocketChannel(BaseChannel):
                     conversation=conversation,
                     registry=registry,
                     started_by="user",
+                    inputs=(
+                        {
+                            "discussion": {
+                                "mode": discussion_mode.value,
+                                "maxRounds": discussion_payload.get("max_rounds"),
+                                "participantIds": list(targets),
+                                "positions": discussion_payload.get("positions") or {},
+                                "styles": discussion_payload.get("styles") or {},
+                                "summaryAgentId": summary_agent,
+                            }
+                        }
+                        if discussion_payload is not None and discussion_mode is not None
+                        else None
+                    ),
                 )
             except (RunConflictError, WorkflowValidationError, ValueError) as exc:
                 # Startup validation/conflict is a handled routing result. Do
@@ -5131,7 +6220,7 @@ class WebSocketChannel(BaseChannel):
                 chat_id=chat_id,
                 agents=list(targets),
                 failures=None,
-                mode=collaboration_mode.value,
+                mode=routed_mode,
                 collaboration_id=launch_id,
             )
             return True
@@ -5142,9 +6231,7 @@ class WebSocketChannel(BaseChannel):
         if not partner_targets:
             return False
         if self._subagent_manager is None:
-            await self._send_event(
-                connection, "error", detail="agent routing unavailable"
-            )
+            await self._send_event(connection, "error", detail="agent routing unavailable")
             # Mona can still answer its direct mention through the normal
             # flow; only partner dispatch is unavailable.
             return not mona_targeted
@@ -5192,9 +6279,7 @@ class WebSocketChannel(BaseChannel):
         # receives the same start-of-message snapshot, so a fast Agent A
         # cannot become an implicit dependency for sibling Agent B.
         batch_context: str | None = None
-        capture_context = getattr(
-            self._subagent_manager, "capture_room_context_snapshot", None
-        )
+        capture_context = getattr(self._subagent_manager, "capture_room_context_snapshot", None)
         if callable(capture_context):
             captured = capture_context(chat_id, registry)
             if isinstance(captured, str):
@@ -5256,9 +6341,7 @@ class WebSocketChannel(BaseChannel):
     # Workflow commands (multi-agent phase 3, guide 8.2)
     # ------------------------------------------------------------------
 
-    def _on_workflow_draft_proposed(
-        self, chat_id: str, workflow: dict[str, Any]
-    ) -> None:
+    def _on_workflow_draft_proposed(self, chat_id: str, workflow: dict[str, Any]) -> None:
         """SubagentManager hook: broadcast a propose_workflow draft (phase 3)."""
         try:
             asyncio.get_running_loop()
@@ -5287,7 +6370,13 @@ class WebSocketChannel(BaseChannel):
             asyncio.get_running_loop()
         except RuntimeError:
             return
-        asyncio.create_task(self.send_workflow_run_updated(chat_id, payload))
+        workflow = payload.get("workflow")
+        workflow_id = workflow.get("id") if isinstance(workflow, dict) else None
+        is_discussion = isinstance(workflow_id, str) and workflow_id.startswith("discussion-")
+        if is_discussion:
+            asyncio.create_task(self.send_discussion_updated(chat_id, payload))
+        else:
+            asyncio.create_task(self.send_workflow_run_updated(chat_id, payload))
         run_id = payload.get("id")
         if not isinstance(run_id, str) or not run_id:
             return
@@ -5296,11 +6385,14 @@ class WebSocketChannel(BaseChannel):
         # each agent step's final summary/error posts as that agent's
         # message. Transcript appends are unconditional — runs triggered by
         # cron or finished while the room is closed still leave a record.
-        self._try_append_webui_transcript(chat_id, {
-            "event": "workflow_run_updated",
-            "chat_id": chat_id,
-            **payload,
-        })
+        self._try_append_webui_transcript(
+            chat_id,
+            {
+                "event": "discussion_updated" if is_discussion else "workflow_run_updated",
+                "chat_id": chat_id,
+                **payload,
+            },
+        )
         self._post_workflow_step_messages(chat_id, run_id, payload)
         status = payload.get("status")
         # IM list contract (plan 11.5/12.1): run-level status changes move the
@@ -5322,9 +6414,7 @@ class WebSocketChannel(BaseChannel):
             signature = ",".join(waiting)
             if waiting and self._approval_notified.get(run_id) != signature:
                 self._approval_notified[run_id] = signature
-                asyncio.create_task(
-                    self.send_approval_requested(chat_id, payload, waiting)
-                )
+                asyncio.create_task(self.send_approval_requested(chat_id, payload, waiting))
         elif status in ("succeeded", "failed", "cancelled"):
             self._approval_notified.pop(run_id, None)
             self._run_step_message_state.pop(run_id, None)
@@ -5346,9 +6436,7 @@ class WebSocketChannel(BaseChannel):
         workflow = payload.get("workflow")
         step_defs = {
             step.get("id"): step
-            for step in (
-                workflow.get("steps", []) if isinstance(workflow, dict) else []
-            )
+            for step in (workflow.get("steps", []) if isinstance(workflow, dict) else [])
             if isinstance(step, dict)
         }
         seen = self._run_step_message_state.get(run_id)
@@ -5364,9 +6452,7 @@ class WebSocketChannel(BaseChannel):
             }
             return
         for step_id, step_state in steps.items():
-            status = (
-                step_state.get("status") if isinstance(step_state, dict) else None
-            )
+            status = step_state.get("status") if isinstance(step_state, dict) else None
             previous = seen.get(step_id)
             seen[step_id] = status
             if status not in ("succeeded", "failed"):
@@ -5393,9 +6479,7 @@ class WebSocketChannel(BaseChannel):
                 self._broadcast_workflow_step_message(
                     chat_id,
                     run_id,
-                    agent_id
-                    if isinstance(agent_id, str) and agent_id
-                    else MONA_AGENT_ID,
+                    agent_id if isinstance(agent_id, str) and agent_id else MONA_AGENT_ID,
                     text,
                     tool_events=tool_events,
                 )
@@ -5435,9 +6519,7 @@ class WebSocketChannel(BaseChannel):
         steps = run.get("steps") if isinstance(run.get("steps"), dict) else {}
         workflow = run.get("workflow") if isinstance(run.get("workflow"), dict) else {}
         step_defs = {
-            step.get("id"): step
-            for step in workflow.get("steps", [])
-            if isinstance(step, dict)
+            step.get("id"): step for step in workflow.get("steps", []) if isinstance(step, dict)
         }
         approvals = [
             {
@@ -5458,31 +6540,60 @@ class WebSocketChannel(BaseChannel):
             await self._safe_send_to(connection, raw, label=" approval_requested ")
 
     async def _workflow_room_context(
-        self, connection: Any, envelope: dict[str, Any], *, result_event: str,
+        self,
+        connection: Any,
+        envelope: dict[str, Any],
+        *,
+        result_event: str,
     ) -> tuple[str, Any, Any] | None:
         """Shared prelude: validate chat_id + room, return (chat_id, conversation, request_id)."""
         request_id = self._room_request_id(envelope)
         chat_id = envelope.get("chat_id")
         if not _is_valid_chat_id(chat_id):
             await self._send_event(
-                connection, result_event, ok=False,
-                code="invalid_chat_id", detail="invalid chat_id", request_id=request_id,
+                connection,
+                result_event,
+                ok=False,
+                code="invalid_chat_id",
+                detail="invalid chat_id",
+                request_id=request_id,
             )
             return None
         if self._session_manager is None:
             await self._send_event(
-                connection, result_event, ok=False,
-                code="unavailable", detail="session manager unavailable",
-                chat_id=chat_id, request_id=request_id,
+                connection,
+                result_event,
+                ok=False,
+                code="unavailable",
+                detail="session manager unavailable",
+                chat_id=chat_id,
+                request_id=request_id,
+            )
+            return None
+        from mona.agent.pack_bootstrap import STOCK_DIAGNOSIS_ROOM_ID
+
+        if chat_id == STOCK_DIAGNOSIS_ROOM_ID and not await _has_subscription_access():
+            await self._send_event(
+                connection,
+                result_event,
+                ok=False,
+                code="membership_required",
+                detail="AI诊股需要有效的 Mona Pro 订阅或试用",
+                chat_id=chat_id,
+                request_id=request_id,
             )
             return None
         session = self._session_manager.get_or_create(f"websocket:{chat_id}")
         conversation = session.conversation_metadata
         if conversation.type != "room":
             await self._send_event(
-                connection, result_event, ok=False,
-                code="not_a_room", detail="chat is not a collaboration room",
-                chat_id=chat_id, request_id=request_id,
+                connection,
+                result_event,
+                ok=False,
+                code="not_a_room",
+                detail="chat is not a collaboration room",
+                chat_id=chat_id,
+                request_id=request_id,
             )
             return None
         return chat_id, conversation, request_id
@@ -5510,9 +6621,13 @@ class WebSocketChannel(BaseChannel):
         steps_raw = envelope.get("steps")
         if not isinstance(steps_raw, list) or not steps_raw:
             await self._send_event(
-                connection, "workflow_draft_ready", ok=False,
-                code="invalid_workflow", detail="steps must be a non-empty list",
-                chat_id=chat_id, request_id=request_id,
+                connection,
+                "workflow_draft_ready",
+                ok=False,
+                code="invalid_workflow",
+                detail="steps must be a non-empty list",
+                chat_id=chat_id,
+                request_id=request_id,
             )
             return
         try:
@@ -5524,9 +6639,13 @@ class WebSocketChannel(BaseChannel):
             )
         except Exception as exc:
             await self._send_event(
-                connection, "workflow_draft_ready", ok=False,
-                code="invalid_workflow", detail=str(exc),
-                chat_id=chat_id, request_id=request_id,
+                connection,
+                "workflow_draft_ready",
+                ok=False,
+                code="invalid_workflow",
+                detail=str(exc),
+                chat_id=chat_id,
+                request_id=request_id,
             )
             return
         store = self._subagent_manager.workflow_store_for_room(chat_id)
@@ -5541,15 +6660,23 @@ class WebSocketChannel(BaseChannel):
             )
         except WorkflowValidationError as exc:
             await self._send_event(
-                connection, "workflow_draft_ready", ok=False,
-                code="invalid_workflow", detail=str(exc),
-                chat_id=chat_id, request_id=request_id,
+                connection,
+                "workflow_draft_ready",
+                ok=False,
+                code="invalid_workflow",
+                detail=str(exc),
+                chat_id=chat_id,
+                request_id=request_id,
             )
             return
         payload = {"workflow": serialize_workflow(draft)}
         await self._send_event(
-            connection, "workflow_draft_ready", ok=True, chat_id=chat_id,
-            request_id=request_id, **payload,
+            connection,
+            "workflow_draft_ready",
+            ok=True,
+            chat_id=chat_id,
+            request_id=request_id,
+            **payload,
         )
         await self.send_workflow_updated(chat_id, {**payload, "draft": True})
 
@@ -5570,9 +6697,13 @@ class WebSocketChannel(BaseChannel):
             promoted = store.activate(chat_id)
         except WorkflowNotFoundError:
             await self._send_event(
-                connection, "activate_workflow_result", ok=False,
-                code="no_draft", detail="room has no workflow draft",
-                chat_id=chat_id, request_id=request_id,
+                connection,
+                "activate_workflow_result",
+                ok=False,
+                code="no_draft",
+                detail="room has no workflow draft",
+                chat_id=chat_id,
+                request_id=request_id,
             )
             return
         # Record the active pointer on the conversation metadata (guide 5.2).
@@ -5590,8 +6721,12 @@ class WebSocketChannel(BaseChannel):
             "activeRevision": promoted.revision,
         }
         await self._send_event(
-            connection, "activate_workflow_result", ok=True, chat_id=chat_id,
-            request_id=request_id, **payload,
+            connection,
+            "activate_workflow_result",
+            ok=True,
+            chat_id=chat_id,
+            request_id=request_id,
+            **payload,
         )
         await self.send_workflow_updated(chat_id, {**payload, "draft": False})
         # Activation can flip the IM list ``scheduled`` flag (cron trigger).
@@ -5638,9 +6773,13 @@ class WebSocketChannel(BaseChannel):
         template_ref = envelope.get("template_ref")
         if template_ref is not None and not isinstance(template_ref, str):
             await self._send_event(
-                connection, "run_workflow_result", ok=False,
-                code="invalid_template_ref", detail="template_ref must be a string",
-                chat_id=chat_id, request_id=request_id,
+                connection,
+                "run_workflow_result",
+                ok=False,
+                code="invalid_template_ref",
+                detail="template_ref must be a string",
+                chat_id=chat_id,
+                request_id=request_id,
             )
             return
         if isinstance(template_ref, str) and template_ref.strip():
@@ -5653,17 +6792,24 @@ class WebSocketChannel(BaseChannel):
                 active = load_pack_template(template_ref)
             except Exception as exc:
                 await self._send_event(
-                    connection, "run_workflow_result", ok=False,
-                    code="invalid_template", detail=str(exc),
-                    chat_id=chat_id, request_id=request_id,
+                    connection,
+                    "run_workflow_result",
+                    ok=False,
+                    code="invalid_template",
+                    detail=str(exc),
+                    chat_id=chat_id,
+                    request_id=request_id,
                 )
                 return
             if active.room_id != chat_id:
                 await self._send_event(
-                    connection, "run_workflow_result", ok=False,
+                    connection,
+                    "run_workflow_result",
+                    ok=False,
                     code="template_room_mismatch",
                     detail="template does not belong to this room",
-                    chat_id=chat_id, request_id=request_id,
+                    chat_id=chat_id,
+                    request_id=request_id,
                 )
                 return
         else:
@@ -5672,27 +6818,38 @@ class WebSocketChannel(BaseChannel):
             active = store.get_active(chat_id)
         if active is None:
             await self._send_event(
-                connection, "run_workflow_result", ok=False,
+                connection,
+                "run_workflow_result",
+                ok=False,
                 code="no_active_workflow",
                 detail="room has no active workflow; activate a draft first",
-                chat_id=chat_id, request_id=request_id,
+                chat_id=chat_id,
+                request_id=request_id,
             )
             return
         try:
             inputs = validate_run_inputs(envelope.get("inputs"))
         except ValueError as exc:
             await self._send_event(
-                connection, "run_workflow_result", ok=False,
-                code="invalid_inputs", detail=str(exc),
-                chat_id=chat_id, request_id=request_id,
+                connection,
+                "run_workflow_result",
+                ok=False,
+                code="invalid_inputs",
+                detail=str(exc),
+                chat_id=chat_id,
+                request_id=request_id,
             )
             return
         runner = self._workflow_runner_for(chat_id)
         if runner.active_run_for_room(chat_id) is not None:
             await self._send_event(
-                connection, "run_workflow_result", ok=False,
-                code="run_conflict", detail="room already has an active run",
-                chat_id=chat_id, request_id=request_id,
+                connection,
+                "run_workflow_result",
+                ok=False,
+                code="run_conflict",
+                detail="room already has an active run",
+                chat_id=chat_id,
+                request_id=request_id,
             )
             return
 
@@ -5706,10 +6863,13 @@ class WebSocketChannel(BaseChannel):
                     inputs=inputs,
                 )
             except RunConflictError:
-                await self.send_workflow_run_updated(chat_id, {
-                    "error": "run_conflict",
-                    "detail": "room already has an active run",
-                })
+                await self.send_workflow_run_updated(
+                    chat_id,
+                    {
+                        "error": "run_conflict",
+                        "detail": "room already has an active run",
+                    },
+                )
             except Exception as exc:
                 # Validation failures land here (the run is never created);
                 # executor crashes additionally flip the persisted run to
@@ -5717,16 +6877,22 @@ class WebSocketChannel(BaseChannel):
                 # must see the failure — a silent log line leaves the panel
                 # showing a phantom "running" state.
                 logger.exception("Workflow run failed for room {}", chat_id)
-                await self.send_workflow_run_updated(chat_id, {
-                    "error": "run_failed",
-                    "detail": str(exc),
-                })
+                await self.send_workflow_run_updated(
+                    chat_id,
+                    {
+                        "error": "run_failed",
+                        "detail": str(exc),
+                    },
+                )
 
         task = asyncio.create_task(_drive())
         self._workflow_tasks[chat_id] = task
         task.add_done_callback(lambda _t: self._workflow_tasks.pop(chat_id, None))
         await self._send_event(
-            connection, "run_workflow_result", ok=True, chat_id=chat_id,
+            connection,
+            "run_workflow_result",
+            ok=True,
+            chat_id=chat_id,
             request_id=request_id,
         )
 
@@ -5778,9 +6944,7 @@ class WebSocketChannel(BaseChannel):
             from mona.services.stock.api import _provider
             from mona.services.stock.screening import default_screening_service
 
-            service = default_screening_service(
-                provider=_provider(), workspace=self.workspace
-            )
+            service = default_screening_service(provider=_provider(), workspace=self.workspace)
             strategy = next(
                 (item for item in service.strategies() if item.strategy_id == strategy_id),
                 None,
@@ -5817,9 +6981,7 @@ class WebSocketChannel(BaseChannel):
                 "ok": ok,
                 "code": result.get("code") if not ok else None,
                 "detail": (
-                    "selection schedule synchronized"
-                    if ok
-                    else "selection schedule unavailable"
+                    "selection schedule synchronized" if ok else "selection schedule unavailable"
                 ),
                 "chat_id": chat_id,
                 "request_id": request_id,
@@ -5861,32 +7023,48 @@ class WebSocketChannel(BaseChannel):
                 run_id = latest[0].id if latest else None
             if run_id is None:
                 await self._send_event(
-                    connection, "cancel_workflow_run_result", ok=False,
-                    code="run_not_found", detail="no run to cancel",
-                    chat_id=chat_id, request_id=request_id,
+                    connection,
+                    "cancel_workflow_run_result",
+                    ok=False,
+                    code="run_not_found",
+                    detail="no run to cancel",
+                    chat_id=chat_id,
+                    request_id=request_id,
                 )
                 return
         try:
             run = run_store.load(run_id)
         except (WorkflowNotFoundError, ValueError):
             await self._send_event(
-                connection, "cancel_workflow_run_result", ok=False,
-                code="run_not_found", detail="run not found in this room",
-                chat_id=chat_id, request_id=request_id,
+                connection,
+                "cancel_workflow_run_result",
+                ok=False,
+                code="run_not_found",
+                detail="run not found in this room",
+                chat_id=chat_id,
+                request_id=request_id,
             )
             return
         if run.room_id != chat_id:
             await self._send_event(
-                connection, "cancel_workflow_run_result", ok=False,
-                code="run_not_found", detail="run not found in this room",
-                chat_id=chat_id, request_id=request_id,
+                connection,
+                "cancel_workflow_run_result",
+                ok=False,
+                code="run_not_found",
+                detail="run not found in this room",
+                chat_id=chat_id,
+                request_id=request_id,
             )
             return
         if run.status in TERMINAL_RUN_STATUSES:
             await self._send_event(
-                connection, "cancel_workflow_run_result", ok=False,
-                code="run_not_cancellable", detail="run is already terminal",
-                chat_id=chat_id, request_id=request_id,
+                connection,
+                "cancel_workflow_run_result",
+                ok=False,
+                code="run_not_cancellable",
+                detail="run is already terminal",
+                chat_id=chat_id,
+                request_id=request_id,
             )
             return
         runner = self._workflow_runner_for(chat_id)
@@ -5895,13 +7073,15 @@ class WebSocketChannel(BaseChannel):
             # AgentJob.  The signal makes the runner own the run-level CAS;
             # cancelling the jobs makes an in-flight LLM task stop promptly.
             runner.cancel_run(run_id)
-            job_ids = list(dict.fromkeys(
-                step.job_id
-                for step in run.steps.values()
-                if step.status not in TERMINAL_STEP_STATUSES
-                and isinstance(step.job_id, str)
-                and step.job_id
-            ))
+            job_ids = list(
+                dict.fromkeys(
+                    step.job_id
+                    for step in run.steps.values()
+                    if step.status not in TERMINAL_STEP_STATUSES
+                    and isinstance(step.job_id, str)
+                    and step.job_id
+                )
+            )
 
             async def _cancel_job(job_id: str) -> None:
                 try:
@@ -5950,12 +7130,23 @@ class WebSocketChannel(BaseChannel):
                 pass
             run = run_store.load(run_id)
         await self._send_event(
-            connection, "cancel_workflow_run_result", ok=True, chat_id=chat_id,
-            request_id=request_id, run_id=run_id, run=serialize_run(run),
+            connection,
+            "cancel_workflow_run_result",
+            ok=True,
+            chat_id=chat_id,
+            request_id=request_id,
+            run_id=run_id,
+            run=serialize_run(run),
         )
-        await self.send_workflow_run_updated(
-            chat_id, serialize_run(run_store.load(run_id))
+        current_payload = serialize_run(run_store.load(run_id))
+        current_workflow = current_payload.get("workflow")
+        current_workflow_id = (
+            current_workflow.get("id") if isinstance(current_workflow, dict) else None
         )
+        if isinstance(current_workflow_id, str) and current_workflow_id.startswith("discussion-"):
+            await self.send_discussion_updated(chat_id, current_payload)
+        else:
+            await self.send_workflow_run_updated(chat_id, current_payload)
 
     async def _handle_retry_workflow_step_envelope(
         self, connection: Any, envelope: dict[str, Any]
@@ -5975,12 +7166,7 @@ class WebSocketChannel(BaseChannel):
         chat_id, _conversation, request_id = ctx
         run_id = envelope.get("run_id")
         step_id = envelope.get("step_id")
-        if (
-            not isinstance(run_id, str)
-            or not run_id
-            or not isinstance(step_id, str)
-            or not step_id
-        ):
+        if not isinstance(run_id, str) or not run_id or not isinstance(step_id, str) or not step_id:
             await self._send_event(
                 connection,
                 "retry_workflow_step_result",
@@ -6113,10 +7299,13 @@ class WebSocketChannel(BaseChannel):
             or not isinstance(approve, bool)
         ):
             await self._send_event(
-                connection, "resolve_workflow_approval_result", ok=False,
+                connection,
+                "resolve_workflow_approval_result",
+                ok=False,
                 code="invalid_request",
                 detail="run_id, step_id, token and a boolean approve are required",
-                chat_id=chat_id, request_id=request_id,
+                chat_id=chat_id,
+                request_id=request_id,
             )
             return
         run_store = self._subagent_manager.run_store_for_room(chat_id)
@@ -6126,35 +7315,47 @@ class WebSocketChannel(BaseChannel):
             run = None
         if run is None or run.room_id != chat_id:
             await self._send_event(
-                connection, "resolve_workflow_approval_result", ok=False,
-                code="run_not_found", detail="run not found in this room",
-                chat_id=chat_id, request_id=request_id,
+                connection,
+                "resolve_workflow_approval_result",
+                ok=False,
+                code="run_not_found",
+                detail="run not found in this room",
+                chat_id=chat_id,
+                request_id=request_id,
             )
             return
         runner = self._workflow_runner_for(chat_id)
         try:
             runner.resolve_approval(
-                run_id=run_id, step_id=step_id, token=token, approve=approve,
+                run_id=run_id,
+                step_id=step_id,
+                token=token,
+                approve=approve,
             )
         except WorkflowApprovalError as exc:
             # State conflict / expired / bad token: push the authoritative
             # run state so the client refreshes instead of trusting its card.
             await self._send_event(
-                connection, "resolve_workflow_approval_result", ok=False,
-                code=exc.code, detail=exc.detail,
-                chat_id=chat_id, request_id=request_id,
+                connection,
+                "resolve_workflow_approval_result",
+                ok=False,
+                code=exc.code,
+                detail=exc.detail,
+                chat_id=chat_id,
+                request_id=request_id,
             )
-            await self.send_workflow_run_updated(
-                chat_id, serialize_run(run_store.load(run_id))
-            )
+            await self.send_workflow_run_updated(chat_id, serialize_run(run_store.load(run_id)))
             return
         await self._send_event(
-            connection, "resolve_workflow_approval_result", ok=True,
-            chat_id=chat_id, request_id=request_id, run_id=run_id, step_id=step_id,
+            connection,
+            "resolve_workflow_approval_result",
+            ok=True,
+            chat_id=chat_id,
+            request_id=request_id,
+            run_id=run_id,
+            step_id=step_id,
         )
-        await self.send_workflow_run_updated(
-            chat_id, serialize_run(run_store.load(run_id))
-        )
+        await self.send_workflow_run_updated(chat_id, serialize_run(run_store.load(run_id)))
         if approve:
             # Resume in the background: the run continues from the persisted
             # state with every downstream step still queued (guide 7.6).
@@ -6162,9 +7363,7 @@ class WebSocketChannel(BaseChannel):
                 try:
                     await runner.resume(run_id)
                 except Exception:
-                    logger.exception(
-                        "Workflow resume after approval failed for run {}", run_id
-                    )
+                    logger.exception("Workflow resume after approval failed for run {}", run_id)
 
             task = asyncio.create_task(_resume())
             self._workflow_tasks[chat_id] = task
@@ -6191,14 +7390,25 @@ class WebSocketChannel(BaseChannel):
                 run = None
             if run is None or run.room_id != chat_id:
                 await self._send_event(
-                    connection, "workflow_run_state_result", ok=False,
-                    code="run_not_found", detail="run not found in this room",
-                    chat_id=chat_id, request_id=request_id,
+                    connection,
+                    "workflow_run_state_result",
+                    ok=False,
+                    code="run_not_found",
+                    detail="run not found in this room",
+                    chat_id=chat_id,
+                    request_id=request_id,
                 )
                 return
         else:
-            latest = run_store.list_for_room(chat_id, limit=1)
-            run = latest[0] if latest else None
+            recent = run_store.list_for_room(chat_id, limit=50)
+            run = next(
+                (
+                    candidate
+                    for candidate in recent
+                    if not candidate.workflow.id.startswith("discussion-")
+                ),
+                None,
+            )
         await self._send_event(
             connection,
             "workflow_run_state_result",
@@ -6221,7 +7431,6 @@ class WebSocketChannel(BaseChannel):
             ephemeral = envelope.get("ephemeral") is True
             if ephemeral:
                 new_id = f"ephemeral:{new_id}"
-            self._attach(connection, new_id)
             # Persist workspace binding on the session so AgentLoop can route
             # file operations to the project directory. ``None`` (or omitted)
             # means the default workspace (~/.mona/workspace/).
@@ -6235,13 +7444,25 @@ class WebSocketChannel(BaseChannel):
             # (ppt / video / 3d / ...), each routing to a DocumentAgentLoop
             # with its own tool whitelist + soul prompt.
             from mona.agent.document_loop import DOCUMENT_PROFILES
+
             agent_kind = envelope.get("agent_kind")
             if not isinstance(agent_kind, str):
                 agent_kind = None
             agent_kind = agent_kind.strip() if agent_kind else None
             if agent_kind not in (*DOCUMENT_PROFILES.keys(), None):
                 agent_kind = None
-            if (workspace is not None or agent_kind is not None) and self._session_manager is not None:
+            if agent_kind is not None and not await _has_subscription_access():
+                await self._send_event(
+                    connection,
+                    "error",
+                    detail="membership_required",
+                    reason="AI文档需要有效的 Mona Pro 订阅或试用",
+                )
+                return
+            self._attach(connection, new_id)
+            if (
+                workspace is not None or agent_kind is not None
+            ) and self._session_manager is not None:
                 session = self._session_manager.get_or_create(f"websocket:{new_id}")
                 if workspace is not None:
                     session.metadata["workspace"] = workspace
@@ -6256,10 +7477,19 @@ class WebSocketChannel(BaseChannel):
             if not _is_valid_chat_id(cid):
                 await self._send_event(connection, "error", detail="invalid chat_id")
                 return
+            from mona.agent.pack_bootstrap import STOCK_DIAGNOSIS_ROOM_ID
+
+            if cid == STOCK_DIAGNOSIS_ROOM_ID and not await _has_subscription_access():
+                await self._send_event(connection, "error", detail="membership_required")
+                return
             self._attach(connection, cid)
             await self._send_event(connection, "attached", chat_id=cid)
             await self._hydrate_after_subscribe(cid)
             return
+        if t in {"ppt_upload", "doc_upload", "ppt_import_native", "ppt_delete_native"}:
+            if not await _has_subscription_access():
+                await self._send_event(connection, "error", detail="membership_required")
+                return
         if t == "ppt_upload":
             await self._handle_ppt_upload_envelope(connection, envelope)
             return
@@ -6281,6 +7511,9 @@ class WebSocketChannel(BaseChannel):
         if t == "agent_config_update":
             await self._handle_agent_config_update_envelope(connection, envelope)
             return
+        if t == "custom_agent_create":
+            await self._handle_custom_agent_create_envelope(connection, envelope)
+            return
         if t == "agent_instruction_save":
             await self._handle_agent_instruction_save_envelope(connection, envelope)
             return
@@ -6292,6 +7525,9 @@ class WebSocketChannel(BaseChannel):
             return
         if t == "agent_skill_action":
             await self._handle_agent_skill_action_envelope(connection, envelope)
+            return
+        if t == "agent_skill_update":
+            await self._handle_agent_skill_update_envelope(connection, envelope)
             return
         if t == "resolve_agent_change":
             await self._handle_resolve_agent_change_envelope(connection, envelope)
@@ -6332,6 +7568,13 @@ class WebSocketChannel(BaseChannel):
         if t == "get_workflow_run":
             await self._handle_get_workflow_run_envelope(connection, envelope)
             return
+        if t == "start_discussion":
+            await self._handle_start_discussion_envelope(
+                connection,
+                sender_id=client_id,
+                envelope=envelope,
+            )
+            return
         if t == "message":
             cid = envelope.get("chat_id")
             content = envelope.get("content")
@@ -6341,21 +7584,44 @@ class WebSocketChannel(BaseChannel):
             if not isinstance(content, str):
                 await self._send_event(connection, "error", detail="missing content")
                 return
+            from mona.agent.document_loop import DOCUMENT_PROFILES
+
+            message_agent_kind = envelope.get("agent_kind")
+            if message_agent_kind is not None:
+                if not isinstance(message_agent_kind, str):
+                    await self._send_event(connection, "error", detail="invalid agent_kind")
+                    return
+                message_agent_kind = message_agent_kind.strip()
+                if message_agent_kind not in DOCUMENT_PROFILES:
+                    await self._send_event(connection, "error", detail="invalid agent_kind")
+                    return
+                if not await _has_subscription_access():
+                    await self._send_event(connection, "error", detail="membership_required")
+                    return
+            if self._session_manager is not None:
+                session = self._session_manager.get_or_create(f"websocket:{cid}")
+                if session.metadata.get("agent_kind") and not await _has_subscription_access():
+                    await self._send_event(connection, "error", detail="membership_required")
+                    return
 
             raw_media = envelope.get("media")
             media_paths: list[str] = []
             if raw_media is not None:
                 if not isinstance(raw_media, list):
                     await self._send_event(
-                        connection, "error",
-                        detail="image_rejected", reason="malformed",
+                        connection,
+                        "error",
+                        detail="image_rejected",
+                        reason="malformed",
                     )
                     return
                 media_paths, reason = self._save_envelope_media(raw_media)
                 if reason is not None:
                     await self._send_event(
-                        connection, "error",
-                        detail="image_rejected", reason=reason,
+                        connection,
+                        "error",
+                        detail="image_rejected",
+                        reason=reason,
                     )
                     return
 
@@ -6396,6 +7662,11 @@ class WebSocketChannel(BaseChannel):
             metadata: dict[str, Any] = {"remote": getattr(connection, "remote_address", None)}
             if envelope.get("webui") is True:
                 metadata["webui"] = True
+            if message_agent_kind is not None:
+                metadata["agent_kind"] = message_agent_kind
+            task_id = envelope.get("task_id")
+            if isinstance(task_id, str) and _API_KEY_RE.fullmatch(task_id.strip()):
+                metadata["task_id"] = task_id.strip()
             terminal_session_id = envelope.get("terminal_session_id")
             if isinstance(terminal_session_id, str) and terminal_session_id:
                 metadata["terminal_session_id"] = terminal_session_id
@@ -6439,6 +7710,9 @@ class WebSocketChannel(BaseChannel):
             browser_page_title = envelope.get("browser_page_title")
             if isinstance(browser_page_title, str) and browser_page_title:
                 metadata["browser_page_title"] = browser_page_title
+            browser_tab_id = envelope.get("browser_tab_id")
+            if isinstance(browser_tab_id, str) and browser_tab_id:
+                metadata["browser_tab_id"] = browser_tab_id
             # IMPORTANT: persist display_content for history replay.
             # DO NOT remove — keeps user messages showing original input, not enriched prompts.
             display_content = envelope.get("display_content")
@@ -6487,6 +7761,7 @@ class WebSocketChannel(BaseChannel):
                     media_paths=media_paths,
                     metadata=metadata,
                     raw_targets=target_agent_ids,
+                    raw_discussion=envelope.get("discussion"),
                 )
                 if routed:
                     return
@@ -6574,7 +7849,9 @@ class WebSocketChannel(BaseChannel):
         raw = json.dumps(payload, ensure_ascii=False)
         self.logger.debug(
             "deliver_files: sending to {} subscribers for chat_id={}, files={}",
-            len(conns), chat_id, [f.get("name") for f in files],
+            len(conns),
+            chat_id,
+            [f.get("name") for f in files],
         )
         for connection in conns:
             await self._safe_send_to(connection, raw, label=" ")
@@ -6589,7 +7866,13 @@ class WebSocketChannel(BaseChannel):
                 continue
             path = Path(path_value)
             mime = str(file.get("mime") or mimetypes.guess_type(path.name)[0] or "")
-            kind = "video" if mime.startswith("video/") else "image" if mime.startswith("image/") else ""
+            kind = (
+                "video"
+                if mime.startswith("video/")
+                else "image"
+                if mime.startswith("image/")
+                else ""
+            )
             if not kind:
                 continue
             attachment = self._sign_or_stage_media_path(path)
@@ -6603,7 +7886,9 @@ class WebSocketChannel(BaseChannel):
         edits: list[Any],
         metadata: dict[str, Any],
     ) -> bool:
-        """Attach refs only to successful edits inside the owning Agent root."""
+        """Attach ownership refs to successful edit traces, not deliveries."""
+        if chat_id.startswith("ephemeral:"):
+            return False
         from mona.agent.artifacts import ArtifactRef
         from mona.config.paths import get_agent_output_dir
 
@@ -6663,35 +7948,9 @@ class WebSocketChannel(BaseChannel):
         # Snapshot the subscriber set so ConnectionClosed cleanups mid-iteration are safe.
         conns = list(self._subs.get(msg.chat_id, ()))
         if not conns:
-            # Named @ results are durable room messages even when the UI is
-            # closed.  Persist the same wire shape used by the live branch so
-            # the next thread hydration can replay the real author.
-            if msg.metadata.get("_agent_job_result") and msg.content:
-                closed_payload: dict[str, Any] = {
-                    "event": "message",
-                    "chat_id": msg.chat_id,
-                    "text": msg.content,
-                    "author_id": msg.metadata.get("author_id") or MONA_AGENT_ID,
-                    "message_type": msg.metadata.get("message_type") or "message",
-                }
-                job_id = msg.metadata.get("job_id")
-                if isinstance(job_id, str) and job_id:
-                    closed_payload["job_id"] = job_id
-                self._try_append_webui_transcript(msg.chat_id, closed_payload)
-            if (
-                msg.metadata.get("_progress")
-                or msg.metadata.get("_file_edit_events")
-                or msg.metadata.get("_turn_end")
-                or msg.metadata.get("_session_updated")
-                or msg.metadata.get("_goal_status")
-                or msg.metadata.get("_goal_state_sync")
-                or msg.metadata.get("_deliver_files")
-                or msg.metadata.get("_workflow_step_activity")
-            ):
-                self.logger.debug("no active subscribers for chat_id={}", msg.chat_id)
-            else:
-                self.logger.warning("no active subscribers for chat_id={}", msg.chat_id)
-            return
+            # Durable branches below still append their canonical transcript
+            # records; only the final socket fan-out becomes a no-op.
+            self.logger.debug("no active subscribers for chat_id={}", msg.chat_id)
         if msg.metadata.get("_workflow_step_activity"):
             # Live tool-activity stream of a workflow step job. Fanned out to
             # room subscribers only — persistence happens when the step's
@@ -6711,13 +7970,20 @@ class WebSocketChannel(BaseChannel):
             return
         if msg.metadata.get("_goal_state_sync"):
             blob = msg.metadata.get("goal_state")
-            await self.send_goal_state(msg.chat_id, blob if isinstance(blob, dict) else {"active": False})
+            await self.send_goal_state(
+                msg.chat_id, blob if isinstance(blob, dict) else {"active": False}
+            )
+            return
+        if msg.metadata.get("_task_plan_sync"):
+            blob = msg.metadata.get("task_plan")
+            if isinstance(blob, dict):
+                await self.send_task_plan(msg.chat_id, blob)
             return
         if msg.metadata.get("_goal_status"):
             status = msg.metadata.get("goal_status")
             if status in ("running", "idle"):
                 started_raw = msg.metadata.get("started_at", msg.metadata.get("goal_started_at"))
-                await self.send_goal_status(
+                await self._send_combined_goal_status(
                     msg.chat_id,
                     status,
                     started_at=float(started_raw) if isinstance(started_raw, int | float) else None,
@@ -6730,6 +7996,9 @@ class WebSocketChannel(BaseChannel):
             gs = msg.metadata.get("goal_state")
             gs_blob = gs if isinstance(gs, dict) else None
             await self.send_turn_end(msg.chat_id, latency_ms=lat_i, goal_state=gs_blob)
+            get_count = getattr(self._subagent_manager, "get_running_count_by_session", None)
+            if callable(get_count) and get_count(f"websocket:{msg.chat_id}") > 0:
+                await self._send_combined_goal_status(msg.chat_id, "running")
             return
         if msg.metadata.get("_session_updated"):
             scope = msg.metadata.get("_session_update_scope")
@@ -6812,6 +8081,9 @@ class WebSocketChannel(BaseChannel):
             payload["latency_ms"] = int(lat)
         if msg.metadata.get("_tool_events"):
             payload["tool_events"] = msg.metadata["_tool_events"]
+        task_plan = msg.metadata.get("task_plan")
+        if isinstance(task_plan, dict):
+            payload["task_plan"] = task_plan
         agent_ui = msg.metadata.get(OUTBOUND_META_AGENT_UI)
         if agent_ui is not None:
             payload["agent_ui"] = agent_ui
@@ -6954,6 +8226,16 @@ class WebSocketChannel(BaseChannel):
         for connection in conns:
             await self._safe_send_to(connection, raw, label=" goal_state ")
 
+    async def send_task_plan(self, chat_id: str, blob: dict[str, Any]) -> None:
+        """Push the authoritative current-task plan snapshot."""
+        conns = list(self._subs.get(chat_id, ()))
+        if not conns:
+            return
+        body = {"event": "task_plan", "chat_id": chat_id, "task_plan": blob}
+        raw = json.dumps(body, ensure_ascii=False)
+        for connection in conns:
+            await self._safe_send_to(connection, raw, label=" task_plan ")
+
     async def send_goal_status(
         self,
         chat_id: str,
@@ -7018,6 +8300,16 @@ class WebSocketChannel(BaseChannel):
         for connection in conns:
             await self._safe_send_to(connection, raw, label=" workflow_run_updated ")
 
+    async def send_discussion_updated(self, chat_id: str, payload: dict[str, Any]) -> None:
+        """Broadcast a topic discussion without exposing workflow UI semantics."""
+        conns = list(self._subs.get(chat_id, ()))
+        if not conns:
+            return
+        body: dict[str, Any] = {"event": "discussion_updated", "chat_id": chat_id, **payload}
+        raw = json.dumps(body, ensure_ascii=False)
+        for connection in conns:
+            await self._safe_send_to(connection, raw, label=" discussion_updated ")
+
     async def send_artifacts_changed(self, *, chat_id: str | None = None) -> None:
         """Broadcast an artifact change hint to every open websocket connection.
 
@@ -7033,6 +8325,21 @@ class WebSocketChannel(BaseChannel):
         raw = json.dumps(payload, ensure_ascii=False)
         for connection in conns:
             await self._safe_send_to(connection, raw, label=" artifacts_changed ")
+
+    async def send_artifact_task_started(self, chat_id: str, task_id: str) -> None:
+        conns = list(self._subs.get(chat_id, ()))
+        if not conns:
+            return
+        raw = json.dumps(
+            {
+                "event": "artifact_task_started",
+                "chat_id": chat_id,
+                "task_id": task_id,
+            },
+            ensure_ascii=False,
+        )
+        for connection in conns:
+            await self._safe_send_to(connection, raw, label=" artifact_task_started ")
 
     async def broadcast_ppt_phase_changed(self, project_name: str, phase: str) -> None:
         """Broadcast a PPT project phase change to every open websocket connection."""
@@ -7050,9 +8357,7 @@ class WebSocketChannel(BaseChannel):
         for connection in conns:
             await self._safe_send_to(connection, raw, label=" ppt_phase_changed ")
 
-    async def broadcast_video_project_changed(
-        self, project_name: str, hint: str = ""
-    ) -> None:
+    async def broadcast_video_project_changed(self, project_name: str, hint: str = "") -> None:
         """Broadcast a video project state change to every open websocket connection.
 
         hint 语义：scenes（分镜/场景内容）、phase（阶段迁移）、

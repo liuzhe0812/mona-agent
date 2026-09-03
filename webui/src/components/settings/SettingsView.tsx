@@ -10,13 +10,12 @@ import {
   type SetStateAction,
 } from "react";
 import {
-  Activity,
+  BarChart3,
   Bot,
   Brain,
   Check,
   ChevronDown,
   ChevronLeft,
-  ChevronRight,
   ChevronUp,
   Cloud,
   Cpu,
@@ -27,19 +26,15 @@ import {
   ExternalLink,
   FolderOpen,
   Gem,
-  Globe2,
   Copy,
   Grid3X3,
   GripVertical,
-  HardDrive,
   Hexagon,
   ImageIcon,
   Info,
-  KeyRound,
   Keyboard,
   Layers,
   Loader2,
-  Monitor,
   Moon,
   Orbit,
   Palette,
@@ -51,13 +46,13 @@ import {
   RefreshCw,
   RotateCcw,
   Search,
-  Server,
+  Settings2,
   SlidersHorizontal,
   Sparkles,
   Star,
   Triangle,
   Trash2,
-  Video,
+  WalletCards,
   Waves,
   Zap,
   type LucideIcon,
@@ -65,6 +60,7 @@ import {
 import { useTranslation } from "react-i18next";
 
 import { LanguageSwitcher } from "@/components/LanguageSwitcher";
+import { MODULE_ICONS } from "@/components/shell/AppRail";
 import { Button } from "@/components/ui/button";
 import {
   Dialog,
@@ -83,6 +79,7 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { Input } from "@/components/ui/input";
+import { Select } from "@/components/ui/select";
 import { Textarea } from "@/components/ui/textarea";
 import { Checkbox } from "@/components/ui/checkbox";
 import {
@@ -95,7 +92,6 @@ import {
   cancelWeixinLogin,
   fetchProviderModels,
   fetchSettings,
-  fetchZenFreeModels,
   getWeixinLoginStatus,
   logoutWeixin,
   startWeixinLogin,
@@ -118,18 +114,19 @@ import {
   isTauri,
   getDesktopSettings,
   updateDesktopSettings,
-  getGatewayStatus,
   checkForUpdates,
   performUpdate,
   getAgentSearchScope,
   setAgentSearchScope,
   loadDesktopNotesState,
+  SEND_MESSAGE_SHORTCUT_EVENT,
   type UpdateCheckResult,
   type UpdateProgress,
   type DesktopAppSettings,
   type SidebarShortcuts,
   type SidebarModuleConfig,
   type AgentSearchScope,
+  type SendMessageShortcut,
 } from "@/lib/tauri";
 import { listAccounts, getFolders } from "@/components/email/lib/emailApi";
 import type { EmailAccount, EmailFolder } from "@/components/email/lib/types";
@@ -147,19 +144,24 @@ import type {
 import { SkillManagementPanel } from "@/components/settings/SkillManagementPanel";
 import { McpManagementPanel } from "@/components/settings/McpManagementPanel";
 import { ChatProvidersSettings } from "@/components/settings/ChatProvidersSettings";
+import { AccountSettings } from "@/components/settings/AccountSettings";
+import { CreditsView } from "@/components/CreditsView";
+import { UsageSettings } from "@/components/settings/UsageSettings";
+import { ManagedRuntimeSettings } from "@/components/settings/ManagedRuntimeSettings";
+import { AutomationSettings } from "@/components/settings/AutomationSettings";
 import { SubsectionLabel } from "@/components/ui/page-header";
 import { StatusNotice } from "@/components/ui/status-notice";
-import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { Switch } from "@/components/ui/switch";
 
 type SettingsSectionKey =
-  | "overview"
+  | "billing"
+  | "usage"
   | "appearance"
   | "models_providers"
   | "image"
-  | "web"
+  | "general"
+  | "resources"
   | "channels"
-  | "runtime"
-  | "desktop"
   | "shortcuts"
   | "skills"
   | "mcp"
@@ -170,8 +172,6 @@ interface AgentSettingsDraft {
   provider: string;
   modelPreset: string;
   timezone: string;
-  botName: string;
-  botIcon: string;
   toolHintMaxLength: number;
   workspace: string;
 }
@@ -206,6 +206,9 @@ interface SettingsViewProps {
   isRestarting?: boolean;
   initialSection?: string;
   onTriggerAgent?: (prompt: string) => void;
+  onOpenLogin?: () => void;
+  onOpenSubscribe?: () => void;
+  onChangePassword?: () => void;
 }
 
 function modelPresetValue(payload: SettingsPayload): string {
@@ -229,6 +232,9 @@ export function SettingsView({
   onRestart,
   isRestarting = false,
   initialSection,
+  onOpenLogin,
+  onOpenSubscribe,
+  onChangePassword,
 }: SettingsViewProps) {
   const { t } = useTranslation();
   const { token } = useClientOptional();
@@ -245,7 +251,9 @@ export function SettingsView({
   const [, setHighlightProvider] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [activeSection, setActiveSection] = useState<SettingsSectionKey>(
-    (initialSection as SettingsSectionKey | undefined) ?? "overview",
+    initialSection === "account" || initialSection === "web" || initialSection === "runtime" || initialSection === "desktop"
+      ? "general"
+      : (initialSection as SettingsSectionKey | undefined) ?? "general",
   );
   const [pendingRestartSections, setPendingRestartSections] = useState<PendingRestartSections>(
     EMPTY_PENDING_RESTART_SECTIONS,
@@ -289,8 +297,6 @@ export function SettingsView({
     provider: "",
     modelPreset: "default",
     timezone: "UTC",
-    botName: "mona",
-    botIcon: "",
     toolHintMaxLength: 40,
     workspace: "",
   });
@@ -303,8 +309,6 @@ export function SettingsView({
       provider: editableDefaultProvider(payload),
       modelPreset: modelPresetValue(payload),
       timezone: payload.agent.timezone,
-      botName: payload.agent.bot_name,
-      botIcon: payload.agent.bot_icon,
       toolHintMaxLength: payload.agent.tool_hint_max_length,
       workspace: payload.runtime.workspace_path,
     });
@@ -371,28 +375,10 @@ export function SettingsView({
     };
   }, [applyPayload, token]);
 
-  useEffect(() => {
-    if (activeSection !== "models_providers") return;
-    let cancelled = false;
-    fetchZenFreeModels(token)
-      .then(() => fetchSettings(token))
-      .then((payload) => {
-        if (!cancelled) applyPayload(payload);
-      })
-      .catch(() => {
-        // Keep the last persisted free-model catalog when the upstream is unavailable.
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, [activeSection, applyPayload, token]);
-
   const runtimeDirty = useMemo(() => {
     if (!settings) return false;
     return (
       form.timezone !== settings.agent.timezone ||
-      form.botName !== settings.agent.bot_name ||
-      form.botIcon !== settings.agent.bot_icon ||
       form.toolHintMaxLength !== settings.agent.tool_hint_max_length ||
       form.workspace !== settings.runtime.workspace_path
     );
@@ -431,28 +417,22 @@ export function SettingsView({
     return formDirty || ttsApiKeyDraft.trim().length > 0;
   }, [ttsForm, settings, ttsApiKeyDraft]);
 
-  const hasPendingRestart = useMemo(
-    () =>
-      !!settings?.requires_restart ||
-      pendingRestartSections.runtime ||
-      pendingRestartSections.web ||
-      pendingRestartSections.providers ||
-      pendingRestartSections.channels,
-    [pendingRestartSections, settings?.requires_restart],
-  );
-
   const saveRuntimeSettings = async () => {
     if (!settings || !runtimeDirty || saving) return;
     setSaving(true);
     try {
       const payload = await updateSettings(token, {
         timezone: form.timezone,
-        botName: form.botName,
-        botIcon: form.botIcon,
         toolHintMaxLength: form.toolHintMaxLength,
         workspace: form.workspace,
       });
-      applyPayload(payload);
+      setSettings(payload);
+      setForm((prev) => ({
+        ...prev,
+        timezone: payload.agent.timezone,
+        toolHintMaxLength: payload.agent.tool_hint_max_length,
+        workspace: payload.runtime.workspace_path,
+      }));
       if (payload.requires_restart) {
         setPendingRestartSections((prev) => ({ ...prev, runtime: true }));
       }
@@ -464,19 +444,24 @@ export function SettingsView({
     }
   };
 
-  const saveImageGenerationSettings = async () => {
-    if (!settings || !imageGenerationDirty || imageGenerationSaving) return;
+  const saveImageGenerationSettings = async (
+    override?: ImageGenerationSettingsUpdate,
+    force = false,
+    includeKeyDraft = true,
+  ) => {
+    if (!settings || (!force && !imageGenerationDirty) || imageGenerationSaving) return;
+    const nextForm = override ?? imageGenerationForm;
     setImageGenerationSaving(true);
     try {
-      const keyDraft = imageApiKeyDraft.trim();
+      const keyDraft = includeKeyDraft ? imageApiKeyDraft.trim() : "";
       if (keyDraft) {
         const providerPayload = await updateProviderSettings(token, {
-          provider: imageGenerationForm.provider,
+          provider: nextForm.provider,
           apiKey: keyDraft,
         });
         applyPayload(providerPayload);
       }
-      const payload = await updateImageGenerationSettings(token, imageGenerationForm);
+      const payload = await updateImageGenerationSettings(token, nextForm);
       applyPayload(payload);
       if (payload.requires_restart) {
         setPendingRestartSections((prev) => ({ ...prev, providers: true }));
@@ -490,19 +475,24 @@ export function SettingsView({
     }
   };
 
-  const saveVideoGenerationSettings = async () => {
-    if (!settings || !videoGenerationDirty || videoGenerationSaving) return;
+  const saveVideoGenerationSettings = async (
+    override?: VideoGenerationSettingsUpdate,
+    force = false,
+    includeKeyDraft = true,
+  ) => {
+    if (!settings || (!force && !videoGenerationDirty) || videoGenerationSaving) return;
+    const nextForm = override ?? videoGenerationForm;
     setVideoGenerationSaving(true);
     try {
-      const keyDraft = videoApiKeyDraft.trim();
+      const keyDraft = includeKeyDraft ? videoApiKeyDraft.trim() : "";
       if (keyDraft) {
         const providerPayload = await updateProviderSettings(token, {
-          provider: videoGenerationForm.provider,
+          provider: nextForm.provider,
           apiKey: keyDraft,
         });
         applyPayload(providerPayload);
       }
-      const payload = await updateVideoGenerationSettings(token, videoGenerationForm);
+      const payload = await updateVideoGenerationSettings(token, nextForm);
       applyPayload(payload);
       if (payload.requires_restart) {
         setPendingRestartSections((prev) => ({ ...prev, providers: true }));
@@ -571,7 +561,7 @@ export function SettingsView({
       if (provider.credential === "api_key" && apiKey) update.apiKey = apiKey;
       if (provider.credential === "base_url") update.baseUrl = baseUrl;
       const payload = await updateWebSearchSettings(token, update);
-      applyPayload(payload);
+      setSettings(payload);
       if (payload.requires_restart || webFetchRestartRequired) {
         setPendingRestartSections((prev) => ({ ...prev, web: true }));
       }
@@ -621,23 +611,73 @@ export function SettingsView({
     setWebSearchKeyEditing(false);
   }, [settings]);
 
-  const handleSelectSection = (section: SettingsSectionKey) => {
-    setActiveSection(section);
-  };
-
   const renderSection = () => {
+    if (activeSection === "general") {
+      return (
+        <div className="space-y-10">
+          <AccountSettings
+            onOpenLogin={onOpenLogin}
+            onManageSubscription={onOpenSubscribe}
+            onOpenBilling={() => setActiveSection("billing")}
+            onChangePassword={onChangePassword}
+          />
+          {loading && !settings ? (
+            <div className="flex h-32 items-center justify-center text-body text-muted-foreground">
+              <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+              {t("settings.status.loading")}
+            </div>
+          ) : null}
+          {error ? <StatusNotice tone="danger">{error}</StatusNotice> : null}
+          {settings ? (
+            <>
+              <WebSettings
+                settings={settings}
+                form={webSearchForm}
+                keyVisible={webSearchKeyVisible}
+                keyEditing={webSearchKeyEditing}
+                saving={webSearchSaving}
+                onChangeForm={setWebSearchForm}
+                onChangeProvider={handleWebSearchProviderChange}
+                onToggleKey={() => setWebSearchKeyVisible((visible) => !visible)}
+                onToggleKeyEditing={() => {
+                  setWebSearchKeyEditing((editing) => !editing);
+                  setWebSearchKeyVisible(false);
+                  setWebSearchForm((prev) => ({ ...prev, apiKey: "" }));
+                }}
+                onReset={resetWebSearchDraft}
+                onSave={saveWebSearch}
+                onRestart={onRestart}
+                isRestarting={isRestarting}
+                requiresRestartPending={pendingRestartSections.web}
+              />
+              <RuntimeSettings
+                form={form}
+                setForm={setForm}
+                dirty={runtimeDirty}
+                saving={saving}
+                onSave={saveRuntimeSettings}
+                onRestart={onRestart}
+                isRestarting={isRestarting}
+                requiresRestartPending={pendingRestartSections.runtime}
+              />
+              {isTauri() ? <DesktopSettings token={token} /> : null}
+              {isTauri() ? <AgentScopeSettings /> : null}
+            </>
+          ) : null}
+        </div>
+      );
+    }
+    if (activeSection === "billing") {
+      return <CreditsView />;
+    }
+    if (activeSection === "usage") {
+      return <UsageSettings />;
+    }
+    if (activeSection === "resources") {
+      return <ManagedRuntimeSettings token={token} />;
+    }
     if (!settings) return null;
     switch (activeSection) {
-      case "overview":
-        return (
-          <OverviewSettings
-            settings={settings}
-            requiresRestart={hasPendingRestart}
-            onRestart={onRestart}
-            isRestarting={isRestarting}
-            onSelectSection={handleSelectSection}
-          />
-        );
       case "appearance":
         return (
           <AppearanceSettings
@@ -652,6 +692,8 @@ export function SettingsView({
             token={token}
             onSettingsChanged={applyPayload}
             onChatModelNameChange={onModelNameChange}
+            onOpenBilling={() => setActiveSection("billing")}
+            onOpenUsage={() => setActiveSection("usage")}
             onSetHighlightProvider={setHighlightProvider}
             // image tab props
             imageForm={imageGenerationForm}
@@ -659,6 +701,11 @@ export function SettingsView({
             imageSaving={imageGenerationSaving}
             onImageFormChange={setImageGenerationForm}
             onImageSave={saveImageGenerationSettings}
+            onSelectImageModel={(provider, model) => {
+              const next = { ...imageGenerationForm, enabled: true, provider, model };
+              setImageGenerationForm(next);
+              void saveImageGenerationSettings(next, true, false);
+            }}
             imageProviderRestartPending={pendingRestartSections.providers}
             imageApiKeyDraft={imageApiKeyDraft}
             onImageApiKeyDraftChange={setImageApiKeyDraft}
@@ -670,6 +717,11 @@ export function SettingsView({
             videoSaving={videoGenerationSaving}
             onVideoFormChange={setVideoGenerationForm}
             onVideoSave={saveVideoGenerationSettings}
+            onSelectVideoModel={(provider, model) => {
+              const next = { ...videoGenerationForm, enabled: true, provider, model };
+              setVideoGenerationForm(next);
+              void saveVideoGenerationSettings(next, true, false);
+            }}
             videoApiKeyDraft={videoApiKeyDraft}
             onVideoApiKeyDraftChange={setVideoApiKeyDraft}
             videoKeyVisible={videoKeyVisible}
@@ -688,32 +740,6 @@ export function SettingsView({
             isRestarting={isRestarting}
           />
         );
-      case "web":
-        return (
-          <div className="space-y-10">
-            <WebSettings
-              settings={settings}
-              form={webSearchForm}
-              keyVisible={webSearchKeyVisible}
-              keyEditing={webSearchKeyEditing}
-              saving={webSearchSaving}
-              onChangeForm={setWebSearchForm}
-              onChangeProvider={handleWebSearchProviderChange}
-              onToggleKey={() => setWebSearchKeyVisible((visible) => !visible)}
-              onToggleKeyEditing={() => {
-                setWebSearchKeyEditing((editing) => !editing);
-                setWebSearchKeyVisible(false);
-                setWebSearchForm((prev) => ({ ...prev, apiKey: "" }));
-              }}
-              onReset={resetWebSearchDraft}
-              onSave={saveWebSearch}
-              onRestart={onRestart}
-              isRestarting={isRestarting}
-              requiresRestartPending={pendingRestartSections.web}
-            />
-            {isTauri() ? <AgentScopeSettings /> : null}
-          </div>
-        );
       case "channels":
         return (
           <ChannelsSettings
@@ -730,22 +756,6 @@ export function SettingsView({
             requiresRestartPending={pendingRestartSections.channels}
           />
         );
-      case "runtime":
-        return (
-          <RuntimeSettings
-            form={form}
-            setForm={setForm}
-            settings={settings}
-            dirty={runtimeDirty}
-            saving={saving}
-            onSave={saveRuntimeSettings}
-            onRestart={onRestart}
-            isRestarting={isRestarting}
-            requiresRestartPending={pendingRestartSections.runtime}
-          />
-        );
-      case "desktop":
-        return <DesktopSettings />;
       case "shortcuts":
         return <ShortcutsSettings />;
       case "skills":
@@ -759,6 +769,8 @@ export function SettingsView({
     }
   };
 
+  const isIndependentSection = ["general", "billing", "usage", "resources"].includes(activeSection);
+
   return (
     <div className="flex min-h-0 flex-1 flex-col overflow-hidden md:flex-row">
       <SettingsSidebar
@@ -767,9 +779,11 @@ export function SettingsView({
         onBackToChat={onBackToChat}
       />
 
-      <main className="min-w-0 flex-1 overflow-y-auto [scrollbar-gutter:stable]">
+      <main className="min-w-0 flex-1 overflow-y-auto">
         <div className="mx-auto w-full max-w-[920px] px-5 py-8 sm:px-8 lg:py-12">
-          {loading ? (
+          {isIndependentSection ? (
+            renderSection()
+          ) : loading ? (
             <div className="flex h-48 items-center justify-center text-body text-muted-foreground">
               <Loader2 className="mr-2 h-4 w-4 animate-spin" />
               {t("settings.status.loading")}
@@ -793,13 +807,13 @@ export function SettingsView({
 }
 
 const SETTINGS_NAV_ITEMS: Array<{ key: SettingsSectionKey; icon: LucideIcon; fallback: string; desktopOnly?: boolean }> = [
-  { key: "overview", icon: Activity, fallback: "Overview" },
-  { key: "appearance", icon: Palette, fallback: "Appearance" },
+  { key: "general", icon: Settings2, fallback: "通用" },
+  { key: "resources", icon: Download, fallback: "功能资源" },
   { key: "models_providers", icon: SlidersHorizontal, fallback: "模型设置" },
-  { key: "web", icon: Search, fallback: "搜索" },
+  { key: "billing", icon: WalletCards, fallback: "余额与充值" },
+  { key: "usage", icon: BarChart3, fallback: "用量统计" },
+  { key: "appearance", icon: Palette, fallback: "Appearance" },
   { key: "channels", icon: Radio, fallback: "频道" },
-  { key: "runtime", icon: Server, fallback: "Runtime" },
-  { key: "desktop", icon: Monitor, fallback: "桌面", desktopOnly: true },
   { key: "shortcuts", icon: Keyboard, fallback: "快捷键", desktopOnly: true },
   { key: "skills", icon: Hexagon, fallback: "技能", desktopOnly: true },
   { key: "mcp", icon: Plug, fallback: "MCP", desktopOnly: true },
@@ -860,170 +874,6 @@ function SettingsSidebar({
         })}
       </nav>
     </aside>
-  );
-}
-
-function OverviewSettings({
-  settings,
-  requiresRestart,
-  onRestart,
-  isRestarting,
-  onSelectSection,
-}: {
-  settings: SettingsPayload;
-  requiresRestart: boolean;
-  onRestart?: () => void;
-  isRestarting?: boolean;
-  onSelectSection: (section: SettingsSectionKey) => void;
-}) {
-  const { t } = useTranslation();
-  const tx = (key: string, fallback: string) => t(key, { defaultValue: fallback });
-  const chatProviders = settings.chat_providers ?? [];
-  const configuredCount = chatProviders.filter((provider) => provider.configured).length;
-  const activePreset = settings.agent.model_preset || "default";
-  const activeProvider = settings.agent.resolved_provider ?? settings.agent.provider;
-  const webStatus = settings.web.enable
-    ? tx("settings.values.enabled", "Enabled")
-    : tx("settings.values.disabled", "Disabled");
-  const imageStatus = settings.image_generation.enabled
-    ? tx("settings.values.enabled", "Enabled")
-    : tx("settings.values.disabled", "Disabled");
-  const imageCaption = `${providerLabel(settings.image_generation.providers, settings.image_generation.provider)} · ${
-    settings.image_generation.provider_configured
-      ? tx("settings.values.configured", "Configured")
-      : tx("settings.values.notConfigured", "Not configured")
-  }`;
-  const videoStatus = settings.video_generation.enabled
-    ? tx("settings.values.enabled", "Enabled")
-    : tx("settings.values.disabled", "Disabled");
-  const videoCaption = `${providerLabel(settings.video_generation.providers, settings.video_generation.provider)} · ${
-    settings.video_generation.provider_configured
-      ? tx("settings.values.configured", "Configured")
-      : tx("settings.values.notConfigured", "Not configured")
-  }`;
-  return (
-    <div className="space-y-7">
-      <section>
-        <div className="overflow-hidden rounded-lg border border-border/60 bg-card">
-          <div className="flex flex-col gap-4 px-5 py-5 sm:flex-row sm:items-center sm:justify-between">
-            <div className="flex min-w-0 items-center gap-3">
-              <span className="grid h-12 w-12 shrink-0 place-items-center rounded-lg bg-muted text-foreground/82 dark:bg-muted/70">
-                <Bot className="h-6 w-6" aria-hidden />
-              </span>
-              <div className="min-w-0">
-                <div className="text-caption font-medium text-muted-foreground">mona</div>
-                <div className="mt-0.5 truncate text-title-sm text-foreground">
-                  {settings.agent.model}
-                </div>
-                <div className="mt-0.5 truncate text-ui text-muted-foreground">
-                  {activeProvider} · {activePreset}
-                </div>
-              </div>
-            </div>
-            <div className="flex flex-wrap items-center gap-2 sm:justify-end">
-              <StatusPill tone={requiresRestart ? "neutral" : "success"}>
-                {requiresRestart
-                  ? tx("settings.values.restartPending", "Restart pending")
-                  : tx("settings.values.ready", "Ready")}
-              </StatusPill>
-              {requiresRestart && onRestart ? (
-                <Button
-                  size="sm"
-                  variant="ghost"
-                  onClick={onRestart}
-                  disabled={isRestarting}
-                  className="rounded-full"
-                >
-                  {isRestarting ? (
-                    <Loader2 className="mr-1.5 h-3.5 w-3.5 animate-spin" aria-hidden />
-                  ) : (
-                    <RotateCcw className="mr-1.5 h-3.5 w-3.5" aria-hidden />
-                  )}
-                  {isRestarting ? t("app.system.restarting") : t("app.system.restart")}
-                </Button>
-              ) : null}
-            </div>
-          </div>
-        </div>
-      </section>
-
-      <section>
-        <SubsectionLabel className="mb-2 px-1">{tx("settings.sections.ai", "AI")}</SubsectionLabel>
-        <SettingsGroup>
-          <OverviewListRow
-            icon={Bot}
-            title={tx("settings.overview.model", "Current model")}
-            value={settings.agent.model}
-            caption={`${activeProvider} · ${activePreset}`}
-            onClick={() => onSelectSection("models_providers")}
-          />
-          <OverviewListRow
-            icon={KeyRound}
-            title={tx("settings.overview.providers", "Providers")}
-            value={tx("settings.overview.configuredCount", "{{count}} configured").replace(
-              "{{count}}",
-              String(configuredCount),
-            )}
-            caption={tx("settings.overview.totalProviders", "{{count}} available").replace(
-              "{{count}}",
-              String(chatProviders.length),
-            )}
-            onClick={() => onSelectSection("models_providers")}
-          />
-        </SettingsGroup>
-      </section>
-
-      <section>
-        <SubsectionLabel className="mb-2 px-1">{tx("settings.sections.capabilities", "Capabilities")}</SubsectionLabel>
-        <SettingsGroup>
-          <OverviewListRow
-            icon={Globe2}
-            title={tx("settings.overview.webSearch", "Web search")}
-            value={providerLabel(settings.web_search.providers, settings.web_search.provider)}
-            caption={webStatus}
-            onClick={() => onSelectSection("web")}
-          />
-          <OverviewListRow
-            icon={ImageIcon}
-            title={tx("settings.overview.imageGeneration", "Image generation")}
-            value={imageStatus}
-            caption={imageCaption}
-            onClick={() => onSelectSection("models_providers")}
-          />
-          <OverviewListRow
-            icon={Video}
-            title={tx("settings.overview.videoGeneration", "Video generation")}
-            value={videoStatus}
-            caption={videoCaption}
-            onClick={() => onSelectSection("models_providers")}
-          />
-        </SettingsGroup>
-      </section>
-
-      <section>
-        <SubsectionLabel className="mb-2 px-1">{tx("settings.sections.system", "System")}</SubsectionLabel>
-        <SettingsGroup>
-          <OverviewListRow
-            icon={Server}
-            title={tx("settings.rows.gateway", "Gateway")}
-            value={`${settings.runtime.gateway_host}:${settings.runtime.gateway_port}`}
-            caption={
-              requiresRestart
-                ? tx("settings.values.restartPending", "Restart pending")
-                : tx("settings.values.ready", "Ready")
-            }
-            onClick={() => onSelectSection("runtime")}
-          />
-          <OverviewListRow
-            icon={HardDrive}
-            title={tx("settings.overview.workspace", "Workspace")}
-            value={settings.runtime.workspace_path}
-            caption={settings.runtime.config_path}
-            onClick={() => onSelectSection("runtime")}
-          />
-        </SettingsGroup>
-      </section>
-    </div>
   );
 }
 
@@ -1185,9 +1035,11 @@ function SidebarModulesSettings() {
   }
 
   const defMap = new Map(MODULE_DEFS.map((d) => [d.key, d]));
+  const moduleLabel = (def: (typeof MODULE_DEFS)[number]) =>
+    def.key === "chat" ? t("rail.messages", "会话") : t(`rail.modules.${def.key}`, def.label);
   // 默认模块下拉选项：与侧栏实际可见性解耦，包含全部已定义模块
-  const viewOptions = MODULE_DEFS.map((d) => ({ key: d.key, label: d.label }));
-  const currentDefaultLabel = defMap.get(defaultView)?.label ?? defaultView;
+  const viewOptions = MODULE_DEFS.map((d) => ({ key: d.key, label: moduleLabel(d) }));
+  const currentDefaultLabel = viewOptions.find((option) => option.key === defaultView)?.label ?? defaultView;
 
   return (
     <div className="space-y-3">
@@ -1236,11 +1088,11 @@ function SidebarModulesSettings() {
             >
               <GripVertical className="h-4 w-4 shrink-0 text-muted-foreground/60" aria-hidden />
               <span className="flex h-7 w-7 shrink-0 items-center justify-center">
-                {def.icon}
+                {MODULE_ICONS[m.key] ?? def.icon}
               </span>
               <div className="min-w-0 flex-1">
                 <div className="text-body font-medium text-foreground">
-                  {def.label}
+                  {moduleLabel(def)}
                   {locked && (
                     <span className="ml-2 text-micro font-normal text-muted-foreground">
                       {tx("settings.values.locked", "固定")}
@@ -1332,12 +1184,15 @@ function AiModelsSettings({
   token,
   onSettingsChanged,
   onChatModelNameChange,
+  onOpenBilling,
+  onOpenUsage,
   // image tab
   imageForm,
   imageDirty,
   imageSaving,
   onImageFormChange,
   onImageSave,
+  onSelectImageModel,
   imageProviderRestartPending,
   imageApiKeyDraft,
   onImageApiKeyDraftChange,
@@ -1349,6 +1204,7 @@ function AiModelsSettings({
   videoSaving,
   onVideoFormChange,
   onVideoSave,
+  onSelectVideoModel,
   videoApiKeyDraft,
   onVideoApiKeyDraftChange,
   videoKeyVisible,
@@ -1372,12 +1228,15 @@ function AiModelsSettings({
   token: string;
   onSettingsChanged: (payload: SettingsPayload) => void;
   onChatModelNameChange: (modelName: string | null) => void;
+  onOpenBilling: () => void;
+  onOpenUsage: () => void;
   // image tab
   imageForm: ImageGenerationSettingsUpdate;
   imageDirty: boolean;
   imageSaving: boolean;
   onImageFormChange: Dispatch<SetStateAction<ImageGenerationSettingsUpdate>>;
   onImageSave: () => void;
+  onSelectImageModel: (provider: string, model: string) => void;
   imageProviderRestartPending: boolean;
   imageApiKeyDraft: string;
   onImageApiKeyDraftChange: Dispatch<SetStateAction<string>>;
@@ -1389,6 +1248,7 @@ function AiModelsSettings({
   videoSaving: boolean;
   onVideoFormChange: Dispatch<SetStateAction<VideoGenerationSettingsUpdate>>;
   onVideoSave: () => void;
+  onSelectVideoModel: (provider: string, model: string) => void;
   videoApiKeyDraft: string;
   onVideoApiKeyDraftChange: Dispatch<SetStateAction<string>>;
   videoKeyVisible: boolean;
@@ -1408,87 +1268,97 @@ function AiModelsSettings({
   onRestart?: () => void;
   isRestarting?: boolean;
 }) {
-  const { t } = useTranslation();
-  const tx = (key: string, fallback: string) => t(key, { defaultValue: fallback });
-  const [activeTab, setActiveTab] = useState("chat");
+  const [mediaSettings, setMediaSettings] = useState<"image" | "video" | "tts" | null>(null);
+
+  const openImageSettings = (provider: string, model?: string) => {
+    onImageFormChange((current) => ({ ...current, provider, ...(model ? { model } : {}) }));
+    onImageApiKeyDraftChange("");
+    setMediaSettings("image");
+  };
+
+  const openVideoSettings = (provider: string, model?: string) => {
+    onVideoFormChange((current) => ({ ...current, provider, ...(model ? { model } : {}) }));
+    onVideoApiKeyDraftChange("");
+    setMediaSettings("video");
+  };
 
   return (
-    <Tabs value={activeTab} onValueChange={setActiveTab} className="w-full">
-      <TabsList aria-label={tx("settings.aiModels.tabsAria", "模型设置类型")} className="mb-4">
-        <TabsTrigger value="chat">{tx("settings.aiModels.chat", "聊天模型")}</TabsTrigger>
-        <TabsTrigger value="image">{tx("settings.aiModels.image", "图片模型")}</TabsTrigger>
-        <TabsTrigger value="video">{tx("settings.aiModels.video", "视频模型")}</TabsTrigger>
-        <TabsTrigger value="tts">{tx("settings.aiModels.tts", "语音合成")}</TabsTrigger>
-      </TabsList>
+    <>
+      <ChatProvidersSettings
+        settings={settings}
+        token={token}
+        onSettingsChanged={onSettingsChanged}
+        onModelNameChange={onChatModelNameChange}
+        onOpenBilling={onOpenBilling}
+        onOpenUsage={onOpenUsage}
+        onSelectImageModel={onSelectImageModel}
+        onSelectVideoModel={onSelectVideoModel}
+        onOpenImageSettings={openImageSettings}
+        onOpenVideoSettings={openVideoSettings}
+        onOpenTtsSettings={() => setMediaSettings("tts")}
+      />
 
-      <TabsContent value="chat">
-        <ChatProvidersSettings
-          settings={settings}
-          token={token}
-          onSettingsChanged={onSettingsChanged}
-          onModelNameChange={onChatModelNameChange}
-        />
-      </TabsContent>
-
-      <TabsContent value="image">
-        <ImageGenerationSettings
-          settings={settings}
-          form={imageForm}
-          dirty={imageDirty}
-          saving={imageSaving}
-          onChangeForm={onImageFormChange}
-          onSave={onImageSave}
-          onOpenProviders={(provider) => {
-            onSetHighlightProvider?.(provider ?? null);
-            setActiveTab("chat");
-          }}
-          onRestart={onRestart}
-          isRestarting={isRestarting}
-          requiresRestartPending={imageProviderRestartPending}
-          apiKeyDraft={imageApiKeyDraft}
-          onApiKeyDraftChange={onImageApiKeyDraftChange}
-          keyVisible={imageKeyVisible}
-          onToggleKeyVisible={onToggleImageKeyVisible}
-        />
-      </TabsContent>
-
-      <TabsContent value="video">
-        <VideoGenerationSettings
-          settings={settings}
-          form={videoForm}
-          dirty={videoDirty}
-          saving={videoSaving}
-          onChangeForm={onVideoFormChange}
-          onSave={onVideoSave}
-          onOpenProviders={(provider) => {
-            onSetHighlightProvider?.(provider ?? null);
-            setActiveTab("chat");
-          }}
-          onRestart={onRestart}
-          isRestarting={isRestarting}
-          requiresRestartPending={imageProviderRestartPending}
-          apiKeyDraft={videoApiKeyDraft}
-          onApiKeyDraftChange={onVideoApiKeyDraftChange}
-          keyVisible={videoKeyVisible}
-          onToggleKeyVisible={onToggleVideoKeyVisible}
-        />
-      </TabsContent>
-
-      <TabsContent value="tts">
-        <TtsSettings
-          settings={settings}
-          form={ttsForm}
-          dirty={ttsDirty}
-          saving={ttsSaving}
-          onChangeForm={onTtsFormChange}
-          onSave={onTtsSave}
-          apiKeyDraft={ttsApiKeyDraft}
-          onApiKeyDraftChange={onTtsApiKeyDraftChange}
-          keyVisible={ttsKeyVisible}
-          onToggleKeyVisible={onToggleTtsKeyVisible}
-        />
-      </TabsContent>
-    </Tabs>
+      <Dialog open={mediaSettings !== null} onOpenChange={(open) => !open && setMediaSettings(null)}>
+        <DialogContent className="max-h-[85vh] max-w-3xl overflow-y-auto">
+          <DialogHeader>
+            <DialogTitle>{mediaSettings === "image" ? "图像模型配置" : mediaSettings === "video" ? "视频模型配置" : "语音合成配置"}</DialogTitle>
+            <DialogDescription>
+              配置专用生成模型及默认参数；保存后由对应生成工具读取，不会进入聊天模型选择器。
+            </DialogDescription>
+          </DialogHeader>
+          {mediaSettings === "image" ? (
+            <ImageGenerationSettings
+              key={`image-${imageForm.provider}`}
+              settings={settings}
+              form={imageForm}
+              dirty={imageDirty}
+              saving={imageSaving}
+              onChangeForm={onImageFormChange}
+              onSave={onImageSave}
+              onOpenProviders={(provider) => onSetHighlightProvider?.(provider ?? null)}
+              onRestart={onRestart}
+              isRestarting={isRestarting}
+              requiresRestartPending={imageProviderRestartPending}
+              apiKeyDraft={imageApiKeyDraft}
+              onApiKeyDraftChange={onImageApiKeyDraftChange}
+              keyVisible={imageKeyVisible}
+              onToggleKeyVisible={onToggleImageKeyVisible}
+            />
+          ) : mediaSettings === "video" ? (
+            <VideoGenerationSettings
+              key={`video-${videoForm.provider}`}
+              settings={settings}
+              form={videoForm}
+              dirty={videoDirty}
+              saving={videoSaving}
+              onChangeForm={onVideoFormChange}
+              onSave={onVideoSave}
+              onOpenProviders={(provider) => onSetHighlightProvider?.(provider ?? null)}
+              onRestart={onRestart}
+              isRestarting={isRestarting}
+              requiresRestartPending={imageProviderRestartPending}
+              apiKeyDraft={videoApiKeyDraft}
+              onApiKeyDraftChange={onVideoApiKeyDraftChange}
+              keyVisible={videoKeyVisible}
+              onToggleKeyVisible={onToggleVideoKeyVisible}
+            />
+          ) : mediaSettings === "tts" ? (
+            <TtsSettings
+              settings={settings}
+              form={ttsForm}
+              dirty={ttsDirty}
+              saving={ttsSaving}
+              onChangeForm={onTtsFormChange}
+              onSave={onTtsSave}
+              apiKeyDraft={ttsApiKeyDraft}
+              onApiKeyDraftChange={onTtsApiKeyDraftChange}
+              keyVisible={ttsKeyVisible}
+              onToggleKeyVisible={onToggleTtsKeyVisible}
+            />
+          ) : null}
+        </DialogContent>
+      </Dialog>
+    </>
   );
 }
 
@@ -1639,11 +1509,7 @@ export function ModelsProvidersSettings({
 
   // --- Provider list logic ---
   const configuredProviders = settings.providers.filter((provider) => provider.configured);
-  const sortedConfiguredProviders = useMemo(() => {
-    const free = configuredProviders.filter((p) => p.free_default_model);
-    const rest = configuredProviders.filter((p) => !p.free_default_model);
-    return [...free, ...rest];
-  }, [configuredProviders]);
+  const sortedConfiguredProviders = configuredProviders;
   const unconfiguredProviders = useMemo(
     () => orderUnconfiguredProviders(settings.providers.filter((provider) => !provider.configured)),
     [settings.providers],
@@ -1722,20 +1588,10 @@ export function ModelsProvidersSettings({
               </span>
             </span>
           </span>
-          <StatusPill
-            tone={
-              provider.free_default_model
-                ? "info"
-                : provider.configured
-                  ? "success"
-                  : "neutral"
-            }
-          >
-            {provider.free_default_model
-              ? tx("settings.byok.builtin", "内置")
-              : provider.configured
-                ? t("settings.byok.configured")
-                : t("settings.byok.notConfigured")}
+          <StatusPill tone={provider.configured ? "success" : "neutral"}>
+            {provider.configured
+              ? t("settings.byok.configured")
+              : t("settings.byok.notConfigured")}
           </StatusPill>
         </Button>
 
@@ -2889,15 +2745,6 @@ function WebSettings({
             />
           </SettingsRow>
 
-          {selectedProvider?.credential === "none" ? (
-            <SettingsRow
-              title={t("settings.byok.webSearch.credentials")}
-              description={t("settings.byok.webSearch.noCredentialHelp")}
-            >
-              <StatusPill tone="success">{t("settings.byok.webSearch.noCredentialRequired")}</StatusPill>
-            </SettingsRow>
-          ) : null}
-
           {selectedProvider?.credential === "api_key" ? (
             <SettingsRow
               title={t("settings.byok.apiKey")}
@@ -2972,12 +2819,6 @@ function WebSettings({
               />
             </SettingsRow>
           ) : null}
-        </SettingsGroup>
-      </section>
-
-      <section>
-        <SubsectionLabel className="mb-2 px-1">{tx("settings.sections.webBehavior", "Behavior")}</SubsectionLabel>
-        <SettingsGroup>
           <SettingsRow
             title={tx("settings.rows.maxResults", "Max results")}
             description={tx("settings.help.maxResults", "Results returned by each web_search call.")}
@@ -3789,7 +3630,6 @@ function ToggleSwitch({
 function RuntimeSettings({
   form,
   setForm,
-  settings,
   dirty,
   saving,
   onSave,
@@ -3799,7 +3639,6 @@ function RuntimeSettings({
 }: {
   form: AgentSettingsDraft;
   setForm: Dispatch<SetStateAction<AgentSettingsDraft>>;
-  settings: SettingsPayload;
   dirty: boolean;
   saving: boolean;
   onSave: () => void;
@@ -3812,22 +3651,8 @@ function RuntimeSettings({
   return (
     <div className="space-y-7">
       <section>
-        <SubsectionLabel className="mb-2 px-1">{tx("settings.sections.identity", "Identity")}</SubsectionLabel>
+        <SubsectionLabel className="mb-2 px-1">{tx("settings.sections.runtimeParameters", "Runtime parameters")}</SubsectionLabel>
         <SettingsGroup>
-          <SettingsRow title={tx("settings.rows.botName", "Bot name")} description={tx("settings.help.botName", "Shown in runtime surfaces that use the configured bot identity.")}>
-            <Input
-              value={form.botName}
-              onChange={(event) => setForm((prev) => ({ ...prev, botName: event.target.value }))}
-              className="h-8 w-[220px] rounded-full text-ui"
-            />
-          </SettingsRow>
-          <SettingsRow title={tx("settings.rows.botIcon", "Bot icon")} description={tx("settings.help.botIcon", "Short emoji or text shown beside the bot name.")}>
-            <Input
-              value={form.botIcon}
-              onChange={(event) => setForm((prev) => ({ ...prev, botIcon: event.target.value }))}
-              className="h-8 w-[120px] rounded-full text-center text-ui"
-            />
-          </SettingsRow>
           <SettingsRow title={tx("settings.rows.timezone", "Timezone")} description={tx("settings.help.timezone", "IANA timezone used by runtime context and schedules.")}>
             <Input
               value={form.timezone}
@@ -3843,44 +3668,6 @@ function RuntimeSettings({
               onChange={(toolHintMaxLength) => setForm((prev) => ({ ...prev, toolHintMaxLength }))}
             />
           </SettingsRow>
-          <RestartSettingsFooter
-            dirty={dirty}
-            saving={saving}
-            pendingRestart={requiresRestartPending}
-            dirtyMessage={tx("settings.status.restartAfterSaving", "Save changes, then restart when ready.")}
-            pendingMessage={tx("settings.status.savedRestartApply", "Saved. Restart when ready.")}
-            onSave={onSave}
-            onRestart={onRestart}
-            isRestarting={isRestarting}
-          />
-        </SettingsGroup>
-      </section>
-
-      <section>
-        <SubsectionLabel className="mb-2 px-1">{t("settings.sections.system")}</SubsectionLabel>
-        <SettingsGroup>
-          {onRestart && !requiresRestartPending ? (
-            <SettingsRow
-              title={t("settings.rows.restart")}
-              description={t("app.system.restartHint")}
-            >
-              <Button
-                size="sm"
-                variant="outline"
-                onClick={onRestart}
-                disabled={isRestarting}
-                className="rounded-full"
-              >
-                {isRestarting ? (
-                  <Loader2 className="mr-1.5 h-3.5 w-3.5 animate-spin" aria-hidden />
-                ) : (
-                  <RotateCcw className="mr-1.5 h-3.5 w-3.5" aria-hidden />
-                )}
-                {isRestarting ? t("app.system.restarting") : t("app.system.restart")}
-              </Button>
-            </SettingsRow>
-          ) : null}
-          <ReadOnlyRow title={t("settings.rows.configPath")} value={settings.runtime.config_path} />
           <SettingsRow
             title={
               <span className="inline-flex items-center gap-1.5">
@@ -3910,6 +3697,7 @@ function RuntimeSettings({
                   size="icon"
                   type="button"
                   className="h-8 w-8 shrink-0 rounded-full"
+                  aria-label={tx("settings.actions.chooseWorkspace", "Choose workspace")}
                   onClick={async () => {
                     try {
                       const { open } = await import("@tauri-apps/plugin-dialog");
@@ -3927,19 +3715,16 @@ function RuntimeSettings({
               ) : null}
             </div>
           </SettingsRow>
-          <ReadOnlyRow title={tx("settings.rows.heartbeat", "Heartbeat")} value={settings.runtime.heartbeat.enabled ? `${settings.runtime.heartbeat.interval_s}s` : tx("settings.values.disabled", "Disabled")} />
-          <ReadOnlyRow title={tx("settings.rows.dream", "Dream")} value={settings.runtime.dream.schedule} />
-          <ReadOnlyRow title={tx("settings.rows.unifiedSession", "Unified session")} value={settings.runtime.unified_session ? tx("settings.values.enabled", "Enabled") : tx("settings.values.disabled", "Disabled")} />
-        </SettingsGroup>
-      </section>
-
-      <section>
-        <SubsectionLabel className="mb-2 px-1">{tx("settings.sections.safety", "Safety")}</SubsectionLabel>
-        <SettingsGroup>
-          <ReadOnlyRow title={tx("settings.rows.restrictWorkspace", "Restrict to workspace")} value={settings.advanced.restrict_to_workspace ? tx("settings.values.enabled", "Enabled") : tx("settings.values.disabled", "Disabled")} />
-          <ReadOnlyRow title={tx("settings.rows.execTool", "Exec tool")} value={settings.advanced.exec_enabled ? tx("settings.values.enabled", "Enabled") : tx("settings.values.disabled", "Disabled")} />
-          <ReadOnlyRow title={tx("settings.rows.execSandbox", "Exec sandbox")} value={settings.advanced.exec_sandbox ?? tx("settings.values.notAvailable", "Not available")} />
-          <ReadOnlyRow title={tx("settings.rows.ssrfWhitelist", "SSRF whitelist")} value={String(settings.advanced.ssrf_whitelist_count)} />
+          <RestartSettingsFooter
+            dirty={dirty}
+            saving={saving}
+            pendingRestart={requiresRestartPending}
+            dirtyMessage={tx("settings.status.restartAfterSaving", "Save changes, then restart when ready.")}
+            pendingMessage={tx("settings.status.savedRestartApply", "Saved. Restart when ready.")}
+            onSave={onSave}
+            onRestart={onRestart}
+            isRestarting={isRestarting}
+          />
         </SettingsGroup>
       </section>
     </div>
@@ -4246,10 +4031,10 @@ function AboutSettings() {
             title={tx("settings.about.activationStatus", "激活状态")}
             description={
               licenseStatus === "active"
-                ? tx("settings.about.activatedDesc", "Pro 功能（DB AI、笔记 AI、终端 AI、知识库 AI）已解锁")
+                ? tx("settings.about.activatedDesc", "Mona Pro 的工作区 AI、AI 文档与 AI 诊股已解锁")
                 : licenseStatus === "expired"
                   ? tx("settings.about.expiredDesc", "授权已过期，Pro 功能已锁定")
-                  : tx("settings.about.notActivatedDesc", "激活后可使用 Pro 功能：DB AI、笔记 AI、终端 AI、知识库 AI")
+                  : tx("settings.about.notActivatedDesc", "激活后可使用工作区 AI、完整 AI 文档与 AI 诊股")
             }
           >
             <StatusPill tone={statusTone}>{statusLabel}</StatusPill>
@@ -4291,7 +4076,10 @@ function AboutSettings() {
           <ReadOnlyRow title="DB AI" value={licenseStatus === "active" ? tx("settings.values.enabled", "已启用") : tx("settings.values.disabled", "未启用")} />
           <ReadOnlyRow title="笔记 AI" value={licenseStatus === "active" ? tx("settings.values.enabled", "已启用") : tx("settings.values.disabled", "未启用")} />
           <ReadOnlyRow title="终端 AI" value={licenseStatus === "active" ? tx("settings.values.enabled", "已启用") : tx("settings.values.disabled", "未启用")} />
+          <ReadOnlyRow title="邮件 AI" value={licenseStatus === "active" ? tx("settings.values.enabled", "已启用") : tx("settings.values.disabled", "未启用")} />
           <ReadOnlyRow title={tx("settings.about.knowledgeBaseAI", "知识库 AI")} value={licenseStatus === "active" ? tx("settings.values.enabled", "已启用") : tx("settings.values.disabled", "未启用")} />
+          <ReadOnlyRow title="AI 文档" value={licenseStatus === "active" ? tx("settings.values.enabled", "已启用") : tx("settings.values.disabled", "未启用")} />
+          <ReadOnlyRow title="AI 诊股" value={licenseStatus === "active" ? tx("settings.values.enabled", "已启用") : tx("settings.values.disabled", "未启用")} />
         </SettingsGroup>
       </section>
     </div>
@@ -4322,6 +4110,7 @@ function AgentScopeSettings() {
   const [foldersByAccount, setFoldersByAccount] = useState<Record<string, EmailFolder[]>>({});
   const [saving, setSaving] = useState(false);
   const [loaded, setLoaded] = useState(false);
+  const [configuringScope, setConfiguringScope] = useState<"notes" | "email" | null>(null);
 
   // 初次加载：读取配置 + 笔记本 + 邮件账号/文件夹
   useEffect(() => {
@@ -4479,68 +4268,26 @@ function AgentScopeSettings() {
   return (
     <div className="space-y-7">
       <section>
-        <SubsectionLabel className="mb-2 px-1">笔记搜索范围</SubsectionLabel>
+        <SubsectionLabel className="mb-2 px-1">Agent 搜索范围</SubsectionLabel>
         <SettingsGroup>
           {vaultReady ? (
             <>
-              {notesModeOptions.map((opt) => {
-                const selected = notesMode === opt.value;
-                return (
-                  <Button
-                    key={opt.value}
-                    type="button"
-                    variant="ghost"
-                    onClick={() => void setNotesMode(opt.value)}
-                    className="h-auto min-h-[62px] w-full items-center justify-start gap-3 whitespace-normal rounded-none px-4 py-3.5 text-left font-normal hover:bg-muted/35 sm:px-5"
-                  >
-                    <span
-                      className={cn(
-                        "mt-0.5 flex h-4 w-4 shrink-0 items-center justify-center rounded-full border",
-                        selected
-                          ? "border-info bg-info"
-                          : "border-muted-foreground/45 bg-transparent",
-                      )}
-                    >
-                      {selected ? <span className="h-1.5 w-1.5 rounded-full bg-white" /> : null}
-                    </span>
-                    <div className="min-w-0">
-                      <div className="text-body font-medium leading-5 text-foreground">{opt.label}</div>
-                      <div className="mt-0.5 max-w-[28rem] text-caption leading-5 text-muted-foreground">
-                        {opt.desc}
-                      </div>
-                    </div>
-                  </Button>
-                );
-              })}
-
-              {notesMode === "specific" ? (
-                <>
-                  <div className="bg-muted/25 px-4 py-2 sm:px-5">
-                    <div className="text-caption font-medium text-muted-foreground">
-                      勾选允许检索的文件夹
-                    </div>
-                  </div>
-                  <label className="flex cursor-pointer select-none items-center gap-2.5 px-4 py-2.5 text-ui text-foreground/85 hover:bg-muted/35 sm:px-5">
-                    <Checkbox
-                      checked={allowedSet.has("")}
-                      onCheckedChange={() => void toggleNotebook("")}
-                    />
-                    <span>根目录（未分类笔记）</span>
-                  </label>
-                  {notebooks.map((nb) => (
-                    <label
-                      key={nb.id}
-                      className="flex cursor-pointer select-none items-center gap-2.5 px-4 py-2.5 text-ui text-foreground/85 hover:bg-muted/35 sm:px-5"
-                    >
-                      <Checkbox
-                        checked={allowedSet.has(nb.id)}
-                        onCheckedChange={() => void toggleNotebook(nb.id)}
-                      />
-                      <span className="truncate">{nb.name}</span>
-                    </label>
-                  ))}
-                </>
-              ) : null}
+              <SettingsRow
+                title="笔记搜索范围"
+                description={notesModeOptions.find((option) => option.value === notesMode)?.desc}
+              >
+                <div className="flex items-center gap-2">
+                  <Select
+                    value={notesMode}
+                    options={notesModeOptions}
+                    onValueChange={(value) => void setNotesMode(value)}
+                    disabled={saving}
+                    aria-label="笔记搜索范围"
+                    className="h-8 w-[180px] rounded-full text-ui"
+                  />
+                  {notesMode === "specific" ? <Button type="button" variant="outline" size="sm" className="h-8 rounded-full" onClick={() => setConfiguringScope("notes")}>配置</Button> : null}
+                </div>
+              </SettingsRow>
             </>
           ) : (
             <SettingsRow
@@ -4548,12 +4295,7 @@ function AgentScopeSettings() {
               description="请先在笔记模块中设置仓库路径后再管理搜索范围。"
             />
           )}
-        </SettingsGroup>
-      </section>
 
-      <section>
-        <SubsectionLabel className="mb-2 px-1">邮件搜索范围</SubsectionLabel>
-        <SettingsGroup>
           {accounts.length === 0 ? (
             <SettingsRow
               title="未配置邮件账号"
@@ -4561,77 +4303,68 @@ function AgentScopeSettings() {
             />
           ) : (
             <>
-              {emailModeOptions.map((opt) => {
-                const selected = emailMode === opt.value;
-                return (
-                  <Button
-                    key={opt.value}
-                    type="button"
-                    variant="ghost"
-                    onClick={() => void setEmailMode(opt.value)}
-                    className="h-auto min-h-[62px] w-full items-center justify-start gap-3 whitespace-normal rounded-none px-4 py-3.5 text-left font-normal hover:bg-muted/35 sm:px-5"
-                  >
-                    <span
-                      className={cn(
-                        "mt-0.5 flex h-4 w-4 shrink-0 items-center justify-center rounded-full border",
-                        selected
-                          ? "border-info bg-info"
-                          : "border-muted-foreground/45 bg-transparent",
-                      )}
-                    >
-                      {selected ? <span className="h-1.5 w-1.5 rounded-full bg-white" /> : null}
-                    </span>
-                    <div className="min-w-0">
-                      <div className="text-body font-medium leading-5 text-foreground">{opt.label}</div>
-                      <div className="mt-0.5 max-w-[28rem] text-caption leading-5 text-muted-foreground">
-                        {opt.desc}
-                      </div>
-                    </div>
-                  </Button>
-                );
-              })}
-
-              {emailMode === "specific" ? (
-                <>
-                  <div className="bg-muted/25 px-4 py-2 sm:px-5">
-                    <div className="text-caption font-medium text-muted-foreground">
-                      勾选允许检索的文件夹
-                    </div>
-                  </div>
-                  {accounts.map((account) => {
-                    const folders = foldersByAccount[account.id] ?? [];
-                    return (
-                      <div key={account.id} className="px-4 py-3 sm:px-5">
-                        <div className="mb-1.5 text-ui font-medium text-foreground">
-                          {account.displayName || account.fromAddress || account.imapUsername}
-                        </div>
-                        <div className="grid gap-1 pl-1">
-                          {folders.length === 0 ? (
-                            <div className="text-caption text-muted-foreground">暂无文件夹缓存</div>
-                          ) : (
-                            folders.map((folder) => (
-                              <label
-                                key={folder.name}
-                                className="flex cursor-pointer select-none items-center gap-2.5 rounded-md px-2 py-1 text-ui text-foreground/85 hover:bg-muted/45"
-                              >
-                                <Checkbox
-                                  checked={emailAllowed.has(folder.name)}
-                                  onCheckedChange={() => void toggleEmailFolder(folder.name)}
-                                />
-                                <span className="truncate">{getFolderDisplayName(folder.name)}</span>
-                              </label>
-                            ))
-                          )}
-                        </div>
-                      </div>
-                    );
-                  })}
-                </>
-              ) : null}
+              <SettingsRow
+                title="邮件搜索范围"
+                description={emailModeOptions.find((option) => option.value === emailMode)?.desc}
+              >
+                <div className="flex items-center gap-2">
+                  <Select
+                    value={emailMode}
+                    options={emailModeOptions}
+                    onValueChange={(value) => void setEmailMode(value)}
+                    disabled={saving}
+                    aria-label="邮件搜索范围"
+                    className="h-8 w-[180px] rounded-full text-ui"
+                  />
+                  {emailMode === "specific" ? <Button type="button" variant="outline" size="sm" className="h-8 rounded-full" onClick={() => setConfiguringScope("email")}>配置</Button> : null}
+                </div>
+              </SettingsRow>
             </>
           )}
         </SettingsGroup>
       </section>
+
+      <Dialog open={configuringScope !== null} onOpenChange={(open) => !open && setConfiguringScope(null)}>
+        <DialogContent className="max-h-[75vh] max-w-lg overflow-y-auto">
+          <DialogHeader>
+            <DialogTitle>{configuringScope === "notes" ? "配置允许检索的笔记文件夹" : "配置允许检索的邮件文件夹"}</DialogTitle>
+            <DialogDescription>仅勾选的文件夹会参与 Agent 搜索。</DialogDescription>
+          </DialogHeader>
+          {configuringScope === "notes" ? (
+            <div className="divide-y divide-border/60 rounded-xl border border-border/60">
+              <label className="flex cursor-pointer select-none items-center gap-2.5 px-4 py-3 text-ui text-foreground/85 hover:bg-muted/35">
+                <Checkbox checked={allowedSet.has("")} onCheckedChange={() => void toggleNotebook("")} />
+                <span>根目录（未分类笔记）</span>
+              </label>
+              {notebooks.map((notebook) => (
+                <label key={notebook.id} className="flex cursor-pointer select-none items-center gap-2.5 px-4 py-3 text-ui text-foreground/85 hover:bg-muted/35">
+                  <Checkbox checked={allowedSet.has(notebook.id)} onCheckedChange={() => void toggleNotebook(notebook.id)} />
+                  <span className="truncate">{notebook.name}</span>
+                </label>
+              ))}
+            </div>
+          ) : configuringScope === "email" ? (
+            <div className="space-y-3">
+              {accounts.map((account) => {
+                const folders = foldersByAccount[account.id] ?? [];
+                return (
+                  <div key={account.id} className="rounded-xl border border-border/60">
+                    <div className="border-b border-border/60 px-4 py-2.5 text-ui font-medium text-foreground">{account.displayName || account.fromAddress || account.imapUsername}</div>
+                    <div className="divide-y divide-border/50">
+                      {folders.length === 0 ? <div className="px-4 py-3 text-caption text-muted-foreground">暂无文件夹缓存</div> : folders.map((folder) => (
+                        <label key={folder.name} className="flex cursor-pointer select-none items-center gap-2.5 px-4 py-2.5 text-ui text-foreground/85 hover:bg-muted/35">
+                          <Checkbox checked={emailAllowed.has(folder.name)} onCheckedChange={() => void toggleEmailFolder(folder.name)} />
+                          <span className="truncate">{getFolderDisplayName(folder.name)}</span>
+                        </label>
+                      ))}
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          ) : null}
+        </DialogContent>
+      </Dialog>
 
       {saving ? (
         <div className="text-caption text-muted-foreground">正在保存…</div>
@@ -4886,13 +4619,6 @@ function optionRowsWithCurrent(
   return [{ name: value, label: value }, ...options];
 }
 
-function providerLabel(
-  providers: Array<{ name: string; label: string }>,
-  value: string,
-): string {
-  return providers.find((provider) => provider.name === value)?.label ?? value;
-}
-
 const PROVIDER_ICONS: Record<string, LucideIcon> = {
   custom: Hexagon,
   openrouter: Sparkles,
@@ -4935,46 +4661,6 @@ function ProviderIcon({ provider }: { provider: string }) {
     <span className="grid h-10 w-10 shrink-0 place-items-center rounded-lg bg-muted text-foreground/82 dark:bg-muted/70">
       <Icon className="h-5 w-5" strokeWidth={2} aria-hidden />
     </span>
-  );
-}
-
-function OverviewListRow({
-  icon: Icon,
-  title,
-  value,
-  caption,
-  onClick,
-}: {
-  icon: LucideIcon;
-  title: string;
-  value: string;
-  caption: string;
-  onClick: () => void;
-}) {
-  return (
-    <Button
-      type="button"
-      variant="ghost"
-      onClick={onClick}
-      className="group h-auto min-h-[68px] w-full items-center justify-start gap-3 whitespace-normal rounded-none px-4 py-3.5 text-left font-normal hover:bg-muted/30 sm:px-5"
-    >
-      <span className="grid h-9 w-9 shrink-0 place-items-center rounded-lg bg-muted text-foreground/82 transition-colors group-hover:bg-muted/80 dark:bg-muted/70">
-        <Icon className="h-4 w-4" aria-hidden />
-      </span>
-      <span className="min-w-0 flex-1">
-        <span className="block text-body font-medium leading-5 text-foreground">{title}</span>
-        <span className="mt-0.5 block truncate text-caption leading-5 text-muted-foreground">{caption}</span>
-      </span>
-      <span className="ml-auto flex min-w-0 max-w-[48%] items-center gap-2">
-        <span className="truncate text-right text-ui leading-5 text-muted-foreground">
-          {value}
-        </span>
-        <ChevronRight
-          className="h-4 w-4 shrink-0 text-muted-foreground/60 transition-transform group-hover:translate-x-0.5"
-          aria-hidden
-        />
-      </span>
-    </Button>
   );
 }
 
@@ -5167,19 +4853,12 @@ function ToggleButton({
   label: string;
 }) {
   return (
-    <Button
-      type="button"
-      variant="ghost"
-      onClick={() => onChange(!checked)}
-      className={cn(
-        "h-8 min-w-[64px] rounded-full px-3 text-caption font-medium",
-        checked
-          ? "bg-info-soft text-info hover:bg-info-soft hover:text-info"
-          : "bg-muted text-muted-foreground hover:bg-muted hover:text-foreground",
-      )}
-    >
-      {label}
-    </Button>
+    <Switch
+      checked={checked}
+      onCheckedChange={onChange}
+      aria-label={label}
+      title={label}
+    />
   );
 }
 
@@ -5243,20 +4922,18 @@ function shortcutFromKeyboardEvent(event: KeyboardEvent): string | null {
   return parts.join("+");
 }
 
-function DesktopSettings() {
+function DesktopSettings({ token }: { token: string | null }) {
   const { t } = useTranslation();
   const tx = (key: string, fallback: string) => t(key, { defaultValue: fallback });
   const [settings, setSettings] = useState<DesktopAppSettings | null>(null);
-  const [gatewayStatus, setGatewayStatus] = useState<{ running: boolean; port: number | null } | null>(null);
+  const [error, setError] = useState<string | null>(null);
 
   const loadSettings = useCallback(async () => {
     try {
       const s = await getDesktopSettings();
-      setSettings(s);
-      const status = await getGatewayStatus();
-      setGatewayStatus(status);
+      setSettings({ ...s, send_message_shortcut: s.send_message_shortcut ?? "enter" });
     } catch (e) {
-      console.error("Failed to load desktop settings:", e);
+      setError(e instanceof Error ? e.message : String(e));
     }
   }, []);
 
@@ -5266,20 +4943,12 @@ function DesktopSettings() {
 
   const updateSetting = async (patch: Partial<DesktopAppSettings>) => {
     if (!settings) return;
+    setError(null);
     try {
       const updated = await updateDesktopSettings({ ...settings, ...patch });
       setSettings(updated);
     } catch (e) {
-      console.error("Failed to update setting:", e);
-    }
-  };
-
-  const handleOpenInBrowser = async () => {
-    try {
-      const { invoke } = await import("@tauri-apps/api/core");
-      await invoke("open_in_browser");
-    } catch (e) {
-      console.error("Failed to open in browser:", e);
+      setError(e instanceof Error ? e.message : String(e));
     }
   };
 
@@ -5320,46 +4989,9 @@ function DesktopSettings() {
         </SettingsGroup>
       </section>
 
-      <section>
-        <SubsectionLabel className="mb-2 px-1">{tx("settings.desktop.gateway", "网关")}</SubsectionLabel>
-        <SettingsGroup>
-          <SettingsRow
-            title={tx("settings.desktop.gatewayStatus", "网关状态")}
-            description={tx("settings.desktop.gatewayStatusHelp", "Mona 网关进程的当前状态。")}
-          >
-            <div className="flex items-center gap-2">
-              <StatusPill tone={gatewayStatus?.running ? "success" : "neutral"}>
-                {gatewayStatus?.running
-                  ? tx("settings.desktop.running", "运行中")
-                  : tx("settings.desktop.stopped", "已停止")}
-              </StatusPill>
-              {gatewayStatus?.port ? (
-                <span className="text-caption text-muted-foreground">
-                  :{gatewayStatus.port}
-                </span>
-              ) : null}
-            </div>
-          </SettingsRow>
-          <SettingsRow
-            title={tx("settings.desktop.openInBrowser", "在浏览器中打开")}
-            description={tx("settings.desktop.openInBrowserHelp", "在默认浏览器中打开 WebUI。")}
-          >
-            <Button
-              size="sm"
-              variant="outline"
-              onClick={handleOpenInBrowser}
-              disabled={!gatewayStatus?.running}
-              className="rounded-full"
-            >
-              {tx("settings.desktop.openBrowser", "打开浏览器")}
-            </Button>
-          </SettingsRow>
-          <ReadOnlyRow
-            title={tx("settings.desktop.gatewayPort", "网关端口")}
-            value={String(settings.gateway_port)}
-          />
-        </SettingsGroup>
-      </section>
+      <AutomationSettings token={token} />
+
+      {error ? <StatusNotice tone="danger">{error}</StatusNotice> : null}
     </div>
   );
 }
@@ -5382,10 +5014,12 @@ const DEFAULT_SIDEBAR_SHORTCUTS: SidebarShortcuts = {
   db: "Alt+6",
 };
 
-function ShortcutsSettings() {
+export function ShortcutsSettings() {
   const { t } = useTranslation();
   const tx = (key: string, fallback: string) => t(key, { defaultValue: fallback });
   const [settings, setSettings] = useState<DesktopAppSettings | null>(null);
+  const [sendShortcutSaving, setSendShortcutSaving] = useState(false);
+  const [sendShortcutError, setSendShortcutError] = useState<string | null>(null);
   const [quickAskDraft, setQuickAskDraft] = useState("Ctrl+Alt+M");
   const [quickAskSaving, setQuickAskSaving] = useState(false);
   const [quickAskSaved, setQuickAskSaved] = useState(false);
@@ -5399,7 +5033,7 @@ function ShortcutsSettings() {
   const loadSettings = useCallback(async () => {
     try {
       const s = await getDesktopSettings();
-      setSettings(s);
+      setSettings({ ...s, send_message_shortcut: s.send_message_shortcut ?? "enter" });
       setQuickAskDraft(s.quick_ask_shortcut || "Ctrl+Alt+M");
       setQuickAskMode(s.quick_ask_mode || "compact");
       setSidebarDrafts(s.sidebar_shortcuts || DEFAULT_SIDEBAR_SHORTCUTS);
@@ -5425,6 +5059,27 @@ function ShortcutsSettings() {
         (key) => sidebarDrafts[key as keyof SidebarShortcuts] !== settings!.sidebar_shortcuts[key as keyof SidebarShortcuts],
       )
     : false;
+
+  const saveSendMessageShortcut = async (send_message_shortcut: SendMessageShortcut) => {
+    if (!settings || sendShortcutSaving || settings.send_message_shortcut === send_message_shortcut) {
+      return;
+    }
+    setSendShortcutSaving(true);
+    setSendShortcutError(null);
+    try {
+      const updated = await updateDesktopSettings({ ...settings, send_message_shortcut });
+      setSettings(updated);
+      window.dispatchEvent(
+        new CustomEvent<SendMessageShortcut>(SEND_MESSAGE_SHORTCUT_EVENT, {
+          detail: updated.send_message_shortcut,
+        }),
+      );
+    } catch (e) {
+      setSendShortcutError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setSendShortcutSaving(false);
+    }
+  };
 
   const saveQuickAsk = async () => {
     if (!settings || quickAskSaving || (!quickAskDirty && !quickAskModeDirty)) return;
@@ -5516,6 +5171,43 @@ function ShortcutsSettings() {
 
   return (
     <div className="space-y-7">
+      <section>
+        <SubsectionLabel className="mb-2 px-1">{tx("settings.shortcuts.messageInput", "消息输入")}</SubsectionLabel>
+        <SettingsGroup>
+          <SettingsRow
+            title={tx("settings.shortcuts.sendMessage", "发送消息")}
+            description={tx("settings.shortcuts.sendMessageHelp", "选择在消息输入框中用于发送的按键。")}
+          >
+            <div className="flex items-center gap-1 rounded-full border border-border p-0.5">
+              {([
+                ["enter", tx("settings.shortcuts.enterToSend", "Enter")],
+                ["ctrl_enter", tx("settings.shortcuts.ctrlEnterToSend", "Ctrl + Enter")],
+              ] as const).map(([value, label]) => (
+                <Button
+                  key={value}
+                  type="button"
+                  variant="ghost"
+                  size="sm"
+                  disabled={sendShortcutSaving}
+                  onClick={() => void saveSendMessageShortcut(value)}
+                  className={cn(
+                    "h-auto rounded-full px-3 py-1 text-ui font-normal",
+                    settings.send_message_shortcut === value
+                      ? "bg-info/[0.10] text-info hover:bg-info/[0.14]"
+                      : "text-muted-foreground hover:bg-transparent hover:text-foreground",
+                  )}
+                >
+                  {label}
+                </Button>
+              ))}
+            </div>
+          </SettingsRow>
+        </SettingsGroup>
+        {sendShortcutError ? (
+          <p className="mt-2 px-1 text-caption text-destructive">{sendShortcutError}</p>
+        ) : null}
+      </section>
+
       <section>
         <SubsectionLabel className="mb-2 px-1">{tx("settings.shortcuts.quickAsk", "快问快捷键")}</SubsectionLabel>
         <SettingsGroup>

@@ -3,8 +3,10 @@
 from __future__ import annotations
 
 import asyncio
+import base64
 import html
 import json
+import locale
 import re
 import shutil
 import tempfile
@@ -24,6 +26,7 @@ _MAX_AUDIO_BYTES = 25 * 1024 * 1024
 _SUBTITLE_EXTENSIONS = ("*.srt", "*.vtt")
 _SUBTITLE_LANGUAGES = "zh.*,zh-Hans,zh-Hant,en.*,en-US"
 _MAX_FRAMES = 8
+_MAX_NOTE_FRAMES = 3
 _FRAME_TIMEOUT = 60
 _TIMESTAMP_PATTERN = re.compile(
     r"^(?:(?:[0-9]{1,2}:)?[0-5]?[0-9]:)?[0-5]?[0-9](?:\.\d+)?$"
@@ -41,6 +44,14 @@ class Url2NoteSource:
     url: str
     kind: str
     text: str
+    frames: tuple["Url2NoteFrame", ...] = ()
+
+
+@dataclass(frozen=True)
+class Url2NoteFrame:
+    timestamp: str
+    file_name: str
+    data_base64: str
 
 
 def parse_subtitle(content: str) -> str:
@@ -90,15 +101,15 @@ class Url2NoteExtractor:
         else:
             from mona.agent.tools.web import WebFetchTool
             self._web_fetcher = WebFetchTool()
-        self._transcribe = transcribe or _transcribe_with_config
+        self._transcribe = transcribe
 
-    async def extract(self, url: str) -> Url2NoteSource:
+    async def extract(self, url: str, *, include_keyframes: bool = False) -> Url2NoteSource:
         url = url.strip(" \t\r\n`\"'")
         valid, error = validate_url_target(url)
         if not valid:
             raise Url2NoteError(f"URL validation failed: {error}")
         if is_video_url(url):
-            return await self._extract_video(url)
+            return await self._extract_video(url, include_keyframes=include_keyframes)
         return await self._extract_article(url)
 
     async def _extract_article(self, url: str) -> Url2NoteSource:
@@ -117,6 +128,10 @@ class Url2NoteExtractor:
             raise Url2NoteError("Unable to parse extracted page content") from exc
         if payload.get("error"):
             raise Url2NoteError(str(payload["error"]))
+        if payload.get("requiresInteraction") is True:
+            raise Url2NoteError("The page requires login or interactive verification")
+        if payload.get("quality") == "low":
+            raise Url2NoteError("The page could not be extracted with reliable quality")
         text = str(payload.get("text") or "").strip()
         if not text or not _has_article_content(text):
             raise Url2NoteError("The page has no readable text")
@@ -153,21 +168,138 @@ class Url2NoteExtractor:
             return None
         return None
 
-    async def _extract_video(self, url: str) -> Url2NoteSource:
+    async def _extract_video(
+        self, url: str, *, include_keyframes: bool = False
+    ) -> Url2NoteSource:
         ytdlp = await self._ensure_component("yt_dlp")
         with tempfile.TemporaryDirectory(prefix="mona-url2note-") as temp:
             workdir = Path(temp)
+            title = await self._video_title(ytdlp, url, workdir)
             subtitle = await self._download_subtitle(ytdlp, url, workdir)
             if subtitle:
-                return Url2NoteSource(_title_from_url(url), url, "video", subtitle)
+                frames: tuple[Url2NoteFrame, ...] = ()
+                timestamps = select_keyframe_timestamps(subtitle) if include_keyframes else []
+                if timestamps:
+                    try:
+                        ffmpeg = await self._ensure_component("ffmpeg")
+                        video = await self._download_video(ytdlp, url, workdir)
+                        frames = await self._extract_note_frames(
+                            ffmpeg, video, timestamps, workdir, url
+                        )
+                    except Url2NoteError:
+                        frames = ()
+                return Url2NoteSource(
+                    title, url, "video", subtitle, frames
+                )
             ffmpeg = await self._ensure_component("ffmpeg")
             audio = await self._download_audio(ytdlp, ffmpeg, url, workdir)
-            if audio.stat().st_size > _MAX_AUDIO_BYTES:
-                raise Url2NoteError("Audio is too large to transcribe; use a shorter video")
-            text = (await self._transcribe(audio.read_bytes(), audio.name)).strip()
+            if self._transcribe is not None:
+                if audio.stat().st_size > _MAX_AUDIO_BYTES:
+                    raise Url2NoteError("Audio is too large to transcribe; use a shorter video")
+                text = (await self._transcribe(audio.read_bytes(), audio.name)).strip()
+            else:
+                text = (await self._transcribe_local(audio)).strip()
             if not text:
                 raise Url2NoteError("Audio transcription returned no text")
-            return Url2NoteSource(_title_from_url(url), url, "video", text)
+            frames = ()
+            timestamps = select_keyframe_timestamps(text) if include_keyframes else []
+            if timestamps:
+                video = next(
+                    (
+                        path
+                        for path in workdir.glob("source.*")
+                        if path.suffix not in {".part", ".ytdl"}
+                    ),
+                    None,
+                )
+                if video is not None:
+                    try:
+                        frames = await self._extract_note_frames(
+                            ffmpeg, video, timestamps, workdir, url
+                        )
+                    except Url2NoteError:
+                        frames = ()
+            return Url2NoteSource(title, url, "video", text, frames)
+
+    async def _video_title(self, ytdlp: str, url: str, workdir: Path) -> str:
+        try:
+            raw = await _run_process_output(
+                [
+                    ytdlp,
+                    "--no-playlist",
+                    "--skip-download",
+                    "--print",
+                    "%(title)s",
+                    url,
+                ],
+                workdir,
+                timeout=60,
+            )
+            title = next((line.strip() for line in raw.splitlines() if line.strip()), "")
+            return title or _title_from_url(url)
+        except Url2NoteError:
+            return _title_from_url(url)
+
+    async def _transcribe_local(self, audio: Path) -> str:
+        result = await self._runtime.ensure_runtime("asr")
+        if not result.get("ok"):
+            raise Url2NoteError(
+                str(result.get("error") or "Unable to install local transcription runtime")
+            )
+        executable = str(result.get("path") or "")
+        model = str(result.get("modelPath") or "")
+        vad = str(result.get("vadPath") or "")
+        if not executable or not model or not vad:
+            raise Url2NoteError("Local transcription runtime is incomplete")
+        raw = await _run_process_output(
+            [executable, "-m", model, "--vad", vad, "--srt", "-a", str(audio.resolve())],
+            audio.parent,
+        )
+        timestamped = parse_subtitle(raw)
+        return timestamped or raw.strip()
+
+    async def _extract_note_frames(
+        self,
+        ffmpeg: str,
+        video: Path,
+        timestamps: list[str],
+        workdir: Path,
+        url: str,
+    ) -> tuple[Url2NoteFrame, ...]:
+        frames: list[Url2NoteFrame] = []
+        source_id = re.sub(r"\D+", "", urlparse(url).path)[-20:] or "video"
+        for index, timestamp in enumerate(timestamps[:_MAX_NOTE_FRAMES], start=1):
+            output = workdir / f"url-note-{source_id}-{index:02d}-{_sanitize_ts(timestamp)}.jpg"
+            await _run_process(
+                [
+                    ffmpeg,
+                    "-y",
+                    "-ss",
+                    timestamp,
+                    "-i",
+                    str(video),
+                    "-frames:v",
+                    "1",
+                    "-vf",
+                    "scale='min(960,iw)':-2",
+                    "-q:v",
+                    "3",
+                    str(output),
+                ],
+                workdir,
+                timeout=_FRAME_TIMEOUT,
+            )
+            if output.is_file() and output.stat().st_size > 0:
+                frames.append(
+                    Url2NoteFrame(
+                        timestamp=timestamp,
+                        file_name=output.name,
+                        data_base64=base64.b64encode(output.read_bytes()).decode("ascii"),
+                    )
+                )
+        if not frames:
+            raise Url2NoteError("Frame extraction produced no images")
+        return tuple(frames)
 
     async def extract_frames(self, url: str, timestamps: list[str]) -> list[Path]:
         """Download the video once and extract keyframes at the given timestamps.
@@ -347,18 +479,116 @@ async def _run_process(command: list[str], workdir: Path, *, timeout: float = 60
         raise Url2NoteError(f"Required component is unavailable: {command[0]}") from exc
     try:
         _stdout, stderr = await asyncio.wait_for(process.communicate(), timeout=timeout)
+    except asyncio.CancelledError:
+        process.kill()
+        await process.wait()
+        raise
     except TimeoutError as exc:
         process.kill()
         await process.wait()
         raise Url2NoteError("URL extraction timed out") from exc
     if process.returncode != 0:
-        detail = stderr.decode("utf-8", "replace").strip()
+        detail = _decode_process_bytes(stderr).strip()
         raise Url2NoteError(detail or "URL extraction failed")
+
+
+async def _run_process_output(
+    command: list[str], workdir: Path, *, timeout: float = 600
+) -> str:
+    """Run a short-lived helper and return stdout after all resources exit."""
+    try:
+        process = await asyncio.create_subprocess_exec(
+            *command,
+            cwd=str(workdir),
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+        )
+    except FileNotFoundError as exc:
+        raise Url2NoteError(f"Required component is unavailable: {command[0]}") from exc
+    try:
+        stdout, stderr = await asyncio.wait_for(process.communicate(), timeout=timeout)
+    except asyncio.CancelledError:
+        process.kill()
+        await process.wait()
+        raise
+    except TimeoutError as exc:
+        process.kill()
+        await process.wait()
+        raise Url2NoteError("URL extraction timed out") from exc
+    if process.returncode != 0:
+        detail = _decode_process_bytes(stderr).strip()
+        raise Url2NoteError(detail or "URL extraction failed")
+    return _decode_process_bytes(stdout)
+
+
+def _decode_process_bytes(content: bytes) -> str:
+    try:
+        return content.decode("utf-8")
+    except UnicodeDecodeError:
+        encoding = locale.getpreferredencoding(False) or "utf-8"
+        return content.decode(encoding, "replace")
 
 
 def _sanitize_ts(ts: str) -> str:
     """Make a timestamp safe for use in a filename."""
     return ts.replace(":", "m").replace(".", "s")
+
+
+def select_keyframe_timestamps(text: str, *, limit: int = _MAX_NOTE_FRAMES) -> list[str]:
+    """Pick a few transcript moments where the spoken content is likely visual."""
+    visual_terms = (
+        "画面",
+        "屏幕",
+        "界面",
+        "图中",
+        "如图",
+        "这里可以看到",
+        "大家看",
+        "看这里",
+        "显示",
+        "点击",
+        "输入",
+        "切换",
+        "代码",
+        "架构图",
+        "流程图",
+        "演示",
+    )
+    important_terms = ("重点", "关键", "核心", "步骤", "流程", "架构", "配置", "参数", "结果")
+    candidates: list[tuple[int, int, str]] = []
+    pattern = re.compile(r"^\[(\d{1,2}:\d{2}(?::\d{2})?)\]\s*(.+)$")
+    for position, line in enumerate(text.splitlines()):
+        match = pattern.match(line.strip())
+        if not match:
+            continue
+        timestamp, caption = match.groups()
+        score = sum(4 for term in visual_terms if term in caption)
+        score += sum(2 for term in important_terms if term in caption)
+        if score == 0:
+            continue
+        candidates.append((score, position, _normalize_timestamp(timestamp)))
+
+    selected: list[tuple[int, int, str]] = []
+    for candidate in sorted(candidates, key=lambda item: (-item[0], item[1])):
+        seconds = _timestamp_seconds(candidate[2])
+        if any(abs(seconds - _timestamp_seconds(item[2])) < 30 for item in selected):
+            continue
+        selected.append(candidate)
+        if len(selected) >= max(0, limit):
+            break
+    return [item[2] for item in sorted(selected, key=lambda item: _timestamp_seconds(item[2]))]
+
+
+def _normalize_timestamp(value: str) -> str:
+    parts = value.split(":")
+    if len(parts) == 2:
+        return f"00:{int(parts[0]):02d}:{int(parts[1]):02d}"
+    return f"{int(parts[0]):02d}:{int(parts[1]):02d}:{int(parts[2]):02d}"
+
+
+def _timestamp_seconds(value: str) -> int:
+    hours, minutes, seconds = (int(part) for part in value.split(":"))
+    return hours * 3600 + minutes * 60 + seconds
 
 
 def _title_from_url(url: str) -> str:

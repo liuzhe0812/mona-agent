@@ -138,15 +138,16 @@
     },
     "nav": {
       "general": "General",
+      "resources": "Feature resources",
       "byok": "BYOK",
-      "overview": "Overview",
+      "billing": "Balance & billing",
+      "usage": "Usage",
       "appearance": "Appearance",
       "models": "Models",
       "providers": "Providers",
       "image": "Image",
       "models_providers": "Model Settings",
-      "web": "Search",
-      "runtime": "Runtime"
+      "advanced": "Advanced"
     },
     "aiModels": {
       "tabsAria": "Model settings type",
@@ -154,6 +155,66 @@
       "image": "Image models",
       "video": "Video models",
       "tts": "Text to speech"
+    },
+    "shortcuts": {
+      "messageInput": "Message input",
+      "sendMessage": "Send message",
+      "sendMessageHelp": "Choose the key used to send from the message input.",
+      "enterToSend": "Enter",
+      "ctrlEnterToSend": "Ctrl + Enter"
+    },
+    "automation": {
+      "title": "Automation",
+      "loading": "Loading automation status…",
+      "loadError": "Automation status is temporarily unavailable",
+      "updateError": "Could not update automation settings",
+      "cancelError": "Could not cancel the computer automation driver download",
+      "permissionError": "Could not complete system authorization",
+      "computerError": "Computer automation is temporarily unavailable",
+      "browser": {
+        "title": "Browser automation",
+        "description": "Allow Mona to read pages and perform actions such as clicking and typing in the built-in browser.",
+        "toggle": "Browser automation"
+      },
+      "computer": {
+        "title": "Computer automation",
+        "description": "Allow Mona to observe and operate other apps on your computer. First-time use downloads a driver and requires system permissions.",
+        "driverSize": " (driver: approximately {{size}})",
+        "toggle": "Computer automation",
+        "downloading": "Downloading the computer automation driver",
+        "progress": "Computer automation driver download progress"
+      },
+      "cancel": "Cancel download",
+      "unsupported": {
+        "title": "Computer automation isn't supported on this system",
+        "description": "This device can't use general computer controls yet."
+      },
+      "degraded": {
+        "title": "Some controls are limited",
+        "description": "Basic computer controls remain available, but some precision controls that depend on accessibility APIs are temporarily unavailable."
+      },
+      "authorization": {
+        "title": "System authorization required",
+        "description": "Allow screen recording and accessibility access in System Settings, then click Authorize."
+      },
+      "authorize": "Authorize",
+      "error": {
+        "title": "Computer automation error"
+      },
+      "retry": "Retry",
+      "notInstalled": {
+        "title": "Computer automation isn't installed",
+        "description": "First-time use requires an approximately {{size}} driver download."
+      },
+      "download": "Download driver",
+      "states": {
+        "disabled": "Off",
+        "notInstalled": "Not installed",
+        "downloading": "Downloading",
+        "pendingAuthorization": "Awaiting authorization",
+        "available": "Available",
+        "error": "Error"
+      }
     },
     "sections": {
       "interface": "Interface",
@@ -164,9 +225,7 @@
       "imageGeneration": "Image generation",
       "imageDefaults": "Defaults",
       "webSearch": "Web search",
-      "webBehavior": "Behavior",
-      "identity": "Identity",
-      "safety": "Safety",
+      "runtimeParameters": "Runtime parameters",
       "capabilities": "Capabilities"
     },
     "rows": {
@@ -175,10 +234,6 @@
       "provider": "Provider",
       "model": "Model",
       "restart": "Restart mona",
-      "configPath": "Config path",
-      "gateway": "Gateway",
-      "restartState": "Restart state",
-      "pendingChanges": "Pending changes",
       "density": "Density",
       "activityMode": "Activity detail",
       "codeWrap": "Code wrapping",
@@ -194,18 +249,9 @@
       "defaultImageSize": "Default size",
       "maxImagesPerTurn": "Max images per turn",
       "imageSaveDir": "Save directory",
-      "botName": "Bot name",
-      "botIcon": "Bot icon",
       "timezone": "Timezone",
       "toolHintMaxLength": "Tool hint length",
       "workspacePath": "Workspace path",
-      "heartbeat": "Heartbeat",
-      "dream": "Dream",
-      "unifiedSession": "Unified session",
-      "restrictWorkspace": "Restrict to workspace",
-      "execTool": "Exec tool",
-      "execSandbox": "Exec sandbox",
-      "ssrfWhitelist": "SSRF whitelist",
       "configurationDocs": "Configuration docs"
     },
     "help": {
@@ -213,7 +259,6 @@
       "language": "Choose the language used by the WebUI.",
       "provider": "Select the provider that should serve new model requests.",
       "model": "Set the default model name used by mona.",
-      "configPath": "The gateway configuration file currently in use.",
       "density": "Stored only in this browser.",
       "activityMode": "Choose how much agent activity chrome to show by default.",
       "codeWrap": "Keep long code lines readable on smaller screens.",
@@ -227,8 +272,6 @@
       "defaultAspectRatio": "Used when the prompt does not choose an aspect ratio.",
       "defaultImageSize": "Size hint sent to providers that support it.",
       "maxImagesPerTurn": "Upper bound for one generate_image request.",
-      "botName": "Shown in runtime surfaces that use the configured bot identity.",
-      "botIcon": "Short emoji or text shown beside the bot name.",
       "timezone": "IANA timezone used by runtime context and schedules.",
       "toolHintMaxLength": "Maximum characters shown in tool progress hints."
     },
@@ -362,12 +405,19 @@
     "hideArchived": "Hide archived",
     "delete": "Delete",
     "newChat": "New chat",
+    "createConversation": "Create conversation",
+    "chooseAgent": "Choose an Agent",
+    "searchAgents": "Search Agents",
+    "noMatchingAgents": "No matching Agents",
     "agentSettings": "Agent Settings",
+    "agentSettingsFor": "Agent Settings: {{name}}",
+    "expertLibrary": "Summon expert",
     "createMenu": "Create",
     "chatWith": "Chat with {{name}}",
     "newRoom": "New group chat",
     "groups": {
       "pinned": "Pinned",
+      "recent": "Recent",
       "conversations": "Conversations",
       "all": "Chats",
       "today": "Today",
@@ -379,6 +429,113 @@
     "moveToProject": "Move to project…",
     "newProjectChat": "New chat in project",
     "bindProjectFolder": "Bind project folder…"
+  },
+  "managedRuntime": {
+    "title": "Feature resources",
+    "description": "Mona manages the resources needed by each feature here. Resources are downloaded when needed.",
+    "refresh": "Refresh",
+    "loading": "Loading feature resource status…",
+    "loadError": "Runtime status is temporarily unavailable",
+    "installError": "Feature resource preparation failed",
+    "cancelError": "Could not cancel the resource download",
+    "updateError": "Could not update download settings",
+    "cleanupError": "Could not clean up feature resources",
+    "installed": "Installed {{version}}",
+    "installing": "Downloading and verifying · {{percent}}%",
+    "install": "Install",
+    "update": "Update",
+    "repair": "Repair",
+    "continue": "Continue",
+    "cancel": "Cancel",
+    "cleanup": "Clear cache",
+    "cleanupLegacy": "Clear old resources",
+    "cleaning": "Cleaning…",
+    "autoDownload": "Download when needed",
+    "autoDownloadDescription": "Automatically prepare required resources when a feature is used",
+    "migration": {
+      "completed": "Old resources have been organized. You can clear about {{size}}.",
+      "partial": "Some old resources are still in use. Organization will continue next time Mona starts.",
+      "repair": "Some feature resources need repair."
+    },
+    "ready": "Ready",
+    "components": {
+      "python": {
+        "name": "Python",
+        "description": "Shared Agent Python environment; user projects keep their own .venv"
+      },
+    "node": {
+      "name": "Node.js",
+      "description": "Shared Agent Node.js; user projects keep their own node_modules"
+    },
+    "ffmpeg": {
+      "name": "Video processing",
+      "description": "Transcodes video, processes audio, and extracts key frames"
+    },
+    "yt_dlp": {
+      "name": "Online video access",
+      "description": "Reads supported video pages and media content"
+    },
+    "asr": {
+      "name": "Speech transcription",
+      "description": "Creates a local transcript when a video has no subtitles"
+    },
+    "pandoc": {
+      "name": "Document import",
+      "description": "Imports Word, PowerPoint, ODT, RTF, and EPUB files"
+    },
+    "computer_use": {
+      "name": "Computer control",
+      "description": "Lets Mona observe and operate other desktop applications"
+    },
+    "westock": {
+      "name": "Stock data support",
+      "description": "Adds structured data used by stock research features"
+    }
+    }
+  },
+  "experts": {
+    "title": "Summon an expert",
+    "description": "Choose an expert for the task. Required capabilities are prepared on demand.",
+    "search": "Search experts",
+    "loading": "Loading experts…",
+    "empty": "No matching official experts",
+    "offlineCache": "The network is unavailable. Showing the most recently loaded expert list.",
+    "catalogError": "Could not load the expert list",
+    "unavailable": "No official experts are currently available",
+    "custom": "Custom expert",
+    "customDescription": "Set the expert's name, area of expertise, and working instructions.",
+    "customAction": "New",
+    "customTitle": "Custom expert",
+    "customName": "Expert name",
+    "customNamePlaceholder": "For example: Contract reviewer",
+    "customExpertise": "Expertise",
+    "customExpertisePlaceholder": "Briefly describe what this expert handles",
+    "customInstructions": "Instructions",
+    "customInstructionsPlaceholder": "Describe how it should analyze, answer, and what rules it must follow",
+    "customCreating": "Creating…",
+    "customCreateAndSummon": "Create and summon",
+    "customCreateError": "Could not create the custom expert",
+    "installError": "Expert installation failed",
+    "cancelError": "Could not cancel installation",
+    "retry": "Retry",
+    "installed": "Installed",
+    "packageInfo": "{{size}} expert package · {{count}} additional capabilities",
+    "install": "Download and use",
+    "update": "Update",
+    "start": "Start chat",
+    "cancel": "Cancel",
+    "historyNeedsInstall": "This expert is not installed. Its memory and personal settings are still preserved.",
+    "reinstall": "Reinstall",
+    "stages": {
+      "queued": "Waiting to install",
+      "catalog": "Checking version",
+      "downloading": "Downloading expert package",
+      "verifying": "Verifying file",
+      "runtime": "Preparing additional capabilities",
+      "ready": "Installation complete",
+      "failed": "Installation failed",
+      "cancelled": "Cancelled"
+    }
   },
   "deleteConfirm": {
     "title": "Delete this chat?",
@@ -399,6 +556,59 @@
       "members": "Members ({{count}})"
     },
     "emptyHint": "Send a message to start collaborating, just like a group chat. Workflow progress also appears here.",
+    "discussion": {
+      "launch": "Start topic",
+      "title": "Start a topic",
+      "description": "Let room members take turns debating or freely discussing one topic.",
+      "topic": "Topic",
+      "topicPlaceholder": "For example: should a new product prioritize growth or cost control?",
+      "mode": "Format",
+      "debate": "Debate",
+      "debateHint": "Assign each Agent a position and let them respond in order.",
+      "discussion": "Open discussion",
+      "discussionHint": "Members contribute and respond from their professional roles.",
+      "participants": "Participants",
+      "positionPlaceholder": "Assign a position to {{agent}}",
+      "rounds": "Maximum rounds",
+      "roundsHint": "One round gives every participant one turn, up to 99 rounds.",
+      "judgeAgent": "Judge Agent (optional)",
+      "noJudge": "No judge",
+      "summaryAgent": "Summarizer",
+      "modelHint": "Each Agent uses the model bound in its settings.",
+      "styleAria": "Debate style for {{agent}}",
+      "styles": {
+        "free": "Free style",
+        "sharp_punchline": "Sharp punchlines",
+        "sharp_punchlineHint": "Keep a fast rhythm, target logical gaps, and close with concise lines.",
+        "value_reframe": "Value reframing",
+        "value_reframeHint": "Reframe key terms and move the clash toward values and underlying motives.",
+        "rational_empathy": "Reasoned empathy",
+        "rational_empathyHint": "Build a structured case, then make it persuasive through concrete human stakes.",
+        "everyday_spicy": "Everyday wit",
+        "everyday_spicyHint": "Use daily-life scenarios, colloquial analogies, and restrained humor.",
+        "concept_deconstruction": "Concept deconstruction",
+        "concept_deconstructionHint": "Define terms, inspect premises, and test the logic with counterexamples.",
+        "simple_analogy": "Simple analogies",
+        "simple_analogyHint": "Explain complex issues through clear and concrete everyday scenes."
+      },
+      "start": "Start discussion",
+      "cancel": "Cancel",
+      "end": "End topic",
+      "ending": "Ending…",
+      "roundProgress": "Round {{current}} / {{total}}",
+      "userMessage": "Started topic: {{topic}}\n{{mode}} · {{rounds}} rounds · {{participants}}",
+      "status": {
+        "succeeded": "Discussion complete",
+        "failed": "Discussion interrupted",
+        "cancelled": "Ended early"
+      },
+      "validation": {
+        "topic": "Enter a topic.",
+        "participants": "Select at least two participants.",
+        "positions": "A debate requires a position for every participant.",
+        "summary": "Select an Agent to summarize the discussion."
+      }
+    },
     "panel": {
       "title": "Group chat",
       "partner": "Partner",
@@ -406,6 +616,16 @@
       "info": "Info",
       "goal": "Goal",
       "goalEmpty": "No group chat goal yet.",
+      "currentTask": {
+        "title": "Current task",
+        "empty": "No task is currently running.",
+        "workflow": "Workflow",
+        "stepProgress": "{{completed}} / {{total}} steps complete",
+        "roundProgress": "Round {{current}} / {{total}}",
+        "judging": "The judge is evaluating both sides",
+        "summarizing": "Summarizing the discussion",
+        "currentAgent": "{{agent}} is working"
+      },
       "members": "Members",
       "builtin": "Built-in",
       "artifacts": "Artifacts",
@@ -415,6 +635,9 @@
     },
     "workflow": {
       "new": "New workflow",
+      "compactEmpty": "Add workflow",
+      "compactActive": "Workflow · {{count}} steps",
+      "compactDraft": "Workflow draft · {{count}} steps",
       "edit": "Edit",
       "editNewVersion": "Edit new revision",
       "activate": "Activate",
@@ -601,6 +824,7 @@
       "goalStateCloseAria": "Close goal",
       "send": "Send message",
       "stop": "Stop response",
+      "stopping": "Stopping",
       "attachImage": "Attach image",
       "attachFile": "Attach files",
       "fileRejected": "Only images and common document formats are supported",
@@ -686,6 +910,7 @@
         "deleteAria": "Delete message",
         "empty": "Staged messages will be sent when the agent finishes",
         "full": "Queue full (max 3)",
+        "images": "{{count}} image(s)",
         "injectedBadge": "Sent as supplement"
       }
     },

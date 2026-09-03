@@ -26,7 +26,12 @@ import yaml
 from mona.agent.partners import MONA_AGENT_ID, AgentDefinition, AgentRegistry, normalize_agent_id
 from mona.agent.skills import SkillsLoader
 from mona.agent.user_config import load_agent_user_config, save_agent_user_config
-from mona.config.paths import get_agent_memory_dir, get_agent_skills_dir, get_workspace_path
+from mona.config.paths import (
+    get_agent_memory_dir,
+    get_agent_skills_dir,
+    get_agents_dir,
+    get_workspace_path,
+)
 
 INSTRUCTION_FILES: dict[str, str] = {
     "soul": "SOUL.md",
@@ -40,10 +45,96 @@ _MAX_SKILL_FILES = 40
 _MAX_SKILL_TOTAL_CHARS = 512_000
 _PROPOSAL_TTL = timedelta(days=7)
 _SKILL_NAME_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$")
+_CUSTOM_AGENT_TOOLS = [
+    "web_search",
+    "web_fetch",
+    "browser_open",
+    "browser_navigate",
+    "browser_read",
+    "browser_snapshot",
+    "browser_screenshot",
+    "browser_act",
+    "browser_click",
+    "browser_type",
+    "browser_list_tabs",
+    "browser_go_back",
+    "browser_go_forward",
+    "browser_close",
+    "read_file",
+    "write_file",
+    "edit_file",
+    "deliver_file",
+    "memory_read",
+    "memory_edit",
+    "memory_search",
+    "skill_read",
+    "skill_reference_read",
+    "skill_asset_copy",
+    "skill_create",
+]
 
 
 class AgentManagementError(ValueError):
     """Controlled validation error suitable for user-facing API responses."""
+
+
+def create_custom_agent(
+    display_name: str,
+    *,
+    description: str = "",
+    instructions: str = "",
+) -> AgentDefinition:
+    """Create one user-owned local expert without publishing it remotely."""
+    name = display_name.strip()
+    summary = description.strip()
+    role = instructions.strip()
+    if not name:
+        raise AgentManagementError("expert name is required")
+    if len(name) > 80:
+        raise AgentManagementError("expert name must be 80 characters or fewer")
+    if len(summary) > 500:
+        raise AgentManagementError("expert description must be 500 characters or fewer")
+    if len(role) > 20_000:
+        raise AgentManagementError("expert instructions must be 20000 characters or fewer")
+
+    agent_id = f"local.custom.{uuid.uuid4().hex}"
+    manifest = {
+        "schemaVersion": 1,
+        "id": agent_id,
+        "displayName": name,
+        "description": summary,
+        "prompt": "prompt.md",
+        "model": "inherit",
+        "toolAllowlist": _CUSTOM_AGENT_TOOLS,
+        "canDelegate": False,
+        "skills": [],
+        "packageId": agent_id,
+        "packageVersion": "1.0.0",
+        "visibility": "partner",
+    }
+    definition = AgentDefinition.model_validate(manifest)
+    root = get_agents_dir()
+    destination = root / agent_id
+    staging = Path(tempfile.mkdtemp(prefix=".custom-agent-", dir=root))
+    try:
+        _atomic_write(
+            staging / "agent.json",
+            json.dumps(manifest, ensure_ascii=False, indent=2) + "\n",
+        )
+        prompt = [
+            f"You are {name}, a user-created local expert in Mona.",
+            "Follow the user's current request and the local expert instructions below.",
+        ]
+        if summary:
+            prompt.append(f"Expertise: {summary}")
+        if role:
+            prompt.extend(["", role])
+        _atomic_write(staging / "prompt.md", "\n".join(prompt).rstrip() + "\n")
+        os.replace(staging, destination)
+    except Exception:
+        shutil.rmtree(staging, ignore_errors=True)
+        raise
+    return definition
 
 
 def _now() -> datetime:
@@ -113,6 +204,7 @@ def list_instructions(agent_id: str) -> list[dict[str, Any]]:
 
 def agent_data_summary(agent_id: str) -> dict[str, Any]:
     """Return bounded, metadata-only storage facts for the management page."""
+
     def _stats(root: Path) -> tuple[int, int, str | None]:
         files = size = 0
         latest: float | None = None
@@ -158,6 +250,7 @@ def agent_tool_catalog(
     from mona.agent.tools.context import ToolContext
     from mona.agent.tools.loader import ToolLoader
     from mona.agent.tools.registry import ToolRegistry
+    from mona.agent.user_config import configurable_agent_tools
     from mona.config.loader import load_config
     from mona.providers.image_generation import image_gen_provider_configs
     from mona.providers.video_generation import video_gen_provider_configs
@@ -165,6 +258,7 @@ def agent_tool_catalog(
     config = load_config()
     runtime_tools = ToolRegistry()
     is_mona = definition.id == MONA_AGENT_ID
+    configurable = configurable_agent_tools(definition)
     ToolLoader().load(
         ToolContext(
             config=config.tools,
@@ -180,13 +274,13 @@ def agent_tool_catalog(
         ),
         runtime_tools,
         scope="core" if is_mona else "subagent",
-        tool_allowlist=None if is_mona else definition.tool_allowlist,
+        tool_allowlist=configurable,
     )
     if is_mona:
         configured = load_agent_user_config(definition.id).granted_tools or []
         names = list(dict.fromkeys([*runtime_tools.tool_names, *configured]))
     else:
-        names = list(definition.tool_allowlist)
+        names = list(configurable or [])
     rows: list[dict[str, Any]] = []
     for name in names:
         tool = runtime_tools.get(name)
@@ -205,7 +299,9 @@ def write_instruction(agent_id: str, key: str, content: str, *, message: str) ->
     if not isinstance(content, str):
         raise AgentManagementError("instruction content must be text")
     if len(content) > _MAX_INSTRUCTION_CHARS:
-        raise AgentManagementError(f"instruction content exceeds {_MAX_INSTRUCTION_CHARS} characters")
+        raise AgentManagementError(
+            f"instruction content exceeds {_MAX_INSTRUCTION_CHARS} characters"
+        )
     path = _instruction_path(agent_id, key)
     store = _memory_store(agent_id)
     # The initial commit snapshots pre-existing files before a user edit.
@@ -218,7 +314,9 @@ def write_instruction(agent_id: str, key: str, content: str, *, message: str) ->
 def instruction_history(agent_id: str, key: str) -> list[dict[str, str]]:
     _instruction_path(agent_id, key)  # validate key before accessing GitStore
     entries = _memory_store(agent_id).git.log()
-    return [{"sha": item.sha, "message": item.message, "timestamp": item.timestamp} for item in entries]
+    return [
+        {"sha": item.sha, "message": item.message, "timestamp": item.timestamp} for item in entries
+    ]
 
 
 def restore_instruction(agent_id: str, key: str, commit: str) -> dict[str, Any]:
@@ -371,7 +469,46 @@ def _validate_skill_frontmatter(name: str, content: str) -> dict[str, Any]:
     description = frontmatter.get("description")
     if not isinstance(description, str) or not description.strip():
         raise AgentManagementError("SKILL.md frontmatter requires a description")
+    _skill_runtime_from_frontmatter(frontmatter)
     return frontmatter
+
+
+def _skill_runtime_from_frontmatter(frontmatter: dict[str, Any]):
+    metadata = frontmatter.get("metadata")
+    if metadata is None:
+        return None
+    if not isinstance(metadata, dict):
+        raise AgentManagementError("Skill metadata must be a mapping")
+    mona_meta = metadata.get("mona", metadata.get("openclaw"))
+    if mona_meta is None:
+        return None
+    if not isinstance(mona_meta, dict):
+        raise AgentManagementError("Skill metadata.mona must be a mapping")
+    from mona.runtime.skill_env import parse_skill_runtime_spec
+
+    try:
+        return parse_skill_runtime_spec(mona_meta.get("runtime"))
+    except ValueError as exc:
+        raise AgentManagementError(str(exc)) from exc
+
+
+def _validate_skill_script_runtime(
+    frontmatter: dict[str, Any],
+    file_paths: list[PurePosixPath],
+) -> object | None:
+    script_suffixes = {
+        path.suffix.lower() for path in file_paths if path.parts and path.parts[0] == "scripts"
+    }
+    executable_suffixes = script_suffixes & {".py", ".mjs", ".r", ".js", ".ts", ".sh", ".ps1"}
+    unsupported = sorted(executable_suffixes - {".py", ".mjs"})
+    if unsupported:
+        raise AgentManagementError(
+            "Skill scripts use unsupported managed runtimes: " + ", ".join(unsupported)
+        )
+    if not executable_suffixes:
+        return _skill_runtime_from_frontmatter(frontmatter)
+    spec = _skill_runtime_from_frontmatter(frontmatter)
+    return spec
 
 
 class SkillManager:
@@ -391,40 +528,167 @@ class SkillManager:
             package_skill_dirs=self.registry.resolve_skill_dirs(self.agent_id),
         )
 
+    @staticmethod
+    def _description(content: str) -> str:
+        try:
+            match = re.match(r"^---\s*\r?\n(.*?)\r?\n---\s*\r?\n", content, flags=re.DOTALL)
+            if match is None:
+                return ""
+            frontmatter = yaml.safe_load(match.group(1)) or {}
+        except (yaml.YAMLError, TypeError):
+            return ""
+        description = frontmatter.get("description") if isinstance(frontmatter, dict) else None
+        return description.strip() if isinstance(description, str) else ""
+
+    def _row(
+        self,
+        *,
+        name: str,
+        source: str,
+        path: Path,
+        enabled: bool,
+        archived: bool,
+        scripts_enabled: bool,
+    ) -> dict[str, Any]:
+        try:
+            content = path.read_text(encoding="utf-8")
+        except OSError:
+            content = ""
+        from mona.agent import skill_usage
+
+        usage = skill_usage.get_record(name, self.agent_id)
+        provenance = skill_usage.get_provenance(name, self.agent_id)
+        category = "self_learning" if source == "private" and provenance == "agent" else "external"
+        has_scripts = (path.parent / "scripts").is_dir()
+        runtime_payload: dict[str, object] | None = None
+        runtime_ready = not has_scripts
+        runtime_error: str | None = None
+        if has_scripts:
+            try:
+                from mona.config.paths import get_managed_runtimes_dir
+                from mona.runtime.agent_env import AgentEnvironmentManager
+                from mona.runtime.skill_env import runtime_spec_from_skill_markdown
+
+                runtime_spec = runtime_spec_from_skill_markdown(content)
+                runtime_payload = runtime_spec.canonical() if runtime_spec else None
+                AgentEnvironmentManager(get_managed_runtimes_dir()).assert_skill_ready(
+                    path.parent, runtime_spec
+                )
+                runtime_ready = True
+            except Exception as exc:
+                runtime_error = str(exc)
+        return {
+            "name": name,
+            "ownerAgentId": self.agent_id,
+            "description": self._description(content),
+            "content": content if source == "private" and not archived else None,
+            "source": source,
+            "category": category,
+            "provenance": provenance,
+            "editable": source == "private" and not archived,
+            "accessCount": int(usage.get("access_count") or 0),
+            "createdAt": usage.get("created_at"),
+            "lastAccessedAt": usage.get("last_accessed_at"),
+            "pinned": bool(usage.get("pinned")),
+            "enabled": enabled,
+            "archived": archived,
+            "hasScripts": has_scripts,
+            "scriptsEnabled": scripts_enabled,
+            "runtime": runtime_payload,
+            "runtimeReady": runtime_ready,
+            "runtimeError": runtime_error,
+            "contentHash": _sha256(content),
+        }
+
     def list(self) -> list[dict[str, Any]]:
         config = load_agent_user_config(self.agent_id)
         disabled = set(config.disabled_skills)
         rows: list[dict[str, Any]] = []
         for entry in self._loader().list_skills(filter_unavailable=False):
             skill_path = Path(entry["path"])
-            try:
-                content = skill_path.read_text(encoding="utf-8")
-            except OSError:
-                content = ""
-            source = {"workspace": "private", "builtin": "platform"}.get(entry["source"], entry["source"])
-            rows.append({
-                "name": entry["name"],
-                "source": source,
-                "enabled": entry["name"] not in disabled,
-                "archived": False,
-                "hasScripts": (skill_path.parent / "scripts").is_dir(),
-                "scriptsEnabled": entry["name"] in config.script_enabled_skills,
-                "contentHash": _sha256(content),
-            })
+            source = {"workspace": "private", "builtin": "platform"}.get(
+                entry["source"], entry["source"]
+            )
+            rows.append(
+                self._row(
+                    name=entry["name"],
+                    source=source,
+                    path=skill_path,
+                    enabled=entry["name"] not in disabled,
+                    archived=False,
+                    scripts_enabled=entry["name"] in config.script_enabled_skills,
+                )
+            )
         from mona.agent import skill_usage
 
         for name in skill_usage.list_archived_skill_names(self.agent_id):
             path = self.skills_dir / ".archive" / name / "SKILL.md"
-            rows.append({
-                "name": name,
-                "source": "private",
-                "enabled": False,
-                "archived": True,
-                "hasScripts": (path.parent / "scripts").is_dir(),
-                "scriptsEnabled": False,
-                "contentHash": _sha256(path.read_text(encoding="utf-8")),
-            })
+            rows.append(
+                self._row(
+                    name=name,
+                    source="private",
+                    path=path,
+                    enabled=False,
+                    archived=True,
+                    scripts_enabled=False,
+                )
+            )
         return sorted(rows, key=lambda item: (item["archived"], item["name"].lower()))
+
+    def read(self, name: str) -> dict[str, Any]:
+        name = _validate_skill_name(name)
+        skill = next((item for item in self.list() if item["name"] == name), None)
+        if skill is None:
+            raise AgentManagementError("skill is not installed")
+        if skill["source"] == "private":
+            path = self.skills_dir / (".archive" if skill["archived"] else "") / name / "SKILL.md"
+        else:
+            entry = next(
+                (
+                    item
+                    for item in self._loader().list_skills(filter_unavailable=False)
+                    if item["name"] == name
+                ),
+                None,
+            )
+            if entry is None:
+                raise AgentManagementError("skill is not installed")
+            path = Path(entry["path"])
+        try:
+            content = path.read_text(encoding="utf-8")
+        except OSError as exc:
+            raise AgentManagementError("skill content is unavailable") from exc
+        return {**skill, "content": content}
+
+    def update_private(
+        self, name: str, content: str, *, expected_hash: str | None
+    ) -> dict[str, Any]:
+        name = _validate_skill_name(name)
+        if not isinstance(content, str):
+            raise AgentManagementError("skill content must be text")
+        if len(content) > _MAX_SKILL_FILE_CHARS:
+            raise AgentManagementError("skill content is too large")
+        path = self.skills_dir / name / "SKILL.md"
+        try:
+            current = path.read_text(encoding="utf-8")
+        except FileNotFoundError as exc:
+            raise AgentManagementError("only active private skills can be edited") from exc
+        if expected_hash and not hmac.compare_digest(_sha256(current), expected_hash):
+            raise AgentManagementError("skill changed since it was opened; refresh and try again")
+        frontmatter = _validate_skill_frontmatter(name, content)
+        skill_root = path.parent
+        existing_files = (
+            [
+                PurePosixPath(item.relative_to(skill_root).as_posix())
+                for item in (skill_root / "scripts").rglob("*")
+                if item.is_file()
+            ]
+            if (skill_root / "scripts").is_dir()
+            else []
+        )
+        _validate_skill_script_runtime(frontmatter, existing_files)
+        _atomic_write(path, content)
+        return self.read(name)
 
     def stage(
         self,
@@ -451,10 +715,15 @@ class SkillManager:
         if total > _MAX_SKILL_TOTAL_CHARS:
             raise AgentManagementError("skill content is too large")
         frontmatter = _validate_skill_frontmatter(name, clean_files[PurePosixPath("SKILL.md")])
+        runtime_spec = _validate_skill_script_runtime(frontmatter, list(clean_files))
         if (self.skills_dir / name).exists():
-            raise AgentManagementError("a private skill with this name already exists; update is not implicit")
+            raise AgentManagementError(
+                "a private skill with this name already exists; update is not implicit"
+            )
         loader = self._loader()
-        existing = [row for row in loader.list_skills(filter_unavailable=False) if row["name"] == name]
+        existing = [
+            row for row in loader.list_skills(filter_unavailable=False) if row["name"] == name
+        ]
         if existing:
             raise AgentManagementError("skill name conflicts with a package or platform skill")
 
@@ -496,7 +765,14 @@ class SkillManager:
                     for path, content in sorted(clean_files.items(), key=lambda item: str(item[0]))
                 ],
                 "hasScripts": has_scripts,
-                "scriptPolicy": "disabled_until_explicitly_enabled" if has_scripts else "not_applicable",
+                "runtime": (
+                    runtime_spec.canonical()
+                    if runtime_spec is not None and hasattr(runtime_spec, "canonical")
+                    else None
+                ),
+                "scriptPolicy": "disabled_until_explicitly_enabled"
+                if has_scripts
+                else "not_applicable",
             },
         )
         # Keep the staging directory id and proposal id equal, so activation does
@@ -517,7 +793,23 @@ class SkillManager:
         if not staged.is_dir() or not (staged / "SKILL.md").is_file():
             raise AgentManagementError("staged skill is missing")
         content = (staged / "SKILL.md").read_text(encoding="utf-8")
-        _validate_skill_frontmatter(name, content)
+        frontmatter = _validate_skill_frontmatter(name, content)
+        spec = _validate_skill_script_runtime(
+            frontmatter,
+            [
+                PurePosixPath(path.relative_to(staged).as_posix())
+                for path in staged.rglob("*")
+                if path.is_file()
+            ],
+        )
+        if (staged / "scripts").is_dir():
+            from mona.config.paths import get_managed_runtimes_dir
+            from mona.runtime.agent_env import AgentEnvironmentManager
+
+            AgentEnvironmentManager(get_managed_runtimes_dir()).assert_skill_ready(
+                staged,
+                spec,
+            )
         final = self.skills_dir / name
         if final.exists():
             raise AgentManagementError("a private skill with this name now exists")
@@ -537,6 +829,13 @@ class SkillManager:
         name = _validate_skill_name(name)
         from mona.agent import skill_usage
 
+        if action in {"pin", "unpin"}:
+            if not skill_usage.is_active(name, self.agent_id) and not skill_usage.is_archived(
+                name, self.agent_id
+            ):
+                raise AgentManagementError("only private skills can be pinned")
+            skill_usage.set_pinned(name, action == "pin", self.agent_id)
+            return
         if action in {"enable", "disable"}:
             config = load_agent_user_config(self.agent_id)
             disabled = set(config.disabled_skills)
@@ -544,7 +843,9 @@ class SkillManager:
                 disabled.discard(name)
             else:
                 disabled.add(name)
-            save_agent_user_config(self.agent_id, {"disabled_skills": sorted(disabled)}, expected_revision=None)
+            save_agent_user_config(
+                self.agent_id, {"disabled_skills": sorted(disabled)}, expected_revision=None
+            )
             return
         if action == "archive":
             ok, detail = skill_usage.archive_skill(name, automatic=False, agent_id=self.agent_id)
@@ -566,9 +867,16 @@ class SkillManager:
 
                 allowed_tools = resolve_effective_agent_config(definition).allowed_tools
                 if allowed_tools is not None and "skill_script_run" not in allowed_tools:
-                    raise AgentManagementError(
-                        "this agent is not allowed to run skill scripts"
-                    )
+                    raise AgentManagementError("this agent is not allowed to run skill scripts")
+                from mona.config.paths import get_managed_runtimes_dir
+                from mona.runtime.agent_env import AgentEnvironmentManager
+                from mona.runtime.skill_env import runtime_spec_from_skill_markdown
+
+                content = (active / "SKILL.md").read_text(encoding="utf-8")
+                AgentEnvironmentManager(get_managed_runtimes_dir()).assert_skill_ready(
+                    active,
+                    runtime_spec_from_skill_markdown(content),
+                )
             config = load_agent_user_config(self.agent_id)
             enabled = set(config.script_enabled_skills)
             if action == "enable_scripts":
@@ -577,7 +885,9 @@ class SkillManager:
             else:
                 enabled.discard(name)
                 skill_usage.set_scripts_approved(name, False, agent_id=self.agent_id)
-            save_agent_user_config(self.agent_id, {"script_enabled_skills": sorted(enabled)}, expected_revision=None)
+            save_agent_user_config(
+                self.agent_id, {"script_enabled_skills": sorted(enabled)}, expected_revision=None
+            )
             return
         raise AgentManagementError("unsupported skill action")
 
@@ -596,6 +906,39 @@ def _cleanup_staged_skill(proposal: dict[str, Any]) -> None:
     proposal_id = proposal.get("id")
     if isinstance(agent_id, str) and isinstance(proposal_id, str):
         shutil.rmtree(get_agent_skills_dir(agent_id) / ".staging" / proposal_id, ignore_errors=True)
+
+
+def get_staged_skill_for_approval(
+    agent_id: str,
+    proposal_id: str,
+    *,
+    token: str,
+) -> tuple[Path, object | None] | None:
+    """Validate an approval token and return staged Skill runtime data."""
+    proposal = _read_proposal(agent_id, proposal_id)
+    if proposal.get("status") != "pending" or proposal.get("kind") != "skill_install":
+        return None
+    if not hmac.compare_digest(token, str(proposal.get("token", ""))):
+        raise AgentManagementError("proposal token is invalid")
+    if _proposal_expired(proposal):
+        raise AgentManagementError("proposal has expired")
+    staged = get_agent_skills_dir(agent_id) / ".staging" / proposal_id
+    skill_file = staged / "SKILL.md"
+    if not skill_file.is_file():
+        raise AgentManagementError("staged skill is missing")
+    frontmatter = _validate_skill_frontmatter(
+        str(proposal.get("preview", {}).get("skillName", "")),
+        skill_file.read_text(encoding="utf-8"),
+    )
+    spec = _validate_skill_script_runtime(
+        frontmatter,
+        [
+            PurePosixPath(path.relative_to(staged).as_posix())
+            for path in staged.rglob("*")
+            if path.is_file()
+        ],
+    )
+    return staged, spec
 
 
 def resolve_change_proposal(
@@ -674,6 +1017,7 @@ __all__ = [
     "agent_data_summary",
     "agent_tool_catalog",
     "get_change_proposal",
+    "get_staged_skill_for_approval",
     "instruction_history",
     "is_skill_script_enabled",
     "list_change_proposals",

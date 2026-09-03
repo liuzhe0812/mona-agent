@@ -322,6 +322,18 @@ class SkillsLoader:
         raw_meta = self.get_skill_metadata(name) or {}
         return self._parse_mona_metadata(raw_meta.get("metadata"))
 
+    def get_runtime_packs(self, name: str) -> list[str]:
+        """Return validated managed runtime pack refs declared by a Skill."""
+        spec = self.get_runtime_spec(name)
+        return list(spec.packs) if spec is not None else []
+
+    def get_runtime_spec(self, name: str):
+        """Return the validated managed runtime declaration for one Skill."""
+        meta = self._get_skill_meta(name)
+        from mona.runtime.skill_env import parse_skill_runtime_spec
+
+        return parse_skill_runtime_spec(meta.get("runtime"))
+
     def get_always_skills(self) -> list[str]:
         """Get skills marked as always=true that meet requirements."""
         return [

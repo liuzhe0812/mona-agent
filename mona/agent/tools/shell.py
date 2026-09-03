@@ -6,8 +6,10 @@ import asyncio
 import os
 import re
 import shutil
+import signal
 import sys
 from contextlib import suppress
+from contextvars import ContextVar
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -18,9 +20,9 @@ from pydantic import Field
 from mona.agent.tools.base import Tool, tool_parameters
 from mona.agent.tools.context import RequestContext
 from mona.agent.tools.exec_session import (
+    DEFAULT_EXEC_SESSION_MANAGER,
     DEFAULT_MAX_OUTPUT_CHARS,
     DEFAULT_YIELD_MS,
-    DEFAULT_EXEC_SESSION_MANAGER,
     MAX_OUTPUT_CHARS,
     MAX_YIELD_MS,
     clamp_session_int,
@@ -28,11 +30,46 @@ from mona.agent.tools.exec_session import (
 )
 from mona.agent.tools.path_utils import get_current_workspace
 from mona.agent.tools.sandbox import wrap_command
-from mona.agent.tools.schema import BooleanSchema, IntegerSchema, StringSchema, tool_parameters_schema
+from mona.agent.tools.schema import (
+    BooleanSchema,
+    IntegerSchema,
+    StringSchema,
+    tool_parameters_schema,
+)
 from mona.config.paths import get_media_dir
 from mona.config.schema import Base
 
 _IS_WINDOWS = sys.platform == "win32"
+_EXEC_OWNER_SESSION_KEY: ContextVar[str | None] = ContextVar(
+    "mona_exec_owner_session_key",
+    default=None,
+)
+
+
+async def kill_process_tree(process: asyncio.subprocess.Process) -> None:
+    """Terminate a shell command and its descendants, then reap the parent."""
+    if process.returncode is not None:
+        return
+    if _IS_WINDOWS:
+        killer = await asyncio.create_subprocess_exec(
+            "taskkill",
+            "/PID",
+            str(process.pid),
+            "/T",
+            "/F",
+            stdout=asyncio.subprocess.DEVNULL,
+            stderr=asyncio.subprocess.DEVNULL,
+        )
+        with suppress(asyncio.TimeoutError):
+            await asyncio.wait_for(killer.wait(), timeout=5.0)
+    else:
+        with suppress(ProcessLookupError):
+            os.killpg(process.pid, signal.SIGKILL)
+    if process.returncode is None:
+        with suppress(ProcessLookupError):
+            process.kill()
+    with suppress(asyncio.TimeoutError, ProcessLookupError):
+        await asyncio.wait_for(process.wait(), timeout=5.0)
 
 
 # Policy note appended to recoverable workspace-boundary guard errors.
@@ -47,6 +84,7 @@ _WORKSPACE_BOUNDARY_NOTE = (
 
 class ExecToolConfig(Base):
     """Shell exec tool configuration."""
+
     enable: bool = True
     timeout: int = 60
     path_append: str = ""
@@ -123,6 +161,7 @@ class _PreparedCommand:
 )
 class ExecTool(Tool):
     """Tool to execute shell commands."""
+
     _scopes = {"core", "subagent"}
 
     config_key = "exec"
@@ -138,8 +177,11 @@ class ExecTool(Tool):
     @classmethod
     def create(cls, ctx: Any) -> Tool:
         cfg = ctx.config.exec
+        from mona.config.paths import is_agent_workspace
+
         return cls(
             working_dir=ctx.workspace,
+            use_agent_runtime=is_agent_workspace(ctx.workspace),
             timeout=cfg.timeout,
             restrict_to_workspace=ctx.config.restrict_to_workspace,
             sandbox=cfg.sandbox,
@@ -160,34 +202,39 @@ class ExecTool(Tool):
         path_append: str = "",
         allowed_env_keys: list[str] | None = None,
         session_manager: Any | None = None,
+        use_agent_runtime: bool = False,
     ):
         self.timeout = timeout
         self.working_dir = working_dir
         self.sandbox = sandbox
-        self.deny_patterns = (deny_patterns or []) + [
-            r"\brm\s+-[rf]{1,2}\b",          # rm -r, rm -rf, rm -fr
-            r"\bdel\s+/[fq]\b",              # del /f, del /q
-            r"\brmdir\s+/s\b",               # rmdir /s
-            r"(?:^|[;&|]\s*)format(?!=)\b",   # format (as standalone command only)
-            r"\b(mkfs|diskpart)\b",          # disk operations
-            r"\bdd\s+if=",                   # dd
-            r">\s*/dev/sd",                  # write to disk
-            r"\b(shutdown|reboot|poweroff)\b",  # system power
-            r":\(\)\s*\{.*\};\s*:",          # fork bomb
-            # Block writes to mona internal state files (#2989).
-            # history.jsonl / .dream_cursor are managed by append_history();
-            # direct writes corrupt the cursor format and crash /dream.
-            r">>?\s*\S*(?:history\.jsonl|\.dream_cursor)",            # > / >> redirect
-            r"\btee\b[^|;&<>]*(?:history\.jsonl|\.dream_cursor)",     # tee / tee -a
-            r"\b(?:cp|mv)\b(?:\s+[^\s|;&<>]+)+\s+\S*(?:history\.jsonl|\.dream_cursor)",  # cp/mv target
-            r"\bdd\b[^|;&<>]*\bof=\S*(?:history\.jsonl|\.dream_cursor)",  # dd of=
-            r"\bsed\s+-i[^|;&<>]*(?:history\.jsonl|\.dream_cursor)",  # sed -i
-        ]
+        self.deny_patterns = (
+            (deny_patterns or [])
+            + [
+                r"\brm\s+-[rf]{1,2}\b",  # rm -r, rm -rf, rm -fr
+                r"\bdel\s+/[fq]\b",  # del /f, del /q
+                r"\brmdir\s+/s\b",  # rmdir /s
+                r"(?:^|[;&|]\s*)format(?!=)\b",  # format (as standalone command only)
+                r"\b(mkfs|diskpart)\b",  # disk operations
+                r"\bdd\s+if=",  # dd
+                r">\s*/dev/sd",  # write to disk
+                r"\b(shutdown|reboot|poweroff)\b",  # system power
+                r":\(\)\s*\{.*\};\s*:",  # fork bomb
+                # Block writes to mona internal state files (#2989).
+                # history.jsonl / .dream_cursor are managed by append_history();
+                # direct writes corrupt the cursor format and crash /dream.
+                r">>?\s*\S*(?:history\.jsonl|\.dream_cursor)",  # > / >> redirect
+                r"\btee\b[^|;&<>]*(?:history\.jsonl|\.dream_cursor)",  # tee / tee -a
+                r"\b(?:cp|mv)\b(?:\s+[^\s|;&<>]+)+\s+\S*(?:history\.jsonl|\.dream_cursor)",  # cp/mv target
+                r"\bdd\b[^|;&<>]*\bof=\S*(?:history\.jsonl|\.dream_cursor)",  # dd of=
+                r"\bsed\s+-i[^|;&<>]*(?:history\.jsonl|\.dream_cursor)",  # sed -i
+            ]
+        )
         self.allow_patterns = allow_patterns or []
         self.restrict_to_workspace = restrict_to_workspace
         self.path_append = path_append
         self.allowed_env_keys = allowed_env_keys or []
         self._session_manager = session_manager or DEFAULT_EXEC_SESSION_MANAGER
+        self.use_agent_runtime = use_agent_runtime
 
     @property
     def name(self) -> str:
@@ -196,22 +243,30 @@ class ExecTool(Tool):
     def set_context(self, ctx: RequestContext) -> None:
         # A terminal-bound chat must operate on that terminal, not Mona's host shell.
         self.is_available = not bool(ctx.terminal_session_id)
+        from mona.agent.tools.context import PROJECT_WORKSPACE_META
+
+        project_workspace = ctx.metadata.get(PROJECT_WORKSPACE_META)
+        if isinstance(project_workspace, bool):
+            self.use_agent_runtime = not project_workspace
+        _EXEC_OWNER_SESSION_KEY.set(ctx.session_key)
 
     _MAX_TIMEOUT = 600
     _MAX_OUTPUT = 10_000
 
     # Kernel device files safe as stdio redirect targets (#3599).
-    _BENIGN_DEVICE_PATHS: frozenset[str] = frozenset({
-        "/dev/null",
-        "/dev/zero",
-        "/dev/full",
-        "/dev/random",
-        "/dev/urandom",
-        "/dev/stdin",
-        "/dev/stdout",
-        "/dev/stderr",
-        "/dev/tty",
-    })
+    _BENIGN_DEVICE_PATHS: frozenset[str] = frozenset(
+        {
+            "/dev/null",
+            "/dev/zero",
+            "/dev/full",
+            "/dev/random",
+            "/dev/urandom",
+            "/dev/stdin",
+            "/dev/stdout",
+            "/dev/stderr",
+            "/dev/tty",
+        }
+    )
 
     @property
     def description(self) -> str:
@@ -222,6 +277,9 @@ class ExecTool(Tool):
             "inspection and apply_patch/write_file/edit_file for file changes "
             "instead of cat, shell find/grep, echo, or sed. "
             "Use -y or --yes flags to avoid interactive prompts. "
+            "In ordinary Agent and expert tasks, Python/Node commands use Mona's "
+            "shared Agent environment. In a project-bound task they use that "
+            "project's .venv and node_modules. Do not choose system runtime paths. "
             "For long-running or interactive commands, pass yield_time_ms; "
             "if the command keeps running, exec returns a session_id that can "
             "be polled or written to with write_stdin. Output is truncated at "
@@ -250,10 +308,15 @@ class ExecTool(Tool):
         return get_current_workspace(fallback)
 
     async def execute(
-        self, command: str | None = None, cmd: str | None = None,
-        working_dir: str | None = None, workdir: str | None = None,
-        timeout: int | None = None, shell: str | None = None,
-        login: bool | None = None, yield_time_ms: int | None = None,
+        self,
+        command: str | None = None,
+        cmd: str | None = None,
+        working_dir: str | None = None,
+        workdir: str | None = None,
+        timeout: int | None = None,
+        shell: str | None = None,
+        login: bool | None = None,
+        yield_time_ms: int | None = None,
         max_output_chars: int | None = None,
         max_output_tokens: int | None = None,
         **kwargs: Any,
@@ -268,6 +331,32 @@ class ExecTool(Tool):
         prepared = self._prepare_command(command, working_dir, timeout, shell, login)
         if isinstance(prepared, str):
             return prepared
+        try:
+            from mona.config.paths import get_managed_runtimes_dir
+            from mona.runtime.project_env import ProjectEnvironmentManager, ProjectRuntimeError
+
+            if self.use_agent_runtime:
+                from mona.runtime.agent_env import AgentEnvironmentManager
+
+                agent_environment = AgentEnvironmentManager(get_managed_runtimes_dir())
+                agent_environment.validate_command(prepared.command)
+                requested_runtimes = agent_environment.requested_runtimes(prepared.command)
+                if requested_runtimes:
+                    prepared.env = await agent_environment.prepare_command(
+                        prepared.command,
+                        base_env=prepared.env,
+                    )
+            elif ProjectEnvironmentManager.requested_runtimes(prepared.command):
+                active_workspace = self._active_workspace()
+                project = await ProjectEnvironmentManager(get_managed_runtimes_dir()).prepare(
+                    prepared.command,
+                    cwd=Path(prepared.cwd),
+                    workspace_root=(active_workspace or Path(prepared.cwd)),
+                    base_env=prepared.env,
+                )
+                prepared.env = project.env
+        except (ProjectRuntimeError, RuntimeError, OSError) as exc:
+            return f"Error preparing execution runtime: {exc}"
 
         if yield_time_ms is not None:
             return await self._execute_session(prepared, yield_time_ms, max_output_chars)
@@ -342,6 +431,7 @@ class ExecTool(Tool):
                     1000,
                     MAX_OUTPUT_CHARS,
                 ),
+                owner_session_key=_EXEC_OWNER_SESSION_KEY.get(),
             )
             return format_session_poll(session_id, poll)
         except Exception as exc:
@@ -369,10 +459,7 @@ class ExecTool(Tool):
                 requested = Path(cwd).expanduser().resolve()
                 workspace_root = active_ws.expanduser().resolve()
             except Exception:
-                return (
-                    "Error: working_dir could not be resolved"
-                    + _WORKSPACE_BOUNDARY_NOTE
-                )
+                return "Error: working_dir could not be resolved" + _WORKSPACE_BOUNDARY_NOTE
             if requested != workspace_root and workspace_root not in requested.parents:
                 return (
                     "Error: working_dir is outside the configured workspace"
@@ -419,7 +506,9 @@ class ExecTool(Tool):
 
     @staticmethod
     async def _spawn(
-        command: str, cwd: str, env: dict[str, str],
+        command: str,
+        cwd: str,
+        env: dict[str, str],
         shell_program: str | None = None,
         login: bool = True,
     ) -> asyncio.subprocess.Process:
@@ -450,6 +539,7 @@ class ExecTool(Tool):
             stderr=asyncio.subprocess.PIPE,
             cwd=cwd,
             env=env,
+            start_new_session=True,
         )
 
     @staticmethod
@@ -480,16 +570,7 @@ class ExecTool(Tool):
     @staticmethod
     async def _kill_process(process: asyncio.subprocess.Process) -> None:
         """Kill a subprocess and reap it to prevent zombies."""
-        process.kill()
-        try:
-            with suppress(asyncio.TimeoutError):
-                await asyncio.wait_for(process.wait(), timeout=5.0)
-        finally:
-            if not _IS_WINDOWS:
-                try:
-                    os.waitpid(process.pid, os.WNOHANG)
-                except (ProcessLookupError, ChildProcessError) as e:
-                    logger.debug("Process already reaped or not found: {}", e)
+        await kill_process_tree(process)
 
     def _build_env(self) -> dict[str, str]:
         """Build a minimal environment for subprocess execution.
@@ -544,6 +625,14 @@ class ExecTool(Tool):
         cmd = command.strip()
         lower = cmd.lower()
 
+        if re.search(
+            r"(?:\$\{?skill_dir\}?|mona[\\/]skills[\\/]|\.mona[\\/].*[\\/]skills[\\/])", lower
+        ) and re.search(r"\.(?:py|mjs|r)(?:\s|[\"']|$)", lower):
+            return (
+                "Error: Skill scripts must run through skill_script_run so Mona can "
+                "apply the declared managed environment"
+            )
+
         # allow_patterns take priority over deny_patterns so that users can
         # exempt specific commands (e.g. "rm -rf" inside a build directory)
         # from the hardcoded deny list via configuration.
@@ -559,6 +648,7 @@ class ExecTool(Tool):
                 return "Error: Command blocked by allowlist filter (not in allowlist)"
 
         from mona.security.network import contains_internal_url
+
         if contains_internal_url(cmd):
             # The runner turns this marker into a non-retryable security hint.
             return "Error: Command blocked by safety guard (internal/private URL detected)"
@@ -588,7 +678,8 @@ class ExecTool(Tool):
                     continue
 
                 media_path = get_media_dir().resolve()
-                if (p.is_absolute()
+                if (
+                    p.is_absolute()
                     and cwd_path not in p.parents
                     and p != cwd_path
                     and media_path not in p.parents
@@ -614,8 +705,12 @@ class ExecTool(Tool):
         # NOTE: `*` is required so `C:\` (nothing after the slash) is still extracted.
         win_paths = re.findall(
             r"(?<![A-Za-z])(?:[A-Za-z]:[^\s\"'|><;]*|\\\\[^\s\"'|><;]+(?:\\[^\s\"'|><;]+)*)",
-            command
+            command,
         )
-        posix_paths = re.findall(r"(?:^|[\s|>'\"])(/[^\s\"'>;|<]+)", command) # POSIX: /absolute only
-        home_paths = re.findall(r"(?:^|[\s>'\"])(~[^\s\"'>;|<]*)", command) # POSIX/Windows home shortcut: ~
+        posix_paths = re.findall(
+            r"(?:^|[\s|>'\"])(/[^\s\"'>;|<]+)", command
+        )  # POSIX: /absolute only
+        home_paths = re.findall(
+            r"(?:^|[\s>'\"])(~[^\s\"'>;|<]*)", command
+        )  # POSIX/Windows home shortcut: ~
         return win_paths + posix_paths + home_paths

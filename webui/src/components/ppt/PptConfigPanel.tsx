@@ -1,9 +1,9 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { AlertCircle, CheckCircle2, Download, FileText, FolderOpen, LayoutTemplate, Loader2, Presentation, Upload, X } from "lucide-react";
+import { AlertCircle, FileText, FolderOpen, LayoutTemplate, Loader2, Upload, X } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
-import { downloadPptOfficeCli, fetchPptOfficeCliCheck, getApiBase, pptAddSources, type PptOfficeCliStatus } from "@/lib/api";
+import { getApiBase, pptAddSources } from "@/lib/api";
 import { isTauri } from "@/lib/tauri";
 import { cn } from "@/lib/utils";
 import { useClient } from "@/providers/ClientProvider";
@@ -46,16 +46,8 @@ export function PptConfigPanel({ config, setConfig, phase, onStart }: PptConfigP
   const [sourceTab, setSourceTab] = useState<SourceTab>("topic");
   const [uploading, setUploading] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
-  // 统一错误区域：上传、选择文件和模板加载失败都写入这里
+  // 统一错误区域：上传和选择文件失败都写入这里
   const [actionError, setActionError] = useState<ActionError | null>(null);
-
-  // --- Template mode (PPT 编辑组件) ---
-  const [engineStatus, setEngineStatus] = useState<PptOfficeCliStatus | null>(null);
-  const [engineChecking, setEngineChecking] = useState(false);
-  const [engineDownloading, setEngineDownloading] = useState(false);
-  const [engineProgress, setEngineProgress] = useState(0);
-  const [templateUploading, setTemplateUploading] = useState(false);
-  const templateInputRef = useRef<HTMLInputElement>(null);
 
   // --- 从内容生成：内置版式 / 品牌 / 自定义模板选择 ---
   const [templateDialogOpen, setTemplateDialogOpen] = useState(false);
@@ -63,110 +55,10 @@ export function PptConfigPanel({ config, setConfig, phase, onStart }: PptConfigP
   const [apiBase, setApiBase] = useState("");
 
   const isTemplateMode = config.mode === "template";
-  const engineOk = Boolean(engineStatus?.ok);
 
   useEffect(() => {
     getApiBase().then(setApiBase).catch(() => {});
   }, []);
-
-  const refreshEngineStatus = useCallback(async (): Promise<boolean> => {
-    setEngineChecking(true);
-    try {
-      const status = await fetchPptOfficeCliCheck(token);
-      setEngineStatus(status);
-      return status.ok;
-    } catch {
-      setEngineStatus(null);
-      return false;
-    } finally {
-      setEngineChecking(false);
-    }
-  }, [token]);
-
-  useEffect(() => {
-    if (!isTemplateMode || readOnly || engineStatus || engineChecking) return;
-    refreshEngineStatus();
-  }, [isTemplateMode, readOnly, engineStatus, engineChecking, refreshEngineStatus]);
-
-  const handleDownloadEngine = useCallback(async () => {
-    if (engineDownloading) return;
-    setEngineDownloading(true);
-    setEngineProgress(0);
-    const timer = setInterval(() => {
-      setEngineProgress((prev) => Math.min(prev + 4, 90));
-    }, 300);
-    try {
-      const result = await downloadPptOfficeCli(token);
-      clearInterval(timer);
-      if (result.ok) {
-        setEngineProgress(100);
-        await refreshEngineStatus();
-      } else {
-        setEngineStatus((prev) =>
-          prev
-            ? { ...prev, ok: false, error: result.error ?? "下载失败" }
-            : { ok: false, version: null, path: null, error: result.error ?? "下载失败", supported: true },
-        );
-      }
-    } catch (e) {
-      clearInterval(timer);
-      setEngineStatus((prev) =>
-        prev
-          ? { ...prev, ok: false, error: e instanceof Error ? e.message : "下载失败" }
-          : { ok: false, version: null, path: null, error: "下载失败", supported: true },
-      );
-    } finally {
-      setEngineDownloading(false);
-    }
-  }, [engineDownloading, token, refreshEngineStatus]);
-
-  const addTemplateFile = useCallback(
-    async (paths: string[]) => {
-      const pptx = paths.find((p) => p.toLowerCase().endsWith(".pptx"));
-      if (!pptx) return;
-      setTemplateUploading(true);
-      setActionError(null);
-      try {
-        const res = await pptAddSources(token, [pptx]);
-        const uploaded = res.files.find((f) => f.path.toLowerCase().endsWith(".pptx"));
-        if (uploaded) {
-          setConfig((prev) => ({ ...prev, templateFile: uploaded.path }));
-        }
-      } catch (e) {
-        setActionError({
-          message: `模版上传失败：${e instanceof Error ? e.message : "未知错误"}`,
-          retry: () => void addTemplateFile(paths),
-        });
-      } finally {
-        setTemplateUploading(false);
-      }
-    },
-    [token, setConfig],
-  );
-
-  const handlePickTemplate = useCallback(async () => {
-    if (readOnly || templateUploading) return;
-    if (isTauri()) {
-      try {
-        const { open } = await import("@tauri-apps/plugin-dialog");
-        const selected = await open({
-          multiple: false,
-          directory: false,
-          title: "选择 PPT 模版",
-          filters: [{ name: "PowerPoint", extensions: ["pptx"] }],
-        });
-        if (!selected) return;
-        await addTemplateFile([String(selected)]);
-      } catch (e) {
-        setActionError({
-          message: `选择模版失败：${e instanceof Error ? e.message : "未知错误"}`,
-          retry: () => void handlePickTemplate(),
-        });
-      }
-    } else {
-      templateInputRef.current?.click();
-    }
-  }, [readOnly, templateUploading, addTemplateFile]);
 
   const uploadSourcePaths = useCallback(
     async (paths: string[]) => {
@@ -324,11 +216,9 @@ export function PptConfigPanel({ config, setConfig, phase, onStart }: PptConfigP
   const missingContent = !config.topic.trim() && config.sourceFiles.length === 0;
   const startDisabledReason = missingContent
     ? "请先填写主题或添加源文件"
-    : isTemplateMode && !engineOk
-      ? "请先下载 PPT 编辑组件"
-      : isTemplateMode && !config.templateFile
-        ? "请先上传 PPT 模版"
-        : null;
+    : isTemplateMode
+      ? "旧版 PPT 模板编辑模式已停止，无法继续。"
+      : null;
 
   return (
     <div className="flex h-full flex-col">
@@ -336,11 +226,10 @@ export function PptConfigPanel({ config, setConfig, phase, onStart }: PptConfigP
         {/* 制作方式 */}
         <section>
           <h3 className="mb-2 text-[12px] font-medium text-foreground">制作方式</h3>
-          <div className="grid grid-cols-2 gap-1">
+          <div className="grid grid-cols-1 gap-1">
             {(
               [
                 { value: "design", label: "从内容生成", title: "输入主题或上传素材，AI 从 0 生成高质量 PPT，可选内置版式" },
-                { value: "template", label: "沿用现有 PPT", title: "上传 .pptx，保留原有母版样式填充内容" },
               ] as Array<{ value: PptMode; label: string; title: string }>
             ).map((item) => (
               <button
@@ -363,175 +252,25 @@ export function PptConfigPanel({ config, setConfig, phase, onStart }: PptConfigP
           </div>
         </section>
 
-        {/* PPT 编辑组件 + PPT 模版（仅沿用现有 PPT 模式） */}
-        {isTemplateMode && (
-          <section>
-            <h3 className="mb-2 text-[12px] font-medium text-foreground">PPT 编辑组件</h3>
-            {engineChecking && !engineStatus ? (
-              <div className="flex items-center gap-1.5 rounded-lg border border-border/70 p-2 text-[11px] text-muted-foreground">
-                <Loader2 className="h-3.5 w-3.5 animate-spin" />
-                正在检测 PPT 编辑组件...
-              </div>
-            ) : engineOk ? (
-              <div className="flex items-center gap-1.5 rounded-lg border border-border/70 bg-muted/30 p-2 text-[11px]">
-                <CheckCircle2 className="h-3.5 w-3.5 shrink-0 text-emerald-500" />
-                <span className="min-w-0 flex-1 truncate text-foreground">
-                  PPT 编辑组件已就绪{engineStatus?.version ? `（${engineStatus.version}）` : ""}
-                </span>
-              </div>
-            ) : (
-              <div className="space-y-2 rounded-lg border border-border/70 p-2">
-                <div className="text-[11px] text-muted-foreground">
-                  {engineStatus && !engineStatus.supported
-                    ? "当前系统平台暂不支持沿用现有 PPT"
-                    : "沿用现有 PPT 需要 PPT 编辑组件（约 33 MB，仅首次下载）"}
-                </div>
-                {engineStatus?.error && engineStatus.supported && (
-                  <div className="text-[10px] text-destructive">{engineStatus.error}</div>
-                )}
-                {engineStatus?.supported !== false && (
-                  <>
-                    {engineDownloading && (
-                      <div className="h-1 w-full overflow-hidden rounded-full bg-muted">
-                        <div
-                          className="h-full rounded-full bg-primary transition-all"
-                          style={{ width: `${engineProgress}%` }}
-                        />
-                      </div>
-                    )}
-                    <Button
-                      variant="outline"
-                      size="sm"
-                      className="w-full text-[11px]"
-                      onClick={handleDownloadEngine}
-                      disabled={engineDownloading || readOnly}
-                    >
-                      {engineDownloading ? (
-                        <>
-                          <Loader2 className="mr-1.5 h-3.5 w-3.5 animate-spin" />
-                          正在下载 {engineProgress}%
-                        </>
-                      ) : (
-                        <>
-                          <Download className="mr-1.5 h-3.5 w-3.5" />
-                          {engineStatus?.error ? "重试下载" : "下载 PPT 编辑组件"}
-                        </>
-                      )}
-                    </Button>
-                  </>
-                )}
-              </div>
-            )}
-          </section>
-        )}
-
-        {isTemplateMode && (
-          <section>
-            <h3 className="mb-2 text-[12px] font-medium text-foreground">PPT 模版</h3>
-            <input
-              ref={templateInputRef}
-              type="file"
-              className="hidden"
-              accept=".pptx"
-              onChange={async (e) => {
-                const file = e.target.files?.[0];
-                e.target.value = "";
-                if (!file) return;
-                const path = (file as File & { path?: string }).path;
-                if (isTauri() && typeof path === "string") {
-                  await addTemplateFile([path]);
-                } else {
-                  setTemplateUploading(true);
-                  setActionError(null);
-                  const reader = new FileReader();
-                  reader.onload = () => {
-                    const data_url = reader.result as string;
-                    let handled = false;
-                    const fail = (message: string) => {
-                      if (handled) return;
-                      handled = true;
-                      clearTimeout(timeout);
-                      unsub();
-                      setTemplateUploading(false);
-                      setActionError({ message, retry: null });
-                    };
-                    const timeout = setTimeout(() => {
-                      fail("模版上传超时，请重试");
-                    }, 30_000);
-                    const unsub = client.onPptUploadResult((result) => {
-                      if (handled) return;
-                      handled = true;
-                      clearTimeout(timeout);
-                      unsub();
-                      setTemplateUploading(false);
-                      const uploaded = result.files?.find((f) =>
-                        f.path.toLowerCase().endsWith(".pptx"),
-                      );
-                      if (result.ok && uploaded) {
-                        setConfig((prev) => ({ ...prev, templateFile: uploaded.path }));
-                      } else {
-                        setActionError({
-                          message: `模版上传失败：${result.error ?? "未知错误"}`,
-                          retry: null,
-                        });
-                      }
-                    });
-                    client.sendPptUpload([{ name: file.name, data_url }]);
-                  };
-                  reader.onerror = () => {
-                    setTemplateUploading(false);
-                    setActionError({ message: "模版读取失败，请重试", retry: null });
-                  };
-                  reader.readAsDataURL(file);
-                }
-              }}
-            />
-            {config.templateFile ? (
-              <div className="flex items-center gap-1.5 rounded-md bg-muted/50 px-2 py-1.5 text-[11px]">
-                <Presentation className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
-                <span className="min-w-0 flex-1 truncate">{config.templateFile}</span>
-                {!readOnly && (
-                  <button
-                    type="button"
-                    aria-label="清除已上传的模版"
-                    className="shrink-0 text-muted-foreground hover:text-foreground"
-                    onClick={() => setConfig((prev) => ({ ...prev, templateFile: null }))}
-                  >
-                    <X className="h-3 w-3" />
-                  </button>
-                )}
-              </div>
-            ) : (
-              <button
+        {isTemplateMode ? (
+          <section
+            role="status"
+            className="space-y-2 rounded-lg border border-border/70 bg-muted/30 p-3 text-[11px] text-muted-foreground"
+          >
+            <p className="text-foreground">旧版 PPT 模板编辑模式已停止。</p>
+            <p>当前不会下载或运行旧版编辑组件，也不会自动切换到普通生成。</p>
+            {!readOnly ? (
+              <Button
                 type="button"
-                className={cn(
-                  "flex min-h-[60px] w-full items-center justify-center rounded-lg border border-dashed text-[11px] transition-colors",
-                  templateUploading
-                    ? "border-border/50 bg-muted/20 text-muted-foreground"
-                    : "border-border/70 text-muted-foreground hover:border-border hover:bg-muted/30",
-                  (!engineOk || readOnly) && "cursor-not-allowed opacity-50",
-                )}
-                onClick={handlePickTemplate}
-                disabled={!engineOk || readOnly || templateUploading}
+                variant="outline"
+                size="sm"
+                onClick={() => setConfig((prev) => ({ ...prev, mode: "design" }))}
               >
-                {templateUploading ? (
-                  <>
-                    <Loader2 className="mr-1.5 h-3.5 w-3.5 animate-spin" />
-                    正在上传模版...
-                  </>
-                ) : (
-                  <>
-                    <Upload className="mr-1.5 h-3.5 w-3.5" />
-                    选择 .pptx 模版文件
-                  </>
-                )}
-              </button>
-            )}
-            <p className="mt-1 text-[10px] text-muted-foreground">
-              保留模版的母版、版式与配色，AI 仅填充内容
-            </p>
+                切换到“从内容生成”
+              </Button>
+            ) : null}
           </section>
-        )}
+        ) : null}
 
         {/* 版式选择（仅从内容生成模式） */}
         {!isTemplateMode && (
@@ -899,7 +638,7 @@ export function PptConfigPanel({ config, setConfig, phase, onStart }: PptConfigP
             className="w-full"
             disabled={
               missingContent ||
-              (isTemplateMode && (!engineOk || !config.templateFile))
+              isTemplateMode
             }
             onClick={onStart}
           >

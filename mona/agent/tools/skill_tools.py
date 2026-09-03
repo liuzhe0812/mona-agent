@@ -6,16 +6,22 @@ builtin skills dir.
 The _FsTool hard boundary prevents direct file access, so agents must use
 these tools.
 """
+
 from __future__ import annotations
 
+import asyncio
+import json
+import os
+import shlex
 import shutil
-import subprocess
+import sys
 from pathlib import Path
 from typing import Any
 
 from mona.agent.partners import MONA_AGENT_ID, normalize_agent_id
 from mona.agent.tools.base import Tool
 from mona.agent.tools.schema import (
+    IntegerSchema,
     StringSchema,
     tool_parameters_schema,
 )
@@ -112,6 +118,7 @@ class SkillReadTool(Tool):
             return f"Error: skill '{name}' not found."
         if self._track_usage:
             from mona.agent import skill_usage
+
             skill_usage.bump_access(name, agent_id=self._agent_id)
         return content
 
@@ -209,13 +216,26 @@ class SkillScriptRunTool(Tool):
 
     _scopes = {"core", "subagent", "memory"}
 
-    def __init__(self, *, track_usage: bool = True, agent_id: str = MONA_AGENT_ID) -> None:
+    def __init__(
+        self,
+        *,
+        track_usage: bool = True,
+        agent_id: str = MONA_AGENT_ID,
+        workspace: str | Path | None = None,
+        agent_environment: Any | None = None,
+    ) -> None:
         self._track_usage = track_usage
         self._agent_id = _coerce_agent_id(agent_id)
+        self._workspace = Path(workspace).resolve() if workspace else None
+        self._agent_environment = agent_environment
 
     @classmethod
     def create(cls, ctx: Any) -> Tool:
-        return cls(agent_id=_agent_id_from_ctx(ctx))
+        return cls(
+            agent_id=_agent_id_from_ctx(ctx),
+            workspace=getattr(ctx, "workspace", None),
+            agent_environment=getattr(ctx, "agent_environment", None),
+        )
 
     @property
     def name(self) -> str:
@@ -224,8 +244,8 @@ class SkillScriptRunTool(Tool):
     @property
     def description(self) -> str:
         return (
-            "Execute a Python script bundled with a skill. "
-            "Scripts live in <skill_dir>/scripts/*.py. "
+            "Execute a Python, Node .mjs, or R script bundled with a skill. "
+            "Scripts live in <skill_dir>/scripts/. "
             "Use this instead of `exec` for skill-provided scripts — it resolves "
             "the skill directory automatically and runs in a controlled manner."
         )
@@ -242,6 +262,12 @@ class SkillScriptRunTool(Tool):
             args=StringSchema(
                 description="Arguments to pass to the script (as a single string).",
             ),
+            timeout_seconds=IntegerSchema(
+                120,
+                description="Maximum runtime in seconds; raise only for a documented long-running skill workflow.",
+                minimum=1,
+                maximum=1800,
+            ),
             required=["skill", "script"],
         )
 
@@ -250,6 +276,7 @@ class SkillScriptRunTool(Tool):
         skill: str | None = None,
         script: str | None = None,
         args: str = "",
+        timeout_seconds: int = 120,
         **kwargs: Any,
     ) -> str:
         if not skill or not script:
@@ -258,7 +285,8 @@ class SkillScriptRunTool(Tool):
         if "/" in script or "\\" in script or ".." in script:
             return f"Error: invalid script name '{script}'."
         # Find the skill directory (agent-private > package > builtin)
-        skill_dir = _skills_loader(self._agent_id).resolve_skill_dir(skill)
+        loader = _skills_loader(self._agent_id)
+        skill_dir = loader.resolve_skill_dir(skill)
         if skill_dir is None:
             return f"Error: skill '{skill}' not found."
         from mona.agent.agent_management import is_skill_script_enabled
@@ -274,31 +302,74 @@ class SkillScriptRunTool(Tool):
         if not script_path.exists():
             return f"Error: script '{script}' not found in skill '{skill}' (expected at {script_path})."
         try:
-            import os
-            import sys
             env = os.environ.copy()
             env["PYTHONUTF8"] = "1"
-            cmd = [sys.executable, str(script_path)]
+            if self._workspace is not None:
+                env["MONA_ACTIVE_WORKSPACE"] = str(self._workspace)
+            suffix = script_path.suffix.lower()
+            from mona.config.paths import get_managed_runtimes_dir
+            from mona.runtime.agent_env import (
+                AgentEnvironmentManager,
+                AgentRuntimeError,
+            )
+            from mona.runtime.manager import RuntimeManagerError
+
+            manager = self._agent_environment or AgentEnvironmentManager(get_managed_runtimes_dir())
+            try:
+                runtime_spec = loader.get_runtime_spec(skill)
+                resolution = await manager.prepare_for_skill(
+                    suffix,
+                    skill_dir,
+                    runtime_spec,
+                )
+            except (AgentRuntimeError, RuntimeManagerError, ValueError) as exc:
+                return json.dumps(
+                    {
+                        "status": "runtime_broken",
+                        "skill": skill,
+                        "error": str(exc),
+                    },
+                    ensure_ascii=False,
+                )
+            runner = str(resolution.executable)
+            env.update(resolution.env)
+            cmd = [runner, *resolution.prefix_args, str(script_path)]
             if args:
-                cmd.extend(args.split())
-            result = subprocess.run(
-                cmd,
-                capture_output=True,
-                text=True,
-                timeout=120,
+                cmd.extend(shlex.split(args))
+            spawn_kwargs: dict[str, Any] = {}
+            if sys.platform != "win32":
+                spawn_kwargs["start_new_session"] = True
+            process = await asyncio.create_subprocess_exec(
+                *cmd,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
                 cwd=str(skill_dir),
                 env=env,
+                **spawn_kwargs,
             )
-            output = result.stdout
-            if result.stderr:
-                output += f"\n[stderr]\n{result.stderr}"
-            output += f"\n[exit code: {result.returncode}]"
+            try:
+                stdout, stderr = await asyncio.wait_for(
+                    process.communicate(), timeout=timeout_seconds
+                )
+            except asyncio.TimeoutError:
+                from mona.agent.tools.shell import kill_process_tree
+
+                await kill_process_tree(process)
+                return f"Error: script '{script}' timed out after {timeout_seconds}s."
+            except asyncio.CancelledError:
+                from mona.agent.tools.shell import kill_process_tree
+
+                await kill_process_tree(process)
+                raise
+            output = stdout.decode("utf-8", errors="replace")
+            if stderr:
+                output += f"\n[stderr]\n{stderr.decode('utf-8', errors='replace')}"
+            output += f"\n[exit code: {process.returncode}]"
             if self._track_usage:
                 from mona.agent import skill_usage
+
                 skill_usage.bump_access(skill, agent_id=self._agent_id)
-            return output.strip() or f"(script completed with exit code {result.returncode})"
-        except subprocess.TimeoutExpired:
-            return f"Error: script '{script}' timed out after 120s."
+            return output.strip() or f"(script completed with exit code {process.returncode})"
         except Exception as e:
             return f"Error running script '{script}': {e}"
 
@@ -366,6 +437,7 @@ class SkillReferenceReadTool(Tool):
             content = ref_file.read_text(encoding="utf-8")
             if self._track_usage:
                 from mona.agent import skill_usage
+
                 skill_usage.bump_access(skill, agent_id=self._agent_id)
             return content
         except Exception as e:
@@ -427,7 +499,9 @@ class SkillAssetCopyTool(Tool):
             return f"Error: skill '{skill}' not found."
         asset_file = skill_dir / "assets" / asset
         if not asset_file.exists():
-            return f"Error: asset '{asset}' not found in skill '{skill}' (expected at {asset_file})."
+            return (
+                f"Error: asset '{asset}' not found in skill '{skill}' (expected at {asset_file})."
+            )
         # Resolve destination (allow absolute or relative to the active
         # session workspace). Using the contextvar-aware helper ensures that
         # normal sessions copy assets into the active Agent output rather than
@@ -436,6 +510,7 @@ class SkillAssetCopyTool(Tool):
         if not dest_path.is_absolute():
             from mona.agent.tools.path_utils import get_current_workspace
             from mona.config.paths import get_workspace_path
+
             active_ws = get_current_workspace(get_workspace_path())
             dest_path = active_ws / dest_path
         try:
@@ -443,6 +518,7 @@ class SkillAssetCopyTool(Tool):
             shutil.copy2(asset_file, dest_path)
             if self._track_usage:
                 from mona.agent import skill_usage
+
                 skill_usage.bump_access(skill, agent_id=self._agent_id)
             return f"Successfully copied {asset_file} to {dest_path}."
         except Exception as e:

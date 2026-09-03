@@ -9,20 +9,18 @@ metadata:
   mona:
     emoji: "📊"
     always: false
-    requires:
-      bins: ["python"]
 ---
 
 # Mona PPT Skill
 
 Pipeline dispatcher for Mona PPT. This file owns execution discipline, step gates, and reference routing. Detailed instructions live in references and are loaded only when the step needs them.
 
-Two tracks exist:
+Run every bundled Python helper through `skill_script_run` with
+`skill="mona-ppt"`; never execute Skill files through `exec` or system Python.
 
-- **Track A (default)**: source -> project -> optional template -> Strategist -> optional image acquisition -> Executor SVG -> quality gate -> `svg_to_pptx.py` export.
-- **Track B (template edit)**: user supplies a `.pptx` template file to fill in directly -> `references/template-edit-mode.md` (officecli track, no SVG pipeline).
-
-When the prompt says "模版编辑模式" or names `references/template-edit-mode.md`, follow Track B only and ignore every Track A step below.
+Use the standard source -> project -> optional visual reference -> Strategist ->
+Executor SVG -> quality gate -> `svg_to_pptx.py` export pipeline. The former
+OfficeCLI template-edit track is retired and must not be selected for new tasks.
 
 ## Core Contract
 
@@ -43,7 +41,7 @@ When the prompt says "模版编辑模式" or names `references/template-edit-mod
 
 - `${SKILL_DIR}` resolves to `<workspace>/mona/skills/mona-ppt/`.
 - Create generated projects under `<workspace>/ppt_projects/` with `--dir ppt_projects`.
-- On Windows, if `python3` fails, rerun the same command with `python`.
+- Do not select a Python executable; `skill_script_run` always supplies Mona's managed environment.
 - Reply in the user's language unless explicitly asked otherwise.
 - `design_spec.md` must keep the English section structure and field names from `templates/design_spec_reference.md`; values may use the user's language.
 - This is a PPT workflow, not a generic coding task. Do not create branches, worktrees, tests, or app scaffolding by default.

@@ -10,6 +10,7 @@ import { PptConfigPanel } from "./PptConfigPanel";
 // --- API mocks ---
 const pptAddSources = vi.fn();
 const fetchPptOfficeCliCheck = vi.fn();
+const downloadPptOfficeCli = vi.fn();
 
 vi.mock("@/lib/api", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@/lib/api")>();
@@ -18,7 +19,7 @@ vi.mock("@/lib/api", async (importOriginal) => {
     getApiBase: vi.fn().mockResolvedValue("http://api"),
     pptAddSources: (...args: unknown[]) => pptAddSources(...args),
     fetchPptOfficeCliCheck: (...args: unknown[]) => fetchPptOfficeCliCheck(...args),
-    downloadPptOfficeCli: vi.fn(),
+    downloadPptOfficeCli: (...args: unknown[]) => downloadPptOfficeCli(...args),
   };
 });
 
@@ -101,13 +102,6 @@ describe("PptConfigPanel", () => {
     dialogProps = null;
     harnessConfig = null;
     vi.mocked(isTauri).mockReturnValue(false);
-    fetchPptOfficeCliCheck.mockResolvedValue({
-      ok: true,
-      version: "1.2.3",
-      path: "/x",
-      error: null,
-      supported: true,
-    });
   });
 
   it("可从配置页打开模板选择器，选择后写入 templateKey/templateKind", async () => {
@@ -125,17 +119,23 @@ describe("PptConfigPanel", () => {
     expect(screen.getByText("内置版式")).toBeTruthy();
   });
 
-  it("切换到「沿用现有 PPT」后显示模版上传入口，不再显示内置版式入口", async () => {
+  it("不再提供旧版 PPT 模板编辑入口，也不触发 OfficeCLI 接口", () => {
     render(<Harness />);
 
-    fireEvent.click(screen.getByRole("button", { name: "沿用现有 PPT" }));
+    expect(screen.queryByRole("button", { name: "沿用现有 PPT" })).toBeNull();
+    expect(fetchPptOfficeCliCheck).not.toHaveBeenCalled();
+    expect(downloadPptOfficeCli).not.toHaveBeenCalled();
+  });
 
-    // 引擎检测完成后显示模版上传入口
-    await screen.findByText("PPT 编辑组件已就绪（1.2.3）");
-    expect(screen.getByRole("button", { name: /选择 \.pptx 模版文件/ })).toBeTruthy();
-    // 内置版式入口消失
-    expect(screen.queryByText(/选择内置版式或品牌模板/)).toBeNull();
-    expect(harnessConfig?.mode).toBe("template");
+  it("旧模板状态显示不可继续提示，且需要用户明确切换模式", () => {
+    render(<Harness initial={{ mode: "template", topic: "季度总结" }} />);
+
+    expect(screen.getByRole("status")).toHaveTextContent("旧版 PPT 模板编辑模式已停止");
+    expect(screen.getByRole("button", { name: "开始生成" })).toBeDisabled();
+    expect(screen.getByText("旧版 PPT 模板编辑模式已停止，无法继续。")).toBeTruthy();
+
+    fireEvent.click(screen.getByRole("button", { name: /切换到“从内容生成”/ }));
+    expect(harnessConfig?.mode).toBe("design");
   });
 
   it("无主题且无来源文件时主按钮不可用，并给出原因", () => {

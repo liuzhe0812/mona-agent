@@ -1,0 +1,134 @@
+{
+  "schemaVersion": 1,
+  "sources": [
+    {
+      "id": "python-base",
+      "version": "3.13.15",
+      "filename": "python-3.13.15-amd64.zip",
+      "size": 34324622,
+      "sha256": "6479223746cdfb79d25865110d6f524ac98de081324e119af1dc3ae36bddc7a5",
+      "urls": [
+        "https://repo.huaweicloud.com/python/3.13.15/python-3.13.15-amd64.zip",
+        "https://www.python.org/ftp/python/3.13.15/python-3.13.15-amd64.zip"
+      ]
+    },
+    {
+      "id": "node-base",
+      "version": "22.23.2",
+      "filename": "node-v22.23.2-win-x64.zip",
+      "size": 35683585,
+      "sha256": "1177b4137ba5adaa56354ae40f1080c7450e8ae09cecb47da459d1c52ac99f97",
+      "urls": [
+        "https://npmmirror.com/mirrors/node/v22.23.2/node-v22.23.2-win-x64.zip",
+        "https://nodejs.org/dist/v22.23.2/node-v22.23.2-win-x64.zip"
+      ]
+    },
+    {
+      "id": "ffmpeg",
+      "version": "6.1.1",
+      "filename": "ffmpeg-win32-x64.gz",
+      "size": 29581307,
+      "sha256": "8883a3dffbd0a16cf4ef95206ea05283f78908dbfb118f73c83f4951dcc06d77",
+      "urls": [
+        "https://dl.mona.lzfun.vip/ffmpeg/v6.1.1/ffmpeg-win32-x64.gz",
+        "https://cdn.npmmirror.com/binaries/ffmpeg-static/b6.1.1/ffmpeg-win32-x64.gz",
+        "https://github.com/eugeneware/ffmpeg-static/releases/download/b6.1.1/ffmpeg-win32-x64.gz"
+      ]
+    },
+    {
+      "id": "ffmpeg-license",
+      "version": "6.1.1",
+      "filename": "ffmpeg-win32-x64.LICENSE",
+      "size": 35147,
+      "sha256": "8ceb4b9ee5adedde47b31e975c1d90c73ad27b6b165a1dcd80c7c545eb65b903",
+      "urls": [
+        "https://dl.mona.lzfun.vip/ffmpeg/v6.1.1/win32-x64.LICENSE",
+        "https://cdn.npmmirror.com/binaries/ffmpeg-static/b6.1.1/win32-x64.LICENSE",
+        "https://github.com/eugeneware/ffmpeg-static/releases/download/b6.1.1/win32-x64.LICENSE"
+      ]
+    },
+    {
+      "id": "ffprobe",
+      "version": "6.1",
+      "filename": "ffprobe-6.1-win-64.zip",
+      "size": 54617320,
+      "sha256": "3c0ea2856cf65edff23a2d4e76b1ceabba65fe8b1bed684ee2eeba24aa9427c3",
+      "urls": [
+        "https://github.com/ffbinaries/ffbinaries-prebuilt/releases/download/v6.1/ffprobe-6.1-win-64.zip"
+      ]
+    },
+    {
+      "id": "yt-dlp",
+      "version": "2026.07.04",
+      "filename": "yt-dlp-2026.07.04.exe",
+      "size": 18226085,
+      "sha256": "52fe3c26dcf71fbdc85b528589020bb0b8e383155cfa81b64dd447bbe35e24b8",
+      "urls": [
+        "https://github.com/yt-dlp/yt-dlp/releases/download/2026.07.04/yt-dlp.exe"
+      ]
+    },
+    {
+      "id": "pandoc",
+      "version": "3.10.1",
+      "filename": "pandoc-3.10.1-windows-x86_64.zip",
+      "size": 41675076,
+      "sha256": "4725a1883e2171c2e181e6fd45003acb59ca4e9cbe031fdd3b79ef0d697d36aa",
+      "urls": [
+        "https://dl.mona.lzfun.vip/pandoc/v3.10.1/pandoc-3.10.1-windows-x86_64.zip",
+        "https://github.com/jgm/pandoc/releases/download/3.10.1/pandoc-3.10.1-windows-x86_64.zip"
+      ]
+    },
+    {
+      "id": "asr-sensevoice-runtime",
+      "version": "0.2.6",
+      "filename": "funasr-llamacpp-windows-x64.zip",
+      "size": 4967457,
+      "sha256": "f6a73a548413ba9fbaf2145263ea66ec53cbdad1fb11790dbeeee493e339492e",
+      "urls": [
+        "https://github.com/modelscope/FunASR/releases/download/runtime-llamacpp-v0.2.6/funasr-llamacpp-windows-x64.zip"
+      ]
+    },
+    {
+      "id": "asr-sensevoice-model",
+      "version": "6f13884973ec2d74b57d2ffdb65f67c95614786f",
+      "filename": "sensevoice-small-q8.gguf",
+      "size": 254208320,
+      "sha256": "4ae45c94422de949b387e2e0fb10d7e14e4c42c69db30c3444ecc7d4b844b7c5",
+      "urls": [
+        "https://modelscope.cn/models/FunAudioLLM/SenseVoiceSmall-GGUF/resolve/6f13884973ec2d74b57d2ffdb65f67c95614786f/sensevoice-small-q8.gguf",
+        "https://www.modelscope.cn/models/FunAudioLLM/SenseVoiceSmall-GGUF/resolve/6f13884973ec2d74b57d2ffdb65f67c95614786f/sensevoice-small-q8.gguf"
+      ]
+    },
+    {
+      "id": "asr-sensevoice-vad",
+      "version": "f04fc3013641c8d59c156e2cbf171c1ad596f74d",
+      "filename": "fsmn-vad.gguf",
+      "size": 1720512,
+      "sha256": "1270f2559c495f4e7b6e739541151027d360761a3fda43fc147034f5719f5479",
+      "urls": [
+        "https://modelscope.cn/models/FunAudioLLM/FSMN-VAD-GGUF/resolve/f04fc3013641c8d59c156e2cbf171c1ad596f74d/fsmn-vad.gguf",
+        "https://www.modelscope.cn/models/FunAudioLLM/FSMN-VAD-GGUF/resolve/f04fc3013641c8d59c156e2cbf171c1ad596f74d/fsmn-vad.gguf"
+      ]
+    },
+    {
+      "id": "cua-driver",
+      "version": "0.23.2",
+      "filename": "cua-driver-rs-0.23.2-windows-x86_64-binary.zip",
+      "size": 27635699,
+      "sha256": "27a41831d5dda71082b58154ff87966a9ad8131ce66e8060da2d860558655c13",
+      "urls": [
+        "https://github.com/trycua/cua/releases/download/cua-driver-rs-v0.23.2/cua-driver-rs-0.23.2-windows-x86_64-binary.zip"
+      ]
+    },
+    {
+      "id": "westock-data",
+      "version": "1.0.5",
+      "filename": "westock-data-skillhub-1.0.5.tgz",
+      "size": 1466401,
+      "sha256": "4da669a18b1ef78b212d9c76add703653b2edd2c3dd11ce9dc46ee811c95e7c7",
+      "urls": [
+        "https://registry.npmjs.org/westock-data-skillhub/-/westock-data-skillhub-1.0.5.tgz"
+      ]
+    }
+  ]
+}

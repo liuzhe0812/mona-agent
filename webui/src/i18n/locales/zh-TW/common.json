@@ -123,14 +123,16 @@
     },
     "nav": {
       "general": "一般",
+      "resources": "功能資源",
       "byok": "BYOK",
-      "overview": "Overview",
+      "billing": "餘額與充值",
+      "usage": "用量統計",
       "appearance": "Appearance",
       "models": "Models",
       "providers": "Providers",
       "image": "Image",
-      "web": "搜尋",
-      "runtime": "Runtime"
+      "models_providers": "模型設定",
+      "advanced": "進階"
     },
     "aiModels": {
       "tabsAria": "模型設定類型",
@@ -139,6 +141,66 @@
       "video": "影片模型",
       "tts": "語音合成"
     },
+    "shortcuts": {
+      "messageInput": "訊息輸入",
+      "sendMessage": "傳送訊息",
+      "sendMessageHelp": "選擇在訊息輸入框中用於傳送的按鍵。",
+      "enterToSend": "Enter",
+      "ctrlEnterToSend": "Ctrl + Enter"
+    },
+    "automation": {
+      "title": "自動化能力",
+      "loading": "正在讀取自動化能力狀態…",
+      "loadError": "自動化能力狀態暫時無法使用",
+      "updateError": "無法更新自動化設定",
+      "cancelError": "無法取消電腦操作自動化驅動程式下載",
+      "permissionError": "無法完成系統授權",
+      "computerError": "電腦操作自動化暫時無法使用",
+      "browser": {
+        "title": "瀏覽器自動操作",
+        "description": "允許 Mona 在內建瀏覽器中讀取頁面並執行點擊、輸入等操作。",
+        "toggle": "瀏覽器自動操作"
+      },
+      "computer": {
+        "title": "電腦操作自動化",
+        "description": "允許 Mona 觀察並操作電腦上的其他應用程式。首次啟用需要下載驅動程式並完成系統授權。",
+        "driverSize": "（驅動程式約 {{size}}）",
+        "toggle": "電腦操作自動化",
+        "downloading": "正在下載電腦操作自動化驅動程式",
+        "progress": "電腦操作自動化驅動程式下載進度"
+      },
+      "cancel": "取消下載",
+      "unsupported": {
+        "title": "目前系統不支援電腦操作自動化",
+        "description": "此裝置暫時無法使用通用電腦操作。"
+      },
+      "degraded": {
+        "title": "部分操作能力受限",
+        "description": "基礎電腦操作仍可使用；部分依賴輔助使用權限的精細操作暫時無法使用。"
+      },
+      "authorization": {
+        "title": "需要系統授權",
+        "description": "請在系統設定中允許螢幕錄製和輔助使用權限，然後點擊授權。"
+      },
+      "authorize": "授權",
+      "error": {
+        "title": "電腦操作自動化發生異常"
+      },
+      "retry": "重試",
+      "notInstalled": {
+        "title": "尚未安裝電腦操作自動化",
+        "description": "首次啟用需要下載約 {{size}}。"
+      },
+      "download": "下載驅動程式",
+      "states": {
+        "disabled": "已關閉",
+        "notInstalled": "未安裝",
+        "downloading": "下載中",
+        "pendingAuthorization": "待授權",
+        "available": "可用",
+        "error": "異常"
+      }
+    },
     "sections": {
       "interface": "介面",
       "ai": "AI",
@@ -146,9 +208,8 @@
       "status": "Status",
       "localPreferences": "Local preferences",
       "webSearch": "Web search",
-      "webBehavior": "Behavior",
-      "identity": "Identity",
-      "safety": "Safety"
+      "runtimeParameters": "執行參數",
+      "capabilities": "Capabilities"
     },
     "rows": {
       "theme": "主題",
@@ -156,27 +217,15 @@
       "provider": "提供者",
       "model": "模型",
       "restart": "重新啟動 mona",
-      "configPath": "設定檔路徑",
-      "gateway": "Gateway",
-      "restartState": "Restart state",
       "density": "Density",
       "activityMode": "Activity detail",
       "codeWrap": "Code wrapping",
       "maxResults": "Max results",
       "timeout": "Timeout",
       "jinaReader": "Jina reader",
-      "botName": "Bot name",
-      "botIcon": "Bot icon",
       "timezone": "Timezone",
       "toolHintMaxLength": "Tool hint length",
       "workspacePath": "Workspace path",
-      "heartbeat": "Heartbeat",
-      "dream": "Dream",
-      "unifiedSession": "Unified session",
-      "restrictWorkspace": "Restrict to workspace",
-      "execTool": "Exec tool",
-      "execSandbox": "Exec sandbox",
-      "ssrfWhitelist": "SSRF whitelist",
       "configurationDocs": "Configuration docs"
     },
     "help": {
@@ -184,15 +233,12 @@
       "language": "選擇 WebUI 使用的語言。",
       "provider": "選擇新模型請求使用的服務提供者。",
       "model": "設定 mona 預設使用的模型名稱。",
-      "configPath": "目前閘道正在使用的設定檔。",
       "density": "Stored only in this browser.",
       "activityMode": "Choose how much agent activity chrome to show by default.",
       "codeWrap": "Keep long code lines readable on smaller screens.",
       "maxResults": "Results returned by each web_search call.",
       "timeout": "Seconds before a search provider request times out.",
       "jinaReader": "Use Jina Reader for web_fetch when available.",
-      "botName": "Shown in runtime surfaces that use the configured bot identity.",
-      "botIcon": "Short emoji or text shown beside the bot name.",
       "timezone": "IANA timezone used by runtime context and schedules.",
       "toolHintMaxLength": "Maximum characters shown in tool progress hints."
     },
@@ -310,12 +356,19 @@
     "hideArchived": "隱藏封存",
     "delete": "刪除",
     "newChat": "新增對話",
+    "createConversation": "建立對話",
+    "chooseAgent": "選擇 Agent",
+    "searchAgents": "搜尋 Agent",
+    "noMatchingAgents": "沒有符合的 Agent",
     "agentSettings": "Agent 設定",
+    "agentSettingsFor": "Agent 設定：{{name}}",
+    "expertLibrary": "召喚專家",
     "createMenu": "建立",
     "chatWith": "與 {{name}} 聊聊",
     "newRoom": "新增協作群組",
     "groups": {
       "pinned": "置頂",
+      "recent": "最近",
       "conversations": "會話",
       "all": "對話",
       "today": "今天",
@@ -327,6 +380,113 @@
     "moveToProject": "移動到專案…",
     "newProjectChat": "在專案中新建會話",
     "bindProjectFolder": "綁定專案目錄…"
+  },
+  "managedRuntime": {
+    "title": "功能資源",
+    "description": "各項功能所需的資源都在這裡統一管理，預設在需要時下載。",
+    "refresh": "重新整理",
+    "loading": "正在讀取功能資源狀態…",
+    "loadError": "執行環境狀態暫時無法使用",
+    "installError": "功能資源準備失敗",
+    "cancelError": "無法取消資源下載",
+    "updateError": "無法更新下載設定",
+    "cleanupError": "無法清理功能資源",
+    "installed": "已安裝 {{version}}",
+    "installing": "正在下載並驗證 · {{percent}}%",
+    "install": "安裝",
+    "update": "更新",
+    "repair": "修復",
+    "continue": "繼續",
+    "cancel": "取消",
+    "cleanup": "清理快取",
+    "cleanupLegacy": "清理舊資源",
+    "cleaning": "正在清理…",
+    "autoDownload": "需要時自動下載",
+    "autoDownloadDescription": "首次使用功能時自動準備所需資源",
+    "migration": {
+      "completed": "舊資源已整理完成，可清理約 {{size}}。",
+      "partial": "仍在使用舊資源，下次啟動會繼續整理。",
+      "repair": "部分功能資源需要修復。"
+    },
+    "ready": "可用",
+    "components": {
+      "python": {
+        "name": "Python",
+        "description": "Agent 共用 Python 工作環境；使用者專案仍使用自己的 .venv"
+      },
+    "node": {
+      "name": "Node.js",
+      "description": "Agent 共用 Node.js；使用者專案仍使用自己的 node_modules"
+    },
+    "ffmpeg": {
+      "name": "影片處理",
+      "description": "用於影片轉碼、音訊處理和重點影格擷取"
+    },
+    "yt_dlp": {
+      "name": "線上影片讀取",
+      "description": "用於讀取支援的影片頁面和媒體內容"
+    },
+    "asr": {
+      "name": "語音轉寫",
+      "description": "影片沒有字幕時，在本機產生文字稿"
+    },
+    "pandoc": {
+      "name": "文件解析",
+      "description": "用於匯入 Word、PPT、ODT、RTF 和 EPUB"
+    },
+    "computer_use": {
+      "name": "電腦操作",
+      "description": "用於觀察並操作電腦上的其他應用程式"
+    },
+    "westock": {
+      "name": "股票資料支援",
+      "description": "用於補充股票研究所需的結構化資料"
+    }
+    }
+  },
+  "experts": {
+    "title": "召喚專家",
+    "description": "選擇適合目前任務的專家，所需能力會按需準備。",
+    "search": "搜尋專家",
+    "loading": "正在取得專家清單…",
+    "empty": "沒有相符的官方專家",
+    "offlineCache": "網路無法使用，正在顯示最近一次取得的專家清單。",
+    "catalogError": "暫時無法取得專家清單",
+    "unavailable": "暫無可用的官方專家",
+    "custom": "自訂專家",
+    "customDescription": "設定專家的名稱、擅長領域和工作要求。",
+    "customAction": "新增",
+    "customTitle": "自訂專家",
+    "customName": "專家名稱",
+    "customNamePlaceholder": "例如：合約審閱專家",
+    "customExpertise": "擅長領域",
+    "customExpertisePlaceholder": "簡要說明這個專家擅長處理什麼",
+    "customInstructions": "工作要求",
+    "customInstructionsPlaceholder": "說明它應如何分析、回答以及需要遵守的規則",
+    "customCreating": "正在建立…",
+    "customCreateAndSummon": "建立並召喚",
+    "customCreateError": "無法建立自訂專家",
+    "installError": "專家安裝失敗",
+    "cancelError": "無法取消安裝",
+    "retry": "重試",
+    "installed": "已安裝",
+    "packageInfo": "專家包 {{size}} · 需準備 {{count}} 項擴充能力",
+    "install": "下載並使用",
+    "update": "更新",
+    "start": "開始對話",
+    "cancel": "取消",
+    "historyNeedsInstall": "此歷史對話的專家尚未安裝；記憶與個人設定仍然保留。",
+    "reinstall": "重新安裝",
+    "stages": {
+      "queued": "等待安裝",
+      "catalog": "正在核對版本",
+      "downloading": "正在下載專家套件",
+      "verifying": "正在驗證檔案",
+      "runtime": "正在準備擴充能力",
+      "ready": "安裝完成",
+      "failed": "安裝失敗",
+      "cancelled": "已取消"
+    }
   },
   "deleteConfirm": {
     "title": "刪除這個對話？",
@@ -347,6 +507,59 @@
       "members": "成員（{{count}}）"
     },
     "emptyHint": "像群組聊天一樣傳送訊息開始協作；工作流程的執行過程也會顯示在這裡。",
+    "discussion": {
+      "launch": "發起議題",
+      "title": "發起議題",
+      "description": "讓群聊成員圍繞同一議題輪流辯論或自由討論。",
+      "topic": "議題",
+      "topicPlaceholder": "例如：新產品應該優先追求成長，還是先控制成本？",
+      "mode": "討論方式",
+      "debate": "觀點辯論",
+      "debateHint": "為每位 Agent 指定立場，按順序交鋒。",
+      "discussion": "自由討論",
+      "discussionHint": "成員從各自專業角色出發補充和回應。",
+      "participants": "參與成員",
+      "positionPlaceholder": "為 {{agent}} 指定立場",
+      "rounds": "最大輪次",
+      "roundsHint": "一輪表示所有參與成員各發言一次，最多 99 輪。",
+      "judgeAgent": "裁判 Agent（選填）",
+      "noJudge": "不設定裁判",
+      "summaryAgent": "總結成員",
+      "modelHint": "每位 Agent 使用其設定中綁定的模型。",
+      "styleAria": "{{agent}} 的辯論風格",
+      "styles": {
+        "free": "自由發揮",
+        "sharp_punchline": "犀利金句",
+        "sharp_punchlineHint": "節奏緊湊，直擊邏輯漏洞，用短句完成收束。",
+        "value_reframe": "價值重構",
+        "value_reframeHint": "重新解釋關鍵詞，將爭論帶到價值排序和底層動機。",
+        "rational_empathy": "學理共情",
+        "rational_empathyHint": "先結構化論證，再用具體情境和情感完成說服。",
+        "everyday_spicy": "生活麻辣",
+        "everyday_spicyHint": "用日常場景、口語類比和克制幽默推進觀點。",
+        "concept_deconstruction": "概念拆解",
+        "concept_deconstructionHint": "定義概念、檢查前提，用反例拆解邏輯鏈。",
+        "simple_analogy": "樸素類比",
+        "simple_analogyHint": "用簡單具體的場景解釋複雜問題。"
+      },
+      "start": "開始討論",
+      "cancel": "取消",
+      "end": "結束議題",
+      "ending": "正在結束…",
+      "roundProgress": "第 {{current}} / {{total}} 輪",
+      "userMessage": "發起議題：{{topic}}\n{{mode}} · {{rounds}} 輪 · {{participants}}",
+      "status": {
+        "succeeded": "討論完成",
+        "failed": "討論中斷",
+        "cancelled": "已提前結束"
+      },
+      "validation": {
+        "topic": "請輸入議題。",
+        "participants": "請至少選擇兩位參與成員。",
+        "positions": "觀點辯論需要為每位參與成員指定立場。",
+        "summary": "請選擇負責總結的成員。"
+      }
+    },
     "panel": {
       "title": "協作群組",
       "partner": "夥伴",
@@ -354,6 +567,16 @@
       "info": "資訊",
       "goal": "目標",
       "goalEmpty": "尚未設定群組聊天目標。",
+      "currentTask": {
+        "title": "目前任務",
+        "empty": "目前沒有正在進行的任務。",
+        "workflow": "工作流程",
+        "stepProgress": "已完成 {{completed}} / {{total}} 個步驟",
+        "roundProgress": "第 {{current}} / {{total}} 輪",
+        "judging": "裁判正在評估雙方表現",
+        "summarizing": "正在整理討論結論",
+        "currentAgent": "{{agent}} 正在處理"
+      },
       "members": "成員",
       "builtin": "團隊內建",
       "artifacts": "產物",
@@ -363,6 +586,9 @@
     },
     "workflow": {
       "new": "新增工作流程",
+      "compactEmpty": "新增工作流程",
+      "compactActive": "工作流程 · {{count}} 個步驟",
+      "compactDraft": "工作流程草稿 · {{count}} 個步驟",
       "edit": "編輯",
       "editNewVersion": "編輯新版本",
       "activate": "啟用",
@@ -546,6 +772,7 @@
       "goalStateSheetTitle": "目標",
       "send": "送出訊息",
       "stop": "停止回覆",
+      "stopping": "正在停止",
       "attachImage": "附加圖片",
       "attachFile": "附加檔案",
       "fileRejected": "僅支援圖片與常用文件格式",

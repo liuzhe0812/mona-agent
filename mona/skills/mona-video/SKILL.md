@@ -10,11 +10,12 @@ metadata:
   mona:
     emoji: "🎬"
     always: false
-    requires:
-      bins: ["python"]
 ---
 
 # Mona Video Skill
+
+Run bundled Python helpers only through `skill_script_run` with
+`skill="mona-video"`; never execute Skill files through `exec` or system Python.
 
 You are the **storyboard strategist** (分镜策划师) of Mona's video maker. Your only
 deliverable is `storyboard.md` — a scene-by-scene plan the UI and backend turn into
@@ -50,7 +51,7 @@ a finished MP4 without any further agent involvement.
 
 - `${SKILL_DIR}` resolves to `<workspace>/mona/skills/mona-video/`.
 - Create projects under `<workspace>/video_projects/` (the initial chat message gives you the exact project name and directory).
-- On Windows, if `python3` fails, rerun the same command with `python`.
+- Do not select a Python executable; any permitted helper call uses Mona's managed environment.
 
 ## Reference Load Map
 
@@ -86,6 +87,9 @@ stop and wait for the user (see Core Contract 2).
 # Storyboard
 
 ### Scene 1: <title>
+- Role: <cover|chapter|content|data|comparison|quote|outro>
+- Layout: <one layout id allowed by the active series style>
+- Background Slot: <cover|chapter|content|data|outro>
 - Duration: 5s
 - Visual: <what the viewer sees — subject, layout, colors, mood>
 - Animation: <how elements move — entrances, emphasis, transitions>
@@ -100,7 +104,16 @@ stop and wait for the user (see Core Contract 2).
 Rules:
 - Scene heading: `### Scene N: <title>` — N is 1-based and sequential.
 - Field lines: `- <Field>: <value>`, one per line, exactly the field names above
-  (`Duration` / `Visual` / `Animation` / `Narration` / `Assets`).
+  (`Role` / `Layout` / `Background Slot` / `Duration` / `Visual` / `Animation` /
+  `Narration` / `Assets`).
+- `Role` describes the scene's teaching/presentation purpose. Use `cover` for the
+  first scene and `outro` for the final scene; choose the narrowest accurate role
+  for every middle scene.
+- `Layout` is a semantic layout id, not free-form CSS. For series projects, use an
+  id allowed by the locked style version. For legacy/single projects use
+  `cover-split`, `content-standard`, or `outro-brand` as safe defaults.
+- `Background Slot` selects the style-controlled background treatment. It never
+  grants permission to invent colors, overlays, crop rules, or per-scene CSS.
 - `Duration` must start with a number (`5s`, `8s`); integer seconds.
 - **Narration enabled** (initial message says 旁白：启用): every scene MUST have a
   non-empty `- Narration:` line. Plain speakable text only — no Markdown, no
@@ -128,7 +141,9 @@ those belong to the backend.
 1. The user edits/reorders scenes in the storyboard review UI and clicks
    「确认分镜，进入制作」 — the backend locks the storyboard.
 2. In the producing view the user clicks 「一键生成全部场景」(or per-scene generate);
-   the backend LLM writes `scenes/scene_NN.html` (HTML + CSS + GSAP) per scene.
+   series projects first generate a constrained `scene_specs/scene_NN.json`, then
+   compile it through the locked style components into `scenes/scene_NN.html`.
+   Legacy single-video projects keep the original direct HTML generation path.
 3. The user previews scenes and clicks 「开始导出 MP4」; the backend synthesizes
    narration (if enabled), snapshots the scenes, renders frames via headless
    Chrome, encodes with FFmpeg, and produces `renders/output.mp4`.

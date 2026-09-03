@@ -240,8 +240,8 @@ class OfficeTool(Tool):
         )
         if not client.available:
             return (
-                "Error: OfficeCLI binary not found. The user can install it from the "
-                "PPT module runtime dialog or the settings page."
+                "Error: the legacy OfficeCLI editor is unavailable and is no longer "
+                "distributed by Mona."
             )
 
         # For mutating actions, operate on a working copy.
