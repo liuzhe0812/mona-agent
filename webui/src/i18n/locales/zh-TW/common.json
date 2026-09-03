@@ -123,7 +123,7 @@
     },
     "nav": {
       "general": "一般",
-      "resources": "功能資源",
+      "resources": "進階功能",
       "byok": "BYOK",
       "billing": "餘額與充值",
       "usage": "用量統計",
@@ -382,15 +382,15 @@
     "bindProjectFolder": "綁定專案目錄…"
   },
   "managedRuntime": {
-    "title": "功能資源",
-    "description": "各項功能所需的資源都在這裡統一管理，預設在需要時下載。",
+    "title": "進階功能",
+    "description": "影片、語音等進階功能所需內容都在這裡管理，預設在需要時下載。",
     "refresh": "重新整理",
-    "loading": "正在讀取功能資源狀態…",
+    "loading": "正在讀取進階功能狀態…",
     "loadError": "執行環境狀態暫時無法使用",
-    "installError": "功能資源準備失敗",
+    "installError": "進階功能準備失敗",
     "cancelError": "無法取消資源下載",
     "updateError": "無法更新下載設定",
-    "cleanupError": "無法清理功能資源",
+    "cleanupError": "無法清理進階功能快取",
     "installed": "已安裝 {{version}}",
     "installing": "正在下載並驗證 · {{percent}}%",
     "install": "安裝",
@@ -403,10 +403,11 @@
     "cleaning": "正在清理…",
     "autoDownload": "需要時自動下載",
     "autoDownloadDescription": "首次使用功能時自動準備所需資源",
+    "catalogUnavailable": "暫時無法取得可下載內容，請稍後重新整理",
     "migration": {
       "completed": "舊資源已整理完成，可清理約 {{size}}。",
       "partial": "仍在使用舊資源，下次啟動會繼續整理。",
-      "repair": "部分功能資源需要修復。"
+      "repair": "部分進階功能內容需要修復。"
     },
     "ready": "可用",
     "components": {

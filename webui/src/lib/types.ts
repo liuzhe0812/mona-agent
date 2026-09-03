@@ -131,6 +131,139 @@ export interface AgentSkill {
   contentHash: string;
 }
 
+export interface AgentSkillDetail extends AgentSkill {
+  content: string;
+}
+
+export interface ExpertCatalogItem {
+  id: string;
+  displayName: string;
+  description: string;
+  version: string;
+  minMonaVersion?: string | null;
+  downloadBytes: number;
+  runtimePacks: string[];
+  requiredTools: string[];
+  installed: boolean;
+  installedVersion?: string | null;
+  updateAvailable: boolean;
+  compatible: boolean;
+  unavailableReason?: string | null;
+}
+
+export interface ExpertCatalogPayload {
+  schemaVersion: number;
+  generatedAt: string | null;
+  source: "remote" | "cache" | "unavailable";
+  stale: boolean;
+  installEnabled: boolean;
+  installUnavailableReason?: string | null;
+  experts: ExpertCatalogItem[];
+}
+
+export interface ExpertInstallJob {
+  schemaVersion: number;
+  jobId: string;
+  expertId: string;
+  version?: string | null;
+  state: "queued" | "running" | "completed" | "failed" | "cancelled";
+  stage: string;
+  downloadedBytes: number;
+  totalBytes: number;
+  detail: string;
+  error?: string | null;
+  cachedDownload?: boolean | null;
+  installedVersion?: string | null;
+  createdAt: number;
+  updatedAt: number;
+  finishedAt?: number | null;
+}
+
+export interface ManagedRuntimeComponent {
+  component: string;
+  available: boolean;
+  packRef?: string;
+  version?: string;
+  downloadBytes?: number;
+  installed: boolean;
+  installedVersion?: string | null;
+  updateAvailable?: boolean;
+}
+
+export interface ManagedRuntimeInstallJob {
+  schemaVersion: number;
+  jobId: string;
+  component: string;
+  packRef: string;
+  packRefs?: string[];
+  repair?: boolean;
+  state: "queued" | "running" | "completed" | "failed" | "cancelled";
+  stage: string;
+  downloadedBytes: number;
+  totalBytes: number;
+  error?: string | null;
+  createdAt: number;
+  updatedAt: number;
+  finishedAt?: number | null;
+}
+
+export interface ManagedRuntimeMigrationStatus {
+  state: "pending" | "partial" | "completed" | "not_needed";
+  migratedComponents: string[];
+  repairComponents: string[];
+  errors: string[];
+  legacyBytes: number;
+  cleanupAvailable: boolean;
+  updatedAt: string;
+}
+
+export interface ManagedRuntimeStatusPayload {
+  schemaVersion: number;
+  autoDownload: boolean;
+  installEnabled: boolean;
+  installUnavailableReason?: string | null;
+  catalogAvailable?: boolean;
+  components: ManagedRuntimeComponent[];
+  jobs: ManagedRuntimeInstallJob[];
+  migration?: ManagedRuntimeMigrationStatus;
+}
+
+export type ComputerUseState =
+  | "disabled"
+  | "not_installed"
+  | "downloading"
+  | "pending_authorization"
+  | "available"
+  | "error";
+
+export interface ComputerUseInstallJob {
+  jobId: string;
+  state: "queued" | "running" | "completed" | "failed" | "cancelled";
+  stage: string;
+  downloadedBytes: number;
+  totalBytes: number;
+  error?: string | null;
+  createdAt?: number;
+  updatedAt?: number;
+  finishedAt?: number | null;
+}
+
+export interface ComputerUseStatus {
+  enabled: boolean;
+  state: ComputerUseState;
+  supported: boolean;
+  version: string;
+  downloadBytes: number;
+  installed: boolean;
+  degraded?: boolean;
+  error?: string | null;
+  job?: ComputerUseInstallJob | null;
+}
+
+export interface AutomationStatus {
+  browserAutomationEnabled: boolean;
+  computerUse: ComputerUseStatus;
+}
 export interface AgentChangeProposal {
   id: string;
   agentId: string;

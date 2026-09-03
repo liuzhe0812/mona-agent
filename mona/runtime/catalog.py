@@ -144,11 +144,11 @@ class RuntimeCatalogClient:
         self.max_bytes = max_bytes
         self.transport = transport
 
-    async def fetch(self) -> RuntimeCatalog:
+    async def fetch(self, *, timeout_seconds: float = 15.0) -> RuntimeCatalog:
         errors: list[str] = []
         cached = self.load_cached()
         async with httpx.AsyncClient(
-            timeout=15,
+            timeout=timeout_seconds,
             follow_redirects=False,
             transport=self.transport,
         ) as client:

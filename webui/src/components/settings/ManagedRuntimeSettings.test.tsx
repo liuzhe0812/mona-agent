@@ -71,6 +71,28 @@ describe("ManagedRuntimeSettings", () => {
     });
   });
 
+  it("keeps known advanced features visible while downloadable content is refreshing", async () => {
+    api.fetchManagedRuntimeStatus.mockResolvedValueOnce({
+      schemaVersion: 1,
+      autoDownload: true,
+      installEnabled: true,
+      catalogAvailable: false,
+      components: [{
+        component: "python",
+        available: false,
+        installed: false,
+        installedVersion: null,
+        updateAvailable: false,
+      }],
+      jobs: [],
+    });
+
+    render(<ManagedRuntimeSettings token="tok" />);
+
+    expect(await screen.findByText("Downloadable content is temporarily unavailable. Try refreshing shortly.")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Install" })).toBeDisabled();
+  });
+
   it("repairs an installed runtime by forcing redeployment", async () => {
     api.fetchManagedRuntimeStatus.mockResolvedValue({
       schemaVersion: 1,
@@ -163,7 +185,7 @@ describe("ManagedRuntimeSettings", () => {
     render(<ManagedRuntimeSettings token="tok" />);
 
     expect(await screen.findByText("Some old resources are still in use. Organization will continue next time Mona starts.")).toBeInTheDocument();
-    expect(screen.getByText("Some feature resources need repair.")).toBeInTheDocument();
+    expect(screen.getByText("Some advanced feature content needs repair.")).toBeInTheDocument();
     expect(screen.queryByText("private-component-id")).not.toBeInTheDocument();
   });
 

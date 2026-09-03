@@ -460,7 +460,7 @@ class VideoRuntime:
         managed = self._managed_node_exe()
         if managed:
             return {"ok": True, "path": str(managed)}
-        return {"ok": False, "error": "Node.js 组件安装后不可用，请在功能资源中修复"}
+        return {"ok": False, "error": "Node.js 组件安装后不可用，请在高级功能中修复"}
 
     async def _ensure_ffmpeg(
         self, progress_cb: "Callable[[int, int], None] | None"
@@ -482,7 +482,7 @@ class VideoRuntime:
         managed_probe = self.get_ffprobe_path()
         if managed and managed_probe:
             return {"ok": True, "path": managed, "ffprobePath": managed_probe}
-        return {"ok": False, "error": "视频处理组件安装后不可用，请在功能资源中修复"}
+        return {"ok": False, "error": "视频处理组件安装后不可用，请在高级功能中修复"}
 
     async def _ensure_ytdlp(
         self, progress_cb: "Callable[[int, int], None] | None"
@@ -497,7 +497,7 @@ class VideoRuntime:
         managed = self.get_ytdlp_path()
         if managed:
             return {"ok": True, "path": managed}
-        return {"ok": False, "error": "视频解析组件安装后不可用，请在功能资源中修复"}
+        return {"ok": False, "error": "视频解析组件安装后不可用，请在高级功能中修复"}
 
     async def _ensure_asr(
         self, progress_cb: "Callable[[int, int], None] | None"
@@ -515,4 +515,4 @@ class VideoRuntime:
         managed = self.get_asr_paths()
         if managed:
             return {"ok": True, **managed}
-        return {"ok": False, "error": "本地语音转写组件安装后不完整，请在功能资源中修复"}
+        return {"ok": False, "error": "本地语音转写组件安装后不完整，请在高级功能中修复"}

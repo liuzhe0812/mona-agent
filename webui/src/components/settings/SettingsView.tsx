@@ -808,10 +808,10 @@ export function SettingsView({
 
 const SETTINGS_NAV_ITEMS: Array<{ key: SettingsSectionKey; icon: LucideIcon; fallback: string; desktopOnly?: boolean }> = [
   { key: "general", icon: Settings2, fallback: "通用" },
-  { key: "resources", icon: Download, fallback: "功能资源" },
   { key: "models_providers", icon: SlidersHorizontal, fallback: "模型设置" },
   { key: "billing", icon: WalletCards, fallback: "余额与充值" },
   { key: "usage", icon: BarChart3, fallback: "用量统计" },
+  { key: "resources", icon: Download, fallback: "高级功能" },
   { key: "appearance", icon: Palette, fallback: "Appearance" },
   { key: "channels", icon: Radio, fallback: "频道" },
   { key: "shortcuts", icon: Keyboard, fallback: "快捷键", desktopOnly: true },

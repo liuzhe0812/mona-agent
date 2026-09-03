@@ -161,7 +161,7 @@ async def _ensure_runtime_resource_via_gateway(
     if progress is not None:
         progress(job.pack_ref, job.downloaded_bytes, job.total_bytes)
     if job.state != "completed":
-        raise RuntimeError(job.error or "功能资源下载失败")
+        raise RuntimeError(job.error or "高级功能内容下载失败")
     return job
 
 
@@ -172,14 +172,14 @@ async def _gateway_api_token(
     _raise_gateway_error(bootstrap)
     token = str(bootstrap.json().get("token") or "")
     if not token:
-        raise RuntimeError("功能资源服务没有返回访问凭据")
+        raise RuntimeError("高级功能内容服务没有返回访问凭据")
     return token
 
 
 def _raise_gateway_error(response: httpx.Response) -> None:
     if response.is_success:
         return
-    message = response.text.strip() or "功能资源服务不可用"
+    message = response.text.strip() or "高级功能内容服务不可用"
     raise RuntimeError(message)
 
 

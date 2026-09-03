@@ -314,6 +314,10 @@ function RuntimeRow({
           <p className="mt-1 text-xs text-destructive">
             {job.error || t("managedRuntime.installError")}
           </p>
+        ) : !component.available && !component.installed ? (
+          <p className="mt-1 text-xs text-muted-foreground">
+            {t("managedRuntime.catalogUnavailable")}
+          </p>
         ) : !installEnabled && !component.installed ? (
           <p className="mt-1 text-xs text-warning">{unavailableReason}</p>
         ) : null}

@@ -138,7 +138,7 @@
     },
     "nav": {
       "general": "General",
-      "resources": "Feature resources",
+      "resources": "Advanced features",
       "byok": "BYOK",
       "billing": "Balance & billing",
       "usage": "Usage",
@@ -431,15 +431,15 @@
     "bindProjectFolder": "Bind project folder…"
   },
   "managedRuntime": {
-    "title": "Feature resources",
-    "description": "Mona manages the resources needed by each feature here. Resources are downloaded when needed.",
+    "title": "Advanced features",
+    "description": "Manage the content needed for advanced features such as video and transcription. It downloads when needed.",
     "refresh": "Refresh",
-    "loading": "Loading feature resource status…",
+    "loading": "Loading advanced feature status…",
     "loadError": "Runtime status is temporarily unavailable",
-    "installError": "Feature resource preparation failed",
+    "installError": "Advanced feature preparation failed",
     "cancelError": "Could not cancel the resource download",
     "updateError": "Could not update download settings",
-    "cleanupError": "Could not clean up feature resources",
+    "cleanupError": "Could not clear advanced feature cache",
     "installed": "Installed {{version}}",
     "installing": "Downloading and verifying · {{percent}}%",
     "install": "Install",
@@ -452,10 +452,11 @@
     "cleaning": "Cleaning…",
     "autoDownload": "Download when needed",
     "autoDownloadDescription": "Automatically prepare required resources when a feature is used",
+    "catalogUnavailable": "Downloadable content is temporarily unavailable. Try refreshing shortly.",
     "migration": {
       "completed": "Old resources have been organized. You can clear about {{size}}.",
       "partial": "Some old resources are still in use. Organization will continue next time Mona starts.",
-      "repair": "Some feature resources need repair."
+      "repair": "Some advanced feature content needs repair."
     },
     "ready": "Ready",
     "components": {

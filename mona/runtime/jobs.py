@@ -38,6 +38,18 @@ RUNTIME_KINDS = {
     "westock": "stock-data-runtime",
 }
 
+_RUNTIME_COMPONENT_IDS = {
+    "python": ("python-base",),
+    "node": ("node-base",),
+    "ffmpeg": ("ffmpeg",),
+    "yt_dlp": ("yt-dlp",),
+    "asr": ("asr-sensevoice",),
+    "pandoc": ("pandoc",),
+    "computer_use": ("cua-driver",),
+    "westock": ("westock-data",),
+}
+_STATUS_CATALOG_WAIT_SECONDS = 2.0
+
 
 class RuntimeInstallUnavailableError(RuntimeError):
     """Raised when the release has no runtime installer configured."""
@@ -92,12 +104,70 @@ class RuntimeInstallJobManager:
         self.cache_dir = getattr(installer, "cache_dir", component_store.root / "downloads")
         self._jobs: dict[str, RuntimeInstallJob] = {}
         self._tasks: dict[str, asyncio.Task[None]] = {}
+        self._catalog_refresh_task: asyncio.Task[RuntimeCatalog] | None = None
         self._install_lock = asyncio.Lock()
         self._last_persisted = 0.0
         self._load()
 
     async def status_payload(self) -> dict[str, object]:
-        catalog = await self.catalog_client.fetch()
+        catalog = await self._status_catalog()
+        components = (
+            self._components_from_catalog(catalog)
+            if catalog is not None
+            else self._components_without_catalog()
+        )
+        payload: dict[str, object] = {
+            "schemaVersion": 1,
+            "autoDownload": bool(self.auto_download_enabled()),
+            "installEnabled": self.installer is not None,
+            "installUnavailableReason": None if self.installer else self.unavailable_reason,
+            "catalogAvailable": catalog is not None,
+            "components": components,
+            "jobs": [job.model_dump(by_alias=True, mode="json") for job in self.list()],
+        }
+        if self.migration_status is not None:
+            payload["migration"] = self.migration_status()
+        return payload
+
+    async def _status_catalog(self) -> RuntimeCatalog | None:
+        cached = self._cached_catalog()
+        task = self._start_catalog_refresh()
+        if cached is not None:
+            return cached
+        try:
+            return await asyncio.wait_for(
+                asyncio.shield(task), timeout=_STATUS_CATALOG_WAIT_SECONDS
+            )
+        except Exception:
+            return None
+
+    def _cached_catalog(self) -> RuntimeCatalog | None:
+        load_cached = getattr(self.catalog_client, "load_cached", None)
+        if not callable(load_cached):
+            return None
+        cached = load_cached()
+        return cached.catalog if cached is not None else None
+
+    def _start_catalog_refresh(self) -> asyncio.Task[RuntimeCatalog]:
+        task = self._catalog_refresh_task
+        if task is not None and not task.done():
+            return task
+        task = asyncio.create_task(self.catalog_client.fetch())
+        self._catalog_refresh_task = task
+        task.add_done_callback(self._finish_catalog_refresh)
+        return task
+
+    def _finish_catalog_refresh(self, task: asyncio.Task[RuntimeCatalog]) -> None:
+        if self._catalog_refresh_task is task:
+            self._catalog_refresh_task = None
+        if task.cancelled():
+            return
+        try:
+            task.result()
+        except Exception:
+            pass
+
+    def _components_from_catalog(self, catalog: RuntimeCatalog) -> list[dict[str, object]]:
         components: list[dict[str, object]] = []
         for component, kind in RUNTIME_KINDS.items():
             entry = self._latest(catalog, kind)
@@ -117,19 +187,28 @@ class RuntimeInstallJobManager:
                     "updateAvailable": bool(
                         installed_version and _newer(entry.version, installed_version)
                     ),
+                    }
+            )
+        return components
+
+    def _components_without_catalog(self) -> list[dict[str, object]]:
+        components: list[dict[str, object]] = []
+        for component, ids in _RUNTIME_COMPONENT_IDS.items():
+            active = None
+            for component_id in ids:
+                active = self.component_store.active(component_id)
+                if active is not None:
+                    break
+            components.append(
+                {
+                    "component": component,
+                    "available": False,
+                    "installed": active is not None,
+                    "installedVersion": active[0].version if active else None,
+                    "updateAvailable": False,
                 }
             )
-        payload: dict[str, object] = {
-            "schemaVersion": 1,
-            "autoDownload": bool(self.auto_download_enabled()),
-            "installEnabled": self.installer is not None,
-            "installUnavailableReason": None if self.installer else self.unavailable_reason,
-            "components": components,
-            "jobs": [job.model_dump(by_alias=True, mode="json") for job in self.list()],
-        }
-        if self.migration_status is not None:
-            payload["migration"] = self.migration_status()
-        return payload
+        return components
 
     async def start(self, component: str, *, repair: bool = False) -> RuntimeInstallJob:
         if self.installer is None:
@@ -153,7 +232,7 @@ class RuntimeInstallJobManager:
         """Install exact packs for a feature and wait without tying the job to its caller."""
         if not self.auto_download_enabled():
             raise RuntimeAutoDownloadDisabledError(
-                "需要先下载功能资源，请在设置的“功能资源”中下载，或开启“需要时自动下载”"
+                "需要先下载高级功能内容，请在设置的“高级功能”中下载，或开启“需要时自动下载”"
             )
         if self.installer is None:
             raise RuntimeInstallUnavailableError(self.unavailable_reason)
@@ -183,7 +262,7 @@ class RuntimeInstallJobManager:
         """Start an automatic feature download while respecting user settings."""
         if not self.auto_download_enabled():
             raise RuntimeAutoDownloadDisabledError(
-                "需要先下载功能资源，请在设置的“功能资源”中下载，或开启“需要时自动下载”"
+                "需要先下载高级功能内容，请在设置的“高级功能”中下载，或开启“需要时自动下载”"
             )
         return await self.start(component)
 
@@ -193,7 +272,7 @@ class RuntimeInstallJobManager:
             await asyncio.shield(task)
         finished = self.get(job.job_id)
         if finished.state != "completed":
-            raise RuntimeError(finished.error or "功能资源下载失败")
+            raise RuntimeError(finished.error or "高级功能内容下载失败")
         return finished
 
     def _start_job(

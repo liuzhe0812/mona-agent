@@ -111,4 +111,4 @@ class PandocRuntime:
         managed = self.get_pandoc_path()
         if managed:
             return {"ok": True, "path": managed}
-        return {"ok": False, "error": "文档转换组件安装后不可用，请在功能资源中修复"}
+        return {"ok": False, "error": "文档转换组件安装后不可用，请在高级功能中修复"}

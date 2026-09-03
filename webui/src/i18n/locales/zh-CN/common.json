@@ -150,7 +150,7 @@
     },
     "nav": {
       "general": "通用",
-      "resources": "功能资源",
+      "resources": "高级功能",
       "byok": "BYOK",
       "billing": "余额与充值",
       "usage": "用量统计",
@@ -446,15 +446,15 @@
     "bindProjectFolder": "绑定项目目录…"
   },
   "managedRuntime": {
-    "title": "功能资源",
-    "description": "各项功能所需的资源都在这里统一管理，默认在需要时下载。",
+    "title": "高级功能",
+    "description": "视频、语音等高级功能所需内容都在这里管理，默认在需要时下载。",
     "refresh": "刷新",
-    "loading": "正在读取功能资源状态…",
+    "loading": "正在读取高级功能状态…",
     "loadError": "运行环境状态暂时不可用",
-    "installError": "功能资源准备失败",
+    "installError": "高级功能准备失败",
     "cancelError": "无法取消资源下载",
     "updateError": "无法更新下载设置",
-    "cleanupError": "无法清理功能资源",
+    "cleanupError": "无法清理高级功能缓存",
     "installed": "已安装 {{version}}",
     "installing": "正在下载并校验 · {{percent}}%",
     "install": "安装",
@@ -467,10 +467,11 @@
     "cleaning": "正在清理…",
     "autoDownload": "需要时自动下载",
     "autoDownloadDescription": "首次使用功能时自动准备所需资源",
+    "catalogUnavailable": "暂时无法获取可下载内容，可稍后刷新",
     "migration": {
       "completed": "旧资源已整理完成，可清理约 {{size}}。",
       "partial": "仍在使用旧资源，下次启动会继续整理。",
-      "repair": "部分功能资源需要修复。"
+      "repair": "部分高级功能内容需要修复。"
     },
     "ready": "可用",
     "components": {

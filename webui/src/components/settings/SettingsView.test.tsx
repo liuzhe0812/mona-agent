@@ -20,7 +20,7 @@ vi.mock("@/providers/ClientProvider", () => ({
 }));
 
 vi.mock("@/components/settings/ManagedRuntimeSettings", () => ({
-  ManagedRuntimeSettings: () => <div data-testid="managed-runtime-settings">Feature resources</div>,
+  ManagedRuntimeSettings: () => <div data-testid="managed-runtime-settings">Advanced features</div>,
 }));
 
 import { SettingsView } from "./SettingsView";
@@ -32,21 +32,24 @@ const props = {
   onModelNameChange: vi.fn(),
 };
 
-describe("SettingsView feature resources section", () => {
+describe("SettingsView advanced features section", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     api.fetchSettings.mockRejectedValue(new Error("settings unavailable"));
   });
 
-  it("opens the independent feature resources section from its initial section", async () => {
+  it("opens the independent advanced features section from its initial section", async () => {
     render(<SettingsView {...props} initialSection="resources" />);
 
     await waitFor(() => expect(api.fetchSettings).toHaveBeenCalledWith("tok"));
 
-    expect(screen.getByRole("button", { name: "Feature resources" })).toHaveAttribute(
+    expect(screen.getByRole("button", { name: "Advanced features" })).toHaveAttribute(
       "aria-current",
       "page",
     );
+    const usage = screen.getByRole("button", { name: "Usage" });
+    const advancedFeatures = screen.getByRole("button", { name: "Advanced features" });
+    expect(usage.compareDocumentPosition(advancedFeatures) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
     expect(screen.getByTestId("managed-runtime-settings")).toBeInTheDocument();
   });
 });

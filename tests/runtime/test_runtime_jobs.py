@@ -8,6 +8,7 @@ from pathlib import Path
 
 import pytest
 
+from mona.runtime import jobs as runtime_jobs
 from mona.runtime.catalog import RuntimeCatalog
 from mona.runtime.jobs import (
     RuntimeAutoDownloadDisabledError,
@@ -52,6 +53,17 @@ def _catalog() -> RuntimeCatalog:
 
 class FakeCatalogClient:
     async def fetch(self) -> RuntimeCatalog:
+        return _catalog()
+
+
+class SlowCatalogClient:
+    def __init__(self) -> None:
+        self.started = asyncio.Event()
+        self.release = asyncio.Event()
+
+    async def fetch(self) -> RuntimeCatalog:
+        self.started.set()
+        await self.release.wait()
         return _catalog()
 
 
@@ -115,6 +127,7 @@ async def test_runtime_status_exposes_optional_downloads(tmp_path: Path) -> None
 
     assert payload["installEnabled"] is True
     assert payload["autoDownload"] is True
+    assert payload["catalogAvailable"] is True
     assert payload["migration"] == {
         "state": "completed",
         "legacyBytes": 10,
@@ -191,10 +204,35 @@ async def test_runtime_install_disabled_without_installer(tmp_path: Path) -> Non
 async def test_feature_download_respects_auto_download_setting(tmp_path: Path) -> None:
     manager = _manager(tmp_path, FakeInstaller(), auto_download=False)
 
-    with pytest.raises(RuntimeAutoDownloadDisabledError, match="功能资源"):
+    with pytest.raises(RuntimeAutoDownloadDisabledError, match="高级功能"):
         await manager.ensure("python")
 
     assert manager.list() == []
+
+
+async def test_runtime_status_returns_local_rows_when_catalog_is_slow(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    client = SlowCatalogClient()
+    manager = RuntimeInstallJobManager(
+        catalog_client=client,  # type: ignore[arg-type]
+        component_store=RuntimeComponentStore(tmp_path / "runtimes"),
+        state_path=tmp_path / "jobs.json",
+        installer=FakeInstaller(),  # type: ignore[arg-type]
+        current_platform="win32",
+        current_architecture="x64",
+    )
+    monkeypatch.setattr(runtime_jobs, "_STATUS_CATALOG_WAIT_SECONDS", 0.01)
+
+    payload = await manager.status_payload()
+
+    assert client.started.is_set()
+    assert payload["catalogAvailable"] is False
+    assert [item["component"] for item in payload["components"]] == list(runtime_jobs.RUNTIME_KINDS)
+    refresh = manager._catalog_refresh_task
+    assert refresh is not None
+    refresh.cancel()
+    await asyncio.gather(refresh, return_exceptions=True)
 
 
 async def test_duplicate_runtime_requests_share_one_job(tmp_path: Path) -> None:

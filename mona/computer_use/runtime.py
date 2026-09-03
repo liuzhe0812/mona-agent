@@ -266,7 +266,7 @@ class CuaDriverManager:
                 )
                 if self.executable is None:
                     raise RuntimeError(
-                        "电脑操作组件安装后不可用，请在功能资源中修复"
+                        "电脑操作组件安装后不可用，请在高级功能中修复"
                     )
             else:
                 archive = self.root / "downloads" / asset.filename

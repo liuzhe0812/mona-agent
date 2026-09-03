@@ -1506,7 +1506,7 @@ class WebSocketChannel(BaseChannel):
             if isinstance(exc, RuntimeInstallUnavailableError):
                 return _http_error(503, str(exc))
             self.logger.exception("failed to start required runtime install")
-            return _http_error(500, "无法启动功能资源下载")
+            return _http_error(500, "无法启动高级功能内容下载")
         return _http_json_response(
             {"ok": True, "job": job.model_dump(by_alias=True, mode="json")},
             status=202,
