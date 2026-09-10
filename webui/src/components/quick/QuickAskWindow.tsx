@@ -1,7 +1,5 @@
 import { useCallback, useEffect, useState } from "react";
-import { FileText, Terminal } from "lucide-react";
 
-import { Button } from "@/components/ui/button";
 import { ThreadComposer } from "@/components/thread/ThreadComposer";
 import type { SendImage } from "@/hooks/useMonaStream";
 import { useTheme } from "@/hooks/useTheme";
@@ -9,11 +7,8 @@ import { listSlashCommands } from "@/lib/api";
 import {
   quickAskFocusChat,
   quickAskHide,
-  quickAskOpenNote,
-  quickAskOpenSsh,
 } from "@/lib/tauri";
 import type { SlashCommand } from "@/lib/types";
-import { cn } from "@/lib/utils";
 import { useClient } from "@/providers/ClientProvider";
 
 function toModelBadgeLabel(modelName: string | null): string | null {
@@ -77,63 +72,38 @@ export function QuickAskWindow() {
     [client, submitting],
   );
 
-  const actionClass = cn(
-    "h-9 rounded-full border border-border/65 bg-card px-3 text-[12px] font-medium",
-    "text-foreground/80 hover:bg-foreground/[0.06] hover:text-foreground",
-    "disabled:pointer-events-none disabled:opacity-55",
-  );
-
   return (
     <div
       data-tauri-drag-region
-      className="flex h-full w-full items-center justify-center bg-transparent"
+      className="flex h-full w-full items-center justify-center bg-transparent px-2 py-1.5"
     >
-      <div className="w-full max-w-[58rem]">
-        <ThreadComposer
-          onSend={handleSend}
-          disabled={submitting}
-          isStreaming={submitting}
-          placeholder="向Mona提问"
-          modelLabel={toModelBadgeLabel(modelName)}
-          variant="hero"
-          slashCommands={slashCommands}
-          leadingActions={
-            <>
-              <Button
-                type="button"
-                variant="ghost"
-                className={actionClass}
-                title="新建 SSH 会话"
-                aria-label="新建 SSH 会话"
-                disabled={submitting}
-                onClick={() => void quickAskOpenSsh()}
-              >
-                <Terminal className="mr-1.5 h-4 w-4 text-info-strong" aria-hidden />
-                SSH
-              </Button>
-              <Button
-                type="button"
-                variant="ghost"
-                className={actionClass}
-                title="新建笔记"
-                aria-label="新建笔记"
-                disabled={submitting}
-                onClick={() => void quickAskOpenNote()}
-              >
-                <FileText className="mr-1.5 h-4 w-4 text-muted-foreground" aria-hidden />
-                笔记
-              </Button>
-            </>
-          }
-        />
-        {error ? (
-          <div
-            role="alert"
-            className="mx-auto mt-2 max-w-[58rem] rounded-full border border-destructive/30 bg-background/90 px-3 py-1.5 text-center text-[12px] font-medium text-destructive"
-          >
-            {error}
-          </div>
-        ) : null}
+      <div className="w-full max-w-[56rem]">
+        <div
+          data-tauri-drag-region
+          className="flex h-6 items-center justify-between gap-3 px-3 text-[11px] font-medium text-muted-foreground"
+        >
+          <span className="flex items-center gap-2 text-foreground/80">
+            <span className="h-1.5 w-1.5 rounded-full bg-[hsl(var(--brand-red))]" aria-hidden />
+            Mona 快捷提问
+          </span>
+          {error ? (
+            <span role="alert" className="min-w-0 truncate text-destructive">{error}</span>
+          ) : (
+            <span className="select-none text-muted-foreground/65">Esc 关闭</span>
+          )}
+        </div>
+        <div className="[&_textarea]:!min-h-[42px] [&_textarea]:!px-4 [&_textarea]:!pb-1 [&_textarea]:!pt-1 [&_textarea]:!text-[14px]">
+          <ThreadComposer
+            onSend={handleSend}
+            disabled={submitting}
+            isStreaming={submitting}
+            placeholder="向 Mona 提问…"
+            modelLabel={toModelBadgeLabel(modelName)}
+            variant="hero"
+            slashCommands={slashCommands}
+            showHeroPromptChips={false}
+          />
+        </div>
       </div>
     </div>
   );

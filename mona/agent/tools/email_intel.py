@@ -10,7 +10,6 @@
 
 from __future__ import annotations
 
-import asyncio
 import json
 from typing import Any
 from urllib.parse import quote
@@ -89,6 +88,32 @@ def _fetch_body_via_tauri(account_id: str, uid: str, folder: str) -> str:
     return ""
 
 
+async def _fetch_body_via_tauri_async(account_id: str, uid: str, folder: str) -> str:
+    """Async counterpart that keeps the IPC request cancellable by the loop."""
+    from mona.agent.tools.tauri_ipc import tauri_invoke_async
+
+    result = await tauri_invoke_async(
+        "email_fetch_body",
+        {
+            "gatewayUrl": _get_gateway_url(),
+            "accountId": account_id,
+            "uid": uid,
+            "mailbox": folder,
+        },
+    )
+    if not isinstance(result, dict):
+        return ""
+    body_text = result.get("bodyText") or ""
+    if body_text:
+        return body_text
+    body_html = result.get("bodyHtml") or ""
+    if body_html:
+        from mona.email_intel.analyze import _html_to_text
+
+        return _html_to_text(body_html)
+    return ""
+
+
 class _EmailToolBase(Tool):
     """邮件工具基类。所有邮件工具默认开启。"""
 
@@ -126,6 +151,26 @@ def _read_email_scope() -> tuple[set[str], bool]:
             if mode == "none":
                 return set(), False
             # specific
+            return {str(f) for f in folders}, False
+    except Exception as e:
+        logger.debug(f"[email_search] could not load email scope: {e}")
+    return set(), True
+
+
+async def _read_email_scope_async() -> tuple[set[str], bool]:
+    """Async counterpart that avoids blocking the agent event loop."""
+    try:
+        from mona.agent.tools.tauri_ipc import tauri_invoke_async
+
+        scope = await tauri_invoke_async("get_agent_search_scope")
+        if isinstance(scope, dict):
+            email_scope = scope.get("email") or {}
+            mode = str(email_scope.get("mode") or "all").lower()
+            folders = email_scope.get("allowedFolders") or []
+            if mode == "all":
+                return set(), True
+            if mode == "none":
+                return set(), False
             return {str(f) for f in folders}, False
     except Exception as e:
         logger.debug(f"[email_search] could not load email scope: {e}")
@@ -211,7 +256,7 @@ class EmailSearchTool(_EmailToolBase):
         # If the user explicitly specified a folder, respect that choice (even if
         # the folder is not in the allowed list). Otherwise, filter to allowed folders.
         if not folder:
-            allowed, is_all = _read_email_scope()
+            allowed, is_all = await _read_email_scope_async()
             if not is_all:
                 results = [m for m in results if m.get("folder") in allowed]
 
@@ -319,12 +364,7 @@ class EmailReadTool(_EmailToolBase):
         # email_fetch_body 命令：Rust 侧会自动回退 IMAP 拉完整 RFC822、落盘并返回正文。
         if not body:
             try:
-                body = await asyncio.to_thread(
-                    _fetch_body_via_tauri,
-                    account_id,
-                    uid,
-                    folder,
-                )
+                body = await _fetch_body_via_tauri_async(account_id, uid, folder)
             except Exception as e:  # noqa: BLE001
                 logger.warning("email_read: fetch_body fallback failed for uid={}: {}", uid, e)
 

@@ -239,6 +239,9 @@ async def extract_schedule_from_email(
         logger.warning("Schedule extract LLM call failed: {}", e)
         return None
 
+    from mona.usage import record_provider_usage
+
+    record_provider_usage(provider, model, response)
     content = response.content or ""
     try:
         raw = _extract_json(content)

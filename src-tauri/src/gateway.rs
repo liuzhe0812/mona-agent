@@ -7,6 +7,7 @@ use crate::settings::{self, AppSettings};
 pub struct GatewayProcess {
     child: Option<std::process::Child>,
     port: u16,
+    ws_port: u16,
     /// true 表示复用一个已在外部运行的 gateway（本进程未 spawn 它）。
     /// 此时 `child` 为 None，stop 时通过 POST /shutdown 关闭。
     external: bool,
@@ -23,8 +24,13 @@ impl GatewayManager {
         }
     }
 
-    pub fn start(&self, settings: &AppSettings, app_handle: &tauri::AppHandle) -> Result<u16, String> {
+    pub fn start(
+        &self,
+        settings: &AppSettings,
+        app_handle: Option<&tauri::AppHandle>,
+    ) -> Result<u16, String> {
         let mut guard = self.process.lock().map_err(|e| format!("Lock error: {}", e))?;
+        let ws_port = settings::read_mona_ws_port();
 
         if let Some(ref mut proc) = *guard {
             // 已有自己 spawn 的子进程且活着：直接复用。
@@ -42,8 +48,31 @@ impl GatewayManager {
             }
         }
 
-        // 探测目标端口：可用则启动新进程；被一个健康 gateway 占用则复用。
-        let (port, external) = probe_gateway_port(settings.gateway_port)?;
+        let (port, external) = if cfg!(debug_assertions) {
+            // A normal dev start owns a fresh source runtime. Avoid the costly
+            // image-wide taskkill unless one of its ports is actually occupied,
+            // and never reuse an external process whose code may be stale.
+            if !is_port_available(settings.gateway_port) || !is_port_available(ws_port) {
+                #[cfg(windows)]
+                python::kill_stale_gateway_processes();
+                for _ in 0..20 {
+                    if is_port_available(settings.gateway_port) && is_port_available(ws_port) {
+                        break;
+                    }
+                    std::thread::sleep(std::time::Duration::from_millis(100));
+                }
+            }
+            if !is_port_available(settings.gateway_port) || !is_port_available(ws_port) {
+                return Err(format!(
+                    "Dev Gateway 端口 {} / {} 已被占用。请关闭残留的 Mona 运行时后重试。",
+                    settings.gateway_port, ws_port
+                ));
+            }
+            (settings.gateway_port, false)
+        } else {
+            // Release builds may reuse an already-running compatible runtime.
+            probe_gateway_port(settings.gateway_port, ws_port)?
+        };
 
         if external {
             log::info!(
@@ -53,6 +82,7 @@ impl GatewayManager {
             *guard = Some(GatewayProcess {
                 child: None,
                 port,
+                ws_port,
                 external: true,
             });
             return Ok(port);
@@ -82,6 +112,7 @@ impl GatewayManager {
             // Rust 写在 app_data_dir()、Python 默认在 ~/.mona 找，路径不一致会导致
             // email_intel.db 抛 "邮件数据库不存在"。
             cmd.env("MONA_APP_DATA_DIR", settings::app_data_dir());
+            cmd.env("MONA_ENABLE_WESTOCK", "1");
 
             // Set PYTHONPATH if source tree exists.
             // Dev exe lives at <repo>/src-tauri/target/debug/mona.exe, so we
@@ -107,6 +138,8 @@ impl GatewayManager {
             }
         } else {
             // Release mode: packaged gateway exe only
+            let app_handle = app_handle
+                .ok_or_else(|| "Release Gateway startup requires an app handle".to_string())?;
             let exe_path = python::deploy_gateway(app_handle)?;
             log::debug!("Using packaged gateway: {:?}", exe_path);
             if !exe_path.exists() {
@@ -130,6 +163,7 @@ impl GatewayManager {
 
             // 同 dev 模式：把 Rust 侧 app_data_dir 传给 Python
             cmd.env("MONA_APP_DATA_DIR", settings::app_data_dir());
+            cmd.env("MONA_ENABLE_WESTOCK", "1");
         }
 
         #[cfg(windows)]
@@ -160,6 +194,7 @@ impl GatewayManager {
         *guard = Some(GatewayProcess {
             child: Some(child),
             port,
+            ws_port,
             external: false,
         });
 
@@ -303,20 +338,24 @@ fn open_gateway_log(port: u16) -> Option<std::fs::File> {
 /// 探测目标端口，返回 (port, external)。
 ///
 /// - 端口可绑定：`(port, false)`，调用方需 spawn 新 gateway。
-/// - 端口被占但跑着一个健康 gateway（GET /health 返回 200）：`(port, true)`，调用方复用。
+/// - 端口被兼容的 Gateway HTTP 与 WebUI 会话服务共同占用：复用。
 /// - 端口被占且不是 gateway：报错。
-fn probe_gateway_port(start_port: u16) -> Result<(u16, bool), String> {
+fn probe_gateway_port(start_port: u16, ws_port: u16) -> Result<(u16, bool), String> {
     if is_port_available(start_port) {
-        return Ok((start_port, false));
+        if is_port_available(ws_port) {
+            return Ok((start_port, false));
+        }
+        return Err(format!(
+            "WebUI 会话端口 {} 已被占用。请关闭残留的 Mona 运行时或释放端口后重试。",
+            ws_port
+        ));
     }
-    // 端口被占：判断占用者是不是一个可用的 Mona gateway。
-    if http_health_ok(start_port) {
+    if http_gateway_compatible(start_port) && http_websocket_compatible(ws_port) {
         return Ok((start_port, true));
     }
     Err(format!(
-        "Gateway port {} is already in use by a non-gateway process. \
-         Free the port or change the gateway port in settings.",
-        start_port
+        "Gateway 端口 {} / {} 被不兼容的进程占用。请关闭残留的 Mona 运行时或释放端口后重试。",
+        start_port, ws_port
     ))
 }
 
@@ -325,12 +364,34 @@ fn is_port_available(port: u16) -> bool {
     TcpListener::bind(("127.0.0.1", port)).is_ok()
 }
 
-/// 同步 GET /health，判断端口上是否跑着 Mona gateway。
-fn http_health_ok(port: u16) -> bool {
-    http_request(port, "GET", "/health").map_or(false, |body| {
-        // 响应体应包含 {"status":"ok"}；只做宽松包含判断以兼容空白差异。
-        body.contains("\"ok\"") || body.contains("ok")
-    })
+fn http_gateway_compatible(port: u16) -> bool {
+    http_request(port, "GET", "/health")
+        .map_or(false, |response| health_response_compatible(&response, "mona-gateway", "agent-http-v1"))
+}
+
+fn http_websocket_compatible(port: u16) -> bool {
+    http_request(port, "GET", "/health")
+        .map_or(false, |response| health_response_compatible(&response, "mona-websocket", "sessions-v1"))
+}
+
+fn health_response_compatible(response: &str, service: &str, capability: &str) -> bool {
+    let status_ok = response
+        .lines()
+        .next()
+        .map_or(false, |line| line.contains(" 200 "));
+    if !status_ok {
+        return false;
+    }
+    let body = response.split_once("\r\n\r\n").map_or("", |(_, body)| body);
+    let Ok(payload) = serde_json::from_str::<serde_json::Value>(body) else {
+        return false;
+    };
+    payload.get("status").and_then(|value| value.as_str()) == Some("ok")
+        && payload.get("service").and_then(|value| value.as_str()) == Some(service)
+        && payload
+            .get("capabilities")
+            .and_then(|value| value.as_array())
+            .is_some_and(|values| values.iter().any(|value| value.as_str() == Some(capability)))
 }
 
 /// 同步 POST /shutdown，通知外部 gateway 优雅退出。
@@ -378,7 +439,7 @@ fn proc_is_alive(proc: &GatewayProcess) -> bool {
     if !proc.external {
         return false;
     }
-    http_health_ok(proc.port)
+    http_gateway_compatible(proc.port) && http_websocket_compatible(proc.ws_port)
 }
 
 /// Strip environment variables that can interfere with the packaged gateway.
@@ -452,6 +513,7 @@ pub async fn read_gateway_log(max_lines: Option<usize>) -> Result<serde_json::Va
 
 pub async fn wait_for_gateway<F>(
     port: u16,
+    ws_port: u16,
     timeout_secs: u64,
     mut gateway_exit_message: F,
 ) -> Result<(), String>
@@ -462,7 +524,8 @@ where
         .no_proxy()
         .build()
         .map_err(|e| format!("Failed to create gateway health client: {}", e))?;
-    let url = format!("http://127.0.0.1:{}/health", port);
+    let gateway_url = format!("http://127.0.0.1:{}/health", port);
+    let websocket_url = format!("http://127.0.0.1:{}/health", ws_port);
     let start = std::time::Instant::now();
     let timeout = std::time::Duration::from_secs(timeout_secs);
 
@@ -474,9 +537,10 @@ where
         if start.elapsed() > timeout {
             let log_tail = read_log_tail(20);
             let mut msg = format!(
-                "Gateway did not start within {}s on port {}. See log: {}",
+                "Gateway did not start within {}s on ports {} / {}. See log: {}",
                 timeout_secs,
                 port,
+                ws_port,
                 gateway_log_path().display()
             );
             if !log_tail.is_empty() {
@@ -485,14 +549,66 @@ where
             return Err(msg);
         }
 
-        match client.get(&url).timeout(std::time::Duration::from_secs(2)).send().await {
-            Ok(resp) if resp.status().is_success() => {
-                log::info!("Gateway is ready on port {}", port);
-                return Ok(());
-            }
-            _ => {
-                tokio::time::sleep(std::time::Duration::from_millis(500)).await;
-            }
+        if endpoint_compatible(&client, &gateway_url, "mona-gateway", "agent-http-v1").await
+            && endpoint_compatible(&client, &websocket_url, "mona-websocket", "sessions-v1").await
+        {
+            log::info!("Gateway is ready on ports {} / {}", port, ws_port);
+            return Ok(());
         }
+        tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+    }
+}
+
+async fn endpoint_compatible(
+    client: &reqwest::Client,
+    url: &str,
+    service: &str,
+    capability: &str,
+) -> bool {
+    let Ok(response) = client
+        .get(url)
+        .timeout(std::time::Duration::from_secs(2))
+        .send()
+        .await
+    else {
+        return false;
+    };
+    if !response.status().is_success() {
+        return false;
+    }
+    let Ok(payload) = response.json::<serde_json::Value>().await else {
+        return false;
+    };
+    payload.get("status").and_then(|value| value.as_str()) == Some("ok")
+        && payload.get("service").and_then(|value| value.as_str()) == Some(service)
+        && payload
+            .get("capabilities")
+            .and_then(|value| value.as_array())
+            .is_some_and(|values| values.iter().any(|value| value.as_str() == Some(capability)))
+}
+
+#[cfg(test)]
+mod readiness_tests {
+    use super::health_response_compatible;
+
+    #[test]
+    fn gateway_health_requires_identity_and_capability() {
+        let response = "HTTP/1.1 200 OK\r\n\r\n{\"status\": \"ok\", \"service\": \"mona-gateway\", \"capabilities\": [\"agent-http-v1\"]}";
+        assert!(health_response_compatible(response, "mona-gateway", "agent-http-v1"));
+        assert!(!health_response_compatible(
+            "HTTP/1.1 200 OK\r\n\r\n{\"status\": \"ok\"}",
+            "mona-gateway",
+            "agent-http-v1",
+        ));
+    }
+
+    #[test]
+    fn websocket_health_rejects_static_html() {
+        let response = "HTTP/1.1 200 OK\r\n\r\n<!doctype html><title>Mona</title>";
+        assert!(!health_response_compatible(
+            response,
+            "mona-websocket",
+            "sessions-v1",
+        ));
     }
 }

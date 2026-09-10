@@ -10,11 +10,13 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import html
+import random
 import re
 import time
 import unicodedata
 from dataclasses import asdict, dataclass, field
 from datetime import datetime, timezone
+from email.utils import parsedate_to_datetime
 from typing import Any, Iterable
 from urllib.parse import quote
 
@@ -25,6 +27,9 @@ from .models import SourceRecord
 
 DEFAULT_TIMEOUT = httpx.Timeout(connect=10.0, read=30.0, write=10.0, pool=10.0)
 DEFAULT_USER_AGENT = "MonaAcademicResearch/0.1"
+
+_PROVIDER_REQUEST_LOCKS: dict[str, asyncio.Lock] = {}
+_PROVIDER_LAST_REQUEST_AT: dict[str, float] = {}
 
 
 @dataclass(frozen=True, slots=True)
@@ -268,7 +273,16 @@ def _error_from_response(provider: str, response: httpx.Response) -> ProviderErr
         try:
             retry_after = float(raw_retry_after)
         except ValueError:
-            retry_after = None
+            try:
+                retry_at = parsedate_to_datetime(raw_retry_after)
+                if retry_at.tzinfo is None:
+                    retry_at = retry_at.replace(tzinfo=timezone.utc)
+                retry_after = max(
+                    0.0,
+                    (retry_at - datetime.now(timezone.utc)).total_seconds(),
+                )
+            except (TypeError, ValueError, OverflowError):
+                retry_after = None
     return ProviderError(
         provider=provider,
         code="rate_limited" if status == 429 else "http_error",
@@ -281,6 +295,7 @@ def _error_from_response(provider: str, response: httpx.Response) -> ProviderErr
 
 class _HTTPProvider:
     provider = "academic"
+    default_min_interval = 0.0
 
     def __init__(
         self,
@@ -288,27 +303,86 @@ class _HTTPProvider:
         transport: httpx.AsyncBaseTransport | None = None,
         timeout: httpx.Timeout | float = DEFAULT_TIMEOUT,
         user_agent: str = DEFAULT_USER_AGENT,
+        min_interval: float | None = None,
+        max_retries: int = 2,
+        max_retry_wait: float = 15.0,
+        retry_base_delay: float = 0.5,
     ) -> None:
         self.transport = transport
         self.timeout = timeout
         self.user_agent = user_agent
+        self.min_interval = max(
+            0.0,
+            self.default_min_interval if min_interval is None else min_interval,
+        )
+        self.max_retries = max(0, max_retries)
+        self.max_retry_wait = max(0.0, max_retry_wait)
+        self.retry_base_delay = max(0.0, retry_base_delay)
+
+    async def _request(
+        self,
+        client: httpx.AsyncClient,
+        url: str,
+        *,
+        params: dict[str, Any] | None,
+    ) -> httpx.Response:
+        lock = _PROVIDER_REQUEST_LOCKS.setdefault(self.provider, asyncio.Lock())
+        async with lock:
+            wait = self.min_interval - (
+                time.monotonic() - _PROVIDER_LAST_REQUEST_AT.get(self.provider, 0.0)
+            )
+            if wait > 0:
+                await asyncio.sleep(wait)
+            _PROVIDER_LAST_REQUEST_AT[self.provider] = time.monotonic()
+            return await client.get(url, params=params)
+
+    def _retry_delay(self, error: ProviderError, attempt: int) -> float:
+        if error.retry_after is not None:
+            return max(0.0, error.retry_after)
+        base = self.retry_base_delay * (2**attempt)
+        return base + random.uniform(0.0, base * 0.25)
 
     async def _get(self, url: str, *, params: dict[str, Any] | None = None) -> tuple[httpx.Response | None, ProviderError | None]:
-        try:
-            async with httpx.AsyncClient(
-                transport=self.transport,
-                timeout=self.timeout,
-                headers={"Accept": "application/json", "User-Agent": self.user_agent},
-                follow_redirects=True,
-            ) as client:
-                response = await client.get(url, params=params)
-        except httpx.TimeoutException as exc:
-            return None, ProviderError(self.provider, "timeout", str(exc) or "request timed out", retryable=True)
-        except httpx.RequestError as exc:
-            return None, ProviderError(self.provider, "transport_error", str(exc) or "request failed", retryable=True)
-        if response.status_code >= 400:
-            return response, _error_from_response(self.provider, response)
-        return response, None
+        waited = 0.0
+        async with httpx.AsyncClient(
+            transport=self.transport,
+            timeout=self.timeout,
+            headers={"Accept": "application/json", "User-Agent": self.user_agent},
+            follow_redirects=True,
+        ) as client:
+            for attempt in range(self.max_retries + 1):
+                response: httpx.Response | None = None
+                try:
+                    response = await self._request(client, url, params=params)
+                except httpx.TimeoutException as exc:
+                    error = ProviderError(
+                        self.provider,
+                        "timeout",
+                        str(exc) or "request timed out",
+                        retryable=True,
+                    )
+                except httpx.RequestError as exc:
+                    error = ProviderError(
+                        self.provider,
+                        "transport_error",
+                        str(exc) or "request failed",
+                        retryable=True,
+                    )
+                else:
+                    if response.status_code < 400:
+                        return response, None
+                    error = _error_from_response(self.provider, response)
+
+                if not error.retryable or attempt >= self.max_retries:
+                    return response, error
+                delay = self._retry_delay(error, attempt)
+                if waited + delay > self.max_retry_wait:
+                    return response, error
+                if delay > 0:
+                    await asyncio.sleep(delay)
+                waited += delay
+
+        raise AssertionError("academic provider retry loop ended unexpectedly")
 
     async def _json(self, url: str, *, params: dict[str, Any] | None = None) -> tuple[Any, ProviderError | None]:
         response, error = await self._get(url, params=params)
@@ -348,6 +422,7 @@ class _HTTPProvider:
 class OpenAlexProvider(_HTTPProvider):
     provider = "openalex"
     base_url = "https://api.openalex.org"
+    default_min_interval = 0.1
 
     def __init__(self, *, mailto: str | None = None, **kwargs: Any) -> None:
         super().__init__(**kwargs)
@@ -438,6 +513,7 @@ class OpenAlexProvider(_HTTPProvider):
 class CrossrefProvider(_HTTPProvider):
     provider = "crossref"
     base_url = "https://api.crossref.org"
+    default_min_interval = 0.2
 
     def __init__(self, *, mailto: str | None = None, **kwargs: Any) -> None:
         super().__init__(**kwargs)
@@ -542,6 +618,7 @@ class CrossrefProvider(_HTTPProvider):
 class EuropePMCProvider(_HTTPProvider):
     provider = "europe_pmc"
     base_url = "https://www.ebi.ac.uk/europepmc/webservices/rest"
+    default_min_interval = 0.1
 
     @staticmethod
     def _authors(item: dict[str, Any]) -> list[str]:
@@ -624,17 +701,7 @@ class EuropePMCProvider(_HTTPProvider):
 class ArxivProvider(_HTTPProvider):
     provider = "arxiv"
     base_url = "https://export.arxiv.org/api/query"
-
-    def __init__(self, *, min_interval: float = 3.0, **kwargs: Any) -> None:
-        super().__init__(**kwargs)
-        self.min_interval = max(0.0, min_interval)
-        self._last_request = 0.0
-
-    async def _wait_rate_limit(self) -> None:
-        wait = self.min_interval - (time.monotonic() - self._last_request)
-        if wait > 0:
-            await asyncio.sleep(wait)
-        self._last_request = time.monotonic()
+    default_min_interval = 3.0
 
     @staticmethod
     def _child(element: Any, name: str) -> str | None:
@@ -668,7 +735,6 @@ class ArxivProvider(_HTTPProvider):
         )
 
     async def _query(self, *, search_query: str | None = None, id_list: str | None = None, start: int = 0, limit: int = 20) -> ProviderPage:
-        await self._wait_rate_limit()
         params = {"max_results": min(max(limit, 1), 2000), "start": max(0, start)}
         if search_query:
             params["search_query"] = f"all:{search_query}"
@@ -706,6 +772,7 @@ class ArxivProvider(_HTTPProvider):
 class ClinicalTrialsProvider(_HTTPProvider):
     provider = "clinicaltrials_gov"
     base_url = "https://clinicaltrials.gov/api/v2"
+    default_min_interval = 0.1
 
     @staticmethod
     def _date(module: dict[str, Any]) -> str | None:

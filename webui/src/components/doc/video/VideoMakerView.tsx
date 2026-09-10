@@ -75,6 +75,21 @@ type TtsProvider = "edge" | "custom";
 type VideoCreationMode = "single" | "series";
 type ConfigSubview = "video" | "create-series" | "style-editor";
 
+export interface EmbeddedVideoProject {
+  name: string;
+  phase: VideoProjectPhase;
+  chatId: string | null;
+}
+
+interface VideoMakerViewProps {
+  embedded?: boolean;
+  hostChatId?: string | null;
+  hostIsStreaming?: boolean;
+  initialProject?: EmbeddedVideoProject | null;
+  onProjectChange?: (project: EmbeddedVideoProject | null) => void;
+  onSendVideoTurn?: (content: string, displayContent?: string) => void;
+}
+
 const RATIOS: Array<{ value: VideoRatio; label: string; resolution: string }> =
   [
     { value: "16:9", label: "横屏", resolution: "1920×1080" },
@@ -137,7 +152,14 @@ function getStepStatus(
   return "pending";
 }
 
-export function VideoMakerView() {
+export function VideoMakerView({
+  embedded = false,
+  hostChatId = null,
+  hostIsStreaming = false,
+  initialProject = null,
+  onProjectChange,
+  onSendVideoTurn,
+}: VideoMakerViewProps = {}) {
   const { client, token } = useClient();
   const bp = useBreakpoint();
   const [topic, setTopic] = useState("");
@@ -191,14 +213,14 @@ export function VideoMakerView() {
   const [pendingMusicPath, setPendingMusicPath] = useState<string | null>(null);
   const [musicRights, setMusicRights] =
     useState<VideoAssetRightsStatus>("unknown");
-  const [phase, setPhase] = useState<VideoPhase>("config");
+  const [phase, setPhase] = useState<VideoPhase>(initialProject?.phase ?? "config");
   // 视图模式与服务端 phase 解耦：phase 驱动步骤条高亮，viewMode 驱动视图。
   // 步骤条点击回退只改 viewMode，不回退服务端阶段。
   const [viewMode, setViewMode] = useState<"storyboard" | "producing">(
     "storyboard",
   );
-  const [chatId, setChatId] = useState<string | null>(null);
-  const [projectName, setProjectName] = useState<string | null>(null);
+  const [chatId, setChatId] = useState<string | null>(initialProject?.chatId ?? hostChatId);
+  const [projectName, setProjectName] = useState<string | null>(initialProject?.name ?? null);
   const [createError, setCreateError] = useState<string | null>(null);
 
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
@@ -209,6 +231,34 @@ export function VideoMakerView() {
   // Incremented when AI finishes a reply (streaming → false) to trigger storyboard refresh
   const [aiTurnComplete, setAiTurnComplete] = useState(0);
   const wasStreamingRef = useRef(false);
+  const onProjectChangeRef = useRef(onProjectChange);
+
+  useEffect(() => {
+    onProjectChangeRef.current = onProjectChange;
+  }, [onProjectChange]);
+
+  useEffect(() => {
+    if (!embedded) return;
+    setChatId(initialProject?.chatId ?? hostChatId);
+    if (initialProject) {
+      setProjectName(initialProject.name);
+      setPhase(initialProject.phase);
+      setViewMode(initialProject.phase === "storyboard" ? "storyboard" : "producing");
+    }
+  }, [embedded, hostChatId, initialProject?.chatId, initialProject?.name, initialProject?.phase]);
+
+  useEffect(() => {
+    if (!embedded) return;
+    if (wasStreamingRef.current && !hostIsStreaming) setAiTurnComplete((current) => current + 1);
+    wasStreamingRef.current = hostIsStreaming;
+  }, [embedded, hostIsStreaming]);
+
+  useEffect(() => {
+    if (!embedded) return;
+    onProjectChangeRef.current?.(projectName && phase !== "config"
+      ? { name: projectName, phase, chatId }
+      : null);
+  }, [chatId, embedded, phase, projectName]);
 
   const refreshSeries = useCallback(async () => {
     setSeriesLoading(true);
@@ -669,12 +719,17 @@ export function VideoMakerView() {
         throw new Error(created.error || "创建项目失败");
       }
       // 2. Create session
-      const newChatId = await client.newChat(5_000, false, null, "video");
+      const newChatId = embedded
+        ? hostChatId
+        : await client.newChat(5_000, false, null, "video");
+      if (!newChatId) throw new Error("当前视频会话尚未就绪");
       setChatId(newChatId);
       // 3. Save chat_id
       await saveVideoChatId(token, name, newChatId);
       // 4. Send prompt
-      client.sendMessage(newChatId, prompt, undefined, {
+      if (embedded && onSendVideoTurn) onSendVideoTurn(prompt, displayText);
+      else client.sendMessage(newChatId, prompt, undefined, {
+        agentKind: embedded ? "video" : undefined,
         displayContent: displayText,
       });
       setPhase("storyboard");
@@ -689,6 +744,9 @@ export function VideoMakerView() {
     }
   }, [
     client,
+    embedded,
+    hostChatId,
+    onSendVideoTurn,
     topic,
     ratio,
     creationMode,
@@ -711,9 +769,10 @@ export function VideoMakerView() {
   const handleSendMessage = useCallback(
     (content: string) => {
       if (!chatId) return;
-      client.sendMessage(chatId, content);
+      if (embedded && onSendVideoTurn) onSendVideoTurn(content);
+      else client.sendMessage(chatId, content, undefined, embedded ? { agentKind: "video" } : undefined);
     },
-    [chatId, client],
+    [chatId, client, embedded, onSendVideoTurn],
   );
 
   // Detect AI turn completion: streaming transitions from true → false.
@@ -817,6 +876,7 @@ export function VideoMakerView() {
   // Restore active project on mount (handles page switching). The server
   // project record decides which phase to enter — local state is only a pointer.
   useEffect(() => {
+    if (embedded) return;
     let cancelled = false;
     try {
       const savedName = localStorage.getItem(ACTIVE_PROJECT_KEY);
@@ -839,7 +899,7 @@ export function VideoMakerView() {
       cancelled = true;
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+  }, [embedded]);
 
   const startResize = useCallback(
     (e: React.MouseEvent) => {
@@ -870,7 +930,7 @@ export function VideoMakerView() {
   return (
     <div className="flex h-full flex-col bg-background">
       <div className="flex min-h-0 flex-1">
-        {sidebarCollapsed ? (
+        {!embedded && (sidebarCollapsed ? (
           <TooltipProvider delayDuration={100}>
             <div className="flex w-12 shrink-0 flex-col items-center border-r border-border/70 bg-card py-3">
               <Tooltip>
@@ -983,7 +1043,7 @@ export function VideoMakerView() {
               aria-hidden="true"
             />
           </aside>
-        )}
+        ))}
 
         <div className="flex min-h-0 flex-1 flex-col">
           {/* 步骤条：phase 驱动高亮；有项目时「编辑分镜」可点击回退，
@@ -1675,14 +1735,14 @@ export function VideoMakerView() {
                 onLocked={handleStoryboardDone}
                 refreshTrigger={aiTurnComplete}
                 alreadyLocked={phase !== "storyboard"}
-                chatPanel={
+                chatPanel={embedded ? undefined : (
                   <DocChatPanel
                     chatId={chatId}
                     onSend={handleSendMessage}
                     onStreamingChange={handleStreamingChange}
                     placeholder="与视频助手对话调整分镜..."
                   />
-                }
+                )}
               />
             </div>
           ) : (

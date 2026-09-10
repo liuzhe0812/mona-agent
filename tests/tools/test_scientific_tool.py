@@ -114,6 +114,63 @@ async def test_academic_search_merges_sources_and_preserves_provider_errors():
     assert payload["query_log"]["action"] == "search"
     assert payload["query_log"]["providers"] == ["good", "broken"]
     assert payload["query_log"]["query"] == "graph neural network"
+    assert payload["coverage_complete"] is False
+    assert payload["truncated"] is False
+    assert payload["provider_status"] == {
+        "good": {"ok": True, "returned_count": 1, "has_more": False},
+        "broken": {
+            "ok": False,
+            "returned_count": 0,
+            "has_more": False,
+            "error_code": "rate_limited",
+        },
+    }
+
+
+@pytest.mark.asyncio
+async def test_academic_search_keeps_each_provider_limit_and_reports_more_pages():
+    class Provider:
+        def __init__(self, provider: str, *, next_cursor: str | None = None):
+            self.provider = provider
+            self.next_cursor = next_cursor
+
+        async def search(self, query: str, *, limit: int, cursor: str | None = None):
+            assert limit == 2
+            return ProviderPage(
+                self.provider,
+                records=[
+                    _source(f"{self.provider}-1", self.provider),
+                    _source(f"{self.provider}-2", self.provider),
+                ],
+                next_cursor=self.next_cursor,
+            )
+
+    tool = AcademicSearchTool(
+        providers={
+            "first": Provider("first"),
+            "second": Provider("second", next_cursor="second-page-2"),
+        }
+    )
+
+    payload = json.loads(
+        await tool.execute(
+            action="search",
+            query="topic",
+            providers=["first", "second"],
+            limit=2,
+        )
+    )
+
+    assert len(payload["records"]) == 4
+    assert payload["next_cursors"] == {"second": "second-page-2"}
+    assert payload["coverage_complete"] is False
+    assert payload["truncated"] is True
+    assert payload["provider_status"] == {
+        "first": {"ok": True, "returned_count": 2, "has_more": False},
+        "second": {"ok": True, "returned_count": 2, "has_more": True},
+    }
+    assert payload["query_log"]["limit"] == 2
+    assert payload["query_log"]["limit_per_provider"] == 2
 
 
 @pytest.mark.asyncio

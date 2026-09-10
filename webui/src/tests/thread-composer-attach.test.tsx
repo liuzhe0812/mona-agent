@@ -5,7 +5,7 @@ import {
   screen,
   waitFor,
 } from "@testing-library/react";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { ThreadComposer } from "@/components/thread/ThreadComposer";
 import type { EncodeResponse } from "@/lib/imageEncode";
@@ -50,6 +50,10 @@ beforeEach(() => {
   }
 });
 
+afterEach(() => {
+  delete window.__TAURI_INTERNALS__;
+});
+
 describe("ThreadComposer — image attachments", () => {
   it("routes a picked file of any format to the document uploader", () => {
     const onAddDocuments = vi.fn();
@@ -70,6 +74,23 @@ describe("ThreadComposer — image attachments", () => {
   it("routes a dropped video to the document uploader", () => {
     const onAddDocuments = vi.fn();
     const file = new File(["video"], "clip.mp4", { type: "video/mp4" });
+    render(<ThreadComposer onSend={vi.fn()} onAddDocuments={onAddDocuments} />);
+
+    const form = screen.getByLabelText(/message input/i).closest("form")!;
+    fireEvent.dragEnter(form, { dataTransfer: { files: [file], types: ["Files"] } });
+    fireEvent.drop(form, { dataTransfer: { files: [file], types: ["Files"] } });
+
+    expect(onAddDocuments).toHaveBeenCalledWith([file]);
+    expect(encodeImage).not.toHaveBeenCalled();
+  });
+
+  it("uses the document uploader for desktop file drops just like the add-file picker", () => {
+    Object.defineProperty(window, "__TAURI_INTERNALS__", {
+      value: {},
+      configurable: true,
+    });
+    const onAddDocuments = vi.fn();
+    const file = pngFile("reference.png");
     render(<ThreadComposer onSend={vi.fn()} onAddDocuments={onAddDocuments} />);
 
     const form = screen.getByLabelText(/message input/i).closest("form")!;

@@ -134,7 +134,7 @@ describe("BrowserToolbar", () => {
       />,
     );
 
-    fireEvent.click(screen.getByTitle("选项"));
+    fireEvent.click(screen.getByRole("button", { name: "选项" }));
 
     await waitFor(() => expect(menuNew).toHaveBeenCalledTimes(1));
     expect(popup).toHaveBeenCalledTimes(1);
@@ -169,12 +169,14 @@ describe("BrowserToolbar", () => {
       />,
     );
 
-    fireEvent.click(screen.getByTitle("提取为笔记"));
+    fireEvent.click(screen.getByRole("button", { name: "提取为笔记" }));
 
     expect(onCreateNote).toHaveBeenCalledTimes(1);
   });
 
-  it("opens downloads from a conventional toolbar button", () => {
+  it("opens the downloads popup without switching to the downloads page", () => {
+    const onOpenDownloads = vi.fn();
+
     vi.spyOn(HTMLButtonElement.prototype, "getBoundingClientRect").mockReturnValue({
       left: 720,
       top: 12,
@@ -197,11 +199,13 @@ describe("BrowserToolbar", () => {
         onReload={vi.fn()}
         onToggleAiPanel={vi.fn()}
         onToggleBookmarkBar={vi.fn()}
+        onOpenDownloads={onOpenDownloads}
       />,
     );
 
-    fireEvent.click(screen.getByTitle("下载"));
+    fireEvent.click(screen.getByRole("button", { name: "下载" }));
 
     expect(toggleDownloads).toHaveBeenCalledWith({ left: 384, top: 42 });
+    expect(onOpenDownloads).not.toHaveBeenCalled();
   });
 });

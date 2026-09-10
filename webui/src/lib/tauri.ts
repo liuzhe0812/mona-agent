@@ -146,16 +146,22 @@ export interface SidebarModuleConfig {
   order: number;
 }
 
+export type SendMessageShortcut = "enter" | "ctrl_enter";
+export const SEND_MESSAGE_SHORTCUT_EVENT = "mona:send-message-shortcut";
+
 export interface DesktopAppSettings {
   run_in_background: boolean;
   auto_start_gateway: boolean;
   gateway_port: number;
   quick_ask_shortcut: string;
   quick_ask_mode: string;
+  send_message_shortcut: SendMessageShortcut;
   sidebar_shortcuts: SidebarShortcuts;
   default_view: string;
   sidebar_modules: SidebarModuleConfig[];
   config_path: string | null;
+  browser_automation_enabled: boolean;
+  computer_use_enabled: boolean;
 }
 
 export async function getGatewayStatus(): Promise<GatewayStatus> {
@@ -172,6 +178,48 @@ export async function getDesktopSettings(): Promise<DesktopAppSettings> {
 
 export async function updateDesktopSettings(settings: DesktopAppSettings): Promise<DesktopAppSettings> {
   return invoke<DesktopAppSettings>("update_settings", { newSettings: settings });
+}
+
+export interface ManagedModelPrice {
+  model: string;
+  billing_type?: "token" | "image" | "video";
+  rates?: Record<string, string>;
+  input_amount_per_million?: string;
+  cached_input_amount_per_million?: string;
+  output_amount_per_million?: string;
+  promotion_label?: string;
+  promotion_name?: string;
+  discount_percent?: number;
+  original_input_amount_per_million?: string;
+  original_cached_input_amount_per_million?: string;
+  original_output_amount_per_million?: string;
+}
+
+export async function getManagedModelPrices(): Promise<{ prices: ManagedModelPrice[] }> {
+  return invoke<{ prices: ManagedModelPrice[] }>("get_managed_model_prices");
+}
+
+export interface ManagedCreditUsageRecent {
+  request_id: string;
+  model: string;
+  billing_type: "token" | "image" | "video";
+  status: string;
+  spent_amount: string | null;
+  reserved_amount: string;
+  usage?: Record<string, unknown> | null;
+  result?: Record<string, unknown> | null;
+  created_at: string;
+  settled_at: string | null;
+}
+
+export interface ManagedCreditUsage {
+  period_spent_amount: string;
+  pending_reserved_amount: string;
+  recent: ManagedCreditUsageRecent[];
+}
+
+export async function getCreditUsage(tzOffsetMinutes: number): Promise<ManagedCreditUsage> {
+  return invoke<ManagedCreditUsage>("get_credit_usage", { tzOffsetMinutes });
 }
 
 export async function startGateway(): Promise<number> {
@@ -272,6 +320,79 @@ export async function saveDesktopNotesState(state: unknown): Promise<void> {
   return invoke<void>("notes_save_state", { state });
 }
 
+export async function deleteDesktopNotes(noteIds: string[]): Promise<void> {
+  return invoke<void>("notes_delete", { noteIds });
+}
+
+export interface WorkspaceCanvasDocument {
+  version: 1;
+  id: string;
+  kind: "flowchart" | "mindmap";
+  title: string;
+  originChatId?: string;
+  createdAt: string;
+  updatedAt: string;
+  contentMarkdown: string;
+}
+
+export interface SavedWorkspaceCanvas {
+  canvas: WorkspaceCanvasDocument;
+  path: string;
+}
+
+export async function saveWorkspaceCanvas(
+  workspaceRoot: string,
+  canvas: WorkspaceCanvasDocument,
+): Promise<SavedWorkspaceCanvas> {
+  const saved = await invoke<SavedWorkspaceCanvas>("workspace_canvas_save", { workspaceRoot, canvas });
+  window.dispatchEvent(new CustomEvent("mona:workspace-canvas-changed", {
+    detail: { canvasId: saved.canvas.id, path: saved.path },
+  }));
+  return saved;
+}
+
+export function listWorkspaceCanvases(
+  workspaceRoot: string,
+  chatId?: string,
+): Promise<SavedWorkspaceCanvas[]> {
+  return invoke<SavedWorkspaceCanvas[]>("workspace_canvas_list", {
+    workspaceRoot,
+    chatId: chatId || null,
+  });
+}
+
+export function readWorkspaceCanvas(
+  workspaceRoot: string,
+  path: string,
+): Promise<SavedWorkspaceCanvas> {
+  return invoke<SavedWorkspaceCanvas>("workspace_canvas_read", { workspaceRoot, path });
+}
+
+export function openWorkspaceCanvasFile(path: string): Promise<SavedWorkspaceCanvas> {
+  return invoke<SavedWorkspaceCanvas>("workspace_canvas_open_file", { path });
+}
+
+export async function writeWorkspaceCanvasFile(
+  path: string,
+  canvas: WorkspaceCanvasDocument,
+): Promise<SavedWorkspaceCanvas> {
+  const saved = await invoke<SavedWorkspaceCanvas>("workspace_canvas_write_file", { path, canvas });
+  window.dispatchEvent(new CustomEvent("mona:workspace-canvas-changed", {
+    detail: { canvasId: saved.canvas.id, path: saved.path },
+  }));
+  return saved;
+}
+
+export async function migrateLegacyCanvases(workspaceRoot: string): Promise<number> {
+  const migrated = await invoke<number>("workspace_canvas_migrate_legacy", { workspaceRoot });
+  if (migrated > 0) {
+    window.dispatchEvent(new CustomEvent("mona:workspace-canvas-changed", {
+      detail: { migrated },
+    }));
+  }
+  return migrated;
+}
+
 export async function exportNoteTempFile(noteId: string, content: string): Promise<string> {
   return invoke<string>("notes_export_temp", { noteId, content });
 }
@@ -281,11 +402,13 @@ export async function createNoteFromChat(
   contentMarkdown: string,
   notebookId?: string,
 ): Promise<string> {
-  return invoke<string>("notes_create_from_chat", {
+  const noteId = await invoke<string>("notes_create_from_chat", {
     title,
     contentMarkdown,
     notebookId: notebookId ?? null,
   });
+  window.dispatchEvent(new CustomEvent("mona:notes-changed"));
+  return noteId;
 }
 
 export interface NoteSearchResult {
@@ -340,6 +463,13 @@ export async function searchAllNotes(
 
 export async function getNotesAssetsDir(): Promise<string> {
   return invoke<string>("notes_get_assets_dir");
+}
+
+export async function saveNoteImageData(
+  imageData: string,
+  fileName: string,
+): Promise<string> {
+  return invoke<string>("notes_save_image_data", { imageData, fileName });
 }
 
 export async function getNotesVaultPath(): Promise<string | null> {
@@ -592,6 +722,10 @@ export async function getCurrentVersion(): Promise<string> {
   return invoke<string>("get_current_version");
 }
 
+export async function takeUpdateError(): Promise<string | null> {
+  return invoke<string | null>("take_update_error");
+}
+
 // ---------------------------------------------------------------------------
 // 全局右下角通知弹窗（独立 Tauri 窗口）
 // ---------------------------------------------------------------------------
@@ -645,24 +779,31 @@ export interface MaterialsEntry {
 export function materialsImportFiles(
   sourcePaths: string[],
   targetDir: string,
+  knowledgeBaseId?: string,
+  agentId?: string,
 ): Promise<MaterialsEntry[]> {
   return invoke<MaterialsEntry[]>("materials_import_files", {
     sourcePaths,
     targetDir,
+    knowledgeBaseId,
+    agentId,
   });
 }
 
 /** 列出 raw 目录下的文件和文件夹（非递归）。 */
-export function materialsListDir(subdir: string | null): Promise<MaterialsEntry[]> {
-  return invoke<MaterialsEntry[]>("materials_list_dir", { subdir });
+export function materialsListDir(
+  subdir: string | null,
+  knowledgeBaseId?: string,
+): Promise<MaterialsEntry[]> {
+  return invoke<MaterialsEntry[]>("materials_list_dir", { subdir, knowledgeBaseId });
 }
 
 /** 确保 .mona/materials/{raw,text,wiki}/ 存在。 */
-export function materialsEnsureInitialized(): Promise<boolean> {
-  return invoke<boolean>("materials_ensure_initialized");
+export function materialsEnsureInitialized(knowledgeBaseId?: string): Promise<boolean> {
+  return invoke<boolean>("materials_ensure_initialized", { knowledgeBaseId });
 }
 
 /** 返回 wiki 目录绝对路径。 */
-export function materialsGetWikiDir(): Promise<string | null> {
-  return invoke<string | null>("materials_get_wiki_dir");
+export function materialsGetWikiDir(knowledgeBaseId?: string): Promise<string | null> {
+  return invoke<string | null>("materials_get_wiki_dir", { knowledgeBaseId });
 }

@@ -47,6 +47,17 @@ describe("CodeBlock", () => {
     expect(screen.getByText("ts")).toBeInTheDocument();
   });
 
+  it("keeps tall chat code inside its own scroll area", () => {
+    render(
+      <ThemeProvider theme="light">
+        <CodeBlock language="mindmap" code="# 根节点\n- 子节点" highlight={false} />
+      </ThemeProvider>,
+    );
+
+    expect(screen.getByTestId("code-block-body")).toHaveClass("max-h-96", "overflow-auto");
+    expect(screen.queryByRole("button", { name: "Show all" })).not.toBeInTheDocument();
+  });
+
   it("reads theme from context without creating per-block observers", async () => {
     const originalMutationObserver = globalThis.MutationObserver;
     const observer = vi.fn();

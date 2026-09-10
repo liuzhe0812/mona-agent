@@ -14,6 +14,7 @@ const openStockIntradayStream = vi.fn();
 const fetchStockResearchContext = vi.fn();
 const fetchStockDiagnoses = vi.fn();
 const fetchStockDiagnosis = vi.fn();
+const fetchStockDiagnosisOutcome = vi.fn();
 const deleteStockDiagnosis = vi.fn();
 const preflightStockResearch = vi.fn();
 const fetchStockReports = vi.fn();
@@ -35,6 +36,11 @@ const confirmStockMaterialBinding = vi.fn();
 const fetchStockMaterialPage = vi.fn();
 const fetchSettings = vi.fn();
 const updateStockSettings = vi.fn();
+let licenseActive = true;
+
+vi.mock("@/hooks/useLicense", () => ({
+  useLicense: () => ({ licenseActive }),
+}));
 
 vi.mock("@/lib/stock-api", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@/lib/stock-api")>();
@@ -48,6 +54,7 @@ vi.mock("@/lib/stock-api", async (importOriginal) => {
     fetchStockResearchContext: (...args: unknown[]) => fetchStockResearchContext(...args),
     fetchStockDiagnoses: (...args: unknown[]) => fetchStockDiagnoses(...args),
     fetchStockDiagnosis: (...args: unknown[]) => fetchStockDiagnosis(...args),
+    fetchStockDiagnosisOutcome: (...args: unknown[]) => fetchStockDiagnosisOutcome(...args),
     deleteStockDiagnosis: (...args: unknown[]) => deleteStockDiagnosis(...args),
     preflightStockResearch: (...args: unknown[]) => preflightStockResearch(...args),
     fetchStockReports: (...args: unknown[]) => fetchStockReports(...args),
@@ -305,6 +312,7 @@ function makeDiagnosisReport() {
 
 beforeEach(() => {
   vi.clearAllMocks();
+  licenseActive = true;
   clearStockViewCache();
   // Clear queued one-shot implementations as well as call history; tests
   // intentionally script the same async client methods in different orders.
@@ -318,6 +326,7 @@ beforeEach(() => {
     fetchStockReport,
     fetchStockDiagnoses,
     fetchStockDiagnosis,
+    fetchStockDiagnosisOutcome,
     deleteStockDiagnosis,
   ]) mock.mockReset();
   runWorkflow.mockResolvedValue(undefined);
@@ -357,6 +366,7 @@ beforeEach(() => {
   fetchStockReports.mockResolvedValue([]);
   fetchStockDiagnoses.mockResolvedValue([]);
   fetchStockDiagnosis.mockRejectedValue(new Error("no diagnosis"));
+  fetchStockDiagnosisOutcome.mockRejectedValue(new Error("no outcome"));
   deleteStockDiagnosis.mockResolvedValue(undefined);
   fetchStockReport.mockResolvedValue({
     report: { report_id: "stock_report_a", kind: "deep_research" },
@@ -1555,6 +1565,19 @@ describe("StockView", () => {
     expect(runWorkflow).not.toHaveBeenCalledWith(STOCK_ROOM_CHAT_ID, expect.anything());
   });
 
+  it("keeps market data free while routing locked AI diagnosis to Pro", async () => {
+    licenseActive = false;
+    const onOpenSubscribe = vi.fn();
+    render(<StockView onOpenSubscribe={onOpenSubscribe} />);
+    await screen.findAllByText("贵州茅台");
+
+    expect(fetchStockQuotes).toHaveBeenCalled();
+    expect(fetchStockDiagnoses).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByRole("tab", { name: "AI诊股" }));
+    expect(onOpenSubscribe).toHaveBeenCalledTimes(1);
+    expect(runWorkflow).not.toHaveBeenCalledWith(STOCK_DIAGNOSIS_ROOM_CHAT_ID, expect.anything());
+  });
+
   it("starts the six-agent expert workflow only after its own tab action", async () => {
     render(<StockView />);
     await screen.findAllByText("贵州茅台");
@@ -1570,11 +1593,20 @@ describe("StockView", () => {
   it("renders a successful StockDiagnosisV1 result and keeps deep history in the expert tab", async () => {
     fetchStockDiagnoses.mockResolvedValueOnce([{ diagnosisId: "diagnosis_12345678", workflowId: "stock-ai-diagnosis", status: "succeeded", instrument: { symbol: "600519", exchange: "XSHG" } }]);
     fetchStockDiagnosis.mockResolvedValueOnce({ report: makeDiagnosisReport(), markdown: "" });
+    fetchStockDiagnosisOutcome.mockResolvedValueOnce({
+      schemaVersion: 1, diagnosisId: "diagnosis_12345678", trackingId: "track_1", status: "pending",
+      outcomeLabel: "诊股结果跟踪中", windowSessions: 10, observedSessions: 2,
+      calculationVersion: "diagnosis-single-stock-outcome-v1", dailyBarProxy: true,
+    });
     fetchStockReports.mockResolvedValueOnce([{ reportId: "deep-1", runId: "deep-run", kind: "deep_research", instrument: { instrumentId: "XSHG:600519" }, symbols: ["XSHG:600519"], asOf: "2026-08-25", modifiedAt: "2026-08-25", schemaVersion: 5, resultStatus: "completed", horizonDecisions: {} }]);
     render(<StockView />);
     await screen.findAllByText("贵州茅台");
     fireEvent.click(screen.getByRole("tab", { name: "AI诊股" }));
-    expect(await screen.findByTestId("ai-diagnosis-result")).toHaveTextContent("四层分析");
+    const diagnosis = await screen.findByTestId("ai-diagnosis-result");
+    expect(diagnosis).toHaveTextContent("核心判断");
+    expect(diagnosis).toHaveTextContent("维度评分概览");
+    expect(diagnosis).not.toHaveTextContent("四层分析");
+    expect(screen.queryByTestId("diagnosis-single-stock-outcome-pending")).not.toBeInTheDocument();
     expect(screen.queryByText("深度投研")).not.toBeInTheDocument();
     fireEvent.click(screen.getByRole("tab", { name: "专家团论证" }));
     expect(await screen.findByText(/专家团历史记录/)).toBeInTheDocument();

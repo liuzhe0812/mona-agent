@@ -1,10 +1,10 @@
-import { BotMessageSquare } from "lucide-react";
 import { useState } from "react";
 
 import { invokeWithTimeout } from "@/lib/tauri";
 import { cn } from "@/lib/utils";
 
 import { Button } from "@/components/ui/button";
+import { RightSidebarToggleIcon } from "@/components/notes/RightSidebarToggleIcon";
 import { MaintenancePanel } from "./MaintenancePanel";
 import { OverviewPanel } from "./OverviewPanel";
 import { SoftwarePanel } from "./SoftwarePanel";
@@ -14,14 +14,15 @@ import { SystemAssistant } from "./SystemAssistant";
 import type { SystemAgentHandoffTask } from "./systemAgentHandoff";
 import { SystemOptimizationPanel } from "./SystemOptimizationPanel";
 import { systemTabs, type SystemTab } from "./systemTabs";
-import { useSoftwareManagement, useStorageScan } from "./useSystemData";
+import { useSoftwareManagement, useStorageScan, type DirectorySize } from "./useSystemData";
 
 export function SystemView({ initialTab = "overview" }: { initialTab?: SystemTab }) {
   const [activeTab, setActiveTab] = useState<SystemTab>(initialTab);
   const [hasVisitedStorage, setHasVisitedStorage] = useState(initialTab === "storage");
   const [hasVisitedSoftware, setHasVisitedSoftware] = useState(initialTab === "software");
   const [handoffTask, setHandoffTask] = useState<SystemAgentHandoffTask | null>(null);
-  const [analysisRequest, setAnalysisRequest] = useState<{ goal: string; nonce: number; channel?: "plan" | "diagnose" } | null>(null);
+  const [analysisRequest, setAnalysisRequest] = useState<{ goal: string; nonce: number; channel?: "plan" | "diagnose" | "storage" } | null>(null);
+  const [storageSelection, setStorageSelection] = useState<DirectorySize | null>(null);
   const [assistantCollapsed, setAssistantCollapsed] = useState(
     () => localStorage.getItem("system.assistantCollapsed") === "true",
   );
@@ -39,6 +40,12 @@ export function SystemView({ initialTab = "overview" }: { initialTab?: SystemTab
       localStorage.setItem("system.assistantCollapsed", String(!previous));
       return !previous;
     });
+  };
+
+  const openAssistant = () => {
+    if (!assistantCollapsed) return;
+    localStorage.setItem("system.assistantCollapsed", "false");
+    setAssistantCollapsed(false);
   };
 
   const handleHandoff = (task: SystemAgentHandoffTask) => {
@@ -78,14 +85,15 @@ export function SystemView({ initialTab = "overview" }: { initialTab?: SystemTab
         </div>
         <Button
           variant="ghost"
-          size="sm"
+          size="icon"
+          title={assistantCollapsed ? "展开系统管家" : "收起系统管家"}
           aria-label={assistantCollapsed ? "展开 Mona 系统管家" : "收起 Mona 系统管家"}
-          aria-pressed={!assistantCollapsed}
+          aria-expanded={!assistantCollapsed}
+          aria-controls="system-assistant-panel"
           onClick={toggleAssistant}
-          className="gap-1.5"
+          className="h-7 w-7 text-muted-foreground hover:text-foreground"
         >
-          <BotMessageSquare className="h-4 w-4" />
-          系统管家
+          <RightSidebarToggleIcon open={!assistantCollapsed} className="h-3.5 w-3.5" />
         </Button>
       </header>
 
@@ -113,7 +121,24 @@ export function SystemView({ initialTab = "overview" }: { initialTab?: SystemTab
                 <StoragePanel
                   scan={storage}
                   onHandoff={handleHandoff}
-                  onAnalyze={(goal) => setAnalysisRequest({ goal, nonce: Date.now(), channel: "diagnose" })}
+                  onAnalyzeScope={(directory) => {
+                    setStorageSelection(directory);
+                    openAssistant();
+                    setAnalysisRequest({
+                      goal: "分析当前存储范围的主要占用、长期未修改大文件和可处理方向",
+                      nonce: Date.now(),
+                      channel: "storage",
+                    });
+                  }}
+                  onPlanCleanup={() => {
+                    openAssistant();
+                    setAnalysisRequest({
+                      goal: "释放磁盘可安全清理空间",
+                      nonce: Date.now(),
+                      channel: "plan",
+                    });
+                  }}
+                  onSelectionChange={setStorageSelection}
                 />
               </div>
             ) : null}
@@ -142,6 +167,7 @@ export function SystemView({ initialTab = "overview" }: { initialTab?: SystemTab
             setHandoffTask((current) => (current?.id === taskId ? null : current))
           }
           analysisRequest={analysisRequest}
+          storageSelection={storageSelection}
         />
       </div>
     </div>

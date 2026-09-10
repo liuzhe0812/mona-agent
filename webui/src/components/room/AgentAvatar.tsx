@@ -1,4 +1,3 @@
-import { AgentLogo } from "@/components/AgentLogo";
 import { cn } from "@/lib/utils";
 import type { AgentSummary, ConversationMeta } from "@/lib/types";
 
@@ -6,7 +5,19 @@ import type { AgentSummary, ConversationMeta } from "@/lib/types";
 export const MONA_AGENT_ID = "mona";
 
 /** Static brand mark for Mona's default avatar in the session list. */
-export const MONA_AVATAR_IMAGE = "/brand/mona_avatar_white.png";
+export const MONA_AVATAR_IMAGE = "/brand/mona_avatar_human.png";
+
+const BUILTIN_AGENT_AVATAR_IMAGES: Readonly<Record<string, string>> = {
+  "com.mona.xhs-operator": "/brand/agents/xhs-operator.png",
+  "com.mona.academic-researcher": "/brand/agents/academic-researcher.png",
+  "com.mona.a-share-analyst": "/brand/agents/a-share-analyst.png",
+};
+
+const BUILTIN_AGENT_DISPLAY_NAMES: Readonly<Record<string, string>> = {
+  "com.mona.academic-researcher": "学者",
+  "com.mona.xhs-operator": "种草家",
+  "com.mona.a-share-analyst": "股神",
+};
 
 /** Minimal identity needed to render an agent avatar/name. */
 export interface AgentIdentity {
@@ -36,6 +47,7 @@ function hashString(value: string): number {
  *  dotted ID segment (``com.mona.a-share-analyst`` → ``A-share-analyst``). */
 export function fallbackAgentName(agentId: string): string {
   if (agentId === MONA_AGENT_ID) return "Mona";
+  if (BUILTIN_AGENT_DISPLAY_NAMES[agentId]) return BUILTIN_AGENT_DISPLAY_NAMES[agentId];
   const leaf = agentId.split(".").pop() ?? agentId;
   if (!leaf) return agentId;
   const first = Array.from(leaf)[0];
@@ -56,29 +68,18 @@ interface AgentAvatarProps {
   className?: string;
 }
 
-/** Small circular avatar for an agent. Mona renders its animated face; partner
- *  agents render an initial on a deterministic accent tint until agent
- *  packages expose HTTP-loadable avatars. */
+/** Small circular avatar for an agent. Mona and built-in partners use bundled
+ *  portraits; installed partners fall back to a deterministic tinted initial. */
 export function AgentAvatar({ agentId, displayName, avatarUrl, className }: AgentAvatarProps) {
-  if (avatarUrl) {
+  const resolvedAvatarUrl = avatarUrl
+    ?? (agentId === MONA_AGENT_ID ? MONA_AVATAR_IMAGE : BUILTIN_AGENT_AVATAR_IMAGES[agentId]);
+  if (resolvedAvatarUrl) {
     return (
       <img
-        src={avatarUrl}
+        src={resolvedAvatarUrl}
         alt=""
         className={cn("inline-flex shrink-0 rounded-full object-cover", className)}
       />
-    );
-  }
-  if (agentId === MONA_AGENT_ID) {
-    return (
-      <span
-        className={cn(
-          "inline-flex shrink-0 items-center justify-center overflow-hidden rounded-full bg-muted/40",
-          className,
-        )}
-      >
-        <AgentLogo state="welcome" variant="avatar" className="h-full w-full" />
-      </span>
     );
   }
   const tint = AVATAR_PALETTE[hashString(agentId) % AVATAR_PALETTE.length];

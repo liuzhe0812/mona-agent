@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { FileText, X, Pin, PinOff, Copy, CopyX, ArrowRightToLine, Clock, VolumeX, Volume2, Eye, Moon, FolderOpen, NotebookPen } from "lucide-react";
+import { FileText, Workflow, X, Pin, PinOff, Copy, CopyX, ArrowRightToLine, Clock, VolumeX, Volume2, Eye, Moon, FolderOpen, NotebookPen } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 import { isTauri } from "@/lib/tauri";
@@ -171,6 +171,8 @@ export function BrowserTabItem({
         <img src={faviconUrl} alt="" className="shrink-0 h-4 w-4 rounded-sm" onError={(e) => { e.currentTarget.style.display = "none"; }} />
       ) : tab.type === "md-reader" ? (
         <FileText className="shrink-0 h-3.5 w-3.5 text-warning" />
+      ) : tab.type === "canvas-reader" ? (
+        <Workflow className="shrink-0 h-3.5 w-3.5 text-theme" />
       ) : tab.type === "history" ? (
         <Clock className="shrink-0 h-3.5 w-3.5 text-muted-foreground" />
       ) : tab.type !== "mona" ? (

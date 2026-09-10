@@ -2,6 +2,7 @@ import { ArrowLeft, ArrowRight, RotateCw, Star, Search, Maximize, Minimize, Sett
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { AgentLogo } from "@/components/AgentLogo";
+import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -149,7 +150,7 @@ export function BrowserToolbar({
   const [editorOpen, setEditorOpen] = useState(false);
   const [editorValue, setEditorValue] = useState("");
   const suggestionsRef = useRef<HTMLDivElement>(null);
-  const debounceRef = useRef<ReturnType<typeof setTimeout>>();
+  const debounceRef = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
   const inputRef = useRef<HTMLInputElement>(null);
   const editorInputRef = useRef<HTMLInputElement>(null);
   const downloadButtonRef = useRef<HTMLButtonElement>(null);
@@ -612,77 +613,108 @@ export function BrowserToolbar({
         )}
       </form>
 
-      <Button
-        variant="ghost"
-        size="icon"
-        className="h-6 w-6"
-        title={isBookmarked ? "取消收藏" : "收藏"}
-        onClick={toggleBookmark}
-      >
-        <Star
-          className={`h-3 w-3 ${isBookmarked ? "fill-current text-warning" : ""}`}
-        />
-      </Button>
+      <TooltipProvider delayDuration={100}>
+        <Tooltip>
+          <TooltipTrigger asChild>
+            <Button
+              variant="ghost"
+              size="icon"
+              className="h-6 w-6"
+              aria-label={isBookmarked ? "取消收藏" : "收藏"}
+              onClick={toggleBookmark}
+            >
+              <Star
+                className={`h-3 w-3 ${isBookmarked ? "fill-current text-warning" : ""}`}
+              />
+            </Button>
+          </TooltipTrigger>
+          <TooltipContent side="bottom">{isBookmarked ? "取消收藏" : "收藏"}</TooltipContent>
+        </Tooltip>
 
-      <Button
-        ref={downloadButtonRef}
-        variant="ghost"
-        size="icon"
-        className="relative h-6 w-6"
-        title="下载"
-        onClick={() => onOpenDownloads?.() ?? handleOpenDownloads()}
-      >
-        <Download className="h-3 w-3" />
-        {hasActiveDownloads && <DownloadProgressRing progress={activeProgress} />}
-      </Button>
+        <Tooltip>
+          <TooltipTrigger asChild>
+            <Button
+              ref={downloadButtonRef}
+              variant="ghost"
+              size="icon"
+              className="relative h-6 w-6"
+              aria-label="下载"
+              onClick={handleOpenDownloads}
+            >
+              <Download className="h-3 w-3" />
+              {hasActiveDownloads && <DownloadProgressRing progress={activeProgress} />}
+            </Button>
+          </TooltipTrigger>
+          <TooltipContent side="bottom">下载</TooltipContent>
+        </Tooltip>
 
-      {onCreateNote && (
-        <Button
-          variant="ghost"
-          size="icon"
-          className="h-6 w-6"
-          title="提取为笔记"
-          disabled={isCreatingNote}
-          onClick={onCreateNote}
-        >
-          {isCreatingNote ? (
-            <Loader2 className="h-3 w-3 animate-spin" />
-          ) : (
-            <FileText className="h-3 w-3" />
-          )}
-        </Button>
-      )}
+        {onCreateNote && (
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <Button
+                variant="ghost"
+                size="icon"
+                className="h-6 w-6"
+                aria-label="提取为笔记"
+                disabled={isCreatingNote}
+                onClick={onCreateNote}
+              >
+                {isCreatingNote ? (
+                  <Loader2 className="h-3 w-3 animate-spin" />
+                ) : (
+                  <FileText className="h-3 w-3" />
+                )}
+              </Button>
+            </TooltipTrigger>
+            <TooltipContent side="bottom">提取为笔记</TooltipContent>
+          </Tooltip>
+        )}
 
-      {/* 全屏按钮 - AI 按钮左边 */}
-      {onToggleFullscreen && (
-        <Button
-          variant="ghost"
-          size="icon"
-          className="h-6 w-6"
-          title={isFullscreen ? "退出全屏 (F11)" : "全屏 (F11)"}
-          onClick={isFullscreen ? onExitFullscreen : onToggleFullscreen}
-        >
-          {isFullscreen ? (
-            <Minimize className="h-3 w-3" />
-          ) : (
-            <Maximize className="h-3 w-3" />
-          )}
-        </Button>
-      )}
+        {/* 全屏按钮 - AI 按钮左边 */}
+        {onToggleFullscreen && (
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <Button
+                variant="ghost"
+                size="icon"
+                className="h-6 w-6"
+                aria-label={isFullscreen ? "退出全屏 (F11)" : "全屏 (F11)"}
+                onClick={isFullscreen ? onExitFullscreen : onToggleFullscreen}
+              >
+                {isFullscreen ? (
+                  <Minimize className="h-3 w-3" />
+                ) : (
+                  <Maximize className="h-3 w-3" />
+                )}
+              </Button>
+            </TooltipTrigger>
+            <TooltipContent side="bottom">{isFullscreen ? "退出全屏 (F11)" : "全屏 (F11)"}</TooltipContent>
+          </Tooltip>
+        )}
 
-      {/* 选项按钮 - 下拉菜单 */}
-      {isTauri() ? (
-        <Button variant="ghost" size="icon" className="h-6 w-6" title="选项" onClick={handleOpenOptions}>
-          <Settings2 className="h-3 w-3" />
-        </Button>
-      ) : (
-      <DropdownMenu>
-        <DropdownMenuTrigger asChild>
-          <Button variant="ghost" size="icon" className="h-6 w-6" title="选项">
-            <Settings2 className="h-3 w-3" />
-          </Button>
-        </DropdownMenuTrigger>
-        <DropdownMenuContent align="end" side="top" className="w-48">
+        {/* 选项按钮 - 下拉菜单 */}
+        {isTauri() ? (
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <Button variant="ghost" size="icon" className="h-6 w-6" aria-label="选项" onClick={handleOpenOptions}>
+                <Settings2 className="h-3 w-3" />
+              </Button>
+            </TooltipTrigger>
+            <TooltipContent side="bottom">选项</TooltipContent>
+          </Tooltip>
+        ) : (
+        <DropdownMenu>
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <DropdownMenuTrigger asChild>
+                <Button variant="ghost" size="icon" className="h-6 w-6" aria-label="选项">
+                  <Settings2 className="h-3 w-3" />
+                </Button>
+              </DropdownMenuTrigger>
+            </TooltipTrigger>
+            <TooltipContent side="bottom">选项</TooltipContent>
+          </Tooltip>
+          <DropdownMenuContent align="end" side="top" className="w-48">
           <DropdownMenuCheckboxItem
             checked={bookmarkBarVisible}
             onCheckedChange={() => onToggleBookmarkBar()}
@@ -809,28 +841,39 @@ export function BrowserToolbar({
             <Upload className="mr-2 h-3.5 w-3.5" />
             导入 Chrome 书签
           </DropdownMenuItem>
-        </DropdownMenuContent>
-      </DropdownMenu>
-      )}
+          </DropdownMenuContent>
+        </DropdownMenu>
+        )}
 
       {/* 无痕模式指示器 */}
       {isIncognito && (
-        <div className="flex items-center gap-1 px-2 text-muted-foreground" title="无痕模式">
-          <Eye className="h-3.5 w-3.5" />
-        </div>
+        <Tooltip>
+          <TooltipTrigger asChild>
+            <div className="flex items-center gap-1 px-2 text-muted-foreground" aria-label="无痕模式">
+              <Eye className="h-3.5 w-3.5" />
+            </div>
+          </TooltipTrigger>
+          <TooltipContent side="bottom">无痕模式</TooltipContent>
+        </Tooltip>
       )}
 
       {/* AI 按钮 */}
-      <Button
-        type="button"
-        variant="ghost"
-        size="icon"
-        onClick={onToggleAiPanel}
-        title="Mona"
-        className={`h-6 w-6 ${isAiPanelOpen ? "bg-primary/15" : ""}`}
-      >
-        <AgentLogo state={isAiControlled ? "working" : "idle"} className="h-5 w-5" />
-      </Button>
+        <Tooltip>
+          <TooltipTrigger asChild>
+            <Button
+              type="button"
+              variant="ghost"
+              size="icon"
+              onClick={onToggleAiPanel}
+              aria-label="Mona"
+              className={`h-6 w-6 ${isAiPanelOpen ? "bg-primary/15" : ""}`}
+            >
+              <AgentLogo state={isAiControlled ? "working" : "idle"} className="h-5 w-5" />
+            </Button>
+          </TooltipTrigger>
+          <TooltipContent side="bottom">Mona</TooltipContent>
+        </Tooltip>
+      </TooltipProvider>
     </div>
   );
 }

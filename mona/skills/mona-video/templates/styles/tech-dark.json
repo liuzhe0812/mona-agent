@@ -1,0 +1,103 @@
+{
+  "schemaVersion": 1,
+  "id": "tech-dark",
+  "name": "霓虹智核",
+  "description": "深色科技发布风格，以清晰的信息分区、冷色标尺和低干扰数据面板承载 AI、软件与数字化内容。",
+  "baseTemplateId": "tech-dark",
+  "mode": "dark",
+  "tokens": {
+    "colors": {
+      "primary": "#7A4DFF",
+      "secondary": "#19D8FF",
+      "accent": "#F338FF",
+      "background": "#050816",
+      "surface": "#10172B",
+      "textPrimary": "#F5F8FF",
+      "textSecondary": "#B5C0D8",
+      "border": "#26345A",
+      "success": "#44E0B6",
+      "warning": "#FFC857",
+      "error": "#FF6B9A"
+    },
+    "typography": {
+      "headingFamily": "Noto Sans SC",
+      "bodyFamily": "Noto Sans SC",
+      "scale": "large",
+      "headingWeight": 800,
+      "bodyWeight": 500,
+      "headingLineHeight": 1.08,
+      "bodyLineHeight": 1.5
+    },
+    "shape": {
+      "cardRadius": 12,
+      "cardStyle": "glass",
+      "density": "standard",
+      "shadow": "glow",
+      "borderWidth": 1,
+      "shadowOpacity": 0.3
+    },
+    "spacing": {
+      "unit": 8,
+      "contentPadding": 72
+    }
+  },
+  "components": {
+    "cover": "cover-split-v1",
+    "chapter": "chapter-glow-v1",
+    "content": "content-outline-v1",
+    "data": "metric-large-number-v1",
+    "comparison": "comparison-columns-v1",
+    "process": "process-node-line-v1",
+    "quote": "quote-terminal-v1",
+    "outro": "outro-brand-v1"
+  },
+  "allowedLayouts": [
+    "cover-split",
+    "chapter-glow",
+    "content-outline",
+    "metric-large-number",
+    "comparison-columns",
+    "process-node-line",
+    "quote-terminal",
+    "outro-brand"
+  ],
+  "allowedAnimations": ["fade-rise", "stagger-rise", "soft-pulse", "cross-fade"],
+  "motion": {
+    "intensity": "active",
+    "enterPreset": "fade-rise",
+    "emphasisPreset": "soft-pulse",
+    "transitionPreset": "cross-fade",
+    "enterDurationMs": 360,
+    "staggerMs": 60,
+    "transitionDurationMs": 420
+  },
+  "backgrounds": {
+    "default": {
+      "assetPolicy": "fixed",
+      "fit": "cover",
+      "focalPoint": {"x": 0.5, "y": 0.45},
+      "overlay": {"type": "linear-gradient", "color": "#050816", "opacity": 0.56, "direction": "left-to-right"},
+      "blur": 0,
+      "tint": 0.12,
+      "contrastMode": "auto",
+      "safeArea": {"top": 0.1, "right": 0.08, "bottom": 0.12, "left": 0.08},
+      "fallback": "#050816"
+    },
+    "roles": {
+      "cover": {"inherit": "default"},
+      "chapter": {"inherit": "default"},
+      "content": {"inherit": "default", "assetPolicy": "episode-replaceable"},
+      "data": {"inherit": "default"},
+      "comparison": {"inherit": "default"},
+      "process": {"inherit": "default"},
+      "quote": {"inherit": "default"},
+      "outro": {"inherit": "default"}
+    }
+  },
+  "subtitle": {"position": "bottom-center", "style": "caption-rail", "maxLines": 2},
+  "aspectVariants": {
+    "16:9": {"enabled": true},
+    "9:16": {"enabled": true},
+    "1:1": {"enabled": true}
+  }
+}

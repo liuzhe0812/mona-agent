@@ -19,7 +19,7 @@ from mona.agent.tools.schema import (
     StringSchema,
     tool_parameters_schema,
 )
-from mona.agent.tools.tauri_ipc import tauri_invoke
+from mona.agent.tools.tauri_ipc import tauri_invoke_async
 from mona.api.url2note import Url2NoteError, Url2NoteExtractor
 
 
@@ -86,7 +86,7 @@ class VideoExtractFrameTool(Tool):
             for frame_path, ts in zip(frames, timestamps, strict=False):
                 file_name = frame_path.name
                 try:
-                    rel_path = tauri_invoke(
+                    rel_path = await tauri_invoke_async(
                         "notes_save_image",
                         {"filePath": str(frame_path), "fileName": file_name},
                     )

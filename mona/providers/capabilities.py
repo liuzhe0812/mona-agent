@@ -1,13 +1,14 @@
 """Unified model capability queries.
 
 Business code asks ``provider.get_capabilities(model)`` instead of
-hard-coding model names. Resolution order:
+hard-coding model names. Resolution order (highest priority last):
 
-  1. Per-model pattern overrides in ``_MODEL_PATTERN_CAPS`` (first match wins,
-     case-insensitive substring match on the model name).
-  2. Provider-level defaults declared on the ``ProviderSpec``.
-  3. ``None`` (unknown) — callers must treat unknown as "feature not
-     advertised", not as "supported".
+  1. Provider-level defaults declared on the ``ProviderSpec``.
+  2. Legacy name-pattern overrides in ``_MODEL_PATTERN_CAPS``.
+  3. Explicit model-catalog ``input_modalities`` metadata.
+
+Missing values remain ``None`` (unknown); callers must not treat unknown as
+supported.
 
 Keep this table curated and conservative: only record capabilities we are
 confident about. Unknown is always safer than wrong.
@@ -15,6 +16,7 @@ confident about. Unknown is always safer than wrong.
 
 from __future__ import annotations
 
+from collections.abc import Collection
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
@@ -47,6 +49,7 @@ _MODEL_PATTERN_CAPS: tuple[tuple[str, dict[str, bool]], ...] = (
     ("qwen-vl", {"supports_vision": True}),
     ("qwen3-vl", {"supports_vision": True}),
     ("qwen2.5-vl", {"supports_vision": True}),
+    ("qwen3.5-plus", {"supports_vision": True}),
     ("glm-4v", {"supports_vision": True}),
     ("glm-4.5v", {"supports_vision": True}),
     ("gpt-4o", {"supports_vision": True, "supports_json_mode": True}),
@@ -69,6 +72,8 @@ _MODEL_PATTERN_CAPS: tuple[tuple[str, dict[str, bool]], ...] = (
 def resolve_capabilities(
     spec: ProviderSpec | None,
     model: str,
+    *,
+    input_modalities: Collection[str] | None = None,
 ) -> ModelCapabilities:
     """Resolve capabilities for a (provider spec, model) pair."""
     overrides: dict[str, bool] = {}
@@ -86,7 +91,24 @@ def resolve_capabilities(
             "supports_json_mode": spec.supports_json_mode,
         }
 
-    merged = {**provider_defaults, **overrides}
+    if input_modalities is None and spec is not None:
+        from mona.providers.cindy_catalog import CINDY_CHAT_PROVIDER_BY_ID
+
+        provider = CINDY_CHAT_PROVIDER_BY_ID.get(spec.name)
+        if provider is not None:
+            catalog_model = next(
+                (item for item in provider.models if item.id == model),
+                None,
+            )
+            if catalog_model is not None:
+                input_modalities = catalog_model.input_modalities
+
+    model_metadata: dict[str, bool] = {}
+    if input_modalities is not None:
+        normalized = {str(item).strip().lower() for item in input_modalities}
+        model_metadata["supports_vision"] = "image" in normalized
+
+    merged = {**provider_defaults, **overrides, **model_metadata}
     return ModelCapabilities(
         supports_vision=merged.get("supports_vision"),
         supports_tool_calling=merged.get("supports_tool_calling"),

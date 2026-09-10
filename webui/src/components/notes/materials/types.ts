@@ -7,8 +7,8 @@
 import type { MaterialsFileEntry } from "@/lib/materials-api";
 
 export type MaterialsSelection =
-  | { kind: "raw"; path: string }
-  | { kind: "wiki"; path: string }
+  | { kind: "raw"; path: string; knowledgeBaseId?: string; agentId?: string }
+  | { kind: "wiki"; path: string; knowledgeBaseId?: string; agentId?: string }
   | null;
 
 /** 递归文件树节点 */
@@ -29,8 +29,8 @@ export interface MaterialsSidebarHandle {
 export interface MaterialsSidebarProps {
   selection: MaterialsSelection;
   onSelect: (sel: MaterialsSelection) => void;
-  /** Reports busy/compiling state so the parent can disable tab bar buttons. */
-  onStateChange?: (state: { busy: boolean; compiling: boolean }) => void;
+  /** Reports upload/retry activity so the parent can disable toolbar buttons. */
+  onStateChange?: (state: { busy: boolean }) => void;
 }
 
 export interface MaterialsPreviewProps {

@@ -316,6 +316,24 @@ fn parse_eml_header(eml_bytes: &[u8]) -> (String, String, String, String, String
     )
 }
 
+fn email_header_json(
+    subject: &str,
+    from_address: &str,
+    from_name: &str,
+    to_addresses: &str,
+    cc_addresses: &str,
+    date: &str,
+) -> serde_json::Value {
+    serde_json::json!({
+        "subject": subject,
+        "fromAddress": from_address,
+        "fromName": from_name,
+        "toAddresses": to_addresses,
+        "ccAddresses": cc_addresses,
+        "date": date,
+    })
+}
+
 /// 重新解析 .eml header 并修复 SQLite 中含 U+FFFD 替换字符的乱码字段。
 ///
 /// 背景：早期版本 Rust 用 `String::from_utf8_lossy` 解码邮件头，GBK 编码的
@@ -331,8 +349,9 @@ fn reparse_header_and_fix_db(
     uid: &str,
     account_id: &str,
     mailbox: &str,
+    fallback_date: &str,
 ) -> serde_json::Value {
-    let (hdr_subject, hdr_from_addr, hdr_from_name, hdr_to, hdr_cc, _hdr_date, _hdr_msg_id, _hdr_has_att) =
+    let (hdr_subject, hdr_from_addr, hdr_from_name, hdr_to, hdr_cc, hdr_date, _hdr_msg_id, _hdr_has_att) =
         parse_eml_header(eml_bytes);
 
     // 只在 SQLite 当前值含 U+FFFD（乱码标志）时才更新，避免无意义 FTS 重建
@@ -362,13 +381,15 @@ fn reparse_header_and_fix_db(
         }
     }
 
-    serde_json::json!({
-        "subject": hdr_subject,
-        "fromAddress": hdr_from_addr,
-        "fromName": hdr_from_name,
-        "toAddresses": hdr_to,
-        "ccAddresses": hdr_cc,
-    })
+    let date = if hdr_date.is_empty() { fallback_date } else { &hdr_date };
+    email_header_json(
+        &hdr_subject,
+        &hdr_from_addr,
+        &hdr_from_name,
+        &hdr_to,
+        &hdr_cc,
+        date,
+    )
 }
 
 /// 解码邮件头字段（原始字节）：
@@ -5141,24 +5162,10 @@ async fn reconcile_folder(
 }
 
 /// skill 第九节：Services 请求失败时先检查进程状态，必要时恢复。
-/// 通过 app_handle 获取 ServicesState，检查 is_running，若未运行则调用 start 重启。
+/// 幂等启动或复用进程，并在真实健康检查通过后发布就绪状态。
 async fn try_recover_services(app_handle: &tauri::AppHandle) {
     let services_state = app_handle.state::<crate::ServicesState>();
-    if services_state.is_running() {
-        // 进程在但请求失败，可能是刚启动还没 ready，等待一下
-        log::info!("[email-fetch-body] services 进程在运行，等待就绪");
-        if let Some(port) = services_state.port() {
-            let _ = crate::services::wait_for_services(
-                port,
-                30,
-                || services_state.exit_message(),
-            )
-            .await;
-        }
-        return;
-    }
-    // 进程未运行，尝试重启
-    log::info!("[email-fetch-body] services 进程未运行，尝试重启");
+    let timeout_secs = if services_state.is_running() { 30 } else { 90 };
     let settings = crate::settings::load_settings();
     if let Err(e) = crate::settings::ensure_desktop_config(
         settings.gateway_port,
@@ -5169,12 +5176,9 @@ async fn try_recover_services(app_handle: &tauri::AppHandle) {
     }
     match services_state.start(&settings, app_handle) {
         Ok(port) => {
-            let _ = crate::services::wait_for_services(
-                port,
-                90,
-                || services_state.exit_message(),
-            )
-            .await;
+            if let Err(e) = services_state.wait_ready(port, timeout_secs).await {
+                log::warn!("[email-fetch-body] services 未就绪: {}", e);
+            }
         }
         Err(e) => {
             log::warn!("[email-fetch-body] 重启 services 失败: {}", e);
@@ -7085,9 +7089,9 @@ pub async fn email_fetch_body(
 ) -> Result<serde_json::Value, String> {
     // 1. 查 SQLite 拿 eml_path、body_fetched 和 header（已解码，避免重复解析）
     let conn = state.conn()?;
-    let (eml_path, body_fetched, db_header): (String, bool, Option<serde_json::Value>) = conn
+    let (eml_path, body_fetched, db_header, db_date): (String, bool, Option<serde_json::Value>, String) = conn
         .query_row(
-            "SELECT eml_path, body_fetched, subject, from_address, from_name, to_addresses, cc_addresses
+            "SELECT eml_path, body_fetched, subject, from_address, from_name, to_addresses, cc_addresses, date
              FROM messages WHERE uid = ?1 AND account_id = ?2 AND folder = ?3",
             params![&uid, &account_id, &mailbox],
             |row| {
@@ -7098,6 +7102,7 @@ pub async fn email_fetch_body(
                 let from_name: String = row.get(4).unwrap_or_default();
                 let to_addresses: String = row.get(5).unwrap_or_default();
                 let cc_addresses: String = row.get(6).unwrap_or_default();
+                let date: String = row.get(7).unwrap_or_default();
                 // 检测是否有乱码标志（旧数据 gb2312→gb18030 修复前），有则返回 None 触发重新解析
                 let has_fffd = subject.contains('\u{FFFD}')
                     || from_name.contains('\u{FFFD}')
@@ -7106,15 +7111,16 @@ pub async fn email_fetch_body(
                 let header = if has_fffd {
                     None
                 } else {
-                    Some(serde_json::json!({
-                        "subject": subject,
-                        "fromAddress": from_address,
-                        "fromName": from_name,
-                        "toAddresses": to_addresses,
-                        "ccAddresses": cc_addresses,
-                    }))
+                    Some(email_header_json(
+                        &subject,
+                        &from_address,
+                        &from_name,
+                        &to_addresses,
+                        &cc_addresses,
+                        &date,
+                    ))
                 };
-                Ok((eml_path, body_fetched, header))
+                Ok((eml_path, body_fetched, header, date))
             },
         )
         .unwrap_or_default();
@@ -7145,6 +7151,7 @@ pub async fn email_fetch_body(
                         &uid,
                         &account_id,
                         &mailbox,
+                        &db_date,
                     ),
                 };
                 return Ok(serde_json::json!({
@@ -7347,16 +7354,17 @@ pub async fn email_fetch_body(
         let (h_subject, h_from_addr, h_from_name, h_to, h_cc, h_date, _mid, _att) =
             parse_eml_header(&bytes);
         if let Some(obj) = body.as_object_mut() {
+            let date = if h_date.is_empty() { &db_date } else { &h_date };
             obj.insert(
                 "header".to_string(),
-                serde_json::json!({
-                    "subject": h_subject,
-                    "fromAddress": h_from_addr,
-                    "fromName": h_from_name,
-                    "toAddresses": h_to,
-                    "ccAddresses": h_cc,
-                    "date": h_date,
-                }),
+                email_header_json(
+                    &h_subject,
+                    &h_from_addr,
+                    &h_from_name,
+                    &h_to,
+                    &h_cc,
+                    date,
+                ),
             );
         }
     }
@@ -7722,4 +7730,26 @@ pub async fn email_rebuild_index(
     })
     .await
     .map_err(|e| format!("后台任务失败: {e}"))?
+}
+
+#[cfg(test)]
+mod tests {
+    use super::email_header_json;
+
+    #[test]
+    fn email_body_header_preserves_cached_date() {
+        let header = email_header_json(
+            "主题",
+            "sender@example.com",
+            "发件人",
+            "recipient@example.com",
+            "",
+            "2026-09-06T10:30:00+08:00",
+        );
+
+        assert_eq!(
+            header["date"].as_str(),
+            Some("2026-09-06T10:30:00+08:00")
+        );
+    }
 }

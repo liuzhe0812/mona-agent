@@ -70,12 +70,13 @@
     "manageAccount": "管理账号",
     "logout": "退出登录",
     "login": "登录",
+    "update": "更新",
     "updateAvailable": "有新版本可用",
     "workspaceTabs": "工作区标签页",
     "newBrowserTab": "新建浏览器标签页",
     "modules": {
       "note": "笔记",
-      "doc": "AI文档",
+      "doc": "文档",
       "ssh": "终端",
       "email": "邮件",
       "schedule": "计划",
@@ -251,14 +252,13 @@
       "codeWrap": "代码换行",
       "maxResults": "最大结果数",
       "timeout": "超时",
-      "jinaReader": "Jina Reader",
       "imageGeneration": "图片生成",
       "imageProvider": "图片服务商",
       "imageProviderStatus": "服务商凭证",
       "imageProviderBase": "服务商地址",
       "imageModel": "图片模型",
       "defaultAspectRatio": "默认比例",
-      "defaultImageSize": "默认尺寸",
+      "defaultImageSize": "默认分辨率",
       "maxImagesPerTurn": "每轮最多图片数",
       "imageSaveDir": "保存目录",
       "timezone": "时区",
@@ -278,13 +278,12 @@
       "codeWrap": "让较小屏幕上的长代码行更易读。",
       "maxResults": "每次 web_search 返回的结果数量。",
       "timeout": "搜索服务商请求超时秒数。",
-      "jinaReader": "可用时为 web_fetch 使用 Jina Reader。",
       "imageGeneration": "当已配置图片服务商时，在对话中开放 generate_image。",
       "imageProvider": "选择 generate_image 使用的服务商。",
       "imageProviderStatus": "图片生成复用服务商页里的凭证配置。",
       "imageModel": "图片生成使用专用图片模型（与聊天模型不同），复用所选服务商的凭证。",
-      "defaultAspectRatio": "当提示词没有选择比例时使用。",
-      "defaultImageSize": "发送给支持该能力的服务商的尺寸提示。",
+      "defaultAspectRatio": "AI 未指定时使用，可在单次生成时调整。",
+      "defaultImageSize": "AI 未指定时使用；实际支持的分辨率以服务为准。",
       "maxImagesPerTurn": "单次 generate_image 请求允许的图片上限。",
       "timezone": "运行时上下文和计划任务使用的 IANA 时区。",
       "toolHintMaxLength": "工具进度提示显示的最大字符数。"
@@ -447,7 +446,7 @@
   },
   "managedRuntime": {
     "title": "高级功能",
-    "description": "视频、语音等高级功能所需内容都在这里管理，默认在需要时下载。",
+    "description": "以下内容只在对应功能使用时需要。开启按需下载后无需提前安装，Mona 会在首次使用时自动准备。",
     "refresh": "刷新",
     "loading": "正在读取高级功能状态…",
     "loadError": "运行环境状态暂时不可用",
@@ -456,6 +455,7 @@
     "updateError": "无法更新下载设置",
     "cleanupError": "无法清理高级功能缓存",
     "installed": "已安装 {{version}}",
+    "availableLocally": "本机可用",
     "installing": "正在下载并校验 · {{percent}}%",
     "install": "安装",
     "update": "更新",
@@ -477,35 +477,35 @@
     "components": {
       "python": {
         "name": "Python",
-        "description": "Agent 共享 Python 工作环境；用户项目仍使用自己的 .venv"
+        "description": "会话中的 Python 分析、PPT 制作、视频制作和学术研究专家会使用"
       },
     "node": {
       "name": "Node.js",
-      "description": "Agent 共享 Node.js；用户项目仍使用自己的 node_modules"
+      "description": "视频制作、学术研究专家的文献检索，以及会话中运行 Node.js 项目时使用"
     },
     "ffmpeg": {
       "name": "视频处理",
-      "description": "用于视频转码、音频处理和重点帧提取"
+      "description": "笔记 > 网页转笔记：处理视频链接时提取音频和关键画面；视频制作导出成片时也会使用"
     },
     "yt_dlp": {
       "name": "在线视频读取",
-      "description": "用于读取支持的视频页面和媒体内容"
+      "description": "笔记 > 网页转笔记：输入视频链接后，用于读取视频标题、字幕和媒体内容"
     },
     "asr": {
       "name": "语音转写",
-      "description": "视频没有字幕时，在本机生成文字稿"
+      "description": "笔记 > 网页转笔记：视频没有可用字幕时，用于把声音转成文字"
     },
     "pandoc": {
       "name": "文档解析",
-      "description": "用于导入 Word、PPT、ODT、RTF 和 EPUB"
+      "description": "笔记 > 文档转笔记：导入 Word、PPT、ODT、RTF 或 EPUB 时使用"
     },
     "computer_use": {
       "name": "电脑操作",
-      "description": "用于观察并操作电脑上的其他应用"
+      "description": "会话：让 Mona 代你点击、输入或操作其他桌面应用时使用"
     },
     "westock": {
       "name": "股票数据支持",
-      "description": "用于补充股票研究所需的结构化数据"
+      "description": "股票：进行个股诊断、深度投研或选股时，用于补充公司、财务、公告和技术数据"
     }
     }
   },
@@ -557,7 +557,7 @@
     "title": "删除这个对话？",
     "description": "此操作无法撤销。",
     "cancel": "取消",
-    "confirm": "删除"
+    "confirm": "删除对话"
   },
   "connection": {
     "idle": "空闲",
@@ -826,8 +826,8 @@
       "settings": "打开设置"
     },
     "composer": {
-      "placeholderThread": "输入消息…",
-      "placeholderHero": "问任何问题...",
+      "placeholderThread": "有什么事情，交给Mona吧",
+      "placeholderHero": "有什么事情，交给Mona吧",
       "placeholderOpening": "正在打开新对话…",
       "placeholderStreaming": "模型正在回复…",
       "inputAria": "消息输入框",
@@ -952,6 +952,20 @@
     "imageAttachment": "图片附件",
     "showAll": "显示全部",
     "collapse": "收起",
+    "copyMessage": "复制",
+    "copiedMessage": "已复制",
+    "quoteMessage": "引用",
+    "shareAsImage": "分享为图片",
+    "shareImageFailed": "分享图片失败",
+    "branchTask": "开启分支任务",
+    "branchDialogTitle": "从这里开启一个新任务？",
+    "branchDialogDescription": "系统会根据这里的对话上下文创建一个独立的新任务。原任务不会改变，之后两边的消息互不影响。",
+    "confirmBranchTask": "开启新任务",
+    "branchingTask": "正在创建…",
+    "moreActions": "更多操作",
+    "tokenUsage": "{{count}} Token",
+    "quotedMessage": "引用 {{author}} 的消息",
+    "removeQuote": "移除引用",
     "copyReply": "复制回复",
     "copiedReply": "已复制回复",
     "saveAsNote": "保存为笔记",
@@ -978,6 +992,7 @@
     "export": "导出",
     "exportPng": "导出 PNG 图片",
     "exportSvg": "导出 SVG 矢量图",
+    "exportDrawio": "导出 Draw.io 可编辑图",
     "exportCsv": "导出 CSV 数据",
     "errors": {
       "invalidJson": "图表数据不是有效的 JSON。",

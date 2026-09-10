@@ -13,11 +13,10 @@ import {
   type ClipboardEvent,
   type KeyboardEvent,
 } from "react";
-import { ImageIcon, Loader2, Send, Square, X } from "lucide-react";
+import { ImageIcon, Loader2, Plus, Send, Square, X } from "lucide-react";
 
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
-import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
 import {
   useAttachedImages,
@@ -140,11 +139,11 @@ export function AgentComposer({
       onDragLeave={onDragLeave}
       onDrop={onDrop}
       className={cn(
-        "relative flex w-full flex-col rounded-xl border border-border/75 bg-background px-2.5 py-1.5 shadow-sm",
+        "relative flex min-h-[52px] w-full flex-col gap-1.5 rounded-xl border border-border/75 bg-background px-2.5 py-1.5 shadow-sm",
         isDragging && "ring-2 ring-primary/40",
       )}
     >
-      <Input
+      <input
         ref={fileInputRef}
         type="file"
         accept={ACCEPT_ATTR}
@@ -154,7 +153,7 @@ export function AgentComposer({
       />
 
       {images.length > 0 ? (
-        <div className="mb-1.5 flex flex-wrap gap-1.5">
+        <div className="flex flex-wrap gap-1.5">
           {images.map((img) => (
             <AttachmentChip
               key={img.id}
@@ -169,25 +168,24 @@ export function AgentComposer({
         </div>
       ) : null}
 
-      <Textarea
-        ref={textareaRef}
-        value={value}
-        onChange={(event) => onChange(event.target.value)}
-        onKeyDown={handleKeyDown}
-        onPaste={handlePaste}
-        disabled={disabled}
-        rows={2}
-        placeholder={placeholder}
-        className="min-h-[36px] flex-1 resize-none rounded-none border-0 bg-transparent px-0 py-0 text-caption focus-visible:ring-0 disabled:opacity-60"
-      />
-
       {inlineError ? (
-        <div className="mb-1 rounded-md border border-destructive/40 bg-destructive/8 px-2 py-0.5 text-micro text-destructive">
+        <div className="rounded-md border border-destructive/40 bg-destructive/8 px-2 py-0.5 text-micro text-destructive">
           {inlineError}
         </div>
       ) : null}
 
-      <div className="mt-1 flex items-center justify-between gap-2">
+      <div className="flex items-end gap-1.5">
+        <Textarea
+          ref={textareaRef}
+          value={value}
+          onChange={(event) => onChange(event.target.value)}
+          onKeyDown={handleKeyDown}
+          onPaste={handlePaste}
+          disabled={disabled}
+          rows={2}
+          placeholder={placeholder}
+          className="min-h-[36px] flex-1 resize-none rounded-none border-0 bg-transparent px-0 py-0 text-caption leading-5 shadow-none focus-visible:ring-0 disabled:opacity-60"
+        />
         <Button
           type="button"
           variant="ghost"
@@ -199,10 +197,8 @@ export function AgentComposer({
         >
           {encoding ? (
             <Loader2 className="h-3.5 w-3.5 animate-spin" />
-          ) : images.length > 0 ? (
-            <span className="text-micro font-medium">{images.length}</span>
           ) : (
-            <ImageIcon className="h-3.5 w-3.5" />
+            <Plus className="h-3 w-3" />
           )}
         </Button>
 

@@ -574,7 +574,38 @@ def build_fundamental_factors(
         else None
     )
     all_source_ids = sorted({sid for item in factors for sid in item["source_ids"]})
-    status = "missing" if not rows else ("available" if all(item["status"] == "available" for item in groups.values()) else "degraded")
+    core_group_ready = {
+        "profitability": any(
+            item["percentile"] is not None
+            for item in group_members["profitability"]
+            if item["id"] in {"roe", "gross_margin", "net_margin"}
+        ),
+        "growth_quality": any(
+            item["percentile"] is not None
+            for item in group_members["growth_quality"]
+            if item["id"] in {"revenue_yoy", "profit_yoy"}
+        ),
+        "cashflow_quality": any(
+            item["percentile"] is not None
+            for item in group_members["cashflow_quality"]
+            if item["id"] == "cashflow_to_profit"
+        ),
+        "financial_safety": any(
+            item["percentile"] is not None
+            for item in group_members["financial_safety"]
+            if item["id"] == "debt_ratio"
+        ),
+        "valuation": any(
+            item["percentile"] is not None
+            for item in group_members["valuation"]
+            if item["id"] in {"pe", "pb"}
+        ),
+    }
+    status = (
+        "missing"
+        if not rows
+        else ("available" if score is not None and all(core_group_ready.values()) else "degraded")
+    )
     if any(item["status"] == "unavailable" for item in group_members["governance"]):
         missing_fields.update({"governance", "audit_or_restatement_status"})
     capex_input = _field(current_metrics, "capex", "capital_expenditure")
@@ -597,6 +628,7 @@ def build_fundamental_factors(
             item["id"]: item["contribution"] for item in factors if item["contribution"] is not None
         },
         "missing_fields": sorted(missing_fields),
+        "core_group_ready": core_group_ready,
         "excluded_future": excluded,
         "validation_status": "descriptive",
         "is_alpha_validated": False,

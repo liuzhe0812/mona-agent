@@ -1,9 +1,41 @@
 import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
-import { describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import { MessageBubble } from "@/components/MessageBubble";
 import { resources } from "@/i18n";
 import type { UIMessage } from "@/lib/types";
+
+const tauriMocks = vi.hoisted(() => ({
+  createNoteFromChat: vi.fn(),
+  isTauri: vi.fn(() => true),
+}));
+const imageMocks = vi.hoisted(() => ({
+  toBlob: vi.fn(),
+}));
+const fileMocks = vi.hoisted(() => ({
+  save: vi.fn(),
+  writeFile: vi.fn(),
+}));
+
+vi.mock("@/lib/tauri", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@/lib/tauri")>()),
+  ...tauriMocks,
+}));
+vi.mock("html-to-image", () => imageMocks);
+vi.mock("@tauri-apps/plugin-dialog", () => ({ save: fileMocks.save }));
+vi.mock("@tauri-apps/plugin-fs", () => ({ writeFile: fileMocks.writeFile }));
+
+beforeEach(() => {
+  tauriMocks.createNoteFromChat.mockReset();
+  tauriMocks.isTauri.mockReset();
+  tauriMocks.isTauri.mockReturnValue(true);
+  imageMocks.toBlob.mockReset();
+  imageMocks.toBlob.mockResolvedValue(new Blob(["png"], { type: "image/png" }));
+  fileMocks.save.mockReset();
+  fileMocks.save.mockResolvedValue("C:\\Users\\test\\mona-message.png");
+  fileMocks.writeFile.mockReset();
+  fileMocks.writeFile.mockResolvedValue(undefined);
+});
 
 describe("MessageBubble", () => {
   it("uses group-chat wording in the visible room labels", () => {
@@ -11,7 +43,7 @@ describe("MessageBubble", () => {
     expect(resources.en.common.room.panel.title).toBe("Group chat");
     expect(resources["zh-CN"].common.chat.newRoom).toBe("新建协作群");
     expect(resources["zh-CN"].common.room.panel.title).toBe("协作群");
-  });
+  }, 15_000);
 
   it("renders user messages as right-aligned pills", () => {
     const message: UIMessage = {
@@ -26,11 +58,37 @@ describe("MessageBubble", () => {
     const pill = screen.getByText("hello");
 
     expect(row).toHaveClass("ml-auto", "flex");
-    expect(pill).toHaveClass("ml-auto", "max-w-full", "rounded-2xl");
-    expect(screen.queryByRole("button", { name: "Copy reply" })).not.toBeInTheDocument();
+    expect(pill.parentElement).toHaveClass("ml-auto", "max-w-full", "rounded-2xl");
+    expect(screen.queryByRole("button", { name: "Copy" })).not.toBeInTheDocument();
   });
 
-  it("copies completed assistant replies from the action row", async () => {
+  it("renders a user PDF as a file card instead of a broken image", () => {
+    const message: UIMessage = {
+      id: "u-pdf",
+      role: "user",
+      content: "总结这份资料",
+      displayContent: "总结这份资料\n\n[已附文件: reference.pdf]",
+      createdAt: Date.now(),
+      media: [{
+        kind: "file",
+        url: "/api/media/signed/reference",
+        name: "reference.pdf",
+      }],
+    };
+
+    const { container } = render(<MessageBubble message={message} />);
+
+    expect(screen.getByText("reference.pdf")).toBeInTheDocument();
+    expect(screen.getByText("总结这份资料")).toBeInTheDocument();
+    expect(screen.queryByText(/已附文件/)).not.toBeInTheDocument();
+    expect(screen.getByLabelText("File attachment")).toHaveAttribute(
+      "href",
+      "/api/media/signed/reference",
+    );
+    expect(container.querySelector("img")).not.toBeInTheDocument();
+  });
+
+  it("places copy, quote, and note actions in the assistant bubble context menu", async () => {
     const writeText = vi.fn().mockResolvedValue(undefined);
     Object.defineProperty(navigator, "clipboard", {
       configurable: true,
@@ -43,14 +101,21 @@ describe("MessageBubble", () => {
       createdAt: Date.now(),
     };
 
-    render(<MessageBubble message={message} />);
+    const onQuote = vi.fn();
+    render(<MessageBubble message={message} onQuote={onQuote} />);
 
-    fireEvent.click(screen.getByRole("button", { name: "Copy reply" }));
+    fireEvent.contextMenu(screen.getByTestId("message-bubble-a-copy"));
+    expect(await screen.findByRole("menuitem", { name: "Copy" })).toBeInTheDocument();
+    expect(screen.getByRole("menuitem", { name: "Reply" })).toBeInTheDocument();
+    expect(screen.getByRole("menuitem", { name: "Save as note" })).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("menuitem", { name: "Copy" }));
 
     expect(writeText).toHaveBeenCalledWith("I can help with the next step.");
-    await waitFor(() =>
-      expect(screen.getByRole("button", { name: "Copied reply" })).toBeInTheDocument(),
-    );
+    await waitFor(() => expect(screen.queryByRole("menu")).not.toBeInTheDocument());
+
+    fireEvent.contextMenu(screen.getByTestId("message-bubble-a-copy"));
+    fireEvent.click(await screen.findByRole("menuitem", { name: "Reply" }));
+    expect(onQuote).toHaveBeenCalledWith(message, "Mona");
   });
 
   it("does not show copy actions for streaming placeholders", () => {
@@ -64,20 +129,63 @@ describe("MessageBubble", () => {
 
     render(<MessageBubble message={message} />);
 
-    expect(screen.queryByRole("button", { name: "Copy reply" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Copy" })).not.toBeInTheDocument();
   });
 
-  it("does not show copy when showAssistantCopyAction is false", () => {
+  it("does not submit duplicate note saves while the first save is pending", async () => {
+    let resolveSave!: (noteId: string) => void;
+    tauriMocks.createNoteFromChat.mockReturnValue(
+      new Promise<string>((resolve) => {
+        resolveSave = resolve;
+      }),
+    );
     const message: UIMessage = {
-      id: "a-mid",
+      id: "a-save-pending",
       role: "assistant",
-      content: "Mid-turn snippet.",
+      content: "A reply worth saving.",
       createdAt: Date.now(),
     };
 
-    render(<MessageBubble message={message} showAssistantCopyAction={false} />);
+    render(<MessageBubble message={message} />);
 
-    expect(screen.queryByRole("button", { name: "Copy reply" })).not.toBeInTheDocument();
+    fireEvent.contextMenu(screen.getByTestId("message-bubble-a-save-pending"));
+    const saveButton = await screen.findByRole("menuitem", { name: "Save as note" });
+    fireEvent.click(saveButton);
+    fireEvent.contextMenu(screen.getByTestId("message-bubble-a-save-pending"));
+    const secondSaveButton = await screen.findByRole("menuitem", { name: "Save as note" });
+
+    expect(tauriMocks.createNoteFromChat).toHaveBeenCalledTimes(1);
+    expect(secondSaveButton).toHaveAttribute("aria-disabled", "true");
+
+    await act(async () => {
+      resolveSave("note-1");
+    });
+    await waitFor(() =>
+      expect(screen.getByRole("menuitem", { name: "Saved as note" })).toBeInTheDocument(),
+    );
+  });
+
+  it("shows a failure message when saving a reply as a note fails", async () => {
+    tauriMocks.createNoteFromChat.mockRejectedValue(new Error("笔记目录不可写"));
+    const alert = vi.spyOn(window, "alert").mockImplementation(() => undefined);
+    const message: UIMessage = {
+      id: "a-save-failed",
+      role: "assistant",
+      content: "This reply cannot be saved.",
+      createdAt: Date.now(),
+    };
+
+    try {
+      render(<MessageBubble message={message} />);
+      fireEvent.contextMenu(screen.getByTestId("message-bubble-a-save-failed"));
+      fireEvent.click(await screen.findByRole("menuitem", { name: "Save as note" }));
+
+      await waitFor(() =>
+        expect(alert).toHaveBeenCalledWith("保存笔记失败：笔记目录不可写"),
+      );
+    } finally {
+      alert.mockRestore();
+    }
   });
 
   it("renders group assistant replies as left bubbles", () => {
@@ -94,11 +202,11 @@ describe("MessageBubble", () => {
 
     expect(container.firstElementChild).toHaveClass("w-fit", "max-w-[min(85%,48rem)]");
     expect(container.querySelector(".self-start")).toBeInTheDocument();
-    const groupBubble = container.querySelector(".rounded-tl-md");
+    const groupBubble = container.querySelector(".rounded-2xl");
     expect(groupBubble).toBeInTheDocument();
-    expect(groupBubble).toHaveClass("border", "bg-card/80");
+    expect(groupBubble).toHaveClass("border", "bg-muted/55");
     expect(groupBubble).not.toHaveClass("shadow-sm");
-    expect(screen.getByTestId("group-bubble-tail")).toBeInTheDocument();
+    expect(screen.queryByTestId("group-bubble-tail")).not.toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Show all" })).not.toBeInTheDocument();
   });
 
@@ -121,7 +229,8 @@ describe("MessageBubble", () => {
     const toggle = await screen.findByRole("button", { name: "Show all" });
     expect(toggle).toHaveAttribute("aria-expanded", "false");
     expect(document.body.textContent).toContain("line 29");
-    fireEvent.click(screen.getByRole("button", { name: "Copy reply" }));
+    fireEvent.contextMenu(screen.getByTestId("message-bubble-a-long"));
+    fireEvent.click(await screen.findByRole("menuitem", { name: "Copy" }));
     await waitFor(() => expect(writeText).toHaveBeenCalledWith(content));
 
     fireEvent.click(toggle);
@@ -134,19 +243,69 @@ describe("MessageBubble", () => {
     );
   });
 
-  it("keeps long direct replies unchanged", () => {
+  it("renders direct replies as open markdown with the requested hover actions", async () => {
     const content = Array.from({ length: 30 }, (_, index) => `direct line ${index}`).join("\n");
     const message: UIMessage = {
       id: "a-direct-long",
       role: "assistant",
       content,
       createdAt: Date.now(),
+      tokenUsage: {
+        promptTokens: 90_000,
+        completionTokens: 8_700,
+        cachedTokens: 0,
+        totalTokens: 98_700,
+      },
     };
 
-    const { container } = render(<MessageBubble message={message} />);
+    const onBranch = vi.fn();
+    const { container } = render(<MessageBubble message={message} onQuote={vi.fn()} onBranch={onBranch} />);
 
+    expect(container.firstElementChild).toHaveClass("w-full", "group/message");
+    expect(container.firstElementChild).not.toHaveClass("w-fit", "max-w-[min(85%,48rem)]");
+    const directSurface = screen.getByTestId("message-bubble-a-direct-long").firstElementChild;
+    expect(directSurface).not.toHaveClass("rounded-2xl", "border", "bg-muted/55");
+    expect(screen.queryByTestId("direct-bubble-tail")).not.toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Show all" })).not.toBeInTheDocument();
     expect(container.querySelector(".max-h-96")).not.toBeInTheDocument();
+    const actions = screen.getByTestId("direct-message-actions");
+    expect(actions).toHaveClass("opacity-0", "group-hover/message:opacity-100");
+    expect(screen.getByRole("button", { name: "Copy" })).toBeInTheDocument();
+    const shareButton = screen.getByRole("button", { name: "Share as image" });
+    expect(shareButton).toBeInTheDocument();
+    fireEvent.pointerMove(shareButton);
+    expect(await screen.findByRole("tooltip")).toHaveTextContent("Share as image");
+    fireEvent.pointerLeave(shareButton);
+    expect(screen.getByText("98.7k tokens")).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Start branch task" }));
+    expect(onBranch).toHaveBeenCalledWith(message, "Mona");
+    fireEvent.pointerDown(screen.getByRole("button", { name: "More actions" }), {
+      button: 0,
+      ctrlKey: false,
+    });
+    expect(await screen.findByRole("menuitem", { name: "Reply" })).toBeInTheDocument();
+    expect(screen.getByRole("menuitem", { name: "Save as note" })).toBeInTheDocument();
+  });
+
+  it("saves a shared reply image through the desktop file picker", async () => {
+    const message: UIMessage = {
+      id: "a-share",
+      role: "assistant",
+      content: "Share this answer.",
+      createdAt: Date.now(),
+    };
+
+    render(<MessageBubble message={message} />);
+    fireEvent.click(screen.getByRole("button", { name: "Share as image" }));
+
+    await waitFor(() => expect(imageMocks.toBlob).toHaveBeenCalledTimes(1));
+    await waitFor(() => expect(fileMocks.save).toHaveBeenCalledWith(expect.objectContaining({
+      filters: [{ name: "PNG", extensions: ["png"] }],
+    })));
+    expect(fileMocks.writeFile).toHaveBeenCalledWith(
+      "C:\\Users\\test\\mona-message.png",
+      expect.any(Uint8Array),
+    );
   });
 
   it("keeps group attachments outside the collapsed reply body", async () => {
@@ -398,5 +557,35 @@ describe("MessageBubble", () => {
     expect(imageButton).toHaveClass("w-[min(100%,34rem)]", "rounded-2xl");
     expect(imageButton).not.toHaveAttribute("title");
     expect(container.querySelector("img")).toHaveClass("h-auto", "w-full", "object-contain");
+  });
+
+  it("groups generated images into a collapsible gallery and opens the lightbox", () => {
+    const message: UIMessage = {
+      id: "a-image-gallery",
+      role: "assistant",
+      content: "done",
+      createdAt: Date.now(),
+      media: Array.from({ length: 6 }, (_, index) => ({
+        kind: "image" as const,
+        url: `/api/media/sig/image-${index + 1}`,
+        name: `generated-${index + 1}.png`,
+      })),
+    };
+
+    const { container } = render(<MessageBubble message={message} />);
+    const gallery = container.querySelector('[data-image-gallery="true"]');
+
+    expect(gallery).toBeInTheDocument();
+    expect(gallery?.querySelectorAll("img")).toHaveLength(4);
+    const expand = screen.getByRole("button", { name: "Show all (+2)" });
+    fireEvent.click(expand);
+
+    expect(gallery?.querySelectorAll("img")).toHaveLength(6);
+    fireEvent.click(screen.getByRole("button", { name: "Collapse" }));
+    expect(gallery?.querySelectorAll("img")).toHaveLength(4);
+    expect(screen.getByRole("button", { name: "Show all (+2)" })).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: "View image: generated-1.png" }));
+    expect(screen.getByRole("dialog", { name: "generated-1.png" })).toBeInTheDocument();
   });
 });

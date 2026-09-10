@@ -140,6 +140,15 @@ class SkillRuntimeSpec(Base):
     packs: list[str] = Field(default_factory=list, max_length=64)
     python: PythonSkillDependencies | None = None
     node: NodeSkillDependencies | None = None
+    optional_script_types: list[Literal["py", "mjs", "r"]] = Field(
+        default_factory=list,
+        max_length=8,
+    )
+
+    @field_validator("optional_script_types")
+    @classmethod
+    def _optional_script_types(cls, values: list[str]) -> list[str]:
+        return list(dict.fromkeys(values))
 
     @field_validator("packs")
     @classmethod
@@ -154,12 +163,20 @@ class SkillRuntimeSpec(Base):
 
     @model_validator(mode="after")
     def _nonempty(self) -> SkillRuntimeSpec:
-        if not self.packs and self.python is None and self.node is None:
+        if (
+            not self.packs
+            and self.python is None
+            and self.node is None
+            and not self.optional_script_types
+        ):
             raise ValueError("Skill runtime declaration is empty")
         return self
 
     def canonical(self) -> dict[str, object]:
-        return self.model_dump(mode="json", exclude_none=True)
+        payload = self.model_dump(mode="json", exclude_none=True)
+        if not self.optional_script_types:
+            payload.pop("optional_script_types", None)
+        return payload
 
 
 def parse_skill_runtime_spec(raw: object) -> SkillRuntimeSpec | None:

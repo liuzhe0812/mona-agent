@@ -6,7 +6,7 @@
  */
 
 import { getServicesHttpBase } from "./api";
-import { httpFetch } from "./tauri";
+import { httpFetch, type LinkGraph } from "./tauri";
 
 async function fetchJSON<T>(url: string, init?: RequestInit): Promise<T> {
   const base = await getServicesHttpBase();
@@ -21,9 +21,134 @@ async function fetchJSON<T>(url: string, init?: RequestInit): Promise<T> {
   return resp.json();
 }
 
+function withKnowledgeBase(url: string, knowledgeBaseId?: string): string {
+  if (!knowledgeBaseId) return url;
+  const separator = url.includes("?") ? "&" : "?";
+  return `${url}${separator}knowledgeBaseId=${encodeURIComponent(knowledgeBaseId)}`;
+}
+
+function withMaterialScope(
+  url: string,
+  knowledgeBaseId?: string,
+  agentId?: string,
+): string {
+  if (agentId) return withAgentId(url, agentId);
+  return withKnowledgeBase(url, knowledgeBaseId);
+}
+
 // ---------------------------------------------------------------------------
 // Types
 // ---------------------------------------------------------------------------
+
+export interface KnowledgeLibrary {
+  id: string;
+  name: string;
+  description: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface AgentKnowledgeProgress {
+  stage: "queued" | "extracting" | "organizing" | "ready" | "failed";
+  label: string;
+  detail?: string;
+  completed?: number;
+  total?: number;
+  percent?: number;
+  evidenceReady: boolean;
+}
+
+export interface AgentKnowledgeDocument {
+  id: string;
+  name: string;
+  path: string;
+  size: number;
+  status: "available" | "unavailable";
+  phase: "queued" | "learning" | "ready" | "failed";
+  message?: string;
+  progress?: AgentKnowledgeProgress;
+  updatedAt: string;
+}
+
+function withAgentId(url: string, agentId: string): string {
+  const separator = url.includes("?") ? "&" : "?";
+  return `${url}${separator}agentId=${encodeURIComponent(agentId)}`;
+}
+
+export async function listAgentKnowledgeDocuments(agentId: string): Promise<AgentKnowledgeDocument[]> {
+  const data = await fetchJSON<{ documents: AgentKnowledgeDocument[] }>(
+    withAgentId("/api/materials/knowledge", agentId),
+  );
+  return data.documents ?? [];
+}
+
+export function getAgentKnowledgeGraph(agentId: string): Promise<LinkGraph> {
+  return fetchJSON<LinkGraph>(
+    withAgentId("/api/materials/knowledge/graph", agentId),
+  );
+}
+
+export async function addAgentKnowledgeDocuments(
+  agentId: string,
+  paths: string[],
+): Promise<AgentKnowledgeDocument[]> {
+  const data = await fetchJSON<{ documents: AgentKnowledgeDocument[] }>(
+    withAgentId("/api/materials/knowledge", agentId),
+    { method: "POST", body: JSON.stringify({ paths }) },
+  );
+  return data.documents ?? [];
+}
+
+export async function retryAgentKnowledgeDocument(
+  documentId: string,
+  agentId: string,
+): Promise<void> {
+  await fetchJSON<unknown>(
+    withAgentId(`/api/materials/knowledge/${encodeURIComponent(documentId)}/retry`, agentId),
+    { method: "POST" },
+  );
+}
+
+export async function deleteAgentKnowledgeDocument(
+  documentId: string,
+  agentId: string,
+): Promise<void> {
+  await fetchJSON<unknown>(
+    withAgentId(`/api/materials/knowledge/${encodeURIComponent(documentId)}`, agentId),
+    { method: "DELETE" },
+  );
+}
+
+export async function listKnowledgeLibraries(): Promise<KnowledgeLibrary[]> {
+  const data = await fetchJSON<{ libraries: KnowledgeLibrary[] }>("/api/materials/libraries");
+  return data.libraries ?? [];
+}
+
+export async function createKnowledgeLibrary(
+  name: string,
+  description = "",
+): Promise<KnowledgeLibrary> {
+  const data = await fetchJSON<{ library: KnowledgeLibrary }>("/api/materials/libraries", {
+    method: "POST",
+    body: JSON.stringify({ name, description }),
+  });
+  return data.library;
+}
+
+export async function updateKnowledgeLibrary(
+  id: string,
+  update: { name?: string; description?: string },
+): Promise<KnowledgeLibrary> {
+  const data = await fetchJSON<{ library: KnowledgeLibrary }>(
+    `/api/materials/libraries/${encodeURIComponent(id)}`,
+    { method: "PATCH", body: JSON.stringify(update) },
+  );
+  return data.library;
+}
+
+export function deleteKnowledgeLibrary(id: string): Promise<{ deleted: string }> {
+  return fetchJSON(`/api/materials/libraries/${encodeURIComponent(id)}`, { method: "DELETE" });
+}
 
 export interface MaterialsExtractStatus {
   status: "queued" | "running" | "ok" | "error" | "unsupported" | "stale";
@@ -92,6 +217,24 @@ export interface MaterialsStatus {
   };
   rawRoot?: string;
   vaultRoot?: string;
+  evidence?: {
+    represented: number;
+    excluded: number;
+    uncovered: number;
+    complete: boolean;
+  };
+}
+
+export interface EvidenceDetail {
+  id: string;
+  materialId: string;
+  source: string;
+  sourceHash: string;
+  kind: string;
+  label: string;
+  location: Record<string, unknown>;
+  status: "represented" | "excluded" | "uncovered";
+  wikiRefs: string[];
 }
 
 // ---------------------------------------------------------------------------
@@ -126,23 +269,28 @@ export interface MaterialsLintReport {
 // ---------------------------------------------------------------------------
 
 /** 列出 raw 目录下所有文件（递归），含提取状态。 */
-export async function listMaterialsFiles(subdir?: string): Promise<MaterialsFileEntry[]> {
+export async function listMaterialsFiles(
+  subdir?: string,
+  knowledgeBaseId?: string,
+): Promise<MaterialsFileEntry[]> {
   const q = subdir ? `?subdir=${encodeURIComponent(subdir)}` : "";
-  const data = await fetchJSON<{ entries: MaterialsFileEntry[] }>(`/api/materials/files${q}`);
+  const data = await fetchJSON<{ entries: MaterialsFileEntry[] }>(
+    withKnowledgeBase(`/api/materials/files${q}`, knowledgeBaseId),
+  );
   return data.entries ?? [];
 }
 
 /** 在 raw 下创建子目录。 */
-export function createMaterialsDirectory(path: string): Promise<{ created: string }> {
-  return fetchJSON(`/api/materials/directory`, {
+export function createMaterialsDirectory(path: string, knowledgeBaseId?: string): Promise<{ created: string }> {
+  return fetchJSON(withKnowledgeBase(`/api/materials/directory`, knowledgeBaseId), {
     method: "POST",
     body: JSON.stringify({ path }),
   });
 }
 
 /** 删除 raw 下的文件或目录。 */
-export function deleteMaterialsFile(path: string): Promise<{ deleted: string }> {
-  return fetchJSON(`/api/materials/files/${encodeURIComponent(path)}`, {
+export function deleteMaterialsFile(path: string, knowledgeBaseId?: string): Promise<{ deleted: string }> {
+  return fetchJSON(withKnowledgeBase(`/api/materials/files/${encodeURIComponent(path)}`, knowledgeBaseId), {
     method: "DELETE",
   });
 }
@@ -151,8 +299,9 @@ export function deleteMaterialsFile(path: string): Promise<{ deleted: string }> 
 export function moveMaterialsFile(
   source: string,
   targetDir: string,
+  knowledgeBaseId?: string,
 ): Promise<{ source: string; target: string }> {
-  return fetchJSON(`/api/materials/move`, {
+  return fetchJSON(withKnowledgeBase(`/api/materials/move`, knowledgeBaseId), {
     method: "POST",
     body: JSON.stringify({ source, targetDir }),
   });
@@ -163,33 +312,45 @@ export function moveMaterialsFile(
 // ---------------------------------------------------------------------------
 
 /** 触发后台文本提取（异步）。 */
-export function extractMaterialsText(path: string): Promise<{
+export function extractMaterialsText(path: string, knowledgeBaseId?: string): Promise<{
   queued: number;
   root: string;
 }> {
-  return fetchJSON(`/api/materials/extract`, {
+  return fetchJSON(withKnowledgeBase(`/api/materials/extract`, knowledgeBaseId), {
     method: "POST",
     body: JSON.stringify({ path }),
   });
 }
 
 /** 轻量对账 raw/text/wiki 一致性并同步检索索引（进入资料页/手动刷新时调用）。 */
-export function reconcileMaterials(): Promise<{
+export function reconcileMaterials(knowledgeBaseId?: string): Promise<{
   requeued: string[];
   removedOrphans: string[];
   staleWiki: string[];
 }> {
-  return fetchJSON(`/api/materials/reconcile`, { method: "POST" });
+  return fetchJSON(withKnowledgeBase(`/api/materials/reconcile`, knowledgeBaseId), { method: "POST" });
 }
 
 /** 读取提取的文本内容。 */
-export function getMaterialsText(path: string): Promise<MaterialsTextContent> {
-  return fetchJSON<MaterialsTextContent>(`/api/materials/text/${encodeURIComponent(path)}`);
+export function getMaterialsText(
+  path: string,
+  knowledgeBaseId?: string,
+  agentId?: string,
+): Promise<MaterialsTextContent> {
+  return fetchJSON<MaterialsTextContent>(
+    withMaterialScope(`/api/materials/text/${encodeURIComponent(path)}`, knowledgeBaseId, agentId),
+  );
 }
 
 /** 读取 raw 原始文件内容（仅文本格式：md/html/txt 等）。 */
-export function getMaterialsRawFile(path: string): Promise<MaterialsTextContent & { ext: string }> {
-  return fetchJSON<MaterialsTextContent & { ext: string }>(`/api/materials/raw/${encodeURIComponent(path)}`);
+export function getMaterialsRawFile(
+  path: string,
+  knowledgeBaseId?: string,
+  agentId?: string,
+): Promise<MaterialsTextContent & { ext: string }> {
+  return fetchJSON<MaterialsTextContent & { ext: string }>(
+    withMaterialScope(`/api/materials/raw/${encodeURIComponent(path)}`, knowledgeBaseId, agentId),
+  );
 }
 
 // ---------------------------------------------------------------------------
@@ -197,30 +358,41 @@ export function getMaterialsRawFile(path: string): Promise<MaterialsTextContent 
 // ---------------------------------------------------------------------------
 
 /** 列出所有 Wiki 页面。 */
-export async function listWikiPages(): Promise<WikiPageSummary[]> {
-  const data = await fetchJSON<{ pages: WikiPageSummary[] }>(`/api/materials/wiki`);
+export async function listWikiPages(
+  knowledgeBaseId?: string,
+  agentId?: string,
+): Promise<WikiPageSummary[]> {
+  const data = await fetchJSON<{ pages: WikiPageSummary[] }>(
+    withMaterialScope(`/api/materials/wiki`, knowledgeBaseId, agentId),
+  );
   return data.pages ?? [];
 }
 
 /** 读取单个 Wiki 页面详情。 */
-export function getWikiPage(path: string): Promise<WikiPageDetail> {
-  return fetchJSON<WikiPageDetail>(`/api/materials/wiki/${encodeURIComponent(path)}`);
+export function getWikiPage(
+  path: string,
+  knowledgeBaseId?: string,
+  agentId?: string,
+): Promise<WikiPageDetail> {
+  return fetchJSON<WikiPageDetail>(
+    withMaterialScope(`/api/materials/wiki/${encodeURIComponent(path)}`, knowledgeBaseId, agentId),
+  );
 }
 
 /** 写入/更新 Wiki 页面。 */
 export function writeWikiPage(payload: {
   path: string;
   content: string;
-}): Promise<{ path: string; bytes: number }> {
-  return fetchJSON(`/api/materials/wiki/write`, {
+}, knowledgeBaseId?: string): Promise<{ path: string; bytes: number }> {
+  return fetchJSON(withKnowledgeBase(`/api/materials/wiki/write`, knowledgeBaseId), {
     method: "POST",
     body: JSON.stringify(payload),
   });
 }
 
 /** 删除 Wiki 页面。 */
-export function deleteWikiPage(path: string): Promise<{ deleted: string }> {
-  return fetchJSON(`/api/materials/wiki/${encodeURIComponent(path)}`, {
+export function deleteWikiPage(path: string, knowledgeBaseId?: string): Promise<{ deleted: string }> {
+  return fetchJSON(withKnowledgeBase(`/api/materials/wiki/${encodeURIComponent(path)}`, knowledgeBaseId), {
     method: "DELETE",
   });
 }
@@ -231,21 +403,48 @@ export function deleteWikiPage(path: string): Promise<{ deleted: string }> {
 
 export interface WikiCompileStatus {
   taskId: string;
-  /** running | done | error | cancelled */
-  state: "running" | "done" | "error" | "cancelled";
+  knowledgeBaseId: string;
+  /** running | done | partial | error | cancelled */
+  state: "running" | "done" | "partial" | "error" | "cancelled";
   currentFile: string;
   totalFiles: number;
   completedFiles: number;
   errors: string[];
+  warnings: string[];
   pagesWritten: number;
   writtenPaths: string[];
+  coverage: {
+    complete: boolean;
+    totalSegments: number;
+    processedSegments: number;
+    totalBatches: number;
+    processedBatches: number;
+    failedBatches: number;
+    missingSegments: number;
+    missingLocations: string[];
+  };
+}
+
+export function getEvidenceDetail(
+  evidenceId: string,
+  knowledgeBaseId?: string,
+  agentId?: string,
+): Promise<EvidenceDetail> {
+  return fetchJSON<EvidenceDetail>(
+    withMaterialScope(
+      `/api/materials/evidence/${encodeURIComponent(evidenceId)}`,
+      knowledgeBaseId,
+      agentId,
+    ),
+  );
 }
 
 /** 启动 Wiki 编译任务。paths 相对 raw/，可为文件或目录（目录递归展开）。 */
 export function startWikiCompile(
   paths: string[],
+  knowledgeBaseId?: string,
 ): Promise<{ taskId: string; totalFiles: number }> {
-  return fetchJSON(`/api/materials/wiki/compile`, {
+  return fetchJSON(withKnowledgeBase(`/api/materials/wiki/compile`, knowledgeBaseId), {
     method: "POST",
     body: JSON.stringify({ paths }),
   });
@@ -272,6 +471,7 @@ export function cancelWikiCompile(taskId: string): Promise<{ cancelled: boolean 
 export interface MaterialsSearchParams {
   query: string;
   count?: number;
+  knowledgeBaseId?: string;
   /** "all" | "text" | "wiki" */
   scope?: "all" | "text" | "wiki";
 }
@@ -282,17 +482,18 @@ export async function searchMaterials(
   const q = new URLSearchParams({ q: params.query });
   if (params.count != null) q.set("count", String(params.count));
   if (params.scope) q.set("scope", params.scope);
+  if (params.knowledgeBaseId) q.set("knowledgeBaseId", params.knowledgeBaseId);
   const data = await fetchJSON<{ results: MaterialsSearchResult[] }>(
     `/api/materials/search?${q.toString()}`,
   );
   return data.results ?? [];
 }
 
-export function getMaterialsStatus(): Promise<MaterialsStatus> {
-  return fetchJSON<MaterialsStatus>(`/api/materials/status`);
+export function getMaterialsStatus(knowledgeBaseId?: string): Promise<MaterialsStatus> {
+  return fetchJSON<MaterialsStatus>(withKnowledgeBase(`/api/materials/status`, knowledgeBaseId));
 }
 
 /** 对 LLM Wiki 产物跑确定性质量检查（只报告不修复）。 */
-export function lintMaterials(): Promise<MaterialsLintReport> {
-  return fetchJSON<MaterialsLintReport>(`/api/materials/lint`, { method: "POST" });
+export function lintMaterials(knowledgeBaseId?: string): Promise<MaterialsLintReport> {
+  return fetchJSON<MaterialsLintReport>(withKnowledgeBase(`/api/materials/lint`, knowledgeBaseId), { method: "POST" });
 }

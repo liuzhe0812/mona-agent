@@ -129,7 +129,7 @@ impl KnownHostsStore {
             None => HostKeyVerification::Unknown { fingerprint: fp.clone() },
         };
 
-        if let HostKeyVerification::Unknown { .. } = &result {
+        if !matches!(&result, HostKeyVerification::Trusted) {
             drop(entries);
             *self.last_unknown.write().unwrap() =
                 Some((host.to_string(), port, kt, fp));
@@ -145,12 +145,14 @@ impl KnownHostsStore {
         let entry = HostKeyEntry {
             host: host.to_string(),
             port,
-            key_type: kt,
+            key_type: kt.clone(),
             fingerprint: fp,
         };
 
         let mut entries = self.entries.write().unwrap();
-        entries.entry(ek).or_default().push(entry);
+        let host_entries = entries.entry(ek).or_default();
+        host_entries.retain(|item| item.key_type != kt);
+        host_entries.push(entry);
         drop(entries);
 
         self.save()
@@ -189,12 +191,14 @@ impl KnownHostsStore {
         let entry = HostKeyEntry {
             host: host.to_string(),
             port,
-            key_type: kt,
+            key_type: kt.clone(),
             fingerprint: fp,
         };
 
         let mut entries = self.entries.write().unwrap();
-        entries.entry(ek).or_default().push(entry);
+        let host_entries = entries.entry(ek).or_default();
+        host_entries.retain(|item| item.key_type != kt);
+        host_entries.push(entry);
         drop(entries);
 
         self.save()

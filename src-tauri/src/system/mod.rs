@@ -17,8 +17,10 @@ pub mod windows_update;
 use crate::settings::app_data_dir;
 use rusqlite::{params, Connection};
 use serde::{Deserialize, Serialize};
+use std::collections::hash_map::DefaultHasher;
 use std::collections::HashMap;
 use std::fs;
+use std::hash::{Hash, Hasher};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
@@ -94,9 +96,11 @@ fn history_window_secs(window_secs: Option<i64>) -> i64 {
 mod tests {
     use super::{
         bytes_per_second, cleanup_is_allowed, cleanup_path, decode_windows_output, file_type_category,
-        history_window_secs, is_thumbcache_file, normalize_scan_drive, refresh_readings, sample,
-        scan_directory_tree, trash_path_check, whole_machine_cpu_percent, Connection, Disks, Inner, Networks,
-        ScanProgressEmitter, System, HISTORY_WINDOW_SECS,
+        generated_artifact_kind, history_window_secs, is_thumbcache_file, modified_bucket,
+        normalize_scan_drive, refresh_readings, sample, scan_directory_tree, storage_entry_id,
+        trash_path_check, whole_machine_cpu_percent, Connection, Disks, Inner, Networks,
+        DirectoryInsightSummary, DirectorySize, FileExtensionBucket, FileTypeSize,
+        ScanProgressEmitter, StorageSizeBucket, System, HISTORY_WINDOW_SECS,
     };
     use std::collections::HashMap;
     use std::path::Path;
@@ -269,6 +273,7 @@ mod tests {
             scan_directory_tree(
                 &root, 0, &cancel, &emitter, &mut dirs, &mut types, &mut top, &mut ext,
             )
+            .0
         };
         let first = scan();
         let second = scan();
@@ -294,11 +299,69 @@ mod tests {
         let mut ext = HashMap::new();
         let node = scan_directory_tree(
             &root, 0, &cancel, &emitter, &mut dirs, &mut types, &mut top, &mut ext,
-        );
+        )
+        .0;
         let _ = std::fs::remove_dir_all(&root);
 
         assert_eq!(node.size_bytes, 0);
         assert_eq!(node.file_count, 0);
+    }
+
+    #[test]
+    fn storage_candidate_ids_are_stable_without_exposing_paths() {
+        let path = Path::new("C:\\Users\\Mona\\private-project");
+        let first = storage_entry_id("dir", path);
+        assert_eq!(first, storage_entry_id("dir", path));
+        assert_ne!(first, storage_entry_id("file", path));
+        assert!(!first.contains("private-project"));
+    }
+
+    #[test]
+    fn recognizes_regenerable_project_directories_conservatively() {
+        assert_eq!(
+            generated_artifact_kind(Path::new("C:\\work\\app\\node_modules")).as_deref(),
+            Some("Node.js 依赖目录")
+        );
+        assert_eq!(
+            generated_artifact_kind(Path::new("C:\\work\\app\\assets")),
+            None
+        );
+    }
+
+    #[test]
+    fn recently_modified_files_are_not_marked_as_old() {
+        let file =
+            std::env::temp_dir().join(format!("mona-modified-bucket-{}.tmp", std::process::id()));
+        std::fs::write(&file, b"x").expect("write temp file");
+        let metadata = std::fs::metadata(&file).expect("metadata");
+        let bucket = modified_bucket(&metadata);
+        let _ = std::fs::remove_file(&file);
+        assert_eq!(bucket, "30d");
+    }
+
+    #[test]
+    fn directory_scan_serializes_compact_ai_evidence() {
+        let node = DirectorySize {
+            id: "dir-1".to_string(),
+            path: "C:\\work".to_string(),
+            size_gb: 2.0,
+            size_bytes: 2_147_483_648,
+            file_count: 3,
+            direct_size_gb: 1.0,
+            insight: Some(DirectoryInsightSummary {
+                artifact_kind: Some("工程构建产物".to_string()),
+                file_types: vec![FileTypeSize { category: "其他".to_string(), size_gb: 2.0 }],
+                modified_buckets: vec![StorageSizeBucket { bucket: "30d".to_string(), count: 3, size_gb: 2.0 }],
+                top_extensions: vec![FileExtensionBucket { extension: "bin".to_string(), count: 3, size_gb: 2.0 }],
+            }),
+            children: Vec::new(),
+        };
+
+        let serialized = serde_json::to_value(node).expect("serialize directory evidence");
+        assert_eq!(serialized["id"], "dir-1");
+        assert_eq!(serialized["directSizeGb"], 1.0);
+        assert_eq!(serialized["insight"]["artifactKind"], "工程构建产物");
+        assert!(serialized.get("sizeBytes").is_none());
     }
 }
 
@@ -685,12 +748,16 @@ pub struct StorageDiskInfo {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct DirectorySize {
+    pub id: String,
     pub path: String,
     pub size_gb: f64,
     /// 字节级精确大小，仅扫描内部累加（消除 GB 浮点往返误差），不序列化
     #[serde(skip)]
     pub size_bytes: u64,
     pub file_count: u64,
+    pub direct_size_gb: f64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub insight: Option<DirectoryInsightSummary>,
     /// 嵌套子目录（仅递归扫描时填充，按大小降序）。
     /// 顶层扫描结果中该字段为空数组或省略；下钻时由前端从内存切片。
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -716,10 +783,28 @@ pub struct FileTypeSize {
     pub size_gb: f64,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct StorageSizeBucket {
+    pub bucket: String,
+    pub count: u64,
+    pub size_gb: f64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DirectoryInsightSummary {
+    pub artifact_kind: Option<String>,
+    pub file_types: Vec<FileTypeSize>,
+    pub modified_buckets: Vec<StorageSizeBucket>,
+    pub top_extensions: Vec<FileExtensionBucket>,
+}
+
 /// 大文件信息（脱敏：仅目录名 + 扩展名 + 大小 + 修改时间桶，不含完整路径和文件名）
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct TopFileInfo {
+    pub id: String,
     pub extension: String,
     pub parent_dir_name: String,
     pub size_gb: f64,
@@ -792,6 +877,7 @@ pub struct FileExtensionBucket {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct StorageScanResult {
+    pub scan_id: String,
     pub disks: Vec<StorageDiskInfo>,
     pub directories: Vec<DirectorySize>,
     pub cleanup_items: Vec<CleanupItem>,
@@ -884,13 +970,157 @@ fn file_type_category(path: &Path) -> &'static str {
 const TOP_FILE_THRESHOLD_GB: f64 = 0.5;
 const MAX_TOP_FILES: usize = 100;
 const MAX_EXTENSION_BUCKETS: usize = 20;
+const MAX_DIRECTORY_EXTENSION_BUCKETS: usize = 8;
+const MIN_DIRECTORY_INSIGHT_GB: f64 = 0.5;
+
+#[derive(Default)]
+struct DirectoryInsightStats {
+    file_type_bytes: HashMap<String, u64>,
+    extension_stats: HashMap<String, (u64, u64)>,
+    modified_stats: HashMap<String, (u64, u64)>,
+}
+
+impl DirectoryInsightStats {
+    fn add_file(&mut self, path: &Path, metadata: &fs::Metadata) {
+        let size = metadata.len();
+        *self
+            .file_type_bytes
+            .entry(file_type_category(path).to_string())
+            .or_default() += size;
+
+        let extension = extension_of(path);
+        let extension_entry = self.extension_stats.entry(extension).or_insert((0, 0));
+        extension_entry.0 += 1;
+        extension_entry.1 += size;
+
+        let modified = modified_bucket(metadata);
+        let modified_entry = self.modified_stats.entry(modified).or_insert((0, 0));
+        modified_entry.0 += 1;
+        modified_entry.1 += size;
+    }
+
+    fn merge(&mut self, other: DirectoryInsightStats) {
+        for (key, bytes) in other.file_type_bytes {
+            *self.file_type_bytes.entry(key).or_default() += bytes;
+        }
+        for (key, (count, bytes)) in other.extension_stats {
+            let entry = self.extension_stats.entry(key).or_insert((0, 0));
+            entry.0 += count;
+            entry.1 += bytes;
+        }
+        for (key, (count, bytes)) in other.modified_stats {
+            let entry = self.modified_stats.entry(key).or_insert((0, 0));
+            entry.0 += count;
+            entry.1 += bytes;
+        }
+    }
+}
+
+fn storage_entry_id(prefix: &str, path: &Path) -> String {
+    let mut hasher = DefaultHasher::new();
+    path.to_string_lossy()
+        .replace('/', "\\")
+        .to_lowercase()
+        .hash(&mut hasher);
+    format!("{prefix}-{:016x}", hasher.finish())
+}
+
+fn generated_artifact_kind(path: &Path) -> Option<String> {
+    let name = path.file_name()?.to_string_lossy().to_ascii_lowercase();
+    let parent = path.parent()?;
+    match name.as_str() {
+        "node_modules" => Some("Node.js 依赖目录".to_string()),
+        "__pycache__" => Some("Python 字节码缓存".to_string()),
+        ".next" => Some("Next.js 构建缓存".to_string()),
+        "target" if parent.join("Cargo.toml").is_file() => Some("Rust 构建产物".to_string()),
+        ".venv" | "venv" if path.join("pyvenv.cfg").is_file() => {
+            Some("Python 虚拟环境".to_string())
+        }
+        "dist" | "build" | "out"
+            if parent.join("package.json").is_file()
+                || parent.join("pyproject.toml").is_file()
+                || parent.join("Cargo.toml").is_file() =>
+        {
+            Some("工程构建产物".to_string())
+        }
+        _ => None,
+    }
+}
+
+fn build_directory_insight(
+    path: &Path,
+    size_bytes: u64,
+    stats: &DirectoryInsightStats,
+) -> Option<DirectoryInsightSummary> {
+    let artifact_kind = generated_artifact_kind(path);
+    let size_gb = size_bytes as f64 / 1_073_741_824.0;
+    if size_gb < MIN_DIRECTORY_INSIGHT_GB && artifact_kind.is_none() {
+        return None;
+    }
+
+    let file_types = ["应用", "视频", "图片", "文档", "系统", "其他"]
+        .into_iter()
+        .filter_map(|category| {
+            let bytes = stats
+                .file_type_bytes
+                .get(category)
+                .copied()
+                .unwrap_or_default();
+            (bytes > 0).then(|| FileTypeSize {
+                category: category.to_string(),
+                size_gb: bytes as f64 / 1_073_741_824.0,
+            })
+        })
+        .collect();
+
+    let mut top_extensions: Vec<FileExtensionBucket> = stats
+        .extension_stats
+        .iter()
+        .map(|(extension, (count, bytes))| FileExtensionBucket {
+            extension: extension.clone(),
+            count: *count,
+            size_gb: *bytes as f64 / 1_073_741_824.0,
+        })
+        .collect();
+    top_extensions.sort_by(|a, b| {
+        b.size_gb
+            .partial_cmp(&a.size_gb)
+            .unwrap_or(std::cmp::Ordering::Equal)
+    });
+    top_extensions.truncate(MAX_DIRECTORY_EXTENSION_BUCKETS);
+
+    let modified_buckets = ["30d", "90d", "180d", "1y", "old", "unknown"]
+        .into_iter()
+        .filter_map(|bucket| {
+            stats
+                .modified_stats
+                .get(bucket)
+                .map(|(count, bytes)| StorageSizeBucket {
+                    bucket: bucket.to_string(),
+                    count: *count,
+                    size_gb: *bytes as f64 / 1_073_741_824.0,
+                })
+        })
+        .collect();
+
+    Some(DirectoryInsightSummary {
+        artifact_kind,
+        file_types,
+        modified_buckets,
+        top_extensions,
+    })
+}
 
 /// 大小桶：将修改时间映射为粗粒度时间段，避免泄露精确时间戳
 fn modified_bucket(metadata: &fs::Metadata) -> String {
-    let Some(modified) = metadata.modified().ok().and_then(|t| t.duration_since(UNIX_EPOCH).ok()) else {
+    let Some(modified) = metadata.modified().ok() else {
         return "unknown".to_string();
     };
-    let days = modified.as_secs() / 86_400;
+    let days = SystemTime::now()
+        .duration_since(modified)
+        .unwrap_or_default()
+        .as_secs()
+        / 86_400;
     if days < 30 {
         "30d".to_string()
     } else if days < 90 {
@@ -931,21 +1161,34 @@ fn scan_directory_for_insights(
     type_bytes: &mut HashMap<&'static str, u64>,
     top_files: &mut Vec<TopFileInfo>,
     extension_stats: &mut HashMap<String, (u64, u64)>,
-) -> (u64, u64, u64) {
-    if cancel.load(Ordering::Relaxed) { return (0, 0, 0); }
+) -> (u64, u64, u64, DirectoryInsightStats) {
+    if cancel.load(Ordering::Relaxed) {
+        return (0, 0, 0, DirectoryInsightStats::default());
+    }
     let mut total = 0u64;
     let mut file_count = 0u64;
     let mut dir_count = 0u64;
+    let mut insight_stats = DirectoryInsightStats::default();
     let mut stack = vec![path.to_path_buf()];
     while let Some(dir) = stack.pop() {
-        if cancel.load(Ordering::Relaxed) { break; }
+        if cancel.load(Ordering::Relaxed) {
+            break;
+        }
         dir_count += 1;
         emitter.dir_scanned(&dir);
-        let Ok(entries) = fs::read_dir(&dir) else { continue };
+        let Ok(entries) = fs::read_dir(&dir) else {
+            continue;
+        };
         for entry in entries.flatten() {
-            if cancel.load(Ordering::Relaxed) { break; }
-            let Ok(file_type) = entry.file_type() else { continue };
-            if file_type.is_symlink() { continue; }
+            if cancel.load(Ordering::Relaxed) {
+                break;
+            }
+            let Ok(file_type) = entry.file_type() else {
+                continue;
+            };
+            if file_type.is_symlink() {
+                continue;
+            }
             if file_type.is_dir() {
                 stack.push(entry.path());
             } else if file_type.is_file() {
@@ -960,10 +1203,12 @@ fn scan_directory_for_insights(
                 let entry_stats = extension_stats.entry(ext.clone()).or_insert((0, 0));
                 entry_stats.0 += 1;
                 entry_stats.1 += size;
+                insight_stats.add_file(&entry.path(), &meta);
 
                 let size_gb = size as f64 / 1_073_741_824.0;
                 if size_gb >= TOP_FILE_THRESHOLD_GB {
                     top_files.push(TopFileInfo {
+                        id: storage_entry_id("file", &entry.path()),
                         extension: ext.clone(),
                         parent_dir_name: parent_dir_name(&entry.path()),
                         size_gb,
@@ -974,7 +1219,7 @@ fn scan_directory_for_insights(
             }
         }
     }
-    (total, file_count, dir_count)
+    (total, file_count, dir_count, insight_stats)
 }
 
 /// 递归扫描目录并构建嵌套树（WizTree 风格：一次扫描，前端秒下钻）。
@@ -993,67 +1238,112 @@ fn scan_directory_tree(
     type_bytes: &mut HashMap<&'static str, u64>,
     top_files: &mut Vec<TopFileInfo>,
     extension_stats: &mut HashMap<String, (u64, u64)>,
-) -> DirectorySize {
+) -> (DirectorySize, DirectoryInsightStats) {
     if cancel.load(Ordering::Relaxed) {
-        return DirectorySize {
-            path: path.to_string_lossy().to_string(),
-            size_gb: 0.0,
-            size_bytes: 0,
-            file_count: 0,
-            children: Vec::new(),
-        };
+        return (
+            DirectorySize {
+                id: storage_entry_id("dir", path),
+                path: path.to_string_lossy().to_string(),
+                size_gb: 0.0,
+                size_bytes: 0,
+                file_count: 0,
+                direct_size_gb: 0.0,
+                insight: None,
+                children: Vec::new(),
+            },
+            DirectoryInsightStats::default(),
+        );
     }
 
     *dir_counter += 1;
     emitter.dir_scanned(path);
     let mut total = 0u64;
+    let mut direct_size = 0u64;
     let mut file_count = 0u64;
     let mut children: Vec<DirectorySize> = Vec::new();
+    let mut insight_stats = DirectoryInsightStats::default();
 
     let Ok(entries) = fs::read_dir(path) else {
-        return DirectorySize {
-            path: path.to_string_lossy().to_string(),
-            size_gb: 0.0,
-            size_bytes: 0,
-            file_count: 0,
-            children: Vec::new(),
-        };
+        return (
+            DirectorySize {
+                id: storage_entry_id("dir", path),
+                path: path.to_string_lossy().to_string(),
+                size_gb: 0.0,
+                size_bytes: 0,
+                file_count: 0,
+                direct_size_gb: 0.0,
+                insight: None,
+                children: Vec::new(),
+            },
+            DirectoryInsightStats::default(),
+        );
     };
 
     let can_recurse = depth < MAX_TREE_DEPTH;
 
     for entry in entries.flatten() {
-        if cancel.load(Ordering::Relaxed) { break; }
-        let Ok(file_type) = entry.file_type() else { continue };
-        if file_type.is_symlink() { continue; }
+        if cancel.load(Ordering::Relaxed) {
+            break;
+        }
+        let Ok(file_type) = entry.file_type() else {
+            continue;
+        };
+        if file_type.is_symlink() {
+            continue;
+        }
 
         if file_type.is_dir() {
             let child_path = entry.path();
-            let child = if can_recurse {
-                scan_directory_tree(&child_path, depth + 1, cancel, emitter, dir_counter, type_bytes, top_files, extension_stats)
+            let (child, child_insight_stats) = if can_recurse {
+                scan_directory_tree(
+                    &child_path,
+                    depth + 1,
+                    cancel,
+                    emitter,
+                    dir_counter,
+                    type_bytes,
+                    top_files,
+                    extension_stats,
+                )
             } else {
                 // 达到深度上限：用迭代版只算大小，不展开
                 let mut tmp_type: HashMap<&'static str, u64> = HashMap::new();
-                let (size, files, _dirs) = scan_directory_for_insights(
-                    &child_path, cancel, emitter, &mut tmp_type, top_files, extension_stats,
+                let (size, files, scanned_dirs, child_insight_stats) = scan_directory_for_insights(
+                    &child_path,
+                    cancel,
+                    emitter,
+                    &mut tmp_type,
+                    top_files,
+                    extension_stats,
                 );
-                *dir_counter += _dirs;
-                for (k, v) in tmp_type { *type_bytes.entry(k).or_default() += v; }
-                DirectorySize {
-                    path: child_path.to_string_lossy().to_string(),
-                    size_gb: size as f64 / 1_073_741_824.0,
-                    size_bytes: size,
-                    file_count: files,
-                    children: Vec::new(),
+                *dir_counter += scanned_dirs;
+                for (k, v) in tmp_type {
+                    *type_bytes.entry(k).or_default() += v;
                 }
+                let insight = build_directory_insight(&child_path, size, &child_insight_stats);
+                (
+                    DirectorySize {
+                        id: storage_entry_id("dir", &child_path),
+                        path: child_path.to_string_lossy().to_string(),
+                        size_gb: size as f64 / 1_073_741_824.0,
+                        size_bytes: size,
+                        file_count: files,
+                        direct_size_gb: size as f64 / 1_073_741_824.0,
+                        insight,
+                        children: Vec::new(),
+                    },
+                    child_insight_stats,
+                )
             };
             total += child.size_bytes;
             file_count += child.file_count;
+            insight_stats.merge(child_insight_stats);
             children.push(child);
         } else if file_type.is_file() {
             let Ok(meta) = entry.metadata() else { continue };
             let size = meta.len();
             total += size;
+            direct_size += size;
             file_count += 1;
 
             let category = file_type_category(&entry.path());
@@ -1063,10 +1353,12 @@ fn scan_directory_tree(
             let entry_stats = extension_stats.entry(ext.clone()).or_insert((0, 0));
             entry_stats.0 += 1;
             entry_stats.1 += size;
+            insight_stats.add_file(&entry.path(), &meta);
 
             let size_gb = size as f64 / 1_073_741_824.0;
             if size_gb >= TOP_FILE_THRESHOLD_GB {
                 top_files.push(TopFileInfo {
+                    id: storage_entry_id("file", &entry.path()),
                     extension: ext.clone(),
                     parent_dir_name: parent_dir_name(&entry.path()),
                     size_gb,
@@ -1077,7 +1369,11 @@ fn scan_directory_tree(
         }
     }
 
-    children.sort_by(|a, b| b.size_gb.partial_cmp(&a.size_gb).unwrap_or(std::cmp::Ordering::Equal));
+    children.sort_by(|a, b| {
+        b.size_gb
+            .partial_cmp(&a.size_gb)
+            .unwrap_or(std::cmp::Ordering::Equal)
+    });
 
     let size_gb = total as f64 / 1_073_741_824.0;
     // 小目录剪枝：低于阈值的目录丢弃 children，减少内存和前端渲染压力
@@ -1085,13 +1381,20 @@ fn scan_directory_tree(
         children.clear();
     }
 
-    DirectorySize {
-        path: path.to_string_lossy().to_string(),
-        size_gb,
-        size_bytes: total,
-        file_count,
-        children,
-    }
+    let insight = build_directory_insight(path, total, &insight_stats);
+    (
+        DirectorySize {
+            id: storage_entry_id("dir", path),
+            path: path.to_string_lossy().to_string(),
+            size_gb,
+            size_bytes: total,
+            file_count,
+            direct_size_gb: direct_size as f64 / 1_073_741_824.0,
+            insight,
+            children,
+        },
+        insight_stats,
+    )
 }
 
 /// 从 top_files 和 extension_stats 生成最终的扩展名桶（按大小降序）
@@ -1159,10 +1462,13 @@ fn extract_hotspots(directories: &[DirectorySize]) -> Vec<DirectorySize> {
             }
             // 复制节点但清空 children（热点卡片只展示大小，不需要嵌套）
             hotspots.push(DirectorySize {
+                id: node.id.clone(),
                 path: format!("{} · {}", label, node.path),
                 size_gb: node.size_gb,
                 size_bytes: node.size_bytes,
                 file_count: node.file_count,
+                direct_size_gb: node.direct_size_gb,
+                insight: node.insight.clone(),
                 children: Vec::new(),
             });
         }
@@ -1174,10 +1480,13 @@ fn extract_hotspots(directories: &[DirectorySize]) -> Vec<DirectorySize> {
             let other_bytes = home_node.size_bytes.saturating_sub(listed_home_bytes);
             if other_bytes > 0 {
                 hotspots.push(DirectorySize {
+                    id: storage_entry_id("dir", home),
                     path: format!("家目录其他 · {}", home_node.path),
                     size_gb: other_bytes as f64 / 1_073_741_824.0,
                     size_bytes: other_bytes,
                     file_count: 0,
+                    direct_size_gb: other_bytes as f64 / 1_073_741_824.0,
+                    insight: None,
                     children: Vec::new(),
                 });
             }
@@ -1407,6 +1716,13 @@ fn scan_storage_inner(app: AppHandle, cancel: Arc<AtomicBool>, drive: Option<Str
     let start = Instant::now();
     let scanned_drive = normalize_scan_drive(drive)?;
     let is_system_drive = scanned_drive == "C:";
+    let scan_id = format!(
+        "scan-{}",
+        SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_nanos()
+    );
 
     // 磁盘信息（sysinfo 快速获取）
     let disks_list = Disks::new_with_refreshed_list();
@@ -1501,7 +1817,7 @@ fn scan_storage_inner(app: AppHandle, cancel: Arc<AtomicBool>, drive: Option<Str
                     let mut local_types = HashMap::new();
                     let mut local_top = Vec::new();
                     let mut local_ext = HashMap::new();
-                    let node = scan_directory_tree(
+                    let (node, _) = scan_directory_tree(
                         target,
                         0,
                         cancel,
@@ -1579,6 +1895,7 @@ fn scan_storage_inner(app: AppHandle, cancel: Arc<AtomicBool>, drive: Option<Str
     };
 
     Ok(StorageScanResult {
+        scan_id,
         disks,
         directories,
         cleanup_items,

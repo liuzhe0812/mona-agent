@@ -17,7 +17,7 @@ import { TaskManagerApp } from "./apps/TaskManagerApp";
 import { TextEditorApp } from "./apps/TextEditorApp";
 import { RecycleBinApp } from "./apps/RecycleBinApp";
 import { useWindowManager } from "./useWindowManager";
-import { desktopDisconnect, desktopConnect, desktopExec } from "../ipc";
+import { desktopDisconnect, desktopConnect, desktopExec, sshTrustHostKey } from "../ipc";
 import { useTerminalStore } from "../store/terminalStore";
 import type { ConnectionConfig } from "../types/terminal";
 import type { AppType, WindowState } from "./types";
@@ -286,6 +286,12 @@ export function DesktopMode({ sessionId, aiEnabled }: DesktopModeProps) {
   const [backendSessionId, setBackendSessionId] = useState<string | null>(null);
   const [loginLoading, setLoginLoading] = useState(false);
   const [loginError, setLoginError] = useState<string | null>(null);
+  const [pendingHostKey, setPendingHostKey] = useState<{
+    config: ConnectionConfig;
+    type: "unknown" | "changed";
+    fingerprint: string;
+    expectedFingerprint: string;
+  } | null>(null);
   const [disconnected, setDisconnected] = useState(false);
 
   const effectiveSessionId = backendSessionId ?? sessionId;
@@ -329,32 +335,73 @@ export function DesktopMode({ sessionId, aiEnabled }: DesktopModeProps) {
     };
   }, []);
 
+  const connectDesktop = async (config: ConnectionConfig) => {
+    const newSessionId = await desktopConnect(config);
+    addConnection(config);
+    setBackendSessionId(newSessionId);
+    updateSessionStatus(sessionId, "connected");
+    updateSessionTitle(sessionId, `${config.username}@${config.host} (桌面)`);
+  };
+
   const handleLogin = async (loginConfig: {
     host: string;
     port: number;
     username: string;
     auth: { type: "password"; password: string };
   }) => {
+    const connConfig: ConnectionConfig = {
+      id: crypto.randomUUID(),
+      name: `${loginConfig.username}@${loginConfig.host}`,
+      protocol: "ssh",
+      host: loginConfig.host,
+      port: loginConfig.port,
+      username: loginConfig.username,
+      auth: loginConfig.auth,
+    };
+    setLoginLoading(true);
+    setLoginError(null);
+    setPendingHostKey(null);
+    try {
+      await connectDesktop(connConfig);
+    } catch (err) {
+      const message = String(err);
+      const unknown = message.match(/Host key unknown:\s*(SHA256:\S+)/);
+      const changed = message.match(
+        /Host key changed: expected\s*(SHA256:\S+),\s*got\s*(SHA256:\S+)/,
+      );
+      if (unknown) {
+        setPendingHostKey({
+          config: connConfig,
+          type: "unknown",
+          fingerprint: unknown[1],
+          expectedFingerprint: "",
+        });
+      } else if (changed) {
+        setPendingHostKey({
+          config: connConfig,
+          type: "changed",
+          fingerprint: changed[2],
+          expectedFingerprint: changed[1],
+        });
+      } else {
+        setLoginError(message);
+      }
+    } finally {
+      setLoginLoading(false);
+    }
+  };
+
+  const handleTrustHostKey = async () => {
+    if (!pendingHostKey) return;
     setLoginLoading(true);
     setLoginError(null);
     try {
-      const connConfig: ConnectionConfig = {
-        id: crypto.randomUUID(),
-        name: `${loginConfig.username}@${loginConfig.host}`,
-        protocol: "ssh",
-        host: loginConfig.host,
-        port: loginConfig.port,
-        username: loginConfig.username,
-        auth: loginConfig.auth,
-      };
-      addConnection(connConfig);
-      const newSessionId = await desktopConnect(connConfig);
-      setBackendSessionId(newSessionId);
-      updateSessionStatus(sessionId, "connected");
-      updateSessionTitle(
-        sessionId,
-        `${loginConfig.username}@${loginConfig.host} (桌面)`,
+      await sshTrustHostKey(
+        pendingHostKey.config.host,
+        pendingHostKey.config.port,
       );
+      await connectDesktop(pendingHostKey.config);
+      setPendingHostKey(null);
     } catch (err) {
       setLoginError(String(err));
     } finally {
@@ -465,6 +512,9 @@ export function DesktopMode({ sessionId, aiEnabled }: DesktopModeProps) {
           onLogin={handleLogin}
           loading={loginLoading}
           error={loginError}
+          hostKey={pendingHostKey}
+          onTrustHostKey={handleTrustHostKey}
+          onCancelHostKey={() => setPendingHostKey(null)}
         />
       </div>
     );

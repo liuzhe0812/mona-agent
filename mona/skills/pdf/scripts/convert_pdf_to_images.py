@@ -1,29 +1,23 @@
-import os
 import sys
+from pathlib import Path
 
-from pdf2image import convert_from_path
-
+import pymupdf
 
 # Converts each page of a PDF to a PNG image.
 
 
 def convert(pdf_path, output_dir, max_dim=1000):
-    images = convert_from_path(pdf_path, dpi=200)
+    destination = Path(output_dir)
+    destination.mkdir(parents=True, exist_ok=True)
+    with pymupdf.open(pdf_path) as document:
+        for i, page in enumerate(document):
+            scale = min(200 / 72, max_dim / max(page.rect.width, page.rect.height))
+            pixmap = page.get_pixmap(matrix=pymupdf.Matrix(scale, scale), alpha=False)
+            image_path = destination / f"page_{i + 1}.png"
+            pixmap.save(image_path)
+            print(f"Saved page {i + 1} as {image_path} (size: {(pixmap.width, pixmap.height)})")
 
-    for i, image in enumerate(images):
-        # Scale image if needed to keep width/height under `max_dim`
-        width, height = image.size
-        if width > max_dim or height > max_dim:
-            scale_factor = min(max_dim / width, max_dim / height)
-            new_width = int(width * scale_factor)
-            new_height = int(height * scale_factor)
-            image = image.resize((new_width, new_height))
-        
-        image_path = os.path.join(output_dir, f"page_{i+1}.png")
-        image.save(image_path)
-        print(f"Saved page {i+1} as {image_path} (size: {image.size})")
-
-    print(f"Converted {len(images)} pages to PNG images")
+        print(f"Converted {len(document)} pages to PNG images")
 
 
 if __name__ == "__main__":

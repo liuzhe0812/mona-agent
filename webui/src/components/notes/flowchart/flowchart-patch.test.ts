@@ -10,6 +10,7 @@ import {
 } from "./flowchart-patch";
 import {
   cloneFlowchartDocument,
+  computeFlowchartDocumentHash,
   computeFlowchartSemanticHash,
   createBlankFlowchartDocument,
   DEFAULT_FLOWCHART_CANVAS,
@@ -112,6 +113,71 @@ describe("parseFlowchartPatch", () => {
     const r = parseFlowchartPatch(text);
     expect(r.ok).toBe(false);
     if (!r.ok) expect(r.message).toContain("唯一 op");
+  });
+
+  it("接受通用视觉图元字段并校验取值范围", () => {
+    const valid = parseFlowchartPatch(`\`\`\`mona-flowchart-patch
+${JSON.stringify({
+  baseHash: "h1",
+  baseDocumentHash: "d1",
+  ops: [{
+    name: "addNode",
+    node: {
+      id: "shape-1",
+      kind: "triangle",
+      label: "",
+      position: { x: 20, y: 30 },
+      size: { width: 9, height: 3 },
+      zIndex: -2,
+      rotation: 25,
+      opacity: 0.4,
+      decorative: true,
+    },
+  }],
+})}
+\`\`\``);
+    expect(valid.ok).toBe(true);
+
+    const invalid = parseFlowchartPatch(`\`\`\`mona-flowchart-patch
+${JSON.stringify({
+  baseHash: "h1",
+  baseDocumentHash: "d1",
+  ops: [{ name: "addNode", node: { id: "shape-1", kind: "circle", label: "", opacity: 1.5 } }],
+})}
+\`\`\``);
+    expect(invalid.ok).toBe(false);
+    if (!invalid.ok) expect(invalid.message).toContain("opacity");
+  });
+
+  it("把常见虚线数值和复合方向端口归一化为底层契约", () => {
+    const doc = makeDoc();
+    const parsed = parseFlowchartPatch(`\`\`\`mona-flowchart-patch
+${JSON.stringify({
+  baseHash: computeFlowchartSemanticHash(doc),
+  baseDocumentHash: computeFlowchartDocumentHash(doc),
+  ops: [{
+    name: "updateEdge",
+    id: "e1",
+    expected: { source: "n1", target: "n2" },
+    patch: {
+      sourceHandle: "bottom-right",
+      targetHandle: "top-left",
+      style: { strokeDasharray: "5 3" },
+    },
+  }],
+})}
+\`\`\``);
+    expect(parsed.ok).toBe(true);
+    if (!parsed.ok) return;
+
+    const applied = applyFlowchartPatch(doc, parsed.patch);
+    expect(applied.ok).toBe(true);
+    if (!applied.ok) return;
+    expect(applied.document.edges[0]).toMatchObject({
+      sourceHandle: "bottom-source",
+      targetHandle: "top-target",
+      style: { strokeDasharray: "dashed" },
+    });
   });
 
   it("未知 op name 报错", () => {
@@ -635,6 +701,9 @@ describe("applyFlowchartPatch — baseHash 校验", () => {
         addedEdges: 0,
         updatedEdges: 0,
         removedEdges: 0,
+        addedGroups: 0,
+        updatedGroups: 0,
+        removedGroups: 0,
         addedPools: 0,
         addedLanes: 0,
         movedToLane: 0,

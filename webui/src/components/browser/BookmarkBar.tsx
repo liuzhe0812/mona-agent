@@ -154,7 +154,7 @@ export function BookmarkBar({ onNavigate, visible }: BookmarkBarProps) {
   const [editTitle, setEditTitle] = useState("");
   const [editFolder, setEditFolder] = useState("");
   const [rootDragOver, setRootDragOver] = useState(false);
-  const refreshTimerRef = useRef<ReturnType<typeof setTimeout>>();
+  const refreshTimerRef = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
 
   const refresh = useCallback(() => {
     browserListBookmarks()

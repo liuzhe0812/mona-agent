@@ -42,6 +42,11 @@ export interface FlowchartControlEdgeData {
   controlPoints?: { x: number; y: number }[];
   /** 只读模式：禁用拖拽 */
   readOnly?: boolean;
+  /** 边标签相对自动位置的像素偏移。 */
+  labelOffset?: { x: number; y: number };
+  /** 文档/受控节点计算出的可靠端点，避免 React Flow 节点重建期间复用旧测量。 */
+  sourcePoint?: Point;
+  targetPoint?: Point;
   /** 控制点实时变更回调（拖动期间高频触发，仅更新视图，不提交历史） */
   onControlPointsChange?: (
     edgeId: string,
@@ -79,6 +84,9 @@ function areEdgePropsEqual(prev: EdgeProps, next: EdgeProps): boolean {
   const pd = (prev.data ?? {}) as FlowchartControlEdgeData;
   const nd = (next.data ?? {}) as FlowchartControlEdgeData;
   if (pd.readOnly !== nd.readOnly) return false;
+  if (pd.labelOffset?.x !== nd.labelOffset?.x || pd.labelOffset?.y !== nd.labelOffset?.y) return false;
+  if (pd.sourcePoint?.x !== nd.sourcePoint?.x || pd.sourcePoint?.y !== nd.sourcePoint?.y) return false;
+  if (pd.targetPoint?.x !== nd.targetPoint?.x || pd.targetPoint?.y !== nd.targetPoint?.y) return false;
   const pc = pd.controlPoints;
   const nc = nd.controlPoints;
   if (pc === nc) return true;
@@ -658,10 +666,10 @@ export const SmoothstepControlEdge = memo(function SmoothstepControlEdge(
 ) {
   const {
     id,
-    sourceX,
-    sourceY,
-    targetX,
-    targetY,
+    sourceX: measuredSourceX,
+    sourceY: measuredSourceY,
+    targetX: measuredTargetX,
+    targetY: measuredTargetY,
     sourcePosition = Position.Bottom,
     targetPosition = Position.Top,
     style,
@@ -682,6 +690,11 @@ export const SmoothstepControlEdge = memo(function SmoothstepControlEdge(
   const readOnly = d.readOnly === true;
   const onControlPointsChange = d.onControlPointsChange;
   const onControlPointsCommit = d.onControlPointsCommit;
+  const labelOffset = d.labelOffset ?? { x: 0, y: 0 };
+  const sourceX = d.sourcePoint?.x ?? measuredSourceX;
+  const sourceY = d.sourcePoint?.y ?? measuredSourceY;
+  const targetX = d.targetPoint?.x ?? measuredTargetX;
+  const targetY = d.targetPoint?.y ?? measuredTargetY;
 
   // 完整路径点：source → controlPoints → target
   const points: Point[] = useMemo(
@@ -703,9 +716,9 @@ export const SmoothstepControlEdge = memo(function SmoothstepControlEdge(
       if (!longest || s.length > longest.length) longest = s;
     }
     return longest
-      ? ([longest.mid.x, longest.mid.y] as const)
-      : ([(sourceX + targetX) / 2, (sourceY + targetY) / 2] as const);
-  }, [segments, sourceX, sourceY, targetX, targetY]);
+      ? ([longest.mid.x + labelOffset.x, longest.mid.y + labelOffset.y] as const)
+      : ([(sourceX + targetX) / 2 + labelOffset.x, (sourceY + targetY) / 2 + labelOffset.y] as const);
+  }, [segments, sourceX, sourceY, targetX, targetY, labelOffset.x, labelOffset.y]);
 
   // dragRef：统一管理拖拽状态
   // 蓝色（1/2 中点）→ 整段平移（from + to 同步移动，垂直于段方向）
@@ -1044,10 +1057,10 @@ export const SmoothstepControlEdge = memo(function SmoothstepControlEdge(
 export const BezierControlEdge = memo(function BezierControlEdge(props: EdgeProps) {
   const {
     id,
-    sourceX,
-    sourceY,
-    targetX,
-    targetY,
+    sourceX: measuredSourceX,
+    sourceY: measuredSourceY,
+    targetX: measuredTargetX,
+    targetY: measuredTargetY,
     sourcePosition = Position.Bottom,
     targetPosition = Position.Top,
     style,
@@ -1068,6 +1081,11 @@ export const BezierControlEdge = memo(function BezierControlEdge(props: EdgeProp
   const readOnly = d.readOnly === true;
   const onControlPointsChange = d.onControlPointsChange;
   const onControlPointsCommit = d.onControlPointsCommit;
+  const labelOffset = d.labelOffset ?? { x: 0, y: 0 };
+  const sourceX = d.sourcePoint?.x ?? measuredSourceX;
+  const sourceY = d.sourcePoint?.y ?? measuredSourceY;
+  const targetX = d.targetPoint?.x ?? measuredTargetX;
+  const targetY = d.targetPoint?.y ?? measuredTargetY;
 
   // 计算 bezier 路径；如果有 2 个控制点则使用它们作为 cp1/cp2
   const { path, labelX, labelY, cp1, cp2 } = useMemo(() => {
@@ -1142,8 +1160,8 @@ export const BezierControlEdge = memo(function BezierControlEdge(props: EdgeProp
       <BaseEdge
         id={id}
         path={path}
-        labelX={labelX}
-        labelY={labelY}
+        labelX={labelX + labelOffset.x}
+        labelY={labelY + labelOffset.y}
         label={label}
         labelStyle={labelStyle}
         labelShowBg={labelShowBg}

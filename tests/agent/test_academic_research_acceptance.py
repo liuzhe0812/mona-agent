@@ -33,7 +33,7 @@ FIXTURE_ROOT = Path(__file__).parents[1] / "fixtures" / "academic_research"
 PDF_PATH = FIXTURE_ROOT / "papers" / "synthetic-paper.pdf"
 AGENT_MANIFEST = (
     Path(__file__).parents[2]
-    / "mona"
+    / "expert-library"
     / "agents"
     / "com.mona.academic-researcher"
     / "agent.json"

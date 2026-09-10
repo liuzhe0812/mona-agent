@@ -29,7 +29,7 @@ import {
   Mail,
   Plus,
   RotateCw,
-  Settings,
+  Search,
   Sparkles,
   Square,
   SquarePen,
@@ -41,14 +41,15 @@ import {
 import { useTranslation } from "react-i18next";
 
 import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
 import { OfficeDocChip } from "@/components/doc/office/OfficeDocChip";
 import {
   DropdownMenu,
   DropdownMenuContent,
-  DropdownMenuGroup,
   DropdownMenuItem,
-  DropdownMenuLabel,
-  DropdownMenuSeparator,
+  DropdownMenuSub,
+  DropdownMenuSubContent,
+  DropdownMenuSubTrigger,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import {
@@ -60,12 +61,18 @@ import {
 import { useClipboardAndDrop } from "@/hooks/useClipboardAndDrop";
 import type { SendImage, SendOptions } from "@/hooks/useMonaStream";
 import type { PendingMessage } from "@/hooks/usePendingQueue";
-import type { RoomAgentInfo, SlashCommand, GoalStateWsPayload } from "@/lib/types";
-import { isTauri } from "@/lib/tauri";
+import type { MessageQuote, RoomAgentInfo, SlashCommand, GoalStateWsPayload } from "@/lib/types";
+import {
+  getDesktopSettings,
+  isTauri,
+  SEND_MESSAGE_SHORTCUT_EVENT,
+  type SendMessageShortcut,
+} from "@/lib/tauri";
 import { cn } from "@/lib/utils";
 import { PendingQueueStrip } from "@/components/thread/PendingQueueStrip";
 
 const IMAGE_ACCEPT_ATTR = "image/png,image/jpeg,image/webp,image/gif";
+const MAX_QUOTE_CONTENT_CHARS = 4_000;
 
 function formatBytes(n: number): string {
   if (n < 1024) return `${n} B`;
@@ -78,8 +85,34 @@ export interface ComposerModelOption {
   providerLabel: string;
   model: string;
   label: string;
-  free: boolean;
   active: boolean;
+  isBuiltin?: boolean;
+  description?: string | null;
+  contextWindow?: number | null;
+  recommended?: boolean;
+  tags?: string[];
+  priceTier?: string | null;
+  reasoningEfforts?: string[];
+  reasoningEffort?: string | null;
+  inputAmountPerMillion?: string | null;
+  cachedInputAmountPerMillion?: string | null;
+  outputAmountPerMillion?: string | null;
+  promotionLabel?: string | null;
+  promotionName?: string | null;
+  discountPercent?: number | null;
+  originalInputAmountPerMillion?: string | null;
+  originalCachedInputAmountPerMillion?: string | null;
+  originalOutputAmountPerMillion?: string | null;
+}
+
+function modelReasoningLabel(value?: string | null): string {
+  return ({ low: "低", medium: "中", high: "高", max: "最高", adaptive: "自动" } as Record<string, string>)[value ?? ""] ?? "默认";
+}
+
+function modelContextLabel(value?: number | null): string | null {
+  if (!value) return null;
+  if (value >= 1_000_000) return `${Math.round(value / 1_000_000)}M`;
+  return `${Math.round(value / 1_000)}K`;
 }
 
 export type ComposerAttachment = File | { name: string; localPath: string };
@@ -89,9 +122,11 @@ interface ThreadComposerProps {
   disabled?: boolean;
   placeholder?: string;
   isStreaming?: boolean;
+  /** True while the server is confirming a stop request. */
+  stopping?: boolean;
   modelLabel?: string | null;
   modelOptions?: ComposerModelOption[];
-  onModelSwitch?: (provider: string, model: string) => void;
+  onModelSwitch?: (provider: string, model: string, reasoningEffort?: string | null) => void;
   /** Server-resolved capability of the active preset. When false, image
    * attach/paste/drop is rejected with an inline hint. Default true. */
   imageInputEnabled?: boolean;
@@ -106,6 +141,7 @@ interface ThreadComposerProps {
   /** Project workspace bound to a new-chat composer. Only shown in hero mode. */
   workspace?: string | null;
   onWorkspaceChange?: (workspace: string | null) => void;
+  heroBrand?: ReactNode;
   showHeroPromptChips?: boolean;
   onOpenSettings?: (section?: string) => void;
   /** Pending message queue for mid-turn staging. */
@@ -122,6 +158,8 @@ interface ThreadComposerProps {
   documentUploadError?: string | null;
   onAddDocuments?: (files: ComposerAttachment[]) => void;
   onRemoveDocument?: (path: string) => void;
+  quote?: MessageQuote | null;
+  onClearQuote?: () => void;
 }
 
 const COMMAND_ICONS: Record<string, LucideIcon> = {
@@ -136,7 +174,7 @@ const COMMAND_ICONS: Record<string, LucideIcon> = {
   "undo-2": Undo2,
 };
 
-interface HeroPromptChip {
+export interface HeroPromptChip {
   label: string;
   prompt: string;
   Icon: LucideIcon;
@@ -476,6 +514,7 @@ export function ThreadComposer({
   disabled,
   placeholder,
   isStreaming = false,
+  stopping = false,
   modelLabel = null,
   modelOptions = [],
   onModelSwitch,
@@ -492,6 +531,7 @@ export function ThreadComposer({
   isPendingFull = false,
   workspace,
   onWorkspaceChange,
+  heroBrand,
   showHeroPromptChips = true,
   onOpenSettings,
   mentionableAgents = [],
@@ -500,10 +540,13 @@ export function ThreadComposer({
   documentUploadError = null,
   onAddDocuments,
   onRemoveDocument,
+  quote = null,
+  onClearQuote,
 }: ThreadComposerProps) {
   const { t } = useTranslation();
   const attachLabel = t(onAddDocuments ? "thread.composer.attachFile" : "thread.composer.attachImage");
   const [value, setValue] = useState("");
+  const [sendMessageShortcut, setSendMessageShortcut] = useState<SendMessageShortcut>("enter");
   const [inlineError, setInlineError] = useState<string | null>(null);
   const [slashMenuDismissed, setSlashMenuDismissed] = useState(false);
   const [selectedCommandIndex, setSelectedCommandIndex] = useState(0);
@@ -517,21 +560,61 @@ export function ThreadComposer({
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const formRef = useRef<HTMLFormElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
-  const [nativeDragging, setNativeDragging] = useState(false);
+  const [modelMenuOpen, setModelMenuOpen] = useState(false);
+  const [modelQuery, setModelQuery] = useState("");
+  const [modelDetailsKey, setModelDetailsKey] = useState<string | null>(null);
   const chipRefs = useRef(new Map<string, HTMLButtonElement>());
   const isHero = variant === "hero";
+  const activeModelOption = modelOptions.find((option) => option.active) ?? null;
+  const normalizedModelQuery = modelQuery.trim().toLowerCase();
+  const filteredModelOptions = normalizedModelQuery
+    ? modelOptions.filter((option) =>
+        `${option.label} ${option.model} ${option.description ?? ""} ${(option.tags ?? []).join(" ")}`
+          .toLowerCase()
+          .includes(normalizedModelQuery),
+      )
+    : modelOptions;
   const groupedModelOptions = useMemo(() => {
     const groups = new Map<string, { label: string; options: ComposerModelOption[] }>();
-    for (const option of modelOptions) {
+    for (const option of filteredModelOptions) {
       const group = groups.get(option.provider);
       if (group) group.options.push(option);
       else groups.set(option.provider, { label: option.providerLabel, options: [option] });
     }
     return [...groups.entries()];
-  }, [modelOptions]);
+  }, [filteredModelOptions]);
+  const triggerModelLabel = activeModelOption?.model ?? modelLabel;
   const resolvedPlaceholder = isStreaming
     ? t("thread.composer.placeholderStreaming")
     : placeholder ?? t("thread.composer.placeholderThread");
+
+  useEffect(() => {
+    if (!quote) return;
+    requestAnimationFrame(() => textareaRef.current?.focus());
+  }, [quote]);
+
+  useEffect(() => {
+    let cancelled = false;
+    if (isTauri()) {
+      void getDesktopSettings()
+        .then((settings) => {
+          const next = settings.send_message_shortcut;
+          if (!cancelled && (next === "enter" || next === "ctrl_enter")) {
+            setSendMessageShortcut(next);
+          }
+        })
+        .catch(() => {});
+    }
+    const handleShortcutChange = (event: Event) => {
+      const next = (event as CustomEvent<SendMessageShortcut>).detail;
+      if (next === "enter" || next === "ctrl_enter") setSendMessageShortcut(next);
+    };
+    window.addEventListener(SEND_MESSAGE_SHORTCUT_EVENT, handleShortcutChange);
+    return () => {
+      cancelled = true;
+      window.removeEventListener(SEND_MESSAGE_SHORTCUT_EVENT, handleShortcutChange);
+    };
+  }, []);
 
   const { images, enqueue, remove, clear, encoding, full } =
     useAttachedImages();
@@ -578,6 +661,18 @@ export function ThreadComposer({
     [addFiles, disabled, documentsUploading, imageInputEnabled, onAddDocuments],
   );
 
+  const addDroppedAttachments = useCallback(
+    (files: File[]) => {
+      if (files.length === 0 || disabled || documentsUploading) return;
+      if (onAddDocuments) {
+        onAddDocuments(files);
+        return;
+      }
+      addFiles(files);
+    },
+    [addFiles, disabled, documentsUploading, onAddDocuments],
+  );
+
   const {
     isDragging,
     onPaste,
@@ -585,56 +680,10 @@ export function ThreadComposer({
     onDragOver,
     onDragLeave,
     onDrop,
-  } = useClipboardAndDrop(addAttachments, { acceptAllFiles: Boolean(onAddDocuments) });
-
-  const desktopFileDropEnabled = Boolean(onAddDocuments) && isTauri();
-
-  useEffect(() => {
-    if (!desktopFileDropEnabled || !onAddDocuments) return;
-    let active = true;
-    let unlisten: (() => void) | null = null;
-    const isInsideComposer = (position: { x: number; y: number }) => {
-      const rect = formRef.current?.getBoundingClientRect();
-      if (!rect) return false;
-      const dpr = window.devicePixelRatio || 1;
-      const x = position.x / dpr;
-      const y = position.y / dpr;
-      return x >= rect.left && x <= rect.right && y >= rect.top && y <= rect.bottom;
-    };
-
-    void import("@tauri-apps/api/webview")
-      .then(({ getCurrentWebview }) => getCurrentWebview().onDragDropEvent((event) => {
-        if (!active) return;
-        switch (event.payload.type) {
-          case "enter":
-          case "over":
-            if ("position" in event.payload) setNativeDragging(isInsideComposer(event.payload.position));
-            break;
-          case "leave":
-            setNativeDragging(false);
-            break;
-          case "drop":
-            setNativeDragging(false);
-            if (!("paths" in event.payload) || !("position" in event.payload)) return;
-            if (!isInsideComposer(event.payload.position) || event.payload.paths.length === 0) return;
-            onAddDocuments(event.payload.paths.map((localPath) => ({
-              localPath,
-              name: localPath.replace(/\\/g, "/").split("/").at(-1) || localPath,
-            })));
-            break;
-        }
-      }))
-      .then((fn) => {
-        if (active) unlisten = fn;
-        else fn();
-      })
-      .catch(() => undefined);
-
-    return () => {
-      active = false;
-      unlisten?.();
-    };
-  }, [desktopFileDropEnabled, onAddDocuments]);
+  } = useClipboardAndDrop(addAttachments, {
+    acceptAllFiles: Boolean(onAddDocuments),
+    onDropFiles: addDroppedAttachments,
+  });
 
   useEffect(() => {
     if (disabled) return;
@@ -785,8 +834,8 @@ export function ThreadComposer({
       if (!el) return;
       el.style.height = "auto";
       el.style.height = `${Math.min(el.scrollHeight, 260)}px`;
-      const pos = markerIdx >= 0 ? markerIdx : text.length;
       el.focus();
+      const pos = markerIdx >= 0 ? markerIdx : text.length;
       el.setSelectionRange(pos, pos);
     });
   }, []);
@@ -887,10 +936,25 @@ export function ThreadComposer({
           .map(([, id]) => id),
       ),
     ];
+    const quotedMessage = quote
+      ? {
+          author: quote.author.trim().slice(0, 80),
+          content: quote.content.trim().slice(0, MAX_QUOTE_CONTENT_CHARS),
+        }
+      : null;
+    const content = quotedMessage
+      ? `引用 ${quotedMessage.author} 的消息：\n${quotedMessage.content}\n\n${trimmed}`
+      : trimmed;
+    const options = targetAgentIds.length > 0 || quotedMessage
+      ? {
+          ...(targetAgentIds.length > 0 ? { targetAgentIds } : {}),
+          ...(quotedMessage ? { quote: quotedMessage, displayContent: trimmed } : {}),
+        }
+      : undefined;
     onSend(
-      trimmed,
+      content,
       payload,
-      targetAgentIds.length > 0 ? { targetAgentIds } : undefined,
+      options,
     );
     mentionedRef.current.clear();
     setValue("");
@@ -900,8 +964,9 @@ export function ThreadComposer({
     clear();
     setSlashMenuDismissed(false);
     setMention(null);
+    onClearQuote?.();
     resizeTextarea();
-  }, [canSend, clear, onSend, readyImages, resizeTextarea, value]);
+  }, [canSend, clear, onClearQuote, onSend, quote, readyImages, resizeTextarea, value]);
 
   const onKeyDown = (e: ReactKeyboardEvent<HTMLTextAreaElement>) => {
     if (showMentionMenu) {
@@ -955,7 +1020,16 @@ export function ThreadComposer({
         return;
       }
     }
-    if (e.key === "Enter" && !e.shiftKey && !e.nativeEvent.isComposing) {
+    const shortcutMatches =
+      sendMessageShortcut === "enter"
+        ? !e.ctrlKey && !e.metaKey && !e.altKey
+        : (e.ctrlKey || e.metaKey) && !e.altKey;
+    if (
+      e.key === "Enter"
+      && !e.shiftKey
+      && !e.nativeEvent.isComposing
+      && shortcutMatches
+    ) {
       e.preventDefault();
       submit();
     }
@@ -1024,7 +1098,10 @@ export function ThreadComposer({
   );
 
   const attachButtonDisabled = disabled || documentsUploading || (full && !onAddDocuments) || (!imageInputEnabled && !onAddDocuments);
-  const showStopButton = isStreaming && !!onStop;
+  const showStopButton = (isStreaming || stopping) && !!onStop;
+  const stopButtonLabel = stopping
+    ? t("thread.composer.stopping")
+    : t("thread.composer.stop");
 
   return (
     <form
@@ -1033,10 +1110,10 @@ export function ThreadComposer({
         e.preventDefault();
         submit();
       }}
-      onDragEnter={desktopFileDropEnabled ? undefined : onDragEnter}
-      onDragOver={desktopFileDropEnabled ? undefined : onDragOver}
-      onDragLeave={desktopFileDropEnabled ? undefined : onDragLeave}
-      onDrop={desktopFileDropEnabled ? undefined : onDrop}
+      onDragEnter={onDragEnter}
+      onDragOver={onDragOver}
+      onDragLeave={onDragLeave}
+      onDrop={onDrop}
       className={cn("relative w-full", isHero ? "px-0" : "px-1 pb-1.5 pt-1 sm:px-0")}
     >
       {showSlashMenu ? (
@@ -1101,27 +1178,35 @@ export function ThreadComposer({
           </div>
         </div>
       ) : null}
-      {isHero && showHeroPromptChips ? (
-        <div className="mx-auto mb-2.5 flex w-full max-w-[58rem] flex-wrap gap-2">
-          {HERO_PROMPT_CHIPS.map((chip) => {
-            const Icon = chip.Icon;
-            return (
-              <button
-                key={chip.label}
-                type="button"
-                onClick={() => applyHeroChip(chip)}
-                className={cn(
-                  "inline-flex h-7 items-center gap-1.5 rounded-full border px-3",
-                  "border-border/55 bg-muted/40 text-[12px] font-medium text-foreground/75",
-                  "hover:bg-muted hover:text-foreground transition-colors",
-                  "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring",
-                )}
-              >
-                <Icon className={cn("h-3.5 w-3.5", chip.iconClass)} aria-hidden />
-                {chip.label}
-              </button>
-            );
-          })}
+      {isHero && (heroBrand || showHeroPromptChips) ? (
+        <div
+          data-testid="hero-composer-prelude"
+          className="absolute bottom-full left-1/2 z-20 mb-2.5 flex w-full max-w-[58rem] -translate-x-1/2 flex-wrap items-end justify-between gap-x-4 gap-y-2"
+        >
+          {heroBrand}
+          {showHeroPromptChips ? (
+            <div className="ml-auto flex max-w-full flex-wrap justify-end gap-2">
+              {HERO_PROMPT_CHIPS.map((chip) => {
+                const Icon = chip.Icon;
+                return (
+                  <button
+                    key={chip.label}
+                    type="button"
+                    onClick={() => applyHeroChip(chip)}
+                    className={cn(
+                      "inline-flex h-7 shrink-0 items-center gap-1.5 whitespace-nowrap rounded-full border px-3",
+                      "border-border/55 bg-muted/40 text-[12px] font-medium text-foreground/75",
+                      "hover:bg-muted hover:text-foreground transition-colors",
+                      "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring",
+                    )}
+                  >
+                    <Icon className={cn("h-3.5 w-3.5", chip.iconClass)} aria-hidden />
+                    {chip.label}
+                  </button>
+                );
+              })}
+            </div>
+          ) : null}
         </div>
       ) : null}
       <div
@@ -1132,7 +1217,7 @@ export function ThreadComposer({
             : "max-w-[49.5rem] rounded-2xl border border-border/60 bg-card dark:border-white/10",
           "focus-within:ring-1 focus-within:ring-foreground/8",
           disabled && "opacity-60",
-          (isDragging || nativeDragging) && "ring-2 ring-primary/40 motion-reduce:ring-0 motion-reduce:border-primary",
+          isDragging && "ring-2 ring-primary/40 motion-reduce:ring-0 motion-reduce:border-primary",
           goalState?.active &&
             "goal-shell-glow ring-1 ring-sky-400/35 motion-reduce:ring-sky-400/25 dark:ring-sky-400/45",
         )}
@@ -1191,6 +1276,28 @@ export function ThreadComposer({
           }}
           isFull={isPendingFull}
         />
+        {quote ? (
+          <div
+            data-testid="composer-quote-preview"
+            className="mx-3 mt-2 flex min-w-0 items-center gap-2 border-l-2 border-foreground/15 bg-muted/45 px-2.5 py-1.5"
+          >
+            <div className="min-w-0 flex-1">
+              <div className="text-caption font-medium text-muted-foreground">
+                {t("message.quotedMessage", { author: quote.author })}
+              </div>
+              <div className="truncate text-caption text-muted-foreground">{quote.content}</div>
+            </div>
+            <button
+              type="button"
+              aria-label={t("message.removeQuote")}
+              title={t("message.removeQuote")}
+              onClick={onClearQuote}
+              className="inline-flex h-6 w-6 shrink-0 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-muted hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+            >
+              <X className="h-3.5 w-3.5" aria-hidden />
+            </button>
+          </div>
+        ) : null}
         <textarea
           ref={textareaRef}
           value={value}
@@ -1215,7 +1322,7 @@ export function ThreadComposer({
           className={cn(
             "w-full resize-none bg-transparent",
             isHero
-              ? "min-h-[78px] px-5 pb-2 pt-5 text-[15px] leading-6"
+              ? "min-h-[78px] px-5 pb-2 pt-px text-[15px] leading-6"
               : "min-h-[50px] px-4 pb-1.5 pt-3 text-[13.5px] leading-5",
             "placeholder:text-muted-foreground/70",
             "focus:outline-none focus-visible:outline-none",
@@ -1279,73 +1386,195 @@ export function ThreadComposer({
                 disabled={disabled}
               />
             ) : null}
-            {modelLabel ? (
+            {triggerModelLabel ? (
               modelOptions.length > 0 && onModelSwitch ? (
-                <DropdownMenu>
+                <DropdownMenu
+                  open={modelMenuOpen}
+                  onOpenChange={(open) => {
+                    setModelMenuOpen(open);
+                    setModelDetailsKey(null);
+                    if (open) setModelQuery("");
+                  }}
+                >
                   <DropdownMenuTrigger asChild>
                     <button
                       type="button"
-                      title={modelLabel}
+                      title={triggerModelLabel}
                       className={cn(
                         "inline-flex min-w-0 items-center gap-1.5 rounded-full border px-2.5",
                         "border-foreground/10 bg-foreground/[0.035] font-medium text-foreground/80",
                         "hover:bg-foreground/[0.07] transition-colors cursor-pointer",
                         isHero
-                          ? "h-7 max-w-[13rem] text-[12px]"
-                          : "h-6 max-w-[10rem] text-[10.5px]",
+                          ? "h-7 max-w-[20rem] text-[12px]"
+                          : "h-6 max-w-[16rem] text-[10.5px]",
                       )}
                     >
                       <span
                         aria-hidden
                         className="h-1.5 w-1.5 flex-none rounded-full bg-emerald-500/80"
                       />
-                      <span className="truncate">{modelLabel}</span>
+                      <span className="truncate">{triggerModelLabel}</span>
                       <ChevronDown className={cn("flex-none opacity-50", isHero ? "h-3 w-3" : "h-2.5 w-2.5")} />
                     </button>
                   </DropdownMenuTrigger>
-                  <DropdownMenuContent align="end" side="top" className="max-h-[min(60vh,420px)] min-w-[240px] overflow-y-auto">
-                    {groupedModelOptions.map(([provider, group]) => (
-                      <DropdownMenuGroup key={provider}>
-                        <DropdownMenuLabel className="pb-1 text-[11px] font-medium text-muted-foreground">
-                          {group.label}
-                        </DropdownMenuLabel>
-                        {group.options.map((option) => (
-                          <DropdownMenuItem
-                            key={`${option.provider}/${option.model}`}
-                            className="flex items-center gap-2 text-[13px]"
-                            onSelect={() => onModelSwitch(option.provider, option.model)}
+                  <DropdownMenuContent
+                    align="end"
+                    side="top"
+                    sideOffset={8}
+                    className="w-[min(320px,calc(100vw-24px))] overflow-hidden rounded-[14px] p-2"
+                  >
+                    <div className="relative mb-1">
+                      <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
+                      <Input
+                        value={modelQuery}
+                        onChange={(event) => {
+                          setModelQuery(event.target.value);
+                          setModelDetailsKey(null);
+                        }}
+                        onKeyDown={(event) => event.stopPropagation()}
+                        placeholder="搜索模型…"
+                        aria-label="搜索模型"
+                        className="h-9 rounded-full bg-muted/45 pl-9 text-sm"
+                      />
+                    </div>
+                    <div
+                      className="max-h-[min(56vh,300px)] overflow-y-auto overscroll-contain"
+                      onScroll={() => setModelDetailsKey(null)}
+                    >
+                      {groupedModelOptions.length ? groupedModelOptions.map(([provider, group], groupIndex) => (
+                        <div key={provider} role="group" aria-label={group.label}>
+                          {groupIndex > 0 ? <div className="mx-2 my-1 h-px bg-border/60" /> : null}
+                          <p className="px-3 pb-1 pt-2 text-xs font-medium text-muted-foreground">
+                            {group.label}
+                          </p>
+                          {group.options.map((option) => {
+                            const hasPromotion = Boolean(
+                              option.promotionLabel
+                              || option.promotionName
+                              || option.discountPercent != null,
+                            );
+                            return (
+                              <DropdownMenuSub
+                                key={`${option.provider}/${option.model}`}
+                                open={modelDetailsKey === `${option.provider}/${option.model}`}
+                                onOpenChange={(open) => {
+                                  const key = `${option.provider}/${option.model}`;
+                                  setModelDetailsKey((current) => open ? key : current === key ? null : current);
+                                }}
+                              >
+                          <DropdownMenuSubTrigger
+                            aria-label={`${option.providerLabel} · ${option.label}`}
+                            className={cn(
+                              "mb-0.5 flex min-h-9 items-center rounded-[10px] px-3 py-2 text-sm [&>svg:last-child]:hidden",
+                              option.active && "bg-muted/80",
+                            )}
+                            onPointerEnter={() => setModelDetailsKey(`${option.provider}/${option.model}`)}
+                            onFocus={() => setModelDetailsKey(`${option.provider}/${option.model}`)}
+                            onClick={() => {
+                              onModelSwitch(option.provider, option.model, option.reasoningEffort);
+                              setModelMenuOpen(false);
+                            }}
+                            onKeyDown={(event) => {
+                              if (event.key !== "Enter" && event.key !== " ") return;
+                              event.preventDefault();
+                              onModelSwitch(option.provider, option.model, option.reasoningEffort);
+                              setModelMenuOpen(false);
+                            }}
                           >
-                            <span
-                              aria-hidden
-                              className={cn(
-                                "h-1.5 w-1.5 flex-none rounded-full",
-                                option.free ? "bg-[hsl(var(--brand-blue)/0.8)]" : "bg-emerald-500/80",
-                              )}
-                            />
-                            <span className="min-w-0 flex-1 truncate">{option.label}</span>
-                            {option.free ? <span className="text-[10px] text-muted-foreground">免费</span> : null}
-                            {option.active ? <Check className="h-3.5 w-3.5 shrink-0 text-primary" aria-label="当前模型" /> : null}
-                          </DropdownMenuItem>
-                        ))}
-                      </DropdownMenuGroup>
-                    ))}
+                            <span className="min-w-0 flex-1 inline-flex items-center gap-1.5 truncate font-medium">
+                              <span className="truncate">{option.label}</span>
+                              {option.promotionLabel ? (
+                                <span className="shrink-0 rounded-full bg-success/10 px-1.5 py-0.5 text-micro font-medium text-success">
+                                  {option.promotionLabel}
+                                </span>
+                              ) : null}
+                            </span>
+                            {option.reasoningEffort ? (
+                              <span className="shrink-0 text-sm text-muted-foreground">
+                                {modelReasoningLabel(option.reasoningEffort)}
+                              </span>
+                            ) : null}
+                            {option.active ? <Check className="h-4 w-4 shrink-0 text-foreground" aria-label="当前模型" /> : null}
+                          </DropdownMenuSubTrigger>
+                          <DropdownMenuSubContent
+                            sideOffset={8}
+                            className="max-h-[min(70vh,480px)] w-[248px] overflow-y-auto rounded-[12px] p-2"
+                          >
+                            <div className="px-2 py-1.5">
+                              <p className="text-sm font-semibold text-foreground">{option.label}</p>
+                              {option.description ? (
+                                <p className="mt-1 line-clamp-2 text-xs leading-5 text-muted-foreground">
+                                  {option.description}
+                                </p>
+                              ) : null}
+                              {hasPromotion && option.promotionName ? (
+                                <p className="mt-2 text-xs font-medium text-foreground">{option.promotionName}</p>
+                              ) : null}
+                              {hasPromotion && option.discountPercent != null ? (
+                                <p className="mt-1 text-xs text-success">
+                                  折扣中，较标准价省 {option.discountPercent}%
+                                </p>
+                              ) : null}
+                            </div>
+                            {option.reasoningEfforts?.length ? (
+                              <>
+                                <div className="mx-1 my-1 h-px bg-border/70" />
+                                <p className="px-2 pb-1 pt-1 text-xs font-medium text-muted-foreground">推理强度</p>
+                                {option.reasoningEfforts.map((effort) => (
+                                  <DropdownMenuItem
+                                    key={effort}
+                                    className={cn(
+                                      "flex min-h-9 items-center justify-between rounded-lg px-3 py-2 text-sm",
+                                      option.reasoningEffort === effort && "bg-muted/80 font-medium",
+                                    )}
+                                    onSelect={() => onModelSwitch(option.provider, option.model, effort)}
+                                  >
+                                    <span>{modelReasoningLabel(effort)}</span>
+                                    {option.reasoningEffort === effort ? <Check className="h-4 w-4" aria-label="当前推理强度" /> : null}
+                                  </DropdownMenuItem>
+                                ))}
+                              </>
+                            ) : null}
+                            {option.inputAmountPerMillion || option.outputAmountPerMillion || option.cachedInputAmountPerMillion ? (
+                              <>
+                                <div className="mx-1 my-1 h-px bg-border/70" />
+                                <p className="px-2 pb-1 pt-1 text-xs font-medium text-muted-foreground">每百万 Token</p>
+                                <div className="space-y-1 px-2 py-1 text-xs text-muted-foreground">
+                                  {option.inputAmountPerMillion ? <div className="flex justify-between gap-3"><span>输入</span><span className="text-foreground">¥{option.inputAmountPerMillion}{hasPromotion && option.originalInputAmountPerMillion ? <span className="ml-1 text-muted-foreground line-through">¥{option.originalInputAmountPerMillion}</span> : null}</span></div> : null}
+                                  {option.outputAmountPerMillion ? <div className="flex justify-between gap-3"><span>输出</span><span className="text-foreground">¥{option.outputAmountPerMillion}{hasPromotion && option.originalOutputAmountPerMillion ? <span className="ml-1 text-muted-foreground line-through">¥{option.originalOutputAmountPerMillion}</span> : null}</span></div> : null}
+                                  {option.cachedInputAmountPerMillion ? <div className="flex justify-between gap-3"><span>缓存读取</span><span className="text-foreground">¥{option.cachedInputAmountPerMillion}{hasPromotion && option.originalCachedInputAmountPerMillion ? <span className="ml-1 text-muted-foreground line-through">¥{option.originalCachedInputAmountPerMillion}</span> : null}</span></div> : null}
+                                  {!hasPromotion ? <p className="pt-0.5">模型标准价格</p> : null}
+                                </div>
+                              </>
+                            ) : null}
+                            <div className="mx-1 my-1 h-px bg-border/70" />
+                            <div className="flex flex-wrap gap-x-2 gap-y-1 px-2 py-1.5 text-xs text-muted-foreground">
+                              <span>来源：{option.providerLabel}</span>
+                              {modelContextLabel(option.contextWindow) ? <span>{modelContextLabel(option.contextWindow)} 上下文</span> : null}
+                            </div>
+                            </DropdownMenuSubContent>
+                              </DropdownMenuSub>
+                            );
+                          })}
+                        </div>
+                      )) : <p className="px-3 py-6 text-center text-sm text-muted-foreground">没有匹配的模型</p>}
+                    </div>
                     {onOpenSettings ? (
-                      <>
-                        <DropdownMenuSeparator />
-                        <DropdownMenuItem
-                          className="flex items-center gap-2 text-[13px] text-muted-foreground"
-                          onSelect={() => onOpenSettings("models_providers")}
+                      <div className="mt-1 flex items-center justify-between border-t border-border/65 pt-1">
+                        <button
+                          type="button"
+                          className="flex items-center gap-2 rounded-lg px-3 py-2 text-sm text-muted-foreground hover:bg-accent"
+                          onClick={() => { setModelMenuOpen(false); onOpenSettings("models_providers"); }}
                         >
-                          <Settings className="h-3.5 w-3.5" />
-                          <span>{t("thread.composer.addModel", "添加模型")}</span>
-                        </DropdownMenuItem>
-                      </>
+                          <Plus className="h-4 w-4" />添加模型
+                        </button>
+                      </div>
                     ) : null}
                   </DropdownMenuContent>
                 </DropdownMenu>
               ) : (
                 <span
-                  title={modelLabel}
+                  title={triggerModelLabel}
                   className={cn(
                     "inline-flex min-w-0 items-center gap-1.5 rounded-full border px-2.5",
                     "border-foreground/10 bg-foreground/[0.035] font-medium text-foreground/80",
@@ -1358,23 +1587,19 @@ export function ThreadComposer({
                     aria-hidden
                     className="h-1.5 w-1.5 flex-none rounded-full bg-emerald-500/80"
                   />
-                  <span className="truncate">{modelLabel}</span>
+                  <span className="truncate">{triggerModelLabel}</span>
                 </span>
               )
-            ) : null}
-            {!isHero ? (
-              <span className="hidden select-none text-[10.5px] text-muted-foreground/60 sm:inline">
-                {t("thread.composer.sendHint")}
-              </span>
             ) : null}
           </div>
           <span className={cn(isHero ? "hidden" : "sm:hidden")} aria-hidden />
           <Button
             type={showStopButton ? "button" : "submit"}
             size="icon"
-            disabled={showStopButton ? disabled : !canSend}
-            aria-label={showStopButton ? t("thread.composer.stop") : t("thread.composer.send")}
-            onClick={showStopButton ? onStop : undefined}
+            disabled={showStopButton ? disabled || stopping : !canSend}
+            aria-label={showStopButton ? stopButtonLabel : t("thread.composer.send")}
+            title={showStopButton ? stopButtonLabel : undefined}
+            onClick={showStopButton && !stopping ? onStop : undefined}
             className={cn(
               "rounded-full transition-transform",
               showStopButton
@@ -1386,7 +1611,9 @@ export function ThreadComposer({
               (canSend || showStopButton) && "hover:scale-[1.03] active:scale-95",
             )}
           >
-            {showStopButton ? (
+            {stopping ? (
+              <Loader2 className={cn("animate-spin", isHero ? "h-3.5 w-3.5" : "h-3 w-3")} />
+            ) : showStopButton ? (
               <Square className={cn("fill-current stroke-current", isHero ? "h-3 w-3" : "h-2.5 w-2.5")} />
             ) : isStreaming ? (
               <Loader2 className={cn(isHero ? "h-4.5 w-4.5" : "h-4 w-4", "animate-spin")} />

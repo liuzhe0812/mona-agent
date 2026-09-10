@@ -1,4 +1,5 @@
 use std::io::{Read, Write};
+use std::path::Path;
 use std::sync::{Arc, Mutex as StdMutex};
 
 use encoding_rs::GBK;
@@ -151,6 +152,7 @@ impl LocalShell {
         session_id: String,
         cols: u16,
         rows: u16,
+        cwd: Option<&Path>,
     ) -> Result<Self, TerminalError> {
         let pty_system = native_pty_system();
 
@@ -173,6 +175,9 @@ impl LocalShell {
         );
 
         let mut cmd = CommandBuilder::new(shell);
+        if let Some(path) = cwd {
+            cmd.cwd(path);
+        }
         cmd.env("TERM", "xterm-256color");
         cmd.env("COLORTERM", "truecolor");
 

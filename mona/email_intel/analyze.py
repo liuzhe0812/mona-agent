@@ -308,6 +308,9 @@ async def analyze_email(
         max_tokens=1024,
         temperature=0.3,
     )
+    from mona.usage import record_provider_usage
+
+    record_provider_usage(provider, model, response)
 
     content = response.content or ""
     raw = _extract_json(content)

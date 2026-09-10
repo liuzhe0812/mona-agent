@@ -9,6 +9,7 @@ from mona.config.paths import (
     get_logs_dir,
     get_media_dir,
     get_runtime_subdir,
+    get_user_profile_dir,
     get_webui_dir,
     get_workspace_path,
     is_default_workspace,
@@ -29,4 +30,5 @@ __all__ = [
     "is_default_workspace",
     "get_cli_history_path",
     "get_legacy_sessions_dir",
+    "get_user_profile_dir",
 ]

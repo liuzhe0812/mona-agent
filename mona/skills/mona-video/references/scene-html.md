@@ -1,6 +1,9 @@
 # Scene HTML Generation Prompt
 
-Single-scene HTML generation prompt for `/api/video/ai/scene-html`. Used when user triggers "重新生成本场景" or first-time scene HTML generation in ProducingPhase.
+Legacy single-video HTML generation prompt for `/api/video/ai/scene-html`.
+Series projects do not use this free-form prompt: they generate a constrained
+`scene_specs/scene_NN.json` and compile it with `compile_scene_spec.py` plus the
+project-local immutable `style/design-system.json`.
 
 ## Input
 

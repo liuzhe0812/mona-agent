@@ -79,7 +79,7 @@ from mona.services.stock.api import (
     handle_stock_watchlist_remove,
     handle_stock_watchlist_reorder,
 )
-from mona.system_agent import handle_system_diagnose, handle_system_plan
+from mona.system_agent import handle_storage_analyze, handle_system_diagnose, handle_system_plan
 from mona.usage import get_usage_summary
 from mona.utils.helpers import safe_filename
 from mona.utils.media_decode import (
@@ -914,25 +914,39 @@ def _get_memory_dir_for_profile() -> Any:
 
 async def handle_profile_get(request: web.Request) -> web.Response:
     """GET /api/profile — return profile.rich.json content."""
-    from mona.distill.store import read_rich_profile
+    import copy
+
+    from mona.distill.store import effective_context, ensure_profile_v3
 
     memory_dir = _get_memory_dir_for_profile()
-    data = read_rich_profile(memory_dir)
+    data = copy.deepcopy(ensure_profile_v3(memory_dir))
+    data["effective_context"] = effective_context(data)
+    artifact_feedback = data.get("feedback", {}).get("artifacts", {})
+    for item in data.get("dashboard", {}).get("artifacts", []):
+        if not isinstance(item, dict):
+            continue
+        feedback = artifact_feedback.get(item.get("id"), {})
+        item["adopted"] = bool(feedback.get("adopted", False))
+        item["feedback_revision"] = int(feedback.get("revision") or 0)
     return web.json_response(data)
 
 
 async def handle_profile_user_get(request: web.Request) -> web.Response:
     """GET /api/profile/user — return USER.md content."""
-    from mona.distill.store import read_user_profile
+    from mona.distill.store import ensure_profile_v3, read_user_profile
 
     memory_dir = _get_memory_dir_for_profile()
+    ensure_profile_v3(memory_dir)
     content = read_user_profile(memory_dir)
     return web.json_response({"content": content})
 
 
 async def handle_profile_user_update(request: web.Request) -> web.Response:
     """PATCH /api/profile/user — update USER.md section or full content."""
-    from mona.distill.store import replace_user_profile, update_user_section
+    from mona.distill.store import (
+        replace_user_profile_and_sync,
+        update_user_section_and_sync,
+    )
 
     try:
         body = await request.json()
@@ -944,27 +958,342 @@ async def handle_profile_user_update(request: web.Request) -> web.Response:
     full = body.get("full")
 
     memory_dir = _get_memory_dir_for_profile()
-    user_path = memory_dir / "USER.md"
-
     if isinstance(full, str):
-        replace_user_profile(memory_dir, full)
-        return web.json_response({"ok": True, "mode": "full"})
+        data = replace_user_profile_and_sync(memory_dir, full)
+        return web.json_response({"ok": True, "mode": "full", "revision": data["revision"]})
 
     if not isinstance(section, str) or not section.strip():
         return _error_json(400, "section is required (or provide full content)")
     if not isinstance(content, str):
         return _error_json(400, "content is required")
 
-    update_user_section(user_path, section, content)
-    return web.json_response({"ok": True, "mode": "section", "section": section})
+    data = update_user_section_and_sync(memory_dir, section, content)
+    return web.json_response({
+        "ok": True,
+        "mode": "section",
+        "section": section,
+        "revision": data["revision"],
+    })
+
+
+def _profile_error(status: int, message: str, code: str, **extra: Any) -> web.Response:
+    return web.json_response({"error": message, "code": code, **extra}, status=status)
+
+
+async def handle_profile_context_update(request: web.Request) -> web.Response:
+    from pydantic import ValidationError
+
+    from mona.distill.models import ProfileContextPatch
+    from mona.distill.store import (
+        ProfileRevisionConflictError,
+        effective_context,
+        update_explicit_context,
+    )
+
+    try:
+        patch = ProfileContextPatch.model_validate(await request.json())
+    except (ValidationError, ValueError, TypeError):
+        return _profile_error(400, "画像字段或内容不符合要求", "invalid_profile_context")
+    try:
+        data, warning = update_explicit_context(
+            _get_memory_dir_for_profile(),
+            field=patch.field,
+            mode=patch.mode,
+            value=patch.value,
+            expected_context_revision=patch.expected_context_revision,
+        )
+    except ProfileRevisionConflictError as exc:
+        return _profile_error(
+            409,
+            "画像已在其他位置更新，请核对最新内容后重试",
+            "profile_revision_conflict",
+            current_context_revision=exc.current_revision,
+        )
+    response: dict[str, Any] = {
+        "ok": True,
+        "revision": data["revision"],
+        "context_revision": data["facts"]["context_revision"],
+        "effective_context": effective_context(data),
+    }
+    if warning:
+        response["warning"] = warning
+    return web.json_response(response)
+
+
+async def handle_profile_advice_feedback(request: web.Request) -> web.Response:
+    from pydantic import ValidationError
+
+    from mona.distill.models import AdviceFeedbackPatch
+    from mona.distill.store import (
+        ProfileItemNotFoundError,
+        ProfileRevisionConflictError,
+        update_advice_feedback,
+    )
+
+    try:
+        patch = AdviceFeedbackPatch.model_validate(await request.json())
+    except (ValidationError, ValueError, TypeError):
+        return _profile_error(400, "建议反馈不符合要求", "invalid_advice_feedback")
+    try:
+        result = update_advice_feedback(
+            _get_memory_dir_for_profile(),
+            request.match_info["id"],
+            patch.model_dump(exclude={"expected_item_revision"}),
+            patch.expected_item_revision,
+        )
+    except ProfileItemNotFoundError:
+        return _profile_error(404, "这条建议已不存在", "advice_not_found")
+    except ProfileRevisionConflictError as exc:
+        return _profile_error(
+            409,
+            "这条建议的反馈已更新，请重试",
+            "feedback_revision_conflict",
+            current_item_revision=exc.current_revision,
+        )
+    return web.json_response(result)
+
+
+async def handle_profile_artifact_feedback(request: web.Request) -> web.Response:
+    from pydantic import ValidationError
+
+    from mona.distill.models import ArtifactFeedbackPatch
+    from mona.distill.store import (
+        ProfileItemNotFoundError,
+        ProfileRevisionConflictError,
+        update_artifact_feedback,
+    )
+
+    try:
+        patch = ArtifactFeedbackPatch.model_validate(await request.json())
+    except (ValidationError, ValueError, TypeError):
+        return _profile_error(400, "成果反馈不符合要求", "invalid_artifact_feedback")
+    try:
+        result = update_artifact_feedback(
+            _get_memory_dir_for_profile(),
+            request.match_info["id"],
+            patch.adopted,
+            patch.expected_item_revision,
+        )
+    except ProfileItemNotFoundError:
+        return _profile_error(404, "这项成果已不存在", "artifact_not_found")
+    except ProfileRevisionConflictError as exc:
+        return _profile_error(
+            409,
+            "这项成果的状态已更新，请重试",
+            "feedback_revision_conflict",
+            current_item_revision=exc.current_revision,
+        )
+    return web.json_response(result)
+
+
+def _profile_evidence_available(item: dict[str, Any], data: dict[str, Any]) -> bool:
+    kind = item.get("kind")
+    current_scope = data.get("dashboard", {}).get("source_scope_id")
+    if not current_scope or item.get("source_scope_id") != current_scope:
+        return False
+    if kind == "explicit_context":
+        return True
+    if kind == "user_message":
+        import hashlib
+
+        from mona.agent.partners import conversation_from_session_metadata
+        from mona.distill.collectors.session_collector import _is_profile_user_message
+        from mona.session.manager import SessionManager
+
+        key = item.get("session_key")
+        if not isinstance(key, str):
+            return False
+        path = get_workspace_path() / "sessions" / f"{SessionManager.safe_key(key)}.jsonl"
+        try:
+            lines = path.read_text(encoding="utf-8").splitlines()
+            meta = _json.loads(lines[0])
+            metadata = meta.get("metadata") if isinstance(meta.get("metadata"), dict) else {}
+            conversation = conversation_from_session_metadata(metadata)
+            name = path.name.lower()
+            background = any(
+                token in name
+                for token in ("ephemeral", "cron_", "cron-", "schedule_", "schedule-")
+            ) or any(metadata.get(field) is True for field in (
+                "background",
+                "is_background",
+                "background_execution",
+            ))
+            source = str(metadata.get("source") or metadata.get("trigger") or "").lower()
+            background = background or source in {
+                "cron",
+                "schedule",
+                "scheduled",
+                "background",
+                "system",
+            }
+            if conversation.hidden or background or str(meta.get("key") or path.stem) != key:
+                return False
+            target_index = item.get("message_index")
+            expected_hash = item.get("content_hash")
+            index = -1
+            for raw in lines[1:]:
+                message = _json.loads(raw)
+                if message.get("_type") == "metadata":
+                    continue
+                index += 1
+                if index != target_index:
+                    continue
+                if not _is_profile_user_message(message, set(conversation.agent_ids)):
+                    return False
+                content = message.get("content")
+                return isinstance(content, str) and hashlib.sha256(
+                    content.encode("utf-8")
+                ).hexdigest() == expected_hash
+            return False
+        except (OSError, ValueError, TypeError, _json.JSONDecodeError, IndexError):
+            return False
+    if kind == "note":
+        import hashlib
+
+        try:
+            from mona.agent.tools.notes import _get_vault_path
+
+            root = _get_vault_path()
+            relative = item.get("note_relative_path")
+            if root is None or not isinstance(relative, str):
+                return False
+            root = Path(root).resolve()
+            target = (root / relative).resolve()
+            target.relative_to(root)
+            if not target.is_file():
+                return False
+            content = target.read_text(encoding="utf-8")
+            return hashlib.sha256(content.encode("utf-8")).hexdigest() == item.get("content_hash")
+        except (OSError, ValueError):
+            return False
+    if kind == "artifact":
+        from mona.agent.artifacts import coerce_artifact_ref
+
+        artifact_id = item.get("artifact_id")
+        artifact = next(
+            (
+                row
+                for row in data.get("dashboard", {}).get("artifacts", [])
+                if isinstance(row, dict) and row.get("id") == artifact_id
+            ),
+            None,
+        )
+        ref = coerce_artifact_ref(artifact.get("artifact_ref")) if artifact else None
+        if ref is None:
+            return False
+        try:
+            return ref.resolve(get_workspace_path()).is_file()
+        except (OSError, ValueError):
+            return False
+    return False
+
+
+async def handle_profile_evidence_get(request: web.Request) -> web.Response:
+    from mona.distill.store import read_rich_profile
+
+    data = read_rich_profile(_get_memory_dir_for_profile())
+    item = data.get("evidence_index", {}).get(request.match_info["ref"])
+    if not isinstance(item, dict):
+        return _profile_error(404, "依据不存在", "evidence_not_found")
+    if not _profile_evidence_available(item, data):
+        return _profile_error(410, "原始依据当前不可访问", "evidence_unavailable")
+    return web.json_response({**item, "available": True})
+
+
+async def handle_profile_advice_start(request: web.Request) -> web.Response:
+    from mona.distill.store import read_rich_profile
+
+    data = read_rich_profile(_get_memory_dir_for_profile())
+    advice_id = request.match_info["id"]
+    item = next(
+        (
+            value
+            for value in data.get("advice", {}).get("items", [])
+            if isinstance(value, dict) and value.get("id") == advice_id
+        ),
+        None,
+    )
+    if item is None:
+        return _profile_error(404, "这条建议已不存在", "advice_not_found")
+    feedback = data.get("feedback", {}).get("advice", {}).get(advice_id, {})
+    if feedback.get("disposition") in {"dismissed", "completed"}:
+        return _profile_error(409, "这条建议当前不是待执行状态", "advice_inactive")
+    evidence = [
+        data.get("evidence_index", {}).get(ref)
+        for ref in item.get("source_refs", [])[:5]
+    ]
+    evidence = [
+        value
+        for value in evidence
+        if isinstance(value, dict) and _profile_evidence_available(value, data)
+    ]
+    source_lines = [
+        f"- {value.get('title') or value.get('kind')}：{value.get('excerpt') or ''}"
+        for value in evidence
+    ]
+    if item.get("kind") == "one_insight":
+        knowledge = item.get("knowledge") if isinstance(item.get("knowledge"), dict) else {}
+        resources = [
+            f"- {value.get('title')}：{value.get('url')}"
+            for value in item.get("resources", [])
+            if isinstance(value, dict) and value.get("url")
+        ]
+        prompt_parts = [
+            f"请继续讲解：{knowledge.get('title') or item.get('title')}",
+            str(knowledge.get("content") or item.get("why_now") or "").strip(),
+            f"学习建议：{item.get('learning_advice') or item.get('first_step')}",
+        ]
+        if resources:
+            prompt_parts.append("参考资料：\n" + "\n".join(resources))
+    elif item.get("kind") == "holistic_learning":
+        applications = [
+            f"- {value.get('area')}：{value.get('benefit')}"
+            for value in item.get("application_areas", [])
+            if isinstance(value, dict)
+        ]
+        resources = [
+            f"- {value.get('title')}：{value.get('url')}"
+            for value in item.get("resources", [])
+            if isinstance(value, dict) and value.get("url")
+        ]
+        prompt_parts = [
+            str(item.get("start_prompt") or "").strip(),
+            f"希望理解的问题：{item.get('title')}",
+            f"建议系统了解：{item.get('knowledge_area')}",
+            f"为什么现在值得了解：{item.get('why_now')}",
+            f"已有简要解释：\n{item.get('starter_content')}",
+        ]
+        if applications:
+            prompt_parts.append("可以联系到的经历：\n" + "\n".join(applications))
+        if resources:
+            prompt_parts.append("可参考资料：\n" + "\n".join(resources))
+    else:
+        prompt_parts = [
+            str(item.get("start_prompt") or "").strip(),
+            f"建议目标：{item.get('title')}",
+            f"先完成：{item.get('first_step')}",
+            f"预期产物：{item.get('expected_output')}",
+            f"完成标准：{item.get('done_when')}",
+        ]
+    if source_lines:
+        prompt_parts.append("相关背景摘要：\n" + "\n".join(source_lines))
+    return web.json_response({
+        "prompt": "\n\n".join(part for part in prompt_parts if part),
+        "advice_id": advice_id,
+        "source_refs": [value["ref"] for value in evidence],
+        "origin": "profile_advice",
+        "evidence": evidence,
+    })
 
 
 async def handle_profile_distill(request: web.Request) -> web.Response:
     """POST /api/profile/distill — trigger distillation manually.
 
-    Body: {"task": "work-pattern" | "profile" | "all"} (default: "all")
+    Body: {"task": "work-pattern" | "profile" | "advice" | "all"}.
     """
     from mona.distill.service import (
+        ProfileBusyError,
+        run_advice_distill,
         run_all_distill,
         run_profile_distill,
         run_work_pattern_distill,
@@ -975,33 +1304,43 @@ async def handle_profile_distill(request: web.Request) -> web.Response:
     except Exception:
         body = {}
     task = body.get("task", "all") if isinstance(body, dict) else "all"
+    if task not in {"work-pattern", "profile", "advice", "all"}:
+        return _profile_error(400, "未知的画像更新任务", "invalid_profile_task")
 
-    # 从 gateway app 获取已初始化的 agent_loop（含 provider）
     agent_loop = request.app.get("agent_loop")
 
-    if task == "work-pattern":
-        result = await run_work_pattern_distill(agent_loop)
-    elif task == "profile":
-        result = await run_profile_distill(agent_loop)
-    else:
-        results = await run_all_distill(agent_loop)
-        return web.json_response({
-            "ok": all(result.success for result in results),
-            "results": [
-                {
-                    "task": r.task_name,
-                    "success": r.success,
-                    "confidence": r.confidence,
-                    "error": r.error,
-                }
-                for r in results
-            ],
-        })
+    try:
+        if task == "work-pattern":
+            result = await run_work_pattern_distill(agent_loop)
+        elif task == "profile":
+            result = await run_profile_distill(agent_loop)
+        elif task == "advice":
+            result = await run_advice_distill(agent_loop)
+        else:
+            results = await run_all_distill(agent_loop)
+            return web.json_response({
+                "ok": all(item.success for item in results),
+                "results": [
+                    {
+                        "task": item.task_name,
+                        "success": item.success,
+                        "status": item.status,
+                        "confidence": item.confidence,
+                        "code": item.code,
+                        "error": item.error,
+                    }
+                    for item in results
+                ],
+            })
+    except ProfileBusyError:
+        return _profile_error(409, "画像正在更新，请稍后再试", "profile_busy")
 
     return web.json_response({
         "ok": result.success,
         "task": result.task_name,
+        "status": result.status,
         "confidence": result.confidence,
+        "code": result.code,
         "error": result.error,
     })
 
@@ -1347,7 +1686,13 @@ async def handle_audio_speech(request: web.Request) -> web.Response:
 
 async def handle_health(request: web.Request) -> web.Response:
     """GET /health"""
-    return web.json_response({"status": "ok"})
+    return web.json_response(
+        {
+            "status": "ok",
+            "service": "mona-gateway",
+            "capabilities": ["agent-http-v1"],
+        }
+    )
 
 
 async def handle_usage_get(request: web.Request) -> web.Response:
@@ -3676,6 +4021,26 @@ async def _computer_use_startup(app: web.Application) -> None:
         result = await _ensure_computer_use_server(app)
         if not result.get("ok"):
             logger.warning("Computer Use startup connection failed: {}", result.get("error"))
+
+
+async def _schedule_computer_use_startup(app: web.Application) -> None:
+    async def run() -> None:
+        try:
+            await _computer_use_startup(app)
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            logger.exception("Computer Use background startup failed")
+
+    app["computer_use_startup_task"] = asyncio.create_task(run())
+
+
+async def _cancel_computer_use_startup(app: web.Application) -> None:
+    task = app.get("computer_use_startup_task")
+    if isinstance(task, asyncio.Task) and not task.done():
+        task.cancel()
+        with contextlib.suppress(asyncio.CancelledError):
+            await task
 
 
 async def handle_mcp_list_servers(request: web.Request) -> web.Response:
@@ -11562,7 +11927,8 @@ def create_app(
     app["session_locks"] = {}  # per-user locks, keyed by session_key
     # Event used by POST /shutdown to unwind the gateway's main loop cleanly.
     app["shutdown_event"] = asyncio.Event()
-    app.on_startup.append(_computer_use_startup)
+    app.on_startup.append(_schedule_computer_use_startup)
+    app.on_cleanup.append(_cancel_computer_use_startup)
 
     # --- Agent runtime routes ---
     app.router.add_post("/v1/chat/completions", handle_chat_completions)
@@ -11576,6 +11942,7 @@ def create_app(
     app.router.add_post("/api/tauri/invoke", handle_tauri_invoke)
     app.router.add_post("/api/system/plan", handle_system_plan)
     app.router.add_post("/api/system/diagnose", handle_system_diagnose)
+    app.router.add_post("/api/system/storage/analyze", handle_storage_analyze)
     app.router.add_get("/api/automation/status", handle_automation_status)
     app.router.add_post("/api/automation/browser", handle_browser_automation_update)
     app.router.add_post("/api/automation/computer", handle_computer_use_update)

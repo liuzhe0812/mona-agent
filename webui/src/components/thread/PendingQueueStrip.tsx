@@ -39,7 +39,7 @@ export function PendingQueueStrip({
           )}
         >
           <span className="min-w-0 flex-1 truncate text-[12px] leading-4 text-foreground/75">
-            {msg.content}
+            {msg.content || t("thread.composer.pendingQueue.images", { count: msg.images?.length ?? 0 })}
           </span>
           <button
             type="button"
@@ -54,19 +54,21 @@ export function PendingQueueStrip({
           >
             {t("thread.composer.pendingQueue.append")}
           </button>
-          <button
-            type="button"
-            onClick={() => onEdit(msg.id)}
-            className={cn(
-              "grid h-6 w-6 shrink-0 place-items-center rounded-full",
-              "text-muted-foreground/70 hover:bg-foreground/8 hover:text-foreground",
-              "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring",
-              "transition-colors",
-            )}
-            aria-label={t("thread.composer.pendingQueue.editAria")}
-          >
-            <Pencil className="h-3.5 w-3.5" aria-hidden />
-          </button>
+          {!msg.images?.length ? (
+            <button
+              type="button"
+              onClick={() => onEdit(msg.id)}
+              className={cn(
+                "grid h-6 w-6 shrink-0 place-items-center rounded-full",
+                "text-muted-foreground/70 hover:bg-foreground/8 hover:text-foreground",
+                "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring",
+                "transition-colors",
+              )}
+              aria-label={t("thread.composer.pendingQueue.editAria")}
+            >
+              <Pencil className="h-3.5 w-3.5" aria-hidden />
+            </button>
+          ) : null}
           <button
             type="button"
             onClick={() => onRemove(msg.id)}

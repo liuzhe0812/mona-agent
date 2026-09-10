@@ -153,7 +153,7 @@ describe("ThreadViewport", () => {
     HTMLElement.prototype.scrollTo = scrollTo;
 
     try {
-      const { container } = render(
+      const { container, rerender } = render(
         <ThreadViewport
           messages={makeLongMessages(300)}
           isStreaming={false}
@@ -172,6 +172,15 @@ describe("ThreadViewport", () => {
       const targetRow = target.closest("#thread-message-m0") as HTMLElement;
       expect(targetRow).toBeInTheDocument();
       targetRow.getBoundingClientRect = () => ({ top: 900 } as DOMRect);
+      scrollTo.mockClear();
+      rerender(
+        <ThreadViewport
+          messages={makeLongMessages(300)}
+          isStreaming={false}
+          composer={<div />}
+          focusMessage={{ id: "m0", requestId: 2 }}
+        />,
+      );
       await waitFor(() => expect(scrollTo).toHaveBeenCalledWith({ top: 750, behavior: "smooth" }));
     } finally {
       HTMLElement.prototype.scrollTo = originalScrollTo;

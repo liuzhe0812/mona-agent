@@ -34,6 +34,18 @@ next_action: rebuild_spec_lock_and_generate_first_page
 
 **关于 8 项确认**：用户在大纲阶段不编辑全局 8 项确认（UI 只读展示 AI 推荐规格）。如用户需要调整全局规格，会通过聊天直接告知 Agent（如「主色改成 #1a73e8」「用深色背景」），Agent 收到后更新 `design_spec.md` + `design_spec_summary.json`。因此 `[OUTLINE_CONFIRMED]` 不携带 8 项修改字段，Agent 直接以 `design_spec.md` 当前状态生成 `spec_lock.md`。
 
+### 全部生成模式
+
+用户点击“全部生成”时，UI 发送：
+
+```
+[OUTLINE_CONFIRMED_ALL]
+project_path: <project_path>
+next_action: generate_all_pages_and_export
+
+读取最终 page_visual_plan.json 和 design_spec_summary.json，重建 design_spec.md 与 spec_lock.md，完成图片获取后一次生成全部 SVG 页面及备注。每页保留 required trace 和质量检查，随后运行全量质量门禁并依次执行 total_md_split.py、finalize_svg.py、svg_to_pptx.py，最终报告 PPTX 路径。
+```
+
 ## 2. 确认当前页并请求生成下一页
 
 触发条件：用户在 UI 上确认当前页（点击"确认通过"），请求生成下一页。
@@ -154,10 +166,10 @@ next_action: run_step_7_export
 
 ## 使用约束
 
-- UI 必须原样发送模板顶部的方括号标记（`[OUTLINE_CONFIRMED]` / `[PAGE_CONFIRMED_NEXT]` / `[PAGE_REDO_REQUESTED]` / `[PAGE_GENERATE_REQUESTED]` / `[ALL_PAGES_CONFIRMED]` / `[DESIGN_SPEC_UPDATED]`），Agent 据此识别消息类型。
+- UI 必须原样发送模板顶部的方括号标记（`[OUTLINE_CONFIRMED]` / `[OUTLINE_CONFIRMED_ALL]` / `[PAGE_CONFIRMED_NEXT]` / `[PAGE_REDO_REQUESTED]` / `[PAGE_GENERATE_REQUESTED]` / `[ALL_PAGES_CONFIRMED]` / `[DESIGN_SPEC_UPDATED]`），Agent 据此识别消息类型。
 - 字段名不得改名，值由 UI 填充。
 - 模板中的 `<...>` 占位符由 UI 替换为实际值，不要保留尖括号。
-- 六类消息之外的其他用户输入（如自由聊天、追问）按普通对话处理，不触发 V3 检查点恢复逻辑。
+- 七类消息之外的其他用户输入（如自由聊天、追问）按普通对话处理，不触发 V3 检查点恢复逻辑。
 
 ## 6. 设计规格更新
 

@@ -10,6 +10,7 @@ const fetchStockKline = vi.fn();
 const fetchStockResearchContext = vi.fn();
 const fetchStockDiagnoses = vi.fn();
 const fetchStockDiagnosis = vi.fn();
+const fetchStockDiagnosisOutcome = vi.fn();
 const fetchStockReports = vi.fn();
 const fetchStockReport = vi.fn();
 const fetchStockDecisionConditions = vi.fn();
@@ -24,6 +25,11 @@ const deleteStockReport = vi.fn();
 const preflightStockResearch = vi.fn();
 const fetchSettings = vi.fn();
 const updateStockSettings = vi.fn();
+let licenseActive = true;
+
+vi.mock("@/hooks/useLicense", () => ({
+  useLicense: () => ({ licenseActive }),
+}));
 
 vi.mock("@/lib/stock-api", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@/lib/stock-api")>();
@@ -35,6 +41,7 @@ vi.mock("@/lib/stock-api", async (importOriginal) => {
     fetchStockResearchContext: (...args: unknown[]) => fetchStockResearchContext(...args),
     fetchStockDiagnoses: (...args: unknown[]) => fetchStockDiagnoses(...args),
     fetchStockDiagnosis: (...args: unknown[]) => fetchStockDiagnosis(...args),
+    fetchStockDiagnosisOutcome: (...args: unknown[]) => fetchStockDiagnosisOutcome(...args),
     fetchStockReports: (...args: unknown[]) => fetchStockReports(...args),
     fetchStockReport: (...args: unknown[]) => fetchStockReport(...args),
     fetchStockDecisionConditions: (...args: unknown[]) => fetchStockDecisionConditions(...args),
@@ -140,6 +147,7 @@ function evaluation(reportId: string): StockDecisionEvaluation {
 }
 
 beforeEach(() => {
+  licenseActive = true;
   vi.clearAllMocks();
   clearStockViewCache();
   client.getWorkflowRun.mockResolvedValue(null);
@@ -149,6 +157,7 @@ beforeEach(() => {
   fetchStockResearchContext.mockResolvedValue(null);
   fetchStockDiagnoses.mockResolvedValue([]);
   fetchStockDiagnosis.mockRejectedValue(new Error("no diagnosis"));
+  fetchStockDiagnosisOutcome.mockRejectedValue(new Error("no outcome"));
   fetchStockReports.mockResolvedValue([]);
   fetchStockReport.mockImplementation(async (_token: string, reportId: string) => ({
     report: { schema_version: 4, report_id: reportId, kind: "deep_research" },

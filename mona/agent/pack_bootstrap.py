@@ -40,7 +40,6 @@ STOCK_ROOM_TITLE = "股票研究室"
 STOCK_DIAGNOSIS_ROOM_ID = "stock_ai_diagnosis"
 STOCK_DIAGNOSIS_ROOM_TITLE = "AI诊股"
 
-STOCK_PARTNER_AGENT_ID = "com.mona.a-share-analyst"
 STOCK_INTERNAL_AGENT_IDS = [
     "com.mona.stock-tech-analyst",
     "com.mona.stock-fundamental-analyst",
@@ -50,7 +49,7 @@ STOCK_INTERNAL_AGENT_IDS = [
     "com.mona.stock-referee",
     "com.mona.stock-selection-analyst",
 ]
-STOCK_ROOM_AGENT_IDS = [STOCK_PARTNER_AGENT_ID, *STOCK_INTERNAL_AGENT_IDS]
+STOCK_ROOM_AGENT_IDS = list(STOCK_INTERNAL_AGENT_IDS)
 STOCK_DIAGNOSIS_AGENT_ID = "com.mona.stock-diagnosis-semantic-researcher"
 STOCK_DIAGNOSIS_ROOM_AGENT_IDS = [STOCK_DIAGNOSIS_AGENT_ID]
 

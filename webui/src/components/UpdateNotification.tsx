@@ -23,6 +23,7 @@ import {
   checkForUpdates,
   performUpdate,
   showNotification,
+  takeUpdateError,
   type UpdateCheckResult,
   type UpdateProgress,
 } from "@/lib/tauri";
@@ -91,6 +92,15 @@ export function UpdateNotification({
       } catch {
         // ignore
       }
+      try {
+        const message = await takeUpdateError();
+        if (message) {
+          setView({ kind: "error", message });
+          setDialogOpen(true);
+        }
+      } catch {
+        // ignore
+      }
     })();
   }, []);
 
@@ -111,23 +121,30 @@ export function UpdateNotification({
           (event) => {
             const info = event.payload;
             if (info?.has_update) {
-              setView({ kind: "available", info });
+              const shouldNotify = availableInfoRef.current?.latest_version !== info.latest_version;
+              setView((current) => current.kind === "updating" ? current : { kind: "available", info });
               availableInfoRef.current = info;
               onUpdateAvailable?.(info);
               // 弹出全局右下角通知（独立窗口）
-              void showNotification({
+              if (shouldNotify) void showNotification({
                 id: `update-${info.latest_version}-${Date.now()}`,
                 title: `发现新版本 v${info.latest_version}`,
                 body: `当前版本 v${info.current_version}${
                   info.size ? ` · ${formatSize(info.size)}` : ""
                 }`,
                 icon: "update",
-                autoCloseMs: 10000,
+                autoCloseMs: 0,
                 actions: [
                   { label: "立即更新", action: "update-now", primary: true },
                   { label: "稍后", action: "update-dismiss" },
                 ],
               });
+            } else if (info) {
+              availableInfoRef.current = null;
+              onUpdateAvailable?.(null);
+              setView((current) =>
+                current.kind === "updating" ? current : { kind: "upToDate" },
+              );
             }
           },
         );
@@ -178,6 +195,8 @@ export function UpdateNotification({
         availableInfoRef.current = result;
         onUpdateAvailable?.(result);
       } else {
+        availableInfoRef.current = null;
+        onUpdateAvailable?.(null);
         setView({ kind: "upToDate" });
       }
     } catch (e) {
@@ -408,7 +427,7 @@ export function UpdateNotification({
                   {view.message}
                 </p>
                 <p className="mt-1.5 text-[12px] leading-4 text-muted-foreground">
-                  请检查网络连接后重试，或稍后再试。
+                  请重试；若仍然失败，请前往官网下载最新版安装包。
                 </p>
               </div>
             ) : null}

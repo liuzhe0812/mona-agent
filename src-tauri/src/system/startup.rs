@@ -9,6 +9,12 @@ use rusqlite::OptionalExtension;
 
 use super::SystemState;
 
+#[cfg(windows)]
+use std::os::windows::process::CommandExt;
+
+#[cfg(windows)]
+const CREATE_NO_WINDOW: u32 = 0x08000000;
+
 #[cfg(test)]
 mod tests {
     use super::{acknowledge_startup_items, parse_registry_startup_id, parse_scheduled_task_line, sync_startup_items, StartupItem};
@@ -254,9 +260,7 @@ fn parse_scheduled_task_line(line: &str) -> Option<StartupItem> {
 
 #[cfg(windows)]
 fn read_scheduled_tasks() -> Vec<StartupItem> {
-    use std::os::windows::process::CommandExt;
     use std::process::Command;
-    const CREATE_NO_WINDOW: u32 = 0x08000000;
     let script = r#"Get-ScheduledTask -ErrorAction SilentlyContinue | Where-Object { @($_.Triggers | Where-Object { $_.CimClass.CimClassName -in @('MSFT_TaskBootTrigger','MSFT_TaskLogonTrigger') }).Count -gt 0 } | ForEach-Object { $a = @($_.Actions | Where-Object { $_.Execute } | Select-Object -First 1); if ($a.Count -gt 0) { @($_.TaskPath,$_.TaskName,$_.State,$a[0].Execute,$a[0].Arguments) -join "`t" } }"#;
     let Ok(output) = Command::new("powershell")
         .args(["-NoProfile", "-NonInteractive", "-Command", script])
@@ -418,6 +422,7 @@ fn resolve_lnk_target(lnk_path: &PathBuf) -> Option<String> {
     );
     let output = Command::new("powershell")
         .args(["-NoProfile", "-NonInteractive", "-Command", &script])
+        .creation_flags(CREATE_NO_WINDOW)
         .output()
         .ok()?;
     let s = super::decode_windows_output(&output.stdout).trim().to_string();
@@ -481,6 +486,7 @@ fn batch_query_signatures(paths: &[String]) -> std::collections::HashMap<String,
     );
     let output = Command::new("powershell")
         .args(["-NoProfile", "-NonInteractive", "-Command", &script])
+        .creation_flags(CREATE_NO_WINDOW)
         .output();
     if let Ok(o) = output {
         let stdout = super::decode_windows_output(&o.stdout);
@@ -568,9 +574,7 @@ fn write_startup_approved(item: &StartupItem, enabled: bool) -> Result<(), Strin
     use windows_registry::{CURRENT_USER, LOCAL_MACHINE, Type};
 
     if item.source == "计划任务" {
-        use std::os::windows::process::CommandExt;
         use std::process::Command;
-        const CREATE_NO_WINDOW: u32 = 0x08000000;
         let raw = item.id.strip_prefix("task:").ok_or_else(|| "计划任务 id 格式错误".to_string())?;
         let (task_path, task_name) = raw.split_once('|').ok_or_else(|| "无法解析计划任务 id".to_string())?;
         let command = if enabled { "Enable-ScheduledTask" } else { "Disable-ScheduledTask" };
@@ -697,6 +701,7 @@ fn read_boot_durations(limit: usize) -> Vec<BootDurationPoint> {
     );
     let output = Command::new("powershell")
         .args(["-NoProfile", "-NonInteractive", "-Command", &script])
+        .creation_flags(CREATE_NO_WINDOW)
         .output();
     let mut points = Vec::new();
     if let Ok(o) = output {

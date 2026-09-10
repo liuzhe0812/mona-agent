@@ -1,4 +1,4 @@
-import { createContext, useCallback, useContext, useEffect, useState } from "react";
+import { createContext, useCallback, useContext, useEffect, useRef, useState } from "react";
 import { isTauri } from "@/lib/tauri";
 
 interface LicenseInfo {
@@ -78,6 +78,13 @@ const LicenseContext = createContext<LicenseContextValue>({
   refreshLicense: async () => {},
 });
 
+function remainingDaysUntil(expiresAt: string | null): number {
+  if (!expiresAt) return 0;
+  const expires = new Date(expiresAt.includes("T") ? expiresAt : `${expiresAt}T23:59:59Z`).getTime();
+  if (!Number.isFinite(expires)) return 0;
+  return Math.max(0, Math.ceil((expires - Date.now()) / 86_400_000));
+}
+
 export function LicenseProvider({ children }: { children: React.ReactNode }) {
   const [licenseActive, setLicenseActive] = useState(false);
   const [checking, setChecking] = useState(true);
@@ -88,6 +95,7 @@ export function LicenseProvider({ children }: { children: React.ReactNode }) {
   const [deviceMismatch, setDeviceMismatch] = useState(false);
   const [pricingConfig, setPricingConfig] = useState<PricingConfig | null>(null);
   const [pricingError, setPricingError] = useState<string | null>(null);
+  const licenseCheckGeneration = useRef(0);
 
   const invokeTauri = useCallback(async <T,>(cmd: string, args?: Record<string, unknown>): Promise<T> => {
     const { invoke } = await import("@tauri-apps/api/core");
@@ -95,25 +103,29 @@ export function LicenseProvider({ children }: { children: React.ReactNode }) {
   }, []);
 
   const checkLicense = useCallback(async () => {
+    const generation = ++licenseCheckGeneration.current;
     if (!isTauri()) {
-      setLicenseActive(false);
-      setChecking(false);
+      if (licenseCheckGeneration.current === generation) {
+        setLicenseActive(false);
+        setChecking(false);
+      }
       return;
     }
     try {
       const result = await invokeTauri<LicenseInfo>("check_license");
+      if (licenseCheckGeneration.current !== generation) return;
       setLicenseInfo(result);
       setLicenseActive(result.status === "valid");
       // 登录状态基于是否有账号信息
       const hasAccount = !!(result.email || result.account);
       setLoggedIn(hasAccount);
       setServerTrial(!!result.trial && result.status === "valid");
-      setRemainingDays(result.remaining_days ?? 0);
+      setRemainingDays(result.remaining_days ?? remainingDaysUntil(result.expires_at));
       setDeviceMismatch(result.status === "device_mismatch");
     } catch {
-      setLicenseActive(false);
+      if (licenseCheckGeneration.current === generation) setLicenseActive(false);
     } finally {
-      setChecking(false);
+      if (licenseCheckGeneration.current === generation) setChecking(false);
     }
   }, [invokeTauri]);
 
@@ -126,10 +138,10 @@ export function LicenseProvider({ children }: { children: React.ReactNode }) {
       } else {
         let resp: Response;
         try {
-          resp = await fetch("https://www.mona-ai.cn/config/pricing");
+          resp = await fetch("https://mona-ai.cn/config/pricing");
           if (!resp.ok) throw new Error(`fetch pricing failed: ${resp.status}`);
         } catch {
-          resp = await fetch("https://mona.lzfun.vip/config/pricing");
+          resp = await fetch("https://www.mona-ai.cn/config/pricing");
           if (!resp.ok) throw new Error(`fetch pricing failed: ${resp.status}`);
         }
         raw = await resp.json();
@@ -193,6 +205,7 @@ export function LicenseProvider({ children }: { children: React.ReactNode }) {
   }, [invokeTauri]);
 
   const logout = useCallback(async () => {
+    licenseCheckGeneration.current += 1;
     await invokeTauri("auth_logout");
     setLoggedIn(false);
     setLicenseActive(false);
@@ -237,6 +250,18 @@ export function LicenseProvider({ children }: { children: React.ReactNode }) {
     checkLicense();
     fetchPricing();
   }, [checkLicense, fetchPricing]);
+
+  useEffect(() => {
+    if (!isTauri() || !licenseActive) return;
+    const timer = window.setInterval(() => {
+      void invokeTauri<boolean>("license_has_access")
+        .then((hasAccess) => {
+          if (!hasAccess) void checkLicense();
+        })
+        .catch(() => undefined);
+    }, 60_000);
+    return () => window.clearInterval(timer);
+  }, [checkLicense, invokeTauri, licenseActive]);
 
   return (
     <LicenseContext.Provider value={{

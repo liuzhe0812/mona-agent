@@ -1,9 +1,9 @@
 """Config agent tools.
 
 Lets the agent configure LLM provider credentials on the user's behalf so
-they don't have to open the BYOK settings panel manually. Writes go through
-the same Tauri IPC commands the WebUI BYOK panel uses, so ``~/.mona/config.json``
-stays the single source of truth.
+they don't have to open the BYOK settings panel manually. Writes reuse the
+same settings update path as the WebUI, so ``~/.mona/config.json`` stays the
+single source of truth.
 
 Design notes:
 - Only providers registered in ``mona.providers.registry.PROVIDERS`` are
@@ -18,6 +18,7 @@ Design notes:
 
 from __future__ import annotations
 
+import json
 from typing import Any
 
 from loguru import logger
@@ -28,8 +29,14 @@ from mona.agent.tools.schema import (
     StringSchema,
     tool_parameters_schema,
 )
-from mona.agent.tools.tauri_ipc import tauri_invoke
+from mona.agent.tools.tauri_ipc import tauri_invoke_async
+from mona.config.loader import load_config
 from mona.providers.registry import PROVIDERS, find_by_name
+from mona.webui.settings_api import (
+    WebUISettingsError,
+    update_agent_settings,
+    update_provider_settings,
+)
 
 # Provider names the agent is allowed to write. Excludes OAuth-based providers
 # (openai_codex, github_copilot) since those need interactive `mona provider
@@ -116,7 +123,7 @@ class ConfigSetProviderTool(Tool):
             "default) in the user's local Mona config at ~/.mona/config.json. "
             "Use this when the user shares an API key in chat and asks you to "
             "set it up, so they don't have to open the BYOK settings panel "
-            "manually. Writes go through the same path as the WebUI BYOK panel. "
+            "manually. Writes use the same settings path as the WebUI BYOK panel. "
             "Mona must be restarted (or the gateway restarted) for the change "
             "to take effect — surface this to the user in your reply."
         )
@@ -187,25 +194,41 @@ class ConfigSetProviderTool(Tool):
             video_model or "(no video)",
         )
 
-        provider_args: dict[str, Any] = {
-            "provider": spec.name,
-            "apiKey": api_key,
+        provider_args: dict[str, list[str]] = {
+            "provider": [spec.name],
+            "api_key": [api_key],
         }
         if api_base:
-            provider_args["apiBase"] = api_base
+            provider_args["api_base"] = [api_base]
+
+        if set_as_default:
+            provider_args["model"] = [default_model]
+            provider_config = load_config().providers.get_provider_config(spec.name)
+            if (
+                provider_config is not None
+                and provider_config.enabled_models is not None
+                and default_model not in provider_config.enabled_models
+            ):
+                provider_args["enabled_models"] = [
+                    json.dumps([*provider_config.enabled_models, default_model])
+                ]
 
         try:
-            tauri_invoke("write_mona_provider_config", provider_args)
-        except RuntimeError as e:
+            update_provider_settings(provider_args)
+        except WebUISettingsError as e:
             return f"Error writing provider config: {e}"
 
         if set_as_default:
             try:
-                tauri_invoke(
-                    "write_mona_model_config",
-                    {"model": default_model, "provider": spec.name},
+                update_agent_settings(
+                    {
+                        "model_preset": ["default"],
+                        "provider": [spec.name],
+                        "model": [default_model],
+                        "provider_model": [default_model],
+                    }
                 )
-            except RuntimeError as e:
+            except WebUISettingsError as e:
                 return (
                     f"Provider credentials written, but failed to set default "
                     f"model: {e}. The user can set the default model manually "
@@ -214,7 +237,7 @@ class ConfigSetProviderTool(Tool):
 
         if image_model:
             try:
-                tauri_invoke(
+                await tauri_invoke_async(
                     "write_mona_image_gen_config",
                     {
                         "provider": spec.name,
@@ -231,7 +254,7 @@ class ConfigSetProviderTool(Tool):
 
         if video_model:
             try:
-                tauri_invoke(
+                await tauri_invoke_async(
                     "write_mona_video_gen_config",
                     {
                         "provider": spec.name,

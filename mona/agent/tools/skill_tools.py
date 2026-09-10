@@ -43,6 +43,17 @@ def _agent_id_from_ctx(ctx: Any) -> str:
     return _coerce_agent_id(getattr(ctx, "agent_id", None))
 
 
+def _agent_kind_from_ctx(ctx: Any) -> str | None:
+    value = getattr(ctx, "agent_kind", None)
+    return value if isinstance(value, str) and value else None
+
+
+def _mona_ppt_scope_error(agent_id: str, agent_kind: str | None, skill: str) -> str | None:
+    if agent_id == MONA_AGENT_ID and skill == "mona-ppt" and agent_kind != "ppt":
+        return "Error: skill 'mona-ppt' is only available in the AI Documents PPT workflow."
+    return None
+
+
 def _skills_loader(agent_id: str = MONA_AGENT_ID):
     """Build a SkillsLoader scoped to *agent_id* (lazy to avoid circular imports).
 
@@ -73,16 +84,26 @@ class SkillReadTool(Tool):
 
     _scopes = {"core", "subagent", "memory"}
 
-    def __init__(self, *, track_usage: bool = True, agent_id: str = MONA_AGENT_ID) -> None:
+    def __init__(
+        self,
+        *,
+        track_usage: bool = True,
+        agent_id: str = MONA_AGENT_ID,
+        agent_kind: str | None = None,
+    ) -> None:
         # When Dream reads skills for dedup/maintenance, it must NOT bump
         # access counters — otherwise maintenance would reset the inactivity
         # clock and archival would never happen.
         self._track_usage = track_usage
         self._agent_id = _coerce_agent_id(agent_id)
+        self._agent_kind = agent_kind
 
     @classmethod
     def create(cls, ctx: Any) -> Tool:
-        return cls(agent_id=_agent_id_from_ctx(ctx))
+        return cls(
+            agent_id=_agent_id_from_ctx(ctx),
+            agent_kind=_agent_kind_from_ctx(ctx),
+        )
 
     @property
     def name(self) -> str:
@@ -112,6 +133,8 @@ class SkillReadTool(Tool):
     async def execute(self, name: str | None = None, **kwargs: Any) -> str:
         if not name:
             return "Error: name parameter is required."
+        if error := _mona_ppt_scope_error(self._agent_id, self._agent_kind, name):
+            return error
         loader = _skills_loader(self._agent_id)
         content = loader.load_skill(name)
         if content is None:
@@ -124,7 +147,7 @@ class SkillReadTool(Tool):
 
 
 class SkillCreateTool(Tool):
-    """Stage a new private skill for user approval in the executing agent."""
+    """Create a new private Skill for the executing agent."""
 
     _scopes = {"memory", "subagent"}
 
@@ -159,9 +182,8 @@ class SkillCreateTool(Tool):
     @property
     def description(self) -> str:
         return (
-            "Propose a new private skill for the executing agent. The content is "
-            "validated and staged under that agent only; it is not active until "
-            "the user approves it in Agent management. SKILL.md must include YAML "
+            "Create a new private skill for the executing agent. The content is "
+            "validated and activated under that agent only. SKILL.md must include YAML "
             "frontmatter with matching name and a description."
         )
 
@@ -189,7 +211,7 @@ class SkillCreateTool(Tool):
             return "Error: content parameter is required."
         try:
             from mona.agent import skill_usage
-            from mona.agent.agent_management import stage_skill_content
+            from mona.agent.agent_management import install_generated_skill_content
 
             active = skill_usage.list_active_user_skill_names(self._agent_id)
             if len(active) >= self._max_active:
@@ -197,18 +219,15 @@ class SkillCreateTool(Tool):
                     f"Error: active user skill count ({len(active)}) has reached "
                     f"the cap ({self._max_active}). Archive or merge existing skills first."
                 )
-            proposal = stage_skill_content(
+            install_generated_skill_content(
                 self._agent_id,
                 name=name,
                 content=content,
                 source="agent:skill_create",
             )
-            return (
-                f"Skill '{name}' is staged for user approval (proposal {proposal['id']}). "
-                "It is not active yet. Ask the user to approve it in this Agent's Skills page."
-            )
+            return f"Skill '{name}' was created and is active for this Agent."
         except Exception as e:
-            return f"Error staging skill '{name}': {e}"
+            return f"Error creating skill '{name}': {e}"
 
 
 class SkillScriptRunTool(Tool):
@@ -221,11 +240,13 @@ class SkillScriptRunTool(Tool):
         *,
         track_usage: bool = True,
         agent_id: str = MONA_AGENT_ID,
+        agent_kind: str | None = None,
         workspace: str | Path | None = None,
         agent_environment: Any | None = None,
     ) -> None:
         self._track_usage = track_usage
         self._agent_id = _coerce_agent_id(agent_id)
+        self._agent_kind = agent_kind
         self._workspace = Path(workspace).resolve() if workspace else None
         self._agent_environment = agent_environment
 
@@ -233,6 +254,7 @@ class SkillScriptRunTool(Tool):
     def create(cls, ctx: Any) -> Tool:
         return cls(
             agent_id=_agent_id_from_ctx(ctx),
+            agent_kind=_agent_kind_from_ctx(ctx),
             workspace=getattr(ctx, "workspace", None),
             agent_environment=getattr(ctx, "agent_environment", None),
         )
@@ -281,6 +303,8 @@ class SkillScriptRunTool(Tool):
     ) -> str:
         if not skill or not script:
             return "Error: skill and script parameters are required."
+        if error := _mona_ppt_scope_error(self._agent_id, self._agent_kind, skill):
+            return error
         # Prevent path traversal in script name
         if "/" in script or "\\" in script or ".." in script:
             return f"Error: invalid script name '{script}'."
@@ -290,12 +314,9 @@ class SkillScriptRunTool(Tool):
         if skill_dir is None:
             return f"Error: skill '{skill}' not found."
         from mona.agent.agent_management import is_skill_script_enabled
-        from mona.config.paths import get_agent_skills_dir
-
-        private_dir = get_agent_skills_dir(self._agent_id) / skill
-        if skill_dir == private_dir and not is_skill_script_enabled(self._agent_id, skill):
+        if not is_skill_script_enabled(self._agent_id, skill):
             return (
-                f"Error: scripts for private skill '{skill}' are disabled. "
+                f"Error: scripts for skill '{skill}' are disabled. "
                 "The user must explicitly enable them in Agent management after review."
             )
         script_path = skill_dir / "scripts" / script
@@ -304,8 +325,11 @@ class SkillScriptRunTool(Tool):
         try:
             env = os.environ.copy()
             env["PYTHONUTF8"] = "1"
-            if self._workspace is not None:
-                env["MONA_ACTIVE_WORKSPACE"] = str(self._workspace)
+            from mona.agent.tools.path_utils import get_current_workspace
+
+            active_workspace = get_current_workspace(self._workspace)
+            if active_workspace is not None:
+                env["MONA_ACTIVE_WORKSPACE"] = str(active_workspace)
             suffix = script_path.suffix.lower()
             from mona.config.paths import get_managed_runtimes_dir
             from mona.runtime.agent_env import (
@@ -343,7 +367,13 @@ class SkillScriptRunTool(Tool):
                 *cmd,
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE,
-                cwd=str(skill_dir),
+                cwd=str(
+                    active_workspace
+                    if self._agent_id == MONA_AGENT_ID
+                    and skill == "mona-ppt"
+                    and active_workspace
+                    else skill_dir
+                ),
                 env=env,
                 **spawn_kwargs,
             )
@@ -379,13 +409,23 @@ class SkillReferenceReadTool(Tool):
 
     _scopes = {"core", "subagent", "memory"}
 
-    def __init__(self, *, track_usage: bool = True, agent_id: str = MONA_AGENT_ID) -> None:
+    def __init__(
+        self,
+        *,
+        track_usage: bool = True,
+        agent_id: str = MONA_AGENT_ID,
+        agent_kind: str | None = None,
+    ) -> None:
         self._track_usage = track_usage
         self._agent_id = _coerce_agent_id(agent_id)
+        self._agent_kind = agent_kind
 
     @classmethod
     def create(cls, ctx: Any) -> Tool:
-        return cls(agent_id=_agent_id_from_ctx(ctx))
+        return cls(
+            agent_id=_agent_id_from_ctx(ctx),
+            agent_kind=_agent_kind_from_ctx(ctx),
+        )
 
     @property
     def name(self) -> str:
@@ -424,6 +464,8 @@ class SkillReferenceReadTool(Tool):
     ) -> str:
         if not skill or not ref_path:
             return "Error: skill and ref_path parameters are required."
+        if error := _mona_ppt_scope_error(self._agent_id, self._agent_kind, skill):
+            return error
         # Prevent path traversal
         if ".." in ref_path:
             return f"Error: invalid ref_path '{ref_path}'."
@@ -449,13 +491,23 @@ class SkillAssetCopyTool(Tool):
 
     _scopes = {"core", "subagent", "memory"}
 
-    def __init__(self, *, track_usage: bool = True, agent_id: str = MONA_AGENT_ID) -> None:
+    def __init__(
+        self,
+        *,
+        track_usage: bool = True,
+        agent_id: str = MONA_AGENT_ID,
+        agent_kind: str | None = None,
+    ) -> None:
         self._track_usage = track_usage
         self._agent_id = _coerce_agent_id(agent_id)
+        self._agent_kind = agent_kind
 
     @classmethod
     def create(cls, ctx: Any) -> Tool:
-        return cls(agent_id=_agent_id_from_ctx(ctx))
+        return cls(
+            agent_id=_agent_id_from_ctx(ctx),
+            agent_kind=_agent_kind_from_ctx(ctx),
+        )
 
     @property
     def name(self) -> str:
@@ -492,6 +544,8 @@ class SkillAssetCopyTool(Tool):
     ) -> str:
         if not skill or not asset or not dest:
             return "Error: skill, asset, and dest parameters are required."
+        if error := _mona_ppt_scope_error(self._agent_id, self._agent_kind, skill):
+            return error
         if ".." in asset:
             return f"Error: invalid asset path '{asset}'."
         skill_dir = _skills_loader(self._agent_id).resolve_skill_dir(skill)

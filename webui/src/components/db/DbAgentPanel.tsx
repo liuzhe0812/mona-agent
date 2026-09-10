@@ -303,7 +303,7 @@ export function DbAgentPanel({
       </div>
 
       <div className="shrink-0 p-2">
-        <div className="flex min-h-[52px] items-end gap-1.5 rounded-xl border border-border/75 bg-background px-2.5 py-1.5">
+        <div className="flex min-h-[52px] items-end gap-1.5 rounded-xl border border-border/75 bg-background px-2.5 py-1.5 shadow-sm">
           <Textarea
             value={draft}
             onChange={(event) => setDraft(event.target.value)}
@@ -314,7 +314,7 @@ export function DbAgentPanel({
               }
             }}
             disabled={!activeTab?.connectionId || creatingChat}
-            className="min-h-[44px] flex-1 resize-none border-0 bg-transparent px-0 py-0 text-caption leading-5 shadow-none focus-visible:ring-0 disabled:cursor-not-allowed disabled:opacity-60"
+            className="min-h-[36px] flex-1 resize-none rounded-none border-0 bg-transparent px-0 py-0 text-caption leading-5 shadow-none focus-visible:ring-0 disabled:cursor-not-allowed disabled:opacity-60"
             rows={2}
             placeholder="描述想查的数据或想做的分析..."
           />

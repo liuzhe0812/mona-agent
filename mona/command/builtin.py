@@ -123,7 +123,12 @@ async def cmd_stop(ctx: CommandContext) -> OutboundMessage:
     """Cancel all active tasks and subagents for the session."""
     loop = ctx.loop
     msg = ctx.msg
-    total = await loop._cancel_active_tasks(msg.session_key)
+    keys = [ctx.key]
+    if msg.session_key != ctx.key:
+        keys.append(msg.session_key)
+    total = sum(await asyncio.gather(*(loop._cancel_active_tasks(key) for key in keys)))
+    if total == 0:
+        await loop._webui_turns.publish_run_status(msg, "idle")
     content = f"Stopped {total} task(s)." if total else "No active task to stop."
     return OutboundMessage(
         channel=msg.channel, chat_id=msg.chat_id, content=content,
@@ -169,7 +174,7 @@ async def cmd_status(ctx: CommandContext) -> OutboundMessage:
         web_cfg = getattr(loop, "web_config", None)
         search_cfg = getattr(web_cfg, "search", None) if web_cfg else None
         if search_cfg is not None:
-            provider = getattr(search_cfg, "provider", "duckduckgo")
+            provider = getattr(search_cfg, "provider", "anysearch")
             api_key = getattr(search_cfg, "api_key", "") or None
             usage = await fetch_search_usage(provider=provider, api_key=api_key)
             search_usage_text = usage.format()
@@ -554,9 +559,9 @@ async def cmd_history(ctx: CommandContext) -> OutboundMessage:
     )
 
 
-_GOAL_PROMPT_TEMPLATE = """The user declared a sustained objective for this thread.
+_GOAL_PROMPT_TEMPLATE = """The user explicitly declared a sustained objective with `/goal`.
 
-Inspect or clarify if needed, then call `long_task` with the refined objective (and optional short ui_summary). Work proceeds as normal assistant turns using your usual tools. When the objective is fully done and verified, call `complete_goal` with a brief recap. If the user later cancels or changes direction, still call `complete_goal` with an honest recap (then `long_task` again only after there is no active goal). Do not use `long_task` / `complete_goal` for trivial one-shot answers.
+Call `long_task` in this turn with the requested objective (and optional short ui_summary); this tool is available only because the user entered `/goal`. Work proceeds as normal assistant turns using your usual tools. When the objective is fully done and verified, call `complete_goal` with a brief recap. If the user later cancels or changes direction, still call `complete_goal` with an honest recap. A replacement goal requires a new explicit `/goal` command.
 
 Goal:
 {goal}

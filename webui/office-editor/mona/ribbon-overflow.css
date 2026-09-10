@@ -1,0 +1,131 @@
+/* Keep the embedded ribbons at the host width so their native responsive
+   collapse can run. Horizontal scrolling remains as a fallback. */
+
+.mona-docs-editor .ribbon,
+.mona-slides-editor .ribbon {
+  width: 100%;
+  overflow-x: auto;
+  overflow-y: hidden;
+  scrollbar-width: none;
+  scrollbar-color: var(--border-strong) transparent;
+}
+
+.mona-docs-editor .ribbon::-webkit-scrollbar,
+.mona-slides-editor .ribbon::-webkit-scrollbar,
+.mona-sheets-editor .excel-header::-webkit-scrollbar {
+  height: 0;
+}
+
+.mona-docs-editor .ribbon:hover,
+.mona-slides-editor .ribbon:hover,
+.mona-sheets-editor .excel-header:hover {
+  scrollbar-width: thin;
+  position: relative;
+  z-index: 1;
+  margin-bottom: -5px;
+}
+
+.mona-docs-editor .ribbon:hover::-webkit-scrollbar,
+.mona-slides-editor .ribbon:hover::-webkit-scrollbar,
+.mona-sheets-editor .excel-header:hover::-webkit-scrollbar {
+  height: 5px;
+}
+
+.mona-docs-editor .ribbon::-webkit-scrollbar-track,
+.mona-slides-editor .ribbon::-webkit-scrollbar-track,
+.mona-sheets-editor .excel-header::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.mona-docs-editor .ribbon::-webkit-scrollbar-thumb,
+.mona-slides-editor .ribbon::-webkit-scrollbar-thumb,
+.mona-sheets-editor .excel-header::-webkit-scrollbar-thumb {
+  border-radius: 2.5px;
+  background: var(--border-strong);
+}
+
+.mona-docs-editor .ribbon-tabs,
+.mona-docs-editor .ribbon-body,
+.mona-slides-editor .ribbon-tabs,
+.mona-slides-editor .ribbon-body {
+  width: 100%;
+  min-width: 0;
+  flex-shrink: 0;
+}
+
+.mona-docs-editor .ribbon-tabs,
+.mona-slides-editor .ribbon-tabs {
+  white-space: nowrap;
+}
+
+.mona-docs-editor .ribbon-tabs-win,
+.mona-slides-editor .ribbon-tabs-win,
+.mona-sheets-editor .ribbon-tabs-win {
+  padding-right: 0;
+}
+
+.mona-docs-editor .ribbon-tabs > *,
+.mona-slides-editor .ribbon-tabs > * {
+  flex-shrink: 0;
+}
+
+.mona-docs-editor .ribbon-tabs-spacer,
+.mona-slides-editor .ribbon-tabs-spacer {
+  flex: 1 0 0;
+}
+
+.mona-docs-editor .ribbon-tab,
+.mona-slides-editor .ribbon-tab {
+  flex-shrink: 0;
+  white-space: nowrap;
+}
+
+.mona-docs-editor .ribbon-body,
+.mona-slides-editor .ribbon-body {
+  overflow: visible;
+}
+
+.mona-docs-editor .ribbon-body > *,
+.mona-slides-editor .ribbon-body > * {
+  flex-shrink: 0;
+}
+
+.mona-docs-editor .ribbon-body .ribbon-group,
+.mona-slides-editor .ribbon-body .ribbon-group {
+  flex-shrink: 0;
+}
+
+.mona-sheets-editor .excel-header {
+  overflow-x: auto;
+  overflow-y: hidden;
+  scrollbar-width: none;
+  scrollbar-color: var(--border-strong) transparent;
+}
+
+.mona-sheets-editor .excel-header > .ribbon-tabs,
+.mona-sheets-editor .excel-header > .ribbon {
+  width: 100%;
+  min-width: 0;
+  flex-shrink: 0;
+}
+
+.mona-sheets-editor .ribbon-tabs {
+  white-space: nowrap;
+}
+
+.mona-sheets-editor .ribbon-tabs > * {
+  flex-shrink: 0;
+}
+
+.mona-sheets-editor .ribbon-tabs-spacer {
+  flex: 1 0 0;
+}
+
+.mona-sheets-editor .ribbon-tabs > button:not(.qa-btn) {
+  flex-shrink: 0;
+  white-space: nowrap;
+}
+
+.mona-sheets-editor .excel-header > .ribbon {
+  overflow: visible;
+}

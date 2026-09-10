@@ -21,7 +21,7 @@ import { formatStorage } from "../useSystemData";
 interface Props {
   files: TopFileInfo[];
   /** 点击"交给 Mona 评估"按钮触发 AI 分析 */
-  onAnalyze?: (goal: string) => void;
+  onAnalyze?: () => void;
   /** 移至系统回收站（可恢复）；不传则不显示删除入口 */
   onTrash?: (paths: string[]) => Promise<StorageTrashResult>;
 }
@@ -60,21 +60,7 @@ export function LargeFileTable({ files, onAnalyze, onTrash }: Props) {
 
   const handleAnalyze = () => {
     if (!onAnalyze || displayFiles.length === 0) return;
-    const summary = displayFiles
-      .map((f, i) => `${i + 1}. ${f.parentDirName}/.${f.extension} ${formatStorage(f.sizeGb)} (${BUCKET_LABEL[f.modifiedBucket] ?? f.modifiedBucket})`)
-      .join("\n");
-    const goal = [
-      `用户刚完成存储空间扫描，以下是占用最大的 ${displayFiles.length} 个文件（脱敏：仅目录名+扩展名+大小+修改时间桶）：`,
-      summary,
-      "",
-      "请逐一评估这些大文件是否可以安全删除：",
-      "1. 判断文件类型（如 .iso/.mp4/.bak/.log/.dmp/.cache 等）的清理价值",
-      "2. 结合修改时间桶判断是否长期未使用",
-      "3. 给出每项的处理建议：可安全删除 / 建议保留 / 需用户确认",
-      "4. 汇总可释放的总空间估算",
-      "注意：你只能提供建议，不要尝试执行任何删除操作。",
-    ].join("\n");
-    onAnalyze(goal);
+    onAnalyze();
   };
 
   const handleContextMenu = (e: React.MouseEvent, path: string) => {

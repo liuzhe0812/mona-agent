@@ -1,0 +1,469 @@
+{
+  "generatedAt": "2026-08-15T10:40:05.644Z",
+  "note": "UI 债务基线（UI-01B）。仅允许计数下降；迁移批次完成后用 `npm run check:ui:update` 更新。",
+  "files": {
+    "src/App.tsx": {
+      "arbitrary-text": 2,
+      "native-button": 1
+    },
+    "src/components/ChatList.tsx": {
+      "native-button": 3
+    },
+    "src/components/CodeBlock.tsx": {
+      "native-button": 1
+    },
+    "src/components/common/editor-extensions/math-extension.tsx": {
+      "native-input": 1
+    },
+    "src/components/common/editor-extensions/slash-command/slash-menu.tsx": {
+      "arbitrary-text": 2,
+      "native-button": 1
+    },
+    "src/components/common/editor-extensions/table-bubble-menu.tsx": {
+      "native-button": 1
+    },
+    "src/components/common/FindReplaceBar.tsx": {
+      "arbitrary-text": 5
+    },
+    "src/components/common/MarkdownEditor.tsx": {
+      "arbitrary-text": 17,
+      "hex-color": 1,
+      "native-button": 4,
+      "native-textarea": 1
+    },
+    "src/components/common/mermaid-diagram.tsx": {
+      "arbitrary-text": 1,
+      "native-button": 4
+    },
+    "src/components/common/MermaidCodeBlock.tsx": {
+      "arbitrary-text": 10,
+      "native-button": 4,
+      "native-input": 1,
+      "native-textarea": 1
+    },
+    "src/components/common/NoteEmbedExtension.tsx": {
+      "native-button": 1
+    },
+    "src/components/common/OfficePreview.tsx": {
+      "arbitrary-text": 2
+    },
+    "src/components/common/SelectionAiToolbar.tsx": {
+      "arbitrary-text": 11,
+      "hex-color": 18,
+      "native-button": 9,
+      "native-input": 1
+    },
+    "src/components/DeleteConfirm.tsx": {
+      "arbitrary-text": 1
+    },
+    "src/components/doc/video/ProducingPhase.tsx": {
+      "arbitrary-text": 46,
+      "native-button": 3
+    },
+    "src/components/doc/video/StoryboardPhase.tsx": {
+      "arbitrary-text": 31,
+      "native-button": 1,
+      "native-input": 1
+    },
+    "src/components/doc/video/VideoHistory.tsx": {
+      "arbitrary-text": 15,
+      "native-button": 7
+    },
+    "src/components/doc/video/VideoMakerView.tsx": {
+      "arbitrary-text": 22,
+      "native-button": 8,
+      "native-select": 2
+    },
+    "src/components/doc/video/VideoRuntimeDialog.tsx": {
+      "arbitrary-text": 6
+    },
+    "src/components/email/AccountSettingsDialog.tsx": {
+      "arbitrary-text": 1,
+      "hex-color": 1
+    },
+    "src/components/email/EmailRichEditor.tsx": {
+      "arbitrary-text": 5,
+      "hex-color": 29
+    },
+    "src/components/email/FolderTree.tsx": {
+      "hex-color": 8
+    },
+    "src/components/email/lib/emailApi.ts": {
+      "hex-color": 9
+    },
+    "src/components/email/MailComposer.tsx": {
+      "hex-color": 4
+    },
+    "src/components/FileReferenceChip.tsx": {
+      "arbitrary-text": 2
+    },
+    "src/components/ide/IdeEditor.tsx": {
+      "hex-color": 11
+    },
+    "src/components/ide/IdeEditorPanel.tsx": {
+      "native-button": 1
+    },
+    "src/components/ide/IdeSystemMonitor/OverviewPanel.tsx": {
+      "hex-color": 5
+    },
+    "src/components/ide/IdeSystemMonitor/PortsPanel.tsx": {
+      "native-button": 2
+    },
+    "src/components/ide/IdeSystemMonitor/ProcessesPanel.tsx": {
+      "native-button": 2
+    },
+    "src/components/ImageLightbox.tsx": {
+      "native-button": 1
+    },
+    "src/components/LanguageSwitcher.tsx": {
+      "arbitrary-text": 1
+    },
+    "src/components/LoginDialog.tsx": {
+      "native-button": 6
+    },
+    "src/components/MarkdownTextRenderer.tsx": {
+      "arbitrary-text": 4
+    },
+    "src/components/MessageBubble.tsx": {
+      "arbitrary-text": 14,
+      "hex-color": 1,
+      "native-button": 5,
+      "arbitrary-radius": 1
+    },
+    "src/components/notes/flowchart/DiagramMigrationView.tsx": {
+      "arbitrary-text": 5
+    },
+    "src/components/notes/flowchart/FlowchartAgentPanel.tsx": {
+      "arbitrary-text": 7,
+      "native-button": 3
+    },
+    "src/components/notes/flowchart/FlowchartCanvas.tsx": {
+      "arbitrary-text": 1,
+      "native-button": 2,
+      "native-input": 2,
+      "native-textarea": 2
+    },
+    "src/components/notes/flowchart/FlowchartDocumentEditor.tsx": {
+      "arbitrary-text": 8,
+      "native-button": 7,
+      "native-input": 3
+    },
+    "src/components/notes/flowchart/FlowchartInspector.tsx": {
+      "arbitrary-text": 1,
+      "native-button": 2
+    },
+    "src/components/notes/flowchart/FlowchartSafeDeleteDialog.tsx": {
+      "arbitrary-text": 2
+    },
+    "src/components/notes/flowchart/FlowchartShapePanel.tsx": {
+      "arbitrary-text": 1,
+      "native-button": 2
+    },
+    "src/components/notes/flowchart/FlowchartThemePanel.tsx": {
+      "arbitrary-text": 3,
+      "native-button": 2
+    },
+    "src/components/notes/GraphViewDialog.tsx": {
+      "hex-color": 7
+    },
+    "src/components/notes/materials/materials-tree.tsx": {
+      "arbitrary-text": 3
+    },
+    "src/components/notes/materials/MaterialsLintPanel.tsx": {
+      "arbitrary-text": 14,
+      "native-button": 2,
+      "native-textarea": 1
+    },
+    "src/components/notes/materials/MaterialsPreview.tsx": {
+      "arbitrary-text": 10
+    },
+    "src/components/notes/materials/MaterialsSidebar.tsx": {
+      "arbitrary-text": 20,
+      "native-button": 7
+    },
+    "src/components/notes/mindmap/MindMapAgentPanel.tsx": {
+      "arbitrary-text": 6,
+      "native-button": 3
+    },
+    "src/components/notes/notes-ai.ts": {
+      "hex-color": 32
+    },
+    "src/components/notes/NotesView.tsx": {
+      "hex-color": 12
+    },
+    "src/components/notification/NotificationWindow.tsx": {
+      "arbitrary-text": 3,
+      "native-button": 1
+    },
+    "src/components/PaymentDialog.tsx": {
+      "hex-color": 2
+    },
+    "src/components/ppt/PptChatPanel.tsx": {
+      "arbitrary-text": 5,
+      "native-button": 2,
+      "native-textarea": 1
+    },
+    "src/components/ppt/PptConfigPanel.tsx": {
+      "arbitrary-text": 33,
+      "hex-color": 1,
+      "native-button": 12,
+      "native-input": 3
+    },
+    "src/components/ppt/PptConfigStepConfirm.tsx": {
+      "arbitrary-text": 8
+    },
+    "src/components/ppt/PptConfigStepSources.tsx": {
+      "arbitrary-text": 3,
+      "native-button": 2,
+      "native-input": 1
+    },
+    "src/components/ppt/PptConfigStepTemplate.tsx": {
+      "arbitrary-text": 21,
+      "hex-color": 1,
+      "native-button": 5,
+      "native-input": 1
+    },
+    "src/components/ppt/PptConfigStepTopic.tsx": {
+      "arbitrary-text": 5,
+      "native-button": 1
+    },
+    "src/components/ppt/PptConfigWizard.tsx": {
+      "arbitrary-text": 6,
+      "native-button": 2
+    },
+    "src/components/ppt/PptHistory.tsx": {
+      "arbitrary-text": 15,
+      "native-button": 7
+    },
+    "src/components/ppt/PptMakerView.tsx": {
+      "arbitrary-text": 14,
+      "native-button": 4
+    },
+    "src/components/ppt/PptOutlinePhase.tsx": {
+      "arbitrary-text": 31,
+      "hex-color": 11,
+      "native-button": 8,
+      "native-input": 10,
+      "native-select": 7
+    },
+    "src/components/ppt/PptPptxTemplateImportView.tsx": {
+      "arbitrary-text": 4,
+      "native-button": 1,
+      "native-input": 1
+    },
+    "src/components/ppt/PptPreview.tsx": {
+      "arbitrary-text": 20
+    },
+    "src/components/ppt/PptProducingPhase.tsx": {
+      "arbitrary-text": 50,
+      "native-button": 6,
+      "native-input": 2
+    },
+    "src/components/ppt/PptTemplateDialog.tsx": {
+      "arbitrary-text": 8,
+      "hex-color": 1,
+      "native-button": 4
+    },
+    "src/components/profile/charts/KnowledgeStarGraph.tsx": {
+      "arbitrary-text": 1
+    },
+    "src/components/profile/charts/RadarChart.tsx": {
+      "arbitrary-text": 2
+    },
+    "src/components/profile/charts/SankeyChart.tsx": {
+      "arbitrary-text": 2
+    },
+    "src/components/profile/ProfileTab.tsx": {
+      "arbitrary-text": 1,
+      "native-button": 1
+    },
+    "src/components/profile/TrajectoryTab.tsx": {
+      "arbitrary-text": 3,
+      "hex-color": 1
+    },
+    "src/components/profile/WorkPatternTab.tsx": {
+      "hex-color": 1
+    },
+    "src/components/quick/QuickAskWindow.tsx": {
+      "arbitrary-text": 3,
+      "hex-color": 1
+    },
+    "src/components/room/AgentAvatar.tsx": {
+      "arbitrary-text": 2
+    },
+    "src/components/room/RoomContextPanel.tsx": {
+      "arbitrary-text": 6,
+      "native-button": 1
+    },
+    "src/components/schedule/CalendarMonth.tsx": {
+      "native-button": 1
+    },
+    "src/components/schedule/DayPlanPanel.tsx": {
+      "native-button": 1
+    },
+    "src/components/schedule/ScheduleDialog.tsx": {
+      "native-button": 1
+    },
+    "src/components/schedule/TodayView.tsx": {
+      "native-button": 2
+    },
+    "src/components/schedule/TodoInbox.tsx": {
+      "native-button": 4
+    },
+    "src/components/SessionSearchDialog.tsx": {
+      "arbitrary-text": 6,
+      "native-button": 1,
+      "native-input": 1
+    },
+    "src/components/shell/AppRail.tsx": {
+      "arbitrary-text": 10,
+      "native-button": 5
+    },
+    "src/components/shell/ConversationDialogs.tsx": {
+      "native-button": 1
+    },
+    "src/components/shell/PartnersView.tsx": {
+      "arbitrary-text": 5,
+      "native-button": 1
+    },
+    "src/components/shell/SessionListPanel.tsx": {
+      "arbitrary-text": 4,
+      "native-button": 1,
+      "native-input": 1
+    },
+    "src/components/Sidebar.tsx": {
+      "arbitrary-text": 14,
+      "native-button": 7
+    },
+    "src/components/SubscribeView.tsx": {
+      "native-button": 3
+    },
+    "src/components/system/AdvancedOptimizationPanel.tsx": {
+      "native-button": 1
+    },
+    "src/components/system/MaintenancePanel.tsx": {
+      "native-button": 1
+    },
+    "src/components/system/NetworkPanel.tsx": {
+      "native-button": 1
+    },
+    "src/components/system/OverviewPanel.tsx": {
+      "hex-color": 5,
+      "native-button": 3
+    },
+    "src/components/system/SoftwarePanel.tsx": {
+      "native-button": 1
+    },
+    "src/components/system/StartupPanel.tsx": {
+      "hex-color": 2,
+      "native-button": 2
+    },
+    "src/components/system/storage/DirectoryTreeView.tsx": {
+      "native-button": 3
+    },
+    "src/components/system/storage/LargeFileTable.tsx": {
+      "native-button": 3
+    },
+    "src/components/system/storage/TreemapView.tsx": {
+      "hex-color": 14
+    },
+    "src/components/system/SystemAssistant.tsx": {
+      "native-button": 1
+    },
+    "src/components/system/SystemOptimizationPanel.tsx": {
+      "native-button": 3
+    },
+    "src/components/system/SystemUi.tsx": {
+      "native-button": 1
+    },
+    "src/components/system/SystemView.tsx": {
+      "native-button": 1
+    },
+    "src/components/terminal/AIPanel/AIChat.tsx": {
+      "native-input": 1
+    },
+    "src/components/terminal/AIPanel/MaintenanceHistory.tsx": {
+      "native-button": 1
+    },
+    "src/components/terminal/BatchMode/BatchModeView.tsx": {
+      "hex-color": 7,
+      "native-button": 1
+    },
+    "src/components/terminal/Dialogs/TerminalSettingsDialog.tsx": {
+      "native-input": 1,
+      "native-select": 2
+    },
+    "src/components/terminal/FileManager/FilePane.tsx": {
+      "native-button": 3
+    },
+    "src/components/terminal/FileManager/PermissionsDialog.tsx": {
+      "native-input": 1
+    },
+    "src/components/terminal/StandaloneTerminalWindow.tsx": {
+      "hex-color": 2
+    },
+    "src/components/thread/AgentActivityCluster.tsx": {
+      "arbitrary-text": 4,
+      "native-button": 1
+    },
+    "src/components/thread/NewChatDashboard.tsx": {
+      "arbitrary-text": 14,
+      "native-button": 3
+    },
+    "src/components/thread/PendingQueueStrip.tsx": {
+      "arbitrary-text": 3,
+      "native-button": 3
+    },
+    "src/components/thread/StreamErrorNotice.tsx": {
+      "arbitrary-text": 1
+    },
+    "src/components/thread/ThreadComposer.tsx": {
+      "arbitrary-text": 26,
+      "native-button": 10,
+      "native-input": 2,
+      "native-textarea": 1
+    },
+    "src/components/thread/ThreadHeader.tsx": {
+      "arbitrary-text": 2,
+      "native-button": 1
+    },
+    "src/components/thread/ThreadMessages.tsx": {
+      "arbitrary-text": 1,
+      "native-button": 1
+    },
+    "src/components/thread/ThreadShell.tsx": {
+      "arbitrary-text": 5,
+      "native-button": 1
+    },
+    "src/components/ui/input.tsx": {
+      "native-input": 1
+    },
+    "src/components/ui/scroll-area.tsx": {
+      "arbitrary-radius": 1
+    },
+    "src/components/ui/textarea.tsx": {
+      "native-textarea": 1
+    },
+    "src/components/UpdateNotification.tsx": {
+      "arbitrary-text": 18
+    },
+    "src/components/workflow/WorkflowEditor.tsx": {
+      "arbitrary-text": 5
+    },
+    "src/components/workflow/WorkflowPanel.tsx": {
+      "arbitrary-text": 15
+    },
+    "src/components/workflow/WorkflowRunCard.tsx": {
+      "arbitrary-text": 12
+    },
+    "src/hooks/useAttachedImages.ts": {
+      "native-input": 1
+    },
+    "src/hooks/useTheme.ts": {
+      "hex-color": 2
+    },
+    "src/lib/notes-export.ts": {
+      "hex-color": 1
+    }
+  }
+}

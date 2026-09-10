@@ -2,6 +2,7 @@ import { render, screen } from "@testing-library/react";
 import { describe, expect, it } from "vitest";
 
 import {
+  AgentAvatar,
   ConversationAvatar,
   fallbackAgentName,
 } from "@/components/room/AgentAvatar";
@@ -11,7 +12,7 @@ import type { ConversationMeta, UIMessage } from "@/lib/types";
 
 describe("fallbackAgentName", () => {
   it("derives a display name from the last dotted id segment", () => {
-    expect(fallbackAgentName("com.mona.a-share-analyst")).toBe("A-share-analyst");
+    expect(fallbackAgentName("com.example.custom-agent")).toBe("Custom-agent");
   });
 
   it("keeps the Mona brand name", () => {
@@ -41,10 +42,16 @@ describe("AgentLogo", () => {
 });
 
 describe("ConversationAvatar", () => {
+  it("uses the current human portrait as Mona's default Agent avatar", () => {
+    const { container } = render(<AgentAvatar agentId="mona" />);
+    expect(container.querySelector('img[src="/brand/mona_avatar_human.png"]')).toBeTruthy();
+    expect(container.querySelector('img[src="/brand/mona_avatar_white.png"]')).toBeNull();
+  });
+
   it("pairs the task initial with a small Mona identity badge", () => {
     const { container } = render(<ConversationAvatar taskTitle="制作新能源报告" />);
     expect(container.textContent).toBe("制");
-    const badge = container.querySelector('img[src="/brand/mona_avatar_white.png"]');
+    const badge = container.querySelector('img[src="/brand/mona_avatar_human.png"]');
     expect(badge).toBeTruthy();
   });
 
@@ -58,7 +65,7 @@ describe("ConversationAvatar", () => {
     expect(container.textContent).toContain("+1");
   });
 
-  it("renders a single initial for partner direct chats", () => {
+  it("renders the built-in avatar for partner direct chats", () => {
     const conversation: ConversationMeta = {
       type: "direct",
       title: "",
@@ -66,8 +73,17 @@ describe("ConversationAvatar", () => {
       directAgentId: "com.mona.a-share-analyst",
     };
     const { container } = render(<ConversationAvatar conversation={conversation} />);
-    expect(container.textContent).toContain("A");
+    expect(container.querySelector('img[src="/brand/agents/a-share-analyst.png"]')).toBeTruthy();
     expect(container.textContent).not.toMatch(/\+\d/);
+  });
+
+  it.each([
+    ["com.mona.xhs-operator", "/brand/agents/xhs-operator.png"],
+    ["com.mona.academic-researcher", "/brand/agents/academic-researcher.png"],
+    ["com.mona.a-share-analyst", "/brand/agents/a-share-analyst.png"],
+  ])("uses a distinct bundled portrait for %s", (agentId, avatarUrl) => {
+    const { container } = render(<AgentAvatar agentId={agentId} />);
+    expect(container.querySelector(`img[src="${avatarUrl}"]`)).toBeTruthy();
   });
 });
 
@@ -92,12 +108,11 @@ describe("ThreadMessages multi-author projection", () => {
         isStreaming={false}
       />,
     );
-    // Registry unavailable in tests → derived fallback name from the id.
-    expect(screen.getByText("A-share-analyst")).toBeTruthy();
+    expect(screen.getByText("股神")).toBeTruthy();
   });
 
   it("shows Mona and partner identities in a group chat", () => {
-    render(
+    const { container } = render(
       <ThreadMessages
         messages={[
           { ...base, id: "mona-1", content: "Mona 的汇总。", authorId: "mona", authorType: "agent" },
@@ -115,9 +130,10 @@ describe("ThreadMessages multi-author projection", () => {
     );
 
     expect(screen.getByText("Mona")).toBeInTheDocument();
-    expect(screen.getByText("A-share-analyst")).toBeInTheDocument();
+    expect(screen.getByText("股神")).toBeInTheDocument();
     expect(screen.getByText("Mona 的汇总。")).toBeInTheDocument();
     expect(screen.getByText("分析师的补充。")).toBeInTheDocument();
+    expect(container.querySelector('img[src="/brand/mona_avatar_human.png"]')).toBeTruthy();
   });
 
   it("uses a left avatar column and weak time divider for spaced group replies", () => {

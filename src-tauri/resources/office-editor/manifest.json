@@ -1,0 +1,11 @@
+{
+    "schemaVersion":  1,
+    "platform":  "windows",
+    "arch":  "x64",
+    "xlsxSidecar":  {
+                        "path":  "sheets/xlsx-sidecar.exe",
+                        "version":  "0.1.0",
+                        "size":  8546304,
+                        "sha256":  "d671c6b8bd98346e4ccd4b43475df314ae6f417f03ec2bd53a3ced37be89872b"
+                    }
+}

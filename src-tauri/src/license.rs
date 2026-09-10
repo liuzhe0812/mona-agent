@@ -4,13 +4,16 @@ use std::path::PathBuf;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use base64::Engine;
 use tauri::{AppHandle, Emitter};
+use tauri_plugin_opener::OpenerExt;
 
 #[cfg(windows)]
 use std::os::windows::process::CommandExt;
 
 const LICENSE_FILENAME: &str = "license.jwt";
-const AUTH_SERVER_URL_PRIMARY: &str = "https://www.mona-ai.cn";
-const AUTH_SERVER_URL_FALLBACK: &str = "https://mona.lzfun.vip";
+const AUTH_TOKEN_SECRET_NAME: &str = "mona_auth_token";
+const AUTH_SERVER_URL_PRIMARY: &str = "https://mona-ai.cn";
+const AUTH_SERVER_URL_FALLBACK: &str = "https://www.mona-ai.cn";
+const LICENSE_CACHE_MAX_AGE_DAYS: i64 = 7;
 
 fn license_dir() -> Result<PathBuf, String> {
     let base = dirs::data_local_dir()
@@ -34,21 +37,39 @@ fn license_cache_path() -> Result<PathBuf, String> {
 // ── Auth token storage ──
 
 fn save_auth_token(token: &str) -> Result<(), String> {
-    let dir = license_dir()?;
-    std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
+    crate::terminal::credential_store::store_secret(AUTH_TOKEN_SECRET_NAME, token)?;
     let path = auth_token_path()?;
-    std::fs::write(&path, token).map_err(|e| e.to_string())
+    if path.exists() {
+        std::fs::remove_file(path).map_err(|e| e.to_string())?;
+    }
+    Ok(())
 }
 
 fn load_auth_token() -> Option<String> {
+    if let Ok(Some(token)) =
+        crate::terminal::credential_store::load_secret(AUTH_TOKEN_SECRET_NAME)
+    {
+        if let Ok(path) = auth_token_path() {
+            if path.exists() {
+                let _ = std::fs::remove_file(path);
+            }
+        }
+        return Some(token);
+    }
     let path = auth_token_path().ok()?;
     if !path.exists() {
         return None;
     }
-    std::fs::read_to_string(&path).ok().map(|s| s.trim().to_string())
+    let token = std::fs::read_to_string(&path).ok()?.trim().to_string();
+    if save_auth_token(&token).is_ok() {
+        Some(token)
+    } else {
+        None
+    }
 }
 
 pub fn remove_auth_token() -> Result<(), String> {
+    crate::terminal::credential_store::delete_secret(AUTH_TOKEN_SECRET_NAME)?;
     let path = auth_token_path()?;
     if path.exists() {
         std::fs::remove_file(&path).map_err(|e| e.to_string())?;
@@ -65,6 +86,8 @@ struct LicenseCache {
     trial: bool,
     email: Option<String>,
     account: Option<String>,
+    #[serde(default)]
+    verified_at: Option<String>,
 }
 
 fn save_license_cache(cache: &LicenseCache) {
@@ -105,8 +128,7 @@ fn build_client() -> Result<reqwest::Client, String> {
         .map_err(|e| format!("HTTP client error: {}", e))
 }
 
-/// 依次尝试主备域名发送请求。主域名 (www.mona-ai.cn) 可能被 SNI 阻断，
-/// 回退到已备案的 mona.lzfun.vip（同一 VPS）。只在连接失败时回退，
+/// 依次尝试 Mona 根域名和 www 兼容域名发送请求。只在连接失败时回退，
 /// 收到 HTTP 响应（含 4xx/5xx）直接返回。
 async fn auth_send<F>(build: F) -> Result<reqwest::Response, String>
 where
@@ -124,6 +146,58 @@ where
         }
     }
     Err(last_err)
+}
+
+async fn service_json(resp: reqwest::Response) -> Result<serde_json::Value, String> {
+    let status = resp.status();
+    if status == reqwest::StatusCode::UNAUTHORIZED {
+        let _ = remove_auth_token();
+        return Err("登录已过期，请重新登录 (401)".to_string());
+    }
+    let content_type = resp
+        .headers()
+        .get(reqwest::header::CONTENT_TYPE)
+        .and_then(|value| value.to_str().ok())
+        .unwrap_or("")
+        .to_string();
+    let text = resp
+        .text()
+        .await
+        .map_err(|_| "读取 Mona 服务响应失败，请稍后重试".to_string())?;
+    let body = decode_service_body(status, &content_type, &text)?;
+    if status.is_success() {
+        return Ok(body);
+    }
+    let code = body.get("error").and_then(|value| value.as_str()).unwrap_or("");
+    let message = match code {
+        "credit_payments_disabled" => "余额充值暂未开放",
+        "alipay_disabled" => "支付宝支付暂不可用",
+        "product_not_found" => "充值商品已下架，请刷新后重试",
+        "custom_recharge_disabled" => "自定义充值暂不可用",
+        "custom_recharge_out_of_range" => "充值金额超出管理员设置范围",
+        "order_conflict" => "充值订单状态已变化，请重新发起",
+        "managed_model_unavailable" => "Mona AI 暂不可用",
+        "insufficient_credits" => "模型余额不足，请先充值",
+        _ => body
+            .get("detail")
+            .and_then(|value| value.as_str())
+            .unwrap_or("服务请求失败"),
+    };
+    Err(format!("{} ({})", message, status.as_u16()))
+}
+
+fn decode_service_body(
+    status: reqwest::StatusCode,
+    content_type: &str,
+    text: &str,
+) -> Result<serde_json::Value, String> {
+    serde_json::from_str(text).map_err(|_| {
+        if !content_type.to_ascii_lowercase().contains("json") {
+            "Mona 服务尚未部署或路由异常，请升级服务端".to_string()
+        } else {
+            format!("Mona 服务返回格式异常 ({})", status.as_u16())
+        }
+    })
 }
 
 #[tauri::command]
@@ -187,12 +261,6 @@ pub async fn mark_notification_read(notification_id: i64) -> Result<serde_json::
     }
 
     Ok(serde_json::json!({ "success": true }))
-}
-
-#[derive(Debug, Serialize, Deserialize)]
-struct TokenResponse {
-    access_token: String,
-    expires_in: i64,
 }
 
 /// 将后端返回的错误码翻译为用户可读的中文提示
@@ -495,6 +563,7 @@ pub async fn create_subscription(plan_code: String, payment_method: String) -> R
         .map_err(|_| format!("Server returned status {} with non-JSON response", status))?;
 
     if body.get("payment_url").is_some() {
+        validate_payment_urls_in_payload(&body)?;
         return Ok(body);
     }
 
@@ -540,6 +609,218 @@ pub async fn get_subscription_info() -> Result<serde_json::Value, String> {
     }
 
     resp.json::<serde_json::Value>().await.map_err(|e| format!("Parse error: {}", e))
+}
+
+#[tauri::command]
+pub async fn get_credit_products() -> Result<serde_json::Value, String> {
+    let token = load_auth_token().ok_or_else(|| "Not logged in".to_string())?;
+    let resp = auth_send(|client, base| {
+        client
+            .get(format!("{}/credits/products", base))
+            .header("Authorization", format!("Bearer {}", token))
+    })
+    .await?;
+    service_json(resp).await
+}
+
+#[tauri::command]
+pub async fn get_credit_balance() -> Result<serde_json::Value, String> {
+    let token = load_auth_token().ok_or_else(|| "Not logged in".to_string())?;
+    let resp = auth_send(|client, base| {
+        client
+            .get(format!("{}/credits/balance", base))
+            .header("Authorization", format!("Bearer {}", token))
+    })
+    .await?;
+    service_json(resp).await
+}
+
+#[tauri::command]
+pub async fn get_credit_ledger(limit: u32) -> Result<serde_json::Value, String> {
+    if !(1..=100).contains(&limit) {
+        return Err("limit must be between 1 and 100".to_string());
+    }
+    let token = load_auth_token().ok_or_else(|| "Not logged in".to_string())?;
+    let resp = auth_send(|client, base| {
+        client
+            .get(format!("{}/credits/ledger?limit={}", base, limit))
+            .header("Authorization", format!("Bearer {}", token))
+    })
+    .await?;
+    service_json(resp).await
+}
+
+#[tauri::command]
+pub async fn get_credit_orders(limit: u32) -> Result<serde_json::Value, String> {
+    if !(1..=50).contains(&limit) {
+        return Err("limit must be between 1 and 50".to_string());
+    }
+    let token = load_auth_token().ok_or_else(|| "Not logged in".to_string())?;
+    let resp = auth_send(|client, base| {
+        client
+            .get(format!("{}/credits/orders?limit={}", base, limit))
+            .header("Authorization", format!("Bearer {}", token))
+    })
+    .await?;
+    let body = service_json(resp).await?;
+    validate_payment_urls_in_payload(&body)?;
+    Ok(body)
+}
+
+#[tauri::command]
+pub async fn get_credit_usage(tz_offset_minutes: i32) -> Result<serde_json::Value, String> {
+    if !(-720..=840).contains(&tz_offset_minutes) {
+        return Err("timezone offset must be between -720 and 840 minutes".to_string());
+    }
+    let token = load_auth_token().ok_or_else(|| "Not logged in".to_string())?;
+    let resp = auth_send(|client, base| {
+        client
+            .get(format!(
+                "{}/credits/usage?tz_offset_minutes={}",
+                base, tz_offset_minutes
+            ))
+            .header("Authorization", format!("Bearer {}", token))
+    })
+    .await?;
+    service_json(resp).await
+}
+
+#[tauri::command]
+pub async fn create_credit_order(
+    product_code: String,
+    idempotency_key: String,
+) -> Result<serde_json::Value, String> {
+    if !(16..=64).contains(&idempotency_key.len())
+        || !idempotency_key
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'_' | b'-'))
+    {
+        return Err("Invalid credit order idempotency key".to_string());
+    }
+    let token = load_auth_token().ok_or_else(|| "Not logged in".to_string())?;
+    let resp = auth_send(|client, base| {
+        client
+            .post(format!("{}/credits/orders", base))
+            .header("Authorization", format!("Bearer {}", token))
+            .json(&serde_json::json!({
+                "product_code": product_code,
+                "idempotency_key": idempotency_key,
+            }))
+    })
+    .await?;
+    let body = service_json(resp).await?;
+    validate_payment_urls_in_payload(&body)?;
+    Ok(body)
+}
+
+fn valid_custom_recharge_amount(raw: &str) -> bool {
+    let mut parts = raw.split('.');
+    let whole = parts.next().unwrap_or_default();
+    let fraction = parts.next();
+    if parts.next().is_some()
+        || whole.is_empty()
+        || whole.len() > 10
+        || !whole.bytes().all(|byte| byte.is_ascii_digit())
+    {
+        return false;
+    }
+    if let Some(value) = fraction {
+        if value.is_empty()
+            || value.len() > 2
+            || !value.bytes().all(|byte| byte.is_ascii_digit())
+        {
+            return false;
+        }
+    }
+    raw.bytes().any(|byte| byte.is_ascii_digit() && byte != b'0')
+}
+
+#[tauri::command]
+pub async fn create_custom_credit_order(
+    amount: String,
+    idempotency_key: String,
+) -> Result<serde_json::Value, String> {
+    if !valid_custom_recharge_amount(&amount) {
+        return Err("Invalid custom recharge amount".to_string());
+    }
+    if !(16..=64).contains(&idempotency_key.len())
+        || !idempotency_key
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'_' | b'-'))
+    {
+        return Err("Invalid credit order idempotency key".to_string());
+    }
+    let token = load_auth_token().ok_or_else(|| "Not logged in".to_string())?;
+    let resp = auth_send(|client, base| {
+        client
+            .post(format!("{}/credits/orders", base))
+            .header("Authorization", format!("Bearer {}", token))
+            .json(&serde_json::json!({
+                "custom_amount": amount,
+                "idempotency_key": idempotency_key,
+            }))
+    })
+    .await?;
+    let body = service_json(resp).await?;
+    validate_payment_urls_in_payload(&body)?;
+    Ok(body)
+}
+
+#[tauri::command]
+pub async fn get_credit_order_status(
+    order_id: i64,
+    reconcile: Option<bool>,
+) -> Result<serde_json::Value, String> {
+    let token = load_auth_token().ok_or_else(|| "Not logged in".to_string())?;
+    let resp = auth_send(|client, base| {
+        client
+            .get(format!("{}/credits/orders/{}", base, order_id))
+            .query(&[("reconcile", reconcile.unwrap_or(false))])
+            .header("Authorization", format!("Bearer {}", token))
+    })
+    .await?;
+    service_json(resp).await
+}
+
+#[tauri::command]
+pub async fn get_model_access_credentials() -> Result<serde_json::Value, String> {
+    let token = load_auth_token().ok_or_else(|| "Not logged in".to_string())?;
+    let resp = auth_send(|client, base| {
+        client
+            .post(format!("{}/model-access/token", base))
+            .header("Authorization", format!("Bearer {}", token))
+    })
+    .await?;
+    let mut api_base = resp.url().clone();
+    api_base.set_path("/v1");
+    api_base.set_query(None);
+    let mut body = service_json(resp).await?;
+    body["api_base"] = serde_json::Value::String(api_base.to_string().trim_end_matches('/').to_string());
+    Ok(body)
+}
+
+#[tauri::command]
+pub async fn get_managed_model_prices() -> Result<serde_json::Value, String> {
+    let token = load_auth_token().ok_or_else(|| "Not logged in".to_string())?;
+    let resp = auth_send(|client, base| {
+        client
+            .get(format!("{}/model-access/prices", base))
+            .header("Authorization", format!("Bearer {}", token))
+    })
+    .await?;
+    service_json(resp).await
+}
+
+#[tauri::command]
+pub async fn get_managed_model_catalog() -> Result<serde_json::Value, String> {
+    let token = load_auth_token().ok_or_else(|| "Not logged in".to_string())?;
+    let resp = auth_send(|client, base| {
+        client
+            .get(format!("{}/model-access/catalog", base))
+            .header("Authorization", format!("Bearer {}", token))
+    })
+    .await?;
+    service_json(resp).await
 }
 
 #[tauri::command]
@@ -590,34 +871,53 @@ pub async fn list_renewals() -> Result<serde_json::Value, String> {
     resp.json::<serde_json::Value>().await.map_err(|e| format!("Parse error: {}", e))
 }
 
-#[tauri::command]
-pub async fn open_external_url(url: String) -> Result<(), String> {
-    // 使用系统默认浏览器打开支付 URL
-    #[cfg(windows)]
+fn validate_payment_url(raw: &str) -> Result<url::Url, String> {
+    let parsed = url::Url::parse(raw).map_err(|_| "Invalid payment URL".to_string())?;
+    let allowed_host = matches!(
+        parsed.host_str(),
+        Some("openapi.alipay.com" | "openapi-sandbox.dl.alipaydev.com")
+    );
+    if parsed.scheme() != "https"
+        || !allowed_host
+        || !parsed.username().is_empty()
+        || parsed.password().is_some()
+        || parsed.port_or_known_default() != Some(443)
     {
-        // raw_arg 避免对 URL 中的 & " 等特殊字符二次转义
-        // 构造命令行: cmd /c start "" "https://..."
-        std::process::Command::new("cmd")
-            .raw_arg(format!("/c start \"\" \"{}\"", url))
-            .creation_flags(0x08000000)
-            .spawn()
-            .map_err(|e| format!("Failed to open URL: {}", e))?;
+        return Err("Payment URL is not an allowed Alipay HTTPS endpoint".to_string());
     }
-    #[cfg(target_os = "macos")]
-    {
-        std::process::Command::new("open")
-            .arg(&url)
-            .spawn()
-            .map_err(|e| format!("Failed to open URL: {}", e))?;
+    Ok(parsed)
+}
+
+fn validate_payment_urls_in_payload(body: &serde_json::Value) -> Result<(), String> {
+    if let Some(value) = body.get("payment_url") {
+        if !value.is_null() {
+            let payment_url = value
+                .as_str()
+                .ok_or_else(|| "Invalid payment URL field".to_string())?;
+            validate_payment_url(payment_url)?;
+        }
     }
-    #[cfg(target_os = "linux")]
-    {
-        std::process::Command::new("xdg-open")
-            .arg(&url)
-            .spawn()
-            .map_err(|e| format!("Failed to open URL: {}", e))?;
+    if let Some(orders) = body.get("orders").and_then(|value| value.as_array()) {
+        for order in orders {
+            if let Some(value) = order.get("payment_url") {
+                if !value.is_null() {
+                    let payment_url = value
+                        .as_str()
+                        .ok_or_else(|| "Invalid payment URL field".to_string())?;
+                    validate_payment_url(payment_url)?;
+                }
+            }
+        }
     }
     Ok(())
+}
+
+#[tauri::command]
+pub async fn open_payment_url(app: AppHandle, url: String) -> Result<(), String> {
+    let payment_url = validate_payment_url(&url)?;
+    app.opener()
+        .open_url(payment_url.as_str(), None::<&str>)
+        .map_err(|e| format!("Failed to open payment URL: {}", e))
 }
 
 #[tauri::command]
@@ -650,7 +950,10 @@ pub async fn check_license() -> Result<serde_json::Value, String> {
             }
             Err(_) => {
                 // Network error — fall back to local cache
-                if let Some(cache) = load_license_cache() {
+                if let Some(mut cache) = load_license_cache() {
+                    if !cached_license_has_access(&cache) {
+                        cache.status = "expired".to_string();
+                    }
                     return Ok(serde_json::to_value(&cache).unwrap_or_default());
                 }
                 // No cache and offline — no access. User must register/login
@@ -681,7 +984,7 @@ pub async fn check_license() -> Result<serde_json::Value, String> {
 /// Read-only local license state check for Agent subscription gating.
 ///
 /// Returns `true` only when one of the following local, trusted sources is
-/// valid: imported `license.jwt` or cached server result (`license_cache.json`).
+/// valid: imported `license.jwt` or a server result cached within the last 7 days.
 /// No network requests are made — this is safe to call on every Agent turn.
 /// Fail-closed: any read/parse error returns `false` so that personal data is
 /// never leaked to an unverified state.
@@ -708,16 +1011,7 @@ pub fn check_license_access() -> bool {
 
     // 2. Cached server license result (offline fallback, no network)
     if let Some(cache) = load_license_cache() {
-        if cache.status == "valid" {
-            if let Some(ref exp_str) = cache.expires_at {
-                if !is_expired(exp_str) {
-                    return true;
-                }
-            } else {
-                // No expiry recorded — trust the cached "valid" status
-                return true;
-            }
-        }
+        return cached_license_has_access(&cache);
     }
 
     false
@@ -777,6 +1071,7 @@ async fn check_license_server(token: &str) -> Result<LicenseCache, String> {
         trial: body.get("trial").and_then(|v| v.as_bool()).unwrap_or(false),
         email: body.get("email").and_then(|v| v.as_str()).map(|s| s.to_string()),
         account: body.get("account").and_then(|v| v.as_str()).map(|s| s.to_string()),
+        verified_at: Some(chrono::Utc::now().to_rfc3339()),
     })
 }
 
@@ -804,6 +1099,13 @@ fn check_paid_license(path: &PathBuf) -> Result<serde_json::Value, String> {
             }));
         }
     };
+
+    if decoded.claims.plan != "pro" {
+        return Ok(serde_json::json!({
+            "status": "invalid",
+            "expires_at": format_exp(decoded.claims.exp)
+        }));
+    }
 
     let current_fp = {
         let machine_id = get_machine_fingerprint();
@@ -897,13 +1199,148 @@ fn extract_exp_fallback(token: &str) -> Option<String> {
 
 #[cfg(test)]
 mod subscription_access_tests {
-    use super::is_expired;
+    use super::{
+        cached_license_has_access, create_credit_order, create_custom_credit_order,
+        decode_service_body, get_credit_ledger, get_credit_orders, get_credit_usage, is_expired,
+        valid_custom_recharge_amount, validate_payment_url, validate_payment_urls_in_payload,
+        LicenseCache,
+    };
 
     #[test]
     fn invalid_cached_expiry_is_rejected() {
         assert!(is_expired("not-a-date"));
         assert!(is_expired(""));
     }
+
+    #[test]
+    fn server_cache_requires_recent_verification() {
+        let mut cache = LicenseCache {
+            status: "valid".to_string(),
+            expires_at: None,
+            trial: false,
+            email: None,
+            account: None,
+            verified_at: Some(chrono::Utc::now().to_rfc3339()),
+        };
+        assert!(cached_license_has_access(&cache));
+
+        cache.verified_at = Some(
+            (chrono::Utc::now() - chrono::Duration::days(8)).to_rfc3339(),
+        );
+        assert!(!cached_license_has_access(&cache));
+    }
+
+    #[tokio::test]
+    async fn credit_ledger_limit_is_validated_before_network_access() {
+        assert_eq!(
+            get_credit_ledger(0).await.unwrap_err(),
+            "limit must be between 1 and 100"
+        );
+        assert_eq!(
+            get_credit_ledger(101).await.unwrap_err(),
+            "limit must be between 1 and 100"
+        );
+        assert_eq!(
+            get_credit_orders(0).await.unwrap_err(),
+            "limit must be between 1 and 50"
+        );
+        assert_eq!(
+            get_credit_orders(51).await.unwrap_err(),
+            "limit must be between 1 and 50"
+        );
+        assert_eq!(
+            get_credit_usage(-721).await.unwrap_err(),
+            "timezone offset must be between -720 and 840 minutes"
+        );
+        assert_eq!(
+            get_credit_usage(841).await.unwrap_err(),
+            "timezone offset must be between -720 and 840 minutes"
+        );
+        assert_eq!(
+            create_credit_order("starter".into(), "short".into())
+                .await
+                .unwrap_err(),
+            "Invalid credit order idempotency key"
+        );
+        assert_eq!(
+            create_custom_credit_order("1.001".into(), "checkoutattempt0001".into())
+                .await
+                .unwrap_err(),
+            "Invalid custom recharge amount"
+        );
+    }
+
+    #[test]
+    fn custom_recharge_amount_uses_plain_positive_cents() {
+        assert!(valid_custom_recharge_amount("1"));
+        assert!(valid_custom_recharge_amount("1.20"));
+        assert!(valid_custom_recharge_amount("5000.00"));
+        assert!(!valid_custom_recharge_amount("0"));
+        assert!(!valid_custom_recharge_amount("-1"));
+        assert!(!valid_custom_recharge_amount("1.001"));
+        assert!(!valid_custom_recharge_amount("1e2"));
+    }
+
+    #[test]
+    fn payment_urls_are_restricted_to_alipay_https_gateways() {
+        assert!(validate_payment_url("https://openapi.alipay.com/gateway.do?x=1").is_ok());
+        assert!(validate_payment_url(
+            "https://openapi-sandbox.dl.alipaydev.com/gateway.do?x=1"
+        )
+        .is_ok());
+        assert!(validate_payment_url("http://openapi.alipay.com/gateway.do").is_err());
+        assert!(validate_payment_url("https://example.com/gateway.do").is_err());
+        assert!(validate_payment_url(
+            "https://openapi.alipay.com.evil.example/gateway.do"
+        )
+        .is_err());
+        assert!(validate_payment_urls_in_payload(&serde_json::json!({
+            "payment_url": "https://example.com/phishing"
+        }))
+        .is_err());
+        assert!(validate_payment_urls_in_payload(&serde_json::json!({
+            "orders": [{
+                "payment_url": "https://openapi.alipay.com/gateway.do?order=1"
+            }]
+        }))
+        .is_ok());
+    }
+
+    #[test]
+    fn non_json_service_pages_report_a_deployment_mismatch() {
+        assert_eq!(
+            decode_service_body(
+                reqwest::StatusCode::OK,
+                "text/html; charset=utf-8",
+                "<html>Mona</html>",
+            )
+            .unwrap_err(),
+            "Mona 服务尚未部署或路由异常，请升级服务端"
+        );
+        assert_eq!(
+            decode_service_body(
+                reqwest::StatusCode::BAD_GATEWAY,
+                "application/json",
+                "not-json",
+            )
+            .unwrap_err(),
+            "Mona 服务返回格式异常 (502)"
+        );
+    }
+}
+
+fn cached_license_has_access(cache: &LicenseCache) -> bool {
+    if cache.status != "valid" {
+        return false;
+    }
+    if cache.expires_at.as_deref().is_some_and(is_expired) {
+        return false;
+    }
+    let Some(verified_at) = cache.verified_at.as_deref().and_then(parse_expiry) else {
+        return false;
+    };
+    chrono::Utc::now().signed_duration_since(verified_at)
+        <= chrono::Duration::days(LICENSE_CACHE_MAX_AGE_DAYS)
 }
 
 fn format_exp(exp: usize) -> String {

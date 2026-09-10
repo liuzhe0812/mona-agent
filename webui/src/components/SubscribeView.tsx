@@ -7,8 +7,9 @@ import { isTauri } from "@/lib/tauri";
 
 const PRO_BENEFITS = [
   "让 Mona 理解你的工作上下文",
-  "在笔记、终端、邮件等模块获得AI协作",
-  "使用知识库、AI 文档与跨模块知识沉淀",
+  "解锁笔记 AI、邮件 AI 与知识库 AI",
+  "解锁数据库 AI 与终端 AI",
+  "使用股票工作台 AI 诊股",
 ];
 
 interface SubscribeViewProps {
@@ -177,6 +178,9 @@ export function SubscribeView({
             <span>{benefit}</span>
           </div>
         ))}
+        <p className="pt-1 text-xs text-muted-foreground">
+          Pro 为软件功能权益；Mona AI 模型调用余额需单独充值，我的 API Key 不扣余额。
+        </p>
       </div>
 
       <div className="grid grid-cols-3 gap-3">
@@ -284,7 +288,7 @@ export function SubscribeView({
 
       {licenseActive && serverTrial && (
         <p className="text-center text-sm text-amber-600">
-          当前为试用状态，购买正式订阅可解锁全部功能。
+          当前为 Mona Pro 全功能试用，购买后可延续全部权益。
         </p>
       )}
 

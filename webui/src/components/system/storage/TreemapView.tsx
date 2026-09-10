@@ -76,6 +76,9 @@ interface Props {
   error: string | null;
   /** 点击某个块下钻 */
   onDrillDown: (path: string) => void;
+  /** 当前选择，用于与目录树和 AI 上下文同步 */
+  selectedPath?: string | null;
+  onSelect?: (path: string) => void;
   /** 点击地址栏项回退 */
   onNavigate: (path: string | null) => void;
 }
@@ -97,6 +100,8 @@ export function TreemapView({
   loading,
   error,
   onDrillDown,
+  selectedPath = null,
+  onSelect,
   onNavigate,
 }: Props) {
   const containerRef = useRef<HTMLDivElement>(null);
@@ -242,13 +247,29 @@ export function TreemapView({
               const fillOpacity = tile.data.isOther ? 0.3 : tile.hasChildren ? 0.85 : 0.5;
               const textColor = tileTextColor(tile.color, fillOpacity);
               const clickable = !tile.data.isOther && tile.hasChildren;
+              const selectable = !tile.data.isOther;
+              const selected = selectedPath === tile.data.path;
               const showLabel = w > 60 && h > 28;
               const showSize = w > 60 && h > 44;
+              const activate = () => {
+                if (!selectable) return;
+                onSelect?.(tile.data.path);
+                if (clickable) onDrillDown(tile.data.path);
+              };
               return (
                 <g
                   key={tile.data.path}
-                  className={clickable ? "cursor-pointer" : "cursor-default"}
-                  onClick={() => clickable && onDrillDown(tile.data.path)}
+                  role={selectable ? "button" : undefined}
+                  tabIndex={selectable ? 0 : undefined}
+                  aria-label={selectable ? `${tile.data.name}，${formatStorage(tile.data.sizeGb)}` : undefined}
+                  className={selectable ? "cursor-pointer" : "cursor-default"}
+                  onClick={activate}
+                  onKeyDown={(event) => {
+                    if ((event.key === "Enter" || event.key === " ") && selectable) {
+                      event.preventDefault();
+                      activate();
+                    }
+                  }}
                 >
                   <title>{tile.data.path}</title>
                   <rect
@@ -258,8 +279,8 @@ export function TreemapView({
                     height={h}
                     fill={tile.color}
                     fillOpacity={fillOpacity}
-                    stroke="hsl(var(--background))"
-                    strokeWidth={1}
+                    stroke={selected ? "hsl(var(--foreground))" : "hsl(var(--background))"}
+                    strokeWidth={selected ? 2 : 1}
                     className={clickable ? "transition-all hover:fill-opacity-100 hover:stroke-2" : undefined}
                   />
                   {showLabel && (

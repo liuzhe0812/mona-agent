@@ -41,6 +41,20 @@ describe("local shell startup", () => {
     expect(mocks.invoke).toHaveBeenCalledWith("shell_spawn", {
       cols: 80,
       rows: 24,
+      cwd: null,
+    });
+  });
+
+  it("passes the current workspace as the shell working directory", async () => {
+    mocks.listen.mockResolvedValue(() => {});
+    await onTerminalOutput(() => {});
+
+    await expect(shellSpawn(100, 30, "D:\\workspace\\project")).resolves.toBe("session-1");
+
+    expect(mocks.invoke).toHaveBeenCalledWith("shell_spawn", {
+      cols: 100,
+      rows: 30,
+      cwd: "D:\\workspace\\project",
     });
   });
 });

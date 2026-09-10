@@ -28,6 +28,7 @@ from mona.services.stock.provider import (
     ProviderError,
 )
 from mona.services.stock.storage import infer_exchange
+from mona.services.stock.westock_runtime import create_default_westock_provider
 
 _EXCHANGES = ("XSHG", "XSHE", "BJSE")
 _INSTRUMENT_TYPES = ("equity", "etf", "index")
@@ -818,6 +819,9 @@ class StockContextReadTool(Tool, ContextAware):
                 workspace=self._workspace,
                 provider=self._provider,
                 research_provider=self._research_provider,
+                supplement_provider=create_default_westock_provider(
+                    Path.home() / ".mona" / "stock" / "cache"
+                ),
             ).build_context(
                 context_id,
                 inst,

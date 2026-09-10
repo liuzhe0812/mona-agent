@@ -238,10 +238,12 @@ class MaterialBindingStore:
 
     def __init__(self, workspace: Path) -> None:
         self.workspace = Path(workspace).expanduser().resolve()
-        self.materials_root = self.workspace / ".mona" / "materials"
+        materials_base = self.workspace / ".mona" / "materials"
+        default_library = materials_base / "libraries" / "kb-default"
+        self.materials_root = default_library if default_library.exists() else materials_base
         self.text_root = self.materials_root / "text"
         self.raw_root = self.materials_root / "raw"
-        self.path = self.materials_root / "stock-bindings.json"
+        self.path = materials_base / "stock-bindings.json"
 
     # ------------------------------------------------------------------
     # Public lifecycle

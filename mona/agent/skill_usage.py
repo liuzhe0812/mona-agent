@@ -267,6 +267,53 @@ def record_agent_created(name: str, agent_id: str = MONA_AGENT_ID) -> None:
     _mutate(name, _apply, agent_id)
 
 
+def migrate_legacy_self_evolution(agent_id: str = MONA_AGENT_ID) -> list[str]:
+    """Backfill provenance for pre-sidecar private skills exactly once.
+
+    Before per-Agent provenance existed, Mona's private skills directory was
+    the self-evolution store.  Skills without any install/origin evidence are
+    therefore legacy Agent-created skills; future unknown skills are not
+    inferred after the marker is written.
+    """
+    root = _skills_dir(agent_id)
+    marker = root / ".legacy-self-evolution-v1"
+    if marker.exists():
+        return []
+    migrated: list[str] = []
+    with _lifecycle_lock(agent_id):
+        data = load_usage(agent_id)
+        names = list_active_user_skill_names(agent_id) + list_archived_skill_names(agent_id)
+        for name in names:
+            existing = data.get(name) if isinstance(data.get(name), dict) else {}
+            if existing.get("created_by") is not None:
+                continue
+            if any(existing.get(key) for key in ("origin", "source", "installed_at", "approved_at")):
+                continue
+            rec = _empty_record()
+            rec.update(existing)
+            rec["created_by"] = "agent"
+            rec["origin"] = "legacy_self_evolution"
+            rec["source"] = "legacy:mona:skills"
+            if not existing.get("created_at"):
+                path = (
+                    _archive_dir(agent_id) / name / "SKILL.md"
+                    if is_archived(name, agent_id)
+                    else root / name / "SKILL.md"
+                )
+                try:
+                    rec["created_at"] = datetime.fromtimestamp(
+                        path.stat().st_mtime, tz=timezone.utc
+                    ).isoformat()
+                except OSError:
+                    pass
+            data[name] = rec
+            migrated.append(name)
+        if migrated:
+            save_usage(data, agent_id)
+        marker.write_text(_now_iso(), encoding="utf-8")
+    return sorted(migrated)
+
+
 def record_install(
     name: str,
     *,
@@ -276,7 +323,7 @@ def record_install(
     content_hash: str,
     scripts_approved: bool,
 ) -> None:
-    """Record a user-approved private-skill installation in the existing ledger."""
+    """Record a private Skill installation in the existing ledger."""
     def _apply(rec: dict[str, Any]) -> None:
         now = _now_iso()
         rec["created_by"] = "agent" if origin == "agent" else "user"
@@ -286,7 +333,7 @@ def record_install(
         rec["source"] = source
         rec["content_hash"] = content_hash
         rec["installed_at"] = now
-        rec["approved_at"] = now
+        rec["approved_at"] = None if origin == "agent" else now
         rec["scripts_approved"] = bool(scripts_approved)
 
     _mutate(name, _apply, agent_id)

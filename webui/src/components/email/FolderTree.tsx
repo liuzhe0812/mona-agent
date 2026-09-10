@@ -50,6 +50,7 @@ interface FolderTreeProps {
   gatewayUrl: string;
   view?: "mail" | "contacts";
   onViewChange?: (view: "mail" | "contacts") => void;
+  onOpenSubscribe?: () => void;
 }
 
 function isJunkFolder(name: string): boolean {
@@ -111,7 +112,7 @@ function getFolderIcon(name: string): React.ComponentType<{ className?: string }
   return Mail;
 }
 
-export function FolderTree({ gatewayUrl, view = "mail", onViewChange }: FolderTreeProps) {
+export function FolderTree({ gatewayUrl, view = "mail", onViewChange, onOpenSubscribe }: FolderTreeProps) {
   const accounts = useEmailStore((s) => s.accounts);
   const selectedAccountId = useEmailStore((s) => s.selectedAccountId);
   const foldersByAccount = useEmailStore((s) => s.foldersByAccount);
@@ -630,6 +631,7 @@ export function FolderTree({ gatewayUrl, view = "mail", onViewChange }: FolderTr
         open={settingsOpen}
         onOpenChange={setSettingsOpen}
         account={contextAccount}
+        onOpenSubscribe={onOpenSubscribe}
       />
       <NewAccountDialog
         open={newAccountOpen}

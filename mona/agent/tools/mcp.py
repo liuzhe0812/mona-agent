@@ -29,6 +29,7 @@ _TRANSIENT_EXC_NAMES: frozenset[str] = frozenset((
 ))
 
 _WINDOWS_SHELL_LAUNCHERS: frozenset[str] = frozenset(("npx", "npm", "pnpm", "yarn", "bunx"))
+BUILTIN_COMPUTER_SERVER_NAME = "__mona_computer_use"
 
 # Characters allowed in tool names by model providers (Anthropic, OpenAI, etc.).
 # Replace anything outside [a-zA-Z0-9_-] with underscore and collapse runs.
@@ -38,6 +39,12 @@ _SANITIZE_RE = re.compile(r"_+")
 def _sanitize_name(name: str) -> str:
     """Sanitize an MCP-derived name for model API compatibility."""
     return _SANITIZE_RE.sub("_", re.sub(r"[^a-zA-Z0-9_-]", "_", name))
+
+
+def _wrapped_tool_name(server_name: str, original_name: str) -> str:
+    if server_name == BUILTIN_COMPUTER_SERVER_NAME:
+        return _sanitize_name(f"computer_{original_name}")
+    return _sanitize_name(f"mcp_{server_name}_{original_name}")
 
 
 def _is_transient(exc: BaseException) -> bool:
@@ -173,12 +180,27 @@ class MCPToolWrapper(Tool):
 
     def __init__(self, session, server_name: str, tool_def, tool_timeout: int = 30):
         self._session = session
+        self._server_name = server_name
         self._original_name = tool_def.name
-        self._name = _sanitize_name(f"mcp_{server_name}_{tool_def.name}")
+        self._name = _wrapped_tool_name(server_name, tool_def.name)
         self._description = tool_def.description or tool_def.name
         raw_schema = tool_def.inputSchema or {"type": "object", "properties": {}}
         self._parameters = _normalize_schema_for_openai(raw_schema)
+        if server_name == BUILTIN_COMPUTER_SERVER_NAME:
+            properties = self._parameters.get("properties")
+            if isinstance(properties, dict):
+                properties.pop("screenshot_out_file", None)
         self._tool_timeout = tool_timeout
+        annotations = getattr(tool_def, "annotations", None)
+        if isinstance(annotations, dict):
+            self._read_only = bool(
+                annotations.get("readOnlyHint") or annotations.get("read_only_hint")
+            )
+        else:
+            self._read_only = bool(
+                getattr(annotations, "readOnlyHint", False)
+                or getattr(annotations, "read_only_hint", False)
+            )
 
     @property
     def name(self) -> str:
@@ -192,8 +214,18 @@ class MCPToolWrapper(Tool):
     def parameters(self) -> dict[str, Any]:
         return self._parameters
 
-    async def execute(self, **kwargs: Any) -> str:
+    @property
+    def read_only(self) -> bool:
+        return self._read_only
+
+    async def execute(self, **kwargs: Any) -> Any:
         from mcp import types
+
+        if (
+            self._server_name == BUILTIN_COMPUTER_SERVER_NAME
+            and "screenshot_out_file" in kwargs
+        ):
+            return "Computer screenshots are returned directly; explicit output paths are disabled."
 
         for attempt in range(2):  # At most 1 retry
             try:
@@ -240,12 +272,33 @@ class MCPToolWrapper(Tool):
                 return f"(MCP tool call failed: {type(exc).__name__})"
             else:
                 # Success — extract result
-                parts = []
+                parts: list[str] = []
+                blocks: list[dict[str, Any]] = []
                 for block in result.content:
                     if isinstance(block, types.TextContent):
                         parts.append(block.text)
+                        blocks.append({"type": "text", "text": block.text})
+                    elif (
+                        getattr(types, "ImageContent", None) is not None
+                        and isinstance(block, types.ImageContent)
+                    ):
+                        mime = getattr(block, "mimeType", None) or getattr(
+                            block, "mime_type", "image/png"
+                        )
+                        blocks.append(
+                            {
+                                "type": "image_url",
+                                "image_url": {
+                                    "url": f"data:{mime};base64,{block.data}"
+                                },
+                            }
+                        )
                     else:
-                        parts.append(str(block))
+                        rendered = str(block)
+                        parts.append(rendered)
+                        blocks.append({"type": "text", "text": rendered})
+                if any(item.get("type") == "image_url" for item in blocks):
+                    return blocks or [{"type": "text", "text": "(no output)"}]
                 return "\n".join(parts) or "(no output)"
 
         return "(MCP tool call failed)"  # Unreachable, but satisfies type checkers
@@ -560,9 +613,11 @@ async def connect_single_mcp_server(
         registered_count = 0
         matched_enabled_tools: set[str] = set()
         available_raw_names = [tool_def.name for tool_def in tools.tools]
-        available_wrapped_names = [_sanitize_name(f"mcp_{name}_{tool_def.name}") for tool_def in tools.tools]
+        available_wrapped_names = [
+            _wrapped_tool_name(name, tool_def.name) for tool_def in tools.tools
+        ]
         for tool_def in tools.tools:
-            wrapped_name = _sanitize_name(f"mcp_{name}_{tool_def.name}")
+            wrapped_name = _wrapped_tool_name(name, tool_def.name)
             if (
                 not allow_all_tools
                 and tool_def.name not in enabled_tools
@@ -596,31 +651,32 @@ async def connect_single_mcp_server(
                     ", ".join(available_wrapped_names) or "(none)",
                 )
 
-        try:
-            resources_result = await session.list_resources()
-            for resource in resources_result.resources:
-                wrapper = MCPResourceWrapper(
-                    session, name, resource, resource_timeout=cfg.tool_timeout
-                )
-                registry.register(wrapper)
-                registered_count += 1
-                logger.debug(
-                    "MCP: registered resource '{}' from server '{}'", wrapper.name, name
-                )
-        except Exception as e:
-            logger.debug("MCP server '{}': resources not supported or failed: {}", name, e)
+        if name != BUILTIN_COMPUTER_SERVER_NAME:
+            try:
+                resources_result = await session.list_resources()
+                for resource in resources_result.resources:
+                    wrapper = MCPResourceWrapper(
+                        session, name, resource, resource_timeout=cfg.tool_timeout
+                    )
+                    registry.register(wrapper)
+                    registered_count += 1
+                    logger.debug(
+                        "MCP: registered resource '{}' from server '{}'", wrapper.name, name
+                    )
+            except Exception as e:
+                logger.debug("MCP server '{}': resources not supported or failed: {}", name, e)
 
-        try:
-            prompts_result = await session.list_prompts()
-            for prompt in prompts_result.prompts:
-                wrapper = MCPPromptWrapper(
-                    session, name, prompt, prompt_timeout=cfg.tool_timeout
-                )
-                registry.register(wrapper)
-                registered_count += 1
-                logger.debug("MCP: registered prompt '{}' from server '{}'", wrapper.name, name)
-        except Exception as e:
-            logger.debug("MCP server '{}': prompts not supported or failed: {}", name, e)
+            try:
+                prompts_result = await session.list_prompts()
+                for prompt in prompts_result.prompts:
+                    wrapper = MCPPromptWrapper(
+                        session, name, prompt, prompt_timeout=cfg.tool_timeout
+                    )
+                    registry.register(wrapper)
+                    registered_count += 1
+                    logger.debug("MCP: registered prompt '{}' from server '{}'", wrapper.name, name)
+            except Exception as e:
+                logger.debug("MCP server '{}': prompts not supported or failed: {}", name, e)
 
         logger.info(
             "MCP server '{}': connected, {} capabilities registered", name, registered_count
@@ -678,7 +734,11 @@ def list_mcp_server_tools(registry: ToolRegistry, server_name: str) -> list[dict
 
     Returns a list of dicts with keys: name, description, kind (tool/resource/prompt).
     """
-    prefix = f"mcp_{server_name}_"
+    prefix = (
+        "computer_"
+        if server_name == BUILTIN_COMPUTER_SERVER_NAME
+        else f"mcp_{server_name}_"
+    )
     out: list[dict[str, Any]] = []
     for tool_name in registry.tool_names:
         if not tool_name.startswith(prefix):

@@ -12,6 +12,8 @@ const ENCRYPTED_MARKER: &str = "__encrypted__";
 const LEGACY_KEYRING_MARKER: &str = "__keyring__";
 const VAULT_FILENAME: &str = "credential-vault.json";
 const KEY_FILENAME: &str = "credential-key.bin";
+const DPAPI_SECRET_PREFIX: &str = "dpapi:";
+const VAULT_SECRET_PREFIX: &str = "vault:";
 
 fn config_dir() -> Result<PathBuf, String> {
     let config_dir =
@@ -27,6 +29,17 @@ fn vault_path() -> Result<PathBuf, String> {
 
 fn key_path() -> Result<PathBuf, String> {
     Ok(config_dir()?.join(KEY_FILENAME))
+}
+
+fn secret_path(name: &str) -> Result<PathBuf, String> {
+    if name.is_empty()
+        || !name
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'_' | b'-'))
+    {
+        return Err("Invalid secret name".to_string());
+    }
+    Ok(config_dir()?.join(format!("secret-{}.bin", name)))
 }
 
 fn get_or_create_key() -> Result<[u8; 32], String> {
@@ -113,6 +126,88 @@ fn decrypt(ciphertext: &str) -> Result<String, String> {
     String::from_utf8(plaintext.to_vec()).map_err(|e| format!("UTF-8 decode failed: {}", e))
 }
 
+#[cfg(windows)]
+fn protect_secret(value: &str) -> Result<String, String> {
+    use windows::core::PCWSTR;
+    use windows::Win32::Foundation::{LocalFree, HLOCAL};
+    use windows::Win32::Security::Cryptography::{
+        CryptProtectData, CRYPTPROTECT_UI_FORBIDDEN, CRYPT_INTEGER_BLOB,
+    };
+
+    let bytes = value.as_bytes();
+    let input = CRYPT_INTEGER_BLOB {
+        cbData: bytes.len().try_into().map_err(|_| "Secret is too large")?,
+        pbData: bytes.as_ptr() as *mut u8,
+    };
+    let mut output = CRYPT_INTEGER_BLOB::default();
+    unsafe {
+        CryptProtectData(
+            &input,
+            PCWSTR::null(),
+            None,
+            None,
+            None,
+            CRYPTPROTECT_UI_FORBIDDEN,
+            &mut output,
+        )
+        .map_err(|e| format!("Windows credential protection failed: {}", e))?;
+        let protected = std::slice::from_raw_parts(output.pbData, output.cbData as usize);
+        let encoded = data_encoding::BASE64URL_NOPAD.encode(protected);
+        let _ = LocalFree(Some(HLOCAL(output.pbData.cast())));
+        Ok(format!("{}{}", DPAPI_SECRET_PREFIX, encoded))
+    }
+}
+
+#[cfg(windows)]
+fn unprotect_secret(value: &str) -> Result<String, String> {
+    use windows::Win32::Foundation::{LocalFree, HLOCAL};
+    use windows::Win32::Security::Cryptography::{
+        CryptUnprotectData, CRYPTPROTECT_UI_FORBIDDEN, CRYPT_INTEGER_BLOB,
+    };
+
+    let encoded = value
+        .strip_prefix(DPAPI_SECRET_PREFIX)
+        .ok_or_else(|| "Invalid protected secret".to_string())?;
+    let mut bytes = data_encoding::BASE64URL_NOPAD
+        .decode(encoded.as_bytes())
+        .map_err(|e| format!("Protected secret decode failed: {}", e))?;
+    let input = CRYPT_INTEGER_BLOB {
+        cbData: bytes.len().try_into().map_err(|_| "Secret is too large")?,
+        pbData: bytes.as_mut_ptr(),
+    };
+    let mut output = CRYPT_INTEGER_BLOB::default();
+    unsafe {
+        CryptUnprotectData(
+            &input,
+            None,
+            None,
+            None,
+            None,
+            CRYPTPROTECT_UI_FORBIDDEN,
+            &mut output,
+        )
+        .map_err(|e| format!("Windows credential unprotection failed: {}", e))?;
+        let plaintext = std::slice::from_raw_parts(output.pbData, output.cbData as usize);
+        let result = String::from_utf8(plaintext.to_vec())
+            .map_err(|e| format!("Protected secret is not UTF-8: {}", e));
+        let _ = LocalFree(Some(HLOCAL(output.pbData.cast())));
+        result
+    }
+}
+
+#[cfg(not(windows))]
+fn protect_secret(value: &str) -> Result<String, String> {
+    Ok(format!("{}{}", VAULT_SECRET_PREFIX, encrypt(value)?))
+}
+
+#[cfg(not(windows))]
+fn unprotect_secret(value: &str) -> Result<String, String> {
+    let encrypted = value
+        .strip_prefix(VAULT_SECRET_PREFIX)
+        .ok_or_else(|| "Invalid protected secret".to_string())?;
+    decrypt(encrypted)
+}
+
 #[derive(Debug, Serialize, Deserialize, Default)]
 struct Vault {
     entries: std::collections::HashMap<String, String>,
@@ -155,6 +250,33 @@ fn save_vault(vault: &Vault) -> Result<(), String> {
     let json = serde_json::to_string_pretty(vault)
         .map_err(|e| format!("Failed to serialize vault: {}", e))?;
     fs::write(&path, json).map_err(|e| format!("Failed to write vault: {}", e))
+}
+
+pub fn store_secret(name: &str, value: &str) -> Result<(), String> {
+    fs::write(secret_path(name)?, protect_secret(value)?)
+        .map_err(|e| format!("Failed to store secret: {}", e))
+}
+
+pub fn load_secret(name: &str) -> Result<Option<String>, String> {
+    let path = secret_path(name)?;
+    if !path.exists() {
+        return Ok(None);
+    }
+    let value = fs::read_to_string(path).map_err(|e| format!("Failed to read secret: {}", e))?;
+    if value.starts_with(DPAPI_SECRET_PREFIX) || value.starts_with(VAULT_SECRET_PREFIX) {
+        return unprotect_secret(&value).map(Some);
+    }
+    let legacy = decrypt(&value)?;
+    store_secret(name, &legacy)?;
+    Ok(Some(legacy))
+}
+
+pub fn delete_secret(name: &str) -> Result<(), String> {
+    let path = secret_path(name)?;
+    if path.exists() {
+        fs::remove_file(path).map_err(|e| format!("Failed to delete secret: {}", e))?;
+    }
+    Ok(())
 }
 
 pub fn store_credential(auth: &AuthConfig, host: &str, port: u16, username: &str) -> AuthConfig {
@@ -280,5 +402,27 @@ pub fn restore_credential(
             })
         }
         AuthConfig::Agent => Ok(AuthConfig::Agent),
+    }
+}
+
+#[cfg(test)]
+mod secret_tests {
+    use super::secret_path;
+
+    #[test]
+    fn secret_names_cannot_escape_the_config_directory() {
+        assert!(secret_path("../auth-token").is_err());
+        assert!(secret_path("auth/token").is_err());
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn dpapi_secret_round_trip() {
+        let protected = super::protect_secret("scoped-account-token").unwrap();
+        assert!(!protected.contains("scoped-account-token"));
+        assert_eq!(
+            super::unprotect_secret(&protected).unwrap(),
+            "scoped-account-token"
+        );
     }
 }

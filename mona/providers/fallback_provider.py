@@ -146,6 +146,8 @@ class FallbackProvider(LLMProvider):
             if response.finish_reason != "error":
                 self._primary_failures = 0
                 self._primary_tripped_at = None
+                response._usage_provider = self._primary
+                response._usage_model = primary_model
                 return response
 
             if has_streamed is not None and has_streamed[0]:
@@ -226,6 +228,8 @@ class FallbackProvider(LLMProvider):
                     "Fallback '{}' succeeded after primary '{}' failed",
                     fallback_model, primary_model,
                 )
+                fallback_response._usage_provider = fallback_provider
+                fallback_response._usage_model = fallback_model
                 return fallback_response
 
             last_response = fallback_response

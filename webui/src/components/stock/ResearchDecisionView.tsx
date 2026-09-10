@@ -19,10 +19,9 @@ import type {
   StockReportV6Document,
   StockReportV6HorizonDecision,
   StockDiagnosisV1,
-  StockDiagnosisDecisionBasisRow,
+  StockDiagnosisClaim,
   StockDiagnosisFactor,
-  StockDiagnosisFactorHorizon,
-  StockDiagnosisHorizonDecision,
+  StockDiagnosisSourceRecord,
   StockSelectionOrigin,
   StockScenario,
   StockStance,
@@ -32,7 +31,8 @@ import type {
 import { isStockReportV6Document } from "@/lib/stock-api";
 import { fmtDateTime } from "@/lib/format";
 import { cn } from "@/lib/utils";
-import { diagnosisActionLabel, diagnosisCurrentActionLabel, evidenceCountLabel, evidenceStrengthLabel, evidenceTextLabel, factorLabel, fieldLabel, missingFieldsLabel, stanceLabel, thesisLabel } from "./labels";
+import { Button } from "@/components/ui/button";
+import { diagnosisCurrentActionLabel, evidenceCountLabel, evidenceStrengthLabel, evidenceTextLabel, factorLabel, fieldLabel, missingFieldsLabel, providerLabel, stanceLabel, thesisLabel } from "./labels";
 import { DebateResolutionPanel, ResearchEvidenceDetail, ValuationAnalysis } from "./ResearchEvidenceDetail";
 import { OutcomeCalibrationPanel } from "./OutcomeCalibrationPanel";
 
@@ -91,38 +91,117 @@ function isDiagnosis(report: ResearchDocument): report is StockDiagnosisV1 {
   return report.kind === "ai_diagnosis" && report.schema_version === 1;
 }
 
-function diagnosisClaim(value: unknown): string {
-  if (typeof value === "string") return value;
-  if (!value || typeof value !== "object" || Array.isArray(value)) return "";
+function diagnosisClaimItem(value: unknown): StockDiagnosisClaim | null {
+  if (typeof value === "string") return value.trim() ? { text: value.trim() } : null;
+  if (!value || typeof value !== "object" || Array.isArray(value)) return null;
   const record = value as Record<string, unknown>;
-  return typeof record.text === "string" ? record.text : typeof record.claim === "string" ? record.claim : "";
+  const text = typeof record.text === "string" ? record.text : typeof record.claim === "string" ? record.claim : "";
+  if (!text.trim()) return null;
+  return {
+    text: text.trim(),
+    claim_type: typeof record.claim_type === "string" ? record.claim_type : undefined,
+    source_ids: Array.isArray(record.source_ids) ? record.source_ids.filter((item): item is string => typeof item === "string" && Boolean(item.trim())) : [],
+  };
 }
 
-function diagnosisClaims(values: unknown): string[] {
-  if (typeof values === "string") return values.trim() ? [values.trim()] : [];
-  return Array.isArray(values) ? values.map(diagnosisClaim).filter(Boolean).slice(0, 4) : [];
+function diagnosisClaimItems(...values: unknown[]): StockDiagnosisClaim[] {
+  const result: StockDiagnosisClaim[] = [];
+  const seen = new Set<string>();
+  for (const value of values) {
+    const items = Array.isArray(value) ? value : [value];
+    for (const item of items) {
+      const claim = diagnosisClaimItem(item);
+      const text = claim?.text?.trim();
+      if (!claim || !text || seen.has(text)) continue;
+      seen.add(text);
+      result.push(claim);
+    }
+  }
+  return result;
 }
 
-function diagnosisValidation(value: string | undefined): string {
-  if (value === "descriptive") return "当前相对强弱（仅描述性排名）";
-  if (value === "calibrated") return "历史效果已验证";
-  if (value === "rejected") return "历史效果未通过验证";
-  return "暂无可用横截面样本";
+function diagnosisClaimType(claim: StockDiagnosisClaim): string {
+  if (claim.claim_type === "fact") return "事实依据";
+  if (claim.claim_type === "inference") return "分析判断";
+  if (claim.claim_type === "hypothesis") return "待验证假设";
+  return "";
 }
 
-function diagnosisPercentile(value: number | null | undefined): string {
-  return typeof value === "number" && Number.isFinite(value) ? `第${Math.round(value * 100)}百分位` : "暂未形成排名";
+function diagnosisSourceLabel(source: StockDiagnosisSourceRecord): string {
+  const knownProvider = providerLabel(source.provider);
+  if (knownProvider !== "来源提供方待确认") return knownProvider;
+  try {
+    return new URL(source.url).hostname.replace(/^www\./, "");
+  } catch {
+    return "公开来源";
+  }
 }
 
-function diagnosisNumber(value: number | null | undefined, suffix = ""): string {
-  return typeof value === "number" && Number.isFinite(value) ? `${value.toFixed(2)}${suffix}` : "本次未形成";
+function DiagnosisClaimList({ claims, sourceMap, tone = "default" }: { claims: StockDiagnosisClaim[]; sourceMap: Map<string, StockDiagnosisSourceRecord>; tone?: "default" | "warning" }) {
+  return (
+    <ul className="mt-2 space-y-2">
+      {claims.slice(0, 5).map((claim) => {
+        const text = claim.text ?? claim.claim ?? "";
+        const claimType = diagnosisClaimType(claim);
+        const sources = (claim.source_ids ?? []).map((sourceId) => sourceMap.get(sourceId)).filter((source): source is StockDiagnosisSourceRecord => Boolean(source));
+        const unknownSourceCount = Math.max(0, (claim.source_ids?.length ?? 0) - sources.length);
+        return <li key={text} className="text-caption"><div className={cn("leading-relaxed", tone === "warning" && "text-warning")}>{text}</div>{(claimType || sources.length > 0 || unknownSourceCount > 0) && <div className="mt-0.5 text-micro text-muted-foreground">{claimType}{claimType && (sources.length > 0 || unknownSourceCount > 0) ? " · " : ""}{sources.slice(0, 2).map((source, index) => <span key={source.id}>{index > 0 ? "、" : "来源："}<a className="text-info hover:underline" href={source.url} target="_blank" rel="noreferrer">{diagnosisSourceLabel(source)}</a>{source.published_at ? `（${source.published_at.slice(0, 10)}）` : source.period_end ? `（截至${source.period_end.slice(0, 10)}）` : ""}</span>)}{unknownSourceCount > 0 ? `${sources.length > 0 ? "，另" : ""}${unknownSourceCount}条可追溯来源` : ""}</div>}</li>;
+      })}
+    </ul>
+  );
+}
+
+const DIAGNOSIS_FACTOR_NAMES = [
+  "roe", "roic", "gross_margin", "net_margin", "revenue_yoy", "profit_yoy",
+  "growth_stability", "operating_cashflow", "cashflow_to_profit", "debt_ratio",
+  "interest_coverage", "current_ratio", "capex_to_cashflow", "pe", "pb",
+  "cashflow_yield", "audit_qualification", "restatement_count", "dilution_ratio",
+  "pledge_ratio", "related_party_transactions",
+] as const;
+
+const DIAGNOSIS_FACTOR_META: Record<string, { group: string; unit: string }> = {
+  roe: { group: "profitability", unit: "percent" }, roic: { group: "profitability", unit: "percent" },
+  gross_margin: { group: "profitability", unit: "percent" }, net_margin: { group: "profitability", unit: "percent" },
+  revenue_yoy: { group: "growth_quality", unit: "percent" }, profit_yoy: { group: "growth_quality", unit: "percent" },
+  growth_stability: { group: "growth_quality", unit: "ratio" }, operating_cashflow: { group: "cashflow_quality", unit: "currency" },
+  cashflow_to_profit: { group: "cashflow_quality", unit: "ratio" }, debt_ratio: { group: "financial_safety", unit: "percent" },
+  interest_coverage: { group: "financial_safety", unit: "ratio" }, current_ratio: { group: "financial_safety", unit: "ratio" },
+  capex_to_cashflow: { group: "financial_safety", unit: "ratio" }, pe: { group: "valuation", unit: "multiple" },
+  pb: { group: "valuation", unit: "multiple" }, cashflow_yield: { group: "valuation", unit: "percent" },
+  audit_qualification: { group: "governance", unit: "flag" }, restatement_count: { group: "governance", unit: "count" },
+  dilution_ratio: { group: "governance", unit: "percent" }, pledge_ratio: { group: "governance", unit: "percent" },
+  related_party_transactions: { group: "governance", unit: "count" },
+};
+
+function diagnosisFactorName(value: string): string {
+  const legacy = /^factor_(\d+)$/i.exec(value.trim());
+  return legacy ? DIAGNOSIS_FACTOR_NAMES[Number(legacy[1]) - 1] ?? value : value.trim().toLowerCase();
+}
+
+function diagnosisFactorGroup(factor: StockDiagnosisFactor): string | null {
+  return factor.group ?? DIAGNOSIS_FACTOR_META[diagnosisFactorName(factor.name)]?.group ?? null;
+}
+
+function diagnosisFactorValue(factor: StockDiagnosisFactor): string {
+  const value = factor.value;
+  if (typeof value !== "number" || !Number.isFinite(value)) return "—";
+  const unit = factor.unit ?? DIAGNOSIS_FACTOR_META[diagnosisFactorName(factor.name)]?.unit;
+  if (unit === "percent") return `${value.toFixed(2)}%`;
+  if (unit === "multiple") return `${value.toFixed(2)}倍`;
+  if (unit === "count") return `${value.toFixed(0)}次`;
+  if (unit === "currency") {
+    if (Math.abs(value) >= 100_000_000) return `${(value / 100_000_000).toFixed(2)}亿元`;
+    if (Math.abs(value) >= 10_000) return `${(value / 10_000).toFixed(2)}万元`;
+    return `${value.toFixed(2)}元`;
+  }
+  return value.toFixed(2);
 }
 
 function diagnosisFactorAssessment(factor: StockDiagnosisFactor): string {
-  if (factor.direction === "positive") return "偏强";
-  if (factor.direction === "negative") return "偏弱";
+  if (factor.direction === "positive") return "较强";
+  if (factor.direction === "negative") return "较弱";
   if (factor.direction === "neutral") return "中性";
-  return typeof factor.value === "number" ? "已有当前值，排名待更新" : "本次未形成";
+  return "仅展示当前值";
 }
 
 function diagnosisFactorTone(factor: StockDiagnosisFactor): string {
@@ -131,137 +210,165 @@ function diagnosisFactorTone(factor: StockDiagnosisFactor): string {
   return "text-muted-foreground";
 }
 
-function diagnosisViewBasisRows(report: StockDiagnosisV1): StockDiagnosisDecisionBasisRow[] {
-  if (report.decision_radar.basis_rows?.length) return report.decision_radar.basis_rows;
-  const factors = report.fundamental_factors.short_term.factors ?? [];
-  const valueAt = (index: number) => factors[index]?.value;
-  const revenue = valueAt(4);
-  const profit = valueAt(5);
-  const cashflow = valueAt(8);
-  const fundamentalSummary = typeof revenue === "number" && typeof profit === "number"
-    ? `${revenue > 0 && profit > 0 ? "盈利修复" : revenue < 0 && profit < 0 ? "营收与利润承压" : "营收与利润分化"}${typeof cashflow === "number" ? `，${cashflow < 0.8 ? "现金流偏弱" : cashflow >= 1 ? "现金流匹配利润" : "现金流尚可"}` : ""}`
-    : "经营结论已形成，因子评分待更新";
-  const current = report.decision_radar.current_decision ?? report.horizon_decisions.short_term;
-  const bearish = current.direction === "negative" || current.not_holding_action === "avoid";
-  const holding = current.holding_action;
-  return [
-    { key: "fundamental", label: "基本面", stance: "neutral", stance_label: "中性", summary: fundamentalSummary },
-    { key: "quant", label: "量化验证", stance: bearish ? "negative" : "neutral", stance_label: bearish ? "偏空" : "中性", summary: bearish ? "短期趋势走弱，暂不新增仓位" : "量价信号分化，等待确认" },
-    { key: "sentiment", label: "情绪与预期", stance: "cautious", stance_label: "谨慎", summary: bearish ? "暂无反转信号，不提高仓位" : "等待市场与个股方向确认" },
-    { key: "risk", label: "风控纪律", stance: "strict", stance_label: "严格", summary: current.not_holding_action === "avoid" ? `回避新增，已持有${holding === "exit" ? "执行退出" : "优先降风险"}` : "按买入、止损和仓位纪律执行" },
-  ];
+function diagnosisComparisonLabel(value: string | null | undefined): string {
+  if (value === "own_history") return "自身历史";
+  if (value === "cross_section" || value === "explicit") return "同类样本";
+  if (value === "market") return "全市场";
+  return "";
 }
 
-function diagnosisBasisTone(value: StockDiagnosisDecisionBasisRow["stance"]): string {
-  if (value === "positive") return "text-stock-up";
-  if (value === "negative" || value === "strict") return "text-stock-down";
-  if (value === "cautious") return "text-warning";
-  return "text-foreground";
+type DiagnosisDimension = {
+  key: string;
+  label: string;
+  score: number;
+  comparableCount: number;
+  totalCount: number;
+  note?: string;
+};
+
+function diagnosisWeightedScore(factors: StockDiagnosisFactor[]): { score: number | null; count: number } {
+  const comparable = factors.filter((factor) => typeof factor.percentile === "number" && Number.isFinite(factor.percentile));
+  if (comparable.length === 0) return { score: null, count: 0 };
+  const weights = comparable.map((factor) => typeof factor.weight === "number" && factor.weight > 0 ? factor.weight : 1);
+  const totalWeight = weights.reduce((sum, weight) => sum + weight, 0);
+  const score = comparable.reduce((sum, factor, index) => sum + (factor.percentile ?? 0) * weights[index], 0) / totalWeight;
+  return { score, count: comparable.length };
 }
 
-function DiagnosisFactorBlock({ title, snapshot }: { title: string; snapshot: StockDiagnosisV1["fundamental_factors"] }) {
-  const isFundamental = title === "基本面因子";
-  const horizons: Array<[keyof StockDiagnosisV1["fundamental_factors"], string]> = [
-    ["short_term", isFundamental ? "综合基本面" : "当前量化验证"],
-  ];
+function diagnosisDimensions(report: StockDiagnosisV1): DiagnosisDimension[] {
+  const fundamentalFactors = report.fundamental_factors.short_term.factors ?? [];
+  const definitions = [
+    ["profitability", "盈利能力"],
+    ["growth_quality", "成长质量"],
+    ["cashflow_quality", "现金流质量"],
+    ["financial_safety", "财务安全"],
+    ["valuation", "估值吸引力"],
+  ] as const;
+  const dimensions: DiagnosisDimension[] = definitions.flatMap(([key, label]) => {
+    const factors = fundamentalFactors.filter((factor) => diagnosisFactorGroup(factor) === key);
+    const { score, count } = diagnosisWeightedScore(factors);
+    return score === null ? [] : [{ key, label, score, comparableCount: count, totalCount: factors.length }];
+  });
+  const quant = report.quant_factors.short_term;
+  if (typeof quant.factor_score === "number" && Number.isFinite(quant.factor_score)) {
+    dimensions.push({
+      key: "market_strength",
+      label: "市场表现",
+      score: quant.factor_score,
+      comparableCount: (quant.factors ?? []).filter((factor) => typeof factor.value === "number").length,
+      totalCount: (quant.factors ?? []).length,
+      note: typeof quant.sample_count === "number" ? `基于${quant.sample_count}个市场样本` : undefined,
+    });
+  }
+  return dimensions;
+}
+
+function diagnosisDimensionLabel(score: number): string {
+  if (score >= 0.7) return "较强";
+  if (score >= 0.55) return "中性偏强";
+  if (score > 0.45) return "中性";
+  if (score > 0.3) return "中性偏弱";
+  return "较弱";
+}
+
+function DiagnosisDimensionOverview({ report }: { report: StockDiagnosisV1 }) {
+  const dimensions = diagnosisDimensions(report);
   return (
-    <section className="py-3" data-testid={`diagnosis-${title === "量化因子" ? "quant" : "fundamental"}-factors`}>
-      <h2 className="text-caption font-semibold">{title}</h2>
-      <div className="mt-2 space-y-3">
-        {horizons.map(([key, label]) => {
-          const horizon = snapshot[key] as StockDiagnosisFactorHorizon;
-          const factors = (horizon.factors ?? []).filter(
-            (factor) => typeof factor.value === "number" && Number.isFinite(factor.value),
-          );
-          return (
-            <div key={key} className="border-t pt-2 first:border-t-0 first:pt-0" data-testid={`diagnosis-factor-${key}`}>
-              <div className="flex items-center justify-between gap-2 text-caption font-medium"><span>{label}</span><span>{typeof horizon.factor_score === "number" ? `${Math.round(horizon.factor_score * 100)}分` : "评分待更新"}</span></div>
-              {!isFundamental && <p className="mt-1 text-micro text-muted-foreground">市场：{diagnosisPercentile(horizon.market_percentile)} · 行业：{diagnosisPercentile(horizon.industry_percentile)} · 样本：{horizon.sample_count ?? "待更新"}</p>}
-              {!isFundamental && <p className="mt-1 text-micro text-muted-foreground">{diagnosisValidation(horizon.validation_status)}{horizon.fallback_scope === "market" ? "；行业样本不足，已回退市场比较" : ""}</p>}
-              {factors.length > 0 ? (
-                <div className="mt-1 grid gap-x-3 gap-y-1 text-micro sm:grid-cols-2">
-                  {factors.map((factor) => <div key={factor.name}><span>{factorLabel(factor.name)}</span>：{diagnosisNumber(factor.value)} · <span className={diagnosisFactorTone(factor)}>{diagnosisFactorAssessment(factor)}</span></div>)}
-                </div>
-              ) : <p className="mt-1 text-micro text-muted-foreground">暂无可解释因子</p>}
-            </div>
-          );
-        })}
-      </div>
+    <section data-testid="diagnosis-dimension-overview">
+      <div className="flex flex-wrap items-end justify-between gap-2"><h2 className="text-ui font-semibold">维度评分概览</h2>{dimensions.length > 0 && <p className="text-micro text-muted-foreground">分数表示当前相对有利位置，不代表上涨概率</p>}</div>
+      {dimensions.length > 0 ? <div className="mt-3 grid gap-3 sm:grid-cols-2 xl:grid-cols-3">{dimensions.map((dimension) => {
+        const score = Math.max(0, Math.min(100, dimension.score * 100));
+        return <div key={dimension.key} className="rounded-lg border border-border/60 bg-muted/15 p-3" data-testid={`diagnosis-dimension-${dimension.key}`}>
+          <div className="flex items-baseline justify-between gap-2"><span className="text-caption font-medium">{dimension.label}</span><span className="text-title-sm font-semibold tabular-nums">{Math.round(score)}分</span></div>
+          <div className="relative mt-2 h-2 rounded-full bg-gradient-to-r from-stock-down via-muted-foreground/25 to-stock-up" role="img" aria-label={`${dimension.label}${Math.round(score)}分`}><span className="absolute top-1/2 h-4 w-1 -translate-x-1/2 -translate-y-1/2 rounded-full border border-background bg-foreground" style={{ left: `${score}%` }} aria-hidden /></div>
+          <div className="mt-2 flex items-center justify-between gap-2 text-micro"><span>{diagnosisDimensionLabel(dimension.score)}</span><span className="text-muted-foreground">{dimension.comparableCount}/{dimension.totalCount}项可比较{dimension.note ? ` · ${dimension.note}` : ""}</span></div>
+        </div>;
+      })}</div> : <p className="mt-2 rounded-lg bg-muted/20 px-3 py-2 text-caption text-muted-foreground">本次没有足够的同类比较数据，不展示推算分数；可继续查看指标原值和分析证据。</p>}
     </section>
   );
 }
 
-function DiagnosisDecisionCard({ label, decision }: { label: string; decision: StockDiagnosisHorizonDecision }) {
-  const plan = decision.materialized_plan;
-  const position = decision.position_plan;
-  const reasons = diagnosisClaims(decision.key_reasons);
-  const risks = diagnosisClaims(decision.key_risks);
-  const canEnter = decision.not_holding_action === "conditional_participation";
+function DiagnosisIndicatorTable({ title, factors, fallbackAsOf, sourceMap }: { title: string; factors: StockDiagnosisFactor[]; fallbackAsOf?: string | null; sourceMap: Map<string, StockDiagnosisSourceRecord> }) {
+  const available = factors.filter((factor) => typeof factor.value === "number" && Number.isFinite(factor.value));
+  if (available.length === 0) return null;
   return (
-    <section className="rounded-xl bg-muted/30 px-5 py-5" data-testid={`diagnosis-horizon-${label}`}>
-      <p className="text-caption text-muted-foreground">{label}</p>
-      <h2 className="mt-1 text-display-sm font-semibold">{diagnosisCurrentActionLabel(decision)}</h2>
-      <div className="mt-4 grid gap-3 text-ui sm:grid-cols-2">
-        <p><span className="text-muted-foreground">未持有：</span>{diagnosisActionLabel(decision.not_holding_action)}</p>
-        <p><span className="text-muted-foreground">已持有：</span>{diagnosisActionLabel(decision.holding_action)}</p>
+    <section className="rounded-lg border border-border/60" data-testid={`diagnosis-${title === "基本面指标" ? "fundamental" : "quant"}-factors`}>
+      <h3 className="border-b border-border/60 px-3 py-2.5 text-caption font-semibold">{title}</h3>
+      <div className="overflow-x-auto">
+        <table className="w-full min-w-[42rem] text-left text-caption">
+          <thead className="text-micro text-muted-foreground"><tr><th className="px-3 py-2 font-medium">指标</th><th className="px-3 py-2 font-medium">当前值</th><th className="px-3 py-2 font-medium">相对表现</th><th className="px-3 py-2 font-medium">判断</th><th className="px-3 py-2 font-medium">数据说明</th></tr></thead>
+          <tbody className="divide-y divide-border/50">{available.map((factor, index) => {
+            const percentile = typeof factor.percentile === "number" ? `${Math.round(factor.percentile * 100)}/100` : "未形成可比分数";
+            const scope = diagnosisComparisonLabel(factor.comparison_scope);
+            const sourceCount = factor.source_ids?.length ?? 0;
+            const source = (factor.source_ids ?? []).map((sourceId) => sourceMap.get(sourceId)).find(Boolean);
+            const asOf = factor.as_of ?? fallbackAsOf;
+            return <tr key={`${factor.name}-${index}`}><td className="px-3 py-2.5 font-medium">{factorLabel(factor.name)}</td><td className="px-3 py-2.5 tabular-nums">{diagnosisFactorValue(factor)}</td><td className="px-3 py-2.5"><span>{percentile}</span>{scope && <span className="ml-1 text-micro text-muted-foreground">· {scope}</span>}</td><td className={cn("px-3 py-2.5 font-medium", diagnosisFactorTone(factor))}>{diagnosisFactorAssessment(factor)}</td><td className="px-3 py-2.5 text-micro text-muted-foreground">{asOf ? `截至${asOf.slice(0, 10)}` : "当前数据"}{source ? <span> · <a className="text-info hover:underline" href={source.url} target="_blank" rel="noreferrer">{diagnosisSourceLabel(source)}</a></span> : sourceCount > 0 ? ` · ${sourceCount}条来源` : ""}</td></tr>;
+          })}</tbody>
+        </table>
       </div>
-      <div className="mt-5 border-t border-border/60 pt-4" data-testid={`diagnosis-plan-${label}`}>
-        <h3 className="text-caption font-semibold">交易计划</h3>
-        <dl className="mt-3 grid grid-cols-[minmax(0,1fr)_minmax(0,1.3fr)] gap-x-4 gap-y-2 text-caption sm:grid-cols-4">
-          <dt className="text-muted-foreground">参考买入</dt><dd>{canEnter ? diagnosisNumber(plan.reference_entry, " 元") : "当前不建议买入"}</dd>
-          <dt className="text-muted-foreground">回踩参与</dt><dd>{canEnter ? diagnosisNumber(plan.pullback_entry, " 元") : "暂不参与"}</dd>
-          <dt className="text-muted-foreground">止损参考</dt><dd>{typeof plan.stop_loss === "number" ? diagnosisNumber(plan.stop_loss, " 元") : "未设置固定止损价"}</dd>
-          <dt className="text-muted-foreground">第一止盈</dt><dd>{typeof plan.first_take_profit === "number" ? diagnosisNumber(plan.first_take_profit, " 元") : "未设置固定止盈价"}</dd>
-          <dt className="text-muted-foreground">第二止盈</dt><dd>{typeof plan.second_take_profit === "number" ? diagnosisNumber(plan.second_take_profit, " 元") : "未设置固定止盈价"}</dd>
-          <dt className="text-muted-foreground">参考仓位</dt><dd>{diagnosisNumber(position.reference_position_pct, "%")} / 最大 {diagnosisNumber(position.max_position_pct, "%")}</dd>
-          <dt className="text-muted-foreground">计划边界</dt><dd className="sm:col-span-3">{plan.boundaries?.join("；") || decision.review_trigger || "价格或基本面变化时复评"}</dd>
-        </dl>
-      </div>
-      <p className="mt-3 text-micro text-muted-foreground">复评条件：{decision.review_trigger || "暂无可确认的复评条件"}{decision.valid_until ? ` · 有效至 ${decision.valid_until.slice(0, 10)}` : ""}</p>
-      {(reasons.length > 0 || risks.length > 0) && (
-        <div className="mt-3 border-t border-border/60 pt-3 text-micro">
-          {reasons.length > 0 && <p>主要依据：{reasons.join("；")}</p>}
-          {risks.length > 0 && <p className="mt-1 text-warning">主要风险：{risks.join("；")}</p>}
-        </div>
-      )}
     </section>
   );
 }
 
 function DiagnosisDecisionView({ report }: { report: StockDiagnosisV1 }) {
   const fundamental = report.fundamental_research;
-  const semantic = [
-    ...diagnosisClaims(fundamental.company_understanding),
-    ...diagnosisClaims(fundamental.business_model_summary ?? fundamental.business_model),
-    ...diagnosisClaims(fundamental.industry_context ?? fundamental.industry_supply_demand),
-    ...diagnosisClaims(fundamental.policy_context ?? fundamental.policy_transmission),
-    ...diagnosisClaims(fundamental.cycle_context ?? fundamental.cycle_position),
-    ...diagnosisClaims(fundamental.governance ?? fundamental.management_governance),
-  ].slice(0, 8);
   const currentDecision = report.decision_radar.current_decision ?? report.horizon_decisions.short_term;
-  const basisRows = diagnosisViewBasisRows(report);
+  const sourceMap = new Map((report.sources ?? []).map((source) => [source.id, source]));
+  const fallbackSupports = diagnosisClaimItems(fundamental.competitive_advantages, fundamental.competitive_advantage, fundamental.industry_context, fundamental.industry_supply_demand);
+  const fallbackConstraints = diagnosisClaimItems(fundamental.competitive_counterevidence, fundamental.competitive_advantage_counterevidence, fundamental.risks);
+  const supports = diagnosisClaimItems(currentDecision.key_reasons);
+  const constraints = diagnosisClaimItems(currentDecision.key_risks);
+  const visibleSupports = supports.length > 0 ? supports : fallbackSupports;
+  const visibleConstraints = constraints.length > 0 ? constraints : fallbackConstraints;
+  const explicitThesis = currentDecision.thesis?.trim();
+  const supportText = visibleSupports[0]?.text ?? visibleSupports[0]?.claim;
+  const constraintText = visibleConstraints[0]?.text ?? visibleConstraints[0]?.claim;
+  const thesis = explicitThesis
+    || supportText && constraintText && `${supportText}，但${constraintText}。综合判断：${diagnosisCurrentActionLabel(currentDecision)}。`
+    || supportText && `${supportText}。综合判断：${diagnosisCurrentActionLabel(currentDecision)}。`
+    || constraintText && `${constraintText}。综合判断：${diagnosisCurrentActionLabel(currentDecision)}。`
+    || `综合现有经营、估值和市场证据，当前判断为：${diagnosisCurrentActionLabel(currentDecision)}。`;
+  const researchSections = [
+    { title: "公司与商业模式", claims: diagnosisClaimItems(fundamental.company_understanding, fundamental.business_model_summary, fundamental.business_model) },
+    { title: "竞争优势", claims: diagnosisClaimItems(fundamental.competitive_advantages, fundamental.competitive_advantage) },
+    { title: "竞争压力", claims: diagnosisClaimItems(fundamental.competitive_counterevidence, fundamental.competitive_advantage_counterevidence) },
+    { title: "行业与周期", claims: diagnosisClaimItems(fundamental.industry_context, fundamental.industry_supply_demand, fundamental.cycle_context, fundamental.cycle_position) },
+    { title: "政策影响", claims: diagnosisClaimItems(fundamental.policy_context, fundamental.policy_transmission) },
+    { title: "公司治理", claims: diagnosisClaimItems(fundamental.governance, fundamental.management_governance) },
+  ].filter((section) => section.claims.length > 0);
+  const changeConditions = diagnosisClaimItems(fundamental.conclusion_change_conditions, fundamental.change_conditions);
+  const assumptions = diagnosisClaimItems(fundamental.key_assumptions);
+  const fundamentalFactors = report.fundamental_factors.short_term.factors ?? [];
+  const quantFactors = report.quant_factors.short_term.factors ?? [];
+  const availableFactorCount = [...fundamentalFactors, ...quantFactors].filter((factor) => typeof factor.value === "number").length;
+  const comparableFactorCount = [...fundamentalFactors, ...quantFactors].filter((factor) => typeof factor.percentile === "number").length;
+  const qualityLabel = report.data_quality.status === "complete" || report.data_quality.status === "available" ? "数据可用" : report.data_quality.status === "degraded" ? "部分可用" : "数据不足";
   return (
-    <div className="space-y-4" data-testid="ai-diagnosis-result">
+    <div className="mx-auto w-full max-w-6xl space-y-6" data-testid="ai-diagnosis-result">
       <header>
         <h1 className="text-title font-semibold">AI诊股结论</h1>
         <p className="mt-1 text-caption text-muted-foreground">研究截至：{fmtDateTime(report.research_cutoff_at) || "未提供"} · 行情截至：{fmtDateTime(report.market_as_of) || "未提供"}</p>
       </header>
-      <section className="space-y-2" data-testid="diagnosis-horizon-conclusions">
-        <DiagnosisDecisionCard label="当前综合建议" decision={currentDecision} />
+
+      <section className="rounded-xl bg-muted/25 px-5 py-5" data-testid="diagnosis-core-judgment">
+        <div className="flex flex-wrap items-center justify-between gap-2"><h2 className="text-ui font-semibold">核心判断</h2><span className="rounded-full bg-background/80 px-2.5 py-1 text-caption font-medium">{diagnosisCurrentActionLabel(currentDecision)}</span></div>
+        <p className="mt-3 max-w-4xl text-title-sm font-medium leading-relaxed">{thesis}</p>
+        {(visibleSupports.length > 0 || visibleConstraints.length > 0) && <div className="mt-4 grid gap-4 border-t border-border/60 pt-4 sm:grid-cols-2">
+          {visibleSupports.length > 0 && <div data-testid="diagnosis-supporting-evidence"><h3 className="text-caption font-semibold text-stock-up">支持因素</h3><DiagnosisClaimList claims={visibleSupports} sourceMap={sourceMap} /></div>}
+          {visibleConstraints.length > 0 && <div data-testid="diagnosis-constraining-evidence"><h3 className="text-caption font-semibold text-warning">制约因素</h3><DiagnosisClaimList claims={visibleConstraints} sourceMap={sourceMap} tone="warning" /></div>}
+        </div>}
       </section>
-      <section className="py-2" data-testid="diagnosis-four-step">
-        <h2 className="text-ui font-semibold">四层分析</h2>
-        <div className="mt-2 divide-y divide-border/60 text-caption">{basisRows.map((row) => <div key={row.key} className="grid grid-cols-[5.5rem_3.5rem_minmax(0,1fr)] gap-2 py-2.5"><span>{row.label}</span><span className={cn("font-medium", diagnosisBasisTone(row.stance))}>{row.stance_label}</span><span>{row.summary}</span></div>)}</div>
-      </section>
-      <details className="border-t border-border/60 pt-3" data-testid="diagnosis-analysis-details">
-        <summary className="cursor-pointer text-caption font-medium">查看分析详情</summary>
-        <div className="mt-3 divide-y divide-border/60">
-          {semantic.length > 0 && <section className="pb-3" data-testid="diagnosis-fundamental-research"><h2 className="text-caption font-semibold">公司与行业分析</h2><ul className="mt-2 space-y-1 text-caption text-muted-foreground">{semantic.map((value) => <li key={value}>{value}</li>)}</ul></section>}
-          <DiagnosisFactorBlock title="基本面因子" snapshot={report.fundamental_factors} />
-          <DiagnosisFactorBlock title="量化因子" snapshot={report.quant_factors} />
-        </div>
-      </details>
-      <p className="text-micro text-muted-foreground">数据质量：{report.data_quality.status === "complete" || report.data_quality.status === "available" ? "可用" : report.data_quality.status === "degraded" ? "部分可用" : "暂无"} · 结论由确定性规则生成</p>
+
+      <DiagnosisDimensionOverview report={report} />
+
+      {researchSections.length > 0 && <section data-testid="diagnosis-fundamental-research"><h2 className="text-ui font-semibold">公司与行业分析</h2><div className="mt-3 grid gap-3 sm:grid-cols-2">{researchSections.map((section) => <div key={section.title} className="rounded-lg border border-border/60 bg-muted/10 p-3"><h3 className="text-caption font-semibold">{section.title}</h3><DiagnosisClaimList claims={section.claims} sourceMap={sourceMap} /></div>)}</div></section>}
+
+      {(fundamentalFactors.some((factor) => typeof factor.value === "number") || quantFactors.some((factor) => typeof factor.value === "number")) && <section data-testid="diagnosis-indicator-details"><h2 className="text-ui font-semibold">指标明细</h2><p className="mt-1 text-micro text-muted-foreground">相对表现仅在存在可比较样本时展示；未形成比较的数据只保留当前值。</p><div className="mt-3 space-y-3"><DiagnosisIndicatorTable title="基本面指标" factors={fundamentalFactors} fallbackAsOf={report.fundamental_factors.snapshot_as_of ?? report.research_cutoff_at} sourceMap={sourceMap} /><DiagnosisIndicatorTable title="市场表现指标" factors={quantFactors} fallbackAsOf={report.quant_factors.snapshot_as_of ?? report.market_as_of} sourceMap={sourceMap} /></div></section>}
+
+      {(changeConditions.length > 0 || assumptions.length > 0) && <section data-testid="diagnosis-change-conditions"><h2 className="text-ui font-semibold">结论变化条件</h2><div className="mt-3 grid gap-3 sm:grid-cols-2">{changeConditions.length > 0 && <div className="rounded-lg border border-border/60 p-3"><h3 className="text-caption font-semibold">什么情况会改变判断</h3><DiagnosisClaimList claims={changeConditions} sourceMap={sourceMap} tone="warning" /></div>}{assumptions.length > 0 && <div className="rounded-lg border border-border/60 p-3"><h3 className="text-caption font-semibold">当前判断依赖的假设</h3><DiagnosisClaimList claims={assumptions} sourceMap={sourceMap} /></div>}</div></section>}
+
+      <section className="border-t border-border/60 pt-4" data-testid="diagnosis-data-coverage"><h2 className="text-caption font-semibold">数据覆盖</h2><div className="mt-2 flex flex-wrap gap-x-5 gap-y-1 text-caption text-muted-foreground"><span>{qualityLabel}</span><span>{availableFactorCount}项指标有当前值</span><span>{comparableFactorCount}项指标具备可比位置</span><span>{report.source_ids.length}条可追溯来源</span></div>{report.data_quality.missing_fields?.length ? <p className="mt-2 text-micro text-warning">关键缺口：{missingFieldsLabel(report.data_quality.missing_fields)}</p> : null}</section>
     </div>
   );
 }
@@ -731,12 +838,12 @@ function ConditionList({
           {conditions.map((condition, index) => (
             <li key={`${condition.text}-${index}`} className="flex items-start gap-1.5">
               {kindLabelMode === "full" && (
-                <span className="shrink-0 px-1 text-[10px] leading-4 text-muted-foreground">
+                <span className="shrink-0 px-1 text-micro leading-4 text-muted-foreground">
                   {condition.kind === "manual" ? "人工观察（不会自动触发）" : "系统可计算"}
                 </span>
               )}
               {kindLabelMode === "decision" && condition.kind === "manual" && (
-                <span className="shrink-0 px-1 text-[10px] leading-4 text-muted-foreground">需人工观察</span>
+                <span className="shrink-0 px-1 text-micro leading-4 text-muted-foreground">需人工观察</span>
               )}
               <span className="min-w-0">{evidenceTextLabel(condition.text) || "未提供"}</span>
             </li>
@@ -1349,9 +1456,10 @@ function HorizonCard({
   const mainRisks = [...view.tradeability_risks, ...view.blind_spots];
   return (
     <section className="border-b border-border/70 last:border-b-0" data-testid={`horizon-card-${meta.key}`}>
-      <button
+      <Button
         type="button"
-        className="flex w-full items-center justify-between gap-3 py-3 text-left hover:bg-muted/30"
+        variant="ghost"
+        className="h-auto w-full justify-between gap-3 rounded-none px-0 py-3 text-left hover:bg-muted/30"
         aria-expanded={expanded}
         aria-controls={`${headingId}-body`}
         onClick={onToggle}
@@ -1364,7 +1472,7 @@ function HorizonCard({
           <span className={cn("text-caption font-medium", stanceTone(view.stance))}>{horizonStanceLabel(view.stance)}</span>
           <span aria-hidden className="text-caption text-muted-foreground">{expanded ? "⌃" : "⌄"}</span>
         </span>
-      </button>
+      </Button>
       <div className="px-0 py-2.5" data-testid={`horizon-summary-${meta.key}`}>
         <div className="grid gap-x-4 gap-y-1 text-caption md:grid-cols-2">
           <div><span className="text-muted-foreground">当前操作：</span>{actionLabel(view.action)}</div>
@@ -1441,15 +1549,17 @@ function HorizonCard({
               <div className="mb-1.5 flex flex-wrap items-center gap-1.5">
                 <span className="text-caption font-medium">情景</span>
                 {SCENARIOS.map((scenario) => (
-                  <button
+                  <Button
                     type="button"
                     key={scenario.key}
-                    className={cn("rounded border px-2 py-0.5 text-micro", scenarioKey === scenario.key ? "border-info bg-info/10 text-info" : "text-muted-foreground hover:text-foreground")}
+                    variant="outline"
+                    size="xs"
+                    className={cn("h-auto px-2 py-0.5 text-micro", scenarioKey === scenario.key ? "border-info bg-info/10 text-info" : "text-muted-foreground hover:text-foreground")}
                     aria-pressed={scenarioKey === scenario.key}
                     onClick={() => onScenarioChange(scenario.key)}
                   >
                     {scenario.label}
-                  </button>
+                  </Button>
                 ))}
               </div>
               <ScenarioPanel scenario={scenarios?.[scenarioKey] ?? EMPTY_SCENARIO} />

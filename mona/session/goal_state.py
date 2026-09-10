@@ -13,6 +13,7 @@ from typing import Any, Mapping, MutableMapping
 from mona.session.manager import SessionManager
 
 GOAL_STATE_KEY = "goal_state"
+GOAL_COMMAND_SOURCE = "/goal"
 # Older builds stored the same JSON blob under this key.
 _LEGACY_GOAL_STATE_SESSION_KEY = "thread_goal"
 _MAX_OBJECTIVE_IN_RUNTIME = 4000
@@ -38,9 +39,13 @@ def goal_state_raw(metadata: Mapping[str, Any] | None) -> Any:
 
 
 def sustained_goal_active(metadata: Mapping[str, Any] | None) -> bool:
-    """True when this session has an active sustained objective (``long_task`` bookkeeping)."""
+    """True when ``/goal`` created an active sustained objective for this session."""
     goal = parse_goal_state(goal_state_raw(metadata))
-    return isinstance(goal, dict) and goal.get("status") == "active"
+    return (
+        isinstance(goal, dict)
+        and goal.get("status") == "active"
+        and goal.get("source") == GOAL_COMMAND_SOURCE
+    )
 
 
 def parse_goal_state(blob: Any) -> dict[str, Any] | None:
@@ -62,7 +67,7 @@ def goal_state_runtime_lines(metadata: Mapping[str, Any] | None) -> list[str]:
     if not metadata:
         return []
     goal = parse_goal_state(_session_goal_raw(metadata))
-    if not isinstance(goal, dict) or goal.get("status") != "active":
+    if not sustained_goal_active(metadata) or not isinstance(goal, dict):
         return []
     objective = str(goal.get("objective") or "").strip()
     if not objective:
@@ -79,7 +84,7 @@ def goal_state_runtime_lines(metadata: Mapping[str, Any] | None) -> list[str]:
 def goal_state_ws_blob(metadata: Mapping[str, Any] | None) -> dict[str, Any]:
     """JSON-safe snapshot for WebSocket ``goal_state`` events (one chat_id per frame)."""
     goal = parse_goal_state(_session_goal_raw(metadata)) if metadata else None
-    if isinstance(goal, dict) and goal.get("status") == "active":
+    if sustained_goal_active(metadata) and isinstance(goal, dict):
         objective = str(goal.get("objective") or "").strip()
         if len(objective) > _MAX_OBJECTIVE_WS:
             objective = objective[:_MAX_OBJECTIVE_WS].rstrip() + "…"

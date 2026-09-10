@@ -1,0 +1,11 @@
+{
+  "schemaVersion": 1,
+  "agentId": "com.mona.xhs-operator",
+  "version": "1.4.0",
+  "requiredTools": [
+    "generate_image",
+    "generate_video",
+    "web_search"
+  ],
+  "runtimePacks": []
+}

@@ -11,7 +11,7 @@ from typing import TYPE_CHECKING, Any
 
 from loguru import logger
 
-from mona.bus.events import OutboundMessage
+from mona.bus.events import OUTBOUND_META_AGENT_UI, OutboundMessage
 from mona.bus.queue import MessageBus
 from mona.channels.base import BaseChannel
 from mona.config.schema import Config
@@ -210,6 +210,8 @@ class ChannelManager:
             await channel.start()
         except Exception:
             logger.exception("Failed to start channel {}", name)
+            if name == "websocket":
+                raise
 
     async def start_all(self) -> None:
         """Start all channels and the outbound dispatcher."""
@@ -229,7 +231,7 @@ class ChannelManager:
         self._notify_restart_done_if_needed()
 
         # Wait for all to complete (they should run forever)
-        await asyncio.gather(*tasks, return_exceptions=True)
+        await asyncio.gather(*tasks)
 
     def _notify_restart_done_if_needed(self) -> None:
         """Send restart completion message when runtime env markers are present."""
@@ -330,7 +332,7 @@ class ChannelManager:
                         await self._send_with_retry(channel, msg)
                     continue
 
-                if msg.metadata.get("_progress"):
+                if msg.metadata.get("_progress") and not msg.metadata.get(OUTBOUND_META_AGENT_UI):
                     if msg.metadata.get("_tool_hint") and not self._should_send_progress(
                         msg.channel, tool_hint=True,
                     ):
@@ -391,7 +393,18 @@ class ChannelManager:
             await channel.send_reasoning(msg)
         elif msg.metadata.get("_stream_delta") or msg.metadata.get("_stream_end"):
             await channel.send_delta(msg.chat_id, msg.content, msg.metadata)
-        elif not msg.metadata.get("_streamed"):
+        elif msg.metadata.get("_streamed"):
+            if msg.metadata.get("_deliver_files") or msg.media:
+                metadata = dict(msg.metadata)
+                metadata.pop("_streamed", None)
+                await channel.send(OutboundMessage(
+                    channel=msg.channel,
+                    chat_id=msg.chat_id,
+                    content="",
+                    media=list(msg.media),
+                    metadata=metadata,
+                ))
+        else:
             await channel.send(msg)
 
     def _coalesce_stream_deltas(

@@ -4,7 +4,7 @@ This mirrors the Tauri ``upload_image`` command (``src-tauri/src/license.rs``) s
 that the agent backend can convert local media paths / data URLs into public
 URLs required by providers that only accept remote references (e.g. Agnes
 image-to-video). Target host is the fixed Mona auth server — not user input —
-so SSRF validation against ``www.mona-ai.cn`` is unnecessary here, matching the
+so SSRF validation against ``mona-ai.cn`` is unnecessary here, matching the
 Rust implementation.
 """
 
@@ -20,8 +20,8 @@ from loguru import logger
 
 # Must stay in sync with ``src-tauri/src/license.rs::AUTH_SERVER_URL_PRIMARY``
 # and ``AUTH_SERVER_URL_FALLBACK``.
-_AUTH_SERVER_URL_PRIMARY = "https://www.mona-ai.cn"
-_AUTH_SERVER_URL_FALLBACK = "https://mona.lzfun.vip"
+_AUTH_SERVER_URL_PRIMARY = "https://mona-ai.cn"
+_AUTH_SERVER_URL_FALLBACK = "https://www.mona-ai.cn"
 _UPLOAD_ENDPOINT = "/upload/image"
 _DEFAULT_TIMEOUT_S = 60.0
 

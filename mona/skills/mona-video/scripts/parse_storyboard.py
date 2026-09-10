@@ -9,6 +9,9 @@ Output (stdout): JSON array of scenes:
       {
         "index": 1,
         "title": "开场",
+        "role": "cover",
+        "layout": "cover-split",
+        "backgroundSlot": "cover",
         "duration": 5,
         "durationRaw": "5s",
         "visual": "渐入 logo + 粒子动效",
@@ -76,6 +79,9 @@ def parse_storyboard(storyboard_path: Path) -> list[dict]:
             current = {
                 "index": int(heading.group(1)),
                 "title": heading.group(2).strip(),
+                "role": "",
+                "layout": "",
+                "backgroundSlot": "",
                 "duration": 0,
                 "durationRaw": "",
                 "visual": "",
@@ -91,7 +97,13 @@ def parse_storyboard(storyboard_path: Path) -> list[dict]:
             continue
         field = m.group(1).strip().lower()
         value = m.group(2).strip()
-        if field in ("duration", "时长", "长度"):
+        if field in ("role", "场景角色", "角色"):
+            current["role"] = value
+        elif field in ("layout", "布局", "布局类型"):
+            current["layout"] = value
+        elif field in ("background slot", "backgroundslot", "背景槽位", "背景"):
+            current["backgroundSlot"] = value
+        elif field in ("duration", "时长", "长度"):
             current["durationRaw"] = value
             current["duration"] = _parse_duration(value)
         elif field in ("visual", "画面", "视觉", "画面描述"):
@@ -109,6 +121,22 @@ def parse_storyboard(storyboard_path: Path) -> list[dict]:
     # Reindex to ensure sequential 1-based indices
     for i, scene in enumerate(scenes, start=1):
         scene["index"] = i
+        if not scene["role"]:
+            if i == 1:
+                scene["role"] = "cover"
+            elif i == len(scenes):
+                scene["role"] = "outro"
+            else:
+                scene["role"] = "content"
+        if not scene["layout"]:
+            scene["layout"] = {
+                "cover": "cover-split",
+                "outro": "outro-brand",
+            }.get(scene["role"], "content-standard")
+        if not scene["backgroundSlot"]:
+            scene["backgroundSlot"] = (
+                scene["role"] if scene["role"] in ("cover", "outro") else "content"
+            )
     return scenes
 
 

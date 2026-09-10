@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import json
 import os
 
@@ -285,11 +286,107 @@ async def test_malformed_provider_response_is_structured(provider_cls, content_t
 
 
 @pytest.mark.asyncio
+async def test_rate_limited_request_retries_within_wait_budget(monkeypatch):
+    calls = 0
+    sleeps = []
+
+    async def fake_sleep(delay: float) -> None:
+        sleeps.append(delay)
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        nonlocal calls
+        calls += 1
+        if calls == 1:
+            return httpx.Response(
+                429,
+                headers={"retry-after": "0.25"},
+                request=request,
+            )
+        return httpx.Response(
+            200,
+            json={"meta": {}, "results": []},
+            request=request,
+        )
+
+    monkeypatch.setattr("mona.academic.providers.asyncio.sleep", fake_sleep)
+    provider = OpenAlexProvider(
+        transport=httpx.MockTransport(handler),
+        min_interval=0,
+        max_retries=2,
+        max_retry_wait=1,
+    )
+
+    page = await provider.search("query")
+
+    assert page.error is None
+    assert calls == 2
+    assert sleeps == [0.25]
+
+
+@pytest.mark.asyncio
+async def test_rate_limited_request_stops_when_retry_after_exceeds_budget():
+    calls = 0
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        nonlocal calls
+        calls += 1
+        return httpx.Response(
+            429,
+            headers={"retry-after": "2"},
+            request=request,
+        )
+
+    provider = OpenAlexProvider(
+        transport=httpx.MockTransport(handler),
+        min_interval=0,
+        max_retries=2,
+        max_retry_wait=1,
+    )
+
+    page = await provider.search("query")
+
+    assert calls == 1
+    assert page.error is not None
+    assert page.error.code == "rate_limited"
+    assert page.error.retry_after == 2
+
+
+@pytest.mark.asyncio
+async def test_provider_rate_limit_is_shared_across_instances():
+    active = 0
+    max_active = 0
+
+    async def handler(request: httpx.Request) -> httpx.Response:
+        nonlocal active, max_active
+        active += 1
+        max_active = max(max_active, active)
+        await asyncio.sleep(0)
+        active -= 1
+        return httpx.Response(
+            200,
+            json={"meta": {}, "results": []},
+            request=request,
+        )
+
+    transport = httpx.MockTransport(handler)
+    first = OpenAlexProvider(transport=transport, min_interval=0, max_retries=0)
+    second = OpenAlexProvider(transport=transport, min_interval=0, max_retries=0)
+
+    await asyncio.gather(first.search("first"), second.search("second"))
+
+    assert max_active == 1
+
+
+@pytest.mark.asyncio
 async def test_rate_limit_timeout_and_cursor_errors_are_distinct():
     def rate_limited(request: httpx.Request) -> httpx.Response:
         return httpx.Response(429, headers={"retry-after": "12"}, request=request)
 
-    page = await OpenAlexProvider(transport=httpx.MockTransport(rate_limited)).search("query")
+    page = await OpenAlexProvider(
+        transport=httpx.MockTransport(rate_limited),
+        min_interval=0,
+        max_retries=0,
+    ).search("query")
     assert page.error is not None
     assert page.error.code == "rate_limited"
     assert page.error.retry_after == 12
@@ -298,7 +395,11 @@ async def test_rate_limit_timeout_and_cursor_errors_are_distinct():
     def timed_out(request: httpx.Request) -> httpx.Response:
         raise httpx.ReadTimeout("fixture timeout", request=request)
 
-    page = await OpenAlexProvider(transport=httpx.MockTransport(timed_out)).search("query")
+    page = await OpenAlexProvider(
+        transport=httpx.MockTransport(timed_out),
+        min_interval=0,
+        max_retries=0,
+    ).search("query")
     assert page.error is not None
     assert page.error.code == "timeout"
 

@@ -69,6 +69,41 @@ afterEach(() => {
 });
 
 describe("MonaClient", () => {
+  it("starts and follows a persistent skill setup job", async () => {
+    const client = new MonaClient({
+      url: "ws://test",
+      reconnect: false,
+      socketFactory: (url) => new FakeSocket(url) as unknown as WebSocket,
+    });
+    client.connect();
+    lastSocket().fakeOpen();
+    const pending = client.startAgentSkillSetup("agent.demo", "analysis-experiment");
+    const request = JSON.parse(lastSocket().sent.at(-1) ?? "{}") as Record<string, string>;
+    expect(request).toMatchObject({
+      type: "agent_skill_setup_start",
+      agent_id: "agent.demo",
+      name: "analysis-experiment",
+    });
+    lastSocket().fakeMessage({
+      event: "agent_skill_setup_start_result",
+      ok: true,
+      request_id: request.request_id,
+      job: {
+        schemaVersion: 1,
+        jobId: "setup-1",
+        agentId: "agent.demo",
+        skillName: "analysis-experiment",
+        contentHash: "a".repeat(64),
+        state: "queued",
+        stage: "queued",
+        createdAt: 1,
+        updatedAt: 1,
+      },
+    });
+
+    await expect(pending).resolves.toMatchObject({ jobId: "setup-1", state: "queued" });
+  });
+
   it("routes events to the matching chat handler", () => {
     const client = new MonaClient({
       url: "ws://test",
@@ -89,7 +124,7 @@ describe("MonaClient", () => {
     });
   });
 
-  it("buffers chat events while no chat handler is registered and replays on subscribe", () => {
+  it("buffers chat events while no chat handler is registered and replays on subscribe", async () => {
     const client = new MonaClient({
       url: "ws://test",
       reconnect: false,
@@ -102,6 +137,7 @@ describe("MonaClient", () => {
     lastSocket().fakeMessage({ event: "delta", chat_id: "chat-queue", text: "b" });
     const handler = vi.fn();
     client.onChat("chat-queue", handler);
+    await Promise.resolve();
     expect(handler).toHaveBeenCalledTimes(2);
     expect(handler.mock.calls[0][0]).toMatchObject({ event: "delta", text: "a" });
     expect(handler.mock.calls[1][0]).toMatchObject({ event: "delta", text: "b" });
@@ -210,7 +246,7 @@ describe("MonaClient", () => {
     expect(client.getGoalState("chat-te")).toEqual({ active: true, objective: "Long task" });
   });
 
-  it("buffers after unsubscribe until the chat is subscribed again", () => {
+  it("buffers after unsubscribe until the chat is subscribed again", async () => {
     const client = new MonaClient({
       url: "ws://test",
       reconnect: false,
@@ -227,8 +263,36 @@ describe("MonaClient", () => {
     expect(h1).toHaveBeenCalledTimes(1);
     const h2 = vi.fn();
     client.onChat("chat-rejoin", h2);
+    await Promise.resolve();
     expect(h2).toHaveBeenCalledTimes(1);
     expect(h2.mock.calls[0][0]).toMatchObject({ event: "delta", text: "queued" });
+  });
+
+  it("replays a queued Office open event to every subscriber registered in the same turn", async () => {
+    const client = new MonaClient({
+      url: "ws://test",
+      reconnect: false,
+      socketFactory: (url) => new FakeSocket(url) as unknown as WebSocket,
+    });
+    client.connect();
+    lastSocket().fakeOpen();
+    const event = {
+      event: "message",
+      chat_id: "chat-office",
+      text: "",
+      kind: "progress",
+      agent_ui: { kind: "office_session", data: { session: { sessionId: "office_1" } } },
+    };
+    lastSocket().fakeMessage(event);
+    const streamHandler = vi.fn();
+    const officeHandler = vi.fn();
+
+    client.onChat("chat-office", streamHandler);
+    client.onChat("chat-office", officeHandler);
+    await Promise.resolve();
+
+    expect(streamHandler).toHaveBeenCalledWith(expect.objectContaining(event));
+    expect(officeHandler).toHaveBeenCalledWith(expect.objectContaining(event));
   });
 
   it("dispatches runtime model updates globally", () => {
@@ -286,6 +350,26 @@ describe("MonaClient", () => {
     expect(lastSocket().sent).toContain(JSON.stringify({ type: "new_chat" }));
     lastSocket().fakeMessage({ event: "attached", chat_id: "fresh-id" });
     await expect(promise).resolves.toBe("fresh-id");
+  });
+
+  it("requests a server-side branch and resolves the new chat id", async () => {
+    const client = new MonaClient({
+      url: "ws://test",
+      reconnect: false,
+      socketFactory: (url) => new FakeSocket(url) as unknown as WebSocket,
+    });
+    client.connect();
+    lastSocket().fakeOpen();
+
+    const promise = client.branchChat("source-chat", 2, "task-2", 1_000);
+    expect(lastSocket().sent).toContain(JSON.stringify({
+      type: "branch_chat",
+      source_chat_id: "source-chat",
+      assistant_ordinal: 2,
+      source_task_id: "task-2",
+    }));
+    lastSocket().fakeMessage({ event: "attached", chat_id: "branch-chat" });
+    await expect(promise).resolves.toBe("branch-chat");
   });
 
   it("queues sends while connecting and flushes on open", () => {
@@ -404,6 +488,127 @@ describe("MonaClient", () => {
     });
   });
 
+  it("includes the browser tab identity in the message envelope", () => {
+    const client = new MonaClient({
+      url: "ws://test",
+      reconnect: false,
+      socketFactory: (url) => new FakeSocket(url) as unknown as WebSocket,
+    });
+    client.connect();
+    lastSocket().fakeOpen();
+
+    client.sendMessage("chat-x", "inspect this page", undefined, {
+      browserTabId: "tab-123",
+    });
+
+    expect(JSON.parse(lastSocket().sent.at(-1) as string)).toMatchObject({
+      type: "message",
+      chat_id: "chat-x",
+      content: "inspect this page",
+      browser_tab_id: "tab-123",
+    });
+  });
+
+  it("includes the active Office document in the message envelope", () => {
+    const client = new MonaClient({
+      url: "ws://test",
+      reconnect: false,
+      socketFactory: (url) => new FakeSocket(url) as unknown as WebSocket,
+    });
+    client.connect();
+    lastSocket().fakeOpen();
+
+    client.sendMessage("chat-office", "修改当前演示文稿", undefined, {
+      officeSessionId: "office_123",
+      officeDocumentType: "slides",
+      officeDisplayName: "季度汇报.pptx",
+    });
+
+    expect(JSON.parse(lastSocket().sent.at(-1) as string)).toMatchObject({
+      type: "message",
+      chat_id: "chat-office",
+      office_session_id: "office_123",
+      office_document_type: "slides",
+      office_display_name: "季度汇报.pptx",
+    });
+  });
+
+  it("includes the active canvas in the message envelope", () => {
+    const client = new MonaClient({
+      url: "ws://test",
+      reconnect: false,
+      socketFactory: (url) => new FakeSocket(url) as unknown as WebSocket,
+    });
+    client.connect();
+    lastSocket().fakeOpen();
+
+    client.sendMessage("chat-canvas", "修改当前架构图", undefined, {
+      canvasId: "canvas-123",
+    });
+
+    expect(JSON.parse(lastSocket().sent.at(-1) as string)).toMatchObject({
+      type: "message",
+      chat_id: "chat-canvas",
+      canvas_id: "canvas-123",
+    });
+  });
+
+  it("includes a quote preview in the message envelope", () => {
+    const client = new MonaClient({
+      url: "ws://test",
+      reconnect: false,
+      socketFactory: (url) => new FakeSocket(url) as unknown as WebSocket,
+    });
+    client.connect();
+    lastSocket().fakeOpen();
+
+    client.sendMessage("chat-quote", "引用 Mona 的消息：\n原消息\n\n请解释", undefined, {
+      displayContent: "请解释",
+      quote: { author: "Mona", content: "原消息" },
+    });
+
+    expect(JSON.parse(lastSocket().sent.at(-1) as string)).toMatchObject({
+      type: "message",
+      chat_id: "chat-quote",
+      content: "引用 Mona 的消息：\n原消息\n\n请解释",
+      display_content: "请解释",
+      quote: { author: "Mona", content: "原消息" },
+    });
+  });
+
+  it("routes a PPT turn with agent_kind in the message envelope", () => {
+    const client = new MonaClient({
+      url: "ws://test",
+      reconnect: false,
+      socketFactory: (url) => new FakeSocket(url) as unknown as WebSocket,
+    });
+    client.connect();
+    lastSocket().fakeOpen();
+
+    client.sendMessage("chat-ppt", "制作一份汇报 PPT", undefined, { agentKind: "ppt" });
+
+    expect(JSON.parse(lastSocket().sent.at(-1) as string)).toMatchObject({
+      type: "message",
+      chat_id: "chat-ppt",
+      content: "制作一份汇报 PPT",
+      agent_kind: "ppt",
+    });
+  });
+
+  it("omits agent_kind when no dedicated agent is selected", () => {
+    const client = new MonaClient({
+      url: "ws://test",
+      reconnect: false,
+      socketFactory: (url) => new FakeSocket(url) as unknown as WebSocket,
+    });
+    client.connect();
+    lastSocket().fakeOpen();
+
+    client.sendMessage("chat-default", "继续讨论", undefined);
+
+    expect(JSON.parse(lastSocket().sent.at(-1) as string)).not.toHaveProperty("agent_kind");
+  });
+
   it("sends resolve_workflow_approval and surfaces server error codes", async () => {
     const client = new MonaClient({
       url: "ws://test",
@@ -458,6 +663,141 @@ describe("MonaClient", () => {
     await expect(failPromise).rejects.toMatchObject({
       name: "RoomCommandError",
       code: "approval_expired",
+    });
+  });
+
+  it("serializes a topic discussion separately from ordinary Agent mentions", () => {
+    const client = new MonaClient({
+      url: "ws://test",
+      reconnect: false,
+      socketFactory: (url) => new FakeSocket(url) as unknown as WebSocket,
+    });
+    client.connect();
+    lastSocket().fakeOpen();
+
+    client.sendMessage("room-1", "增长还是利润？", undefined, {
+      targetAgentIds: ["agent.a", "agent.b"],
+      discussion: {
+        mode: "debate",
+        maxRounds: 99,
+        participantIds: ["agent.a", "agent.b"],
+        positions: { "agent.a": "增长", "agent.b": "利润" },
+        styles: { "agent.a": "sharp_punchline", "agent.b": "value_reframe" },
+        summaryAgentId: null,
+      },
+    });
+
+    expect(JSON.parse(lastSocket().sent.at(-1) as string)).toMatchObject({
+      type: "start_discussion",
+      chat_id: "room-1",
+      target_agent_ids: ["agent.a", "agent.b"],
+      discussion: {
+        mode: "debate",
+        max_rounds: 99,
+        positions: { "agent.a": "增长", "agent.b": "利润" },
+        styles: { "agent.a": "sharp_punchline", "agent.b": "value_reframe" },
+        summary_agent_id: null,
+      },
+    });
+
+    client.sendMessage("room-1", "增长还是利润？", undefined, {
+      targetAgentIds: ["agent.a", "agent.b"],
+      discussion: {
+        mode: "debate",
+        maxRounds: 99,
+        participantIds: ["agent.a", "agent.b"],
+        positions: { "agent.a": "增长", "agent.b": "利润" },
+        styles: { "agent.a": "sharp_punchline", "agent.b": "value_reframe" },
+        summaryAgentId: "agent.judge",
+      },
+    });
+
+    expect(JSON.parse(lastSocket().sent.at(-1) as string)).toMatchObject({
+      type: "start_discussion",
+      discussion: {
+        summary_agent_id: "agent.judge",
+      },
+    });
+  });
+
+  it("records authoritative task plans without an onChat subscriber", () => {
+    const client = new MonaClient({
+      url: "ws://test",
+      reconnect: false,
+      socketFactory: (url) => new FakeSocket(url) as unknown as WebSocket,
+    });
+    client.connect();
+    lastSocket().fakeOpen();
+    lastSocket().fakeMessage({
+      event: "task_plan",
+      chat_id: "chat-plan",
+      task_plan: {
+        task_id: "task-1",
+        revision: 2,
+        steps: [{ id: "verify", step: "Verify output", status: "in_progress" }],
+        source: "ai",
+      },
+    });
+    expect(client.getTaskPlan("chat-plan")).toEqual({
+      task_id: "task-1",
+      revision: 2,
+      steps: [{ id: "verify", step: "Verify output", status: "in_progress" }],
+      source: "ai",
+    });
+    lastSocket().fakeMessage({
+      event: "artifact_task_started",
+      chat_id: "chat-plan",
+      task_id: "task-2",
+    });
+    lastSocket().fakeMessage({
+      event: "task_plan",
+      chat_id: "chat-plan",
+      task_plan: {
+        task_id: "task-1",
+        revision: 3,
+        steps: [{ id: "stale", step: "Stale", status: "in_progress" }],
+        source: "ai",
+      },
+    });
+    expect(client.getTaskPlan("chat-plan")).toBeUndefined();
+  });
+
+  it("carries task identity on message envelopes", () => {
+    const client = new MonaClient({
+      url: "ws://test",
+      reconnect: false,
+      socketFactory: (url) => new FakeSocket(url) as unknown as WebSocket,
+    });
+    client.connect();
+    lastSocket().fakeOpen();
+
+    client.sendMessage("chat-x", "continue", undefined, { taskId: "task-1" });
+    expect(JSON.parse(lastSocket().sent.at(-1) as string)).toMatchObject({
+      type: "message",
+      chat_id: "chat-x",
+      task_id: "task-1",
+    });
+
+  });
+
+  it("carries the bounded profile advice origin on message envelopes", () => {
+    const client = new MonaClient({
+      url: "ws://test",
+      reconnect: false,
+      socketFactory: (url) => new FakeSocket(url) as unknown as WebSocket,
+    });
+    client.connect();
+    lastSocket().fakeOpen();
+
+    client.sendMessage("chat-x", "start", undefined, {
+      origin: "profile_advice",
+      profileAdviceId: "advice-1",
+    });
+    expect(JSON.parse(lastSocket().sent.at(-1) as string)).toMatchObject({
+      type: "message",
+      chat_id: "chat-x",
+      origin: "profile_advice",
+      profile_advice_id: "advice-1",
     });
   });
 

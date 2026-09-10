@@ -8,12 +8,22 @@ import { useMaterialsOpenStore } from "@/lib/materials-open-store";
 
 /** Wiki 节点 path 的 vault 相对前缀（与 Rust 侧 WIKI_REL_PREFIX 一致）。 */
 const WIKI_PATH_PREFIX = ".mona/materials/wiki/";
+const WIKI_LIBRARY_PATH_RE = /^\.mona\/materials\/libraries\/(kb-[^/]+)\/wiki\/(.+)$/;
 
 interface GraphViewDialogProps {
   open: boolean;
   onOpenChange: (open: boolean) => void;
   activeNoteId?: string | null;
   onSelectNote?: (noteId: string) => void;
+  loadGraph?: () => Promise<LinkGraph | null>;
+  refreshKey?: string | number;
+  title?: string;
+  loadingLabel?: string;
+  emptyTitle?: string;
+  emptyDescription?: string;
+  legendMode?: "notes" | "knowledge";
+  showClose?: boolean;
+  onSelectNode?: (node: LinkNode) => void;
 }
 
 interface SimNode extends LinkNode {
@@ -45,6 +55,15 @@ export function GraphViewDialog({
   onOpenChange,
   activeNoteId,
   onSelectNote,
+  loadGraph,
+  refreshKey,
+  title = "关系图",
+  loadingLabel = "正在加载关系图...",
+  emptyTitle,
+  emptyDescription,
+  legendMode = "notes",
+  showClose = true,
+  onSelectNode,
 }: GraphViewDialogProps) {
   const [graph, setGraph] = useState<LinkGraph | null>(null);
   const [loading, setLoading] = useState(false);
@@ -77,7 +96,7 @@ export function GraphViewDialog({
     setLoading(true);
     setError(null);
 
-    if (!isTauri()) {
+    if (!loadGraph && !isTauri()) {
       setLoading(false);
       setGraph(EMPTY_GRAPH);
       nodesRef.current = [];
@@ -91,7 +110,8 @@ export function GraphViewDialog({
       setLoading(false);
     }, 15000);
 
-    getNotesLinkGraph()
+    const loader = loadGraph ?? getNotesLinkGraph;
+    loader()
       .then((data) => {
         if (cancelled) return;
         if (!data) {
@@ -157,11 +177,12 @@ export function GraphViewDialog({
       cancelled = true;
       window.clearTimeout(timeoutId);
     };
-  }, [open, retryCount]);
+  }, [loadGraph, open, refreshKey, retryCount]);
 
   // Save layout positions when the dialog closes so the next open restores
   // the previous view instantly without re-running the force simulation.
   useEffect(() => {
+    if (loadGraph) return;
     if (open) return;
     const nodes = nodesRef.current;
     if (nodes.length === 0) return;
@@ -170,11 +191,12 @@ export function GraphViewDialog({
       positions[n.id] = [n.x, n.y];
     }
     void saveNotesLinkPositions(positions);
-  }, [open]);
+  }, [loadGraph, open]);
 
   // Track container size.
   useEffect(() => {
     if (!open || !containerRef.current) return;
+    if (typeof ResizeObserver === "undefined") return;
     const observer = new ResizeObserver((entries) => {
       for (const entry of entries) {
         const cr = entry.contentRect;
@@ -486,19 +508,30 @@ export function GraphViewDialog({
         (n) => Math.sqrt((n.x - x) ** 2 + (n.y - y) ** 2) < NODE_RADIUS + 6,
       );
       if (!node) return;
+      if (onSelectNode) {
+        onSelectNode(node);
+        return;
+      }
       if (node.sourceKind === "wiki") {
         // Wiki 节点：跳到资料库页面而非打开笔记 tab
-        const rel = node.path.startsWith(WIKI_PATH_PREFIX)
-          ? node.path.slice(WIKI_PATH_PREFIX.length)
-          : node.path;
-        useMaterialsOpenStore.getState().request({ kind: "wiki", path: rel });
+        const libraryMatch = node.path.match(WIKI_LIBRARY_PATH_RE);
+        const rel = libraryMatch
+          ? libraryMatch[2]
+          : node.path.startsWith(WIKI_PATH_PREFIX)
+            ? node.path.slice(WIKI_PATH_PREFIX.length)
+            : node.path;
+        useMaterialsOpenStore.getState().request({
+          kind: "wiki",
+          path: rel,
+          knowledgeBaseId: libraryMatch?.[1],
+        });
         return;
       }
       if (onSelectNote) {
         onSelectNote(node.id);
       }
     },
-    [onSelectNote],
+    [onSelectNode, onSelectNote],
   );
 
   // Native non-passive wheel listener so we can call preventDefault.
@@ -572,7 +605,7 @@ export function GraphViewDialog({
     <div className="flex min-h-0 flex-1 flex-col bg-background">
       <div className="flex h-10 shrink-0 items-center justify-between border-b border-border/60 px-3">
         <div className="flex items-center gap-2 text-ui font-medium">
-          <span>关系图</span>
+          <h2>{title}</h2>
           {stats && (
             <span className="text-micro text-muted-foreground">
               {stats.nodes} 节点 · {stats.edges} 连接 · {stats.orphans} 孤立
@@ -580,30 +613,33 @@ export function GraphViewDialog({
           )}
         </div>
         <div className="flex items-center gap-1">
-          <Button variant="ghost" size="sm" className="h-7 px-2 text-caption" onClick={zoomIn}>
+          <Button variant="ghost" size="sm" className="h-7 px-2 text-caption" aria-label="放大关系图" onClick={zoomIn}>
             <ZoomIn className="h-3.5 w-3.5" />
           </Button>
-          <Button variant="ghost" size="sm" className="h-7 px-2 text-caption" onClick={zoomOut}>
+          <Button variant="ghost" size="sm" className="h-7 px-2 text-caption" aria-label="缩小关系图" onClick={zoomOut}>
             <ZoomOut className="h-3.5 w-3.5" />
           </Button>
-          <Button variant="ghost" size="sm" className="h-7 px-2 text-caption" onClick={resetView}>
+          <Button variant="ghost" size="sm" className="h-7 px-2 text-caption" aria-label="重置关系图" onClick={resetView}>
             <Maximize2 className="h-3.5 w-3.5" />
           </Button>
-          <Button
-            variant="ghost"
-            size="sm"
-            className="h-7 px-2 text-caption"
-            onClick={() => onOpenChange(false)}
-          >
-            <X className="h-4 w-4" />
-          </Button>
+          {showClose ? (
+            <Button
+              variant="ghost"
+              size="sm"
+              className="h-7 px-2 text-caption"
+              aria-label="关闭关系图"
+              onClick={() => onOpenChange(false)}
+            >
+              <X className="h-4 w-4" />
+            </Button>
+          ) : null}
         </div>
       </div>
       <div ref={containerRef} className={cn("relative min-h-0 flex-1")}>
         {loading && (
           <div className="absolute inset-0 flex flex-col items-center justify-center gap-3">
             <Loader2 className="h-7 w-7 animate-spin text-muted-foreground" />
-            <span className="text-ui text-muted-foreground">正在加载关系图...</span>
+            <span className="text-ui text-muted-foreground">{loadingLabel}</span>
           </div>
         )}
         {error && (
@@ -625,7 +661,14 @@ export function GraphViewDialog({
         )}
         {!loading && !error && graph && graph.nodes.length === 0 && (
           <div className="absolute inset-0 flex flex-col items-center justify-center gap-2 text-center">
-            {!isTauri() ? (
+            {emptyTitle ? (
+              <>
+                <p className="text-ui text-muted-foreground">{emptyTitle}</p>
+                {emptyDescription ? (
+                  <p className="text-micro text-muted-foreground/70">{emptyDescription}</p>
+                ) : null}
+              </>
+            ) : !isTauri() ? (
               <>
                 <p className="text-ui text-muted-foreground">仅桌面客户端可用</p>
                 <p className="text-micro text-muted-foreground/70">
@@ -653,7 +696,7 @@ export function GraphViewDialog({
             onClick={handleClick}
           />
         )}
-        {graph && graph.nodes.length > 0 && (
+        {graph && graph.nodes.length > 0 && legendMode === "notes" && (
           <div className="absolute bottom-2 left-2 flex flex-col gap-0.5 rounded-md border border-border/60 bg-background px-2 py-1 text-micro">
             <div className="flex items-center gap-1.5">
               <span className="h-2 w-2 rounded-full bg-blue-500" />
@@ -677,6 +720,12 @@ export function GraphViewDialog({
             </div>
           </div>
         )}
+        {graph && graph.nodes.length > 0 && legendMode === "knowledge" ? (
+          <div className="absolute bottom-2 left-2 flex items-center gap-1.5 rounded-md border border-border/60 bg-background px-2 py-1 text-micro">
+            <span className="h-2 w-2 rounded-full bg-emerald-500" />
+            <span>知识页面</span>
+          </div>
+        ) : null}
       </div>
     </div>
   );

@@ -27,16 +27,20 @@ import {
   type PptDesignSpecSummary,
   type PptOutlinePage,
 } from "@/lib/api";
+
+export type PptGenerationMode = "page-by-page" | "all";
+
 interface PptOutlinePhaseProps {
   projectName: string;
   token: string;
-  onLocked: () => void;
+  onLocked: (mode: PptGenerationMode) => void;
   /** Incremented by parent when AI streaming transitions from true → false.
    *  Mirrors VideoMakerView's aiTurnComplete pattern: triggers an immediate
    *  refresh + 800ms fallback to catch files the AI just wrote to disk. */
   refreshTrigger?: number;
   /** Responsive breakpoint: narrow 时页面列表和整体规格通过 Sheet 打开 */
   bp?: Breakpoint;
+  disabled?: boolean;
 }
 
 const VISUAL_TYPE_OPTIONS: Array<{ value: string; label: string }> = [
@@ -150,7 +154,7 @@ function makeEmptyPage(): PptOutlinePage {
   };
 }
 
-export function PptOutlinePhase({ projectName, token, onLocked, refreshTrigger, bp = "wide" }: PptOutlinePhaseProps) {
+export function PptOutlinePhase({ projectName, token, onLocked, refreshTrigger, bp = "wide", disabled = false }: PptOutlinePhaseProps) {
   const [pages, setPages] = useState<PptOutlinePage[]>([]);
   const [revision, setRevision] = useState<number>(0);
   const [selectedIdx, setSelectedIdx] = useState<number>(0);
@@ -702,7 +706,7 @@ export function PptOutlinePhase({ projectName, token, onLocked, refreshTrigger, 
   );
 
   // --- Confirm: clear drafts → flush spec save → save outline → lock ---
-  const handleConfirm = useCallback(async () => {
+  const handleConfirm = useCallback(async (mode: PptGenerationMode) => {
     // Clear any pending outline save timer
     if (saveTimerRef.current) clearTimeout(saveTimerRef.current);
     // Step 0: 停止草稿防抖并清理本地草稿（确认后内容以服务端为准，草稿失去意义）。
@@ -728,7 +732,7 @@ export function PptOutlinePhase({ projectName, token, onLocked, refreshTrigger, 
       setRevision(saveRes.revision);
       // Step 3: Lock outline
       await lockPptOutline(token, projectName);
-      onLocked();
+      onLocked(mode);
     } catch (e) {
       if (e instanceof ApiError && e.status === 409) {
         setError("大纲已被修改，正在重新加载...");
@@ -1128,13 +1132,15 @@ export function PptOutlinePhase({ projectName, token, onLocked, refreshTrigger, 
   // 确认按钮不可用原因（锁定/大纲保存期间不可重复触发，向用户说明原因）。
   // 注意：规格保存进行中（specSaving）不禁用——handleConfirm 内的 flushSpecSave
   // 会等待在途请求完成后再提交累积 patch，点击确认即排队等待。
-  const confirmReason = locking
-    ? "正在确认大纲…"
-    : saving
-      ? "大纲保存中…"
-      : pages.length === 0
-        ? "等待 AI 生成大纲"
-        : null;
+  const confirmReason = disabled
+    ? "Mona 正在处理当前修改…"
+    : locking
+      ? "正在确认大纲…"
+      : saving
+        ? "大纲保存中…"
+        : pages.length === 0
+          ? "等待 AI 生成大纲"
+          : null;
 
   return (
     <div className="flex h-full flex-col">
@@ -1330,20 +1336,19 @@ export function PptOutlinePhase({ projectName, token, onLocked, refreshTrigger, 
               <span className="text-[11px] text-muted-foreground">{confirmReason}</span>
             )}
             <Button
-              onClick={handleConfirm}
+              variant="outline"
+              onClick={() => void handleConfirm("page-by-page")}
               disabled={confirmReason !== null}
             >
-              {locking ? (
-                <>
-                  <Loader2 className="mr-1.5 h-3.5 w-3.5 animate-spin" />
-                  锁定中...
-                </>
-              ) : (
-                <>
-                  <Check className="mr-1.5 h-3.5 w-3.5" />
-                  确认大纲并继续
-                </>
-              )}
+              <Check className="mr-1.5 h-3.5 w-3.5" />
+              逐页生成
+            </Button>
+            <Button
+              onClick={() => void handleConfirm("all")}
+              disabled={confirmReason !== null}
+            >
+              {locking && <Loader2 className="mr-1.5 h-3.5 w-3.5 animate-spin" />}
+              全部生成
             </Button>
           </div>
         </div>

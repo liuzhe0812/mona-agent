@@ -1347,13 +1347,9 @@ def _run_gateway(
             request_timeout=120.0,
         )
 
-        async def on_startup(_app):
-            await agent._connect_mcp()
-
         async def on_cleanup(_app):
             await agent.close_mcp()
 
-        app.on_startup.append(on_startup)
         app.on_cleanup.append(on_cleanup)
 
         runner = web.AppRunner(app)
@@ -1541,7 +1537,11 @@ def _run_services(config: Config, *, port: int | None = None) -> None:
     port = port if port is not None else config.services.port
     host = config.services.host or "127.0.0.1"
     console.print(f"{__logo__} Starting mona services version {__version__} on port {port}...")
-    run_startup_migrations(config.workspace_path)
+    # Global migrations belong to the Gateway startup. Services may run in the
+    # same desktop launch, so repeating them here only serializes both processes
+    # on shared filesystem locks. Runtime components still migrate lazily when a
+    # services feature first requests one.
+    config.workspace_path.mkdir(parents=True, exist_ok=True)
 
     schedule_dir = config.workspace_path / "schedule"
     cron = CronService(schedule_dir / "cron_jobs.json")

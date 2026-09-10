@@ -1,0 +1,38 @@
+{
+  "baseHash": "<canvas.open semanticHash>",
+  "baseDocumentHash": "<canvas.open documentHash>",
+  "ops": [{
+    "name": "replaceGraph",
+    "graph": {
+      "direction": "LR",
+      "layout": "auto",
+      "theme": { "stylePreset": "soft", "paletteId": "blue-gray", "preserveManualStyles": true },
+      "background": "#FFFFFF",
+      "nodes": [
+        { "id": "submit", "kind": "start", "label": "提交退款申请", "laneId": "lane-user", "icon": "user" },
+        { "id": "verify", "kind": "process", "label": "核验订单与金额", "laneId": "lane-service", "icon": "server" },
+        { "id": "eligible", "kind": "decision", "label": "符合退款条件？", "laneId": "lane-service" },
+        { "id": "pay", "kind": "process", "label": "原路退款", "laneId": "lane-finance", "icon": "check", "style": { "fill": "#DCFCE7", "borderColor": "#6FAE63" } },
+        { "id": "reject", "kind": "end", "label": "说明拒绝原因", "laneId": "lane-user", "style": { "fill": "#FEE2E2", "borderColor": "#D85A52" } },
+        { "id": "complete", "kind": "end", "label": "退款完成", "laneId": "lane-user" }
+      ],
+      "edges": [
+        { "id": "e-submit-verify", "source": "submit", "target": "verify" },
+        { "id": "e-verify-eligible", "source": "verify", "target": "eligible" },
+        { "id": "e-eligible-pay", "source": "eligible", "target": "pay", "label": "是" },
+        { "id": "e-eligible-reject", "source": "eligible", "target": "reject", "label": "否", "style": { "stroke": "#D85A52", "strokeDasharray": "dashed" } },
+        { "id": "e-pay-complete", "source": "pay", "target": "complete" }
+      ],
+      "pools": [{
+        "id": "refund-pool",
+        "label": "订单退款流程",
+        "orientation": "horizontal",
+        "lanes": [
+          { "id": "lane-user", "label": "用户" },
+          { "id": "lane-service", "label": "业务系统" },
+          { "id": "lane-finance", "label": "支付系统" }
+        ]
+      }]
+    }
+  }]
+}

@@ -15,7 +15,7 @@ import re
 import tempfile
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 
 from pydantic import Field, field_validator
 
@@ -30,9 +30,64 @@ _AVATAR_DATA_URL_RE = re.compile(
 _MAX_AVATAR_BYTES = 2 * 1024 * 1024
 _MAX_AVATAR_CHARS = 3_000_000
 
+# Platform-owned personal-knowledge capabilities that a user may explicitly
+# grant to an installed Agent even when its package manifest did not request
+# them. Other tools remain bounded by the package allowlist.
+USER_GRANTABLE_PLATFORM_TOOLS = frozenset({
+    "materials_read",
+    "materials_search",
+    "notes_create",
+    "notes_read",
+    "notes_save_image",
+    "notes_search",
+    "wiki_read",
+    "wiki_search",
+})
+AGENT_KNOWLEDGE_TOOLS = (
+    "materials_search",
+    "materials_read",
+    "wiki_search",
+    "wiki_read",
+)
+MONA_CONTEXTUAL_TOOLS = ("canvas",)
+
+# Query permissions are intentionally atomic: search without evidence reading
+# encourages answers from snippets, while read without search is not usable.
+QUERY_TOOL_PAIRS = (
+    frozenset({"notes_search", "notes_read"}),
+    frozenset({"materials_search", "materials_read"}),
+    frozenset({"wiki_search", "wiki_read"}),
+)
+
+_ACADEMIC_SKILL_RENAMES = {
+    "research-evidence": ("literature-search", "paper-reading", "citation-audit"),
+    "research-design": ("research-design",),
+    "research-execution": ("analysis-experiment",),
+    "research-writing": ("manuscript-editing", "review-response"),
+}
+
 
 class AgentConfigConflictError(ValueError):
     """Raised when a caller saves against a stale configuration revision."""
+
+
+class KnowledgeBaseScope(Base):
+    """Knowledge libraries one Agent may query."""
+
+    mode: Literal["all", "none", "specific"] = "all"
+    knowledge_base_ids: list[str] = Field(default_factory=list)
+
+    @field_validator("knowledge_base_ids")
+    @classmethod
+    def _validate_ids(cls, value: list[str]) -> list[str]:
+        from mona.materials.catalog import validate_library_id
+
+        result: list[str] = []
+        for item in value:
+            library_id = validate_library_id(item)
+            if library_id not in result:
+                result.append(library_id)
+        return result
 
 
 class AgentUserConfig(Base):
@@ -53,11 +108,15 @@ class AgentUserConfig(Base):
     max_tokens: int | None = Field(default=None, ge=1, le=200_000)
     # null means inherit the manifest's allowed tools; [] means explicitly no tools.
     granted_tools: list[str] | None = None
+    knowledge_base_scope: KnowledgeBaseScope = Field(default_factory=KnowledgeBaseScope)
     disabled_skills: list[str] = Field(default_factory=list)
     delegation_enabled: bool = True
     # Scripts are never enabled merely by installing a skill. This list is managed
     # through an explicit UI action after the user reviews the script risk.
     script_enabled_skills: list[str] = Field(default_factory=list)
+    # Bind approval to the exact effective Skill content. A package update or a
+    # higher-precedence private Skill with the same name requires fresh approval.
+    script_enabled_skill_hashes: dict[str, str] = Field(default_factory=dict)
     updated_at: str | None = None
 
     @field_validator("display_name", "avatar", "model_preset", "reasoning_effort")
@@ -100,6 +159,18 @@ class AgentUserConfig(Base):
                 names.append(name)
         return names
 
+    @field_validator("script_enabled_skill_hashes")
+    @classmethod
+    def _validate_script_hashes(cls, value: dict[str, str]) -> dict[str, str]:
+        result: dict[str, str] = {}
+        for raw_name, raw_hash in value.items():
+            name = raw_name.strip()
+            content_hash = raw_hash.strip().lower()
+            if not name or not re.fullmatch(r"[0-9a-f]{64}", content_hash):
+                raise ValueError("script approval hashes must be SHA-256 values")
+            result[name] = content_hash
+        return result
+
 
 class EffectiveAgentConfig(Base):
     """Resolved values consumed by runtime and returned for UI explanation."""
@@ -113,6 +184,7 @@ class EffectiveAgentConfig(Base):
     temperature: float | None = None
     max_tokens: int | None = None
     allowed_tools: list[str] | None = None
+    knowledge_base_scope: KnowledgeBaseScope = Field(default_factory=KnowledgeBaseScope)
     disabled_skills: list[str] = Field(default_factory=list)
     delegation_enabled: bool = False
     script_enabled_skills: list[str] = Field(default_factory=list)
@@ -137,7 +209,18 @@ def load_agent_user_config(agent_id: str) -> AgentUserConfig:
         return AgentUserConfig()
     try:
         raw = json.loads(path.read_text(encoding="utf-8"))
-        return AgentUserConfig.model_validate(raw)
+        config = AgentUserConfig.model_validate(raw)
+        if normalize_agent_id(agent_id) == "com.mona.academic-researcher":
+            updates: dict[str, list[str]] = {}
+            for field_name in ("disabled_skills", "script_enabled_skills"):
+                names: list[str] = []
+                for name in getattr(config, field_name):
+                    for replacement in _ACADEMIC_SKILL_RENAMES.get(name, (name,)):
+                        if replacement not in names:
+                            names.append(replacement)
+                updates[field_name] = names
+            config = config.model_copy(update=updates)
+        return config
     except (OSError, ValueError, json.JSONDecodeError):
         return AgentUserConfig()
 
@@ -187,7 +270,7 @@ def resolve_effective_agent_config(
     definition: AgentDefinition,
     config: AgentUserConfig | None = None,
 ) -> EffectiveAgentConfig:
-    """Resolve user choices without ever expanding a package capability bound."""
+    """Resolve package defaults plus explicitly user-grantable platform tools."""
     config = config or load_agent_user_config(definition.id)
     if definition.id == MONA_AGENT_ID:
         manifest_tools: list[str] | None = None
@@ -199,7 +282,31 @@ def resolve_effective_agent_config(
     elif config.granted_tools is None:
         allowed_tools = manifest_tools
     else:
-        allowed_tools = [name for name in config.granted_tools if name in manifest_tools]
+        ceiling = set(manifest_tools) | USER_GRANTABLE_PLATFORM_TOOLS
+        allowed_tools = [name for name in config.granted_tools if name in ceiling]
+
+    if allowed_tools is not None:
+        allowed_tools = [
+            name for name in allowed_tools if name not in AGENT_KNOWLEDGE_TOOLS
+        ] + list(AGENT_KNOWLEDGE_TOOLS)
+        if definition.id == MONA_AGENT_ID:
+            allowed_tools = [
+                name for name in allowed_tools if name not in MONA_CONTEXTUAL_TOOLS
+            ] + list(MONA_CONTEXTUAL_TOOLS)
+
+    if (
+        allowed_tools is not None
+        and "notes_save_image" in allowed_tools
+        and "notes_create" not in allowed_tools
+    ):
+        allowed_tools = [name for name in allowed_tools if name != "notes_save_image"]
+
+    if allowed_tools is not None:
+        allowed = set(allowed_tools)
+        for pair in QUERY_TOOL_PAIRS:
+            if not pair <= allowed:
+                allowed.difference_update(pair)
+        allowed_tools = [name for name in allowed_tools if name in allowed]
 
     return EffectiveAgentConfig(
         agent_id=definition.id,
@@ -211,9 +318,27 @@ def resolve_effective_agent_config(
         temperature=config.temperature,
         max_tokens=config.max_tokens,
         allowed_tools=allowed_tools,
+        knowledge_base_scope=config.knowledge_base_scope,
         disabled_skills=list(config.disabled_skills),
         delegation_enabled=definition.can_delegate and config.delegation_enabled,
         script_enabled_skills=list(config.script_enabled_skills),
+    )
+
+
+def configurable_agent_tools(definition: AgentDefinition) -> list[str] | None:
+    """Return the tools the user may enable for one Agent.
+
+    ``None`` keeps Mona's unrestricted platform catalog. Package Agents keep
+    their manifest tools plus the narrow set of platform-owned knowledge
+    capabilities above.
+    """
+    if definition.id == MONA_AGENT_ID:
+        return None
+    return list(
+        dict.fromkeys([
+            *definition.tool_allowlist,
+            *sorted(USER_GRANTABLE_PLATFORM_TOOLS),
+        ])
     )
 
 
@@ -221,6 +346,11 @@ __all__ = [
     "AGENT_USER_CONFIG_SCHEMA_VERSION",
     "AgentConfigConflictError",
     "AgentUserConfig",
+    "AGENT_KNOWLEDGE_TOOLS",
+    "KnowledgeBaseScope",
+    "USER_GRANTABLE_PLATFORM_TOOLS",
+    "QUERY_TOOL_PAIRS",
+    "configurable_agent_tools",
     "EffectiveAgentConfig",
     "get_agent_user_config_path",
     "load_agent_user_config",

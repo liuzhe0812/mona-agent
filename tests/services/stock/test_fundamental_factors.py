@@ -45,6 +45,14 @@ def test_fundamental_factor_result_is_deterministic_and_explainable():
     )
 
     assert first == second
+    assert first["status"] == "available"
+    assert first["core_group_ready"] == {
+        "profitability": True,
+        "growth_quality": True,
+        "cashflow_quality": True,
+        "financial_safety": True,
+        "valuation": True,
+    }
     assert first["score"] is not None
     roe = next(item for item in first["factors"] if item["id"] == "roe")
     assert roe["raw_value"] == 12.0

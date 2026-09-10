@@ -1,8 +1,10 @@
+import { act, renderHook } from "@testing-library/react";
 import { describe, expect, it } from "vitest";
 import {
   createBrowserTabId,
   mergeServerTabs,
   shouldPersistBrowserSession,
+  useBrowserTabs,
   type Tab,
 } from "./useBrowserTabs";
 
@@ -46,5 +48,17 @@ describe("browser tab ids", () => {
 
     expect(first).toMatch(/^tab-[0-9a-f-]{36}$/);
     expect(second).not.toBe(first);
+  });
+});
+
+describe("local document tab callbacks", () => {
+  it("keeps the canvas opener stable while tabs change", () => {
+    const { result } = renderHook(() => useBrowserTabs());
+    const openCanvas = result.current.addCanvasReaderTab;
+
+    act(() => openCanvas("D:\\workspace\\diagram.mona-canvas"));
+
+    expect(result.current.tabs.some((tab) => tab.canvasFilePath === "D:\\workspace\\diagram.mona-canvas")).toBe(true);
+    expect(result.current.addCanvasReaderTab).toBe(openCanvas);
   });
 });

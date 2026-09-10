@@ -5,12 +5,14 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { FileText, Loader2 } from "lucide-react";
 
-import { OfficePreview, isOfficePreviewable } from "@/components/common/OfficePreview";
+import { PdfPreview } from "@/components/common/PdfPreview";
+import { OfficeFileEditor, officeDocumentType } from "@/components/office/OfficeFileEditor";
 import { getServicesHttpBase } from "@/lib/api";
 import { httpFetch } from "@/lib/tauri";
 import {
   getMaterialsText,
   getMaterialsRawFile,
+  getEvidenceDetail,
   getWikiPage,
 } from "@/lib/materials-api";
 import MarkdownTextRenderer from "@/components/MarkdownTextRenderer";
@@ -25,14 +27,14 @@ export function MaterialsPreview({ selection }: MaterialsPreviewProps) {
   if (!selection) {
     return (
       <div className="flex flex-1 items-center justify-center text-[13px] text-muted-foreground">
-        选择左侧的资料或 Wiki 页面查看内容
+        选择左侧资料查看内容
       </div>
     );
   }
   return selection.kind === "raw" ? (
-    <RawPreview path={selection.path} />
+    <RawPreview path={selection.path} knowledgeBaseId={selection.knowledgeBaseId} agentId={selection.agentId} />
   ) : (
-    <WikiPreview path={selection.path} />
+    <WikiPreview path={selection.path} knowledgeBaseId={selection.knowledgeBaseId} agentId={selection.agentId} />
   );
 }
 
@@ -48,11 +50,12 @@ function rawPathToTextPath(rawRel: string): string {
   return `text/${stripped}.md`;
 }
 
-function RawPreview({ path }: { path: string }) {
+function RawPreview({ path, knowledgeBaseId, agentId }: { path: string; knowledgeBaseId?: string; agentId?: string }) {
   const rawRel = path.replace(/^raw\//, "");
   const ext = getExt(rawRel);
-  const isOffice = isOfficePreviewable(rawRel);
+  const isOffice = !!officeDocumentType(rawRel);
   const isDirect = DIRECT_PREVIEW_EXTS.has(ext);
+  const isImage = ["png", "jpg", "jpeg", "webp"].includes(ext);
 
   // 引用跳转带位置时强制走文本预览（提取文本含 seg 标题，可滚动定位），
   // 否则 Office 原文预览无法定位到 Page/Sheet。
@@ -63,11 +66,13 @@ function RawPreview({ path }: { path: string }) {
 
   useEffect(() => {
     if (!pending || pending.kind !== "raw" || pending.path !== path) return;
+    if (pending.agentId && pending.agentId !== agentId) return;
+    if (pending.knowledgeBaseId && pending.knowledgeBaseId !== knowledgeBaseId) return;
     if (pending.location) {
       setCaptured({ nonce: pending.nonce, location: pending.location });
     }
     useMaterialsOpenStore.getState().clear();
-  }, [pending, path]);
+  }, [agentId, pending, path, knowledgeBaseId]);
 
   // 切换文件后丢弃旧的捕获位置
   useEffect(() => {
@@ -76,9 +81,11 @@ function RawPreview({ path }: { path: string }) {
 
   const forceText = captured !== null;
 
-  // Office 文档用 jit-viewer 预览
-  if (isOffice && !forceText) {
-    return <OfficeRawPreview path={path} />;
+  if ((isOffice || ext === "pdf") && !forceText) {
+    return <OfficeRawPreview path={path} knowledgeBaseId={knowledgeBaseId} agentId={agentId} />;
+  }
+  if (isImage && !forceText) {
+    return <ImageRawPreview path={path} knowledgeBaseId={knowledgeBaseId} agentId={agentId} />;
   }
 
   return (
@@ -89,27 +96,86 @@ function RawPreview({ path }: { path: string }) {
       isDirect={isDirect && !forceText}
       scrollToLabel={captured?.location}
       scrollNonce={captured?.nonce}
+      knowledgeBaseId={knowledgeBaseId}
+      agentId={agentId}
     />
   );
 }
 
-function OfficeRawPreview({ path }: { path: string }) {
+function ImageRawPreview({ path, knowledgeBaseId, agentId }: { path: string; knowledgeBaseId?: string; agentId?: string }) {
   const rawRel = path.replace(/^raw\//, "");
+  const [url, setUrl] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  useEffect(() => {
+    let cancelled = false;
+    let objectUrl: string | null = null;
+    void (async () => {
+      try {
+        const base = await getServicesHttpBase();
+        const query = agentId
+          ? `?agentId=${encodeURIComponent(agentId)}`
+          : knowledgeBaseId
+            ? `?knowledgeBaseId=${encodeURIComponent(knowledgeBaseId)}`
+            : "";
+        const response = await httpFetch(
+          `${base}/api/materials/raw-binary/${encodeURIComponent(rawRel)}${query}`,
+        );
+        if (!response.ok) throw new Error(`HTTP ${response.status}`);
+        objectUrl = URL.createObjectURL(await response.blob());
+        if (!cancelled) setUrl(objectUrl);
+      } catch (cause) {
+        if (!cancelled) setError(cause instanceof Error ? cause.message : "无法读取图片");
+      }
+    })();
+    return () => {
+      cancelled = true;
+      if (objectUrl) URL.revokeObjectURL(objectUrl);
+    };
+  }, [agentId, knowledgeBaseId, rawRel]);
+  return (
+    <div className="flex min-h-0 flex-1 items-center justify-center overflow-auto bg-muted/20 p-6">
+      {error ? <span className="text-caption text-destructive">{error}</span> : null}
+      {!error && !url ? <Loader2 className="h-4 w-4 animate-spin text-muted-foreground" /> : null}
+      {url ? <img src={url} alt={rawRel} className="max-h-full max-w-full object-contain" /> : null}
+    </div>
+  );
+}
+
+function OfficeRawPreview({ path, knowledgeBaseId, agentId }: { path: string; knowledgeBaseId?: string; agentId?: string }) {
+  const rawRel = path.replace(/^raw\//, "");
+  const [toolbarContainer, setToolbarContainer] = useState<HTMLDivElement | null>(null);
   const fetchBuffer = useCallback(async () => {
     const base = await getServicesHttpBase();
     // 必须走 httpFetch（Tauri 本地桥）：裸 fetch 不会附带 X-Mona-Token，会 401
-    const resp = await httpFetch(`${base}/api/materials/raw-binary/${encodeURIComponent(rawRel)}`);
+    const query = agentId
+      ? `?agentId=${encodeURIComponent(agentId)}`
+      : knowledgeBaseId
+        ? `?knowledgeBaseId=${encodeURIComponent(knowledgeBaseId)}`
+        : "";
+    const resp = await httpFetch(`${base}/api/materials/raw-binary/${encodeURIComponent(rawRel)}${query}`);
     if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
     return resp.arrayBuffer();
-  }, [rawRel]);
+  }, [agentId, rawRel, knowledgeBaseId]);
 
   return (
     <div className="flex min-h-0 flex-1 flex-col">
       <div className="flex h-9 shrink-0 items-center gap-2 border-b border-border/70 px-3">
         <FileText className="h-3.5 w-3.5 text-muted-foreground" />
-        <span className="truncate text-[13px]">{rawRel}</span>
+        <span className="min-w-0 flex-1 truncate text-[13px]">{rawRel}</span>
+        <div ref={setToolbarContainer} className="flex shrink-0 items-center" />
       </div>
-      <OfficePreview filename={rawRel} fetchBuffer={fetchBuffer} />
+      {getExt(rawRel) === "pdf" ? (
+        <PdfPreview key={`${agentId ?? knowledgeBaseId}:${rawRel}`} filename={rawRel} fetchBuffer={fetchBuffer} />
+      ) : (
+        <OfficeFileEditor
+          key={`${agentId ?? knowledgeBaseId}:${rawRel}`}
+          filename={rawRel.replace(/\\/g, "/").split("/").pop()!}
+          sourceIdentity={`materials:${agentId ?? knowledgeBaseId ?? "default"}:${rawRel}`}
+          ownerSessionKey={`materials:${agentId ?? knowledgeBaseId ?? "default"}`}
+          fetchBuffer={fetchBuffer}
+          toolbarContainer={toolbarContainer}
+        />
+      )}
     </div>
   );
 }
@@ -121,6 +187,8 @@ function TextRawPreview({
   isDirect,
   scrollToLabel,
   scrollNonce,
+  knowledgeBaseId,
+  agentId,
 }: {
   path: string;
   rawRel: string;
@@ -128,6 +196,8 @@ function TextRawPreview({
   isDirect: boolean;
   scrollToLabel?: string;
   scrollNonce?: number;
+  knowledgeBaseId?: string;
+  agentId?: string;
 }) {
   const [content, setContent] = useState<string | null>(null);
   const [previewMode, setPreviewMode] = useState<"text" | "markdown" | "html">("text");
@@ -164,7 +234,7 @@ function TextRawPreview({
       try {
         if (isDirect) {
           // md/html/txt 等文本格式：直接读取 raw 原文
-          const data = await getMaterialsRawFile(rawRel);
+          const data = await getMaterialsRawFile(rawRel, knowledgeBaseId, agentId);
           if (cancelled) return;
           setContent(data.content);
           if (ext === "md" || ext === "markdown") {
@@ -177,7 +247,7 @@ function TextRawPreview({
         } else {
           // pdf/docx/xlsx/pptx 等：读取提取后的文本
           const textPath = rawPathToTextPath(path);
-          const data = await getMaterialsText(textPath);
+          const data = await getMaterialsText(textPath, knowledgeBaseId, agentId);
           if (cancelled) return;
           // 去掉 frontmatter
           let text = data.content;
@@ -199,7 +269,7 @@ function TextRawPreview({
     return () => {
       cancelled = true;
     };
-  }, [path, rawRel, ext, isDirect]);
+  }, [agentId, path, rawRel, ext, isDirect, knowledgeBaseId]);
 
   return (
     <div className="flex min-h-0 flex-1 flex-col">
@@ -249,10 +319,11 @@ function TextRawPreview({
   );
 }
 
-function WikiPreview({ path }: { path: string }) {
+function WikiPreview({ path, knowledgeBaseId, agentId }: { path: string; knowledgeBaseId?: string; agentId?: string }) {
   const [content, setContent] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [evidenceLinks, setEvidenceLinks] = useState<Record<string, string>>({});
   const containerRef = useRef<HTMLDivElement | null>(null);
 
   // 引用跳转（wiki）：捕获位置标签后立即清除全局 pending，
@@ -262,11 +333,13 @@ function WikiPreview({ path }: { path: string }) {
 
   useEffect(() => {
     if (!pending || pending.kind !== "wiki" || pending.path !== path) return;
+    if (pending.agentId && pending.agentId !== agentId) return;
+    if (pending.knowledgeBaseId && pending.knowledgeBaseId !== knowledgeBaseId) return;
     if (pending.location) {
       setCaptured({ nonce: pending.nonce, location: pending.location });
     }
     useMaterialsOpenStore.getState().clear();
-  }, [pending, path]);
+  }, [agentId, pending, path, knowledgeBaseId]);
 
   useEffect(() => {
     setCaptured(null);
@@ -279,7 +352,7 @@ function WikiPreview({ path }: { path: string }) {
     setContent(null);
     (async () => {
       try {
-        const data = await getWikiPage(path);
+        const data = await getWikiPage(path, knowledgeBaseId, agentId);
         if (!cancelled) setContent(data.content);
       } catch (err) {
         if (!cancelled) {
@@ -292,16 +365,49 @@ function WikiPreview({ path }: { path: string }) {
     return () => {
       cancelled = true;
     };
-  }, [path]);
+  }, [agentId, path, knowledgeBaseId]);
+
+  useEffect(() => {
+    let cancelled = false;
+    const ids = Array.from(
+      new Set(Array.from((content ?? "").matchAll(/\[\[evidence:(ev-[a-f0-9]+)\]\]/g), (match) => match[1])),
+    );
+    if (ids.length === 0) {
+      setEvidenceLinks({});
+      return () => { cancelled = true; };
+    }
+    void Promise.all(ids.map(async (id) => {
+      try {
+        const detail = await getEvidenceDetail(id, knowledgeBaseId, agentId);
+        const params = new URLSearchParams({
+          ...(knowledgeBaseId ? { knowledgeBaseId } : {}),
+          ...(agentId ? { agentId } : {}),
+          path: `raw/${detail.source}`,
+          location: detail.label,
+        });
+        return [id, `mona:material?${params.toString()}`] as const;
+      } catch {
+        return null;
+      }
+    })).then((entries) => {
+      if (cancelled) return;
+      setEvidenceLinks(Object.fromEntries(entries.filter((entry) => entry !== null)));
+    });
+    return () => { cancelled = true; };
+  }, [agentId, content, knowledgeBaseId]);
 
   const body = useMemo(() => {
     if (!content) return "";
+    let value = content;
     if (content.startsWith("---")) {
       const end = content.indexOf("---", 3);
-      if (end !== -1) return content.slice(end + 3).trimStart();
+      if (end !== -1) value = content.slice(end + 3).trimStart();
     }
-    return content;
-  }, [content]);
+    return value.replace(
+      /\[\[evidence:(ev-[a-f0-9]+)\]\]/g,
+      (marker, id: string) => evidenceLinks[id] ? `[证据](${evidenceLinks[id]})` : marker,
+    );
+  }, [content, evidenceLinks]);
 
   useEffect(() => {
     if (!captured || !body || !containerRef.current) return;

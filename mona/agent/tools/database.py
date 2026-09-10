@@ -7,7 +7,7 @@ from loguru import logger
 from mona.agent.tools.base import Tool, tool_parameters
 from mona.agent.tools.context import RequestContext
 from mona.agent.tools.schema import StringSchema, tool_parameters_schema
-from mona.agent.tools.terminal import _tauri_invoke
+from mona.agent.tools.terminal import _tauri_invoke_async
 
 
 @tool_parameters(
@@ -25,6 +25,7 @@ from mona.agent.tools.terminal import _tauri_invoke
 class DbQueryTool(Tool):
     config_key = "db_query"
     _scopes = {"core"}
+    subscription_required = True
     _request_ctx: RequestContext | None = None
     _connection_id: str | None = None
     _database: str | None = None
@@ -60,7 +61,7 @@ class DbQueryTool(Tool):
 
         logger.debug("db_query: sql={!r} db={} conn={}", sql, effective_db, self._connection_id)
 
-        result = _tauri_invoke(
+        result = await _tauri_invoke_async(
             "db_execute_ai_read",
             {
                 "connectionId": self._connection_id,
@@ -89,6 +90,7 @@ class DbQueryTool(Tool):
 class DbInspectTool(Tool):
     config_key = "db_inspect"
     _scopes = {"core"}
+    subscription_required = True
     _connection_id: str | None = None
     _database: str | None = None
 
@@ -126,7 +128,7 @@ class DbInspectTool(Tool):
         if not self._connection_id:
             return "Error: No database connection available."
 
-        result = _tauri_invoke(
+        result = await _tauri_invoke_async(
             "db_ai_inspect",
             {
                 "connectionId": self._connection_id,
@@ -158,6 +160,7 @@ class DbInspectTool(Tool):
 class DbSqlDraftTool(Tool):
     config_key = "db_sql_draft"
     _scopes = {"core"}
+    subscription_required = True
 
     @property
     def name(self) -> str:
@@ -191,7 +194,7 @@ class DbSqlDraftTool(Tool):
             else []
         )
 
-        result = _tauri_invoke(
+        result = await _tauri_invoke_async(
             "db_publish_sql_draft",
             {
                 "sql": sql,

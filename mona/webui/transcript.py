@@ -22,6 +22,23 @@ _IMAGE_EXTS = {".png", ".jpg", ".jpeg", ".gif", ".webp", ".bmp", ".ico", ".tif",
 _VIDEO_EXTS = {".mp4", ".webm", ".mov", ".m4v", ".avi", ".mkv", ".3gp"}
 
 
+def _ui_token_usage(value: Any) -> dict[str, int] | None:
+    if not isinstance(value, dict):
+        return None
+    prompt = int(value.get("prompt_tokens") or 0)
+    completion = int(value.get("completion_tokens") or 0)
+    cached = int(value.get("cached_tokens") or value.get("cache_read_input_tokens") or 0)
+    total = int(value.get("total_tokens") or prompt + completion)
+    if max(prompt, completion, cached, total) <= 0:
+        return None
+    return {
+        "promptTokens": max(0, prompt),
+        "completionTokens": max(0, completion),
+        "cachedTokens": max(0, cached),
+        "totalTokens": max(0, total),
+    }
+
+
 def _infer_media_kind(name: str, url: str) -> str:
     """Infer media kind from file name / URL extension."""
     ext = Path(name).suffix.lower() if name else ""
@@ -84,6 +101,26 @@ def append_transcript_object(session_key: str, obj: dict[str, Any]) -> None:
         os.fsync(f.fileno())
 
 
+def write_transcript_objects(session_key: str, objects: list[dict[str, Any]]) -> None:
+    """Atomically create a WebUI transcript from validated display records."""
+    lines = [json.dumps(obj, ensure_ascii=False, separators=(",", ":")) for obj in objects]
+    raw = "\n".join(lines) + ("\n" if lines else "")
+    if len(raw.encode("utf-8")) > _MAX_TRANSCRIPT_FILE_BYTES:
+        raise ValueError("webui transcript too large")
+    path = webui_transcript_path(session_key)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp_path = path.with_suffix(".jsonl.tmp")
+    try:
+        with open(tmp_path, "w", encoding="utf-8") as f:
+            f.write(raw)
+            f.flush()
+            os.fsync(f.fileno())
+        os.replace(tmp_path, path)
+    except BaseException:
+        tmp_path.unlink(missing_ok=True)
+        raise
+
+
 def delete_webui_transcript(session_key: str) -> bool:
     path = webui_transcript_path(session_key)
     if not path.is_file():
@@ -99,6 +136,9 @@ def delete_webui_transcript(session_key: str) -> bool:
 def _format_tool_call_trace(call: Any) -> str | None:
     if not call or not isinstance(call, dict):
         return None
+    from mona.agent.tool_privacy import redact_persisted_tool_call
+
+    call = redact_persisted_tool_call(call)
     fn = call.get("function")
     name = fn.get("name") if isinstance(fn, dict) else None
     if not isinstance(name, str) or not name:
@@ -286,15 +326,51 @@ def replay_transcript_to_ui_messages(
             kept.append(m)
         messages = kept
 
-    def stamp_latency(latency_ms: int) -> None:
+    def stamp_turn_end(
+        idx: int,
+        latency_ms: int | None = None,
+        token_usage: dict[str, int] | None = None,
+        task_id: str | None = None,
+    ) -> None:
+        fallback_index: int | None = None
         for i in range(len(messages) - 1, -1, -1):
-            if messages[i].get("role") == "assistant" and messages[i].get("kind") != "trace":
-                messages[i] = {
-                    **messages[i],
-                    "latencyMs": latency_ms,
-                    "isStreaming": False,
-                }
-                return
+            candidate = messages[i]
+            if candidate.get("role") == "user":
+                break
+            if candidate.get("role") != "assistant" or candidate.get("kind") == "trace":
+                continue
+            candidate_task_id = candidate.get("taskId")
+            if task_id and candidate_task_id not in (None, task_id):
+                continue
+            if fallback_index is None:
+                fallback_index = i
+            if str(candidate.get("content") or "").strip():
+                fallback_index = i
+                break
+        if fallback_index is None:
+            return
+        for i, candidate in enumerate(messages):
+            if (
+                i != fallback_index
+                and token_usage is not None
+                and task_id
+                and candidate.get("role") == "assistant"
+                and candidate.get("kind") != "trace"
+                and candidate.get("taskId") == task_id
+            ):
+                candidate.pop("tokenUsage", None)
+        update: dict[str, Any] = {
+            **messages[fallback_index],
+            "sourceTranscriptIndex": idx,
+            "isStreaming": False,
+        }
+        if latency_ms is not None:
+            update["latencyMs"] = latency_ms
+        if token_usage is not None:
+            update["tokenUsage"] = token_usage
+        if task_id:
+            update["taskId"] = task_id
+        messages[fallback_index] = update
 
     def _delivered_file_key(file: dict[str, Any]) -> str:
         return str(file.get("absolute_path") or file.get("path") or file.get("name") or "")
@@ -359,6 +435,7 @@ def replay_transcript_to_ui_messages(
                         message.get("media") if isinstance(message.get("media"), list) else None,
                         media or [],
                     ),
+                    "sourceTranscriptIndex": idx,
                 }
                 return
         messages.append(
@@ -369,6 +446,7 @@ def replay_transcript_to_ui_messages(
                 "deliveredFiles": merge_delivered_files(None, files),
                 "media": merge_media(None, media or []),
                 "createdAt": _ts_base + idx,
+                "sourceTranscriptIndex": idx,
             },
         )
 
@@ -429,6 +507,7 @@ def replay_transcript_to_ui_messages(
                 **extra,
                 "isStreaming": False,
                 "reasoningStreaming": False,
+                "sourceTranscriptIndex": idx,
             }
         else:
             messages.append(
@@ -436,6 +515,7 @@ def replay_transcript_to_ui_messages(
                     "id": _new_id("as", idx),
                     "role": "assistant",
                     "createdAt": _ts_base + idx,
+                    "sourceTranscriptIndex": idx,
                     **extra,
                 },
             )
@@ -548,6 +628,7 @@ def replay_transcript_to_ui_messages(
                 "createdAt": _ts_base + idx,
                 "authorType": "user",
                 "messageType": "message",
+                "sourceTranscriptIndex": idx,
             }
             # IMPORTANT: restore displayContent from transcript so history
             # replay shows the short label (e.g. "健康巡检") instead of the
@@ -555,6 +636,15 @@ def replay_transcript_to_ui_messages(
             dc = rec.get("display_content")
             if isinstance(dc, str) and dc:
                 row["displayContent"] = dc
+            quote = rec.get("quote")
+            if isinstance(quote, dict):
+                author = quote.get("author")
+                quote_content = quote.get("content")
+                if isinstance(author, str) and isinstance(quote_content, str):
+                    row["quote"] = {"author": author, "content": quote_content}
+            task_id = rec.get("task_id")
+            if isinstance(task_id, str) and task_id:
+                row["taskId"] = task_id
             if media_att:
                 row["media"] = media_att
                 if all(m.get("kind") == "image" for m in media_att):
@@ -585,21 +675,20 @@ def replay_transcript_to_ui_messages(
                 attach_or_queue_delivered_files(files, media)
             continue
 
-        if ev == "workflow_run_updated":
-            # Room workflow run card (guide 5.3: structured status payload,
-            # not natural language). Every transition appends a fresh
-            # snapshot; replay keeps the latest one per run, rendered in
-            # place at the position where the run first appeared.
+        if ev in ("workflow_run_updated", "discussion_updated"):
+            # Structured room activity cards keep only the latest snapshot per
+            # run and stay where the activity first appeared in the transcript.
             run_id = rec.get("id")
             if not isinstance(run_id, str) or not run_id:
                 continue
+            card_kind = "discussion" if ev == "discussion_updated" else "workflowRun"
             run_payload = {
                 k: v for k, v in rec.items() if k not in ("event", "chat_id")
             }
             for i in range(len(messages) - 1, -1, -1):
                 candidate = messages[i]
                 if (
-                    candidate.get("kind") == "workflowRun"
+                    candidate.get("kind") == card_kind
                     and candidate.get("workflowRunId") == run_id
                 ):
                     messages[i] = {**candidate, "payload": run_payload}
@@ -607,9 +696,9 @@ def replay_transcript_to_ui_messages(
             else:
                 messages.append(
                     {
-                        "id": _new_id("wfr", idx),
+                        "id": _new_id("topic" if card_kind == "discussion" else "wfr", idx),
                         "role": "assistant",
-                        "kind": "workflowRun",
+                        "kind": card_kind,
                         "content": "",
                         "workflowRunId": run_id,
                         "payload": run_payload,
@@ -632,6 +721,7 @@ def replay_transcript_to_ui_messages(
                 else:
                     buffer_message_id = _new_id("buf", idx)
                     buffer_author_id = rec.get("author_id")
+                    buffer_task_id = rec.get("task_id")
                     messages.append(
                         {
                             "id": buffer_message_id,
@@ -646,13 +736,29 @@ def replay_transcript_to_ui_messages(
                                 else MONA_AGENT_ID
                             ),
                             "messageType": "message",
+                            "sourceTranscriptIndex": idx,
+                            **(
+                                {"taskId": buffer_task_id}
+                                if isinstance(buffer_task_id, str) and buffer_task_id
+                                else {}
+                            ),
                         },
                     )
             buffer_parts.append(chunk)
             combined = "".join(buffer_parts)
             for i, m in enumerate(messages):
                 if m.get("id") == buffer_message_id:
-                    messages[i] = {**m, "content": combined, "isStreaming": True}
+                    messages[i] = {
+                        **m,
+                        "content": combined,
+                        "isStreaming": True,
+                        "sourceTranscriptIndex": idx,
+                        **(
+                            {"taskId": rec["task_id"]}
+                            if isinstance(rec.get("task_id"), str) and rec.get("task_id")
+                            else {}
+                        ),
+                    }
                     break
             continue
 
@@ -723,6 +829,10 @@ def replay_transcript_to_ui_messages(
                         "traces": merged_traces,
                         "content": merged_traces[-1],
                         "activitySegmentId": last.get("activitySegmentId") or segment,
+                        "toolEvents": [
+                            *(last.get("toolEvents") or []),
+                            *(rec.get("tool_events") or []),
+                        ],
                     }
                     messages[-1] = merged
                 else:
@@ -733,6 +843,7 @@ def replay_transcript_to_ui_messages(
                             "kind": "trace",
                             "content": trace_lines[-1],
                             "traces": trace_lines,
+                            **({"toolEvents": rec.get("tool_events")} if rec.get("tool_events") else {}),
                             "activitySegmentId": segment,
                             "createdAt": _ts_base + idx,
                         },
@@ -781,6 +892,15 @@ def replay_transcript_to_ui_messages(
             rec_tool_events = rec.get("tool_events")
             if isinstance(rec_tool_events, list) and rec_tool_events:
                 extra["toolEvents"] = rec_tool_events
+            rec_task_plan = rec.get("task_plan")
+            if isinstance(rec_task_plan, dict):
+                extra["taskPlan"] = rec_task_plan
+            rec_task_id = rec.get("task_id")
+            if isinstance(rec_task_id, str) and rec_task_id:
+                extra["taskId"] = rec_task_id
+            rec_token_usage = _ui_token_usage(rec.get("token_usage"))
+            if rec_token_usage is not None:
+                extra["tokenUsage"] = rec_token_usage
             if media:
                 extra["media"] = media
             lat = rec.get("latency_ms")
@@ -801,8 +921,13 @@ def replay_transcript_to_ui_messages(
             prune_reasoning_only()
             flush_pending_delivered_files(idx)
             lat = rec.get("latency_ms")
-            if isinstance(lat, (int, float)) and lat >= 0:
-                stamp_latency(int(lat))
+            turn_task_id = rec.get("task_id")
+            stamp_turn_end(
+                idx,
+                int(lat) if isinstance(lat, (int, float)) and lat >= 0 else None,
+                _ui_token_usage(rec.get("token_usage")),
+                turn_task_id if isinstance(turn_task_id, str) else None,
+            )
             buffer_message_id = None
             buffer_parts = []
             continue

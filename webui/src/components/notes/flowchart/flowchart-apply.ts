@@ -168,18 +168,23 @@ function emptySummary(): FlowchartPatchSummary {
 
 function formatPatchSummary(summary: FlowchartPatchSummary): string {
   if (summary.replacedGraph) {
-    return "已替换完整流程图";
+    return (summary.qualityIssues?.length ?? 0) > 0
+      ? `已替换完整流程图，仍有 ${summary.qualityIssues!.length} 项布局提醒`
+      : "已替换完整流程图";
   }
   const parts: string[] = [];
   if (summary.addedPools > 0) parts.push(`新增 ${summary.addedPools} 个泳池`);
   if (summary.addedLanes > 0) parts.push(`新增 ${summary.addedLanes} 条泳道`);
   if (summary.movedToLane > 0) parts.push(`移动 ${summary.movedToLane} 个节点归属`);
+  if (summary.updatedTheme) parts.push("更新主题");
+  if (summary.reflowed) parts.push("重新布局");
   if (summary.addedNodes > 0) parts.push(`新增 ${summary.addedNodes} 个节点`);
   if (summary.updatedNodes > 0) parts.push(`修改 ${summary.updatedNodes} 个节点`);
   if (summary.removedNodes > 0) parts.push(`删除 ${summary.removedNodes} 个节点`);
   if (summary.addedEdges > 0) parts.push(`新增 ${summary.addedEdges} 条连线`);
   if (summary.updatedEdges > 0) parts.push(`修改 ${summary.updatedEdges} 条连线`);
   if (summary.removedEdges > 0) parts.push(`删除 ${summary.removedEdges} 条连线`);
+  if ((summary.qualityIssues?.length ?? 0) > 0) parts.push(`${summary.qualityIssues!.length} 项布局提醒`);
   return parts.length === 0 ? "已应用 patch" : `已应用：${parts.join(" · ")}`;
 }
 

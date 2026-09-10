@@ -71,6 +71,41 @@ def test_migration_is_idempotent(tmp_path: Path) -> None:
     assert [path.name for path in (target_component / "versions").iterdir()] == ["1.0.0"]
 
 
+def test_completed_migration_fast_path_does_not_rescan_legacy_tree(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    legacy_root, target_root = _roots(tmp_path)
+    _install_component(tmp_path, legacy_root)
+    migration.migrate_managed_runtime_root(legacy_root, target_root)
+
+    monkeypatch.setattr(
+        migration,
+        "_legacy_runtime_bytes",
+        lambda _root: pytest.fail("completed migration must not rescan legacy files"),
+    )
+
+    payload = migration.migrate_managed_runtime_root(legacy_root, target_root)
+
+    assert payload["state"] == "completed"
+    assert payload["legacyBytes"] > 0
+
+
+def test_incomplete_completed_marker_does_not_skip_migration(tmp_path: Path) -> None:
+    legacy_root, target_root = _roots(tmp_path)
+    _install_component(tmp_path, legacy_root)
+    target_root.mkdir()
+    (target_root / "migration-state.json").write_text(
+        '{"state": "completed"}',
+        encoding="utf-8",
+    )
+
+    payload = migration.migrate_managed_runtime_root(legacy_root, target_root)
+
+    assert payload["migratedComponents"] == ["python-base"]
+    assert RuntimeComponentStore(target_root).active("python-base") is not None
+
+
 def test_migration_does_not_overwrite_valid_target_component(tmp_path: Path) -> None:
     legacy_root, target_root = _roots(tmp_path)
     _install_component(tmp_path, legacy_root, payload=b"legacy")
@@ -261,6 +296,50 @@ def test_migration_status_reports_legacy_bytes_and_cleanup_availability(tmp_path
     assert complete["state"] == "completed"
     assert complete["legacyBytes"] > 0
     assert complete["cleanupAvailable"] is True
+
+
+def test_completed_status_uses_persisted_size_without_rescan(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    legacy_root, target_root = _roots(tmp_path)
+    _install_component(tmp_path, legacy_root)
+    completed = migration.migrate_managed_runtime_root(legacy_root, target_root)
+
+    monkeypatch.setattr(
+        migration,
+        "_legacy_runtime_bytes",
+        lambda _root: pytest.fail("completed status must use persisted size"),
+    )
+
+    status = migration.runtime_migration_status(legacy_root, target_root)
+
+    assert status["state"] == "completed"
+    assert status["legacyBytes"] == completed["legacyBytes"]
+
+
+def test_status_payload_counts_legacy_bytes_once(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls = 0
+
+    def count_once(_root: Path) -> int:
+        nonlocal calls
+        calls += 1
+        return 7
+
+    monkeypatch.setattr(migration, "_legacy_runtime_bytes", count_once)
+
+    status = migration._status_payload(
+        "completed",
+        tmp_path / "legacy",
+        tmp_path / "target",
+    )
+
+    assert status["legacyBytes"] == 7
+    assert status["cleanupAvailable"] is True
+    assert calls == 1
 
 
 def test_migration_status_normalizes_incomplete_state_file(tmp_path: Path) -> None:

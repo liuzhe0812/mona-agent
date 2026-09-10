@@ -16,12 +16,12 @@ from mona.distill.collectors import collect_tool_calls
 from mona.utils.prompt_templates import render_template
 
 _TASK_NAME = "work-pattern"
-_USER_SECTION = "Work Patterns"
+_USER_SECTION = "Agent Assistance Patterns"
 _TEMPLATE = "distill/work_pattern.md"
 
 
 class WorkPatternTask(DistillTask):
-    """Distill user work patterns from tool call history."""
+    """Distill Agent assistance activity from attributed tool-call history."""
 
     @property
     def name(self) -> str:
@@ -61,6 +61,7 @@ class WorkPatternTask(DistillTask):
         if ctx.provider is None:
             # No LLM available — produce a rule-based fallback
             result_data = _rule_based_fallback(data)
+            result_data = _with_evidence_and_visualizations(result_data, data)
             return DistillResult(
                 task_name=_TASK_NAME,
                 success=True,
@@ -81,21 +82,7 @@ class WorkPatternTask(DistillTask):
                 )
 
             # Enrich with evidence for profile.rich.json
-            result_data = {
-                **parsed,
-                "evidence": {
-                    "top_tools": data.get("top_tools", []),
-                    "tool_chains": data.get("tool_chains", []),
-                    "hourly_distribution": data.get("hourly_distribution", {}),
-                    "daily_distribution": data.get("daily_distribution", {}),
-                    "tool_success": data.get("tool_success", {}),
-                },
-                "visualizations": {
-                    "top_tools_chart": data.get("top_tools", [])[:10],
-                    "tool_chain_sankey": data.get("tool_chains", [])[:10],
-                    "active_hours_heatmap": _build_hourly_heatmap(data),
-                },
-            }
+            result_data = _with_evidence_and_visualizations(parsed, data)
 
             return DistillResult(
                 task_name=_TASK_NAME,
@@ -121,6 +108,31 @@ def _build_hourly_heatmap(data: dict[str, Any]) -> list[dict[str, Any]]:
     return [{"hour": int(h), "count": c} for h, c in hourly.items()]
 
 
+def _with_evidence_and_visualizations(
+    result: dict[str, Any], data: dict[str, Any]
+) -> dict[str, Any]:
+    return {
+        **result,
+        "evidence": {
+            "top_tools": data.get("top_tools", []),
+            "tool_chains": data.get("tool_chains", []),
+            "hourly_distribution": data.get("hourly_distribution", {}),
+            "daily_distribution": data.get("daily_distribution", {}),
+            "tool_success": data.get("tool_success", {}),
+            "by_agent": data.get("by_agent", {}),
+            "by_conversation_type": data.get("by_conversation_type", {}),
+            "attributions": data.get("attributions", []),
+            "tool_usage_scope": data.get("tool_usage_scope", "agent_execution"),
+            "user_preference_tools": data.get("user_preference_tools", []),
+        },
+        "visualizations": {
+            "top_tools_chart": data.get("top_tools", [])[:10],
+            "tool_chain_sankey": data.get("tool_chains", [])[:10],
+            "active_hours_heatmap": _build_hourly_heatmap(data),
+        },
+    }
+
+
 def _rule_based_fallback(data: dict[str, Any]) -> dict[str, Any]:
     """Generate a basic work pattern summary without LLM."""
     top_tools = data.get("top_tools", [])[:5]
@@ -130,7 +142,7 @@ def _rule_based_fallback(data: dict[str, Any]) -> dict[str, Any]:
         "preferred_tools": frequent_tasks[:3],
         "tool_chains": [c["chain"] for c in data.get("tool_chains", [])[:3]],
         "active_hours": "unknown (rule-based)",
-        "output_style": "adaptive",
+        "output_style": "unknown",
         "work_focus": f"Primarily uses: {', '.join(frequent_tasks[:3])}",
         "confidence": 0.3,
     }
@@ -146,30 +158,24 @@ def _format_markdown(data: dict[str, Any]) -> str:
 
     tasks = data.get("frequent_tasks") or []
     if tasks:
-        sentences.append(f"高频任务：{'、'.join(tasks[:5])}")
+        sentences.append(f"Agent 高频协助任务：{'、'.join(tasks[:5])}")
 
     tools = data.get("preferred_tools") or []
     if tools:
-        sentences.append(f"偏好工具：{'、'.join(tools[:5])}")
+        sentences.append(f"Agent 常用工具：{'、'.join(tools[:5])}")
 
     chains = data.get("tool_chains") or []
     if chains:
         chain_str = "；".join(c if isinstance(c, str) else " → ".join(c) for c in chains[:3])
-        sentences.append(f"常用工具链：{chain_str}")
+        sentences.append(f"Agent 常用工具链：{chain_str}")
 
     active = data.get("active_hours") or ""
     if active and "unknown" not in active.lower():
-        sentences.append(f"活跃时段{active}")
-
-    style = data.get("output_style") or ""
-    if style and style != "adaptive":
-        sentences.append(f"输出风格偏{style}")
-    elif style:
-        sentences.append("输出风格自适应")
+        sentences.append(f"Agent 协助活跃时段{active}")
 
     focus = data.get("work_focus") or ""
     if focus and "unknown" not in focus.lower():
-        sentences.append(f"工作焦点：{focus}")
+        sentences.append(f"Agent 协助方向：{focus}")
 
     if not sentences:
         return "(insufficient data)"
@@ -179,7 +185,7 @@ def _format_markdown(data: dict[str, Any]) -> str:
 async def _call_llm(ctx: DistillContext, prompt: str) -> str:
     """Call LLM provider with distillation prompt."""
     messages = [
-        {"role": "system", "content": "你是一位用户行为分析师。只输出合法 JSON。"},
+        {"role": "system", "content": "你是一位 Agent 执行活动分析师。只输出合法 JSON。"},
         {"role": "user", "content": prompt},
     ]
     response = await ctx.provider.chat(
@@ -189,6 +195,9 @@ async def _call_llm(ctx: DistillContext, prompt: str) -> str:
         # profile schema 含 pain_points/open_questions，需要更大输出空间
         max_tokens=2048,
     )
+    from mona.usage import record_provider_usage
+
+    record_provider_usage(ctx.provider, ctx.model_name or None, response)
     # LLMResponse has .content attribute
     return response.content or ""
 

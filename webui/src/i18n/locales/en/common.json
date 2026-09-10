@@ -58,12 +58,13 @@
     "manageAccount": "Manage account",
     "logout": "Log out",
     "login": "Log in",
+    "update": "Update",
     "updateAvailable": "Update available",
     "workspaceTabs": "Workspace tabs",
     "newBrowserTab": "New browser tab",
     "modules": {
       "note": "Notes",
-      "doc": "AI Docs",
+      "doc": "Documents",
       "ssh": "Terminal",
       "email": "Mail",
       "schedule": "Plan",
@@ -239,14 +240,13 @@
       "codeWrap": "Code wrapping",
       "maxResults": "Max results",
       "timeout": "Timeout",
-      "jinaReader": "Jina reader",
       "imageGeneration": "Image generation",
       "imageProvider": "Image provider",
       "imageProviderStatus": "Provider status",
       "imageProviderBase": "Provider base",
       "imageModel": "Image model",
       "defaultAspectRatio": "Default aspect",
-      "defaultImageSize": "Default size",
+      "defaultImageSize": "Default resolution",
       "maxImagesPerTurn": "Max images per turn",
       "imageSaveDir": "Save directory",
       "timezone": "Timezone",
@@ -264,13 +264,12 @@
       "codeWrap": "Keep long code lines readable on smaller screens.",
       "maxResults": "Results returned by each web_search call.",
       "timeout": "Seconds before a search provider request times out.",
-      "jinaReader": "Use Jina Reader for web_fetch when available.",
       "imageGeneration": "Expose generate_image in chats when a configured image provider is available.",
       "imageProvider": "Choose the registry provider used by generate_image.",
       "imageProviderStatus": "Image generation reuses provider credentials from Providers.",
       "imageModel": "Image generation uses a dedicated image model (different from the chat model). It reuses the credentials of the selected provider.",
-      "defaultAspectRatio": "Used when the prompt does not choose an aspect ratio.",
-      "defaultImageSize": "Size hint sent to providers that support it.",
+      "defaultAspectRatio": "Used when AI does not specify a ratio. Can be changed for one generation.",
+      "defaultImageSize": "Used when AI does not specify a resolution. Supported values depend on the service.",
       "maxImagesPerTurn": "Upper bound for one generate_image request.",
       "timezone": "IANA timezone used by runtime context and schedules.",
       "toolHintMaxLength": "Maximum characters shown in tool progress hints."
@@ -432,7 +431,7 @@
   },
   "managedRuntime": {
     "title": "Advanced features",
-    "description": "Manage the content needed for advanced features such as video and transcription. It downloads when needed.",
+    "description": "These downloads are only needed by the features described below. With download-on-demand enabled, Mona prepares them automatically the first time you use each feature.",
     "refresh": "Refresh",
     "loading": "Loading advanced feature status…",
     "loadError": "Runtime status is temporarily unavailable",
@@ -441,6 +440,7 @@
     "updateError": "Could not update download settings",
     "cleanupError": "Could not clear advanced feature cache",
     "installed": "Installed {{version}}",
+    "availableLocally": "Available on this device",
     "installing": "Downloading and verifying · {{percent}}%",
     "install": "Install",
     "update": "Update",
@@ -462,35 +462,35 @@
     "components": {
       "python": {
         "name": "Python",
-        "description": "Shared Agent Python environment; user projects keep their own .venv"
+        "description": "Used by Python analysis in chats, PPT creation, video creation, and the Academic Research expert"
       },
     "node": {
       "name": "Node.js",
-      "description": "Shared Agent Node.js; user projects keep their own node_modules"
+      "description": "Used by video creation, literature search in the Academic Research expert, and Node.js projects in chats"
     },
     "ffmpeg": {
       "name": "Video processing",
-      "description": "Transcodes video, processes audio, and extracts key frames"
+      "description": "Notes > Web to note: extracts audio and key frames from video links; also used when video creation exports a finished video"
     },
     "yt_dlp": {
       "name": "Online video access",
-      "description": "Reads supported video pages and media content"
+      "description": "Notes > Web to note: reads the title, subtitles, and media after you enter a video link"
     },
     "asr": {
       "name": "Speech transcription",
-      "description": "Creates a local transcript when a video has no subtitles"
+      "description": "Notes > Web to note: turns speech into text when a video has no usable subtitles"
     },
     "pandoc": {
       "name": "Document import",
-      "description": "Imports Word, PowerPoint, ODT, RTF, and EPUB files"
+      "description": "Notes > Document to note: used when importing Word, PowerPoint, ODT, RTF, or EPUB files"
     },
     "computer_use": {
       "name": "Computer control",
-      "description": "Lets Mona observe and operate other desktop applications"
+      "description": "Chats: used when Mona clicks, types, or operates another desktop application for you"
     },
     "westock": {
       "name": "Stock data support",
-      "description": "Adds structured data used by stock research features"
+      "description": "Stocks: supplements company, financial, announcement, and technical data for diagnosis, deep research, and screening"
     }
     }
   },
@@ -542,7 +542,7 @@
     "title": "Delete this chat?",
     "description": "This action cannot be undone.",
     "cancel": "Cancel",
-    "confirm": "Delete"
+    "confirm": "Delete chat"
   },
   "connection": {
     "idle": "Idle",
@@ -937,6 +937,20 @@
     "imageAttachment": "Image attachment",
     "showAll": "Show all",
     "collapse": "Collapse",
+    "copyMessage": "Copy",
+    "copiedMessage": "Copied",
+    "quoteMessage": "Reply",
+    "shareAsImage": "Share as image",
+    "shareImageFailed": "Could not share image",
+    "branchTask": "Start branch task",
+    "branchDialogTitle": "Start a new task from here?",
+    "branchDialogDescription": "A separate task will be created with the conversation context through this message. The original task will not change, and future messages will remain independent.",
+    "confirmBranchTask": "Start new task",
+    "branchingTask": "Creating…",
+    "moreActions": "More actions",
+    "tokenUsage": "{{count}} tokens",
+    "quotedMessage": "Replying to {{author}}",
+    "removeQuote": "Remove reply",
     "copyReply": "Copy reply",
     "copiedReply": "Copied reply",
     "saveAsNote": "Save as note",
@@ -963,6 +977,7 @@
     "export": "Export",
     "exportPng": "Export PNG image",
     "exportSvg": "Export SVG image",
+    "exportDrawio": "Export editable Draw.io diagram",
     "exportCsv": "Export CSV data",
     "errors": {
       "invalidJson": "The chart data is not valid JSON.",

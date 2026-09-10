@@ -10,6 +10,22 @@ const messages: UIMessage[] = [
 ];
 
 describe("ThreadHeader conversation tools", () => {
+  it("toggles the session list with the left-sidebar icon", () => {
+    const onToggleSidebar = vi.fn();
+    const { rerender } = render(
+      <ThreadHeader title="会话" onToggleSidebar={onToggleSidebar} sidebarOpen />,
+    );
+
+    const collapse = screen.getByRole("button", { name: "收起会话列表" });
+    expect(collapse).toHaveAttribute("aria-expanded", "true");
+    expect(collapse.querySelector("svg rect")).toBeInTheDocument();
+    fireEvent.click(collapse);
+    expect(onToggleSidebar).toHaveBeenCalledOnce();
+
+    rerender(<ThreadHeader title="会话" onToggleSidebar={onToggleSidebar} sidebarOpen={false} />);
+    expect(screen.getByRole("button", { name: "展开会话列表" })).toHaveAttribute("aria-expanded", "false");
+  });
+
   it("searches the current conversation and jumps to a result", () => {
     const onJumpToMessage = vi.fn();
     render(<ThreadHeader title="会话" onToggleSidebar={() => {}} messages={messages} onJumpToMessage={onJumpToMessage} />);

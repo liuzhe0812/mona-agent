@@ -12,8 +12,8 @@ Every entry writes out all fields so you can copy-paste as a template.
 
 from __future__ import annotations
 
-from dataclasses import dataclass
 import re
+from dataclasses import dataclass
 from typing import Any
 
 from pydantic.alias_generators import to_snake
@@ -34,14 +34,13 @@ class ProviderSpec:
     name: str  # config field name, e.g. "dashscope"
     keywords: tuple[str, ...]  # model-name keywords for matching (lowercase)
     env_key: str  # env var for API key, e.g. "DASHSCOPE_API_KEY"
-    # Default model for providers that need no API key
-    free_default_model: str = ""
-    api_key_required: bool = True  # False for free providers (e.g. Zen)
+    api_key_required: bool = True
     display_name: str = ""  # shown in `mona status`
 
     # which provider implementation to use
-    # "openai_compat" | "anthropic" | "azure_openai" | "openai_codex" | "github_copilot" | "bedrock"
+    # "openai_compat" | "mona_managed" | "anthropic" | "azure_openai" | "openai_codex" | "github_copilot" | "bedrock"
     backend: str = "openai_compat"
+    allow_auto_fallback: bool = True
 
     # extra env vars, e.g. (("ZHIPUAI_API_KEY", "{api_key}"),)
     env_extras: tuple[tuple[str, str], ...] = ()
@@ -116,6 +115,19 @@ class ProviderSpec:
 # ---------------------------------------------------------------------------
 
 PROVIDERS: tuple[ProviderSpec, ...] = (
+    ProviderSpec(
+        name="mona_managed",
+        keywords=("mona-managed",),
+        env_key="",
+        display_name="Mona AI",
+        api_key_required=False,
+        backend="mona_managed",
+        allow_auto_fallback=False,
+        is_gateway=True,
+        chat_only=True,
+        default_api_base="https://mona-ai.cn/v1",
+        supports_tool_calling=True,
+    ),
     # === Custom (direct OpenAI-compatible endpoint) ========================
     ProviderSpec(
         name="custom",
@@ -612,16 +624,6 @@ PROVIDERS: tuple[ProviderSpec, ...] = (
         backend="openai_compat",
         default_api_base="https://qianfan.baidubce.com/v2"
     ),
-    # OpenCode Zen: free provider, no API key required
-    ProviderSpec(
-        name="zen",
-        keywords=("zen",),
-        env_key="",
-        display_name="内置供应商",
-        api_key_required=False,
-        default_api_base="https://opencode.ai/zen/v1",
-        free_default_model="deepseek-v4-flash-free",
-    ),
 )
 
 # Cindy chat presets are OpenAI-compatible runtime providers.  Keep them in
@@ -638,6 +640,7 @@ PROVIDERS = PROVIDERS + tuple(
         chat_only=True,
         api_key_required=provider.api_key_required,
         default_api_base=provider.api_base,
+        thinking_style=provider.thinking_style,
     )
     for provider in CINDY_CHAT_PROVIDERS
 )

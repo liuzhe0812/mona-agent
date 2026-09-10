@@ -1,0 +1,103 @@
+{
+  "schemaVersion": 1,
+  "id": "knowledge-cards",
+  "name": "奇想实验室",
+  "description": "清晰的知识卡片风格，以分区底色、模块卡片和步骤层级承载科普、课程与方法拆解。",
+  "baseTemplateId": "knowledge-cards",
+  "mode": "light",
+  "tokens": {
+    "colors": {
+      "primary": "#2356A8",
+      "secondary": "#ED6A4A",
+      "accent": "#F2B83F",
+      "background": "#F3E5CC",
+      "surface": "#FFF9ED",
+      "textPrimary": "#1E2C44",
+      "textSecondary": "#5C6879",
+      "border": "#E7C99B",
+      "success": "#2A978C",
+      "warning": "#F2B83F",
+      "error": "#D94B41"
+    },
+    "typography": {
+      "headingFamily": "Noto Sans SC",
+      "bodyFamily": "Noto Sans SC",
+      "scale": "large",
+      "headingWeight": 800,
+      "bodyWeight": 500,
+      "headingLineHeight": 1.12,
+      "bodyLineHeight": 1.5
+    },
+    "shape": {
+      "cardRadius": 18,
+      "cardStyle": "solid",
+      "density": "standard",
+      "shadow": "soft",
+      "borderWidth": 2,
+      "shadowOpacity": 0.2
+    },
+    "spacing": {
+      "unit": 8,
+      "contentPadding": 56
+    }
+  },
+  "components": {
+    "cover": "cover-card-stack-v1",
+    "chapter": "chapter-sticker-v1",
+    "content": "content-card-grid-v1",
+    "data": "data-pill-row-v1",
+    "comparison": "comparison-card-pair-v1",
+    "process": "process-step-cards-v1",
+    "quote": "quote-bubble-v1",
+    "outro": "outro-card-v1"
+  },
+  "allowedLayouts": [
+    "cover-card-stack",
+    "chapter-sticker",
+    "content-card-grid",
+    "data-pill-row",
+    "comparison-card-pair",
+    "process-step-cards",
+    "quote-bubble",
+    "outro-card"
+  ],
+  "allowedAnimations": ["fade-rise", "stagger-rise", "soft-pulse", "cross-fade"],
+  "motion": {
+    "intensity": "active",
+    "enterPreset": "stagger-rise",
+    "emphasisPreset": "soft-pulse",
+    "transitionPreset": "cross-fade",
+    "enterDurationMs": 420,
+    "staggerMs": 72,
+    "transitionDurationMs": 460
+  },
+  "backgrounds": {
+    "default": {
+      "assetPolicy": "none",
+      "fit": "cover",
+      "focalPoint": {"x": 0.5, "y": 0.5},
+      "overlay": {"type": "solid", "color": "#F3E5CC", "opacity": 0.9, "direction": "none"},
+      "blur": 0,
+      "tint": 0,
+      "contrastMode": "auto",
+      "safeArea": {"top": 0.08, "right": 0.08, "bottom": 0.1, "left": 0.08},
+      "fallback": "#F3E5CC"
+    },
+    "roles": {
+      "cover": {"inherit": "default"},
+      "chapter": {"inherit": "default"},
+      "content": {"inherit": "default", "assetPolicy": "episode-replaceable"},
+      "data": {"inherit": "default"},
+      "comparison": {"inherit": "default"},
+      "process": {"inherit": "default"},
+      "quote": {"inherit": "default"},
+      "outro": {"inherit": "default"}
+    }
+  },
+  "subtitle": {"position": "bottom-center", "style": "caption-rail", "maxLines": 2},
+  "aspectVariants": {
+    "16:9": {"enabled": true},
+    "9:16": {"enabled": true},
+    "1:1": {"enabled": true}
+  }
+}

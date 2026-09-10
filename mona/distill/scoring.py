@@ -102,17 +102,6 @@ def compute_radar_scores(
                 signals[dim] += count * 2
                 break
 
-    # From work patterns (tool usage → tools/efficiency)
-    if work_patterns:
-        wp = work_patterns
-        preferred = wp.get("preferred_tools", [])
-        signals["tools"] += len(preferred) * 8
-        tool_chains = wp.get("tool_chains", [])
-        signals["efficiency"] += len(tool_chains) * 6
-        # output_style detailed → communication
-        if wp.get("output_style") == "detailed":
-            signals["communication"] += 15
-
     # From email stats (communication)
     if email_stats:
         total_emails = email_stats.get("total_emails", 0)
@@ -398,6 +387,8 @@ def compute_growth_comparison(
 # Historical snapshot
 # ---------------------------------------------------------------------------
 
+_MAX_PROFILE_SNAPSHOTS = 104
+
 def save_snapshot(
     memory_dir: Path,
     radar_scores: list[dict[str, Any]],
@@ -424,6 +415,9 @@ def save_snapshot(
             json.dumps(snapshot, ensure_ascii=False, indent=2),
             encoding="utf-8",
         )
+        snapshots = sorted(snapshots_dir.glob("*.json"), key=lambda path: path.name)
+        for stale in snapshots[:-_MAX_PROFILE_SNAPSHOTS]:
+            stale.unlink(missing_ok=True)
         logger.debug(f"[profile] snapshot saved: {snapshot_file}")
     except Exception as e:
         logger.warning(f"[profile] failed to save snapshot: {e}")
@@ -463,4 +457,3 @@ def get_previous_snapshot(
         prev = [s for s in snapshots if s.get("date", "") < current_date]
         return prev[-1] if prev else None
     return snapshots[-1] if len(snapshots) >= 2 else None
-

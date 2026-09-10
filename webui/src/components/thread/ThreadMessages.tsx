@@ -12,10 +12,9 @@ import {
   AgentActivityCluster,
   isAgentActivityMember,
 } from "@/components/thread/AgentActivityCluster";
-import { WorkflowRunMessage } from "@/components/workflow/WorkflowRunMessage";
 import { StepActivityTrace } from "@/components/workflow/StepActivityTrace";
 import { useClientContextOrNull } from "@/providers/ClientProvider";
-import type { AgentSummary, ToolProgressEvent, UIMessage, WorkflowRun } from "@/lib/types";
+import type { AgentSummary, UIMessage } from "@/lib/types";
 
 interface ThreadMessagesProps {
   messages: UIMessage[];
@@ -25,8 +24,8 @@ interface ThreadMessagesProps {
   isGroupChat?: boolean;
   hiddenMessageCount?: number;
   onLoadEarlier?: () => void;
-  /** Live workflow-step tool activity, keyed ``runId:stepId`` (rooms only). */
-  stepActivities?: Record<string, ToolProgressEvent[]>;
+  onQuote?: (message: UIMessage, author: string) => void;
+  onBranch?: (message: UIMessage, author: string) => void;
 }
 
 export type DisplayUnit =
@@ -35,26 +34,15 @@ export type DisplayUnit =
 
 const GROUP_TIME_DIVIDER_GAP_MS = 5 * 60 * 1000;
 
-/** True when this unit index is the last assistant text slice before the next user message (or end of thread). */
-export function isFinalAssistantSliceBeforeNextUser(
-  units: DisplayUnit[],
-  index: number,
-): boolean {
-  const u = units[index];
-  if (u.type !== "single" || u.message.role !== "assistant") return true;
-  for (let j = index + 1; j < units.length; j++) {
-    const v = units[j];
-    if (v.type === "single" && v.message.role === "user") break;
-    return false;
-  }
-  return true;
-}
-
 export function buildDisplayUnits(messages: UIMessage[]): DisplayUnit[] {
   const out: DisplayUnit[] = [];
   let i = 0;
   while (i < messages.length) {
     const m = messages[i];
+    if (m.kind === "discussion" || m.kind === "workflowRun") {
+      i += 1;
+      continue;
+    }
     if (isAgentActivityMember(m)) {
       const cluster: UIMessage[] = [];
       let segmentId: string | undefined = m.activitySegmentId;
@@ -157,23 +145,6 @@ function stripInlineReasoning(message: UIMessage): UIMessage {
   return next;
 }
 
-export function assistantCopyFlags(units: DisplayUnit[]): boolean[] {
-  const flags = new Array<boolean>(units.length).fill(true);
-  let hasLaterUnitBeforeUser = false;
-  for (let i = units.length - 1; i >= 0; i -= 1) {
-    const unit = units[i];
-    if (unit.type === "single" && unit.message.role === "user") {
-      hasLaterUnitBeforeUser = false;
-      continue;
-    }
-    if (unit.type === "single" && unit.message.role === "assistant") {
-      flags[i] = !hasLaterUnitBeforeUser;
-    }
-    hasLaterUnitBeforeUser = true;
-  }
-  return flags;
-}
-
 /** Author row above assistant bubbles: group chats show Mona and partner
  *  authors alike; direct chats preserve the existing Mona-bare layout. */
 function AgentAuthorHeader({
@@ -207,6 +178,18 @@ function AgentAuthorHeader({
   );
 }
 
+function quoteAuthorName(
+  message: UIMessage,
+  agentsById: ReadonlyMap<string, AgentSummary>,
+  isGroupChat: boolean,
+): string | undefined {
+  if (message.role !== "assistant") return undefined;
+  const authorId = message.authorId ?? (isGroupChat ? MONA_AGENT_ID : null);
+  if (!authorId || authorId === MONA_AGENT_ID) return "Mona";
+  return agentsById.get(authorId)?.displayName
+    ?? resolveAgentDisplayName(agentsById, authorId);
+}
+
 function visibleMessageTime(unit: DisplayUnit): number | null {
   if (unit.type !== "single") return null;
   const message = unit.message;
@@ -235,7 +218,8 @@ export function ThreadMessages({
   isGroupChat = false,
   hiddenMessageCount = 0,
   onLoadEarlier,
-  stepActivities,
+  onQuote,
+  onBranch,
 }: ThreadMessagesProps) {
   const { t } = useTranslation();
   // Tolerates bare renders (no ClientProvider in unit tests): agent names
@@ -243,7 +227,6 @@ export function ThreadMessages({
   const clientCtx = useClientContextOrNull();
   const agentsById = useAgents(clientCtx?.token ?? null);
   const units = useMemo(() => buildDisplayUnits(messages), [messages]);
-  const copyFlags = useMemo(() => assistantCopyFlags(units), [units]);
   const showTimeDivider = useMemo(() => {
     let previousTime: number | null = null;
     return units.map((unit) => {
@@ -287,9 +270,6 @@ export function ThreadMessages({
           && next?.type === "single"
           && next.message.role === "assistant";
 
-        const workflowRun =
-          unit.type === "single" ? asWorkflowRun(unit.message) : null;
-
         const groupAssistant =
           isGroupChat && unit.type === "single" && unit.message.role === "assistant";
         const groupAuthorId = groupAssistant
@@ -322,8 +302,6 @@ export function ThreadMessages({
                 isTurnStreaming={index === liveActivityClusterIndex}
                 hasBodyBelow={hasBodyBelow}
               />
-            ) : workflowRun ? (
-              <WorkflowRunMessage run={workflowRun} stepActivities={stepActivities} />
             ) : groupAssistant ? (
               <div className="flex min-w-0 items-start gap-2">
                 <AgentAvatar
@@ -342,7 +320,9 @@ export function ThreadMessages({
                   <MessageBubble
                     message={unit.message}
                     isGroupChat={isGroupChat}
-                    showAssistantCopyAction={copyFlags[index]}
+                    authorName={quoteAuthorName(unit.message, agentsById, isGroupChat)}
+                    onQuote={onQuote}
+                    onBranch={onBranch}
                   />
                   {unit.message.toolEvents && unit.message.toolEvents.length > 0 ? (
                     <StepActivityTrace events={unit.message.toolEvents} />
@@ -359,11 +339,9 @@ export function ThreadMessages({
                 <MessageBubble
                   message={unit.message}
                   isGroupChat={isGroupChat}
-                  showAssistantCopyAction={
-                    unit.message.role === "assistant"
-                      ? copyFlags[index]
-                      : true
-                  }
+                  authorName={quoteAuthorName(unit.message, agentsById, isGroupChat)}
+                  onQuote={onQuote}
+                  onBranch={onBranch}
                 />
                 {unit.message.toolEvents && unit.message.toolEvents.length > 0 ? (
                   <StepActivityTrace events={unit.message.toolEvents} />
@@ -380,28 +358,6 @@ export function ThreadMessages({
 function currentActivityClusterIndex(units: DisplayUnit[]): number {
   const last = units.length - 1;
   return units[last]?.type === "cluster" ? last : -1;
-}
-
-/** Extract the workflow run snapshot carried by a ``workflowRun`` message,
- *  returning null for malformed payloads so they fall through to the plain
- *  message renderer. */
-function asWorkflowRun(message: UIMessage): WorkflowRun | null {
-  if (message.kind !== "workflowRun") return null;
-  const payload = message.payload as Partial<WorkflowRun> | null;
-  if (
-    !payload
-    || typeof payload.id !== "string"
-    || typeof payload.roomId !== "string"
-    || typeof payload.status !== "string"
-    || !payload.workflow
-    || typeof payload.workflow !== "object"
-    || !Array.isArray(payload.workflow.steps)
-    || !payload.steps
-    || typeof payload.steps !== "object"
-  ) {
-    return null;
-  }
-  return payload as WorkflowRun;
 }
 
 function unitKey(unit: DisplayUnit, index: number): string {

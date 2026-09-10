@@ -8,8 +8,8 @@ artifact collector, evidence bootstrap, cron dispatch and report queries.
 
 Covers design §16 item by item:
 
-1. After installing the pack the partner list exposes only the A-share
-   analyst; ``/api/sessions`` never lists the stock research room.
+1. The built-in stock pack exposes no user-facing partner; ``/api/sessions``
+   never lists the stock research room.
 2. The hidden room exists with 7 members and the deep-research template
    active.
 3. ``run_workflow(inputs={"symbols": ["XSHG:600519"]})`` creates exactly 6
@@ -46,7 +46,6 @@ from mona.agent.pack_bootstrap import (
     DAILY_REVIEW_TEMPLATE_REF,
     STOCK_DIAGNOSIS_ROOM_AGENT_IDS,
     STOCK_PACK_ID,
-    STOCK_PARTNER_AGENT_ID,
     STOCK_ROOM_AGENT_IDS,
     STOCK_ROOM_ID,
     ensure_stock_pack,
@@ -745,7 +744,7 @@ def _read_json(path: Path) -> dict:
 
 
 class TestVisibilityAcceptance:
-    def test_only_a_share_analyst_is_partner_visible(self, tmp_path, monkeypatch):
+    def test_stock_pack_has_no_visible_partner(self, tmp_path, monkeypatch):
         harness = _Harness(tmp_path, monkeypatch)
         pack_agents = [
             a
@@ -757,7 +756,7 @@ class TestVisibilityAcceptance:
             *STOCK_DIAGNOSIS_ROOM_AGENT_IDS,
         }
         visible = [a.id for a in pack_agents if a.visibility == "partner"]
-        assert visible == [STOCK_PARTNER_AGENT_ID]
+        assert visible == []
 
     def test_sessions_list_never_shows_research_room(self, tmp_path, monkeypatch):
         harness = _Harness(tmp_path, monkeypatch)
@@ -777,7 +776,7 @@ class TestVisibilityAcceptance:
         # A normal room for contrast.
         normal = harness.sessions.get_or_create("websocket:room-normal")
         normal.metadata["conversation"] = ConversationMetadata.room(
-            [STOCK_PARTNER_AGENT_ID], title="普通房间"
+            ["com.mona.stock-tech-analyst"], title="普通房间"
         ).to_session_metadata()
         harness.sessions.save(normal)
 

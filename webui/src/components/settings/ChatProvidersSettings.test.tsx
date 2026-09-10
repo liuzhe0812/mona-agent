@@ -1,361 +1,293 @@
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
-import { beforeEach, describe, expect, it, vi } from "vitest";
-
-import type { SettingsPayload } from "@/lib/types";
-
-const fetchProviderModels = vi.hoisted(() => vi.fn());
-const updateProviderSettings = vi.hoisted(() => vi.fn());
-const updateSettings = vi.hoisted(() => vi.fn());
+import { fireEvent, render, screen, within } from "@testing-library/react";
+import { describe, expect, it, vi } from "vitest";
 
 vi.mock("@/lib/api", () => ({
-  fetchProviderModels,
-  updateProviderSettings,
-  updateSettings,
+  fetchProviderModels: vi.fn(),
+  updateProviderSettings: vi.fn(),
+  updateSettings: vi.fn(),
 }));
 
 import { ChatProvidersSettings } from "./ChatProvidersSettings";
+import type { SettingsPayload } from "@/lib/types";
 
-type ChatProvider = NonNullable<SettingsPayload["chat_providers"]>[number];
-
-function provider(
-  name: string,
-  label: string,
-  configured: boolean,
-  models: Array<{ id: string; name: string; enabled?: boolean; recommended?: boolean }>,
-  region?: string,
-  isCustom = false,
-): ChatProvider {
-  return {
-    name,
-    label,
-    configured,
-    is_custom: isCustom,
-    api_key_required: !isCustom,
-    api_key_hint: configured ? "secr••••2345" : null,
-    api_base: `https://${name}.example/v1`,
-    default_api_base: `https://${name}.example/v1`,
-    model: models[0]?.id ?? null,
-    models: models.map((model, index) => ({
-      id: model.id,
-      name: model.name,
-      context_window: null,
-      enabled: model.enabled ?? true,
-      recommended: model.recommended ?? index === 0,
-    })),
-    models_url: null,
-    region: region ?? null,
-    api_base_editable: isCustom || name === "litellm",
-  };
+function openModelMenu(name: string) {
+  fireEvent.pointerDown(screen.getByRole("button", { name: `设置 ${name}` }), {
+    button: 0,
+    ctrlKey: false,
+    pointerType: "mouse",
+  });
 }
 
-function settingsWith(providers: ChatProvider[]): SettingsPayload {
-  return {
-    agent: {
-      model: providers.find((item) => item.configured)?.models[0]?.id ?? "",
-      provider: providers.find((item) => item.configured)?.name ?? "auto",
+const settings = {
+  agent: { provider: "deepseek", model: "deepseek-v4-flash" },
+  chat_providers: [
+    {
+      name: "mona_managed",
+      label: "Mona AI",
+      is_builtin: true,
+      configured: true,
+      api_key_required: false,
+      api_base: "https://mona-ai.cn/v1",
+      default_api_base: "https://mona-ai.cn/v1",
+      models: [{ id: "deepseek-v4-flash", name: "DeepSeek V4 Flash", enabled: true }],
     },
-    chat_providers: providers,
-  } as SettingsPayload;
-}
-
-const noop = vi.fn();
+    {
+      name: "deepseek",
+      label: "DeepSeek",
+      configured: true,
+      api_key_required: true,
+      api_base: "https://api.deepseek.com",
+      default_api_base: "https://api.deepseek.com",
+      models: [{ id: "deepseek-v4-flash", name: "DeepSeek V4 Flash", enabled: true }],
+    },
+  ],
+  image_generation: {
+    provider: "deepseek",
+    model: "deepseek-image",
+    providers: [{ name: "deepseek", label: "DeepSeek", configured: true, image_models: ["deepseek-image"] }],
+  },
+  video_generation: {
+    provider: "deepseek",
+    model: "deepseek-video",
+    providers: [{ name: "deepseek", label: "DeepSeek", configured: true, video_models: ["deepseek-video"] }],
+  },
+} as unknown as SettingsPayload;
 
 describe("ChatProvidersSettings", () => {
-  beforeEach(() => {
-    vi.clearAllMocks();
-  });
-
-  it("opens the three-step wizard and keeps manual fallback after discovery fails", async () => {
-    const zhipu = provider(
-      "zhipu-glm-cn",
-      "智谱 GLM（中国大陆）",
-      false,
-      [{ id: "glm-5.2", name: "GLM-5.2" }],
-      "cn",
-    );
-    fetchProviderModels.mockRejectedValueOnce(new Error("网络不可用"));
-    updateProviderSettings.mockResolvedValueOnce(settingsWith([provider(zhipu.name, zhipu.label, true, zhipu.models)]));
-
-    render(
-      <ChatProvidersSettings
-        settings={settingsWith([zhipu])}
-        token="token"
-        onSettingsChanged={noop}
-        onModelNameChange={noop}
-      />,
-    );
-
-    fireEvent.click(screen.getByRole("button", { name: "添加供应商" }));
-    fireEvent.click(screen.getByRole("button", { name: /智谱 GLM（中国大陆）/ }));
-    const key = screen.getByPlaceholderText("请输入 API Key");
-    expect(screen.getByDisplayValue(zhipu.api_base)).toHaveAttribute("readonly");
-    fireEvent.change(key, { target: { value: "zhipu-secret" } });
-    fireEvent.click(screen.getByRole("button", { name: "拉取模型" }));
-
-    expect(await screen.findByText("网络不可用")).toBeInTheDocument();
-    const manual = screen.getByPlaceholderText("手动添加模型 ID（逗号分隔）");
-    fireEvent.change(manual, { target: { value: "custom-model" } });
-    fireEvent.click(screen.getByRole("button", { name: "添加" }));
-    fireEvent.click(screen.getByRole("button", { name: "完成" }));
-
-    await waitFor(() => expect(updateProviderSettings).toHaveBeenCalled());
-    expect(updateProviderSettings).toHaveBeenCalledWith(
-      "token",
-      expect.objectContaining({
-        provider: "zhipu-glm-cn",
-        apiKey: "zhipu-secret",
-        enabledModels: expect.arrayContaining(["glm-5.2", "custom-model"]),
-      }),
-    );
-  });
-
-  it("keeps discovery disabled until a required API key is entered", () => {
-    const deepseek = provider(
-      "deepseek",
-      "DeepSeek",
-      false,
-      [{ id: "deepseek-v4-pro", name: "DeepSeek V4 Pro" }],
-    );
-    render(
-      <ChatProvidersSettings
-        settings={settingsWith([deepseek])}
-        token="token"
-        onSettingsChanged={noop}
-        onModelNameChange={noop}
-      />,
-    );
-
-    fireEvent.click(screen.getByRole("button", { name: "添加供应商" }));
-    fireEvent.click(screen.getByRole("button", { name: /DeepSeek/ }));
-
-    expect(screen.getByRole("button", { name: "拉取模型" })).toBeDisabled();
-    expect(updateProviderSettings).not.toHaveBeenCalled();
-  });
-
-  it("uses an independent search field in the add-provider wizard", () => {
-    const configured = provider("zhipu-glm-cn", "智谱 GLM（中国大陆）", true, [{ id: "glm-5.2", name: "GLM-5.2" }], "cn");
-    const deepseek = provider("deepseek", "DeepSeek", false, [{ id: "deepseek-v4-pro", name: "DeepSeek V4 Pro" }]);
-    const litellm = provider("litellm", "LiteLLM Proxy", false, []);
-    render(
-      <ChatProvidersSettings
-        settings={settingsWith([configured, deepseek, litellm])}
-        token="token"
-        onSettingsChanged={noop}
-        onModelNameChange={noop}
-      />,
-    );
-
-    fireEvent.change(screen.getByPlaceholderText("搜索供应商"), { target: { value: "not-a-provider" } });
-    fireEvent.click(screen.getByRole("button", { name: "添加供应商" }));
-    expect(screen.getByRole("button", { name: /DeepSeek/ })).toBeInTheDocument();
-    fireEvent.change(screen.getAllByPlaceholderText("搜索供应商")[1], { target: { value: "LiteLLM" } });
-    expect(screen.queryByRole("button", { name: /DeepSeek/ })).not.toBeInTheDocument();
-    expect(screen.getByRole("button", { name: /LiteLLM Proxy/ })).toBeInTheDocument();
-  });
-
-  it("shows the default action when the same model belongs to another provider", () => {
-    const zhipu = provider("zhipu-glm-cn", "智谱 GLM（中国大陆）", true, [{ id: "shared-model", name: "Shared model" }], "cn");
-    const deepseek = provider("deepseek", "DeepSeek", true, [{ id: "shared-model", name: "Shared model" }]);
-    const settings = settingsWith([zhipu, deepseek]);
-    settings.agent.provider = "deepseek";
-    settings.agent.model = "shared-model";
+  it("shows Mona AI as an immutable provider in the existing provider layout", () => {
+    const onSelectImageModel = vi.fn();
+    const onSelectVideoModel = vi.fn();
+    const onOpenImageSettings = vi.fn();
+    const onOpenVideoSettings = vi.fn();
     render(
       <ChatProvidersSettings
         settings={settings}
-        token="token"
-        onSettingsChanged={noop}
-        onModelNameChange={noop}
+        token="test-token"
+        onSettingsChanged={vi.fn()}
+        onModelNameChange={vi.fn()}
+        onSelectImageModel={onSelectImageModel}
+        onSelectVideoModel={onSelectVideoModel}
+        onOpenImageSettings={onOpenImageSettings}
+        onOpenVideoSettings={onOpenVideoSettings}
       />,
     );
 
-    expect(screen.getByRole("button", { name: "设为默认" })).toBeInTheDocument();
-    expect(screen.getByRole("switch", { name: /Shared model/ })).toBeInTheDocument();
+    expect(screen.getAllByText("DeepSeek").length).toBeGreaterThan(0);
+    expect(screen.getAllByText("Mona AI")).toHaveLength(2);
+    expect(screen.getByText("内置")).toBeInTheDocument();
+    expect(screen.getByText(/按实际 Token 从 Mona AI 余额扣费/)).toBeInTheDocument();
+    expect(screen.getByText("可用余额")).toBeInTheDocument();
+    expect(screen.getAllByText("已配置").length).toBeGreaterThan(0);
+    expect(screen.queryByText("已连接")).not.toBeInTheDocument();
+    expect(screen.queryByText("我的 API Key")).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "编辑供应商" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "删除供应商" })).not.toBeInTheDocument();
+
+    const providerButtons = within(screen.getByRole("complementary")).getAllByRole("button");
+    expect(providerButtons[0]).toHaveTextContent("Mona AI");
+    expect(providerButtons[0].querySelector("img")).toHaveAttribute("src", "/brand/mona_icon.png");
+    expect(providerButtons[1].querySelector("img")).not.toBeNull();
+
+    fireEvent.click(providerButtons[1]);
+    expect(screen.getByRole("button", { name: "设置 DeepSeek V4 Flash" })).toBeInTheDocument();
+    expect(screen.getAllByRole("button", { name: "设置 deepseek-image" })).toHaveLength(1);
+    expect(screen.getAllByRole("button", { name: "设置 deepseek-video" })).toHaveLength(1);
+    expect(screen.getAllByRole("switch")).toHaveLength(1);
+    expect(screen.getAllByText("默认图片")).toHaveLength(1);
+    expect(screen.getAllByText("默认视频")).toHaveLength(1);
+
+    openModelMenu("deepseek-video");
+    fireEvent.click(screen.getByRole("menuitem", { name: "设为默认图片模型" }));
+    expect(onSelectImageModel).toHaveBeenCalledWith("deepseek", "deepseek-video");
+
+    openModelMenu("deepseek-image");
+    fireEvent.click(screen.getByRole("menuitem", { name: "图片生成设置" }));
+    expect(onOpenImageSettings).toHaveBeenCalledWith("deepseek", "deepseek-image");
+
+    openModelMenu("deepseek-image");
+    fireEvent.click(screen.getByRole("menuitem", { name: "设为默认视频模型" }));
+    expect(onSelectVideoModel).toHaveBeenCalledWith("deepseek", "deepseek-image");
+
+    openModelMenu("deepseek-video");
+    fireEvent.click(screen.getByRole("menuitem", { name: "视频生成设置" }));
+    expect(onOpenVideoSettings).toHaveBeenCalledWith("deepseek", "deepseek-video");
   });
 
-  it("allows disabling a provider's final model when another provider remains enabled", async () => {
-    const deepseek = provider("deepseek", "DeepSeek", true, [{ id: "deepseek-v4-pro", name: "DeepSeek V4 Pro" }]);
-    const zhipu = provider("zhipu-glm-cn", "智谱 GLM", true, [{ id: "glm-5.2", name: "GLM-5.2" }]);
-    updateProviderSettings.mockResolvedValueOnce(settingsWith([
-      provider("deepseek", "DeepSeek", true, [{ id: "deepseek-v4-pro", name: "DeepSeek V4 Pro", enabled: false }]),
-      zhipu,
-    ]));
+  it("shows Mona AI as unavailable when the server catalog is empty", () => {
+    const unavailable = {
+      ...settings,
+      chat_providers: settings.chat_providers?.map((provider) =>
+        provider.name === "mona_managed"
+          ? { ...provider, configured: false, model: null, models: [] }
+          : provider,
+      ),
+    } as SettingsPayload;
+
     render(
       <ChatProvidersSettings
-        settings={settingsWith([deepseek, zhipu])}
-        token="token"
-        onSettingsChanged={noop}
-        onModelNameChange={noop}
+        settings={unavailable}
+        token="test-token"
+        onSettingsChanged={vi.fn()}
+        onModelNameChange={vi.fn()}
       />,
     );
 
-    fireEvent.click(screen.getByRole("switch", { name: "DeepSeek V4 Pro 关闭" }));
-
-    await waitFor(() => expect(updateProviderSettings).toHaveBeenCalledWith(
-      "token",
-      { provider: "deepseek", enabledModels: [] },
-    ));
+    expect(screen.getByText("服务端尚未开放可用的托管模型")).toBeInTheDocument();
+    expect(screen.getByText("服务端暂无可用模型")).toBeInTheDocument();
+    expect(screen.getAllByText("未配置").length).toBeGreaterThan(0);
+    expect(screen.queryByRole("switch")).not.toBeInTheDocument();
   });
 
-  it("edits a configured provider with enabled models preselected and preserves a blank key", async () => {
-    const zhipu = provider(
-      "zhipu-glm-cn",
-      "智谱 GLM（中国大陆）",
-      true,
-      [
-        { id: "glm-5.2", name: "GLM-5.2", enabled: true },
-        { id: "glm-5.1", name: "GLM-5.1", enabled: false },
+  it("offers one custom model list independently to chat, image, and video", () => {
+    const customSettings = {
+      ...settings,
+      chat_providers: [
+        settings.chat_providers![0],
+        {
+          name: "custom-relay",
+          label: "自建模型",
+          is_custom: true,
+          configured: true,
+          api_key_required: false,
+          api_base: "https://relay.example/v1",
+          default_api_base: "https://relay.example/v1",
+          models: ["qwen", "z-image", "h3-video", "songgen", "world3d", "misc", "mystery"].map((id) => ({
+            id,
+            name: id,
+            type: id === "qwen"
+              ? "chat"
+              : id === "z-image"
+                ? "image"
+                : id === "h3-video"
+                  ? "video"
+                  : id === "songgen"
+                    ? "audio"
+                    : id === "world3d"
+                      ? "world3d"
+                      : id === "misc"
+                        ? "other"
+                        : undefined,
+            enabled: id === "qwen",
+            recommended: false,
+          })),
+        },
       ],
-      "cn",
-    );
-    fetchProviderModels.mockResolvedValueOnce({ models: [] });
-    updateProviderSettings.mockResolvedValueOnce(settingsWith([zhipu]));
-    render(
+      image_generation: {
+        ...settings.image_generation,
+        provider: "custom-relay",
+        model: "songgen",
+        providers: [
+          {
+            name: "custom-relay",
+            label: "自建模型",
+            configured: true,
+            image_models: ["qwen", "z-image", "h3-video"],
+          },
+        ],
+      },
+      video_generation: {
+        ...settings.video_generation,
+        provider: "custom-relay",
+        model: "songgen",
+        providers: [
+          {
+            name: "custom-relay",
+            label: "自建模型",
+            configured: true,
+            video_models: ["qwen", "z-image", "h3-video"],
+          },
+        ],
+      },
+    } as SettingsPayload;
+    const onSelectImageModel = vi.fn();
+    const onSelectVideoModel = vi.fn();
+    const onOpenImageSettings = vi.fn();
+    const onOpenVideoSettings = vi.fn();
+
+    const view = render(
       <ChatProvidersSettings
-        settings={settingsWith([zhipu])}
-        token="token"
-        onSettingsChanged={noop}
-        onModelNameChange={noop}
+        settings={customSettings}
+        token="test-token"
+        onSettingsChanged={vi.fn()}
+        onModelNameChange={vi.fn()}
+        onSelectImageModel={onSelectImageModel}
+        onSelectVideoModel={onSelectVideoModel}
+        onOpenImageSettings={onOpenImageSettings}
+        onOpenVideoSettings={onOpenVideoSettings}
       />,
     );
 
-    fireEvent.click(screen.getByRole("button", { name: "编辑供应商" }));
-    expect(screen.getByRole("dialog", { name: "编辑供应商" })).toBeInTheDocument();
-    expect(screen.getByDisplayValue(zhipu.api_base)).toHaveAttribute("readonly");
-    expect(screen.getByPlaceholderText(/已配置 secr/)).toBeInTheDocument();
-    fireEvent.click(screen.getByRole("button", { name: "拉取模型" }));
+    const providerButtons = within(screen.getByRole("complementary")).getAllByRole("button");
+    fireEvent.click(providerButtons[1]);
+    expect(screen.getAllByRole("switch")).toHaveLength(1);
+    const qwenSwitch = screen.getByRole("switch", { name: "qwen 不在对话中显示" });
+    const qwenDefaultButton = screen.getByRole("button", { name: "设为默认" });
+    const qwenRowChildren = [...qwenSwitch.parentElement!.children];
+    expect(qwenRowChildren.indexOf(qwenDefaultButton)).toBeLessThan(qwenRowChildren.indexOf(qwenSwitch));
+    expect(screen.getAllByRole("button", { name: /^设置 / })).toHaveLength(3);
+    expect(screen.queryByRole("button", { name: "设置 qwen" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "设置 songgen" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "设置 world3d" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "设置 misc" })).not.toBeInTheDocument();
+    expect(screen.getByText("对话", { exact: true })).toBeInTheDocument();
+    expect(screen.getByText("图片", { exact: true })).toBeInTheDocument();
+    expect(screen.getByText("视频", { exact: true })).toBeInTheDocument();
+    expect(screen.getByText("音频", { exact: true })).toBeInTheDocument();
+    expect(screen.getByText("3D", { exact: true })).toBeInTheDocument();
+    expect(screen.getAllByText("其他", { exact: true })).toHaveLength(2);
+    expect(screen.getAllByRole("button", { name: "设置 z-image" })).toHaveLength(1);
+    expect(screen.getAllByRole("button", { name: "设置 h3-video" })).toHaveLength(1);
+    expect(screen.getAllByText("默认图片")).toHaveLength(1);
+    expect(screen.getAllByText("默认视频")).toHaveLength(1);
+    openModelMenu("z-image");
+    fireEvent.click(screen.getByRole("menuitem", { name: "设为默认图片模型" }));
+    expect(onSelectImageModel).toHaveBeenCalledWith("custom-relay", "z-image");
+    openModelMenu("z-image");
+    expect(screen.queryByRole("menuitem", { name: "设为默认视频模型" })).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole("menuitem", { name: "图片生成设置" }));
+    expect(onOpenImageSettings).toHaveBeenCalledWith("custom-relay", "z-image");
+    openModelMenu("h3-video");
+    expect(screen.queryByRole("menuitem", { name: "设为默认图片模型" })).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole("menuitem", { name: "设为默认视频模型" }));
+    expect(onSelectVideoModel).toHaveBeenCalledWith("custom-relay", "h3-video");
+    openModelMenu("h3-video");
+    fireEvent.click(screen.getByRole("menuitem", { name: "视频生成设置" }));
+    expect(onOpenVideoSettings).toHaveBeenCalledWith("custom-relay", "h3-video");
+    openModelMenu("mystery");
+    expect(screen.getByRole("menuitem", { name: "设为默认图片模型" })).toBeInTheDocument();
+    expect(screen.getByRole("menuitem", { name: "设为默认视频模型" })).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("menuitem", { name: "设为默认图片模型" }));
+    expect(onSelectImageModel).toHaveBeenCalledWith("custom-relay", "mystery");
+    openModelMenu("mystery");
+    fireEvent.click(screen.getByRole("menuitem", { name: "设为默认视频模型" }));
+    expect(onSelectVideoModel).toHaveBeenCalledWith("custom-relay", "mystery");
 
-    expect(await screen.findByText("选择可用模型")).toBeInTheDocument();
-    expect(screen.getByRole("checkbox", { name: /GLM-5.2/ })).toBeChecked();
-    expect(screen.getByRole("checkbox", { name: "GLM-5.1" })).not.toBeChecked();
-    fireEvent.click(screen.getByRole("button", { name: "完成" }));
-
-    await waitFor(() => expect(updateProviderSettings).toHaveBeenCalled());
-    const update = updateProviderSettings.mock.calls[0][1] as Record<string, unknown>;
-    expect(update).not.toHaveProperty("apiKey");
-    expect(update).toEqual(expect.objectContaining({
-      provider: "zhipu-glm-cn",
-      enabledModels: ["glm-5.2"],
-    }));
-  });
-
-  it("deduplicates repeated discovered model IDs in the wizard", async () => {
-    const deepseek = provider(
-      "deepseek",
-      "DeepSeek",
-      false,
-      [{ id: "deepseek-v4-pro", name: "DeepSeek V4 Pro" }],
-    );
-    fetchProviderModels.mockResolvedValueOnce({
-      models: ["custom-model", "custom-model", "custom-other"],
-    });
-    render(
+    const updatedSettings = {
+      ...customSettings,
+      image_generation: { ...customSettings.image_generation, model: "qwen" },
+      video_generation: { ...customSettings.video_generation, model: "qwen" },
+    } as SettingsPayload;
+    view.rerender(
       <ChatProvidersSettings
-        settings={settingsWith([deepseek])}
-        token="token"
-        onSettingsChanged={noop}
-        onModelNameChange={noop}
+        settings={updatedSettings}
+        token="test-token"
+        onSettingsChanged={vi.fn()}
+        onModelNameChange={vi.fn()}
+        onSelectImageModel={onSelectImageModel}
+        onSelectVideoModel={onSelectVideoModel}
+        onOpenImageSettings={onOpenImageSettings}
+        onOpenVideoSettings={onOpenVideoSettings}
       />,
     );
+    const qwenRow = screen.getAllByText("qwen", { exact: true })[0].parentElement!.parentElement!.parentElement!;
+    expect(within(qwenRow).getByText("默认图片")).toBeInTheDocument();
+    expect(within(qwenRow).getByText("默认视频")).toBeInTheDocument();
+    expect(screen.getAllByText("默认图片")).toHaveLength(1);
+    expect(screen.getAllByText("默认视频")).toHaveLength(1);
+    expect(screen.queryByRole("button", { name: "设为默认" })).not.toBeInTheDocument();
 
-    fireEvent.click(screen.getByRole("button", { name: "添加供应商" }));
-    fireEvent.click(screen.getByRole("button", { name: /DeepSeek/ }));
-    fireEvent.change(screen.getByPlaceholderText("请输入 API Key"), { target: { value: "deepseek-key" } });
-    fireEvent.click(screen.getByRole("button", { name: "拉取模型" }));
-
-    expect(await screen.findByText("选择可用模型")).toBeInTheDocument();
-    expect(screen.getAllByRole("checkbox", { name: "custom-model" })).toHaveLength(1);
-  });
-
-  it("keeps the custom endpoint entry visible when the catalog search has no matches", () => {
-    render(
-      <ChatProvidersSettings
-        settings={settingsWith([provider("deepseek", "DeepSeek", false, [{ id: "deepseek-v4-pro", name: "DeepSeek V4 Pro" }])])}
-        token="token"
-        onSettingsChanged={noop}
-        onModelNameChange={noop}
-      />,
-    );
-
-    fireEvent.click(screen.getByRole("button", { name: "添加供应商" }));
-    fireEvent.change(screen.getAllByPlaceholderText("搜索供应商")[1], { target: { value: "no-such-provider" } });
-    expect(screen.getByRole("button", { name: /自定义端点/ })).toBeInTheDocument();
-    fireEvent.click(screen.getByRole("button", { name: /自定义端点/ }));
-    expect(screen.getByRole("dialog", { name: "添加自定义供应商" })).toBeInTheDocument();
-    expect(screen.getByLabelText("显示名称")).toBeInTheDocument();
-    expect(screen.getByLabelText("API Base")).toBeInTheDocument();
-  });
-
-  it("saves a custom endpoint with a manual model after discovery fails", async () => {
-    fetchProviderModels.mockRejectedValueOnce(new Error("endpoint offline"));
-    updateProviderSettings.mockResolvedValueOnce(settingsWith([
-      provider("custom-local", "本地模型", true, [{ id: "local-chat", name: "local-chat" }], undefined, true),
-    ]));
-    render(
-      <ChatProvidersSettings
-        settings={settingsWith([provider("deepseek", "DeepSeek", false, [])])}
-        token="token"
-        onSettingsChanged={noop}
-        onModelNameChange={noop}
-      />,
-    );
-
-    fireEvent.click(screen.getByRole("button", { name: "添加供应商" }));
-    fireEvent.click(screen.getByRole("button", { name: /自定义端点/ }));
-    fireEvent.change(screen.getByLabelText("显示名称"), { target: { value: "本地模型" } });
-    fireEvent.change(screen.getByLabelText("API Base"), { target: { value: "http://127.0.0.1:1234/v1" } });
-    fireEvent.click(screen.getByRole("button", { name: "拉取模型列表" }));
-    expect(await screen.findByText("endpoint offline")).toBeInTheDocument();
-    fireEvent.change(screen.getByPlaceholderText("手动添加模型 ID（逗号分隔）"), { target: { value: "local-chat" } });
-    fireEvent.click(screen.getByRole("button", { name: "添加" }));
-    fireEvent.click(screen.getByRole("button", { name: "完成" }));
-
-    await waitFor(() => expect(updateProviderSettings).toHaveBeenCalled());
-    expect(updateProviderSettings).toHaveBeenCalledWith(
-      "token",
-      expect.objectContaining({
-        provider: "custom",
-        customName: "本地模型",
-        apiBase: "http://127.0.0.1:1234/v1",
-        enabledModels: ["local-chat"],
-      }),
-    );
-    expect(updateProviderSettings.mock.calls[0][1]).not.toHaveProperty("apiKey");
-  });
-
-  it("edits a custom endpoint with its enabled models preselected and keeps a blank key", async () => {
-    const custom = provider(
-      "custom-local",
-      "本地模型",
-      true,
-      [{ id: "local-chat", name: "local-chat", enabled: true }],
-      undefined,
-      true,
-    );
-    fetchProviderModels.mockResolvedValueOnce({ models: [] });
-    updateProviderSettings.mockResolvedValueOnce(settingsWith([custom]));
-    render(
-      <ChatProvidersSettings
-        settings={settingsWith([custom])}
-        token="token"
-        onSettingsChanged={noop}
-        onModelNameChange={noop}
-      />,
-    );
-
-    fireEvent.click(screen.getByRole("button", { name: "编辑供应商" }));
-    expect(screen.getByRole("dialog", { name: "编辑自定义供应商" })).toBeInTheDocument();
-    fireEvent.click(screen.getByRole("button", { name: "拉取模型列表" }));
-    expect(fetchProviderModels).toHaveBeenCalledWith("token", expect.objectContaining({ provider: "custom-local" }));
-    expect(await screen.findByText("选择可用模型")).toBeInTheDocument();
-    expect(screen.getByRole("checkbox", { name: /local-chat/ })).toBeChecked();
-    fireEvent.click(screen.getByRole("button", { name: "完成" }));
-
-    await waitFor(() => expect(updateProviderSettings).toHaveBeenCalled());
-    expect(updateProviderSettings.mock.calls[0][1]).toEqual(expect.objectContaining({
-      provider: "custom-local",
-      customName: "本地模型",
-      enabledModels: ["local-chat"],
-    }));
-    expect(updateProviderSettings.mock.calls[0][1]).not.toHaveProperty("apiKey");
+    fireEvent.change(screen.getByPlaceholderText("搜索模型"), { target: { value: "h3-video" } });
+    expect(screen.getAllByRole("button", { name: /^设置 / })).toHaveLength(1);
+    expect(screen.getByRole("button", { name: "设置 h3-video" })).toBeInTheDocument();
   });
 });

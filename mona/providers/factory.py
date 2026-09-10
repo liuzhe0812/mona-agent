@@ -57,7 +57,13 @@ def _make_provider_core(
                 f"请在设置中补全 API Key。"
             )
 
-    if backend == "openai_codex":
+    if backend == "mona_managed":
+        from mona.providers.mona_managed_provider import MonaManagedProvider
+
+        if spec is None:
+            raise ValueError("Mona managed provider metadata is missing")
+        provider = MonaManagedProvider(default_model=model, spec=spec)
+    elif backend == "openai_codex":
         from mona.providers.openai_codex_provider import OpenAICodexProvider
 
         provider = OpenAICodexProvider(default_model=model)
@@ -113,6 +119,22 @@ def _make_provider_core(
 
     provider.generation = resolved.to_generation_settings()
     provider.spec = spec
+    provider.model_input_modalities = {}
+    for item in (p.discovered_models if p else None) or []:
+        if not isinstance(item, dict):
+            continue
+        model_id = str(item.get("id") or "").strip()
+        raw_modalities = item.get("input_modalities", item.get("inputModalities"))
+        if not model_id or not isinstance(raw_modalities, list):
+            continue
+        modalities = tuple(
+            dict.fromkeys(
+                str(value).strip().lower()
+                for value in raw_modalities
+                if str(value).strip()
+            )
+        )
+        provider.model_input_modalities[model_id] = modalities
     return provider
 
 

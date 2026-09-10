@@ -175,14 +175,12 @@ export function ManagedRuntimeSettings({ token }: { token: string | null }) {
       <div className="mb-1 flex flex-wrap items-center justify-between gap-2 px-1">
         <SubsectionLabel>{t("managedRuntime.title")}</SubsectionLabel>
         <div className="flex items-center gap-1">
-          <Button variant="ghost" size="sm" onClick={() => void cleanup()} disabled={loading || cleaning}>
-            <Trash2 className={`mr-1.5 h-3.5 w-3.5 ${cleaning ? "animate-pulse" : ""}`} />
-            {cleaning
-              ? t("managedRuntime.cleaning")
-              : hasLegacyResources
-                ? t("managedRuntime.cleanupLegacy")
-                : t("managedRuntime.cleanup")}
-          </Button>
+          {hasLegacyResources ? (
+            <Button variant="ghost" size="sm" onClick={() => void cleanup()} disabled={loading || cleaning}>
+              <Trash2 className={`mr-1.5 h-3.5 w-3.5 ${cleaning ? "animate-pulse" : ""}`} />
+              {cleaning ? t("managedRuntime.cleaning") : t("managedRuntime.cleanupLegacy")}
+            </Button>
+          ) : null}
           <Button variant="ghost" size="sm" onClick={() => void load()} disabled={loading}>
             <RefreshCw className={`mr-1.5 h-3.5 w-3.5 ${loading ? "animate-spin" : ""}`} />
             {t("managedRuntime.refresh")}
@@ -293,6 +291,11 @@ function RuntimeRow({
               <CheckCircle2 className="h-3.5 w-3.5" />
               {t("managedRuntime.installed", { version: component.installedVersion })}
             </span>
+          ) : component.availableLocally ? (
+            <span className="inline-flex items-center gap-1 text-xs text-success">
+              <CheckCircle2 className="h-3.5 w-3.5" />
+              {t("managedRuntime.availableLocally")}
+            </span>
           ) : null}
         </div>
         {description || component.downloadBytes ? (
@@ -314,11 +317,11 @@ function RuntimeRow({
           <p className="mt-1 text-xs text-destructive">
             {job.error || t("managedRuntime.installError")}
           </p>
-        ) : !component.available && !component.installed ? (
+        ) : !component.available && !component.installed && !component.availableLocally ? (
           <p className="mt-1 text-xs text-muted-foreground">
             {t("managedRuntime.catalogUnavailable")}
           </p>
-        ) : !installEnabled && !component.installed ? (
+        ) : !installEnabled && !component.installed && !component.availableLocally ? (
           <p className="mt-1 text-xs text-warning">{unavailableReason}</p>
         ) : null}
       </div>
@@ -326,7 +329,7 @@ function RuntimeRow({
         <Button variant="outline" size="sm" onClick={() => onCancel(job)}>
           {t("managedRuntime.cancel")}
         </Button>
-      ) : (
+      ) : component.availableLocally ? null : (
         <Button
           variant={!resumable && component.installed && !component.updateAvailable ? "outline" : "default"}
           size="sm"

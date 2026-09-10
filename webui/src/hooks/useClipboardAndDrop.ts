@@ -75,6 +75,9 @@ export interface UseClipboardAndDropApi {
 interface UseClipboardAndDropOptions {
   /** Accept every local file instead of limiting this drop zone to images. */
   acceptAllFiles?: boolean;
+  /** Optional drop-specific destination when paste and drop have different
+   * attachment semantics. */
+  onDropFiles?: (files: File[]) => void;
 }
 
 /** Wire paste + drag-and-drop to a callback.
@@ -85,7 +88,7 @@ interface UseClipboardAndDropOptions {
  * highlight off otherwise). */
 export function useClipboardAndDrop(
   onFiles: (files: File[]) => void,
-  { acceptAllFiles = false }: UseClipboardAndDropOptions = {},
+  { acceptAllFiles = false, onDropFiles = onFiles }: UseClipboardAndDropOptions = {},
 ): UseClipboardAndDropApi {
   const [isDragging, setIsDragging] = useState(false);
   const dragDepth = useRef(0);
@@ -134,9 +137,9 @@ export function useClipboardAndDrop(
         ? extractFilesFromDrop(event)
         : extractImageFilesFromDrop(event);
       if (files.length === 0) return;
-      onFiles(files);
+      onDropFiles(files);
     },
-    [acceptAllFiles, onFiles],
+    [acceptAllFiles, onDropFiles],
   );
 
   return { isDragging, onPaste, onDragEnter, onDragOver, onDragLeave, onDrop };

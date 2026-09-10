@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import json
 import re
+import threading
 from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
 from typing import Any, Collection, Literal, Mapping
@@ -119,10 +120,9 @@ class AgentExecutionContext:
 class AgentDefinition(Base):
     """Validated agent manifest (``agent.json``), see guide section 5.1.
 
-    ``tool_allowlist`` semantics: for package agents the runner intersects this
-    list with the platform-safe tool table, so an empty list means no tools.
-    The reserved Mona definition bypasses the allowlist entirely and keeps the
-    full platform tool table.
+    ``tool_allowlist`` defines package defaults. Runtime registration still
+    intersects them with the platform-safe table; users may additionally grant
+    the narrow platform-owned knowledge capabilities declared in user_config.
     """
 
     schema_version: int = AGENT_DEFINITION_SCHEMA_VERSION
@@ -334,11 +334,16 @@ class AgentRegistry:
         *,
         builtin_dir: Path | None = None,
         installed_dir: Path | None = None,
+        package_store_dir: Path | None = None,
         known_tool_names: Collection[str] | None = None,
+        enforce_package_dir_name: bool = True,
     ) -> None:
         self._builtin_dir = builtin_dir if builtin_dir is not None else BUILTIN_AGENTS_DIR
         self._installed_dir = installed_dir
+        self._package_store_dir = package_store_dir
         self._known_tool_names = known_tool_names
+        self._enforce_package_dir_name = enforce_package_dir_name
+        self._lock = threading.RLock()
         self._agents: dict[str, ResolvedAgent] = {}
         self._load()
 
@@ -347,12 +352,42 @@ class AgentRegistry:
     # ------------------------------------------------------------------
 
     def _load(self) -> None:
-        entry = ResolvedAgent(definition=_mona_definition(), package_root=None)
-        self._agents[MONA_AGENT_ID] = entry
-        self._load_dir(self._builtin_dir, source="builtin", strict=True)
-        installed = self._installed_dir or self._default_installed_dir()
-        if installed is not None:
-            self._load_dir(installed, source="installed", strict=False)
+        with self._lock:
+            previous = self._agents
+            self._agents = {}
+            try:
+                entry = ResolvedAgent(definition=_mona_definition(), package_root=None)
+                self._agents[MONA_AGENT_ID] = entry
+                self._load_dir(self._builtin_dir, source="builtin", strict=True)
+                self._load_package_store()
+                installed = self._installed_dir or self._default_installed_dir()
+                if installed is not None:
+                    self._load_dir(installed, source="installed", strict=False)
+            except Exception:
+                self._agents = previous
+                raise
+
+    def reload(self) -> None:
+        """Atomically refresh built-in, downloaded, and legacy Agent sources."""
+        self._load()
+
+    def _load_package_store(self) -> None:
+        root = self._package_store_dir
+        if root is None:
+            try:
+                from mona.config.paths import get_config_path
+
+                root = get_config_path().parent / "packages" / "agents"
+            except Exception as exc:
+                logger.warning("Cannot resolve Agent package store, skipping: {}", exc)
+                return
+        try:
+            from mona.agent.package_store import iter_active_agent_package_roots
+
+            for package_root in iter_active_agent_package_roots(root):
+                self._load_agent(package_root, source="package-store", strict=False)
+        except Exception as exc:
+            logger.error("Cannot load Agent package store {}: {}", root, exc)
 
     @staticmethod
     def _default_installed_dir() -> Path | None:
@@ -384,7 +419,13 @@ class AgentRegistry:
     def _load_agent(self, package_root: Path, *, source: str, strict: bool) -> None:
         manifest = package_root / "agent.json"
         try:
-            definition = self._load_manifest(manifest, package_root=package_root)
+            definition = self._load_manifest(
+                manifest,
+                package_root=package_root,
+                enforce_dir_name=(
+                    self._enforce_package_dir_name and source != "package-store"
+                ),
+            )
         except AgentDefinitionError as exc:
             if strict:
                 raise
@@ -401,7 +442,13 @@ class AgentRegistry:
         )
         logger.debug("Loaded {} agent {!r} from {}", source, definition.id, manifest)
 
-    def _load_manifest(self, manifest: Path, *, package_root: Path) -> AgentDefinition:
+    def _load_manifest(
+        self,
+        manifest: Path,
+        *,
+        package_root: Path,
+        enforce_dir_name: bool,
+    ) -> AgentDefinition:
         try:
             raw = json.loads(manifest.read_text(encoding="utf-8"))
         except (OSError, json.JSONDecodeError) as exc:
@@ -414,7 +461,7 @@ class AgentRegistry:
             raise AgentDefinitionError(f"{manifest}: agent id {definition.id!r} is reserved")
         if not definition.prompt:
             raise AgentDefinitionError(f"{manifest}: package agents must declare a prompt file")
-        if package_root.name != definition.id:
+        if enforce_dir_name and package_root.name != definition.id:
             raise AgentDefinitionError(
                 f"{manifest}: agent id {definition.id!r} must match directory name "
                 f"{package_root.name!r}"
@@ -467,8 +514,9 @@ class AgentRegistry:
 
     def get(self, agent_id: str) -> AgentDefinition | None:
         """Return the definition for an agent ID, or None."""
-        entry = self._agents.get(normalize_agent_id(agent_id))
-        return entry.definition if entry else None
+        with self._lock:
+            entry = self._agents.get(normalize_agent_id(agent_id))
+            return entry.definition if entry else None
 
     def require(self, agent_id: str) -> AgentDefinition:
         """Return the definition for an agent ID, raising AgentNotFoundError."""
@@ -479,16 +527,19 @@ class AgentRegistry:
 
     def get_entry(self, agent_id: str) -> ResolvedAgent | None:
         """Return the full resolved entry (definition + package root), or None."""
-        return self._agents.get(normalize_agent_id(agent_id))
+        with self._lock:
+            return self._agents.get(normalize_agent_id(agent_id))
 
     def list_agents(self) -> list[AgentDefinition]:
         """List all loaded agents (Mona first, then built-ins, then installed)."""
-        return [entry.definition for entry in self._agents.values()]
+        with self._lock:
+            return [entry.definition for entry in self._agents.values()]
 
     def package_root(self, agent_id: str) -> Path | None:
         """Return the package root for an agent (None for Mona or unknown IDs)."""
-        entry = self._agents.get(normalize_agent_id(agent_id))
-        return entry.package_root if entry else None
+        with self._lock:
+            entry = self._agents.get(normalize_agent_id(agent_id))
+            return entry.package_root if entry else None
 
     def resolve_skill_dirs(self, agent_id: str) -> list[Path]:
         """Resolve the agent's concrete package skill directories.
@@ -497,33 +548,37 @@ class AgentRegistry:
         must contain ``SKILL.md`` (completion guide 8.1); entries without it
         are skipped so downstream loaders never see a skill root.
         """
-        entry = self._agents.get(normalize_agent_id(agent_id))
-        if entry is None or entry.package_root is None:
-            return []
-        dirs: list[Path] = []
-        for skill_rel in entry.definition.skills:
-            skill_dir = _resolve_within(entry.package_root, skill_rel, field_name="skills[]")
-            if skill_dir.is_dir() and (skill_dir / "SKILL.md").is_file():
-                dirs.append(skill_dir)
-        return dirs
+        with self._lock:
+            entry = self._agents.get(normalize_agent_id(agent_id))
+            if entry is None or entry.package_root is None:
+                return []
+            dirs: list[Path] = []
+            for skill_rel in entry.definition.skills:
+                skill_dir = _resolve_within(entry.package_root, skill_rel, field_name="skills[]")
+                if skill_dir.is_dir() and (skill_dir / "SKILL.md").is_file():
+                    dirs.append(skill_dir)
+            return dirs
 
     def load_prompt(self, agent_id: str) -> str:
         """Load the agent prompt markdown; empty string for Mona or unknown IDs."""
-        entry = self._agents.get(normalize_agent_id(agent_id))
-        if entry is None or entry.package_root is None or not entry.definition.prompt:
-            return ""
-        prompt_path = _resolve_within(
-            entry.package_root, entry.definition.prompt, field_name="prompt"
-        )
-        return prompt_path.read_text(encoding="utf-8")
+        with self._lock:
+            entry = self._agents.get(normalize_agent_id(agent_id))
+            if entry is None or entry.package_root is None or not entry.definition.prompt:
+                return ""
+            prompt_path = _resolve_within(
+                entry.package_root, entry.definition.prompt, field_name="prompt"
+            )
+            return prompt_path.read_text(encoding="utf-8")
 
     def __contains__(self, agent_id: object) -> bool:
         if not isinstance(agent_id, str):
             return False
         try:
-            return normalize_agent_id(agent_id) in self._agents
+            with self._lock:
+                return normalize_agent_id(agent_id) in self._agents
         except ValueError:
             return False
 
     def __len__(self) -> int:
-        return len(self._agents)
+        with self._lock:
+            return len(self._agents)

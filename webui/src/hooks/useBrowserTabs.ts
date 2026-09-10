@@ -23,13 +23,14 @@ const SESSION_RESTORE_DELAY = 800; // ms，等待主窗口初始化完成
 
 export interface Tab {
   id: string;
-  type: "mona" | "browser" | "md-reader" | "history" | "downloads";
+  type: "mona" | "browser" | "md-reader" | "canvas-reader" | "history" | "downloads";
   title: string;
   url?: string;
   favicon?: string;
   isAiControlled: boolean;
   webviewCreated: boolean; // WebView 是否已在 Rust 侧创建
   mdFilePath?: string; // md-reader 类型标签的文件路径
+  canvasFilePath?: string; // canvas-reader 类型标签的文件路径
   isLoading?: boolean; // 页面是否正在加载
   canGoBack?: boolean; // 是否可以后退
   canGoForward?: boolean; // 是否可以前进
@@ -109,6 +110,7 @@ export function useBrowserTabs() {
   // 最近关闭的标签（用于 Ctrl+Shift+T 恢复）
   const recentlyClosedRef = useRef<Array<{ url: string; title: string }>>([]);
   const creatingTabIdsRef = useRef(new Set<string>());
+  const backgroundTabIdsRef = useRef(new Set<string>());
 
   // tabs 的 ref，用于在事件监听器中访问最新状态（避免 stale closure）
   const tabsRef = useRef<Tab[]>([MONA_TAB]);
@@ -355,13 +357,14 @@ export function useBrowserTabs() {
               isLoading: true,
             }];
           });
-          setActiveTabId(id);
+          if (!backgroundTabIdsRef.current.has(id)) setActiveTabId(id);
         }
       );
       if (!keepListener(unlistenCreated)) return;
 
       unlistenClosed = await listen<string>("browser-tab-closed", (event) => {
         const id = event.payload;
+        backgroundTabIdsRef.current.delete(id);
         const nextActive = pickNextActiveAfterClose(tabsRef.current, id);
         setTabs((prev) => prev.filter((t) => t.id !== id));
         setActiveTabId((current) => (current === id ? nextActive : current));
@@ -502,7 +505,7 @@ export function useBrowserTabs() {
   }, []);
 
   // 创建纯 UI 标签（不创建 WebView，等用户输入 URL 后再创建）
-  const addEmptyTab = useCallback((opts?: { isIncognito?: boolean }) => {
+  const addEmptyTab = useCallback((opts?: { isIncognito?: boolean; activate?: boolean }) => {
     const id = createBrowserTabId();
     const newTab: Tab = {
       id,
@@ -515,7 +518,8 @@ export function useBrowserTabs() {
       adBlockEnabled: true,
     };
     setTabs((prev) => [...prev, newTab]);
-    setActiveTabId(id);
+    if (opts?.activate === false) backgroundTabIdsRef.current.add(id);
+    else setActiveTabId(id);
     return id;
   }, []);
 
@@ -577,6 +581,7 @@ export function useBrowserTabs() {
   // 关闭标签
   const closeTab = useCallback(async (id: string) => {
     if (id === "mona") return;
+    backgroundTabIdsRef.current.delete(id);
 
     const tab = tabs.find((t) => t.id === id);
     if (!tab) return;
@@ -594,7 +599,7 @@ export function useBrowserTabs() {
       }
     }
 
-    // 关闭 md-reader 标签时，清理 store 中的文件数据
+    // 关闭 Markdown 阅读器标签时，清理 store 中的文件数据
     if (tab.type === "md-reader") {
       const { useMdReaderStore } = await import("@/components/md-reader/mdReaderStore");
       const store = useMdReaderStore.getState();
@@ -678,7 +683,7 @@ export function useBrowserTabs() {
   const addMdReaderTab = useCallback((filePath: string) => {
     const fileName = filePath.replace(/\\/g, "/").split("/").pop() || "untitled.md";
     // 检查是否已有该文件的标签
-    const existing = tabs.find((t) => t.type === "md-reader" && t.mdFilePath === filePath);
+    const existing = tabsRef.current.find((t) => t.type === "md-reader" && t.mdFilePath === filePath);
     if (existing) {
       setActiveTabId(existing.id);
       return;
@@ -694,7 +699,27 @@ export function useBrowserTabs() {
     };
     setTabs((prev) => [...prev, newTab]);
     setActiveTabId(id);
-  }, [tabs]);
+  }, []);
+
+  const addCanvasReaderTab = useCallback((filePath: string) => {
+    const fileName = filePath.replace(/\\/g, "/").split("/").pop() || "untitled.mona-canvas";
+    const existing = tabsRef.current.find((t) => t.type === "canvas-reader" && t.canvasFilePath === filePath);
+    if (existing) {
+      setActiveTabId(existing.id);
+      return;
+    }
+    const id = createTabId("canvas");
+    const newTab: Tab = {
+      id,
+      type: "canvas-reader",
+      title: fileName,
+      canvasFilePath: filePath,
+      isAiControlled: false,
+      webviewCreated: false,
+    };
+    setTabs((prev) => [...prev, newTab]);
+    setActiveTabId(id);
+  }, []);
 
   // 打开历史记录页面
   const openHistoryPage = useCallback(() => {
@@ -958,7 +983,9 @@ export function useBrowserTabs() {
 
       // Ctrl+Tab / Ctrl+Shift+Tab: 切换标签
       if (ctrl && e.key === "Tab") {
-        const browserTabsList = tabs.filter((t) => t.id !== "mona" || tabs.length === 1);
+        const browserTabsList = tabs.filter(
+          (tab) => (tab.id !== "mona" || tabs.length === 1) && !backgroundTabIdsRef.current.has(tab.id),
+        );
         if (browserTabsList.length < 2) return;
         const currentIdx = browserTabsList.findIndex((t) => t.id === activeTabId);
         if (currentIdx === -1) return;
@@ -1009,6 +1036,7 @@ export function useBrowserTabs() {
     activeTab,
     addEmptyTab,
     addMdReaderTab,
+    addCanvasReaderTab,
     openHistoryPage,
     openDownloadsPage,
     navigateToUrl,

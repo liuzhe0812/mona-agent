@@ -453,11 +453,11 @@ export function MailAgentPanel() {
       ) : null}
 
       {/* 输入框 */}
-      <div className="shrink-0 border-t border-border/70 p-2">
+      <div className="shrink-0 p-2">
         {notice ? (
           <div className="mb-1.5 text-micro text-muted-foreground">{notice}</div>
         ) : null}
-        <div className="flex min-h-9 items-end gap-1.5 rounded-lg border border-border/75 bg-background px-2.5 py-1.5">
+        <div className="flex min-h-[52px] items-end gap-1.5 rounded-xl border border-border/75 bg-background px-2.5 py-1.5 shadow-sm">
           <Textarea
             value={draft}
             onChange={(event) => setDraft(event.target.value)}
@@ -468,8 +468,8 @@ export function MailAgentPanel() {
               }
             }}
             disabled={creatingChat}
-            className="min-h-5 flex-1 resize-none rounded-none border-0 bg-transparent px-0 py-0 text-caption leading-5 shadow-none focus-visible:ring-0"
-            rows={1}
+            className="min-h-[36px] flex-1 resize-none rounded-none border-0 bg-transparent px-0 py-0 text-caption leading-5 shadow-none focus-visible:ring-0"
+            rows={2}
             placeholder="输入问题，如「找上个月张总发的关于预算的邮件」..."
           />
           <Button

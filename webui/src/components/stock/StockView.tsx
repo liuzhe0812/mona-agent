@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Loader2 } from "lucide-react";
 
 import { useClient } from "@/providers/ClientProvider";
+import { useLicense } from "@/hooks/useLicense";
 import { Button } from "@/components/ui/button";
 import { StatusNotice } from "@/components/ui/status-notice";
 import { fetchSettings, updateStockSettings } from "@/lib/api";
@@ -17,6 +18,7 @@ import type {
   StockDecisionEvaluation,
   StockWatchlistAddInput,
   StockDiagnosisRun,
+  StockDiagnosisOutcome,
   StockDiagnosisV1,
 } from "@/lib/stock-api";
 import {
@@ -29,6 +31,7 @@ import {
   fetchStockResearchContext,
   fetchStockDiagnoses,
   fetchStockDiagnosis,
+  fetchStockDiagnosisOutcome,
   fetchStockDecisionConditions,
   isStockReportV5Document,
   preflightStockResearch,
@@ -187,6 +190,7 @@ interface StockViewProps {
   /** 私聊确认卡（T22d）带入的标的：进入工作台后自动选中并启动深度投研。 */
   autoRunSymbol?: string | null;
   onConsumeAutoRun?: () => void;
+  onOpenSubscribe?: () => void;
 }
 
 export function StockView({
@@ -194,8 +198,10 @@ export function StockView({
   onConsumeFocusRun,
   autoRunSymbol,
   onConsumeAutoRun,
+  onOpenSubscribe,
 }: StockViewProps) {
   const { client, token } = useClient();
+  const { licenseActive } = useLicense();
   const [items, setItems] = useState<StockDashboardItem[]>([]);
   const [quotes, setQuotes] = useState<Record<string, StockQuote>>({});
   const [watchSignals, setWatchSignals] = useState<
@@ -215,6 +221,7 @@ export function StockView({
   const [diagnosisRun, setDiagnosisRun] = useState<WorkflowRun | null>(null);
   const [diagnosisReports, setDiagnosisReports] = useState<StockDiagnosisRun[]>([]);
   const [diagnosisReport, setDiagnosisReport] = useState<StockDiagnosisV1 | null>(null);
+  const [diagnosisOutcome, setDiagnosisOutcome] = useState<StockDiagnosisOutcome | null>(null);
   const [stepActivities, setStepActivities] = useState<
     Record<string, ToolProgressEvent[]>
   >({});
@@ -350,9 +357,10 @@ export function StockView({
 
   const refreshDiagnoses = useCallback(async (instrumentId: string | null) => {
     const requestId = ++diagnosisRequestId.current;
-    if (!instrumentId) {
+    if (!instrumentId || !licenseActive) {
       setDiagnosisReports([]);
       setDiagnosisReport(null);
+      setDiagnosisOutcome(null);
       return;
     }
     const retryDelays = [0, 250, 750];
@@ -370,9 +378,13 @@ export function StockView({
           const detail = await fetchStockDiagnosis(latest.diagnosisId);
           latestReport = detail.report ?? null;
         }
+        const latestOutcome = latest
+          ? await fetchStockDiagnosisOutcome(latest.diagnosisId).catch(() => null)
+          : null;
         if (!mounted.current || requestId !== diagnosisRequestId.current) return;
         setDiagnosisReports(diagnosisItems);
         setDiagnosisReport(latestReport);
+        setDiagnosisOutcome(latestOutcome);
         return;
       } catch {
         if (attempt < retryDelays.length - 1) continue;
@@ -381,28 +393,42 @@ export function StockView({
     if (mounted.current && requestId === diagnosisRequestId.current) {
       setDiagnosisReports([]);
       setDiagnosisReport(null);
+      setDiagnosisOutcome(null);
     }
-  }, []);
+  }, [licenseActive]);
 
   const handleOpenDiagnosis = useCallback(async (diagnosisId: string) => {
+    if (!licenseActive) {
+      onOpenSubscribe?.();
+      return;
+    }
     try {
       const detail = await fetchStockDiagnosis(diagnosisId);
-      if (mounted.current) setDiagnosisReport(detail.report ?? null);
+      const outcome = await fetchStockDiagnosisOutcome(diagnosisId).catch(() => null);
+      if (mounted.current) {
+        setDiagnosisReport(detail.report ?? null);
+        setDiagnosisOutcome(outcome);
+      }
     } catch {
       if (mounted.current) setActionError("AI诊股历史详情打开失败，请稍后重试");
     }
-  }, []);
+  }, [licenseActive, onOpenSubscribe]);
 
   const handleDeleteDiagnosis = useCallback(async (diagnosisId: string) => {
+    if (!licenseActive) {
+      onOpenSubscribe?.();
+      return;
+    }
     try {
       await deleteStockDiagnosis(diagnosisId);
       if (!mounted.current) return;
       setDiagnosisReport((current) => current?.diagnosis_id === diagnosisId ? null : current);
+      setDiagnosisOutcome((current) => current?.diagnosisId === diagnosisId ? null : current);
       await refreshDiagnoses(selectedId);
     } catch {
       if (mounted.current) setActionError("AI诊股历史删除失败，请稍后重试");
     }
-  }, [refreshDiagnoses, selectedId]);
+  }, [licenseActive, onOpenSubscribe, refreshDiagnoses, selectedId]);
 
   useEffect(() => {
     void refreshDiagnoses(selectedId);
@@ -772,6 +798,10 @@ export function StockView({
   }, [selectedId, requestPreflight]);
 
   const handleStartDiagnosis = useCallback(async () => {
+    if (!licenseActive) {
+      onOpenSubscribe?.();
+      return;
+    }
     if (!selectedId || diagnosisStarting) return;
     const previousRunId = diagnosisRun?.id ?? null;
     setActionError(null);
@@ -794,7 +824,7 @@ export function StockView({
     } finally {
       if (mounted.current) setDiagnosisStarting(false);
     }
-  }, [client, diagnosisRun?.id, diagnosisStarting, items, selectedId]);
+  }, [client, diagnosisRun?.id, diagnosisStarting, items, licenseActive, onOpenSubscribe, selectedId]);
 
   const handleCancelDiagnosis = useCallback(async () => {
     const activeRun = diagnosisRun;
@@ -1144,6 +1174,7 @@ export function StockView({
                     run={run}
                     diagnosisRun={diagnosisRun}
                     diagnosisReport={diagnosisReport}
+                    diagnosisOutcome={diagnosisOutcome}
                     diagnosisReports={diagnosisReports}
                     stepActivities={stepActivities}
                     starting={starting}
@@ -1156,6 +1187,8 @@ export function StockView({
                     onCancelDiagnosis={() => void handleCancelDiagnosis()}
                     onOpenDiagnosis={(id) => void handleOpenDiagnosis(id)}
                     onDeleteDiagnosis={(id) => void handleDeleteDiagnosis(id)}
+                    diagnosisLocked={!licenseActive}
+                    onRequestDiagnosisAccess={onOpenSubscribe}
                     reports={selectedReports}
                     reportDetail={contextReport}
                     decisionEvaluation={decisionEvaluation}

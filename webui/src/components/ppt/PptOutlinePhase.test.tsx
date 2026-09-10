@@ -90,7 +90,7 @@ function editAudience(value: string) {
 }
 
 function clickConfirm() {
-  fireEvent.click(screen.getByRole("button", { name: /确认大纲并继续/ }));
+  fireEvent.click(screen.getByRole("button", { name: "逐页生成" }));
 }
 
 describe("PptOutlinePhase 规格保存门控", () => {
@@ -106,7 +106,7 @@ describe("PptOutlinePhase 规格保存门控", () => {
     editAudience("新客户");
     clickConfirm();
 
-    await waitFor(() => expect(onLocked).toHaveBeenCalled());
+    await waitFor(() => expect(onLocked).toHaveBeenCalledWith("page-by-page"));
     expect(order).toEqual(["spec", "save", "lock"]);
     expect(updatePptDesignSpecSummary).toHaveBeenCalledWith(
       "tok",
@@ -136,7 +136,7 @@ describe("PptOutlinePhase 规格保存门控", () => {
 
     // 再次确认可走通完整流程
     clickConfirm();
-    await waitFor(() => expect(onLocked).toHaveBeenCalled());
+    await waitFor(() => expect(onLocked).toHaveBeenCalledWith("page-by-page"));
     expect(order).toEqual(["spec", "save", "lock"]);
   });
 
@@ -178,7 +178,7 @@ describe("PptOutlinePhase 规格保存门控", () => {
     await act(async () => {
       resolveFirst?.({ ok: true, summary: SUMMARY });
     });
-    await waitFor(() => expect(onLocked).toHaveBeenCalled());
+    await waitFor(() => expect(onLocked).toHaveBeenCalledWith("page-by-page"));
     expect(updatePptDesignSpecSummary).toHaveBeenCalledTimes(2);
     expect(updatePptDesignSpecSummary).toHaveBeenLastCalledWith(
       "tok",
@@ -203,8 +203,18 @@ describe("PptOutlinePhase 规格保存门控", () => {
     // refetch 成功后错误清除，确认按钮恢复可用
     await waitFor(() =>
       expect(
-        screen.getByRole("button", { name: /确认大纲并继续/ }),
+        screen.getByRole("button", { name: "逐页生成" }),
       ).not.toBeDisabled(),
     );
+  });
+
+  it("locks the same outline and requests full generation", async () => {
+    const onLocked = vi.fn();
+    await renderLoaded(onLocked);
+
+    fireEvent.click(screen.getByRole("button", { name: "全部生成" }));
+
+    await waitFor(() => expect(onLocked).toHaveBeenCalledWith("all"));
+    expect(order).toEqual(["save", "lock"]);
   });
 });

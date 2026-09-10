@@ -57,7 +57,7 @@ export async function getApiBase(): Promise<string> {
   if (_apiBase) return _apiBase;
   if (isTauri()) {
     const status = await getGatewayStatus();
-    if (status.ws_port) {
+    if (status.port && status.ws_port) {
       _apiBase = `http://127.0.0.1:${status.ws_port}`;
       return _apiBase;
     }
@@ -75,13 +75,13 @@ export async function getGatewayHttpBase(): Promise<string> {
   if (_gatewayHttpBase) return _gatewayHttpBase;
   if (isTauri()) {
     let status = await getGatewayStatus();
-    if (!status.running) {
+    if (!status.running || !status.port) {
       try {
         const { startGateway } = await import("./tauri");
         await startGateway();
         status = await getGatewayStatus();
       } catch {
-        // fall through — return empty if gateway cannot be started
+        return "";
       }
     }
     if (status.port) {
@@ -102,13 +102,13 @@ export async function getServicesHttpBase(): Promise<string> {
   if (_servicesHttpBase) return _servicesHttpBase;
   if (isTauri()) {
     let status = await getServicesStatus();
-    if (!status.running) {
+    if (!status.running || !status.port) {
       try {
         const { startServices } = await import("./tauri");
         await startServices();
         status = await getServicesStatus();
       } catch {
-        // fall through — return empty if services cannot be started
+        return "";
       }
     }
     if (status.port) {
@@ -153,13 +153,19 @@ async function request<T>(
   if (!res.ok) {
     let message = `HTTP ${res.status}`;
     try {
-      const payload = (await res.json()) as {
-        error?: string | { message?: string };
-      };
-      const error = payload.error;
-      message = typeof error === "string" ? error : (error?.message ?? message);
+      const contentType = res.headers.get("content-type") ?? "";
+      if (contentType.includes("text/plain")) {
+        const body = (await res.text()).trim();
+        if (body) message = body;
+      } else {
+        const payload = (await res.json()) as {
+          error?: string | { message?: string };
+        };
+        const error = payload.error;
+        message = typeof error === "string" ? error : (error?.message ?? message);
+      }
     } catch {
-      // Keep the HTTP fallback when the server did not return JSON.
+      // Keep the HTTP fallback when the response body cannot be read.
     }
     throw new ApiError(res.status, message);
   }
@@ -337,7 +343,7 @@ export async function cleanupManagedRuntimes(
   removedLegacyBytes: number;
 }> {
   const effectiveBase = base ?? (await getApiBase());
-  return request(`${effectiveBase}/api/runtimes/cleanup`, token, { method: "POST" });
+  return request(`${effectiveBase}/api/runtimes/cleanup`, token);
 }
 
 export async function fetchAutomationStatus(
@@ -592,6 +598,12 @@ export async function fetchSettings(
 
 export interface ProviderModelsResult {
   models: string[];
+  model_details?: Array<{
+    id: string;
+    name?: string;
+    type?: string | null;
+    input_modalities?: string[] | null;
+  }>;
   /** Friendly Chinese error message from the backend; empty on success. */
   error?: string;
 }
@@ -746,9 +758,6 @@ export async function updateWebSearchSettings(
     query.set("max_results", String(update.maxResults));
   if (update.timeout !== undefined)
     query.set("timeout", String(update.timeout));
-  if (update.useJinaReader !== undefined) {
-    query.set("use_jina_reader", String(update.useJinaReader));
-  }
   return request<SettingsPayload>(
     `${effectiveBase}/api/settings/web-search/update?${query}`,
     token,
@@ -768,6 +777,7 @@ export async function updateImageGenerationSettings(
   query.set("default_aspect_ratio", update.defaultAspectRatio);
   query.set("default_image_size", update.defaultImageSize);
   query.set("max_images_per_turn", String(update.maxImagesPerTurn));
+  query.set("parameters", JSON.stringify(update.parameters));
   return request<SettingsPayload>(
     `${effectiveBase}/api/settings/image-generation/update?${query}`,
     token,
@@ -786,6 +796,7 @@ export async function updateVideoGenerationSettings(
   query.set("model", update.model);
   query.set("default_aspect_ratio", update.defaultAspectRatio);
   query.set("default_duration", String(update.defaultDuration));
+  query.set("parameters", JSON.stringify(update.parameters));
   return request<SettingsPayload>(
     `${effectiveBase}/api/settings/video-generation/update?${query}`,
     token,
@@ -940,6 +951,16 @@ export async function fetchPptProjects(
 ): Promise<{ projects: PptProject[] }> {
   const effectiveBase = base ?? (await getApiBase());
   return request(`${effectiveBase}/api/ppt/projects`, token);
+}
+
+export async function fetchPptProjectPath(
+  token: string,
+  project: string,
+  base?: string,
+): Promise<{ path: string }> {
+  const effectiveBase = base ?? (await getApiBase());
+  const query = new URLSearchParams({ project });
+  return request(`${effectiveBase}/api/ppt/project-path?${query}`, token);
 }
 
 export interface PptSlide {

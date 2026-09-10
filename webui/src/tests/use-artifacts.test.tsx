@@ -59,6 +59,40 @@ describe("useArtifacts", () => {
     expect(mockedList).toHaveBeenCalledTimes(1);
   });
 
+  it("loads the current task projection with its stable task id", async () => {
+    mockedList.mockResolvedValue({
+      files: [],
+      session_files: [],
+      task_files: [{
+        path: "helpers/render.py",
+        absolute_path: "/out/helpers/render.py",
+        name: "render.py",
+        size: 4,
+        size_human: "4 B",
+        mime: "text/x-python",
+      }],
+      task_id: "task-1",
+      truncated: false,
+    });
+    const { result } = renderHook(() =>
+      useArtifacts("tok", undefined, {
+        scope: "shared",
+        sessionKey: "session-1",
+        taskId: "task-1",
+      }),
+    );
+
+    await waitFor(() => expect(result.current.taskFiles).toHaveLength(1));
+    expect(result.current.taskId).toBe("task-1");
+    expect(mockedList).toHaveBeenCalledWith(
+      "tok",
+      undefined,
+      undefined,
+      "session-1",
+      "task-1",
+    );
+  });
+
   it("runs a trailing refetch when a refresh arrives mid-flight", async () => {
     const first = deferred<typeof emptyResult>();
     mockedList.mockReturnValueOnce(first.promise).mockResolvedValue(emptyResult);
@@ -95,6 +129,40 @@ describe("useArtifacts", () => {
     await waitFor(() => expect(mockedList).toHaveBeenCalledTimes(1));
 
     rerender({ signal: 1 });
+    await waitFor(() => expect(mockedList).toHaveBeenCalledTimes(2));
+  });
+
+  it("hides the previous session inventory while the next session loads", async () => {
+    const next = deferred<Awaited<ReturnType<typeof listArtifacts>>>();
+    mockedList
+      .mockResolvedValueOnce({
+        files: [],
+        session_files: [{
+          path: "old.png",
+          absolute_path: "/out/old.png",
+          name: "old.png",
+          size: 1,
+          size_human: "1 B",
+          mime: "image/png",
+        }],
+        truncated: false,
+      })
+      .mockReturnValueOnce(next.promise);
+    const { result, rerender } = renderHook(
+      ({ sessionKey }) =>
+        useArtifacts("tok", undefined, { scope: "shared", sessionKey }),
+      { initialProps: { sessionKey: "session-1" } },
+    );
+    await waitFor(() => expect(result.current.sessionFiles).toHaveLength(1));
+
+    rerender({ sessionKey: "session-2" });
+    expect(result.current.sessionFiles).toEqual([]);
+
+    await act(async () => next.resolve({
+      files: [],
+      session_files: [],
+      truncated: false,
+    }));
     await waitFor(() => expect(mockedList).toHaveBeenCalledTimes(2));
   });
 

@@ -288,3 +288,11 @@
 
 - 顶层 `Mona` 保留点击返回工作区能力，但不显示浏览器标签式 active／hover 表面；
 - 其他浏览器、Markdown 和历史标签维持原 TabBar 交互。
+
+### UI-V2-26：品牌启动动画
+
+- 新增独立 `StartupScene`，复用当前 `mona_app_icon.png`；
+- 启动超过约 400ms 后显示“正在醒来／正在接通工作台”，ready 后立即卸载；
+- 动效只使用 Mona Red、AI Cyan、transform 与 opacity，并支持 reduced-motion；
+- connecting 状态不再显示琥珀点和“正在连接 mona”；
+- 不修改 Gateway 启动、bootstrap、认证、错误与重试逻辑。

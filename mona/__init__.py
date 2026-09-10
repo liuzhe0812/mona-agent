@@ -30,6 +30,7 @@ __logo__ = "🐈"
 
 _LAZY_EXPORTS = {
     "Mona": ".mona",
+    "mona": ".mona",
     "RunResult": ".mona",
 }
 
@@ -45,4 +46,4 @@ def __getattr__(name: str):
     return val
 
 
-__all__ = ["Mona", "RunResult"]
+__all__ = ["Mona", "RunResult", "mona"]

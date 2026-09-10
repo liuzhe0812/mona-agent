@@ -23,6 +23,11 @@ class DistillContext:
     # Time window (None = all history)
     since: datetime | None = None
     until: datetime | None = None
+    # One frozen timestamp/configuration for the full profile pipeline.
+    as_of: datetime | None = None
+    profile_config: Any = None
+    # Shared, bounded collector outputs reused across sequential tasks.
+    shared_data: dict[str, Any] = field(default_factory=dict)
 
 
 @dataclass
@@ -44,6 +49,8 @@ class DistillResult:
     # (e.g. ProfileTask writes both "Profile" and "Current Focus").
     extra_sections: list[tuple[str, str]] = field(default_factory=list)
     error: str | None = None
+    status: str = "success"
+    code: str | None = None
 
 
 class DistillTask(ABC):
@@ -81,6 +88,8 @@ class DistillTask(ABC):
                 task_name=self.name,
                 success=False,
                 error=str(e),
+                status="failed",
+                code="distill_failed",
             )
 
     async def write(self, ctx: DistillContext, result: DistillResult) -> None:

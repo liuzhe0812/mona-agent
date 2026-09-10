@@ -370,6 +370,9 @@ class WorkflowRun(Base):
     # time and never mutated afterwards; legacy run files without the field
     # load as empty inputs without a schema_version bump.
     inputs: dict[str, Any] = Field(default_factory=dict)
+    # One privacy-filtered user-profile version for the entire run. All step
+    # AgentJobs inherit this exact snapshot, including parallel layers.
+    user_profile_snapshot: dict[str, Any] = Field(default_factory=dict)
 
     @field_validator("schema_version")
     @classmethod
@@ -676,12 +679,21 @@ class WorkflowRunStore:
         trigger_type: str = TRIGGER_MANUAL,
         started_by: str = "user",
         inputs: dict[str, Any] | None = None,
+        user_profile_snapshot: dict[str, Any] | None = None,
     ) -> WorkflowRun:
         """Persist a new ``queued`` run with the full workflow snapshot."""
         self.runs_dir.mkdir(parents=True, exist_ok=True)
         run_id = f"run_{uuid.uuid4().hex[:12]}"
         while self._path(run_id).exists():
             run_id = f"run_{uuid.uuid4().hex[:12]}"
+        if user_profile_snapshot is None:
+            try:
+                from mona.distill.snapshot import build_user_profile_snapshot
+
+                user_profile_snapshot = build_user_profile_snapshot()
+            except Exception:
+                logger.exception("Failed to capture user profile snapshot for workflow run")
+                user_profile_snapshot = {}
         run = WorkflowRun(
             id=run_id,
             room_id=room_id,
@@ -692,6 +704,7 @@ class WorkflowRunStore:
             started_by=started_by,
             steps={step.id: StepRun() for step in workflow.steps},
             inputs=inputs or {},
+            user_profile_snapshot=user_profile_snapshot,
         )
         self._save(run)
         return run

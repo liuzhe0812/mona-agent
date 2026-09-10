@@ -362,26 +362,52 @@ def _current_action(direction: V6Direction, action: str, holding: V6HoldingState
     return "avoid"
 
 
+def cost_adjusted_risk_reward(
+    *,
+    entry_price: float,
+    stop_loss: float,
+    first_take_profit: float,
+    second_take_profit: float,
+    slippage_pct: float | None,
+    costs: V6CostAssumptions | Mapping[str, Any] | None = None,
+) -> tuple[float | None, float | None]:
+    if slippage_pct is None:
+        return None, None
+    assumptions = _coerce_costs(costs)
+    prices = (entry_price, stop_loss, first_take_profit, second_take_profit)
+    if (
+        any(not math.isfinite(value) or value <= 0 for value in prices)
+        or not math.isfinite(slippage_pct)
+        or slippage_pct < 0
+    ):
+        return None, None
+    buy_cost = assumptions.commission_pct + assumptions.transfer_fee_pct + slippage_pct
+    sell_cost = assumptions.commission_pct + assumptions.transfer_fee_pct + assumptions.stamp_tax_pct + slippage_pct
+    effective_entry = entry_price * (1 + buy_cost / 100)
+    effective_stop = stop_loss * (1 - sell_cost / 100)
+    denominator = effective_entry - effective_stop
+    if denominator <= 0:
+        return None, None
+    first = first_take_profit * (1 - sell_cost / 100)
+    second = second_take_profit * (1 - sell_cost / 100)
+    return (
+        round((first - effective_entry) / denominator, 6),
+        round((second - effective_entry) / denominator, 6),
+    )
+
+
 def _cost_adjusted_rr(
     plan: V5TradingPlan,
     slippage_pct: float | None,
     costs: V6CostAssumptions,
 ) -> tuple[float | None, float | None]:
-    if slippage_pct is None:
-        return None, None
-    entry = (plan.reference_buy_low + plan.reference_buy_high) / 2
-    buy_cost = costs.commission_pct + costs.transfer_fee_pct + slippage_pct
-    sell_cost = costs.commission_pct + costs.transfer_fee_pct + costs.stamp_tax_pct + slippage_pct
-    effective_entry = entry * (1 + buy_cost / 100)
-    effective_stop = plan.stop_loss * (1 - sell_cost / 100)
-    denominator = effective_entry - effective_stop
-    if denominator <= 0:
-        return None, None
-    first = plan.first_take_profit * (1 - sell_cost / 100)
-    second = plan.second_take_profit * (1 - sell_cost / 100)
-    return (
-        round((first - effective_entry) / denominator, 6),
-        round((second - effective_entry) / denominator, 6),
+    return cost_adjusted_risk_reward(
+        entry_price=(plan.reference_buy_low + plan.reference_buy_high) / 2,
+        stop_loss=plan.stop_loss,
+        first_take_profit=plan.first_take_profit,
+        second_take_profit=plan.second_take_profit,
+        slippage_pct=slippage_pct,
+        costs=costs,
     )
 
 

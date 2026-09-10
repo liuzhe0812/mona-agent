@@ -28,7 +28,16 @@ import {
   AlertDialogHeader,
   AlertDialogTitle,
 } from "@/components/ui/alert-dialog";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
 import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
 import { EmptyState } from "@/components/ui/empty-state";
 import { RightSidebarToggleIcon } from "@/components/notes/RightSidebarToggleIcon";
 import { useFilePreviewStore, type PreviewScope } from "./filePreviewStore";
@@ -43,10 +52,13 @@ import type { DeliveredFile } from "@/lib/types";
 
 interface WorkspacePanelProps {
   files: DeliveredFile[];
-  /** Files delivered during the current session (deliver_file / file_edit
-   *  events). Rendered as a dedicated flat section above the full artifact
+  /** Files explicitly delivered during the current session. Rendered as a
+   *  dedicated flat section above the full artifact
    *  tree so the user can answer "what did THIS conversation produce". */
   sessionFiles?: DeliveredFile[];
+  /** Files created or modified by the current task. Rendered between the
+   *  session deliveries and the full workspace tree. */
+  taskFiles?: DeliveredFile[];
   /** Preview scope passed through to file cards so previews resolve against
    *  the active Agent owner or session project. */
   scope?: PreviewScope;
@@ -64,12 +76,18 @@ interface WorkspacePanelProps {
    *  return a promise; rejections are shown inside the confirmation dialog
    *  so the user can retry or cancel. */
   onDelete?: (file: DeliveredFile) => void | Promise<void>;
+  /** Rename a file or directory. The callback owns the filesystem update. */
+  onRename?: (file: DeliveredFile, newName: string) => void | Promise<void>;
   /** Absolute path of the panel's root directory (Agent output or project
    *  workspace). Enables the "open directory" affordances and the
    *  directory context menu. */
   outputDir?: string | null;
   /** Stable Agent/project/room owner key for directory expansion state. */
   ownerKey?: string;
+  /** Hide the standalone header when rendered inside the overview tab. */
+  embedded?: boolean;
+  /** Render only one flat inventory without the legacy nested section labels. */
+  listOnly?: "session" | "task" | "workspace";
   className?: string;
 }
 
@@ -80,6 +98,14 @@ interface TreeNode {
   isDir: boolean;
   file?: DeliveredFile;
   children?: TreeNode[];
+}
+
+interface FileSelection {
+  selectedKeys: Set<string>;
+  selectedFiles: DeliveredFile[];
+  onSelect: (file: DeliveredFile, event: React.MouseEvent<HTMLButtonElement>) => void;
+  onContextMenu: (file: DeliveredFile) => void;
+  onDelete: (files: DeliveredFile[]) => void;
 }
 
 const IMAGE_EXTS = new Set([".png", ".jpg", ".jpeg", ".gif", ".webp", ".bmp", ".svg"]);
@@ -212,13 +238,15 @@ function collectDirectoryPaths(nodes: TreeNode[]): string[] {
   return paths;
 }
 
-/** Flatten the panel's visual order — session section first (flat), then
- *  the sorted artifact tree depth-first — into a single navigation list.
+/** Flatten the panel's visual order — session section first, current-task
+ *  section second, then the sorted artifact tree depth-first — into a single
+ *  navigation list.
  *  Used by the preview panel's prev/next cycling so "next" matches the
  *  next visual row the user saw in the list. Deduped by absolute path. */
 export function flattenFilesForDisplay(
   files: DeliveredFile[],
   sessionFiles: DeliveredFile[],
+  taskFiles: DeliveredFile[] = [],
 ): DeliveredFile[] {
   const out: DeliveredFile[] = [];
   const seen = new Set<string>();
@@ -229,6 +257,7 @@ export function flattenFilesForDisplay(
     out.push(f);
   };
   for (const f of sessionFiles) push(f);
+  for (const f of taskFiles) push(f);
   const walk = (nodes: TreeNode[]) => {
     for (const node of nodes) {
       if (node.isDir) {
@@ -245,6 +274,7 @@ export function flattenFilesForDisplay(
 export function WorkspacePanel({
   files,
   sessionFiles: sessionFilesProp,
+  taskFiles: taskFilesProp,
   scope = "shared",
   sessionKey = null,
   error = null,
@@ -252,8 +282,11 @@ export function WorkspacePanel({
   onRefresh,
   onCollapse,
   onDelete,
+  onRename,
   outputDir = null,
   ownerKey = "default",
+  embedded = false,
+  listOnly,
   className,
 }: WorkspacePanelProps) {
   const previewFile = useFilePreviewStore((s) => s.file);
@@ -287,13 +320,26 @@ export function WorkspacePanel({
     initializeTreeDirectories(ownerKey, directoryPaths);
   }, [directoryPaths, initializeTreeDirectories, ownerKey]);
   const [deleteTarget, setDeleteTarget] = useState<{
-    file: DeliveredFile;
+    files: DeliveredFile[];
     isDir: boolean;
   } | null>(null);
   const [deleteError, setDeleteError] = useState<string | null>(null);
   const [deletePending, setDeletePending] = useState(false);
+  const [renameTarget, setRenameTarget] = useState<{
+    file: DeliveredFile;
+    isDir: boolean;
+  } | null>(null);
+  const [renameValue, setRenameValue] = useState("");
+  const [renameError, setRenameError] = useState<string | null>(null);
+  const [renamePending, setRenamePending] = useState(false);
   const [sessionExpanded, setSessionExpanded] = useState(true);
-  const [workspaceExpanded, setWorkspaceExpanded] = useState(true);
+  const [taskExpanded, setTaskExpanded] = useState(true);
+  const [workspaceExpanded, setWorkspaceExpanded] = useState(scope !== "shared");
+  const [selectedFileKeys, setSelectedFileKeys] = useState<Set<string>>(() => new Set());
+  const selectionAnchorRef = useRef<string | null>(null);
+  useEffect(() => {
+    setWorkspaceExpanded(scope !== "shared");
+  }, [ownerKey, scope]);
 
   // Session deliveries may repeat the same file across turns (dedupe by
   // absolute path); the scan tree below stays the authoritative full list.
@@ -301,6 +347,7 @@ export function WorkspacePanel({
     const out: DeliveredFile[] = [];
     const seen = new Set<string>();
     for (const f of sessionFilesProp ?? []) {
+      if (f.missing) continue;
       const key = f.absolute_path || f.path || f.name;
       if (seen.has(key)) continue;
       seen.add(key);
@@ -309,12 +356,60 @@ export function WorkspacePanel({
     return out;
   }, [sessionFilesProp]);
 
+  // Current-task files can also be present in the session delivery list;
+  // session deliveries own that section and should not be repeated here.
+  const taskFiles = useMemo(() => {
+    const sessionKeys = new Set(sessionFiles.map(fileKey));
+    const out: DeliveredFile[] = [];
+    const seen = new Set<string>();
+    for (const f of taskFilesProp ?? []) {
+      if (f.missing) continue;
+      const key = fileKey(f);
+      if (sessionKeys.has(key) || seen.has(key)) continue;
+      seen.add(key);
+      out.push(f);
+    }
+    return out;
+  }, [sessionFiles, taskFilesProp]);
+
   const totalCount = useMemo(() => {
     const keys = new Set<string>();
     for (const f of files) keys.add(fileKey(f));
     for (const f of sessionFiles) keys.add(fileKey(f));
+    for (const f of taskFiles) keys.add(fileKey(f));
     return keys.size;
-  }, [files, sessionFiles]);
+  }, [files, sessionFiles, taskFiles]);
+
+  const selectionOrder = useMemo(
+    () => flattenFilesForDisplay(files, sessionFiles, taskFiles).filter((file) => !file.missing),
+    [files, sessionFiles, taskFiles],
+  );
+  const filesByKey = useMemo(
+    () => new Map(selectionOrder.map((file) => [fileKey(file), file])),
+    [selectionOrder],
+  );
+  const selectedFiles = useMemo(
+    () => [...selectedFileKeys]
+      .map((key) => filesByKey.get(key))
+      .filter((file): file is DeliveredFile => Boolean(file)),
+    [filesByKey, selectedFileKeys],
+  );
+
+  useEffect(() => {
+    const availableKeys = new Set(filesByKey.keys());
+    setSelectedFileKeys((current) => {
+      const next = new Set([...current].filter((key) => availableKeys.has(key)));
+      return next.size === current.size ? current : next;
+    });
+    if (selectionAnchorRef.current && !availableKeys.has(selectionAnchorRef.current)) {
+      selectionAnchorRef.current = null;
+    }
+  }, [filesByKey]);
+
+  useEffect(() => {
+    setSelectedFileKeys(new Set());
+    selectionAnchorRef.current = null;
+  }, [ownerKey]);
 
   // New-file feedback: the first non-empty inventory is the baseline;
   // anything arriving afterwards is flagged "new" until previewed. The
@@ -324,8 +419,9 @@ export function WorkspacePanel({
     const keys: string[] = [];
     for (const f of files) keys.push(fileKey(f));
     for (const f of sessionFiles) keys.push(fileKey(f));
+    for (const f of taskFiles) keys.push(fileKey(f));
     return keys;
-  }, [files, sessionFiles]);
+  }, [files, sessionFiles, taskFiles]);
 
   useEffect(() => {
     observeArtifactInventory(allKeys);
@@ -358,10 +454,77 @@ export function WorkspacePanel({
     void openPathWithSystemApp(outputDir);
   };
 
-  const handleDeleteRequest = (file: DeliveredFile, isDir = false) => {
-    if (file.missing) return;
+  const handleDeleteRequest = (filesToDelete: DeliveredFile[], isDir = false) => {
+    const availableFiles = filesToDelete.filter((file) => !file.missing);
+    if (availableFiles.length === 0) return;
     setDeleteError(null);
-    setDeleteTarget({ file, isDir });
+    setDeleteTarget({ files: availableFiles, isDir });
+  };
+
+  const handleFileSelection = (
+    file: DeliveredFile,
+    event: React.MouseEvent<HTMLButtonElement>,
+  ) => {
+    if (file.missing) return;
+    const key = fileKey(file);
+    const isRangeSelection = event.shiftKey && selectionAnchorRef.current;
+    const isToggleSelection = event.ctrlKey || event.metaKey;
+
+    setSelectedFileKeys((current) => {
+      if (isRangeSelection) {
+        const anchorIndex = selectionOrder.findIndex(
+          (candidate) => fileKey(candidate) === selectionAnchorRef.current,
+        );
+        const targetIndex = selectionOrder.findIndex((candidate) => fileKey(candidate) === key);
+        if (anchorIndex >= 0 && targetIndex >= 0) {
+          const range = selectionOrder
+            .slice(Math.min(anchorIndex, targetIndex), Math.max(anchorIndex, targetIndex) + 1)
+            .map(fileKey);
+          return new Set(isToggleSelection ? [...current, ...range] : range);
+        }
+      }
+
+      const next = new Set(isToggleSelection ? current : []);
+      if (isToggleSelection && next.has(key)) next.delete(key);
+      else next.add(key);
+      return next;
+    });
+
+    if (!event.shiftKey) selectionAnchorRef.current = key;
+  };
+
+  const handleFileContextMenu = (file: DeliveredFile) => {
+    if (file.missing) return;
+    const key = fileKey(file);
+    setSelectedFileKeys((current) => current.has(key) ? current : new Set([key]));
+    selectionAnchorRef.current = key;
+  };
+
+  const handleRenameRequest = (file: DeliveredFile, isDir = false) => {
+    if (file.missing || !onRename) return;
+    setRenameError(null);
+    setRenameValue(file.name);
+    setRenameTarget({ file, isDir });
+  };
+
+  const handleRenameConfirm = async (event: React.FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    if (!renameTarget || !onRename || renamePending) return;
+    const newName = renameValue.trim();
+    if (!newName) {
+      setRenameError("请输入新名称");
+      return;
+    }
+    setRenamePending(true);
+    setRenameError(null);
+    try {
+      await onRename(renameTarget.file, newName);
+      setRenameTarget(null);
+    } catch (err) {
+      setRenameError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setRenamePending(false);
+    }
   };
 
   const handleDeleteConfirm = async (event: React.MouseEvent) => {
@@ -370,37 +533,60 @@ export function WorkspacePanel({
     // dialog open and never read as a silent permanent delete.
     event.preventDefault();
     if (!deleteTarget || !onDelete) return;
-    const target = deleteTarget.file;
-    const targetIsDir = deleteTarget.isDir;
+    const targets = deleteTarget.files;
     setDeletePending(true);
     setDeleteError(null);
-    try {
-      await onDelete(target);
-    } catch (err) {
-      setDeletePending(false);
-      setDeleteError(err instanceof Error ? err.message : String(err));
-      return;
+    for (let index = 0; index < targets.length; index += 1) {
+      try {
+        await onDelete(targets[index]);
+      } catch (err) {
+        setDeletePending(false);
+        const remainingTargets = targets.slice(index);
+        setDeleteTarget({
+          files: remainingTargets,
+          isDir: remainingTargets.length === 1 && deleteTarget.isDir,
+        });
+        setDeleteError(err instanceof Error ? err.message : String(err));
+        return;
+      }
     }
     setDeletePending(false);
     // 若正在预览该文件（或被删目录内的文件），先关闭预览，避免预览面板
     // 指向已删除内容。
     const previewPath = previewFile?.absolute_path;
     if (previewPath) {
-      const targetPath = target.absolute_path;
-      const insideDir =
-        targetIsDir && previewPath.startsWith(`${targetPath}/`);
-      if (previewPath === targetPath || insideDir) closePreview();
+      const previewWasDeleted = targets.some((target) => {
+        const targetPath = target.absolute_path;
+        return previewPath === targetPath
+          || (deleteTarget.isDir && previewPath.startsWith(`${targetPath}/`));
+      });
+      if (previewWasDeleted) closePreview();
     }
+    setSelectedFileKeys((current) => {
+      const next = new Set(current);
+      for (const target of targets) next.delete(fileKey(target));
+      return next;
+    });
     setDeleteTarget(null);
   };
 
-  const isEmpty = files.length === 0 && sessionFiles.length === 0;
+  const isEmpty =
+    files.length === 0 && sessionFiles.length === 0 && taskFiles.length === 0;
+  const deleteFileCount = deleteTarget?.files.length ?? 0;
   const canDelete = !!onDelete;
-  const panelLabel = scope === "shared" ? "产物" : "项目文件";
+  const canRename = !!onRename;
+  const fileSelection: FileSelection = {
+    selectedKeys: selectedFileKeys,
+    selectedFiles,
+    onSelect: handleFileSelection,
+    onContextMenu: handleFileContextMenu,
+    onDelete: (filesToDelete) => handleDeleteRequest(filesToDelete),
+  };
+  const panelLabel = embedded ? "交付物" : scope === "shared" ? "概览" : "项目文件";
 
   return (
-    <div className={cn("flex h-full flex-col bg-card", className)}>
-      <div className="flex items-center gap-2 border-b border-border/60 px-3 py-2">
+    <div className={cn("flex flex-col bg-card", !embedded && "h-full", className)}>
+      {!embedded ? <div className="flex items-center gap-2 border-b border-border/60 px-3 py-2">
         <Package className="h-4 w-4 text-muted-foreground" />
         <span className="text-body font-medium">{panelLabel}</span>
         {!isEmpty && (
@@ -414,8 +600,8 @@ export function WorkspacePanel({
             type="button"
             variant="ghost"
             onClick={onCollapse}
-            title="收起产物区"
-            aria-label="收起产物区"
+            title="收起概览"
+            aria-label="收起概览"
             className={cn(
               "h-6 w-6 rounded-sm p-0 text-muted-foreground hover:bg-muted hover:text-foreground",
             )}
@@ -423,7 +609,7 @@ export function WorkspacePanel({
             <RightSidebarToggleIcon open className="h-3.5 w-3.5" />
           </Button>
         )}
-      </div>
+      </div> : null}
 
       {error ? (
         <div className="flex flex-col items-center gap-2 px-4 py-6 text-center text-caption text-destructive">
@@ -440,6 +626,79 @@ export function WorkspacePanel({
             </Button>
           )}
         </div>
+      ) : listOnly ? (
+        <div className="py-1">
+          {listOnly === "workspace" ? (
+            <>
+              <ul className="flex flex-col text-ui">
+                {tree.map((node) => (
+                  <TreeRow
+                    key={`${node.isDir ? "d" : "f"}-${node.path}`}
+                    node={node}
+                    depth={0}
+                    collapsed={collapsed}
+                    onToggle={toggle}
+                    scope={scope}
+                    sessionKey={sessionKey}
+                    activePath={previewFile?.absolute_path ?? null}
+                    canDelete={canDelete}
+                    onDelete={handleDeleteRequest}
+                    canRename={canRename}
+                    onRename={handleRenameRequest}
+                    newKeys={new Set<string>()}
+                    rootDir={outputDir}
+                    selection={fileSelection}
+                  />
+                ))}
+              </ul>
+              {tree.length === 0 ? (
+                <div className="px-3 py-2 text-micro text-muted-foreground/70">
+                  工作区暂无文件。
+                  {isTauri() && outputDir ? (
+                    <Button type="button" variant="link" size="xs" onClick={handleOpenOutputDir} className="ml-1 h-auto p-0 text-micro">
+                      打开目录
+                    </Button>
+                  ) : null}
+                </div>
+              ) : null}
+            </>
+          ) : (
+            <>
+              <ul className="flex flex-col text-ui">
+                {(listOnly === "session" ? sessionFiles : taskFiles).map((file) => {
+                  const key = fileKey(file);
+                  return (
+                    <TreeRow
+                      key={`${listOnly}-${key}`}
+                      node={{ name: file.name, path: key, isDir: false, file }}
+                      depth={0}
+                      collapsed={collapsed}
+                      onToggle={toggle}
+                      scope={scope}
+                      sessionKey={sessionKey}
+                      activePath={previewFile?.absolute_path ?? null}
+                      canDelete={canDelete}
+                      onDelete={handleDeleteRequest}
+                      canRename={canRename}
+                      onRename={handleRenameRequest}
+                      newKeys={new Set<string>()}
+                      rootDir={outputDir}
+                      selection={fileSelection}
+                    />
+                  );
+                })}
+              </ul>
+              {(listOnly === "session" ? sessionFiles : taskFiles).length === 0 ? (
+                <p className="px-3 py-2 text-micro text-muted-foreground/70">
+                  {listOnly === "session" ? "当前会话还没有明确交付的文件" : "当前任务还没有新增或修改的文件"}
+                </p>
+              ) : null}
+            </>
+          )}
+          {truncated ? (
+            <p className="px-3 py-2 text-micro text-muted-foreground">仅显示最近 1000 个文件。</p>
+          ) : null}
+        </div>
       ) : scope !== "shared" && isEmpty ? (
         <EmptyState
           className="h-full py-6"
@@ -449,10 +708,10 @@ export function WorkspacePanel({
       ) : (
         <>
           {scope === "shared" && (
-            <section className="shrink-0 px-2 py-1.5">
+            <section className="shrink-0 py-1.5">
               <button
                 type="button"
-                className="flex w-full items-center gap-1 px-1 text-left text-micro font-medium text-muted-foreground hover:text-foreground"
+                className="flex w-full items-center gap-1 px-3 text-left text-micro font-medium text-muted-foreground hover:text-foreground"
                 aria-expanded={sessionExpanded}
                 onClick={() => setSessionExpanded((expanded) => !expanded)}
               >
@@ -475,20 +734,66 @@ export function WorkspacePanel({
                         activePath={previewFile?.absolute_path ?? null}
                         canDelete={canDelete}
                         onDelete={handleDeleteRequest}
+                        canRename={canRename}
+                        onRename={handleRenameRequest}
                         newKeys={newKeys}
                         rootDir={outputDir}
+                        selection={fileSelection}
                       />
                     );
                   })}
                 </ul>
               ) : (
-                <p className="px-1 py-1 text-micro text-muted-foreground/70">
+                <p className="px-3 py-1 text-micro text-muted-foreground/70">
                   当前会话还没有明确交付的文件
                 </p>
               ) : null}
             </section>
           )}
-          <div className="flex-1 overflow-y-auto scrollbar-hover py-1">
+          {scope === "shared" && (
+            <section className="shrink-0 py-1.5">
+              <button
+                type="button"
+                className="flex w-full items-center gap-1 px-3 text-left text-micro font-medium text-muted-foreground hover:text-foreground"
+                aria-expanded={taskExpanded}
+                onClick={() => setTaskExpanded((expanded) => !expanded)}
+              >
+                <ChevronRight className={cn("h-3.5 w-3.5 transition-transform", taskExpanded && "rotate-90")} />
+                当前任务文件
+              </button>
+              {taskExpanded ? taskFiles.length > 0 ? (
+                <ul className="flex flex-col text-ui">
+                  {taskFiles.map((f) => {
+                    const key = fileKey(f);
+                    return (
+                      <TreeRow
+                        key={`t-${key}`}
+                        node={{ name: f.name, path: key, isDir: false, file: f }}
+                        depth={0}
+                        collapsed={collapsed}
+                        onToggle={toggle}
+                        scope={scope}
+                        sessionKey={sessionKey}
+                        activePath={previewFile?.absolute_path ?? null}
+                        canDelete={canDelete}
+                        onDelete={handleDeleteRequest}
+                        canRename={canRename}
+                        onRename={handleRenameRequest}
+                        newKeys={newKeys}
+                        rootDir={outputDir}
+                        selection={fileSelection}
+                      />
+                    );
+                  })}
+                </ul>
+              ) : (
+                <p className="px-3 py-1 text-micro text-muted-foreground/70">
+                  当前任务还没有新增或修改的文件
+                </p>
+              ) : null}
+            </section>
+          )}
+          <div className={cn("py-1", !embedded && "flex-1 overflow-y-auto scrollbar-hover")}>
             <button
               type="button"
               className="flex w-full items-center gap-1 px-3 pt-1.5 pb-1 text-left text-micro font-medium text-muted-foreground hover:text-foreground"
@@ -497,7 +802,7 @@ export function WorkspacePanel({
             >
               <ChevronRight className={cn("h-3.5 w-3.5 transition-transform", workspaceExpanded && "rotate-90")} />
               <span>
-                {scope === "shared" ? "工作区产物" : "全部文件"}
+                {scope === "shared" ? "工作区文件" : "全部文件"}
               </span>
             </button>
             {workspaceExpanded ? <>
@@ -514,14 +819,17 @@ export function WorkspacePanel({
                   activePath={previewFile?.absolute_path ?? null}
                   canDelete={canDelete}
                   onDelete={handleDeleteRequest}
+                  canRename={canRename}
+                  onRename={handleRenameRequest}
                   newKeys={newKeys}
                   rootDir={outputDir}
+                  selection={fileSelection}
                 />
               ))}
             </ul>
             {scope === "shared" && tree.length === 0 ? (
               <div className="px-3 py-3 text-micro text-muted-foreground/70">
-                工作区暂无其他产物。
+                工作区暂无其他文件。
                 {isTauri() && outputDir && (
                   <Button
                     type="button"
@@ -574,10 +882,14 @@ export function WorkspacePanel({
               </div>
             </div>
             <AlertDialogTitle className="text-center text-title-sm tracking-[-0.02em] text-foreground">
-              {deleteTarget?.isDir ? "删除这个文件夹？" : "删除这个文件？"}
+              {deleteFileCount > 1
+                ? `删除这 ${deleteFileCount} 个文件？`
+                : deleteTarget?.isDir ? "删除这个文件夹？" : "删除这个文件？"}
             </AlertDialogTitle>
             <AlertDialogDescription className="mt-3 max-w-[17rem] text-center text-body leading-6 text-muted-foreground">
-              「{deleteTarget?.file.name ?? ""}」将被移至系统回收站，需要时可以从回收站恢复。
+              {deleteFileCount > 1
+                ? `选中的 ${deleteFileCount} 个文件将被移至系统回收站，需要时可以从回收站恢复。`
+                : `「${deleteTarget?.files[0]?.name ?? ""}」将被移至系统回收站，需要时可以从回收站恢复。`}
             </AlertDialogDescription>
             {deleteError ? (
               <p className="mt-3 max-w-[17rem] text-center text-ui leading-5 text-destructive">
@@ -599,6 +911,52 @@ export function WorkspacePanel({
           </AlertDialogFooter>
         </AlertDialogContent>
       </AlertDialog>
+
+      <Dialog
+        open={!!renameTarget}
+        onOpenChange={(open) => {
+          if (!open) {
+            setRenameTarget(null);
+            setRenameError(null);
+            setRenamePending(false);
+          }
+        }}
+      >
+        <DialogContent className="sm:max-w-sm">
+          <form className="grid gap-4" onSubmit={handleRenameConfirm}>
+            <DialogHeader>
+              <DialogTitle>
+                {renameTarget?.isDir ? "重命名文件夹" : "重命名文件"}
+              </DialogTitle>
+              <DialogDescription>请输入新的名称。</DialogDescription>
+            </DialogHeader>
+            <Input
+              aria-label="新名称"
+              value={renameValue}
+              onChange={(event) => setRenameValue(event.target.value)}
+              autoFocus
+              maxLength={255}
+              disabled={renamePending}
+            />
+            {renameError ? (
+              <p className="text-ui text-destructive">重命名失败：{renameError}</p>
+            ) : null}
+            <DialogFooter className="gap-2 sm:space-x-0">
+              <Button
+                type="button"
+                variant="outline"
+                onClick={() => setRenameTarget(null)}
+                disabled={renamePending}
+              >
+                取消
+              </Button>
+              <Button type="submit" disabled={renamePending || !renameValue.trim()}>
+                {renamePending ? "保存中…" : "保存"}
+              </Button>
+            </DialogFooter>
+          </form>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }
@@ -613,8 +971,11 @@ function TreeRow({
   activePath,
   canDelete,
   onDelete,
+  canRename,
+  onRename,
   newKeys,
   rootDir,
+  selection,
 }: {
   node: TreeNode;
   depth: number;
@@ -624,13 +985,16 @@ function TreeRow({
   sessionKey: string | null;
   activePath: string | null;
   canDelete: boolean;
-  onDelete: (file: DeliveredFile, isDir?: boolean) => void;
+  onDelete: (files: DeliveredFile[], isDir?: boolean) => void;
+  canRename: boolean;
+  onRename: (file: DeliveredFile, isDir?: boolean) => void;
   /** Paths that arrived after the baseline inventory and are not yet
    *  previewed — file rows get a leading "new" dot. */
   newKeys: Set<string>;
   /** Absolute path of the panel root; directory rows resolve their own
    *  absolute path against it for the context menu. */
   rootDir: string | null;
+  selection: FileSelection;
 }) {
   const openPreview = useFilePreviewStore((s) => s.open);
   const indent = 8 + depth * 14;
@@ -680,7 +1044,7 @@ function TreeRow({
     const handleOpenDir = () => {
       if (isTauri() && dirAbsPath) void openPathWithSystemApp(dirAbsPath);
     };
-    const handleDeleteDir = () => onDelete(dirPseudoFile, true);
+    const handleDeleteDir = () => onDelete([dirPseudoFile], true);
 
     return (
       <li>
@@ -698,7 +1062,6 @@ function TreeRow({
                     onClick={handleDeleteDir}
                     className="text-destructive focus:text-destructive"
                   >
-                    <Trash2 className="mr-2 h-4 w-4" />
                     删除
                   </ContextMenuItem>
                 </>
@@ -722,8 +1085,11 @@ function TreeRow({
                 activePath={activePath}
                 canDelete={canDelete}
                 onDelete={onDelete}
+                canRename={canRename}
+                onRename={onRename}
                 newKeys={newKeys}
                 rootDir={rootDir}
+                selection={selection}
               />
             ))}
           </ul>
@@ -733,30 +1099,39 @@ function TreeRow({
   }
 
   const file = node.file!;
-  const isActive = activePath === file.absolute_path;
+  const isPreviewing = activePath === file.absolute_path;
+  const isSelected = selection.selectedKeys.has(fileKey(file));
+  const contextFiles = isSelected && selection.selectedFiles.length > 0
+    ? selection.selectedFiles
+    : [file];
+  const isMultiple = contextFiles.length > 1;
   const isNew = newKeys.has(fileKey(file));
 
-  const handleClick = () => {
+  const handleClick = (event: React.MouseEvent<HTMLButtonElement>) => {
+    selection.onSelect(file, event);
+  };
+  const handleDoubleClick = (event: React.MouseEvent<HTMLButtonElement>) => {
     if (file.missing) return;
+    selection.onSelect(file, event);
     openPreview(file, scope, sessionKey);
   };
-  const handleDoubleClick = () => {
-    if (file.missing) return;
-    // Single click stays on in-pane preview; double click hands the file
-    // to the OS default app (file-manager muscle memory).
-    if (isTauri()) void openPathWithSystemApp(file.absolute_path);
-  };
   const handleOpenWithSystem = () => {
-    if (file.missing) return;
-    if (isTauri()) void openPathWithSystemApp(file.absolute_path);
+    if (isTauri()) {
+      for (const selectedFile of contextFiles) {
+        void openPathWithSystemApp(selectedFile.absolute_path);
+      }
+    }
   };
   const handleRevealInDir = () => {
     if (file.missing) return;
     if (isTauri()) void revealItemInDir(file.absolute_path);
   };
   const handleDelete = () => {
+    selection.onDelete(contextFiles);
+  };
+  const handleRename = () => {
     if (file.missing) return;
-    onDelete(file);
+    onRename(file);
   };
 
   const row = (
@@ -766,14 +1141,17 @@ function TreeRow({
         variant="ghost"
         onClick={handleClick}
         onDoubleClick={handleDoubleClick}
+        onContextMenu={() => selection.onContextMenu(file)}
+        aria-pressed={isSelected}
         disabled={file.missing}
         className={cn(
           "relative h-auto w-full justify-start gap-1.5 rounded-sm py-1 pr-2 text-left font-normal",
           "hover:bg-muted/60 hover:text-foreground",
           file.missing && "cursor-default opacity-60",
-          isActive && "bg-foreground/5 text-foreground hover:bg-foreground/5 before:absolute before:inset-y-1.5 before:left-0 before:w-0.5 before:rounded-full before:bg-[hsl(var(--brand-red))]",
+          isSelected && "bg-muted/70 text-foreground hover:bg-muted/70",
+          isPreviewing && "before:absolute before:inset-y-1.5 before:left-0 before:w-0.5 before:rounded-full before:bg-[hsl(var(--brand-red))]",
         )}
-        style={{ paddingLeft: indent + 18 }}
+        style={{ paddingLeft: depth === 0 ? indent : indent + 18 }}
       >
         {isNew ? (
           <span
@@ -794,7 +1172,7 @@ function TreeRow({
         <span
           className={cn(
             "min-w-0 flex-1 truncate text-foreground",
-            isActive && "text-foreground",
+            (isSelected || isPreviewing) && "text-foreground",
           )}
         >
           {file.name}
@@ -820,18 +1198,20 @@ function TreeRow({
     <ContextMenu>
       <ContextMenuTrigger asChild>{row}</ContextMenuTrigger>
       <ContextMenuContent className="w-48">
-        <ContextMenuItem onClick={handleClick} disabled={file.missing}>
-          预览
-        </ContextMenuItem>
         <ContextMenuItem
           onClick={handleOpenWithSystem}
           disabled={file.missing}
         >
-          系统程序打开
+          {isMultiple ? `用系统程序打开 ${contextFiles.length} 个文件` : "用系统程序打开"}
         </ContextMenuItem>
-        <ContextMenuItem onClick={handleRevealInDir} disabled={file.missing}>
+        {!isMultiple && <ContextMenuItem onClick={handleRevealInDir} disabled={file.missing}>
           打开所在目录
-        </ContextMenuItem>
+        </ContextMenuItem>}
+        {canRename && !file.missing && !isMultiple && (
+          <ContextMenuItem onClick={handleRename}>
+            重命名
+          </ContextMenuItem>
+        )}
         {canDelete && !file.missing && (
           <>
             <ContextMenuSeparator />
@@ -840,8 +1220,7 @@ function TreeRow({
               disabled={file.missing}
               className="text-destructive focus:text-destructive"
             >
-              <Trash2 className="mr-2 h-4 w-4" />
-              删除
+              {isMultiple ? `删除 ${contextFiles.length} 个文件` : "删除"}
             </ContextMenuItem>
           </>
         )}

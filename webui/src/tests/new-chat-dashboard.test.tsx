@@ -86,7 +86,6 @@ describe("NewChatDashboard", () => {
           scheduleItem("项目例会", 9, { done: true }),
           scheduleItem("客户方案评审", 10),
         ]}
-        unreadCount={12}
         recentSession={recentSession}
         now={now}
         onContinue={onContinue}
@@ -98,14 +97,17 @@ describe("NewChatDashboard", () => {
 
     expect(screen.getByText("今日焦点")).toBeInTheDocument();
     expect(screen.getByText("客户方案调研")).toBeInTheDocument();
-    expect(screen.getByText("待处理邮件").closest("section")).toHaveTextContent("12 封未读");
+    expect(screen.queryByText("待处理邮件")).not.toBeInTheDocument();
     const dashboard = screen.getByText("今日焦点").closest("section")?.parentElement;
     expect(dashboard).not.toHaveClass("md:border-l");
     expect(screen.getByText("今日焦点").closest("section")).not.toHaveClass("border-t");
-    expect(screen.getByRole("button", { name: "连接主机" }).parentElement).not.toHaveClass("border-t");
+    const connectHost = screen.getByRole("button", { name: "连接主机" });
+    expect(connectHost.parentElement).not.toHaveClass("border-t");
+    expect(connectHost.parentElement).toHaveClass("flex-wrap");
+    expect(connectHost).toHaveClass("shrink-0", "whitespace-nowrap");
 
     fireEvent.click(screen.getByRole("button", { name: "继续" }));
-    fireEvent.click(screen.getByRole("button", { name: "连接主机" }));
+    fireEvent.click(connectHost);
     fireEvent.click(screen.getByRole("button", { name: "连接数据库" }));
     fireEvent.click(screen.getByRole("button", { name: "新建笔记" }));
 

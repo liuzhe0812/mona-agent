@@ -1,5 +1,6 @@
 use crate::settings::app_data_dir;
 use crate::notes_links;
+use base64::Engine;
 use rusqlite::{params, Connection};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -11,6 +12,7 @@ use tauri_plugin_dialog::DialogExt;
 const NOTES_DB_FILE: &str = "notes.sqlite3";
 const VAULT_PATH_FILE: &str = "vault_path.txt";
 const DEFAULT_NOTEBOOK_NAME: &str = "默认分类";
+const MAX_NOTE_IMAGE_BYTES: usize = 10 * 1024 * 1024;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -67,6 +69,8 @@ pub struct OperationNote {
     pub plain_text: Option<String>,
     #[serde(default)]
     pub agent_chat_id: Option<String>,
+    #[serde(default)]
+    pub origin_chat_id: Option<String>,
     #[serde(default)]
     pub applied_agent_message_ids: Vec<String>,
     /// Context level controls how this note participates in knowledge-base
@@ -192,6 +196,15 @@ pub fn agent_allowed_notebook_ids() -> Option<std::collections::HashSet<String>>
             .cloned()
             .collect(),
     )
+}
+
+fn notebook_allowed_by_agent_scope(
+    notebook_id: &str,
+    allowed: &Option<std::collections::HashSet<String>>,
+) -> bool {
+    allowed
+        .as_ref()
+        .map_or(true, |ids| ids.contains(notebook_id))
 }
 
 /// Return the set of email folder names the Agent is allowed to search.
@@ -499,6 +512,7 @@ fn migrate_legacy_sqlite_to_vault(vault: &Path) -> Result<Option<usize>, String>
                 content_json: None,
                 plain_text: None,
                 agent_chat_id,
+                origin_chat_id: None,
                 applied_agent_message_ids: applied_ids,
                 context_level: if context_level.is_empty() {
                     "full".to_string()
@@ -645,6 +659,7 @@ struct ParsedFrontmatter {
     source_label: Option<String>,
     context_level: Option<String>,
     agent_chat_id: Option<String>,
+    origin_chat_id: Option<String>,
     applied_agent_message_ids: Vec<String>,
     created_at: Option<String>,
     updated_at: Option<String>,
@@ -747,6 +762,14 @@ fn parse_frontmatter_lines(lines: &[String]) -> ParsedFrontmatter {
             "agentChatId" => {
                 let v = yaml_value(value);
                 fm.agent_chat_id = if v.is_empty() || v == "null" || v == "~" {
+                    None
+                } else {
+                    Some(v)
+                };
+            }
+            "originChatId" => {
+                let v = yaml_value(value);
+                fm.origin_chat_id = if v.is_empty() || v == "null" || v == "~" {
                     None
                 } else {
                     Some(v)
@@ -875,6 +898,9 @@ fn serialize_frontmatter(note: &OperationNote) -> String {
         Some(c) => out.push_str(&format!("agentChatId: {}\n", yaml_scalar(c))),
         None => out.push_str("agentChatId:\n"),
     }
+    if let Some(chat_id) = &note.origin_chat_id {
+        out.push_str(&format!("originChatId: {}\n", yaml_scalar(chat_id)));
+    }
     if note.applied_agent_message_ids.is_empty() {
         out.push_str("appliedAgentMessageIds: []\n");
     } else {
@@ -944,12 +970,40 @@ fn make_preview(content: &str) -> String {
 fn sanitize_filename(title: &str) -> String {
     let sanitized: String = title
         .chars()
-        .filter(|&c| !matches!(c, '\\' | '/' | ':' | '*' | '?' | '"' | '<' | '>' | '|'))
+        .filter(|&c| {
+            !c.is_control() && !matches!(c, '\\' | '/' | ':' | '*' | '?' | '"' | '<' | '>' | '|')
+        })
         .collect();
-    let trimmed = sanitized.trim();
+    let trimmed = sanitized.trim().trim_end_matches([' ', '.']);
     let result: String = trimmed.chars().take(80).collect();
     if result.is_empty() {
         "untitled".to_string()
+    } else if matches!(
+        result.split('.').next().unwrap_or_default().to_ascii_uppercase().as_str(),
+        "CON"
+            | "PRN"
+            | "AUX"
+            | "NUL"
+            | "COM1"
+            | "COM2"
+            | "COM3"
+            | "COM4"
+            | "COM5"
+            | "COM6"
+            | "COM7"
+            | "COM8"
+            | "COM9"
+            | "LPT1"
+            | "LPT2"
+            | "LPT3"
+            | "LPT4"
+            | "LPT5"
+            | "LPT6"
+            | "LPT7"
+            | "LPT8"
+            | "LPT9"
+    ) {
+        format!("_{}", result)
     } else {
         result
     }
@@ -1022,7 +1076,23 @@ fn collect_asset_refs(md: &str, set: &mut HashSet<String>) {
 // ---------------------------------------------------------------------------
 
 pub(crate) fn is_notebook_folder(name: &str) -> bool {
-    name != ".mona" && name != "assets"
+    !name.starts_with('.')
+        && !matches!(
+            name,
+            "assets"
+                | "agent-workspaces"
+                | "output"
+                | "sessions"
+                | "cron"
+                | "schedule"
+                | "ppt_projects"
+                | "video_projects"
+                | "stock_projects"
+                | "rooms"
+                | "agent-jobs"
+                | "workflows"
+                | "workflow-runs"
+        )
 }
 
 pub(crate) fn parse_note_file(path: &Path, notebook_name: &str) -> Result<OperationNote, String> {
@@ -1067,6 +1137,7 @@ pub(crate) fn parse_note_file(path: &Path, notebook_name: &str) -> Result<Operat
         content_json: None,
         plain_text: Some(strip_markdown(&body)),
         agent_chat_id,
+        origin_chat_id: fm.origin_chat_id,
         applied_agent_message_ids: fm.applied_agent_message_ids,
         context_level,
         note_type: fm.note_type.unwrap_or_else(default_note_type),
@@ -1344,9 +1415,6 @@ pub async fn notes_save_state(mut state: NotesState) -> Result<(), String> {
         .map(|(id, p)| (p.clone(), id.clone()))
         .collect();
 
-    let state_note_ids: HashSet<String> =
-        state.notes.iter().map(|n| n.id.clone()).collect();
-
     for note in &state.notes {
         // notebook_id = "" → vault root; otherwise → subdirectory by notebook name.
         let notebook_dir = if note.notebook_id.is_empty() {
@@ -1402,22 +1470,19 @@ pub async fn notes_save_state(mut state: NotesState) -> Result<(), String> {
         }
 
         let content = serialize_note_to_file(note);
-        fs::write(&file_path, content)
-            .map_err(|e| format!("Failed to write note {:?}: {}", file_path, e))?;
+        let unchanged = fs::read_to_string(&file_path)
+            .map(|existing| existing == content)
+            .unwrap_or(false);
+        if !unchanged {
+            fs::write(&file_path, content)
+                .map_err(|e| format!("Failed to write note {:?}: {}", file_path, e))?;
+        }
         path_to_id.insert(file_path.clone(), note.id.clone());
         files_by_id.insert(note.id.clone(), file_path);
     }
 
-    // Delete orphan .md files (whose note id is no longer in state).
-    for (id, path) in &files_by_id {
-        if !state_note_ids.contains(id) {
-            let _ = fs::remove_file(path);
-        }
-    }
-
     // Remove notebook folders that are no longer in state and are empty.
-    // (save_state already deleted orphan .md files, so a removed notebook's
-    // folder should be empty now; only remove if empty to avoid data loss.)
+    // Only remove if empty to avoid deleting files created outside this state snapshot.
     let state_notebook_names: HashSet<String> = state
         .notebooks
         .iter()
@@ -1460,9 +1525,6 @@ pub async fn notes_save_state(mut state: NotesState) -> Result<(), String> {
         transformations: state.transformations.clone(),
     };
     write_vault_meta(&vault, &meta)?;
-
-    // Clean up orphan images.
-    cleanup_orphaned_assets_vault(&vault, &state.notes)?;
 
     // Pre-warm the link graph cache in the background so the next
     // `notes_links_get_graph` call hits the cache instead of triggering a
@@ -1520,6 +1582,25 @@ fn validate_state(state: &NotesState) -> Result<(), String> {
 // Create from chat
 // ---------------------------------------------------------------------------
 
+const CHAT_TRANSFER_NOTEBOOK_NAME: &str = "笔记转存";
+
+fn chat_notebook_name(notebook_id: Option<String>) -> String {
+    notebook_id
+        .filter(|name| !name.trim().is_empty())
+        .unwrap_or_else(|| CHAT_TRANSFER_NOTEBOOK_NAME.to_string())
+}
+
+pub(crate) fn read_legacy_canvas_notes() -> Result<Vec<OperationNote>, String> {
+    let vault = match read_vault_path() {
+        Some(path) => path,
+        None => return Ok(Vec::new()),
+    };
+    Ok(scan_vault_notes(&vault)?
+        .into_iter()
+        .filter(|note| note.note_type == "flowchart" || note.note_type == "mindmap")
+        .collect())
+}
+
 #[tauri::command]
 pub async fn notes_create_from_chat(
     title: String,
@@ -1529,16 +1610,11 @@ pub async fn notes_create_from_chat(
     let vault = read_vault_path()
         .ok_or_else(|| "Notes vault is not configured".to_string())?;
 
-    // notebook_id = None or "" → vault root; otherwise → subdirectory.
-    let folder_name = notebook_id.unwrap_or_default();
-    let notebook_dir = if folder_name.is_empty() {
-        vault.to_path_buf()
-    } else {
-        let dir = vault.join(&folder_name);
-        fs::create_dir_all(&dir)
-            .map_err(|e| format!("Failed to create notebook folder: {}", e))?;
-        dir
-    };
+    // Chat-saved notes default to a dedicated notebook; explicit user choices win.
+    let folder_name = chat_notebook_name(notebook_id);
+    let notebook_dir = vault.join(&folder_name);
+    fs::create_dir_all(&notebook_dir)
+        .map_err(|e| format!("Failed to create notebook folder: {}", e))?;
 
     let note_id = format!("note-{}", uuid::Uuid::new_v4());
     let now_iso = chrono::Utc::now().to_rfc3339();
@@ -1557,6 +1633,7 @@ pub async fn notes_create_from_chat(
         content_json: None,
         plain_text: None,
         agent_chat_id: None,
+        origin_chat_id: None,
         applied_agent_message_ids: Vec::new(),
         context_level: "full".to_string(),
         note_type: default_note_type(),
@@ -1606,6 +1683,14 @@ pub async fn notes_read_note_content(note_id: String) -> Result<NoteContent, Str
         .iter()
         .find(|n| n.id == note_id)
         .ok_or_else(|| format!("Note not found: {}", note_id))?;
+
+    let allowed = agent_allowed_notebook_ids();
+    if !notebook_allowed_by_agent_scope(&note.notebook_id, &allowed) {
+        return Err(format!(
+            "Note {} is outside the configured Agent search scope",
+            note_id
+        ));
+    }
 
     let context_level = if note.context_level.is_empty() {
         "full".to_string()
@@ -1762,13 +1847,11 @@ pub async fn notes_search_all(
     };
     let notes = scan_vault_notes(&vault)?;
     // Apply Agent search scope exclusion (None = no exclusions = all allowed).
-    let filtered: Vec<OperationNote> = match agent_allowed_notebook_ids() {
-        None => notes,
-        Some(allowed) => notes
-            .into_iter()
-            .filter(|n| allowed.contains(&n.notebook_id))
-            .collect(),
-    };
+    let allowed = agent_allowed_notebook_ids();
+    let filtered: Vec<OperationNote> = notes
+        .into_iter()
+        .filter(|note| notebook_allowed_by_agent_scope(&note.notebook_id, &allowed))
+        .collect();
     Ok(search_notes_in_memory(
         &filtered,
         None,
@@ -1828,6 +1911,75 @@ fn cleanup_orphaned_assets_vault(vault: &Path, notes: &[OperationNote]) -> Resul
     Ok(())
 }
 
+fn delete_note_files(vault: &Path, note_ids: &[String]) -> Result<(), String> {
+    let files_by_id = scan_existing_note_files(vault)?;
+    for note_id in note_ids {
+        if let Some(path) = files_by_id.get(note_id) {
+            fs::remove_file(path)
+                .map_err(|e| format!("Failed to delete note {:?}: {}", path, e))?;
+        }
+    }
+    Ok(())
+}
+
+#[tauri::command]
+pub async fn notes_delete(note_ids: Vec<String>) -> Result<(), String> {
+    let vault = read_vault_path()
+        .ok_or_else(|| "Notes vault is not configured".to_string())?;
+    delete_note_files(&vault, &note_ids)?;
+    let remaining_notes = scan_vault_notes(&vault)?;
+    cleanup_orphaned_assets_vault(&vault, &remaining_notes)?;
+    notes_links::refresh_cache_background(vault);
+    Ok(())
+}
+
+fn sanitize_note_asset_file_name(file_name: &str) -> Result<String, String> {
+    let basename = file_name
+        .rsplit(['/', '\\'])
+        .next()
+        .unwrap_or_default()
+        .trim();
+    if basename.is_empty() || basename == "." || basename == ".." {
+        return Err("Image file name is required".to_string());
+    }
+    if basename.chars().any(char::is_control) {
+        return Err("Image file name contains invalid characters".to_string());
+    }
+
+    let sanitized = sanitize_filename(basename);
+    if sanitized == "untitled" && !basename.eq_ignore_ascii_case("untitled") {
+        return Err("Image file name is invalid".to_string());
+    }
+    Ok(sanitized)
+}
+
+fn decode_note_image_data(image_data: &str) -> Result<Vec<u8>, String> {
+    let trimmed = image_data.trim();
+    let payload = trimmed
+        .split_once(',')
+        .filter(|(metadata, _)| {
+            let metadata = metadata.trim().to_ascii_lowercase();
+            metadata.starts_with("data:") && metadata.contains(";base64")
+        })
+        .map(|(_, payload)| payload.trim())
+        .unwrap_or(trimmed);
+
+    if payload.is_empty() {
+        return Err("Image data is required".to_string());
+    }
+    if payload.len() > MAX_NOTE_IMAGE_BYTES * 4 / 3 + 8 {
+        return Err("Image data exceeds the 10 MiB limit".to_string());
+    }
+
+    let bytes = base64::engine::general_purpose::STANDARD
+        .decode(payload)
+        .map_err(|e| format!("Invalid image base64 data: {}", e))?;
+    if bytes.len() > MAX_NOTE_IMAGE_BYTES {
+        return Err("Image data exceeds the 10 MiB limit".to_string());
+    }
+    Ok(bytes)
+}
+
 #[tauri::command]
 pub async fn notes_save_image(
     file_path: String,
@@ -1849,6 +2001,20 @@ pub async fn notes_save_image(
     let assets_dir = assets_dir_create()?;
     let dest = assets_dir.join(&final_name);
     fs::copy(&src, &dest).map_err(|e| format!("Failed to copy image to assets: {}", e))?;
+
+    Ok(format!("assets/{}", final_name))
+}
+
+#[tauri::command]
+pub async fn notes_save_image_data(
+    image_data: String,
+    file_name: String,
+) -> Result<String, String> {
+    let bytes = decode_note_image_data(&image_data)?;
+    let final_name = sanitize_note_asset_file_name(&file_name)?;
+    let assets_dir = assets_dir_create()?;
+    let dest = assets_dir.join(&final_name);
+    fs::write(&dest, bytes).map_err(|e| format!("Failed to write image to assets: {}", e))?;
 
     Ok(format!("assets/{}", final_name))
 }
@@ -1912,5 +2078,106 @@ impl PathExt for PathBuf {
         } else {
             self
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use base64::Engine;
+    use super::{
+        decode_note_image_data, delete_note_files, is_notebook_folder,
+        notebook_allowed_by_agent_scope, parse_frontmatter_lines,
+        sanitize_note_asset_file_name,
+    };
+    use std::collections::HashSet;
+
+    #[test]
+    fn task_directories_are_not_notebooks() {
+        assert!(is_notebook_folder("学习笔记"));
+        assert!(!is_notebook_folder("agent-workspaces"));
+        assert!(!is_notebook_folder("ppt_projects"));
+        assert!(!is_notebook_folder(".mona"));
+    }
+
+    #[test]
+    fn chat_note_filenames_are_windows_safe() {
+        assert_eq!(super::sanitize_filename("CON"), "_CON");
+        assert_eq!(super::sanitize_filename("总结."), "总结");
+    }
+
+    #[test]
+    fn chat_notes_default_to_transfer_notebook() {
+        assert_eq!(super::chat_notebook_name(None), "笔记转存");
+        assert_eq!(super::chat_notebook_name(Some(String::new())), "笔记转存");
+        assert_eq!(
+            super::chat_notebook_name(Some("指定分类".to_string())),
+            "指定分类"
+        );
+    }
+
+    #[test]
+    fn explicit_note_delete_preserves_unlisted_notes() {
+        let vault = std::env::temp_dir().join(format!(
+            "mona-notes-delete-{}",
+            uuid::Uuid::new_v4()
+        ));
+        let notebook = vault.join("笔记转存");
+        std::fs::create_dir_all(&notebook).unwrap();
+        let deleted = notebook.join("deleted.md");
+        let preserved = notebook.join("preserved.md");
+        std::fs::write(&deleted, "---\nid: note-deleted\n---\n删除").unwrap();
+        std::fs::write(&preserved, "---\nid: note-preserved\n---\n保留").unwrap();
+
+        delete_note_files(&vault, &["note-deleted".to_string()]).unwrap();
+
+        assert!(!deleted.exists());
+        assert!(preserved.exists());
+        std::fs::remove_dir_all(vault).unwrap();
+    }
+
+    #[test]
+    fn image_data_accepts_data_urls_and_strips_path_components() {
+        assert_eq!(
+            decode_note_image_data("data:image/png;base64,aGVsbG8=").unwrap(),
+            b"hello"
+        );
+        assert_eq!(
+            sanitize_note_asset_file_name(r"..\frames/frame.png").unwrap(),
+            "frame.png"
+        );
+    }
+
+    #[test]
+    fn image_data_rejects_invalid_or_oversized_input() {
+        assert!(decode_note_image_data("not base64").is_err());
+        let oversized = base64::engine::general_purpose::STANDARD
+            .encode(vec![0u8; 10 * 1024 * 1024 + 1]);
+        assert!(decode_note_image_data(&oversized).is_err());
+        assert!(sanitize_note_asset_file_name("../").is_err());
+    }
+
+    #[test]
+    fn agent_scope_is_enforced_for_direct_note_reads() {
+        assert!(notebook_allowed_by_agent_scope("private", &None));
+        assert!(!notebook_allowed_by_agent_scope(
+            "private",
+            &Some(HashSet::new())
+        ));
+        assert!(notebook_allowed_by_agent_scope(
+            "shared",
+            &Some(HashSet::from(["shared".to_string()]))
+        ));
+    }
+
+    #[test]
+    fn canvas_origin_chat_id_round_trips_through_frontmatter_parser() {
+        let lines = vec![
+            "id: note-canvas-1".to_string(),
+            "originChatId: chat-main-1".to_string(),
+            "type: flowchart".to_string(),
+        ];
+        let parsed = parse_frontmatter_lines(&lines);
+        assert_eq!(parsed.origin_chat_id.as_deref(), Some("chat-main-1"));
+        assert_eq!(parsed.note_type.as_deref(), Some("flowchart"));
     }
 }

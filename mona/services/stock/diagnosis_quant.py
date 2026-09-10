@@ -529,8 +529,22 @@ def build_diagnosis_quant_payload(
     if target_id not in industry_ids and industry:
         industry_ids.append(target_id)
     registry = _method_registry()
+    cutoff = _cutoff(bundle)
+    cross_section_as_of = max(
+        (
+            str(row.get("observed_at") or row.get("as_of"))
+            for row in rows
+            if row.get("observed_at") or row.get("as_of")
+        ),
+        default=None,
+    )
+    cohort_eligible = (
+        cache_status in {"built", "same_day_cache", "provided_fixture", "fixture"}
+        and _date(cross_section_as_of) == _date(cutoff)
+    )
     horizons: dict[str, dict[str, Any]] = {}
     cross_section: dict[str, dict[str, Any]] = {}
+    calibration_candidates: dict[str, dict[str, Any]] = {}
     horizon_signals: list[str] = []
     max_market_sample = 0
     max_observed_sample = 0
@@ -635,6 +649,15 @@ def build_diagnosis_quant_payload(
             factor_scopes.setdefault(field, scope_payload)
         records = validation_records.get(horizon) if isinstance(validation_records, Mapping) else None
         calibration = _calibration_result(records, horizon)
+        if calibration.get("promotionStatus") == "calibrated" and not cohort_eligible:
+            calibration = {
+                **calibration,
+                "status": "research_only",
+                "promotionStatus": "research_only",
+                "eligibleForTrading": False,
+                "reason": "当前横截面不是同日完整快照，历史校准不授权本次交易信号",
+                "calibratedHorizon": None,
+            }
         calibrated = calibration.get("promotionStatus") == "calibrated"
         if calibrated and market_percentile is not None:
             validation_label = "calibrated"
@@ -672,6 +695,60 @@ def build_diagnosis_quant_payload(
             "factor_observations": observations,
         }
         horizons[horizon] = horizon_payload
+        complete_ids = [
+            instrument_key
+            for instrument_key in market_ids
+            if all(
+                _finite(values.get(instrument_key, {}).get(field)) is not None
+                for field in fields
+            )
+            and instrument_key in market_scores
+        ]
+        cohort_rows: list[dict[str, Any]] = []
+        for instrument_key in complete_ids:
+            market_row = by_id.get(instrument_key) or {}
+            reference_price = _finite(market_row.get("price"))
+            peer_factor = factors.get(instrument_key) or {}
+            row_sources = set(_source_ids(market_row.get("source_ids")))
+            row_sources.update(_source_ids(peer_factor.get("source_ids")))
+            if instrument_key == target_id:
+                row_sources.update(
+                    source_id
+                    for field_sources in target_sources.values()
+                    for source_id in field_sources
+                )
+            if reference_price is None or reference_price <= 0 or not row_sources:
+                continue
+            cohort_rows.append(
+                {
+                    "instrument_id": instrument_key,
+                    "composite_score": round(float(market_scores[instrument_key]), 10),
+                    "reference_price": reference_price,
+                    "source_ids": sorted(row_sources),
+                }
+            )
+        method_id = str(registry[horizon].get("methodId") or horizon)
+        calibration_candidates[horizon] = {
+            "strategy_id": f"diagnosis-{method_id}",
+            "strategy_fingerprint": stable_json_hash(
+                {
+                    "strategy": "diagnosis_cross_section",
+                    "horizon": horizon,
+                    "method": registry[horizon],
+                    "factor_version": FACTOR_METHOD_VERSION,
+                }
+            ),
+            "as_of": cutoff,
+            "factor_version": FACTOR_METHOD_VERSION,
+            "rank_version": RANK_METHOD_VERSION,
+            "validation_window": int(
+                registry[horizon].get("targetWindowSessions") or 10
+            ),
+            "universe_count": len(market_ids),
+            "observed_count": len(cohort_rows),
+            "rows": cohort_rows,
+            "cohort_eligible": cohort_eligible,
+        }
         max_market_sample = max(max_market_sample, min(market_sample_counts.values(), default=0))
         max_observed_sample = max(max_observed_sample, len(market_scores))
         target_observation_count += sum(item["raw_value"] is not None for item in observations)
@@ -697,12 +774,13 @@ def build_diagnosis_quant_payload(
         item["calibration"] for item in horizons.values()
         if item.get("calibration", {}).get("promotionStatus") == "calibrated"
     ]
+    if calibration_promotions:
+        top_status = "calibrated"
     promotion = calibration_promotions[0] if calibration_promotions else _calibration_result(None, "medium_term")
     if any_available:
         reason = "当前横截面评分和分位为描述性结果；OOS滚动样本外验证未通过或尚未形成，不代表Alpha。"
     else:
         reason = "市场有效样本不足30只或目标因子缺失，当前量化信号不可用；不会退化为单股中性。"
-    cutoff = _cutoff(bundle)
     normalized_factors = {
         instrument_id: {
             "as_of": item.get("as_of"),
@@ -714,14 +792,6 @@ def build_diagnosis_quant_payload(
     }
     cache_rows_hash = stable_json_hash(
         {"as_of": cutoff, "rows": rows, "factors": normalized_factors}
-    )
-    cross_section_as_of = max(
-        (
-            str(row.get("observed_at") or row.get("as_of"))
-            for row in rows
-            if row.get("observed_at") or row.get("as_of")
-        ),
-        default=None,
     )
     validation_metrics = {
         "status": "available" if calibration_promotions else "not_evaluable",
@@ -822,7 +892,11 @@ def build_diagnosis_quant_payload(
         "calibrated_horizon": None,
         "validation_metrics": validation_metrics,
     }
-    return {"quant_snapshot": quant_snapshot, "quant_validation": quant_validation}
+    return {
+        "quant_snapshot": quant_snapshot,
+        "quant_validation": quant_validation,
+        "_calibration_candidates": calibration_candidates,
+    }
 
 
 async def ensure_diagnosis_cross_section_cache(

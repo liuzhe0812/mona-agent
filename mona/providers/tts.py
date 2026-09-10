@@ -11,6 +11,7 @@ import binascii
 import contextlib
 import os
 import re
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
@@ -28,6 +29,13 @@ _RETRYABLE_EXCEPTIONS = (
     httpx.WriteError,
     httpx.RemoteProtocolError,
 )
+
+
+@dataclass(frozen=True)
+class TTSSynthesisResult:
+    audio: bytes
+    boundaries: tuple[dict[str, Any], ...] = ()
+    timing_source: str = "missing"
 
 
 class TTSProvider:
@@ -58,6 +66,12 @@ class TTSProvider:
         finally:
             with contextlib.suppress(OSError):
                 tmp.unlink()
+
+    async def synthesize_with_timings(
+        self, text: str, *, voice: str = ""
+    ) -> TTSSynthesisResult | None:
+        audio = await self.synthesize_to_bytes(text, voice=voice)
+        return TTSSynthesisResult(audio=audio) if audio is not None else None
 
 
 # ---------------------------------------------------------------------------
@@ -105,6 +119,13 @@ class EdgeTTSProvider(TTSProvider):
 
     async def synthesize_to_bytes(self, text: str, *, voice: str = "") -> bytes | None:
         """Synthesize via Edge TTS streaming — no temp file."""
+        result = await self.synthesize_with_timings(text, voice=voice)
+        return result.audio if result is not None else None
+
+    async def synthesize_with_timings(
+        self, text: str, *, voice: str = ""
+    ) -> TTSSynthesisResult | None:
+        """Collect audio and word-boundary metadata from the same Edge stream."""
         try:
             import edge_tts
         except ImportError:
@@ -112,15 +133,42 @@ class EdgeTTSProvider(TTSProvider):
             return None
         v = voice or self.voice
         try:
-            communicate = edge_tts.Communicate(text, voice=v, rate=_normalize_rate(self.rate))
+            try:
+                communicate = edge_tts.Communicate(
+                    text,
+                    voice=v,
+                    rate=_normalize_rate(self.rate),
+                    boundary="WordBoundary",
+                )
+            except TypeError:
+                communicate = edge_tts.Communicate(
+                    text, voice=v, rate=_normalize_rate(self.rate)
+                )
             chunks: list[bytes] = []
+            boundaries: list[dict[str, Any]] = []
             async for chunk in communicate.stream():
                 if chunk["type"] == "audio":
                     chunks.append(chunk["data"])
+                elif chunk["type"] in {"WordBoundary", "SentenceBoundary"}:
+                    start_ms = int(round(float(chunk.get("offset") or 0) / 10_000))
+                    duration_ms = max(
+                        1, int(round(float(chunk.get("duration") or 0) / 10_000))
+                    )
+                    boundaries.append(
+                        {
+                            "text": str(chunk.get("text") or ""),
+                            "startMs": start_ms,
+                            "endMs": start_ms + duration_ms,
+                        }
+                    )
             if not chunks:
                 logger.error("Edge TTS returned no audio data")
                 return None
-            return b"".join(chunks)
+            return TTSSynthesisResult(
+                audio=b"".join(chunks),
+                boundaries=tuple(boundaries),
+                timing_source="provider-boundary" if boundaries else "missing",
+            )
         except Exception as e:
             logger.exception("Edge TTS synthesis failed: {}", e)
             return None

@@ -1,7 +1,7 @@
 /**
  * 图表画布文档模型 v2。
  *
- * 规范（见 AI_EDITABLE_DIAGRAM_CANVAS_PRODUCTION_PLAN.md §7）：
+ * 规范（见 docs/architecture/module-invariants.md 的“可编辑画布”）：
  * 1. 统一 `diagram` 文档模型，`diagramKind` 区分具体图型，不新增平行笔记类型；
  * 2. JSON 是唯一权威数据源；文本投影是只读派生产物；
  * 3. 元素为可辨识联合类型（shape/text/icon/image/group/container/brace/table/lifeline/activation/freehand）；

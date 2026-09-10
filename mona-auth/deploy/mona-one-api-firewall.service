@@ -1,0 +1,13 @@
+[Unit]
+Description=Restrict Mona One API to localhost
+DefaultDependencies=no
+Before=network-pre.target
+Wants=network-pre.target
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/sbin/mona-one-api-firewall
+RemainAfterExit=yes
+
+[Install]
+WantedBy=network-pre.target

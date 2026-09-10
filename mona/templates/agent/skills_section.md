@@ -8,8 +8,8 @@ Do NOT use `read_file` to load SKILL.md files — they are stored outside the wo
 
 Unavailable skills need dependencies installed first — you can try installing them with apt/brew.
 
-## Document & Report Tasks
+## Office and writing tasks
 
-For any task that produces a written deliverable — reports, PRDs, whitepapers, research reports, competitive analyses, technical proposals, specs, or any structured document — **load the `doc-writing-guide` skill first** using `skill_read(name="doc-writing-guide")` before proceeding. It governs intent interpretation, genre selection, writing style, content structure, and routes the artifact production to the appropriate format skill (`html-report` by default, or `docx`/`pdf` when explicitly requested).
+For Word/DOCX tasks, load `mona-docx` before editing or analyzing the document. Excel and PowerPoint tasks use `mona-xlsx` and `mona-pptx`. Continue the active Office document when one is provided. Respect the user's requested format; unspecified writing tasks do not automatically require an HTML file. Read `prd-document` only for product requirements or feature specifications, not routine document formatting.
 
 {{ skills_summary }}

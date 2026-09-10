@@ -3,6 +3,7 @@
 import base64
 import mimetypes
 import platform
+import re
 from contextlib import suppress
 from importlib.resources import files as pkg_files
 from pathlib import Path
@@ -12,6 +13,7 @@ from mona.agent.memory import MemoryStore
 from mona.agent.partners import MONA_AGENT_ID, AgentRegistry, normalize_agent_id
 from mona.agent.skills import SkillsLoader
 from mona.session.goal_state import goal_state_runtime_lines
+from mona.session.task_plan import task_plan_runtime_lines
 from mona.utils.helpers import (
     current_time_str,
     detect_image_mime,
@@ -52,6 +54,19 @@ class ContextBuilder:
     _MAX_RECENT_HISTORY = 50
     _MAX_HISTORY_CHARS = 32_000  # hard cap on recent history section size
     _RUNTIME_CONTEXT_END = "[/Runtime Context]"
+
+    @staticmethod
+    def _attachment_runtime_lines(metadata: Mapping[str, Any] | None) -> list[str]:
+        if not metadata:
+            return []
+        paths = metadata.get("_attachment_paths")
+        if not isinstance(paths, list):
+            return []
+        return [
+            f"Attached File (workspace-relative): {path}"
+            for path in paths[:20]
+            if isinstance(path, str) and path and "\n" not in path and "\r" not in path
+        ]
 
     def __init__(
         self,
@@ -106,6 +121,10 @@ class ContextBuilder:
         if bootstrap:
             parts.append(bootstrap)
 
+        shared_profile = self._load_shared_user_profile()
+        if shared_profile:
+            parts.append(shared_profile)
+
         parts.append(render_template("agent/tool_contract.md"))
 
         memory = self.memory.get_memory_context()
@@ -113,12 +132,16 @@ class ContextBuilder:
             parts.append(f"# Memory\n\n{memory}")
 
         always_skills = self.skills.get_always_skills()
-        if always_skills:
-            always_content = self.skills.load_skills_for_context(always_skills)
+        active_skills = list(dict.fromkeys([*always_skills, *(skill_names or [])]))
+        if active_skills:
+            always_content = self.skills.load_skills_for_context(active_skills)
             if always_content:
                 parts.append(f"# Active Skills\n\n{always_content}")
 
-        skills_summary = self.skills.build_skills_summary(exclude=set(always_skills))
+        skill_exclusions = set(active_skills)
+        if self.agent_id == MONA_AGENT_ID:
+            skill_exclusions.add("mona-ppt")
+        skills_summary = self.skills.build_skills_summary(exclude=skill_exclusions)
         if skills_summary:
             parts.append(render_template("agent/skills_section.md", skills_summary=skills_summary))
 
@@ -179,8 +202,12 @@ class ContextBuilder:
         timezone: str | None = None,
         sender_id: str | None = None,
         supplemental_lines: Sequence[str] | None = None,
+        browser_tab_id: str | None = None,
         browser_page_url: str | None = None,
         browser_page_title: str | None = None,
+        office_session_id: str | None = None,
+        office_document_type: str | None = None,
+        office_display_name: str | None = None,
         db_context: str | None = None,
     ) -> str:
         """Build untrusted runtime metadata block appended after user content."""
@@ -189,13 +216,29 @@ class ContextBuilder:
             lines += [f"Channel: {channel}", f"Chat ID: {chat_id}"]
         if sender_id:
             lines += [f"Sender ID: {sender_id}"]
-        if browser_page_url or browser_page_title:
+        if browser_tab_id or browser_page_url or browser_page_title:
             page_info = "Browser Page:"
             if browser_page_title:
                 page_info += f" {browser_page_title}"
             if browser_page_url:
                 page_info += f" ({browser_page_url})"
+            if browser_tab_id:
+                page_info += f" [Tab ID: {browser_tab_id}]"
             lines.append(page_info)
+        if office_session_id:
+            type_label = {
+                "docs": "Word",
+                "sheets": "Excel",
+                "slides": "PowerPoint",
+            }.get(office_document_type or "", "Office")
+            name = office_display_name or "未命名文档"
+            lines.append(
+                f"Active Office Document: {name} ({type_label}) "
+                f"[Session ID: {office_session_id}]"
+            )
+            lines.append(
+                "Use the office tool with this session ID when the user refers to the current document."
+            )
         if db_context:
             lines.append(db_context)
         if supplemental_lines:
@@ -224,9 +267,51 @@ class ContextBuilder:
             file_path = self.memory.memory_dir / filename
             if file_path.exists():
                 content = file_path.read_text(encoding="utf-8")
+                if filename == "USER.md" and self.agent_id == MONA_AGENT_ID:
+                    content = self._strip_legacy_generated_profile_sections(content)
                 parts.append(f"## {filename}\n\n{content}")
 
         return "\n\n".join(parts) if parts else ""
+
+    @staticmethod
+    def _strip_legacy_generated_profile_sections(content: str) -> str:
+        """Hide stale distill-owned sections left in Mona's private USER.md."""
+        for section in (
+            "Profile",
+            "Current Focus",
+            "Work Patterns",
+            "Agent Assistance Patterns",
+        ):
+            pattern = re.compile(
+                r"(^##\s+" + re.escape(section) + r"\s*\n)(.*?)(?=^##\s+|\Z)",
+                re.MULTILINE | re.DOTALL,
+            )
+            content = pattern.sub("", content)
+        return content.strip()
+
+    @staticmethod
+    def _load_shared_user_profile() -> str:
+        """Load the platform-owned, privacy-filtered user profile snapshot."""
+        try:
+            from mona.distill.snapshot import build_shared_user_profile_context
+
+            return build_shared_user_profile_context()
+        except Exception:
+            return ""
+
+    def build_personalization_context(self) -> str:
+        """Return private bootstrap plus the read-only shared user profile.
+
+        Named room/workflow Agent runs do not use ``build_system_prompt``;
+        exposing this smaller helper keeps their personalization semantics in
+        sync with direct conversations without duplicating platform/tool text.
+        """
+        parts = [self._load_bootstrap_files(), self._load_shared_user_profile()]
+        return "\n\n---\n\n".join(part for part in parts if part)
+
+    def build_private_bootstrap_context(self) -> str:
+        """Return only this Agent's private SOUL/USER/AGENTS bootstrap."""
+        return self._load_bootstrap_files()
 
     @staticmethod
     def _is_template_content(content: str, template_path: str) -> bool:
@@ -252,13 +337,25 @@ class ContextBuilder:
         message_metadata: Mapping[str, Any] | None = None,
     ) -> list[dict[str, Any]]:
         """Build the complete message list for an LLM call."""
-        extra = goal_state_runtime_lines(session_metadata)
+        extra = [
+            *goal_state_runtime_lines(session_metadata),
+            *task_plan_runtime_lines(session_metadata),
+            *self._attachment_runtime_lines(message_metadata),
+        ]
         browser_page_url = None
         browser_page_title = None
+        browser_tab_id = None
+        office_session_id = None
+        office_document_type = None
+        office_display_name = None
         db_context = None
         if message_metadata:
             browser_page_url = message_metadata.get("browser_page_url")
             browser_page_title = message_metadata.get("browser_page_title")
+            browser_tab_id = message_metadata.get("browser_tab_id")
+            office_session_id = message_metadata.get("office_session_id")
+            office_document_type = message_metadata.get("office_document_type")
+            office_display_name = message_metadata.get("office_display_name")
             db_context = _build_db_runtime_context(message_metadata)
         runtime_ctx = self._build_runtime_context(
             channel,
@@ -266,8 +363,12 @@ class ContextBuilder:
             self.timezone,
             sender_id=sender_id,
             supplemental_lines=extra or None,
+            browser_tab_id=browser_tab_id,
             browser_page_url=browser_page_url,
             browser_page_title=browser_page_title,
+            office_session_id=office_session_id,
+            office_document_type=office_document_type,
+            office_display_name=office_display_name,
             db_context=db_context,
         )
         user_content = self._build_user_content(current_message, media)

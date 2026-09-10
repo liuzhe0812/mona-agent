@@ -463,6 +463,10 @@ class SessionManager:
         self.sessions_dir = ensure_dir(self.workspace / "sessions")
         self.legacy_sessions_dir = get_legacy_sessions_dir()
         self._cache: dict[str, Session] = {}
+        # Legacy files without a persisted UI summary need one transcript scan
+        # the first time they appear in the list. Keep that result for the
+        # unchanged file so repeated sidebar refreshes stay metadata-only.
+        self._list_summary_cache: dict[Path, tuple[int, int, dict[str, Any]]] = {}
 
     @staticmethod
     def safe_key(key: str) -> str:
@@ -669,6 +673,19 @@ class SessionManager:
             raise
 
         self._cache[session.key] = session
+        try:
+            stat = path.stat()
+        except OSError:
+            self._list_summary_cache.pop(path, None)
+        else:
+            # Cache the in-memory summary after the atomic replace. This also
+            # avoids rescanning a legacy session that was saved without a
+            # visible message (and therefore still has no persisted summary).
+            self._list_summary_cache[path] = (
+                stat.st_mtime_ns,
+                stat.st_size,
+                session.ui_summary(),
+            )
 
     def flush_all(self) -> int:
         """Re-save every cached session with fsync for durable shutdown.
@@ -689,6 +706,7 @@ class SessionManager:
     def invalidate(self, key: str) -> None:
         """Remove a session from the in-memory cache."""
         self._cache.pop(key, None)
+        self._list_summary_cache.pop(self._get_session_path(key), None)
 
     def delete_session(self, key: str) -> bool:
         """Remove a session from disk and the in-memory cache.
@@ -763,6 +781,8 @@ class SessionManager:
         for path in self.sessions_dir.glob("*.jsonl"):
             fallback_key = path.stem.replace("_", ":", 1)
             try:
+                stat = path.stat()
+                signature = (stat.st_mtime_ns, stat.st_size)
                 # Read the metadata line and the IM summary for WebUI/session lists.
                 with open(path, encoding="utf-8") as f:
                     first_line = f.readline().strip()
@@ -776,20 +796,37 @@ class SessionManager:
                             title = metadata.get("title")
                             summary = _valid_ui_summary(metadata.get(_UI_SUMMARY_KEY))
                             if summary is None:
-                                # Legacy session without a cached summary: scan
-                                # for the LAST user-visible message (IM plan
-                                # 12.2 fallback; the cache is written by the
-                                # next normal save, not by this read path).
-                                for line in f:
-                                    if not line.strip():
-                                        continue
-                                    item = json.loads(line)
-                                    if item.get("_type") == "metadata":
-                                        continue
-                                    normalize_message_author(item)
-                                    candidate = build_ui_summary(item)
-                                    if candidate is not None:
-                                        summary = candidate
+                                cached = self._list_summary_cache.get(path)
+                                if cached is not None and cached[:2] == signature:
+                                    summary = cached[2]
+                                else:
+                                    # Legacy session without a cached summary:
+                                    # scan for the LAST user-visible message
+                                    # (IM plan 12.2 fallback). Cache even an
+                                    # empty result so sessions with no visible
+                                    # messages do not get rescanned.
+                                    summary = {}
+                                    for line in f:
+                                        if not line.strip():
+                                            continue
+                                        item = json.loads(line)
+                                        if item.get("_type") == "metadata":
+                                            continue
+                                        normalize_message_author(item)
+                                        candidate = build_ui_summary(item)
+                                        if candidate is not None:
+                                            summary = candidate
+                                    self._list_summary_cache[path] = (
+                                        signature[0],
+                                        signature[1],
+                                        summary,
+                                    )
+                            else:
+                                self._list_summary_cache[path] = (
+                                    signature[0],
+                                    signature[1],
+                                    summary,
+                                )
                             summary = summary or {}
                             row = {
                                 "key": key,

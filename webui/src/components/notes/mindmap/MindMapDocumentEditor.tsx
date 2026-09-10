@@ -358,6 +358,27 @@ export const MindMapDocumentEditor = forwardRef<MindMapDocumentEditorHandle, Min
     return () => observer.disconnect();
   }, []);
 
+  const fitMindMapAfterRefresh = useCallback(() => {
+    const fitWhenReady = (attempts = 0) => {
+      const container = containerRef.current;
+      const mind = mindRef.current;
+      if (!container || !mind || attempts > 30) return;
+      if (container.offsetWidth === 0 || container.offsetHeight === 0) {
+        requestAnimationFrame(() => fitWhenReady(attempts + 1));
+        return;
+      }
+
+      requestAnimationFrame(() => {
+        if (mindRef.current !== mind) return;
+        mind.scaleFit();
+        setZoomPercent(Math.round(mind.scaleVal * 100));
+        redrawBoundariesRef.current();
+      });
+    };
+
+    requestAnimationFrame(() => fitWhenReady());
+  }, []);
+
   // 同步外部 contentMarkdown 变化
   useEffect(() => {
     if (note.contentMarkdown === lastContentRef.current) return;
@@ -394,9 +415,9 @@ export const MindMapDocumentEditor = forwardRef<MindMapDocumentEditorHandle, Min
       } finally {
         isRefreshingRef.current = false;
       }
-      requestAnimationFrame(() => redrawBoundariesRef.current());
+      fitMindMapAfterRefresh();
     }
-  }, [note.contentMarkdown]);
+  }, [fitMindMapAfterRefresh, note.contentMarkdown]);
 
   // 初始化 Mind Elixir
   useEffect(() => {

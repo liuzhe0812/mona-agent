@@ -253,6 +253,75 @@ impl IpcBridge {
         state: &TerminalState,
     ) -> Result<Value, String> {
         match cmd {
+            "canvas_agent_request" => {
+                let canvas_state = self
+                    .app_handle
+                    .state::<crate::canvas_agent::CanvasAgentBridgeState>();
+                canvas_state.submit(&self.app_handle, args).await
+            }
+            "canvas_activate_sidebar" => {
+                let canvas_id = args
+                    .get("canvasId")
+                    .and_then(Value::as_str)
+                    .filter(|value| !value.trim().is_empty())
+                    .ok_or("Missing canvasId")?;
+                let path = args
+                    .get("path")
+                    .and_then(Value::as_str)
+                    .filter(|value| !value.trim().is_empty());
+                self.app_handle
+                    .emit_to(
+                        "main",
+                        "canvas-agent-activate-sidebar",
+                        serde_json::json!({ "canvasId": canvas_id, "path": path }),
+                    )
+                    .map_err(|error| error.to_string())?;
+                if args.get("focus").and_then(Value::as_bool) == Some(true) {
+                    if let Some(main_window) = self.app_handle.get_webview_window("main") {
+                        let _ = main_window.show();
+                        let _ = main_window.unminimize();
+                        let _ = main_window.set_focus();
+                    }
+                }
+                Ok(serde_json::json!({ "activated": true }))
+            }
+            "canvas_open_file" => {
+                let path = args
+                    .get("path")
+                    .and_then(Value::as_str)
+                    .ok_or("Missing path")?
+                    .to_string();
+                let saved = crate::workspace_canvas::workspace_canvas_open_file(path.clone()).await?;
+                crate::emit_canvas_file_open(&self.app_handle, &path);
+                serde_json::to_value(saved).map_err(|error| error.to_string())
+            }
+            "get_automation_settings" => {
+                let settings = crate::settings::load_settings();
+                Ok(serde_json::json!({
+                    "browserAutomationEnabled": settings.browser_automation_enabled,
+                    "computerUseEnabled": settings.computer_use_enabled,
+                }))
+            }
+            "set_automation_settings" => {
+                let mut settings = crate::settings::load_settings();
+                if let Some(enabled) = args
+                    .get("browserAutomationEnabled")
+                    .and_then(Value::as_bool)
+                {
+                    settings.browser_automation_enabled = enabled;
+                }
+                if let Some(enabled) = args
+                    .get("computerUseEnabled")
+                    .and_then(Value::as_bool)
+                {
+                    settings.computer_use_enabled = enabled;
+                }
+                crate::settings::save_settings(&settings)?;
+                Ok(serde_json::json!({
+                    "browserAutomationEnabled": settings.browser_automation_enabled,
+                    "computerUseEnabled": settings.computer_use_enabled,
+                }))
+            }
             "terminal_list_sessions" => {
                 let sessions = state.manager.list_sessions().await;
                 serde_json::to_value(sessions).map_err(|e| e.to_string())
@@ -764,6 +833,10 @@ impl IpcBridge {
                     notebook_id,
                 )
                 .await?;
+                let _ = self.app_handle.emit(
+                    "notes-changed",
+                    serde_json::json!({ "noteId": note_id.clone() }),
+                );
                 Ok(Value::String(note_id))
             }
             "notes_search_all" => {
@@ -805,6 +878,12 @@ impl IpcBridge {
             "license_has_access" => {
                 let has_access = crate::license::check_license_access();
                 Ok(Value::Bool(has_access))
+            }
+            "get_model_access_credentials" => {
+                crate::license::get_model_access_credentials().await
+            }
+            "get_managed_model_catalog" => {
+                crate::license::get_managed_model_catalog().await
             }
             "email_fetch_body" => {
                 // 纯本地 Tauri IPC：读 SQLite + 读 .eml + mailparse 解析。

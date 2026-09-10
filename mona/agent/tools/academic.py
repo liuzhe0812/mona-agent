@@ -156,7 +156,8 @@ class AcademicSearchTool(Tool):
         return (
             "Search, retrieve metadata, or inspect citations through OpenAlex, Crossref, "
             "Europe PMC, arXiv, and ClinicalTrials.gov. Returns normalized records, "
-            "provider errors, and a query log; it never invents missing metadata."
+            "provider errors, paging cursors, and per-provider completeness; it never "
+            "invents missing metadata."
         )
 
     @property
@@ -356,7 +357,6 @@ class AcademicSearchTool(Tool):
                     if isinstance(payload, dict):
                         payload["citation_direction"] = relation_direction
                     records.append(payload)
-            records = records[:limit]
         else:
             raw_records = [record for page in pages for record in page.records]
             records = [
@@ -368,23 +368,41 @@ class AcademicSearchTool(Tool):
                     year_to=year_to,
                     source_type=source_type,
                 )
-            ][:limit]
+            ]
         provider_errors = [
             page.error.to_dict()
             for page in pages
             if page.error is not None
         ]
+        next_cursors = {
+            page.provider: page.next_cursor
+            for page in pages
+            if page.next_cursor is not None
+        }
+        provider_status = {
+            page.provider: {
+                "ok": page.error is None,
+                "returned_count": len(page.records),
+                "has_more": page.next_cursor is not None,
+                **(
+                    {"error_code": page.error.code}
+                    if page.error is not None
+                    else {}
+                ),
+            }
+            for page in pages
+        }
+        coverage_complete = not provider_errors and not next_cursors
         finished = _now_iso()
         return _json(
             {
                 "ok": True,
                 "records": [_dump(record) for record in records],
                 "provider_errors": provider_errors,
-                "next_cursors": {
-                    page.provider: page.next_cursor
-                    for page in pages
-                    if page.next_cursor is not None
-                },
+                "provider_status": provider_status,
+                "coverage_complete": coverage_complete,
+                "truncated": bool(next_cursors),
+                "next_cursors": next_cursors,
                 "query_log": {
                     "action": action,
                     "query": query,
@@ -396,6 +414,7 @@ class AcademicSearchTool(Tool):
                         "source_type": source_type,
                     },
                     "limit": limit,
+                    "limit_per_provider": limit,
                     "cursor": cursor,
                     "citation_direction": direction,
                     "provider_directions": {

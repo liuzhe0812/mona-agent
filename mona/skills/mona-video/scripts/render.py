@@ -26,9 +26,11 @@ import os
 import socket
 import subprocess
 import sys
+import tempfile
 import time
 from collections.abc import Callable
 from pathlib import Path
+from typing import Any
 
 sys.path.insert(0, str(Path(__file__).parent))
 from check_edge import find_browser  # noqa: E402
@@ -47,6 +49,58 @@ __all__ = ("render_project", "render_project_async")
 # Called from a worker thread (server wraps render in asyncio.to_thread), so
 # implementations must be thread-safe and non-blocking (file write is fine).
 ProgressCb = Callable[[str, float, str], None]
+
+
+class RenderCancelledError(RuntimeError):
+    """Raised when the owning export job requests cooperative cancellation."""
+
+
+def _raise_if_cancelled(cancel_event: Any | None) -> None:
+    if cancel_event is not None and cancel_event.is_set():
+        raise RenderCancelledError("视频导出已取消")
+
+
+def _terminate_process_tree(proc: subprocess.Popen) -> None:
+    if os.name == "nt" and getattr(proc, "pid", None):
+        subprocess.run(
+            ["taskkill", "/PID", str(proc.pid), "/T", "/F"],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            check=False,
+            creationflags=subprocess.CREATE_NO_WINDOW,  # type: ignore[attr-defined]
+        )
+        return
+    proc.terminate()
+    try:
+        proc.wait(timeout=3)
+    except subprocess.TimeoutExpired:
+        proc.kill()
+        proc.wait(timeout=3)
+
+
+def _run_ffmpeg(cmd: list[str], cancel_event: Any | None = None) -> None:
+    """Run FFmpeg while keeping cancellation responsive during long encodes."""
+    creationflags = subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0  # type: ignore[attr-defined]
+    with tempfile.TemporaryFile() as stderr_file:
+        proc = subprocess.Popen(
+            cmd,
+            stdout=subprocess.DEVNULL,
+            stderr=stderr_file,
+            creationflags=creationflags,
+        )
+        try:
+            while proc.poll() is None:
+                _raise_if_cancelled(cancel_event)
+                time.sleep(0.1)
+        except RenderCancelledError:
+            _terminate_process_tree(proc)
+            raise
+        stderr_file.seek(0)
+        stderr = stderr_file.read()
+        if proc.returncode != 0:
+            raise subprocess.CalledProcessError(
+                proc.returncode, cmd, output=b"", stderr=stderr
+            )
 
 
 def _frame_progress(done: int, total: int) -> float:
@@ -68,8 +122,10 @@ def _find_free_port() -> int:
         return s.getsockname()[1]
 
 
-def _resolve_ffmpeg() -> str | None:
-    for candidate in ("ffmpeg",):
+def _resolve_ffmpeg(preferred: str | None = None) -> str | None:
+    for candidate in (preferred, "ffmpeg"):
+        if not candidate:
+            continue
         try:
             subprocess.run(
                 [candidate, "-version"],
@@ -249,6 +305,7 @@ async def _render_scene(
     frames_dir: Path,
     frame_offset: int,
     frame_cb: Callable[[int], None] | None = None,
+    cancel_event: Any | None = None,
 ) -> int:
     """Render one scene to a sequence of PNGs. Returns frame count.
 
@@ -256,6 +313,7 @@ async def _render_scene(
     frame, so callers can report sub-scene progress (~0.5s @ 30fps).
     """
     file_url = scene_path.resolve().as_uri()
+    _raise_if_cancelled(cancel_event)
 
     # Some Chromium builds (e.g. chrome-headless-shell) do not expose the Page
     # domain. Enable it when available and fall back to ready-state polling.
@@ -301,6 +359,7 @@ async def _render_scene(
         await _wait_for_event(ws, "Page.loadEventFired", timeout=30.0)
     else:
         for _ in range(300):
+            _raise_if_cancelled(cancel_event)
             result = await _cdp_call(ws, "Runtime.evaluate", {
                 "expression": "document.readyState === 'complete'",
                 "returnByValue": True,
@@ -311,6 +370,7 @@ async def _render_scene(
 
     # Wait for GSAP to be ready (poll up to 5s)
     for _ in range(50):
+        _raise_if_cancelled(cancel_event)
         result = await _cdp_call(ws, "Runtime.evaluate", {
             "expression": _WAIT_GSAP_JS,
             "returnByValue": True,
@@ -331,6 +391,7 @@ async def _render_scene(
 
     total_frames = max(1, int(round(duration * fps)))
     for i in range(total_frames):
+        _raise_if_cancelled(cancel_event)
         t = (i + 0.5) / fps  # sample mid-frame
         if t > duration:
             t = duration
@@ -366,9 +427,11 @@ def _encode_mp4(
     output_mp4: Path,
     fps: int,
     crf: int,
+    cancel_event: Any | None = None,
+    ffmpeg_path: str | None = None,
 ) -> bool:
     """Encode PNG sequence → MP4 via FFmpeg."""
-    ffmpeg = _resolve_ffmpeg()
+    ffmpeg = _resolve_ffmpeg(ffmpeg_path)
     if ffmpeg is None:
         return False
     cmd = [
@@ -384,16 +447,22 @@ def _encode_mp4(
         str(output_mp4),
     ]
     try:
-        subprocess.run(cmd, check=True, capture_output=True)
+        _run_ffmpeg(cmd, cancel_event)
         return True
     except subprocess.CalledProcessError as e:
         stderr = e.stderr.decode("utf-8", errors="replace") if e.stderr else ""
         raise RuntimeError(f"FFmpeg encoding failed: {stderr.strip()[:500]}") from e
 
 
-def _mux_audio(silent_mp4: Path, narration_mp3: Path, output_mp4: Path) -> bool:
+def _mux_audio(
+    silent_mp4: Path,
+    narration_mp3: Path,
+    output_mp4: Path,
+    cancel_event: Any | None = None,
+    ffmpeg_path: str | None = None,
+) -> bool:
     """Mux narration audio into silent MP4."""
-    ffmpeg = _resolve_ffmpeg()
+    ffmpeg = _resolve_ffmpeg(ffmpeg_path)
     if ffmpeg is None:
         return False
     cmd = [
@@ -409,16 +478,21 @@ def _mux_audio(silent_mp4: Path, narration_mp3: Path, output_mp4: Path) -> bool:
         str(output_mp4),
     ]
     try:
-        subprocess.run(cmd, check=True, capture_output=True)
+        _run_ffmpeg(cmd, cancel_event)
         return True
     except subprocess.CalledProcessError as e:
         stderr = e.stderr.decode("utf-8", errors="replace") if e.stderr else ""
         raise RuntimeError(f"FFmpeg mux failed: {stderr.strip()[:500]}") from e
 
 
-def _concat_scene_audio(scene_mp3s: list[Path], output_mp3: Path) -> bool:
+def _concat_scene_audio(
+    scene_mp3s: list[Path],
+    output_mp3: Path,
+    cancel_event: Any | None = None,
+    ffmpeg_path: str | None = None,
+) -> bool:
     """Concatenate per-scene MP3s into a single narration.mp3 via FFmpeg concat demuxer."""
-    ffmpeg = _resolve_ffmpeg()
+    ffmpeg = _resolve_ffmpeg(ffmpeg_path)
     if ffmpeg is None or not scene_mp3s:
         return False
     concat_list = output_mp3.parent / "concat_list.txt"
@@ -435,7 +509,7 @@ def _concat_scene_audio(scene_mp3s: list[Path], output_mp3: Path) -> bool:
         str(output_mp3),
     ]
     try:
-        subprocess.run(cmd, check=True, capture_output=True)
+        _run_ffmpeg(cmd, cancel_event)
         return True
     except subprocess.CalledProcessError as e:
         stderr = e.stderr.decode("utf-8", errors="replace") if e.stderr else ""
@@ -453,6 +527,10 @@ async def render_project_async(
     quality: str = "standard",
     progress_cb: ProgressCb | None = None,
     scenes_dir: str | Path | None = None,
+    cancel_event: Any | None = None,
+    output_name: str = "output.mp4",
+    ffmpeg_path: str | None = None,
+    browser_path: str | None = None,
 ) -> dict:
     """Render all scenes in a project to MP4 via headless Chromium + CDP.
 
@@ -464,6 +542,7 @@ async def render_project_async(
     made while the render is running. Defaults to <project>/scenes.
     """
     project = Path(project_path)
+    _raise_if_cancelled(cancel_event)
     if not project.exists():
         return {"ok": False, "error": f"Project not found: {project_path}"}
 
@@ -488,7 +567,11 @@ async def render_project_async(
         width = max(2, int(round(width * scale)))
         height = max(2, int(round(height * scale)))
 
-    browser = find_browser()
+    browser = (
+        str(Path(browser_path))
+        if browser_path and Path(browser_path).is_file()
+        else find_browser()
+    )
     if not browser:
         return {
             "ok": False,
@@ -499,7 +582,7 @@ async def render_project_async(
             "need_download": True,
         }
 
-    ffmpeg = _resolve_ffmpeg()
+    ffmpeg = _resolve_ffmpeg(ffmpeg_path)
     if not ffmpeg:
         return {"ok": False, "error": "FFmpeg not found in PATH", "need_download": True}
 
@@ -514,8 +597,10 @@ async def render_project_async(
     frames_dir.mkdir(parents=True, exist_ok=True)
     renders_dir = project / "renders"
     renders_dir.mkdir(parents=True, exist_ok=True)
-    silent_mp4 = renders_dir / "silent.mp4"
-    output_mp4 = renders_dir / "output.mp4"
+    output_mp4 = renders_dir / output_name
+    silent_mp4 = renders_dir / (
+        "silent.mp4" if output_name == "output.mp4" else "silent.pending.mp4"
+    )
 
     # Start Chrome
     port = _find_free_port()
@@ -556,6 +641,7 @@ async def render_project_async(
                     ws, path, duration, fps, width, height,
                     frames_dir, frame_offset,
                     frame_cb=lambda done, pos=scene_pos: _report_frames(pos, done),
+                    cancel_event=cancel_event,
                 )
                 scene_results.append({
                     "scene": num,
@@ -569,7 +655,8 @@ async def render_project_async(
         # Encode silent MP4
         if progress_cb is not None:
             progress_cb("encoding", 92, "正在编码 MP4...")
-        _encode_mp4(frames_dir, silent_mp4, fps, crf)
+        _raise_if_cancelled(cancel_event)
+        _encode_mp4(frames_dir, silent_mp4, fps, crf, cancel_event, ffmpeg)
 
         # Mux audio if narration exists
         narration_mp3 = project / "audio" / "narration.mp3"
@@ -580,11 +667,15 @@ async def render_project_async(
             if scene_mp3s:
                 if progress_cb is not None:
                     progress_cb("muxing", 97, "正在合成音频...")
-                _concat_scene_audio(scene_mp3s, narration_mp3)
+                _concat_scene_audio(
+                    scene_mp3s, narration_mp3, cancel_event, ffmpeg
+                )
         if narration_mp3.is_file():
             if progress_cb is not None:
                 progress_cb("muxing", 98, "正在混流音视频...")
-            _mux_audio(silent_mp4, narration_mp3, output_mp4)
+            _mux_audio(
+                silent_mp4, narration_mp3, output_mp4, cancel_event, ffmpeg
+            )
         else:
             # Rename silent.mp4 to output.mp4
             # Windows 上 Path.rename 不会覆盖已存在文件(抛 WinError 183),
@@ -604,13 +695,9 @@ async def render_project_async(
         }
     finally:
         try:
-            proc.terminate()
-            proc.wait(timeout=5)
+            _terminate_process_tree(proc)
         except Exception:
-            try:
-                proc.kill()
-            except Exception:
-                pass
+            pass
 
 
 def render_project(
@@ -619,6 +706,10 @@ def render_project(
     quality: str = "standard",
     progress_cb: ProgressCb | None = None,
     scenes_dir: str | Path | None = None,
+    cancel_event: Any | None = None,
+    output_name: str = "output.mp4",
+    ffmpeg_path: str | None = None,
+    browser_path: str | None = None,
 ) -> dict:
     """Sync wrapper around render_project_async."""
     return asyncio.run(
@@ -628,6 +719,10 @@ def render_project(
             quality=quality,
             progress_cb=progress_cb,
             scenes_dir=scenes_dir,
+            cancel_event=cancel_event,
+            output_name=output_name,
+            ffmpeg_path=ffmpeg_path,
+            browser_path=browser_path,
         )
     )
 

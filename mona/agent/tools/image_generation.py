@@ -2,12 +2,16 @@
 
 from __future__ import annotations
 
+import json
+import math
+import re
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
+import httpx
 from pydantic import Field
 
-from mona.agent.tools.base import Tool, tool_parameters
+from mona.agent.tools.base import Tool
 from mona.agent.tools.path_utils import get_current_workspace
 from mona.agent.tools.schema import (
     ArraySchema,
@@ -16,7 +20,7 @@ from mona.agent.tools.schema import (
     tool_parameters_schema,
 )
 from mona.config.paths import get_media_dir
-from mona.config.schema import Base
+from mona.config.schema import Base, ModelGenerationParameters
 from mona.providers.image_generation import (
     ImageGenerationError,
     ImageGenerationProvider,
@@ -41,13 +45,18 @@ class ImageGenerationToolConfig(Base):
     default_aspect_ratio: str = "1:1"
     default_image_size: str = "1K"
     max_images_per_turn: int = Field(default=4, ge=1, le=8)
+    model_parameters: dict[str, ModelGenerationParameters] = Field(default_factory=dict)
     save_dir: str = "generated"
 
-
-@tool_parameters(
-    tool_parameters_schema(
+_IMAGE_PARAMETERS = tool_parameters_schema(
         prompt=StringSchema(
-            "Detailed image generation or edit prompt. Include style, subject, composition, colors, and constraints.",
+            "Follow the active image-generation Skill before calling this tool. For an incomplete new-image "
+            "request, read its matching upstream template and example reference. Submit a complete image brief "
+            "in the user's language. Make the subject and task, focal placement and "
+            "scale, spatial relationships, medium/material, palette and light, exact text placement "
+            "or no-added-text policy, output form and targeted exclusions concrete in this prompt. "
+            "Generic praise such as professional layout or high quality cannot replace these decisions. "
+            "For a narrow edit, state what changes and what stays unchanged; do not redesign the image.",
             min_length=1,
         ),
         reference_images=ArraySchema(
@@ -66,8 +75,9 @@ class ImageGenerationToolConfig(Base):
             maximum=8,
         ),
         required=["prompt"],
-    )
 )
+
+
 class ImageGenerationTool(Tool):
     """Generate persistent image artifacts through the configured image provider."""
 
@@ -118,8 +128,32 @@ class ImageGenerationTool(Tool):
         return (
             "Generate or edit images and store them as persistent artifacts. "
             "Returns artifact ids and local paths. For edits, pass prior generated image paths "
-            "or user image paths as reference_images."
+            "or user image paths as reference_images. Optional image_size and aspect_ratio "
+            "override the user's defaults for this call only. Common sizes are presets, "
+            "not a guarantee of provider support. A successful returned image is ready to use: "
+            "do not check its dimensions against the request or generate again to correct them. "
+            "If retry_safe is false, do not resubmit an uncertain or failed generation. "
+            f"Current defaults: image_size={self.config.default_image_size}, "
+            f"aspect_ratio={self.config.default_aspect_ratio}."
         )
+
+    @property
+    def parameters(self) -> dict[str, Any]:
+        from copy import deepcopy
+
+        schema = deepcopy(_IMAGE_PARAMETERS)
+        props = schema["properties"]
+        props["image_size"]["description"] = (
+            "Optional per-call resolution override, e.g. 1K, 2K, 4K or WIDTHxHEIGHT. "
+            f"Omit to use the user's default {self.config.default_image_size}. "
+            "The provider decides which sizes it accepts; use returned alternatives on a size rejection."
+        )
+        props["aspect_ratio"]["description"] = (
+            f"Optional per-call aspect ratio; default {self.config.default_aspect_ratio}. "
+            "Explicit pixel dimensions already define their ratio."
+        )
+        props["count"]["maximum"] = self.config.max_images_per_turn
+        return schema
 
     def _provider_config(self) -> ProviderConfig | None:
         return self.provider_configs.get(self.config.provider)
@@ -138,13 +172,49 @@ class ImageGenerationTool(Tool):
             spec = _find_spec(self.config.provider)
             if spec and spec.default_api_base:
                 api_base = spec.default_api_base
+        extra_body = dict(provider.extra_body or {}) if provider else {}
+        parameters = self.config.model_parameters.get(self.config.model)
+        from mona.providers.registry import is_custom_provider_name
+
+        if parameters and is_custom_provider_name(self.config.provider):
+            allowed = {"seed", "steps", "cfg", "negative_prompt"}
+            extra_body.update(
+                {
+                    name: parameters.values[name]
+                    for name in parameters.enabled
+                    if name in allowed and name in parameters.values
+                }
+            )
         kwargs = {
             "api_key": provider.api_key if provider else None,
             "api_base": api_base,
             "extra_headers": provider.extra_headers if provider else None,
-            "extra_body": provider.extra_body if provider else None,
+            "extra_body": extra_body,
         }
         return cls(**kwargs)
+
+    def _output_parameters(self, image_size: str | None, aspect_ratio: str | None) -> tuple[str | None, str | None]:
+        size = (image_size or self.config.default_image_size).strip().replace("×", "x").replace("X", "x")
+        ratio = (aspect_ratio or self.config.default_aspect_ratio).strip()
+        if size and not re.fullmatch(r"(?:[1-9][0-9]{0,4}x[1-9][0-9]{0,4}|(?:0\.5|[1-9][0-9]?)[kK]|auto)", size):
+            raise ImageGenerationError("分辨率格式无效，请使用 1K、2K、4K 或宽x高。", code="INVALID_IMAGE_SIZE", retry_safe=True)
+        if ratio and not re.fullmatch(r"[1-9][0-9]?(?:\.[0-9]+)?:[1-9][0-9]?(?:\.[0-9]+)?", ratio):
+            raise ImageGenerationError("画面比例格式无效，例如 16:9。", code="INVALID_IMAGE_SIZE", retry_safe=True)
+        if "x" in size:
+            width, height = (int(part) for part in size.split("x"))
+            if width > 65536 or height > 65536:
+                raise ImageGenerationError("图片宽高超出可接受范围。", code="INVALID_IMAGE_SIZE", retry_safe=True)
+            if aspect_ratio:
+                left, right = (float(part) for part in ratio.split(":"))
+                if not math.isclose(width / height, left / right, rel_tol=0.001):
+                    if image_size:
+                        raise ImageGenerationError("本次指定的像素尺寸与画面比例冲突，请调整其中一项。", code="INVALID_IMAGE_SIZE", retry_safe=True)
+                    # An explicitly requested aspect takes priority over a conflicting default canvas.
+                    return None, ratio
+            return size, None
+        if size.lower().endswith("k"):
+            size = size.upper()
+        return size or None, ratio or None
 
     def _resolve_reference_image(self, value: str) -> str:
         active_ws = self._active_workspace()
@@ -181,18 +251,21 @@ class ImageGenerationTool(Tool):
         count: int | None = None,
         **kwargs: Any,
     ) -> str:
-        client = self._provider_client()
-        if client is None:
-            return f"Error: unsupported image generation provider '{self.config.provider}'"
-
         requested = count or 1
+        if count is not None and (isinstance(count, bool) or count < 1):
+            return "Error: count must be a positive integer"
         if requested > self.config.max_images_per_turn:
             return (
                 "Error: count exceeds tools.imageGeneration.maxImagesPerTurn "
                 f"({self.config.max_images_per_turn})"
             )
 
+        artifacts: list[dict[str, Any]] = []
         try:
+            effective_size, effective_ratio = self._output_parameters(image_size, aspect_ratio)
+            client = self._provider_client()
+            if client is None:
+                return f"Error: unsupported image generation provider '{self.config.provider}'"
             refs = self._resolve_reference_images(reference_images)
             # Use the image-specific model from image_generation config.
             # Do not fall back to the provider's chat model — image generation
@@ -204,15 +277,16 @@ class ImageGenerationTool(Tool):
             # Store generated images under the active session workspace so they
             # appear in the active Agent output panel for normal sessions.
             artifact_root = self._active_workspace()
-            artifacts: list[dict[str, Any]] = []
             while len(artifacts) < requested:
                 response = await client.generate(
                     prompt=prompt,
                     model=model,
                     reference_images=refs,
-                    aspect_ratio=aspect_ratio or self.config.default_aspect_ratio,
-                    image_size=image_size or self.config.default_image_size,
+                    aspect_ratio=effective_ratio,
+                    image_size=effective_size,
                 )
+                if not response.images:
+                    raise ImageGenerationError("模型服务未返回图片")
                 for image_data_url in response.images:
                     artifact = store_generated_image_artifact(
                         image_data_url,
@@ -222,13 +296,31 @@ class ImageGenerationTool(Tool):
                         save_dir=self.config.save_dir,
                         provider=self.config.provider,
                         artifact_root=artifact_root,
+                        requested_size=effective_size,
+                        requested_aspect_ratio=effective_ratio,
                     )
                     artifacts.append(artifact)
                     if len(artifacts) >= requested:
                         break
             return generated_image_tool_result(artifacts)
         except (ArtifactError, ImageGenerationError, OSError) as exc:
+            code = getattr(exc, "code", None)
+            supported_sizes = getattr(exc, "supported_sizes", [])
+            if code or artifacts:
+                return json.dumps({
+                    "ok": False, "code": code or "IMAGE_GENERATION_FAILED", "message": str(exc),
+                    "supported_sizes": supported_sizes,
+                    "retry_safe": getattr(exc, "retry_safe", False), "artifacts": artifacts,
+                    "next_step": "Keep completed artifacts. Do not automatically resubmit when retry_safe is false. Respect the user's exact size requirements.",
+                }, ensure_ascii=False)
             return f"Error: {exc}"
+        except (httpx.HTTPError, ValueError) as exc:
+            return json.dumps({
+                "ok": False, "code": "IMAGE_RESULT_UNAVAILABLE", "retry_safe": False,
+                "message": "无法读取生成结果；任务可能已执行，请勿自动重新提交。",
+                "artifacts": artifacts,
+                "error_type": type(exc).__name__,
+            }, ensure_ascii=False)
 
 
 def _is_relative_to(path: Path, root: Path) -> bool:

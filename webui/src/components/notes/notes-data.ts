@@ -106,6 +106,8 @@ export interface OperationNote {
   contentJson?: JSONContent;
   plainText?: string;
   agentChatId?: string;
+  /** Main conversation that created this canvas artifact. */
+  originChatId?: string;
   appliedAgentMessageIds?: string[];
   /** Context level for knowledge-base retrieval. Defaults to "full". */
   contextLevel?: NoteContextLevel;

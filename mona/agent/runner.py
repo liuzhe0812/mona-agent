@@ -48,7 +48,6 @@ from mona.utils.runtime import (
     build_length_recovery_message,
     ensure_nonempty_tool_result,
     is_blank_text,
-    repeated_external_lookup_error,
     repeated_workspace_violation_error,
 )
 
@@ -61,13 +60,22 @@ _MAX_INJECTION_CYCLES = 5
 _SNIP_SAFETY_BUFFER = 1024
 _MICROCOMPACT_KEEP_RECENT = 10
 _MICROCOMPACT_MIN_CHARS = 500
-# ponytail: fixed web-only budget; make it configurable only if real tasks need it.
-_MAX_WEB_LOOKUP_STREAK = 12
-_WEB_LOOKUP_TOOLS = frozenset({"web_search", "web_fetch"})
+_TOOL_REPEAT_WARNING_AT = 3
+_TOOL_REPEAT_BLOCK_AT = 5
+_POLLING_REPEAT_WARNING_AT = 5
+_POLLING_REPEAT_BLOCK_AT = 10
+_POLLING_TOOLS = frozenset(
+    {"list_exec_sessions", "stock_research_status", "terminal_output", "write_stdin"}
+)
+_PAGINATION_ARGUMENTS = frozenset({"cursor", "offset", "pages"})
 _GENERATED_MEDIA_TOOLS = frozenset({"generate_image", "generate_video"})
-_LOOP_DETECTED_MESSAGE = (
-    "I stopped a repeating tool loop and could not produce a reliable final answer "
-    "from the results collected so far."
+_TOOL_REPEAT_WARNING = (
+    "Harness notice: this exact tool call returned the same result repeatedly. "
+    "Use the existing result, change the arguments, choose another tool, or answer with the limitation."
+)
+_TOOL_PATH_BLOCKED = (
+    "Error: this unchanged tool-call path is blocked for the rest of the current turn. "
+    "Change the arguments, use another tool, or answer from the results already collected."
 )
 _INLINE_CHART_BLOCK_RE = re.compile(r"```chart[ \t]*\r?\n.*?\r?\n```", re.DOTALL | re.IGNORECASE)
 
@@ -113,10 +121,18 @@ def _definition_matches(definition: Any, names: set[str]) -> bool:
     return isinstance(name, str) and name in names
 
 
-_COMPACTABLE_TOOLS = frozenset({
-    "read_file", "exec", "grep", "find_files",
-    "web_search", "web_fetch", "list_dir", "list_exec_sessions",
-})
+_COMPACTABLE_TOOLS = frozenset(
+    {
+        "read_file",
+        "exec",
+        "grep",
+        "find_files",
+        "web_search",
+        "web_fetch",
+        "list_dir",
+        "list_exec_sessions",
+    }
+)
 _BACKFILL_CONTENT = "[Tool result unavailable — call was interrupted or lost]"
 
 
@@ -138,6 +154,7 @@ class AgentRunSpec:
     concurrent_tools: bool = False
     fail_on_tool_error: bool = False
     max_tool_failures: int = 3
+    repeat_guard_enabled: bool = False
     workspace: Path | None = None
     session_key: str | None = None
     context_window_tokens: int | None = None
@@ -173,7 +190,7 @@ class AgentRunner:
         self.provider = provider
 
     @staticmethod
-    def _generated_media_paths(result: Any) -> list[str]:
+    def _generated_media_outputs(result: Any) -> list[dict[str, Any]]:
         payload = result if isinstance(result, dict) else None
         if payload is None and isinstance(result, str):
             try:
@@ -185,32 +202,46 @@ class AgentRunner:
         artifacts = payload.get("artifacts") or payload.get("output_files") or []
         if not isinstance(artifacts, list):
             return []
-        paths: list[str] = []
+        outputs: list[dict[str, Any]] = []
         for artifact in artifacts:
             if not isinstance(artifact, dict):
                 continue
             path = artifact.get("path") or artifact.get("local_path") or artifact.get("saved_to")
-            if isinstance(path, str) and path and path not in paths:
-                paths.append(path)
-        return paths
+            if (
+                isinstance(path, str)
+                and path
+                and all(existing.get("path") != path for existing in outputs)
+            ):
+                outputs.append({**artifact, "path": path})
+        return outputs
 
     async def _register_generated_media(
         self,
         spec: AgentRunSpec,
         tool_name: str,
+        tool_call_id: str,
         result: Any,
     ) -> None:
         if tool_name not in _GENERATED_MEDIA_TOOLS:
             return
-        paths = self._generated_media_paths(result)
-        if not paths:
+        outputs = self._generated_media_outputs(result)
+        if not outputs:
             return
         try:
             deliver_file = spec.tools.get("deliver_file")
             if deliver_file is None:
-                logger.warning("Generated media could not be registered: deliver_file is unavailable")
+                logger.warning(
+                    "Generated media could not be registered: deliver_file is unavailable"
+                )
                 return
-            delivery = await deliver_file.execute(paths=paths)
+            source_ids = [
+                str(output.get("id") or f"{tool_call_id}:{index}")
+                for index, output in enumerate(outputs)
+            ]
+            delivery = await deliver_file.execute(
+                paths=[str(output["path"]) for output in outputs],
+                _artifact_source_ids=source_ids,
+            )
             if isinstance(delivery, str) and delivery.startswith("Error"):
                 logger.warning("Generated media could not be registered: {}", delivery)
         except Exception:
@@ -241,11 +272,7 @@ class AgentRunner:
     ) -> None:
         """Append injected user messages while preserving role alternation."""
         for injection in injections:
-            if (
-                messages
-                and injection.get("role") == "user"
-                and messages[-1].get("role") == "user"
-            ):
+            if messages and injection.get("role") == "user" and messages[-1].get("role") == "user":
                 merged = dict(messages[-1])
                 merged["content"] = cls._merge_message_content(
                     merged.get("content"),
@@ -295,7 +322,10 @@ class AgentRunner:
         self._append_injected_messages(messages, injections)
         logger.debug(
             "Injected {} follow-up message(s) {} ({}/{})",
-            len(injections), phase, injection_cycles, _MAX_INJECTION_CYCLES,
+            len(injections),
+            phase,
+            injection_cycles,
+            _MAX_INJECTION_CYCLES,
         )
         return True, injection_cycles
 
@@ -311,12 +341,9 @@ class AgentRunner:
             return []
         try:
             signature = inspect.signature(spec.injection_callback)
-            accepts_limit = (
-                "limit" in signature.parameters
-                or any(
-                    parameter.kind is inspect.Parameter.VAR_KEYWORD
-                    for parameter in signature.parameters.values()
-                )
+            accepts_limit = "limit" in signature.parameters or any(
+                parameter.kind is inspect.Parameter.VAR_KEYWORD
+                for parameter in signature.parameters.values()
             )
             if accepts_limit:
                 items = await spec.injection_callback(limit=_MAX_INJECTIONS_PER_TURN)
@@ -339,7 +366,9 @@ class AgentRunner:
             dropped = len(injected_messages) - _MAX_INJECTIONS_PER_TURN
             logger.warning(
                 "Injection callback returned {} messages, capping to {} ({} dropped)",
-                len(injected_messages), _MAX_INJECTIONS_PER_TURN, dropped,
+                len(injected_messages),
+                _MAX_INJECTIONS_PER_TURN,
+                dropped,
             )
             injected_messages = injected_messages[:_MAX_INJECTIONS_PER_TURN]
         return injected_messages
@@ -353,19 +382,30 @@ class AgentRunner:
         error: str | None = None
         stop_reason = "completed"
         tool_events: list[dict[str, str]] = []
-        external_lookup_counts: dict[str, int] = {}
-        # Per-turn throttle for repeated attempts against the same outside target.
         workspace_violation_counts: dict[str, int] = {}
         # Per-turn consecutive-failure counter for tool circuit-breaking.
         tool_failure_counts: dict[str, int] = {}
         disabled_tools: set[str] = set()
-        recent_tool_steps: list[str] = []
+        last_tool_step_signature: str | None = None
+        repeated_tool_step_count = 0
+        blocked_tool_call_signature: str | None = None
+        office_edit_failures: dict[str, int] = {}
+        blocked_office_edits: set[str] = set()
         inline_chart_blocks: list[str] = []
-        web_lookup_streak = 0
         empty_content_retries = 0
         length_recovery_count = 0
         had_injections = False
         injection_cycles = 0
+
+        def reset_repeat_guard() -> None:
+            nonlocal last_tool_step_signature
+            nonlocal repeated_tool_step_count
+            nonlocal blocked_tool_call_signature
+            last_tool_step_signature = None
+            repeated_tool_step_count = 0
+            blocked_tool_call_signature = None
+            office_edit_failures.clear()
+            blocked_office_edits.clear()
 
         for iteration in range(spec.max_iterations):
             try:
@@ -395,7 +435,10 @@ class AgentRunner:
             context = AgentHookContext(iteration=iteration, messages=messages)
             await hook.before_iteration(context)
             response = await self._request_model(
-                spec, messages_for_model, hook, context,
+                spec,
+                messages_for_model,
+                hook,
+                context,
                 disabled_tools=disabled_tools or None,
             )
             raw_usage = self._usage_dict(response.usage)
@@ -420,9 +463,15 @@ class AgentRunner:
                 if hook.wants_streaming():
                     await hook.on_stream_end(context, resuming=True)
 
+                from mona.agent.tool_privacy import redact_persisted_tool_call
+
+                persisted_tool_calls = [
+                    redact_persisted_tool_call(tc.to_openai_tool_call())
+                    for tc in response.tool_calls
+                ]
                 assistant_message = build_assistant_message(
                     response.content or "",
-                    tool_calls=[tc.to_openai_tool_call() for tc in response.tool_calls],
+                    tool_calls=persisted_tool_calls,
                     reasoning_content=response.reasoning_content,
                     thinking_blocks=response.thinking_blocks,
                 )
@@ -436,17 +485,36 @@ class AgentRunner:
                         "model": spec.model,
                         "assistant_message": assistant_message,
                         "completed_tool_results": [],
-                        "pending_tool_calls": [tc.to_openai_tool_call() for tc in response.tool_calls],
+                        "pending_tool_calls": persisted_tool_calls,
                     },
                 )
 
                 await hook.before_execute_tools(context)
 
+                partial_results: dict[str, dict[str, Any]] = {}
+
+                async def checkpoint_completed(call: ToolCallRequest, value: Any) -> None:
+                    partial_results[call.id] = {
+                        "role": "tool", "tool_call_id": call.id, "name": call.name,
+                        "content": self._normalize_tool_result(spec, call.id, call.name, value),
+                    }
+                    await self._emit_checkpoint(spec, {
+                        "phase": "tools_partial", "iteration": iteration, "model": spec.model,
+                        "assistant_message": assistant_message,
+                        "completed_tool_results": [partial_results[tc.id] for tc in response.tool_calls if tc.id in partial_results],
+                        "pending_tool_calls": [tc for tc in persisted_tool_calls if tc["id"] not in partial_results],
+                    })
+
                 results, new_events, fatal_error = await self._execute_tools(
                     spec,
                     response.tool_calls,
-                    external_lookup_counts,
                     workspace_violation_counts,
+                    disabled_tools=disabled_tools,
+                    blocked_tool_call_signature=(
+                        blocked_tool_call_signature if spec.repeat_guard_enabled else None
+                    ),
+                    blocked_office_edits=blocked_office_edits,
+                    checkpoint_completed=checkpoint_completed if spec.checkpoint_callback else None,
                 )
                 tool_events.extend(new_events)
                 context.tool_results = list(results)
@@ -459,7 +527,7 @@ class AgentRunner:
                     spec=spec,
                 )
                 completed_tool_results: list[dict[str, Any]] = []
-                for tool_call, result in zip(response.tool_calls, results):
+                for tool_call, result, event in zip(response.tool_calls, results, new_events):
                     if tool_call.name == "chart":
                         for block in _extract_inline_chart_blocks(result):
                             if block not in inline_chart_blocks:
@@ -470,6 +538,49 @@ class AgentRunner:
                         tool_call.name,
                         result,
                     )
+                    edit_key = self._office_edit_key(tool_call)
+                    receipt = self._structured_tool_receipt(result)
+                    if spec.repeat_guard_enabled and edit_key and receipt:
+                        conflict = isinstance(receipt.get("error"), dict) and receipt["error"].get("code") == "VERSION_CONFLICT"
+                        if conflict or (receipt.get("ok") is True and receipt.get("unchanged") is not True):
+                            office_edit_failures.pop(edit_key, None)
+                            blocked_office_edits.discard(edit_key)
+                        elif receipt.get("ok") is False or receipt.get("unchanged") is True:
+                            count = office_edit_failures.get(edit_key, 0) + 1
+                            office_edit_failures[edit_key] = count
+                            if count == _TOOL_REPEAT_WARNING_AT:
+                                normalized_result = self._append_tool_guidance(normalized_result,
+                                    "Office edits to this target have made no progress. Read the supported fields and exact skill example; stop guessing property names.")
+                            elif count >= _TOOL_REPEAT_BLOCK_AT:
+                                blocked_office_edits.add(edit_key)
+                                normalized_result = self._append_tool_guidance(normalized_result,
+                                    "Further edits to this target are paused for this turn. Inspection remains available; explain the limitation using the actual errors.")
+                    if spec.repeat_guard_enabled and event.get("detail") != "repeating tool path blocked":
+                        step_signature = self._tool_step_signature(tool_call, result)
+                        if step_signature == last_tool_step_signature:
+                            repeated_tool_step_count += 1
+                        else:
+                            last_tool_step_signature = step_signature
+                            repeated_tool_step_count = 1
+                            blocked_tool_call_signature = None
+                        warning_at, block_at = self._tool_repeat_thresholds(tool_call)
+                        if repeated_tool_step_count == warning_at:
+                            normalized_result = self._append_tool_guidance(
+                                normalized_result,
+                                _TOOL_REPEAT_WARNING,
+                            )
+                        elif repeated_tool_step_count == block_at:
+                            blocked_tool_call_signature = self._tool_call_signature(tool_call)
+                            normalized_result = self._append_tool_guidance(
+                                normalized_result,
+                                _TOOL_PATH_BLOCKED,
+                            )
+                            logger.warning(
+                                "Blocked repeating tool path for {} after {} unchanged results: {}",
+                                spec.session_key or "default",
+                                repeated_tool_step_count,
+                                tool_call.name,
+                            )
                     tool_message = {
                         "role": "tool",
                         "tool_call_id": tool_call.id,
@@ -478,15 +589,6 @@ class AgentRunner:
                     }
                     messages.append(tool_message)
                     completed_tool_results.append(tool_message)
-                    recent_tool_steps.append(self._tool_step_signature(
-                        tool_call,
-                        result,
-                    ))
-                    del recent_tool_steps[:-9]
-                    if tool_call.name in _WEB_LOOKUP_TOOLS:
-                        web_lookup_streak += 1
-                    else:
-                        web_lookup_streak = 0
                 if fatal_error is not None:
                     error = f"Error: {type(fatal_error).__name__}: {fatal_error}"
                     final_content = error
@@ -497,11 +599,15 @@ class AgentRunner:
                     context.stop_reason = stop_reason
                     await hook.after_iteration(context)
                     should_continue, injection_cycles = await self._try_drain_injections(
-                        spec, messages, None, injection_cycles,
+                        spec,
+                        messages,
+                        None,
+                        injection_cycles,
                         phase="after tool error",
                     )
                     if should_continue:
                         had_injections = True
+                        reset_repeat_guard()
                         continue
                     break
                 await self._emit_checkpoint(
@@ -519,35 +625,15 @@ class AgentRunner:
                 length_recovery_count = 0
                 # Checkpoint 1: drain injections after tools, before next LLM call
                 _drained, injection_cycles = await self._try_drain_injections(
-                    spec, messages, None, injection_cycles,
+                    spec,
+                    messages,
+                    None,
+                    injection_cycles,
                     phase="after tool execution",
                 )
                 if _drained:
                     had_injections = True
-                    recent_tool_steps.clear()
-                    web_lookup_streak = 0
-                loop_reason = self._tool_loop_reason(
-                    recent_tool_steps,
-                    web_lookup_streak,
-                )
-                if loop_reason and not _drained:
-                    logger.warning(
-                        "Tool loop detected for {}: {}",
-                        spec.session_key or "default",
-                        loop_reason,
-                    )
-                    stop_reason = "loop_detected"
-                    final_content, finalization_usage = await self._finalize_without_tools(
-                        spec,
-                        messages,
-                    )
-                    self._accumulate_usage(usage, finalization_usage)
-                    final_content = final_content or _LOOP_DETECTED_MESSAGE
-                    self._append_final_message(messages, final_content)
-                    context.final_content = final_content
-                    context.stop_reason = stop_reason
-                    await hook.after_iteration(context)
-                    break
+                    reset_repeat_guard()
                 await hook.after_iteration(context)
                 continue
 
@@ -602,11 +688,13 @@ class AgentRunner:
                     )
                     if hook.wants_streaming():
                         await hook.on_stream_end(context, resuming=True)
-                    messages.append(build_assistant_message(
-                        clean,
-                        reasoning_content=response.reasoning_content,
-                        thinking_blocks=response.thinking_blocks,
-                    ))
+                    messages.append(
+                        build_assistant_message(
+                            clean,
+                            reasoning_content=response.reasoning_content,
+                            thinking_blocks=response.thinking_blocks,
+                        )
+                    )
                     messages.append(build_length_recovery_message())
                     await hook.after_iteration(context)
                     continue
@@ -628,12 +716,16 @@ class AgentRunner:
             # If injections are found we keep the stream alive (resuming=True)
             # so streaming channels don't prematurely finalize the card.
             should_continue, injection_cycles = await self._try_drain_injections(
-                spec, messages, assistant_message, injection_cycles,
+                spec,
+                messages,
+                assistant_message,
+                injection_cycles,
                 phase="after final response",
                 iteration=iteration,
             )
             if should_continue:
                 had_injections = True
+                reset_repeat_guard()
 
             if hook.wants_streaming():
                 await hook.on_stream_end(context, resuming=should_continue)
@@ -652,11 +744,15 @@ class AgentRunner:
                 context.stop_reason = stop_reason
                 await hook.after_iteration(context)
                 should_continue, injection_cycles = await self._try_drain_injections(
-                    spec, messages, None, injection_cycles,
+                    spec,
+                    messages,
+                    None,
+                    injection_cycles,
                     phase="after LLM error",
                 )
                 if should_continue:
                     had_injections = True
+                    reset_repeat_guard()
                     continue
                 break
             if is_blank_text(clean):
@@ -669,19 +765,26 @@ class AgentRunner:
                 context.stop_reason = stop_reason
                 await hook.after_iteration(context)
                 should_continue, injection_cycles = await self._try_drain_injections(
-                    spec, messages, None, injection_cycles,
+                    spec,
+                    messages,
+                    None,
+                    injection_cycles,
                     phase="after empty response",
                 )
                 if should_continue:
                     had_injections = True
+                    reset_repeat_guard()
                     continue
                 break
 
-            messages.append(assistant_message or build_assistant_message(
-                clean,
-                reasoning_content=response.reasoning_content,
-                thinking_blocks=response.thinking_blocks,
-            ))
+            messages.append(
+                assistant_message
+                or build_assistant_message(
+                    clean,
+                    reasoning_content=response.reasoning_content,
+                    thinking_blocks=response.thinking_blocks,
+                )
+            )
             await self._emit_checkpoint(
                 spec,
                 {
@@ -722,7 +825,10 @@ class AgentRunner:
             # We ignore should_continue here because the for-loop has already
             # exhausted all iterations.
             drained_after_max_iterations, injection_cycles = await self._try_drain_injections(
-                spec, messages, None, injection_cycles,
+                spec,
+                messages,
+                None,
+                injection_cycles,
                 phase="after max_iterations",
             )
             if drained_after_max_iterations:
@@ -785,10 +891,7 @@ class AgentRunner:
 
         tool_defs = spec.tools.get_definitions()
         if disabled_tools:
-            tool_defs = [
-                d for d in tool_defs
-                if not _definition_matches(d, disabled_tools)
-            ]
+            tool_defs = [d for d in tool_defs if not _definition_matches(d, disabled_tools)]
         kwargs = self._build_request_kwargs(
             spec,
             messages,
@@ -805,10 +908,10 @@ class AgentRunner:
         progress_state: dict[str, bool] | None = None
         live_file_edits: StreamingFileEditTracker | None = None
 
-        if (
-            spec.progress_callback is not None
-            and on_progress_accepts_file_edit_events(spec.progress_callback)
+        if spec.progress_callback is not None and on_progress_accepts_file_edit_events(
+            spec.progress_callback
         ):
+
             async def _emit_live_file_edits(events: list[dict[str, Any]]) -> None:
                 await invoke_file_edit_progress(spec.progress_callback, events)
 
@@ -823,6 +926,7 @@ class AgentRunner:
                 await live_file_edits.update(delta)
 
         if wants_streaming:
+
             async def _stream(delta: str) -> None:
                 if delta:
                     context.streamed_content = True
@@ -852,7 +956,7 @@ class AgentRunner:
                 prev_clean = strip_think(stream_buf)
                 stream_buf += delta
                 new_clean = strip_think(stream_buf)
-                incremental = new_clean[len(prev_clean):]
+                incremental = new_clean[len(prev_clean) :]
 
                 if await think_extractor.feed(stream_buf, hook.emit_reasoning):
                     context.streamed_reasoning = True
@@ -878,10 +982,13 @@ class AgentRunner:
         # not killed just because total elapsed time exceeded mona_LLM_TIMEOUT_S.
         # Workflow steps opt into a finite per-call wall-clock cap as well.
         is_streaming = wants_streaming or wants_progress_streaming
-        outer_timeout_s = None if is_streaming and not spec.enforce_llm_timeout_for_streaming else timeout_s
+        outer_timeout_s = (
+            None if is_streaming and not spec.enforce_llm_timeout_for_streaming else timeout_s
+        )
         try:
             response = (
-                await coro if outer_timeout_s is None
+                await coro
+                if outer_timeout_s is None
                 else await asyncio.wait_for(coro, timeout=outer_timeout_s)
             )
             if live_file_edits is not None:
@@ -949,6 +1056,49 @@ class AgentRunner:
             return None, {}
 
     @staticmethod
+    def _structured_tool_receipt(result: Any) -> dict[str, Any] | None:
+        if isinstance(result, dict):
+            return result
+        if isinstance(result, str):
+            try:
+                parsed = json.loads(result)
+                return parsed if isinstance(parsed, dict) else None
+            except (ValueError, TypeError):
+                return None
+        return None
+
+    @staticmethod
+    def _office_edit_key(call: ToolCallRequest) -> str | None:
+        if call.name != "office" or call.arguments.get("action") not in {"apply", "batch"}:
+            return None
+        ops = call.arguments.get("operations")
+        if isinstance(ops, str):
+            try:
+                ops = json.loads(ops)
+            except ValueError:
+                return None
+        targets: set[str] = set()
+        for operation in ops if isinstance(ops, list) else []:
+            if not isinstance(operation, dict):
+                continue
+            payload = operation.get("payload") or {}
+            if not isinstance(payload, dict):
+                continue
+            if operation.get("op") == "slide_apply_txn":
+                for op in payload.get("ops") or []:
+                    target = op.get("target", {}) if isinstance(op, dict) else {}
+                    targets.add(json.dumps(target, sort_keys=True, default=str))
+            else:
+                target = {key: payload[key] for key in
+                    ("blockId", "sheet", "range", "cell") if key in payload}
+                if "slideId" in payload:
+                    target["slide"] = payload["slideId"]
+                if "elementId" in payload:
+                    target["el"] = payload["elementId"]
+                targets.add(json.dumps(target, sort_keys=True))
+        return json.dumps([call.arguments.get("session_id"), sorted(targets)]) if targets else None
+
+    @staticmethod
     def _tool_step_signature(tool_call: ToolCallRequest, result: Any) -> str:
         payload = json.dumps(
             [tool_call.name, tool_call.arguments, result],
@@ -960,14 +1110,35 @@ class AgentRunner:
         return hashlib.sha256(payload.encode()).hexdigest()
 
     @staticmethod
-    def _tool_loop_reason(recent_steps: list[str], web_lookup_streak: int) -> str | None:
-        for period in (1, 2, 3):
-            tail = recent_steps[-period * 3:]
-            if len(tail) == period * 3 and tail == tail[:period] * 3:
-                return f"tool sequence with period {period} repeated 3 times"
-        if web_lookup_streak >= _MAX_WEB_LOOKUP_STREAK:
-            return f"{web_lookup_streak} consecutive web lookups"
-        return None
+    def _tool_call_signature(tool_call: ToolCallRequest) -> str:
+        payload = json.dumps(
+            [tool_call.name, tool_call.arguments],
+            sort_keys=True,
+            ensure_ascii=False,
+            default=str,
+            separators=(",", ":"),
+        )
+        return hashlib.sha256(payload.encode()).hexdigest()
+
+    @staticmethod
+    def _tool_repeat_thresholds(tool_call: ToolCallRequest) -> tuple[int, int]:
+        is_polling = tool_call.name in _POLLING_TOOLS or (
+            tool_call.name == "scientific_tool"
+            and str(tool_call.arguments.get("action") or "").lower() == "status"
+        )
+        is_pagination = any(key in tool_call.arguments for key in _PAGINATION_ARGUMENTS)
+        if is_polling or is_pagination:
+            return _POLLING_REPEAT_WARNING_AT, _POLLING_REPEAT_BLOCK_AT
+        return _TOOL_REPEAT_WARNING_AT, _TOOL_REPEAT_BLOCK_AT
+
+    @staticmethod
+    def _append_tool_guidance(content: Any, guidance: str) -> Any:
+        marker = f"[{guidance}]"
+        if isinstance(content, str):
+            return f"{content}\n\n{marker}"
+        if isinstance(content, list):
+            return [*content, {"type": "text", "text": marker}]
+        return f"{json.dumps(content, ensure_ascii=False, default=str)}\n\n{marker}"
 
     @staticmethod
     def _usage_dict(usage: dict[str, Any] | None) -> dict[str, int]:
@@ -997,26 +1168,39 @@ class AgentRunner:
         self,
         spec: AgentRunSpec,
         tool_calls: list[ToolCallRequest],
-        external_lookup_counts: dict[str, int],
         workspace_violation_counts: dict[str, int],
+        *,
+        disabled_tools: set[str] | None = None,
+        blocked_tool_call_signature: str | None = None,
+        blocked_office_edits: set[str] | None = None,
+        checkpoint_completed: Any | None = None,
     ) -> tuple[list[Any], list[dict[str, str]], BaseException | None]:
         batches = self._partition_tool_batches(spec, tool_calls)
         tool_results: list[tuple[Any, dict[str, str], BaseException | None]] = []
+        async def execute(call: ToolCallRequest):
+            outcome = await self._run_tool(
+                spec, call, workspace_violation_counts,
+                disabled_tools=disabled_tools,
+                blocked_tool_call_signature=blocked_tool_call_signature,
+                blocked_office_edits=blocked_office_edits,
+            )
+            if checkpoint_completed is not None:
+                await checkpoint_completed(call, outcome[0])
+            return outcome
+
         for batch in batches:
             if spec.concurrent_tools and len(batch) > 1:
-                batch_results = await asyncio.gather(*(
-                    self._run_tool(
-                        spec, tool_call, external_lookup_counts, workspace_violation_counts,
+                batch_results = await asyncio.gather(
+                    *(
+                        execute(tool_call)
+                        for tool_call in batch
                     )
-                    for tool_call in batch
-                ))
+                )
                 tool_results.extend(batch_results)
             else:
                 batch_results = []
                 for tool_call in batch:
-                    result = await self._run_tool(
-                        spec, tool_call, external_lookup_counts, workspace_violation_counts,
-                    )
+                    result = await execute(tool_call)
                     tool_results.append(result)
                     batch_results.append(result)
 
@@ -1052,20 +1236,29 @@ class AgentRunner:
         # this iteration, so repeated calls to the same tool in one batch count
         # as a single failure (not N).
         status_by_name: dict[str, str] = {}
+        non_retryable: set[str] = set()
         for event in events:
             name = event.get("name")
             if not name:
                 continue
             if event.get("status") == "error":
                 status_by_name[name] = "error"
+                if event.get("retryable") == "false":
+                    non_retryable.add(name)
             elif name not in status_by_name:
                 status_by_name[name] = event.get("status", "ok")
         newly_disabled: list[str] = []
         for name, status in status_by_name.items():
+            if name == "office":
+                continue  # Per-target editing guard keeps inspection and conflict recovery available.
             if name in disabled:
                 continue
             if status == "error":
-                count = failure_counts.get(name, 0) + 1
+                count = (
+                    spec.max_tool_failures
+                    if name in non_retryable
+                    else failure_counts.get(name, 0) + 1
+                )
                 failure_counts[name] = count
                 if count >= spec.max_tool_failures:
                     disabled.add(name)
@@ -1083,26 +1276,41 @@ class AgentRunner:
         self,
         spec: AgentRunSpec,
         tool_call: ToolCallRequest,
-        external_lookup_counts: dict[str, int],
         workspace_violation_counts: dict[str, int],
+        *,
+        disabled_tools: set[str] | None = None,
+        blocked_tool_call_signature: str | None = None,
+        blocked_office_edits: set[str] | None = None,
     ) -> tuple[Any, dict[str, str], BaseException | None]:
         hint = "\n\n[Analyze the error above and try a different approach.]"
-        lookup_error = repeated_external_lookup_error(
-            tool_call.name,
-            tool_call.arguments,
-            external_lookup_counts,
-        )
-        if lookup_error:
+        if blocked_office_edits and self._office_edit_key(tool_call) in blocked_office_edits:
+            value = json.dumps({"ok": False, "error": {
+                "code": "NO_PROGRESS", "message": "Edits to this Office target are paused for this turn after repeated failures. Inspect its capabilities or explain the limitation.",
+                "retryable": False,
+            }})
+            return value, {"name": tool_call.name, "status": "error", "detail": "Office edit target blocked"}, None
+        if disabled_tools and tool_call.name in disabled_tools:
+            value = json.dumps({"ok": False, "error": {
+                "code": "TOOL_DISABLED",
+                "message": f"Tool {tool_call.name} is disabled for this turn after repeated failures.",
+                "retryable": False,
+            }})
+            return value, {
+                "name": tool_call.name,
+                "status": "error",
+                "detail": "Tool disabled after repeated failures",
+                "retryable": "false",
+            }, None
+        if (
+            blocked_tool_call_signature is not None
+            and self._tool_call_signature(tool_call) == blocked_tool_call_signature
+        ):
             event = {
                 "name": tool_call.name,
                 "status": "error",
-                "detail": "repeated external lookup blocked",
+                "detail": "repeating tool path blocked",
             }
-            # Throttling is a guidance signal, not a tool failure: the model
-            # is told to answer with the results it already has, so even
-            # fail_on_tool_error runs must get the chance to recover instead
-            # of being killed mid-task.
-            return lookup_error + hint, event, None
+            return _TOOL_PATH_BLOCKED, event, None
         prepare_call = getattr(spec.tools, "prepare_call", None)
         tool, params, prep_error = None, tool_call.arguments, None
         if callable(prepare_call):
@@ -1125,8 +1333,10 @@ class AgentRunner:
             )
             if handled is not None:
                 return handled
-            return prep_error + hint, event, (
-                RuntimeError(prep_error) if spec.fail_on_tool_error else None
+            return (
+                prep_error + hint,
+                event,
+                (RuntimeError(prep_error) if spec.fail_on_tool_error else None),
             )
         emit_file_edit_events = (
             spec.progress_callback is not None
@@ -1147,10 +1357,13 @@ class AgentRunner:
         if file_edit_trackers and progress_callback is not None:
             await invoke_file_edit_progress(
                 progress_callback,
-                [build_file_edit_start_event(
-                    file_edit_tracker,
-                    params if isinstance(params, dict) else None,
-                ) for file_edit_tracker in file_edit_trackers],
+                [
+                    build_file_edit_start_event(
+                        file_edit_tracker,
+                        params if isinstance(params, dict) else None,
+                    )
+                    for file_edit_tracker in file_edit_trackers
+                ],
             )
         try:
             if tool is not None:
@@ -1188,6 +1401,16 @@ class AgentRunner:
                 return payload, event, exc
             return payload, event, None
 
+        receipt = self._structured_tool_receipt(result)
+        if receipt and (receipt.get("ok") is False or receipt.get("isError") is True):
+            details = receipt.get("error") or receipt.get("message") or "Tool reported failure"
+            message = str(details.get("message") or details.get("code")) if isinstance(details, dict) else str(details)
+            conflict = isinstance(details, dict) and details.get("code") == "VERSION_CONFLICT"
+            event = {"name": tool_call.name, "status": "conflict" if conflict else "error", "detail": message[:120]}
+            if isinstance(details, dict) and details.get("retryable") is False:
+                event["retryable"] = "false"
+            return result, event, RuntimeError(message) if spec.fail_on_tool_error and not conflict else None
+
         if isinstance(result, str) and result.startswith("Error"):
             if file_edit_trackers and progress_callback is not None:
                 await invoke_file_edit_progress(
@@ -1218,13 +1441,16 @@ class AgentRunner:
         if file_edit_trackers and progress_callback is not None:
             await invoke_file_edit_progress(
                 progress_callback,
-                [build_file_edit_end_event(
-                    file_edit_tracker,
-                    params if isinstance(params, dict) else None,
-                ) for file_edit_tracker in file_edit_trackers],
+                [
+                    build_file_edit_end_event(
+                        file_edit_tracker,
+                        params if isinstance(params, dict) else None,
+                    )
+                    for file_edit_tracker in file_edit_trackers
+                ],
             )
 
-        await self._register_generated_media(spec, tool_call.name, result)
+        await self._register_generated_media(spec, tool_call.name, tool_call.id, result)
 
         detail = "" if result is None else str(result)
         detail = detail.replace("\n", " ").strip()
@@ -1352,7 +1578,11 @@ class AgentRunner:
 
     @staticmethod
     def _append_model_error_placeholder(messages: list[dict[str, Any]]) -> None:
-        if messages and messages[-1].get("role") == "assistant" and not messages[-1].get("tool_calls"):
+        if (
+            messages
+            and messages[-1].get("role") == "assistant"
+            and not messages[-1].get("tool_calls")
+        ):
             return
         messages.append(build_assistant_message(_PERSISTED_MODEL_ERROR_PLACEHOLDER))
 
@@ -1364,6 +1594,8 @@ class AgentRunner:
         result: Any,
     ) -> Any:
         result = ensure_nonempty_tool_result(tool_name, result)
+        if isinstance(result, str):
+            result = compress_tool_result(result, tool_name=tool_name)
         try:
             content = maybe_persist_tool_result(
                 spec.workspace,
@@ -1379,10 +1611,6 @@ class AgentRunner:
                 spec.session_key or "default",
             )
             content = result
-        if isinstance(content, str):
-            compressed = compress_tool_result(content, tool_name=tool_name)
-            if compressed is not content and len(compressed) < len(content):
-                content = compressed
         if isinstance(content, str) and len(content) > spec.max_tool_result_chars:
             return truncate_text(content, spec.max_tool_result_chars)
         return content
@@ -1445,12 +1673,15 @@ class AgentRunner:
             insert_at = assistant_idx + 1 + offset
             while insert_at < len(updated) and updated[insert_at].get("role") == "tool":
                 insert_at += 1
-            updated.insert(insert_at, {
-                "role": "tool",
-                "tool_call_id": call_id,
-                "name": name,
-                "content": _BACKFILL_CONTENT,
-            })
+            updated.insert(
+                insert_at,
+                {
+                    "role": "tool",
+                    "tool_call_id": call_id,
+                    "name": name,
+                    "content": _BACKFILL_CONTENT,
+                },
+            )
             offset += 1
         return updated
 
@@ -1509,9 +1740,13 @@ class AgentRunner:
         if not messages or not spec.context_window_tokens:
             return messages
 
-        provider_max_tokens = getattr(getattr(self.provider, "generation", None), "max_tokens", 4096)
-        max_output = spec.max_tokens if isinstance(spec.max_tokens, int) else (
-            provider_max_tokens if isinstance(provider_max_tokens, int) else 4096
+        provider_max_tokens = getattr(
+            getattr(self.provider, "generation", None), "max_tokens", 4096
+        )
+        max_output = (
+            spec.max_tokens
+            if isinstance(spec.max_tokens, int)
+            else (provider_max_tokens if isinstance(provider_max_tokens, int) else 4096)
         )
         budget = spec.context_block_limit or (
             spec.context_window_tokens - max_output - _SNIP_SAFETY_BUFFER

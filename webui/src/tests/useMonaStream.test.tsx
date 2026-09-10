@@ -3,7 +3,7 @@ import type { ReactNode } from "react";
 import { describe, expect, it, vi } from "vitest";
 
 import { useMonaStream } from "@/hooks/useMonaStream";
-import type { InboundEvent, GoalStateWsPayload } from "@/lib/types";
+import type { InboundEvent, GoalStateWsPayload, TaskPlanWsPayload } from "@/lib/types";
 import { ClientProvider } from "@/providers/ClientProvider";
 
 const EMPTY_MESSAGES: import("@/lib/types").UIMessage[] = [];
@@ -12,6 +12,8 @@ function fakeClient() {
   const handlers = new Map<string, Set<(ev: InboundEvent) => void>>();
   const runStartedAtByChatId = new Map<string, number>();
   const goalStateByChatId = new Map<string, GoalStateWsPayload>();
+  const taskPlanByChatId = new Map<string, TaskPlanWsPayload>();
+  const taskIdByChatId = new Map<string, string>();
 
   function recordGoalStatusForRunStrip(chatId: string, ev: InboundEvent) {
     if (ev.event !== "goal_status") return;
@@ -45,6 +47,9 @@ function fakeClient() {
       getGoalState(chatId: string) {
         return goalStateByChatId.get(chatId);
       },
+      getTaskPlan(chatId: string) {
+        return taskPlanByChatId.get(chatId);
+      },
       onChat(chatId: string, h: (ev: InboundEvent) => void) {
         let set = handlers.get(chatId);
         if (!set) {
@@ -64,6 +69,15 @@ function fakeClient() {
     emit(chatId: string, ev: InboundEvent) {
       recordGoalStatusForRunStrip(chatId, ev);
       recordGoalStateSnapshot(chatId, ev);
+      if (ev.event === "artifact_task_started") {
+        taskIdByChatId.set(chatId, ev.task_id);
+        taskPlanByChatId.delete(chatId);
+      } else if (ev.event === "task_plan") {
+        const currentTaskId = taskIdByChatId.get(chatId);
+        if (!currentTaskId || !ev.task_plan.task_id || ev.task_plan.task_id === currentTaskId) {
+          taskPlanByChatId.set(chatId, ev.task_plan);
+        }
+      }
       const set = handlers.get(chatId);
       set?.forEach((h) => h(ev));
     },
@@ -467,6 +481,7 @@ describe("useMonaStream", () => {
     expect(result.current.messages[0].content).toBe(
       'web_search({"query":"hermes-agent GitHub stars","count":8})',
     );
+    expect(result.current.messages[0].toolEvents).toHaveLength(2);
   });
 
   it("dedupes finish-phase tool events after their start trace", () => {
@@ -1211,6 +1226,27 @@ describe("useMonaStream", () => {
     expect(result.current.messages[0].content).toBe("fine");
   });
 
+  it("attaches final task-plan snapshots to assistant history messages", () => {
+    const fake = fakeClient();
+    const { result } = renderHook(() => useMonaStream("chat-plan-message", EMPTY_MESSAGES), {
+      wrapper: wrap(fake.client),
+    });
+    act(() => {
+      fake.emit("chat-plan-message", {
+        event: "message",
+        chat_id: "chat-plan-message",
+        text: "done",
+        task_plan: {
+          task_id: "task-1",
+          revision: 2,
+          steps: [{ id: "one", step: "Deliver", status: "completed" }],
+          source: "ai",
+        },
+      });
+    });
+    expect(result.current.messages[0].taskPlan?.steps[0].step).toBe("Deliver");
+  });
+
   it("sends uploaded document paths without requiring message text", () => {
     const fake = fakeClient();
     const { result } = renderHook(() => useMonaStream("chat-doc", EMPTY_MESSAGES), {
@@ -1226,6 +1262,89 @@ describe("useMonaStream", () => {
       "",
       undefined,
       expect.objectContaining({ docPaths: ["uploads/chat-doc/report.xlsx"] }),
+    );
+  });
+
+  it("renders uploaded documents as optimistic file attachments", () => {
+    const fake = fakeClient();
+    const { result } = renderHook(() => useMonaStream("chat-pdf", EMPTY_MESSAGES), {
+      wrapper: wrap(fake.client),
+    });
+
+    act(() => {
+      result.current.send("总结这份资料", undefined, {
+        displayContent: "总结这份资料",
+        docPaths: ["uploads/chat-pdf/reference.pdf"],
+        documentNames: ["reference.pdf"],
+      });
+    });
+
+    expect(result.current.messages[0]).toMatchObject({
+      content: "总结这份资料",
+      displayContent: "总结这份资料",
+      media: [{ kind: "file", name: "reference.pdf" }],
+    });
+  });
+
+  it("forwards the browser tab identity with a user turn", () => {
+    const fake = fakeClient();
+    const { result } = renderHook(() => useMonaStream("chat-browser", EMPTY_MESSAGES), {
+      wrapper: wrap(fake.client),
+    });
+
+    act(() => {
+      result.current.send("inspect this page", undefined, { browserTabId: "tab-123" });
+    });
+
+    expect(fake.client.sendMessage).toHaveBeenCalledWith(
+      "chat-browser",
+      "inspect this page",
+      undefined,
+      expect.objectContaining({ browserTabId: "tab-123" }),
+    );
+  });
+
+  it("forwards the active Office document with a user turn", () => {
+    const fake = fakeClient();
+    const { result } = renderHook(() => useMonaStream("chat-office", EMPTY_MESSAGES), {
+      wrapper: wrap(fake.client),
+    });
+
+    act(() => {
+      result.current.send("修改当前演示文稿", undefined, {
+        officeSessionId: "office_123",
+        officeDocumentType: "slides",
+        officeDisplayName: "季度汇报.pptx",
+      });
+    });
+
+    expect(fake.client.sendMessage).toHaveBeenCalledWith(
+      "chat-office",
+      "修改当前演示文稿",
+      undefined,
+      expect.objectContaining({
+        officeSessionId: "office_123",
+        officeDocumentType: "slides",
+        officeDisplayName: "季度汇报.pptx",
+      }),
+    );
+  });
+
+  it("forwards the active canvas with a user turn", () => {
+    const fake = fakeClient();
+    const { result } = renderHook(() => useMonaStream("chat-canvas", EMPTY_MESSAGES), {
+      wrapper: wrap(fake.client),
+    });
+
+    act(() => {
+      result.current.send("修改当前架构图", undefined, { canvasId: "canvas-123" });
+    });
+
+    expect(fake.client.sendMessage).toHaveBeenCalledWith(
+      "chat-canvas",
+      "修改当前架构图",
+      undefined,
+      expect.objectContaining({ canvasId: "canvas-123" }),
     );
   });
 
@@ -1303,15 +1422,35 @@ describe("useMonaStream", () => {
 
     act(() => {
       result.current.stop();
+      result.current.stop();
     });
 
-    expect(fake.client.sendMessage).toHaveBeenLastCalledWith("chat-stop", "/stop");
-    expect(result.current.isStreaming).toBe(false);
+    expect(fake.client.sendMessage).toHaveBeenCalledTimes(2);
+
+    expect(fake.client.sendMessage).toHaveBeenLastCalledWith(
+      "chat-stop",
+      "/stop",
+      undefined,
+      { taskId: result.current.currentTaskId },
+    );
+    expect(result.current.isStreaming).toBe(true);
+    expect(result.current.stopping).toBe(true);
     expect(result.current.messages).toHaveLength(1);
     expect(result.current.messages[0].content).toBe("long task");
+
+    act(() => {
+      fake.emit("chat-stop", {
+        event: "goal_status",
+        chat_id: "chat-stop",
+        status: "idle",
+      });
+    });
+
+    expect(result.current.isStreaming).toBe(false);
+    expect(result.current.stopping).toBe(false);
   });
 
-  it("ends the local loading state after direct agent mentions are accepted", () => {
+  it("keeps the local loading state until direct agent mentions complete", () => {
     const fake = fakeClient();
     const { result } = renderHook(() => useMonaStream("chat-mentions", EMPTY_MESSAGES), {
       wrapper: wrap(fake.client),
@@ -1332,7 +1471,69 @@ describe("useMonaStream", () => {
       });
     });
 
+    expect(result.current.isStreaming).toBe(true);
+
+    act(() => {
+      fake.emit("chat-mentions", {
+        event: "goal_status",
+        chat_id: "chat-mentions",
+        status: "idle",
+      });
+    });
+
     expect(result.current.isStreaming).toBe(false);
+  });
+
+  it("keeps a topic card separate from workflows and completes on its terminal update", () => {
+    const fake = fakeClient();
+    const onTurnEnd = vi.fn();
+    const { result } = renderHook(
+      () => useMonaStream("room-topic", EMPTY_MESSAGES, false, onTurnEnd),
+      { wrapper: wrap(fake.client) },
+    );
+    const workflow = {
+      schemaVersion: 1,
+      id: "discussion-debate-1",
+      roomId: "room-topic",
+      revision: 1,
+      status: "active" as const,
+      goal: "增长还是利润？",
+      trigger: { type: "manual" as const },
+      steps: [],
+      createdAt: "2026-08-29T00:00:00Z",
+      createdBy: "user",
+    };
+
+    act(() => {
+      fake.emit("room-topic", {
+        event: "discussion_updated",
+        chat_id: "room-topic",
+        id: "run-topic",
+        roomId: "room-topic",
+        status: "running",
+        workflow,
+        steps: {},
+      });
+    });
+    expect(result.current.messages).toEqual([
+      expect.objectContaining({ id: "discussion:run-topic", kind: "discussion" }),
+    ]);
+    expect(result.current.isStreaming).toBe(true);
+
+    act(() => {
+      fake.emit("room-topic", {
+        event: "discussion_updated",
+        chat_id: "room-topic",
+        id: "run-topic",
+        roomId: "room-topic",
+        status: "succeeded",
+        workflow,
+        steps: {},
+      });
+    });
+    expect(result.current.messages).toHaveLength(1);
+    expect(result.current.isStreaming).toBe(false);
+    expect(onTurnEnd).toHaveBeenCalledTimes(1);
   });
 
   it("keeps streaming alive across stream_end and completes on turn_end", async () => {
@@ -1414,11 +1615,81 @@ describe("useMonaStream", () => {
         event: "turn_end",
         chat_id: "chat-lat",
         latency_ms: 2400,
+        task_id: "task-lat",
+        token_usage: {
+          prompt_tokens: 1_000,
+          completion_tokens: 250,
+          total_tokens: 1_250,
+        },
       });
     });
 
     const lastAssistant = [...result.current.messages].reverse().find((m) => m.role === "assistant");
     expect(lastAssistant?.latencyMs).toBe(2400);
+    expect(lastAssistant?.taskId).toBe("task-lat");
+    expect(lastAssistant?.tokenUsage).toEqual({
+      promptTokens: 1_000,
+      completionTokens: 250,
+      cachedTokens: 0,
+      totalTokens: 1_250,
+    });
+  });
+
+  it("shows turn token usage on streamed text when the completion also delivers media", async () => {
+    const fake = fakeClient();
+    const { result } = renderHook(() => useMonaStream("chat-media-usage", EMPTY_MESSAGES), {
+      wrapper: wrap(fake.client),
+    });
+
+    act(() => {
+      fake.emit("chat-media-usage", {
+        event: "delta",
+        chat_id: "chat-media-usage",
+        text: "海报已生成",
+        stream_id: "stream-media-usage",
+        task_id: "task-media-usage",
+      });
+    });
+    await flushStreamFrame();
+
+    act(() => {
+      fake.emit("chat-media-usage", {
+        event: "stream_end",
+        chat_id: "chat-media-usage",
+        stream_id: "stream-media-usage",
+        task_id: "task-media-usage",
+      });
+      fake.emit("chat-media-usage", {
+        event: "message",
+        chat_id: "chat-media-usage",
+        text: "",
+        author_id: "mona",
+        media_urls: [{ url: "/api/media/poster", name: "poster.png" }],
+        task_id: "task-media-usage",
+        token_usage: {
+          prompt_tokens: 54_381,
+          completion_tokens: 409,
+          total_tokens: 54_790,
+        },
+      });
+      fake.emit("chat-media-usage", {
+        event: "turn_end",
+        chat_id: "chat-media-usage",
+        task_id: "task-media-usage",
+        latency_ms: 36_904,
+        token_usage: {
+          prompt_tokens: 54_381,
+          completion_tokens: 409,
+          total_tokens: 54_790,
+        },
+      });
+    });
+
+    const textMessage = result.current.messages.find((message) => message.content === "海报已生成");
+    const mediaMessage = result.current.messages.find((message) => message.media?.length);
+    expect(textMessage?.tokenUsage?.totalTokens).toBe(54_790);
+    expect(textMessage?.latencyMs).toBe(36_904);
+    expect(mediaMessage?.tokenUsage).toBeUndefined();
   });
 
   it("tracks goal_status running and clears on idle", () => {
@@ -1438,6 +1709,7 @@ describe("useMonaStream", () => {
       });
     });
     expect(result.current.runStartedAt).toBe(1700);
+    expect(result.current.isStreaming).toBe(true);
 
     act(() => {
       fake.emit("chat-g", {
@@ -1447,6 +1719,24 @@ describe("useMonaStream", () => {
       });
     });
     expect(result.current.runStartedAt).toBeNull();
+    expect(result.current.isStreaming).toBe(false);
+  });
+
+  it("restores streaming when the selected chat is already running", () => {
+    const fake = fakeClient();
+    fake.emit("chat-running", {
+      event: "goal_status",
+      chat_id: "chat-running",
+      status: "running",
+      started_at: 1701,
+    });
+
+    const { result } = renderHook(() => useMonaStream("chat-running", EMPTY_MESSAGES), {
+      wrapper: wrap(fake.client),
+    });
+
+    expect(result.current.isStreaming).toBe(true);
+    expect(result.current.runStartedAt).toBe(1701);
   });
 
   it("restores runStartedAt after switching away and back when goal_status was recorded without a subscriber", () => {
@@ -1528,6 +1818,64 @@ describe("useMonaStream", () => {
     expect(result.current.goalState).toEqual({ active: false });
   });
 
+  it("starts a fresh task for each top-level request", () => {
+    const fake = fakeClient();
+    const { result } = renderHook(
+      () => useMonaStream("chat-task", EMPTY_MESSAGES),
+      { wrapper: wrap(fake.client) },
+    );
+
+    act(() => result.current.send("first request"));
+    const firstTask = result.current.currentTaskId;
+    expect(firstTask).toMatch(/^task_/);
+
+    act(() => result.current.send("second request"));
+    const secondTask = result.current.currentTaskId;
+    expect(secondTask).toMatch(/^task_/);
+    expect(secondTask).not.toBe(firstTask);
+    expect(fake.client.sendMessage).toHaveBeenLastCalledWith(
+      "chat-task",
+      "second request",
+      undefined,
+      { taskId: secondTask },
+    );
+  });
+
+  it("does not manufacture a plan from the user's wording", () => {
+    const fake = fakeClient();
+    const { result } = renderHook(
+      () => useMonaStream("chat-seeded-plan", EMPTY_MESSAGES),
+      { wrapper: wrap(fake.client) },
+    );
+    act(() => result.current.send("查询今天的github热榜，制作html报告"));
+    expect(result.current.taskPlan).toBeUndefined();
+  });
+
+  it("tracks task_plan per chat and does not restore a stale plan after a new task", () => {
+    const fake = fakeClient();
+    const { result, rerender } = renderHook(
+      ({ chatId }: { chatId: string }) => useMonaStream(chatId, EMPTY_MESSAGES),
+      { wrapper: wrap(fake.client), initialProps: { chatId: "chat-a" } },
+    );
+    const plan: TaskPlanWsPayload = {
+      task_id: "task-a",
+      revision: 1,
+      steps: [{ id: "one", step: "Inspect", status: "in_progress" }],
+      source: "ai",
+    };
+    act(() => fake.emit("chat-a", { event: "task_plan", chat_id: "chat-a", task_plan: plan }));
+    expect(result.current.taskPlan).toEqual(plan);
+
+    act(() => fake.emit("chat-a", { event: "artifact_task_started", chat_id: "chat-a", task_id: "task-b" }));
+    expect(result.current.taskPlan).toBeUndefined();
+    act(() => fake.emit("chat-a", { event: "task_plan", chat_id: "chat-a", task_plan: plan }));
+    expect(result.current.taskPlan).toBeUndefined();
+
+    rerender({ chatId: "chat-b" });
+    rerender({ chatId: "chat-a" });
+    expect(result.current.taskPlan).toBeUndefined();
+  });
+
   it("inject() sends a message without resetting streaming state", async () => {
     const fake = fakeClient();
     const { result } = renderHook(
@@ -1539,7 +1887,14 @@ describe("useMonaStream", () => {
       result.current.send("start");
     });
     expect(result.current.isStreaming).toBe(true);
-    expect(fake.client.sendMessage).toHaveBeenCalledWith("chat-inject", "start", undefined);
+    const taskId = result.current.currentTaskId;
+    expect(taskId).toMatch(/^task_/);
+    expect(fake.client.sendMessage).toHaveBeenCalledWith(
+      "chat-inject",
+      "start",
+      undefined,
+      { taskId },
+    );
 
     act(() => {
       fake.emit("chat-inject", { event: "delta", text: "thinking" });
@@ -1550,7 +1905,12 @@ describe("useMonaStream", () => {
       result.current.inject("correction");
     });
 
-    expect(fake.client.sendMessage).toHaveBeenCalledWith("chat-inject", "correction", undefined);
+    expect(fake.client.sendMessage).toHaveBeenCalledWith(
+      "chat-inject",
+      "correction",
+      undefined,
+      { taskId },
+    );
     expect(result.current.isStreaming).toBe(true);
 
     const injectedBubble = result.current.messages.find(
@@ -1558,6 +1918,58 @@ describe("useMonaStream", () => {
     );
     expect(injectedBubble).toBeDefined();
     expect(injectedBubble!.content).toBe("correction");
+  });
+
+  it("inject() keeps the active Office context on the current task", () => {
+    const fake = fakeClient();
+    const { result } = renderHook(
+      () => useMonaStream("chat-office-inject", EMPTY_MESSAGES),
+      { wrapper: wrap(fake.client) },
+    );
+
+    act(() => {
+      result.current.send("start");
+      result.current.inject("继续修改当前文档", undefined, {
+        officeSessionId: "office_123",
+        officeDocumentType: "slides",
+        officeDisplayName: "季度汇报.pptx",
+      });
+    });
+
+    expect(fake.client.sendMessage).toHaveBeenLastCalledWith(
+      "chat-office-inject",
+      "继续修改当前文档",
+      undefined,
+      expect.objectContaining({
+        officeSessionId: "office_123",
+        officeDocumentType: "slides",
+        officeDisplayName: "季度汇报.pptx",
+      }),
+    );
+  });
+
+  it("inject() forwards attached images to the active task", () => {
+    const fake = fakeClient();
+    const { result } = renderHook(
+      () => useMonaStream("chat-inject-image", EMPTY_MESSAGES),
+      { wrapper: wrap(fake.client) },
+    );
+    const image = {
+      media: { data_url: "data:image/png;base64,AAAA", name: "followup.png" },
+      preview: { url: "data:image/png;base64,AAAA", name: "followup.png" },
+    };
+
+    act(() => {
+      result.current.inject("look at this", [image]);
+    });
+
+    expect(fake.client.sendMessage).toHaveBeenCalledWith(
+      "chat-inject-image",
+      "look at this",
+      [image.media],
+      { taskId: expect.any(String) },
+    );
+    expect(result.current.messages.at(-1)?.images).toEqual([image.preview]);
   });
 
   it("inject() does not clear the active assistant stream buffer", async () => {

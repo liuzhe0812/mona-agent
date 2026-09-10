@@ -1,0 +1,584 @@
+{
+  "documentVersion": {
+    "editorEpoch": "epoch_d0",
+    "modelRevision": 4
+  },
+  "session": {
+    "sessionId": "office_d0",
+    "displayName": "销售计划.xlsx",
+    "type": "sheets",
+    "version": {
+      "editorEpoch": "epoch_d0",
+      "modelRevision": 4
+    },
+    "checkpointVersion": {
+      "editorEpoch": "epoch_d0",
+      "modelRevision": 3
+    },
+    "savedVersion": null,
+    "dirty": true,
+    "editorConnected": true,
+    "saveState": "dirty",
+    "lastError": null
+  },
+  "inspectRequests": [
+    {
+      "sessionId": "office_d0",
+      "query": { "mode": "summary" }
+    },
+    {
+      "sessionId": "office_d0",
+      "query": {
+        "mode": "range",
+        "sheet": "销售",
+        "range": "A1:C2",
+        "includeFormula": true,
+        "includeStyle": false
+      }
+    }
+  ],
+  "inspectResults": [
+    {
+      "sessionId": "office_d0",
+      "version": {
+        "editorEpoch": "epoch_d0",
+        "modelRevision": 4
+      },
+      "result": {
+        "mode": "summary",
+        "documentType": "sheets",
+        "sheetCount": 1,
+        "sheets": [
+          { "id": "sheet_1", "name": "销售", "rowCount": 2, "columnCount": 3 }
+        ]
+      }
+    },
+    {
+      "sessionId": "office_d0",
+      "version": {
+        "editorEpoch": "epoch_d0",
+        "modelRevision": 4
+      },
+      "result": {
+        "mode": "range",
+        "sheet": "销售",
+        "range": "A1:C2",
+        "rows": [
+          [
+            { "value": "月份", "formula": null, "style": { "bold": true } },
+            { "value": "收入" },
+            { "value": "增长率" }
+          ],
+          [
+            { "value": "一月" },
+            { "value": 120000 },
+            { "value": 0.12, "formula": "=B2/107143-1" }
+          ]
+        ]
+      }
+    }
+  ],
+  "command": {
+    "sessionId": "office_d0",
+    "operationId": "op_d0_1",
+    "expectedVersion": {
+      "editorEpoch": "epoch_d0",
+      "modelRevision": 4
+    },
+    "operations": [
+      { "op": "set_cell", "payload": { "sheet": "销售", "cell": "B2", "value": 125000 } },
+      { "op": "set_range", "payload": { "sheet": "销售", "range": "A3:B3", "values": [["二月", 130000]] } },
+      { "op": "set_formula", "payload": { "sheet": "销售", "cell": "C3", "formula": "=B3/B2-1" } },
+      { "op": "clear_range", "payload": { "sheet": "销售", "range": "D1:D20" } },
+      { "op": "set_style", "payload": { "sheet": "销售", "range": "A1:C1", "style": { "bold": true, "horizontalAlign": "center" } } }
+    ]
+  },
+  "commandResults": [
+    {
+      "ok": true,
+      "sessionId": "office_d0",
+      "operationId": "op_d0_1",
+      "version": {
+        "editorEpoch": "epoch_d0",
+        "modelRevision": 5
+      },
+      "changedTargets": ["销售!B2", "销售!A3:C3", "销售!D1:D20", "销售!A1:C1"],
+      "summary": "已更新销售数据"
+    },
+    {
+      "ok": false,
+      "sessionId": "office_d0",
+      "operationId": "op_d0_stale",
+      "currentVersion": {
+        "editorEpoch": "epoch_d0",
+        "modelRevision": 5
+      },
+      "changedTargets": ["销售!B2"],
+      "error": {
+        "code": "VERSION_CONFLICT",
+        "message": "文档已发生变化，请重新读取相关区域。",
+        "retryable": true
+      }
+    }
+  ],
+  "checkpoint": {
+    "sessionId": "office_d0",
+    "version": {
+      "editorEpoch": "epoch_d0",
+      "modelRevision": 5
+    },
+    "size": 8192,
+    "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+  },
+  "socketMessages": [
+    {
+      "event": "office_editor_ready",
+      "sessionId": "office_d0",
+      "version": { "editorEpoch": "epoch_d0", "modelRevision": 4 }
+    },
+    {
+      "event": "office_inspect_command",
+      "command": {
+        "sessionId": "office_d0",
+        "requestId": "inspect_d0",
+        "query": { "mode": "summary" }
+      }
+    },
+    {
+      "event": "office_inspect_result",
+      "result": {
+        "ok": true,
+        "requestId": "inspect_d0",
+        "sessionId": "office_d0",
+        "version": { "editorEpoch": "epoch_d0", "modelRevision": 4 },
+        "result": {
+          "mode": "summary",
+          "documentType": "sheets",
+          "sheetCount": 1,
+          "sheets": [
+            { "id": "sheet_1", "name": "销售", "rowCount": 2, "columnCount": 3 }
+          ]
+        }
+      }
+    },
+    {
+      "event": "office_command_result",
+      "result": {
+        "ok": true,
+        "sessionId": "office_d0",
+        "operationId": "op_d0_1",
+        "version": { "editorEpoch": "epoch_d0", "modelRevision": 5 },
+        "changedTargets": ["销售!B2"],
+        "summary": "已更新销售数据"
+      }
+    }
+  ],
+  "d1": {
+    "inspectRequests": [
+      {
+        "sessionId": "office_docs",
+        "query": { "mode": "summary" }
+      },
+      {
+        "sessionId": "office_docs",
+        "query": { "mode": "outline", "limit": 20 }
+      },
+      {
+        "sessionId": "office_docs",
+        "query": { "mode": "search", "text": "季度目标", "limit": 10 }
+      },
+      {
+        "sessionId": "office_docs",
+        "query": {
+          "mode": "blocks",
+          "blockIds": ["heading_1", "paragraph_1"]
+        }
+      },
+      {
+        "sessionId": "office_slides",
+        "query": { "mode": "summary" }
+      },
+      {
+        "sessionId": "office_slides",
+        "query": { "mode": "slides", "slideIds": ["slide_1"], "limit": 5 }
+      },
+      {
+        "sessionId": "office_docs",
+        "query": {
+          "mode": "changed_since",
+          "version": { "editorEpoch": "epoch_d1", "modelRevision": 2 }
+        }
+      }
+    ],
+    "inspectResults": [
+      {
+        "sessionId": "office_docs",
+        "version": {
+          "editorEpoch": "epoch_d1",
+          "modelRevision": 3
+        },
+        "result": {
+          "mode": "summary",
+          "documentType": "docs",
+          "blockCount": 4,
+          "characterCount": 24,
+          "headingCount": 1,
+          "tableCount": 1,
+          "imageCount": 0
+        }
+      },
+      {
+        "sessionId": "office_docs",
+        "version": {
+          "editorEpoch": "epoch_d1",
+          "modelRevision": 3
+        },
+        "result": {
+          "mode": "outline",
+          "items": [
+            {
+              "id": "heading_1",
+              "type": "heading",
+              "text": "季度目标",
+              "level": 1
+            },
+            {
+              "id": "paragraph_1",
+              "type": "paragraph",
+              "text": "本季度完成编辑器闭环。"
+            }
+          ]
+        }
+      },
+      {
+        "sessionId": "office_docs",
+        "version": {
+          "editorEpoch": "epoch_d1",
+          "modelRevision": 3
+        },
+        "result": {
+          "mode": "search",
+          "matches": [
+            {
+              "id": "heading_1",
+              "type": "heading",
+              "text": "季度目标",
+              "level": 1
+            }
+          ]
+        }
+      },
+      {
+        "sessionId": "office_docs",
+        "version": {
+          "editorEpoch": "epoch_d1",
+          "modelRevision": 3
+        },
+        "result": {
+          "mode": "blocks",
+          "blocks": [
+            {
+              "id": "heading_1",
+              "type": "heading",
+              "text": "季度目标",
+              "level": 1
+            },
+            {
+              "id": "paragraph_1",
+              "type": "paragraph",
+              "text": "本季度完成编辑器闭环。"
+            }
+          ]
+        }
+      },
+      {
+        "sessionId": "office_slides",
+        "version": {
+          "editorEpoch": "epoch_d1",
+          "modelRevision": 1
+        },
+        "result": {
+          "mode": "summary",
+          "documentType": "slides",
+          "slideCount": 1,
+          "elementCount": 1
+        }
+      },
+      {
+        "sessionId": "office_slides",
+        "version": {
+          "editorEpoch": "epoch_d1",
+          "modelRevision": 1
+        },
+        "result": {
+          "mode": "slides",
+          "slides": [
+            {
+              "id": "slide_1",
+              "index": 0,
+              "title": "季度汇报",
+              "elements": [
+                {
+                  "id": "shape_1",
+                  "type": "text",
+                  "text": "季度汇报",
+                  "x": 10,
+                  "y": 10,
+                  "width": 200,
+                  "height": 40
+                }
+              ]
+            }
+          ]
+        }
+      },
+      {
+        "sessionId": "office_docs",
+        "version": {
+          "editorEpoch": "epoch_d1",
+          "modelRevision": 3
+        },
+        "result": {
+          "mode": "changed_since",
+          "changes": [
+            {
+              "revision": 3,
+              "actor": "user",
+              "target": "paragraph_1",
+              "kind": "block"
+            }
+          ]
+        }
+      }
+    ],
+    "inspectFailures": [
+      {
+        "ok": false,
+        "requestId": "docs_resync",
+        "sessionId": "office_docs",
+        "currentVersion": {
+          "editorEpoch": "epoch_d1",
+          "modelRevision": 3
+        },
+        "error": {
+          "code": "RESYNC_REQUIRED",
+          "message": "文档版本已过期，请重新读取状态。",
+          "retryable": true
+        }
+      }
+    ],
+    "commands": [
+      {
+        "sessionId": "office_docs",
+        "operationId": "docs_d1_1",
+        "expectedVersion": {
+          "editorEpoch": "epoch_d1",
+          "modelRevision": 3
+        },
+        "operations": [
+          {
+            "op": "replace_block_text",
+            "payload": { "blockId": "paragraph_1", "text": "已更新内容。" }
+          },
+          {
+            "op": "delete_block",
+            "payload": { "blockId": "paragraph_2" }
+          },
+          {
+            "op": "insert_paragraph",
+            "payload": { "afterBlockId": "heading_1", "text": "新增段落。" }
+          },
+          {
+            "op": "insert_heading",
+            "payload": { "afterBlockId": "paragraph_1", "text": "结论", "level": 2 }
+          },
+          {
+            "op": "insert_list",
+            "payload": {
+              "afterBlockId": "heading_2",
+              "items": ["完成编辑", "导出文件"],
+              "ordered": false
+            }
+          },
+          {
+            "op": "insert_table",
+            "payload": {
+              "afterBlockId": "list_1",
+              "rows": [["指标", "值"], ["完成率", "80%"]]
+            }
+          },
+          {
+            "op": "set_table_cell",
+            "payload": {
+              "blockId": "table_1",
+              "rowIndex": 1,
+              "columnIndex": 1,
+              "text": "90%"
+            }
+          },
+          {
+            "op": "insert_image",
+            "payload": {
+              "afterBlockId": "paragraph_2",
+              "assetId": "asset_1",
+              "alt": "图表"
+            }
+          },
+          {
+            "op": "set_block_style",
+            "payload": { "blockId": "heading_1", "style": { "bold": true } }
+          }
+        ]
+      },
+      {
+        "sessionId": "office_slides",
+        "operationId": "slides_d1_1",
+        "expectedVersion": {
+          "editorEpoch": "epoch_d1",
+          "modelRevision": 1
+        },
+        "operations": [
+          {
+            "op": "slide_set_text",
+            "payload": { "slideId": "slide_1", "elementId": "shape_1", "text": "新标题" }
+          },
+          {
+            "op": "slide_set_font",
+            "payload": { "slideId": "slide_1", "elementId": "shape_1", "size": 28 }
+          },
+          {
+            "op": "slide_set_geometry",
+            "payload": { "slideId": "slide_1", "elementId": "shape_1", "x": 20, "y": 20 }
+          },
+          {
+            "op": "slide_set_fill",
+            "payload": { "slideId": "slide_1", "elementId": "shape_1", "color": "#ffffff" }
+          },
+          {
+            "op": "slide_set_stroke",
+            "payload": { "slideId": "slide_1", "elementId": "shape_1", "color": "#000000" }
+          },
+          {
+            "op": "slide_add_text",
+            "payload": { "slideId": "slide_1", "text": "新增文本", "x": 30, "y": 30 }
+          },
+          {
+            "op": "slide_add_shape",
+            "payload": { "slideId": "slide_1", "shape": "rect", "x": 40, "y": 40 }
+          },
+          {
+            "op": "slide_add_image",
+            "payload": { "slideId": "slide_1", "assetId": "asset_1", "x": 50, "y": 50 }
+          },
+          {
+            "op": "slide_delete_element",
+            "payload": { "slideId": "slide_1", "elementId": "shape_2" }
+          },
+          {
+            "op": "slide_add",
+            "payload": { "afterSlideId": "slide_1" }
+          },
+          {
+            "op": "slide_duplicate",
+            "payload": { "slideId": "slide_1" }
+          },
+          {
+            "op": "slide_delete",
+            "payload": { "slideId": "slide_2" }
+          },
+          {
+            "op": "slide_move",
+            "payload": { "slideId": "slide_1", "index": 0 }
+          },
+          {
+            "op": "slide_apply_txn",
+            "payload": {
+              "ops": [
+                {
+                  "op": "setNotes",
+                  "target": { "slide": "slide_1" },
+                  "text": "AI 备注"
+                }
+              ]
+            }
+          }
+        ]
+      }
+    ],
+    "commandResults": [
+      {
+        "ok": true,
+        "sessionId": "office_docs",
+        "operationId": "docs_d1_1",
+        "version": {
+          "editorEpoch": "epoch_d1",
+          "modelRevision": 4
+        },
+        "changedTargets": ["paragraph_1", "heading_2", "table_1"],
+        "summary": "文档已更新"
+      },
+      {
+        "ok": false,
+        "sessionId": "office_slides",
+        "operationId": "slides_d1_stale",
+        "currentVersion": {
+          "editorEpoch": "epoch_d1",
+          "modelRevision": 2
+        },
+        "changedTargets": ["slide_1"],
+        "error": {
+          "code": "RESYNC_REQUIRED",
+          "message": "幻灯片版本已过期，请重新读取状态。",
+          "retryable": true
+        }
+      }
+    ],
+    "blankOpenMessages": [
+      {
+        "event": "office_session_open",
+        "session": {
+          "sessionId": "blank_docs",
+          "displayName": "新建文档.docx",
+          "type": "docs",
+          "version": { "editorEpoch": "epoch_blank_docs", "modelRevision": 0 },
+          "checkpointVersion": null,
+          "savedVersion": null,
+          "dirty": false,
+          "editorConnected": false,
+          "saveState": "clean",
+          "lastError": null
+        }
+      },
+      {
+        "event": "office_session_open",
+        "session": {
+          "sessionId": "blank_sheets",
+          "displayName": "新建工作簿.xlsx",
+          "type": "sheets",
+          "version": { "editorEpoch": "epoch_blank_sheets", "modelRevision": 0 },
+          "checkpointVersion": null,
+          "savedVersion": null,
+          "dirty": false,
+          "editorConnected": false,
+          "saveState": "clean",
+          "lastError": null
+        }
+      },
+      {
+        "event": "office_session_open",
+        "session": {
+          "sessionId": "blank_slides",
+          "displayName": "新建演示文稿.pptx",
+          "type": "slides",
+          "version": { "editorEpoch": "epoch_blank_slides", "modelRevision": 0 },
+          "checkpointVersion": null,
+          "savedVersion": null,
+          "dirty": false,
+          "editorConnected": false,
+          "saveState": "clean",
+          "lastError": null
+        }
+      }
+    ]
+  }
+}

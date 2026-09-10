@@ -86,6 +86,10 @@ class AgentJob(Base):
     workflow_run_id: str | None = None
     workflow_step_id: str | None = None
     parent_job_id: str | None = None
+    # Privacy-filtered user-profile snapshot captured when the job is created.
+    # Keeping it on the durable job guarantees parallel/restarted work uses
+    # one profile version without reading another Agent's private memory.
+    user_profile_snapshot: dict[str, Any] = Field(default_factory=dict)
     attempt: int = 1
     result: str | None = None
     error: str | None = None
@@ -178,6 +182,7 @@ class AgentJobStore:
         workflow_run_id: str | None = None,
         workflow_step_id: str | None = None,
         parent_job_id: str | None = None,
+        user_profile_snapshot: dict[str, Any] | None = None,
         attempt: int = 1,
     ) -> AgentJob:
         """Build and persist a new ``queued`` job."""
@@ -185,6 +190,14 @@ class AgentJobStore:
         job_id = f"job_{uuid.uuid4().hex[:12]}"
         while self._path(job_id).exists():
             job_id = f"job_{uuid.uuid4().hex[:12]}"
+        if user_profile_snapshot is None:
+            try:
+                from mona.distill.snapshot import build_user_profile_snapshot
+
+                user_profile_snapshot = build_user_profile_snapshot()
+            except Exception:
+                logger.exception("Failed to capture user profile snapshot for new job")
+                user_profile_snapshot = {}
         job = AgentJob(
             id=job_id,
             room_id=room_id,
@@ -195,6 +208,7 @@ class AgentJobStore:
             workflow_run_id=workflow_run_id,
             workflow_step_id=workflow_step_id,
             parent_job_id=parent_job_id,
+            user_profile_snapshot=user_profile_snapshot,
             attempt=attempt,
         )
         self._save(job)

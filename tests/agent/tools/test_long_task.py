@@ -12,19 +12,24 @@ from mona.agent.tools.long_task import (
     CompleteGoalTool,
     LongTaskTool,
 )
+from mona.agent.tools.registry import ToolRegistry
 from mona.bus.queue import MessageBus
 from mona.session.goal_state import GOAL_STATE_KEY
 from mona.session.manager import SessionManager
 
 
-def _tools(sm: SessionManager) -> tuple[LongTaskTool, CompleteGoalTool]:
+def _tools(
+    sm: SessionManager,
+    *,
+    goal_command: bool = True,
+) -> tuple[LongTaskTool, CompleteGoalTool]:
     lt = LongTaskTool(sessions=sm)
     cg = CompleteGoalTool(sessions=sm)
     rc = RequestContext(
         channel="websocket",
         chat_id="c1",
         session_key="websocket:c1",
-        metadata={},
+        metadata={"original_command": "/goal"} if goal_command else {},
     )
     lt.set_context(rc)
     cg.set_context(rc)
@@ -43,8 +48,44 @@ async def test_long_task_records_goal_metadata(tmp_path):
     blob = sess.metadata.get(GOAL_STATE_KEY)
     assert isinstance(blob, dict)
     assert blob["status"] == "active"
+    assert blob["source"] == "/goal"
     assert blob["objective"] == "Do the thing"
     assert blob["ui_summary"] == "thing"
+
+
+@pytest.mark.asyncio
+async def test_long_task_is_unavailable_without_explicit_goal_command(tmp_path):
+    sm = SessionManager(tmp_path)
+    lt, _cg = _tools(sm, goal_command=False)
+
+    assert lt.is_available is False
+    out = await lt.execute(goal="Do not persist this")
+
+    assert "explicit /goal command" in out
+    assert GOAL_STATE_KEY not in sm.get_or_create("websocket:c1").metadata
+
+
+def test_long_task_is_hidden_from_model_outside_goal_command(tmp_path):
+    sm = SessionManager(tmp_path)
+    lt, _cg = _tools(sm, goal_command=False)
+    registry = ToolRegistry()
+    registry.register(lt)
+
+    assert registry.get_definitions() == []
+
+    lt.set_context(
+        RequestContext(
+            channel="websocket",
+            chat_id="c1",
+            session_key="websocket:c1",
+            metadata={"original_command": "/goal"},
+        )
+    )
+    registry.invalidate_definitions_cache()
+
+    assert [definition["function"]["name"] for definition in registry.get_definitions()] == [
+        "long_task"
+    ]
 
 
 @pytest.mark.asyncio
@@ -82,7 +123,7 @@ async def test_long_task_publishes_goal_state_ws_after_save(tmp_path):
         channel="websocket",
         chat_id="chat-99",
         session_key="websocket:chat-99",
-        metadata={},
+        metadata={"original_command": "/goal"},
     )
     lt.set_context(rc)
 
@@ -111,7 +152,7 @@ async def test_complete_goal_publishes_inactive_goal_state_ws(tmp_path):
         channel="websocket",
         chat_id="chat-z",
         session_key="websocket:chat-z",
-        metadata={},
+        metadata={"original_command": "/goal"},
     )
     lt.set_context(rc)
     await lt.execute(goal="X")
@@ -167,7 +208,7 @@ async def test_goal_tools_keep_each_partner_session_isolated(tmp_path):
             channel="websocket",
             chat_id="c2",
             session_key="websocket:c2",
-            metadata={},
+            metadata={"original_command": "/goal"},
         )
     )
     await lt_two.execute(goal="Second session")

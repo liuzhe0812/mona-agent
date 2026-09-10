@@ -25,6 +25,12 @@ def render_storyboard(scenes: list[dict]) -> str:
         idx = scene.get("index", 0)
         title = scene.get("title", "")
         lines.append(f"### Scene {idx}: {title}")
+        if scene.get("role"):
+            lines.append(f"- Role: {scene['role']}")
+        if scene.get("layout"):
+            lines.append(f"- Layout: {scene['layout']}")
+        if scene.get("backgroundSlot"):
+            lines.append(f"- Background Slot: {scene['backgroundSlot']}")
         duration_raw = scene.get("durationRaw") or f"{scene.get('duration', 0)}s"
         lines.append(f"- Duration: {duration_raw}")
         if scene.get("visual"):

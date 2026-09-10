@@ -1,0 +1,133 @@
+:root {
+  color-scheme: light dark;
+  font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+}
+
+html,
+body,
+#root,
+.mona-sheets-editor,
+#univer-container {
+  width: 100%;
+  height: 100%;
+  margin: 0;
+  overflow: hidden;
+}
+
+.mona-sheets-editor {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  background: Canvas;
+  color: CanvasText;
+}
+
+.mona-sheets-editor > .app-shell,
+.mona-sheets-editor .sheet-body,
+.mona-sheets-editor .sheet-main,
+.mona-sheets-editor .workbook-area {
+  min-height: 0;
+}
+
+.mona-sheets-editor > .app-shell {
+  flex: 1;
+}
+
+/* Embedded mode omits GenOffice's AI panel entirely. Without this override,
+   CSS Grid places the spreadsheet in the removed panel's first column. */
+.mona-sheets-editor .app-shell.copilot-collapsed .sheet-body {
+  grid-template-columns: minmax(0, 1fr);
+  width: 100%;
+}
+
+.mona-sheets-editor .app-shell.copilot-collapsed .sheet-main {
+  grid-column: 1 / -1;
+  width: 100%;
+}
+
+.mona-sheets-editor .ribbon-group:has(.ai-entry),
+.mona-sheets-editor .ai-entry {
+  display: none;
+}
+
+.mona-sheets-editor [role="tablist"],
+.mona-sheets-editor [data-u-comp="ribbon-toolbar"] {
+  justify-content: flex-start;
+}
+
+.mona-sheets-editor .mona-embedded-bottom-bar {
+  --mona-sheet-status-width: min(440px, calc(60% - 60px));
+  position: relative;
+  grid-template-rows: auto minmax(0, 1fr);
+}
+
+.mona-sheets-editor .mona-embedded-bottom-bar .status-bar {
+  position: absolute;
+  right: 60px;
+  bottom: 0;
+  z-index: 5;
+  width: var(--mona-sheet-status-width);
+  height: 36px;
+  border-top: 0;
+  background: var(--surface);
+}
+
+.mona-sheets-editor .mona-embedded-bottom-bar
+  #univer-container
+  section[data-range-selector]:has([data-u-comp="slide-tab-bar"])
+  > :first-child {
+  padding-right: var(--mona-sheet-status-width);
+}
+
+@media (max-width: 720px) {
+  .mona-sheets-editor .mona-embedded-bottom-bar {
+    --mona-sheet-status-width: min(300px, calc(70% - 60px));
+  }
+
+  .mona-sheets-editor .mona-embedded-bottom-bar .status-left {
+    display: none;
+  }
+
+  .mona-sheets-editor .mona-embedded-bottom-bar .zoom-slider {
+    width: 80px;
+  }
+}
+
+@media (max-width: 520px) {
+  .mona-sheets-editor .mona-embedded-bottom-bar .zoom-slider {
+    display: none;
+  }
+}
+
+.mona-sheets-status {
+  position: absolute;
+  inset: 0;
+  z-index: 10;
+  display: grid;
+  place-items: center;
+  padding: 24px;
+  background: Canvas;
+  color: GrayText;
+  font-size: 13px;
+  text-align: center;
+}
+
+.mona-sheets-status[data-error="true"] {
+  color: LinkText;
+}
+
+.mona-follow-button {
+  position: absolute;
+  right: 16px;
+  bottom: 16px;
+  z-index: 20;
+  border: 1px solid ButtonBorder;
+  border-radius: 999px;
+  background: ButtonFace;
+  padding: 7px 12px;
+  color: ButtonText;
+  box-shadow: 0 2px 8px rgb(0 0 0 / 14%);
+  font: inherit;
+  font-size: 12px;
+  cursor: pointer;
+}

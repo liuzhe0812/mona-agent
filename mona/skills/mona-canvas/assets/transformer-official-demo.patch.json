@@ -1,0 +1,761 @@
+{
+  "baseHash": "<canvas.open semanticHash>",
+  "baseDocumentHash": "<canvas.open documentHash>",
+  "ops": [
+    {
+      "name": "replaceGraph",
+      "graph": {
+        "direction": "TB",
+        "layout": "manual",
+        "theme": {
+          "stylePreset": "soft",
+          "paletteId": "default",
+          "preserveManualStyles": true
+        },
+        "background": "#FFFFFF",
+        "nodes": [
+          {
+            "id": "title",
+            "kind": "text",
+            "label": "Transformer\nArchitecture",
+            "position": {
+              "x": 288,
+              "y": 4
+            },
+            "size": {
+              "width": 192,
+              "height": 50
+            },
+            "style": {
+              "fontSize": 22,
+              "color": "#111827",
+              "bold": true,
+              "lineHeight": 1.05
+            }
+          },
+          {
+            "id": "input-embedding",
+            "kind": "rounded-rectangle",
+            "label": "Input Embedding",
+            "position": {
+              "x": 50,
+              "y": 62
+            },
+            "size": {
+              "width": 120,
+              "height": 46
+            },
+            "style": {
+              "fontSize": 11,
+              "fill": "#DBEAFE",
+              "borderColor": "#5B8CCB",
+              "cornerRadius": 6
+            }
+          },
+          {
+            "id": "input-position",
+            "kind": "rounded-rectangle",
+            "label": "Positional Encoding",
+            "position": {
+              "x": 50,
+              "y": 122
+            },
+            "size": {
+              "width": 120,
+              "height": 46
+            },
+            "style": {
+              "fontSize": 10,
+              "fill": "#FEF3C7",
+              "borderColor": "#D39B31",
+              "cornerRadius": 6
+            }
+          },
+          {
+            "id": "enc-attention",
+            "kind": "rounded-rectangle",
+            "label": "Multi-Head\nAttention",
+            "position": {
+              "x": 50,
+              "y": 214
+            },
+            "size": {
+              "width": 120,
+              "height": 46
+            },
+            "style": {
+              "fontSize": 11,
+              "fill": "#FECACA",
+              "borderColor": "#D85A52",
+              "cornerRadius": 6,
+              "lineHeight": 1.15
+            }
+          },
+          {
+            "id": "enc-addnorm-1",
+            "kind": "rounded-rectangle",
+            "label": "Add & Norm",
+            "position": {
+              "x": 50,
+              "y": 274
+            },
+            "size": {
+              "width": 120,
+              "height": 46
+            },
+            "style": {
+              "fontSize": 11,
+              "fill": "#DCFCE7",
+              "borderColor": "#6FAE63",
+              "cornerRadius": 6
+            }
+          },
+          {
+            "id": "enc-feedforward",
+            "kind": "rounded-rectangle",
+            "label": "Feed Forward\nNetwork",
+            "position": {
+              "x": 50,
+              "y": 334
+            },
+            "size": {
+              "width": 120,
+              "height": 46
+            },
+            "style": {
+              "fontSize": 11,
+              "fill": "#FECACA",
+              "borderColor": "#D85A52",
+              "cornerRadius": 6,
+              "lineHeight": 1.15
+            }
+          },
+          {
+            "id": "enc-addnorm-2",
+            "kind": "rounded-rectangle",
+            "label": "Add & Norm",
+            "position": {
+              "x": 50,
+              "y": 394
+            },
+            "size": {
+              "width": 120,
+              "height": 46
+            },
+            "style": {
+              "fontSize": 11,
+              "fill": "#DCFCE7",
+              "borderColor": "#6FAE63",
+              "cornerRadius": 6
+            }
+          },
+          {
+            "id": "output-embedding",
+            "kind": "rounded-rectangle",
+            "label": "Output Embedding",
+            "position": {
+              "x": 598,
+              "y": 62
+            },
+            "size": {
+              "width": 120,
+              "height": 46
+            },
+            "style": {
+              "fontSize": 10,
+              "fill": "#DBEAFE",
+              "borderColor": "#5B8CCB",
+              "cornerRadius": 6
+            }
+          },
+          {
+            "id": "output-position",
+            "kind": "rounded-rectangle",
+            "label": "Positional Encoding",
+            "position": {
+              "x": 598,
+              "y": 122
+            },
+            "size": {
+              "width": 120,
+              "height": 46
+            },
+            "style": {
+              "fontSize": 10,
+              "fill": "#FEF3C7",
+              "borderColor": "#D39B31",
+              "cornerRadius": 6
+            }
+          },
+          {
+            "id": "dec-masked-attention",
+            "kind": "rounded-rectangle",
+            "label": "Masked Multi-Head\nAttention",
+            "position": {
+              "x": 598,
+              "y": 214
+            },
+            "size": {
+              "width": 120,
+              "height": 46
+            },
+            "style": {
+              "fontSize": 10,
+              "fill": "#FECACA",
+              "borderColor": "#D85A52",
+              "cornerRadius": 6,
+              "lineHeight": 1.15
+            }
+          },
+          {
+            "id": "dec-addnorm-1",
+            "kind": "rounded-rectangle",
+            "label": "Add & Norm",
+            "position": {
+              "x": 598,
+              "y": 269
+            },
+            "size": {
+              "width": 120,
+              "height": 46
+            },
+            "style": {
+              "fontSize": 11,
+              "fill": "#DCFCE7",
+              "borderColor": "#6FAE63",
+              "cornerRadius": 6
+            }
+          },
+          {
+            "id": "dec-cross-attention",
+            "kind": "rounded-rectangle",
+            "label": "Multi-Head\nCross-Attention",
+            "position": {
+              "x": 598,
+              "y": 324
+            },
+            "size": {
+              "width": 120,
+              "height": 46
+            },
+            "style": {
+              "fontSize": 11,
+              "fill": "#FECACA",
+              "borderColor": "#D85A52",
+              "cornerRadius": 6,
+              "lineHeight": 1.15
+            }
+          },
+          {
+            "id": "dec-addnorm-2",
+            "kind": "rounded-rectangle",
+            "label": "Add & Norm",
+            "position": {
+              "x": 598,
+              "y": 379
+            },
+            "size": {
+              "width": 120,
+              "height": 46
+            },
+            "style": {
+              "fontSize": 11,
+              "fill": "#DCFCE7",
+              "borderColor": "#6FAE63",
+              "cornerRadius": 6
+            }
+          },
+          {
+            "id": "dec-feedforward",
+            "kind": "rounded-rectangle",
+            "label": "Feed Forward\nNetwork",
+            "position": {
+              "x": 598,
+              "y": 434
+            },
+            "size": {
+              "width": 120,
+              "height": 46
+            },
+            "style": {
+              "fontSize": 11,
+              "fill": "#FECACA",
+              "borderColor": "#D85A52",
+              "cornerRadius": 6,
+              "lineHeight": 1.15
+            }
+          },
+          {
+            "id": "dec-addnorm-3",
+            "kind": "rounded-rectangle",
+            "label": "Add & Norm",
+            "position": {
+              "x": 598,
+              "y": 489
+            },
+            "size": {
+              "width": 120,
+              "height": 46
+            },
+            "style": {
+              "fontSize": 11,
+              "fill": "#DCFCE7",
+              "borderColor": "#6FAE63",
+              "cornerRadius": 6
+            }
+          },
+          {
+            "id": "linear-softmax",
+            "kind": "rounded-rectangle",
+            "label": "Linear & Softmax",
+            "position": {
+              "x": 598,
+              "y": 565
+            },
+            "size": {
+              "width": 120,
+              "height": 46
+            },
+            "style": {
+              "fontSize": 10,
+              "fill": "#CFFAFE",
+              "borderColor": "#168A99",
+              "cornerRadius": 6
+            }
+          },
+          {
+            "id": "output-probabilities",
+            "kind": "rounded-rectangle",
+            "label": "Output Probabilities",
+            "position": {
+              "x": 598,
+              "y": 630
+            },
+            "size": {
+              "width": 120,
+              "height": 46
+            },
+            "style": {
+              "fontSize": 10,
+              "fill": "#BFDBFE",
+              "borderColor": "#2876A7",
+              "bold": true,
+              "cornerRadius": 6
+            }
+          },
+          {
+            "id": "encoder-nx",
+            "kind": "text",
+            "label": "N×",
+            "position": {
+              "x": 0,
+              "y": 314
+            },
+            "size": {
+              "width": 48,
+              "height": 28
+            },
+            "style": {
+              "fontSize": 14,
+              "color": "#9B73B3",
+              "bold": true
+            }
+          },
+          {
+            "id": "decoder-nx",
+            "kind": "text",
+            "label": "N×",
+            "position": {
+              "x": 714,
+              "y": 415
+            },
+            "size": {
+              "width": 48,
+              "height": 28
+            },
+            "style": {
+              "fontSize": 14,
+              "color": "#D79A00",
+              "bold": true
+            }
+          }
+        ],
+        "edges": [
+          {
+            "id": "e-input-pos",
+            "source": "input-embedding",
+            "target": "input-position",
+            "sourceHandle": "bottom-source",
+            "targetHandle": "top-target",
+            "style": {
+              "stroke": "#5B8CCB",
+              "strokeWidth": 1.6,
+              "route": "smoothstep",
+              "markerEnd": "arrowclosed"
+            }
+          },
+          {
+            "id": "e-pos-enc",
+            "source": "input-position",
+            "target": "enc-attention",
+            "sourceHandle": "bottom-source",
+            "targetHandle": "top-target",
+            "style": {
+              "stroke": "#8B5AA5",
+              "strokeWidth": 1.6,
+              "route": "smoothstep",
+              "markerEnd": "arrowclosed"
+            }
+          },
+          {
+            "id": "e-enc-1",
+            "source": "enc-attention",
+            "target": "enc-addnorm-1",
+            "sourceHandle": "bottom-source",
+            "targetHandle": "top-target",
+            "style": {
+              "stroke": "#C44E47",
+              "strokeWidth": 1.6,
+              "route": "smoothstep",
+              "markerEnd": "arrowclosed"
+            }
+          },
+          {
+            "id": "e-enc-2",
+            "source": "enc-addnorm-1",
+            "target": "enc-feedforward",
+            "sourceHandle": "bottom-source",
+            "targetHandle": "top-target",
+            "style": {
+              "stroke": "#68A95D",
+              "strokeWidth": 1.6,
+              "route": "smoothstep",
+              "markerEnd": "arrowclosed"
+            }
+          },
+          {
+            "id": "e-enc-3",
+            "source": "enc-feedforward",
+            "target": "enc-addnorm-2",
+            "sourceHandle": "bottom-source",
+            "targetHandle": "top-target",
+            "style": {
+              "stroke": "#C44E47",
+              "strokeWidth": 1.6,
+              "route": "smoothstep",
+              "markerEnd": "arrowclosed"
+            }
+          },
+          {
+            "id": "e-output-pos",
+            "source": "output-embedding",
+            "target": "output-position",
+            "sourceHandle": "bottom-source",
+            "targetHandle": "top-target",
+            "style": {
+              "stroke": "#5B8CCB",
+              "strokeWidth": 1.6,
+              "route": "smoothstep",
+              "markerEnd": "arrowclosed"
+            }
+          },
+          {
+            "id": "e-pos-dec",
+            "source": "output-position",
+            "target": "dec-masked-attention",
+            "sourceHandle": "bottom-source",
+            "targetHandle": "top-target",
+            "style": {
+              "stroke": "#D29400",
+              "strokeWidth": 1.6,
+              "route": "smoothstep",
+              "markerEnd": "arrowclosed"
+            }
+          },
+          {
+            "id": "e-dec-1",
+            "source": "dec-masked-attention",
+            "target": "dec-addnorm-1",
+            "sourceHandle": "bottom-source",
+            "targetHandle": "top-target",
+            "style": {
+              "stroke": "#C44E47",
+              "strokeWidth": 1.6,
+              "route": "smoothstep",
+              "markerEnd": "arrowclosed"
+            }
+          },
+          {
+            "id": "e-dec-2",
+            "source": "dec-addnorm-1",
+            "target": "dec-cross-attention",
+            "sourceHandle": "bottom-source",
+            "targetHandle": "top-target",
+            "style": {
+              "stroke": "#68A95D",
+              "strokeWidth": 1.6,
+              "route": "smoothstep",
+              "markerEnd": "arrowclosed"
+            }
+          },
+          {
+            "id": "e-dec-3",
+            "source": "dec-cross-attention",
+            "target": "dec-addnorm-2",
+            "sourceHandle": "bottom-source",
+            "targetHandle": "top-target",
+            "style": {
+              "stroke": "#C44E47",
+              "strokeWidth": 1.6,
+              "route": "smoothstep",
+              "markerEnd": "arrowclosed"
+            }
+          },
+          {
+            "id": "e-dec-4",
+            "source": "dec-addnorm-2",
+            "target": "dec-feedforward",
+            "sourceHandle": "bottom-source",
+            "targetHandle": "top-target",
+            "style": {
+              "stroke": "#68A95D",
+              "strokeWidth": 1.6,
+              "route": "smoothstep",
+              "markerEnd": "arrowclosed"
+            }
+          },
+          {
+            "id": "e-dec-5",
+            "source": "dec-feedforward",
+            "target": "dec-addnorm-3",
+            "sourceHandle": "bottom-source",
+            "targetHandle": "top-target",
+            "style": {
+              "stroke": "#C44E47",
+              "strokeWidth": 1.6,
+              "route": "smoothstep",
+              "markerEnd": "arrowclosed"
+            }
+          },
+          {
+            "id": "e-dec-linear",
+            "source": "dec-addnorm-3",
+            "target": "linear-softmax",
+            "sourceHandle": "bottom-source",
+            "targetHandle": "top-target",
+            "style": {
+              "stroke": "#168A99",
+              "strokeWidth": 1.6,
+              "route": "smoothstep",
+              "markerEnd": "arrowclosed"
+            }
+          },
+          {
+            "id": "e-linear-output",
+            "source": "linear-softmax",
+            "target": "output-probabilities",
+            "sourceHandle": "bottom-source",
+            "targetHandle": "top-target",
+            "style": {
+              "stroke": "#2876A7",
+              "strokeWidth": 1.6,
+              "route": "smoothstep",
+              "markerEnd": "arrowclosed"
+            }
+          },
+          {
+            "id": "e-enc-residual-1",
+            "source": "enc-attention",
+            "target": "enc-addnorm-1",
+            "sourceHandle": "left-source",
+            "targetHandle": "left-target",
+            "controlPoints": [
+              {
+                "x": 18,
+                "y": 237
+              },
+              {
+                "x": 18,
+                "y": 297
+              }
+            ],
+            "style": {
+              "stroke": "#9CA3AF",
+              "strokeWidth": 1.2,
+              "strokeDasharray": "dashed",
+              "route": "smoothstep",
+              "markerEnd": "arrowclosed"
+            }
+          },
+          {
+            "id": "e-enc-residual-2",
+            "source": "enc-feedforward",
+            "target": "enc-addnorm-2",
+            "sourceHandle": "left-source",
+            "targetHandle": "left-target",
+            "controlPoints": [
+              {
+                "x": 18,
+                "y": 357
+              },
+              {
+                "x": 18,
+                "y": 417
+              }
+            ],
+            "style": {
+              "stroke": "#9CA3AF",
+              "strokeWidth": 1.2,
+              "strokeDasharray": "dashed",
+              "route": "smoothstep",
+              "markerEnd": "arrowclosed"
+            }
+          },
+          {
+            "id": "e-dec-residual-1",
+            "source": "dec-masked-attention",
+            "target": "dec-addnorm-1",
+            "sourceHandle": "right-source",
+            "targetHandle": "right-target",
+            "controlPoints": [
+              {
+                "x": 752,
+                "y": 237
+              },
+              {
+                "x": 752,
+                "y": 292
+              }
+            ],
+            "style": {
+              "stroke": "#9CA3AF",
+              "strokeWidth": 1.2,
+              "strokeDasharray": "dashed",
+              "route": "smoothstep",
+              "markerEnd": "arrowclosed"
+            }
+          },
+          {
+            "id": "e-dec-residual-2",
+            "source": "dec-cross-attention",
+            "target": "dec-addnorm-2",
+            "sourceHandle": "right-source",
+            "targetHandle": "right-target",
+            "controlPoints": [
+              {
+                "x": 752,
+                "y": 347
+              },
+              {
+                "x": 752,
+                "y": 402
+              }
+            ],
+            "style": {
+              "stroke": "#9CA3AF",
+              "strokeWidth": 1.2,
+              "strokeDasharray": "dashed",
+              "route": "smoothstep",
+              "markerEnd": "arrowclosed"
+            }
+          },
+          {
+            "id": "e-dec-residual-3",
+            "source": "dec-feedforward",
+            "target": "dec-addnorm-3",
+            "sourceHandle": "right-source",
+            "targetHandle": "right-target",
+            "controlPoints": [
+              {
+                "x": 752,
+                "y": 457
+              },
+              {
+                "x": 752,
+                "y": 512
+              }
+            ],
+            "style": {
+              "stroke": "#9CA3AF",
+              "strokeWidth": 1.2,
+              "strokeDasharray": "dashed",
+              "route": "smoothstep",
+              "markerEnd": "arrowclosed"
+            }
+          },
+          {
+            "id": "e-encoder-output",
+            "source": "enc-addnorm-2",
+            "target": "dec-cross-attention",
+            "sourceHandle": "right-source",
+            "targetHandle": "left-target",
+            "label": "Encoder Output",
+            "controlPoints": [
+              {
+                "x": 370,
+                "y": 417
+              },
+              {
+                "x": 370,
+                "y": 347
+              }
+            ],
+            "style": {
+              "stroke": "#FF5C62",
+              "strokeWidth": 2,
+              "strokeDasharray": "dashed",
+              "route": "smoothstep",
+              "markerEnd": "arrowclosed",
+              "labelColor": "#FF5C62",
+              "labelBackground": "#FFFFFF",
+              "labelFontSize": 11,
+              "labelBold": true,
+              "labelOffsetX": -72,
+              "labelOffsetY": -10
+            }
+          }
+        ],
+        "groups": [
+          {
+            "id": "encoder",
+            "label": "ENCODER",
+            "memberIds": [
+              "enc-attention",
+              "enc-addnorm-1",
+              "enc-feedforward",
+              "enc-addnorm-2"
+            ],
+            "style": {
+              "fontSize": 13,
+              "color": "#1F2937",
+              "fill": "#E9D5FF",
+              "borderColor": "#A78BBA",
+              "borderWidth": 1,
+              "cornerRadius": 22
+            }
+          },
+          {
+            "id": "decoder",
+            "label": "DECODER",
+            "memberIds": [
+              "dec-masked-attention",
+              "dec-addnorm-1",
+              "dec-cross-attention",
+              "dec-addnorm-2",
+              "dec-feedforward",
+              "dec-addnorm-3"
+            ],
+            "style": {
+              "fontSize": 13,
+              "color": "#1F2937",
+              "fill": "#FFEDD5",
+              "borderColor": "#ECA229",
+              "borderWidth": 1,
+              "cornerRadius": 22
+            }
+          }
+        ]
+      }
+    }
+  ]
+}

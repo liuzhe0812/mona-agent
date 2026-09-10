@@ -2,6 +2,7 @@ import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { ThreadComposer } from "@/components/thread/ThreadComposer";
+import { SEND_MESSAGE_SHORTCUT_EVENT } from "@/lib/tauri";
 import type { RoomAgentInfo, SlashCommand } from "@/lib/types";
 
 const COMMANDS: SlashCommand[] = [
@@ -71,6 +72,12 @@ describe("ThreadComposer", () => {
     expect(input).toBeInTheDocument();
     expect(input.className).toContain("min-h-[78px]");
     expect(input.parentElement?.className).toContain("max-w-[58rem]");
+    expect(screen.getByTestId("hero-composer-prelude")).toHaveClass(
+      "left-1/2",
+      "max-w-[58rem]",
+      "-translate-x-1/2",
+      "flex-wrap",
+    );
   });
 
   it("can hide global hero prompt chips for a dedicated agent", () => {
@@ -107,7 +114,65 @@ describe("ThreadComposer", () => {
     expect(screen.getByRole("button", { name: "Send message" }).className).toContain("bg-foreground");
   });
 
-  it("groups enabled chat models by provider and switches the selected model", async () => {
+  it("sends with Enter by default and keeps Shift+Enter for a newline", () => {
+    const onSend = vi.fn();
+    render(<ThreadComposer onSend={onSend} />);
+    const input = screen.getByLabelText("Message input");
+
+    fireEvent.change(input, { target: { value: "first" } });
+    fireEvent.keyDown(input, { key: "Enter", shiftKey: true });
+    expect(onSend).not.toHaveBeenCalled();
+
+    fireEvent.keyDown(input, { key: "Enter" });
+    expect(onSend).toHaveBeenCalledWith("first", undefined, undefined);
+  });
+
+  it("sends a structured quote preview with the follow-up prompt", () => {
+    const onSend = vi.fn();
+    const onClearQuote = vi.fn();
+    render(
+      <ThreadComposer
+        onSend={onSend}
+        quote={{ author: "Mona", content: "先检查构建是否通过。" }}
+        onClearQuote={onClearQuote}
+      />,
+    );
+
+    expect(screen.getByTestId("composer-quote-preview")).toHaveTextContent("Replying to Mona");
+    fireEvent.change(screen.getByLabelText("Message input"), {
+      target: { value: "那接下来怎么做？" },
+    });
+    fireEvent.keyDown(screen.getByLabelText("Message input"), { key: "Enter" });
+
+    expect(onSend).toHaveBeenCalledWith(
+      "引用 Mona 的消息：\n先检查构建是否通过。\n\n那接下来怎么做？",
+      undefined,
+      {
+        quote: { author: "Mona", content: "先检查构建是否通过。" },
+        displayContent: "那接下来怎么做？",
+      },
+    );
+    expect(onClearQuote).toHaveBeenCalledTimes(1);
+  });
+
+  it("switches live to Ctrl+Enter send while plain Enter keeps editing", () => {
+    const onSend = vi.fn();
+    render(<ThreadComposer onSend={onSend} />);
+    const input = screen.getByLabelText("Message input");
+    fireEvent(
+      window,
+      new CustomEvent(SEND_MESSAGE_SHORTCUT_EVENT, { detail: "ctrl_enter" }),
+    );
+    fireEvent.change(input, { target: { value: "second" } });
+
+    fireEvent.keyDown(input, { key: "Enter" });
+    expect(onSend).not.toHaveBeenCalled();
+
+    fireEvent.keyDown(input, { key: "Enter", ctrlKey: true });
+    expect(onSend).toHaveBeenCalledWith("second", undefined, undefined);
+  });
+
+  it("opens model details as a secondary menu and switches the selected model", async () => {
     const onModelSwitch = vi.fn();
     render(
       <ThreadComposer
@@ -119,16 +184,31 @@ describe("ThreadComposer", () => {
             providerLabel: "阿里云百炼 Coding Plan（包月）",
             model: "qwen3.7-plus",
             label: "Qwen 3.7 Plus",
-            free: false,
             active: true,
           },
           {
-            provider: "zen",
-            providerLabel: "内置供应商",
-            model: "hy3-free",
-            label: "hy3",
-            free: true,
+            provider: "mona_managed",
+            providerLabel: "Mona AI",
+            model: "deepseek-v4-flash",
+            label: "DeepSeek V4 Flash",
             active: false,
+            isBuiltin: true,
+            description: "编程主力，响应快，适合大多数代码任务",
+            contextWindow: 1_000_000,
+            recommended: true,
+            tags: ["编程", "快速"],
+            priceTier: "经济",
+            reasoningEfforts: ["medium", "high", "max"],
+            reasoningEffort: "high",
+            inputAmountPerMillion: "1",
+            cachedInputAmountPerMillion: "0.02",
+            outputAmountPerMillion: "2",
+            promotionLabel: "↓50%",
+            promotionName: "新用户限时优惠",
+            discountPercent: 50,
+            originalInputAmountPerMillion: "2",
+            originalCachedInputAmountPerMillion: "0.04",
+            originalOutputAmountPerMillion: "4",
           },
         ]}
         onModelSwitch={onModelSwitch}
@@ -139,11 +219,47 @@ describe("ThreadComposer", () => {
       button: 0,
       ctrlKey: false,
     });
-    expect(await screen.findByText("阿里云百炼 Coding Plan（包月）")).toBeInTheDocument();
-    expect(screen.getByText("内置供应商")).toBeInTheDocument();
-    expect(screen.getByText("免费")).toBeInTheDocument();
-    fireEvent.click(screen.getByText("hy3"));
-    expect(onModelSwitch).toHaveBeenCalledWith("zen", "hy3-free");
+    expect(await screen.findByPlaceholderText("搜索模型…")).toBeInTheDocument();
+    expect(screen.getByText("阿里云百炼 Coding Plan（包月）")).toBeInTheDocument();
+    expect(screen.getByText("Mona AI")).toBeInTheDocument();
+    expect(screen.getByText("Qwen 3.7 Plus")).toBeInTheDocument();
+    expect(screen.queryByText("免费")).not.toBeInTheDocument();
+    const modelRow = screen.getByText("DeepSeek V4 Flash");
+    fireEvent.pointerEnter(modelRow);
+    expect(await screen.findByText("编程主力，响应快，适合大多数代码任务")).toBeInTheDocument();
+    expect(screen.getByText("↓50%")).toBeInTheDocument();
+    expect(screen.getByText("新用户限时优惠")).toBeInTheDocument();
+    expect(screen.getByText("折扣中，较标准价省 50%")).toBeInTheDocument();
+    expect(screen.getAllByText("¥2").length).toBeGreaterThanOrEqual(1);
+    expect(screen.getByText("¥4")).toBeInTheDocument();
+    expect(screen.getByText("推理强度")).toBeInTheDocument();
+    expect(screen.getByText("每百万 Token")).toBeInTheDocument();
+    expect(screen.getByText("缓存读取")).toBeInTheDocument();
+    expect(screen.getByText("1M 上下文")).toBeInTheDocument();
+    fireEvent.click(modelRow);
+    expect(onModelSwitch).toHaveBeenCalledWith("mona_managed", "deepseek-v4-flash", "high");
+  });
+
+  it("shows only the active model id in the composer trigger", () => {
+    render(
+      <ThreadComposer
+        onSend={vi.fn()}
+        modelOptions={[{
+          provider: "mona_managed",
+          providerLabel: "Mona AI",
+          model: "ZHIPU/GLM-5.3",
+          label: "GLM-5.3",
+          active: true,
+          isBuiltin: true,
+          reasoningEffort: "medium",
+        }]}
+        onModelSwitch={vi.fn()}
+      />,
+    );
+
+    expect(screen.getByRole("button", { name: "ZHIPU/GLM-5.3" })).toBeInTheDocument();
+    expect(screen.queryByText("Mona AI")).not.toBeInTheDocument();
+    expect(screen.queryByText("默认")).not.toBeInTheDocument();
   });
 
   it("shows turn run timer when runStartedAt is set", () => {
@@ -316,6 +432,21 @@ describe("ThreadComposer", () => {
     fireEvent.click(screen.getByRole("button", { name: "Stop response" }));
 
     expect(onStop).toHaveBeenCalledTimes(1);
+    expect(screen.queryByRole("button", { name: "Send message" })).not.toBeInTheDocument();
+  });
+
+  it("shows a disabled stopping state while waiting for server confirmation", () => {
+    render(
+      <ThreadComposer
+        onSend={vi.fn()}
+        onStop={vi.fn()}
+        isStreaming
+        stopping
+      />,
+    );
+
+    const button = screen.getByRole("button", { name: "Stopping" });
+    expect(button).toBeDisabled();
     expect(screen.queryByRole("button", { name: "Send message" })).not.toBeInTheDocument();
   });
 });

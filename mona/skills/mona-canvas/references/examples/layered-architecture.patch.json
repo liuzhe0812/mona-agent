@@ -1,0 +1,169 @@
+{
+  "baseHash": "<canvas.open semanticHash>",
+  "baseDocumentHash": "<canvas.open documentHash>",
+  "ops": [
+    {
+      "name": "replaceGraph",
+      "graph": {
+        "direction": "LR",
+        "layout": "manual",
+        "theme": {
+          "stylePreset": "soft",
+          "paletteId": "deep-blue",
+          "preserveManualStyles": true
+        },
+        "background": "#F8FAFC",
+        "nodes": [
+          {
+            "id": "client",
+            "kind": "rounded-rectangle",
+            "label": "Web / Mobile",
+            "icon": "mobile",
+            "style": {
+              "fill": "#DBEAFE",
+              "borderColor": "#5B8CCB"
+            },
+            "position": {
+              "x": 40,
+              "y": 220
+            }
+          },
+          {
+            "id": "gateway",
+            "kind": "rounded-rectangle",
+            "label": "API Gateway",
+            "icon": "network",
+            "style": {
+              "fill": "#E0E7FF",
+              "borderColor": "#6366F1",
+              "bold": true
+            },
+            "position": {
+              "x": 240,
+              "y": 220
+            }
+          },
+          {
+            "id": "order",
+            "kind": "rounded-rectangle",
+            "label": "Order Service",
+            "icon": "server",
+            "position": {
+              "x": 460,
+              "y": 140
+            }
+          },
+          {
+            "id": "inventory",
+            "kind": "rounded-rectangle",
+            "label": "Inventory Service",
+            "icon": "server",
+            "position": {
+              "x": 460,
+              "y": 300
+            }
+          },
+          {
+            "id": "events",
+            "kind": "rounded-rectangle",
+            "label": "Event Bus",
+            "icon": "message",
+            "style": {
+              "fill": "#FEF3C7",
+              "borderColor": "#D39B31"
+            },
+            "position": {
+              "x": 680,
+              "y": 220
+            }
+          },
+          {
+            "id": "database",
+            "kind": "database",
+            "label": "Business Data",
+            "icon": "database",
+            "style": {
+              "fill": "#DCFCE7",
+              "borderColor": "#6FAE63"
+            },
+            "position": {
+              "x": 900,
+              "y": 220
+            }
+          }
+        ],
+        "edges": [
+          {
+            "id": "e-client-gateway",
+            "source": "client",
+            "target": "gateway",
+            "label": "HTTPS"
+          },
+          {
+            "id": "e-gateway-order",
+            "source": "gateway",
+            "target": "order",
+            "label": "REST"
+          },
+          {
+            "id": "e-gateway-inventory",
+            "source": "gateway",
+            "target": "inventory",
+            "label": "REST"
+          },
+          {
+            "id": "e-order-events",
+            "source": "order",
+            "target": "events",
+            "label": "publish",
+            "style": {
+              "strokeDasharray": "dashed"
+            }
+          },
+          {
+            "id": "e-inventory-events",
+            "source": "inventory",
+            "target": "events",
+            "label": "consume",
+            "style": {
+              "strokeDasharray": "dashed"
+            }
+          },
+          {
+            "id": "e-events-db",
+            "source": "events",
+            "target": "database",
+            "label": "persist"
+          }
+        ],
+        "groups": [
+          {
+            "id": "edge-region",
+            "label": "ACCESS",
+            "memberIds": [
+              "client",
+              "gateway"
+            ],
+            "style": {
+              "fill": "#EEF2FF",
+              "borderColor": "#A5B4FC"
+            }
+          },
+          {
+            "id": "service-region",
+            "label": "BUSINESS SERVICES",
+            "memberIds": [
+              "order",
+              "inventory",
+              "events"
+            ],
+            "style": {
+              "fill": "#F1F5F9",
+              "borderColor": "#CBD5E1"
+            }
+          }
+        ]
+      }
+    }
+  ]
+}

@@ -18,6 +18,7 @@ from mona.runtime.skill_env import (
     SkillRuntimeSpec,
     parse_skill_runtime_spec,
 )
+from mona.runtime.skill_jobs import SkillSetupJobManager
 
 
 def _install_component(
@@ -83,6 +84,153 @@ def test_runtime_declarations_require_exact_dependency_versions() -> None:
         PythonSkillDependencies(requirements=["requests>=2"])
     with pytest.raises(ValueError, match="package@version"):
         NodeSkillDependencies(packages=["lodash@latest"])
+
+
+async def test_optional_r_script_does_not_block_python_skill_setup(tmp_path: Path) -> None:
+    skill_dir = tmp_path / "skill"
+    scripts = skill_dir / "scripts"
+    scripts.mkdir(parents=True)
+    (scripts / "run.py").write_text("print('ok')\n", encoding="utf-8")
+    (scripts / "optional_backend.R").write_text("print('ok')\n", encoding="utf-8")
+    manager = AgentEnvironmentManager(tmp_path / "runtimes")
+    seen: list[str] = []
+
+    async def prepare(suffix, _skill_dir, _spec):
+        seen.append(suffix)
+
+    manager.prepare_for_skill = prepare  # type: ignore[method-assign]
+    spec = SkillRuntimeSpec(
+        python=PythonSkillDependencies(),
+        optional_script_types=["r"],
+    )
+
+    await manager.prepare_all(skill_dir, spec)
+
+    assert seen == [".py"]
+    assert spec.canonical()["optional_script_types"] == ["r"]
+
+
+async def test_skill_setup_job_completes_and_persists(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    skill_dir = tmp_path / "skill"
+    (skill_dir / "scripts").mkdir(parents=True)
+    (skill_dir / "SKILL.md").write_text(
+        "---\nname: analysis-experiment\ndescription: Test\n---\n",
+        encoding="utf-8",
+    )
+    (skill_dir / "scripts" / "run.py").write_text("print('ok')\n", encoding="utf-8")
+    actions: list[tuple[str, str]] = []
+
+    class FakeSkillManager:
+        def __init__(self, agent_id, *, registry):
+            del agent_id, registry
+
+        def active_skill_dir(self, name):
+            assert name == "analysis-experiment"
+            return skill_dir
+
+        assert_script_setup_allowed = active_skill_dir
+
+        def action(self, name, action):
+            actions.append((name, action))
+
+    async def prepare_all(self, current_dir, spec):
+        del self, spec
+        assert current_dir == skill_dir
+
+    monkeypatch.setattr("mona.agent.agent_management.SkillManager", FakeSkillManager)
+    monkeypatch.setattr(
+        "mona.config.paths.get_managed_runtimes_dir", lambda: tmp_path / "runtimes"
+    )
+    monkeypatch.setattr(AgentEnvironmentManager, "prepare_all", prepare_all)
+    state_path = tmp_path / "jobs" / "skill-setups.json"
+    manager = SkillSetupJobManager(state_path)
+
+    started = manager.start("agent.demo", "analysis-experiment", object())
+    for _ in range(20):
+        await asyncio.sleep(0)
+        finished = manager.get(started.job_id)
+        if finished.state not in {"queued", "running"}:
+            break
+
+    assert finished.state == "completed"
+    assert actions == [("analysis-experiment", "enable_scripts")]
+    assert SkillSetupJobManager(state_path).get(started.job_id).state == "completed"
+
+
+async def test_skill_setup_job_can_be_cancelled(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    skill_dir = tmp_path / "skill"
+    (skill_dir / "scripts").mkdir(parents=True)
+    (skill_dir / "SKILL.md").write_text("---\nname: test\n---\n", encoding="utf-8")
+    entered = asyncio.Event()
+
+    class FakeSkillManager:
+        def __init__(self, agent_id, *, registry):
+            del agent_id, registry
+
+        def active_skill_dir(self, name):
+            del name
+            return skill_dir
+
+        assert_script_setup_allowed = active_skill_dir
+
+        def action(self, name, action):
+            raise AssertionError((name, action))
+
+    async def prepare_all(self, current_dir, spec):
+        del self, current_dir, spec
+        entered.set()
+        await asyncio.Future()
+
+    monkeypatch.setattr("mona.agent.agent_management.SkillManager", FakeSkillManager)
+    monkeypatch.setattr(
+        "mona.config.paths.get_managed_runtimes_dir", lambda: tmp_path / "runtimes"
+    )
+    monkeypatch.setattr(AgentEnvironmentManager, "prepare_all", prepare_all)
+    manager = SkillSetupJobManager(tmp_path / "skill-setups.json")
+    job = manager.start("agent.demo", "test", object())
+    await entered.wait()
+
+    cancelled = await manager.cancel(job.job_id)
+
+    assert cancelled.state == "cancelled"
+    assert cancelled.stage == "cancelled"
+
+
+def test_interrupted_skill_setup_is_recoverable(tmp_path: Path) -> None:
+    state_path = tmp_path / "skill-setups.json"
+    state_path.write_text(
+        json.dumps(
+            {
+                "schemaVersion": 1,
+                "jobs": [
+                    {
+                        "schemaVersion": 1,
+                        "jobId": "job-1",
+                        "agentId": "agent.demo",
+                        "skillName": "analysis-experiment",
+                        "contentHash": "a" * 64,
+                        "state": "running",
+                        "stage": "preparing_runtime",
+                        "createdAt": 1,
+                        "updatedAt": 1,
+                    }
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    recovered = SkillSetupJobManager(state_path).get("job-1")
+
+    assert recovered.state == "failed"
+    assert recovered.stage == "interrupted"
+    assert recovered.error and "重新开始" in recovered.error
 
 
 async def test_python_dependency_profiles_are_reused_by_declaration(

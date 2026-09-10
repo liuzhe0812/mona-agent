@@ -126,10 +126,11 @@ def build_index_html(
     timeline, total = compute_timeline(scenes, storyboard)
 
     entries: list[str] = []
-    for _num, path, start, duration in timeline:
+    for num, path, start, duration in timeline:
         rel = f"scenes/{path.name}"
         entries.append(
-            f'    <div data-composition-src="{rel}" '
+            f'    <div id="scene-host-{num}" data-composition-id="scene-host-{num}" '
+            f'data-composition-src="{rel}" '
             f'data-start="{_fmt(start)}" data-duration="{_fmt(duration)}" '
             f'data-track-index="0"></div>'
         )
@@ -150,7 +151,7 @@ def build_index_html(
         entries_block,
         "  </main>",
         "  <script>",
-        "    window.__timelines = window.__timelines || {};",
+        "    window.__timelines = window.__timelines || [];",
         '    window.__timelines["main"] = gsap.timeline({ paused: true });',
         "  </script>",
         "</body>",

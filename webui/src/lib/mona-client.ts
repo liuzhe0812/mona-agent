@@ -1,14 +1,18 @@
 import type {
   AgentChangeProposal,
   AgentInstruction,
+  AgentSkillSetupJob,
+  AgentSummary,
   AgentUserConfigPayload,
   AgentJobSummary,
   ApprovalRequestedPayload,
   ConnectionStatus,
+  DiscussionLaunchOptions,
   InboundEvent,
   Outbound,
   OutboundMedia,
   GoalStateWsPayload,
+  TaskPlanWsPayload,
   RoomCommandResult,
   RoomState,
   RoomUpdate,
@@ -19,6 +23,7 @@ import type {
   WorkflowStepActivityPayload,
   WorkflowTrigger,
   WorkflowUpdatedPayload,
+  MessageQuote,
 } from "./types";
 
 /** WebSocket readyState constants, referenced by value to stay portable
@@ -28,9 +33,9 @@ const WS_CLOSING = 2;
 
 /** Inbound WebSocket ``console.log`` / parse-failure ``console.warn``.
  *
- * - **Dev** (non-production bundle): **on by default** — messages appear at default log level.
- * - **Production**: off unless ``localStorage.setItem('mona_debug_ws','1')`` (or ``true``).
- * - **Silence anywhere**: ``localStorage.setItem('mona_debug_ws','0')`` (or ``false`` / ``off``).
+ * Disabled by default because token-level streams can produce thousands of
+ * frames and retained console objects can stall WebView2. Enable explicitly
+ * with ``localStorage.setItem('mona_debug_ws','1')`` when diagnosing transport.
  * Values are read on every frame; no reload needed.
  */
 function wsInboundDebugEnabled(): boolean {
@@ -45,9 +50,9 @@ function wsInboundDebugEnabled(): boolean {
     if (raw === "1" || raw === "true" || raw === "on" || raw === "yes") {
       return true;
     }
-    return !import.meta.env.PROD;
+    return false;
   } catch {
-    return !import.meta.env.PROD;
+    return false;
   }
 }
 
@@ -185,6 +190,7 @@ export class MonaClient {
   private chatHandlers = new Map<string, Set<EventHandler>>();
   /** Inbound frames received while no subscriber is registered (e.g. user switched away). */
   private pendingInboundByChat = new Map<string, InboundEvent[]>();
+  private pendingChatReplayScheduled = new Set<string>();
   private static readonly PENDING_INBOUND_MAX = 2000;
   // chat_ids we've attached to since connect; re-attached after reconnects
   private knownChats = new Set<string>();
@@ -192,6 +198,8 @@ export class MonaClient {
   private runStartedAtByChatId = new Map<string, number>();
   /** Latest ``goal_state`` snapshot per ``chat_id`` (multi-session isolation). */
   private goalStateByChatId = new Map<string, GoalStateWsPayload>();
+  private taskPlanByChatId = new Map<string, TaskPlanWsPayload>();
+  private artifactTaskIdByChatId = new Map<string, string>();
   private pendingNewChat: PendingNewChat | null = null;
   private pendingRoomCommands = new Map<string, PendingRoomCommand>();
   private roomCommandSeq = 0;
@@ -404,6 +412,10 @@ export class MonaClient {
     return this.goalStateByChatId.get(chatId);
   }
 
+  getTaskPlan(chatId: string): TaskPlanWsPayload | undefined {
+    return this.taskPlanByChatId.get(chatId);
+  }
+
   private recordGoalStatusForRunStrip(chatId: string, ev: InboundEvent): void {
     if (ev.event !== "goal_status") return;
     if (ev.status === "running" && typeof ev.started_at === "number") {
@@ -435,12 +447,22 @@ export class MonaClient {
     }
     handlers.add(handler);
     const pending = this.pendingInboundByChat.get(chatId);
-    if (pending !== undefined && pending.length > 0) {
-      const flushed = pending.splice(0);
-      this.pendingInboundByChat.delete(chatId);
-      for (const ev of flushed) {
-        handler(ev);
-      }
+    if (
+      pending !== undefined
+      && pending.length > 0
+      && !this.pendingChatReplayScheduled.has(chatId)
+    ) {
+      this.pendingChatReplayScheduled.add(chatId);
+      queueMicrotask(() => {
+        this.pendingChatReplayScheduled.delete(chatId);
+        const flushed = this.pendingInboundByChat.get(chatId)?.splice(0) ?? [];
+        this.pendingInboundByChat.delete(chatId);
+        const current = this.chatHandlers.get(chatId);
+        if (!current) return;
+        for (const ev of flushed) {
+          for (const subscriber of current) subscriber(ev);
+        }
+      });
     }
     this.attach(chatId);
     return () => {
@@ -608,7 +630,7 @@ export class MonaClient {
   actOnAgentSkill(
     agentId: string,
     name: string,
-    action: "enable" | "disable" | "archive" | "restore" | "enable_scripts" | "disable_scripts",
+    action: "enable" | "disable" | "archive" | "restore" | "enable_scripts" | "disable_scripts" | "pin" | "unpin",
   ): Promise<void> {
     return this.sendAgentCommandRaw("agent_skill_action_result", (requestId) => ({
       type: "agent_skill_action",
@@ -749,6 +771,93 @@ export class MonaClient {
       chat_id: chatId,
       ...(inputs !== undefined ? { inputs } : {}),
       ...(templateRef !== undefined ? { template_ref: templateRef } : {}),
+      request_id: requestId,
+    })).then(() => undefined);
+  }
+
+  startAgentSkillSetup(agentId: string, name: string): Promise<AgentSkillSetupJob> {
+    return this.sendAgentCommandRaw("agent_skill_setup_start_result", (requestId) => ({
+      type: "agent_skill_setup_start",
+      agent_id: agentId,
+      name,
+      request_id: requestId,
+    })).then((result) => {
+      const job = (result as unknown as { job?: AgentSkillSetupJob }).job;
+      if (!job) throw new Error("malformed agent_skill_setup_start_result");
+      return job;
+    });
+  }
+
+  getAgentSkillSetup(
+    agentId: string,
+    name: string,
+    jobId?: string,
+  ): Promise<AgentSkillSetupJob | null> {
+    return this.sendAgentCommandRaw("agent_skill_setup_status_result", (requestId) => ({
+      type: "agent_skill_setup_status",
+      agent_id: agentId,
+      name,
+      ...(jobId ? { job_id: jobId } : {}),
+      request_id: requestId,
+    })).then((result) => (
+      (result as unknown as { job?: AgentSkillSetupJob | null }).job ?? null
+    ));
+  }
+
+  cancelAgentSkillSetup(jobId: string): Promise<AgentSkillSetupJob> {
+    return this.sendAgentCommandRaw("agent_skill_setup_cancel_result", (requestId) => ({
+      type: "agent_skill_setup_cancel",
+      job_id: jobId,
+      request_id: requestId,
+    })).then((result) => {
+      const job = (result as unknown as { job?: AgentSkillSetupJob }).job;
+      if (!job) throw new Error("malformed agent_skill_setup_cancel_result");
+      return job;
+    });
+  }
+
+  createCustomAgent(
+    displayName: string,
+    description: string,
+    instructions: string,
+  ): Promise<AgentSummary> {
+    return this.sendAgentCommandRaw("custom_agent_create_result", (requestId) => ({
+      type: "custom_agent_create",
+      display_name: displayName,
+      description,
+      instructions,
+      request_id: requestId,
+    })).then((result) => {
+      const agent = (result as { agent?: AgentSummary }).agent;
+      if (!agent) throw new Error("malformed custom_agent_create_result");
+      return agent;
+    });
+  }
+
+  private recordTaskPlanSnapshot(chatId: string, ev: InboundEvent): void {
+    if (ev.event === "artifact_task_started") {
+      this.artifactTaskIdByChatId.set(chatId, ev.task_id);
+      this.taskPlanByChatId.delete(chatId);
+      return;
+    }
+    if (ev.event !== "task_plan") return;
+    const currentTaskId = this.artifactTaskIdByChatId.get(chatId);
+    if (currentTaskId && ev.task_plan.task_id && ev.task_plan.task_id !== currentTaskId) return;
+    this.taskPlanByChatId.set(chatId, ev.task_plan);
+  }
+
+  updateAgentSkill(
+    agentId: string,
+    name: string,
+    content: string,
+    expectedHash: string,
+  ): Promise<void> {
+    return this.sendAgentCommandRaw("agent_skill_update_result", (requestId) => ({
+      type: "agent_skill_update",
+      agent_id: agentId,
+      name,
+      content,
+      expected_hash: expectedHash,
       request_id: requestId,
     })).then(() => undefined);
   }
@@ -914,6 +1023,31 @@ export class MonaClient {
     });
   }
 
+  /** Create an independent chat containing the source history through one assistant turn. */
+  branchChat(
+    sourceChatId: string,
+    assistantOrdinal: number,
+    sourceTaskId?: string,
+    timeoutMs: number = 5_000,
+  ): Promise<string> {
+    if (this.pendingNewChat) {
+      return Promise.reject(new Error("newChat already in flight"));
+    }
+    return new Promise<string>((resolve, reject) => {
+      const timer = setTimeout(() => {
+        this.pendingNewChat = null;
+        reject(new Error("branchChat timed out"));
+      }, timeoutMs);
+      this.pendingNewChat = { resolve, reject, timer };
+      this.queueSend({
+        type: "branch_chat",
+        source_chat_id: sourceChatId,
+        assistant_ordinal: assistantOrdinal,
+        ...(sourceTaskId ? { source_task_id: sourceTaskId } : {}),
+      });
+    });
+  }
+
   attach(chatId: string): void {
     this.knownChats.add(chatId);
     if (this.socket?.readyState === WS_OPEN) {
@@ -927,6 +1061,8 @@ export class MonaClient {
     this.pendingInboundByChat.delete(chatId);
     this.runStartedAtByChatId.delete(chatId);
     this.goalStateByChatId.delete(chatId);
+    this.taskPlanByChatId.delete(chatId);
+    this.artifactTaskIdByChatId.delete(chatId);
     this.queueSend({ type: "delete_chat", chat_id: chatId });
   }
 
@@ -938,6 +1074,7 @@ export class MonaClient {
       /** IMPORTANT: Short display text persisted to server for history replay.
        *  DO NOT remove — keeps user messages showing original input, not enriched prompts. */
       displayContent?: string;
+      quote?: MessageQuote;
       terminalSessionId?: string;
       terminalExecMode?: string;
       dbConnectionId?: string;
@@ -947,8 +1084,19 @@ export class MonaClient {
       dbServerVersion?: string;
       dbCurrentSql?: string;
       dbLastError?: string;
+      browserTabId?: string;
       browserPageUrl?: string;
       browserPageTitle?: string;
+      officeSessionId?: string;
+      officeDocumentType?: "docs" | "sheets" | "slides";
+      officeDisplayName?: string;
+      canvasId?: string;
+      canvasPath?: string;
+      /** Route only this message through a dedicated document Agent. */
+      agentKind?: "ppt" | "video";
+      taskId?: string;
+      origin?: "profile_advice";
+      profileAdviceId?: string;
       /** Workspace-relative paths of documents uploaded via sendDocUpload.
        *  The backend resolves them to absolute paths and passes them to
        *  extract_documents(), which injects the extracted text into the user
@@ -958,15 +1106,38 @@ export class MonaClient {
        *  The backend re-validates every ID against room membership and
        *  routes partner targets to tracked AgentJobs. */
       targetAgentIds?: string[];
+      /** Structured topic discussion launched from a room. */
+      discussion?: DiscussionLaunchOptions;
     },
   ): void {
     this.knownChats.add(chatId);
+    if (options?.discussion) {
+      const frame: Outbound = {
+        type: "start_discussion",
+        chat_id: chatId,
+        content,
+        target_agent_ids: options.discussion.participantIds,
+        discussion: {
+          mode: options.discussion.mode,
+          max_rounds: options.discussion.maxRounds,
+          positions: options.discussion.positions,
+          styles: options.discussion.styles,
+          summary_agent_id: options.discussion.summaryAgentId,
+        },
+        ...(options.displayContent ? { display_content: options.displayContent } : {}),
+        ...(options.quote ? { quote: options.quote } : {}),
+        webui: true,
+      };
+      this.queueSend(frame);
+      return;
+    }
     const frame: Outbound = {
       type: "message",
       chat_id: chatId,
       content,
       ...(media && media.length > 0 ? { media } : {}),
       ...(options?.displayContent ? { display_content: options.displayContent } : {}),
+      ...(options?.quote ? { quote: options.quote } : {}),
       ...(options?.terminalSessionId ? { terminal_session_id: options.terminalSessionId } : {}),
       ...(options?.terminalExecMode ? { terminal_exec_mode: options.terminalExecMode } : {}),
       ...(options?.dbConnectionId ? { db_connection_id: options.dbConnectionId } : {}),
@@ -976,8 +1147,18 @@ export class MonaClient {
       ...(options?.dbServerVersion ? { db_server_version: options.dbServerVersion } : {}),
       ...(options?.dbCurrentSql ? { db_current_sql: options.dbCurrentSql } : {}),
       ...(options?.dbLastError ? { db_last_error: options.dbLastError } : {}),
+      ...(options?.browserTabId ? { browser_tab_id: options.browserTabId } : {}),
       ...(options?.browserPageUrl ? { browser_page_url: options.browserPageUrl } : {}),
       ...(options?.browserPageTitle ? { browser_page_title: options.browserPageTitle } : {}),
+      ...(options?.officeSessionId ? { office_session_id: options.officeSessionId } : {}),
+      ...(options?.officeDocumentType ? { office_document_type: options.officeDocumentType } : {}),
+      ...(options?.officeDisplayName ? { office_display_name: options.officeDisplayName } : {}),
+      ...(options?.canvasId ? { canvas_id: options.canvasId } : {}),
+      ...(options?.canvasPath ? { canvas_path: options.canvasPath } : {}),
+      ...(options?.agentKind ? { agent_kind: options.agentKind } : {}),
+      ...(options?.taskId ? { task_id: options.taskId } : {}),
+      ...(options?.origin ? { origin: options.origin } : {}),
+      ...(options?.profileAdviceId ? { profile_advice_id: options.profileAdviceId } : {}),
       ...(options?.docPaths && options.docPaths.length > 0 ? { doc_paths: options.docPaths } : {}),
       ...(options?.targetAgentIds && options.targetAgentIds.length > 0
         ? { target_agent_ids: options.targetAgentIds }
@@ -1165,10 +1346,15 @@ export class MonaClient {
       parsed.event === "resolve_workflow_approval_result" ||
       (parsed as unknown as { event?: string }).event === "sync_stock_selection_schedule_result" ||
       parsed.event === "agent_config_update_result" ||
+      parsed.event === "custom_agent_create_result" ||
       parsed.event === "agent_instruction_save_result" ||
       parsed.event === "agent_instruction_restore_result" ||
       parsed.event === "agent_skill_stage_result" ||
       parsed.event === "agent_skill_action_result" ||
+      parsed.event === "agent_skill_setup_start_result" ||
+      parsed.event === "agent_skill_setup_status_result" ||
+      parsed.event === "agent_skill_setup_cancel_result" ||
+      (parsed as unknown as { event?: string }).event === "agent_skill_update_result" ||
       parsed.event === "resolve_agent_change_result"
     ) {
       this.handleRoomCommandResult(parsed);
@@ -1269,6 +1455,7 @@ export class MonaClient {
     if (chatId) {
       this.recordGoalStatusForRunStrip(chatId, parsed);
       this.recordGoalStateSnapshot(chatId, parsed);
+      this.recordTaskPlanSnapshot(chatId, parsed);
       this.dispatch(chatId, parsed);
     }
   }

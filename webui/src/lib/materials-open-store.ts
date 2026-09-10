@@ -13,6 +13,8 @@ export interface MaterialOpenRequest {
   /** raw 选择路径（raw/<rel>）或 wiki 页面相对路径（<rel>.md） */
   path: string;
   kind: "raw" | "wiki";
+  knowledgeBaseId?: string;
+  agentId?: string;
   /** 位置标签（如 "Page 12"），预览内滚动定位用；可空 */
   location?: string;
   /** 保证同一目标重复点击也能触发订阅 */

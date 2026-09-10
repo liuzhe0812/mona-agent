@@ -142,6 +142,7 @@ async def test_runtime_status_exposes_optional_downloads(tmp_path: Path) -> None
             "downloadBytes": 20_000_000,
             "installed": False,
             "installedVersion": None,
+            "availableLocally": False,
             "updateAvailable": False,
         },
         {
@@ -152,9 +153,22 @@ async def test_runtime_status_exposes_optional_downloads(tmp_path: Path) -> None
             "downloadBytes": 30_000_000,
             "installed": False,
             "installedVersion": None,
+            "availableLocally": False,
             "updateAvailable": False,
         },
     ]
+
+
+async def test_runtime_status_recognizes_a_compatible_local_resource(tmp_path: Path) -> None:
+    manager = _manager(tmp_path, FakeInstaller())
+    manager.local_component_available = lambda component: component == "python"
+
+    payload = await manager.status_payload()
+
+    components = {item["component"]: item for item in payload["components"]}
+    assert components["python"]["installed"] is False
+    assert components["python"]["availableLocally"] is True
+    assert components["node"]["availableLocally"] is False
 
 
 async def test_runtime_job_installs_latest_compatible_pack(tmp_path: Path) -> None:

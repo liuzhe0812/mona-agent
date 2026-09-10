@@ -145,7 +145,7 @@ export const PptChatPanel = forwardRef<PptChatPanelHandle, PptChatPanelProps>(fu
               }
             }}
             disabled={!chatId || isStreaming}
-            className="min-h-[36px] flex-1 resize-none bg-transparent text-[12px] leading-5 outline-none placeholder:text-muted-foreground disabled:cursor-not-allowed disabled:opacity-60"
+            className="min-h-[36px] flex-1 resize-none border-0 bg-transparent px-0 py-0 text-caption leading-5 outline-none placeholder:text-muted-foreground disabled:cursor-not-allowed disabled:opacity-60"
             rows={2}
             placeholder="输入消息..."
           />

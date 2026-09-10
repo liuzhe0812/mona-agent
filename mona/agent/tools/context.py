@@ -1,4 +1,5 @@
 """Runtime context for tool construction."""
+
 from __future__ import annotations
 
 from dataclasses import dataclass, field
@@ -9,11 +10,13 @@ from typing import Any, Callable, Protocol, runtime_checkable
 # expose them as user-facing parameters.
 DIRECT_TARGET_AGENT_IDS_META = "_direct_target_agent_ids"
 PARTNER_JOBS_DISPATCHED_META = "_partner_jobs_dispatched"
+PROJECT_WORKSPACE_META = "_project_workspace"
 
 
 @dataclass(frozen=True)
 class RequestContext:
     """Per-request context injected into tools at message-processing time."""
+
     channel: str
     chat_id: str
     message_id: str | None = None
@@ -25,14 +28,14 @@ class RequestContext:
 
 @runtime_checkable
 class ContextAware(Protocol):
-    def set_context(self, ctx: RequestContext) -> None:
-        ...
+    def set_context(self, ctx: RequestContext) -> None: ...
 
 
 @dataclass
 class ToolContext:
     config: Any
     workspace: str
+    services_port: int = 17174
     bus: Any | None = None
     subagent_manager: Any | None = None
     cron_service: Any | None = None
@@ -46,6 +49,8 @@ class ToolContext:
     timezone: str = "UTC"
     # Multi-agent identity (phase 0): defaults preserve legacy Mona behavior.
     agent_id: str = "mona"
+    # Dedicated document loops use this to scope private workflow skills.
+    agent_kind: str | None = None
     conversation_id: str | None = None
     room_id: str | None = None
     job_id: str | None = None

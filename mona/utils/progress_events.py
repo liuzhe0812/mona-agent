@@ -50,12 +50,16 @@ async def invoke_file_edit_progress(
 
 
 def build_tool_event_start_payload(tool_call: Any) -> dict[str, Any]:
+    from mona.agent.tool_privacy import redact_tool_arguments
+
+    name = str(getattr(tool_call, "name", "") or "")
+    arguments = getattr(tool_call, "arguments", {}) or {}
     return {
         "version": 1,
         "phase": "start",
         "call_id": str(getattr(tool_call, "id", "") or ""),
-        "name": getattr(tool_call, "name", ""),
-        "arguments": getattr(tool_call, "arguments", {}) or {},
+        "name": name,
+        "arguments": redact_tool_arguments(name, arguments),
         "result": None,
         "error": None,
         "files": [],
@@ -72,6 +76,8 @@ def tool_event_result_extras(result: Any) -> tuple[list[Any], list[Any]]:
 
 
 def build_tool_event_finish_payloads(context: AgentHookContext) -> list[dict[str, Any]]:
+    from mona.agent.tool_privacy import redact_tool_arguments
+
     payloads: list[dict[str, Any]] = []
     count = min(len(context.tool_calls), len(context.tool_results), len(context.tool_events))
     for idx in range(count):
@@ -81,12 +87,14 @@ def build_tool_event_finish_payloads(context: AgentHookContext) -> list[dict[str
         status = event.get("status")
         phase = "end" if status == "ok" else "error"
         files, embeds = tool_event_result_extras(result)
+        name = str(getattr(tool_call, "name", "") or "")
+        arguments = getattr(tool_call, "arguments", {}) or {}
         payload = {
             "version": 1,
             "phase": phase,
             "call_id": str(getattr(tool_call, "id", "") or ""),
-            "name": getattr(tool_call, "name", ""),
-            "arguments": getattr(tool_call, "arguments", {}) or {},
+            "name": name,
+            "arguments": redact_tool_arguments(name, arguments),
             "result": result if phase == "end" else None,
             "error": None,
             "files": files,

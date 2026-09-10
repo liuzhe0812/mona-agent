@@ -1,7 +1,7 @@
 /**
  * 旧版 diagram 文件迁移引导视图。
  *
- * 规范（见 FLOWCHART_DEVELOPMENT_PLAN.md §10.3 路径 B）：
+ * 规范（见 docs/architecture/module-invariants.md 的“可编辑画布”）：
  * 1. 打开旧图时显示迁移提示，先预览可迁移/不支持摘要；
  * 2. 用户确认后创建新的 flowchart 副本，原 diagram 文件保留并追加"旧版备份"；
  * 3. 存在不支持元素时整体不可迁移，只展示原因，不生成部分结果；

@@ -20,13 +20,17 @@ import os
 import re
 import shutil
 import uuid
-from collections.abc import Awaitable, Callable, Mapping
+from collections.abc import Awaitable, Callable, Mapping, Sequence
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 
 from loguru import logger
 
+from mona.services.stock.diagnosis_calibration import (
+    DIAGNOSIS_CALIBRATION_VERSION,
+    DiagnosisCalibrationService,
+)
 from mona.services.stock.diagnosis_decision import (
     HORIZONS,
     build_diagnosis_decision,
@@ -39,6 +43,7 @@ from mona.services.stock.diagnosis_quant import (
 from mona.services.stock.evidence import EvidenceService
 from mona.services.stock.fundamental_factors import build_fundamental_factors
 from mona.services.stock.provider import InstrumentRef
+from mona.services.stock.quant_validation import VALIDATION_METHOD_VERSION
 from mona.services.stock.schemas import (
     DiagnosisAvailability,
     DiagnosisDataQuality,
@@ -52,6 +57,7 @@ from mona.services.stock.schemas import (
     InstrumentTag,
     StockDiagnosisV1,
 )
+from mona.services.stock.westock_runtime import create_default_westock_provider
 
 CN_TZ = timezone(timedelta(hours=8))
 DIAGNOSIS_SCHEMA_VERSION = 1
@@ -128,6 +134,38 @@ def _source_ids_from_evidence(bundle: Mapping[str, Any]) -> list[str]:
         if item not in result:
             result.append(item)
     return result
+
+
+def _diagnosis_source_records(bundle: Mapping[str, Any], source_ids: Sequence[str]) -> list[dict[str, Any]]:
+    allowed = set(source_ids)
+    records: list[dict[str, Any]] = []
+    seen: set[str] = set()
+    for value in bundle.get("sources") or []:
+        source = _mapping(value)
+        source_id = source.get("id")
+        provider = source.get("provider")
+        url = source.get("url")
+        if (
+            not isinstance(source_id, str)
+            or source_id not in allowed
+            or source_id in seen
+            or not isinstance(provider, str)
+            or not provider.strip()
+            or not isinstance(url, str)
+            or not url.strip()
+        ):
+            continue
+        seen.add(source_id)
+        records.append(
+            {
+                "id": source_id,
+                "provider": provider.strip(),
+                "url": url.strip(),
+                "published_at": source.get("published_at") if isinstance(source.get("published_at"), str) else None,
+                "period_end": source.get("period_end") if isinstance(source.get("period_end"), str) else None,
+            }
+        )
+    return records
 
 
 def _horizon_value(value: Any, horizon: str) -> dict[str, Any]:
@@ -244,6 +282,14 @@ def _factor_rows(raw: Mapping[str, Any]) -> list[DiagnosisFactor]:
                 value=_number(value.get("value", value.get("raw_value"))),
                 percentile=percentile,
                 direction=direction,
+                group=str(value.get("group")).strip() if value.get("group") else None,
+                unit=str(value.get("unit")).strip() if value.get("unit") else None,
+                comparison_scope=(
+                    str(value.get("comparison_scope") or value.get("scope")).strip()
+                    if value.get("comparison_scope") or value.get("scope")
+                    else None
+                ),
+                as_of=str(value.get("as_of")).strip() if value.get("as_of") else None,
                 weight=_number(value.get("weight")),
                 contribution=_number(value.get("contribution")),
                 source_ids=[
@@ -316,6 +362,24 @@ def _factor_horizon(raw_value: Any, horizon: str, *, quant: bool) -> DiagnosisFa
 
     if fallback_scope not in {"none", "market", "unavailable"}:
         fallback_scope = "none"
+    calibration = _mapping(raw.get("calibration")) if quant else {}
+    promotion_status = str(
+        calibration.get("promotionStatus") or calibration.get("status") or "unavailable"
+    )
+    if promotion_status not in {"calibrated", "research_only", "rejected"}:
+        promotion_status = "unavailable"
+    validation_metrics = _mapping(calibration.get("metrics"))
+    cohort_progress = calibration.get("cohortProgress")
+    if isinstance(cohort_progress, Mapping):
+        validation_metrics["cohortProgress"] = dict(cohort_progress)
+    target_window = raw.get("target_window_sessions")
+    target_window = (
+        int(target_window)
+        if isinstance(target_window, int)
+        and not isinstance(target_window, bool)
+        and target_window > 0
+        else None
+    )
     rank = raw.get("rank")
     rank = int(rank) if isinstance(rank, int) and rank >= 1 else None
     missing_count = raw.get("missing_count")
@@ -328,6 +392,15 @@ def _factor_horizon(raw_value: Any, horizon: str, *, quant: bool) -> DiagnosisFa
     return DiagnosisFactorHorizon(
         status=status,
         validation_status=validation,
+        promotion_status=promotion_status,  # type: ignore[arg-type]
+        validation_reason=(
+            str(calibration.get("reason")).strip()
+            if isinstance(calibration.get("reason"), str)
+            and str(calibration.get("reason")).strip()
+            else None
+        ),
+        validation_metrics=validation_metrics,
+        target_window_sessions=target_window,
         factor_score=score,
         market_percentile=market_percentile,
         industry_percentile=industry_percentile,
@@ -472,10 +545,57 @@ def _fundamental_research_from_bundle(bundle: Mapping[str, Any], explicit: Any) 
 def _technical_input(bundle: Mapping[str, Any], explicit: Any) -> Any:
     if explicit is not None:
         return explicit
-    return _default_factor_input(
+    derived = _default_factor_input(
         bundle,
         ("technical_execution", "execution", "derived_decision_metrics"),
     )
+    if not isinstance(derived, Mapping):
+        return derived
+    result = dict(derived)
+    tradeability = _mapping(bundle.get("tradeability"))
+    projection = _mapping(tradeability.get("execution_facts_projection"))
+    quote = _mapping(bundle.get("quote"))
+    volatility = _mapping(result.get("volatility"))
+    raw_board = str(projection.get("board") or tradeability.get("board") or "").lower()
+    board = (
+        "chinext" if "创业板" in raw_board or "chinext" in raw_board
+        else "star" if "科创板" in raw_board or "star" in raw_board
+        else "bse" if "北交所" in raw_board or "bse" in raw_board
+        else "main" if "主板" in raw_board or raw_board == "main"
+        else "unknown"
+    )
+    observed_at = (
+        tradeability.get("observed_at")
+        or quote.get("as_of")
+        or result.get("as_of")
+    )
+    if isinstance(observed_at, str) and observed_at.strip():
+        execution_sources = _basis_source_ids(projection, tradeability, quote, volatility)
+        result["execution_facts"] = {
+            "board": board,
+            "exchange": projection.get("exchange") or tradeability.get("exchange"),
+            "risk_warning": projection.get("risk_warning"),
+            "registration_listing": projection.get("registration_listing"),
+            "suspended": projection.get("suspended", projection.get("is_suspended")),
+            "delisted": projection.get("delisted"),
+            "delisting": projection.get("delisting", projection.get("is_delisting")),
+            "listing_days": projection.get("listing_days"),
+            "listing_age_lower_bound_sessions": projection.get("listing_age_lower_bound_sessions"),
+            "listing_days_is_lower_bound": projection.get("listing_days") is None
+            and projection.get("listing_age_lower_bound_sessions") is not None,
+            "price": projection.get("price", quote.get("price")),
+            "previous_close": projection.get("previous_close", quote.get("previous_close")),
+            "amount_yuan": projection.get("amount", quote.get("amount")),
+            "turnover_rate_pct": projection.get("turnover_rate_pct", quote.get("turnover_rate")),
+            "atr20_pct": volatility.get("atr20_pct"),
+            "has_order_book": False,
+            "observed_at": observed_at,
+            "source_ids": execution_sources,
+        }
+    costs = bundle.get("cost_assumptions")
+    if isinstance(costs, Mapping):
+        result["cost_assumptions"] = dict(costs)
+    return result
 
 
 def _fundamental_factor_input(bundle: Mapping[str, Any], explicit: Any) -> Any:
@@ -595,15 +715,14 @@ def _decision_basis_rows(
     """Build the four user-facing conclusions from deterministic outputs."""
 
     fundamental = _factor_lookup(fundamental_factors)
-    quant = _factor_lookup(quant_factors)
     fundamental_score = fundamental_factors.short_term.factor_score
     if fundamental_research.business_understandable is False:
         fundamental_stance, fundamental_label = "negative", "回避"
     elif fundamental_score is None:
         fundamental_stance, fundamental_label = "cautious", "谨慎"
-    elif fundamental_score >= 0.65:
+    elif fundamental_score >= 0.70:
         fundamental_stance, fundamental_label = "positive", "偏强"
-    elif fundamental_score <= 0.35:
+    elif fundamental_score <= 0.30:
         fundamental_stance, fundamental_label = "negative", "偏弱"
     else:
         fundamental_stance, fundamental_label = "neutral", "中性"
@@ -633,43 +752,39 @@ def _decision_basis_rows(
             else "经营结论已形成，因子评分待更新"
         )
 
-    direction = str(current_decision.get("direction") or "unavailable")
-    action = str(current_decision.get("action") or "avoid")
-    if direction == "positive":
+    quant_horizon = quant_factors.short_term
+    quant_percentile = quant_horizon.market_percentile
+    if (
+        quant_horizon.status == "unavailable"
+        or quant_horizon.validation_status in {"unavailable", "rejected"}
+        or quant_percentile is None
+    ):
+        quant_stance, quant_label = "cautious", "暂无有效排名"
+    elif quant_percentile >= 0.70:
         quant_stance, quant_label = "positive", "偏多"
-    elif direction == "negative" or action in {"avoid", "reduce", "exit"}:
+    elif quant_percentile <= 0.30:
         quant_stance, quant_label = "negative", "偏空"
-    elif direction == "neutral":
-        quant_stance, quant_label = "neutral", "中性"
     else:
-        quant_stance, quant_label = "cautious", "谨慎"
-
-    valuation_percentiles = [
-        factor.percentile
-        for name in ("pe", "pb")
-        if (factor := fundamental.get(name)) is not None and factor.percentile is not None
-    ]
+        quant_stance, quant_label = "neutral", "中性"
     quant_parts: list[str] = []
-    if valuation_percentiles:
-        valuation_score = sum(valuation_percentiles) / len(valuation_percentiles)
-        quant_parts.append(
-            "估值偏高" if valuation_score <= 0.30
-            else "估值偏低" if valuation_score >= 0.70
-            else "估值居中"
-        )
-    momentum20 = getattr(quant.get("momentum20"), "value", None)
-    if isinstance(momentum20, (int, float)):
-        quant_parts.append(
-            "短期动量走弱" if momentum20 < 0
-            else "短期动量向上" if momentum20 > 0
-            else "短期动量平稳"
-        )
-    if not quant_parts:
-        quant_parts.append(
-            "短期趋势走弱" if quant_label == "偏空"
-            else "量价信号偏强" if quant_label == "偏多"
-            else "量价信号分化"
-        )
+    if quant_percentile is not None:
+        quant_parts.append(f"市场第{round(quant_percentile * 100)}百分位")
+    if quant_horizon.fallback_scope == "market":
+        quant_parts.append("行业样本不足，按全市场比较")
+    if quant_horizon.validation_status == "calibrated":
+        quant_parts.append("历史效果已验证")
+    elif quant_horizon.validation_status == "descriptive":
+        quant_parts.append("仅为描述性排名，未经过样本外验证")
+    else:
+        quant_parts.append("有效横截面样本不足，暂不形成量化方向")
+    technical_supplement = _mapping(evidence.get("technical_supplement"))
+    technical_price = _number(technical_supplement.get("close_price"))
+    technical_ma20 = _number(technical_supplement.get("ma20"))
+    if technical_price is not None and technical_ma20 is not None:
+        if technical_price > technical_ma20:
+            quant_parts.append("价格站上20日均线")
+        elif technical_price < technical_ma20:
+            quant_parts.append("价格仍在20日均线下")
 
     sentiment = _mapping(evidence.get("market_sentiment"))
     sentiment_direction = str(sentiment.get("direction") or sentiment.get("label") or "暂不判断")
@@ -680,7 +795,7 @@ def _decision_basis_rows(
         sentiment_summary = "市场偏多，个股趋势同步"
     elif sentiment_direction == "偏空":
         sentiment_stance, sentiment_label = "cautious", "谨慎"
-        sentiment_summary = "市场偏弱，不提高仓位"
+        sentiment_summary = "市场偏弱，暂不追价参与"
     elif sentiment_direction == "偏多":
         sentiment_stance, sentiment_label = "cautious", "谨慎"
         sentiment_summary = "市场偏多，但个股尚未转强"
@@ -690,17 +805,28 @@ def _decision_basis_rows(
     else:
         sentiment_stance, sentiment_label = "neutral", "中性"
         sentiment_summary = "市场信号分化，等待方向确认"
+    chip_data = _mapping(evidence.get("chip_data"))
+    chip_average_cost = _number(chip_data.get("average_cost"))
+    chip_profit_ratio = _number(chip_data.get("profit_ratio"))
+    current_price = _number(_mapping(evidence.get("quote")).get("price"))
+    if (
+        chip_average_cost is not None
+        and current_price is not None
+        and current_price < chip_average_cost
+    ):
+        sentiment_stance, sentiment_label = "cautious", "谨慎"
+        sentiment_summary = "现价低于筹码平均成本，反弹压力仍需观察"
+    elif chip_profit_ratio is not None and chip_profit_ratio < 30:
+        sentiment_stance, sentiment_label = "cautious", "谨慎"
+        sentiment_summary = "获利筹码比例偏低，暂不追价参与"
 
     not_holding = str(current_decision.get("not_holding_action") or "avoid")
-    holding = str(current_decision.get("holding_action") or "reduce")
-    if not_holding == "avoid" and holding == "exit":
-        risk_summary = "回避新增，已持有执行退出"
-    elif not_holding == "avoid" and holding == "reduce":
-        risk_summary = "回避新增，已持有优先降风险"
+    if not_holding == "avoid":
+        risk_summary = "当前回避买入，等待方向修复"
     elif not_holding == "conditional_participation":
-        risk_summary = "满足买入条件再参与，持仓执行止损纪律"
+        risk_summary = "满足参与条件后再按止损与仓位纪律执行"
     else:
-        risk_summary = "暂不新增，持仓按止损与仓位纪律执行"
+        risk_summary = "暂不买入，等待方向与价格条件确认"
 
     rows = [
         DiagnosisDecisionBasisRow(
@@ -717,7 +843,9 @@ def _decision_basis_rows(
             stance=quant_stance,
             stance_label=quant_label,
             summary="，".join(quant_parts),
-            source_ids=_basis_source_ids(fundamental_factors, quant_factors, technical_input),
+            source_ids=_basis_source_ids(
+                fundamental_factors, quant_factors, technical_input, technical_supplement
+            ),
         ),
         DiagnosisDecisionBasisRow(
             key="sentiment",
@@ -725,7 +853,9 @@ def _decision_basis_rows(
             stance=sentiment_stance,
             stance_label=sentiment_label,
             summary=sentiment_summary,
-            source_ids=_basis_source_ids(sentiment, evidence.get("public_opinion"), technical_input),
+            source_ids=_basis_source_ids(
+                sentiment, evidence.get("public_opinion"), technical_input, chip_data
+            ),
         ),
         DiagnosisDecisionBasisRow(
             key="risk",
@@ -836,6 +966,20 @@ def _technical_report(value: Any, decision: Mapping[str, Any]) -> DiagnosisTechn
 
 def _markdown(report: StockDiagnosisV1) -> str:
     labels = {"short_term": "短线", "medium_term": "中线", "long_term": "长线"}
+    gate_labels = {"passed": "通过", "failed": "未通过", "unavailable": "待确认"}
+    stress_labels = {"passed": "通过", "failed": "承压", "unavailable": "待确认"}
+    direction_labels = {"positive": "偏多", "neutral": "中性", "negative": "偏空", "unavailable": "待确认"}
+    action_labels = {
+        "conditional_participation": "条件参与",
+        "wait": "等待",
+        "hold": "持有",
+        "reduce": "减仓",
+        "exit": "退出",
+        "avoid": "回避",
+        "participate": "参与",
+    }
+    confidence_labels = {"high": "高", "medium": "中", "low": "低"}
+    plan_status_labels = {"available": "可用", "partial": "部分可用", "unavailable": "待确认"}
     lines = [
         "# AI诊股报告",
         "",
@@ -848,10 +992,38 @@ def _markdown(report: StockDiagnosisV1) -> str:
     ]
     for horizon in HORIZONS:
         decision = getattr(report.horizon_decisions, horizon)
+        plan = decision.materialized_plan
         lines.append(
-            f"- {labels[horizon]}：方向 {decision.direction}；动作 {decision.action}；"
-            f"可信度 {decision.confidence}；计划状态 {decision.materialized_plan.value_status}"
+            f"- {labels[horizon]}：方向 {direction_labels[decision.direction]}；"
+            f"策略动作 {action_labels[decision.action]}；"
+            f"当前动作 {action_labels.get(decision.current_action or '', '待确认')}；"
+            f"可信度 {confidence_labels[decision.confidence]}；"
+            f"计划状态 {plan_status_labels[plan.value_status]}"
         )
+        if plan.risk_reward_first is not None and plan.risk_reward_second is not None:
+            lines.append(
+                f"  - 毛盈亏比：第一目标 {plan.risk_reward_first:.2f}R；"
+                f"第二目标 {plan.risk_reward_second:.2f}R；"
+                f"门槛 {gate_labels[plan.risk_reward_gate_status]}"
+            )
+        if (
+            plan.risk_reward_first_after_fees is not None
+            and plan.risk_reward_second_after_fees is not None
+        ):
+            lines.append(
+                f"  - 默认费率后盈亏比：第一目标 {plan.risk_reward_first_after_fees:.2f}R；"
+                f"第二目标 {plan.risk_reward_second_after_fees:.2f}R；"
+                f"门槛 {gate_labels[plan.fee_gate_status]}"
+            )
+        if (
+            plan.risk_reward_first_after_cost is not None
+            and plan.risk_reward_second_after_cost is not None
+        ):
+            lines.append(
+                f"  - 滑点压力测试：第一目标 {plan.risk_reward_first_after_cost:.2f}R；"
+                f"第二目标 {plan.risk_reward_second_after_cost:.2f}R；"
+                f"结果 {stress_labels[plan.slippage_stress_status]}"
+            )
     lines.extend(
         [
             "",
@@ -1021,6 +1193,7 @@ class DiagnosisService:
             self.evidence_service = EvidenceService(
                 workspace=self.store.workspace,
                 provider=provider,
+                supplement_provider=create_default_westock_provider(self.cache_root),
                 cache_root=self.cache_root,
             )
 
@@ -1304,7 +1477,52 @@ class DiagnosisService:
             cached_factors=factors if isinstance(factors, Mapping) else {},
             cache_status=status if isinstance(status, str) else "unavailable",
         )
-        return result if isinstance(result, Mapping) else {}
+        if not isinstance(result, Mapping):
+            return {}
+        payload = dict(result)
+        candidates = payload.get("_calibration_candidates")
+        if isinstance(candidates, Mapping) and self.provider is not None:
+            try:
+                calibration = await DiagnosisCalibrationService(
+                    workspace=self.store.workspace,
+                    provider=self.provider,
+                ).update(candidates)
+                validation_records = calibration.get("records")
+                if isinstance(validation_records, Mapping):
+                    rebuilt = build_diagnosis_quant_payload(
+                        evidence,
+                        f"{instrument.exchange}:{instrument.symbol}",
+                        cache_root=self.cache_root,
+                        market_rows=rows if isinstance(rows, list) else [],
+                        cached_factors=factors if isinstance(factors, Mapping) else {},
+                        validation_records=validation_records,
+                        cache_status=status if isinstance(status, str) else "unavailable",
+                    )
+                    if isinstance(rebuilt, Mapping):
+                        payload = dict(rebuilt)
+                progress = calibration.get("progress")
+                if isinstance(progress, Mapping):
+                    for key in ("quant_snapshot", "quant_validation"):
+                        section = payload.get(key)
+                        if isinstance(section, dict):
+                            metrics = section.get("validation_metrics")
+                            if not isinstance(metrics, dict):
+                                metrics = {}
+                                section["validation_metrics"] = metrics
+                            metrics["cohortProgress"] = dict(progress)
+                    validation = payload.get("quant_validation")
+                    horizons = validation.get("horizons") if isinstance(validation, Mapping) else None
+                    if isinstance(horizons, dict):
+                        for horizon, horizon_progress in progress.items():
+                            item = horizons.get(horizon)
+                            if isinstance(item, dict) and isinstance(horizon_progress, Mapping):
+                                calibration_result = item.get("calibration")
+                                if isinstance(calibration_result, dict):
+                                    calibration_result["cohortProgress"] = dict(horizon_progress)
+            except Exception as exc:
+                logger.warning("standard stock diagnosis calibration unavailable: {}", exc)
+        payload.pop("_calibration_candidates", None)
+        return payload
 
     async def execute(self, diagnosis_id: str) -> dict[str, Any]:
         record = self.store.require(diagnosis_id)
@@ -1395,6 +1613,18 @@ class DiagnosisService:
                 immutable_quant = _quant_factor_input(evidence, None)
                 if _has_usable_quant_cross_section(immutable_quant):
                     quant_input = immutable_quant
+                    if self.quant_provider is None and self.provider is not None:
+                        try:
+                            refreshed_quant = await self._default_quant_factors(
+                                evidence, instrument
+                            )
+                            if refreshed_quant:
+                                quant_input = refreshed_quant
+                        except Exception as exc:
+                            logger.warning(
+                                "standard stock diagnosis calibration refresh unavailable: {}",
+                                exc,
+                            )
             if quant_input is None:
                 try:
                     if self.quant_provider is not None:
@@ -1474,6 +1704,9 @@ class DiagnosisService:
             market_as_of = inputs.get("market_as_of") or evidence.get("market_as_of") or evidence.get("as_of")
             if not isinstance(market_as_of, str):
                 market_as_of = None
+            quote = _mapping(evidence.get("quote"))
+            price_source_ids = _source_ids(quote)
+            current_price = _number(quote.get("price")) if price_source_ids else None
             generated_at = _now()
             data_quality = _data_quality(
                 fundamental=fundamental_research,
@@ -1490,9 +1723,12 @@ class DiagnosisService:
                     "instrument": instrument.model_dump(mode="python"),
                     "research_cutoff_at": research_cutoff,
                     "market_as_of": market_as_of,
+                    "current_price": current_price,
+                    "price_source_ids": price_source_ids,
                     "generated_at": generated_at,
                     "evidence_context_id": context_id,
                     "source_ids": all_sources,
+                    "sources": _diagnosis_source_records(evidence, all_sources),
                     "data_quality": data_quality.model_dump(mode="python"),
                     "fundamental_research": fundamental_research.model_dump(mode="python"),
                     "fundamental_factors": fundamental_factors.model_dump(mode="python"),
@@ -1502,9 +1738,17 @@ class DiagnosisService:
                     "decision_radar": decision["decision_radar"],
                     "method_versions": {
                         "diagnosis_schema": "stock-diagnosis-v1",
-                        "decision_engine": "deterministic-diagnosis-v1",
+                        "decision_engine": "deterministic-diagnosis-v5",
                         "factor_snapshot": "factor-snapshot-v1",
-                        "decision_basis": "diagnosis-four-step-v1",
+                        "decision_basis": "diagnosis-four-step-v2",
+                        "quant_calibration": DIAGNOSIS_CALIBRATION_VERSION,
+                        "quant_validation": VALIDATION_METHOD_VERSION,
+                        "cost_assumptions": "a-share-cost-assumptions-v1",
+                        "slippage": "turnover-amount-atr-proxy-v1",
+                        "cost_adjusted_risk_reward": "a-share-cost-adjusted-risk-reward-v1",
+                        "fee_gate": "fee-adjusted-risk-reward-gate-v1",
+                        "slippage_stress": "market-slippage-stress-v1",
+                        "entry_condition_realtime": "single-price-trigger-live-evaluation-v1",
                     },
                 }
             )

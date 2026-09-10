@@ -140,8 +140,17 @@ pub fn setup_tray(app: &App) -> Result<(), Box<dyn std::error::Error>> {
                     let _ = gateway.stop();
                     match gateway.start(&settings, app) {
                         Ok(port) => {
-                            log::info!("Gateway restarted on port {port}");
-                            let _ = app.emit("gateway-restarted", port);
+                            let state = gateway.inner().clone();
+                            let app = app.clone();
+                            tauri::async_runtime::spawn(async move {
+                                match state.wait_ready(port, crate::GATEWAY_START_TIMEOUT_SECS).await {
+                                    Ok(()) => {
+                                        log::info!("Gateway restarted on port {port}");
+                                        let _ = app.emit("gateway-restarted", port);
+                                    }
+                                    Err(e) => log::error!("Gateway restart failed: {e}"),
+                                }
+                            });
                         }
                         Err(e) => {
                             log::error!("Failed to restart gateway: {e}");
@@ -151,8 +160,17 @@ pub fn setup_tray(app: &App) -> Result<(), Box<dyn std::error::Error>> {
                 if let Some(services) = app.try_state::<crate::ServicesState>() {
                     match services.start(&settings, app) {
                         Ok(port) => {
-                            log::info!("Services restarted on port {port}");
-                            let _ = app.emit("services-restarted", port);
+                            let state = services.inner().clone();
+                            let app = app.clone();
+                            tauri::async_runtime::spawn(async move {
+                                match state.wait_ready(port, crate::SERVICES_START_TIMEOUT_SECS).await {
+                                    Ok(()) => {
+                                        log::info!("Services restarted on port {port}");
+                                        let _ = app.emit("services-restarted", port);
+                                    }
+                                    Err(e) => log::error!("Services restart failed: {e}"),
+                                }
+                            });
                         }
                         Err(e) => {
                             log::error!("Failed to restart services: {e}");

@@ -83,6 +83,13 @@ documents the general tool contract and non-obvious usage patterns.
 - Preserve the complete `chart` fenced block returned by the tool in the final reply; the conversation renders it as a chart with PNG, SVG, and CSV export controls.
 - Match the requested chart type. In particular, never replace a scatter plot with a connected line chart.
 
+### Visualizations
+
+- Use a visualization when it makes an important relationship materially easier to understand than prose or a short list.
+- Prefer Mermaid fenced blocks for static flows, architecture, dependencies, hierarchies, sequences, and state transitions that can be expressed with labeled nodes and edges. The conversation renders complete `mermaid` fences as diagrams.
+- Keep the diagram focused and readable. Use a neutral layout without hard-coded colors so it follows the conversation theme; for architecture and flow diagrams, prefer concise labels, rounded process nodes, generous spacing, and sparse edge labels.
+- Do not add a diagram for a single fact, a one-step action, or information already clear in a compact paragraph or table.
+
 ## Scheduling and Background Work
 
 - Use `cron` for scheduled reminders or recurring jobs; do not run `mona cron` through `exec`.

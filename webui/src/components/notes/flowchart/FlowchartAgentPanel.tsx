@@ -7,8 +7,7 @@
  * 主要职责：
  * 1. AI 回答完成后仅做 parse + dry-run，生成 PendingFlowchartPatch；
  * 2. 在变更卡片上展示变更摘要，用户点击"应用到流程图"后才修改文档；
- * 3. 生成期间语义变化（baseHash 不匹配）时标记 stale，禁止应用；
- * 4. 拖动节点或改样式不改变 semantic hash，不会使 patch 过期。
+ * 3. 生成期间语义或视觉变化时标记 stale，禁止覆盖用户编辑。
  *
  * 与 MindMapAgentPanel 的差异：
  * - 流程图只有 patch 一种 fenced block（没有 mindmap 那种 replace + patch 双契约）；
@@ -16,7 +15,7 @@
  * - 所有 AI 修改都不自动应用，必须经过变更卡片确认。
  */
 
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   AlertTriangle,
   Check,
@@ -39,6 +38,7 @@ import {
   type PendingFlowchartPatch,
 } from "./flowchart-apply";
 import { useFlowchartSelection } from "./FlowchartSelectionContext";
+import { computeFlowchartDocumentHash, parseFlowchartMarkdown } from "./flowchart-document";
 import { AgentChat } from "../NoteAgentPanel";
 import { AgentComposer } from "../AgentComposer";
 
@@ -74,6 +74,11 @@ export function FlowchartAgentPanel({
   initialPrompt,
   onInitialPromptHandled,
 }: FlowchartAgentPanelProps) {
+  const currentDocumentHash = useMemo(() => {
+    if (!note || note.type !== "flowchart") return "";
+    const parsed = parseFlowchartMarkdown(note.contentMarkdown);
+    return parsed.ok ? computeFlowchartDocumentHash(parsed.document) : "";
+  }, [note]);
   const [draft, setDraft] = useState("");
   const collapsed = collapsedProp ?? false;
   const [notice, setNotice] = useState<string | null>(null);
@@ -197,14 +202,16 @@ export function FlowchartAgentPanel({
 
     const currentHash = flowchartSelectionCtx.baseHash ?? "";
     // 不自动应用：baseHash 匹配 → ready（等待用户确认）；不匹配 → stale
-    const status = result.pending.requestBaseHash === currentHash ? "ready" : "stale";
+    const documentMatches = !result.pending.patch.baseDocumentHash
+      || result.pending.patch.baseDocumentHash === currentDocumentHash;
+    const status = result.pending.requestBaseHash === currentHash && documentMatches ? "ready" : "stale";
     setPendingPatches((prev) => {
       const next = new Map(prev);
       next.set(completedMessage.id, { ...result.pending, status });
       return next;
     });
     requestBaseHashRef.current = null;
-  }, [creatingChat, isStreaming, loading, messages, note, flowchartSelectionCtx.baseHash]);
+  }, [creatingChat, currentDocumentHash, isStreaming, loading, messages, note, flowchartSelectionCtx.baseHash]);
 
   // stale 检测：当前文档 baseHash 与 requestBaseHash 不同时，标记 pending 为 stale
   const currentBaseHash = flowchartSelectionCtx.baseHash;
@@ -214,10 +221,12 @@ export function FlowchartAgentPanel({
       let changed = false;
       const next = new Map(prev);
       for (const [messageId, pending] of next) {
-        if (pending.status === "ready" && pending.requestBaseHash !== currentBaseHash) {
+        const documentMatches = !pending.patch.baseDocumentHash
+          || pending.patch.baseDocumentHash === currentDocumentHash;
+        if (pending.status === "ready" && (pending.requestBaseHash !== currentBaseHash || !documentMatches)) {
           next.set(messageId, { ...pending, status: "stale" });
           changed = true;
-        } else if (pending.status === "stale" && pending.requestBaseHash === currentBaseHash) {
+        } else if (pending.status === "stale" && pending.requestBaseHash === currentBaseHash && documentMatches) {
           // 用户撤销回原 hash，恢复 ready
           next.set(messageId, { ...pending, status: "ready" });
           changed = true;
@@ -225,7 +234,7 @@ export function FlowchartAgentPanel({
       }
       return changed ? next : prev;
     });
-  }, [currentBaseHash]);
+  }, [currentBaseHash, currentDocumentHash]);
 
   const sendPromptToAgent = useCallback(
     async (prompt: string, images?: SendImage[], displayContent?: string) => {
@@ -422,7 +431,7 @@ export function FlowchartAgentPanel({
         {/* 生成期间提示 */}
         {isStreaming && requestBaseHashRef.current && (
           <div className="mt-2 rounded-md border border-blue-500/30 bg-blue-500/5 px-2.5 py-2 text-[11px] text-blue-700 dark:text-blue-300">
-            AI 正在生成。拖动节点或改样式不会使结果过期；修改文字、增删节点或连线会使结果过期。
+            AI 正在生成。期间修改内容、位置或样式后，旧结果不会覆盖当前画布。
           </div>
         )}
       </div>
@@ -515,6 +524,8 @@ function FlowchartPatchCard({
             {summary.addedPools > 0 && <span>新增 {summary.addedPools} 泳池</span>}
             {summary.addedLanes > 0 && <span>新增 {summary.addedLanes} 泳道</span>}
             {summary.movedToLane > 0 && <span>移动 {summary.movedToLane} 节点归属</span>}
+            {summary.updatedTheme && <span>更新主题</span>}
+            {summary.reflowed && <span>重新布局</span>}
             {summary.addedNodes > 0 && <span>新增 {summary.addedNodes} 节点</span>}
             {summary.updatedNodes > 0 && <span>修改 {summary.updatedNodes} 节点</span>}
             {summary.removedNodes > 0 && <span className="text-destructive/80">删除 {summary.removedNodes} 节点</span>}
@@ -524,6 +535,15 @@ function FlowchartPatchCard({
           </div>
         )}
       </div>
+
+      {(summary.qualityIssues?.length ?? 0) > 0 && (
+        <div className="mt-1.5 rounded bg-amber-500/10 px-2 py-1.5 text-amber-700 dark:text-amber-300">
+          {summary.qualityIssues!.slice(0, 3).map((issue) => (
+            <div key={`${issue.code}-${issue.message}`}>{issue.message}</div>
+          ))}
+          {summary.qualityIssues!.length > 3 ? <div>另有 {summary.qualityIssues!.length - 3} 项布局提醒</div> : null}
+        </div>
+      )}
 
       {!isStale && (
         <div className="mt-2 flex gap-1.5">

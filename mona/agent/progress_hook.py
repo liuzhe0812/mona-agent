@@ -121,8 +121,12 @@ class AgentProgressHook(AgentHook):
                 tool_hint=True,
                 tool_events=tool_events,
             )
+        from mona.agent.tool_privacy import redact_tool_arguments
+
         for tc in context.tool_calls:
-            args_str = json.dumps(tc.arguments, ensure_ascii=False)
+            args_str = json.dumps(
+                redact_tool_arguments(tc.name, tc.arguments), ensure_ascii=False
+            )
             logger.debug("Tool call: {}({})", tc.name, args_str[:200])
         if self._set_tool_context:
             self._set_tool_context(

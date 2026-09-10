@@ -66,7 +66,7 @@ describe("buildInspectionCards", () => {
       tone: "info",
       metric: "2.5 GB",
       goal: "释放磁盘可清理空间",
-      actionLabel: "一键清理",
+      actionLabel: "生成清理方案",
       tab: "storage",
     });
   });
@@ -103,7 +103,7 @@ describe("buildInspectionCards", () => {
       tone: "warning",
       detail: "WeChat",
       metric: "1 项",
-      actionLabel: "一键审查",
+      actionLabel: "查看启动项",
       tab: "startup",
     });
   });

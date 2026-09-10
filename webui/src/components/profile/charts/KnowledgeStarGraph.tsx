@@ -173,7 +173,7 @@ export function KnowledgeStarGraph({ data, size = 320 }: KnowledgeStarGraphProps
               x={node.x}
               y={node.y + r + 12}
               textAnchor="middle"
-              className="fill-foreground text-[10px] font-medium"
+              className="fill-foreground text-micro font-medium"
               style={{ opacity: isHovered || isCenter ? 1 : 0.7 }}
             >
               {node.label}

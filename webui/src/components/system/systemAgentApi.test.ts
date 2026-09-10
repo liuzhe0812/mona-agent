@@ -1,8 +1,20 @@
 import { invoke } from "@tauri-apps/api/core";
 import { describe, expect, it, vi } from "vitest";
 
-import { collectSystemEvidence, executeSystemAction, type SystemAgentAction } from "./systemAgentApi";
+import {
+  buildStorageAnalysisContext,
+  collectSystemEvidence,
+  executeSystemAction,
+  requestStorageAnalysis,
+  type SystemAgentAction,
+  type StorageAnalysisEvidence,
+} from "./systemAgentApi";
+import type { StorageScanResult } from "./useSystemData";
 
+const httpFetchMock = vi.hoisted(() => vi.fn());
+
+vi.mock("@/lib/api", () => ({ getGatewayHttpBase: vi.fn(() => Promise.resolve("http://mona.local")) }));
+vi.mock("@/lib/tauri", () => ({ httpFetch: httpFetchMock }));
 vi.mock("@tauri-apps/api/core", () => ({
   invoke: vi.fn((command: string) => {
     if (command === "clean_storage") return Promise.resolve({ freedGb: 1.25, cleanedIds: ["temp"], failures: [] });
@@ -92,6 +104,114 @@ describe("collectSystemEvidence", () => {
     });
     expect(evidence.startup.items[0]).not.toHaveProperty("command");
     expect(evidence.startup.items[0]).not.toHaveProperty("targetPath");
+  });
+
+  it("builds path-free storage analysis evidence for the selected directory", () => {
+    const storage: StorageScanResult = {
+      scanId: "scan-1",
+      disks: [],
+      directories: [{
+        id: "dir-secret",
+        path: "C:\\Users\\Mona\\SecretProject",
+        sizeGb: 10,
+        fileCount: 12,
+        directSizeGb: 2,
+        insight: {
+          artifactKind: "Node.js 依赖目录",
+          fileTypes: [{ category: "其他", sizeGb: 10 }],
+          modifiedBuckets: [{ bucket: "old", count: 2, sizeGb: 3 }],
+          topExtensions: [{ extension: "zip", count: 2, sizeGb: 3 }],
+        },
+      }],
+      cleanupItems: [],
+      fileTypes: [],
+      totalScannedGb: 10,
+      topFiles: [{
+        id: "file-private",
+        path: "C:\\Users\\Mona\\SecretProject\\private-backup.zip",
+        parentDirName: "SecretProject",
+        extension: "zip",
+        sizeGb: 3,
+        modifiedBucket: "old",
+      }],
+    };
+
+    const context = buildStorageAnalysisContext(storage, storage.directories[0]);
+    const serialized = JSON.stringify(context.evidence);
+
+    expect(context.evidence.scope).toMatchObject({
+      id: "dir-secret",
+      artifactKind: "Node.js 依赖目录",
+      directSizeGb: 2,
+    });
+    expect(context.evidence.largeFiles).toEqual([{
+      id: "file-private",
+      extension: "zip",
+      sizeGb: 3,
+      modifiedBucket: "old",
+    }]);
+    expect(serialized).not.toContain("SecretProject");
+    expect(serialized).not.toContain("private-backup.zip");
+    expect(serialized).not.toContain("path");
+  });
+});
+
+describe("requestStorageAnalysis", () => {
+  it("uses the dedicated Gateway route and keeps only evidence-linked findings", async () => {
+    const evidence: StorageAnalysisEvidence = {
+      scanId: "scan-1",
+      scope: {
+        id: "dir-root",
+        sizeGb: 10,
+        fileCount: 12,
+        directSizeGb: 1,
+        artifactKind: null,
+        fileTypes: [],
+        modifiedBuckets: [],
+        topExtensions: [],
+      },
+      children: [],
+      largeFiles: [],
+      cleanupItems: [],
+    };
+    httpFetchMock.mockResolvedValueOnce({
+      ok: true,
+      json: () => Promise.resolve({
+        scanId: "scan-1",
+        summary: "扫描分析完成",
+        findings: [{
+          id: "storage-finding-1",
+          title: "主要占用",
+          detail: "当前范围占用较大。",
+          confidence: "high",
+          risk: "keep",
+          evidenceIds: ["dir-root"],
+          action: "none",
+          targetIds: [],
+          relatedSizeGb: 10,
+        }, {
+          id: "storage-finding-2",
+          title: "虚构证据",
+          detail: "不应进入界面。",
+          confidence: "high",
+          risk: "review",
+          evidenceIds: ["not-scanned"],
+          action: "inspect_directory",
+          targetIds: ["not-scanned"],
+          relatedSizeGb: 99,
+        }],
+        cautions: [],
+      }),
+    });
+
+    const result = await requestStorageAnalysis("分析当前范围", evidence);
+
+    expect(httpFetchMock).toHaveBeenCalledWith(
+      "http://mona.local/api/system/storage/analyze",
+      expect.objectContaining({ method: "POST" }),
+    );
+    expect(result.findings).toHaveLength(1);
+    expect(result.findings[0].evidenceIds).toEqual(["dir-root"]);
   });
 });
 

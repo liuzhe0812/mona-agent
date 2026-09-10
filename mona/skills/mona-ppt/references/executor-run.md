@@ -50,18 +50,19 @@ Before each page:
 4. Output the trace line required by `references/executor-base.md` Section 2.1.
 5. Write the page SVG by hand to `<project_path>/svg_output/`.
 
-No sub-agents. No page batches. No script or template loop may generate project SVG pages.
+No sub-agents. No script or template loop may generate project SVG pages. “Generate all” still means hand-writing each page in order within one turn.
 
-## V3 Per-Page Mode (when PPT_UI_CHECKPOINTS=1)
+## V3 UI Modes (when PPT_UI_CHECKPOINTS=1)
 
-When `PPT_UI_CHECKPOINTS=1` is active, the executor operates in **per-page mode**:
+When `PPT_UI_CHECKPOINTS=1` is active, the outline confirmation marker selects the mode:
 
 - After `[OUTLINE_CONFIRMED]`: generate spec_lock.md, then **only the first page** SVG. Stop.
+- After `[OUTLINE_CONFIRMED_ALL]`: generate every page sequentially with its trace, quality check, and notes; then run the full quality gate and export without waiting between pages.
 - After `[PAGE_CONFIRMED_NEXT]`: generate **only the next page** SVG. Stop.
 - After `[PAGE_REDO_REQUESTED]`: regenerate **only the specified page** SVG. Stop.
 - After `[PAGE_GENERATE_REQUESTED]`: generate **only the specified page** SVG. Stop.
 
-Key differences from batch mode:
+Page-by-page mode requirements:
 
 1. **One page at a time**: never generate multiple pages in a single turn.
 2. **Per-page quality check**: after writing each SVG, run `svg_quality_checker.py` and fix any errors on that page before stopping.

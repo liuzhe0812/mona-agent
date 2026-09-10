@@ -4,7 +4,8 @@ Follow the built-in **long-goal** skill for lifecycle rules and how to phrase
 objectives (especially **idempotent**, compaction-safe goals). Load that skill
 from the skills listing (path shown there) before composing ``long_task.goal`` text.
 
-``long_task`` registers an objective on the session (JSON-serializable metadata).
+``long_task`` is exposed only for an explicit user ``/goal`` turn and registers that
+objective on the session (JSON-serializable metadata).
 Active objectives are mirrored each turn into the Runtime Context block (see
 ``mona.session.goal_state.goal_state_runtime_lines``) so compaction cannot hide them.
 Work proceeds in ordinary agent turns (same runner, compaction as configured).
@@ -24,11 +25,13 @@ from mona.agent.tools.context import ContextAware, RequestContext
 from mona.agent.tools.schema import StringSchema, tool_parameters_schema
 from mona.bus.events import OutboundMessage
 from mona.session.goal_state import (
+    GOAL_COMMAND_SOURCE,
     GOAL_STATE_KEY,
     discard_legacy_goal_state_key,
     goal_state_raw,
     goal_state_ws_blob,
     parse_goal_state,
+    sustained_goal_active,
 )
 
 if TYPE_CHECKING:
@@ -83,8 +86,8 @@ class _GoalToolsMixin(ContextAware):
 @tool_parameters(
     tool_parameters_schema(
         goal=StringSchema(
-            "Sustained objective for this chat thread. First read the built-in **long-goal** skill, "
-            "especially its Start fast section, then call this promptly once the user's intent is clear. "
+            "Sustained objective from the user's current /goal command. First read the built-in "
+            "**long-goal** skill, especially its Start fast section, then call this promptly. "
             "The goal must still be idempotent, self-contained, bounded, and explicit about done-ness; "
             "do not delay this tool call to over-plan, research, or decide execution details.",
             max_length=12_000,
@@ -104,6 +107,11 @@ class LongTaskTool(Tool, _GoalToolsMixin):
 
     def __init__(self, sessions: Any, bus: Any | None = None) -> None:
         _GoalToolsMixin.__init__(self, sessions, bus)
+        self.is_available = False
+
+    def set_context(self, ctx: RequestContext) -> None:
+        _GoalToolsMixin.set_context(self, ctx)
+        self.is_available = ctx.metadata.get("original_command") == GOAL_COMMAND_SOURCE
 
     @classmethod
     def create(cls, ctx: Any) -> Tool:
@@ -122,9 +130,9 @@ class LongTaskTool(Tool, _GoalToolsMixin):
     @property
     def description(self) -> str:
         return (
-            "Mark this thread as a sustained long-running task. "
+            "Record the sustained goal requested by the user's current /goal command. "
             "First read the built-in **long-goal** skill, especially its Start fast section; then call this "
-            "as soon as the user's intent is clear. Write a good idempotent goal, but do not delay the tool "
+            "as soon as the command's intent is clear. Write a good idempotent goal, but do not delay the tool "
             "call with long planning, research, or execution-detail thinking. "
             "The active goal is mirrored in Runtime Context each turn. Use normal tools until done, then call "
             "complete_goal when the objective is satisfied, cancelled, or replaced. "
@@ -132,13 +140,14 @@ class LongTaskTool(Tool, _GoalToolsMixin):
         )
 
     async def execute(self, goal: str, ui_summary: str | None = None, **kwargs: Any) -> str:
+        if not self.is_available:
+            return "Error: long_task can only be started by the user's explicit /goal command."
         sess = self._session()
         if sess is None:
             return (
                 "Error: long_task requires an active chat session (missing routing context)."
             )
-        prior = parse_goal_state(goal_state_raw(sess.metadata))
-        if isinstance(prior, dict) and prior.get("status") == "active":
+        if sustained_goal_active(sess.metadata):
             return (
                 "Error: a sustained goal is already active. "
                 "Use complete_goal when finished, or ask the user before replacing it."
@@ -147,6 +156,7 @@ class LongTaskTool(Tool, _GoalToolsMixin):
         summary = (ui_summary or "").strip()[:120]
         blob = {
             "status": "active",
+            "source": GOAL_COMMAND_SOURCE,
             "objective": goal.strip(),
             "ui_summary": summary,
             "started_at": _iso_now(),
@@ -228,4 +238,3 @@ class CompleteGoalTool(Tool, _GoalToolsMixin):
         if tail:
             return f"Goal marked complete ({ended}). Recap:\n{tail}"
         return f"Goal marked complete ({ended})."
-

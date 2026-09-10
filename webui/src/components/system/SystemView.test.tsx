@@ -7,6 +7,7 @@ import type { SystemEvidence, SystemEvidenceStage } from "./systemAgentApi";
 import type { StorageScanResult } from "./useSystemData";
 
 const storageScanMock = vi.hoisted(() => vi.fn<() => Promise<StorageScanResult>>(() => Promise.resolve({
+  scanId: "scan-empty",
   disks: [],
   directories: [],
   cleanupItems: [],
@@ -40,11 +41,19 @@ const systemAgentMock = vi.hoisted(() => ({
     verified: true,
     detail: "Google Chrome 更新完成",
   })),
+  storageAnalyze: vi.fn(() => Promise.resolve({
+    scanId: "scan-complete",
+    summary: "主要空间来自当前目录。",
+    findings: [],
+    cautions: [],
+  })),
 }));
 
-vi.mock("./systemAgentApi", () => ({
+vi.mock("./systemAgentApi", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./systemAgentApi")>()),
   collectSystemEvidence: systemAgentMock.collect,
   requestSystemPlan: systemAgentMock.plan,
+  requestStorageAnalysis: systemAgentMock.storageAnalyze,
   executeSystemAction: systemAgentMock.execute,
 }));
 
@@ -237,6 +246,9 @@ describe("SystemView", () => {
     render(<SystemView />);
 
     const toggleButton = screen.getByRole("button", { name: "收起 Mona 系统管家" });
+    expect(toggleButton.querySelector("svg")).toBeTruthy();
+    expect(toggleButton.textContent).toBe("");
+    expect(toggleButton.getAttribute("aria-expanded")).toBe("true");
     fireEvent.click(toggleButton);
 
     const assistant = document.querySelector('aside[aria-label="Mona 系统管家"]')!;
@@ -282,7 +294,7 @@ describe("SystemView", () => {
     expect(screen.getByRole("heading", { name: "Mona 系统管家" })).toBeTruthy();
     expect(await screen.findByText("巡检发现")).toBeTruthy();
     expect(screen.getByTestId("inspection-card-software")).toBeTruthy();
-    expect(screen.getByRole("button", { name: "一键更新" })).toBeTruthy();
+    expect(screen.getByRole("button", { name: "生成更新方案" })).toBeTruthy();
     expect(screen.queryByRole("button", { name: "释放 C 盘可清理空间" })).toBeNull();
     expect(screen.getByTestId("system-layout").className).toContain(
       "grid-cols-[minmax(0,1fr)_360px]",
@@ -502,8 +514,9 @@ describe("SystemView", () => {
 
     fireEvent.click(screen.getByRole("tab", { name: "软件管理" }));
     await act(async () => resolveScan({
+      scanId: "scan-complete",
       disks: [{ driveLetter: "C:\\", usagePercent: 50, usedGb: 50, totalGb: 100, availableGb: 50 }],
-      directories: [{ path: "C:\\Users\\Mona", sizeGb: 20, fileCount: 10 }],
+      directories: [{ id: "dir-mona", path: "C:\\Users\\Mona", sizeGb: 20, fileCount: 10, directSizeGb: 20 }],
       cleanupItems: [{ id: "temp", name: "系统临时文件", sizeGb: 1.5, path: "C:\\Temp", cleanable: true, recommended: true, reason: "可安全清理" }],
       fileTypes: [{ category: "应用", sizeGb: 12 }],
       totalScannedGb: 20,
@@ -511,6 +524,9 @@ describe("SystemView", () => {
     fireEvent.click(screen.getByRole("tab", { name: "存储空间" }));
     // WizTree 布局：CleanupPanel 中的清理项 + FileTypePanel 中的类型
     expect((await screen.findAllByText("1.5 GB")).length).toBeGreaterThan(0);
+    expect(screen.getByRole("heading", { name: "Mona 发现" })).toBeTruthy();
+    expect(screen.getAllByRole("button", { name: "分析当前范围" }).length).toBeGreaterThan(0);
+    expect(screen.getByRole("button", { name: "生成清理方案" })).toBeTruthy();
     expect(screen.getByText("应用")).toBeTruthy();
     // 扫描覆盖率说明：totalScannedGb(20) / 系统盘已用(50) = 40%
     expect((await screen.findAllByText(/约占 C: 已用的 40%/)).length).toBeGreaterThan(0);
@@ -528,8 +544,9 @@ describe("SystemView", () => {
     expect(vi.mocked(invoke)).toHaveBeenCalledWith("cancel_storage_scan");
 
     await act(async () => resolveScan({
+      scanId: "scan-cancelled",
       disks: [{ driveLetter: "C:\\", usagePercent: 50, usedGb: 50, totalGb: 100, availableGb: 50 }],
-      directories: [{ path: "C:\\Users", sizeGb: 8, fileCount: 4 }],
+      directories: [{ id: "dir-users", path: "C:\\Users", sizeGb: 8, fileCount: 4, directSizeGb: 8 }],
       cleanupItems: [],
       fileTypes: [{ category: "应用", sizeGb: 5 }],
       totalScannedGb: 8,
@@ -549,8 +566,9 @@ describe("SystemView", () => {
 
     fireEvent.click(screen.getByRole("button", { name: "开始扫描" }));
     await act(async () => resolveScan({
+      scanId: "scan-cleanup",
       disks: [{ driveLetter: "C:\\", usagePercent: 50, usedGb: 50, totalGb: 100, availableGb: 50 }],
-      directories: [{ path: "C:\\Users", sizeGb: 8, fileCount: 4 }],
+      directories: [{ id: "dir-users", path: "C:\\Users", sizeGb: 8, fileCount: 4, directSizeGb: 8 }],
       cleanupItems: [
         { id: "temp", name: "系统临时文件", sizeGb: 1.5, path: "C:\\Windows\\Temp", cleanable: true, recommended: true, reason: "应用未占用的临时文件可安全清理" },
         { id: "windows_old", name: "Windows.old（旧系统文件）", sizeGb: 12, path: "C:\\Windows.old", cleanable: false, recommended: false, reason: "建议通过系统「存储感知」清理：设置 → 系统 → 存储 → 临时文件" },

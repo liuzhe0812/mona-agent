@@ -1,4 +1,4 @@
-import { act, render, screen, waitFor } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { forwardRef } from "react";
 
@@ -6,8 +6,10 @@ import { PptMakerView, resolveNextPhase, type PptConfig } from "./PptMakerView";
 
 // --- API mocks ---
 const fetchPptExportStatus = vi.fn();
+const fetchPptProjectPath = vi.fn();
 const markPptGenerating = vi.fn().mockResolvedValue({ ok: true });
 const savePptChatId = vi.fn().mockResolvedValue({ ok: true });
+const desktop = vi.hoisted(() => ({ enabled: false, openPath: vi.fn() }));
 
 vi.mock("@/lib/api", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@/lib/api")>();
@@ -15,6 +17,7 @@ vi.mock("@/lib/api", async (importOriginal) => {
     ...actual,
     getApiBase: vi.fn().mockResolvedValue("http://api"),
     fetchPptExportStatus: (...args: unknown[]) => fetchPptExportStatus(...args),
+    fetchPptProjectPath: (...args: unknown[]) => fetchPptProjectPath(...args),
     markPptGenerating: (...args: unknown[]) => markPptGenerating(...args),
     savePptChatId: (...args: unknown[]) => savePptChatId(...args),
   };
@@ -24,10 +27,14 @@ vi.mock("@/lib/tauri", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@/lib/tauri")>();
   return {
     ...actual,
-    isTauri: () => false,
+    isTauri: () => desktop.enabled,
     httpFetch: vi.fn(),
   };
 });
+
+vi.mock("@tauri-apps/plugin-opener", () => ({
+  openPath: (...args: unknown[]) => desktop.openPath(...args),
+}));
 
 vi.mock("@/lib/project-name", () => ({
   generateProjectName: vi.fn().mockReturnValue("ppt-test-project"),
@@ -55,6 +62,7 @@ interface ConfigPanelProps {
   onStart: () => void;
 }
 let configPanelProps: ConfigPanelProps | null = null;
+let outlinePhaseProps: { onLocked: (mode: "page-by-page" | "all") => void } | null = null;
 
 vi.mock("./PptConfigWizard", () => ({
   PptConfigWizard: (props: ConfigPanelProps) => {
@@ -76,7 +84,10 @@ vi.mock("./PptHistory", () => ({
 }));
 
 vi.mock("./PptOutlinePhase", () => ({
-  PptOutlinePhase: () => <div data-testid="outline-phase" />,
+  PptOutlinePhase: (props: { onLocked: (mode: "page-by-page" | "all") => void }) => {
+    outlinePhaseProps = props;
+    return <div data-testid="outline-phase" />;
+  },
 }));
 
 vi.mock("./PptProducingPhase", () => ({
@@ -133,7 +144,9 @@ describe("resolveNextPhase", () => {
 describe("PptMakerView", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    desktop.enabled = false;
     configPanelProps = null;
+    outlinePhaseProps = null;
     localStorage.clear();
     fetchPptExportStatus.mockResolvedValue(statusWithPhase("outline"));
   });
@@ -167,6 +180,129 @@ describe("PptMakerView", () => {
       resolvePoll?.(statusWithPhase("outline"));
     });
     await waitFor(() => expect(screen.getByTestId("outline-phase")).toBeTruthy());
+  });
+
+  it("uses the host chat and removes nested history/chat when embedded", async () => {
+    render(
+      <PptMakerView
+        embedded
+        hostChatId="main-chat"
+        initialProject={{ name: "季度汇报", phase: "producing" }}
+      />,
+    );
+
+    expect(await screen.findByTestId("producing-phase")).toBeTruthy();
+    expect(screen.queryByTestId("ppt-history")).toBeNull();
+    expect(screen.queryByTestId("chat-panel")).toBeNull();
+  });
+
+  it("routes a manual embedded PPT request through the main Mona workflow tool", async () => {
+    const onRequestPptCreation = vi.fn();
+    render(
+      <PptMakerView
+        embedded
+        hostChatId="main-chat"
+        onRequestPptCreation={onRequestPptCreation}
+      />,
+    );
+    act(() => {
+      configPanelProps?.setConfig((current) => ({ ...current, topic: "季度业务复盘", pageCount: 5 }));
+    });
+    await startGeneration();
+
+    expect(newChat).not.toHaveBeenCalled();
+    expect(savePptChatId).not.toHaveBeenCalled();
+    expect(sendMessage).not.toHaveBeenCalled();
+    expect(onRequestPptCreation).toHaveBeenCalledWith(expect.stringContaining("季度业务复盘"));
+    expect(onRequestPptCreation).toHaveBeenCalledWith(expect.stringContaining("页数：5 页"));
+    expect(screen.getByText("正在启动 PPT 工作流")).toBeTruthy();
+  });
+
+  it("shows a recoverable error when an embedded turn ends without an outline", async () => {
+    fetchPptExportStatus.mockResolvedValue(statusWithPhase("generating"));
+    const project = { name: "魔兽世界介绍", phase: "generating" as const };
+    const { rerender } = render(
+      <PptMakerView
+        embedded
+        hostChatId="main-chat"
+        hostIsStreaming
+        initialProject={project}
+      />,
+    );
+
+    rerender(
+      <PptMakerView
+        embedded
+        hostChatId="main-chat"
+        hostIsStreaming={false}
+        initialProject={project}
+      />,
+    );
+
+    expect(await screen.findByText("大纲生成未完成")).toBeTruthy();
+    expect(screen.getByRole("button", { name: "重新检查" })).toBeTruthy();
+    expect(screen.queryByText("AI 正在分析素材并生成大纲，请稍候…")).toBeNull();
+  });
+
+  it("opens the project path returned by the backend", async () => {
+    desktop.enabled = true;
+    fetchPptProjectPath.mockResolvedValue({ path: "C:\\workspace\\ppt_projects\\项目" });
+    render(
+      <PptMakerView
+        embedded
+        hostChatId="main-chat"
+        initialProject={{ name: "项目", phase: "done" }}
+      />,
+    );
+
+    fireEvent.click(await screen.findByRole("button", { name: "打开项目目录" }));
+
+    await waitFor(() => {
+      expect(fetchPptProjectPath).toHaveBeenCalledWith("tok", "项目");
+      expect(desktop.openPath).toHaveBeenCalledWith("C:\\workspace\\ppt_projects\\项目");
+    });
+  });
+
+  it("hands a finished workflow back to the collaborative PPT editor", async () => {
+    const onOpenGeneratedPptx = vi.fn();
+    render(
+      <PptMakerView
+        embedded
+        hostChatId="main-chat"
+        initialProject={{ name: "项目", phase: "done" }}
+        onOpenGeneratedPptx={onOpenGeneratedPptx}
+      />,
+    );
+
+    fireEvent.click(await screen.findByRole("button", { name: "继续编辑" }));
+
+    expect(onOpenGeneratedPptx).toHaveBeenCalledWith("项目");
+  });
+
+  it("requests full generation and export from the outline", async () => {
+    render(
+      <PptMakerView
+        embedded
+        hostChatId="main-chat"
+        initialProject={{ name: "项目", phase: "outline" }}
+      />,
+    );
+    await screen.findByTestId("outline-phase");
+
+    await act(async () => {
+      outlinePhaseProps?.onLocked("all");
+      await Promise.resolve();
+    });
+
+    expect(sendMessage).toHaveBeenCalledWith(
+      "main-chat",
+      expect.stringContaining("[OUTLINE_CONFIRMED_ALL]"),
+      undefined,
+      expect.objectContaining({
+        agentKind: "ppt",
+        displayContent: "已确认 PPT 大纲，开始全部生成",
+      }),
+    );
   });
 
   it("reaches the done phase with a download entry when backend reports done (template mode path)", async () => {

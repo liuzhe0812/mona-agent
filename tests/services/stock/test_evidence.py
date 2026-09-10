@@ -162,6 +162,70 @@ class FakeProvider:
         ]
 
 
+class FakeWestockSupplement:
+    def __init__(self):
+        self.calls = []
+
+    async def fetch(self, command, inst):
+        self.calls.append(command)
+        source = SourceRecord.create(
+            provider="westock",
+            url=f"westock://{command}/{inst.id}",
+            body=f"{command}:{inst.id}".encode(),
+            fields=[command],
+            published_at=AS_OF,
+        )
+        data = {
+            "profile": {
+                "code": inst.symbol,
+                "name": "贵州茅台",
+                "company_name": "贵州茅台股份有限公司",
+                "main_business": "白酒生产与销售",
+                "industry": "白酒",
+            },
+            "asfund": [{
+                "code": inst.symbol,
+                "report_period": "2026-03-31",
+                "period_end": "2026-03-31",
+                "published_at": AS_OF,
+                "revenue": 10_000,
+                "net_profit": 3_000,
+                "operating_cashflow": 3_200,
+                "cashflow_to_profit": 1.0667,
+                "current_ratio": 1.8,
+                "interest_coverage": 12.0,
+            }],
+            "sector": [{
+                "code": inst.symbol,
+                "industry": "白酒",
+                "indicator_name": "产量:白酒:当期同比",
+                "latest_date": "2026-08-14",
+                "latest_value": 4.2,
+            }],
+            "macro": [
+                {"name": "M2同比", "value": 7.7, "unit": "percent", "period_end": "2026-07-31", "published_at": AS_OF},
+                {"name": "居民消费价格同比", "value": 0.5, "unit": "percent", "period_end": "2026-07-31", "published_at": AS_OF},
+            ],
+            "report": [{"code": inst.symbol, "document_id": "report-1", "title": "公司研究报告", "published_at": AS_OF, "url": ""}],
+            "notice": [{"code": inst.symbol, "document_id": "notice-1", "title": "公司经营公告", "published_at": AS_OF, "url": ""}],
+            "chip": {"code": inst.symbol, "as_of": AS_OF, "profit_ratio": 38.0, "average_cost": 1600.0, "concentration": 6.0, "concentration70": 6.0},
+            "technical": {"code": inst.symbol, "as_of": AS_OF, "close_price": 1680.5, "ma20": 1650.0, "macd": 1.2, "dif": 2.0, "dea": 0.8},
+        }[command]
+        return {
+            "data": data,
+            "data_as_of": AS_OF,
+            "source": source,
+            "source_ids": [source.id],
+            "package_name": "westock-data-skillhub",
+            "package_version": "1.0.5",
+            "contract_version": "westock-contract-v2",
+            "validation_mode": "real_canary",
+        }
+
+    def capability_matrix(self):
+        return {command: {"status": "canary_verified"} for command in self.calls}
+
+
 class StructuredEventProvider(FakeProvider):
     def __init__(self, events=None, *, complete=True, **kwargs):
         super().__init__(**kwargs)
@@ -397,6 +461,33 @@ def test_asia_datetime_parser_is_explicit_and_unknown_safe():
     assert normalize_asia_datetime("2026-08-18T07:00:00Z") == "2026-08-18T15:00:00+08:00"
     assert parse_asia_datetime("not-a-date") is None
     assert compare_asia_datetime("not-a-date", "2026-08-18") is None
+
+
+async def test_westock_supplements_feed_standard_evidence_sections(tmp_path):
+    supplement = FakeWestockSupplement()
+    bundle = await make_service(
+        tmp_path,
+        FakeProvider(bars=_bars(60), fund_published_at=AS_OF),
+        supplement_provider=supplement,
+    ).build("run_westock_merge", MT, as_of=AS_OF)
+
+    assert set(supplement.calls) == {
+        "profile", "asfund", "sector", "macro", "report", "notice", "chip", "technical",
+    }
+    assert bundle["company_profile"]["main_business"] == "白酒生产与销售"
+    assert bundle["fundamentals"]["metrics"]["eps"] == pytest.approx(12.34)
+    assert bundle["fundamentals"]["metrics"]["current_ratio"] == pytest.approx(1.8)
+    assert len(bundle["fundamentals"]["source_ids"]) == 2
+    assert bundle["cycle_context"]["cycles"]["macro_liquidity"]["status"] == "available"
+    assert bundle["cycle_context"]["cycles"]["industry_supply_demand"]["status"] == "available"
+    assert bundle["capital_positioning"]["chip_average_cost"] == pytest.approx(1600.0)
+    assert bundle["technical_supplement"]["ma20"] == pytest.approx(1650.0)
+    assert any(item["title"] == "公司经营公告" for item in bundle["news"])
+    assert bundle["research_reports"][0]["title"] == "公司研究报告"
+    assert "governance" in bundle["company_quality"]["optional_missing_fields"]
+    assert "governance" not in bundle["company_quality"]["missing_fields"]
+    source_ids = {item["id"] for item in bundle["sources"]}
+    assert set(bundle["capital_positioning"]["source_ids"]) <= source_ids
 
 
 async def test_research_cutoff_excludes_future_news_and_source(tmp_path):
@@ -1041,7 +1132,7 @@ async def test_v6_policy_gate_applies_only_to_policy_sensitive_industry(tmp_path
     assert nonsensitive["horizons"]["medium_term"]["status"] == "ready"
 
 
-async def test_v6_long_gate_requires_multi_period_cashflow_valuation_and_lifecycle(tmp_path):
+async def test_v6_long_gate_requires_core_financials_not_optional_lifecycle(tmp_path):
     service = make_service(
         tmp_path,
         FakeProvider(bars=_bars(60), fund_published_at=AS_OF),
@@ -1057,7 +1148,6 @@ async def test_v6_long_gate_requires_multi_period_cashflow_valuation_and_lifecyc
         "cycles": {
             "industry_supply_demand": {
                 "status": "available",
-                "industry_lifecycle": {"status": "available", "source_ids": ["src_cycle"]},
                 "source_ids": ["src_cycle"],
             },
             "company_earnings": {"status": "available", "source_ids": ["src_cycle"]},
@@ -1114,7 +1204,8 @@ async def test_v2_sections_are_deterministic_and_market_source_is_resolvable(tmp
     assert bundle["policy_context"]["status"] == "missing"
     assert bundle["cycle_context"]["cycles"]["macro_liquidity"]["status"] == "missing"
     assert bundle["company_quality"]["status"] == "degraded"
-    assert "financing_balance" in bundle["capital_positioning"]["missing_fields"]
+    assert "financing_balance" in bundle["capital_positioning"]["optional_missing_fields"]
+    assert "financing_balance" not in bundle["capital_positioning"]["missing_fields"]
     assert bundle["tradeability"]["liquidity_proxy"]["value"] == 1.2
     assert bundle["tradeability"]["status"] == "degraded"
     assert bundle["evidence_coverage"]["short_term"]["status"] == "insufficient_data"
@@ -1182,8 +1273,9 @@ async def test_tradeability_falls_back_to_quote_and_profile_after_market_page_fa
     assert tradeability["listing_date"] == "2010-05-18"
     assert tradeability["t_plus_one"] == "restricted"
     assert tradeability["t_plus_one_method"] == "a-share-equity-t-plus-one-rule-v1"
-    assert "order_book_depth" in tradeability["missing_fields"]
-    assert "realized_slippage" in tradeability["missing_fields"]
+    assert "order_book_depth" in tradeability["optional_missing_fields"]
+    assert "realized_slippage" in tradeability["optional_missing_fields"]
+    assert "order_book_depth" not in tradeability["missing_fields"]
     assert tradeability["limit_up"] != pytest.approx(40.48)
     assert tradeability["limit_down"] != pytest.approx(39.03)
     assert tradeability["source_ids"]
@@ -1353,7 +1445,8 @@ async def test_valuation_with_one_other_peer_is_insufficient(tmp_path):
         "median": None,
         "percentile": None,
     }
-    assert "peer_valuation" in bundle["company_quality"]["missing_fields"]
+    assert "peer_valuation" in bundle["company_quality"]["optional_missing_fields"]
+    assert "peer_valuation" not in bundle["company_quality"]["missing_fields"]
 
 
 async def test_valuation_excludes_negative_peer_values(tmp_path):

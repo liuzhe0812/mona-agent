@@ -8,12 +8,27 @@ import type {
   InboundEvent,
   OutboundMedia,
   GoalStateWsPayload,
+  TaskPlanWsPayload,
   DeliveredFile,
+  DiscussionLaunchOptions,
   UIMediaAttachment,
   UIImage,
   UIFileEdit,
   UIMessage,
+  WorkflowRun,
+  ToolProgressEvent,
+  MessageQuote,
 } from "@/lib/types";
+
+const MAX_UI_TRACE_LINES = 500;
+const MAX_UI_TOOL_EVENTS = 500;
+const MAX_UI_REASONING_CHARS = 128_000;
+
+function boundedReasoning(value: string): string {
+  return value.length > MAX_UI_REASONING_CHARS
+    ? `…\n${value.slice(-MAX_UI_REASONING_CHARS)}`
+    : value;
+}
 
 interface StreamBuffer {
   /** ID of the assistant message currently receiving deltas (cleared on ``stream_end``). */
@@ -33,8 +48,8 @@ interface ActiveAssistantCursor {
 }
 
 type PendingStreamEvent =
-  | { kind: "delta"; text: string; authorId?: string; streamKey?: string; jobId?: string }
-  | { kind: "reasoning"; text: string; authorId?: string; streamKey?: string; jobId?: string };
+  | { kind: "delta"; text: string; authorId?: string; streamKey?: string; jobId?: string; taskId?: string }
+  | { kind: "reasoning"; text: string; authorId?: string; streamKey?: string; jobId?: string; taskId?: string };
 
 type RuntimeInboundEvent = InboundEvent & {
   message_id?: unknown;
@@ -44,6 +59,7 @@ type RuntimeInboundEvent = InboundEvent & {
   job_id?: unknown;
   workflow_run_id?: unknown;
   author_id?: unknown;
+  task_id?: unknown;
 };
 
 interface EventIdentity {
@@ -52,6 +68,7 @@ interface EventIdentity {
   jobId?: string;
   workflowRunId?: string;
   authorId?: string;
+  taskId?: string;
   streamKey?: string;
 }
 
@@ -65,6 +82,7 @@ function eventIdentity(event: InboundEvent): EventIdentity {
   const jobId = nonEmptyString(raw.job_id);
   const workflowRunId = nonEmptyString(raw.workflow_run_id);
   const authorId = nonEmptyString(raw.author_id);
+  const taskId = nonEmptyString(raw.task_id);
   const messageId =
     nonEmptyString(raw.message_id)
     ?? nonEmptyString(raw.messageId)
@@ -78,7 +96,7 @@ function eventIdentity(event: InboundEvent): EventIdentity {
         : authorId
           ? `agent:${authorId}`
           : undefined;
-  return { messageId, streamId, jobId, workflowRunId, authorId, streamKey };
+  return { messageId, streamId, jobId, workflowRunId, authorId, taskId, streamKey };
 }
 
 function findMessageIndexById(messages: UIMessage[], id: string | undefined): number | null {
@@ -140,7 +158,7 @@ function attachReasoningChunk(
       const next = prev.slice();
       next[i] = {
         ...candidate,
-        reasoning: (candidate.reasoning ?? "") + chunk,
+        reasoning: boundedReasoning((candidate.reasoning ?? "") + chunk),
         reasoningStreaming: true,
         ...(activitySegmentId ? { activitySegmentId } : {}),
       };
@@ -299,14 +317,20 @@ function pruneReasoningOnlyPlaceholders(prev: UIMessage[]): UIMessage[] {
 }
 
 function stampLastAssistantLatency(prev: UIMessage[], latencyMs: number): UIMessage[] {
+  let fallbackIndex = -1;
   for (let i = prev.length - 1; i >= 0; i -= 1) {
     const m = prev[i];
-    if (m.role === "assistant" && m.kind !== "trace") {
-      const merged: UIMessage = { ...m, latencyMs, isStreaming: false };
-      return [...prev.slice(0, i), merged, ...prev.slice(i + 1)];
+    if (m.role === "user") break;
+    if (m.role !== "assistant" || m.kind === "trace") continue;
+    if (fallbackIndex < 0) fallbackIndex = i;
+    if (m.content.trim().length > 0) {
+      fallbackIndex = i;
+      break;
     }
   }
-  return prev;
+  if (fallbackIndex < 0) return prev;
+  const merged: UIMessage = { ...prev[fallbackIndex], latencyMs, isStreaming: false };
+  return [...prev.slice(0, fallbackIndex), merged, ...prev.slice(fallbackIndex + 1)];
 }
 
 function absorbCompleteAssistantMessage(
@@ -419,8 +443,13 @@ export interface SendImage {
 
 export interface SendOptions {
   displayContent?: string;
+  quote?: MessageQuote;
+  origin?: "profile_advice";
+  profileAdviceId?: string;
   /** Workspace-relative documents returned by the document upload endpoint. */
   docPaths?: string[];
+  /** Names rendered as optimistic file cards while the canonical history is loading. */
+  documentNames?: string[];
   terminalSessionId?: string;
   terminalExecMode?: string;
   dbConnectionId?: string;
@@ -430,10 +459,104 @@ export interface SendOptions {
   dbServerVersion?: string;
   dbCurrentSql?: string;
   dbLastError?: string;
+  browserTabId?: string;
   browserPageUrl?: string;
   browserPageTitle?: string;
+  officeSessionId?: string;
+  officeDocumentType?: "docs" | "sheets" | "slides";
+  officeDisplayName?: string;
+  canvasId?: string;
+  canvasPath?: string;
+  /** Route only this turn through a dedicated document Agent. */
+  agentKind?: "ppt" | "video";
   /** Structured ``@Agent`` targets in a room (multi-agent guide 7.5). */
   targetAgentIds?: string[];
+  /** A bounded topic debate/discussion; rendered separately from workflows. */
+  discussion?: DiscussionLaunchOptions;
+  taskId?: string;
+}
+
+function normalizedTokenUsage(value: Record<string, number> | undefined): UIMessage["tokenUsage"] {
+  if (!value) return undefined;
+  const promptTokens = Math.max(0, Math.round(value.prompt_tokens ?? 0));
+  const completionTokens = Math.max(0, Math.round(value.completion_tokens ?? 0));
+  const cachedTokens = Math.max(
+    0,
+    Math.round(value.cached_tokens ?? value.cache_read_input_tokens ?? 0),
+  );
+  const totalTokens = Math.max(
+    0,
+    Math.round(value.total_tokens ?? promptTokens + completionTokens),
+  );
+  if (Math.max(promptTokens, completionTokens, cachedTokens, totalTokens) === 0) return undefined;
+  return { promptTokens, completionTokens, cachedTokens, totalTokens };
+}
+
+function stampLastAssistantTurnMetadata(
+  prev: UIMessage[],
+  tokenUsage: UIMessage["tokenUsage"],
+  taskId?: string,
+): UIMessage[] {
+  if (!tokenUsage && !taskId) return prev;
+  let fallbackIndex = -1;
+  for (let i = prev.length - 1; i >= 0; i -= 1) {
+    const message = prev[i];
+    if (message.role === "user") break;
+    if (message.role !== "assistant" || message.kind === "trace") continue;
+    if (fallbackIndex < 0 && (!taskId || !message.taskId || message.taskId === taskId)) {
+      fallbackIndex = i;
+    }
+    if (
+      message.content.trim().length > 0
+      && (!taskId || !message.taskId || message.taskId === taskId)
+    ) {
+      fallbackIndex = i;
+      break;
+    }
+  }
+  if (fallbackIndex < 0) return prev;
+  return prev.map((message, index) => {
+    if (index === fallbackIndex) {
+      return {
+        ...message,
+        ...(tokenUsage ? { tokenUsage } : {}),
+        ...(taskId ? { taskId } : {}),
+      };
+    }
+    if (
+      tokenUsage
+      && taskId
+      && message.role === "assistant"
+      && message.kind !== "trace"
+      && message.taskId === taskId
+      && message.tokenUsage
+    ) {
+      const { tokenUsage: _duplicateUsage, ...rest } = message;
+      return rest;
+    }
+    return message;
+  });
+}
+
+function boundedTraceLines(lines: string[]): string[] {
+  return lines.length > MAX_UI_TRACE_LINES ? lines.slice(-MAX_UI_TRACE_LINES) : lines;
+}
+
+function toolEventKey(event: ToolProgressEvent, index: number): string {
+  const callId = typeof event.call_id === "string" && event.call_id ? event.call_id : `index:${index}`;
+  return `${callId}|${event.phase ?? ""}|${event.name ?? ""}`;
+}
+
+function boundedToolEvents(
+  existing: ToolProgressEvent[] | undefined,
+  incoming: ToolProgressEvent[] | undefined,
+): ToolProgressEvent[] | undefined {
+  if ((!existing || existing.length === 0) && (!incoming || incoming.length === 0)) return undefined;
+  const merged = [...(existing ?? []), ...(incoming ?? [])];
+  const byKey = new Map<string, ToolProgressEvent>();
+  merged.forEach((event, index) => byKey.set(toolEventKey(event, index), event));
+  const result = [...byKey.values()];
+  return result.length > MAX_UI_TOOL_EVENTS ? result.slice(-MAX_UI_TOOL_EVENTS) : result;
 }
 
 export function useMonaStream(
@@ -444,12 +567,16 @@ export function useMonaStream(
 ): {
   messages: UIMessage[];
   isStreaming: boolean;
+  /** True after the user requested stop until the server confirms completion. */
+  stopping: boolean;
   /** Unix epoch seconds when the current user turn started (WebSocket ``goal_status``). */
   runStartedAt: number | null;
   /** Latest sustained goal for this ``chatId`` (``goal_state`` WS events). */
   goalState: GoalStateWsPayload | undefined;
+  taskPlan: TaskPlanWsPayload | undefined;
+  currentTaskId: string | null;
   send: (content: string, images?: SendImage[], options?: SendOptions) => void;
-  inject: (content: string, images?: SendImage[]) => void;
+  inject: (content: string, images?: SendImage[], options?: SendOptions) => void;
   stop: () => void;
   setMessages: React.Dispatch<React.SetStateAction<UIMessage[]>>;
   /** Latest transport-level fault raised since the last ``dismissStreamError``.
@@ -467,10 +594,18 @@ export function useMonaStream(
   const initialStreaming = initialMessages.length > 0
     ? initialMessages[initialMessages.length - 1].kind === "trace"
     : false;
-  const [isStreaming, setIsStreaming] = useState(initialStreaming || hasPendingToolCalls);
+  const initialRunStartedAt = chatId && client ? client.getRunStartedAt(chatId) : null;
+  const [isStreaming, setIsStreaming] = useState(
+    initialStreaming || hasPendingToolCalls || initialRunStartedAt !== null,
+  );
+  const [stopping, setStopping] = useState(false);
+  const stoppingRef = useRef(false);
   /** Unix epoch seconds when the current user turn started; cleared on ``idle``. */
   const [runStartedAt, setRunStartedAt] = useState<number | null>(null);
   const [goalState, setGoalState] = useState<GoalStateWsPayload | undefined>(undefined);
+  const [taskPlan, setTaskPlan] = useState<TaskPlanWsPayload | undefined>(undefined);
+  const [currentTaskId, setCurrentTaskId] = useState<string | null>(null);
+  const currentTaskIdRef = useRef<string | null>(null);
   const [streamError, setStreamError] = useState<StreamError | null>(null);
   const buffer = useRef<StreamBuffer | null>(null);
   const activeAssistantRef = useRef<ActiveAssistantCursor | null>(null);
@@ -495,6 +630,11 @@ export function useMonaStream(
    * the loading spinner alive across tool-call boundaries without needing
    * backend changes. */
   const streamEndTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  useEffect(() => {
+    currentTaskIdRef.current = null;
+    setCurrentTaskId(null);
+  }, [chatId]);
 
   useEffect(() => {
     if (!client) return undefined;
@@ -617,6 +757,7 @@ export function useMonaStream(
         const authorId = events[i].authorId;
         const streamKey = events[i].streamKey;
         const jobId = events[i].jobId;
+        const taskId = events[i].taskId;
         let text = "";
         while (
           i < events.length
@@ -624,6 +765,7 @@ export function useMonaStream(
           && (events[i].authorId ?? null) === (authorId ?? null)
           && (events[i].streamKey ?? null) === (streamKey ?? null)
           && (events[i].jobId ?? null) === (jobId ?? null)
+          && (events[i].taskId ?? null) === (taskId ?? null)
         ) {
           text += events[i].text;
           i += 1;
@@ -649,6 +791,7 @@ export function useMonaStream(
               isStreaming: true,
               createdAt: Date.now(),
               ...(authorId ? { authorId, authorType: "agent" as const } : {}),
+              ...(taskId ? { taskId } : {}),
             });
             targetIndex = draft.length - 1;
           }
@@ -660,6 +803,7 @@ export function useMonaStream(
             ...(authorId && !target.authorId
               ? { authorId, authorType: "agent" as const }
               : {}),
+            ...(taskId && !target.taskId ? { taskId } : {}),
           };
           closedAssistantStreamIdsRef.current.delete(merged.id);
           activeAssistantRef.current = {
@@ -686,7 +830,7 @@ export function useMonaStream(
             const activitySegmentId = candidate.activitySegmentId ?? ensureActivitySegmentId();
             draft[keyedReasoningIndex] = {
               ...candidate,
-              reasoning: (candidate.reasoning ?? "") + text,
+              reasoning: boundedReasoning((candidate.reasoning ?? "") + text),
               reasoningStreaming: true,
               ...(activitySegmentId ? { activitySegmentId } : {}),
             };
@@ -707,7 +851,7 @@ export function useMonaStream(
               ) {
                 draft[j] = {
                   ...candidate,
-                  reasoning: (candidate.reasoning ?? "") + text,
+                  reasoning: boundedReasoning((candidate.reasoning ?? "") + text),
                   reasoningStreaming: true,
                   ...(activitySegmentId ? { activitySegmentId } : {}),
                 };
@@ -801,14 +945,18 @@ export function useMonaStream(
   // history response after the optimistic first message has already rendered.
   useEffect(() => {
     setMessages(initialMessages);
+    const restoredRunStartedAt = chatId && client ? client.getRunStartedAt(chatId) : null;
     setIsStreaming(
       (initialMessages.length > 0
         ? initialMessages[initialMessages.length - 1].kind === "trace"
-        : false) || hasPendingToolCalls,
+        : false) || hasPendingToolCalls || restoredRunStartedAt !== null,
     );
     setStreamError(null);
-    setRunStartedAt(chatId && client ? client.getRunStartedAt(chatId) : null);
+    setRunStartedAt(restoredRunStartedAt);
     setGoalState(chatId && client ? client.getGoalState(chatId) : undefined);
+    setTaskPlan(chatId && client ? client.getTaskPlan?.(chatId) : undefined);
+    stoppingRef.current = false;
+    setStopping(false);
     buffer.current = null;
     activeAssistantRef.current = null;
     streamMessageIdsRef.current.clear();
@@ -855,6 +1003,7 @@ export function useMonaStream(
           ...(identity.authorId ? { authorId: identity.authorId } : {}),
           ...(identity.streamKey ? { streamKey: identity.streamKey } : {}),
           ...(identity.jobId ? { jobId: identity.jobId } : {}),
+          ...(identity.taskId ? { taskId: identity.taskId } : {}),
         });
         schedulePendingStreamFlush();
         return;
@@ -872,6 +1021,7 @@ export function useMonaStream(
           ...(identity.authorId ? { authorId: identity.authorId } : {}),
           ...(identity.streamKey ? { streamKey: identity.streamKey } : {}),
           ...(identity.jobId ? { jobId: identity.jobId } : {}),
+          ...(identity.taskId ? { taskId: identity.taskId } : {}),
         });
         schedulePendingStreamFlush();
         return;
@@ -899,10 +1049,37 @@ export function useMonaStream(
         return;
       }
 
+      if (ev.event === "task_plan") {
+        if (
+          currentTaskIdRef.current
+          && ev.task_plan.task_id
+          && ev.task_plan.task_id !== currentTaskIdRef.current
+        ) return;
+        setTaskPlan(ev.task_plan);
+        return;
+      }
+
+      if (ev.event === "artifact_task_started") {
+        currentTaskIdRef.current = ev.task_id;
+        setCurrentTaskId(ev.task_id);
+        setTaskPlan(undefined);
+        return;
+      }
+
       if (ev.event === "goal_status") {
-        if (ev.status === "running" && typeof ev.started_at === "number") {
-          setRunStartedAt(ev.started_at);
+        if (ev.status === "running") {
+          setIsStreaming(true);
+          if (!stoppingRef.current) setStopping(false);
+          if (typeof ev.started_at === "number") {
+            setRunStartedAt(ev.started_at);
+          } else {
+            setRunStartedAt(null);
+          }
         } else {
+          setIsStreaming(false);
+          stoppingRef.current = false;
+          setStopping(false);
+          suppressStreamUntilTurnEndRef.current = false;
           setRunStartedAt(null);
         }
         return;
@@ -911,7 +1088,50 @@ export function useMonaStream(
       // Direct @Agent requests are acknowledged before their background jobs
       // finish, so they do not emit the normal turn_end frame.
       if (ev.event === "agent_mentions_routed") {
+        setIsStreaming(true);
+        return;
+      }
+
+      if (ev.event === "discussion_updated") {
+        const run = ev as Partial<WorkflowRun>;
+        if (typeof run.id !== "string" || !run.workflow || !run.steps) return;
+        setMessages((prev) => {
+          const id = `discussion:${run.id}`;
+          const index = prev.findIndex((message) => message.id === id);
+          const message: UIMessage = {
+            id,
+            role: "assistant",
+            kind: "discussion",
+            content: "",
+            workflowRunId: run.id,
+            payload: run,
+            createdAt: index >= 0 ? prev[index].createdAt : Date.now(),
+          };
+          if (index < 0) return [...prev, message];
+          const next = prev.slice();
+          next[index] = message;
+          return next;
+        });
+        if (run.status === "succeeded" || run.status === "failed" || run.status === "cancelled") {
+          setIsStreaming(false);
+          stoppingRef.current = false;
+          setStopping(false);
+          setRunStartedAt(null);
+          onTurnEnd?.();
+        } else {
+          setIsStreaming(true);
+        }
+        return;
+      }
+
+      // Some direct @Agent backends report completion explicitly instead of
+      // sending the normal turn_end frame. Keep this string-based for
+      // compatibility with servers that add the event before the shared type.
+      if ((ev as { event?: string }).event === "agent_mentions_completed") {
         setIsStreaming(false);
+        stoppingRef.current = false;
+        setStopping(false);
+        suppressStreamUntilTurnEndRef.current = false;
         return;
       }
 
@@ -926,6 +1146,8 @@ export function useMonaStream(
           streamEndTimerRef.current = null;
         }
         setIsStreaming(false);
+        stoppingRef.current = false;
+        setStopping(false);
         setMessages((prev) => {
           let finalized = prev.map((m) => (m.isStreaming ? { ...m, isStreaming: false } : m));
           finalized = pruneReasoningOnlyPlaceholders(finalized);
@@ -941,6 +1163,11 @@ export function useMonaStream(
           if (typeof ev.latency_ms === "number" && ev.latency_ms >= 0) {
             finalized = stampLastAssistantLatency(finalized, Math.round(ev.latency_ms));
           }
+          finalized = stampLastAssistantTurnMetadata(
+            finalized,
+            normalizedTokenUsage(ev.token_usage),
+            ev.task_id,
+          );
           buffer.current = null;
           activeAssistantRef.current = null;
           streamMessageIdsRef.current.clear();
@@ -1003,11 +1230,14 @@ export function useMonaStream(
               if (mergedLines && !mergedLines.added) return prev;
               const merged: UIMessage = {
                 ...last,
-                traces: mergedLines ? mergedLines.traces : [...previousTraces, ...lines],
+                traces: boundedTraceLines(mergedLines ? mergedLines.traces : [...previousTraces, ...lines]),
                 content: mergedLines
                   ? mergedLines.traces[mergedLines.traces.length - 1]
                   : lines[lines.length - 1],
                 activitySegmentId: last.activitySegmentId ?? segmentId,
+                ...(boundedToolEvents(last.toolEvents, ev.tool_events)
+                  ? { toolEvents: boundedToolEvents(last.toolEvents, ev.tool_events) }
+                  : {}),
               };
               const next = prev.slice();
               next[next.length - 1] = merged;
@@ -1020,7 +1250,10 @@ export function useMonaStream(
                 role: "tool",
                 kind: "trace",
                 content: lines[lines.length - 1],
-                traces: lines,
+                traces: boundedTraceLines(lines),
+                ...(boundedToolEvents(undefined, ev.tool_events)
+                  ? { toolEvents: boundedToolEvents(undefined, ev.tool_events) }
+                  : {}),
                 activitySegmentId: segmentId,
                 createdAt: Date.now(),
                 ...(ev.author_id
@@ -1096,10 +1329,13 @@ export function useMonaStream(
             typeof ev.latency_ms === "number" && ev.latency_ms >= 0
               ? Math.round(ev.latency_ms)
               : undefined;
+          const tokenUsage = normalizedTokenUsage(ev.token_usage);
           const completeMessage: Omit<UIMessage, "id" | "role" | "createdAt"> = {
             content,
             ...(hasMedia ? { media } : {}),
             ...(lat !== undefined ? { latencyMs: lat } : {}),
+            ...(tokenUsage ? { tokenUsage } : {}),
+            ...(ev.task_id ? { taskId: ev.task_id } : {}),
             ...(identity.authorId
               ? { authorId: identity.authorId, authorType: "agent" as const }
               : {}),
@@ -1109,8 +1345,9 @@ export function useMonaStream(
             ...(identity.jobId ? { jobId: identity.jobId } : {}),
             ...(identity.workflowRunId ? { workflowRunId: identity.workflowRunId } : {}),
             ...(Array.isArray(ev.tool_events) && ev.tool_events.length > 0
-              ? { toolEvents: ev.tool_events }
+              ? { toolEvents: boundedToolEvents(undefined, ev.tool_events) }
               : {}),
+            ...(ev.task_plan ? { taskPlan: ev.task_plan } : {}),
             isStreaming: false,
             reasoningStreaming: false,
           };
@@ -1291,8 +1528,28 @@ export function useMonaStream(
       // the image blocks via ``media`` paths.
       if (!hasImages && !hasDocuments && !content.trim()) return;
 
+      let taskId = options?.taskId;
+      let startsNewTask = false;
+      if (!taskId && goalState?.active) {
+        taskId = currentTaskIdRef.current ?? undefined;
+      }
+      if (!taskId) {
+        taskId = `task_${crypto.randomUUID()}`;
+        startsNewTask = true;
+      } else if (!goalState?.active && taskId !== currentTaskIdRef.current) {
+        startsNewTask = true;
+      }
+      if (startsNewTask) {
+        currentTaskIdRef.current = taskId;
+        setCurrentTaskId(taskId);
+        setTaskPlan(undefined);
+      }
+
       flushPendingStreamEvents();
       const previews = hasImages ? images!.map((i) => i.preview) : undefined;
+      const documentMedia: UIMediaAttachment[] | undefined = options?.documentNames?.length
+        ? options.documentNames.map((name) => ({ kind: "file", name }))
+        : undefined;
       setMessages((prev) => {
         buffer.current = null;
         activeAssistantRef.current = null;
@@ -1308,9 +1565,12 @@ export function useMonaStream(
             id: crypto.randomUUID(),
             role: "user",
             content,
+            taskId,
             createdAt: Date.now(),
             ...(options?.displayContent ? { displayContent: options.displayContent } : {}),
+            ...(options?.quote ? { quote: options.quote } : {}),
             ...(previews ? { images: previews } : {}),
+            ...(documentMedia ? { media: documentMedia } : {}),
           },
         ];
       });
@@ -1323,6 +1583,7 @@ export function useMonaStream(
           // IMPORTANT: displayContent is persisted to the server so that
           // history replay also shows the short label. DO NOT remove.
           displayContent: options.displayContent,
+          quote: options.quote,
           terminalSessionId: options.terminalSessionId,
           terminalExecMode: options.terminalExecMode,
           dbConnectionId: options.dbConnectionId,
@@ -1332,23 +1593,41 @@ export function useMonaStream(
           dbServerVersion: options.dbServerVersion,
           dbCurrentSql: options.dbCurrentSql,
           dbLastError: options.dbLastError,
+          browserTabId: options.browserTabId,
           browserPageUrl: options.browserPageUrl,
           browserPageTitle: options.browserPageTitle,
+          officeSessionId: options.officeSessionId,
+          officeDocumentType: options.officeDocumentType,
+          officeDisplayName: options.officeDisplayName,
+          canvasId: options.canvasId,
+          canvasPath: options.canvasPath,
+          agentKind: options.agentKind,
           docPaths: options.docPaths,
           targetAgentIds: options.targetAgentIds,
+          discussion: options.discussion,
+          taskId,
+          origin: options.origin,
+          profileAdviceId: options.profileAdviceId,
         });
       } else {
-        client.sendMessage(chatId, content, wireMedia);
+        client.sendMessage(chatId, content, wireMedia, { taskId });
       }
     },
-    [chatId, clearActivitySegment, client, flushPendingStreamEvents],
+    [chatId, clearActivitySegment, client, flushPendingStreamEvents, goalState?.active],
   );
 
   const inject = useCallback(
-    (content: string, images?: SendImage[]) => {
+    (content: string, images?: SendImage[], options?: SendOptions) => {
       if (!chatId || !client) return;
       const hasImages = !!images && images.length > 0;
       if (!hasImages && !content.trim()) return;
+
+      let taskId = currentTaskIdRef.current;
+      if (!taskId) {
+        taskId = `task_${crypto.randomUUID()}`;
+        currentTaskIdRef.current = taskId;
+        setCurrentTaskId(taskId);
+      }
 
       const previews = hasImages ? images!.map((i) => i.preview) : undefined;
       setMessages((prev) => [
@@ -1357,21 +1636,23 @@ export function useMonaStream(
           id: crypto.randomUUID(),
           role: "user" as const,
           content,
+          taskId,
           createdAt: Date.now(),
           isInjected: true,
           ...(previews ? { images: previews } : {}),
         },
       ]);
       const wireMedia = hasImages ? images!.map((i) => i.media) : undefined;
-      client.sendMessage(chatId, content, wireMedia);
+      client.sendMessage(chatId, content, wireMedia, options ? { ...options, taskId } : { taskId });
     },
     [chatId, client],
   );
 
   const stop = useCallback(() => {
-    if (!chatId || !client) return;
+    if (!chatId || !client || stoppingRef.current || !isStreaming) return;
+    stoppingRef.current = true;
+    setStopping(true);
     flushPendingStreamEvents();
-    setIsStreaming(false);
     setMessages((prev) => {
       buffer.current = null;
       activeAssistantRef.current = null;
@@ -1383,15 +1664,19 @@ export function useMonaStream(
       clearActivitySegment();
       return prev.map((m) => (m.isStreaming ? { ...m, isStreaming: false } : m));
     });
-    suppressStreamUntilTurnEndRef.current = false;
-    client.sendMessage(chatId, "/stop");
-  }, [chatId, clearActivitySegment, client, flushPendingStreamEvents]);
+    suppressStreamUntilTurnEndRef.current = true;
+    const taskId = currentTaskIdRef.current;
+    client.sendMessage(chatId, "/stop", undefined, taskId ? { taskId } : undefined);
+  }, [chatId, clearActivitySegment, client, flushPendingStreamEvents, isStreaming]);
 
   return {
     messages,
     isStreaming,
+    stopping,
     runStartedAt,
     goalState,
+    taskPlan,
+    currentTaskId,
     send,
     inject,
     stop,

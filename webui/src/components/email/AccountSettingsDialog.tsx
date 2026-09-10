@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { Loader2, Plus, Trash2, Star, Edit3, Check, X as XIcon, Filter, PlayCircle, CalendarClock } from "lucide-react";
+import { Loader2, LockKeyhole, Plus, Trash2, Star, Edit3, Check, X as XIcon, Filter, PlayCircle, CalendarClock } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -46,18 +46,22 @@ import {
   type EmailScheduleConfig,
 } from "@/lib/tauri";
 import { cn } from "@/lib/utils";
+import { useLicense } from "@/hooks/useLicense";
 
 interface AccountSettingsDialogProps {
   open: boolean;
   onOpenChange: (open: boolean) => void;
   account: EmailAccount | null;
+  onOpenSubscribe?: () => void;
 }
 
 export function AccountSettingsDialog({
   open,
   onOpenChange,
   account,
+  onOpenSubscribe,
 }: AccountSettingsDialogProps) {
+  const { licenseActive } = useLicense();
   const updateAccount = useEmailStore((s) => s.updateAccount);
   const gatewayUrl = useEmailStore((s) => s.gatewayUrl);
   const foldersByAccount = useEmailStore((s) => s.foldersByAccount);
@@ -839,6 +843,16 @@ export function AccountSettingsDialog({
           </section>
             </TabsContent>
             <TabsContent value="schedule" className="mt-4 max-h-[60vh] space-y-5 overflow-y-auto pr-1">
+          {!licenseActive ? (
+            <div className="flex min-h-48 flex-col items-center justify-center gap-3 rounded-md border border-dashed px-6 text-center">
+              <LockKeyhole className="h-5 w-5 text-muted-foreground" aria-hidden />
+              <div>
+                <p className="text-ui font-medium">AI 日程提取是 Pro 功能</p>
+                <p className="mt-1 text-caption text-muted-foreground">升级后可从邮件自动识别并创建日程。</p>
+              </div>
+              <Button type="button" size="sm" onClick={onOpenSubscribe}>升级 Pro</Button>
+            </div>
+          ) : (
           <section className="space-y-3">
             <div className="flex items-center justify-between">
               <h3 className="flex items-center gap-1 text-caption font-medium text-muted-foreground">
@@ -1010,6 +1024,7 @@ export function AccountSettingsDialog({
               </>
             )}
           </section>
+          )}
             </TabsContent>
           </Tabs>
 

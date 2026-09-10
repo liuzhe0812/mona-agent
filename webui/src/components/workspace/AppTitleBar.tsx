@@ -9,6 +9,7 @@ import { BrowserTabItem } from "@/components/browser/BrowserTab";
 import { isTauri } from "@/lib/tauri";
 import { cn } from "@/lib/utils";
 import type { Tab } from "@/hooks/useBrowserTabs";
+import { VideoRuntimeDownloadIndicator } from "@/components/workspace/VideoRuntimeDownloadIndicator";
 
 interface AppTitleBarProps {
   tabs: Tab[];
@@ -80,7 +81,7 @@ export function AppTitleBar({
             onReorder={onReorder}
             onToggleMute={tab.type === "browser" && onToggleMute ? () => onToggleMute(tab.id) : undefined}
             onSaveAsNote={tab.type === "md-reader" && onSaveMdAsNote ? () => onSaveMdAsNote(tab.id) : undefined}
-            onRevealInExplorer={tab.type === "md-reader" && onRevealMdInExplorer ? () => onRevealMdInExplorer(tab.id) : undefined}
+            onRevealInExplorer={(tab.type === "md-reader" || tab.type === "canvas-reader") && onRevealMdInExplorer ? () => onRevealMdInExplorer(tab.id) : undefined}
           />
         ))}
         <Button
@@ -98,6 +99,7 @@ export function AppTitleBar({
 
       {/* 右侧控制按钮 */}
       <div className="ml-auto flex h-full items-center">
+        <VideoRuntimeDownloadIndicator />
         <ConnectionBadge />
         <TitleBarButton
           label="最小化"

@@ -10,6 +10,7 @@ on the browser module.
 
 from __future__ import annotations
 
+import asyncio
 import json
 import time
 import urllib.error
@@ -87,6 +88,11 @@ def tauri_invoke(cmd: str, args: dict[str, Any] | None = None) -> Any:
             f"IPC bridge unavailable for {cmd!r}: {e}. "
             "Is the Mona app running?"
         ) from e
+
+
+async def tauri_invoke_async(cmd: str, args: dict[str, Any] | None = None) -> Any:
+    """Call a Tauri IPC command without blocking the asyncio event loop."""
+    return await asyncio.to_thread(tauri_invoke, cmd, args)
 
 
 def check_subscription_access() -> bool:

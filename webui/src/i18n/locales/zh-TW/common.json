@@ -46,12 +46,13 @@
     "manageAccount": "管理帳號",
     "logout": "登出",
     "login": "登入",
+    "update": "更新",
     "updateAvailable": "有新版本可用",
     "workspaceTabs": "工作區標籤頁",
     "newBrowserTab": "新增瀏覽器標籤頁",
     "modules": {
       "note": "筆記",
-      "doc": "AI文件",
+      "doc": "文件",
       "ssh": "終端機",
       "email": "郵件",
       "schedule": "計畫",
@@ -222,7 +223,6 @@
       "codeWrap": "Code wrapping",
       "maxResults": "Max results",
       "timeout": "Timeout",
-      "jinaReader": "Jina reader",
       "timezone": "Timezone",
       "toolHintMaxLength": "Tool hint length",
       "workspacePath": "Workspace path",
@@ -238,7 +238,6 @@
       "codeWrap": "Keep long code lines readable on smaller screens.",
       "maxResults": "Results returned by each web_search call.",
       "timeout": "Seconds before a search provider request times out.",
-      "jinaReader": "Use Jina Reader for web_fetch when available.",
       "timezone": "IANA timezone used by runtime context and schedules.",
       "toolHintMaxLength": "Maximum characters shown in tool progress hints."
     },
@@ -383,7 +382,7 @@
   },
   "managedRuntime": {
     "title": "進階功能",
-    "description": "影片、語音等進階功能所需內容都在這裡管理，預設在需要時下載。",
+    "description": "以下內容只在使用對應功能時需要。開啟按需下載後不必預先安裝，Mona 會在首次使用時自動準備。",
     "refresh": "重新整理",
     "loading": "正在讀取進階功能狀態…",
     "loadError": "執行環境狀態暫時無法使用",
@@ -392,6 +391,7 @@
     "updateError": "無法更新下載設定",
     "cleanupError": "無法清理進階功能快取",
     "installed": "已安裝 {{version}}",
+    "availableLocally": "本機可用",
     "installing": "正在下載並驗證 · {{percent}}%",
     "install": "安裝",
     "update": "更新",
@@ -413,35 +413,35 @@
     "components": {
       "python": {
         "name": "Python",
-        "description": "Agent 共用 Python 工作環境；使用者專案仍使用自己的 .venv"
+        "description": "會話中的 Python 分析、PPT 製作、影片製作和學術研究專家會使用"
       },
     "node": {
       "name": "Node.js",
-      "description": "Agent 共用 Node.js；使用者專案仍使用自己的 node_modules"
+      "description": "影片製作、學術研究專家的文獻檢索，以及會話中執行 Node.js 專案時使用"
     },
     "ffmpeg": {
       "name": "影片處理",
-      "description": "用於影片轉碼、音訊處理和重點影格擷取"
+      "description": "筆記 > 網頁轉筆記：處理影片連結時擷取音訊和關鍵畫面；影片製作匯出成片時也會使用"
     },
     "yt_dlp": {
       "name": "線上影片讀取",
-      "description": "用於讀取支援的影片頁面和媒體內容"
+      "description": "筆記 > 網頁轉筆記：輸入影片連結後，用於讀取影片標題、字幕和媒體內容"
     },
     "asr": {
       "name": "語音轉寫",
-      "description": "影片沒有字幕時，在本機產生文字稿"
+      "description": "筆記 > 網頁轉筆記：影片沒有可用字幕時，用於將聲音轉成文字"
     },
     "pandoc": {
       "name": "文件解析",
-      "description": "用於匯入 Word、PPT、ODT、RTF 和 EPUB"
+      "description": "筆記 > 文件轉筆記：匯入 Word、PPT、ODT、RTF 或 EPUB 時使用"
     },
     "computer_use": {
       "name": "電腦操作",
-      "description": "用於觀察並操作電腦上的其他應用程式"
+      "description": "會話：讓 Mona 代你點擊、輸入或操作其他桌面應用程式時使用"
     },
     "westock": {
       "name": "股票資料支援",
-      "description": "用於補充股票研究所需的結構化資料"
+      "description": "股票：進行個股診斷、深度研究或選股時，用於補充公司、財務、公告和技術資料"
     }
     }
   },
@@ -493,7 +493,7 @@
     "title": "刪除這個對話？",
     "description": "此操作無法復原。",
     "cancel": "取消",
-    "confirm": "刪除"
+    "confirm": "刪除對話"
   },
   "connection": {
     "idle": "閒置",
@@ -890,6 +890,20 @@
     "imageAttachment": "圖片附件",
     "showAll": "顯示全部",
     "collapse": "收合",
+    "copyMessage": "複製",
+    "copiedMessage": "已複製",
+    "quoteMessage": "引用",
+    "shareAsImage": "分享為圖片",
+    "shareImageFailed": "分享圖片失敗",
+    "branchTask": "開啟分支任務",
+    "branchDialogTitle": "從這裡開啟一個新任務？",
+    "branchDialogDescription": "系統會根據這裡的對話上下文建立一個獨立的新任務。原任務不會改變，之後兩邊的訊息互不影響。",
+    "confirmBranchTask": "開啟新任務",
+    "branchingTask": "正在建立…",
+    "moreActions": "更多操作",
+    "tokenUsage": "{{count}} Token",
+    "quotedMessage": "引用 {{author}} 的訊息",
+    "removeQuote": "移除引用",
     "saveAsNote": "儲存為筆記",
     "savedAsNote": "已儲存為筆記",
     "downloadImage": "下載圖片",
@@ -914,6 +928,7 @@
     "export": "匯出",
     "exportPng": "匯出 PNG 圖片",
     "exportSvg": "匯出 SVG 向量圖",
+    "exportDrawio": "匯出 Draw.io 可編輯圖",
     "exportCsv": "匯出 CSV 資料",
     "errors": {
       "invalidJson": "圖表資料不是有效的 JSON。",

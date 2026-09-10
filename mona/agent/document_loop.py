@@ -93,10 +93,10 @@ class DocumentAgentLoop(AgentLoop):
     """
 
     def __init__(self, *args: Any, agent_kind: str, **kwargs: Any) -> None:
-        super().__init__(*args, **kwargs)
         if agent_kind not in DOCUMENT_PROFILES:
             raise ValueError(f"Unknown agent_kind: {agent_kind!r}")
         self._profile = DOCUMENT_PROFILES[agent_kind]
+        super().__init__(*args, **kwargs)
         self.context = DocumentContextBuilder(
             self.workspace,
             profile=self._profile,
@@ -107,6 +107,7 @@ class DocumentAgentLoop(AgentLoop):
 
     def _filter_tools_to_whitelist(self, whitelist: frozenset[str]) -> None:
         """Unregister every tool not in the given whitelist."""
+        self._tool_allowlist = set(whitelist)
         if not isinstance(self.tools, ToolRegistry):
             logger.warning(
                 "DocumentAgentLoop.tools is not a ToolRegistry; skipping whitelist filter"

@@ -148,7 +148,7 @@ export function DocChatPanel({ chatId, onSend, placeholder, onStreamingChange }:
               }
             }}
             disabled={!chatId || busy}
-            className="min-h-[36px] flex-1 resize-none rounded-lg border-0 bg-transparent px-0 text-ui leading-5 shadow-none focus-visible:ring-0 focus-visible:ring-offset-0 placeholder:text-muted-foreground disabled:cursor-not-allowed disabled:opacity-60"
+            className="min-h-[36px] flex-1 resize-none rounded-none border-0 bg-transparent px-0 py-0 text-caption leading-5 shadow-none focus-visible:ring-0 focus-visible:ring-offset-0 placeholder:text-muted-foreground disabled:cursor-not-allowed disabled:opacity-60"
             rows={2}
             placeholder={placeholder ?? "输入消息..."}
           />

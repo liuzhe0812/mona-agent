@@ -181,7 +181,7 @@ export function RadarChart({
             y={y}
             textAnchor={anchor}
             dominantBaseline="middle"
-            className="fill-foreground text-[11px] font-medium"
+            className="fill-foreground text-caption font-medium"
           >
             {s.axis}
           </text>
@@ -198,7 +198,7 @@ export function RadarChart({
             y={y}
             textAnchor="middle"
             dominantBaseline="middle"
-            className="fill-muted-foreground text-[9px] tabular-nums"
+            className="fill-muted-foreground text-micro tabular-nums"
           >
             {Math.round(s.value * progress)}
           </text>

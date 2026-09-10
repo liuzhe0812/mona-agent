@@ -5,8 +5,9 @@ from __future__ import annotations
 import asyncio
 import dataclasses
 import os
+import shutil
 import time
-from contextlib import AsyncExitStack, nullcontext, suppress
+from contextlib import AsyncExitStack, nullcontext
 from copy import copy
 from dataclasses import dataclass, field
 from enum import Enum, auto
@@ -27,7 +28,11 @@ from mona.agent.subagent import SubagentManager
 from mona.agent.tools.deliver_file import DELIVER_FILES_PENDING_META
 from mona.agent.tools.file_state import FileStateStore, bind_file_states, reset_file_states
 from mona.agent.tools.message import MessageTool
-from mona.agent.tools.path_utils import reset_current_workspace, set_current_workspace
+from mona.agent.tools.path_utils import (
+    get_current_workspace,
+    reset_current_workspace,
+    set_current_workspace,
+)
 from mona.agent.tools.registry import ToolRegistry
 from mona.agent.tools.self import MyTool
 from mona.bus.events import InboundMessage, OutboundMessage
@@ -36,17 +41,21 @@ from mona.command import CommandContext, CommandRouter, register_builtin_command
 from mona.config.schema import AgentDefaults, ModelPresetConfig
 from mona.providers.base import LLMProvider
 from mona.providers.factory import ProviderSnapshot
-from mona.session.goal_state import (
-    runner_wall_llm_timeout_s,
-)
+from mona.session.goal_state import runner_wall_llm_timeout_s
 from mona.session.manager import Session, SessionManager, normalize_message_author
+from mona.session.task_plan import task_plan_ws_blob
 from mona.session.webui_turns import (
     WebuiTurnCoordinator,
     build_bus_progress_callback,
     mark_webui_session,
 )
 from mona.utils.document import extract_documents
-from mona.utils.helpers import estimate_message_tokens, image_placeholder_text
+from mona.utils.helpers import (
+    detect_image_mime,
+    estimate_message_tokens,
+    image_placeholder_text,
+    safe_filename,
+)
 from mona.utils.helpers import truncate_text as truncate_text_fn
 from mona.utils.image_generation_intent import image_generation_prompt
 from mona.utils.llm_runtime import LLMRuntime
@@ -64,6 +73,7 @@ if TYPE_CHECKING:
 
 UNIFIED_SESSION_KEY = "unified:default"
 
+
 def previewable_delivered_media(files: list[dict[str, Any]] | None) -> list[str]:
     """Return existing image/video deliverables for inline reply previews."""
     media: list[str] = []
@@ -78,6 +88,7 @@ def previewable_delivered_media(files: list[dict[str, Any]] | None) -> list[str]
             seen.add(path)
     return media
 
+
 # Appended to the system prompt when the user has no active subscription or
 # trial, so the model knows which capabilities are unavailable and does not
 # hallucinate having searched notes or emails.
@@ -86,11 +97,14 @@ _FREE_TIER_CAPABILITY_NOTE = (
     "# Subscription Status\n\n"
     "The user does not have an active subscription or trial. The following "
     "capabilities are **unavailable** to you right now:\n"
-    "- Searching the knowledge base (knowledge_search) or reading existing "
-    "notes (notes_read)\n"
+    "- Searching the knowledge base (knowledge_search, notes_search, "
+    "wiki_search), reading existing notes (notes_read), traversing compiled "
+    "Wiki pages (wiki_read), or verifying source evidence (materials_read)\n"
     "- Saving images to notes (notes_save_image)\n"
     "- Searching, reading, or operating on emails (email_search, email_read, "
     "email_action)\n"
+    "- Using database AI tools (db_query, db_inspect, db_sql_draft) or terminal "
+    "AI tools (terminal_task, terminal_exec, terminal_output, terminal_upload)\n"
     "- Searching the unified memory (hoard_search) for note or email sources\n\n"
     "You **may still**:\n"
     "- Create new notes (notes_create)\n"
@@ -102,6 +116,35 @@ _FREE_TIER_CAPABILITY_NOTE = (
     "- If the user asks to read notes/materials/emails or search the knowledge "
     "base, explain that an active subscription or trial is required and they "
     "can subscribe to unlock this capability."
+)
+
+_TASK_PLAN_NOTE = (
+    "\n\n---\n\n"
+    "## Planning\n\n"
+    "You have access to an `update_plan` tool which tracks steps and progress and renders them to the user. "
+    "Using the tool helps demonstrate that you've understood the task and convey how you're approaching it. "
+    "Plans can help to make complex, ambiguous, or multi-phase work clearer and more collaborative for the user. "
+    "A good plan should break the task into meaningful, logically ordered steps that are easy to verify as you go.\n\n"
+    "Note that plans are not for padding out simple work with filler steps or stating the obvious. The content of "
+    "your plan should not involve doing anything that you aren't capable of doing (i.e. don't try to test things "
+    "that you can't test). Do not use plans for simple or single-step queries that you can just do or answer "
+    "immediately.\n\n"
+    "Do not repeat the full contents of the plan after an `update_plan` call — the harness already displays it. "
+    "Instead, summarize the change made and highlight any important context or next step.\n\n"
+    "Before running a command, consider whether or not you have completed the previous step, and make sure to mark "
+    "it as completed before moving on to the next step. It may be the case that you complete all steps in your plan "
+    "after a single pass of implementation. If this is the case, you can simply mark all the planned steps as "
+    "completed. Sometimes, you may need to change plans in the middle of a task: call `update_plan` with the updated "
+    "plan and make sure to provide an `explanation` of the rationale when doing so.\n\n"
+    "## `update_plan`\n\n"
+    "A tool named `update_plan` is available to you. You can use it to keep an up-to-date, step-by-step plan for "
+    "the task.\n\n"
+    "To create a new plan, call `update_plan` with a short list of 1-sentence steps (no more than 5-7 words each) "
+    "with a `status` for each step (`pending`, `in_progress`, or `completed`).\n\n"
+    "When steps have been completed, use `update_plan` to mark each finished step as `completed` and the next step "
+    "you are working on as `in_progress`. There should always be exactly one `in_progress` step until everything is "
+    "done. You can mark multiple items as complete in a single `update_plan` call.\n\n"
+    "If all steps are complete, ensure you call `update_plan` to mark all steps as `completed`."
 )
 
 
@@ -157,6 +200,7 @@ class TurnContext:
 
     turn_wall_started_at: float = field(default_factory=time.time)
     turn_latency_ms: int | None = None
+    turn_usage: dict[str, int] = field(default_factory=dict)
 
     delivered_files: list[dict[str, Any]] = field(default_factory=list)
     trace: list[StateTraceEntry] = field(default_factory=list)
@@ -230,8 +274,10 @@ class AgentLoop:
         unified_session: bool = False,
         disabled_skills: list[str] | None = None,
         tools_config: ToolsConfig | None = None,
+        services_port: int = 17174,
         image_generation_provider_configs: dict[str, ProviderConfig] | None = None,
         video_generation_provider_configs: dict[str, ProviderConfig] | None = None,
+        runtime_config_loader: Callable[[], Any] | None = None,
         provider_snapshot_loader: Callable[..., ProviderSnapshot] | None = None,
         provider_signature: tuple[object, ...] | None = None,
         model_presets: dict[str, ModelPresetConfig] | None = None,
@@ -246,11 +292,14 @@ class AgentLoop:
         self.bus = bus
         self.channels_config = channels_config
         self.provider = provider
+        self._runtime_config_loader = runtime_config_loader
         self._provider_snapshot_loader = provider_snapshot_loader
         self._preset_snapshot_loader = preset_snapshot_loader
         self._runtime_model_publisher = runtime_model_publisher
         self._provider_signature = provider_signature
-        self._default_selection_signature = preset_helpers.default_selection_signature(provider_signature)
+        self._default_selection_signature = preset_helpers.default_selection_signature(
+            provider_signature
+        )
         self.workspace = workspace
         self.model = model or provider.get_default_model()
         self.max_iterations = (
@@ -269,10 +318,12 @@ class AgentLoop:
         )
         self.provider_retry_mode = provider_retry_mode
         self.tool_hint_max_length = (
-            tool_hint_max_length if tool_hint_max_length is not None
+            tool_hint_max_length
+            if tool_hint_max_length is not None
             else defaults.tool_hint_max_length
         )
         self.tools_config = _tc
+        self.services_port = services_port
         self.web_config = _tc.web
         self.exec_config = _tc.exec
         self._image_generation_provider_configs = dict(image_generation_provider_configs or {})
@@ -284,6 +335,7 @@ class AgentLoop:
         self._start_time = time.time()
         self._last_usage: dict[str, int] = {}
         self._pending_turn_latency_ms: dict[str, int] = {}
+        self._pending_turn_usage: dict[str, dict[str, int]] = {}
         self._extra_hooks: list[AgentHook] = hooks or []
 
         self._base_disabled_skills = set(disabled_skills or [])
@@ -309,6 +361,7 @@ class AgentLoop:
             bus=bus,
             model=self.model,
             tools_config=_tc,
+            services_port=self.services_port,
             image_generation_provider_configs=self._image_generation_provider_configs,
             video_generation_provider_configs=self._video_generation_provider_configs,
             max_tool_result_chars=self.max_tool_result_chars,
@@ -318,6 +371,7 @@ class AgentLoop:
             llm_wall_timeout_for_session=lambda sk: runner_wall_llm_timeout_s(self.sessions, sk),
             session_manager=self.sessions,
             agent_runtime_resolver=self._resolve_named_agent_runtime,
+            subscription_access_resolver=self._resolve_subagent_subscription_access,
         )
         self._unified_session = unified_session
         self._max_messages = max_messages if max_messages > 0 else 120
@@ -410,9 +464,21 @@ class AgentLoop:
         provider = extra.pop("provider", None) or make_provider(config)
         resolved = config.resolve_preset()
         model = extra.pop("model", None) or resolved.model
-        context_window_tokens = extra.pop("context_window_tokens", None) or resolved.context_window_tokens
+        context_window_tokens = (
+            extra.pop("context_window_tokens", None) or resolved.context_window_tokens
+        )
         provider_snapshot_loader = extra.pop("provider_snapshot_loader", None)
-        preset_snapshot_loader = extra.pop("preset_snapshot_loader", None) or preset_helpers.make_preset_snapshot_loader(
+        runtime_config_loader = extra.pop("runtime_config_loader", None)
+        if runtime_config_loader is None and provider_snapshot_loader is not None:
+            from mona.config.loader import load_config, resolve_config_env_vars
+
+            def load_runtime_config() -> Any:
+                return resolve_config_env_vars(load_config())
+
+            runtime_config_loader = load_runtime_config
+        preset_snapshot_loader = extra.pop(
+            "preset_snapshot_loader", None
+        ) or preset_helpers.make_preset_snapshot_loader(
             config,
             provider_snapshot_loader,
         )
@@ -437,6 +503,8 @@ class AgentLoop:
             consolidation_ratio=defaults.consolidation_ratio,
             max_messages=defaults.max_messages,
             tools_config=config.tools,
+            services_port=extra.pop("services_port", config.services.port),
+            runtime_config_loader=runtime_config_loader,
             model_presets=preset_helpers.configured_model_presets(config),
             model_preset=defaults.model_preset,
             provider_snapshot_loader=provider_snapshot_loader,
@@ -460,7 +528,9 @@ class AgentLoop:
             return
         definition = AgentRegistry().require(MONA_AGENT_ID)
         effective = resolve_effective_agent_config(definition, config)
-        self.context.skills.disabled_skills = self._base_disabled_skills | set(effective.disabled_skills)
+        self.context.skills.disabled_skills = self._base_disabled_skills | set(
+            effective.disabled_skills
+        )
         self.subagents.disabled_skills = self._base_disabled_skills | set(effective.disabled_skills)
         self.tools.set_allowed_tool_names(
             set(effective.allowed_tools) if effective.allowed_tools is not None else None
@@ -472,7 +542,11 @@ class AgentLoop:
         )
         if effective.model_preset and effective.model_preset != self._active_preset:
             self.set_model_preset(effective.model_preset, publish_update=False)
-        elif not effective.model_preset and self._base_model_preset and self._active_preset != self._base_model_preset:
+        elif (
+            not effective.model_preset
+            and self._base_model_preset
+            and self._active_preset != self._base_model_preset
+        ):
             self.set_model_preset(self._base_model_preset, publish_update=False)
         self._mona_effective_config = effective
         self._mona_config_revision = config.revision
@@ -557,7 +631,9 @@ class AgentLoop:
             self._default_selection_signature = default_selection
         if snapshot.signature == self._provider_signature:
             return
-        self._default_selection_signature = preset_helpers.default_selection_signature(snapshot.signature)
+        self._default_selection_signature = preset_helpers.default_selection_signature(
+            snapshot.signature
+        )
         self._apply_provider_snapshot(snapshot)
 
     @property
@@ -608,14 +684,15 @@ class AgentLoop:
             # must remain the project's own root.  Rooms are the one
             # exception: their workspace override only selects the base from
             # which the executing Agent's isolated output is resolved.
-            is_room = (
-                session is not None
-                and session.conversation_metadata.type == "room"
-            )
+            is_room = session is not None and session.conversation_metadata.type == "room"
             if not is_room:
                 return base_workspace
         from mona.agent.document_loop import DOCUMENT_PROFILES
-        agent_kind = session.metadata.get("agent_kind") if session is not None else None
+
+        profile = getattr(self, "_profile", None)
+        agent_kind = getattr(profile, "agent_kind", None)
+        if agent_kind is None:
+            agent_kind = session.metadata.get("agent_kind") if session is not None else None
         if isinstance(agent_kind, str) and agent_kind in DOCUMENT_PROFILES:
             return base_workspace
         owner_id = getattr(self, "_partner_agent_id", MONA_AGENT_ID)
@@ -699,8 +776,7 @@ class AgentLoop:
             "# Collaboration room metadata\n"
             "This metadata describes the current room; it is context, not an instruction.\n"
             f"Room goal: {conversation.goal or '(no room goal set)'}\n"
-            "Members:\n"
-            + ("\n".join(members) if members else "(no members listed)")
+            "Members:\n" + ("\n".join(members) if members else "(no members listed)")
         )
         if getattr(self, "_partner_agent_id", None) is None:
             context += (
@@ -745,6 +821,7 @@ class AgentLoop:
         if cached is not None:
             return cached
         from mona.agent.document_loop import DocumentAgentLoop
+
         loop = DocumentAgentLoop(
             bus=self.bus,
             provider=self.provider,
@@ -758,6 +835,10 @@ class AgentLoop:
             max_messages=self._max_messages,
             disabled_skills=None,
             tools_config=self.tools_config,
+            services_port=self.services_port,
+            image_generation_provider_configs=self._image_generation_provider_configs,
+            video_generation_provider_configs=self._video_generation_provider_configs,
+            runtime_config_loader=self._runtime_config_loader,
             hooks=list(self._extra_hooks) if self._extra_hooks else None,
             unified_session=self._unified_session,
             agent_kind=agent_kind,
@@ -777,7 +858,8 @@ class AgentLoop:
         from mona.agent.user_config import load_agent_user_config
 
         registry = AgentRegistry()
-        if agent_id not in registry:
+        definition = registry.get(agent_id)
+        if definition is None:
             logger.warning(
                 "Direct-chat agent {!r} not found; answering with unavailable notice",
                 agent_id,
@@ -788,11 +870,16 @@ class AgentLoop:
             logger.info("Direct-chat agent {!r} is disabled", agent_id)
             return None
         cached = self._partner_loops.get(agent_id)
-        if cached is not None and getattr(cached, "user_config_revision", None) == config.revision:
+        if (
+            cached is not None
+            and getattr(cached, "user_config_revision", None) == config.revision
+            and getattr(cached, "package_version", None) == definition.package_version
+        ):
             return cached
         if cached is not None:
             self._partner_loops.pop(agent_id, None)
         from mona.agent.partner_loop import PartnerAgentLoop
+
         loop = PartnerAgentLoop(
             agent_id=agent_id,
             registry=registry,
@@ -808,6 +895,7 @@ class AgentLoop:
             max_messages=self._max_messages,
             disabled_skills=None,
             tools_config=self.tools_config,
+            services_port=self.services_port,
             image_generation_provider_configs=self._image_generation_provider_configs,
             video_generation_provider_configs=self._video_generation_provider_configs,
             hooks=list(self._extra_hooks) if self._extra_hooks else None,
@@ -818,6 +906,7 @@ class AgentLoop:
             provider_signature=self._provider_signature,
             model_presets=self.model_presets,
             preset_snapshot_loader=self._preset_snapshot_loader,
+            runtime_config_loader=self._runtime_config_loader,
         )
         self._partner_loops[agent_id] = loop
         logger.info("PartnerAgentLoop({}) initialized for direct chat", agent_id)
@@ -831,6 +920,7 @@ class AgentLoop:
         ctx = ToolContext(
             config=self.tools_config,
             workspace=str(self.workspace),
+            services_port=self.services_port,
             bus=self.bus,
             subagent_manager=self.subagents,
             cron_service=self.cron_service,
@@ -842,8 +932,11 @@ class AgentLoop:
             video_generation_provider_configs=self._video_generation_provider_configs,
             timezone=self.context.timezone or "UTC",
             agent_id=getattr(self, "_partner_agent_id", "mona"),
+            agent_kind=getattr(getattr(self, "_profile", None), "agent_kind", None),
         )
         self._tool_ctx = ctx
+        self._tool_scope = "core"
+        self._tool_allowlist: set[str] | None = None
         loader = ToolLoader()
         registered = loader.load(ctx, self.tools)
 
@@ -855,6 +948,69 @@ class AgentLoop:
             registered.append("my")
 
         logger.debug("Registered {} tools: {}", len(registered), registered)
+
+    def _refresh_media_generation_tools(self) -> None:
+        """Apply image/video settings to the next turn without restarting."""
+        if self._runtime_config_loader is None:
+            return
+        try:
+            config = self._runtime_config_loader()
+            from mona.providers.image_generation import image_gen_provider_configs
+            from mona.providers.video_generation import video_gen_provider_configs
+
+            image_providers = image_gen_provider_configs(config)
+            video_providers = video_gen_provider_configs(config)
+        except Exception:
+            logger.exception("Failed to refresh media generation config")
+            return
+
+        image_config = config.tools.image_generation
+        video_config = config.tools.video_generation
+        if (
+            self.tools_config.image_generation == image_config
+            and self.tools_config.video_generation == video_config
+            and self._image_generation_provider_configs == image_providers
+            and self._video_generation_provider_configs == video_providers
+        ):
+            return
+
+        self.tools_config.image_generation = image_config
+        self.tools_config.video_generation = video_config
+        self._image_generation_provider_configs = image_providers
+        self._video_generation_provider_configs = video_providers
+        self.subagents.tools_config = self.tools_config
+        self.subagents._image_generation_provider_configs = dict(image_providers)
+        self.subagents._video_generation_provider_configs = dict(video_providers)
+
+        if self._tool_ctx is None:
+            return
+        self._tool_ctx.config = self.tools_config
+        self._tool_ctx.image_generation_provider_configs = image_providers
+        self._tool_ctx.video_generation_provider_configs = video_providers
+
+        from mona.agent.tools.image_generation import ImageGenerationTool
+        from mona.agent.tools.video_generation import VideoGenerationTool
+
+        allowlist = getattr(self, "_tool_allowlist", None)
+        scope = getattr(self, "_tool_scope", "core")
+        for tool_cls, name in (
+            (ImageGenerationTool, "generate_image"),
+            (VideoGenerationTool, "generate_video"),
+        ):
+            allowed = (
+                scope in getattr(tool_cls, "_scopes", {"core"})
+                and (allowlist is None or name in allowlist)
+            )
+            if allowed and tool_cls.enabled(self._tool_ctx):
+                self.tools.register(tool_cls.create(self._tool_ctx))
+            else:
+                self.tools.unregister(name)
+
+        logger.info(
+            "Media generation config refreshed for next turn: image={}, video={}",
+            image_config.enabled,
+            video_config.enabled,
+        )
 
     async def _connect_mcp(self) -> None:
         """Connect to configured MCP servers (one-time, lazy)."""
@@ -879,12 +1035,20 @@ class AgentLoop:
             self._mcp_connecting = False
 
     def _set_tool_context(
-        self, channel: str, chat_id: str,
-        message_id: str | None = None, metadata: dict | None = None,
-        session_key: str | None = None, session: Session | None = None,
+        self,
+        channel: str,
+        chat_id: str,
+        message_id: str | None = None,
+        metadata: dict | None = None,
+        session_key: str | None = None,
+        session: Session | None = None,
     ) -> None:
         """Update context for all tools that need routing info."""
-        from mona.agent.tools.context import ContextAware, RequestContext
+        from mona.agent.tools.context import (
+            PROJECT_WORKSPACE_META,
+            ContextAware,
+            RequestContext,
+        )
 
         # Multi-agent identity (phase 2): refresh the shared ToolContext
         # before tools read it in set_context. ``agent_id`` is fixed at
@@ -896,10 +1060,7 @@ class AgentLoop:
             self._tool_ctx.conversation_id = chat_id
             self._tool_ctx.job_id = None
             self._tool_ctx.workflow_run_id = None
-            is_room = (
-                session is not None
-                and session.conversation_metadata.type == "room"
-            )
+            is_room = session is not None and session.conversation_metadata.type == "room"
             self._tool_ctx.room_id = chat_id if is_room else None
 
         if session_key is not None:
@@ -910,6 +1071,13 @@ class AgentLoop:
             effective_key = f"{channel}:{chat_id}"
 
         meta = dict(metadata or {})
+        if session is not None:
+            workspace_override = session.metadata.get("workspace")
+            meta[PROJECT_WORKSPACE_META] = bool(
+                isinstance(workspace_override, str)
+                and workspace_override.strip()
+                and session.conversation_metadata.type != "room"
+            )
         request_ctx = RequestContext(
             channel=channel,
             chat_id=chat_id,
@@ -978,6 +1146,11 @@ class AgentLoop:
         has_text = isinstance(msg.content, str) and msg.content.strip()
         if has_text or media_paths:
             extra: dict[str, Any] = {"media": list(media_paths)} if media_paths else {}
+            if msg.metadata.get("origin") == "profile_advice":
+                extra["origin"] = "profile_advice"
+                advice_id = msg.metadata.get("profile_advice_id")
+                if isinstance(advice_id, str) and advice_id:
+                    extra["profile_advice_id"] = advice_id
             extra.update(kwargs)
             text = msg.content if isinstance(msg.content, str) else ""
             session.add_message("user", text, **extra)
@@ -1001,6 +1174,7 @@ class AgentLoop:
                 msg.metadata,
                 media=msg.media,
             ),
+            skill_names=["image-generation"] if self.tools.has("generate_image") else None,
             media=msg.media if msg.media else None,
             channel=msg.channel,
             chat_id=self._runtime_chat_id(msg),
@@ -1053,12 +1227,8 @@ class AgentLoop:
         )
 
         metadata = msg.metadata if isinstance(msg.metadata, dict) else {}
-        direct_targets = self._routing_agent_ids(
-            metadata.get(DIRECT_TARGET_AGENT_IDS_META)
-        )
-        dispatched_targets = self._routing_agent_ids(
-            metadata.get(PARTNER_JOBS_DISPATCHED_META)
-        )
+        direct_targets = self._routing_agent_ids(metadata.get(DIRECT_TARGET_AGENT_IDS_META))
+        dispatched_targets = self._routing_agent_ids(metadata.get(PARTNER_JOBS_DISPATCHED_META))
         if MONA_AGENT_ID not in direct_targets or not dispatched_targets:
             return messages
         first = messages[0]
@@ -1097,13 +1267,32 @@ class AgentLoop:
 
         Returns the total number of cancelled tasks + subagents.
         """
-        tasks = self._active_tasks.pop(key, [])
+        tasks = [task for task in self._active_tasks.get(key, []) if not task.done()]
         cancelled = sum(1 for t in tasks if not t.done() and t.cancel())
-        for t in tasks:
-            with suppress(asyncio.CancelledError, Exception):
-                await t
-        sub_cancelled = await self.subagents.cancel_by_session(key)
-        return cancelled + sub_cancelled
+
+        async def _wait_for_turns() -> None:
+            if not tasks:
+                return
+            done, pending = await asyncio.wait(tasks, timeout=5.0)
+            if done:
+                await asyncio.gather(*done, return_exceptions=True)
+            if pending:
+                logger.warning(
+                    "{} active task(s) did not stop within 5s for session {}",
+                    len(pending),
+                    key,
+                )
+
+        from mona.agent.tools.exec_session import DEFAULT_EXEC_SESSION_MANAGER
+        from mona.agent.tools.terminal import cancel_terminal_tasks_by_session
+
+        _, sub_cancelled, process_cancelled, terminal_cancelled = await asyncio.gather(
+            _wait_for_turns(),
+            self.subagents.cancel_by_session(key),
+            DEFAULT_EXEC_SESSION_MANAGER.cancel_by_session(key),
+            cancel_terminal_tasks_by_session(key),
+        )
+        return cancelled + sub_cancelled + process_cancelled + terminal_cancelled
 
     def _effective_session_key(self, msg: InboundMessage) -> str:
         """Return the session key used for task routing and mid-turn injections."""
@@ -1203,9 +1392,11 @@ class AgentLoop:
             # Block if nothing drained but sub-agents spawned in this dispatch
             # are still running.  Direct @Agent jobs post their own room result
             # instead of injecting one, so also stop waiting once they finish.
-            if (not items
-                    and session is not None
-                    and self.subagents.get_running_count_by_session(session.key) > 0):
+            if (
+                not items
+                and session is not None
+                and self.subagents.get_running_count_by_session(session.key) > 0
+            ):
                 deadline = asyncio.get_running_loop().time() + 300
                 while self.subagents.get_running_count_by_session(session.key) > 0:
                     try:
@@ -1236,39 +1427,43 @@ class AgentLoop:
         # AgentRunSpec.workspace is read from the contextvar so subagents
         # spawned via asyncio.create_task inherit the caller's workspace.
         from mona.agent.tools.path_utils import get_current_workspace
+
         effective_ws = get_current_workspace(self.workspace)
         try:
             temperature, max_tokens, reasoning_effort = self._mona_generation_overrides
-            result = await self.runner.run(AgentRunSpec(
-                initial_messages=initial_messages,
-                tools=self.tools,
-                model=self.model,
-                max_iterations=self.max_iterations,
-                max_tool_result_chars=self.max_tool_result_chars,
-                temperature=temperature,
-                max_tokens=max_tokens,
-                reasoning_effort=reasoning_effort,
-                hook=hook,
-                error_message="Sorry, I encountered an error calling the AI model.",
-                concurrent_tools=True,
-                workspace=effective_ws,
-                session_key=session.key if session else None,
-                context_window_tokens=self.context_window_tokens,
-                context_block_limit=self.context_block_limit,
-                provider_retry_mode=self.provider_retry_mode,
-                progress_callback=on_progress,
-                stream_progress_deltas=on_stream is not None,
-                retry_wait_callback=on_retry_wait,
-                checkpoint_callback=_checkpoint,
-                injection_callback=_drain_pending,
-                # Sustained goals may legitimately exceed mona_LLM_TIMEOUT_S; idle stall
-                # is still capped by mona_STREAM_IDLE_TIMEOUT_S in streaming providers.
-                llm_timeout_s=runner_wall_llm_timeout_s(
-                    self.sessions,
-                    session.key if session is not None else session_key,
-                    metadata=(session.metadata if session is not None else None),
-                ),
-            ))
+            result = await self.runner.run(
+                AgentRunSpec(
+                    initial_messages=initial_messages,
+                    tools=self.tools,
+                    model=self.model,
+                    max_iterations=self.max_iterations,
+                    max_tool_result_chars=self.max_tool_result_chars,
+                    temperature=temperature,
+                    max_tokens=max_tokens,
+                    reasoning_effort=reasoning_effort,
+                    hook=hook,
+                    error_message="Sorry, I encountered an error calling the AI model.",
+                    concurrent_tools=True,
+                    workspace=effective_ws,
+                    session_key=session.key if session else None,
+                    context_window_tokens=self.context_window_tokens,
+                    context_block_limit=self.context_block_limit,
+                    provider_retry_mode=self.provider_retry_mode,
+                    progress_callback=on_progress,
+                    stream_progress_deltas=on_stream is not None,
+                    retry_wait_callback=on_retry_wait,
+                    checkpoint_callback=_checkpoint,
+                    injection_callback=_drain_pending,
+                    repeat_guard_enabled=True,
+                    # Sustained goals may legitimately exceed mona_LLM_TIMEOUT_S; idle stall
+                    # is still capped by mona_STREAM_IDLE_TIMEOUT_S in streaming providers.
+                    llm_timeout_s=runner_wall_llm_timeout_s(
+                        self.sessions,
+                        session.key if session is not None else session_key,
+                        metadata=(session.metadata if session is not None else None),
+                    ),
+                )
+            )
         finally:
             reset_file_states(file_state_token)
         self._last_usage = result.usage
@@ -1284,7 +1479,13 @@ class AgentLoop:
                 await on_stream_end(resuming=False)
         elif result.stop_reason == "error":
             logger.error("LLM returned error: {}", (result.final_content or "")[:200])
-        return result.final_content, result.tools_used, result.messages, result.stop_reason, result.had_injections
+        return (
+            result.final_content,
+            result.tools_used,
+            result.messages,
+            result.stop_reason,
+            result.had_injections,
+        )
 
     async def run(self) -> None:
         """Run the agent loop, dispatching messages as tasks to stay responsive to /stop."""
@@ -1319,8 +1520,11 @@ class AgentLoop:
 
             raw = msg.content.strip()
             if self.commands.is_priority(raw):
+                priority_key = self._effective_session_key(msg)
                 await self._dispatch_command_inline(
-                    msg, msg.session_key, raw,
+                    msg,
+                    priority_key,
+                    raw,
                     self.commands.dispatch_priority,
                 )
                 continue
@@ -1333,7 +1537,9 @@ class AgentLoop:
                 # dispatch them directly (same pattern as priority commands).
                 if self.commands.is_dispatchable_command(raw):
                     await self._dispatch_command_inline(
-                        msg, effective_key, raw,
+                        msg,
+                        effective_key,
+                        raw,
                         self.commands.dispatch,
                     )
                     continue
@@ -1361,10 +1567,11 @@ class AgentLoop:
             task = asyncio.create_task(self._dispatch(msg))
             self._active_tasks.setdefault(effective_key, []).append(task)
             task.add_done_callback(
-                lambda t, k=effective_key: self._active_tasks.get(k, [])
-                and self._active_tasks[k].remove(t)
-                if t in self._active_tasks.get(k, [])
-                else None
+                lambda t, k=effective_key: (
+                    self._active_tasks.get(k, []) and self._active_tasks[k].remove(t)
+                    if t in self._active_tasks.get(k, [])
+                    else None
+                )
             )
 
     async def _dispatch(self, msg: InboundMessage) -> None:
@@ -1396,11 +1603,14 @@ class AgentLoop:
                             meta = dict(msg.metadata or {})
                             meta["_stream_delta"] = True
                             meta["_stream_id"] = _current_stream_id()
-                            await self.bus.publish_outbound(OutboundMessage(
-                                channel=msg.channel, chat_id=msg.chat_id,
-                                content=delta,
-                                metadata=meta,
-                            ))
+                            await self.bus.publish_outbound(
+                                OutboundMessage(
+                                    channel=msg.channel,
+                                    chat_id=msg.chat_id,
+                                    content=delta,
+                                    metadata=meta,
+                                )
+                            )
 
                         async def on_stream_end(*, resuming: bool = False) -> None:
                             nonlocal stream_segment
@@ -1408,30 +1618,41 @@ class AgentLoop:
                             meta["_stream_end"] = True
                             meta["_resuming"] = resuming
                             meta["_stream_id"] = _current_stream_id()
-                            await self.bus.publish_outbound(OutboundMessage(
-                                channel=msg.channel, chat_id=msg.chat_id,
-                                content="",
-                                metadata=meta,
-                            ))
+                            await self.bus.publish_outbound(
+                                OutboundMessage(
+                                    channel=msg.channel,
+                                    chat_id=msg.chat_id,
+                                    content="",
+                                    metadata=meta,
+                                )
+                            )
                             stream_segment += 1
 
                     response = await self._process_message(
-                        msg, on_stream=on_stream, on_stream_end=on_stream_end,
+                        msg,
+                        on_stream=on_stream,
+                        on_stream_end=on_stream_end,
                         pending_queue=pending,
                     )
                     if response is not None:
                         await self.bus.publish_outbound(response)
                     elif msg.channel == "cli":
-                        await self.bus.publish_outbound(OutboundMessage(
-                            channel=msg.channel, chat_id=msg.chat_id,
-                            content="", metadata=msg.metadata or {},
-                        ))
+                        await self.bus.publish_outbound(
+                            OutboundMessage(
+                                channel=msg.channel,
+                                chat_id=msg.chat_id,
+                                content="",
+                                metadata=msg.metadata or {},
+                            )
+                        )
                     if msg.channel == "websocket":
                         turn_lat = self._pending_turn_latency_ms.pop(session_key, None)
+                        turn_usage = self._pending_turn_usage.pop(session_key, None)
                         await self._webui_turns.handle_turn_end(
                             msg,
                             session_key=session_key,
                             latency_ms=turn_lat,
+                            token_usage=turn_usage,
                         )
                 except asyncio.CancelledError:
                     logger.info("Task cancelled for session {}", session_key)
@@ -1461,10 +1682,13 @@ class AgentLoop:
                     raise
                 except Exception:
                     logger.exception("Error processing message for session {}", session_key)
-                    await self.bus.publish_outbound(OutboundMessage(
-                        channel=msg.channel, chat_id=msg.chat_id,
-                        content="Sorry, I encountered an error.",
-                    ))
+                    await self.bus.publish_outbound(
+                        OutboundMessage(
+                            channel=msg.channel,
+                            chat_id=msg.chat_id,
+                            content="Sorry, I encountered an error.",
+                        )
+                    )
         finally:
             # Drain any messages still in the pending queue and re-publish
             # them to the bus so they are processed as fresh inbound messages
@@ -1482,10 +1706,12 @@ class AgentLoop:
                 if leftover:
                     logger.info(
                         "Re-published {} leftover message(s) to bus for session {}",
-                        leftover, session_key,
+                        leftover,
+                        session_key,
                     )
             await self._webui_turns.publish_run_status(msg, "idle")
             self._pending_turn_latency_ms.pop(session_key, None)
+            self._pending_turn_usage.pop(session_key, None)
             self._webui_turns.discard(session_key)
 
     async def close_mcp(self) -> None:
@@ -1506,7 +1732,9 @@ class AgentLoop:
 
     def _unregister_mcp_server_tools(self, name: str) -> None:
         """Unregister all tools/resources/prompts belonging to a MCP server."""
-        prefix = f"mcp_{name}_"
+        from mona.agent.tools.mcp import BUILTIN_COMPUTER_SERVER_NAME
+
+        prefix = "computer_" if name == BUILTIN_COMPUTER_SERVER_NAME else f"mcp_{name}_"
         for tool_name in list(self.tools.tool_names):
             if tool_name.startswith(prefix):
                 self.tools.unregister(tool_name)
@@ -1523,22 +1751,20 @@ class AgentLoop:
                 if cfg.command:
                     transport = "stdio"
                 elif cfg.url:
-                    transport = (
-                        "sse" if cfg.url.rstrip("/").endswith("/sse") else "streamableHttp"
-                    )
+                    transport = "sse" if cfg.url.rstrip("/").endswith("/sse") else "streamableHttp"
                 else:
                     transport = "unknown"
-            tool_count = (
-                len(list_mcp_server_tools(self.tools, name)) if connected else 0
+            tool_count = len(list_mcp_server_tools(self.tools, name)) if connected else 0
+            rows.append(
+                {
+                    "name": name,
+                    "connected": connected,
+                    "transport": transport,
+                    "toolCount": tool_count,
+                    "toolTimeout": cfg.tool_timeout,
+                    "enabledTools": list(cfg.enabled_tools) if cfg.enabled_tools else ["*"],
+                }
             )
-            rows.append({
-                "name": name,
-                "connected": connected,
-                "transport": transport,
-                "toolCount": tool_count,
-                "toolTimeout": cfg.tool_timeout,
-                "enabledTools": list(cfg.enabled_tools) if cfg.enabled_tools else ["*"],
-            })
         return rows
 
     async def restart_mcp_server(self, name: str) -> dict[str, Any]:
@@ -1587,7 +1813,7 @@ class AgentLoop:
         self._mcp_stacks.clear()
         # 2. Unregister all MCP tools
         for tool_name in list(self.tools.tool_names):
-            if tool_name.startswith("mcp_"):
+            if tool_name.startswith(("mcp_", "computer_")):
                 self.tools.unregister(tool_name)
         # 3. Reconnect
         self._mcp_connected = False
@@ -1640,9 +1866,7 @@ class AgentLoop:
         pending_queue: asyncio.Queue | None = None,
     ) -> OutboundMessage | None:
         """Process a system inbound message (e.g. subagent announce)."""
-        channel, chat_id = (
-            msg.chat_id.split(":", 1) if ":" in msg.chat_id else ("cli", msg.chat_id)
-        )
+        channel, chat_id = msg.chat_id.split(":", 1) if ":" in msg.chat_id else ("cli", msg.chat_id)
         logger.debug("Processing system message from {}", msg.sender_id)
         key = msg.session_key_override or f"{channel}:{chat_id}"
         session = self.sessions.get_or_create(key)
@@ -1664,8 +1888,12 @@ class AgentLoop:
             logger.debug("Subagent result persisted for session {}", key)
             self.sessions.save(session)
         self._set_tool_context(
-            channel, chat_id, msg.metadata.get("message_id"),
-            msg.metadata, session_key=key, session=session,
+            channel,
+            chat_id,
+            msg.metadata.get("message_id"),
+            msg.metadata,
+            session_key=key,
+            session=session,
         )
         _hist_kwargs: dict[str, Any] = {
             "max_messages": self._max_messages,
@@ -1692,7 +1920,10 @@ class AgentLoop:
             messages = self._append_mona_direct_mention_boundary(messages, msg, session)
             t_wall = time.time()
             final_content, _, all_msgs, stop_reason, _ = await self._run_agent_loop(
-                messages, session=session, channel=channel, chat_id=chat_id,
+                messages,
+                session=session,
+                channel=channel,
+                chat_id=chat_id,
                 message_id=msg.metadata.get("message_id"),
                 metadata=msg.metadata,
                 session_key=key,
@@ -1702,9 +1933,18 @@ class AgentLoop:
             reset_current_workspace(ws_token)
         wall_done = time.time()
         latency_ms = max(0, int((wall_done - t_wall) * 1000))
-        self._save_turn(session, all_msgs, 1 + len(history), turn_latency_ms=latency_ms)
+        turn_usage = dict(self._last_usage)
+        self._save_turn(
+            session,
+            all_msgs,
+            1 + len(history),
+            turn_latency_ms=latency_ms,
+            token_usage=turn_usage,
+            task_id=msg.metadata.get("task_id"),
+        )
         if channel == "websocket":
             self._pending_turn_latency_ms[key] = latency_ms
+            self._pending_turn_usage[key] = turn_usage
         session.enforce_file_cap(on_archive=self.context.memory.raw_archive)
         self._clear_runtime_checkpoint(session)
         self.sessions.save(session)
@@ -1716,6 +1956,10 @@ class AgentLoop:
         )
         content = final_content or "Background task completed."
         outbound_metadata: dict[str, Any] = {}
+        if turn_usage:
+            outbound_metadata["token_usage"] = turn_usage
+        if task_id := msg.metadata.get("task_id"):
+            outbound_metadata["task_id"] = task_id
         if channel == "slack" and key.startswith("slack:") and key.count(":") >= 2:
             outbound_metadata["slack"] = {"thread_ts": key.split(":", 2)[2]}
         if origin_message_id := msg.metadata.get("origin_message_id"):
@@ -1739,6 +1983,7 @@ class AgentLoop:
         """Process a single inbound message and return the response."""
         self._refresh_provider_snapshot()
         self._refresh_mona_user_config()
+        self._refresh_media_generation_tools()
 
         if msg.channel == "system":
             return await self._process_system_message(
@@ -1762,7 +2007,9 @@ class AgentLoop:
         # shares this loop's provider/sessions but has its own filtered tool
         # registry and DocumentContextBuilder.
         from mona.agent.document_loop import DOCUMENT_PROFILES
-        agent_kind = session.metadata.get("agent_kind")
+
+        message_agent_kind = msg.metadata.get("agent_kind")
+        agent_kind = message_agent_kind or session.metadata.get("agent_kind")
         if agent_kind and agent_kind in DOCUMENT_PROFILES and not hasattr(self, "_profile"):
             doc_loop = self._ensure_document_loop(agent_kind)
             return await doc_loop._process_message(
@@ -1782,6 +2029,7 @@ class AgentLoop:
         # recurses. When the agent is uninstalled/disabled the turn is answered
         # with an explicit unavailable notice — identity never falls back to Mona.
         from mona.agent.partners import MONA_AGENT_ID
+
         conversation = session.conversation_metadata
         if (
             conversation.type == "direct"
@@ -1863,8 +2111,7 @@ class AgentLoop:
                 next_state = self._TRANSITIONS.get((ctx.state, event))
                 if next_state is None:
                     raise RuntimeError(
-                        f"[turn {ctx.turn_id}] No transition from {ctx.state} "
-                        f"on event {event!r}"
+                        f"[turn {ctx.turn_id}] No transition from {ctx.state} on event {event!r}"
                     )
                 ctx.state = next_state
         finally:
@@ -1887,12 +2134,16 @@ class AgentLoop:
         on_stream: Callable[[str], Awaitable[None]] | None,
         *,
         turn_latency_ms: int | None = None,
+        token_usage: dict[str, int] | None = None,
         delivered_files: list[dict[str, Any]] | None = None,
+        task_plan: dict[str, Any] | None = None,
     ) -> OutboundMessage | None:
         """Assemble the final outbound message from turn results."""
         # MessageTool suppression
         if (mt := self.tools.get("message")) and isinstance(mt, MessageTool) and mt._sent_in_turn:
-            if not delivered_files and (not had_injections or stop_reason == "empty_final_response"):
+            if not delivered_files and (
+                not had_injections or stop_reason == "empty_final_response"
+            ):
                 return None
 
         preview = final_content[:120] + "..." if len(final_content) > 120 else final_content
@@ -1904,16 +2155,19 @@ class AgentLoop:
             meta["_streamed"] = True
         if turn_latency_ms is not None:
             meta["latency_ms"] = int(turn_latency_ms)
+        if token_usage:
+            meta["token_usage"] = dict(token_usage)
         if delivered_files:
             meta["_deliver_files"] = list(delivered_files)
+        if task_plan is not None:
+            meta["task_plan"] = task_plan
 
         already_sent_media = (
-            set(mt.turn_delivered_media_paths())
-            if isinstance(mt, MessageTool)
-            else set()
+            set(mt.turn_delivered_media_paths()) if isinstance(mt, MessageTool) else set()
         )
         media = [
-            path for path in previewable_delivered_media(delivered_files)
+            path
+            for path in previewable_delivered_media(delivered_files)
             if path not in already_sent_media
         ]
 
@@ -1930,6 +2184,51 @@ class AgentLoop:
         msg = ctx.msg
 
         if msg.media:
+            active_workspace = get_current_workspace(self.workspace)
+            staged_media: list[str] = []
+            staged_attachment_paths: list[str] = []
+            for raw_path in msg.media:
+                source = Path(raw_path).expanduser()
+                try:
+                    if not source.is_file():
+                        staged_media.append(raw_path)
+                        continue
+                    with source.open("rb") as stream:
+                        is_image = detect_image_mime(stream.read(16)) is not None
+                    resolved_source = source.resolve()
+                    if is_image or active_workspace is None:
+                        staged_media.append(str(resolved_source))
+                        continue
+                    workspace_root = active_workspace.expanduser().resolve()
+                    try:
+                        resolved_source.relative_to(workspace_root)
+                        staged_media.append(str(resolved_source))
+                        staged_attachment_paths.append(
+                            resolved_source.relative_to(workspace_root).as_posix()
+                        )
+                        continue
+                    except ValueError:
+                        pass
+                    attachment_dir = (
+                        workspace_root
+                        / ".mona"
+                        / "attachments"
+                        / safe_filename(ctx.session_key)
+                    )
+                    attachment_dir.mkdir(parents=True, exist_ok=True)
+                    destination = attachment_dir / (safe_filename(source.name) or "attachment")
+                    shutil.copy2(resolved_source, destination)
+                    staged = destination.resolve()
+                    staged_media.append(str(staged))
+                    staged_attachment_paths.append(staged.relative_to(workspace_root).as_posix())
+                except OSError:
+                    logger.exception("Failed to stage attached file {}", source)
+                    staged_media.append(raw_path)
+            metadata = dict(msg.metadata)
+            if staged_attachment_paths:
+                metadata["_attachment_paths"] = staged_attachment_paths
+            msg = dataclasses.replace(msg, media=staged_media, metadata=metadata)
+            ctx.msg = msg
             new_content, image_only = extract_documents(msg.content, msg.media)
             ctx.msg = dataclasses.replace(msg, content=new_content, media=image_only)
             msg = ctx.msg
@@ -1972,9 +2271,7 @@ class AgentLoop:
                 ctx.user_persisted_early = self._persist_user_message_early(
                     ctx.msg, ctx.session, _command=True
                 )
-                ctx.session.add_message(
-                    "assistant", result.content, _command=True
-                )
+                ctx.session.add_message("assistant", result.content, _command=True)
                 self.sessions.save(ctx.session)
                 self._clear_pending_user_turn(ctx.session)
             return "shortcut"
@@ -1997,7 +2294,8 @@ class AgentLoop:
             ctx.msg.chat_id,
             ctx.msg.metadata.get("message_id"),
             ctx.msg.metadata,
-            session_key=ctx.session_key, session=ctx.session,
+            session_key=ctx.session_key,
+            session=ctx.session,
         )
         if message_tool := self.tools.get("message"):
             if isinstance(message_tool, MessageTool):
@@ -2023,13 +2321,11 @@ class AgentLoop:
         # note to the system prompt so the model knows notes/email search is
         # unavailable and does not hallucinate having queried them.
         if not self.tools.has_subscription_access:
-            ctx.initial_messages = self._inject_capability_note(
-                ctx.initial_messages
-            )
+            ctx.initial_messages = self._inject_capability_note(ctx.initial_messages)
+        if self.tools.has("update_plan"):
+            ctx.initial_messages = self._inject_task_plan_note(ctx.initial_messages)
 
-        ctx.user_persisted_early = self._persist_user_message_early(
-            ctx.msg, ctx.session
-        )
+        ctx.user_persisted_early = self._persist_user_message_early(ctx.msg, ctx.session)
 
         if ctx.on_progress is None:
             ctx.on_progress = await self._build_bus_progress_callback(ctx.msg)
@@ -2064,6 +2360,18 @@ class AgentLoop:
         self.tools.set_subscription_access(has_access)
 
     @staticmethod
+    def _resolve_subagent_subscription_access() -> bool:
+        """Resolve the same trusted, cached entitlement for out-of-band jobs.
+
+        Direct room mentions can launch a named Agent without first entering
+        Mona's normal turn builder, so reading only the parent registry's last
+        value would incorrectly deny a freshly started subscribed session.
+        """
+        from mona.agent.tools.tauri_ipc import check_subscription_access
+
+        return bool(check_subscription_access())
+
+    @staticmethod
     def _inject_capability_note(
         messages: list[dict[str, Any]],
     ) -> list[dict[str, Any]]:
@@ -2077,11 +2385,20 @@ class AgentLoop:
             result[0] = {
                 **first,
                 "content": (
-                    content + _FREE_TIER_CAPABILITY_NOTE
-                    if isinstance(content, str)
-                    else content
+                    content + _FREE_TIER_CAPABILITY_NOTE if isinstance(content, str) else content
                 ),
             }
+        return result
+
+    @staticmethod
+    def _inject_task_plan_note(messages: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        if not messages:
+            return messages
+        first = messages[0]
+        if first.get("role") != "system" or not isinstance(first.get("content"), str):
+            return messages
+        result = list(messages)
+        result[0] = {**first, "content": first["content"] + _TASK_PLAN_NOTE}
         return result
 
     async def _state_run(self, ctx: TurnContext) -> str:
@@ -2102,6 +2419,7 @@ class AgentLoop:
         )
         final_content, tools_used, all_msgs, stop_reason, had_injections = result
         ctx.final_content = final_content
+        ctx.turn_usage = dict(self._last_usage)
         ctx.tools_used = tools_used
         ctx.all_messages = all_msgs
         ctx.stop_reason = stop_reason
@@ -2116,15 +2434,21 @@ class AgentLoop:
 
         ctx.turn_latency_ms = max(0, int((time.time() - ctx.turn_wall_started_at) * 1000))
         self._save_turn(
-            ctx.session, ctx.all_messages, ctx.save_skip,
+            ctx.session,
+            ctx.all_messages,
+            ctx.save_skip,
             turn_latency_ms=ctx.turn_latency_ms,
+            token_usage=ctx.turn_usage,
+            task_id=ctx.msg.metadata.get("task_id"),
         )
         if ctx.msg.channel == "websocket":
             self._pending_turn_latency_ms[ctx.session_key] = ctx.turn_latency_ms
+            self._pending_turn_usage[ctx.session_key] = dict(ctx.turn_usage)
         ctx.session.enforce_file_cap(on_archive=self.context.memory.raw_archive)
         self._clear_pending_user_turn(ctx.session)
         self._clear_runtime_checkpoint(ctx.session)
         self.sessions.save(ctx.session)
+        self._record_completed_turn_history(ctx.msg.content, ctx.final_content)
         self._schedule_background(
             self.consolidator.maybe_consolidate_by_tokens(
                 ctx.session,
@@ -2132,6 +2456,25 @@ class AgentLoop:
             )
         )
         return "ok"
+
+    def _record_completed_turn_history(self, user_content: str, assistant_content: str) -> None:
+        """Give this Agent's Dream a bounded per-turn learning signal."""
+        user = " ".join((user_content or "").split())
+        assistant = " ".join((assistant_content or "").split())
+        if not user and not assistant:
+            return
+        entry = (
+            "Conversation turn\n"
+            f"User: {truncate_text_fn(user, 1_200)}\n"
+            f"Assistant: {truncate_text_fn(assistant, 2_400)}"
+        )
+        try:
+            self.context.memory.append_history(entry, max_chars=4_000)
+        except Exception:
+            logger.exception(
+                "Failed to record completed turn for Agent {}",
+                self.context.memory.agent_id,
+            )
 
     async def _state_respond(self, ctx: TurnContext) -> str:
         ctx.outbound = self._assemble_outbound(
@@ -2142,7 +2485,9 @@ class AgentLoop:
             ctx.had_injections,
             ctx.on_stream,
             turn_latency_ms=ctx.turn_latency_ms,
+            token_usage=ctx.turn_usage,
             delivered_files=ctx.delivered_files,
+            task_plan=task_plan_ws_blob(ctx.session.metadata),
         )
         return "ok"
 
@@ -2236,6 +2581,8 @@ class AgentLoop:
         skip: int,
         *,
         turn_latency_ms: int | None = None,
+        token_usage: dict[str, int] | None = None,
+        task_id: str | None = None,
     ) -> None:
         """Save new-turn messages into session, truncating large tool results."""
         from datetime import datetime
@@ -2269,6 +2616,8 @@ class AgentLoop:
                         continue
                     entry["content"] = filtered
             entry.setdefault("timestamp", datetime.now().isoformat())
+            if task_id:
+                entry.setdefault("task_id", task_id)
             # Multi-agent authorship: turns executed by a PartnerAgentLoop are
             # stamped with the partner's agent_id so room/direct history
             # projects the true author; the Mona loop leaves the legacy
@@ -2283,6 +2632,11 @@ class AgentLoop:
                 last_assistant_idx = len(session.messages) - 1
         if turn_latency_ms is not None and last_assistant_idx is not None:
             session.messages[last_assistant_idx]["latency_ms"] = int(turn_latency_ms)
+        if token_usage and last_assistant_idx is not None:
+            session.messages[last_assistant_idx]["token_usage"] = dict(token_usage)
+        plan = task_plan_ws_blob(session.metadata)
+        if last_assistant_idx is not None and plan is not None:
+            session.messages[last_assistant_idx]["task_plan"] = plan
         session.updated_at = datetime.now()
 
     def _persist_subagent_followup(self, session: Session, msg: InboundMessage) -> bool:
@@ -2296,10 +2650,7 @@ class AgentLoop:
             return False
         task_id = msg.metadata.get("subagent_task_id") if isinstance(msg.metadata, dict) else None
         if task_id and any(
-            (
-                m.get("injected_event") == "subagent_result"
-                and m.get("subagent_task_id") == task_id
-            )
+            (m.get("injected_event") == "subagent_result" and m.get("subagent_task_id") == task_id)
             or m.get("job_id") == task_id
             for m in session.messages
         ):
@@ -2330,8 +2681,24 @@ class AgentLoop:
         return True
 
     def _set_runtime_checkpoint(self, session: Session, payload: dict[str, Any]) -> None:
-        """Persist the latest in-flight turn state into session metadata."""
-        session.metadata[self._RUNTIME_CHECKPOINT_KEY] = payload
+        """Keep completed iterations as well as the current in-flight tool batch."""
+        previous = session.metadata.get(self._RUNTIME_CHECKPOINT_KEY)
+        completed = []
+        if isinstance(previous, dict):
+            completed = list(previous.get("completed_messages") or [])
+            old_assistant = previous.get("assistant_message")
+            if isinstance(old_assistant, dict) and old_assistant != payload.get("assistant_message"):
+                completed.extend([old_assistant, *(previous.get("completed_tool_results") or [])])
+        checkpoint = {**payload, "completed_messages": completed}
+        checkpoint["completed_tool_results"] = [
+            {
+                **message,
+                "content": self._sanitize_persisted_blocks(message["content"], should_truncate_text=True),
+            }
+            if isinstance(message.get("content"), list) else message
+            for message in (payload.get("completed_tool_results") or [])
+        ]
+        session.metadata[self._RUNTIME_CHECKPOINT_KEY] = checkpoint
         self.sessions.save(session)
 
     def _mark_pending_user_turn(self, session: Session) -> None:
@@ -2368,7 +2735,11 @@ class AgentLoop:
         completed_tool_results = checkpoint.get("completed_tool_results") or []
         pending_tool_calls = checkpoint.get("pending_tool_calls") or []
 
-        restored_messages: list[dict[str, Any]] = []
+        restored_messages: list[dict[str, Any]] = [
+            {**message, "timestamp": message.get("timestamp") or datetime.now().isoformat()}
+            for message in (checkpoint.get("completed_messages") or [])
+            if isinstance(message, dict)
+        ]
         if isinstance(assistant_message, dict):
             restored = dict(assistant_message)
             restored.setdefault("timestamp", datetime.now().isoformat())
@@ -2448,8 +2819,11 @@ class AgentLoop:
         """Process a message directly and return the outbound payload."""
         await self._connect_mcp()
         msg = InboundMessage(
-            channel=channel, sender_id="user", chat_id=chat_id,
-            content=content, media=media or [],
+            channel=channel,
+            sender_id="user",
+            chat_id=chat_id,
+            content=content,
+            media=media or [],
         )
         return await self._process_message(
             msg,

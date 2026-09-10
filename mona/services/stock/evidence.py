@@ -486,6 +486,9 @@ def _macro_indicators(document: dict[str, Any]) -> list[dict[str, Any]]:
     than a stable numeric-series API.  Parsing a stated percentage is a
     transparent fact extraction; missing periods/units remain missing.
     """
+    explicit = document.get("indicators")
+    if isinstance(explicit, list):
+        return [dict(item) for item in explicit if isinstance(item, dict)]
     text = f"{document.get('title') or ''} {document.get('summary') or ''}"
     indicators: list[dict[str, Any]] = []
     for name, pattern in _MACRO_INDICATOR_PATTERNS:
@@ -1606,13 +1609,23 @@ class EvidenceService:
             return {}
         output: dict[str, dict[str, Any]] = {}
         status_by_command: dict[str, Any] = {}
-        for command in sorted(WESTOCK_COMMANDS):
+        semaphore = asyncio.Semaphore(3)
+
+        async def fetch_one(command: str) -> tuple[str, Any, Exception | None]:
             try:
-                result = await fetch(command, inst)
+                async with semaphore:
+                    return command, await fetch(command, inst), None
             except Exception as exc:
+                return command, None, exc
+
+        results = await asyncio.gather(
+            *(fetch_one(command) for command in sorted(WESTOCK_COMMANDS))
+        )
+        for command, result, error in results:
+            if error is not None:
                 status_by_command[command] = {
                     "status": "fallback",
-                    "reason": type(exc).__name__,
+                    "reason": type(error).__name__,
                 }
                 continue
             data, source, data_as_of = self._westock_result_data(result)
@@ -1747,6 +1760,167 @@ class EvidenceService:
                 )
             )
         return out
+
+    @staticmethod
+    def _merge_westock_fundamentals(
+        bundle: dict[str, Any], result: dict[str, Any]
+    ) -> None:
+        data = result.get("data")
+        rows = data if isinstance(data, list) else [data]
+        source_ids = [item for item in result.get("source_ids") or [] if isinstance(item, str)]
+        history = bundle.get("fundamentals_history")
+        history = [dict(item) for item in history if isinstance(item, dict)] if isinstance(history, list) else []
+        by_period = {
+            str(item.get("report_period")): item
+            for item in history
+            if item.get("report_period")
+        }
+        metric_names = {
+            "eps", "roe", "roic", "gross_margin", "net_margin", "revenue",
+            "revenue_yoy", "net_profit", "profit_yoy", "operating_cashflow",
+            "cashflow_to_profit", "debt_ratio", "capex", "pe", "pb",
+            "interest_coverage", "current_ratio",
+        }
+        for raw in rows:
+            if not isinstance(raw, dict):
+                continue
+            period = str(raw.get("report_period") or raw.get("period_end") or "")[:10]
+            published_at = normalize_asia_datetime(raw.get("published_at"))
+            if not period or published_at is None:
+                continue
+            metrics = {key: raw[key] for key in metric_names if raw.get(key) is not None}
+            if not metrics:
+                continue
+            target = by_period.get(period)
+            if target is None:
+                target = {
+                    "report_period": period,
+                    "period_end": period,
+                    "published_at": published_at,
+                    "availability_status": "known",
+                    "metrics": {},
+                    "source_ids": [],
+                }
+                history.append(target)
+                by_period[period] = target
+            target_metrics = target.get("metrics")
+            if not isinstance(target_metrics, dict):
+                target_metrics = {}
+                target["metrics"] = target_metrics
+            contributed = False
+            for key, value in metrics.items():
+                if target_metrics.get(key) is None:
+                    target_metrics[key] = value
+                    contributed = True
+            if contributed:
+                target["source_ids"] = sorted(set((target.get("source_ids") or []) + source_ids))
+                existing_published = normalize_asia_datetime(target.get("published_at"))
+                target["published_at"] = max(
+                    [value for value in (existing_published, published_at) if value]
+                )
+        history.sort(key=lambda item: str(item.get("report_period") or ""), reverse=True)
+        bundle["fundamentals_history"] = history
+        if history:
+            bundle["fundamentals"] = dict(history[0])
+
+    @staticmethod
+    def _merge_westock_supplements(
+        bundle: dict[str, Any], supplements: dict[str, dict[str, Any]]
+    ) -> None:
+        profile = supplements.get("profile")
+        if isinstance(profile, dict) and profile.get("status") == "available":
+            bundle["company_profile"] = {
+                **(profile.get("data") if isinstance(profile.get("data"), dict) else {}),
+                "source_ids": profile.get("source_ids") or [],
+                "as_of": profile.get("data_as_of"),
+            }
+
+        finance = supplements.get("asfund")
+        if isinstance(finance, dict) and finance.get("status") == "available":
+            EvidenceService._merge_westock_fundamentals(bundle, finance)
+
+        technical = supplements.get("technical")
+        if isinstance(technical, dict) and technical.get("status") == "available":
+            bundle["technical_supplement"] = {
+                **(technical.get("data") if isinstance(technical.get("data"), dict) else {}),
+                "source_ids": technical.get("source_ids") or [],
+            }
+
+        chip = supplements.get("chip")
+        if isinstance(chip, dict) and chip.get("status") == "available":
+            bundle["chip_data"] = {
+                **(chip.get("data") if isinstance(chip.get("data"), dict) else {}),
+                "source_ids": chip.get("source_ids") or [],
+            }
+
+        sector = supplements.get("sector")
+        if isinstance(sector, dict) and sector.get("status") == "available":
+            rows = sector.get("data")
+            bundle["industry_operating_data"] = {
+                "status": "available" if isinstance(rows, list) and rows else "missing",
+                "indicators": rows if isinstance(rows, list) else [],
+                "as_of": sector.get("data_as_of"),
+                "source_ids": sector.get("source_ids") or [],
+            }
+
+        macro = supplements.get("macro")
+        if isinstance(macro, dict) and macro.get("status") == "available":
+            indicators = macro.get("data")
+            if isinstance(indicators, list) and indicators:
+                source_ids = macro.get("source_ids") or []
+                normalized = [
+                    {**item, "source_ids": source_ids, "claim_type": "fact"}
+                    for item in indicators
+                    if isinstance(item, dict)
+                ]
+                bundle.setdefault("macro_documents", []).append(
+                    {
+                        "title": "公开宏观指标",
+                        "published_at": max(
+                            (item.get("published_at") for item in normalized if item.get("published_at")),
+                            default=macro.get("data_as_of"),
+                        ),
+                        "period_end": max(
+                            (item.get("period_end") for item in normalized if item.get("period_end")),
+                            default=None,
+                        ),
+                        "summary": "",
+                        "indicators": normalized,
+                        "source_ids": source_ids,
+                    }
+                )
+
+        report = supplements.get("report")
+        if isinstance(report, dict) and report.get("status") == "available":
+            rows = report.get("data")
+            bundle["research_reports"] = [
+                {**item, "source_ids": report.get("source_ids") or []}
+                for item in rows if isinstance(item, dict)
+            ] if isinstance(rows, list) else []
+
+        notice = supplements.get("notice")
+        if isinstance(notice, dict) and notice.get("status") == "available":
+            existing = {
+                (item.get("title"), item.get("published_at"))
+                for item in bundle.get("news") or []
+                if isinstance(item, dict)
+            }
+            for item in notice.get("data") or []:
+                if not isinstance(item, dict):
+                    continue
+                key = (item.get("title"), item.get("published_at"))
+                if key in existing:
+                    continue
+                bundle.setdefault("news", []).append(
+                    {
+                        "title": item.get("title") or "",
+                        "url": item.get("url") or "",
+                        "published_at": item.get("published_at"),
+                        "summary": "",
+                        "source_ids": notice.get("source_ids") or [],
+                    }
+                )
+                existing.add(key)
 
     async def _fetch_westock_profile(self, inst: InstrumentRef) -> dict[str, Any] | None:
         provider = self.supplement_provider
@@ -2623,6 +2797,9 @@ class EvidenceService:
                     )
                 bundle[section] = documents
 
+        if westock_supplements:
+            self._merge_westock_supplements(bundle, westock_supplements)
+
         if market_observation_times:
             bundle["market_as_of"] = max(market_observation_times).isoformat()
 
@@ -2910,12 +3087,8 @@ class EvidenceService:
         cycles = cycles if isinstance(cycles, dict) else {}
         industry_cycle = cycles.get("industry_supply_demand")
         earnings_cycle = cycles.get("company_earnings")
-        lifecycle = cycles.get("industry_lifecycle")
-        if lifecycle is None and isinstance(industry_cycle, dict):
-            lifecycle = industry_cycle.get("industry_lifecycle")
         industry_cycle_ready = isinstance(industry_cycle, dict) and industry_cycle.get("status") == "available"
         earnings_cycle_ready = isinstance(earnings_cycle, dict) and earnings_cycle.get("status") == "available"
-        lifecycle_ready = isinstance(lifecycle, dict) and lifecycle.get("status") == "available"
         medium_cycle_ready = industry_cycle_ready and earnings_cycle_ready
 
         medium_missing = list(short_missing)
@@ -2946,9 +3119,6 @@ class EvidenceService:
         if not valuation_ready:
             long_missing.append("valuation_basis")
             long_reasons.append("long_valuation_basis_missing")
-        if not lifecycle_ready:
-            long_missing.append("industry_lifecycle")
-            long_reasons.append("long_industry_lifecycle_missing")
 
         def horizon(
             required: list[str], missing: list[str], reasons: list[str]
@@ -2991,7 +3161,6 @@ class EvidenceService:
                     "multi_period_financials",
                     "cashflow_quality",
                     "valuation_basis",
-                    "industry_lifecycle",
                 ],
                 long_missing,
                 long_reasons,
@@ -3765,8 +3934,15 @@ class EvidenceService:
         )
         fundamentals = bundle.get("fundamentals")
         fundamentals_history = bundle.get("fundamentals_history") or []
+        company_profile = (
+            bundle.get("company_profile")
+            if isinstance(bundle.get("company_profile"), dict)
+            else {}
+        )
         fundamental_ids = sorted(
-            set(fundamental_ids) | set((fundamentals or {}).get("source_ids") or [])
+            set(fundamental_ids)
+            | set((fundamentals or {}).get("source_ids") or [])
+            | set(company_profile.get("source_ids") or [])
         )
         if fundamentals:
             periods = [item for item in fundamentals_history if item.get("report_period")]
@@ -3862,20 +4038,34 @@ class EvidenceService:
                 "as_of": industry_valuation_observed or industry_context.get("observed_at") or market_regime.get("observed_at"),
                 "source_ids": sorted(set(industry_ids + valuation_source_ids + _quote_source_ids(sources))),
             }
-            missing_fields = [
-                "capital_expenditure", "governance", "dilution_history", "audit_or_restatement_status",
-            ]
+            missing_fields = []
             if len(periods) < 4:
                 missing_fields += ["multi_period_financials", "cashflow_quality_trend"]
+            current_metrics = fundamentals.get("metrics") or {}
+            optional_missing_fields = [
+                field
+                for field, value in {
+                    "capital_expenditure": current_metrics.get("capex", current_metrics.get("capital_expenditure")),
+                    "governance": bundle.get("governance"),
+                    "dilution_history": current_metrics.get("dilution_ratio", bundle.get("dilution_history")),
+                    "audit_or_restatement_status": current_metrics.get("audit_qualification", bundle.get("audit_or_restatement_status")),
+                    "customer_supplier_concentration": bundle.get("customer_supplier_concentration"),
+                    "segment_revenue_profit": bundle.get("segment_revenue_profit"),
+                    "management_commitment_delivery": bundle.get("management_commitment_delivery"),
+                }.items()
+                if value in (None, [], {})
+            ]
             if valuation["status"] == "missing":
-                missing_fields.append("peer_valuation")
+                optional_missing_fields.append("peer_valuation")
             company_quality = {
-                "status": "degraded",
+                "status": "degraded" if missing_fields else "available",
                 "claim_type": "fact",
                 "report_period": fundamentals.get("report_period"),
                 "period_end": fundamentals.get("period_end"),
                 "published_at": fundamentals.get("published_at"),
                 "metrics": fundamentals.get("metrics") or {},
+                "company_profile": company_profile,
+                "main_business": company_profile.get("main_business"),
                 "period_count": len(periods),
                 "periods": periods,
                 "growth_history": growth_history,
@@ -3883,7 +4073,8 @@ class EvidenceService:
                 "valuation_context": valuation,
                 "source_ids": sorted(set(fundamental_ids + valuation["source_ids"])),
                 "missing_fields": missing_fields,
-                "reason": "多期聚合财务与同行估值可用于趋势和相对比较；治理与审计仍需正式公告",
+                "optional_missing_fields": optional_missing_fields,
+                "reason": "核心经营与现金流数据用于结论；仅在公司实际披露时增强治理、分部与集中度分析",
             }
         else:
             company_quality = {
@@ -3892,7 +4083,11 @@ class EvidenceService:
                 "source_ids": [],
                 "missing_fields": [
                     "financial_period", "multi_period_financials", "cashflow_quality_trend",
+                ],
+                "optional_missing_fields": [
                     "capital_expenditure", "governance", "dilution_history",
+                    "audit_or_restatement_status", "customer_supplier_concentration",
+                    "segment_revenue_profit", "management_commitment_delivery",
                 ],
             }
 
@@ -4048,13 +4243,15 @@ class EvidenceService:
                 if math.isfinite(candidate_previous_close) and candidate_previous_close > 0:
                     previous_close = candidate_previous_close
                     previous_close_method = "price-change-reverse-v1"
+        chip_data = bundle.get("chip_data") if isinstance(bundle.get("chip_data"), dict) else {}
+        chip_source_ids = chip_data.get("source_ids") or []
         capital_positioning = {
-            "status": "degraded" if target is not None or target_quote else "missing",
+            "status": "available" if target is not None or target_quote else "missing",
             "claim_type": "inference",
             "basis": "仅用公开快照的成交额/换手/成交量变化与正式公告事件构造可复核信号，不推断机构净买入",
             "method": "public-capital-signals-v1",
             "version": "1",
-            "source_ids": sorted(set(target_ids + quote_ids + kline_ids)),
+            "source_ids": sorted(set(target_ids + quote_ids + kline_ids + chip_source_ids)),
             "observed_at": (
                 cls._snapshot_value(target, "observed_at")
                 if target is not None and cls._snapshot_value(target, "observed_at") is not None
@@ -4067,16 +4264,43 @@ class EvidenceService:
             "volume": target_volume,
             "price_change_pct": target_change_pct,
             "volume_change_pct_5d": (bundle.get("indicators") or {}).get("volume_change_pct"),
+            "chip_profit_ratio": chip_data.get("profit_ratio"),
+            "chip_average_cost": chip_data.get("average_cost"),
+            "chip_concentration70": chip_data.get("concentration70"),
+            "chip_concentration90": chip_data.get("concentration90"),
             "public_signals": [],
             "disclosure_signals": [
                 item for item in events
                 if item["event_type"] in {"share_unlock", "share_reduction", "share_pledge"}
             ],
-            "missing_fields": [
+            "missing_fields": [],
+            "optional_missing_fields": [
                 "financing_balance", "short_balance", "financing_flow", "institutional_flow",
-                "etf_flow", "shareholder_concentration",
+                "etf_flow", *( [] if chip_data.get("concentration") is not None else ["shareholder_concentration"] ),
             ],
         }
+        if chip_data.get("average_cost") is not None:
+            capital_positioning["public_signals"].append(
+                {
+                    "signal_type": "chip_average_cost",
+                    "value": chip_data.get("average_cost"),
+                    "unit": "yuan",
+                    "observed_at": chip_data.get("as_of"),
+                    "claim_type": "fact",
+                    "source_ids": chip_source_ids,
+                }
+            )
+        if chip_data.get("profit_ratio") is not None:
+            capital_positioning["public_signals"].append(
+                {
+                    "signal_type": "chip_profit_ratio",
+                    "value": chip_data.get("profit_ratio"),
+                    "unit": "percent",
+                    "observed_at": chip_data.get("as_of"),
+                    "claim_type": "fact",
+                    "source_ids": chip_source_ids,
+                }
+            )
         if target_amount is not None:
             capital_positioning["public_signals"].append(
                 {
@@ -4113,7 +4337,7 @@ class EvidenceService:
                 }
             )
         disclosed_event_types = {item["event_type"] for item in capital_positioning["disclosure_signals"]}
-        capital_positioning["missing_fields"] += [
+        capital_positioning["optional_missing_fields"] += [
             field for field, event_type in (
                 ("pledge", "share_pledge"), ("reduction", "share_reduction"), ("unlock", "share_unlock")
             ) if event_type not in disclosed_event_types
@@ -4178,7 +4402,7 @@ class EvidenceService:
         execution_optional_missing = [
             "order_book_depth", "realized_slippage", "tick_trade_data"
         ]
-        tradeability_missing = execution_data_missing + execution_optional_missing + execution_rule_missing
+        tradeability_missing = execution_data_missing + execution_rule_missing
         tradeability_required_missing = [
             field
             for field, value in {
@@ -4213,7 +4437,7 @@ class EvidenceService:
         tradeability = {
             "status": (
                 "degraded"
-                if has_trade_data and (tradeability_required_missing or execution_optional_missing)
+                if has_trade_data and tradeability_required_missing
                 else ("available" if has_trade_data else "missing")
             ),
             "claim_type": "inference",
@@ -4280,6 +4504,7 @@ class EvidenceService:
             "liquidity_proxy": liquidity_proxy,
             "source_ids": trade_source_ids,
             "missing_fields": tradeability_missing,
+            "optional_missing_fields": execution_optional_missing,
         }
         tradeability["execution_facts_projection"] = {
             key: tradeability.get(key)
@@ -4424,17 +4649,52 @@ class EvidenceService:
                 else "未取得研究截止前的正式宏观与流动性材料"
             ),
         }
+        industry_operating = (
+            bundle.get("industry_operating_data")
+            if isinstance(bundle.get("industry_operating_data"), dict)
+            else {}
+        )
+        industry_indicators = [
+            item
+            for item in industry_operating.get("indicators") or []
+            if isinstance(item, dict)
+        ]
+        indicator_text = " ".join(
+            str(item.get("indicator_name") or "") for item in industry_indicators
+        )
+        optional_industry_gaps = [
+            field
+            for field, markers in {
+                "inventory": ("库存",),
+                "capacity_utilization": ("产能", "开工率", "产量"),
+                "product_price": ("价格", "指数", "期货"),
+                "industry_demand": ("需求", "消费", "出口"),
+            }.items()
+            if not any(marker in indicator_text for marker in markers)
+        ]
         industry_supply_demand = {
-            "status": "degraded" if industry_context.get("status") != "missing" else "missing",
+            "status": (
+                "available"
+                if industry_indicators and industry_operating.get("source_ids")
+                else ("degraded" if industry_context.get("status") != "missing" else "missing")
+            ),
             "claim_type": "inference",
-            "basis": "行业相对强弱只作为市场预期代理，不替代库存、产能利用率、产品价格与需求数据",
-            "method": "industry-expectation-proxy-v1",
+            "basis": (
+                "行业公开经营指标用于识别产量、价格与需求变化；行业相对强弱仅作为市场预期补充"
+                if industry_indicators
+                else "行业相对强弱只作为市场预期代理，不替代库存、产能利用率、产品价格与需求数据"
+            ),
+            "method": "industry-operating-signals-v1" if industry_indicators else "industry-expectation-proxy-v1",
             "version": "1",
             "industry": target_industry,
             "relative_change_pct": industry_context.get("relative_change_pct"),
             "policy_documents": industry_policy_documents,
-            "source_ids": sorted(set(industry_ids + policy_ids)),
-            "missing_fields": ["inventory", "capacity_utilization", "product_price", "industry_demand"],
+            "operating_indicators": industry_indicators,
+            "source_ids": sorted(
+                set(industry_ids + policy_ids + (industry_operating.get("source_ids") or []))
+            ),
+            "missing_fields": [],
+            "optional_missing_fields": optional_industry_gaps,
         }
         lifecycle_raw = cls._snapshot_value(target, "industry_lifecycle") if target is not None else None
         lifecycle_source_ids = sorted(set(target_ids + industry_ids))

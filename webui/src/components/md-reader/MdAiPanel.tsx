@@ -297,7 +297,7 @@ export function MdAiPanel({
 
       {/* Input */}
       <div className="shrink-0 p-2">
-        <div className="flex min-h-9 items-end gap-1.5 rounded-xl border border-border/75 bg-background px-2.5 py-1.5 shadow-sm">
+        <div className="flex min-h-[52px] items-end gap-1.5 rounded-xl border border-border/75 bg-background px-2.5 py-1.5 shadow-sm">
           <Textarea
             value={draft}
             onChange={(e) => setDraft(e.target.value)}
@@ -309,8 +309,8 @@ export function MdAiPanel({
             }}
             disabled={creatingChat}
             placeholder="输入消息让 AI 编辑..."
-            rows={1}
-            className="min-h-[24px] flex-1 resize-none rounded-none border-0 bg-transparent px-0 py-0 text-caption leading-5 focus-visible:ring-0 disabled:cursor-not-allowed disabled:opacity-60"
+            rows={2}
+            className="min-h-[36px] flex-1 resize-none rounded-none border-0 bg-transparent px-0 py-0 text-caption leading-5 shadow-none focus-visible:ring-0 disabled:cursor-not-allowed disabled:opacity-60"
           />
           <Button
             type="button"

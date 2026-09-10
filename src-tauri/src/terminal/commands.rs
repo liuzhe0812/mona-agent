@@ -490,8 +490,17 @@ pub async fn shell_spawn(
     state: State<'_, TerminalState>,
     cols: u16,
     rows: u16,
+    cwd: Option<String>,
 ) -> Result<String, String> {
     let session_id = uuid::Uuid::new_v4().to_string();
+    let cwd = cwd
+        .filter(|value| !value.trim().is_empty())
+        .map(PathBuf::from);
+    if let Some(path) = &cwd {
+        if !path.is_dir() {
+            return Err(format!("Terminal working directory does not exist: {}", path.display()));
+        }
+    }
 
     let shell =
         LocalShell::spawn(
@@ -499,6 +508,7 @@ pub async fn shell_spawn(
             session_id.clone(),
             cols,
             rows,
+            cwd.as_deref(),
         )
         .map_err(|e| e.to_string())?;
 

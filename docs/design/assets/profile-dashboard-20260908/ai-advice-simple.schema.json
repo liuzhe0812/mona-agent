@@ -1,0 +1,58 @@
+{
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "knowledge_items"
+  ],
+  "properties": {
+    "knowledge_items": {
+      "type": "array",
+      "maxItems": 3,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "knowledge",
+          "learning_advice",
+          "resources"
+        ],
+        "properties": {
+          "knowledge": {
+            "type": "string",
+            "minLength": 1,
+            "description": "用户可能需要学习的具体知识"
+          },
+          "learning_advice": {
+            "type": "string",
+            "minLength": 1,
+            "description": "应该从何入手去学习"
+          },
+          "resources": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "title",
+                "url"
+              ],
+              "properties": {
+                "title": {
+                  "type": "string",
+                  "minLength": 1,
+                  "description": "用于显示链接的资料名称"
+                },
+                "url": {
+                  "type": "string",
+                  "format": "uri",
+                  "pattern": "^https?://",
+                  "description": "实际搜索得到的资源 URL"
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+}

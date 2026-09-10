@@ -1,0 +1,79 @@
+html,
+body,
+#root,
+.mona-docs-editor {
+  width: 100%;
+  height: 100%;
+  min-height: 0;
+  margin: 0;
+  overflow: hidden;
+}
+
+.mona-docs-editor > .app {
+  min-height: 0;
+  flex: 1;
+}
+
+.mona-docs-editor {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+}
+
+.mona-docs-editor .app-main,
+.mona-docs-editor .app-content,
+.mona-docs-editor .editor-area {
+  min-height: 0;
+}
+
+.mona-docs-editor .ribbon-group:has(.ai-entry) {
+  display: none;
+}
+
+.mona-docs-ribbon-status {
+  max-width: 220px;
+  overflow: hidden;
+  color: var(--text-dim);
+  font-size: 12px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.mona-docs-status {
+  position: absolute;
+  top: 8px;
+  right: 12px;
+  z-index: 80;
+  max-width: 280px;
+  overflow: hidden;
+  color: var(--text-dim);
+  font-size: 12px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.mona-follow-button {
+  position: absolute;
+  right: 16px;
+  bottom: 32px;
+  z-index: 50;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: var(--surface);
+  padding: 7px 12px;
+  color: var(--text-primary);
+  box-shadow: var(--shadow-sm);
+  font: inherit;
+  font-size: 12px;
+  cursor: pointer;
+}
+
+@media (max-width: 760px) {
+  .mona-docs-ribbon-status {
+    display: none;
+  }
+
+  .mona-docs-editor .editor-scroll {
+    padding-inline: 12px;
+  }
+}

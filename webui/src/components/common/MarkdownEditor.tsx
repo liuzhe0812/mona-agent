@@ -175,6 +175,7 @@ export function MarkdownEditor({
   isEmbedFlowchart,
 }: MarkdownEditorProps) {
   const settingContentRef = useRef(false);
+  const editorReadyRef = useRef(false);
   const lastMarkdownRef = useRef(content);
   const onContentChangeRef = useRef(onContentChange);
   onContentChangeRef.current = onContentChange;
@@ -722,8 +723,10 @@ export function MarkdownEditor({
         },
       },
     },
-    onCreate: async ({ editor }) => {
-      await convertAssetsPaths(editor);
+    onCreate: ({ editor }) => {
+      lastMarkdownRef.current = editor.getMarkdown();
+      editorReadyRef.current = true;
+      void convertAssetsPaths(editor);
     },
     onUpdate: ({ editor }) => {
       if (settingContentRef.current) return;
@@ -731,6 +734,11 @@ export function MarkdownEditor({
         detectWikiLinkTriggerVisual(editor);
       }
       const contentMarkdown = editor.getMarkdown();
+      if (!editorReadyRef.current) {
+        lastMarkdownRef.current = contentMarkdown;
+        return;
+      }
+      if (contentMarkdown === lastMarkdownRef.current) return;
       lastMarkdownRef.current = contentMarkdown;
       // Defer the parent setState to a microtask so it never fires
       // synchronously during React's render phase (avoids the

@@ -18,9 +18,23 @@ interface DesktopLoginProps {
   }) => void;
   loading?: boolean;
   error?: string | null;
+  hostKey?: {
+    type: "unknown" | "changed";
+    fingerprint: string;
+    expectedFingerprint: string;
+  } | null;
+  onTrustHostKey?: () => void;
+  onCancelHostKey?: () => void;
 }
 
-export function DesktopLogin({ onLogin, loading, error }: DesktopLoginProps) {
+export function DesktopLogin({
+  onLogin,
+  loading,
+  error,
+  hostKey,
+  onTrustHostKey,
+  onCancelHostKey,
+}: DesktopLoginProps) {
   const [loginType, setLoginType] = useState<"password" | "key">("password");
   const [showPassword, setShowPassword] = useState(false);
   const [progress, setProgress] = useState(0);
@@ -215,13 +229,45 @@ export function DesktopLogin({ onLogin, loading, error }: DesktopLoginProps) {
                 </div>
               )}
 
-              <button
-                type="submit"
-                disabled={loading || !host || !username}
-                className="w-full rounded-full bg-[#0a82ff] py-2.5 text-sm font-medium text-white shadow-lg shadow-blue-500/30 transition-colors hover:bg-[#339bff] disabled:cursor-not-allowed disabled:opacity-50"
-              >
-                连接
-              </button>
+              {hostKey ? (
+                <div className="space-y-3 rounded-xl border border-amber-400/50 bg-amber-400/10 p-3 text-left text-sm text-white">
+                  <div className="font-medium">
+                    {hostKey.type === "changed" ? "主机密钥已变更" : "首次连接，请确认主机密钥"}
+                  </div>
+                  <div className="break-all font-mono text-xs text-white/80">
+                    {hostKey.fingerprint}
+                  </div>
+                  {hostKey.type === "changed" && (
+                    <div className="break-all text-xs text-red-200">
+                      原指纹：{hostKey.expectedFingerprint}
+                    </div>
+                  )}
+                  <div className="flex gap-2">
+                    <button
+                      type="button"
+                      onClick={onCancelHostKey}
+                      className="flex-1 rounded-full border border-white/25 py-2 text-white/80 hover:bg-white/10"
+                    >
+                      取消
+                    </button>
+                    <button
+                      type="button"
+                      onClick={onTrustHostKey}
+                      className="flex-1 rounded-full bg-[#0a82ff] py-2 font-medium text-white hover:bg-[#339bff]"
+                    >
+                      信任并连接
+                    </button>
+                  </div>
+                </div>
+              ) : (
+                <button
+                  type="submit"
+                  disabled={loading || !host || !username}
+                  className="w-full rounded-full bg-[#0a82ff] py-2.5 text-sm font-medium text-white shadow-lg shadow-blue-500/30 transition-colors hover:bg-[#339bff] disabled:cursor-not-allowed disabled:opacity-50"
+                >
+                  连接
+                </button>
+              )}
             </form>
 
             <div className="mt-6 text-center">

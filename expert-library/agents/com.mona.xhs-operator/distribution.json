@@ -1,0 +1,5 @@
+{
+  "platforms": ["win32"],
+  "architectures": ["x64"],
+  "mirrors": []
+}

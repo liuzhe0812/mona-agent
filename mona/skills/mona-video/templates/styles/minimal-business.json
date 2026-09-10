@@ -1,0 +1,103 @@
+{
+  "schemaVersion": 1,
+  "id": "minimal-business",
+  "name": "山河新章",
+  "description": "暖调东方编辑风格，以克制的竖向标尺、印章色块和纸张层次承载文化、城市与品牌叙事。",
+  "baseTemplateId": "minimal-business",
+  "mode": "light",
+  "tokens": {
+    "colors": {
+      "primary": "#A62920",
+      "secondary": "#174F43",
+      "accent": "#C69A4B",
+      "background": "#F2E5CC",
+      "surface": "#FFF8E9",
+      "textPrimary": "#211B17",
+      "textSecondary": "#67584A",
+      "border": "#C69A4B",
+      "success": "#2B6B54",
+      "warning": "#C69A4B",
+      "error": "#A62920"
+    },
+    "typography": {
+      "headingFamily": "Noto Serif SC",
+      "bodyFamily": "Noto Sans SC",
+      "scale": "large",
+      "headingWeight": 700,
+      "bodyWeight": 500,
+      "headingLineHeight": 1.15,
+      "bodyLineHeight": 1.55
+    },
+    "shape": {
+      "cardRadius": 4,
+      "cardStyle": "solid",
+      "density": "spacious",
+      "shadow": "paper",
+      "borderWidth": 2,
+      "shadowOpacity": 0.18
+    },
+    "spacing": {
+      "unit": 8,
+      "contentPadding": 80
+    }
+  },
+  "components": {
+    "cover": "cover-title-right-v1",
+    "chapter": "chapter-numbered-v1",
+    "content": "content-outline-v1",
+    "data": "data-metric-row-v1",
+    "comparison": "comparison-columns-v1",
+    "process": "process-horizontal-v1",
+    "quote": "quote-accent-v1",
+    "outro": "outro-brand-light-v1"
+  },
+  "allowedLayouts": [
+    "cover-title-right",
+    "chapter-numbered",
+    "content-outline",
+    "data-metric-row",
+    "comparison-columns",
+    "process-horizontal",
+    "quote-accent",
+    "outro-brand"
+  ],
+  "allowedAnimations": ["fade-rise", "stagger-rise", "soft-pulse", "cross-fade"],
+  "motion": {
+    "intensity": "standard",
+    "enterPreset": "stagger-rise",
+    "emphasisPreset": "soft-pulse",
+    "transitionPreset": "cross-fade",
+    "enterDurationMs": 520,
+    "staggerMs": 95,
+    "transitionDurationMs": 560
+  },
+  "backgrounds": {
+    "default": {
+      "assetPolicy": "none",
+      "fit": "cover",
+      "focalPoint": {"x": 0.5, "y": 0.5},
+      "overlay": {"type": "solid", "color": "#F2E5CC", "opacity": 0.92, "direction": "none"},
+      "blur": 0,
+      "tint": 0,
+      "contrastMode": "auto",
+      "safeArea": {"top": 0.08, "right": 0.08, "bottom": 0.1, "left": 0.08},
+      "fallback": "#F2E5CC"
+    },
+    "roles": {
+      "cover": {"inherit": "default"},
+      "chapter": {"inherit": "default"},
+      "content": {"inherit": "default", "assetPolicy": "episode-replaceable"},
+      "data": {"inherit": "default"},
+      "comparison": {"inherit": "default"},
+      "process": {"inherit": "default"},
+      "quote": {"inherit": "default"},
+      "outro": {"inherit": "default"}
+    }
+  },
+  "subtitle": {"position": "bottom-center", "style": "caption-rail", "maxLines": 2},
+  "aspectVariants": {
+    "16:9": {"enabled": true},
+    "9:16": {"enabled": true},
+    "1:1": {"enabled": true}
+  }
+}

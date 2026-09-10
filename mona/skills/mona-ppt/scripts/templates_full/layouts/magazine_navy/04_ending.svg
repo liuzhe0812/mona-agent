@@ -1,0 +1,22 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" width="1280" height="720" viewBox="0 0 1280 720">
+  <!-- 深蓝整页背景 -->
+  <rect width="1280" height="720" fill="#16264C"/>
+
+  <!-- 右下角超大低透明装饰：同心圆 + 年份 -->
+  <circle cx="1150" cy="610" r="200" fill="none" stroke="#C9A227" stroke-opacity="0.12" stroke-width="1"/>
+  <circle cx="1150" cy="610" r="140" fill="none" stroke="#C9A227" stroke-opacity="0.08" stroke-width="1"/>
+  <text x="950" y="700" fill="#FAF7F2" fill-opacity="0.06" font-family="Arial, Microsoft YaHei, sans-serif" font-size="120" font-weight="bold">{{YEAR}}</text>
+
+  <!-- 居中主内容 -->
+  <rect x="636" y="252" width="8" height="8" fill="#C9A227"/>
+  <text x="640" y="330" text-anchor="middle" fill="#FAF7F2" font-family="Microsoft YaHei, SimHei, sans-serif" font-size="48" font-weight="bold">{{THANKS_TITLE}}</text>
+  <text x="640" y="374" text-anchor="middle" fill="#C9A227" font-family="Arial, Microsoft YaHei, sans-serif" font-size="16" letter-spacing="2">{{THANKS_SUB}}</text>
+
+  <!-- 中部金色短线 -->
+  <rect x="616" y="412" width="48" height="3" fill="#C9A227"/>
+
+  <!-- 联系信息与机构 -->
+  <text x="640" y="478" text-anchor="middle" fill="#FAF7F2" fill-opacity="0.6" font-family="Microsoft YaHei, SimHei, sans-serif" font-size="14">{{CONTACT_INFO}}</text>
+  <text x="640" y="506" text-anchor="middle" fill="#FAF7F2" fill-opacity="0.6" font-family="Microsoft YaHei, SimHei, sans-serif" font-size="14">{{ORGANIZATION}}</text>
+</svg>

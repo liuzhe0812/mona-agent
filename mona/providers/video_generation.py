@@ -12,15 +12,16 @@ import asyncio
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from typing import Any
+from urllib.parse import quote
 
 import httpx
 from loguru import logger
 
+from mona.providers.mona_managed_media import MonaManagedMediaClient, MonaManagedMediaError
 from mona.providers.registry import find_by_name
 
 _DEFAULT_TIMEOUT_S = 60.0
 _DEFAULT_POLL_INTERVAL_S = 5.0
-_DEFAULT_POLL_TIMEOUT_S = 600.0
 
 # Agnes AI aspect ratio → (width, height).  Default native size is 1152x768.
 _AGNES_ASPECT_RATIO_SIZES = {
@@ -73,7 +74,7 @@ def register_video_gen_provider(cls: type[VideoGenerationProvider]) -> None:
 
 
 def get_video_gen_provider(name: str) -> type[VideoGenerationProvider] | None:
-    return _VIDEO_GEN_PROVIDERS.get(name)
+    return _VIDEO_GEN_PROVIDERS.get(name) or _VIDEO_GEN_PROVIDERS.get("openai_compat")
 
 
 def video_gen_provider_names() -> tuple[str, ...]:
@@ -99,6 +100,8 @@ def video_gen_provider_configs(config: Any) -> dict[str, Any]:
         pc = getattr(providers_cfg, spec.name, None)
         if pc is not None:
             result[spec.name] = pc
+    for name, pc in getattr(providers_cfg, "cindy", {}).items():
+        result[name] = pc
     return result
 
 
@@ -132,7 +135,7 @@ class VideoGenerationProvider(ABC):
         self.extra_body = extra_body or {}
         self.timeout = timeout if timeout is not None else self.default_timeout
         self.poll_interval = poll_interval if poll_interval is not None else _DEFAULT_POLL_INTERVAL_S
-        self.poll_timeout = poll_timeout if poll_timeout is not None else _DEFAULT_POLL_TIMEOUT_S
+        self.poll_timeout = poll_timeout
         self._client = client
 
     def _resolve_base_url(self, api_base: str | None) -> str:
@@ -153,6 +156,8 @@ class VideoGenerationProvider(ABC):
         prompt: str,
         model: str,
         reference_images: list[str] | None = None,
+        first_frame: str | None = None,
+        last_frame: str | None = None,
         aspect_ratio: str | None = None,
         duration: int | None = None,
     ) -> GeneratedVideoResponse: ...
@@ -219,6 +224,8 @@ class AgnesVideoGenerationClient(VideoGenerationProvider):
         prompt: str,
         model: str,
         reference_images: list[str] | None = None,
+        first_frame: str | None = None,
+        last_frame: str | None = None,
         aspect_ratio: str | None = None,
         duration: int | None = None,
     ) -> GeneratedVideoResponse:
@@ -240,7 +247,7 @@ class AgnesVideoGenerationClient(VideoGenerationProvider):
         # Image-to-video: Agnes accepts a single image URL.  Local reference
         # images cannot be uploaded inline (no documented upload endpoint), so
         # only HTTP(S) URLs are forwarded.
-        refs = list(reference_images or [])
+        refs = [first_frame] if first_frame else list(reference_images or [])
         if refs:
             image_url = refs[0]
             if isinstance(image_url, str) and image_url.startswith(("http://", "https://")):
@@ -291,7 +298,7 @@ class AgnesVideoGenerationClient(VideoGenerationProvider):
         poll_headers = {"Authorization": headers.get("Authorization", ""), **self.extra_headers}
         poll_url = f"{self._poll_base_url()}/agnesapi"
         loop = asyncio.get_event_loop()
-        deadline = loop.time() + self.poll_timeout
+        deadline = loop.time() + self.poll_timeout if self.poll_timeout is not None else None
         last_progress = -1
         last_status = ""
 
@@ -299,7 +306,7 @@ class AgnesVideoGenerationClient(VideoGenerationProvider):
         client = self._client or httpx.AsyncClient(timeout=self.timeout)
         try:
             while True:
-                if loop.time() >= deadline:
+                if deadline is not None and loop.time() >= deadline:
                     raise VideoGenerationError(
                         f"Agnes video generation timed out after {int(self.poll_timeout)}s "
                         f"(video_id={video_id}, last status={last_status or 'unknown'})"
@@ -364,6 +371,288 @@ class AgnesVideoGenerationClient(VideoGenerationProvider):
                 await client.aclose()
 
 
+def _video_url_from_payload(payload: Any) -> str | None:
+    if isinstance(payload, dict):
+        for key in ("url", "video_url", "videoUrl"):
+            value = payload.get(key)
+            if isinstance(value, str) and value:
+                return value
+        for value in payload.values():
+            url = _video_url_from_payload(value)
+            if url:
+                return url
+    elif isinstance(payload, list):
+        for value in payload:
+            url = _video_url_from_payload(value)
+            if url:
+                return url
+    return None
+
+
+def _video_task_id_from_payload(payload: Any) -> str | None:
+    if isinstance(payload, dict):
+        for key in ("id", "task_id", "video_id"):
+            value = payload.get(key)
+            if isinstance(value, (str, int)) and str(value):
+                return str(value)
+        for value in payload.values():
+            task_id = _video_task_id_from_payload(value)
+            if task_id:
+                return task_id
+    elif isinstance(payload, list):
+        for value in payload:
+            task_id = _video_task_id_from_payload(value)
+            if task_id:
+                return task_id
+    return None
+
+
+def _video_status_from_payload(payload: dict[str, Any]) -> str:
+    for key in ("status", "state"):
+        value = payload.get(key)
+        if isinstance(value, str) and value:
+            return value.lower()
+    for key in ("result", "data"):
+        nested = payload.get(key)
+        if isinstance(nested, dict):
+            status = _video_status_from_payload(nested)
+            if status:
+                return status
+    return ""
+
+
+def _video_progress_from_payload(payload: dict[str, Any], default: int = 0) -> int:
+    value = payload.get("progress")
+    if value is None:
+        for key in ("result", "data"):
+            nested = payload.get(key)
+            if isinstance(nested, dict) and nested.get("progress") is not None:
+                value = nested["progress"]
+                break
+    try:
+        return int(value) if value is not None else default
+    except (TypeError, ValueError):
+        return default
+
+
+def _video_error_message(payload: dict[str, Any]) -> str:
+    value = payload.get("error") or payload.get("message")
+    if isinstance(value, dict):
+        value = value.get("message") or value.get("detail")
+    return str(value) if value else "unknown error"
+
+
+class OpenAICompatVideoGenerationClient(VideoGenerationProvider):
+    """Generic video client for an OpenAI-compatible media endpoint."""
+
+    provider_name = "openai_compat"
+
+    async def generate(
+        self,
+        *,
+        prompt: str,
+        model: str,
+        reference_images: list[str] | None = None,
+        first_frame: str | None = None,
+        last_frame: str | None = None,
+        aspect_ratio: str | None = None,
+        duration: int | None = None,
+    ) -> GeneratedVideoResponse:
+        body: dict[str, Any] = {"model": model, "prompt": prompt}
+        references = list(reference_images or [])
+        if references:
+            body["reference_images"] = references
+        if first_frame:
+            body["first_frame"] = first_frame
+        if last_frame:
+            body["last_frame"] = last_frame
+        if aspect_ratio:
+            body["aspect_ratio"] = aspect_ratio
+        if duration is not None:
+            body["duration"] = duration
+        body.update(self.extra_body)
+
+        headers = {
+            "Content-Type": "application/json",
+            **{
+                key: value
+                for key, value in self.extra_headers.items()
+                if key.lower() != "authorization"
+            },
+        }
+        if self.api_key:
+            headers["Authorization"] = f"Bearer {self.api_key}"
+        response = await self._http_post(
+            f"{self.api_base}/videos/generations",
+            headers=headers,
+            body=body,
+        )
+        try:
+            response.raise_for_status()
+        except httpx.HTTPStatusError as exc:
+            detail = response.text[:1000]
+            raise VideoGenerationError(
+                f"Video generation failed (HTTP {response.status_code}): {detail}"
+            ) from exc
+
+        payload = response.json()
+        video_url = _video_url_from_payload(payload)
+        if video_url:
+            status = _video_status_from_payload(payload) or "completed"
+            return self._response_from_payload(
+                payload,
+                video_url,
+                status=status,
+                default_progress=100,
+            )
+
+        task_id = _video_task_id_from_payload(payload)
+        if not task_id:
+            raise VideoGenerationError("Video generation returned no video URL or task id")
+        return await self._poll_until_complete(task_id, headers)
+
+    def _response_from_payload(
+        self,
+        payload: dict[str, Any],
+        video_url: str,
+        *,
+        status: str,
+        default_progress: int,
+    ) -> GeneratedVideoResponse:
+        duration = payload.get("seconds") or payload.get("duration")
+        size = payload.get("size") or payload.get("resolution")
+        return GeneratedVideoResponse(
+            video_url=video_url,
+            content="",
+            raw=payload,
+            status=status,
+            progress=_video_progress_from_payload(payload, default=default_progress),
+            seconds=str(duration) if duration is not None else None,
+            size=str(size) if size is not None else None,
+        )
+
+    async def _poll_until_complete(
+        self,
+        task_id: str,
+        headers: dict[str, str],
+    ) -> GeneratedVideoResponse:
+        loop = asyncio.get_event_loop()
+        deadline = loop.time() + self.poll_timeout if self.poll_timeout is not None else None
+        owns_client = self._client is None
+        client = self._client or httpx.AsyncClient(timeout=self.timeout)
+        poll_url = f"{self.api_base}/tasks/{quote(task_id, safe='')}"
+        try:
+            while True:
+                if deadline is not None and loop.time() >= deadline:
+                    raise VideoGenerationError(
+                        f"Video generation timed out after {int(self.poll_timeout)}s "
+                        f"(task_id={task_id})"
+                    )
+                await asyncio.sleep(self.poll_interval)
+                try:
+                    response = await client.get(poll_url, headers=headers)
+                except httpx.RequestError as exc:
+                    logger.warning("Video poll request failed (will retry): {}", exc)
+                    continue
+                if response.status_code == 404:
+                    raise VideoGenerationError(f"Video task not found: {task_id}")
+                if response.status_code >= 500:
+                    logger.warning(
+                        "Video poll returned HTTP {} (will retry)", response.status_code
+                    )
+                    continue
+                try:
+                    response.raise_for_status()
+                except httpx.HTTPStatusError as exc:
+                    detail = response.text[:500]
+                    raise VideoGenerationError(
+                        f"Video poll failed (HTTP {response.status_code}): {detail}"
+                    ) from exc
+
+                payload = response.json()
+                status = _video_status_from_payload(payload)
+                if status in {"failed", "error"}:
+                    raise VideoGenerationError(
+                        f"Video generation failed: {_video_error_message(payload)}"
+                    )
+                video_url = _video_url_from_payload(payload)
+                if status in {"completed", "succeeded", "success"} or (
+                    video_url and not status
+                ):
+                    if not video_url:
+                        raise VideoGenerationError(
+                            "Video task completed but no video URL was returned"
+                        )
+                    return self._response_from_payload(
+                        payload,
+                        video_url,
+                        status=status or "completed",
+                        default_progress=100,
+                    )
+        finally:
+            if owns_client:
+                await client.aclose()
+
+
+class MonaManagedVideoGenerationClient(VideoGenerationProvider):
+    provider_name = "mona_managed"
+    missing_key_message = "请登录 Mona AI 后再使用托管视频模型"
+
+    async def generate(
+        self,
+        *,
+        prompt: str,
+        model: str,
+        reference_images: list[str] | None = None,
+        first_frame: str | None = None,
+        last_frame: str | None = None,
+        aspect_ratio: str | None = None,
+        duration: int | None = None,
+    ) -> GeneratedVideoResponse:
+        try:
+            service = MonaManagedMediaClient(
+                poll_interval=self.poll_interval,
+                poll_timeout=self.poll_timeout,
+                client=self._client,
+            )
+            payload = await service.generate(
+                {
+                    "model": model,
+                    "prompt": prompt,
+                    "input_image_urls": ([first_frame] if first_frame else list(reference_images or []))[:1],
+                    "resolution": "720P",
+                    "aspect_ratio": aspect_ratio or "16:9",
+                    "duration": duration or 5,
+                    "watermark": False,
+                }
+            )
+        except MonaManagedMediaError as exc:
+            raise VideoGenerationError(str(exc)) from exc
+        result = payload.get("result") or {}
+        asset = result.get("asset") if isinstance(result, dict) else None
+        video_url = asset.get("url") if isinstance(asset, dict) else None
+        if not isinstance(video_url, str) or not video_url:
+            raise VideoGenerationError("Mona AI 未返回生成视频")
+        try:
+            video_bytes, content_type = await service.download_asset(video_url)
+        except MonaManagedMediaError as exc:
+            raise VideoGenerationError(str(exc)) from exc
+        if not content_type.startswith(("video/", "application/octet-stream")):
+            raise VideoGenerationError("Mona AI 返回了不支持的视频格式")
+        usage = payload.get("usage") or {}
+        raw_payload = dict(payload)
+        raw_payload["_video_bytes"] = video_bytes
+        return GeneratedVideoResponse(
+            video_url=video_url,
+            content="",
+            raw=raw_payload,
+            status="completed",
+            progress=100,
+            seconds=str(usage.get("duration")) if usage.get("duration") is not None else None,
+            size=f"{usage.get('SR')}P" if usage.get("SR") is not None else None,
+        )
+
+
 async def download_video_bytes(url: str, *, timeout: float = 300.0) -> bytes:
     """Download a generated video from a URL and return its raw bytes."""
     async with httpx.AsyncClient(timeout=timeout, follow_redirects=True) as client:
@@ -381,3 +670,5 @@ async def download_video_bytes(url: str, *, timeout: float = 300.0) -> bytes:
 # ---------------------------------------------------------------------------
 
 register_video_gen_provider(AgnesVideoGenerationClient)
+register_video_gen_provider(MonaManagedVideoGenerationClient)
+register_video_gen_provider(OpenAICompatVideoGenerationClient)

@@ -1,4 +1,5 @@
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
+use std::sync::Mutex;
 
 use tauri::Manager;
 
@@ -12,6 +13,10 @@ pub const GATEWAY_EXE_NAME: &str = "mona-gateway";
 /// Name of the gateway directory (both in resources and deployed location)
 const GATEWAY_DIR_NAME: &str = "mona-gateway";
 
+/// Gateway and Services share one deployed Python tree. Startup may request
+/// both at once, so replacement must remain a single operation.
+static GATEWAY_DEPLOY_LOCK: Mutex<()> = Mutex::new(());
+
 /// Directory where the gateway directory is deployed to
 pub fn gateway_deploy_dir() -> PathBuf {
     app_data_dir().join("gateway")
@@ -19,13 +24,15 @@ pub fn gateway_deploy_dir() -> PathBuf {
 
 /// Path to the deployed gateway executable
 pub fn gateway_exe_path() -> PathBuf {
-    gateway_deploy_dir().join(GATEWAY_DIR_NAME).join(GATEWAY_EXE_NAME)
+    gateway_deploy_dir()
+        .join(GATEWAY_DIR_NAME)
+        .join(GATEWAY_EXE_NAME)
 }
 
 /// Deploy the mona-gateway directory from bundled resources to app data dir.
 /// This copies the entire directory (exe + _internal/) from the Tauri resource
 /// directory to a stable location. Re-deploys if the bundled version differs
-/// (detected by comparing the exe file size).
+/// or the deployed executable is missing/damaged.
 pub fn deploy_gateway(app_handle: &tauri::AppHandle) -> Result<PathBuf, String> {
     let source_dir = find_gateway_resource_dir(app_handle)?;
     let dest_dir = gateway_deploy_dir().join(GATEWAY_DIR_NAME);
@@ -33,6 +40,18 @@ pub fn deploy_gateway(app_handle: &tauri::AppHandle) -> Result<PathBuf, String> 
     // Best-effort sweep of stale dirs left by the rename fallback in
     // remove_old_gateway_dir (locked by an orphaned process at the time).
     sweep_stale_gateway_dirs();
+
+    deploy_gateway_directory(&source_dir, &dest_dir, env!("CARGO_PKG_VERSION"))
+}
+
+fn deploy_gateway_directory(
+    source_dir: &PathBuf,
+    dest_dir: &PathBuf,
+    version: &str,
+) -> Result<PathBuf, String> {
+    let _deployment_guard = GATEWAY_DEPLOY_LOCK
+        .lock()
+        .map_err(|error| format!("Gateway deployment lock failed: {}", error))?;
 
     let source_exe = source_dir.join(GATEWAY_EXE_NAME);
     if !source_exe.exists() {
@@ -45,7 +64,11 @@ pub fn deploy_gateway(app_handle: &tauri::AppHandle) -> Result<PathBuf, String> 
     let dest_exe = dest_dir.join(GATEWAY_EXE_NAME);
 
     // Check if we need to (re-)deploy: missing/damaged or different exe size
-    let need_deploy = if !dest_exe.exists() {
+    let need_deploy = if !deployed_gateway_version_matches(dest_dir, version) {
+        // Sidecar resources and file-based skills can change without changing
+        // the gateway executable's size. Every app upgrade must redeploy them.
+        true
+    } else if !dest_exe.exists() {
         true
     } else if !dest_dir.join("_internal").is_dir() {
         // A previous removal partially deleted the tree (e.g. blocked by a
@@ -76,39 +99,69 @@ pub fn deploy_gateway(app_handle: &tauri::AppHandle) -> Result<PathBuf, String> 
         return Ok(dest_exe);
     }
 
+    let staging_dir = dest_dir.with_file_name(format!(
+        "{}.staging-{}-{}",
+        GATEWAY_DIR_NAME,
+        std::process::id(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_nanos(),
+    ));
     log::info!("Deploying gateway from {:?} to {:?}", source_dir, dest_dir);
 
-    // Remove old deployment directory if it exists
-    if dest_dir.exists() {
-        remove_old_gateway_dir(&dest_dir)?;
+    let deployment: Result<(), String> = (|| {
+        copy_dir_recursive(source_dir, &staging_dir)?;
+        std::fs::write(staging_dir.join(".mona-app-version"), version)
+            .map_err(|e| format!("Failed to record deployed gateway version: {}", e))?;
+        if dest_dir.exists() {
+            remove_old_gateway_dir(dest_dir)?;
+        }
+        std::fs::rename(&staging_dir, dest_dir)
+            .map_err(|e| format!("Failed to activate deployed gateway: {}", e))?;
+        Ok(())
+    })();
+    if deployment.is_err() {
+        let _ = std::fs::remove_dir_all(&staging_dir);
     }
-
-    // Copy the entire directory tree
-    copy_dir_recursive(&source_dir, &dest_dir)?;
+    deployment?;
 
     log::info!("Gateway deployed to {:?}", dest_dir);
 
     Ok(dest_exe)
 }
 
-/// Remove the previously deployed gateway directory.
-///
-/// The tree can be locked by an orphaned `mona-gateway.exe` process (e.g. a
-/// services process left behind by an older hot-update, or a crash remnant),
-/// in which case plain `remove_dir_all` fails with Access Denied (os error 5).
-/// Strategy: kill stale processes, retry removal with backoff, then fall back
-/// to renaming the directory aside (rename works even while files inside are
-/// locked) and deleting it best-effort — the sweep on a later launch cleans
-/// it up once the orphan exits.
+fn deployed_gateway_version_matches(dest_dir: &Path, version: &str) -> bool {
+    std::fs::read_to_string(dest_dir.join(".mona-app-version"))
+        .map(|deployed| deployed == version)
+        .unwrap_or(false)
+}
+
+/// Move the previous deployment aside before copying the new gateway.
+/// Deleting this large tree synchronously can block startup for minutes on
+/// Windows, while renaming it on the same volume is fast and atomic.
 fn remove_old_gateway_dir(dir: &PathBuf) -> Result<(), String> {
     #[cfg(windows)]
     kill_stale_gateway_processes();
 
+    let suffix = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_millis();
+    let stale = dir.with_file_name(format!(
+        "{}.stale-{}-{}",
+        GATEWAY_DIR_NAME,
+        std::process::id(),
+        suffix
+    ));
     const ATTEMPTS: u32 = 4;
     let mut last_err: Option<std::io::Error> = None;
     for attempt in 1..=ATTEMPTS {
-        match std::fs::remove_dir_all(dir) {
-            Ok(()) => return Ok(()),
+        match rename_gateway_dir(dir, &stale) {
+            Ok(()) => {
+                delete_directory_in_background(stale);
+                return Ok(());
+            }
             Err(e) => {
                 last_err = Some(e);
                 if attempt < ATTEMPTS {
@@ -117,29 +170,28 @@ fn remove_old_gateway_dir(dir: &PathBuf) -> Result<(), String> {
             }
         }
     }
-    log::warn!(
-        "remove_dir_all {:?} failed after {} attempts ({:?}), trying rename fallback",
-        dir,
+    Err(format!(
+        "Failed to rotate old gateway directory after {} attempts: {}",
         ATTEMPTS,
         last_err
-    );
-
-    let stale = dir.with_file_name(format!("{}.stale-{}", GATEWAY_DIR_NAME, std::process::id()));
-    std::fs::rename(dir, &stale).map_err(|e| {
-        format!(
-            "Failed to remove old gateway dir: {}; rename fallback also failed: {}",
-            last_err
-                .map(|e| e.to_string())
-                .unwrap_or_else(|| "unknown".to_string()),
-            e
-        )
-    })?;
-    // Best-effort: may still be locked; sweep_stale_gateway_dirs retries later.
-    let _ = std::fs::remove_dir_all(&stale);
-    Ok(())
+            .map(|error| error.to_string())
+            .unwrap_or_else(|| "unknown error".to_string())
+    ))
 }
 
-/// Delete `mona-gateway.stale-*` directories left by the rename fallback.
+fn rename_gateway_dir(source: &Path, destination: &Path) -> std::io::Result<()> {
+    std::fs::rename(source, destination)
+}
+
+fn delete_directory_in_background(path: PathBuf) {
+    std::thread::spawn(move || {
+        if let Err(error) = std::fs::remove_dir_all(&path) {
+            log::debug!("Deferred gateway cleanup {:?} failed: {}", path, error);
+        }
+    });
+}
+
+/// Delete `mona-gateway.stale-*` directories without delaying startup.
 fn sweep_stale_gateway_dirs() {
     let prefix = format!("{}.stale-", GATEWAY_DIR_NAME);
     let Ok(entries) = std::fs::read_dir(gateway_deploy_dir()) else {
@@ -152,7 +204,7 @@ fn sweep_stale_gateway_dirs() {
             .map(|n| n.starts_with(&prefix))
             .unwrap_or(false)
         {
-            let _ = std::fs::remove_dir_all(entry.path());
+            delete_directory_in_background(entry.path());
         }
     }
 }
@@ -162,12 +214,12 @@ fn sweep_stale_gateway_dirs() {
 /// running instance is necessarily an outdated orphan that would hold locks
 /// on the exe/DLLs inside.
 #[cfg(windows)]
-fn kill_stale_gateway_processes() {
+pub(crate) fn kill_stale_gateway_processes() {
     let mut cmd = std::process::Command::new("taskkill");
     cmd.args(["/IM", GATEWAY_EXE_NAME, "/T", "/F"]);
     use std::os::windows::process::CommandExt;
     cmd.creation_flags(0x08000000); // CREATE_NO_WINDOW
-    // taskkill exits non-zero when no matching process exists — that is fine.
+                                    // taskkill exits non-zero when no matching process exists — that is fine.
     if let Err(e) = cmd.status() {
         log::warn!("Failed to taskkill stale gateway processes: {}", e);
     }
@@ -175,13 +227,12 @@ fn kill_stale_gateway_processes() {
 
 /// Recursively copy a directory tree.
 fn copy_dir_recursive(source: &PathBuf, dest: &PathBuf) -> Result<u64, String> {
-    std::fs::create_dir_all(dest)
-        .map_err(|e| format!("Failed to create dir {:?}: {}", dest, e))?;
+    std::fs::create_dir_all(dest).map_err(|e| format!("Failed to create dir {:?}: {}", dest, e))?;
 
     let mut total_copied: u64 = 0;
 
-    for entry in std::fs::read_dir(source)
-        .map_err(|e| format!("Failed to read dir {:?}: {}", source, e))?
+    for entry in
+        std::fs::read_dir(source).map_err(|e| format!("Failed to read dir {:?}: {}", source, e))?
     {
         let entry = entry.map_err(|e| format!("Failed to read dir entry: {}", e))?;
         let src_path = entry.path();
@@ -325,7 +376,9 @@ fn find_windows_python() -> Option<PathBuf> {
     use std::ffi::OsStr;
 
     let local_app_data = std::env::var("LOCALAPPDATA").ok()?;
-    let base = PathBuf::from(&local_app_data).join("Programs").join("Python");
+    let base = PathBuf::from(&local_app_data)
+        .join("Programs")
+        .join("Python");
 
     if let Ok(entries) = std::fs::read_dir(&base) {
         let mut candidates: Vec<PathBuf> = entries
@@ -356,6 +409,82 @@ fn find_windows_python() -> Option<PathBuf> {
     }
 
     None
+}
+
+#[cfg(test)]
+mod gateway_rotation_tests {
+    use super::{deployed_gateway_version_matches, deploy_gateway_directory, rename_gateway_dir, GATEWAY_EXE_NAME};
+    use std::sync::{Arc, Barrier};
+
+    #[test]
+    fn app_upgrade_invalidates_gateway_even_when_executable_size_is_unchanged() {
+        let root = tempfile::tempdir().unwrap();
+        std::fs::write(root.path().join("mona-gateway.exe"), b"unchanged exe").unwrap();
+        assert!(!deployed_gateway_version_matches(root.path(), "1.6.0"));
+        std::fs::write(root.path().join(".mona-app-version"), "1.5.1").unwrap();
+        assert!(!deployed_gateway_version_matches(root.path(), "1.6.0"));
+        std::fs::write(root.path().join(".mona-app-version"), "1.6.0").unwrap();
+        assert!(deployed_gateway_version_matches(root.path(), "1.6.0"));
+    }
+
+    #[test]
+    fn rotates_gateway_directory_without_deleting_its_contents_first() {
+        let root =
+            std::env::temp_dir().join(format!("mona-gateway-rotation-{}", uuid::Uuid::new_v4()));
+        let current = root.join("mona-gateway");
+        let stale = root.join("mona-gateway.stale-test");
+        std::fs::create_dir_all(current.join("_internal")).unwrap();
+        std::fs::write(current.join("_internal").join("payload.bin"), b"payload").unwrap();
+
+        rename_gateway_dir(&current, &stale).unwrap();
+
+        assert!(!current.exists());
+        assert_eq!(
+            std::fs::read(stale.join("_internal").join("payload.bin")).unwrap(),
+            b"payload"
+        );
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn concurrent_deployments_leave_one_complete_gateway_tree() {
+        let root = tempfile::tempdir().unwrap();
+        let source = root.path().join("source");
+        let destination = root.path().join("gateway/mona-gateway");
+        std::fs::create_dir_all(source.join("_internal/pytz/zoneinfo/America")).unwrap();
+        std::fs::write(source.join(GATEWAY_EXE_NAME), b"gateway").unwrap();
+        std::fs::write(
+            source.join("_internal/pytz/zoneinfo/America/Cordoba"),
+            b"timezone",
+        )
+        .unwrap();
+
+        let barrier = Arc::new(Barrier::new(2));
+        let mut tasks = Vec::new();
+        for _ in 0..2 {
+            let source = source.clone();
+            let destination = destination.clone();
+            let barrier = barrier.clone();
+            tasks.push(std::thread::spawn(move || {
+                barrier.wait();
+                deploy_gateway_directory(&source, &destination, "1.6.0")
+            }));
+        }
+        for task in tasks {
+            task.join().unwrap().unwrap();
+        }
+
+        assert_eq!(
+            std::fs::read(destination.join("_internal/pytz/zoneinfo/America/Cordoba")).unwrap(),
+            b"timezone"
+        );
+        assert_eq!(std::fs::read_to_string(destination.join(".mona-app-version")).unwrap(), "1.6.0");
+        assert!(
+            std::fs::read_dir(destination.parent().unwrap())
+                .unwrap()
+                .all(|entry| !entry.unwrap().file_name().to_string_lossy().starts_with("mona-gateway.staging-"))
+        );
+    }
 }
 
 mod which {

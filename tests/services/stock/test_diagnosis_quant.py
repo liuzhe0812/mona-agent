@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 from copy import deepcopy
+from datetime import date, timedelta
 from pathlib import Path
 
 from mona.services.stock.diagnosis_quant import (
@@ -29,14 +30,18 @@ def _fixture() -> tuple[dict, list[dict], dict[str, dict]]:
                 "industry": "固定行业" if index < 5 else "其他行业",
                 "instrument_type": "equity",
                 "listing_days": 2_000,
+                "as_of": AS_OF,
+                "price": 10 + index,
                 "volume": 1_000_000 + index,
                 "turnover": 10_000_000 + index,
                 "pe": 10 + index / 10,
                 "pb": 1 + index / 100,
+                "source_ids": [f"market-source-{index}"],
             }
         )
         factors[instrument_id] = {
             "as_of": AS_OF,
+            "source_ids": [f"factor-source-{index}"],
             "factors": {
                 "momentum20": index,
                 "momentum60": index * 2,
@@ -109,6 +114,13 @@ def test_full_market_and_industry_emit_deterministic_three_horizon_analysis() ->
         assert view["method_versions"]["descriptive"]
     assert first["quant_validation"]["quant_signal"] != "insufficient_data"
     assert first["quant_snapshot"]["validation_metrics"]["oosPeriods"] == 0
+    for horizon, candidate in first["_calibration_candidates"].items():
+        assert candidate["strategy_id"].startswith("diagnosis-")
+        assert candidate["as_of"] == AS_OF
+        assert candidate["validation_window"] in {10, 60, 120}
+        assert candidate["universe_count"] == 30
+        assert candidate["observed_count"] == 30
+        assert len(candidate["rows"]) == 30
 
 
 def test_small_industry_explicitly_falls_back_to_market() -> None:
@@ -125,6 +137,90 @@ def test_small_industry_explicitly_falls_back_to_market() -> None:
         and view["industry_percentile"] is None
         for view in payload["quant_validation"]["horizons"].values()
     )
+
+
+def _calibrated_records() -> list[dict]:
+    records = []
+    start = date(2025, 1, 1)
+    for period in range(11):
+        as_of = start + timedelta(days=period * 20)
+        outcome_as_of = as_of + timedelta(days=10)
+        for index in range(30):
+            records.append(
+                {
+                    "as_of": as_of.isoformat(),
+                    "outcome_as_of": outcome_as_of.isoformat(),
+                    "instrument_id": f"XSHG:{600000 + index:06d}",
+                    "factor": float(index),
+                    "forward_return": index / 1000 + ((index * (period + 3)) % 11) / 2_000,
+                    "snapshot_hash": f"snapshot-{period}",
+                    "factor_version": "diagnosis-cross-section-factor-v1",
+                    "strategy_fingerprint": "diagnosis-short-v1",
+                    "report_id": f"cohort-{period}",
+                    "workflow_run_id": f"cohort-{period}",
+                    "factor_id": "composite_score",
+                    "factor_direction": "desc",
+                    "sample_scope": "full_eligible_universe",
+                    "universe_count": 30,
+                    "observed_count": 30,
+                    "source_ids": ["src-factor", "src-outcome"],
+                    "outcome_snapshot_hash": f"outcome-{period}-{index}",
+                }
+            )
+    return records
+
+
+def test_mature_oos_records_promote_diagnosis_quant_and_expose_risk_metrics() -> None:
+    bundle, rows, factors = _fixture()
+    payload = build_diagnosis_quant_payload(
+        bundle,
+        TARGET,
+        market_rows=rows,
+        cached_factors=factors,
+        validation_records={
+            "short_term": _calibrated_records(),
+            "medium_term": [],
+            "long_term": [],
+        },
+    )
+
+    assert payload is not None
+    short = payload["quant_validation"]["horizons"]["short_term"]
+    metrics = short["calibration"]["metrics"]
+    assert short["validation_status"] == "calibrated"
+    assert short["calibration"]["promotionStatus"] == "calibrated"
+    assert payload["quant_snapshot"]["validation_status"] == "calibrated"
+    assert payload["quant_validation"]["validation_status"] == "calibrated"
+    assert payload["quant_snapshot"]["eligible_for_trading"] is True
+    assert metrics["oosPeriods"] >= 3
+    assert metrics["sampleCount"] >= 60
+    assert metrics["rankIc"] is not None
+    assert metrics["excessReturnAfterCost"] is not None
+    assert metrics["maxDrawdown"] is not None
+
+
+def test_historical_calibration_never_authorizes_a_stale_current_snapshot() -> None:
+    bundle, rows, factors = _fixture()
+    payload = build_diagnosis_quant_payload(
+        bundle,
+        TARGET,
+        market_rows=rows,
+        cached_factors=factors,
+        cache_status="recent_prior_cache",
+        validation_records={
+            "short_term": _calibrated_records(),
+            "medium_term": [],
+            "long_term": [],
+        },
+    )
+
+    assert payload is not None
+    short = payload["quant_validation"]["horizons"]["short_term"]
+    assert short["validation_status"] == "descriptive"
+    assert short["calibration"]["promotionStatus"] == "research_only"
+    assert short["calibration"]["eligibleForTrading"] is False
+    assert "当前横截面不是同日完整快照" in short["calibration"]["reason"]
+    assert payload["quant_snapshot"]["eligible_for_trading"] is False
 
 
 def test_single_target_is_unavailable_and_never_default_neutral() -> None:

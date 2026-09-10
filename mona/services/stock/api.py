@@ -31,6 +31,7 @@ from mona.services.stock.diagnosis import (
     DiagnosisStateError,
     DiagnosisStorageError,
 )
+from mona.services.stock.diagnosis_outcome import calculate_diagnosis_outcome
 from mona.services.stock.evidence import EvidenceService
 from mona.services.stock.failover import FailoverProvider, IntradayFailoverProvider
 from mona.services.stock.indicators import (
@@ -100,12 +101,20 @@ from mona.services.stock.v6_tracking import (
     ensure_v6_tracking_snapshot,
     latest_v6_observations,
 )
+from mona.services.stock.westock_runtime import create_default_westock_provider
 
 _MAX_QUOTE_IDS = 50
 _MAX_KLINE_LIMIT = 250
 _DEFAULT_NEWS_LIMIT = 5
 _MAX_NEWS_LIMIT = 8
 _ID_RE = re.compile(r"^(XSHG|XSHE|BJSE):(\d{6})$")
+
+
+def _finite_number(value: Any) -> float | None:
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        return None
+    result = float(value)
+    return result if math.isfinite(result) else None
 
 _STORE: WatchlistStore | None = None
 _PROVIDER: FailoverProvider | None = None
@@ -143,11 +152,13 @@ def _diagnosis_service(request: web.Request) -> DiagnosisService:
     if evidence_service is None and callable(evidence_factory):
         evidence_service = evidence_factory(request)
     if evidence_service is None:
+        cache_root = Path.home() / ".mona" / "stock" / "cache"
         evidence_service = EvidenceService(
             workspace=workspace,
             provider=provider,
             research_provider=GovernmentResearchProvider(),
-            cache_root=Path.home() / ".mona" / "stock" / "cache",
+            supplement_provider=create_default_westock_provider(cache_root),
+            cache_root=cache_root,
         )
     return DiagnosisService(
         workspace,
@@ -485,6 +496,53 @@ async def handle_stock_diagnosis_get(request: web.Request) -> web.Response:
     except (ValueError, DiagnosisNotFoundError):
         return _error(404, "diagnosis_not_found", "诊股记录不存在")
     return web.json_response(_diagnosis_wire(record))
+
+
+async def handle_stock_diagnosis_outcome(request: web.Request) -> web.Response:
+    diagnosis_id = request.match_info.get("diagnosis_id", "")
+    try:
+        service = _diagnosis_service(request)
+        record = service.get(diagnosis_id)
+    except (ValueError, DiagnosisNotFoundError):
+        return _error(404, "diagnosis_not_found", "诊股记录不存在")
+    report = record.get("report")
+    if not isinstance(report, dict):
+        return _error(409, "diagnosis_not_ready", "诊股结论尚未生成")
+    if _finite_number(report.get("current_price")) is None and isinstance(service, DiagnosisService):
+        inputs = service.store.load_inputs(diagnosis_id)
+        evidence = inputs.get("evidence")
+        quote = evidence.get("quote") if isinstance(evidence, dict) else None
+        price = quote.get("price") if isinstance(quote, dict) else None
+        if _finite_number(price) is not None:
+            report = {**report, "current_price": price}
+    instrument = report.get("instrument")
+    if not isinstance(instrument, dict):
+        return _error(409, "diagnosis_not_trackable", "诊股报告缺少标的信息")
+    try:
+        target = InstrumentRef(
+            exchange=str(instrument["exchange"]),
+            symbol=str(instrument["symbol"]),
+            instrument_type=str(instrument.get("instrument_type") or "equity"),
+        )
+        provider = request.app.get("stock_diagnosis_provider") or _provider()
+        target_series, benchmark_series = await asyncio.gather(
+            provider.kline(target, limit=640),
+            provider.kline(
+                InstrumentRef(exchange="XSHG", symbol="000985", instrument_type="index"),
+                limit=640,
+            ),
+        )
+    except (KeyError, ProviderError, TypeError, ValueError):
+        return _error(502, "outcome_data_unavailable", "诊股结果跟踪所需行情暂不可用")
+    outcome = calculate_diagnosis_outcome(
+        report,
+        getattr(target_series, "bars", []) or [],
+        getattr(benchmark_series, "bars", []) or [],
+        calculated_at=datetime.now(CN_TZ).isoformat(),
+    )
+    if outcome is None:
+        return _error(409, "diagnosis_not_trackable", "诊股报告缺少报告时价格锚点，请重新诊股")
+    return web.json_response(outcome)
 
 
 async def handle_stock_diagnosis_delete(request: web.Request) -> web.Response:
@@ -2249,6 +2307,9 @@ async def handle_stock_research_preflight(request: web.Request) -> web.Response:
         workspace=_preflight_workspace(request),
         provider=_provider(),
         research_provider=GovernmentResearchProvider(),
+        supplement_provider=create_default_westock_provider(
+            Path.home() / ".mona" / "stock" / "cache"
+        ),
         cache_root=Path.home() / ".mona" / "stock" / "cache",
     )
     try:

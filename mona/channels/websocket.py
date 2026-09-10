@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import base64
 import binascii
+import copy
 import email.utils
 import hashlib
 import hmac
@@ -23,7 +24,7 @@ from collections.abc import Callable
 from datetime import datetime
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, ClassVar, Self
-from urllib.parse import parse_qs, unquote, urlparse
+from urllib.parse import parse_qs, quote, unquote, urlparse
 
 from loguru import logger
 from pydantic import Field, field_validator, model_validator
@@ -51,7 +52,7 @@ from mona.utils.media_decode import (
 from mona.utils.subagent_channel_display import scrub_subagent_messages_for_channel
 from mona.webui.settings_api import (
     WebUISettingsError,
-    probe_provider_models,
+    probe_provider_model_details,
     settings_payload,
     update_agent_settings,
     update_channel_settings,
@@ -68,7 +69,13 @@ from mona.webui.sidebar_state import (
     write_webui_sidebar_state,
 )
 from mona.webui.thread_disk import delete_webui_thread
-from mona.webui.transcript import append_transcript_object, build_webui_thread_response
+from mona.webui.transcript import (
+    append_transcript_object,
+    build_webui_thread_response,
+    read_transcript_lines,
+    replay_transcript_to_ui_messages,
+    write_transcript_objects,
+)
 
 if TYPE_CHECKING:
     from mona.session.manager import SessionManager
@@ -286,10 +293,27 @@ def _parse_inbound_payload(raw: str) -> str | None:
 # Accept UUIDs and short scoped keys like "unified:default". Keeps the capability
 # namespace small enough to rule out path traversal / quote injection tricks.
 _CHAT_ID_RE = re.compile(r"^[A-Za-z0-9_:-]{1,64}$")
+_MAX_QUOTE_AUTHOR_CHARS = 80
+_MAX_QUOTE_CONTENT_CHARS = 4_000
 
 
 def _is_valid_chat_id(value: Any) -> bool:
     return isinstance(value, str) and _CHAT_ID_RE.match(value) is not None
+
+
+def _parse_message_quote(value: Any) -> dict[str, str] | None:
+    """Validate the compact quote preview carried with a WebUI user turn."""
+    if not isinstance(value, dict):
+        return None
+    author = value.get("author")
+    content = value.get("content")
+    if not isinstance(author, str) or not isinstance(content, str):
+        return None
+    author = " ".join(author.split())[:_MAX_QUOTE_AUTHOR_CHARS]
+    content = content.strip()[:_MAX_QUOTE_CONTENT_CHARS]
+    if not author or not content:
+        return None
+    return {"author": author, "content": content}
 
 
 def _parse_envelope(raw: str) -> dict[str, Any] | None:
@@ -730,6 +754,7 @@ class WebSocketChannel(BaseChannel):
         self._run_step_message_state: dict[str, dict[str, Any]] = {}
         self._runtime_model_name = runtime_model_name
         self._settings_restart_sections: set[str] = set()
+        self._skill_setup_jobs: Any = None
         # Process-local WeChat QR login session (single-use, replaced on each start).
         self._weixin_login_session: Any = None
         # HMAC secret for signing media URLs. Persisted to disk so signed
@@ -757,11 +782,12 @@ class WebSocketChannel(BaseChannel):
         self._conn_default.pop(connection, None)
 
     async def _maybe_push_active_goal_state(self, chat_id: str) -> None:
-        """Replay an active sustained goal from session metadata after *chat_id* is subscribed.
+        """Replay the authoritative goal snapshot after *chat_id* is subscribed.
 
         Goal metadata lives on the session JSONL and survives gateway restarts, but
         connected clients normally see it via ``goal_state`` / ``turn_end`` frames.
-        Pushing here makes refresh + reconnect restore the strip without a new model turn.
+        Pushing inactive snapshots too clears client-side goals completed while disconnected
+        and goals from older builds that were not created by an explicit ``/goal`` command.
         """
         if self._session_manager is None:
             return
@@ -770,8 +796,6 @@ class WebSocketChannel(BaseChannel):
         if not isinstance(meta, dict):
             meta = {}
         blob = goal_state_ws_blob(meta)
-        if not blob.get("active"):
-            return
         await self.send_goal_state(chat_id, blob)
 
     async def _maybe_push_turn_run_wall_clock(self, chat_id: str) -> None:
@@ -953,6 +977,15 @@ class WebSocketChannel(BaseChannel):
                 return self._handle_token_issue_http(connection, request)
 
         # 2. Bootstrap (`/webui/bootstrap`): mint WS/API tokens + shared session metadata.
+        if got == "/health":
+            return _http_json_response(
+                {
+                    "status": "ok",
+                    "service": "mona-websocket",
+                    "capabilities": ["webui-bootstrap-v1", "sessions-v1"],
+                }
+            )
+
         if got == "/webui/bootstrap":
             return self._handle_bootstrap(connection, request)
 
@@ -1082,6 +1115,9 @@ class WebSocketChannel(BaseChannel):
 
         if got == "/api/ppt/download":
             return self._handle_ppt_download(request)
+
+        if got == "/api/ppt/project-path":
+            return self._handle_ppt_project_path(request)
 
         if got == "/api/ppt/preview-port":
             return self._handle_ppt_preview_port(request)
@@ -1277,14 +1313,12 @@ class WebSocketChannel(BaseChannel):
         # Sidebar/chat listing for WS-backed sessions only — CLI / Slack / etc.
         # keys are not intended for resume over this HTTP surface.
         #
-        # Collect chat IDs owned by video / PPT projects so they can be hidden
-        # from the sidebar (each maker view has its own history panel).
+        # Video maker keeps its own history panel. PPT now lives in the main
+        # conversation sidebar, so PPT project chats remain visible here.
         hidden_chat_ids: set[str] = set()
         try:
             workspace_path = self.workspace
-            # Video and PPT sessions are hidden from the main sidebar — each
-            # has its own history panel inside the dedicated maker view.
-            for kind in ("video_projects", "ppt_projects"):
+            for kind in ("video_projects",):
                 kind_dir = workspace_path / kind
                 if kind_dir.is_dir():
                     for dot in kind_dir.glob("*/.chat_id"):
@@ -1305,7 +1339,7 @@ class WebSocketChannel(BaseChannel):
                 continue
             # Hidden rooms (stock-module design §4.4) are invisible execution
             # containers — never listed in the sidebar, same discipline as the
-            # video/PPT-owned chats above.
+            # video-owned chats above.
             conversation = s.get("conversation")
             if isinstance(conversation, dict) and conversation.get("hidden") is True:
                 continue
@@ -1796,14 +1830,19 @@ class WebSocketChannel(BaseChannel):
             api_key = _query_first(query, "api_key") or _query_first(query, "apiKey")
         api_base = _query_first(query, "api_base") or _query_first(query, "apiBase")
         try:
-            models = await probe_provider_models(
+            model_details = await probe_provider_model_details(
                 provider_name=provider_name,
                 api_key=api_key,
                 api_base=api_base,
             )
         except WebUISettingsError as e:
             return _http_json_response({"error": e.message, "models": []})
-        return _http_json_response({"models": models})
+        return _http_json_response(
+            {
+                "models": [item["id"] for item in model_details],
+                "model_details": model_details,
+            }
+        )
 
     def _handle_settings_web_search_update(self, request: WsRequest) -> Response:
         if not self._check_api_token(request):
@@ -2417,13 +2456,39 @@ class WebSocketChannel(BaseChannel):
                 content,
                 content_type="application/vnd.openxmlformats-officedocument.presentationml.presentation",
                 extra_headers=[
-                    ("Content-Disposition", f'attachment; filename="{filename}"'),
+                    (
+                        "Content-Disposition",
+                        "attachment; filename=\"presentation.pptx\"; "
+                        f"filename*=UTF-8''{quote(filename, safe='')}",
+                    ),
                     ("Cache-Control", "no-cache"),
                 ],
             )
         except Exception as e:
             logger.exception("ppt download error")
             return _http_error(500, str(e))
+
+    def _handle_ppt_project_path(self, request: WsRequest) -> Response:
+        if not self._check_api_token(request):
+            return _http_error(401, "Unauthorized")
+        query = _parse_query(request.path)
+        project_name = _query_first(query, "project") or ""
+        if (
+            not project_name
+            or "/" in project_name
+            or "\\" in project_name
+            or ".." in project_name
+        ):
+            return _http_error(400, "invalid project name")
+        projects_root = (self.workspace / "ppt_projects").resolve()
+        project_dir = (projects_root / project_name).resolve()
+        try:
+            project_dir.relative_to(projects_root)
+        except ValueError:
+            return _http_error(400, "invalid project name")
+        if not project_dir.is_dir():
+            return _http_error(404, "project not found")
+        return _http_json_response({"path": str(project_dir)})
 
     def _handle_ppt_preview_port(self, request: WsRequest) -> Response:
         if not self._check_api_token(request):
@@ -3221,7 +3286,13 @@ class WebSocketChannel(BaseChannel):
             if att is None:
                 continue
             mime, _ = mimetypes.guess_type(path.name)
-            kind = "video" if mime and mime.startswith("video/") else "image"
+            kind = (
+                "image"
+                if mime and mime.startswith("image/")
+                else "video"
+                if mime and mime.startswith("video/")
+                else "file"
+            )
             out.append(
                 {"kind": kind, "url": att["url"], "name": att.get("name", path.name)},
             )
@@ -3247,7 +3318,7 @@ class WebSocketChannel(BaseChannel):
                 else f"task_{uuid.uuid4().hex}"
             )
             meta["task_id"] = task_id
-            task_started = self._start_artifact_task(chat_id, task_id, content)
+            task_started = self._start_artifact_task(chat_id, task_id)
             user_obj: dict[str, Any] = {
                 "event": "user",
                 "chat_id": chat_id,
@@ -3260,6 +3331,9 @@ class WebSocketChannel(BaseChannel):
             display_content = meta.get("display_content")
             if isinstance(display_content, str) and display_content:
                 user_obj["display_content"] = display_content
+            quote = meta.get("quote")
+            if isinstance(quote, dict):
+                user_obj["quote"] = quote
             if media:
                 user_obj["media_paths"] = list(media)
             self._try_append_webui_transcript(chat_id, user_obj)
@@ -3449,9 +3523,8 @@ class WebSocketChannel(BaseChannel):
         self,
         chat_id: str,
         task_id: str,
-        user_message: str = "",
     ) -> bool:
-        """Persist a workspace baseline for a new user-controlled task."""
+        """Persist the identity of a new user-controlled artifact task."""
         if self._session_manager is None:
             return False
         session_key = f"websocket:{chat_id}"
@@ -3460,30 +3533,55 @@ class WebSocketChannel(BaseChannel):
         if isinstance(current, dict) and current.get("id") == task_id:
             return False
 
-        baseline: dict[str, list[Any]] = {}
-        # Owner resolution reads persisted session metadata; materialize a
-        # newly created chat before resolving its Agent output root.
-        self._session_manager.save(session)
-        owner = self._session_artifact_owner(session_key)
-        if owner is not None:
-            from mona.config.paths import get_agent_output_dir
-            from mona.utils.artifact_listing import list_artifacts
-
-            base, agent_id = owner
-            try:
-                listing = list_artifacts(get_agent_output_dir(base, agent_id))
-                baseline = {item.path: [item.size, item.modified_at] for item in listing.files}
-            except Exception:
-                logger.exception("Failed to capture artifact task baseline for {}", chat_id)
-
         session.metadata[_ARTIFACT_TASK_STATE_KEY] = {
             "id": task_id,
             "started_at": time.time(),
-            "baseline": baseline,
         }
-        reset_task_plan(session.metadata, task_id, user_message)
+        reset_task_plan(session.metadata, task_id)
         self._session_manager.save(session)
         return True
+
+    def _artifact_refs_from_task(self, session_key: str, task_id: str) -> list[Any]:
+        """Project successful writes from this task, never shared-directory changes."""
+        from mona.agent.artifacts import coerce_artifact_ref
+        from mona.webui.transcript import read_transcript_lines
+
+        refs: list[Any] = []
+        current_task_id = None
+        for record in read_transcript_lines(session_key):
+            if record.get("event") == "user":
+                current_task_id = record.get("task_id")
+                continue
+            if record.get("event") not in {"file_edit", "artifact_rename"}:
+                continue
+            # Older edit records have no task id; their user-turn boundary
+            # supplies it. An explicit id also isolates late events from old tasks.
+            if record.get("task_id", current_task_id) != task_id:
+                continue
+            if record.get("event") == "artifact_rename":
+                old_path, new_path = record.get("path"), record.get("new_path")
+                if not isinstance(old_path, str) or not isinstance(new_path, str):
+                    continue
+                for index, ref in enumerate(refs):
+                    path = ref.relative_path
+                    if path == old_path or path.startswith(old_path + "/"):
+                        renamed = coerce_artifact_ref({
+                            **ref.model_dump(mode="json"),
+                            "relative_path": new_path + path[len(old_path):],
+                        })
+                        if renamed is not None:
+                            refs[index] = renamed
+                continue
+            edits = record.get("edits")
+            for edit in edits if isinstance(edits, list) else []:
+                if not isinstance(edit, dict) or edit.get("status") != "done":
+                    continue
+                ref = coerce_artifact_ref(edit.get("artifact_ref"))
+                if ref is None:
+                    ref = self._legacy_session_artifact_ref(session_key, edit)
+                if ref is not None and ref.session_id in (None, session_key):
+                    refs.append(ref)
+        return refs
 
     def _artifact_refs_from_session(self, session_key: str) -> list[Any]:
         """Read explicit delivery references from the session projection."""
@@ -4005,25 +4103,30 @@ class WebSocketChannel(BaseChannel):
                         "artifact_ref": ref.model_dump(mode="json"),
                     }
                 session_files.append(item)
-            task_state = self._artifact_task_state(
-                decoded_key,
-                requested_task_id or None,
+            # The client first scans while a historical conversation is still
+            # hydrating. Do not guess its process task from server state: wait
+            # for the session-scoped artifact_task_started event, then require
+            # that exact id on the follow-up request.
+            task_state = (
+                self._artifact_task_state(decoded_key, requested_task_id)
+                if requested_task_id
+                else None
             )
             active_task_id = (
                 str(task_state.get("id")) if task_state is not None else requested_task_id or None
             )
-            baseline = task_state.get("baseline") if task_state is not None else None
-            baseline = baseline if isinstance(baseline, dict) else {}
             task_files: list[dict[str, Any]] = []
             task_paths: set[str] = set()
             if task_state is not None:
+                recorded_paths = {
+                    ref.relative_path
+                    for ref in self._artifact_refs_from_task(decoded_key, active_task_id)
+                    if ref.owner_kind == "agent" and ref.owner_id == agent_id
+                }
                 for path, item in scanned.items():
-                    if path in session_paths:
+                    if path not in recorded_paths or path in session_paths:
                         continue
                     if any(part in _ARTIFACT_TASK_SKIP_DIRS for part in Path(path).parts[:-1]):
-                        continue
-                    signature = [item.get("size"), item.get("modified_at")]
-                    if baseline.get(path) == signature:
                         continue
                     task_paths.add(path)
                     task_files.append(item)
@@ -4105,6 +4208,18 @@ class WebSocketChannel(BaseChannel):
             return _http_error(500, f"rename failed: {exc}")
 
         relative_path = destination.relative_to(root).as_posix()
+        if scope == "shared":
+            task_state = self._artifact_task_state(decoded_key)
+            if task_state is not None:
+                self._try_append_webui_transcript(
+                    decoded_key.removeprefix("websocket:"),
+                    {
+                        "event": "artifact_rename",
+                        "task_id": task_state["id"],
+                        "path": source.relative_to(root).as_posix(),
+                        "new_path": relative_path,
+                    },
+                )
         if scope == "shared" and agent_id and destination.is_file():
             from mona.agent.artifacts import ArtifactRef
 
@@ -5325,7 +5440,7 @@ class WebSocketChannel(BaseChannel):
                 raise ValueError("config must be an object")
             if definition.id == MONA_AGENT_ID and update.get("enabled") is False:
                 raise ValueError("Mona cannot be disabled")
-            if "script_enabled_skills" in update:
+            if "script_enabled_skills" in update or "script_enabled_skill_hashes" in update:
                 raise ValueError("script permissions must be changed from a skill action")
             granted = update.get("granted_tools")
             if definition.id != MONA_AGENT_ID and isinstance(granted, list):
@@ -5547,14 +5662,11 @@ class WebSocketChannel(BaseChannel):
                 raise ValueError("skill name and action are required")
             manager = SkillManager(agent_id, registry=self._room_agent_registry())
             if action == "enable_scripts":
-                from mona.config.paths import (
-                    get_agent_skills_dir,
-                    get_managed_runtimes_dir,
-                )
+                from mona.config.paths import get_managed_runtimes_dir
                 from mona.runtime.agent_env import AgentEnvironmentManager
                 from mona.runtime.skill_env import runtime_spec_from_skill_markdown
 
-                skill_dir = get_agent_skills_dir(agent_id) / name
+                skill_dir = manager.active_skill_dir(name)
                 skill_content = (skill_dir / "SKILL.md").read_text(encoding="utf-8")
                 await AgentEnvironmentManager(get_managed_runtimes_dir()).prepare_all(
                     skill_dir,
@@ -5575,6 +5687,103 @@ class WebSocketChannel(BaseChannel):
             await self._send_event(
                 connection,
                 "agent_skill_action_result",
+                ok=False,
+                request_id=request_id,
+                detail=str(exc),
+            )
+
+    def _skill_setup_job_manager(self) -> Any:
+        if self._skill_setup_jobs is None:
+            from mona.config.paths import get_managed_runtimes_dir
+            from mona.runtime.skill_jobs import SkillSetupJobManager
+
+            self._skill_setup_jobs = SkillSetupJobManager(
+                get_managed_runtimes_dir() / "jobs" / "skill-setups.json"
+            )
+        return self._skill_setup_jobs
+
+    async def _handle_agent_skill_setup_start_envelope(
+        self, connection: Any, envelope: dict[str, Any]
+    ) -> None:
+        request_id = self._room_request_id(envelope)
+        try:
+            from mona.agent.partners import normalize_agent_id
+
+            agent_id = normalize_agent_id(str(envelope.get("agent_id", "")))
+            name = envelope.get("name")
+            if not isinstance(name, str):
+                raise ValueError("skill name is required")
+            job = self._skill_setup_job_manager().start(
+                agent_id, name, self._room_agent_registry()
+            )
+            await self._send_event(
+                connection,
+                "agent_skill_setup_start_result",
+                ok=True,
+                request_id=request_id,
+                job=job.model_dump(by_alias=True, mode="json"),
+            )
+        except Exception as exc:
+            await self._send_event(
+                connection,
+                "agent_skill_setup_start_result",
+                ok=False,
+                request_id=request_id,
+                detail=str(exc),
+            )
+
+    async def _handle_agent_skill_setup_status_envelope(
+        self, connection: Any, envelope: dict[str, Any]
+    ) -> None:
+        request_id = self._room_request_id(envelope)
+        try:
+            from mona.agent.partners import normalize_agent_id
+
+            job_id = envelope.get("job_id")
+            if isinstance(job_id, str) and job_id:
+                job = self._skill_setup_job_manager().get(job_id)
+            else:
+                agent_id = normalize_agent_id(str(envelope.get("agent_id", "")))
+                name = envelope.get("name")
+                if not isinstance(name, str):
+                    raise ValueError("skill name is required")
+                job = self._skill_setup_job_manager().latest(agent_id, name)
+            await self._send_event(
+                connection,
+                "agent_skill_setup_status_result",
+                ok=True,
+                request_id=request_id,
+                job=job.model_dump(by_alias=True, mode="json") if job else None,
+            )
+        except Exception as exc:
+            await self._send_event(
+                connection,
+                "agent_skill_setup_status_result",
+                ok=False,
+                request_id=request_id,
+                detail=str(exc),
+            )
+
+    async def _handle_agent_skill_setup_cancel_envelope(
+        self, connection: Any, envelope: dict[str, Any]
+    ) -> None:
+        request_id = self._room_request_id(envelope)
+        try:
+            job_id = envelope.get("job_id")
+            if not isinstance(job_id, str) or not job_id:
+                raise ValueError("job id is required")
+            job = await self._skill_setup_job_manager().cancel(job_id)
+            await self._send_event(
+                connection,
+                "agent_skill_setup_cancel_result",
+                ok=True,
+                request_id=request_id,
+                job=job.model_dump(by_alias=True, mode="json"),
+            )
+        except Exception as exc:
+            await self._send_event(
+                connection,
+                "agent_skill_setup_cancel_result",
                 ok=False,
                 request_id=request_id,
                 detail=str(exc),
@@ -6012,6 +6221,9 @@ class WebSocketChannel(BaseChannel):
         display_content = envelope.get("display_content")
         if isinstance(display_content, str) and display_content:
             metadata["display_content"] = display_content
+        quote = _parse_message_quote(envelope.get("quote"))
+        if quote is not None:
+            metadata["quote"] = quote
         routed = await self._route_room_agent_mentions(
             connection,
             sender_id=sender_id,
@@ -6138,6 +6350,9 @@ class WebSocketChannel(BaseChannel):
                 }
                 if isinstance(display_content, str) and display_content:
                     user_obj["display_content"] = display_content
+                quote = metadata.get("quote")
+                if isinstance(quote, dict):
+                    user_obj["quote"] = quote
                 if media_paths:
                     user_obj["media_paths"] = list(media_paths)
                 self._try_append_webui_transcript(chat_id, user_obj)
@@ -6149,6 +6364,10 @@ class WebSocketChannel(BaseChannel):
                 extra["display_content"] = display_content
             if sender_id:
                 extra["sender_id"] = sender_id
+            if metadata.get("origin") == "profile_advice":
+                extra["origin"] = "profile_advice"
+                if metadata.get("profile_advice_id"):
+                    extra["profile_advice_id"] = metadata["profile_advice_id"]
             session.add_message("user", content, **extra)
             self._session_manager.save(session)
 
@@ -6248,6 +6467,9 @@ class WebSocketChannel(BaseChannel):
             }
             if isinstance(display_content, str) and display_content:
                 user_obj["display_content"] = display_content
+            quote = metadata.get("quote")
+            if isinstance(quote, dict):
+                user_obj["quote"] = quote
             if media_paths:
                 user_obj["media_paths"] = list(media_paths)
             self._try_append_webui_transcript(chat_id, user_obj)
@@ -6262,6 +6484,10 @@ class WebSocketChannel(BaseChannel):
                 extra["display_content"] = display_content
             if sender_id:
                 extra["sender_id"] = sender_id
+            if metadata.get("origin") == "profile_advice":
+                extra["origin"] = "profile_advice"
+                if metadata.get("profile_advice_id"):
+                    extra["profile_advice_id"] = metadata["profile_advice_id"]
             session.add_message("user", content, **extra)
             self._session_manager.save(session)
 
@@ -7418,6 +7644,131 @@ class WebSocketChannel(BaseChannel):
             run=serialize_run(run) if run is not None else None,
         )
 
+    async def _handle_branch_chat_envelope(
+        self,
+        connection: Any,
+        envelope: dict[str, Any],
+    ) -> None:
+        source_chat_id = envelope.get("source_chat_id")
+        assistant_ordinal = envelope.get("assistant_ordinal")
+        source_task_id = envelope.get("source_task_id")
+        if not _is_valid_chat_id(source_chat_id):
+            await self._send_event(connection, "error", detail="invalid source_chat_id")
+            return
+        if (
+            not isinstance(assistant_ordinal, int)
+            or isinstance(assistant_ordinal, bool)
+            or assistant_ordinal <= 0
+        ):
+            await self._send_event(connection, "error", detail="invalid assistant_ordinal")
+            return
+        if source_task_id is not None and (
+            not isinstance(source_task_id, str)
+            or not _API_KEY_RE.fullmatch(source_task_id.strip())
+        ):
+            await self._send_event(connection, "error", detail="invalid source_task_id")
+            return
+        if self._session_manager is None:
+            await self._send_event(connection, "error", detail="session manager unavailable")
+            return
+
+        source_key = f"websocket:{source_chat_id}"
+        source_session = self._session_manager.get_or_create(source_key)
+        transcript = read_transcript_lines(source_key)
+        if not source_session.messages or not transcript:
+            await self._send_event(connection, "error", detail="source chat not found")
+            return
+
+        replayed = replay_transcript_to_ui_messages(transcript)
+        assistants = [
+            message
+            for message in replayed
+            if message.get("role") == "assistant"
+            and message.get("kind") not in {"trace", "workflowRun", "discussion"}
+            and str(message.get("content") or "").strip()
+        ]
+        normalized_task_id = source_task_id.strip() if isinstance(source_task_id, str) else None
+        if assistant_ordinal > len(assistants):
+            await self._send_event(connection, "error", detail="branch message not found")
+            return
+        selected = assistants[assistant_ordinal - 1]
+        selected_task_id = selected.get("taskId")
+        if normalized_task_id and selected_task_id and selected_task_id != normalized_task_id:
+            await self._send_event(connection, "error", detail="stale branch message")
+            return
+        transcript_end = selected.get("sourceTranscriptIndex")
+        if not isinstance(transcript_end, int) or not 0 <= transcript_end < len(transcript):
+            await self._send_event(connection, "error", detail="branch boundary unavailable")
+            return
+
+        selected_content = str(selected.get("content") or "")
+        candidates = [
+            (index, message)
+            for index, message in enumerate(source_session.messages)
+            if message.get("role") == "assistant"
+            and not message.get("tool_calls")
+            and not message.get("_command")
+            and isinstance(message.get("content"), str)
+            and message["content"].strip()
+        ]
+        session_end: int | None = None
+        if assistant_ordinal <= len(candidates):
+            candidate_index, candidate = candidates[assistant_ordinal - 1]
+            if candidate.get("content") == selected_content:
+                session_end = candidate_index
+        if session_end is None:
+            matching = [
+                index
+                for index, message in candidates
+                if message.get("content") == selected_content
+                and (
+                    normalized_task_id is None
+                    or message.get("task_id") == normalized_task_id
+                )
+            ]
+            if matching:
+                session_end = matching[-1]
+        if session_end is None:
+            await self._send_event(connection, "error", detail="session branch boundary unavailable")
+            return
+
+        from mona.session.manager import Session
+
+        new_chat_id = str(uuid.uuid4())
+        new_key = f"websocket:{new_chat_id}"
+        metadata = {
+            key: copy.deepcopy(source_session.metadata[key])
+            for key in ("webui", "workspace", "agent_kind", "conversation")
+            if key in source_session.metadata
+        }
+        metadata["webui"] = True
+        source_title = source_session.metadata.get("title")
+        if isinstance(source_title, str) and source_title.strip():
+            metadata["title"] = f"{source_title.strip()} · 分支"[:60]
+        branch = Session(
+            key=new_key,
+            messages=copy.deepcopy(source_session.messages[: session_end + 1]),
+            metadata=metadata,
+            last_consolidated=0,
+        )
+        copied_transcript = copy.deepcopy(transcript[: transcript_end + 1])
+        for record in copied_transcript:
+            if "chat_id" in record:
+                record["chat_id"] = new_chat_id
+        try:
+            write_transcript_objects(new_key, copied_transcript)
+            self._session_manager.save(branch)
+        except Exception:
+            delete_webui_thread(new_key)
+            self._session_manager.delete_session(new_key)
+            self.logger.exception("Failed to branch chat {}", source_chat_id)
+            await self._send_event(connection, "error", detail="branch chat failed")
+            return
+
+        self._attach(connection, new_chat_id)
+        await self._send_event(connection, "attached", chat_id=new_chat_id)
+        await self._hydrate_after_subscribe(new_chat_id)
+
     async def _dispatch_envelope(
         self,
         connection: Any,
@@ -7426,6 +7777,9 @@ class WebSocketChannel(BaseChannel):
     ) -> None:
         """Route one typed inbound envelope (``new_chat`` / ``attach`` / ``message``)."""
         t = envelope.get("type")
+        if t == "branch_chat":
+            await self._handle_branch_chat_envelope(connection, envelope)
+            return
         if t == "new_chat":
             new_id = str(uuid.uuid4())
             ephemeral = envelope.get("ephemeral") is True
@@ -7526,6 +7880,15 @@ class WebSocketChannel(BaseChannel):
         if t == "agent_skill_action":
             await self._handle_agent_skill_action_envelope(connection, envelope)
             return
+        if t == "agent_skill_setup_start":
+            await self._handle_agent_skill_setup_start_envelope(connection, envelope)
+            return
+        if t == "agent_skill_setup_status":
+            await self._handle_agent_skill_setup_status_envelope(connection, envelope)
+            return
+        if t == "agent_skill_setup_cancel":
+            await self._handle_agent_skill_setup_cancel_envelope(connection, envelope)
+            return
         if t == "agent_skill_update":
             await self._handle_agent_skill_update_envelope(connection, envelope)
             return
@@ -7595,14 +7958,22 @@ class WebSocketChannel(BaseChannel):
                 if message_agent_kind not in DOCUMENT_PROFILES:
                     await self._send_event(connection, "error", detail="invalid agent_kind")
                     return
-                if not await _has_subscription_access():
-                    await self._send_event(connection, "error", detail="membership_required")
-                    return
+            session_agent_kind = None
             if self._session_manager is not None:
                 session = self._session_manager.get_or_create(f"websocket:{cid}")
-                if session.metadata.get("agent_kind") and not await _has_subscription_access():
-                    await self._send_event(connection, "error", detail="membership_required")
-                    return
+                stored_agent_kind = session.metadata.get("agent_kind")
+                if isinstance(stored_agent_kind, str) and stored_agent_kind in DOCUMENT_PROFILES:
+                    session_agent_kind = stored_agent_kind
+            if message_agent_kind is not None and message_agent_kind != session_agent_kind:
+                await self._send_event(
+                    connection,
+                    "error",
+                    detail="invalid_agent_kind_context",
+                )
+                return
+            if session_agent_kind and not await _has_subscription_access():
+                await self._send_event(connection, "error", detail="membership_required")
+                return
 
             raw_media = envelope.get("media")
             media_paths: list[str] = []
@@ -7662,11 +8033,20 @@ class WebSocketChannel(BaseChannel):
             metadata: dict[str, Any] = {"remote": getattr(connection, "remote_address", None)}
             if envelope.get("webui") is True:
                 metadata["webui"] = True
-            if message_agent_kind is not None:
-                metadata["agent_kind"] = message_agent_kind
+            if session_agent_kind is not None:
+                metadata["agent_kind"] = session_agent_kind
             task_id = envelope.get("task_id")
             if isinstance(task_id, str) and _API_KEY_RE.fullmatch(task_id.strip()):
                 metadata["task_id"] = task_id.strip()
+            origin = envelope.get("origin")
+            profile_advice_id = envelope.get("profile_advice_id")
+            if origin == "profile_advice":
+                metadata["origin"] = "profile_advice"
+                if (
+                    isinstance(profile_advice_id, str)
+                    and _API_KEY_RE.fullmatch(profile_advice_id.strip())
+                ):
+                    metadata["profile_advice_id"] = profile_advice_id.strip()
             terminal_session_id = envelope.get("terminal_session_id")
             if isinstance(terminal_session_id, str) and terminal_session_id:
                 metadata["terminal_session_id"] = terminal_session_id
@@ -7713,11 +8093,31 @@ class WebSocketChannel(BaseChannel):
             browser_tab_id = envelope.get("browser_tab_id")
             if isinstance(browser_tab_id, str) and browser_tab_id:
                 metadata["browser_tab_id"] = browser_tab_id
+            office_session_id = envelope.get("office_session_id")
+            if isinstance(office_session_id, str):
+                office_session_id = office_session_id.strip()
+                if _API_KEY_RE.fullmatch(office_session_id):
+                    metadata["office_session_id"] = office_session_id
+            office_document_type = envelope.get("office_document_type")
+            if office_document_type in {"docs", "sheets", "slides"}:
+                metadata["office_document_type"] = office_document_type
+            office_display_name = envelope.get("office_display_name")
+            if isinstance(office_display_name, str) and office_display_name.strip():
+                metadata["office_display_name"] = " ".join(office_display_name.split())[:160]
+            canvas_id = envelope.get("canvas_id")
+            if isinstance(canvas_id, str) and _API_KEY_RE.fullmatch(canvas_id.strip()):
+                metadata["canvas_id"] = canvas_id.strip()
+            canvas_path = envelope.get("canvas_path")
+            if isinstance(canvas_path, str) and canvas_path.strip():
+                metadata["canvas_path"] = canvas_path.strip()[:2000]
             # IMPORTANT: persist display_content for history replay.
             # DO NOT remove — keeps user messages showing original input, not enriched prompts.
             display_content = envelope.get("display_content")
             if isinstance(display_content, str) and display_content:
                 metadata["display_content"] = display_content
+            quote = _parse_message_quote(envelope.get("quote"))
+            if quote is not None:
+                metadata["quote"] = quote
             image_generation = envelope.get("image_generation")
             if isinstance(image_generation, dict) and image_generation.get("enabled") is True:
                 aspect_ratio = image_generation.get("aspect_ratio")
@@ -7995,7 +8395,14 @@ class WebSocketChannel(BaseChannel):
             lat_i = int(lat) if isinstance(lat, (int, float)) else None
             gs = msg.metadata.get("goal_state")
             gs_blob = gs if isinstance(gs, dict) else None
-            await self.send_turn_end(msg.chat_id, latency_ms=lat_i, goal_state=gs_blob)
+            token_usage = msg.metadata.get("token_usage")
+            await self.send_turn_end(
+                msg.chat_id,
+                latency_ms=lat_i,
+                goal_state=gs_blob,
+                task_id=msg.metadata.get("task_id"),
+                token_usage=token_usage if isinstance(token_usage, dict) else None,
+            )
             get_count = getattr(self._subagent_manager, "get_running_count_by_session", None)
             if callable(get_count) and get_count(f"websocket:{msg.chat_id}") > 0:
                 await self._send_combined_goal_status(msg.chat_id, "running")
@@ -8019,6 +8426,9 @@ class WebSocketChannel(BaseChannel):
                 "chat_id": msg.chat_id,
                 "edits": edits,
             }
+            task_id = msg.metadata.get("task_id")
+            if isinstance(task_id, str) and task_id:
+                payload["task_id"] = task_id
             self._try_append_webui_transcript(msg.chat_id, payload)
             if attached:
                 await self.send_artifacts_changed(chat_id=msg.chat_id)
@@ -8079,6 +8489,12 @@ class WebSocketChannel(BaseChannel):
         lat = msg.metadata.get("latency_ms")
         if isinstance(lat, (int, float)):
             payload["latency_ms"] = int(lat)
+        task_id = msg.metadata.get("task_id")
+        if isinstance(task_id, str) and task_id:
+            payload["task_id"] = task_id
+        token_usage = msg.metadata.get("token_usage")
+        if isinstance(token_usage, dict) and token_usage:
+            payload["token_usage"] = token_usage
         if msg.metadata.get("_tool_events"):
             payload["tool_events"] = msg.metadata["_tool_events"]
         task_plan = msg.metadata.get("task_plan")
@@ -8182,6 +8598,9 @@ class WebSocketChannel(BaseChannel):
             )
         if meta.get("_stream_id") is not None:
             body["stream_id"] = meta["_stream_id"]
+        task_id = meta.get("task_id")
+        if isinstance(task_id, str) and task_id:
+            body["task_id"] = task_id
         self._try_append_webui_transcript(chat_id, body)
         raw = json.dumps(body, ensure_ascii=False)
         for connection in conns:
@@ -8193,6 +8612,8 @@ class WebSocketChannel(BaseChannel):
         latency_ms: int | None = None,
         *,
         goal_state: dict[str, Any] | None = None,
+        task_id: str | None = None,
+        token_usage: dict[str, Any] | None = None,
     ) -> None:
         """Signal that the agent has fully finished processing the current turn."""
         conns = list(self._subs.get(chat_id, ()))
@@ -8203,6 +8624,10 @@ class WebSocketChannel(BaseChannel):
             body["latency_ms"] = int(latency_ms)
         if goal_state is not None:
             body["goal_state"] = goal_state
+        if isinstance(task_id, str) and task_id:
+            body["task_id"] = task_id
+        if token_usage:
+            body["token_usage"] = token_usage
         self._try_append_webui_transcript(chat_id, body)
         raw = json.dumps(body, ensure_ascii=False)
         for connection in conns:

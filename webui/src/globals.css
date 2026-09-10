@@ -2,6 +2,12 @@
 @tailwind components;
 @tailwind utilities;
 
+@font-face {
+  font-family: "Anton";
+  src: url("./assets/fonts/Anton-Regular.ttf") format("truetype");
+  font-display: swap;
+}
+
 /* UI control typography: tabs, toolbars, labels, tags and buttons share 12px. */
 .text-micro {
   font-size: 0.75rem;
@@ -269,146 +275,380 @@ span[class*="rounded"][class*="px-"] {
 }
 
 @layer utilities {
-  /* Brand boot scene: only the logo perimeter, scan line and status signal move. */
+  .mona-welcome-shell {
+    container-type: inline-size;
+  }
+
+  @container (max-width: 760px) {
+    .mona-welcome-grid {
+      grid-template-columns: minmax(0, 1fr);
+      gap: 1rem;
+    }
+
+    .mona-welcome-primary {
+      min-height: auto;
+      padding-right: 0;
+    }
+
+    .mona-welcome-dashboard {
+      justify-content: flex-start;
+      padding-left: 0;
+    }
+  }
+
+  .mona-home-wordmark {
+    position: relative;
+    background: linear-gradient(
+      102deg,
+      hsl(var(--foreground)) 0%,
+      hsl(var(--foreground)) 58%,
+      hsl(var(--brand-red) / 0.72) 76%,
+      hsl(var(--brand-red)) 94%,
+      hsl(var(--brand-red) / 0.9) 100%
+    );
+    background-clip: text;
+    color: transparent;
+    font-family: "Anton", sans-serif;
+    font-size: 3.2rem;
+    font-weight: 400;
+    line-height: 0.9;
+    letter-spacing: 0.025em;
+    -webkit-background-clip: text;
+    -webkit-text-fill-color: transparent;
+  }
+
+  .mona-home-wordmark::after {
+    position: absolute;
+    inset: 0;
+    background: linear-gradient(
+      100deg,
+      transparent 40%,
+      hsl(var(--brand-red) / 0.12) 46%,
+      hsl(var(--brand-red) / 0.78) 49%,
+      hsl(var(--background) / 0.95) 50.5%,
+      hsl(var(--brand-red)) 52%,
+      transparent 59%
+    );
+    background-size: 300% 100%;
+    background-repeat: no-repeat;
+    background-clip: text;
+    color: transparent;
+    content: attr(data-text);
+    filter: drop-shadow(4px 0 8px hsl(var(--brand-red) / 0.22));
+    opacity: 0;
+    pointer-events: none;
+    -webkit-background-clip: text;
+    -webkit-text-fill-color: transparent;
+    animation: mona-home-wordmark-sweep 8s linear infinite;
+  }
+
+  .mona-home-avatar::after {
+    position: absolute;
+    inset: 0;
+    z-index: 2;
+    border-radius: inherit;
+    background: linear-gradient(
+      90deg,
+      hsl(var(--brand-red) / 0.16),
+      transparent 34%,
+      transparent 66%,
+      hsl(var(--ai-cyan) / 0.18)
+    );
+    content: "";
+    opacity: 0;
+    pointer-events: none;
+    animation: mona-home-avatar-overlay 8s steps(1, end) infinite;
+  }
+
+  .mona-home-avatar {
+    animation: mona-home-avatar-frame 8s steps(1, end) infinite;
+  }
+
+  .mona-home-avatar-image {
+    transform: translateX(-50%);
+    animation: mona-home-avatar-glitch 8s steps(1, end) infinite;
+  }
+
+  @keyframes mona-home-avatar-glitch {
+    0%,
+    52%,
+    60%,
+    100% {
+      filter: none;
+      transform: translateX(-50%);
+    }
+    53% {
+      filter: contrast(1.22) saturate(1.24) drop-shadow(3px 0 0 hsl(var(--brand-red) / 0.86)) drop-shadow(-3px 0 0 hsl(var(--ai-cyan) / 0.8));
+      transform: translateX(calc(-50% - 4px)) skewX(-3deg);
+    }
+    54.5% {
+      filter: brightness(0.92) contrast(1.34) drop-shadow(-4px 0 0 hsl(var(--brand-red) / 0.8)) drop-shadow(4px 0 0 hsl(var(--ai-cyan) / 0.74));
+      transform: translateX(calc(-50% + 4px)) skewX(2deg);
+    }
+    56% {
+      filter: brightness(1.16) saturate(1.35) drop-shadow(3px 0 0 hsl(var(--brand-red) / 0.72));
+      transform: translateX(calc(-50% - 3px)) translateY(-1px) skewX(-2deg);
+    }
+    57.5% {
+      filter: contrast(1.2) drop-shadow(-3px 0 0 hsl(var(--ai-cyan) / 0.72));
+      transform: translateX(calc(-50% + 3px)) translateY(1px);
+    }
+    59% {
+      filter: drop-shadow(2px 0 0 hsl(var(--brand-red) / 0.58)) drop-shadow(-1px 0 0 hsl(var(--ai-cyan) / 0.48));
+      transform: translateX(calc(-50% - 1px));
+    }
+  }
+
+  @keyframes mona-home-avatar-frame {
+    0%,
+    52%,
+    60%,
+    100% {
+      border-color: hsl(var(--foreground) / 0.1);
+      box-shadow: 0 1px 2px 0 rgb(0 0 0 / 0.05);
+    }
+    53%,
+    56% {
+      border-color: hsl(var(--brand-red) / 0.72);
+      box-shadow: 4px 0 0 hsl(var(--brand-red) / 0.3), -4px 0 0 hsl(var(--ai-cyan) / 0.28);
+    }
+    54.5%,
+    57.5% {
+      border-color: hsl(var(--ai-cyan) / 0.72);
+      box-shadow: -3px 0 0 hsl(var(--brand-red) / 0.28), 3px 0 0 hsl(var(--ai-cyan) / 0.3);
+    }
+    59% {
+      border-color: hsl(var(--foreground) / 0.18);
+      box-shadow: 0 0 10px hsl(var(--ai-cyan) / 0.18);
+    }
+  }
+
+  @keyframes mona-home-avatar-overlay {
+    0%,
+    52%,
+    60%,
+    100% { opacity: 0; }
+    53%,
+    56% { opacity: 0.9; }
+    54.5%,
+    57.5% { opacity: 0.42; }
+    59% { opacity: 0.68; }
+  }
+
+  @keyframes mona-home-wordmark-sweep {
+    0%,
+    62% {
+      background-position: 135% 50%;
+      opacity: 0;
+    }
+    66% { opacity: 1; }
+    96% { opacity: 0.92; }
+    100% {
+      background-position: -35% 50%;
+      opacity: 0;
+    }
+  }
+
   .mona-startup-scene {
+    --mona-startup-exit-x: 0px;
+    --mona-startup-exit-y: 0px;
+    --mona-startup-exit-scale: 0.86;
     isolation: isolate;
     background:
-      radial-gradient(circle at 50% 42%, hsl(var(--ai-cyan) / 0.08), transparent 28rem),
+      radial-gradient(circle at 50% 48%, hsl(var(--ai-cyan) / 0.08), transparent 32rem),
       hsl(var(--background));
   }
 
-  .mona-startup-grid {
+  .mona-startup-halo {
     position: absolute;
-    inset: 0;
-    pointer-events: none;
-    opacity: 0.28;
-    background-image:
-      linear-gradient(hsl(var(--foreground) / 0.045) 1px, transparent 1px),
-      linear-gradient(90deg, hsl(var(--foreground) / 0.045) 1px, transparent 1px);
-    background-size: 42px 42px;
-    mask-image: linear-gradient(to bottom, transparent, black 20%, black 80%, transparent);
-  }
-
-  .mona-startup-content {
-    position: relative;
-    z-index: 1;
-    animation: mona-startup-enter var(--motion-arrival) var(--ease-entrance) both;
-  }
-
-  .mona-startup-kicker {
-    color: hsl(var(--brand-red));
-  }
-
-  .mona-startup-kicker-signal {
-    width: 18px;
-    height: 2px;
-    background: hsl(var(--brand-red));
-  }
-
-  .mona-startup-logo-wrap {
-    position: relative;
-    display: grid;
-    width: 148px;
-    height: 148px;
-    margin-top: 34px;
-    place-items: center;
-  }
-
-  .mona-startup-logo {
-    position: relative;
-    z-index: 1;
-    width: 116px;
-    height: 116px;
-    border: 1px solid hsl(var(--foreground) / 0.14);
-    border-radius: 24px;
-    object-fit: cover;
-    box-shadow: 0 0 28px hsl(var(--ai-cyan) / 0.14);
-  }
-
-  .mona-startup-orbit {
-    position: absolute;
-    inset: 3px;
-    border: 1px solid hsl(var(--ai-cyan) / 0.48);
-    border-left-color: hsl(var(--brand-red) / 0.76);
+    width: min(72vw, 780px);
+    aspect-ratio: 1;
     border-radius: 999px;
-    animation: mona-startup-orbit 9s linear infinite;
+    background: radial-gradient(circle, hsl(var(--ai-cyan) / 0.08), transparent 66%);
+    filter: blur(12px);
   }
 
-  .mona-startup-orbit::after {
+  .mona-startup-stage {
+    position: relative;
+    width: min(76vw, 620px);
+    height: min(64vh, 600px);
+  }
+
+  .mona-startup-human-stack {
     position: absolute;
-    top: 7px;
+    top: 0;
     left: 50%;
-    width: 5px;
-    height: 5px;
-    border-radius: 999px;
-    background: hsl(var(--brand-red));
-    content: "";
+    width: min(52vw, 380px);
+    height: 100%;
     transform: translateX(-50%);
   }
 
-  .mona-startup-scan {
+  .mona-startup-human {
     position: absolute;
+    inset: 0;
+    width: 100%;
+    height: 100%;
+    object-fit: contain;
+    object-position: center bottom;
+    transform-origin: center center;
+  }
+
+  .mona-startup-human-ghost-dark {
+    opacity: 0.58;
+    animation: mona-startup-ghost-dark 2.2s steps(1, end) infinite;
+  }
+
+  .mona-startup-human-ghost-light {
+    opacity: 0;
+    animation: mona-startup-ghost-light 2.2s steps(1, end) infinite;
+  }
+
+  .mona-startup-human-solid {
     z-index: 2;
-    width: 108px;
-    height: 2px;
-    background: hsl(var(--ai-cyan) / 0.85);
-    box-shadow: 0 0 12px hsl(var(--ai-cyan) / 0.5);
-    animation: mona-startup-scan 2.4s ease-in-out infinite;
+    opacity: 0;
+    transform: scale(0.985);
+    transition:
+      opacity 300ms ease,
+      transform 760ms var(--ease-entrance);
   }
 
-  .mona-startup-status-line {
-    width: 24px;
-    height: 2px;
-    background: hsl(var(--ai-cyan));
-    animation: mona-startup-signal 1.8s ease-in-out infinite;
+  .mona-startup-cat {
+    position: absolute;
+    bottom: 10%;
+    left: 50%;
+    z-index: 3;
+    width: min(36vw, 270px);
+    height: auto;
+    transform: translateX(-50%);
+    transform-origin: center bottom;
+    filter: drop-shadow(0 18px 30px hsl(var(--foreground) / 0.08));
+    animation: mona-startup-cat-breathe 2.8s ease-in-out infinite;
+    transition:
+      opacity 260ms ease,
+      transform 360ms var(--ease-exit);
   }
 
-  @keyframes mona-startup-enter {
-    from {
+  .mona-startup-awakening {
+    margin-top: 10px;
+    background: linear-gradient(
+      105deg,
+      hsl(var(--foreground) / 0.58) 34%,
+      hsl(var(--brand-blue) / 0.48) 45%,
+      hsl(var(--ai-cyan)) 50%,
+      hsl(var(--brand-blue) / 0.48) 55%,
+      hsl(var(--foreground) / 0.58) 66%
+    );
+    background-size: 300% 100%;
+    background-clip: text;
+    color: transparent;
+    font-size: 20px;
+    font-weight: 500;
+    letter-spacing: 0.1em;
+    filter: drop-shadow(0 0 10px hsl(var(--brand-blue) / 0.14));
+    animation: mona-startup-copy-shimmer 3.2s ease-in-out infinite;
+    transition: opacity 220ms ease;
+  }
+
+  .mona-startup-scene.is-exiting {
+    animation: mona-startup-scene-exit 860ms ease forwards;
+  }
+
+  .mona-startup-scene.is-exiting .mona-startup-cat {
+    opacity: 0;
+    animation: none;
+    transform: translateX(-50%) translateY(12px) scale(0.94);
+  }
+
+  .mona-startup-scene.is-exiting .mona-startup-human-ghost-dark,
+  .mona-startup-scene.is-exiting .mona-startup-human-ghost-light {
+    opacity: 0;
+    animation: none;
+  }
+
+  .mona-startup-scene.is-exiting .mona-startup-human-solid {
+    opacity: 1;
+    transform:
+      translate(var(--mona-startup-exit-x), var(--mona-startup-exit-y))
+      scale(var(--mona-startup-exit-scale));
+  }
+
+  .mona-startup-scene.is-exiting .mona-startup-awakening {
+    opacity: 0;
+  }
+
+  @keyframes mona-startup-ghost-dark {
+    0%,
+    42%,
+    100% { opacity: 0.58; }
+    43%,
+    62% { opacity: 0.12; }
+  }
+
+  @keyframes mona-startup-ghost-light {
+    0%,
+    42%,
+    63%,
+    100% { opacity: 0; }
+    43%,
+    62% { opacity: 0.72; }
+  }
+
+  @keyframes mona-startup-cat-breathe {
+    0%,
+    100% { transform: translateX(-50%) scaleY(0.99); }
+    50% { transform: translateX(-50%) translateY(-3px) scaleY(1.01); }
+  }
+
+  @keyframes mona-startup-copy-shimmer {
+    from { background-position: 130% 50%; }
+    to { background-position: -130% 50%; }
+  }
+
+  @keyframes mona-startup-scene-exit {
+    0%,
+    62% { background-color: hsl(var(--background)); }
+    100% {
+      background-color: transparent;
       opacity: 0;
-      transform: translateY(8px);
-    }
-    to {
-      opacity: 1;
-      transform: translateY(0);
     }
   }
 
-  @keyframes mona-startup-orbit {
-    to {
-      transform: rotate(360deg);
-    }
-  }
-
-  @keyframes mona-startup-scan {
-    0%,
-    100% {
-      opacity: 0.24;
-      transform: translateY(-38px);
-    }
-    50% {
-      opacity: 0.95;
-      transform: translateY(38px);
-    }
-  }
-
-  @keyframes mona-startup-signal {
-    0%,
-    100% {
-      opacity: 0.42;
-    }
-    50% {
-      opacity: 1;
+  @media (max-width: 700px) {
+    .mona-startup-stage { height: min(60vh, 540px); }
+    .mona-startup-human-stack { width: min(70vw, 330px); }
+    .mona-startup-cat {
+      bottom: 12%;
+      width: min(54vw, 240px);
     }
   }
 
   @media (prefers-reduced-motion: reduce) {
-    .mona-startup-content,
-    .mona-startup-orbit,
-    .mona-startup-scan,
-    .mona-startup-status-line {
+    .mona-home-avatar,
+    .mona-home-avatar::after,
+    .mona-home-avatar-image,
+    .mona-home-wordmark::after {
       animation: none;
     }
+
+    .mona-home-wordmark::after {
+      content: none;
+    }
+
+    .mona-startup-human-ghost-dark,
+    .mona-startup-human-ghost-light,
+    .mona-startup-cat,
+    .mona-startup-awakening,
+    .mona-startup-scene.is-exiting {
+      animation: none;
+    }
+
+    .mona-startup-human-solid,
+    .mona-startup-cat {
+      transition: none;
+    }
+
+    .mona-startup-human-ghost-dark { opacity: 0.5; }
+    .mona-startup-human-ghost-light { opacity: 0; }
   }
 
   .shadow-inner-right {
@@ -602,6 +842,28 @@ span[class*="rounded"][class*="px-"] {
     will-change: transform, opacity;
   }
 
+  @keyframes mona-update-breathe {
+    0%,
+    100% {
+      transform: scale(1);
+      opacity: 0.82;
+    }
+    50% {
+      transform: scale(1.08);
+      opacity: 1;
+    }
+  }
+  .mona-update-breathe {
+    animation: mona-update-breathe 1.8s ease-in-out infinite;
+    will-change: transform, opacity;
+  }
+  @media (prefers-reduced-motion: reduce) {
+    .mona-update-breathe {
+      animation: none;
+      opacity: 1;
+    }
+  }
+
   /* Subtle scrollbar that doesn't fight the dark background.
      Lighter color + hover-reveal: thumb is hidden until the container is hovered,
      keeping the UI calm by default. See frontend spec skill for the full rule. */
@@ -790,15 +1052,6 @@ span[class*="rounded"][class*="px-"] {
   user-select: none !important;
 }
 
-/* ─── jit-viewer overrides ─────────────────────────────────────────── */
-.jv-viewer__branding { display: none !important; }
-.jv-toolbar__bottom:not(:has(.jv-toolbar-btn)):not(:has(.jv-pagination)) { display: none !important; }
-.jv-toolbar__filename { display: none !important; }
-.jv-toolbar__top, .jv-toolbar__bottom { height: 36px !important; padding: 0 8px !important; }
-.jv-toolbar__left, .jv-toolbar__center { display: none !important; }
-.jv-toolbar__top .jv-toolbar__right { flex: 1 !important; justify-content: flex-start !important; }
-.jv-toolbar-btn--fullscreen { margin-left: auto !important; }
-.jv-toolbar-btn { padding: 4px 8px !important; }
 .notes-prosemirror li[data-type="taskItem"] > label input[type="checkbox"] {
   cursor: pointer !important;
   margin: 0 !important;
@@ -1175,16 +1428,6 @@ span[class*="rounded"][class*="px-"] {
 .flowchart-surface.flowchart-exporting .flowchart-edge-bezier-handle,
 .flowchart-surface.flowchart-exporting .flowchart-edge-handle-line {
   display: none !important;
-}
-
-/* ─── jit-viewer 预览自适应父窗口 ──────────────────────────────────
-   SDK 自身 .jv-viewer 是 flex column 容器，但未设 flex:1，
-   在 block 父容器中高度会塌缩。OfficePreview 的 host 容器
-   已改为 flex column，这里让 .jv-viewer 在其中 flex 撑满。 */
-.office-preview-host > .jv-viewer {
-  flex: 1;
-  min-height: 0;
-  width: 100%;
 }
 
 /* ─── Reduced motion（阶段 2 全局落地，redesign-plan §3.4 / §5.6）──────

@@ -1,4 +1,4 @@
-import { Loader2, Play, Square, UserRound } from "lucide-react";
+import { Loader2, LockKeyhole, Play, Square, UserRound } from "lucide-react";
 import { useState } from "react";
 
 import { Button } from "@/components/ui/button";
@@ -15,14 +15,14 @@ import {
   type StockReportV6HorizonDecision,
   type StockReportV6MaterializedPlan,
   type StockDiagnosisV1,
-  type StockDiagnosisDecisionBasisRow,
   type StockDiagnosisHorizonDecision,
+  type StockDiagnosisOutcome,
   isStockReportV5Document,
   isStockReportV6Document,
   type StockStance,
 } from "@/lib/stock-api";
 import { cn } from "@/lib/utils";
-import { diagnosisActionLabel, diagnosisCurrentActionLabel } from "./labels";
+import { diagnosisCurrentActionLabel, diagnosisEntryConditionStatus } from "./labels";
 
 export type DecisionRadarTab = "market" | "fundamentals" | "news" | "report";
 
@@ -36,8 +36,10 @@ export interface DecisionRadarProps {
   report: StockReportDocument | null;
   /** Latest successful standard AI diagnosis takes precedence over deep history. */
   diagnosisReport?: StockDiagnosisV1 | null;
+  diagnosisOutcome?: StockDiagnosisOutcome | null;
   /** Actual workbench mode; omitted for legacy callers/tests. */
   diagnosisMode?: boolean;
+  proLocked?: boolean;
   reportStance: StockStance | null | undefined;
   reportDataQuality: string | null | undefined;
   comparison: string;
@@ -753,85 +755,195 @@ function V6TradingDecisionPanel({ model }: { model: V6TradingDisplayModel }) {
 }
 
 function HorizonTabs({ activeHorizon, onChange }: { activeHorizon: HorizonKey; onChange: (horizon: HorizonKey) => void }) {
-  return <div className="flex border-b border-border/60" role="tablist" aria-label="研究周期">{HORIZONS.map(({ key, label }) => <button key={key} type="button" role="tab" aria-selected={activeHorizon === key} className={cn("flex-1 border-b-2 px-2 py-2 text-caption", activeHorizon === key ? "border-info font-medium text-foreground" : "border-transparent text-muted-foreground")} onClick={() => onChange(key)}>{label}</button>)}</div>;
+  return <div className="flex border-b border-border/60" role="tablist" aria-label="研究周期">{HORIZONS.map(({ key, label }) => <Button key={key} type="button" role="tab" aria-selected={activeHorizon === key} variant="ghost" size="sm" className={cn("h-auto flex-1 rounded-none border-b-2 px-2 py-2 text-caption", activeHorizon === key ? "border-info font-medium text-foreground" : "border-transparent text-muted-foreground")} onClick={() => onChange(key)}>{label}</Button>)}</div>;
 }
 
 function diagnosisValue(value: number | null | undefined, suffix = ""): string {
   return typeof value === "number" && Number.isFinite(value) ? `${value.toFixed(2)}${suffix}` : "本次未形成";
 }
 
-const LEGACY_FUNDAMENTAL_FACTOR_ORDER = [
-  "roe", "roic", "gross_margin", "net_margin", "revenue_yoy", "profit_yoy",
-  "growth_stability", "operating_cashflow", "cashflow_to_profit", "debt_ratio",
-  "interest_coverage", "current_ratio", "capex_to_cashflow", "pe", "pb",
-  "cashflow_yield", "audit_qualification", "restatement_count", "dilution_ratio",
-  "pledge_ratio", "related_party_transactions",
-];
-
-function diagnosisFactorMap(report: StockDiagnosisV1): Map<string, number> {
-  const result = new Map<string, number>();
-  (report.fundamental_factors?.short_term?.factors ?? []).forEach((factor) => {
-    const legacy = /^factor_(\d+)$/.exec(factor.name);
-    const name = legacy ? LEGACY_FUNDAMENTAL_FACTOR_ORDER[Number(legacy[1]) - 1] : factor.name;
-    if (name && typeof factor.value === "number" && Number.isFinite(factor.value)) result.set(name, factor.value);
-  });
-  return result;
+function diagnosisPriceRange(
+  low: number | null | undefined,
+  high: number | null | undefined,
+  fallback: number | null | undefined,
+): string {
+  if (typeof low === "number" && Number.isFinite(low) && typeof high === "number" && Number.isFinite(high)) {
+    return low === high ? `${low.toFixed(2)} 元` : `${low.toFixed(2)}–${high.toFixed(2)} 元`;
+  }
+  return diagnosisValue(fallback, " 元");
 }
 
-function fallbackDiagnosisBasisRows(
-  report: StockDiagnosisV1,
-  decision: StockDiagnosisHorizonDecision,
-): StockDiagnosisDecisionBasisRow[] {
-  const factors = diagnosisFactorMap(report);
-  const revenue = factors.get("revenue_yoy");
-  const profit = factors.get("profit_yoy");
-  const cashflow = factors.get("cashflow_to_profit");
-  const fundamentalSummary = typeof revenue === "number" && typeof profit === "number"
-    ? `${revenue > 0 && profit > 0 ? "盈利修复" : revenue < 0 && profit < 0 ? "营收与利润承压" : "营收与利润分化"}${typeof cashflow === "number" ? `，${cashflow < 0.8 ? "现金流偏弱" : cashflow >= 1 ? "现金流匹配利润" : "现金流尚可"}` : ""}`
-    : "经营结论已形成，因子评分待更新";
-  const fundamentalScore = report.fundamental_factors?.short_term?.factor_score;
-  const fundamentalLabel = typeof fundamentalScore === "number"
-    ? fundamentalScore >= 0.65 ? "偏强" : fundamentalScore <= 0.35 ? "偏弱" : "中性"
-    : typeof revenue === "number" && typeof profit === "number" ? "中性" : "谨慎";
-  const bearish = decision.direction === "negative" || decision.not_holding_action === "avoid";
-  const riskSummary = decision.not_holding_action === "avoid" && decision.holding_action === "exit"
-    ? "回避新增，已持有执行退出"
-    : decision.not_holding_action === "avoid" && decision.holding_action === "reduce"
-      ? "回避新增，已持有优先降风险"
-      : "暂不新增，持仓按止损与仓位纪律执行";
-  return [
-    { key: "fundamental", label: "基本面", stance: fundamentalLabel === "中性" ? "neutral" : fundamentalLabel === "偏强" ? "positive" : fundamentalLabel === "偏弱" ? "negative" : "cautious", stance_label: fundamentalLabel, summary: fundamentalSummary },
-    { key: "quant", label: "量化验证", stance: bearish ? "negative" : "neutral", stance_label: bearish ? "偏空" : "中性", summary: bearish ? "短期趋势走弱，暂不新增仓位" : "量价信号分化，等待确认" },
-    { key: "sentiment", label: "情绪与预期", stance: "cautious", stance_label: "谨慎", summary: bearish ? "暂无反转信号，不提高仓位" : "等待市场与个股方向确认" },
-    { key: "risk", label: "风控纪律", stance: "strict", stance_label: "严格", summary: riskSummary },
-  ];
+function DiagnosisDecisionStrength({
+  score,
+  positiveThreshold,
+  negativeThreshold,
+}: {
+  score: number | null;
+  positiveThreshold: number;
+  negativeThreshold: number;
+}) {
+  if (score === null) return null;
+  const position = Math.max(0, Math.min(100, (score + 1) / 2 * 100));
+  const positivePosition = (positiveThreshold + 1) / 2 * 100;
+  const negativePosition = (negativeThreshold + 1) / 2 * 100;
+  const roundedScore = Math.sign(score) * Math.round(Math.abs(score) * 1000) / 10;
+  const signed = `${roundedScore >= 0 ? "+" : ""}${roundedScore.toFixed(1)}`;
+  const margin = score > positiveThreshold
+    ? score - positiveThreshold
+    : score < negativeThreshold
+      ? negativeThreshold - score
+      : null;
+  const summary = score > positiveThreshold
+    ? margin !== null && margin <= 0.05 ? "刚超过偏多门槛，方向优势有限" : "超过偏多门槛"
+    : score < negativeThreshold
+      ? margin !== null && margin <= 0.05 ? "刚跌破偏空门槛，方向劣势有限" : "跌破偏空门槛"
+      : "处于中性区间，尚未形成明确方向";
+  return (
+    <section data-testid="diagnosis-decision-strength">
+      <div className="flex items-baseline justify-between gap-3 text-body"><span className="font-medium">综合方向强度</span><span className="font-semibold tabular-nums">{signed}</span></div>
+      <div className="relative mt-2 h-2 rounded-full bg-gradient-to-r from-stock-down via-muted-foreground/30 to-stock-up" role="img" aria-label={`综合方向强度：${signed}`}>
+        <span className="absolute top-1/2 h-3 w-px -translate-y-1/2 bg-background/90" style={{ left: `${negativePosition}%` }} aria-hidden />
+        <span className="absolute top-1/2 h-3 w-px -translate-y-1/2 bg-background/90" style={{ left: `${positivePosition}%` }} aria-hidden />
+        <span className="absolute top-1/2 h-4 w-1 -translate-x-1/2 -translate-y-1/2 rounded-full border border-background bg-foreground shadow-sm" style={{ left: `${position}%` }} aria-hidden />
+      </div>
+      <div className="mt-1 flex justify-between text-micro text-muted-foreground"><span>偏空 -100</span><span>中性</span><span>偏多 +100</span></div>
+      <p className="mt-1 text-micro font-medium">{summary}</p>
+    </section>
+  );
 }
 
-function diagnosisBasisTone(value: StockDiagnosisDecisionBasisRow["stance"]): string {
-  if (value === "positive") return "text-stock-up";
-  if (value === "negative" || value === "strict") return "text-stock-down";
-  if (value === "cautious") return "text-warning";
-  return "text-foreground";
-}
-
-function DiagnosisRadarPanel({ decision, report }: { decision: StockDiagnosisHorizonDecision; report: StockDiagnosisV1 }) {
+function DiagnosisRadarPanel({ decision, report, currentPrice }: { decision: StockDiagnosisHorizonDecision; report: StockDiagnosisV1; currentPrice: number | null }) {
   const plan = decision.materialized_plan;
   const position = decision.position_plan;
-  const canEnter = decision.not_holding_action === "conditional_participation";
-  const basisRows = report.decision_radar.basis_rows?.length
-    ? report.decision_radar.basis_rows
-    : fallbackDiagnosisBasisRows(report, decision);
+  const hasParticipationPlan = decision.action === "conditional_participation"
+    || decision.not_holding_action === "conditional_participation";
+  const fundamentalScore = report.fundamental_factors?.short_term?.factor_score;
+  const quantHorizon = report.quant_factors?.short_term;
+  const directDecisionScore = typeof decision.decision_score === "number" ? decision.decision_score : null;
+  const fallbackFundamentalScore = typeof fundamentalScore === "number" ? fundamentalScore * 2 - 1 : null;
+  const fallbackTechnicalScore = typeof decision.factor_contributions?.trend === "number" ? decision.factor_contributions.trend : null;
+  const fallbackQuantScore = quantHorizon?.validation_status === "calibrated" && typeof quantHorizon.factor_score === "number" ? quantHorizon.factor_score * 2 - 1 : null;
+  const fallbackRawCandidates: Array<[string, number, number] | null> = [
+    fallbackFundamentalScore === null ? null : ["fundamental", fallbackFundamentalScore, 0.55],
+    fallbackTechnicalScore === null ? null : ["technical", fallbackTechnicalScore, 0.45],
+    fallbackQuantScore === null ? null : ["quant", fallbackQuantScore, 0.25],
+  ];
+  const fallbackRawComponents = fallbackRawCandidates.filter(
+    (item): item is [string, number, number] => item !== null,
+  );
+  const fallbackWeightTotal = fallbackRawComponents.reduce((sum, item) => sum + item[2], 0);
+  const fallbackDecisionScore = fallbackRawComponents.length >= 2
+    ? fallbackRawComponents.reduce((sum, item) => sum + item[1] * item[2], 0) / fallbackWeightTotal
+    : null;
+  const decisionScore = directDecisionScore ?? fallbackDecisionScore;
+  const entryThreshold = plan.reference_entry_high ?? plan.reference_entry;
+  const entryGapPct = typeof currentPrice === "number" && currentPrice > 0 && typeof entryThreshold === "number"
+    ? (entryThreshold / currentPrice - 1) * 100
+    : null;
+  const riskReference = plan.risk_reference_price ?? plan.reference_entry_high ?? plan.reference_entry;
+  const riskPerShare = plan.risk_per_share ?? (
+    typeof riskReference === "number" && typeof plan.stop_loss === "number" && riskReference > plan.stop_loss
+      ? riskReference - plan.stop_loss
+      : null
+  );
+  const riskPct = plan.risk_pct ?? (
+    typeof riskPerShare === "number" && typeof riskReference === "number" && riskReference > 0
+      ? riskPerShare / riskReference * 100
+      : null
+  );
+  const firstRiskRewardAfterFees = plan.risk_reward_first_after_fees;
+  const secondRiskRewardAfterFees = plan.risk_reward_second_after_fees;
+  const hasFeeRiskReward = typeof firstRiskRewardAfterFees === "number"
+    || typeof secondRiskRewardAfterFees === "number";
+  const hasPositionAdvice = typeof position.reference_position_pct === "number"
+    || typeof position.max_position_pct === "number"
+    || typeof position.risk_budget_pct === "number";
+  const feeGateStatus = plan.fee_gate_status;
+  const feeGateLabel = feeGateStatus === "passed"
+    ? "已通过"
+    : feeGateStatus === "failed"
+      ? "未通过"
+      : feeGateStatus === "unavailable"
+        ? "暂未形成"
+        : null;
+  const slippageStressStatus = plan.slippage_stress_status;
+  const currentEntryStatus = diagnosisEntryConditionStatus(decision, currentPrice);
+  const entryNotTriggered = currentEntryStatus === "not_triggered";
+  const actionBlockers = [
+    plan.fee_gate_status === "failed"
+      ? "扣除交易费率后的收益风险比未达标"
+      : plan.fee_gate_status === "unavailable" && decision.direction === "positive"
+        ? "扣除交易费率后的收益风险比暂未形成"
+        : null,
+    plan.risk_reward_gate_status === "failed"
+      ? "收益风险比未达到参与条件"
+      : null,
+    entryNotTriggered ? "价格参与条件尚未触发" : null,
+    plan.value_status !== "available"
+      ? "入场、止损或止盈计划尚未完整形成"
+      : null,
+    plan.risk_reward_gate_status !== "failed"
+      && plan.fee_gate_status !== "failed"
+      && position.value_status !== "available"
+      ? "风险预算或仓位依据尚未完整形成"
+      : null,
+    decision.direction === "neutral" ? "综合方向强度尚未超过参与门槛" : null,
+  ].filter((value): value is string => Boolean(value)).slice(0, 3);
+  const showActionBlockers = actionBlockers.length > 0 && (
+    decision.current_action === "wait"
+    || decision.not_holding_action === "wait"
+    || decision.not_holding_action === "conditional_participation" && entryNotTriggered
+  );
   return (
     <section className="space-y-5 pt-4" data-testid="decision-radar-ai-diagnosis">
       <div className="rounded-xl bg-muted/30 px-4 py-4">
         <div className="text-body font-medium">当前综合建议</div>
-        <div className="mt-1 text-display-sm font-semibold">{diagnosisCurrentActionLabel(decision)}</div>
-        <div className="mt-3 space-y-1 text-body"><p>未持有：{diagnosisActionLabel(decision.not_holding_action)}</p><p>已持有：{diagnosisActionLabel(decision.holding_action)}</p></div>
+        <div className="mt-1 text-display-sm font-semibold">{diagnosisCurrentActionLabel(decision, currentPrice)}</div>
+        {typeof currentPrice === "number" && (
+          <div className="mt-3 border-t border-border/60 pt-3 text-caption" data-testid="diagnosis-current-stock-status">
+            <p>当前个股：现价 <span className="font-semibold tabular-nums">{currentPrice.toFixed(2)} 元</span>{typeof entryThreshold === "number" ? ` · 参与确认线 ${entryThreshold.toFixed(2)} 元` : ""}</p>
+            {entryGapPct !== null && entryGapPct > 0 && <p className="mt-1 text-muted-foreground">距参与确认还需上涨 {entryGapPct.toFixed(2)}%</p>}
+            {entryGapPct !== null && entryGapPct <= 0 && <p className="mt-1 text-stock-up">当前价格已达到参与确认线</p>}
+          </div>
+        )}
+        {showActionBlockers && <div className="mt-3 border-t border-border/60 pt-3 text-caption" data-testid="diagnosis-action-blockers"><p className="font-medium text-warning">暂不买入的原因</p><ul className="mt-1 space-y-1 text-muted-foreground">{actionBlockers.map((reason) => <li key={reason}>· {reason}</li>)}</ul></div>}
       </div>
-      <section data-testid="decision-radar-four-step"><h3 className="text-title-sm font-semibold">四层分析</h3><div className="mt-2 divide-y divide-border/60 text-body">{basisRows.map((row) => <div key={row.key} className="grid grid-cols-[5.5rem_3.5rem_minmax(0,1fr)] gap-2 py-2"><span>{row.label}</span><span className={cn("font-medium", diagnosisBasisTone(row.stance))}>{row.stance_label}</span><span>{row.summary}</span></div>)}</div></section>
-      <section data-testid="decision-radar-ai-trading-plan"><h3 className="text-title-sm font-semibold">交易计划</h3><dl className="mt-3 grid grid-cols-[minmax(0,0.9fr)_minmax(0,1.5fr)] gap-x-3 gap-y-2 text-body"><dt className="text-muted-foreground">参考买入</dt><dd>{canEnter ? diagnosisValue(plan.reference_entry, " 元") : "当前不建议买入"}</dd><dt className="text-muted-foreground">回踩参与</dt><dd>{canEnter ? diagnosisValue(plan.pullback_entry, " 元") : "暂不参与"}</dd><dt className="text-muted-foreground">止损参考</dt><dd>{typeof plan.stop_loss === "number" ? diagnosisValue(plan.stop_loss, " 元") : "未设置固定止损价"}</dd><dt className="text-muted-foreground">第一止盈</dt><dd>{typeof plan.first_take_profit === "number" ? diagnosisValue(plan.first_take_profit, " 元") : "未设置固定止盈价"}</dd><dt className="text-muted-foreground">第二止盈</dt><dd>{typeof plan.second_take_profit === "number" ? diagnosisValue(plan.second_take_profit, " 元") : "未设置固定止盈价"}</dd></dl></section>
-      <section data-testid="decision-radar-ai-position"><h3 className="text-title-sm font-semibold">参考仓位</h3><div className="mt-3 grid grid-cols-2 gap-4 text-center"><div><div className="text-body text-muted-foreground">参考仓位</div><div className="mt-1 text-title font-semibold">{diagnosisValue(position.reference_position_pct, "%")}</div></div><div><div className="text-body text-muted-foreground">最大仓位</div><div className="mt-1 text-title font-semibold">{diagnosisValue(position.max_position_pct, "%")}</div></div></div><p className="mt-2 text-body text-muted-foreground">风险预算：{diagnosisValue(position.risk_budget_pct, "%")}</p></section>
-      <section data-testid="decision-radar-ai-boundary"><h3 className="text-title-sm font-semibold">计划边界</h3><dl className="mt-3 grid grid-cols-[minmax(0,0.9fr)_minmax(0,1.5fr)] gap-x-3 gap-y-2 text-body"><dt className="text-muted-foreground">有效期</dt><dd>{decision.valid_until ? `至 ${decision.valid_until.slice(0, 10)}` : "价格或基本面变化时复评"}</dd><dt className="text-muted-foreground">计划失效</dt><dd>{plan.invalidation?.join("；") || decision.review_trigger}</dd><dt className="text-muted-foreground">单笔风险预算</dt><dd>{diagnosisValue(plan.max_risk_pct ?? position.risk_budget_pct, "%")}</dd></dl></section>
+      {decisionScore !== null && <section data-testid="decision-radar-score-bars"><DiagnosisDecisionStrength score={decisionScore} positiveThreshold={decision.positive_threshold ?? 0.2} negativeThreshold={decision.negative_threshold ?? -0.2} /></section>}
+      <section data-testid="decision-radar-ai-trading-plan">
+        <h3 className="text-title-sm font-semibold">交易计划</h3>
+        <dl className="mt-3 grid grid-cols-[minmax(0,0.9fr)_minmax(0,1.5fr)] gap-x-3 gap-y-2 text-body">
+          <dt className="text-muted-foreground">参考买入</dt><dd>{hasParticipationPlan ? diagnosisPriceRange(plan.reference_entry_low, plan.reference_entry_high, plan.reference_entry) : "当前不建议买入"}</dd>
+          <dt className="text-muted-foreground">回踩参与</dt><dd>{hasParticipationPlan ? diagnosisPriceRange(plan.pullback_entry_low, plan.pullback_entry_high, plan.pullback_entry) : "暂不参与"}</dd>
+          <dt className="text-muted-foreground">止损参考</dt><dd>{typeof plan.stop_loss === "number" ? diagnosisValue(plan.stop_loss, " 元") : "未设置固定止损价"}</dd>
+          <dt className="text-muted-foreground">第一止盈</dt><dd>{typeof plan.first_take_profit === "number" ? diagnosisValue(plan.first_take_profit, " 元") : "未设置固定止盈价"}</dd>
+          <dt className="text-muted-foreground">第二止盈</dt><dd>{typeof plan.second_take_profit === "number" ? diagnosisValue(plan.second_take_profit, " 元") : "未设置固定止盈价"}</dd>
+        </dl>
+        <dl className="mt-3 grid grid-cols-[minmax(0,0.9fr)_minmax(0,1.5fr)] gap-x-3 gap-y-2 border-t border-border/60 pt-3 text-body" data-testid="decision-radar-ai-boundary">
+          <dt className="text-muted-foreground">计划有效期</dt><dd>{decision.valid_until ? `至 ${decision.valid_until.slice(0, 10)}` : "价格、趋势或基本面发生明显变化前"}</dd>
+          <dt className="text-muted-foreground">计划失效</dt><dd>{plan.invalidation?.join("；") || decision.review_trigger || "价格、趋势或基本面发生明显变化"}</dd>
+          <dt className="text-muted-foreground">重新诊股</dt><dd>{decision.review_trigger || "计划失效、目标到达或关键数据更新后"}</dd>
+        </dl>
+      </section>
+      {typeof riskPerShare === "number" && typeof riskPct === "number" && (
+        <section data-testid="decision-radar-risk-reward">
+          <h3 className="text-title-sm font-semibold">收益风险</h3>
+          <div className={cn("mt-3 grid gap-3 text-center text-caption", hasFeeRiskReward ? "grid-cols-3" : "grid-cols-1")}>
+            <div><div className="text-muted-foreground">计划风险</div><div className="mt-1 font-semibold tabular-nums">{riskPct.toFixed(2)}%</div><div className="text-micro text-muted-foreground">每股 {riskPerShare.toFixed(2)} 元</div></div>
+            {hasFeeRiskReward && <div><div className="text-muted-foreground">第一目标盈亏比</div><div className="mt-1 font-semibold tabular-nums">{typeof firstRiskRewardAfterFees === "number" ? `${firstRiskRewardAfterFees.toFixed(2)}R` : "—"}</div></div>}
+            {hasFeeRiskReward && <div><div className="text-muted-foreground">第二目标盈亏比</div><div className="mt-1 font-semibold tabular-nums">{typeof secondRiskRewardAfterFees === "number" ? `${secondRiskRewardAfterFees.toFixed(2)}R` : "—"}</div></div>}
+          </div>
+          {hasFeeRiskReward && feeGateLabel && <p className={cn("mt-3 border-t border-border/60 pt-2 text-caption", feeGateStatus === "passed" ? "text-stock-up" : feeGateStatus === "failed" ? "text-stock-down" : "text-warning")} data-testid="diagnosis-fee-risk-reward">费率后盈亏比：第一目标 {typeof firstRiskRewardAfterFees === "number" ? `${firstRiskRewardAfterFees.toFixed(2)}R` : "—"} · 第二目标 {typeof secondRiskRewardAfterFees === "number" ? `${secondRiskRewardAfterFees.toFixed(2)}R` : "—"} · {feeGateLabel}</p>}
+          {slippageStressStatus === "failed" && <p className="mt-2 text-micro text-warning" data-testid="diagnosis-liquidity-warning">成交成本压力较高，实际下单前需关注流动性。</p>}
+        </section>
+      )}
+      {hasPositionAdvice && <section data-testid="decision-radar-ai-position">
+        <h3 className="text-title-sm font-semibold">建议仓位</h3>
+        <div className="mt-3 grid grid-cols-2 gap-4 text-center">
+          <div><div className="text-caption text-muted-foreground">建议首仓</div><div className="mt-1 text-title font-semibold">{diagnosisValue(position.reference_position_pct, "%")}</div></div>
+          <div><div className="text-caption text-muted-foreground">建议上限</div><div className="mt-1 text-title font-semibold">{diagnosisValue(position.max_position_pct, "%")}</div></div>
+        </div>
+        <p className="mt-2 text-body text-muted-foreground">单笔风险预算：{diagnosisValue(position.risk_budget_pct, "%")}</p>
+      </section>}
     </section>
   );
 }
@@ -847,6 +959,7 @@ export function DecisionRadar({
   cancellingRun,
   diagnosisReport = null,
   diagnosisMode = false,
+  proLocked = false,
 }: DecisionRadarProps) {
   const v4 = isV4Report(report);
   const v5Report = isV5Report(report) ? report : null;
@@ -879,7 +992,11 @@ export function DecisionRadar({
     <div className="flex h-full min-h-0 min-w-0 flex-col bg-background" data-testid="decision-radar">
       <header className="flex h-12 shrink-0 items-center justify-between gap-2 border-b px-3">
         <h2 className="min-w-0 truncate text-ui font-semibold">决策雷达</h2>
-        {starting ? (
+        {proLocked ? (
+          <Button type="button" size="xs" className="text-caption" onClick={onStartRun}>
+            <LockKeyhole className="mr-1 h-3.5 w-3.5" aria-hidden />升级 Pro 解锁
+          </Button>
+        ) : starting ? (
           <Button type="button" variant="outline" size="xs" className="text-caption" disabled aria-label={diagnosisMode ? "正在准备AI诊股" : "正在准备投研"}><Loader2 className="mr-1 h-3.5 w-3.5 animate-spin" aria-hidden />准备中</Button>
         ) : runActive ? (
           <Button type="button" variant="outline" size="xs" className="text-caption" onClick={onCancelRun} disabled={cancellingRun}>
@@ -891,8 +1008,10 @@ export function DecisionRadar({
       </header>
 
       <div className="scrollbar-hover min-h-0 flex-1 overflow-y-auto px-3 pb-4">
-        {diagnosisReport ? (
-          <DiagnosisRadarPanel decision={diagnosisReport.decision_radar.current_decision ?? diagnosisReport.horizon_decisions.short_term} report={diagnosisReport} />
+        {proLocked ? (
+          <PendingTradingPlanPanel testId="decision-radar-pro-locked" status="Pro" headline="AI诊股为 Pro 功能" message="升级 Mona Pro 后可生成诊股结论、交易计划与历史记录" />
+        ) : diagnosisReport ? (
+          <DiagnosisRadarPanel decision={diagnosisReport.decision_radar.current_decision ?? diagnosisReport.horizon_decisions.short_term} report={diagnosisReport} currentPrice={quote.price ?? diagnosisReport.current_price ?? null} />
         ) : diagnosisMode ? (
           <PendingTradingPlanPanel testId="decision-radar-empty-state" status={runFailed ? "生成失败" : "尚未生成"} headline={runFailed ? undefined : "尚无AI诊股结论"} message={runFailed ? "本次AI诊股未形成结论，请重新诊股" : "请开始AI诊股生成当前建议"} />
         ) : !v4 && !v5 && !v6 ? (

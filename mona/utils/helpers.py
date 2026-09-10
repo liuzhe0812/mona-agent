@@ -354,12 +354,16 @@ def maybe_persist_tool_result(
         else:
             _write_text_atomic(path, text_payload)
 
-    preview = text_payload[:_TOOL_RESULT_PREVIEW_CHARS]
+    reference_overhead = _render_tool_result_reference(
+        path, original_size=len(text_payload), preview="", truncated_preview=True,
+    )
+    preview_chars = min(_TOOL_RESULT_PREVIEW_CHARS, max(0, max_chars - len(reference_overhead)))
+    preview = text_payload[:preview_chars]
     return _render_tool_result_reference(
         path,
         original_size=len(text_payload),
         preview=preview,
-        truncated_preview=len(text_payload) > _TOOL_RESULT_PREVIEW_CHARS,
+        truncated_preview=len(text_payload) > preview_chars,
     )
 
 

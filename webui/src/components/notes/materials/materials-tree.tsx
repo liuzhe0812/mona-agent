@@ -10,7 +10,6 @@ import {
   FolderPlus,
   Folder,
   RefreshCw,
-  Sparkles,
   Trash2,
   Upload,
   ExternalLink,
@@ -35,24 +34,21 @@ import type { MaterialsSelection, TreeNode } from "./types";
 
 function statusLabel(
   status?: MaterialsExtractStatus,
-  ingestStatus?: MaterialsFileEntry["ingestStatus"],
 ): string {
   if (!status) return "";
   switch (status.status) {
     case "ok":
-      if (ingestStatus === "ingested") return "已入库";
-      if (ingestStatus === "stale") return "待更新";
-      return "未入库";
+      return "";
     case "queued":
-      return "排队中";
+      return "处理中";
     case "running":
-      return "提取中";
+      return "处理中";
     case "error":
-      return "提取失败";
+      return "处理失败";
     case "unsupported":
-      return "不支持";
+      return "无法处理";
     case "stale":
-      return "待更新";
+      return "处理中";
     default:
       return "";
   }
@@ -60,12 +56,11 @@ function statusLabel(
 
 function statusColor(
   status?: MaterialsExtractStatus,
-  ingestStatus?: MaterialsFileEntry["ingestStatus"],
 ): string {
   if (!status) return "text-muted-foreground";
   switch (status.status) {
     case "ok":
-      return ingestStatus === "ingested" ? "text-emerald-600" : "text-amber-600";
+      return "text-emerald-600";
     case "queued":
     case "running":
     case "stale":
@@ -107,8 +102,7 @@ interface TreeRowProps {
   onCreateFolder: (parentDir: string) => void;
   onDelete: (path: string) => void;
   onMove: (path: string) => void;
-  onExtract: (path: string) => void;
-  onCompile: (path: string) => void;
+  onRetry: (path: string) => void;
   onDragDrop: (srcPath: string, targetDirRaw: string) => void;
   onOpenLocation: (path: string) => void;
   loadChildren: (path: string) => Promise<TreeNode[]>;
@@ -241,12 +235,12 @@ export function TreeRow(props: TreeRowProps) {
               <FileText className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
             )}
             <span className="min-w-0 flex-1 truncate">{node.entry.name}</span>
-            {!isDir && node.entry.extractStatus ? (
+            {!isDir && statusLabel(node.entry.extractStatus) ? (
               <span className={cn(
                 "shrink-0 text-[10px]",
-                statusColor(node.entry.extractStatus, node.entry.ingestStatus),
+                statusColor(node.entry.extractStatus),
               )}>
-                {statusLabel(node.entry.extractStatus, node.entry.ingestStatus)}
+                {statusLabel(node.entry.extractStatus)}
               </span>
             ) : null}
             {isDir && node.entry.fileCount != null ? (
@@ -261,7 +255,7 @@ export function TreeRow(props: TreeRowProps) {
             <>
               <ContextMenuItem onClick={() => props.onUpload(node.entry.path.replace(/^raw\//, ""))}>
                 <Upload className="mr-2 h-3.5 w-3.5" />
-                上传到此目录
+                添加到此目录
               </ContextMenuItem>
               <ContextMenuItem onClick={() => props.onCreateFolder(node.entry.path.replace(/^raw\//, ""))}>
                 <FolderPlus className="mr-2 h-3.5 w-3.5" />
@@ -269,16 +263,12 @@ export function TreeRow(props: TreeRowProps) {
               </ContextMenuItem>
               <ContextMenuSeparator />
             </>
-          ) : (
-            <ContextMenuItem onClick={() => props.onExtract(node.entry.path)}>
+          ) : node.entry.extractStatus?.status === "error" ? (
+            <ContextMenuItem onClick={() => props.onRetry(node.entry.path)}>
               <RefreshCw className="mr-2 h-3.5 w-3.5" />
-              重新提取
+              重试
             </ContextMenuItem>
-          )}
-          <ContextMenuItem onClick={() => props.onCompile(node.entry.path)}>
-            <Sparkles className="mr-2 h-3.5 w-3.5" />
-            入库
-          </ContextMenuItem>
+          ) : null}
           <ContextMenuSeparator />
           <ContextMenuItem onClick={() => props.onMove(node.entry.path)}>
             <FolderInput className="mr-2 h-3.5 w-3.5" />
@@ -294,7 +284,7 @@ export function TreeRow(props: TreeRowProps) {
             onClick={() => props.onDelete(node.entry.path)}
           >
             <Trash2 className="mr-2 h-3.5 w-3.5" />
-            删除
+            移出资料库
           </ContextMenuItem>
         </ContextMenuContent>
       </ContextMenu>

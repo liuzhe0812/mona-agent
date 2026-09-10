@@ -364,6 +364,15 @@ mod tests {
     }
 
     #[test]
+    fn browser_tabs_never_auto_allow_site_permissions() {
+        let source = include_str!("mod.rs");
+        let permission_hook = ["add_", "PermissionRequested"].concat();
+        let allow_state = ["COREWEBVIEW2_PERMISSION_STATE", "(1)"].concat();
+        assert!(!source.contains(&permission_hook));
+        assert!(!source.contains(&allow_state));
+    }
+
+    #[test]
     fn visible_bounds_updates_do_not_hide_the_webview() {
         let source = include_str!("mod.rs");
         let bounds = source
@@ -891,7 +900,6 @@ impl BrowserState {
                 let mut token: i64 = 0;
                 unsafe { let _ = core_webview.add_HistoryChanged(&hist_handler, &mut token); }
 
-                // PermissionRequested — 桌面应用全部放行权限请求，不弹 WebView2 默认权限提示
                 // DownloadStarting is the single download owner. Its COM
                 // operation outlives the source tab, matching browser behavior.
                 let dl_emit = download_event_app.clone();
@@ -997,25 +1005,9 @@ impl BrowserState {
                     }
                 }
 
-                use webview2_com::PermissionRequestedEventHandler;
-                use webview2_com::Microsoft::Web::WebView2::Win32::{
-                    ICoreWebView2PermissionRequestedEventArgs,
-                    COREWEBVIEW2_PERMISSION_STATE,
-                };
-                // 桌面应用全部放行权限请求，不弹 WebView2 默认权限提示
-                let perm_handler = PermissionRequestedEventHandler::create(Box::new(
-                    move |_sender: Option<ICoreWebView2>,
-                          args: Option<ICoreWebView2PermissionRequestedEventArgs>| {
-                        if let Some(args) = args {
-                            unsafe {
-                                let _ = args.SetState(COREWEBVIEW2_PERMISSION_STATE(1)); // ALLOW
-                            }
-                        }
-                        Ok(())
-                    },
-                ));
-                let mut token: i64 = 0;
-                unsafe { let _ = core_webview.add_PermissionRequested(&perm_handler, &mut token); }
+                // Leave site permission requests to WebView2's native prompt. The
+                // application must never grant camera, microphone, location, or
+                // clipboard access merely because an AI opened the page.
             }
             #[cfg(not(target_os = "windows"))]
             {

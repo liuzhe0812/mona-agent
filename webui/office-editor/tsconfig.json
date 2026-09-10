@@ -1,0 +1,36 @@
+{
+  "compilerOptions": {
+    "target": "ES2022",
+    "module": "ESNext",
+    "moduleResolution": "Bundler",
+    "jsx": "react-jsx",
+    "strict": true,
+    "isolatedModules": true,
+    "skipLibCheck": true,
+    "noEmit": true,
+    "types": ["node", "vite/client"],
+    "baseUrl": ".",
+    "paths": {
+      "@mona-xlsx-gateway": ["mona/xlsx-gateway.d.ts"],
+      "@genoffice/i18n": ["vendor/genoffice/packages/i18n/src/index.ts"],
+      "@genoffice/font-metrics": ["vendor/genoffice/packages/font-metrics/src/index.ts"],
+      "@genoffice/ui": ["vendor/genoffice/packages/ui/src/index.ts"],
+      "@genoffice/agent-core": ["vendor/genoffice/packages/agent-core/src/index.ts"],
+      "@genoffice/ai-provider": ["vendor/genoffice/packages/ai-provider/src/index.ts"],
+      "@genoffice/ai-search": ["vendor/genoffice/packages/ai-search/src/index.ts"],
+      "@genoffice/file-parse": ["vendor/genoffice/packages/file-parse/src/index.ts"],
+      "@genoffice/project-store": ["vendor/genoffice/packages/project-store/src/index.ts"],
+      "@genoffice/docx-engine": ["vendor/genoffice/packages/docx-engine/src/index.ts"],
+      "@genoffice/docx-engine/math": ["vendor/genoffice/packages/docx-engine/src/math.ts"],
+      "@genoffice/docx-engine/metafile": ["vendor/genoffice/packages/docx-engine/src/metafile.ts"],
+      "@genoffice/pptx-engine": ["vendor/genoffice/packages/pptx-engine/src/index.ts"],
+      "@genoffice/pptx-engine/custgeom": ["vendor/genoffice/packages/pptx-engine/src/custgeom.ts"],
+      "@genoffice/pptx-engine/table-grid": ["vendor/genoffice/packages/pptx-engine/src/table-grid.ts"],
+      "@genoffice/pptx-engine/identity": ["vendor/genoffice/packages/pptx-engine/src/identity.ts"],
+      "@genoffice/pptx-engine/background-promote": ["vendor/genoffice/packages/pptx-engine/src/background-promote.ts"],
+      "@genoffice/pptx-render": ["vendor/genoffice/packages/pptx-render/src/index.ts"],
+      "@genoffice/pptx-render/preset-geometry": ["vendor/genoffice/packages/pptx-render/src/preset-geometry.ts"]
+    }
+  },
+  "include": ["entries/**/*.ts", "entries/**/*.tsx", "mona/**/*.ts", "mona/**/*.tsx"]
+}

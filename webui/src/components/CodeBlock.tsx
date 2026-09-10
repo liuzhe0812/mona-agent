@@ -10,6 +10,8 @@ interface CodeBlockProps {
   code: string;
   className?: string;
   highlight?: boolean;
+  showHeader?: boolean;
+  constrainHeight?: boolean;
 }
 
 interface HighlightedCodeProps {
@@ -66,6 +68,8 @@ export function CodeBlock({
   code,
   className,
   highlight = true,
+  showHeader = true,
+  constrainHeight = true,
 }: CodeBlockProps) {
   const { t } = useTranslation();
   const [copied, setCopied] = useState(false);
@@ -86,43 +90,50 @@ export function CodeBlock({
         className,
       )}
     >
-      <div
-        className={cn(
-          "flex items-center justify-between px-4 py-1.5 text-xs font-medium",
-          isDark
-            ? "bg-zinc-800 text-zinc-300"
-            : "bg-zinc-100 text-zinc-600",
-        )}
-      >
-        <span className="lowercase font-mono">
-          {language || t("code.fallbackLanguage")}
-        </span>
-        <button
-          type="button"
-          onClick={onCopy}
+      {showHeader ? (
+        <div
           className={cn(
-            "inline-flex items-center gap-1 rounded px-1.5 py-0.5 font-mono transition-colors",
+            "flex items-center justify-between px-4 py-1.5 text-xs font-medium",
             isDark
-              ? "text-zinc-400 hover:bg-zinc-700 hover:text-zinc-200"
-              : "text-zinc-500 hover:bg-zinc-200 hover:text-zinc-700",
+              ? "bg-zinc-800 text-zinc-300"
+              : "bg-zinc-100 text-zinc-600",
           )}
-          aria-label={t("code.copyAria")}
         >
-          {copied ? (
-            <Check className="h-3.5 w-3.5" />
-          ) : (
-            <Copy className="h-3.5 w-3.5" />
-          )}
-          <span>{copied ? t("code.copied") : t("code.copy")}</span>
-        </button>
+          <span className="lowercase font-mono">
+            {language || t("code.fallbackLanguage")}
+          </span>
+          <button
+            type="button"
+            onClick={onCopy}
+            className={cn(
+              "inline-flex items-center gap-1 rounded px-1.5 py-0.5 font-mono transition-colors",
+              isDark
+                ? "text-zinc-400 hover:bg-zinc-700 hover:text-zinc-200"
+                : "text-zinc-500 hover:bg-zinc-200 hover:text-zinc-700",
+            )}
+            aria-label={t("code.copyAria")}
+          >
+            {copied ? (
+              <Check className="h-3.5 w-3.5" />
+            ) : (
+              <Copy className="h-3.5 w-3.5" />
+            )}
+            <span>{copied ? t("code.copied") : t("code.copy")}</span>
+          </button>
+        </div>
+      ) : null}
+      <div
+        data-testid="code-block-body"
+        className={cn(constrainHeight && "max-h-96 overflow-auto scrollbar-thin")}
+      >
+        {highlight ? (
+          <Suspense fallback={<PlainCodeFallback code={code} />}>
+            <LazyHighlightedCode language={language} code={code} isDark={isDark} />
+          </Suspense>
+        ) : (
+          <PlainCodeFallback code={code} />
+        )}
       </div>
-      {highlight ? (
-        <Suspense fallback={<PlainCodeFallback code={code} />}>
-          <LazyHighlightedCode language={language} code={code} isDark={isDark} />
-        </Suspense>
-      ) : (
-        <PlainCodeFallback code={code} />
-      )}
     </div>
   );
 }

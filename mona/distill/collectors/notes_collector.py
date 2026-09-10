@@ -1,39 +1,39 @@
-"""Notes data collector.
-
-Aggregates note distribution by notebook and tags from the vault.
-Uses the Rust-side search/index if available, otherwise scans markdown files.
-"""
+"""Collect bounded, date-aware statistics from a configured notes vault."""
 
 from __future__ import annotations
 
+import hashlib
 from collections import Counter
 from dataclasses import dataclass, field
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
+from zoneinfo import ZoneInfo
 
 from loguru import logger
+
+_DEFAULT_TIMEZONE = "Asia/Shanghai"
+_IGNORED_TAGS = {"草稿", "draft", "Draft", "DRAFT"}
 
 
 @dataclass
 class NotesStats:
-    """Aggregated notes statistics."""
+    """Aggregated notes statistics and bounded source records."""
 
     total_notes: int = 0
     total_notebooks: int = 0
-    # Notebook distribution: [{notebook, count}]
     notebook_distribution: list[dict[str, Any]] = field(default_factory=list)
-    # Tag distribution: [{tag, count}] (top N)
     tag_distribution: list[dict[str, Any]] = field(default_factory=list)
-    # Top words in titles (technical keyword frequency)
     title_keywords: list[dict[str, Any]] = field(default_factory=list)
-    # Notes created per month: {YYYY-MM: count}
     monthly_distribution: dict[str, int] = field(default_factory=dict)
-    # Recent note titles (for LLM context)
     recent_titles: list[str] = field(default_factory=list)
-    # Per-note keyword lists for co-occurrence: [{title, keywords: [...]}]
     note_keywords: list[dict[str, Any]] = field(default_factory=list)
-    # Keyword first appearance: {keyword: "YYYY-MM"}
     keyword_first_seen: dict[str, str] = field(default_factory=dict)
+    records: list[dict[str, Any]] = field(default_factory=list)
+    # Complete in-window records for deterministic local aggregates. Prompt and
+    # persisted evidence continue to use the bounded ``records`` projection.
+    all_records: list[dict[str, Any]] = field(default_factory=list, repr=False)
+    coverage: dict[str, Any] = field(default_factory=dict)
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -46,77 +46,81 @@ class NotesStats:
             "recent_titles": self.recent_titles,
             "note_keywords": self.note_keywords,
             "keyword_first_seen": self.keyword_first_seen,
+            "records": self.records,
+            "coverage": self.coverage,
         }
 
 
-# 技术关键词（英文小写 + 中文），用于从标题/标签中提取
+# 技术关键词（英文小写 + 中文），用于从标题/标签中提取。
 _TECH_KEYWORDS = {
-    # 编程语言
     "python", "rust", "typescript", "javascript", "java", "go", "golang",
-    "c++", "c#", "swift", "kotlin",
-    # 框架/运行时
-    "react", "vue", "tauri", "electron", "godot", "node", "deno",
-    # 数据库
-    "sql", "postgres", "postgresql", "mysql", "sqlite", "redis", "mongodb",
-    # 协议/API
-    "api", "http", "grpc", "websocket", "rest", "graphql",
-    # AI/ML
-    "ai", "ml", "llm", "gpt", "agent", "embedding", "rag",
-    # 系统/工具
-    "linux", "windows", "macos", "shell", "bash", "powershell",
-    "git", "docker", "kubernetes", "nginx", "ci/cd", "vim", "vscode",
-    # Web
-    "css", "html", "npm", "vite", "webpack",
-    # —— 中文技术词 ——
-    "架构", "设计模式", "系统设计", "微服务", "分布式",
-    "前端", "后端", "全栈", "数据库", "缓存",
-    "邮件", "授权", "认证", "加密", "安全",
-    "蒸馏", "画像", "可视化", "图表",
-    "自动化", "工作流", "效率",
-    "终端", "命令行",
-    "模型", "降级", "并发", "性能",
-    "提示词", "模板",
-    "笔记", "知识库",
+    "c++", "c#", "swift", "kotlin", "react", "vue", "tauri", "electron",
+    "godot", "node", "deno", "sql", "postgres", "postgresql", "mysql",
+    "sqlite", "redis", "mongodb", "api", "http", "grpc", "websocket", "rest",
+    "graphql", "ai", "ml", "llm", "gpt", "agent", "embedding", "rag", "linux",
+    "windows", "macos", "shell", "bash", "powershell", "git", "docker",
+    "kubernetes", "nginx", "ci/cd", "vim", "vscode", "css", "html", "npm",
+    "vite", "webpack", "架构", "设计模式", "系统设计", "微服务", "分布式",
+    "前端", "后端", "全栈", "数据库", "缓存", "邮件", "授权", "认证", "加密",
+    "安全", "蒸馏", "画像", "可视化", "图表", "自动化", "工作流", "效率",
+    "终端", "命令行", "模型", "降级", "并发", "性能", "提示词", "模板", "笔记",
+    "知识库",
 }
 
 
-# 状态性标签：无兴趣分类意义，统计时忽略
-_IGNORED_TAGS = {"草稿", "draft", "Draft", "DRAFT"}
+def _timezone(name: str) -> timezone | ZoneInfo:
+    try:
+        return ZoneInfo(name)
+    except (KeyError, ValueError):
+        logger.warning("[notes_collector] invalid timezone {!r}; using UTC", name)
+        return timezone.utc
+
+
+def _parse_date(
+    value: str | datetime | None,
+    timezone_name: str = _DEFAULT_TIMEZONE,
+) -> tuple[datetime | None, bool]:
+    if value is None or value == "":
+        return None, False
+    try:
+        parsed = value if isinstance(value, datetime) else datetime.fromisoformat(str(value).replace("Z", "+00:00"))
+    except (ValueError, TypeError):
+        return None, False
+    assumed = parsed.tzinfo is None
+    if assumed:
+        parsed = parsed.replace(tzinfo=_timezone(timezone_name))
+    return parsed.astimezone(timezone.utc), assumed
+
+
+def _bound(value: datetime | None, timezone_name: str) -> datetime | None:
+    return _parse_date(value, timezone_name)[0] if value is not None else None
+
+
+def _iso(value: datetime | None) -> str | None:
+    return value.isoformat() if value is not None else None
 
 
 def _extract_keywords(title: str) -> list[str]:
-    """Extract technical keywords from a note title (case-insensitive).
-
-    匹配 _TECH_KEYWORDS 中的英文（小写比较）和中文（原样比较）。
-    """
+    """Extract known keywords in deterministic order."""
     if not title:
         return []
     lowered = title.lower()
-    found = []
-    for kw in _TECH_KEYWORDS:
-        if kw in lowered:
-            found.append(kw)
-    return found
+    return sorted(kw for kw in _TECH_KEYWORDS if kw in lowered)
 
 
 def _parse_frontmatter(content: str) -> dict[str, Any]:
-    """Parse YAML frontmatter from markdown content.
-
-    Supports simple key: value pairs and YAML block lists (``- item``).
-    """
+    """Parse simple YAML frontmatter and block lists."""
     if not content.startswith("---"):
         return {}
     parts = content.split("---", 2)
     if len(parts) < 3:
         return {}
-    fm_text = parts[1].strip()
     result: dict[str, Any] = {}
     last_key: str | None = None
-    for line in fm_text.splitlines():
+    for line in parts[1].strip().splitlines():
         stripped = line.strip()
         if not stripped:
             continue
-        # YAML list item: "- value"
         if stripped.startswith("- ") and last_key:
             item = stripped[2:].strip().strip('"').strip("'")
             if isinstance(result.get(last_key), list):
@@ -126,137 +130,175 @@ def _parse_frontmatter(content: str) -> dict[str, Any]:
             continue
         if ":" not in stripped:
             continue
-        key, _, val = stripped.partition(":")
+        key, _, value = stripped.partition(":")
         key = key.strip()
-        val = val.strip().strip('"').strip("'")
-        if val:
-            result[key] = val
-            last_key = key
-        else:
-            # key with empty value — might be a block list header
-            result[key] = []
-            last_key = key
+        value = value.strip().strip('"').strip("'")
+        result[key] = value if value else []
+        last_key = key
     return result
 
 
-def collect_notes_stats(vault: Path | None, top_n: int = 15) -> NotesStats:
-    """Scan notes vault and aggregate statistics.
+def _stable_note_ref(relative_path: str) -> str:
+    return f"note:{hashlib.sha256(relative_path.encode('utf-8')).hexdigest()[:32]}"
 
-    Args:
-        vault: notes vault root path (None if not configured)
-        top_n: number of top items to return per category
+
+def collect_notes_stats(
+    vault: Path | None,
+    top_n: int = 15,
+    *,
+    since: datetime | None = None,
+    until: datetime | None = None,
+    timezone_name: str = _DEFAULT_TIMEZONE,
+    max_records: int = 200,
+) -> NotesStats:
+    """Scan notes, optionally selecting one half-open date window.
+
+    Counts are calculated over every selected note. ``records`` is a bounded,
+    date-sorted source sample for downstream prompts and evidence views.
     """
     stats = NotesStats()
-
-    if vault is None or not vault.exists():
+    if vault is None or not vault.exists() or not vault.is_dir():
+        stats.coverage = {
+            "status": "unavailable",
+            "scanned_count": 0,
+            "selected_count": 0,
+            "unknown_time_count": 0,
+            "assumed_timezone_count": 0,
+            "truncated_count": 0,
+            "earliest": None,
+            "latest": None,
+            "reason_code": "notes_unavailable",
+        }
         logger.debug("[notes_collector] no vault configured")
         return stats
 
+    lower = _bound(since, timezone_name)
+    upper = _bound(until, timezone_name)
+    has_window = lower is not None or upper is not None
     notebook_counter: Counter[str] = Counter()
     tag_counter: Counter[str] = Counter()
     keyword_counter: Counter[str] = Counter()
     monthly: Counter[str] = Counter()
-    recent_titles: list[str] = []
-    note_keyword_records: list[dict[str, Any]] = []
     keyword_first_seen: dict[str, str] = {}
-    total_notes = 0
+    selected_records: list[dict[str, Any]] = []
+    note_keyword_records: list[dict[str, Any]] = []
+    scanned_count = 0
+    read_errors = 0
+    unknown_time_count = 0
+    assumed_timezone_count = 0
+    earliest: datetime | None = None
+    latest: datetime | None = None
 
-    # Scan markdown files
-    for md_file in vault.rglob("*.md"):
-        # Skip hidden directories and assets
-        if any(part.startswith(".") for part in md_file.relative_to(vault).parts):
+    for md_file in sorted(vault.rglob("*.md"), key=lambda path: path.as_posix()):
+        relative = md_file.relative_to(vault)
+        if any(part.startswith(".") for part in relative.parts) or "assets" in relative.parts:
             continue
-        if "assets" in md_file.parts:
-            continue
-
+        scanned_count += 1
         try:
             content = md_file.read_text(encoding="utf-8")
-        except Exception:
+        except (OSError, UnicodeError):
+            read_errors += 1
+            continue
+        frontmatter = _parse_frontmatter(content)
+        title = str(frontmatter.get("title") or md_file.stem)
+        rel_parts = relative.parts
+        notebook = rel_parts[0] if len(rel_parts) > 1 else vault.name
+        tags_raw = frontmatter.get("tags", "")
+        if isinstance(tags_raw, list):
+            tags = [str(tag).strip() for tag in tags_raw if str(tag).strip()]
+        elif tags_raw:
+            tags = [tag.strip() for tag in str(tags_raw).replace(",", " ").split() if tag.strip()]
+        else:
+            tags = []
+        tags = list(dict.fromkeys(tags))
+        date_raw = frontmatter.get("createdAt") or frontmatter.get("created_at") or frontmatter.get("updated")
+        occurred, assumed = _parse_date(date_raw, timezone_name)
+        if assumed:
+            assumed_timezone_count += 1
+        if occurred is None:
+            unknown_time_count += 1
+        if has_window and occurred is None:
+            continue
+        if occurred is not None and ((lower is not None and occurred < lower) or (upper is not None and occurred >= upper)):
             continue
 
-        frontmatter = _parse_frontmatter(content)
-        title = frontmatter.get("title", md_file.stem)
-        # notebook：用 vault 下第一级文件夹名；根目录散落笔记用 vault 名
-        rel_parts = md_file.relative_to(vault).parts
-        if len(rel_parts) > 1:
-            notebook = rel_parts[0]
-        else:
-            notebook = vault.name
-        tags_raw = frontmatter.get("tags", "")
-        created = frontmatter.get("createdAt") or frontmatter.get("created_at") or frontmatter.get("updated", "")
-
+        note_keywords = sorted(set(_extract_keywords(title)).union(*(set(_extract_keywords(tag)) for tag in tags)))
+        for tag in tags:
+            if tag not in _IGNORED_TAGS:
+                tag_counter[tag] += 1
+        for keyword in note_keywords:
+            keyword_counter[keyword] += 1
+        month = occurred.astimezone(_timezone(timezone_name)).strftime("%Y-%m") if occurred else None
+        if month:
+            monthly[month] += 1
+            for keyword in note_keywords:
+                if keyword not in keyword_first_seen or month < keyword_first_seen[keyword]:
+                    keyword_first_seen[keyword] = month
+        if occurred is not None:
+            earliest = occurred if earliest is None else min(earliest, occurred)
+            latest = occurred if latest is None else max(latest, occurred)
+        content_hash = hashlib.sha256(content.encode("utf-8")).hexdigest()
+        selected_records.append(
+            {
+                "ref": _stable_note_ref(relative.as_posix()),
+                "relative_path": relative.as_posix(),
+                "title": title,
+                "tags": tags,
+                "notebook": notebook,
+                "occurred_at": _iso(occurred),
+                "content_hash": content_hash,
+                "keywords": note_keywords,
+            }
+        )
+        note_keyword_records.append(
+            {
+                "ref": _stable_note_ref(relative.as_posix()),
+                "title": title,
+                "keywords": note_keywords,
+                "occurred_at": _iso(occurred),
+            }
+        )
         notebook_counter[notebook] += 1
-        total_notes += 1
 
-        # Normalize tags to list[str]
-        tag_list: list[str] = []
-        if isinstance(tags_raw, list):
-            tag_list = [str(t).strip() for t in tags_raw if str(t).strip()]
-        elif tags_raw:
-            tag_list = [t.strip() for t in str(tags_raw).replace(",", " ").split() if t.strip()]
-
-        for tag in tag_list:
-            # 过滤状态性标签（无兴趣分类意义）
-            if tag in _IGNORED_TAGS:
-                continue
-            tag_counter[tag] += 1
-
-        # Extract technical keywords from title
-        note_kws: list[str] = []
-        for kw in _extract_keywords(title):
-            keyword_counter[kw] += 1
-            note_kws.append(kw)
-
-        # Also extract keywords from tags
-        for tag in tag_list:
-            for kw in _extract_keywords(tag):
-                keyword_counter[kw] += 1
-                if kw not in note_kws:
-                    note_kws.append(kw)
-
-        # Track first appearance month of each keyword
-        if note_kws and created:
-            created_month = str(created)[:7]
-            if len(created_month) == 7 and created_month[4] == "-":
-                for kw in note_kws:
-                    if kw not in keyword_first_seen or created_month < keyword_first_seen[kw]:
-                        keyword_first_seen[kw] = created_month
-
-        if note_kws:
-            note_keyword_records.append({"title": title, "keywords": note_kws})
-
-        # Monthly distribution
-        if created:
-            # Try to extract YYYY-MM
-            created_str = str(created)[:7]
-            if len(created_str) == 7 and created_str[4] == "-":
-                monthly[created_str] += 1
-
-        # Keep recent titles (last 50 by filename)
-        if len(recent_titles) < 50:
-            recent_titles.append(title)
-
-    stats.total_notes = total_notes
+    selected_records.sort(key=lambda item: (item.get("occurred_at") or "", item["relative_path"]), reverse=True)
+    stats.total_notes = len(selected_records)
     stats.total_notebooks = len(notebook_counter)
     stats.notebook_distribution = [
-        {"notebook": nb, "count": count}
-        for nb, count in notebook_counter.most_common(top_n)
+        {"notebook": notebook, "count": count}
+        for notebook, count in notebook_counter.most_common(top_n)
     ]
     stats.tag_distribution = [
         {"tag": tag, "count": count}
         for tag, count in tag_counter.most_common(top_n)
     ]
     stats.title_keywords = [
-        {"keyword": kw, "count": count}
-        for kw, count in keyword_counter.most_common(top_n)
+        {"keyword": keyword, "count": count}
+        for keyword, count in keyword_counter.most_common(top_n)
     ]
     stats.monthly_distribution = dict(sorted(monthly.items()))
-    stats.recent_titles = recent_titles
+    stats.recent_titles = [str(item["title"]) for item in selected_records[:50]]
     stats.note_keywords = note_keyword_records
-    stats.keyword_first_seen = dict(sorted(keyword_first_seen.items(), key=lambda x: x[1]))
-
+    stats.keyword_first_seen = dict(sorted(keyword_first_seen.items(), key=lambda item: item[1]))
+    stats.records = selected_records[: max(0, max_records)]
+    stats.all_records = selected_records
+    stats.coverage = {
+        "status": "partial" if read_errors or (has_window and unknown_time_count) else "available",
+        "scanned_count": scanned_count,
+        "selected_count": len(selected_records),
+        "unknown_time_count": unknown_time_count,
+        "assumed_timezone_count": assumed_timezone_count,
+        "truncated_count": max(0, len(selected_records) - len(stats.records)),
+        "earliest": _iso(earliest),
+        "latest": _iso(latest),
+        "reason_code": "notes_read_partial" if read_errors else (
+            "unknown_note_time" if has_window and unknown_time_count else None
+        ),
+    }
     logger.info(
-        f"[notes_collector] scanned {total_notes} notes, "
-        f"{len(notebook_counter)} notebooks, {len(tag_counter)} tags"
+        "[notes_collector] scanned {} notes, selected {}, {} notebooks, {} tags",
+        scanned_count,
+        stats.total_notes,
+        stats.total_notebooks,
+        len(tag_counter),
     )
     return stats

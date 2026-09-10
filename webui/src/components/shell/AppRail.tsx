@@ -5,20 +5,15 @@ import {
   Download,
   FileText,
   LogIn,
-  LogOut,
   Mail,
   MessageSquareText,
   MonitorCog,
-  Moon,
   MoreHorizontal,
   NotebookPen,
   ScanFace,
-  Settings,
   SquareTerminal,
-  Sun,
   TrendingUp,
   User,
-  UserCog,
 } from "lucide-react";
 import { useTranslation } from "react-i18next";
 
@@ -30,7 +25,6 @@ import {
   DropdownMenu,
   DropdownMenuContent,
   DropdownMenuItem,
-  DropdownMenuLabel,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import {
@@ -40,7 +34,7 @@ import {
   TooltipTrigger,
 } from "@/components/ui/tooltip";
 import { useLicense } from "@/hooks/useLicense";
-import type { SidebarModuleConfig } from "@/lib/tauri";
+import { isTauri, type SidebarModuleConfig } from "@/lib/tauri";
 import { cn } from "@/lib/utils";
 
 /**
@@ -86,7 +80,8 @@ function isMacOS() {
 // 单槽位高度随标签字号/行高演变，不再硬编码，运行时从首个槽位实测（见 useLayoutEffect）
 const FALLBACK_ITEM_PITCH_PX = 56;
 
-const MODULE_ICONS: Record<string, ReactNode> = {
+export const MODULE_ICONS: Record<string, ReactNode> = {
+  chat: <MessageSquareText className="h-5 w-5" />,
   note: <NotebookPen className="h-5 w-5" />,
   doc: <FileText className="h-5 w-5" />,
   ssh: <SquareTerminal className="h-5 w-5" />,
@@ -145,7 +140,7 @@ function RailItem({
 
 export function AppRail(props: AppRailProps) {
   const { t } = useTranslation();
-  const { loggedIn, licenseInfo, licenseActive, serverTrial, logout } = useLicense();
+  const { loggedIn, licenseInfo } = useLicense();
   const emailUnreadCount = useEmailStore((s) => s.totalUnreadCount);
   const planInboxCount = useTodoStore((s) => s.inboxCount);
   const [overflowOpen, setOverflowOpen] = useState(false);
@@ -216,12 +211,61 @@ export function AppRail(props: AppRailProps) {
     0,
   );
   const secondaryActive = secondary.some((item) => item.key === props.activeView);
+  const openNativeOverflowMenu = async () => {
+    const { Menu } = await import("@tauri-apps/api/menu");
+    const menu = await Menu.new({
+      items: secondary.map((item) => {
+        const badge = moduleBadge(item.key);
+        const label = t(`rail.modules.${item.key}`, item.label);
+        return {
+          text: badge ? `${label} (${badge > 99 ? "99+" : badge})` : label,
+          checked: props.activeView === item.key,
+          action: moduleHandlers[item.key] ?? (() => {}),
+        };
+      }),
+    });
+    try {
+      await menu.popup();
+    } finally {
+      await menu.close();
+    }
+  };
+
+  const overflowTrigger = (
+    <button
+      type="button"
+      aria-label={t("rail.more")}
+      aria-current={secondaryActive ? "page" : undefined}
+      className={cn(
+        "relative flex w-full flex-col items-center gap-1 rounded-lg px-1 py-1.5 transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring before:absolute before:left-0 before:top-1/2 before:h-4 before:w-0.5 before:-translate-y-1/2 before:rounded-r before:bg-transparent before:content-['']",
+        secondaryActive
+          ? "bg-transparent text-sidebar-foreground before:bg-[hsl(var(--brand-red))]"
+          : "text-sidebar-foreground/80 hover:bg-[hsl(var(--sidebar-hover-surface)/0.04)] hover:text-sidebar-foreground",
+      )}
+    >
+      <span
+        className={cn(
+          "relative flex h-5 w-5 items-center justify-center",
+          secondaryActive && "text-theme",
+        )}
+        aria-hidden
+      >
+        <MoreHorizontal className="h-5 w-5" />
+        {secondaryBadgeTotal > 0 ? (
+          <span className="absolute -right-2 -top-1.5 flex h-3.5 min-w-3.5 items-center justify-center rounded-full bg-destructive px-0.5 text-[8px] font-semibold leading-none text-white">
+            {secondaryBadgeTotal > 99 ? "99+" : secondaryBadgeTotal}
+          </span>
+        ) : null}
+      </span>
+      <span className="text-[10px] leading-none">{t("rail.more")}</span>
+    </button>
+  );
 
   return (
     <TooltipProvider delayDuration={0}>
       <nav
         aria-label={t("rail.navigation")}
-        className="flex h-full w-16 shrink-0 flex-col items-center bg-transparent pb-2 pt-2 text-sidebar-foreground"
+        className="flex h-full w-14 shrink-0 flex-col items-center bg-transparent pb-2 pt-2 text-sidebar-foreground"
       >
         <div ref={middleRef} className="mt-3 flex min-h-0 w-full flex-1 flex-col gap-0.5 overflow-hidden px-2">
           <RailItem
@@ -242,150 +286,74 @@ export function AppRail(props: AppRailProps) {
             />
           ))}
           {secondary.length > 0 && (
-            <DropdownMenu open={overflowOpen} onOpenChange={setOverflowOpen}>
-              <DropdownMenuTrigger asChild>
-                <button
-                  type="button"
-                  aria-label={t("rail.more")}
-                  aria-current={secondaryActive ? "page" : undefined}
-                  className={cn(
-                    "relative flex w-full flex-col items-center gap-1 rounded-lg px-1 py-1.5 transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring before:absolute before:left-0 before:top-1/2 before:h-4 before:w-0.5 before:-translate-y-1/2 before:rounded-r before:bg-transparent before:content-['']",
-                    secondaryActive
-                      ? "bg-transparent text-sidebar-foreground before:bg-[hsl(var(--brand-red))]"
-                      : "text-sidebar-foreground/80 hover:bg-[hsl(var(--sidebar-hover-surface)/0.04)] hover:text-sidebar-foreground",
-                  )}
-                >
-                  <span
-                    className={cn(
-                      "relative flex h-5 w-5 items-center justify-center",
-                      secondaryActive && "text-theme",
-                    )}
-                    aria-hidden
-                  >
-                    <MoreHorizontal className="h-5 w-5" />
-                    {secondaryBadgeTotal > 0 ? (
-                      <span className="absolute -right-2 -top-1.5 flex h-3.5 min-w-3.5 items-center justify-center rounded-full bg-destructive px-0.5 text-[8px] font-semibold leading-none text-white">
-                        {secondaryBadgeTotal > 99 ? "99+" : secondaryBadgeTotal}
-                      </span>
-                    ) : null}
-                  </span>
-                  <span className="text-[10px] leading-none">{t("rail.more")}</span>
-                </button>
-              </DropdownMenuTrigger>
-              <DropdownMenuContent side="right" align="center" sideOffset={8} className="min-w-[160px]">
-                {secondary.map((item) => (
-                  <DropdownMenuItem
-                    key={item.key}
-                    className={cn(
-                      "gap-2 px-2.5 py-1.5 text-[13px]",
-                      props.activeView === item.key && "bg-accent",
-                    )}
-                    onSelect={() => (moduleHandlers[item.key] ?? (() => {}))()}
-                  >
-                    <span
+            isTauri() ? (
+              <div className="w-full" onClick={() => void openNativeOverflowMenu()}>{overflowTrigger}</div>
+            ) : (
+              <DropdownMenu open={overflowOpen} onOpenChange={setOverflowOpen}>
+                <DropdownMenuTrigger asChild>{overflowTrigger}</DropdownMenuTrigger>
+                <DropdownMenuContent side="right" align="center" sideOffset={8} className="min-w-[160px]">
+                  {secondary.map((item) => (
+                    <DropdownMenuItem
+                      key={item.key}
                       className={cn(
-                        "flex h-4 w-4 items-center justify-center [&_svg]:h-4 [&_svg]:w-4",
-                        props.activeView === item.key && "text-theme",
+                        "gap-2 px-2.5 py-1.5 text-[13px]",
+                        props.activeView === item.key && "bg-accent",
                       )}
-                      aria-hidden
+                      onSelect={() => (moduleHandlers[item.key] ?? (() => {}))()}
                     >
-                      {MODULE_ICONS[item.key] ?? item.icon}
-                    </span>
-                    <span>{t(`rail.modules.${item.key}`, item.label)}</span>
-                    {moduleBadge(item.key) ? (
-                      <span className="ml-auto rounded-full bg-destructive px-1.5 py-0.5 text-[9px] font-semibold leading-none text-white">
-                        {(moduleBadge(item.key) ?? 0) > 99 ? "99+" : moduleBadge(item.key)}
+                      <span
+                        className={cn(
+                          "flex h-4 w-4 items-center justify-center [&_svg]:h-4 [&_svg]:w-4",
+                          props.activeView === item.key && "text-theme",
+                        )}
+                        aria-hidden
+                      >
+                        {MODULE_ICONS[item.key] ?? item.icon}
                       </span>
-                    ) : null}
-                  </DropdownMenuItem>
-                ))}
-              </DropdownMenuContent>
-            </DropdownMenu>
+                      <span>{t(`rail.modules.${item.key}`, item.label)}</span>
+                      {moduleBadge(item.key) ? (
+                        <span className="ml-auto rounded-full bg-destructive px-1.5 py-0.5 text-[9px] font-semibold leading-none text-white">
+                          {(moduleBadge(item.key) ?? 0) > 99 ? "99+" : moduleBadge(item.key)}
+                        </span>
+                      ) : null}
+                    </DropdownMenuItem>
+                  ))}
+                </DropdownMenuContent>
+              </DropdownMenu>
+            )
           )}
         </div>
 
         <div className="flex w-full shrink-0 flex-col items-center gap-0.5 px-2">
-          {props.updateAvailable && (
+          {props.updateAvailable ? (
             <Tooltip>
               <TooltipTrigger asChild>
                 <button
                   type="button"
                   aria-label={t("rail.updateAvailable")}
                   onClick={() => props.onStartUpdate?.()}
-                  className="relative flex h-8 w-8 items-center justify-center rounded-lg text-info transition-colors hover:bg-[hsl(var(--sidebar-hover-surface)/0.04)] focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
+                  className="mona-update-breathe flex h-6 w-6 items-center justify-center rounded-full bg-[hsl(var(--brand-red))] text-white transition-colors hover:bg-[hsl(var(--brand-red)/0.86)] focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
                 >
-                  <Download className="h-4 w-4 animate-pulse [animation-duration:2s]" />
-                  <span className="absolute right-1 top-1 h-1.5 w-1.5 rounded-full bg-info" />
+                  <Download className="h-3.5 w-3.5" aria-hidden />
                 </button>
               </TooltipTrigger>
               <TooltipContent side="right">{t("rail.updateAvailable")}</TooltipContent>
             </Tooltip>
-          )}
+          ) : null}
           {loggedIn ? (
-            <DropdownMenu>
-              <DropdownMenuTrigger asChild>
+            <Tooltip>
+              <TooltipTrigger asChild>
                 <button
                   type="button"
                   aria-label={licenseInfo?.account ?? licenseInfo?.email ?? t("rail.account")}
+                  onClick={() => props.onOpenSettings("general")}
                   className="mt-0.5 flex h-9 w-9 items-center justify-center rounded-full bg-muted text-sidebar-foreground/85 transition-colors hover:bg-[hsl(var(--sidebar-hover-surface)/0.08)] focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
                 >
                   <User className="h-4 w-4" />
                 </button>
-              </DropdownMenuTrigger>
-              <DropdownMenuContent side="top" align="center" sideOffset={8} className="min-w-[200px]">
-                <DropdownMenuLabel className="px-2.5 py-2 font-normal">
-                  <div className="flex items-center gap-2.5">
-                    <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-muted text-muted-foreground">
-                      <User className="h-4 w-4" />
-                    </span>
-                    <div className="min-w-0 flex-1">
-                      <div className="flex items-center gap-1.5">
-                        <span className="truncate text-[13px] font-semibold text-foreground">
-                          {licenseInfo?.account ?? licenseInfo?.email ?? t("rail.account")}
-                        </span>
-                        {licenseActive && !serverTrial && (
-                          <span className="shrink-0 rounded-full bg-gradient-to-r from-amber-500 to-orange-500 px-1 py-px text-[8px] font-bold leading-tight text-white">
-                            Pro
-                          </span>
-                        )}
-                      </div>
-                    </div>
-                  </div>
-                </DropdownMenuLabel>
-                <DropdownMenuItem
-                  className="gap-2 px-2.5 py-1.5 text-[13px]"
-                  onSelect={() => props.onOpenSettings()}
-                >
-                  <Settings className="h-4 w-4" />
-                  <span>{t("rail.settings")}</span>
-                </DropdownMenuItem>
-                <DropdownMenuItem
-                  className="gap-2 px-2.5 py-1.5 text-[13px]"
-                  onSelect={() => props.onToggleTheme?.()}
-                >
-                  {props.theme === "dark" ? (
-                    <Sun className="h-4 w-4" />
-                  ) : (
-                    <Moon className="h-4 w-4" />
-                  )}
-                  <span>{props.theme === "dark" ? "切换为浅色" : "切换为深色"}</span>
-                </DropdownMenuItem>
-                <DropdownMenuItem
-                  className="gap-2 px-2.5 py-1.5 text-[13px]"
-                  onSelect={() => props.onOpenLogin?.()}
-                >
-                  <UserCog className="h-4 w-4" />
-                  <span>{t("rail.manageAccount")}</span>
-                </DropdownMenuItem>
-                <DropdownMenuItem
-                  className="gap-2 px-2.5 py-1.5 text-[13px] text-destructive focus:text-destructive"
-                  onSelect={() => void logout()}
-                >
-                  <LogOut className="h-4 w-4" />
-                  <span>{t("rail.logout")}</span>
-                </DropdownMenuItem>
-              </DropdownMenuContent>
-            </DropdownMenu>
+              </TooltipTrigger>
+              <TooltipContent side="right">{t("rail.account")}</TooltipContent>
+            </Tooltip>
           ) : (
             <Tooltip>
               <TooltipTrigger asChild>

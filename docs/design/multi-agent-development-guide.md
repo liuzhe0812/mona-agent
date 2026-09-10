@@ -427,11 +427,12 @@ mona/agent/partners.py
 首批定义建议放在：
 
 ```text
-mona/agents/com.mona.xhs-operator/
-mona/agents/com.mona.a-share-analyst/
+expert-library/agents/com.mona.xhs-operator/
+expert-library/agents/com.mona.a-share-analyst/
 ```
 
-构建配置需要把 `mona/agents/**/*` 加入 wheel/sdist。
+用户可召唤专家由官方专家库分发；只有产品内部工作流角色放入
+`mona/agents/**/*` 并随 wheel/sdist 构建。
 
 Mona 本身继续复用现有模板；Registry 为其合成保留定义，不复制整套模板。
 
@@ -662,7 +663,7 @@ mona/agent/packages.py
 - 解析 manifest。
 - 校验 schema_version 和最低 Mona 版本。
 - 校验所有归档项路径，拒绝绝对路径、`..`、符号链接和超限文件。
-- 校验每个文件哈希和官方 Ed25519 签名。
+- 校验官方目录声明的包大小和 SHA-256。
 - 安装到版本目录，成功后原子切换启用版本。
 - 显示新增工具权限并要求确认。
 - 失败时删除未激活临时目录，不影响上一版本。
@@ -932,8 +933,8 @@ save_error
 
 ### 10.4 Package 安全
 
-- 签名验证和授权验证是两件事：签名证明来源与完整性，授权证明用户可使用。
-- 仅有 SHA-256 不能证明发布者身份。
+- 官方专家包只允许从 Mona 固定目录安装；用户仍可在本地创建和维护自定义专家，但不能上传到 Mona 官方专家库。
+- SHA-256 用于确认下载文件与官方目录声明一致，授权仍单独决定用户是否可使用。
 - 解压前检查路径、符号链接、文件数量和总体大小。
 - Package 内置 Skill 第一版只允许 Markdown 和明确白名单资源，不执行脚本。
 
@@ -1103,7 +1104,7 @@ save_error
 
 任务：
 
-- [ ] Package manifest、签名和安全解压。
+- [ ] Package manifest、SHA-256 和安全解压。
 - [ ] 安装、升级、回滚和卸载。
 - [ ] 权限差异确认。
 - [ ] 官网 catalog、订单和 entitlement 接口。
@@ -1112,7 +1113,7 @@ save_error
 
 退出标准：
 
-- [ ] 未签名、篡改或路径非法的包不能安装。
+- [ ] 哈希不一致、内容损坏或路径非法的包不能安装。
 - [ ] 升级失败自动保留上一版本。
 - [ ] 卸载产品文件前明确处理仍在房间中的 Agent 引用。
 - [ ] 授权失效不删除用户数据。

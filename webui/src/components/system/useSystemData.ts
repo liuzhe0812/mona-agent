@@ -92,7 +92,7 @@ export function useSystemOverview() {
 export function useSystemHistory(windowSecs = 600) {
   const [data, setData] = useState<SamplePoint[]>([]);
   const [error, setError] = useState<string | null>(null);
-  const timerRef = useRef<ReturnType<typeof setTimeout>>();
+  const timerRef = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
 
   useEffect(() => {
     let active = true;
@@ -314,11 +314,27 @@ export interface StorageDiskInfo {
 }
 
 export interface DirectorySize {
+  id: string;
   path: string;
   sizeGb: number;
   fileCount: number;
+  directSizeGb: number;
+  insight?: DirectoryInsightSummary;
   /** 嵌套子目录（后端递归扫描时填充，前端下钻直接从内存切片） */
   children?: DirectorySize[];
+}
+
+export interface StorageSizeBucket {
+  bucket: string;
+  count: number;
+  sizeGb: number;
+}
+
+export interface DirectoryInsightSummary {
+  artifactKind: string | null;
+  fileTypes: FileTypeSize[];
+  modifiedBuckets: StorageSizeBucket[];
+  topExtensions: FileExtensionBucket[];
 }
 
 export interface CleanupItem {
@@ -337,6 +353,7 @@ export interface FileTypeSize {
 }
 
 export interface TopFileInfo {
+  id: string;
   extension: string;
   parentDirName: string;
   sizeGb: number;
@@ -361,6 +378,7 @@ export interface FileExtensionBucket {
 }
 
 export interface StorageScanResult {
+  scanId: string;
   disks: StorageDiskInfo[];
   directories: DirectorySize[];
   cleanupItems: CleanupItem[];
@@ -408,7 +426,7 @@ export type ScanStatus = "idle" | "scanning" | "done" | "error";
 
 // 缓存版本：StorageScanResult 结构变化时递增，旧缓存自动失效
 // v3 → v4: 缓存 key 增加盘符维度（latest:C / latest:D），disks 增加 isRemovable
-const STORAGE_CACHE_VERSION = 4;
+const STORAGE_CACHE_VERSION = 5;
 const STORAGE_DB_NAME = "mona-system";
 const STORAGE_DB_STORE = "storage-scan";
 const storageCacheKey = (drive: string) => `latest:${drive}`;

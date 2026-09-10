@@ -43,6 +43,12 @@ function formatSize(bytes: number): string {
   return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
 }
 
+export function formatPreviewDate(value: string): string {
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return "";
+  return `${date.getFullYear()}-${date.getMonth() + 1}-${date.getDate()}`;
+}
+
 export function MailPreviewWindow() {
   const [message, setMessage] = useState<EmailMessage | null>(null);
   const [account, setAccount] = useState<EmailAccount | null>(null);
@@ -276,7 +282,7 @@ export function MailPreviewWindow() {
               </span>
               <span>
                 <span className="text-foreground/70">日期：</span>
-                {message.date}
+                {formatPreviewDate(message.date)}
               </span>
             </div>
             <div className="mt-0.5 text-caption text-muted-foreground">

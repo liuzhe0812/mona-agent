@@ -32,6 +32,7 @@ import {
   ArrowUp,
   Bold,
   BringToFront,
+  ChevronDown,
   FlipHorizontal2,
   FlipVertical2,
   Italic,
@@ -43,6 +44,11 @@ import {
 
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
 import { Input } from "@/components/ui/input";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Select } from "@/components/ui/select";
@@ -52,10 +58,12 @@ import { cn } from "@/lib/utils";
 
 import {
   isFlowchartContainerKind,
+  FLOWCHART_ICON_NAMES,
   type FlowchartCanvasSettings,
   type FlowchartDocument,
   type FlowchartEdgeStyle,
   type FlowchartNode,
+  type FlowchartIconName,
   type FlowchartNodeStyle,
 } from "./flowchart-document";
 import type { FlowchartLayerAction } from "./flowchart-operations";
@@ -89,6 +97,7 @@ export interface FlowchartInspectorProps {
   onCanvasSettingsChange: (patch: Partial<FlowchartCanvasSettings>) => void;
   onNodeGeometryChange: (patch: FlowchartNodeGeometryPatch) => void;
   onNodeStyleChange: (patch: Partial<FlowchartNodeStyle>) => void;
+  onNodeIconChange: (icon: FlowchartIconName | null) => void;
   onEdgeLabelChange: (label: string) => void;
   onEdgeStyleChange: (patch: Partial<FlowchartEdgeStyle>) => void;
   onAlign: (mode: FlowchartAlignMode) => void;
@@ -131,6 +140,34 @@ const FONT_SIZE_OPTIONS = [
   { value: "36", label: "36" },
   { value: "40", label: "40" },
   { value: "48", label: "48" },
+];
+
+const ICON_LABELS: Record<FlowchartIconName, string> = {
+  user: "用户",
+  users: "团队",
+  browser: "浏览器",
+  mobile: "移动端",
+  server: "服务",
+  database: "数据库",
+  file: "文件",
+  folder: "文件夹",
+  cloud: "云",
+  network: "网络",
+  message: "消息",
+  mail: "邮件",
+  search: "搜索",
+  lock: "安全",
+  check: "完成",
+  warning: "警告",
+  settings: "设置",
+  code: "代码",
+  cpu: "计算",
+  ai: "AI",
+};
+
+const ICON_OPTIONS = [
+  { value: "", label: "无图标" },
+  ...FLOWCHART_ICON_NAMES.map((value) => ({ value, label: ICON_LABELS[value] })),
 ];
 
 const COLOR_PRESETS = [
@@ -276,7 +313,7 @@ function TextField({
   );
 }
 
-/** 颜色字段：预设色板 + 十六进制输入 + 清除覆盖。undefined 表示跟随主题默认。 */
+/** 颜色字段：收起时仅显示当前色，点击后从色板选择。 */
 function ColorField({
   label,
   value,
@@ -290,74 +327,125 @@ function ColorField({
   onCommit: (v: string | undefined) => void;
   disabled?: boolean;
 }) {
+  const [open, setOpen] = useState(false);
   const [draft, setDraft] = useState<string | null>(null);
+  const commitColor = (next: string | undefined) => {
+    if (next !== value) onCommit(next);
+    setOpen(false);
+  };
   const commitHex = () => {
     if (draft === null) return;
     const t = draft.trim();
     if (/^#([0-9a-fA-F]{3}|[0-9a-fA-F]{6})$/.test(t) || t === "transparent") {
-      if (t !== value) onCommit(t);
+      commitColor(t);
     }
     setDraft(null);
   };
+  const pickerValue = /^#([0-9a-fA-F]{6})$/.test(value ?? "")
+    ? value!
+    : COLOR_PRESETS[0];
 
   return (
-    <div className="flex flex-col gap-1.5">
-      <div className="flex items-center justify-between">
-        <span className="text-xs text-muted-foreground">{label}</span>
-        {value !== undefined && !disabled && (
-          <button
+    <div className="flex items-center justify-between gap-2">
+      <span className="text-xs text-muted-foreground">{label}</span>
+      <DropdownMenu open={open} onOpenChange={setOpen}>
+        <DropdownMenuTrigger asChild>
+          <Button
             type="button"
-            className="text-[10px] text-muted-foreground hover:text-foreground"
-            onClick={() => onCommit(undefined)}
-          >
-            清除
-          </button>
-        )}
-      </div>
-      <div className="flex items-center gap-1.5">
-        <div
-          className="h-6 w-6 shrink-0 rounded-md border border-border/60"
-          style={{ background: mixed ? "repeating-linear-gradient(45deg, #94a3b8 0 2px, transparent 2px 4px)" : (value ?? "transparent") }}
-          aria-hidden="true"
-        />
-        <Input
-          type="text"
-          value={draft ?? (mixed ? "" : (value ?? ""))}
-          placeholder={mixed ? "混合" : "默认"}
-          disabled={disabled}
-          aria-label={`${label}色值`}
-          onChange={(e) => setDraft(e.target.value)}
-          onBlur={commitHex}
-          onKeyDown={(e) => {
-            if (e.key === "Enter") {
-              e.preventDefault();
-              commitHex();
-            } else if (e.key === "Escape") {
-              e.preventDefault();
-              setDraft(null);
-            }
-          }}
-          className="h-7 flex-1 rounded-md px-2 text-xs"
-        />
-      </div>
-      <div className="flex flex-wrap gap-1">
-        {COLOR_PRESETS.map((c) => (
-          <button
-            key={c}
-            type="button"
+            variant="outline"
             disabled={disabled}
-            aria-label={`使用颜色 ${c}`}
-            onClick={() => onCommit(c)}
-            className={cn(
-              "h-4 w-4 rounded-sm border border-border/60 transition-transform hover:scale-110",
-              "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring",
-              value === c && "ring-1 ring-ring",
-              disabled && "opacity-40",
-            )}
-            style={{ background: c }}
-          />
-        ))}
-      </div>
+            aria-label={`选择${label}`}
+            className="h-7 min-w-[5.5rem] justify-between gap-2 px-1.5 text-xs font-normal"
+          >
+            <span
+              className="h-4 w-4 shrink-0 rounded border border-border/60"
+              style={{
+                background: mixed
+                  ? "repeating-linear-gradient(45deg, #94a3b8 0 2px, transparent 2px 4px)"
+                  : (value ?? "transparent"),
+              }}
+              aria-hidden="true"
+            />
+            <span className="truncate">{mixed ? "混合" : value ?? "默认"}</span>
+            <ChevronDown className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
+          </Button>
+        </DropdownMenuTrigger>
+        <DropdownMenuContent align="end" className="w-48 p-2">
+          <div className="mb-2 flex items-center gap-2 border-b border-border/60 pb-2">
+            <button
+              type="button"
+              disabled={disabled}
+              onClick={() => commitColor(undefined)}
+              className={cn(
+                "flex h-7 flex-1 items-center gap-2 rounded-md px-1.5 text-xs hover:bg-muted",
+                value === undefined && !mixed && "bg-muted",
+              )}
+            >
+              <span className="h-4 w-4 rounded border border-border/60 bg-background" />
+              默认
+            </button>
+            <button
+              type="button"
+              disabled={disabled}
+              onClick={() => commitColor("transparent")}
+              className={cn(
+                "h-7 rounded-md px-2 text-xs hover:bg-muted",
+                value === "transparent" && "bg-muted",
+              )}
+            >
+              透明
+            </button>
+          </div>
+          <div className="grid grid-cols-7 gap-1.5">
+            {COLOR_PRESETS.map((color) => (
+              <button
+                key={color}
+                type="button"
+                disabled={disabled}
+                aria-label={`使用颜色 ${color}`}
+                onClick={() => commitColor(color)}
+                className={cn(
+                  "h-5 w-5 rounded border border-border/60 transition-transform hover:scale-110",
+                  "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring",
+                  value === color && "ring-2 ring-ring ring-offset-1 ring-offset-background",
+                  disabled && "opacity-40",
+                )}
+                style={{ background: color }}
+              />
+            ))}
+          </div>
+          <div className="mt-2 flex items-center gap-1.5 border-t border-border/60 pt-2">
+            <input
+              type="color"
+              value={pickerValue}
+              disabled={disabled}
+              aria-label={`自定义${label}`}
+              onChange={(event) => commitColor(event.target.value)}
+              className="h-7 w-7 cursor-pointer rounded border border-border/60 bg-transparent p-0.5"
+            />
+            <Input
+              type="text"
+              value={draft ?? (mixed ? "" : (value ?? ""))}
+              placeholder="自定义色值"
+              disabled={disabled}
+              aria-label={`${label}色值`}
+              onChange={(event) => setDraft(event.target.value)}
+              onBlur={commitHex}
+              onKeyDown={(event) => {
+                if (event.key === "Enter") {
+                  event.preventDefault();
+                  commitHex();
+                } else if (event.key === "Escape") {
+                  event.preventDefault();
+                  setDraft(null);
+                  setOpen(false);
+                }
+              }}
+              className="h-7 min-w-0 flex-1 rounded-md px-2 text-xs"
+            />
+          </div>
+        </DropdownMenuContent>
+      </DropdownMenu>
     </div>
   );
 }
@@ -477,6 +565,7 @@ export function FlowchartInspector({
   onCanvasSettingsChange,
   onNodeGeometryChange,
   onNodeStyleChange,
+  onNodeIconChange,
   onEdgeLabelChange,
   onEdgeStyleChange,
   onAlign,
@@ -542,6 +631,7 @@ export function FlowchartInspector({
               readOnly={readOnly}
               onGeometry={onNodeGeometryChange}
               onStyle={onNodeStyleChange}
+              onIcon={onNodeIconChange}
               onReorder={onReorder}
             />
           )}
@@ -744,12 +834,14 @@ function SingleNodeSection({
   readOnly,
   onGeometry,
   onStyle,
+  onIcon,
   onReorder,
 }: {
   node: FlowchartNode;
   readOnly: boolean;
   onGeometry: (patch: FlowchartNodeGeometryPatch) => void;
   onStyle: (patch: Partial<FlowchartNodeStyle>) => void;
+  onIcon: (icon: FlowchartIconName | null) => void;
   onReorder: (action: FlowchartLayerAction) => void;
 }) {
   const s = node.style ?? {};
@@ -852,6 +944,14 @@ function SingleNodeSection({
       </Section>
 
       <Section title="文本">
+        <FieldRow label="图标">
+          <Select
+            value={node.icon ?? ""}
+            disabled={readOnly}
+            onValueChange={(value) => onIcon(value ? value as FlowchartIconName : null)}
+            options={ICON_OPTIONS}
+          />
+        </FieldRow>
         <FieldRow label="字体">
           <Select
             value={s.fontFamily ?? ""}

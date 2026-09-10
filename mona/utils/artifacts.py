@@ -8,6 +8,7 @@ import json
 import re
 import uuid
 from datetime import datetime
+from io import BytesIO
 from pathlib import Path, PurePosixPath
 from typing import Any
 
@@ -117,6 +118,8 @@ def store_generated_image_artifact(
     provider: str = "openrouter",
     created_at: datetime | None = None,
     artifact_root: Path | None = None,
+    requested_size: str | None = None,
+    requested_aspect_ratio: str | None = None,
 ) -> dict[str, Any]:
     """Persist a generated image and sidecar metadata.
 
@@ -125,6 +128,13 @@ def store_generated_image_artifact(
     fall back to the global media directory.
     """
     raw, mime = decode_image_data_url(data_url)
+    from PIL import Image, UnidentifiedImageError
+
+    try:
+        with Image.open(BytesIO(raw)) as image:
+            width, height = image.size
+    except (UnidentifiedImageError, OSError, ValueError) as exc:
+        raise ArtifactError("generated image dimensions could not be read") from exc
     ext = _MIME_EXTENSIONS.get(mime)
     if ext is None:
         raise ArtifactError(f"unsupported image MIME type: {mime}")
@@ -145,6 +155,11 @@ def store_generated_image_artifact(
         "provider": provider,
         "source_images": list(source_images or []),
         "created_at": now.isoformat(),
+        "width": width,
+        "height": height,
+        "actual_size": f"{width}x{height}",
+        "requested_size": requested_size,
+        "requested_aspect_ratio": requested_aspect_ratio,
     }
     metadata_path.write_text(
         json.dumps(metadata, ensure_ascii=False, indent=2),
@@ -157,12 +172,15 @@ def generated_image_tool_result(artifacts: list[dict[str, Any]]) -> str:
     """Return the compact structured result exposed to the LLM."""
     return json.dumps(
         {
+            "ok": True,
             "artifacts": artifacts,
             "next_step": (
-                "Use these artifact paths as reference_images for follow-up edits. "
                 "Generated images are automatically delivered as chat previews and "
-                "session artifacts. Keep raw paths internal unless the user asks for "
-                "debug details."
+                "session artifacts. Generation succeeded: use these images as returned. "
+                "Do not compare their dimensions with the requested size, regenerate, crop, "
+                "or upscale to correct the provider's output. Actual dimensions are informational. "
+                "Only edit or generate again if the user requests it. Keep raw paths internal "
+                "unless the user asks for them."
             ),
         },
         ensure_ascii=False,

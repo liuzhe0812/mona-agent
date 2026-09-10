@@ -29,14 +29,16 @@ The skill format and metadata structure follow OpenClaw's conventions to maintai
 |-------|-------------|
 | `clawhub` | Search and install agent skills from ClawHub, the public skill registry. |
 | `cron` | Schedule reminders and recurring tasks. |
-| `doc-writing-guide` | Primary skill for document and content writing (PRD, product requirements, MVP spec, research report, etc.). |
-| `docx` | Comprehensive document creation, editing, and analysis with tracked changes, comments, and formatting preservation. |
+| `prd-document` | Product requirements and feature specifications; format follows the user's request. |
 | `github` | Interact with GitHub using the `gh` CLI. |
 | `html-report` | Create self-contained HTML deliverables — research reports, whitepapers, PRDs, dashboards, portfolios, etc. |
-| `image-generation` | Generate images and iteratively edit saved image artifacts. |
-| `long-goal` | Sustained objectives: `long_task`, `complete_goal`, idempotent goals, modular project work, early research. |
+| `image-generation` | Plan, generate, and iteratively edit images with reusable visual templates and prompt-quality guidance. |
+| `long-goal` | Explicit `/goal` objectives: `long_task`, `complete_goal`, idempotent goals, modular project work, early research. |
 | `memory` | Two-layer memory system with Dream-managed knowledge files. |
-| `mona-office` | Inspect and modify Office documents through the `office` tool. |
+| `mona-docx` | Word creation and editing through live Office sessions, with advanced OOXML helpers loaded when needed. |
+| `mona-xlsx` | Professional spreadsheet editing through live Office sessions. |
+| `mona-pptx` | Presentation design and editing through live Office sessions. |
+| `mona-canvas` | Create and edit content on Mona's canvas. |
 | `mona-ppt` | AI-driven multi-format SVG content generation system. Exports to PPTX through multi-role collaboration. |
 | `mona-video` | AI-driven video generation system using Hyperframes. Renders HTML+GSAP animation compositions to MP4. |
 | `my` | Check and set the agent's own runtime state (model, iterations, context window, token usage, web config). |

@@ -134,6 +134,7 @@ import { getFolderDisplayName } from "@/components/email/lib/folderUtils";
 import { useClientOptional } from "@/providers/ClientProvider";
 import type {
   ChannelInfo,
+  GenerationParameterSettings,
   ImageGenerationSettingsUpdate,
   SettingsPayload,
   TtsSettingsUpdate,
@@ -190,6 +191,28 @@ const IMAGE_ASPECT_RATIO_OPTIONS = ["1:1", "3:4", "9:16", "4:3", "16:9", "3:2", 
 const IMAGE_SIZE_OPTIONS = ["1K", "2K", "4K", "1024x1024", "1536x1024", "1024x1536"];
 const VIDEO_ASPECT_RATIO_OPTIONS = ["16:9", "9:16", "1:1", "4:3", "3:4"];
 const VIDEO_DURATION_OPTIONS = [3, 5, 10, 18];
+const IMAGE_PARAMETER_DEFAULTS: Record<string, string | number> = {
+  seed: -1,
+  steps: 20,
+  cfg: 7,
+  negative_prompt: "",
+};
+const VIDEO_PARAMETER_DEFAULTS: Record<string, string | number> = {
+  ...IMAGE_PARAMETER_DEFAULTS,
+  fps: 24,
+};
+
+function generationParametersFor(
+  modelParameters: Record<string, GenerationParameterSettings> | undefined,
+  model: string,
+  defaults: Record<string, string | number>,
+): GenerationParameterSettings {
+  const saved = modelParameters?.[model];
+  return {
+    enabled: [...(saved?.enabled ?? [])],
+    values: { ...defaults, ...(saved?.values ?? {}) },
+  };
+}
 const EMPTY_PENDING_RESTART_SECTIONS: PendingRestartSections = {
   runtime: false,
   web: false,
@@ -259,12 +282,11 @@ export function SettingsView({
     EMPTY_PENDING_RESTART_SECTIONS,
   );
   const [webSearchForm, setWebSearchForm] = useState<WebSearchSettingsUpdate>({
-    provider: "duckduckgo",
+    provider: "anysearch",
     apiKey: "",
     baseUrl: "",
     maxResults: 5,
     timeout: 30,
-    useJinaReader: true,
   });
   const [imageGenerationForm, setImageGenerationForm] = useState<ImageGenerationSettingsUpdate>({
     enabled: false,
@@ -273,6 +295,7 @@ export function SettingsView({
     defaultAspectRatio: "1:1",
     defaultImageSize: "1K",
     maxImagesPerTurn: 4,
+    parameters: generationParametersFor(undefined, "", IMAGE_PARAMETER_DEFAULTS),
   });
   const [videoGenerationForm, setVideoGenerationForm] = useState<VideoGenerationSettingsUpdate>({
     enabled: false,
@@ -280,6 +303,7 @@ export function SettingsView({
     model: "agnes-video-v2.0",
     defaultAspectRatio: "16:9",
     defaultDuration: 5,
+    parameters: generationParametersFor(undefined, "", VIDEO_PARAMETER_DEFAULTS),
   });
   const [ttsForm, setTtsForm] = useState<TtsSettingsUpdate>({
     provider: "edge",
@@ -318,7 +342,6 @@ export function SettingsView({
       baseUrl: payload.web_search.base_url ?? "",
       maxResults: payload.web_search.max_results,
       timeout: payload.web_search.timeout,
-      useJinaReader: payload.web.fetch.use_jina_reader,
     }));
     setImageGenerationForm({
       enabled: payload.image_generation.enabled,
@@ -327,6 +350,11 @@ export function SettingsView({
       defaultAspectRatio: payload.image_generation.default_aspect_ratio,
       defaultImageSize: payload.image_generation.default_image_size,
       maxImagesPerTurn: payload.image_generation.max_images_per_turn,
+      parameters: generationParametersFor(
+        payload.image_generation.model_parameters,
+        payload.image_generation.model,
+        IMAGE_PARAMETER_DEFAULTS,
+      ),
     });
     setVideoGenerationForm({
       enabled: payload.video_generation.enabled,
@@ -334,6 +362,11 @@ export function SettingsView({
       model: payload.video_generation.model,
       defaultAspectRatio: payload.video_generation.default_aspect_ratio,
       defaultDuration: payload.video_generation.default_duration,
+      parameters: generationParametersFor(
+        payload.video_generation.model_parameters,
+        payload.video_generation.model,
+        VIDEO_PARAMETER_DEFAULTS,
+      ),
     });
     setTtsForm({
       provider: payload.tts.provider,
@@ -392,7 +425,14 @@ export function SettingsView({
       imageGenerationForm.model !== settings.image_generation.model ||
       imageGenerationForm.defaultAspectRatio !== settings.image_generation.default_aspect_ratio ||
       imageGenerationForm.defaultImageSize !== settings.image_generation.default_image_size ||
-      imageGenerationForm.maxImagesPerTurn !== settings.image_generation.max_images_per_turn;
+      imageGenerationForm.maxImagesPerTurn !== settings.image_generation.max_images_per_turn ||
+      JSON.stringify(imageGenerationForm.parameters) !== JSON.stringify(
+        generationParametersFor(
+          settings.image_generation.model_parameters,
+          imageGenerationForm.model,
+          IMAGE_PARAMETER_DEFAULTS,
+        ),
+      );
     return formDirty || imageApiKeyDraft.trim().length > 0;
   }, [imageGenerationForm, settings, imageApiKeyDraft]);
 
@@ -403,7 +443,14 @@ export function SettingsView({
       videoGenerationForm.provider !== settings.video_generation.provider ||
       videoGenerationForm.model !== settings.video_generation.model ||
       videoGenerationForm.defaultAspectRatio !== settings.video_generation.default_aspect_ratio ||
-      videoGenerationForm.defaultDuration !== settings.video_generation.default_duration;
+      videoGenerationForm.defaultDuration !== settings.video_generation.default_duration ||
+      JSON.stringify(videoGenerationForm.parameters) !== JSON.stringify(
+        generationParametersFor(
+          settings.video_generation.model_parameters,
+          videoGenerationForm.model,
+          VIDEO_PARAMETER_DEFAULTS,
+        ),
+      );
     return formDirty || videoApiKeyDraft.trim().length > 0;
   }, [videoGenerationForm, settings, videoApiKeyDraft]);
 
@@ -549,29 +596,21 @@ export function SettingsView({
 
     setWebSearchSaving(true);
     try {
-      const webFetchRestartRequired =
-        (webSearchForm.useJinaReader ?? settings.web.fetch.use_jina_reader) !==
-        settings.web.fetch.use_jina_reader;
       const update: WebSearchSettingsUpdate = {
         provider: webSearchForm.provider,
         maxResults: webSearchForm.maxResults,
         timeout: webSearchForm.timeout,
-        useJinaReader: webSearchForm.useJinaReader,
       };
       if (provider.credential === "api_key" && apiKey) update.apiKey = apiKey;
       if (provider.credential === "base_url") update.baseUrl = baseUrl;
       const payload = await updateWebSearchSettings(token, update);
       setSettings(payload);
-      if (payload.requires_restart || webFetchRestartRequired) {
-        setPendingRestartSections((prev) => ({ ...prev, web: true }));
-      }
       setWebSearchForm((prev) => ({
         provider: payload.web_search.provider,
         apiKey: "",
         baseUrl: payload.web_search.base_url ?? prev.baseUrl ?? "",
         maxResults: payload.web_search.max_results,
         timeout: payload.web_search.timeout,
-        useJinaReader: payload.web.fetch.use_jina_reader,
       }));
       setWebSearchKeyVisible(false);
       setWebSearchKeyEditing(false);
@@ -591,7 +630,6 @@ export function SettingsView({
       baseUrl: settings.web_search.base_url ?? "",
       maxResults: settings.web_search.max_results,
       timeout: settings.web_search.timeout,
-      useJinaReader: settings.web.fetch.use_jina_reader,
     });
     setWebSearchKeyVisible(false);
     setWebSearchKeyEditing(false);
@@ -605,7 +643,6 @@ export function SettingsView({
       baseUrl: provider === settings.web_search.provider ? settings.web_search.base_url ?? "" : "",
       maxResults: prev.maxResults ?? settings.web_search.max_results,
       timeout: prev.timeout ?? settings.web_search.timeout,
-      useJinaReader: prev.useJinaReader ?? settings.web.fetch.use_jina_reader,
     }));
     setWebSearchKeyVisible(false);
     setWebSearchKeyEditing(false);
@@ -646,9 +683,6 @@ export function SettingsView({
                 }}
                 onReset={resetWebSearchDraft}
                 onSave={saveWebSearch}
-                onRestart={onRestart}
-                isRestarting={isRestarting}
-                requiresRestartPending={pendingRestartSections.web}
               />
               <RuntimeSettings
                 form={form}
@@ -702,7 +736,17 @@ export function SettingsView({
             onImageFormChange={setImageGenerationForm}
             onImageSave={saveImageGenerationSettings}
             onSelectImageModel={(provider, model) => {
-              const next = { ...imageGenerationForm, enabled: true, provider, model };
+              const next = {
+                ...imageGenerationForm,
+                enabled: true,
+                provider,
+                model,
+                parameters: generationParametersFor(
+                  settings.image_generation.model_parameters,
+                  model,
+                  IMAGE_PARAMETER_DEFAULTS,
+                ),
+              };
               setImageGenerationForm(next);
               void saveImageGenerationSettings(next, true, false);
             }}
@@ -718,7 +762,17 @@ export function SettingsView({
             onVideoFormChange={setVideoGenerationForm}
             onVideoSave={saveVideoGenerationSettings}
             onSelectVideoModel={(provider, model) => {
-              const next = { ...videoGenerationForm, enabled: true, provider, model };
+              const next = {
+                ...videoGenerationForm,
+                enabled: true,
+                provider,
+                model,
+                parameters: generationParametersFor(
+                  settings.video_generation.model_parameters,
+                  model,
+                  VIDEO_PARAMETER_DEFAULTS,
+                ),
+              };
               setVideoGenerationForm(next);
               void saveVideoGenerationSettings(next, true, false);
             }}
@@ -1271,13 +1325,37 @@ function AiModelsSettings({
   const [mediaSettings, setMediaSettings] = useState<"image" | "video" | "tts" | null>(null);
 
   const openImageSettings = (provider: string, model?: string) => {
-    onImageFormChange((current) => ({ ...current, provider, ...(model ? { model } : {}) }));
+    onImageFormChange((current) => {
+      const nextModel = model ?? current.model;
+      return {
+        ...current,
+        provider,
+        model: nextModel,
+        parameters: generationParametersFor(
+          settings.image_generation.model_parameters,
+          nextModel,
+          IMAGE_PARAMETER_DEFAULTS,
+        ),
+      };
+    });
     onImageApiKeyDraftChange("");
     setMediaSettings("image");
   };
 
   const openVideoSettings = (provider: string, model?: string) => {
-    onVideoFormChange((current) => ({ ...current, provider, ...(model ? { model } : {}) }));
+    onVideoFormChange((current) => {
+      const nextModel = model ?? current.model;
+      return {
+        ...current,
+        provider,
+        model: nextModel,
+        parameters: generationParametersFor(
+          settings.video_generation.model_parameters,
+          nextModel,
+          VIDEO_PARAMETER_DEFAULTS,
+        ),
+      };
+    });
     onVideoApiKeyDraftChange("");
     setMediaSettings("video");
   };
@@ -2051,6 +2129,26 @@ function ImageGenerationSettings({
     IMAGE_SIZE_OPTIONS.map((value) => ({ name: value, label: value })),
     form.defaultImageSize,
   );
+  const setParameterEnabled = (name: string, enabled: boolean) => {
+    onChangeForm((prev) => ({
+      ...prev,
+      parameters: {
+        ...prev.parameters,
+        enabled: enabled
+          ? [...new Set([...prev.parameters.enabled, name])]
+          : prev.parameters.enabled.filter((item) => item !== name),
+      },
+    }));
+  };
+  const setParameterValue = (name: string, value: string | number) => {
+    onChangeForm((prev) => ({
+      ...prev,
+      parameters: {
+        ...prev.parameters,
+        values: { ...prev.parameters.values, [name]: value },
+      },
+    }));
+  };
 
   return (
     <div className="space-y-7">
@@ -2085,10 +2183,16 @@ function ImageGenerationSettings({
                     imageModelOptions.includes(prev.model) ||
                     (selectedProvider?.image_models ?? []).includes(prev.model);
                   const shouldReplace = wasCandidate && newCandidates.length > 0;
+                  const nextModel = shouldReplace ? (newDefault ?? "") : prev.model;
                   return {
                     ...prev,
                     provider,
-                    model: shouldReplace && newDefault ? newDefault : prev.model,
+                    model: nextModel,
+                    parameters: generationParametersFor(
+                      settings.image_generation.model_parameters,
+                      nextModel,
+                      IMAGE_PARAMETER_DEFAULTS,
+                    ),
                   };
                 });
                 onApiKeyDraftChange("");
@@ -2166,7 +2270,15 @@ function ImageGenerationSettings({
           >
             <ImageModelInput
               value={form.model}
-              onChange={(model) => onChangeForm((prev) => ({ ...prev, model }))}
+              onChange={(model) => onChangeForm((prev) => ({
+                ...prev,
+                model,
+                parameters: generationParametersFor(
+                  settings.image_generation.model_parameters,
+                  model,
+                  IMAGE_PARAMETER_DEFAULTS,
+                ),
+              }))}
               options={imageModelOptions}
               placeholder={tx("settings.image.modelPlaceholder", "e.g. gpt-image-1, wan2.2-t2i-plus")}
               selectLabel={tx("settings.image.selectModel", "Select image model")}
@@ -2176,8 +2288,8 @@ function ImageGenerationSettings({
             />
           </SettingsRow>
           <SettingsRow
-            title={tx("settings.rows.defaultAspectRatio", "Default aspect")}
-            description={tx("settings.help.defaultAspectRatio", "Used when the prompt does not choose an aspect ratio.")}
+            title={tx("settings.rows.defaultAspectRatio", "默认比例")}
+            description={tx("settings.help.defaultAspectRatio", "AI未指定时使用；AI可在单次生成时覆盖。")}
           >
             <ProviderPicker
               providers={aspectOptions}
@@ -2189,8 +2301,8 @@ function ImageGenerationSettings({
             />
           </SettingsRow>
           <SettingsRow
-            title={tx("settings.rows.defaultImageSize", "Default size")}
-            description={tx("settings.help.defaultImageSize", "Size hint sent to providers that support it.")}
+            title={tx("settings.rows.defaultImageSize", "默认分辨率")}
+            description={tx("settings.help.defaultImageSize", "AI未指定时使用；实际支持以服务为准。")}
           >
             <ProviderPicker
               providers={sizeOptions}
@@ -2215,6 +2327,58 @@ function ImageGenerationSettings({
             />
           </SettingsRow>
           <ReadOnlyRow title={tx("settings.rows.imageSaveDir", "Save directory")} value={settings.image_generation.save_dir} />
+          {selectedProvider?.is_custom ? (
+            <>
+              <SettingsRow
+                title="高级生成参数"
+                description="对端没有声明参数能力。只有打开开关的字段才会发送。"
+              >
+                <StatusPill tone="warning">兼容性未知</StatusPill>
+              </SettingsRow>
+              <OptionalGenerationParameterRow
+                title="随机种子"
+                description="以 seed 字段发送，-1 通常表示随机。"
+                enabled={form.parameters.enabled.includes("seed")}
+                value={form.parameters.values.seed}
+                type="number"
+                min={-1}
+                max={Number.MAX_SAFE_INTEGER}
+                onEnabledChange={(enabled) => setParameterEnabled("seed", enabled)}
+                onValueChange={(value) => setParameterValue("seed", value)}
+              />
+              <OptionalGenerationParameterRow
+                title="采样步数"
+                description="以 steps 字段发送。"
+                enabled={form.parameters.enabled.includes("steps")}
+                value={form.parameters.values.steps}
+                type="number"
+                min={1}
+                max={200}
+                onEnabledChange={(enabled) => setParameterEnabled("steps", enabled)}
+                onValueChange={(value) => setParameterValue("steps", value)}
+              />
+              <OptionalGenerationParameterRow
+                title="CFG"
+                description="以 cfg 字段发送。"
+                enabled={form.parameters.enabled.includes("cfg")}
+                value={form.parameters.values.cfg}
+                type="number"
+                min={0}
+                max={100}
+                step={0.1}
+                onEnabledChange={(enabled) => setParameterEnabled("cfg", enabled)}
+                onValueChange={(value) => setParameterValue("cfg", value)}
+              />
+              <OptionalGenerationParameterRow
+                title="负面提示词"
+                description="以 negative_prompt 字段发送。"
+                enabled={form.parameters.enabled.includes("negative_prompt")}
+                value={form.parameters.values.negative_prompt}
+                onEnabledChange={(enabled) => setParameterEnabled("negative_prompt", enabled)}
+                onValueChange={(value) => setParameterValue("negative_prompt", value)}
+              />
+            </>
+          ) : null}
           <RestartSettingsFooter
             dirty={dirty}
             saving={saving}
@@ -2287,6 +2451,26 @@ function VideoGenerationSettings({
     VIDEO_DURATION_OPTIONS.map((value) => ({ name: String(value), label: `${value}s` })),
     String(form.defaultDuration),
   );
+  const setParameterEnabled = (name: string, enabled: boolean) => {
+    onChangeForm((prev) => ({
+      ...prev,
+      parameters: {
+        ...prev.parameters,
+        enabled: enabled
+          ? [...new Set([...prev.parameters.enabled, name])]
+          : prev.parameters.enabled.filter((item) => item !== name),
+      },
+    }));
+  };
+  const setParameterValue = (name: string, value: string | number) => {
+    onChangeForm((prev) => ({
+      ...prev,
+      parameters: {
+        ...prev.parameters,
+        values: { ...prev.parameters.values, [name]: value },
+      },
+    }));
+  };
 
   return (
     <div className="space-y-7">
@@ -2321,10 +2505,16 @@ function VideoGenerationSettings({
                     videoModelOptions.includes(prev.model) ||
                     (selectedProvider?.video_models ?? []).includes(prev.model);
                   const shouldReplace = wasCandidate && newCandidates.length > 0;
+                  const nextModel = shouldReplace ? (newDefault ?? "") : prev.model;
                   return {
                     ...prev,
                     provider,
-                    model: shouldReplace && newDefault ? newDefault : prev.model,
+                    model: nextModel,
+                    parameters: generationParametersFor(
+                      settings.video_generation.model_parameters,
+                      nextModel,
+                      VIDEO_PARAMETER_DEFAULTS,
+                    ),
                   };
                 });
                 onApiKeyDraftChange("");
@@ -2402,7 +2592,15 @@ function VideoGenerationSettings({
           >
             <ImageModelInput
               value={form.model}
-              onChange={(model) => onChangeForm((prev) => ({ ...prev, model }))}
+              onChange={(model) => onChangeForm((prev) => ({
+                ...prev,
+                model,
+                parameters: generationParametersFor(
+                  settings.video_generation.model_parameters,
+                  model,
+                  VIDEO_PARAMETER_DEFAULTS,
+                ),
+              }))}
               options={videoModelOptions}
               placeholder={tx("settings.video.modelPlaceholder", "例如 agnes-video-v2.0")}
               selectLabel={tx("settings.video.selectModel", "选择视频模型")}
@@ -2441,6 +2639,69 @@ function VideoGenerationSettings({
             />
           </SettingsRow>
           <ReadOnlyRow title={tx("settings.rows.videoSaveDir", "保存目录")} value={settings.video_generation.save_dir} />
+          {selectedProvider?.is_custom ? (
+            <>
+              <SettingsRow
+                title="高级生成参数"
+                description="对端没有声明参数能力。只有打开开关的字段才会发送。"
+              >
+                <StatusPill tone="warning">兼容性未知</StatusPill>
+              </SettingsRow>
+              <OptionalGenerationParameterRow
+                title="随机种子"
+                description="以 seed 字段发送，-1 通常表示随机。"
+                enabled={form.parameters.enabled.includes("seed")}
+                value={form.parameters.values.seed}
+                type="number"
+                min={-1}
+                max={Number.MAX_SAFE_INTEGER}
+                onEnabledChange={(enabled) => setParameterEnabled("seed", enabled)}
+                onValueChange={(value) => setParameterValue("seed", value)}
+              />
+              <OptionalGenerationParameterRow
+                title="采样步数"
+                description="以 steps 字段发送。"
+                enabled={form.parameters.enabled.includes("steps")}
+                value={form.parameters.values.steps}
+                type="number"
+                min={1}
+                max={200}
+                onEnabledChange={(enabled) => setParameterEnabled("steps", enabled)}
+                onValueChange={(value) => setParameterValue("steps", value)}
+              />
+              <OptionalGenerationParameterRow
+                title="CFG"
+                description="以 cfg 字段发送。"
+                enabled={form.parameters.enabled.includes("cfg")}
+                value={form.parameters.values.cfg}
+                type="number"
+                min={0}
+                max={100}
+                step={0.1}
+                onEnabledChange={(enabled) => setParameterEnabled("cfg", enabled)}
+                onValueChange={(value) => setParameterValue("cfg", value)}
+              />
+              <OptionalGenerationParameterRow
+                title="负面提示词"
+                description="以 negative_prompt 字段发送。"
+                enabled={form.parameters.enabled.includes("negative_prompt")}
+                value={form.parameters.values.negative_prompt}
+                onEnabledChange={(enabled) => setParameterEnabled("negative_prompt", enabled)}
+                onValueChange={(value) => setParameterValue("negative_prompt", value)}
+              />
+              <OptionalGenerationParameterRow
+                title="帧率"
+                description="以 fps 字段发送。"
+                enabled={form.parameters.enabled.includes("fps")}
+                value={form.parameters.values.fps}
+                type="number"
+                min={1}
+                max={120}
+                onEnabledChange={(enabled) => setParameterEnabled("fps", enabled)}
+                onValueChange={(value) => setParameterValue("fps", value)}
+              />
+            </>
+          ) : null}
           <RestartSettingsFooter
             dirty={dirty}
             saving={saving}
@@ -2451,8 +2712,8 @@ function VideoGenerationSettings({
                 ? tx("settings.video.missingCredential", "启用视频生成前请先配置该供应商。")
                 : undefined
             }
-            dirtyMessage={tx("settings.status.restartAfterSaving", "保存修改后，准备好时重启。")}
-            pendingMessage={tx("settings.status.savedRestartApply", "已保存，准备好时重启。")}
+            dirtyMessage="保存后将在下一次视频生成时生效。"
+            pendingMessage="已保存，将在下一次视频生成时生效。"
             onSave={onSave}
             onRestart={onRestart}
             isRestarting={isRestarting}
@@ -2681,9 +2942,6 @@ function WebSettings({
   onToggleKeyEditing,
   onReset,
   onSave,
-  onRestart,
-  isRestarting,
-  requiresRestartPending,
 }: {
   settings: SettingsPayload;
   form: WebSearchSettingsUpdate;
@@ -2696,9 +2954,6 @@ function WebSettings({
   onToggleKeyEditing: () => void;
   onReset: () => void;
   onSave: () => void;
-  onRestart?: () => void;
-  isRestarting?: boolean;
-  requiresRestartPending: boolean;
 }) {
   const { t } = useTranslation();
   const tx = (key: string, fallback: string) => t(key, { defaultValue: fallback });
@@ -2712,15 +2967,12 @@ function WebSettings({
   const showKeyInput = selectedProvider?.credential === "api_key" && (!hasExistingSecret || keyEditing);
   const apiKey = form.apiKey?.trim() ?? "";
   const baseUrl = form.baseUrl?.trim() ?? "";
-  const effectiveJinaReader = form.useJinaReader ?? settings.web.fetch.use_jina_reader;
   const dirty =
     form.provider !== settings.web_search.provider ||
     apiKey.length > 0 ||
     baseUrl !== (settings.web_search.base_url ?? "") ||
     form.maxResults !== settings.web_search.max_results ||
-    form.timeout !== settings.web_search.timeout ||
-    effectiveJinaReader !== settings.web.fetch.use_jina_reader;
-  const jinaReaderDirty = effectiveJinaReader !== settings.web.fetch.use_jina_reader;
+    form.timeout !== settings.web_search.timeout;
   const missingCredential =
     selectedProvider?.credential === "api_key"
       ? !apiKey && !hasExistingSecret
@@ -2842,36 +3094,20 @@ function WebSettings({
               suffix="s"
             />
           </SettingsRow>
-          <SettingsRow
-            title={tx("settings.rows.jinaReader", "Jina reader")}
-            description={tx("settings.help.jinaReader", "Use Jina Reader for web_fetch when available.")}
-          >
-            <ToggleButton
-              checked={effectiveJinaReader}
-              onChange={(useJinaReader) => onChangeForm((prev) => ({ ...prev, useJinaReader }))}
-              label={effectiveJinaReader ? tx("settings.values.on", "On") : tx("settings.values.off", "Off")}
-            />
-          </SettingsRow>
           <RestartSettingsFooter
             dirty={dirty}
             saving={saving}
-            pendingRestart={requiresRestartPending}
+            pendingRestart={false}
             disabled={missingCredential}
             message={
               missingCredential
                 ? t("settings.byok.webSearch.missingCredential")
-                : requiresRestartPending && !dirty
-                  ? tx("settings.status.savedRestartApply", "Saved. Restart when ready.")
-                  : jinaReaderDirty
-                    ? tx("settings.status.restartAfterSaving", "Save changes, then restart when ready.")
-                    : dirty
-                      ? t("settings.byok.webSearch.saveHint")
-                      : undefined
+                : dirty
+                  ? t("settings.byok.webSearch.saveHint")
+                  : undefined
             }
             onSave={onSave}
-            onRestart={onRestart}
             onReset={onReset}
-            isRestarting={isRestarting}
           />
         </SettingsGroup>
       </section>
@@ -3719,8 +3955,8 @@ function RuntimeSettings({
             dirty={dirty}
             saving={saving}
             pendingRestart={requiresRestartPending}
-            dirtyMessage={tx("settings.status.restartAfterSaving", "Save changes, then restart when ready.")}
-            pendingMessage={tx("settings.status.savedRestartApply", "Saved. Restart when ready.")}
+            dirtyMessage="保存后将在下一次图片生成时生效。"
+            pendingMessage="已保存，将在下一次图片生成时生效。"
             onSave={onSave}
             onRestart={onRestart}
             isRestarting={isRestarting}
@@ -3746,6 +3982,7 @@ function AboutSettings() {
   const [updateChecking, setUpdateChecking] = useState(false);
   const [updateDownloading, setUpdateDownloading] = useState(false);
   const [updateProgress, setUpdateProgress] = useState<UpdateProgress | null>(null);
+  const [updateError, setUpdateError] = useState<string | null>(null);
 
   const [appVersion, setAppVersion] = useState<string>("");
 
@@ -3769,6 +4006,7 @@ function AboutSettings() {
           setUpdateProgress(event.payload);
         });
         unlistenAvailable = await listen<UpdateCheckResult>("update-available", (event) => {
+          setUpdateError(null);
           setUpdateCheck(event.payload);
         });
       } catch {}
@@ -3783,18 +4021,14 @@ function AboutSettings() {
   const handleCheckUpdate = async () => {
     if (updateChecking) return;
     setUpdateChecking(true);
+    setUpdateError(null);
     setUpdateCheck(null);
     try {
       const result = await checkForUpdates();
       setUpdateCheck(result);
-    } catch {
-      setUpdateCheck({
-        has_update: false,
-        current_version: appVersion,
-        latest_version: "",
-        notes: null,
-        size: null,
-      });
+    } catch (e) {
+      setUpdateCheck(null);
+      setUpdateError(`检查更新失败：${e instanceof Error ? e.message : String(e)}`);
     } finally {
       setUpdateChecking(false);
     }
@@ -3802,11 +4036,14 @@ function AboutSettings() {
 
   const handlePerformUpdate = async () => {
     if (updateDownloading) return;
+    setUpdateError(null);
+    setUpdateProgress(null);
     setUpdateDownloading(true);
     try {
       await performUpdate();
       // performUpdate calls process::exit(0), so this line may not be reached
-    } catch {
+    } catch (e) {
+      setUpdateError(`更新未完成：${e instanceof Error ? e.message : String(e)}`);
       setUpdateDownloading(false);
     }
   };
@@ -3961,14 +4198,16 @@ function AboutSettings() {
             <SettingsRow
               title={tx("settings.about.checkUpdate", "检查更新")}
               description={
-                updateCheck?.has_update
-                  ? tx("settings.about.newVersionAvailable", "发现新版本 {{version}}").replace(
-                      "{{version}}",
-                      updateCheck.latest_version,
-                    )
-                  : updateCheck && !updateCheck.has_update
-                    ? tx("settings.about.alreadyUpToDate", "已是最新版本")
-                    : undefined
+                updateError
+                  ? updateError
+                  : updateCheck?.has_update
+                    ? tx("settings.about.newVersionAvailable", "发现新版本 {{version}}").replace(
+                        "{{version}}",
+                        updateCheck.latest_version,
+                      )
+                    : updateCheck && !updateCheck.has_update
+                      ? tx("settings.about.alreadyUpToDate", "已是最新版本")
+                      : undefined
               }
             >
               <div className="flex shrink-0 items-center gap-2">
@@ -3996,11 +4235,21 @@ function AboutSettings() {
                     )}
                     {updateChecking
                       ? tx("settings.about.checking", "检查中...")
-                      : tx("settings.about.checkNow", "立即检查")}
+                      : updateError
+                        ? tx("settings.about.retryCheck", "重试")
+                        : tx("settings.about.checkNow", "立即检查")}
                   </Button>
                 )}
               </div>
             </SettingsRow>
+            {updateError ? (
+              <div
+                role="alert"
+                className="px-4 py-3 text-ui text-destructive sm:px-5"
+              >
+                {updateError}
+              </div>
+            ) : null}
             {updateDownloading && updateProgress ? (
               <div className="px-4 py-3 sm:px-5">
                 <div className="mb-1.5 flex items-center justify-between text-caption">
@@ -4031,10 +4280,10 @@ function AboutSettings() {
             title={tx("settings.about.activationStatus", "激活状态")}
             description={
               licenseStatus === "active"
-                ? tx("settings.about.activatedDesc", "Mona Pro 的工作区 AI、AI 文档与 AI 诊股已解锁")
+                ? tx("settings.about.activatedDesc", "Mona Pro 的工作区 AI 与 AI 诊股已解锁")
                 : licenseStatus === "expired"
                   ? tx("settings.about.expiredDesc", "授权已过期，Pro 功能已锁定")
-                  : tx("settings.about.notActivatedDesc", "激活后可使用工作区 AI、完整 AI 文档与 AI 诊股")
+                  : tx("settings.about.notActivatedDesc", "文档工作台完全开放；激活后可使用工作区 AI 与 AI 诊股")
             }
           >
             <StatusPill tone={statusTone}>{statusLabel}</StatusPill>
@@ -4078,7 +4327,7 @@ function AboutSettings() {
           <ReadOnlyRow title="终端 AI" value={licenseStatus === "active" ? tx("settings.values.enabled", "已启用") : tx("settings.values.disabled", "未启用")} />
           <ReadOnlyRow title="邮件 AI" value={licenseStatus === "active" ? tx("settings.values.enabled", "已启用") : tx("settings.values.disabled", "未启用")} />
           <ReadOnlyRow title={tx("settings.about.knowledgeBaseAI", "知识库 AI")} value={licenseStatus === "active" ? tx("settings.values.enabled", "已启用") : tx("settings.values.disabled", "未启用")} />
-          <ReadOnlyRow title="AI 文档" value={licenseStatus === "active" ? tx("settings.values.enabled", "已启用") : tx("settings.values.disabled", "未启用")} />
+          <ReadOnlyRow title="文档" value={licenseStatus === "active" ? tx("settings.values.enabled", "已启用") : tx("settings.values.disabled", "未启用")} />
           <ReadOnlyRow title="AI 诊股" value={licenseStatus === "active" ? tx("settings.values.enabled", "已启用") : tx("settings.values.disabled", "未启用")} />
         </SettingsGroup>
       </section>
@@ -4702,6 +4951,54 @@ function ReadOnlyRow({ title, value }: { title: string; value: string }) {
       <span className="block max-w-[320px] truncate text-right text-ui text-muted-foreground">
         {value}
       </span>
+    </SettingsRow>
+  );
+}
+
+function OptionalGenerationParameterRow({
+  title,
+  description,
+  enabled,
+  value,
+  type = "text",
+  min,
+  max,
+  step,
+  onEnabledChange,
+  onValueChange,
+}: {
+  title: string;
+  description: string;
+  enabled: boolean;
+  value: string | number;
+  type?: "text" | "number";
+  min?: number;
+  max?: number;
+  step?: number;
+  onEnabledChange: (enabled: boolean) => void;
+  onValueChange: (value: string | number) => void;
+}) {
+  return (
+    <SettingsRow title={title} description={description}>
+      <div className="flex items-center gap-2">
+        <Switch
+          checked={enabled}
+          onCheckedChange={onEnabledChange}
+          aria-label={`发送${title}参数`}
+        />
+        <Input
+          type={type}
+          value={value}
+          min={min}
+          max={max}
+          step={step}
+          disabled={!enabled}
+          onChange={(event) => {
+            onValueChange(type === "number" ? Number(event.target.value) : event.target.value);
+          }}
+          className="h-8 w-52 rounded-full text-ui"
+        />
+      </div>
     </SettingsRow>
   );
 }

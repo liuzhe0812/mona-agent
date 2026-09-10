@@ -6,7 +6,7 @@ DocumentAgentLoop) so the partner agent itself executes the turn:
 
 - ``ContextBuilder`` resolves the agent's package prompt, private memory and
   private + package skills (multi-agent guide 7.2).
-- The tool registry is rebuilt with the manifest allowlist intersected with
+- The tool registry is rebuilt with the effective user grants intersected with
   the platform-safe ``subagent`` scope table, and every tool is constructed
   with ``ToolContext.agent_id`` set to the partner — memory/skill tools
   therefore read and write the agent's private directories.
@@ -46,6 +46,7 @@ class PartnerAgentLoop(AgentLoop):
         # any other value pins this partner to its own model for every turn
         # (LLMRuntime reads ``self.model`` per call).
         definition = self._agent_registry.require(self._partner_agent_id)
+        self.package_version = definition.package_version
         self._user_config = load_agent_user_config(self._partner_agent_id)
         self._effective_config = resolve_effective_agent_config(definition, self._user_config)
         self.user_config_revision = self._user_config.revision
@@ -127,7 +128,7 @@ class PartnerAgentLoop(AgentLoop):
         return self._partner_agent_id
 
     def _register_default_tools(self) -> None:
-        """Build the partner tool registry from the manifest allowlist.
+        """Build the partner tool registry from effective user grants.
 
         Replaces the base implementation entirely: the allowlist is
         intersected with the platform-safe ``subagent`` scope (Mona-only tools
@@ -140,6 +141,7 @@ class PartnerAgentLoop(AgentLoop):
         ctx = ToolContext(
             config=self.tools_config,
             workspace=str(self.workspace),
+            services_port=self.services_port,
             bus=self.bus,
             subagent_manager=self.subagents,
             sessions=self.sessions,
@@ -149,6 +151,12 @@ class PartnerAgentLoop(AgentLoop):
             agent_id=self._partner_agent_id,
         )
         self._tool_ctx = ctx
+        self._tool_scope = "subagent"
+        self._tool_allowlist = (
+            set(self._effective_config.allowed_tools)
+            if self._effective_config.allowed_tools is not None
+            else None
+        )
         registered = ToolLoader().load(
             ctx,
             self.tools,

@@ -11,8 +11,9 @@
   自动读取同一 ``services.token`` 文件并附带 ``X-Mona-Token`` 头，
   前端无需感知令牌。
 
-校验 ``/api/materials/*`` 以及会触发外部数据抓取和上下文写入的
-``POST /api/stock/research/preflight``；其它 stock、email、schedule 路由维持现状。
+校验 ``/api/materials/*``、``/api/profile/*``、``/api/office/*`` 以及会触发外部数据抓取
+和上下文写入的 ``POST /api/stock/research/preflight``。Office WebSocket 使用一次性 ticket，
+不重复要求浏览器无法附加的自定义请求头。
 """
 
 from __future__ import annotations
@@ -31,8 +32,9 @@ SERVICES_TOKEN_HEADER = "X-Mona-Token"
 _TOKEN_FILE_NAME = "services.token"
 
 # 受保护的路由前缀
-_PROTECTED_PREFIX = "/api/materials"
+_PROTECTED_PREFIXES = ("/api/materials", "/api/profile", "/api/office")
 _PROTECTED_EXACT_PATHS = {"/api/stock/research/preflight"}
+_TOKEN_EXEMPT_PATHS = {"/api/office/ws"}
 
 
 def _token_file_path() -> Path:
@@ -81,7 +83,12 @@ def is_valid_services_token(token: str | None) -> bool:
 
 
 def _requires_services_token(path: str) -> bool:
-    return path.startswith(_PROTECTED_PREFIX) or path in _PROTECTED_EXACT_PATHS
+    if path in _TOKEN_EXEMPT_PATHS:
+        return False
+    return (
+        any(path.startswith(prefix) for prefix in _PROTECTED_PREFIXES)
+        or path in _PROTECTED_EXACT_PATHS
+    )
 
 
 @web.middleware

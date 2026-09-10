@@ -5,6 +5,7 @@ import {
   ChevronRight,
   FileText,
   Loader2,
+  LockKeyhole,
   Newspaper,
   Trash2,
 } from "lucide-react";
@@ -46,6 +47,7 @@ import {
   type StockReportV5ListProjection,
   type StockReportV6ListProjection,
   type StockDiagnosisRun,
+  type StockDiagnosisOutcome,
   type StockDiagnosisV1,
   type StockHorizonStances,
   type StockDecisionEvaluation,
@@ -255,6 +257,7 @@ interface InstrumentStageProps {
   /** Standard AI diagnosis state is deliberately independent from the deep run. */
   diagnosisRun?: WorkflowRun | null;
   diagnosisReport?: StockDiagnosisV1 | null;
+  diagnosisOutcome?: StockDiagnosisOutcome | null;
   diagnosisReports?: StockDiagnosisRun[];
   diagnosisStarting?: boolean;
   diagnosisCancellingRun?: boolean;
@@ -262,6 +265,8 @@ interface InstrumentStageProps {
   onCancelDiagnosis?: () => void;
   onOpenDiagnosis?: (diagnosisId: string) => void;
   onDeleteDiagnosis?: (diagnosisId: string) => void;
+  diagnosisLocked?: boolean;
+  onRequestDiagnosisAccess?: () => void;
   decisionEvaluation?: StockDecisionEvaluation | null;
   /** 决策雷达面板开关：由顶栏按钮控制（StockView 持有状态），收起时不渲染右列。 */
   decisionSummaryOpen?: boolean;
@@ -394,6 +399,7 @@ export function InstrumentStage({
   onDeleteReport,
   diagnosisRun = null,
   diagnosisReport = null,
+  diagnosisOutcome = null,
   diagnosisReports = [],
   diagnosisStarting = false,
   diagnosisCancellingRun = false,
@@ -401,6 +407,8 @@ export function InstrumentStage({
   onCancelDiagnosis = () => undefined,
   onOpenDiagnosis = () => undefined,
   onDeleteDiagnosis = () => undefined,
+  diagnosisLocked = false,
+  onRequestDiagnosisAccess = () => undefined,
   decisionEvaluation = null,
   decisionSummaryOpen = true,
   initialTab = "market",
@@ -446,8 +454,11 @@ export function InstrumentStage({
   }, [item.instrumentId, period, totalBars]);
   useEffect(() => {
     if (starting || runActive) setActiveTab("expert");
-    if (diagnosisStarting || diagnosisRunActive) setActiveTab("diagnosis");
-  }, [starting, runActive, diagnosisStarting, diagnosisRunActive]);
+    if (!diagnosisLocked && (diagnosisStarting || diagnosisRunActive)) setActiveTab("diagnosis");
+  }, [starting, runActive, diagnosisStarting, diagnosisRunActive, diagnosisLocked]);
+  useEffect(() => {
+    if (diagnosisLocked) setActiveTab((current) => current === "diagnosis" ? "market" : current);
+  }, [diagnosisLocked]);
   useEffect(() => {
     setMarketView("intraday");
     setIntraday(null);
@@ -701,11 +712,11 @@ export function InstrumentStage({
     ? runStepIds.filter((id) => ["succeeded", "failed", "skipped", "cancelled"].includes(visibleRun.steps[id]?.status ?? "")).length
     : 0;
 
-  const tabs: { key: StageTab; label: string }[] = [
+  const tabs: { key: StageTab; label: string; locked?: boolean }[] = [
     { key: "market", label: "行情" },
     { key: "fundamentals", label: "基本面" },
     { key: "news", label: "资讯公告" },
-    { key: "diagnosis", label: "AI诊股" },
+    { key: "diagnosis", label: "AI诊股", locked: diagnosisLocked },
     { key: "expert", label: "专家团论证" },
   ];
 
@@ -773,13 +784,20 @@ export function InstrumentStage({
               variant="ghost"
               role="tab"
               aria-selected={activeTab === tab.key}
-              onClick={() => setActiveTab(tab.key)}
+              onClick={() => {
+                if (tab.locked) {
+                  onRequestDiagnosisAccess();
+                  return;
+                }
+                setActiveTab(tab.key);
+              }}
               className={cn(
                 "h-8 rounded-none border-b-2 border-transparent px-0.5 text-caption transition-colors duration-instant hover:bg-transparent focus-visible:border-info focus-visible:ring-0",
                 activeTab === tab.key ? "border-info text-foreground" : "text-muted-foreground hover:text-foreground",
               )}
             >
               {tab.label}
+              {tab.locked && <LockKeyhole className="ml-1 inline h-3 w-3" aria-hidden />}
             </Button>
           ))}
         </div>
@@ -1156,7 +1174,9 @@ export function InstrumentStage({
             runningStepLabel={undefined}
             report={report}
             diagnosisReport={diagnosisReport}
+            diagnosisOutcome={diagnosisOutcome}
             diagnosisMode
+            proLocked={diagnosisLocked}
             reportStance={reportStance}
             reportDataQuality={reportDataQuality}
             comparison={comparison}

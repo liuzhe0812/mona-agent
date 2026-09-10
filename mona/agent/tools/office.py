@@ -1,22 +1,12 @@
-"""Agent tool for AI-driven Office document inspection and modification.
-
-Wraps :class:`mona.api.office_cli.OfficeCliClient` to expose a narrow,
-safe interface to the agent loop. Read-only actions (inspect/query/view/
-get/validate) operate on the original file; mutating actions (batch) are
-executed on a working copy so the user's original file is never touched.
-
-Working copy management:
-- The first mutating action on a given source file copies it to
-  ``workspace/uploads/office/<uuid>-<name>`` and records the mapping.
-- Subsequent mutating actions reuse the same working copy so edits
-  accumulate across turns.
-- The working copy path is returned to the agent so it can be delivered
-  to the user via ``deliver_file`` when the edit session is complete.
-"""
+"""Agent tool for live Mona Office sessions and legacy OfficeCLI reads."""
 
 from __future__ import annotations
 
+import asyncio
+import base64
 import hashlib
+import json
+import mimetypes
 import shutil
 import uuid
 from pathlib import Path
@@ -25,16 +15,44 @@ from typing import Any
 from loguru import logger
 from pydantic import Field
 
+from mona.agent.artifacts import ArtifactRef
 from mona.agent.tools.base import Tool, tool_parameters
+from mona.agent.tools.context import ContextAware, RequestContext
 from mona.agent.tools.path_utils import get_current_workspace, resolve_workspace_path
-from mona.agent.tools.schema import ArraySchema, ObjectSchema, StringSchema, tool_parameters_schema
+from mona.agent.tools.schema import (
+    ArraySchema,
+    BooleanSchema,
+    IntegerSchema,
+    NumberSchema,
+    ObjectSchema,
+    StringSchema,
+    tool_parameters_schema,
+)
+from mona.bus.events import OUTBOUND_META_AGENT_UI, OutboundMessage
 from mona.config.schema import Base
+from mona.office.capabilities import get_capabilities
+from mona.office.client import OfficeServiceClient
+from mona.office.errors import OfficeError, OfficeErrorCode
+from mona.office.schemas import (
+    OfficeApplyCommand,
+    OfficeInspectRequest,
+    OfficeInspectSuccess,
+)
 
 __all__ = ("OfficeTool", "OfficeToolConfig")
 
 _MAX_OUTPUT_CHARS = 50_000
 _MAX_BATCH_ITEMS = 50
 _OFFICE_EXTS = {".docx", ".xlsx", ".pptx"}
+_IMAGE_EXT_TO_MIME = {
+    ".jpg": "image/jpeg",
+    ".png": "image/png",
+    ".webp": "image/webp",
+    ".gif": "image/gif",
+    ".bmp": "image/bmp",
+    ".svg": "image/svg+xml",
+}
+_MAX_IMAGE_BYTES = 10 * 1024 * 1024
 
 
 class OfficeToolConfig(Base):
@@ -54,6 +72,34 @@ def _truncate(text: str, max_chars: int) -> str:
     return text[:max_chars] + "\n\n[... truncated]"
 
 
+def _asset_data_url(asset_path: object, workspace: Path) -> str:
+    if not isinstance(asset_path, str) or not asset_path.strip():
+        raise ValueError("assetPath must be a non-empty workspace path")
+    try:
+        resolved = resolve_workspace_path(asset_path, workspace, workspace)
+    except (OSError, PermissionError, ValueError) as exc:
+        raise ValueError(f"assetPath is not allowed: {exc}") from exc
+
+    workspace = workspace.resolve()
+    try:
+        resolved.relative_to(workspace)
+    except ValueError as exc:
+        raise ValueError("assetPath must resolve inside the current workspace") from exc
+    extension = resolved.suffix.lower()
+    mime = _IMAGE_EXT_TO_MIME.get(extension)
+    if mime is None:
+        raise ValueError(
+            "assetPath must use one of .jpg, .png, .webp, .gif, .bmp, or .svg"
+        )
+    if not resolved.is_file():
+        raise ValueError(f"assetPath file not found: {asset_path}")
+    size = resolved.stat().st_size
+    if size > _MAX_IMAGE_BYTES:
+        raise ValueError("assetPath image exceeds the 10 MB limit")
+    encoded = base64.b64encode(resolved.read_bytes()).decode("ascii")
+    return f"data:{mime};base64,{encoded}"
+
+
 def _sha256(path: Path) -> str:
     h = hashlib.sha256()
     with open(path, "rb") as f:
@@ -65,51 +111,156 @@ def _sha256(path: Path) -> str:
 @tool_parameters(
     tool_parameters_schema(
         action=StringSchema(
-            "Operation to perform: inspect | query | view | get | validate | batch",
-            enum=["inspect", "query", "view", "get", "validate", "batch"],
+            "Operation: list | open | inspect | apply | save | export | close",
+            enum=[
+                "list",
+                "open",
+                "inspect",
+                "apply",
+                "save",
+                "export",
+                "close",
+            ],
         ),
-        path=StringSchema("Workspace-relative path to the .docx/.xlsx/.pptx file"),
-        selector=StringSchema("CSS-like selector for the 'query' action (e.g. 'p', 'slide[1] shape')"),
-        node_path=StringSchema("Document node path for the 'get' action (e.g. '/body/p[1]')"),
-        mode=StringSchema("View mode for the 'view' action: outline | content | raw", enum=["outline", "content", "raw"]),
-        commands=ArraySchema(
-            ObjectSchema(
-                properties={
-                    "command": StringSchema("The verb: add | set | remove | move | swap"),
-                    "path": StringSchema("Target node path (for set/remove/get)"),
-                    "parent": StringSchema("Parent path (for add)"),
-                    "selector": StringSchema("Selector (for query, alias of path)"),
-                    "type": StringSchema("Element type (for add, e.g. 'shape', 'paragraph')"),
-                    "props": ObjectSchema(
-                        {},
-                        description="Key-value map of property names to string values (e.g. {\"text\":\"Hi\",\"bold\":\"true\"})",
-                        additional_properties=True,
-                    ),
-                    "to": StringSchema("Destination path (for move)"),
-                    "path2": StringSchema("Second path (for swap)"),
-                },
+        path=StringSchema("Workspace-relative Office file path for open", nullable=True),
+        session_id=StringSchema(
+            "Mona Office session ID; omit to use the active Office document from runtime context",
+            nullable=True,
+        ),
+        document_type=StringSchema(
+            "Document type for a new file: docs | sheets | slides",
+            enum=["docs", "sheets", "slides"],
+            nullable=True,
+        ),
+        display_name=StringSchema("Visible file name for a new Office document", nullable=True),
+        query=ObjectSchema(
+            {
+                "mode": StringSchema(
+                    "Inspect mode",
+                    enum=[
+                        "summary",
+                        "range",
+                        "outline",
+                        "search",
+                        "blocks",
+                        "slides",
+                        "capabilities",
+                        "selection",
+                        "visual",
+                        "review",
+                        "changed_since",
+                    ],
+                ),
+                "documentType": StringSchema(
+                    "Optional capability document type; the live session type is authoritative",
+                    enum=["docs", "sheets", "slides"],
+                    nullable=True,
+                ),
+                "elementType": StringSchema(
+                    "Optional capability element type filter",
+                    min_length=1,
+                    nullable=True,
+                ),
+                "operations": ArraySchema(
+                    StringSchema("Capability operation name"),
+                    description="Optional operation names to return, up to 20",
+                    max_items=20,
+                ),
+                "includeData": BooleanSchema(description="For slides, false returns chart text style without categories and series; default true"),
+                "slideIds": ArraySchema(
+                    StringSchema("Stable slide ID"),
+                    description="Slides to inspect, up to 50",
+                    max_items=50,
+                ),
+                "elementIds": ArraySchema(
+                    StringSchema("Stable slide element ID"),
+                    description="Slide elements to inspect or capture, up to 50",
+                    max_items=50,
+                ),
+                "pageIndex": IntegerSchema(
+                    description="Zero-based Word page index for visual inspection",
+                    minimum=0,
+                    nullable=True,
+                ),
+                "slideId": StringSchema("Stable slide ID for visual inspection", nullable=True),
+                "region": ObjectSchema(
+                    {
+                        "x": NumberSchema(
+                            description="Non-negative region x coordinate", minimum=0
+                        ),
+                        "y": NumberSchema(
+                            description="Non-negative region y coordinate", minimum=0
+                        ),
+                        "width": {
+                            "type": "number",
+                            "exclusiveMinimum": 0,
+                            "description": "Positive region width",
+                        },
+                        "height": {
+                            "type": "number",
+                            "exclusiveMinimum": 0,
+                            "description": "Positive region height",
+                        },
+                    },
+                    required=["x", "y", "width", "height"],
+                    description="Optional PPT region to capture",
+                    additional_properties=False,
+                    nullable=True,
+                ),
+                "padding": NumberSchema(
+                    description="PPT region padding in pixels, from 0 to 100",
+                    minimum=0,
+                    maximum=100,
+                ),
+            },
+            required=["mode"],
+            description=(
+                "Inspect query. Modes include summary, range, outline, search, blocks, slides, "
+                "capabilities, selection, visual, and changed_since. Use capabilities for the "
+                "current operation fields and selection for stable user targets."
             ),
-            description="Batch commands for the 'batch' action (max 50 items)",
-            max_items=_MAX_BATCH_ITEMS,
+            additional_properties=True,
+            nullable=True,
         ),
-        required=["action", "path"],
+        expected_version=ObjectSchema(
+            {},
+            description="Version returned by the latest inspect: editorEpoch and modelRevision",
+            additional_properties=True,
+            nullable=True,
+        ),
+        operations=ArraySchema(
+            ObjectSchema({}, additional_properties=True),
+            description=(
+                "Atomic operations, up to 50 per apply. Use the relevant Office Skill for known "
+                "fields; inspect capabilities with operations when a field schema is unknown. "
+                "Use selection and slides inspection for stable target IDs. For slide_add_image and "
+                "slide_compose image items, assetPath may reference an image in the current workspace; "
+                "the tool converts it to dataUrl. Detailed examples are in the specialist Skill references."
+            ),
+            max_items=_MAX_BATCH_ITEMS,
+            nullable=True,
+        ),
+        output=StringSchema("Workspace-relative native Office export path", nullable=True),
+        overwrite_source=BooleanSchema(description="Explicitly overwrite the unchanged source file"),
+        allow_unreviewed=BooleanSchema(description="Export a clearly labelled draft only when the user explicitly requests skipping review; default false"),
+        required=["action"],
     )
 )
-class OfficeTool(Tool):
-    """Inspect and modify Office documents (.docx/.xlsx/.pptx) via OfficeCLI."""
+class OfficeTool(Tool, ContextAware):
+    """Inspect and modify Office documents through Mona Office sessions."""
 
     _scopes = {"core", "subagent"}
     config_key = "office"
 
     name = "office"
     description = (
-        "Inspect, query, and modify Office documents (.docx, .xlsx, .pptx) via a structured "
-        "command set backed by OfficeCLI. Read-only actions (inspect/query/view/get/validate) "
-        "operate on the original file; the 'batch' action executes a list of mutating commands "
-        "(add/set/remove/move/swap) on a working copy so the original file is never modified. "
-        "Use 'inspect' first to understand the document structure, then 'batch' to apply edits, "
-        "then 'validate' to check the result. After editing, call deliver_file on the returned "
-        "working_copy path so the user can download the modified document."
+        "Open and edit .docx, .xlsx, and .pptx files in Mona's live Office editor. "
+        "Use the active session from runtime context, or open a path/new document. "
+        "Inspect reads the current in-memory document; open returns its latest version and "
+        "connected selection. Use that version for apply. Follow the relevant Office Skill; "
+        "inspect capabilities with operations only when a field schema is unknown. "
+        "Save or export after applying structured operations. Version conflicts never overwrite "
+        "newer user edits."
     )
 
     @classmethod
@@ -122,11 +273,15 @@ class OfficeTool(Tool):
 
     @classmethod
     def create(cls, ctx: Any) -> Tool:
-        return cls(
+        tool = cls(
             workspace=ctx.workspace,
             config=ctx.config.office,
             restrict_to_workspace=ctx.config.restrict_to_workspace,
+            services_port=ctx.services_port,
+            bus=ctx.bus,
         )
+        tool._agent_id = str(getattr(ctx, "agent_id", "mona") or "mona")
+        return tool
 
     def __init__(
         self,
@@ -134,18 +289,36 @@ class OfficeTool(Tool):
         workspace: str | Path | None = None,
         config: OfficeToolConfig | None = None,
         restrict_to_workspace: bool = False,
+        services_port: int = 17174,
+        bus: Any | None = None,
     ) -> None:
         from mona.config.paths import get_workspace_path
 
         self._workspace = Path(workspace).expanduser() if workspace else get_workspace_path()
         self.config = config or OfficeToolConfig()
         self._restrict = restrict_to_workspace or self.config.restrict_to_workspace
+        self._services_port = services_port
+        self._bus = bus
+        self._owner_session_key = "cli:direct"
+        self._active_session_id: str | None = None
+        self._request_ctx: RequestContext | None = None
+        self._agent_id = "mona"
         # source_path -> working_copy_path (accumulates edits across turns)
         self._working_copies: dict[str, Path] = {}
         # working_copy_path -> last known mtime (conflict detection: if the
         # user opened the working copy in system Office and saved changes, the
         # mtime will differ and we refuse the next batch to avoid clobbering).
         self._working_copy_mtimes: dict[str, float] = {}
+
+    def set_context(self, ctx: RequestContext) -> None:
+        self._request_ctx = ctx
+        self._owner_session_key = ctx.session_key or f"{ctx.channel}:{ctx.chat_id}"
+        active_session_id = ctx.metadata.get("office_session_id")
+        self._active_session_id = (
+            active_session_id.strip()
+            if isinstance(active_session_id, str) and active_session_id.strip()
+            else None
+        )
 
     def _active_workspace(self) -> Path:
         ws = get_current_workspace(self._workspace)
@@ -182,7 +355,7 @@ class OfficeTool(Tool):
         shutil.copy2(source, dest)
         self._working_copies[key] = dest
         self._working_copy_mtimes[str(dest)] = dest.stat().st_mtime
-        logger.info("office: created working copy {} -> {}", source.name, dest)
+        logger.info("office: created working copy for {}", source.name)
         return dest
 
     def _check_working_copy_fresh(self, working_copy: Path) -> bool:
@@ -205,21 +378,135 @@ class OfficeTool(Tool):
             return True
         return abs(current - recorded) < 0.001
 
+    def _prepare_slide_assets(
+        self,
+        operations: list[dict[str, Any]],
+    ) -> list[dict[str, Any]]:
+        workspace = self._active_workspace().resolve()
+        prepared: list[dict[str, Any]] = []
+        for operation in operations:
+            copied_operation = dict(operation)
+            payload = operation.get("payload")
+            if not isinstance(payload, dict):
+                prepared.append(copied_operation)
+                continue
+
+            copied_payload = dict(payload)
+            if operation.get("op") == "slide_add_image" and "assetPath" in payload:
+                copied_payload["dataUrl"] = _asset_data_url(payload["assetPath"], workspace)
+                copied_payload.pop("assetPath", None)
+            elif operation.get("op") == "slide_compose":
+                items = payload.get("items")
+                if isinstance(items, list):
+                    copied_items: list[object] = []
+                    for item in items:
+                        if (
+                            isinstance(item, dict)
+                            and item.get("type") == "image"
+                            and "assetPath" in item
+                        ):
+                            copied_item = dict(item)
+                            copied_item["dataUrl"] = _asset_data_url(
+                                item["assetPath"], workspace
+                            )
+                            copied_item.pop("assetPath", None)
+                            copied_items.append(copied_item)
+                        else:
+                            copied_items.append(item)
+                    copied_payload["items"] = copied_items
+            copied_operation["payload"] = copied_payload
+            prepared.append(copied_operation)
+        return prepared
+
     @property
     def read_only(self) -> bool:
         return False
 
+    @staticmethod
+    def _session_error_json(
+        error: OfficeError,
+        *,
+        recovery_session_id: str | None = None,
+    ) -> str:
+        payload: dict[str, Any] = {
+            "ok": False,
+            "error": {
+                "code": error.code,
+                "message": error.message,
+                "retryable": error.retryable,
+            },
+        }
+        if error.code == OfficeErrorCode.EDITOR_UNAVAILABLE and recovery_session_id:
+            payload["recovery"] = {
+                "action": "open",
+                "session_id": recovery_session_id,
+            }
+        return json.dumps(payload, ensure_ascii=False)
+
+    @staticmethod
+    def _add_session_recovery(
+        payload: dict[str, Any],
+        *,
+        session_id: str,
+    ) -> dict[str, Any]:
+        error = payload.get("error")
+        if (
+            payload.get("ok") is False
+            and isinstance(error, dict)
+            and error.get("code") == OfficeErrorCode.EDITOR_UNAVAILABLE
+        ):
+            payload["recovery"] = {"action": "open", "session_id": session_id}
+        return payload
+
     async def execute(
         self,
         action: str,
-        path: str,
+        path: str | None = None,
+        session_id: str | None = None,
+        document_type: str | None = None,
+        display_name: str | None = None,
+        query: dict[str, Any] | None = None,
+        expected_version: dict[str, Any] | None = None,
+        operations: list[dict[str, Any]] | None = None,
+        output: str | None = None,
+        overwrite_source: bool = False,
+        allow_unreviewed: bool = False,
         selector: str | None = None,
         node_path: str | None = None,
         mode: str | None = None,
         commands: list[dict[str, Any]] | None = None,
         **kwargs: Any,
-    ) -> str:
+    ) -> str | list[dict[str, Any]]:
         from mona.api.office_cli import OfficeCliClient, OfficeCliError
+
+        if action in {"list", "open", "inspect", "apply", "save", "export", "close"} or session_id:
+            recovery_session_id = session_id
+            if recovery_session_id is None and (
+                action != "open" or (not path and document_type is None)
+            ):
+                recovery_session_id = self._active_session_id
+            try:
+                return await self._execute_session_action(
+                    action=action,
+                    path=path,
+                    session_id=session_id,
+                    document_type=document_type,
+                    display_name=display_name,
+                    query=query,
+                    expected_version=expected_version,
+                    operations=operations,
+                    output=output,
+                    overwrite_source=overwrite_source,
+                    allow_unreviewed=allow_unreviewed,
+                )
+            except OfficeError as exc:
+                return self._session_error_json(
+                    exc,
+                    recovery_session_id=recovery_session_id,
+                )
+
+        if not path:
+            return "Error: 'path' is required for legacy OfficeCLI actions"
 
         try:
             resolved = self._resolve(path)
@@ -333,3 +620,304 @@ class OfficeTool(Tool):
                 parts.append(f"\n⚠ validate skipped: {e}")
 
         return "\n".join(parts)
+
+    async def _execute_session_action(
+        self,
+        *,
+        action: str,
+        path: str | None,
+        session_id: str | None,
+        document_type: str | None,
+        display_name: str | None,
+        query: dict[str, Any] | None,
+        expected_version: dict[str, Any] | None,
+        operations: list[dict[str, Any]] | None,
+        output: str | None,
+        overwrite_source: bool,
+        allow_unreviewed: bool = False,
+    ) -> str | list[dict[str, Any]]:
+        client = OfficeServiceClient.from_port(self._services_port)
+        owner = self._owner_session_key
+        if not session_id and action != "list":
+            session_id = self._active_session_id
+        if action == "list":
+            sessions = await client.list(owner_session_key=owner)
+            return json.dumps(
+                {
+                    "sessions": [
+                        session.model_dump(by_alias=True, mode="json") for session in sessions
+                    ]
+                },
+                ensure_ascii=False,
+                indent=2,
+            )
+        if action == "open":
+            if session_id and not path and document_type is None:
+                result = await client.get(session_id, owner_session_key=owner)
+                await self._publish_session_open(result.model_dump(by_alias=True, mode="json"))
+            else:
+                resolved: Path | None = None
+                workspace = self._active_workspace()
+                if document_type not in {None, "docs", "sheets", "slides"}:
+                    return "Error: document_type must be docs, sheets, or slides"
+                if path:
+                    try:
+                        resolved = resolve_workspace_path(path, workspace, workspace)
+                    except (OSError, PermissionError, ValueError) as exc:
+                        return f"Error: path not allowed: {exc}"
+                    if resolved.suffix.lower() not in _OFFICE_EXTS:
+                        return "Error: the live editor supports .docx, .xlsx, and .pptx files only"
+                elif document_type is None:
+                    return "Error: 'path', 'document_type', or a recoverable 'session_id' is required for 'open'"
+                result = await client.open(
+                    owner_session_key=owner,
+                    path=resolved,
+                    document_type=document_type,
+                    display_name=display_name,
+                )
+                await self._publish_session_open(result.model_dump(by_alias=True, mode="json"))
+
+            if (not result.editor_connected and self._bus is not None and self._request_ctx is not None
+                and self._request_ctx.channel == "websocket"):
+                for _ in range(40):
+                    await asyncio.sleep(0.2)
+                    result = await client.get(result.session_id, owner_session_key=owner)
+                    if result.editor_connected:
+                        break
+            if not result.editor_connected:
+                payload = result.model_dump(
+                    by_alias=True,
+                    mode="json",
+                    exclude_none=True,
+                )
+                payload["recovery"] = {
+                    "action": "open",
+                    "session_id": result.session_id,
+                }
+                return json.dumps(payload, ensure_ascii=False, indent=2)
+            try:
+                selection_result = await client.inspect(
+                    OfficeInspectRequest(
+                        session_id=result.session_id,
+                        query={"mode": "selection"},
+                    ),
+                    owner_session_key=owner,
+                )
+            except OfficeError as exc:
+                return self._session_error_json(
+                    exc,
+                    recovery_session_id=result.session_id,
+                )
+            if not selection_result.ok:
+                payload = selection_result.model_dump(
+                    by_alias=True,
+                    mode="json",
+                    exclude_none=True,
+                )
+                self._add_session_recovery(payload, session_id=result.session_id)
+                return json.dumps(payload, ensure_ascii=False, indent=2)
+            if selection_result.result.mode != "selection":
+                raise OfficeError(OfficeErrorCode.INVALID_OPERATION, "编辑器未返回当前选区信息。")
+            payload = result.model_dump(
+                by_alias=True,
+                mode="json",
+                exclude_none=True,
+            )
+            payload["version"] = selection_result.version.model_dump(
+                by_alias=True,
+                mode="json",
+            )
+            payload["selection"] = selection_result.result.model_dump(
+                by_alias=True,
+                mode="json",
+                exclude_none=True,
+            )
+            return json.dumps(payload, ensure_ascii=False, indent=2)
+        if not session_id:
+            return f"Error: 'session_id' is required for '{action}'"
+        if action == "inspect":
+            if query is None:
+                return "Error: 'query' is required for 'inspect'"
+            request = OfficeInspectRequest(session_id=session_id, query=query)
+            if request.query.mode == "capabilities":
+                session = await client.get(session_id, owner_session_key=owner)
+                session_type = getattr(session, "document_type", None) or getattr(
+                    session, "type", None
+                )
+                if session_type in {"docs", "sheets"}:
+                    try:
+                        capabilities = get_capabilities(
+                            session_type,
+                            getattr(request.query, "element_type", None),
+                            request.query.operations,
+                        )
+                    except ValueError as exc:
+                        return f"Error: {exc}"
+                    result = OfficeInspectSuccess(
+                        ok=True,
+                        request_id=f"inspect_{uuid.uuid4().hex}",
+                        session_id=session_id,
+                        version=session.version,
+                        result={
+                            "mode": "capabilities",
+                            "document_type": session_type,
+                            "operations": capabilities,
+                        },
+                    )
+                else:
+                    result = await client.inspect(request, owner_session_key=owner)
+            else:
+                result = await client.inspect(request, owner_session_key=owner)
+            if not result.ok:
+                payload = result.model_dump(
+                    by_alias=True,
+                    mode="json",
+                    exclude_none=True,
+                )
+                self._add_session_recovery(payload, session_id=session_id)
+                return json.dumps(payload, ensure_ascii=False, indent=2)
+            if result.result.mode == "visual":
+                payload = result.model_dump(by_alias=True, mode="json")
+                data_url = payload["result"].pop("dataUrl")
+                return [
+                    {"type": "text", "text": json.dumps(payload, ensure_ascii=False)},
+                    {"type": "image_url", "image_url": {"url": data_url}},
+                ]
+            return result.model_dump_json(by_alias=True, indent=2)
+        if action in {"apply", "batch"}:
+            if expected_version is None or not operations:
+                return "Error: 'expected_version' and 'operations' are required for 'apply'"
+            try:
+                prepared_operations = self._prepare_slide_assets(operations)
+                command = OfficeApplyCommand(
+                    session_id=session_id,
+                    operation_id=f"op_{uuid.uuid4().hex}",
+                    expected_version=expected_version,
+                    operations=prepared_operations,
+                )
+            except ValueError as exc:
+                return f"Error: {exc}"
+            result = await client.apply(command, owner_session_key=owner)
+            payload = result.model_dump(
+                by_alias=True,
+                mode="json",
+                exclude_none=True,
+                exclude_unset=True,
+            )
+            self._add_session_recovery(payload, session_id=session_id)
+            return json.dumps(payload, ensure_ascii=False, indent=2)
+        if action == "save":
+            result = await client.save(
+                session_id,
+                owner_session_key=owner,
+                overwrite_source=overwrite_source,
+                version=expected_version,
+            )
+            return json.dumps(result, ensure_ascii=False, indent=2)
+        if action == "export":
+            if not output:
+                return "Error: 'output' is required for 'export'"
+            workspace = self._active_workspace()
+            try:
+                exported = resolve_workspace_path(output, workspace, workspace)
+            except (OSError, PermissionError, ValueError) as exc:
+                return f"Error: path not allowed: {exc}"
+            session = await client.get(session_id, owner_session_key=owner)
+            review_payload = None
+            export_version = expected_version
+            if session.type == "slides":
+                review = await client.inspect(
+                    OfficeInspectRequest(session_id=session_id, query={"mode": "review"}),
+                    owner_session_key=owner,
+                )
+                if not review.ok:
+                    return review.model_dump_json(by_alias=True, exclude_none=True)
+                if review.result.mode != "review":
+                    raise OfficeError(OfficeErrorCode.INVALID_OPERATION, "编辑器未返回有效的审阅状态，请重新打开编辑器。")
+                review_payload = review.result.model_dump(by_alias=True, mode="json")
+                current = review.version.model_dump(by_alias=True, mode="json")
+                if expected_version is not None and expected_version != current:
+                    return json.dumps({"ok": False, "currentVersion": current, "error": {
+                        "code": OfficeErrorCode.VERSION_CONFLICT,
+                        "message": "文档在审阅前已变化，请按当前版本检查后再导出。", "retryable": True,
+                    }}, ensure_ascii=False)
+                export_version = current
+                if review.result.pending_slide_ids and not allow_unreviewed:
+                    return json.dumps({"ok": False, "sessionId": session_id, "currentVersion": current,
+                        "error": {"code": OfficeErrorCode.REVIEW_REQUIRED, "retryable": True,
+                            "message": "修改后的布局尚未查看。请用 inspect visual 检查列出的页面，处理或明确披露警告后再导出。保存草稿不受影响。"},
+                        "review": review_payload,
+                        "nextQueries": [{"mode": "visual", "slideId": page} for page in review.result.pending_slide_ids],
+                    }, ensure_ascii=False)
+            result = await client.export(
+                session_id,
+                owner_session_key=owner,
+                output=str(exported),
+                version=export_version,
+            )
+            if review_payload is not None:
+                result = {**result, "review": {**review_payload,
+                    "status": "draft" if allow_unreviewed else "no_pending_layout_review",
+                    "note": "视觉观察记录不等于自动证明设计合格或原文内容完整。",
+                }}
+            await self._publish_export(exported)
+            return json.dumps(result, ensure_ascii=False, indent=2)
+        if action == "close":
+            await client.close(session_id, owner_session_key=owner)
+            return json.dumps({"ok": True, "sessionId": session_id}, ensure_ascii=False)
+        return f"Error: unknown session action '{action}'"
+
+    async def _publish_session_open(self, session: dict[str, Any]) -> None:
+        if self._bus is None or self._request_ctx is None:
+            return
+        await self._bus.publish_outbound(
+            OutboundMessage(
+                channel=self._request_ctx.channel,
+                chat_id=self._request_ctx.chat_id,
+                content="",
+                metadata={
+                    "_progress": True,
+                    OUTBOUND_META_AGENT_UI: {
+                        "kind": "office_session",
+                        "data": {"version": 1, "action": "open", "session": session},
+                    },
+                },
+            )
+        )
+
+    async def _publish_export(self, path: Path) -> None:
+        if self._bus is None or self._request_ctx is None or not path.is_file():
+            return
+        workspace = self._active_workspace().resolve()
+        ref = ArtifactRef.for_path(
+            owner_kind="agent",
+            owner_id=self._agent_id,
+            root=workspace,
+            path=path,
+            created_by_agent_id=self._agent_id,
+            session_id=self._request_ctx.session_key,
+            room_id=str(self._request_ctx.metadata.get("room_id") or "") or None,
+        )
+        stat = path.stat()
+        await self._bus.publish_outbound(
+            OutboundMessage(
+                channel=self._request_ctx.channel,
+                chat_id=self._request_ctx.chat_id,
+                content="",
+                metadata={
+                    "_deliver_files": [
+                        {
+                            "path": path.relative_to(workspace).as_posix(),
+                            "absolute_path": str(path),
+                            "name": path.name,
+                            "size": stat.st_size,
+                            "size_human": f"{stat.st_size / 1024:.1f} KB",
+                            "mime": mimetypes.guess_type(path.name)[0]
+                            or "application/octet-stream",
+                            "summary": "Office 文档已导出",
+                            "artifact_ref": ref.model_dump(mode="json"),
+                        }
+                    ]
+                },
+            )
+        )

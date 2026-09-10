@@ -90,7 +90,7 @@ export function buildInspectionCards(input: InspectionInput): InspectionCard[] {
       detail: `${cleanable.length} 类缓存/临时文件可安全清理`,
       metric: `${cleanableGb.toFixed(1)} GB`,
       goal: "释放磁盘可清理空间",
-      actionLabel: "一键清理",
+      actionLabel: "生成清理方案",
       tab: "storage",
     });
   }
@@ -106,7 +106,7 @@ export function buildInspectionCards(input: InspectionInput): InspectionCard[] {
       detail: "WinGet 检测到可用更新",
       metric: `${updateCount} 项`,
       goal: "更新所有可升级的软件",
-      actionLabel: "一键更新",
+      actionLabel: "生成更新方案",
       tab: "software",
     });
   }
@@ -123,7 +123,7 @@ export function buildInspectionCards(input: InspectionInput): InspectionCard[] {
       detail: newItems.length > 2 ? `${names} 等 ${newItems.length} 项` : names,
       metric: `${newItems.length} 项`,
       goal: "审查并禁用不需要的新增启动项",
-      actionLabel: "一键审查",
+      actionLabel: "查看启动项",
       tab: "startup",
     });
   }

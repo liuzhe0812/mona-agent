@@ -41,6 +41,9 @@ import {
   applyNodeChanges,
   applyEdgeChanges,
   useReactFlow,
+  useNodesInitialized,
+  useNodeId,
+  useUpdateNodeInternals,
   useViewport,
   type Viewport,
 } from "@xyflow/react";
@@ -48,6 +51,7 @@ import { getNotesVaultPath, isTauri } from "@/lib/tauri";
 import { cn } from "@/lib/utils";
 import "@xyflow/react/dist/style.css";
 import { toPng, toSvg } from "html-to-image";
+import { waitForCanvasRender, waitForCanvasTask } from "./canvas-render-task";
 import {
   Grid3X3,
   Magnet,
@@ -71,13 +75,18 @@ import type {
   FlowchartNodeStyle,
   FlowchartCanvasSettings,
 } from "./flowchart-document";
-import { isFlowchartContainerKind } from "./flowchart-document";
+import {
+  DEFAULT_FLOWCHART_CANVAS,
+  DEFAULT_FLOWCHART_THEME,
+  isFlowchartContainerKind,
+} from "./flowchart-document";
 import {
   FLOWCHART_LANE_HEADER_SIZE,
   FLOWCHART_LANE_MIN_EXTENT,
   FLOWCHART_POOL_HEADER_SIZE,
 } from "./flowchart-operations";
-import { FLOWCHART_SHAPE_CATALOG, renderFlowchartShape } from "./flowchart-shapes";
+import { FLOWCHART_SHAPE_CATALOG, getFlowchartShapeDefaultSize, renderFlowchartShape } from "./flowchart-shapes";
+import { FlowchartNodeIcon } from "./flowchart-icons";
 import type { FlowchartThemeDefaults } from "./flowchart-themes";
 import {
   HIGHLIGHTER_STYLE,
@@ -93,6 +102,19 @@ import {
   SmoothstepControlEdge,
   type FlowchartControlEdgeData,
 } from "./FlowchartControlEdge";
+import {
+  FLOWCHART_DEFAULT_PORT,
+  decodeFlowchartHandleId,
+  encodeFlowchartHandleId,
+  flowchartHandleSide,
+  flowchartPortPoint,
+  isFlowchartPort,
+  type FlowchartPortDescriptor,
+} from "./flowchart-ports";
+import {
+  inspectFlowchartQuality,
+  type FlowchartQualityIssue,
+} from "./flowchart-quality";
 
 // ---------------------------------------------------------------------------
 // 节点组件（WPS 风格）
@@ -102,6 +124,9 @@ interface FlowchartNodeData {
   kind: FlowchartNodeKind;
   label: string;
   style?: FlowchartNodeStyle;
+  icon?: FlowchartNode["icon"];
+  /** Dynamic fractional handles referenced by the node's current edges. */
+  ports?: FlowchartPortDescriptor[];
   /** 是否允许缩放（仅非只读模式） */
   resizable?: boolean;
   /** 是否只读（禁用编辑） */
@@ -180,7 +205,15 @@ function edgeStyleToCss(style: FlowchartEdgeStyle | undefined): React.CSSPropert
 /** 四方向 Handle 组件：每个方向同时渲染 source + target 两个 handle（同方向重叠）。
  *  参考 NoteGen 的 ConnectionHandles 配置：任意方向都能拖出连线，也能接受连入。
  *  handle id 使用 `{dir}-source` / `{dir}-target` 格式，与 toFlowEdge 的归一化逻辑一致。 */
-function FourHandles() {
+function FourHandles({ ports }: { ports?: FlowchartPortDescriptor[] }) {
+  const nodeId = useNodeId();
+  const updateNodeInternals = useUpdateNodeInternals();
+  const updateNodeInternalsRef = useRef(updateNodeInternals);
+  updateNodeInternalsRef.current = updateNodeInternals;
+  const portKey = (ports ?? []).map((port) => `${port.handle}:${port.port}`).join("|");
+  useEffect(() => {
+    if (nodeId) updateNodeInternalsRef.current(nodeId);
+  }, [nodeId, portKey]);
   const handleStyle = { background: "var(--flowchart-handle)" };
   return (
     <>
@@ -192,6 +225,32 @@ function FourHandles() {
       <Handle type="source" position={Position.Left} id="left-source" style={handleStyle} isConnectable />
       <Handle type="target" position={Position.Right} id="right-target" style={handleStyle} isConnectable />
       <Handle type="source" position={Position.Right} id="right-source" style={handleStyle} isConnectable />
+      {(ports ?? []).map((port) => {
+        const id = encodeFlowchartHandleId(port.handle, port.port);
+        if (!id || !isFlowchartPort(port.port)) return null;
+        const side = flowchartHandleSide(port.handle, port.handle.endsWith("-target") ? "target" : "source");
+        const position = side === "top"
+          ? Position.Top
+          : side === "bottom"
+            ? Position.Bottom
+            : side === "left"
+              ? Position.Left
+              : Position.Right;
+        const type = port.handle.endsWith("-target") ? "target" : "source";
+        const offsetStyle = side === "top" || side === "bottom"
+          ? { left: `${port.port * 100}%` }
+          : { top: `${port.port * 100}%` };
+        return (
+          <Handle
+            key={id}
+            type={type}
+            position={position}
+            id={id}
+            style={{ ...handleStyle, ...offsetStyle }}
+            isConnectable
+          />
+        );
+      })}
     </>
   );
 }
@@ -427,7 +486,7 @@ function FlowchartNodeView({ id, data, selected, width, height }: NodeProps<Node
             <span className="text-xs text-muted-foreground">图片</span>
           )}
         </div>
-        <FourHandles />
+        <FourHandles ports={d.ports} />
       </div>
     );
   }
@@ -450,6 +509,12 @@ function FlowchartNodeView({ id, data, selected, width, height }: NodeProps<Node
       }}
     />
   );
+  const contentEl = (
+    <div className="flex min-w-0 items-center justify-center gap-2">
+      {d.icon ? <FlowchartNodeIcon name={d.icon} /> : null}
+      {labelEl}
+    </div>
+  );
 
   // 使用统一的 renderFlowchartShape，把 cssVars 转换为 options
   const shape = renderFlowchartShape(d.kind, {
@@ -463,10 +528,30 @@ function FlowchartNodeView({ id, data, selected, width, height }: NodeProps<Node
     cornerRadius: d.style?.cornerRadius,
   });
 
-  // group 容器（FC-GROUP-01）：无视觉框，仅作为 parentId 载体让子节点一起移动。
-  // 不渲染 FourHandles（connectable=false），不作为连线端点，不渲染 NodeResizer。
+  // 无标题、无样式的手工 group 继续保持透明；AI 架构分区可用标题/样式显示边界。
   if (d.kind === "group") {
-    return <div className={className} style={{ ...containerStyle, width: "100%", height: "100%" }} />;
+    const visible = d.label.trim().length > 0 || d.style !== undefined;
+    const groupFill = cssVars["--node-fill"];
+    const groupBackground = groupFill ?? "hsl(var(--muted) / 0.16)";
+    return (
+      <div
+        className={className}
+        style={{
+          ...containerStyle,
+          width: "100%",
+          height: "100%",
+          border: visible ? `${cssVars["--node-border-width"] ?? "1px"} ${cssVars["--node-border-style"] ?? "solid"} ${cssVars["--node-border"] ?? "var(--flowchart-node-border)"}` : undefined,
+          borderRadius: visible ? (d.style?.cornerRadius ?? 10) : undefined,
+          background: visible ? groupBackground : undefined,
+        }}
+      >
+        {visible && d.label ? (
+          <div className="absolute left-3 top-1.5 z-[1] text-xs font-semibold" style={{ color: cssVars["--node-text"] ?? undefined }}>
+            {labelEl}
+          </div>
+        ) : null}
+      </div>
+    );
   }
 
   // 泳池 / 泳道（FC-SWIM-02）：外框 + 标题区（横向在左、纵向在顶）+ 可编辑标题。
@@ -593,9 +678,9 @@ function FlowchartNodeView({ id, data, selected, width, height }: NodeProps<Node
             padding: "4px 8px",
           }}
         >
-          {labelEl}
+          {contentEl}
         </div>
-        <FourHandles />
+        <FourHandles ports={d.ports} />
       </div>
     );
   }
@@ -616,9 +701,9 @@ function FlowchartNodeView({ id, data, selected, width, height }: NodeProps<Node
         {shape}
       </svg>
       <div className="flowchart-node-content" style={{ position: "relative", zIndex: 1, width: "100%", height: "100%", display: "flex", alignItems: "center", justifyContent: "center", padding: "8px 12px" }}>
-        {labelEl}
+        {contentEl}
       </div>
-      <FourHandles />
+      <FourHandles ports={d.ports} />
     </div>
   );
 }
@@ -631,6 +716,8 @@ const edgeTypes = {
   "flowchart-smoothstep": SmoothstepControlEdge,
   "flowchart-bezier": BezierControlEdge,
 };
+const FLOWCHART_FIT_VIEW_OPTIONS = { padding: 0.12, maxZoom: 1 } as const;
+const FLOWCHART_PRO_OPTIONS = { hideAttribution: true } as const;
 
 /** 连线拖到空白处弹出的形状选择菜单（左侧形状库的子集，图标保持一致） */
 const CONNECTION_MENU_KINDS: FlowchartNodeKind[] = [
@@ -650,12 +737,65 @@ const CONNECTION_MENU_SHAPES = FLOWCHART_SHAPE_CATALOG.filter((s) => CONNECTION_
 // 工具：节点/边转换
 // ---------------------------------------------------------------------------
 
+function defaultFlowchartHandle(role: "source" | "target", direction: FlowchartDirection): string {
+  const side = role === "source"
+    ? direction === "TB" ? "bottom" : "right"
+    : direction === "TB" ? "top" : "left";
+  return `${side}-${role}`;
+}
+
+function normalizeReactFlowHandle(handle: string | undefined, role: "source" | "target"): string | undefined {
+  const base = decodeFlowchartHandleId(handle).handle;
+  if (!base) return undefined;
+  if (base.endsWith("-source") || base.endsWith("-target")) return base;
+  return `${base}-${role}`;
+}
+
+function resolveReactFlowHandle(
+  handle: string | undefined,
+  port: number | undefined,
+  role: "source" | "target",
+  direction: FlowchartDirection,
+): string | undefined {
+  const decoded = decodeFlowchartHandleId(handle);
+  const effectivePort = isFlowchartPort(port) ? port : decoded.port;
+  const normalized = normalizeReactFlowHandle(decoded.handle, role);
+  const base = normalized ?? (
+    effectivePort !== undefined && effectivePort !== FLOWCHART_DEFAULT_PORT
+      ? defaultFlowchartHandle(role, direction)
+      : undefined
+  );
+  return encodeFlowchartHandleId(base, effectivePort);
+}
+
+function collectDynamicFlowchartPorts(
+  edges: readonly FlowchartEdge[],
+  direction: FlowchartDirection,
+): ReadonlyMap<string, FlowchartPortDescriptor[]> {
+  const portsByNode = new Map<string, FlowchartPortDescriptor[]>();
+  const add = (nodeId: string, handle: string | undefined, port: number | undefined, role: "source" | "target") => {
+    if (!isFlowchartPort(port) || port === FLOWCHART_DEFAULT_PORT) return;
+    const normalized = normalizeReactFlowHandle(handle, role) ?? defaultFlowchartHandle(role, direction);
+    const existing = portsByNode.get(nodeId) ?? [];
+    if (!existing.some((item) => item.handle === normalized && item.port === port)) {
+      existing.push({ handle: normalized, port });
+      portsByNode.set(nodeId, existing);
+    }
+  };
+  for (const edge of edges) {
+    add(edge.source, edge.sourceHandle, edge.sourcePort, "source");
+    add(edge.target, edge.targetHandle, edge.targetPort, "target");
+  }
+  return portsByNode;
+}
+
 function toFlowNode(
   n: FlowchartNode,
   direction: FlowchartDirection,
   readOnly: boolean = true,
   onLabelEdit?: (nodeId: string, label: string) => void,
   themeDefaults?: FlowchartThemeDefaults,
+  ports?: FlowchartPortDescriptor[],
 ): Node {
   const node: Node = {
     id: n.id,
@@ -665,6 +805,8 @@ function toFlowNode(
       kind: n.kind,
       label: n.label,
       style: n.style,
+      icon: n.icon,
+      ports,
       resizable: !readOnly,
       readOnly,
       onLabelEdit,
@@ -724,6 +866,7 @@ function toFlowNodes(
   readOnly: boolean = true,
   onLabelEdit?: (nodeId: string, label: string) => void,
   themeDefaults?: FlowchartThemeDefaults,
+  portsByNode?: ReadonlyMap<string, FlowchartPortDescriptor[]>,
 ): Node[] {
   const indexOf = new Map<string, number>();
   nodes.forEach((n, i) => indexOf.set(n.id, i));
@@ -749,13 +892,14 @@ function toFlowNodes(
     if (da !== db) return da - db;
     return indexOf.get(a.id)! - indexOf.get(b.id)!;
   });
-  return sorted.map((n) => toFlowNode(n, direction, readOnly, onLabelEdit, themeDefaults));
+  return sorted.map((n) => toFlowNode(n, direction, readOnly, onLabelEdit, themeDefaults, portsByNode?.get(n.id)));
 }
 
 function toFlowEdge(
   e: FlowchartEdge,
   options?: {
     readOnly?: boolean;
+    direction?: FlowchartDirection;
     onControlPointsChange?: (
       edgeId: string,
       controlPoints: { x: number; y: number }[] | undefined,
@@ -770,18 +914,7 @@ function toFlowEdge(
   // route 映射：bezier→自定义曲线（带把手）、smoothstep→自定义折线（带控制点）、straight→默认直线
   // 默认折线（smoothstep），对齐 NoteGen 流程图常见样式
   const route = e.style?.route ?? "smoothstep";
-  // 兼容旧 handle id：旧格式为 top/bottom/left/right（单类型），
-  // 新格式为 {dir}-source / {dir}-target。旧数据自动补全后缀。
-  const normalizeSourceHandle = (h?: string | null): string | undefined => {
-    if (!h) return undefined;
-    if (h.endsWith("-source") || h.endsWith("-target")) return h;
-    return `${h}-source`;
-  };
-  const normalizeTargetHandle = (h?: string | null): string | undefined => {
-    if (!h) return undefined;
-    if (h.endsWith("-source") || h.endsWith("-target")) return h;
-    return `${h}-target`;
-  };
+  const direction = options?.direction ?? "TB";
   // 自定义边类型 vs React Flow 默认边类型
   // - smoothstep / bezier：使用自定义边（支持控制点交互）
   // - straight：使用 React Flow 默认 straight（直线不支持控制点）
@@ -789,6 +922,10 @@ function toFlowEdge(
   // 注入 data：controlPoints + readOnly + 实时/提交回调
   const data: FlowchartControlEdgeData = {
     controlPoints: e.controlPoints,
+    labelOffset: {
+      x: e.style?.labelOffsetX ?? 0,
+      y: e.style?.labelOffsetY ?? 0,
+    },
     readOnly: options?.readOnly,
     onControlPointsChange: options?.onControlPointsChange,
     onControlPointsCommit: options?.onControlPointsCommit,
@@ -797,13 +934,26 @@ function toFlowEdge(
     id: e.id,
     source: e.source,
     target: e.target,
-    sourceHandle: normalizeSourceHandle(e.sourceHandle),
-    targetHandle: normalizeTargetHandle(e.targetHandle),
+    sourceHandle: resolveReactFlowHandle(e.sourceHandle, e.sourcePort, "source", direction),
+    targetHandle: resolveReactFlowHandle(e.targetHandle, e.targetPort, "target", direction),
     label: e.label,
     type,
     style,
     data,
   };
+  if (e.label) {
+    edgeObj.labelStyle = {
+      fill: e.style?.labelColor ?? e.style?.stroke ?? "#334155",
+      color: e.style?.labelColor ?? e.style?.stroke ?? "#334155",
+      fontSize: e.style?.labelFontSize ?? 12,
+      fontWeight: e.style?.labelBold ? 700 : 500,
+    };
+    const labelBackground = e.style?.labelBackground ?? "#FFFFFF";
+    edgeObj.labelShowBg = labelBackground !== "transparent";
+    edgeObj.labelBgStyle = { fill: labelBackground, fillOpacity: 0.92 };
+    edgeObj.labelBgPadding = [4, 3];
+    edgeObj.labelBgBorderRadius = 4;
+  }
   // 箭头：默认终点闭合箭头
   const markerEnd = e.style?.markerEnd ?? "arrowclosed";
   const markerStart = e.style?.markerStart ?? "none";
@@ -822,12 +972,79 @@ function toFlowEdge(
   return edgeObj;
 }
 
+function withReliableEdgeEndpoints(
+  baseEdges: Edge[],
+  flowNodes: Node[],
+  documentNodes: FlowchartNode[],
+  direction: FlowchartDirection,
+  documentEdges?: readonly FlowchartEdge[],
+): Edge[] {
+  const renderedNodes = new Map(flowNodes.map((node) => [node.id, node]));
+  const nodeDocuments = new Map(documentNodes.map((node) => [node.id, node]));
+  const edgeDocuments = new Map((documentEdges ?? []).map((edge) => [edge.id, edge]));
+  const anchor = (
+    nodeId: string,
+    handle: string | null | undefined,
+    port: number | undefined,
+    fallback: "source" | "target",
+  ) => {
+    const rendered = renderedNodes.get(nodeId);
+    const documentNode = nodeDocuments.get(nodeId);
+    if (!rendered || !documentNode) return undefined;
+    let position = { ...rendered.position };
+    let parentId = rendered.parentId;
+    const seen = new Set<string>([nodeId]);
+    while (parentId && !seen.has(parentId)) {
+      seen.add(parentId);
+      const parent = renderedNodes.get(parentId);
+      if (!parent) break;
+      position = { x: position.x + parent.position.x, y: position.y + parent.position.y };
+      parentId = parent.parentId;
+    }
+    const defaultSize = getFlowchartShapeDefaultSize(documentNode.kind);
+    const size = {
+      width: rendered.measured?.width ?? rendered.width ?? documentNode.size?.width ?? defaultSize.width,
+      height: rendered.measured?.height ?? rendered.height ?? documentNode.size?.height ?? defaultSize.height,
+    };
+    const pointHandle = handle ?? defaultFlowchartHandle(fallback, direction);
+    return flowchartPortPoint(
+      { x: position.x, y: position.y, width: size.width, height: size.height },
+      pointHandle,
+      port,
+      fallback,
+    );
+  };
+  return baseEdges.map((edge) => {
+    const documentEdge = edgeDocuments.get(edge.id);
+    const sourceHandle = documentEdge
+      ? resolveReactFlowHandle(documentEdge.sourceHandle, documentEdge.sourcePort, "source", direction)
+      : edge.sourceHandle;
+    const targetHandle = documentEdge
+      ? resolveReactFlowHandle(documentEdge.targetHandle, documentEdge.targetPort, "target", direction)
+      : edge.targetHandle;
+    const sourcePort = documentEdge?.sourcePort ?? decodeFlowchartHandleId(sourceHandle).port;
+    const targetPort = documentEdge?.targetPort ?? decodeFlowchartHandleId(targetHandle).port;
+    const renderedEdge = sourceHandle === edge.sourceHandle && targetHandle === edge.targetHandle
+      ? edge
+      : { ...edge, sourceHandle, targetHandle };
+    return {
+      ...renderedEdge,
+      data: {
+        ...(renderedEdge.data ?? {}),
+        sourcePoint: anchor(edge.source, sourceHandle, sourcePort, "source"),
+        targetPoint: anchor(edge.target, targetHandle, targetPort, "target"),
+      },
+    };
+  });
+}
+
 // ---------------------------------------------------------------------------
 // 画布组件
 // ---------------------------------------------------------------------------
 
 /** 导出图片选项（设计文档 §7.12） */
 export interface FlowchartExportOptions {
+  signal?: AbortSignal;
   /** PNG 缩放倍数：1x 用于普通场景，2x 用于高清 */
   scale?: 1 | 2;
   /** 背景：transparent 透明 / theme 当前主题画布色 */
@@ -850,6 +1067,8 @@ export interface FlowchartCanvasHandle {
   getZoom: () => number;
   /** 获取当前视口中心的 flow 坐标（考虑 zoom/pan），用于点击创建节点 */
   getViewportCenter: () => { x: number; y: number };
+  /** 检查当前真实 DOM/SVG 渲染，并与文档几何检查合并。 */
+  inspectQuality: (signal?: AbortSignal) => Promise<FlowchartQualityIssue[]>;
 }
 
 
@@ -900,6 +1119,8 @@ export interface FlowchartCanvasProps {
     target: string;
     sourceHandle?: string;
     targetHandle?: string;
+    sourcePort?: number;
+    targetPort?: number;
   }) => void;
   /** 边重连回调（拖动边端点到新 Handle） */
   onReconnect?: (
@@ -909,6 +1130,8 @@ export interface FlowchartCanvasProps {
       target: string;
       sourceHandle?: string;
       targetHandle?: string;
+      sourcePort?: number;
+      targetPort?: number;
     },
   ) => void;
   /** 边控制点实时变更回调（拖动期间高频触发，仅更新视图） */
@@ -961,6 +1184,7 @@ export interface FlowchartCanvasProps {
     connection: {
       source: string;
       sourceHandle?: string;
+      sourcePort?: number;
     },
   ) => void;
   /** 当前文档 ID，用于切换文档时重置视图恢复状态 */
@@ -1030,11 +1254,16 @@ const FlowchartCanvasInner = forwardRef<FlowchartCanvasHandle, FlowchartCanvasPr
   const edgeEditInputRef = useRef<HTMLTextAreaElement | null>(null);
   const reactFlowWrapper = useRef<HTMLDivElement | null>(null);
   const { screenToFlowPosition, setViewport, getViewport, getNodes, getNodesBounds, setNodes, setEdges } = useReactFlow();
+  const nodesInitialized = useNodesInitialized();
   // 订阅 viewport 变化，用于 freehand 预览 path 对齐
   const viewport = useViewport();
 
   // v2：canvasSettings 优先于独立 gridGap prop（编辑器传入文档 canvas 设置）
   const effectiveGridGap = canvasSettings?.grid.size ?? gridGap;
+  const flowSnapGrid = useMemo<[number, number]>(
+    () => [effectiveGridGap, effectiveGridGap],
+    [effectiveGridGap],
+  );
   const pageMode = canvasSettings?.mode === "page";
   const pageSize = pageMode
     ? {
@@ -1043,33 +1272,72 @@ const FlowchartCanvasInner = forwardRef<FlowchartCanvasHandle, FlowchartCanvasPr
       }
     : null;
   const surfaceBackground = canvasSettings?.background;
+  const shouldInitialFit = !initialViewport
+    || (initialViewport.x === 0 && initialViewport.y === 0 && initialViewport.zoom === 1);
+  const dynamicPortsByNode = useMemo(
+    () => collectDynamicFlowchartPorts(edges, direction),
+    [edges, direction],
+  );
 
   const flowNodes = useMemo(
     () => {
-      const base = internalNodes ?? nodes.map((n) => toFlowNode(n, direction, readOnly, onNodeLabelEdit, themeDefaults));
+      const base = internalNodes ?? toFlowNodes(
+        nodes,
+        direction,
+        readOnly,
+        onNodeLabelEdit,
+        themeDefaults,
+        dynamicPortsByNode,
+      );
       // internalNodes 由父组件创建时可能未注入 onLabelEdit，这里补上
-      if (internalNodes && onNodeLabelEdit) {
-        return base.map((n) => ({
-          ...n,
-          data: { ...n.data, onLabelEdit: onNodeLabelEdit },
-        }));
+      if (internalNodes) {
+        return base.map((n) => {
+          const ports = dynamicPortsByNode.get(n.id);
+          const data = n.data as unknown as FlowchartNodeData;
+          const currentPorts = data?.ports;
+          const samePorts = currentPorts === ports || (
+            currentPorts !== undefined
+            && ports !== undefined
+            && currentPorts.length === ports.length
+            && currentPorts.every((item, index) => item.handle === ports[index]?.handle && item.port === ports[index]?.port)
+          );
+          if (samePorts && (!onNodeLabelEdit || data?.onLabelEdit === onNodeLabelEdit)) return n;
+          return {
+            ...n,
+            data: {
+              ...n.data,
+              ...(onNodeLabelEdit ? { onLabelEdit: onNodeLabelEdit } : {}),
+              ports,
+            },
+          };
+        });
       }
       return base;
     },
-    [internalNodes, nodes, direction, readOnly, onNodeLabelEdit, themeDefaults],
+    [internalNodes, nodes, direction, readOnly, onNodeLabelEdit, themeDefaults, dynamicPortsByNode],
   );
-  const flowEdges = useMemo(
-    () =>
-      internalEdges ??
-      edges.map((e) =>
-        toFlowEdge(e, {
-          readOnly,
-          onControlPointsChange: onEdgeControlPointsChange,
-          onControlPointsCommit: onEdgeControlPointsCommit,
-        }),
-      ),
-    [internalEdges, edges, readOnly, onEdgeControlPointsChange, onEdgeControlPointsCommit],
-  );
+  const flowEdges = useMemo(() => {
+    const base = internalEdges ?? edges.map((e) =>
+      toFlowEdge(e, {
+        readOnly,
+        direction,
+        onControlPointsChange: onEdgeControlPointsChange,
+        onControlPointsCommit: onEdgeControlPointsCommit,
+      }),
+    );
+    return withReliableEdgeEndpoints(base, flowNodes, nodes, direction, edges);
+  }, [internalEdges, edges, flowNodes, nodes, direction, readOnly, onEdgeControlPointsChange, onEdgeControlPointsCommit]);
+  const handleSelectionChange = useCallback(({ nodes: selectedNodes, edges: selectedEdges }: { nodes: Node[]; edges: Edge[] }) => {
+    onSelectionChange?.({
+      nodeIds: selectedNodes.map((node) => node.id),
+      edgeIds: selectedEdges.map((edge) => edge.id),
+    });
+  }, [onSelectionChange]);
+  const handleMoveEnd = useCallback((_: MouseEvent | TouchEvent | null, viewport: Viewport) => {
+    if (onViewportChange && !exportingViewportRef.current) {
+      onViewportChange({ x: viewport.x, y: viewport.y, zoom: viewport.zoom });
+    }
+  }, [onViewportChange]);
 
   // 恢复保存的 viewport，或在新建/默认视图时 zoom=1 居中（设计文档 §7.7）
   const viewportRestoredRef = useRef(false);
@@ -1080,10 +1348,10 @@ const FlowchartCanvasInner = forwardRef<FlowchartCanvasHandle, FlowchartCanvasPr
       viewportRestoredRef.current = false;
     }
     if (viewportRestoredRef.current) return;
+    if (!nodesInitialized) return;
     const apply = () => {
       const allNodes = getNodes();
       if (allNodes.length === 0) {
-        viewportRestoredRef.current = true;
         return;
       }
       // 存在非默认的保存视图时直接恢复
@@ -1095,7 +1363,7 @@ const FlowchartCanvasInner = forwardRef<FlowchartCanvasHandle, FlowchartCanvasPr
         viewportRestoredRef.current = true;
         return;
       }
-      // 新建或默认视图：强制 zoom=1，并把节点整体居中到画布
+      // 新建或默认视图：小图保持 100%，大图缩放到完整可见，再居中。
       const surfaceEl = reactFlowWrapper.current;
       if (!surfaceEl) {
         viewportRestoredRef.current = true;
@@ -1110,11 +1378,17 @@ const FlowchartCanvasInner = forwardRef<FlowchartCanvasHandle, FlowchartCanvasPr
       const containerRect = rfEl.getBoundingClientRect();
       const centerX = bounds.x + bounds.width / 2;
       const centerY = bounds.y + bounds.height / 2;
+      const availableWidth = Math.max(1, containerRect.width - 96);
+      const availableHeight = Math.max(1, containerRect.height - 96);
+      const fitZoom = Math.max(
+        0.2,
+        Math.min(1, availableWidth / Math.max(1, bounds.width), availableHeight / Math.max(1, bounds.height)),
+      );
       setViewport(
         {
-          x: containerRect.width / 2 - centerX,
-          y: containerRect.height / 2 - centerY,
-          zoom: 1,
+          x: containerRect.width / 2 - centerX * fitZoom,
+          y: containerRect.height / 2 - centerY * fitZoom,
+          zoom: fitZoom,
         },
         { duration: 0 },
       );
@@ -1123,7 +1397,7 @@ const FlowchartCanvasInner = forwardRef<FlowchartCanvasHandle, FlowchartCanvasPr
     // 等待 React Flow 完成节点测量后再计算边界
     const timer = setTimeout(apply, 0);
     return () => clearTimeout(timer);
-  }, [noteId, initialViewport, setViewport, getNodes, getNodesBounds]);
+  }, [noteId, initialViewport, nodesInitialized, setViewport, getNodes, getNodesBounds]);
 
   // 节点双击编辑已下沉到 EditableLabel 组件，画布层不再处理
 
@@ -1156,11 +1430,15 @@ const FlowchartCanvasInner = forwardRef<FlowchartCanvasHandle, FlowchartCanvasPr
       if (readOnly) return;
       if (!connection.source || !connection.target) return;
       if (connection.source === connection.target) return;
+      const source = decodeFlowchartHandleId(connection.sourceHandle ?? undefined);
+      const target = decodeFlowchartHandleId(connection.targetHandle ?? undefined);
       onConnect?.({
         source: connection.source,
         target: connection.target,
-        sourceHandle: connection.sourceHandle ?? undefined,
-        targetHandle: connection.targetHandle ?? undefined,
+        sourceHandle: source.handle,
+        targetHandle: target.handle,
+        sourcePort: source.port,
+        targetPort: target.port,
       });
     },
     [readOnly, onConnect],
@@ -1173,6 +1451,7 @@ const FlowchartCanvasInner = forwardRef<FlowchartCanvasHandle, FlowchartCanvasPr
     y: number;
     source: string;
     sourceHandle?: string;
+    sourcePort?: number;
   } | null>(null);
   // 上次选择的形状类型，下次弹出菜单时排在第一位（NoteGen preferredNodeType）
   const [preferredKind, setPreferredKind] = useState<FlowchartNodeKind | null>(null);
@@ -1188,12 +1467,14 @@ const FlowchartCanvasInner = forwardRef<FlowchartCanvasHandle, FlowchartCanvasPr
       const clientX = "clientX" in event ? event.clientX : event.changedTouches?.[0]?.clientX;
       const clientY = "clientY" in event ? event.clientY : event.changedTouches?.[0]?.clientY;
       if (clientX === undefined || clientY === undefined) return;
+      const source = decodeFlowchartHandleId(connectionState.fromHandle?.id ?? undefined);
 
       setConnectionMenu({
         x: clientX,
         y: clientY,
         source: fromNode.id,
-        sourceHandle: connectionState.fromHandle?.id ?? undefined,
+        sourceHandle: source.handle,
+        sourcePort: source.port,
       });
     },
     [readOnly, onCreateNodeWithConnection],
@@ -1210,6 +1491,7 @@ const FlowchartCanvasInner = forwardRef<FlowchartCanvasHandle, FlowchartCanvasPr
       onCreateNodeWithConnection?.(kind, flowPosition, {
         source: menu.source,
         sourceHandle: menu.sourceHandle,
+        sourcePort: menu.sourcePort,
       });
     },
     [connectionMenu, screenToFlowPosition, onCreateNodeWithConnection],
@@ -1242,11 +1524,15 @@ const FlowchartCanvasInner = forwardRef<FlowchartCanvasHandle, FlowchartCanvasPr
     (edge: Edge, newConnection: { source: string; target: string; sourceHandle?: string | null; targetHandle?: string | null }) => {
       if (readOnly) return;
       if (newConnection.source === newConnection.target) return;
+      const source = decodeFlowchartHandleId(newConnection.sourceHandle ?? undefined);
+      const target = decodeFlowchartHandleId(newConnection.targetHandle ?? undefined);
       onReconnect?.(edge.id, {
         source: newConnection.source,
         target: newConnection.target,
-        sourceHandle: newConnection.sourceHandle ?? undefined,
-        targetHandle: newConnection.targetHandle ?? undefined,
+        sourceHandle: source.handle,
+        targetHandle: target.handle,
+        sourcePort: source.port,
+        targetPort: target.port,
       });
     },
     [readOnly, onReconnect],
@@ -1320,6 +1606,8 @@ const FlowchartCanvasInner = forwardRef<FlowchartCanvasHandle, FlowchartCanvasPr
   // 3. 等待渲染，调用 html-to-image 生成图片
   // 4. 恢复 viewport 和 class
   // 5. 大图导出失败时抛出明确错误，不返回空白 dataURL
+  const exportingViewportRef = useRef(false);
+  const imageTaskRef = useRef<Promise<string> | null>(null);
   const exportImage = useCallback(
     async (
       format: "png" | "svg",
@@ -1330,6 +1618,9 @@ const FlowchartCanvasInner = forwardRef<FlowchartCanvasHandle, FlowchartCanvasPr
 
       const surfaceEl = reactFlowWrapper.current;
       if (!surfaceEl) throw new Error("画布未就绪，无法导出");
+      if (exportingViewportRef.current || imageTaskRef.current) throw new Error("画布正在导出，请等待当前操作完成");
+      await waitForCanvasRender(surfaceEl, options.signal);
+      if (exportingViewportRef.current || imageTaskRef.current) throw new Error("画布正在导出，请等待当前操作完成");
       const rfEl = surfaceEl.querySelector<HTMLElement>(".react-flow");
       if (!rfEl) throw new Error("React Flow 容器未就绪，无法导出");
 
@@ -1343,6 +1634,7 @@ const FlowchartCanvasInner = forwardRef<FlowchartCanvasHandle, FlowchartCanvasPr
       setEdgeEditValue("");
 
       // 2. 隐藏编辑 UI
+      exportingViewportRef.current = true;
       surfaceEl.classList.add("flowchart-exporting");
 
       // 3. 保存并设置 viewport 以包含全图
@@ -1359,14 +1651,9 @@ const FlowchartCanvasInner = forwardRef<FlowchartCanvasHandle, FlowchartCanvasPr
       );
       const x = -bounds.x * zoom + (containerRect.width - bounds.width * zoom) / 2;
       const y = -bounds.y * zoom + (containerRect.height - bounds.height * zoom) / 2;
-      setViewport({ x, y, zoom }, { duration: 0 });
-
-      // 4. 等待 DOM 更新（两帧确保 React Flow 完成渲染）
-      await new Promise<void>((resolve) => requestAnimationFrame(() => resolve()));
-      await new Promise<void>((resolve) => requestAnimationFrame(() => resolve()));
-      await new Promise<void>((resolve) => setTimeout(resolve, 80));
-
       try {
+        await waitForCanvasTask(setViewport({ x, y, zoom }, { duration: 0 }), options.signal);
+        await waitForCanvasRender(surfaceEl, options.signal);
         // 5. 计算背景色
         const backgroundColor =
           background === "transparent"
@@ -1381,6 +1668,7 @@ const FlowchartCanvasInner = forwardRef<FlowchartCanvasHandle, FlowchartCanvasPr
           backgroundColor,
           // 过滤掉可能残留的编辑 UI（CSS 已隐藏，这里双重保险）
           filter: (node: HTMLElement) => {
+            options.signal?.throwIfAborted();
             if (!node.classList) return true;
             return (
               !node.classList.contains("react-flow__controls") &&
@@ -1389,14 +1677,22 @@ const FlowchartCanvasInner = forwardRef<FlowchartCanvasHandle, FlowchartCanvasPr
           },
         };
 
-        if (format === "png") {
-          return await toPng(rfEl, htmlToImageOptions);
-        }
-        return await toSvg(rfEl, htmlToImageOptions);
+        // html-to-image does not support cancellation; keep it single-flight even if the caller times out.
+        const imageTask = format === "png" ? toPng(rfEl, htmlToImageOptions) : toSvg(rfEl, htmlToImageOptions);
+        imageTaskRef.current = imageTask;
+        void imageTask.then(
+          () => { imageTaskRef.current = null; },
+          () => { imageTaskRef.current = null; },
+        );
+        return await waitForCanvasTask(imageTask, options.signal, 15_000);
       } finally {
         // 7. 恢复 viewport 和 class
-        setViewport(prevViewport, { duration: 0 });
-        surfaceEl.classList.remove("flowchart-exporting");
+        try {
+          await waitForCanvasTask(setViewport(prevViewport, { duration: 0 }));
+        } finally {
+          surfaceEl.classList.remove("flowchart-exporting");
+          exportingViewportRef.current = false;
+        }
       }
     },
     [getNodes, getNodesBounds, getViewport, setViewport],
@@ -1641,6 +1937,175 @@ const FlowchartCanvasInner = forwardRef<FlowchartCanvasHandle, FlowchartCanvasPr
     return undefined;
   }, [activeTool]);
 
+  const inspectRenderedQuality = useCallback(async (signal?: AbortSignal): Promise<FlowchartQualityIssue[]> => {
+    await waitForCanvasRender(reactFlowWrapper.current, signal);
+    const root = reactFlowWrapper.current;
+    if (!root) throw new Error("画布 DOM 尚未挂载");
+    const rootRect = root.getBoundingClientRect();
+    if (rootRect.width < 2 || rootRect.height < 2) throw new Error("画布当前不可见，无法进行真实渲染检查");
+    const documentIssues = inspectFlowchartQuality({
+      version: 2,
+      direction,
+      canvas: canvasSettings ?? { ...DEFAULT_FLOWCHART_CANVAS, grid: { ...DEFAULT_FLOWCHART_CANVAS.grid } },
+      theme: { ...DEFAULT_FLOWCHART_THEME },
+      nodes,
+      edges,
+    });
+    const renderedIssues: FlowchartQualityIssue[] = [];
+    const nodeById = new Map(nodes.map((node) => [node.id, node]));
+    const nodeElements = new Map<string, HTMLElement>();
+    root.querySelectorAll<HTMLElement>(".react-flow__node[data-id]").forEach((element) => {
+      const id = element.dataset.id;
+      if (id) nodeElements.set(id, element);
+    });
+    const missingNodeIds = nodes.filter((node) => !nodeElements.has(node.id)).map((node) => node.id).sort();
+    if (missingNodeIds.length > 0) {
+      renderedIssues.push({
+        code: "render-missing-node",
+        severity: "error",
+        message: `实际画面缺少节点 ${missingNodeIds.join("、")}`,
+        nodeIds: missingNodeIds,
+      });
+    }
+
+    for (const [id, element] of nodeElements) {
+      const node = nodeById.get(id);
+      if (!node || isFlowchartContainerKind(node.kind) || node.decorative) continue;
+      const labels = element.querySelectorAll<HTMLElement>(".flowchart-node-label");
+      const nodeRect = element.getBoundingClientRect();
+      if ([...labels].some((label) => {
+        const labelRect = label.getBoundingClientRect();
+        return label.scrollWidth > label.clientWidth + 1
+          || label.scrollHeight > label.clientHeight + 1
+          || labelRect.left < nodeRect.left - 1
+          || labelRect.right > nodeRect.right + 1
+          || labelRect.top < nodeRect.top - 1
+          || labelRect.bottom > nodeRect.bottom + 1;
+      })) {
+        renderedIssues.push({
+          code: "text-overflow",
+          severity: "error",
+          message: `节点 ${id} 的实际渲染文字超出可用区域`,
+          nodeIds: [id],
+        });
+      }
+    }
+
+    const edgeById = new Map(edges.map((edge) => [edge.id, edge]));
+    const obstacles = [...nodeElements].flatMap(([id, element]) => {
+      const node = nodeById.get(id);
+      return node && !isFlowchartContainerKind(node.kind) && !node.decorative
+        ? [{ id, rect: element.getBoundingClientRect() }] : [];
+    });
+    const renderedLabels = [...root.querySelectorAll<SVGGraphicsElement>(".react-flow__edge-textwrapper")].flatMap((element) => {
+      const edgeElement = element.closest<SVGGElement>(".react-flow__edge");
+      const id = edgeElement?.dataset.id;
+      const rect = element.getBoundingClientRect();
+      return id && edgeById.has(id) && rect.width > 0 && rect.height > 0 ? [{ id, rect }] : [];
+    });
+    const rectsOverlap = (a: DOMRect, b: DOMRect) => a.left + 2 < b.right && a.right - 2 > b.left
+      && a.top + 2 < b.bottom && a.bottom - 2 > b.top;
+    for (let i = 0; i < renderedLabels.length; i++) {
+      const label = renderedLabels[i];
+      for (let j = i + 1; j < renderedLabels.length; j++) {
+        const other = renderedLabels[j];
+        if (!rectsOverlap(label.rect, other.rect)) continue;
+        renderedIssues.push({
+          code: "label-overlap", severity: "error",
+          message: `连线 ${label.id} 与 ${other.id} 的实际标签相互遮挡`,
+          edgeIds: [label.id, other.id].sort(),
+        });
+      }
+      for (const node of obstacles) {
+        if (!rectsOverlap(label.rect, node.rect)) continue;
+        renderedIssues.push({
+          code: "label-overlap", severity: "error",
+          message: `连线 ${label.id} 的实际标签遮挡节点 ${node.id}`,
+          edgeIds: [label.id], nodeIds: [node.id],
+        });
+      }
+    }
+    const pageRect = root.querySelector<HTMLElement>(".flowchart-page-frame")?.getBoundingClientRect();
+    const renderedEdgeIds = new Set<string>();
+    let lastYield = performance.now();
+    const deadline = lastYield + 5_000;
+    for (const path of root.querySelectorAll<SVGPathElement>(".react-flow__edge-path")) {
+      signal?.throwIfAborted();
+      const id = path.id.replace(/^react-flow__edge-/, "");
+      const edge = edgeById.get(id);
+      const matrix = path.getScreenCTM();
+      const svg = path.ownerSVGElement;
+      if (!edge || !matrix || !svg) continue;
+      renderedEdgeIds.add(id);
+      const length = path.getTotalLength();
+      const hitNodes = new Set<string>();
+      let outsidePage = false;
+      for (let distance = 8; distance < length - 8; distance += 8) {
+        if (performance.now() - lastYield > 8) {
+          await new Promise<void>((resolve) => setTimeout(resolve, 0));
+          signal?.throwIfAborted();
+          lastYield = performance.now();
+          if (lastYield > deadline) throw new Error("连线质量检查超时，本次检查尚未完成");
+        }
+        const point = path.getPointAtLength(distance);
+        const svgPoint = svg.createSVGPoint();
+        svgPoint.x = point.x;
+        svgPoint.y = point.y;
+        const screen = svgPoint.matrixTransform(matrix);
+        if (pageRect && (
+          screen.x < pageRect.left - 1
+          || screen.x > pageRect.right + 1
+          || screen.y < pageRect.top - 1
+          || screen.y > pageRect.bottom + 1
+        )) outsidePage = true;
+        for (const { id: nodeId, rect } of obstacles) {
+          if (nodeId === edge.source || nodeId === edge.target) continue;
+          if (screen.x > rect.left + 4 && screen.x < rect.right - 4 && screen.y > rect.top + 4 && screen.y < rect.bottom - 4) {
+            hitNodes.add(nodeId);
+          }
+        }
+      }
+      if (hitNodes.size > 0) {
+        const nodeIds = [...hitNodes].sort();
+        renderedIssues.push({
+          code: "edge-through-node",
+          severity: "error",
+          message: `连线 ${id} 的实际路径穿过节点 ${nodeIds.join("、")}`,
+          nodeIds,
+          edgeIds: [id],
+        });
+      }
+      if (outsidePage) {
+        renderedIssues.push({
+          code: "edge-page-overflow",
+          severity: "error",
+          message: `连线 ${id} 的实际路径超出页面范围`,
+          edgeIds: [id],
+        });
+      }
+    }
+    const missingEdgeIds = edges.filter((edge) => !renderedEdgeIds.has(edge.id)).map((edge) => edge.id).sort();
+    if (missingEdgeIds.length > 0) {
+      renderedIssues.push({
+        code: "render-missing-edge",
+        severity: "error",
+        message: `实际画面缺少连线 ${missingEdgeIds.join("、")}`,
+        edgeIds: missingEdgeIds,
+      });
+    }
+
+    const merged = new Map<string, FlowchartQualityIssue>();
+    for (const issue of [...documentIssues, ...renderedIssues]) {
+      const key = `${issue.code}|${[...(issue.nodeIds ?? [])].sort().join(",")}|${[...(issue.edgeIds ?? [])].sort().join(",")}`;
+      merged.set(key, issue);
+    }
+    return [...merged.values()].sort((a, b) => {
+      const ak = `${a.code}|${(a.nodeIds ?? []).join(",")}|${(a.edgeIds ?? []).join(",")}`;
+      const bk = `${b.code}|${(b.nodeIds ?? []).join(",")}|${(b.edgeIds ?? []).join(",")}`;
+      return ak.localeCompare(bk);
+    });
+  }, [canvasSettings, direction, edges, nodes]);
+
   useImperativeHandle(
     ref,
     () => ({
@@ -1662,8 +2127,9 @@ const FlowchartCanvasInner = forwardRef<FlowchartCanvasHandle, FlowchartCanvasPr
           y: rect.top + rect.height / 2,
         });
       },
+      inspectQuality: inspectRenderedQuality,
     }),
-    [exportToPng, exportToSvg, fitView, selectAll, getViewport, setViewport, screenToFlowPosition],
+    [exportToPng, exportToSvg, fitView, inspectRenderedQuality, selectAll, getViewport, setViewport, screenToFlowPosition],
   );
 
   return (
@@ -1688,17 +2154,8 @@ const FlowchartCanvasInner = forwardRef<FlowchartCanvasHandle, FlowchartCanvasPr
         onNodeContextMenu={handleNodeContextMenu}
         onEdgeContextMenu={handleEdgeContextMenu}
         onPaneContextMenu={handlePaneContextMenu}
-        onSelectionChange={({ nodes: ns, edges: es }) => {
-          onSelectionChange?.({
-            nodeIds: ns.map((n) => n.id),
-            edgeIds: es.map((e) => e.id),
-          });
-        }}
-        onMoveEnd={(_, vp: Viewport) => {
-          if (onViewportChange) {
-            onViewportChange({ x: vp.x, y: vp.y, zoom: vp.zoom });
-          }
-        }}
+        onSelectionChange={handleSelectionChange}
+        onMoveEnd={handleMoveEnd}
         nodesDraggable={rfNodesDraggable}
         nodesConnectable={!readOnly}
         elementsSelectable={!readOnly}
@@ -1706,17 +2163,18 @@ const FlowchartCanvasInner = forwardRef<FlowchartCanvasHandle, FlowchartCanvasPr
         edgesReconnectable={!readOnly}
         // 删除键统一由编辑器键盘处理（FC-SWIM-04 安全删除确认），禁用 React Flow 内置删除
         deleteKeyCode={null}
-        fitView={false}
+        fitView={shouldInitialFit}
+        fitViewOptions={FLOWCHART_FIT_VIEW_OPTIONS}
         minZoom={0.2}
         maxZoom={2.5}
-        proOptions={{ hideAttribution: true }}
+        proOptions={FLOWCHART_PRO_OPTIONS}
         panOnDrag={rfPanOnDrag}
         selectionOnDrag={rfSelectionOnDrag}
         selectionMode={SelectionMode.Partial}
         connectionRadius={28}
         nodeDragThreshold={1}
         snapToGrid={!readOnly && snapToGrid}
-        snapGrid={[effectiveGridGap, effectiveGridGap]}
+        snapGrid={flowSnapGrid}
       >
         {showGrid && (
           <Background
@@ -1736,7 +2194,7 @@ const FlowchartCanvasInner = forwardRef<FlowchartCanvasHandle, FlowchartCanvasPr
                 top: 0,
                 width: pageSize.width,
                 height: pageSize.height,
-                zIndex: -1,
+                zIndex: -2,
                 background: "var(--flowchart-node-bg, #fff)",
                 border: "1px solid var(--flowchart-node-border, #cbd5e1)",
                 boxShadow: "0 2px 12px rgb(0 0 0 / 0.08)",
@@ -1895,6 +2353,7 @@ export const flowchartCanvasHelpers = {
   toFlowNode,
   toFlowNodes,
   toFlowEdge,
+  withReliableEdgeEndpoints,
   applyNodeChanges,
   applyEdgeChanges,
   addEdge,

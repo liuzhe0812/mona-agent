@@ -441,7 +441,7 @@ export function NoteAgentPanel({
       </div>
 
       <div className="shrink-0 p-2">
-        <div className="flex min-h-[52px] items-end gap-1.5 rounded-xl border border-border/75 bg-background px-2.5 py-1.5">
+        <div className="flex min-h-[52px] items-end gap-1.5 rounded-xl border border-border/75 bg-background px-2.5 py-1.5 shadow-sm">
           <Textarea
             value={draft}
             onChange={(event) => setDraft(event.target.value)}
@@ -628,7 +628,7 @@ function SingleMessageWithActions({
 }) {
   return (
     <div className="min-w-0">
-      <MessageBubble message={message} showAssistantCopyAction={false} />
+      <MessageBubble message={message} />
       <NoteMessageActions
         message={message}
         applied={appliedMessageIds.includes(message.id)}

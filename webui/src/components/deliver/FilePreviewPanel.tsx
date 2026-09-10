@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { lazy, Suspense, useCallback, useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import {
   ChevronDown,
@@ -12,15 +12,24 @@ import {
   Minimize2,
   PlaySquare,
 } from "lucide-react";
-import { useFilePreviewStore } from "./filePreviewStore";
+import { useFilePreviewStore, type PreviewScope } from "./filePreviewStore";
 import { isTauri, openPathWithSystemApp, revealItemInDir } from "@/lib/tauri";
 import { useClient } from "@/providers/ClientProvider";
 import { fetchFilePreviewBlob } from "@/lib/api";
-import { OfficePreview, isOfficePreviewable } from "@/components/common/OfficePreview";
+import { OfficeFileEditor, officeDocumentType } from "@/components/office/OfficeFileEditor";
+import type { OfficeSessionState } from "@/components/office/types";
+import { CodeBlock } from "@/components/CodeBlock";
 import MarkdownTextRenderer from "@/components/MarkdownTextRenderer";
 import { Button } from "@/components/ui/button";
 import { EmptyState } from "@/components/ui/empty-state";
+import { getCodeLanguage } from "@/lib/file-types";
 import type { DeliveredFile } from "@/lib/types";
+
+const CanvasArtifactPreview = lazy(() =>
+  import("@/components/canvas/CanvasArtifactPreview").then((module) => ({
+    default: module.CanvasArtifactPreview,
+  })),
+);
 
 const PREVIEWABLE_TEXT_EXTS = new Set([
   ".txt", ".md", ".py", ".js", ".ts", ".tsx", ".jsx", ".json", ".yaml", ".yml",
@@ -37,6 +46,11 @@ const MARKDOWN_EXTS = new Set([".md", ".markdown"]);
 function extOf(name: string): string {
   const dot = name.lastIndexOf(".");
   return dot < 0 ? "" : name.slice(dot).toLowerCase();
+}
+
+function isWorkspaceCanvasFile(file: DeliveredFile): boolean {
+  return [file.name, file.path, file.absolute_path, file.artifact_ref?.relative_path]
+    .some((value) => value?.toLowerCase().endsWith(".mona-canvas"));
 }
 
 /** Stable identity of a delivered file across scan results and live
@@ -199,16 +213,43 @@ function FileIcon({ file }: { file: DeliveredFile }) {
   return <FileText className="h-4 w-4" />;
 }
 
-export function FilePreviewPanel({ files = [] }: { files?: DeliveredFile[] }) {
-  const file = useFilePreviewStore((s) => s.file);
-  const scope = useFilePreviewStore((s) => s.scope);
-  const sessionKey = useFilePreviewStore((s) => s.sessionKey);
-  const roomId = useFilePreviewStore((s) => s.roomId);
+export function FilePreviewPanel({
+  files = [],
+  embedded = false,
+  previewFile,
+  previewScope,
+  previewSessionKey,
+  previewRoomId,
+  onOfficeOpened,
+  onOfficeExported,
+  officeExportDirectory,
+}: {
+  files?: DeliveredFile[];
+  /** The surrounding sidebar owns the tab/header controls. */
+  embedded?: boolean;
+  /** Explicit tab target. Omit to use the legacy single-preview store. */
+  previewFile?: DeliveredFile;
+  previewScope?: PreviewScope;
+  previewSessionKey?: string | null;
+  previewRoomId?: string | null;
+  onOfficeOpened?: (session: OfficeSessionState) => void;
+  onOfficeExported?: () => void;
+  officeExportDirectory?: string | null;
+}) {
+  const storedFile = useFilePreviewStore((s) => s.file);
+  const storedScope = useFilePreviewStore((s) => s.scope);
+  const storedSessionKey = useFilePreviewStore((s) => s.sessionKey);
+  const storedRoomId = useFilePreviewStore((s) => s.roomId);
+  const file = previewFile ?? storedFile;
+  const scope = previewScope ?? storedScope;
+  const sessionKey = previewSessionKey === undefined ? storedSessionKey : previewSessionKey;
+  const roomId = previewRoomId === undefined ? storedRoomId : previewRoomId;
   const close = useFilePreviewStore((s) => s.close);
   const open = useFilePreviewStore((s) => s.open);
   const fullscreen = useFilePreviewStore((s) => s.fullscreen);
   const toggleFullscreen = useFilePreviewStore((s) => s.toggleFullscreen);
   const { token } = useClient();
+  const isCanvas = !!file && isWorkspaceCanvasFile(file);
 
   // Build/revoke Blob URLs whenever the preview target or scope changes.
   // Holds at most one URL at a time; previous URL is revoked before the
@@ -216,25 +257,36 @@ export function FilePreviewPanel({ files = [] }: { files?: DeliveredFile[] }) {
   const [blobUrl, setBlobUrl] = useState<string | null>(null);
   const [blobError, setBlobError] = useState<string | null>(null);
   const [textSource, setTextSource] = useState<string | null>(null);
+  const [settledPreviewKey, setSettledPreviewKey] = useState<string | null>(null);
   const currentUrlRef = useRef<string | null>(null);
+  const previewKey = file && token && !officeDocumentType(file.name) && !isCanvas
+    ? `${scope}:${sessionKey ?? ""}:${roomId ?? ""}:${fileKey(file)}`
+    : null;
+  const previewLoading = previewKey !== null && settledPreviewKey !== previewKey;
 
   useEffect(() => {
     if (!file || !token) {
       setBlobUrl(null);
       setTextSource(null);
       setBlobError(null);
+      setSettledPreviewKey(null);
       return;
     }
-    // Office 文档由 OfficePreview 组件自行加载，跳过 blob 获取
-    if (isOfficePreviewable(file.name)) {
+    if (officeDocumentType(file.name) || isCanvas) {
       setBlobUrl(null);
       setTextSource(null);
       setBlobError(null);
+      setSettledPreviewKey(null);
       return;
     }
     let cancelled = false;
     setBlobError(null);
     setTextSource(null);
+    setBlobUrl(null);
+    if (currentUrlRef.current) {
+      URL.revokeObjectURL(currentUrlRef.current);
+      currentUrlRef.current = null;
+    }
 
     (async () => {
       try {
@@ -273,6 +325,7 @@ export function FilePreviewPanel({ files = [] }: { files?: DeliveredFile[] }) {
         } else if (
           !isPreviewableImage(file)
           && !isPreviewableVideo(file)
+          && ![".pdf", ".doc", ".xls", ".ppt", ".ofd"].includes(extOf(file.name))
           && (mime.startsWith("text/") || mime === "application/json")
         ) {
           const text = await blob.text();
@@ -280,7 +333,9 @@ export function FilePreviewPanel({ files = [] }: { files?: DeliveredFile[] }) {
           setTextSource(text);
           setBlobUrl(null);
         } else {
-          const url = URL.createObjectURL(blob);
+          const url = URL.createObjectURL(extOf(file.name) === ".pdf"
+            ? new Blob([blob], { type: "application/pdf" })
+            : blob);
           if (cancelled) {
             URL.revokeObjectURL(url);
             return;
@@ -297,13 +352,15 @@ export function FilePreviewPanel({ files = [] }: { files?: DeliveredFile[] }) {
         setBlobError(err instanceof Error ? err.message : String(err));
         setBlobUrl(null);
         setTextSource(null);
+      } finally {
+        if (!cancelled) setSettledPreviewKey(previewKey);
       }
     })();
 
     return () => {
       cancelled = true;
     };
-  }, [file, scope, sessionKey, roomId, token]);
+  }, [file, scope, sessionKey, roomId, token, previewKey, isCanvas]);
 
   // Revoke the lingering Blob URL on unmount.
   useEffect(() => {
@@ -392,14 +449,33 @@ export function FilePreviewPanel({ files = [] }: { files?: DeliveredFile[] }) {
     </div>
   );
 
-  const isOffice = isOfficePreviewable(file.name);
+  const isOffice = !!officeDocumentType(file.name);
+  const codeLanguage = getCodeLanguage(file.name);
 
-  const body = isOffice ? (
+  const body = isCanvas ? (
     <div className="flex min-h-0 flex-1 flex-col">
-      <OfficePreview
+      <Suspense fallback={<div className="h-full animate-pulse bg-muted/30" />}>
+        <CanvasArtifactPreview
+          file={file}
+          scope={scope}
+          sessionKey={sessionKey}
+          roomId={roomId}
+        />
+      </Suspense>
+    </div>
+  ) : isOffice ? (
+    <div className="flex min-h-0 flex-1 flex-col">
+      <OfficeFileEditor
+        key={`${sessionKey ?? roomId ?? "preview"}:${fileKey(file)}`}
         filename={file.name}
+        sourceIdentity={file.absolute_path || `${scope}:${sessionKey ?? roomId ?? ""}:${file.path}`}
+        ownerSessionKey={sessionKey || (roomId ? `websocket:${roomId}` : "preview:local")}
+        onOpened={onOfficeOpened}
+        onClosed={close}
+        onExported={onOfficeExported}
+        exportDirectory={officeExportDirectory}
         fetchBuffer={async () => {
-          if (!token) throw new Error("No token");
+          if (!token) throw new Error("文档服务尚未连接，请稍后重试。");
           const { blob } = await fetchFilePreviewBlob(token, {
             scope,
             path: file.path,
@@ -413,7 +489,11 @@ export function FilePreviewPanel({ files = [] }: { files?: DeliveredFile[] }) {
     </div>
   ) : (
     <div className="flex min-h-0 flex-1 flex-col">
-      {blobError ? (
+      {previewLoading ? (
+        <div className="flex h-full items-center justify-center p-4 text-caption text-muted-foreground">
+          正在加载预览…
+        </div>
+      ) : blobError ? (
         <div className="flex h-full flex-col items-center justify-center gap-2 p-4 text-caption text-destructive">
           <File className="h-10 w-10 opacity-40" />
           <span>加载预览失败：{blobError}</span>
@@ -432,9 +512,21 @@ export function FilePreviewPanel({ files = [] }: { files?: DeliveredFile[] }) {
           <MarkdownTextRenderer>{textSource}</MarkdownTextRenderer>
         </div>
       ) : isPreviewableText(file) && textSource !== null ? (
-        <pre className="scrollbar-thin h-full w-full overflow-auto whitespace-pre-wrap break-words p-4 font-mono text-caption text-foreground">
-          {textSource}
-        </pre>
+        codeLanguage ? (
+          <div className="scrollbar-thin h-full w-full overflow-auto">
+            <CodeBlock
+              className="min-h-full rounded-none"
+              code={textSource}
+              language={codeLanguage}
+              constrainHeight={false}
+              showHeader={false}
+            />
+          </div>
+        ) : (
+          <pre className="scrollbar-thin h-full w-full overflow-auto whitespace-pre-wrap break-words p-4 font-mono text-caption text-foreground">
+            {textSource}
+          </pre>
+        )
       ) : isPreviewableImage(file) && blobUrl ? (
         <div className="flex h-full items-center justify-center p-4">
           <img
@@ -453,18 +545,22 @@ export function FilePreviewPanel({ files = [] }: { files?: DeliveredFile[] }) {
             className="max-h-full max-w-full"
           />
         </div>
+      ) : [".doc", ".xls", ".ppt", ".ofd"].includes(extOf(file.name)) ? (
+        <NoPreview file={file} />
       ) : blobUrl ? (
         <iframe
           src={blobUrl}
           className="h-full w-full border-0"
           title="File preview"
-          sandbox="allow-same-origin"
+          sandbox={extOf(file.name) === ".pdf" ? undefined : "allow-same-origin"}
         />
       ) : (
         <NoPreview file={file} />
       )}
     </div>
   );
+
+  if (isOffice) return <div className="flex h-full min-h-0 flex-col bg-editor-surface">{body}</div>;
 
   if (fullscreen) {
     return createPortal(
@@ -478,7 +574,7 @@ export function FilePreviewPanel({ files = [] }: { files?: DeliveredFile[] }) {
 
   return (
     <div className="flex h-full flex-col bg-editor-surface">
-      {header}
+      {embedded ? null : header}
       {body}
     </div>
   );
@@ -497,7 +593,9 @@ function NoPreview({ file }: { file: DeliveredFile }) {
     <EmptyState
       className="h-full"
       icon={<File className="h-6 w-6 opacity-40" />}
-      title="此文件类型不支持预览"
+      title={[".doc", ".xls", ".ppt"].includes(extOf(file.name))
+        ? "请将旧版文档另存为 .docx、.xlsx 或 .pptx 后编辑"
+        : "此文件类型不支持预览"}
       action={
         isTauri() ? (
           <div className="flex gap-2">

@@ -125,7 +125,7 @@ def _check_schema(page: dict[str, Any], add) -> None:
             "frontmatter-schema",
             "error",
             rel,
-            "sources 缺失或不是列表",
+            "sources 不是列表或缺失",
             {"field": "sources", "value": sources},
         )
     elif not sources:
@@ -146,9 +146,9 @@ def _check_schema(page: dict[str, Any], add) -> None:
         )
 
 
-def lint_materials(vault: Path) -> dict[str, Any]:
+def lint_materials(vault: Path, *, root: Path | None = None) -> dict[str, Any]:
     """扫描 `<vault>/.mona/materials/`，返回机器可读 lint 报告。"""
-    root = vault / ".mona" / "materials"
+    root = root or vault / ".mona" / "materials"
     raw_root = root / "raw"
     text_root = root / "text"
     wiki_root = root / "wiki"

@@ -6,6 +6,9 @@ license: Proprietary. LICENSE.txt has complete terms
 
 # PDF Processing Guide
 
+Run bundled Python helpers only through `skill_script_run` with `skill="pdf"`.
+Do not execute Skill files through `exec` or a system Python.
+
 ## Overview
 
 This guide covers essential PDF processing operations using Python libraries and command-line tools. For advanced features, JavaScript libraries, and detailed examples, see REFERENCE.md. If you need to fill out a PDF form, read FORMS.md and follow its instructions.
@@ -550,23 +553,12 @@ pdftk input.pdf rotate 1east output rotated.pdf
 ## Common Tasks
 
 ### Extract Text from Scanned PDFs
-```python
-# Requires: pip install pytesseract pdf2image
-import pytesseract
-from pdf2image import convert_from_path
 
-# Convert PDF to images
-images = convert_from_path('scanned.pdf')
-
-# OCR each page
-text = ""
-for i, image in enumerate(images):
-    text += f"Page {i+1}:\n"
-    text += pytesseract.image_to_string(image)
-    text += "\n\n"
-
-print(text)
-```
+OCR requires the external Tesseract program, which is not part of Mona's first
+managed Python/Node runtime. Do not run `pip install` or fall back to a system
+OCR installation. If OCR is required and no dedicated Mona OCR tool is
+available, report that exact dependency and ask the user to choose another
+input or wait for OCR runtime support.
 
 ### Add Watermark
 ```python

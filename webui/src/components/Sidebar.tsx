@@ -9,7 +9,6 @@ import {
   LogOut,
   Menu,
   MoreHorizontal,
-  LockKeyhole,
   Pencil,
   Pin,
   PinOff,
@@ -451,14 +450,14 @@ function isMacOS() {
 export const MODULE_DEFS: ToolboxItem[] = [
   { key: "chat", label: "新会话", icon: <img src={sidebarMonaIcon} className="h-5 w-5 object-contain" alt="" draggable={false} /> },
   { key: "note", label: "笔记", icon: <img src={sidebarNoteIcon} className="h-5 w-5 object-contain" alt="" draggable={false} /> },
-  { key: "doc", label: "AI文档", icon: <img src={sidebarDocIcon} className="h-5 w-5 object-contain" alt="" draggable={false} /> },
-  { key: "ssh", label: "终端", icon: <img src={sidebarTerminalIcon} className="h-5 w-5 object-contain" alt="" draggable={false} /> },
+  { key: "doc", label: "文档", icon: <img src={sidebarDocIcon} className="h-5 w-5 object-contain" alt="" draggable={false} /> },
   { key: "email", label: "邮件", icon: <img src={sidebarEmailIcon} className="h-5 w-5 object-contain" alt="" draggable={false} /> },
   { key: "schedule", label: "计划", icon: <img src={sidebarScheduleIcon} className="h-5 w-5 object-contain" alt="" draggable={false} /> },
-  { key: "stock", label: "股票", icon: <img src={sidebarStockIcon} className="h-5 w-5 object-contain" alt="" draggable={false} /> },
+  { key: "ssh", label: "终端", icon: <img src={sidebarTerminalIcon} className="h-5 w-5 object-contain" alt="" draggable={false} /> },
   { key: "db", label: "数据库", icon: <img src={sidebarDatabaseIcon} className="h-5 w-5 object-contain" alt="" draggable={false} /> },
   { key: "system", label: "系统", icon: <img src={sidebarSystemIcon} className="h-5 w-5 object-contain" alt="" draggable={false} />, windowsOnly: true },
   { key: "profile", label: "画像", icon: <img src={sidebarProfileIcon} className="h-5 w-5 object-contain" alt="" draggable={false} /> },
+  { key: "stock", label: "股票", icon: <img src={sidebarStockIcon} className="h-5 w-5 object-contain" alt="" draggable={false} /> },
 ];
 
 // 默认顺序与可见性（用户配置持久化在桌面设置 sidebar_modules 中）
@@ -470,6 +469,18 @@ export const DEFAULT_SIDEBAR_MODULES: SidebarModuleConfig[] = MODULE_DEFS.map((m
 
 // 「新会话」入口锁定不可隐藏
 const LOCKED_MODULE_KEYS = new Set(["chat"]);
+const LEGACY_DEFAULT_SIDEBAR_MODULE_ORDER = [
+  "chat",
+  "note",
+  "doc",
+  "ssh",
+  "email",
+  "schedule",
+  "db",
+  "system",
+  "profile",
+  "stock",
+];
 
 // 主区域直接展示的最多模块数；超出收纳到「更多」菜单
 // 股票是交付即用的核心模块（设计 §13 默认开启），必须一级可见
@@ -491,10 +502,13 @@ export function mergeSidebarModules(
       }
     }
   }
+  const hasLegacyDefaultOrder = userMap.size > 0 && [...userMap.values()].every(
+    (module) => LEGACY_DEFAULT_SIDEBAR_MODULE_ORDER.indexOf(module.key) === module.order,
+  );
   const merged: SidebarModuleConfig[] = MODULE_DEFS.map((d, i) => {
     const u = userMap.get(d.key);
     return u
-      ? { key: d.key, visible: u.visible, order: u.order }
+      ? { key: d.key, visible: u.visible, order: hasLegacyDefaultOrder ? i : u.order }
       : { key: d.key, visible: true, order: i };
   });
   return merged.sort((a, b) => a.order - b.order);
@@ -563,8 +577,6 @@ function ToolboxNavigation({
   modules?: SidebarModuleConfig[];
   moduleAvailability?: Record<string, boolean>;
 }) {
-  const { licenseActive } = useLicense();
-  const LICENSE_REQUIRED = new Set(["doc"]);
   const handlers = {
     onNewChat,
     onOpenNote,
@@ -656,7 +668,6 @@ function ToolboxNavigation({
             className="min-w-[160px]"
           >
             {visibleSecondary.map((item) => {
-              const locked = !licenseActive && LICENSE_REQUIRED.has(item.key);
               return (
                 <DropdownMenuItem
                   key={item.key}
@@ -665,7 +676,6 @@ function ToolboxNavigation({
                 >
                   {item.icon}
                   <span>{item.label}</span>
-                  {locked && <LockKeyhole className="ml-auto h-3.5 w-3.5 text-muted-foreground" />}
                 </DropdownMenuItem>
               );
             })}

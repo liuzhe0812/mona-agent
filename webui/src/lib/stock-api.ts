@@ -2006,6 +2006,10 @@ export interface StockDiagnosisFactor {
   value?: number | null;
   percentile?: number | null;
   direction?: StockDiagnosisDirection | null;
+  group?: string | null;
+  unit?: string | null;
+  comparison_scope?: string | null;
+  as_of?: string | null;
   weight?: number | null;
   contribution?: number | null;
   source_ids?: string[];
@@ -2014,6 +2018,10 @@ export interface StockDiagnosisFactor {
 export interface StockDiagnosisFactorHorizon {
   status?: "available" | "degraded" | "unavailable";
   validation_status?: StockDiagnosisValidationStatus;
+  promotion_status?: "calibrated" | "research_only" | "rejected" | "unavailable";
+  validation_reason?: string | null;
+  validation_metrics?: Record<string, unknown>;
+  target_window_sessions?: number | null;
   factor_score?: number | null;
   market_percentile?: number | null;
   industry_percentile?: number | null;
@@ -2042,10 +2050,43 @@ export interface StockDiagnosisFactorSnapshot {
 
 export interface StockDiagnosisMaterializedPlan {
   reference_entry?: number | null;
+  reference_entry_low?: number | null;
+  reference_entry_high?: number | null;
   pullback_entry?: number | null;
+  pullback_entry_low?: number | null;
+  pullback_entry_high?: number | null;
   stop_loss?: number | null;
   first_take_profit?: number | null;
   second_take_profit?: number | null;
+  risk_reference_price?: number | null;
+  risk_per_share?: number | null;
+  risk_pct?: number | null;
+  first_reward_pct?: number | null;
+  second_reward_pct?: number | null;
+  risk_reward_first?: number | null;
+  risk_reward_second?: number | null;
+  risk_reward_method_version?: string | null;
+  risk_reward_first_after_cost?: number | null;
+  risk_reward_second_after_cost?: number | null;
+  risk_reward_first_after_fees?: number | null;
+  risk_reward_second_after_fees?: number | null;
+  estimated_slippage_pct?: number | null;
+  cost_assumptions?: Record<string, unknown>;
+  cost_scope?: "fees_and_slippage_proxy" | "unavailable";
+  cost_method_version?: string | null;
+  slippage_method_version?: string | null;
+  minimum_risk_reward_first?: number;
+  minimum_risk_reward_second?: number;
+  risk_reward_gate_status?: "passed" | "failed" | "unavailable";
+  risk_reward_gate_method_version?: string;
+  fee_gate_status?: "passed" | "failed" | "unavailable";
+  fee_gate_method_version?: string;
+  slippage_stress_status?: "passed" | "failed" | "unavailable";
+  slippage_stress_method_version?: string;
+  entry_condition_status?: "triggered" | "not_triggered" | "unavailable";
+  entry_condition?: string | null;
+  entry_condition_count?: number;
+  entry_condition_realtime_eligible?: boolean;
   value_status?: "available" | "partial" | "unavailable";
   unavailable_fields?: string[];
   invalidation?: string[];
@@ -2058,13 +2099,33 @@ export interface StockDiagnosisPositionPlan {
   reference_position_pct?: number | null;
   max_position_pct?: number | null;
   risk_budget_pct?: number | null;
+  stop_distance_pct?: number | null;
+  volatility_adjustment?: number | null;
+  liquidity_cap_pct?: number | null;
+  conservative_risk_cap_pct?: number | null;
+  calculation_method?: string | null;
+  calculation_version?: string | null;
+  risk_cap_method_version?: string | null;
   value_status?: "available" | "partial" | "unavailable";
   source_ids?: string[];
+}
+
+export interface StockDiagnosisSourceRecord {
+  id: string;
+  provider: string;
+  url: string;
+  published_at?: string | null;
+  period_end?: string | null;
 }
 
 export interface StockDiagnosisHorizonDecision {
   direction: StockDiagnosisDirection;
   action: StockDiagnosisAction;
+  decision_score?: number | null;
+  positive_threshold?: number;
+  negative_threshold?: number;
+  component_scores?: Record<string, number>;
+  component_weights?: Record<string, number>;
   factor_score?: number | null;
   market_percentile?: number | null;
   industry_percentile?: number | null;
@@ -2072,6 +2133,8 @@ export interface StockDiagnosisHorizonDecision {
   validation_status: StockDiagnosisValidationStatus;
   not_holding_action: StockDiagnosisAction;
   holding_action: StockDiagnosisAction;
+  current_action?: "wait" | "participate" | "hold" | "reduce" | "exit" | "avoid";
+  thesis?: string | null;
   materialized_plan: StockDiagnosisMaterializedPlan;
   position_plan: StockDiagnosisPositionPlan;
   review_trigger?: string;
@@ -2124,9 +2187,12 @@ export interface StockDiagnosisV1 {
   instrument: StockRawReportInstrument;
   research_cutoff_at: string;
   market_as_of?: string | null;
+  current_price?: number | null;
+  price_source_ids?: string[];
   generated_at: string;
   evidence_context_id: string;
   source_ids: string[];
+  sources?: StockDiagnosisSourceRecord[];
   data_quality: {
     status: "complete" | "available" | "degraded" | "unavailable";
     confidence: "high" | "medium" | "low";
@@ -2181,6 +2247,38 @@ export interface StockDiagnosisRun {
   errorCode?: string | null;
   report?: StockDiagnosisV1;
   markdown?: string;
+}
+
+export interface StockDiagnosisOutcome {
+  schemaVersion: 1;
+  diagnosisId: string;
+  trackingId: string;
+  status: "pending" | "available";
+  outcomeLabel: string;
+  windowSessions: number;
+  observedSessions: number;
+  reportAsOf?: string | null;
+  observationStartDate?: string | null;
+  exitDate?: string | null;
+  referencePrice?: number | null;
+  direction?: StockDiagnosisDirection | null;
+  action?: StockDiagnosisAction | null;
+  directionReturnPct?: number | null;
+  directionMfePct?: number | null;
+  directionMaePct?: number | null;
+  directionHit?: boolean | null;
+  tradeStatus?: "entered" | "not_entered" | "not_applicable" | "research_only" | null;
+  entryDate?: string | null;
+  entryPrice?: number | null;
+  firstTriggerType?: "ambiguous_same_bar" | "stop_loss" | "first_take_profit" | "second_take_profit" | null;
+  firstTriggerDate?: string | null;
+  conservativeRule?: string | null;
+  tradeReturnPct?: number | null;
+  tradeMfePct?: number | null;
+  tradeMaePct?: number | null;
+  calculatedAt?: string | null;
+  calculationVersion: string;
+  dailyBarProxy: boolean;
 }
 
 export const STOCK_DIAGNOSIS_ROOM_CHAT_ID = "stock_ai_diagnosis";
@@ -2884,6 +2982,15 @@ export async function fetchStockDiagnosis(
 ): Promise<StockDiagnosisRun> {
   return servicesFetch<StockDiagnosisRun>(
     `/api/stock/diagnosis/${encodeURIComponent(diagnosisId)}`,
+    { method: "GET" },
+  );
+}
+
+export async function fetchStockDiagnosisOutcome(
+  diagnosisId: string,
+): Promise<StockDiagnosisOutcome> {
+  return servicesFetch<StockDiagnosisOutcome>(
+    `/api/stock/diagnosis/${encodeURIComponent(diagnosisId)}/outcome`,
     { method: "GET" },
   );
 }

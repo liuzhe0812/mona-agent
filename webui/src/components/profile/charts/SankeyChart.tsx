@@ -157,14 +157,14 @@ export function SankeyChart({ chains, height = 200 }: SankeyChartProps) {
             <text
               x={node.x + node.width + 6}
               y={node.y + node.height / 2 + 3}
-              className="fill-foreground text-[10px]"
+            className="fill-foreground text-micro"
             >
               {node.label}
             </text>
             <text
               x={node.x + node.width + 6}
               y={node.y + node.height / 2 + 15}
-              className="fill-muted-foreground text-[9px] tabular-nums"
+            className="fill-muted-foreground text-micro tabular-nums"
             >
               {node.total}次
             </text>

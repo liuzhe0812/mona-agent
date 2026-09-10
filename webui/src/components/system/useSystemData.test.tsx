@@ -9,11 +9,12 @@ vi.mock("@tauri-apps/api/core", () => ({ invoke: vi.fn(() => Promise.resolve(nul
 vi.mock("@tauri-apps/api/event", () => ({ listen: vi.fn(() => Promise.resolve(() => {})) }));
 
 const scanResult = (disk: string): StorageScanResult => ({
+  scanId: `scan-${disk}`,
   disks: [
     { driveLetter: "C:\\", usagePercent: 50, usedGb: 50, totalGb: 100, availableGb: 50, isRemovable: false },
     { driveLetter: "D:\\", usagePercent: 30, usedGb: 60, totalGb: 200, availableGb: 140, isRemovable: false },
   ],
-  directories: [{ path: `${disk}\\Data`, sizeGb: 8, fileCount: 4 }],
+  directories: [{ id: `dir-${disk}`, path: `${disk}\\Data`, sizeGb: 8, fileCount: 4, directSizeGb: 8 }],
   cleanupItems: [],
   fileTypes: [],
   totalScannedGb: 8,

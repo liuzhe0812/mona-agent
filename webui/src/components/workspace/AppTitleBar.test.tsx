@@ -11,10 +11,12 @@ vi.mock("@tauri-apps/api/window", () => ({
 }));
 
 import { AppTitleBar } from "./AppTitleBar";
+import { useVideoRuntimeDownloadStore } from "@/lib/video-runtime-download-store";
 
 describe("AppTitleBar", () => {
   beforeEach(() => {
     startDragging.mockClear();
+    useVideoRuntimeDownloadStore.setState({ jobs: [], error: null });
   });
 
   it("marks non-interactive title bar content as a native drag region", () => {
@@ -59,5 +61,47 @@ describe("AppTitleBar", () => {
     );
 
     expect(screen.getByRole("button", { name: "New browser tab" })).toBeInTheDocument();
+  });
+
+  it("shows background video-runtime download progress in the title bar", async () => {
+    useVideoRuntimeDownloadStore.setState({
+      error: null,
+      jobs: [
+        {
+          jobId: "job-1",
+          state: "running",
+          progress: 42,
+          currentComponent: "ffmpeg",
+          createdAt: 1,
+          updatedAt: 2,
+          components: {
+            ffmpeg: {
+              component: "ffmpeg",
+              state: "downloading",
+              progress: 42,
+              receivedBytes: 42,
+              totalBytes: 100,
+            },
+          },
+        },
+      ],
+    });
+
+    render(
+      <AppTitleBar
+        tabs={[]}
+        activeTabId="mona"
+        onTabClick={vi.fn()}
+        onTabClose={vi.fn()}
+        onNewTab={vi.fn()}
+      />,
+    );
+
+    fireEvent.pointerDown(screen.getByRole("button", { name: "视频组件下载中 42%" }), {
+      button: 0,
+      ctrlKey: false,
+    });
+    expect(await screen.findByText("FFmpeg")).toBeInTheDocument();
+    expect(screen.getAllByText("42%").length).toBeGreaterThan(0);
   });
 });

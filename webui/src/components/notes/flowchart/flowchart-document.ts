@@ -18,6 +18,7 @@
 // ---------------------------------------------------------------------------
 
 import { migrateFlowchartV1ToV2 } from "./flowchart-migrate";
+import { isFlowchartPort } from "./flowchart-ports";
 
 export type FlowchartDirection = "TB" | "LR";
 export type FlowchartNodeKind =
@@ -158,47 +159,38 @@ export function isFlowchartContainerKind(kind: FlowchartNodeKind): boolean {
   return FLOWCHART_CONTAINER_KINDS.includes(kind);
 }
 
-/**
- * AI patch 可用的节点 kind（FC-AI-01）。
- *
- * - 仅包含流程语义形状：9 种基础流程 + NoteGen 11 种扩展 + v2 8 种流程扩展；
- * - 不含基础装饰形状（rectangle/star/cloud 等）：避免模型随意美化，
- *   这些形状不出现在 AI 提示中（replaceGraph 回传既有装饰节点由校验层容忍）；
- * - 不含容器（group/swimlane-pool/swimlane-lane）：泳道 AI 协议未稳定（FC-AI-02 延后）；
- * - 不含 text/image/freehand：这些元素需要尺寸/内容语义，AI 不应管理。
- */
-export const FLOWCHART_AI_NODE_KINDS: readonly FlowchartNodeKind[] = [
-  "start",
-  "end",
-  "terminator",
-  "process",
-  "alternate-process",
-  "predefined-process",
-  "subprocess",
-  "manual-operation",
-  "decision",
-  "input-output",
-  "manual-input",
-  "display",
-  "document",
-  "multi-document",
-  "database",
-  "internal-storage",
-  "stored-data",
-  "preparation",
-  "delay",
-  "card",
-  "merge",
-  "extract",
-  "sort",
-  "or",
-  "summation",
-  "connector",
-  "off-page-connector",
-  "annotation",
-];
+/** AI 可创建的形状：开放现有安全图形，排除本地资产、手绘和结构容器。 */
+export const FLOWCHART_AI_NODE_KINDS: readonly FlowchartNodeKind[] = FLOWCHART_NODE_KINDS.filter(
+  (kind) => !isFlowchartContainerKind(kind) && kind !== "image" && kind !== "freehand",
+);
 
 export const FLOWCHART_DIRECTIONS: readonly FlowchartDirection[] = ["TB", "LR"];
+
+/** AI 与编辑器共用的通用图标；保持有限集合，避免文档依赖任意组件名。 */
+export const FLOWCHART_ICON_NAMES = [
+  "user",
+  "users",
+  "browser",
+  "mobile",
+  "server",
+  "database",
+  "file",
+  "folder",
+  "cloud",
+  "network",
+  "message",
+  "mail",
+  "search",
+  "lock",
+  "check",
+  "warning",
+  "settings",
+  "code",
+  "cpu",
+  "ai",
+] as const;
+
+export type FlowchartIconName = (typeof FLOWCHART_ICON_NAMES)[number];
 
 /** 节点样式覆盖（全部可选，undefined 表示使用主题默认值）。 */
 export interface FlowchartNodeStyle {
@@ -247,6 +239,14 @@ export interface FlowchartEdgeStyle {
   markerStart?: "none" | "arrow" | "arrowclosed";
   /** 终点箭头 */
   markerEnd?: "none" | "arrow" | "arrowclosed";
+  /** 边标签文字颜色、背景、字号与强调。 */
+  labelColor?: string;
+  labelBackground?: string;
+  labelFontSize?: number;
+  labelBold?: boolean;
+  /** 标签相对自动位置的像素偏移。 */
+  labelOffsetX?: number;
+  labelOffsetY?: number;
 }
 
 export interface FlowchartNode {
@@ -261,6 +261,8 @@ export interface FlowchartNode {
   size?: { width: number; height: number };
   /** 节点级样式覆盖；不参与语义哈希，但会写入 JSON 与渲染 */
   style?: FlowchartNodeStyle;
+  /** 通用语义图标；不改变节点 kind。 */
+  icon?: FlowchartIconName;
   /** 图片节点：相对于 vault 根目录的图片路径（如 assets/xxx.png） */
   imagePath?: string;
   /** freehand 节点：原始笔触点（含压感），不参与语义哈希 */
@@ -287,6 +289,8 @@ export interface FlowchartNode {
   flipY?: boolean;
   /** v2：锁定后禁止位置/尺寸修改，不参与语义哈希 */
   locked?: boolean;
+  /** 纯视觉图元：不进入流程语义、不参与自动布局与普通节点重叠检查。 */
+  decorative?: boolean;
   /** v2：容器结构参数，只允许挂在 group/pool/lane kind 上 */
   container?:
     | { type: "group" }
@@ -302,6 +306,10 @@ export interface FlowchartEdge {
   sourceHandle?: string;
   /** 目标 Handle ID；不参与语义哈希 */
   targetHandle?: string;
+  /** 源 Handle 所在边的 0..1 比例；缺省为 0.5，不参与语义哈希。 */
+  sourcePort?: number;
+  /** 目标 Handle 所在边的 0..1 比例；缺省为 0.5，不参与语义哈希。 */
+  targetPort?: number;
   label?: string;
   /** 边级样式覆盖；不参与语义哈希，但会写入 JSON 与渲染 */
   style?: FlowchartEdgeStyle;
@@ -310,6 +318,8 @@ export interface FlowchartEdge {
    *  - bezier: 长度固定为 2，作为 cubic bezier 的两个控制点 [cp1, cp2]
    *  - straight: 忽略（直线不支持控制点） */
   controlPoints?: { x: number; y: number }[];
+  /** 本地路由器生成的控制点；节点移动或 reflow 时允许重新计算。 */
+  autoRouted?: boolean;
 }
 
 export interface FlowchartViewport {
@@ -567,6 +577,9 @@ export function validateFlowchartDocument(input: unknown): FlowchartValidationRe
           }
         }
       }
+      if (n.icon !== undefined && !FLOWCHART_ICON_NAMES.includes(n.icon as FlowchartIconName)) {
+        errors.push(invalid("node-icon-invalid", `${ctx} icon 不合法：${String(n.icon)}`));
+      }
       // v2 可选字段
       if (n.parentId !== undefined && (typeof n.parentId !== "string" || n.parentId.length === 0)) {
         errors.push(invalid("node-parent-invalid", `${ctx} parentId 不是非空字符串`));
@@ -585,6 +598,9 @@ export function validateFlowchartDocument(input: unknown): FlowchartValidationRe
       }
       if (n.locked !== undefined && typeof n.locked !== "boolean") {
         errors.push(invalid("node-locked-invalid", `${ctx} locked 不是布尔值`));
+      }
+      if (n.decorative !== undefined && typeof n.decorative !== "boolean") {
+        errors.push(invalid("node-decorative-invalid", `${ctx} decorative 不是布尔值`));
       }
       if (n.opacity !== undefined &&
           (typeof n.opacity !== "number" || !Number.isFinite(n.opacity) || n.opacity < 0 || n.opacity > 1)) {
@@ -687,11 +703,13 @@ export function validateFlowchartDocument(input: unknown): FlowchartValidationRe
     const edgeIds = new Set<string>();
     const nodeIds = new Set<string>();
     const kindById = new Map<string, FlowchartNodeKind>();
+    const decorativeIds = new Set<string>();
     if (Array.isArray(doc.nodes)) {
       for (const n of doc.nodes) {
         if (typeof n === "object" && n !== null && typeof (n as { id: unknown }).id === "string") {
           nodeIds.add((n as { id: string }).id);
           kindById.set((n as { id: string }).id, (n as { kind: FlowchartNodeKind }).kind);
+          if ((n as { decorative?: boolean }).decorative === true) decorativeIds.add((n as { id: string }).id);
         }
       }
     }
@@ -726,10 +744,22 @@ export function validateFlowchartDocument(input: unknown): FlowchartValidationRe
           if (k && isFlowchartContainerKind(k)) {
             errors.push(invalid("edge-container-endpoint", `${ctx} ${endpoint} 指向容器节点：${ref}`));
           }
+          if (decorativeIds.has(ref)) {
+            errors.push(invalid("edge-decorative-endpoint", `${ctx} ${endpoint} 指向纯视觉节点：${ref}`));
+          }
         }
       }
       if (e.label !== undefined && typeof e.label !== "string") {
         errors.push(invalid("edge-label-not-string", `${ctx} label 不是字符串`));
+      }
+      for (const endpoint of ["sourcePort", "targetPort"] as const) {
+        const port = e[endpoint];
+        if (port !== undefined && !isFlowchartPort(port)) {
+          errors.push(invalid("edge-port-invalid", `${ctx} ${endpoint} 必须在 0.05-0.95 之间`));
+        }
+      }
+      if (e.autoRouted !== undefined && typeof e.autoRouted !== "boolean") {
+        errors.push(invalid("edge-auto-route-invalid", `${ctx} autoRouted 不是布尔值`));
       }
     });
   }
@@ -1016,6 +1046,12 @@ function normalizeEdgeStyle(raw: unknown): FlowchartEdgeStyle | undefined {
   }
   if (s.markerStart === "none" || s.markerStart === "arrow" || s.markerStart === "arrowclosed") out.markerStart = s.markerStart;
   if (s.markerEnd === "none" || s.markerEnd === "arrow" || s.markerEnd === "arrowclosed") out.markerEnd = s.markerEnd;
+  if (typeof s.labelColor === "string" && s.labelColor.length > 0) out.labelColor = s.labelColor;
+  if (typeof s.labelBackground === "string" && s.labelBackground.length > 0) out.labelBackground = s.labelBackground;
+  if (typeof s.labelFontSize === "number" && Number.isFinite(s.labelFontSize)) out.labelFontSize = s.labelFontSize;
+  if (typeof s.labelBold === "boolean") out.labelBold = s.labelBold;
+  if (typeof s.labelOffsetX === "number" && Number.isFinite(s.labelOffsetX)) out.labelOffsetX = s.labelOffsetX;
+  if (typeof s.labelOffsetY === "number" && Number.isFinite(s.labelOffsetY)) out.labelOffsetY = s.labelOffsetY;
   return Object.keys(out).length === 0 ? undefined : out;
 }
 
@@ -1055,6 +1091,9 @@ function normalizeFlowchartDocument(input: unknown): FlowchartDocument {
     };
     const s = normalizeNodeStyle(n.style);
     if (s) node.style = s;
+    if (FLOWCHART_ICON_NAMES.includes(n.icon as FlowchartIconName)) {
+      node.icon = n.icon as FlowchartIconName;
+    }
     // 图片节点
     if (typeof n.imagePath === "string" && n.imagePath.length > 0) node.imagePath = n.imagePath;
     // freehand 节点：保留笔触数据
@@ -1096,6 +1135,7 @@ function normalizeFlowchartDocument(input: unknown): FlowchartDocument {
     if (typeof n.flipX === "boolean") node.flipX = n.flipX;
     if (typeof n.flipY === "boolean") node.flipY = n.flipY;
     if (typeof n.locked === "boolean") node.locked = n.locked;
+    if (typeof n.decorative === "boolean") node.decorative = n.decorative;
     // v2：容器结构参数
     if (isFlowchartContainerKind(node.kind) &&
         typeof n.container === "object" && n.container !== null && !Array.isArray(n.container)) {
@@ -1128,11 +1168,14 @@ function normalizeFlowchartDocument(input: unknown): FlowchartDocument {
     // 解析 sourceHandle/targetHandle，避免节点移动时 React Flow 切换 Handle
     if (typeof e.sourceHandle === "string") edge.sourceHandle = e.sourceHandle;
     if (typeof e.targetHandle === "string") edge.targetHandle = e.targetHandle;
+    if (typeof e.sourcePort === "number") edge.sourcePort = e.sourcePort;
+    if (typeof e.targetPort === "number") edge.targetPort = e.targetPort;
     const s = normalizeEdgeStyle(e.style);
     if (s) edge.style = s;
     // 解析用户调整的控制点（仅保留有限数值坐标对）
     const cps = normalizeControlPoints(e.controlPoints);
     if (cps) edge.controlPoints = cps;
+    if (e.autoRouted === true) edge.autoRouted = true;
     return edge;
   });
   const doc: FlowchartDocument = {
@@ -1252,7 +1295,7 @@ export function extractSemanticGraph(doc: FlowchartDocument): FlowchartSemanticG
   );
   const nodes: FlowchartSemanticNode[] = [];
   for (const n of doc.nodes) {
-    if (isFlowchartContainerKind(n.kind) || n.kind === "freehand" || n.kind === "image") continue;
+    if (isFlowchartContainerKind(n.kind) || n.kind === "freehand" || n.kind === "image" || n.decorative) continue;
     const node: FlowchartSemanticNode = { id: n.id, kind: n.kind, label: n.label };
     if (n.parentId && laneIds.has(n.parentId)) node.laneId = n.parentId;
     nodes.push(node);
@@ -1294,6 +1337,57 @@ export function computeFlowchartSemanticHash(doc: FlowchartDocument): string {
   const json = JSON.stringify(canonical);
   const hash = cyrb53a(json);
   return `h${hash.toString(16).padStart(14, "0")}`;
+}
+
+/**
+ * AI 视觉编辑的并发保护哈希。包含全部可见文档状态，但排除 viewport，
+ * 因为缩放和平移视图不应让内容修改失效。
+ */
+export function computeFlowchartDocumentHash(doc: FlowchartDocument): string {
+  const canonical = {
+    version: doc.version,
+    direction: doc.direction,
+    canvas: doc.canvas,
+    theme: doc.theme,
+    nodes: doc.nodes.map((n) => ({
+      id: n.id,
+      kind: n.kind,
+      label: n.label,
+      position: n.position,
+      size: n.size,
+      style: n.style,
+      icon: n.icon,
+      imagePath: n.imagePath,
+      points: n.points,
+      path: n.path,
+      drawingTool: n.drawingTool,
+      color: n.color,
+      opacity: n.opacity,
+      strokeWidth: n.strokeWidth,
+      parentId: n.parentId,
+      zIndex: n.zIndex,
+      rotation: n.rotation,
+      flipX: n.flipX,
+      flipY: n.flipY,
+      locked: n.locked,
+      decorative: n.decorative,
+      container: n.container,
+    })),
+    edges: doc.edges.map((e) => ({
+      id: e.id,
+      source: e.source,
+      target: e.target,
+      sourceHandle: e.sourceHandle,
+      targetHandle: e.targetHandle,
+      sourcePort: e.sourcePort,
+      targetPort: e.targetPort,
+      label: e.label,
+      style: e.style,
+      controlPoints: e.controlPoints,
+      autoRouted: e.autoRouted,
+    })),
+  };
+  return `d${cyrb53a(JSON.stringify(canonical)).toString(16).padStart(14, "0")}`;
 }
 
 /** 规范化为可哈希对象：稳定字段顺序 + 节点/边排序；与 extractSemanticGraph 同一投影。 */
@@ -1372,6 +1466,7 @@ export function cloneFlowchartDocument(doc: FlowchartDocument): FlowchartDocumen
         ...(n.style ? { style: { ...n.style } } : {}),
       };
       if (n.size) clone.size = { width: n.size.width, height: n.size.height };
+      if (n.icon) clone.icon = n.icon;
       if (n.imagePath) clone.imagePath = n.imagePath;
       if (n.kind === "freehand") {
         if (n.points) clone.points = n.points.map((p) => ({ x: p.x, y: p.y, pressure: p.pressure }));
@@ -1388,6 +1483,7 @@ export function cloneFlowchartDocument(doc: FlowchartDocument): FlowchartDocumen
       if (n.flipX !== undefined) clone.flipX = n.flipX;
       if (n.flipY !== undefined) clone.flipY = n.flipY;
       if (n.locked !== undefined) clone.locked = n.locked;
+      if (n.decorative !== undefined) clone.decorative = n.decorative;
       if (n.container) clone.container = { ...n.container };
       return clone;
     }),
@@ -1401,8 +1497,11 @@ export function cloneFlowchartDocument(doc: FlowchartDocument): FlowchartDocumen
       // 保留 sourceHandle/targetHandle，避免节点移动时 React Flow 自动切换端点
       if (typeof e.sourceHandle === "string") edge.sourceHandle = e.sourceHandle;
       if (typeof e.targetHandle === "string") edge.targetHandle = e.targetHandle;
+      if (e.sourcePort !== undefined) edge.sourcePort = e.sourcePort;
+      if (e.targetPort !== undefined) edge.targetPort = e.targetPort;
       if (e.style) edge.style = { ...e.style };
       if (e.controlPoints) edge.controlPoints = e.controlPoints.map((p) => ({ x: p.x, y: p.y }));
+      if (e.autoRouted) edge.autoRouted = true;
       return edge;
     }),
     viewport: doc.viewport

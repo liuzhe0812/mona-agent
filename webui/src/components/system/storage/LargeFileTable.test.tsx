@@ -9,8 +9,8 @@ vi.mock("@tauri-apps/api/core", () => ({
 }));
 
 const files: TopFileInfo[] = [
-  { path: "C:\\Users\\Mona\\Videos\\big.mp4", parentDirName: "Videos", extension: "mp4", sizeGb: 3.2, modifiedBucket: "old" },
-  { path: "C:\\Users\\Mona\\Downloads\\setup.iso", parentDirName: "Downloads", extension: "iso", sizeGb: 2.1, modifiedBucket: "90d" },
+  { id: "file-video", path: "C:\\Users\\Mona\\Videos\\big.mp4", parentDirName: "Videos", extension: "mp4", sizeGb: 3.2, modifiedBucket: "old" },
+  { id: "file-setup", path: "C:\\Users\\Mona\\Downloads\\setup.iso", parentDirName: "Downloads", extension: "iso", sizeGb: 2.1, modifiedBucket: "90d" },
 ];
 
 function trashSuccess(path: string): StorageTrashResult {

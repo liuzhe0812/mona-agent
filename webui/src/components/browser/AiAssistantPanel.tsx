@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Loader2, RotateCcw, Send, Sparkles, Square, X } from "lucide-react";
 import { Button } from "@/components/ui/button";
-import { Input } from "@/components/ui/input";
+import { Textarea } from "@/components/ui/textarea";
 import { ThreadMessages } from "@/components/thread/ThreadMessages";
 import { useMonaStream, type SendOptions } from "@/hooks/useMonaStream";
 import { useSessionHistory } from "@/hooks/useSessions";
@@ -19,6 +19,8 @@ interface AiAssistantPanelProps {
   session: ChatSummary | null;
   /** Whether AI is currently operating the browser */
   isAiActive: boolean;
+  /** Current browser tab identity used by browser automation tools. */
+  tabId?: string;
   /** Current browser page URL */
   pageUrl?: string;
   /** Current browser page title */
@@ -32,6 +34,7 @@ interface AiAssistantPanelProps {
 export function AiAssistantPanel({
   session,
   isAiActive,
+  tabId,
   pageUrl,
   pageTitle,
   onToggle,
@@ -97,9 +100,10 @@ export function AiAssistantPanel({
   }, [chatId, creatingChat, isStreaming, send]);
 
   const browserSendOpts = useMemo<SendOptions>(() => ({
+    browserTabId: tabId || undefined,
     browserPageUrl: pageUrl || undefined,
     browserPageTitle: pageTitle || undefined,
-  }), [pageUrl, pageTitle]);
+  }), [tabId, pageUrl, pageTitle]);
 
   const sendDraft = useCallback(() => {
     const text = draft.trim();
@@ -260,8 +264,8 @@ export function AiAssistantPanel({
 
       {/* Input */}
       <div className="shrink-0 p-2">
-        <div className="flex min-h-9 items-end gap-1.5 rounded-xl border border-border/75 bg-background px-2.5 py-1.5 shadow-sm">
-          <Input
+        <div className="flex min-h-[52px] items-end gap-1.5 rounded-xl border border-border/75 bg-background px-2.5 py-1.5 shadow-sm">
+          <Textarea
             value={draft}
             onChange={(e) => setDraft(e.target.value)}
             onKeyDown={(e) => {
@@ -272,11 +276,13 @@ export function AiAssistantPanel({
             }}
             disabled={creatingChat}
             placeholder="输入消息..."
-            className="flex-1 h-5 border-0 bg-transparent text-caption leading-5 px-0 focus-visible:ring-0 focus-visible:ring-offset-0"
+            rows={2}
+            className="min-h-[36px] flex-1 resize-none rounded-none border-0 bg-transparent px-0 py-0 text-caption leading-5 shadow-none focus-visible:ring-0 focus-visible:ring-offset-0"
           />
           <Button
             type="button"
             size="icon"
+            aria-label="发送"
             onClick={sendDraft}
             disabled={!draft.trim() || creatingChat || isStreaming}
             className="h-6 w-6 shrink-0 rounded-lg bg-action text-white hover:bg-action-hover hover:text-white active:bg-action-hover/90 disabled:bg-muted disabled:text-muted-foreground disabled:opacity-100"

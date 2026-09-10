@@ -351,7 +351,7 @@ function ChartSvg({
   label,
   children,
 }: {
-  svgRef: React.RefObject<SVGSVGElement>;
+  svgRef: React.RefObject<SVGSVGElement | null>;
   label: string;
   children: React.ReactNode;
 }) {
@@ -388,7 +388,7 @@ function CartesianChart({
   svgRef,
 }: {
   chart: CategoricalChart;
-  svgRef: React.RefObject<SVGSVGElement>;
+  svgRef: React.RefObject<SVGSVGElement | null>;
 }) {
   const plotWidth = WIDTH - MARGIN.left - MARGIN.right;
   const plotHeight = HEIGHT - MARGIN.top - MARGIN.bottom;
@@ -466,7 +466,7 @@ function ScatterPlot({
   svgRef,
 }: {
   chart: ScatterChart;
-  svgRef: React.RefObject<SVGSVGElement>;
+  svgRef: React.RefObject<SVGSVGElement | null>;
 }) {
   const plotWidth = WIDTH - MARGIN.left - MARGIN.right;
   const plotHeight = HEIGHT - MARGIN.top - MARGIN.bottom;
@@ -519,7 +519,7 @@ function PieChart({
   svgRef,
 }: {
   chart: CategoricalChart;
-  svgRef: React.RefObject<SVGSVGElement>;
+  svgRef: React.RefObject<SVGSVGElement | null>;
 }) {
   const values = chart.rows.map((row) => Math.max(0, row[0]));
   const total = values.reduce((sum, value) => sum + value, 0);

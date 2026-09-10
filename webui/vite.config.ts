@@ -1,6 +1,7 @@
 import { defineConfig, loadEnv } from "vite";
 import react from "@vitejs/plugin-react";
 import path from "node:path";
+import { officeEditorDev } from "./scripts/office-editor-dev.mjs";
 
 export default defineConfig(({ mode }) => {
   const env = loadEnv(mode, process.cwd(), "");
@@ -9,7 +10,7 @@ export default defineConfig(({ mode }) => {
   const isTauriBuild = mode === "tauri";
 
   return {
-    plugins: [react()],
+    plugins: [officeEditorDev(path.resolve(__dirname, "office-editor")), react()],
     resolve: {
       alias: {
         "@": path.resolve(__dirname, "./src"),
@@ -61,6 +62,9 @@ export default defineConfig(({ mode }) => {
       host: "127.0.0.1",
       port: 9527,
       strictPort: true,
+      watch: {
+        ignored: ["**/office-editor/**"],
+      },
       proxy: {
         "/webui": { target, changeOrigin: true },
         "/api": { target, changeOrigin: true },

@@ -504,8 +504,8 @@ describe("StepActivityTrace", () => {
   });
 });
 
-describe("ThreadMessages workflowRun", () => {
-  it("renders a workflowRun message as a run card inside the thread", () => {
+describe("ThreadMessages task status cards", () => {
+  it("keeps workflow state out of the conversation", () => {
     render(
       <ThreadMessages
         messages={[
@@ -522,11 +522,9 @@ describe("ThreadMessages workflowRun", () => {
         ]}
       />,
     );
-    // Run status chip + revision line from the embedded run card.
-    expect(screen.getAllByText("Running").length).toBeGreaterThan(0);
-    expect(screen.getByText("Based on revision 2")).toBeTruthy();
-    // The plain bubble for the run message must not render alongside.
-    expect(screen.getAllByText(/^(a|b|ok)$/).length).toBe(3);
+    expect(screen.getByText("run it")).toBeTruthy();
+    expect(screen.queryByText("Based on revision 2")).toBeNull();
+    expect(screen.queryByText("Running")).toBeNull();
   });
 
   it("falls back to the plain renderer for malformed payloads", () => {
@@ -546,6 +544,44 @@ describe("ThreadMessages workflowRun", () => {
       />,
     );
     expect(screen.queryByText("Based on revision 2")).toBeNull();
+  });
+
+  it("keeps discussion state out of the conversation", () => {
+    const base = makeRun();
+    const run = makeRun({
+      workflow: {
+        ...base.workflow,
+        id: "discussion-debate-1",
+        goal: "增长还是利润？",
+        steps: [],
+      },
+      steps: {},
+      inputs: {
+        discussion: {
+          mode: "debate",
+          maxRounds: 3,
+          participantIds: ["agent-a", "agent-b"],
+          positions: { "agent-a": "增长", "agent-b": "利润" },
+          summaryAgentId: "mona",
+        },
+      },
+    });
+    render(
+      <ThreadMessages
+        messages={[{
+          id: "topic-1",
+          role: "assistant",
+          kind: "discussion",
+          content: "",
+          workflowRunId: run.id,
+          payload: run,
+          createdAt: 1,
+        }]}
+      />,
+    );
+
+    expect(screen.queryByText("增长还是利润？")).toBeNull();
+    expect(screen.queryByText("Debate")).toBeNull();
   });
 });
 

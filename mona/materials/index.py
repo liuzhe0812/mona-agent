@@ -53,10 +53,16 @@ _TRIGRAM_MIN = 3
 class MaterialsIndex:
     """可重建的 FTS5 chunk 索引。"""
 
-    def __init__(self, db_path: Path, vault: Path | None = None) -> None:
+    def __init__(
+        self,
+        db_path: Path,
+        vault: Path | None = None,
+        library_root: Path | None = None,
+    ) -> None:
         db_path.parent.mkdir(parents=True, exist_ok=True)
-        # vault 默认从 db_path（<vault>/.mona/materials/index.db）推导
+        # ``vault`` 保留兼容旧调用；原文件定位只依赖当前知识库根目录。
         self._vault = vault if vault is not None else db_path.parents[2]
+        self._library_root = library_root or db_path.parent
         self._conn = sqlite3.connect(str(db_path), check_same_thread=False)
         self._conn.execute("PRAGMA journal_mode=WAL")
         self._conn.execute("PRAGMA busy_timeout=3000")
@@ -93,7 +99,7 @@ class MaterialsIndex:
                     " seq, content)"
                     " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                     (
-                        f"{material_id}:{seq}",
+                        chunk.get("chunkId") or f"{material_id}:{seq}",
                         material_id,
                         chunk["title"],
                         chunk["rawPath"],
@@ -159,6 +165,26 @@ class MaterialsIndex:
                 " FROM chunks WHERE content MATCH ? ORDER BY rank LIMIT 200",
                 (match,),
             ).fetchall()
+            # ``title`` is intentionally UNINDEXED metadata, so add an exact
+            # title candidate pass. Otherwise a paper named by the user's
+            # query is invisible when the term does not appear in its body.
+            title_conditions = " AND ".join(
+                "title LIKE ? ESCAPE '\\'" for _ in long_tokens
+            )
+            title_params = tuple(
+                "%"
+                + token.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+                + "%"
+                for token in long_tokens
+            )
+            title_rows = self._conn.execute(
+                "SELECT chunk_id, material_id, title, raw_path, kind, seg_kind,"
+                " location, label, size, mtime_ns, stale_flag, seq, content, -1.0"
+                f" FROM chunks WHERE {title_conditions} LIMIT 200",
+                title_params,
+            ).fetchall()
+            seen_ids = {row[0] for row in rows}
+            rows.extend(row for row in title_rows if row[0] not in seen_ids)
         else:
             # 全部 token 都短于 trigram 下限：子串回退
             rows = self._conn.execute(
@@ -185,8 +211,7 @@ class MaterialsIndex:
 
             stale = bool(stale_flag)
             if kind == "source" and raw_path:
-                base = vault if vault is not None else self._vault
-                stale = not _raw_matches(base, raw_path, size, mtime_ns)
+                stale = not _raw_matches(self._library_root, raw_path, size, mtime_ns)
 
             result_kind = "material_source" if kind == "source" else "material_wiki"
             results.append({
@@ -216,7 +241,15 @@ class MaterialsIndex:
         ).fetchone()
         if row is None:
             return None
-        return self._row_to_chunk(row)
+        chunk = self._row_to_chunk(row)
+        if chunk["kind"] == "material_source" and chunk["rawPath"]:
+            chunk["stale"] = not _raw_matches(
+                self._library_root,
+                chunk["rawPath"],
+                chunk["size"],
+                chunk["mtimeNs"],
+            )
+        return chunk
 
     def get_neighbors(self, ref: str, before: int = 1, after: int = 1) -> list[dict[str, Any]]:
         """返回同一 material 内相邻 seq 的 chunks（上下文扩展）。"""
@@ -255,9 +288,9 @@ class MaterialsIndex:
         }
 
 
-def _raw_matches(vault: Path, raw_path: str, size: int, mtime_ns: int) -> bool:
+def _raw_matches(library_root: Path, raw_path: str, size: int, mtime_ns: int) -> bool:
     """raw 文件当前 size/mtimeNs 是否与索引记录一致。"""
-    raw = vault / ".mona" / "materials" / "raw" / raw_path
+    raw = library_root / "raw" / raw_path
     try:
         stat = raw.stat()
     except OSError:
@@ -326,6 +359,7 @@ def _index_text_md(
             k: v for k, v in meta.items() if k not in ("kind", "label")
         }
         chunks.append({
+            "chunkId": str(meta.get("id") or ""),
             "title": title,
             "rawPath": raw_path,
             "kind": "source",
@@ -359,6 +393,10 @@ def _index_wiki_md(
     if index.material_fresh(material_id, fingerprint):
         return material_id, None
     stale_flag = 1 if str(fm.get("stale", "")).lower() == "true" else 0
+    evidence_refs = fm.get("evidenceRefs")
+    if not isinstance(evidence_refs, list):
+        evidence_refs = []
+    evidence_refs = [str(ref) for ref in evidence_refs if str(ref).strip()]
     title = fm.get("title", md_file.stem)
     if not isinstance(title, str):
         title = md_file.stem
@@ -369,7 +407,7 @@ def _index_wiki_md(
             "rawPath": wiki_rel,
             "kind": "derived",
             "segKind": "wiki",
-            "location": {"path": wiki_rel},
+            "location": {"path": wiki_rel, "evidenceRefs": evidence_refs},
             "label": title,
             "fingerprint": fingerprint,
             "size": md_file.stat().st_size,
@@ -381,12 +419,17 @@ def _index_wiki_md(
     return material_id, len(chunks)
 
 
-def sync_index(vault: Path, index: MaterialsIndex) -> dict[str, int]:
+def sync_index(
+    vault: Path,
+    index: MaterialsIndex,
+    *,
+    library_root: Path | None = None,
+) -> dict[str, int]:
     """把 text/ 与 wiki/ 的最新状态增量同步进索引。
 
     返回 {"indexed": n, "skipped": n, "removed": n}。
     """
-    root = vault / ".mona" / "materials"
+    root = library_root or index._library_root
     text_root = root / "text"
     wiki_root = root / "wiki"
 
@@ -422,6 +465,7 @@ def sync_index(vault: Path, index: MaterialsIndex) -> dict[str, int]:
 def sync_write_point(
     vault: Path,
     *,
+    library_root: Path | None = None,
     text_files: Iterable[Path] = (),
     wiki_files: Iterable[Path] = (),
     removed_ids: Iterable[str] = (),
@@ -432,14 +476,16 @@ def sync_write_point(
     失败只记日志，绝不影响主流程；reconcile 仍作为兜底全量对账。
     """
     try:
-        index = MaterialsIndex(
-            vault / ".mona" / "materials" / "index.db", vault=vault
-        )
+        if library_root is None:
+            from mona.materials.catalog import get_library_root
+
+            library_root = get_library_root(vault)
+        index = MaterialsIndex(library_root / "index.db", vault=vault, library_root=library_root)
     except Exception:
         logger.exception("materials: open index failed at write point")
         return
     try:
-        wiki_root = vault / ".mona" / "materials" / "wiki"
+        wiki_root = library_root / "wiki"
         for md_file in text_files:
             try:
                 _index_text_md(vault, index, md_file)
@@ -456,7 +502,7 @@ def sync_write_point(
             except Exception:
                 logger.exception("materials: index remove failed for {}", material_id)
         if full:
-            sync_index(vault, index)
+            sync_index(vault, index, library_root=library_root)
     finally:
         index.close()
 

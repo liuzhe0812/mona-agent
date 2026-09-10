@@ -243,7 +243,7 @@ export function PptPreview({ projectName, isStreaming, hasPptxOutput, pipelineSt
           const objectUrl = URL.createObjectURL(blob);
           objectUrlsRef.current.add(objectUrl);
           // Always update state — functional updates are safe even after the
-          // effect has been cleaned up (React 18 ignores updates to unmounted
+          // effect has been cleaned up (React ignores updates to unmounted
           // components). If we skip these updates, a slide whose fetch
           // completed right after cleanup would be stuck in "loading" forever:
           // svgRequestedRef keeps the URL marked as requested, so fetchSvgs

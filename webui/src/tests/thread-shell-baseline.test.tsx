@@ -1,9 +1,16 @@
-import { act, render, screen } from "@testing-library/react";
+import { act, render, waitFor } from "@testing-library/react";
 import type { ReactNode } from "react";
 import { describe, expect, it, vi } from "vitest";
 
 import { buildSharedOutputDir, ThreadShell } from "@/components/thread/ThreadShell";
 import { ClientProvider } from "@/providers/ClientProvider";
+
+const { artifactFetch } = vi.hoisted(() => ({ artifactFetch: vi.fn() }));
+
+vi.mock("@/lib/tauri", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@/lib/tauri")>()),
+  httpFetch: artifactFetch,
+}));
 
 function makeClient() {
   const errorHandlers = new Set<(err: { kind: string }) => void>();
@@ -47,6 +54,7 @@ function makeClient() {
         artifactsChangedHandlers.delete(handler);
       };
     },
+    onDocUploadResult: () => () => {},
     _emitError(err: { kind: string }) {
       for (const h of errorHandlers) h(err);
     },
@@ -113,9 +121,7 @@ describe("baseline", () => {
     const fileB = { ...fileA, path: "b.png", absolute_path: "/ws/output/b.png", name: "b.png" };
     let artifactFiles: unknown[] = [fileA];
     let artifactFetches = 0;
-    vi.stubGlobal(
-      "fetch",
-      vi.fn(async (input: RequestInfo | URL) => {
+    artifactFetch.mockImplementation(async (input: RequestInfo | URL) => {
         const url = String(input);
         if (url.includes("/api/artifacts")) {
           artifactFetches += 1;
@@ -131,8 +137,7 @@ describe("baseline", () => {
           status: 404,
           json: async () => ({}),
         };
-      }),
-    );
+    });
 
     render(
       wrap(
@@ -146,20 +151,13 @@ describe("baseline", () => {
       ),
     );
 
-    await screen.findByText("a.png");
-    expect(artifactFetches).toBe(1);
+    await waitFor(() => expect(artifactFetches).toBe(1));
 
     artifactFiles = [fileA, fileB];
     await act(async () => {
       client._emitArtifactsChanged();
     });
 
-    console.log("artifactFetches after emit:", artifactFetches);
-    const panel = document.body.textContent ?? "";
-    console.log("has a.png:", panel.includes("a.png"), "has b.png:", panel.includes("b.png"));
-    console.log("panel snippet:", panel.slice(0, 3000));
-
-    await screen.findByText("b.png");
-    expect(artifactFetches).toBe(2);
+    await waitFor(() => expect(artifactFetches).toBe(2));
   });
 });

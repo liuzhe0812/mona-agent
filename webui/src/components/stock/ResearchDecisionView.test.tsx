@@ -902,23 +902,29 @@ describe("ResearchDecisionView", () => {
     expect(conflict).not.toHaveTextContent("source-1");
   });
 
-  it("renders StockDiagnosisV1 as standard conclusions without deep-research process", () => {
+  it("renders StockDiagnosisV1 as an action-oriented main tab without fabricating scores", () => {
+    const claim = (text: string, claim_type: "fact" | "inference" | "hypothesis" = "inference") => ({
+      text,
+      claim_type,
+      source_ids: ["source-1"],
+    });
     const horizon = (direction: "positive" | "neutral" | "negative") => ({
       direction,
       action: "conditional_participation" as const,
-      factor_score: 0.72,
-      market_percentile: 0.8,
-      industry_percentile: 0.6,
-      factor_contributions: { momentum20: 0.12, operating_cashflow: 0.08 },
+      factor_score: null,
+      market_percentile: null,
+      industry_percentile: null,
+      factor_contributions: {},
       validation_status: "descriptive" as const,
       not_holding_action: "conditional_participation" as const,
       holding_action: "hold" as const,
+      current_action: "wait" as const,
+      thesis: "盈利修复尚未形成清晰买点",
       materialized_plan: { reference_entry: null, pullback_entry: null, stop_loss: null, first_take_profit: null, second_take_profit: null, value_status: "unavailable" as const, boundaries: [] },
       position_plan: { reference_position_pct: null, max_position_pct: null, risk_budget_pct: null, value_status: "unavailable" as const },
-      review_trigger: "盈利假设变化时复评",
       valid_until: null,
-      key_reasons: [{ text: "现金流质量改善", source_ids: ["source-1"] }],
-      key_risks: [{ text: "行业需求变化", source_ids: ["source-1"] }],
+      key_reasons: [claim("现金流质量改善", "fact")],
+      key_risks: [claim("行业竞争加剧", "inference")],
       confidence: "medium" as const,
       source_ids: ["source-1"],
     });
@@ -932,45 +938,52 @@ describe("ResearchDecisionView", () => {
       generated_at: "2026-08-25T15:01:00+08:00",
       evidence_context_id: "ctx-1",
       source_ids: ["source-1"],
-      data_quality: { status: "available", confidence: "medium" },
-      fundamental_research: { status: "available", business_model_summary: "主营业务清晰", source_ids: ["source-1"] },
-      fundamental_factors: { short_term: { status: "available", validation_status: "descriptive", factor_score: 0.6, sample_count: 5, factors: [{ name: "factor_1", value: 12, direction: "positive" }, { name: "factor_10", value: 68, direction: "negative" }, { name: "factor_7", value: 0.5, direction: "neutral" }, { name: "factor_11", value: null, direction: "unavailable" }] }, medium_term: { status: "available", validation_status: "descriptive", factor_score: 0.7, sample_count: 5, factors: [] }, long_term: { status: "unavailable", validation_status: "unavailable", sample_count: 0, factors: [] } },
-      quant_factors: { short_term: { status: "available", validation_status: "descriptive", factor_score: 0.72, market_percentile: 0.8, industry_percentile: 0.6, sample_count: 35, factors: [{ name: "momentum20", value: 8, direction: "positive", contribution: 0.12, percentile: 0.8 }, { name: "operating_cashflow", value: 0.66, direction: "negative", contribution: 0.08, percentile: 0.7 }] }, medium_term: { status: "available", validation_status: "descriptive", factor_score: 0.72, market_percentile: 0.8, industry_percentile: 0.6, sample_count: 35, factors: [] }, long_term: { status: "unavailable", validation_status: "unavailable", sample_count: 0, factors: [] } },
+      sources: [{ id: "source-1", provider: "eastmoney", url: "https://example.com/report", published_at: "2026-08-25T15:00:00+08:00" }],
+      data_quality: { status: "degraded", confidence: "medium", missing_fields: ["governance"], degraded_fields: ["industry_context"], sample_counts: { fundamental: 5, quant: 35 } },
+      fundamental_research: {
+        status: "available",
+        business_understandable: true,
+        company_understanding: "公司主营业务清晰",
+        business_model_summary: "主营业务清晰",
+        competitive_advantages: [claim("一体化带来成本优势", "inference")],
+        competitive_counterevidence: [claim("行业竞争加剧", "inference")],
+        industry_context: [claim("行业需求保持增长", "fact")],
+        policy_context: [claim("政策传导仍需验证", "inference")],
+        conclusion_change_conditions: [claim("若现金流持续恶化，则下调结论", "hypothesis")],
+        source_ids: ["source-1"],
+      },
+      fundamental_factors: { short_term: { status: "available", validation_status: "descriptive", factor_score: null, sample_count: 5, factors: [{ name: "factor_1", value: 12, direction: "positive" }, { name: "factor_10", value: 68, direction: "negative" }, { name: "factor_7", value: 0.5, direction: "neutral" }, { name: "factor_11", value: null, direction: "unavailable" }] }, medium_term: { status: "available", validation_status: "descriptive", factor_score: null, sample_count: 5, factors: [] }, long_term: { status: "unavailable", validation_status: "unavailable", sample_count: 0, factors: [] } },
+      quant_factors: { short_term: { status: "available", validation_status: "descriptive", factor_score: null, market_percentile: null, industry_percentile: null, sample_count: 35, factors: [{ name: "momentum20", value: 8, direction: "positive", contribution: 0.12 }, { name: "operating_cashflow", value: 0.66, direction: "negative", contribution: 0.08 }] }, medium_term: { status: "available", validation_status: "descriptive", factor_score: null, market_percentile: null, industry_percentile: null, sample_count: 35, factors: [] }, long_term: { status: "unavailable", validation_status: "unavailable", sample_count: 0, factors: [] } },
       technical_execution: { status: "unavailable" },
       horizon_decisions: { short_term: horizon("positive"), medium_term: horizon("neutral"), long_term: horizon("negative") },
-      decision_radar: { short_term: horizon("positive"), medium_term: horizon("neutral"), long_term: horizon("negative"), current_decision: { ...horizon("negative"), action: "avoid", not_holding_action: "avoid", holding_action: "exit" }, deterministic: true, basis_rows: [
-        { key: "fundamental", label: "基本面", stance: "neutral", stance_label: "中性", summary: "盈利修复，现金流偏弱" },
-        { key: "quant", label: "量化验证", stance: "negative", stance_label: "偏空", summary: "估值偏高，短期动量走弱" },
-        { key: "sentiment", label: "情绪与预期", stance: "cautious", stance_label: "谨慎", summary: "暂无反转信号，不提高仓位" },
-        { key: "risk", label: "风控纪律", stance: "strict", stance_label: "严格", summary: "回避新增，持仓优先降风险" },
-      ] },
+      decision_radar: { short_term: horizon("positive"), medium_term: horizon("neutral"), long_term: horizon("negative"), current_decision: { ...horizon("positive"), action: "conditional_participation", not_holding_action: "conditional_participation", holding_action: "hold", current_action: "wait" }, deterministic: true, basis_rows: [] },
       method_versions: {},
     } as StockDiagnosisV1;
     render(<ResearchDecisionView report={report} />);
-    expect(screen.getByTestId("ai-diagnosis-result")).toHaveTextContent("AI诊股结论");
-    expect(screen.getByTestId("diagnosis-horizon-conclusions")).toHaveTextContent("暂不买入 / 退出");
-    expect(screen.getByTestId("diagnosis-horizon-conclusions")).not.toHaveTextContent("看跌 · 回避");
-    expect(screen.getByTestId("diagnosis-plan-当前综合建议")).toHaveTextContent("当前不建议买入");
-    expect(screen.getByTestId("diagnosis-four-step")).toHaveTextContent("四层分析");
-    expect(screen.getByTestId("diagnosis-four-step")).toHaveTextContent("盈利修复，现金流偏弱");
-    expect(screen.getByTestId("diagnosis-four-step")).toHaveTextContent("估值偏高，短期动量走弱");
-    expect(screen.getByTestId("diagnosis-quant-factors")).toHaveTextContent("第80百分位");
-    expect(screen.getByTestId("diagnosis-quant-factors")).toHaveTextContent("20日动量");
-    expect(screen.getByTestId("diagnosis-quant-factors")).toHaveTextContent("经营现金流");
-    const fundamentalFactors = screen.getByTestId("diagnosis-fundamental-factors");
-    expect(fundamentalFactors).toHaveTextContent("ROE：12.00 · 偏强");
-    expect(fundamentalFactors).toHaveTextContent("负债率：68.00 · 偏弱");
-    expect(fundamentalFactors).toHaveTextContent("盈利稳定性：0.50 · 中性");
-    expect(fundamentalFactors).not.toHaveTextContent("利息保障倍数");
-    expect(within(fundamentalFactors).getByText("偏强")).toHaveClass("text-stock-up");
-    expect(within(fundamentalFactors).getByText("偏弱")).toHaveClass("text-stock-down");
-    expect(within(fundamentalFactors).getByText("中性")).toHaveClass("text-muted-foreground");
-    expect(screen.getByTestId("diagnosis-horizon-conclusions")).toHaveTextContent("现金流质量改善");
-    expect(screen.getByTestId("diagnosis-horizon-conclusions")).toHaveTextContent("当前综合建议");
-    expect(screen.getByTestId("diagnosis-analysis-details")).not.toHaveAttribute("open");
-    expect(screen.getByTestId("diagnosis-horizon-conclusions").compareDocumentPosition(screen.getByTestId("diagnosis-four-step")) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
-    expect(within(screen.getByTestId("diagnosis-horizon-conclusions")).queryByRole("heading", { name: "中线" })).not.toBeInTheDocument();
-    expect(within(screen.getByTestId("diagnosis-horizon-conclusions")).queryByRole("heading", { name: "长线" })).not.toBeInTheDocument();
+    const result = screen.getByTestId("ai-diagnosis-result");
+    expect(result).toHaveTextContent("AI诊股结论");
+    expect(result).toHaveTextContent("核心判断");
+    expect(result).toHaveTextContent("盈利修复尚未形成清晰买点");
+    expect(result).toHaveTextContent("支持因素");
+    expect(result).toHaveTextContent("现金流质量改善");
+    expect(result).toHaveTextContent("制约因素");
+    expect(result).toHaveTextContent("行业竞争加剧");
+    expect(result).toHaveTextContent("来源：东方财富（2026-08-25）");
+    expect(result).toHaveTextContent("维度评分概览");
+    expect(result).not.toHaveTextContent(/60(?:\.0)?分|72(?:\.0)?分|80(?:\.0)?分/);
+    expect(result).toHaveTextContent("公司与行业分析");
+    expect(result).toHaveTextContent("公司主营业务清晰");
+    expect(result).toHaveTextContent("行业需求保持增长");
+    expect(result).toHaveTextContent("指标明细");
+    expect(result).toHaveTextContent("ROE");
+    expect(result).toHaveTextContent("20日动量");
+    expect(result).toHaveTextContent("结论变化条件");
+    expect(result).toHaveTextContent("若现金流持续恶化");
+    expect(result).toHaveTextContent("数据覆盖");
+    expect(result).toHaveTextContent("部分可用");
+    expect(result).not.toHaveTextContent(/交易计划|参考买入|回踩参与|止损参考|第一止盈|第二止盈|参考首仓|仓位上限|单笔风险预算|四层分析|复评条件/);
+    expect(screen.queryByTestId("diagnosis-plan-当前综合建议")).not.toBeInTheDocument();
+    expect(screen.queryByTestId("diagnosis-four-step")).not.toBeInTheDocument();
     expect(screen.queryByText(/Agent|LLM|semantic_research|source_ids|momentum20|operating_cashflow/)).not.toBeInTheDocument();
   });
 });

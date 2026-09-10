@@ -13,6 +13,9 @@ interface Props {
   directories: DirectorySize[];
   /** 当前所在路径（根目录为 null） */
   currentPath: string | null;
+  /** 当前选择的目录，用于与 Treemap 和 AI 上下文同步 */
+  selectedPath: string | null;
+  onSelect: (path: string) => void;
   /** 双击 / Enter / 右键打开时下钻 */
   onDrillDown: (path: string) => void;
 }
@@ -32,6 +35,18 @@ function findNodeByPath(nodes: DirectorySize[], target: string): DirectorySize |
     if (node.path === target) return node;
     if (node.children) {
       const found = findNodeByPath(node.children, target);
+      if (found) return found;
+    }
+  }
+  return null;
+}
+
+function findPathChain(nodes: DirectorySize[], target: string, parents: string[] = []): string[] | null {
+  for (const node of nodes) {
+    const chain = [...parents, node.path];
+    if (node.path === target) return chain;
+    if (node.children) {
+      const found = findPathChain(node.children, target, chain);
       if (found) return found;
     }
   }
@@ -70,6 +85,7 @@ function NodeRow({
   onOpen,
   onContextMenu,
 }: NodeRowProps) {
+  const rowRef = useRef<HTMLDivElement>(null);
   const name = shortName(node.path);
   const isSelected = selectedPath === node.path;
   const hasChildren = node.children && node.children.length > 0;
@@ -91,9 +107,14 @@ function NodeRow({
     }
   };
 
+  useEffect(() => {
+    if (isSelected) rowRef.current?.scrollIntoView?.({ block: "nearest" });
+  }, [isSelected]);
+
   return (
     <div role="treeitem" aria-expanded={hasChildren ? expanded : undefined}>
       <div
+        ref={rowRef}
         aria-selected={isSelected}
         tabIndex={0}
         onClick={() => onSelect(node.path)}
@@ -173,6 +194,8 @@ function NodeRow({
 export function DirectoryTreeView({
   directories,
   currentPath,
+  selectedPath,
+  onSelect,
   onDrillDown,
 }: Props) {
   const total = useMemo(
@@ -183,7 +206,6 @@ export function DirectoryTreeView({
     () => [...directories].sort((a, b) => b.sizeGb - a.sizeGb),
     [directories],
   );
-  const [selectedPath, setSelectedPath] = useState<string | null>(currentPath);
   const [expandedPaths, setExpandedPaths] = useState<Set<string>>(() => new Set());
 
   // 右键菜单状态
@@ -191,12 +213,16 @@ export function DirectoryTreeView({
   const menuRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
-    setSelectedPath(currentPath);
-  }, [currentPath]);
-
-  const handleSelect = (path: string) => {
-    setSelectedPath(path);
-  };
+    const target = currentPath ?? selectedPath;
+    if (!target) return;
+    const chain = findPathChain(directories, target);
+    if (!chain) return;
+    setExpandedPaths((previous) => {
+      const next = new Set(previous);
+      for (const path of chain.slice(0, -1)) next.add(path);
+      return next;
+    });
+  }, [currentPath, directories, selectedPath]);
 
   const handleToggleExpand = (path: string) => {
     setExpandedPaths((prev) => {
@@ -208,7 +234,7 @@ export function DirectoryTreeView({
   };
 
   const handleOpen = (path: string) => {
-    setSelectedPath(path);
+    onSelect(path);
     setExpandedPaths((prev) => {
       const next = new Set(prev);
       next.add(path);
@@ -221,6 +247,7 @@ export function DirectoryTreeView({
     // 边界检测：确保菜单不超出视口
     const maxX = window.innerWidth - MENU_WIDTH - 8;
     const maxY = window.innerHeight - MENU_ITEM_HEIGHT * MENU_ITEMS - 8;
+    onSelect(path);
     setMenu({
       path,
       x: Math.min(x, maxX),
@@ -254,7 +281,7 @@ export function DirectoryTreeView({
 
   return (
     <PanelCard
-      title="目录列表"
+      title="目录占用"
       className="h-full overflow-hidden [&>div:first-child]:min-h-9 [&>div:first-child]:px-3 [&>div:first-child]:py-1.5"
       bodyClassName="h-full p-2"
     >
@@ -273,7 +300,7 @@ export function DirectoryTreeView({
               total={total}
               selectedPath={selectedPath}
               expandedPaths={expandedPaths}
-              onSelect={handleSelect}
+              onSelect={onSelect}
               onToggleExpand={handleToggleExpand}
               onOpen={handleOpen}
               onContextMenu={handleContextMenu}

@@ -23,7 +23,7 @@ AS_OF = "2026-08-25T15:00:00+08:00"
 def _payload(data, *, version="1.0.5", as_of=AS_OF):
     return {
         "package_version": version,
-        "contract_version": "westock-contract-v1",
+        "contract_version": "westock-contract-v2",
         "data_as_of": as_of,
         "data": data,
     }

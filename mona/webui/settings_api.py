@@ -9,6 +9,7 @@ from __future__ import annotations
 import json
 import os
 import re
+import time
 import unicodedata
 from pathlib import Path
 from typing import Any
@@ -19,7 +20,7 @@ import httpx
 from loguru import logger
 
 from mona.config.loader import get_config_path, load_config, save_config
-from mona.config.schema import ProviderConfig
+from mona.config.schema import ModelGenerationParameters, ProviderConfig
 from mona.providers.capabilities import resolve_capabilities
 from mona.providers.cindy_catalog import CINDY_CHAT_PROVIDER_BY_ID, CINDY_CHAT_PROVIDERS
 from mona.providers.image_generation import get_image_gen_provider
@@ -34,7 +35,37 @@ from mona.security.network import validate_url_target
 
 QueryParams = dict[str, list[str]]
 
+_MANAGED_CATALOG_TTL_SECONDS = 30.0
+_managed_catalog_cached_at = 0.0
+_managed_catalog_cache: dict[str, Any] = {"available": False, "models": []}
+
+
+def _managed_model_catalog() -> dict[str, Any]:
+    global _managed_catalog_cached_at, _managed_catalog_cache
+    now = time.monotonic()
+    cache_ttl = _MANAGED_CATALOG_TTL_SECONDS if _managed_catalog_cache["available"] else 3.0
+    if now - _managed_catalog_cached_at < cache_ttl:
+        return _managed_catalog_cache
+    catalog: dict[str, Any] = {"available": False, "models": []}
+    try:
+        from mona.agent.tools.tauri_ipc import tauri_invoke
+
+        raw = tauri_invoke("get_managed_model_catalog")
+        if isinstance(raw, dict):
+            models = raw.get("models")
+            if isinstance(models, list):
+                catalog = {
+                    "available": raw.get("available") is True and len(models) > 0,
+                    "models": [model for model in models if isinstance(model, dict)],
+                }
+    except Exception:
+        pass
+    _managed_catalog_cache = catalog
+    _managed_catalog_cached_at = now
+    return catalog
+
 _WEB_SEARCH_PROVIDER_OPTIONS: tuple[dict[str, str], ...] = (
+    {"name": "anysearch", "label": "AnySearch", "credential": "none"},
     {"name": "duckduckgo", "label": "DuckDuckGo", "credential": "none"},
     {"name": "brave", "label": "Brave Search", "credential": "api_key"},
     {"name": "tavily", "label": "Tavily", "credential": "api_key"},
@@ -60,6 +91,14 @@ _IMAGE_GENERATION_ASPECT_RATIOS = {
 
 _VIDEO_GENERATION_ASPECT_RATIOS = {"1:1", "3:4", "9:16", "4:3", "16:9"}
 _VIDEO_DURATION_OPTIONS = (3, 5, 10, 18)
+_IMAGE_GENERATION_PARAMETER_NAMES = {"seed", "steps", "cfg", "negative_prompt"}
+_VIDEO_GENERATION_PARAMETER_NAMES = {
+    "seed",
+    "steps",
+    "cfg",
+    "negative_prompt",
+    "fps",
+}
 
 
 class WebUISettingsError(ValueError):
@@ -79,6 +118,58 @@ def _query_first(query: QueryParams, key: str) -> str | None:
 def _query_first_alias(query: QueryParams, snake: str, camel: str) -> str | None:
     value = _query_first(query, snake)
     return _query_first(query, camel) if value is None else value
+
+
+def _parse_generation_parameters(
+    raw: str,
+    allowed: set[str],
+) -> ModelGenerationParameters:
+    try:
+        payload = json.loads(raw)
+    except json.JSONDecodeError:
+        raise WebUISettingsError("生成参数必须是 JSON 对象") from None
+    if not isinstance(payload, dict):
+        raise WebUISettingsError("生成参数必须是 JSON 对象")
+    enabled = payload.get("enabled", [])
+    values = payload.get("values", {})
+    if not isinstance(enabled, list) or not all(isinstance(name, str) for name in enabled):
+        raise WebUISettingsError("生成参数 enabled 必须是字符串数组")
+    if not isinstance(values, dict):
+        raise WebUISettingsError("生成参数 values 必须是对象")
+    enabled = list(dict.fromkeys(enabled))
+    unknown = (set(enabled) | set(values)) - allowed
+    if unknown:
+        raise WebUISettingsError(f"不支持的生成参数：{', '.join(sorted(unknown))}")
+
+    normalized: dict[str, str | int | float] = {}
+    for name, value in values.items():
+        if name in {"seed", "steps", "fps"}:
+            if isinstance(value, bool) or not isinstance(value, int):
+                raise WebUISettingsError(f"生成参数 {name} 必须是整数")
+            minimum, maximum = {
+                "seed": (-1, 2**63 - 1),
+                "steps": (1, 200),
+                "fps": (1, 120),
+            }[name]
+            if value < minimum or value > maximum:
+                raise WebUISettingsError(
+                    f"生成参数 {name} 必须在 {minimum} 到 {maximum} 之间"
+                )
+        elif name == "cfg":
+            if isinstance(value, bool) or not isinstance(value, int | float):
+                raise WebUISettingsError("生成参数 cfg 必须是数字")
+            if value < 0 or value > 100:
+                raise WebUISettingsError("生成参数 cfg 必须在 0 到 100 之间")
+        elif name == "negative_prompt":
+            if not isinstance(value, str):
+                raise WebUISettingsError("负面提示词必须是字符串")
+            if len(value) > 4000:
+                raise WebUISettingsError("负面提示词不能超过 4000 个字符")
+        normalized[name] = value
+    missing = [name for name in enabled if name not in normalized]
+    if missing:
+        raise WebUISettingsError(f"缺少已启用参数的值：{', '.join(missing)}")
+    return ModelGenerationParameters(enabled=enabled, values=normalized)
 
 
 def _mask_secret_hint(secret: str | None) -> str | None:
@@ -234,6 +325,19 @@ def _migrate_workspace_data(old_ws: Path, new_ws: Path) -> None:
     # resources under ~/.mona/ and not workspace-scoped.
 
 
+def _custom_generation_model_ids(provider_config: Any, model_type: str) -> list[str]:
+    model_ids: list[str] = []
+    for item in provider_config.discovered_models or []:
+        if not isinstance(item, dict) or not item.get("id"):
+            continue
+        declared_type = str(item.get("type") or "").strip().lower()
+        # Some catalogs use "model" as a generic resource type, not a capability.
+        if declared_type not in {"", "model", model_type}:
+            continue
+        model_ids.append(str(item["id"]).strip())
+    return model_ids
+
+
 def _image_generation_provider_rows(config: Any) -> list[dict[str, Any]]:
     """Provider rows for the image generation settings section.
 
@@ -244,7 +348,29 @@ def _image_generation_provider_rows(config: Any) -> list[dict[str, Any]]:
     """
     rows: list[dict[str, Any]] = []
     for spec in PROVIDERS:
-        if spec.is_oauth or spec.is_local or spec.chat_only:
+        if spec.is_oauth or spec.is_local or (spec.chat_only and spec.name != "mona_managed"):
+            continue
+        if spec.name == "mona_managed":
+            image_models = [
+                str(item.get("id") or "").strip()
+                for item in _managed_model_catalog()["models"]
+                if isinstance(item, dict)
+                and item.get("billing_type") == "image"
+                and item.get("id")
+            ]
+            rows.append(
+                {
+                    "name": spec.name,
+                    "label": spec.label,
+                    "configured": bool(image_models),
+                    "api_key_hint": None,
+                    "api_base": spec.default_api_base,
+                    "default_api_base": spec.default_api_base,
+                    "image_models": image_models,
+                    "default_image_model": image_models[0] if image_models else None,
+                    "is_builtin": True,
+                }
+            )
             continue
         provider_config = _provider_config(config, spec.name)
         configured = (
@@ -269,6 +395,24 @@ def _image_generation_provider_rows(config: Any) -> list[dict[str, Any]]:
                 "default_image_model": image_models[0] if image_models else None,
             }
         )
+    existing_names = {row["name"] for row in rows}
+    for provider_name, provider_config in config.providers.cindy.items():
+        if not is_custom_provider_name(provider_name) or provider_name in existing_names:
+            continue
+        model_ids = _custom_generation_model_ids(provider_config, "image")
+        rows.append(
+            {
+                "name": provider_name,
+                "label": provider_config.display_name or provider_name,
+                "configured": bool(provider_config.api_base and model_ids),
+                "api_key_hint": _mask_secret_hint(provider_config.api_key),
+                "api_base": provider_config.api_base,
+                "default_api_base": provider_config.api_base,
+                "image_models": model_ids,
+                "default_image_model": None,
+                "is_custom": True,
+            }
+        )
     return rows
 
 
@@ -281,7 +425,29 @@ def _video_generation_provider_rows(config: Any) -> list[dict[str, Any]]:
     """
     rows: list[dict[str, Any]] = []
     for spec in PROVIDERS:
-        if spec.is_oauth or spec.is_local or spec.chat_only:
+        if spec.is_oauth or spec.is_local or (spec.chat_only and spec.name != "mona_managed"):
+            continue
+        if spec.name == "mona_managed":
+            video_models = [
+                str(item.get("id") or "").strip()
+                for item in _managed_model_catalog()["models"]
+                if isinstance(item, dict)
+                and item.get("billing_type") == "video"
+                and item.get("id")
+            ]
+            rows.append(
+                {
+                    "name": spec.name,
+                    "label": spec.label,
+                    "configured": bool(video_models),
+                    "api_key_hint": None,
+                    "api_base": spec.default_api_base,
+                    "default_api_base": spec.default_api_base,
+                    "video_models": video_models,
+                    "default_video_model": video_models[0] if video_models else None,
+                    "is_builtin": True,
+                }
+            )
             continue
         provider_config = _provider_config(config, spec.name)
         configured = (
@@ -302,6 +468,24 @@ def _video_generation_provider_rows(config: Any) -> list[dict[str, Any]]:
                 "default_api_base": spec.default_api_base or None,
                 "video_models": video_models,
                 "default_video_model": video_models[0] if video_models else None,
+            }
+        )
+    existing_names = {row["name"] for row in rows}
+    for provider_name, provider_config in config.providers.cindy.items():
+        if not is_custom_provider_name(provider_name) or provider_name in existing_names:
+            continue
+        model_ids = _custom_generation_model_ids(provider_config, "video")
+        rows.append(
+            {
+                "name": provider_name,
+                "label": provider_config.display_name or provider_name,
+                "configured": bool(provider_config.api_base and model_ids),
+                "api_key_hint": _mask_secret_hint(provider_config.api_key),
+                "api_base": provider_config.api_base,
+                "default_api_base": provider_config.api_base,
+                "video_models": model_ids,
+                "default_video_model": None,
+                "is_custom": True,
             }
         )
     return rows
@@ -498,7 +682,20 @@ def _preset_capabilities_payload(config: Any, preset: Any) -> dict[str, Any]:
     if not provider_name and preset.provider and preset.provider != "auto":
         provider_name = preset.provider
     spec = find_by_name(provider_name) if provider_name else None
-    return resolve_capabilities(spec, preset.model).to_dict()
+    provider_config = config.get_provider(preset.model, preset=preset)
+    input_modalities: list[str] | None = None
+    for item in (provider_config.discovered_models if provider_config else None) or []:
+        if not isinstance(item, dict) or str(item.get("id") or "") != preset.model:
+            continue
+        raw_modalities = item.get("input_modalities", item.get("inputModalities"))
+        if isinstance(raw_modalities, list):
+            input_modalities = [str(value) for value in raw_modalities]
+        break
+    return resolve_capabilities(
+        spec,
+        preset.model,
+        input_modalities=input_modalities,
+    ).to_dict()
 
 
 def settings_payload(*, requires_restart: bool = False) -> dict[str, Any]:
@@ -548,9 +745,6 @@ def settings_payload(*, requires_restart: bool = False) -> dict[str, Any]:
                 "api_base": provider_config.api_base or spec.default_api_base or None,
                 "default_api_base": spec.default_api_base or None,
                 "model": cfg_model,
-                "free_default_model": (
-                    spec.free_default_model if spec.free_default_model else None
-                ),
                 "backend": spec.backend,
                 "probe_supported": (
                     not spec.is_oauth
@@ -566,7 +760,7 @@ def settings_payload(*, requires_restart: bool = False) -> dict[str, Any]:
     search_provider = (
         search_config.provider
         if search_config.provider in _WEB_SEARCH_PROVIDER_BY_NAME
-        else "duckduckgo"
+        else "anysearch"
     )
     image_providers = _image_generation_provider_rows(config)
     selected_image_provider = next(
@@ -633,8 +827,6 @@ def settings_payload(*, requires_restart: bool = False) -> dict[str, Any]:
             "temperature": effective_preset.temperature,
             "reasoning_effort": effective_preset.reasoning_effort,
             "timezone": defaults.timezone,
-            "bot_name": defaults.bot_name,
-            "bot_icon": defaults.bot_icon,
             "tool_hint_max_length": defaults.tool_hint_max_length,
         },
         "model_presets": model_presets,
@@ -656,9 +848,6 @@ def settings_payload(*, requires_restart: bool = False) -> dict[str, Any]:
                 "max_results": search_config.max_results,
                 "timeout": search_config.timeout,
             },
-            "fetch": {
-                "use_jina_reader": config.tools.web.fetch.use_jina_reader,
-            },
         },
         "image_generation": {
             "enabled": image_config.enabled,
@@ -670,6 +859,10 @@ def settings_payload(*, requires_restart: bool = False) -> dict[str, Any]:
             "default_aspect_ratio": image_config.default_aspect_ratio,
             "default_image_size": image_config.default_image_size,
             "max_images_per_turn": image_config.max_images_per_turn,
+            "model_parameters": {
+                model_id: parameters.model_dump(mode="json")
+                for model_id, parameters in image_config.model_parameters.items()
+            },
             "save_dir": image_config.save_dir,
             "providers": image_providers,
         },
@@ -682,6 +875,10 @@ def settings_payload(*, requires_restart: bool = False) -> dict[str, Any]:
             "model": video_config.model,
             "default_aspect_ratio": video_config.default_aspect_ratio,
             "default_duration": video_config.default_duration,
+            "model_parameters": {
+                model_id: parameters.model_dump(mode="json")
+                for model_id, parameters in video_config.model_parameters.items()
+            },
             "save_dir": video_config.save_dir,
             "providers": video_providers,
         },
@@ -702,6 +899,7 @@ def settings_payload(*, requires_restart: bool = False) -> dict[str, Any]:
                 "annotate_line_ages": defaults.dream.annotate_line_ages,
             },
             "unified_session": defaults.unified_session,
+            "auto_download": config.runtime.auto_download,
         },
         "advanced": {
             "restrict_to_workspace": config.tools.restrict_to_workspace,
@@ -803,6 +1001,23 @@ def update_agent_settings(query: QueryParams) -> dict[str, Any]:
             provider_config.model = provider_model
             changed = True
 
+    reasoning_effort = _query_first_alias(query, "reasoning_effort", "reasoningEffort")
+    if reasoning_effort is not None:
+        reasoning_effort = reasoning_effort.strip().lower()
+        if reasoning_effort not in {"none", "low", "medium", "high", "max", "adaptive"}:
+            raise WebUISettingsError("reasoning_effort is invalid")
+        normalized_effort = None if reasoning_effort == "none" else reasoning_effort
+        if defaults.reasoning_effort != normalized_effort:
+            defaults.reasoning_effort = normalized_effort
+            changed = True
+
+    auto_download_raw = _query_first_alias(query, "auto_download", "autoDownload")
+    if auto_download_raw is not None:
+        auto_download = _parse_bool(auto_download_raw, "auto_download")
+        if config.runtime.auto_download != auto_download:
+            config.runtime.auto_download = auto_download
+            changed = True
+
     timezone = _query_first(query, "timezone")
     if timezone is not None:
         timezone = timezone.strip()
@@ -814,24 +1029,6 @@ def update_agent_settings(query: QueryParams) -> dict[str, Any]:
             raise WebUISettingsError("invalid timezone") from None
         if defaults.timezone != timezone:
             defaults.timezone = timezone
-            changed = True
-            restart_required = True
-
-    bot_name = _query_first_alias(query, "bot_name", "botName")
-    if bot_name is not None:
-        bot_name = bot_name.strip()
-        if not bot_name:
-            raise WebUISettingsError("bot_name is required")
-        if defaults.bot_name != bot_name:
-            defaults.bot_name = bot_name
-            changed = True
-            restart_required = True
-
-    bot_icon = _query_first_alias(query, "bot_icon", "botIcon")
-    if bot_icon is not None:
-        bot_icon = bot_icon.strip()
-        if defaults.bot_icon != bot_icon:
-            defaults.bot_icon = bot_icon
             changed = True
             restart_required = True
 
@@ -911,6 +1108,25 @@ def update_provider_settings(query: QueryParams) -> dict[str, Any]:
             raise WebUISettingsError("unknown provider")
         provider_config = None
 
+    managed_entry = provider_name == "mona_managed"
+    if managed_entry:
+        if _parse_bool(_query_first(query, "delete") or "false", "delete"):
+            raise WebUISettingsError("Mona AI 是内置供应商，不能删除")
+        if any(
+            key in query
+            for key in (
+                "api_key",
+                "apiKey",
+                "api_base",
+                "apiBase",
+                "custom_name",
+                "customName",
+                "discovered_models",
+                "discoveredModels",
+            )
+        ):
+            raise WebUISettingsError("Mona AI 是内置供应商，不能编辑连接配置")
+
     delete_requested = (catalog_entry is not None or custom_entry) and _parse_bool(
         _query_first(query, "delete") or "false", "delete"
     )
@@ -960,9 +1176,17 @@ def update_provider_settings(query: QueryParams) -> dict[str, Any]:
                     else (available_model_ids[0] if available_model_ids else "")
                 )
             else:
-                # Zen resolves its free_default_model when model is empty.
-                config.agents.defaults.provider = "zen"
-                config.agents.defaults.model = ""
+                managed_catalog = _managed_model_catalog()
+                managed_model = next(
+                    (
+                        str(item.get("id") or "").strip()
+                        for item in managed_catalog["models"]
+                        if isinstance(item, dict) and item.get("id")
+                    ),
+                    "",
+                )
+                config.agents.defaults.provider = "auto"
+                config.agents.defaults.model = managed_model
         save_config(config)
         return settings_payload()
 
@@ -1041,14 +1265,7 @@ def update_provider_settings(query: QueryParams) -> dict[str, Any]:
         if provider_config.model != model:
             provider_config.model = model
             changed = True
-    if custom_entry and creating_custom and model is None:
-        raise WebUISettingsError("模型不能为空")
-    if custom_entry and creating_custom and not (
-        "enabled_models" in query or "enabledModels" in query
-    ):
-        raise WebUISettingsError("enabled_models must not be empty")
-
-    if (catalog_entry is not None or custom_entry or spec.free_default_model) and (
+    if (catalog_entry is not None or custom_entry or managed_entry) and (
         "enabled_models" in query or "enabledModels" in query
     ):
         raw_enabled = _query_first_alias(query, "enabled_models", "enabledModels")
@@ -1060,11 +1277,13 @@ def update_provider_settings(query: QueryParams) -> dict[str, Any]:
             isinstance(item, str) for item in enabled
         ):
             raise WebUISettingsError("enabled_models must be a JSON array of strings")
-        if not enabled and creating_custom:
-            raise WebUISettingsError("enabled_models must not be empty")
         known_models = {item.id for item in catalog_entry.models} if catalog_entry else set()
-        if spec.free_default_model:
-            known_models.add(spec.free_default_model)
+        if managed_entry:
+            known_models.update(
+                str(item.get("id") or "").strip()
+                for item in _managed_model_catalog()["models"]
+                if isinstance(item, dict) and item.get("id")
+            )
         known_models.update(
             str(item.get("id"))
             for item in (provider_config.discovered_models or [])
@@ -1086,15 +1305,13 @@ def update_provider_settings(query: QueryParams) -> dict[str, Any]:
                 )
         if any(item not in known_models for item in enabled):
             raise WebUISettingsError("enabled_models contains an unknown model")
-        if spec.free_default_model and any(not item.endswith("-free") for item in enabled):
-            raise WebUISettingsError("内置免费供应商仅支持免费模型")
         normalized_enabled = list(dict.fromkeys(enabled))
         if provider_config.enabled_models != normalized_enabled:
             provider_config.enabled_models = normalized_enabled
             changed = True
         models_updated = True
 
-    if (catalog_entry is not None or custom_entry or spec.free_default_model) and (
+    if (catalog_entry is not None or custom_entry) and (
         "discovered_models" in query or "discoveredModels" in query
     ):
         raw_discovered = _query_first_alias(
@@ -1114,8 +1331,6 @@ def update_provider_settings(query: QueryParams) -> dict[str, Any]:
             model_id = str(item.get("id") or "").strip()
             if not model_id:
                 continue
-            if spec.free_default_model and not model_id.endswith("-free"):
-                raise WebUISettingsError("内置免费供应商仅支持免费模型")
             context_window = item.get("contextWindow")
             if context_window is not None and (
                 isinstance(context_window, bool) or not isinstance(context_window, int)
@@ -1123,6 +1338,39 @@ def update_provider_settings(query: QueryParams) -> dict[str, Any]:
                 raise WebUISettingsError(
                     "discovered_models.contextWindow must be an integer"
                 )
+            model_type = item.get("type")
+            if model_type is not None and not isinstance(model_type, str):
+                raise WebUISettingsError("discovered_models.type must be a string")
+            model_type = model_type.strip().lower() if isinstance(model_type, str) else ""
+            if len(model_type) > 64:
+                raise WebUISettingsError("discovered_models.type is too long")
+            raw_modalities = item.get(
+                "inputModalities",
+                item.get("input_modalities"),
+            )
+            if raw_modalities is not None and not isinstance(raw_modalities, list):
+                raise WebUISettingsError(
+                    "discovered_models.inputModalities must be an array"
+                )
+            input_modalities: list[str] | None = None
+            if isinstance(raw_modalities, list):
+                if any(not isinstance(value, str) for value in raw_modalities):
+                    raise WebUISettingsError(
+                        "discovered_models.inputModalities must contain strings"
+                    )
+                input_modalities = list(
+                    dict.fromkeys(
+                        value.strip().lower()
+                        for value in raw_modalities
+                        if value.strip()
+                    )
+                )
+                if len(input_modalities) > 16 or any(
+                    len(value) > 64 for value in input_modalities
+                ):
+                    raise WebUISettingsError(
+                        "discovered_models.inputModalities is too large"
+                    )
             if model_id in seen_discovered:
                 continue
             seen_discovered.add(model_id)
@@ -1130,30 +1378,46 @@ def update_provider_settings(query: QueryParams) -> dict[str, Any]:
                 {
                     "id": model_id,
                     "name": str(item.get("name") or model_id),
+                    **({"type": model_type} if model_type else {}),
                     **(
                         {"context_window": context_window}
                         if context_window is not None
                         else {}
                     ),
+                    **(
+                        {"input_modalities": input_modalities}
+                        if input_modalities is not None
+                        else {}
+                    ),
                 }
             )
         existing_discovered = list(provider_config.discovered_models or [])
-        existing_ids = {
-            str(item.get("id"))
-            for item in existing_discovered
-            if isinstance(item, dict) and item.get("id")
-        }
-        merged_discovered = existing_discovered + [
+        incoming_by_id = {item["id"]: item for item in normalized_discovered}
+        merged_discovered: list[dict[str, Any]] = []
+        existing_ids: set[str] = set()
+        for item in existing_discovered:
+            if not isinstance(item, dict):
+                continue
+            model_id = str(item.get("id") or "").strip()
+            if not model_id:
+                continue
+            existing_ids.add(model_id)
+            incoming = incoming_by_id.get(model_id)
+            updates: dict[str, Any] = {}
+            if incoming and incoming.get("type"):
+                updates["type"] = incoming["type"]
+            if incoming and "input_modalities" in incoming:
+                updates["input_modalities"] = incoming["input_modalities"]
+            merged_discovered.append({**item, **updates})
+        merged_discovered.extend(
             item for item in normalized_discovered if item["id"] not in existing_ids
-        ]
+        )
         if provider_config.discovered_models != merged_discovered:
             provider_config.discovered_models = merged_discovered
             changed = True
 
         if provider_config.enabled_models is not None:
             known_models = {item.id for item in catalog_entry.models} if catalog_entry else set()
-            if spec.free_default_model:
-                known_models.add(spec.free_default_model)
             known_models.update(
                 str(item.get("id"))
                 for item in merged_discovered
@@ -1168,7 +1432,7 @@ def update_provider_settings(query: QueryParams) -> dict[str, Any]:
                 fallback_model = (
                     catalog_entry.models[0].id
                     if catalog_entry and catalog_entry.models
-                    else (spec.free_default_model or next((item["id"] for item in merged_discovered), None))
+                    else next((item["id"] for item in merged_discovered), None)
                 )
                 if fallback_model is None:
                     raise WebUISettingsError("至少需要一个模型")
@@ -1183,7 +1447,7 @@ def update_provider_settings(query: QueryParams) -> dict[str, Any]:
         # scalar fields and model payload syntax have passed validation.
         config.providers.cindy[provider_name] = provider_config
 
-    if (catalog_entry is not None or custom_entry or spec.free_default_model) and models_updated and provider_config.enabled_models:
+    if (catalog_entry is not None or custom_entry or managed_entry) and models_updated and provider_config.enabled_models:
         enabled_models = provider_config.enabled_models
         if provider_config.model and provider_config.model not in enabled_models:
             provider_config.model = enabled_models[0]
@@ -1207,13 +1471,13 @@ def update_provider_settings(query: QueryParams) -> dict[str, Any]:
             raise WebUISettingsError("显示名称不能为空")
         if not provider_config.api_base:
             raise WebUISettingsError("API Base 不能为空")
-        if creating_custom and not provider_config.enabled_models:
-            raise WebUISettingsError("enabled_models must not be empty")
         known_models = {
             str(item.get("id"))
             for item in (provider_config.discovered_models or [])
             if isinstance(item, dict) and item.get("id")
         }
+        if creating_custom and not known_models:
+            raise WebUISettingsError("至少需要一个模型")
         if any(model_id not in known_models for model_id in provider_config.enabled_models or []):
             raise WebUISettingsError("enabled_models contains an unknown model")
         if provider_config.enabled_models and not provider_config.model:
@@ -1228,14 +1492,7 @@ def update_provider_settings(query: QueryParams) -> dict[str, Any]:
 
     if changed:
         save_config(config)
-    image_config = config.tools.image_generation
-    restart_required = (
-        changed
-        and image_config.enabled
-        and image_config.provider == spec.name
-        and get_image_gen_provider(spec.name) is not None
-    )
-    return settings_payload(requires_restart=restart_required)
+    return settings_payload()
 
 
 def update_web_search_settings(query: QueryParams) -> dict[str, Any]:
@@ -1246,21 +1503,13 @@ def update_web_search_settings(query: QueryParams) -> dict[str, Any]:
 
     config = load_config()
     search_config = config.tools.web.search
-    web_config = config.tools.web
     previous_provider = search_config.provider
     changed = False
-    restart_required = False
 
     def set_search_value(attr: str, value: object) -> None:
         nonlocal changed
         if getattr(search_config, attr) != value:
             setattr(search_config, attr, value)
-            changed = True
-
-    def set_fetch_value(attr: str, value: object) -> None:
-        nonlocal changed
-        if getattr(web_config.fetch, attr) != value:
-            setattr(web_config.fetch, attr, value)
             changed = True
 
     if search_config.provider != provider_name:
@@ -1310,19 +1559,9 @@ def update_web_search_settings(query: QueryParams) -> dict[str, Any]:
             raise WebUISettingsError("timeout must be between 1 and 120")
         set_search_value("timeout", parsed_timeout)
 
-    use_jina_reader = _query_first_alias(query, "use_jina_reader", "useJinaReader")
-    if use_jina_reader is not None:
-        normalized = use_jina_reader.strip().lower()
-        if normalized not in {"1", "0", "true", "false", "yes", "no"}:
-            raise WebUISettingsError("use_jina_reader must be boolean")
-        previous_jina_reader = web_config.fetch.use_jina_reader
-        set_fetch_value("use_jina_reader", normalized in {"1", "true", "yes"})
-        if web_config.fetch.use_jina_reader != previous_jina_reader:
-            restart_required = True
-
     if changed:
         save_config(config)
-    return settings_payload(requires_restart=restart_required)
+    return settings_payload()
 
 
 def update_image_generation_settings(query: QueryParams) -> dict[str, Any]:
@@ -1360,6 +1599,18 @@ def update_image_generation_settings(query: QueryParams) -> dict[str, Any]:
             raise WebUISettingsError("image generation model is too long")
         if image_config.model != model:
             image_config.model = model
+            changed = True
+
+    raw_parameters = _query_first(query, "parameters")
+    if raw_parameters is not None:
+        parameters = _parse_generation_parameters(
+            raw_parameters,
+            _IMAGE_GENERATION_PARAMETER_NAMES,
+        )
+        if parameters.enabled and not is_custom_provider_name(image_config.provider):
+            raise WebUISettingsError("高级生成参数目前只支持自定义供应商")
+        if image_config.model_parameters.get(image_config.model) != parameters:
+            image_config.model_parameters[image_config.model] = parameters
             changed = True
 
     default_aspect_ratio = _query_first_alias(
@@ -1423,7 +1674,7 @@ def update_image_generation_settings(query: QueryParams) -> dict[str, Any]:
 
     if changed:
         save_config(config)
-    return settings_payload(requires_restart=changed)
+    return settings_payload()
 
 
 def update_video_generation_settings(query: QueryParams) -> dict[str, Any]:
@@ -1460,6 +1711,18 @@ def update_video_generation_settings(query: QueryParams) -> dict[str, Any]:
             raise WebUISettingsError("video generation model is too long")
         if video_config.model != model:
             video_config.model = model
+            changed = True
+
+    raw_parameters = _query_first(query, "parameters")
+    if raw_parameters is not None:
+        parameters = _parse_generation_parameters(
+            raw_parameters,
+            _VIDEO_GENERATION_PARAMETER_NAMES,
+        )
+        if parameters.enabled and not is_custom_provider_name(video_config.provider):
+            raise WebUISettingsError("高级生成参数目前只支持自定义供应商")
+        if video_config.model_parameters.get(video_config.model) != parameters:
+            video_config.model_parameters[video_config.model] = parameters
             changed = True
 
     default_aspect_ratio = _query_first_alias(
@@ -1501,7 +1764,7 @@ def update_video_generation_settings(query: QueryParams) -> dict[str, Any]:
 
     if changed:
         save_config(config)
-    return settings_payload(requires_restart=changed)
+    return settings_payload()
 
 
 _TTS_PROVIDERS = {"edge", "custom"}
@@ -1702,7 +1965,9 @@ def _chat_provider_rows(config: Any) -> list[dict[str, Any]]:
             {
                 "id": model.id,
                 "name": model.name,
+                "type": "chat",
                 "context_window": model.context_window,
+                "input_modalities": model.input_modalities,
             }
             for model in entry.models
         ]
@@ -1716,7 +1981,9 @@ def _chat_provider_rows(config: Any) -> list[dict[str, Any]]:
                 {
                     "id": model_id,
                     "name": str(model.get("name") or model_id),
+                    "type": str(model.get("type") or "").strip().lower() or None,
                     "context_window": model.get("context_window"),
+                    "input_modalities": model.get("input_modalities"),
                 }
             )
         rows.append(
@@ -1750,37 +2017,74 @@ def _chat_provider_rows(config: Any) -> list[dict[str, Any]]:
                 "is_custom": False,
             }
         )
-    zen = find_by_name("zen")
-    if zen and zen.free_default_model:
-        provider_config = _provider_config(config, zen.name)
+    managed = find_by_name("mona_managed")
+    if managed:
+        provider_config = _provider_config(config, managed.name)
+        managed_catalog = _managed_model_catalog()
+        managed_models: list[dict[str, Any]] = []
+        seen_managed_ids: set[str] = set()
+        for item in managed_catalog["models"]:
+            if str(item.get("billing_type") or "token") != "token":
+                continue
+            model_id = str(item.get("id") or "").strip()
+            if not model_id or model_id in seen_managed_ids:
+                continue
+            seen_managed_ids.add(model_id)
+            promotion_fields = {
+                field: item[field]
+                for field in (
+                    "promotion_label",
+                    "promotion_name",
+                    "discount_percent",
+                    "original_input_amount_per_million",
+                    "original_cached_input_amount_per_million",
+                    "original_output_amount_per_million",
+                )
+                if item.get(field) is not None
+            }
+            managed_models.append(
+                {
+                    "id": model_id,
+                    "name": str(item.get("name") or model_id),
+                    "type": "chat",
+                    "context_window": item.get("context_window"),
+                    "input_modalities": item.get("input_modalities"),
+                    "input_amount_per_million": item.get("input_amount_per_million"),
+                    "cached_input_amount_per_million": item.get("cached_input_amount_per_million"),
+                    "output_amount_per_million": item.get("output_amount_per_million"),
+                    "billing_type": "token",
+                    **promotion_fields,
+                }
+            )
+        managed_ids = [model["id"] for model in managed_models]
         selected = (
             list(provider_config.enabled_models)
             if provider_config and provider_config.enabled_models is not None
             else None
         )
-        models = [{"id": zen.free_default_model, "name": zen.free_default_model}]
-        seen_ids = {zen.free_default_model}
-        for model in (provider_config.discovered_models if provider_config else None) or []:
-            model_id = str(model.get("id") or "").strip()
-            if not model_id or not model_id.endswith("-free") or model_id in seen_ids:
-                continue
-            seen_ids.add(model_id)
-            models.append({"id": model_id, "name": str(model.get("name") or model_id)})
         rows.insert(
             0,
             {
-                "name": zen.name,
-                "label": zen.display_name,
-                "configured": True,
+                "name": managed.name,
+                "label": managed.display_name,
+                "configured": managed_catalog["available"] is True and bool(managed_models),
                 "api_key_required": False,
-                "api_base": zen.default_api_base,
-                "default_api_base": zen.default_api_base,
-                "model": (provider_config.model if provider_config and provider_config.model else zen.free_default_model),
+                "api_base": managed.default_api_base,
+                "default_api_base": managed.default_api_base,
+                "model": (
+                    provider_config.model
+                    if provider_config and provider_config.model in managed_ids
+                    else (managed_ids[0] if managed_ids else None)
+                ),
                 "models": [
-                    {**model, "enabled": selected is None or model["id"] in selected, "recommended": index == 0}
-                    for index, model in enumerate(models)
+                    {
+                        **model,
+                        "enabled": selected is None or model["id"] in selected,
+                        "recommended": index == 0,
+                    }
+                    for index, model in enumerate(managed_models)
                 ],
-                "models_url": _ZEN_MODELS_URL,
+                "models_url": None,
                 "api_base_editable": False,
                 "is_builtin": True,
             },
@@ -1801,7 +2105,9 @@ def _chat_provider_rows(config: Any) -> list[dict[str, Any]]:
                 {
                     "id": model_id,
                     "name": str(model.get("name") or model_id),
+                    "type": str(model.get("type") or "").strip().lower() or None,
                     "context_window": model.get("context_window"),
+                    "input_modalities": model.get("input_modalities"),
                 }
             )
         selected = list(provider_config.enabled_models or [])
@@ -1823,9 +2129,9 @@ def _chat_provider_rows(config: Any) -> list[dict[str, Any]]:
                     {
                         **model,
                         "enabled": model["id"] in selected,
-                        "recommended": index == 0,
+                        "recommended": False,
                     }
-                    for index, model in enumerate(discovered_models)
+                    for model in discovered_models
                 ],
                 "models_url": None,
                 "region": None,
@@ -1856,9 +2162,6 @@ def _ensure_enabled_model_default(config: Any) -> bool:
         except Exception:
             current_provider = ""
     current_model = defaults.model
-    if current_provider == "zen" and not current_model:
-        zen = find_by_name("zen")
-        current_model = zen.free_default_model if zen else ""
     if any(
         row["name"] == current_provider
         and current_model in models
@@ -1875,79 +2178,18 @@ def _ensure_enabled_model_default(config: Any) -> bool:
             order.get(choice[0]["name"], len(order)),
         )
     )
-    replacement, models = (preferred or choices)[0]
+    if not preferred:
+        replacement, models = choices[0]
+        model = replacement["model"] if replacement.get("model") in models else models[0]
+        changed = defaults.provider != "auto" or defaults.model != model
+        defaults.provider = "auto"
+        defaults.model = model
+        return changed
+
+    replacement, models = preferred[0]
     defaults.provider = replacement["name"]
     defaults.model = replacement["model"] if replacement.get("model") in models else models[0]
     return True
-
-
-_ZEN_MODELS_URL = "https://opencode.ai/zen/v1/models"
-
-
-async def fetch_zen_free_models() -> list[str]:
-    """Fetch free model IDs from OpenCode Zen API.
-
-    Free models have a ``-free`` suffix in their ``id`` field.
-    Returns a sorted list of model ID strings; on any error returns an empty list.
-    """
-    try:
-        async with httpx.AsyncClient(timeout=10) as client:
-            resp = await client.get(_ZEN_MODELS_URL)
-        resp.raise_for_status()
-        data = resp.json()
-        models = data.get("data", [])
-        free_ids = sorted(m["id"] for m in models if m.get("id", "").endswith("-free"))
-        return free_ids
-    except Exception:
-        logger.exception("Failed to fetch Zen free models")
-        return []
-
-
-def sync_zen_free_models(models: list[str]) -> bool:
-    """Persist the live Zen catalog without changing an explicit model selection."""
-    model_ids = list(dict.fromkeys(model.strip() for model in models if model.strip().endswith("-free")))
-    if not model_ids:
-        return False
-
-    config = load_config()
-    spec = find_by_name("zen")
-    provider_config = _provider_config(config, "zen")
-    if spec is None or provider_config is None or not spec.free_default_model:
-        return False
-
-    discovered = [
-        {"id": model_id, "name": model_id}
-        for model_id in model_ids
-        if model_id != spec.free_default_model
-    ]
-    changed = provider_config.discovered_models != discovered
-    if changed:
-        provider_config.discovered_models = discovered
-
-    known_models = {spec.free_default_model, *model_ids}
-    if provider_config.enabled_models is not None:
-        enabled = [model_id for model_id in provider_config.enabled_models if model_id in known_models]
-        if provider_config.enabled_models and not enabled:
-            enabled = [spec.free_default_model]
-        if provider_config.enabled_models != enabled:
-            provider_config.enabled_models = enabled
-            changed = True
-
-    enabled_models = provider_config.enabled_models
-    if enabled_models is not None and provider_config.model not in enabled_models:
-        next_model = enabled_models[0] if enabled_models else None
-        if provider_config.model != next_model:
-            provider_config.model = next_model
-            changed = True
-    elif provider_config.model and provider_config.model not in known_models:
-        provider_config.model = spec.free_default_model
-        changed = True
-
-    changed = _ensure_enabled_model_default(config) or changed
-    if changed:
-        save_config(config)
-    return changed
-
 
 # ─── Provider model probing ───────────────────────────────────────────
 #
@@ -1995,8 +2237,30 @@ def _models_url_for(backend: str, api_base: str, provider_name: str = "") -> str
     return None
 
 
-def _parse_models_payload(payload: Any) -> list[str]:
-    """Extract a flat ``list[str]`` of model ids from arbitrary shapes.
+def _model_input_modalities(item: dict[str, Any]) -> list[str] | None:
+    raw = item.get("input_modalities", item.get("inputModalities"))
+    modalities = item.get("modalities")
+    if raw is None and isinstance(modalities, dict):
+        raw = modalities.get("input")
+    architecture = item.get("architecture")
+    if raw is None and isinstance(architecture, dict):
+        raw = architecture.get("input_modalities", architecture.get("inputModalities"))
+    if isinstance(raw, list) and all(isinstance(value, str) for value in raw):
+        return list(
+            dict.fromkeys(
+                value.strip().lower()
+                for value in raw
+                if value.strip()
+            )
+        )
+    capabilities = item.get("capabilities")
+    if isinstance(capabilities, dict) and isinstance(capabilities.get("vision"), bool):
+        return ["text", "image"] if capabilities["vision"] else ["text"]
+    return None
+
+
+def _parse_model_details_payload(payload: Any) -> list[dict[str, Any]]:
+    """Extract model IDs and optional model types from arbitrary shapes.
 
     Accepted shapes (any of):
       - ``{"data": [{"id": "gpt-4o"}, ...]}``        (OpenAI standard)
@@ -2016,34 +2280,53 @@ def _parse_models_payload(payload: Any) -> list[str]:
     elif isinstance(payload, list):
         items = payload
 
-    out: list[str] = []
+    out: list[dict[str, Any]] = []
     seen: set[str] = set()
     for item in items:
         if isinstance(item, str):
             name = item.strip()
+            label = name
+            model_type = None
+            input_modalities = None
         elif isinstance(item, dict):
             name = str(item.get("id") or item.get("name") or "").strip()
+            label = str(item.get("name") or name).strip() or name
+            raw_type = item.get("type")
+            model_type = raw_type.strip().lower() if isinstance(raw_type, str) else None
+            input_modalities = _model_input_modalities(item)
         else:
             continue
         if not name or name in seen:
             continue
         seen.add(name)
-        out.append(name)
+        out.append(
+            {
+                "id": name,
+                "name": label,
+                "type": model_type,
+                "input_modalities": input_modalities,
+            }
+        )
     return out
 
 
-async def probe_provider_models(
+def _parse_models_payload(payload: Any) -> list[str]:
+    """Extract a flat ``list[str]`` of model IDs from arbitrary shapes."""
+    return [item["id"] for item in _parse_model_details_payload(payload)]
+
+
+async def probe_provider_model_details(
     *,
     provider_name: str,
     api_key: str | None = None,
     api_base: str | None = None,
     timeout: float = 15.0,
-) -> list[str]:
+) -> list[dict[str, Any]]:
     """Fetch the model catalog for one provider.
 
     Raises ``WebUISettingsError`` on any failure (auth / network / unsupported /
     parse), with a Chinese ``message`` suitable for surfacing to the UI.
-    On success returns a list of model id strings (may be empty).
+    On success returns model IDs with optional names and types.
     """
     spec = find_by_name(provider_name)
     if spec is None:
@@ -2142,10 +2425,25 @@ async def probe_provider_models(
     if not isinstance(payload, (dict, list)):
         raise WebUISettingsError("endpoint 返回内容格式无法识别")
 
-    models = _parse_models_payload(payload)
-    if spec.free_default_model:
-        models = [model for model in models if model.endswith("-free")]
+    models = _parse_model_details_payload(payload)
     if not models and isinstance(payload, dict) and payload.get("error"):
         err_msg = str(payload["error"])[:200]
         raise WebUISettingsError(f"endpoint 返回错误: {err_msg}")
     return models
+
+
+async def probe_provider_models(
+    *,
+    provider_name: str,
+    api_key: str | None = None,
+    api_base: str | None = None,
+    timeout: float = 15.0,
+) -> list[str]:
+    """Fetch only model IDs for callers that do not need model metadata."""
+    models = await probe_provider_model_details(
+        provider_name=provider_name,
+        api_key=api_key,
+        api_base=api_base,
+        timeout=timeout,
+    )
+    return [item["id"] for item in models]

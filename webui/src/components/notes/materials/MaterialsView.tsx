@@ -2,7 +2,7 @@
  * MaterialsView — 资料库视图（拆分为 sidebar + preview）。
  *
  * 由 NotesView 组装布局：
- * - MaterialsSidebar：顶部 toolbar + 双分组列表（原始资料 / AI 整理）
+ * - MaterialsSidebar：资料目录、自动处理状态与失败重试
  * - MaterialsPreview：根据选中项渲染文本预览或 Wiki markdown
  *
  * 所有路径限制在 `<vault>/.mona/materials/` 内，由后端做 canonical 校验。

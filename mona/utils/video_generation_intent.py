@@ -17,10 +17,8 @@ def video_generation_prompt(
 
     The WebUI no longer asks the user to pick aspect ratio / duration / a
     reference image URL inline. Instead the AI chooses parameters from the
-    prompt itself, and treats any attached images as image-to-video references.
-    Attached image paths are surfaced to the model so it can pass them to
-    ``generate_video``; the tool uploads them to Mona's image host and only
-    forwards the resulting HTTP URL to the provider.
+    prompt itself and maps attached images to general references or explicit
+    first/last frames according to the user's wording.
     """
     raw = (metadata or {}).get(VIDEO_GENERATION_METADATA_KEY)
     if not isinstance(raw, dict) or raw.get("enabled") is not True:
@@ -34,9 +32,9 @@ def video_generation_prompt(
     if image_paths:
         listed = ", ".join(repr(p) for p in image_paths)
         parts.append(
-            "The user attached image(s). Pass their local paths as reference_images "
-            f"to drive image-to-video generation: [{listed}]. "
-            "The tool will upload them automatically — do not invent HTTP URLs."
+            "The user attached image(s). Use their local paths as reference_images, "
+            "first_frame, or last_frame according to the user's wording: "
+            f"[{listed}]. Do not invent HTTP URLs or imply frame order when the user did not."
         )
     instruction = " ".join(parts)
     return f"{content}\n\n[WebUI video generation instruction: {instruction}]"

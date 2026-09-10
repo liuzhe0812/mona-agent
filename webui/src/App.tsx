@@ -8,6 +8,11 @@ import { RenameChatDialog } from "@/components/RenameChatDialog";
 import { AppRail } from "@/components/shell/AppRail";
 import { SessionListPanel } from "@/components/shell/SessionListPanel";
 import { AgentManagementView } from "@/components/agents/AgentManagementView";
+import { ExpertLibraryDialog } from "@/components/experts/ExpertLibraryDialog";
+import {
+  CustomExpertDialog,
+  type CustomExpertInput,
+} from "@/components/experts/CustomExpertDialog";
 import {
   NewRoomDialog,
 } from "@/components/shell/ConversationDialogs";
@@ -18,6 +23,7 @@ import { SessionSearchDialog } from "@/components/SessionSearchDialog";
 import { QuickAskWindow } from "@/components/quick/QuickAskWindow";
 import { SettingsView } from "@/components/settings/SettingsView";
 import { ThreadShell } from "@/components/thread/ThreadShell";
+import { useFilePreviewStore, type PreviewScope } from "@/components/deliver/filePreviewStore";
 import { StartupScene } from "@/components/StartupScene";
 import { Sheet, SheetContent, SheetTitle } from "@/components/ui/sheet";
 import {
@@ -63,9 +69,10 @@ import { removeProject, resetApiBase } from "@/lib/api";
 import { browserHideTabsExcept } from "@/lib/browser-ipc";
 import { deriveTitle } from "@/lib/format";
 import { MonaClient } from "@/lib/mona-client";
+import type { ProfileArtifact, ProfileStartRequest } from "@/lib/profile-api";
 import { ClientProvider, useClientOptional, type RuntimeStatus } from "@/providers/ClientProvider";
-import type { ChatSummary } from "@/lib/types";
-import { isTauri, getGatewayStatus, startGateway, getServicesStatus, startServices, getDesktopSettings, readGatewayLog, createNoteFromChat, revealItemInDir, openPathWithSystemApp, type GatewayLog, type SidebarShortcuts, type SidebarModuleConfig, type UpdateCheckResult } from "@/lib/tauri";
+import type { ArtifactRef, ChatSummary, DeliveredFile } from "@/lib/types";
+import { isTauri, startGateway, getServicesStatus, startServices, getDesktopSettings, readGatewayLog, createNoteFromChat, revealItemInDir, openPathWithSystemApp, type GatewayLog, type SidebarShortcuts, type SidebarModuleConfig, type UpdateCheckResult } from "@/lib/tauri";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 
@@ -81,7 +88,6 @@ type BootState =
       modelName: string | null;
     };
 
-const SIDEBAR_STORAGE_KEY = "mona-webui.sidebar";
 const COMPLETED_RUNS_STORAGE_KEY = "mona-webui.sidebar.completed-runs.v1";
 const RESTART_STARTED_KEY = "mona-webui.restartStartedAt";
 const TOKEN_REFRESH_MARGIN_MS = 30_000;
@@ -99,6 +105,8 @@ export function openNewBrowserTab(
 interface QueuedAgentPrompt {
   id: string;
   content: string;
+  origin?: "profile_advice";
+  profileAdviceId?: string;
 }
 
 const NotesView = lazy(() =>
@@ -122,6 +130,12 @@ const DocMakerView = lazy(() =>
 const MdFileView = lazy(() =>
   import("@/components/md-reader/MdFileView").then((module) => ({
     default: module.MdFileView,
+  })),
+);
+
+const CanvasFileView = lazy(() =>
+  import("@/components/canvas/CanvasFileView").then((module) => ({
+    default: module.CanvasFileView,
   })),
 );
 
@@ -295,17 +309,6 @@ function AuthForm({
   );
 }
 
-function readSidebarOpen(): boolean {
-  if (typeof window === "undefined") return true;
-  try {
-    const raw = window.localStorage.getItem(SIDEBAR_STORAGE_KEY);
-    if (raw === null) return true;
-    return raw === "1";
-  } catch {
-    return true;
-  }
-}
-
 function readCompletedRunChatIds(): Set<string> {
   if (typeof window === "undefined") return new Set();
   try {
@@ -439,19 +442,14 @@ export default function App() {
       setState({ status: "loading" });
       try {
         try {
-          const gwStatus = await getGatewayStatus();
-          if (!gwStatus.running) {
-            await startGateway();
-          }
-        } catch {
-          try {
-            await startGateway();
-          } catch (startErr) {
-            if (cancelled) return;
-            const errMsg = startErr instanceof Error ? startErr.message : String(startErr);
-            setState({ status: "error", message: `Gateway 启动失败: ${errMsg}` });
-            return;
-          }
+          // The native "running" state is set as soon as the child process is
+          // spawned. This idempotent command also waits until /health is ready.
+          await startGateway();
+        } catch (startErr) {
+          if (cancelled) return;
+          const errMsg = startErr instanceof Error ? startErr.message : String(startErr);
+          setState({ status: "error", message: `Gateway 启动失败: ${errMsg}` });
+          return;
         }
 
         const saved = loadSavedSecret();
@@ -541,7 +539,9 @@ function Shell({
   const { t, i18n } = useTranslation();
   const { client, runtimeStatus, runtimeError, token } = useClientOptional();
   const { theme, toggle } = useTheme();
-  const { licenseActive, loggedIn, pricingConfig } = useLicense();
+  const { loggedIn, pricingConfig } = useLicense();
+  const [startupSceneVisible, setStartupSceneVisible] = useState(runtimeStatus === "connecting");
+  const [startupSceneExiting, setStartupSceneExiting] = useState(false);
   const [promoClosed, setPromoClosed] = useState(false);
   const promo = pricingConfig?.promoTrial;
   const promoKey = promo?.end_at ? `mona_promo_closed_${promo.end_at}` : "mona_promo_closed";
@@ -567,7 +567,20 @@ function Shell({
     setPromoClosed(true);
     try { localStorage.setItem(promoKey, "1"); } catch { /* ignore */ }
   };
-  const { sessions, loading, loaded: sessionsLoaded, refresh, createChat, deleteChat } = useSessions();
+  const handleStartupExitComplete = useCallback(() => {
+    setStartupSceneVisible(false);
+    setStartupSceneExiting(false);
+  }, []);
+  const {
+    sessions,
+    loading,
+    loaded: sessionsLoaded,
+    error: sessionError,
+    refresh,
+    createChat,
+    branchChat,
+    deleteChat,
+  } = useSessions();
   const {
     state: sidebarState,
     loading: sidebarStateLoading,
@@ -581,10 +594,13 @@ function Shell({
     return client.onAgentsUpdated(() => invalidateAgents());
   }, [client]);
   const [roomDialogOpen, setRoomDialogOpen] = useState(false);
+  const [expertLibraryOpen, setExpertLibraryOpen] = useState(false);
+  const [customExpertOpen, setCustomExpertOpen] = useState(false);
   const [roomInitialAgents, setRoomInitialAgents] = useState<string[] | undefined>(undefined);
   const [creatingConversation, setCreatingConversation] = useState(false);
   const [activeKey, setActiveKey] = useState<string | null>(null);
   const [pendingDirectAgentId, setPendingDirectAgentId] = useState<string | null>(null);
+  const [pendingDirectAgentName, setPendingDirectAgentName] = useState<string | null>(null);
   const [managedAgentId, setManagedAgentId] = useState<string | null>(null);
   const [createNoteOnOpen, setCreateNoteOnOpen] = useState(false);
   const [view, setView] = useState<ShellView>(
@@ -607,6 +623,7 @@ function Shell({
     activeTab: activeBrowserTab,
     addEmptyTab,
     addMdReaderTab,
+    addCanvasReaderTab,
     navigateToUrl,
     closeTab: closeBrowserTab,
     switchTab: switchBrowserTab,
@@ -629,6 +646,61 @@ function Shell({
     toggleDarkMode,
     openDevtools,
   } = useBrowserTabs();
+  const [sidebarBrowserTabId, setSidebarBrowserTabId] = useState<string | null>(null);
+  const [sidebarBrowserVisible, setSidebarBrowserVisible] = useState(false);
+  const sidebarBrowserTab = browserTabs.find((tab) => tab.id === sidebarBrowserTabId) ?? null;
+  const ensureSidebarBrowser = useCallback(() => {
+    if (sidebarBrowserTabId && browserTabs.some((tab) => tab.id === sidebarBrowserTabId)) return;
+    setSidebarBrowserTabId(addEmptyTab({ activate: false }));
+  }, [addEmptyTab, browserTabs, sidebarBrowserTabId]);
+  useEffect(() => {
+    if (sidebarBrowserVisible && !sidebarBrowserTab) ensureSidebarBrowser();
+  }, [ensureSidebarBrowser, sidebarBrowserTab, sidebarBrowserVisible]);
+  const titleBarBrowserTabs = useMemo(
+    () => browserTabs.filter((tab) => tab.id !== sidebarBrowserTabId),
+    [browserTabs, sidebarBrowserTabId],
+  );
+  const sidebarBrowserController = useMemo(() => ({
+    tab: sidebarBrowserTab,
+    navigate: (url: string) => {
+      if (sidebarBrowserTab) void navigateToUrl(sidebarBrowserTab.id, url);
+    },
+    goBack: () => {
+      if (sidebarBrowserTab) void goBack(sidebarBrowserTab.id);
+    },
+    goForward: () => {
+      if (sidebarBrowserTab) void goForward(sidebarBrowserTab.id);
+    },
+    reload: () => {
+      if (sidebarBrowserTab) void reload(sidebarBrowserTab.id);
+    },
+    updateUrl: (url: string) => {
+      if (sidebarBrowserTab) updateTabUrl(sidebarBrowserTab.id, url);
+    },
+    toggleMute: () => {
+      if (sidebarBrowserTab) void toggleMute(sidebarBrowserTab.id);
+    },
+    toggleAdBlock: () => {
+      if (sidebarBrowserTab) void toggleAdBlock(sidebarBrowserTab.id);
+    },
+    toggleDarkMode: () => {
+      if (sidebarBrowserTab) void toggleDarkMode(sidebarBrowserTab.id);
+    },
+    openDevtools: () => {
+      if (sidebarBrowserTab) void openDevtools(sidebarBrowserTab.id);
+    },
+  }), [
+    goBack,
+    goForward,
+    navigateToUrl,
+    openDevtools,
+    reload,
+    sidebarBrowserTab,
+    toggleAdBlock,
+    toggleDarkMode,
+    toggleMute,
+    updateTabUrl,
+  ]);
   const mdReaderTabs = useMdReaderStore((s) => s.tabs);
   const saveMdAsNote = useCallback((tabId: string) => {
     const tab = browserTabs.find((t) => t.id === tabId);
@@ -645,9 +717,14 @@ function Shell({
     if (!tab || tab.type !== "md-reader" || !tab.mdFilePath) return;
     void revealItemInDir(tab.mdFilePath);
   }, [browserTabs]);
-  const [desktopSidebarOpen, setDesktopSidebarOpen] =
-    useState<boolean>(readSidebarOpen);
+  const revealCanvasInExplorer = useCallback((tabId: string) => {
+    const tab = browserTabs.find((t) => t.id === tabId);
+    if (!tab || tab.type !== "canvas-reader" || !tab.canvasFilePath) return;
+    void revealItemInDir(tab.canvasFilePath);
+  }, [browserTabs]);
+  const [desktopSidebarOpen, setDesktopSidebarOpen] = useState(true);
   const [mobileSidebarOpen, setMobileSidebarOpen] = useState(false);
+  const [rightWorkspaceMaximized, setRightWorkspaceMaximized] = useState(false);
   const [sessionSearchOpen, setSessionSearchOpen] = useState(false);
   const [pendingDelete, setPendingDelete] = useState<{
     key: string;
@@ -664,7 +741,7 @@ function Shell({
   const [completedChatIds, setCompletedChatIds] = useState<Set<string>>(readCompletedRunChatIds);
   const [queuedAgentPrompt, setQueuedAgentPrompt] = useState<QueuedAgentPrompt | null>(null);
   const [loginDialogOpen, setLoginDialogOpen] = useState(false);
-  const [loginDialogInitialView, setLoginDialogInitialView] = useState<"login" | "subscribe">("login");
+  const [loginDialogInitialView, setLoginDialogInitialView] = useState<"login" | "subscribe" | "change">("login");
   const [loginDialogSubscribeIntent, setLoginDialogSubscribeIntent] = useState(false);
   const [updateAvailable, setUpdateAvailable] = useState<UpdateCheckResult | null>(null);
   const [updateDialogTrigger, setUpdateDialogTrigger] = useState(0);
@@ -700,6 +777,7 @@ function Shell({
     let intervalId = 0;
     let ws: WebSocket | null = null;
     let wsReconnectTimer = 0;
+    let startupTimer = 0;
     const loadAccounts = useEmailStore.getState().loadAccounts;
     const syncAllAccounts = useEmailStore.getState().syncAllAccounts;
     const startAllIdle = useEmailStore.getState().startAllIdle;
@@ -737,50 +815,53 @@ function Shell({
       };
     };
 
-    void (async () => {
-      try {
-        // 轮询等待 services HTTP 端口就绪（services 启动可能比 Shell 挂载晚）
-        let gatewayUrl = "";
-        for (let i = 0; i < 60; i++) {
-          if (cancelled) return;
-          let status = await getServicesStatus();
-          if (!status.running && i === 0) {
-            try {
-              await startServices();
-              status = await getServicesStatus();
-            } catch {
-              // fall through — 继续轮询等待
+    startupTimer = window.setTimeout(() => {
+      void (async () => {
+        try {
+          // 轮询等待 services HTTP 端口就绪（services 启动可能比 Shell 挂载晚）
+          let gatewayUrl = "";
+          for (let i = 0; i < 60; i++) {
+            if (cancelled) return;
+            let status = await getServicesStatus();
+            if (!status.port && i === 0) {
+              try {
+                await startServices();
+                status = await getServicesStatus();
+              } catch {
+                // fall through — 继续轮询等待
+              }
             }
+            if (status.port) {
+              gatewayUrl = `http://127.0.0.1:${status.port}`;
+              break;
+            }
+            await new Promise((r) => setTimeout(r, 1000));
           }
-          if (status.port) {
-            gatewayUrl = `http://127.0.0.1:${status.port}`;
-            break;
-          }
-          await new Promise((r) => setTimeout(r, 1000));
-        }
-        // eslint-disable-next-line no-console
-        console.log("[email] global sync ready", gatewayUrl);
-        if (cancelled || !gatewayUrl) return;
-        await loadAccounts();
-        if (cancelled) return;
-        // 启动 IMAP IDLE 实时监听（秒级推送）
-        // bg sync 会在启动 30s 后自动全量同步 INBOX + 其他文件夹，无需此处冗余 syncAllAccounts
-        await startAllIdle(gatewayUrl);
-        // 连接 WebSocket 接收 IDLE 事件
-        connectIdleWs(gatewayUrl);
-        // 兜底轮询：IDLE 可能因网络断开失效，每 10 分钟兜底同步一次
-        intervalId = window.setInterval(() => {
           // eslint-disable-next-line no-console
-          console.log("[email] scheduled fallback sync");
-          void syncAllAccounts(gatewayUrl, false);
-        }, 10 * 60 * 1000);
-      } catch (e) {
-        // eslint-disable-next-line no-console
-        console.error("[email] global sync init failed", e);
-      }
-    })();
+          console.log("[email] global sync ready", gatewayUrl);
+          if (cancelled || !gatewayUrl) return;
+          await loadAccounts();
+          if (cancelled) return;
+          // 启动 IMAP IDLE 实时监听（秒级推送）
+          // bg sync 会在启动 30s 后自动全量同步 INBOX + 其他文件夹，无需此处冗余 syncAllAccounts
+          await startAllIdle(gatewayUrl);
+          // 连接 WebSocket 接收 IDLE 事件
+          connectIdleWs(gatewayUrl);
+          // 兜底轮询：IDLE 可能因网络断开失效，每 10 分钟兜底同步一次
+          intervalId = window.setInterval(() => {
+            // eslint-disable-next-line no-console
+            console.log("[email] scheduled fallback sync");
+            void syncAllAccounts(gatewayUrl, false);
+          }, 10 * 60 * 1000);
+        } catch (e) {
+          // eslint-disable-next-line no-console
+          console.error("[email] global sync init failed", e);
+        }
+      })();
+    }, 1_500);
     return () => {
       cancelled = true;
+      if (startupTimer) window.clearTimeout(startupTimer);
       if (intervalId) window.clearInterval(intervalId);
       if (wsReconnectTimer) window.clearTimeout(wsReconnectTimer);
       if (ws) {
@@ -860,17 +941,6 @@ function Shell({
       if (unlisten) unlisten();
     };
   }, []);
-
-  useEffect(() => {
-    try {
-      window.localStorage.setItem(
-        SIDEBAR_STORAGE_KEY,
-        desktopSidebarOpen ? "1" : "0",
-      );
-    } catch {
-      // ignore storage errors (private mode, etc.)
-    }
-  }, [desktopSidebarOpen]);
 
   useEffect(() => {
     writeCompletedRunChatIds(completedChatIds);
@@ -1036,11 +1106,16 @@ function Shell({
     setMobileSidebarOpen(false);
   }, [switchToMonaTab]);
 
-  // 聊天中的资料引用链接（mona:material?...）被点击：切到笔记模块，
-  // 由 NotesView/MaterialsPreview 继续消费请求并定位到引用位置。
+  // 新引用打开对应 Agent 的知识页；旧知识库引用继续走笔记迁移入口。
   const pendingMaterialOpen = useMaterialsOpenStore((s) => s.pending);
   useEffect(() => {
     if (!pendingMaterialOpen) return;
+    if (pendingMaterialOpen.agentId) {
+      setView("chat");
+      setManagedAgentId(pendingMaterialOpen.agentId);
+      switchToMonaTab();
+      return;
+    }
     setCreateNoteOnOpen(false);
     setView("note");
     switchToMonaTab();
@@ -1084,14 +1159,10 @@ function Shell({
   }, [switchToMonaTab]);
 
   const onOpenDoc = useCallback(() => {
-    if (!licenseActive) {
-      onOpenSubscribe();
-      return;
-    }
     setView("doc");
     switchToMonaTab();
     setMobileSidebarOpen(false);
-  }, [licenseActive, onOpenSubscribe, switchToMonaTab]);
+  }, [switchToMonaTab]);
 
   const onOpenEmail = useCallback(() => {
     setView("email");
@@ -1137,6 +1208,24 @@ function Shell({
     }
   }, [createChat]);
 
+  const onBranchChat = useCallback(async (
+    sourceChatId: string,
+    assistantOrdinal: number,
+    sourceTaskId?: string,
+  ) => {
+    try {
+      const chatId = await branchChat(sourceChatId, assistantOrdinal, sourceTaskId);
+      setActiveKey(`websocket:${chatId}`);
+      setView("chat");
+      switchToMonaTab();
+      setMobileSidebarOpen(false);
+      return chatId;
+    } catch (error) {
+      console.error("Failed to branch chat", error);
+      return null;
+    }
+  }, [branchChat, switchToMonaTab]);
+
   // Trigger an agent task from a non-chat surface (e.g. settings page banner).
   // Always starts a fresh session so the setup flow has a clean context.
   const onTriggerAgent = useCallback(
@@ -1160,9 +1249,33 @@ function Shell({
     [createChat, switchToMonaTab],
   );
 
+  const onStartProfileAdvice = useCallback(
+    async (request: ProfileStartRequest) => {
+      const trimmed = request.prompt.trim();
+      if (!trimmed) return;
+      try {
+        const chatId = await createChat();
+        setActiveKey(`websocket:${chatId}`);
+        setQueuedAgentPrompt({
+          id: crypto.randomUUID(),
+          content: trimmed,
+          origin: "profile_advice",
+          profileAdviceId: request.advice_id,
+        });
+        setView("chat");
+        switchToMonaTab();
+        setMobileSidebarOpen(false);
+      } catch (e) {
+        console.error("Failed to start profile advice", e);
+      }
+    },
+    [createChat, switchToMonaTab],
+  );
+
   const onNewChat = useCallback(() => {
     setManagedAgentId(null);
     setPendingDirectAgentId(null);
+    setPendingDirectAgentName(null);
     setActiveKey(null);
     setView("chat");
     switchToMonaTab();
@@ -1171,7 +1284,7 @@ function Shell({
 
   /** Open a direct-agent draft. The actual chat is created on first send. */
   const onStartDirect = useCallback(
-    (agentId: string) => {
+    (agentId: string, displayName?: string) => {
       if (creatingConversation) return;
       if (agentId === MONA_AGENT_ID) {
         onNewChat();
@@ -1179,6 +1292,7 @@ function Shell({
       }
       setManagedAgentId(null);
       setPendingDirectAgentId(agentId);
+      setPendingDirectAgentName(displayName ?? null);
       setActiveKey(null);
       setView("chat");
       switchToMonaTab();
@@ -1200,6 +1314,7 @@ function Shell({
         switchToMonaTab();
         setMobileSidebarOpen(false);
         setPendingDirectAgentId(null);
+        setPendingDirectAgentName(null);
         setManagedAgentId(null);
         return chatId;
       } catch (e) {
@@ -1240,11 +1355,23 @@ function Shell({
   const onSelectAgent = useCallback((agentId: string) => {
     setManagedAgentId(agentId);
     setPendingDirectAgentId(null);
+    setPendingDirectAgentName(null);
     setActiveKey(null);
     setView("chat");
     switchToMonaTab();
     setMobileSidebarOpen(false);
   }, [switchToMonaTab]);
+
+  const onCreateCustomExpert = useCallback(async (input: CustomExpertInput) => {
+    if (!client) throw new Error(t("experts.customCreateError"));
+    const agent = await client.createCustomAgent(
+      input.displayName,
+      input.description,
+      input.instructions,
+    );
+    invalidateAgents();
+    await onStartDirect(agent.id, agent.displayName);
+  }, [client, onStartDirect, t]);
 
   const onSelectChat = useCallback(
     (key: string) => {
@@ -1259,12 +1386,47 @@ function Shell({
       }
       setManagedAgentId(null);
       setPendingDirectAgentId(null);
+      setPendingDirectAgentName(null);
       setActiveKey(key);
       setView("chat");
       switchToMonaTab();
       setMobileSidebarOpen(false);
     },
     [sessions, switchToMonaTab],
+  );
+
+  const onOpenProfileArtifact = useCallback(
+    (artifact: ProfileArtifact) => {
+      const rawRef = artifact.artifact_ref as Partial<ArtifactRef>;
+      if (!rawRef.id || !rawRef.relative_path || !rawRef.owner_kind || !rawRef.owner_id || !rawRef.created_by_agent_id || !rawRef.created_at) {
+        onSelectChat(artifact.session_key);
+        return;
+      }
+      const file: DeliveredFile = {
+        path: rawRef.relative_path,
+        absolute_path: "",
+        name: artifact.title,
+        size: rawRef.size ?? 0,
+        size_human: "",
+        mime: artifact.mime ?? rawRef.mime ?? "application/octet-stream",
+        modified_at: rawRef.modified_at ?? undefined,
+        missing: artifact.missing,
+        artifact_ref: rawRef as ArtifactRef,
+      };
+      const scope: PreviewScope = artifact.room_id
+        ? "room"
+        : rawRef.owner_kind === "product"
+          ? "project"
+          : "shared";
+      useFilePreviewStore.getState().open(
+        file,
+        scope,
+        artifact.session_key,
+        artifact.room_id ?? null,
+      );
+      onSelectChat(artifact.session_key);
+    },
+    [onSelectChat],
   );
 
   const onTogglePin = useCallback(
@@ -1492,7 +1654,11 @@ function Shell({
           addMdReaderTab(filePath);
         }
       });
-      const un5 = await listen<{ action: string; data?: unknown }>("notification-action", async (event) => {
+      const un5 = await listen<string>("canvas-file-open", (event) => {
+        const filePath = event.payload;
+        if (filePath) addCanvasReaderTab(filePath);
+      });
+      const un6 = await listen<{ action: string; data?: unknown }>("notification-action", async (event) => {
         const action = event.payload?.action;
         const data = event.payload?.data as
           | { type?: string; accountId?: string; uid?: string; folder?: string; subject?: string }
@@ -1538,15 +1704,16 @@ function Shell({
         un3();
         un4();
         un5();
+        un6();
         return;
       }
-      unlisteners.push(un1, un2, un3, un4, un5);
+      unlisteners.push(un1, un2, un3, un4, un5, un6);
     })();
     return () => {
       cancelled = true;
       unlisteners.forEach((fn) => fn());
     };
-  }, [onOpenNote, onOpenSSHAndNew, refresh, addMdReaderTab, onOpenEmail, onOpenSchedule, onOpenStock]);
+  }, [onOpenNote, onOpenSSHAndNew, refresh, addCanvasReaderTab, addMdReaderTab, onOpenEmail, onOpenSchedule, onOpenStock]);
 
   // 监听浏览器 WebView 内的 Ctrl+J/Ctrl+H 快捷键，打开下载/历史记录页面
   useEffect(() => {
@@ -1605,6 +1772,32 @@ function Shell({
 
   const onOpenLogin = useCallback(() => {
     setLoginDialogInitialView("login");
+    setLoginDialogSubscribeIntent(false);
+    setLoginDialogOpen(true);
+    setMobileSidebarOpen(false);
+  }, []);
+
+  const addCanvasReaderTabRef = useRef(addCanvasReaderTab);
+  addCanvasReaderTabRef.current = addCanvasReaderTab;
+  useEffect(() => {
+    if (!isTauri()) return;
+    let cancelled = false;
+    (async () => {
+      try {
+        const files = await invoke<string[]>("get_pending_canvas_files");
+        if (cancelled || !files || files.length === 0) return;
+        files.forEach((filePath) => addCanvasReaderTabRef.current(filePath));
+      } catch (error) {
+        console.error("Failed to get pending canvas files:", error);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  const onChangePassword = useCallback(() => {
+    setLoginDialogInitialView("change");
     setLoginDialogSubscribeIntent(false);
     setLoginDialogOpen(true);
     setMobileSidebarOpen(false);
@@ -1726,8 +1919,34 @@ function Shell({
     : t("app.brand");
 
   const isBrowserTabActive = activeBrowserTab.type !== "mona";
+  const startupSceneHostVisible =
+    view === "chat"
+    && activeBrowserTab.type === "mona"
+    && activeSession === null
+    && pendingDirectAgentId === null
+    && managedAgentId === null
+    && !loginDialogOpen;
+  useEffect(() => {
+    if (!startupSceneHostVisible) {
+      setStartupSceneVisible(false);
+      setStartupSceneExiting(false);
+      return;
+    }
+    if (runtimeStatus === "connecting") {
+      setStartupSceneVisible(true);
+      setStartupSceneExiting(false);
+    } else if (startupSceneVisible) {
+      setStartupSceneExiting(true);
+    }
+  }, [runtimeStatus, startupSceneHostVisible, startupSceneVisible]);
   const browserSurfaceVisible =
     view === "chat" && activeBrowserTab.type === "browser" && !loginDialogOpen;
+  const sidebarBrowserSurfaceVisible =
+    view === "chat"
+    && activeBrowserTab.type === "mona"
+    && sidebarBrowserVisible
+    && !!sidebarBrowserTab
+    && !loginDialogOpen;
   // 主内容表面：非浏览器原生 WebView 模式时启用圆角裁切与画布边缘。
   // browser 类型标签走原生 WebView，必须边到边布局（见 redesign-plan §4.7）。
   const showContentSurface = !browserFullscreen && activeBrowserTab.type !== "browser";
@@ -1735,9 +1954,13 @@ function Shell({
   useEffect(() => {
     if (!isTauri()) return;
     void browserHideTabsExcept(
-      browserSurfaceVisible ? activeBrowserTab.id : undefined,
+      sidebarBrowserSurfaceVisible
+        ? sidebarBrowserTab.id
+        : browserSurfaceVisible
+          ? activeBrowserTab.id
+          : undefined,
     ).catch(() => {});
-  }, [activeBrowserTab.id, browserSurfaceVisible]);
+  }, [activeBrowserTab.id, browserSurfaceVisible, sidebarBrowserSurfaceVisible, sidebarBrowserTab]);
 
   useEffect(() => {
     if (view === "settings") {
@@ -1755,8 +1978,9 @@ function Shell({
     sessions,
     activeKey,
     loading,
+    error: sessionError,
+    onRetry: refresh,
     onSelect: onSelectChat,
-    onSelectAgent,
     onRequestDelete: (key: string, label: string) =>
       setPendingDelete({ key, label }),
     onTogglePin,
@@ -1776,13 +2000,14 @@ function Shell({
     projectNames: sidebarState.project_names,
     onRequestProjectRename,
     onOpenProjectFolder,
-    onNewChat: () => {
-      setMobileSidebarOpen(false);
-      onNewChat();
-    },
+    onSelectAgent,
     onStartDirect: (agentId: string) => {
       setMobileSidebarOpen(false);
       void onStartDirect(agentId);
+    },
+    onOpenExpertLibrary: () => {
+      setMobileSidebarOpen(false);
+      setExpertLibraryOpen(true);
     },
     onNewRoom: () => {
       setMobileSidebarOpen(false);
@@ -1804,7 +2029,7 @@ function Shell({
         {/* 标题栏在最顶部，全宽（浏览器全屏时隐藏） */}
         {!browserFullscreen && (
           <AppTitleBar
-            tabs={browserTabs}
+            tabs={titleBarBrowserTabs}
             activeTabId={activeBrowserTabId}
             onTabClick={handleBrowserTabClick}
             onTabClose={closeBrowserTab}
@@ -1816,11 +2041,13 @@ function Shell({
             onReorder={reorderTabs}
             onToggleMute={toggleMute}
             onSaveMdAsNote={saveMdAsNote}
-            onRevealMdInExplorer={revealMdInExplorer}
+            onRevealMdInExplorer={(tabId) => {
+              const tab = browserTabs.find((item) => item.id === tabId);
+              if (tab?.type === "canvas-reader") revealCanvasInExplorer(tabId);
+              else revealMdInExplorer(tabId);
+            }}
           />
         )}
-
-        {runtimeStatus === "connecting" ? <StartupScene /> : null}
 
         {/* 活动走马灯（关闭后不再显示） */}
         {promoVisible && (
@@ -1847,7 +2074,7 @@ function Shell({
         <div className="flex min-h-0 flex-1 overflow-hidden">
           {/* 企微式窄功能栏（浏览器全屏时隐藏；无展开/折叠态） */}
           {!browserFullscreen && showMainSidebar ? (
-            <aside className="relative z-20 w-16 shrink-0 overflow-hidden">
+            <aside className="relative z-20 w-14 shrink-0 overflow-hidden">
               <AppRail
                 activeView={view}
                 onGoHome={onGoHome}
@@ -1877,7 +2104,7 @@ function Shell({
 
           {/* 消息会话列表列 */}
 
-          {!browserFullscreen && showSessionList ? (
+          {!browserFullscreen && showSessionList && !rightWorkspaceMaximized ? (
             <Sheet
               open={mobileSidebarOpen}
               onOpenChange={(open) => setMobileSidebarOpen(open)}
@@ -1897,13 +2124,13 @@ function Shell({
           <div className="flex min-w-0 flex-1 flex-col">
             <div
               className={cn(
-                "flex min-h-0 flex-1 overflow-hidden bg-background",
+                "relative flex min-h-0 flex-1 overflow-hidden bg-background",
                 showContentSurface &&
                   "m-px mr-2 mb-2 rounded-xl border border-border/60",
               )}
             >
               {/* 消息 Tab 的会话列表列（仅 chat 视图显示，包在圆角卡片内） */}
-              {!browserFullscreen && showSessionList && view === "chat" ? (
+              {!browserFullscreen && showSessionList && view === "chat" && desktopSidebarOpen && !rightWorkspaceMaximized ? (
                 <SessionListPanel
                   {...sessionListProps}
                   className="hidden lg:flex"
@@ -1919,7 +2146,7 @@ function Shell({
                 className={cn(
                   "absolute inset-0 flex flex-col bg-background",
                   (view === "settings" || view === "note" || view === "ssh" || view === "db" || view === "doc" || view === "email" || view === "schedule" || view === "system" || view === "profile" || view === "stock" || activeBrowserTab.type !== "mona") &&
-                    "invisible pointer-events-none",
+                    "hidden",
                 )}
               >
                 {managedAgentId ? (
@@ -1933,22 +2160,30 @@ function Shell({
                     session={activeSession}
                     title={headerTitle}
                     onToggleSidebar={toggleSidebar}
+                    onCollapseSessionList={() => setDesktopSidebarOpen(false)}
+                    sessionListOpen={desktopSidebarOpen || mobileSidebarOpen}
                     onOpenSSH={onOpenSSHAndNew}
                     onOpenDb={onOpenDbAndNew}
-                    onOpenEmail={onOpenEmail}
                     onCreateNote={onCreateNote}
                     recentSessions={sessions.filter((session) => !sidebarState.archived_keys.includes(session.key))}
                     onSelectSession={onSelectChat}
                     onCreateChat={onCreateChat}
+                    onBranchChat={onBranchChat}
                     pendingDirectAgentId={pendingDirectAgentId}
+                    pendingDirectAgentName={pendingDirectAgentName}
                     onCreateDirectChat={onCreateDirectChat}
                     onTurnEnd={onTurnEnd}
                     queuedPrompt={queuedAgentPrompt}
                     onQueuedPromptConsumed={() => setQueuedAgentPrompt(null)}
-                    hideSidebarToggleOnDesktop
                     showHeader
                     onModelNameChange={onModelNameChange}
                     onOpenSettings={onOpenSettings}
+                    onOpenExpertLibrary={() => setExpertLibraryOpen(true)}
+                    sidebarBrowser={sidebarBrowserController}
+                    onEnsureSidebarBrowser={ensureSidebarBrowser}
+                    browserHostVisible={view === "chat" && activeBrowserTab.type === "mona" && !loginDialogOpen}
+                    onSidebarBrowserVisibilityChange={setSidebarBrowserVisible}
+                    onRightWorkspaceMaximizedChange={setRightWorkspaceMaximized}
                   />
                 ) : (
                   <div className="flex h-full min-h-0 flex-col">
@@ -1975,7 +2210,7 @@ function Shell({
               {noteMounted && (
                 <div className={cn(
                   "absolute inset-0 flex flex-col",
-                  (view !== "note" || isBrowserTabActive) && "invisible pointer-events-none",
+                  (view !== "note" || isBrowserTabActive) && "hidden",
                 )}>
                   <Suspense fallback={<ModuleLoading title="正在打开笔记" />}>
                     <NotesView
@@ -1998,6 +2233,9 @@ function Shell({
                     isRestarting={isRestarting}
                     initialSection={settingsInitialSection}
                     onTriggerAgent={onTriggerAgent}
+                    onOpenLogin={onOpenLogin}
+                    onOpenSubscribe={onOpenSubscribe}
+                    onChangePassword={onChangePassword}
                   />
                 </div>
               )}
@@ -2057,7 +2295,12 @@ function Shell({
               {view === "profile" && (
                 <div className={cn("absolute inset-0 flex flex-col", isBrowserTabActive && "hidden")}>
                   <Suspense fallback={<ModuleLoading title="正在打开用户画像" />}>
-                    <ProfileView onAskMona={onTriggerAgent} />
+                    <ProfileView
+                      onAskMona={onTriggerAgent}
+                      onStartAdvice={onStartProfileAdvice}
+                      onOpenSession={onSelectChat}
+                      onOpenArtifact={onOpenProfileArtifact}
+                    />
                   </Suspense>
                 </div>
               )}
@@ -2069,6 +2312,7 @@ function Shell({
                       onConsumeFocusRun={() => setStockFocusRunId(null)}
                       autoRunSymbol={stockAutoRunSymbol}
                       onConsumeAutoRun={() => setStockAutoRunSymbol(null)}
+                      onOpenSubscribe={onOpenSubscribe}
                     />
                   </Suspense>
                 </div>
@@ -2085,7 +2329,7 @@ function Shell({
               )}
               {client ? (
                 <div className={cn("absolute inset-0 flex flex-col bg-background", (view !== "doc" || isBrowserTabActive) && "invisible pointer-events-none")}>
-                  <Suspense fallback={<ModuleLoading title="正在打开 AI 文档" />}>
+                  <Suspense fallback={<ModuleLoading title="正在打开文档" />}>
                     <DocMakerView />
                   </Suspense>
                 </div>
@@ -2100,6 +2344,19 @@ function Shell({
                   >
                     <Suspense fallback={<ModuleLoading title="正在打开 Markdown 阅读器" />}>
                       <MdFileView filePath={tab.mdFilePath!} />
+                    </Suspense>
+                  </div>
+                ))}
+              {browserTabs
+                .filter((t) => t.type === "canvas-reader")
+                .map((tab) => (
+                  <div
+                    key={tab.id}
+                    className="absolute inset-0 flex flex-col"
+                    style={{ display: tab.id === activeBrowserTabId ? "flex" : "none" }}
+                  >
+                    <Suspense fallback={<ModuleLoading title="正在打开 Mona 画布" />}>
+                      <CanvasFileView filePath={tab.canvasFilePath!} />
                     </Suspense>
                   </div>
                 ))}
@@ -2137,7 +2394,7 @@ function Shell({
                   </div>
                 ))}
               {browserTabs
-                .filter((t) => t.type === "browser")
+                .filter((t) => t.type === "browser" && t.id !== sidebarBrowserTabId)
                 .map((tab) => (
                   <div
                     key={tab.id}
@@ -2167,6 +2424,12 @@ function Shell({
                   </div>
                 ))}
             </main>
+            {startupSceneVisible && startupSceneHostVisible ? (
+              <StartupScene
+                exiting={startupSceneExiting}
+                onExitComplete={handleStartupExitComplete}
+              />
+            ) : null}
           </div>
         </div>
         </div>
@@ -2212,6 +2475,21 @@ function Shell({
           initialSelected={roomInitialAgents}
           submitting={creatingConversation}
           onSubmit={(input) => void onSubmitRoom(input)}
+        />
+        <ExpertLibraryDialog
+          open={expertLibraryOpen}
+          token={token}
+          onOpenChange={setExpertLibraryOpen}
+          onStartDirect={(agentId, displayName) => void onStartDirect(agentId, displayName)}
+          onCreateCustom={() => {
+            setExpertLibraryOpen(false);
+            setCustomExpertOpen(true);
+          }}
+        />
+        <CustomExpertDialog
+          open={customExpertOpen}
+          onOpenChange={setCustomExpertOpen}
+          onSubmit={onCreateCustomExpert}
         />
         {runtimeStatus === "auth" ? (
           <div className="fixed inset-0 z-50 flex items-center justify-center bg-background/80 backdrop-blur-sm">

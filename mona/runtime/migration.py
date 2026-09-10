@@ -39,6 +39,18 @@ def migrate_managed_runtime_root(legacy_root: Path, target_root: Path) -> dict[s
     target_root.mkdir(parents=True, exist_ok=True)
 
     with FileLock(str(target_root / ".migration.lock"), timeout=600):
+        persisted = _read_state(target_root)
+        if (
+            persisted is not None
+            and persisted.get("schemaVersion") == 1
+            and persisted.get("state") == "completed"
+            and isinstance(persisted.get("legacyBytes"), int)
+            and not persisted.get("errors")
+        ):
+            payload = _normalize_status_payload(persisted)
+            payload["migratedComponents"] = []
+            return payload
+
         components_root = legacy_root / "components"
         if not components_root.is_dir():
             payload = _status_payload("not_needed", legacy_root, target_root)
@@ -96,27 +108,16 @@ def runtime_migration_status(legacy_root: Path, target_root: Path) -> dict[str, 
     target_root = target_root.resolve()
     if legacy_root == target_root:
         return _status_payload("not_needed", legacy_root, target_root)
-    try:
-        payload = json.loads((target_root / _STATE_FILE).read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError):
+    payload = _read_state(target_root)
+    if payload is None:
         state = "pending" if (legacy_root / "components").is_dir() else "not_needed"
         return _status_payload(state, legacy_root, target_root)
-    if not isinstance(payload, dict):
-        return _status_payload("pending", legacy_root, target_root)
     state = payload.get("state")
     if state not in {"pending", "partial", "completed", "not_needed"}:
-        state = "pending"
-    normalized = _status_payload(
-        state,
-        legacy_root,
-        target_root,
-        migrated=_string_list(payload.get("migratedComponents")),
-        repair=_string_list(payload.get("repairComponents")),
-        errors=_string_list(payload.get("errors")),
-    )
-    if isinstance(payload.get("updatedAt"), str):
-        normalized["updatedAt"] = payload["updatedAt"]
-    return normalized
+        return _status_payload("pending", legacy_root, target_root)
+    if not isinstance(payload.get("legacyBytes"), int):
+        return _status_payload(str(state), legacy_root, target_root)
+    return _normalize_status_payload(payload)
 
 
 def cleanup_legacy_runtime_root(legacy_root: Path, target_root: Path) -> dict[str, int]:
@@ -294,19 +295,46 @@ def _status_payload(
     repair: list[str] | None = None,
     errors: list[str] | None = None,
 ) -> dict[str, object]:
+    legacy_bytes = _legacy_runtime_bytes(legacy_root)
     return {
         "schemaVersion": 1,
         "state": state,
         "migratedComponents": migrated or [],
         "repairComponents": repair or [],
         "errors": errors or [],
-        "legacyBytes": _legacy_runtime_bytes(legacy_root),
+        "legacyBytes": legacy_bytes,
         "cleanupAvailable": bool(
             state in {"completed", "not_needed"}
             and legacy_root != target_root
-            and _legacy_runtime_bytes(legacy_root) > 0
+            and legacy_bytes > 0
         ),
         "updatedAt": datetime.now(timezone.utc).isoformat(),
+    }
+
+
+def _read_state(root: Path) -> dict[str, object] | None:
+    try:
+        payload = json.loads((root / _STATE_FILE).read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return None
+    return payload if isinstance(payload, dict) else None
+
+
+def _normalize_status_payload(payload: dict[str, object]) -> dict[str, object]:
+    legacy_bytes = payload.get("legacyBytes")
+    return {
+        "schemaVersion": 1,
+        "state": str(payload.get("state") or "pending"),
+        "migratedComponents": _string_list(payload.get("migratedComponents")),
+        "repairComponents": _string_list(payload.get("repairComponents")),
+        "errors": _string_list(payload.get("errors")),
+        "legacyBytes": legacy_bytes if isinstance(legacy_bytes, int) else 0,
+        "cleanupAvailable": payload.get("cleanupAvailable") is True,
+        "updatedAt": (
+            payload["updatedAt"]
+            if isinstance(payload.get("updatedAt"), str)
+            else datetime.now(timezone.utc).isoformat()
+        ),
     }
 
 

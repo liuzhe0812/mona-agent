@@ -34,8 +34,9 @@ OfficeCLI template-edit track is retired and must not be selected for new tasks.
 8. Normal SVG path: run `svg_quality_checker.py <project_path>` on `svg_output/`; all errors must be fixed before export. Use `--fix` to auto-repair XML entity errors, then re-run to confirm.
 9. Normal SVG path: speaker notes must be real Markdown under `notes/`; SVG `<metadata>` does not count.
 10. Export discipline: PPTX export must use `${SKILL_DIR}/scripts/svg_to_pptx.py`. For custom PPTX templates, add `--template-underlay <native_template_dir>/template.pptx`. Never create custom export scripts, never use Node/pptxgenjs, never install PPTX-generation npm packages.
-11. When `PPT_UI_CHECKPOINTS=1`: Step 4 generates outline draft and stops; Step 6 generates SVG pages **one at a time** (not batch), stopping after each page for user confirmation. No `.review_ready` file is written.
+11. When `PPT_UI_CHECKPOINTS=1`: Step 4 generates the outline draft and stops. `[OUTLINE_CONFIRMED]` uses page-by-page confirmation; `[OUTLINE_CONFIRMED_ALL]` generates, validates, and exports the full deck in one turn.
 12. SVG text must be well-formed XML: use raw Unicode for typographic symbols (em dash, ©, →, NBSP) and XML builtin entities (`&amp;`, `&lt;`, `&gt;`, `&quot;`, `&apos;`) for XML reserved characters. HTML named entities (`&nbsp;`, `&mdash;`, `&copy;`) and bare `&` characters (`R&D`) are forbidden because they abort both preview and export.
+13. When the prompt contains `BOUND_PPT_PROJECT_PATH`, that exact directory is the only valid project path. Never substitute another name or directory.
 
 ## Mona Defaults
 
@@ -88,7 +89,8 @@ Checkpoint: source content is ready.
 
 Gate: Step 1 complete.
 
-- Initialize with `project_manager.py init <project_name> --format <format> --dir ppt_projects`.
+- When `BOUND_PPT_PROJECT_PATH` is present, the product has already initialized the project. Do not run `project_manager.py init`; use the bound directory as `<project_path>`.
+- Otherwise, initialize with `project_manager.py init <project_name> --format <format> --dir ppt_projects`.
 - Import source files with `project_manager.py import-sources <project_path> <source_files...> --move`.
 - Chat-only text needs no import.
 
@@ -186,7 +188,8 @@ Checkpoint: Strategist deliverables complete; continue automatically to Step 5 o
    - 所有颜色用 HEX 字符串；所有枚举值用小写英文。
 5. **不写 `spec_lock.md`**。
 6. **不进入 Step 5/6**。
-7. 输出一行简短提示（不超过 2 句话）告知用户"大纲草稿已生成，请在 PPT 页面编辑每页内容后确认；如需调整全局设计规格请直接在聊天中说明"，然后结束当前 turn。**不要在 chat 中重复 8 项推荐内容**——它们已经写入 `design_spec_summary.json`，UI 会读取展示。
+7. 结束前确认 `<project_path>/page_visual_plan.json` 和 `<project_path>/design_spec_summary.json` 都真实存在；`.md` 文件不能替代这两个 JSON 文件。
+8. 输出一行简短提示（不超过 2 句话）告知用户"大纲草稿已生成，请在 PPT 页面编辑每页内容后确认；如需调整全局设计规格请直接在聊天中说明"，然后结束当前 turn。**不要在 chat 中重复 8 项推荐内容**——它们已经写入 `design_spec_summary.json`，UI 会读取展示。
 
 用户会在 UI 上编辑/增删/重排页面、编辑每页内容，确认后系统会自动锁定大纲。收到 `[OUTLINE_CONFIRMED]` 消息后，Agent 必须：
 1. 读取最终 `page_visual_plan.json`。
@@ -201,6 +204,14 @@ Checkpoint: Strategist deliverables complete; continue automatically to Step 5 o
 10. **不要生成其他页，不要进入 Step 7，不要写 `.review_ready`**。
 
 **关于 8 项确认**：用户在大纲阶段不编辑全局 8 项确认（UI 只读展示 AI 推荐规格）。如用户需要调整全局规格，会通过聊天直接告知 Agent（如「主色改成 #1a73e8」「用深色背景」），Agent 收到后更新 `design_spec.md` + `design_spec_summary.json`。因此 `[OUTLINE_CONFIRMED]` 不携带 8 项修改字段，Agent 直接以 `design_spec.md` 当前状态生成 `spec_lock.md`。
+
+收到 `[OUTLINE_CONFIRMED_ALL]` 消息后，Agent 必须：
+1. 读取最终 `page_visual_plan.json` 和 `design_spec_summary.json`，同步重建 `design_spec.md`。
+2. 生成完整 `spec_lock.md`，并完成所需图片获取。
+3. 按大纲顺序生成全部 SVG 页面及对应备注，每页保留 required trace 和质量检查。
+4. 运行全量 `svg_quality_checker.py`，修复所有 error。
+5. 依次运行 `total_md_split.py`、`finalize_svg.py`、`svg_to_pptx.py` 完成导出。
+6. 报告最终 PPTX 路径后结束。
 
 收到 `[PAGE_CONFIRMED_NEXT]` 消息后，Agent 必须：
 1. 生成下一页 SVG，输出 required trace line。
@@ -271,17 +282,17 @@ Mandatory:
 
 Checkpoint: live preview started, all SVGs generated, quality gate has 0 errors, notes exist, chart verification was run or skipped.
 
-#### V3 Per-Page Mode (when PPT_UI_CHECKPOINTS=1)
+#### V3 UI Generation Modes (when PPT_UI_CHECKPOINTS=1)
 
-当 `PPT_UI_CHECKPOINTS=1` 时，Step 6 变为**逐页生成模式**：
+当 `PPT_UI_CHECKPOINTS=1` 时，UI 可选择两种模式：
 
 - 收到 `[OUTLINE_CONFIRMED]` 后，仅生成第 1 页 SVG + 质量检查 + 备注，然后停止
+- 收到 `[OUTLINE_CONFIRMED_ALL]` 后，一次生成全部页面、完成质量检查并直接导出
 - 收到 `[PAGE_CONFIRMED_NEXT]` 后，生成下一页 SVG + 质量检查 + 备注，然后停止
 - 收到 `[PAGE_REDO_REQUESTED]` 后，重做指定页 SVG + 质量检查，然后停止
 - 收到 `[PAGE_GENERATE_REQUESTED]` 后，生成指定页 SVG + 质量检查 + 备注，然后停止
 - **不写 `.review_ready` 文件**
-- **不批量生成所有页**
-- 每页生成后必须停止，等待用户在 UI 上确认后才推进
+- 仅逐页模式需要每页停止并等待用户确认
 
 消息模板详见 `references/ui-checkpoints.md`。
 

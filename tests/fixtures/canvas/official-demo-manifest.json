@@ -1,0 +1,110 @@
+{
+  "schemaVersion": 2,
+  "benchmark": "next-ai-draw-io official demo grammar transfer",
+  "referenceGrid": {
+    "file": "docs/design/assets/ai-canvas-official-demo/official-demo-grid.png",
+    "width": 2009,
+    "height": 1821,
+    "sha256": "F8ECA23A3AFC429F20B3B60CD6697FC083AB72E9DA4C12DDD3ACF57F2F649A40",
+    "origin": "user-provided official demo screenshot",
+    "purpose": "visual benchmark for transferable composition grammar; never a coordinate or content template"
+  },
+  "reference": {
+    "file": "docs/design/assets/ai-canvas-official-demo/transformer-reference.png",
+    "width": 768,
+    "height": 690,
+    "sha256": "BFB1CAB5375B127BC36C0CEAAE56327F04282106E25DBB1A69901F61A2F686A0",
+    "origin": "user-provided official demo screenshot",
+    "purpose": "single-image visual reference for the connected-dataflow family"
+  },
+  "upstream": {
+    "project": "next-ai-draw-io",
+    "version": "0.4.16",
+    "license": "Apache-2.0",
+    "localSource": "D:/liuzhe/Desktop/code/next-ai-draw-io/public/animated_connectors.svg",
+    "sha256": "BA42A2FD315B12AF2A877D7060F7187271A7A57C09F4A36BA84460C3A5BB9F72"
+  },
+  "l0Fixture": {
+    "file": "tests/fixtures/canvas/transformer-official-demo-l0.json",
+    "sha256": "1D29B480ED2B8E0C144290ED89713659D80E85289755DC540990C09339948D1C",
+    "purpose": "renderer and editable document expressiveness only; not evidence of AI generation quality"
+  },
+  "demoFamilies": [
+    {
+      "id": "connected-dataflow",
+      "officialDemo": "RAG Technique Diagram",
+      "sourceRegion": "top-left of referenceGrid",
+      "grammar": "connected dataflow",
+      "contentModel": ["actors", "processing stages", "stores", "online path", "offline or asynchronous path", "annotated relationships"],
+      "requiredVisuals": [
+        "one readable primary flow",
+        "secondary ingestion or asynchronous pipeline is visually grouped",
+        "store and processing roles use distinct semantic shapes or colors",
+        "cross-region and feedback relationships have separate routes"
+      ]
+    },
+    {
+      "id": "boundary-topology",
+      "officialDemo": "Authentication using React and AWS",
+      "sourceRegion": "top-right of referenceGrid",
+      "grammar": "boundary topology",
+      "contentModel": ["external actors", "trust or deployment boundary", "internal services", "request path", "callback or status path", "failure path"],
+      "requiredVisuals": [
+        "boundary contains its members with visible title",
+        "external participant and boundary crossing are unambiguous",
+        "normal, callback, and failure/status routes remain distinguishable",
+        "service roles remain legible at overview scale"
+      ]
+    },
+    {
+      "id": "concentric-radial",
+      "officialDemo": "Open Innovation",
+      "sourceRegion": "bottom-left of referenceGrid",
+      "grammar": "concentric and radial map",
+      "contentModel": ["center capability", "inner core", "permeable boundary", "outer ecosystem", "radial relationships", "feedback or outcome"],
+      "requiredVisuals": [
+        "center and rings express hierarchy",
+        "radial labels avoid ring and node collisions",
+        "inner and outer participants remain visually distinct",
+        "directional relationships and outcomes remain traceable"
+      ]
+    },
+    {
+      "id": "freeform-composition",
+      "officialDemo": "Cat sketch",
+      "sourceRegion": "bottom-right of referenceGrid",
+      "grammar": "freeform vector composition",
+      "contentModel": ["primary silhouette", "basic shape parts", "rotated or curved details", "facial or semantic marks", "caption", "decorative background elements"],
+      "requiredVisuals": [
+        "multiple editable primitives compose a recognizable whole",
+        "front/back order is intentional",
+        "rotation, proportion, stroke and fill are coherent",
+        "decorative elements do not become graph edges or routing obstacles"
+      ]
+    }
+  ],
+  "requiredContent": {
+    "title": "Transformer Architecture",
+    "regions": ["ENCODER", "DECODER"],
+    "encoderMembers": ["Multi-Head Attention", "Add & Norm", "Feed Forward Network", "Add & Norm"],
+    "decoderMembers": ["Masked Multi-Head Attention", "Add & Norm", "Multi-Head Cross-Attention", "Add & Norm", "Feed Forward Network", "Add & Norm"],
+    "outerNodes": ["Input Embedding", "Positional Encoding", "Output Embedding", "Positional Encoding", "Linear & Softmax", "Output Probabilities"],
+    "annotations": ["N×", "Encoder Output"],
+    "relationshipRoles": ["main flow", "residual connection", "encoder-to-decoder cross-region connection"]
+  },
+  "visualRequirements": [
+    "select a composition grammar from content rather than a keyword template",
+    "use consistent hierarchy, semantic styling, readable text and deliberate whitespace",
+    "keep containers, rings, decorative primitives and labels editable",
+    "route relationships around unrelated objects and distinguish relationship types",
+    "return a real rendered inspection and apply bounded, local repairs",
+    "never copy official demo coordinates, text, object arrays or fixed colors as production output"
+  ],
+  "forbiddenShortcuts": [
+    "keyword-to-template selection",
+    "fixed official-demo coordinates or node IDs",
+    "flattened screenshot or single SVG replacing editable objects",
+    "manual engineering edits after product AI generation",
+    "declaring quality from structural checks without rendered inspection"
+  ]
+}

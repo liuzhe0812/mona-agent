@@ -1,0 +1,84 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1280" height="720" viewBox="0 0 1280 720">
+  <defs>
+    <linearGradient id="bgGrad" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0%" stop-color="#0B1220"/>
+      <stop offset="100%" stop-color="#131C2E"/>
+    </linearGradient>
+    <pattern id="dotGrid" x="0" y="0" width="48" height="48" patternUnits="userSpaceOnUse" data-pptx-pattern="dotGrid" data-pptx-fg="#1C2942" data-pptx-bg="#101828">
+      <rect width="48" height="48" fill="#101828"/>
+      <path d="M 48 0 L 0 0 0 48" fill="none" stroke="#1C2942" stroke-width="0.5"/>
+      <circle cx="2" cy="2" r="1" fill="#FFFFFF" fill-opacity="0.06"/>
+    </pattern>
+  </defs>
+
+  <g id="background">
+    <rect x="0" y="0" width="1280" height="720" fill="url(#bgGrad)"/>
+    <rect x="0" y="0" width="1280" height="720" fill="url(#dotGrid)"/>
+  </g>
+
+  <g id="page-header">
+    <rect x="56" y="50" width="16" height="16" rx="3" fill="#22D3EE" fill-opacity="0.15"/>
+    <rect x="60" y="54" width="8" height="8" rx="1.5" fill="#22D3EE"/>
+    <text x="78" y="62" font-family="Arial, Microsoft YaHei, sans-serif" font-size="12" letter-spacing="3" fill="#22D3EE">{{KICKER}}</text>
+    <text x="60" y="108" font-family="Microsoft YaHei, SimHei, sans-serif" font-size="28" font-weight="bold" fill="#E6EDF7">{{PAGE_TITLE}}</text>
+    <line x1="62" y1="128" x2="222" y2="128" stroke="#22D3EE" stroke-width="6" stroke-opacity="0.15" stroke-linecap="round"/>
+    <line x1="62" y1="128" x2="222" y2="128" stroke="#22D3EE" stroke-width="1.5" stroke-linecap="round"/>
+  </g>
+
+  <g id="option-card-1">
+    <rect x="60" y="200" width="368" height="360" rx="14" fill="#FFFFFF" fill-opacity="0.04" stroke="#22D3EE" stroke-opacity="0.18"/>
+    <text x="244" y="254" font-family="Microsoft YaHei, SimHei, sans-serif" font-size="17" font-weight="bold" fill="#E6EDF7" text-anchor="middle">{{OPTION_1_NAME}}</text>
+    <line x1="204" y1="272" x2="284" y2="272" stroke="#22D3EE" stroke-width="6" stroke-opacity="0.15" stroke-linecap="round"/>
+    <line x1="204" y1="272" x2="284" y2="272" stroke="#22D3EE" stroke-width="1.5" stroke-linecap="round"/>
+    <text x="104" y="330" font-family="Arial, Microsoft YaHei, sans-serif" font-size="14" fill="#22D3EE" text-anchor="middle">&#10003;</text>
+    <text x="128" y="330" font-family="Microsoft YaHei, SimHei, sans-serif" font-size="13" fill="#C9D4E5">{{OPTION_1_FEAT_1}}</text>
+    <text x="104" y="382" font-family="Arial, Microsoft YaHei, sans-serif" font-size="14" fill="#22D3EE" text-anchor="middle">&#10003;</text>
+    <text x="128" y="382" font-family="Microsoft YaHei, SimHei, sans-serif" font-size="13" fill="#C9D4E5">{{OPTION_1_FEAT_2}}</text>
+    <text x="104" y="434" font-family="Arial, Microsoft YaHei, sans-serif" font-size="14" fill="#7A8BA8" text-anchor="middle">&#10007;</text>
+    <text x="128" y="434" font-family="Microsoft YaHei, SimHei, sans-serif" font-size="13" fill="#7A8BA8">{{OPTION_1_FEAT_3}}</text>
+    <text x="104" y="486" font-family="Arial, Microsoft YaHei, sans-serif" font-size="14" fill="#7A8BA8" text-anchor="middle">&#10007;</text>
+    <text x="128" y="486" font-family="Microsoft YaHei, SimHei, sans-serif" font-size="13" fill="#7A8BA8">{{OPTION_1_FEAT_4}}</text>
+  </g>
+
+  <g id="option-card-2">
+    <rect x="456" y="200" width="368" height="360" rx="14" fill="#FFFFFF" fill-opacity="0.04" stroke="#22D3EE" stroke-opacity="0.5"/>
+    <rect x="592" y="187" width="96" height="26" rx="13" fill="#22D3EE"/>
+    <text x="640" y="204" font-family="Microsoft YaHei, SimHei, sans-serif" font-size="10" font-weight="bold" fill="#FFFFFF" text-anchor="middle">{{OPTION_2_TAG}}</text>
+    <text x="640" y="254" font-family="Microsoft YaHei, SimHei, sans-serif" font-size="17" font-weight="bold" fill="#E6EDF7" text-anchor="middle">{{OPTION_2_NAME}}</text>
+    <line x1="600" y1="272" x2="680" y2="272" stroke="#22D3EE" stroke-width="6" stroke-opacity="0.15" stroke-linecap="round"/>
+    <line x1="600" y1="272" x2="680" y2="272" stroke="#22D3EE" stroke-width="1.5" stroke-linecap="round"/>
+    <text x="500" y="330" font-family="Arial, Microsoft YaHei, sans-serif" font-size="14" fill="#22D3EE" text-anchor="middle">&#10003;</text>
+    <text x="524" y="330" font-family="Microsoft YaHei, SimHei, sans-serif" font-size="13" fill="#C9D4E5">{{OPTION_2_FEAT_1}}</text>
+    <text x="500" y="382" font-family="Arial, Microsoft YaHei, sans-serif" font-size="14" fill="#22D3EE" text-anchor="middle">&#10003;</text>
+    <text x="524" y="382" font-family="Microsoft YaHei, SimHei, sans-serif" font-size="13" fill="#C9D4E5">{{OPTION_2_FEAT_2}}</text>
+    <text x="500" y="434" font-family="Arial, Microsoft YaHei, sans-serif" font-size="14" fill="#22D3EE" text-anchor="middle">&#10003;</text>
+    <text x="524" y="434" font-family="Microsoft YaHei, SimHei, sans-serif" font-size="13" fill="#C9D4E5">{{OPTION_2_FEAT_3}}</text>
+    <text x="500" y="486" font-family="Arial, Microsoft YaHei, sans-serif" font-size="14" fill="#22D3EE" text-anchor="middle">&#10003;</text>
+    <text x="524" y="486" font-family="Microsoft YaHei, SimHei, sans-serif" font-size="13" fill="#C9D4E5">{{OPTION_2_FEAT_4}}</text>
+  </g>
+
+  <g id="option-card-3">
+    <rect x="852" y="200" width="368" height="360" rx="14" fill="#FFFFFF" fill-opacity="0.04" stroke="#22D3EE" stroke-opacity="0.18"/>
+    <text x="1036" y="254" font-family="Microsoft YaHei, SimHei, sans-serif" font-size="17" font-weight="bold" fill="#E6EDF7" text-anchor="middle">{{OPTION_3_NAME}}</text>
+    <line x1="996" y1="272" x2="1076" y2="272" stroke="#22D3EE" stroke-width="6" stroke-opacity="0.15" stroke-linecap="round"/>
+    <line x1="996" y1="272" x2="1076" y2="272" stroke="#22D3EE" stroke-width="1.5" stroke-linecap="round"/>
+    <text x="896" y="330" font-family="Arial, Microsoft YaHei, sans-serif" font-size="14" fill="#22D3EE" text-anchor="middle">&#10003;</text>
+    <text x="920" y="330" font-family="Microsoft YaHei, SimHei, sans-serif" font-size="13" fill="#C9D4E5">{{OPTION_3_FEAT_1}}</text>
+    <text x="896" y="382" font-family="Arial, Microsoft YaHei, sans-serif" font-size="14" fill="#22D3EE" text-anchor="middle">&#10003;</text>
+    <text x="920" y="382" font-family="Microsoft YaHei, SimHei, sans-serif" font-size="13" fill="#C9D4E5">{{OPTION_3_FEAT_2}}</text>
+    <text x="896" y="434" font-family="Arial, Microsoft YaHei, sans-serif" font-size="14" fill="#22D3EE" text-anchor="middle">&#10003;</text>
+    <text x="920" y="434" font-family="Microsoft YaHei, SimHei, sans-serif" font-size="13" fill="#C9D4E5">{{OPTION_3_FEAT_3}}</text>
+    <text x="896" y="486" font-family="Arial, Microsoft YaHei, sans-serif" font-size="14" fill="#7A8BA8" text-anchor="middle">&#10007;</text>
+    <text x="920" y="486" font-family="Microsoft YaHei, SimHei, sans-serif" font-size="13" fill="#7A8BA8">{{OPTION_3_FEAT_4}}</text>
+  </g>
+
+  <g id="page-footer">
+    <circle cx="60" cy="700" r="5" fill="#22D3EE" fill-opacity="0.25"/>
+    <circle cx="60" cy="700" r="2.2" fill="#22D3EE"/>
+    <circle cx="78" cy="700" r="5" fill="#8B5CF6" fill-opacity="0.25"/>
+    <circle cx="78" cy="700" r="2.2" fill="#8B5CF6"/>
+    <circle cx="96" cy="700" r="5" fill="#22D3EE" fill-opacity="0.25"/>
+    <circle cx="96" cy="700" r="2.2" fill="#22D3EE"/>
+    <text x="1220" y="704" font-family="Arial, Microsoft YaHei, sans-serif" font-size="11" fill="#7A8BA8" text-anchor="end">{{PAGE_NUM}}</text>
+  </g>
+</svg>

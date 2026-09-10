@@ -1,0 +1,5 @@
+fastapi==0.115.12
+paddleocr==3.7.0
+python-multipart==0.0.20
+uvicorn==0.34.0
+

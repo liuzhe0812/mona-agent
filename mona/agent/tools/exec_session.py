@@ -11,8 +11,12 @@ from dataclasses import dataclass
 from typing import Any
 
 from mona.agent.tools.base import Tool, tool_parameters
-from mona.agent.tools.schema import BooleanSchema, IntegerSchema, StringSchema, tool_parameters_schema
-
+from mona.agent.tools.schema import (
+    BooleanSchema,
+    IntegerSchema,
+    StringSchema,
+    tool_parameters_schema,
+)
 
 DEFAULT_YIELD_MS = 1000
 MAX_YIELD_MS = 30_000
@@ -54,6 +58,7 @@ class _ExecSession:
         command: str,
         cwd: str,
         timeout: int,
+        owner_session_key: str | None,
     ) -> None:
         self.session_id = session_id
         self.process = process
@@ -61,6 +66,7 @@ class _ExecSession:
         self.cwd = cwd
         self.started_at = time.monotonic()
         self.deadline = time.monotonic() + timeout
+        self.owner_session_key = owner_session_key
         self.last_access = time.monotonic()
         self._chunks: list[str] = []
         self._lock = asyncio.Lock()
@@ -149,11 +155,9 @@ class _ExecSession:
         )
 
     async def kill(self) -> None:
-        if self.process.returncode is not None:
-            return
-        self.process.kill()
-        with suppress(asyncio.TimeoutError):
-            await asyncio.wait_for(self.process.wait(), timeout=5.0)
+        from mona.agent.tools.shell import kill_process_tree
+
+        await kill_process_tree(self.process)
 
 
 class ExecSessionManager:
@@ -174,6 +178,7 @@ class ExecSessionManager:
         login: bool,
         yield_time_ms: int,
         max_output_chars: int,
+        owner_session_key: str | None = None,
     ) -> tuple[str, _SessionPoll]:
         async with self._lock:
             await self._cleanup_locked()
@@ -187,6 +192,7 @@ class ExecSessionManager:
                 command=command,
                 cwd=cwd,
                 timeout=timeout,
+                owner_session_key=owner_session_key,
             )
             self._sessions[session_id] = session
 
@@ -252,6 +258,19 @@ class ExecSessionManager:
                 for session_id, session in sorted(self._sessions.items())
             ]
 
+    async def cancel_by_session(self, session_key: str) -> int:
+        async with self._lock:
+            owned = [
+                session_id
+                for session_id, session in self._sessions.items()
+                if session.owner_session_key == session_key
+                and session.process.returncode is None
+            ]
+            sessions = [self._sessions.pop(session_id) for session_id in owned]
+        if sessions:
+            await asyncio.gather(*(session.kill() for session in sessions))
+        return len(sessions)
+
     async def _cleanup_locked(self) -> None:
         now = time.monotonic()
         stale = [
@@ -294,6 +313,7 @@ class ExecSessionManager:
             stderr=asyncio.subprocess.PIPE,
             cwd=cwd,
             env=env,
+            start_new_session=True,
         )
 
 

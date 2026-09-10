@@ -5,6 +5,9 @@ description: Create or update AgentSkills. Use when designing, structuring, or p
 
 # Skill Creator
 
+Run bundled Python helpers only through `skill_script_run` with
+`skill="skill-creator"`; never execute Skill files through `exec` or system Python.
+
 This skill provides guidance for creating effective skills.
 
 ## About Skills
@@ -58,6 +61,39 @@ skill-name/
     ├── scripts/          - Executable code (Python/Bash/etc.)
     ├── references/       - Documentation intended to be loaded into context as needed
     └── assets/           - Files used in output (templates, icons, fonts, etc.)
+```
+
+### Runtime dependencies
+
+Do not invent runtime fields in `SKILL.md`. Mona uses one shared Agent Python
+environment and one shared Agent Node.js environment for non-project tasks.
+
+- A normal instruction-only Skill needs only `SKILL.md`.
+- A Skill with Python dependencies declares them in a standard root
+  `pyproject.toml` under `[project].dependencies`.
+- A Skill with Node dependencies declares them in a standard root
+  `package.json` under `dependencies`.
+- Project dependencies belong to the user's project, not the Skill package.
+- Never select a system Python/Node path. Mona routes Skill scripts and Agent
+  workspace code to the shared environment automatically.
+
+Minimal Python example:
+
+```toml
+[project]
+name = "example-skill"
+version = "1.0.0"
+dependencies = ["requests>=2", "pandas>=2"]
+```
+
+Minimal Node example:
+
+```json
+{
+  "name": "example-skill",
+  "private": true,
+  "dependencies": { "zod": "^4.0.0" }
+}
 ```
 
 #### SKILL.md (required)

@@ -1,17 +1,17 @@
 ﻿---
 name: long-goal
-description: Sustained objectives via long_task / complete_goal — idempotent goal wording, project-style modular work, early web/doc research, Runtime Context metadata.
+description: Sustained objectives explicitly requested with /goal, backed by long_task / complete_goal, idempotent goal wording, and Runtime Context metadata.
 ---
 
 # Long-running objectives (`long_task` / `complete_goal`)
 
-Use these tools when the user wants **multi-turn sustained work** on **one** clear objective (same runner, ordinary tools). Not for trivial one-shot questions.
+Use these tools only when the user explicitly starts a sustained objective with **`/goal <objective>`**. A normal request, even when complex or long-running, must not create or display a persisted goal.
 
 ## Start fast
 
 `long_task` is a lightweight marker. Calling it tells mona: "this thread has a sustained objective; keep that objective visible across turns and surface it in the UI."
 
-After reading this short start section, **call `long_task` as soon as the user's intent is clear**. Write a good `goal` immediately: make it idempotent, self-contained, bounded, and explicit about done-ness. Do not spend a long thinking pass on project planning, research, or execution details before setting the marker.
+After the explicit `/goal` command, **call `long_task` as soon as the command's intent is clear**. Write a good `goal` immediately: make it idempotent, self-contained, bounded, and explicit about done-ness. Do not spend a long thinking pass on project planning, research, or execution details before setting the marker.
 
 Before the first `long_task` call, you do **not** need to:
 
@@ -24,11 +24,11 @@ Those belong to the execution phase after the marker is set.
 
 ## Tools
 
-- **`long_task`** — Register **one** sustained objective per thread. Call it promptly once the user has asked for a sustained task. The `goal` should follow the idempotent-goal rules below, but it should be produced quickly from the user's request—not after a long hidden planning pass.
+- **`long_task`** — Register **one** sustained objective per thread. It is available only in the turn created by an explicit `/goal` command. The `goal` should follow the idempotent-goal rules below, but it should be produced quickly from the command—not after a long hidden planning pass.
 
-- **`complete_goal`** — Close bookkeeping for the **current** active goal. Call when work is **done**, **and also** when the user **cancels**, **changes direction**, or **replaces** the objective: use **`recap`** to state honestly what happened (e.g. cancelled, partially done, superseded). Then you may call **`long_task`** again for a **new** objective after the session shows no active goal (or after the user agrees to replace).
+- **`complete_goal`** — Close bookkeeping for the **current** active goal. Call when work is **done**, **and also** when the user **cancels**, **changes direction**, or **replaces** the objective: use **`recap`** to state honestly what happened (e.g. cancelled, partially done, superseded). A replacement goal requires a new explicit `/goal` command.
 
-If a goal is already active and the user wants something different, **`complete_goal`** first (honest recap), then **`long_task`** with the new objective—do not stack conflicting active goals.
+If a goal is already active and the user wants something different, **`complete_goal`** first with an honest recap, then ask the user to submit the replacement with `/goal`—do not stack conflicting active goals.
 
 ## Where the goal appears
 
@@ -40,7 +40,7 @@ Optional **`Summary:`** is a short UI label only—put crisp acceptance hints in
 
 # Execution guide after `long_task` is set
 
-Use the guidance below while doing the work. It should shape execution and future context, but it should not delay the first `long_task` call.
+Use the guidance below after an explicit `/goal` command has set the marker. It should shape execution and future context.
 
 ## Idempotent goals (important)
 
@@ -60,7 +60,7 @@ Write goals so they are:
 
 6. **`ui_summary`** — Short label for sidebars/logs; keep **non-load-bearing** (no secret requirements only in the summary).
 
-If you discover the objective was underspecified, you may ask the user—or **`complete_goal`** with recap and register a **narrower** replacement goal rather than overloading one ambiguous string.
+If you discover the objective was underspecified, ask the user for clarification. If the objective must be replaced, call **`complete_goal`** with a recap and ask the user to submit a narrower `/goal` command.
 
 ## Project-shaped work (avoid the “mega file” trap)
 

@@ -15,8 +15,8 @@ vi.mock("../SystemUi", () => ({
 }));
 
 const directories: DirectorySize[] = [
-  { path: "C:\\Users\\Mona\\Documents", sizeGb: 12, fileCount: 100, children: [{ path: "C:\\Users\\Mona\\Documents\\sub", sizeGb: 5, fileCount: 10 }] },
-  { path: "C:\\Users\\Mona\\Pictures", sizeGb: 6, fileCount: 50 },
+  { id: "dir-documents", path: "C:\\Users\\Mona\\Documents", sizeGb: 12, fileCount: 100, directSizeGb: 7, children: [{ id: "dir-sub", path: "C:\\Users\\Mona\\Documents\\sub", sizeGb: 5, fileCount: 10, directSizeGb: 5 }] },
+  { id: "dir-pictures", path: "C:\\Users\\Mona\\Pictures", sizeGb: 6, fileCount: 50, directSizeGb: 6 },
 ];
 
 function renderTreemap(currentTotalGb?: number, onDrillDown = vi.fn()) {
@@ -62,6 +62,27 @@ describe("TreemapView", () => {
     renderTreemap(18);
 
     expect(screen.queryByText("其他（未展开）")).toBeNull();
+  });
+
+  it("keeps directory selection in sync when a tile is opened", () => {
+    const onSelect = vi.fn();
+    const onDrillDown = vi.fn();
+    render(
+      <TreemapView
+        directories={directories}
+        currentTotalGb={18}
+        breadcrumb={[]}
+        loading={false}
+        error={null}
+        onSelect={onSelect}
+        onDrillDown={onDrillDown}
+        onNavigate={() => {}}
+      />,
+    );
+
+    fireEvent.click(screen.getByText("Documents"));
+    expect(onSelect).toHaveBeenCalledWith("C:\\Users\\Mona\\Documents");
+    expect(onDrillDown).toHaveBeenCalledWith("C:\\Users\\Mona\\Documents");
   });
 
   it("uses the theme background token for tile strokes", () => {

@@ -6,6 +6,7 @@ import { httpFetch } from "@/lib/tauri";
 import type { SystemTab } from "./systemTabs";
 import type {
   DiagnosticCheck,
+  DirectorySize,
   MaintenanceHistory,
   SoftwareActionResult,
   SoftwareCheckResult,
@@ -134,6 +135,129 @@ export function buildStorageEvidence(storage: StorageScanResult | null): Storage
   };
 }
 
+function shortStorageName(path: string): string {
+  return path.split(/[\\/]/).filter(Boolean).pop() ?? path;
+}
+
+function storagePathContains(parent: string, candidate: string): boolean {
+  const normalizedParent = parent.replaceAll("/", "\\").replace(/\\+$/, "").toLocaleLowerCase();
+  const normalizedCandidate = candidate.replaceAll("/", "\\").toLocaleLowerCase();
+  return normalizedCandidate === normalizedParent || normalizedCandidate.startsWith(`${normalizedParent}\\`);
+}
+
+function directoryAnalysisEvidence(directory: DirectorySize): StorageAnalysisDirectoryEvidence {
+  return {
+    id: directory.id,
+    sizeGb: directory.sizeGb,
+    fileCount: directory.fileCount,
+    directSizeGb: directory.directSizeGb,
+    artifactKind: directory.insight?.artifactKind ?? null,
+    fileTypes: directory.insight?.fileTypes ?? [],
+    modifiedBuckets: directory.insight?.modifiedBuckets ?? [],
+    topExtensions: directory.insight?.topExtensions ?? [],
+  };
+}
+
+/** Build one compact, path-free scope for the dedicated storage analysis endpoint. */
+export function buildStorageAnalysisContext(
+  storage: StorageScanResult,
+  selectedDirectory: DirectorySize | null,
+): StorageAnalysisContext {
+  const rootId = `storage-root-${storage.scanId}`;
+  const scope = selectedDirectory
+    ? directoryAnalysisEvidence(selectedDirectory)
+    : {
+        id: rootId,
+        sizeGb: storage.totalScannedGb,
+        fileCount: storage.scanSummary?.totalFiles ?? 0,
+        directSizeGb: 0,
+        artifactKind: null,
+        fileTypes: storage.fileTypes,
+        modifiedBuckets: [],
+        topExtensions: storage.extensionBuckets?.slice(0, 8) ?? [],
+      };
+  const children = (selectedDirectory?.children ?? storage.directories)
+    .slice(0, 20)
+    .map(directoryAnalysisEvidence);
+  const scopedFiles = (storage.topFiles ?? [])
+    .filter((file) => !selectedDirectory || storagePathContains(selectedDirectory.path, file.path))
+    .slice(0, 20)
+    .map(({ id, extension, sizeGb, modifiedBucket }) => ({ id, extension, sizeGb, modifiedBucket }));
+  const cleanupItems = selectedDirectory
+    ? []
+    : storage.cleanupItems
+        .filter((item) => item.cleanable)
+        .slice(0, 20)
+        .map(({ id, name, sizeGb, cleanable, reason }) => ({ id, name, sizeGb, cleanable, reason }));
+
+  const labels: Record<string, string> = {
+    [scope.id]: selectedDirectory ? shortStorageName(selectedDirectory.path) : "当前磁盘",
+  };
+  for (const directory of selectedDirectory?.children ?? storage.directories) {
+    labels[directory.id] = shortStorageName(directory.path);
+  }
+  for (const file of storage.topFiles ?? []) {
+    labels[file.id] = `${file.parentDirName} / ${file.extension === "(none)" ? "文件" : `.${file.extension}`}`;
+  }
+  for (const item of storage.cleanupItems) {
+    labels[item.id] = item.name;
+  }
+
+  return {
+    evidence: {
+      scanId: storage.scanId,
+      scope,
+      children,
+      largeFiles: scopedFiles,
+      cleanupItems,
+    },
+    labels,
+    scopeName: labels[scope.id],
+  };
+}
+
+function isStorageFindingAction(value: unknown): value is StorageFindingAction {
+  return value === "plan_cleanup" || value === "review_files" || value === "inspect_directory" || value === "none";
+}
+
+export async function requestStorageAnalysis(
+  goal: string,
+  evidence: StorageAnalysisEvidence,
+): Promise<StorageAssessment> {
+  const base = await getGatewayHttpBase();
+  if (!base) throw new Error("Mona 服务未就绪，请稍后重试");
+  const response = await httpFetch(`${base}/api/system/storage/analyze`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ goal, evidence }),
+  });
+  const payload = await response.json() as Partial<StorageAssessment> & { error?: string };
+  if (!response.ok) throw new Error(payload.error || "存储分析失败");
+  const knownIds = new Set([
+    evidence.scope.id,
+    ...evidence.children.map((item) => item.id),
+    ...evidence.largeFiles.map((item) => item.id),
+    ...evidence.cleanupItems.map((item) => item.id),
+  ]);
+  return {
+    scanId: typeof payload.scanId === "string" ? payload.scanId : evidence.scanId,
+    summary: typeof payload.summary === "string" ? payload.summary : "Mona 未返回可用的存储结论",
+    findings: Array.isArray(payload.findings)
+      ? payload.findings.filter((finding): finding is StorageFinding =>
+          Boolean(finding)
+          && typeof finding.id === "string"
+          && typeof finding.title === "string"
+          && typeof finding.detail === "string"
+          && Array.isArray(finding.evidenceIds)
+          && finding.evidenceIds.some((id) => knownIds.has(id))
+          && isStorageFindingAction(finding.action))
+      : [],
+    cautions: Array.isArray(payload.cautions)
+      ? payload.cautions.filter((item): item is string => typeof item === "string").slice(0, 3)
+      : [],
+  };
+}
+
 export async function requestSystemPlan(goal: string, evidence: SystemEvidence): Promise<SystemAgentPlan> {
   const base = await getGatewayHttpBase();
   if (!base) throw new Error("Mona 服务未就绪，请稍后重试");
@@ -159,6 +283,52 @@ export interface SystemDiagnosisHypothesis {
   evidenceIds: string[];
   explanation: string;
   nextStep: string;
+}
+
+export interface StorageAnalysisDirectoryEvidence {
+  id: string;
+  sizeGb: number;
+  fileCount: number;
+  directSizeGb: number;
+  artifactKind: string | null;
+  fileTypes: StorageScanResult["fileTypes"];
+  modifiedBuckets: NonNullable<DirectorySize["insight"]>["modifiedBuckets"];
+  topExtensions: NonNullable<DirectorySize["insight"]>["topExtensions"];
+}
+
+export interface StorageAnalysisEvidence {
+  scanId: string;
+  scope: StorageAnalysisDirectoryEvidence;
+  children: StorageAnalysisDirectoryEvidence[];
+  largeFiles: Array<Pick<NonNullable<StorageScanResult["topFiles"]>[number], "id" | "extension" | "sizeGb" | "modifiedBucket">>;
+  cleanupItems: Array<Pick<StorageScanResult["cleanupItems"][number], "id" | "name" | "sizeGb" | "cleanable" | "reason">>;
+}
+
+export type StorageFindingAction = "plan_cleanup" | "review_files" | "inspect_directory" | "none";
+
+export interface StorageFinding {
+  id: string;
+  title: string;
+  detail: string;
+  confidence: "low" | "medium" | "high";
+  risk: "low" | "review" | "keep";
+  evidenceIds: string[];
+  action: StorageFindingAction;
+  targetIds: string[];
+  relatedSizeGb: number;
+}
+
+export interface StorageAssessment {
+  scanId: string;
+  summary: string;
+  findings: StorageFinding[];
+  cautions: string[];
+}
+
+export interface StorageAnalysisContext {
+  evidence: StorageAnalysisEvidence;
+  labels: Record<string, string>;
+  scopeName: string;
 }
 
 export interface SystemDiagnosisResult {

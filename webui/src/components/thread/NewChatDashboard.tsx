@@ -11,15 +11,8 @@ import type { ChatSummary } from "@/lib/types";
 import { deriveTitle } from "@/lib/format";
 import { cn } from "@/lib/utils";
 
-export interface UnreadMailPreview {
-  sender: string;
-  subject: string;
-}
-
 interface NewChatDashboardProps {
   scheduleItems: ScheduleItem[];
-  unreadCount: number;
-  unreadMails?: UnreadMailPreview[];
   recentSession: ChatSummary | null;
   now?: Date;
   disabled?: boolean;
@@ -27,7 +20,6 @@ interface NewChatDashboardProps {
   onConnectHost?: () => void;
   onConnectDatabase?: () => void;
   onCreateNote?: () => void;
-  onOpenEmail?: () => void;
 }
 
 function isSameDay(timestamp: number, day: Date): boolean {
@@ -78,8 +70,6 @@ const sectionTitleClass = "text-[12px] font-semibold tracking-[0.16em] text-mute
 
 export function NewChatDashboard({
   scheduleItems,
-  unreadCount,
-  unreadMails,
   recentSession,
   now = new Date(),
   disabled = false,
@@ -87,7 +77,6 @@ export function NewChatDashboard({
   onConnectHost,
   onConnectDatabase,
   onCreateNote,
-  onOpenEmail,
 }: NewChatDashboardProps) {
   const focusItems = selectTodayFocus(scheduleItems, now);
   const nextItem = focusItems.find((item) => !item.done && item.startAtMs >= now.getTime())
@@ -99,7 +88,7 @@ export function NewChatDashboard({
   const recentExcerpt = recentSession?.preview?.replace(/\s+/g, " ").trim() ?? "";
 
   return (
-    <div className="w-full motion-safe:animate-in fill-mode-backwards fade-in-0 slide-in-from-bottom-2 text-left duration-arrival [animation-delay:140ms] md:pl-14">
+    <div className="mona-welcome-dashboard w-full motion-safe:animate-in fill-mode-backwards fade-in-0 slide-in-from-bottom-2 text-left duration-arrival [animation-delay:140ms] md:flex md:flex-col md:justify-center md:pl-14">
       <section className={sectionClass}>
         <header className="flex items-baseline justify-between gap-3">
           <h2 className={sectionTitleClass}>今日焦点</h2>
@@ -162,44 +151,6 @@ export function NewChatDashboard({
 
       <section className={sectionClass}>
         <header className="flex items-baseline justify-between gap-3">
-          <h2 className={sectionTitleClass}>待处理邮件</h2>
-          <div className="flex items-baseline gap-3">
-            <span className="text-[11.5px] text-muted-foreground">
-              {unreadCount > 0 ? (
-                <><span className="font-medium tabular-nums text-warning">{unreadCount}</span> 封未读</>
-              ) : "收件箱已清空"}
-            </span>
-            {unreadCount > 0 && onOpenEmail ? (
-              <button
-                type="button"
-                onClick={onOpenEmail}
-                disabled={disabled}
-                className="group inline-flex items-center gap-1 text-[12px] font-medium text-warning transition-colors hover:text-warning-hover disabled:pointer-events-none disabled:opacity-50"
-              >
-                查看
-                <ArrowRight className="h-3 w-3 transition-transform group-hover:translate-x-0.5" />
-              </button>
-            ) : null}
-          </div>
-        </header>
-        {unreadMails && unreadMails.length > 0 ? (
-          <ul className="mt-3 space-y-0.5">
-            {unreadMails.map((mail, index) => (
-              <li key={index} className="flex items-baseline gap-2.5 rounded-md px-1.5 py-1.5">
-                <span className="max-w-[38%] shrink-0 truncate text-[13px] font-medium text-foreground">
-                  {mail.sender}
-                </span>
-                <span className="min-w-0 truncate text-[12.5px] text-muted-foreground">
-                  {mail.subject}
-                </span>
-              </li>
-            ))}
-          </ul>
-        ) : null}
-      </section>
-
-      <section className={sectionClass}>
-        <header className="flex items-baseline justify-between gap-3">
           <h2 className={sectionTitleClass}>继续工作</h2>
           <div className="flex items-baseline gap-3">
             {recentSession ? (
@@ -228,7 +179,7 @@ export function NewChatDashboard({
         </div>
       </section>
 
-      <div className="flex items-center gap-1.5 pt-4">
+      <div className="flex flex-wrap items-center gap-1.5 pt-4">
         <QuietAction label="连接主机" icon={<TerminalSquare className="h-3.5 w-3.5" />} onClick={onConnectHost} disabled={disabled} />
         <QuietAction label="连接数据库" icon={<Database className="h-3.5 w-3.5" />} onClick={onConnectDatabase} disabled={disabled} />
         <QuietAction label="新建笔记" icon={<FilePenLine className="h-3.5 w-3.5" />} onClick={onCreateNote} disabled={disabled} />
@@ -253,7 +204,7 @@ function QuietAction({
       type="button"
       onClick={onClick}
       disabled={!onClick || disabled}
-      className="group inline-flex h-8 items-center gap-2 rounded-full pl-2 pr-3 text-[12.5px] font-medium text-muted-foreground transition-colors hover:bg-foreground/[0.06] hover:text-foreground disabled:pointer-events-none disabled:opacity-45"
+      className="group inline-flex h-8 shrink-0 items-center gap-2 whitespace-nowrap rounded-full pl-2 pr-3 text-[12.5px] font-medium text-muted-foreground transition-colors hover:bg-foreground/[0.06] hover:text-foreground disabled:pointer-events-none disabled:opacity-45"
     >
       <span className="flex h-5 w-5 items-center justify-center opacity-70 transition-transform group-hover:scale-110">
         {icon}

@@ -12,7 +12,7 @@
       "id": "semantic_research",
       "type": "agent",
       "agentId": "com.mona.stock-diagnosis-semantic-researcher",
-      "task": "第一回合必须调用 stock_evidence_read 读取当前 workflow run 的不可变 Evidence context；随后只输出公司业务、行业供需、政策传导、周期位置、治理公开证据、关键假设、风险和改变结论条件。严格调用唯一的 submit_stock_diagnosis_semantic 合同；不得提交技术指标、量化分数、价格、仓位、止损止盈或交易计划。最终方向、动作、价格和仓位由确定性诊股裁决器生成，不追加LLM裁判。",
+      "task": "第一回合必须调用 stock_evidence_read 读取当前 workflow run 的不可变 Evidence context；随后只输出公司业务、行业供需、政策传导、周期位置、治理公开证据、关键假设、风险和改变结论条件。资本开支、治理、稀释、审计、客户/供应商集中度、分部盈利、产能订单和管理层承诺只有在证据实际披露时才作为增强分析，未披露时静默跳过且不得阻断结论。严格调用唯一的 submit_stock_diagnosis_semantic 合同；不得提交技术指标、量化分数、价格、仓位、止损止盈或交易计划。最终方向、动作、价格和仓位由确定性诊股裁决器生成，不追加LLM裁判。",
       "expectedOutput": "调用 submit_stock_diagnosis_semantic，产出 semantic_submission.json；提交字段仅限公司/行业/政策/周期/治理结构化语义与source_ids。",
       "requiredArtifacts": ["semantic_submission.json"],
       "dependsOn": []

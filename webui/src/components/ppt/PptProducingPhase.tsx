@@ -13,6 +13,7 @@ import {
   Play,
   RefreshCw,
   RotateCw,
+  SlidersHorizontal,
   X,
 } from "lucide-react";
 
@@ -81,6 +82,8 @@ interface PptProducingPhaseProps {
   setExportOptions: React.Dispatch<React.SetStateAction<PptExportOptions>>;
   /** Responsive breakpoint for layout adaptation */
   bp?: Breakpoint;
+  /** Embedded in the main conversation workspace; the main chat replaces PptChatPanel. */
+  embedded?: boolean;
 }
 
 const PAGE_TRANSITION_OPTIONS: Array<{ value: PptPageTransition; label: string }> = [
@@ -135,6 +138,7 @@ export function PptProducingPhase({
   exportOptions,
   setExportOptions,
   bp = "wide",
+  embedded = false,
 }: PptProducingPhaseProps) {
   const [pages, setPages] = useState<PptPageInfo[]>([]);
   const [outlinePages, setOutlinePages] = useState<PptOutlinePage[]>([]);
@@ -547,13 +551,16 @@ export function PptProducingPhase({
   );
 
   const showPageListInline = bp !== "narrow";
-  const showChatInline = bp === "wide";
+  const showChatInline = !embedded && bp === "wide";
 
   return (
     <div className="flex h-full">
       {/* Left: page list — inline on wide/medium, Sheet on narrow */}
       {showPageListInline ? (
-        <div className="flex w-[200px] shrink-0 flex-col border-r border-border/70">
+        <div className={cn(
+          "flex shrink-0 flex-col border-r border-border/70",
+          embedded && bp !== "wide" ? "w-24" : "w-[200px]",
+        )}>
           {pageListContent}
         </div>
       ) : (
@@ -814,7 +821,7 @@ export function PptProducingPhase({
 
           <div className="flex items-center gap-1">
             {/* Narrow/medium: chat toggle */}
-            {!showChatInline && (
+            {!embedded && !showChatInline && (
               <Button
                 variant="ghost"
                 size="sm"
@@ -845,8 +852,8 @@ export function PptProducingPhase({
                 disabled={isStreaming}
                 className="h-7 gap-1 px-2 text-[11px]"
               >
-                <RotateCw className="h-3 w-3" />
-                重新生成
+                {embedded ? <SlidersHorizontal className="h-3 w-3" /> : <RotateCw className="h-3 w-3" />}
+                {embedded ? "页面设置" : "重新生成"}
               </Button>
             )}
             {allConfirmed ? (
@@ -888,8 +895,51 @@ export function PptProducingPhase({
         </div>
       </div>
 
+      {embedded && bp === "wide" && selectedPage ? (
+        <aside className="flex w-[260px] shrink-0 flex-col border-l border-border/70 bg-background">
+          <div className="border-b border-border/70 px-4 py-3 text-[13px] font-medium text-foreground">
+            页面设置
+          </div>
+          <div className="min-h-0 flex-1 space-y-4 overflow-y-auto p-4 text-[12px]">
+            <div>
+              <div className="mb-1 text-[11px] text-muted-foreground">页面</div>
+              <div className="font-medium text-foreground">{String(selectedIdx + 1).padStart(2, "0")} · {selectedPage.title || "未命名"}</div>
+            </div>
+            <div>
+              <div className="mb-1 text-[11px] text-muted-foreground">版式</div>
+              <div className="rounded-md border border-border/70 px-3 py-2 text-foreground">
+                {outlinePages[selectedIdx]?.layout || "AI 推荐"}
+              </div>
+            </div>
+            <div>
+              <div className="mb-1 text-[11px] text-muted-foreground">视觉类型</div>
+              <div className="rounded-md border border-border/70 px-3 py-2 text-foreground">
+                {outlinePages[selectedIdx]?.visual_type || "AI 推荐"}
+              </div>
+            </div>
+            <div>
+              <div className="mb-1 text-[11px] text-muted-foreground">演讲备注</div>
+              <div className="min-h-20 rounded-md border border-border/70 px-3 py-2 leading-relaxed text-foreground">
+                {outlinePages[selectedIdx]?.notes || "暂无备注"}
+              </div>
+            </div>
+          </div>
+          <div className="border-t border-border/70 p-3">
+            <Button
+              variant="outline"
+              size="sm"
+              className="h-8 w-full text-[11px]"
+              onClick={handleOpenRegenerate}
+              disabled={isStreaming}
+            >
+              编辑并重新生成
+            </Button>
+          </div>
+        </aside>
+      ) : null}
+
       {/* Right: chat panel — inline on wide, Sheet on medium/narrow */}
-      {showChatInline ? (
+      {!embedded && (showChatInline ? (
         <div className="flex w-[360px] shrink-0 flex-col border-l border-border/70">
           <PptChatPanel
             key={chatId ?? "empty"}
@@ -914,7 +964,7 @@ export function PptProducingPhase({
             />
           </SheetContent>
         </Sheet>
-      )}
+      ))}
 
       {/* 导出配置面板：全部确认后弹出，默认只显示生成 PPTX 按钮，高级选项折叠 */}
       <Dialog open={showExportDialog} onOpenChange={setShowExportDialog}>

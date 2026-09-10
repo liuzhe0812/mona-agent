@@ -14,7 +14,7 @@ import { ThreadMessages } from "@/components/thread/ThreadMessages";
 import { isAgentActivityMember } from "@/components/thread/AgentActivityCluster";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
-import type { ToolProgressEvent, UIMessage } from "@/lib/types";
+import type { UIMessage } from "@/lib/types";
 
 interface ThreadViewportProps {
   messages: UIMessage[];
@@ -29,8 +29,8 @@ interface ThreadViewportProps {
   focusMessage?: { id: string; requestId: number } | null;
   conversationKey?: string | null;
   showScrollToBottomButton?: boolean;
-  /** Live workflow-step tool activity, keyed ``runId:stepId`` (rooms only). */
-  stepActivities?: Record<string, ToolProgressEvent[]>;
+  onQuote?: (message: UIMessage, author: string) => void;
+  onBranch?: (message: UIMessage, author: string) => void;
 }
 
 const NEAR_BOTTOM_PX = 48;
@@ -62,7 +62,8 @@ export function ThreadViewport({
   focusMessage = null,
   conversationKey = null,
   showScrollToBottomButton = true,
-  stepActivities,
+  onQuote,
+  onBranch,
 }: ThreadViewportProps) {
   const { t } = useTranslation();
   const scrollRef = useRef<HTMLDivElement>(null);
@@ -286,7 +287,8 @@ export function ThreadViewport({
                   isGroupChat={isGroupChat}
                   hiddenMessageCount={hiddenMessageCount}
                   onLoadEarlier={loadEarlierMessages}
-                  stepActivities={stepActivities}
+                  onQuote={onQuote}
+                  onBranch={onBranch}
                 />
               </div>
             </div>
@@ -313,7 +315,7 @@ export function ThreadViewport({
               data-testid="thread-composer-dock"
               className="sticky bottom-0 z-10 mt-auto bg-background/95"
             >
-              <div className="px-4 pb-4 pt-2">
+              <div className="px-4 pb-4 pt-px">
                 {composer}
               </div>
             </div>

@@ -2123,6 +2123,7 @@ DiagnosisAction = Literal[
     "exit",
     "avoid",
 ]
+DiagnosisCurrentAction = Literal["wait", "participate", "hold", "reduce", "exit", "avoid"]
 DiagnosisValidationStatus = Literal[
     "descriptive", "calibrated", "rejected", "unavailable"
 ]
@@ -2260,6 +2261,10 @@ class DiagnosisFactor(Payload):
     value: float | None = None
     percentile: float | None = Field(default=None, ge=0, le=1)
     direction: Literal["positive", "neutral", "negative", "unavailable"] | None = None
+    group: str | None = None
+    unit: str | None = None
+    comparison_scope: str | None = None
+    as_of: str | None = None
     weight: float | None = None
     contribution: float | None = None
     source_ids: list[str] = Field(default_factory=list)
@@ -2268,6 +2273,10 @@ class DiagnosisFactor(Payload):
 class DiagnosisFactorHorizon(Payload):
     status: DiagnosisAvailability = "unavailable"
     validation_status: DiagnosisValidationStatus = "unavailable"
+    promotion_status: Literal["calibrated", "research_only", "rejected", "unavailable"] = "unavailable"
+    validation_reason: str | None = None
+    validation_metrics: dict[str, object] = Field(default_factory=dict)
+    target_window_sessions: int | None = Field(default=None, ge=1)
     factor_score: float | None = Field(default=None, ge=0, le=1)
     market_percentile: float | None = Field(default=None, ge=0, le=1)
     industry_percentile: float | None = Field(default=None, ge=0, le=1)
@@ -2294,14 +2303,55 @@ class DiagnosisFactorSnapshot(Payload):
     source_ids: list[str] = Field(default_factory=list)
 
 
+class DiagnosisSourceRecord(Payload):
+    id: str = Field(min_length=1)
+    provider: str = Field(min_length=1)
+    url: str = Field(min_length=1)
+    published_at: str | None = None
+    period_end: str | None = None
+
+
 class DiagnosisMaterializedPlan(Payload):
     """Execution values are copied only from deterministic execution output."""
 
     reference_entry: float | None = None
+    reference_entry_low: float | None = None
+    reference_entry_high: float | None = None
     pullback_entry: float | None = None
+    pullback_entry_low: float | None = None
+    pullback_entry_high: float | None = None
     stop_loss: float | None = None
     first_take_profit: float | None = None
     second_take_profit: float | None = None
+    risk_reference_price: float | None = Field(default=None, gt=0)
+    risk_per_share: float | None = Field(default=None, ge=0)
+    risk_pct: float | None = Field(default=None, ge=0)
+    first_reward_pct: float | None = Field(default=None, ge=0)
+    second_reward_pct: float | None = Field(default=None, ge=0)
+    risk_reward_first: float | None = Field(default=None, ge=0)
+    risk_reward_second: float | None = Field(default=None, ge=0)
+    risk_reward_method_version: str | None = None
+    risk_reward_first_after_cost: float | None = None
+    risk_reward_second_after_cost: float | None = None
+    risk_reward_first_after_fees: float | None = None
+    risk_reward_second_after_fees: float | None = None
+    estimated_slippage_pct: float | None = Field(default=None, ge=0)
+    cost_assumptions: dict[str, object] = Field(default_factory=dict)
+    cost_scope: Literal["fees_and_slippage_proxy", "unavailable"] = "unavailable"
+    cost_method_version: str | None = None
+    slippage_method_version: str | None = None
+    minimum_risk_reward_first: float = Field(default=1.0, ge=0)
+    minimum_risk_reward_second: float = Field(default=2.0, ge=0)
+    risk_reward_gate_status: Literal["passed", "failed", "unavailable"] = "unavailable"
+    risk_reward_gate_method_version: str = "gross-risk-reward-gate-v1"
+    fee_gate_status: Literal["passed", "failed", "unavailable"] = "unavailable"
+    fee_gate_method_version: str = "fee-adjusted-risk-reward-gate-v1"
+    slippage_stress_status: Literal["passed", "failed", "unavailable"] = "unavailable"
+    slippage_stress_method_version: str = "market-slippage-stress-v1"
+    entry_condition_status: Literal["triggered", "not_triggered", "unavailable"] = "unavailable"
+    entry_condition: str | None = None
+    entry_condition_count: int = Field(default=0, ge=0)
+    entry_condition_realtime_eligible: bool = False
     value_status: Literal["available", "partial", "unavailable"] = "unavailable"
     unavailable_fields: list[str] = Field(default_factory=list)
     invalidation: list[str] = Field(default_factory=list)
@@ -2309,18 +2359,188 @@ class DiagnosisMaterializedPlan(Payload):
     max_risk_pct: float | None = None
     source_ids: list[str] = Field(default_factory=list)
 
+    @model_validator(mode="after")
+    def _validate_price_relationships(self) -> "DiagnosisMaterializedPlan":
+        price_fields = (
+            "reference_entry",
+            "reference_entry_low",
+            "reference_entry_high",
+            "pullback_entry",
+            "pullback_entry_low",
+            "pullback_entry_high",
+            "stop_loss",
+            "first_take_profit",
+            "second_take_profit",
+        )
+        for field_name in price_fields:
+            value = getattr(self, field_name)
+            if value is not None and value <= 0:
+                raise ValueError(f"diagnosis plan {field_name} must be positive")
+        if (
+            self.reference_entry_low is not None
+            and self.reference_entry_high is not None
+            and self.reference_entry_low > self.reference_entry_high
+        ):
+            raise ValueError("diagnosis reference entry range is inverted")
+        if (
+            self.pullback_entry_low is not None
+            and self.pullback_entry_high is not None
+            and self.pullback_entry_low > self.pullback_entry_high
+        ):
+            raise ValueError("diagnosis pullback entry range is inverted")
+        entry_lows = [
+            value
+            for value in (
+                self.reference_entry_low,
+                self.pullback_entry_low,
+                self.reference_entry,
+                self.pullback_entry,
+            )
+            if value is not None
+        ]
+        entry_highs = [
+            value
+            for value in (
+                self.reference_entry_high,
+                self.pullback_entry_high,
+                self.reference_entry,
+                self.pullback_entry,
+            )
+            if value is not None
+        ]
+        if self.stop_loss is not None and entry_lows and self.stop_loss >= min(entry_lows):
+            raise ValueError("diagnosis stop loss must be below the entry range")
+        if (
+            self.first_take_profit is not None
+            and entry_highs
+            and self.first_take_profit <= max(entry_highs)
+        ):
+            raise ValueError("diagnosis first take profit must be above the entry range")
+        if (
+            self.first_take_profit is not None
+            and self.second_take_profit is not None
+            and self.second_take_profit <= self.first_take_profit
+        ):
+            raise ValueError("diagnosis second take profit must exceed the first")
+        if self.value_status == "available" and any(
+            getattr(self, field_name) is None
+            for field_name in (
+                "reference_entry",
+                "pullback_entry",
+                "stop_loss",
+                "first_take_profit",
+                "second_take_profit",
+            )
+        ):
+            raise ValueError("available diagnosis plan requires all execution prices")
+        if self.entry_condition_status != "unavailable" and not self.entry_condition:
+            raise ValueError("diagnosis entry condition status requires a condition description")
+        if self.entry_condition_realtime_eligible and (
+            self.entry_condition_count != 1 or not self.entry_condition
+        ):
+            raise ValueError("realtime diagnosis entry evaluation requires one described condition")
+        if self.risk_reward_gate_status != "unavailable":
+            if self.risk_reward_first is None or self.risk_reward_second is None:
+                raise ValueError("diagnosis risk-reward gate requires both target ratios")
+            passed = (
+                self.risk_reward_first >= self.minimum_risk_reward_first
+                and self.risk_reward_second >= self.minimum_risk_reward_second
+            )
+            if (self.risk_reward_gate_status == "passed") != passed:
+                raise ValueError("diagnosis risk-reward gate status does not match its ratios")
+        if self.fee_gate_status != "unavailable":
+            if (
+                self.risk_reward_first_after_fees is None
+                or self.risk_reward_second_after_fees is None
+            ):
+                raise ValueError("diagnosis fee gate requires both target ratios")
+            passed_after_fees = (
+                self.risk_reward_first_after_fees >= self.minimum_risk_reward_first
+                and self.risk_reward_second_after_fees >= self.minimum_risk_reward_second
+            )
+            if (self.fee_gate_status == "passed") != passed_after_fees:
+                raise ValueError("diagnosis fee gate status does not match its ratios")
+        if self.slippage_stress_status != "unavailable":
+            if (
+                self.risk_reward_first_after_cost is None
+                or self.risk_reward_second_after_cost is None
+            ):
+                raise ValueError("diagnosis slippage stress requires both target ratios")
+            passed_stress = (
+                self.risk_reward_first_after_cost >= self.minimum_risk_reward_first
+                and self.risk_reward_second_after_cost >= self.minimum_risk_reward_second
+            )
+            if (self.slippage_stress_status == "passed") != passed_stress:
+                raise ValueError("diagnosis slippage stress status does not match its ratios")
+        if self.cost_scope == "fees_and_slippage_proxy" and (
+            self.estimated_slippage_pct is None or not self.cost_assumptions
+        ):
+            raise ValueError("diagnosis cost scope requires slippage and cost assumptions")
+        if self.cost_scope == "fees_and_slippage_proxy" and self.slippage_stress_status == "unavailable":
+            raise ValueError("diagnosis cost scope requires a slippage stress result")
+        if self.cost_scope == "unavailable" and (
+            self.risk_reward_first_after_cost is not None
+            or self.risk_reward_second_after_cost is not None
+            or self.slippage_stress_status != "unavailable"
+        ):
+            raise ValueError("unavailable diagnosis cost scope cannot carry slippage stress results")
+        return self
+
 
 class DiagnosisPositionPlan(Payload):
     reference_position_pct: float | None = Field(default=None, ge=0, le=100)
     max_position_pct: float | None = Field(default=None, ge=0, le=100)
     risk_budget_pct: float | None = Field(default=None, ge=0, le=100)
+    stop_distance_pct: float | None = Field(default=None, gt=0, le=100)
+    volatility_adjustment: float | None = Field(default=None, gt=0, le=1)
+    liquidity_cap_pct: float | None = Field(default=None, gt=0, le=100)
+    conservative_risk_cap_pct: float | None = Field(default=None, ge=0, le=100)
+    calculation_method: str | None = None
+    calculation_version: str | None = None
+    risk_cap_method_version: str | None = None
     value_status: Literal["available", "partial", "unavailable"] = "unavailable"
     source_ids: list[str] = Field(default_factory=list)
+
+    @model_validator(mode="after")
+    def _validate_position_math(self) -> "DiagnosisPositionPlan":
+        if (
+            self.reference_position_pct is not None
+            and self.max_position_pct is not None
+            and self.reference_position_pct > self.max_position_pct
+        ):
+            raise ValueError("diagnosis reference position cannot exceed max position")
+        source_sizing = (
+            self.risk_budget_pct,
+            self.stop_distance_pct,
+            self.volatility_adjustment,
+            self.liquidity_cap_pct,
+            self.max_position_pct,
+        )
+        if all(value is not None for value in source_sizing):
+            theoretical = self.risk_budget_pct / self.stop_distance_pct * 100  # type: ignore[operator]
+            maximum = min(
+                theoretical * self.volatility_adjustment,  # type: ignore[operator]
+                self.liquidity_cap_pct,  # type: ignore[arg-type]
+            )
+            if self.max_position_pct > maximum + 1e-6:  # type: ignore[operator]
+                raise ValueError("diagnosis max position exceeds source risk limits")
+        if (
+            self.conservative_risk_cap_pct is not None
+            and self.max_position_pct is not None
+            and self.max_position_pct > self.conservative_risk_cap_pct + 1e-6
+        ):
+            raise ValueError("diagnosis max position exceeds conservative risk cap")
+        return self
 
 
 class DiagnosisHorizonDecision(Payload):
     direction: DiagnosisDirection
     action: DiagnosisAction
+    decision_score: float | None = Field(default=None, ge=-1, le=1)
+    positive_threshold: float = Field(default=0.2, ge=0, le=1)
+    negative_threshold: float = Field(default=-0.2, ge=-1, le=0)
+    component_scores: dict[str, float] = Field(default_factory=dict)
+    component_weights: dict[str, float] = Field(default_factory=dict)
     factor_score: float | None = Field(default=None, ge=0, le=1)
     market_percentile: float | None = Field(default=None, ge=0, le=1)
     industry_percentile: float | None = Field(default=None, ge=0, le=1)
@@ -2328,6 +2548,8 @@ class DiagnosisHorizonDecision(Payload):
     validation_status: DiagnosisValidationStatus
     not_holding_action: DiagnosisAction
     holding_action: DiagnosisAction
+    current_action: DiagnosisCurrentAction | None = None
+    thesis: str | None = None
     materialized_plan: DiagnosisMaterializedPlan
     position_plan: DiagnosisPositionPlan
     review_trigger: str = "暂无可确认的复评条件"
@@ -2336,6 +2558,29 @@ class DiagnosisHorizonDecision(Payload):
     key_risks: list[DiagnosisClaim] = Field(default_factory=list)
     confidence: Literal["high", "medium", "low"]
     source_ids: list[str] = Field(default_factory=list)
+
+    @model_validator(mode="after")
+    def _validate_decision_score_contract(self) -> "DiagnosisHorizonDecision":
+        allowed_components = {"fundamental", "technical", "quant"}
+        if not set(self.component_scores) <= allowed_components:
+            raise ValueError("diagnosis decision has an unknown score component")
+        if set(self.component_scores) != set(self.component_weights):
+            raise ValueError("diagnosis decision score components and weights differ")
+        if any(not isfinite(value) or not -1 <= value <= 1 for value in self.component_scores.values()):
+            raise ValueError("diagnosis decision component scores must be within -1..1")
+        if any(not isfinite(value) or not 0 <= value <= 1 for value in self.component_weights.values()):
+            raise ValueError("diagnosis decision component weights must be within 0..1")
+        if self.component_weights and abs(sum(self.component_weights.values()) - 1.0) > 1e-8:
+            raise ValueError("diagnosis decision component weights must sum to one")
+        if self.decision_score is None:
+            return self
+        if self.direction == "positive" and self.decision_score <= self.positive_threshold:
+            raise ValueError("positive diagnosis direction does not clear its threshold")
+        if self.direction == "negative" and self.decision_score >= self.negative_threshold:
+            raise ValueError("negative diagnosis direction does not clear its threshold")
+        if self.direction == "neutral" and not self.negative_threshold <= self.decision_score <= self.positive_threshold:
+            raise ValueError("neutral diagnosis direction is outside its thresholds")
+        return self
 
 
 class DiagnosisHorizonDecisions(Payload):
@@ -2390,9 +2635,12 @@ class StockDiagnosisV1(Payload):
     instrument: InstrumentTag
     research_cutoff_at: str = Field(min_length=1)
     market_as_of: str | None = None
+    current_price: float | None = Field(default=None, gt=0)
+    price_source_ids: list[str] = Field(default_factory=list)
     generated_at: str = Field(min_length=1)
     evidence_context_id: str = Field(min_length=1)
     source_ids: list[str] = Field(default_factory=list)
+    sources: list[DiagnosisSourceRecord] = Field(default_factory=list)
     data_quality: DiagnosisDataQuality
     fundamental_research: DiagnosisFundamentalResearch
     fundamental_factors: DiagnosisFactorSnapshot
@@ -2406,7 +2654,10 @@ class StockDiagnosisV1(Payload):
     def _separate_from_deep_research(self) -> "StockDiagnosisV1":
         if self.kind != "ai_diagnosis" or self.schema_version != 1:
             raise ValueError("standard diagnosis requires kind=ai_diagnosis and schema_version=1")
+        if self.current_price is not None and not self.price_source_ids:
+            raise ValueError("diagnosis current_price requires price_source_ids")
         nested_source_ids: set[str] = set()
+        nested_source_ids.update(self.price_source_ids)
         for value in (
             self.fundamental_research,
             self.fundamental_factors,
@@ -2419,6 +2670,8 @@ class StockDiagnosisV1(Payload):
         if not nested_source_ids <= set(self.source_ids):
             missing = sorted(nested_source_ids - set(self.source_ids))
             raise ValueError(f"diagnosis source_ids missing nested sources: {missing}")
+        if not {source.id for source in self.sources} <= set(self.source_ids):
+            raise ValueError("diagnosis source records must belong to source_ids")
         return self
 
 

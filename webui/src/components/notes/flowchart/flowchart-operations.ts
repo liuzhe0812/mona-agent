@@ -168,6 +168,7 @@ export function flowchartNodeAbsolutePosition(
 // ---------------------------------------------------------------------------
 
 export const FLOWCHART_GROUP_PADDING = 16;
+export const FLOWCHART_GROUP_HEADER_SIZE = 30;
 
 /**
  * 组合：把 ≥2 个根级普通节点装入新建 group。
@@ -213,9 +214,10 @@ export function groupNodes(
     maxX = Math.max(maxX, n.position.x + size.width);
     maxY = Math.max(maxY, n.position.y + size.height);
   }
+  const headerSize = title?.trim() ? FLOWCHART_GROUP_HEADER_SIZE : 0;
   const groupPos = {
     x: round2(minX - FLOWCHART_GROUP_PADDING),
-    y: round2(minY - FLOWCHART_GROUP_PADDING),
+    y: round2(minY - FLOWCHART_GROUP_PADDING - headerSize),
   };
   const group: FlowchartNode = {
     id: groupId,
@@ -224,7 +226,7 @@ export function groupNodes(
     position: groupPos,
     size: {
       width: round2(maxX - minX + FLOWCHART_GROUP_PADDING * 2),
-      height: round2(maxY - minY + FLOWCHART_GROUP_PADDING * 2),
+      height: round2(maxY - minY + FLOWCHART_GROUP_PADDING * 2 + headerSize),
     },
     container: { type: "group" },
   };

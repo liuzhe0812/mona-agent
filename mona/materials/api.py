@@ -10,6 +10,7 @@ import asyncio
 import hashlib
 import json
 import os
+import re
 import shutil
 import uuid
 from datetime import datetime
@@ -19,12 +20,21 @@ from typing import Any
 from aiohttp import web
 from loguru import logger
 
+from mona.config.paths import get_agent_knowledge_dir, get_data_dir
+from mona.materials.catalog import (
+    DEFAULT_LIBRARY_ID,
+    create_library,
+    get_library_root,
+    list_libraries,
+    remove_library,
+    update_library,
+    validate_library_id,
+)
 from mona.materials.frontmatter import _parse_frontmatter, _render_frontmatter
 from mona.materials.index import sync_write_point
 from mona.materials.vault import get_vault_path
 from mona.utils.document import (
     EXTRACTOR_VERSION,
-    IMAGE_EXTENSIONS,
     SUPPORTED_EXTENSIONS,
     ExtractedSegment,
     extract_segments,
@@ -39,8 +49,7 @@ UNSUPPORTED_EXTENSIONS = {".doc", ".xls"}
 # 提取任务超时（秒）
 EXTRACT_TIMEOUT = 120
 
-# 后台提取任务表：vault_path -> { rel_path -> {"state": "queued"|"running", "task": Task} }
-# 用 vault_path 隔离不同 vault 的任务，避免互相干扰。
+# 后台提取任务表：vault 下再以物理知识根目录和相对路径共同隔离任务。
 # 进程内状态，重启后由 reconciliation 恢复未完成的提取。
 _EXTRACT_TASKS: dict[Path, dict[str, dict[str, Any]]] = {}
 
@@ -53,12 +62,71 @@ def _require_vault() -> Path:
     return vault
 
 
-def _materials_root(vault: Path) -> Path:
-    """返回资料库根目录 `<vault>/.mona/materials/`，必要时创建子目录。"""
-    root = vault / ".mona" / "materials"
-    for sub in ("raw", "text", "wiki"):
-        (root / sub).mkdir(parents=True, exist_ok=True)
-    return root
+def _materials_root(vault: Path, library_id: str | None = None) -> Path:
+    """返回一个知识库的数据根目录，缺省为迁移后的默认知识库。"""
+    return get_library_root(vault, library_id or DEFAULT_LIBRARY_ID)
+
+
+def _request_library_id(req: web.Request) -> str:
+    query = getattr(req, "query", None)
+    value = query.get("knowledgeBaseId", DEFAULT_LIBRARY_ID) if hasattr(query, "get") else DEFAULT_LIBRARY_ID
+    if not isinstance(value, str):
+        value = DEFAULT_LIBRARY_ID
+    try:
+        return validate_library_id(value)
+    except ValueError as exc:
+        raise web.HTTPBadRequest(reason=str(exc)) from exc
+
+
+def _request_materials_root(req: web.Request, vault: Path) -> Path:
+    try:
+        return _materials_root(vault, _request_library_id(req))
+    except KeyError as exc:
+        raise web.HTTPNotFound(reason=str(exc)) from exc
+
+
+def _request_materials_context(req: web.Request) -> tuple[Path, Path]:
+    """Resolve either legacy library storage or one Agent's private Wiki."""
+    value = req.query.get("agentId", "")
+    agent_id = value.strip() if isinstance(value, str) else ""
+    if agent_id:
+        from mona.agent.partners import normalize_agent_id
+
+        try:
+            normalized = normalize_agent_id(agent_id)
+        except ValueError as exc:
+            raise web.HTTPBadRequest(reason="invalid Agent id") from exc
+        return get_data_dir(), get_agent_knowledge_dir(normalized)
+    vault = _require_vault()
+    return vault, _request_materials_root(req, vault)
+
+
+def _archived_path(root: Path, domain: str, rel: str) -> Path | None:
+    """Resolve a removed Agent source for historical citation preview only."""
+    state_path = root / "state.json"
+    try:
+        state = json.loads(state_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return None
+    documents = state.get("documents") if isinstance(state, dict) else None
+    if not isinstance(documents, list):
+        return None
+    archive_root = root / "archive"
+    for record in documents:
+        if not isinstance(record, dict) or record.get("active", True):
+            continue
+        document_id = str(record.get("id", ""))
+        if not re.fullmatch(r"document-[A-Za-z0-9-]+", document_id):
+            continue
+        candidate = archive_root / document_id / domain / rel
+        try:
+            resolved = candidate.resolve()
+            resolved.relative_to(archive_root.resolve())
+        except (OSError, ValueError):
+            continue
+        if resolved.is_file():
+            return resolved
+    return None
 
 
 def _ensure_within_materials(path: Path, materials_root: Path) -> Path:
@@ -143,6 +211,105 @@ def _atomic_write_text(path: Path, content: str) -> None:
     os.replace(tmp, path)
 
 
+def _evidence_id(
+    *,
+    material_id: str,
+    source_hash: str,
+    segment: ExtractedSegment,
+) -> str:
+    payload = json.dumps(
+        {
+            "materialId": material_id,
+            "sourceHash": source_hash,
+            "kind": segment.kind,
+            "label": segment.label,
+            "meta": segment.meta,
+            "textHash": hashlib.sha256(segment.text.encode("utf-8")).hexdigest(),
+        },
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+    )
+    return "ev-" + hashlib.sha256(payload.encode("utf-8")).hexdigest()[:32]
+
+
+def _write_evidence_manifest(
+    materials_root: Path,
+    *,
+    material_id: str,
+    source_rel: str,
+    source_hash: str,
+    segments: list[ExtractedSegment],
+) -> None:
+    units: list[dict[str, Any]] = []
+    for segment in segments:
+        if not segment.text.strip():
+            continue
+        units.append(
+            {
+                "id": _evidence_id(
+                    material_id=material_id,
+                    source_hash=source_hash,
+                    segment=segment,
+                ),
+                "kind": segment.kind,
+                "label": segment.label,
+                "location": segment.meta,
+                "textHash": hashlib.sha256(segment.text.encode("utf-8")).hexdigest(),
+                "status": "uncovered",
+                "wikiRefs": [],
+            }
+        )
+    manifest = {
+        "schemaVersion": 1,
+        "materialId": material_id,
+        "source": source_rel,
+        "sourceHash": source_hash,
+        "units": units,
+    }
+    path = materials_root / "evidence" / f"{material_id}.json"
+    _atomic_write_text(
+        path,
+        json.dumps(manifest, ensure_ascii=False, indent=2) + "\n",
+    )
+
+
+def _write_uncovered_evidence_manifest(
+    materials_root: Path,
+    *,
+    material_id: str,
+    source_rel: str,
+    source_hash: str,
+    kind: str,
+    reason: str,
+) -> None:
+    unit_id = "ev-" + hashlib.sha256(
+        f"{material_id}\0{source_hash}\0{kind}\0{reason}".encode("utf-8")
+    ).hexdigest()[:32]
+    manifest = {
+        "schemaVersion": 1,
+        "materialId": material_id,
+        "source": source_rel,
+        "sourceHash": source_hash,
+        "units": [
+            {
+                "id": unit_id,
+                "kind": kind,
+                "label": Path(source_rel).name,
+                "location": {},
+                "textHash": "",
+                "status": "uncovered",
+                "reason": reason,
+                "wikiRefs": [],
+            }
+        ],
+    }
+    _atomic_write_text(
+        materials_root / "evidence" / f"{material_id}.json",
+        json.dumps(manifest, ensure_ascii=False, indent=2) + "\n",
+    )
+
+
 def _read_existing_material_id(text_path: Path) -> str | None:
     """读取已有 text/ 文件的 material ID（重新提取时保留稳定身份）。"""
     try:
@@ -164,8 +331,21 @@ def _render_text_document(
     sha256: str,
     size: int,
     mtime_ns: int,
+    status: str = "ok",
 ) -> str:
     """渲染 text/ markdown：frontmatter 元数据 + 带位置标记的 segments。"""
+    extension = Path(source_rel).suffix.lower()
+    base_fidelity = {
+        ".pdf": "text_only",
+        ".docx": "paragraphs_only",
+        ".pptx": "visible_text_only",
+        ".xlsx": "cell_values",
+    }.get(extension, "full_text")
+    extraction_fidelity = (
+        "text_and_visual"
+        if any(segment.kind == "visual" for segment in segments)
+        else base_fidelity
+    )
     fm = _render_frontmatter({
         "id": material_id,
         "source": source_rel,
@@ -173,13 +353,23 @@ def _render_text_document(
         "size": size,
         "mtimeNs": mtime_ns,
         "extractorVersion": EXTRACTOR_VERSION,
-        "status": "ok",
+        "extractionFidelity": extraction_fidelity,
+        "status": status,
         "truncated": "false",
         "extractedAt": datetime.now().isoformat(timespec="seconds"),
     })
     parts: list[str] = [fm]
     for seg in segments:
-        marker = {"kind": seg.kind, "label": seg.label, **seg.meta}
+        marker = {
+            "id": _evidence_id(
+                material_id=material_id,
+                source_hash=sha256,
+                segment=seg,
+            ),
+            "kind": seg.kind,
+            "label": seg.label,
+            **seg.meta,
+        }
         parts.append(f"<!-- seg {json.dumps(marker, ensure_ascii=False)} -->")
         parts.append(f"## {seg.label}")
         parts.append("")
@@ -197,11 +387,11 @@ def _read_raw_freshness(raw_path: Path) -> tuple[str, int, int] | None:
     return _sha256_of(raw_path), stat.st_size, stat.st_mtime_ns
 
 
-async def _extract_one(vault: Path, materials_root: Path, raw_rel_path: str) -> None:
+async def _extract_one(vault: Path, materials_root: Path, raw_rel_path: str) -> str | None:
     """提取单个文件并写入 text/（同步解析放到线程池执行）。
 
     产物 frontmatter 携带稳定 material ID、sha256、size、mtimeNs 和
-    extractorVersion；失败时写入 error 状态文件，图片写 unsupported。
+    extractorVersion；失败时写入 error 状态文件。
     """
     raw_path = materials_root / "raw" / raw_rel_path
     text_path = _text_path_for_raw(raw_rel_path, materials_root)
@@ -217,24 +407,6 @@ async def _extract_one(vault: Path, materials_root: Path, raw_rel_path: str) -> 
 
         material_id = _read_existing_material_id(text_path) or f"material-{uuid.uuid4()}"
 
-        if raw_path.suffix.lower() in IMAGE_EXTENSIONS:
-            fm = _render_frontmatter({
-                "id": material_id,
-                "source": raw_rel_path,
-                "sha256": sha256,
-                "size": size,
-                "mtimeNs": _mtime_ns,
-                "extractorVersion": EXTRACTOR_VERSION,
-                "status": "unsupported",
-                "extractedAt": datetime.now().isoformat(timespec="seconds"),
-            })
-            _atomic_write_text(
-                text_path,
-                fm + f"\n[image: {raw_path.name}]（图片内容暂不支持检索）\n",
-            )
-            logger.info("materials: image marked unsupported {}", raw_rel_path)
-            return
-
         # extract_segments 是同步阻塞调用，放到线程池
         result = await asyncio.wait_for(
             asyncio.to_thread(extract_segments, raw_path),
@@ -244,7 +416,29 @@ async def _extract_one(vault: Path, materials_root: Path, raw_rel_path: str) -> 
             raise RuntimeError("unsupported file type")
         if isinstance(result, str):
             raise RuntimeError(result)
-        if result and all(not seg.text.strip() for seg in result):
+        from mona.materials.vision import extract_visual_segments
+
+        extraction_dir = materials_root / "evidence" / "extraction" / sha256
+        _atomic_write_text(
+            extraction_dir / "text.md",
+            _render_text_document(
+                result, material_id=material_id, source_rel=raw_rel_path,
+                sha256=sha256, size=size, mtime_ns=_mtime_ns, status="partial",
+            ),
+        )
+        visual_segments = await extract_visual_segments(
+            raw_path, cache_dir=extraction_dir / "visual",
+        )
+        result = [*result, *visual_segments]
+        if not result or all(not seg.text.strip() for seg in result):
+            _write_uncovered_evidence_manifest(
+                materials_root,
+                material_id=material_id,
+                source_rel=raw_rel_path,
+                source_hash=sha256,
+                kind="document",
+                reason="no text extracted; OCR may be required",
+            )
             raise RuntimeError("未能提取到文本，可能是扫描件，需要 OCR")
 
         document = _render_text_document(
@@ -256,22 +450,31 @@ async def _extract_one(vault: Path, materials_root: Path, raw_rel_path: str) -> 
             mtime_ns=_mtime_ns,
         )
         _atomic_write_text(text_path, document)
-        sync_write_point(vault, text_files=[text_path])
+        _write_evidence_manifest(
+            materials_root,
+            material_id=material_id,
+            source_rel=raw_rel_path,
+            source_hash=sha256,
+            segments=result,
+        )
+        sync_write_point(vault, library_root=materials_root, text_files=[text_path])
         logger.info("materials: extracted {}", raw_rel_path)
+        return None
     except asyncio.TimeoutError:
         _mark_text_error(text_path, raw_rel_path, "提取超时")
         logger.warning("materials: extract timeout {}", raw_rel_path)
+        return "提取超时"
     except Exception as e:
         _mark_text_error(text_path, raw_rel_path, str(e))
         logger.exception("materials: extract failed {}", raw_rel_path)
+        return str(e) or "资料解析失败"
 
 
 async def _extract_in_background(
     vault: Path, materials_root: Path, raw_rel_path: str
 ) -> None:
     """调度后台提取任务（同一路径去重）。"""
-    task_key = raw_rel_path
-
+    task_key = f"{materials_root.resolve()}\0{raw_rel_path}"
     tasks_for_vault = _EXTRACT_TASKS.setdefault(vault, {})
     existing = tasks_for_vault.get(task_key)
     if existing is not None and not existing["task"].done():
@@ -296,6 +499,14 @@ def _mark_text_error(text_path: Path, source_rel: str, error: str) -> None:
     标记写入本身失败（如磁盘错误）时只记录日志——不覆盖已有完整文件，
     也不让后台任务因二次异常崩溃。
     """
+    if text_path.exists():
+        try:
+            existing_fm, _ = _parse_frontmatter(text_path.read_text(encoding="utf-8"))
+        except OSError:
+            existing_fm = {}
+        if existing_fm.get("status") == "ok":
+            # A failed re-read must not destroy the last complete evidence layer.
+            return
     material_id = _read_existing_material_id(text_path) or f"material-{uuid.uuid4()}"
     fm = _render_frontmatter({
         "id": material_id,
@@ -335,8 +546,13 @@ def _read_text_status(
 ) -> dict[str, Any]:
     """读取 text/ 文件状态：queued/running/ok/error/unsupported/stale。"""
     if not text_path.exists():
-        if vault is not None and raw_rel is not None:
-            entry = _EXTRACT_TASKS.get(vault, {}).get(raw_rel)
+        if raw_rel is not None and raw_path is not None:
+            root = raw_path
+            for _ in Path(raw_rel).parts:
+                root = root.parent
+            task_key = f"{root.parent.resolve()}\0{raw_rel}"
+            tasks = _EXTRACT_TASKS.get(vault, {}) if vault is not None else {}
+            entry = tasks.get(task_key) or tasks.get(raw_rel)
             if entry is not None and not entry["task"].done():
                 return {"status": entry["state"]}
         return {"status": "queued"}
@@ -402,14 +618,85 @@ def _wiki_ingest_states(root: Path) -> dict[str, str]:
     return states
 
 
+async def handle_materials_list_libraries(_req: web.Request) -> web.Response:
+    vault = _require_vault()
+    return web.json_response({"libraries": list_libraries(vault)})
+
+
+async def handle_materials_create_library(req: web.Request) -> web.Response:
+    vault = _require_vault()
+    body = await req.json()
+    try:
+        library = create_library(
+            vault,
+            str(body.get("name", "")),
+            str(body.get("description", "")),
+        )
+    except ValueError as exc:
+        raise web.HTTPBadRequest(reason=str(exc)) from exc
+    return web.json_response({"library": library}, status=201)
+
+
+async def handle_materials_update_library(req: web.Request) -> web.Response:
+    vault = _require_vault()
+    body = await req.json()
+    try:
+        library = update_library(
+            vault,
+            req.match_info.get("library_id", ""),
+            name=body.get("name"),
+            description=body.get("description"),
+        )
+    except KeyError as exc:
+        raise web.HTTPNotFound(reason=str(exc)) from exc
+    except ValueError as exc:
+        raise web.HTTPBadRequest(reason=str(exc)) from exc
+    return web.json_response({"library": library})
+
+
+async def handle_materials_delete_library(req: web.Request) -> web.Response:
+    vault = _require_vault()
+    try:
+        target = remove_library(vault, req.match_info.get("library_id", ""))
+    except KeyError as exc:
+        raise web.HTTPNotFound(reason=str(exc)) from exc
+    except ValueError as exc:
+        raise web.HTTPBadRequest(reason=str(exc)) from exc
+    shutil.rmtree(target, ignore_errors=False)
+    affected_agents: list[str] = []
+    from mona.agent.user_config import load_agent_user_config, save_agent_user_config
+    from mona.config.paths import get_agents_dir
+
+    for agent_dir in get_agents_dir().iterdir():
+        if not agent_dir.is_dir() or not (agent_dir / "config.json").is_file():
+            continue
+        config = load_agent_user_config(agent_dir.name)
+        scope = config.knowledge_base_scope
+        if scope.mode != "specific" or target.name not in scope.knowledge_base_ids:
+            continue
+        save_agent_user_config(
+            agent_dir.name,
+            {
+                "knowledge_base_scope": {
+                    "mode": "specific",
+                    "knowledge_base_ids": [
+                        value for value in scope.knowledge_base_ids if value != target.name
+                    ],
+                }
+            },
+            expected_revision=None,
+        )
+        affected_agents.append(agent_dir.name)
+    return web.json_response({"deleted": target.name, "affectedAgents": affected_agents})
+
+
 async def handle_materials_list_files(req: web.Request) -> web.Response:
     """GET /api/materials/files — 递归列出 raw/ 下的文件和目录树。
 
     查询参数：
       - subdir: 可选，相对于 raw/ 的子目录，默认为空（列根目录）
     """
-    vault = _require_vault()
-    root = _materials_root(vault)
+    vault, root = _request_materials_context(req)
     raw_root = root / "raw"
     subdir = req.query.get("subdir", "").strip()
     target = raw_root
@@ -457,8 +744,7 @@ async def handle_materials_create_directory(req: web.Request) -> web.Response:
 
     Body: { "path": "relative/path" }
     """
-    vault = _require_vault()
-    root = _materials_root(vault)
+    vault, root = _request_materials_context(req)
     body = await req.json()
     rel = _clean_rel(body.get("path", ""))
     raw_root = root / "raw"
@@ -469,8 +755,7 @@ async def handle_materials_create_directory(req: web.Request) -> web.Response:
 
 async def handle_materials_delete(req: web.Request) -> web.Response:
     """DELETE /api/materials/files/{path:.*} — 删除 raw/ 下的文件或目录，同步删除 text/ 对应文件。"""
-    vault = _require_vault()
-    root = _materials_root(vault)
+    vault, root = _request_materials_context(req)
     raw_root = root / "raw"
     rel = _clean_rel(req.match_info.get("path", ""))
 
@@ -510,7 +795,11 @@ async def handle_materials_delete(req: web.Request) -> web.Response:
             logger.warning("materials: text cleanup incomplete for {}", rel)
 
     if removed_ids:
-        sync_write_point(vault, removed_ids=removed_ids)
+        for material_id in removed_ids:
+            manifest = root / "evidence" / f"{material_id}.json"
+            if manifest.exists():
+                manifest.unlink()
+        sync_write_point(vault, library_root=root, removed_ids=removed_ids)
 
     return web.json_response({"deleted": rel})
 
@@ -542,14 +831,31 @@ def _rewrite_text_frontmatter_source(text_path: Path, new_source_rel: str) -> No
     _atomic_write_text(text_path, "---" + "\n".join(new_lines) + content[end:])
 
 
+def _rewrite_evidence_manifest_source(
+    root: Path, text_path: Path, new_source_rel: str
+) -> None:
+    material_id = _read_existing_material_id(text_path)
+    if not material_id:
+        return
+    manifest_path = root / "evidence" / f"{material_id}.json"
+    try:
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return
+    manifest["source"] = new_source_rel
+    _atomic_write_text(
+        manifest_path,
+        json.dumps(manifest, ensure_ascii=False, indent=2) + "\n",
+    )
+
+
 async def handle_materials_move(req: web.Request) -> web.Response:
     """POST /api/materials/move — 移动 raw/ 下的文件或目录，同步移动 text/ 对应文件。
 
     Body: { "source": "relative/path", "targetDir": "relative/dir" }
     targetDir 为空字符串表示移到 raw/ 根目录。
     """
-    vault = _require_vault()
-    root = _materials_root(vault)
+    vault, root = _request_materials_context(req)
     raw_root = root / "raw"
     body = await req.json()
     source_rel = _clean_rel(body.get("source", ""))
@@ -595,6 +901,7 @@ async def handle_materials_move(req: web.Request) -> web.Response:
             # 更新 text frontmatter 的 source 路径（material ID 不变）
             if src_is_file:
                 _rewrite_text_frontmatter_source(new_text, new_rel)
+                _rewrite_evidence_manifest_source(root, new_text, new_rel)
                 moved_text_mds.append(new_text)
             else:
                 for moved_md in new_text.rglob("*.md"):
@@ -606,13 +913,16 @@ async def handle_materials_move(req: web.Request) -> web.Response:
                     _rewrite_text_frontmatter_source(
                         moved_md, f"{new_rel}/{old_source_rel}"
                     )
+                    _rewrite_evidence_manifest_source(
+                        root, moved_md, f"{new_rel}/{old_source_rel}"
+                    )
                     moved_text_mds.append(moved_md)
     except OSError:
         shutil.move(str(dst), str(src))
         raise
 
     if moved_text_mds:
-        sync_write_point(vault, text_files=moved_text_mds)
+        sync_write_point(vault, library_root=root, text_files=moved_text_mds)
 
     return web.json_response({
         "source": source_rel,
@@ -625,8 +935,7 @@ async def handle_materials_extract(req: web.Request) -> web.Response:
 
     Body: { "path": "relative/path" }  （path 可以是文件或目录）
     """
-    vault = _require_vault()
-    root = _materials_root(vault)
+    vault, root = _request_materials_context(req)
     raw_root = root / "raw"
     body = await req.json()
     rel = _clean_rel(body.get("path", ""))
@@ -661,14 +970,15 @@ async def handle_materials_extract(req: web.Request) -> web.Response:
 
 async def handle_materials_get_text(req: web.Request) -> web.Response:
     """GET /api/materials/text/{path:.*} — 读取 text/ 下对应的提取文本。"""
-    vault = _require_vault()
-    root = _materials_root(vault)
+    vault, root = _request_materials_context(req)
     text_root = root / "text"
     rel = _clean_rel(req.match_info.get("path", ""))
 
     text_path = _ensure_within_domain(text_root / rel, text_root)
     if not text_path.exists() or not text_path.is_file():
-        raise web.HTTPNotFound(reason="text not found")
+        text_path = _archived_path(root, "text", rel)
+        if text_path is None:
+            raise web.HTTPNotFound(reason="text not found")
 
     content = text_path.read_text(encoding="utf-8")
     return web.json_response({"path": rel, "content": content})
@@ -683,14 +993,15 @@ async def handle_materials_get_raw(req: web.Request) -> web.Response:
 
     用于前端直接预览 md/html/txt 等文本文件，不经过提取流程。
     """
-    vault = _require_vault()
-    root = _materials_root(vault)
+    vault, root = _request_materials_context(req)
     raw_root = root / "raw"
     rel = _clean_rel(req.match_info.get("path", ""))
 
     raw_path = _ensure_within_domain(raw_root / rel, raw_root)
     if not raw_path.exists() or not raw_path.is_file():
-        raise web.HTTPNotFound(reason="raw file not found")
+        raw_path = _archived_path(root, "raw", rel)
+        if raw_path is None:
+            raise web.HTTPNotFound(reason="raw file not found")
 
     ext = raw_path.suffix.lower()
     if ext not in _RAW_READABLE_EXTS:
@@ -703,16 +1014,17 @@ async def handle_materials_get_raw(req: web.Request) -> web.Response:
 async def handle_materials_get_raw_binary(req: web.Request) -> web.Response:
     """GET /api/materials/raw-binary/{path:.*} — 返回 raw/ 下文件的二进制内容。
 
-    用于前端 jit-viewer 预览 docx/xlsx/pptx/pdf 等 Office 文档。
+    用于前端读取原始文档，交给 Office 编辑器或 PDF 预览。
     """
-    vault = _require_vault()
-    root = _materials_root(vault)
+    vault, root = _request_materials_context(req)
     raw_root = root / "raw"
     rel = _clean_rel(req.match_info.get("path", ""))
 
     raw_path = _ensure_within_domain(raw_root / rel, raw_root)
     if not raw_path.exists() or not raw_path.is_file():
-        raise web.HTTPNotFound(reason="raw file not found")
+        raw_path = _archived_path(root, "raw", rel)
+        if raw_path is None:
+            raise web.HTTPNotFound(reason="raw file not found")
 
     if raw_path.stat().st_size > MAX_FILE_SIZE:
         raise web.HTTPRequestEntityTooLarge(
@@ -725,8 +1037,7 @@ async def handle_materials_get_raw_binary(req: web.Request) -> web.Response:
 
 async def handle_materials_list_wiki(req: web.Request) -> web.Response:
     """GET /api/materials/wiki — 列出 wiki/ 下所有页面。"""
-    vault = _require_vault()
-    root = _materials_root(vault)
+    vault, root = _request_materials_context(req)
     wiki_dir = root / "wiki"
 
     pages: list[dict[str, Any]] = []
@@ -766,8 +1077,7 @@ async def handle_materials_list_wiki(req: web.Request) -> web.Response:
 
 async def handle_materials_get_wiki_page(req: web.Request) -> web.Response:
     """GET /api/materials/wiki/{path:.*} — 读取单个 wiki 页面。"""
-    vault = _require_vault()
-    root = _materials_root(vault)
+    vault, root = _request_materials_context(req)
     wiki_root = root / "wiki"
     rel = _clean_rel(req.match_info.get("path", ""))
 
@@ -777,6 +1087,40 @@ async def handle_materials_get_wiki_page(req: web.Request) -> web.Response:
 
     content = wiki_path.read_text(encoding="utf-8")
     return web.json_response({"path": rel, "content": content})
+
+
+async def handle_materials_get_evidence(req: web.Request) -> web.Response:
+    vault, root = _request_materials_context(req)
+    evidence_id = req.match_info.get("evidence_id", "").strip()
+    if not re.fullmatch(r"ev-[a-f0-9]{16,64}", evidence_id):
+        raise web.HTTPBadRequest(reason="invalid evidence id")
+    manifest_paths = list((root / "evidence").glob("*.json"))
+    manifest_paths.extend((root / "archive").glob("*/evidence/*.json"))
+    for manifest_path in manifest_paths:
+        try:
+            manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            continue
+        units = manifest.get("units")
+        if not isinstance(units, list):
+            continue
+        unit = next(
+            (
+                item for item in units
+                if isinstance(item, dict) and item.get("id") == evidence_id
+            ),
+            None,
+        )
+        if unit is None:
+            continue
+        return web.json_response({
+            "id": evidence_id,
+            "materialId": manifest.get("materialId"),
+            "source": manifest.get("source"),
+            "sourceHash": manifest.get("sourceHash"),
+            **unit,
+        })
+    raise web.HTTPNotFound(reason="evidence not found")
 
 
 def _ensure_wiki_frontmatter_id(content: str, existing_id: str | None = None) -> str:
@@ -831,8 +1175,7 @@ async def handle_materials_write_wiki_page(req: web.Request) -> web.Response:
 
     Body: { "path": "relative/path", "content": "markdown content" }
     """
-    vault = _require_vault()
-    root = _materials_root(vault)
+    vault, root = _request_materials_context(req)
     wiki_root = root / "wiki"
     body = await req.json()
     rel = _clean_rel(body.get("path", ""))
@@ -846,14 +1189,13 @@ async def handle_materials_write_wiki_page(req: web.Request) -> web.Response:
     existing_id = _read_wiki_existing_id(wiki_path) if wiki_path.exists() else None
     final_content = _ensure_wiki_frontmatter_id(content, existing_id)
     wiki_path.write_text(final_content, encoding="utf-8")
-    sync_write_point(vault, wiki_files=[wiki_path])
+    sync_write_point(vault, library_root=root, wiki_files=[wiki_path])
     return web.json_response({"path": rel, "bytes": len(final_content)})
 
 
 async def handle_materials_delete_wiki_page(req: web.Request) -> web.Response:
     """DELETE /api/materials/wiki/{path:.*} — 删除 wiki 页面。"""
-    vault = _require_vault()
-    root = _materials_root(vault)
+    vault, root = _request_materials_context(req)
     wiki_root = root / "wiki"
     rel = _clean_rel(req.match_info.get("path", ""))
 
@@ -866,7 +1208,7 @@ async def handle_materials_delete_wiki_page(req: web.Request) -> web.Response:
         fallback_id = f"wiki-{rel}"
         if fallback_id != existing_id:
             removed.append(fallback_id)
-        sync_write_point(vault, removed_ids=removed)
+        sync_write_point(vault, library_root=root, removed_ids=removed)
     return web.json_response({"deleted": rel})
 
 
@@ -881,7 +1223,7 @@ async def handle_materials_search(req: web.Request) -> web.Response:
     结果 path 约定：source 为相对 raw/ 的路径，wiki 为相对 wiki/ 的路径；
     locationLabel/stale 由索引透传（写入点同步保证新鲜，reconcile 兜底）。
     """
-    vault = _require_vault()
+    vault, root = _request_materials_context(req)
     query = req.query.get("q", "").strip()
     if not query:
         return web.json_response({"results": []})
@@ -895,7 +1237,7 @@ async def handle_materials_search(req: web.Request) -> web.Response:
     from mona.materials.index import MaterialsIndex
 
     index = MaterialsIndex(
-        vault / ".mona" / "materials" / "index.db", vault=vault
+        root / "index.db", vault=vault, library_root=root
     )
     try:
         rows = index.search(query, count=count, kinds=kinds)
@@ -926,8 +1268,7 @@ async def handle_materials_reconcile(req: web.Request) -> web.Response:
 
     进入资料页和手动刷新时由前端调用；进程重启后的任务恢复也依赖此入口。
     """
-    vault = _require_vault()
-    root = _materials_root(vault)
+    vault, root = _request_materials_context(req)
     report = await reconcile_materials(vault, root)
     return web.json_response(report)
 
@@ -952,11 +1293,6 @@ async def reconcile_materials(vault: Path, root: Path) -> dict[str, Any]:
                 if not text_path.exists():
                     _mark_text_error(text_path, raw_rel, reason or "unsupported")
                 continue
-            if raw_file.suffix.lower() in IMAGE_EXTENSIONS:
-                if not text_path.exists():
-                    await _extract_in_background(vault, root, raw_rel)
-                    requeued.append(raw_rel)
-                continue
             if not text_path.exists():
                 await _extract_in_background(vault, root, raw_rel)
                 requeued.append(raw_rel)
@@ -966,11 +1302,11 @@ async def reconcile_materials(vault: Path, root: Path) -> dict[str, Any]:
             except OSError:
                 fm = {}
             fm_status = fm.get("status")
-            if fm_status in ("ok", "unsupported") and _is_fresh(fm, raw_file):
+            if fm_status == "ok" and _is_fresh(fm, raw_file):
                 continue
-            if fm_status == "error" and "error" in fm and not fm.get("sha256"):
-                # 历史 error（从未成功提取）：重试一次，让修复后的解析器有机会成功
-                pass
+            if fm_status in ("error", "unsupported"):
+                # 失败后只允许用户显式重新学习；刷新页面不能偷偷重试。
+                continue
             await _extract_in_background(vault, root, raw_rel)
             requeued.append(raw_rel)
 
@@ -988,7 +1324,12 @@ async def reconcile_materials(vault: Path, root: Path) -> dict[str, Any]:
                 pass
             if not (raw_root / raw_rel).exists():
                 try:
+                    material_id = _read_existing_material_id(text_file)
                     text_file.unlink()
+                    if material_id:
+                        manifest = root / "evidence" / f"{material_id}.json"
+                        if manifest.exists():
+                            manifest.unlink()
                     removed_orphans.append(raw_rel)
                     # 清理空父目录
                     parent = text_file.parent
@@ -1085,17 +1426,39 @@ def _mark_wiki_stale(wiki_path: Path) -> None:
 
 async def handle_materials_status(req: web.Request) -> web.Response:
     """GET /api/materials/status — 返回资料库整体状态（文件数、提取进度等）。"""
-    vault = _require_vault()
-    root = _materials_root(vault)
+    vault, root = _request_materials_context(req)
 
     raw_dir = root / "raw"
     text_dir = root / "text"
     wiki_dir = root / "wiki"
+    evidence_dir = root / "evidence"
 
     raw_files = list(raw_dir.rglob("*")) if raw_dir.exists() else []
     raw_file_count = sum(1 for p in raw_files if p.is_file())
     text_files = list(text_dir.rglob("*.md")) if text_dir.exists() else []
     wiki_files = list(wiki_dir.rglob("*.md")) if wiki_dir.exists() else []
+    evidence_counts = {"represented": 0, "excluded": 0, "uncovered": 0}
+    manifest_material_ids: set[str] = set()
+    if evidence_dir.exists():
+        for manifest_path in evidence_dir.glob("*.json"):
+            try:
+                manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+            except (OSError, json.JSONDecodeError):
+                continue
+            units = manifest.get("units")
+            material_id = manifest.get("materialId")
+            if isinstance(material_id, str) and material_id:
+                manifest_material_ids.add(material_id)
+            if not isinstance(units, list):
+                continue
+            for unit in units:
+                status = unit.get("status") if isinstance(unit, dict) else "uncovered"
+                key = status if status in evidence_counts else "uncovered"
+                evidence_counts[key] += 1
+    for text_file in text_files:
+        material_id = _read_existing_material_id(text_file)
+        if material_id and material_id not in manifest_material_ids:
+            evidence_counts["uncovered"] += 1
 
     # 统计提取状态（queued/running/ok/error/unsupported/stale）
     counts: dict[str, int] = {}
@@ -1112,6 +1475,10 @@ async def handle_materials_status(req: web.Request) -> web.Response:
         "rawFiles": raw_file_count,
         "textFiles": len(text_files),
         "wikiFiles": len(wiki_files),
+        "evidence": {
+            **evidence_counts,
+            "complete": evidence_counts["uncovered"] == 0,
+        },
         "extract": counts,
         "rawRoot": str(raw_dir),
         "vaultRoot": str(vault),
@@ -1123,10 +1490,10 @@ async def handle_materials_lint(req: web.Request) -> web.Response:
 
     只报告不修复；前端可把报告注入 Agent 面板走「让 Mona 修复」流程。
     """
-    vault = _require_vault()
+    vault, root = _request_materials_context(req)
     from mona.materials.lint import lint_materials
 
-    report = lint_materials(vault)
+    report = lint_materials(vault, root=root)
     return web.json_response(report)
 
 

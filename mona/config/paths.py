@@ -264,6 +264,14 @@ def get_agent_skills_dir(agent_id: str) -> Path:
     return _get_agent_resource_dir(agent_id, "skills")
 
 
+def get_agent_knowledge_dir(agent_id: str) -> Path:
+    """Return the independent LLM Wiki store owned by one Agent."""
+    root = _get_agent_resource_dir(agent_id, "knowledge")
+    for name in ("raw", "text", "evidence", "wiki"):
+        ensure_dir(root / name)
+    return root
+
+
 def _get_agent_resource_dir(agent_id: str, name: str) -> Path:
     """Resolve an agent-private directory, preserving Mona's legacy fallback."""
     from mona.agent.partners import MONA_AGENT_ID, normalize_agent_id

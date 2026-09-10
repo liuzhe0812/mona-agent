@@ -14,6 +14,7 @@ class CindyModel:
     id: str
     name: str
     context_window: int | None = None
+    input_modalities: tuple[str, ...] | None = None
 
 
 @dataclass(frozen=True)
@@ -26,10 +27,30 @@ class CindyChatProvider:
     region: str | None = None
     api_key_required: bool = True
     api_base_editable: bool = False
+    thinking_style: str = ""
+
+
+_KNOWN_INPUT_MODALITIES: dict[str, tuple[str, ...]] = {
+    "qwen3.7-plus": ("text", "image"),
+    "qwen3.6-plus": ("text", "image"),
+    "qwen3.6-flash": ("text", "image"),
+    "kimi-k2.7-code": ("text", "image"),
+    "kimi-k2.6": ("text", "image"),
+    "kimi-k2.5": ("text", "image"),
+    "moonshotai/kimi-k2.6": ("text", "image"),
+    "gemini-3.6-flash": ("text", "image"),
+    "gemini-3.5-flash": ("text", "image"),
+    "gemini-3.5-flash-lite": ("text", "image"),
+    "anthropic/claude-sonnet-4.6": ("text", "image"),
+    "openai/gpt-5.4": ("text", "image"),
+}
 
 
 def _models(*rows: tuple[str, str, int | None]) -> tuple[CindyModel, ...]:
-    return tuple(CindyModel(*row) for row in rows)
+    return tuple(
+        CindyModel(*row, input_modalities=_KNOWN_INPUT_MODALITIES.get(row[0]))
+        for row in rows
+    )
 
 
 # Keep this list in Cindy preset order; Chinese Mainland entries are sorted
@@ -80,6 +101,7 @@ CINDY_CHAT_PROVIDERS: tuple[CindyChatProvider, ...] = (
     CindyChatProvider(
         "aliyun-bailian-coding", "阿里云百炼 Coding Plan（包月）", "https://coding.dashscope.aliyuncs.com/v1",
         _models(("qwen3.7-plus", "Qwen 3.7 Plus", None), ("qwen3-coder-next", "Qwen3 Coder Next", None), ("qwen3-coder-plus", "Qwen3 Coder Plus", None)), region="cn",
+        thinking_style="enable_thinking",
     ),
     CindyChatProvider(
         "aliyun-bailian-token-plan-cn", "阿里云百炼 Token Plan（个人版）", "https://token-plan.cn-beijing.maas.aliyuncs.com/compatible-mode/v1",

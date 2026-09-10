@@ -1,0 +1,99 @@
+{
+  "schemaVersion": 1,
+  "id": "editorial-magazine",
+  "name": "时代切片",
+  "description": "高对比纪实编辑风格，以稳定栅格、单一强调色和纸张内容卡承载观察、案例与人物故事。",
+  "baseTemplateId": "editorial-magazine",
+  "mode": "dark",
+  "tokens": {
+    "colors": {
+      "primary": "#E54B16",
+      "secondary": "#7D201C",
+      "accent": "#42576B",
+      "background": "#131211",
+      "surface": "#E7DDCA",
+      "textPrimary": "#F5ECDD",
+      "textSecondary": "#CBBCA5",
+      "border": "#42576B",
+      "success": "#5E8A67",
+      "warning": "#D39A2C",
+      "error": "#E54B16"
+    },
+    "typography": {
+      "headingFamily": "Noto Sans SC",
+      "bodyFamily": "Noto Serif SC",
+      "scale": "large"
+    },
+    "shape": {
+      "cardRadius": 0,
+      "cardStyle": "solid",
+      "density": "spacious",
+      "shadow": "paper",
+      "borderWidth": 0,
+      "shadowOpacity": 0.4
+    },
+    "spacing": {
+      "unit": 8,
+      "contentPadding": 80
+    }
+  },
+  "components": {
+    "cover": "cover-editorial-masthead-v1",
+    "chapter": "chapter-rule-v1",
+    "content": "content-column-v1",
+    "data": "data-editorial-stat-v1",
+    "comparison": "comparison-ledger-v1",
+    "process": "process-numbered-v1",
+    "quote": "quote-pull-v1",
+    "outro": "outro-editorial-v1"
+  },
+  "allowedLayouts": [
+    "cover-editorial-masthead",
+    "chapter-rule",
+    "content-column",
+    "data-editorial-stat",
+    "comparison-ledger",
+    "process-numbered",
+    "quote-pull",
+    "outro-editorial"
+  ],
+  "allowedAnimations": ["fade-rise", "stagger-rise", "soft-pulse", "cross-fade"],
+  "motion": {
+    "intensity": "standard",
+    "enterPreset": "fade-rise",
+    "emphasisPreset": "soft-pulse",
+    "transitionPreset": "cross-fade",
+    "enterDurationMs": 620,
+    "staggerMs": 110,
+    "transitionDurationMs": 680
+  },
+  "backgrounds": {
+    "default": {
+      "assetPolicy": "none",
+      "fit": "cover",
+      "focalPoint": {"x": 0.5, "y": 0.5},
+      "overlay": {"type": "solid", "color": "#131211", "opacity": 0.78, "direction": "none"},
+      "blur": 0,
+      "tint": 0,
+      "contrastMode": "auto",
+      "safeArea": {"top": 0.1, "right": 0.1, "bottom": 0.12, "left": 0.1},
+      "fallback": "#131211"
+    },
+    "roles": {
+      "cover": {"inherit": "default"},
+      "chapter": {"inherit": "default"},
+      "content": {"inherit": "default", "assetPolicy": "episode-replaceable"},
+      "data": {"inherit": "default"},
+      "comparison": {"inherit": "default"},
+      "process": {"inherit": "default"},
+      "quote": {"inherit": "default"},
+      "outro": {"inherit": "default"}
+    }
+  },
+  "subtitle": {"position": "bottom-center", "style": "caption-rail", "maxLines": 2},
+  "aspectVariants": {
+    "16:9": {"enabled": true},
+    "9:16": {"enabled": true},
+    "1:1": {"enabled": true}
+  }
+}

@@ -9,13 +9,16 @@ from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
+from urllib.parse import quote
 
 import httpx
 from loguru import logger
 
 from mona.config.schema import ProviderConfig
+from mona.providers.mona_managed_media import MonaManagedMediaClient, MonaManagedMediaError
 from mona.providers.registry import find_by_name
 from mona.utils.helpers import detect_image_mime
+from mona.utils.image_upload import ImageUploadError, upload_image_to_mona
 
 _OPENROUTER_ATTRIBUTION_HEADERS = {
     "HTTP-Referer": "https://github.com/HKUDS/mona",
@@ -23,6 +26,8 @@ _OPENROUTER_ATTRIBUTION_HEADERS = {
     "X-OpenRouter-Categories": "cli-agent,personal-agent",
 }
 _DEFAULT_TIMEOUT_S = 120.0
+_TASK_POLL_INTERVAL_S = 2.0
+_ASYNC_TASK_TIMEOUT_S = 240.0
 _AIHUBMIX_TIMEOUT_S = 300.0
 _AIHUBMIX_ASPECT_RATIO_SIZES = {
     "1:1": "1024x1024",
@@ -36,7 +41,206 @@ _GEMINI_IMAGEN_ASPECT_RATIOS = {"1:1", "9:16", "16:9", "3:4", "4:3"}
 
 
 class ImageGenerationError(RuntimeError):
-    """Raised when the image generation provider cannot return images."""
+    """Raised when the image generation provider cannot return images.
+
+    ``code`` and ``supported_sizes`` let the agent recover from a provider
+    rejecting an output size without having to parse a human-readable error.
+    ``retry_safe`` describes whether the same request can safely be submitted
+    again.  Generation requests that time out or lose transport connectivity
+    leave that status unknown and are therefore never marked safe.
+    """
+
+    def __init__(
+        self,
+        message: str,
+        *,
+        code: str | None = None,
+        supported_sizes: list[str] | None = None,
+        retry_safe: bool = False,
+        task_id: str | None = None,
+    ) -> None:
+        super().__init__(message)
+        self.code = code
+        self.supported_sizes = list(supported_sizes or [])
+        self.retry_safe = retry_safe
+        self.task_id = task_id
+
+
+def _merge_extra_body(
+    body: dict[str, Any],
+    extra_body: dict[str, Any],
+    *,
+    protected: set[str] = frozenset(),
+) -> None:
+    """Merge provider preconfiguration without replacing request fields.
+
+    ``extra_body`` is intentionally useful when a self-hosted service needs
+    fields that Mona does not know about.  Fields that are part of the current
+    request (especially model, prompt, and dimensions) must remain authoritative.
+    Nested dictionaries are merged so a configured ``generationConfig`` or
+    ``image_config`` can retain unrelated fields while the request overrides
+    the fields it actually selected.
+    """
+    for key, value in extra_body.items():
+        if key in protected:
+            continue
+        current = body.get(key)
+        if isinstance(current, dict) and isinstance(value, dict):
+            merged = dict(value)
+            merged.update(current)
+            body[key] = merged
+        elif key not in body:
+            body[key] = value
+
+
+def _request_error(
+    label: str,
+    exc: Exception,
+    *,
+    task_id: str | None = None,
+) -> ImageGenerationError:
+    """Create a non-retryable error for an uncertain network outcome."""
+    if task_id:
+        message = (
+            f"{label} image task request failed (task_id={task_id}); "
+            "the generation result is unknown, so do not submit the request again automatically"
+        )
+    else:
+        message = (
+            f"{label} image generation request failed; cannot confirm whether the request "
+            "was submitted, so it is unsafe to retry automatically"
+        )
+    if str(exc):
+        message = f"{message}: {exc}"
+    return ImageGenerationError(
+        message,
+        code="IMAGE_GENERATION_UNCERTAIN",
+        retry_safe=False,
+        task_id=task_id,
+    )
+
+
+def _response_json(response: httpx.Response) -> Any:
+    try:
+        return response.json()
+    except (TypeError, ValueError):
+        return None
+
+
+def _structured_error_values(payload: Any, key: str) -> list[str]:
+    """Read an explicitly structured error list without parsing free text."""
+    if isinstance(payload, dict):
+        value = payload.get(key)
+        if isinstance(value, list):
+            result: list[str] = []
+            for item in value:
+                if isinstance(item, str) and item.strip() and item.strip() not in result:
+                    result.append(item.strip())
+            return result
+        for child_key in ("error", "details", "metadata", "data"):
+            child = payload.get(child_key)
+            values = _structured_error_values(child, key)
+            if values:
+                return values
+    elif isinstance(payload, list):
+        for child in payload:
+            values = _structured_error_values(child, key)
+            if values:
+                return values
+    return []
+
+
+def _structured_error_code(payload: Any) -> str:
+    if isinstance(payload, dict):
+        for key in ("code", "type", "reason", "category"):
+            value = payload.get(key)
+            if isinstance(value, str) and value.strip():
+                return value.strip().lower()
+        for child_key in ("error", "details", "metadata", "data"):
+            value = _structured_error_code(payload.get(child_key))
+            if value:
+                return value
+    elif isinstance(payload, list):
+        for child in payload:
+            value = _structured_error_code(child)
+            if value:
+                return value
+    return ""
+
+
+def _is_auth_or_quota_error(payload: Any) -> bool:
+    code = _structured_error_code(payload)
+    if not code:
+        return False
+    return any(
+        marker in code
+        for marker in (
+            "auth",
+            "api_key",
+            "apikey",
+            "permission",
+            "credential",
+            "quota",
+            "billing",
+            "credit",
+            "rate_limit",
+            "ratelimit",
+        )
+    )
+
+
+def _http_image_generation_error(
+    response: httpx.Response,
+    *,
+    label: str,
+) -> ImageGenerationError:
+    """Turn an HTTP error into a structured provider error."""
+    payload = _response_json(response)
+    if response.status_code in (400, 422) and not _is_auth_or_quota_error(payload):
+        supported_sizes = _structured_error_values(payload, "supported_sizes")
+        if not supported_sizes:
+            supported_sizes = _structured_error_values(payload, "allowed_sizes")
+        if supported_sizes:
+            return ImageGenerationError(
+                f"{label} rejected the requested image size; supported sizes: "
+                + ", ".join(supported_sizes),
+                code="UNSUPPORTED_IMAGE_SIZE",
+                supported_sizes=supported_sizes,
+                retry_safe=True,
+            )
+        error = payload.get("error", {}) if isinstance(payload, dict) else {}
+        if isinstance(error, dict) and error.get("param") in {"size", "image_size", "aspect_ratio", "resolution", "width", "height"}:
+            return ImageGenerationError(
+                f"{label} rejected the requested image output (HTTP {response.status_code}): {_http_error_detail(response)}",
+                code="UNSUPPORTED_IMAGE_SIZE",
+                retry_safe=True,
+            )
+    detail = _http_error_detail(response)
+    if response.status_code in (401, 403):
+        code = "IMAGE_AUTHENTICATION_FAILED"
+    elif response.status_code == 402:
+        code = "IMAGE_QUOTA_EXCEEDED"
+    elif response.status_code == 429:
+        code = "IMAGE_RATE_LIMITED"
+    elif response.status_code >= 500:
+        code = "IMAGE_PROVIDER_UNAVAILABLE"
+    else:
+        code = "IMAGE_GENERATION_FAILED"
+    return ImageGenerationError(
+        f"{label} image generation failed (HTTP {response.status_code}): {detail}",
+        code=code,
+    )
+
+
+def _parse_image_dimensions(value: str) -> tuple[int, int] | None:
+    normalized = value.strip().replace("×", "x").replace("X", "x")
+    width, separator, height = normalized.partition("x")
+    if not separator or not width.isdecimal() or not height.isdecimal():
+        return None
+    width_value, height_value = int(width), int(height)
+    if width_value <= 0 or height_value <= 0:
+        return None
+    return width_value, height_value
 
 
 @dataclass(frozen=True)
@@ -82,19 +286,44 @@ def _b64_image_data_url(value: str) -> str:
     return f"data:{mime};base64,{encoded}"
 
 
-def _aihubmix_size(aspect_ratio: str | None, image_size: str | None) -> str:
+def _aihubmix_size(aspect_ratio: str | None, image_size: str | None) -> str | None:
     """Return an OpenAI Images API size string for AIHubMix.
 
-    The WebUI emits compact size hints like ``1K`` for OpenRouter. AIHubMix's
-    Images API expects OpenAI-style dimensions or ``auto``, so only pass
-    through explicit dimension strings and otherwise derive the closest
-    supported orientation from aspect ratio.
+    AIHubMix's Images API expects OpenAI-style dimensions.  A requested
+    concrete size is passed through unchanged; an aspect ratio uses the
+    existing known orientation mapping.  With neither value supplied, the
+    service chooses its own default.
     """
-    if image_size and "x" in image_size.lower():
-        return image_size
-    if aspect_ratio in _AIHUBMIX_ASPECT_RATIO_SIZES:
+    if image_size:
+        if image_size.strip().lower() == "auto":
+            return "auto"
+        tier = image_size.strip().upper()
+        if tier == "1K":
+            ratio = aspect_ratio or "1:1"
+            if ratio in _AIHUBMIX_ASPECT_RATIO_SIZES:
+                return _AIHUBMIX_ASPECT_RATIO_SIZES[ratio]
+            raise ImageGenerationError(
+                f"AIHubMix does not support aspect ratio '{ratio}'",
+                code="UNSUPPORTED_IMAGE_SIZE",
+                supported_sizes=sorted(set(_AIHUBMIX_ASPECT_RATIO_SIZES.values())),
+                retry_safe=True,
+            )
+        if _parse_image_dimensions(image_size) is None:
+            raise ImageGenerationError(
+                f"AIHubMix does not support image size '{image_size}'; "
+                "use a concrete WIDTHxHEIGHT size or the provider default 1K",
+                code="UNSUPPORTED_IMAGE_SIZE",
+                supported_sizes=sorted(set(_AIHUBMIX_ASPECT_RATIO_SIZES.values())),
+                retry_safe=True,
+            )
+        return image_size.strip()
+    if aspect_ratio:
+        if aspect_ratio not in _AIHUBMIX_ASPECT_RATIO_SIZES:
+            raise ImageGenerationError(
+                f"AIHubMix does not support aspect ratio '{aspect_ratio}'"
+            )
         return _AIHUBMIX_ASPECT_RATIO_SIZES[aspect_ratio]
-    return "auto"
+    return None
 
 
 def _aihubmix_model_path(model: str) -> str:
@@ -109,7 +338,10 @@ async def _download_image_data_url(
     client: httpx.AsyncClient,
     url: str,
 ) -> str:
-    response = await client.get(url)
+    try:
+        response = await client.get(url)
+    except (httpx.TimeoutException, httpx.RequestError) as exc:
+        raise _request_error("Generated image download", exc) from exc
     try:
         response.raise_for_status()
     except httpx.HTTPStatusError as exc:
@@ -168,6 +400,9 @@ def image_gen_provider_configs(config: Any) -> dict[str, Any]:
             continue
         pc = getattr(providers_cfg, field_name, None)
         if isinstance(pc, ProviderConfig) and (pc.api_key or pc.api_base):
+            result[field_name] = pc
+    for field_name, pc in getattr(providers_cfg, "cindy", {}).items():
+        if isinstance(pc, ProviderConfig):
             result[field_name] = pc
     return result
 
@@ -239,10 +474,13 @@ class ImageGenerationProvider(ABC):
         headers: dict[str, str],
         body: dict[str, Any],
     ) -> httpx.Response:
-        if self._client is not None:
-            return await self._client.post(url, headers=headers, json=body)
-        async with httpx.AsyncClient(timeout=self.timeout) as c:
-            return await c.post(url, headers=headers, json=body)
+        try:
+            if self._client is not None:
+                return await self._client.post(url, headers=headers, json=body)
+            async with httpx.AsyncClient(timeout=self.timeout) as c:
+                return await c.post(url, headers=headers, json=body)
+        except (httpx.TimeoutException, httpx.RequestError) as exc:
+            raise _request_error(self.provider_name or "Image", exc) from exc
 
 
 class OpenRouterImageGenerationClient(ImageGenerationProvider):
@@ -293,7 +531,20 @@ class OpenRouterImageGenerationClient(ImageGenerationProvider):
             image_config["image_size"] = image_size
         if image_config:
             body["image_config"] = image_config
-        body.update(self.extra_body)
+        _merge_extra_body(body, self.extra_body, protected={"model", "prompt", "messages"})
+        if image_config:
+            configured = body.get("image_config")
+            merged_config = (
+                {
+                    key: value
+                    for key, value in configured.items()
+                    if key not in {"size", "resolution", "width", "height", "aspect_ratio", "image_size"}
+                }
+                if isinstance(configured, dict)
+                else {}
+            )
+            merged_config.update(image_config)
+            body["image_config"] = merged_config
 
         headers = {
             "Authorization": f"Bearer {self.api_key}",
@@ -307,8 +558,7 @@ class OpenRouterImageGenerationClient(ImageGenerationProvider):
         try:
             response.raise_for_status()
         except httpx.HTTPStatusError as exc:
-            detail = response.text[:500]
-            raise ImageGenerationError(f"OpenRouter image generation failed: {detail}") from exc
+            raise _http_image_generation_error(response, label="OpenRouter") from exc
 
         data = response.json()
         images: list[str] = []
@@ -334,7 +584,6 @@ class OpenRouterImageGenerationClient(ImageGenerationProvider):
             content="\n".join(part for part in text_parts if part).strip(),
             raw=data,
         )
-
 
 class AIHubMixImageGenerationClient(ImageGenerationProvider):
     """Small async client for AIHubMix unified image generation."""
@@ -388,7 +637,7 @@ class AIHubMixImageGenerationClient(ImageGenerationProvider):
         prompt: str,
         model: str,
         reference_images: list[str],
-        size: str,
+        size: str | None,
         headers: dict[str, str],
     ) -> GeneratedImageResponse:
         image_input: str | list[str] | None = None
@@ -399,11 +648,14 @@ class AIHubMixImageGenerationClient(ImageGenerationProvider):
         input_body: dict[str, Any] = {
             "prompt": prompt,
             "n": 1,
-            "size": size,
         }
+        _merge_extra_body(input_body, self.extra_body, protected={"model", "prompt"})
         if image_input is not None:
             input_body["image"] = image_input
-        input_body.update(self.extra_body)
+        if size is not None:
+            for key in ("size", "resolution", "width", "height", "aspect_ratio", "image_config"):
+                input_body.pop(key, None)
+            input_body["size"] = size
 
         body = {"input": input_body}
         model_path = _aihubmix_model_path(model)
@@ -414,16 +666,13 @@ class AIHubMixImageGenerationClient(ImageGenerationProvider):
                 headers={**headers, "Content-Type": "application/json"},
                 json=body,
             )
-        except httpx.TimeoutException as exc:
-            raise ImageGenerationError("AIHubMix image generation timed out") from exc
-        except httpx.RequestError as exc:
-            raise ImageGenerationError(f"AIHubMix image generation request failed: {exc}") from exc
+        except (httpx.TimeoutException, httpx.RequestError) as exc:
+            raise _request_error("AIHubMix", exc) from exc
 
         try:
             response.raise_for_status()
         except httpx.HTTPStatusError as exc:
-            detail = response.text[:500]
-            raise ImageGenerationError(f"AIHubMix image generation failed: {detail}") from exc
+            raise _http_image_generation_error(response, label="AIHubMix") from exc
 
         payload = response.json()
         images = await _aihubmix_images_from_payload(client, payload)
@@ -488,7 +737,21 @@ class GeminiImageGenerationClient(ImageGenerationProvider):
                     model,
                 )
             return await self._generate_imagen(
-                prompt=prompt, model=model, aspect_ratio=aspect_ratio
+                prompt=prompt,
+                model=model,
+                aspect_ratio=aspect_ratio,
+                image_size=image_size,
+            )
+        if (
+            (image_size and image_size.strip().upper() != "1K")
+            or (aspect_ratio and aspect_ratio != "1:1")
+        ):
+            raise ImageGenerationError(
+                "Gemini Flash image generation does not support explicit output "
+                "aspect ratio or image size",
+                code="UNSUPPORTED_IMAGE_SIZE",
+                supported_sizes=["1K"],
+                retry_safe=True,
             )
         return await self._generate_gemini_flash(
             prompt=prompt, model=model, reference_images=reference_images or []
@@ -500,15 +763,31 @@ class GeminiImageGenerationClient(ImageGenerationProvider):
         prompt: str,
         model: str,
         aspect_ratio: str | None,
+        image_size: str | None = None,
     ) -> GeneratedImageResponse:
+        if image_size and image_size.strip().upper() != "1K":
+            raise ImageGenerationError(
+                "Gemini Imagen does not support this image_size; use the provider default 1K or aspect_ratio",
+                code="UNSUPPORTED_IMAGE_SIZE",
+                supported_sizes=["1K"],
+                retry_safe=True,
+            )
+        if aspect_ratio and aspect_ratio not in _GEMINI_IMAGEN_ASPECT_RATIOS:
+            raise ImageGenerationError(
+                f"Gemini Imagen does not support aspect ratio '{aspect_ratio}'"
+            )
         parameters: dict[str, Any] = {"sampleCount": 1}
-        if aspect_ratio in _GEMINI_IMAGEN_ASPECT_RATIOS:
+        if aspect_ratio:
             parameters["aspectRatio"] = aspect_ratio
         body: dict[str, Any] = {
             "instances": [{"prompt": prompt}],
             "parameters": parameters,
         }
-        body.update(self.extra_body)
+        _merge_extra_body(body, self.extra_body, protected={"prompt", "instances", "parameters"})
+        configured = body.get("parameters")
+        merged_parameters = dict(configured) if isinstance(configured, dict) else {}
+        merged_parameters.update(parameters)
+        body["parameters"] = merged_parameters
 
         url = f"{self.api_base}/models/{model}:predict"
         headers = {
@@ -521,11 +800,9 @@ class GeminiImageGenerationClient(ImageGenerationProvider):
         try:
             response.raise_for_status()
         except httpx.HTTPStatusError as exc:
-            detail = _http_error_detail(response)
-            logger.error("Gemini Imagen generation failed (HTTP {}): {}", response.status_code, detail)
-            raise ImageGenerationError(
-                f"Gemini Imagen generation failed (HTTP {response.status_code}): {detail}"
-            ) from exc
+            error = _http_image_generation_error(response, label="Gemini Imagen")
+            logger.error("Gemini Imagen generation failed (HTTP {}): {}", response.status_code, error)
+            raise error from exc
 
         data = response.json()
         images: list[str] = []
@@ -557,7 +834,11 @@ class GeminiImageGenerationClient(ImageGenerationProvider):
             "contents": [{"role": "user", "parts": parts}],
             "generationConfig": {"responseModalities": ["TEXT", "IMAGE"]},
         }
-        body.update(self.extra_body)
+        _merge_extra_body(body, self.extra_body, protected={"prompt", "contents", "generationConfig"})
+        configured = body.get("generationConfig")
+        generation_config = dict(configured) if isinstance(configured, dict) else {}
+        generation_config["responseModalities"] = ["TEXT", "IMAGE"]
+        body["generationConfig"] = generation_config
 
         url = f"{self.api_base}/models/{model}:generateContent"
         headers = {
@@ -570,11 +851,9 @@ class GeminiImageGenerationClient(ImageGenerationProvider):
         try:
             response.raise_for_status()
         except httpx.HTTPStatusError as exc:
-            detail = _http_error_detail(response)
-            logger.error("Gemini image generation failed (HTTP {}): {}", response.status_code, detail)
-            raise ImageGenerationError(
-                f"Gemini image generation failed (HTTP {response.status_code}): {detail}"
-            ) from exc
+            error = _http_image_generation_error(response, label="Gemini")
+            logger.error("Gemini image generation failed (HTTP {}): {}", response.status_code, error)
+            raise error from exc
 
         data = response.json()
         images: list[str] = []
@@ -684,10 +963,14 @@ class MiniMaxImageGenerationClient(ImageGenerationProvider):
     def _default_base_url(self) -> str:
         return "https://api.minimaxi.com/v1"
 
-    def _resolve_aspect_ratio(self, aspect_ratio: str | None) -> str:
-        if aspect_ratio and aspect_ratio in _MINIMAX_ASPECT_RATIO_SIZES:
+    def _resolve_aspect_ratio(self, aspect_ratio: str | None) -> str | None:
+        if not aspect_ratio:
+            return None
+        if aspect_ratio in _MINIMAX_ASPECT_RATIO_SIZES:
             return _MINIMAX_ASPECT_RATIO_SIZES[aspect_ratio]
-        return "1:1"
+        raise ImageGenerationError(
+            f"MiniMax does not support aspect ratio '{aspect_ratio}'"
+        )
 
     async def generate(
         self,
@@ -700,6 +983,13 @@ class MiniMaxImageGenerationClient(ImageGenerationProvider):
     ) -> GeneratedImageResponse:
         if not self.api_key:
             raise ImageGenerationError(self.missing_key_message)
+        if image_size and image_size.strip().upper() != "1K":
+            raise ImageGenerationError(
+                "MiniMax does not support this image_size; use the provider default 1K or aspect_ratio",
+                code="UNSUPPORTED_IMAGE_SIZE",
+                supported_sizes=["1K"],
+                retry_safe=True,
+            )
 
         headers = {
             "Authorization": f"Bearer {self.api_key}",
@@ -714,7 +1004,11 @@ class MiniMaxImageGenerationClient(ImageGenerationProvider):
         }
 
         resolved_ratio = self._resolve_aspect_ratio(aspect_ratio)
-        body["aspect_ratio"] = resolved_ratio
+        _merge_extra_body(body, self.extra_body, protected={"model", "prompt"})
+        if resolved_ratio is not None:
+            for key in ("size", "resolution", "width", "height", "aspect_ratio", "image_config"):
+                body.pop(key, None)
+            body["aspect_ratio"] = resolved_ratio
 
         refs = list(reference_images or [])
         if refs:
@@ -722,8 +1016,6 @@ class MiniMaxImageGenerationClient(ImageGenerationProvider):
             body["subject_reference"] = [
                 {"type": "character", "image_file": ref} for ref in image_refs
             ]
-
-        body.update(self.extra_body)
 
         client = self._client or httpx.AsyncClient(timeout=self.timeout)
         try:
@@ -741,16 +1033,13 @@ class MiniMaxImageGenerationClient(ImageGenerationProvider):
         url = f"{self.api_base}/image_generation"
         try:
             response = await client.post(url, headers=headers, json=body)
-        except httpx.TimeoutException as exc:
-            raise ImageGenerationError("MiniMax image generation timed out") from exc
-        except httpx.RequestError as exc:
-            raise ImageGenerationError(f"MiniMax image generation request failed: {exc}") from exc
+        except (httpx.TimeoutException, httpx.RequestError) as exc:
+            raise _request_error("MiniMax", exc) from exc
 
         try:
             response.raise_for_status()
         except httpx.HTTPStatusError as exc:
-            detail = response.text[:500]
-            raise ImageGenerationError(f"MiniMax image generation failed: {detail}") from exc
+            raise _http_image_generation_error(response, label="MiniMax") from exc
 
         payload = response.json()
         images = _minimax_images_from_payload(payload)
@@ -862,6 +1151,7 @@ class OpenAIImageGenerationClient(ImageGenerationProvider):
             "model": clean_model,
             "prompt": prompt,
         }
+        _merge_extra_body(body, self.extra_body, protected={"model", "prompt"})
 
         if not _openai_is_gpt_image_model(clean_model):
             body["response_format"] = "b64_json"
@@ -869,9 +1159,9 @@ class OpenAIImageGenerationClient(ImageGenerationProvider):
 
         size = _openai_size(clean_model, aspect_ratio, image_size)
         if size:
+            for key in ("size", "resolution", "width", "height", "aspect_ratio", "image_config"):
+                body.pop(key, None)
             body["size"] = size
-
-        body.update(self.extra_body)
 
         logger.debug("OpenAI Images API request: POST {}/images/generations", self.api_base)
 
@@ -884,11 +1174,9 @@ class OpenAIImageGenerationClient(ImageGenerationProvider):
         try:
             response.raise_for_status()
         except httpx.HTTPStatusError as exc:
-            detail = response.text[:1000]
-            logger.error("OpenAI Images API error ({}): {}", response.status_code, detail)
-            raise ImageGenerationError(
-                f"OpenAI image generation failed (HTTP {response.status_code}): {detail}"
-            ) from exc
+            error = _http_image_generation_error(response, label="OpenAI")
+            logger.error("OpenAI Images API error ({}): {}", response.status_code, error)
+            raise error from exc
 
         payload = response.json()
         logger.debug("OpenAI Images API response ({})", response.status_code)
@@ -913,6 +1201,25 @@ class OpenAIImageGenerationClient(ImageGenerationProvider):
 # ---------------------------------------------------------------------------
 
 
+def _image_task_id(payload: dict[str, Any]) -> str | None:
+    value = payload.get("task_id") or payload.get("image_id")
+    if isinstance(value, (str, int)) and str(value):
+        return str(value)
+    return None
+
+
+def _image_task_status(payload: dict[str, Any]) -> str:
+    value = payload.get("status") or payload.get("state")
+    return value.lower() if isinstance(value, str) else ""
+
+
+def _image_task_error(payload: dict[str, Any]) -> str:
+    value = payload.get("error") or payload.get("message")
+    if isinstance(value, dict):
+        value = value.get("message") or value.get("detail")
+    return str(value) if value else "unknown error"
+
+
 class OpenAICompatImageGenerationClient(ImageGenerationProvider):
     """Generic OpenAI-compatible Images API client.
 
@@ -923,6 +1230,7 @@ class OpenAICompatImageGenerationClient(ImageGenerationProvider):
     """
 
     provider_name = "openai_compat"
+    default_timeout = _ASYNC_TASK_TIMEOUT_S
     missing_key_message = (
         "API key is not configured for this provider. "
         "Set the provider's apiKey in the Providers settings."
@@ -937,22 +1245,16 @@ class OpenAICompatImageGenerationClient(ImageGenerationProvider):
         aspect_ratio: str | None = None,
         image_size: str | None = None,
     ) -> GeneratedImageResponse:
-        if not self.api_key:
-            raise ImageGenerationError(self.missing_key_message)
-
-        if reference_images:
-            logger.warning(
-                "OpenAI-compatible image generation does not support reference images; "
-                "ignoring {} reference image(s) for {}",
-                len(reference_images),
-                model,
-            )
-
         headers = {
-            "Authorization": f"Bearer {self.api_key}",
             "Content-Type": "application/json",
-            **self.extra_headers,
+            **{
+                key: value
+                for key, value in self.extra_headers.items()
+                if key.lower() != "authorization"
+            },
         }
+        if self.api_key:
+            headers["Authorization"] = f"Bearer {self.api_key}"
 
         body: dict[str, Any] = {
             "model": model,
@@ -960,16 +1262,28 @@ class OpenAICompatImageGenerationClient(ImageGenerationProvider):
             "n": 1,
         }
 
+        references = []
+        for value in reference_images or []:
+            if value.startswith(("http://", "https://", "data:")):
+                references.append(value)
+            else:
+                references.append(image_path_to_data_url(value))
+        if references:
+            body["reference_images"] = references
+
         # Only request b64_json for models known to support it (OpenAI native
         # models).  Third-party gateways like Agnes AI reject this parameter.
         if _model_supports_b64_response(model):
             body["response_format"] = "b64_json"
 
-        size = _openai_size(model, aspect_ratio, image_size)
-        if size:
-            body["size"] = size
-
-        body.update(self.extra_body)
+        _merge_extra_body(body, self.extra_body, protected={"model", "prompt"})
+        if image_size or aspect_ratio:
+            for key in ("size", "resolution", "width", "height", "aspect_ratio", "image_config"):
+                body.pop(key, None)
+            if image_size:
+                body["size"] = image_size.strip()
+            if aspect_ratio:
+                body["aspect_ratio"] = aspect_ratio
 
         logger.debug(
             "OpenAI-compat Images API request: POST {}/images/generations",
@@ -985,15 +1299,13 @@ class OpenAICompatImageGenerationClient(ImageGenerationProvider):
         try:
             response.raise_for_status()
         except httpx.HTTPStatusError as exc:
-            detail = response.text[:1000]
+            error = _http_image_generation_error(response, label="Image")
             logger.error(
                 "OpenAI-compat Images API error ({}): {}",
                 response.status_code,
-                detail,
+                error,
             )
-            raise ImageGenerationError(
-                f"Image generation failed (HTTP {response.status_code}): {detail}"
-            ) from exc
+            raise error from exc
 
         payload = response.json()
 
@@ -1003,6 +1315,14 @@ class OpenAICompatImageGenerationClient(ImageGenerationProvider):
             client = httpx.AsyncClient(timeout=self.timeout)
         try:
             images = await _openai_images_from_payload(client, payload)
+            if not images:
+                task_id = _image_task_id(payload)
+                if task_id:
+                    images, payload = await self._poll_task_images(
+                        client,
+                        task_id,
+                        headers,
+                    )
         finally:
             if owns_client:
                 await client.aclose()
@@ -1010,6 +1330,52 @@ class OpenAICompatImageGenerationClient(ImageGenerationProvider):
         self._require_images(images, payload)
 
         return GeneratedImageResponse(images=images, content="", raw=payload)
+
+    async def _poll_task_images(
+        self,
+        client: httpx.AsyncClient,
+        task_id: str,
+        headers: dict[str, str],
+    ) -> tuple[list[str], dict[str, Any]]:
+        loop = asyncio.get_event_loop()
+        deadline = loop.time() + self.timeout
+        task_url = f"{self.api_base}/tasks/{quote(task_id, safe='')}"
+        while True:
+            if loop.time() >= deadline:
+                raise ImageGenerationError(
+                    f"Image generation timed out after {int(self.timeout)}s (task_id={task_id}); "
+                    "the task may still be running, so do not submit the request again automatically",
+                    code="IMAGE_GENERATION_UNCERTAIN",
+                    retry_safe=False,
+                    task_id=task_id,
+                )
+            await asyncio.sleep(_TASK_POLL_INTERVAL_S)
+            try:
+                response = await client.get(task_url, headers=headers)
+            except (httpx.TimeoutException, httpx.RequestError) as exc:
+                raise _request_error("Image", exc, task_id=task_id) from exc
+            if response.status_code == 404:
+                raise ImageGenerationError(f"Image task not found: {task_id}")
+            if response.status_code >= 500:
+                logger.warning("Image task poll returned HTTP {} (will retry)", response.status_code)
+                continue
+            try:
+                response.raise_for_status()
+            except httpx.HTTPStatusError as exc:
+                raise _http_image_generation_error(response, label="Image task poll") from exc
+            payload = response.json()
+            if not isinstance(payload, dict):
+                raise ImageGenerationError("Image task returned an invalid response")
+            status = _image_task_status(payload)
+            if status in {"failed", "error"}:
+                raise ImageGenerationError(
+                    f"Image generation failed: {_image_task_error(payload)}"
+                )
+            images = await _openai_images_from_payload(client, payload)
+            if images:
+                return images, payload
+            if status in {"completed", "succeeded", "success"}:
+                raise ImageGenerationError("Image task completed but returned no images")
 
 
 # ---------------------------------------------------------------------------
@@ -1061,6 +1427,17 @@ class CodexImageGenerationClient(ImageGenerationProvider):
         if not token or not token.access:
             raise ImageGenerationError(self.missing_key_message)
 
+        if (
+            (image_size and image_size.strip().upper() != "1K")
+            or (aspect_ratio and aspect_ratio != "1:1")
+        ):
+            raise ImageGenerationError(
+                "Codex image generation supports only its default 1K 1:1 output",
+                code="UNSUPPORTED_IMAGE_SIZE",
+                supported_sizes=["1K"],
+                retry_safe=True,
+            )
+
         logger.debug("Using Codex OAuth token for image generation")
 
         if reference_images:
@@ -1089,7 +1466,11 @@ class CodexImageGenerationClient(ImageGenerationProvider):
             "stream": True,
             "store": False,
         }
-        body.update(self.extra_body)
+        _merge_extra_body(
+            body,
+            self.extra_body,
+            protected={"model", "instructions", "input", "tools", "tool_choice", "stream", "store"},
+        )
 
         logger.debug("Codex Responses API request: POST {}/codex/responses", self.api_base)
 
@@ -1102,13 +1483,14 @@ class CodexImageGenerationClient(ImageGenerationProvider):
         try:
             response.raise_for_status()
         except httpx.HTTPStatusError as exc:
-            detail = response.text[:1000]
-            logger.error("Codex Responses API error ({}): {}", response.status_code, detail)
-            raise ImageGenerationError(
-                f"Codex image generation failed (HTTP {response.status_code}): {detail}"
-            ) from exc
+            error = _http_image_generation_error(response, label="Codex")
+            logger.error("Codex Responses API error ({}): {}", response.status_code, error)
+            raise error from exc
 
-        images, content_text = await _parse_codex_sse_images(response)
+        try:
+            images, content_text = await _parse_codex_sse_images(response)
+        except (httpx.TimeoutException, httpx.RequestError) as exc:
+            raise _request_error("Codex", exc) from exc
 
         raw = {"status": "completed"}
         self._require_images(images, raw)
@@ -1126,24 +1508,43 @@ def _openai_size(
     model: str,
     aspect_ratio: str | None,
     image_size: str | None,
-) -> str:
+) -> str | None:
     """Resolve aspect ratio or image_size to an OpenAI Images API size string."""
     sizes, supported_sizes = _openai_size_options(model)
     explicit_size = _normalize_openai_image_size(image_size)
-    if explicit_size and _openai_explicit_size_supported(
-        explicit_size,
-        supported_sizes=supported_sizes,
-    ):
-        return explicit_size
     if explicit_size:
-        logger.warning(
-            "OpenAI image size '{}' is not supported by {}; using aspect ratio/default size",
+        # The built-in 1K default is represented by the existing model/ratio
+        # pixel mapping.  Higher tiers are only valid when a provider has an
+        # explicit pixel-size contract; never pretend that they were applied.
+        if explicit_size == "1k":
+            default_ratio = aspect_ratio or "1:1"
+            if default_ratio in sizes:
+                return sizes[default_ratio]
+            raise ImageGenerationError(
+                f"OpenAI image model {model} does not support aspect ratio '{default_ratio}'",
+                code="UNSUPPORTED_IMAGE_SIZE",
+                supported_sizes=sorted(set(sizes.values())),
+                retry_safe=True,
+            )
+        if not _openai_explicit_size_supported(
             explicit_size,
-            model,
-        )
-    if aspect_ratio and aspect_ratio in sizes:
+            supported_sizes=supported_sizes,
+        ):
+            raise ImageGenerationError(
+                f"OpenAI image size '{image_size}' is not supported by {model}; "
+                "use one of the supported pixel sizes",
+                code="UNSUPPORTED_IMAGE_SIZE",
+                supported_sizes=sorted(set(supported_sizes or sizes.values())),
+                retry_safe=True,
+            )
+        return explicit_size
+    if aspect_ratio:
+        if aspect_ratio not in sizes:
+            raise ImageGenerationError(
+                f"OpenAI image model {model} does not support aspect ratio '{aspect_ratio}'"
+            )
         return sizes[aspect_ratio]
-    return "1024x1024"
+    return None
 
 
 def _openai_is_gpt_image_model(model: str) -> bool:
@@ -1178,6 +1579,8 @@ def _openai_explicit_size_supported(
 ) -> bool:
     if supported_sizes is not None:
         return size in supported_sizes
+    if size == "auto":
+        return True
     width, sep, height = size.partition("x")
     return bool(sep and width.isdecimal() and height.isdecimal())
 
@@ -1197,6 +1600,12 @@ async def _openai_images_from_payload(
         b64 = item.get("b64_json")
         if isinstance(b64, str) and b64:
             images.append(_b64_image_data_url(b64))
+            continue
+        url = item.get("url")
+        if isinstance(url, str) and url:
+            images.append(await _download_image_data_url(client, url))
+    for item in payload.get("files") or []:
+        if not isinstance(item, dict):
             continue
         url = item.get("url")
         if isinstance(url, str) and url:
@@ -1362,8 +1771,7 @@ class StepFunImageGenerationClient(ImageGenerationProvider):
 
         # Map aspect ratio / image_size to StepFun size string
         size = _stepfun_size(aspect_ratio, image_size)
-        if size:
-            body["size"] = size
+        _merge_extra_body(body, self.extra_body, protected={"model", "prompt"})
 
         # step-1x-medium supports style_reference for reference-image-guided generation
         refs = list(reference_images or [])
@@ -1372,7 +1780,10 @@ class StepFunImageGenerationClient(ImageGenerationProvider):
                 "source_url": image_path_to_data_url(refs[0]),
             }
 
-        body.update(self.extra_body)
+        if size is not None:
+            for key in ("size", "resolution", "width", "height", "aspect_ratio", "image_config"):
+                body.pop(key, None)
+            body["size"] = size
 
         response = await self._http_post(
             f"{self.api_base}/images/generations",
@@ -1383,10 +1794,7 @@ class StepFunImageGenerationClient(ImageGenerationProvider):
         try:
             response.raise_for_status()
         except httpx.HTTPStatusError as exc:
-            detail = response.text[:500]
-            raise ImageGenerationError(
-                f"StepFun image generation failed: {detail}"
-            ) from exc
+            raise _http_image_generation_error(response, label="StepFun") from exc
 
         payload = response.json()
         images = _stepfun_images_from_payload(payload)
@@ -1399,18 +1807,41 @@ class StepFunImageGenerationClient(ImageGenerationProvider):
 def _stepfun_size(
     aspect_ratio: str | None,
     image_size: str | None,
-) -> str:
+) -> str | None:
     """Resolve aspect ratio / image_size to StepFun size string.
 
     StepFun expects ``WIDTHxHEIGHT`` (note: width x height, not the more
     common ``HxW`` order used by other providers).  The accepted sizes are
     ``1024x1024``, ``768x1360``, ``896x1184``, ``1360x768``, ``1184x896``.
     """
-    if image_size and "x" in image_size.lower():
-        return image_size
-    if aspect_ratio and aspect_ratio in _STEPFUN_ASPECT_RATIO_SIZES:
+    if image_size:
+        tier = image_size.strip().upper()
+        if tier == "1K":
+            ratio = aspect_ratio or "1:1"
+            if ratio in _STEPFUN_ASPECT_RATIO_SIZES:
+                return _STEPFUN_ASPECT_RATIO_SIZES[ratio]
+            raise ImageGenerationError(
+                f"StepFun does not support aspect ratio '{ratio}'",
+                code="UNSUPPORTED_IMAGE_SIZE",
+                supported_sizes=sorted(set(_STEPFUN_ASPECT_RATIO_SIZES.values())),
+                retry_safe=True,
+            )
+        if _parse_image_dimensions(image_size) is None:
+            raise ImageGenerationError(
+                f"StepFun does not support image size '{image_size}'; "
+                "use a concrete WIDTHxHEIGHT size or the provider default 1K",
+                code="UNSUPPORTED_IMAGE_SIZE",
+                supported_sizes=sorted(set(_STEPFUN_ASPECT_RATIO_SIZES.values())),
+                retry_safe=True,
+            )
+        return image_size.strip()
+    if aspect_ratio:
+        if aspect_ratio not in _STEPFUN_ASPECT_RATIO_SIZES:
+            raise ImageGenerationError(
+                f"StepFun does not support aspect ratio '{aspect_ratio}'"
+            )
         return _STEPFUN_ASPECT_RATIO_SIZES[aspect_ratio]
-    return "1024x1024"
+    return None
 
 
 def _stepfun_images_from_payload(payload: dict[str, Any]) -> list[str]:
@@ -1428,6 +1859,106 @@ def _stepfun_images_from_payload(payload: dict[str, Any]) -> list[str]:
     return images
 
 
+_MONA_IMAGE_SIZES = {
+    "1K": {
+        "1:1": "1024*1024",
+        "16:9": "1344*768",
+        "9:16": "768*1344",
+        "4:3": "1152*864",
+        "3:4": "864*1152",
+    },
+    "2K": {
+        "1:1": "2048*2048",
+        "16:9": "2048*1152",
+        "9:16": "1152*2048",
+        "4:3": "1792*1344",
+        "3:4": "1344*1792",
+    },
+}
+
+
+class MonaManagedImageGenerationClient(ImageGenerationProvider):
+    provider_name = "mona_managed"
+    missing_key_message = "请登录 Mona AI 后再使用托管图片模型"
+
+    @staticmethod
+    def _size(aspect_ratio: str | None, image_size: str | None) -> str | None:
+        if image_size:
+            normalized = image_size.strip().upper().replace("X", "*").replace("×", "*")
+            if "*" in normalized:
+                dimensions = _parse_image_dimensions(normalized.replace("*", "x"))
+                if dimensions is None:
+                    raise ImageGenerationError(
+                        f"Mona AI does not support image size '{image_size}'"
+                    )
+                return normalized
+            if normalized not in _MONA_IMAGE_SIZES:
+                raise ImageGenerationError(
+                    f"Mona AI does not support image size '{image_size}'"
+                )
+            tier = normalized
+        else:
+            if not aspect_ratio:
+                return None
+            tier = "1K"
+        if aspect_ratio:
+            sizes = _MONA_IMAGE_SIZES[tier]
+            if aspect_ratio not in sizes:
+                raise ImageGenerationError(
+                    f"Mona AI does not support aspect ratio '{aspect_ratio}'"
+                )
+            return sizes[aspect_ratio]
+        return _MONA_IMAGE_SIZES[tier]["1:1"]
+
+    async def generate(
+        self,
+        *,
+        prompt: str,
+        model: str,
+        reference_images: list[str] | None = None,
+        aspect_ratio: str | None = None,
+        image_size: str | None = None,
+    ) -> GeneratedImageResponse:
+        try:
+            references = [
+                await upload_image_to_mona(value)
+                for value in list(reference_images or [])[:3]
+            ]
+            service = MonaManagedMediaClient(client=self._client)
+            request_body: dict[str, Any] = {
+                "model": model,
+                "prompt": prompt,
+                "input_image_urls": references,
+                "n": 1,
+                "watermark": False,
+            }
+            _merge_extra_body(
+                request_body,
+                self.extra_body,
+                protected={"model", "prompt", "input_image_urls"},
+            )
+            size = self._size(aspect_ratio, image_size)
+            if size is not None:
+                request_body["size"] = size
+            payload = await service.generate(request_body)
+            assets = (payload.get("result") or {}).get("assets") or []
+            if not assets:
+                raise ImageGenerationError("Mona AI 未返回生成图片")
+            images: list[str] = []
+            for asset in assets:
+                asset_url = asset.get("url") if isinstance(asset, dict) else None
+                if not isinstance(asset_url, str) or not asset_url:
+                    raise ImageGenerationError("Mona AI 图片地址无效")
+                raw, _content_type = await service.download_asset(asset_url)
+                mime = detect_image_mime(raw)
+                if mime is None:
+                    raise ImageGenerationError("Mona AI 返回了不支持的图片格式")
+                images.append(f"data:{mime};base64,{base64.b64encode(raw).decode('ascii')}")
+            return GeneratedImageResponse(images=images, content="", raw=payload)
+        except (ImageUploadError, MonaManagedMediaError) as exc:
+            raise ImageGenerationError(str(exc)) from exc
+
+
 # ---------------------------------------------------------------------------
 # Provider registration
 # ---------------------------------------------------------------------------
@@ -1436,6 +1967,7 @@ register_image_gen_provider(AIHubMixImageGenerationClient)
 register_image_gen_provider(CodexImageGenerationClient)
 register_image_gen_provider(GeminiImageGenerationClient)
 register_image_gen_provider(MiniMaxImageGenerationClient)
+register_image_gen_provider(MonaManagedImageGenerationClient)
 register_image_gen_provider(OpenAICompatImageGenerationClient)
 register_image_gen_provider(OpenAIImageGenerationClient)
 register_image_gen_provider(OpenRouterImageGenerationClient)

@@ -33,31 +33,33 @@ export function DeleteConfirm({
   return (
     <AlertDialog open={open} onOpenChange={(o) => (!o ? onCancel() : undefined)}>
       <AlertDialogContent
-        className="w-[min(calc(100vw-2rem),22.75rem)] gap-0 rounded-2xl border border-border/60 bg-card/95 p-5 text-center shadow-lg backdrop-blur-xl data-[state=open]:zoom-in-95 sm:rounded-2xl"
+        className="w-full max-w-sm gap-0 rounded-xl border-border/70 bg-popover p-6 shadow-overlay sm:rounded-xl"
       >
-        <AlertDialogHeader className="items-center space-y-0 text-center">
-          <div className="mb-5 grid h-16 w-16 place-items-center rounded-full bg-destructive/10 text-destructive">
-            <div className="grid h-9 w-9 place-items-center rounded-full border border-destructive/20 bg-destructive/5">
-              <Trash2 className="h-5 w-5" strokeWidth={2.4} aria-hidden />
+        <AlertDialogHeader className="space-y-0 text-left">
+          <div className="flex items-start gap-3">
+            <div className="grid h-10 w-10 shrink-0 place-items-center rounded-lg bg-destructive/10 text-destructive">
+              <Trash2 className="h-5 w-5" aria-hidden />
+            </div>
+            <div className="min-w-0">
+              <AlertDialogTitle className="text-title-sm text-foreground">
+                {titleText ?? t("deleteConfirm.title", { title })}
+              </AlertDialogTitle>
+              <AlertDialogDescription className="mt-2 text-body text-muted-foreground">
+                {descriptionText ?? t("deleteConfirm.description")}
+              </AlertDialogDescription>
             </div>
           </div>
-          <AlertDialogTitle className="text-center text-title-sm font-semibold leading-tight tracking-[-0.02em] text-foreground">
-            {titleText ?? t("deleteConfirm.title", { title })}
-          </AlertDialogTitle>
-          <AlertDialogDescription className="mt-3 max-w-[17rem] text-center text-[14px] leading-6 text-muted-foreground">
-            {descriptionText ?? t("deleteConfirm.description")}
-          </AlertDialogDescription>
         </AlertDialogHeader>
-        <AlertDialogFooter className="mt-7 grid grid-cols-2 gap-3 space-x-0">
+        <AlertDialogFooter className="mt-6 gap-2 sm:space-x-0">
           <AlertDialogCancel
             onClick={onCancel}
-            className="mt-0 h-10 rounded-full border-0 bg-muted/70 px-5 text-body font-semibold text-foreground shadow-none hover:bg-muted"
+            className="text-ui"
           >
             {t("deleteConfirm.cancel")}
           </AlertDialogCancel>
           <AlertDialogAction
             onClick={onConfirm}
-            className="h-10 rounded-full bg-destructive px-5 text-body font-semibold text-destructive-foreground shadow-none hover:bg-destructive/90"
+            className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
           >
             {t("deleteConfirm.confirm")}
           </AlertDialogAction>

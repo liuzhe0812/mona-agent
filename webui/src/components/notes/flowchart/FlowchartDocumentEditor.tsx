@@ -61,14 +61,26 @@ import {
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
 
 import type { OperationNote } from "../notes-data";
-import { layoutFlowchartWithContainers } from "./flowchart-patch";
+import {
+  applyFlowchartPatch,
+  layoutFlowchartWithContainers,
+  parseFlowchartPatch,
+  routeFlowchartEdges,
+} from "./flowchart-patch";
+import {
+  recommendedFlowchartNodeSize,
+  type FlowchartQualityIssue,
+} from "./flowchart-quality";
 import {
   buildFlowchartPlainText,
   cloneFlowchartDocument,
+  computeFlowchartDocumentHash,
   computeFlowchartSemanticHash,
   DEFAULT_FLOWCHART_CANVAS,
   DEFAULT_FLOWCHART_THEME,
+  FLOWCHART_AI_NODE_KINDS,
   FLOWCHART_DOCUMENT_VERSION,
+  FLOWCHART_ICON_NAMES,
   generateFlowchartEdgeId,
   generateFlowchartNodeId,
   isFlowchartContainerKind,
@@ -455,6 +467,7 @@ function redoHistory(state: HistoryState): HistoryState {
 // ---------------------------------------------------------------------------
 
 let editorInstanceCounter = 0;
+const canvasAgentEditors = new Map<string, string[]>();
 function generateEditorInstanceId(): string {
   editorInstanceCounter += 1;
   return `flowchart-editor-${Date.now().toString(36)}-${editorInstanceCounter}`;
@@ -466,6 +479,9 @@ function generateEditorInstanceId(): string {
 
 export interface FlowchartDocumentEditorProps {
   note: OperationNote;
+  /** 明确的只读预览；不会伪装成其它标签页占用写者租约。 */
+  readOnly?: boolean;
+  readOnlyLabel?: string;
   onContentChange: (next: {
     contentMarkdown: string;
     plainText: string;
@@ -486,12 +502,24 @@ export interface FlowchartDocumentEditorProps {
   forceSync?: number;
 }
 
+interface CanvasAgentRequest {
+  requestId: string;
+  canvasId?: string;
+  action: "open" | "inspect" | "apply" | "export";
+  patch?: unknown;
+  format?: "png" | "svg";
+  includeVisual?: boolean;
+  deadlineMs?: number;
+}
+
 // ---------------------------------------------------------------------------
 // 组件
 // ---------------------------------------------------------------------------
 
 export function FlowchartDocumentEditor({
   note,
+  readOnly: forcedReadOnly = false,
+  readOnlyLabel = "只读预览",
   onContentChange,
   toolbarLeading,
   toolbarExtra,
@@ -502,12 +530,17 @@ export function FlowchartDocumentEditor({
 }: FlowchartDocumentEditorProps) {
   const editorInstanceId = useMemo(generateEditorInstanceId, []);
   const { setSelection, updateBaseHash } = useFlowchartSelection();
+  const editorRootRef = useRef<HTMLDivElement | null>(null);
   const canvasRef = useRef<FlowchartCanvasHandle | null>(null);
   const [exporting, setExporting] = useState(false);
   const [exportError, setExportError] = useState<string | null>(null);
+  const [renderQuality, setRenderQuality] = useState<{
+    status: "pending" | "ready" | "failed";
+    issues: FlowchartQualityIssue[];
+  }>({ status: "pending", issues: [] });
   const [activeTool, setActiveTool] = useState<CanvasTool>("select");
-  // 右侧属性面板（FC-UI-02）：默认展开，可关闭
-  const [inspectorOpen, setInspectorOpen] = useState(true);
+  // 右侧属性面板（FC-UI-02）：默认收起，可按需展开
+  const [inspectorOpen, setInspectorOpen] = useState(false);
   // 右键菜单上下文：null 表示关闭
   const [menuCtx, setMenuCtx] = useState<FlowchartContextMenuContext | null>(null);
   // footer 缩放显示（受控）；网格显示/吸附统一取文档 canvas.grid（FC-UI-02 单一数据源）
@@ -535,8 +568,9 @@ export function FlowchartDocumentEditor({
   const [parseError, setParseError] = useState<string | null>(null);
 
   // 8. 写者校验（提前到 state 初始化之前，因为 toFlowNode 需要 readOnly 决定是否可缩放）
-  const isWriter = !writerInstanceId || writerInstanceId === editorInstanceId;
-  const readOnly = !isWriter;
+  const ownsWriteLease = !writerInstanceId || writerInstanceId === editorInstanceId;
+  const canWrite = !forcedReadOnly && ownsWriteLease;
+  const readOnly = !canWrite;
 
   // 2. 内部历史状态
   const [history, setHistory] = useState<HistoryState>(() =>
@@ -578,6 +612,11 @@ export function FlowchartDocumentEditor({
   // 4. 选区状态
   const [selectedNodeIds, setSelectedNodeIds] = useState<string[]>([]);
   const [selectedEdgeIds, setSelectedEdgeIds] = useState<string[]>([]);
+  const agentStateRef = useRef({ canWrite, selectedNodeIds, selectedEdgeIds });
+  agentStateRef.current = { canWrite, selectedNodeIds, selectedEdgeIds };
+  const agentVisualBusyRef = useRef(false);
+  const qualityCacheRef = useRef<{ hash: string; issues: FlowchartQualityIssue[] } | null>(null);
+  const autoQualityControllerRef = useRef<AbortController | null>(null);
 
   // 5. React Flow 受控节点/边
   // v2：文档主题解析为节点默认色（优先级：节点手动覆盖 > 文档主题 > CSS token）
@@ -587,7 +626,7 @@ export function FlowchartDocumentEditor({
   );
 
   const [rfNodes, setRfNodes] = useState<Node[]>(() =>
-    parsed.ok ? parsed.document.nodes.map((n) => flowchartCanvasHelpers.toFlowNode(n, parsed.document.direction, readOnly, undefined, themeDefaults)) : [],
+    parsed.ok ? flowchartCanvasHelpers.toFlowNodes(parsed.document.nodes, parsed.document.direction, readOnly, undefined, themeDefaults) : [],
   );
   const [rfEdges, setRfEdges] = useState<Edge[]>(() =>
     parsed.ok ? parsed.document.edges.map((e) => flowchartCanvasHelpers.toFlowEdge(e)) : [],
@@ -599,7 +638,7 @@ export function FlowchartDocumentEditor({
   // 注：commitChange 必须在 handleEdgeControlPointsCommit 之前定义（被其依赖）。
   const commitChange = useCallback(
     (next: FlowchartDocument, changeKind: "layout" | "semantic", coalesceKey?: string) => {
-      if (!isWriter) return;
+      if (!canWrite) return;
       // 校验文档
       const v = validateFlowchartDocument(next);
       if (!v.ok) {
@@ -631,11 +670,259 @@ export function FlowchartDocumentEditor({
         baseRevision: revision,
       });
     },
-    [history, note.title, onContentChange, isWriter, revision],
+    [history, note.title, onContentChange, canWrite, revision],
   );
   // 同步 ref：让边控制点回调通过 ref 间接调用，避免回调依赖 history 导致的连锁重建
   commitChangeRef.current = commitChange;
   latestDocRef.current = history.present.document;
+
+  const qualityDocumentHash = useMemo(() => computeFlowchartDocumentHash(history.present.document), [history.present.document]);
+  useEffect(() => {
+    let cancelled = false;
+    const controller = new AbortController();
+    autoQualityControllerRef.current = controller;
+    setRenderQuality((current) => ({ status: "pending", issues: current.issues }));
+    const timer = window.setTimeout(() => {
+      if (agentVisualBusyRef.current || controller.signal.aborted) return;
+      const canvas = canvasRef.current;
+      if (!canvas) {
+        if (!cancelled) setRenderQuality({ status: "failed", issues: [] });
+        return;
+      }
+      void canvas.inspectQuality(controller.signal).then((issues) => {
+        if (!cancelled && !controller.signal.aborted) {
+          if (!issues.some((issue) => issue.code === "render-missing-node" || issue.code === "render-missing-edge")) {
+            qualityCacheRef.current = { hash: qualityDocumentHash, issues };
+          }
+          setRenderQuality({ status: "ready", issues });
+        }
+      }).catch(() => {
+        if (!cancelled && !controller.signal.aborted) setRenderQuality({ status: "failed", issues: [] });
+      });
+    }, 250);
+    return () => {
+      cancelled = true;
+      controller.abort();
+      window.clearTimeout(timer);
+    };
+  }, [qualityDocumentHash]);
+
+  useEffect(() => {
+    if (!isTauri()) return;
+    const instances = canvasAgentEditors.get(note.id) ?? [];
+    canvasAgentEditors.set(note.id, [...instances.filter((id) => id !== editorInstanceId), editorInstanceId]);
+    return () => {
+      const remaining = (canvasAgentEditors.get(note.id) ?? []).filter((id) => id !== editorInstanceId);
+      if (remaining.length > 0) canvasAgentEditors.set(note.id, remaining);
+      else canvasAgentEditors.delete(note.id);
+    };
+  }, [editorInstanceId, note.id]);
+
+  useEffect(() => {
+    if (!isTauri()) return;
+    let disposed = false;
+    let unlisten: (() => void) | undefined;
+    let unlistenCancel: (() => void) | undefined;
+    const requests = new Map<string, { controller: AbortController; result?: Record<string, unknown> }>();
+    void (async () => {
+      const [{ listen }, { invoke }] = await Promise.all([
+        import("@tauri-apps/api/event"),
+        import("@tauri-apps/api/core"),
+      ]);
+      if (disposed) return;
+      const stopCancelling = await listen<{ requestId: string }>("canvas-agent-cancel", ({ payload }) => {
+        requests.get(payload.requestId)?.controller.abort(new Error("画布请求已超时"));
+      });
+      if (disposed) { stopCancelling(); return; }
+      unlistenCancel = stopCancelling;
+      const stopListening = await listen<CanvasAgentRequest>("canvas-agent-request", async ({ payload }) => {
+        if (disposed) return;
+        if (!payload?.requestId || !payload.action) return;
+        if (payload.canvasId && payload.canvasId !== note.id) return;
+        if (canvasAgentEditors.get(note.id)?.at(-1) !== editorInstanceId) return;
+        const respond = async (result: Record<string, unknown>) => {
+          try {
+            await invoke("canvas_agent_respond", { requestId: payload.requestId, result });
+          } catch (error) {
+            console.error("Canvas response failed", payload.requestId, error);
+          }
+        };
+        const existing = requests.get(payload.requestId);
+        if (existing) {
+          if (existing.result) await respond(existing.result);
+          return;
+        }
+        if (payload.deadlineMs && Date.now() >= payload.deadlineMs) return;
+        const controller = new AbortController();
+        const entry: { controller: AbortController; result?: Record<string, unknown> } = { controller };
+        requests.set(payload.requestId, entry);
+        const timer = window.setTimeout(() => controller.abort(new Error("画布请求已超时")),
+          Math.max(1, (payload.deadlineMs ?? Date.now() + 25_000) - Date.now()));
+        let stage = "received";
+        const reportStage = (next: string) => {
+          stage = next;
+          void invoke("canvas_agent_stage", { requestId: payload.requestId, stage: next }).catch((error) => {
+            console.error("Canvas stage report failed", payload.requestId, error);
+          });
+        };
+        reportStage(stage);
+        let ownsVisualWork = false;
+        let failureStatus = "unavailable";
+        let result: Record<string, unknown>;
+        try {
+          const current = latestDocRef.current;
+          if (!current) throw new Error("画布尚未就绪");
+          const documentHash = computeFlowchartDocumentHash(current);
+          if (payload.action !== "open" && agentVisualBusyRef.current) throw new Error("画布正在检查或导出，请等待当前操作完成");
+          if (payload.action === "open" || payload.action === "inspect") {
+            let renderedQuality: { status: string; issues: FlowchartQualityIssue[] } = { status: "not_requested", issues: [] };
+            let visualData: string | undefined;
+            if (payload.action === "inspect") {
+              ownsVisualWork = true;
+              agentVisualBusyRef.current = true;
+              autoQualityControllerRef.current?.abort();
+              reportStage("inspect");
+              if (!canvasRef.current) throw new Error("画布尚未完成渲染");
+              const cached = qualityCacheRef.current;
+              const issues = cached?.hash === documentHash
+                ? cached.issues : await canvasRef.current.inspectQuality(controller.signal);
+              if (payload.includeVisual) {
+                reportStage("export");
+                visualData = await canvasRef.current.exportToPng({ scale: 1, background: "theme", signal: controller.signal });
+              }
+              controller.signal.throwIfAborted();
+              if (documentHash !== computeFlowchartDocumentHash(latestDocRef.current!)) {
+                failureStatus = "conflict";
+                throw new Error("检查期间画布已修改，请按当前内容重新检查");
+              }
+              renderedQuality = { status: "ready", issues };
+              if (!issues.some((issue) => issue.code === "render-missing-node" || issue.code === "render-missing-edge")) {
+                qualityCacheRef.current = { hash: documentHash, issues };
+              }
+              setRenderQuality({ status: "ready", issues });
+            }
+            result = {
+              ok: true,
+              status: "ready",
+              canvasId: note.id,
+              editorInstanceId,
+              document: cloneFlowchartDocument(current),
+              semanticHash: computeFlowchartSemanticHash(current),
+              documentHash,
+              writable: agentStateRef.current.canWrite,
+              selection: { nodeIds: agentStateRef.current.selectedNodeIds, edgeIds: agentStateRef.current.selectedEdgeIds },
+              renderedQuality,
+              ...(visualData ? { visualData } : {}),
+              capabilities: {
+                actions: ["open", "inspect", "apply", "export"],
+                maxOps: 50,
+                formats: ["png", "svg"],
+                nodeKinds: FLOWCHART_AI_NODE_KINDS,
+                icons: FLOWCHART_ICON_NAMES,
+                visualNodeFields: ["position", "size", "style", "icon", "zIndex", "rotation", "opacity", "decorative"],
+                visualEdgeFields: ["sourceHandle", "targetHandle", "sourcePort", "targetPort", "controlPoints", "style"],
+                coordinates: {
+                  positionAnchor: "top-left",
+                  bounds: "right=x+width; bottom=y+height",
+                  portRange: [0.05, 0.95],
+                  portDefault: 0.5,
+                },
+              },
+            };
+          } else if (payload.action === "apply") {
+            if (!agentStateRef.current.canWrite) throw new Error("当前画布为只读状态，无法应用修改");
+            const parsedPatch = parseFlowchartPatch(
+              `\`\`\`mona-flowchart-patch\n${JSON.stringify(payload.patch)}\n\`\`\``,
+            );
+            if (!parsedPatch.ok) {
+              result = { ok: false, status: "invalid", canvasId: note.id, message: parsedPatch.message };
+            } else {
+              reportStage("parsed");
+              const applied = applyFlowchartPatch(current, parsedPatch.patch);
+              if (!applied.ok) {
+                result = { ok: false, status: "conflict", canvasId: note.id, message: applied.message };
+              } else {
+                const unchanged = computeFlowchartDocumentHash(applied.document) === computeFlowchartDocumentHash(current);
+                if (!unchanged) {
+                  latestDocRef.current = applied.document;
+                  const changeKind = computeFlowchartSemanticHash(applied.document) === computeFlowchartSemanticHash(current)
+                    ? "layout"
+                    : "semantic";
+                  commitChangeRef.current(applied.document, changeKind);
+                }
+                reportStage("committed");
+                result = {
+                  ok: true,
+                  status: unchanged ? "unchanged" : "applied",
+                  canvasId: note.id,
+                  editorInstanceId,
+                  semanticHash: computeFlowchartSemanticHash(applied.document),
+                  documentHash: computeFlowchartDocumentHash(applied.document),
+                  summary: applied.summary,
+                  renderedQuality: { status: "not_requested", issues: [] },
+                };
+              }
+            }
+          } else {
+            ownsVisualWork = true;
+            agentVisualBusyRef.current = true;
+            autoQualityControllerRef.current?.abort();
+            reportStage("export");
+            if (!canvasRef.current) throw new Error("画布尚未完成渲染");
+            const format = payload.format ?? "png";
+            const data = format === "svg"
+              ? await canvasRef.current.exportToSvg({ background: "theme", signal: controller.signal })
+              : await canvasRef.current.exportToPng({ scale: 2, background: "theme", signal: controller.signal });
+            controller.signal.throwIfAborted();
+            if (documentHash !== computeFlowchartDocumentHash(latestDocRef.current!)) {
+              failureStatus = "conflict";
+              throw new Error("导出期间画布已修改，请按当前内容重新导出");
+            }
+            result = {
+              ok: true,
+              status: "exported",
+              canvasId: note.id,
+              editorInstanceId,
+              format,
+              documentHash,
+              data,
+            };
+          }
+        } catch (error) {
+          result = {
+            ok: false,
+            status: failureStatus,
+            stage,
+            canvasId: note.id,
+            editorInstanceId,
+            message: error instanceof Error ? error.message : String(error),
+          };
+        } finally {
+          window.clearTimeout(timer);
+          if (ownsVisualWork) agentVisualBusyRef.current = false;
+        }
+        entry.result = result;
+        for (const [id, request] of requests) {
+          if (requests.size <= 8) break;
+          if (request.result) requests.delete(id);
+        }
+        await respond(result);
+      });
+      if (disposed) {
+        stopListening();
+        return;
+      }
+      unlisten = stopListening;
+    })().catch((error) => {
+      console.error("Canvas listener registration failed", note.id, error);
+    });
+    return () => {
+      disposed = true;
+      requests.forEach(({ controller }) => controller.abort(new Error("画布已关闭")));
+      unlisten?.();
+      unlistenCancel?.();
+    };
+  }, [editorInstanceId, note.id]);
 
   // 边控制点实时变更（WPS 风格连接线调整）：拖动期间高频触发，
   // 只更新 React Flow 内部状态（rfEdges），不提交历史栈，避免历史淹没。
@@ -680,6 +967,7 @@ export function FlowchartDocumentEditor({
       } else {
         delete next.controlPoints;
       }
+      delete next.autoRouted;
       doc.edges[idx] = next;
       commitChangeRef.current(doc, "layout");
     },
@@ -689,7 +977,7 @@ export function FlowchartDocumentEditor({
   // 同步 history → React Flow
   useEffect(() => {
     const doc = history.present.document;
-    setRfNodes(doc.nodes.map((n) => flowchartCanvasHelpers.toFlowNode(n, doc.direction, readOnly, undefined, themeDefaults)));
+    setRfNodes(flowchartCanvasHelpers.toFlowNodes(doc.nodes, doc.direction, readOnly, undefined, themeDefaults));
     setRfEdges(
       doc.edges.map((e) =>
         flowchartCanvasHelpers.toFlowEdge(e, {
@@ -902,7 +1190,7 @@ export function FlowchartDocumentEditor({
     (
       kind: FlowchartNodeKind,
       position: { x: number; y: number },
-      connection: { source: string; sourceHandle?: string },
+      connection: { source: string; sourceHandle?: string; sourcePort?: number },
     ) => {
       if (readOnly) return;
       const node = createShapeNodeAtCenter(kind, position);
@@ -914,6 +1202,7 @@ export function FlowchartDocumentEditor({
         source: connection.source,
         target: node.id,
         sourceHandle: connection.sourceHandle,
+        sourcePort: connection.sourcePort,
       };
       doc.edges.push(edge);
       setSelectedNodeIds([node.id]);
@@ -1025,7 +1314,10 @@ export function FlowchartDocumentEditor({
           }
         }
         const updated: typeof e = { ...e, style: Object.keys(next).length > 0 ? next : undefined };
-        if (routeChanged) delete updated.controlPoints;
+        if (routeChanged) {
+          delete updated.controlPoints;
+          delete updated.autoRouted;
+        }
         return updated;
       });
       commitChange(doc, "layout");
@@ -1046,6 +1338,24 @@ export function FlowchartDocumentEditor({
       commitChange(doc, "layout");
     },
     [history.present.document, readOnly, commitChange],
+  );
+
+  const applyNodeIcon = useCallback(
+    (icon: FlowchartNode["icon"] | null) => {
+      if (readOnly || selectedNodeIds.length === 0) return;
+      const doc = cloneFlowchartDocument(history.present.document);
+      const idSet = new Set(selectedNodeIds);
+      doc.nodes = doc.nodes.map((node) => {
+        if (!idSet.has(node.id) || isFlowchartContainerKind(node.kind)) return node;
+        const next = { ...node };
+        if (icon) next.icon = icon;
+        else delete next.icon;
+        next.size = recommendedFlowchartNodeSize(next);
+        return next;
+      });
+      commitChange(doc, "layout");
+    },
+    [history.present.document, readOnly, selectedNodeIds, commitChange],
   );
 
   // 有手动颜色样式的节点数（样式面板“清理确认”提示用）
@@ -1572,35 +1882,34 @@ export function FlowchartDocumentEditor({
     (vp: FlowchartViewport) => {
       // footer 缩放显示始终同步（不论是否写者）
       setZoom(vp.zoom);
-      if (!isWriter) return;
-      setHistory((state) => {
-        const doc = state.present.document;
-        // 仅当变化超过阈值时才提交，避免频繁触发
-        const cur = doc.viewport;
-        if (
-          cur &&
-          Math.abs(cur.x - vp.x) < 0.5 &&
-          Math.abs(cur.y - vp.y) < 0.5 &&
-          Math.abs(cur.zoom - vp.zoom) < 0.001
-        ) {
-          return state;
-        }
-        const nextDoc = { ...doc, viewport: { x: vp.x, y: vp.y, zoom: vp.zoom } };
-        const md = serializeFlowchartMarkdown(note.title || "未命名流程图", nextDoc);
-        lastSyncedMdRef.current = md;
-        isLocalCommitRef.current = true;
-        onContentChange({
-          contentMarkdown: md,
-          plainText: buildFlowchartPlainText(note.title || "未命名流程图", nextDoc),
-          baseRevision: revision,
-        });
-        return {
-          ...state,
-          present: { ...state.present, document: nextDoc },
-        };
+      if (!canWrite) return;
+      const doc = latestDocRef.current!;
+      // 仅当变化超过阈值时才提交，避免频繁触发
+      const cur = doc.viewport;
+      if (
+        cur &&
+        Math.abs(cur.x - vp.x) < 0.5 &&
+        Math.abs(cur.y - vp.y) < 0.5 &&
+        Math.abs(cur.zoom - vp.zoom) < 0.001
+      ) {
+        return;
+      }
+      const nextDoc = { ...doc, viewport: { x: vp.x, y: vp.y, zoom: vp.zoom } };
+      latestDocRef.current = nextDoc;
+      setHistory((state) => ({
+        ...state,
+        present: { ...state.present, document: nextDoc },
+      }));
+      const md = serializeFlowchartMarkdown(note.title || "未命名流程图", nextDoc);
+      lastSyncedMdRef.current = md;
+      isLocalCommitRef.current = true;
+      onContentChange({
+        contentMarkdown: md,
+        plainText: buildFlowchartPlainText(note.title || "未命名流程图", nextDoc),
+        baseRevision: revision,
       });
     },
-    [isWriter, note.title, onContentChange, revision],
+    [canWrite, note.title, onContentChange, revision],
   );
 
   // 11. 撤销 / 重做
@@ -1784,6 +2093,7 @@ export function FlowchartDocumentEditor({
               }
             }
           }
+          routeFlowchartEdges(doc);
           commitChange(doc, membershipChanged ? "semantic" : "layout");
           return current;
         });
@@ -1815,6 +2125,8 @@ export function FlowchartDocumentEditor({
       target: string;
       sourceHandle?: string;
       targetHandle?: string;
+      sourcePort?: number;
+      targetPort?: number;
     }) => {
       if (readOnly) return;
       // 禁止自环
@@ -1826,7 +2138,9 @@ export function FlowchartDocumentEditor({
           e.source === connection.source &&
           e.target === connection.target &&
           (e.sourceHandle ?? null) === (connection.sourceHandle ?? null) &&
-          (e.targetHandle ?? null) === (connection.targetHandle ?? null),
+          (e.targetHandle ?? null) === (connection.targetHandle ?? null) &&
+          (e.sourcePort ?? 0.5) === (connection.sourcePort ?? 0.5) &&
+          (e.targetPort ?? 0.5) === (connection.targetPort ?? 0.5),
       );
       if (dup) return;
       const edge = {
@@ -1835,6 +2149,8 @@ export function FlowchartDocumentEditor({
         target: connection.target,
         sourceHandle: connection.sourceHandle,
         targetHandle: connection.targetHandle,
+        sourcePort: connection.sourcePort,
+        targetPort: connection.targetPort,
       };
       doc.edges.push(edge);
       commitChange(doc, "semantic");
@@ -1849,6 +2165,8 @@ export function FlowchartDocumentEditor({
       target: string;
       sourceHandle?: string;
       targetHandle?: string;
+      sourcePort?: number;
+      targetPort?: number;
     }) => {
       if (readOnly) return;
       if (next.source === next.target) return;
@@ -1862,7 +2180,9 @@ export function FlowchartDocumentEditor({
           e.source === next.source &&
           e.target === next.target &&
           (e.sourceHandle ?? null) === (next.sourceHandle ?? null) &&
-          (e.targetHandle ?? null) === (next.targetHandle ?? null),
+          (e.targetHandle ?? null) === (next.targetHandle ?? null) &&
+          (e.sourcePort ?? 0.5) === (next.sourcePort ?? 0.5) &&
+          (e.targetPort ?? 0.5) === (next.targetPort ?? 0.5),
       );
       if (dup) return;
       doc.edges[idx] = {
@@ -1871,8 +2191,11 @@ export function FlowchartDocumentEditor({
         target: next.target,
         sourceHandle: next.sourceHandle,
         targetHandle: next.targetHandle,
+        sourcePort: next.sourcePort,
+        targetPort: next.targetPort,
         // 端点重连后旧控制点失效，清空
         controlPoints: undefined,
+        autoRouted: undefined,
       };
       commitChange(doc, "semantic");
     },
@@ -2287,7 +2610,7 @@ export function FlowchartDocumentEditor({
 
   return (
     <TooltipProvider delayDuration={300}>
-    <div className="flex h-full min-w-0 flex-1 flex-col bg-editor-surface">
+    <div ref={editorRootRef} className="flex h-full min-w-0 flex-1 flex-col bg-editor-surface">
       {/* 工具栏 */}
       <div className="flex flex-wrap items-center gap-1 border-b border-border/60 px-3 py-1.5">
         {toolbarLeading ? (
@@ -2437,22 +2760,6 @@ export function FlowchartDocumentEditor({
 
         <div className="ml-auto flex items-center gap-2">
           {toolbarExtra}
-          {/* 属性面板开关（FC-UI-01） */}
-          <Tooltip>
-            <TooltipTrigger asChild>
-              <Button
-                variant="ghost"
-                size="icon"
-                className={cn("h-7 w-7", inspectorOpen && "bg-accent")}
-                aria-label="属性面板"
-                aria-pressed={inspectorOpen}
-                onClick={() => setInspectorOpen((v) => !v)}
-              >
-                <PanelRight className="h-3.5 w-3.5" />
-              </Button>
-            </TooltipTrigger>
-            <TooltipContent side="bottom">属性面板</TooltipContent>
-          </Tooltip>
           {/* 导出菜单（设计文档 §7.12, §7.13） */}
           <DropdownMenu>
             <Tooltip>
@@ -2493,10 +2800,28 @@ export function FlowchartDocumentEditor({
               </DropdownMenuItem>
             </DropdownMenuContent>
           </DropdownMenu>
+          {/* 属性面板开关（FC-UI-01） */}
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <Button
+                variant="ghost"
+                size="icon"
+                className={cn("h-7 w-7", inspectorOpen && "bg-accent")}
+                aria-label="属性面板"
+                aria-pressed={inspectorOpen}
+                onClick={() => setInspectorOpen((v) => !v)}
+              >
+                <PanelRight className="h-3.5 w-3.5" />
+              </Button>
+            </TooltipTrigger>
+            <TooltipContent side="bottom">属性面板</TooltipContent>
+          </Tooltip>
           {exportError && (
             <span className="text-xs text-destructive">{exportError}</span>
           )}
-          {!isWriter && (
+          {forcedReadOnly ? (
+            <span className="text-xs text-muted-foreground">{readOnlyLabel}</span>
+          ) : !ownsWriteLease && (
             <Tooltip>
               <TooltipTrigger asChild>
                 <Button
@@ -2511,7 +2836,7 @@ export function FlowchartDocumentEditor({
               <TooltipContent side="bottom">另一个标签页正在编辑此流程图</TooltipContent>
             </Tooltip>
           )}
-          {!isWriter && (
+          {!forcedReadOnly && !ownsWriteLease && (
             <span className="text-xs text-muted-foreground">
               此流程图正在另一个标签页编辑
             </span>
@@ -2520,7 +2845,7 @@ export function FlowchartDocumentEditor({
       </div>
 
       {/* 非写者提示条 */}
-      {!isWriter && (
+      {!forcedReadOnly && !ownsWriteLease && (
         <div className="flex items-center gap-2 border-b border-amber-500/40 bg-amber-500/10 px-3 py-1.5 text-xs text-amber-700 dark:text-amber-400">
           <Loader2 className="h-3 w-3 animate-spin" />
           当前为只读模式，点击"在此编辑"接管编辑权
@@ -2591,6 +2916,17 @@ export function FlowchartDocumentEditor({
             {actionNotice}
           </div>
         )}
+        {!actionNotice && renderQuality.status === "failed" ? (
+          <div className="pointer-events-none absolute bottom-4 left-1/2 z-40 -translate-x-1/2 rounded-md border border-amber-500/40 bg-card/95 px-3 py-1.5 text-xs text-amber-700 shadow-sm dark:text-amber-300">
+            画布实际渲染质检未完成
+          </div>
+        ) : null}
+        {!actionNotice && renderQuality.status === "ready" && renderQuality.issues.length > 0 ? (
+          <div className="pointer-events-none absolute bottom-4 left-1/2 z-40 max-w-[32rem] -translate-x-1/2 rounded-md border border-amber-500/40 bg-card/95 px-3 py-1.5 text-xs text-amber-700 shadow-sm dark:text-amber-300">
+            {renderQuality.issues[0].message}
+            {renderQuality.issues.length > 1 ? `，另有 ${renderQuality.issues.length - 1} 项` : ""}
+          </div>
+        ) : null}
         {/* 安全删除确认（FC-SWIM-04）：非空泳池/泳道删除前选择内容处理方式 */}
         <FlowchartSafeDeleteDialog
           open={safeDeleteTargets !== null}
@@ -2633,6 +2969,7 @@ export function FlowchartDocumentEditor({
             onCanvasSettingsChange={handleCanvasSettingsChange}
             onNodeGeometryChange={handleNodeGeometryChange}
             onNodeStyleChange={applyNodeStyle}
+            onNodeIconChange={applyNodeIcon}
             onEdgeLabelChange={handleInspectorEdgeLabelChange}
             onEdgeStyleChange={applyEdgeStyle}
             onAlign={applyAlignment}

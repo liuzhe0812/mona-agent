@@ -23,6 +23,7 @@ ALLOWED_FRONTMATTER_KEYS = {
     "allowed-tools",
 }
 ALLOWED_RESOURCE_DIRS = {"scripts", "references", "assets"}
+ALLOWED_ROOT_FILES = {"SKILL.md", "pyproject.toml", "package.json"}
 PLACEHOLDER_MARKERS = ("[todo", "todo:")
 
 
@@ -188,7 +189,7 @@ def validate_skill(skill_path):
         return False, f"'always' must be a boolean, got {type(always).__name__}"
 
     for child in skill_path.iterdir():
-        if child.name == "SKILL.md":
+        if child.is_file() and child.name in ALLOWED_ROOT_FILES:
             continue
         if child.is_dir() and child.name in ALLOWED_RESOURCE_DIRS:
             continue
@@ -197,7 +198,8 @@ def validate_skill(skill_path):
         return (
             False,
             f"Unexpected file or directory in skill root: {child.name}. "
-            "Only SKILL.md, scripts/, references/, and assets/ are allowed.",
+            "Only SKILL.md, optional pyproject.toml/package.json, scripts/, "
+            "references/, and assets/ are allowed.",
         )
 
     return True, "Skill is valid!"

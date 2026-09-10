@@ -1,8 +1,24 @@
 use std::io::Write;
+use std::path::{Path, PathBuf};
 use std::sync::Mutex;
+use tauri::Manager;
 
 use crate::python;
 use crate::settings::{self, AppSettings};
+
+pub(crate) fn office_resources_root(resource_dir: &Path, development: bool) -> PathBuf {
+    let resources = resource_dir.join("resources");
+    if development {
+        resources
+    } else {
+        // Legacy updaters replace only the gateway tree. Read Office from that
+        // same tree, never the potentially stale sibling left by old installers.
+        resources
+            .join("mona-gateway")
+            .join("_internal")
+            .join("desktop-resources")
+    }
+}
 
 pub struct ServicesProcess {
     child: Option<std::process::Child>,
@@ -80,6 +96,7 @@ impl ServicesManager {
 
             // 同 gateway：把 Rust 侧 app_data_dir 传给 Python，用于定位 email.sqlite3 等
             cmd.env("MONA_APP_DATA_DIR", settings::app_data_dir());
+            cmd.env("MONA_ENABLE_WESTOCK", "1");
 
             // Set PYTHONPATH if source tree exists.
             // Dev exe lives at <repo>/src-tauri/target/debug/mona.exe, so we
@@ -128,6 +145,14 @@ impl ServicesManager {
 
             // 同 dev 模式：把 Rust 侧 app_data_dir 传给 Python
             cmd.env("MONA_APP_DATA_DIR", settings::app_data_dir());
+            cmd.env("MONA_ENABLE_WESTOCK", "1");
+        }
+
+        if let Ok(resource_dir) = app_handle.path().resource_dir() {
+            cmd.env(
+                "MONA_RESOURCES_DIR",
+                office_resources_root(&resource_dir, cfg!(debug_assertions)),
+            );
         }
 
         #[cfg(windows)]
@@ -349,11 +374,25 @@ fn http_services_compatible(port: u16) -> bool {
 }
 
 fn services_health_response_compatible(response: &str) -> bool {
-    response
+    let status_ok = response
         .lines()
         .next()
-        .map_or(false, |line| line.contains(" 200 "))
-        && response.contains("\"stock-v1\"")
+        .map_or(false, |line| line.contains(" 200 "));
+    if !status_ok {
+        return false;
+    }
+    let body = response.split_once("\r\n\r\n").map_or("", |(_, body)| body);
+    serde_json::from_str::<serde_json::Value>(body)
+        .is_ok_and(|payload| services_payload_compatible(&payload))
+}
+
+fn services_payload_compatible(payload: &serde_json::Value) -> bool {
+    payload.get("status").and_then(|value| value.as_str()) == Some("ok")
+        && payload.get("service").and_then(|value| value.as_str()) == Some("mona-services")
+        && payload
+            .get("capabilities")
+            .and_then(|value| value.as_array())
+            .is_some_and(|values| values.iter().any(|value| value.as_str() == Some("stock-v1")))
 }
 
 /// 同步 POST /shutdown，通知外部 services 优雅退出。
@@ -411,7 +450,7 @@ mod tests {
     #[test]
     fn services_health_requires_current_capability() {
         assert!(services_health_response_compatible(
-            "HTTP/1.1 200 OK\r\n\r\n{\"status\":\"ok\",\"capabilities\":[\"stock-v1\"]}"
+            "HTTP/1.1 200 OK\r\n\r\n{\"status\":\"ok\",\"service\":\"mona-services\",\"capabilities\":[\"stock-v1\"]}"
         ));
         assert!(!services_health_response_compatible(
             "HTTP/1.1 200 OK\r\n\r\n{\"status\":\"ok\"}"
@@ -494,14 +533,16 @@ where
             return Err(msg);
         }
 
-        match client.get(&url).timeout(std::time::Duration::from_secs(2)).send().await {
-            Ok(resp) if resp.status().is_success() => {
-                log::info!("Services is ready on port {}", port);
-                return Ok(());
-            }
-            _ => {
-                tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+        if let Ok(response) = client.get(&url).timeout(std::time::Duration::from_secs(2)).send().await {
+            if response.status().is_success() {
+                if let Ok(payload) = response.json::<serde_json::Value>().await {
+                    if services_payload_compatible(&payload) {
+                        log::info!("Services is ready on port {}", port);
+                        return Ok(());
+                    }
+                }
             }
         }
+        tokio::time::sleep(std::time::Duration::from_millis(500)).await;
     }
 }

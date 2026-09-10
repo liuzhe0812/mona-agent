@@ -269,37 +269,477 @@ function renderRadar(overrides: Partial<ComponentProps<typeof DecisionRadar>> = 
 }
 
 describe("DecisionRadar", () => {
-  it("summarizes factor validation without exposing calculation internals", () => {
+  it("does not render internal quant validation regions", () => {
     const decision = {
       direction: "positive",
       action: "conditional_participation",
-      factor_score: 0.7,
-      market_percentile: 0.8,
-      industry_percentile: 0.6,
-      validation_status: "descriptive",
+      validation_status: "calibrated",
       not_holding_action: "conditional_participation",
       holding_action: "hold",
-      factor_contributions: { momentum20: 0.1, operating_cashflow: 0.2, custom_internal_factor: 0.3 },
-      materialized_plan: { boundaries: [], invalidation: [], max_risk_pct: null },
-      position_plan: { reference_position_pct: null, max_position_pct: null, risk_budget_pct: null },
+      materialized_plan: { boundaries: [], invalidation: [] },
+      position_plan: {},
     };
     renderRadar({ report: null, diagnosisMode: true, diagnosisReport: {
       fundamental_research: { status: "available", business_understandable: true },
-      decision_radar: { current_decision: decision, basis_rows: [
-        { key: "fundamental", label: "基本面", stance: "neutral", stance_label: "中性", summary: "盈利修复，现金流偏弱" },
-        { key: "quant", label: "量化验证", stance: "negative", stance_label: "偏空", summary: "估值偏高，短期动量走弱" },
-        { key: "sentiment", label: "情绪与预期", stance: "cautious", stance_label: "谨慎", summary: "暂无反转信号，不提高仓位" },
-        { key: "risk", label: "风控纪律", stance: "strict", stance_label: "严格", summary: "回避新增，持仓优先降风险" },
-      ] },
+      fundamental_factors: { short_term: { factor_score: 0.72, factors: [] } },
+      quant_factors: { short_term: {
+        market_percentile: 0.81,
+        validation_status: "descriptive",
+        promotion_status: "calibrated",
+        target_window_sessions: 10,
+        sample_count: 90,
+        validation_metrics: {
+          oosPeriods: 3,
+          sampleCount: 90,
+          rankIc: 0.08,
+          excessReturnAfterCost: 0.012,
+          maxDrawdown: -0.06,
+        },
+        factors: [],
+      } },
+      decision_radar: { current_decision: decision },
       horizon_decisions: { short_term: decision, medium_term: decision, long_term: decision },
     } as never });
-    const basis = screen.getByTestId("decision-radar-four-step");
-    expect(basis).toHaveTextContent("基本面中性盈利修复，现金流偏弱");
-    expect(basis).toHaveTextContent("量化验证偏空估值偏高，短期动量走弱");
-    expect(basis).toHaveTextContent("情绪与预期谨慎暂无反转信号，不提高仓位");
-    expect(basis).toHaveTextContent("风控纪律严格回避新增，持仓优先降风险");
-    expect(basis).not.toHaveTextContent("因子贡献");
-    expect(basis).not.toHaveTextContent(/momentum20|operating_cashflow|custom_internal_factor/);
+
+    expect(screen.queryByTestId("diagnosis-quant-calibration-progress")).not.toBeInTheDocument();
+    expect(screen.queryByTestId("diagnosis-quant-calibrated-metrics")).not.toBeInTheDocument();
+    expect(screen.queryByTestId("diagnosis-quant-rejected-metrics")).not.toBeInTheDocument();
+  });
+
+  it("keeps a concrete waiting reason without rendering confidence disclaimers", () => {
+    const decision = {
+      direction: "positive",
+      action: "conditional_participation",
+      validation_status: "descriptive",
+      not_holding_action: "conditional_participation",
+      holding_action: "hold",
+      confidence: "low",
+      materialized_plan: {
+        entry_condition_status: "not_triggered",
+        entry_condition: "价格达到参考买入区间上沿 39.36 元",
+        reference_entry: 39.36,
+        reference_entry_high: 39.36,
+        boundaries: [],
+        invalidation: [],
+      },
+      position_plan: {},
+    };
+    renderRadar({ report: null, diagnosisMode: true, diagnosisReport: {
+      data_quality: { status: "degraded", confidence: "low" },
+      fundamental_factors: { short_term: { factors: [] } },
+      quant_factors: { short_term: { validation_status: "descriptive", promotion_status: "research_only", factors: [] } },
+      decision_radar: { current_decision: decision },
+      horizon_decisions: { short_term: decision, medium_term: decision, long_term: decision },
+    } as never });
+
+    const panel = screen.getByTestId("decision-radar-ai-diagnosis");
+    expect(panel).toHaveTextContent("暂不买入");
+    expect(panel).not.toHaveTextContent("结论可信度");
+    expect(panel).not.toHaveTextContent("低可信度");
+    expect(panel).not.toHaveTextContent("当前交易计划仅作条件参考");
+    expect(panel).not.toHaveTextContent("按未持有测算");
+    const waiting = screen.getByTestId("diagnosis-action-blockers");
+    expect(waiting).toHaveTextContent("暂不买入的原因");
+    expect(waiting).toHaveTextContent("价格参与条件尚未触发");
+  });
+
+  it("shows when a positive diagnosis has not met its participation condition", () => {
+    const decision = {
+      direction: "positive",
+      action: "conditional_participation",
+      validation_status: "descriptive",
+      not_holding_action: "conditional_participation",
+      holding_action: "hold",
+      materialized_plan: {
+        entry_condition_status: "not_triggered",
+        reference_entry: 39.36,
+        pullback_entry: 38.91,
+        stop_loss: 37.55,
+        boundaries: [],
+        invalidation: [],
+        max_risk_pct: 1,
+      },
+      position_plan: { reference_position_pct: null, max_position_pct: null, risk_budget_pct: 1 },
+    };
+    renderRadar({ report: null, diagnosisMode: true, quote: { price: 36.13, changePct: -0.85, updatedAt: "2026-09-01T10:26:06+08:00" }, diagnosisReport: {
+      fundamental_research: { status: "available", business_understandable: true },
+      decision_radar: { current_decision: decision },
+      horizon_decisions: { short_term: decision, medium_term: decision, long_term: decision },
+    } as never });
+
+    expect(screen.getByTestId("decision-radar-ai-diagnosis")).toHaveTextContent("暂不买入");
+    const status = screen.getByTestId("diagnosis-current-stock-status");
+    expect(status).toHaveTextContent("现价 36.13 元 · 参与确认线 39.36 元");
+    expect(status).toHaveTextContent("距参与确认还需上涨 8.94%");
+  });
+
+  it("renders reference and pullback entry ranges from the materialized plan", () => {
+    const decision = {
+      direction: "positive",
+      action: "conditional_participation",
+      validation_status: "descriptive",
+      not_holding_action: "conditional_participation",
+      holding_action: "hold",
+      materialized_plan: {
+        reference_entry_low: 38.91,
+        reference_entry_high: 39.36,
+        pullback_entry_low: 38.5,
+        pullback_entry_high: 38.91,
+        boundaries: [],
+        invalidation: [],
+        max_risk_pct: 1,
+      },
+      position_plan: { reference_position_pct: null, max_position_pct: null, risk_budget_pct: 1 },
+    };
+    renderRadar({ report: null, diagnosisMode: true, diagnosisReport: {
+      fundamental_research: { status: "available", business_understandable: true },
+      decision_radar: { current_decision: decision },
+      horizon_decisions: { short_term: decision, medium_term: decision, long_term: decision },
+    } as never });
+
+    const plan = screen.getByTestId("decision-radar-ai-trading-plan");
+    expect(plan).toHaveTextContent("参考买入");
+    expect(plan).toHaveTextContent("38.91–39.36 元");
+    expect(plan).toHaveTextContent("回踩参与");
+    expect(plan).toHaveTextContent("38.50–38.91 元");
+  });
+
+  it("shows the fee-adjusted risk-reward and suggested position", () => {
+    const decision = {
+      direction: "positive",
+      action: "conditional_participation",
+      validation_status: "descriptive",
+      not_holding_action: "conditional_participation",
+      holding_action: "hold",
+      confidence: "low",
+      materialized_plan: {
+        reference_entry: 39.36,
+        reference_entry_low: 38.64,
+        reference_entry_high: 39.36,
+        pullback_entry: 38.91,
+        pullback_entry_low: 37.83,
+        pullback_entry_high: 38.91,
+        stop_loss: 37.55,
+        first_take_profit: 41.90,
+        second_take_profit: 43.35,
+        risk_reference_price: 39.36,
+        risk_per_share: 1.81,
+        risk_pct: 4.598577,
+        first_reward_pct: 6.453252,
+        second_reward_pct: 10.137195,
+        risk_reward_first: 1.403315,
+        risk_reward_second: 2.20442,
+        risk_reward_first_after_fees: 1.25,
+        risk_reward_second_after_fees: 2.05,
+        fee_gate_status: "passed",
+        boundaries: [],
+        invalidation: [],
+        max_risk_pct: 1,
+      },
+      position_plan: {
+        reference_position_pct: 4.59,
+        max_position_pct: 9.18,
+        risk_budget_pct: 1,
+        stop_distance_pct: 3.717949,
+        volatility_adjustment: 0.556788,
+        liquidity_cap_pct: 30,
+        conservative_risk_cap_pct: 21.75,
+      },
+    };
+    renderRadar({ report: null, diagnosisMode: true, diagnosisReport: {
+      data_quality: { status: "degraded", confidence: "low" },
+      fundamental_factors: { short_term: { factors: [] } },
+      quant_factors: { short_term: { validation_status: "descriptive", factors: [] } },
+      decision_radar: { current_decision: decision },
+      horizon_decisions: { short_term: decision, medium_term: decision, long_term: decision },
+    } as never });
+
+    expect(screen.getByTestId("diagnosis-fee-risk-reward")).toHaveTextContent("费率后盈亏比：第一目标 1.25R · 第二目标 2.05R · 已通过");
+    const position = screen.getByTestId("decision-radar-ai-position");
+    expect(position).toHaveTextContent("建议首仓");
+    expect(position).toHaveTextContent("4.59%");
+    expect(position).toHaveTextContent("建议上限");
+    expect(position).toHaveTextContent("9.18%");
+    expect(screen.queryByTestId("diagnosis-risk-reward-gate")).not.toBeInTheDocument();
+    expect(screen.queryByTestId("diagnosis-slippage-stress")).not.toBeInTheDocument();
+    expect(screen.queryByTestId("diagnosis-position-evidence")).not.toBeInTheDocument();
+  });
+
+  it.each(["passed", "failed", "unavailable"] as const)("keeps fee-adjusted risk-reward without slippage details (%s)", (status) => {
+    const decision = {
+      direction: "positive",
+      action: "conditional_participation",
+      validation_status: "descriptive",
+      not_holding_action: "wait",
+      holding_action: "hold",
+      current_action: "wait",
+      materialized_plan: {
+        reference_entry: 100,
+        pullback_entry: 99,
+        stop_loss: 95,
+        first_take_profit: 110,
+        second_take_profit: 120,
+        risk_reference_price: 100,
+        risk_per_share: 5,
+        risk_pct: 5,
+        first_reward_pct: 10,
+        second_reward_pct: 20,
+        risk_reward_first: 2,
+        risk_reward_second: 4,
+        risk_reward_gate_status: "passed",
+        risk_reward_first_after_fees: 1.25,
+        risk_reward_second_after_fees: 2.05,
+        fee_gate_status: "passed",
+        risk_reward_first_after_cost: status === "unavailable" ? null : status === "passed" ? 1.2 : 0.82,
+        risk_reward_second_after_cost: status === "unavailable" ? null : status === "passed" ? 2.0 : 1.74,
+        estimated_slippage_pct: status === "unavailable" ? null : status === "passed" ? 0.07 : 1.99,
+        cost_assumptions: { commission_pct: 0.03, stamp_tax_pct: 0.05, transfer_fee_pct: 0.001 },
+        cost_scope: status === "unavailable" ? "unavailable" : "fees_and_slippage_proxy",
+        slippage_stress_status: status,
+        boundaries: [],
+        invalidation: [],
+      },
+      position_plan: {},
+    };
+    renderRadar({ report: null, diagnosisMode: true, diagnosisReport: {
+      fundamental_research: { status: "available", business_understandable: true },
+      decision_radar: { current_decision: decision },
+      horizon_decisions: { short_term: decision, medium_term: decision, long_term: decision },
+    } as never });
+
+    const fees = screen.getByTestId("diagnosis-fee-risk-reward");
+    expect(fees).toHaveTextContent("费率后盈亏比：第一目标 1.25R · 第二目标 2.05R · 已通过");
+    expect(screen.queryByTestId("diagnosis-slippage-stress")).not.toBeInTheDocument();
+    if (status === "failed") {
+      expect(screen.getByTestId("diagnosis-liquidity-warning")).toHaveTextContent("成交成本压力较高，实际下单前需关注流动性");
+    } else {
+      expect(screen.queryByTestId("diagnosis-liquidity-warning")).not.toBeInTheDocument();
+    }
+    cleanup();
+  });
+
+  it("explains why a single-stock buy is waiting under the not-held calculation", () => {
+    const decision = {
+      direction: "positive",
+      action: "conditional_participation",
+      validation_status: "descriptive",
+      not_holding_action: "wait",
+      holding_action: "hold",
+      current_action: "wait",
+      materialized_plan: {
+        reference_entry: 100,
+        pullback_entry: 99,
+        stop_loss: 95,
+        first_take_profit: 105.5,
+        second_take_profit: 111,
+        risk_reference_price: 100,
+        risk_per_share: 5,
+        risk_pct: 5,
+        first_reward_pct: 5.5,
+        second_reward_pct: 11,
+        risk_reward_first: 1.1,
+        risk_reward_second: 2.2,
+        risk_reward_gate_status: "passed",
+        risk_reward_first_after_fees: 1.25,
+        risk_reward_second_after_fees: 2.05,
+        fee_gate_status: "passed",
+        risk_reward_first_after_cost: 0.48,
+        risk_reward_second_after_cost: 0.97,
+        slippage_stress_status: "failed",
+        minimum_risk_reward_first: 1,
+        minimum_risk_reward_second: 2,
+        entry_condition_status: "not_triggered",
+        entry_condition: "收盘价站上100.00元",
+        value_status: "available",
+        boundaries: [],
+        invalidation: [],
+      },
+      position_plan: { value_status: "available" },
+    };
+    const diagnosisReport = {
+      fundamental_research: { status: "available", business_understandable: true },
+      decision_radar: { current_decision: decision, holding_state: "not_holding" },
+      horizon_decisions: { short_term: decision, medium_term: decision, long_term: decision },
+    } as never;
+
+    renderRadar({ report: null, diagnosisMode: true, quote: { price: 99, changePct: -1, updatedAt: "2026-09-01T10:26:06+08:00" }, diagnosisReport });
+
+    const panel = screen.getByTestId("decision-radar-ai-diagnosis");
+    expect(panel).toHaveTextContent("暂不买入");
+    expect(panel).not.toHaveTextContent("按未持有测算");
+    expect(panel).not.toHaveTextContent("已持有");
+    expect(panel).not.toHaveTextContent("当前仓位");
+    expect(panel).not.toHaveTextContent("参考新增");
+    expect(panel).not.toHaveTextContent("个人风险设置");
+    const waiting = screen.getByTestId("diagnosis-action-blockers");
+    expect(waiting).toHaveTextContent("暂不买入的原因");
+    expect(waiting).toHaveTextContent("价格参与条件尚未触发");
+    expect(waiting).not.toHaveTextContent("0.48R");
+    expect(waiting).not.toHaveTextContent("滑点压力测试");
+    expect(screen.queryByTestId("diagnosis-slippage-stress")).not.toBeInTheDocument();
+    expect(screen.getByTestId("diagnosis-liquidity-warning")).toHaveTextContent("成交成本压力较高");
+    expect(screen.getByTestId("diagnosis-current-stock-status")).toHaveTextContent("参与确认线 100.00 元");
+  });
+
+  it("shows an unmet risk-reward gate and prioritizes the deterministic current action", () => {
+    const decision = {
+      direction: "positive",
+      action: "conditional_participation",
+      validation_status: "descriptive",
+      not_holding_action: "wait",
+      holding_action: "hold",
+      current_action: "wait",
+      materialized_plan: {
+        reference_entry: 100,
+        pullback_entry: 99,
+        stop_loss: 95,
+        first_take_profit: 104,
+        second_take_profit: 110,
+        risk_reference_price: 100,
+        risk_per_share: 5,
+        risk_pct: 5,
+        first_reward_pct: 4,
+        second_reward_pct: 10,
+        risk_reward_first: 0.8,
+        risk_reward_second: 2,
+        minimum_risk_reward_first: 1,
+        minimum_risk_reward_second: 2,
+        risk_reward_gate_status: "failed",
+        entry_condition_status: "triggered",
+        entry_condition: "价格达到参考买入区间上沿 100.00 元",
+        boundaries: [],
+        invalidation: [],
+      },
+      position_plan: {},
+    };
+    renderRadar({ report: null, diagnosisMode: true, diagnosisReport: {
+      fundamental_research: { status: "available", business_understandable: true },
+      decision_radar: { current_decision: decision },
+      horizon_decisions: { short_term: decision, medium_term: decision, long_term: decision },
+    } as never });
+
+    expect(screen.queryByTestId("diagnosis-risk-reward-gate")).not.toBeInTheDocument();
+    expect(screen.getByTestId("diagnosis-action-blockers")).toHaveTextContent("收益风险比未达到参与条件");
+    expect(screen.getByTestId("decision-radar-ai-diagnosis")).toHaveTextContent("暂不买入");
+  });
+
+  it("uses the live quote when a single price condition crosses above or below its confirmation line", () => {
+    const decision = {
+      direction: "positive",
+      action: "conditional_participation",
+      validation_status: "descriptive",
+      not_holding_action: "conditional_participation",
+      holding_action: "hold",
+      current_action: "wait",
+      materialized_plan: {
+        reference_entry: 39.36,
+        reference_entry_high: 39.36,
+        pullback_entry: 38.91,
+        stop_loss: 37.55,
+        first_take_profit: 41.9,
+        second_take_profit: 43.35,
+        entry_condition_status: "not_triggered",
+        entry_condition: "价格达到参考买入区间上沿 39.36 元",
+        entry_condition_count: 1,
+        entry_condition_realtime_eligible: true,
+        value_status: "available",
+        boundaries: [],
+        invalidation: [],
+      },
+      position_plan: { reference_position_pct: 5, max_position_pct: 10, risk_budget_pct: 1, value_status: "available" },
+    };
+    const report = {
+      fundamental_research: { status: "available", business_understandable: true },
+      decision_radar: { current_decision: decision },
+      horizon_decisions: { short_term: decision, medium_term: decision, long_term: decision },
+    } as never;
+    renderRadar({ report: null, diagnosisMode: true, quote: { price: 39.50, changePct: 1, updatedAt: "2026-09-01T10:26:06+08:00" }, diagnosisReport: report });
+
+    const panel = screen.getByTestId("decision-radar-ai-diagnosis");
+    expect(screen.getByText("可按计划分批买入", { exact: true })).toBeInTheDocument();
+    expect(panel).toHaveTextContent("可按计划分批买入");
+    expect(panel).not.toHaveTextContent("按未持有测算");
+    expect(panel).not.toHaveTextContent("当前未满足条件");
+    expect(screen.queryByTestId("diagnosis-action-blockers")).not.toBeInTheDocument();
+    expect(screen.getByTestId("diagnosis-current-stock-status")).toHaveTextContent("当前价格已达到参与确认线");
+    expect(panel).not.toHaveTextContent("这只股票的决策证据");
+
+    cleanup();
+    const triggeredDecision = {
+      ...decision,
+      current_action: "participate",
+      materialized_plan: { ...decision.materialized_plan, entry_condition_status: "triggered" },
+    };
+    renderRadar({ report: null, diagnosisMode: true, quote: { price: 38.00, changePct: -1, updatedAt: "2026-09-01T10:36:06+08:00" }, diagnosisReport: {
+      ...report,
+      decision_radar: { current_decision: triggeredDecision },
+      horizon_decisions: { short_term: triggeredDecision, medium_term: triggeredDecision, long_term: triggeredDecision },
+    } as never });
+    expect(screen.getByText("暂不买入", { exact: true })).toBeInTheDocument();
+    expect(screen.getByTestId("diagnosis-action-blockers")).toHaveTextContent("价格参与条件尚未触发");
+  });
+
+  it("does not let a live price override a non-realtime condition", () => {
+    const decision = {
+      direction: "positive",
+      action: "conditional_participation",
+      validation_status: "descriptive",
+      not_holding_action: "conditional_participation",
+      holding_action: "hold",
+      current_action: "wait",
+      materialized_plan: {
+        reference_entry: 39.36,
+        reference_entry_high: 39.36,
+        entry_condition_status: "not_triggered",
+        entry_condition: "等待经营现金流改善",
+        entry_condition_count: 1,
+        entry_condition_realtime_eligible: false,
+        boundaries: [],
+        invalidation: [],
+      },
+      position_plan: {},
+    };
+    renderRadar({ report: null, diagnosisMode: true, quote: { price: 40, changePct: 2, updatedAt: "2026-09-01T10:26:06+08:00" }, diagnosisReport: {
+      fundamental_research: { status: "available", business_understandable: true },
+      decision_radar: { current_decision: decision },
+      horizon_decisions: { short_term: decision, medium_term: decision, long_term: decision },
+    } as never });
+    expect(screen.getByText("暂不买入", { exact: true })).toBeInTheDocument();
+    expect(screen.queryByText("这只股票的决策证据")).not.toBeInTheDocument();
+  });
+
+  it("shows the signed overall direction score without internal calculation details", () => {
+    const decision = {
+      direction: "positive",
+      action: "conditional_participation",
+      decision_score: 0.2145,
+      positive_threshold: 0.2,
+      negative_threshold: -0.2,
+      component_scores: { fundamental: 0.39, technical: 0 },
+      component_weights: { fundamental: 0.55, technical: 0.45 },
+      validation_status: "descriptive",
+      not_holding_action: "conditional_participation",
+      holding_action: "hold",
+      confidence: "low",
+      materialized_plan: { boundaries: [], invalidation: [] },
+      position_plan: {},
+    };
+    renderRadar({ report: null, diagnosisMode: true, diagnosisReport: {
+      data_quality: { status: "degraded", confidence: "low" },
+      fundamental_factors: { short_term: { factor_score: 0.695, factors: [] } },
+      quant_factors: { short_term: { validation_status: "descriptive", factors: [] } },
+      decision_radar: { current_decision: decision },
+      horizon_decisions: { short_term: decision, medium_term: decision, long_term: decision },
+    } as never });
+
+    const panel = screen.getByTestId("decision-radar-ai-diagnosis");
+    expect(panel).toHaveTextContent("综合方向");
+    expect(panel).toHaveTextContent(/-100/);
+    expect(panel).toHaveTextContent("+100");
+    expect(panel).toHaveTextContent(/\+21\.5/);
+    expect(panel).toHaveTextContent("刚超过偏多门槛");
+    expect(panel).not.toHaveTextContent("基本面 +39.0");
+    expect(panel).not.toHaveTextContent("偏空门槛");
   });
 
   it("shows one current diagnosis with executable risk boundaries and no horizon tabs", () => {
@@ -338,14 +778,31 @@ describe("DecisionRadar", () => {
     expect(screen.queryByRole("tab", { name: "短线" })).not.toBeInTheDocument();
     expect(screen.queryByRole("tab", { name: "中线" })).not.toBeInTheDocument();
     expect(screen.queryByRole("tab", { name: "长线" })).not.toBeInTheDocument();
-    expect(screen.getByTestId("decision-radar-ai-diagnosis")).toHaveTextContent("暂不买入 / 减仓");
-    expect(screen.getByTestId("decision-radar-four-step")).toHaveTextContent("基本面中性盈利修复，现金流偏弱");
-    expect(screen.getByTestId("decision-radar-four-step")).toHaveTextContent("量化验证偏空短期趋势走弱，暂不新增仓位");
-    expect(screen.getByTestId("decision-radar-ai-trading-plan")).toHaveTextContent("当前不建议买入");
-    expect(screen.getByTestId("decision-radar-ai-trading-plan")).toHaveTextContent("暂不参与");
-    expect(screen.getByTestId("decision-radar-ai-trading-plan")).toHaveTextContent("34.05 元");
-    expect(screen.getByTestId("decision-radar-ai-trading-plan")).toHaveTextContent("38.64 元");
-    expect(screen.getByTestId("decision-radar-ai-trading-plan")).toHaveTextContent("40.17 元");
+    const panel = screen.getByTestId("decision-radar-ai-diagnosis");
+    expect(panel).toHaveTextContent("暂不买入");
+    expect(panel).toHaveTextContent("当前综合建议");
+    expect(panel).toHaveTextContent("交易计划");
+    expect(panel).toHaveTextContent("当前不建议买入");
+    expect(panel).toHaveTextContent("暂不参与");
+    expect(panel).toHaveTextContent("34.05 元");
+    expect(panel).toHaveTextContent("38.64 元");
+    expect(panel).toHaveTextContent("40.17 元");
+    expect(panel).toHaveTextContent("计划失效");
+    expect(panel).toHaveTextContent("跌破止损价后计划失效");
+    expect(screen.getByRole("button", { name: "重新诊股" })).toBeInTheDocument();
+    expect(screen.queryByTestId("diagnosis-metric-fundamental")).not.toBeInTheDocument();
+    expect(screen.queryByTestId("diagnosis-fundamental-profile")).not.toBeInTheDocument();
+    expect(screen.queryByTestId("diagnosis-metric-quant")).not.toBeInTheDocument();
+    expect(screen.queryByTestId("decision-radar-four-step")).not.toBeInTheDocument();
+    expect(screen.queryByTestId("diagnosis-quant-calibration-progress")).not.toBeInTheDocument();
+    expect(screen.queryByTestId("diagnosis-quant-calibrated-metrics")).not.toBeInTheDocument();
+    expect(screen.queryByTestId("diagnosis-quant-rejected-metrics")).not.toBeInTheDocument();
+    expect(screen.queryByTestId("diagnosis-risk-reward-gate")).not.toBeInTheDocument();
+    expect(screen.queryByTestId("diagnosis-slippage-stress")).not.toBeInTheDocument();
+    expect(screen.queryByTestId("diagnosis-position-evidence")).not.toBeInTheDocument();
+    expect(screen.queryByTestId("diagnosis-single-stock-outcome-pending")).not.toBeInTheDocument();
+    expect(screen.queryByTestId("diagnosis-single-stock-outcome")).not.toBeInTheDocument();
+    expect(panel).not.toHaveTextContent(/基本面综合|基本面六维画像|当前个股量化位置|四层分析|量化验证|毛盈亏比门槛|市场滑点压力测试|模型止损距离|波动调整|产品仓位上限|保守风险上限|本次个股诊断/);
   });
 
   it("keeps the period tabs and complete plan while adding the four-step summary", () => {

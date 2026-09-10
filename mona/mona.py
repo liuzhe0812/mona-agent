@@ -104,3 +104,9 @@ class Mona:
         )
 
 
+# Backward-compatible lowercase facade retained for existing SDK callers.
+mona = Mona
+
+__all__ = ["Mona", "RunResult", "mona"]
+
+

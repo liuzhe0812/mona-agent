@@ -228,17 +228,17 @@ describe("groupNodes", () => {
     expect(g.kind).toBe("group");
     expect(g.label).toBe("分组");
     expect(g.container).toEqual({ type: "group" });
-    // 包围盒：min(100,100) max(500,350) → +16 padding
-    expect(g.position).toEqual({ x: 100 - FLOWCHART_GROUP_PADDING, y: 100 - FLOWCHART_GROUP_PADDING });
+    // 带标题的分组在内容上方保留 30px 标题区。
+    expect(g.position).toEqual({ x: 100 - FLOWCHART_GROUP_PADDING, y: 100 - FLOWCHART_GROUP_PADDING - 30 });
     expect(g.size).toEqual({
       width: 400 + FLOWCHART_GROUP_PADDING * 2,
-      height: 250 + FLOWCHART_GROUP_PADDING * 2,
+      height: 250 + FLOWCHART_GROUP_PADDING * 2 + 30,
     });
     const a = r!.nodes.find((n) => n.id === "a")!;
     const b = r!.nodes.find((n) => n.id === "b")!;
     expect(a.parentId).toBe("g1");
-    expect(a.position).toEqual({ x: FLOWCHART_GROUP_PADDING, y: FLOWCHART_GROUP_PADDING });
-    expect(b.position).toEqual({ x: 300 + FLOWCHART_GROUP_PADDING, y: 200 + FLOWCHART_GROUP_PADDING });
+    expect(a.position).toEqual({ x: FLOWCHART_GROUP_PADDING, y: FLOWCHART_GROUP_PADDING + 30 });
+    expect(b.position).toEqual({ x: 300 + FLOWCHART_GROUP_PADDING, y: 200 + FLOWCHART_GROUP_PADDING + 30 });
     // 未选中的 c 不受影响
     expect(r!.nodes.find((n) => n.id === "c")!.parentId).toBeUndefined();
     // 父先子后：g1 在 a/b 之前

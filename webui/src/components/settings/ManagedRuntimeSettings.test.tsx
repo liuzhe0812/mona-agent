@@ -63,8 +63,12 @@ describe("ManagedRuntimeSettings", () => {
   it("installs a runtime only after the user requests it", async () => {
     render(<ManagedRuntimeSettings token="tok" />);
 
+    expect(await screen.findByText((_content, element) => (
+      element?.tagName === "P"
+      && element.textContent?.includes("Used by Python analysis in chats, PPT creation") === true
+    ))).toBeInTheDocument();
     expect(api.startManagedRuntimeInstall).not.toHaveBeenCalled();
-    fireEvent.click(await screen.findByRole("button", { name: "Install" }));
+    fireEvent.click(screen.getByRole("button", { name: "Install" }));
 
     await waitFor(() => {
       expect(api.startManagedRuntimeInstall).toHaveBeenCalledWith("tok", "python", false);
@@ -131,13 +135,62 @@ describe("ManagedRuntimeSettings", () => {
   });
 
   it("cleans up managed resources from the settings page", async () => {
+    api.fetchManagedRuntimeStatus.mockResolvedValue({
+      schemaVersion: 1,
+      autoDownload: true,
+      installEnabled: true,
+      components: [],
+      jobs: [],
+      migration: {
+        state: "completed",
+        migratedComponents: ["python"],
+        repairComponents: [],
+        errors: [],
+        legacyBytes: 2 * 1024 * 1024,
+        cleanupAvailable: true,
+        updatedAt: "2026-09-03T00:00:00Z",
+      },
+    });
     render(<ManagedRuntimeSettings token="tok" />);
-    fireEvent.click(await screen.findByRole("button", { name: "Clear cache" }));
+    fireEvent.click(await screen.findByRole("button", { name: "Clear old resources" }));
 
     await waitFor(() => {
       expect(api.cleanupManagedRuntimes).toHaveBeenCalledWith("tok");
       expect(api.fetchManagedRuntimeStatus).toHaveBeenCalledTimes(2);
     });
+  });
+
+  it("does not show cleanup on a clean installation", async () => {
+    render(<ManagedRuntimeSettings token="tok" />);
+
+    await screen.findByRole("button", { name: "Install" });
+    expect(screen.queryByRole("button", { name: "Clear cache" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Clear old resources" })).not.toBeInTheDocument();
+  });
+
+  it("shows a compatible local resource without an install action", async () => {
+    api.fetchManagedRuntimeStatus.mockResolvedValueOnce({
+      schemaVersion: 1,
+      autoDownload: true,
+      installEnabled: true,
+      components: [{
+        component: "python",
+        available: true,
+        packRef: "python-base@3.13.15",
+        version: "3.13.15",
+        downloadBytes: 20_000_000,
+        installed: false,
+        installedVersion: null,
+        availableLocally: true,
+        updateAvailable: false,
+      }],
+      jobs: [],
+    });
+
+    render(<ManagedRuntimeSettings token="tok" />);
+
+    expect(await screen.findByText("Available on this device")).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Install" })).not.toBeInTheDocument();
   });
 
   it("shows when migrated resources can be cleaned up", async () => {

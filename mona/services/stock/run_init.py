@@ -52,6 +52,7 @@ from mona.services.stock.screening import (
     stable_json_hash,
 )
 from mona.services.stock.storage import WatchlistStore
+from mona.services.stock.westock_runtime import create_default_westock_provider
 
 _EXCHANGES = ("XSHG", "XSHE", "BJSE")
 _SELECTION_RUN_ID_RE = re.compile(r"^[A-Za-z0-9_-]{1,96}$")
@@ -1358,6 +1359,9 @@ async def build_run_evidence(
         workspace=Path(workspace),
         provider=provider,
         research_provider=GovernmentResearchProvider() if using_default_provider else None,
+        supplement_provider=create_default_westock_provider(
+            cache_root or _default_cache_root()
+        ),
         cache_root=cache_root or _default_cache_root(),
     )
     if material_binding_ids:

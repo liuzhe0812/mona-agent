@@ -1,6 +1,6 @@
 import { act, renderHook, waitFor } from "@testing-library/react";
 import type { ReactNode } from "react";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import {
   conversationListStatus,
@@ -10,6 +10,7 @@ import {
 } from "@/hooks/useSessions";
 import * as api from "@/lib/api";
 import { ClientProvider } from "@/providers/ClientProvider";
+import type { ConnectionStatus } from "@/lib/types";
 
 vi.mock("@/lib/api", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@/lib/api")>();
@@ -23,10 +24,18 @@ vi.mock("@/lib/api", async (importOriginal) => {
 
 function fakeClient() {
   const sessionUpdateHandlers = new Set<(chatId: string, scope?: string) => void>();
+  const statusHandlers = new Set<(status: ConnectionStatus) => void>();
+  let currentStatus: ConnectionStatus = "open";
   return {
-    status: "open" as const,
+    get status() {
+      return currentStatus;
+    },
     defaultChatId: null as string | null,
-    onStatus: () => () => {},
+    onStatus: (handler: (status: ConnectionStatus) => void) => {
+      statusHandlers.add(handler);
+      handler(currentStatus);
+      return () => statusHandlers.delete(handler);
+    },
     onError: () => () => {},
     onChat: () => () => {},
     getRunStartedAt: () => null,
@@ -37,8 +46,13 @@ function fakeClient() {
     emitSessionUpdate: (chatId: string, scope?: string) => {
       for (const handler of sessionUpdateHandlers) handler(chatId, scope);
     },
+    emitStatus: (status: ConnectionStatus) => {
+      currentStatus = status;
+      for (const handler of statusHandlers) handler(status);
+    },
     sendMessage: vi.fn(),
     newChat: vi.fn(),
+    branchChat: vi.fn(),
     attach: vi.fn(),
     connect: vi.fn(),
     close: vi.fn(),
@@ -60,6 +74,10 @@ function wrap(client: ReturnType<typeof fakeClient>) {
 }
 
 describe("useSessions", () => {
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
   beforeEach(() => {
     vi.mocked(api.listSessions).mockReset();
     vi.mocked(api.deleteSession).mockReset();
@@ -86,6 +104,24 @@ describe("useSessions", () => {
 
     await waitFor(() => expect(result.current.loaded).toBe(true));
     expect(result.current.loading).toBe(false);
+  });
+
+  it("retries a transient session-list failure with a finite backoff", async () => {
+    vi.useFakeTimers();
+    vi.mocked(api.listSessions).mockRejectedValue(new Error("temporarily unavailable"));
+
+    const { result } = renderHook(() => useSessions(), {
+      wrapper: wrap(fakeClient()),
+    });
+
+    await act(async () => {
+      await Promise.resolve();
+      await vi.runAllTimersAsync();
+    });
+
+    expect(api.listSessions).toHaveBeenCalledTimes(4);
+    expect(result.current.loaded).toBe(false);
+    expect(result.current.error).toBe("temporarily unavailable");
   });
 
   it("does not use low-information greetings as fallback session titles", () => {
@@ -190,6 +226,46 @@ describe("useSessions", () => {
     expect(api.listSessions).toHaveBeenCalledTimes(2);
   });
 
+  it("refreshes sessions after the websocket reconnects", async () => {
+    vi.mocked(api.listSessions)
+      .mockResolvedValueOnce([
+        {
+          key: "websocket:chat-a",
+          channel: "websocket",
+          chatId: "chat-a",
+          createdAt: "2026-04-16T10:00:00Z",
+          updatedAt: "2026-04-16T10:00:00Z",
+          preview: "第一条回复",
+        },
+      ])
+      .mockResolvedValueOnce([
+        {
+          key: "websocket:chat-a",
+          channel: "websocket",
+          chatId: "chat-a",
+          createdAt: "2026-04-16T10:00:00Z",
+          updatedAt: "2026-04-16T10:01:00Z",
+          title: "重连后刷新标题",
+          preview: "最新回复",
+        },
+      ]);
+    const client = fakeClient();
+
+    const { result } = renderHook(() => useSessions(), {
+      wrapper: wrap(client),
+    });
+
+    await waitFor(() => expect(result.current.sessions[0]?.title).toBeUndefined());
+
+    act(() => {
+      client.emitStatus("reconnecting");
+      client.emitStatus("open");
+    });
+
+    await waitFor(() => expect(result.current.sessions[0]?.title).toBe("重连后刷新标题"));
+    expect(api.listSessions).toHaveBeenCalledTimes(2);
+  });
+
   it("keeps a newly created chat visible until the server session list catches up", async () => {
     vi.mocked(api.listSessions)
       .mockResolvedValueOnce([])
@@ -235,6 +311,21 @@ describe("useSessions", () => {
     expect(result.current.sessions.map((s) => s.key)).toEqual(["websocket:chat-new"]);
     expect(result.current.sessions[0]?.preview).toBe("First message");
     expect(result.current.sessions[0]?.title).toBe("Generated title");
+  });
+
+  it("keeps a newly branched chat visible while the session list catches up", async () => {
+    vi.mocked(api.listSessions).mockResolvedValue([]);
+    const client = fakeClient();
+    client.branchChat.mockResolvedValue("chat-branch");
+    const { result } = renderHook(() => useSessions(), { wrapper: wrap(client) });
+    await waitFor(() => expect(result.current.loading).toBe(false));
+
+    await act(async () => {
+      await result.current.branchChat("chat-source", 2, "task-2");
+    });
+
+    expect(client.branchChat).toHaveBeenCalledWith("chat-source", 2, "task-2");
+    expect(result.current.sessions[0]?.key).toBe("websocket:chat-branch");
   });
 
   it("passes through WebUI transcript user media as images and media", async () => {

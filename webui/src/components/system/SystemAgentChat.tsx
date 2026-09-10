@@ -83,8 +83,8 @@ export function SystemAgentChat({ chatId, task, onChatCreated, onTaskHandled }: 
         </div>
       </div>
 
-      <div className="shrink-0 border-t border-border/70 p-3">
-        <div className="flex min-h-[52px] items-end gap-1.5 rounded-lg border border-border/75 bg-background px-2.5 py-1.5 shadow-sm">
+      <div className="shrink-0 p-2">
+        <div className="flex min-h-[52px] items-end gap-1.5 rounded-xl border border-border/75 bg-background px-2.5 py-1.5 shadow-sm">
           <Textarea
             value={draft}
             onChange={(event) => setDraft(event.target.value)}
@@ -95,7 +95,7 @@ export function SystemAgentChat({ chatId, task, onChatCreated, onTaskHandled }: 
               }
             }}
             disabled={!chatId || isStreaming || creating}
-            className="min-h-[36px] flex-1 resize-none rounded-lg border-0 bg-transparent px-0 text-caption leading-5 shadow-none focus-visible:ring-0 focus-visible:ring-offset-0 placeholder:text-muted-foreground disabled:cursor-not-allowed disabled:opacity-60"
+            className="min-h-[36px] flex-1 resize-none rounded-none border-0 bg-transparent px-0 py-0 text-caption leading-5 shadow-none focus-visible:ring-0 focus-visible:ring-offset-0 placeholder:text-muted-foreground disabled:cursor-not-allowed disabled:opacity-60"
             rows={2}
             placeholder="继续告诉 Mona..."
           />
@@ -106,7 +106,7 @@ export function SystemAgentChat({ chatId, task, onChatCreated, onTaskHandled }: 
             size="icon"
             disabled={isStreaming ? false : !chatId || !draft.trim() || creating}
             onClick={isStreaming ? stop : sendDraft}
-            className="h-7 w-7 shrink-0 rounded-lg"
+            className="h-6 w-6 shrink-0 rounded-lg"
           >
             {isStreaming ? <Square className="h-3 w-3" /> : <Send className="h-3.5 w-3.5" />}
           </Button>

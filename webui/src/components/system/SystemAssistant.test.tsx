@@ -3,7 +3,7 @@ import type { ComponentProps } from "react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import { SystemAssistant } from "./SystemAssistant";
-import type { SystemEvidence } from "./systemAgentApi";
+import type { StorageAnalysisEvidence, SystemEvidence } from "./systemAgentApi";
 
 const systemAgentMock = vi.hoisted(() => ({
   collect: vi.fn(() => Promise.resolve({} as SystemEvidence)),
@@ -19,6 +19,22 @@ const systemAgentMock = vi.hoisted(() => ({
     }],
     cautions: ["诊断仅供参考"],
   })),
+  storageAnalyze: vi.fn((_goal: string, _evidence: unknown) => Promise.resolve({
+    scanId: "scan-storage",
+    summary: "主要占用来自当前目录。",
+    findings: [{
+      id: "storage-finding-1",
+      title: "审查长期未修改文件",
+      detail: "修改时间只能作为审查线索。",
+      confidence: "medium",
+      risk: "review",
+      evidenceIds: ["file-old"],
+      action: "review_files",
+      targetIds: ["file-old"],
+      relatedSizeGb: 3,
+    }],
+    cautions: ["个人文件需要确认"],
+  })),
   execute: vi.fn(),
 }));
 
@@ -27,6 +43,7 @@ vi.mock("./systemAgentApi", async (importOriginal) => ({
   collectSystemEvidence: systemAgentMock.collect,
   requestSystemPlan: systemAgentMock.plan,
   requestSystemDiagnosis: systemAgentMock.diagnose,
+  requestStorageAnalysis: systemAgentMock.storageAnalyze,
   executeSystemAction: systemAgentMock.execute,
 }));
 
@@ -59,9 +76,9 @@ vi.mock("@tauri-apps/api/event", () => ({
   listen: vi.fn(() => Promise.resolve(() => {})),
 }));
 
-const storageStub = (): ComponentProps<typeof SystemAssistant>["storage"] => ({
+const storageStub = (result: ComponentProps<typeof SystemAssistant>["storage"]["result"] = null): ComponentProps<typeof SystemAssistant>["storage"] => ({
   status: "idle",
-  result: null,
+  result,
   lastScanAt: null,
   progress: null,
   error: null,
@@ -79,6 +96,7 @@ describe("SystemAssistant", () => {
     systemAgentMock.collect.mockClear();
     systemAgentMock.plan.mockClear();
     systemAgentMock.diagnose.mockClear();
+    systemAgentMock.storageAnalyze.mockClear();
     systemAgentMock.execute.mockClear();
   });
 
@@ -134,7 +152,7 @@ describe("SystemAssistant", () => {
     );
 
     expect(await screen.findByText("WinGet exit code 1603")).toBeTruthy();
-    fireEvent.click(screen.getByRole("button", { name: "返回系统方案" }));
+    fireEvent.click(screen.getByRole("button", { name: "返回维护建议" }));
     expect(await screen.findByText("系统状态良好，暂无需要处理的事项。")).toBeTruthy();
   });
 
@@ -236,5 +254,51 @@ describe("SystemAssistant", () => {
     expect(await screen.findByText("方案")).toBeTruthy();
     expect(systemAgentMock.plan).toHaveBeenCalledWith("清理磁盘空间", expect.anything());
     expect(systemAgentMock.diagnose).not.toHaveBeenCalled();
+  });
+
+  it("uses path-free scope evidence for dedicated storage analysis", async () => {
+    const storage = storageStub({
+      scanId: "scan-storage",
+      disks: [],
+      directories: [{
+        id: "dir-project",
+        path: "C:\\Users\\Mona\\SecretProject",
+        sizeGb: 12,
+        fileCount: 20,
+        directSizeGb: 2,
+      }],
+      cleanupItems: [],
+      fileTypes: [],
+      totalScannedGb: 12,
+      topFiles: [{
+        id: "file-old",
+        path: "C:\\Users\\Mona\\SecretProject\\backup.zip",
+        parentDirName: "SecretProject",
+        extension: "zip",
+        sizeGb: 3,
+        modifiedBucket: "old",
+      }],
+    });
+    render(
+      <SystemAssistant
+        tab="storage"
+        storage={storage}
+        software={null}
+        onNavigate={vi.fn()}
+        collapsed={false}
+        handoffTask={null}
+        onHandoffTaskHandled={vi.fn()}
+        onCollapse={vi.fn()}
+        storageSelection={storage.result?.directories[0] ?? null}
+        analysisRequest={{ goal: "分析当前范围", nonce: 3, channel: "storage" }}
+      />,
+    );
+
+    expect(await screen.findByText("存储分析")).toBeTruthy();
+    const evidence = systemAgentMock.storageAnalyze.mock.calls[0][1] as StorageAnalysisEvidence;
+    expect(JSON.stringify(evidence)).not.toContain("C:\\\\Users");
+    expect(JSON.stringify(evidence)).not.toContain("SecretProject");
+    expect(evidence.scope.id).toBe("dir-project");
+    expect(screen.getByText("审查长期未修改文件")).toBeTruthy();
   });
 });

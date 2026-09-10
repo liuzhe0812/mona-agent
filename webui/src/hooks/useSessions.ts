@@ -19,6 +19,20 @@ import type {
 
 const EMPTY_MESSAGES: UIMessage[] = [];
 
+/** Keep startup races recoverable without leaving a request loop running. */
+const SESSION_REFRESH_RETRY_DELAYS_MS = [250, 500, 1_000] as const;
+
+function isRetryableSessionListError(error: unknown): boolean {
+  if (!(error instanceof ApiError)) return true;
+  return error.status === 408 || error.status === 429 || error.status >= 500;
+}
+
+function sessionListErrorMessage(error: unknown): string {
+  if (error instanceof ApiError) return error.message || `HTTP ${error.status}`;
+  if (error instanceof Error && error.message) return error.message;
+  return String(error || "Unknown error");
+}
+
 /** Client-side fallback for system-managed hidden rooms (stock-module design
  *  §5.1): even if the server ever leaks a ``hidden`` conversation row, the
  *  sidebar must never render it. Applied to every server refresh. */
@@ -35,10 +49,11 @@ export function useSessions(): {
   error: string | null;
   refresh: () => Promise<void>;
   createChat: (workspace?: string | null) => Promise<string>;
+  branchChat: (sourceChatId: string, assistantOrdinal: number, sourceTaskId?: string) => Promise<string>;
   deleteChat: (key: string) => Promise<void>;
   updateWorkspace: (key: string, workspace: string | null) => Promise<void>;
 } {
-  const { client, token } = useClientOptional();
+  const { client, token, runtimeStatus, runtimeError } = useClientOptional();
   const [sessions, setSessions] = useState<ChatSummary[]>([]);
   const [loading, setLoading] = useState(true);
   const [loaded, setLoaded] = useState(false);
@@ -47,11 +62,33 @@ export function useSessions(): {
   const optimisticKeysRef = useRef<Set<string>>(new Set());
   const refreshingRef = useRef(false);
   const refreshPendingRef = useRef(false);
+  const retryTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const retryResolveRef = useRef<(() => void) | null>(null);
+  const mountedRef = useRef(true);
+  const connectionStatusRef = useRef(client?.status ?? "idle");
   tokenRef.current = token;
+
+  useEffect(() => {
+    mountedRef.current = true;
+    return () => {
+      mountedRef.current = false;
+      if (retryTimerRef.current !== null) {
+        clearTimeout(retryTimerRef.current);
+        retryTimerRef.current = null;
+      }
+      retryResolveRef.current?.();
+      retryResolveRef.current = null;
+    };
+  }, []);
 
   const refresh = useCallback(async () => {
     if (!client) {
-      setLoading(false);
+      setLoading(runtimeStatus === "connecting" || runtimeStatus === "ready");
+      if (runtimeStatus === "error" || runtimeStatus === "auth") {
+        setError(runtimeError ?? "Runtime unavailable");
+      } else {
+        setError(null);
+      }
       return;
     }
     // IM plan 12.5: bursts of session_updated events coalesce into one
@@ -62,38 +99,60 @@ export function useSessions(): {
       return;
     }
     refreshingRef.current = true;
+    setLoading(true);
+    setError(null);
     try {
       do {
         refreshPendingRef.current = false;
-        try {
-          setLoading(true);
-          const rows = filterVisibleSessions(await listSessions(tokenRef.current));
-          const serverKeys = new Set(rows.map((row) => row.key));
-          setSessions((prev) => [
-            ...rows,
-            ...prev.filter(
-              (session) =>
-                optimisticKeysRef.current.has(session.key) &&
-                !serverKeys.has(session.key),
-            ),
-          ]);
-          setLoaded(true);
-          for (const key of Array.from(optimisticKeysRef.current)) {
-            if (serverKeys.has(key)) optimisticKeysRef.current.delete(key);
+        let completed = false;
+        for (let attempt = 0; attempt <= SESSION_REFRESH_RETRY_DELAYS_MS.length; attempt += 1) {
+          if (attempt > 0) {
+            await new Promise<void>((resolve) => {
+              retryResolveRef.current = resolve;
+              retryTimerRef.current = setTimeout(() => {
+                retryTimerRef.current = null;
+                retryResolveRef.current = null;
+                resolve();
+              }, SESSION_REFRESH_RETRY_DELAYS_MS[attempt - 1]);
+            });
           }
-          setError(null);
-        } catch (e) {
-          const msg =
-            e instanceof ApiError ? `HTTP ${e.status}` : (e as Error).message;
-          setError(msg);
-        } finally {
-          setLoading(false);
+          if (!mountedRef.current) return;
+          try {
+            const rows = filterVisibleSessions(await listSessions(tokenRef.current));
+            if (!mountedRef.current) return;
+            const serverKeys = new Set(rows.map((row) => row.key));
+            setSessions((prev) => [
+              ...rows,
+              ...prev.filter(
+                (session) =>
+                  optimisticKeysRef.current.has(session.key) &&
+                  !serverKeys.has(session.key),
+              ),
+            ]);
+            setLoaded(true);
+            for (const key of Array.from(optimisticKeysRef.current)) {
+              if (serverKeys.has(key)) optimisticKeysRef.current.delete(key);
+            }
+            setError(null);
+            completed = true;
+            break;
+          } catch (e) {
+            if (
+              !isRetryableSessionListError(e) ||
+              attempt === SESSION_REFRESH_RETRY_DELAYS_MS.length
+            ) {
+              if (mountedRef.current) setError(sessionListErrorMessage(e));
+              break;
+            }
+          }
         }
+        if (!completed && !mountedRef.current) return;
       } while (refreshPendingRef.current);
     } finally {
       refreshingRef.current = false;
+      if (mountedRef.current) setLoading(false);
     }
-  }, [client]);
+  }, [client, runtimeError, runtimeStatus]);
 
   useEffect(() => {
     void refresh();
@@ -103,6 +162,18 @@ export function useSessions(): {
     if (!client) return;
     return client.onSessionUpdate(() => {
       void refresh();
+    });
+  }, [client, refresh]);
+
+  useEffect(() => {
+    if (!client) return;
+    connectionStatusRef.current = client.status;
+    return client.onStatus((status) => {
+      const previous = connectionStatusRef.current;
+      connectionStatusRef.current = status;
+      if (status === "open" && previous !== "open") {
+        void refresh();
+      }
     });
   }, [client, refresh]);
 
@@ -131,6 +202,33 @@ export function useSessions(): {
     return chatId;
   }, [client]);
 
+  const branchChat = useCallback(async (
+    sourceChatId: string,
+    assistantOrdinal: number,
+    sourceTaskId?: string,
+  ): Promise<string> => {
+    if (!client) throw new Error("runtime not ready");
+    const chatId = await client.branchChat(sourceChatId, assistantOrdinal, sourceTaskId);
+    const source = sessions.find((item) => item.chatId === sourceChatId);
+    const key = `websocket:${chatId}`;
+    optimisticKeysRef.current.add(key);
+    setSessions((prev) => [
+      {
+        key,
+        channel: "websocket",
+        chatId,
+        createdAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString(),
+        title: source?.title ? `${source.title} · 分支` : "",
+        preview: source?.preview ?? "",
+        workspace: source?.workspace ?? null,
+        conversation: source?.conversation,
+      },
+      ...prev.filter((item) => item.key !== key),
+    ]);
+    return chatId;
+  }, [client, sessions]);
+
   const deleteChat = useCallback(
     async (key: string) => {
       await apiDeleteSession(tokenRef.current, key);
@@ -152,7 +250,7 @@ export function useSessions(): {
     [],
   );
 
-  return { sessions, loading, loaded, error, refresh, createChat, deleteChat, updateWorkspace };
+  return { sessions, loading, loaded, error, refresh, createChat, branchChat, deleteChat, updateWorkspace };
 }
 
 /** Lazy-load a session's on-disk messages the first time the UI displays it. */

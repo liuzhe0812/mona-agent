@@ -21,10 +21,8 @@ import {
   Plus,
   Folder,
   FolderOpen,
-  Settings2,
   TriangleAlert,
   Trash2,
-  UsersRound,
 } from "lucide-react";
 import { useTranslation } from "react-i18next";
 
@@ -35,11 +33,10 @@ import {
   ContextMenuSeparator,
   ContextMenuTrigger,
 } from "@/components/ui/context-menu";
+import { Button } from "@/components/ui/button";
 import {
-  AgentAvatar,
   ConversationAvatar,
   MONA_AGENT_ID,
-  MONA_AVATAR_IMAGE,
   resolveAgentDisplayName,
 } from "@/components/room/AgentAvatar";
 import { useAgents } from "@/components/room/useAgents";
@@ -48,7 +45,6 @@ import { deriveTitle, sessionListTime } from "@/lib/format";
 import { cleanSessionPreview, isGenericMonaTitle } from "@/lib/session-preview";
 import { cn } from "@/lib/utils";
 import type {
-  AgentSummary,
   ChatSummary,
   ConversationListStatus,
 } from "@/lib/types";
@@ -57,8 +53,7 @@ import { useClientContextOrNull } from "@/providers/ClientProvider";
 interface ChatSection {
   label: string;
   sessions: ChatSummary[];
-  kind: "pinned" | "project" | "agent" | "rooms" | "archived";
-  agentId?: string;
+  kind: "pinned" | "project" | "recent" | "archived";
   workspace?: string;
 }
 
@@ -97,6 +92,8 @@ interface ChatListProps {
   showArchived?: boolean;
   actionMenuPortalContainer?: HTMLElement | null;
   loading?: boolean;
+  error?: string | null;
+  onRetry?: () => void | Promise<void>;
   emptyLabel?: string;
   /** Controls whether project sections default to expanded. */
   defaultProjectExpanded?: boolean;
@@ -108,14 +105,6 @@ interface ChatListProps {
   onCreateTask?: (workspace: string) => void;
   projectNames?: Record<string, string>;
   onRequestProjectRename?: (workspace: string, label: string) => void;
-  /** Opens the selected Agent's management surface. */
-  onSelectAgent?: (agentId: string) => void;
-  /** Starts a new direct conversation from an Agent group header. */
-  onStartDirect?: (agentId: string) => void;
-  /** Creates a new room from the rooms group header. */
-  onNewRoom?: () => void;
-  /** Search result mode deliberately suppresses empty Agent groups. */
-  searchMode?: boolean;
 }
 
 export const ChatList = memo(function ChatList({
@@ -135,21 +124,17 @@ export const ChatList = memo(function ChatList({
   showArchived = false,
   defaultProjectExpanded = true,
   loading,
+  error,
+  onRetry,
   emptyLabel,
-  onSelectAgent,
-  onStartDirect,
-  onNewRoom,
   onCreateTask,
   onRemoveProject,
   projectNames = {},
   onRequestProjectRename,
   onOpenProjectFolder,
-  searchMode = false,
 }: ChatListProps) {
   const [visibleLimit, setVisibleLimit] = useState(INITIAL_VISIBLE_SESSIONS);
-  const [expandedGroups, setExpandedGroups] = useState<Set<string>>(
-    () => new Set(["mona", "rooms"]),
-  );
+  const [expandedGroups, setExpandedGroups] = useState<Set<string>>(() => new Set());
   const [projectExpansionOverrides, setProjectExpansionOverrides] = useState<Set<string>>(
     () => new Set(),
   );
@@ -159,21 +144,18 @@ export const ChatList = memo(function ChatList({
   const labels = useMemo(() => ({
     pinned: t("chat.groups.pinned"),
     archived: t("chat.groups.archived"),
-    rooms: t("chat.groups.rooms"),
+    recent: t("chat.groups.recent"),
   }), [t]);
   const groups = useMemo(
-    () => groupAgentSessions(sessions, labels, agentsById, {
+    () => groupConversationSessions(sessions, labels, {
       pinnedKeys,
       archivedKeys,
       showArchived,
-      includeEmptyAgents: !searchMode,
     }),
     [
       archivedKeys,
-      agentsById,
       labels,
       pinnedKeys,
-      searchMode,
       sessions,
       showArchived,
     ],
@@ -293,6 +275,17 @@ export const ChatList = memo(function ChatList({
     };
   }, [expandedGroups, limitedGroups, syncOverlayScrollbar]);
 
+  if (error && sessions.length === 0) {
+    return (
+      <SessionListError
+        error={error}
+        loading={loading}
+        onRetry={onRetry}
+        className="px-5 py-6"
+      />
+    );
+  }
+
   if (loading && sessions.length === 0) {
     return (
       <div className="px-5 py-6 text-caption text-muted-foreground">
@@ -301,7 +294,7 @@ export const ChatList = memo(function ChatList({
     );
   }
 
-  if (sessions.length === 0 && (searchMode || agentsById.size === 0)) {
+  if (sessions.length === 0) {
     return (
       <div className="px-5 py-6 text-caption leading-5 text-muted-foreground/80">
         {emptyLabel ?? t("chat.noSessions")}
@@ -316,6 +309,14 @@ export const ChatList = memo(function ChatList({
 
   return (
     <div className="group/session-list relative h-full min-h-0 min-w-0">
+      {error ? (
+        <SessionListError
+          error={error}
+          loading={loading}
+          onRetry={onRetry}
+          className="mx-3 my-2"
+        />
+      ) : null}
       <div
         ref={scrollViewportRef}
         onScroll={scheduleOverlayScrollbarSync}
@@ -323,15 +324,14 @@ export const ChatList = memo(function ChatList({
       >
       <div className="min-w-0 space-y-2 py-1.5">
         {limitedGroups.map((group) => {
-          const groupKey = group.workspace ? `project:${group.workspace}` : group.agentId ?? group.kind;
-          const collapsible = group.kind === "project" || group.kind === "agent" || group.kind === "rooms" || group.kind === "archived";
+          const groupKey = group.workspace ? `project:${group.workspace}` : group.kind;
+          const collapsible = group.kind === "project" || group.kind === "archived";
           const projectExpanded = defaultProjectExpanded
             ? !projectExpansionOverrides.has(groupKey)
             : projectExpansionOverrides.has(groupKey);
           const expanded = group.kind === "project"
             ? projectExpanded
             : !collapsible || expandedGroups.has(groupKey);
-          const agent = group.agentId ? agentsById.get(group.agentId) : null;
           const projectLabel = group.workspace
             ? projectNames[group.workspace]?.trim() || group.label
             : group.label;
@@ -343,83 +343,28 @@ export const ChatList = memo(function ChatList({
           <section key={groupKey} aria-label={projectLabel}>
             <ContextMenu>
               <ContextMenuTrigger asChild disabled={!isProjectGroup}>
-            <div className={cn(
-              "group/header flex min-h-9 items-center gap-1 px-3 pb-1 pt-1 text-caption font-medium text-muted-foreground/75",
-              group.kind === "agent" && "mx-2 rounded-md transition-colors hover:bg-[hsl(var(--sidebar-hover-surface)/0.04)] hover:text-sidebar-foreground",
-            )}>
-              {group.kind === "agent" && group.agentId ? (
-                <button
+            <div className="group/header flex min-h-9 items-center gap-1 px-3 pb-1 pt-1 text-caption font-medium text-muted-foreground/75">
+              {collapsible ? (
+                <Button
                   type="button"
-                  onClick={() => toggleGroup(groupKey)}
+                  variant="ghost"
+                  size="xs"
+                  onClick={() => toggleGroup(groupKey, group.kind === "project")}
+                  className="h-auto min-w-0 flex-1 justify-start gap-1 px-1 py-1 text-left font-medium hover:bg-[hsl(var(--sidebar-hover-surface)/0.04)] hover:text-sidebar-foreground"
                   aria-expanded={expanded}
-                  className="flex min-w-0 flex-1 items-center gap-1 rounded-md px-1 py-1 text-left"
-                  aria-label={group.label}
+                  aria-label={group.kind === "project" ? projectLabel : group.label}
                 >
                   {expanded ? <ChevronDown className="h-3.5 w-3.5 shrink-0" /> : <ChevronRight className="h-3.5 w-3.5 shrink-0" />}
-                  <AgentAvatar agentId={group.agentId} displayName={agent?.displayName ?? group.label} avatarUrl={agent?.avatarUrl ?? (group.agentId === MONA_AGENT_ID ? MONA_AVATAR_IMAGE : null)} className="h-5 w-5" />
-                  <span className="min-w-0 shrink truncate">{group.label}</span>
-                  {group.sessions.filter((session) => unread.has(session.key)).length > 0 ? (
-                    <span className="shrink-0 rounded-full bg-destructive px-1.5 text-[10px] leading-4 text-white">
-                      {group.sessions.filter((session) => unread.has(session.key)).length}
-                    </span>
-                  ) : null}
-                  {agent?.enabled === false ? <span className="text-micro text-muted-foreground/65">{t("common.disabled", "已停用")}</span> : null}
-                </button>
-              ) : (
-                <button
-                  type="button"
-                  onClick={() => collapsible && toggleGroup(groupKey, group.kind === "project")}
-                  className={cn(
-                    "flex min-w-0 flex-1 items-center gap-1 rounded-md px-1 py-1 text-left",
-                    collapsible && "hover:bg-[hsl(var(--sidebar-hover-surface)/0.04)] hover:text-sidebar-foreground",
-                  )}
-                  aria-expanded={collapsible ? expanded : undefined}
-                  aria-label={group.kind === "project" ? projectLabel : undefined}
-                >
-                  {collapsible ? (
-                    expanded ? <ChevronDown className="h-3.5 w-3.5 shrink-0" /> : <ChevronRight className="h-3.5 w-3.5 shrink-0" />
-                  ) : null}
                   {group.kind === "project" ? (
                     expanded
                       ? <FolderOpen className="h-3.5 w-3.5 shrink-0" />
                       : <Folder className="h-3.5 w-3.5 shrink-0" />
                   ) : null}
-                  {group.kind === "rooms" ? <UsersRound className="h-3.5 w-3.5 shrink-0" /> : null}
                   <span className="min-w-0 flex-1 truncate">{projectLabel}</span>
-                </button>
+                </Button>
+              ) : (
+                <span className="min-w-0 flex-1 truncate px-1 py-1">{projectLabel}</span>
               )}
-              {group.kind === "agent" && group.agentId && agent?.enabled !== false ? (
-                <>
-                  <button
-                    type="button"
-                    onClick={() => onSelectAgent?.(group.agentId!)}
-                    aria-label={t("chat.agentSettings", "Agent 设置")}
-                    title={t("chat.agentSettings", "Agent 设置")}
-                    className="grid h-7 w-7 shrink-0 place-items-center rounded-md text-muted-foreground opacity-0 transition-opacity hover:bg-[hsl(var(--sidebar-hover-surface)/0.06)] hover:text-sidebar-foreground group-hover/header:opacity-100 focus-visible:opacity-100"
-                  >
-                    <Settings2 className="h-3.5 w-3.5" />
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => onStartDirect?.(group.agentId!)}
-                    aria-label={t("chat.newChat")}
-                    className="grid h-7 w-7 shrink-0 place-items-center rounded-md text-muted-foreground opacity-0 transition-opacity hover:bg-[hsl(var(--sidebar-hover-surface)/0.06)] hover:text-sidebar-foreground group-hover/header:opacity-100 focus-visible:opacity-100"
-                  >
-                    <Plus className="h-3.5 w-3.5" />
-                  </button>
-                </>
-              ) : null}
-              {group.kind === "rooms" ? (
-                <button
-                  type="button"
-                  onClick={() => onNewRoom?.()}
-                  aria-label={t("chat.newRoom")}
-                  title={t("chat.newRoom")}
-                  className="grid h-7 w-7 shrink-0 place-items-center rounded-md text-muted-foreground opacity-0 transition-opacity hover:bg-[hsl(var(--sidebar-hover-surface)/0.06)] hover:text-sidebar-foreground group-hover/header:opacity-100 focus-visible:opacity-100"
-                >
-                  <Plus className="h-3.5 w-3.5" />
-                </button>
-              ) : null}
               {group.kind === "project" && group.workspace ? (
                 <button
                   type="button"
@@ -484,8 +429,6 @@ export const ChatList = memo(function ChatList({
                 const agentName = isRoom
                   ? ""
                   : resolveAgentDisplayName(agentsById, conv?.directAgentId ?? MONA_AGENT_ID);
-                const isMonaTask = !isRoom
-                  && (conv?.directAgentId ?? MONA_AGENT_ID) === MONA_AGENT_ID;
                 const taskTitle = !isRoom && (
                   isGenericMonaTitle(generatedTitle, agentName)
                   || generatedTitle.trim().toLocaleLowerCase() === agentName.trim().toLocaleLowerCase()
@@ -498,7 +441,7 @@ export const ChatList = memo(function ChatList({
                   taskTitle ||
                   deriveTitle(cleanedPreview, t("chat.newChat"));
                 const tooltipTitle = rowTitle;
-                // 私聊头像已经表达身份，只有协作房间需要最后发言者前缀。
+                // 协作群摘要标出最后发言者；私聊摘要标出所属 Agent。
                 let speakerPrefix = "";
                 if (isRoom) {
                   const authorId = s.previewAuthorId;
@@ -509,13 +452,17 @@ export const ChatList = memo(function ChatList({
                 const statusLabel = activityState
                   ? t(`chat.activity.${activityState === "waiting_approval" ? "waitingApproval" : activityState}`)
                   : "";
-                const projectPrefix = s.workspace ? `${workspaceLabel(s.workspace)} · ` : "";
-                const summaryTextWithStatus = activityState
-                  ? [statusLabel, cleanedPreview].filter(Boolean).join(" · ")
-                  : `${projectPrefix}${speakerPrefix}${cleanedPreview}`;
-                const summaryText = summaryTextWithStatus.trim() === rowTitle.trim()
+                const previewText = cleanedPreview.trim() === rowTitle.trim()
                   ? ""
-                  : summaryTextWithStatus;
+                  : cleanedPreview;
+                const summaryTextWithStatus = activityState
+                  ? [statusLabel, previewText].filter(Boolean).join(" · ")
+                  : [
+                      s.workspace ? workspaceLabel(s.workspace) : "",
+                      isRoom ? `${speakerPrefix}${previewText}` : agentName,
+                      isRoom ? "" : previewText,
+                    ].filter(Boolean).join(" · ");
+                const summaryText = summaryTextWithStatus.trim();
                 return (
                   <li key={s.key} className="min-w-0 px-2">
                     <ContextMenu>
@@ -541,27 +488,24 @@ export const ChatList = memo(function ChatList({
                           active && "opacity-0",
                         )}
                       />
-                      {isRoom || group.kind === "pinned" ? (
-                        <span className="relative flex h-10 w-10 shrink-0 self-center rounded-md">
-                          <ConversationAvatar
-                            conversation={conv}
-                            agentsById={agentsById}
-                            taskTitle={isMonaTask ? rowTitle : undefined}
-                            className="h-10 w-10 justify-center overflow-hidden rounded-md"
-                            avatarClassName="h-6 w-6 rounded-md text-micro"
+                      <span className="relative flex h-10 w-10 shrink-0 self-center rounded-md">
+                        <ConversationAvatar
+                          conversation={conv}
+                          agentsById={agentsById}
+                          className="h-10 w-10 justify-center overflow-hidden rounded-md"
+                          avatarClassName="h-6 w-6 rounded-md text-micro"
+                        />
+                        {isUnread ? (
+                          <span
+                            aria-label={t("chat.unread")}
+                            title={t("chat.unread")}
+                            className={cn(
+                              "absolute -right-0.5 -top-0.5 h-2 w-2 rounded-full border bg-destructive",
+                              "border-background",
+                            )}
                           />
-                          {isUnread ? (
-                            <span
-                              aria-label={t("chat.unread")}
-                              title={t("chat.unread")}
-                              className={cn(
-                                "absolute -right-0.5 -top-0.5 h-2 w-2 rounded-full border bg-destructive",
-                                "border-background",
-                              )}
-                            />
-                          ) : null}
-                        </span>
-                      ) : <span className="h-8 w-1 shrink-0" aria-hidden />}
+                        ) : null}
+                      </span>
                       <span className="flex h-full min-w-0 flex-1 flex-col justify-center overflow-hidden py-2 text-left">
                         <span className="flex w-full items-baseline gap-2">
                           <span className={cn(
@@ -684,6 +628,47 @@ export const ChatList = memo(function ChatList({
   );
 });
 
+function SessionListError({
+  error,
+  loading,
+  onRetry,
+  className,
+}: {
+  error: string;
+  loading?: boolean;
+  onRetry?: () => void | Promise<void>;
+  className?: string;
+}) {
+  const { t } = useTranslation();
+  return (
+    <div
+      role="alert"
+      className={cn(
+        "flex items-center gap-2 rounded-md border border-destructive/35 bg-destructive/5 px-3 py-2 text-caption text-destructive",
+        className,
+      )}
+    >
+      <TriangleAlert className="h-4 w-4 shrink-0" aria-hidden />
+      <div className="min-w-0 flex-1">
+        <p className="font-medium">{t("app.error.title")}</p>
+        <p className="mt-0.5 break-words text-destructive/80">{error}</p>
+      </div>
+      {onRetry ? (
+        <Button
+          type="button"
+          variant="outline"
+          size="xs"
+          disabled={loading}
+          onClick={() => void onRetry()}
+          className="shrink-0 border-destructive/35 text-destructive hover:bg-destructive/10 hover:text-destructive"
+        >
+          {loading ? t("chat.loading") : t("app.error.retry")}
+        </Button>
+      ) : null}
+    </div>
+  );
+}
+
 /** 第二行摘要区的任务状态图标（§8.2）：执行中为主题色旋转图标。 */
 function ActivityStatusIcon({
   state,
@@ -710,19 +695,17 @@ function ActivityStatusIcon({
   return null;
 }
 
-function groupAgentSessions(
+function groupConversationSessions(
   sessions: ChatSummary[],
   labels: {
     pinned: string;
     archived: string;
-    rooms: string;
+    recent: string;
   },
-  agentsById: ReadonlyMap<string, AgentSummary>,
   options: {
     pinnedKeys: string[];
     archivedKeys: string[];
     showArchived: boolean;
-    includeEmptyAgents: boolean;
   },
 ): ChatSection[] {
   const pinned = new Set(options.pinnedKeys);
@@ -730,8 +713,7 @@ function groupAgentSessions(
   const pinnedSessions: ChatSummary[] = [];
   const projectBuckets = new Map<string, ChatSummary[]>();
   const archivedSessions: ChatSummary[] = [];
-  const directBuckets = new Map<string, ChatSummary[]>();
-  const roomSessions: ChatSummary[] = [];
+  const recentSessions: ChatSummary[] = [];
 
   for (const session of sessions) {
     if (archived.has(session.key)) {
@@ -749,30 +731,7 @@ function groupAgentSessions(
       pinnedSessions.push(session);
       continue;
     }
-    const conversation = session.conversation;
-    if (conversation?.type === "room") {
-      roomSessions.push(session);
-      continue;
-    }
-    const agentId = conversation?.directAgentId ?? MONA_AGENT_ID;
-    const rows = directBuckets.get(agentId) ?? [];
-    rows.push(session);
-    directBuckets.set(agentId, rows);
-  }
-
-  const visibleAgents = [...agentsById.values()]
-    .filter((agent) => agent.visibility !== "internal")
-    .sort((left, right) => {
-      if (left.id === MONA_AGENT_ID) return -1;
-      if (right.id === MONA_AGENT_ID) return 1;
-      return left.displayName.localeCompare(right.displayName);
-    });
-  if (!visibleAgents.some((agent) => agent.id === MONA_AGENT_ID)) {
-    visibleAgents.unshift({
-      id: MONA_AGENT_ID,
-      displayName: "Mona",
-      enabled: true,
-    });
+    recentSessions.push(session);
   }
 
   const groups: ChatSection[] = [];
@@ -787,24 +746,8 @@ function groupAgentSessions(
       sessions: sortSessions(rows),
     });
   }
-  for (const agent of visibleAgents) {
-    const rows = directBuckets.get(agent.id) ?? [];
-    if (!options.includeEmptyAgents && rows.length === 0) continue;
-    groups.push({
-      label: agent.displayName,
-      kind: "agent",
-      agentId: agent.id,
-      sessions: sortSessions(rows),
-    });
-    directBuckets.delete(agent.id);
-  }
-  // A package can be removed after a conversation was created. Keep those
-  // sessions reachable rather than silently dropping them from the sidebar.
-  for (const [agentId, rows] of directBuckets) {
-    groups.push({ kind: "agent", agentId, label: agentId, sessions: sortSessions(rows) });
-  }
-  if (roomSessions.length) {
-    groups.push({ label: labels.rooms, kind: "rooms", sessions: sortSessions(roomSessions) });
+  if (recentSessions.length) {
+    groups.push({ label: labels.recent, kind: "recent", sessions: sortSessions(recentSessions) });
   }
   if (archivedSessions.length) {
     groups.push({ label: labels.archived, kind: "archived", sessions: sortSessions(archivedSessions) });
@@ -837,7 +780,7 @@ function limitGroups(
     if (activeKey && visible.some((session) => session.key === activeKey)) {
       activeVisible = true;
     }
-    if (visible.length > 0 || group.kind === "agent") {
+    if (visible.length > 0) {
       out.push({ ...group, sessions: visible });
     }
   }

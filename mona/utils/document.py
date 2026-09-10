@@ -11,9 +11,9 @@ from loguru import logger
 from mona.utils.helpers import detect_image_mime
 
 # 提取器输出版本：frontmatter 中记录，版本不一致时 reconciliation 重新提取
-EXTRACTOR_VERSION = 2
+EXTRACTOR_VERSION = 4
 
-# 图片扩展名：无可提取文本，资料入库标记为 unsupported
+# 图片扩展名：由资料视觉解析层交给支持视觉的模型处理
 IMAGE_EXTENSIONS: set[str] = {".png", ".jpg", ".jpeg", ".gif", ".webp"}
 
 # 结构化 segment 的最大字符数：超过则二次切分，避免单个 chunk 过大
@@ -105,7 +105,17 @@ def _extract_pdf(path: Path) -> str:
         pages: list[str] = []
         for i, page in enumerate(reader.pages, 1):
             text = page.extract_text() or ""
-            pages.append(f"--- Page {i} ---\n{text}")
+            box = page.mediabox
+            width_pt = float(box.width)
+            height_pt = float(box.height)
+            rotation = int(page.get("/Rotate", 0) or 0) % 360
+            if rotation in {90, 270}:
+                width_pt, height_pt = height_pt, width_pt
+            width_mm = width_pt * 25.4 / 72
+            height_mm = height_pt * 25.4 / 72
+            pages.append(
+                f"--- Page {i} ({width_mm:.2f} x {height_mm:.2f} mm) ---\n{text}"
+            )
         return _truncate("\n\n".join(pages), _MAX_TEXT_LENGTH)
     except Exception as e:
         logger.exception("Failed to extract PDF {}", path)
@@ -312,7 +322,7 @@ def extract_documents(
 class ExtractedSegment:
     """结构化提取单元：携带位置信息（页/幻灯片/工作表/标题）的文本块。"""
 
-    kind: str  # "page" | "slide" | "sheet" | "heading" | "block"
+    kind: str  # "page" | "slide" | "sheet" | "table" | "heading" | "block"
     label: str  # 展示标签，如 "Page 3" / "Slide 2" / "Sheet: 营收 (行 1-200)"
     text: str
     meta: dict[str, Any] = field(default_factory=dict)
@@ -486,7 +496,21 @@ def _segments_docx(path: Path) -> list[ExtractedSegment] | str:
                 current_lines.append(para.text)
         if current_lines or current_heading is not None:
             blocks.append((current_heading, current_lines))
-        return _segments_from_heading_blocks(blocks)
+        segments = _segments_from_heading_blocks(blocks)
+        for table_index, table in enumerate(doc.tables, 1):
+            rows: list[str] = []
+            for row in table.rows:
+                values = [cell.text.strip() for cell in row.cells]
+                if any(values):
+                    rows.append("\t".join(values))
+            if rows:
+                segments.append(ExtractedSegment(
+                    kind="table",
+                    label=f"Table {table_index}",
+                    text="\n".join(rows),
+                    meta={"table": table_index},
+                ))
+        return segments
     except Exception as e:
         logger.exception("Failed to extract DOCX {}", path)
         return f"[error: failed to extract DOCX: {e!s}]"

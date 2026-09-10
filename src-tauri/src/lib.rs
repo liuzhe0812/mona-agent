@@ -1,4 +1,5 @@
 mod browser;
+mod canvas_agent;
 mod contacts;
 mod db;
 mod email;
@@ -19,11 +20,12 @@ mod system;
 mod terminal;
 mod tray;
 mod updater;
+mod workspace_canvas;
 
 use gateway::GatewayManager;
 use services::ServicesManager;
 use settings::AppSettings;
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, OnceLock};
 use tauri::webview::{DownloadEvent, WebviewWindowBuilder};
 use tauri::{Emitter, Listener, Manager, WebviewUrl};
 use tauri::utils::config::Color;
@@ -94,9 +96,13 @@ mod trash_tests {
     }
 }
 
-/// 存储首次启动时待打开的 md 文件路径（前端就绪后拉取）
+/// 存储首次启动时待打开的 Markdown 文件路径（前端就绪后拉取）
 #[derive(Default)]
 struct PendingMdFiles(Mutex<Vec<String>>);
+
+/// 存储首次启动时待打开的 Mona 画布文件路径（前端就绪后拉取）
+#[derive(Default)]
+struct PendingCanvasFiles(Mutex<Vec<String>>);
 
 #[derive(Clone)]
 pub struct GatewayState {
@@ -119,9 +125,26 @@ impl GatewayState {
     }
 
     pub fn start(&self, settings: &AppSettings, app_handle: &tauri::AppHandle) -> Result<u16, String> {
-        let port = self.inner.manager.start(settings, app_handle)?;
+        self.inner.manager.start(settings, Some(app_handle))
+    }
+
+    #[cfg(debug_assertions)]
+    pub fn start_dev_early(&self, settings: &AppSettings) -> Result<u16, String> {
+        self.inner.manager.start(settings, None)
+    }
+
+    pub fn mark_ready(&self, port: u16) -> Result<(), String> {
         *self.inner.port.lock().map_err(|e| e.to_string())? = Some(port);
-        Ok(port)
+        Ok(())
+    }
+
+    pub async fn wait_ready(&self, port: u16, timeout_secs: u64) -> Result<(), String> {
+        let state = self.clone();
+        gateway::wait_for_gateway(port, settings::read_mona_ws_port(), timeout_secs, move || {
+            state.exit_message()
+        })
+        .await?;
+        self.mark_ready(port)
     }
 
     pub fn stop(&self) -> Result<(), String> {
@@ -164,9 +187,18 @@ impl ServicesState {
     }
 
     pub fn start(&self, settings: &AppSettings, app_handle: &tauri::AppHandle) -> Result<u16, String> {
-        let port = self.inner.manager.start(settings, app_handle)?;
+        self.inner.manager.start(settings, app_handle)
+    }
+
+    pub fn mark_ready(&self, port: u16) -> Result<(), String> {
         *self.inner.port.lock().map_err(|e| e.to_string())? = Some(port);
-        Ok(port)
+        Ok(())
+    }
+
+    pub async fn wait_ready(&self, port: u16, timeout_secs: u64) -> Result<(), String> {
+        let state = self.clone();
+        services::wait_for_services(port, timeout_secs, move || state.exit_message()).await?;
+        self.mark_ready(port)
     }
 
     pub fn stop(&self) -> Result<(), String> {
@@ -225,11 +257,7 @@ async fn start_gateway(
     let settings = settings::load_settings();
     settings::ensure_desktop_config(settings.gateway_port, settings.services_port)?;
     let port = state.start(&settings, &app_handle)?;
-    let wait_state = state.inner().clone();
-    gateway::wait_for_gateway(port, GATEWAY_START_TIMEOUT_SECS, move || {
-        wait_state.exit_message()
-    })
-    .await?;
+    state.wait_ready(port, GATEWAY_START_TIMEOUT_SECS).await?;
     Ok(port)
 }
 
@@ -258,11 +286,7 @@ async fn start_services(
     let settings = settings::load_settings();
     settings::ensure_desktop_config(settings.gateway_port, settings.services_port)?;
     let port = state.start(&settings, &app_handle)?;
-    let wait_state = state.inner().clone();
-    services::wait_for_services(port, SERVICES_START_TIMEOUT_SECS, move || {
-        wait_state.exit_message()
-    })
-    .await?;
+    state.wait_ready(port, SERVICES_START_TIMEOUT_SECS).await?;
     Ok(port)
 }
 
@@ -324,7 +348,6 @@ async fn diagnose_gateway(app_handle: tauri::AppHandle) -> Result<serde_json::Va
 /// 桌面应用全部放行权限请求，不弹 WebView2 默认权限提示。
 #[cfg(target_os = "windows")]
 pub(crate) fn attach_permission_allower(window: &tauri::WebviewWindow) {
-    use tauri::webview::Webview;
     let _ = window.with_webview(|wv| {
         use webview2_com::PermissionRequestedEventHandler;
         use webview2_com::Microsoft::Web::WebView2::Win32::{
@@ -351,6 +374,70 @@ pub(crate) fn attach_permission_allower(window: &tauri::WebviewWindow) {
 #[cfg(not(target_os = "windows"))]
 pub(crate) fn attach_permission_allower(_window: &tauri::WebviewWindow) {}
 
+/// 为主窗口注册 WebView2 ProcessFailed 诊断处理器，仅记录非敏感的进程字段。
+#[cfg(target_os = "windows")]
+pub(crate) fn attach_process_failure_logger(window: &tauri::WebviewWindow) {
+    let _ = window.with_webview(|wv| {
+        use webview2_com::Microsoft::Web::WebView2::Win32::{
+            ICoreWebView2ProcessFailedEventArgs2, COREWEBVIEW2_PROCESS_FAILED_KIND,
+            COREWEBVIEW2_PROCESS_FAILED_REASON,
+        };
+        use webview2_com::ProcessFailedEventHandler;
+        use windows::core::Interface;
+
+        unsafe {
+            if let Some(core) = wv.controller().CoreWebView2().ok() {
+                let handler = ProcessFailedEventHandler::create(Box::new(
+                    move |_sender, args| {
+                        if let Some(args) = args {
+                            let mut kind = COREWEBVIEW2_PROCESS_FAILED_KIND(0);
+                            let kind = if args.ProcessFailedKind(&mut kind).is_ok() {
+                                Some(kind.0)
+                            } else {
+                                None
+                            };
+
+                            let details = args
+                                .cast::<ICoreWebView2ProcessFailedEventArgs2>()
+                                .ok()
+                                .map(|args2| {
+                                    let mut reason = COREWEBVIEW2_PROCESS_FAILED_REASON(0);
+                                    let reason = if args2.Reason(&mut reason).is_ok() {
+                                        Some(reason.0)
+                                    } else {
+                                        None
+                                    };
+                                    let mut exit_code = 0;
+                                    let exit_code = if args2.ExitCode(&mut exit_code).is_ok() {
+                                        Some(exit_code)
+                                    } else {
+                                        None
+                                    };
+                                    (reason, exit_code)
+                                })
+                                .unwrap_or((None, None));
+
+                            log::error!(
+                                "[webview2] process failed kind={kind:?} reason={:?} exit_code={:?}",
+                                details.0,
+                                details.1,
+                            );
+                        }
+                        Ok(())
+                    },
+                ));
+                let mut token: i64 = 0;
+                if let Err(error) = core.add_ProcessFailed(&handler, &mut token) {
+                    log::error!("[webview2] failed to attach process failure logger: {error}");
+                }
+            }
+        }
+    });
+}
+
+#[cfg(not(target_os = "windows"))]
+pub(crate) fn attach_process_failure_logger(_window: &tauri::WebviewWindow) {}
+
 fn is_loopback_http_url(url: &reqwest::Url) -> bool {
     if !matches!(url.scheme(), "http" | "https") {
         return false;
@@ -367,6 +454,41 @@ fn is_loopback_http_url(url: &reqwest::Url) -> bool {
         .unwrap_or(false)
 }
 
+#[cfg(test)]
+mod local_http_auth_tests {
+    use super::needs_services_token;
+
+    #[test]
+    fn office_http_uses_services_token_but_socket_uses_ticket() {
+        assert!(needs_services_token("/api/office/sessions"));
+        assert!(needs_services_token("/api/office/sessions/id/checkpoint"));
+        assert!(!needs_services_token("/api/office/ws"));
+    }
+}
+
+fn local_http_client() -> Result<&'static reqwest::Client, String> {
+    static CLIENT: OnceLock<reqwest::Client> = OnceLock::new();
+    if let Some(client) = CLIENT.get() {
+        return Ok(client);
+    }
+    let client = reqwest::Client::builder()
+        .no_proxy()
+        .connect_timeout(std::time::Duration::from_secs(3))
+        .build()
+        .map_err(|e| format!("Failed to create local HTTP client: {}", e))?;
+    let _ = CLIENT.set(client);
+    CLIENT
+        .get()
+        .ok_or_else(|| "Failed to initialize local HTTP client".to_string())
+}
+
+fn needs_services_token(path: &str) -> bool {
+    path.starts_with("/api/materials")
+        || path.starts_with("/api/profile")
+        || (path.starts_with("/api/office") && path != "/api/office/ws")
+        || path == "/api/stock/research/preflight"
+}
+
 #[tauri::command]
 async fn local_http_request(
     method: String,
@@ -381,19 +503,19 @@ async fn local_http_request(
 
     let method = reqwest::Method::from_bytes(method.as_bytes())
         .map_err(|e| format!("Invalid HTTP method: {}", e))?;
-    let client = reqwest::Client::builder()
-        .no_proxy()
-        .build()
-        .map_err(|e| format!("Failed to create local HTTP client: {}", e))?;
+    let client = local_http_client()?;
 
-    // 受保护的 services 路由自动附带本地令牌：资料库前缀，以及会
-    // 触发外部抓取和写入预检上下文的精确股票预检路径。
+    // 受保护的 services 路由自动附带本地令牌：资料库、用户画像、Office，
+    // 以及会触发外部抓取和写入预检上下文的精确股票预检路径。
     // 与 mona/materials/auth.py 的 X-Mona-Token 校验对应。
-    let needs_token = (parsed.path().starts_with("/api/materials")
-        || parsed.path() == "/api/stock/research/preflight")
+    let needs_token = needs_services_token(parsed.path())
         && !headers.iter().any(|(n, _)| n.eq_ignore_ascii_case("x-mona-token"));
 
+    let startup_read = matches!(parsed.path(), "/health" | "/webui/bootstrap" | "/api/sessions");
     let mut request = client.request(method, parsed);
+    if startup_read {
+        request = request.timeout(std::time::Duration::from_secs(10));
+    }
 
     if needs_token {
         let token_path = settings::app_data_dir().join("services.token");
@@ -551,9 +673,41 @@ fn emit_md_file_open(app_handle: &tauri::AppHandle, file_path: &str) {
     }
 }
 
+pub(crate) fn emit_canvas_file_open(app_handle: &tauri::AppHandle, file_path: &str) {
+    if let Some(pending) = app_handle.try_state::<PendingCanvasFiles>() {
+        if let Ok(mut files) = pending.0.lock() {
+            files.push(file_path.to_string());
+        }
+    }
+    let _ = app_handle.emit_to("main", "canvas-file-open", file_path);
+    if let Some(main_window) = app_handle.get_webview_window("main") {
+        let _ = main_window.show();
+        let _ = main_window.unminimize();
+        let _ = main_window.set_focus();
+    }
+}
+
+fn open_supported_file(app_handle: &tauri::AppHandle, file_path: &str) {
+    let lower = file_path.to_lowercase();
+    if lower.ends_with(".md") || lower.ends_with(".markdown") {
+        emit_md_file_open(app_handle, file_path);
+    } else if lower.ends_with(".mona-canvas") {
+        emit_canvas_file_open(app_handle, file_path);
+    }
+}
+
 /// 前端启动时调用，拉取并清空 pending 的 md 文件路径
 #[tauri::command]
 fn get_pending_md_files(state: tauri::State<PendingMdFiles>) -> Vec<String> {
+    let mut files = state.0.lock().unwrap();
+    let result = files.clone();
+    files.clear();
+    result
+}
+
+/// 前端启动时调用，拉取并清空 pending 的 Mona 画布文件路径。
+#[tauri::command]
+fn get_pending_canvas_files(state: tauri::State<PendingCanvasFiles>) -> Vec<String> {
     let mut files = state.0.lock().unwrap();
     let result = files.clone();
     files.clear();
@@ -586,11 +740,26 @@ pub fn run() {
     let services_state = ServicesState::new();
     let gateway_state_for_exit = gateway_state.clone();
     let services_state_for_exit = services_state.clone();
+
+    // In dev, launch source Python before Tauri initializes plugins and WebView2.
+    // The managed state is reused by setup(), which performs the readiness wait
+    // after the app handle and local IPC bridge exist.
+    #[cfg(debug_assertions)]
+    {
+        let settings = settings::load_settings();
+        if settings.auto_start_gateway && settings::check_mona_config().has_provider {
+            if let Err(e) = settings::ensure_desktop_config(settings.gateway_port, settings.services_port) {
+                log::error!("Failed to ensure desktop config: {}", e);
+            } else if let Err(e) = gateway_state.start_dev_early(&settings) {
+                log::error!("Failed to start dev Gateway early: {}", e);
+            }
+        }
+    }
+
     let terminal_state = terminal::TerminalState::new();
     let db_state = db::DbState::new();
     let email_state = email::EmailState::new();
     let contacts_state = contacts::ContactsState::new();
-
     let terminal_state_for_bridge = terminal_state.clone();
 
     tauri::Builder::default()
@@ -605,12 +774,9 @@ pub fn run() {
         .plugin(tauri_plugin_clipboard_manager::init())
         .plugin(tauri_plugin_http::init())
         .plugin(tauri_plugin_single_instance::init(|app, args, _cwd| {
-            // 二次启动时，检查命令行参数中是否有 md 文件
+            // 二次启动时，打开受 Mona 支持的文档。
             for arg in args.iter().skip(1) {
-                let lower = arg.to_lowercase();
-                if lower.ends_with(".md") || lower.ends_with(".markdown") {
-                    let _ = app.emit_to("main", "md-file-open", arg.as_str());
-                }
+                open_supported_file(app, arg);
             }
             // 激活主窗口
             if let Some(main_window) = app.get_webview_window("main") {
@@ -641,7 +807,9 @@ pub fn run() {
         .manage(contacts_state)
         .manage(quick_ask::QuickAskShortcutState::default())
         .manage(browser::BrowserState::new())
+        .manage(canvas_agent::CanvasAgentBridgeState::default())
         .manage(PendingMdFiles::default())
+        .manage(PendingCanvasFiles::default())
         .manage(tray::PendingMailNavigation::default())
         .manage(notification_window::NotificationWindowState::new())
         .manage(system::SystemState::new())
@@ -666,6 +834,7 @@ pub fn run() {
             read_email_schedule_config,
             write_email_schedule_config,
             get_pending_md_files,
+            get_pending_canvas_files,
             set_window_background_color,
             move_to_trash,
             quick_ask::quick_ask_hide,
@@ -675,18 +844,28 @@ pub fn run() {
             quick_ask::quick_ask_open_ssh,
             notes::notes_load_state,
             notes::notes_save_state,
+            notes::notes_delete,
             notes::notes_export_temp,
             notes::notes_create_from_chat,
             notes::notes_read_note_content,
             notes::notes_search,
             notes::notes_search_all,
             notes::notes_save_image,
+            notes::notes_save_image_data,
             notes::notes_get_assets_dir,
             notes::notes_vault_get_path,
             notes::notes_vault_set_path,
             notes::notes_vault_pick_directory,
             notes::get_agent_search_scope,
             notes::set_agent_search_scope,
+            workspace_canvas::workspace_canvas_save,
+            workspace_canvas::workspace_canvas_list,
+            workspace_canvas::workspace_canvas_read,
+            workspace_canvas::workspace_canvas_open_file,
+            workspace_canvas::workspace_canvas_write_file,
+            workspace_canvas::workspace_canvas_migrate_legacy,
+            canvas_agent::canvas_agent_respond,
+            canvas_agent::canvas_agent_stage,
             notes_links::notes_links_get_graph,
             notes_links::notes_links_save_positions,
             notes_links::notes_links_get_backlinks,
@@ -886,12 +1065,24 @@ pub fn run() {
             license::create_subscription,
             license::poll_payment_status,
             license::get_subscription_info,
+            license::get_credit_products,
+            license::get_credit_balance,
+            license::get_credit_ledger,
+            license::get_credit_orders,
+            license::get_credit_usage,
+            license::create_credit_order,
+            license::create_custom_credit_order,
+            license::get_credit_order_status,
+            license::get_model_access_credentials,
+            license::get_managed_model_prices,
+            license::get_managed_model_catalog,
             license::cancel_auto_renew,
             license::list_renewals,
-            license::open_external_url,
+            license::open_payment_url,
             updater::check_for_updates,
             updater::perform_update,
             updater::get_current_version,
+            updater::take_update_error,
             browser::commands::browser_create_tab,
             browser::commands::browser_close_tab,
             browser::commands::browser_update_tab_url,
@@ -999,6 +1190,63 @@ pub fn run() {
             system::defender::system_enable_defender,
         ])
         .setup(move |app| {
+            let settings = settings::load_settings();
+
+            // Recover a failed executable swap before starting either backend.
+            if let Err(e) = updater::cleanup_after_update() {
+                log::warn!("Update cleanup failed: {}", e);
+            }
+
+            // Start the local bridge and Gateway before WebView2 construction so
+            // Python initialization overlaps the comparatively expensive window
+            // creation path in development builds.
+            let bridge = Arc::new(ipc_bridge::IpcBridge::new(app.handle().clone()));
+            let ts = terminal_state_for_bridge.clone();
+            tauri::async_runtime::spawn(async move {
+                if let Err(e) = bridge.start(ts).await {
+                    log::error!("IPC bridge failed: {}", e);
+                }
+            });
+
+            if settings.auto_start_gateway {
+                let config_status = settings::check_mona_config();
+                if config_status.has_provider {
+                    if let Err(e) = settings::ensure_desktop_config(settings.gateway_port, settings.services_port) {
+                        log::error!("Failed to ensure desktop config: {}", e);
+                    }
+                    let state = gateway_state.clone();
+                    let settings_clone = settings.clone();
+                    let app_handle_clone = app.handle().clone();
+                    match state.start(&settings_clone, &app_handle_clone) {
+                        Ok(actual_port) => {
+                            tauri::async_runtime::spawn(async move {
+                                match state.wait_ready(actual_port, GATEWAY_START_TIMEOUT_SECS).await {
+                                    Ok(()) => {
+                                        log::info!("Gateway ready on port {}", actual_port);
+                                        schedule_notifier::start_polling(
+                                            app_handle_clone.clone(),
+                                            settings_clone.services_port,
+                                        );
+                                        email::start_background_sync(
+                                            app_handle_clone.clone(),
+                                            settings_clone.services_port,
+                                        );
+                                    }
+                                    Err(e) => {
+                                        log::error!("Gateway failed to start: {}", e);
+                                    }
+                                }
+                            });
+                        }
+                        Err(e) => {
+                            log::error!("Failed to start gateway: {}", e);
+                        }
+                    }
+                } else {
+                    log::debug!("No provider configured, skipping gateway auto-start");
+                }
+            }
+
             // 创建主窗口（在 builder 上注册 on_download，让 video 原生下载按钮生效）
             // 禁用 Tauri 原生拖放处理器，启用 HTML5 drag-and-drop API（标签页拖拽排序等）
             let _main_window = WebviewWindowBuilder::new(
@@ -1059,6 +1307,7 @@ pub fn run() {
                 let _ = win.set_icon(tray::load_icon());
                 // 桌面应用全部放行权限请求，不弹 WebView2 默认权限提示。
                 attach_permission_allower(&win);
+                attach_process_failure_logger(&win);
             }
 
             tray::setup_tray(app)?;
@@ -1108,7 +1357,7 @@ pub fn run() {
                     if let Some(paths) = payload.get("paths").and_then(|p| p.as_array()) {
                         for path in paths {
                             if let Some(path_str) = path.as_str() {
-                                emit_md_file_open(&app_handle_for_file, path_str);
+                                open_supported_file(&app_handle_for_file, path_str);
                             }
                         }
                     }
@@ -1116,13 +1365,9 @@ pub fn run() {
             });
 
             for arg in std::env::args().skip(1) {
-                let lower = arg.to_lowercase();
-                if lower.ends_with(".md") || lower.ends_with(".markdown") {
-                    emit_md_file_open(app.handle(), &arg);
-                }
+                open_supported_file(app.handle(), &arg);
             }
 
-            let settings = settings::load_settings();
             let shortcut_state = app.state::<quick_ask::QuickAskShortcutState>();
             if let Err(e) = quick_ask::register_quick_ask_shortcut(
                 app.handle(),
@@ -1130,60 +1375,6 @@ pub fn run() {
                 &settings.quick_ask_shortcut,
             ) {
                 log::error!("Failed to register quick ask shortcut: {}", e);
-            }
-
-            if settings.auto_start_gateway {
-                let config_status = settings::check_mona_config();
-                if config_status.has_provider {
-                    if let Err(e) = settings::ensure_desktop_config(settings.gateway_port, settings.services_port) {
-                        log::error!("Failed to ensure desktop config: {}", e);
-                    }
-                    let state = gateway_state.clone();
-                    let settings_clone = settings.clone();
-                    let app_handle_clone = app.handle().clone();
-                    tauri::async_runtime::spawn(async move {
-                        match state.start(&settings_clone, &app_handle_clone) {
-                            Ok(actual_port) => {
-                                let wait_state = state.clone();
-                                match gateway::wait_for_gateway(
-                                    actual_port,
-                                    GATEWAY_START_TIMEOUT_SECS,
-                                    move || wait_state.exit_message(),
-                                )
-                                .await
-                                {
-                                    Ok(()) => {
-                                        log::info!("Gateway ready on port {}", actual_port);
-                                        // Start polling for schedule reminders to fire
-                                        // native system toasts independent of webview state.
-                                        schedule_notifier::start_polling(
-                                            app_handle_clone.clone(),
-                                            settings_clone.services_port,
-                                        );
-                                        // 启动邮箱后台静默同步引擎：30s 后首次执行，之后每 5 分钟一次
-                                        email::start_background_sync(
-                                            app_handle_clone.clone(),
-                                            settings_clone.services_port,
-                                        );
-                                    }
-                                    Err(e) => {
-                                        log::error!("Gateway failed to start: {}", e);
-                                    }
-                                }
-                            }
-                            Err(e) => {
-                                log::error!("Failed to start gateway: {}", e);
-                            }
-                        }
-                    });
-                } else {
-                    log::debug!("No provider configured, skipping gateway auto-start");
-                }
-            }
-
-            // Cleanup after update (remove backups, markers)
-            if let Err(e) = updater::cleanup_after_update() {
-                log::warn!("Update cleanup failed: {}", e);
             }
 
             // Auto-check for updates 5 seconds after launch
@@ -1229,14 +1420,6 @@ pub fn run() {
                         let _ = gateway_state_for_close.stop();
                         let _ = services_state_for_close.stop();
                     }
-                }
-            });
-
-            let bridge = Arc::new(ipc_bridge::IpcBridge::new(app.handle().clone()));
-            let ts = terminal_state_for_bridge.clone();
-            tauri::async_runtime::spawn(async move {
-                if let Err(e) = bridge.start(ts).await {
-                    log::error!("IPC bridge failed: {}", e);
                 }
             });
 

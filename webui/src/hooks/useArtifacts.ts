@@ -5,6 +5,8 @@ import type { DeliveredFile } from "@/lib/types";
 interface UseArtifactsResult {
   files: DeliveredFile[];
   sessionFiles: DeliveredFile[];
+  taskFiles: DeliveredFile[];
+  taskId: string | null;
   loading: boolean;
   error: string | null;
   truncated: boolean;
@@ -22,6 +24,11 @@ export interface ArtifactSource {
   sessionKey?: string | null;
   /** Required when ``scope === "room"``: the room id. */
   room?: string | null;
+  /** Current user-controlled task within a shared session. */
+  taskId?: string | null;
+  /** Stable conversation identity used to keep artifact projections isolated
+   *  when a transport session key is reused. */
+  sourceKey?: string | null;
 }
 
 /** Stream the artifact list from the server (``GET /api/artifacts`` for
@@ -43,14 +50,20 @@ export function useArtifacts(
   refreshSignal?: unknown,
   source: ArtifactSource = {},
 ): UseArtifactsResult {
-  const { scope = "shared", sessionKey = null, room = null } = source;
+  const { scope = "shared", sessionKey = null, room = null, taskId = null, sourceKey = null } = source;
   const [files, setFiles] = useState<DeliveredFile[]>([]);
   const [sessionFiles, setSessionFiles] = useState<DeliveredFile[]>([]);
+  const [taskFiles, setTaskFiles] = useState<DeliveredFile[]>([]);
+  const [resolvedTaskId, setResolvedTaskId] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [truncated, setTruncated] = useState(false);
   const [refreshTick, setRefreshTick] = useState(0);
   const controlRef = useRef({ running: false, pending: false });
+  const sourceId = scope === "room"
+    ? `room:${room ?? ""}:source:${sourceKey ?? ""}`
+    : `${scope}:${sessionKey ?? ""}:source:${sourceKey ?? ""}:task:${taskId ?? "current"}`;
+  const loadedSourceRef = useRef<string | null>(null);
 
   const refresh = useCallback(() => setRefreshTick((t) => t + 1), []);
 
@@ -74,10 +87,13 @@ export function useArtifacts(
             ? await listProjectFiles(token, sessionKey!)
             : scope === "room"
               ? await listArtifacts(token, undefined, room!)
-              : await listArtifacts(token, undefined, undefined, sessionKey!);
+              : await listArtifacts(token, undefined, undefined, sessionKey!, taskId ?? undefined);
         if (cancelled) return;
+        loadedSourceRef.current = sourceId;
         setFiles(result.files);
         setSessionFiles(result.session_files ?? []);
+        setTaskFiles(result.task_files ?? []);
+        setResolvedTaskId(result.task_id ?? taskId);
         setTruncated(result.truncated);
       } catch (err) {
         if (cancelled) return;
@@ -94,7 +110,17 @@ export function useArtifacts(
     return () => {
       cancelled = true;
     };
-  }, [token, refreshTick, refreshSignal, scope, sessionKey, room]);
+  }, [token, refreshTick, refreshSignal, scope, sessionKey, room, taskId, sourceId]);
 
-  return { files, sessionFiles, loading, error, truncated, refresh };
+  const sourceIsCurrent = loadedSourceRef.current === sourceId;
+  return {
+    files: sourceIsCurrent ? files : [],
+    sessionFiles: sourceIsCurrent ? sessionFiles : [],
+    taskFiles: sourceIsCurrent ? taskFiles : [],
+    taskId: sourceIsCurrent ? resolvedTaskId : taskId,
+    loading,
+    error: sourceIsCurrent ? error : null,
+    truncated: sourceIsCurrent ? truncated : false,
+    refresh,
+  };
 }

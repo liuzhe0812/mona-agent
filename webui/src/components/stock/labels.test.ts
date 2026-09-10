@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { dataQualityLabel, diagnosisCurrentActionLabel, evidenceTextLabel, factorLabel, stanceLabel, thesisLabel } from "./labels";
+import { dataQualityLabel, diagnosisCurrentActionLabel, diagnosisEntryConditionStatus, evidenceTextLabel, factorLabel, stanceLabel, thesisLabel } from "./labels";
 
 describe("evidenceTextLabel", () => {
   it("cleans the run_958 historical analyst wording into business Chinese", () => {
@@ -36,7 +36,43 @@ describe("business-facing stock labels", () => {
       action: "avoid",
       not_holding_action: "avoid",
       holding_action: "exit",
-    } as never)).toBe("暂不买入 / 退出");
+    } as never)).toBe("暂不买入");
+    expect(diagnosisCurrentActionLabel({
+      action: "wait",
+      not_holding_action: "wait",
+      holding_action: "hold",
+    } as never)).toBe("暂不买入");
+    expect(diagnosisCurrentActionLabel({
+      action: "conditional_participation",
+      not_holding_action: "conditional_participation",
+      holding_action: "hold",
+      current_action: "wait",
+      materialized_plan: { entry_condition_status: "not_triggered" },
+    } as never)).toBe("暂不买入");
+    expect(diagnosisCurrentActionLabel({
+      action: "conditional_participation",
+      not_holding_action: "conditional_participation",
+      holding_action: "hold",
+      current_action: "participate",
+      materialized_plan: { entry_condition_status: "triggered" },
+    } as never)).toBe("可按计划分批买入");
+  });
+
+  it("re-evaluates a legacy generated single-price condition with the live quote", () => {
+    const decision = {
+      action: "conditional_participation",
+      not_holding_action: "conditional_participation",
+      holding_action: "hold",
+      materialized_plan: {
+        reference_entry_high: 39.36,
+        entry_condition_status: "not_triggered",
+        entry_condition: "价格达到参考买入区间上沿 39.36 元",
+      },
+    } as never;
+    expect(diagnosisEntryConditionStatus(decision, 39.5)).toBe("triggered");
+    expect(diagnosisEntryConditionStatus(decision, 39)).toBe("not_triggered");
+    expect(diagnosisCurrentActionLabel(decision, 39.5)).toBe("可按计划分批买入");
+    expect(diagnosisCurrentActionLabel(decision, 39)).toBe("暂不买入");
   });
 
   it("maps deterministic factor keys and hides unknown internal names", () => {

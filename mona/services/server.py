@@ -15,6 +15,7 @@ they exist exactly once per process.
 from __future__ import annotations
 
 import asyncio
+import inspect
 import threading
 from typing import Any
 
@@ -65,21 +66,26 @@ from mona.api.server import (
     handle_hoard_add,
     handle_hoard_delete_by_url,
     handle_materials_create_directory,
+    handle_materials_create_library,
     handle_materials_delete,
+    handle_materials_delete_library,
     handle_materials_delete_wiki_page,
     handle_materials_extract,
+    handle_materials_get_evidence,
     handle_materials_get_raw,
     handle_materials_get_raw_binary,
     handle_materials_get_text,
     handle_materials_get_wiki_page,
     handle_materials_lint,
     handle_materials_list_files,
+    handle_materials_list_libraries,
     handle_materials_list_wiki,
     handle_materials_llm_config,
     handle_materials_move,
     handle_materials_reconcile,
     handle_materials_search,
     handle_materials_status,
+    handle_materials_update_library,
     handle_materials_write_wiki_page,
     handle_notes_export_docx,
     handle_office_health,
@@ -92,8 +98,13 @@ from mona.api.server import (
     handle_ppt_page_confirm,
     handle_ppt_pages_get,
     handle_ppt_request_export,
+    handle_profile_advice_feedback,
+    handle_profile_advice_start,
+    handle_profile_artifact_feedback,
     handle_profile_comparison,
+    handle_profile_context_update,
     handle_profile_distill,
+    handle_profile_evidence_get,
     handle_profile_get,
     handle_profile_snapshots,
     handle_profile_user_get,
@@ -130,12 +141,26 @@ from mona.api.server import (
     handle_video_ai_scene_html,
     handle_video_ai_scene_rewrite,
     handle_video_project,
+    handle_video_project_archive,
+    handle_video_project_asset_import,
+    handle_video_project_asset_update,
+    handle_video_project_assets,
+    handle_video_project_change_aspect,
+    handle_video_project_copy,
     handle_video_project_create,
     handle_video_project_export,
+    handle_video_project_export_cancel,
+    handle_video_project_export_preflight,
     handle_video_project_export_status,
     handle_video_project_file,
+    handle_video_project_localize,
     handle_video_project_lock_storyboard,
+    handle_video_project_plan,
     handle_video_project_preview_full,
+    handle_video_project_rename,
+    handle_video_project_review_create,
+    handle_video_project_review_resolve,
+    handle_video_project_reviews,
     handle_video_project_save_chat_id,
     handle_video_project_scene_add,
     handle_video_project_scene_confirm,
@@ -144,11 +169,44 @@ from mona.api.server import (
     handle_video_project_scene_preview,
     handle_video_project_scene_regenerate,
     handle_video_project_scene_reorder,
+    handle_video_project_scene_timeline,
     handle_video_project_scene_update,
     handle_video_project_storyboard,
+    handle_video_project_upgrade_style,
+    handle_video_project_version_restore,
+    handle_video_project_versions,
     handle_video_projects,
     handle_video_runtime_check,
     handle_video_runtime_download,
+    handle_video_series_projects_upgrade,
+)
+from mona.api.video_runtime_jobs import (
+    handle_video_runtime_download_cancel,
+    handle_video_runtime_download_start,
+    handle_video_runtime_download_status,
+)
+from mona.api.video_series import (
+    handle_video_background_asset_delete,
+    handle_video_background_asset_import,
+    handle_video_background_asset_preview,
+    handle_video_brand_kit_create,
+    handle_video_brand_kit_lock,
+    handle_video_brand_kits,
+    handle_video_brand_logo_import,
+    handle_video_series_apply_brand_kit,
+    handle_video_series_create,
+    handle_video_series_delete,
+    handle_video_series_get,
+    handle_video_series_list,
+    handle_video_series_update,
+    handle_video_style_draft_get,
+    handle_video_style_draft_put,
+    handle_video_style_lock,
+    handle_video_style_preview,
+    handle_video_style_templates,
+    handle_video_style_validate,
+    handle_video_style_version_to_draft,
+    handle_video_style_versions,
 )
 from mona.email.imap_pool import imap_pool_manager
 from mona.materials.auth import get_services_token, materials_auth_middleware
@@ -157,6 +215,16 @@ from mona.materials.compile import (
     handle_materials_wiki_compile_start,
     handle_materials_wiki_compile_status,
 )
+from mona.materials.knowledge import (
+    handle_agent_knowledge_add,
+    handle_agent_knowledge_graph,
+    handle_agent_knowledge_list,
+    handle_agent_knowledge_remove,
+    handle_agent_knowledge_retry,
+    recover_agent_knowledge_tasks,
+    shutdown_agent_knowledge_tasks,
+)
+from mona.office.api import office_error_middleware, register_office_routes
 from mona.services.stock.api import (
     cleanup_stock_intraday,
     handle_stock_decision_conditions,
@@ -166,6 +234,7 @@ from mona.services.stock.api import (
     handle_stock_diagnosis_fail,
     handle_stock_diagnosis_get,
     handle_stock_diagnosis_list,
+    handle_stock_diagnosis_outcome,
     handle_stock_diagnosis_retry,
     handle_stock_intraday,
     handle_stock_intraday_stream,
@@ -189,11 +258,56 @@ from mona.services.stock.api import (
     handle_stock_screen_templates,
 )
 
+_PRO_ROUTE_PREFIXES = (
+    "/api/ppt",
+    "/api/video",
+    "/api/stock/diagnosis",
+    "/email/analyze",
+    "/email/schedule/",
+    "/api/email/schedule/",
+)
+
+
+async def _has_subscription_access(request: web.Request) -> bool:
+    resolver = request.app.get("subscription_access_resolver")
+    try:
+        if resolver is None:
+            from mona.agent.tools.tauri_ipc import check_subscription_access
+
+            return bool(await asyncio.to_thread(check_subscription_access))
+        result = resolver()
+        if inspect.isawaitable(result):
+            result = await result
+        return result is True
+    except Exception:
+        logger.exception("subscription access check failed")
+        return False
+
+
+@web.middleware
+async def _subscription_middleware(
+    request: web.Request, handler: Any
+) -> web.StreamResponse:
+    if request.method != "OPTIONS" and request.path.startswith(_PRO_ROUTE_PREFIXES):
+        if not await _has_subscription_access(request):
+            return web.json_response(
+                {
+                    "error": "membership_required",
+                    "detail": "该功能需要有效的 Mona Pro 订阅或试用",
+                },
+                status=403,
+            )
+    return await handler(request)
+
 
 async def handle_services_health(request: web.Request) -> web.Response:
     """Identify a compatible services process, not merely a live HTTP server."""
     return web.json_response(
-        {"status": "ok", "service": "mona-services", "capabilities": ["stock-v1"]}
+        {
+            "status": "ok",
+            "service": "mona-services",
+            "capabilities": ["stock-v1", "office-editor-v1"],
+        }
     )
 
 
@@ -215,7 +329,12 @@ def create_services_app(
     """
     app = web.Application(
         client_max_size=20 * 1024 * 1024,
-        middlewares=[_cors_middleware, materials_auth_middleware],
+        middlewares=[
+            _cors_middleware,
+            _subscription_middleware,
+            materials_auth_middleware,
+            office_error_middleware,
+        ],
     )
     # 启动时即解析并持久化 services 令牌，保证 Rust 本地 HTTP 桥读取
     # services.token 时文件已存在（避免首次请求的 chicken-and-egg 401）。
@@ -296,6 +415,14 @@ def create_services_app(
     app.router.add_get("/api/schedule/briefing", handle_todo_briefing)
 
     # Materials routes
+    app.router.add_get("/api/materials/libraries", handle_materials_list_libraries)
+    app.router.add_post("/api/materials/libraries", handle_materials_create_library)
+    app.router.add_patch(
+        "/api/materials/libraries/{library_id}", handle_materials_update_library
+    )
+    app.router.add_delete(
+        "/api/materials/libraries/{library_id}", handle_materials_delete_library
+    )
     app.router.add_get("/api/materials/files", handle_materials_list_files)
     app.router.add_post("/api/materials/directory", handle_materials_create_directory)
     app.router.add_delete("/api/materials/files/{path:.*}", handle_materials_delete)
@@ -303,6 +430,9 @@ def create_services_app(
     app.router.add_post("/api/materials/extract", handle_materials_extract)
     app.router.add_post("/api/materials/reconcile", handle_materials_reconcile)
     app.router.add_get("/api/materials/text/{path:.*}", handle_materials_get_text)
+    app.router.add_get(
+        "/api/materials/evidence/{evidence_id}", handle_materials_get_evidence
+    )
     app.router.add_get("/api/materials/raw/{path:.*}", handle_materials_get_raw)
     app.router.add_get("/api/materials/raw-binary/{path:.*}", handle_materials_get_raw_binary)
     app.router.add_get("/api/materials/wiki", handle_materials_list_wiki)
@@ -320,6 +450,20 @@ def create_services_app(
     app.router.add_post("/api/materials/lint", handle_materials_lint)
     app.router.add_get("/api/materials/status", handle_materials_status)
     app.router.add_get("/api/materials/llm-config", handle_materials_llm_config)
+    app.router.add_get("/api/materials/knowledge", handle_agent_knowledge_list)
+    app.router.add_post("/api/materials/knowledge", handle_agent_knowledge_add)
+    app.router.add_get(
+        "/api/materials/knowledge/graph",
+        handle_agent_knowledge_graph,
+    )
+    app.router.add_post(
+        "/api/materials/knowledge/{document_id}/retry",
+        handle_agent_knowledge_retry,
+    )
+    app.router.add_delete(
+        "/api/materials/knowledge/{document_id}",
+        handle_agent_knowledge_remove,
+    )
 
     # Hoard routes (Agent URL memory: browser star sync)
     app.router.add_post("/api/hoard", handle_hoard_add)
@@ -341,6 +485,10 @@ def create_services_app(
     app.router.add_post("/api/stock/diagnosis", handle_stock_diagnosis_create)
     app.router.add_get("/api/stock/diagnosis", handle_stock_diagnosis_list)
     app.router.add_get("/api/stock/diagnosis/{diagnosis_id}", handle_stock_diagnosis_get)
+    app.router.add_get(
+        "/api/stock/diagnosis/{diagnosis_id}/outcome",
+        handle_stock_diagnosis_outcome,
+    )
     app.router.add_delete(
         "/api/stock/diagnosis/{diagnosis_id}", handle_stock_diagnosis_delete
     )
@@ -388,6 +536,15 @@ def create_services_app(
     app.router.add_get("/api/profile", handle_profile_get)
     app.router.add_get("/api/profile/user", handle_profile_user_get)
     app.router.add_patch("/api/profile/user", handle_profile_user_update)
+    app.router.add_patch("/api/profile/context", handle_profile_context_update)
+    app.router.add_patch(
+        "/api/profile/advice/{id}/feedback", handle_profile_advice_feedback
+    )
+    app.router.add_post("/api/profile/advice/{id}/start", handle_profile_advice_start)
+    app.router.add_patch(
+        "/api/profile/artifacts/{id}/feedback", handle_profile_artifact_feedback
+    )
+    app.router.add_get("/api/profile/evidence/{ref}", handle_profile_evidence_get)
     app.router.add_post("/api/profile/distill", handle_profile_distill)
     app.router.add_get("/api/profile/snapshots", handle_profile_snapshots)
     app.router.add_get("/api/profile/comparison", handle_profile_comparison)
@@ -395,6 +552,15 @@ def create_services_app(
     # Video project routes + url2note + doc2note
     app.router.add_get("/api/video/runtime-check", handle_video_runtime_check)
     app.router.add_post("/api/video/runtime-download", handle_video_runtime_download)
+    app.router.add_post(
+        "/api/video/runtime-download/start", handle_video_runtime_download_start
+    )
+    app.router.add_post(
+        "/api/video/runtime-download/cancel", handle_video_runtime_download_cancel
+    )
+    app.router.add_get(
+        "/api/video/runtime-download/status", handle_video_runtime_download_status
+    )
     app.router.add_post("/api/url2note/extract", handle_url2note_extract)
     app.router.add_get("/api/doc2note/status", handle_doc2note_status)
     app.router.add_post("/api/doc2note/runtime-download", handle_doc2note_runtime_download)
@@ -403,12 +569,88 @@ def create_services_app(
     # Office document collaboration (阶段 B: OfficeCLI-backed AI modification)
     app.router.add_get("/api/office/health", handle_office_health)
     app.router.add_post("/api/office/runtime-download", handle_office_runtime_download)
+    register_office_routes(app, workspace=workspace)
     # Notes → Word export (markdown → .docx, with mermaid PNGs rasterized client-side)
     app.router.add_post("/api/notes/export-docx", handle_notes_export_docx)
     app.router.add_get("/api/video/projects", handle_video_projects)
+    app.router.add_get("/api/video/style/templates", handle_video_style_templates)
+    app.router.add_get("/api/video/series", handle_video_series_list)
+    app.router.add_post("/api/video/series", handle_video_series_create)
+    app.router.add_patch(
+        "/api/video/series/{series_id}", handle_video_series_update
+    )
+    app.router.add_get("/api/video/brand-kits", handle_video_brand_kits)
+    app.router.add_post("/api/video/brand-kits", handle_video_brand_kit_create)
+    app.router.add_post(
+        "/api/video/brand-kits/{kit_id}/logo", handle_video_brand_logo_import
+    )
+    app.router.add_post(
+        "/api/video/brand-kits/{kit_id}/lock", handle_video_brand_kit_lock
+    )
+    app.router.add_get("/api/video/series/{series_id}", handle_video_series_get)
+    app.router.add_delete("/api/video/series/{series_id}", handle_video_series_delete)
+    app.router.add_post(
+        "/api/video/series/{series_id}/brand-kit",
+        handle_video_series_apply_brand_kit,
+    )
+    app.router.add_get(
+        "/api/video/series/{series_id}/style/draft", handle_video_style_draft_get
+    )
+    app.router.add_put(
+        "/api/video/series/{series_id}/style/draft", handle_video_style_draft_put
+    )
+    app.router.add_post(
+        "/api/video/series/{series_id}/style/validate", handle_video_style_validate
+    )
+    app.router.add_post(
+        "/api/video/series/{series_id}/style/preview", handle_video_style_preview
+    )
+    app.router.add_post(
+        "/api/video/series/{series_id}/style/lock", handle_video_style_lock
+    )
+    app.router.add_get(
+        "/api/video/series/{series_id}/styles", handle_video_style_versions
+    )
+    app.router.add_post(
+        "/api/video/series/{series_id}/styles/{version}/draft",
+        handle_video_style_version_to_draft,
+    )
+    app.router.add_post(
+        "/api/video/series/{series_id}/background-assets",
+        handle_video_background_asset_import,
+    )
+    app.router.add_delete(
+        "/api/video/series/{series_id}/background-assets/{asset_id}",
+        handle_video_background_asset_delete,
+    )
+    app.router.add_get(
+        "/api/video/series/{series_id}/background-assets/{asset_id}/preview",
+        handle_video_background_asset_preview,
+    )
+    app.router.add_post("/api/video/project/plan", handle_video_project_plan)
     app.router.add_post("/api/video/project/create", handle_video_project_create)
+    app.router.add_post("/api/video/project/rename", handle_video_project_rename)
+    app.router.add_post("/api/video/project/copy", handle_video_project_copy)
+    app.router.add_post("/api/video/project/archive", handle_video_project_archive)
+    app.router.add_post(
+        "/api/video/project/change-aspect", handle_video_project_change_aspect
+    )
+    app.router.add_post(
+        "/api/video/project/upgrade-style", handle_video_project_upgrade_style
+    )
+    app.router.add_post(
+        "/api/video/series/{series_id}/upgrade-projects",
+        handle_video_series_projects_upgrade,
+    )
     app.router.add_get("/api/video/project", handle_video_project)
     app.router.add_get("/api/video/project-file", handle_video_project_file)
+    app.router.add_get("/api/video/project/assets", handle_video_project_assets)
+    app.router.add_post(
+        "/api/video/project/asset/import", handle_video_project_asset_import
+    )
+    app.router.add_patch(
+        "/api/video/project/asset", handle_video_project_asset_update
+    )
     app.router.add_post(
         "/api/video/project-save-chat-id", handle_video_project_save_chat_id
     )
@@ -427,11 +669,20 @@ def create_services_app(
         "/api/video/project/lock-storyboard", handle_video_project_lock_storyboard
     )
     app.router.add_post(
+        "/api/video/project/localize", handle_video_project_localize
+    )
+    app.router.add_post(
+        "/api/video/project/scene/narration", handle_video_project_scene_narration
+    )
+    app.router.add_get(
         "/api/video/project/scene/narration", handle_video_project_scene_narration
     )
     app.router.add_post("/api/video/ai/scene-html", handle_video_ai_scene_html)
     app.router.add_get(
         "/api/video/project/scene/preview", handle_video_project_scene_preview
+    )
+    app.router.add_get(
+        "/api/video/project/scene/timeline", handle_video_project_scene_timeline
     )
     app.router.add_post(
         "/api/video/project/scene/confirm", handle_video_project_scene_confirm
@@ -441,11 +692,31 @@ def create_services_app(
     )
     app.router.add_post("/api/video/ai/scene-rewrite", handle_video_ai_scene_rewrite)
     app.router.add_post("/api/video/project/export", handle_video_project_export)
+    app.router.add_post(
+        "/api/video/project/export/cancel", handle_video_project_export_cancel
+    )
+    app.router.add_get(
+        "/api/video/project/export-preflight",
+        handle_video_project_export_preflight,
+    )
     app.router.add_get(
         "/api/video/project/export-status", handle_video_project_export_status
     )
     app.router.add_get(
         "/api/video/project/preview-full", handle_video_project_preview_full
+    )
+    app.router.add_get(
+        "/api/video/project/versions", handle_video_project_versions
+    )
+    app.router.add_post(
+        "/api/video/project/version/restore", handle_video_project_version_restore
+    )
+    app.router.add_get("/api/video/project/reviews", handle_video_project_reviews)
+    app.router.add_post(
+        "/api/video/project/review", handle_video_project_review_create
+    )
+    app.router.add_patch(
+        "/api/video/project/review", handle_video_project_review_resolve
     )
 
     # PPT project V2 routes (outline + lock + review + export)
@@ -476,9 +747,11 @@ def create_services_app(
 
     async def _on_cleanup(_app: web.Application) -> None:
         _idle_manager.stop_all()
+        await shutdown_agent_knowledge_tasks()
         await asyncio.to_thread(imap_pool_manager.close_all)
         await cleanup_stock_intraday()
 
+    app.on_startup.append(recover_agent_knowledge_tasks)
     app.on_cleanup.append(_on_cleanup)
 
     logger.info("services app created (business routes, no AgentLoop)")

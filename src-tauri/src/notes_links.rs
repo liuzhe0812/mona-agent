@@ -112,6 +112,12 @@ const CACHE_VERSION: u32 = 5;
 
 /// Wiki 页面在 vault 内的相对路径前缀（POSIX 分隔符）。
 const WIKI_REL_PREFIX: &str = ".mona/materials/wiki/";
+const WIKI_LIBRARIES_REL_PREFIX: &str = ".mona/materials/libraries/";
+
+fn is_material_wiki_path(path: &str) -> bool {
+    path.starts_with(WIKI_REL_PREFIX)
+        || (path.starts_with(WIKI_LIBRARIES_REL_PREFIX) && path.contains("/wiki/"))
+}
 
 fn links_cache_path(vault: &Path) -> PathBuf {
     vault.join(".mona").join("links.json")
@@ -187,9 +193,19 @@ fn scan_vault_links(vault: &Path) -> Vec<ScannedNote> {
     // Recursively scan materials wiki directory: <vault>/.mona/materials/wiki/
     // Wiki pages use `wiki-<UUID>` ids in frontmatter and participate in the
     // unified link graph alongside notes (`note-<UUID>`).
-    let wiki_dir = vault.join(".mona").join("materials").join("wiki");
+    let materials_dir = vault.join(".mona").join("materials");
+    let wiki_dir = materials_dir.join("wiki");
     if wiki_dir.is_dir() {
         scan_wiki_recursive(&wiki_dir, &push, &mut out);
+    }
+    let libraries_dir = materials_dir.join("libraries");
+    if let Ok(entries) = fs::read_dir(libraries_dir) {
+        for entry in entries.flatten() {
+            let library_wiki = entry.path().join("wiki");
+            if library_wiki.is_dir() {
+                scan_wiki_recursive(&library_wiki, &push, &mut out);
+            }
+        }
     }
 
     out
@@ -384,7 +400,7 @@ fn build_graph(vault: &Path) -> LinkGraph {
             path: sn.relative_path.clone(),
             aliases: sn.note.aliases.clone(),
             note_type: sn.note.note_type.clone(),
-            source_kind: if sn.relative_path.starts_with(WIKI_REL_PREFIX) {
+            source_kind: if is_material_wiki_path(&sn.relative_path) {
                 "wiki".to_string()
             } else {
                 "note".to_string()
@@ -504,6 +520,10 @@ fn vault_mtime_newer_than(vault: &Path, threshold: i64) -> bool {
     // Wiki 目录递归检查：wiki 页面参与图谱，其变更必须让缓存失效。
     let wiki_dir = vault.join(".mona").join("materials").join("wiki");
     if wiki_dir.is_dir() && dir_mtime_newer_than(&wiki_dir, threshold) {
+        return true;
+    }
+    let libraries_dir = vault.join(".mona").join("materials").join("libraries");
+    if libraries_dir.is_dir() && dir_mtime_newer_than(&libraries_dir, threshold) {
         return true;
     }
 

@@ -88,6 +88,7 @@ class RuntimeInstallJobManager:
         current_architecture: str | None = None,
         unavailable_reason: str = "官方运行组件服务暂不可用",
         auto_download_enabled: Callable[[], bool] | None = None,
+        local_component_available: Callable[[str], bool] | None = None,
         migration_status: Callable[[], dict[str, object]] | None = None,
         cleanup_legacy: Callable[[], dict[str, int]] | None = None,
     ) -> None:
@@ -99,6 +100,7 @@ class RuntimeInstallJobManager:
         self.current_architecture = current_architecture or _architecture()
         self.unavailable_reason = unavailable_reason
         self.auto_download_enabled = auto_download_enabled or (lambda: True)
+        self.local_component_available = local_component_available or (lambda _component: False)
         self.migration_status = migration_status
         self.cleanup_legacy = cleanup_legacy
         self.cache_dir = getattr(installer, "cache_dir", component_store.root / "downloads")
@@ -175,6 +177,7 @@ class RuntimeInstallJobManager:
                 continue
             active = self.component_store.active(entry.id)
             installed_version = active[0].version if active else None
+            available_locally = active is None and self._available_locally(component)
             components.append(
                 {
                     "component": component,
@@ -184,6 +187,7 @@ class RuntimeInstallJobManager:
                     "downloadBytes": self._dependency_bytes(catalog, entry),
                     "installed": installed_version is not None,
                     "installedVersion": installed_version,
+                    "availableLocally": available_locally,
                     "updateAvailable": bool(
                         installed_version and _newer(entry.version, installed_version)
                     ),
@@ -205,10 +209,17 @@ class RuntimeInstallJobManager:
                     "available": False,
                     "installed": active is not None,
                     "installedVersion": active[0].version if active else None,
+                    "availableLocally": active is None and self._available_locally(component),
                     "updateAvailable": False,
                 }
             )
         return components
+
+    def _available_locally(self, component: str) -> bool:
+        try:
+            return bool(self.local_component_available(component))
+        except Exception:
+            return False
 
     async def start(self, component: str, *, repair: bool = False) -> RuntimeInstallJob:
         if self.installer is None:

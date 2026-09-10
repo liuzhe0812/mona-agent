@@ -1,18 +1,18 @@
 import { useMemo, useState } from "react";
-import { History, Menu, Search, Users } from "lucide-react";
+import { History, Search, Users } from "lucide-react";
 import { useTranslation } from "react-i18next";
 
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { RightSidebarToggleIcon } from "@/components/notes/RightSidebarToggleIcon";
-import { cn } from "@/lib/utils";
+import { LeftSidebarToggleIcon } from "@/components/notes/LeftSidebarToggleIcon";
 import type { ConversationMeta, UIMessage } from "@/lib/types";
 
 interface ThreadHeaderProps {
   title: string;
   onToggleSidebar: () => void;
-  hideSidebarToggleOnDesktop?: boolean;
+  sidebarOpen?: boolean;
   minimal?: boolean;
   /** Multi-agent phase 2d: conversation shape of the active session. Rooms
    *  surface a member-count badge that toggles the room context panel. */
@@ -142,7 +142,7 @@ function ConversationTools({
 export function ThreadHeader({
   title,
   onToggleSidebar,
-  hideSidebarToggleOnDesktop = false,
+  sidebarOpen = true,
   minimal = false,
   conversation = null,
   onToggleRoomPanel,
@@ -159,14 +159,13 @@ export function ThreadHeader({
         <Button
           variant="ghost"
           size="icon"
-          aria-label={t("thread.header.toggleSidebar")}
+          aria-label={sidebarOpen ? "收起会话列表" : "展开会话列表"}
+          title={sidebarOpen ? "收起会话列表" : "展开会话列表"}
+          aria-expanded={sidebarOpen}
           onClick={onToggleSidebar}
-          className={cn(
-            "h-7 w-7 rounded-md text-muted-foreground hover:bg-accent hover:text-foreground",
-            hideSidebarToggleOnDesktop && "lg:hidden",
-          )}
+          className="h-7 w-7 rounded-md text-muted-foreground hover:bg-accent hover:text-foreground"
         >
-          <Menu className="h-3.5 w-3.5" />
+          <LeftSidebarToggleIcon open={sidebarOpen} className="h-3.5 w-3.5" />
         </Button>
       {workspaceHasContent && onToggleWorkspace ? (
           <Button
@@ -193,14 +192,13 @@ export function ThreadHeader({
         <Button
           variant="ghost"
           size="icon"
-          aria-label={t("thread.header.toggleSidebar")}
+          aria-label={sidebarOpen ? "收起会话列表" : "展开会话列表"}
+          title={sidebarOpen ? "收起会话列表" : "展开会话列表"}
+          aria-expanded={sidebarOpen}
           onClick={onToggleSidebar}
-          className={cn(
-            "h-7 w-7 rounded-md text-muted-foreground hover:bg-accent hover:text-foreground",
-            hideSidebarToggleOnDesktop && "lg:hidden",
-          )}
+          className="h-7 w-7 rounded-md text-muted-foreground hover:bg-accent hover:text-foreground"
         >
-          <Menu className="h-3.5 w-3.5" />
+          <LeftSidebarToggleIcon open={sidebarOpen} className="h-3.5 w-3.5" />
         </Button>
         <div className="flex min-w-0 items-center rounded-md px-1.5 py-1 text-[12px] font-medium text-muted-foreground">
           <span className="max-w-[min(60vw,32rem)] truncate">{title}</span>

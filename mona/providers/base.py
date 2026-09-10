@@ -183,7 +183,12 @@ class LLMProvider(ABC):
         Unknown capabilities are reported as ``None`` — callers must treat
         unknown as "not advertised", never as "supported".
         """
-        return resolve_capabilities(self.spec, model)
+        modalities = getattr(self, "model_input_modalities", {}).get(model)
+        return resolve_capabilities(
+            self.spec,
+            model,
+            input_modalities=modalities,
+        )
 
     @staticmethod
     def _sanitize_empty_content(messages: list[dict[str, Any]]) -> list[dict[str, Any]]:
@@ -615,13 +620,17 @@ class LLMProvider(ABC):
             on_thinking_delta=on_thinking_delta,
             on_tool_call_delta=on_tool_call_delta,
         )
-        return await self._run_with_retry(
+        response = await self._run_with_retry(
             self._safe_chat_stream,
             kw,
             messages,
             retry_mode=retry_mode,
             on_retry_wait=on_retry_wait,
         )
+        from mona.usage import record_provider_usage
+
+        record_provider_usage(self, model, response)
+        return response
 
     async def chat_with_retry(
         self,
@@ -656,13 +665,17 @@ class LLMProvider(ABC):
             max_tokens=max_tokens, temperature=temperature,
             reasoning_effort=reasoning_effort, tool_choice=tool_choice,
         )
-        return await self._run_with_retry(
+        response = await self._run_with_retry(
             self._safe_chat,
             kw,
             messages,
             retry_mode=retry_mode,
             on_retry_wait=on_retry_wait,
         )
+        from mona.usage import record_provider_usage
+
+        record_provider_usage(self, model, response)
+        return response
 
     @classmethod
     def _extract_retry_after(cls, content: str | None) -> float | None:

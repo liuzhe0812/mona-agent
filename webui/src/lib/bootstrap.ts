@@ -34,15 +34,15 @@ export async function getGatewayBaseUrl(): Promise<string> {
   if (_wsBaseUrl) return _wsBaseUrl;
   if (isTauri()) {
     let status = await getGatewayStatus();
-    if (!status.running) {
+    if (!status.running || !status.port) {
       try {
         await startGateway();
         status = await getGatewayStatus();
       } catch {
-        // fall through
+        return "";
       }
     }
-    if (status.ws_port) {
+    if (status.port && status.ws_port) {
       _wsBaseUrl = `http://127.0.0.1:${status.ws_port}`;
       return _wsBaseUrl;
     }

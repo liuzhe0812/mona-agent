@@ -343,7 +343,7 @@ class OpenAICompatProvider(LLMProvider):
                 timeout=timeout_s,
             )
         elif self._no_auth:
-            # Zen-style providers reject Authorization headers; strip them.
+            # Keyless providers reject Authorization headers; strip them.
             async def _strip_auth(request: httpx.Request) -> None:
                 request.headers.pop("authorization", None)
 

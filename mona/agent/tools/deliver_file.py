@@ -1,13 +1,14 @@
 """Deliver file tool for submitting generated files as deliverables."""
 
+import uuid
 from contextvars import ContextVar
 from pathlib import Path
 from typing import Any, Awaitable, Callable
 
 from loguru import logger
 
-from mona.agent.artifacts import ArtifactRef
 from mona.agent import run_artifacts
+from mona.agent.artifacts import ArtifactRef
 from mona.agent.tools.base import Tool, tool_parameters
 from mona.agent.tools.context import ContextAware, RequestContext
 from mona.agent.tools.path_utils import get_current_workspace, resolve_workspace_path
@@ -133,7 +134,9 @@ class DeliverFileTool(Tool, ContextAware):
         active_workspace = get_current_workspace(self._workspace)
         allowed_dir = active_workspace if self._restrict_to_workspace else None
 
-        for raw_path in paths:
+        raw_source_ids = kwargs.get("_artifact_source_ids")
+        source_ids = raw_source_ids if isinstance(raw_source_ids, list) else []
+        for output_index, raw_path in enumerate(paths):
             if self._restrict_to_workspace:
                 try:
                     resolved = resolve_workspace_path(raw_path, active_workspace, allowed_dir)
@@ -156,11 +159,15 @@ class DeliverFileTool(Tool, ContextAware):
             except ValueError:
                 display_path = resolved.as_posix()
 
-            owner_kind = "product" if (
-                self._workflow_run_id
-                and active_workspace.name == self._workflow_run_id
-                and active_workspace.parent.name == "stock_projects"
-            ) else "agent"
+            owner_kind = (
+                "product"
+                if (
+                    self._workflow_run_id
+                    and active_workspace.name == self._workflow_run_id
+                    and active_workspace.parent.name == "stock_projects"
+                )
+                else "agent"
+            )
             owner_id = self._workflow_run_id if owner_kind == "product" else self._agent_id
             try:
                 ref = ArtifactRef.for_path(
@@ -175,22 +182,33 @@ class DeliverFileTool(Tool, ContextAware):
                     job_id=self._job_id,
                     workflow_run_id=self._workflow_run_id,
                 )
+                if output_index < len(source_ids) and isinstance(source_ids[output_index], str):
+                    source_id = source_ids[output_index].strip()
+                    if source_id:
+                        session_id = getattr(self, "_session_key", None) or default_chat_id
+                        stable_id = uuid.uuid5(
+                            uuid.NAMESPACE_URL,
+                            f"mona:artifact:{session_id}:{source_id}",
+                        )
+                        ref = ref.model_copy(update={"id": f"artifact_{stable_id.hex}"})
                 ref_payload = ref.model_dump(mode="json")
                 if self._job_id:
                     run_artifacts.append(self._job_id, ref)
             except (OSError, ValueError):
                 return "Error: file is outside the active artifact owner"
 
-            files.append({
-                "path": display_path,
-                "absolute_path": str(resolved),
-                "name": resolved.name,
-                "size": size,
-                "size_human": _human_size(size),
-                "mime": _mime_from_ext(resolved),
-                "summary": summary,
-                "artifact_ref": ref_payload,
-            })
+            files.append(
+                {
+                    "path": display_path,
+                    "absolute_path": str(resolved),
+                    "name": resolved.name,
+                    "size": size,
+                    "size_human": _human_size(size),
+                    "mime": _mime_from_ext(resolved),
+                    "summary": summary,
+                    "artifact_ref": ref_payload,
+                }
+            )
 
         if not files:
             return "Error: no valid files to deliver"
@@ -222,7 +240,9 @@ class DeliverFileTool(Tool, ContextAware):
         try:
             logger.debug(
                 "deliver_file: sending _deliver_files event channel={} chat_id={} files={}",
-                default_channel, default_chat_id, [f["name"] for f in files],
+                default_channel,
+                default_chat_id,
+                [f["name"] for f in files],
             )
             await self._send_callback(msg)
             logger.debug("deliver_file: _deliver_files event sent successfully")

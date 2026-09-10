@@ -1,5 +1,18 @@
-import { Children, isValidElement, useEffect, useRef, useState, type ReactNode } from "react"
-import { X, ZoomIn } from "lucide-react"
+import { Children, isValidElement, useCallback, useEffect, useRef, useState, type ReactNode } from "react"
+import { Download, X, ZoomIn } from "lucide-react"
+import { useTranslation } from "react-i18next"
+
+import { Button } from "@/components/ui/button"
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu"
+import { useThemeValue } from "@/hooks/useTheme"
+
+import { CollapsibleContent } from "./CollapsibleContent"
+import { downloadMermaidDiagram, type MermaidExportFormat } from "./mermaid-export"
 
 interface MermaidDiagramProps {
   code: string
@@ -8,23 +21,26 @@ interface MermaidDiagramProps {
 const svgCache = new Map<string, string>()
 
 export function MermaidDiagram({ code }: MermaidDiagramProps) {
+  const { t } = useTranslation()
+  const isDark = useThemeValue() === "dark"
+  const cacheKey = `${isDark ? "dark" : "light"}:${code}`
   const containerRef = useRef<HTMLDivElement>(null)
   const [error, setError] = useState<string | null>(null)
-  const [svg, setSvg] = useState<string | null>(() => svgCache.get(code) ?? null)
-  const [visible, setVisible] = useState(() => svgCache.has(code))
+  const [svg, setSvg] = useState<string | null>(() => svgCache.get(cacheKey) ?? null)
+  const [visible, setVisible] = useState(() => svgCache.has(cacheKey))
   const [expanded, setExpanded] = useState(false)
   const [scale, setScale] = useState(1)
 
   useEffect(() => {
-    const cached = svgCache.get(code) ?? null
+    const cached = svgCache.get(cacheKey) ?? null
     setError(null)
     setSvg(cached)
     setVisible(Boolean(cached))
-  }, [code])
+  }, [cacheKey])
 
   // Only render when the diagram scrolls into view
   useEffect(() => {
-    if (svgCache.has(code)) return
+    if (svgCache.has(cacheKey)) return
     const el = containerRef.current
     if (!el) return
     const observer = new IntersectionObserver(
@@ -38,12 +54,12 @@ export function MermaidDiagram({ code }: MermaidDiagramProps) {
     )
     observer.observe(el)
     return () => observer.disconnect()
-  }, [code])
+  }, [cacheKey])
 
   // Render mermaid SVG once visible
   useEffect(() => {
     if (!visible || svg) return
-    const cached = svgCache.get(code)
+    const cached = svgCache.get(cacheKey)
     if (cached) {
       setSvg(cached)
       return
@@ -54,13 +70,38 @@ export function MermaidDiagram({ code }: MermaidDiagramProps) {
         const mermaid = (await import("mermaid")).default
         mermaid.initialize({
           startOnLoad: false,
-          theme: "default",
+          theme: "base",
           securityLevel: "strict",
+          themeVariables: isDark
+            ? {
+                background: "#181818",
+                primaryColor: "#242424",
+                primaryTextColor: "#f4f4f4",
+                primaryBorderColor: "#555555",
+                lineColor: "#a3a3a3",
+                secondaryColor: "#242424",
+                tertiaryColor: "#242424",
+                clusterBkg: "#202020",
+                clusterBorder: "#555555",
+                edgeLabelBackground: "#181818",
+              }
+            : {
+                background: "#ffffff",
+                primaryColor: "#ffffff",
+                primaryTextColor: "#242424",
+                primaryBorderColor: "#d9d9d9",
+                lineColor: "#606266",
+                secondaryColor: "#ffffff",
+                tertiaryColor: "#ffffff",
+                clusterBkg: "#fafafa",
+                clusterBorder: "#d9d9d9",
+                edgeLabelBackground: "#ffffff",
+              },
         })
         const id = `mermaid-${Math.random().toString(36).slice(2, 10)}`
         const { svg: rendered } = await mermaid.render(id, code)
         if (!cancelled) {
-          svgCache.set(code, rendered)
+          svgCache.set(cacheKey, rendered)
           setSvg(rendered)
           setError(null)
         }
@@ -73,10 +114,16 @@ export function MermaidDiagram({ code }: MermaidDiagramProps) {
     }
     render()
     return () => { cancelled = true }
-  }, [visible, code, svg])
+  }, [visible, code, svg, cacheKey, isDark])
 
   // Prevent layout shift: compute a stable min-height from code line count
   const estimatedHeight = Math.max(80, code.split("\n").length * 20)
+
+  const handleExport = useCallback((format: MermaidExportFormat) => {
+    const rendered = containerRef.current?.querySelector<SVGSVGElement>("svg")
+    if (!rendered) return
+    void downloadMermaidDiagram(rendered, code, format, isDark ? "#181818" : "#ffffff")
+  }, [code, isDark])
 
   // Close overlay on Escape
   useEffect(() => {
@@ -102,37 +149,39 @@ export function MermaidDiagram({ code }: MermaidDiagramProps) {
 
   return (
     <>
-      <div
-        ref={containerRef}
-        className="group/diagram relative my-2 overflow-x-auto rounded border border-border/40 bg-muted/20 [&>svg]:mx-auto [&>svg]:max-w-full [&>svg]:h-auto"
-        style={{ minHeight: svg ? undefined : estimatedHeight }}
-      >
-        {svg ? (
-          <>
-            <button
-              type="button"
-              onClick={() => setExpanded(true)}
-              className="absolute top-2 right-2 z-10 rounded-md bg-background/80 px-1.5 py-1 text-muted-foreground opacity-0 transition-opacity hover:bg-accent hover:text-foreground group-hover/diagram:opacity-100"
-              title="Enlarge diagram"
-            >
-              <ZoomIn className="h-4 w-4" />
-            </button>
-            <div
-              className="cursor-zoom-in p-3"
-              onClick={() => setExpanded(true)}
-              dangerouslySetInnerHTML={{ __html: svg }}
-            />
-          </>
-        ) : visible ? (
-          <div className="flex items-center justify-center h-full p-4">
-            <span className="text-xs text-muted-foreground animate-pulse">Rendering diagram...</span>
-          </div>
-        ) : (
-          <div className="flex items-center justify-center h-full p-4">
-            <span className="text-xs text-muted-foreground/50">图表</span>
-          </div>
-        )}
-      </div>
+      <CollapsibleContent contentKey={code} maxHeight={384} className="my-2">
+        <div
+          ref={containerRef}
+          className="group/diagram relative overflow-x-auto rounded border border-border/40 bg-muted/20 [&>svg]:mx-auto [&>svg]:max-w-full [&>svg]:h-auto"
+          style={{ minHeight: svg ? undefined : estimatedHeight }}
+        >
+          {svg ? (
+            <>
+              <button
+                type="button"
+                onClick={() => setExpanded(true)}
+                className="absolute top-2 right-2 z-10 rounded-md bg-background/80 px-1.5 py-1 text-muted-foreground opacity-0 transition-opacity hover:bg-accent hover:text-foreground group-hover/diagram:opacity-100"
+                title="Enlarge diagram"
+              >
+                <ZoomIn className="h-4 w-4" />
+              </button>
+              <div
+                className="cursor-zoom-in p-3"
+                onClick={() => setExpanded(true)}
+                dangerouslySetInnerHTML={{ __html: svg }}
+              />
+            </>
+          ) : visible ? (
+            <div className="flex items-center justify-center h-full p-4">
+              <span className="text-xs text-muted-foreground animate-pulse">Rendering diagram...</span>
+            </div>
+          ) : (
+            <div className="flex items-center justify-center h-full p-4">
+              <span className="text-xs text-muted-foreground/50">图表</span>
+            </div>
+          )}
+        </div>
+      </CollapsibleContent>
       {/* Fullscreen overlay */}
       {expanded && svg && (
         <div
@@ -144,6 +193,26 @@ export function MermaidDiagram({ code }: MermaidDiagramProps) {
             onClick={(e) => e.stopPropagation()}
           >
             <div className="absolute top-3 right-3 z-10 flex items-center gap-1">
+              <DropdownMenu>
+                <DropdownMenuTrigger asChild>
+                  <Button type="button" variant="ghost" size="sm" className="h-7 gap-1.5 px-2 text-xs">
+                    <Download className="h-3.5 w-3.5" aria-hidden />
+                    {t("chart.export")}
+                  </Button>
+                </DropdownMenuTrigger>
+                <DropdownMenuContent align="end">
+                  <DropdownMenuItem onSelect={() => handleExport("png")}>
+                    {t("chart.exportPng")}
+                  </DropdownMenuItem>
+                  <DropdownMenuItem onSelect={() => handleExport("svg")}>
+                    {t("chart.exportSvg")}
+                  </DropdownMenuItem>
+                  <DropdownMenuItem onSelect={() => handleExport("drawio")}>
+                    {t("chart.exportDrawio")}
+                  </DropdownMenuItem>
+                </DropdownMenuContent>
+              </DropdownMenu>
+              <span className="mx-1 h-4 w-px bg-border" aria-hidden />
               <button
                 type="button"
                 onClick={() => setScale((s) => Math.min(s + 0.3, 5))}

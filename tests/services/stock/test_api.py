@@ -177,6 +177,10 @@ async def client(store, provider, monkeypatch):
     app.router.add_get("/api/stock/quote", stock_api.handle_stock_quote)
     app.router.add_get("/api/stock/kline", stock_api.handle_stock_kline)
     app.router.add_get("/api/stock/diagnosis/{diagnosis_id}", stock_api.handle_stock_diagnosis_get)
+    app.router.add_get(
+        "/api/stock/diagnosis/{diagnosis_id}/outcome",
+        stock_api.handle_stock_diagnosis_outcome,
+    )
     app.router.add_delete("/api/stock/diagnosis/{diagnosis_id}", stock_api.handle_stock_diagnosis_delete)
     app.router.add_get("/api/stock/research-context", stock_api.handle_stock_research_context)
     app.router.add_post("/api/stock/research/preflight", stock_api.handle_stock_research_preflight)
@@ -213,6 +217,71 @@ async def test_diagnosis_delete_removes_terminal_record(client, store):
     assert await response.json() == {"deleted": record["diagnosis_id"]}
     missing = await client.get(f"/api/stock/diagnosis/{record['diagnosis_id']}")
     assert missing.status == 404
+
+
+@pytest.mark.asyncio
+async def test_standard_diagnosis_outcome_endpoint_tracks_one_stock_path(provider):
+    from tests.services.stock.test_diagnosis_outcome import _report
+
+    class OutcomeDiagnosisService:
+        def get(self, diagnosis_id, **_kwargs):
+            assert diagnosis_id == "diagnosis_outcome_fixture"
+            return {"status": "succeeded", "report": _report()}
+
+        create = execute = list = cancel = fail = retry = delete = lambda self, *args, **kwargs: None
+
+    def series(instrument_id: str, rows: list[tuple[str, float, float, float]]) -> KlineSeries:
+        return KlineSeries(
+            instrument_id=instrument_id,
+            instrument_type="index" if instrument_id == "XSHG:000985" else "equity",
+            bars=[
+                KlineBar(
+                    date=date,
+                    open=close,
+                    high=high,
+                    low=low,
+                    close=close,
+                    volume=1000,
+                )
+                for date, high, low, close in rows
+            ],
+            source=_source(),
+        )
+
+    provider.kline_series["XSHE:002709"] = series(
+        "XSHE:002709",
+        [
+            ("2026-01-02", 39.50, 39.00, 39.20),
+            ("2026-01-05", 39.00, 38.50, 38.80),
+            ("2026-01-06", 42.10, 38.00, 41.50),
+        ],
+    )
+    provider.kline_series["XSHG:000985"] = series(
+        "XSHG:000985",
+        [
+            ("2026-01-02", 101, 99, 100),
+            ("2026-01-05", 102, 100, 101),
+            ("2026-01-06", 103, 101, 102),
+        ],
+    )
+    app = web.Application()
+    app["stock_diagnosis_service"] = OutcomeDiagnosisService()
+    app["stock_diagnosis_provider"] = provider
+    app.router.add_get(
+        "/api/stock/diagnosis/{diagnosis_id}/outcome",
+        stock_api.handle_stock_diagnosis_outcome,
+    )
+    async with TestClient(TestServer(app)) as outcome_client:
+        response = await outcome_client.get(
+            "/api/stock/diagnosis/diagnosis_outcome_fixture/outcome"
+        )
+        assert response.status == 200
+        body = await response.json()
+
+    assert body["outcomeLabel"] == "达到第一止盈"
+    assert body["entryDate"] == "2026-01-05"
+    assert body["firstTriggerType"] == "first_take_profit"
+    assert provider.kline_types[-2:] == ["equity", "index"]
 
 
 async def test_watchlist_add_bare_code_infers_exchange(client):

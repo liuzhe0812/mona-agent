@@ -15,6 +15,7 @@ MONA_BOT_NAME = "Mona"
 MONA_BOT_ICON = ""
 
 if TYPE_CHECKING:
+    from mona.agent.tools.canvas import CanvasToolConfig
     from mona.agent.tools.chart import ChartToolConfig
     from mona.agent.tools.crypto import CryptoToolConfig
     from mona.agent.tools.dataframe import DataframeToolConfig
@@ -196,6 +197,13 @@ class AgentsConfig(Base):
     defaults: AgentDefaults = Field(default_factory=AgentDefaults)
 
 
+class ModelGenerationParameters(Base):
+    """Explicitly enabled optional request fields for one media model."""
+
+    enabled: list[str] = Field(default_factory=list)
+    values: dict[str, str | int | float] = Field(default_factory=dict)
+
+
 class ProviderConfig(Base):
     """LLM provider configuration."""
 
@@ -347,6 +355,32 @@ class VideoModuleConfig(Base):
     hyperframes_version: str = "0.8.16"
 
 
+class ProfileConfig(Base):
+    """User-profile dashboard collection and generation limits."""
+
+    window_days: Literal[30] = 30
+    timezone: str = "Asia/Shanghai"
+    max_evidence_sessions: int = Field(default=50, ge=1, le=100)
+    max_evidence_messages: int = Field(default=200, ge=1, le=400)
+    max_message_chars: int = Field(default=1200, ge=200, le=4000)
+    max_input_tokens: int = Field(default=12000, ge=2000, le=32000)
+    profile_max_output_tokens: int = Field(default=4096, ge=256, le=32000)
+    advice_max_output_tokens: int = Field(default=8192, ge=512, le=32000)
+    llm_timeout_seconds: int = Field(default=120, ge=30, le=120)
+    pipeline_timeout_seconds: int = Field(default=420, ge=60, le=600)
+    max_advice_history: int = Field(default=100, ge=3, le=200)
+
+    @model_validator(mode="after")
+    def validate_timezone(self) -> "ProfileConfig":
+        from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
+
+        try:
+            ZoneInfo(self.timezone)
+        except ZoneInfoNotFoundError as exc:
+            raise ValueError(f"invalid profile timezone: {self.timezone}") from exc
+        return self
+
+
 class MCPServerConfig(Base):
     """MCP server connection configuration (stdio or HTTP)."""
 
@@ -472,6 +506,9 @@ class ToolsConfig(Base):
     chart: ChartToolConfig = Field(
         default_factory=lambda: _lazy_default("mona.agent.tools.chart", "ChartToolConfig"),
     )
+    canvas: CanvasToolConfig = Field(
+        default_factory=lambda: _lazy_default("mona.agent.tools.canvas", "CanvasToolConfig"),
+    )
     crypto: CryptoToolConfig = Field(
         default_factory=lambda: _lazy_default("mona.agent.tools.crypto", "CryptoToolConfig"),
     )
@@ -497,6 +534,7 @@ class Config(BaseSettings):
     services: ServicesConfig = Field(default_factory=ServicesConfig)
     runtime: RuntimeConfig = Field(default_factory=RuntimeConfig)
     video: VideoModuleConfig = Field(default_factory=VideoModuleConfig)
+    profile: ProfileConfig = Field(default_factory=ProfileConfig)
     tools: ToolsConfig = Field(default_factory=ToolsConfig)
     stock: StockConfig = Field(default_factory=StockConfig)
     model_presets: dict[str, ModelPresetConfig] = Field(
@@ -693,6 +731,7 @@ def _resolve_tool_config_refs() -> None:
     """
     import sys
 
+    from mona.agent.tools.canvas import CanvasToolConfig
     from mona.agent.tools.chart import ChartToolConfig
     from mona.agent.tools.crypto import CryptoToolConfig
     from mona.agent.tools.dataframe import DataframeToolConfig
@@ -719,6 +758,7 @@ def _resolve_tool_config_refs() -> None:
     mod.HttpToolConfig = HttpToolConfig  # type: ignore[attr-defined]
     mod.DataframeToolConfig = DataframeToolConfig  # type: ignore[attr-defined]
     mod.ChartToolConfig = ChartToolConfig  # type: ignore[attr-defined]
+    mod.CanvasToolConfig = CanvasToolConfig  # type: ignore[attr-defined]
     mod.CryptoToolConfig = CryptoToolConfig  # type: ignore[attr-defined]
     mod.OfficeToolConfig = OfficeToolConfig  # type: ignore[attr-defined]
     mod.EmailIntelConfig = EmailIntelConfig  # type: ignore[attr-defined]

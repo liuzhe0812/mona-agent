@@ -131,22 +131,81 @@ export function scoreLevel(score: number): { label: string; color: string; level
   return { label: "未涉", color: "#1f2937", level: 0 };
 }
 
-/** 把 work_patterns.evidence.hourly_distribution（{ "9": 12, ... }）转成 7×24 热力图网格。
- *  若无数据返回全 0 网格。 */
-export function hourlyToHeatmap(
+export interface HourlyDistributionPoint {
+  hour: number;
+  count: number;
+}
+
+/** 把小时聚合转换为 24 个真实小时点，不推断对应的星期。 */
+export function hourlyToDistribution(
   hourly: Record<string, number> | undefined | null,
-): number[][] {
-  const grid: number[][] = Array.from({ length: 7 }, () => Array.from({ length: 24 }, () => 0));
-  if (!hourly) return grid;
-  const max = Math.max(1, ...Object.values(hourly));
-  for (const [hStr, count] of Object.entries(hourly)) {
-    const h = Number(hStr);
-    if (!Number.isInteger(h) || h < 0 || h > 23) continue;
-    // 工作日（0-4）给满权重，周末给 0.4
-    for (let day = 0; day < 7; day++) {
-      const factor = day < 5 ? 1 : 0.4;
-      grid[day][h] = Math.round((count / max) * 10 * factor);
+): HourlyDistributionPoint[] {
+  const points = Array.from({ length: 24 }, (_, hour) => ({ hour, count: 0 }));
+  if (!hourly) return points;
+
+  for (const [hourKey, count] of Object.entries(hourly)) {
+    const hour = Number(hourKey);
+    if (!Number.isInteger(hour) || hour < 0 || hour > 23 || !Number.isFinite(count)) continue;
+    points[hour].count += count;
+  }
+  return points;
+}
+
+/** 将 YYYY-MM-DD 日期键按真实星期聚合，结果按周一到周日排列。
+ *  同时兼容旧版 0..6（周一为 0）的星期键。 */
+export function dailyDistributionToWeekdays(
+  daily: Record<string, number> | undefined | null,
+): number[] {
+  const weekdays = Array.from({ length: 7 }, () => 0);
+  if (!daily) return weekdays;
+
+  for (const [key, count] of Object.entries(daily)) {
+    if (!Number.isFinite(count)) continue;
+
+    const dateMatch = /^(\d{4})-(\d{2})-(\d{2})$/.exec(key);
+    if (dateMatch) {
+      const year = Number(dateMatch[1]);
+      const month = Number(dateMatch[2]);
+      const day = Number(dateMatch[3]);
+      const date = new Date(Date.UTC(year, month - 1, day));
+      if (
+        date.getUTCFullYear() === year
+        && date.getUTCMonth() === month - 1
+        && date.getUTCDate() === day
+      ) {
+        // Date#getUTCDay: Sunday=0; this UI uses Monday=0.
+        const mondayIndex = (date.getUTCDay() + 6) % 7;
+        weekdays[mondayIndex] += count;
+      }
+      continue;
+    }
+
+    const weekday = Number(key);
+    if (Number.isInteger(weekday) && weekday >= 0 && weekday <= 6) {
+      weekdays[weekday] += count;
     }
   }
-  return grid;
+
+  return weekdays;
+}
+
+export type OutputStyle = "concise" | "detailed" | "adaptive";
+
+/** 兼容画像历史英文值和当前中文值，统一为稳定的内部枚举。 */
+export function normalizeOutputStyle(value: unknown): OutputStyle | null {
+  if (typeof value !== "string") return null;
+  const normalized = value.trim().toLowerCase();
+  if (normalized === "concise" || normalized === "简洁") return "concise";
+  if (normalized === "detailed" || normalized === "详细") return "detailed";
+  if (normalized === "adaptive" || normalized === "自适应") return "adaptive";
+  return null;
+}
+
+/** 输出画像页面使用的中文标签；未知值保留原文，避免静默丢失信息。 */
+export function outputStyleLabel(value: unknown): string {
+  const style = normalizeOutputStyle(value);
+  if (style === "concise") return "简洁";
+  if (style === "detailed") return "详细";
+  if (style === "adaptive") return "自适应";
+  return typeof value === "string" && value.trim() ? value.trim() : "未知";
 }

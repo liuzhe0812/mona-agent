@@ -1,6 +1,6 @@
 import { Children, isValidElement, useMemo } from "react";
 import type { Components } from "react-markdown";
-import ReactMarkdown from "react-markdown";
+import ReactMarkdown, { defaultUrlTransform } from "react-markdown";
 import rehypeKatex from "rehype-katex";
 import rehypeRaw from "rehype-raw";
 import rehypeSanitize, { defaultSchema } from "rehype-sanitize";
@@ -11,6 +11,7 @@ import remarkMath from "remark-math";
 import { ChatChart } from "@/components/ChatChart";
 import { CodeBlock } from "@/components/CodeBlock";
 import { FileReferenceChip, isLikelyFilePath } from "@/components/FileReferenceChip";
+import { MermaidDiagram, unwrapMermaidPre } from "@/components/common/mermaid-diagram";
 import { isTauri, openPathWithSystemApp, openExternalUrl, revealItemInDir } from "@/lib/tauri";
 import { useMaterialsOpenStore } from "@/lib/materials-open-store";
 import { useWorkspaceStore, resolveToAbsolutePath } from "@/lib/workspace-store";
@@ -53,6 +54,13 @@ const rehypePlugins: import("unified").PluggableList = [
   rehypeKatex,
 ];
 
+function markdownUrlTransform(url: string): string {
+  if (url.startsWith("mona:material?") || url.startsWith("mona:email?")) {
+    return url;
+  }
+  return defaultUrlTransform(url);
+}
+
 /**
  * Heavy markdown stack (GFM, math, KaTeX, syntax highlighting) kept in a
  * separate chunk so the app shell can paint sooner on refresh.
@@ -70,6 +78,9 @@ export default function MarkdownTextRenderer({
           const code = String(kids).replace(/\n$/, "");
           if (match[1].toLowerCase() === "chart" && highlightCode) {
             return <ChatChart source={code} />;
+          }
+          if (match[1].toLowerCase() === "mermaid" && highlightCode) {
+            return <MermaidDiagram code={code} />;
           }
           return (
             <CodeBlock
@@ -113,6 +124,8 @@ export default function MarkdownTextRenderer({
         );
       },
       pre({ children: markdownChildren }) {
+        const mermaid = unwrapMermaidPre(markdownChildren);
+        if (mermaid) return <>{mermaid}</>;
         const kids = Children.toArray(markdownChildren);
         const lone = kids.length === 1 ? kids[0] : null;
         /** Highlighted fences render ``CodeBlock`` (block shell); skip invalid ``<pre><div>``. */
@@ -201,6 +214,7 @@ export default function MarkdownTextRenderer({
         remarkPlugins={remarkPlugins}
         rehypePlugins={rehypePlugins}
         components={components}
+        urlTransform={markdownUrlTransform}
       >
         {children}
       </ReactMarkdown>
@@ -244,11 +258,13 @@ function MonaMaterialLink({ href, children }: { href: string; children: React.Re
     const linkPath = params.get("path");
     if (!linkPath) return;
     const location = params.get("location") ?? undefined;
+    const knowledgeBaseId = params.get("knowledgeBaseId") ?? undefined;
+    const agentId = params.get("agentId") ?? undefined;
     const { request } = useMaterialsOpenStore.getState();
     if (linkPath.startsWith("wiki/")) {
-      request({ kind: "wiki", path: linkPath.slice("wiki/".length), location });
+      request({ kind: "wiki", path: linkPath.slice("wiki/".length), location, knowledgeBaseId, agentId });
     } else {
-      request({ kind: "raw", path: linkPath, location });
+      request({ kind: "raw", path: linkPath, location, knowledgeBaseId, agentId });
     }
   };
   return (

@@ -1,24 +1,21 @@
 /**
- * MaterialsSidebar — 资料库侧边栏：顶部 toolbar + 双分组列表（原始资料 / AI 整理）。
+ * MaterialsSidebar — 资料库侧边栏：添加后自动处理，用户只管理资料文件。
  */
 
-import { useCallback, useEffect, useMemo, useRef, useState, forwardRef, useImperativeHandle } from "react";
+import { useCallback, useEffect, useState, forwardRef, useImperativeHandle } from "react";
 import {
+  BookOpen,
   ChevronRight,
   FileText,
   Folder,
   Loader2,
+  Pencil,
+  Plus,
   Search,
   Trash2,
   X,
 } from "lucide-react";
 
-import {
-  ContextMenu,
-  ContextMenuContent,
-  ContextMenuItem,
-  ContextMenuTrigger,
-} from "@/components/ui/context-menu";
 import {
   Dialog,
   DialogContent,
@@ -38,21 +35,25 @@ import {
 } from "@/lib/tauri";
 import {
   createMaterialsDirectory,
-  deleteMaterialsFile,
-  deleteWikiPage,
-  extractMaterialsText,
-  getMaterialsStatus,
-  getWikiCompileStatus,
+  createKnowledgeLibrary,
   cancelWikiCompile,
+  deleteKnowledgeLibrary,
+  deleteMaterialsFile,
+  extractMaterialsText,
+  getWikiCompileStatus,
+  getMaterialsStatus,
+  listKnowledgeLibraries,
   listMaterialsFiles,
   listWikiPages,
   moveMaterialsFile,
   reconcileMaterials,
   searchMaterials,
   startWikiCompile,
+  type KnowledgeLibrary,
   type MaterialsSearchResult,
   type WikiCompileStatus,
   type WikiPageSummary,
+  updateKnowledgeLibrary,
 } from "@/lib/materials-api";
 import type {
   MaterialsSidebarHandle,
@@ -69,17 +70,19 @@ import { useMaterialsOpenStore } from "@/lib/materials-open-store";
 export const MaterialsSidebar = forwardRef<MaterialsSidebarHandle, MaterialsSidebarProps>(
   function MaterialsSidebar({ selection, onSelect, onStateChange }, ref) {
   const [initialized, setInitialized] = useState(false);
+  const [libraries, setLibraries] = useState<KnowledgeLibrary[]>([]);
+  const [knowledgeBaseId, setKnowledgeBaseId] = useState("kb-default");
+  const [libraryPromptOpen, setLibraryPromptOpen] = useState(false);
+  const [libraryRenameOpen, setLibraryRenameOpen] = useState(false);
+  const [libraryDeleteOpen, setLibraryDeleteOpen] = useState(false);
 
   const [tree, setTree] = useState<TreeNode[]>([]);
-  const [rawLoading, setRawLoading] = useState(false);
   const [wikiPages, setWikiPages] = useState<WikiPageSummary[]>([]);
-  const [wikiLoading, setWikiLoading] = useState(false);
-
+  const [compileTask, setCompileTask] = useState<WikiCompileStatus | null>(null);
+  const [compileCancelling, setCompileCancelling] = useState(false);
+  const [rawLoading, setRawLoading] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [compiling, setCompiling] = useState(false);
-  const [compileTask, setCompileTask] = useState<WikiCompileStatus | null>(null);
-  const compileTaskIdRef = useRef<string | null>(null);
 
   // 资料搜索：非空 query 时以搜索结果替换下方双分组列表
   const [searchQuery, setSearchQuery] = useState("");
@@ -88,11 +91,11 @@ export const MaterialsSidebar = forwardRef<MaterialsSidebarHandle, MaterialsSide
 
   const [rawCollapsed, setRawCollapsed] = useState(false);
   const [wikiCollapsed, setWikiCollapsed] = useState(false);
-  const [wikiGroupCollapsed, setWikiGroupCollapsed] = useState<Set<string>>(new Set());
   const [expandedPaths, setExpandedPaths] = useState<Set<string>>(new Set());
 
   // raw 根目录绝对路径，用于"打开文件路径"功能
   const [rawRoot, setRawRoot] = useState<string | null>(null);
+  const [evidenceSummary, setEvidenceSummary] = useState<{ represented: number; excluded: number; uncovered: number; complete: boolean } | null>(null);
   // 刷新信号：递增后通知所有已展开的 TreeRow 重新加载子目录内容
   const [refreshTick, setRefreshTick] = useState(0);
 
@@ -102,9 +105,8 @@ export const MaterialsSidebar = forwardRef<MaterialsSidebarHandle, MaterialsSide
   );
   const [deleteConfirm, setDeleteConfirm] = useState<{
     open: boolean;
-    kind: "raw" | "wiki";
     path: string;
-  }>({ open: false, kind: "raw", path: "" });
+  }>({ open: false, path: "" });
   const [moveTarget, setMoveTarget] = useState<{ open: boolean; srcPath: string }>(
     { open: false, srcPath: "" },
   );
@@ -112,12 +114,18 @@ export const MaterialsSidebar = forwardRef<MaterialsSidebarHandle, MaterialsSide
   const init = useCallback(async () => {
     if (!isTauri()) return;
     try {
-      await materialsEnsureInitialized();
+      const available = await listKnowledgeLibraries();
+      const initialId = selection?.knowledgeBaseId && available.some((item) => item.id === selection.knowledgeBaseId)
+        ? selection.knowledgeBaseId
+        : available[0]?.id ?? "kb-default";
+      setLibraries(available);
+      setKnowledgeBaseId(initialId);
+      await materialsEnsureInitialized(initialId);
       setInitialized(true);
     } catch (err) {
       console.error("[materials] init failed:", err);
     }
-  }, []);
+  }, [selection?.knowledgeBaseId]);
 
   useEffect(() => {
     void init();
@@ -127,17 +135,20 @@ export const MaterialsSidebar = forwardRef<MaterialsSidebarHandle, MaterialsSide
     setRawLoading(true);
     try {
       // 先做轻量对账（补缺/清理孤儿/同步索引），再拉取最新列表
-      await reconcileMaterials().catch(() => undefined);
-      const entries = await listMaterialsFiles();
+      await reconcileMaterials(knowledgeBaseId).catch(() => undefined);
+      const [entries, pages] = await Promise.all([
+        listMaterialsFiles(undefined, knowledgeBaseId),
+        listWikiPages(knowledgeBaseId),
+      ]);
       setTree(buildTree(entries));
+      setWikiPages(pages);
       // 异步获取 raw 根目录绝对路径（用于"打开文件路径"）
-      if (rawRoot === null) {
-        try {
-          const status = await getMaterialsStatus();
-          if (status.rawRoot) setRawRoot(status.rawRoot);
-        } catch {
-          // 静默失败，不影响列表加载
-        }
+      try {
+        const status = await getMaterialsStatus(knowledgeBaseId);
+        if (rawRoot === null && status.rawRoot) setRawRoot(status.rawRoot);
+        setEvidenceSummary(status.evidence ?? null);
+      } catch {
+        // 静默失败，不影响列表加载
       }
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
@@ -146,40 +157,30 @@ export const MaterialsSidebar = forwardRef<MaterialsSidebarHandle, MaterialsSide
       // 通知已展开的子目录重新加载（解决移动/删除后子目录缓存不刷新）
       setRefreshTick((t) => t + 1);
     }
-  }, [rawRoot]);
-
-  const refreshWiki = useCallback(async () => {
-    setWikiLoading(true);
-    try {
-      const data = await listWikiPages();
-      setWikiPages(data);
-    } catch (err) {
-      setError(err instanceof Error ? err.message : String(err));
-    } finally {
-      setWikiLoading(false);
-    }
-  }, []);
-
-  const refreshAll = useCallback(async () => {
-    setError(null);
-    await Promise.all([refreshRaw(), refreshWiki()]);
-  }, [refreshRaw, refreshWiki]);
+  }, [rawRoot, knowledgeBaseId]);
 
   useEffect(() => {
-    if (initialized) void refreshAll();
-  }, [initialized, refreshAll]);
+    if (initialized) void refreshRaw();
+  }, [initialized, refreshRaw]);
 
-  // Report busy/compiling state to parent so tab bar buttons can disable.
   useEffect(() => {
-    onStateChange?.({ busy, compiling });
-  }, [busy, compiling, onStateChange]);
+    setRawRoot(null);
+    setTree([]);
+    setWikiPages([]);
+    if (selection?.knowledgeBaseId && selection.knowledgeBaseId !== knowledgeBaseId) return;
+    onSelect(null);
+  }, [knowledgeBaseId]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Report processing state to parent so the add button can disable.
+  useEffect(() => {
+    onStateChange?.({ busy });
+  }, [busy, onStateChange]);
 
   const handleUpload = useCallback(
     async (targetDir: string) => {
       if (!isTauri()) return;
       try {
         setError(null);
-        setCompileTask(null);
         const { open } = await import("@tauri-apps/plugin-dialog");
         const selected = await open({
           multiple: true,
@@ -193,14 +194,14 @@ export const MaterialsSidebar = forwardRef<MaterialsSidebarHandle, MaterialsSide
         if (!selected) return;
         const paths = Array.isArray(selected) ? selected : [selected];
         setBusy(true);
-        const imported = await materialsImportFiles(paths, targetDir);
+        const imported = await materialsImportFiles(paths, targetDir, knowledgeBaseId);
         // 上传后立即触发后台文本提取，避免 extractStatus 永远为 pending
         // 对每个导入的文件单独触发提取（extract API 接受相对 raw/ 的路径）
         for (const entry of imported) {
           if (entry.kind === "file") {
             const rawRel = entry.path.replace(/^raw\//, "");
             try {
-              await extractMaterialsText(rawRel);
+              await extractMaterialsText(rawRel, knowledgeBaseId);
             } catch (extractErr) {
               console.warn(`[materials] extract trigger failed for ${rawRel}:`, extractErr);
             }
@@ -215,7 +216,7 @@ export const MaterialsSidebar = forwardRef<MaterialsSidebarHandle, MaterialsSide
         setBusy(false);
       }
     },
-    [refreshRaw],
+    [refreshRaw, knowledgeBaseId],
   );
 
   const handleCreateFolder = useCallback((parentDir: string) => {
@@ -227,51 +228,46 @@ export const MaterialsSidebar = forwardRef<MaterialsSidebarHandle, MaterialsSide
       const parentDir = folderPrompt.parentDir;
       try {
         const rel = parentDir ? `${parentDir}/${name}` : name;
-        await createMaterialsDirectory(rel);
+        await createMaterialsDirectory(rel, knowledgeBaseId);
         await refreshRaw();
+        setFolderPrompt((current) => ({ ...current, open: false }));
       } catch (err) {
         setError(err instanceof Error ? err.message : String(err));
       }
     },
-    [folderPrompt.parentDir, refreshRaw],
+    [folderPrompt.parentDir, refreshRaw, knowledgeBaseId],
   );
 
   const handleDeleteRaw = useCallback((path: string) => {
-    setDeleteConfirm({ open: true, kind: "raw", path });
-  }, []);
-
-  const handleDeleteWiki = useCallback((path: string) => {
-    setDeleteConfirm({ open: true, kind: "wiki", path });
+    setDeleteConfirm({ open: true, path });
   }, []);
 
   const submitDelete = useCallback(async () => {
-    const { kind, path } = deleteConfirm;
+    const { path } = deleteConfirm;
     try {
-      if (kind === "raw") {
-        await deleteMaterialsFile(path.replace(/^raw\//, ""));
-        if (selection?.kind === "raw" && selection.path === path) {
-          onSelect(null);
-        }
-        await refreshRaw();
-      } else {
-        await deleteWikiPage(path);
-        if (selection?.kind === "wiki" && selection.path === path) {
-          onSelect(null);
-        }
-        await refreshWiki();
+      await deleteMaterialsFile(path.replace(/^raw\//, ""), knowledgeBaseId);
+      if (selection?.kind === "raw" && selection.path === path) {
+        onSelect(null);
       }
+      await refreshRaw();
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
     }
-  }, [deleteConfirm, selection, onSelect, refreshRaw, refreshWiki]);
+  }, [deleteConfirm, selection, onSelect, refreshRaw, knowledgeBaseId]);
 
-  const handleExtract = useCallback(async (path: string) => {
+  const handleRetry = useCallback(async (path: string) => {
+    setBusy(true);
     try {
-      await extractMaterialsText(path.replace(/^raw\//, ""));
+      setError(null);
+      await extractMaterialsText(path.replace(/^raw\//, ""), knowledgeBaseId);
+      await refreshRaw();
+      setTimeout(() => void refreshRaw(), 2000);
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setBusy(false);
     }
-  }, []);
+  }, [refreshRaw, knowledgeBaseId]);
 
   const handleMove = useCallback((srcPath: string) => {
     setMoveTarget({ open: true, srcPath });
@@ -280,13 +276,13 @@ export const MaterialsSidebar = forwardRef<MaterialsSidebarHandle, MaterialsSide
   const submitMove = useCallback(
     async (targetDir: string) => {
       try {
-        await moveMaterialsFile(moveTarget.srcPath.replace(/^raw\//, ""), targetDir);
+        await moveMaterialsFile(moveTarget.srcPath.replace(/^raw\//, ""), targetDir, knowledgeBaseId);
         await refreshRaw();
       } catch (err) {
         setError(err instanceof Error ? err.message : String(err));
       }
     },
-    [moveTarget.srcPath, refreshRaw],
+    [moveTarget.srcPath, refreshRaw, knowledgeBaseId],
   );
 
   // 拖拽移动：把 srcPath 拖到 targetDir 目录（相对 raw/ 的目录路径，空字符串表示根目录）
@@ -309,13 +305,13 @@ export const MaterialsSidebar = forwardRef<MaterialsSidebarHandle, MaterialsSide
         if (srcParent === tgtRel) return;
       }
       try {
-        await moveMaterialsFile(srcRel, tgtRel);
+        await moveMaterialsFile(srcRel, tgtRel, knowledgeBaseId);
         await refreshRaw();
       } catch (err) {
         setError(err instanceof Error ? err.message : String(err));
       }
     },
-    [refreshRaw],
+    [refreshRaw, knowledgeBaseId],
   );
 
   // 在系统资源管理器中定位文件（revealItemInDir 无路径白名单限制）
@@ -329,68 +325,107 @@ export const MaterialsSidebar = forwardRef<MaterialsSidebarHandle, MaterialsSide
     [rawRoot],
   );
 
-  // 后端编译：启动任务后轮询进度，支持取消。
-  // paths 相对 raw/，可为文件或目录（目录由后端递归展开）。
-  const runCompile = useCallback(
-    async (paths: string[]) => {
-      if (paths.length === 0) {
-        setError("没有可入库的资料。请先上传文件。");
-        return;
-      }
-      setCompiling(true);
-      setCompileTask(null);
-      setError(null);
-      try {
-        const { taskId } = await startWikiCompile(paths);
-        compileTaskIdRef.current = taskId;
-        for (;;) {
-          const status = await getWikiCompileStatus(taskId);
-          setCompileTask(status);
-          if (status.state !== "running") {
-            if (status.errors.length > 0 && status.state !== "cancelled") {
-              setError(
-                `入库完成，但有 ${status.errors.length} 个错误：\n${status.errors.slice(0, 3).join("\n")}${status.errors.length > 3 ? `\n…（共 ${status.errors.length} 个）` : ""}`,
-              );
-            }
-            break;
-          }
-          await new Promise((resolve) => setTimeout(resolve, 1000));
-        }
-      } catch (err) {
-        setError(err instanceof Error ? err.message : String(err));
-      } finally {
-        compileTaskIdRef.current = null;
-        setCompiling(false);
-        await Promise.all([refreshRaw(), refreshWiki()]);
-      }
-    },
-    [refreshRaw, refreshWiki],
-  );
-
-  const handleCompile = useCallback(async () => {
+  const handleCreateLibrary = useCallback(async (name: string) => {
     try {
-      const entries = await listMaterialsFiles();
-      // 传根目录全部条目（含目录），后端递归展开，修复旧流程只编译根目录文件的问题
-      const paths = entries.map((e) => e.path.replace(/^raw\//, "")).filter(Boolean);
-      if (paths.length === 0) {
-        setError("当前资料库没有原始资料。请先上传文件，再点击“全部入库”。");
-        return;
-      }
-      await runCompile(paths);
+      const created = await createKnowledgeLibrary(name);
+      const available = await listKnowledgeLibraries();
+      setLibraries(available);
+      setKnowledgeBaseId(created.id);
+      await materialsEnsureInitialized(created.id);
+      setLibraryPromptOpen(false);
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
     }
-  }, [runCompile]);
+  }, []);
+
+  const handleRenameLibrary = useCallback(async (name: string) => {
+    try {
+      await updateKnowledgeLibrary(knowledgeBaseId, { name });
+      setLibraries(await listKnowledgeLibraries());
+      setLibraryRenameOpen(false);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
+    }
+  }, [knowledgeBaseId]);
+
+  const handleDeleteLibrary = useCallback(async () => {
+    try {
+      await deleteKnowledgeLibrary(knowledgeBaseId);
+      const available = await listKnowledgeLibraries();
+      setLibraries(available);
+      setKnowledgeBaseId(available[0]?.id ?? "kb-default");
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
+    }
+  }, [knowledgeBaseId]);
+
+  const runCompile = useCallback(async (paths: string[]) => {
+    if (paths.length === 0) {
+      setError("当前知识库还没有可整理的来源资料");
+      return;
+    }
+    setBusy(true);
+    setError(null);
+    setCompileCancelling(false);
+    try {
+      const started = await startWikiCompile(paths, knowledgeBaseId);
+      let status = await getWikiCompileStatus(started.taskId);
+      setCompileTask(status);
+      const deadline = Date.now() + 10 * 60 * 1000;
+      while (status.state === "running") {
+        const remaining = deadline - Date.now();
+        if (remaining <= 0) break;
+        await new Promise((resolve) => window.setTimeout(resolve, Math.min(600, remaining)));
+        status = await getWikiCompileStatus(started.taskId);
+        setCompileTask(status);
+      }
+      if (status.state === "running") {
+        const cancelled = await cancelWikiCompile(started.taskId).catch(() => ({ cancelled: false }));
+        if (cancelled.cancelled) {
+          status = { ...status, state: "cancelled" };
+          setCompileTask(status);
+        }
+        setError("整理时间较长，已停止等待。你可以稍后重试");
+      } else if (status.state === "error") {
+        setError(status.errors[0] ?? "整理失败，请重试");
+      }
+      await refreshRaw();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setBusy(false);
+    }
+  }, [knowledgeBaseId, refreshRaw]);
+
+  const handleCompile = useCallback(async () => {
+    await runCompile(tree.map((node) => node.entry.path.replace(/^raw\//, "")));
+  }, [tree, runCompile]);
+
+  const handleUpdateStaleWiki = useCallback(async () => {
+    const paths = Array.from(new Set(
+      wikiPages
+        .filter((page) => page.stale)
+        .flatMap((page) => page.sources ?? [])
+        .map((source) => source.replace(/^raw\//, "")),
+    ));
+    await runCompile(
+      paths.length > 0
+        ? paths
+        : tree.map((node) => node.entry.path.replace(/^raw\//, "")),
+    );
+  }, [wikiPages, tree, runCompile]);
 
   const handleCancelCompile = useCallback(async () => {
-    const taskId = compileTaskIdRef.current;
-    if (!taskId) return;
+    if (!compileTask || compileTask.state !== "running") return;
+    setCompileCancelling(true);
     try {
-      await cancelWikiCompile(taskId);
-    } catch {
-      // 任务可能刚好结束，忽略
+      await cancelWikiCompile(compileTask.taskId);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setCompileCancelling(false);
     }
-  }, []);
+  }, [compileTask]);
 
   // Expose imperative handlers for the parent (tab bar buttons).
   useImperativeHandle(ref, () => ({
@@ -409,7 +444,7 @@ export const MaterialsSidebar = forwardRef<MaterialsSidebarHandle, MaterialsSide
     }
     setSearching(true);
     const timer = window.setTimeout(() => {
-      searchMaterials({ query: q, count: 30 })
+      searchMaterials({ query: q, count: 30, scope: "all", knowledgeBaseId })
         .then((results) => setSearchResults(results))
         .catch((err) => {
           setError(err instanceof Error ? err.message : String(err));
@@ -418,52 +453,29 @@ export const MaterialsSidebar = forwardRef<MaterialsSidebarHandle, MaterialsSide
         .finally(() => setSearching(false));
     }, 300);
     return () => window.clearTimeout(timer);
-  }, [searchQuery]);
+  }, [searchQuery, knowledgeBaseId]);
 
   const handleSearchResultClick = useCallback(
     (result: MaterialsSearchResult) => {
       if (result.kind === "material_wiki") {
-        onSelect({ kind: "wiki", path: result.path });
-      } else {
-        // 索引契约：source 结果的 path 已相对 raw/（如 docs/foo.pdf）
-        const rawPath = `raw/${result.path}`;
-        onSelect({ kind: "raw", path: rawPath });
-        // 携带位置标签跳转：与 mona:material 引用跳转同一定位机制
-        if (result.locationLabel) {
-          useMaterialsOpenStore.getState().request({
-            kind: "raw",
-            path: rawPath,
-            location: result.locationLabel,
-          });
-        }
+        onSelect({ kind: "wiki", path: result.path, knowledgeBaseId });
+        return;
+      }
+      // 索引契约：source 结果的 path 已相对 raw/（如 docs/foo.pdf）
+      const rawPath = `raw/${result.path}`;
+      onSelect({ kind: "raw", path: rawPath, knowledgeBaseId });
+      // 携带位置标签跳转：与 mona:material 引用跳转同一定位机制
+      if (result.locationLabel) {
+        useMaterialsOpenStore.getState().request({
+          kind: "raw",
+          path: rawPath,
+          location: result.locationLabel,
+          knowledgeBaseId,
+        });
       }
     },
-    [onSelect],
+    [onSelect, knowledgeBaseId],
   );
-
-  // Wiki 页面按顶层目录分组（sources/entities/concepts/...），根级页面归入 "" 组
-  const wikiGroups = useMemo(() => {
-    const groups = new Map<string, WikiPageSummary[]>();
-    for (const page of wikiPages) {
-      const dir = page.path.includes("/") ? page.path.split("/")[0] : "";
-      const list = groups.get(dir) ?? [];
-      list.push(page);
-      groups.set(dir, list);
-    }
-    return [...groups.entries()].sort((a, b) => a[0].localeCompare(b[0]));
-  }, [wikiPages]);
-
-  const toggleWikiGroup = useCallback((dir: string) => {
-    setWikiGroupCollapsed((prev) => {
-      const next = new Set(prev);
-      if (next.has(dir)) {
-        next.delete(dir);
-      } else {
-        next.add(dir);
-      }
-      return next;
-    });
-  }, []);
 
   const toggleExpand = useCallback((path: string) => {
     setExpandedPaths((prev) => {
@@ -477,6 +489,8 @@ export const MaterialsSidebar = forwardRef<MaterialsSidebarHandle, MaterialsSide
     });
   }, []);
 
+  const staleWikiCount = wikiPages.filter((page) => page.stale).length;
+
   if (!initialized) {
     return (
       <div className="flex flex-1 items-center justify-center text-ui text-muted-foreground">
@@ -488,9 +502,105 @@ export const MaterialsSidebar = forwardRef<MaterialsSidebarHandle, MaterialsSide
 
   return (
     <>
+      <div className="flex items-center gap-1 px-2 pb-1">
+        <select
+          aria-label="当前知识库"
+          value={knowledgeBaseId}
+          onChange={(event) => setKnowledgeBaseId(event.target.value)}
+          className="h-7 min-w-0 flex-1 rounded-md border border-border bg-background px-2 text-caption"
+        >
+          {libraries.map((library) => (
+            <option key={library.id} value={library.id}>{library.name}</option>
+          ))}
+        </select>
+        <Button
+          type="button"
+          variant="ghost"
+          size="icon"
+          aria-label="新建知识库"
+          onClick={() => setLibraryPromptOpen(true)}
+          className="h-7 w-7"
+        >
+          <Plus className="h-3.5 w-3.5" />
+        </Button>
+        <Button
+          type="button"
+          variant="ghost"
+          size="icon"
+          aria-label="重命名知识库"
+          onClick={() => setLibraryRenameOpen(true)}
+          className="h-7 w-7"
+        >
+          <Pencil className="h-3.5 w-3.5" />
+        </Button>
+        <Button
+          type="button"
+          variant="ghost"
+          size="icon"
+          aria-label="删除知识库"
+          disabled={knowledgeBaseId === "kb-default"}
+          onClick={() => setLibraryDeleteOpen(true)}
+          className="h-7 w-7 text-destructive"
+        >
+          <Trash2 className="h-3.5 w-3.5" />
+        </Button>
+      </div>
       {error ? (
         <div className="whitespace-pre-wrap px-3 py-1.5 text-[11.5px] text-destructive">
           {error}
+        </div>
+      ) : null}
+
+      {compileTask ? (
+        <div className="flex items-center gap-2 px-3 pb-1 text-micro text-muted-foreground">
+          <span className="min-w-0 flex-1">
+            {compileTask.state === "running"
+              ? `正在整理 ${compileTask.completedFiles}/${compileTask.totalFiles}`
+              : `整理${compileTask.state === "done" ? "完成" : compileTask.state === "cancelled" ? "已取消" : "结束"}，生成 ${compileTask.pagesWritten} 个知识页面${compileTask.coverage.complete ? "" : "，部分内容尚未整理"}`}
+          </span>
+          {compileTask.state === "running" ? (
+            <Button
+              type="button"
+              variant="ghost"
+              size="sm"
+              aria-label="取消编译"
+              disabled={compileCancelling}
+              onClick={() => void handleCancelCompile()}
+              className="h-6 shrink-0 px-1.5 text-[11px] text-destructive"
+            >
+              {compileCancelling ? "取消中..." : "取消"}
+            </Button>
+          ) : null}
+        </div>
+      ) : null}
+      {staleWikiCount > 0 ? (
+        <div className="mx-2 mb-1 flex items-center gap-2 rounded-md bg-amber-500/10 px-2.5 py-2 text-caption text-amber-700">
+          <span className="min-w-0 flex-1">来源资料有变化，{staleWikiCount} 个知识页面需要更新</span>
+          <Button
+            type="button"
+            variant="ghost"
+            size="sm"
+            disabled={busy}
+            onClick={() => void handleUpdateStaleWiki()}
+            className="h-6 shrink-0 px-1.5 text-[11px] text-amber-700"
+          >
+            一键更新
+          </Button>
+        </div>
+      ) : null}
+      {staleWikiCount === 0 && evidenceSummary && evidenceSummary.uncovered > 0 ? (
+        <div className="mx-2 mb-1 flex items-center gap-2 rounded-md bg-amber-500/10 px-2.5 py-2 text-caption text-amber-700">
+          <span className="min-w-0 flex-1">有部分来源资料尚未完成整理</span>
+          <Button
+            type="button"
+            variant="ghost"
+            size="sm"
+            disabled={busy}
+            onClick={() => void handleCompile()}
+            className="h-6 shrink-0 px-1.5 text-[11px] text-amber-700"
+          >
+            继续整理
+          </Button>
         </div>
       ) : null}
 
@@ -503,7 +613,7 @@ export const MaterialsSidebar = forwardRef<MaterialsSidebarHandle, MaterialsSide
           onKeyDown={(e) => {
             if (e.key === "Escape") setSearchQuery("");
           }}
-          placeholder="搜索资料正文和 Wiki..."
+          placeholder="搜索当前知识库..."
           className="pl-7 pr-7 text-caption"
         />
         {searchQuery ? (
@@ -518,46 +628,7 @@ export const MaterialsSidebar = forwardRef<MaterialsSidebarHandle, MaterialsSide
         ) : null}
       </div>
 
-      {compileTask ? (
-        <div
-          className={cn(
-            "border-b border-border/70 px-3 py-1.5 text-[11.5px] text-muted-foreground",
-            compileTask.state === "error" && "text-destructive",
-          )}
-        >
-          <div className="flex items-center gap-1.5">
-            {compileTask.state === "running" ? (
-              <Loader2 className="h-3 w-3 animate-spin" />
-            ) : null}
-            <span className="min-w-0 flex-1 truncate">
-              {compileTask.state === "running"
-                ? compileTask.currentFile || "正在入库..."
-                : compileTask.state === "done"
-                  ? `入库完成：处理 ${compileTask.completedFiles} 个资料，生成 ${compileTask.pagesWritten} 个 Wiki 页面`
-                  : compileTask.state === "cancelled"
-                    ? "入库已取消"
-                    : "入库失败"}
-            </span>
-            {compileTask.state === "running" ? (
-              <button
-                type="button"
-                onClick={handleCancelCompile}
-                className="shrink-0 rounded px-1 py-0.5 text-[10.5px] text-muted-foreground hover:bg-accent hover:text-foreground"
-              >
-                取消
-              </button>
-            ) : null}
-          </div>
-          {compileTask.state === "running" ? (
-            <div className="mt-0.5 text-[10.5px]">
-              已完成 {compileTask.completedFiles} / {compileTask.totalFiles} · 生成{" "}
-              {compileTask.pagesWritten} 页
-            </div>
-          ) : null}
-        </div>
-      ) : null}
-
-      {/* 列表区：搜索模式 / 双分组模式 */}
+      {/* 列表区：搜索结果或资料目录 */}
       <div className="min-h-0 flex-1 overflow-y-auto py-1 scrollbar-thin">
         {searchResults !== null ? (
           searching ? (
@@ -585,11 +656,13 @@ export const MaterialsSidebar = forwardRef<MaterialsSidebarHandle, MaterialsSide
                     </span>
                   ) : null}
                   {r.stale ? (
-                    <span className="shrink-0 text-[10px] text-amber-600">已过期</span>
+                    <span
+                      className="shrink-0 text-[10px] text-amber-600"
+                      title="来源资料有变化，更新后可使用最新内容"
+                    >
+                      需更新
+                    </span>
                   ) : null}
-                  <span className="shrink-0 text-[10px] text-muted-foreground">
-                    {r.kind === "material_wiki" ? "Wiki" : "原文"}
-                  </span>
                 </div>
                 {r.snippet ? (
                   <div className="line-clamp-2 pl-5 text-micro text-muted-foreground">
@@ -601,7 +674,7 @@ export const MaterialsSidebar = forwardRef<MaterialsSidebarHandle, MaterialsSide
           )
         ) : (
         <>
-        {/* 原始资料分组（整个区域作为根目录 drop target） */}
+        {/* 资料目录（整个区域作为根目录 drop target） */}
         <div
           onDragOver={(e) => {
             e.preventDefault();
@@ -616,14 +689,14 @@ export const MaterialsSidebar = forwardRef<MaterialsSidebarHandle, MaterialsSide
           }}
         >
           <GroupHeader
-            label="原始资料"
+            label="来源资料"
             collapsed={rawCollapsed}
             onToggle={() => setRawCollapsed((v) => !v)}
           />
           {!rawCollapsed ? (
             tree.length === 0 && !rawLoading ? (
               <div className="px-3 py-3 text-center text-[11.5px] text-muted-foreground">
-                还没有资料。点击上方上传按钮添加文件。
+                还没有资料。点击上方“添加资料”。
               </div>
             ) : (
               tree.map((node) => (
@@ -633,21 +706,20 @@ export const MaterialsSidebar = forwardRef<MaterialsSidebarHandle, MaterialsSide
                   depth={0}
                   selection={selection}
                   expandedPaths={expandedPaths}
-                  onSelectRaw={(path) => onSelect({ kind: "raw", path })}
+                  onSelectRaw={(path) => onSelect({ kind: "raw", path, knowledgeBaseId })}
                   onToggleExpand={toggleExpand}
                   onUpload={handleUpload}
                   onCreateFolder={handleCreateFolder}
                   onDelete={handleDeleteRaw}
                   onMove={handleMove}
-                  onExtract={handleExtract}
-                  onCompile={(path) => void runCompile([path.replace(/^raw\//, "")])}
+                  onRetry={handleRetry}
                   onDragDrop={handleDragDrop}
                   onOpenLocation={handleOpenLocation}
                   refreshTick={refreshTick}
                   loadChildren={async (path) => {
                     try {
                       const rel = path.replace(/^raw\//, "");
-                      const entries = await listMaterialsFiles(rel);
+                      const entries = await listMaterialsFiles(rel, knowledgeBaseId);
                       return buildTree(entries);
                     } catch {
                       return [];
@@ -659,56 +731,72 @@ export const MaterialsSidebar = forwardRef<MaterialsSidebarHandle, MaterialsSide
           ) : null}
         </div>
 
-        {/* AI 整理分组（按顶层目录再分组） */}
-        <GroupHeader
-          label="AI 整理"
-          collapsed={wikiCollapsed}
-          onToggle={() => setWikiCollapsed((v) => !v)}
-        />
-        {!wikiCollapsed ? (
-          wikiPages.length === 0 && !wikiLoading ? (
-            <div className="px-3 py-3 text-center text-[11.5px] text-muted-foreground">
-              还没有 AI 整理页面。
-            </div>
-          ) : (
-            wikiGroups.map(([dir, pages]) => (
-              <div key={dir || "_root"}>
-                {dir ? (
-                  <button
-                    type="button"
-                    onClick={() => toggleWikiGroup(dir)}
-                    className="flex w-full items-center gap-1 px-2 py-0.5 text-micro text-muted-foreground hover:text-foreground"
-                  >
-                    <ChevronRight
-                      className={cn(
-                        "h-3 w-3 transition-transform",
-                        !wikiGroupCollapsed.has(dir) && "rotate-90",
-                      )}
-                    />
-                    <span>{dir}</span>
-                    <span className="text-[10px]">{pages.length}</span>
-                  </button>
-                ) : null}
-                {!dir || !wikiGroupCollapsed.has(dir)
-                  ? pages.map((page) => (
-                      <WikiRow
-                        key={page.path}
-                        page={page}
-                        selected={selection?.kind === "wiki" && selection.path === page.path}
-                        onSelect={() => onSelect({ kind: "wiki", path: page.path })}
-                        onDelete={() => handleDeleteWiki(page.path)}
-                      />
-                    ))
-                  : null}
+        <div className="mt-1 border-t border-border/40 pt-1">
+          <GroupHeader
+            label="知识页面"
+            collapsed={wikiCollapsed}
+            onToggle={() => setWikiCollapsed((v) => !v)}
+          />
+          {!wikiCollapsed ? (
+            wikiPages.length === 0 ? (
+              <div className="px-3 py-2 text-center text-[11.5px] text-muted-foreground">
+                还没有知识页面，点击上方“整理知识”开始整理
               </div>
-            ))
-          )
-        ) : null}
+            ) : (
+              wikiPages.map((page) => (
+                <button
+                  key={page.id || page.path}
+                  type="button"
+                  onClick={() => onSelect({ kind: "wiki", path: page.path, knowledgeBaseId })}
+                  className={cn(
+                    "flex w-full items-center gap-1.5 px-3 py-1.5 text-left hover:bg-accent",
+                    selection?.kind === "wiki" && selection.path === page.path && selection.knowledgeBaseId === knowledgeBaseId && "bg-accent",
+                  )}
+                >
+                  <BookOpen className="h-3.5 w-3.5 shrink-0 text-emerald-600" />
+                  <span className="min-w-0 flex-1 truncate text-caption">{page.title}</span>
+                  {page.stale ? (
+                    <span
+                      className="text-[10px] text-amber-600"
+                      title="来源资料有变化，更新后可使用最新内容"
+                    >
+                      需更新
+                    </span>
+                  ) : null}
+                </button>
+              ))
+            )
+          ) : null}
+        </div>
+
         </>
         )}
       </div>
 
       {/* 新建文件夹 */}
+      <PromptDialog
+        open={libraryPromptOpen}
+        title="新建知识库"
+        placeholder="输入知识库名称"
+        onConfirm={handleCreateLibrary}
+        onOpenChange={setLibraryPromptOpen}
+      />
+      <PromptDialog
+        open={libraryRenameOpen}
+        title="重命名知识库"
+        placeholder="输入新的知识库名称"
+        onConfirm={handleRenameLibrary}
+        onOpenChange={setLibraryRenameOpen}
+      />
+      <ConfirmDialog
+        open={libraryDeleteOpen}
+        title="删除知识库"
+        message="将永久删除该知识库中的原始资料、证据和 Wiki。"
+        destructive
+        onConfirm={handleDeleteLibrary}
+        onOpenChange={setLibraryDeleteOpen}
+      />
+
       <PromptDialog
         open={folderPrompt.open}
         title={folderPrompt.parentDir ? "新建子文件夹" : "新建文件夹"}
@@ -720,12 +808,8 @@ export const MaterialsSidebar = forwardRef<MaterialsSidebarHandle, MaterialsSide
       {/* 删除确认 */}
       <ConfirmDialog
         open={deleteConfirm.open}
-        title={deleteConfirm.kind === "raw" ? "删除资料" : "删除 Wiki 页面"}
-        message={
-          deleteConfirm.kind === "raw"
-            ? `确认删除 ${deleteConfirm.path.replace(/^raw\//, "")}？`
-            : `确认删除 Wiki 页面 ${deleteConfirm.path}？`
-        }
+        title="移出资料库"
+        message={`确认将 ${deleteConfirm.path.replace(/^raw\//, "")} 移出资料库？`}
         destructive
         onConfirm={submitDelete}
         onOpenChange={(open) => setDeleteConfirm((prev) => ({ ...prev, open }))}
@@ -767,66 +851,6 @@ function GroupHeader({
       />
       <span>{label}</span>
     </button>
-  );
-}
-
-// ---------------------------------------------------------------------------
-// Wiki 行
-// ---------------------------------------------------------------------------
-
-function WikiRow({
-  page,
-  selected,
-  onSelect,
-  onDelete,
-}: {
-  page: WikiPageSummary;
-  selected: boolean;
-  onSelect: () => void;
-  onDelete: () => void;
-}) {
-  const sources = page.sources ?? [];
-  const sourceLabel =
-    sources.length === 0
-      ? null
-      : sources.length === 1
-        ? (sources[0].split("/").pop() ?? sources[0])
-        : `${sources.length} 份来源`;
-  return (
-    <ContextMenu>
-      <ContextMenuTrigger asChild>
-        <div
-          role="button"
-          tabIndex={0}
-          onClick={onSelect}
-          className={cn(
-            "flex cursor-default items-center gap-1 px-3 py-[3px] text-[13px] outline-none",
-            "hover:bg-accent",
-            selected && "bg-accent text-foreground",
-          )}
-        >
-          <FileText className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
-          <span className="min-w-0 flex-1 truncate">{page.title}</span>
-          {page.stale ? (
-            <span className="shrink-0 text-[10px] text-amber-600">已过期</span>
-          ) : null}
-          {sourceLabel ? (
-            <span className="max-w-[90px] shrink-0 truncate text-[10px] text-muted-foreground">
-              {sourceLabel}
-            </span>
-          ) : null}
-        </div>
-      </ContextMenuTrigger>
-      <ContextMenuContent>
-        <ContextMenuItem
-          className="text-destructive focus:text-destructive"
-          onClick={onDelete}
-        >
-          <Trash2 className="mr-2 h-3.5 w-3.5" />
-          删除
-        </ContextMenuItem>
-      </ContextMenuContent>
-    </ContextMenu>
   );
 }
 

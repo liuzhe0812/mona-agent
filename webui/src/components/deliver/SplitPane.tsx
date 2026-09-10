@@ -10,6 +10,12 @@ interface SplitPaneProps {
   onRatioChange: (ratio: number) => void;
   /** Right pane visibility. */
   rightVisible: boolean;
+  /** Let the right sidebar occupy the complete workspace. */
+  rightMaximized?: boolean;
+  /** Keep stateful editors mounted while the sidebar is collapsed. */
+  keepRightMounted?: boolean;
+  /** Invoked once when a leftward drag leaves too little room for the left pane. */
+  onLeftPaneNarrow?: () => void;
 }
 
 const MIN_RATIO = 0.2;
@@ -19,6 +25,7 @@ const DIVIDER_WIDTH = 6;
  *  usable width (right panel forms break, conversation column over-wraps). */
 const MIN_LEFT_PX = 360;
 const MIN_RIGHT_PX = 280;
+const NARROW_LEFT_PANE_PX = 480;
 
 export function SplitPane({
   left,
@@ -26,9 +33,14 @@ export function SplitPane({
   ratio,
   onRatioChange,
   rightVisible,
+  rightMaximized = false,
+  keepRightMounted = false,
+  onLeftPaneNarrow,
 }: SplitPaneProps) {
   const containerRef = useRef<HTMLDivElement>(null);
   const dragging = useRef(false);
+  const dragStartX = useRef(0);
+  const leftPaneNarrowNotified = useRef(false);
   const [containerWidth, setContainerWidth] = useState(0);
 
   useEffect(() => {
@@ -58,7 +70,9 @@ export function SplitPane({
   const onPointerDown = useCallback((e: React.PointerEvent) => {
     e.preventDefault();
     dragging.current = true;
-    (e.target as HTMLElement).setPointerCapture(e.pointerId);
+    dragStartX.current = e.clientX;
+    leftPaneNarrowNotified.current = false;
+    e.currentTarget.setPointerCapture(e.pointerId);
   }, []);
 
   const onPointerMove = useCallback(
@@ -66,18 +80,68 @@ export function SplitPane({
       if (!dragging.current) return;
       const rect = containerRef.current?.getBoundingClientRect();
       if (!rect) return;
-      const next = (e.clientX - rect.left) / rect.width;
+      const leftPaneWidth = e.clientX - rect.left;
+      if (
+        leftPaneWidth <= NARROW_LEFT_PANE_PX
+        && e.clientX < dragStartX.current
+        && !leftPaneNarrowNotified.current
+      ) {
+        leftPaneNarrowNotified.current = true;
+        onLeftPaneNarrow?.();
+      }
+      const next = leftPaneWidth / rect.width;
       onRatioChange(clampRatio(next, rect.width));
     },
-    [clampRatio, onRatioChange],
+    [clampRatio, onLeftPaneNarrow, onRatioChange],
   );
 
   const onPointerUp = useCallback(() => {
     dragging.current = false;
   }, []);
 
-  if (!rightVisible || right == null) {
+  if (right == null) {
     return <>{left}</>;
+  }
+
+  if (keepRightMounted) {
+    const effectiveRatio = clampRatio(ratio, containerWidth);
+    return (
+      <div
+        ref={containerRef}
+        className="flex h-full w-full overflow-hidden"
+        onPointerMove={onPointerMove}
+        onPointerUp={onPointerUp}
+      >
+        <div
+          style={{ width: rightVisible ? `${effectiveRatio * 100}%` : "100%" }}
+          className={cn(
+            "min-w-0 flex-col overflow-hidden",
+            rightVisible && rightMaximized ? "hidden" : "flex",
+          )}
+        >
+          {left}
+        </div>
+        {rightVisible && !rightMaximized ? <Divider onPointerDown={onPointerDown} /> : null}
+        <div
+          aria-hidden={!rightVisible}
+          style={{ width: rightMaximized ? "100%" : `${(1 - effectiveRatio) * 100}%` }}
+          className={cn(
+            "min-w-0 shrink-0 flex-col overflow-hidden",
+            rightVisible ? "flex" : "hidden",
+          )}
+        >
+          {right}
+        </div>
+      </div>
+    );
+  }
+
+  if (!rightVisible) {
+    return <>{left}</>;
+  }
+
+  if (rightMaximized) {
+    return <div className="flex h-full w-full min-w-0 flex-col overflow-hidden">{right}</div>;
   }
 
   const effectiveRatio = clampRatio(ratio, containerWidth);

@@ -127,6 +127,9 @@ async def _generate_summary(title: str, url: str, content: str) -> str:
             max_tokens=512,
             temperature=0.3,
         )
+        from mona.usage import record_provider_usage
+
+        record_provider_usage(provider, model, resp)
         return (resp.content or "").strip()
     except Exception as e:
         logger.warning(f"[hoard] summary generation failed: {e}")
@@ -149,6 +152,9 @@ async def _generate_tags(title: str, summary: str) -> list[str]:
             max_tokens=128,
             temperature=0.3,
         )
+        from mona.usage import record_provider_usage
+
+        record_provider_usage(provider, model, resp)
         raw = (resp.content or "").strip()
         tags = [t.strip() for t in re.split(r"[,，、\s]+", raw) if t.strip()]
         return tags[:5]

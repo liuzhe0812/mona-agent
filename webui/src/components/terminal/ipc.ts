@@ -129,9 +129,9 @@ export async function sshResize(
   return invoke("ssh_resize", { sessionId, cols, rows });
 }
 
-export async function shellSpawn(cols: number, rows: number): Promise<string> {
+export async function shellSpawn(cols: number, rows: number, cwd?: string): Promise<string> {
   await terminalOutputReady;
-  return invoke<string>("shell_spawn", { cols, rows });
+  return invoke<string>("shell_spawn", { cols, rows, cwd: cwd || null });
 }
 
 export async function shellWrite(sessionId: string, data: string): Promise<void> {

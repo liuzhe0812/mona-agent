@@ -4,6 +4,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { SubscribeView } from "./SubscribeView";
 import { ManageSubscription } from "./ManageSubscription";
+import { CreditsView } from "./CreditsView";
 import {
   Dialog,
   DialogContent,
@@ -11,7 +12,7 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 
-type LoginView = "login" | "register" | "forgot" | "reset" | "subscribe" | "manage" | "change";
+type LoginView = "login" | "register" | "forgot" | "reset" | "subscribe" | "manage" | "change" | "credits";
 
 export function LoginDialog({
   open,
@@ -228,14 +229,17 @@ export function LoginDialog({
 
   const isSubscribeView = view === "subscribe";
   const isManageView = view === "manage";
+  const isCreditsView = view === "credits";
   const showAccountInfo = loggedIn && view === "login";
 
   return (
     <Dialog open={open} onOpenChange={handleClose}>
-      <DialogContent className={isSubscribeView || isManageView ? "sm:max-w-lg" : "sm:max-w-sm"}>
+      <DialogContent className={isSubscribeView || isManageView || isCreditsView ? "sm:max-w-lg" : "sm:max-w-sm"}>
         <DialogHeader>
           <DialogTitle>
-            {isSubscribeView
+            {isCreditsView
+              ? "Mona 余额"
+              : isSubscribeView
               ? "购买订阅"
               : isManageView
                 ? "订阅管理"
@@ -267,6 +271,8 @@ export function LoginDialog({
           <ManageSubscription onBack={() => setView("subscribe")} />
         )}
 
+        {isCreditsView && <CreditsView onBack={() => setView("login")} />}
+
         {showAccountInfo && (
           <div className="flex flex-col gap-3 text-sm">
             {licenseInfo?.account && (
@@ -297,6 +303,12 @@ export function LoginDialog({
             )}
             <Button
               variant="outline"
+              onClick={() => setView("credits")}
+            >
+              查看余额与充值
+            </Button>
+            <Button
+              variant="outline"
               onClick={() => { setView("change"); setError(""); setSuccess(""); setOldPassword(""); setNewPassword(""); }}
             >
               修改密码
@@ -313,7 +325,7 @@ export function LoginDialog({
           </div>
         )}
 
-        {!isSubscribeView && !showAccountInfo && (
+        {!isSubscribeView && !isCreditsView && !showAccountInfo && (
           <>
             {error && <p className="text-sm text-destructive">{error}</p>}
             {success && <p className="text-sm text-green-600">{success}</p>}

@@ -1,6 +1,9 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import {
+  cancelExpertInstall,
+  cancelManagedRuntimeInstall,
+  cleanupManagedRuntimes,
   deleteSession,
   fetchProviderModels,
   fetchSidebarState,
@@ -8,6 +11,8 @@ import {
   listSessions,
   listSlashCommands,
   removeProject,
+  startExpertInstall,
+  startManagedRuntimeInstall,
   updateSidebarState,
   updateImageGenerationSettings,
   updateProviderSettings,
@@ -59,14 +64,13 @@ describe("webui API helpers", () => {
       modelPreset: "default",
       model: "openrouter/test",
       provider: "openrouter",
+      reasoningEffort: "high",
       timezone: "Asia/Shanghai",
-      botName: "mona",
-      botIcon: "nb",
       toolHintMaxLength: 120,
     });
 
     expect(fetch).toHaveBeenCalledWith(
-      "/api/settings/update?model_preset=default&model=openrouter%2Ftest&provider=openrouter&timezone=Asia%2FShanghai&bot_name=mona&bot_icon=nb&tool_hint_max_length=120",
+      "/api/settings/update?model_preset=default&model=openrouter%2Ftest&provider=openrouter&reasoning_effort=high&timezone=Asia%2FShanghai&tool_hint_max_length=120",
       expect.objectContaining({
         headers: { Authorization: "Bearer tok" },
       }),
@@ -104,6 +108,23 @@ describe("webui API helpers", () => {
         },
       }),
     );
+  });
+
+  it("uses GET-compatible requests for websocket-hosted install actions", async () => {
+    await startExpertInstall("tok", "com.mona.academic-researcher", "2.1.0");
+    await cancelExpertInstall("tok", "expert-job");
+    await startManagedRuntimeInstall("tok", "python");
+    await cancelManagedRuntimeInstall("tok", "runtime-job");
+    await cleanupManagedRuntimes("tok");
+
+    const calls = vi.mocked(fetch).mock.calls.slice(-5);
+    expect(calls.map(([, init]) => init?.method)).toEqual([
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+    ]);
   });
 
   it("sends project removal as JSON", async () => {
@@ -147,11 +168,10 @@ describe("webui API helpers", () => {
       baseUrl: "https://search.example.com",
       maxResults: 8,
       timeout: 45,
-      useJinaReader: false,
     });
 
     expect(fetch).toHaveBeenCalledWith(
-      "/api/settings/web-search/update?provider=searxng&base_url=https%3A%2F%2Fsearch.example.com&max_results=8&timeout=45&use_jina_reader=false",
+      "/api/settings/web-search/update?provider=searxng&base_url=https%3A%2F%2Fsearch.example.com&max_results=8&timeout=45",
       expect.objectContaining({
         headers: { Authorization: "Bearer tok" },
       }),
@@ -166,14 +186,39 @@ describe("webui API helpers", () => {
       defaultAspectRatio: "16:9",
       defaultImageSize: "2K",
       maxImagesPerTurn: 3,
+      parameters: { enabled: ["seed"], values: { seed: 42 } },
     });
 
     expect(fetch).toHaveBeenCalledWith(
-      "/api/settings/image-generation/update?enabled=true&provider=openrouter&model=openai%2Fgpt-5.4-image-2&default_aspect_ratio=16%3A9&default_image_size=2K&max_images_per_turn=3",
+      "/api/settings/image-generation/update?enabled=true&provider=openrouter&model=openai%2Fgpt-5.4-image-2&default_aspect_ratio=16%3A9&default_image_size=2K&max_images_per_turn=3&parameters=%7B%22enabled%22%3A%5B%22seed%22%5D%2C%22values%22%3A%7B%22seed%22%3A42%7D%7D",
       expect.objectContaining({
         headers: { Authorization: "Bearer tok" },
       }),
     );
+  });
+
+  it("surfaces plain-text image generation errors", async () => {
+    vi.mocked(fetch).mockResolvedValueOnce({
+      ok: false,
+      status: 400,
+      headers: { get: () => "text/plain; charset=utf-8" },
+      text: async () => "image generation model is invalid",
+    } as unknown as Response);
+
+    await expect(
+      updateImageGenerationSettings("tok", {
+        enabled: true,
+        provider: "agnes",
+        model: "agnes-image-2.5-flash",
+        defaultAspectRatio: "1:1",
+        defaultImageSize: "1K",
+        maxImagesPerTurn: 1,
+        parameters: { enabled: [], values: {} },
+      }),
+    ).rejects.toMatchObject({
+      status: 400,
+      message: "image generation model is invalid",
+    });
   });
 
   it("serializes video generation settings updates", async () => {
@@ -183,10 +228,11 @@ describe("webui API helpers", () => {
       model: "agnes-video-v2.0",
       defaultAspectRatio: "16:9",
       defaultDuration: 5,
+      parameters: { enabled: [], values: { fps: 24 } },
     });
 
     expect(fetch).toHaveBeenCalledWith(
-      "/api/settings/video-generation/update?enabled=true&provider=agnes&model=agnes-video-v2.0&default_aspect_ratio=16%3A9&default_duration=5",
+      "/api/settings/video-generation/update?enabled=true&provider=agnes&model=agnes-video-v2.0&default_aspect_ratio=16%3A9&default_duration=5&parameters=%7B%22enabled%22%3A%5B%5D%2C%22values%22%3A%7B%22fps%22%3A24%7D%7D",
       expect.objectContaining({
         headers: { Authorization: "Bearer tok" },
       }),

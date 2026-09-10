@@ -1,5 +1,5 @@
 import { Database, Eraser, FolderSearch, HardDrive, Loader2, PieChart, RefreshCw, X } from "lucide-react";
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
@@ -15,6 +15,7 @@ import { MetricCard, PanelCard, ProgressBar } from "./SystemUi";
 import type { SystemAgentHandoffTask } from "./systemAgentHandoff";
 import { DirectoryTreeView } from "./storage/DirectoryTreeView";
 import { LargeFileTable } from "./storage/LargeFileTable";
+import { StorageInsights } from "./storage/StorageInsights";
 import { TreemapView } from "./storage/TreemapView";
 import {
   formatPercent,
@@ -397,13 +398,26 @@ function findNodeByPath(nodes: DirectorySize[], target: string): DirectorySize |
   return null;
 }
 
-export function StoragePanel({ scan, onHandoff, onAnalyze }: { scan: ReturnType<typeof useStorageScan>; onHandoff: (task: SystemAgentHandoffTask) => void; onAnalyze?: (goal: string) => void }) {
+export function StoragePanel({
+  scan,
+  onHandoff,
+  onAnalyzeScope,
+  onPlanCleanup,
+  onSelectionChange,
+}: {
+  scan: ReturnType<typeof useStorageScan>;
+  onHandoff: (task: SystemAgentHandoffTask) => void;
+  onAnalyzeScope?: (directory: DirectorySize | null) => void;
+  onPlanCleanup?: () => void;
+  onSelectionChange?: (directory: DirectorySize | null) => void;
+}) {
   const { status, result, lastScanAt, progress, error, cleaning, start, clean, selectedDrive, selectDrive } = scan;
   const { data: overview, error: overviewError } = useSystemOverview();
 
   // 下钻路径：数组形式，每项 {path, name}。空数组表示根。
   // 下钻直接从 result.directories 的 children 切片，无需再次调用后端。
   const [drilldownPath, setDrilldownPath] = useState<DrilldownPathEntry[]>([]);
+  const [selectedPath, setSelectedPath] = useState<string | null>(null);
 
   const disks = result?.disks ?? overview?.disks ?? [];
   const rootDirectories = result?.directories ?? [];
@@ -427,6 +441,7 @@ export function StoragePanel({ scan, onHandoff, onAnalyze }: { scan: ReturnType<
     if (drive === selectedDrive) return;
     selectDrive(drive);
     setDrilldownPath([]);
+    setSelectedPath(null);
   };
 
   // 根据下钻路径在内存树中切片当前层级的目录列表
@@ -453,6 +468,18 @@ export function StoragePanel({ scan, onHandoff, onAnalyze }: { scan: ReturnType<
     [disks, scannedDiskLetter],
   );
   const cleanupTotal = cleanupItems.filter((item) => item.cleanable).reduce((sum, item) => sum + item.sizeGb, 0);
+  const selectedDirectory = useMemo(
+    () => selectedPath ? findNodeByPath(rootDirectories, selectedPath) : null,
+    [rootDirectories, selectedPath],
+  );
+
+  useEffect(() => {
+    if (selectedPath && !selectedDirectory) setSelectedPath(null);
+  }, [selectedDirectory, selectedPath]);
+
+  useEffect(() => {
+    onSelectionChange?.(selectedDirectory);
+  }, [onSelectionChange, selectedDirectory]);
 
   // 扫描覆盖率：扫描总量 / 系统盘已用，回答「这次扫描看了多少」
   const coverageNote = useMemo(() => {
@@ -463,17 +490,20 @@ export function StoragePanel({ scan, onHandoff, onAnalyze }: { scan: ReturnType<
 
   const handleDrillDown = (path: string) => {
     const name = path.split("\\").filter(Boolean).pop() ?? path;
+    setSelectedPath(path);
     setDrilldownPath((prev) => [...prev, { path, name }]);
   };
 
   const handleNavigate = (targetPath: string | null) => {
     if (targetPath === null) {
       setDrilldownPath([]);
+      setSelectedPath(null);
       return;
     }
     const index = drilldownPath.findIndex((entry) => entry.path === targetPath);
     if (index < 0) return;
     setDrilldownPath((prev) => prev.slice(0, index + 1));
+    setSelectedPath(targetPath);
   };
 
   const hasScanData = rootDirectories.length > 0;
@@ -491,16 +521,27 @@ export function StoragePanel({ scan, onHandoff, onAnalyze }: { scan: ReturnType<
         <MetricCard label="可安全释放" value={result ? (isSystemDrive ? formatStorage(cleanupTotal) : "—") : "待分析"} detail={result ? (isSystemDrive ? `${cleanupItems.filter((item) => item.cleanable && item.sizeGb > 0).length} 项可直接清理` : "仅系统盘支持安全清理") : "深度扫描后计算"} icon={<Eraser className="h-4 w-4" />} accent="orange" />
       </div>
 
+      {result ? (
+        <StorageInsights
+          result={result}
+          selectedDirectory={selectedDirectory}
+          onAnalyzeScope={() => onAnalyzeScope?.(selectedDirectory)}
+          onPlanCleanup={() => onPlanCleanup?.()}
+        />
+      ) : null}
+
       {overviewError && <StatusNotice tone="warning">实时磁盘信息读取失败：{overviewError}</StatusNotice>}
 
       {/* WizTree 核心可视化：左目录列表树 + 右 Treemap，扫描后内存秒下钻 */}
       {hasScanData ? (
         // 固定高度的网格容器：左侧目录列表限制最大高度并内部滚动，右侧 Treemap 同步
-        <div className="grid gap-3 lg:grid-cols-[300px_1fr]">
+        <div id="storage-distribution" className="grid gap-3 lg:grid-cols-[300px_1fr]">
           <div className="h-[420px]">
             <DirectoryTreeView
               directories={rootDirectories}
               currentPath={currentPath}
+              selectedPath={selectedPath}
+              onSelect={setSelectedPath}
               onDrillDown={handleDrillDown}
             />
           </div>
@@ -511,6 +552,8 @@ export function StoragePanel({ scan, onHandoff, onAnalyze }: { scan: ReturnType<
             loading={false}
             error={null}
             onDrillDown={handleDrillDown}
+            selectedPath={selectedPath}
+            onSelect={setSelectedPath}
             onNavigate={handleNavigate}
           />
         </div>
@@ -522,8 +565,8 @@ export function StoragePanel({ scan, onHandoff, onAnalyze }: { scan: ReturnType<
 
       {/* 大文件列表 + 文件类型分布 */}
       {hasScanData && (
-        <div className="grid gap-3 lg:grid-cols-[1.3fr_1fr]">
-          <LargeFileTable files={topFiles} onAnalyze={onAnalyze} onTrash={scan.trashFiles} />
+        <div id="storage-large-files" className="grid gap-3 lg:grid-cols-[1.3fr_1fr]">
+          <LargeFileTable files={topFiles} onAnalyze={() => onAnalyzeScope?.(selectedDirectory)} onTrash={scan.trashFiles} />
           <FileTypePanel items={fileTypes} status={status} progress={progress} error={error} />
         </div>
       )}

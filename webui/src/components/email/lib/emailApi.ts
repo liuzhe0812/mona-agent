@@ -484,7 +484,7 @@ export interface FetchEmailBodyResult {
     fromName: string;
     toAddresses: string;
     ccAddresses: string;
-    /** 邮件日期（网络回退路径注入；本地命中路径无此字段） */
+    /** 邮件日期；优先来自本地缓存，缺失时由 RFC822 header 补充。 */
     date?: string;
   };
 }

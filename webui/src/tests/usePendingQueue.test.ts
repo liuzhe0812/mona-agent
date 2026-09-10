@@ -19,6 +19,38 @@ describe("usePendingQueue", () => {
     expect(result.current.messages[0].id).toBeTruthy();
   });
 
+  it("preserves images until the pending message is appended", () => {
+    const { result } = renderHook(() => usePendingQueue());
+    const images = [{
+      media: { data_url: "data:image/png;base64,AAAA", name: "followup.png" },
+      preview: { url: "data:image/png;base64,AAAA", name: "followup.png" },
+    }];
+
+    act(() => {
+      result.current.enqueue("look at this", images);
+    });
+
+    expect(result.current.messages[0].images).toEqual(images);
+  });
+
+  it("preserves the active Office context until the pending message is appended", () => {
+    const { result } = renderHook(() => usePendingQueue());
+
+    act(() => {
+      result.current.enqueue("继续修改", undefined, {
+        officeSessionId: "office_123",
+        officeDocumentType: "slides",
+        officeDisplayName: "季度汇报.pptx",
+      });
+    });
+
+    expect(result.current.messages[0].options).toMatchObject({
+      officeSessionId: "office_123",
+      officeDocumentType: "slides",
+      officeDisplayName: "季度汇报.pptx",
+    });
+  });
+
   it("respects the max limit of 3", () => {
     const { result } = renderHook(() => usePendingQueue());
     act(() => {

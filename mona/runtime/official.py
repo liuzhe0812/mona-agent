@@ -49,6 +49,39 @@ def _cleanup_legacy() -> dict[str, int]:
     )
 
 
+def _local_component_available(component: str) -> bool:
+    if component in {"ffmpeg", "yt_dlp", "asr"}:
+        from mona.api.video_runtime import VideoRuntime
+
+        runtime = VideoRuntime()
+        if component == "ffmpeg":
+            return runtime.get_ffmpeg_path() is not None and runtime.get_ffprobe_path() is not None
+        if component == "yt_dlp":
+            return runtime.get_ytdlp_path() is not None
+        return runtime.get_asr_paths() is not None
+    if component == "pandoc":
+        from mona.api.pandoc_runtime import PandocRuntime
+
+        return PandocRuntime().get_pandoc_path() is not None
+    if component == "computer_use":
+        from mona.computer_use.runtime import CUA_DRIVER_VERSION
+        from mona.config.paths import get_data_dir
+
+        executable = "cua-driver.exe" if os.name == "nt" else "cua-driver"
+        return (
+            get_data_dir()
+            / "computer-use"
+            / "versions"
+            / CUA_DRIVER_VERSION
+            / executable
+        ).is_file()
+    if component == "westock":
+        from mona.services.stock.westock_runtime import _runtime_paths
+
+        return _runtime_paths() is not None
+    return False
+
+
 def build_official_runtime_installer(
     settings: DistributionSettings | None = None,
 ) -> RuntimeInstaller:
@@ -87,6 +120,7 @@ def build_official_runtime_jobs(
         installer=installer,
         unavailable_reason="官方运行组件服务暂不可用",
         auto_download_enabled=_auto_download_enabled,
+        local_component_available=_local_component_available,
         migration_status=_migration_status,
         cleanup_legacy=_cleanup_legacy,
     )

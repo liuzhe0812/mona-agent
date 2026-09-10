@@ -21,11 +21,13 @@ PARTNER_VISIBLE_BUILTIN_SKILLS = frozenset({
     "memory",
     "my",
     "summarize",
-    "doc-writing-guide",
-    "docx",
+    "prd-document",
     "pdf",
     "html-report",
-    "mona-office",
+    "image-generation",
+    "mona-docx",
+    "mona-xlsx",
+    "mona-pptx",
 })
 
 # Opening ---, YAML body (group 1), closing --- on its own line; supports CRLF.

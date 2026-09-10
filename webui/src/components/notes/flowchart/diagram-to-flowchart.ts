@@ -1,7 +1,7 @@
 /**
  * diagram v2 -> flowchart v2 一次性迁移器。
  *
- * 规范（见 FLOWCHART_DEVELOPMENT_PLAN.md §10.2）：
+ * 规范（见 docs/architecture/module-invariants.md 的“可编辑画布”）：
  * 1. shape/text/image/freehand/group/container/brace 映射为 flowchart 节点；
  *    connector 映射为 edge；canvas/viewport/layout 映射为同名字段；
  * 2. table/lifeline/activation/icon、无法映射的 shapeKind 或 marker、自由端点

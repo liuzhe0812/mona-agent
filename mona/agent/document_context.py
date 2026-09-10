@@ -57,8 +57,7 @@ class DocumentContextBuilder(ContextBuilder):
             disabled_skills=None,
         )
         always = doc_skills.get_always_skills()
-        if self._profile.skill_name not in always:
-            always = [*always, self._profile.skill_name]
+        always = list(dict.fromkeys([*always, self._profile.skill_name, *(skill_names or [])]))
         always_content = doc_skills.load_skills_for_context(always)
         if always_content:
             parts.append(f"# Active Skills\n\n{always_content}")
@@ -119,6 +118,7 @@ class DocumentContextBuilder(ContextBuilder):
             chat_id,
             self.timezone,
             sender_id=sender_id,
+            supplemental_lines=self._attachment_runtime_lines(message_metadata) or None,
         )
         if isinstance(user_content, str):
             merged = f"{user_content}\n\n{runtime_ctx}"

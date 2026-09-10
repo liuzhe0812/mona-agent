@@ -17,6 +17,13 @@ Mona 采用三层服务架构：
 - **后端**：Python 3.11+ (aiohttp) + Rust (Tauri)
 - **桌面**：Tauri 2.x（Windows / macOS / Linux）
 
+项目文档入口：
+
+- [Agent 开发规则](AGENTS.md)
+- [文档目录与分类](docs/README.md)
+- [工程架构边界](docs/architecture/engineering-boundaries.md)
+- [可下载运行时架构](docs/architecture/runtime-component-management.md)
+
 ## 开源范围
 
 本项目采用**分区许可证**策略：
@@ -97,6 +104,19 @@ cd webui && bun run build
 # Tauri 打包
 cd src-tauri && cargo tauri build
 ```
+
+### Windows 正式发布签名
+
+Windows 11 的智能应用控制会拦截未知或未签名的可执行文件。正式发布必须使用受 Microsoft 信任根计划认可的 CA 代码签名证书；自签名证书不能替代它。
+
+将证书导入当前用户的 `Cert:\CurrentUser\My` 后，使用证书指纹执行签名发布构建：
+
+```powershell
+cd src-tauri
+.\build-windows-release.ps1 -CertificateThumbprint "你的证书指纹"
+```
+
+该命令会先签名 PyInstaller gateway 的可执行文件、DLL 和 PYD，再由 Tauri 签名主程序及 NSIS/MSI 安装器，并在结束时验证全部签名。证书私钥和密码不得写入仓库。
 
 ## 社区
 

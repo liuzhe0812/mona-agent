@@ -319,6 +319,7 @@ export function EmailClientView({ onOpenSubscribe }: { onOpenSubscribe?: () => v
             gatewayUrl={gatewayUrl}
             view={view}
             onViewChange={setView}
+            onOpenSubscribe={onOpenSubscribe}
           />
         </div>
         {view === "contacts" ? (
@@ -344,7 +345,7 @@ export function EmailClientView({ onOpenSubscribe }: { onOpenSubscribe?: () => v
               title="拖动调整宽度"
             />
             <div className="min-w-0 flex-1 bg-background">
-              <MailView />
+              <MailView onOpenSubscribe={onOpenSubscribe} />
             </div>
             {licenseActive && agentPanelVisible && (
               <div className="w-[320px] shrink-0 border-l border-border bg-card">

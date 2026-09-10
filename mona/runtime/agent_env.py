@@ -211,6 +211,10 @@ class AgentEnvironmentManager:
             for path in scripts.rglob("*")
             if path.is_file() and path.suffix.lower() in {".py", ".mjs", ".r"}
         }
+        optional_suffixes = {
+            f".{suffix}" for suffix in (spec.optional_script_types if spec else [])
+        }
+        suffixes.difference_update(optional_suffixes)
         for suffix in sorted(suffixes):
             await self.prepare_for_skill(suffix, skill_dir, spec)
 
@@ -237,6 +241,10 @@ class AgentEnvironmentManager:
             for path in scripts.rglob("*")
             if path.is_file() and path.suffix.lower() in {".py", ".mjs", ".r"}
         }
+        optional_suffixes = {
+            f".{suffix}" for suffix in (spec.optional_script_types if spec else [])
+        }
+        suffixes.difference_update(optional_suffixes)
         if ".r" in suffixes:
             raise AgentRuntimeError("Mona managed R is not available")
         state = self._read_state()

@@ -5,7 +5,7 @@ import {
   useState,
   type ReactNode,
 } from "react";
-import { Check, ChevronRight, Copy, CornerDownLeft, Download, FileIcon, FolderOpen, ImageIcon, PlaySquare, Sparkles, Wrench, BookmarkCheck, Bookmark } from "lucide-react";
+import { Check, ChevronRight, ChevronUp, Copy, CornerDownLeft, Download, FileIcon, FolderOpen, GitFork, ImageIcon, MoreHorizontal, PlaySquare, Share2, Sparkles, Wrench, BookmarkCheck, Bookmark } from "lucide-react";
 import { useTranslation } from "react-i18next";
 
 import { ImageLightbox } from "@/components/ImageLightbox";
@@ -18,6 +18,18 @@ import {
   ContextMenuItem,
   ContextMenuTrigger,
 } from "@/components/ui/context-menu";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
+import {
+  Tooltip,
+  TooltipContent,
+  TooltipProvider,
+  TooltipTrigger,
+} from "@/components/ui/tooltip";
 import { cn } from "@/lib/utils";
 import { formatTurnLatency } from "@/lib/format";
 import { createNoteFromChat, downloadMediaUrl, isTauri, revealItemInDir } from "@/lib/tauri";
@@ -57,14 +69,45 @@ function suggestMediaFilename(
 
 interface MessageBubbleProps {
   message: UIMessage;
-  /** When false, hide the assistant reply copy button (mid-turn text before more agent activity). Default true. */
-  showAssistantCopyAction?: boolean;
   /** Render assistant turns as left-aligned IM bubbles for collaboration groups. */
   isGroupChat?: boolean;
+  /** Queue this message as the source for a follow-up reply. */
+  onQuote?: (message: UIMessage, author: string) => void;
+  /** User-visible author name for a quoted assistant turn. */
+  authorName?: string;
+  /** Start a new task using this reply as its branch context. */
+  onBranch?: (message: UIMessage, author: string) => void;
 }
 
 const LONG_REPLY_CHAR_THRESHOLD = 1_600;
 const LONG_REPLY_LINE_THRESHOLD = 24;
+const IMAGE_GALLERY_PREVIEW_LIMIT = 4;
+const LEGACY_ATTACHED_FILES_PREFIX = "\n\n[已附文件: ";
+
+function visibleUserContent(message: UIMessage, media: UIMediaAttachment[]): string {
+  const content = message.displayContent ?? message.content;
+  if (!media.some((item) => item.kind === "file") || !content.endsWith("]")) {
+    return content;
+  }
+  const markerIndex = content.lastIndexOf(LEGACY_ATTACHED_FILES_PREFIX);
+  return markerIndex >= 0 ? content.slice(0, markerIndex) : content;
+}
+
+function formatMessageTime(timestamp: number): string {
+  const date = new Date(timestamp);
+  if (Number.isNaN(date.getTime())) return "";
+  const month = String(date.getMonth() + 1).padStart(2, "0");
+  const day = String(date.getDate()).padStart(2, "0");
+  const hour = String(date.getHours()).padStart(2, "0");
+  const minute = String(date.getMinutes()).padStart(2, "0");
+  return `${month}-${day} ${hour}:${minute}`;
+}
+
+function formatMessageTokenCount(value: number): string {
+  if (value >= 1_000_000) return `${Number((value / 1_000_000).toFixed(1))}M`;
+  if (value >= 1_000) return `${Number((value / 1_000).toFixed(1))}k`;
+  return String(value);
+}
 
 /** 确认卡标记行协议（T22d，design §10.4）：
  *  `[[stock-deep-research XSHG:600519 名称?]]`，A股分析师在私聊中
@@ -132,10 +175,76 @@ function StockConfirmCard({
   );
 }
 
+function QuotedMessagePreview({ quote }: { quote: NonNullable<UIMessage["quote"]> }) {
+  const { t } = useTranslation();
+  return (
+    <div className="mb-2 border-l-2 border-foreground/15 bg-background/35 px-2.5 py-1.5 text-left">
+      <div className="text-caption font-medium text-muted-foreground">
+        {t("message.quotedMessage", { author: quote.author })}
+      </div>
+      <div className="mt-0.5 line-clamp-2 whitespace-pre-wrap text-caption leading-relaxed text-muted-foreground">
+        {quote.content}
+      </div>
+    </div>
+  );
+}
+
+function MessageContextMenu({
+  children,
+  copied,
+  onCopy,
+  onQuote,
+  onSaveAsNote,
+  saving,
+  saved,
+}: {
+  children: ReactNode;
+  copied: boolean;
+  onCopy: () => void;
+  onQuote?: () => void;
+  onSaveAsNote?: () => void;
+  saving: boolean;
+  saved: boolean;
+}) {
+  const { t } = useTranslation();
+  return (
+    <ContextMenu>
+      <ContextMenuTrigger asChild>{children}</ContextMenuTrigger>
+      <ContextMenuContent>
+        <ContextMenuItem onSelect={onCopy}>
+          {copied ? <Check className="h-4 w-4" aria-hidden /> : <Copy className="h-4 w-4" aria-hidden />}
+          {copied ? t("message.copiedMessage") : t("message.copyMessage")}
+        </ContextMenuItem>
+        {onQuote ? (
+          <ContextMenuItem onSelect={onQuote}>
+            <CornerDownLeft className="h-4 w-4" aria-hidden />
+            {t("message.quoteMessage")}
+          </ContextMenuItem>
+        ) : null}
+        {onSaveAsNote ? (
+          <ContextMenuItem disabled={saving} onSelect={onSaveAsNote}>
+            {saved ? <BookmarkCheck className="h-4 w-4" aria-hidden /> : <Bookmark className="h-4 w-4" aria-hidden />}
+            {saved ? t("message.savedAsNote") : t("message.saveAsNote")}
+          </ContextMenuItem>
+        ) : null}
+      </ContextMenuContent>
+    </ContextMenu>
+  );
+}
+
+function MessageActionTooltip({ label, children }: { label: string; children: ReactNode }) {
+  return (
+    <Tooltip>
+      <TooltipTrigger asChild>{children}</TooltipTrigger>
+      <TooltipContent side="top" sideOffset={6}>{label}</TooltipContent>
+    </Tooltip>
+  );
+}
+
 /**
  * Render a single message. Following agent-chat-ui: user turns are a rounded
- * "pill" right-aligned with a muted fill; direct assistant turns render as
- * bare markdown while group-chat turns use a neutral left-aligned bubble.
+ * "pill" right-aligned with a muted fill; direct assistant turns use open
+ * markdown while group-chat assistant turns use a neutral bubble.
  * Each turn fades+slides in for a touch of motion polish.
  *
  * Trace rows (tool-call hints, progress breadcrumbs) render as a subdued
@@ -143,12 +252,17 @@ function StockConfirmCard({
  */
 export function MessageBubble({
   message,
-  showAssistantCopyAction = true,
   isGroupChat = false,
+  onQuote,
+  authorName,
+  onBranch,
 }: MessageBubbleProps) {
   const { t } = useTranslation();
   const [copied, setCopied] = useState(false);
   const [saved, setSaved] = useState(false);
+  const [saving, setSaving] = useState(false);
+  const [sharingImage, setSharingImage] = useState(false);
+  const messageContentRef = useRef<HTMLDivElement>(null);
   const copyResetRef = useRef<number | null>(null);
   const saveResetRef = useRef<number | null>(null);
   const [expanded, setExpanded] = useState(false);
@@ -169,9 +283,12 @@ export function MessageBubble({
     };
   }, []);
 
-  const onCopyAssistantReply = useCallback(() => {
+  const onCopyMessage = useCallback(() => {
     if (!navigator.clipboard) return;
-    void navigator.clipboard.writeText(message.content).then(() => {
+    const content = message.role === "user"
+      ? visibleUserContent(message, message.media ?? [])
+      : message.content;
+    void navigator.clipboard.writeText(content).then(() => {
       setCopied(true);
       if (copyResetRef.current !== null) {
         window.clearTimeout(copyResetRef.current);
@@ -181,11 +298,12 @@ export function MessageBubble({
         copyResetRef.current = null;
       }, 1_500);
     });
-  }, [message.content]);
+  }, [message]);
 
   const onSaveAsNote = useCallback(() => {
-    if (!isTauri() || saved) return;
+    if (message.role !== "assistant" || !isTauri() || saved || saving) return;
     const title = message.content.split("\n").find((line) => line.trim().length > 0)?.slice(0, 60) ?? "未命名笔记";
+    setSaving(true);
     createNoteFromChat(title, message.content)
       .then(() => {
         setSaved(true);
@@ -198,9 +316,54 @@ export function MessageBubble({
         }, 2_000);
       })
       .catch((err) => {
-        console.error("[MessageBubble] save as note failed:", err);
+        window.alert(`保存笔记失败：${err instanceof Error ? err.message : String(err)}`);
+      })
+      .finally(() => setSaving(false));
+  }, [message.content, saved, saving]);
+
+  const onShareAsImage = useCallback(async () => {
+    const target = messageContentRef.current;
+    if (!target || sharingImage) return;
+    setSharingImage(true);
+    try {
+      const { toBlob } = await import("html-to-image");
+      const blob = await toBlob(target, {
+        backgroundColor: getComputedStyle(document.body).backgroundColor,
+        cacheBust: true,
+        pixelRatio: 2,
       });
-  }, [message.content, saved]);
+      if (!blob) throw new Error("image render failed");
+      const fileName = `mona-message-${Date.now()}.png`;
+      if (isTauri()) {
+        const { save } = await import("@tauri-apps/plugin-dialog");
+        const savePath = await save({
+          defaultPath: fileName,
+          filters: [{ name: "PNG", extensions: ["png"] }],
+        });
+        if (!savePath) return;
+        const { writeFile } = await import("@tauri-apps/plugin-fs");
+        await writeFile(savePath, new Uint8Array(await blob.arrayBuffer()));
+      } else {
+        const url = URL.createObjectURL(blob);
+        const link = document.createElement("a");
+        link.href = url;
+        link.download = fileName;
+        link.click();
+        URL.revokeObjectURL(url);
+      }
+    } catch (error) {
+      if ((error as Error)?.name !== "AbortError") {
+        window.alert(t("message.shareImageFailed"));
+      }
+    } finally {
+      setSharingImage(false);
+    }
+  }, [sharingImage, t]);
+
+  const quoteAuthor = authorName ?? (message.role === "user" ? t("message.you") : "Mona");
+  const canQuote = !message.isStreaming && message.content.trim().length > 0;
+  const quoteMessage = onQuote && canQuote ? () => onQuote(message, quoteAuthor) : undefined;
+  const canSaveAsNote = message.role === "assistant" && !message.isStreaming && message.content.trim().length > 0 && isTauri();
 
   if (message.kind === "trace") {
     return <TraceGroup message={message} animClass={baseAnim} />;
@@ -210,32 +373,44 @@ export function MessageBubble({
     const images = message.images ?? [];
     const media = message.media ?? [];
     const hasImages = images.length > 0;
-    const hasMedia = media.length > 0;
-    const hasText = message.content.trim().length > 0;
+    const visibleMedia = hasImages
+      ? media.filter((item) => item.kind !== "image")
+      : media;
+    const displayContent = visibleUserContent(message, media);
+    const hasText = displayContent.trim().length > 0;
     return (
-      <div
+      <MessageContextMenu
+        copied={copied}
+        onCopy={onCopyMessage}
+        onQuote={quoteMessage}
+        saving={saving}
+        saved={saved}
+      >
+        <div
+          data-testid={`message-bubble-${message.id}`}
         className={cn(
           "group ml-auto flex max-w-[min(85%,36rem)] min-w-0 flex-col items-end gap-1.5",
           baseAnim,
         )}
-      >
-        {hasImages ? <UserImages images={images} align="right" /> : null}
-        {!hasImages && hasMedia ? (
-          <MessageMedia media={media} align="right" />
-        ) : null}
+        >
+          {hasImages ? <UserImages images={images} align="right" /> : null}
+        {visibleMedia.length > 0 ? <MessageMedia media={visibleMedia} align="right" /> : null}
         {hasText ? (
-          <p
+          <div
             className={cn(
               "ml-auto max-w-full rounded-2xl bg-secondary/70 px-4 py-2",
-              "text-left text-[16px]/[1.75] whitespace-pre-wrap break-words select-text",
+              "text-left select-text",
             )}
           >
+            {message.quote ? <QuotedMessagePreview quote={message.quote} /> : null}
+            <p className="text-[16px]/[1.75] whitespace-pre-wrap break-words">
             {/* IMPORTANT: Use displayContent (short label) when available, fallback to content.
                 DO NOT change to just message.content — displayContent ensures user messages
                 show the original input, not the enriched prompt with terminal/DB context.
                 This is persisted to the server for history replay. */}
-            {message.displayContent ?? message.content}
-          </p>
+            {displayContent}
+            </p>
+          </div>
         ) : null}
         {message.isInjected && (
           <span className="mt-1 inline-flex items-center gap-1 text-[10px] text-primary/60">
@@ -243,7 +418,8 @@ export function MessageBubble({
             {t("thread.composer.pendingQueue.injectedBadge")}
           </span>
         )}
-      </div>
+        </div>
+      </MessageContextMenu>
     );
   }
 
@@ -254,17 +430,20 @@ export function MessageBubble({
   const reasoning = message.role === "assistant" ? message.reasoning ?? "" : "";
   const reasoningStreaming = !!(message.role === "assistant" && message.reasoningStreaming);
   const hasReasoning = reasoning.length > 0 || reasoningStreaming;
+  const isAssistantBubble = isGroupChat && message.role === "assistant";
+  const showDirectActions =
+    !isGroupChat
+    && message.role === "assistant"
+    && !message.isStreaming
+    && !empty;
 
-  const showAssistantActions = message.role === "assistant" && !message.isStreaming && !empty;
-  const showCopyButton = showAssistantCopyAction && showAssistantActions;
-  const showSaveButton = showAssistantActions && isTauri();
   const latencyMs = message.latencyMs;
   const showLatencyFooter =
-    message.role === "assistant"
+    isGroupChat
+    && message.role === "assistant"
     && latencyMs != null
     && !message.isStreaming
     && (!empty || hasReasoning || media.length > 0);
-  const showAssistantFooterRow = showCopyButton || showSaveButton || showLatencyFooter;
   const stockConfirmSegments = message.content.includes("[[stock-deep-research")
     ? parseStockConfirmSegments(message.content)
     : null;
@@ -298,26 +477,29 @@ export function MessageBubble({
     <MarkdownText streaming={!!message.isStreaming}>{message.content}</MarkdownText>
   );
   return (
-    <div
+    <MessageContextMenu
+      copied={copied}
+      onCopy={onCopyMessage}
+      onQuote={quoteMessage}
+      onSaveAsNote={canSaveAsNote ? onSaveAsNote : undefined}
+      saving={saving}
+      saved={saved}
+    >
+      <div
+      data-testid={`message-bubble-${message.id}`}
       className={cn(
-        "w-full min-w-0 text-[15px]",
-        isGroupChat && "w-fit max-w-[min(85%,48rem)] self-start",
+        "group/message w-full min-w-0 text-[15px]",
+        isAssistantBubble && "w-fit max-w-[min(85%,48rem)] self-start",
         baseAnim,
       )}
       style={{ lineHeight: "var(--cjk-line-height)" }}
     >
       <div
+        ref={messageContentRef}
         className={cn(
-          isGroupChat && "relative rounded-2xl rounded-tl-md border border-border/70 bg-card/80 px-4 py-3",
+          isAssistantBubble && "rounded-2xl border border-border/70 bg-muted/55 px-4 py-3",
         )}
       >
-      {isGroupChat ? (
-        <span
-          aria-hidden
-          data-testid="group-bubble-tail"
-          className="pointer-events-none absolute -left-1.5 top-3 h-3 w-3 rotate-45 border-b border-l border-border/70 bg-card/80"
-        />
-      ) : null}
       {hasReasoning ? (
         <ReasoningBubble text={reasoning} streaming={reasoningStreaming} hasBodyBelow={!empty} />
       ) : null}
@@ -332,7 +514,7 @@ export function MessageBubble({
                 aria-hidden
                 className={cn(
                   "pointer-events-none absolute inset-x-0 bottom-0 h-16 bg-gradient-to-t from-background via-background/90 to-transparent",
-                  isGroupChat && "from-card via-card/90",
+                  isAssistantBubble && "from-muted via-muted/90",
                 )}
               />
             ) : null}
@@ -354,62 +536,108 @@ export function MessageBubble({
               {replyCollapsed ? t("message.showAll") : t("message.collapse")}
             </button>
           ) : null}
-          {showAssistantFooterRow ? (
+          {showLatencyFooter ? (
             <div className="mt-2 flex min-h-8 flex-wrap items-center gap-x-2 gap-y-1 text-muted-foreground">
-              {showCopyButton ? (
-                <button
-                  type="button"
-                  onClick={onCopyAssistantReply}
-                  aria-label={copied ? t("message.copiedReply") : t("message.copyReply")}
-                  title={copied ? t("message.copiedReply") : t("message.copyReply")}
-                  className={cn(
-                    "inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-full",
-                    "transition-colors hover:bg-muted/55 hover:text-foreground",
-                    "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring",
-                  )}
-                >
-                  {copied ? (
-                    <Check className="h-4 w-4" aria-hidden />
-                  ) : (
-                    <Copy className="h-4 w-4" aria-hidden />
-                  )}
-                </button>
-              ) : null}
-              {showSaveButton ? (
-                <button
-                  type="button"
-                  onClick={onSaveAsNote}
-                  disabled={saved}
-                  aria-label={saved ? t("message.savedAsNote") : t("message.saveAsNote")}
-                  title={saved ? t("message.savedAsNote") : t("message.saveAsNote")}
-                  className={cn(
-                    "inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-full",
-                    "transition-colors hover:bg-muted/55 hover:text-foreground",
-                    "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring",
-                    saved && "text-[#1f9d7a]",
-                  )}
-                >
-                  {saved ? (
-                    <BookmarkCheck className="h-4 w-4" aria-hidden />
-                  ) : (
-                    <Bookmark className="h-4 w-4" aria-hidden />
-                  )}
-                </button>
-              ) : null}
-              {showLatencyFooter ? (
-                <span
-                  className="text-[11px] leading-none text-muted-foreground/70 tabular-nums"
-                  title={t("message.turnLatencyTitle")}
-                >
-                  {formatTurnLatency(latencyMs)}
-                </span>
-              ) : null}
+              <span
+                className="text-[11px] leading-none text-muted-foreground/70 tabular-nums"
+                title={t("message.turnLatencyTitle")}
+              >
+                {formatTurnLatency(latencyMs)}
+              </span>
             </div>
           ) : null}
         </>
       )}
       </div>
-    </div>
+      {showDirectActions ? (
+        <TooltipProvider delayDuration={250}>
+        <div
+          data-testid="direct-message-actions"
+          className="mt-1 flex min-h-7 items-center gap-0.5 text-muted-foreground opacity-0 transition-opacity group-hover/message:opacity-100 group-focus-within/message:opacity-100"
+        >
+          <MessageActionTooltip label={t("message.copyMessage")}>
+          <button
+            type="button"
+            onClick={onCopyMessage}
+            aria-label={copied ? t("message.copiedMessage") : t("message.copyMessage")}
+            className="inline-flex h-7 w-7 items-center justify-center rounded-md transition-colors hover:bg-muted/60 hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+          >
+            {copied ? <Check className="h-4 w-4" aria-hidden /> : <Copy className="h-4 w-4" aria-hidden />}
+          </button>
+          </MessageActionTooltip>
+          <MessageActionTooltip label={t("message.shareAsImage")}>
+          <button
+            type="button"
+            onClick={() => void onShareAsImage()}
+            disabled={sharingImage}
+            aria-label={t("message.shareAsImage")}
+            className="inline-flex h-7 w-7 items-center justify-center rounded-md transition-colors hover:bg-muted/60 hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:opacity-50"
+          >
+            <Share2 className="h-4 w-4" aria-hidden />
+          </button>
+          </MessageActionTooltip>
+          {onBranch ? (
+            <MessageActionTooltip label={t("message.branchTask")}>
+            <button
+              type="button"
+              onClick={() => onBranch(message, quoteAuthor)}
+              aria-label={t("message.branchTask")}
+              className="inline-flex h-7 w-7 items-center justify-center rounded-md transition-colors hover:bg-muted/60 hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+            >
+              <GitFork className="h-4 w-4" aria-hidden />
+            </button>
+            </MessageActionTooltip>
+          ) : null}
+          <DropdownMenu>
+            <Tooltip>
+              <TooltipTrigger asChild>
+            <DropdownMenuTrigger asChild>
+              <button
+                type="button"
+                aria-label={t("message.moreActions")}
+                className="inline-flex h-7 w-7 items-center justify-center rounded-md transition-colors hover:bg-muted/60 hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+              >
+                <MoreHorizontal className="h-4 w-4" aria-hidden />
+              </button>
+            </DropdownMenuTrigger>
+              </TooltipTrigger>
+              <TooltipContent side="top" sideOffset={6}>{t("message.moreActions")}</TooltipContent>
+            </Tooltip>
+            <DropdownMenuContent align="start" sideOffset={4}>
+              {quoteMessage ? (
+                <DropdownMenuItem onSelect={quoteMessage}>
+                  <CornerDownLeft className="h-4 w-4" aria-hidden />
+                  {t("message.quoteMessage")}
+                </DropdownMenuItem>
+              ) : null}
+              {canSaveAsNote ? (
+                <DropdownMenuItem disabled={saving} onSelect={onSaveAsNote}>
+                  {saved ? <BookmarkCheck className="h-4 w-4" aria-hidden /> : <Bookmark className="h-4 w-4" aria-hidden />}
+                  {saved ? t("message.savedAsNote") : t("message.saveAsNote")}
+                </DropdownMenuItem>
+              ) : null}
+            </DropdownMenuContent>
+          </DropdownMenu>
+          <span className="ml-1 text-[11px] tabular-nums text-muted-foreground/70">
+            {formatMessageTime(message.createdAt)}
+          </span>
+          {latencyMs != null ? (
+            <span className="text-[11px] tabular-nums text-muted-foreground/70">
+              {formatTurnLatency(latencyMs)}
+            </span>
+          ) : null}
+          {message.tokenUsage?.totalTokens ? (
+            <span className="text-[11px] tabular-nums text-muted-foreground/70">
+              {t("message.tokenUsage", {
+                count: formatMessageTokenCount(message.tokenUsage.totalTokens),
+              })}
+            </span>
+          ) : null}
+        </div>
+        </TooltipProvider>
+      ) : null}
+      </div>
+    </MessageContextMenu>
   );
 }
 
@@ -545,31 +773,82 @@ function UserImages({
   }
 
   const [lightboxIndex, setLightboxIndex] = useState<number | null>(null);
+  const [galleryExpanded, setGalleryExpanded] = useState(false);
+  const isGallery = size === "large" && images.length > 1;
+  const displayedImages = isGallery && !galleryExpanded
+    ? images.slice(0, IMAGE_GALLERY_PREVIEW_LIMIT)
+    : images;
+  const hiddenImageCount = images.length - displayedImages.length;
+  const galleryColumns = Math.min(displayedImages.length, IMAGE_GALLERY_PREVIEW_LIMIT);
 
   return (
     <>
       <div
         className={cn(
-          "flex flex-wrap items-end gap-2",
-          size === "large" && "gap-3",
+          isGallery
+            ? "grid w-full max-w-[34rem] gap-2"
+            : "flex flex-wrap items-end gap-2",
+          size === "large" && !isGallery && "gap-3",
           align === "right" ? "ml-auto justify-end" : "mr-auto justify-start",
         )}
+        data-image-gallery={isGallery ? "true" : undefined}
+        style={isGallery
+          ? { gridTemplateColumns: `repeat(${galleryColumns}, minmax(0, 1fr))` }
+          : undefined}
       >
-        {images.map((img, i) => (
-          <UserImageCell
-            key={`${img.url ?? "placeholder"}-${i}`}
-            image={img}
-            size={size}
-            placeholderLabel={t("message.imageAttachment")}
-            openLabel={t("lightbox.open")}
-            onOpen={
-              originalToViewable.has(i)
-                ? () => setLightboxIndex(originalToViewable.get(i)!)
-                : undefined
-            }
-          />
-        ))}
+        {displayedImages.map((img, i) => {
+          const coveredByExpand =
+            hiddenImageCount > 0 && i === displayedImages.length - 1;
+          return (
+            <div
+              key={`${img.url ?? "placeholder"}-${i}`}
+              className={cn(isGallery && "relative min-w-0")}
+            >
+              <UserImageCell
+                image={img}
+                size={isGallery ? "gallery" : size}
+                placeholderLabel={t("message.imageAttachment")}
+                openLabel={t("lightbox.open")}
+                covered={coveredByExpand}
+                onOpen={
+                  originalToViewable.has(i)
+                    ? () => setLightboxIndex(originalToViewable.get(i)!)
+                    : undefined
+                }
+              />
+              {coveredByExpand ? (
+                <Button
+                  type="button"
+                  variant="ghost"
+                  aria-label={`${t("message.showAll")} (+${hiddenImageCount})`}
+                  onClick={() => setGalleryExpanded(true)}
+                  className="absolute inset-0 h-full w-full flex-col gap-1 rounded-xl bg-black/55 text-white hover:bg-black/65 hover:text-white"
+                >
+                  <span className="text-title-sm font-semibold tabular-nums">
+                    +{hiddenImageCount}
+                  </span>
+                  <span className="text-micro">{t("message.showAll")}</span>
+                </Button>
+              ) : null}
+            </div>
+          );
+        })}
       </div>
+      {isGallery && galleryExpanded && images.length > IMAGE_GALLERY_PREVIEW_LIMIT ? (
+        <Button
+          type="button"
+          variant="ghost"
+          size="xs"
+          onClick={() => setGalleryExpanded(false)}
+          className={cn(
+            "mt-1 gap-1 text-muted-foreground",
+            align === "right" ? "ml-auto" : "mr-auto",
+          )}
+        >
+          <ChevronUp className="h-3.5 w-3.5" aria-hidden />
+          {t("message.collapse")}
+        </Button>
+      ) : null}
       <ImageLightbox
         images={viewableImages}
         index={lightboxIndex}
@@ -588,12 +867,14 @@ function UserImageCell({
   placeholderLabel,
   openLabel,
   onOpen,
+  covered = false,
 }: {
   image: UIImage;
-  size: "compact" | "large";
+  size: "compact" | "large" | "gallery";
   placeholderLabel: string;
   openLabel: string;
   onOpen?: () => void;
+  covered?: boolean;
 }) {
   const { t } = useTranslation();
   const hasUrl = typeof image.url === "string" && image.url.length > 0;
@@ -602,7 +883,9 @@ function UserImageCell({
     "relative overflow-hidden border border-border/60 bg-muted/40",
     size === "large"
       ? "w-[min(100%,34rem)] rounded-2xl bg-transparent"
-      : "h-24 w-24 rounded-xl",
+      : size === "gallery"
+        ? "aspect-square w-full rounded-xl"
+        : "h-24 w-24 rounded-xl",
     "shadow-sm",
   );
 
@@ -627,11 +910,14 @@ function UserImageCell({
             type="button"
             onClick={onOpen}
             aria-label={image.name ? `${openLabel}: ${image.name}` : openLabel}
+            aria-hidden={covered || undefined}
+            tabIndex={covered ? -1 : undefined}
             className={cn(
               tileClasses,
               "block cursor-zoom-in p-0 transition-transform duration-150 motion-reduce:transition-none",
               "hover:scale-[1.01] hover:ring-2 hover:ring-primary/25",
               "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/50",
+              covered && "pointer-events-none",
             )}
           >
             <img
@@ -748,13 +1034,15 @@ interface ReasoningBubbleProps {
   embeddedInCluster?: boolean;
 }
 
+const LIVE_REASONING_PREVIEW_CHARS = 6_000;
+
 /**
  * Subordinate "thinking" trace shown above an assistant turn.
  *
  * Lifecycle:
  *   - While ``streaming`` is true (``reasoning_delta`` frames still arriving),
- *     the bubble defaults to open and the header shows a sheen + pulse so
- *     the user sees the model "thinking out loud" in real time.
+ *     the bubble starts open, then collapses after the live preview limit so
+ *     long model traces cannot monopolize the WebView main thread.
  *   - Expanded reasoning uses the same Markdown pipeline as assistant replies
  *     (deferred while streaming to reduce parser thrash), so headings and
  *     emphasis render instead of leaking raw ``###`` / ``**``.
@@ -771,7 +1059,12 @@ export function ReasoningBubble({
   const { t } = useTranslation();
   const [userToggled, setUserToggled] = useState(false);
   const [openLocal, setOpenLocal] = useState(true);
-  const open = userToggled ? openLocal : streaming;
+  const open = userToggled
+    ? openLocal
+    : streaming && text.length <= LIVE_REASONING_PREVIEW_CHARS;
+  const visibleText = streaming && text.length > LIVE_REASONING_PREVIEW_CHARS
+    ? `…\n\n${text.slice(-LIVE_REASONING_PREVIEW_CHARS)}`
+    : text;
   const onToggle = () => {
     setUserToggled(true);
     setOpenLocal((v) => (userToggled ? !v : !open));
@@ -816,7 +1109,7 @@ export function ReasoningBubble({
           )}
         />
       </button>
-      {open && text.length > 0 && (
+      {open && visibleText.length > 0 && (
         <div
           className={cn(
             "mt-1 min-w-0 border-l border-muted-foreground/20 pl-3",
@@ -835,7 +1128,7 @@ export function ReasoningBubble({
               "prose-code:text-[0.92em]",
             )}
           >
-            {text}
+            {visibleText}
           </MarkdownText>
         </div>
       )}

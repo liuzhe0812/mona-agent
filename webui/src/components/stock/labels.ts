@@ -9,6 +9,7 @@ export function diagnosisActionLabel(value: string): string {
     negative: "看跌",
     unavailable: "暂无方向",
     conditional_participation: "满足条件再参与",
+    participate: "按计划参与",
     wait: "等待确认",
     hold: "继续持有",
     reduce: "减仓",
@@ -18,12 +19,52 @@ export function diagnosisActionLabel(value: string): string {
   return labels[value] ?? "待确认";
 }
 
-export function diagnosisCurrentActionLabel(decision: StockDiagnosisHorizonDecision): string {
-  if (decision.not_holding_action === "avoid" && ["reduce", "exit"].includes(decision.holding_action)) {
-    return decision.holding_action === "exit" ? "暂不买入 / 退出" : "暂不买入 / 减仓";
+export function diagnosisEntryConditionStatus(
+  decision: StockDiagnosisHorizonDecision,
+  currentPrice?: number | null,
+): "triggered" | "not_triggered" | "unavailable" {
+  const threshold = decision.materialized_plan.reference_entry_high ?? decision.materialized_plan.reference_entry;
+  const legacySinglePriceCondition = decision.materialized_plan.entry_condition_realtime_eligible == null
+    && decision.materialized_plan.entry_condition_count == null
+    && decision.materialized_plan.entry_condition?.startsWith("价格达到参考买入区间上沿");
+  if ((decision.materialized_plan.entry_condition_realtime_eligible === true || legacySinglePriceCondition) && typeof currentPrice === "number" && Number.isFinite(currentPrice) && typeof threshold === "number" && Number.isFinite(threshold)) {
+    return currentPrice >= threshold ? "triggered" : "not_triggered";
   }
-  if (decision.not_holding_action === "wait" && decision.holding_action === "hold") return "等待买入 / 继续持有";
-  return diagnosisActionLabel(decision.action);
+  const explicit = decision.materialized_plan.entry_condition_status;
+  if (explicit === "triggered" || explicit === "not_triggered") return explicit;
+  return "unavailable";
+}
+
+export function diagnosisCurrentActionLabel(decision: StockDiagnosisHorizonDecision, currentPrice?: number | null): string {
+  if (decision.not_holding_action === "avoid") return "暂不买入";
+  if (decision.not_holding_action === "wait") return "暂不买入";
+  if (decision.not_holding_action === "conditional_participation") {
+    const status = diagnosisEntryConditionStatus(decision, currentPrice);
+    if (status === "triggered" || decision.current_action === "participate" && status === "unavailable") return "可按计划分批买入";
+    return "暂不买入";
+  }
+  return diagnosisActionLabel(decision.not_holding_action);
+}
+
+export function diagnosisNotHoldingActionLabel(decision: StockDiagnosisHorizonDecision, currentPrice?: number | null): string {
+  if (decision.not_holding_action !== "conditional_participation") {
+    return "暂不买入";
+  }
+  const condition = decision.materialized_plan.entry_condition?.trim();
+  const status = diagnosisEntryConditionStatus(decision, currentPrice);
+  if (status === "not_triggered") {
+    return condition ? `暂不买入；等待${condition}` : "暂不买入；等待价格条件满足";
+  }
+  if (status === "triggered") {
+    return "可按计划分批买入";
+  }
+  if (decision.current_action === "participate") {
+    return "可按计划分批买入";
+  }
+  if (decision.current_action === "wait") {
+    return condition ? `暂不买入；等待${condition}` : "暂不买入；参与条件待确认";
+  }
+  return "暂不买入；参与条件待确认";
 }
 
 export const STANCE_LABELS: Record<StockStance, string> = {

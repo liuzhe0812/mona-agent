@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import asyncio
 import base64
+from contextvars import ContextVar
 from typing import Any
 
 from loguru import logger
@@ -15,6 +17,7 @@ from mona.agent.tools.schema import (
     tool_parameters_schema,
 )
 from mona.agent.tools.tauri_ipc import tauri_invoke as _shared_tauri_invoke
+from mona.agent.tools.tauri_ipc import tauri_invoke_async as _shared_tauri_invoke_async
 from mona.config.schema import TerminalToolConfig
 
 
@@ -32,7 +35,49 @@ def _tauri_invoke(cmd: str, args: dict[str, Any] | None = None) -> Any:
         return f"Error: Tauri invoke failed: {e}"
 
 
+async def _tauri_invoke_async(cmd: str, args: dict[str, Any] | None = None) -> Any:
+    """Async counterpart that preserves the terminal wrapper's error contract."""
+    try:
+        return await _shared_tauri_invoke_async(cmd, args)
+    except RuntimeError as e:
+        logger.warning("IPC bridge error for cmd={!r}: {}", cmd, e)
+        return f"Error: {e}"
+    except Exception as e:
+        logger.warning("IPC bridge invoke failed for cmd={!r}: {}", cmd, e)
+        return f"Error: Tauri invoke failed: {e}"
+
+
 _DEFAULT_TERMINAL_CONFIG = TerminalToolConfig()
+_TERMINAL_OWNER_SESSION_KEY: ContextVar[str | None] = ContextVar(
+    "mona_terminal_owner_session_key",
+    default=None,
+)
+_TERMINAL_TASKS_BY_SESSION: dict[str, set[str]] = {}
+
+
+def _track_terminal_task(task_id: str) -> None:
+    session_key = _TERMINAL_OWNER_SESSION_KEY.get()
+    if session_key:
+        _TERMINAL_TASKS_BY_SESSION.setdefault(session_key, set()).add(task_id)
+
+
+def _untrack_terminal_task(task_id: str) -> None:
+    for session_key, task_ids in list(_TERMINAL_TASKS_BY_SESSION.items()):
+        task_ids.discard(task_id)
+        if not task_ids:
+            _TERMINAL_TASKS_BY_SESSION.pop(session_key, None)
+
+
+async def cancel_terminal_tasks_by_session(session_key: str) -> int:
+    task_ids = list(_TERMINAL_TASKS_BY_SESSION.pop(session_key, set()))
+    if task_ids:
+        await asyncio.gather(
+            *(
+                _tauri_invoke_async("terminal_maintenance_cancel", {"taskId": task_id})
+                for task_id in task_ids
+            )
+        )
+    return len(task_ids)
 
 _NO_TASK_ERROR = (
     "Error: terminal_exec requires task_id and step_id from an active "
@@ -104,6 +149,38 @@ def _resolve_terminal_session(preferred_id: str | None) -> str | None:
         if stype in ("ssh", "local", "desktop") and "connected" in status:
             return s.get("id")
     # Last resort: any terminal session regardless of status.
+    for s in sessions:
+        stype = (s.get("sessionType") or s.get("session_type") or "").lower()
+        if stype in ("ssh", "local", "desktop"):
+            return s.get("id")
+    return None
+
+
+async def _session_type_async(session_id: str) -> str | None:
+    """Async version of _session_type for tool execution paths."""
+    result = await _tauri_invoke_async("terminal_list_sessions")
+    if isinstance(result, list):
+        for s in result:
+            if isinstance(s, dict) and s.get("id") == session_id:
+                return s.get("sessionType") or s.get("session_type")
+    return None
+
+
+async def _resolve_terminal_session_async(preferred_id: str | None) -> str | None:
+    """Async version of _resolve_terminal_session for tool execution paths."""
+    result = await _tauri_invoke_async("terminal_list_sessions")
+    if not isinstance(result, list):
+        return None
+    sessions = [s for s in result if isinstance(s, dict)]
+    if preferred_id:
+        for s in sessions:
+            if s.get("id") == preferred_id:
+                return preferred_id
+    for s in sessions:
+        stype = (s.get("sessionType") or s.get("session_type") or "").lower()
+        status = (s.get("status") or "").lower()
+        if stype in ("ssh", "local", "desktop") and "connected" in status:
+            return s.get("id")
     for s in sessions:
         stype = (s.get("sessionType") or s.get("session_type") or "").lower()
         if stype in ("ssh", "local", "desktop"):
@@ -204,6 +281,7 @@ _STEP_ITEM_SCHEMA = ObjectSchema(
 class TerminalTaskTool(Tool):
     _scopes = {"core", "subagent"}
     config_key = "terminal_task"
+    subscription_required = True
     _request_ctx: RequestContext | None = None
 
     def set_context(self, ctx: RequestContext) -> None:
@@ -213,6 +291,7 @@ class TerminalTaskTool(Tool):
         # visibility to frontend store state and breaks easily when other
         # modules change.
         self._request_ctx = ctx
+        _TERMINAL_OWNER_SESSION_KEY.set(ctx.session_key)
 
     @property
     def name(self) -> str:
@@ -252,14 +331,14 @@ class TerminalTaskTool(Tool):
     ) -> str:
         action = (action or "").strip()
         if action == "start":
-            return self._start(goal, steps, session_id)
+            return await self._start(goal, steps, session_id)
         if action == "finish":
-            return self._finish(task_id, diagnosis, summary)
+            return await self._finish(task_id, diagnosis, summary)
         if action == "fail":
-            return self._fail(task_id, error)
+            return await self._fail(task_id, error)
         return f"Error: unknown action {action!r}; use start, finish or fail"
 
-    def _start(self, goal: str | None, steps: Any, session_id: str | None) -> str:
+    async def _start(self, goal: str | None, steps: Any, session_id: str | None) -> str:
         if not goal or not goal.strip():
             return "Error: goal is required for start"
         parsed = _parse_steps(steps)
@@ -268,7 +347,7 @@ class TerminalTaskTool(Tool):
         preferred = session_id or (
             self._request_ctx.terminal_session_id if self._request_ctx else None
         )
-        effective_session = _resolve_terminal_session(preferred)
+        effective_session = await _resolve_terminal_session_async(preferred)
         if not effective_session:
             return (
                 "tool_unavailable: terminal_task requires an active terminal "
@@ -280,7 +359,7 @@ class TerminalTaskTool(Tool):
             if self._request_ctx and self._request_ctx.terminal_exec_mode
             else _DEFAULT_TERMINAL_CONFIG.exec_mode.value
         )
-        result = _tauri_invoke(
+        result = await _tauri_invoke_async(
             "terminal_maintenance_start",
             {
                 "sessionId": effective_session,
@@ -294,6 +373,8 @@ class TerminalTaskTool(Tool):
             return result
         task_id = result.get("taskId", "?") if isinstance(result, dict) else "?"
         step_ids = result.get("stepIds", []) if isinstance(result, dict) else []
+        if isinstance(task_id, str) and task_id != "?":
+            _track_terminal_task(task_id)
         lines = [f"Maintenance task started. task_id: {task_id}", "steps:"]
         for i, sid in enumerate(step_ids):
             title = parsed[i]["title"] if i < len(parsed) else "?"
@@ -303,10 +384,10 @@ class TerminalTaskTool(Tool):
         )
         return "\n".join(lines)
 
-    def _finish(self, task_id: str | None, diagnosis: str | None, summary: str | None) -> str:
+    async def _finish(self, task_id: str | None, diagnosis: str | None, summary: str | None) -> str:
         if not task_id:
             return "Error: task_id is required for finish"
-        result = _tauri_invoke(
+        result = await _tauri_invoke_async(
             "terminal_maintenance_finish",
             {
                 "taskId": task_id,
@@ -316,20 +397,22 @@ class TerminalTaskTool(Tool):
         )
         if isinstance(result, str) and result.startswith("Error:"):
             return result
+        _untrack_terminal_task(task_id)
         return (
             "Maintenance task finished successfully. Give the user your final summary. "
             "Do not run further steps for this task."
         )
 
-    def _fail(self, task_id: str | None, error: str | None) -> str:
+    async def _fail(self, task_id: str | None, error: str | None) -> str:
         if not task_id:
             return "Error: task_id is required for fail"
-        result = _tauri_invoke(
+        result = await _tauri_invoke_async(
             "terminal_maintenance_fail",
             {"taskId": task_id, "error": error or "AI 放弃继续处理"},
         )
         if isinstance(result, str) and result.startswith("Error:"):
             return result
+        _untrack_terminal_task(task_id)
         return "Maintenance task marked as failed. Explain the situation to the user."
 
 
@@ -363,6 +446,7 @@ class TerminalTaskTool(Tool):
 class TerminalExecTool(Tool):
     _scopes = {"core", "subagent"}
     config_key = "terminal"
+    subscription_required = True
     _request_ctx: RequestContext | None = None
 
     def set_context(self, ctx: RequestContext) -> None:
@@ -407,7 +491,7 @@ class TerminalExecTool(Tool):
         preferred = session_id or (
             self._request_ctx.terminal_session_id if self._request_ctx else None
         )
-        effective_session = _resolve_terminal_session(preferred)
+        effective_session = await _resolve_terminal_session_async(preferred)
         if not effective_session:
             return (
                 "tool_unavailable: terminal_exec requires an active terminal "
@@ -421,8 +505,8 @@ class TerminalExecTool(Tool):
         if not task_id or not step_id:
             # Local shells have no structured execution yet — keep the previous
             # untracked passthrough so existing local-terminal usage still works.
-            if (_session_type(effective_session) or "").lower() == "local":
-                result = _tauri_invoke(
+            if (await _session_type_async(effective_session) or "").lower() == "local":
+                result = await _tauri_invoke_async(
                     "terminal_exec_command",
                     {"sessionId": effective_session, "command": command, "source": "ai"},
                 )
@@ -443,7 +527,7 @@ class TerminalExecTool(Tool):
         }
         if isinstance(timeout_secs, int) and timeout_secs > 0:
             args["timeoutSecs"] = timeout_secs
-        result = _tauri_invoke("terminal_maintenance_execute_step", args)
+        result = await _tauri_invoke_async("terminal_maintenance_execute_step", args)
 
         if isinstance(result, str) and result.startswith("Error:"):
             return result
@@ -476,6 +560,7 @@ _DEFAULT_OUTPUT_LINES = 200
 class TerminalOutputTool(Tool):
     _scopes = {"core", "subagent"}
     config_key = "terminal_output"
+    subscription_required = True
     _request_ctx: RequestContext | None = None
 
     def set_context(self, ctx: RequestContext) -> None:
@@ -508,13 +593,13 @@ class TerminalOutputTool(Tool):
         preferred = session_id or (
             self._request_ctx.terminal_session_id if self._request_ctx else None
         )
-        effective_session = _resolve_terminal_session(preferred)
+        effective_session = await _resolve_terminal_session_async(preferred)
         if effective_session:
-            result = _tauri_invoke(
+            result = await _tauri_invoke_async(
                 "terminal_get_output", {"sessionId": effective_session}
             )
         else:
-            result = _tauri_invoke("terminal_list_sessions")
+            result = await _tauri_invoke_async("terminal_list_sessions")
 
         if isinstance(result, str) and result.startswith("Error:"):
             return result
@@ -566,6 +651,7 @@ class TerminalOutputTool(Tool):
 class TerminalUploadTool(Tool):
     _scopes = {"core", "subagent"}
     config_key = "terminal_upload"
+    subscription_required = True
     _request_ctx: RequestContext | None = None
 
     def set_context(self, ctx: RequestContext) -> None:
@@ -610,7 +696,7 @@ class TerminalUploadTool(Tool):
         preferred = session_id or (
             self._request_ctx.terminal_session_id if self._request_ctx else None
         )
-        effective_session = _resolve_terminal_session(preferred)
+        effective_session = await _resolve_terminal_session_async(preferred)
         if not effective_session:
             return (
                 "tool_unavailable: terminal_upload requires an active terminal "
@@ -626,7 +712,7 @@ class TerminalUploadTool(Tool):
         else:
             content_b64 = base64.b64encode(content.encode("utf-8")).decode("ascii")
 
-        result = _tauri_invoke(
+        result = await _tauri_invoke_async(
             "terminal_maintenance_execute_upload",
             {
                 "taskId": task_id,
@@ -678,7 +764,7 @@ class GenerateReportTool(Tool):
         content: str,
         **kwargs: Any,
     ) -> str:
-        result = _tauri_invoke(
+        result = await _tauri_invoke_async(
             "report_save_temp",
             {"title": title, "content": content},
         )

@@ -1,465 +1,234 @@
-/** 人物画像 Tab：话题投入与关系总览看板（真实后端数据，可追溯到原始计数）。 */
-
-import { useState } from "react";
-import {
-  AlertTriangle,
-  BadgeCheck,
-  CalendarDays,
-  ChevronDown,
-  ChevronUp,
-  CircleHelp,
-  Lightbulb,
-  MessageSquareText,
-  Sparkles,
-  Star,
-  Tags,
-  TrendingUp,
-  UserRound,
-  Users,
-} from "lucide-react";
+import { Fragment, useMemo } from "react";
+import { FileText, Network, Radar, Users } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
-import {
-  type PainPoint,
-  type ProfileData,
-} from "@/lib/profile-api";
-import { cn } from "@/lib/utils";
+import type { ProfileArtifact, ProfileCharts, ProfileData, RichProfile } from "@/lib/profile-api";
 
-import { KnowledgeStarGraph } from "./charts/KnowledgeStarGraph";
-import { RadarChart } from "./charts/RadarChart";
-import { SkillMatrix } from "./charts/SkillMatrix";
-import {
-  CARD_BASE, CARD_HOVER, PROFILE_COLORS,
-} from "./profile-theme";
+import { PROFILE_COLORS } from "./profile-theme";
 
 interface ProfileTabProps {
   data?: ProfileData;
+  profile?: RichProfile;
   loading: boolean;
-  /** 带着上下文提示词开启一个 Mona 会话（行动出口）。 */
-  onAskMona?: (prompt: string) => void;
+  onOpenArtifact?: (artifact: ProfileArtifact) => void;
 }
 
-export function ProfileTab({
-  data,
-  loading,
-  onAskMona,
-}: ProfileTabProps) {
-  const [painOpen, setPainOpen] = useState(true);
-  if (loading) {
-    return (
-      <div className="flex h-full items-center justify-center text-body text-muted-foreground">
-        加载中…
+export function ProfileTab({ data, profile, loading, onOpenArtifact }: ProfileTabProps) {
+  if (loading) return <div className="flex h-full items-center justify-center text-body text-muted-foreground">加载中…</div>;
+
+  const actual = profile?.profile ?? data;
+  const dashboard = profile?.dashboard;
+  const evidence = actual?.evidence;
+  const charts = profileCharts(profile);
+  const radar = normalizeDimensions(charts?.profile_dimensions);
+  const graph = normalizeGraph(charts?.topic_graph);
+  const topics = dashboard?.topic_records ?? [];
+  const topicCount = graph?.nodes?.length ?? topics.length;
+  const focusCount = radar.length;
+  const normalizedConversationTypes = normalizeCounts(charts?.collaboration_types);
+  const conversationTypes = normalizedConversationTypes.length ? normalizedConversationTypes : [];
+  const supportSessions = dashboard?.metrics?.active_conversations?.current.value ?? evidence?.total_sessions ?? 0;
+  const artifacts = dashboard?.artifacts ?? [];
+  const generatedArtifacts = dashboard?.metrics?.generated_artifacts?.current.value ?? artifacts.length;
+  const normalizedArtifactGroups = normalizeCounts(charts?.artifact_types);
+  const artifactGroups = normalizedArtifactGroups.length ? normalizedArtifactGroups : groupArtifacts(artifacts);
+  const matrix = readMatrix(charts?.domain_task_matrix);
+
+  return (
+    <div className="flex w-full flex-col text-foreground lg:grid lg:h-full lg:min-h-0 lg:grid-rows-[auto_minmax(0,1.15fr)_minmax(0,0.85fr)_auto]">
+      <div className="grid grid-cols-2 border-b border-border/70 py-3 sm:grid-cols-4">
+        <SummaryStat label="关注领域" value={focusCount} />
+        <SummaryStat label="关联主题" value={topicCount} />
+        <SummaryStat label="协作类型" value={conversationTypes.length} />
+        <SummaryStat label="支撑会话" value={supportSessions} />
       </div>
-    );
+
+      <div className="grid min-h-0 grid-cols-1 border-b border-border/70 lg:grid-cols-[0.95fr_1.7fr]">
+        <section className="flex min-h-0 flex-col overflow-hidden border-b border-border/70 py-4 lg:border-b-0 lg:border-r lg:border-border/70 lg:pr-6">
+          <ChartHeading icon={<Radar className="h-4 w-4" />} title="关注领域" subtitle="相关记录数" />
+          {radar.length > 2 ? <RadarPlot values={radar} /> : <ChartEmpty text="暂无足够领域记录" />}
+        </section>
+        <section className="flex min-h-0 flex-col overflow-hidden py-4 lg:pl-6">
+          <ChartHeading icon={<Network className="h-4 w-4" />} title="主题关联" subtitle="同一记录中的共同出现" />
+          {graph?.nodes?.length ? <TopicGraph graph={graph} /> : <ChartEmpty text="暂无主题关联图" />}
+          <div className="mt-1 flex flex-wrap gap-4 text-micro text-muted-foreground">
+            {graphLegend(graph).map((item) => <Legend key={item.label} color={item.color} label={item.label} />)}
+          </div>
+        </section>
+      </div>
+
+      <div className="grid min-h-0 grid-cols-1 border-b border-border/70 py-4 lg:grid-cols-[0.9fr_1fr_1.3fr]">
+        <section className="flex min-h-0 flex-col justify-center overflow-hidden border-b border-border/70 pb-4 lg:border-b-0 lg:border-r lg:border-border/70 lg:pr-6">
+          <ChartHeading icon={<Users className="h-4 w-4" />} title="常见协作类型" />
+          {conversationTypes.length ? <CollaborationDonut items={conversationTypes} /> : <ChartEmpty text="暂无协作类型记录" />}
+        </section>
+        <section className="flex min-h-0 flex-col justify-center overflow-hidden border-b border-border/70 py-4 lg:border-b-0 lg:border-r lg:border-border/70 lg:px-6 lg:py-0">
+          <ChartHeading icon={<FileText className="h-4 w-4" />} title="常见交付物" subtitle={`${generatedArtifacts || 0} 份记录`} />
+          {artifactGroups.length ? <ArtifactBars groups={artifactGroups} artifacts={artifacts} onOpenArtifact={onOpenArtifact} /> : <ChartEmpty text="暂无可验证的交付物" />}
+        </section>
+        <section className="flex min-h-0 flex-col overflow-hidden pt-4 lg:pl-6 lg:pt-0">
+          <ChartHeading icon={<Network className="h-4 w-4" />} title="领域 × 协作方式" />
+          {matrix.values.length ? <Matrix data={matrix} /> : <ChartEmpty text="暂无领域与协作方式交叉记录" />}
+        </section>
+      </div>
+    </div>
+  );
+}
+
+function SummaryStat({ label, value }: { label: string; value: number }) {
+  return <div className="flex items-baseline justify-center gap-2 border-r border-border/70 px-2 last:border-r-0"><span className="text-caption text-muted-foreground">{label}</span><strong className="text-title-sm font-medium leading-none tabular-nums">{value}</strong></div>;
+}
+
+function ChartHeading({ icon, title, subtitle }: { icon: React.ReactNode; title: string; subtitle?: string }) {
+  return <div className="mb-2 flex items-baseline gap-2"><h2 className="flex items-center gap-1.5 text-body font-semibold">{icon}{title}</h2>{subtitle ? <span className="text-micro text-muted-foreground">{subtitle}</span> : null}</div>;
+}
+
+function ChartEmpty({ text }: { text: string }) {
+  return <div className="flex min-h-0 flex-1 items-center justify-center text-caption text-muted-foreground">{text}</div>;
+}
+
+function Legend({ color, label }: { color: string; label: string }) {
+  return <span className="flex items-center gap-1"><i className="h-2.5 w-2.5 rounded-full" style={{ background: color }} />{label}</span>;
+}
+
+function RadarPlot({ values }: { values: Array<{ axis: string; value: number }> }) {
+  const size = 320;
+  const center = size / 2;
+  const radius = 105;
+  const max = Math.max(30, ...values.map((item) => item.value));
+  const points = values.slice(0, 8).map((item, index, all) => {
+    const angle = -Math.PI / 2 + (index / all.length) * Math.PI * 2;
+    const distance = radius * Math.max(0, Math.min(1, item.value / max));
+    return { ...item, x: center + Math.cos(angle) * distance, y: center + Math.sin(angle) * distance, labelX: center + Math.cos(angle) * (radius + 22), labelY: center + Math.sin(angle) * (radius + 22), angle };
+  });
+  const polygon = points.map((point) => `${point.x},${point.y}`).join(" ");
+  return <svg viewBox={`0 0 ${size} ${size}`} className="mx-auto block min-h-0 flex-1 w-full max-w-[380px] text-border" aria-label="关注领域雷达图">
+    {[0.33, 0.66, 1].map((level) => <g key={level}>
+      <polygon points={points.map((_, index, all) => { const angle = -Math.PI / 2 + (index / all.length) * Math.PI * 2; return `${center + Math.cos(angle) * radius * level},${center + Math.sin(angle) * radius * level}`; }).join(" ")} fill="none" stroke="currentColor" strokeWidth="1" />
+      <text x={center + 4} y={center - radius * level + 10} className="fill-muted-foreground" fontSize="9">{Math.round(max * level)}</text>
+    </g>)}
+    {points.map((point) => <line key={`axis-${point.axis}`} x1={center} y1={center} x2={center + Math.cos(point.angle) * radius} y2={center + Math.sin(point.angle) * radius} stroke="currentColor" strokeWidth="1" />)}
+    <polygon points={polygon} fill={`${PROFILE_COLORS.emerald}18`} stroke={PROFILE_COLORS.emerald} strokeWidth="2" />
+    {points.map((point) => <g key={point.axis}><circle cx={point.x} cy={point.y} r="3.5" fill={PROFILE_COLORS.emerald} /><text x={point.labelX} y={point.labelY} textAnchor={point.labelX < center - 8 ? "end" : point.labelX > center + 8 ? "start" : "middle"} dominantBaseline="middle" className="fill-muted-foreground" fontSize="11">{point.axis}</text></g>)}
+    <text x={center} y={center - 4} textAnchor="middle" className="fill-muted-foreground" fontSize="10">相关记录数</text>
+  </svg>;
+}
+
+function TopicGraph({ graph }: { graph: NonNullable<ProfileCharts["topic_graph"]> }) {
+  const nodes = graph.nodes.slice(0, 18);
+  const positions = useMemo(() => {
+    const groups = new Map<string, typeof nodes>();
+    for (const node of nodes) groups.set(node.group, [...(groups.get(node.group) ?? []), node]);
+    const output = new Map<string, { x: number; y: number }>();
+    const groupRows = groups.size > 3 ? 2 : 1;
+    [...groups.entries()].forEach(([_group, groupNodes], groupIndex) => {
+      const cx = 120 + (groupIndex % 3) * 240;
+      const cy = groupRows === 1 ? 140 : 70 + Math.floor(groupIndex / 3) * 140;
+      groupNodes.forEach((node, index) => {
+        const angle = groupNodes.length === 1 ? 0 : (index / groupNodes.length) * Math.PI * 2;
+        output.set(node.id, { x: cx + Math.cos(angle) * 54, y: cy + Math.sin(angle) * 38 });
+      });
+    });
+    return output;
+  }, [nodes]);
+  return <svg viewBox="0 0 720 280" className="min-h-0 flex-1 w-full text-border" aria-label="主题关联图">
+    {graph.links.slice(0, 30).map((link, index) => { const from = positions.get(link.source); const to = positions.get(link.target); return from && to ? <line key={`${link.source}-${link.target}-${index}`} x1={from.x} y1={from.y} x2={to.x} y2={to.y} stroke="currentColor" strokeWidth="1" /> : null; })}
+    {nodes.map((node) => { const position = positions.get(node.id); if (!position) return null; const color = [PROFILE_COLORS.emerald, PROFILE_COLORS.cyan, PROFILE_COLORS.amber][[...new Set(nodes.map((item) => item.group))].indexOf(node.group) % 3]; const size = Math.max(5, Math.min(18, node.count / 2)); return <g key={node.id}><circle cx={position.x} cy={position.y} r={size} fill={color} opacity="0.95" /><text x={position.x} y={position.y + size + 13} textAnchor="middle" className="fill-muted-foreground" fontSize="11">{node.label}</text></g>; })}
+  </svg>;
+}
+
+function CollaborationDonut({ items }: { items: { label: string; count: number }[] }) {
+  const total = items.reduce((sum, item) => sum + item.count, 0);
+  let start = 0;
+  const colors = [PROFILE_COLORS.emerald, PROFILE_COLORS.cyan, PROFILE_COLORS.amber, PROFILE_COLORS.violet];
+  const gradient = items.map((item, index) => { const end = total ? start + (item.count / total) * 100 : 0; const part = `${colors[index % colors.length]} ${start}% ${end}%`; start = end; return part; }).join(", ");
+  return <div className="flex items-center justify-center gap-5 py-3"><div className="relative h-36 w-36 shrink-0 rounded-full" style={{ background: `conic-gradient(${gradient})` }}><div className="absolute inset-8 flex flex-col items-center justify-center rounded-full bg-background"><span className="text-title-sm font-medium leading-none">{total}</span><span className="text-micro text-muted-foreground">次协作</span></div></div><div className="space-y-2 text-caption">{items.slice(0, 5).map((item, index) => <div key={item.label} className="flex items-center gap-2"><i className="h-2.5 w-2.5 rounded-full" style={{ background: colors[index % colors.length] }} /><span>{item.label}</span><span className="text-muted-foreground">{item.count}</span></div>)}</div></div>;
+}
+
+function groupArtifacts(artifacts: ProfileArtifact[]) {
+  const groups = new Map<string, number>();
+  for (const artifact of artifacts) {
+    const type = artifactCategory(artifact);
+    groups.set(type, (groups.get(type) ?? 0) + 1);
   }
+  return [...groups.entries()].map(([label, count]) => ({ label, count }));
+}
 
-  const identity = data?.identity ?? {};
-  const evidence = data?.evidence ?? {};
-  const viz = data?.visualizations ?? {};
-  const radarScores = viz.radar_scores ?? [];
-  const skillMatrix = viz.skill_matrix ?? [];
-  const knowledgeGraph = viz.knowledge_graph;
-  const tagCloud = viz.tag_cloud ?? evidence.tag_distribution ?? [];
-  const totalNotes = evidence.total_notes ?? 0;
-  const painPoints = data?.pain_points ?? [];
-  const openQuestions = data?.open_questions ?? [];
-
-  // 人际网络：真实邮件数（后端已过滤自己的邮箱）；frequent_contacts 无计数时只列名字
-  const topSenders = evidence.top_senders ?? [];
-  const maxCount = Math.max(1, ...topSenders.map((s) => s.count ?? 0));
-  const contacts = topSenders.length > 0
-    ? topSenders.slice(0, 5).map((s, i) => ({
-        name: s.sender ?? s.address ?? `联系人 ${i + 1}`,
-        count: s.count ?? 0,
-        // 条形宽度按最大值归一，展示值是真实计数
-        ratio: Math.round(((s.count ?? 0) / maxCount) * 100),
-      }))
-    : (data?.relationships?.frequent_contacts ?? []).slice(0, 5).map((name) => ({
-        name,
-        count: null as number | null,
-        ratio: null as number | null,
-      }));
-
-  // 记录活跃月数（真实计数，替代原来的"综合评分"）
-  const monthly = evidence.notes_monthly ?? {};
-  const monthKeys = Object.keys(monthly).sort();
-  const activeMonths = monthKeys.length;
-
-  // 关键洞察：数据驱动生成
-  const sortedRadar = [...radarScores].sort((a, b) => b.value - a.value);
-  const strongest = sortedRadar[0];
-  const weakest = sortedRadar[sortedRadar.length - 1];
-
-  // 笔记月度趋势（最近两个月对比）
-  const lastMonth = monthKeys[monthKeys.length - 1];
-  const prevMonth = monthKeys[monthKeys.length - 2];
-  const lastCount = lastMonth ? monthly[lastMonth] : 0;
-  const prevCount = prevMonth ? monthly[prevMonth] : 0;
-  const monthDelta = lastCount - prevCount;
-
+function ArtifactBars({ groups, artifacts, onOpenArtifact }: { groups: { label: string; count: number }[]; artifacts: ProfileArtifact[]; onOpenArtifact?: (artifact: ProfileArtifact) => void }) {
+  const colors = [PROFILE_COLORS.emerald, PROFILE_COLORS.cyan, PROFILE_COLORS.amber, PROFILE_COLORS.violet];
+  const max = Math.max(...groups.map((group) => group.count), 1);
   return (
-    <div className="mx-auto flex w-full max-w-7xl flex-col gap-3">
-      <Panel className="border-border bg-card p-5">
-        <div className="grid gap-5 lg:grid-cols-[1fr_220px]">
-          <div className="flex min-w-0 items-center gap-4">
-            <div
-              className="relative flex h-16 w-16 shrink-0 items-center justify-center rounded-xl border border-border bg-muted text-foreground"
-            >
-              <UserRound className="h-8 w-8" />
-              <span className="absolute right-2 top-2 h-3 w-3 rounded-full border-2 border-background bg-success-indicator" />
-            </div>
-            <div className="min-w-0">
-              <div className="mb-2 flex flex-wrap items-center gap-2">
-                <h2 className="truncate text-title tracking-tight">
-                  {identity.primary_role || "尚未确定角色"}
-                </h2>
-                <span className="rounded-full border border-border bg-muted px-2 py-0.5 text-caption font-medium text-muted-foreground">
-                  主角色
-                </span>
-              </div>
-              <div className="mb-3 flex flex-wrap gap-1.5">
-                {(identity.secondary_roles ?? []).map((role) => (
-                  <span key={role} className="rounded-full bg-muted/70 px-2.5 py-1 text-caption text-muted-foreground">
-                    {role}
-                  </span>
-                ))}
-              </div>
-              <div className="mb-3 flex flex-wrap gap-2">
-                <MetricPill label="置信度" value={`${Math.round((data?.confidence ?? 0) * 100)}%`} color={PROFILE_COLORS.emerald} />
-                <MetricPill label="笔记总数" value={`${totalNotes} 篇`} color={PROFILE_COLORS.cyan} />
-              </div>
-              <p className="max-w-3xl text-body leading-6 text-muted-foreground">
-                {data?.relationships?.collaboration_pattern || "暂无画像摘要，蒸馏后生成。"}
-              </p>
-            </div>
+    <div className="space-y-4 py-2">
+      {groups.slice(0, 4).map((group, index) => {
+        const target = artifacts.find((artifact) => artifactCategory(artifact) === group.label);
+        const content = <>
+          <span>{group.label}</span>
+          <span className="h-2 bg-muted"><span className="block h-full" style={{ width: `${(group.count / max) * 100}%`, background: colors[index % colors.length] }} /></span>
+          <span className="text-right tabular-nums">{group.count}</span>
+        </>;
+        return target && onOpenArtifact ? (
+          <Button key={group.label} type="button" variant="ghost" size="xs" className="grid h-auto w-full grid-cols-[50px_1fr_28px] items-center gap-2 rounded-none p-0 text-left text-caption font-normal hover:bg-transparent" onClick={() => onOpenArtifact(target)}>
+            {content}
+          </Button>
+        ) : (
+          <div key={group.label} className="grid w-full grid-cols-[50px_1fr_28px] items-center gap-2 text-caption">
+            {content}
           </div>
-          <div className="flex flex-col justify-center border-t pt-4 lg:border-l lg:border-t-0 lg:pl-6 lg:pt-0">
-            <div className="mb-1 flex items-center gap-1.5 text-body text-muted-foreground">
-              <CalendarDays className="h-4 w-4" />
-              记录活跃月数
-            </div>
-            <div className="flex items-end gap-2">
-              <span className="text-display-sm font-semibold tabular-nums" style={{ color: PROFILE_COLORS.emerald }}>{activeMonths}</span>
-              <span className="pb-1 text-body text-muted-foreground">个月</span>
-            </div>
-            <div className="mt-3 h-2 overflow-hidden rounded-full bg-muted">
-              <div className="h-full rounded-full" style={{ width: `${Math.min(100, (activeMonths / 12) * 100)}%`, background: PROFILE_COLORS.emerald }} />
-            </div>
-            <span className="mt-2 text-caption text-muted-foreground">有笔记记录的月份 · 共 {totalNotes} 篇</span>
-          </div>
-        </div>
-      </Panel>
-
-      {(painPoints.length > 0 || openQuestions.length > 0) && (
-        <Panel className="p-4">
-          <button
-            type="button"
-            className={cn(
-              "flex w-full items-center justify-between gap-3 rounded-md px-1 text-left transition-colors hover:bg-accent",
-              painOpen && "mb-3",
-            )}
-            onClick={() => setPainOpen((v) => !v)}
-            aria-expanded={painOpen}
-          >
-            <h3 className="flex items-center gap-1.5 text-body font-semibold">
-              <span style={{ color: PROFILE_COLORS.coral }}>
-                <AlertTriangle className="h-4 w-4" />
-              </span>
-              近期痛点与开放问题
-              <span className="rounded-full bg-muted px-1.5 py-0.5 text-[10px] text-muted-foreground">
-                {painPoints.length + openQuestions.length}
-              </span>
-            </h3>
-            <span className="flex items-center gap-2 text-muted-foreground">
-              <span className="truncate text-caption">由蒸馏从对话中提炼</span>
-              {painOpen ? <ChevronUp className="h-4 w-4" /> : <ChevronDown className="h-4 w-4" />}
-            </span>
-          </button>
-          {painOpen && (
-            <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
-              {painPoints.map((p) => (
-                <PainPointCard key={p.topic} point={p} onAskMona={onAskMona} />
-              ))}
-              {openQuestions.map((q) => (
-                <div key={q} className="flex gap-3 rounded-lg border bg-background/60 p-3">
-                  <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full" style={{ background: `${PROFILE_COLORS.cyan}18`, color: PROFILE_COLORS.cyan }}>
-                    <CircleHelp className="h-4 w-4" />
-                  </div>
-                  <div className="min-w-0 flex-1">
-                    <p className="text-caption leading-5 text-foreground">{q}</p>
-                    {onAskMona && (
-                      <Button
-                        type="button"
-                        variant="ghost"
-                        size="xs"
-                        className="mt-2 h-auto gap-1 rounded-full px-2 py-0.5 text-micro"
-                        style={{ color: PROFILE_COLORS.cyan }}
-                        onClick={() => onAskMona(`我正在探索这个问题：${q}。请结合你的工作记忆，帮我分析一下现状和可能的解法。`)}
-                      >
-                        <MessageSquareText className="h-3 w-3" />
-                        和 Mona 探讨
-                      </Button>
-                    )}
-                  </div>
-                </div>
-              ))}
-            </div>
-          )}
-        </Panel>
-      )}
-
-      <div className="grid grid-cols-1 gap-3 xl:grid-cols-[1.1fr_1.35fr_340px]">
-        <Panel className="p-4">
-          <SectionTitle icon={<Star className="h-4 w-4" />} title="话题投入分布" hint={radarScores.length > 0 ? "基于笔记/行为信号的绝对投入度" : "暂无数据"} color={PROFILE_COLORS.emerald} />
-          <div className="flex justify-center">
-            <RadarChart current={radarScores} size={330} />
-          </div>
-        </Panel>
-
-        {knowledgeGraph && (
-          <Panel className="p-4">
-            <SectionTitle icon={<Sparkles className="h-4 w-4" />} title="知识结构" hint="核心领域 / 相关领域 / 探索领域" color={PROFILE_COLORS.coral} />
-            <div className="flex justify-center">
-              <KnowledgeStarGraph data={knowledgeGraph} size={330} />
-            </div>
-          </Panel>
-        )}
-
-        <Panel className="p-4">
-          <SectionTitle icon={<Lightbulb className="h-4 w-4" />} title="关键洞察" color={PROFILE_COLORS.amber} />
-          <div className="flex flex-col gap-3">
-            <InsightItem
-              icon={<Star className="h-4 w-4" />}
-              title="投入最多"
-              body={strongest ? `${strongest.axis} 相关话题投入度最高（信号量 ${Math.round(strongest.raw_signal ?? 0)}）。` : "暂无数据，蒸馏后生成。"}
-              evidence="证据：话题投入分布"
-              color={PROFILE_COLORS.emerald}
-              onAskMona={strongest && onAskMona
-                ? () => onAskMona(`我的话题投入分布显示「${strongest.axis}」投入最多。请结合你对我工作的了解，帮我分析这个投入是否合理、有没有可以提效的方向。`)
-                : undefined}
-            />
-            <InsightItem
-              icon={<TrendingUp className="h-4 w-4" />}
-              title="最近变化"
-              body={lastMonth && prevMonth
-                ? `${lastMonth} 笔记 ${lastCount} 篇，较上月 ${monthDelta >= 0 ? "增加" : "减少"} ${Math.abs(monthDelta)} 篇。`
-                : "暂无月度对比数据。"}
-              evidence="证据：笔记月度分布"
-              color={PROFILE_COLORS.amber}
-            />
-            <InsightItem
-              icon={<AlertTriangle className="h-4 w-4" />}
-              title="投入最少"
-              body={weakest ? `${weakest.axis} 相关话题投入度最低（信号量 ${Math.round(weakest.raw_signal ?? 0)}）。` : "暂无数据，蒸馏后生成。"}
-              evidence="证据：话题投入分布"
-              color={PROFILE_COLORS.coral}
-              onAskMona={weakest && onAskMona
-                ? () => onAskMona(`我的话题投入分布显示「${weakest.axis}」投入最少。这是有意的取舍还是盲区？请结合你对我近期工作的了解给出判断。`)
-                : undefined}
-            />
-          </div>
-        </Panel>
-      </div>
-
-      <div className="grid grid-cols-1 gap-3 md:grid-cols-2 xl:grid-cols-3">
-        <Panel className="p-4">
-          <SectionTitle icon={<BadgeCheck className="h-4 w-4" />} title="技能矩阵" hint={skillMatrix.length > 0 ? "Top 技能" : "暂无数据"} color={PROFILE_COLORS.emerald} />
-          <SkillMatrix skills={skillMatrix} />
-        </Panel>
-        <Panel className="p-4">
-          <SectionTitle icon={<Tags className="h-4 w-4" />} title="兴趣标签" hint={tagCloud.length > 0 ? "Top 标签" : "暂无数据"} color={PROFILE_COLORS.amber} />
-          <div className="flex flex-wrap gap-2">
-            {tagCloud.length > 0 ? tagCloud.map((tag, index) => (
-              <span
-                key={tag.tag}
-                className="rounded-full border px-2.5 py-1 text-caption font-medium"
-                style={{
-                  background: `${[PROFILE_COLORS.emerald, PROFILE_COLORS.amber, PROFILE_COLORS.coral, PROFILE_COLORS.cyan][index % 4]}14`,
-                  color: [PROFILE_COLORS.emeraldDeep, PROFILE_COLORS.amberDeep, PROFILE_COLORS.coralDeep, PROFILE_COLORS.cyan][index % 4],
-                }}
-              >
-                {tag.tag}
-              </span>
-            )) : <span className="text-caption text-muted-foreground">暂无标签</span>}
-          </div>
-        </Panel>
-        <Panel className="p-4">
-          <SectionTitle icon={<Users className="h-4 w-4" />} title="人际网络" hint={contacts.length > 0 ? "按邮件数排序" : "暂无数据"} color={PROFILE_COLORS.coral} />
-          <div className="flex flex-col gap-2">
-            {contacts.length > 0 ? contacts.map((contact) => (
-              <BarRow
-                key={contact.name}
-                label={contact.name}
-                ratio={contact.ratio}
-                value={contact.count !== null ? `${contact.count} 封` : ""}
-                color={PROFILE_COLORS.emerald}
-              />
-            )) : <span className="text-caption text-muted-foreground">暂无联系人数据</span>}
-          </div>
-        </Panel>
-      </div>
+        );
+      })}
     </div>
   );
 }
 
-function PainPointCard({
-  point,
-  onAskMona,
-}: {
-  point: PainPoint;
-  onAskMona?: (prompt: string) => void;
-}) {
-  return (
-    <div className="flex gap-3 rounded-lg border bg-background/60 p-3">
-      <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full" style={{ background: `${PROFILE_COLORS.coral}18`, color: PROFILE_COLORS.coralDeep }}>
-        <AlertTriangle className="h-4 w-4" />
-      </div>
-      <div className="min-w-0 flex-1">
-        <p className="text-body font-semibold" style={{ color: PROFILE_COLORS.coralDeep }}>{point.topic}</p>
-        {point.detail && <p className="mt-1 text-caption leading-5 text-foreground">{point.detail}</p>}
-        <div className="mt-2 flex items-center gap-2">
-          {point.last_seen && (
-            <span className="rounded-full px-2 py-0.5 text-micro" style={{ background: `${PROFILE_COLORS.coral}12`, color: PROFILE_COLORS.coralDeep }}>
-              最近信号 {point.last_seen}
-            </span>
-          )}
-          {onAskMona && (
-            <Button
-              type="button"
-              variant="ghost"
-              size="xs"
-              className="h-auto gap-1 rounded-full px-2 py-0.5 text-micro"
-              style={{ color: PROFILE_COLORS.coralDeep }}
-              onClick={() => onAskMona(`我最近反复被这个问题困扰：${point.topic}${point.detail ? `（${point.detail}）` : ""}。请结合你的工作记忆，帮我梳理思路并给出可执行的下一步建议。`)}
-            >
-              <MessageSquareText className="h-3 w-3" />
-              和 Mona 聊聊
-            </Button>
-          )}
-        </div>
-      </div>
-    </div>
-  );
+function artifactCategory(artifact: ProfileArtifact): string {
+  const mime = artifact.mime ?? "";
+  if (mime.includes("image")) return "图像";
+  if (mime.includes("javascript") || mime.includes("python") || mime.includes("json")) return "代码";
+  if (mime.includes("text") || mime.includes("pdf") || mime.includes("document")) return "文档";
+  return "其他";
 }
 
-function Panel({
-  children,
-  className,
-}: {
-  children: React.ReactNode;
-  className?: string;
-}) {
-  return (
-    <div className={cn(CARD_BASE, CARD_HOVER, "profile-card", className)}>
-      {children}
-    </div>
-  );
+function readMatrix(raw: unknown): { rows: string[]; columns: string[]; values: number[][] } {
+  const matrix = raw as { domains?: string[]; tasks?: string[]; values?: number[][]; rows?: string[]; columns?: string[] } | undefined;
+  const rows = matrix?.domains ?? matrix?.rows;
+  const columns = matrix?.tasks ?? matrix?.columns;
+  if (!matrix || !rows?.length || !columns?.length || !matrix.values?.length) return { rows: [], columns: [], values: [] };
+  return { rows, columns, values: matrix.values };
 }
 
-function SectionTitle({
-  icon,
-  title,
-  hint,
-  color,
-}: {
-  icon: React.ReactNode;
-  title: string;
-  hint?: string;
-  color: string;
-}) {
-  return (
-    <div className="mb-3 flex items-center justify-between gap-3">
-      <h3 className="flex items-center gap-1.5 text-body font-semibold">
-        <span style={{ color }}>{icon}</span>
-        {title}
-      </h3>
-      {hint && <span className="truncate text-caption text-muted-foreground">{hint}</span>}
-    </div>
-  );
+function profileCharts(profile?: RichProfile): ProfileCharts | undefined {
+  return profile?.dashboard?.profile_charts;
 }
 
-function MetricPill({
-  label,
-  value,
-  color,
-}: {
-  label: string;
-  value: string;
-  color: string;
-}) {
-  return (
-    <span className="rounded-md border px-2.5 py-1 text-caption" style={{ background: `${color}12`, borderColor: `${color}33`, color }}>
-      {label} {value}
-    </span>
-  );
+function normalizeDimensions(raw: unknown): Array<{ axis: string; value: number }> {
+  const values = Array.isArray(raw) ? raw : (raw as { axes?: unknown[] } | undefined)?.axes;
+  if (!Array.isArray(values)) return [];
+  return values.map((item) => item as { axis?: string; label?: string; value?: number; count?: number }).map((item) => ({ axis: item.axis ?? item.label ?? "", value: Number(item.value ?? item.count ?? 0) })).filter((item) => item.axis && Number.isFinite(item.value));
 }
 
-function InsightItem({
-  icon,
-  title,
-  body,
-  evidence,
-  color,
-  onAskMona,
-}: {
-  icon: React.ReactNode;
-  title: string;
-  body: string;
-  evidence: string;
-  color: string;
-  onAskMona?: () => void;
-}) {
-  return (
-    <div className="flex gap-3 border-b pb-3 last:border-b-0 last:pb-0">
-      <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full" style={{ background: `${color}18`, color }}>
-        {icon}
-      </div>
-      <div className="min-w-0">
-        <p className="text-body font-semibold" style={{ color }}>{title}</p>
-        <p className="mt-1 text-caption leading-5 text-foreground">{body}</p>
-        <div className="mt-1 flex items-center gap-2">
-          <span className="text-micro text-muted-foreground">{evidence}</span>
-          {onAskMona && (
-            <Button
-              type="button"
-              variant="ghost"
-              size="xs"
-              className="h-auto gap-1 rounded-full px-1.5 py-0.5 text-micro"
-              style={{ color }}
-              onClick={onAskMona}
-            >
-              <MessageSquareText className="h-3 w-3" />
-              和 Mona 聊聊
-            </Button>
-          )}
-        </div>
-      </div>
-    </div>
-  );
+function normalizeGraph(raw: unknown): { nodes: { id: string; label: string; group: string; count: number }[]; links: { source: string; target: string; weight: number }[] } | undefined {
+  const value = raw as { nodes?: { id: string; label: string; group: string | number; count?: number; size?: number }[]; links?: { source: string; target: string; weight?: number }[] } | undefined;
+  if (!value?.nodes?.length) return undefined;
+  return { nodes: value.nodes.map((node) => ({ ...node, group: String(node.group), count: node.count ?? node.size ?? 1 })), links: (value.links ?? []).map((link) => ({ ...link, weight: link.weight ?? 1 })) };
 }
 
-function BarRow({
-  label,
-  ratio,
-  value,
-  color,
-}: {
-  label: string;
-  /** 条形宽度（0-100），null 表示无计数仅列名 */
-  ratio: number | null;
-  /** 右侧展示文本（真实计数） */
-  value: string;
-  color: string;
-}) {
-  return (
-    <div className="grid grid-cols-[90px_1fr_52px] items-center gap-2 text-caption">
-      <span className="truncate text-muted-foreground">{label}</span>
-      <div className="h-1.5 overflow-hidden rounded-full bg-muted">
-        {ratio !== null && (
-          <div className="h-full rounded-full" style={{ width: `${ratio}%`, background: color }} />
-        )}
-      </div>
-      <span className="text-right tabular-nums text-muted-foreground">{value}</span>
-    </div>
-  );
+function normalizeCounts(raw: unknown): Array<{ label: string; count: number }> {
+  if (!Array.isArray(raw)) return [];
+  return raw.map((item) => item as { label?: string; type?: string; name?: string; count?: number; total?: number }).map((item) => ({ label: item.label ?? item.type ?? item.name ?? "", count: Number(item.count ?? item.total ?? 0) })).filter((item) => item.label && item.count > 0);
+}
+
+function graphLegend(graph?: { nodes?: { label: string; group: string; count?: number }[] }) {
+  if (!graph?.nodes?.length) return [];
+  const colors = [PROFILE_COLORS.emerald, PROFILE_COLORS.cyan, PROFILE_COLORS.amber, PROFILE_COLORS.violet];
+  const groups = [...new Set(graph.nodes.map((node) => node.group))];
+  return groups.slice(0, 3).map((group, index) => ({ label: group, color: colors[index % colors.length] }));
+}
+
+function hexAlpha(color: string, opacity: number): string {
+  return `${color}${Math.round(Math.max(0, Math.min(1, opacity)) * 255).toString(16).padStart(2, "0")}`;
+}
+
+function Matrix({ data }: { data: { rows: string[]; columns: string[]; values: number[][] } }) {
+  const max = Math.max(...data.values.flat(), 1);
+  return <div className="min-h-0 flex-1 overflow-auto scrollbar-hover text-micro"><div className="grid min-w-[360px]" style={{ gridTemplateColumns: `minmax(78px, 1fr) repeat(${data.columns.length}, minmax(48px, 1fr))` }}><span />{data.columns.map((column) => <span key={column} className="pb-2 text-center text-muted-foreground">{column}</span>)}{data.rows.map((row, rowIndex) => <Fragment key={row}><span className="py-2 pr-2 text-muted-foreground">{row}</span>{data.columns.map((column, columnIndex) => { const value = data.values[rowIndex]?.[columnIndex] ?? 0; return <span key={`${row}-${column}`} className="m-px flex items-center justify-center py-2" style={{ background: hexAlpha(PROFILE_COLORS.emerald, 0.06 + (value / max) * 0.7) }}>{value}</span>; })}</Fragment>)}</div></div>;
 }

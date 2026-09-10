@@ -2,7 +2,7 @@ export type Role = "user" | "assistant" | "tool" | "system";
 
 /** "trace" rows are intermediate agent breadcrumbs (tool-call hints,
  * progress pings) that should not be rendered as conversational replies. */
-export type MessageKind = "message" | "trace" | "workflowRun";
+export type MessageKind = "message" | "trace" | "workflowRun" | "discussion";
 
 /** Multi-agent author kinds (phase 0, multi-agent-development-guide 5.3). */
 export type AuthorType = "user" | "agent" | "system";
@@ -57,10 +57,18 @@ export interface AgentUserConfigPayload {
   temperature?: number | null;
   maxTokens?: number | null;
   grantedTools?: string[] | null;
+  knowledgeBaseScope: KnowledgeBaseScope;
   disabledSkills: string[];
   delegationEnabled: boolean;
   scriptEnabledSkills?: string[];
   updatedAt?: string | null;
+}
+
+export type KnowledgeBaseScopeMode = "all" | "none" | "specific";
+
+export interface KnowledgeBaseScope {
+  mode: KnowledgeBaseScopeMode;
+  knowledgeBaseIds: string[];
 }
 
 export interface EffectiveAgentConfigPayload {
@@ -73,6 +81,7 @@ export interface EffectiveAgentConfigPayload {
   temperature?: number | null;
   maxTokens?: number | null;
   allowedTools?: string[] | null;
+  knowledgeBaseScope: KnowledgeBaseScope;
   disabledSkills: string[];
   delegationEnabled: boolean;
   scriptEnabledSkills?: string[];
@@ -123,16 +132,45 @@ export interface AgentInstructionHistoryItem {
 
 export interface AgentSkill {
   name: string;
+  ownerAgentId: string;
+  description: string;
+  content?: string | null;
   source: "private" | "package" | "platform" | string;
+  category: "self_learning" | "external";
+  provenance: "agent" | "bundled" | "unknown" | string;
+  editable: boolean;
+  accessCount: number;
+  createdAt?: string | null;
+  lastAccessedAt?: string | null;
+  pinned: boolean;
   enabled: boolean;
   archived: boolean;
   hasScripts: boolean;
   scriptsEnabled: boolean;
+  runtime?: {
+    packs?: string[];
+    python?: { requirements?: string[] };
+    node?: { packages?: string[] };
+    optional_script_types?: Array<"py" | "mjs" | "r">;
+  } | null;
+  runtimeReady?: boolean;
+  runtimeError?: string | null;
   contentHash: string;
+  executionHash?: string;
 }
 
-export interface AgentSkillDetail extends AgentSkill {
-  content: string;
+export interface AgentSkillSetupJob {
+  schemaVersion: number;
+  jobId: string;
+  agentId: string;
+  skillName: string;
+  contentHash: string;
+  state: "queued" | "running" | "completed" | "failed" | "cancelled";
+  stage: string;
+  error?: string | null;
+  createdAt: number;
+  updatedAt: number;
+  finishedAt?: number | null;
 }
 
 export interface ExpertCatalogItem {
@@ -187,6 +225,7 @@ export interface ManagedRuntimeComponent {
   downloadBytes?: number;
   installed: boolean;
   installedVersion?: string | null;
+  availableLocally?: boolean;
   updateAvailable?: boolean;
 }
 
@@ -264,6 +303,11 @@ export interface AutomationStatus {
   browserAutomationEnabled: boolean;
   computerUse: ComputerUseStatus;
 }
+
+export interface AgentSkillDetail extends AgentSkill {
+  content: string;
+}
+
 export interface AgentChangeProposal {
   id: string;
   agentId: string;
@@ -283,6 +327,24 @@ export interface AgentChangeProposal {
 export interface RoomAgentInfo {
   id: string;
   displayName: string;
+}
+
+export type DiscussionMode = "debate" | "discussion";
+export type DebateStyle =
+  | "sharp_punchline"
+  | "value_reframe"
+  | "rational_empathy"
+  | "everyday_spicy"
+  | "concept_deconstruction"
+  | "simple_analogy";
+
+export interface DiscussionLaunchOptions {
+  mode: DiscussionMode;
+  maxRounds: number;
+  participantIds: string[];
+  positions: Record<string, string>;
+  styles: Partial<Record<string, DebateStyle>>;
+  summaryAgentId: string | null;
 }
 
 /** Room state returned by ``create_room`` / ``update_room`` / ``get_room_state``
@@ -545,12 +607,29 @@ export interface ArtifactRef {
   mime?: string | null;
 }
 
+/** A compact snapshot of the message a user is replying to. */
+export interface MessageQuote {
+  author: string;
+  content: string;
+}
+
+export interface UITokenUsage {
+  promptTokens: number;
+  completionTokens: number;
+  cachedTokens: number;
+  totalTokens: number;
+}
+
 export interface UIMessage {
   id: string;
   role: Role;
   content: string;
+  /** Stable backend task identity shared by the initial request and injected follow-ups. */
+  taskId?: string;
   /** Short display text for user messages (e.g. action label). Falls back to ``content``. */
   displayContent?: string;
+  /** The quoted message preview shown above this user turn. */
+  quote?: MessageQuote;
   kind?: MessageKind;
   isStreaming?: boolean;
   createdAt: number;
@@ -567,6 +646,8 @@ export interface UIMessage {
   media?: UIMediaAttachment[];
   /** Files delivered via deliver_file tool, rendered as FileCards. */
   deliveredFiles?: DeliveredFile[];
+  /** Authoritative task plan snapshot attached to completed assistant history. */
+  taskPlan?: TaskPlanWsPayload;
   /** Assistant turn: accumulated model reasoning / thinking text. Built up
    * incrementally from ``reasoning_delta`` frames; finalized when
    * ``reasoning_end`` arrives. */
@@ -576,6 +657,10 @@ export interface UIMessage {
   reasoningStreaming?: boolean;
   /** End-to-end wall time for this assistant turn (persisted ``latency_ms`` / ``turn_end``). */
   latencyMs?: number;
+  /** Provider-reported aggregate token usage for this assistant turn. */
+  tokenUsage?: UITokenUsage;
+  /** Source WebUI transcript record used by server-side branching. */
+  sourceTranscriptIndex?: number;
   /** User turn: true when this message was injected mid-turn (via the pending
    *  queue "append" action) rather than sent as a new conversational turn.
    *  Drives a subtle visual badge so the user knows it was a supplement. */
@@ -611,6 +696,22 @@ export interface GoalStateWsPayload {
   active: boolean;
   ui_summary?: string;
   objective?: string;
+}
+
+export type TaskPlanStepStatus = "pending" | "in_progress" | "completed";
+
+export interface TaskPlanStep {
+  id: string;
+  step: string;
+  status: TaskPlanStepStatus;
+}
+
+export interface TaskPlanWsPayload {
+  task_id?: string | null;
+  revision: number;
+  steps: TaskPlanStep[];
+  explanation?: string;
+  source?: "ai" | "awaiting_ai" | "legacy";
 }
 
 export interface ToolProgressEvent {
@@ -730,8 +831,6 @@ export interface SettingsPayload {
     temperature: number;
     reasoning_effort: string | null;
     timezone: string;
-    bot_name: string;
-    bot_icon: string;
     tool_hint_max_length: number;
   };
   model_presets: Array<{
@@ -760,7 +859,6 @@ export interface SettingsPayload {
     api_key_hint?: string | null;
     api_base?: string | null;
     default_api_base?: string | null;
-    free_default_model?: string | null;
     model?: string | null;
     backend?: string;
     probe_supported?: boolean;
@@ -779,9 +877,25 @@ export interface SettingsPayload {
     models: Array<{
       id: string;
       name: string;
+      type?: string | null;
       context_window?: number | null;
+      input_modalities?: string[] | null;
       enabled: boolean;
       recommended: boolean;
+      description?: string | null;
+      tags?: string[];
+      price_tier?: string | null;
+      reasoning_efforts?: string[];
+      default_reasoning_effort?: string | null;
+      input_amount_per_million?: string | null;
+      cached_input_amount_per_million?: string | null;
+      output_amount_per_million?: string | null;
+      promotion_label?: string | null;
+      promotion_name?: string | null;
+      discount_percent?: number | null;
+      original_input_amount_per_million?: string | null;
+      original_cached_input_amount_per_million?: string | null;
+      original_output_amount_per_million?: string | null;
     }>;
     models_url?: string | null;
     region?: string | null;
@@ -807,9 +921,6 @@ export interface SettingsPayload {
       max_results: number;
       timeout: number;
     };
-    fetch: {
-      use_jina_reader: boolean;
-    };
   };
   image_generation: {
     enabled: boolean;
@@ -819,6 +930,7 @@ export interface SettingsPayload {
     default_aspect_ratio: string;
     default_image_size: string;
     max_images_per_turn: number;
+    model_parameters: Record<string, GenerationParameterSettings>;
     save_dir: string;
     providers: Array<{
       name: string;
@@ -829,6 +941,7 @@ export interface SettingsPayload {
       default_api_base?: string | null;
       image_models?: string[];
       default_image_model?: string | null;
+      is_custom?: boolean;
     }>;
   };
   video_generation: {
@@ -838,6 +951,7 @@ export interface SettingsPayload {
     model: string;
     default_aspect_ratio: string;
     default_duration: number;
+    model_parameters: Record<string, GenerationParameterSettings>;
     save_dir: string;
     providers: Array<{
       name: string;
@@ -848,11 +962,13 @@ export interface SettingsPayload {
       default_api_base?: string | null;
       video_models?: string[];
       default_video_model?: string | null;
+      is_custom?: boolean;
     }>;
   };
   runtime: {
     config_path: string;
     workspace_path: string;
+    auto_download?: boolean;
     gateway_host: string;
     gateway_port: number;
     heartbeat: {
@@ -936,9 +1052,8 @@ export interface SettingsUpdate {
   provider?: string;
   modelPreset?: string | null;
   providerModel?: string;
+  reasoningEffort?: string | null;
   timezone?: string;
-  botName?: string;
-  botIcon?: string;
   toolHintMaxLength?: number;
   workspace?: string;
 }
@@ -950,7 +1065,13 @@ export interface ProviderSettingsUpdate {
   apiBase?: string;
   model?: string;
   enabledModels?: string[];
-  discoveredModels?: Array<{ id: string; name?: string; contextWindow?: number | null }>;
+  discoveredModels?: Array<{
+    id: string;
+    name?: string;
+    type?: string | null;
+    contextWindow?: number | null;
+    inputModalities?: string[] | null;
+  }>;
   delete?: boolean;
 }
 
@@ -960,7 +1081,6 @@ export interface WebSearchSettingsUpdate {
   baseUrl?: string;
   maxResults?: number;
   timeout?: number;
-  useJinaReader?: boolean;
 }
 
 export interface ImageGenerationSettingsUpdate {
@@ -970,6 +1090,7 @@ export interface ImageGenerationSettingsUpdate {
   defaultAspectRatio: string;
   defaultImageSize: string;
   maxImagesPerTurn: number;
+  parameters: GenerationParameterSettings;
 }
 
 export interface VideoGenerationSettingsUpdate {
@@ -978,6 +1099,12 @@ export interface VideoGenerationSettingsUpdate {
   model: string;
   defaultAspectRatio: string;
   defaultDuration: number;
+  parameters: GenerationParameterSettings;
+}
+
+export interface GenerationParameterSettings {
+  enabled: string[];
+  values: Record<string, string | number>;
 }
 
 export interface TtsSettingsUpdate {
@@ -1032,11 +1159,14 @@ export type InboundEvent =
       media?: string[];
       media_urls?: Array<{ url: string; name?: string }>;
       tool_events?: ToolProgressEvent[];
+      task_plan?: TaskPlanWsPayload;
       /** Present when the frame is an agent breadcrumb (e.g. tool hint,
        * generic progress line) rather than a conversational reply. */
       kind?: "tool_hint" | "progress" | "reasoning";
       /** Server-measured turn wall time when this frame finishes an assistant reply. */
       latency_ms?: number;
+      task_id?: string;
+      token_usage?: Record<string, number>;
       /** Optional structured payload on progress frames (channel-specific). */
       agent_ui?: AgentUIBlob;
       /** Set when this message is a fired personal schedule reminder;
@@ -1054,6 +1184,7 @@ export type InboundEvent =
   | {
       event: "file_edit";
       chat_id: string;
+      task_id?: string;
       edits: UIFileEdit[];
     }
   | {
@@ -1068,6 +1199,7 @@ export type InboundEvent =
       chat_id: string;
       text: string;
       stream_id?: string;
+      task_id?: string;
       /** Multi-agent phase 2d: streaming author; absent defaults to Mona. */
       author_id?: string;
     }
@@ -1096,6 +1228,8 @@ export type InboundEvent =
       event: "turn_end";
       chat_id: string;
       latency_ms?: number;
+      task_id?: string;
+      token_usage?: Record<string, number>;
       /** Authoritative sustained-goal snapshot for this chat (same shape as ``goal_state`` events). */
       goal_state?: GoalStateWsPayload;
     }
@@ -1113,6 +1247,11 @@ export type InboundEvent =
       goal_state: GoalStateWsPayload;
     }
   | {
+      event: "task_plan";
+      chat_id: string;
+      task_plan: TaskPlanWsPayload;
+    }
+  | {
       /** Direct ``@Agent`` jobs were accepted and continue in the background. */
       event: "agent_mentions_routed";
       chat_id: string;
@@ -1122,6 +1261,7 @@ export type InboundEvent =
       collaboration_id?: string;
     }
   | { event: "session_updated"; chat_id: string; scope?: "metadata" | "thread" | string }
+  | { event: "artifact_task_started"; chat_id: string; task_id: string }
   | { event: "artifacts_changed"; chat_id?: string }
   | { event: "video_project_changed"; name?: string; hint?: string }
   | { event: "error"; chat_id?: string; detail?: string }
@@ -1191,10 +1331,15 @@ export type InboundEvent =
   | ({
       event:
         | "agent_config_update_result"
+        | "custom_agent_create_result"
         | "agent_instruction_save_result"
         | "agent_instruction_restore_result"
         | "agent_skill_stage_result"
         | "agent_skill_action_result"
+        | "agent_skill_setup_start_result"
+        | "agent_skill_setup_status_result"
+        | "agent_skill_setup_cancel_result"
+        | "agent_skill_update_result"
         | "resolve_agent_change_result";
       ok: boolean;
       request_id?: string;
@@ -1204,8 +1349,10 @@ export type InboundEvent =
       agent?: AgentSummary;
       instruction?: AgentInstruction;
       proposal?: AgentChangeProposal;
+      skill?: AgentSkill;
       name?: string;
       action?: string;
+      job?: AgentSkillSetupJob | null;
     })
   | {
       event: "cancel_agent_job_result";
@@ -1250,6 +1397,10 @@ export type InboundEvent =
       error?: string;
       detail?: string;
     } & Partial<WorkflowRun>)
+  | ({
+      event: "discussion_updated";
+      chat_id: string;
+    } & Partial<WorkflowRun>)
   | {
       event: "workflow_step_activity";
       chat_id: string;
@@ -1283,7 +1434,24 @@ export interface WebuiThreadPersistedPayload {
 
 export type Outbound =
   | { type: "new_chat"; ephemeral?: boolean; workspace?: string | null; agent_kind?: string | null }
+  | { type: "branch_chat"; source_chat_id: string; source_task_id?: string; assistant_ordinal: number }
   | { type: "attach"; chat_id: string }
+  | {
+      type: "start_discussion";
+      chat_id: string;
+      content: string;
+      target_agent_ids: string[];
+      discussion: {
+        mode: DiscussionMode;
+        max_rounds: number;
+        positions: Record<string, string>;
+        styles: Partial<Record<string, DebateStyle>>;
+        summary_agent_id: string | null;
+      };
+      display_content?: string;
+      quote?: MessageQuote;
+      webui?: true;
+    }
   | {
       type: "message";
       chat_id: string;
@@ -1295,6 +1463,7 @@ export type Outbound =
        *  This field is persisted to the server so history replay also shows the short version.
        *  DO NOT remove — multiple modules (terminal, db, notes) depend on this. */
       display_content?: string;
+      quote?: MessageQuote;
       terminal_session_id?: string;
       terminal_exec_mode?: string;
       db_connection_id?: string;
@@ -1304,8 +1473,19 @@ export type Outbound =
       db_server_version?: string;
       db_current_sql?: string;
       db_last_error?: string;
+      browser_tab_id?: string;
       browser_page_url?: string;
       browser_page_title?: string;
+      office_session_id?: string;
+      office_document_type?: "docs" | "sheets" | "slides";
+      office_display_name?: string;
+      canvas_id?: string;
+      canvas_path?: string;
+      agent_kind?: "ppt" | "video";
+      task_id?: string;
+      origin?: "profile_advice";
+      profile_advice_id?: string;
+      target_agent_ids?: string[];
     }
   | { type: "delete_chat"; chat_id: string }
   | {
@@ -1395,6 +1575,13 @@ export type Outbound =
       request_id?: string;
     }
   | {
+      type: "custom_agent_create";
+      display_name: string;
+      description?: string;
+      instructions?: string;
+      request_id?: string;
+    }
+  | {
       type: "agent_config_update";
       agent_id: string;
       config: Record<string, unknown>;
@@ -1427,7 +1614,33 @@ export type Outbound =
       type: "agent_skill_action";
       agent_id: string;
       name: string;
-      action: "enable" | "disable" | "archive" | "restore" | "enable_scripts" | "disable_scripts";
+      action: "enable" | "disable" | "archive" | "restore" | "enable_scripts" | "disable_scripts" | "pin" | "unpin";
+      request_id?: string;
+    }
+  | {
+      type: "agent_skill_setup_start";
+      agent_id: string;
+      name: string;
+      request_id?: string;
+    }
+  | {
+      type: "agent_skill_setup_status";
+      agent_id: string;
+      name: string;
+      job_id?: string;
+      request_id?: string;
+    }
+  | {
+      type: "agent_skill_setup_cancel";
+      job_id: string;
+      request_id?: string;
+    }
+  | {
+      type: "agent_skill_update";
+      agent_id: string;
+      name: string;
+      content: string;
+      expected_hash?: string;
       request_id?: string;
     }
   | {

@@ -23,7 +23,7 @@ from mona.agent.tools.schema import (
     StringSchema,
     tool_parameters_schema,
 )
-from mona.agent.tools.tauri_ipc import tauri_invoke
+from mona.agent.tools.tauri_ipc import tauri_invoke, tauri_invoke_async
 
 
 def _notes_config(ctx: Any) -> Any:
@@ -47,9 +47,30 @@ def _get_vault_path() -> Path | None:
     return None
 
 
+async def _get_vault_path_async() -> Path | None:
+    """Async counterpart that keeps IPC off the agent event loop."""
+    try:
+        result = await tauri_invoke_async("notes_vault_get_path")
+    except RuntimeError:
+        return None
+    if result is None:
+        return None
+    if isinstance(result, str) and result.strip():
+        return Path(result.strip())
+    if isinstance(result, dict):
+        v = result.get("path") or result.get("result")
+        if isinstance(v, str) and v.strip():
+            return Path(v.strip())
+    return None
+
+
 def _vault_ready() -> bool:
     """Check whether the notes vault is configured."""
     return _get_vault_path() is not None
+
+
+async def _vault_ready_async() -> bool:
+    return await _get_vault_path_async() is not None
 
 
 # 剥离常见 Markdown 语法，用于从首行生成干净的标题。需与前端实现保持一致。
@@ -89,7 +110,7 @@ _CREATE_PARAMETERS = tool_parameters_schema(
         "produced by notes_save_image."
     ),
     notebook_name=StringSchema(
-        "Notebook (folder) name to place the note in. Defaults to the vault root "
+        "Notebook (folder) name to place the note in. Defaults to '笔记转存' "
         "when omitted. The folder is created if it does not exist."
     ),
     required=["content_markdown"],
@@ -100,7 +121,7 @@ _CREATE_PARAMETERS = tool_parameters_schema(
 class NotesCreateTool(Tool):
     """Create a new note in the vault."""
 
-    _scopes = {"core"}
+    _scopes = {"core", "subagent"}
     _plugin_discoverable = True
 
     @classmethod
@@ -143,7 +164,7 @@ class NotesCreateTool(Tool):
                 return "Error: unable to derive a title from content. Please provide a title."
         notebook_name = kwargs.get("notebook_name")
 
-        if not _vault_ready():
+        if not await _vault_ready_async():
             return "Error: Notes vault is not configured. Ask the user to set up a vault first."
 
         args: dict[str, Any] = {
@@ -154,10 +175,10 @@ class NotesCreateTool(Tool):
             args["notebookId"] = str(notebook_name)
 
         try:
-            note_id = tauri_invoke("notes_create_from_chat", args)
+            note_id = await tauri_invoke_async("notes_create_from_chat", args)
         except RuntimeError as e:
             return f"Error creating note: {e}"
-        return f"Created note with id={note_id} in notebook '{notebook_name or '(root)'}'."
+        return f"Created note with id={note_id} in notebook '{notebook_name or '笔记转存'}'."
 
 
 # ---------------------------------------------------------------------------
@@ -174,7 +195,7 @@ _READ_PARAMETERS = tool_parameters_schema(
 class NotesReadTool(Tool):
     """Read the full content of a note by ID."""
 
-    _scopes = {"core"}
+    _scopes = {"core", "subagent"}
     _plugin_discoverable = True
     read_only = True
     subscription_required = True
@@ -200,11 +221,13 @@ class NotesReadTool(Tool):
         note_id = str(kwargs.get("note_id", "")).strip()
         if not note_id:
             return "Error: note_id is required."
-        if not _vault_ready():
+        if not await _vault_ready_async():
             return "Error: Notes vault is not configured."
 
         try:
-            result = tauri_invoke("notes_read_note_content", {"noteId": note_id})
+            result = await tauri_invoke_async(
+                "notes_read_note_content", {"noteId": note_id}
+            )
         except RuntimeError as e:
             return f"Error reading note: {e}"
 
@@ -252,7 +275,7 @@ _SAVE_IMAGE_PARAMETERS = tool_parameters_schema(
 class NotesSaveImageTool(Tool):
     """Save an image to the vault's assets directory."""
 
-    _scopes = {"core"}
+    _scopes = {"core", "subagent"}
     _plugin_discoverable = True
     subscription_required = True
 
@@ -283,7 +306,7 @@ class NotesSaveImageTool(Tool):
         if not file_path:
             return "Error: file_path is required."
 
-        if not _vault_ready():
+        if not await _vault_ready_async():
             return "Error: Notes vault is not configured."
 
         args: dict[str, Any] = {"filePath": file_path}
@@ -292,7 +315,7 @@ class NotesSaveImageTool(Tool):
             args["fileName"] = str(file_name)
 
         try:
-            rel_path = tauri_invoke("notes_save_image", args)
+            rel_path = await tauri_invoke_async("notes_save_image", args)
         except RuntimeError as e:
             return f"Error saving image: {e}"
 
