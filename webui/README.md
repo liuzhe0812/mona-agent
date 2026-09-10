@@ -1,6 +1,6 @@
 ﻿# mona webui
 
-The browser front-end for the mona gateway. It is built with Vite + React 18 +
+The browser front-end for the mona gateway. It is built with Vite + React 19 +
 TypeScript + Tailwind 3 + shadcn/ui, talks to the gateway over the WebSocket
 multiplex protocol, and reads session metadata from the embedded REST surface
 on the same port.
@@ -55,11 +55,15 @@ In another terminal:
 
 ```bash
 cd webui
-bun install            # npm install also works
-bun run dev
+npm --prefix office-editor ci  # first time only: install editor dependencies
+npm run dev
 ```
 
-Then open `http://127.0.0.1:5173`.
+Then open `http://127.0.0.1:9527`.
+
+The main Vite server mounts the independent Office editor Vite build at
+`/office-editor/`, so there is no second editor server to start. `npm run dev`
+also starts the same integrated editor middleware used by `cargo tauri dev`.
 
 By default the dev server proxies `/api`, `/webui`, `/auth`, and WebSocket traffic to `http://127.0.0.1:8765`.
 
