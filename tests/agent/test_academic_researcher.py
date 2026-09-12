@@ -69,7 +69,7 @@ def test_academic_researcher_manifest_and_package_skills() -> None:
     assert manifest["model"] == "inherit"
     assert manifest["canDelegate"] is False
     assert manifest["prompt"] == "prompt.md"
-    assert manifest["packageVersion"] == "2.1.0"
+    assert manifest["packageVersion"] == "2.1.1"
     assert manifest["skills"] == [f"skills/{name}" for name in SKILL_NAMES]
     assert set(manifest["toolAllowlist"]) >= {
         "academic_search",

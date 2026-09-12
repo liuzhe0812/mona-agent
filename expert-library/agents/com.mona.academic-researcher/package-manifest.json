@@ -1,7 +1,7 @@
 {
   "schemaVersion": 1,
   "agentId": "com.mona.academic-researcher",
-  "version": "2.1.0",
+  "version": "2.1.1",
   "requiredTools": [
     "academic_search",
     "scientific_tool",

@@ -10,12 +10,18 @@ import tempfile
 import zipfile
 from collections.abc import Iterable
 from pathlib import Path
+from typing import Any
 
 from mona.agent.package_store import AgentPackageManifest
 from mona.runtime.manager import RuntimeComponentManifest
 
 _IGNORED_PARTS = {"__pycache__", ".git", ".pytest_cache"}
 _IGNORED_SUFFIXES = {".pyc", ".pyo", ".tmp"}
+_QINIU_NOT_FOUND = 612
+_PRIMARY_CATALOG_TARGETS = {
+    "experts/catalog-v1.json": "/var/www/mona/catalogs/experts/catalog-v1.json",
+    "runtimes/catalog-v1.json": "/var/www/mona/catalogs/runtimes/catalog-v1.json",
+}
 
 
 def build_expert_repository(
@@ -121,7 +127,7 @@ def build_runtime_repository(
 
 def upload_repository(output_root: Path, *, prefix: str) -> None:
     try:
-        from qiniu import Auth, CdnManager, put_file_v2
+        from qiniu import Auth, BucketManager, CdnManager, etag, put_file_v2
     except ImportError as exc:
         raise RuntimeError("qiniu is required for --upload") from exc
     access_key = _required_env("QINIU_AK")
@@ -131,18 +137,38 @@ def upload_repository(output_root: Path, *, prefix: str) -> None:
     if not domain.startswith(("http://", "https://")):
         domain = "https://" + domain
     auth = Auth(access_key, secret_key)
+    bucket_manager = BucketManager(auth)
     paths = sorted(_files(output_root))
+    artifacts = [path for path in paths if path.name != "catalog-v1.json"]
+    catalogs = [path for path in paths if path.name == "catalog-v1.json"]
     legacy_catalog_urls: list[str] = []
-    for path in paths:
+    for path in artifacts:
         key = "/".join(
             part for part in (prefix.strip("/"), path.relative_to(output_root).as_posix()) if part
         )
-        token = auth.upload_token(bucket, key, 3600)
-        result, info = put_file_v2(token, key, str(path), version="v2")
-        if info.status_code != 200 or not isinstance(result, dict) or result.get("key") != key:
-            raise RuntimeError(f"Qiniu upload failed for {key}: {info}")
-        if path.name == "catalog-v1.json":
-            legacy_catalog_urls.append(f"{domain}/{key}")
+        _upload_immutable_object(
+            path,
+            key=key,
+            bucket=bucket,
+            auth=auth,
+            bucket_manager=bucket_manager,
+            put_file=put_file_v2,
+            etag_file=etag,
+        )
+    for path in catalogs:
+        key = "/".join(
+            part for part in (prefix.strip("/"), path.relative_to(output_root).as_posix()) if part
+        )
+        _upload_replaceable_object(
+            path,
+            key=key,
+            bucket=bucket,
+            auth=auth,
+            bucket_manager=bucket_manager,
+            put_file=put_file_v2,
+            etag_file=etag,
+        )
+        legacy_catalog_urls.append(f"{domain}/{key}")
     if legacy_catalog_urls:
         result, info = CdnManager(auth).refresh_urls(legacy_catalog_urls)
         if (
@@ -151,6 +177,119 @@ def upload_repository(output_root: Path, *, prefix: str) -> None:
             or result.get("code") != 200
         ):
             raise RuntimeError(f"Qiniu legacy catalog refresh failed: {result}")
+    if not prefix.strip("/"):
+        _publish_primary_catalogs(output_root)
+
+
+def _upload_immutable_object(
+    path: Path,
+    *,
+    key: str,
+    bucket: str,
+    auth: Any,
+    bucket_manager: Any,
+    put_file: Any,
+    etag_file: Any,
+) -> None:
+    expected_size = path.stat().st_size
+    expected_hash = etag_file(str(path))
+    existing, info = bucket_manager.stat(bucket, key)
+    if info.status_code == 200:
+        if (
+            isinstance(existing, dict)
+            and existing.get("fsize") == expected_size
+            and existing.get("hash") == expected_hash
+        ):
+            return
+        raise RuntimeError(
+            f"refusing to overwrite immutable distribution object {key}; bump its version"
+        )
+    if info.status_code != _QINIU_NOT_FOUND:
+        raise RuntimeError(f"Qiniu stat failed for {key}: {info}")
+    token = auth.upload_token(bucket, key, 3600, policy={"insertOnly": 1})
+    result, info = put_file(token, key, str(path), version="v2")
+    if info.status_code != 200 or not isinstance(result, dict) or result.get("key") != key:
+        raise RuntimeError(f"Qiniu upload failed for {key}: {info}")
+    _verify_qiniu_object(
+        path,
+        key=key,
+        bucket=bucket,
+        bucket_manager=bucket_manager,
+        etag_file=etag_file,
+    )
+
+
+def _upload_replaceable_object(
+    path: Path,
+    *,
+    key: str,
+    bucket: str,
+    auth: Any,
+    bucket_manager: Any,
+    put_file: Any,
+    etag_file: Any,
+) -> None:
+    token = auth.upload_token(bucket, key, 3600, policy={"insertOnly": 0})
+    result, info = put_file(token, key, str(path), version="v2")
+    if info.status_code != 200 or not isinstance(result, dict) or result.get("key") != key:
+        raise RuntimeError(f"Qiniu upload failed for {key}: {info}")
+    _verify_qiniu_object(
+        path,
+        key=key,
+        bucket=bucket,
+        bucket_manager=bucket_manager,
+        etag_file=etag_file,
+    )
+
+
+def _verify_qiniu_object(
+    path: Path,
+    *,
+    key: str,
+    bucket: str,
+    bucket_manager: Any,
+    etag_file: Any,
+) -> None:
+    result, info = bucket_manager.stat(bucket, key)
+    if (
+        info.status_code != 200
+        or not isinstance(result, dict)
+        or result.get("fsize") != path.stat().st_size
+        or result.get("hash") != etag_file(str(path))
+    ):
+        raise RuntimeError(f"Qiniu object verification failed for {key}: {info}")
+
+
+def _publish_primary_catalogs(output_root: Path) -> None:
+    try:
+        import paramiko
+    except ImportError as exc:
+        raise RuntimeError("paramiko is required to publish primary catalogs") from exc
+    password = _required_env("VPS_PASSWORD")
+    host = os.environ.get("VPS_HOST", "47.117.69.105").strip()
+    ssh = paramiko.SSHClient()
+    ssh.set_missing_host_key_policy(paramiko.AutoAddPolicy())
+    ssh.connect(host, username="root", password=password, timeout=15)
+    sftp = ssh.open_sftp()
+    try:
+        for relative, target in _PRIMARY_CATALOG_TARGETS.items():
+            source = output_root / Path(relative)
+            if not source.is_file():
+                continue
+            temporary = f"{target}.tmp-{os.getpid()}"
+            try:
+                sftp.put(str(source), temporary)
+                if sftp.stat(temporary).st_size != source.stat().st_size:
+                    raise RuntimeError(f"primary catalog upload size mismatch: {relative}")
+                sftp.posix_rename(temporary, target)
+            finally:
+                try:
+                    sftp.remove(temporary)
+                except OSError:
+                    pass
+    finally:
+        sftp.close()
+        ssh.close()
 
 
 def _deterministic_zip(
