@@ -8,6 +8,7 @@ import type {
   ServerStats,
   ProcessInfo,
   UserInfo,
+  TableSummary,
 } from "./types";
 
 async function invoke<T>(cmd: string, args?: Record<string, unknown>): Promise<T> {
@@ -53,6 +54,10 @@ export async function dbGetTables(
   database: string,
 ): Promise<DatabaseObject[]> {
   return invoke<DatabaseObject[]>("db_get_tables", { connectionId, database });
+}
+
+export async function dbGetTableSummaries(connectionId: string, database: string): Promise<TableSummary[]> {
+  return invoke<TableSummary[]>("db_get_table_summaries", { connectionId, database });
 }
 
 export async function dbGetViews(

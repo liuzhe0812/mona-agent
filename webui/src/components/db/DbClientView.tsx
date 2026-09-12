@@ -1,15 +1,12 @@
-import { useCallback, useEffect, useRef, useState } from "react";
-import { Play, Square, Plus, FolderOpen, Save, Download, Upload, Trash2, PlusCircle, ChevronLeft, ChevronRight, LockKeyhole } from "lucide-react";
-import { AgentLogo } from "@/components/AgentLogo";
+import { useEffect, useRef, useState } from "react";
 import { Button } from "@/components/ui/button";
-import { PageToolbar } from "@/components/ui/page-toolbar";
-import { Separator } from "@/components/ui/separator";
-import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
+import { TooltipProvider, Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
+import { ResizableHandle, ResizablePanel, ResizablePanelGroup } from "@/components/ui/resizable";
+import { AlertDialog, AlertDialogContent, AlertDialogHeader, AlertDialogTitle, AlertDialogDescription, AlertDialogFooter, AlertDialogCancel, AlertDialogAction } from "@/components/ui/alert-dialog";
+import { RightSidebarToggleIcon } from "@/components/notes/RightSidebarToggleIcon";
 import { cn } from "@/lib/utils";
 import { useLicense } from "@/hooks/useLicense";
 import { ConnectionTree } from "./ConnectionTree";
-import { SqlEditor } from "./SqlEditor";
-import { ResultPanel } from "./ResultPanel";
 import { DbAgentPanel } from "./DbAgentPanel";
 import { DashboardView } from "./DashboardView";
 import { UsersView } from "./UsersView";
@@ -20,530 +17,112 @@ import { ReplicationView } from "./ReplicationView";
 import { BackupView } from "./BackupView";
 import { NewConnectionDialog } from "./NewConnectionDialog";
 import { EditConnectionDialog } from "./EditConnectionDialog";
+import { TableBrowser } from "./TableBrowser";
+import { TableListView } from "./TableListView";
+import { QueryWorkspace } from "./QueryWorkspace";
+import { DbIcon } from "./DbIcon";
+import { DbToolButton } from "./DbToolButton";
 import { useDbStore } from "./store/dbStore";
-
-const LEFT_PANEL_MIN = 180;
-const LEFT_PANEL_MAX = 480;
-const LEFT_PANEL_DEFAULT = 260;
-const RESULT_PANEL_MIN = 120;
-const RESULT_PANEL_DEFAULT = 360;
-const AGENT_PANEL_MIN = 240;
-const AGENT_PANEL_MAX = 480;
-const AGENT_PANEL_DEFAULT = 320;
-
-const STORAGE_KEY_LEFT = "db.panel.leftWidth";
-const STORAGE_KEY_AGENT = "db.panel.agentWidth";
-
-function loadStoredWidth(key: string, fallback: number): number {
-  const raw = typeof localStorage !== "undefined" ? localStorage.getItem(key) : null;
-  if (!raw) return fallback;
-  const v = Number(raw);
-  if (!Number.isFinite(v) || v <= 0) return fallback;
-  return v;
-}
+import { hasPendingEdits } from "./table-sql";
+import type { QueryTab } from "./types";
 
 export function DbClientView({ onOpenSubscribe }: { onOpenSubscribe?: () => void }) {
   const { licenseActive } = useLicense();
-  const loadSavedConnections = useDbStore((s) => s.loadSavedConnections);
-  const queryTabs = useDbStore((s) => s.queryTabs);
-  const activeTabId = useDbStore((s) => s.activeTabId);
-  const addQueryTab = useDbStore((s) => s.addQueryTab);
-  const removeQueryTab = useDbStore((s) => s.removeQueryTab);
-  const setActiveTab = useDbStore((s) => s.setActiveTab);
-  const executeQuery = useDbStore((s) => s.executeQuery);
+  const tabs = useDbStore((s) => s.queryTabs);
+  const activeId = useDbStore((s) => s.activeTabId);
   const currentView = useDbStore((s) => s.currentView);
-  const selectedConnectionId = useDbStore((s) => s.selectedConnectionId);
-  const selectedDatabase = useDbStore((s) => s.selectedDatabase);
-  const activeConnections = useDbStore((s) => s.activeConnections);
-  const selectedTable = useDbStore((s) => s.selectedTable);
-  const serverStats = useDbStore((s) => s.serverStats);
-  const agentStreaming = useDbStore((s) => s.agentStreaming);
-  const initializedRef = useRef(false);
-
-  const [leftWidth, setLeftWidth] = useState(() => loadStoredWidth(STORAGE_KEY_LEFT, LEFT_PANEL_DEFAULT));
-  const [resultHeight, setResultHeight] = useState(RESULT_PANEL_DEFAULT);
-  const [agentPanelCollapsed, setAgentPanelCollapsed] = useState(true);
-  const [agentPanelWidth, setAgentPanelWidth] = useState(() => loadStoredWidth(STORAGE_KEY_AGENT, AGENT_PANEL_DEFAULT));
-  const leftDraggingRef = useRef(false);
-  const resultDraggingRef = useRef(false);
-  const agentDraggingRef = useRef(false);
-  const startXRef = useRef(0);
-  const startYRef = useRef(0);
-  const startLeftWidthRef = useRef(0);
-  const startResultHeightRef = useRef(0);
-  const startAgentWidthRef = useRef(0);
-  // 用 ref 跟踪最新宽度，避免 onMouseUp 闭包捕获过时 state。
-  const leftWidthRef = useRef(leftWidth);
-  const agentWidthRef = useRef(agentPanelWidth);
-  useEffect(() => { leftWidthRef.current = leftWidth; }, [leftWidth]);
-  useEffect(() => { agentWidthRef.current = agentPanelWidth; }, [agentPanelWidth]);
+  const objectScope = useDbStore((s) => s.objectScope);
+  const tree = useDbStore((s) => s.connectionTree);
+  const connections = useDbStore((s) => s.activeConnections);
+  const [agentOpen, setAgentOpen] = useState(false);
+  const [closeTab, setCloseTab] = useState<QueryTab | null>(null);
+  const initialized = useRef(false);
+  const tabBar = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
-    if (initializedRef.current) return;
-    initializedRef.current = true;
-    loadSavedConnections();
-  }, [loadSavedConnections]);
-
-  const onLeftDragStart = useCallback((e: React.MouseEvent) => {
-    e.preventDefault();
-    leftDraggingRef.current = true;
-    startXRef.current = e.clientX;
-    startLeftWidthRef.current = leftWidth;
-    document.body.style.cursor = "col-resize";
-    document.body.style.userSelect = "none";
-  }, [leftWidth]);
-
-  const onResultDragStart = useCallback((e: React.MouseEvent) => {
-    e.preventDefault();
-    resultDraggingRef.current = true;
-    startYRef.current = e.clientY;
-    startResultHeightRef.current = resultHeight;
-    document.body.style.cursor = "row-resize";
-    document.body.style.userSelect = "none";
-  }, [resultHeight]);
-
-  const onAgentDragStart = useCallback((e: React.MouseEvent) => {
-    e.preventDefault();
-    agentDraggingRef.current = true;
-    startXRef.current = e.clientX;
-    startAgentWidthRef.current = agentPanelWidth;
-    document.body.style.cursor = "col-resize";
-    document.body.style.userSelect = "none";
-  }, [agentPanelWidth]);
-
-  useEffect(() => {
-    const onMouseMove = (e: MouseEvent) => {
-      if (leftDraggingRef.current) {
-        const delta = e.clientX - startXRef.current;
-        const next = Math.min(LEFT_PANEL_MAX, Math.max(LEFT_PANEL_MIN, startLeftWidthRef.current + delta));
-        setLeftWidth(next);
-      }
-      if (resultDraggingRef.current) {
-        const delta = startYRef.current - e.clientY;
-        const next = Math.max(RESULT_PANEL_MIN, startResultHeightRef.current + delta);
-        setResultHeight(next);
-      }
-      if (agentDraggingRef.current) {
-        const delta = startXRef.current - e.clientX;
-        const next = Math.min(AGENT_PANEL_MAX, Math.max(AGENT_PANEL_MIN, startAgentWidthRef.current + delta));
-        setAgentPanelWidth(next);
-      }
-    };
-    const onMouseUp = () => {
-      if (leftDraggingRef.current) {
-        leftDraggingRef.current = false;
-        document.body.style.cursor = "";
-        document.body.style.userSelect = "";
-        try { localStorage.setItem(STORAGE_KEY_LEFT, String(leftWidthRef.current)); } catch {}
-      }
-      if (resultDraggingRef.current) {
-        resultDraggingRef.current = false;
-        document.body.style.cursor = "";
-        document.body.style.userSelect = "";
-      }
-      if (agentDraggingRef.current) {
-        agentDraggingRef.current = false;
-        document.body.style.cursor = "";
-        document.body.style.userSelect = "";
-        try { localStorage.setItem(STORAGE_KEY_AGENT, String(agentWidthRef.current)); } catch {}
-      }
-    };
-    window.addEventListener("mousemove", onMouseMove);
-    window.addEventListener("mouseup", onMouseUp);
-    return () => {
-      window.removeEventListener("mousemove", onMouseMove);
-      window.removeEventListener("mouseup", onMouseUp);
-    };
+    if (!initialized.current) { initialized.current = true; void useDbStore.getState().loadSavedConnections(); }
   }, []);
+  useEffect(() => {
+    if (objectScope || currentView !== "objects") return;
+    const [connectionId, databases] = Object.entries(tree)[0] ?? [];
+    if (connectionId && databases?.[0]) useDbStore.getState().openDatabase(connectionId, databases[0].name);
+  }, [tree, objectScope, currentView]);
+  useEffect(() => {
+    tabBar.current?.querySelector('[aria-selected="true"]')?.scrollIntoView?.({ block: "nearest", inline: "nearest" });
+  }, [activeId, currentView]);
 
-  const activeTab = queryTabs.find((t) => t.id === activeTabId);
-  const activeConn = activeConnections.find((c) => c.id === selectedConnectionId);
+  function showList() {
+    const state = useDbStore.getState();
+    const scope = state.objectScope;
+    const tab = state.queryTabs.find((t) => t.id === state.activeTabId);
+    if (state.currentView === "table" && tab?.connectionId && tab.database) state.openDatabase(tab.connectionId, tab.database, tab.objectType);
+    else if (scope) state.openDatabase(scope.connectionId, scope.database, scope.objectType);
+    else state.setCurrentView("objects");
+  }
+  function requestClose(tab: QueryTab) {
+    if (tab.isExecuting || tab.isSaving) return;
+    if (hasPendingEdits(tab) || (tab.kind !== "table" && tab.sql.trim())) setCloseTab(tab);
+    else useDbStore.getState().removeQueryTab(tab.id);
+  }
+  const adminViews = { dashboard: DashboardView, users: UsersView, variables: VariablesView,
+    processes: ProcessesView, "slow-queries": SlowQueryView, replication: ReplicationView, backup: BackupView };
+  const AdminView = currentView !== "table" && currentView !== "objects" ? adminViews[currentView] : null;
 
-  return (
-    <div className="flex h-full overflow-hidden">
-      <div style={{ width: leftWidth }} className="shrink-0">
-        <ConnectionTree />
-      </div>
-
-      <div
-        className="relative w-[5px] shrink-0 cursor-col-resize"
-        onMouseDown={onLeftDragStart}
-      >
-        <div className="absolute inset-y-0 left-1/2 w-px -translate-x-1/2 bg-border/70 transition-colors hover:bg-info/50" />
-      </div>
-
-      <div className="flex min-h-0 min-w-0 flex-1 flex-col">
-        {currentView === "table" && (
-          <>
-            <QueryTabBar
-              tabs={queryTabs}
-              activeTabId={activeTabId}
-              onTabClick={setActiveTab}
-              onTabClose={removeQueryTab}
-              onAddTab={addQueryTab}
-              onToggleAgent={licenseActive ? () => setAgentPanelCollapsed((c) => !c) : (onOpenSubscribe ?? (() => {}))}
-              agentPanelCollapsed={agentPanelCollapsed}
-              agentLogoNode={
-                licenseActive ? (
-                  <AgentLogo state={agentStreaming ? "working" : "idle"} className="h-5 w-5" />
-                ) : (
-                  <LockKeyhole className="h-4 w-4 text-muted-foreground" />
-                )
-              }
-            />
-
-            <TooltipProvider delayDuration={300}>
-              <PageToolbar
-                className="h-10 border-b border-border/60 bg-muted/20 px-3.5"
-                leading={
-                  <>
-                <div className="flex items-center gap-1">
-                  <Tooltip>
-                    <TooltipTrigger asChild>
-                      <Button
-                        size="sm"
-                        className="h-6 gap-1 px-2 text-caption"
-                        disabled={!activeTab?.connectionId || activeTab?.isExecuting}
-                        onClick={() => activeTabId && executeQuery(activeTabId)}
-                      >
-                        <Play className="h-2.5 w-2.5" />
-                        执行
-                      </Button>
-                    </TooltipTrigger>
-                    <TooltipContent>执行查询 (Ctrl+Enter)</TooltipContent>
-                  </Tooltip>
-                  <Tooltip>
-                    <TooltipTrigger asChild>
-                      <Button variant="ghost" size="sm" className="h-6 w-6 px-0" disabled>
-                        <Square className="h-2.5 w-2.5" />
-                      </Button>
-                    </TooltipTrigger>
-                    <TooltipContent>停止查询</TooltipContent>
-                  </Tooltip>
-                </div>
-                <Separator orientation="vertical" className="h-5" />
-                <div className="flex items-center gap-1">
-                  <Tooltip>
-                    <TooltipTrigger asChild>
-                      <Button variant="ghost" size="sm" className="h-6 w-6 px-0" onClick={addQueryTab}>
-                        <PlusCircle className="h-3.5 w-3.5" />
-                      </Button>
-                    </TooltipTrigger>
-                    <TooltipContent>新建查询</TooltipContent>
-                  </Tooltip>
-                  <Tooltip>
-                    <TooltipTrigger asChild>
-                      <Button variant="ghost" size="sm" className="h-6 w-6 px-0" disabled>
-                        <FolderOpen className="h-3.5 w-3.5" />
-                      </Button>
-                    </TooltipTrigger>
-                    <TooltipContent>打开</TooltipContent>
-                  </Tooltip>
-                  <Tooltip>
-                    <TooltipTrigger asChild>
-                      <Button variant="ghost" size="sm" className="h-6 w-6 px-0" disabled>
-                        <Save className="h-3.5 w-3.5" />
-                      </Button>
-                    </TooltipTrigger>
-                    <TooltipContent>保存</TooltipContent>
-                  </Tooltip>
-                </div>
-                <Separator orientation="vertical" className="h-5" />
-                <div className="flex items-center gap-1">
-                  <Tooltip>
-                    <TooltipTrigger asChild>
-                      <Button variant="ghost" size="sm" className="h-6 w-6 px-0" disabled>
-                        <Download className="h-3.5 w-3.5" />
-                      </Button>
-                    </TooltipTrigger>
-                    <TooltipContent>导入</TooltipContent>
-                  </Tooltip>
-                  <Tooltip>
-                    <TooltipTrigger asChild>
-                      <Button variant="ghost" size="sm" className="h-6 w-6 px-0" disabled>
-                        <Upload className="h-3.5 w-3.5" />
-                      </Button>
-                    </TooltipTrigger>
-                    <TooltipContent>导出</TooltipContent>
-                  </Tooltip>
-                </div>
-                <Separator orientation="vertical" className="h-5" />
-                <div className="flex items-center gap-1">
-                  <Tooltip>
-                    <TooltipTrigger asChild>
-                      <Button variant="ghost" size="sm" className="h-6 w-6 px-0" disabled>
-                        <PlusCircle className="h-3.5 w-3.5" />
-                      </Button>
-                    </TooltipTrigger>
-                    <TooltipContent>插入行</TooltipContent>
-                  </Tooltip>
-                  <Tooltip>
-                    <TooltipTrigger asChild>
-                      <Button
-                        variant="ghost"
-                        size="sm"
-                        className="h-6 w-6 px-0 text-destructive hover:text-destructive"
-                        disabled
-                      >
-                        <Trash2 className="h-3.5 w-3.5" />
-                      </Button>
-                    </TooltipTrigger>
-                    <TooltipContent>删除行</TooltipContent>
-                  </Tooltip>
-                </div>
-                  </>
-                }
-                actions={
-                  <span className="text-micro text-muted-foreground">
-                    {selectedTable?.name}
-                  </span>
-                }
-              />
-            </TooltipProvider>
-
-            <div className="flex min-h-0 flex-1 flex-col">
-              <div className="flex min-h-0 flex-1 flex-col">
-                <SqlEditor />
+  return <TooltipProvider delayDuration={250}>
+    <div className="flex h-full min-h-0 overflow-hidden bg-background text-foreground">
+      <ResizablePanelGroup direction="horizontal">
+        <ResizablePanel id="db-connections" defaultSize="240px" minSize="180px" maxSize="420px">
+          <ConnectionTree />
+        </ResizablePanel>
+        <ResizableHandle />
+        <ResizablePanel id="db-content" minSize="400px">
+          <div className="flex h-full min-h-0 min-w-0 flex-col">
+            <div className="flex h-9 shrink-0 items-center border-b border-border">
+              <div ref={tabBar} role="tablist" aria-label="数据库工作标签" className="flex min-w-0 flex-1 overflow-x-auto scrollbar-none">
+                <Button role="tab" aria-selected={currentView === "objects"} variant="ghost"
+                  className={cn("h-9 shrink-0 gap-2 rounded-none border-b-2 px-3 text-caption", currentView === "objects" ? "border-info bg-muted/20" : "border-transparent")}
+                  onClick={showList}><DbIcon name="table" className="h-4 w-4" />表清单</Button>
+                {tabs.map((tab) => <div key={tab.id} className={cn("group flex h-9 shrink-0 items-center border-b-2 border-r border-r-border", currentView === "table" && activeId === tab.id ? "border-b-info bg-muted/20" : "border-b-transparent")}>
+                  <Button role="tab" aria-selected={currentView === "table" && activeId === tab.id} variant="ghost" title={`${tab.connectionId ? useDbStore.getState().activeConnections.find((c) => c.id === tab.connectionId)?.config.name ?? "" : ""} / ${tab.database ?? ""} / ${tab.title}`}
+                    className={cn("h-8 gap-2 rounded-none px-3 text-caption font-normal", tab.preview && "italic")}
+                    onClick={() => useDbStore.getState().setActiveTab(tab.id)} onDoubleClick={() => useDbStore.getState().pinTab(tab.id)}>
+                    <DbIcon name={tab.kind === "table" ? tab.objectType === "view" ? "view" : "table" : "query"} className="h-4 w-4" />
+                    <span className="max-w-44 truncate">{tab.title}</span>
+                    {hasPendingEdits(tab) && <span className="text-warning" aria-label="有未保存的修改">●</span>}
+                  </Button>
+                  <DbToolButton icon="close" label={`关闭 ${tab.title}`} className="mr-1 h-6 w-6" disabled={tab.isExecuting || tab.isSaving} onClick={() => requestClose(tab)} />
+                </div>)}
+                <DbToolButton icon="add" label="新建查询" onClick={() => useDbStore.getState().addQueryTab()} />
               </div>
-              <div
-                className="relative h-[5px] shrink-0 cursor-row-resize"
-                onMouseDown={onResultDragStart}
-              >
-                <div className="absolute inset-x-0 top-1/2 h-px -translate-y-1/2 bg-border/70 transition-colors hover:bg-info/50" />
-              </div>
-              <div style={{ height: resultHeight }} className="shrink-0">
-                <ResultPanel />
-              </div>
+              <Tooltip><TooltipTrigger asChild><Button variant="ghost" size="icon" aria-label={agentOpen ? "收起 Mona" : "展开 Mona"} onClick={() => licenseActive ? setAgentOpen((open) => !open) : onOpenSubscribe?.()}>
+                <RightSidebarToggleIcon open={agentOpen} className="h-4 w-4" />
+              </Button></TooltipTrigger><TooltipContent>{agentOpen ? "收起 Mona" : "展开 Mona"}</TooltipContent></Tooltip>
             </div>
-          </>
-        )}
-
-        {currentView === "dashboard" && (
-          <div className="flex min-h-0 flex-1 flex-col overflow-hidden">
-            <DashboardView />
+            <div className="relative min-h-0 flex-1">
+              <div className={cn("absolute inset-0", currentView !== "objects" && "hidden")}>
+                <TableListView connectionId={connections.some((c) => c.id === objectScope?.connectionId) ? objectScope?.connectionId ?? null : null} database={objectScope?.database ?? null} objectType={objectScope?.objectType}
+                  onOpenTable={(name, pinned, objectType) => { if (objectScope) void useDbStore.getState().selectTable(objectScope.connectionId, objectScope.database, name, pinned, objectType); }}
+                  onNewQuery={() => {
+                    if (objectScope) { useDbStore.getState().setSelectedConnectionId(objectScope.connectionId); useDbStore.getState().setSelectedDatabase(objectScope.database); }
+                    useDbStore.getState().addQueryTab(objectScope?.connectionId, objectScope?.database);
+                  }} />
+              </div>
+              {tabs.map((tab) => <div key={tab.id} className={cn("absolute inset-0", (currentView !== "table" || activeId !== tab.id) && "hidden")}>
+                {tab.kind === "table" ? <TableBrowser tab={tab} /> : <QueryWorkspace tab={tab} />}
+              </div>)}
+              {AdminView && <div className="absolute inset-0 overflow-auto"><AdminView /></div>}
+            </div>
           </div>
-        )}
-        {currentView === "users" && (
-          <div className="flex min-h-0 flex-1 flex-col overflow-hidden">
-            <UsersView />
-          </div>
-        )}
-        {currentView === "variables" && (
-          <div className="flex min-h-0 flex-1 flex-col overflow-hidden">
-            <VariablesView />
-          </div>
-        )}
-        {currentView === "processes" && (
-          <div className="flex min-h-0 flex-1 flex-col overflow-hidden">
-            <ProcessesView />
-          </div>
-        )}
-        {currentView === "slow-queries" && (
-          <div className="flex min-h-0 flex-1 flex-col overflow-hidden">
-            <SlowQueryView />
-          </div>
-        )}
-        {currentView === "replication" && (
-          <div className="flex min-h-0 flex-1 flex-col overflow-hidden">
-            <ReplicationView />
-          </div>
-        )}
-        {currentView === "backup" && (
-          <div className="flex min-h-0 flex-1 flex-col overflow-hidden">
-            <BackupView />
-          </div>
-        )}
-
-        <div className="flex items-center justify-between border-t border-border/60 bg-muted/20 px-3.5 py-1 text-micro text-muted-foreground">
-          <div className="flex items-center gap-3">
-            {activeConn ? (
-              <span className="flex items-center gap-1.5">
-                <span className="h-1.5 w-1.5 rounded-full bg-success-indicator" />
-                {activeConn.config.name}
-                {activeConn.server_version && ` · ${activeConn.server_version}`}
-              </span>
-            ) : (
-              <span className="flex items-center gap-1.5">
-                <span className="h-1.5 w-1.5 rounded-full bg-muted-foreground" />
-                未连接
-              </span>
-            )}
-            {selectedDatabase && <span>{selectedDatabase}</span>}
-          </div>
-          <div className="flex items-center gap-3">
-            {activeConn && (
-              <>
-                <span>{activeConnections.length} 连接</span>
-                {serverStats && <span>{serverStats.qps.toLocaleString()} QPS</span>}
-                {serverStats?.replication_lag_seconds !== null && serverStats?.replication_lag_seconds !== undefined && (
-                  <span>延迟 {serverStats.replication_lag_seconds.toFixed(1)}ms</span>
-                )}
-              </>
-            )}
-          </div>
-        </div>
-      </div>
-
-      {licenseActive && !agentPanelCollapsed && (
-        <div
-          className="relative w-[5px] shrink-0 cursor-col-resize"
-          onMouseDown={onAgentDragStart}
-        >
-          <div className="absolute inset-y-0 left-1/2 w-px -translate-x-1/2 bg-border/70 transition-colors hover:bg-info/50" />
-        </div>
-      )}
-
-      {licenseActive && (
-        <DbAgentPanel
-          collapsed={agentPanelCollapsed}
-          width={agentPanelWidth}
-        />
-      )}
-
-      <NewConnectionDialog />
-      <EditConnectionDialog />
+        </ResizablePanel>
+      </ResizablePanelGroup>
+      {licenseActive && <DbAgentPanel collapsed={!agentOpen} width={320} />}
+      <NewConnectionDialog /><EditConnectionDialog />
     </div>
-  );
-}
-
-function QueryTabBar({
-  tabs,
-  activeTabId,
-  onTabClick,
-  onTabClose,
-  onAddTab,
-  onToggleAgent,
-  agentPanelCollapsed,
-  agentLogoNode,
-}: {
-  tabs: { id: string; title: string }[];
-  activeTabId: string | null;
-  onTabClick: (id: string) => void;
-  onTabClose: (id: string) => void;
-  onAddTab: () => void;
-  onToggleAgent: () => void;
-  agentPanelCollapsed: boolean;
-  agentLogoNode: React.ReactNode;
-}) {
-  const scrollRef = useRef<HTMLDivElement>(null);
-  const [canScrollLeft, setCanScrollLeft] = useState(false);
-  const [canScrollRight, setCanScrollRight] = useState(false);
-
-  const updateScrollState = useCallback(() => {
-    const el = scrollRef.current;
-    if (!el) return;
-    setCanScrollLeft(el.scrollLeft > 0);
-    setCanScrollRight(el.scrollLeft + el.clientWidth < el.scrollWidth - 1);
-  }, []);
-
-  useEffect(() => {
-    updateScrollState();
-    const el = scrollRef.current;
-    if (!el) return;
-    const observer = new ResizeObserver(updateScrollState);
-    observer.observe(el);
-    return () => observer.disconnect();
-  }, [updateScrollState, tabs]);
-
-  useEffect(() => {
-    const el = scrollRef.current;
-    if (!el) return;
-    const activeTabEl = el.querySelector('[data-active="true"]');
-    if (activeTabEl) {
-      activeTabEl.scrollIntoView({ block: "nearest", inline: "nearest" });
-    }
-  }, [activeTabId]);
-
-  const scroll = useCallback((direction: "left" | "right") => {
-    const el = scrollRef.current;
-    if (!el) return;
-    const amount = el.clientWidth * 0.6;
-    el.scrollBy({ left: direction === "left" ? -amount : amount, behavior: "smooth" });
-  }, []);
-
-  return (
-    <div className="flex items-center border-b border-border bg-card">
-      {canScrollLeft && (
-        <Button
-          type="button"
-          variant="ghost"
-          className="h-full shrink-0 rounded-none px-1 text-muted-foreground hover:text-foreground"
-          onClick={() => scroll("left")}
-        >
-          <ChevronLeft className="h-3.5 w-3.5" />
-        </Button>
-      )}
-      <div
-        ref={scrollRef}
-        onScroll={updateScrollState}
-        onWheel={(e) => {
-          if (e.deltaY === 0) return;
-          e.preventDefault();
-          scrollRef.current?.scrollBy({ left: e.deltaY });
-        }}
-        className="flex min-w-0 flex-1 overflow-x-auto scrollbar-none"
-      >
-        {tabs.map((tab) => (
-          <div
-            key={tab.id}
-            data-active={tab.id === activeTabId}
-            className={cn(
-              "group relative flex h-7 shrink-0 cursor-pointer items-center gap-1 border-r border-border px-2.5 text-caption",
-              tab.id === activeTabId
-                ? "bg-background text-foreground"
-                : "text-muted-foreground hover:text-foreground hover:bg-accent",
-            )}
-            onClick={() => onTabClick(tab.id)}
-          >
-            {tab.id === activeTabId && (
-                <span className="absolute bottom-0 left-0 right-0 h-px bg-info" />
-            )}
-            <span className="truncate max-w-28">{tab.title}</span>
-            <Button
-              type="button"
-              variant="ghost"
-              size="icon"
-              aria-label="关闭标签"
-              className="ml-1 hidden h-4 w-4 text-muted-foreground hover:text-foreground group-hover:block"
-              onClick={(e) => {
-                e.stopPropagation();
-                onTabClose(tab.id);
-              }}
-            >
-              ×
-            </Button>
-          </div>
-        ))}
-        <Button
-          type="button"
-          variant="ghost"
-          className="h-7 shrink-0 rounded-none px-2 text-muted-foreground hover:text-foreground"
-          onClick={onAddTab}
-          title="新建查询"
-          aria-label="新建查询"
-        >
-          <Plus className="h-3.5 w-3.5" />
-        </Button>
-      </div>
-      {canScrollRight && (
-        <Button
-          type="button"
-          variant="ghost"
-          className="h-full shrink-0 rounded-none px-1 text-muted-foreground hover:text-foreground"
-          onClick={() => scroll("right")}
-        >
-          <ChevronRight className="h-3.5 w-3.5" />
-        </Button>
-      )}
-      <Button
-        type="button"
-        variant="ghost"
-        className="h-auto shrink-0 rounded-none px-2 py-1.5"
-        onClick={onToggleAgent}
-        title={agentPanelCollapsed ? "展开 Mona" : "收起 Mona"}
-      >
-        {agentLogoNode}
-      </Button>
-    </div>
-  );
+    <AlertDialog open={!!closeTab} onOpenChange={(open) => !open && setCloseTab(null)}>
+      <AlertDialogContent><AlertDialogHeader><AlertDialogTitle>关闭“{closeTab?.title}”？</AlertDialogTitle>
+        <AlertDialogDescription>{closeTab?.kind === "table" ? "此标签还有未保存的数据修改。关闭会放弃这些修改。" : "此查询包含 SQL 草稿，请先保存需要保留的内容。关闭后将丢弃草稿。"}</AlertDialogDescription></AlertDialogHeader>
+        <AlertDialogFooter><AlertDialogCancel>取消</AlertDialogCancel><AlertDialogAction onClick={() => { if (closeTab) { useDbStore.getState().revertAllEdits(closeTab.id); useDbStore.getState().removeQueryTab(closeTab.id); } setCloseTab(null); }}>放弃并关闭</AlertDialogAction></AlertDialogFooter>
+      </AlertDialogContent>
+    </AlertDialog>
+  </TooltipProvider>;
 }

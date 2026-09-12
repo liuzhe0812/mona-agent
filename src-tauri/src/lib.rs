@@ -974,6 +974,7 @@ pub fn run() {
             db::commands::db_get_tables,
             db::commands::db_get_views,
             db::commands::db_get_table_info,
+            db::commands::db_get_table_summaries,
             db::commands::db_get_server_stats,
             db::commands::db_get_processes,
             db::commands::db_get_users,

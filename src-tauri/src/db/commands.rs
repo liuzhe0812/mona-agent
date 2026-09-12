@@ -16,23 +16,21 @@ pub async fn db_connect(
     if manager.contains_connection(&config.id) {
         let _ = manager.disconnect(&config.id);
     }
-    manager.insert_connection(config, handle, server_version)
+    manager
+        .insert_connection(config, handle, server_version)
         .map_err(|e| e.to_string())
 }
 
 #[tauri::command]
-pub async fn db_disconnect(
-    state: State<'_, DbState>,
-    connection_id: String,
-) -> Result<(), String> {
+pub async fn db_disconnect(state: State<'_, DbState>, connection_id: String) -> Result<(), String> {
     let mut manager = state.manager.lock().await;
-    manager.disconnect(&connection_id).map_err(|e| e.to_string())
+    manager
+        .disconnect(&connection_id)
+        .map_err(|e| e.to_string())
 }
 
 #[tauri::command]
-pub async fn db_test_connection(
-    config: DbConnectionConfig,
-) -> Result<String, String> {
+pub async fn db_test_connection(config: DbConnectionConfig) -> Result<String, String> {
     super::manager::test_connection(&config)
         .await
         .map_err(|e| e.to_string())
@@ -48,7 +46,8 @@ pub async fn db_execute_query(
 ) -> Result<QueryResult, String> {
     let handle = {
         let manager = state.manager.lock().await;
-        manager.get_handle(&connection_id)
+        manager
+            .get_handle(&connection_id)
             .ok_or_else(|| format!("Connection {} not found", connection_id))?
     };
     super::manager::execute_on_handle(&handle, &sql, limit, database.as_deref())
@@ -63,7 +62,8 @@ pub async fn db_get_databases(
 ) -> Result<Vec<String>, String> {
     let handle = {
         let manager = state.manager.lock().await;
-        manager.get_handle(&connection_id)
+        manager
+            .get_handle(&connection_id)
             .ok_or_else(|| format!("Connection {} not found", connection_id))?
     };
     super::manager::get_databases_on_handle(&handle)
@@ -79,7 +79,8 @@ pub async fn db_get_tables(
 ) -> Result<Vec<DatabaseObject>, String> {
     let handle = {
         let manager = state.manager.lock().await;
-        manager.get_handle(&connection_id)
+        manager
+            .get_handle(&connection_id)
             .ok_or_else(|| format!("Connection {} not found", connection_id))?
     };
     super::manager::get_tables_on_handle(&handle, &database)
@@ -95,7 +96,8 @@ pub async fn db_get_views(
 ) -> Result<Vec<DatabaseObject>, String> {
     let handle = {
         let manager = state.manager.lock().await;
-        manager.get_handle(&connection_id)
+        manager
+            .get_handle(&connection_id)
             .ok_or_else(|| format!("Connection {} not found", connection_id))?
     };
     super::manager::get_views_on_handle(&handle, &database)
@@ -112,10 +114,28 @@ pub async fn db_get_table_info(
 ) -> Result<TableInfo, String> {
     let handle = {
         let manager = state.manager.lock().await;
-        manager.get_handle(&connection_id)
+        manager
+            .get_handle(&connection_id)
             .ok_or_else(|| format!("Connection {} not found", connection_id))?
     };
     super::manager::get_table_info_on_handle(&handle, &database, &table)
+        .await
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub async fn db_get_table_summaries(
+    state: State<'_, DbState>,
+    connection_id: String,
+    database: String,
+) -> Result<Vec<TableSummary>, String> {
+    let handle = {
+        let manager = state.manager.lock().await;
+        manager
+            .get_handle(&connection_id)
+            .ok_or_else(|| format!("Connection {} not found", connection_id))?
+    };
+    super::catalog::get_table_summaries_on_handle(&handle, &database)
         .await
         .map_err(|e| e.to_string())
 }
@@ -127,7 +147,8 @@ pub async fn db_get_server_stats(
 ) -> Result<ServerStats, String> {
     let handle = {
         let manager = state.manager.lock().await;
-        manager.get_handle(&connection_id)
+        manager
+            .get_handle(&connection_id)
             .ok_or_else(|| format!("Connection {} not found", connection_id))?
     };
     super::manager::get_server_stats_on_handle(&handle)
@@ -142,7 +163,8 @@ pub async fn db_get_processes(
 ) -> Result<Vec<ProcessInfo>, String> {
     let handle = {
         let manager = state.manager.lock().await;
-        manager.get_handle(&connection_id)
+        manager
+            .get_handle(&connection_id)
             .ok_or_else(|| format!("Connection {} not found", connection_id))?
     };
     super::manager::get_processes_on_handle(&handle)
@@ -157,7 +179,8 @@ pub async fn db_get_users(
 ) -> Result<Vec<UserInfo>, String> {
     let handle = {
         let manager = state.manager.lock().await;
-        manager.get_handle(&connection_id)
+        manager
+            .get_handle(&connection_id)
             .ok_or_else(|| format!("Connection {} not found", connection_id))?
     };
     super::manager::get_users_on_handle(&handle)
@@ -173,7 +196,8 @@ pub async fn db_kill_process(
 ) -> Result<(), String> {
     let handle = {
         let manager = state.manager.lock().await;
-        manager.get_handle(&connection_id)
+        manager
+            .get_handle(&connection_id)
             .ok_or_else(|| format!("Connection {} not found", connection_id))?
     };
     super::manager::kill_process_on_handle(&handle, process_id)
@@ -192,7 +216,8 @@ pub async fn db_backup_database(
 ) -> Result<(), String> {
     let handle = {
         let manager = state.manager.lock().await;
-        manager.get_handle(&connection_id)
+        manager
+            .get_handle(&connection_id)
             .ok_or_else(|| format!("Connection {} not found", connection_id))?
     };
     super::manager::backup_on_handle(
@@ -201,7 +226,9 @@ pub async fn db_backup_database(
         &output_path,
         include_ddl.unwrap_or(true),
         include_data.unwrap_or(true),
-    ).await.map_err(|e| e.to_string())
+    )
+    .await
+    .map_err(|e| e.to_string())
 }
 
 #[tauri::command]
@@ -213,7 +240,8 @@ pub async fn db_restore_database(
 ) -> Result<(), String> {
     let handle = {
         let manager = state.manager.lock().await;
-        manager.get_handle(&connection_id)
+        manager
+            .get_handle(&connection_id)
             .ok_or_else(|| format!("Connection {} not found", connection_id))?
     };
     super::manager::restore_on_handle(&handle, &database, &input_path)
@@ -222,19 +250,14 @@ pub async fn db_restore_database(
 }
 
 #[tauri::command]
-pub async fn db_list_connections(
-    state: State<'_, DbState>,
-) -> Result<Vec<ConnectionInfo>, String> {
+pub async fn db_list_connections(state: State<'_, DbState>) -> Result<Vec<ConnectionInfo>, String> {
     let manager = state.manager.lock().await;
     Ok(manager.list_connections())
 }
 
 #[tauri::command]
-pub async fn db_save_connections(
-    connections: Vec<DbConnectionConfig>,
-) -> Result<(), String> {
-    let data_dir = dirs::data_dir()
-        .ok_or("Cannot determine data directory")?;
+pub async fn db_save_connections(connections: Vec<DbConnectionConfig>) -> Result<(), String> {
+    let data_dir = dirs::data_dir().ok_or("Cannot determine data directory")?;
     let db_dir = data_dir.join("mona").join("db");
     std::fs::create_dir_all(&db_dir).map_err(|e| e.to_string())?;
     let path = db_dir.join("connections.json");
@@ -245,13 +268,13 @@ pub async fn db_save_connections(
 
 #[tauri::command]
 pub async fn db_load_connections() -> Result<Vec<DbConnectionConfig>, String> {
-    let data_dir = dirs::data_dir()
-        .ok_or("Cannot determine data directory")?;
+    let data_dir = dirs::data_dir().ok_or("Cannot determine data directory")?;
     let path = data_dir.join("mona").join("db").join("connections.json");
     if !path.exists() {
         return Ok(vec![]);
     }
     let json = std::fs::read_to_string(&path).map_err(|e| e.to_string())?;
-    let connections: Vec<DbConnectionConfig> = serde_json::from_str(&json).map_err(|e| e.to_string())?;
+    let connections: Vec<DbConnectionConfig> =
+        serde_json::from_str(&json).map_err(|e| e.to_string())?;
     Ok(connections)
 }

@@ -39,8 +39,13 @@ pub struct DbConnectionConfig {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum SshAuthConfig {
-    Password { password: String },
-    Key { key_path: String, passphrase: Option<String> },
+    Password {
+        password: String,
+    },
+    Key {
+        key_path: String,
+        passphrase: Option<String>,
+    },
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -135,12 +140,13 @@ impl serde::Serialize for CellValue {
 impl<'de> serde::Deserialize<'de> for CellValue {
     fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
         let value = serde_json::Value::deserialize(deserializer)?;
-        let obj = value.as_object().ok_or_else(|| {
-            serde::de::Error::custom("CellValue must be an object")
-        })?;
-        let type_str = obj.get("type").and_then(|v| v.as_str()).ok_or_else(|| {
-            serde::de::Error::custom("CellValue missing 'type' field")
-        })?;
+        let obj = value
+            .as_object()
+            .ok_or_else(|| serde::de::Error::custom("CellValue must be an object"))?;
+        let type_str = obj
+            .get("type")
+            .and_then(|v| v.as_str())
+            .ok_or_else(|| serde::de::Error::custom("CellValue missing 'type' field"))?;
         match type_str {
             "null" => Ok(CellValue::Null),
             "integer" => obj
@@ -230,6 +236,20 @@ pub struct TableInfo {
     pub indexes: Vec<IndexDefinition>,
     pub foreign_keys: Vec<ForeignKeyDefinition>,
     pub ddl: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TableSummary {
+    pub name: String,
+    pub object_type: String,
+    pub comment: Option<String>,
+    pub row_count: Option<i64>,
+    pub data_size: Option<i64>,
+    pub index_size: Option<i64>,
+    pub engine: Option<String>,
+    pub charset: Option<String>,
+    pub create_time: Option<String>,
+    pub update_time: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

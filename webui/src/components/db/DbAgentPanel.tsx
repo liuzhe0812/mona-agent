@@ -124,9 +124,9 @@ export function DbAgentPanel({
     const opts: SendOptions = {
       dbConnectionId: activeTab?.connectionId ?? undefined,
       dbDatabase: activeTab?.database ?? undefined,
-      dbTable: activeTab?.title ?? undefined,
+      dbTable: activeTab?.tableName,
       dbCurrentSql: activeTab?.sql?.trim() || undefined,
-      dbLastError: activeTab?.result?.message ?? undefined,
+      dbLastError: activeTab?.error ?? undefined,
     };
     if (activeConnection) {
       opts.dbType = activeConnection.config.db_type;
@@ -215,7 +215,7 @@ export function DbAgentPanel({
   }
 
   const hasSql = !!activeTab?.sql?.trim();
-  const hasError = !!activeTab?.result?.message;
+  const hasError = !!activeTab?.error;
 
   return (
     <aside
@@ -293,7 +293,7 @@ export function DbAgentPanel({
               draft={sqlDraft}
               onInsert={(sql) => {
                 const tab = useDbStore.getState().queryTabs.find((t) => t.id === activeTabId);
-                if (tab) updateTabSql(activeTabId, `${tab.sql}\n${sql}`);
+                if (tab) updateTabSql(activeTabId, tab.kind === "table" ? sql : `${tab.sql}\n${sql}`);
               }}
               onReplace={(sql) => updateTabSql(activeTabId, sql)}
               onDismiss={() => setSqlDraft(null)}

@@ -156,7 +156,33 @@ export interface UserInfo {
   account_locked: boolean;
 }
 
-export type DbViewType = "table" | "dashboard" | "users" | "variables" | "processes" | "slow-queries" | "replication" | "backup";
+export type DbViewType = "objects" | "table" | "dashboard" | "users" | "variables" | "processes" | "slow-queries" | "replication" | "backup";
+
+export interface TableSummary {
+  name: string;
+  object_type: "table" | "view";
+  comment: string | null;
+  row_count: number | null;
+  data_size: number | null;
+  index_size: number | null;
+  engine: string | null;
+  charset: string | null;
+  create_time: string | null;
+  update_time: string | null;
+}
+
+export interface TableFilter {
+  column: string;
+  operator: "eq" | "contains" | "gt" | "lt" | "is_null" | "not_null";
+  value: string;
+}
+
+export interface TableBrowse {
+  page: number;
+  pageSize: number;
+  filters: TableFilter[];
+  sort: { column: string; direction: "asc" | "desc" } | null;
+}
 
 export interface CellEdit {
   rowIdx: number;
@@ -169,6 +195,20 @@ export const NULL_MARKER = "\u0000NULL";
 export const DEFAULT_MARKER = "\u0000DEFAULT";
 
 export interface QueryTab {
+  kind?: "table" | "query";
+  tableName?: string;
+  objectType?: "table" | "view";
+  preview?: boolean;
+  browse?: TableBrowse;
+  hasMore?: boolean;
+  selectedRows?: number[];
+  deletedRows?: number[];
+  isSaving?: boolean;
+  isLoadingMetadata?: boolean;
+  metadataError?: string | null;
+  error?: string | null;
+  lastExecutedSql?: string;
+  hiddenColumns?: string[];
   id: string;
   title: string;
   sql: string;

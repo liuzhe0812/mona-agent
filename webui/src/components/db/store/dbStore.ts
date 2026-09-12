@@ -4,16 +4,20 @@ import type {
   ConnectionInfo,
   DatabaseObject,
   QueryTab,
-  CellEdit,
   CellValue,
   TableInfo,
   ServerStats,
   ProcessInfo,
   UserInfo,
   DbViewType,
+  TableBrowse,
 } from "../types";
-import { displayCellValue, NULL_MARKER, DEFAULT_MARKER } from "../types";
+import { DEFAULT_MARKER, NULL_MARKER } from "../types";
 import * as ipc from "../ipc";
+import { DEFAULT_BROWSE, buildBrowseSql, buildRowMutation, canEditTable, hasPendingEdits } from "../table-sql";
+import { singleQueryStatement } from "../query-sql";
+
+const treeRequests = new Map<string, number>();
 
 interface DbState {
   savedConnections: DbConnectionConfig[];
@@ -35,6 +39,7 @@ interface DbState {
   connectingId: string | null;
   connectError: string | null;
   agentStreaming: boolean;
+  objectScope: { connectionId: string; database: string; objectType: "table" | "view" } | null;
 
   setAgentStreaming: (streaming: boolean) => void;
 
@@ -45,12 +50,17 @@ interface DbState {
   disconnect: (connectionId: string) => Promise<void>;
   testConnection: (config: DbConnectionConfig) => Promise<string>;
   refreshTree: (connectionId: string) => Promise<void>;
-  selectTable: (connectionId: string, database: string, tableName: string) => Promise<void>;
-  addQueryTab: () => string;
+  openDatabase: (connectionId: string, database: string, objectType?: "table" | "view") => void;
+  selectTable: (connectionId: string, database: string, tableName: string, pinned?: boolean, objectType?: "table" | "view") => Promise<void>;
+  pinTab: (tabId: string) => void;
+  patchTab: (tabId: string, patch: Partial<QueryTab>) => void;
+  browseTable: (tabId: string, patch: Partial<TableBrowse>) => Promise<void>;
+  setQueryTarget: (tabId: string, connectionId: string, database: string | null) => void;
+  addQueryTab: (connectionId?: string, database?: string | null) => string;
   removeQueryTab: (tabId: string) => void;
   setActiveTab: (tabId: string) => void;
   updateTabSql: (tabId: string, sql: string) => void;
-  executeQuery: (tabId: string) => Promise<void>;
+  executeQuery: (tabId: string, sql?: string) => Promise<void>;
   setCurrentView: (view: DbViewType) => void;
   setSelectedConnectionId: (id: string | null) => void;
   setSelectedDatabase: (db: string | null) => void;
@@ -75,7 +85,7 @@ export const useDbStore = create<DbState>((set, get) => ({
   connectionTree: {},
   queryTabs: [],
   activeTabId: null,
-  currentView: "table",
+  currentView: "objects",
   selectedTable: null,
   selectedConnectionId: null,
   selectedDatabase: null,
@@ -89,6 +99,7 @@ export const useDbStore = create<DbState>((set, get) => ({
   connectingId: null,
   connectError: null,
   agentStreaming: false,
+  objectScope: null,
 
   loadSavedConnections: async () => {
     try {
@@ -142,6 +153,7 @@ export const useDbStore = create<DbState>((set, get) => ({
   },
 
   disconnect: async (connectionId) => {
+    treeRequests.set(connectionId, (treeRequests.get(connectionId) ?? 0) + 1);
     try {
       await ipc.dbDisconnect(connectionId);
       set((state) => {
@@ -151,6 +163,7 @@ export const useDbStore = create<DbState>((set, get) => ({
             (c) => c.id !== connectionId,
           ),
           connectionTree: restTree,
+          objectScope: state.objectScope?.connectionId === connectionId ? null : state.objectScope,
           selectedConnectionId:
             state.selectedConnectionId === connectionId
               ? state.activeConnections.find((c) => c.id !== connectionId)?.id ?? null
@@ -167,6 +180,8 @@ export const useDbStore = create<DbState>((set, get) => ({
   },
 
   refreshTree: async (connectionId) => {
+    const request = (treeRequests.get(connectionId) ?? 0) + 1;
+    treeRequests.set(connectionId, request);
     set({ isLoadingTree: true });
     try {
       const databases = await ipc.dbGetDatabases(connectionId);
@@ -230,668 +245,278 @@ export const useDbStore = create<DbState>((set, get) => ({
             }
           }),
       );
-      set((state) => ({
-        connectionTree: { ...state.connectionTree, [connectionId]: tree },
-      }));
-    } catch {
-      // ignore tree refresh errors
+      if (treeRequests.get(connectionId) === request && get().activeConnections.some((c) => c.id === connectionId)) {
+        set((state) => ({ connectionTree: { ...state.connectionTree, [connectionId]: tree } }));
+      }
+    } catch (error) {
+      if (treeRequests.get(connectionId) === request) set({ connectError: `刷新连接失败：${String(error)}` });
     } finally {
       set({ isLoadingTree: false });
     }
   },
 
-  selectTable: async (connectionId, database, tableName) => {
-    set({ isLoadingTable: true, selectedConnectionId: connectionId, selectedDatabase: database, currentView: "table" });
+  openDatabase: (connectionId, database, objectType = "table") => {
+    set({ objectScope: { connectionId, database, objectType }, selectedConnectionId: connectionId,
+      selectedDatabase: database, selectedTable: null, currentView: "objects" });
+  },
 
-    const conn = get().activeConnections.find((c) => c.id === connectionId);
-    const isSqlite = conn?.config.db_type === "sqlite";
-    const sql = isSqlite
-      ? `SELECT * FROM "${tableName}" LIMIT 100`
-      : `SELECT * FROM \`${database}\`.\`${tableName}\` LIMIT 100`;
-    const { queryTabs, activeTabId } = get();
-    let tab = queryTabs.find(
-      (t) => t.connectionId === connectionId && t.database === database && t.sql === sql,
-    );
-    if (!tab) {
-      const id = crypto.randomUUID();
-      tab = {
-        id,
-        title: tableName,
-        sql,
-        result: null,
-        isExecuting: false,
-        connectionId,
-        database,
-        edits: [],
-        insertedRows: [],
-        tableInfo: null,
-        agentChatId: null,
-      };
-      set((state) => ({
-        queryTabs: [...state.queryTabs, tab!],
-        activeTabId: id,
-      }));
-    } else if (activeTabId !== tab.id) {
-      set({ activeTabId: tab.id });
+  patchTab: (tabId, patch) => {
+    set((state) => ({ queryTabs: state.queryTabs.map((tab) => tab.id === tabId ? { ...tab, ...patch } : tab) }));
+  },
+
+  pinTab: (tabId) => get().patchTab(tabId, { preview: false }),
+
+  selectTable: async (connectionId, database, tableName, pinned = false, objectType = "table") => {
+    const existing = get().queryTabs.find((tab) =>
+      tab.kind === "table" && tab.connectionId === connectionId && tab.database === database && tab.tableName === tableName);
+    if (existing) {
+      if (pinned) get().pinTab(existing.id);
+      get().setActiveTab(existing.id);
+      return;
     }
-
+    const tab: QueryTab = {
+      id: crypto.randomUUID(), kind: "table", tableName, objectType, preview: !pinned,
+      title: tableName, sql: "", result: null, connectionId, database, edits: [], insertedRows: [],
+      deletedRows: [], selectedRows: [], tableInfo: null, agentChatId: null, isExecuting: false,
+      browse: { ...DEFAULT_BROWSE, filters: [] }, error: null, isLoadingMetadata: true,
+    };
+    set((state) => ({
+      queryTabs: [...state.queryTabs.filter((t) => !t.preview || hasPendingEdits(t) || t.isExecuting || t.isSaving), tab],
+      activeTabId: tab.id, currentView: "table", selectedConnectionId: connectionId,
+      selectedDatabase: database, selectedTable: null, isLoadingTable: true,
+      objectScope: { connectionId, database, objectType },
+    }));
     try {
       const info = await ipc.dbGetTableInfo(connectionId, database, tableName);
-      set({ selectedTable: info });
-      set((state) => ({
-        queryTabs: state.queryTabs.map((t) =>
-          t.id === tab!.id ? { ...t, tableInfo: info } : t,
-        ),
-      }));
-    } catch {
-      set({ selectedTable: null });
+      get().patchTab(tab.id, { tableInfo: info, isLoadingMetadata: false });
+      if (get().activeTabId === tab.id) set({ selectedTable: info });
+    } catch (error) {
+      // Data remains browsable if metadata access is denied, but editing stays disabled.
+      get().patchTab(tab.id, { metadataError: `无法读取表结构：${String(error)}`, isLoadingMetadata: false });
     }
-
-    get().executeQuery(tab.id);
+    await get().executeQuery(tab.id);
     set({ isLoadingTable: false });
   },
 
-  addQueryTab: () => {
+  addQueryTab: (connectionId, database) => {
     const id = crypto.randomUUID();
+    const active = get().currentView === "table" ? get().queryTabs.find((t) => t.id === get().activeTabId) : undefined;
+    const targetId = connectionId ?? active?.connectionId ?? get().selectedConnectionId;
+    const targetDatabase = connectionId !== undefined ? database ?? null : active?.database ?? get().selectedDatabase;
     const tab: QueryTab = {
-      id,
-      title: "新查询",
-      sql: "",
-      result: null,
-      isExecuting: false,
-      connectionId: get().selectedConnectionId,
-      database: get().selectedDatabase,
-      edits: [],
-      insertedRows: [],
-      tableInfo: null,
-      agentChatId: null,
+      id, kind: "query", title: "新查询", sql: "", result: null, isExecuting: false,
+      connectionId: targetId, database: targetDatabase,
+      edits: [], insertedRows: [], tableInfo: null, agentChatId: null, error: null,
     };
-    set((state) => ({
-      queryTabs: [...state.queryTabs, tab],
-      activeTabId: id,
-      currentView: "table",
-    }));
+    set((state) => ({ queryTabs: [...state.queryTabs, tab], activeTabId: id, currentView: "table", selectedTable: null, selectedConnectionId: targetId, selectedDatabase: targetDatabase }));
     return id;
   },
 
   removeQueryTab: (tabId) => {
-    set((state) => {
-      const tabs = state.queryTabs.filter((t) => t.id !== tabId);
-      return {
-        queryTabs: tabs,
-        activeTabId:
-          state.activeTabId === tabId
-            ? tabs[tabs.length - 1]?.id ?? null
-            : state.activeTabId,
-      };
-    });
+    const tab = get().queryTabs.find((t) => t.id === tabId);
+    if (!tab || hasPendingEdits(tab) || tab.isSaving || tab.isExecuting) return;
+    const tabs = get().queryTabs.filter((t) => t.id !== tabId);
+    set({ queryTabs: tabs });
+    if (get().activeTabId === tabId) {
+      if (tabs.length) get().setActiveTab(tabs[tabs.length - 1].id);
+      else set({ activeTabId: null, currentView: "objects", selectedTable: null });
+    }
   },
 
   setActiveTab: (tabId) => {
-    set({ activeTabId: tabId });
+    const tab = get().queryTabs.find((t) => t.id === tabId);
+    if (!tab) return;
+    set({ activeTabId: tabId, currentView: "table", selectedConnectionId: tab.connectionId,
+      selectedDatabase: tab.database, selectedTable: tab.tableInfo,
+      ...(tab.connectionId && tab.database ? { objectScope: { connectionId: tab.connectionId, database: tab.database, objectType: tab.objectType ?? "table" } } : {}) });
+  },
+
+  setQueryTarget: (tabId, connectionId, database) => {
+    const tab = get().queryTabs.find((t) => t.id === tabId);
+    if (!tab || tab.kind === "table" || tab.isExecuting) return;
+    get().patchTab(tabId, { connectionId, database, result: null, error: null });
+    if (get().activeTabId === tabId) set({ selectedConnectionId: connectionId, selectedDatabase: database });
   },
 
   updateTabSql: (tabId, sql) => {
-    set((state) => ({
-      queryTabs: state.queryTabs.map((t) =>
-        t.id === tabId ? { ...t, sql } : t,
-      ),
-    }));
+    const tab = get().queryTabs.find((t) => t.id === tabId);
+    if (tab?.kind === "table") {
+      // AI drafts and generated SQL open a query; they never change a table browser's identity.
+      const id = get().addQueryTab();
+      get().patchTab(id, { sql, connectionId: tab.connectionId, database: tab.database });
+      return;
+    }
+    get().patchTab(tabId, { sql, preview: false });
   },
 
-  executeQuery: async (tabId) => {
+  browseTable: async (tabId, patch) => {
     const tab = get().queryTabs.find((t) => t.id === tabId);
-    if (!tab || !tab.sql.trim() || !tab.connectionId) return;
-
-    set((state) => ({
-      queryTabs: state.queryTabs.map((t) =>
-        t.id === tabId ? { ...t, isExecuting: true } : t,
-      ),
-    }));
-
-    try {
-      const result = await ipc.dbExecuteQuery(tab.connectionId, tab.sql, undefined, tab.database ?? undefined);
-      if (tab.tableInfo && result.columns.length > 0) {
-        const pkNames = new Set(
-          tab.tableInfo.columns
-            .filter((c) => c.is_primary_key)
-            .map((c) => c.name),
-        );
-        const colTypes = new Map(
-          tab.tableInfo.columns.map((c) => [c.name, c.data_type.toUpperCase()]),
-        );
-        result.columns = result.columns.map((col) => ({
-          ...col,
-          is_primary_key: pkNames.has(col.name),
-          data_type: colTypes.get(col.name) ?? col.data_type,
-        }));
-      }
-
-      // For non-SELECT statements on a table-bound tab, auto-refresh table data
-      const isTableTab = tab.title !== "新查询" && tab.database;
-      if (result.columns.length === 0 && isTableTab) {
-        const conn = get().activeConnections.find((c) => c.id === tab.connectionId);
-        const isSqlite = conn?.config.db_type === "sqlite";
-        const refreshSql = isSqlite
-          ? `SELECT * FROM "${tab.title}" LIMIT 100`
-          : `SELECT * FROM \`${tab.database}\`.\`${tab.title}\` LIMIT 100`;
-        try {
-          const refreshResult = await ipc.dbExecuteQuery(tab.connectionId, refreshSql, undefined, tab.database ?? undefined);
-          if (tab.tableInfo) {
-            const pkNames = new Set(
-              tab.tableInfo.columns
-                .filter((c) => c.is_primary_key)
-                .map((c) => c.name),
-            );
-            const colTypes = new Map(
-              tab.tableInfo.columns.map((c) => [c.name, c.data_type.toUpperCase()]),
-            );
-            refreshResult.columns = refreshResult.columns.map((col) => ({
-              ...col,
-              is_primary_key: pkNames.has(col.name),
-              data_type: colTypes.get(col.name) ?? col.data_type,
-            }));
-          }
-          // Carry over the original DDL/DML execution result
-          refreshResult.message = result.message;
-          refreshResult.affected_rows = result.affected_rows;
-          set((state) => ({
-            queryTabs: state.queryTabs.map((t) =>
-              t.id === tabId ? { ...t, result: refreshResult, isExecuting: false } : t,
-            ),
-          }));
-        } catch {
-          // Refresh failed — keep showing previous table data if any
-          set((state) => ({
-            queryTabs: state.queryTabs.map((t) =>
-              t.id === tabId ? { ...t, isExecuting: false } : t,
-            ),
-          }));
-        }
-      } else {
-        set((state) => ({
-          queryTabs: state.queryTabs.map((t) =>
-            t.id === tabId ? { ...t, result, isExecuting: false } : t,
-          ),
-        }));
-      }
-    } catch (e) {
-      // Don't overwrite table data with error result — keep previous table visible
-      // Error info is available in the message tab
-      set((state) => ({
-        queryTabs: state.queryTabs.map((t) =>
-          t.id === tabId
-            ? {
-                ...t,
-                isExecuting: false,
-                result: t.result
-                  ? { ...t.result, message: String(e) }
-                  : {
-                      columns: [],
-                      rows: [],
-                      affected_rows: 0,
-                      execution_time_ms: 0,
-                      message: String(e),
-                    },
-              }
-            : t,
-        ),
-      }));
+    if (!tab || tab.kind !== "table" || tab.isExecuting || tab.isSaving || hasPendingEdits(tab)) return;
+    get().patchTab(tabId, { browse: { ...(tab.browse ?? DEFAULT_BROWSE), ...patch }, selectedRows: [] });
+    await get().executeQuery(tabId);
+    if (get().queryTabs.find((t) => t.id === tabId)?.error) {
+      get().patchTab(tabId, { browse: tab.browse, sql: tab.sql, hasMore: tab.hasMore });
     }
   },
 
-  setCurrentView: (view) => {
-    set({ currentView: view });
+  executeQuery: async (tabId, sqlOverride) => {
+    const tab = get().queryTabs.find((t) => t.id === tabId);
+    if (!tab || !tab.connectionId || tab.isExecuting || tab.isSaving || hasPendingEdits(tab)) return;
+    const conn = get().activeConnections.find((c) => c.id === tab.connectionId);
+    if (!conn) { get().patchTab(tabId, { error: "连接已断开，请重新连接后执行。" }); return; }
+    const sqlite = conn.config.db_type === "sqlite";
+    let sql: string;
+    try {
+      if (tab.kind !== "table" && !(sqlOverride ?? tab.sql).trim()) return;
+      sql = tab.kind === "table" ? buildBrowseSql(tab, sqlite) : singleQueryStatement(sqlOverride ?? tab.sql, sqlite);
+    } catch (error) {
+      get().patchTab(tabId, { error: String(error) });
+      return;
+    }
+    if (!sql.trim()) return;
+    get().patchTab(tabId, { isExecuting: true, error: null, lastExecutedSql: sql,
+      ...(tab.kind === "table" ? { sql } : {}) });
+    try {
+      const result = await ipc.dbExecuteQuery(tab.connectionId, sql, tab.kind === "table" ? (tab.browse?.pageSize ?? 100) + 1 : undefined, tab.database ?? undefined);
+      const pageSize = tab.browse?.pageSize ?? 100;
+      const hasMore = tab.kind === "table" && result.rows.length > pageSize;
+      if (tab.kind === "table") {
+        result.rows = result.rows.slice(0, pageSize);
+        if (!result.columns.length && tab.tableInfo) result.columns = tab.tableInfo.columns.map((col) => ({
+          name: col.name, data_type: col.data_type, nullable: col.nullable, is_primary_key: col.is_primary_key, is_auto_increment: col.is_auto_increment,
+        }));
+        result.columns = result.columns.map((col) => {
+          const info = tab.tableInfo?.columns.find((c) => c.name === col.name);
+          return info ? { ...col, is_primary_key: info.is_primary_key, is_auto_increment: info.is_auto_increment, data_type: info.data_type } : col;
+        });
+      }
+      get().patchTab(tabId, { result, hasMore, isExecuting: false, selectedRows: [] });
+    } catch (error) {
+      get().patchTab(tabId, { isExecuting: false, error: String(error) });
+    }
   },
 
-  setSelectedConnectionId: (id) => {
-    set({ selectedConnectionId: id });
-  },
-
-  setSelectedDatabase: (db) => {
-    set({ selectedDatabase: db });
-  },
-
-  setNewConnectionDialogOpen: (open) => {
-    set({ newConnectionDialogOpen: open });
-  },
-
-  setEditConnectionConfig: (config) => {
-    set({ editConnectionConfig: config });
-  },
-
-  setConnectError: (error) => {
-    set({ connectError: error });
-  },
-
-  setAgentStreaming: (streaming) => {
-    set({ agentStreaming: streaming });
-  },
+  setCurrentView: (view) => set({ currentView: view }),
+  setSelectedConnectionId: (id) => set({ selectedConnectionId: id }),
+  setSelectedDatabase: (db) => set({ selectedDatabase: db }),
+  setNewConnectionDialogOpen: (open) => set({ newConnectionDialogOpen: open }),
+  setEditConnectionConfig: (config) => set({ editConnectionConfig: config }),
+  setConnectError: (error) => set({ connectError: error }),
+  setAgentStreaming: (streaming) => set({ agentStreaming: streaming }),
 
   refreshServerStats: async (connectionId) => {
-    try {
-      const stats = await ipc.dbGetServerStats(connectionId);
-      set({ serverStats: stats });
-    } catch {
-      set({ serverStats: null });
-    }
+    try { set({ serverStats: await ipc.dbGetServerStats(connectionId) }); }
+    catch { set({ serverStats: null }); }
   },
-
   refreshProcesses: async (connectionId) => {
-    try {
-      const processes = await ipc.dbGetProcesses(connectionId);
-      set({ processes });
-    } catch {
-      set({ processes: [] });
-    }
+    try { set({ processes: await ipc.dbGetProcesses(connectionId) }); }
+    catch { set({ processes: [] }); }
   },
-
   refreshUsers: async (connectionId) => {
-    try {
-      const users = await ipc.dbGetUsers(connectionId);
-      set({ users });
-    } catch {
-      set({ users: [] });
-    }
+    try { set({ users: await ipc.dbGetUsers(connectionId) }); }
+    catch { set({ users: [] }); }
   },
-
   killProcess: async (connectionId, processId) => {
-    try {
-      await ipc.dbKillProcess(connectionId, processId);
-      await get().refreshProcesses(connectionId);
-    } catch {
-      // ignore
-    }
+    try { await ipc.dbKillProcess(connectionId, processId); await get().refreshProcesses(connectionId); }
+    catch (error) { set({ connectError: String(error) }); }
   },
 
   updateCell: (tabId, rowIdx, colIdx, newValue) => {
-    set((state) => ({
-      queryTabs: state.queryTabs.map((t) => {
-        if (t.id !== tabId || !t.result) return t;
-        const oldValue = t.result.rows[rowIdx][colIdx];
-        const existing = t.edits.find(
-          (e) => e.rowIdx === rowIdx && e.colIdx === colIdx,
-        );
-        const edits = existing
-          ? t.edits.map((e) =>
-              e.rowIdx === rowIdx && e.colIdx === colIdx
-                ? { ...e, newValue }
-                : e,
-            )
-          : [...t.edits, { rowIdx, colIdx, oldValue, newValue }];
-        return { ...t, edits };
-      }),
-    }));
+    const tab = get().queryTabs.find((t) => t.id === tabId);
+    if (!tab?.result || !canEditTable(tab) || tab.isSaving || tab.isExecuting || tab.deletedRows?.includes(rowIdx)) return;
+    const oldValue = tab.result.rows[rowIdx]?.[colIdx];
+    if (!oldValue || oldValue.type === "blob") return;
+    const edits = tab.edits.filter((e) => e.rowIdx !== rowIdx || e.colIdx !== colIdx);
+    edits.push({ rowIdx, colIdx, oldValue, newValue });
+    get().patchTab(tabId, { edits, preview: false });
   },
 
   revertCell: (tabId, rowIdx, colIdx) => {
-    set((state) => ({
-      queryTabs: state.queryTabs.map((t) => {
-        if (t.id !== tabId) return t;
-        return {
-          ...t,
-          edits: t.edits.filter(
-            (e) => !(e.rowIdx === rowIdx && e.colIdx === colIdx),
-          ),
-        };
-      }),
-    }));
+    const tab = get().queryTabs.find((t) => t.id === tabId);
+    if (!tab || tab.isSaving) return;
+    get().patchTab(tabId, { edits: tab.edits.filter((e) => e.rowIdx !== rowIdx || e.colIdx !== colIdx) });
   },
 
   revertAllEdits: (tabId) => {
-    set((state) => ({
-      queryTabs: state.queryTabs.map((t) => {
-        if (t.id !== tabId || !t.result) return t;
-        // 移除所有前端插入的行
-        const insertedSet = new Set(t.insertedRows);
-        const newRows = t.result.rows.filter((_, i) => !insertedSet.has(i));
-        return { ...t, edits: [], insertedRows: [], result: { ...t.result, rows: newRows } };
-      }),
-    }));
+    const tab = get().queryTabs.find((t) => t.id === tabId);
+    if (!tab?.result || tab.isSaving) return;
+    get().patchTab(tabId, {
+      result: { ...tab.result, rows: tab.result.rows.filter((_, i) => !tab.insertedRows.includes(i)) },
+      edits: [], insertedRows: [], deletedRows: [], selectedRows: [], error: null,
+    });
   },
 
   saveEdits: async (tabId) => {
     const tab = get().queryTabs.find((t) => t.id === tabId);
-    if (!tab || !tab.connectionId || !tab.result || tab.edits.length === 0) return;
-
+    if (!tab?.connectionId || !tab.result || !canEditTable(tab) || !hasPendingEdits(tab) || tab.isSaving || tab.isExecuting) return;
     const conn = get().activeConnections.find((c) => c.id === tab.connectionId);
-    const isSqlite = conn?.config.db_type === "sqlite";
-
-    let pkCols: { name: string; idx: number }[] = [];
-    const colTypeMap = new Map<string, string>();
-
-    if (tab.result.columns.some((c) => c.is_primary_key)) {
-      pkCols = tab.result.columns
-        .map((c, i) => ({ name: c.name, idx: i }))
-        .filter((c) => tab.result!.columns[c.idx].is_primary_key);
-    }
-
-    if (pkCols.length === 0 && tab.connectionId && tab.database) {
+    if (!conn) { get().patchTab(tabId, { error: "连接已断开，修改尚未保存。" }); return; }
+    const sqlite = conn.config.db_type === "sqlite";
+    const rows = [...new Set([...tab.edits.map((e) => e.rowIdx), ...tab.insertedRows, ...(tab.deletedRows ?? [])])].sort((a, b) => a - b);
+    get().patchTab(tabId, { isSaving: true, error: null });
+    const completed = new Set<number>();
+    let error: string | null = null;
+    for (const rowIdx of rows) {
       try {
-        const pkSql = isSqlite
-          ? `PRAGMA table_info("${tab.title}")`
-          : `SHOW COLUMNS FROM \`${tab.database}\`.\`${tab.title}\` WHERE \`Key\` = 'PRI'`;
-        const pkResult = await ipc.dbExecuteQuery(tab.connectionId, pkSql, undefined, tab.database ?? undefined);
-        const pkNames = new Set<string>();
-        for (const row of pkResult.rows) {
-          const nameCell = isSqlite ? row[1] : row[0];
-          if (nameCell.type !== "null") pkNames.add(displayCellValue(nameCell));
+        const sql = buildRowMutation(tab, rowIdx, sqlite);
+        const result = await ipc.dbExecuteQuery(tab.connectionId, sql, undefined, tab.database ?? undefined);
+        if (!tab.insertedRows.includes(rowIdx) && result.affected_rows === 0) {
+          throw new Error("记录已变化或不存在，请核对后重试。");
         }
-        for (let i = 0; i < tab.result.columns.length; i++) {
-          if (pkNames.has(tab.result.columns[i].name)) {
-            pkCols.push({ name: tab.result.columns[i].name, idx: i });
-          }
-        }
+        completed.add(rowIdx);
       } catch (e) {
-        console.error("[saveEdits] Failed to get primary key columns:", e);
+        error = `保存失败（第 ${rowIdx + 1} 行）：${String(e)}。已完成 ${completed.size} 行，未完成的修改已保留。`;
+        break;
       }
     }
-
-    if (tab.connectionId && tab.database) {
-      try {
-        const colSql = isSqlite
-          ? `PRAGMA table_info("${tab.title}")`
-          : `SHOW COLUMNS FROM \`${tab.database}\`.\`${tab.title}\``;
-        const colResult = await ipc.dbExecuteQuery(tab.connectionId, colSql, undefined, tab.database ?? undefined);
-        for (const row of colResult.rows) {
-          const nameCell = isSqlite ? row[1] : row[0];
-          const typeCell = isSqlite ? row[2] : row[1];
-          if (nameCell.type === "null" || typeCell.type === "null") continue;
-          const name = displayCellValue(nameCell);
-          const typeStr = displayCellValue(typeCell).toUpperCase();
-          colTypeMap.set(name, typeStr);
-        }
-      } catch (e) {
-        console.error("[saveEdits] Failed to get column types:", e);
-      }
-    }
-    for (const c of tab.result.columns) {
-      if (!colTypeMap.has(c.name)) {
-        colTypeMap.set(c.name, c.data_type.toUpperCase());
-      }
-    }
-
-    const numericTypes = new Set([
-      "INT", "INTEGER", "TINYINT", "SMALLINT", "MEDIUMINT", "BIGINT",
-      "FLOAT", "DOUBLE", "DECIMAL", "NUMERIC", "REAL",
-    ]);
-    const isNumericCol = (colIdx: number) => {
-      const col = tab.result!.columns[colIdx];
-      if (!col) return false;
-      const dt = colTypeMap.get(col.name) ?? col.data_type.toUpperCase();
-      return numericTypes.has(dt) || dt.startsWith("INT") || dt.startsWith("DECIMAL") || dt.startsWith("FLOAT") || dt.startsWith("DOUBLE");
-    };
-
-    const formatValue = (val: string, colIdx: number) => {
-      if (val === NULL_MARKER) return "NULL";
-      if (val === DEFAULT_MARKER) return "DEFAULT";
-      if (val === "") return "''";
-      if (isNumericCol(colIdx) && /^-?\d+(\.\d+)?$/.test(val)) return val;
-      return `'${val.replace(/'/g, "''")}'`;
-    };
-
-    const formatCellValue = (cell: CellValue) => {
-      if (cell.type === "null") return "NULL";
-      if (cell.type === "bool") return cell.value ? "1" : "0";
-      if (cell.type === "integer" || cell.type === "float") {
-        return String(cell.value);
-      }
-      if (cell.type === "blob") {
-        const hex = cell.value;
-        return isSqlite ? `X'${hex}'` : `UNHEX('${hex}')`;
-      }
-      return `'${String(cell.value).replace(/'/g, "''")}'`;
-    };
-
-    const rowEdits = new Map<number, CellEdit[]>();
-    for (const edit of tab.edits) {
-      const list = rowEdits.get(edit.rowIdx) ?? [];
-      list.push(edit);
-      rowEdits.set(edit.rowIdx, list);
-    }
-
-    try {
-      const insertedRowSet = new Set(tab.insertedRows);
-
-      for (const [rowIdx, edits] of rowEdits) {
-        const row = tab.result.rows[rowIdx];
-
-        if (insertedRowSet.has(rowIdx)) {
-          // 新插入行：执行 INSERT
-          const colParts: string[] = [];
-          const valParts: string[] = [];
-          for (const e of edits) {
-            const colName = tab.result!.columns[e.colIdx].name;
-            const val = formatValue(e.newValue, e.colIdx);
-            colParts.push(isSqlite ? `"${colName}"` : `\`${colName}\``);
-            valParts.push(val);
-          }
-          const tableName = tab.title;
-          const sql = isSqlite
-            ? `INSERT INTO "${tableName}" (${colParts.join(", ")}) VALUES (${valParts.join(", ")})`
-            : `INSERT INTO \`${tab.database}\`.\`${tableName}\` (${colParts.join(", ")}) VALUES (${valParts.join(", ")})`;
-          await ipc.dbExecuteQuery(tab.connectionId, sql, undefined, tab.database ?? undefined);
-          continue;
-        }
-
-        // 已存在行：执行 UPDATE
-        const setClauses = edits.map((e) => {
-          const colName = tab.result!.columns[e.colIdx].name;
-          const val = formatValue(e.newValue, e.colIdx);
-          return isSqlite
-            ? `"${colName}" = ${val}`
-            : `\`${colName}\` = ${val}`;
-        });
-
-        let whereClause: string;
-        if (pkCols.length > 0) {
-          whereClause = pkCols
-            .map((pk) => {
-              const cell = row[pk.idx];
-              const val = formatCellValue(cell);
-              const q = isSqlite ? `"${pk.name}"` : `\`${pk.name}\``;
-              return cell.type === "null" ? `${q} IS NULL` : `${q} = ${val}`;
-            })
-            .join(" AND ");
-        } else {
-          whereClause = tab.result.columns
-            .map((col, i) => {
-              const cell = row[i];
-              const val = formatCellValue(cell);
-              const q = isSqlite ? `"${col.name}"` : `\`${col.name}\``;
-              return cell.type === "null" ? `${q} IS NULL` : `${q} = ${val}`;
-            })
-            .join(" AND ");
-        }
-
-        const tableName = tab.title;
-        const setStr = setClauses.join(", ");
-        const sql = isSqlite
-          ? `UPDATE "${tableName}" SET ${setStr} WHERE ${whereClause}`
-          : `UPDATE \`${tab.database}\`.\`${tableName}\` SET ${setStr} WHERE ${whereClause}`;
-
-        const updateResult = await ipc.dbExecuteQuery(tab.connectionId, sql, undefined, tab.database ?? undefined);
-        if (updateResult.affected_rows === 0) {
-          throw new Error(`UPDATE 未影响任何行，可能 WHERE 条件未匹配到数据。SQL: ${sql}`);
-        }
-      }
-
-      set((state) => ({
-        queryTabs: state.queryTabs.map((t) =>
-          t.id === tabId ? { ...t, edits: [], insertedRows: [] } : t,
-        ),
-      }));
-
+    // Remove successful inserts/deletes from the displayed snapshot so retries cannot duplicate them.
+    const removed = new Set([...completed].filter((i) => tab.insertedRows.includes(i) || tab.deletedRows?.includes(i)));
+    const remap = (i: number) => i - [...removed].filter((r) => r < i).length;
+    const updatedRows = tab.result.rows.map((row, i) => {
+      if (!completed.has(i)) return row;
+      return row.map((cell, j): CellValue => {
+        const edit = tab.edits.find((e) => e.rowIdx === i && e.colIdx === j);
+        if (!edit) return cell;
+        if (edit.newValue === NULL_MARKER || edit.newValue === DEFAULT_MARKER) return { type: "null" };
+        return { type: "text", value: edit.newValue };
+      });
+    }).filter((_, i) => !removed.has(i));
+    get().patchTab(tabId, {
+      isSaving: false, error, result: { ...tab.result, rows: updatedRows },
+      edits: tab.edits.filter((e) => !completed.has(e.rowIdx)).map((e) => ({ ...e, rowIdx: remap(e.rowIdx) })),
+      insertedRows: tab.insertedRows.filter((i) => !completed.has(i)).map(remap),
+      deletedRows: (tab.deletedRows ?? []).filter((i) => !completed.has(i)).map(remap),
+      selectedRows: [],
+    });
+    if (!error) {
       await get().executeQuery(tabId);
-    } catch (e) {
-      set((state) => ({
-        queryTabs: state.queryTabs.map((t) =>
-          t.id === tabId
-            ? {
-                ...t,
-                result: t.result
-                  ? { ...t.result, message: `保存失败: ${String(e)}` }
-                  : {
-                      columns: [],
-                      rows: [],
-                      affected_rows: 0,
-                      execution_time_ms: 0,
-                      message: `保存失败: ${String(e)}`,
-                    },
-              }
-            : t,
-        ),
-      }));
+      await get().refreshTree(tab.connectionId);
     }
   },
 
   insertRow: (tabId) => {
     const tab = get().queryTabs.find((t) => t.id === tabId);
-    if (!tab || !tab.result || !tab.database || tab.title === "新查询") return;
-
-    const newRowIdx = tab.result.rows.length;
-    const nullCells: CellValue[] = tab.result.columns.map(() => ({ type: "null" as const }));
-
-    set((state) => ({
-      queryTabs: state.queryTabs.map((t) =>
-        t.id === tabId && t.result
-          ? {
-              ...t,
-              result: {
-                ...t.result,
-                rows: [...t.result.rows, nullCells],
-              },
-              insertedRows: [...t.insertedRows, newRowIdx],
-            }
-          : t,
-      ),
-    }));
+    if (!tab?.result || !canEditTable(tab) || tab.isSaving || tab.isExecuting) return;
+    const idx = tab.result.rows.length;
+    get().patchTab(tabId, { preview: false,
+      result: { ...tab.result, rows: [...tab.result.rows, tab.result.columns.map((): CellValue => ({ type: "null" }))] },
+      insertedRows: [...tab.insertedRows, idx], selectedRows: [idx],
+    });
   },
 
   deleteRow: async (tabId, rowIdx) => {
     const tab = get().queryTabs.find((t) => t.id === tabId);
-    if (!tab || !tab.connectionId || !tab.database || !tab.result) return;
-
-    // 前端插入的未保存行：直接从前端移除
+    if (!tab?.result || !canEditTable(tab) || tab.isSaving || tab.isExecuting) return;
     if (tab.insertedRows.includes(rowIdx)) {
-      set((state) => ({
-        queryTabs: state.queryTabs.map((t) => {
-          if (t.id !== tabId || !t.result) return t;
-          const newRows = t.result.rows.filter((_, i) => i !== rowIdx);
-          const newInsertedRows = t.insertedRows
-            .filter((i) => i !== rowIdx)
-            .map((i) => (i > rowIdx ? i - 1 : i));
-          const newEdits = t.edits
-            .filter((e) => e.rowIdx !== rowIdx)
-            .map((e) => (e.rowIdx > rowIdx ? { ...e, rowIdx: e.rowIdx - 1 } : e));
-          return {
-            ...t,
-            result: { ...t.result, rows: newRows },
-            insertedRows: newInsertedRows,
-            edits: newEdits,
-          };
-        }),
-      }));
+      const remap = (i: number) => i > rowIdx ? i - 1 : i;
+      get().patchTab(tabId, {
+        result: { ...tab.result, rows: tab.result.rows.filter((_, i) => i !== rowIdx) },
+        insertedRows: tab.insertedRows.filter((i) => i !== rowIdx).map(remap),
+        edits: tab.edits.filter((e) => e.rowIdx !== rowIdx).map((e) => ({ ...e, rowIdx: remap(e.rowIdx) })),
+        deletedRows: tab.deletedRows?.map(remap), selectedRows: [],
+      });
       return;
     }
-
-    const conn = get().activeConnections.find((c) => c.id === tab.connectionId);
-    const isSqlite = conn?.config.db_type === "sqlite";
-    const tableName = tab.title;
-    const row = tab.result.rows[rowIdx];
-    if (!row) return;
-
-    const formatCellValue = (cell: CellValue) => {
-      if (cell.type === "null") return "NULL";
-      if (cell.type === "bool") return cell.value ? "1" : "0";
-      if (cell.type === "integer" || cell.type === "float") {
-        return String(cell.value);
-      }
-      if (cell.type === "blob") {
-        const hex = cell.value;
-        return isSqlite ? `X'${hex}'` : `UNHEX('${hex}')`;
-      }
-      return `'${String(cell.value).replace(/'/g, "''")}'`;
-    };
-
-    let pkCols: { name: string; idx: number }[] = [];
-    if (tab.result.columns.some((c) => c.is_primary_key)) {
-      pkCols = tab.result.columns
-        .map((c, i) => ({ name: c.name, idx: i }))
-        .filter((c) => tab.result!.columns[c.idx].is_primary_key);
-    }
-
-    if (pkCols.length === 0 && tab.connectionId && tab.database) {
-      try {
-        const pkSql = isSqlite
-          ? `PRAGMA table_info("${tab.title}")`
-          : `SHOW COLUMNS FROM \`${tab.database}\`.\`${tab.title}\` WHERE \`Key\` = 'PRI'`;
-        const pkResult = await ipc.dbExecuteQuery(tab.connectionId, pkSql, undefined, tab.database ?? undefined);
-        const pkNames = new Set<string>();
-        for (const r of pkResult.rows) {
-          const nameCell = isSqlite ? r[1] : r[0];
-          if (nameCell.type !== "null") pkNames.add(displayCellValue(nameCell));
-        }
-        for (let i = 0; i < tab.result.columns.length; i++) {
-          if (pkNames.has(tab.result.columns[i].name)) {
-            pkCols.push({ name: tab.result.columns[i].name, idx: i });
-          }
-        }
-      } catch (e) {
-        console.error("[deleteRow] Failed to get primary key columns:", e);
-      }
-    }
-
-    let whereClause: string;
-    if (pkCols.length > 0) {
-      whereClause = pkCols
-        .map((pk) => {
-          const cell = row[pk.idx];
-          const val = formatCellValue(cell);
-          const q = isSqlite ? `"${pk.name}"` : `\`${pk.name}\``;
-          return cell.type === "null" ? `${q} IS NULL` : `${q} = ${val}`;
-        })
-        .join(" AND ");
-    } else {
-      whereClause = tab.result.columns
-        .map((col, i) => {
-          const cell = row[i];
-          const val = formatCellValue(cell);
-          const q = isSqlite ? `"${col.name}"` : `\`${col.name}\``;
-          return cell.type === "null" ? `${q} IS NULL` : `${q} = ${val}`;
-        })
-        .join(" AND ");
-    }
-
-    const sql = isSqlite
-      ? `DELETE FROM "${tableName}" WHERE ${whereClause}`
-      : `DELETE FROM \`${tab.database}\`.\`${tableName}\` WHERE ${whereClause}`;
-
-    try {
-      const result = await ipc.dbExecuteQuery(tab.connectionId, sql, undefined, tab.database ?? undefined);
-      if (result.affected_rows === 0) {
-        throw new Error(`DELETE 未影响任何行，可能 WHERE 条件未匹配到数据。SQL: ${sql}`);
-      }
-      await get().executeQuery(tabId);
-    } catch (e) {
-      set((state) => ({
-        queryTabs: state.queryTabs.map((t) =>
-          t.id === tabId
-            ? {
-                ...t,
-                result: t.result
-                  ? { ...t.result, message: `删除失败: ${String(e)}` }
-                  : {
-                      columns: [],
-                      rows: [],
-                      affected_rows: 0,
-                      execution_time_ms: 0,
-                      message: `删除失败: ${String(e)}`,
-                    },
-              }
-            : t,
-        ),
-      }));
-    }
+    get().patchTab(tabId, { preview: false, deletedRows: [...new Set([...(tab.deletedRows ?? []), rowIdx])] });
   },
 }));

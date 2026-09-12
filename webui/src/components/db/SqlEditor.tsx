@@ -1,140 +1,66 @@
-import { useRef, useEffect } from "react";
+import { forwardRef, useEffect, useImperativeHandle, useRef } from "react";
 import { EditorView, keymap, lineNumbers, highlightActiveLine } from "@codemirror/view";
-import { EditorState } from "@codemirror/state";
-import { sql } from "@codemirror/lang-sql";
-import { oneDark } from "@codemirror/theme-one-dark";
+import { Compartment, EditorState } from "@codemirror/state";
+import { sql, MySQL, SQLite } from "@codemirror/lang-sql";
 import { defaultKeymap, history, historyKeymap } from "@codemirror/commands";
+import { defaultHighlightStyle, syntaxHighlighting } from "@codemirror/language";
 import { useDbStore } from "./store/dbStore";
-import { EmptyState } from "@/components/ui/empty-state";
+import type { QueryTab } from "./types";
 
-const customTheme = EditorView.theme({
-  "&": {
-    fontSize: "13px",
-    lineHeight: "1.6",
-    height: "100%",
-  },
-  ".cm-content": {
-    fontFamily: "'JetBrains Mono', 'Fira Code', 'Cascadia Code', Consolas, monospace",
-    padding: "12px 14px",
-    caretColor: "hsl(210, 80%, 55%)",
-  },
-  ".cm-focused": {
-    outline: "none",
-  },
-  ".cm-gutters": {
-    backgroundColor: "transparent",
-    borderRight: "none",
-    color: "hsl(0, 0%, 60%)",
-    fontSize: "11px",
-  },
-  ".cm-activeLineGutter": {
-    backgroundColor: "transparent",
-  },
-  ".cm-cursor": {
-    borderLeftColor: "hsl(210, 80%, 55%)",
-    borderLeftWidth: "2px",
-  },
-  ".cm-selectionBackground, &.cm-focused .cm-selectionBackground": {
-    backgroundColor: "hsl(210, 80%, 55%, 0.2) !important",
-  },
+export interface SqlEditorHandle { selectedSql: () => string }
+export const SqlEditor = forwardRef<SqlEditorHandle, { tab: QueryTab }>(({ tab }, ref) => {
+  const host = useRef<HTMLDivElement>(null);
+  const view = useRef<EditorView | null>(null);
+  const tabRef = useRef(tab);
+  tabRef.current = tab;
+  const dialect = useRef(new Compartment());
+  const connection = useDbStore((s) => s.activeConnections.find((c) => c.id === tab.connectionId));
+  const selectedSql = () => {
+    const editor = view.current;
+    if (!editor) return tabRef.current.sql;
+    const selection = editor.state.selection.main;
+    return selection.empty ? editor.state.doc.toString() : editor.state.sliceDoc(selection.from, selection.to);
+  };
+  useImperativeHandle(ref, () => ({ selectedSql }));
+
+  useEffect(() => {
+    if (!host.current) return;
+    const editor = new EditorView({
+      parent: host.current,
+      state: EditorState.create({
+        doc: tabRef.current.sql,
+        extensions: [
+          lineNumbers(), highlightActiveLine(), history(),
+          dialect.current.of(sql({ dialect: connection?.config.db_type === "sqlite" ? SQLite : MySQL })),
+          syntaxHighlighting(defaultHighlightStyle),
+          EditorView.theme({
+            "&": { height: "100%", fontSize: "inherit", backgroundColor: "hsl(var(--background))", color: "hsl(var(--foreground))" },
+            ".cm-content": { fontFamily: "var(--font-mono, monospace)", padding: "8px 0", caretColor: "hsl(var(--foreground))" },
+            ".cm-scroller": { overflow: "auto", fontFamily: "var(--font-mono, monospace)" },
+            ".cm-gutters": { backgroundColor: "hsl(var(--muted))", color: "hsl(var(--muted-foreground))", border: "none" },
+            ".cm-activeLine, .cm-activeLineGutter": { backgroundColor: "hsl(var(--muted) / .5)" },
+            ".cm-cursor": { borderLeftColor: "hsl(var(--foreground))" },
+            "&.cm-focused .cm-selectionBackground, .cm-selectionBackground": { backgroundColor: "hsl(var(--muted))" },
+          }),
+          EditorView.contentAttributes.of({ "aria-label": "SQL 编辑器" }),
+          keymap.of([{ key: "Mod-Enter", run: () => { void useDbStore.getState().executeQuery(tabRef.current.id, selectedSql()); return true; } }, ...defaultKeymap, ...historyKeymap]),
+          EditorView.updateListener.of((update) => {
+            if (update.docChanged) useDbStore.getState().updateTabSql(tabRef.current.id, update.state.doc.toString());
+          }),
+        ],
+      }),
+    });
+    view.current = editor;
+    return () => { editor.destroy(); view.current = null; };
+  }, [tab.id]);
+
+  useEffect(() => {
+    const editor = view.current;
+    if (editor && editor.state.doc.toString() !== tab.sql) editor.dispatch({ changes: { from: 0, to: editor.state.doc.length, insert: tab.sql } });
+  }, [tab.sql]);
+  useEffect(() => {
+    view.current?.dispatch({ effects: dialect.current.reconfigure(sql({ dialect: connection?.config.db_type === "sqlite" ? SQLite : MySQL })) });
+  }, [connection?.config.db_type]);
+  return <div ref={host} className="h-full min-h-0 overflow-hidden text-caption" />;
 });
-
-export function SqlEditor() {
-  const activeTabId = useDbStore((s) => s.activeTabId);
-  const queryTabs = useDbStore((s) => s.queryTabs);
-  const updateTabSql = useDbStore((s) => s.updateTabSql);
-  const executeQuery = useDbStore((s) => s.executeQuery);
-  const activeTab = queryTabs.find((t) => t.id === activeTabId);
-  const editorRef = useRef<HTMLDivElement>(null);
-  const viewRef = useRef<EditorView | null>(null);
-  const tabIdRef = useRef<string | null>(null);
-
-  useEffect(() => {
-    if (!editorRef.current) return;
-
-    const state = EditorState.create({
-      doc: activeTab?.sql ?? "",
-      extensions: [
-        lineNumbers(),
-        highlightActiveLine(),
-        history(),
-        keymap.of([...defaultKeymap, ...historyKeymap]),
-        sql(),
-        customTheme,
-        oneDark,
-        EditorView.updateListener.of((update) => {
-          if (update.docChanged) {
-            const tabId = tabIdRef.current;
-            if (tabId) {
-              updateTabSql(tabId, update.state.doc.toString());
-            }
-          }
-        }),
-        keymap.of([
-          {
-            key: "Ctrl-Enter",
-            run: () => {
-              const tabId = tabIdRef.current;
-              if (tabId) executeQuery(tabId);
-              return true;
-            },
-          },
-          {
-            key: "Cmd-Enter",
-            run: () => {
-              const tabId = tabIdRef.current;
-              if (tabId) executeQuery(tabId);
-              return true;
-            },
-          },
-        ]),
-        EditorView.lineWrapping,
-      ],
-    });
-
-    const view = new EditorView({
-      state,
-      parent: editorRef.current,
-    });
-
-    viewRef.current = view;
-    tabIdRef.current = activeTabId ?? null;
-
-    return () => {
-      view.destroy();
-      viewRef.current = null;
-    };
-  }, [activeTabId]);
-
-  useEffect(() => {
-    const view = viewRef.current;
-    if (!view || !activeTab) return;
-
-    const currentDoc = view.state.doc.toString();
-    if (currentDoc !== activeTab.sql) {
-      view.dispatch({
-        changes: {
-          from: 0,
-          to: currentDoc.length,
-          insert: activeTab.sql,
-        },
-      });
-    }
-  }, [activeTab?.sql]);
-
-  if (!activeTab) {
-    return (
-      <EmptyState className="h-full" title="选择或新建一个查询标签" />
-    );
-  }
-
-  return (
-    <div className="flex h-full flex-col">
-      <div ref={editorRef} className="flex-1 overflow-hidden" />
-      <div className="flex items-center justify-between border-t border-border bg-card px-3.5 py-1 text-micro text-muted-foreground">
-        <span>Ctrl+Enter 执行</span>
-        <span>UTF-8 | SQL</span>
-      </div>
-    </div>
-  );
-}
+SqlEditor.displayName = "SqlEditor";

@@ -153,7 +153,10 @@ fn execute_sqlite(
 
     if is_select {
         let limit_val = limit.unwrap_or(1000);
-        let limited_sql = if trimmed.contains("LIMIT") {
+        let limited_sql = if trimmed.contains("LIMIT")
+            || trimmed.starts_with("PRAGMA")
+            || trimmed.starts_with("EXPLAIN")
+        {
             sql.to_string()
         } else {
             format!("{} LIMIT {}", sql.trim().trim_end_matches(';'), limit_val)
@@ -263,6 +266,18 @@ async fn execute_mysql(
         || trimmed.starts_with("EXPLAIN")
         || trimmed.starts_with("WITH");
 
+    let mut connection = pool
+        .acquire()
+        .await
+        .map_err(|e| DbError::Mysql(format!("Failed to acquire connection: {}", e)))?;
+    if let Some(db) = database {
+        let use_sql = format!("USE {}", quote_mysql_identifier(db));
+        sqlx::query(&use_sql)
+            .execute(&mut *connection)
+            .await
+            .map_err(|e| DbError::Mysql(format!("Failed to USE {}: {}", db, e)))?;
+    }
+
     if is_select {
         let limit_val = limit.unwrap_or(1000);
         let limited_sql = if trimmed.contains("LIMIT") || trimmed.starts_with("SHOW") || trimmed.starts_with("DESCRIBE") {
@@ -271,22 +286,10 @@ async fn execute_mysql(
             format!("{} LIMIT {}", sql.trim().trim_end_matches(';'), limit_val)
         };
 
-        let rows_raw = if let Some(db) = database {
-            let use_sql = format!("USE `{}`", db);
-            sqlx::query(&use_sql)
-                .execute(pool)
-                .await
-                .map_err(|e| DbError::Mysql(format!("Failed to USE {}: {}", db, e)))?;
-            sqlx::query(&limited_sql)
-                .fetch_all(pool)
-                .await
-                .map_err(|e| DbError::Mysql(e.to_string()))?
-        } else {
-            sqlx::query(&limited_sql)
-                .fetch_all(pool)
-                .await
-                .map_err(|e| DbError::Mysql(e.to_string()))?
-        };
+        let rows_raw = sqlx::query(&limited_sql)
+            .fetch_all(&mut *connection)
+            .await
+            .map_err(|e| DbError::Mysql(e.to_string()))?;
 
         let columns: Vec<ColumnInfo> = if let Some(row) = rows_raw.first() {
             let col_count = row.columns().len();
@@ -327,7 +330,7 @@ async fn execute_mysql(
         })
     } else {
         let result = sqlx::query(sql)
-            .execute(pool)
+            .execute(&mut *connection)
             .await
             .map_err(|e| DbError::Mysql(e.to_string()))?;
 
@@ -340,6 +343,10 @@ async fn execute_mysql(
             message: Some(format!("{} row(s) affected", result.rows_affected())),
         })
     }
+}
+
+fn quote_mysql_identifier(identifier: &str) -> String {
+    format!("`{}`", identifier.replace('`', "``"))
 }
 
 fn mysql_cell_value(row: &sqlx::mysql::MySqlRow, idx: usize) -> CellValue {
@@ -685,9 +692,17 @@ pub async fn get_databases_on_handle(
             tokio::task::spawn_blocking(move || {
                 let conn = conn.lock()
                     .map_err(|e| DbError::ConnectionFailed(format!("Failed to lock connection: {}", e)))?;
-                let mut stmt = conn.prepare("SELECT name FROM sqlite_master WHERE type='database' ORDER BY name")?;
-                let rows = stmt.query_map([], |row| row.get(0))?;
-                Ok(rows.filter_map(|r| r.ok()).collect())
+                let mut stmt = conn.prepare("PRAGMA database_list")?;
+                let rows = stmt.query_map([], |row| row.get::<_, String>(1))?;
+                let mut names = Vec::new();
+                for row in rows {
+                    names.push(row?);
+                }
+                if !names.iter().any(|name| name == "main") {
+                    names.push("main".to_string());
+                }
+                names.sort();
+                Ok(names)
             })
             .await
             .map_err(|e| DbError::ConnectionFailed(e.to_string()))?
