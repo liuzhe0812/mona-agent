@@ -2,7 +2,7 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use serde::{Deserialize, Serialize};
-use tokio::sync::{Mutex, oneshot};
+use tokio::sync::{oneshot, Mutex};
 use uuid::Uuid;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -11,6 +11,9 @@ pub struct PendingCommand {
     pub session_id: String,
     pub command: String,
     pub source: String,
+    /// Direct terminal requests execute after approval. Structured callers
+    /// execute their own checked command and only need the verdict.
+    pub execute_after_approval: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -41,6 +44,27 @@ impl ApprovalManager {
         command: String,
         source: String,
     ) -> (PendingCommand, oneshot::Receiver<ApprovalVerdict>) {
+        self.submit_with_mode(session_id, command, source, true)
+            .await
+    }
+
+    pub async fn submit_deferred(
+        &self,
+        session_id: String,
+        command: String,
+        source: String,
+    ) -> (PendingCommand, oneshot::Receiver<ApprovalVerdict>) {
+        self.submit_with_mode(session_id, command, source, false)
+            .await
+    }
+
+    async fn submit_with_mode(
+        &self,
+        session_id: String,
+        command: String,
+        source: String,
+        execute_after_approval: bool,
+    ) -> (PendingCommand, oneshot::Receiver<ApprovalVerdict>) {
         let request_id = Uuid::new_v4().to_string();
         let (tx, rx) = oneshot::channel();
 
@@ -49,6 +73,7 @@ impl ApprovalManager {
             session_id,
             command,
             source,
+            execute_after_approval,
         };
 
         let entry = PendingEntry {
@@ -77,7 +102,24 @@ impl ApprovalManager {
         let pending = self.pending.lock().await;
         pending.values().map(|e| e.command.clone()).collect()
     }
+}
 
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn distinguishes_direct_and_structured_approval_requests() {
+        let manager = ApprovalManager::new();
+        let (direct, _) = manager
+            .submit("s1".into(), "echo direct".into(), "terminal".into())
+            .await;
+        let (deferred, _) = manager
+            .submit_deferred("s1".into(), "echo checked".into(), "docker".into())
+            .await;
+        assert!(direct.execute_after_approval);
+        assert!(!deferred.execute_after_approval);
+    }
 }
 
 #[derive(Clone)]

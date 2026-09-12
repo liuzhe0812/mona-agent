@@ -27,6 +27,10 @@ export function ExecApprovalDialog() {
 
   if (!execApproval.open) return null;
 
+  const dockerOperation =
+    execApproval.source.startsWith("Docker 管理") ||
+    execApproval.source.startsWith("Docker Compose");
+
   const handleApprove = async () => {
     try {
       await terminalRespondExec(execApproval.requestId, true);
@@ -46,7 +50,9 @@ export function ExecApprovalDialog() {
       <div className="w-96 rounded-2xl border bg-background p-5 shadow-lg">
         <div className="flex items-center gap-2 mb-3">
           <AlertTriangle className="h-5 w-5 text-warning" />
-          <h3 className="text-body font-semibold">AI 请求执行命令</h3>
+          <h3 className="text-body font-semibold">
+            {dockerOperation ? "确认 Docker 操作" : "AI 请求执行命令"}
+          </h3>
         </div>
 
         <div className="mb-3 space-y-2 text-caption text-muted-foreground">

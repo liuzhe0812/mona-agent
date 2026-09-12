@@ -398,6 +398,11 @@ export interface TerminalOutputEvent {
   data: string;
 }
 
+export interface TerminalSessionStatusEvent {
+  sessionId: string;
+  status: "disconnected" | "error";
+}
+
 export function onTerminalOutput(
   handler: (event: TerminalOutputEvent) => void,
 ): Promise<UnlistenFn> {
@@ -406,6 +411,16 @@ export function onTerminalOutput(
     : Promise.resolve(() => {});
   terminalOutputReady ??= registration.then(() => undefined, () => undefined);
   return registration;
+}
+
+export function onTerminalSessionStatus(
+  handler: (event: TerminalSessionStatusEvent) => void,
+): Promise<UnlistenFn> {
+  return isTauri()
+    ? listen<TerminalSessionStatusEvent>("terminal-session-status", (event) =>
+        handler(event.payload),
+      )
+    : Promise.resolve(() => {});
 }
 
 export async function terminalRespondExec(

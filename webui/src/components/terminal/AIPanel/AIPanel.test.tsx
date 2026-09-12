@@ -10,6 +10,7 @@ const getActive = vi.hoisted(() => vi.fn().mockResolvedValue(null));
 vi.mock("../ipc", () => ({
   terminalMaintenanceGetActive: getActive,
   onTerminalOutput: vi.fn().mockResolvedValue(() => {}),
+  onTerminalSessionStatus: vi.fn().mockResolvedValue(() => {}),
   onTerminalMaintenanceUpdated: vi.fn().mockResolvedValue(() => {}),
   terminalSaveConnections: vi.fn(),
   terminalLoadConnections: vi.fn().mockResolvedValue([]),

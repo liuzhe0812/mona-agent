@@ -17,7 +17,7 @@ export interface ConnectionConfig {
 
 export type SessionStatus = "disconnected" | "connecting" | "connected" | "error";
 
-export type SessionType = "local" | "ssh" | "sftp" | "ftp" | "batch" | "desktop" | "vnc";
+export type SessionType = "local" | "ssh" | "sftp" | "ftp" | "batch" | "desktop" | "vnc" | "docker";
 
 export interface Session {
   id: string;
@@ -25,6 +25,8 @@ export interface Session {
   type: SessionType;
   status: SessionStatus;
   title: string;
+  /** Docker tool tabs reuse this SSH session instead of owning a connection. */
+  parentSessionId?: string;
   /** VNC: WebSocket URL for noVNC to connect to */
   vncWsUrl?: string;
   /** VNC: one-time token for WS authentication */

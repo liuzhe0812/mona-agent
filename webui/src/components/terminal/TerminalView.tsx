@@ -13,6 +13,7 @@ import { ExecApprovalDialog } from "./Dialogs/ExecApprovalDialog";
 import { FileManager } from "./FileManager/FileManager";
 import { BatchModeView } from "./BatchMode/BatchModeView";
 import { DesktopMode } from "./Desktop/DesktopMode";
+import { DockerPanel } from "./Docker/DockerPanel";
 import { IdeLayout } from "../ide/IdeLayout";
 import { EmptyState } from "@/components/ui/empty-state";
 import { useTerminalStore } from "./store/terminalStore";
@@ -31,6 +32,9 @@ export function TerminalView({ onOpenSubscribe }: { onOpenSubscribe?: () => void
   const addSession = useTerminalStore((s) => s.addSession);
   const updateSessionStatus = useTerminalStore((s) => s.updateSessionStatus);
   const activeSession = sessions.find((s) => s.id === activeSessionId) ?? null;
+  const activeParentSession = activeSession?.type === "docker"
+    ? sessions.find((session) => session.id === activeSession.parentSessionId) ?? null
+    : activeSession;
   const initializedRef = useRef(false);
 
   const [aiPanelWidth, setAiPanelWidth] = useState(AI_PANEL_DEFAULT_WIDTH);
@@ -142,6 +146,25 @@ export function TerminalView({ onOpenSubscribe }: { onOpenSubscribe?: () => void
                     </div>
                   );
                 }
+                if (session.type === "docker") {
+                  const parent = sessions.find(
+                    (candidate) => candidate.id === session.parentSessionId,
+                  );
+                  return (
+                    <div
+                      key={session.id}
+                      className="h-full"
+                      style={{ display: isActive ? "block" : "none" }}
+                    >
+                      <DockerPanel
+                        parentSessionId={session.parentSessionId ?? ""}
+                        parentStatus={parent?.status ?? "disconnected"}
+                        hostTitle={parent?.title ?? session.title}
+                        visible={isActive}
+                      />
+                    </div>
+                  );
+                }
                 if (session.type === "ssh") {
                   return (
                     <div
@@ -191,12 +214,13 @@ export function TerminalView({ onOpenSubscribe }: { onOpenSubscribe?: () => void
           )}
           {!activeSession && <TerminalEmptyState />}
         </div>
-        <StatusBar sessionId={activeSessionId} />
+        <StatusBar sessionId={activeParentSession?.id ?? null} />
       </div>
       {licenseActive &&
         aiPanelVisible &&
         activeSession?.type !== "batch" &&
-        activeSession?.type !== "desktop" && (
+        activeSession?.type !== "desktop" &&
+        activeSession?.type !== "docker" && (
         <>
           <div
             onMouseDown={handleDragStart}

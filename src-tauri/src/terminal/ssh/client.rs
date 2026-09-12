@@ -8,6 +8,7 @@ use tokio::sync::Mutex;
 
 use crate::terminal::config::AuthConfig;
 use crate::terminal::error::TerminalError;
+use crate::terminal::session::{SessionManager, SessionStatus};
 use crate::terminal::shell::local::ScrollBuffer;
 use crate::terminal::ssh::agent::SshAgentClient;
 use crate::terminal::ssh::known_hosts::{HostKeyVerification, KnownHostsStore};
@@ -31,6 +32,13 @@ pub struct StructuredExecResult {
     pub duration_ms: u64,
     pub timed_out: bool,
     pub cancelled: bool,
+    pub truncated: bool,
+}
+
+#[derive(Debug, Clone, Copy)]
+pub enum ExecOutputStream {
+    Stdout,
+    Stderr,
 }
 
 pub struct SshClientHandler {
@@ -47,7 +55,9 @@ impl client::Handler for SshClientHandler {
         &mut self,
         server_public_key: &russh::keys::PublicKey,
     ) -> Result<bool, Self::Error> {
-        let result = self.known_hosts.verify(&self.host, self.port, server_public_key);
+        let result = self
+            .known_hosts
+            .verify(&self.host, self.port, server_public_key);
         *self.verification_result.lock().await = Some(result);
         Ok(true)
     }
@@ -124,12 +134,7 @@ impl SshClient {
             ))
         })?
         .map_err(|e| {
-            log::error!(
-                "[batch] SSH connect failed for {}:{}: {}",
-                host,
-                port,
-                e
-            );
+            log::error!("[batch] SSH connect failed for {}:{}: {}", host, port, e);
             TerminalError::SshConnection(e.to_string())
         })?;
 
@@ -259,6 +264,7 @@ impl SshClient {
     pub async fn start_shell(
         &self,
         app_handle: AppHandle,
+        session_manager: Option<(SessionManager, i64)>,
         session_id: String,
         cols: u32,
         rows: u32,
@@ -288,7 +294,16 @@ impl SshClient {
         tokio::spawn(async move {
             let mut reader = read_half;
             loop {
-                match reader.wait().await {
+                let message = reader.wait().await;
+                if let Some((manager, generation)) = session_manager.as_ref() {
+                    if !manager
+                        .is_generation_current(&session_id, *generation)
+                        .await
+                    {
+                        break;
+                    }
+                }
+                match message {
                     Some(ChannelMsg::Data { data }) => {
                         let output = String::from_utf8_lossy(&data).to_string();
                         sb.push(output);
@@ -308,14 +323,60 @@ impl SshClient {
                         let _ = app_handle.emit("terminal-output", payload);
                     }
                     Some(ChannelMsg::Eof) | Some(ChannelMsg::Close) => {
-                        let payload = serde_json::json!({
-                            "sessionId": session_id,
-                            "data": "\r\n[Connection closed]\r\n",
-                        });
-                        let _ = app_handle.emit("terminal-output", payload);
+                        let current_generation =
+                            if let Some((manager, generation)) = session_manager.as_ref() {
+                                manager
+                                    .update_status_if_generation(
+                                        &session_id,
+                                        *generation,
+                                        SessionStatus::Disconnected,
+                                    )
+                                    .await
+                                    .unwrap_or(false)
+                            } else {
+                                false
+                            };
+                        if session_manager.is_none() || current_generation {
+                            let payload = serde_json::json!({
+                                "sessionId": session_id,
+                                "data": "\r\n[Connection closed]\r\n",
+                            });
+                            let _ = app_handle.emit("terminal-output", payload);
+                            let _ = app_handle.emit(
+                                "terminal-session-status",
+                                serde_json::json!({
+                                    "sessionId": session_id,
+                                    "status": "disconnected",
+                                }),
+                            );
+                        }
                         break;
                     }
-                    None => break,
+                    None => {
+                        let current_generation =
+                            if let Some((manager, generation)) = session_manager.as_ref() {
+                                manager
+                                    .update_status_if_generation(
+                                        &session_id,
+                                        *generation,
+                                        SessionStatus::Disconnected,
+                                    )
+                                    .await
+                                    .unwrap_or(false)
+                            } else {
+                                false
+                            };
+                        if current_generation {
+                            let _ = app_handle.emit(
+                                "terminal-session-status",
+                                serde_json::json!({
+                                    "sessionId": session_id,
+                                    "status": "disconnected",
+                                }),
+                            );
+                        }
+                        break;
+                    }
                     _ => {}
                 }
             }
@@ -415,6 +476,21 @@ impl SshClient {
         command: &str,
         timeout: Duration,
         cancel: tokio_util::sync::CancellationToken,
+        on_output: F,
+    ) -> Result<StructuredExecResult, TerminalError>
+    where
+        F: FnMut(&str),
+    {
+        self.exec_command_structured_bounded(command, timeout, cancel, usize::MAX, on_output)
+            .await
+    }
+
+    pub async fn exec_command_structured_bounded<F>(
+        &self,
+        command: &str,
+        timeout: Duration,
+        cancel: tokio_util::sync::CancellationToken,
+        max_output_bytes: usize,
         mut on_output: F,
     ) -> Result<StructuredExecResult, TerminalError>
     where
@@ -439,6 +515,7 @@ impl SshClient {
         let mut exit_code = None;
         let mut timed_out = false;
         let mut cancelled = false;
+        let mut truncated = false;
 
         let deadline = tokio::time::sleep(timeout);
         tokio::pin!(deadline);
@@ -450,13 +527,21 @@ impl SshClient {
                         Some(ChannelMsg::Data { data }) => {
                             let chunk = String::from_utf8_lossy(&data);
                             on_output(&chunk);
-                            stdout.extend_from_slice(&data);
+                            let remaining = max_output_bytes
+                                .saturating_sub(stdout.len().saturating_add(stderr.len()));
+                            let take = remaining.min(data.len());
+                            stdout.extend_from_slice(&data[..take]);
+                            truncated |= take < data.len();
                         }
                         Some(ChannelMsg::ExtendedData { data, ext }) => {
                             if ext == 1 {
                                 let chunk = String::from_utf8_lossy(&data);
                                 on_output(&chunk);
-                                stderr.extend_from_slice(&data);
+                                let remaining = max_output_bytes
+                                    .saturating_sub(stdout.len().saturating_add(stderr.len()));
+                                let take = remaining.min(data.len());
+                                stderr.extend_from_slice(&data[..take]);
+                                truncated |= take < data.len();
                             }
                         }
                         Some(ChannelMsg::ExitStatus { exit_status }) => {
@@ -492,6 +577,83 @@ impl SshClient {
             duration_ms: started.elapsed().as_millis() as u64,
             timed_out,
             cancelled,
+            truncated,
+        })
+    }
+
+    /// Execute a long-running command without retaining its output. Docker
+    /// logs and events use this so a remote stream cannot grow Mona's memory.
+    pub async fn exec_command_streaming<F>(
+        &self,
+        command: &str,
+        timeout: Duration,
+        cancel: tokio_util::sync::CancellationToken,
+        mut on_output: F,
+    ) -> Result<StructuredExecResult, TerminalError>
+    where
+        F: FnMut(ExecOutputStream, &str),
+    {
+        let started = std::time::Instant::now();
+        let mut channel = self
+            .handle
+            .lock()
+            .await
+            .channel_open_session()
+            .await
+            .map_err(|e| TerminalError::SshConnection(e.to_string()))?;
+
+        channel
+            .exec(true, command)
+            .await
+            .map_err(|e| TerminalError::SshConnection(e.to_string()))?;
+
+        let mut exit_code = None;
+        let mut timed_out = false;
+        let mut cancelled = false;
+        let deadline = tokio::time::sleep(timeout);
+        tokio::pin!(deadline);
+
+        loop {
+            tokio::select! {
+                msg = channel.wait() => {
+                    match msg {
+                        Some(ChannelMsg::Data { data }) => {
+                            on_output(ExecOutputStream::Stdout, &String::from_utf8_lossy(&data));
+                        }
+                        Some(ChannelMsg::ExtendedData { data, ext }) if ext == 1 => {
+                            on_output(ExecOutputStream::Stderr, &String::from_utf8_lossy(&data));
+                        }
+                        Some(ChannelMsg::ExitStatus { exit_status }) => {
+                            exit_code = Some(exit_status);
+                        }
+                        Some(ChannelMsg::Eof) => {}
+                        Some(ChannelMsg::Close) | None => break,
+                        _ => {}
+                    }
+                }
+                _ = &mut deadline => {
+                    timed_out = true;
+                    break;
+                }
+                _ = cancel.cancelled() => {
+                    cancelled = true;
+                    break;
+                }
+            }
+        }
+
+        if timed_out || cancelled {
+            let _ = channel.close().await;
+        }
+
+        Ok(StructuredExecResult {
+            stdout: String::new(),
+            stderr: String::new(),
+            exit_code,
+            duration_ms: started.elapsed().as_millis() as u64,
+            timed_out,
+            cancelled,
+            truncated: false,
         })
     }
 
@@ -510,23 +672,14 @@ impl SshClient {
             .await
             .map_err(|e| TerminalError::SshConnection(e.to_string()))?;
 
-        channel
-            .request_subsystem(true, "sftp")
-            .await
-            .map_err(|e| {
-                TerminalError::SftpOperation(format!(
-                    "Failed to request SFTP subsystem: {}",
-                    e
-                ))
-            })?;
+        channel.request_subsystem(true, "sftp").await.map_err(|e| {
+            TerminalError::SftpOperation(format!("Failed to request SFTP subsystem: {}", e))
+        })?;
 
         let sftp_session = russh_sftp::client::SftpSession::new(channel.into_stream())
             .await
             .map_err(|e| {
-                TerminalError::SftpOperation(format!(
-                    "Failed to init SFTP session: {}",
-                    e
-                ))
+                TerminalError::SftpOperation(format!("Failed to init SFTP session: {}", e))
             })?;
 
         Ok(sftp_session)

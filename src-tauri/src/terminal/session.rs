@@ -5,8 +5,8 @@ use serde::{Deserialize, Serialize};
 use tokio::sync::RwLock;
 
 use crate::terminal::error::TerminalError;
-use crate::terminal::shell::local::LocalShell;
 use crate::terminal::sftp::client::SftpClient;
+use crate::terminal::shell::local::LocalShell;
 use crate::terminal::ssh::client::SshClient;
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -104,11 +104,11 @@ impl SessionManager {
         handle: SessionHandle,
     ) -> Result<(), TerminalError> {
         let mut sessions = self.inner.sessions.write().await;
-        if sessions.len() >= self.inner.max_sessions {
+        let id = session.id.clone();
+        if !sessions.contains_key(&id) && sessions.len() >= self.inner.max_sessions {
             return Err(TerminalError::TooManySessions);
         }
         let mut handles = self.inner.handles.write().await;
-        let id = session.id.clone();
         sessions.insert(id.clone(), session);
         handles.insert(id, handle);
         Ok(())
@@ -151,8 +151,103 @@ impl SessionManager {
         }
     }
 
+    pub async fn update_status_if_generation(
+        &self,
+        id: &str,
+        generation: i64,
+        status: SessionStatus,
+    ) -> Result<bool, TerminalError> {
+        let mut sessions = self.inner.sessions.write().await;
+        let Some(session) = sessions.get_mut(id) else {
+            return Ok(false);
+        };
+        if session.created_at.timestamp_millis() != generation || session.status == status {
+            return Ok(false);
+        }
+        if !session.status.can_transition_to(&status) {
+            return Err(TerminalError::SshConnection(format!(
+                "Invalid state transition: {:?} -> {:?}",
+                session.status, status
+            )));
+        }
+        session.status = status;
+        Ok(true)
+    }
+
+    pub async fn is_generation_current(&self, id: &str, generation: i64) -> bool {
+        self.inner
+            .sessions
+            .read()
+            .await
+            .get(id)
+            .is_some_and(|session| session.created_at.timestamp_millis() == generation)
+    }
+
     pub async fn list_sessions(&self) -> Vec<Session> {
         let sessions = self.inner.sessions.read().await;
         sessions.values().cloned().collect()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn session(id: &str, created_at: chrono::DateTime<chrono::Utc>) -> Session {
+        Session {
+            id: id.to_string(),
+            config_id: "config".to_string(),
+            session_type: SessionType::Ssh,
+            status: SessionStatus::Connected,
+            target_label: "user@example:22".to_string(),
+            created_at,
+        }
+    }
+
+    #[tokio::test]
+    async fn stale_connection_generation_cannot_disconnect_reconnected_session() {
+        let manager = SessionManager::new(1);
+        let first_time = chrono::Utc::now();
+        manager
+            .create(session("session", first_time), SessionHandle::Vnc)
+            .await
+            .unwrap();
+
+        let second_time = first_time + chrono::Duration::milliseconds(1);
+        manager
+            .create(session("session", second_time), SessionHandle::Vnc)
+            .await
+            .unwrap();
+
+        assert!(!manager
+            .update_status_if_generation(
+                "session",
+                first_time.timestamp_millis(),
+                SessionStatus::Disconnected,
+            )
+            .await
+            .unwrap());
+        assert_eq!(
+            manager.get("session").await.unwrap().status,
+            SessionStatus::Connected
+        );
+        assert!(manager
+            .update_status_if_generation(
+                "session",
+                second_time.timestamp_millis(),
+                SessionStatus::Disconnected,
+            )
+            .await
+            .unwrap());
+        assert!(
+            !manager
+                .is_generation_current("session", first_time.timestamp_millis())
+                .await
+        );
+        assert!(
+            manager
+                .is_generation_current("session", second_time.timestamp_millis())
+                .await
+        );
     }
 }

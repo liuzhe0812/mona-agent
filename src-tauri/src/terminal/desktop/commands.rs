@@ -902,7 +902,7 @@ pub async fn desktop_start_terminal(
 ) -> Result<(), String> {
     let client = get_desktop_client(&state, &session_id).await?;
     client
-        .start_shell(app_handle, terminal_session_id, cols, rows)
+        .start_shell(app_handle, None, terminal_session_id, cols, rows)
         .await
         .map_err(|e| e.to_string())?;
     Ok(())

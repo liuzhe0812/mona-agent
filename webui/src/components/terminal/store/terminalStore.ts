@@ -4,6 +4,7 @@ import {
   terminalSaveConnections,
   terminalLoadConnections,
   onTerminalOutput,
+  onTerminalSessionStatus,
   onTerminalMaintenanceUpdated,
   type MaintenanceTaskDetail,
 } from "../ipc";
@@ -68,6 +69,7 @@ interface TerminalState {
   activeMaintenanceTasks: Record<string, MaintenanceTaskDetail>;
 
   addSession: (session: Session) => void;
+  openDockerSession: (parentSessionId: string) => void;
   removeSession: (sessionId: string) => void;
   setActiveSession: (sessionId: string) => void;
   updateSessionStatus: (sessionId: string, status: SessionStatus) => void;
@@ -160,13 +162,44 @@ export const useTerminalStore = create<TerminalState>((set, get) => ({
     }));
   },
 
+  openDockerSession: (parentSessionId) => {
+    const state = get();
+    const parent = state.sessions.find((session) => session.id === parentSessionId);
+    if (!parent || parent.type !== "ssh" || parent.status !== "connected") return;
+    const existing = state.sessions.find(
+      (session) => session.type === "docker" && session.parentSessionId === parentSessionId,
+    );
+    if (existing) {
+      set({ activeSessionId: existing.id });
+      return;
+    }
+    const dockerSession: Session = {
+      id: `docker:${parent.id}`,
+      configId: parent.configId,
+      type: "docker",
+      status: parent.status,
+      title: `Docker · ${parent.title}`,
+      parentSessionId: parent.id,
+    };
+    set((current) => ({
+      sessions: [...current.sessions, dockerSession],
+      activeSessionId: dockerSession.id,
+    }));
+  },
+
   removeSession: (sessionId) => {
-    registry.unregister(sessionId);
-    registry.clearBuffer(sessionId);
+    const removedIds = get().sessions
+      .filter((session) => session.id === sessionId || session.parentSessionId === sessionId)
+      .map((session) => session.id);
+    for (const id of removedIds) {
+      registry.unregister(id);
+      registry.clearBuffer(id);
+    }
     set((state) => {
-      const sessions = state.sessions.filter((s) => s.id !== sessionId);
+      const removed = new Set(removedIds);
+      const sessions = state.sessions.filter((session) => !removed.has(session.id));
       const activeSessionId =
-        state.activeSessionId === sessionId
+        state.activeSessionId !== null && removed.has(state.activeSessionId)
           ? sessions[sessions.length - 1]?.id ?? null
           : state.activeSessionId;
       return { sessions, activeSessionId };
@@ -180,7 +213,7 @@ export const useTerminalStore = create<TerminalState>((set, get) => ({
   updateSessionStatus: (sessionId, status) => {
     set((state) => ({
       sessions: state.sessions.map((s) =>
-        s.id === sessionId ? { ...s, status } : s,
+        s.id === sessionId || s.parentSessionId === sessionId ? { ...s, status } : s,
       ),
     }));
   },
@@ -392,6 +425,10 @@ export const useTerminalStore = create<TerminalState>((set, get) => ({
 
 onTerminalOutput((event) => {
   registry.write(event.sessionId, event.data);
+}).catch(() => {});
+
+onTerminalSessionStatus((event) => {
+  useTerminalStore.getState().updateSessionStatus(event.sessionId, event.status);
 }).catch(() => {});
 
 onTerminalMaintenanceUpdated((event) => {

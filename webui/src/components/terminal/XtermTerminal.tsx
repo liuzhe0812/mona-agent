@@ -21,7 +21,7 @@ interface Props {
   sessionId: string;
 }
 
-function buildTheme(): Record<string, string> {
+export function buildTerminalTheme(): Record<string, string> {
   return {
     background: "#1a1a1a",
     foreground: "#e5e5e5",
@@ -80,7 +80,7 @@ export function XtermTerminal({ sessionId }: Props) {
       fontSize: settings.fontSize,
       fontFamily: settings.fontFamily,
       scrollback: settings.scrollback,
-      theme: buildTheme(),
+      theme: buildTerminalTheme(),
       allowProposedApi: true,
     });
 

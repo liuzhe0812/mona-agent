@@ -38,6 +38,8 @@
 ### plans/（49 篇）
 按模块和时间组织的开发计划。
 
+- [2026-09-12-ssh-docker-management-plan.md](plans/2026-09-12-ssh-docker-management-plan.md)：SSH 会话内 Docker 管理开发计划，覆盖 M0–M5；代码已实现，真实环境验收待完成
+
 - `main-chat-canvas-workspace.md`：主会话右侧可编辑画布工作区的剩余实施与验收
 - [ai-canvas-official-demo-implementation.md](plans/ai-canvas-official-demo-implementation.md)：以官方 Demo 为基准，验收 AI 自主生成、默认创作、检查修正及新内容迁移的当前开发计划（待实施）
 - [2026-09-07-ai-canvas-quality-replication-plan.md](plans/2026-09-07-ai-canvas-quality-replication-plan.md)：上一阶段画布能力实施记录，已由官方 Demo 计划取代
@@ -65,6 +67,8 @@
 ### design/（57 篇 Markdown）
 模块级详细设计方案。
 
+- [2026-09-12-ssh-docker-management-design.md](design/2026-09-12-ssh-docker-management-design.md)：终端 Docker 派生标签、容器与 Compose 运维、安全执行及生命周期方案（代码已实现）
+
 - [2026-09-07-miniapp-three-end-design.md](design/2026-09-07-miniapp-three-end-design.md)：微信小程序、桌面与云服务互通方案，覆盖笔记日程同步、云端对话、P2P 远控、内网 ASR 与数据归属（待实施）
 - `multi-agent-functional-design.md`：多 Agent 功能设计（伙伴 Agent、房间协作、Agent 商店的产品依据），已纳入版本管理
 - `multi-agent-development-guide.md`：多 Agent 开发指南（阶段 0–4 技术方案，代码注释中引用的 `docs/design/multi-agent-development-guide.md` 即本文），已纳入版本管理
@@ -78,6 +82,7 @@
 ### guides/（14 篇）
 面向使用者和开发者的参考文档。
 
+- [ssh-docker-management.md](guides/ssh-docker-management.md)：终端 SSH 会话内 Docker 容器、Compose、日志、更新与精确清理使用说明
 - [mona-worker-deployment.md](guides/mona-worker-deployment.md)：内网计算节点的 Docker、GPU、目录、长期运行与迁移配置
 - `browser-testing.md`：WebView2 生命周期、下载、窗口、压力与安全回归矩阵
 - `three-maker-guide.md`：3D Maker 使用指南（参考图到 Three.js 模型的 AI 建模管线、候选规格协作、导出与安全边界）

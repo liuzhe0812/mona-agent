@@ -8,6 +8,7 @@ import {
   Monitor,
   FolderTree,
   Activity,
+  Container,
   LockKeyhole,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
@@ -31,6 +32,7 @@ export function Toolbar({ onOpenSubscribe }: { onOpenSubscribe?: () => void }) {
   const activeSessionId = useTerminalStore((s) => s.activeSessionId);
   const sessions = useTerminalStore((s) => s.sessions);
   const addSession = useTerminalStore((s) => s.addSession);
+  const openDockerSession = useTerminalStore((s) => s.openDockerSession);
   const connections = useTerminalStore((s) => s.connections);
   const [sessionManagerOpen, setSessionManagerOpen] = useState(false);
 
@@ -107,6 +109,10 @@ export function Toolbar({ onOpenSubscribe }: { onOpenSubscribe?: () => void }) {
     });
   };
 
+  const handleOpenDocker = () => {
+    if (activeSession) openDockerSession(activeSession.id);
+  };
+
   return (
     <div className="flex h-9 shrink-0 items-center gap-1 border-b border-border bg-card px-2">
       <Button
@@ -149,6 +155,19 @@ export function Toolbar({ onOpenSubscribe }: { onOpenSubscribe?: () => void }) {
         <Monitor className="h-3.5 w-3.5" />
         桌面
       </Button>
+      {activeSession?.type === "ssh" && (
+        <Button
+          variant="ghost"
+          size="sm"
+          className="gap-1.5"
+          onClick={handleOpenDocker}
+          disabled={activeSession.status !== "connected"}
+          title="管理当前 SSH 主机的 Docker"
+        >
+          <Container className="h-3.5 w-3.5" />
+          Docker
+        </Button>
+      )}
       <Button
         variant="ghost"
         size="sm"
@@ -189,7 +208,7 @@ export function Toolbar({ onOpenSubscribe }: { onOpenSubscribe?: () => void }) {
           </Button>
         </>
       )}
-      {activeSession?.type !== "desktop" && (licenseActive ? (
+      {activeSession?.type !== "desktop" && activeSession?.type !== "docker" && (licenseActive ? (
         <Button
           variant="ghost"
           size="icon"

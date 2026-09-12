@@ -328,7 +328,7 @@ async fn execute_step_inner(
             let (pending, rx) = state
                 .approval
                 .manager
-                .submit(
+                .submit_deferred(
                     v.session_id.clone(),
                     command.to_string(),
                     "AI Agent".to_string(),

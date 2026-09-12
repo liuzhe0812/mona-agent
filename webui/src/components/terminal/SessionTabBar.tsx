@@ -10,6 +10,7 @@ import {
   Download,
   Notebook,
   ExternalLink,
+  Container,
 } from "lucide-react";
 import { useTerminalStore } from "./store/terminalStore";
 import { sshConnect, sshDisconnect, shellKill, shellSpawn, sshOpenSftp, vncDisconnect } from "./ipc";
@@ -39,6 +40,7 @@ export function SessionTabBar() {
   const updateSessionStatus = useTerminalStore((s) => s.updateSessionStatus);
   const updateSessionTitle = useTerminalStore((s) => s.updateSessionTitle);
   const addSession = useTerminalStore((s) => s.addSession);
+  const openDockerSession = useTerminalStore((s) => s.openDockerSession);
   const connections = useTerminalStore((s) => s.connections);
 
   const [renameOpen, setRenameOpen] = useState(false);
@@ -148,9 +150,19 @@ export function SessionTabBar() {
     [connections, addSession],
   );
 
+  const handleOpenDocker = useCallback(
+    (session: { id: string }) => openDockerSession(session.id),
+    [openDockerSession],
+  );
+
   const handleCloseOthers = useCallback(
     (keepSessionId: string) => {
-      const toClose = sessions.filter((s) => s.id !== keepSessionId);
+      const keepSession = sessions.find((session) => session.id === keepSessionId);
+      const keepIds = new Set([keepSessionId]);
+      if (keepSession?.type === "docker" && keepSession.parentSessionId) {
+        keepIds.add(keepSession.parentSessionId);
+      }
+      const toClose = sessions.filter((session) => !keepIds.has(session.id));
       for (const s of toClose) {
         void handleClose(s.id, s.type);
       }
@@ -270,6 +282,7 @@ export function SessionTabBar() {
           const isSsh = session.type === "ssh";
           const canDuplicate = session.type === "ssh" || session.type === "sftp" || session.type === "local";
           const canExport = session.type === "ssh" || session.type === "local";
+          const canOpenInNewWindow = session.type !== "docker" && session.type !== "batch";
 
           return (
             <ContextMenu key={session.id}>
@@ -322,9 +335,17 @@ export function SessionTabBar() {
                   </ContextMenuItem>
                 )}
                 {isSsh && (
-                  <ContextMenuItem onClick={() => handleOpenSftp(session)}>
-                    <FolderOpen className="mr-2 h-3.5 w-3.5" /> 打开 SFTP
-                  </ContextMenuItem>
+                  <>
+                    <ContextMenuItem onClick={() => handleOpenSftp(session)}>
+                      <FolderOpen className="mr-2 h-3.5 w-3.5" /> 打开 SFTP
+                    </ContextMenuItem>
+                    <ContextMenuItem
+                      disabled={session.status !== "connected"}
+                      onClick={() => handleOpenDocker(session)}
+                    >
+                      <Container className="mr-2 h-3.5 w-3.5" /> Docker 管理
+                    </ContextMenuItem>
+                  </>
                 )}
                 {canExport && (
                   <>
@@ -338,9 +359,11 @@ export function SessionTabBar() {
                   </>
                 )}
                 <ContextMenuSeparator />
-                <ContextMenuItem onClick={() => handleOpenInNewWindow(session)}>
-                  <ExternalLink className="mr-2 h-3.5 w-3.5" /> 在新窗口打开
-                </ContextMenuItem>
+                {canOpenInNewWindow && (
+                  <ContextMenuItem onClick={() => handleOpenInNewWindow(session)}>
+                    <ExternalLink className="mr-2 h-3.5 w-3.5" /> 在新窗口打开
+                  </ContextMenuItem>
+                )}
                 <ContextMenuSeparator />
                 <ContextMenuItem onClick={() => handleClose(session.id, session.type)}>
                   <X className="mr-2 h-3.5 w-3.5" /> 关闭
