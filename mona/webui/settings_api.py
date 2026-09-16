@@ -9,7 +9,6 @@ from __future__ import annotations
 import json
 import os
 import re
-import time
 import unicodedata
 from pathlib import Path
 from typing import Any
@@ -23,7 +22,12 @@ from mona.config.loader import get_config_path, load_config, save_config
 from mona.config.schema import ModelGenerationParameters, ProviderConfig
 from mona.providers.capabilities import resolve_capabilities
 from mona.providers.cindy_catalog import CINDY_CHAT_PROVIDER_BY_ID, CINDY_CHAT_PROVIDERS
+from mona.providers.context_window import (
+    resolve_model_context_window,
+    resolve_model_context_window_details,
+)
 from mona.providers.image_generation import get_image_gen_provider
+from mona.providers.managed_catalog import managed_model_catalog as _managed_model_catalog
 from mona.providers.registry import (
     PROVIDERS,
     custom_provider_spec,
@@ -34,35 +38,6 @@ from mona.providers.video_generation import get_video_gen_provider
 from mona.security.network import validate_url_target
 
 QueryParams = dict[str, list[str]]
-
-_MANAGED_CATALOG_TTL_SECONDS = 30.0
-_managed_catalog_cached_at = 0.0
-_managed_catalog_cache: dict[str, Any] = {"available": False, "models": []}
-
-
-def _managed_model_catalog() -> dict[str, Any]:
-    global _managed_catalog_cached_at, _managed_catalog_cache
-    now = time.monotonic()
-    cache_ttl = _MANAGED_CATALOG_TTL_SECONDS if _managed_catalog_cache["available"] else 3.0
-    if now - _managed_catalog_cached_at < cache_ttl:
-        return _managed_catalog_cache
-    catalog: dict[str, Any] = {"available": False, "models": []}
-    try:
-        from mona.agent.tools.tauri_ipc import tauri_invoke
-
-        raw = tauri_invoke("get_managed_model_catalog")
-        if isinstance(raw, dict):
-            models = raw.get("models")
-            if isinstance(models, list):
-                catalog = {
-                    "available": raw.get("available") is True and len(models) > 0,
-                    "models": [model for model in models if isinstance(model, dict)],
-                }
-    except Exception:
-        pass
-    _managed_catalog_cache = catalog
-    _managed_catalog_cached_at = now
-    return catalog
 
 _WEB_SEARCH_PROVIDER_OPTIONS: tuple[dict[str, str], ...] = (
     {"name": "anysearch", "label": "AnySearch", "credential": "none"},
@@ -717,6 +692,13 @@ def settings_payload(*, requires_restart: bool = False) -> dict[str, Any]:
     if effective_preset.provider != "auto":
         spec = find_by_name(effective_preset.provider)
         selected_provider = spec.name if spec else provider_name
+    managed_catalog = _managed_model_catalog()
+    effective_context_window = resolve_model_context_window_details(
+        config,
+        effective_preset,
+        provider_name=selected_provider,
+        managed_catalog=managed_catalog,
+    ).tokens
 
     providers = []
     for spec in PROVIDERS:
@@ -790,7 +772,12 @@ def settings_payload(*, requires_restart: bool = False) -> dict[str, Any]:
             "model": defaults.model,
             "provider": defaults.provider,
             "max_tokens": defaults.max_tokens,
-            "context_window_tokens": defaults.context_window_tokens,
+            "context_window_tokens": resolve_model_context_window(
+                config,
+                default_preset_obj,
+                managed_catalog=managed_catalog,
+            ),
+            "auto_compact_token_limit": defaults.auto_compact_token_limit,
             "temperature": defaults.temperature,
             "reasoning_effort": defaults.reasoning_effort,
             "capabilities": _preset_capabilities_payload(config, default_preset_obj),
@@ -806,7 +793,12 @@ def settings_payload(*, requires_restart: bool = False) -> dict[str, Any]:
                 "model": preset.model,
                 "provider": preset.provider,
                 "max_tokens": preset.max_tokens,
-                "context_window_tokens": preset.context_window_tokens,
+                "context_window_tokens": resolve_model_context_window(
+                    config,
+                    preset,
+                    managed_catalog=managed_catalog,
+                ),
+                "auto_compact_token_limit": preset.auto_compact_token_limit,
                 "temperature": preset.temperature,
                 "reasoning_effort": preset.reasoning_effort,
                 "capabilities": _preset_capabilities_payload(config, preset),
@@ -823,7 +815,8 @@ def settings_payload(*, requires_restart: bool = False) -> dict[str, Any]:
             "has_api_key": bool(provider and provider.api_key),
             "model_preset": active_preset_name,
             "max_tokens": effective_preset.max_tokens,
-            "context_window_tokens": effective_preset.context_window_tokens,
+            "context_window_tokens": effective_context_window,
+            "auto_compact_token_limit": effective_preset.auto_compact_token_limit,
             "temperature": effective_preset.temperature,
             "reasoning_effort": effective_preset.reasoning_effort,
             "timezone": defaults.timezone,
@@ -1009,6 +1002,26 @@ def update_agent_settings(query: QueryParams) -> dict[str, Any]:
         normalized_effort = None if reasoning_effort == "none" else reasoning_effort
         if defaults.reasoning_effort != normalized_effort:
             defaults.reasoning_effort = normalized_effort
+            changed = True
+
+    auto_compact_token_limit = _query_first_alias(
+        query,
+        "auto_compact_token_limit",
+        "autoCompactTokenLimit",
+    )
+    if auto_compact_token_limit is not None:
+        raw_limit = auto_compact_token_limit.strip().lower()
+        if raw_limit in {"", "none", "null"}:
+            parsed_limit = None
+        else:
+            try:
+                parsed_limit = int(raw_limit)
+            except ValueError:
+                raise WebUISettingsError("auto_compact_token_limit must be an integer") from None
+            if parsed_limit < 4_096:
+                raise WebUISettingsError("auto_compact_token_limit must be at least 4096")
+        if defaults.auto_compact_token_limit != parsed_limit:
+            defaults.auto_compact_token_limit = parsed_limit
             changed = True
 
     auto_download_raw = _query_first_alias(query, "auto_download", "autoDownload")
@@ -2310,11 +2323,6 @@ def _parse_model_details_payload(payload: Any) -> list[dict[str, Any]]:
     return out
 
 
-def _parse_models_payload(payload: Any) -> list[str]:
-    """Extract a flat ``list[str]`` of model IDs from arbitrary shapes."""
-    return [item["id"] for item in _parse_model_details_payload(payload)]
-
-
 async def probe_provider_model_details(
     *,
     provider_name: str,
@@ -2359,6 +2367,12 @@ async def probe_provider_model_details(
     if not effective_base:
         raise WebUISettingsError("请先填写 API Base 后再拉取模型")
 
+    custom_endpoint = provider_name.strip() == "custom" or is_custom_provider_name(
+        provider_name
+    )
+    if custom_endpoint:
+        effective_base = _validate_custom_api_base(effective_base)
+
     # ``custom`` is the create-form sentinel, not a persisted provider.  Do
     # not borrow the legacy fixed ``providers.custom`` key for a new endpoint;
     # only an explicitly supplied request key may be used.  Persisted
@@ -2378,7 +2392,7 @@ async def probe_provider_model_details(
         raise WebUISettingsError("该服务商不支持自动拉取模型列表，请手动填写")
 
     # SSRF 红线：所有出站 HTTP 必须过 validate_url_target
-    ok, err = validate_url_target(url)
+    ok, err = validate_url_target(url, allow_private=custom_endpoint)
     if not ok:
         raise WebUISettingsError(f"API Base 不允许访问：{err}")
 

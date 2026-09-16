@@ -54,11 +54,6 @@ def _load_github_token() -> OAuthToken | None:
     return token
 
 
-def get_github_copilot_login_status() -> OAuthToken | None:
-    """Return the persisted GitHub OAuth token if available."""
-    return _load_github_token()
-
-
 def login_github_copilot(
     print_fn: Callable[[str], None] | None = None,
     prompt_fn: Callable[[str], str] | None = None,
@@ -181,7 +176,7 @@ class GitHubCopilotProvider(OpenAICompatProvider):
 
         github_token = _load_github_token()
         if not github_token or not github_token.access:
-            raise RuntimeError("GitHub Copilot is not logged in. Run: mona provider login github-copilot")
+            raise RuntimeError("GitHub Copilot is not logged in. Sign in from Mona settings.")
 
         timeout = httpx.Timeout(20.0, connect=20.0)
         async with httpx.AsyncClient(timeout=timeout, follow_redirects=True, trust_env=True) as client:

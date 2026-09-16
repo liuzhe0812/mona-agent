@@ -9,6 +9,7 @@ from loguru import logger
 
 from mona.config.schema import Config, InlineFallbackConfig, ModelPresetConfig
 from mona.providers.base import LLMProvider
+from mona.providers.context_window import resolve_model_context_window
 from mona.providers.fallback_provider import FallbackProvider
 from mona.providers.registry import find_by_name
 
@@ -19,6 +20,7 @@ class ProviderSnapshot:
     model: str
     context_window_tokens: int
     signature: tuple[object, ...]
+    auto_compact_token_limit: int | None = None
 
 
 def _resolve_model_preset(
@@ -146,11 +148,7 @@ def _inline_fallback_preset(
         model=fallback.model,
         provider=fallback.provider,
         max_tokens=fallback.max_tokens if fallback.max_tokens is not None else primary.max_tokens,
-        context_window_tokens=(
-            fallback.context_window_tokens
-            if fallback.context_window_tokens is not None
-            else primary.context_window_tokens
-        ),
+        auto_compact_token_limit=primary.auto_compact_token_limit,
         temperature=(
             fallback.temperature if fallback.temperature is not None else primary.temperature
         ),
@@ -166,6 +164,18 @@ def _resolve_fallback_presets(config: Config, primary: ModelPresetConfig) -> lis
         else:
             presets.append(_inline_fallback_preset(primary, fallback))
     return presets
+
+
+def _effective_auto_compact_token_limit(
+    primary: ModelPresetConfig,
+    fallbacks: list[ModelPresetConfig],
+) -> int | None:
+    limits = [
+        preset.auto_compact_token_limit
+        for preset in [primary, *fallbacks]
+        if preset.auto_compact_token_limit is not None
+    ]
+    return min(limits) if limits else None
 
 
 def make_provider(
@@ -222,7 +232,8 @@ def provider_signature(
             fallback.max_tokens,
             fallback.temperature,
             fallback.reasoning_effort,
-            fallback.context_window_tokens,
+            resolve_model_context_window(config, fallback),
+            fallback.auto_compact_token_limit,
         )
 
     return (
@@ -238,7 +249,8 @@ def provider_signature(
         resolved.max_tokens,
         resolved.temperature,
         resolved.reasoning_effort,
-        resolved.context_window_tokens,
+        resolve_model_context_window(config, resolved),
+        resolved.auto_compact_token_limit,
         tuple(_fallback_signature(fallback) for fallback in fallback_presets),
     )
 
@@ -250,15 +262,20 @@ def build_provider_snapshot(
     preset: ModelPresetConfig | None = None,
 ) -> ProviderSnapshot:
     resolved = _resolve_model_preset(config, preset_name=preset_name, preset=preset)
-    fallback_windows = [
-        fallback.context_window_tokens
-        for fallback in _resolve_fallback_presets(config, resolved)
-    ]
+    fallback_presets = _resolve_fallback_presets(config, resolved)
+    fallback_windows = [resolve_model_context_window(config, fallback) for fallback in fallback_presets]
     return ProviderSnapshot(
         provider=make_provider(config, preset=resolved),
         model=resolved.model,
-        context_window_tokens=min([resolved.context_window_tokens, *fallback_windows]),
+        context_window_tokens=min([
+            resolve_model_context_window(config, resolved),
+            *fallback_windows,
+        ]),
         signature=provider_signature(config, preset=resolved),
+        auto_compact_token_limit=_effective_auto_compact_token_limit(
+            resolved,
+            fallback_presets,
+        ),
     )
 
 

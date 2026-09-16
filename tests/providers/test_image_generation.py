@@ -42,11 +42,13 @@ class FakeResponse:
         status_code: int = 200,
         content: bytes = b"",
         sse_lines: list[str] | None = None,
+        headers: dict[str, str] | None = None,
     ) -> None:
         self._payload = payload
         self.status_code = status_code
         self.text = str(payload)
         self.content = content
+        self.headers = headers or {}
         self.request = httpx.Request("POST", "https://openrouter.ai/api/v1/chat/completions")
         self._sse_lines = sse_lines
 
@@ -243,7 +245,13 @@ async def test_aihubmix_image_edit_payload_uses_reference_images(tmp_path: Path)
 
 
 @pytest.mark.asyncio
-async def test_aihubmix_image_generation_downloads_url_response() -> None:
+async def test_aihubmix_image_generation_downloads_url_response(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        "mona.providers.image_generation.validate_url_target",
+        lambda url, *, allow_private=False: (True, ""),
+    )
     fake = FakeClient(FakeResponse({"data": [{"url": "https://cdn.example/image.png"}]}))
     fake.get_response = FakeResponse({}, content=PNG_BYTES)
     client = AIHubMixImageGenerationClient(
@@ -661,7 +669,13 @@ async def test_openai_b64_json_response_uses_detected_mime() -> None:
 
 
 @pytest.mark.asyncio
-async def test_openai_url_download_fallback() -> None:
+async def test_openai_url_download_fallback(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        "mona.providers.image_generation.validate_url_target",
+        lambda url, *, allow_private=False: (True, ""),
+    )
     fake = FakeClient(FakeResponse({"data": [{"url": "https://cdn.example/image.png"}]}))
     fake.get_response = FakeResponse({}, content=PNG_BYTES)
     client = OpenAIImageGenerationClient(
@@ -1006,6 +1020,77 @@ async def test_openai_compat_aspect_ratio_is_forwarded_for_self_hosted_service()
 
 
 @pytest.mark.asyncio
+async def test_openai_compat_resolves_relative_result_url_against_api_base() -> None:
+    fake = FakeClient(FakeResponse({"data": [{"url": "/outputs/generated.png"}]}))
+    fake.get_response = FakeResponse({}, content=PNG_BYTES)
+    client = OpenAICompatImageGenerationClient(
+        api_key=None,
+        api_base="http://172.31.13.189:30030/v1",
+        client=fake,  # type: ignore[arg-type]
+    )
+
+    response = await client.generate(prompt="draw", model="z-image")
+
+    encoded = response.images[0].split(",", 1)[1]
+    assert base64.b64decode(encoded) == PNG_BYTES
+    assert fake.get_calls == [
+        {
+            "url": "http://172.31.13.189:30030/outputs/generated.png",
+            "follow_redirects": False,
+        }
+    ]
+
+
+@pytest.mark.asyncio
+async def test_openai_compat_blocks_result_redirect_to_metadata() -> None:
+    class RedirectClient(FakeClient):
+        async def get(self, url: str, **kwargs: Any) -> FakeResponse:
+            self.get_calls.append({"url": url, **kwargs})
+            return FakeResponse(
+                {},
+                status_code=302,
+                headers={"location": "http://169.254.169.254/latest/meta-data"},
+            )
+
+    fake = RedirectClient(FakeResponse({"data": [{"url": "/outputs/generated.png"}]}))
+    client = OpenAICompatImageGenerationClient(
+        api_key=None,
+        api_base="http://172.31.13.189:30030/v1",
+        client=fake,  # type: ignore[arg-type]
+    )
+
+    with pytest.raises(ImageGenerationError) as caught:
+        await client.generate(prompt="draw", model="z-image")
+
+    assert caught.value.code == "IMAGE_URL_BLOCKED"
+    assert caught.value.result_url == "http://169.254.169.254/latest/meta-data"
+    assert len(fake.get_calls) == 1
+
+
+@pytest.mark.asyncio
+async def test_openai_compat_preserves_result_url_when_download_fails() -> None:
+    class FailingDownloadClient(FakeClient):
+        async def get(self, url: str, **kwargs: Any) -> FakeResponse:
+            self.get_calls.append({"url": url, **kwargs})
+            raise httpx.ConnectError("offline", request=httpx.Request("GET", url))
+
+    fake = FailingDownloadClient(
+        FakeResponse({"data": [{"url": "/outputs/generated.png"}]})
+    )
+    client = OpenAICompatImageGenerationClient(
+        api_key=None,
+        api_base="http://172.31.13.189:30030/v1",
+        client=fake,  # type: ignore[arg-type]
+    )
+
+    with pytest.raises(ImageGenerationError) as caught:
+        await client.generate(prompt="draw", model="z-image")
+
+    assert caught.value.code == "IMAGE_GENERATION_UNCERTAIN"
+    assert caught.value.result_url == "http://172.31.13.189:30030/outputs/generated.png"
+
+
+@pytest.mark.asyncio
 async def test_openai_compat_selected_size_removes_preconfigured_size_aliases() -> None:
     fake = FakeClient(FakeResponse({"data": [{"b64_json": RAW_B64}]}))
     client = OpenAICompatImageGenerationClient(
@@ -1052,6 +1137,24 @@ async def test_openai_compat_structured_size_error_is_recoverable() -> None:
     assert error.code == "UNSUPPORTED_IMAGE_SIZE"
     assert error.supported_sizes == ["1024x1024", "1152x2048"]
     assert error.retry_safe is True
+
+
+@pytest.mark.asyncio
+async def test_openai_compat_fastapi_size_error_is_recoverable() -> None:
+    fake = FakeClient(
+        FakeResponse(
+            {"detail": "size must be formatted as positive WIDTHxHEIGHT"},
+            status_code=400,
+        )
+    )
+    client = OpenAICompatImageGenerationClient(api_key=None, client=fake)  # type: ignore[arg-type]
+
+    with pytest.raises(ImageGenerationError) as caught:
+        await client.generate(prompt="draw", model="z-image", image_size="1K")
+
+    assert caught.value.code == "UNSUPPORTED_IMAGE_SIZE"
+    assert caught.value.retry_safe is True
+    assert "positive WIDTHxHEIGHT" in str(caught.value)
 
 
 @pytest.mark.asyncio

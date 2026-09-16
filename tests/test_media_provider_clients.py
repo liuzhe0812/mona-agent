@@ -4,6 +4,7 @@ import json
 import httpx
 import pytest
 
+import mona.providers.image_generation as image_generation
 from mona.config.schema import Config, ProviderConfig, ProvidersConfig
 from mona.providers.image_generation import ImageGenerationError, OpenAICompatImageGenerationClient
 from mona.providers.mona_managed_media import MonaManagedMediaClient
@@ -21,6 +22,15 @@ _PNG = (
     b"\x00\x00\x00\x00IEND\xaeB`\x82"
 )
 _PNG_B64 = base64.b64encode(_PNG).decode("ascii")
+
+
+@pytest.fixture(autouse=True)
+def _allow_mock_media_hosts(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(
+        image_generation,
+        "validate_url_target",
+        lambda url, *, allow_private=False: (True, ""),
+    )
 
 
 @pytest.mark.asyncio

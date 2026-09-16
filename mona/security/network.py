@@ -8,16 +8,20 @@ import socket
 from contextlib import suppress
 from urllib.parse import urlparse
 
-_BLOCKED_NETWORKS = [
-    ipaddress.ip_network("0.0.0.0/8"),
+_USER_CONFIGURABLE_SERVICE_NETWORKS = [
     ipaddress.ip_network("10.0.0.0/8"),
     ipaddress.ip_network("100.64.0.0/10"),   # carrier-grade NAT
     ipaddress.ip_network("127.0.0.0/8"),
-    ipaddress.ip_network("169.254.0.0/16"),   # link-local / cloud metadata
     ipaddress.ip_network("172.16.0.0/12"),
     ipaddress.ip_network("192.168.0.0/16"),
     ipaddress.ip_network("::1/128"),
     ipaddress.ip_network("fc00::/7"),          # unique local
+]
+
+_BLOCKED_NETWORKS = [
+    ipaddress.ip_network("0.0.0.0/8"),
+    *_USER_CONFIGURABLE_SERVICE_NETWORKS,
+    ipaddress.ip_network("169.254.0.0/16"),   # link-local / cloud metadata
     ipaddress.ip_network("fe80::/10"),         # link-local v6
 ]
 
@@ -42,8 +46,22 @@ def _is_private(addr: ipaddress.IPv4Address | ipaddress.IPv6Address) -> bool:
     return any(addr in net for net in _BLOCKED_NETWORKS)
 
 
-def validate_url_target(url: str) -> tuple[bool, str]:
+def _is_user_configurable_service_address(
+    addr: ipaddress.IPv4Address | ipaddress.IPv6Address,
+) -> bool:
+    return any(addr in net for net in _USER_CONFIGURABLE_SERVICE_NETWORKS)
+
+
+def validate_url_target(
+    url: str,
+    *,
+    allow_private: bool = False,
+) -> tuple[bool, str]:
     """Validate a URL is safe to fetch: scheme, hostname, and resolved IPs.
+
+    ``allow_private`` is reserved for endpoints the user explicitly configures
+    as trusted local services.  Scheme, hostname, and DNS validation still
+    apply; ordinary URL fetches keep the default private-network block.
 
     Returns (ok, error_message).  When ok is True, error_message is empty.
     """
@@ -71,7 +89,8 @@ def validate_url_target(url: str) -> tuple[bool, str]:
             addr = ipaddress.ip_address(info[4][0])
         except ValueError:
             continue
-        if _is_private(addr):
+        private_allowed = allow_private and _is_user_configurable_service_address(addr)
+        if _is_private(addr) and not private_allowed:
             return False, f"Blocked: {hostname} resolves to private/internal address {addr}"
 
     return True, ""

@@ -100,7 +100,7 @@ CINDY_CHAT_PROVIDERS: tuple[CindyChatProvider, ...] = (
     ),
     CindyChatProvider(
         "aliyun-bailian-coding", "阿里云百炼 Coding Plan（包月）", "https://coding.dashscope.aliyuncs.com/v1",
-        _models(("qwen3.7-plus", "Qwen 3.7 Plus", None), ("qwen3-coder-next", "Qwen3 Coder Next", None), ("qwen3-coder-plus", "Qwen3 Coder Plus", None)), region="cn",
+        _models(("qwen3.7-plus", "Qwen 3.7 Plus", 1_000_000), ("qwen3-coder-next", "Qwen3 Coder Next", None), ("qwen3-coder-plus", "Qwen3 Coder Plus", None)), region="cn",
         thinking_style="enable_thinking",
     ),
     CindyChatProvider(

@@ -9,16 +9,18 @@ the downloadable video URL.  This mirrors the pattern used by Agnes AI's
 from __future__ import annotations
 
 import asyncio
+import ipaddress
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from typing import Any
-from urllib.parse import quote
+from urllib.parse import quote, urljoin, urlparse
 
 import httpx
 from loguru import logger
 
 from mona.providers.mona_managed_media import MonaManagedMediaClient, MonaManagedMediaError
 from mona.providers.registry import find_by_name
+from mona.security.network import validate_url_target
 
 _DEFAULT_TIMEOUT_S = 60.0
 _DEFAULT_POLL_INTERVAL_S = 5.0
@@ -44,6 +46,55 @@ _AGNES_DURATION_PRESETS = {
 
 class VideoGenerationError(RuntimeError):
     """Raised when the video generation provider cannot return a video."""
+
+    def __init__(self, message: str, *, result_url: str | None = None) -> None:
+        super().__init__(message)
+        self.result_url = result_url
+
+
+def _origin(value: str) -> tuple[str, str, int | None]:
+    parsed = urlparse(value)
+    port = parsed.port
+    if port is None:
+        port = 443 if parsed.scheme.lower() == "https" else 80 if parsed.scheme.lower() == "http" else None
+    return parsed.scheme.lower(), (parsed.hostname or "").lower(), port
+
+
+def _resolve_provider_video_url(api_base: str, value: str) -> str:
+    parsed = urlparse(value)
+    if parsed.scheme:
+        return value
+    return urljoin(f"{api_base.rstrip('/')}/", value)
+
+
+def _is_private_literal_url(value: str) -> bool:
+    hostname = urlparse(value).hostname
+    if not hostname or hostname.lower() == "localhost":
+        return bool(hostname)
+    try:
+        address = ipaddress.ip_address(hostname)
+    except ValueError:
+        return False
+    return address.is_private or address.is_loopback or address.is_link_local
+
+
+def _validate_provider_video_url(url: str, *, api_base: str = "") -> None:
+    allow_private = bool(api_base) and _origin(url) == _origin(api_base)
+    ok, error = validate_url_target(url, allow_private=allow_private)
+    if not ok:
+        raise VideoGenerationError(
+            f"Video service URL is not allowed: {error}",
+            result_url=url,
+        )
+
+
+def _normalize_provider_video_url(api_base: str, value: str) -> str:
+    url = _resolve_provider_video_url(api_base, value) if api_base else value
+    # Keep public result URLs provider agnostic.  Literal private results must
+    # still belong to the configured service origin before they are downloaded.
+    if _is_private_literal_url(url):
+        _validate_provider_video_url(url, api_base=api_base)
+    return url
 
 
 @dataclass(frozen=True)
@@ -75,11 +126,6 @@ def register_video_gen_provider(cls: type[VideoGenerationProvider]) -> None:
 
 def get_video_gen_provider(name: str) -> type[VideoGenerationProvider] | None:
     return _VIDEO_GEN_PROVIDERS.get(name) or _VIDEO_GEN_PROVIDERS.get("openai_compat")
-
-
-def video_gen_provider_names() -> tuple[str, ...]:
-    """Return registered video generation provider names in registry order."""
-    return tuple(_VIDEO_GEN_PROVIDERS)
 
 
 def video_gen_provider_configs(config: Any) -> dict[str, Any]:
@@ -349,6 +395,7 @@ class AgnesVideoGenerationClient(VideoGenerationProvider):
                         raise VideoGenerationError(
                             f"Agnes video completed but no url returned: {data}"
                         )
+                    url = _normalize_provider_video_url(self.api_base, url)
                     return GeneratedVideoResponse(
                         video_url=url,
                         content="",
@@ -519,6 +566,7 @@ class OpenAICompatVideoGenerationClient(VideoGenerationProvider):
         status: str,
         default_progress: int,
     ) -> GeneratedVideoResponse:
+        video_url = _normalize_provider_video_url(self.api_base, video_url)
         duration = payload.get("seconds") or payload.get("duration")
         size = payload.get("size") or payload.get("resolution")
         return GeneratedVideoResponse(
@@ -653,16 +701,55 @@ class MonaManagedVideoGenerationClient(VideoGenerationProvider):
         )
 
 
-async def download_video_bytes(url: str, *, timeout: float = 300.0) -> bytes:
-    """Download a generated video from a URL and return its raw bytes."""
-    async with httpx.AsyncClient(timeout=timeout, follow_redirects=True) as client:
-        response = await client.get(url)
+async def download_video_bytes(
+    url: str,
+    *,
+    timeout: float = 300.0,
+    api_base: str | None = None,
+    client: httpx.AsyncClient | None = None,
+) -> bytes:
+    """Download a generated video while validating every redirect target."""
+    current = _resolve_provider_video_url(api_base, url) if api_base else url
+    trusted_base = api_base or ""
+    owns_client = client is None
+    client = client or httpx.AsyncClient(timeout=timeout)
+    try:
+        for _ in range(6):
+            _validate_provider_video_url(current, api_base=trusted_base)
+            try:
+                response = await client.get(current, follow_redirects=False)
+            except (httpx.TimeoutException, httpx.RequestError) as exc:
+                raise VideoGenerationError(
+                    f"failed to download generated video: {exc}",
+                    result_url=current,
+                ) from exc
+            if response.status_code not in {301, 302, 303, 307, 308}:
+                break
+            location = response.headers.get("location")
+            if not location:
+                raise VideoGenerationError(
+                    "generated video redirect did not include a location",
+                    result_url=current,
+                )
+            current = urljoin(current, location)
+        else:
+            raise VideoGenerationError(
+                "generated video download exceeded the redirect limit",
+                result_url=current,
+            )
+
         try:
             response.raise_for_status()
         except httpx.HTTPStatusError as exc:
             detail = response.text[:500]
-            raise VideoGenerationError(f"failed to download generated video: {detail}") from exc
+            raise VideoGenerationError(
+                f"failed to download generated video: {detail}",
+                result_url=current,
+            ) from exc
         return response.content
+    finally:
+        if owns_client:
+            await client.aclose()
 
 
 # ---------------------------------------------------------------------------

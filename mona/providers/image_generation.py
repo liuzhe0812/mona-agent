@@ -9,7 +9,7 @@ from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
-from urllib.parse import quote
+from urllib.parse import quote, urljoin, urlparse
 
 import httpx
 from loguru import logger
@@ -17,6 +17,7 @@ from loguru import logger
 from mona.config.schema import ProviderConfig
 from mona.providers.mona_managed_media import MonaManagedMediaClient, MonaManagedMediaError
 from mona.providers.registry import find_by_name
+from mona.security.network import validate_url_target
 from mona.utils.helpers import detect_image_mime
 from mona.utils.image_upload import ImageUploadError, upload_image_to_mona
 
@@ -58,12 +59,14 @@ class ImageGenerationError(RuntimeError):
         supported_sizes: list[str] | None = None,
         retry_safe: bool = False,
         task_id: str | None = None,
+        result_url: str | None = None,
     ) -> None:
         super().__init__(message)
         self.code = code
         self.supported_sizes = list(supported_sizes or [])
         self.retry_safe = retry_safe
         self.task_id = task_id
+        self.result_url = result_url
 
 
 def _merge_extra_body(
@@ -98,6 +101,7 @@ def _request_error(
     exc: Exception,
     *,
     task_id: str | None = None,
+    result_url: str | None = None,
 ) -> ImageGenerationError:
     """Create a non-retryable error for an uncertain network outcome."""
     if task_id:
@@ -117,7 +121,34 @@ def _request_error(
         code="IMAGE_GENERATION_UNCERTAIN",
         retry_safe=False,
         task_id=task_id,
+        result_url=result_url,
     )
+
+
+def _origin(value: str) -> tuple[str, str, int | None]:
+    parsed = urlparse(value)
+    port = parsed.port
+    if port is None:
+        port = 443 if parsed.scheme == "https" else 80 if parsed.scheme == "http" else None
+    return parsed.scheme.lower(), (parsed.hostname or "").lower(), port
+
+
+def _resolve_provider_asset_url(api_base: str, value: str) -> str:
+    parsed = urlparse(value)
+    if parsed.scheme:
+        return value
+    return urljoin(f"{api_base.rstrip('/')}/", value)
+
+
+def _validate_provider_url(url: str, *, api_base: str) -> None:
+    allow_private = bool(api_base) and _origin(url) == _origin(api_base)
+    ok, error = validate_url_target(url, allow_private=allow_private)
+    if not ok:
+        raise ImageGenerationError(
+            f"Image service URL is not allowed: {error}",
+            code="IMAGE_URL_BLOCKED",
+            result_url=url,
+        )
 
 
 def _response_json(response: httpx.Response) -> Any:
@@ -189,6 +220,23 @@ def _is_auth_or_quota_error(payload: Any) -> bool:
     )
 
 
+def _is_output_parameter_error(payload: Any) -> bool:
+    if not isinstance(payload, dict):
+        return False
+    error = payload.get("error")
+    candidates = [payload, error] if isinstance(error, dict) else [payload]
+    output_fields = {"size", "image_size", "aspect_ratio", "resolution", "width", "height"}
+    for candidate in candidates:
+        param = candidate.get("param")
+        if isinstance(param, str) and param.strip().lower() in output_fields:
+            return True
+    detail = payload.get("detail")
+    if not isinstance(detail, str):
+        return False
+    normalized = detail.lower().replace("-", "_").replace(" ", "_")
+    return any(field in normalized for field in output_fields)
+
+
 def _http_image_generation_error(
     response: httpx.Response,
     *,
@@ -208,8 +256,7 @@ def _http_image_generation_error(
                 supported_sizes=supported_sizes,
                 retry_safe=True,
             )
-        error = payload.get("error", {}) if isinstance(payload, dict) else {}
-        if isinstance(error, dict) and error.get("param") in {"size", "image_size", "aspect_ratio", "resolution", "width", "height"}:
+        if _is_output_parameter_error(payload):
             return ImageGenerationError(
                 f"{label} rejected the requested image output (HTTP {response.status_code}): {_http_error_detail(response)}",
                 code="UNSUPPORTED_IMAGE_SIZE",
@@ -337,20 +384,50 @@ def _aihubmix_model_path(model: str) -> str:
 async def _download_image_data_url(
     client: httpx.AsyncClient,
     url: str,
+    *,
+    api_base: str = "",
 ) -> str:
-    try:
-        response = await client.get(url)
-    except (httpx.TimeoutException, httpx.RequestError) as exc:
-        raise _request_error("Generated image download", exc) from exc
+    current = _resolve_provider_asset_url(api_base, url) if api_base else url
+    response: httpx.Response | Any
+    for _ in range(6):
+        _validate_provider_url(current, api_base=api_base)
+        try:
+            response = await client.get(current, follow_redirects=False)
+        except (httpx.TimeoutException, httpx.RequestError) as exc:
+            raise _request_error(
+                "Generated image download",
+                exc,
+                result_url=current,
+            ) from exc
+        if response.status_code not in {301, 302, 303, 307, 308}:
+            break
+        location = getattr(response, "headers", {}).get("location")
+        if not location:
+            raise ImageGenerationError(
+                "generated image redirect did not include a location",
+                result_url=current,
+            )
+        current = urljoin(current, location)
+    else:
+        raise ImageGenerationError(
+            "generated image download exceeded the redirect limit",
+            result_url=current,
+        )
     try:
         response.raise_for_status()
     except httpx.HTTPStatusError as exc:
         detail = response.text[:500]
-        raise ImageGenerationError(f"failed to download generated image: {detail}") from exc
+        raise ImageGenerationError(
+            f"failed to download generated image: {detail}",
+            result_url=current,
+        ) from exc
     raw = response.content
     mime = detect_image_mime(raw)
     if mime is None:
-        raise ImageGenerationError("generated image URL did not return a supported image")
+        raise ImageGenerationError(
+            "generated image URL did not return a supported image",
+            result_url=current,
+        )
     encoded = base64.b64encode(raw).decode("ascii")
     return f"data:{mime};base64,{encoded}"
 
@@ -378,11 +455,6 @@ def get_image_gen_provider(name: str) -> type[ImageGenerationProvider] | None:
     # dashscope, custom, etc. to work for image generation without a dedicated
     # implementation.
     return _IMAGE_GEN_PROVIDERS.get("openai_compat")
-
-
-def image_gen_provider_names() -> tuple[str, ...]:
-    """Return registered image generation provider names in registry order."""
-    return tuple(_IMAGE_GEN_PROVIDERS)
 
 
 def image_gen_provider_configs(config: Any) -> dict[str, Any]:
@@ -475,6 +547,8 @@ class ImageGenerationProvider(ABC):
         body: dict[str, Any],
     ) -> httpx.Response:
         try:
+            if self.api_base:
+                _validate_provider_url(url, api_base=self.api_base)
             if self._client is not None:
                 return await self._client.post(url, headers=headers, json=body)
             async with httpx.AsyncClient(timeout=self.timeout) as c:
@@ -675,7 +749,11 @@ class AIHubMixImageGenerationClient(ImageGenerationProvider):
             raise _http_image_generation_error(response, label="AIHubMix") from exc
 
         payload = response.json()
-        images = await _aihubmix_images_from_payload(client, payload)
+        images = await _aihubmix_images_from_payload(
+            client,
+            payload,
+            api_base=self.api_base,
+        )
 
         self._require_images(images, payload)
 
@@ -692,6 +770,9 @@ def _http_error_detail(response: httpx.Response) -> str:
                 return err.get("message") or str(err)
             if err:
                 return str(err)
+            detail = data.get("detail")
+            if isinstance(detail, str) and detail:
+                return detail
     except Exception:
         pass
     return response.text[:500] or "<empty response body>"
@@ -886,6 +967,8 @@ class GeminiImageGenerationClient(ImageGenerationProvider):
 async def _aihubmix_images_from_payload(
     client: httpx.AsyncClient,
     payload: dict[str, Any],
+    *,
+    api_base: str = "",
 ) -> list[str]:
     images: list[str] = []
     candidates: list[Any] = []
@@ -903,7 +986,13 @@ async def _aihubmix_images_from_payload(
             if value.startswith("data:image/"):
                 images.append(value)
             elif value.startswith(("http://", "https://")):
-                images.append(await _download_image_data_url(client, value))
+                images.append(
+                    await _download_image_data_url(
+                        client,
+                        value,
+                        api_base=api_base,
+                    )
+                )
             return
         if not isinstance(value, dict):
             return
@@ -1186,7 +1275,11 @@ class OpenAIImageGenerationClient(ImageGenerationProvider):
         if owns_client:
             client = httpx.AsyncClient(timeout=self.timeout)
         try:
-            images = await _openai_images_from_payload(client, payload)
+            images = await _openai_images_from_payload(
+                client,
+                payload,
+                api_base=self.api_base,
+            )
         finally:
             if owns_client:
                 await client.aclose()
@@ -1314,7 +1407,11 @@ class OpenAICompatImageGenerationClient(ImageGenerationProvider):
         if owns_client:
             client = httpx.AsyncClient(timeout=self.timeout)
         try:
-            images = await _openai_images_from_payload(client, payload)
+            images = await _openai_images_from_payload(
+                client,
+                payload,
+                api_base=self.api_base,
+            )
             if not images:
                 task_id = _image_task_id(payload)
                 if task_id:
@@ -1371,7 +1468,11 @@ class OpenAICompatImageGenerationClient(ImageGenerationProvider):
                 raise ImageGenerationError(
                     f"Image generation failed: {_image_task_error(payload)}"
                 )
-            images = await _openai_images_from_payload(client, payload)
+            images = await _openai_images_from_payload(
+                client,
+                payload,
+                api_base=self.api_base,
+            )
             if images:
                 return images, payload
             if status in {"completed", "succeeded", "success"}:
@@ -1588,6 +1689,8 @@ def _openai_explicit_size_supported(
 async def _openai_images_from_payload(
     client: httpx.AsyncClient,
     payload: dict[str, Any],
+    *,
+    api_base: str = "",
 ) -> list[str]:
     """Extract images from OpenAI Images API response.
 
@@ -1603,32 +1706,25 @@ async def _openai_images_from_payload(
             continue
         url = item.get("url")
         if isinstance(url, str) and url:
-            images.append(await _download_image_data_url(client, url))
+            images.append(
+                await _download_image_data_url(
+                    client,
+                    url,
+                    api_base=api_base,
+                )
+            )
     for item in payload.get("files") or []:
         if not isinstance(item, dict):
             continue
         url = item.get("url")
         if isinstance(url, str) and url:
-            images.append(await _download_image_data_url(client, url))
-    return images
-
-
-def _codex_responses_images_from_payload(payload: dict[str, Any]) -> list[str]:
-    """Extract images from Codex Responses API ``image_generation_call`` output."""
-    images: list[str] = []
-    for item in payload.get("output") or []:
-        if not isinstance(item, dict):
-            continue
-        if item.get("type") != "image_generation_call":
-            continue
-        result = item.get("result")
-        if isinstance(result, str):
-            images.append(result if result.startswith("data:image/") else _b64_image_data_url(result))
-            continue
-        if isinstance(result, dict):
-            image_url = result.get("image_url") or result.get("image") or ""
-            if isinstance(image_url, str):
-                images.append(image_url if image_url.startswith("data:image/") else _b64_image_data_url(image_url))
+            images.append(
+                await _download_image_data_url(
+                    client,
+                    url,
+                    api_base=api_base,
+                )
+            )
     return images
 
 

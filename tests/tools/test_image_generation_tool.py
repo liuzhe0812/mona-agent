@@ -13,7 +13,10 @@ from mona.config.schema import (
     ModelGenerationParameters,
     ProviderConfig,
 )
-from mona.providers.image_generation import GeneratedImageResponse
+from mona.providers.image_generation import (
+    GeneratedImageResponse,
+    ImageGenerationError,
+)
 
 PNG_BYTES = (
     b"\x89PNG\r\n\x1a\n\x00\x00\x00\rIHDR\x00\x00\x00\x01"
@@ -116,9 +119,39 @@ async def test_custom_image_model_sends_only_explicitly_enabled_parameters(
 
     assert FakeImageClient.instances[0].kwargs["extra_body"] == {
         "quality": "standard",
+        "response_format": "b64_json",
         "seed": 42,
         "cfg": 7.0,
     }
+    assert FakeImageClient.instances[0].calls[0]["image_size"] == "1024x1024"
+
+
+@pytest.mark.asyncio
+async def test_custom_image_model_converts_size_tier_using_aspect_ratio(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    FakeImageClient.instances = []
+    monkeypatch.setattr(
+        "mona.agent.tools.image_generation.get_image_gen_provider",
+        lambda name: FakeImageClient if name == "custom-images" else None,
+    )
+    tool = ImageGenerationTool(
+        workspace=tmp_path,
+        config=ImageGenerationToolConfig(
+            enabled=True,
+            provider="custom-images",
+            model="z-image",
+        ),
+        provider_configs={
+            "custom-images": ProviderConfig(api_base="http://172.31.13.189:30030/v1")
+        },
+    )
+
+    await tool.execute(prompt="draw", aspect_ratio="16:9")
+
+    assert FakeImageClient.instances[0].calls[0]["image_size"] == "1024x576"
+    assert FakeImageClient.instances[0].calls[0]["aspect_ratio"] == "16:9"
 
 
 @pytest.mark.asyncio
@@ -196,3 +229,43 @@ async def test_generate_image_tool_rejects_reference_outside_workspace(tmp_path:
     result = await tool.execute(prompt="edit", reference_images=[str(outside)])
 
     assert "reference_images must be inside the workspace" in result
+
+
+@pytest.mark.asyncio
+async def test_generate_image_tool_preserves_failed_download_url(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class DownloadFailureClient(FakeImageClient):
+        async def generate(self, **kwargs: Any) -> GeneratedImageResponse:
+            raise ImageGenerationError(
+                "download failed",
+                code="IMAGE_GENERATION_UNCERTAIN",
+                result_url="http://172.31.13.189:30030/outputs/generated.png",
+            )
+
+    monkeypatch.setattr(
+        "mona.agent.tools.image_generation.get_image_gen_provider",
+        lambda name: DownloadFailureClient if name == "custom-images" else None,
+    )
+    tool = ImageGenerationTool(
+        workspace=tmp_path,
+        config=ImageGenerationToolConfig(
+            enabled=True,
+            provider="custom-images",
+            model="z-image",
+        ),
+        provider_configs={
+            "custom-images": ProviderConfig(
+                api_base="http://172.31.13.189:30030/v1",
+            )
+        },
+    )
+
+    payload = json.loads(await tool.execute(prompt="draw"))
+
+    assert payload["code"] == "IMAGE_GENERATION_UNCERTAIN"
+    assert payload["result_url"] == (
+        "http://172.31.13.189:30030/outputs/generated.png"
+    )
+    assert "without resubmitting" in payload["next_step"]
