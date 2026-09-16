@@ -814,6 +814,65 @@ describe('Sheets command atomic rollback', () => {
     }))
   })
 
+  it('keeps changed ranges pending and reports formula errors until inspected and fixed', async () => {
+    vi.resetModules()
+    resetFakeState([[{ value: '#DIV/0!', formula: '=1/0' }, { value: null }, { value: null }]])
+    const bridge = await openSheets(new ArrayBuffer(0))
+    bridge.emit({ type: 'office_command', command: {
+      sessionId: 'session-1', operationId: 'style-error',
+      expectedVersion: { editorEpoch: 'epoch-1', modelRevision: 0 },
+      operations: [{ op: 'set_style', payload: { sheet: 'Sheet1', range: 'A1', style: { bold: true } } }],
+    } })
+    const applied = await waitForPost((message) => isRecord(message) && message.type === 'office_command_result'
+      && isRecord(message.result) && message.result.operationId === 'style-error')
+    expect(applied.result).toEqual(expect.objectContaining({ ok: true }))
+    expect(state.cells[0]?.[0]).toEqual(expect.objectContaining({ formula: '=1/0' }))
+    state.cells[0]![0]!.value = '#DIV/0!'
+    bridge.emit({ type: 'office_inspect', command: {
+      sessionId: 'session-1', requestId: 'review-error', query: { mode: 'review' },
+    } })
+    const review = await waitForPost((message) => isRecord(message) && message.type === 'office_inspect_result'
+      && isRecord(message.result) && message.result.requestId === 'review-error')
+    expect(review.result).toEqual(expect.objectContaining({ result: expect.objectContaining({
+      pendingTargets: ['Sheet1!A1'], warnings: [expect.stringContaining('#DIV/0!')],
+    }) }))
+    bridge.emit({ type: 'office_inspect', command: {
+      sessionId: 'session-1', requestId: 'range-error',
+      query: { mode: 'range', sheet: 'Sheet1', range: 'A1', includeFormula: true, includeStyle: true },
+    } })
+    await waitForPost((message) => isRecord(message) && message.type === 'office_inspect_result'
+      && isRecord(message.result) && message.result.requestId === 'range-error')
+    bridge.emit({ type: 'office_inspect', command: {
+      sessionId: 'session-1', requestId: 'review-read', query: { mode: 'review' },
+    } })
+    const readReview = await waitForPost((message) => isRecord(message) && message.type === 'office_inspect_result'
+      && isRecord(message.result) && message.result.requestId === 'review-read')
+    expect(readReview.result).toEqual(expect.objectContaining({ result: expect.objectContaining({
+      pendingTargets: ['Sheet1!A1'], warnings: [expect.stringContaining('#DIV/0!')],
+    }) }))
+    bridge.emit({ type: 'office_command', command: {
+      sessionId: 'session-1', operationId: 'fix-error',
+      expectedVersion: { editorEpoch: 'epoch-1', modelRevision: 1 },
+      operations: [{ op: 'set_cell', payload: { sheet: 'Sheet1', cell: 'A1', value: 0 } }],
+    } })
+    await waitForPost((message) => isRecord(message) && message.type === 'office_command_result'
+      && isRecord(message.result) && message.result.operationId === 'fix-error')
+    bridge.emit({ type: 'office_inspect', command: {
+      sessionId: 'session-1', requestId: 'range-fixed',
+      query: { mode: 'range', sheet: 'Sheet1', range: 'A1', includeFormula: true, includeStyle: true },
+    } })
+    await waitForPost((message) => isRecord(message) && message.type === 'office_inspect_result'
+      && isRecord(message.result) && message.result.requestId === 'range-fixed')
+    bridge.emit({ type: 'office_inspect', command: {
+      sessionId: 'session-1', requestId: 'review-fixed', query: { mode: 'review' },
+    } })
+    const fixed = await waitForPost((message) => isRecord(message) && message.type === 'office_inspect_result'
+      && isRecord(message.result) && message.result.requestId === 'review-fixed')
+    expect(fixed.result).toEqual(expect.objectContaining({ result: expect.objectContaining({
+      pendingTargets: [], warnings: [],
+    }) }))
+  })
+
   it('tracks the mutation range from an existing workbook and preserves it for inspect and checkpoint', async () => {
     vi.resetModules()
     resetFakeState()

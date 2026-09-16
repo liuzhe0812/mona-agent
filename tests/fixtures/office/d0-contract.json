@@ -389,6 +389,10 @@
             "payload": { "afterBlockId": "heading_1", "text": "新增段落。" }
           },
           {
+            "op": "insert_title",
+            "payload": { "afterBlockId": null, "text": "项目报告" }
+          },
+          {
             "op": "insert_heading",
             "payload": { "afterBlockId": "paragraph_1", "text": "结论", "level": 2 }
           },

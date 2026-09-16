@@ -34,6 +34,15 @@ function normalizeColor(value: unknown): string | null {
   return /^([0-9a-f]{6})$/i.test(hex) ? `#${hex.toUpperCase()}` : value
 }
 
+function rowBreakXml(raw: unknown, allowBreak: boolean): string | null {
+  let xml = typeof raw === 'string' && /^<w:trPr(?:\s[^>]*)?>[\s\S]*<\/w:trPr>$/.test(raw)
+    ? raw
+    : '<w:trPr></w:trPr>'
+  xml = xml.replace(/<w:cantSplit(?:\s[^>]*)?\/>/g, '')
+  if (!allowBreak) xml = xml.replace('</w:trPr>', '<w:cantSplit/></w:trPr>')
+  return /^<w:trPr(?:\s[^>]*)?>\s*<\/w:trPr>$/.test(xml) ? null : xml
+}
+
 export function applyTableStyle(
   editor: Editor,
   tablePos: number,
@@ -42,7 +51,10 @@ export function applyTableStyle(
   const table = editor.state.doc.nodeAt(tablePos)
   if (!table || table.type.name !== 'docTable') throw new Error('指定位置不是文档表格。')
 
-  const provided = ['columnWidths', 'headerRows', 'headerFill', 'bodyFill', 'borderColor', 'cellPadding']
+  const provided = [
+    'columnWidths', 'headerRows', 'headerFill', 'bodyFill', 'borderColor', 'cellPadding',
+    'headerBold', 'headerAlign', 'verticalAlign', 'allowRowBreakAcrossPages',
+  ]
     .filter((key) => hasValue(payload, key))
   if (provided.length === 0) throw new Error('至少需要提供一个表格样式字段。')
 
@@ -72,6 +84,22 @@ export function applyTableStyle(
   const headerFill = hasValue(payload, 'headerFill') ? colorValue(payload, 'headerFill') : undefined
   const bodyFill = hasValue(payload, 'bodyFill') ? colorValue(payload, 'bodyFill') : undefined
   const borderColor = hasValue(payload, 'borderColor') ? colorValue(payload, 'borderColor') : undefined
+  const headerBold = hasValue(payload, 'headerBold') ? payload.headerBold : undefined
+  if (headerBold !== undefined && typeof headerBold !== 'boolean') throw new Error('headerBold 必须是布尔值。')
+  const headerAlign = hasValue(payload, 'headerAlign') ? payload.headerAlign : undefined
+  if (headerAlign !== undefined && !['left', 'center', 'right'].includes(String(headerAlign))) {
+    throw new Error('headerAlign 必须是 left、center 或 right。')
+  }
+  const verticalAlign = hasValue(payload, 'verticalAlign') ? payload.verticalAlign : undefined
+  if (verticalAlign !== undefined && !['top', 'center', 'bottom'].includes(String(verticalAlign))) {
+    throw new Error('verticalAlign 必须是 top、center 或 bottom。')
+  }
+  const allowRowBreak = hasValue(payload, 'allowRowBreakAcrossPages')
+    ? payload.allowRowBreakAcrossPages
+    : undefined
+  if (allowRowBreak !== undefined && typeof allowRowBreak !== 'boolean') {
+    throw new Error('allowRowBreakAcrossPages 必须是布尔值。')
+  }
   let columnPercentages: number[] | undefined
   let totalWidth: number | undefined
   if (columnWidths !== undefined) {
@@ -97,11 +125,15 @@ export function applyTableStyle(
 
   let transaction = editor.state.tr
   table.forEach((row, rowOffset, rowIndex) => {
-    if (headerRows !== undefined) {
+    if (headerRows !== undefined || allowRowBreak !== undefined) {
       transaction = transaction.setNodeMarkup(tablePos + 1 + rowOffset, undefined, {
         ...row.attrs,
-        repeatHeader: rowIndex < headerRows,
-        repeatHeaderEdited: true,
+        ...(headerRows === undefined
+          ? {}
+          : { repeatHeader: rowIndex < headerRows, repeatHeaderEdited: true }),
+        ...(allowRowBreak === undefined
+          ? {}
+          : { rawTrPr: rowBreakXml(row.attrs.rawTrPr, allowRowBreak) }),
       })
     }
 
@@ -113,6 +145,9 @@ export function applyTableStyle(
       if (columnWidths !== undefined) cellPatch.colwidth = columnWidths.slice(column, column + colspan)
       if (isHeaderRow && headerFill !== undefined) cellPatch.fill = headerFill
       if (!isHeaderRow && bodyFill !== undefined) cellPatch.fill = bodyFill
+      if (isHeaderRow && headerBold !== undefined) cellPatch.bold = headerBold
+      if (isHeaderRow && headerAlign !== undefined) cellPatch.align = headerAlign
+      if (verticalAlign !== undefined) cellPatch.vAlign = verticalAlign
       if (border !== undefined) {
         cellPatch.borders = {
           top: { ...border },
@@ -125,6 +160,27 @@ export function applyTableStyle(
         transaction = transaction.setNodeMarkup(tablePos + 2 + rowOffset + cellOffset, undefined, {
           ...cell.attrs,
           ...cellPatch,
+        })
+      }
+      if (isHeaderRow && (headerBold !== undefined || headerAlign !== undefined)) {
+        const cellPos = tablePos + 2 + rowOffset + cellOffset
+        cell.forEach((paragraph, paragraphOffset) => {
+          if (paragraph.type.name !== 'docParagraph' && paragraph.type.name !== 'docListItem') return
+          const paragraphPos = cellPos + 1 + paragraphOffset
+          if (headerAlign !== undefined) {
+            transaction = transaction.setNodeMarkup(paragraphPos, undefined, {
+              ...paragraph.attrs,
+              align: headerAlign,
+            })
+          }
+          if (headerBold !== undefined && paragraph.content.size > 0) {
+            const from = paragraphPos + 1
+            const to = from + paragraph.content.size
+            const bold = editor.schema.marks.bold
+            transaction = headerBold
+              ? transaction.addMark(from, to, bold.create())
+              : transaction.removeMark(from, to, bold)
+          }
         })
       }
       column += colspan

@@ -1,0 +1,1 @@
+import '../../mona/slides-entry'

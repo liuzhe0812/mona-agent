@@ -108,10 +108,6 @@ const packageJson = JSON.parse(await readFile(resolve(root, 'package.json'), 'ut
 assert.equal(packageJson.dependencies.react, '19.2.8')
 assert.equal(packageJson.dependencies['react-dom'], '19.2.8')
 assert.equal(
-  packageJson.scripts['build:mona'],
-  'vite build --outDir ../../../mona/web/dist/office-editor --emptyOutDir',
-)
-assert.equal(
   packageJson.scripts['build:tauri'],
   'vite build --outDir ../../../src-tauri/dist/office-editor --emptyOutDir',
 )
@@ -121,5 +117,4 @@ const outputPath = (scriptName) => {
   assert.ok(match, `${scriptName} must declare --outDir`)
   return resolve(entriesRoot, match[1])
 }
-assert.equal(outputPath('build:mona'), resolve(root, '../../mona/web/dist/office-editor'))
 assert.equal(outputPath('build:tauri'), resolve(root, '../../src-tauri/dist/office-editor'))

@@ -294,6 +294,7 @@ export function OfficeEditorHost({
         version: message.version,
         changedTargets: message.changedTargets,
         ...(message.pendingVisualSlideIds ? { pendingVisualSlideIds: message.pendingVisualSlideIds } : {}),
+        ...(message.pendingReviewTargets ? { pendingReviewTargets: message.pendingReviewTargets } : {}),
       });
       scheduleCheckpoint(message.version);
     } else if (message.type === "office_command_result") {
@@ -381,6 +382,7 @@ export function OfficeEditorHost({
                 version: message.session.version,
                 file,
                 ...(message.session.pendingVisualSlideIds ? { pendingVisualSlideIds: message.session.pendingVisualSlideIds } : {}),
+                ...(message.session.pendingReviewTargets ? { pendingReviewTargets: message.session.pendingReviewTargets } : {}),
               },
               [file],
             );

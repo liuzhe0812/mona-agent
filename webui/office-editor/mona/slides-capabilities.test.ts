@@ -9,6 +9,7 @@ describe('Slides capabilities', () => {
     expect(result.mode).toBe('capabilities')
     expect(result.documentType).toBe('slides')
     expect(result.operations.map(({ op }) => op)).toEqual([
+      'slide_add_chart',
       'slide_set_text',
       'slide_set_font',
       'slide_set_chart_style',

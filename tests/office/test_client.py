@@ -105,3 +105,48 @@ async def test_client_lists_sessions_for_the_request_owner() -> None:
     sessions = await client.list(owner_session_key="chat:1")
 
     assert [session.session_id for session in sessions] == ["office_1"]
+
+
+async def test_client_exports_checkpoint_into_gateway_workspace(tmp_path) -> None:
+    calls: list[tuple[str, str]] = []
+
+    async def handler(request: httpx.Request) -> httpx.Response:
+        calls.append((request.method, request.url.path))
+        assert request.headers["X-Mona-Session-Key"] == "chat:1"
+        if request.method == "POST":
+            assert request.url.path == "/api/office/sessions/office_1/save"
+            return httpx.Response(
+                200,
+                json={
+                    "ok": True,
+                    "fileName": "working.docx",
+                    "version": {"editorEpoch": "epoch_1", "modelRevision": 3},
+                },
+            )
+        assert request.url.path == "/api/office/sessions/office_1/file"
+        return httpx.Response(200, content=b"docx-checkpoint")
+
+    client = OfficeServiceClient(
+        "http://127.0.0.1:17174",
+        token="token",
+        transport=httpx.MockTransport(handler),
+    )
+    destination = tmp_path / "deliverables" / "report.docx"
+
+    result = await client.export(
+        "office_1",
+        owner_session_key="chat:1",
+        output=destination,
+        version={"editorEpoch": "epoch_1", "modelRevision": 3},
+    )
+
+    assert destination.read_bytes() == b"docx-checkpoint"
+    assert result == {
+        "ok": True,
+        "fileName": "report.docx",
+        "version": {"editorEpoch": "epoch_1", "modelRevision": 3},
+    }
+    assert calls == [
+        ("POST", "/api/office/sessions/office_1/save"),
+        ("GET", "/api/office/sessions/office_1/file"),
+    ]

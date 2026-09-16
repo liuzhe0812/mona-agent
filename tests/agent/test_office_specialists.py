@@ -180,8 +180,8 @@ def test_specialist_guidance_uses_incremental_reads_and_domain_acceptance() -> N
     assert "使用顺序" in ppt and "不等待整套图片" in ppt
     assert "不要求把任意表格都改成原生对象" in ppt
 
-    assert "REVIEW_REQUIRED" not in contents["mona-docx"]
-    assert "REVIEW_REQUIRED" not in contents["mona-xlsx"]
+    assert "REVIEW_REQUIRED" in contents["mona-docx"]
+    assert "REVIEW_REQUIRED" in contents["mona-xlsx"]
     assert "原生单元格/范围用于需要编辑和数据含义" in contents["mona-xlsx"]
     assert "不要求任意表格都变成原生对象" in contents["mona-docx"]
 

@@ -9,7 +9,6 @@
     "test": "node --test mona/entry-contract.test.mjs && vitest run --config vitest.config.ts",
     "typecheck": "tsc --noEmit",
     "build": "vite build",
-    "build:mona": "vite build --outDir ../../../mona/web/dist/office-editor --emptyOutDir",
     "build:tauri": "vite build --outDir ../../../src-tauri/dist/office-editor --emptyOutDir",
     "report:bundle-size": "node scripts/report-bundle-size.mjs",
     "generate:third-party-notices": "node scripts/generate-third-party-notices.mjs"

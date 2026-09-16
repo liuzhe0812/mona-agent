@@ -32,12 +32,6 @@ from mona.api.officecli_runtime import OfficeCliRuntime
 
 __all__ = ("OfficeCliClient", "OfficeCliError", "OfficeCliResult")
 
-# Commands that modify the document. Used to decide whether a working copy
-# is needed before invocation.
-_MUTATING_COMMANDS = frozenset({
-    "set", "add", "remove", "move", "swap", "raw-set", "add-part", "import", "merge", "create",
-})
-
 # Subcommands exposed by ``officecli`` (from ``officecli --help``).
 _VALID_COMMANDS = frozenset({
     "open", "close", "save", "watch", "unwatch",
@@ -220,7 +214,3 @@ class OfficeCliClient:
     async def get_node(self, file_path: str, path: str) -> OfficeCliResult:
         """Get a specific document node by path (e.g. ``/body/p[1]``)."""
         return await self.run("get", file_path, args=[path])
-
-    @staticmethod
-    def is_mutating(command: str) -> bool:
-        return command in _MUTATING_COMMANDS

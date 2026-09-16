@@ -7,6 +7,7 @@ import base64
 import hashlib
 import json
 import mimetypes
+import re
 import shutil
 import uuid
 from pathlib import Path
@@ -212,6 +213,10 @@ def _sha256(path: Path) -> str:
                     minimum=0,
                     maximum=100,
                 ),
+                "acceptWarnings": BooleanSchema(
+                    description="Accept non-blocking slide warnings only after a prior full-slide visual inspection at the same version; requires reviewReason",
+                ),
+                "reviewReason": StringSchema("Specific reason for retaining the reported slide design issues after viewing the current full-slide image", nullable=True),
             },
             required=["mode"],
             description=(
@@ -825,7 +830,7 @@ class OfficeTool(Tool, ContextAware):
             session = await client.get(session_id, owner_session_key=owner)
             review_payload = None
             export_version = expected_version
-            if session.type == "slides":
+            if session.type in {"docs", "sheets", "slides"}:
                 review = await client.inspect(
                     OfficeInspectRequest(session_id=session_id, query={"mode": "review"}),
                     owner_session_key=owner,
@@ -842,12 +847,38 @@ class OfficeTool(Tool, ContextAware):
                         "message": "文档在审阅前已变化，请按当前版本检查后再导出。", "retryable": True,
                     }}, ensure_ascii=False)
                 export_version = current
-                if review.result.pending_slide_ids and not allow_unreviewed:
+                blocking_warnings = [
+                    warning for warning in review.result.warnings
+                    if warning.startswith("[错误]")
+                    or "文字可能溢出" in warning
+                    or "文字溢出" in warning
+                    or "文字相互重叠" in warning
+                    or "超出页面边界" in warning
+                ]
+                pending_slides = list(review.result.pending_slide_ids)
+                pending_targets = list(review.result.pending_targets)
+                pending = pending_slides or pending_targets
+                if (pending or blocking_warnings) and not allow_unreviewed:
+                    if session.type == "slides":
+                        next_queries = [{"mode": "visual", "slideId": page} for page in pending_slides]
+                    elif session.type == "docs":
+                        next_queries = [{"mode": "visual", "pageIndex": 0}]
+                    else:
+                        next_queries = []
+                        for target in pending_targets:
+                            sheet, separator, cell_range = target.partition("!")
+                            next_queries.append(
+                                {"mode": "range", "sheet": sheet, "range": cell_range,
+                                 "includeFormula": True, "includeStyle": True}
+                                if separator and re.fullmatch(r"[A-Za-z]+[1-9]\d*(?::[A-Za-z]+[1-9]\d*)?", cell_range)
+                                else {"mode": "summary"}
+                            )
                     return json.dumps({"ok": False, "sessionId": session_id, "currentVersion": current,
                         "error": {"code": OfficeErrorCode.REVIEW_REQUIRED, "retryable": True,
-                            "message": "修改后的布局尚未查看。请用 inspect visual 检查列出的页面，处理或明确披露警告后再导出。保存草稿不受影响。"},
+                            "message": "Office 文件仍有未完成的质量验收。请按建议查询核对并修复错误后再导出；保存草稿不受影响。"},
                         "review": review_payload,
-                        "nextQueries": [{"mode": "visual", "slideId": page} for page in review.result.pending_slide_ids],
+                        "blockingWarnings": blocking_warnings,
+                        "nextQueries": next_queries,
                     }, ensure_ascii=False)
             result = await client.export(
                 session_id,
@@ -857,7 +888,7 @@ class OfficeTool(Tool, ContextAware):
             )
             if review_payload is not None:
                 result = {**result, "review": {**review_payload,
-                    "status": "draft" if allow_unreviewed else "no_pending_layout_review",
+                    "status": "draft" if allow_unreviewed else "no_pending_quality_review",
                     "note": "视觉观察记录不等于自动证明设计合格或原文内容完整。",
                 }}
             await self._publish_export(exported)

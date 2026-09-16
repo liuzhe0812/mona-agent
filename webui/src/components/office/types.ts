@@ -29,6 +29,7 @@ export interface OfficeSessionState {
   sessionId: string;
   displayName: string;
   type: OfficeDocumentType;
+  workingPath?: string | null;
   version: DocumentVersion;
   checkpointVersion: DocumentVersion | null;
   savedVersion: DocumentVersion | null;
@@ -37,6 +38,7 @@ export interface OfficeSessionState {
   saveState: OfficeSaveState;
   lastError: OfficeErrorPayload | null;
   pendingVisualSlideIds?: string[];
+  pendingReviewTargets?: string[];
 }
 
 export interface OfficeSessionCreateRequest {
@@ -83,7 +85,7 @@ export type OfficeInspectQuery =
   | { mode: "summary" }
   | { mode: "selection" }
   | { mode: "review" }
-  | { mode: "visual"; pageIndex?: number; slideId?: string; elementIds?: string[]; region?: { x: number; y: number; width: number; height: number }; padding?: number }
+  | { mode: "visual"; pageIndex?: number; slideId?: string; elementIds?: string[]; region?: { x: number; y: number; width: number; height: number }; padding?: number; acceptWarnings?: boolean; reviewReason?: string }
   | { mode: "capabilities"; documentType?: OfficeDocumentType; elementType?: string; operations?: string[] }
   | { mode: "changed_since"; version: DocumentVersion }
   | { mode: "outline"; limit?: number }
@@ -143,9 +145,9 @@ export interface SheetCell {
 }
 
 export type SheetInspectResult =
-  | { mode: "review"; documentType: "slides"; pendingSlideIds: string[]; warnings: string[] }
+  | { mode: "review"; documentType: OfficeDocumentType; pendingSlideIds?: string[]; pendingTargets?: string[]; warnings: string[] }
   | { mode: "capabilities"; documentType: OfficeDocumentType; operations: Array<Record<string, unknown>> }
-  | { mode: "visual"; dataUrl: string; width: number; height: number; target: string; warnings: string[]; pendingVisualSlideIds?: string[] }
+  | { mode: "visual"; dataUrl: string; width: number; height: number; target: string; warnings: string[]; pendingVisualSlideIds?: string[]; pendingReviewTargets?: string[]; reviewReason?: string }
   | { mode: "selection"; documentType: OfficeDocumentType; blockIds?: string[]; text?: string; sheet?: string | null; range?: string | null; slideId?: string | null; elementIds?: string[]; elements?: Array<Record<string, unknown>>; slideWidth?: number; slideHeight?: number }
   | {
       mode: "summary";
@@ -157,10 +159,12 @@ export type SheetInspectResult =
       headingCount?: number | null;
       tableCount?: number | null;
       imageCount?: number | null;
+      pageCount?: number | null;
       slideCount?: number | null;
       elementCount?: number | null;
+      pendingReviewTargets?: string[];
     }
-  | { mode: "range"; sheet: string; range: string; rows: SheetCell[][]; columnWidths?: number[]; rowHeights?: number[]; autoFilter?: SheetCellArea | null; conditionalFormatCount?: number; freeze?: { frozenRows: number; frozenColumns: number } }
+  | { mode: "range"; sheet: string; range: string; rows: SheetCell[][]; pendingReviewTargets?: string[]; columnWidths?: number[]; rowHeights?: number[]; autoFilter?: SheetCellArea | null; conditionalFormatCount?: number; freeze?: { frozenRows: number; frozenColumns: number } }
   | {
       mode: "outline";
       items: Array<Record<string, unknown>>;
@@ -281,6 +285,7 @@ export type OfficeCommandResult =
       updatedElements?: Array<Record<string, unknown>>;
       warnings?: string[];
       pendingVisualSlideIds?: string[];
+      pendingReviewTargets?: string[];
       sessionId: string;
       operationId: string;
       version: DocumentVersion;
@@ -325,6 +330,8 @@ export type OfficeSocketMessage =
       sessionId: string;
       version: DocumentVersion;
       changedTargets: string[];
+      pendingVisualSlideIds?: string[];
+      pendingReviewTargets?: string[];
     }
   | { event: "office_command_result"; result: OfficeCommandResult }
   | { event: "office_inspect_result"; result: OfficeInspectResponse }

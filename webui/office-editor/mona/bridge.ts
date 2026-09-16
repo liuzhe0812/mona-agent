@@ -12,6 +12,7 @@ export interface OfficeOpenMessage {
   version: DocumentVersion
   file: ArrayBuffer
   pendingVisualSlideIds?: string[]
+  pendingReviewTargets?: string[]
 }
 
 export interface EngineRangeRequest {
@@ -34,7 +35,7 @@ export type HostMessage =
 
 export type EditorMessage =
   | { type: 'office_editor_ready'; sessionId: string; version: DocumentVersion }
-  | { type: 'office_user_change'; sessionId: string; version: DocumentVersion; changedTargets: string[]; pendingVisualSlideIds?: string[] }
+  | { type: 'office_user_change'; sessionId: string; version: DocumentVersion; changedTargets: string[]; pendingVisualSlideIds?: string[]; pendingReviewTargets?: string[] }
   | { type: 'office_command_result'; result: unknown }
   | { type: 'office_inspect_result'; result: unknown }
   | { type: 'office_checkpoint'; sessionId: string; version: DocumentVersion; file: ArrayBuffer }

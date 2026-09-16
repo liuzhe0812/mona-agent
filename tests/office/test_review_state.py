@@ -25,7 +25,8 @@ def test_pending_visual_pages_survive_checkpoint_and_manager_recovery(tmp_path):
 
         async def send(outgoing):
             manager.complete_command(OfficeCommandSuccess(ok=True, session_id=session.session_id,
-                operation_id=outgoing.operation_id, version=changed, changed_targets=['s_1'], pending_visual_slide_ids=['s_1']))
+                operation_id=outgoing.operation_id, version=changed, changed_targets=['s_1'],
+                pending_visual_slide_ids=['s_1'], pending_review_targets=['s_1']))
 
         await manager.execute_command(command, send)
         contents = session.working_path.read_bytes()
@@ -34,6 +35,8 @@ def test_pending_visual_pages_survive_checkpoint_and_manager_recovery(tmp_path):
         restored = OfficeSessionManager(sessions_root=tmp_path / 'sessions').get_session(session.session_id)
         assert restored.pending_visual_slide_ids == ['s_1']
         assert restored.to_state().pending_visual_slide_ids == ['s_1']
+        assert restored.pending_review_targets == ['s_1']
+        assert restored.to_state().pending_review_targets == ['s_1']
 
     asyncio.run(run())
 

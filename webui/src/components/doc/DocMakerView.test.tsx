@@ -9,9 +9,6 @@ const mocks = vi.hoisted(() => ({
   createOfficeSession: vi.fn(),
   getOfficeSession: vi.fn(),
   importOfficeSession: vi.fn(),
-  fetchPptProjects: vi.fn(),
-  fetchPptProjectPath: vi.fn(),
-  fetchPptExportStatus: vi.fn(),
   fetchVideoProjects: vi.fn(),
   newChat: vi.fn(),
   sendMessage: vi.fn(),
@@ -33,11 +30,7 @@ vi.mock("@/lib/office-client", () => ({
 }));
 
 vi.mock("@/lib/api", () => ({
-  fetchPptProjects: mocks.fetchPptProjects,
-  fetchPptProjectPath: mocks.fetchPptProjectPath,
-  fetchPptExportStatus: mocks.fetchPptExportStatus,
   fetchVideoProjects: mocks.fetchVideoProjects,
-  getApiBase: vi.fn().mockResolvedValue("http://127.0.0.1:17173"),
 }));
 
 vi.mock("@/lib/tauri", async (importOriginal) => ({
@@ -60,10 +53,6 @@ vi.mock("@/components/doc/DocChatPanel", () => ({
       <button type="button" onClick={() => onSend("修改当前文档")}>发送测试消息</button>
     </div>
   ),
-}));
-
-vi.mock("@/components/ppt/PptMakerView", () => ({
-  PptMakerView: () => <div>PPT 工作流</div>,
 }));
 
 vi.mock("@/components/doc/video/VideoMakerView", () => ({
@@ -95,12 +84,6 @@ describe("DocMakerView", () => {
     mocks.createOfficeSession.mockReset();
     mocks.getOfficeSession.mockReset();
     mocks.importOfficeSession.mockReset();
-    mocks.fetchPptProjects.mockReset().mockResolvedValue({ projects: [] });
-    mocks.fetchPptProjectPath.mockReset().mockResolvedValue({ path: "D:\\workspace\\ppt_projects\\魔兽世界介绍" });
-    mocks.fetchPptExportStatus.mockReset().mockResolvedValue({
-      exportFile: "output.pptx",
-      hasPptxOutput: true,
-    });
     mocks.fetchVideoProjects.mockReset().mockResolvedValue({ projects: [] });
     mocks.newChat.mockReset().mockResolvedValue("chat-1");
     mocks.sendMessage.mockReset();
@@ -187,40 +170,78 @@ describe("DocMakerView", () => {
     }));
   });
 
-  it("opens a context menu for history rows, reveals the directory, and can toggle favorite", async () => {
-    mocks.fetchPptProjects.mockResolvedValue({
-      projects: [{
-        name: "魔兽世界介绍",
-        createdAt: Date.now(),
-        format: "16:9",
-        slideCount: 5,
-        hasExport: true,
-        hasSvgOutput: true,
-        hasPptxOutput: true,
-        hasSpecLock: true,
-        status: "done",
-        phase: "done",
-        chatId: "ppt-chat",
-      }],
-    });
+  it("drops obsolete PPT workflow tabs from the saved workspace", async () => {
+    localStorage.setItem("mona.ai-docs.workspace.v1", JSON.stringify([{
+      id: "ppt:旧项目",
+      kind: "ppt-workflow",
+      title: "旧项目",
+      chatId: "ppt-chat",
+      ownerSessionKey: "websocket:ppt-chat",
+      project: null,
+      createdAt: 1,
+    }]));
+    localStorage.setItem("mona.ai-docs.active-tab.v1", "ppt:旧项目");
     render(<DocMakerView />);
 
-    const row = await screen.findByTestId("document-history-row-ppt:魔兽世界介绍");
+    await waitFor(() => expect(screen.getByRole("tab", { name: "开始" })).toHaveAttribute("aria-selected", "true"));
+    expect(screen.queryByRole("tab", { name: "旧项目" })).not.toBeInTheDocument();
+    expect(JSON.parse(localStorage.getItem("mona.ai-docs.workspace.v1") ?? "[]")).toEqual([]);
+  });
+
+  it("opens a context menu for Office history, reveals the file, and can toggle favorite", async () => {
+    localStorage.setItem("mona.ai-docs.recent-office.v1", JSON.stringify([{
+      key: "office:slides-session",
+      sessionId: "slides-session",
+      ownerSessionKey: "websocket:slides-chat",
+      chatId: "slides-chat",
+      title: "季度汇报.pptx",
+      officeType: "slides",
+      updatedAt: Date.now(),
+      sourcePath: "D:\\workspace\\季度汇报.pptx",
+    }]));
+    render(<DocMakerView />);
+
+    const row = await screen.findByTestId("document-history-row-office:slides-session");
     fireEvent.contextMenu(row);
 
     expect(await screen.findByRole("menuitem", { name: "打开" })).toBeInTheDocument();
     fireEvent.click(screen.getByRole("menuitem", { name: "打开文件目录" }));
     await waitFor(() => {
-      expect(mocks.fetchPptProjectPath).toHaveBeenCalledWith("token", "魔兽世界介绍");
-      expect(mocks.revealItemInDir).toHaveBeenCalledWith(
-        "D:\\workspace\\ppt_projects\\魔兽世界介绍/output/output.pptx",
-      );
+      expect(mocks.revealItemInDir).toHaveBeenCalledWith("D:\\workspace\\季度汇报.pptx");
     });
 
     fireEvent.contextMenu(row);
     const favoriteItem = screen.getByRole("menuitem", { name: "收藏" });
     fireEvent.click(favoriteItem);
-    expect(screen.getByRole("button", { name: "取消收藏 魔兽世界介绍" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "取消收藏 季度汇报.pptx" })).toBeInTheDocument();
+  });
+
+  it("reveals a saved Office working copy when older history lacks a source path", async () => {
+    localStorage.setItem("mona.ai-docs.recent-office.v1", JSON.stringify([{
+      key: "office:slides-session",
+      sessionId: "slides-session",
+      ownerSessionKey: "websocket:slides-chat",
+      chatId: "slides-chat",
+      title: "新建演示文稿",
+      officeType: "slides",
+      updatedAt: Date.now(),
+    }]));
+    mocks.getOfficeSession.mockResolvedValue({
+      ...officeSession("slides", "新建演示文稿"),
+      workingPath: "D:\\Mona\\office\\sessions\\slides-session\\working.pptx",
+    });
+    render(<DocMakerView />);
+
+    const row = await screen.findByTestId("document-history-row-office:slides-session");
+    fireEvent.contextMenu(row);
+    fireEvent.click(await screen.findByRole("menuitem", { name: "打开文件目录" }));
+
+    await waitFor(() => {
+      expect(mocks.revealItemInDir).toHaveBeenCalledWith(
+        "D:\\Mona\\office\\sessions\\slides-session\\working.pptx",
+      );
+    });
+    expect(localStorage.getItem("mona.ai-docs.recent-office.v1")).toContain("savedPath");
   });
 
   it("reveals the final rendered video instead of the video project root", async () => {
@@ -265,19 +286,25 @@ describe("DocMakerView", () => {
     expect(screen.getByRole("complementary", { name: "MONA AI 文档助手" })).toBeInTheDocument();
   });
 
-  it("opens the PPT workflow from a collaborative PPT editor", async () => {
+  it("creates PPT in the native Office editor", async () => {
     mocks.createOfficeSession.mockResolvedValue(officeSession("slides", "新建演示文稿"));
     render(<DocMakerView />);
 
     fireEvent.click(screen.getByRole("button", { name: /PPT/ }));
     expect(await screen.findByText("Office 编辑器：新建演示文稿")).toBeInTheDocument();
+    expect(mocks.createOfficeSession).toHaveBeenCalledWith({
+      ownerSessionKey: "websocket:chat-1",
+      type: "slides",
+      displayName: "新建演示文稿",
+    });
+    expect(screen.queryByRole("button", { name: "启动AI PPT工作流" })).not.toBeInTheDocument();
 
-    const workflowButton = screen.getByRole("button", { name: "启动AI PPT工作流" });
-    expect(workflowButton.parentElement).toBe(screen.getByRole("tablist", { name: "打开的文档" }).parentElement);
-    fireEvent.click(workflowButton);
-    expect(await screen.findByText("PPT 工作流")).toBeInTheDocument();
-    expect(screen.getByText("MONA AI")).toBeInTheDocument();
-    expect(screen.getByText("AI 对话：chat-1")).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "返回自由编辑" })).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "打开 MONA AI" }));
+    fireEvent.click(screen.getByRole("button", { name: "发送测试消息" }));
+    expect(mocks.sendMessage).toHaveBeenCalledWith("chat-1", "修改当前文档", undefined, expect.objectContaining({
+      officeSessionId: "slides-session",
+      officeDocumentType: "slides",
+      officeDisplayName: "新建演示文稿",
+    }));
   });
 });

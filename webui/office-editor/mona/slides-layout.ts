@@ -1,4 +1,4 @@
-import type { RenderSlide } from '@genoffice/pptx-render'
+import type { RenderNode, RenderSlide, RenderTextLayout } from '@genoffice/pptx-render'
 
 type Payload = Record<string, unknown>
 type AddOperation = { op: string; payload: Payload }
@@ -94,21 +94,103 @@ export function composeSlide(payload: Payload, slide: Pick<RenderSlide, 'widthPx
 }
 
 export function slideLayoutWarnings(slide: RenderSlide, elementIds: ReadonlySet<string>): string[] {
-  const warnings: string[] = []
-  for (const node of slide.nodes) {
-    if (!node.durableId || !elementIds.has(node.durableId)) continue
-    const box = node.box
-    if (box.x < -0.5 || box.y < -0.5 || box.x + box.w > slide.widthPx + 0.5 || box.y + box.h > slide.heightPx + 0.5) {
-      warnings.push(`${node.durableId} 超出页面边界。`)
+  type Box = { x: number; y: number; w: number; h: number }
+  type Item = { id: string; node: RenderNode; box: Box; textBox?: Box }
+  const items: Item[] = []
+  const visit = (nodes: RenderNode[], offsetX = 0, offsetY = 0): void => {
+    for (const node of nodes) {
+      const box = { x: node.box.x + offsetX, y: node.box.y + offsetY, w: node.box.w, h: node.box.h }
+      if (!node.decoration && node.durableId) {
+        const text = (node.type === 'text' || node.type === 'shape') ? node.text : undefined
+        items.push({ id: node.durableId, node, box, textBox: textBounds(text, box.x, box.y) })
+      }
+      if (node.type === 'group') visit(node.children, box.x, box.y)
     }
-    if ((node.type === 'text' || node.type === 'shape') && node.text
-      && node.text.lines.some((line) => line.runs.some((run) => run.text.trim()))) {
-      const text = node.text
-      if (text.contentHeight > box.h - text.insets.t - text.insets.b + 1
-        || text.lines.some((line) => line.runs.some((run) => run.x + run.widthPx > box.w - text.insets.r + 1))) {
-        warnings.push(`${node.durableId} 文字可能溢出，请增大文本区域或缩短内容并检查画面。`)
+  }
+  visit(slide.nodes)
+
+  const warnings: string[] = []
+  const contentItems = items.filter((item) => !item.node.background
+    && (item.textBox || ['picture', 'chart', 'table'].includes(item.node.type)))
+  const textOnly = contentItems.length <= 2 && contentItems.every((item) => !!item.textBox)
+  for (const item of items) {
+    if (!elementIds.has(item.id)) continue
+    const { box, node } = item
+    if (box.x < -0.5 || box.y < -0.5 || box.x + box.w > slide.widthPx + 0.5 || box.y + box.h > slide.heightPx + 0.5) {
+      warnings.push(`[错误] ${item.id} 超出页面边界。`)
+    }
+    const text = (node.type === 'text' || node.type === 'shape') ? node.text : undefined
+    if (text && item.textBox) {
+      const lines = text.lines.map((line) => line.runs.map((run) => run.text).join(''))
+      if (lines.filter((line) => /[█▓▒■▬━]{3,}/u.test(line) && /\d/u.test(line)).length >= 2) {
+        warnings.push(`[需检查] ${item.id} 使用字符条模拟数值图表，长度可能不对应数值；请用 slide_add_chart 保留分类、系列和数值，若是原文引用请说明。`)
+      }
+      if (textOnly && lines.filter((line) => line.trim()).length >= 6
+        && lines.join('').length >= 180 && box.w > slide.widthPx * 0.65) {
+        warnings.push(`[需检查] ${item.id} 把长内容集中在单个全宽文本框；请检查是否应拆为独立比较模块、表格或图表。纯文字讲解或引用可在观察整页后说明保留理由。`)
+      }
+      const availableWidth = Math.max(0, box.w - text.insets.l - text.insets.r)
+      const availableHeight = Math.max(0, box.h - text.insets.t - text.insets.b)
+      const visibleRuns = text.lines.flatMap((line) => line.runs.filter((run) => run.text.trim()))
+      const left = Math.min(...visibleRuns.map((run) => run.x))
+      const right = Math.max(...visibleRuns.map((run) => run.x + run.widthPx))
+      const actualWidth = Math.max(0, right - left)
+      const actualHeight = text.contentHeight
+      if (actualHeight > availableHeight + 1
+        || left < -1 || right > availableWidth + 1
+        || text.lines.some((line) => line.top < -1 || line.top + line.height > availableHeight + 1)) {
+        warnings.push(`[错误] ${item.id} 文字溢出：实际约 ${Math.ceil(actualWidth)}×${Math.ceil(actualHeight)}px，`
+          + `可用 ${Math.floor(availableWidth)}×${Math.floor(availableHeight)}px；请增大文本区域、调整位置或缩短内容。`)
       }
     }
   }
-  return warnings
+
+  for (let index = 0; index < items.length; index += 1) {
+    const first = items[index]!
+    for (let otherIndex = index + 1; otherIndex < items.length; otherIndex += 1) {
+      const second = items[otherIndex]!
+      if (!elementIds.has(first.id) && !elementIds.has(second.id)) continue
+      if (first.textBox && second.textBox) {
+        const overlap = intersection(first.textBox, second.textBox)
+        if (overlap) warnings.push(`[错误] ${first.id} 与 ${second.id} 的文字相互重叠`
+          + `（约 ${Math.ceil(overlap.w)}×${Math.ceil(overlap.h)}px）；请调整文本区域、位置或文案。`)
+        continue
+      }
+      const textItem = first.textBox ? first : second.textBox ? second : undefined
+      const pictureItem = first.node.type === 'picture' ? first : second.node.type === 'picture' ? second : undefined
+      if (!textItem?.textBox || !pictureItem || pictureItem.node.background) continue
+      const overlap = intersection(textItem.textBox, pictureItem.box)
+      if (overlap) warnings.push(`[需检查] ${textItem.id} 的文字与图片 ${pictureItem.id} 交叠`
+        + `（约 ${Math.ceil(overlap.w)}×${Math.ceil(overlap.h)}px）；请确认这是有意叠字且文字可读，否则分开图文区域。`)
+    }
+  }
+  return [...new Set(warnings)]
+}
+
+export function isBlockingLayoutWarning(warning: string): boolean {
+  return warning.startsWith('[错误]')
+}
+
+function textBounds(text: RenderTextLayout | undefined, offsetX: number, offsetY: number): { x: number; y: number; w: number; h: number } | undefined {
+  if (!text) return undefined
+  const runs = text.lines.flatMap((line) => line.runs
+    .filter((run) => run.text.trim())
+    .map((run) => ({ x: run.x, y: line.top, right: run.x + run.widthPx, bottom: line.top + line.height })))
+  if (!runs.length) return undefined
+  const left = Math.min(...runs.map((run) => run.x))
+  const top = Math.min(...runs.map((run) => run.y))
+  const right = Math.max(...runs.map((run) => run.right))
+  const bottom = Math.max(...runs.map((run) => run.bottom))
+  return {
+    x: offsetX + text.insets.l + left,
+    y: offsetY + text.insets.t + top,
+    w: right - left,
+    h: bottom - top,
+  }
+}
+
+function intersection(first: { x: number; y: number; w: number; h: number }, second: { x: number; y: number; w: number; h: number }): { w: number; h: number } | undefined {
+  const width = Math.min(first.x + first.w, second.x + second.w) - Math.max(first.x, second.x)
+  const height = Math.min(first.y + first.h, second.y + second.h) - Math.max(first.y, second.y)
+  return width > 1 && height > 1 ? { w: width, h: height } : undefined
 }

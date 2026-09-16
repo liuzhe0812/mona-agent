@@ -368,6 +368,7 @@ class OfficeSessionManager:
         *,
         changed_targets: Sequence[str] = (),
         pending_visual_slide_ids: Sequence[str] | None = None,
+        pending_review_targets: Sequence[str] | None = None,
     ) -> bool:
         session = self.get_session(session_id)
         self._require_current_epoch(session, version)
@@ -379,6 +380,8 @@ class OfficeSessionManager:
         session.recent_changed_targets = list(changed_targets)[-50:]
         if pending_visual_slide_ids is not None:
             session.pending_visual_slide_ids = list(pending_visual_slide_ids)
+        if pending_review_targets is not None:
+            session.pending_review_targets = list(pending_review_targets)
         self._append_revision_changes(session, "user", version, changed_targets)
         self._persist_session(session)
         return True
@@ -528,10 +531,15 @@ class OfficeSessionManager:
             self._persist_session(session)
         if result.ok and version == session.version:
             pending_pages = getattr(result.result, "pending_visual_slide_ids", None)
+            pending_targets = getattr(result.result, "pending_review_targets", None)
             if result.result.mode == "review":
                 pending_pages = result.result.pending_slide_ids
+                pending_targets = result.result.pending_targets
             if pending_pages is not None:
                 session.pending_visual_slide_ids = list(pending_pages)
+            if pending_targets is not None:
+                session.pending_review_targets = list(pending_targets)
+            if pending_pages is not None or pending_targets is not None:
                 self._persist_session(session)
         if not future.done():
             future.set_result(result)
@@ -909,6 +917,8 @@ class OfficeSessionManager:
             session.version = result.version
             if result.pending_visual_slide_ids is not None:
                 session.pending_visual_slide_ids = list(result.pending_visual_slide_ids)
+            if result.pending_review_targets is not None:
+                session.pending_review_targets = list(result.pending_review_targets)
             session.dirty = session.saved_version != result.version
             session.save_state = "dirty" if session.dirty else "clean"
             session.recent_changed_targets = result.changed_targets[-50:]
@@ -1094,6 +1104,7 @@ class OfficeSessionManager:
             ),
             "changeFloorRevision": session.change_floor_revision,
             "pendingVisualSlideIds": session.pending_visual_slide_ids,
+            "pendingReviewTargets": session.pending_review_targets,
             "revisionChanges": [
                 change.model_dump(by_alias=True) for change in session.revision_changes
             ],
@@ -1233,6 +1244,7 @@ class OfficeSessionManager:
                     last_error=last_error,
                     revision_changes=revision_changes[-128:],
                     pending_visual_slide_ids=[str(value) for value in payload.get("pendingVisualSlideIds", [])],
+                    pending_review_targets=[str(value) for value in payload.get("pendingReviewTargets", [])],
                     change_floor_revision=max(
                         0,
                         int(payload.get("changeFloorRevision", 0)),

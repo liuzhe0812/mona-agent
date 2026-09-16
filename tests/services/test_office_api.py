@@ -184,6 +184,7 @@ async def test_import_streams_binary_and_returns_clean_private_session(
         session = manager.get_session(body["sessionId"], owner_session_key="chat:1")
         assert session.source_path is None
         assert session.source_identity == "C:/授权/报告.xlsx"
+        assert body["workingPath"] == str(session.working_path)
         assert session.working_path.read_bytes() == b"binary workbook"
         assert not list(manager.sessions_root.glob(".office-import-*"))
 

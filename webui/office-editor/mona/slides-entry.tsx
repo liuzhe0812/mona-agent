@@ -53,7 +53,7 @@ import {
   slideText,
   type SlidesDocument,
 } from './slides-engine'
-import { composeSlide, slideLayoutWarnings } from './slides-layout'
+import { composeSlide, isBlockingLayoutWarning, slideLayoutWarnings } from './slides-layout'
 import { dataUrlImage, svgImage } from './slides-assets'
 import { getSlidesCapabilities } from './slides-capabilities'
 import {
@@ -387,6 +387,34 @@ function translateOperation(
   }
   const target = targetOf(payload)
   const changed = [target.el ? `${target.slide}/${target.el}` : target.slide]
+  if (operation.op === 'slide_add_chart') {
+    const allowed = ['slideId', 'x', 'y', 'width', 'height', 'kind', 'title', 'categories', 'series', 'legendPos', 'gridlines', 'dataLabels', 'valAxisTitle']
+    const extras = Object.keys(payload).filter((key) => !allowed.includes(key))
+    if (extras.length) throw new Error(`slide_add_chart 不支持字段：${extras.join(', ')}。`)
+    if (['x', 'y', 'width', 'height'].some((key) => typeof payload[key] !== 'number' || !Number.isFinite(payload[key]))) {
+      throw new Error('slide_add_chart 需要有限数值的 x、y、width、height（预览像素）。')
+    }
+    if (['title', 'valAxisTitle'].some((key) => key in payload && typeof payload[key] !== 'string')
+      || ['gridlines', 'dataLabels'].some((key) => key in payload && typeof payload[key] !== 'boolean')
+      || ('legendPos' in payload && !['none', 'b', 't', 'l', 'r'].includes(String(payload.legendPos)))) {
+      throw new Error('图表 title/valAxisTitle 必须是文本，gridlines/dataLabels 必须是布尔值，legendPos 必须是 none/b/t/l/r。')
+    }
+    if (!['bar', 'line', 'area', 'pie', 'doughnut'].includes(String(payload.kind))) {
+      throw new Error('slide_add_chart.kind 必须是 bar、line、area、pie 或 doughnut。')
+    }
+    if (!Array.isArray(payload.categories) || !payload.categories.length
+      || payload.categories.some((value) => typeof value !== 'string')
+      || !Array.isArray(payload.series) || !payload.series.length
+      || payload.series.some((series) => !isRecord(series) || typeof series.name !== 'string'
+        || Object.keys(series).some((key) => !['name', 'values'].includes(key))
+        || !Array.isArray(series.values) || series.values.length !== (payload.categories as unknown[]).length
+        || series.values.some((value) => typeof value !== 'number' || !Number.isFinite(value)))) {
+      throw new Error('图表需要非空 categories 和 series，每个系列的有限数值数量必须与分类一致。')
+    }
+    const chart = Object.fromEntries(['kind', 'title', 'categories', 'series', 'legendPos', 'gridlines', 'dataLabels', 'valAxisTitle']
+      .filter((key) => key in payload).map((key) => [key, payload[key]]))
+    return { op: { ...chart, op: 'addChart', target, offset: operationBox(document, payload) } as Op, targets: changed }
+  }
   if (operation.op === 'slide_set_chart_style') {
     if (!isRecord(payload.style)) throw new Error('slide_set_chart_style 需要 style 对象。')
     return { op: { op: 'setChart', target, patch: payload.style }, targets: changed }
@@ -635,6 +663,7 @@ function MonaSlidesEditor(): React.JSX.Element {
   const versionRef = useRef<DocumentVersion | null>(null)
   const documentRef = useRef<SlidesDocument | null>(null)
   const reviewStateRef = useRef<SlidesReviewState>(createSlidesReviewState())
+  const observedSlideVersionsRef = useRef(new Map<string, DocumentVersion>())
   const selectionRef = useRef<SlidesSelectionState>({ slideIndex: 0, elementIds: [] })
   const revisionFilesRef = useRef(new Map<number, () => Promise<ArrayBuffer>>())
   const operationCacheRef = useRef(new Map<string, { fingerprint: string; result: unknown }>())
@@ -674,6 +703,7 @@ function MonaSlidesEditor(): React.JSX.Element {
     operations: readonly Op[],
     records?: readonly ReviewRecord[],
   ): void {
+    observedSlideVersionsRef.current.clear()
     const scope = reviewScope(before, operations, records)
     const current = slideIdsOf(document)
     const warningTargets = scope.allSlides ? current : scope.slideIds
@@ -724,6 +754,7 @@ function MonaSlidesEditor(): React.JSX.Element {
   }
 
   async function openDocument(message: OfficeOpenMessage): Promise<void> {
+    observedSlideVersionsRef.current.clear()
     if (message.documentType !== 'slides' || !isVersion(message.version)) {
       throw new Error('当前入口不能打开这个文档。')
     }
@@ -995,21 +1026,33 @@ function MonaSlidesEditor(): React.JSX.Element {
           ...(region ? { region } : {}),
           ...(padding === undefined ? {} : { padding }),
         }
+        const fullPage = !elementIds && !region
+        const acceptWarnings = command.query.acceptWarnings === true
+        const reviewReason = typeof command.query.reviewReason === 'string' ? command.query.reviewReason.trim() : ''
+        const observationKey = `${session.sessionId}/${target}`
+        if (acceptWarnings && (!fullPage || !reviewReason
+          || !sameVersion(observedSlideVersionsRef.current.get(observationKey) ?? null, version))) {
+          throw new Error('接受设计提示前请先查看当前版本的整页画面，并通过 reviewReason 说明保留理由；局部截图不能代替整页检查。')
+        }
         const captured = Object.keys(captureOptions).length > 0
           ? await captureSlide(targetSlide, version, () => versionRef.current, captureOptions)
           : await captureSlide(targetSlide, version, () => versionRef.current)
         if (!sameVersion(versionRef.current, version)) {
           throw new VisualVersionConflict('检查画面时文档已变化，请重新检查。')
         }
-        const fullPage = !elementIds && !region
-        if (fullPage) clearSlidePending(reviewStateRef.current, target, slideIdsOf(document))
+        const warnings = slideLayoutWarnings(targetSlide, slideElementIds(targetSlide))
+        if (fullPage) observedSlideVersionsRef.current.set(observationKey, { ...version })
+        if (fullPage && !warnings.some(isBlockingLayoutWarning) && (warnings.length === 0 || acceptWarnings)) {
+          clearSlidePending(reviewStateRef.current, target, slideIdsOf(document))
+        }
         result = {
           mode,
           dataUrl: captured.dataUrl,
           width: captured.width,
           height: captured.height,
           target,
-          warnings: [],
+          warnings,
+          ...(acceptWarnings ? { reviewReason } : {}),
           pendingVisualSlideIds: currentPendingVisualSlideIds(document),
         }
       } else {

@@ -809,6 +809,7 @@ async def handle_office_socket(request: web.Request) -> web.WebSocketResponse:
                             parsed.version,
                             changed_targets=parsed.changed_targets,
                             pending_visual_slide_ids=parsed.pending_visual_slide_ids,
+                            pending_review_targets=parsed.pending_review_targets,
                         )
                     ):
                         await socket.close(code=1008, message=b"invalid editor version")

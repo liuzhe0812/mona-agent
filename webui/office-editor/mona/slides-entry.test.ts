@@ -184,6 +184,12 @@ async function apply(
   return resultOf(message)
 }
 
+async function inspectError(bridge: TestBridgeLike, sessionId: string, requestId: string, query: Record<string, unknown>) {
+  bridge.emit({ type: 'office_inspect', command: { sessionId, requestId, query } })
+  const message = await waitForPost((candidate) => candidate.type === 'office_inspect_result' && resultOf(candidate).requestId === requestId)
+  expect(resultOf(message)).toEqual(expect.objectContaining({ ok: false, error: expect.objectContaining({ code: 'INVALID_OPERATION' }) }))
+}
+
 describe('Slides Mona entry', () => {
   it('opens and reopens a blank PPTX checkpoint', async () => {
     const blank = await fsPromises.readFile(bundledBlankPath)
@@ -297,7 +303,7 @@ describe('Slides Mona entry', () => {
     expect(reopenedSlides?.[0]?.nodes.some((node) => node.type === 'table')).toBe(true)
   })
 
-  it('round-trips addChart style fields through slide_apply_txn and chart XML', async () => {
+  it('creates native charts in pixel coordinates, rejects mismatched data and preserves chart XML', async () => {
     vi.resetModules()
     harness.posts = []
     harness.cleanups = []
@@ -336,24 +342,24 @@ describe('Slides Mona entry', () => {
     const page = (pages.slides as Array<Record<string, unknown>>)[0]
     if (!page) throw new Error('空白演示文稿没有第一页。')
     const slideId = String(page.id)
+    const invalid = await apply(bridge, sessionId, version, 'chart-invalid', [{
+      op: 'slide_add_chart', payload: { slideId, x: 100, y: 150, width: 700, height: 350,
+        kind: 'bar', categories: ['Q1', 'Q2'], series: [{ name: '收入', values: [1] }] },
+    }])
+    expect(invalid.ok).toBe(false)
+    expect(invalid.currentVersion).toEqual(version)
     const result = await apply(bridge, sessionId, version, 'chart-add-1', [{
-      op: 'slide_apply_txn',
+      op: 'slide_add_chart',
       payload: {
-        ops: [
-          {
-            op: 'addChart',
-            target: { slide: slideId },
+            slideId, x: 100, y: 150, width: 700, height: 350,
             kind: 'bar',
             title: '季度收入（千美元）',
             categories: ['Q1', 'Q2', 'Q3'],
             series: [{ name: '收入（千美元）', values: [1200, 1450, 1610] }],
-            offset: { x: 914400, y: 914400, cx: 5486400, cy: 2743200 },
             legendPos: 'none',
             gridlines: true,
             dataLabels: true,
             valAxisTitle: '千美元',
-          },
-        ],
       },
     }])
     expect(result).toEqual(expect.objectContaining({
@@ -361,6 +367,7 @@ describe('Slides Mona entry', () => {
       version: { editorEpoch: version.editorEpoch, modelRevision: 1 },
     }))
     const nextVersion = result.version as typeof version
+    expect(result.createdElements).toEqual(expect.arrayContaining([expect.objectContaining({ type: 'chart', x: 100, y: 150, width: 700, height: 350 })]))
 
     bridge.emit({ type: 'office_checkpoint_request', sessionId, version: nextVersion })
     const checkpointMessage = await waitForPost((message) => (
@@ -389,6 +396,8 @@ describe('Slides Mona entry', () => {
     expect(chartXml).toContain('<c:majorGridlines/>')
     expect(chartXml).toContain('<c:dLbls>')
     expect(chartXml).toContain('<a:t>千美元</a:t>')
+    expect(chartXml).toContain('1450')
+    expect(chartXml).toContain('Q2')
   })
 
   it('edits chart text through stable IDs, reports no-ops, and preserves colors across save and data edits', async () => {
@@ -1107,9 +1116,10 @@ describe('Slides Mona entry', () => {
         .toEqual([slideId])
 
       captureMode = 'ok'
-      await inspect(bridge, sessionId, version, 'review-full-visual-2', { mode: 'visual', slideId })
+      const warningVisual = await inspect(bridge, sessionId, version, 'review-full-visual-2', { mode: 'visual', slideId })
+      expect(warningVisual.warnings).toEqual(expect.arrayContaining([expect.stringContaining(overflowElementId)]))
       const afterWarningVisual = await inspect(bridge, sessionId, version, 'review-after-warning-visual', { mode: 'review' })
-      expect(afterWarningVisual.pendingSlideIds).toEqual([])
+      expect(afterWarningVisual.pendingSlideIds).toEqual([slideId])
       expect(afterWarningVisual.warnings).toEqual(expect.arrayContaining([expect.stringContaining(overflowElementId)]))
       result = await apply(bridge, sessionId, version, 'review-fix-overflow', [{
         op: 'slide_set_text',
@@ -1118,7 +1128,38 @@ describe('Slides Mona entry', () => {
       version = result.version as typeof version
       const afterWarningFix = await inspect(bridge, sessionId, version, 'review-after-warning-fix', { mode: 'review' })
       expect(afterWarningFix.warnings).toEqual([])
-      expect(afterWarningFix.pendingSlideIds).toEqual([])
+      expect(afterWarningFix.pendingSlideIds).toEqual([slideId])
+      await inspect(bridge, sessionId, version, 'review-after-warning-fix-visual', { mode: 'visual', slideId })
+      expect((await inspect(bridge, sessionId, version, 'review-after-warning-fix-final', { mode: 'review' })).pendingSlideIds)
+        .toEqual([])
+
+      result = await apply(bridge, sessionId, version, 'review-add-picture-overlay', [{
+        op: 'slide_add_image',
+        payload: {
+          slideId, x: 600, y: 100, width: 200, height: 200,
+          dataUrl: 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+jRZkAAAAASUVORK5CYII=',
+        },
+      }, {
+        op: 'slide_add_text',
+        payload: { slideId, text: '有意的图片叠字', x: 610, y: 120, width: 180, height: 80 },
+      }])
+      version = result.version as typeof version
+      await inspectError(bridge, sessionId, 'review-overlay-before-seeing', {
+        mode: 'visual', slideId, acceptWarnings: true, reviewReason: '尚未观察不应接受',
+      })
+      const overlayVisual = await inspect(bridge, sessionId, version, 'review-overlay-visual', { mode: 'visual', slideId })
+      expect(overlayVisual.warnings).toEqual(expect.arrayContaining([expect.stringContaining('[需检查]')]))
+      expect(overlayVisual.pendingVisualSlideIds).toEqual([slideId])
+      await inspectError(bridge, sessionId, 'review-overlay-no-reason', { mode: 'visual', slideId, acceptWarnings: true })
+      await inspectError(bridge, sessionId, 'review-overlay-crop-accept', {
+        mode: 'visual', slideId, acceptWarnings: true, reviewReason: '局部不能放行', region: { x: 600, y: 100, width: 200, height: 200 },
+      })
+      const acceptedOverlay = await inspect(bridge, sessionId, version, 'review-overlay-accepted', {
+        mode: 'visual', slideId, acceptWarnings: true, reviewReason: '文字有意放在图片留白区，已检查整页且文字清晰。',
+      })
+      expect(acceptedOverlay.pendingVisualSlideIds).toEqual([])
+      expect(acceptedOverlay.reviewReason).toContain('图片留白区')
+
       result = await apply(bridge, sessionId, version, 'review-add-3', [{
         op: 'slide_add_text',
         payload: { slideId, text: '断开后仍需复核', x: 100, y: 380, width: 300, height: 100 },
@@ -1127,6 +1168,9 @@ describe('Slides Mona entry', () => {
       expect(result.pendingVisualSlideIds).toEqual([slideId])
 
       const reopenedSessionId = 'slides-review-route-2'
+      await inspectError(bridge, sessionId, 'review-overlay-after-edit', {
+        mode: 'visual', slideId, acceptWarnings: true, reviewReason: '旧版本观察不能放行',
+      })
       bridge.emit({
         type: 'office_open',
         sessionId: reopenedSessionId,
@@ -1138,6 +1182,40 @@ describe('Slides Mona entry', () => {
       await waitForPost((message) => message.type === 'office_editor_ready' && message.sessionId === reopenedSessionId)
       expect((await inspect(bridge, reopenedSessionId, version, 'review-after-reopen', { mode: 'review' })).pendingSlideIds)
         .toEqual([slideId])
+
+      const comparisonText = ['示例模型 A', '• 编码测试结果仅供本回归测试使用', '• 推理测试与价格需要按统一字段比较',
+        '• 输入和输出价格必须区分单位', '', '示例模型 B', '• 编码测试结果仅供本回归测试使用',
+        '• 推理测试与价格需要按统一字段比较', '• 输入和输出价格必须区分单位', '', '示例模型 C',
+        '• 编码测试结果仅供本回归测试使用', '• 推理测试与价格需要按统一字段比较',
+        '• 输入和输出价格必须区分单位，并注明数据来源与测试日期，保持各模型之间的比较口径一致'].join('\n')
+      const comparison = await apply(bridge, reopenedSessionId, version, 'comparison-single-box', [{
+        op: 'slide_compose', payload: { slideId, columns: [1], rows: [0.3, 1], gap: 24, items: [
+          { type: 'text', column: 0, row: 0, text: '三个示例模型的比较', font: { fontSize: 32, bold: true } },
+          { type: 'text', column: 0, row: 1, text: comparisonText, font: { fontSize: 14 } },
+        ] },
+      }])
+      expect(comparison.ok).toBe(true)
+      expect(comparison.warnings).toEqual(expect.arrayContaining([expect.stringContaining('单个全宽文本框')]))
+      version = comparison.version as typeof version
+      const singleBoxReview = await inspect(bridge, reopenedSessionId, version, 'comparison-review', { mode: 'review' })
+      expect(singleBoxReview.warnings).toEqual(expect.arrayContaining([expect.stringContaining('单个全宽文本框')]))
+      const singleBoxVisual = await inspect(bridge, reopenedSessionId, version, 'comparison-visual', { mode: 'visual', slideId })
+      expect(singleBoxVisual.pendingVisualSlideIds).toEqual([slideId])
+      const bodyId = (comparison.createdElements as Array<Record<string, unknown>>)[1]!.id
+      const split = await apply(bridge, reopenedSessionId, version, 'comparison-split', [
+        { op: 'slide_delete_element', payload: { slideId, elementId: bodyId } },
+        { op: 'slide_compose', payload: { slideId, x: 48, y: 210, width: 1184, height: 450,
+          columns: [1, 1, 1], rows: [1], gap: 24, items: ['A', 'B', 'C'].map((name, column) => ({
+            type: 'text', column, row: 0, text: `示例模型 ${name}\n编码：待测\n推理：待测\n价格：待核对`, font: { fontSize: 18 },
+          })) } },
+      ])
+      expect(split.ok).toBe(true)
+      version = split.version as typeof version
+      const splitReview = await inspect(bridge, reopenedSessionId, version, 'comparison-split-review', { mode: 'review' })
+      expect(splitReview.warnings).toEqual([])
+      expect(splitReview.pendingSlideIds).toEqual([slideId])
+      const splitVisual = await inspect(bridge, reopenedSessionId, version, 'comparison-split-visual', { mode: 'visual', slideId })
+      expect(splitVisual.pendingVisualSlideIds).toEqual([])
     } finally {
       vi.doUnmock('./slides-visual')
     }

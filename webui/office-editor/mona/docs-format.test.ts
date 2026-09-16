@@ -52,6 +52,10 @@ describe('Mona document formatting helpers', () => {
       bodyFill: '#FFFFFF',
       borderColor: '#9DC3E6',
       cellPadding: 10,
+      headerBold: true,
+      headerAlign: 'center',
+      verticalAlign: 'center',
+      allowRowBreakAcrossPages: false,
     })
 
     const table = editor.state.doc.nodeAt(tablePos)!
@@ -60,22 +64,34 @@ describe('Mona document formatting helpers', () => {
       tblAutoFit: 'fixed',
       cellMar: { top: 150, right: 150, bottom: 150, left: 150 },
     })
-    expect(table.child(0).attrs).toMatchObject({ repeatHeader: true, repeatHeaderEdited: true })
-    expect(table.child(1).attrs).toMatchObject({ repeatHeader: false, repeatHeaderEdited: true })
+    expect(table.child(0).attrs).toMatchObject({
+      repeatHeader: true, repeatHeaderEdited: true,
+      rawTrPr: '<w:trPr><w:cantSplit/></w:trPr>',
+    })
+    expect(table.child(1).attrs).toMatchObject({
+      repeatHeader: false, repeatHeaderEdited: true,
+      rawTrPr: '<w:trPr><w:cantSplit/></w:trPr>',
+    })
     expect(table.child(0).child(0).attrs).toMatchObject({
       colwidth: [200],
       fill: 'D9EAF7',
+      bold: true,
+      align: 'center',
+      vAlign: 'center',
       borders: { top: { color: '9DC3E6' } },
     })
     expect(table.child(1).child(1).attrs).toMatchObject({ colwidth: [300], fill: 'FFFFFF' })
 
     const plan = pmDocToSavePlan(editor.getJSON() as PmNode, parsed.blocks)
     const reparsed = await parseDocx(await saveDocx(parsed, plan.saveBlocks))
-    const savedTable = reparsed.blocks.find((block) => block.table)?.table
+    const savedTableBlock = reparsed.blocks.find((block) => block.table)
+    const savedTable = savedTableBlock?.table
     expect(savedTable?.colWidthsTwips).toEqual([3000, 4500])
     expect(savedTable?.cellMarTwips).toEqual({ top: 150, right: 150, bottom: 150, left: 150 })
     expect(savedTable?.repeatHeaderRows).toEqual([true, false])
+    expect(savedTableBlock?.originalXml).toContain('<w:cantSplit/>')
     expect(savedTable?.rows[0]?.[0]?.fill).toBe('D9EAF7')
+    expect(savedTable?.rows[0]?.[0]).toMatchObject({ bold: true, align: 'center', vAlign: 'center' })
     expect(savedTable?.rows[1]?.[1]?.fill).toBe('FFFFFF')
     expect(savedTable?.rows[0]?.[0]?.borders?.top?.color).toBe('9DC3E6')
     editor.destroy()
@@ -94,6 +110,7 @@ describe('Mona document formatting helpers', () => {
         cellPadding: 10,
       }),
     ).toThrow(/columnWidths/)
+    expect(() => applyTableStyle(editor, 0, { headerAlign: 'middle' })).toThrow(/headerAlign/)
     expect(editor.getJSON()).toEqual(before)
     editor.destroy()
   })

@@ -42,8 +42,14 @@ vi.mock('./bridge', () => ({
     }
   },
 }))
+vi.mock('./visual', () => ({
+  captureEditorElement: async (_element: unknown, target: string) => ({
+    mode: 'visual', dataUrl: 'data:image/png;base64,AA==', width: 800, height: 1100, target, warnings: [],
+  }),
+  VisualVersionConflict: class extends Error {},
+}))
 
-import { mountDocsEntry } from './docs-entry'
+import { mountDocsEntry, tableRowSplitCount } from './docs-entry'
 
 function flush(delay = 0): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, delay))
@@ -198,9 +204,17 @@ describe('Mona Docs entry', () => {
       return resultOf(bridge, 'office_command_result')
     }
 
-    const heading = await sendCommand('heading-1', initialVersion, [{
+    const title = await sendCommand('title-1', initialVersion, [{
+      op: 'insert_title',
+      payload: { text: '2026 年月度销售报告', afterBlockId: 'block_0' },
+    }])
+    expect(title.ok).toBe(true)
+    const titleId = String((title.changedTargets as string[])[0])
+    const titleVersion = versionOf(title)
+
+    const heading = await sendCommand('heading-1', titleVersion, [{
       op: 'insert_heading',
-      payload: { text: '销售报告', level: 1, afterBlockId: 'block_0' },
+      payload: { text: '销售报告', level: 1, afterBlockId: titleId },
     }])
     expect(heading.ok).toBe(true)
     const headingId = String((heading.changedTargets as string[])[0])
@@ -297,7 +311,55 @@ describe('Mona Docs entry', () => {
       documentType: 'docs',
       headingCount: 1,
       tableCount: 1,
+      pageCount: 1,
     }))
+
+    await act(async () => {
+      bridge.emit({ type: 'office_inspect', command: {
+        sessionId: 'docs-session', requestId: 'review-before-visual', query: { mode: 'review' },
+      } })
+      await flush()
+    })
+    expect(resultOf(bridge, 'office_inspect_result').result).toEqual(expect.objectContaining({
+      mode: 'review', documentType: 'docs', pendingTargets: ['document'], warnings: [],
+    }))
+    await act(async () => {
+      bridge.emit({ type: 'office_inspect', command: {
+        sessionId: 'docs-session', requestId: 'review-visual', query: { mode: 'visual', pageIndex: 0 },
+      } })
+      await flush()
+    })
+    expect(resultOf(bridge, 'office_inspect_result').result).toEqual(expect.objectContaining({
+      mode: 'visual', target: 'page:0', warnings: [],
+    }))
+    await act(async () => {
+      bridge.emit({ type: 'office_inspect', command: {
+        sessionId: 'docs-session', requestId: 'review-after-visual', query: { mode: 'review' },
+      } })
+      await flush()
+    })
+    expect(resultOf(bridge, 'office_inspect_result').result).toEqual(expect.objectContaining({ pendingTargets: [] }))
+
+    const docPage = document.querySelector('.doc-page')
+    if (!docPage) throw new Error('Docs 测试页面没有连续文档容器。')
+    const pageGap = document.createElement('div')
+    pageGap.className = 'page-gap'
+    docPage.append(pageGap)
+    await act(async () => {
+      bridge.emit({
+        type: 'office_inspect',
+        command: { sessionId: 'docs-session', requestId: 'summary-pages', query: { mode: 'summary' } },
+      })
+      await flush()
+    })
+    expect(resultOf(bridge, 'office_inspect_result').result).toEqual(expect.objectContaining({ pageCount: 2 }))
+    pageGap.remove()
+
+    const paginationTable = document.createElement('div')
+    paginationTable.innerHTML = '<table class="doc-table"><tbody><tr class="page-gap page-gap-inline page-gap-table"><td></td></tr></tbody></table>'
+    expect(tableRowSplitCount(paginationTable)).toBe(0)
+    paginationTable.querySelector('td')!.innerHTML = '<span class="page-gap-cell"></span>'
+    expect(tableRowSplitCount(paginationTable)).toBe(1)
 
     await act(async () => {
       bridge.emit({
@@ -386,6 +448,23 @@ describe('Mona Docs entry', () => {
     const checkpointBytes = checkpoint.file
     if (!(checkpointBytes instanceof ArrayBuffer)) throw new Error('checkpoint is not an ArrayBuffer')
     const reparsed = await parseDocx(new Uint8Array(checkpointBytes))
+    const reparsedTitle = reparsed.blocks.find((block) => parsedBlockText(block) === '2026 年月度销售报告')
+    expect(reparsedTitle).toMatchObject({ styleId: 'Title' })
+    expect(reparsedTitle?.runs?.[0]).toMatchObject({
+      text: '2026 年月度销售报告', bold: true, color: '000000', sizeHalfPoints: 44,
+      font: 'Microsoft YaHei', fontAscii: 'Arial',
+    })
+    const defaultTableBlock = reparsed.blocks.find((block) => block.table)
+    const defaultTable = defaultTableBlock?.table
+    expect(defaultTable).toMatchObject({
+      cellMarTwips: { top: 120, right: 120, bottom: 120, left: 120 },
+      repeatHeaderRows: [true, false],
+    })
+    expect(defaultTableBlock?.originalXml).toContain('<w:cantSplit/>')
+    expect(defaultTable?.rows[0]?.[0]).toMatchObject({
+      fill: 'EAF2F8', bold: true, align: 'center', vAlign: 'center',
+      borders: { top: { color: 'D9D9D9' } },
+    })
     expect(reparsed.blocks.map(parsedBlockText)).toEqual(expect.arrayContaining([
       '月度销售报告',
       '第一项',
@@ -405,6 +484,48 @@ describe('Mona Docs entry', () => {
       underline: true,
       color: 'C00000',
       sizeHalfPoints: 36,
+    }))
+
+    const badFooter = await sendCommand('bad-footer-review', finalVersion, [{
+      op: 'set_header_footer', payload: { kind: 'footer', text: '页', pageNumber: false },
+    }])
+    const badFooterVersion = versionOf(badFooter)
+    await act(async () => {
+      bridge.emit({ type: 'office_inspect', command: {
+        sessionId: 'docs-session', requestId: 'bad-footer-review-state', query: { mode: 'review' },
+      } })
+      await flush()
+    })
+    expect(resultOf(bridge, 'office_inspect_result').result).toEqual(expect.objectContaining({
+      pendingTargets: ['document'], warnings: [expect.stringContaining('没有 PAGE 字段')],
+    }))
+    await act(async () => {
+      bridge.emit({ type: 'office_inspect', command: {
+        sessionId: 'docs-session', requestId: 'bad-footer-visual', query: { mode: 'visual', pageIndex: 0 },
+      } })
+      await flush()
+    })
+    expect(resultOf(bridge, 'office_inspect_result').result).toEqual(expect.objectContaining({
+      warnings: [expect.stringContaining('[错误]')],
+    }))
+    const fixedFooter = await sendCommand('fixed-footer-review', badFooterVersion, [{
+      op: 'set_header_footer', payload: { kind: 'footer', text: '第 # 页', pageNumber: true },
+    }])
+    await act(async () => {
+      bridge.emit({ type: 'office_inspect', command: {
+        sessionId: 'docs-session', requestId: 'fixed-footer-visual', query: { mode: 'visual', pageIndex: 0 },
+      } })
+      await flush()
+    })
+    expect(versionOf(resultOf(bridge, 'office_inspect_result'))).toEqual(versionOf(fixedFooter))
+    await act(async () => {
+      bridge.emit({ type: 'office_inspect', command: {
+        sessionId: 'docs-session', requestId: 'fixed-footer-review-state', query: { mode: 'review' },
+      } })
+      await flush()
+    })
+    expect(resultOf(bridge, 'office_inspect_result').result).toEqual(expect.objectContaining({
+      pendingTargets: [], warnings: [],
     }))
   })
 
@@ -615,7 +736,7 @@ describe('Mona Docs entry', () => {
           type: 'heading',
           text: '专业标题',
           style: expect.objectContaining({
-            fontFamily: null,
+          fontFamily: 'Arial',
             fontSizePt: 18,
             color: '#C00000',
             bold: true,

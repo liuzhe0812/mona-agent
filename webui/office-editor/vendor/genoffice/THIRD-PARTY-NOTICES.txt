@@ -1,0 +1,48 @@
+GenOffice v0.8.667 selected source snapshot — third-party license index
+
+This file indexes license texts that are included in this Mona source
+snapshot. The listed files are retained verbatim from the fixed upstream
+commit. It is an index, not a generated application bundle notice.
+
+1. Apache License 2.0
+
+The GenOffice source and its Apache-licensed components are covered by:
+
+  ../../LICENSE
+
+2. SIL Open Font License 1.1
+
+The upstream font license text is retained at:
+
+  apps/docs/src/renderer/fonts/LICENSE-OFL.txt
+
+3. EMF converter license
+
+The vendored EMF converter license text is retained at:
+
+  packages/docx-engine/src/vendor/emf-converter/LICENSE
+
+4. msoffcrypto-tool fixture license
+
+The encrypted-document test fixture attribution is retained at:
+
+  apps/docs/tests/encrypted-fixtures/LICENSE-msoffcrypto-tool.txt
+
+5. python-pptx fixture license
+
+The test fixture attribution is retained at:
+
+  packages/pptx-engine/tests/fixtures/LICENSE-python-pptx.txt
+
+6. Unicode License v3
+
+The Unicode Character Database license text referenced by the upstream
+NOTICE is retained at:
+
+  LICENSE-UNICODE.txt
+
+Runtime npm packages and Rust crates are not vendored by D0-02. Their
+versions and license metadata remain in the upstream package manifests and
+the Sheets Cargo.lock used by the later independent build. D0-03/D0-07 must
+generate the final runtime dependency notice from the exact installed graph
+before packaging.

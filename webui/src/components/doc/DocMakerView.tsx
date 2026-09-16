@@ -5,7 +5,6 @@ import {
   ListX,
   Loader2,
   Search,
-  Sparkles,
   Star,
   Upload,
   X,
@@ -29,33 +28,21 @@ import { Input } from "@/components/ui/input";
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
 import {
-  fetchPptProjects,
-  fetchPptProjectPath,
-  fetchPptExportStatus,
   fetchVideoProjects,
-  getApiBase,
-  savePptChatId,
   saveVideoChatId,
   type VideoProject,
 } from "@/lib/api";
 import { createOfficeSession, getOfficeSession, importOfficeSession } from "@/lib/office-client";
 import {
-  httpFetch,
   isTauri,
   revealItemInDir,
   saveWorkspaceCanvas,
   type WorkspaceCanvasDocument,
 } from "@/lib/tauri";
-import type { PptProject } from "@/lib/types";
 import { cn } from "@/lib/utils";
 import { useWorkspaceStore } from "@/lib/workspace-store";
 import { useClient } from "@/providers/ClientProvider";
-import type { EmbeddedPptProject, PptPhase } from "@/components/ppt/PptMakerView";
 import type { EmbeddedVideoProject } from "@/components/doc/video/VideoMakerView";
-
-const PptMakerView = lazy(() =>
-  import("@/components/ppt/PptMakerView").then((module) => ({ default: module.PptMakerView })),
-);
 
 const VideoMakerView = lazy(() =>
   import("@/components/doc/video/VideoMakerView").then((module) => ({ default: module.VideoMakerView })),
@@ -130,6 +117,7 @@ interface RecentOfficeDocument {
   officeType: OfficeDocumentType;
   updatedAt: number;
   sourcePath?: string | null;
+  savedPath?: string | null;
 }
 
 interface OfficeWorkspaceTab {
@@ -140,20 +128,8 @@ interface OfficeWorkspaceTab {
   ownerSessionKey: string;
   officeType: OfficeDocumentType;
   session: OfficeSessionState;
-  view: "editor" | "ppt-workflow";
-  pptProject: EmbeddedPptProject | null;
   createdAt: number;
   sourcePath?: string | null;
-}
-
-interface PptWorkspaceTab {
-  id: string;
-  kind: "ppt-workflow";
-  title: string;
-  chatId: string;
-  ownerSessionKey: string;
-  project: EmbeddedPptProject | null;
-  createdAt: number;
 }
 
 interface VideoWorkspaceTab {
@@ -175,17 +151,16 @@ interface CanvasWorkspaceTab {
   createdAt: number;
 }
 
-type WorkspaceTab = OfficeWorkspaceTab | PptWorkspaceTab | VideoWorkspaceTab | CanvasWorkspaceTab;
-type PersistedWorkspaceTab = Omit<OfficeWorkspaceTab, "session"> & { sessionId: string } | PptWorkspaceTab | VideoWorkspaceTab | CanvasWorkspaceTab;
+type WorkspaceTab = OfficeWorkspaceTab | VideoWorkspaceTab | CanvasWorkspaceTab;
+type PersistedWorkspaceTab = Omit<OfficeWorkspaceTab, "session"> & { sessionId: string } | VideoWorkspaceTab | CanvasWorkspaceTab;
 
 interface HistoryItem {
   key: string;
-  kind: "office" | "ppt" | "video";
+  kind: "office" | "video";
   title: string;
   createdAt: number;
   detail: string;
   office?: RecentOfficeDocument;
-  ppt?: PptProject;
   video?: VideoProject;
 }
 
@@ -221,14 +196,7 @@ function persistWorkspaceTabs(tabs: WorkspaceTab[]): void {
   localStorage.setItem(WORKSPACE_STORAGE_KEY, JSON.stringify(value));
 }
 
-function pptPhase(project: PptProject): PptPhase {
-  const phase = project.phase;
-  if (phase === "config" || phase === "generating" || phase === "outline" || phase === "producing" || phase === "exporting" || phase === "done") return phase;
-  return project.status === "done" || project.hasExport ? "done" : "outline";
-}
-
 function tabIcon(tab: WorkspaceTab): DocumentIconKind {
-  if (tab.kind === "ppt-workflow") return "ppt";
   if (tab.kind === "video-workflow") return "video";
   if (tab.kind === "canvas") return tab.canvasKind;
   if (tab.officeType === "sheets") return "excel";
@@ -237,7 +205,6 @@ function tabIcon(tab: WorkspaceTab): DocumentIconKind {
 }
 
 function historyIcon(item: HistoryItem): DocumentIconKind {
-  if (item.kind === "ppt") return "ppt";
   if (item.kind === "video") return "video";
   if (item.office?.officeType === "sheets") return "excel";
   if (item.office?.officeType === "slides") return "ppt";
@@ -270,7 +237,6 @@ export function DocMakerView() {
   const [favorites, setFavorites] = useState<Set<string>>(() => new Set(readStoredArray<string>(FAVORITES_STORAGE_KEY)));
   const [historyMode, setHistoryMode] = useState<"recent" | "favorites">("recent");
   const [query, setQuery] = useState("");
-  const [pptProjects, setPptProjects] = useState<PptProject[]>([]);
   const [videoProjects, setVideoProjects] = useState<VideoProject[]>([]);
   const [historyLoading, setHistoryLoading] = useState(true);
   const [historyError, setHistoryError] = useState<string | null>(null);
@@ -288,11 +254,15 @@ export function DocMakerView() {
 
   const refreshHistory = useCallback(async () => {
     setHistoryLoading(true);
-    const [pptResult, videoResult] = await Promise.allSettled([fetchPptProjects(token), fetchVideoProjects(token)]);
-    if (pptResult.status === "fulfilled") setPptProjects(pptResult.value.projects ?? []);
-    if (videoResult.status === "fulfilled") setVideoProjects(videoResult.value.projects ?? []);
-    setHistoryError(pptResult.status === "rejected" && videoResult.status === "rejected" ? "历史项目暂时无法加载，请稍后重试。" : null);
-    setHistoryLoading(false);
+    try {
+      const result = await fetchVideoProjects(token);
+      setVideoProjects(result.projects ?? []);
+      setHistoryError(null);
+    } catch {
+      setHistoryError("历史项目暂时无法加载，请稍后重试。");
+    } finally {
+      setHistoryLoading(false);
+    }
   }, [token]);
 
   useEffect(() => { void refreshHistory(); }, [refreshHistory]);
@@ -303,15 +273,17 @@ export function DocMakerView() {
       const persisted = readStoredArray<PersistedWorkspaceTab>(WORKSPACE_STORAGE_KEY);
       const restored: WorkspaceTab[] = [];
       for (const tab of persisted) {
-        if (tab.kind !== "office") {
+        if (tab.kind === "video-workflow" || tab.kind === "canvas") {
           restored.push(tab);
           continue;
         }
-        try {
-          const session = await getOfficeSession(tab.sessionId, tab.ownerSessionKey);
-          restored.push({ ...tab, session });
-        } catch {
-          // Closed or expired sessions disappear from the open tab strip.
+        if (tab.kind === "office") {
+          try {
+            const session = await getOfficeSession(tab.sessionId, tab.ownerSessionKey);
+            restored.push({ ...tab, session });
+          } catch {
+            // Closed or expired sessions disappear from the open tab strip.
+          }
         }
       }
       if (cancelled) return;
@@ -366,11 +338,12 @@ export function DocMakerView() {
       officeType: tab.officeType,
       updatedAt: Date.now(),
       sourcePath: tab.sourcePath ?? null,
+      savedPath: tab.session.workingPath ?? null,
     };
     setRecentOffice((current) => [recent, ...current.filter((item) => item.key !== recent.key)].slice(0, 50));
   }, []);
 
-  const createChat = useCallback((agentKind?: "ppt" | "video") => client.newChat(5_000, false, null, agentKind ?? null), [client]);
+  const createChat = useCallback((agentKind?: "video") => client.newChat(5_000, false, null, agentKind ?? null), [client]);
 
   const createOfficeDocument = useCallback(async (officeType: OfficeDocumentType) => {
     if (creating) return;
@@ -389,8 +362,6 @@ export function DocMakerView() {
         ownerSessionKey,
         officeType,
         session,
-        view: "editor",
-        pptProject: null,
         createdAt: Date.now(),
         sourcePath: null,
       };
@@ -425,8 +396,6 @@ export function DocMakerView() {
         ownerSessionKey,
         officeType,
         session,
-        view: "editor",
-        pptProject: null,
         createdAt: Date.now(),
         sourcePath,
       };
@@ -505,11 +474,6 @@ export function DocMakerView() {
     }
   }, [addTab, canvasWorkspaceRoot, createChat, creating]);
 
-  const startPptWorkflow = useCallback((tabId: string) => {
-    updateTab(tabId, (tab) => tab.kind === "office" && tab.officeType === "slides" ? { ...tab, view: "ppt-workflow" } : tab);
-    setRightSidebarOpen(true);
-  }, [updateTab]);
-
   const openHistoryItem = useCallback(async (item: HistoryItem) => {
     setActionError(null);
     try {
@@ -517,18 +481,9 @@ export function DocMakerView() {
         const session = await getOfficeSession(item.office.sessionId, item.office.ownerSessionKey);
         addTab({
           id: `office:${session.sessionId}`, kind: "office", title: item.office.title, chatId: item.office.chatId,
-          ownerSessionKey: item.office.ownerSessionKey, officeType: item.office.officeType, session, view: "editor",
-          pptProject: null, createdAt: item.office.updatedAt,
+          ownerSessionKey: item.office.ownerSessionKey, officeType: item.office.officeType, session,
+          createdAt: item.office.updatedAt,
           sourcePath: item.office.sourcePath ?? null,
-        });
-        return;
-      }
-      if (item.ppt) {
-        const chatId = item.ppt.chatId ?? await createChat("ppt");
-        if (!item.ppt.chatId) await savePptChatId(token, item.ppt.name, chatId);
-        addTab({
-          id: `ppt:${item.ppt.name}`, kind: "ppt-workflow", title: item.ppt.name, chatId,
-          ownerSessionKey: `websocket:${chatId}`, project: { name: item.ppt.name, phase: pptPhase(item.ppt) }, createdAt: item.ppt.createdAt,
         });
         return;
       }
@@ -544,28 +499,6 @@ export function DocMakerView() {
       setActionError(error instanceof Error ? error.message : "项目打开失败。");
     }
   }, [addTab, createChat, token]);
-
-  const openGeneratedPpt = useCallback(async (tabId: string, projectName: string) => {
-    const tab = tabs.find((item) => item.id === tabId);
-    if (!tab || (tab.kind !== "office" && tab.kind !== "ppt-workflow")) return;
-    setActionError(null);
-    try {
-      const base = await getApiBase();
-      const response = await httpFetch(`${base}/api/ppt/download?project=${encodeURIComponent(projectName)}&token=${encodeURIComponent(token)}`);
-      if (!response.ok) throw new Error("生成的 PPTX 暂时无法打开。");
-      const filename = `${projectName}.pptx`;
-      const session = await importOfficeSession({ filename, sourceIdentity: `ppt-workflow:${projectName}`, ownerSessionKey: tab.ownerSessionKey }, await response.arrayBuffer());
-      const next: OfficeWorkspaceTab = {
-        id: tab.id, kind: "office", title: filename, chatId: tab.chatId, ownerSessionKey: tab.ownerSessionKey,
-        officeType: "slides", session, view: "editor", pptProject: { name: projectName, phase: "done" }, createdAt: tab.createdAt,
-        sourcePath: workspacePath ? `${workspacePath}/ppt_projects/${projectName}/output/output.pptx` : null,
-      };
-      addTab(next);
-      rememberOffice(next);
-    } catch (error) {
-      setActionError(error instanceof Error ? error.message : "生成结果打开失败。");
-    }
-  }, [addTab, rememberOffice, tabs, token, workspacePath]);
 
   const closeTab = useCallback((tabId: string) => {
     setTabs((current) => current.filter((tab) => tab.id !== tabId));
@@ -609,26 +542,21 @@ export function DocMakerView() {
     }
     try {
       if (item.office) {
-        if (!item.office.sourcePath) {
-          setActionError("该文档尚未保存，暂时没有可打开的文件目录。");
+        let filePath = item.office.sourcePath ?? item.office.savedPath ?? null;
+        if (!filePath) {
+          const session = await getOfficeSession(item.office.sessionId, item.office.ownerSessionKey);
+          filePath = session.workingPath ?? null;
+          if (filePath) {
+            setRecentOffice((current) => current.map((office) => (
+              office.key === item.office!.key ? { ...office, savedPath: filePath } : office
+            )));
+          }
+        }
+        if (!filePath) {
+          setActionError("该文档当前没有可定位的已保存文件。");
           return;
         }
-        await revealItemInDir(item.office.sourcePath);
-        return;
-      }
-      if (item.ppt) {
-        const [project, status] = await Promise.all([
-          fetchPptProjectPath(token, item.ppt.name),
-          fetchPptExportStatus(token, item.ppt.name),
-        ]);
-        if (!status.exportFile) {
-          setActionError("该 PPT 尚未生成最终文件。");
-          return;
-        }
-        const outputFolder = status.hasPptxOutput && status.exportFile === "output.pptx"
-          ? "output"
-          : "exports";
-        await revealItemInDir(`${project.path}/${outputFolder}/${status.exportFile}`);
+        await revealItemInDir(filePath);
         return;
       }
       if (item.video) {
@@ -642,12 +570,11 @@ export function DocMakerView() {
     } catch (error) {
       setActionError(`无法打开文件目录：${error instanceof Error ? error.message : "目录不存在或已被移动"}`);
     }
-  }, [token, workspacePath]);
+  }, [workspacePath]);
 
   const sendForTab = useCallback((tab: WorkspaceTab, content: string, displayContent?: string) => {
     if (tab.kind === "office") {
-      if (tab.view === "ppt-workflow") client.sendMessage(tab.chatId, content, undefined, { agentKind: "ppt", displayContent });
-      else client.sendMessage(tab.chatId, content, undefined, {
+      client.sendMessage(tab.chatId, content, undefined, {
         officeSessionId: tab.session.sessionId, officeDocumentType: tab.officeType, officeDisplayName: tab.title, displayContent,
       });
       return;
@@ -656,19 +583,18 @@ export function DocMakerView() {
       client.sendMessage(tab.chatId, content, undefined, { displayContent });
       return;
     }
-    client.sendMessage(tab.chatId, content, undefined, { agentKind: tab.kind === "ppt-workflow" ? "ppt" : "video", displayContent });
+    client.sendMessage(tab.chatId, content, undefined, { agentKind: "video", displayContent });
   }, [client]);
 
   const historyItems = useMemo<HistoryItem[]>(() => {
     const officeItems: HistoryItem[] = recentOffice.map((office) => ({ key: office.key, kind: "office", title: office.title, createdAt: office.updatedAt, detail: OFFICE_META[office.officeType].label, office }));
-    const pptItems: HistoryItem[] = pptProjects.map((ppt) => ({ key: `ppt:${ppt.name}`, kind: "ppt", title: ppt.name, createdAt: ppt.createdAt, detail: ppt.status === "done" || ppt.hasExport ? `PPT · ${ppt.slideCount} 页 · 已完成` : "PPT · 制作中", ppt }));
     const videoItems: HistoryItem[] = videoProjects.map((video) => ({ key: `video:${video.name}`, kind: "video", title: video.name, createdAt: video.createdAt, detail: video.phase === "done" ? "视频 · 已完成" : "视频 · 制作中", video }));
     const normalizedQuery = query.trim().toLocaleLowerCase();
-    return [...officeItems, ...pptItems, ...videoItems]
+    return [...officeItems, ...videoItems]
       .filter((item) => historyMode === "recent" || favorites.has(item.key))
       .filter((item) => !normalizedQuery || item.title.toLocaleLowerCase().includes(normalizedQuery))
       .sort((left, right) => right.createdAt - left.createdAt);
-  }, [favorites, historyMode, pptProjects, query, recentOffice, videoProjects]);
+  }, [favorites, historyMode, query, recentOffice, videoProjects]);
 
   const renderStartPage = () => (
     <div
@@ -786,9 +712,6 @@ export function DocMakerView() {
             })}
           </div>
           <div ref={setOfficeToolbarContainer} className="flex shrink-0 items-center" data-testid="document-office-controls" />
-          {activeTab?.kind === "office" && activeTab.officeType === "slides" && activeTab.view === "editor" ? (
-            <Button type="button" variant="ghost" size="sm" className="ml-2 h-6 shrink-0 gap-1.5 px-2 text-caption" onClick={() => startPptWorkflow(activeTab.id)}><Sparkles className="h-3.5 w-3.5" />启动AI PPT工作流</Button>
-          ) : null}
         </div>
 
         <main className="relative isolate min-w-0 flex-1 overflow-hidden">
@@ -796,19 +719,9 @@ export function DocMakerView() {
           {tabs.map((tab) => (
             <div key={tab.id} className={cn("absolute inset-0 flex min-h-0 flex-col bg-background", activeTabId !== tab.id && "invisible pointer-events-none")}>
               {tab.kind === "office" ? (
-                <>
-                  <div className={cn("absolute inset-0 flex min-h-0 flex-col", tab.view !== "editor" && "invisible pointer-events-none")}>
-                    <div className="min-h-0 flex-1"><OfficeEditorHost key={tab.session.sessionId} initialSession={tab.session} ownerSessionKey={tab.ownerSessionKey} generating={Boolean(streamingByTab[tab.id])} onClosed={(sessionId) => handleOfficeClosed(tab.id, sessionId)} onAiRequest={(prompt, displayText) => { setRightSidebarOpen(true); sendForTab(tab, prompt, displayText); }} toolbarContainer={activeTabId === tab.id && tab.view === "editor" ? officeToolbarContainer : null} /></div>
-                  </div>
-                  {tab.officeType === "slides" ? (
-                    <div className={cn("absolute inset-0 flex min-h-0 flex-col", tab.view !== "ppt-workflow" && "invisible pointer-events-none")}>
-                      <div className="flex h-9 shrink-0 items-center justify-between border-b border-border/60 px-3 text-caption"><span className="font-medium">AI 制作整套 PPT</span><Button variant="ghost" size="sm" className="h-7 text-caption" onClick={() => updateTab(tab.id, (current) => current.kind === "office" ? { ...current, view: "editor" } : current)}>返回自由编辑</Button></div>
-                      <div className="min-h-0 flex-1"><Suspense fallback={<LoadingLabel label="正在打开 PPT 工作流…" />}><PptMakerView embedded hostChatId={tab.chatId} hostIsStreaming={Boolean(streamingByTab[tab.id])} initialProject={tab.pptProject} onProjectChange={(project) => updateTab(tab.id, (current) => current.kind === "office" ? { ...current, title: project?.name ?? current.title, pptProject: project } : current)} onSendPptTurn={(content, displayContent) => sendForTab(tab, content, displayContent)} onOpenGeneratedPptx={(projectName) => openGeneratedPpt(tab.id, projectName)} /></Suspense></div>
-                    </div>
-                  ) : null}
-                </>
-              ) : tab.kind === "ppt-workflow" ? (
-                <Suspense fallback={<LoadingLabel label="正在打开 PPT 工作流…" />}><PptMakerView embedded hostChatId={tab.chatId} hostIsStreaming={Boolean(streamingByTab[tab.id])} initialProject={tab.project} onProjectChange={(project) => updateTab(tab.id, (current) => current.kind === "ppt-workflow" ? { ...current, title: project?.name ?? current.title, project } : current)} onSendPptTurn={(content, displayContent) => sendForTab(tab, content, displayContent)} onOpenGeneratedPptx={(projectName) => openGeneratedPpt(tab.id, projectName)} /></Suspense>
+                <div className="absolute inset-0 flex min-h-0 flex-col">
+                  <div className="min-h-0 flex-1"><OfficeEditorHost key={tab.session.sessionId} initialSession={tab.session} ownerSessionKey={tab.ownerSessionKey} generating={Boolean(streamingByTab[tab.id])} onClosed={(sessionId) => handleOfficeClosed(tab.id, sessionId)} onAiRequest={(prompt, displayText) => { setRightSidebarOpen(true); sendForTab(tab, prompt, displayText); }} toolbarContainer={activeTabId === tab.id ? officeToolbarContainer : null} /></div>
+                </div>
               ) : tab.kind === "canvas" ? (
                 <Suspense fallback={<LoadingLabel label="正在打开画布…" />}><CanvasFileView filePath={tab.filePath} /></Suspense>
               ) : (
@@ -823,7 +736,7 @@ export function DocMakerView() {
         <aside aria-label="MONA AI 文档助手" className="flex h-full w-80 shrink-0 flex-col border-l border-border/70 bg-background">
           <div className="flex h-8 shrink-0 items-center border-b border-border/70 px-3 pr-11"><div className="flex min-w-0 items-center gap-2"><AgentLogo state={activeTab && streamingByTab[activeTab.id] ? "working" : "idle"} className="h-5 w-5 shrink-0" title="Mona" /><div className="text-ui font-semibold">MONA AI</div></div></div>
           <div className="min-h-0 flex-1">
-            {activeTab ? <DocChatPanel key={activeTab.chatId} chatId={activeTab.chatId} onSend={(content) => sendForTab(activeTab, content)} onStreamingChange={(streaming) => setStreamingByTab((current) => ({ ...current, [activeTab.id]: streaming }))} placeholder={activeTab.kind === "video-workflow" ? "和 MONA AI 一起调整当前视频…" : activeTab.kind === "canvas" ? "让 MONA AI 协助完善当前画布…" : activeTab.kind === "ppt-workflow" || (activeTab.kind === "office" && activeTab.view === "ppt-workflow") ? "和 MONA AI 一起制作当前 PPT…" : "让 MONA AI 阅读或修改当前文档…"} /> : <div className="flex h-full flex-col items-center justify-center gap-2 px-6 text-center text-caption text-muted-foreground"><AgentLogo state="idle" className="h-8 w-8" title="Mona" /><span>打开一个文档后，MONA AI 会在这里协助你。</span></div>}
+            {activeTab ? <DocChatPanel key={activeTab.chatId} chatId={activeTab.chatId} onSend={(content) => sendForTab(activeTab, content)} onStreamingChange={(streaming) => setStreamingByTab((current) => ({ ...current, [activeTab.id]: streaming }))} placeholder={activeTab.kind === "video-workflow" ? "和 MONA AI 一起调整当前视频…" : activeTab.kind === "canvas" ? "让 MONA AI 协助完善当前画布…" : "让 MONA AI 阅读或修改当前文档…"} /> : <div className="flex h-full flex-col items-center justify-center gap-2 px-6 text-center text-caption text-muted-foreground"><AgentLogo state="idle" className="h-8 w-8" title="Mona" /><span>打开一个文档后，MONA AI 会在这里协助你。</span></div>}
           </div>
         </aside>
       ) : null}

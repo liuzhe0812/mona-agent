@@ -11,9 +11,7 @@ export interface SlidesReviewOperation {
   }
 }
 
-const NON_VISUAL_OPERATIONS = new Set([
-  'setText',
-  'setFont',
+const SKIP_VISUAL_OPERATIONS = new Set([
   'setFill',
   'setStroke',
   'setNotes',
@@ -25,8 +23,6 @@ const NON_VISUAL_OPERATIONS = new Set([
   'setAdvanceTime',
   'setAnimations',
 ])
-
-const STRUCTURE_ONLY_OPERATIONS = new Set(['setText', 'setFont', 'setFill', 'setStroke'])
 
 const ALL_SLIDES_OPERATIONS = new Set([
   'addBlankSlide',
@@ -100,10 +96,7 @@ export function pendingSlideIdsInOrder(
 export function operationsRequireVisualReview(
   operations: readonly SlidesReviewOperation[],
 ): boolean {
-  if (operations.every((operation) => (
-    NON_VISUAL_OPERATIONS.has(operation.op) && !STRUCTURE_ONLY_OPERATIONS.has(operation.op)
-  ))) return false
-  return operations.length !== 1 || !STRUCTURE_ONLY_OPERATIONS.has(operations[0]!.op)
+  return operations.some((operation) => !SKIP_VISUAL_OPERATIONS.has(operation.op))
 }
 
 export function operationsRequireAllSlides(

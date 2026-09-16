@@ -22,6 +22,11 @@ export function DocChatPanel({ chatId, onSend, placeholder, onStreamingChange }:
   const [draft, setDraft] = useState("");
   const [awaitingResponse, setAwaitingResponse] = useState(false);
   const bottomRef = useRef<HTMLDivElement>(null);
+  const onStreamingChangeRef = useRef(onStreamingChange);
+
+  useEffect(() => {
+    onStreamingChangeRef.current = onStreamingChange;
+  }, [onStreamingChange]);
 
   const historyKey = chatId ? `websocket:${chatId}` : null;
   const {
@@ -49,8 +54,8 @@ export function DocChatPanel({ chatId, onSend, placeholder, onStreamingChange }:
 
   // Notify parent of streaming state changes
   useEffect(() => {
-    onStreamingChange?.(isStreaming);
-  }, [isStreaming, onStreamingChange]);
+    onStreamingChangeRef.current?.(isStreaming);
+  }, [isStreaming]);
 
   useEffect(() => {
     if (!chatId) {

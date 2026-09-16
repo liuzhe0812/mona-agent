@@ -32,7 +32,7 @@ describe('Slides review state', () => {
     expect(operationsRequireAllSlides([{ op: 'applyTheme' }])).toBe(true)
   })
 
-  it('allows exact local operations to skip visual review', () => {
+  it('keeps text reflow changes pending while exact paint changes may skip visual review', () => {
     expect(operationsRequireVisualReview([
       { op: 'setText', target: { slide: 's-1', el: 'e-1' } },
       { op: 'setFont', target: { slide: 's-1', el: 'e-1' } },
@@ -41,6 +41,12 @@ describe('Slides review state', () => {
     ])).toBe(true)
     expect(operationsRequireVisualReview([
       { op: 'setText', target: { slide: 's-1', el: 'e-1' } },
+    ])).toBe(true)
+    expect(operationsRequireVisualReview([
+      { op: 'setFont', target: { slide: 's-1', el: 'e-1' } },
+    ])).toBe(true)
+    expect(operationsRequireVisualReview([
+      { op: 'setFill', target: { slide: 's-1', el: 'e-1' } },
     ])).toBe(false)
     expect(operationsRequireVisualReview([
       { op: 'setNotes', target: { slide: 's-1' } },

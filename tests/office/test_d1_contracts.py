@@ -69,6 +69,7 @@ def test_d1_docs_and_slides_operations_cover_all_allowed_discriminators() -> Non
         "replace_block_text",
         "delete_block",
         "insert_paragraph",
+        "insert_title",
         "insert_heading",
         "insert_list",
         "insert_table",

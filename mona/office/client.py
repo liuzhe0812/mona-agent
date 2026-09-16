@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import os
+import tempfile
 from pathlib import Path
 from typing import Any
 
@@ -15,7 +17,6 @@ from mona.office.schemas import (
     OfficeApplyCommand,
     OfficeCommandResult,
     OfficeDocumentType,
-    OfficeExportRequest,
     OfficeInspectRequest,
     OfficeInspectResponse,
     OfficeSaveRequest,
@@ -138,13 +139,79 @@ class OfficeServiceClient:
         output: str | Path,
         version: DocumentVersion | dict[str, Any] | None = None,
     ) -> dict[str, Any]:
-        body = OfficeExportRequest(output=str(output), version=version)
-        return await self._request(
-            "POST",
-            f"/api/office/sessions/{session_id}/export",
+        saved = await self.save(
+            session_id,
             owner_session_key=owner_session_key,
-            json_body=body.model_dump(by_alias=True, mode="json"),
+            version=version,
         )
+        contents = await self.download_file(
+            session_id,
+            owner_session_key=owner_session_key,
+        )
+        destination = Path(output).expanduser().resolve()
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        descriptor, temporary_name = tempfile.mkstemp(
+            prefix=f".{destination.name}.",
+            suffix=".tmp",
+            dir=destination.parent,
+        )
+        temporary = Path(temporary_name)
+        try:
+            with os.fdopen(descriptor, "wb") as stream:
+                stream.write(contents)
+                stream.flush()
+                os.fsync(stream.fileno())
+            os.replace(temporary, destination)
+        finally:
+            temporary.unlink(missing_ok=True)
+        return {
+            "ok": True,
+            "fileName": destination.name,
+            "version": saved["version"],
+        }
+
+    async def download_file(
+        self,
+        session_id: str,
+        *,
+        owner_session_key: str,
+    ) -> bytes:
+        headers = {
+            SERVICES_TOKEN_HEADER: self._token,
+            OFFICE_OWNER_HEADER: owner_session_key,
+        }
+        try:
+            async with httpx.AsyncClient(
+                timeout=_TIMEOUT,
+                transport=self._transport,
+                trust_env=False,
+            ) as client:
+                response = await client.get(
+                    f"{self._base_url}/api/office/sessions/{session_id}/file",
+                    headers=headers,
+                )
+        except (httpx.ConnectError, httpx.ConnectTimeout, httpx.ReadTimeout) as exc:
+            raise OfficeError(
+                OfficeErrorCode.EDITOR_UNAVAILABLE,
+                "Office 服务不可用，请稍后重试。",
+                retryable=True,
+            ) from exc
+        if response.status_code != 200:
+            try:
+                payload = response.json()
+            except ValueError:
+                payload = {}
+            error = payload.get("error", {}) if isinstance(payload, dict) else {}
+            try:
+                code = OfficeErrorCode(error.get("code"))
+            except ValueError:
+                code = OfficeErrorCode.EDITOR_UNAVAILABLE
+            raise OfficeError(
+                code,
+                str(error.get("message") or f"Office 文件读取失败：HTTP {response.status_code}"),
+                retryable=bool(error.get("retryable", False)),
+            )
+        return response.content
 
     async def close(self, session_id: str, *, owner_session_key: str) -> None:
         await self._request(

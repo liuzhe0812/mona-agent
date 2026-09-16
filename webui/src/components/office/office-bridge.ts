@@ -9,7 +9,7 @@ import type {
 } from "./types";
 
 export type HostToOfficeEditorMessage =
-  | { type: "office_open"; sessionId: string; documentType: OfficeDocumentType; version: DocumentVersion; file: ArrayBuffer; pendingVisualSlideIds?: string[] }
+  | { type: "office_open"; sessionId: string; documentType: OfficeDocumentType; version: DocumentVersion; file: ArrayBuffer; pendingVisualSlideIds?: string[]; pendingReviewTargets?: string[] }
   | { type: "office_command"; command: OfficeApplyCommand }
   | { type: "office_inspect"; command: OfficeInspectCommand }
   | { type: "office_checkpoint_request"; version: DocumentVersion }
@@ -18,7 +18,7 @@ export type HostToOfficeEditorMessage =
 
 export type OfficeEditorToHostMessage =
   | { type: "office_editor_ready"; sessionId: string; version: DocumentVersion }
-  | { type: "office_user_change"; sessionId: string; version: DocumentVersion; changedTargets: string[]; pendingVisualSlideIds?: string[] }
+  | { type: "office_user_change"; sessionId: string; version: DocumentVersion; changedTargets: string[]; pendingVisualSlideIds?: string[]; pendingReviewTargets?: string[] }
   | { type: "office_command_result"; result: OfficeCommandResult }
   | { type: "office_inspect_result"; result: OfficeInspectResponse }
   | { type: "office_checkpoint"; sessionId: string; version: DocumentVersion; file: ArrayBuffer }

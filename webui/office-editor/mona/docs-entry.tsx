@@ -216,8 +216,30 @@ function insertionPoint(editor: Editor, afterBlockId: unknown): number {
   return block.pos + block.size
 }
 
-function textContent(text: string): JSONContent[] {
-  return text ? [{ type: 'text', text }] : []
+function textContent(text: string, fontSizePt = 11, bold = false): JSONContent[] {
+  if (!text) return []
+  return [{
+    type: 'text',
+    text,
+    marks: [
+      {
+        type: 'docTextStyle',
+        attrs: {
+          color: '000000',
+          sizeHalfPoints: fontSizePt * 2,
+          font: 'Microsoft YaHei',
+          fontAscii: 'Arial',
+        },
+      },
+      ...(bold ? [{ type: 'bold' }] : []),
+    ],
+  }]
+}
+
+export function tableRowSplitCount(root: ParentNode): number {
+  return new Set(Array.from(root.querySelectorAll(
+    '.doc-table .page-gap-cell, .doc-table .page-gap-cut',
+  )).map((element) => element.closest('tr')).filter(Boolean)).size
 }
 
 function applyOperation(editor: Editor, operation: DocsCommand['operations'][number]): string[] {
@@ -257,15 +279,30 @@ function applyOperation(editor: Editor, operation: DocsCommand['operations'][num
     editor.view.dispatch(editor.state.tr.delete(block.pos, block.pos + block.size))
     return [block.id]
   }
-  if (operation.op === 'insert_paragraph' || operation.op === 'insert_heading') {
+  if (operation.op === 'insert_paragraph' || operation.op === 'insert_title' || operation.op === 'insert_heading') {
     const id = `block_${crypto.randomUUID().replaceAll('-', '')}`
     const text = asText(payload.text, 'text')
+    const title = operation.op === 'insert_title'
     const heading = operation.op === 'insert_heading'
     const level = Math.max(1, Math.min(6, Number(payload.level) || 1))
+    const headingSize = level === 1 ? 16 : level === 2 ? 13 : 12
     editor.commands.insertContentAt(insertionPoint(editor, payload.afterBlockId), {
       type: heading ? 'docHeading' : 'docParagraph',
-      attrs: { docxIndex: null, monaId: id, ...(heading ? { level } : {}) },
-      content: textContent(text),
+      attrs: {
+        docxIndex: null,
+        monaId: id,
+        ...(title
+          ? { styleId: 'Title', align: 'center', lineSpacing: 1, spaceBefore: 0, spaceAfter: 240 }
+          : heading
+            ? {
+                level,
+                lineSpacing: 1.15,
+                spaceBefore: level === 1 ? 240 : 160,
+                spaceAfter: 80,
+              }
+            : { lineSpacing: 1.35, spaceAfter: 120 }),
+      },
+      content: textContent(text, title ? 22 : heading ? headingSize : 11, title || heading),
     })
     return [id]
   }
@@ -280,7 +317,7 @@ function applyOperation(editor: Editor, operation: DocsCommand['operations'][num
       ids.push(id)
       return {
         type: 'docListItem',
-        attrs: { docxIndex: null, monaId: id, kind, ilvl: 0 },
+        attrs: { docxIndex: null, monaId: id, kind, ilvl: 0, lineSpacing: 1.3, spaceAfter: 60 },
         content: textContent(asText(item, 'item')),
       }
     })
@@ -302,15 +339,44 @@ function applyOperation(editor: Editor, operation: DocsCommand['operations'][num
     const id = `block_${crypto.randomUUID().replaceAll('-', '')}`
     editor.commands.insertContentAt(insertionPoint(editor, payload.afterBlockId), {
       type: 'docTable',
-      attrs: { docxIndex: null, monaId: id, tblAutoFit: 'window' },
-      content: rows.map((row) => ({
+      attrs: {
+        docxIndex: null,
+        monaId: id,
+        tblAutoFit: 'window',
+        cellMar: { top: 120, right: 120, bottom: 120, left: 120 },
+        cellMarEdited: true,
+      },
+      content: rows.map((row, rowIndex) => ({
         type: 'docTableRow',
+        attrs: {
+          repeatHeader: rowIndex === 0,
+          repeatHeaderEdited: true,
+          rawTrPr: '<w:trPr><w:cantSplit/></w:trPr>',
+        },
         content: row.map((cell) => ({
-          type: 'docTableCell',
+          type: rowIndex === 0 ? 'docTableHeader' : 'docTableCell',
+          attrs: {
+            fill: rowIndex === 0 ? 'EAF2F8' : null,
+            bold: rowIndex === 0,
+            align: rowIndex === 0 ? 'center' : null,
+            vAlign: 'center',
+            borders: {
+              top: { style: 'single', szEighths: 4, color: 'D9D9D9' },
+              right: { style: 'single', szEighths: 4, color: 'D9D9D9' },
+              bottom: { style: 'single', szEighths: 4, color: 'D9D9D9' },
+              left: { style: 'single', szEighths: 4, color: 'D9D9D9' },
+            },
+          },
           content: [{
             type: 'docParagraph',
-            attrs: { docxIndex: null, monaId: null },
-            content: textContent(asText(cell, 'cell')),
+            attrs: {
+              docxIndex: null,
+              monaId: null,
+              lineSpacing: 1.2,
+              spaceAfter: 0,
+              align: rowIndex === 0 ? 'center' : null,
+            },
+            content: textContent(asText(cell, 'cell'), 10, rowIndex === 0),
           }],
         })),
       })),
@@ -451,6 +517,9 @@ function MonaDocsEditor(): React.JSX.Element {
   const versionRef = useRef<DocumentVersion | null>(null)
   const revisionDocsRef = useRef(new Map<number, () => Promise<Uint8Array | null>>())
   const operationCacheRef = useRef(new Map<string, { fingerprint: string; result: unknown }>())
+  const reviewPendingRef = useRef(false)
+  const observedReviewVersionRef = useRef<DocumentVersion | null>(null)
+  const footerTouchedRef = useRef(false)
   const suppressRef = useRef(false)
   const agentApplyingRef = useRef(false)
   const embeddedApiRef = useRef<EmbeddedDocsApi | null>(null)
@@ -479,11 +548,14 @@ function MonaDocsEditor(): React.JSX.Element {
       const version = { ...current, modelRevision: current.modelRevision + 1 }
       versionRef.current = version
       rememberRevision(version, api.editor.getJSON())
+      reviewPendingRef.current = true
+      observedReviewVersionRef.current = null
       bridgeRef.current?.post({
         type: 'office_user_change',
         sessionId: session.sessionId,
         version,
         changedTargets: [target],
+        pendingReviewTargets: ['document'],
       })
     },
     attach: (api) => {
@@ -495,6 +567,8 @@ function MonaDocsEditor(): React.JSX.Element {
         const version = { ...versionRef.current, modelRevision: versionRef.current.modelRevision + 1 }
         versionRef.current = version
         rememberRevision(version, api.editor.getJSON())
+        reviewPendingRef.current = true
+        observedReviewVersionRef.current = null
         const block = blocksOf(api.editor).find((candidate) => (
           api.editor.state.selection.from >= candidate.pos
           && api.editor.state.selection.from <= candidate.pos + candidate.size
@@ -504,6 +578,7 @@ function MonaDocsEditor(): React.JSX.Element {
           sessionId: sessionRef.current.sessionId,
           version,
           changedTargets: [block?.id ?? 'document'],
+          pendingReviewTargets: ['document'],
         })
       }
       api.editor.on('update', onUpdate)
@@ -544,6 +619,9 @@ function MonaDocsEditor(): React.JSX.Element {
     suppressRef.current = true
     sessionRef.current = message
     versionRef.current = message.version
+    reviewPendingRef.current = message.pendingReviewTargets?.includes('document') ?? false
+    observedReviewVersionRef.current = null
+    footerTouchedRef.current = false
     try {
       const outcome = await api.open({
         path: `mona://${message.sessionId}`,
@@ -586,9 +664,35 @@ function MonaDocsEditor(): React.JSX.Element {
     try {
       const blocks = blocksOf(editor)
       const mode = command.query.mode
+      const currentPageCount = (): number => {
+        const debug = (window as unknown as { __pageDebug?: { slices?: unknown[] } }).__pageDebug
+        const debugCount = Array.isArray(debug?.slices) ? debug.slices.length : 0
+        const boundaries = Array.from(document.querySelectorAll<HTMLElement>(
+          '.doc-page .page-gap[data-boundary-y], .doc-page .page-gap-cut[data-boundary-y]',
+        )).map((element) => element.dataset.boundaryY).filter(Boolean)
+        const domCount = boundaries.length > 0
+          ? new Set(boundaries).size + 1
+          : document.querySelectorAll('.doc-page .page-gap, .doc-page .page-gap-cut').length + 1
+        return Math.max(1, debugCount, domCount)
+      }
+      const qualityWarnings = (): string[] => {
+        const warnings: string[] = []
+        const state = embeddedApiRef.current?.readHeaderFooter()
+        const footers = state ? [state.footer, state.hfVariants.footerFirst, state.hfVariants.footerEven] : []
+        for (const footer of footerTouchedRef.current ? footers : []) {
+          if (footer && !footer.pageNumber && /^(?:第\s*)?(?:页|页码|page)$/iu.test(footer.text.trim())) {
+            warnings.push('[错误] 页脚包含页码文字但没有 PAGE 字段；请用单次 set_header_footer 写入真实页码。')
+            break
+          }
+        }
+        const splitRows = tableRowSplitCount(document)
+        if (splitRows > 0) warnings.push(`[需检查] 检测到 ${splitRows} 个表格行跨页拆分；请确认阅读连续性，必要时调整列宽、内容或禁止拆行。`)
+        return warnings
+      }
       let result: unknown
       if (mode === 'summary') {
         const state = embeddedApiRef.current?.readHeaderFooter()
+        const pageCount = currentPageCount()
         const lightHeaderFooter = (value: { text: string; pageNumber?: boolean } | null) => (
           value ? { text: value.text, pageNumber: value.pageNumber === true } : null
         )
@@ -600,6 +704,8 @@ function MonaDocsEditor(): React.JSX.Element {
           headingCount: blocks.filter((block) => block.type === 'docHeading').length,
           tableCount: blocks.filter((block) => block.type === 'docTable').length,
           imageCount: blocks.filter((block) => block.type === 'docProtected').length,
+          pageCount,
+          warnings: qualityWarnings(),
           headerFooter: state ? {
             header: lightHeaderFooter(state.header),
             footer: lightHeaderFooter(state.footer),
@@ -627,12 +733,45 @@ function MonaDocsEditor(): React.JSX.Element {
         }
       } else if (mode === 'visual') {
         const pages = document.querySelectorAll<HTMLElement>('.doc-page')
+        const pageCount = currentPageCount()
         const pageIndex = command.query.pageIndex == null ? null : asIndex(command.query.pageIndex, 'pageIndex')
         const element = pageIndex === null
           ? document.querySelector<HTMLElement>('.editor-scroll') ?? editor.view.dom
           : pages[pageIndex]
         if (!element) throw new Error('指定页尚未显示，请使用当前视图检查。')
-        result = await captureEditorElement(element, pageIndex === null ? 'viewport' : `page:${pageIndex}`, version, () => versionRef.current)
+        const fullDocument = pageIndex === 0 && pages.length === 1
+        const acceptWarnings = command.query.acceptWarnings === true
+        const reviewReason = typeof command.query.reviewReason === 'string' ? command.query.reviewReason.trim() : ''
+        if (acceptWarnings && (!fullDocument || !reviewReason
+          || !sameVersion(observedReviewVersionRef.current, version))) {
+          throw new Error('接受文档提示前请先查看当前版本的完整连续文档，并通过 reviewReason 说明保留理由。')
+        }
+        const captured = await captureEditorElement(element, pageIndex === null ? 'viewport' : `page:${pageIndex}`, version, () => versionRef.current)
+        const warnings = [...captured.warnings, ...qualityWarnings()]
+        if (fullDocument) observedReviewVersionRef.current = { ...version }
+        const blocking = warnings.some((warning) => warning.startsWith('[错误]'))
+        if (fullDocument && !blocking && (warnings.length === 0 || acceptWarnings)) reviewPendingRef.current = false
+        if (pageIndex !== null && pages.length === 1 && pageCount > 1) {
+          result = {
+            ...captured,
+            target: 'document:continuous',
+            warnings: [...warnings, `当前画面是包含 ${pageCount} 页的连续文档，请检查全部分页内容。`],
+            pendingReviewTargets: reviewPendingRef.current ? ['document'] : [],
+            ...(acceptWarnings ? { reviewReason } : {}),
+          }
+        } else result = {
+          ...captured,
+          warnings,
+          pendingReviewTargets: reviewPendingRef.current ? ['document'] : [],
+          ...(acceptWarnings ? { reviewReason } : {}),
+        }
+      } else if (mode === 'review') {
+        result = {
+          mode,
+          documentType: 'docs',
+          pendingTargets: reviewPendingRef.current ? ['document'] : [],
+          warnings: qualityWarnings(),
+        }
       } else if (mode === 'outline') {
         result = { mode, items: blocks.filter((block) => block.type === 'docHeading').map(publicBlock) }
       } else if (mode === 'search') {
@@ -767,6 +906,11 @@ function MonaDocsEditor(): React.JSX.Element {
       const version = { ...currentVersion, modelRevision: currentVersion.modelRevision + 1 }
       versionRef.current = version
       rememberRevision(version, editor.getJSON())
+      reviewPendingRef.current = true
+      observedReviewVersionRef.current = null
+      if (command.operations.some((operation) => operation.op === 'set_header_footer')) {
+        footerTouchedRef.current = true
+      }
       const result = {
         ok: true,
         sessionId: session.sessionId,
@@ -774,6 +918,7 @@ function MonaDocsEditor(): React.JSX.Element {
         version,
         changedTargets: [...new Set(changedTargets)],
         summary: `已完成 ${command.operations.length} 项文档修改`,
+        pendingReviewTargets: ['document'],
       }
       revealChangedBlock(result.changedTargets)
       operationCacheRef.current.set(command.operationId, { fingerprint, result })

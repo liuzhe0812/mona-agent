@@ -39,6 +39,7 @@ class OfficeSession:
     last_error: OfficeErrorPayload | None = None
     recent_changed_targets: list[str] = field(default_factory=list)
     pending_visual_slide_ids: list[str] = field(default_factory=list)
+    pending_review_targets: list[str] = field(default_factory=list)
     revision_changes: list[RevisionChange] = field(default_factory=list)
     change_floor_revision: int = 0
     operation_commands: OrderedDict[str, str] = field(default_factory=OrderedDict)
@@ -49,6 +50,7 @@ class OfficeSession:
             session_id=self.session_id,
             display_name=self.display_name,
             type=self.document_type,
+            working_path=str(self.working_path),
             version=self.version,
             checkpoint_version=self.checkpoint_version,
             saved_version=self.saved_version,
@@ -57,6 +59,7 @@ class OfficeSession:
             save_state=self.save_state,
             last_error=self.last_error,
             pending_visual_slide_ids=self.pending_visual_slide_ids,
+            pending_review_targets=self.pending_review_targets,
         )
 
     def remember_command(self, command: OfficeApplyCommand, *, limit: int) -> str:

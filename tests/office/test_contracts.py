@@ -32,6 +32,7 @@ def test_python_capabilities_keep_docs_and_sheets_operations() -> None:
 
     assert {item["op"] for item in docs} >= {
         "replace_block_text",
+        "insert_title",
         "insert_table",
         "set_table_style",
         "set_page_style",
@@ -44,7 +45,33 @@ def test_python_capabilities_keep_docs_and_sheets_operations() -> None:
         "set_style",
         "set_conditional_format",
     }
+    table_style = next(item for item in docs if item["op"] == "set_table_style")
+    assert set(table_style["payloadSchema"]["properties"]) >= {
+        "headerBold",
+        "headerAlign",
+        "verticalAlign",
+        "allowRowBreakAcrossPages",
+    }
     assert all(set(item) == {"op", "payloadSchema", "description"} for item in docs + sheets)
+
+
+def test_direct_slide_chart_and_visual_review_reason_roundtrip() -> None:
+    command = OfficeApplyCommand.model_validate({
+        "sessionId": "office_1", "operationId": "chart_1",
+        "expectedVersion": {"editorEpoch": "epoch", "modelRevision": 1},
+        "operations": [{"op": "slide_add_chart", "payload": {
+            "slideId": "s_1", "x": 48, "y": 180, "width": 900, "height": 450,
+            "kind": "bar", "categories": ["A", "B"], "series": [{"name": "分数", "values": [80, 90]}],
+        }}],
+    })
+    assert command.model_dump(by_alias=True)["operations"][0]["payload"]["series"][0]["values"] == [80, 90]
+    result = OfficeInspectResult.model_validate({
+        "sessionId": "office_1",
+        "version": {"editorEpoch": "epoch", "modelRevision": 1},
+        "result": {"mode": "visual", "dataUrl": "data:image/png;base64,AA==", "width": 1280,
+                   "height": 720, "target": "s_1", "reviewReason": "保留原文引用", "warnings": []},
+    })
+    assert result.model_dump(by_alias=True)["result"]["reviewReason"] == "保留原文引用"
 
 
 def test_python_contract_accepts_shared_d0_fixture() -> None:
@@ -136,6 +163,8 @@ def test_python_contract_accepts_capabilities_selection_and_visual_extensions() 
                 "elementIds": ["element_1"],
                 "region": {"x": 10, "y": 20, "width": 300, "height": 180},
                 "padding": 24,
+                "acceptWarnings": True,
+                "reviewReason": "已确认文字位于图片留白区。",
             },
         }
     ).query
@@ -143,6 +172,8 @@ def test_python_contract_accepts_capabilities_selection_and_visual_extensions() 
     assert visual.region is not None
     assert visual.region.width == 300
     assert visual.padding == 24
+    assert visual.accept_warnings is True
+    assert visual.review_reason == "已确认文字位于图片留白区。"
 
     selection = SelectionResult.model_validate(
         {

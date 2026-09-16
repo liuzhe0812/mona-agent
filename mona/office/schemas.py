@@ -38,6 +38,7 @@ class OfficeSessionState(OfficeWireModel):
     session_id: str = Field(min_length=1)
     display_name: str = Field(min_length=1)
     type: OfficeDocumentType
+    working_path: str | None = None
     version: DocumentVersion
     checkpoint_version: DocumentVersion | None = None
     saved_version: DocumentVersion | None = None
@@ -46,6 +47,7 @@ class OfficeSessionState(OfficeWireModel):
     save_state: OfficeSaveState = "clean"
     last_error: OfficeErrorPayload | None = None
     pending_visual_slide_ids: list[str] = Field(default_factory=list)
+    pending_review_targets: list[str] = Field(default_factory=list)
 
 
 class OfficeSessionCreateRequest(OfficeWireModel):
@@ -160,6 +162,8 @@ class VisualQuery(OfficeWireModel):
     element_ids: list[str] = Field(default_factory=list, max_length=50)
     region: VisualRegion | None = None
     padding: float = Field(default=16, ge=0, le=100)
+    accept_warnings: bool = False
+    review_reason: str | None = Field(default=None, min_length=1, max_length=1000)
 
 
 class ReviewQuery(OfficeWireModel):
@@ -253,12 +257,14 @@ class OfficeSummaryResult(OfficeWireModel):
     heading_count: int | None = Field(default=None, ge=0)
     table_count: int | None = Field(default=None, ge=0)
     image_count: int | None = Field(default=None, ge=0)
+    page_count: int | None = Field(default=None, ge=1)
     slide_count: int | None = Field(default=None, ge=0)
     element_count: int | None = Field(default=None, ge=0)
     page_settings: list[dict[str, object]] = Field(default_factory=list)
     header_footer: dict[str, object] | None = None
     slide_width_emu: int | None = Field(default=None, gt=0)
     slide_height_emu: int | None = Field(default=None, gt=0)
+    pending_review_targets: list[str] | None = None
 
 
 class SheetRangeResult(OfficeWireModel):
@@ -266,6 +272,7 @@ class SheetRangeResult(OfficeWireModel):
     sheet: str = Field(min_length=1)
     range: str = Field(min_length=1)
     rows: list[list[SheetCell]]
+    pending_review_targets: list[str] | None = None
     column_widths: list[float] = Field(default_factory=list)
     row_heights: list[float] = Field(default_factory=list)
     auto_filter: SheetCellArea | None = None
@@ -370,12 +377,15 @@ class VisualResult(OfficeWireModel):
     target: str
     warnings: list[str] = Field(default_factory=list)
     pending_visual_slide_ids: list[str] | None = None
+    pending_review_targets: list[str] | None = None
+    review_reason: str | None = None
 
 
 class ReviewResult(OfficeWireModel):
     mode: Literal["review"]
-    document_type: Literal["slides"]
+    document_type: Literal["docs", "sheets", "slides"]
     pending_slide_ids: list[str] = Field(default_factory=list)
+    pending_targets: list[str] = Field(default_factory=list)
     warnings: list[str] = Field(default_factory=list)
 
 
@@ -500,6 +510,7 @@ class DocsOperation(OfficeWireModel):
         "replace_block_text",
         "delete_block",
         "insert_paragraph",
+        "insert_title",
         "insert_heading",
         "insert_list",
         "insert_table",
@@ -522,6 +533,7 @@ class SlidesOperation(OfficeWireModel):
         "slide_set_fill",
         "slide_set_stroke",
         "slide_add_text",
+        "slide_add_chart",
         "slide_add_shape",
         "slide_add_image",
         "slide_add_svg",
@@ -569,6 +581,7 @@ class OfficeCommandSuccess(OfficeWireModel):
     updated_elements: list[SlideElementInfo] | None = None
     warnings: list[str] | None = None
     pending_visual_slide_ids: list[str] | None = None
+    pending_review_targets: list[str] | None = None
 
 
 class OfficeCommandFailure(OfficeWireModel):
@@ -641,6 +654,7 @@ class OfficeUserChangeMessage(OfficeWireModel):
     version: DocumentVersion
     changed_targets: list[str]
     pending_visual_slide_ids: list[str] | None = None
+    pending_review_targets: list[str] | None = None
 
 
 class OfficeCommandResultMessage(OfficeWireModel):

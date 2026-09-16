@@ -25,6 +25,12 @@ DOCS_CAPABILITIES: list[dict[str, Any]] = [
         "payload": {"afterBlockId": "string|null", "text": "string"},
     },
     {
+        "op": "insert_title",
+        "description": "Insert the document title with the professional default Title style.",
+        "elementTypes": ["paragraph"],
+        "payload": {"afterBlockId": "string|null", "text": "string"},
+    },
+    {
         "op": "insert_heading",
         "description": "Insert a level 1-6 heading after a block.",
         "elementTypes": ["heading"],
@@ -67,7 +73,7 @@ DOCS_CAPABILITIES: list[dict[str, Any]] = [
     },
     {
         "op": "set_table_style",
-        "description": "Set table column widths, header/body fills, border color, header row count, and cell padding in pixels.",
+        "description": "Set table column widths, header/body fills, border color, header rows, text alignment, row splitting, and cell padding.",
         "elementTypes": ["table"],
         "payload": {
             "blockId": "string",
@@ -77,6 +83,10 @@ DOCS_CAPABILITIES: list[dict[str, Any]] = [
             "bodyFill": "string|null",
             "borderColor": "string|null",
             "cellPadding": "number",
+            "headerBold": "boolean",
+            "headerAlign": "left|center|right",
+            "verticalAlign": "top|center|bottom",
+            "allowRowBreakAcrossPages": "boolean",
         },
     },
     {

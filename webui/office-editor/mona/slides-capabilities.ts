@@ -46,6 +46,27 @@ const addFont = {
 
 const directCapabilities: SlidesCapability[] = [
   {
+    op: 'slide_add_chart',
+    payloadSchema: {
+      type: 'object', additionalProperties: false,
+      required: ['slideId', 'x', 'y', 'width', 'height', 'kind', 'categories', 'series'],
+      properties: {
+        slideId, ...geometry,
+        kind: { type: 'string', enum: ['bar', 'line', 'area', 'pie', 'doughnut'] },
+        title: { type: 'string' },
+        categories: { type: 'array', minItems: 1, items: { type: 'string' } },
+        series: { type: 'array', minItems: 1, items: {
+          type: 'object', required: ['name', 'values'], additionalProperties: false,
+          properties: { name: { type: 'string' }, values: { type: 'array', minItems: 1, items: { type: 'number' } } },
+        } },
+        legendPos: { type: 'string', enum: ['none', 'b', 't', 'l', 'r'] },
+        gridlines: { type: 'boolean' }, dataLabels: { type: 'boolean' }, valAxisTitle: { type: 'string' },
+      },
+    },
+    description: '用预览像素位置和分类/数值直接创建可编辑原生图表，无需换算 EMU。用于数值比较，勿用字符条或空格模拟图表。',
+    supportedElementTypes: ['chart'],
+  },
+  {
     op: 'slide_set_text',
     payloadSchema: {
       type: 'object',

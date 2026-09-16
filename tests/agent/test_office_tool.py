@@ -53,6 +53,14 @@ class _FakeOfficeClient:
         self.owner = owner_session_key
         self.inspected_session_id = request.session_id
         self.inspect_queries.append(request.query)
+        if request.query.mode == "review":
+            return OfficeInspectSuccess(
+                ok=True,
+                request_id="inspect_review",
+                session_id=request.session_id,
+                version=DocumentVersion(editor_epoch="epoch_1", model_revision=0),
+                result={"mode": "review", "documentType": "sheets", "pendingTargets": [], "warnings": []},
+            )
         return OfficeInspectSuccess(
             ok=True,
             request_id="inspect_1",

@@ -190,6 +190,7 @@ interface InspectCommand {
   query:
     | { mode: 'summary' }
     | { mode: 'visual' }
+    | { mode: 'review' }
     | { mode: 'selection' }
     | { mode: 'range'; sheet: string; range: string; includeFormula: boolean; includeStyle: boolean }
 }
@@ -698,6 +699,7 @@ function MonaSheetsEditor(): React.JSX.Element {
   const originalSheetsRef = useRef(new Map<string, EngineSheet>())
   const removedSheetsRef = useRef(new Map<string, RemovedSheetState>())
   const recentChangedTargetsRef = useRef<string[]>([])
+  const pendingReviewTargetsRef = useRef(new Set<string>())
   const operationCacheRef = useRef(new Map<string, CachedOperation>())
   const suppressEventsRef = useRef(false)
   const agentApplyingRef = useRef(false)
@@ -842,11 +844,13 @@ function MonaSheetsEditor(): React.JSX.Element {
     if (changedTargets.length === 0) return
     const version = nextVersion()
     recentChangedTargetsRef.current = changedTargets
+    changedTargets.forEach((target) => pendingReviewTargetsRef.current.add(target))
     bridgeRef.current?.post({
       type: 'office_user_change',
       sessionId: session.sessionId,
       version,
       changedTargets,
+      pendingReviewTargets: [...pendingReviewTargetsRef.current],
     })
   }
 
@@ -860,6 +864,54 @@ function MonaSheetsEditor(): React.JSX.Element {
     if (suppressEventsRef.current || changeQueuedRef.current) return
     changeQueuedRef.current = true
     queueMicrotask(flushUserChange)
+  }
+
+  function targetRange(target: string): { sheet: string; bounds: RangeBounds } | null {
+    const split = target.indexOf('!')
+    if (split <= 0) return null
+    try {
+      return { sheet: target.slice(0, split), bounds: parseRange(target.slice(split + 1)) }
+    } catch {
+      return null
+    }
+  }
+
+  function markRangeReviewed(sheet: string, bounds: RangeBounds): void {
+    for (const target of pendingReviewTargetsRef.current) {
+      const parsed = targetRange(target)
+      if (!parsed || parsed.sheet !== sheet) continue
+      if (parsed.bounds.startRow >= bounds.startRow && parsed.bounds.endRow <= bounds.endRow
+        && parsed.bounds.startColumn >= bounds.startColumn && parsed.bounds.endColumn <= bounds.endColumn) {
+        pendingReviewTargetsRef.current.delete(target)
+      }
+    }
+  }
+
+  function formulaErrors(): Array<{ target: string; warning: string }> {
+    const runtime = runtimeRef.current
+    const workbook = workbookRef.current
+    const errors = /^(?:#REF!|#DIV\/0!|#VALUE!|#NAME\?|#N\/A|#NUM!|#NULL!|#SPILL!|#CALC!)$/i
+    const errorsByTarget = new Map<string, string>()
+    const inspectCell = (sheet: string, row: number, column: number, formula: unknown, value: unknown) => {
+      if (!formula || typeof value !== 'string' || !errors.test(value.trim())) return
+      const target = `${sheet}!${formatAddress(row, column)}`
+      errorsByTarget.set(target, `[错误] ${target} 的公式 ${String(formula)} 返回 ${value.trim()}。`)
+    }
+    for (const edit of editsRef.current.values()) {
+      const sheet = workbook?.sheets.find((candidate) => (
+        candidate.name === edit.sheetName || candidate.originalName === edit.sheetName
+      ))
+      const worksheet = runtime && sheet ? worksheetByName(runtime, sheet.name) : undefined
+      const cell = worksheet?.getRange(edit.row, edit.column, 1, 1)
+      inspectCell(
+        sheet?.name ?? edit.sheetName,
+        edit.row,
+        edit.column,
+        cell?.getFormulas()[0]?.[0] ?? edit.cell.formula,
+        cell?.getValues()[0]?.[0] ?? edit.cell.value,
+      )
+    }
+    return [...errorsByTarget].map(([target, warning]) => ({ target, warning }))
   }
 
   async function loadRange(sheet: EngineSheet, bounds: RangeBounds, preserveEdits: boolean): Promise<void> {
@@ -914,6 +966,7 @@ function MonaSheetsEditor(): React.JSX.Element {
     removedSheetsRef.current.clear()
     pendingUserRangesRef.current.clear()
     pendingUserTargetsRef.current.clear()
+    pendingReviewTargetsRef.current = new Set(message.pendingReviewTargets ?? [])
     recentChangedTargetsRef.current = []
     rememberRevision(message.version.modelRevision)
     const workbook = parseWorkbook(await bridgeRef.current!.engineOpen())
@@ -1621,6 +1674,7 @@ function MonaSheetsEditor(): React.JSX.Element {
     }
     const version = nextVersion()
     revealChangedRange(targets)
+    changedTargets.forEach((target) => pendingReviewTargetsRef.current.add(target))
     const result = {
       ok: true,
       sessionId: session.sessionId,
@@ -1628,6 +1682,7 @@ function MonaSheetsEditor(): React.JSX.Element {
       version,
       changedTargets,
       summary: `已完成 ${command.operations.length} 项表格修改`,
+      pendingReviewTargets: [...pendingReviewTargetsRef.current],
     }
     recentChangedTargetsRef.current = result.changedTargets
     operationCacheRef.current.set(command.operationId, { fingerprint, result })
@@ -1689,6 +1744,9 @@ function MonaSheetsEditor(): React.JSX.Element {
         return
       }
       if (query.mode === 'summary') {
+        for (const target of pendingReviewTargetsRef.current) {
+          if (!targetRange(target)) pendingReviewTargetsRef.current.delete(target)
+        }
         bridgeRef.current!.post({
           type: 'office_inspect_result',
           result: {
@@ -1700,6 +1758,7 @@ function MonaSheetsEditor(): React.JSX.Element {
               mode: 'summary',
               documentType: 'sheets',
               sheetCount: workbook.sheets.length,
+              pendingReviewTargets: [...pendingReviewTargetsRef.current],
               sheets: workbook.sheets.map((sheet) => ({
                 id: sheet.id,
                 name: sheet.name,
@@ -1710,6 +1769,18 @@ function MonaSheetsEditor(): React.JSX.Element {
             },
           },
         })
+        return
+      }
+      if (query.mode === 'review') {
+        const formulaFailures = formulaErrors()
+        bridgeRef.current!.post({ type: 'office_inspect_result', result: {
+          ok: true, requestId: command.requestId, sessionId: session.sessionId, version,
+          result: { mode: 'review', documentType: 'sheets',
+            pendingTargets: [...new Set([
+              ...pendingReviewTargetsRef.current,
+              ...formulaFailures.map(({ target }) => target),
+            ])], warnings: formulaFailures.map(({ warning }) => warning) },
+        } })
         return
       }
       const sheet = workbook.sheets.find((candidate) => candidate.name === query.sheet)
@@ -1764,6 +1835,7 @@ function MonaSheetsEditor(): React.JSX.Element {
           ...(query.includeStyle ? { style } : {}),
         }
       }))
+      markRangeReviewed(sheet.name, bounds)
       bridgeRef.current!.post({
         type: 'office_inspect_result',
         result: {
@@ -1773,6 +1845,7 @@ function MonaSheetsEditor(): React.JSX.Element {
           version,
           result: {
             mode: 'range', sheet: sheet.name, range: toAddress(bounds), rows,
+            pendingReviewTargets: [...pendingReviewTargetsRef.current],
             ...presentationState(sheet),
             ...(query.includeStyle ? {
               columnWidths: Array.from({ length: bounds.endColumn - bounds.startColumn + 1 }, (_, offset) =>
