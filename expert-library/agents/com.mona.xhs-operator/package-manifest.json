@@ -1,7 +1,7 @@
 {
   "schemaVersion": 1,
   "agentId": "com.mona.xhs-operator",
-  "version": "1.4.0",
+  "version": "1.4.1",
   "requiredTools": [
     "generate_image",
     "generate_video",

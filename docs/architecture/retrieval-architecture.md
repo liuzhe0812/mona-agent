@@ -32,9 +32,8 @@ Wiki 负责组织和推理导航，不能替代证据层。Wiki 未采用的原�
 
 - 每个 Agent 只能搜索和读取自己的知识目录；Agent 身份来自运行时上下文，模型不能传入其他 `agentId` 扩大范围。
 - 相同 MD5 只在同一 Agent 内去重；不同 Agent 的 Wiki、任务、索引和来源互不共享。
-- 主 Mona 使用 `knowledge_search` 联合查询可用的 Notes 与自己的 Knowledge。
-- 伙伴 Agent 使用 `wiki_search`、`wiki_read` 及材料兼容工具访问自己的 Knowledge；知识能力不再作为工具页里的知识库开关。
-- `scope` 只选择 notes、materials、wiki 或 text 等来源类型，不选择知识库。
+- 前端和模型只保留两个业务概念：用户笔记使用 `notes_search`、`notes_read`；Agent 设置中的私有知识使用 `knowledge_search`、`knowledge_read`。
+- Agent 知识内部的上传资料、提取文本和编译 Wiki 是同一知识流水线的存储层，不作为独立用户工具。旧 `materials_*`、`wiki_*` 名称只保留内部兼容实现。
 - 新 Agent 引用使用 `ak:` 前缀；读取时再次绑定当前 Agent，并生成带 `agentId` 的 `mona:material` 链接。
 - 旧 `kb:` 引用继续经过旧知识库权限校验，只用于迁移兼容。
 
@@ -66,7 +65,19 @@ Notes 保持独立存储和检索，不复制进 Agent Knowledge。笔记标题�
 
 Mona 不把全部笔记、知识或收藏拼入 system prompt。Agent 根据任务显式调用检索工具；未经检索取得的内容不能伪装成用户知识。当前没有向量库、图数据库或 RRF，UI 和文档不得宣称未验证的语义检索能力。
 
-## 6. 关键实现
+## 6. 会话历史检索
+
+桌面普通直聊的可见聊天正文由 WebUI append-only transcript 持久化，独立于用于模型回放的 `sessions/*.jsonl`。Session 的消息数量上限、上下文裁剪和交接摘要不能删除 transcript 中已经成功保存的正文。
+
+- 会话历史使用本地 SQLite FTS5 关键词索引，不使用向量、embedding、图数据库或查询时 LLM 改写。索引是可重建派生数据，transcript 是正文事实源。
+- `conversation_search` 只搜索当前工作区、当前运行时 Agent 所属的普通直聊；协作房间、隐藏任务、临时会话和其他 Agent 的会话不进入结果。
+- `conversation_read` 只接受搜索返回的服务端引用，并在读取时重新校验会话归属和原始 transcript；预览、分页和读取不能接受模型传入的路径或 Agent ID 扩大范围。
+- 新 transcript 事件保存稳定事件 ID 和落盘时间；旧记录没有可信时间时保持未知，不使用回放时间伪造。
+- 用户询问以前说过、决定或纠正的内容时，Agent 先搜索，再读取命中原文和相邻问答；覆盖不足或引用失效时必须明确说明。
+- 删除会话会删除 transcript；下一次搜索或读取同步移除派生索引，已经删除的正文不得从索引返回。`/new` 只重置当前上下文，不等于删除历史聊天。
+- 工具轨迹、推理、运行时提示和内联二进制不属于普通聊天正文；transcript 对这些数据的裁剪不应被描述为完整工具审计。
+
+## 7. 关键实现
 
 - `mona/materials/knowledge.py`
 - `mona/materials/vision.py`
@@ -75,3 +86,6 @@ Mona 不把全部笔记、知识或收藏拼入 system prompt。Agent 根据任�
 - `mona/agent/tools/knowledge_search.py`
 - `mona/config/paths.py`
 - `src-tauri/src/materials.rs`
+- `mona/session/conversation_history.py`
+- `mona/agent/tools/conversation_history.py`
+- `mona/webui/transcript.py`

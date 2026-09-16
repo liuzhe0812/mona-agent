@@ -10,16 +10,12 @@
     "web_search",
     "web_fetch",
     "http_request",
-    "browser_open",
-    "browser_snapshot",
-    "browser_type",
-    "browser_click",
-    "browser_read",
-    "browser_close",
+    "browser_observe",
+    "browser_act",
     "read_file",
     "document",
-    "materials_search",
-    "materials_read",
+    "knowledge_search",
+    "knowledge_read",
     "find_files",
     "grep",
     "research_record",
@@ -52,6 +48,6 @@
     "skills/review-response"
   ],
   "packageId": "com.mona.academic-researcher",
-  "packageVersion": "2.1.1",
+  "packageVersion": "2.1.2",
   "visibility": "partner"
 }

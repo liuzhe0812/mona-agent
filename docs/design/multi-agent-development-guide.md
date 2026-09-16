@@ -60,7 +60,7 @@
 
 | 现有模块 | 路径 | 当前行为 | 本项目改造点 |
 | --- | --- | --- | --- |
-| Agent 入口 | `mona/agent/loop.py` | 创建单一上下文、SessionManager、工具和 SubagentManager | 根据会话元数据解析当前 Agent；构造 AgentExecutionContext |
+| Agent 入口 | `mona/agent/loop.py` | 创建单一上下文、SessionManager、工具和 SubagentManager | 根据会话元数据解析当前 Agent；在 `ToolContext` 上填入运行身份 |
 | 通用运行器 | `mona/agent/runner.py` | `AgentRunSpec` 驱动模型、工具、流式回调和注入 | 保持核心不变；只补充可选 Agent/Job 追踪字段或通过 hook 传递 |
 | 临时子 Agent | `mona/agent/subagent.py` | 创建独立工具表，执行一次任务，结果注入主 Agent | 增加可选命名 Agent 路径和持久化 Job；保留旧 `spawn` |
 | 委派工具 | `mona/agent/tools/spawn.py` | Mona 创建匿名后台任务 | 新增显式 `delegate_agent`，要求目标 Agent、房间、成功标准 |
@@ -105,16 +105,14 @@ flowchart LR
     BUS --> WS
 ```
 
-### 4.1 AgentExecutionContext
+### 4.1 Agent 运行身份
 
-所有 Agent 运行入口必须携带统一上下文，避免继续依赖全局状态：
+所有 Agent 运行入口必须携带统一身份，避免继续依赖全局状态。身份由工具上下文 `ToolContext`（`mona/agent/tools/context.py`）承载，每个 Agent 运行入口在构造工具表时填入下列字段：
 
 ```python
-@dataclass(frozen=True, slots=True)
-class AgentExecutionContext:
-    agent_id: str
-    conversation_id: str
-    conversation_type: Literal["direct", "room"]
+class ToolContext:
+    agent_id: str = "mona"
+    conversation_id: str | None = None
     room_id: str | None = None
     job_id: str | None = None
     workflow_run_id: str | None = None
@@ -126,6 +124,8 @@ class AgentExecutionContext:
 - 私聊中 `conversation_id` 是 chat_id，`room_id` 为空。
 - 房间中 `conversation_id` 和 `room_id` 使用同一 chat_id。
 - 匿名旧 Subagent 使用保留的临时身份语义，不创建持久化私有记忆。
+
+本指南早期版本曾规划独立的 `AgentExecutionContext` 类；实际实现收敛到 `ToolContext`，该类从未落地，已从代码中移除。`ConversationMetadata`（`mona/agent/partners.py`）仍用于描述会话的 direct/room 形态。
 
 ### 4.2 运行时策略
 
@@ -356,6 +356,13 @@ class AgentExecutionContext:
 ```text
 <workspace>/
   sessions/                         现有会话 JSONL
+  agent-workspaces/
+    <agent_id>/output/               Agent 长期产物目录；同一 Agent 的会话共享
+  stock_projects/<run_id>/           股票产品运行产物
+  ppt_projects/                     旧 PPT 工作流存量数据，仅迁移保留
+  video_projects/                   视频专用工作流项目
+
+~/.mona/runtime/
   workflows/
     <room_id>.json                  当前草稿、版本索引和版本内容
   workflow-runs/
@@ -372,6 +379,8 @@ class AgentExecutionContext:
       memory/                       私有记忆
       skills/                       Agent 自建 Skill
 ```
+
+项目绑定会话直接使用 `metadata.workspace` 作为执行根目录。普通协作房间只聚合产物引用，文件仍归执行 Agent；股票工作流使用独立运行目录。以上目录对应当前 `mona/config/paths.py`，不再把 Job/Run 状态放入用户工作区。
 
 ### 6.2 存储选择
 
@@ -456,7 +465,7 @@ Mona 本身继续复用现有模板；Registry 为其合成保留定义，不复
    - 专业 Agent 私聊 → `direct_agent_id`。
    - 房间普通消息 → `mona`。
    - 明确目标 Agent 的内部执行 → 指定 Agent。
-2. 创建 `AgentExecutionContext`。
+2. 在 `ToolContext` 上填入本 Agent 的运行身份。
 3. ContextBuilder 按 Agent 注入：
    - 平台基础约束。
    - Agent 身份与专属提示词。
@@ -982,7 +991,7 @@ save_error
 
 任务：
 
-- [x] 定义 AgentDefinition、AgentExecutionContext、ConversationMetadata。
+- [x] 定义 AgentDefinition、ConversationMetadata；运行身份由 `ToolContext` 承载。
 - [x] 建立 AgentRegistry 和两个内置专业 Agent 清单。
 - [x] 旧会话默认映射 Mona。
 - [x] UIMessage/WebSocket 增加 author_id，旧消息兼容 Mona。
@@ -1231,7 +1240,7 @@ cargo check
 
 - [ ] 是否复用了 AgentRunner、MessageBus、SessionManager 和 cron。
 - [ ] 是否避免引入新服务和重复消息存储。
-- [ ] 是否只有一个可信 AgentExecutionContext 来源。
+- [ ] 是否只有一个可信的运行身份来源（`ToolContext`）。
 - [ ] 是否把 Job/Run 状态与聊天展示分离。
 
 ### 14.2 隔离
