@@ -117,7 +117,10 @@ export function collectOverviewReferences(messages: UIMessage[]): OverviewRefere
       if (label) push({ id: `search:${label}`, kind: "search", label });
       continue;
     }
-    if (["web_fetch", "browser_open", "browser_navigate", "open"].includes(name)) {
+    if (
+      ["web_fetch", "browser_open", "browser_navigate", "open"].includes(name)
+      || (name === "browser_act" && ["open", "navigate"].includes(String(args.kind ?? "")))
+    ) {
       const url = String(args.url ?? args.ref_id ?? "").trim() || firstResultUrl(event);
       if (/^https?:\/\//i.test(url)) {
         let label = url;

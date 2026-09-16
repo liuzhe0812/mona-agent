@@ -10,6 +10,25 @@ import { fetchFilePreviewBlob } from "@/lib/api";
 import type { OfficeSessionState } from "@/components/office/types";
 
 const officeImport = vi.hoisted(() => vi.fn());
+const renderAbc = vi.hoisted(() => vi.fn((target: HTMLElement) => {
+  target.appendChild(document.createElementNS("http://www.w3.org/2000/svg", "svg"));
+  return [{ warnings: [] }];
+}));
+
+vi.mock("abcjs", () => ({
+  renderAbc,
+  TimingCallbacks: class {},
+  synth: {
+    CreateSynth: class {},
+    getMidiFile: vi.fn(),
+  },
+}));
+
+vi.mock("@/components/deliver/GuitarTabPreview", () => ({
+  GuitarTabPreview: ({ source }: { source: string }) => (
+    <div data-testid="guitar-tab-preview">{source}</div>
+  ),
+}));
 
 vi.mock("@/lib/office-client", () => ({
   importOfficeSession: officeImport,
@@ -73,6 +92,18 @@ vi.mock("@/lib/api", () => ({
     if (params.path.endsWith(".py")) {
       return {
         blob: new Blob(["import pandas as pd\nprint(pd.__version__)"], { type: "text/plain" }),
+        mime: "text/plain",
+      };
+    }
+    if (params.path.endsWith(".abc")) {
+      return {
+        blob: new Blob(["X:1\nT:Test\nM:4/4\nL:1/8\nK:C\nCDEF GABc|"], { type: "text/plain" }),
+        mime: "text/plain",
+      };
+    }
+    if (params.path.endsWith(".atex")) {
+      return {
+        blob: new Blob([String.raw`\title "Tab" \track "Guitar" \staff {tabs}`], { type: "text/plain" }),
         mime: "text/plain",
       };
     }
@@ -315,6 +346,33 @@ describe("FilePreviewPanel", () => {
       expect(container.querySelector("code.language-python")).toBeInTheDocument();
     }, { timeout: 5_000 });
     expect(container.querySelector("code.language-python")).toHaveTextContent("import pandas as pd");
+  });
+
+  it("renders ABC artifacts with the dedicated score preview", async () => {
+    const score = artifact("melody.abc");
+    previewWith(score);
+    render(wrap(<FilePreviewPanel files={[score]} />));
+
+    expect(await screen.findByTestId("music-score-preview")).toBeInTheDocument();
+    expect(screen.getByText("乐谱")).toBeInTheDocument();
+    await waitFor(() => expect(renderAbc).toHaveBeenCalled());
+    expect(vi.mocked(fetchFilePreviewBlob)).toHaveBeenCalledWith(
+      "tok",
+      expect.objectContaining({ path: "melody.abc" }),
+    );
+  });
+
+  it("routes AlphaTex artifacts to the independent guitar-tab preview", async () => {
+    const tab = artifact("canon.atex");
+    previewWith(tab);
+    render(wrap(<FilePreviewPanel files={[tab]} />));
+
+    expect(await screen.findByTestId("guitar-tab-preview")).toHaveTextContent("\\staff {tabs}");
+    expect(screen.queryByTestId("music-score-preview")).not.toBeInTheDocument();
+    expect(vi.mocked(fetchFilePreviewBlob)).toHaveBeenCalledWith(
+      "tok",
+      expect.objectContaining({ path: "canon.atex" }),
+    );
   });
 
   it("shows a loading state instead of the unsupported preview before content arrives", async () => {

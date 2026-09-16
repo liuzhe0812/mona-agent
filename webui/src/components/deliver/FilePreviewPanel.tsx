@@ -31,6 +31,18 @@ const CanvasArtifactPreview = lazy(() =>
   })),
 );
 
+const MusicScorePreview = lazy(() =>
+  import("@/components/deliver/MusicScorePreview").then((module) => ({
+    default: module.MusicScorePreview,
+  })),
+);
+
+const GuitarTabPreview = lazy(() =>
+  import("@/components/deliver/GuitarTabPreview").then((module) => ({
+    default: module.GuitarTabPreview,
+  })),
+);
+
 const PREVIEWABLE_TEXT_EXTS = new Set([
   ".txt", ".md", ".py", ".js", ".ts", ".tsx", ".jsx", ".json", ".yaml", ".yml",
   ".toml", ".cfg", ".ini", ".sh", ".bash", ".zsh", ".css", ".scss", ".html",
@@ -42,6 +54,8 @@ const IMAGE_EXTS = new Set([".png", ".jpg", ".jpeg", ".gif", ".webp", ".bmp", ".
 const VIDEO_EXTS = new Set([".mp4", ".webm", ".mov", ".m4v", ".avi", ".mkv", ".3gp"]);
 const HTML_EXTS = new Set([".html", ".htm"]);
 const MARKDOWN_EXTS = new Set([".md", ".markdown"]);
+const MUSIC_SCORE_EXTS = new Set([".abc"]);
+const GUITAR_TAB_EXTS = new Set([".atex"]);
 
 function extOf(name: string): string {
   const dot = name.lastIndexOf(".");
@@ -68,6 +82,14 @@ function isPreviewableText(file: DeliveredFile): boolean {
 function isMarkdown(file: DeliveredFile): boolean {
   return MARKDOWN_EXTS.has(extOf(file.name))
     || file.mime === "text/markdown";
+}
+
+function isMusicScore(file: DeliveredFile): boolean {
+  return MUSIC_SCORE_EXTS.has(extOf(file.name));
+}
+
+function isGuitarTab(file: DeliveredFile): boolean {
+  return GUITAR_TAB_EXTS.has(extOf(file.name));
 }
 
 function isPreviewableImage(file: DeliveredFile): boolean {
@@ -250,6 +272,8 @@ export function FilePreviewPanel({
   const toggleFullscreen = useFilePreviewStore((s) => s.toggleFullscreen);
   const { token } = useClient();
   const isCanvas = !!file && isWorkspaceCanvasFile(file);
+  const isScore = !!file && isMusicScore(file);
+  const isTab = !!file && isGuitarTab(file);
 
   // Build/revoke Blob URLs whenever the preview target or scope changes.
   // Holds at most one URL at a time; previous URL is revoked before the
@@ -317,7 +341,7 @@ export function FilePreviewPanel({
           if (cancelled) return;
           setTextSource(prepared);
           setBlobUrl(null);
-        } else if (isMarkdown(file)) {
+        } else if (isMarkdown(file) || isMusicScore(file) || isGuitarTab(file)) {
           const text = await blob.text();
           if (cancelled) return;
           setTextSource(text);
@@ -507,6 +531,14 @@ export function FilePreviewPanel({
           // page remove its own sandbox — keep the origin opaque.
           sandbox="allow-scripts allow-forms allow-popups allow-popups-to-escape-sandbox allow-downloads"
         />
+      ) : isScore && textSource !== null ? (
+        <Suspense fallback={<div className="h-full animate-pulse bg-muted/30" />}>
+          <MusicScorePreview source={textSource} filename={file.name} />
+        </Suspense>
+      ) : isTab && textSource !== null ? (
+        <Suspense fallback={<div className="h-full animate-pulse bg-muted/30" />}>
+          <GuitarTabPreview source={textSource} filename={file.name} />
+        </Suspense>
       ) : isMarkdown(file) && textSource !== null ? (
         <div className="markdown-content scrollbar-hover h-full w-full overflow-auto px-4 py-2 text-body">
           <MarkdownTextRenderer>{textSource}</MarkdownTextRenderer>

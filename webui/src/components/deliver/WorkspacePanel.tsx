@@ -66,7 +66,9 @@ interface WorkspacePanelProps {
   sessionKey?: string | null;
   /** Error message from the artifact scan, if any. */
   error?: string | null;
-  /** Whether the server hit its 1000-file return cap. */
+  /** Whether the directory inventory is being read. Existing entries remain visible. */
+  loading?: boolean;
+  /** Whether the server hit its 1000-entry return cap. */
   truncated?: boolean;
   /** Manual refresh callback. */
   onRefresh?: () => void;
@@ -167,9 +169,9 @@ function useFileIconUrl(name: string): string | null {
   return url;
 }
 
-/** 将扁平的 DeliveredFile 列表构建为树形结构。
+/** 将扁平的工作区条目列表构建为树形结构。
  *
- *  - artifacts scan 返回相对路径（如 "sub/dir/file.pdf"），按 "/" 分层
+ *  - 扫描结果同时包含文件和目录，空目录也能保留
  *  - deliver_file/file_edit 事件可能是绝对路径或纯文件名，回退为顶层节点
  */
 function buildFileTree(files: DeliveredFile[]): TreeNode[] {
@@ -188,12 +190,28 @@ function buildFileTree(files: DeliveredFile[]): TreeNode[] {
       const part = segments[i];
       const isLeaf = i === segments.length - 1;
       if (isLeaf) {
-        cur.children!.push({
-          name: part,
-          path: rawPath,
-          isDir: false,
-          file,
-        });
+        if (file.is_dir) {
+          const existing = cur.children!.find((child) => child.isDir && child.name === part);
+          if (existing) {
+            existing.path = rawPath;
+            existing.file = file;
+          } else {
+            cur.children!.push({
+              name: part,
+              path: rawPath,
+              isDir: true,
+              file,
+              children: [],
+            });
+          }
+        } else {
+          cur.children!.push({
+            name: part,
+            path: rawPath,
+            isDir: false,
+            file,
+          });
+        }
       } else {
         let next = cur.children!.find((c) => c.isDir && c.name === part);
         if (!next) {
@@ -219,13 +237,6 @@ function buildFileTree(files: DeliveredFile[]): TreeNode[] {
   };
   sortNodes(root.children!);
   return root.children!;
-}
-
-/** Hide the technical generated/ wrapper while keeping its real paths. */
-function flattenGeneratedDirectory(nodes: TreeNode[]): TreeNode[] {
-  return nodes.flatMap((node) =>
-    node.isDir && node.name.toLowerCase() === "generated" ? node.children ?? [] : [node],
-  );
 }
 
 function collectDirectoryPaths(nodes: TreeNode[]): string[] {
@@ -278,6 +289,7 @@ export function WorkspacePanel({
   scope = "shared",
   sessionKey = null,
   error = null,
+  loading = false,
   truncated = false,
   onRefresh,
   onCollapse,
@@ -298,7 +310,7 @@ export function WorkspacePanel({
   );
   const markArtifactsViewed = useFilePreviewStore((s) => s.markArtifactsViewed);
 
-  const tree = useMemo(() => flattenGeneratedDirectory(buildFileTree(files)), [files]);
+  const tree = useMemo(() => buildFileTree(files), [files]);
   const directoryPaths = useMemo(() => collectDirectoryPaths(tree), [tree]);
   const collapsedPaths = useFilePreviewStore(
     (s) => s.treeCollapsedByOwner[ownerKey] ?? EMPTY_COLLAPSED_PATHS,
@@ -336,7 +348,16 @@ export function WorkspacePanel({
   const [taskExpanded, setTaskExpanded] = useState(true);
   const [workspaceExpanded, setWorkspaceExpanded] = useState(scope !== "shared");
   const [selectedFileKeys, setSelectedFileKeys] = useState<Set<string>>(() => new Set());
+  const [showLoading, setShowLoading] = useState(false);
   const selectionAnchorRef = useRef<string | null>(null);
+  useEffect(() => {
+    if (!loading) {
+      setShowLoading(false);
+      return;
+    }
+    const timer = window.setTimeout(() => setShowLoading(true), 400);
+    return () => window.clearTimeout(timer);
+  }, [loading]);
   useEffect(() => {
     setWorkspaceExpanded(scope !== "shared");
   }, [ownerKey, scope]);
@@ -626,6 +647,10 @@ export function WorkspacePanel({
             </Button>
           )}
         </div>
+      ) : loading && listOnly === "workspace" && tree.length === 0 ? (
+        showLoading ? (
+          <p className="px-3 py-3 text-micro text-muted-foreground">正在读取工作区…</p>
+        ) : null
       ) : listOnly ? (
         <div className="py-1">
           {listOnly === "workspace" ? (
@@ -696,7 +721,7 @@ export function WorkspacePanel({
             </>
           )}
           {truncated ? (
-            <p className="px-3 py-2 text-micro text-muted-foreground">仅显示最近 1000 个文件。</p>
+            <p className="px-3 py-2 text-micro text-muted-foreground">仅显示前 1000 个项目。</p>
           ) : null}
         </div>
       ) : scope !== "shared" && isEmpty ? (
@@ -845,7 +870,7 @@ export function WorkspacePanel({
             ) : null}
             {truncated && (
               <div className="mt-2 rounded-md border border-border/50 bg-muted/30 px-2 py-1.5 text-micro text-muted-foreground">
-                仅显示最近 1000 个文件。
+                仅显示前 1000 个项目。
                 {isTauri() && outputDir && (
                   <Button
                     type="button"
@@ -1030,16 +1055,17 @@ function TreeRow({
 
     // Directory rows resolve their absolute path against the panel root so
     // the context menu can open / trash the whole folder.
-    const dirAbsPath = rootDir
+    const dirAbsPath = node.file?.absolute_path || (rootDir
       ? `${rootDir.replace(/\\/g, "/").replace(/\/+$/, "")}/${node.path}`
-      : null;
-    const dirPseudoFile: DeliveredFile = {
+      : null);
+    const dirPseudoFile: DeliveredFile = node.file ?? {
       path: node.path,
       absolute_path: dirAbsPath ?? node.path,
       name: node.name,
       size: 0,
       size_human: "",
       mime: "",
+      is_dir: true,
     };
     const handleOpenDir = () => {
       if (isTauri() && dirAbsPath) void openPathWithSystemApp(dirAbsPath);

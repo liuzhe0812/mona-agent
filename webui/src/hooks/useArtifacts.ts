@@ -64,6 +64,7 @@ export function useArtifacts(
     ? `room:${room ?? ""}:source:${sourceKey ?? ""}`
     : `${scope}:${sessionKey ?? ""}:source:${sourceKey ?? ""}:task:${taskId ?? "current"}`;
   const loadedSourceRef = useRef<string | null>(null);
+  const errorSourceRef = useRef<string | null>(null);
 
   const refresh = useCallback(() => setRefreshTick((t) => t + 1), []);
 
@@ -97,6 +98,7 @@ export function useArtifacts(
         setTruncated(result.truncated);
       } catch (err) {
         if (cancelled) return;
+        errorSourceRef.current = sourceId;
         setError(err instanceof Error ? err.message : String(err));
       } finally {
         control.running = false;
@@ -119,7 +121,7 @@ export function useArtifacts(
     taskFiles: sourceIsCurrent ? taskFiles : [],
     taskId: sourceIsCurrent ? resolvedTaskId : taskId,
     loading,
-    error: sourceIsCurrent ? error : null,
+    error: errorSourceRef.current === sourceId ? error : null,
     truncated: sourceIsCurrent ? truncated : false,
     refresh,
   };

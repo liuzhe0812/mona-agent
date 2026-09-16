@@ -45,6 +45,19 @@ function nestedArtifact(): DeliveredFile {
   };
 }
 
+function directory(path: string): DeliveredFile {
+  const name = path.split("/").at(-1)!;
+  return {
+    path,
+    absolute_path: `/ws/output/${path}`,
+    name,
+    size: 0,
+    size_human: "",
+    mime: "inode/directory",
+    is_dir: true,
+  };
+}
+
 function expandWorkspace(): void {
   const toggle = screen.getByRole("button", { name: "工作区文件" });
   if (toggle.getAttribute("aria-expanded") === "false") fireEvent.click(toggle);
@@ -122,6 +135,20 @@ describe("WorkspacePanel", () => {
       sessionRow.compareDocumentPosition(treeRow) &
         Node.DOCUMENT_POSITION_FOLLOWING,
     ).toBeTruthy();
+  });
+
+  it("does not report an empty workspace while its directory is still loading", async () => {
+    render(
+      <WorkspacePanel
+        files={[]}
+        scope="project"
+        listOnly="workspace"
+        loading
+      />,
+    );
+
+    expect(screen.queryByText("工作区暂无文件。")).not.toBeInTheDocument();
+    expect(await screen.findByText("正在读取工作区…", {}, { timeout: 800 })).toBeInTheDocument();
   });
 
   it("renders current task files between session deliveries and workspace files", () => {
@@ -239,17 +266,27 @@ describe("WorkspacePanel", () => {
     expect(screen.getByText("session.md")).toBeInTheDocument();
   });
 
-  it("hides the technical generated wrapper while keeping date folders", () => {
+  it("shows generated, empty directories, hidden files, and temporary files", () => {
     render(
       <WorkspacePanel
-        files={[{ ...artifact("generated/2026-08-21/report.md"), name: "report.md" }]}
+        files={[
+          directory("empty"),
+          directory("generated"),
+          directory("generated/2026-08-21"),
+          { ...artifact("generated/2026-08-21/report.md"), name: "report.md" },
+          artifact(".env"),
+          artifact("draft.tmp"),
+        ]}
         scope="shared"
       />,
     );
 
     expandWorkspace();
-    expect(screen.queryByText("generated")).not.toBeInTheDocument();
-    expect(screen.getByText("2026-08-21")).toBeInTheDocument();
+    expect(screen.getByText("empty")).toBeInTheDocument();
+    expect(screen.getByText("generated")).toBeInTheDocument();
+    expect(screen.getByText(".env")).toBeInTheDocument();
+    expect(screen.getByText("draft.tmp")).toBeInTheDocument();
+    fireEvent.click(screen.getByText("generated"));
     fireEvent.click(screen.getByText("2026-08-21"));
     expect(screen.getByText("report.md")).toBeInTheDocument();
   });

@@ -93,6 +93,19 @@ describe("useArtifacts", () => {
     );
   });
 
+  it("shows an initial scan failure and clears it after a successful retry", async () => {
+    mockedList.mockRejectedValueOnce(new Error("scan failed")).mockResolvedValue(emptyResult);
+    const { result } = renderHook(() => useArtifacts("tok", undefined, {
+      scope: "shared", sessionKey: "session-1",
+    }));
+    await waitFor(() => expect(result.current.error).toBe("scan failed"));
+    expect(result.current.files).toEqual([]);
+    act(() => result.current.refresh());
+    await waitFor(() => expect(mockedList).toHaveBeenCalledTimes(2));
+    await waitFor(() => expect(result.current.loading).toBe(false));
+    expect(result.current.error).toBeNull();
+  });
+
   it("runs a trailing refetch when a refresh arrives mid-flight", async () => {
     const first = deferred<typeof emptyResult>();
     mockedList.mockReturnValueOnce(first.promise).mockResolvedValue(emptyResult);
