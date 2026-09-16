@@ -232,10 +232,12 @@ class SkillsLoader:
 
     def build_skills_summary(self, exclude: set[str] | None = None) -> str:
         """
-        Build a summary of all skills (name, description, path, availability).
+        Build a summary of all skills (name, short description, availability).
 
         This is used for progressive loading - the agent can read the full
-        skill content using read_file when needed.
+        skill content using the skill tools when needed. Explicit
+        ``short_description`` metadata is used when available; full
+        ``description`` metadata remains the fallback.
 
         Args:
             exclude: Set of skill names to omit from the summary.
@@ -278,8 +280,12 @@ class SkillsLoader:
     def _get_skill_description(self, name: str) -> str:
         """Get the description of a skill from its frontmatter."""
         meta = self.get_skill_metadata(name)
-        if meta and meta.get("description"):
-            return meta["description"]
+        if meta:
+            short_description = meta.get("short_description")
+            if isinstance(short_description, str) and short_description.strip():
+                return short_description.strip()
+            if meta.get("description"):
+                return meta["description"]
         return name  # Fallback to skill name
 
     def _strip_frontmatter(self, content: str) -> str:
@@ -323,11 +329,6 @@ class SkillsLoader:
         """Get mona metadata for a skill (cached in frontmatter)."""
         raw_meta = self.get_skill_metadata(name) or {}
         return self._parse_mona_metadata(raw_meta.get("metadata"))
-
-    def get_runtime_packs(self, name: str) -> list[str]:
-        """Return validated managed runtime pack refs declared by a Skill."""
-        spec = self.get_runtime_spec(name)
-        return list(spec.packs) if spec is not None else []
 
     def get_runtime_spec(self, name: str):
         """Return the validated managed runtime declaration for one Skill."""
