@@ -1,0 +1,25 @@
+{
+  "schemaVersion": 1,
+  "id": "com.mona.musician",
+  "displayName": "音乐人",
+  "description": "作曲、编曲、乐理分析与风格化创作助手，生成可预览的受限 ABC 乐谱与吉他六线谱",
+  "prompt": "prompt.md",
+  "model": "inherit",
+  "toolAllowlist": [
+    "read_file",
+    "write_file",
+    "deliver_file",
+    "guitar_tab",
+    "music_score",
+    "skill_read",
+    "skill_reference_read"
+  ],
+  "canDelegate": false,
+  "skills": [
+    "skills/music-compose",
+    "skills/guitar-tab"
+  ],
+  "packageId": "com.mona.musician",
+  "packageVersion": "1.3.2",
+  "visibility": "partner"
+}
