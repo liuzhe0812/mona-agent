@@ -55,9 +55,9 @@ import {
   TooltipTrigger,
 } from "@/components/ui/tooltip";
 import {
+  fetchAutomationStatus,
   getAgentDetail,
   fetchSettings,
-  listAgentChangeProposals,
   listAgentInstructionHistory,
   listAgentInstructions,
   listAgentSkills,
@@ -65,17 +65,17 @@ import {
 import { getAgentKnowledgeGraph } from "@/lib/materials-api";
 import { useMaterialsOpenStore } from "@/lib/materials-open-store";
 import type {
-  AgentChangeProposal,
   AgentDetailPayload,
   AgentInstruction,
   AgentInstructionHistoryItem,
   AgentSkill,
   AgentSkillSetupJob,
+  AutomationStatus,
 } from "@/lib/types";
 import { useClientContextOrNull } from "@/providers/ClientProvider";
 
 type Tab = "overview" | "identity" | "knowledge" | "permissions" | "skills";
-type SkillAction = "enable" | "disable" | "archive" | "restore" | "enable_scripts" | "disable_scripts" | "pin" | "unpin";
+type SkillAction = "enable" | "disable" | "archive" | "restore" | "pin" | "unpin";
 const MAX_AVATAR_FILE_BYTES = 2 * 1024 * 1024;
 
 const INSTRUCTION_LABELS: Record<AgentInstruction["key"], string> = {
@@ -94,10 +94,10 @@ function formatBytes(bytes: number): string {
   return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
 }
 
-type ToolGroupId = "notes" | "knowledge" | "media" | "web" | "files" | "memory" | "skills" | "collaboration" | "other";
+type ToolGroupId = "notes" | "knowledge" | "research" | "database" | "media" | "planning" | "automation" | "web" | "connections" | "files" | "office" | "communication" | "terminal" | "memory" | "skills" | "collaboration" | "system" | "other";
 
 type CompositeTool = {
-  id: "notes_query";
+  id: string;
   groupId: ToolGroupId;
   names: string[];
   label: string;
@@ -113,33 +113,41 @@ type PermissionRow = {
 };
 
 const TOOL_GROUPS: Array<{ id: ToolGroupId; label: string; description: string }> = [
+  { id: "automation", label: "自动化", description: "操作浏览器页面或电脑上的其他应用。" },
+  { id: "media", label: "媒体", description: "生成图片或视频内容。" },
   { id: "notes", label: "笔记", description: "访问和整理笔记仓库中的内容。" },
   { id: "knowledge", label: "知识", description: "检索和读取这个 Agent 已学习的内容。" },
-  { id: "media", label: "图片与视频", description: "生成图片或视频内容。" },
-  { id: "web", label: "网页与浏览器", description: "搜索互联网并操作浏览器页面。" },
-  { id: "files", label: "文件与命令", description: "读写工作区文件并执行命令。" },
+  { id: "research", label: "研究", description: "检索学术资料、分析数据并生成图表。" },
+  { id: "database", label: "数据库", description: "检查数据库结构、查询数据并生成 SQL 草稿。" },
+  { id: "planning", label: "计划", description: "管理个人日程、提醒、待办和周期任务。" },
+  { id: "web", label: "网页", description: "搜索互联网并读取网页内容。" },
+  { id: "connections", label: "连接", description: "使用已经连接的 MCP 工具。" },
+  { id: "files", label: "文件", description: "读写工作区文件并执行命令。" },
+  { id: "office", label: "文档", description: "读取文档或在 Office 编辑器中修改文件。" },
+  { id: "communication", label: "通信", description: "读取、管理邮件或向指定渠道发送消息。" },
+  { id: "terminal", label: "终端", description: "管理本地执行会话或操作当前终端连接。" },
   { id: "memory", label: "记忆", description: "读取、搜索和维护智能体记忆。" },
   { id: "skills", label: "技能", description: "读取技能资料并运行技能脚本。" },
-  { id: "collaboration", label: "智能体协作", description: "委派任务或创建子任务。" },
-  { id: "other", label: "其他工具", description: "完成智能体工作所需的辅助能力。" },
+  { id: "collaboration", label: "协作", description: "委派任务或创建子任务。" },
+  { id: "system", label: "系统", description: "管理系统能力。" },
+  { id: "other", label: "其他", description: "完成智能体工作所需的辅助能力。" },
 ];
 
-const COMPOSITE_TOOLS: CompositeTool[] = [
-  { id: "notes_query", groupId: "notes", names: ["notes_search", "notes_read"], label: "查询笔记", description: "搜索并读取允许访问的笔记。" },
-];
-
-const COMPOSITE_TOOL_NAMES = new Set(COMPOSITE_TOOLS.flatMap((tool) => tool.names));
 const HIDDEN_KNOWLEDGE_TOOL_NAMES = new Set([
   "knowledge_search",
+  "knowledge_read",
   "materials_search",
   "materials_read",
   "wiki_search",
   "wiki_read",
 ]);
 
-function normalizeCompositeToolPermissions(tools: string[]): string[] {
+function normalizeCompositeToolPermissions(
+  tools: string[],
+  composites: CompositeTool[],
+): string[] {
   const next = new Set(tools);
-  COMPOSITE_TOOLS.forEach(({ names }) => {
+  composites.forEach(({ names }) => {
     if (names.every((name) => next.has(name))) return;
     names.forEach((name) => next.delete(name));
   });
@@ -147,11 +155,79 @@ function normalizeCompositeToolPermissions(tools: string[]): string[] {
 }
 
 const TOOL_LABELS: Record<string, string> = {
+  academic_search: "学术搜索",
+  apply_patch: "批量修改文件",
+  artifact_read: "读取协作产物",
+  browser_observe: "查看浏览器",
+  canvas: "流程图画布",
+  chart: "生成图表",
+  complete_goal: "结束长期目标",
+  computer_act: "操作电脑",
+  computer_observe: "查看电脑",
+  config_set_provider: "配置模型供应商",
+  crypto: "编码与加密",
+  dataframe_query: "分析表格数据",
+  db_inspect: "检查数据库",
+  db_query: "查询数据库",
+  db_sql_draft: "生成 SQL 草稿",
+  document: "读取文档",
+  email_action: "管理邮件",
+  email_read: "读取邮件",
+  email_search: "搜索邮件",
+  find_files: "查找文件",
+  grep: "搜索文件内容",
+  guitar_tab: "校验吉他六线谱",
+  heartbeat_update: "周期任务",
+  hoard_capture: "收藏内容",
+  hoard_search: "搜索收藏",
+  http_request: "HTTP 请求",
+  list_dir: "浏览目录",
+  list_exec_sessions: "查看执行会话",
+  long_task: "登记长期目标",
+  message: "发送消息",
+  my: "运行状态",
+  music_score: "校验乐谱",
+  office: "Office 实时编辑",
+  propose_workflow: "设计协作流程",
+  research_record: "研究记录",
+  run_collaboration: "立即运行协作",
+  schedule: "日程管理",
+  scientific_tool: "科学工具",
+  skill_create: "创建技能",
+  stock_context_read: "读取股票研究上下文",
+  stock_evidence_read: "读取股票研究证据",
+  stock_opportunity_submit: "提交股票机会研究",
+  stock_quote: "查询股票行情",
+  stock_report_read: "读取股票报告",
+  stock_research_status: "查看股票研究进度",
+  stock_screen_compare: "比较选股候选",
+  stock_screen_read: "读取选股结果",
+  stock_screen_run: "运行选股分析",
+  stock_screen_strategy_save: "保存选股策略",
+  stock_screen_validation_read: "读取策略验证",
+  stock_source_open: "查看股票数据来源",
+  submit_bear_case: "提交看空观点",
+  submit_bull_case: "提交看多观点",
+  submit_fundamental_view: "提交基本面观点",
+  submit_news_view: "提交资讯观点",
+  submit_stock_diagnosis_semantic: "提交股票语义分析",
+  submit_stock_report_staged: "分步提交股票报告",
+  submit_technical_view: "提交技术面观点",
+  todo: "待办事项",
+  terminal_exec: "执行终端命令",
+  terminal_output: "读取终端输出",
+  terminal_task: "维护任务",
+  terminal_upload: "上传远程文件",
+  url2note: "网页转笔记",
+  update_plan: "更新任务计划",
+  video_extract_frame: "提取视频帧",
+  write_stdin: "与运行中进程交互",
   notes_search: "搜索笔记",
   notes_read: "读取笔记",
   notes_create: "创建笔记",
   notes_save_image: "保存图片到笔记",
   knowledge_search: "搜索知识",
+  knowledge_read: "读取知识",
   materials_search: "搜索资料",
   materials_read: "读取资料",
   wiki_search: "搜索 Wiki",
@@ -189,11 +265,79 @@ const TOOL_LABELS: Record<string, string> = {
 };
 
 const TOOL_DESCRIPTIONS: Record<string, string> = {
+  academic_search: "检索论文、临床试验和学术引用信息。",
+  apply_patch: "一次完成一个或多个文件的精确修改。",
+  artifact_read: "读取当前协作流程中其他步骤提交的结构化成果。",
+  browser_observe: "查看 Mona 内置浏览器的页面、标签、结构和截图。",
+  canvas: "打开、查看、编辑并导出当前流程图画布。",
+  chart: "根据结构化数据生成柱状图、折线图、饼图或散点图。",
+  complete_goal: "结束已经完成、取消或被替换的长期目标。",
+  computer_act: "在电脑上的其他应用中执行点击、输入、滚动等操作。",
+  computer_observe: "查看电脑上的窗口、界面结构或屏幕画面。",
+  config_set_provider: "保存模型供应商密钥并切换默认供应商；仅在用户明确要求时使用。",
+  crypto: "执行哈希、编码、解码、UUID 和密码生成等本地计算。",
+  dataframe_query: "读取 CSV、JSON 或 XLSX，并使用只读 SQL 分析数据。",
+  db_inspect: "检查当前数据库连接、表结构、索引、执行计划和健康状态。",
+  db_query: "对当前连接的数据库执行只读查询。",
+  db_sql_draft: "在数据库编辑器中生成可复制或插入的 SQL 草稿。",
+  document: "将 PDF、Office、文本或代码文件解析为可阅读内容。",
+  email_action: "对邮件执行已读、星标、移动或删除等操作。",
+  email_read: "读取指定邮件的完整内容和附件信息。",
+  email_search: "按关键词、发件人、日期或状态搜索邮件。",
+  find_files: "按名称、路径或文件类型查找工作区文件。",
+  grep: "使用文本或正则表达式搜索工作区文件内容。",
+  guitar_tab: "检查 AlphaTex 吉他六线谱的结构、节拍、品位和小节数。",
+  heartbeat_update: "更新 Mona 定期检查和执行的周期任务。",
+  hoard_capture: "将有长期价值的网页或文本收藏到 Mona。",
+  hoard_search: "搜索此前收藏的网页、邮件、笔记和对话内容。",
+  http_request: "发送结构化 HTTP 请求，用于 API 调试或 Webhook。",
+  list_dir: "查看目录中的文件和子目录。",
+  list_exec_sessions: "查看仍在运行的本地命令会话。",
+  long_task: "登记用户明确提出的长期目标，并在后续会话中持续跟进。",
+  message: "向用户或已连接渠道主动发送消息和附件。",
+  my: "检查 Mona 当前会话的运行状态和可调整配置。",
+  music_score: "检查 ABC 乐谱的格式、声部和小节时值。",
+  office: "在 Mona 的 Office 编辑器中打开并修改 Word、Excel 或 PowerPoint。",
+  propose_workflow: "为协作房间设计可复用的任务顺序和人工确认节点，提交后等待用户启用。",
+  research_record: "记录并校验研究来源、证据、实验、交付物和任务清单。",
+  run_collaboration: "立即运行一次临时智能体协作，完成后汇总各智能体结果。",
+  schedule: "创建、查看、修改或删除个人提醒和自动执行任务。",
+  scientific_tool: "发现、查看或运行受支持的科学数据与计算工具。",
+  skill_create: "为当前智能体创建并启用私有技能。",
+  stock_context_read: "构建并读取可追溯的 A 股研究上下文和数据质量信息。",
+  stock_evidence_read: "读取当前研究流程准备的股票证据包及其来源。",
+  stock_opportunity_submit: "提交候选股票的结构化机会、风险和不同周期判断。",
+  stock_quote: "查询一只 A 股或 ETF 的实时价格、涨跌幅和成交量。",
+  stock_report_read: "按报告编号读取已生成的股票研究报告或复盘摘要。",
+  stock_research_status: "查看多智能体股票研究的当前步骤、完成情况和失败信息。",
+  stock_screen_compare: "使用结构化指标和风险比较多个候选股票。",
+  stock_screen_read: "读取已经保存的选股分析结果。",
+  stock_screen_run: "运行确定性的股票筛选流程并保存结果。",
+  stock_screen_strategy_save: "保存用户确认的结构化选股策略。",
+  stock_screen_validation_read: "读取选股策略的真实历史验证指标或不可用原因。",
+  stock_source_open: "查看股票研究数据来源、时间和内容校验信息。",
+  submit_bear_case: "提交包含短期、中期和长期判断及证据的看空观点。",
+  submit_bull_case: "提交包含短期、中期和长期判断及证据的看多观点。",
+  submit_fundamental_view: "提交公司质量、财务质量、估值和长期价值判断。",
+  submit_news_view: "提交行业、政策、周期和事件日历分析。",
+  submit_stock_diagnosis_semantic: "提交公司、行业、政策、周期、治理和风险语义分析。",
+  submit_stock_report_staged: "分阶段保存股票深度研究内容，并在完成后执行完整校验。",
+  submit_technical_view: "提交价格成交、趋势、市场环境、资金和交易性分析。",
+  todo: "添加、查看、完成或整理统一待办事项。",
+  terminal_exec: "在当前终端维护任务中执行一个命令步骤。",
+  terminal_output: "读取当前终端或长时间运行会话的输出。",
+  terminal_task: "创建并管理包含检查、修改和验证步骤的终端维护任务。",
+  terminal_upload: "在终端维护任务中向远程主机上传文件。",
+  url2note: "将用户指定的公开文章或视频整理为 Markdown 笔记。",
+  update_plan: "更新当前任务的执行步骤和状态。",
+  video_extract_frame: "从公开视频的指定时间提取关键画面并保存到笔记。",
+  write_stdin: "向正在运行的本地命令发送输入、轮询输出或终止会话。",
   notes_search: "在允许访问的笔记中搜索标题和正文。",
   notes_read: "读取指定笔记的完整 Markdown 内容。",
   notes_create: "在笔记仓库中创建新的 Markdown 笔记。",
   notes_save_image: "将图片保存到笔记仓库；启用时会同时启用“创建笔记”。",
-  knowledge_search: "搜索笔记和这个 Agent 已学习的知识。",
+  knowledge_search: "搜索这个 Agent 从资料中学习和整理的知识。",
+  knowledge_read: "读取知识搜索命中的原始内容、上下文和引用信息。",
   materials_search: "在资料库中搜索上传的文档和知识内容。",
   materials_read: "读取资料库中指定片段及其上下文。",
   wiki_search: "搜索这个 Agent 已整理的知识页面。",
@@ -234,12 +378,49 @@ function toolGroupId(name: string): ToolGroupId {
   if (name.startsWith("notes_")) return "notes";
   if (name.startsWith("materials_") || name.startsWith("wiki_") || name === "knowledge_search" || name === "kb_search") return "knowledge";
   if (name.startsWith("generate_")) return "media";
-  if (name.startsWith("web_") || name.startsWith("browser_")) return "web";
-  if (name.endsWith("_file") || ["read_file", "write_file", "edit_file", "deliver_file", "exec"].includes(name)) return "files";
+  if (
+    ["academic_search", "chart", "dataframe_query", "research_record", "scientific_tool"].includes(name)
+    || name.startsWith("stock_")
+    || name.startsWith("submit_")
+  ) return "research";
+  if (name.startsWith("db_")) return "database";
+  if (["crypto", "config_set_provider"].includes(name)) return "other";
+  if (["schedule", "todo", "heartbeat_update"].includes(name)) return "planning";
+  if (["document", "office"].includes(name)) return "office";
+  if (name.startsWith("email_") || name === "message") return "communication";
+  if (name.startsWith("terminal_") || ["list_exec_sessions", "write_stdin"].includes(name)) return "terminal";
+  if (["url2note", "video_extract_frame"].includes(name)) return "notes";
+  if (name.startsWith("hoard_")) return "memory";
+  if (["music_score", "guitar_tab"].includes(name)) return "media";
+  if (name.startsWith("browser_") || name.startsWith("computer_")) return "automation";
+  if (name.startsWith("mcp_")) return "connections";
+  if (name.startsWith("web_") || name === "http_request") return "web";
+  if (name.endsWith("_file") || ["read_file", "write_file", "edit_file", "deliver_file", "exec", "apply_patch", "find_files", "grep", "list_dir"].includes(name)) return "files";
   if (name.startsWith("memory_")) return "memory";
   if (name.startsWith("skill_")) return "skills";
-  if (["delegate_agent", "spawn", "run_collaboration", "propose_workflow"].includes(name)) return "collaboration";
+  if (["delegate_agent", "spawn", "run_collaboration", "propose_workflow", "artifact_read"].includes(name)) return "collaboration";
   return "other";
+}
+
+function computerStatusText(
+  status: AutomationStatus["computerUse"] | null,
+  enabled: boolean,
+): string {
+  if (!status) return enabled ? "正在读取运行状态…" : "默认关闭；首次开启会自动下载驱动。";
+  if (status.state === "disabled") return enabled ? "正在准备电脑操作能力…" : "默认关闭；首次开启会自动下载驱动。";
+  if (status.state === "downloading") {
+    const job = status.job;
+    const progress = job && job.totalBytes > 0
+      ? Math.min(100, Math.round((job.downloadedBytes / job.totalBytes) * 100))
+      : 0;
+    return `正在下载驱动 · ${progress}%`;
+  }
+  if (status.state === "pending_authorization") return "等待完成系统授权。";
+  if (status.state === "available") {
+    return status.degraded ? "可用，部分精细操作暂时受限。" : "可用";
+  }
+  if (status.state === "not_installed") return "首次开启会自动下载驱动。";
+  return status.error || status.job?.error || "电脑操作运行异常，请关闭后重新开启。";
 }
 
 function ConfigFields({
@@ -364,38 +545,86 @@ function PermissionFields({
   onSave: (update: Record<string, unknown>) => Promise<void>;
 }) {
   const catalog = detail.toolCatalog ?? [];
+  const configurableCatalog = catalog.filter((tool) => !tool.systemManaged);
+  const { token } = useClientContextOrNull() ?? { token: "" };
+  const defaultTools = configurableCatalog
+    .filter((tool) => !tool.requiresExplicitPermission)
+    .map((tool) => tool.name);
+  const configurableToolNames = new Set(configurableCatalog.map((tool) => tool.name));
+  const initialTools = detail.config.grantedTools ?? detail.effective.allowedTools ?? defaultTools;
   const [selectedTools, setSelectedTools] = useState<string[]>(
-    detail.config.grantedTools ?? detail.effective.allowedTools ?? catalog.map((tool) => tool.name),
+    initialTools.filter((name) => configurableToolNames.has(name)),
   );
+  const [automationStatus, setAutomationStatus] = useState<AutomationStatus | null>(null);
   const [saving, setSaving] = useState(false);
   const [query, setQuery] = useState("");
   const normalizedQuery = query.trim().toLocaleLowerCase();
-  const visibleCatalog = catalog.filter((tool) => !HIDDEN_KNOWLEDGE_TOOL_NAMES.has(tool.name));
-  const enabledCount = visibleCatalog.filter((tool) => selectedTools.includes(tool.name)).length;
+  const browserTools = configurableCatalog.filter((tool) => tool.name.startsWith("browser_")).map((tool) => tool.name);
+  const computerTools = configurableCatalog.filter((tool) => tool.name.startsWith("computer_")).map((tool) => tool.name);
+  const compositeTools: CompositeTool[] = [
+    {
+      id: "notes_query",
+      groupId: "notes",
+      names: ["notes_search", "notes_read"],
+      label: "查询笔记",
+      description: "搜索并读取允许访问的笔记。",
+    },
+    ...(browserTools.length > 0 ? [{ id: "browser_automation", groupId: "automation" as const, names: browserTools, label: "浏览器自动操作", description: "读取并操作 Mona 内置浏览器中的页面，默认开启。" }] : []),
+    ...(computerTools.length > 0 ? [{ id: "computer_automation", groupId: "automation" as const, names: computerTools, label: "电脑操作自动化", description: "观察并操作电脑上的其他应用；首次开启会下载驱动。" }] : []),
+  ];
+  const compositeToolNames = new Set(compositeTools.flatMap((tool) => tool.names));
   const visibleGroups = TOOL_GROUPS.map((group) => {
-    const groupCatalogTools = catalog.filter((tool) => toolGroupId(tool.name) === group.id);
+    const groupCatalogTools = configurableCatalog.filter(
+      (tool) => ((tool.category as ToolGroupId | undefined) ?? toolGroupId(tool.name)) === group.id,
+    );
     const rows: PermissionRow[] = [
-      ...COMPOSITE_TOOLS
+      ...compositeTools
         .filter((composite) => composite.groupId === group.id && composite.names.some((name) => groupCatalogTools.some((tool) => tool.name === name)))
         .map((composite) => ({
           key: composite.id,
           names: composite.names,
           label: composite.label,
           description: composite.description,
-          available: composite.names.every((name) => groupCatalogTools.find((tool) => tool.name === name)?.available !== false),
+          available: composite.names.every((name) => configurableCatalog.find((tool) => tool.name === name)?.available === true),
         })),
       ...groupCatalogTools
-        .filter((tool) => !COMPOSITE_TOOL_NAMES.has(tool.name) && !HIDDEN_KNOWLEDGE_TOOL_NAMES.has(tool.name))
+        .filter((tool) => !compositeToolNames.has(tool.name) && !HIDDEN_KNOWLEDGE_TOOL_NAMES.has(tool.name))
         .map((tool) => ({
           key: tool.name,
           names: [tool.name],
-          label: TOOL_LABELS[tool.name] ?? tool.name.replaceAll("_", " "),
-          description: TOOL_DESCRIPTIONS[tool.name] ?? "用于完成智能体工作的辅助能力。",
+          label: TOOL_LABELS[tool.name] ?? `${tool.name.startsWith("mcp_") ? "外部工具" : "扩展工具"} · ${tool.name.replaceAll("_", " ")}`,
+          description: TOOL_DESCRIPTIONS[tool.name]
+            ?? (tool.description && /[\u3400-\u9fff]/u.test(tool.description)
+              ? tool.description
+              : tool.name.startsWith("mcp_")
+                ? "调用已连接的外部服务提供的这项能力。"
+                : "用于完成当前智能体任务的扩展能力。"),
           available: tool.available,
         })),
     ].filter((row) => !normalizedQuery || `${row.label} ${row.description} ${row.names.join(" ")}`.toLocaleLowerCase().includes(normalizedQuery));
-    return { ...group, rows, catalogTools: groupCatalogTools };
+    return { ...group, rows };
   }).filter((group) => group.rows.length > 0);
+  const visibleRows = visibleGroups.flatMap((group) => group.rows);
+  const enabledCount = visibleRows.filter((row) => row.names.every((name) => selectedTools.includes(name))).length;
+
+  const loadAutomationStatus = useCallback(async () => {
+    if (!token) return;
+    try {
+      setAutomationStatus(await fetchAutomationStatus(token, detail.agent.id));
+    } catch {
+      setAutomationStatus(null);
+    }
+  }, [detail.agent.id, token]);
+
+  useEffect(() => {
+    void loadAutomationStatus();
+  }, [loadAutomationStatus]);
+
+  useEffect(() => {
+    if (automationStatus?.computerUse.state !== "downloading") return;
+    const timer = window.setInterval(() => void loadAutomationStatus(), 800);
+    return () => window.clearInterval(timer);
+  }, [automationStatus?.computerUse.state, loadAutomationStatus]);
   const toggleTool = async (names: string[], checked: boolean) => {
     if (saving) return;
     const previous = selectedTools;
@@ -407,11 +636,12 @@ function PermissionFields({
     } else if (!checked && names.includes("notes_create")) {
       next = next.filter((item) => item !== "notes_save_image");
     }
-    next = normalizeCompositeToolPermissions(next);
+    next = normalizeCompositeToolPermissions(next, compositeTools);
     setSelectedTools(next);
     setSaving(true);
     try {
       await onSave({ granted_tools: next });
+      await loadAutomationStatus();
     } catch {
       setSelectedTools(previous);
     } finally {
@@ -426,7 +656,7 @@ function PermissionFields({
           <p className="mt-1 text-caption leading-5 text-muted-foreground">控制这个 Agent 可以使用哪些能力。关闭后，不会影响已有会话和数据。</p>
         </div>
         <div className="flex flex-col gap-2 sm:items-end">
-          <span className="text-caption text-muted-foreground">已启用 {enabledCount} / {visibleCatalog.length}</span>
+          <span className="text-caption text-muted-foreground">已启用 {enabledCount} / {visibleRows.length}</span>
           <div className="relative w-full sm:w-64">
             <Search className="pointer-events-none absolute left-2.5 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" aria-hidden />
             <Input
@@ -441,7 +671,7 @@ function PermissionFields({
         </div>
       </div>
       {visibleGroups.map((group) => {
-        const groupEnabledCount = group.catalogTools.filter((tool) => selectedTools.includes(tool.name)).length;
+        const groupEnabledCount = group.rows.filter((row) => row.names.every((name) => selectedTools.includes(name))).length;
         return (
           <section key={group.id} className="overflow-hidden rounded-lg border border-border/60 bg-background/65">
             <div className="flex items-center justify-between gap-4 border-b border-border/50 bg-muted/20 px-4 py-3">
@@ -450,7 +680,7 @@ function PermissionFields({
                 <p className="mt-0.5 text-caption text-muted-foreground">{group.description}</p>
               </div>
               <span className="shrink-0 rounded-full border border-border/60 bg-background px-2 py-0.5 text-micro text-muted-foreground">
-                {groupEnabledCount} / {group.catalogTools.length}
+                {groupEnabledCount} / {group.rows.length}
               </span>
             </div>
             <div className="grid grid-cols-1 gap-px bg-border/45 sm:grid-cols-2">
@@ -461,6 +691,7 @@ function PermissionFields({
                     <div className="min-w-0 flex-1">
                       <p className="truncate text-ui font-medium">{row.label}</p>
                       <p className="mt-1 line-clamp-2 text-caption leading-4 text-muted-foreground">{row.description}</p>
+                      {row.key === "computer_automation" ? <p className="mt-1 text-caption leading-4 text-muted-foreground">{computerStatusText(automationStatus?.computerUse ?? null, checked)}</p> : null}
                       {!row.available ? <p className="text-caption leading-4 text-amber-600">当前运行配置不可用</p> : null}
                     </div>
                     <Button
@@ -483,8 +714,8 @@ function PermissionFields({
           </section>
         );
       })}
-      {catalog.length === 0 ? <p className="rounded-lg border border-dashed border-border/60 px-4 py-10 text-center text-caption text-muted-foreground">暂无工具</p> : null}
-      {catalog.length > 0 && visibleGroups.length === 0 ? <p className="rounded-lg border border-dashed border-border/60 px-4 py-10 text-center text-caption text-muted-foreground">没有匹配的工具</p> : null}
+      {configurableCatalog.length === 0 ? <p className="rounded-lg border border-dashed border-border/60 px-4 py-10 text-center text-caption text-muted-foreground">暂无工具</p> : null}
+      {configurableCatalog.length > 0 && visibleGroups.length === 0 ? <p className="rounded-lg border border-dashed border-border/60 px-4 py-10 text-center text-caption text-muted-foreground">没有匹配的工具</p> : null}
     </div>
   );
 }
@@ -574,7 +805,6 @@ function SkillGroup({
                   <span>最近 {skillRelativeTime(skill.lastAccessedAt)}</span>
                   <span>创建 {skillRelativeTime(skill.createdAt)}</span>
                   <span>{skill.archived ? "已归档" : skill.enabled ? "已启用" : "已停用"}</span>
-                  {skill.hasScripts ? <span>{skill.scriptsEnabled ? "脚本已允许" : "脚本未允许"}</span> : null}
                   {skill.hasScripts ? (
                     <span
                       className={skill.runtimeReady ? "text-emerald-600" : "text-amber-600"}
@@ -591,7 +821,7 @@ function SkillGroup({
                 {skill.source === "private" && !skill.archived ? <SkillIconButton label={`归档 ${skill.name}`} tooltip="归档" onClick={() => onAction(skill.name, "archive")}><Archive className="h-3.5 w-3.5" /></SkillIconButton> : null}
                 {skill.source === "private" && skill.archived ? <SkillIconButton label={`恢复 ${skill.name}`} tooltip="恢复" onClick={() => onAction(skill.name, "restore")}><ArchiveRestore className="h-3.5 w-3.5" /></SkillIconButton> : null}
                 {!skill.archived ? <Button size="sm" variant="outline" onClick={() => onAction(skill.name, skill.enabled ? "disable" : "enable")}>{skill.enabled ? "停用" : "启用"}</Button> : null}
-                {skill.hasScripts && !skill.archived ? <Button size="sm" variant="outline" className="gap-1" onClick={() => onConfigure(skill)}><Settings2 className="h-3.5 w-3.5" />{skill.scriptsEnabled && skill.runtimeReady ? "管理配置" : "完成配置"}</Button> : null}
+                {skill.hasScripts && !skill.archived ? <Button size="sm" variant="outline" className="gap-1" onClick={() => onConfigure(skill)}><Settings2 className="h-3.5 w-3.5" />{skill.runtimeReady ? "查看环境" : "准备环境"}</Button> : null}
               </div>
             </article>
           ))}
@@ -605,38 +835,29 @@ function SkillSetupDialog({
   skill,
   busy,
   job,
-  canRunScripts,
   error,
   onRun,
   onCancel,
-  onOpenPermissions,
   onOpenChange,
 }: {
   skill: AgentSkill | null;
   busy: boolean;
   job: AgentSkillSetupJob | null;
-  canRunScripts: boolean;
   error: string | null;
-  onRun: (action: "enable_scripts" | "disable_scripts") => void;
+  onRun: () => void;
   onCancel: () => void;
-  onOpenPermissions: () => void;
   onOpenChange: (open: boolean) => void;
 }) {
-  const ready = Boolean(skill?.scriptsEnabled && skill?.runtimeReady);
+  const ready = Boolean(skill?.runtimeReady);
   const optionalTypes = skill?.runtime?.optional_script_types ?? [];
   return (
     <Dialog open={skill !== null} onOpenChange={onOpenChange}>
       <DialogContent className="max-w-xl">
         <DialogHeader>
           <DialogTitle>配置技能：{skill?.name ?? ""}</DialogTitle>
-          <DialogDescription>技能内容保持只读；以下授权和环境配置仅用于当前 Agent。</DialogDescription>
+          <DialogDescription>技能内容保持只读；以下环境配置仅用于当前 Agent。</DialogDescription>
         </DialogHeader>
         {skill ? <div className="grid gap-4 py-1 text-caption">
-          <section className="rounded-lg border border-border/60 p-4">
-            <div className="flex items-center justify-between gap-3"><h3 className="text-ui font-medium">运行权限</h3><span className={skill.scriptsEnabled ? "text-emerald-600" : "text-amber-600"}>{skill.scriptsEnabled ? "已允许" : canRunScripts ? "待允许" : "缺少工具权限"}</span></div>
-            <p className="mt-1 text-muted-foreground">允许此技能运行随技能提供的脚本。技能仍受当前 Agent 的工具权限限制。</p>
-            {!canRunScripts ? <Button className="mt-3" size="sm" variant="outline" onClick={onOpenPermissions}>前往工具权限</Button> : null}
-          </section>
           <section className="rounded-lg border border-border/60 p-4">
             <div className="flex items-center justify-between gap-3"><h3 className="text-ui font-medium">基础环境</h3><span className={skill.runtimeReady ? "text-emerald-600" : "text-amber-600"}>{skill.runtimeReady ? "已就绪" : "待准备"}</span></div>
             <p className="mt-1 text-muted-foreground">{skillRuntimeSummary(skill.runtime)}</p>
@@ -649,8 +870,7 @@ function SkillSetupDialog({
         </div> : null}
         <DialogFooter>
           {busy ? <Button variant="outline" onClick={onCancel}>取消准备</Button> : null}
-          {ready ? <Button variant="outline" disabled={busy} onClick={() => onRun("disable_scripts")}>撤销脚本权限</Button> : null}
-          {!ready ? <Button disabled={busy || !canRunScripts} className="gap-1.5" onClick={() => onRun("enable_scripts")}>{busy ? <LoaderCircle className="h-4 w-4 animate-spin" /> : <Play className="h-4 w-4" />}{skill?.scriptsEnabled ? "准备环境" : "允许并准备"}</Button> : <Button onClick={() => onOpenChange(false)}>完成</Button>}
+          {!ready ? <Button disabled={busy} className="gap-1.5" onClick={onRun}>{busy ? <LoaderCircle className="h-4 w-4 animate-spin" /> : <Play className="h-4 w-4" />}准备环境</Button> : <Button onClick={() => onOpenChange(false)}>完成</Button>}
         </DialogFooter>
       </DialogContent>
     </Dialog>
@@ -716,44 +936,6 @@ function SkillEditorDialog({
   );
 }
 
-function ProposalCards({
-  proposals,
-  onResolve,
-  resolvingProposalId,
-}: {
-  proposals: AgentChangeProposal[];
-  onResolve: (proposal: AgentChangeProposal, approve: boolean) => void;
-  resolvingProposalId?: string | null;
-}) {
-  if (proposals.length === 0) return null;
-  return (
-    <section className="mt-6 grid gap-3">
-      <h3 className="text-ui font-medium">待确认的 Agent 变更</h3>
-      {proposals.map((proposal) => {
-        const resolving = resolvingProposalId === proposal.id;
-        const preview = proposal.preview;
-        const title = proposal.kind === "skill_install"
-          ? `安装技能：${String(preview.skillName ?? "")}`
-          : `修改 ${String(preview.filename ?? "指令文件")}`;
-        return (
-          <article key={proposal.id} className="rounded-lg border border-amber-500/35 bg-amber-500/5 p-3">
-            <div className="flex flex-wrap items-center justify-between gap-2"><strong className="text-ui">{title}</strong><span className="text-caption text-muted-foreground">{new Date(proposal.expiresAt).toLocaleString()}</span></div>
-            {proposal.kind === "instruction_patch" ? (
-              <div className="mt-3 grid gap-2"><details><summary className="cursor-pointer text-caption text-muted-foreground">现有内容</summary><pre className="mt-1 max-h-36 overflow-auto rounded-md bg-background/55 p-2 text-caption whitespace-pre-wrap">{String(preview.before ?? "")}</pre></details><div><p className="mb-1 text-caption text-muted-foreground">拟写入内容</p><pre className="max-h-44 overflow-auto rounded-md bg-background/75 p-2 text-caption whitespace-pre-wrap">{String(preview.after ?? "")}</pre></div></div>
-            ) : (
-              <div className="mt-2 grid gap-2 text-caption text-muted-foreground"><p>{Array.isArray(preview.files) ? `${preview.files.length} 个文件` : ""}{preview.hasScripts ? ` · ${skillRuntimeSummary(preview.runtime as Record<string, unknown> | null)} · 批准后准备共享环境，脚本仍保持禁用` : ""}</p>{Array.isArray(preview.files) ? preview.files.map((file, index) => { const row = file as Record<string, unknown>; return <details key={`${String(row.path ?? "file")}:${index}`}><summary className="cursor-pointer">{String(row.path ?? "文件")}</summary><pre className="mt-1 max-h-44 overflow-auto rounded-md bg-background/75 p-2 text-caption whitespace-pre-wrap text-foreground">{String(row.content ?? "")}</pre></details>; }) : null}</div>
-            )}
-            <div className="mt-3 flex gap-2">
-              <Button size="sm" disabled={resolving} onClick={() => onResolve(proposal, true)}>{resolving ? "正在准备环境…" : "批准"}</Button>
-              <Button size="sm" variant="outline" disabled={resolving} onClick={() => onResolve(proposal, false)}>拒绝</Button>
-            </div>
-          </article>
-        );
-      })}
-    </section>
-  );
-}
-
 export function AgentManagementView({
   agentId,
   onBack,
@@ -768,7 +950,6 @@ export function AgentManagementView({
   const [detail, setDetail] = useState<AgentDetailPayload | null>(null);
   const [instructions, setInstructions] = useState<AgentInstruction[]>([]);
   const [skills, setSkills] = useState<AgentSkill[]>([]);
-  const [proposals, setProposals] = useState<AgentChangeProposal[]>([]);
   const [selectedInstruction, setSelectedInstruction] = useState<AgentInstruction["key"]>("soul");
   const [draftInstruction, setDraftInstruction] = useState("");
   const [history, setHistory] = useState<AgentInstructionHistoryItem[]>([]);
@@ -780,7 +961,6 @@ export function AgentManagementView({
   const [skillSetupBusy, setSkillSetupBusy] = useState(false);
   const [skillSetupJob, setSkillSetupJob] = useState<AgentSkillSetupJob | null>(null);
   const [skillSetupError, setSkillSetupError] = useState<string | null>(null);
-  const [resolvingProposalId, setResolvingProposalId] = useState<string | null>(null);
   const [skillQuery, setSkillQuery] = useState("");
   const [knowledgeSelection, setKnowledgeSelection] = useState<AgentKnowledgeSelection | null>(null);
   const [knowledgeGraphRevision, setKnowledgeGraphRevision] = useState(0);
@@ -820,16 +1000,14 @@ export function AgentManagementView({
     if (!token) return;
     setLoading(true);
     try {
-      const [nextDetail, nextInstructions, nextSkills, nextProposals] = await Promise.all([
+      const [nextDetail, nextInstructions, nextSkills] = await Promise.all([
         getAgentDetail(token, agentId),
         listAgentInstructions(token, agentId),
         listAgentSkills(token, agentId),
-        listAgentChangeProposals(token, agentId),
       ]);
       setDetail(nextDetail);
       setInstructions(nextInstructions);
       setSkills(nextSkills);
-      setProposals(nextProposals);
       setError(null);
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : "无法加载 Agent 管理信息");
@@ -896,24 +1074,13 @@ export function AgentManagementView({
     if (!client) return;
     try { await client.actOnAgentSkill(agentId, name, action); await reload(); } catch (cause) { setError(cause instanceof Error ? cause.message : "更新 Skill 失败"); }
   };
-  const resolveProposal = async (proposal: AgentChangeProposal, approve: boolean) => {
-    if (!client || !proposal.token) { setError("该变更缺少确认令牌，请刷新后重试"); return; }
-    setResolvingProposalId(proposal.id);
-    try { await client.resolveAgentChange(agentId, proposal.id, proposal.token, approve); await reload(); } catch (cause) { setError(cause instanceof Error ? cause.message : "处理变更失败"); } finally { setResolvingProposalId(null); }
-  };
-  const runSkillSetup = async (action: "enable_scripts" | "disable_scripts") => {
+  const runSkillSetup = async () => {
     if (!client || !configuringSkill) return;
     setSkillSetupBusy(true);
     setSkillSetupError(null);
     try {
-      if (action === "enable_scripts") {
-        const job = await client.startAgentSkillSetup(agentId, configuringSkill.name);
-        setSkillSetupJob(job);
-        return;
-      }
-      await client.actOnAgentSkill(agentId, configuringSkill.name, action);
-      await reload();
-      setConfiguringSkill((current) => current ? { ...current, scriptsEnabled: false } : null);
+      const job = await client.startAgentSkillSetup(agentId, configuringSkill.name);
+      setSkillSetupJob(job);
     } catch (cause) {
       setSkillSetupError(cause instanceof Error ? cause.message : "技能配置失败");
     } finally {
@@ -1015,10 +1182,8 @@ export function AgentManagementView({
             direction="horizontal"
             className="h-full min-h-0"
             defaultLayout={knowledgePanelLayout}
-            onLayoutChanged={(layout, meta) => {
-              if (meta.isUserInteraction) {
-                window.localStorage.setItem("mona.agentKnowledge.layout", JSON.stringify(layout));
-              }
+            onLayoutChanged={(layout) => {
+              window.localStorage.setItem("mona.agentKnowledge.layout", JSON.stringify(layout));
             }}
           >
             <ResizablePanel
@@ -1078,11 +1243,10 @@ export function AgentManagementView({
             </div>
             <SkillGroup title="自我学习" description="Agent 从任务中自动沉淀的专属能力。" emptyLabel={normalizedSkillQuery ? "没有匹配的自我学习技能。" : "这个 Agent 还没有自我学习的技能。"} skills={learnedSkills} onEdit={(skill) => void openSkillEditor(skill)} onAction={(name, action) => void actOnSkill(name, action)} onConfigure={(skill) => void openSkillSetup(skill)} />
             <SkillGroup title="外部安装" description="来自平台、Agent 包或其他来源的技能。平台和包技能为只读，个人配置可管理。" emptyLabel={normalizedSkillQuery ? "没有匹配的外部安装技能。" : "没有外部安装的技能。"} skills={externalSkills} onEdit={(skill) => void openSkillEditor(skill)} onAction={(name, action) => void actOnSkill(name, action)} onConfigure={(skill) => void openSkillSetup(skill)} />
-            <ProposalCards proposals={proposals.filter((proposal) => proposal.kind === "skill_install")} onResolve={resolveProposal} resolvingProposalId={resolvingProposalId} />
-            <section className="rounded-lg border border-border/60 bg-muted/20 p-4 text-caption leading-5 text-muted-foreground"><ShieldCheck className="mb-2 h-4 w-4 text-theme" />安装技能不会自动增加工具、连接或密钥权限。包含脚本的技能需要单独完成运行配置。</section>
+            <section className="rounded-lg border border-border/60 bg-muted/20 p-4 text-caption leading-5 text-muted-foreground"><ShieldCheck className="mb-2 h-4 w-4 text-theme" />安装技能不会自动增加工具、连接或密钥权限。包含脚本的技能可按需准备共享环境。</section>
           </div>
           <SkillEditorDialog skill={editingSkill} content={skillDraft} loading={skillEditorLoading} saving={skillSaving} onContentChange={setSkillDraft} onSave={() => void saveSkill()} onOpenChange={(open) => { if (!open && !skillSaving) setEditingSkill(null); }} />
-          <SkillSetupDialog skill={configuringSkill} busy={skillSetupBusy || skillSetupJob?.state === "queued" || skillSetupJob?.state === "running"} job={skillSetupJob} canRunScripts={detail.effective.allowedTools == null || detail.effective.allowedTools.includes("skill_script_run")} error={skillSetupError} onRun={(action) => void runSkillSetup(action)} onCancel={() => void cancelSkillSetup()} onOpenPermissions={() => { setConfiguringSkill(null); setTab("permissions"); }} onOpenChange={(open) => { if (!open) setConfiguringSkill(null); }} />
+          <SkillSetupDialog skill={configuringSkill} busy={skillSetupBusy || skillSetupJob?.state === "queued" || skillSetupJob?.state === "running"} job={skillSetupJob} error={skillSetupError} onRun={() => void runSkillSetup()} onCancel={() => void cancelSkillSetup()} onOpenChange={(open) => { if (!open) setConfiguringSkill(null); }} />
         </TabsContent>
       </Tabs>
     </section>

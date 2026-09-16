@@ -23,6 +23,7 @@ import { MessageBubble } from "@/components/MessageBubble";
 import { AgentLogo } from "@/components/AgentLogo";
 import { AgentActivityCluster } from "@/components/thread/AgentActivityCluster";
 import { buildDisplayUnits, type DisplayUnit } from "@/components/thread/ThreadMessages";
+import { deriveNoteTitle } from "@/lib/note-title";
 import { useMonaStream } from "@/hooks/useMonaStream";
 import { useSessionHistory } from "@/hooks/useSessions";
 import type { UIMessage } from "@/lib/types";
@@ -310,9 +311,7 @@ export function NoteAgentPanel({
       if (!onSaveAsNote) return;
       const markdown = buildAgentResultMarkdown(message.content);
       if (!markdown) return;
-      const firstLine = markdown.split("\n").find((line) => line.trim().length > 0) ?? "";
-      const title = firstLine.replace(/^#+\s*/, "").replace(/[*_~`]/g, "").trim().slice(0, 40)
-        || `AI 回复 ${new Date().toLocaleString("zh-CN")}`;
+      const title = deriveNoteTitle(markdown, `AI 回复 ${new Date().toLocaleString("zh-CN")}`);
       onSaveAsNote(markdown, title);
       setNotice("已保存为新笔记");
     },

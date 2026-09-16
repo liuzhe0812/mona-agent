@@ -56,6 +56,7 @@ import { cn } from "@/lib/utils";
 import { markdownToHtml } from "@/lib/markdown-to-html";
 import { useMaterialsOpenStore } from "@/lib/materials-open-store";
 import { listWikiPages, type WikiPageSummary } from "@/lib/materials-api";
+import { deriveNoteTitle } from "@/lib/note-title";
 import { exportNoteToDocx } from "@/lib/notes-export";
 import {
   downloadDoc2NoteRuntime,
@@ -1005,7 +1006,7 @@ export function NotesView({
     (selectedText: string) => {
       // 编辑器选区创建笔记，统一落到 vault 根目录。
       const notebookId = "";
-      const title = selectedText.trim().split("\n")[0].slice(0, 40) || "从选区创建的笔记";
+      const title = deriveNoteTitle(selectedText, "从选区创建的笔记");
       const nextNote: OperationNote = {
         ...createBlankNote(notebookId, "manual"),
         title,

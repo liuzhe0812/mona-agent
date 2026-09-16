@@ -458,6 +458,7 @@ describe("useMonaStream", () => {
         chat_id: "chat-tool-events",
         text: 'search "hermes"',
         kind: "tool_hint",
+        task_id: "task-tool-events",
         tool_events: [
           {
             phase: "start",
@@ -482,6 +483,7 @@ describe("useMonaStream", () => {
       'web_search({"query":"hermes-agent GitHub stars","count":8})',
     );
     expect(result.current.messages[0].toolEvents).toHaveLength(2);
+    expect(result.current.messages[0].taskId).toBe("task-tool-events");
   });
 
   it("dedupes finish-phase tool events after their start trace", () => {
@@ -1720,6 +1722,75 @@ describe("useMonaStream", () => {
     });
     expect(result.current.runStartedAt).toBeNull();
     expect(result.current.isStreaming).toBe(false);
+  });
+
+  it("tracks context compaction progress independently of model output", () => {
+    const fake = fakeClient();
+    const { result } = renderHook(() => useMonaStream("chat-compaction", EMPTY_MESSAGES), {
+      wrapper: wrap(fake.client),
+    });
+
+    act(() => {
+      fake.emit("chat-compaction", {
+        event: "message",
+        chat_id: "chat-compaction",
+        text: "正在整理上下文",
+        kind: "progress",
+        context_compacting: true,
+      });
+    });
+    expect(result.current.isCompacting).toBe(true);
+    expect(result.current.messages).toEqual([]);
+
+    act(() => {
+      fake.emit("chat-compaction", {
+        event: "message",
+        chat_id: "chat-compaction",
+        text: "",
+        kind: "progress",
+        context_compacting: false,
+      });
+    });
+    expect(result.current.isCompacting).toBe(false);
+  });
+
+  it("starts the run timer immediately when a message is sent", () => {
+    const fake = fakeClient();
+    const { result } = renderHook(() => useMonaStream("chat-local-start", EMPTY_MESSAGES), {
+      wrapper: wrap(fake.client),
+    });
+    const before = Date.now() / 1000;
+
+    act(() => result.current.send("hello"));
+
+    const after = Date.now() / 1000;
+    expect(result.current.isStreaming).toBe(true);
+    expect(result.current.isAwaitingModelResponse).toBe(true);
+    expect(result.current.runStartedAt).not.toBeNull();
+    expect(result.current.runStartedAt!).toBeGreaterThanOrEqual(before);
+    expect(result.current.runStartedAt!).toBeLessThanOrEqual(after);
+  });
+
+  it("leaves the waiting phase when the model emits its first response", async () => {
+    const fake = fakeClient();
+    const { result } = renderHook(() => useMonaStream("chat-awaiting-response", EMPTY_MESSAGES), {
+      wrapper: wrap(fake.client),
+    });
+
+    act(() => result.current.send("hello"));
+    expect(result.current.isAwaitingModelResponse).toBe(true);
+
+    act(() => {
+      fake.emit("chat-awaiting-response", {
+        event: "delta",
+        chat_id: "chat-awaiting-response",
+        text: "Hi",
+      });
+    });
+    await flushStreamFrame();
+
+    expect(result.current.isAwaitingModelResponse).toBe(false);
+    expect(result.current.isStreaming).toBe(true);
   });
 
   it("restores streaming when the selected chat is already running", () => {

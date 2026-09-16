@@ -1,5 +1,4 @@
 import type {
-  AgentChangeProposal,
   AgentDetailPayload,
   AgentInstruction,
   AgentInstructionHistoryItem,
@@ -18,8 +17,6 @@ import type {
   DeliveredFile,
   ImageGenerationSettingsUpdate,
   MessageType,
-  PptProject,
-  PptTemplatesResponse,
   ProviderSettingsUpdate,
   SettingsPayload,
   SettingsUpdate,
@@ -202,6 +199,7 @@ export async function listSessions(
     scheduled?: boolean;
     run_started_at?: number | null;
     conversation?: ConversationMeta | null;
+    workspace?: string | null;
   };
   const body = await request<{ sessions: Row[] }>(
     `${effectiveBase}/api/sessions`,
@@ -221,7 +219,7 @@ export async function listSessions(
     workflowRunStatus: s.workflow_run_status ?? null,
     waitingApproval: s.waiting_approval ?? false,
     scheduled: s.scheduled ?? false,
-    workspace: (s as Row & { workspace?: string | null }).workspace ?? null,
+    workspace: s.workspace ?? null,
     runStartedAt: s.run_started_at ?? null,
     conversation: s.conversation ?? null,
   }));
@@ -348,23 +346,11 @@ export async function cleanupManagedRuntimes(
 
 export async function fetchAutomationStatus(
   token: string,
+  agentId = "mona",
   base?: string,
 ): Promise<AutomationStatus> {
   const effectiveBase = base ?? (await getGatewayHttpBase());
-  return request(`${effectiveBase}/api/automation/status`, token);
-}
-
-export async function updateBrowserAutomation(
-  token: string,
-  enabled: boolean,
-  base?: string,
-): Promise<{ browserAutomationEnabled: boolean }> {
-  const effectiveBase = base ?? (await getGatewayHttpBase());
-  return request(`${effectiveBase}/api/automation/browser`, token, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ enabled }),
-  });
+  return request(`${effectiveBase}/api/automation/status?agent_id=${encodeURIComponent(agentId)}`, token);
 }
 
 export async function updateComputerUse(
@@ -481,19 +467,6 @@ export async function getAgentSkill(
     token,
   );
   return body.skill;
-}
-
-export async function listAgentChangeProposals(
-  token: string,
-  agentId: string,
-  base?: string,
-): Promise<AgentChangeProposal[]> {
-  const effectiveBase = base ?? (await getApiBase());
-  const body = await request<{ proposals: AgentChangeProposal[] }>(
-    `${effectiveBase}/api/agents/${encodeURIComponent(agentId)}/proposals`,
-    token,
-  );
-  return body.proposals;
 }
 
 export async function fetchWebuiThread(
@@ -701,6 +674,12 @@ export async function updateSettings(
   if (update.provider !== undefined) query.set("provider", update.provider);
   if (update.providerModel !== undefined)
     query.set("provider_model", update.providerModel);
+  if (update.autoCompactTokenLimit !== undefined) {
+    query.set(
+      "auto_compact_token_limit",
+      update.autoCompactTokenLimit == null ? "none" : String(update.autoCompactTokenLimit),
+    );
+  }
   if (update.reasoningEffort !== undefined)
     query.set("reasoning_effort", update.reasoningEffort ?? "none");
   if (update.timezone !== undefined) query.set("timezone", update.timezone);
@@ -932,431 +911,6 @@ export async function logoutWeixin(
     `${effectiveBase}/api/channels/weixin/logout`,
     token,
   );
-}
-
-export async function fetchPptTemplates(
-  token: string,
-  base?: string,
-): Promise<PptTemplatesResponse> {
-  const effectiveBase = base ?? (await getApiBase());
-  return request<PptTemplatesResponse>(
-    `${effectiveBase}/api/ppt/templates`,
-    token,
-  );
-}
-
-export async function fetchPptProjects(
-  token: string,
-  base?: string,
-): Promise<{ projects: PptProject[] }> {
-  const effectiveBase = base ?? (await getApiBase());
-  return request(`${effectiveBase}/api/ppt/projects`, token);
-}
-
-export async function fetchPptProjectPath(
-  token: string,
-  project: string,
-  base?: string,
-): Promise<{ path: string }> {
-  const effectiveBase = base ?? (await getApiBase());
-  const query = new URLSearchParams({ project });
-  return request(`${effectiveBase}/api/ppt/project-path?${query}`, token);
-}
-
-export interface PptSlide {
-  name: string;
-  url: string;
-  type?: "svg" | "image";
-}
-
-export async function fetchPptProjectSlides(
-  token: string,
-  project: string,
-  base?: string,
-): Promise<{ slides: PptSlide[] }> {
-  const effectiveBase = base ?? (await getApiBase());
-  const query = new URLSearchParams();
-  query.set("project", project);
-  return request(`${effectiveBase}/api/ppt/project-slides?${query}`, token);
-}
-
-export async function fetchPptPreviewPort(
-  token: string,
-  project: string,
-  base?: string,
-): Promise<{ port: number | null }> {
-  const effectiveBase = base ?? (await getApiBase());
-  const query = new URLSearchParams();
-  query.set("project", project);
-  return request(`${effectiveBase}/api/ppt/preview-port?${query}`, token);
-}
-
-export interface PptExportStatus {
-  status: "not_found" | "init" | "planning" | "generating" | "done";
-  phase?:
-    "config" | "generating" | "outline" | "producing" | "exporting" | "done";
-  slideCount: number;
-  hasExport: boolean;
-  hasSvgOutput: boolean;
-  hasPptxOutput: boolean;
-  hasSpecLock: boolean;
-  exportFile: string | null;
-  pipelineStage: string;
-  svgOutputCount: number;
-  svgFinalCount: number;
-}
-
-export async function fetchPptExportStatus(
-  token: string,
-  project: string,
-  base?: string,
-): Promise<PptExportStatus> {
-  const effectiveBase = base ?? (await getApiBase());
-  const query = new URLSearchParams();
-  query.set("project", project);
-  return request<PptExportStatus>(
-    `${effectiveBase}/api/ppt/export-status?${query}`,
-    token,
-  );
-}
-
-export interface PptVisualPlanPage {
-  page: string;
-  file: string;
-  title: string;
-  visual_type: string;
-  chart_template: string | null;
-  layout_template: string | null;
-  has_ai_image: boolean;
-  notes: string;
-}
-
-export async function fetchPptVisualPlan(
-  token: string,
-  project: string,
-  base?: string,
-): Promise<{ pages: PptVisualPlanPage[] }> {
-  const effectiveBase = base ?? (await getApiBase());
-  const query = new URLSearchParams();
-  query.set("project", project);
-  return request(`${effectiveBase}/api/ppt/visual-plan?${query}`, token);
-}
-
-export async function markPptGenerating(
-  token: string,
-  project: string,
-  action: "start" | "finish",
-  base?: string,
-): Promise<{ ok: boolean }> {
-  const effectiveBase = base ?? (await getApiBase());
-  const query = new URLSearchParams();
-  query.set("project", project);
-  query.set("action", action);
-  return request<{ ok: boolean }>(
-    `${effectiveBase}/api/ppt/mark-generating?${query}`,
-    token,
-  );
-}
-
-export interface PptSourceFile {
-  name: string;
-  path: string;
-}
-
-export async function pptAddSources(
-  token: string,
-  sources: string[],
-  base?: string,
-): Promise<{ files: PptSourceFile[] }> {
-  const effectiveBase = base ?? (await getApiBase());
-  const query = new URLSearchParams();
-  query.set("sources", sources.join("|"));
-  return request(`${effectiveBase}/api/ppt/add-sources?${query}`, token);
-}
-
-export interface PptOfficeCliStatus {
-  ok: boolean;
-  version: string | null;
-  path: string | null;
-  error: string | null;
-  supported: boolean;
-}
-
-export async function fetchPptOfficeCliCheck(
-  token: string,
-  base?: string,
-): Promise<PptOfficeCliStatus> {
-  const effectiveBase = base ?? (await getApiBase());
-  return request<PptOfficeCliStatus>(
-    `${effectiveBase}/api/ppt/officecli-check`,
-    token,
-  );
-}
-
-export async function downloadPptOfficeCli(
-  token: string,
-  base?: string,
-): Promise<{ ok: boolean; path?: string; cached?: boolean; error?: string }> {
-  const effectiveBase = base ?? (await getApiBase());
-  return request(`${effectiveBase}/api/ppt/officecli-download`, token);
-}
-
-// --- PPT V2 outline APIs (services port) ---
-
-export interface PptOutlinePage {
-  page: string;
-  file: string;
-  title: string;
-  bullets: string[];
-  visual_type: string;
-  chart_template: string | null;
-  layout_template: string;
-  has_ai_image: boolean;
-  layout: string;
-  notes: string;
-  summary: string;
-  image_plan: string;
-}
-
-export interface PptOutlineResponse {
-  ok: boolean;
-  pages: PptOutlinePage[];
-  revision: number;
-  schemaVersion: number;
-  locked: boolean;
-}
-
-export async function fetchPptOutline(
-  token: string,
-  name: string,
-  base?: string,
-): Promise<PptOutlineResponse> {
-  const effectiveBase = base ?? (await getServicesHttpBase());
-  const query = new URLSearchParams();
-  query.set("name", name);
-  return request<PptOutlineResponse>(
-    `${effectiveBase}/api/ppt/project/outline?${query}`,
-    token,
-  );
-}
-
-export async function savePptOutline(
-  token: string,
-  name: string,
-  expectedRevision: number,
-  pages: PptOutlinePage[],
-  base?: string,
-): Promise<{ ok: boolean; revision: number; pages: PptOutlinePage[] }> {
-  const effectiveBase = base ?? (await getServicesHttpBase());
-  return request<{ ok: boolean; revision: number; pages: PptOutlinePage[] }>(
-    `${effectiveBase}/api/ppt/project/outline`,
-    token,
-    {
-      method: "PUT",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ name, expectedRevision, pages }),
-    },
-  );
-}
-
-export async function lockPptOutline(
-  token: string,
-  name: string,
-  base?: string,
-): Promise<{ ok: boolean; revision: number }> {
-  const effectiveBase = base ?? (await getServicesHttpBase());
-  return request<{ ok: boolean; revision: number }>(
-    `${effectiveBase}/api/ppt/project/lock-outline`,
-    token,
-    {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ name }),
-    },
-  );
-}
-
-// --- PPT design spec summary (eight confirmations AI recommendation) ---
-
-export interface PptDesignSpecSummary {
-  schemaVersion?: number;
-  canvasFormat?: string;
-  pageCount?: number | null;
-  audience?: string;
-  styleMode?: string | null;
-  styleDescriptor?: string;
-  primaryColor?: string;
-  colorScheme?: string;
-  iconApproach?: string | null;
-  iconLibrary?: string | null;
-  typographyPlan?: string;
-  titleFont?: string;
-  bodyFont?: string;
-  formulaPolicy?: string | null;
-  imageApproach?: string | null;
-  imageRendering?: string | null;
-  imagePalette?: string | null;
-  updatedAt?: string;
-}
-
-export interface PptDesignSpecSummaryResponse {
-  ok: boolean;
-  summary: PptDesignSpecSummary | null;
-  error?: string;
-}
-
-export async function fetchPptDesignSpecSummary(
-  token: string,
-  name: string,
-  base?: string,
-): Promise<PptDesignSpecSummaryResponse> {
-  const effectiveBase = base ?? (await getServicesHttpBase());
-  const query = new URLSearchParams();
-  query.set("name", name);
-  return request<PptDesignSpecSummaryResponse>(
-    `${effectiveBase}/api/ppt/project/design-spec-summary?${query}`,
-    token,
-  );
-}
-
-export async function updatePptDesignSpecSummary(
-  token: string,
-  name: string,
-  patch: Partial<PptDesignSpecSummary>,
-  base?: string,
-): Promise<PptDesignSpecSummaryResponse> {
-  const effectiveBase = base ?? (await getServicesHttpBase());
-  const query = new URLSearchParams();
-  query.set("name", name);
-  return request<PptDesignSpecSummaryResponse>(
-    `${effectiveBase}/api/ppt/project/design-spec-summary?${query}`,
-    token,
-    {
-      method: "PUT",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(patch),
-    },
-  );
-}
-
-// --- PPT V3 per-page APIs (services port) ---
-
-export type PptPageState = "pending" | "previewing" | "confirmed";
-
-export interface PptPageInfo {
-  page: string;
-  file: string;
-  title: string;
-  mtime: number | null;
-  state: PptPageState;
-}
-
-export interface PptPagesResponse {
-  ok: boolean;
-  pages: PptPageInfo[];
-  outlineRevision: number;
-  confirmedCount: number;
-  totalCount: number;
-  currentPageIndex: number;
-}
-
-export async function fetchPptPages(
-  token: string,
-  name: string,
-  base?: string,
-): Promise<PptPagesResponse> {
-  const effectiveBase = base ?? (await getServicesHttpBase());
-  const query = new URLSearchParams();
-  query.set("name", name);
-  return request<PptPagesResponse>(
-    `${effectiveBase}/api/ppt/project/pages?${query}`,
-    token,
-  );
-}
-
-export async function confirmPptPage(
-  token: string,
-  name: string,
-  file: string,
-  expectedMtime: number,
-  base?: string,
-): Promise<{ ok: boolean; file: string; mtime: number; confirmedAt: string }> {
-  const effectiveBase = base ?? (await getServicesHttpBase());
-  return request<{
-    ok: boolean;
-    file: string;
-    mtime: number;
-    confirmedAt: string;
-  }>(`${effectiveBase}/api/ppt/project/page/confirm`, token, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ name, file, expectedMtime }),
-  });
-}
-
-export async function requestPptExport(
-  token: string,
-  name: string,
-  base?: string,
-): Promise<{ ok: boolean; exportRequestedAt: string }> {
-  const effectiveBase = base ?? (await getServicesHttpBase());
-  return request<{ ok: boolean; exportRequestedAt: string }>(
-    `${effectiveBase}/api/ppt/project/request-export`,
-    token,
-    {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ name }),
-    },
-  );
-}
-
-export async function savePptChatId(
-  token: string,
-  project: string,
-  chatId: string,
-  base?: string,
-): Promise<{ ok: boolean }> {
-  const effectiveBase = base ?? (await getApiBase());
-  const query = new URLSearchParams();
-  query.set("project", project);
-  query.set("chatId", chatId);
-  return request(`${effectiveBase}/api/ppt/save-chat-id?${query}`, token);
-}
-
-export async function deletePptProject(
-  token: string,
-  project: string,
-  base?: string,
-): Promise<{ ok: boolean }> {
-  const effectiveBase = base ?? (await getApiBase());
-  const query = new URLSearchParams();
-  query.set("project", project);
-  return request(`${effectiveBase}/api/ppt/delete-project?${query}`, token);
-}
-
-export async function fetchPptUrl(
-  token: string,
-  url: string,
-  project?: string,
-  base?: string,
-): Promise<{ ok: boolean; file?: string; output?: string; error?: string }> {
-  const effectiveBase = base ?? (await getApiBase());
-  const query = new URLSearchParams();
-  query.set("url", url);
-  if (project) query.set("project", project);
-  return request(`${effectiveBase}/api/ppt/fetch-url?${query}`, token);
-}
-
-export async function generatePptPreview(
-  token: string,
-  project: string,
-  base?: string,
-): Promise<{ ok: boolean; slideCount?: number; error?: string }> {
-  const effectiveBase = base ?? (await getApiBase());
-  const query = new URLSearchParams();
-  query.set("project", project);
-  return request(`${effectiveBase}/api/ppt/generate-preview?${query}`, token);
 }
 
 // ---------------------------------------------------------------------------
@@ -3480,8 +3034,8 @@ export async function renameArtifact(
 /** List all files of a project session's bound workspace directory.
  *
  *  The root is resolved server-side from the session's ``metadata.workspace``;
- *  clients cannot pass an arbitrary root. Machine-generated directories
- *  (``node_modules``, ``dist`` …) are skipped by the server. */
+ *  clients cannot pass an arbitrary root. The server returns unfiltered
+ *  resource-manager entries, including directories and hidden/build files. */
 export async function listProjectFiles(
   token: string,
   sessionKey: string,

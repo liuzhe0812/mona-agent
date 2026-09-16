@@ -576,7 +576,7 @@ describe("MonaClient", () => {
     });
   });
 
-  it("routes a PPT turn with agent_kind in the message envelope", () => {
+  it("routes a video turn with agent_kind in the message envelope", () => {
     const client = new MonaClient({
       url: "ws://test",
       reconnect: false,
@@ -585,13 +585,13 @@ describe("MonaClient", () => {
     client.connect();
     lastSocket().fakeOpen();
 
-    client.sendMessage("chat-ppt", "制作一份汇报 PPT", undefined, { agentKind: "ppt" });
+    client.sendMessage("chat-video", "继续制作当前视频", undefined, { agentKind: "video" });
 
     expect(JSON.parse(lastSocket().sent.at(-1) as string)).toMatchObject({
       type: "message",
-      chat_id: "chat-ppt",
-      content: "制作一份汇报 PPT",
-      agent_kind: "ppt",
+      chat_id: "chat-video",
+      content: "继续制作当前视频",
+      agent_kind: "video",
     });
   });
 

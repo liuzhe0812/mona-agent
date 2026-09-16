@@ -1,5 +1,5 @@
-import { useMemo, useState } from "react";
-import { LibraryBig, Plus, Search, Settings2, UsersRound, X } from "lucide-react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { Download, LibraryBig, LoaderCircle, Plus, Search, Settings2, UsersRound, X } from "lucide-react";
 import { useTranslation } from "react-i18next";
 
 import { ChatList } from "@/components/ChatList";
@@ -8,7 +8,7 @@ import {
   MONA_AGENT_ID,
   MONA_AVATAR_IMAGE,
 } from "@/components/room/AgentAvatar";
-import { useAgents } from "@/components/room/useAgents";
+import { invalidateAgents, useAgents } from "@/components/room/useAgents";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -20,7 +20,8 @@ import {
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { filterSessionsByQuery } from "@/lib/session-search";
-import type { AgentSummary, ChatSummary } from "@/lib/types";
+import { fetchExpertCatalog, fetchExpertInstallJob, startExpertInstall } from "@/lib/api";
+import type { AgentSummary, ChatSummary, ExpertCatalogItem } from "@/lib/types";
 import { cn } from "@/lib/utils";
 import { useClientContextOrNull } from "@/providers/ClientProvider";
 
@@ -67,8 +68,60 @@ export function SessionListPanel(props: SessionListPanelProps) {
   const [query, setQuery] = useState("");
   const [createQuery, setCreateQuery] = useState("");
   const [createMenuOpen, setCreateMenuOpen] = useState(false);
+  const [expertUpdates, setExpertUpdates] = useState<ReadonlyMap<string, ExpertCatalogItem>>(
+    () => new Map(),
+  );
+  const [updatingAgentId, setUpdatingAgentId] = useState<string | null>(null);
+  const [failedUpdateAgentId, setFailedUpdateAgentId] = useState<string | null>(null);
+  const mounted = useRef(true);
   const clientContext = useClientContextOrNull();
-  const agentsById = useAgents(clientContext?.token ?? null);
+  const token = clientContext?.token ?? null;
+  const agentsById = useAgents(token);
+
+  useEffect(() => () => {
+    mounted.current = false;
+  }, []);
+
+  const loadExpertUpdates = useCallback(async () => {
+    if (!token) return;
+    try {
+      const catalog = await fetchExpertCatalog(token);
+      const updates = new Map(
+        catalog.installEnabled
+          ? catalog.experts
+            .filter((expert) => expert.installed && expert.updateAvailable && expert.compatible)
+            .map((expert) => [expert.id, expert] as const)
+          : [],
+      );
+      if (mounted.current) setExpertUpdates(updates);
+    } catch {
+      if (mounted.current) setExpertUpdates(new Map());
+    }
+  }, [token]);
+
+  useEffect(() => {
+    if (createMenuOpen) void loadExpertUpdates();
+  }, [createMenuOpen, loadExpertUpdates]);
+
+  const updateExpert = useCallback(async (expert: ExpertCatalogItem) => {
+    if (!token || updatingAgentId) return;
+    setUpdatingAgentId(expert.id);
+    setFailedUpdateAgentId(null);
+    try {
+      let job = (await startExpertInstall(token, expert.id, expert.version)).job;
+      while (job.state === "queued" || job.state === "running") {
+        await new Promise((resolve) => window.setTimeout(resolve, 650));
+        job = (await fetchExpertInstallJob(token, job.jobId)).job;
+      }
+      if (job.state !== "completed") throw new Error(job.error || "expert update failed");
+      invalidateAgents();
+      await loadExpertUpdates();
+    } catch {
+      if (mounted.current) setFailedUpdateAgentId(expert.id);
+    } finally {
+      if (mounted.current) setUpdatingAgentId(null);
+    }
+  }, [loadExpertUpdates, token, updatingAgentId]);
   const filteredSessions = useMemo(
     () => filterSessionsByQuery(
       props.sessions,
@@ -180,7 +233,13 @@ export function SessionListPanel(props: SessionListPanelProps) {
                     props.onSelectAgent(agent.id);
                   }}
                   settingsLabel={t("chat.agentSettingsFor", { name: agent.displayName })}
-                />
+                  update={expertUpdates.get(agent.id)}
+                  updating={updatingAgentId === agent.id}
+                   updateFailed={failedUpdateAgentId === agent.id}
+                   onUpdate={(expert) => void updateExpert(expert)}
+                   updateLabel={`${t("experts.update")} ${agent.displayName}`}
+                   retryLabel={t("experts.retry")}
+                 />
               )) : (
                 <p className="px-2 py-5 text-center text-caption text-muted-foreground">
                   {t("chat.noMatchingAgents")}
@@ -245,12 +304,25 @@ function AgentConversationItem({
   onSelect,
   onOpenSettings,
   settingsLabel,
+  update,
+  updating,
+  updateFailed,
+  onUpdate,
+  updateLabel,
+  retryLabel,
 }: {
   agent: AgentSummary;
   onSelect: () => void;
   onOpenSettings: () => void;
   settingsLabel: string;
+  update?: ExpertCatalogItem;
+  updating: boolean;
+  updateFailed: boolean;
+  onUpdate: (expert: ExpertCatalogItem) => void;
+  updateLabel: string;
+  retryLabel: string;
 }) {
+  const actionLabel = updateFailed ? `${retryLabel} ${agent.displayName}` : updateLabel;
   return (
     <div className="flex items-center">
       <DropdownMenuItem onSelect={onSelect} className="h-9 min-w-0 flex-1">
@@ -262,6 +334,24 @@ function AgentConversationItem({
         />
         <span className="min-w-0 flex-1 truncate">{agent.displayName}</span>
       </DropdownMenuItem>
+      {update ? (
+        <Button
+          type="button"
+          variant="ghost"
+          size="icon"
+          aria-label={actionLabel}
+          title={actionLabel}
+          disabled={updating}
+          onClick={() => onUpdate(update)}
+          className="h-7 w-7 shrink-0 p-0 text-primary hover:text-primary"
+        >
+          {updating ? (
+            <LoaderCircle className="h-3.5 w-3.5 animate-spin" aria-hidden />
+          ) : (
+            <Download className="h-3.5 w-3.5" aria-hidden />
+          )}
+        </Button>
+      ) : null}
       <Button
         type="button"
         variant="ghost"

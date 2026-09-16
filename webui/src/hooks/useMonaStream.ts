@@ -468,7 +468,7 @@ export interface SendOptions {
   canvasId?: string;
   canvasPath?: string;
   /** Route only this turn through a dedicated document Agent. */
-  agentKind?: "ppt" | "video";
+  agentKind?: "video";
   /** Structured ``@Agent`` targets in a room (multi-agent guide 7.5). */
   targetAgentIds?: string[];
   /** A bounded topic debate/discussion; rendered separately from workflows. */
@@ -489,7 +489,14 @@ function normalizedTokenUsage(value: Record<string, number> | undefined): UIMess
     Math.round(value.total_tokens ?? promptTokens + completionTokens),
   );
   if (Math.max(promptTokens, completionTokens, cachedTokens, totalTokens) === 0) return undefined;
-  return { promptTokens, completionTokens, cachedTokens, totalTokens };
+  const contextTokens = Math.max(0, Math.round(value.context_tokens ?? 0));
+  return {
+    promptTokens,
+    completionTokens,
+    cachedTokens,
+    totalTokens,
+    ...(contextTokens ? { contextTokens } : {}),
+  };
 }
 
 function stampLastAssistantTurnMetadata(
@@ -567,6 +574,10 @@ export function useMonaStream(
 ): {
   messages: UIMessage[];
   isStreaming: boolean;
+  /** True after sending a turn until Mona emits its first visible activity. */
+  isAwaitingModelResponse: boolean;
+  /** True only while the server is generating a replacement context handoff. */
+  isCompacting: boolean;
   /** True after the user requested stop until the server confirms completion. */
   stopping: boolean;
   /** Unix epoch seconds when the current user turn started (WebSocket ``goal_status``). */
@@ -598,6 +609,10 @@ export function useMonaStream(
   const [isStreaming, setIsStreaming] = useState(
     initialStreaming || hasPendingToolCalls || initialRunStartedAt !== null,
   );
+  // A restored in-progress turn may already have emitted activity before this
+  // view subscribed, so only locally sent turns enter the waiting phase.
+  const [isAwaitingModelResponse, setIsAwaitingModelResponse] = useState(false);
+  const [isCompacting, setIsCompacting] = useState(false);
   const [stopping, setStopping] = useState(false);
   const stoppingRef = useRef(false);
   /** Unix epoch seconds when the current user turn started; cleared on ``idle``. */
@@ -952,6 +967,8 @@ export function useMonaStream(
         : false) || hasPendingToolCalls || restoredRunStartedAt !== null,
     );
     setStreamError(null);
+    setIsAwaitingModelResponse(false);
+    setIsCompacting(false);
     setRunStartedAt(restoredRunStartedAt);
     setGoalState(chatId && client ? client.getGoalState(chatId) : undefined);
     setTaskPlan(chatId && client ? client.getTaskPlan?.(chatId) : undefined);
@@ -996,6 +1013,7 @@ export function useMonaStream(
         const chunk = typeof ev.text === "string" ? ev.text : "";
         if (!chunk) return;
         clearActivitySegment();
+        setIsAwaitingModelResponse(false);
         setIsStreaming(true);
         pendingStreamEventsRef.current.push({
           kind: "delta",
@@ -1014,6 +1032,7 @@ export function useMonaStream(
         const chunk = ev.text;
         if (!chunk) return;
         if (fileEditSegmentRef.current) clearActivitySegment();
+        setIsAwaitingModelResponse(false);
         setIsStreaming(true);
         pendingStreamEventsRef.current.push({
           kind: "reasoning",
@@ -1073,10 +1092,12 @@ export function useMonaStream(
           if (typeof ev.started_at === "number") {
             setRunStartedAt(ev.started_at);
           } else {
-            setRunStartedAt(null);
+            setRunStartedAt((current) => current ?? Date.now() / 1000);
           }
         } else {
           setIsStreaming(false);
+          setIsAwaitingModelResponse(false);
+          setIsCompacting(false);
           stoppingRef.current = false;
           setStopping(false);
           suppressStreamUntilTurnEndRef.current = false;
@@ -1114,6 +1135,7 @@ export function useMonaStream(
         });
         if (run.status === "succeeded" || run.status === "failed" || run.status === "cancelled") {
           setIsStreaming(false);
+          setIsAwaitingModelResponse(false);
           stoppingRef.current = false;
           setStopping(false);
           setRunStartedAt(null);
@@ -1129,6 +1151,7 @@ export function useMonaStream(
       // compatibility with servers that add the event before the shared type.
       if ((ev as { event?: string }).event === "agent_mentions_completed") {
         setIsStreaming(false);
+        setIsAwaitingModelResponse(false);
         stoppingRef.current = false;
         setStopping(false);
         suppressStreamUntilTurnEndRef.current = false;
@@ -1146,6 +1169,8 @@ export function useMonaStream(
           streamEndTimerRef.current = null;
         }
         setIsStreaming(false);
+        setIsAwaitingModelResponse(false);
+        setIsCompacting(false);
         stoppingRef.current = false;
         setStopping(false);
         setMessages((prev) => {
@@ -1181,6 +1206,10 @@ export function useMonaStream(
       }
 
       if (ev.event === "message") {
+        if (typeof ev.context_compacting === "boolean") {
+          setIsCompacting(ev.context_compacting);
+          return;
+        }
         if (
           suppressStreamUntilTurnEndRef.current &&
           (ev.kind === "tool_hint" || ev.kind === "progress" || ev.kind === "reasoning")
@@ -1193,6 +1222,7 @@ export function useMonaStream(
         if (ev.kind === "reasoning") {
           const line = ev.text;
           if (!line) return;
+          setIsAwaitingModelResponse(false);
           if (fileEditSegmentRef.current) clearActivitySegment();
           setMessages((prev) => closeReasoningStream(attachReasoningChunk(prev, line, {
             ensure: ensureActivitySegmentId,
@@ -1210,6 +1240,7 @@ export function useMonaStream(
               ? [ev.text]
               : [];
           if (lines.length === 0) return;
+          setIsAwaitingModelResponse(false);
           setMessages((prev) => {
             const segmentId = ensureActivitySegmentId();
             const last = prev[prev.length - 1];
@@ -1217,6 +1248,7 @@ export function useMonaStream(
               last
               && last.kind === "trace"
               && !last.isStreaming
+              && (!identity.taskId || identity.taskId === last.taskId)
               && (!last.activitySegmentId || last.activitySegmentId === segmentId)
             ) {
               const previousTraces = last.traces?.length
@@ -1235,6 +1267,7 @@ export function useMonaStream(
                   ? mergedLines.traces[mergedLines.traces.length - 1]
                   : lines[lines.length - 1],
                 activitySegmentId: last.activitySegmentId ?? segmentId,
+                ...(identity.taskId ? { taskId: identity.taskId } : {}),
                 ...(boundedToolEvents(last.toolEvents, ev.tool_events)
                   ? { toolEvents: boundedToolEvents(last.toolEvents, ev.tool_events) }
                   : {}),
@@ -1254,6 +1287,7 @@ export function useMonaStream(
                 ...(boundedToolEvents(undefined, ev.tool_events)
                   ? { toolEvents: boundedToolEvents(undefined, ev.tool_events) }
                   : {}),
+                ...(identity.taskId ? { taskId: identity.taskId } : {}),
                 activitySegmentId: segmentId,
                 createdAt: Date.now(),
                 ...(ev.author_id
@@ -1269,6 +1303,7 @@ export function useMonaStream(
           ? ev.media_urls.map((m) => toMediaAttachment(m))
           : ev.media?.map((url) => toMediaAttachment({ url }));
         const hasMedia = !!media && media.length > 0;
+        setIsAwaitingModelResponse(false);
 
         // A complete (non-streamed) assistant message. If a stream was in
         // flight, drop the placeholder so we don't render the text twice.
@@ -1408,6 +1443,7 @@ export function useMonaStream(
         if (edits.length === 0) return;
         const normalized = mergeFileEdits(undefined, edits);
         if (normalized.length === 0) return;
+        setIsAwaitingModelResponse(false);
         const opensFileEditPhase = normalized.some(
           (edit) => edit.status === "editing" || edit.phase === "start",
         );
@@ -1451,6 +1487,7 @@ export function useMonaStream(
       if (ev.event === "deliver_files") {
         const files = Array.isArray(ev.files) ? ev.files : [];
         if (files.length === 0) return;
+        setIsAwaitingModelResponse(false);
         const media = ev.media_urls?.map((item) => toMediaAttachment(item)) ?? [];
         setMessages((prev) => {
           let targetIdx: number | null = null;
@@ -1576,6 +1613,9 @@ export function useMonaStream(
       });
       // Mark streaming immediately so the UI shows the loading indicator
       // right away, before the first delta arrives from the server.
+      setRunStartedAt(Date.now() / 1000);
+      setIsAwaitingModelResponse(true);
+      setIsCompacting(false);
       setIsStreaming(true);
       const wireMedia = hasImages ? images!.map((i) => i.media) : undefined;
       if (options) {
@@ -1672,6 +1712,8 @@ export function useMonaStream(
   return {
     messages,
     isStreaming,
+    isAwaitingModelResponse,
+    isCompacting,
     stopping,
     runStartedAt,
     goalState,

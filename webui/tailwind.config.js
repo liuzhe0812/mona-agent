@@ -123,6 +123,13 @@ export default {
           hover: "hsl(var(--action-hover))",
           foreground: "hsl(var(--action-foreground))",
         },
+        interaction: {
+          foreground: "hsl(var(--interaction-foreground))",
+          surface: "hsl(var(--interaction-surface))",
+          border: "hsl(var(--interaction-border))",
+          hover: "hsl(var(--interaction-hover))",
+          pressed: "hsl(var(--interaction-pressed))",
+        },
         // 语义状态色（design §4.4）：alpha 修饰符可用（如 bg-info-strong/[0.07]）
         info: {
           DEFAULT: "hsl(var(--info))",
@@ -136,6 +143,14 @@ export default {
         warning: {
           DEFAULT: "hsl(var(--warning))",
           hover: "hsl(var(--warning-hover))",
+        },
+        data: {
+          1: "hsl(var(--data-1))",
+          2: "hsl(var(--data-2))",
+          3: "hsl(var(--data-3))",
+          4: "hsl(var(--data-4))",
+          5: "hsl(var(--data-5))",
+          6: "hsl(var(--data-6))",
         },
         // A 股涨跌色（数据可视化例外）：text-stock-up / text-stock-down
         stock: {

@@ -3,6 +3,7 @@ import {
   useEffect,
   useRef,
   useState,
+  type MouseEvent as ReactMouseEvent,
   type ReactNode,
 } from "react";
 import { Check, ChevronRight, ChevronUp, Copy, CornerDownLeft, Download, FileIcon, FolderOpen, GitFork, ImageIcon, MoreHorizontal, PlaySquare, Share2, Sparkles, Wrench, BookmarkCheck, Bookmark } from "lucide-react";
@@ -32,6 +33,7 @@ import {
 } from "@/components/ui/tooltip";
 import { cn } from "@/lib/utils";
 import { formatTurnLatency } from "@/lib/format";
+import { deriveNoteTitle } from "@/lib/note-title";
 import { createNoteFromChat, downloadMediaUrl, isTauri, revealItemInDir } from "@/lib/tauri";
 import type { UIImage, UIMediaAttachment, UIMessage } from "@/lib/types";
 
@@ -189,44 +191,42 @@ function QuotedMessagePreview({ quote }: { quote: NonNullable<UIMessage["quote"]
   );
 }
 
-function MessageContextMenu({
-  children,
-  copied,
-  onCopy,
-  onQuote,
-  onSaveAsNote,
-  saving,
-  saved,
-}: {
-  children: ReactNode;
-  copied: boolean;
-  onCopy: () => void;
-  onQuote?: () => void;
-  onSaveAsNote?: () => void;
-  saving: boolean;
-  saved: boolean;
-}) {
+function selectedTextWithin(element: HTMLElement): string | null {
+  const selection = window.getSelection();
+  if (!selection || selection.isCollapsed || selection.rangeCount === 0) return null;
+  if (!element.contains(selection.getRangeAt(0).commonAncestorContainer)) return null;
+  const text = selection.toString();
+  return text.trim() ? text : null;
+}
+
+function MessageContextMenu({ children }: { children: ReactNode }) {
   const { t } = useTranslation();
+  const [selectedText, setSelectedText] = useState("");
+
+  const handleContextMenu = useCallback((event: ReactMouseEvent<HTMLDivElement>) => {
+    const text = selectedTextWithin(event.currentTarget);
+    if (!text) {
+      event.preventDefault();
+      return;
+    }
+    setSelectedText(text);
+  }, []);
+
+  const handleCopy = useCallback(() => {
+    if (!selectedText || !navigator.clipboard?.writeText) return;
+    void navigator.clipboard.writeText(selectedText);
+  }, [selectedText]);
+
   return (
-    <ContextMenu>
-      <ContextMenuTrigger asChild>{children}</ContextMenuTrigger>
+    <ContextMenu onOpenChange={(open) => !open && setSelectedText("")}>
+      <ContextMenuTrigger asChild onContextMenuCapture={handleContextMenu}>
+        {children}
+      </ContextMenuTrigger>
       <ContextMenuContent>
-        <ContextMenuItem onSelect={onCopy}>
-          {copied ? <Check className="h-4 w-4" aria-hidden /> : <Copy className="h-4 w-4" aria-hidden />}
-          {copied ? t("message.copiedMessage") : t("message.copyMessage")}
+        <ContextMenuItem onSelect={handleCopy}>
+          <Copy className="h-4 w-4" aria-hidden />
+          {t("message.copyMessage")}
         </ContextMenuItem>
-        {onQuote ? (
-          <ContextMenuItem onSelect={onQuote}>
-            <CornerDownLeft className="h-4 w-4" aria-hidden />
-            {t("message.quoteMessage")}
-          </ContextMenuItem>
-        ) : null}
-        {onSaveAsNote ? (
-          <ContextMenuItem disabled={saving} onSelect={onSaveAsNote}>
-            {saved ? <BookmarkCheck className="h-4 w-4" aria-hidden /> : <Bookmark className="h-4 w-4" aria-hidden />}
-            {saved ? t("message.savedAsNote") : t("message.saveAsNote")}
-          </ContextMenuItem>
-        ) : null}
       </ContextMenuContent>
     </ContextMenu>
   );
@@ -302,7 +302,7 @@ export function MessageBubble({
 
   const onSaveAsNote = useCallback(() => {
     if (message.role !== "assistant" || !isTauri() || saved || saving) return;
-    const title = message.content.split("\n").find((line) => line.trim().length > 0)?.slice(0, 60) ?? "未命名笔记";
+    const title = deriveNoteTitle(message.content);
     setSaving(true);
     createNoteFromChat(title, message.content)
       .then(() => {
@@ -379,13 +379,7 @@ export function MessageBubble({
     const displayContent = visibleUserContent(message, media);
     const hasText = displayContent.trim().length > 0;
     return (
-      <MessageContextMenu
-        copied={copied}
-        onCopy={onCopyMessage}
-        onQuote={quoteMessage}
-        saving={saving}
-        saved={saved}
-      >
+      <MessageContextMenu>
         <div
           data-testid={`message-bubble-${message.id}`}
         className={cn(
@@ -477,14 +471,7 @@ export function MessageBubble({
     <MarkdownText streaming={!!message.isStreaming}>{message.content}</MarkdownText>
   );
   return (
-    <MessageContextMenu
-      copied={copied}
-      onCopy={onCopyMessage}
-      onQuote={quoteMessage}
-      onSaveAsNote={canSaveAsNote ? onSaveAsNote : undefined}
-      saving={saving}
-      saved={saved}
-    >
+    <MessageContextMenu>
       <div
       data-testid={`message-bubble-${message.id}`}
       className={cn(

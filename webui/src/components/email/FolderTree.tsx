@@ -511,7 +511,7 @@ export function FolderTree({ gatewayUrl, view = "mail", onViewChange, onOpenSubs
                                     </span>
                                   )}
                                   {!isRenaming && folder.unreadCount && folder.unreadCount > 0 ? (
-                                    <span className="flex h-4 min-w-[16px] shrink-0 items-center justify-center rounded-full bg-primary px-1 text-[10px] font-medium text-primary-foreground">
+                                    <span className="flex h-4 min-w-[16px] shrink-0 items-center justify-center rounded-full bg-[hsl(var(--brand-red))] px-1 text-[10px] font-medium text-white">
                                       {folder.unreadCount > 99 ? "99+" : folder.unreadCount}
                                     </span>
                                   ) : null}

@@ -55,6 +55,19 @@ describe("ConversationAvatar", () => {
     expect(badge).toBeTruthy();
   });
 
+  it("keeps the user's Mona avatar on task badges", () => {
+    const customAvatar = "data:image/png;base64,dXNlci1hdmF0YXI=";
+    const agents = new Map([
+      ["mona", { id: "mona", displayName: "Mona", avatarUrl: customAvatar, enabled: true }],
+    ]);
+    const { container } = render(
+      <ConversationAvatar taskTitle="制作新能源报告" agentsById={agents} />,
+    );
+
+    expect(container.querySelector(`img[src="${customAvatar}"]`)).toBeTruthy();
+    expect(container.querySelector('img[src="/brand/mona_avatar_human.png"]')).toBeNull();
+  });
+
   it("renders a stacked cluster with overflow count for rooms", () => {
     const conversation: ConversationMeta = {
       type: "room",
@@ -81,6 +94,7 @@ describe("ConversationAvatar", () => {
     ["com.mona.xhs-operator", "/brand/agents/xhs-operator.png"],
     ["com.mona.academic-researcher", "/brand/agents/academic-researcher.png"],
     ["com.mona.a-share-analyst", "/brand/agents/a-share-analyst.png"],
+    ["com.mona.musician", "/brand/agents/musician.webp"],
   ])("uses a distinct bundled portrait for %s", (agentId, avatarUrl) => {
     const { container } = render(<AgentAvatar agentId={agentId} />);
     expect(container.querySelector(`img[src="${avatarUrl}"]`)).toBeTruthy();

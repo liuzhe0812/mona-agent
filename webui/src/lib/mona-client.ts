@@ -1,5 +1,4 @@
 import type {
-  AgentChangeProposal,
   AgentInstruction,
   AgentSkillSetupJob,
   AgentSummary,
@@ -86,7 +85,7 @@ type WorkflowRunUpdatedHandler = (chatId: string, run: WorkflowRun | null, error
  *  not a delta — replace any previously seen list for the same step). */
 type WorkflowStepActivityHandler = (chatId: string, payload: WorkflowStepActivityPayload) => void;
 type ApprovalRequestedHandler = (payload: ApprovalRequestedPayload) => void;
-type AgentsUpdatedHandler = (agentId: string, event: "agents_updated" | "agent_instructions_updated" | "agent_skills_updated" | "agent_change_proposal_created" | "agent_change_proposal_resolved") => void;
+type AgentsUpdatedHandler = (agentId: string, event: "agents_updated" | "agent_instructions_updated" | "agent_skills_updated") => void;
 /** Room-scoped command results share one pending map; workflow commands add
  *  their optional payload fields via this intersection. */
 type AnyRoomCommandResult = RoomCommandResult & WorkflowCommandResult;
@@ -156,7 +155,6 @@ export class MonaClient {
   private runtimeModelHandlers = new Set<RuntimeModelHandler>();
   private sessionUpdateHandlers = new Set<SessionUpdateHandler>();
   private artifactsChangedHandlers = new Set<(chatId?: string) => void>();
-  private pptPhaseChangedHandlers = new Set<(payload: { projectName: string; phase: string }) => void>();
   private videoProjectChangedHandlers = new Set<(payload: { projectName: string; hint: string }) => void>();
   private runStatusHandlers = new Set<RunStatusHandler>();
   private roomUpdatedHandlers = new Set<RoomUpdatedHandler>();
@@ -167,19 +165,6 @@ export class MonaClient {
   private approvalRequestedHandlers = new Set<ApprovalRequestedHandler>();
   private agentsUpdatedHandlers = new Set<AgentsUpdatedHandler>();
   private errorHandlers = new Set<ErrorHandler>();
-  private pptUploadHandlers = new Set<(result: { ok: boolean; files?: { name: string; path: string }[]; error?: string }) => void>();
-  private pptSaveBrandHandlers = new Set<(result: { ok: boolean; brandId?: string; error?: string }) => void>();
-  private pptDeleteBrandHandlers = new Set<(result: { ok: boolean; brandId?: string; error?: string }) => void>();
-  private pptImportNativeHandlers = new Set<(result: {
-    ok: boolean;
-    templateId?: string;
-    name?: string;
-    pageCount?: number;
-    coverUrl?: string;
-    primaryColor?: string;
-    error?: string;
-  }) => void>();
-  private pptDeleteNativeHandlers = new Set<(result: { ok: boolean; templateId?: string; error?: string }) => void>();
   private docUploadHandlers = new Set<(result: {
     ok: boolean;
     files?: { name: string; path: string; size?: number; mime?: string }[];
@@ -269,15 +254,6 @@ export class MonaClient {
     };
   }
 
-  /** Subscribe to server-pushed ``ppt_phase_changed`` broadcasts: a PPT
-   *  project's lifecycle phase changed, listeners should refresh its status. */
-  onPptPhaseChanged(handler: (payload: { projectName: string; phase: string }) => void): Unsubscribe {
-    this.pptPhaseChangedHandlers.add(handler);
-    return () => {
-      this.pptPhaseChangedHandlers.delete(handler);
-    };
-  }
-
   /** Subscribe to server-pushed ``video_project_changed`` broadcasts: a video
    *  project's state changed, listeners should refresh per ``hint`` granularity. */
   onVideoProjectChanged(handler: (payload: { projectName: string; hint: string }) => void): Unsubscribe {
@@ -305,63 +281,6 @@ export class MonaClient {
     };
   }
 
-  onPptUploadResult(
-    handler: (result: { ok: boolean; files?: { name: string; path: string }[]; error?: string }) => void,
-  ): Unsubscribe {
-    this.pptUploadHandlers.add(handler);
-    return () => {
-      this.pptUploadHandlers.delete(handler);
-    };
-  }
-
-  onPptSaveBrandResult(
-    handler: (result: { ok: boolean; brandId?: string; error?: string }) => void,
-  ): Unsubscribe {
-    this.pptSaveBrandHandlers.add(handler);
-    return () => {
-      this.pptSaveBrandHandlers.delete(handler);
-    };
-  }
-
-  onPptDeleteBrandResult(
-    handler: (result: { ok: boolean; brandId?: string; error?: string }) => void,
-  ): Unsubscribe {
-    this.pptDeleteBrandHandlers.add(handler);
-    return () => {
-      this.pptDeleteBrandHandlers.delete(handler);
-    };
-  }
-
-  onPptImportNativeResult(
-    handler: (result: {
-      ok: boolean;
-      templateId?: string;
-      name?: string;
-      pageCount?: number;
-      coverUrl?: string;
-      primaryColor?: string;
-      error?: string;
-    }) => void,
-  ): Unsubscribe {
-    this.pptImportNativeHandlers.add(handler);
-    return () => {
-      this.pptImportNativeHandlers.delete(handler);
-    };
-  }
-
-  onPptDeleteNativeResult(
-    handler: (result: { ok: boolean; templateId?: string; error?: string }) => void,
-  ): Unsubscribe {
-    this.pptDeleteNativeHandlers.add(handler);
-    return () => {
-      this.pptDeleteNativeHandlers.delete(handler);
-    };
-  }
-
-  sendPptUpload(files: { name: string; data_url: string }[]): void {
-    this.queueSend({ type: "ppt_upload", files });
-  }
-
   /**
    * Upload documents for the "文档加工" workbench. Files are written to
    * ``workspace/uploads/<chat_id>/`` on the server. The returned relative
@@ -387,18 +306,6 @@ export class MonaClient {
     return () => {
       this.docUploadHandlers.delete(handler);
     };
-  }
-
-  sendPptDeleteBrand(data: { brandId: string }): void {
-    this.queueSend({ type: "ppt_delete_brand", data });
-  }
-
-  sendPptImportNative(file: { name: string; data_url: string }): void {
-    this.queueSend({ type: "ppt_import_native", file });
-  }
-
-  sendPptDeleteNative(data: { templateId: string }): void {
-    this.queueSend({ type: "ppt_delete_native", data });
   }
 
   /** Last ``goal_status`` ``started_at`` (unix sec) for *chatId*, if the turn is running. */
@@ -613,20 +520,6 @@ export class MonaClient {
     });
   }
 
-  stageAgentSkill(agentId: string, name: string, content: string): Promise<AgentChangeProposal> {
-    return this.sendAgentCommandRaw("agent_skill_stage_result", (requestId) => ({
-      type: "agent_skill_stage",
-      agent_id: agentId,
-      name,
-      content,
-      request_id: requestId,
-    })).then((result) => {
-      const proposal = (result as { proposal?: AgentChangeProposal }).proposal;
-      if (!proposal) throw new Error("malformed agent_skill_stage_result");
-      return proposal;
-    });
-  }
-
   actOnAgentSkill(
     agentId: string,
     name: string,
@@ -639,26 +532,6 @@ export class MonaClient {
       action,
       request_id: requestId,
     })).then(() => undefined);
-  }
-
-  resolveAgentChange(
-    agentId: string,
-    proposalId: string,
-    token: string,
-    approve: boolean,
-  ): Promise<AgentChangeProposal> {
-    return this.sendAgentCommandRaw("resolve_agent_change_result", (requestId) => ({
-      type: "resolve_agent_change",
-      agent_id: agentId,
-      proposal_id: proposalId,
-      token,
-      approve,
-      request_id: requestId,
-    })).then((result) => {
-      const proposal = (result as { proposal?: AgentChangeProposal }).proposal;
-      if (!proposal) throw new Error("malformed resolve_agent_change_result");
-      return proposal;
-    });
   }
 
   /** Edit room title / goal / membership. */
@@ -997,9 +870,7 @@ export class MonaClient {
    *  ``workspace`` binds the session to a project working directory. Pass
    *  ``null`` or omit for the default "会话" section.
    *
-   *  ``agentKind`` routes the session to a dedicated document agent loop.
-   *  Supported: ``"ppt"`` / ``"video"`` — each routes to a
-   *  DocumentAgentLoop with its own tool whitelist + soul prompt. */
+   *  ``agentKind`` routes the session to a dedicated document agent loop. */
   newChat(
     timeoutMs: number = 5_000,
     ephemeral = false,
@@ -1093,7 +964,7 @@ export class MonaClient {
       canvasId?: string;
       canvasPath?: string;
       /** Route only this message through a dedicated document Agent. */
-      agentKind?: "ppt" | "video";
+      agentKind?: "video";
       taskId?: string;
       origin?: "profile_advice";
       profileAdviceId?: string;
@@ -1250,80 +1121,12 @@ export class MonaClient {
       return;
     }
 
-    // PPT phase broadcasts use a ``type`` envelope (not ``event``).
-    if ((parsed as { type?: string }).type === "ppt_phase_changed") {
-      const payload = parsed as unknown as { project_name?: string; phase?: string };
-      for (const handler of this.pptPhaseChangedHandlers) {
-        handler({ projectName: payload.project_name ?? "", phase: payload.phase ?? "" });
-      }
-      return;
-    }
-
-    if (parsed.event === "ppt_upload_result") {
-      for (const handler of this.pptUploadHandlers) {
-        handler({
-          ok: !!parsed.ok,
-          files: parsed.files,
-          error: parsed.error,
-        });
-      }
-      return;
-    }
-
     if (parsed.event === "doc_upload_result") {
       for (const handler of this.docUploadHandlers) {
         handler({
           ok: !!parsed.ok,
           files: parsed.files,
           chatId: parsed.chat_id,
-          error: parsed.error,
-        });
-      }
-      return;
-    }
-
-    if (parsed.event === "ppt_save_brand_result") {
-      for (const handler of this.pptSaveBrandHandlers) {
-        handler({
-          ok: !!parsed.ok,
-          brandId: parsed.brandId,
-          error: parsed.error,
-        });
-      }
-      return;
-    }
-
-    if (parsed.event === "ppt_delete_brand_result") {
-      for (const handler of this.pptDeleteBrandHandlers) {
-        handler({
-          ok: !!parsed.ok,
-          brandId: parsed.brandId,
-          error: parsed.error,
-        });
-      }
-      return;
-    }
-
-    if (parsed.event === "ppt_import_native_result") {
-      for (const handler of this.pptImportNativeHandlers) {
-        handler({
-          ok: !!parsed.ok,
-          templateId: parsed.templateId,
-          name: parsed.name,
-          pageCount: parsed.pageCount,
-          coverUrl: parsed.coverUrl,
-          primaryColor: parsed.primaryColor,
-          error: parsed.error,
-        });
-      }
-      return;
-    }
-
-    if (parsed.event === "ppt_delete_native_result") {
-      for (const handler of this.pptDeleteNativeHandlers) {
-        handler({
-          ok: !!parsed.ok,
-          templateId: parsed.templateId,
           error: parsed.error,
         });
       }
@@ -1349,13 +1152,11 @@ export class MonaClient {
       parsed.event === "custom_agent_create_result" ||
       parsed.event === "agent_instruction_save_result" ||
       parsed.event === "agent_instruction_restore_result" ||
-      parsed.event === "agent_skill_stage_result" ||
       parsed.event === "agent_skill_action_result" ||
       parsed.event === "agent_skill_setup_start_result" ||
       parsed.event === "agent_skill_setup_status_result" ||
       parsed.event === "agent_skill_setup_cancel_result" ||
-      (parsed as unknown as { event?: string }).event === "agent_skill_update_result" ||
-      parsed.event === "resolve_agent_change_result"
+      (parsed as unknown as { event?: string }).event === "agent_skill_update_result"
     ) {
       this.handleRoomCommandResult(parsed);
       return;
@@ -1364,9 +1165,7 @@ export class MonaClient {
     if (
       parsed.event === "agents_updated" ||
       parsed.event === "agent_instructions_updated" ||
-      parsed.event === "agent_skills_updated" ||
-      parsed.event === "agent_change_proposal_created" ||
-      parsed.event === "agent_change_proposal_resolved"
+      parsed.event === "agent_skills_updated"
     ) {
       for (const handler of this.agentsUpdatedHandlers) {
         handler(parsed.agent_id, parsed.event);

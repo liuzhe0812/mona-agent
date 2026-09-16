@@ -509,7 +509,22 @@ describe("useSessions", () => {
     await waitFor(() => expect(result.current.loading).toBe(false));
 
     expect(result.current.messages).toEqual([]);
+    expect(result.current.missing).toBe(true);
     expect(result.current.hasPendingToolCalls).toBe(false);
+  });
+
+  it("keeps transcript request failures distinct from missing history", async () => {
+    vi.mocked(api.fetchWebuiThread).mockRejectedValue(new api.ApiError(500, "HTTP 500"));
+
+    const { result } = renderHook(() => useSessionHistory("websocket:broken"), {
+      wrapper: wrap(fakeClient()),
+    });
+
+    await waitFor(() => expect(result.current.loading).toBe(false));
+
+    expect(result.current.messages).toEqual([]);
+    expect(result.current.missing).toBe(false);
+    expect(result.current.error).toBe("HTTP 500");
   });
 
   it("keeps the session in the list when delete fails", async () => {

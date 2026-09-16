@@ -104,4 +104,5 @@ describe("AppTitleBar", () => {
     expect(await screen.findByText("FFmpeg")).toBeInTheDocument();
     expect(screen.getAllByText("42%").length).toBeGreaterThan(0);
   });
+
 });

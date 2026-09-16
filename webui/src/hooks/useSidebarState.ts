@@ -26,6 +26,11 @@ export const DEFAULT_SIDEBAR_STATE: SidebarStatePayload = {
   updated_at: null,
 };
 
+/** Retry schedule for the initial sidebar-state load. A transient failure must
+ *  not be mistaken for "no markers": persisting that empty baseline is what
+ *  turns every session unread after a dev restart. */
+export const SIDEBAR_LOAD_RETRY_DELAYS_MS = [250, 500, 1_000] as const;
+
 function uniqueStrings(value: unknown): string[] {
   if (!Array.isArray(value)) return [];
   const out: string[] = [];
@@ -202,10 +207,38 @@ export function useSidebarState(
   const stateRef = useRef(DEFAULT_SIDEBAR_STATE);
   const persistVersionRef = useRef(0);
   const loadPromiseRef = useRef<Promise<void> | null>(null);
+  /** True only once an authoritative server payload replaced the baseline. */
+  const loadOkRef = useRef(false);
   const [state, setState] = useState<SidebarStatePayload>(DEFAULT_SIDEBAR_STATE);
   const [loading, setLoading] = useState(true);
   tokenRef.current = token;
   stateRef.current = state;
+
+  const loadState = useCallback(async (): Promise<boolean> => {
+    for (let attempt = 0; attempt <= SIDEBAR_LOAD_RETRY_DELAYS_MS.length; attempt += 1) {
+      if (attempt > 0) {
+        await new Promise((resolve) =>
+          setTimeout(resolve, SIDEBAR_LOAD_RETRY_DELAYS_MS[attempt - 1]),
+        );
+      }
+      try {
+        const loaded = normalizeSidebarState(await fetchSidebarState(tokenRef.current));
+        stateRef.current = loaded;
+        loadOkRef.current = true;
+        setState(loaded);
+        setLoading(false);
+        return true;
+      } catch {
+        // Retry a transient failure (dev startup race, expired runtime token)
+        // instead of latching an empty baseline that would erase every stored
+        // read marker on the next write.
+      }
+    }
+    loadOkRef.current = false;
+    stateRef.current = DEFAULT_SIDEBAR_STATE;
+    setState(DEFAULT_SIDEBAR_STATE);
+    return false;
+  }, []);
 
   useEffect(() => {
     // 等待 runtime token 就绪再拉取：界面先于运行时显示，空 token 必然
@@ -215,29 +248,35 @@ export function useSidebarState(
     let cancelled = false;
     setLoading(true);
     const load = (async () => {
-      try {
-        const loaded = normalizeSidebarState(await fetchSidebarState(tokenRef.current));
-        if (cancelled) return;
-        stateRef.current = loaded;
-        setState(loaded);
-      } catch {
-        if (cancelled) return;
-        stateRef.current = DEFAULT_SIDEBAR_STATE;
-        setState(DEFAULT_SIDEBAR_STATE);
-      } finally {
-        if (!cancelled) setLoading(false);
-      }
+      const ok = await loadState();
+      if (cancelled) return;
+      // A failed load keeps `loading` true: the state stays "unknown" so the
+      // sidebar does not render a false unread badge and writes stay blocked.
+      setLoading(!ok);
     })();
     loadPromiseRef.current = load;
     return () => {
       cancelled = true;
     };
-  }, [token]);
+  }, [loadState, token]);
 
   const update = useCallback(
     async (updater: (current: SidebarStatePayload) => SidebarStatePayload) => {
       // 首次磁盘加载完成前不得写入，否则未加载的 DEFAULT 会覆盖服务端标记。
       await loadPromiseRef.current;
+      if (!loadOkRef.current) {
+        // Baseline is unknown (the load failed). Ask the server again rather
+        // than persisting a state that omits every marker read on another
+        // device or in an earlier run.
+        await loadState();
+        if (!loadOkRef.current) {
+          // Server still unreachable: keep the optimistic state in memory and
+          // skip the write so the persisted markers survive.
+          stateRef.current = normalizeSidebarState(updater(stateRef.current));
+          setState(stateRef.current);
+          return;
+        }
+      }
       const next = normalizeSidebarState(updater(stateRef.current));
       const version = persistVersionRef.current + 1;
       persistVersionRef.current = version;
@@ -255,11 +294,15 @@ export function useSidebarState(
         // should not break the chat list; the next refresh can try again.
       }
     },
-    [],
+    [loadState],
   );
 
   const pruned = useMemo(() => {
     if (!sessionsLoaded || loading) return state;
+    // An empty list is not authoritative: a blank or fully filtered refresh
+    // must not delete the markers of sessions that still exist, or every
+    // session flips back to unread after a restart.
+    if (sessions.length === 0) return state;
     return pruneMissingSessions(state, sessions);
   }, [loading, sessions, sessionsLoaded, state]);
 

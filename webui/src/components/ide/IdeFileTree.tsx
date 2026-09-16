@@ -30,6 +30,16 @@ import {
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
 import { Progress } from "@/components/ui/progress";
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from "@/components/ui/alert-dialog";
 import { useIdeStore, type FileTreeNode } from "./useIdeStore";
 import {
   getCachedIcon,
@@ -143,6 +153,7 @@ function TreeNode({ node, depth }: TreeNodeProps) {
 
   const [renaming, setRenaming] = useState(false);
   const [renameValue, setRenameValue] = useState(node.name);
+  const [deleteOpen, setDeleteOpen] = useState(false);
 
   const handleToggle = (e: React.MouseEvent) => {
     // Handle selection on single click
@@ -179,12 +190,12 @@ function TreeNode({ node, depth }: TreeNodeProps) {
   );
 
   const handleDelete = () => {
-    if (node.isDir) {
-      if (!confirm(`确认删除文件夹 "${node.name}" 及其所有内容？`)) return;
-    } else {
-      if (!confirm(`确认删除文件 "${node.name}"？`)) return;
-    }
+    setDeleteOpen(true);
+  };
+
+  const confirmDelete = () => {
     useIdeStore.getState().deleteNode(node.path, node.isDir).catch(console.error);
+    setDeleteOpen(false);
   };
 
   return (
@@ -302,6 +313,30 @@ function TreeNode({ node, depth }: TreeNodeProps) {
           删除
         </ContextMenuItem>
       </ContextMenuContent>
+
+      <AlertDialog open={deleteOpen} onOpenChange={setDeleteOpen}>
+        <AlertDialogContent className="max-w-sm">
+          <AlertDialogHeader>
+            <AlertDialogTitle>
+              {node.isDir ? "删除这个文件夹？" : "删除这个文件？"}
+            </AlertDialogTitle>
+            <AlertDialogDescription>
+              {node.isDir
+                ? `将删除文件夹「${node.name}」及其所有内容，此操作不可恢复。`
+                : `将删除文件「${node.name}」，此操作不可恢复。`}
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>取消</AlertDialogCancel>
+            <AlertDialogAction
+              className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
+              onClick={confirmDelete}
+            >
+              删除
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </ContextMenu>
   );
 }

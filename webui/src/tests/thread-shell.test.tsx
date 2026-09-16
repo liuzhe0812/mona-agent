@@ -76,6 +76,12 @@ vi.mock("@/components/canvas/ConversationCanvasPanel", () => ({
   ),
 }));
 
+vi.mock("@/components/deliver/GuitarTabPreview", () => ({
+  GuitarTabPreview: ({ source }: { source: string }) => (
+    <div data-testid="guitar-tab-preview">{source}</div>
+  ),
+}));
+
 vi.mock("@/components/office/OfficeEditorHost", () => ({
   OfficeEditorHost: ({ initialSession }: { initialSession: { sessionId: string; displayName: string } }) => {
     const [mountId] = useState(() => {
@@ -360,6 +366,137 @@ describe("ThreadShell", () => {
     fireEvent.click(screen.getByText("Important conversation"));
 
     expect(onGoHome).not.toHaveBeenCalled();
+  });
+
+  it("warns during computer control, stops for takeover, and clears when the run ends", async () => {
+    const client = makeClient();
+    const chatId = "chat-computer-use";
+    render(wrap(
+      client,
+      <ThreadShell
+        session={session(chatId)}
+        title="Computer use chat"
+        onToggleSidebar={() => {}}
+      />,
+    ));
+    await waitFor(() => expect(screen.getByLabelText("Message input")).toBeInTheDocument());
+
+    act(() => {
+      client._emitChat(chatId, {
+        event: "artifact_task_started",
+        chat_id: chatId,
+        task_id: "task-previous",
+      });
+      client._emitChat(chatId, {
+        event: "goal_status",
+        chat_id: chatId,
+        status: "running",
+        started_at: Date.now() / 1000 - 5,
+      });
+      client._emitChat(chatId, {
+        event: "message",
+        chat_id: chatId,
+        text: "computer_act",
+        kind: "tool_hint",
+        task_id: "task-previous",
+        tool_events: [{ phase: "start", call_id: "previous-act", name: "computer_act" }],
+      });
+      client._emitChat(chatId, { event: "goal_status", chat_id: chatId, status: "idle" });
+
+      client._emitChat(chatId, {
+        event: "artifact_task_started",
+        chat_id: chatId,
+        task_id: "task-current",
+      });
+      client._emitChat(chatId, {
+        event: "goal_status",
+        chat_id: chatId,
+        status: "running",
+        started_at: Date.now() / 1000,
+      });
+      client._emitChat(chatId, {
+        event: "message",
+        chat_id: chatId,
+        text: "web_search",
+        kind: "tool_hint",
+        task_id: "task-current",
+        tool_events: [{ phase: "start", call_id: "current-search", name: "web_search" }],
+      });
+    });
+
+    expect(screen.queryByRole("button", { name: "Stop and take over" })).not.toBeInTheDocument();
+
+    act(() => {
+      client._emitChat(chatId, {
+        event: "message",
+        chat_id: chatId,
+        text: "computer_act",
+        kind: "tool_hint",
+        task_id: "task-current",
+        tool_events: [{ phase: "start", call_id: "current-act", name: "computer_act" }],
+      });
+    });
+
+    expect(screen.getByText(
+      "AI is controlling the computer. Please avoid using the mouse and keyboard for now.",
+    )).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Stop and take over" }));
+    expect(client.sendMessage).toHaveBeenCalledWith(
+      chatId,
+      "/stop",
+      undefined,
+      { taskId: "task-current" },
+    );
+    expect(screen.getByText("Stopping computer control. Please wait before taking over.")).toBeInTheDocument();
+
+    act(() => {
+      client._emitChat(chatId, { event: "turn_end", chat_id: chatId, task_id: "task-current" });
+    });
+    expect(screen.queryByText("AI is controlling the computer. Please avoid using the mouse and keyboard for now.")).not.toBeInTheDocument();
+    expect(screen.queryByText("Stopping computer control. Please wait before taking over.")).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Stop and take over" })).not.toBeInTheDocument();
+  });
+
+  it("shows a retryable error instead of the welcome page when established history fails", async () => {
+    const client = makeClient();
+    let historyAttempts = 0;
+    const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+      if (String(input).includes("websocket%3Abroken-history/webui-thread")) {
+        historyAttempts += 1;
+        return historyAttempts === 1
+          ? { ok: false, status: 500 }
+          : httpJson(transcriptFromSimpleMessages([
+              { role: "user", content: "Recovered question" },
+              { role: "assistant", content: "Recovered answer" },
+            ]));
+      }
+      return { ok: false, status: 404 };
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    render(wrap(
+      client,
+      <ThreadShell
+        session={{
+          ...session("broken-history"),
+          title: "Existing conversation",
+          preview: "Earlier message",
+        }}
+        title="Existing conversation"
+        onToggleSidebar={() => {}}
+        onGoHome={() => {}}
+        onNewChat={() => {}}
+      />,
+    ));
+
+    expect(await screen.findByRole("alert")).toHaveTextContent("Could not load conversation");
+    expect(screen.queryByTestId("mona-welcome-shell")).not.toBeInTheDocument();
+    expect(screen.getByLabelText("Message input")).toBeDisabled();
+
+    fireEvent.click(screen.getByRole("button", { name: "Reload conversation" }));
+    await waitFor(() => expect(screen.getByText("Recovered answer")).toBeInTheDocument());
+    expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+    expect(screen.getByLabelText("Message input")).toBeEnabled();
   });
 
   it("restores in-memory messages when switching away and back to a session", async () => {
@@ -1271,6 +1408,39 @@ describe("ThreadShell", () => {
     );
   });
 
+  it("shows the user's Mona avatar on the empty landing", async () => {
+    const client = makeClient();
+    const customAvatar = "data:image/png;base64,dXNlci1hdmF0YXI=";
+    invalidateAgents();
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (input: RequestInfo | URL) => {
+        if (String(input).includes("/api/agents")) {
+          return httpJson({
+            agents: [{ id: "mona", displayName: "Mona", avatarUrl: customAvatar, enabled: true }],
+          });
+        }
+        return { ok: false, status: 404, json: async () => ({}) };
+      }),
+    );
+
+    render(wrap(
+      client,
+      <ThreadShell
+        session={null}
+        title="新建对话"
+        onToggleSidebar={() => {}}
+        onNewChat={() => {}}
+      />,
+    ));
+
+    const portrait = await within(screen.getByTestId("mona-hero-composer"))
+      .findByTestId("mona-human-portrait-image");
+    expect(portrait).toHaveAttribute("src", customAvatar);
+    expect(portrait).toHaveClass("object-cover");
+    expect(portrait).not.toHaveClass("mona-home-avatar-image");
+  });
+
   it("animates the activity icon without a top working line", async () => {
     const client = makeClient();
 
@@ -2136,6 +2306,244 @@ describe("ThreadShell", () => {
     expect(await within(deliverySection).findByText("result.png")).toBeInTheDocument();
     expect(within(processSection).queryByText("result.png")).not.toBeInTheDocument();
     expect(screen.getAllByText("result.png")).toHaveLength(1);
+  });
+
+  it("keeps delivered and process scores visible in the musician workspace", async () => {
+    const client = makeClient();
+    const root = "D:/workspace/agent-workspaces/com.mona.musician/output";
+    const scores = ["autumn_memories.abc", "autumn_memories_v2.abc"].map((name) => ({
+      path: name, absolute_path: `${root}/${name}`, name,
+      size: 1230, size_human: "1.2 KB", mime: "text/vnd.abc",
+    }));
+    vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL) => {
+      if (String(input).includes("/api/artifacts")) {
+        expect(String(input)).toContain("session_key=websocket%3Achat-musician-inventory");
+        return httpJson({
+          files: scores, session_files: [scores[0]], task_files: [scores[1]],
+          task_id: "task-score", truncated: false,
+        });
+      }
+      return { ok: false, status: 404, json: async () => ({}) };
+    }));
+    render(wrap(client, <ThreadShell
+      session={{ ...session("chat-musician-inventory"), conversation: {
+        type: "direct", title: "音乐家", agentIds: ["com.mona.musician"],
+        directAgentId: "com.mona.musician",
+      } }}
+      title="音乐家" onToggleSidebar={() => {}} onNewChat={() => {}}
+    />));
+
+    await screen.findByText(scores[0].name);
+    await screen.findByText(scores[1].name);
+    await expandWorkspaceSection();
+    for (const score of scores) {
+      const visibleRows = screen.getAllByText(score.name).filter((row) => !row.closest(".hidden"));
+      expect(visibleRows).toHaveLength(1);
+      expect(visibleRows[0]).toBeVisible();
+    }
+    expect(screen.queryByText("工作区暂无文件。")).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "概览" }));
+    const deliveries = screen.getByRole("button", { name: "交付物" }).closest("section")!;
+    const process = screen.getByRole("button", { name: "当前过程产物" }).closest("section")!;
+    expect(within(deliveries).getByText(scores[0].name)).toBeVisible();
+    expect(within(process).getByText(scores[1].name)).toBeVisible();
+    expect(within(process).queryByText(scores[0].name)).not.toBeInTheDocument();
+  });
+
+  it("automatically opens a newly delivered ABC score in the right preview tab", async () => {
+    const client = makeClient();
+    const score = {
+      path: "scores/autumn-memories.abc",
+      absolute_path: "D:/workspace/output/scores/autumn-memories.abc",
+      name: "autumn-memories.abc",
+      size: 72,
+      size_human: "72 B",
+      mime: "text/vnd.abc",
+    };
+    vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.includes("/api/artifacts")) return httpJson({ files: [], truncated: false });
+      if (url.includes("websocket%3Achat-score-preview/webui-thread")) {
+        return httpJson(transcriptFromSimpleMessages([
+          { role: "user", content: "写一首钢琴小品" },
+          { role: "assistant", content: "已完成" },
+        ]));
+      }
+      return { ok: false, status: 404, json: async () => ({}) };
+    }));
+    officePreviewState.fetchFilePreviewBlob.mockResolvedValue({
+      blob: new Blob(["X:1\nT:Autumn\nM:4/4\nL:1/8\nK:C\nCDEF GABc|"], { type: "text/vnd.abc" }),
+      mime: "text/vnd.abc",
+    });
+
+    render(wrap(client, <ThreadShell session={session("chat-score-preview")} title="Score" onToggleSidebar={() => {}} onNewChat={() => {}} />));
+    await screen.findByText("已完成");
+    expect(useFilePreviewStore.getState().file).toBeNull();
+
+    await act(async () => {
+      client._emitChat("chat-score-preview", {
+        event: "deliver_files",
+        chat_id: "chat-score-preview",
+        files: [score],
+      });
+    });
+
+    await waitFor(() => expect(useFilePreviewStore.getState().file?.name).toBe(score.name));
+    expect(await screen.findByRole("tab", { name: score.name })).toHaveAttribute("aria-selected", "true");
+    const scorePreview = await screen.findByTestId("music-score-preview");
+    expect(scorePreview.closest("[data-preview-tab-id]")).toHaveClass("h-full", "min-h-0");
+    await waitFor(() => expect(scorePreview.querySelector("svg")).toBeInTheDocument());
+
+    act(() => {
+      useFilePreviewStore.getState().close();
+    });
+    await act(async () => {
+      client._emitChat("chat-score-preview", {
+        event: "deliver_files",
+        chat_id: "chat-score-preview",
+        files: [score],
+      });
+    });
+    expect(useFilePreviewStore.getState().file).toBeNull();
+  });
+
+  it("does not automatically open a score restored from session history", async () => {
+    const client = makeClient();
+    const score = {
+      path: "scores/autumn-memories.abc",
+      absolute_path: "D:/workspace/output/scores/autumn-memories.abc",
+      name: "autumn-memories.abc",
+      size: 72,
+      size_human: "72 B",
+      mime: "text/vnd.abc",
+    };
+    vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.includes("/api/artifacts")) return httpJson({ files: [], truncated: false });
+      if (url.includes("websocket%3Achat-history-score/webui-thread")) {
+        return httpJson({
+          schemaVersion: 3,
+          messages: [{
+            id: "history-score",
+            role: "assistant",
+            content: "已完成",
+            deliveredFiles: [score],
+            createdAt: Date.now(),
+          }],
+        });
+      }
+      return { ok: false, status: 404, json: async () => ({}) };
+    }));
+
+    render(wrap(client, <ThreadShell session={session("chat-history-score")} title="Score" onToggleSidebar={() => {}} onNewChat={() => {}} />));
+
+    await screen.findByText("已完成");
+    await waitFor(() => expect(useFilePreviewStore.getState().file).toBeNull());
+    expect(officePreviewState.fetchFilePreviewBlob).not.toHaveBeenCalled();
+  });
+
+  it("opens a score after each completed file edit, including the same path again", async () => {
+    const client = makeClient();
+    vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.includes("/api/artifacts")) return httpJson({ files: [], truncated: false });
+      if (url.includes("websocket%3Achat-edited-score/webui-thread")) {
+        return httpJson(transcriptFromSimpleMessages([
+          { role: "user", content: "修改乐谱" },
+          { role: "assistant", content: "处理中" },
+        ]));
+      }
+      return { ok: false, status: 404, json: async () => ({}) };
+    }));
+    officePreviewState.fetchFilePreviewBlob.mockResolvedValue({
+      blob: new Blob(["X:1\nT:Edited\nM:4/4\nL:1/8\nK:C\nCDEF GABc|"], { type: "text/vnd.abc" }),
+      mime: "text/vnd.abc",
+    });
+    const edit = (callId: string, phase: "start" | "end", status: "editing" | "done") => ({
+      version: 1,
+      call_id: callId,
+      tool: "write_file",
+      path: "scores/edited.abc",
+      absolute_path: "D:/workspace/output/scores/edited.abc",
+      phase,
+      added: 8,
+      deleted: 0,
+      status,
+    } as const);
+
+    render(wrap(client, <ThreadShell session={session("chat-edited-score")} title="Score" onToggleSidebar={() => {}} onNewChat={() => {}} />));
+    await screen.findByText("处理中");
+
+    await act(async () => client._emitChat("chat-edited-score", {
+      event: "file_edit",
+      chat_id: "chat-edited-score",
+      edits: [edit("write-1", "start", "editing")],
+    }));
+    expect(useFilePreviewStore.getState().file).toBeNull();
+
+    await act(async () => client._emitChat("chat-edited-score", {
+      event: "file_edit",
+      chat_id: "chat-edited-score",
+      edits: [edit("write-1", "end", "done")],
+    }));
+    await waitFor(() => expect(useFilePreviewStore.getState().file?.name).toBe("edited.abc"));
+
+    act(() => useFilePreviewStore.getState().close());
+    await act(async () => client._emitChat("chat-edited-score", {
+      event: "file_edit",
+      chat_id: "chat-edited-score",
+      edits: [edit("write-1", "end", "done")],
+    }));
+    expect(useFilePreviewStore.getState().file).toBeNull();
+
+    await act(async () => client._emitChat("chat-edited-score", {
+      event: "file_edit",
+      chat_id: "chat-edited-score",
+      edits: [edit("write-2", "end", "done")],
+    }));
+    await waitFor(() => expect(useFilePreviewStore.getState().file?.name).toBe("edited.abc"));
+  });
+
+  it("automatically opens a newly delivered AlphaTex guitar tab", async () => {
+    const client = makeClient();
+    const tab = {
+      path: "scores/canon.atex",
+      absolute_path: "D:/workspace/output/scores/canon.atex",
+      name: "canon.atex",
+      size: 180,
+      size_human: "180 B",
+      mime: "text/plain",
+    };
+    vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.includes("/api/artifacts")) return httpJson({ files: [], truncated: false });
+      if (url.includes("websocket%3Achat-tab-preview/webui-thread")) {
+        return httpJson(transcriptFromSimpleMessages([
+          { role: "user", content: "制作吉他六线谱" },
+          { role: "assistant", content: "已完成" },
+        ]));
+      }
+      return { ok: false, status: 404, json: async () => ({}) };
+    }));
+    officePreviewState.fetchFilePreviewBlob.mockResolvedValue({
+      blob: new Blob([String.raw`\title "Canon" \track "Guitar" \staff {tabs}`], { type: "text/plain" }),
+      mime: "text/plain",
+    });
+
+    render(wrap(client, <ThreadShell session={session("chat-tab-preview")} title="Tab" onToggleSidebar={() => {}} onNewChat={() => {}} />));
+    await screen.findByText("已完成");
+
+    await act(async () => {
+      client._emitChat("chat-tab-preview", {
+        event: "deliver_files",
+        chat_id: "chat-tab-preview",
+        files: [tab],
+      });
+    });
+
+    await waitFor(() => expect(useFilePreviewStore.getState().file?.name).toBe(tab.name));
+    expect(await screen.findByRole("tab", { name: tab.name })).toHaveAttribute("aria-selected", "true");
+    expect(await screen.findByTestId("guitar-tab-preview")).toBeInTheDocument();
   });
 
   it("clears process artifacts when switching conversations that share a transport key", async () => {

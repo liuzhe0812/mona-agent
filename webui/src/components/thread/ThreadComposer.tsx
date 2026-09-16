@@ -27,6 +27,7 @@ import {
   Layers,
   Loader2,
   Mail,
+  Monitor,
   Plus,
   RotateCw,
   Search,
@@ -42,6 +43,7 @@ import { useTranslation } from "react-i18next";
 
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
 import { OfficeDocChip } from "@/components/doc/office/OfficeDocChip";
 import {
   DropdownMenu,
@@ -115,6 +117,66 @@ function modelContextLabel(value?: number | null): string | null {
   return `${Math.round(value / 1_000)}K`;
 }
 
+function formatContextTokens(value: number): string {
+  if (value >= 1_000_000) return `${(value / 1_000_000).toFixed(1)}M`;
+  return `${(value / 1000).toFixed(1)}K`;
+}
+
+function resolvedContextUsage(usage?: ThreadComposerProps["contextUsage"]): {
+  percent: number;
+  label: string;
+} {
+  if (!usage) return { percent: 0, label: "暂无上下文用量" };
+  if (!usage.total || usage.total <= 0 || usage.used < 0 || usage.used > usage.total) {
+    return {
+      percent: 0,
+      label: `已使用 ${formatContextTokens(Math.max(0, usage.used))}，模型上下文窗口未知`,
+    };
+  }
+  const percent = (usage.used / usage.total) * 100;
+  return {
+    percent,
+    label: `${percent.toFixed(1)}% · ${formatContextTokens(usage.used)} / ${formatContextTokens(usage.total)} 上下文已使用`,
+  };
+}
+
+function ContextUsageIndicator({ usage }: { usage?: ThreadComposerProps["contextUsage"] }) {
+  const { percent, label } = resolvedContextUsage(usage);
+  return (
+    <TooltipProvider delayDuration={100}>
+      <Tooltip>
+        <TooltipTrigger asChild>
+          <span
+            role="img"
+            tabIndex={0}
+            aria-label={label}
+            className="inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-full text-foreground/80 transition-colors hover:bg-muted focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
+          >
+            <svg viewBox="0 0 24 24" className="h-5 w-5" aria-hidden>
+              <circle cx="12" cy="12" r="9" fill="none" stroke="hsl(var(--border))" strokeWidth="2" />
+              <circle
+                cx="12"
+                cy="12"
+                r="9"
+                fill="none"
+                stroke="currentColor"
+                strokeWidth="2"
+                strokeLinecap="round"
+                pathLength="100"
+                strokeDasharray={`${percent} 100`}
+                transform="rotate(-90 12 12)"
+              />
+            </svg>
+          </span>
+        </TooltipTrigger>
+        <TooltipContent side="top" sideOffset={8} className="whitespace-nowrap">
+          {label}
+        </TooltipContent>
+      </Tooltip>
+    </TooltipProvider>
+  );
+}
+
 export type ComposerAttachment = File | { name: string; localPath: string };
 
 interface ThreadComposerProps {
@@ -122,11 +184,23 @@ interface ThreadComposerProps {
   disabled?: boolean;
   placeholder?: string;
   isStreaming?: boolean;
+  /** True after a computer_act tool has started in the active run. */
+  computerUseActive?: boolean;
+  /** True after a message is sent and before Mona emits visible activity. */
+  isAwaitingModelResponse?: boolean;
+  /** True while the current turn is compacting earlier conversation context. */
+  isCompacting?: boolean;
   /** True while the server is confirming a stop request. */
   stopping?: boolean;
   modelLabel?: string | null;
   modelOptions?: ComposerModelOption[];
   onModelSwitch?: (provider: string, model: string, reasoningEffort?: string | null) => void;
+  /** Latest turn context usage vs the active model's context window.
+   * ``total`` is ``null`` when the active model has no known context window. */
+  contextUsage?: {
+    used: number;
+    total: number | null;
+  } | null;
   /** Server-resolved capability of the active preset. When false, image
    * attach/paste/drop is rejected with an inline hint. Default true. */
   imageInputEnabled?: boolean;
@@ -316,9 +390,13 @@ function FlowingActivityIcon({ className }: { className?: string }) {
 function RunElapsedStrip({
   startedAt,
   goalState,
+  isAwaitingModelResponse = false,
+  isCompacting = false,
 }: {
   startedAt: number | null;
   goalState?: GoalStateWsPayload;
+  isAwaitingModelResponse?: boolean;
+  isCompacting?: boolean;
 }) {
   const { t } = useTranslation();
   const [goalPanelOpen, setGoalPanelOpen] = useState(false);
@@ -408,8 +486,13 @@ function RunElapsedStrip({
   const timerTitle = showTimer
     ? t("thread.composer.runRuntimeTitle", { elapsed: shortElapsed })
     : null;
+  const activityTitle = isCompacting && timerTitle
+    ? t("thread.composer.compactingRuntimeTitle", { elapsed: shortElapsed })
+    : isAwaitingModelResponse && timerTitle
+      ? t("thread.composer.awaitingResponseRuntimeTitle", { elapsed: shortElapsed })
+      : timerTitle;
 
-  const ariaParts = [timerTitle, showGoal ? stripLabel : null].filter(Boolean);
+  const ariaParts = [activityTitle, showGoal ? stripLabel : null].filter(Boolean);
   const ariaLabel = ariaParts.join(" · ");
 
   return (
@@ -470,8 +553,8 @@ function RunElapsedStrip({
           <Target className="h-4 w-4 shrink-0 text-primary/75" aria-hidden />
         )}
         <span className="flex min-w-0 flex-1 items-center gap-1.5 text-[12px] font-medium text-foreground/75">
-          {timerTitle ? <span className="shrink-0">{timerTitle}</span> : null}
-          {timerTitle && showGoal ? (
+          {activityTitle ? <span className="shrink-0">{activityTitle}</span> : null}
+          {activityTitle && showGoal ? (
             <span className="shrink-0 text-muted-foreground/45" aria-hidden>
               ·
             </span>
@@ -514,10 +597,14 @@ export function ThreadComposer({
   disabled,
   placeholder,
   isStreaming = false,
+  computerUseActive = false,
+  isAwaitingModelResponse = false,
   stopping = false,
+  isCompacting = false,
   modelLabel = null,
   modelOptions = [],
   onModelSwitch,
+  contextUsage = null,
   imageInputEnabled = true,
   variant = "thread",
   slashCommands = [],
@@ -584,9 +671,13 @@ export function ThreadComposer({
     return [...groups.entries()];
   }, [filteredModelOptions]);
   const triggerModelLabel = activeModelOption?.model ?? modelLabel;
-  const resolvedPlaceholder = isStreaming
-    ? t("thread.composer.placeholderStreaming")
-    : placeholder ?? t("thread.composer.placeholderThread");
+  const resolvedPlaceholder = isCompacting
+    ? t("thread.composer.placeholderCompacting")
+    : isAwaitingModelResponse
+      ? t("thread.composer.placeholderAwaitingResponse")
+      : isStreaming
+        ? t("thread.composer.placeholderStreaming")
+        : placeholder ?? t("thread.composer.placeholderThread");
 
   useEffect(() => {
     if (!quote) return;
@@ -1116,6 +1207,29 @@ export function ThreadComposer({
       onDrop={onDrop}
       className={cn("relative w-full", isHero ? "px-0" : "px-1 pb-1.5 pt-1 sm:px-0")}
     >
+      {computerUseActive && onStop ? (
+        <div className="mb-2 flex flex-wrap items-center justify-between gap-2 rounded-md border border-warning/30 bg-warning/10 px-3 py-2">
+          <div className="flex min-w-0 items-center gap-2 text-caption leading-5 text-foreground">
+            <Monitor className="h-4 w-4 shrink-0 text-warning" aria-hidden="true" />
+            <span role="status" aria-atomic="true">
+              {stopping
+                ? t("thread.composer.computerUseStopping")
+                : t("thread.composer.computerUseNotice")}
+            </span>
+          </div>
+          <Button
+            type="button"
+            variant="outline"
+            size="sm"
+            disabled={stopping}
+            onClick={onStop}
+          >
+            {stopping
+              ? t("thread.composer.computerUseStoppingAction")
+              : t("thread.composer.computerUseTakeOver")}
+          </Button>
+        </div>
+      ) : null}
       {showSlashMenu ? (
         <SlashCommandPalette
           commands={filteredSlashCommands}
@@ -1259,7 +1373,12 @@ export function ThreadComposer({
           </div>
         ) : null}
         {runStartedAt != null || goalState?.active ? (
-          <RunElapsedStrip startedAt={runStartedAt} goalState={goalState} />
+          <RunElapsedStrip
+            startedAt={runStartedAt}
+            goalState={goalState}
+            isAwaitingModelResponse={isAwaitingModelResponse}
+            isCompacting={isCompacting}
+          />
         ) : null}
         <PendingQueueStrip
           messages={pendingMessages}
@@ -1386,6 +1505,9 @@ export function ThreadComposer({
                 disabled={disabled}
               />
             ) : null}
+          </div>
+          <div className="flex min-w-0 items-center gap-2">
+            {triggerModelLabel ? <ContextUsageIndicator usage={contextUsage} /> : null}
             {triggerModelLabel ? (
               modelOptions.length > 0 && onModelSwitch ? (
                 <DropdownMenu
@@ -1401,20 +1523,14 @@ export function ThreadComposer({
                       type="button"
                       title={triggerModelLabel}
                       className={cn(
-                        "inline-flex min-w-0 items-center gap-1.5 rounded-full border px-2.5",
-                        "border-foreground/10 bg-foreground/[0.035] font-medium text-foreground/80",
-                        "hover:bg-foreground/[0.07] transition-colors cursor-pointer",
-                        isHero
-                          ? "h-7 max-w-[20rem] text-[12px]"
-                          : "h-6 max-w-[16rem] text-[10.5px]",
+                        "inline-flex h-7 min-w-0 items-center gap-1 rounded-md px-1",
+                        "font-medium text-caption text-foreground/85 transition-colors hover:bg-muted",
+                        "focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring",
+                        isHero ? "max-w-[20rem]" : "max-w-[16rem]",
                       )}
                     >
-                      <span
-                        aria-hidden
-                        className="h-1.5 w-1.5 flex-none rounded-full bg-emerald-500/80"
-                      />
                       <span className="truncate">{triggerModelLabel}</span>
-                      <ChevronDown className={cn("flex-none opacity-50", isHero ? "h-3 w-3" : "h-2.5 w-2.5")} />
+                      <ChevronDown className="h-3.5 w-3.5 flex-none text-muted-foreground" aria-hidden />
                     </button>
                   </DropdownMenuTrigger>
                   <DropdownMenuContent
@@ -1576,23 +1692,15 @@ export function ThreadComposer({
                 <span
                   title={triggerModelLabel}
                   className={cn(
-                    "inline-flex min-w-0 items-center gap-1.5 rounded-full border px-2.5",
-                    "border-foreground/10 bg-foreground/[0.035] font-medium text-foreground/80",
-                    isHero
-                      ? "h-7 max-w-[13rem] text-[12px]"
-                      : "h-6 max-w-[10rem] text-[10.5px]",
+                    "inline-flex h-7 min-w-0 items-center rounded-md px-1",
+                    "font-medium text-caption text-foreground/85",
+                    isHero ? "max-w-[13rem]" : "max-w-[10rem]",
                   )}
                 >
-                  <span
-                    aria-hidden
-                    className="h-1.5 w-1.5 flex-none rounded-full bg-emerald-500/80"
-                  />
                   <span className="truncate">{triggerModelLabel}</span>
                 </span>
               )
             ) : null}
-          </div>
-          <span className={cn(isHero ? "hidden" : "sm:hidden")} aria-hidden />
           <Button
             type={showStopButton ? "button" : "submit"}
             size="icon"
@@ -1601,26 +1709,24 @@ export function ThreadComposer({
             title={showStopButton ? stopButtonLabel : undefined}
             onClick={showStopButton && !stopping ? onStop : undefined}
             className={cn(
-              "rounded-full transition-transform",
+              "h-8 w-8 rounded-full transition-transform",
               showStopButton
-                ? "border border-border/70 bg-card text-foreground/85 hover:bg-muted/65 hover:text-foreground disabled:text-muted-foreground/50"
-                : isHero
-                  ? "border border-foreground bg-foreground text-background hover:bg-foreground/90 disabled:border-foreground/35 disabled:bg-foreground/35 disabled:text-background/80"
-                  : "border border-foreground bg-foreground text-background hover:bg-foreground/90 disabled:border-foreground/35 disabled:bg-foreground/35 disabled:text-background/80",
-              isHero ? "" : "h-7.5 w-7.5",
-              (canSend || showStopButton) && "hover:scale-[1.03] active:scale-95",
+                ? "border border-destructive bg-destructive text-destructive-foreground hover:bg-destructive/90 hover:text-destructive-foreground disabled:bg-destructive/60 disabled:text-destructive-foreground/75"
+                : "bg-action text-action-foreground hover:bg-action-hover disabled:bg-muted disabled:text-muted-foreground",
+              (canSend || showStopButton) && "hover:scale-105 active:scale-95",
             )}
           >
             {stopping ? (
-              <Loader2 className={cn("animate-spin", isHero ? "h-3.5 w-3.5" : "h-3 w-3")} />
+              <Loader2 className="h-3.5 w-3.5 animate-spin" />
             ) : showStopButton ? (
-              <Square className={cn("fill-current stroke-current", isHero ? "h-3 w-3" : "h-2.5 w-2.5")} />
+              <Square className="h-3 w-3 fill-current stroke-current" />
             ) : isStreaming ? (
-              <Loader2 className={cn(isHero ? "h-4.5 w-4.5" : "h-4 w-4", "animate-spin")} />
+              <Loader2 className="h-4 w-4 animate-spin" />
             ) : (
-              <ArrowUp className={cn(isHero ? "h-4.5 w-4.5" : "h-4 w-4")} />
+              <ArrowUp className="h-4 w-4" />
             )}
           </Button>
+          </div>
         </div>
       </div>
     </form>

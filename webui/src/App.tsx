@@ -2248,7 +2248,7 @@ function Shell({
                 <TerminalView onOpenSubscribe={onOpenSubscribe} />
               </div>
               {view === "db" && (
-                <div className={cn("absolute inset-0 flex flex-col", isBrowserTabActive && "hidden")}>
+                <div className={cn("absolute inset-0 flex min-h-0 flex-col overflow-hidden", isBrowserTabActive && "hidden")}>
                   {client ? (
                     <Suspense fallback={<ModuleLoading title="正在打开数据库客户端" />}>
                       <DbClientView onOpenSubscribe={onOpenSubscribe} />

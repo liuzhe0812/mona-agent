@@ -11,12 +11,14 @@ const BUILTIN_AGENT_AVATAR_IMAGES: Readonly<Record<string, string>> = {
   "com.mona.xhs-operator": "/brand/agents/xhs-operator.png",
   "com.mona.academic-researcher": "/brand/agents/academic-researcher.png",
   "com.mona.a-share-analyst": "/brand/agents/a-share-analyst.png",
+  "com.mona.musician": "/brand/agents/musician.webp",
 };
 
 const BUILTIN_AGENT_DISPLAY_NAMES: Readonly<Record<string, string>> = {
   "com.mona.academic-researcher": "学者",
   "com.mona.xhs-operator": "种草家",
   "com.mona.a-share-analyst": "股神",
+  "com.mona.musician": "音乐人",
 };
 
 /** Minimal identity needed to render an agent avatar/name. */
@@ -164,7 +166,7 @@ export function ConversationAvatar({
         {Array.from(taskTitle.trim())[0]?.toUpperCase() ?? "M"}
         <AgentAvatar
           agentId={MONA_AGENT_ID}
-          avatarUrl={MONA_AVATAR_IMAGE}
+          avatarUrl={agents.get(MONA_AGENT_ID)?.avatarUrl ?? MONA_AVATAR_IMAGE}
           className="absolute bottom-0.5 right-0.5 h-4 w-4 rounded-sm bg-background ring-1 ring-background"
         />
       </span>

@@ -258,6 +258,8 @@ export function useSessionHistory(key: string | null): {
   messages: UIMessage[];
   loading: boolean;
   error: string | null;
+  /** True when the history endpoint reports that no WebUI transcript exists. */
+  missing: boolean;
   refresh: () => void;
   version: number;
   /** ``true`` when the replayed transcript ends with a trace row (turn still in flight). */
@@ -273,6 +275,7 @@ export function useSessionHistory(key: string | null): {
     messages: UIMessage[];
     loading: boolean;
     error: string | null;
+    missing: boolean;
     hasPendingToolCalls: boolean;
     version: number;
   }>({
@@ -280,6 +283,7 @@ export function useSessionHistory(key: string | null): {
     messages: [],
     loading: false,
     error: null,
+    missing: false,
     hasPendingToolCalls: false,
     version: 0,
   });
@@ -291,6 +295,7 @@ export function useSessionHistory(key: string | null): {
         messages: [],
         loading: false,
         error: null,
+        missing: false,
         hasPendingToolCalls: false,
         version: 0,
       });
@@ -306,6 +311,7 @@ export function useSessionHistory(key: string | null): {
           messages: [],
           loading: true,
           error: null,
+          missing: false,
           hasPendingToolCalls: false,
           version: 0,
         });
@@ -319,6 +325,7 @@ export function useSessionHistory(key: string | null): {
             messages: [],
             loading: false,
             error: null,
+            missing: body === null,
             hasPendingToolCalls: false,
             version: prev.key === key ? prev.version + 1 : 1,
           }));
@@ -338,6 +345,7 @@ export function useSessionHistory(key: string | null): {
           messages: ui,
           loading: false,
           error: null,
+          missing: false,
           hasPendingToolCalls: hasPending,
           version: prev.key === key ? prev.version + 1 : 1,
         }));
@@ -349,6 +357,7 @@ export function useSessionHistory(key: string | null): {
             messages: [],
             loading: false,
             error: null,
+            missing: true,
             hasPendingToolCalls: false,
             version: prev.key === key ? prev.version + 1 : 1,
           }));
@@ -358,6 +367,7 @@ export function useSessionHistory(key: string | null): {
             messages: [],
             loading: false,
             error: (e as Error).message,
+            missing: false,
             hasPendingToolCalls: false,
             version: prev.key === key ? prev.version : 0,
           }));
@@ -374,6 +384,7 @@ export function useSessionHistory(key: string | null): {
       messages: EMPTY_MESSAGES,
       loading: false,
       error: null,
+      missing: false,
       refresh,
       version: 0,
       hasPendingToolCalls: false,
@@ -387,6 +398,7 @@ export function useSessionHistory(key: string | null): {
       messages: EMPTY_MESSAGES,
       loading: true,
       error: null,
+      missing: false,
       refresh,
       version: 0,
       hasPendingToolCalls: false,
@@ -397,6 +409,7 @@ export function useSessionHistory(key: string | null): {
     messages: state.messages,
     loading: state.loading,
     error: state.error,
+    missing: state.missing,
     refresh,
     version: state.version,
     hasPendingToolCalls: state.hasPendingToolCalls,

@@ -343,14 +343,14 @@ export const ChatList = memo(function ChatList({
           <section key={groupKey} aria-label={projectLabel}>
             <ContextMenu>
               <ContextMenuTrigger asChild disabled={!isProjectGroup}>
-            <div className="group/header flex min-h-9 items-center gap-1 px-3 pb-1 pt-1 text-caption font-medium text-muted-foreground/75">
+            <div className="group/header relative flex min-h-9 items-center gap-1 rounded-md px-3 pb-1 pt-1 text-caption font-medium text-muted-foreground/75 hover:bg-[hsl(var(--sidebar-hover-surface)/0.04)]">
               {collapsible ? (
                 <Button
                   type="button"
                   variant="ghost"
                   size="xs"
                   onClick={() => toggleGroup(groupKey, group.kind === "project")}
-                  className="h-auto min-w-0 flex-1 justify-start gap-1 px-1 py-1 text-left font-medium hover:bg-[hsl(var(--sidebar-hover-surface)/0.04)] hover:text-sidebar-foreground"
+                  className="h-auto min-w-0 flex-1 justify-start gap-1 px-1 py-1 pr-8 text-left font-medium hover:bg-transparent hover:text-sidebar-foreground"
                   aria-expanded={expanded}
                   aria-label={group.kind === "project" ? projectLabel : group.label}
                 >
@@ -371,7 +371,7 @@ export const ChatList = memo(function ChatList({
                   onClick={() => onCreateTask?.(group.workspace!)}
                   aria-label={t("chat.newProjectChat")}
                   title={t("chat.newProjectChat")}
-                  className="grid h-7 w-7 shrink-0 place-items-center rounded-md text-muted-foreground opacity-0 transition-opacity hover:bg-[hsl(var(--sidebar-hover-surface)/0.06)] hover:text-sidebar-foreground group-hover/header:opacity-100 focus-visible:opacity-100"
+                  className="absolute right-1 top-1/2 z-10 grid h-7 w-7 -translate-y-1/2 place-items-center rounded-md text-muted-foreground opacity-0 transition-opacity hover:bg-[hsl(var(--sidebar-hover-surface)/0.06)] hover:text-sidebar-foreground group-hover/header:opacity-100 focus-visible:opacity-100"
                 >
                   <Plus className="h-3.5 w-3.5" />
                 </button>

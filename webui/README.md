@@ -8,17 +8,16 @@ on the same port.
 For the project overview, install guide, and general docs map, see the root
 [`README.md`](../README.md).
 
-## Just want to use the WebUI?
-
-If you installed mona via `pip install mona-ai`, the WebUI is **already bundled** in the wheel. Enable the WebSocket channel in `~/.mona/config.json` and run `mona gateway` — see the root [`README.md`](../README.md#-webui) for the 3-step setup. You do **not** need anything in this directory.
-
-This `webui/` tree is for people **hacking on the WebUI itself** (UI changes, new components, styling, etc.).
+The production UI is embedded in the Mona desktop app by Tauri. This source
+tree also supports a local Vite server for frontend development; the Python
+Gateway does not serve a standalone web client.
 
 ## Layout
 
 ```text
 webui/                 source tree (this directory)
-mona/web/dist/      build output served by the gateway
+webui/dist/            local preview build
+src-tauri/dist/        production build embedded by Tauri
 ```
 
 ## Develop the WebUI (Vite HMR)
@@ -31,7 +30,7 @@ From the repository root:
 pip install -e .
 ```
 
-> Editable installs intentionally **skip** the WebUI bundle step — Vite HMR is faster than rebuilding `dist/` on every change.
+> Python packaging does not build or bundle the frontend.
 
 ### 2. Enable the WebSocket channel
 
@@ -46,7 +45,7 @@ In `~/.mona/config.json`:
 In one terminal:
 
 ```bash
-mona gateway
+python -m mona gateway
 ```
 
 ### 4. Start the WebUI dev server
@@ -73,39 +72,17 @@ If your gateway listens on a non-default port, point the dev server at it:
 mona_API_URL=http://127.0.0.1:9000 bun run dev
 ```
 
-### Access from another device (LAN)
-
-To use the WebUI from another device on the same network, set `host` to `"0.0.0.0"` and configure a `token` or `tokenIssueSecret` in `~/.mona/config.json`:
-
-```json
-{
-  "channels": {
-    "websocket": {
-      "enabled": true,
-      "host": "0.0.0.0",
-      "port": 8765,
-      "tokenIssueSecret": "your-secret-here"
-    }
-  }
-}
-```
-
-The gateway will refuse to start if `host` is `"0.0.0.0"` and neither `token` nor `tokenIssueSecret` is set.
-
-Then open `http://<your-ip>:8765` on the other device. The WebUI will show an authentication form where you enter the secret. It is saved in your browser so you only need to enter it once.
-
-## Build for packaged runtime
-
-You usually do not need to run this by hand: `python -m build` invokes the WebUI build automatically when packaging the wheel.
-
-If you want to preview the production bundle locally without rebuilding the wheel:
+## Build
 
 ```bash
 cd webui
-bun run build          # writes to ../mona/web/dist
+npm run build        # local preview output in webui/dist
+npm run preview      # preview that build with Vite
+npm run build:tauri  # production output in src-tauri/dist
 ```
 
-The gateway picks up the new bundle on the next restart.
+Both builds include the Office editor. Python wheels contain backend code and
+resources only; Tauri embeds the production frontend.
 
 ## Test
 

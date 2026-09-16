@@ -102,9 +102,12 @@ export interface AgentDetailPayload {
   effective: EffectiveAgentConfigPayload;
   toolCatalog: Array<{
     name: string;
+    category?: string;
     description: string;
     available: boolean;
     readOnly: boolean | null;
+    requiresExplicitPermission?: boolean;
+    systemManaged?: boolean;
   }>;
   data: {
     memoryFiles: number;
@@ -306,21 +309,6 @@ export interface AutomationStatus {
 
 export interface AgentSkillDetail extends AgentSkill {
   content: string;
-}
-
-export interface AgentChangeProposal {
-  id: string;
-  agentId: string;
-  kind: "instruction_patch" | "skill_install";
-  status: "pending" | "approved" | "rejected" | "expired" | "failed";
-  preview: Record<string, unknown>;
-  expectedHash?: string | null;
-  createdAt: string;
-  expiresAt: string;
-  resolvedAt?: string | null;
-  error?: string;
-  /** Returned only through the authenticated Agent-management channel. */
-  token?: string;
 }
 
 /** One member entry inside a room state payload. */
@@ -581,6 +569,11 @@ export interface DeliveredFile {
   size: number;
   size_human: string;
   mime: string;
+  /** Directory inventory entries are returned by workspace/project scans so
+   *  empty directories remain visible. Delivery records omit this field. */
+  is_dir?: boolean;
+  /** Symlinks are listed as entries but the server never traverses them. */
+  is_symlink?: boolean;
   summary?: string;
   /** ISO 8601 timestamp from the shared-output scan. May be absent on
    *  deliver_file/file_edit events that don't carry mtime. */
@@ -618,6 +611,10 @@ export interface UITokenUsage {
   completionTokens: number;
   cachedTokens: number;
   totalTokens: number;
+  /** Prompt size of the last single LLM call in the turn — the actual
+   * context-window occupancy. Cumulative ``promptTokens`` counts every
+   * iteration, so it overstates the window on tool-heavy turns. */
+  contextTokens?: number;
 }
 
 export interface UIMessage {
@@ -828,6 +825,7 @@ export interface SettingsPayload {
     model_preset: string | null;
     max_tokens: number;
     context_window_tokens: number;
+    auto_compact_token_limit: number | null;
     temperature: number;
     reasoning_effort: string | null;
     timezone: string;
@@ -842,6 +840,7 @@ export interface SettingsPayload {
     provider: string;
     max_tokens: number;
     context_window_tokens: number;
+    auto_compact_token_limit: number | null;
     temperature: number;
     reasoning_effort: string | null;
     capabilities?: {
@@ -1052,6 +1051,7 @@ export interface SettingsUpdate {
   provider?: string;
   modelPreset?: string | null;
   providerModel?: string;
+  autoCompactTokenLimit?: number | null;
   reasoningEffort?: string | null;
   timezone?: string;
   toolHintMaxLength?: number;
@@ -1163,6 +1163,8 @@ export type InboundEvent =
       /** Present when the frame is an agent breadcrumb (e.g. tool hint,
        * generic progress line) rather than a conversational reply. */
       kind?: "tool_hint" | "progress" | "reasoning";
+      /** True while the server is generating a handoff summary for this turn. */
+      context_compacting?: boolean;
       /** Server-measured turn wall time when this frame finishes an assistant reply. */
       latency_ms?: number;
       task_id?: string;
@@ -1266,40 +1268,6 @@ export type InboundEvent =
   | { event: "video_project_changed"; name?: string; hint?: string }
   | { event: "error"; chat_id?: string; detail?: string }
   | {
-      event: "ppt_upload_result";
-      ok: boolean;
-      files?: { name: string; path: string }[];
-      error?: string;
-    }
-  | {
-      event: "ppt_save_brand_result";
-      ok: boolean;
-      brandId?: string;
-      error?: string;
-    }
-  | {
-      event: "ppt_delete_brand_result";
-      ok: boolean;
-      brandId?: string;
-      error?: string;
-    }
-  | {
-      event: "ppt_import_native_result";
-      ok: boolean;
-      templateId?: string;
-      name?: string;
-      pageCount?: number;
-      coverUrl?: string;
-      primaryColor?: string;
-      error?: string;
-    }
-  | {
-      event: "ppt_delete_native_result";
-      ok: boolean;
-      templateId?: string;
-      error?: string;
-    }
-  | {
       event: "doc_upload_result";
       ok: boolean;
       files?: { name: string; path: string; size?: number; mime?: string }[];
@@ -1321,26 +1289,17 @@ export type InboundEvent =
       agent_id: string;
       key?: string;
     }
-  | {
-      event: "agent_change_proposal_created" | "agent_change_proposal_resolved";
-      agent_id: string;
-      proposal_id: string;
-      kind?: AgentChangeProposal["kind"];
-      status?: AgentChangeProposal["status"];
-    }
   | ({
       event:
         | "agent_config_update_result"
         | "custom_agent_create_result"
         | "agent_instruction_save_result"
         | "agent_instruction_restore_result"
-        | "agent_skill_stage_result"
         | "agent_skill_action_result"
         | "agent_skill_setup_start_result"
         | "agent_skill_setup_status_result"
         | "agent_skill_setup_cancel_result"
-        | "agent_skill_update_result"
-        | "resolve_agent_change_result";
+        | "agent_skill_update_result";
       ok: boolean;
       request_id?: string;
       agent_id?: string;
@@ -1348,7 +1307,6 @@ export type InboundEvent =
       config?: AgentUserConfigPayload;
       agent?: AgentSummary;
       instruction?: AgentInstruction;
-      proposal?: AgentChangeProposal;
       skill?: AgentSkill;
       name?: string;
       action?: string;
@@ -1481,29 +1439,13 @@ export type Outbound =
       office_display_name?: string;
       canvas_id?: string;
       canvas_path?: string;
-      agent_kind?: "ppt" | "video";
+      agent_kind?: "video";
       task_id?: string;
       origin?: "profile_advice";
       profile_advice_id?: string;
       target_agent_ids?: string[];
     }
   | { type: "delete_chat"; chat_id: string }
-  | {
-      type: "ppt_upload";
-      files: { name: string; data_url: string }[];
-    }
-  | {
-      type: "ppt_delete_brand";
-      data: { brandId: string };
-    }
-  | {
-      type: "ppt_import_native";
-      file: { name: string; data_url: string };
-    }
-  | {
-      type: "ppt_delete_native";
-      data: { templateId: string };
-    }
   | {
       type: "doc_upload";
       chat_id: string;
@@ -1603,14 +1545,6 @@ export type Outbound =
       request_id?: string;
     }
   | {
-      type: "agent_skill_stage";
-      agent_id: string;
-      name: string;
-      content?: string;
-      files?: Record<string, string>;
-      request_id?: string;
-    }
-  | {
       type: "agent_skill_action";
       agent_id: string;
       name: string;
@@ -1643,51 +1577,4 @@ export type Outbound =
       expected_hash?: string;
       request_id?: string;
     }
-  | {
-      type: "resolve_agent_change";
-      agent_id: string;
-      proposal_id: string;
-      token: string;
-      approve: boolean;
-      request_id?: string;
-    };
-
-export interface PptTemplate {
-  key: string;
-  kind: "layout" | "brand" | "native";
-  group: string;
-  name: string;
-  summary: string;
-  coverSvgUrl: string;
-  primaryColor?: string;
-  pageCount?: number;
-  canvasFormat?: string;
-  userCreated?: boolean;
-}
-
-export interface PptCanvasFormat {
-  key: string;
-  label: string;
-  viewBox: string;
-  desc: string;
-}
-
-export interface PptTemplatesResponse {
-  templates: PptTemplate[];
-  canvasFormats: PptCanvasFormat[];
-}
-
-export interface PptProject {
-  name: string;
-  createdAt: number;
-  format: string;
-  slideCount: number;
-  hasExport: boolean;
-  hasSvgOutput: boolean;
-  hasPptxOutput: boolean;
-  hasSpecLock: boolean;
-  status: "init" | "planning" | "generating" | "done";
-  phase?: string;
-  chatId: string | null;
-}
-
+  ;

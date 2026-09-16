@@ -35,7 +35,17 @@ beforeEach(() => {
   fileMocks.save.mockResolvedValue("C:\\Users\\test\\mona-message.png");
   fileMocks.writeFile.mockReset();
   fileMocks.writeFile.mockResolvedValue(undefined);
+  window.getSelection()?.removeAllRanges();
 });
+
+function selectText(element: HTMLElement): void {
+  const selection = window.getSelection();
+  if (!selection) throw new Error("浏览器不支持文本选区");
+  const range = document.createRange();
+  range.selectNodeContents(element);
+  selection.removeAllRanges();
+  selection.addRange(range);
+}
 
 describe("MessageBubble", () => {
   it("uses group-chat wording in the visible room labels", () => {
@@ -88,7 +98,7 @@ describe("MessageBubble", () => {
     expect(container.querySelector("img")).not.toBeInTheDocument();
   });
 
-  it("places copy, quote, and note actions in the assistant bubble context menu", async () => {
+  it("shows only Copy for selected message text in the context menu", async () => {
     const writeText = vi.fn().mockResolvedValue(undefined);
     Object.defineProperty(navigator, "clipboard", {
       configurable: true,
@@ -101,21 +111,31 @@ describe("MessageBubble", () => {
       createdAt: Date.now(),
     };
 
-    const onQuote = vi.fn();
-    render(<MessageBubble message={message} onQuote={onQuote} />);
+    render(<MessageBubble message={message} onQuote={vi.fn()} />);
 
-    fireEvent.contextMenu(screen.getByTestId("message-bubble-a-copy"));
+    const content = screen.getByText("I can help with the next step.");
+    selectText(content);
+    fireEvent.contextMenu(content);
     expect(await screen.findByRole("menuitem", { name: "Copy" })).toBeInTheDocument();
-    expect(screen.getByRole("menuitem", { name: "Reply" })).toBeInTheDocument();
-    expect(screen.getByRole("menuitem", { name: "Save as note" })).toBeInTheDocument();
+    expect(screen.queryByRole("menuitem", { name: "Reply" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("menuitem", { name: "Save as note" })).not.toBeInTheDocument();
     fireEvent.click(screen.getByRole("menuitem", { name: "Copy" }));
 
     expect(writeText).toHaveBeenCalledWith("I can help with the next step.");
-    await waitFor(() => expect(screen.queryByRole("menu")).not.toBeInTheDocument());
+  });
 
-    fireEvent.contextMenu(screen.getByTestId("message-bubble-a-copy"));
-    fireEvent.click(await screen.findByRole("menuitem", { name: "Reply" }));
-    expect(onQuote).toHaveBeenCalledWith(message, "Mona");
+  it("does not open a message context menu without selected text", () => {
+    const message: UIMessage = {
+      id: "a-no-selection",
+      role: "assistant",
+      content: "Nothing selected.",
+      createdAt: Date.now(),
+    };
+
+    render(<MessageBubble message={message} />);
+
+    fireEvent.contextMenu(screen.getByTestId("message-bubble-a-no-selection"));
+    expect(screen.queryByRole("menu")).not.toBeInTheDocument();
   });
 
   it("does not show copy actions for streaming placeholders", () => {
@@ -148,10 +168,16 @@ describe("MessageBubble", () => {
 
     render(<MessageBubble message={message} />);
 
-    fireEvent.contextMenu(screen.getByTestId("message-bubble-a-save-pending"));
+    fireEvent.pointerDown(screen.getByRole("button", { name: "More actions" }), {
+      button: 0,
+      ctrlKey: false,
+    });
     const saveButton = await screen.findByRole("menuitem", { name: "Save as note" });
     fireEvent.click(saveButton);
-    fireEvent.contextMenu(screen.getByTestId("message-bubble-a-save-pending"));
+    fireEvent.pointerDown(screen.getByRole("button", { name: "More actions" }), {
+      button: 0,
+      ctrlKey: false,
+    });
     const secondSaveButton = await screen.findByRole("menuitem", { name: "Save as note" });
 
     expect(tauriMocks.createNoteFromChat).toHaveBeenCalledTimes(1);
@@ -163,6 +189,29 @@ describe("MessageBubble", () => {
     await waitFor(() =>
       expect(screen.getByRole("menuitem", { name: "Saved as note" })).toBeInTheDocument(),
     );
+  });
+
+  it("saves a Markdown-free title derived from the reply", async () => {
+    tauriMocks.createNoteFromChat.mockResolvedValue("note-1");
+    const content = "## **房颤 RR 间期分布**\n\n正文仍然保留 Markdown。";
+    const message: UIMessage = {
+      id: "a-save-title",
+      role: "assistant",
+      content,
+      createdAt: Date.now(),
+    };
+
+    render(<MessageBubble message={message} />);
+    fireEvent.pointerDown(screen.getByRole("button", { name: "More actions" }), {
+      button: 0,
+      ctrlKey: false,
+    });
+    fireEvent.click(await screen.findByRole("menuitem", { name: "Save as note" }));
+
+    await waitFor(() => expect(tauriMocks.createNoteFromChat).toHaveBeenCalledWith(
+      "房颤 RR 间期分布",
+      content,
+    ));
   });
 
   it("shows a failure message when saving a reply as a note fails", async () => {
@@ -177,7 +226,10 @@ describe("MessageBubble", () => {
 
     try {
       render(<MessageBubble message={message} />);
-      fireEvent.contextMenu(screen.getByTestId("message-bubble-a-save-failed"));
+      fireEvent.pointerDown(screen.getByRole("button", { name: "More actions" }), {
+        button: 0,
+        ctrlKey: false,
+      });
       fireEvent.click(await screen.findByRole("menuitem", { name: "Save as note" }));
 
       await waitFor(() =>
@@ -211,11 +263,6 @@ describe("MessageBubble", () => {
   });
 
   it("collapses long completed replies without truncating their content", async () => {
-    const writeText = vi.fn().mockResolvedValue(undefined);
-    Object.defineProperty(navigator, "clipboard", {
-      configurable: true,
-      value: { writeText },
-    });
     const content = Array.from({ length: 30 }, (_, index) => `line ${index}`).join("\n");
     const message: UIMessage = {
       id: "a-long",
@@ -229,10 +276,6 @@ describe("MessageBubble", () => {
     const toggle = await screen.findByRole("button", { name: "Show all" });
     expect(toggle).toHaveAttribute("aria-expanded", "false");
     expect(document.body.textContent).toContain("line 29");
-    fireEvent.contextMenu(screen.getByTestId("message-bubble-a-long"));
-    fireEvent.click(await screen.findByRole("menuitem", { name: "Copy" }));
-    await waitFor(() => expect(writeText).toHaveBeenCalledWith(content));
-
     fireEvent.click(toggle);
     const collapse = await screen.findByRole("button", { name: "Collapse" });
     expect(collapse).toHaveAttribute("aria-expanded", "true");

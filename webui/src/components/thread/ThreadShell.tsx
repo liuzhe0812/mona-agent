@@ -40,7 +40,7 @@ import { usePendingQueue } from "@/hooks/usePendingQueue";
 import { useSessionHistory } from "@/hooks/useSessions";
 import { useArtifacts } from "@/hooks/useArtifacts";
 import { fetchSettings, listSlashCommands, renameArtifact, updateSettings } from "@/lib/api";
-import type { ChatSummary, DeliveredFile, DiscussionLaunchOptions, MessageQuote, RoomAgentInfo, SettingsPayload, SlashCommand, UIMessage, WorkflowRun } from "@/lib/types";
+import type { ChatSummary, DeliveredFile, DiscussionLaunchOptions, MessageQuote, RoomAgentInfo, SettingsPayload, SlashCommand, UIFileEdit, UIMessage, WorkflowRun } from "@/lib/types";
 import { useWorkspaceStore } from "@/lib/workspace-store";
 import { normalizeLegacyLongTaskMessages } from "@/lib/thread-display-compat";
 import { scrubSubagentUiMessages } from "@/lib/subagent-channel-display";
@@ -212,6 +212,28 @@ function artifactIdentity(file: DeliveredFile): string {
     file.path ||
     file.name
   );
+}
+
+function isScorePreviewArtifact(file: DeliveredFile): boolean {
+  const name = file.name.toLowerCase();
+  return name.endsWith(".abc") || name.endsWith(".atex");
+}
+
+function scorePreviewArtifactFromEdit(edit: UIFileEdit): DeliveredFile | null {
+  const path = edit.path.trim() || edit.absolute_path?.trim() || "";
+  const name = normalizeArtifactPath(path).split("/").pop() || "";
+  const lowerName = name.toLowerCase();
+  if (!lowerName.endsWith(".abc") && !lowerName.endsWith(".atex")) return null;
+  const size = edit.artifact_ref?.size ?? 0;
+  return {
+    path,
+    absolute_path: edit.absolute_path?.trim() || path,
+    name,
+    size,
+    size_human: size > 0 ? `${size} B` : "",
+    mime: edit.artifact_ref?.mime || (lowerName.endsWith(".abc") ? "text/vnd.abc" : "text/plain"),
+    artifact_ref: edit.artifact_ref,
+  };
 }
 
 function artifactTabId(file: DeliveredFile): string {
@@ -401,7 +423,6 @@ export function ThreadShell({
   const canvasRouteMessageRef = useRef<(content: string) => {
     content: string;
     displayContent?: string;
-    agentKind?: "ppt";
     canvasId?: string;
     canvasPath?: string;
     canvasPathReady?: Promise<string | undefined>;
@@ -420,6 +441,8 @@ export function ThreadShell({
   const {
     messages: historical,
     loading,
+    error: historyError,
+    missing: historyMissing,
     hasPendingToolCalls,
     refresh: refreshHistory,
     version: historyVersion,
@@ -436,6 +459,9 @@ export function ThreadShell({
   // Whether the active model preset accepts image input. ``supports_vision``
   // is tri-state server-side; only an explicit ``false`` disables upload.
   const [imageInputEnabled, setImageInputEnabled] = useState(true);
+  /** Context window of the active model preset. Drives the composer usage
+   * pill; falls back to the model catalogue value when unset. */
+  const [contextWindowTokens, setContextWindowTokens] = useState<number | null>(null);
   const [scrollToBottomSignal, setScrollToBottomSignal] = useState(0);
   const [focusMessage, setFocusMessage] = useState<{ id: string; requestId: number } | null>(null);
   const [quote, setQuote] = useState<MessageQuote | null>(null);
@@ -472,6 +498,8 @@ export function ThreadShell({
   const {
     messages,
     isStreaming,
+    isAwaitingModelResponse,
+    isCompacting,
     stopping,
     runStartedAt,
     goalState,
@@ -486,6 +514,17 @@ export function ThreadShell({
   } = useMonaStream(chatId, initial, hasPendingToolCalls, handleTurnEnd);
 
   const pendingQueue = usePendingQueue();
+  const computerUseActive = useMemo(() => {
+    if (!isStreaming) return false;
+    const runStartedAtMs = runStartedAt === null ? null : runStartedAt * 1000;
+    return messages.some((message) => {
+      const belongsToCurrentRun = currentTaskId && message.taskId
+        ? message.taskId === currentTaskId
+        : runStartedAtMs !== null && message.createdAt >= runStartedAtMs;
+      return belongsToCurrentRun
+        && message.toolEvents?.some((event) => event.name === "computer_act");
+    });
+  }, [currentTaskId, isStreaming, messages, runStartedAt]);
 
   useEffect(() => {
     setAttachedDocuments([]);
@@ -535,6 +574,28 @@ export function ThreadShell({
 
   const activeModelOptions = useMemo(() => providerOptions, [providerOptions]);
 
+  // Composer context pill: latest provider-reported turn usage vs the active
+  // model's context window.
+  const composerContextUsage = useMemo(() => {
+    const total = contextWindowTokens
+      ?? activeModelOptions.find((option) => option.active)?.contextWindow
+      ?? null;
+    for (let i = messages.length - 1; i >= 0; i--) {
+      const usage = messages[i]?.tokenUsage;
+      if (usage?.promptTokens) {
+        // ``contextTokens`` is the last LLM call's prompt size (true window
+        // occupancy); cumulative promptTokens would overstate tool-heavy turns.
+        // Zero (or absent) means the backend did not report it; fall back.
+        const contextTokens = usage.contextTokens;
+        const used = contextTokens && contextTokens > 0
+          ? contextTokens
+          : usage.promptTokens + usage.completionTokens;
+        return { used, total };
+      }
+    }
+    return null;
+  }, [messages, activeModelOptions, contextWindowTokens]);
+
   useEffect(() => {
     if (chatId && historyKey) sessionKeyByChatIdRef.current.set(chatId, historyKey);
   }, [chatId, historyKey]);
@@ -563,7 +624,11 @@ export function ThreadShell({
     setFocusMessage((current) => ({ id, requestId: (current?.requestId ?? 0) + 1 }));
   }, []);
 
-  const showHeroComposer = messages.length === 0 && !loading;
+  const establishedSession = Boolean(
+    session?.title?.trim() || session?.preview?.trim() || session?.previewAt,
+  );
+  const historyUnavailable = historyError || (historyMissing && establishedSession);
+  const showHeroComposer = messages.length === 0 && !loading && !historyUnavailable;
   const scheduleItems = useScheduleStore((s) => s.items);
   const loadScheduleItems = useScheduleStore((s) => s.loadItems);
   const recentSession = useMemo(() => {
@@ -687,13 +752,10 @@ export function ThreadShell({
         ? {
             ...pending.options,
             displayContent: pending.options?.displayContent ?? routed.displayContent,
-            agentKind: routed.agentKind ?? pending.options?.agentKind,
             canvasId: routed.canvasId ?? pending.options?.canvasId,
             canvasPath: canvasPath ?? pending.options?.canvasPath,
           }
-        : routed.agentKind
-          ? { agentKind: routed.agentKind }
-          : undefined;
+        : undefined;
       send(routed.content, pending.images, options);
       setBooting(false);
     })();
@@ -755,6 +817,9 @@ export function ThreadShell({
           setProviderOptions(options);
           const activePreset = settings.model_presets.find((p) => p.active);
           setImageInputEnabled(activePreset?.capabilities?.supports_vision !== false);
+          setContextWindowTokens(
+            activePreset?.context_window_tokens ?? settings.agent?.context_window_tokens ?? null,
+          );
           if (settings.runtime?.workspace_path) {
             setWorkspacePath(settings.runtime.workspace_path);
           }
@@ -789,9 +854,12 @@ export function ThreadShell({
         const newModel = payload.agent.model || null;
         onModelNameChange?.(newModel);
         const activePreset = payload.model_presets?.find(
-          (p: { active: boolean }) => p.active,
+          (p: { active: boolean; context_window_tokens?: number | null }) => p.active,
         );
         setImageInputEnabled(activePreset?.capabilities?.supports_vision !== false);
+        setContextWindowTokens(
+          activePreset?.context_window_tokens ?? payload.agent?.context_window_tokens ?? null,
+        );
         if (payload.chat_providers) {
           const options = buildComposerProviderOptions(payload, managedModelPricesRef.current);
           setProviderOptions(options);
@@ -806,6 +874,7 @@ export function ThreadShell({
   // Multi-agent: room members offered by the composer ``@`` picker. The
   // registry provides display names; unknown ids degrade to the raw id.
   const agentsById = useAgents(token);
+  const customMonaAvatar = agentsById.get("mona")?.avatarUrl || null;
   const directAgentId = conversation?.type === "direct"
     ? conversation.directAgentId?.trim() || null
     : pendingDirectAgentId?.trim() || null;
@@ -876,15 +945,14 @@ export function ThreadShell({
             ..._options,
             docPaths,
             documentNames: attachedDocuments.map((document) => document.name),
-            agentKind: routed.agentKind ?? _options?.agentKind,
             canvasId: routed.canvasId ?? _options?.canvasId,
             canvasPath: routedCanvasPath ?? _options?.canvasPath,
             displayContent: baseDisplayContent ?? content,
           }
         : baseDisplayContent
-          ? { ..._options, displayContent: baseDisplayContent, agentKind: routed.agentKind ?? _options?.agentKind, canvasId: routed.canvasId ?? _options?.canvasId, canvasPath: routedCanvasPath ?? _options?.canvasPath }
-          : routed.agentKind || routed.canvasId || routedCanvasPath
-            ? { ..._options, agentKind: routed.agentKind, canvasId: routed.canvasId, canvasPath: routedCanvasPath }
+          ? { ..._options, displayContent: baseDisplayContent, canvasId: routed.canvasId ?? _options?.canvasId, canvasPath: routedCanvasPath ?? _options?.canvasPath }
+          : routed.canvasId || routedCanvasPath
+            ? { ..._options, canvasId: routed.canvasId, canvasPath: routedCanvasPath }
             : _options;
       const officeContext = activeOfficeContextRef.current;
       send(
@@ -984,10 +1052,9 @@ export function ThreadShell({
         ?? (routed.canvasPathReady ? await routed.canvasPathReady : undefined);
       if (cancelled) return;
       const officeContext = activeOfficeContextRef.current;
-      const options = routed.displayContent || routed.agentKind || routed.canvasId || canvasPath || queuedPrompt.origin
+      const options = routed.displayContent || routed.canvasId || canvasPath || queuedPrompt.origin
         ? {
             displayContent: routed.displayContent,
-            agentKind: routed.agentKind,
             canvasId: routed.canvasId,
             canvasPath,
             origin: queuedPrompt.origin,
@@ -1024,10 +1091,12 @@ export function ThreadShell({
         className="mona-home-avatar relative h-[3.25rem] w-[3.25rem] shrink-0 overflow-hidden rounded-full border border-foreground/10 bg-muted/55 shadow-surface"
       >
         <img
-          src="/brand/mona_human_solid.png"
+          src={customMonaAvatar ?? "/brand/mona_human_solid.png"}
           alt="Mona"
           data-testid="mona-human-portrait-image"
-          className="mona-home-avatar-image pointer-events-none absolute left-1/2 top-[-0.15rem] h-[5.75rem] w-auto max-w-none select-none"
+          className={customMonaAvatar
+            ? "pointer-events-none h-full w-full select-none object-cover"
+            : "mona-home-avatar-image pointer-events-none absolute left-1/2 top-[-0.15rem] h-[5.75rem] w-auto max-w-none select-none"}
           draggable={false}
         />
       </div>
@@ -1052,13 +1121,17 @@ export function ThreadShell({
       {session ? (
         <ThreadComposer
           onSend={handleThreadSend}
-          disabled={!chatId}
+          disabled={!chatId || Boolean(historyUnavailable)}
           isStreaming={isStreaming}
+          computerUseActive={computerUseActive}
+          isAwaitingModelResponse={isAwaitingModelResponse}
+          isCompacting={isCompacting}
           stopping={stopping}
           placeholder={composerPlaceholder}
           modelLabel={toModelBadgeLabel(modelName)}
           modelOptions={activeModelOptions}
           onModelSwitch={handleModelSwitch}
+          contextUsage={composerContextUsage}
           imageInputEnabled={imageInputEnabled}
           variant={showHeroComposer ? "hero" : "thread"}
           heroBrand={monaHeroBrand}
@@ -1098,6 +1171,9 @@ export function ThreadShell({
           onSend={handleWelcomeSend}
           disabled={booting}
           isStreaming={isStreaming}
+          computerUseActive={computerUseActive}
+          isAwaitingModelResponse={isAwaitingModelResponse}
+          isCompacting={isCompacting}
           placeholder={openingPlaceholder}
           modelLabel={toModelBadgeLabel(modelName)}
           modelOptions={activeModelOptions}
@@ -1106,6 +1182,7 @@ export function ThreadShell({
           variant="hero"
           heroBrand={monaHeroBrand}
           slashCommands={slashCommands}
+          onStop={stop}
           runStartedAt={runStartedAt}
           goalState={goalState}
           pendingMessages={pendingQueue.messages}
@@ -1151,6 +1228,18 @@ export function ThreadShell({
   const emptyState = loading ? (
     <div className="flex h-full items-center justify-center text-sm text-muted-foreground">
       {t("thread.loadingConversation")}
+    </div>
+  ) : historyUnavailable ? (
+    <div role="alert" className="flex w-full flex-col items-center justify-center py-16 text-center">
+      <div className="text-ui font-medium text-foreground">
+        {t("thread.historyLoadFailed")}
+      </div>
+      <p className="mt-2 max-w-[28rem] text-sm leading-relaxed text-muted-foreground">
+        {t("thread.historyLoadFailedHint")}
+      </p>
+      <Button className="mt-5" variant="outline" onClick={refreshHistory}>
+        {t("thread.retryHistory")}
+      </Button>
     </div>
   ) : isRoomEmptyState ? (
     <div className="flex w-full flex-col items-center justify-center py-16 text-center">
@@ -1236,6 +1325,15 @@ export function ThreadShell({
       ? "project"
       : "shared";
   const [previewTabs, setPreviewTabs] = useState<ArtifactPreviewTab[]>([]);
+  const deliveredScorePreviewRef = useRef<{
+    historyKey: string | null;
+    seenDeliveries: Set<string>;
+    seenEdits: Set<string>;
+  }>({
+    historyKey: null,
+    seenDeliveries: new Set(),
+    seenEdits: new Set(),
+  });
   const [toolTabs, setToolTabs] = useState<ToolSidebarTab[]>([]);
   const [officeSessions, setOfficeSessions] = useState<Record<string, OfficeSessionState>>({});
   const toolTabsRef = useRef(toolTabs);
@@ -1566,6 +1664,46 @@ export function ThreadShell({
     });
   }, [isRoomSession, messageFiles, deletedArtifactPaths, scanKeys]);
 
+  // Only live file activity may take focus. Replayed history remains visible in
+  // the workspace, while duplicate delivery frames must not reopen a file the
+  // user already closed. A new edit call may intentionally reopen the same path.
+  useEffect(() => {
+    if (!chatId || !historyKey || isRoomSession) return;
+    return client.onChat(chatId, (event) => {
+      const tracker = deliveredScorePreviewRef.current;
+      if (tracker.historyKey !== historyKey) {
+        tracker.historyKey = historyKey;
+        tracker.seenDeliveries = new Set();
+        tracker.seenEdits = new Set();
+      }
+      let newScore: DeliveredFile | undefined;
+      if (event.event === "file_edit") {
+        const completed = event.edits
+          .filter((edit) => edit.status === "done" && edit.phase !== "error")
+          .map((edit) => ({ edit, file: scorePreviewArtifactFromEdit(edit) }))
+          .filter((item): item is { edit: UIFileEdit; file: DeliveredFile } => !!item.file);
+        const unseen = [...completed].reverse().find(({ edit, file }) => (
+          !tracker.seenEdits.has(`${edit.call_id}:${artifactIdentity(file)}`)
+        ));
+        completed.forEach(({ edit, file }) => {
+          tracker.seenEdits.add(`${edit.call_id}:${artifactIdentity(file)}`);
+          tracker.seenDeliveries.add(artifactIdentity(file));
+        });
+        newScore = unseen?.file;
+      } else if (event.event === "deliver_files") {
+        const scores = event.files.filter(isScorePreviewArtifact);
+        newScore = [...scores].reverse().find(
+          (file) => !tracker.seenDeliveries.has(artifactIdentity(file)),
+        );
+        scores.forEach((file) => tracker.seenDeliveries.add(artifactIdentity(file)));
+      }
+      if (!newScore) return;
+      useFilePreviewStore.getState().open(newScore, workspaceScope, sessionKey);
+      setWorkspaceCollapsed(false);
+      setSplitRatio(0.5);
+    });
+  }, [chatId, client, historyKey, isRoomSession, sessionKey, setSplitRatio, setWorkspaceCollapsed, workspaceScope]);
+
   const visibleTaskFiles = useMemo(() => {
     if (isRoomSession || isProjectSession) return [];
     if (deletedArtifactPaths.size === 0) return artifacts.taskFiles;
@@ -1580,35 +1718,9 @@ export function ThreadShell({
     });
   }, [isRoomSession, isProjectSession, artifacts.taskFiles, deletedArtifactPaths, scanKeys]);
 
-  // Pick the authoritative data source for the workspace panel. The server
-  // separates persisted session references from the Agent scan; live message
-  // events are only a short-lived supplement until the next refresh.
-  const workspaceFiles = useMemo(() => {
-    if (isRoomSession) return artifacts.files;
-    if (isProjectSession) return artifacts.files;
-    const out: DeliveredFile[] = [];
-    const seen = new Set<string>();
-    const push = (file: DeliveredFile) => {
-      const key = artifactIdentity(file);
-      if (seen.has(key)) return;
-      seen.add(key);
-      out.push(file);
-    };
-    const reservedKeys = new Set(
-      [...artifacts.sessionFiles, ...visibleMessageFiles].map(artifactIdentity),
-    );
-    for (const file of visibleTaskFiles) {
-      reservedKeys.add(normalizeArtifactPath(artifactIdentity(file)));
-    }
-    for (const f of artifacts.files) push(f);
-    // Older servers may still return session files in ``files``; hide them
-    // by identity so the UI never duplicates a delivered row.
-    if (reservedKeys.size > 0) {
-      const filtered = out.filter((f) => !reservedKeys.has(artifactIdentity(f)));
-      return filtered;
-    }
-    return out;
-  }, [isRoomSession, isProjectSession, artifacts.files, artifacts.sessionFiles, visibleMessageFiles, visibleTaskFiles]);
+  // The directory inventory includes delivered and process files too.
+  // Their session/task attribution belongs only to the overview projections.
+  const workspaceFiles = artifacts.files;
 
   // Session references remain visible even after the file also appears in the
   // workspace scan. Merge scan metadata into the reference row when possible.
@@ -2051,11 +2163,12 @@ export function ThreadShell({
               <div className={cn("flex h-full flex-col", activeRightTabId !== SIDEBAR_WORKSPACE_TAB_ID && "hidden")}>
                 <div className="min-h-0 flex-1 overflow-y-auto">
                   <WorkspacePanel
-                    files={artifacts.files}
+                    files={workspaceFiles}
                     scope={workspaceScope}
                     sessionKey={sessionKey}
                     ownerKey={`${artifactOwnerKey}:workspace`}
                     error={artifacts.error}
+                    loading={artifacts.loading}
                     truncated={artifacts.truncated}
                     onRefresh={artifacts.refresh}
                     onDelete={handleDeleteArtifact}
@@ -2132,7 +2245,11 @@ export function ThreadShell({
               </div>
             ))}
             {previewTabs.map((tab) => (
-              <div key={tab.id} className={cn("h-full", activeRightTabId !== tab.id && "hidden")}>
+              <div
+                key={tab.id}
+                data-preview-tab-id={tab.id}
+                className={cn("flex h-full min-h-0 flex-col", activeRightTabId !== tab.id && "hidden")}
+              >
                 <FilePreviewPanel
                   files={previewNavFiles}
                   embedded

@@ -111,7 +111,7 @@ describe("ThreadComposer", () => {
     expect(input.parentElement?.className).not.toContain("shadow-sm");
     expect(input.parentElement?.className).toContain("focus-within:ring-foreground/8");
     expect(screen.getByRole("button", { name: "Attach image" }).className).toContain("bg-card");
-    expect(screen.getByRole("button", { name: "Send message" }).className).toContain("bg-foreground");
+    expect(screen.getByRole("button", { name: "Send message" }).className).toContain("bg-action");
   });
 
   it("sends with Enter by default and keeps Shift+Enter for a newline", () => {
@@ -278,6 +278,40 @@ describe("ThreadComposer", () => {
     expect(status).toHaveTextContent(/Running/);
     expect(status).toHaveTextContent(/2:05/);
 
+    vi.useRealTimers();
+  });
+
+  it("labels the run strip while earlier context is being compacted", () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date(1_125_000));
+
+    render(
+      <ThreadComposer
+        onSend={vi.fn()}
+        runStartedAt={1_000}
+        isCompacting
+      />,
+    );
+
+    expect(screen.getByRole("status")).toHaveTextContent("Compacting context");
+    vi.useRealTimers();
+  });
+
+  it("shows a distinct waiting phase before the model starts responding", () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date((1_000 + 125) * 1000));
+
+    render(
+      <ThreadComposer
+        onSend={vi.fn()}
+        isStreaming
+        isAwaitingModelResponse
+        runStartedAt={1_000}
+      />,
+    );
+
+    expect(screen.getByRole("status")).toHaveTextContent("Waiting for model response · 2:05");
+    expect(screen.getByPlaceholderText("Waiting for the model to respond…")).toBeInTheDocument();
     vi.useRealTimers();
   });
 
@@ -448,5 +482,138 @@ describe("ThreadComposer", () => {
     const button = screen.getByRole("button", { name: "Stopping" });
     expect(button).toBeDisabled();
     expect(screen.queryByRole("button", { name: "Send message" })).not.toBeInTheDocument();
+  });
+
+  it("renders context usage to the left of the model and reveals details on hover", async () => {
+    render(
+      <ThreadComposer
+        onSend={vi.fn()}
+        modelLabel="hy4-preview"
+        contextUsage={{ used: 59_600, total: 1_000_000 }}
+      />,
+    );
+
+    const indicator = screen.getByRole("img", {
+      name: "6.0% · 59.6K / 1.0M 上下文已使用",
+    });
+    const model = screen.getByText("hy4-preview");
+    expect(indicator.className).toContain("h-7");
+    expect(indicator.querySelector("svg")?.getAttribute("class")).toContain("h-5");
+    expect(indicator.compareDocumentPosition(model) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(screen.queryByRole("tooltip")).not.toBeInTheDocument();
+
+    fireEvent.focus(indicator);
+    expect(await screen.findByRole("tooltip")).toHaveTextContent(
+      "6.0% · 59.6K / 1.0M 上下文已使用",
+    );
+  });
+
+  it("keeps context usage limited to user-facing values", async () => {
+    render(
+      <ThreadComposer
+        onSend={vi.fn()}
+        modelLabel="qwen3.7-plus"
+        contextUsage={{ used: 60_000, total: 1_000_000 }}
+      />,
+    );
+
+    const indicator = screen.getByRole("img", {
+      name: "6.0% · 60.0K / 1.0M 上下文已使用",
+    });
+    fireEvent.focus(indicator);
+    expect(await screen.findByRole("tooltip")).toHaveTextContent(
+      "6.0% · 60.0K / 1.0M 上下文已使用",
+    );
+    expect(screen.queryByText(/配置回退|模型目录|模型探测/)).not.toBeInTheDocument();
+  });
+
+  it("groups the context indicator with the trailing model selector and send button", () => {
+    render(
+      <ThreadComposer
+        onSend={vi.fn()}
+        modelLabel="hy4-preview"
+        contextUsage={{ used: 170_000, total: 1_000_000 }}
+      />,
+    );
+
+    const indicator = screen.getByRole("img", { name: "17.0% · 170.0K / 1.0M 上下文已使用" });
+    const send = screen.getByRole("button", { name: "Send message" });
+    expect(indicator.parentElement).toBe(send.parentElement);
+  });
+
+  it("keeps the context indicator visible when the context window is unknown", () => {
+    render(
+      <ThreadComposer
+        onSend={vi.fn()}
+        modelLabel="hy4-preview"
+        contextUsage={{ used: 59_600, total: null }}
+      />,
+    );
+
+    expect(screen.getByRole("img", { name: "已使用 59.6K，模型上下文窗口未知" })).toBeInTheDocument();
+  });
+
+  it("keeps the context indicator visible for legacy cumulative usage", () => {
+    // Legacy turns stored cumulative usage; never render a nonsensical ratio.
+    render(
+      <ThreadComposer
+        onSend={vi.fn()}
+        modelLabel="qwen3.7-plus"
+        contextUsage={{ used: 3_897_400, total: 65_536 }}
+      />,
+    );
+
+    expect(screen.getByRole("img", { name: "已使用 3.9M，模型上下文窗口未知" })).toBeInTheDocument();
+  });
+
+  it("shows an empty context indicator without usage data", () => {
+    render(<ThreadComposer onSend={vi.fn()} modelLabel="hy4-preview" />);
+
+    expect(screen.getByRole("img", { name: "暂无上下文用量" })).toBeInTheDocument();
+  });
+
+  it("renders the model selector without a leading icon", () => {
+    render(
+      <ThreadComposer
+        onSend={vi.fn()}
+        modelLabel="Deepseek-V4"
+        modelOptions={[{
+          provider: "mona",
+          providerLabel: "Mona",
+          model: "Deepseek-V4",
+          label: "Deepseek V4",
+          active: true,
+        }]}
+        onModelSwitch={vi.fn()}
+      />,
+    );
+
+    const trigger = screen.getByTitle("Deepseek-V4");
+    expect(trigger.className).toContain("h-7");
+    expect(trigger.className).toContain("text-caption");
+    expect(trigger.querySelector("img")).toBeNull();
+    expect(trigger.querySelector("svg")).toHaveAttribute("aria-hidden", "true");
+  });
+
+  it("groups the model selector with the send button on the trailing side", () => {
+    render(
+      <ThreadComposer
+        onSend={vi.fn()}
+        modelLabel="hy4-preview"
+        modelOptions={[{
+          provider: "mona",
+          providerLabel: "Mona",
+          model: "hy4-preview",
+          label: "Hy4 preview",
+          active: true,
+          contextWindow: 1_000_000,
+        }]}
+        onModelSwitch={vi.fn()}
+      />,
+    );
+
+    const trigger = screen.getByTitle("hy4-preview");
+    const send = screen.getByRole("button", { name: "Send message" });
+    expect(trigger.parentElement).toBe(send.parentElement);
   });
 });

@@ -29,13 +29,14 @@ const detail = {
     delegationEnabled: false,
   },
   toolCatalog: [
-    { name: "web_search", description: "Search the web", available: true, readOnly: true },
+    { name: "web_search", description: "Search the web", available: true, readOnly: true, systemManaged: true },
     { name: "generate_image", description: "Generate an image", available: false, readOnly: false },
     { name: "notes_search", description: "Search notes", available: true, readOnly: true },
     { name: "notes_read", description: "Read notes", available: true, readOnly: true },
     { name: "notes_create", description: "Create notes", available: true, readOnly: false },
     { name: "notes_save_image", description: "Save note image", available: true, readOnly: false },
-    { name: "knowledge_search", description: "Search knowledge", available: true, readOnly: true },
+    { name: "knowledge_search", description: "Search Agent Knowledge", available: true, readOnly: true },
+    { name: "knowledge_read", description: "Read Agent Knowledge", available: true, readOnly: true },
     { name: "materials_search", description: "Search materials", available: true, readOnly: true },
     { name: "materials_read", description: "Read materials", available: true, readOnly: true },
     { name: "wiki_search", description: "Search Wiki", available: true, readOnly: true },
@@ -48,7 +49,7 @@ const partialDetail = {
   ...detail,
   agent: { ...detail.agent, id: "agent.partial", displayName: "Partial Agent" },
   definition: { ...detail.definition, id: "agent.partial" },
-  config: { ...detail.config, grantedTools: ["web_search", "notes_search", "notes_read", "materials_search"] },
+  config: { ...detail.config, grantedTools: ["web_search", "notes_search", "notes_read", "materials_search", "removed_tool"] },
   effective: { ...detail.effective, agentId: "agent.partial", displayName: "Partial Agent" },
 };
 
@@ -164,6 +165,20 @@ const clientMocks = vi.hoisted(() => ({
 }));
 
 vi.mock("@/lib/api", () => ({
+  fetchAutomationStatus: vi.fn(async () => ({
+    browserAutomationEnabled: true,
+    computerUse: {
+      enabled: false,
+      state: "disabled",
+      supported: true,
+      version: "0.23.2",
+      downloadBytes: 27_635_699,
+      installed: true,
+      degraded: false,
+      error: null,
+      job: null,
+    },
+  })),
   fetchSettings: vi.fn(async () => ({
     model_presets: [
       { name: "default", label: "默认模型", model: "demo-model", provider: "demo" },
@@ -176,6 +191,33 @@ vi.mock("@/lib/api", () => ({
         agent: { ...detail.agent, id: "mona", displayName: "Mona" },
         definition: { ...detail.definition, id: "mona" },
         effective: { ...detail.effective, agentId: "mona", displayName: "Mona" },
+        toolCatalog: [
+          ...detail.toolCatalog,
+          { name: "browser_observe", description: "Observe browser", available: true, readOnly: true },
+          { name: "browser_act", description: "Act in browser", available: true, readOnly: false },
+          { name: "computer_observe", description: "Observe desktop", available: true, readOnly: true, requiresExplicitPermission: true },
+          { name: "computer_act", description: "Act on desktop", available: true, readOnly: false, requiresExplicitPermission: true },
+          { name: "canvas", description: "Canvas", available: false, readOnly: false, systemManaged: true },
+          { name: "long_task", description: "Long goal", available: false, readOnly: false, systemManaged: true },
+          { name: "read_file", description: "Read file", available: true, readOnly: true, systemManaged: true },
+          { name: "memory_read", description: "Read memory", available: true, readOnly: true, systemManaged: true },
+          { name: "skill_read", description: "Read skill", available: true, readOnly: true, systemManaged: true },
+          { name: "db_query", description: "Database query", available: true, readOnly: true },
+          { name: "office", description: "Office", available: true, readOnly: false },
+          { name: "email_search", description: "Email search", available: true, readOnly: true },
+          { name: "delegate_agent", description: "Delegate an agent", available: true, readOnly: false, systemManaged: true },
+          { name: "propose_workflow", description: "Propose a structured workflow", available: true, readOnly: false, systemManaged: true },
+          { name: "run_collaboration", description: "Run a one-time collaboration", available: true, readOnly: false, systemManaged: true },
+          { name: "spawn", description: "Spawn a subtask", available: true, readOnly: false, systemManaged: true },
+          { name: "terminal_task", description: "Terminal task", available: true, readOnly: false },
+          { name: "crypto", description: "Crypto utility", available: true, readOnly: true, requiresExplicitPermission: true },
+          { name: "config_set_provider", description: "Provider settings", available: true, readOnly: false, requiresExplicitPermission: true },
+          { name: "http_request", description: "HTTP request", available: true, readOnly: false, systemManaged: true },
+          { name: "heartbeat_update", description: "Update heartbeat", available: true, readOnly: false },
+          { name: "schedule", description: "Manage schedules", available: true, readOnly: false },
+          { name: "todo", description: "Manage todos", available: true, readOnly: false },
+          { name: "my", description: "Inspect runtime state", available: true, readOnly: true, systemManaged: true },
+        ],
       }
     : agentId === "agent.partial" ? partialDetail : detail),
   listAgentInstructions: vi.fn(async () => [
@@ -192,7 +234,6 @@ vi.mock("@/lib/api", () => ({
       content: `---\nname: ${skill.name}\ndescription: ${skill.description}\n---\n`,
     };
   }),
-  listAgentChangeProposals: vi.fn(async () => []),
   listAgentInstructionHistory: vi.fn(async () => []),
 }));
 vi.mock("@/lib/materials-api", () => ({
@@ -296,12 +337,52 @@ describe("AgentManagementView navigation surfaces", () => {
     render(<AgentManagementView agentId="agent.demo" onBack={() => {}} onStartDirect={() => {}} />);
     await user.click(await screen.findByRole("tab", { name: "工具" }));
 
-    expect(screen.getByText("网页搜索")).toBeInTheDocument();
     expect(screen.getByText("图片生成")).toBeInTheDocument();
-    expect(screen.getByRole("switch", { name: "网页搜索工具" })).toBeInTheDocument();
     expect(screen.getByRole("switch", { name: "图片生成工具" })).toBeInTheDocument();
     expect(screen.queryByText("Search the web")).not.toBeInTheDocument();
     expect(screen.queryByText("继承推荐工具")).not.toBeInTheDocument();
+  });
+
+  it("uses the Agent tool tab as the only automation permission entry", async () => {
+    const user = userEvent.setup();
+    render(<AgentManagementView agentId="mona" onBack={() => {}} onStartDirect={() => {}} />);
+    await user.click(await screen.findByRole("tab", { name: "工具" }));
+
+    expect(screen.getByRole("switch", { name: "浏览器自动操作工具" })).toHaveAttribute("aria-checked", "true");
+    expect(screen.getByRole("switch", { name: "电脑操作自动化工具" })).toHaveAttribute("aria-checked", "false");
+    expect(screen.getAllByRole("heading", { level: 3 }).slice(0, 2).map((heading) => heading.textContent)).toEqual(["自动化", "媒体"]);
+    expect(screen.getByText("默认关闭；首次开启会自动下载驱动。")).toBeInTheDocument();
+    expect(screen.queryByRole("switch", { name: "browser observe工具" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("switch", { name: "computer act工具" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("switch", { name: "canvas工具" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("switch", { name: "long task工具" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("switch", { name: "my工具" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("heading", { name: "文件" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("heading", { name: "记忆" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("heading", { name: "技能" })).not.toBeInTheDocument();
+    expect(screen.getByRole("switch", { name: "查询笔记工具" })).toHaveAttribute("aria-checked", "true");
+    expect(screen.queryByRole("heading", { name: "研究" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("switch", { name: "校验乐谱工具" })).not.toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: "数据库" })).toBeInTheDocument();
+    const planningTools = screen.getByRole("heading", { name: "计划" }).closest("section");
+    expect(planningTools).not.toBeNull();
+    expect(within(planningTools as HTMLElement).getByRole("switch", { name: "日程管理工具" })).toHaveAttribute("aria-checked", "true");
+    expect(within(planningTools as HTMLElement).getByRole("switch", { name: "待办事项工具" })).toHaveAttribute("aria-checked", "true");
+    expect(within(planningTools as HTMLElement).getByRole("switch", { name: "周期任务工具" })).toHaveAttribute("aria-checked", "true");
+    expect(screen.queryByRole("heading", { name: "网页" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("heading", { name: "协作" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("switch", { name: "设计协作流程工具" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("switch", { name: "立即运行协作工具" })).not.toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: "文档" })).toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: "通信" })).toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: "终端" })).toBeInTheDocument();
+    const otherTools = screen.getByRole("heading", { name: "其他" }).closest("section");
+    expect(otherTools).not.toBeNull();
+    expect(within(otherTools as HTMLElement).getByRole("switch", { name: "编码与加密工具" })).toBeInTheDocument();
+    expect(within(otherTools as HTMLElement).getByRole("switch", { name: "配置模型供应商工具" })).toBeInTheDocument();
+    expect(within(otherTools as HTMLElement).getByRole("switch", { name: "编码与加密工具" })).toHaveAttribute("aria-checked", "false");
+    expect(within(otherTools as HTMLElement).getByRole("switch", { name: "配置模型供应商工具" })).toHaveAttribute("aria-checked", "false");
+    expect(screen.queryByRole("heading", { name: "实用工具" })).not.toBeInTheDocument();
   });
 
   it("shows the tool permission overview and filters tools by search", async () => {
@@ -310,7 +391,7 @@ describe("AgentManagementView navigation surfaces", () => {
     await user.click(await screen.findByRole("tab", { name: "工具" }));
 
     expect(screen.getByRole("heading", { name: "工具权限" })).toBeInTheDocument();
-    expect(screen.getByText("已启用 6 / 6")).toBeInTheDocument();
+    expect(screen.getByText("已启用 4 / 4")).toBeInTheDocument();
     const search = screen.getByRole("searchbox", { name: "搜索工具" });
     expect(search).toBeInTheDocument();
 
@@ -357,7 +438,7 @@ describe("AgentManagementView navigation surfaces", () => {
     await user.click(notesSwitch);
     await waitFor(() => expect(clientMocks.updateAgentConfig).toHaveBeenCalledWith(
       "agent.partial",
-      { granted_tools: ["web_search", "materials_search"] },
+      { granted_tools: ["materials_search"] },
       1,
     ));
   });
@@ -464,21 +545,44 @@ describe("AgentManagementView navigation surfaces", () => {
     expect(screen.queryByText("learned-research")).not.toBeInTheDocument();
   });
 
-  it("configures scripts for a package skill and explains optional runtimes", async () => {
+  it("prepares a package skill environment and explains optional runtimes", async () => {
     const user = userEvent.setup();
     render(<AgentManagementView agentId="agent.demo" onBack={() => {}} onStartDirect={() => {}} />);
     await user.click(await screen.findByRole("tab", { name: "技能" }));
 
-    await user.click(screen.getByRole("button", { name: "完成配置" }));
+    await user.click(screen.getByRole("button", { name: "准备环境" }));
     const dialog = await screen.findByRole("dialog", { name: /配置技能：analysis-experiment/ });
     expect(within(dialog).getByText("可选 R 后端")).toBeInTheDocument();
     expect(within(dialog).getByText("当前版本不支持")).toBeInTheDocument();
+    expect(within(dialog).queryByText("运行权限")).not.toBeInTheDocument();
+    expect(within(dialog).queryByText(/待允许|允许并准备|撤销脚本权限|前往工具权限/)).not.toBeInTheDocument();
 
     clientMocks.startAgentSkillSetup.mockClear();
-    await user.click(within(dialog).getByRole("button", { name: "允许并准备" }));
+    await user.click(within(dialog).getByRole("button", { name: "准备环境" }));
     await waitFor(() => expect(clientMocks.startAgentSkillSetup).toHaveBeenCalledWith(
       "agent.demo",
       "analysis-experiment",
     ));
+  });
+
+  it("treats a ready skill as complete without script approval", async () => {
+    const user = userEvent.setup();
+    const skill = skills.find((item) => item.name === "analysis-experiment");
+    if (!skill) throw new Error("analysis-experiment fixture is missing");
+    const previousRuntimeReady = skill.runtimeReady;
+    skill.runtimeReady = true;
+    try {
+      render(<AgentManagementView agentId="agent.demo" onBack={() => {}} onStartDirect={() => {}} />);
+      await user.click(await screen.findByRole("tab", { name: "技能" }));
+      await user.click(await screen.findByRole("button", { name: "查看环境" }));
+
+      const dialog = await screen.findByRole("dialog", { name: /配置技能：analysis-experiment/ });
+      expect(within(dialog).getByText("已就绪")).toBeInTheDocument();
+      expect(within(dialog).getByRole("button", { name: "完成" })).toBeInTheDocument();
+      expect(within(dialog).queryByRole("button", { name: "准备环境" })).not.toBeInTheDocument();
+      expect(within(dialog).queryByText(/运行权限|待允许|允许并准备|撤销脚本权限|前往工具权限/)).not.toBeInTheDocument();
+    } finally {
+      skill.runtimeReady = previousRuntimeReady;
+    }
   });
 });
