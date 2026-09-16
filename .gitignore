@@ -304,6 +304,7 @@ docs/reports/*
 !docs/guides/
 docs/guides/*
 !docs/guides/browser-testing.md
+!docs/guides/changelog.md
 !docs/guides/mona-worker-deployment.md
 !docs/guides/ssh-docker-management.md
 
