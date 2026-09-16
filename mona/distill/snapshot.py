@@ -14,7 +14,7 @@ from mona.distill.store import (
 )
 
 PROFILE_SNAPSHOT_SCHEMA_VERSION = 2
-DEFAULT_ALLOWED_FIELDS = ("preferences", "work_context", "current_focus")
+DEFAULT_ALLOWED_FIELDS = ("preferences",)
 _MAX_VALUE_CHARS = 2_000
 
 
@@ -106,8 +106,13 @@ def render_user_profile_snapshot(snapshot: dict[str, Any] | None) -> str:
     )
 
 
-def build_shared_user_profile_context() -> str:
-    return render_user_profile_snapshot(build_user_profile_snapshot())
+def build_shared_user_profile_context(
+    *,
+    allowed_fields: Iterable[str] | None = None,
+) -> str:
+    return render_user_profile_snapshot(
+        build_user_profile_snapshot(allowed_fields=allowed_fields)
+    )
 
 
 __all__ = [

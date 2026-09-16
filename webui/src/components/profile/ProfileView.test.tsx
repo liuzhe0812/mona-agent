@@ -12,6 +12,8 @@ vi.mock("@/lib/profile-api", async () => {
 });
 
 import { ProfileView } from "./ProfileView";
+import { ProfileTab } from "./ProfileTab";
+import { TrajectoryTab } from "./TrajectoryTab";
 
 const profile: RichProfile = {
   version: "3.0",
@@ -148,5 +150,42 @@ describe("ProfileView dashboard shell", () => {
 
     expect(await screen.findByText("部分内容已更新；AI 建议未完成，可稍后重试。")).toBeInTheDocument();
     expect(screen.queryByText(/3\/4/)).not.toBeInTheDocument();
+  });
+});
+
+
+describe("profile category compatibility", () => {
+  it("removes legacy catch-all categories across both tabs and preserves matrix alignment", () => {
+    const legacy = structuredClone(profile);
+    const charts = legacy.dashboard!.profile_charts!;
+    charts.profile_dimensions!.push({ axis: "其他", count: 500 });
+    charts.previous_profile_dimensions!.push({ axis: "其他", count: 300 });
+    charts.topic_graph!.nodes.push({ id: "other", label: "其他", group: "其他", count: 500 });
+    charts.topic_graph!.links.push({ source: "other", target: "topic:AI", weight: 8 });
+    charts.collaboration_types!.push({ label: "其他", count: 500 });
+    charts.artifact_types!.push({ label: "其他", count: 500 });
+    charts.domain_task_matrix = { domains: ["其他", "产品设计"], tasks: ["其他", "设计"], values: [[500, 400], [300, 17]] };
+    charts.topic_trends!.series.push({ topic: "其他", values: [100, 200, 300, 500] });
+    charts.topic_comparison!.push({ topic: "其他", current: 500, previous: 300, delta: 200 });
+    charts.new_topics!.push({ topic: "其他", count: 500, first_seen_at: "2026-09-01" });
+    const { container, rerender } = render(<ProfileTab profile={legacy} loading={false} />);
+    expect(screen.queryByText("其他")).not.toBeInTheDocument();
+    expect(screen.getByText("17")).toBeInTheDocument();
+    expect(container.querySelectorAll('[aria-label="主题关联图"] line')).toHaveLength(1);
+    rerender(<TrajectoryTab data={legacy} loading={false} />);
+    expect(screen.queryByText("其他")).not.toBeInTheDocument();
+  });
+
+  it("recovers identifiable files from legacy catch-all counts and keeps source actions", async () => {
+    const legacy = structuredClone(profile);
+    const artifact = { id: "slides", title: "方案.PPTX", mime: null, first_recorded_at: null, session_key: "session", artifact_ref: {}, source_ref: "artifact:slides", missing: false };
+    legacy.dashboard!.artifacts = [artifact];
+    legacy.dashboard!.profile_charts!.artifact_types = [{ label: "其他", count: 1 }];
+    const onOpenArtifact = vi.fn();
+    render(<ProfileTab profile={legacy} loading={false} onOpenArtifact={onOpenArtifact} />);
+    expect(screen.queryByText("其他")).not.toBeInTheDocument();
+    expect(screen.getByText("1 / 1 份已识别")).toBeInTheDocument();
+    await userEvent.click(screen.getByRole("button", { name: "文档 1" }));
+    expect(onOpenArtifact).toHaveBeenCalledWith(artifact);
   });
 });

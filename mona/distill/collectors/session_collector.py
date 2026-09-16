@@ -32,46 +32,6 @@ _TRUNCATION_MARKER = "\n...(truncated)...\n"
 
 
 @dataclass
-class SessionEvent:
-    """One real user message with a stable, bounded source reference."""
-
-    ref: str
-    session_key: str
-    message_index: int
-    content: str
-    content_hash: str
-    occurred_at: str | None
-    timestamp: str | None
-    title: str
-    truncated: bool
-    window: str = ""
-    message_id: str | None = None
-    author_type: str = "user"
-    conversation_type: str = "direct"
-    agent_ids: list[str] = field(default_factory=list)
-    direct_agent_id: str | None = None
-
-    def to_dict(self) -> dict[str, Any]:
-        return {
-            "ref": self.ref,
-            "session_key": self.session_key,
-            "message_id": self.message_id,
-            "message_index": self.message_index,
-            "content": self.content,
-            "content_hash": self.content_hash,
-            "occurred_at": self.occurred_at,
-            "timestamp": self.timestamp,
-            "title": self.title,
-            "truncated": self.truncated,
-            "window": self.window,
-            "author_type": self.author_type,
-            "conversation_type": self.conversation_type,
-            "agent_ids": self.agent_ids,
-            "direct_agent_id": self.direct_agent_id,
-        }
-
-
-@dataclass
 class SessionTopic:
     """A bounded prompt sample for one session and one time window."""
 

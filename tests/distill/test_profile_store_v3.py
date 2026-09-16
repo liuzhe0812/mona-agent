@@ -55,7 +55,14 @@ def test_legacy_explicit_sections_are_imported_and_override_observations(tmp_pat
         "explicit": "回答简洁。",
         "special_instructions": "不要替我发送消息。",
     }
-    assert snapshot["content"]["current_focus"]["explicit"] == "近期目标"
+    assert snapshot["allowed_fields"] == ["preferences"]
+    assert "current_focus" not in snapshot["content"]
+
+    advice_snapshot = build_user_profile_snapshot(
+        profile_dir=tmp_path,
+        allowed_fields=("preferences", "work_context", "current_focus"),
+    )
+    assert advice_snapshot["content"]["current_focus"]["explicit"] == "近期目标"
 
 
 def test_context_revision_conflict_and_suppression(tmp_path) -> None:

@@ -63,7 +63,7 @@
 | `ProfileTab.tsx` | 痛点、开放问题、话题分布、知识图、技能矩阵、人际网络和关键洞察并列 | 调整信息优先级，加入理解、建议与修正入口 |
 | `TrajectoryTab.tsx` | 关键词新增被展示为掌握技能；存在合成参考线和需要补强数值 | 移除无依据的数值与能力判断，重做可比窗口变化 |
 | `WorkPatternTab.tsx` | 工具调用成功率被称为完成质量；调用链重复展示 | 展示使用与成果，工具执行数据默认折叠 |
-| `mona/distill/scoring.py` | 技能级别来自关键词相对数量；新增技能来自关键词差集 | 新 UI 不消费这些能力评分；新摘要不再写“深度掌握” |
+| `mona/distill/scoring.py` | 技能级别来自关键词相对数量；新增技能来自关键词差集 | 新 UI 不消费这些能力评分；新摘要不再写“深度掌握”。该文件及其成长快照读取端（`load_snapshots`、`compute_growth_comparison`）已随整项成长快照能力一并删除 |
 | `mona/templates/distill/profile.md` | 把提炼痛点列为最重要任务；没有建议结构 | 画像任务改为理解用户，建议单独生成 |
 | `collectors/session_collector.py` | 按更新时间取至多 50 个会话；没有消息级时间、来源 ID；长会话后部可能缺失 | 保留真实作者过滤，补足近期事件、来源和抽样覆盖 |
 | `collectors/notes_collector.py` | 技术词表、标题、标签为主；同一笔记标题和标签可重复计数；recent_titles 不是真实时间排序 | 标明材料记录口径，按笔记去重，日期有效时才能进时间比较 |
@@ -365,7 +365,7 @@ interface SourceCoverage {
 输出 understanding 数组，每项只有 field、text、source_refs；field 必须属于五个固定字段。
 ```
 
-新模型输出只包含 understanding。存储保留旧 profile 中未知字段以支持历史回看，但新增 UI 和 snapshot 只消费 understanding 的有效值。不得保留“深度掌握”自动段落作为隐藏的旧结论继续注入 Agent。v3 管线停止调用用于能力评分的 compute_radar_scores/build_skill_matrix 和旧 save_snapshot 副作用；已有历史快照保留，新变化来自 dashboard 的两个窗口。
+新模型输出只包含 understanding。存储保留旧 profile 中未知字段以支持历史回看，但新增 UI 和 snapshot 只消费 understanding 的有效值。不得保留“深度掌握”自动段落作为隐藏的旧结论继续注入 Agent。v3 管线不再调用能力评分与快照保存逻辑：`compute_radar_scores`、`build_skill_matrix`、`build_knowledge_graph`、`detect_milestones`、`save_snapshot`、`get_previous_snapshot` 以及整个 `mona/distill/scoring.py` 已删除（`load_snapshots`、`compute_growth_comparison` 随成长快照能力一并移除），新变化来自 dashboard 的两个窗口。
 
 ### 6.3 建议提示词
 
@@ -509,7 +509,7 @@ interface SourceCoverage {
 | `AdviceCard.tsx`、`ProfileContextEditor.tsx`、`ProfileEvidenceDialog.tsx`（新增） | 建议、修正、来源交互 | Luna C |
 | `webui/src/App.tsx`、`ThreadShell.tsx`、`useMonaStream.ts`、`mona-client.ts` | 类型化起步请求、预览后发送、队列一次消费、origin 标记 | 主 Agent |
 | `mona/channels/websocket.py`、`mona/agent/loop.py` 的入站保存点 | 白名单元数据保存，含房间分支；不改核心循环 | 主 Agent |
-| `mona/distill/scoring.py` | 只修本次仍使用的计数；旧能力评分不进入新版消费链 | 主 Agent |
+| `mona/distill/scoring.py` | 已删除；旧能力评分与成长快照读取端均不进入新版消费链 | 主 Agent |
 | 对应 tests 文件 | 见第 11 节，测试随负责模块一起提交 | 各负责人 |
 
 并行约束：models、profile-api、store、App、server 为共享契约文件，主 Agent 统一修改。Luna 不自行扩大返回字段或改共享模型；先返回所需差异由主 Agent 合并。
@@ -655,9 +655,9 @@ npm run check:ui
 
 ## 12. 兼容、失败与回滚
 
-- v2 文件按需读取并补默认字段，首次成功变更再写 v3；不删除原 profile_snapshots，不伪造历史新字段。
+- v2 文件按需读取并补默认字段，首次成功变更再写 v3；不删除磁盘上已有的 profile_snapshots 目录，不伪造历史新字段。
 - 新 UI 读到 v2 时显示已有中性事实与“更新后可生成建议”，不得继续显示旧能力评分。
-- 旧 `/comparison`、`/snapshots` 保留兼容，新变化页读取 dashboard 的两个窗口；不要将旧词频快照转换成新能力数据。
+- 旧 `/comparison`、`/snapshots` 路由与成长快照读取端已整体删除，新变化页读取 dashboard 的两个窗口；不要将旧词频快照转换成新能力数据。
 - 空数据与模型不可用分开；明确用户覆盖即使没有任何会话也必须可以编辑和进入快照。
 - 建议失效、重试和反馈不改变原始来源；清理只涉及有界画像缓存。
 - 原子写失败时不报告成功；不得记录原始模型响应、个人材料或完整错误请求体。

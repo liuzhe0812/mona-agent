@@ -21,7 +21,6 @@ _DOMAINS = (
     "知识检索",
     "内容创作",
     "效率工具",
-    "其他",
 )
 _TASKS = ("开发", "分析", "写作", "设计")
 
@@ -266,7 +265,7 @@ def _topics(text: str) -> dict[str, str]:
     for alias, (topic, domain) in _KEYWORD_MAP.items():
         if _contains(lowered, alias):
             matched[topic] = domain
-    return matched or {"其他": "其他"}
+    return matched
 
 
 def _event_text(event: dict[str, Any]) -> str:
@@ -326,9 +325,7 @@ def _topic_graph(records: list[tuple[set[str], dict[str, str], datetime | None]]
     topic_counts: Counter[str] = Counter()
     topic_domains: dict[str, str] = {}
     links: Counter[tuple[str, str]] = Counter()
-    has_named_topic = any("其他" not in labels and labels for labels, _mapped, _occurred in records)
     for labels, mapped, _occurred in records:
-        labels = labels - {"其他"}
         if not labels:
             continue
         topic_counts.update(labels)
@@ -336,9 +333,6 @@ def _topic_graph(records: list[tuple[set[str], dict[str, str], datetime | None]]
             topic_domains.setdefault(topic, mapped[topic])
         for first, second in combinations(sorted(labels), 2):
             links[(first, second)] += 1
-    if not has_named_topic and records:
-        topic_counts["其他"] = len(records)
-        topic_domains["其他"] = "其他"
     ordered = _sort_topics(topic_counts)
     nodes = [
         {
@@ -400,11 +394,10 @@ def _collaboration_types(
 ) -> list[dict[str, Any]]:
     counts: Counter[str] = Counter()
     for event, _occurred in events:
-        counts[_classify_collaboration(_event_text(event)) or "其他"] += 1
-    result = [{"label": label, "count": counts[label]} for label in _TASKS]
-    if counts["其他"]:
-        result.append({"label": "其他", "count": counts["其他"]})
-    return result
+        label = _classify_collaboration(_event_text(event))
+        if label is not None:
+            counts[label] += 1
+    return [{"label": label, "count": counts[label]} for label in _TASKS]
 
 
 def _artifact_key(artifact: dict[str, Any], index: int) -> str:
@@ -421,7 +414,17 @@ def _artifact_key(artifact: dict[str, Any], index: int) -> str:
     return f"fallback:{json.dumps(identity, ensure_ascii=False, sort_keys=True, default=str)}"
 
 
-def _artifact_type(mime: Any) -> str:
+_ARTIFACT_EXTENSIONS = {
+    "文档": {"md", "txt", "csv", "tsv", "pdf", "rtf", "doc", "docx", "ppt", "pptx", "xls", "xlsx", "odt", "ods", "odp"},
+    "代码": {"py", "rs", "js", "jsx", "ts", "tsx", "json", "xml", "html", "htm", "css", "scss", "sql", "sh", "ps1", "bat", "c", "cpp", "h", "java", "go", "vue", "yaml", "yml", "toml"},
+    "图像": {"png", "jpg", "jpeg", "gif", "webp", "svg", "bmp", "ico", "avif", "tif", "tiff"},
+    "音频": {"mp3", "wav", "ogg", "flac", "m4a", "aac", "mid", "midi"},
+    "视频": {"mp4", "webm", "mov", "avi", "mkv", "m4v"},
+    "压缩包": {"zip", "7z", "rar", "gz", "tar", "bz2", "xz"},
+}
+
+
+def _artifact_type(mime: Any, filename: Any = "") -> str | None:
     value = str(mime or "").lower().split(";", 1)[0].strip()
     if value.startswith("image/") or value in {"image/svg+xml", "image/svg"}:
         return "图像"
@@ -441,7 +444,14 @@ def _artifact_type(mime: Any) -> str:
         or any(token in value for token in ("python", "rust", "shell", "source-code"))
     ):
         return "代码"
-    return "其他"
+    if value.startswith("audio/"):
+        return "音频"
+    if value.startswith("video/"):
+        return "视频"
+    if value in {"application/zip", "application/x-7z-compressed", "application/x-rar-compressed", "application/vnd.rar", "application/gzip", "application/x-tar"}:
+        return "压缩包"
+    extension = str(filename or "").lower().rsplit(".", 1)[-1]
+    return next((label for label, extensions in _ARTIFACT_EXTENSIONS.items() if extension in extensions), None)
 
 
 def _artifact_types(artifacts: list[dict[str, Any]]) -> list[dict[str, Any]]:
@@ -454,8 +464,11 @@ def _artifact_types(artifacts: list[dict[str, Any]]) -> list[dict[str, Any]]:
         if key in seen:
             continue
         seen.add(key)
-        counts[_artifact_type(artifact.get("mime"))] += 1
-    return [{"label": label, "count": counts[label]} for label in ("文档", "代码", "图像", "其他")]
+        ref = artifact.get("artifact_ref") or {}
+        label = _artifact_type(artifact.get("mime"), ref.get("relative_path") or artifact.get("relative_path") or artifact.get("title"))
+        if label is not None:
+            counts[label] += 1
+    return [{"label": label, "count": counts[label]} for label in _ARTIFACT_EXTENSIONS]
 
 
 def _domain_task_matrix(

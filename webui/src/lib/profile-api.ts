@@ -344,15 +344,6 @@ export interface Milestone {
   description: string;
 }
 
-export interface GrowthComparison {
-  current_radar: RadarScore[];
-  previous_radar: RadarScore[];
-  new_skills: string[];
-  skill_progression: { skill: string; before: number; after: number; delta: number }[];
-  current_snapshot_date?: string;
-  previous_snapshot_date?: string;
-}
-
 export interface TrajectoryPoint {
   timestamp: string;
   task: string;
@@ -529,26 +520,4 @@ export interface ProfileStartRequest {
 
 export async function prepareAdviceStart(id: string): Promise<ProfileStartRequest> {
   return _jsonRequest(`/api/profile/advice/${encodeURIComponent(id)}/start`, { method: "POST" });
-}
-
-/** 获取成长对比数据。 */
-export async function fetchGrowthComparison(
-  date?: string,
-): Promise<{
-  comparison: GrowthComparison | null;
-  snapshots: { date: string; keywords_count: number }[];
-}> {
-  const query = date ? `?date=${encodeURIComponent(date)}` : "";
-  return _jsonRequest(`/api/profile/comparison${query}`, { method: "GET" });
-}
-
-/** 获取所有历史快照。 */
-export async function fetchSnapshots(): Promise<{
-  snapshots: Array<{
-    date: string;
-    radar_scores?: RadarScore[];
-    keywords?: { keyword: string; count: number }[];
-  }>;
-}> {
-  return _jsonRequest("/api/profile/snapshots", { method: "GET" });
 }

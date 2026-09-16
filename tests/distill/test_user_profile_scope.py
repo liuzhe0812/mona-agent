@@ -33,9 +33,6 @@ def test_legacy_profile_migration_is_non_destructive_and_idempotent(tmp_path, mo
         encoding="utf-8",
     )
     (legacy / "USER.md").write_text("# User Profile\n\n## Preferences\n\n简洁", encoding="utf-8")
-    snapshots = legacy / "profile_snapshots"
-    snapshots.mkdir()
-    (snapshots / "2026-08-01.json").write_text("{}", encoding="utf-8")
 
     import mona.config.paths as paths
 
@@ -45,7 +42,6 @@ def test_legacy_profile_migration_is_non_destructive_and_idempotent(tmp_path, mo
     assert ensure_user_profile_store() == destination
     assert (destination / "profile.rich.json").is_file()
     assert (destination / "USER.md").is_file()
-    assert (destination / "profile_snapshots" / "2026-08-01.json").is_file()
 
     (legacy / "USER.md").write_text("changed legacy", encoding="utf-8")
     assert ensure_user_profile_store() == destination
@@ -60,6 +56,13 @@ def test_shared_snapshot_is_stable_and_excludes_sensitive_fields(tmp_path):
                 "revision": 7,
                 "last_distilled_at": "2026-08-31T10:00:00",
                 "profile": {
+                    "understanding": [
+                        {
+                            "field": "interests",
+                            "text": "多 Agent",
+                            "source_refs": ["session-message:test"],
+                        }
+                    ],
                     "identity": {"primary_role": "开发者", "timezone_hint": "Asia/Shanghai"},
                     "tech_stack": [{"area": "语言", "items": ["Python"]}],
                     "interests": ["多 Agent"],
@@ -88,9 +91,20 @@ def test_shared_snapshot_is_stable_and_excludes_sensitive_fields(tmp_path):
     assert first["profile_revision"] == 8
     payload = json.dumps(first, ensure_ascii=False)
     assert "回答简洁" in payload
+    assert "负责桌面应用" not in payload
+    assert "多 Agent" not in payload
     assert "private pain" not in payload
     assert "secret@example.com" not in payload
     assert "detailed" not in payload
+
+    advice = build_user_profile_snapshot(
+        profile_dir=tmp_path,
+        allowed_fields=("preferences", "work_context", "current_focus"),
+    )
+    advice_payload = json.dumps(advice, ensure_ascii=False)
+    assert "回答简洁" in advice_payload
+    assert "负责桌面应用" in advice_payload
+    assert "多 Agent" in advice_payload
 
 
 def test_concurrent_distill_writes_merge_without_losing_task_results(tmp_path):

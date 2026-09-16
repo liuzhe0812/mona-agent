@@ -27,6 +27,13 @@ def _configure_profile_paths(tmp_path, monkeypatch, agent_id: str):
     profile_dir = tmp_path / "profile"
     profile_dir.mkdir()
     (profile_dir / ".migrated-from-mona-memory-v1").write_text("done", encoding="utf-8")
+    (profile_dir / "USER.md").write_text(
+        "# User Profile\n\n"
+        "## Preferences\n\n回答简洁。\n\n"
+        "## Work Context\n\n负责桌面应用。\n\n"
+        "## Current Focus\n\n多 Agent。\n",
+        encoding="utf-8",
+    )
     (profile_dir / "profile.rich.json").write_text(
         json.dumps(
             {
@@ -34,8 +41,19 @@ def _configure_profile_paths(tmp_path, monkeypatch, agent_id: str):
                 "revision": 2,
                 "last_distilled_at": "2026-08-31T10:00:00",
                 "facts": {
-                    "explicit_context": {},
-                    "context_revision": 0,
+                    "explicit_context": {
+                        "preferences": {
+                            "mode": "override",
+                            "value": "回答简洁。",
+                            "updated_at": "2026-08-31T10:00:00",
+                        },
+                        "work_context": {
+                            "mode": "override",
+                            "value": "负责桌面应用。",
+                            "updated_at": "2026-08-31T10:00:00",
+                        },
+                    },
+                    "context_revision": 2,
                     "legacy_explicit_imported": True,
                 },
                 "profile": {
@@ -83,6 +101,30 @@ def test_partner_direct_context_has_private_bootstrap_and_shared_profile(tmp_pat
     assert "private user preferences" in rendered
     assert "private agent rules" in rendered
     assert "Shared User Profile (read-only)" in rendered
+    assert "回答简洁" in rendered
+    assert "负责桌面应用" not in rendered
+    assert "多 Agent" not in rendered
+
+
+def test_profile_advice_context_adds_work_context_and_focus(tmp_path, monkeypatch):
+    agent_id = "com.example.writer"
+    _configure_profile_paths(tmp_path, monkeypatch, agent_id)
+    definition = AgentDefinition(id=agent_id, display_name="Writer")
+    context = ContextBuilder(
+        tmp_path,
+        agent_id=agent_id,
+        agent_registry=_Registry(definition),
+    )
+
+    messages = context.build_messages(
+        [],
+        "开始这条建议",
+        message_metadata={"origin": "profile_advice"},
+    )
+    rendered = messages[0]["content"]
+
+    assert "回答简洁" in rendered
+    assert "负责桌面应用" in rendered
     assert "多 Agent" in rendered
 
 

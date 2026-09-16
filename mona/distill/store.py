@@ -121,18 +121,6 @@ def ensure_user_profile_store() -> Path:
                         shutil.copy2(src, dst)
                         if dst.read_bytes() != src.read_bytes():
                             raise OSError(f"profile migration verification failed for {filename}")
-                source_snapshots = source / "profile_snapshots"
-                destination_snapshots = destination / "profile_snapshots"
-                if source_snapshots.is_dir():
-                    destination_snapshots.mkdir(parents=True, exist_ok=True)
-                    for src in source_snapshots.glob("*.json"):
-                        dst = destination_snapshots / src.name
-                        if not dst.exists():
-                            shutil.copy2(src, dst)
-                            if dst.read_bytes() != src.read_bytes():
-                                raise OSError(
-                                    f"profile snapshot migration verification failed for {src.name}"
-                                )
                 _atomic_write_text(marker, _now_iso() + "\n")
     ensure_profile_v3(destination)
     return destination

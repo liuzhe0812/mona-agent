@@ -123,7 +123,9 @@ def test_profile_charts_fixed_categories_and_matrix_counts() -> None:
         {"label": "文档", "count": 1},
         {"label": "代码", "count": 1},
         {"label": "图像", "count": 1},
-        {"label": "其他", "count": 1},
+        {"label": "音频", "count": 0},
+        {"label": "视频", "count": 0},
+        {"label": "压缩包", "count": 0},
     ]
     matrix = charts["domain_task_matrix"]
     assert matrix["tasks"] == ["开发", "分析", "写作", "设计"]
@@ -156,7 +158,9 @@ def test_profile_charts_empty_input_has_stable_contract() -> None:
         {"label": "文档", "count": 0},
         {"label": "代码", "count": 0},
         {"label": "图像", "count": 0},
-        {"label": "其他", "count": 0},
+        {"label": "音频", "count": 0},
+        {"label": "视频", "count": 0},
+        {"label": "压缩包", "count": 0},
     ]
     assert charts["topic_trends"]["labels"] == [
         "2026-08-11",
@@ -167,3 +171,40 @@ def test_profile_charts_empty_input_has_stable_contract() -> None:
     assert charts["topic_trends"]["series"] == []
     assert charts["topic_comparison"] == []
     assert charts["new_topics"] == []
+
+
+def test_unmatched_records_do_not_become_categories() -> None:
+    charts = build_profile_charts(
+        current_events=[_event("unknown", "好的，继续吧", "2026-09-07T00:00:00+00:00")],
+        previous_events=[_event("previous", "嗯", "2026-08-07T00:00:00+00:00")],
+        current_notes={"records": [_note("n", "随手记", "2026-09-07T00:00:00+00:00")]},
+        previous_notes={}, artifacts=[], as_of=AS_OF, timezone_name="UTC",
+    )
+    assert charts["profile_dimensions"] == []
+    assert charts["previous_profile_dimensions"] == []
+    assert charts["topic_graph"] == {"nodes": [], "links": []}
+    assert charts["topic_trends"]["series"] == []
+    assert charts["topic_comparison"] == []
+    assert charts["new_topics"] == []
+    assert charts["domain_task_matrix"]["domains"] == []
+    assert sum(item["count"] for item in charts["collaboration_types"]) == 0
+
+
+def test_artifact_categories_use_filename_when_mime_is_missing() -> None:
+    artifacts = [
+        {"id": "slides", "mime": None, "title": "方案.PPTX"},
+        {"id": "sheet", "mime": "application/octet-stream", "artifact_ref": {"relative_path": "成果/数据.xlsx"}},
+        {"id": "code", "mime": None, "title": "app.tsx"},
+        {"id": "image", "mime": "image/png", "title": "截图"},
+        {"id": "audio", "mime": "audio/mpeg"},
+        {"id": "video", "mime": None, "title": "演示.mp4"},
+        {"id": "zip", "mime": "application/zip"},
+        {"id": "unknown", "mime": "application/octet-stream", "title": "未命名"},
+    ]
+    charts = build_profile_charts(
+        current_events=[], previous_events=[], current_notes={}, previous_notes={},
+        artifacts=artifacts + [artifacts[0]], as_of=AS_OF, timezone_name="UTC",
+    )
+    assert {item["label"]: item["count"] for item in charts["artifact_types"]} == {
+        "文档": 2, "代码": 1, "图像": 1, "音频": 1, "视频": 1, "压缩包": 1,
+    }

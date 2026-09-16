@@ -128,4 +128,4 @@ export function ProfileView({ onAskMona, onStartAdvice, onOpenSession, onOpenArt
   );
 }
 
-const TAB_CLASS = "relative h-7 rounded-none !bg-transparent px-2.5 text-caption text-muted-foreground shadow-none transition-colors hover:!bg-transparent hover:text-foreground data-[state=active]:!bg-transparent data-[state=active]:text-foreground data-[state=active]:!shadow-none data-[state=active]:after:absolute data-[state=active]:after:inset-x-2 data-[state=active]:after:bottom-0 data-[state=active]:after:h-0.5 data-[state=active]:after:rounded-full data-[state=active]:after:bg-action";
+const TAB_CLASS = "relative h-7 rounded-none !bg-transparent px-2.5 text-caption text-muted-foreground shadow-none transition-colors hover:!bg-transparent hover:text-foreground data-[state=active]:!bg-transparent data-[state=active]:text-foreground data-[state=active]:!shadow-none data-[state=active]:after:absolute data-[state=active]:after:inset-x-2 data-[state=active]:after:bottom-0 data-[state=active]:after:h-0.5 data-[state=active]:after:rounded-full data-[state=active]:after:bg-[hsl(var(--brand-red))]";

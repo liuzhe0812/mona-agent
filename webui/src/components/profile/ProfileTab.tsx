@@ -4,7 +4,14 @@ import { FileText, Network, Radar, Users } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import type { ProfileArtifact, ProfileCharts, ProfileData, RichProfile } from "@/lib/profile-api";
 
-import { PROFILE_COLORS } from "./profile-theme";
+import {
+  PROFILE_CHART_COLORS,
+  profileChartColor,
+  profileChartColorAlpha,
+  profileHeatmapStyle,
+} from "./profile-chart-colors";
+
+import { artifactCategory, isNamedCategory } from "./profile-categories";
 
 interface ProfileTabProps {
   data?: ProfileData;
@@ -22,7 +29,7 @@ export function ProfileTab({ data, profile, loading, onOpenArtifact }: ProfileTa
   const charts = profileCharts(profile);
   const radar = normalizeDimensions(charts?.profile_dimensions);
   const graph = normalizeGraph(charts?.topic_graph);
-  const topics = dashboard?.topic_records ?? [];
+  const topics = (dashboard?.topic_records ?? []).filter((item) => isNamedCategory(item.topic));
   const topicCount = graph?.nodes?.length ?? topics.length;
   const focusCount = radar.length;
   const normalizedConversationTypes = normalizeCounts(charts?.collaboration_types);
@@ -31,7 +38,8 @@ export function ProfileTab({ data, profile, loading, onOpenArtifact }: ProfileTa
   const artifacts = dashboard?.artifacts ?? [];
   const generatedArtifacts = dashboard?.metrics?.generated_artifacts?.current.value ?? artifacts.length;
   const normalizedArtifactGroups = normalizeCounts(charts?.artifact_types);
-  const artifactGroups = normalizedArtifactGroups.length ? normalizedArtifactGroups : groupArtifacts(artifacts);
+  const hasLegacyArtifactGroups = charts?.artifact_types?.some((item) => !isNamedCategory(item.label));
+  const artifactGroups = hasLegacyArtifactGroups && artifacts.length ? groupArtifacts(artifacts) : normalizedArtifactGroups.length ? normalizedArtifactGroups : groupArtifacts(artifacts);
   const matrix = readMatrix(charts?.domain_task_matrix);
 
   return (
@@ -59,11 +67,11 @@ export function ProfileTab({ data, profile, loading, onOpenArtifact }: ProfileTa
 
       <div className="grid min-h-0 grid-cols-1 border-b border-border/70 py-4 lg:grid-cols-[0.9fr_1fr_1.3fr]">
         <section className="flex min-h-0 flex-col justify-center overflow-hidden border-b border-border/70 pb-4 lg:border-b-0 lg:border-r lg:border-border/70 lg:pr-6">
-          <ChartHeading icon={<Users className="h-4 w-4" />} title="常见协作类型" />
+          <ChartHeading icon={<Users className="h-4 w-4" />} title="常见协作类型" subtitle="已识别记录" />
           {conversationTypes.length ? <CollaborationDonut items={conversationTypes} /> : <ChartEmpty text="暂无协作类型记录" />}
         </section>
         <section className="flex min-h-0 flex-col justify-center overflow-hidden border-b border-border/70 py-4 lg:border-b-0 lg:border-r lg:border-border/70 lg:px-6 lg:py-0">
-          <ChartHeading icon={<FileText className="h-4 w-4" />} title="常见交付物" subtitle={`${generatedArtifacts || 0} 份记录`} />
+          <ChartHeading icon={<FileText className="h-4 w-4" />} title="常见交付物" subtitle={`${artifactGroups.reduce((sum, item) => sum + item.count, 0)} / ${generatedArtifacts || 0} 份已识别`} />
           {artifactGroups.length ? <ArtifactBars groups={artifactGroups} artifacts={artifacts} onOpenArtifact={onOpenArtifact} /> : <ChartEmpty text="暂无可验证的交付物" />}
         </section>
         <section className="flex min-h-0 flex-col overflow-hidden pt-4 lg:pl-6 lg:pt-0">
@@ -108,8 +116,8 @@ function RadarPlot({ values }: { values: Array<{ axis: string; value: number }> 
       <text x={center + 4} y={center - radius * level + 10} className="fill-muted-foreground" fontSize="9">{Math.round(max * level)}</text>
     </g>)}
     {points.map((point) => <line key={`axis-${point.axis}`} x1={center} y1={center} x2={center + Math.cos(point.angle) * radius} y2={center + Math.sin(point.angle) * radius} stroke="currentColor" strokeWidth="1" />)}
-    <polygon points={polygon} fill={`${PROFILE_COLORS.emerald}18`} stroke={PROFILE_COLORS.emerald} strokeWidth="2" />
-    {points.map((point) => <g key={point.axis}><circle cx={point.x} cy={point.y} r="3.5" fill={PROFILE_COLORS.emerald} /><text x={point.labelX} y={point.labelY} textAnchor={point.labelX < center - 8 ? "end" : point.labelX > center + 8 ? "start" : "middle"} dominantBaseline="middle" className="fill-muted-foreground" fontSize="11">{point.axis}</text></g>)}
+    <polygon points={polygon} fill={profileChartColorAlpha(PROFILE_CHART_COLORS.blue, 0.14)} stroke={PROFILE_CHART_COLORS.blue} strokeWidth="2" />
+    {points.map((point) => <g key={point.axis}><circle cx={point.x} cy={point.y} r="3.5" fill={PROFILE_CHART_COLORS.blue} /><text x={point.labelX} y={point.labelY} textAnchor={point.labelX < center - 8 ? "end" : point.labelX > center + 8 ? "start" : "middle"} dominantBaseline="middle" className="fill-muted-foreground" fontSize="11">{point.axis}</text></g>)}
     <text x={center} y={center - 4} textAnchor="middle" className="fill-muted-foreground" fontSize="10">相关记录数</text>
   </svg>;
 }
@@ -133,37 +141,36 @@ function TopicGraph({ graph }: { graph: NonNullable<ProfileCharts["topic_graph"]
   }, [nodes]);
   return <svg viewBox="0 0 720 280" className="min-h-0 flex-1 w-full text-border" aria-label="主题关联图">
     {graph.links.slice(0, 30).map((link, index) => { const from = positions.get(link.source); const to = positions.get(link.target); return from && to ? <line key={`${link.source}-${link.target}-${index}`} x1={from.x} y1={from.y} x2={to.x} y2={to.y} stroke="currentColor" strokeWidth="1" /> : null; })}
-    {nodes.map((node) => { const position = positions.get(node.id); if (!position) return null; const color = [PROFILE_COLORS.emerald, PROFILE_COLORS.cyan, PROFILE_COLORS.amber][[...new Set(nodes.map((item) => item.group))].indexOf(node.group) % 3]; const size = Math.max(5, Math.min(18, node.count / 2)); return <g key={node.id}><circle cx={position.x} cy={position.y} r={size} fill={color} opacity="0.95" /><text x={position.x} y={position.y + size + 13} textAnchor="middle" className="fill-muted-foreground" fontSize="11">{node.label}</text></g>; })}
+    {nodes.map((node) => { const position = positions.get(node.id); if (!position) return null; const color = profileChartColor(node.group); const size = Math.max(5, Math.min(18, node.count / 2)); return <g key={node.id}><circle cx={position.x} cy={position.y} r={size} fill={color} opacity="0.95" /><text x={position.x} y={position.y + size + 13} textAnchor="middle" className="fill-muted-foreground" fontSize="11">{node.label}</text></g>; })}
   </svg>;
 }
 
 function CollaborationDonut({ items }: { items: { label: string; count: number }[] }) {
   const total = items.reduce((sum, item) => sum + item.count, 0);
   let start = 0;
-  const colors = [PROFILE_COLORS.emerald, PROFILE_COLORS.cyan, PROFILE_COLORS.amber, PROFILE_COLORS.violet];
-  const gradient = items.map((item, index) => { const end = total ? start + (item.count / total) * 100 : 0; const part = `${colors[index % colors.length]} ${start}% ${end}%`; start = end; return part; }).join(", ");
-  return <div className="flex items-center justify-center gap-5 py-3"><div className="relative h-36 w-36 shrink-0 rounded-full" style={{ background: `conic-gradient(${gradient})` }}><div className="absolute inset-8 flex flex-col items-center justify-center rounded-full bg-background"><span className="text-title-sm font-medium leading-none">{total}</span><span className="text-micro text-muted-foreground">次协作</span></div></div><div className="space-y-2 text-caption">{items.slice(0, 5).map((item, index) => <div key={item.label} className="flex items-center gap-2"><i className="h-2.5 w-2.5 rounded-full" style={{ background: colors[index % colors.length] }} /><span>{item.label}</span><span className="text-muted-foreground">{item.count}</span></div>)}</div></div>;
+  const gradient = items.map((item) => { const end = total ? start + (item.count / total) * 100 : 0; const part = `${profileChartColor(item.label)} ${start}% ${end}%`; start = end; return part; }).join(", ");
+  return <div className="flex items-center justify-center gap-5 py-3"><div className="relative h-36 w-36 shrink-0 rounded-full" style={{ background: `conic-gradient(${gradient})` }}><div className="absolute inset-8 flex flex-col items-center justify-center rounded-full bg-background"><span className="text-title-sm font-medium leading-none">{total}</span><span className="text-micro text-muted-foreground">次协作</span></div></div><div className="space-y-2 text-caption">{items.slice(0, 5).map((item) => <div key={item.label} className="flex items-center gap-2"><i className="h-2.5 w-2.5 rounded-full" style={{ background: profileChartColor(item.label) }} /><span>{item.label}</span><span className="text-muted-foreground">{item.count}</span></div>)}</div></div>;
 }
 
 function groupArtifacts(artifacts: ProfileArtifact[]) {
   const groups = new Map<string, number>();
   for (const artifact of artifacts) {
     const type = artifactCategory(artifact);
+    if (type === null) continue;
     groups.set(type, (groups.get(type) ?? 0) + 1);
   }
   return [...groups.entries()].map(([label, count]) => ({ label, count }));
 }
 
 function ArtifactBars({ groups, artifacts, onOpenArtifact }: { groups: { label: string; count: number }[]; artifacts: ProfileArtifact[]; onOpenArtifact?: (artifact: ProfileArtifact) => void }) {
-  const colors = [PROFILE_COLORS.emerald, PROFILE_COLORS.cyan, PROFILE_COLORS.amber, PROFILE_COLORS.violet];
   const max = Math.max(...groups.map((group) => group.count), 1);
   return (
-    <div className="space-y-4 py-2">
-      {groups.slice(0, 4).map((group, index) => {
+    <div className="min-h-0 overflow-y-auto scrollbar-hover space-y-4 py-2">
+      {groups.map((group) => {
         const target = artifacts.find((artifact) => artifactCategory(artifact) === group.label);
         const content = <>
           <span>{group.label}</span>
-          <span className="h-2 bg-muted"><span className="block h-full" style={{ width: `${(group.count / max) * 100}%`, background: colors[index % colors.length] }} /></span>
+          <span className="h-2 bg-muted"><span className="block h-full" style={{ width: `${(group.count / max) * 100}%`, background: profileChartColor(group.label) }} /></span>
           <span className="text-right tabular-nums">{group.count}</span>
         </>;
         return target && onOpenArtifact ? (
@@ -180,20 +187,15 @@ function ArtifactBars({ groups, artifacts, onOpenArtifact }: { groups: { label: 
   );
 }
 
-function artifactCategory(artifact: ProfileArtifact): string {
-  const mime = artifact.mime ?? "";
-  if (mime.includes("image")) return "图像";
-  if (mime.includes("javascript") || mime.includes("python") || mime.includes("json")) return "代码";
-  if (mime.includes("text") || mime.includes("pdf") || mime.includes("document")) return "文档";
-  return "其他";
-}
-
 function readMatrix(raw: unknown): { rows: string[]; columns: string[]; values: number[][] } {
   const matrix = raw as { domains?: string[]; tasks?: string[]; values?: number[][]; rows?: string[]; columns?: string[] } | undefined;
   const rows = matrix?.domains ?? matrix?.rows;
   const columns = matrix?.tasks ?? matrix?.columns;
   if (!matrix || !rows?.length || !columns?.length || !matrix.values?.length) return { rows: [], columns: [], values: [] };
-  return { rows, columns, values: matrix.values };
+  const rowIndexes = rows.map((_, index) => index).filter((index) => isNamedCategory(rows[index]));
+  const columnIndexes = columns.map((_, index) => index).filter((index) => isNamedCategory(columns[index]));
+  if (!rowIndexes.length || !columnIndexes.length) return { rows: [], columns: [], values: [] };
+  return { rows: rowIndexes.map((index) => rows[index]), columns: columnIndexes.map((index) => columns[index]), values: rowIndexes.map((row) => columnIndexes.map((column) => matrix.values![row]?.[column] ?? 0)) };
 }
 
 function profileCharts(profile?: RichProfile): ProfileCharts | undefined {
@@ -203,32 +205,29 @@ function profileCharts(profile?: RichProfile): ProfileCharts | undefined {
 function normalizeDimensions(raw: unknown): Array<{ axis: string; value: number }> {
   const values = Array.isArray(raw) ? raw : (raw as { axes?: unknown[] } | undefined)?.axes;
   if (!Array.isArray(values)) return [];
-  return values.map((item) => item as { axis?: string; label?: string; value?: number; count?: number }).map((item) => ({ axis: item.axis ?? item.label ?? "", value: Number(item.value ?? item.count ?? 0) })).filter((item) => item.axis && Number.isFinite(item.value));
+  return values.map((item) => item as { axis?: string; label?: string; value?: number; count?: number }).map((item) => ({ axis: item.axis ?? item.label ?? "", value: Number(item.value ?? item.count ?? 0) })).filter((item) => isNamedCategory(item.axis) && Number.isFinite(item.value));
 }
 
 function normalizeGraph(raw: unknown): { nodes: { id: string; label: string; group: string; count: number }[]; links: { source: string; target: string; weight: number }[] } | undefined {
   const value = raw as { nodes?: { id: string; label: string; group: string | number; count?: number; size?: number }[]; links?: { source: string; target: string; weight?: number }[] } | undefined;
   if (!value?.nodes?.length) return undefined;
-  return { nodes: value.nodes.map((node) => ({ ...node, group: String(node.group), count: node.count ?? node.size ?? 1 })), links: (value.links ?? []).map((link) => ({ ...link, weight: link.weight ?? 1 })) };
+  const nodes = value.nodes.filter((node) => isNamedCategory(node.label) && isNamedCategory(String(node.group)));
+  const ids = new Set(nodes.map((node) => node.id));
+  return { nodes: nodes.map((node) => ({ ...node, group: String(node.group), count: node.count ?? node.size ?? 1 })), links: (value.links ?? []).filter((link) => ids.has(link.source) && ids.has(link.target)).map((link) => ({ ...link, weight: link.weight ?? 1 })) };
 }
 
 function normalizeCounts(raw: unknown): Array<{ label: string; count: number }> {
   if (!Array.isArray(raw)) return [];
-  return raw.map((item) => item as { label?: string; type?: string; name?: string; count?: number; total?: number }).map((item) => ({ label: item.label ?? item.type ?? item.name ?? "", count: Number(item.count ?? item.total ?? 0) })).filter((item) => item.label && item.count > 0);
+  return raw.map((item) => item as { label?: string; type?: string; name?: string; count?: number; total?: number }).map((item) => ({ label: item.label ?? item.type ?? item.name ?? "", count: Number(item.count ?? item.total ?? 0) })).filter((item) => isNamedCategory(item.label) && item.count > 0);
 }
 
 function graphLegend(graph?: { nodes?: { label: string; group: string; count?: number }[] }) {
   if (!graph?.nodes?.length) return [];
-  const colors = [PROFILE_COLORS.emerald, PROFILE_COLORS.cyan, PROFILE_COLORS.amber, PROFILE_COLORS.violet];
-  const groups = [...new Set(graph.nodes.map((node) => node.group))];
-  return groups.slice(0, 3).map((group, index) => ({ label: group, color: colors[index % colors.length] }));
-}
-
-function hexAlpha(color: string, opacity: number): string {
-  return `${color}${Math.round(Math.max(0, Math.min(1, opacity)) * 255).toString(16).padStart(2, "0")}`;
+  const groups = [...new Set(graph.nodes.slice(0, 18).map((node) => node.group))];
+  return groups.map((group) => ({ label: group, color: profileChartColor(group) }));
 }
 
 function Matrix({ data }: { data: { rows: string[]; columns: string[]; values: number[][] } }) {
   const max = Math.max(...data.values.flat(), 1);
-  return <div className="min-h-0 flex-1 overflow-auto scrollbar-hover text-micro"><div className="grid min-w-[360px]" style={{ gridTemplateColumns: `minmax(78px, 1fr) repeat(${data.columns.length}, minmax(48px, 1fr))` }}><span />{data.columns.map((column) => <span key={column} className="pb-2 text-center text-muted-foreground">{column}</span>)}{data.rows.map((row, rowIndex) => <Fragment key={row}><span className="py-2 pr-2 text-muted-foreground">{row}</span>{data.columns.map((column, columnIndex) => { const value = data.values[rowIndex]?.[columnIndex] ?? 0; return <span key={`${row}-${column}`} className="m-px flex items-center justify-center py-2" style={{ background: hexAlpha(PROFILE_COLORS.emerald, 0.06 + (value / max) * 0.7) }}>{value}</span>; })}</Fragment>)}</div></div>;
+  return <div className="min-h-0 flex-1 overflow-auto scrollbar-hover text-micro"><div className="grid min-w-[360px]" style={{ gridTemplateColumns: `minmax(78px, 1fr) repeat(${data.columns.length}, minmax(48px, 1fr))` }}><span />{data.columns.map((column) => <span key={column} className="pb-2 text-center text-muted-foreground">{column}</span>)}{data.rows.map((row, rowIndex) => <Fragment key={row}><span className="py-2 pr-2 text-muted-foreground">{row}</span>{data.columns.map((column, columnIndex) => { const value = data.values[rowIndex]?.[columnIndex] ?? 0; return <span key={`${row}-${column}`} className="m-px flex items-center justify-center py-2" style={profileHeatmapStyle(value, max)}>{value}</span>; })}</Fragment>)}</div></div>;
 }
