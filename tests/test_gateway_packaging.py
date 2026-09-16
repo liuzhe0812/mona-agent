@@ -1,5 +1,6 @@
 import runpy
 import sys
+import tomllib
 import types
 from importlib.metadata import Distribution
 from pathlib import Path
@@ -8,7 +9,6 @@ import pytest
 
 _ALLOWED_SCRIPTS = {
     "mona/skills/pdf/scripts/helpers/convert.py",
-    "mona/skills/mona-ppt/scripts/source_to_md/web_to_md.py",
     "mona/skills/mona-video/scripts/render.py",
     "mona/skills/mona-video/scripts/nested/storyboard.py",
 }
@@ -16,7 +16,7 @@ _EXCLUDED_SCRIPTS = {
     "mona/skills/pdf/scripts/tests/test_helper.py",
     "mona/skills/pdf/scripts/test/fixture.py",
     "mona/skills/pdf/scripts/__pycache__/cached.py",
-    "mona/skills/mona-ppt/scripts/node_modules/pkg/ignored.py",
+    "mona/skills/mona-video/scripts/node_modules/pkg/ignored.py",
     "mona/skills/mona-video/scripts/.git/ignored.py",
 }
 _ORDINARY_MODULE = "mona/ordinary_module.py"
@@ -25,6 +25,13 @@ _WEB_DIST_FILES = {
     "mona/web/dist/assets/chunk.js",
 }
 _OFFICE_ROOT = "src-tauri/resources/office-editor"
+
+
+def test_desktop_package_does_not_publish_global_cli() -> None:
+    root = Path(__file__).resolve().parents[1]
+    project = tomllib.loads((root / "pyproject.toml").read_text(encoding="utf-8"))["project"]
+
+    assert "scripts" not in project
 
 
 def _write_fixture_file(root: Path, relative: str) -> None:

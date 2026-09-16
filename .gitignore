@@ -57,6 +57,8 @@ design-assets/
 !/tests/providers/
 /tests/providers/*
 !tests/providers/test_image_generation.py
+!tests/providers/test_custom_provider_network.py
+!tests/providers/test_video_generation.py
 !/tests/test_video_style_system.py
 !/tests/test_video_storyboard_schema.py
 !/tests/test_video_series_project_integration.py
@@ -88,6 +90,8 @@ design-assets/
 !tests/tools/test_scientific_backend.py
 !/tests/agent/
 /tests/agent/*
+!tests/agent/test_harness_prompt_budget.py
+!tests/agent/test_skill_catalog_budget.py
 !tests/agent/test_academic_researcher.py
 !tests/agent/test_academic_research_acceptance.py
 !tests/agent/test_academic_algorithm_acceptance.py
@@ -109,6 +113,9 @@ design-assets/
 !tests/agent/test_expert_jobs.py
 !tests/agent/test_expert_runtime_api.py
 !tests/agent/test_package_skill_e2e.py
+!tests/agent/test_music_score.py
+!tests/agent/test_guitar_tab.py
+!tests/agent/test_musician_package.py
 !tests/agent/test_skill_tools_agent_scope.py
 !tests/agent/test_skill_creator_scripts.py
 !tests/agent/test_profile_context_injection.py
@@ -122,6 +129,10 @@ design-assets/
 !tests/agent/tools/test_web_search_anysearch.py
 !tests/agent/tools/test_web_fetch_config.py
 !tests/agent/tools/test_result_compress.py
+!tests/agent/tools/test_conversation_history_tools.py
+!tests/session/
+/tests/session/*
+!tests/session/test_conversation_history.py
 !tests/e2e/
 /tests/e2e/*
 !tests/e2e/test_stock_module_e2e.py
@@ -204,6 +215,9 @@ docs/*
 docs/architecture/*
 docs/design/*
 docs/plans/*
+!docs/plans/2026-09-14-harness-token-optimization.md
+!docs/plans/2026-09-14-agent-capability-exposure-audit.md
+!docs/plans/2026-09-14-conversation-memory-retrieval.md
 docs/reports/*
 !docs/architecture/runtime-component-management.md
 !docs/architecture/engineering-boundaries.md
@@ -220,6 +234,11 @@ docs/reports/*
 !docs/design/session-list-ui-redesign.md
 !docs/design/2026-08-22-mona-app-brand-ui-update-plan.md
 !docs/design/mona-ui-design-system.md
+!docs/design/2026-09-10-music-agent-and-score-preview.md
+!docs/design/2026-09-11-workspace-artifact-review.md
+!docs/design/2026-09-12-ssh-docker-management-design.md
+!docs/design/2026-09-13-software-uninstall-and-residual-cleanup.md
+!docs/plans/2026-09-12-ssh-docker-management-plan.md
 !docs/design/2026-09-08-user-profile-advice-prompt.md
 !docs/design/stock-data-source-compliance-matrix.md
 !docs/design/mona-video-series-style-system-design-2026-08-26.md
@@ -253,6 +272,7 @@ docs/reports/*
 !docs/reports/mona-credits-feasibility-report-2026-08-25.md
 !docs/reports/mona-credits-production-design-2026-08-26.md
 !docs/plans/multi-agent-completion-plan.md
+!docs/plans/2026-09-11-context-compaction-optimization.md
 !docs/plans/2026-09-08-user-profile-dashboard-development-plan.md
 !docs/plans/2026-08-23-mona-brand-ui-v2-implementation-plan.md
 !docs/plans/mona-credits-development-plan-2026-08-26.md
@@ -285,6 +305,7 @@ docs/reports/*
 docs/guides/*
 !docs/guides/browser-testing.md
 !docs/guides/mona-worker-deployment.md
+!docs/guides/ssh-docker-management.md
 
 # 多 Agent 开发临时产物（baseline 对比目录、patch/scratch 中转，禁止入库）
 .baseline_check/

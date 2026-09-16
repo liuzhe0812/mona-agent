@@ -1,8 +1,7 @@
 """Model information helpers for the onboard wizard.
 
-Provides a static curated table of mainstream chat models with context
-window limits, used by the onboard wizard for autocomplete and context
-window auto-fill. This is a lightweight fallback — it does not attempt to
+Provides a static curated table of mainstream chat models, used by the
+onboard wizard for autocomplete. This is a lightweight fallback — it does not attempt to
 enumerate every model from every provider; users can always type a custom
 model name that is not in this table.
 """
@@ -103,19 +102,6 @@ def find_model_info(model_name: str) -> dict[str, Any] | None:
     return _KNOWN_MODELS.get(model_name.lower())
 
 
-def get_model_context_limit(model: str, provider: str = "auto") -> int | None:
-    """Return context window token limit for a model, or None if unknown.
-
-    The `provider` argument is accepted for API compatibility but ignored —
-    context window is a property of the model, not the provider.
-    """
-    info = _KNOWN_MODELS.get(model.lower())
-    if info is None:
-        return None
-    limit = info.get("context_window")
-    return int(limit) if limit is not None else None
-
-
 def get_model_suggestions(_partial: str, provider: str = "auto", limit: int = 20) -> list[str]:
     """Return model names matching the partial input (case-insensitive).
 
@@ -124,8 +110,3 @@ def get_model_suggestions(_partial: str, provider: str = "auto", limit: int = 20
     partial = _partial.lower()
     matches = [m for m in _KNOWN_MODELS if partial in m]
     return matches[:limit]
-
-
-def format_token_count(tokens: int) -> str:
-    """Format token count for display (e.g., 200000 -> '200,000')."""
-    return f"{tokens:,}"

@@ -16,11 +16,7 @@ from rich.console import Console
 from rich.panel import Panel
 from rich.table import Table
 
-from mona.cli.models import (
-    format_token_count,
-    get_model_context_limit,
-    get_model_suggestions,
-)
+from mona.cli.models import get_model_suggestions
 from mona.config.loader import get_config_path, load_config
 from mona.config.schema import Config, ModelPresetConfig
 
@@ -514,81 +510,13 @@ def _input_model_with_autocomplete(
     return value if value is not None else None
 
 
-def _input_context_window_with_recommendation(
-    display_name: str, current: Any, model_obj: BaseModel
-) -> int | None:
-    """Get context window input with option to fetch recommended value."""
-    current_val = current if current else ""
-
-    choices = ["Enter new value"]
-    if current_val:
-        choices.append("Keep existing value")
-    choices.append("[?] Get recommended value")
-
-    choice = _get_questionary().select(
-        display_name,
-        choices=choices,
-        default="Enter new value",
-    ).ask()
-
-    if choice is None:
-        return None
-
-    if choice == "Keep existing value":
-        return None
-
-    if choice == "[?] Get recommended value":
-        # Get the model name from the model object
-        model_name = getattr(model_obj, "model", None)
-        if not model_name:
-            console.print("[yellow]! Please configure the model field first[/yellow]")
-            return None
-
-        provider = _get_current_provider(model_obj)
-        context_limit = get_model_context_limit(model_name, provider)
-
-        if context_limit:
-            console.print(f"[green]+ Recommended context window: {format_token_count(context_limit)} tokens[/green]")
-            return context_limit
-        else:
-            console.print("[yellow]! Could not fetch model info, please enter manually[/yellow]")
-            # Fall through to manual input
-
-    # Manual input
-    value = _get_questionary().text(
-        f"{display_name}:",
-        default=str(current_val) if current_val else "",
-    ).ask()
-
-    if value is None or value == "":
-        return None
-
-    try:
-        return int(value)
-    except ValueError:
-        console.print("[yellow]! Invalid number format, value not saved[/yellow]")
-        return None
-
-
 def _handle_model_field(
     working_model: BaseModel, field_name: str, field_display: str, current_value: Any
 ) -> None:
-    """Handle the 'model' field with autocomplete and context-window auto-fill."""
+    """Handle the model field with provider-aware autocomplete."""
     provider = _get_current_provider(working_model)
     new_value = _input_model_with_autocomplete(field_display, current_value, provider)
     if new_value is not None and new_value != current_value:
-        setattr(working_model, field_name, new_value)
-        _try_auto_fill_context_window(working_model, new_value)
-
-
-def _handle_context_window_field(
-    working_model: BaseModel, field_name: str, field_display: str, current_value: Any
-) -> None:
-    """Handle context_window_tokens with recommendation lookup."""
-    new_value = _input_context_window_with_recommendation(
-        field_display, current_value, working_model
-    )
-    if new_value is not None:
         setattr(working_model, field_name, new_value)
 
 
@@ -684,7 +612,6 @@ def _handle_fallback_models_field(
 
 _FIELD_HANDLERS: dict[str, Any] = {
     "model": _handle_model_field,
-    "context_window_tokens": _handle_context_window_field,
     "model_preset": _handle_model_preset_field,
     "provider": _handle_provider_field,
     "fallback_models": _handle_fallback_models_field,
@@ -819,39 +746,6 @@ def _configure_pydantic_model(
             if new_value == "" and _is_str_or_none(field_info.annotation):
                 new_value = None
             setattr(working_model, field_name, new_value)
-
-
-def _try_auto_fill_context_window(model: BaseModel, new_model_name: str) -> None:
-    """Try to auto-fill context_window_tokens if it's at default value.
-
-    Note:
-        This function imports AgentDefaults from mona.config.schema to get
-        the default context_window_tokens value. If the schema changes, this
-        coupling needs to be updated accordingly.
-    """
-    # Check if context_window_tokens field exists
-    if not hasattr(model, "context_window_tokens"):
-        return
-
-    current_context = getattr(model, "context_window_tokens", None)
-
-    # Check if current value is the default (65536)
-    # We only auto-fill if the user hasn't changed it from default
-    from mona.config.schema import AgentDefaults
-
-    default_context = AgentDefaults.model_fields["context_window_tokens"].default
-
-    if current_context != default_context:
-        return  # User has customized it, don't override
-
-    provider = _get_current_provider(model)
-    context_limit = get_model_context_limit(new_model_name, provider)
-
-    if context_limit:
-        setattr(model, "context_window_tokens", context_limit)
-        console.print(f"[green]+ Auto-filled context window: {format_token_count(context_limit)} tokens[/green]")
-    else:
-        console.print("[dim](i) Could not auto-fill context window (model not in database)[/dim]")
 
 
 # --- Model Preset Configuration ---
@@ -1253,7 +1147,7 @@ def _show_summary(config: Config) -> None:
     # Model Presets
     preset_rows = []
     for name, preset in config.model_presets.items():
-        preset_rows.append((name, f"{preset.model} (ctx={preset.context_window_tokens})"))
+        preset_rows.append((name, preset.model))
     _print_summary_panel(preset_rows, "Model Presets")
 
     # Settings sections

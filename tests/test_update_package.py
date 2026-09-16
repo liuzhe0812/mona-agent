@@ -58,10 +58,10 @@ def _make_staging(tmp_path: Path) -> Path:
 
     # A real skill script must survive packaging, while development-only
     # caches and tests must be removed from the Gateway tree.
-    _write(gateway / "_internal" / "mona" / "skills" / "mona-ppt" / "scripts" / "export.py")
-    _write(gateway / "_internal" / "mona" / "skills" / "mona-ppt" / "scripts" / "tests" / "test_export.py")
-    _write(gateway / "_internal" / "mona" / "skills" / "mona-ppt" / "scripts" / "__pycache__" / "export.pyc")
-    _write(gateway / "_internal" / "mona" / "skills" / "mona-ppt" / "py.typed")
+    _write(gateway / "_internal" / "mona" / "skills" / "mona-video" / "scripts" / "export.py")
+    _write(gateway / "_internal" / "mona" / "skills" / "mona-video" / "scripts" / "tests" / "test_export.py")
+    _write(gateway / "_internal" / "mona" / "skills" / "mona-video" / "scripts" / "__pycache__" / "export.pyc")
+    _write(gateway / "_internal" / "mona" / "skills" / "mona-video" / "py.typed")
     _write(gateway / "node_modules" / "dev-only" / "index.js")
     _write(gateway / ".git" / "config")
     return staging
@@ -93,7 +93,7 @@ def test_build_package_keeps_office_and_skill_scripts_and_removes_dev_cache(tmp_
     for name in ("blank.docx", "blank.xlsx", "blank.pptx"):
         assert f"mona-gateway/_internal/desktop-resources/office-editor/templates/{name}" in members
     assert "mona-gateway/_internal/desktop-resources/office-editor/licenses/LICENSE" in members
-    assert "mona-gateway/_internal/mona/skills/mona-ppt/scripts/export.py" in members
+    assert "mona-gateway/_internal/mona/skills/mona-video/scripts/export.py" in members
     assert not any("/tests/" in name or "/__pycache__/" in name for name in members)
     assert not any(name.endswith(".pyc") or name.endswith("py.typed") for name in members)
     assert not any("/node_modules/" in name or "/.git/" in name for name in members)
@@ -103,7 +103,7 @@ def test_build_package_rejects_missing_office_before_cleanup_or_output(tmp_path:
     staging = _make_staging(tmp_path)
     office_root = staging / "mona-gateway" / "_internal" / "desktop-resources" / "office-editor"
     shutil.rmtree(office_root)
-    cache = staging / "mona-gateway" / "_internal" / "mona" / "skills" / "mona-ppt" / "scripts" / "__pycache__" / "export.pyc"
+    cache = staging / "mona-gateway" / "_internal" / "mona" / "skills" / "mona-video" / "scripts" / "__pycache__" / "export.pyc"
     output = tmp_path / "dist" / "package.tar.zst"
 
     with pytest.raises(build_update_package.UpdatePackageValidationError, match="Office"):
@@ -119,7 +119,7 @@ def test_build_package_rejects_manifest_path_escape_before_cleanup_or_output(tmp
     manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
     manifest["xlsxSidecar"]["path"] = "../../../../outside.exe"
     manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
-    cache = staging / "mona-gateway" / "_internal" / "mona" / "skills" / "mona-ppt" / "scripts" / "__pycache__" / "export.pyc"
+    cache = staging / "mona-gateway" / "_internal" / "mona" / "skills" / "mona-video" / "scripts" / "__pycache__" / "export.pyc"
     output = tmp_path / "dist" / "package.tar.zst"
 
     with pytest.raises(build_update_package.UpdatePackageValidationError, match="escapes"):
@@ -135,7 +135,7 @@ def test_build_package_rejects_sidecar_hash_before_cleanup_or_output(tmp_path: P
     manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
     manifest["xlsxSidecar"]["sha256"] = "0" * 64
     manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
-    cache = staging / "mona-gateway" / "_internal" / "mona" / "skills" / "mona-ppt" / "scripts" / "__pycache__" / "export.pyc"
+    cache = staging / "mona-gateway" / "_internal" / "mona" / "skills" / "mona-video" / "scripts" / "__pycache__" / "export.pyc"
     output = tmp_path / "dist" / "package.tar.zst"
 
     with pytest.raises(build_update_package.UpdatePackageValidationError, match="sha256"):
@@ -149,7 +149,7 @@ def test_build_package_rejects_web_dist_duplicate_before_cleanup(tmp_path: Path)
     staging = _make_staging(tmp_path)
     web_dist = staging / "mona-gateway" / "_internal" / "mona" / "web" / "dist"
     _write(web_dist / "index.html", b"unused web bundle")
-    cache = staging / "mona-gateway" / "_internal" / "mona" / "skills" / "mona-ppt" / "scripts" / "__pycache__" / "export.pyc"
+    cache = staging / "mona-gateway" / "_internal" / "mona" / "skills" / "mona-video" / "scripts" / "__pycache__" / "export.pyc"
     output = tmp_path / "dist" / "package.tar.zst"
 
     with pytest.raises(build_update_package.UpdatePackageValidationError, match="web bundle"):
@@ -174,7 +174,7 @@ def test_build_package_requires_sidecar_version_used_by_client(tmp_path: Path) -
 
 def test_build_package_rejects_output_inside_staging_before_cleanup(tmp_path: Path) -> None:
     staging = _make_staging(tmp_path)
-    cache = staging / "mona-gateway" / "_internal" / "mona" / "skills" / "mona-ppt" / "scripts" / "__pycache__" / "export.pyc"
+    cache = staging / "mona-gateway" / "_internal" / "mona" / "skills" / "mona-video" / "scripts" / "__pycache__" / "export.pyc"
     output = staging / "package.tar.zst"
 
     with pytest.raises(build_update_package.UpdatePackageValidationError, match="outside staging"):
@@ -198,7 +198,7 @@ def test_build_package_rejects_symlink_before_cleanup_or_output(tmp_path: Path) 
 
         _winapi.CreateJunction(str(target), str(linked))
 
-    cache = staging / "mona-gateway" / "_internal" / "mona" / "skills" / "mona-ppt" / "scripts" / "__pycache__" / "export.pyc"
+    cache = staging / "mona-gateway" / "_internal" / "mona" / "skills" / "mona-video" / "scripts" / "__pycache__" / "export.pyc"
     output = tmp_path / "dist" / "package.tar.zst"
     with pytest.raises(build_update_package.UpdatePackageValidationError, match="outside staging|Symlink"):
         build_update_package.build_package(str(staging), str(output))
@@ -219,7 +219,7 @@ def test_build_package_rejects_symlinked_staging_root_before_cleanup_or_output(t
 
         _winapi.CreateJunction(str(real_staging), str(staging))
 
-    cache = real_staging / "mona-gateway" / "_internal" / "mona" / "skills" / "mona-ppt" / "scripts" / "__pycache__" / "export.pyc"
+    cache = real_staging / "mona-gateway" / "_internal" / "mona" / "skills" / "mona-video" / "scripts" / "__pycache__" / "export.pyc"
     output = tmp_path / "dist" / "package.tar.zst"
     with pytest.raises(build_update_package.UpdatePackageValidationError, match="symlink"):
         build_update_package.build_package(str(staging), str(output))

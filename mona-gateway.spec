@@ -56,6 +56,9 @@ if not office_resources.is_dir():
 datas.append((str(office_resources), "desktop-resources/office-editor"))
 
 hiddenimports += [
+    "pymupdf",
+    "pypdf",
+    "pdfplumber",
     "uvicorn.lifespan.on",
     "uvicorn.loops.auto",
     "uvicorn.protocols.http.auto",

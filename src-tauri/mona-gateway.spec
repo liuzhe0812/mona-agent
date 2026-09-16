@@ -142,6 +142,8 @@ hidden_imports_third_party = [
     "pptx.opc",
     "pptx.oxml",
     "pypdf",
+    "pymupdf",
+    "pdfplumber",
     # IM channel adapters
     "dingtalk_stream",
     "dingtalk_stream.chatbot",

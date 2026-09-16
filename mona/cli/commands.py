@@ -470,7 +470,7 @@ def onboard(
             console.print(f"[green]✓[/green] Config saved at {config_path}")
         except Exception as e:
             console.print(f"[red]✗[/red] Error during configuration: {e}")
-            console.print("[yellow]Please run 'mona onboard' again to complete setup.[/yellow]")
+            console.print("[yellow]Please run 'python -m mona onboard' again to complete setup.[/yellow]")
             raise typer.Exit(1)
     _onboard_plugins(config_path)
 
@@ -484,8 +484,8 @@ def onboard(
     # → shared output dir → loose artifact migration.
     run_startup_migrations(workspace_path)
 
-    agent_cmd = 'mona agent -m "Hello!"'
-    gateway_cmd = "mona gateway"
+    agent_cmd = 'python -m mona agent -m "Hello!"'
+    gateway_cmd = "python -m mona gateway"
     if config:
         agent_cmd += f" --config {config_path}"
         gateway_cmd += f" --config {config_path}"
@@ -1036,6 +1036,7 @@ def _run_gateway(
         provider=provider_snapshot.provider,
         model=provider_snapshot.model,
         context_window_tokens=provider_snapshot.context_window_tokens,
+        auto_compact_token_limit=provider_snapshot.auto_compact_token_limit,
         cron_service=cron,
         schedule_service=schedule_client,
         todo_service=todo_client,
@@ -1239,6 +1240,7 @@ def _run_gateway(
         session_manager=session_manager,
         webui_runtime_model_name=_webui_runtime_model_name,
         subagent_manager=agent.subagents,
+        runtime_tool_registry=agent.tools,
     )
 
     def _pick_heartbeat_target() -> tuple[str, str]:
@@ -2352,7 +2354,8 @@ def doctor():
         "EmailSearchTool", "EmailReadTool", "EmailActionTool",
         "TerminalExecTool", "TerminalOutputTool", "TerminalUploadTool",
         "TerminalTaskTool",
-        "KnowledgeSearchTool", "DbQueryTool", "ApplyPatchTool",
+        "NotesSearchTool", "KnowledgeSearchTool", "KnowledgeReadTool",
+        "DbQueryTool", "ApplyPatchTool",
         "SpawnTool", "DeliverFileTool", "HoardSearchTool",
     ]
     console.print("\n[bold]Critical Tool Classes[/bold]\n")
