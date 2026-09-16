@@ -176,11 +176,30 @@ class Tool(ABC):
     # time unless the user has an active subscription or valid trial.
     subscription_required: bool = False
 
+    # Dynamic tools such as MCP capabilities are denied until their concrete
+    # names are saved in the Agent's tool permissions.
+    requires_explicit_permission: bool = False
+
+    # Internal execution adapters remain callable by façade tools but are not
+    # included in model function definitions.
+    model_visible: bool = True
+
+    # System-managed tools are activated by runtime context and are not user
+    # permission switches.
+    system_managed: bool = False
+
+    # Optional hard boundary for tools owned by specific packaged Agents.
+    agent_allowlist: frozenset[str] | None = None
+
     # Runtime availability flag. When False, the tool is excluded from
     # ``get_definitions`` so the model never sees it. Unlike
     # ``subscription_required``, this reflects per-request context (e.g.
     # ``terminal_session_id`` missing) and is updated by ``set_context``.
     is_available: bool = True
+
+    def available_in_context(self) -> bool:
+        """Return whether this tool is model-visible and callable in this request."""
+        return bool(self.is_available)
 
     @classmethod
     def config_cls(cls) -> type[BaseModel] | None:

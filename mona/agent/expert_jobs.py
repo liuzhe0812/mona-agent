@@ -16,7 +16,7 @@ from filelock import FileLock
 from packaging.version import InvalidVersion, Version
 from pydantic import Field
 
-from mona.agent.expert_catalog import ExpertCatalogClient
+from mona.agent.expert_catalog import ExpertCatalogClient, ExpertCatalogSnapshot
 from mona.agent.expert_installer import ExpertInstaller, ExpertInstallProgress
 from mona.agent.package_store import AgentPackageStore, ExpertCatalogEntry
 from mona.config.schema import Base
@@ -65,11 +65,22 @@ class ExpertInstallJobManager:
         self.unavailable_reason = unavailable_reason
         self._jobs: dict[str, ExpertInstallJob] = {}
         self._tasks: dict[str, asyncio.Task[None]] = {}
+        self._catalog_snapshot: ExpertCatalogSnapshot | None = None
+        self._catalog_refresh_task: asyncio.Task[None] | None = None
         self._last_persisted = 0.0
         self._load()
 
     async def catalog_payload(self) -> dict[str, object]:
-        snapshot = await self.catalog_client.fetch()
+        snapshot = self._catalog_snapshot
+        if snapshot is None:
+            snapshot = self.catalog_client.load_cached_snapshot()
+            if snapshot is None:
+                snapshot = await self.catalog_client.fetch()
+            self._catalog_snapshot = snapshot
+            if snapshot.source == "cache":
+                self._start_catalog_refresh()
+        else:
+            self._start_catalog_refresh()
         latest: dict[str, ExpertCatalogEntry] = {}
         for entry in snapshot.catalog.experts:
             current = latest.get(entry.id)
@@ -113,6 +124,24 @@ class ExpertInstallJobManager:
             "installUnavailableReason": None if self.installer else self.unavailable_reason,
             "experts": experts,
         }
+
+    def _start_catalog_refresh(self) -> None:
+        if self._catalog_refresh_task is not None and not self._catalog_refresh_task.done():
+            return
+        task = asyncio.create_task(self._refresh_catalog())
+        self._catalog_refresh_task = task
+        task.add_done_callback(self._clear_catalog_refresh_task)
+
+    async def _refresh_catalog(self) -> None:
+        try:
+            self._catalog_snapshot = await self.catalog_client.fetch()
+        except Exception:
+            # The already validated cache remains usable until a later refresh.
+            return
+
+    def _clear_catalog_refresh_task(self, task: asyncio.Task[None]) -> None:
+        if self._catalog_refresh_task is task:
+            self._catalog_refresh_task = None
 
     def start(self, expert_id: str, version: str | None = None) -> ExpertInstallJob:
         if self.installer is None:

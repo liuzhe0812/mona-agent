@@ -43,6 +43,7 @@ class ToolContext:
     todo_service: Any | None = None
     sessions: Any | None = None
     file_state_store: Any = field(default=None)
+    registry: Any | None = None
     provider_snapshot_loader: Callable[[], Any] | None = None
     image_generation_provider_configs: dict[str, Any] | None = None
     video_generation_provider_configs: dict[str, Any] | None = None

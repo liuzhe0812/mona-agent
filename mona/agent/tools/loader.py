@@ -10,6 +10,7 @@ from loguru import logger
 
 from mona.agent.tools.base import Tool
 from mona.agent.tools.registry import ToolRegistry
+from mona.agent.user_config import tool_available_to_agent
 
 _SKIP_MODULES = frozenset({
     "base", "schema", "registry", "context", "loader",
@@ -24,6 +25,10 @@ _MONA_ONLY_TOOLS = frozenset({
     "delegate_agent",
     "propose_workflow",
     "run_collaboration",
+    "terminal_task",
+    "terminal_exec",
+    "terminal_output",
+    "terminal_upload",
 })
 
 
@@ -118,6 +123,15 @@ class ToolLoader:
                     if not tool_cls.enabled(ctx):
                         continue
                     tool = tool_cls.create(ctx)
+                    agent_id = getattr(ctx, "agent_id", "mona")
+                    if not tool_available_to_agent(tool.name, agent_id):
+                        continue
+                    agent_allowlist = getattr(tool, "agent_allowlist", None)
+                    if (
+                        agent_allowlist is not None
+                        and agent_id not in agent_allowlist
+                    ):
+                        continue
                     # A package/partner agent must not acquire orchestration
                     # capabilities through a broad loader call or an
                     # over-permissive manifest allowlist.  The request-scoped
@@ -125,7 +139,7 @@ class ToolLoader:
                     # but rejecting registration here is the hard boundary.
                     if (
                         tool.name in _MONA_ONLY_TOOLS
-                        and getattr(ctx, "agent_id", "mona") != "mona"
+                        and agent_id != "mona"
                     ):
                         continue
                     if allow is not None and (

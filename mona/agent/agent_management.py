@@ -12,20 +12,23 @@ import hmac
 import json
 import os
 import re
-import secrets
 import shutil
 import tempfile
 import uuid
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timezone
 from pathlib import Path, PurePosixPath
 from stat import S_ISREG
-from typing import Any, Literal
+from typing import Any
 
 import yaml
 
 from mona.agent.partners import MONA_AGENT_ID, AgentDefinition, AgentRegistry, normalize_agent_id
 from mona.agent.skills import SkillsLoader
-from mona.agent.user_config import load_agent_user_config, save_agent_user_config
+from mona.agent.user_config import (
+    REQUIRED_AGENT_TOOLS,
+    load_agent_user_config,
+    save_agent_user_config,
+)
 from mona.config.paths import (
     get_agent_memory_dir,
     get_agent_skills_dir,
@@ -41,25 +44,31 @@ INSTRUCTION_FILES: dict[str, str] = {
 }
 _MAX_INSTRUCTION_CHARS = 64_000
 _MAX_SKILL_FILE_CHARS = 128_000
-_MAX_SKILL_FILES = 40
-_MAX_SKILL_TOTAL_CHARS = 512_000
-_PROPOSAL_TTL = timedelta(days=7)
 _SKILL_NAME_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$")
+_SYSTEM_MANAGED_TOOL_NAMES = frozenset(
+    {
+        *REQUIRED_AGENT_TOOLS,
+        "canvas",
+        "complete_goal",
+        "delegate_agent",
+        "hoard_capture",
+        "hoard_search",
+        "long_task",
+        "my",
+        "memory_edit",
+        "propose_workflow",
+        "run_collaboration",
+        "spawn",
+        "skill_create",
+        "update_plan",
+    }
+)
+_MONA_RUNTIME_TOOL_NAMES = ("my", "schedule", "todo")
 _CUSTOM_AGENT_TOOLS = [
     "web_search",
     "web_fetch",
-    "browser_open",
-    "browser_navigate",
-    "browser_read",
-    "browser_snapshot",
-    "browser_screenshot",
+    "browser_observe",
     "browser_act",
-    "browser_click",
-    "browser_type",
-    "browser_list_tabs",
-    "browser_go_back",
-    "browser_go_forward",
-    "browser_close",
     "read_file",
     "write_file",
     "edit_file",
@@ -72,6 +81,51 @@ _CUSTOM_AGENT_TOOLS = [
     "skill_asset_copy",
     "skill_create",
 ]
+
+
+def _tool_category(name: str) -> str:
+    if name.startswith("notes_") or name in {"url2note", "video_extract_frame"}:
+        return "notes"
+    if name.startswith(("materials_", "wiki_")) or name in {"knowledge_search", "kb_search"}:
+        return "knowledge"
+    if name.startswith("generate_") or name in {"music_score", "guitar_tab"}:
+        return "media"
+    if (
+        name in {"academic_search", "chart", "dataframe_query", "research_record", "scientific_tool"}
+        or name.startswith(("stock_", "submit_"))
+    ):
+        return "research"
+    if name.startswith("db_"):
+        return "database"
+    if name in {"schedule", "todo", "heartbeat_update"}:
+        return "planning"
+    if name in {"document", "office", "pdf"}:
+        return "office"
+    if name.startswith("email_") or name == "message":
+        return "communication"
+    if name.startswith("terminal_") or name in {"list_exec_sessions", "write_stdin"}:
+        return "terminal"
+    if name in {"crypto", "config_set_provider"}:
+        return "other"
+    if name.startswith(("browser_", "computer_")):
+        return "automation"
+    if name.startswith("mcp_"):
+        return "connections"
+    if name.startswith("web_") or name == "http_request":
+        return "web"
+    if name.endswith("_file") or name in {
+        "apply_patch", "deliver_file", "edit_file", "exec", "find_files", "grep", "list_dir",
+    }:
+        return "files"
+    if name.startswith("memory_") or name.startswith("hoard_"):
+        return "memory"
+    if name.startswith("skill_"):
+        return "skills"
+    if name in {"artifact_read", "delegate_agent", "propose_workflow", "run_collaboration", "spawn"}:
+        return "collaboration"
+    if name in {"canvas", "complete_goal", "long_task", "my", "update_plan"}:
+        return "system"
+    return "other"
 
 
 class AgentManagementError(ValueError):
@@ -158,10 +212,6 @@ def _atomic_write(path: Path, content: str) -> None:
         except OSError:
             pass
         raise
-
-
-def _atomic_json(path: Path, payload: dict[str, Any]) -> None:
-    _atomic_write(path, json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True) + "\n")
 
 
 def _sha256(content: str) -> str:
@@ -272,6 +322,7 @@ def agent_tool_catalog(
     bus: Any = None,
     subagent_manager: Any = None,
     sessions: Any = None,
+    runtime_registry: Any = None,
 ) -> list[dict[str, Any]]:
     """Return the current Agent's configurable tool ceiling and availability."""
     from mona.agent.tools.context import ToolContext
@@ -283,7 +334,7 @@ def agent_tool_catalog(
     from mona.providers.video_generation import video_gen_provider_configs
 
     config = load_config()
-    runtime_tools = ToolRegistry()
+    catalog_registry = ToolRegistry()
     is_mona = definition.id == MONA_AGENT_ID
     configurable = configurable_agent_tools(definition)
     ToolLoader().load(
@@ -299,24 +350,76 @@ def agent_tool_catalog(
             timezone=config.agents.defaults.timezone,
             agent_id=definition.id,
         ),
-        runtime_tools,
+        catalog_registry,
         scope="core" if is_mona else "subagent",
         tool_allowlist=configurable,
     )
     if is_mona:
-        configured = load_agent_user_config(definition.id).granted_tools or []
-        names = list(dict.fromkeys([*runtime_tools.tool_names, *configured]))
+        from mona.computer_use.runtime import COMPUTER_PERMISSION_TOOL_NAMES
+
+        dynamic = (
+            [
+                name
+                for name in runtime_registry.tool_names
+                if getattr(runtime_registry.get(name), "model_visible", True)
+            ]
+            if runtime_registry is not None
+            else []
+        )
+        static = [
+            name
+            for name in catalog_registry.tool_names
+            if getattr(catalog_registry.get(name), "model_visible", True)
+        ]
+        names = list(
+            dict.fromkeys(
+                [
+                    *static,
+                    *dynamic,
+                    *_MONA_RUNTIME_TOOL_NAMES,
+                    *COMPUTER_PERMISSION_TOOL_NAMES,
+                ]
+            )
+        )
     else:
         names = list(configurable or [])
     rows: list[dict[str, Any]] = []
     for name in names:
-        tool = runtime_tools.get(name)
+        tool = (
+            runtime_registry.get(name)
+            if runtime_registry is not None and runtime_registry.has(name)
+            else catalog_registry.get(name)
+        )
+        if tool is not None and not getattr(tool, "model_visible", True):
+            continue
+        if (
+            is_mona
+            and tool is None
+            and name.startswith("computer_")
+            and name not in COMPUTER_PERMISSION_TOOL_NAMES
+        ):
+            continue
+        computer_tool = name.startswith("computer_")
         rows.append(
             {
                 "name": name,
-                "description": tool.description if tool else "当前运行配置下不可用",
-                "available": tool is not None,
+                "category": _tool_category(name),
+                "description": (
+                    tool.description
+                    if tool
+                    else ("观察和操作电脑上的其他应用。" if computer_tool else "当前运行配置下不可用")
+                ),
+                "available": tool is not None or computer_tool,
                 "readOnly": tool.read_only if tool else None,
+                "requiresExplicitPermission": bool(
+                    computer_tool
+                    or name.startswith("mcp_")
+                    or (tool and tool.requires_explicit_permission)
+                ),
+                "systemManaged": bool(
+                    name in _SYSTEM_MANAGED_TOOL_NAMES
+                    or (tool and getattr(tool, "system_managed", False))
+                ),
             }
         )
     return rows
@@ -355,128 +458,10 @@ def restore_instruction(agent_id: str, key: str, commit: str) -> dict[str, Any]:
     return write_instruction(agent_id, key, content, message=f"restore {path.name} from {commit}")
 
 
-def _proposal_dir(agent_id: str) -> Path:
-    return get_agent_memory_dir(normalize_agent_id(agent_id)).parent / "proposals"
-
-
-def _proposal_path(agent_id: str, proposal_id: str) -> Path:
-    if not re.fullmatch(r"[0-9a-f-]{36}", proposal_id):
-        raise AgentManagementError("invalid proposal id")
-    return _proposal_dir(agent_id) / f"{proposal_id}.json"
-
-
-def _read_proposal(agent_id: str, proposal_id: str) -> dict[str, Any]:
-    path = _proposal_path(agent_id, proposal_id)
-    try:
-        data = json.loads(path.read_text(encoding="utf-8"))
-    except FileNotFoundError as exc:
-        raise AgentManagementError("proposal was not found") from exc
-    except (OSError, json.JSONDecodeError) as exc:
-        raise AgentManagementError("proposal is unreadable") from exc
-    if not isinstance(data, dict) or data.get("agentId") != normalize_agent_id(agent_id):
-        raise AgentManagementError("proposal was not found")
-    return data
-
-
-def _write_proposal(data: dict[str, Any]) -> None:
-    agent_id = data.get("agentId")
-    proposal_id = data.get("id")
-    if not isinstance(agent_id, str) or not isinstance(proposal_id, str):
-        raise AgentManagementError("invalid proposal")
-    _atomic_json(_proposal_path(agent_id, proposal_id), data)
-
-
-def _new_proposal(
-    agent_id: str,
-    *,
-    kind: Literal["instruction_patch", "skill_install"],
-    preview: dict[str, Any],
-    expected_hash: str | None = None,
-    staged_path: str | None = None,
-) -> dict[str, Any]:
-    created = _now()
-    proposal = {
-        "id": str(uuid.uuid4()),
-        "agentId": normalize_agent_id(agent_id),
-        "kind": kind,
-        "status": "pending",
-        "token": secrets.token_urlsafe(24),
-        "expectedHash": expected_hash,
-        "preview": preview,
-        "stagedPath": staged_path,
-        "createdAt": created.isoformat(),
-        "expiresAt": (created + _PROPOSAL_TTL).isoformat(),
-        "resolvedAt": None,
-    }
-    _write_proposal(proposal)
-    return proposal
-
-
-def _public_proposal(proposal: dict[str, Any]) -> dict[str, Any]:
-    # Resolving is already gated by the authenticated local control channel.
-    # The one-time token protects against stale/replayed approval actions and
-    # must be available to the management UI even when a model made proposal.
-    return {key: value for key, value in proposal.items() if key != "stagedPath"}
-
-
-def list_change_proposals(agent_id: str, *, include_resolved: bool = False) -> list[dict[str, Any]]:
-    root = _proposal_dir(agent_id)
-    if not root.exists():
-        return []
-    rows: list[dict[str, Any]] = []
-    for path in root.glob("*.json"):
-        try:
-            proposal = _read_proposal(agent_id, path.stem)
-        except AgentManagementError:
-            continue
-        if proposal.get("status") == "pending" and _proposal_expired(proposal):
-            proposal["status"] = "expired"
-            proposal["resolvedAt"] = _now_iso()
-            _cleanup_staged_skill(proposal)
-            _write_proposal(proposal)
-        if include_resolved or proposal.get("status") == "pending":
-            rows.append(_public_proposal(proposal))
-    return sorted(rows, key=lambda item: str(item.get("createdAt", "")), reverse=True)
-
-
-def get_change_proposal(agent_id: str, proposal_id: str) -> dict[str, Any]:
-    proposal = _read_proposal(agent_id, proposal_id)
-    return _public_proposal(proposal)
-
-
-def propose_instruction_patch(agent_id: str, key: str, content: str) -> dict[str, Any]:
-    if key == "memory":
-        raise AgentManagementError("MEMORY.md may be maintained by its existing memory flow")
-    if not isinstance(content, str) or len(content) > _MAX_INSTRUCTION_CHARS:
-        raise AgentManagementError("invalid instruction content")
-    current = read_instruction(agent_id, key)
-    proposal = _new_proposal(
-        agent_id,
-        kind="instruction_patch",
-        expected_hash=current["contentHash"],
-        preview={
-            "key": key,
-            "filename": current["filename"],
-            "before": current["content"],
-            "after": content,
-        },
-    )
-    return {**_public_proposal(proposal), "token": proposal["token"]}
-
-
 def _validate_skill_name(name: str) -> str:
     if not isinstance(name, str) or not _SKILL_NAME_RE.fullmatch(name):
         raise AgentManagementError("skill name must use letters, digits, hyphen, or underscore")
     return name
-
-
-def _validate_relative_file(path: str) -> PurePosixPath:
-    if not isinstance(path, str) or not path or "\\" in path:
-        raise AgentManagementError("skill file paths must be non-empty relative POSIX paths")
-    relative = PurePosixPath(path)
-    if relative.is_absolute() or ".." in relative.parts or relative.parts[0].startswith("."):
-        raise AgentManagementError("skill file path escapes the skill directory")
-    return relative
 
 
 def _validate_skill_frontmatter(name: str, content: str) -> dict[str, Any]:
@@ -638,10 +623,6 @@ class SkillManager:
         rows: list[dict[str, Any]] = []
         for entry in self._loader().list_skills(filter_unavailable=False):
             skill_path = Path(entry["path"])
-            try:
-                skill_content_hash = skill_execution_hash(skill_path.parent)
-            except OSError:
-                skill_content_hash = ""
             source = {"workspace": "private", "builtin": "platform"}.get(
                 entry["source"], entry["source"]
             )
@@ -652,11 +633,7 @@ class SkillManager:
                     path=skill_path,
                     enabled=entry["name"] not in disabled,
                     archived=False,
-                    scripts_enabled=(
-                        entry["name"] in config.script_enabled_skills
-                        and config.script_enabled_skill_hashes.get(entry["name"])
-                        == skill_content_hash
-                    ),
+                    scripts_enabled=entry["name"] not in disabled,
                 )
             )
         from mona.agent import skill_usage
@@ -790,141 +767,6 @@ class SkillManager:
             raise AgentManagementError("this agent is not allowed to run skill scripts")
         return active
 
-    def stage(
-        self,
-        *,
-        name: str,
-        files: dict[str, str],
-        source: str,
-    ) -> dict[str, Any]:
-        name = _validate_skill_name(name)
-        if not isinstance(files, dict) or "SKILL.md" not in files:
-            raise AgentManagementError("a skill install must include SKILL.md")
-        if len(files) > _MAX_SKILL_FILES:
-            raise AgentManagementError(f"skill has more than {_MAX_SKILL_FILES} files")
-        total = 0
-        clean_files: dict[PurePosixPath, str] = {}
-        for raw_path, content in files.items():
-            relative = _validate_relative_file(raw_path)
-            if not isinstance(content, str):
-                raise AgentManagementError("skill files must be UTF-8 text")
-            if len(content) > _MAX_SKILL_FILE_CHARS:
-                raise AgentManagementError(f"skill file {raw_path!r} is too large")
-            total += len(content)
-            clean_files[relative] = content
-        if total > _MAX_SKILL_TOTAL_CHARS:
-            raise AgentManagementError("skill content is too large")
-        frontmatter = _validate_skill_frontmatter(name, clean_files[PurePosixPath("SKILL.md")])
-        runtime_spec = _validate_skill_script_runtime(frontmatter, list(clean_files))
-        if (self.skills_dir / name).exists():
-            raise AgentManagementError(
-                "a private skill with this name already exists; update is not implicit"
-            )
-        loader = self._loader()
-        existing = [
-            row for row in loader.list_skills(filter_unavailable=False) if row["name"] == name
-        ]
-        if existing:
-            raise AgentManagementError("skill name conflicts with a package or platform skill")
-
-        proposal_id = str(uuid.uuid4())
-        stage = self.skills_dir / ".staging" / proposal_id
-        if stage.exists():
-            raise AgentManagementError("skill staging collision")
-        temporary = self.skills_dir / ".staging" / f".{proposal_id}.tmp"
-        try:
-            for relative, content in clean_files.items():
-                target = temporary.joinpath(*relative.parts)
-                target.parent.mkdir(parents=True, exist_ok=True)
-                _atomic_write(target, content)
-            stage.parent.mkdir(parents=True, exist_ok=True)
-            os.replace(temporary, stage)
-        except Exception:
-            shutil.rmtree(temporary, ignore_errors=True)
-            raise
-        has_scripts = any(path.parts and path.parts[0] == "scripts" for path in clean_files)
-        proposal = _new_proposal(
-            self.agent_id,
-            kind="skill_install",
-            staged_path=str(stage),
-            preview={
-                "skillName": name,
-                "source": source[:2_000],
-                "frontmatter": frontmatter,
-                "files": [
-                    {
-                        "path": str(path),
-                        "size": len(content),
-                        "sha256": _sha256(content),
-                        # The proposal is authenticated local data and the
-                        # total staged payload is capped above, so retain a
-                        # real review preview rather than asking users to
-                        # approve an opaque hash.
-                        "content": content,
-                    }
-                    for path, content in sorted(clean_files.items(), key=lambda item: str(item[0]))
-                ],
-                "hasScripts": has_scripts,
-                "runtime": (
-                    runtime_spec.canonical()
-                    if runtime_spec is not None and hasattr(runtime_spec, "canonical")
-                    else None
-                ),
-                "scriptPolicy": "disabled_until_explicitly_enabled"
-                if has_scripts
-                else "not_applicable",
-            },
-        )
-        # Keep the staging directory id and proposal id equal, so activation does
-        # not ever need to trust a model-provided filesystem path.
-        if proposal["id"] != proposal_id:
-            final_stage = self.skills_dir / ".staging" / proposal["id"]
-            os.replace(stage, final_stage)
-            proposal["stagedPath"] = str(final_stage)
-            _write_proposal(proposal)
-        return {**_public_proposal(proposal), "token": proposal["token"]}
-
-    def _activate(self, proposal: dict[str, Any]) -> None:
-        preview = proposal.get("preview")
-        if not isinstance(preview, dict):
-            raise AgentManagementError("proposal preview is invalid")
-        name = _validate_skill_name(str(preview.get("skillName", "")))
-        staged = self.skills_dir / ".staging" / str(proposal["id"])
-        if not staged.is_dir() or not (staged / "SKILL.md").is_file():
-            raise AgentManagementError("staged skill is missing")
-        content = (staged / "SKILL.md").read_text(encoding="utf-8")
-        frontmatter = _validate_skill_frontmatter(name, content)
-        spec = _validate_skill_script_runtime(
-            frontmatter,
-            [
-                PurePosixPath(path.relative_to(staged).as_posix())
-                for path in staged.rglob("*")
-                if path.is_file()
-            ],
-        )
-        if (staged / "scripts").is_dir():
-            from mona.config.paths import get_managed_runtimes_dir
-            from mona.runtime.agent_env import AgentEnvironmentManager
-
-            AgentEnvironmentManager(get_managed_runtimes_dir()).assert_skill_ready(
-                staged,
-                spec,
-            )
-        final = self.skills_dir / name
-        if final.exists():
-            raise AgentManagementError("a private skill with this name now exists")
-        os.replace(staged, final)
-        from mona.agent import skill_usage
-
-        skill_usage.record_install(
-            name,
-            agent_id=self.agent_id,
-            origin="agent" if str(preview.get("source", "")).startswith("agent:") else "user",
-            source=str(preview.get("source", "")),
-            content_hash=_sha256(content),
-            scripts_approved=False,
-        )
-
     def action(self, name: str, action: str) -> None:
         name = _validate_skill_name(name)
         from mona.agent import skill_usage
@@ -970,130 +812,10 @@ class SkillManager:
                     active,
                     runtime_spec_from_skill_markdown(content),
                 )
-            config = load_agent_user_config(self.agent_id)
-            enabled = set(config.script_enabled_skills)
-            approval_hashes = dict(config.script_enabled_skill_hashes)
-            if action == "enable_scripts":
-                enabled.add(name)
-                approval_hashes[name] = skill_execution_hash(active)
-                skill_usage.set_scripts_approved(name, True, agent_id=self.agent_id)
-            else:
-                enabled.discard(name)
-                approval_hashes.pop(name, None)
-                skill_usage.set_scripts_approved(name, False, agent_id=self.agent_id)
-            save_agent_user_config(
-                self.agent_id,
-                {
-                    "script_enabled_skills": sorted(enabled),
-                    "script_enabled_skill_hashes": approval_hashes,
-                },
-                expected_revision=None,
-            )
+            elif action == "disable_scripts":
+                self.action(name, "disable")
             return
         raise AgentManagementError("unsupported skill action")
-
-
-def _proposal_expired(proposal: dict[str, Any]) -> bool:
-    try:
-        return _now() >= datetime.fromisoformat(str(proposal["expiresAt"]))
-    except (KeyError, TypeError, ValueError):
-        return True
-
-
-def _cleanup_staged_skill(proposal: dict[str, Any]) -> None:
-    if proposal.get("kind") != "skill_install":
-        return
-    agent_id = proposal.get("agentId")
-    proposal_id = proposal.get("id")
-    if isinstance(agent_id, str) and isinstance(proposal_id, str):
-        shutil.rmtree(get_agent_skills_dir(agent_id) / ".staging" / proposal_id, ignore_errors=True)
-
-
-def get_staged_skill_for_approval(
-    agent_id: str,
-    proposal_id: str,
-    *,
-    token: str,
-) -> tuple[Path, object | None] | None:
-    """Validate an approval token and return staged Skill runtime data."""
-    proposal = _read_proposal(agent_id, proposal_id)
-    if proposal.get("status") != "pending" or proposal.get("kind") != "skill_install":
-        return None
-    if not hmac.compare_digest(token, str(proposal.get("token", ""))):
-        raise AgentManagementError("proposal token is invalid")
-    if _proposal_expired(proposal):
-        raise AgentManagementError("proposal has expired")
-    staged = get_agent_skills_dir(agent_id) / ".staging" / proposal_id
-    skill_file = staged / "SKILL.md"
-    if not skill_file.is_file():
-        raise AgentManagementError("staged skill is missing")
-    frontmatter = _validate_skill_frontmatter(
-        str(proposal.get("preview", {}).get("skillName", "")),
-        skill_file.read_text(encoding="utf-8"),
-    )
-    spec = _validate_skill_script_runtime(
-        frontmatter,
-        [
-            PurePosixPath(path.relative_to(staged).as_posix())
-            for path in staged.rglob("*")
-            if path.is_file()
-        ],
-    )
-    return staged, spec
-
-
-def resolve_change_proposal(
-    agent_id: str,
-    proposal_id: str,
-    *,
-    token: str,
-    approve: bool,
-) -> dict[str, Any]:
-    proposal = _read_proposal(agent_id, proposal_id)
-    if proposal.get("status") != "pending":
-        return _public_proposal(proposal)
-    if not isinstance(token, str) or not hmac.compare_digest(token, str(proposal.get("token", ""))):
-        raise AgentManagementError("proposal token is invalid")
-    if _proposal_expired(proposal):
-        proposal["status"] = "expired"
-        proposal["resolvedAt"] = _now_iso()
-        _cleanup_staged_skill(proposal)
-        _write_proposal(proposal)
-        return _public_proposal(proposal)
-    if not approve:
-        proposal["status"] = "rejected"
-        proposal["resolvedAt"] = _now_iso()
-        _cleanup_staged_skill(proposal)
-        _write_proposal(proposal)
-        return _public_proposal(proposal)
-    try:
-        if proposal.get("kind") == "instruction_patch":
-            preview = proposal.get("preview")
-            if not isinstance(preview, dict):
-                raise AgentManagementError("instruction proposal is invalid")
-            current = read_instruction(agent_id, str(preview.get("key", "")))
-            if current["contentHash"] != proposal.get("expectedHash"):
-                raise AgentManagementError("instruction changed since this proposal was created")
-            write_instruction(
-                agent_id,
-                str(preview["key"]),
-                str(preview.get("after", "")),
-                message=f"approved agent patch for {preview.get('filename', 'instruction')}",
-            )
-        elif proposal.get("kind") == "skill_install":
-            SkillManager(agent_id)._activate(proposal)
-        else:
-            raise AgentManagementError("proposal kind is invalid")
-    except Exception as exc:
-        proposal["status"] = "failed"
-        proposal["resolvedAt"] = _now_iso()
-        proposal["error"] = str(exc)
-        _write_proposal(proposal)
-        raise AgentManagementError(str(exc)) from exc
-    proposal["status"] = "approved"
-    proposal["resolvedAt"] = _now_iso()
-    _write_proposal(proposal)
-    return _public_proposal(proposal)
 
 
 def install_generated_skill_content(
@@ -1109,14 +831,13 @@ def install_generated_skill_content(
 
 def is_skill_script_enabled(agent_id: str, name: str) -> bool:
     config = load_agent_user_config(agent_id)
-    if name not in config.script_enabled_skills:
+    if name in config.disabled_skills:
         return False
     try:
-        skill_dir = SkillManager(agent_id).active_skill_dir(name)
-        content_hash = skill_execution_hash(skill_dir)
+        SkillManager(agent_id).active_skill_dir(name)
     except (AgentManagementError, OSError):
         return False
-    return config.script_enabled_skill_hashes.get(name) == content_hash
+    return True
 
 
 __all__ = [
@@ -1125,15 +846,10 @@ __all__ = [
     "SkillManager",
     "agent_data_summary",
     "agent_tool_catalog",
-    "get_change_proposal",
-    "get_staged_skill_for_approval",
     "instruction_history",
     "is_skill_script_enabled",
-    "list_change_proposals",
     "list_instructions",
-    "propose_instruction_patch",
     "read_instruction",
-    "resolve_change_proposal",
     "restore_instruction",
     "install_generated_skill_content",
     "write_instruction",

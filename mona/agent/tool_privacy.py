@@ -19,6 +19,14 @@ def redact_tool_arguments(name: str, arguments: dict[str, Any]) -> dict[str, Any
         safe["text"] = _REDACTED
     elif name == "computer_set_value" and "value" in safe:
         safe["value"] = _REDACTED
+    elif name == "computer_act" and safe.get("action") in {"type", "set_value"}:
+        nested = safe.get("arguments")
+        if isinstance(nested, dict):
+            nested_safe = dict(nested)
+            sensitive_key = "text" if safe.get("action") == "type" else "value"
+            if sensitive_key in nested_safe:
+                nested_safe[sensitive_key] = _REDACTED
+                safe["arguments"] = nested_safe
     return safe
 
 

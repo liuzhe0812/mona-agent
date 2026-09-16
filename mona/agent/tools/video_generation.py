@@ -207,7 +207,15 @@ class VideoGenerationTool(Tool):
                 duration=duration or self.config.default_duration,
             )
             embedded = response.raw.get("_video_bytes") if isinstance(response.raw, dict) else None
-            raw = embedded if isinstance(embedded, bytes) else await download_video_bytes(response.video_url)
+            download_kwargs: dict[str, Any] = {}
+            api_base = getattr(client, "api_base", None)
+            if api_base:
+                download_kwargs["api_base"] = api_base
+            raw = (
+                embedded
+                if isinstance(embedded, bytes)
+                else await download_video_bytes(response.video_url, **download_kwargs)
+            )
             # Store generated videos under the active session workspace so they
             # appear in the active Agent output panel for normal sessions.
             artifact_root = self._active_workspace()
@@ -230,6 +238,24 @@ class VideoGenerationTool(Tool):
             return generated_video_tool_result([artifact])
         except VideoGenerationError as exc:
             message = str(exc)
+            result_url = getattr(exc, "result_url", None)
+            if result_url:
+                return json.dumps(
+                    {
+                        "ok": False,
+                        "error": {
+                            "code": "VIDEO_RESULT_UNAVAILABLE",
+                            "message": message,
+                            "result_url": result_url,
+                            "retryable": False,
+                            "next_step": (
+                                "Retry downloading result_url without resubmitting "
+                                "the generation request."
+                            ),
+                        },
+                    },
+                    ensure_ascii=False,
+                )
             if "超时" in message or "timed out" in message.lower():
                 return json.dumps(
                     {

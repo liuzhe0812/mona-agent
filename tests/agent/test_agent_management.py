@@ -15,17 +15,19 @@ import mona.config.paths as paths
 from mona.agent.agent_management import (
     AgentManagementError,
     SkillManager,
+    agent_tool_catalog,
     create_custom_agent,
 )
-from mona.agent.partners import AgentRegistry
-from mona.agent.user_config import AgentUserConfig
+from mona.agent.partners import MONA_AGENT_ID, AgentRegistry
+from mona.agent.user_config import (
+    AGENT_EXCLUSIVE_TOOLS,
+    COMMON_AGENT_TOOLS,
+    REQUIRED_AGENT_TOOLS,
+    AgentUserConfig,
+)
 from mona.bus.queue import MessageBus
 from mona.channels.websocket import WebSocketChannel
-from mona.runtime.agent_env import AgentRuntimeError
-from mona.runtime.skill_env import (
-    PythonSkillDependencies,
-    SkillRuntimeSpec,
-)
+from mona.session.manager import SessionManager
 
 AGENT_ID = "com.example.skill-owner"
 LEARNED_SKILL = "learned-skill"
@@ -34,6 +36,129 @@ PACKAGE_SKILL = "external-skill"
 
 def _skill_content(name: str, description: str, body: str = "# Skill") -> str:
     return f"---\nname: {name}\ndescription: {description}\n---\n{body}\n"
+
+
+def test_mona_tool_catalog_includes_dynamic_and_uninstalled_computer_tools(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        agent_management,
+        "load_agent_user_config",
+        lambda _agent_id: AgentUserConfig(),
+    )
+    dynamic_tool = SimpleNamespace(
+        name="mcp_demo_search",
+        description="Search a connected service",
+        read_only=True,
+        requires_explicit_permission=True,
+    )
+    internal_tool = SimpleNamespace(
+        name="my",
+        description="Inspect runtime state",
+        read_only=True,
+        requires_explicit_permission=False,
+        system_managed=True,
+    )
+    runtime_registry = SimpleNamespace(
+        tool_names=[dynamic_tool.name, internal_tool.name],
+        has=lambda name: name in {dynamic_tool.name, internal_tool.name},
+        get=lambda name: (
+            dynamic_tool if name == dynamic_tool.name
+            else internal_tool if name == internal_tool.name
+            else None
+        ),
+    )
+
+    rows = agent_tool_catalog(
+        AgentRegistry().require(MONA_AGENT_ID),
+        workspace=tmp_path,
+        runtime_registry=runtime_registry,
+        sessions=SessionManager(tmp_path / "sessions"),
+    )
+    by_name = {row["name"]: row for row in rows}
+
+    assert by_name["computer_observe"]["available"] is True
+    assert by_name["computer_observe"]["requiresExplicitPermission"] is True
+    assert by_name["computer_act"]["requiresExplicitPermission"] is True
+    assert by_name["mcp_demo_search"]["requiresExplicitPermission"] is True
+    assert by_name["canvas"]["systemManaged"] is True
+    assert by_name["long_task"]["systemManaged"] is True
+    assert by_name["complete_goal"]["systemManaged"] is True
+    assert by_name["update_plan"]["systemManaged"] is True
+    assert by_name["my"]["systemManaged"] is True
+    assert all(
+        by_name[name]["systemManaged"] is True
+        for name in ("delegate_agent", "propose_workflow", "run_collaboration", "spawn")
+    )
+    assert all(
+        by_name[name]["systemManaged"] is True
+        for name in REQUIRED_AGENT_TOOLS
+        if name in by_name
+    )
+    assert "guitar_tab" not in by_name
+    assert "music_score" not in by_name
+    assert "academic_search" not in by_name
+    assert "chart" not in by_name
+    assert "dataframe_query" not in by_name
+    assert by_name["notes_search"]["available"] is True
+    assert by_name["knowledge_search"]["available"] is True
+    assert by_name["knowledge_read"]["available"] is True
+    assert by_name["schedule"]["category"] == "planning"
+    assert by_name["todo"]["category"] == "planning"
+
+
+def test_mona_tool_catalog_does_not_restore_removed_tools_from_an_old_selection(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        agent_management,
+        "load_agent_user_config",
+        lambda _agent_id: AgentUserConfig(granted_tools=["removed_tool"]),
+    )
+
+    rows = agent_tool_catalog(
+        AgentRegistry().require(MONA_AGENT_ID),
+        workspace=tmp_path,
+        sessions=SessionManager(tmp_path / "sessions"),
+    )
+
+    assert "removed_tool" not in {row["name"] for row in rows}
+
+
+def test_expert_tool_catalogs_share_common_tools_and_isolate_exclusive_tools(
+    tmp_path: Path,
+) -> None:
+    registry = AgentRegistry()
+    academic = registry.require("com.mona.academic-researcher")
+    musician = registry.require("com.mona.musician")
+
+    academic_names = {
+        row["name"]
+        for row in agent_tool_catalog(
+            academic,
+            workspace=tmp_path,
+            sessions=SessionManager(tmp_path / "academic-sessions"),
+        )
+    }
+    musician_names = {
+        row["name"]
+        for row in agent_tool_catalog(
+            musician,
+            workspace=tmp_path,
+            sessions=SessionManager(tmp_path / "musician-sessions"),
+        )
+    }
+
+    assert COMMON_AGENT_TOOLS <= academic_names
+    assert COMMON_AGENT_TOOLS <= musician_names
+    assert {"computer_observe", "computer_act"} <= academic_names
+    assert {"computer_observe", "computer_act"} <= musician_names
+    assert AGENT_EXCLUSIVE_TOOLS[academic.id] <= academic_names
+    assert AGENT_EXCLUSIVE_TOOLS[musician.id] <= musician_names
+    assert not (AGENT_EXCLUSIVE_TOOLS[academic.id] & musician_names)
+    assert not (AGENT_EXCLUSIVE_TOOLS[musician.id] & academic_names)
 
 
 @pytest.fixture
@@ -126,7 +251,7 @@ def test_update_private_rejects_non_private_and_missing_skills(
         manager.update_private("missing-skill", package_content, expected_hash=None)
 
 
-def test_package_skill_script_approval_is_bound_to_effective_content(
+def test_package_skill_scripts_need_no_approval_after_install_or_update(
     skill_manager: tuple[SkillManager, Path],
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -152,11 +277,9 @@ def test_package_skill_script_approval_is_bound_to_effective_content(
         lambda *args, **kwargs: None,
     )
 
-    manager.action(PACKAGE_SKILL, "enable_scripts")
-
     approved = next(row for row in manager.list() if row["name"] == PACKAGE_SKILL)
     assert approved["scriptsEnabled"] is True
-    assert current.script_enabled_skill_hashes[PACKAGE_SKILL] == approved["executionHash"]
+    assert current.script_enabled_skill_hashes == {}
 
     cache = skill_dir / "scripts" / "__pycache__"
     cache.mkdir()
@@ -169,7 +292,10 @@ def test_package_skill_script_approval_is_bound_to_effective_content(
         encoding="utf-8",
     )
     changed = next(row for row in manager.list() if row["name"] == PACKAGE_SKILL)
-    assert changed["scriptsEnabled"] is False
+    assert changed["scriptsEnabled"] is True
+    manager.action(PACKAGE_SKILL, "disable")
+    assert PACKAGE_SKILL in current.disabled_skills
+    assert not agent_management.is_skill_script_enabled(manager.agent_id, PACKAGE_SKILL)
 
 
 def test_create_custom_agent_is_local_and_registry_loadable(
@@ -196,162 +322,6 @@ def test_create_custom_agent_is_local_and_registry_loadable(
         package_store_dir=tmp_path / "packages",
     )
     assert registry.require(definition.id).display_name == "法律文书专家"
-
-
-def test_private_skill_scripts_use_shared_agent_environment_without_custom_metadata(
-    skill_manager: tuple[SkillManager, Path],
-) -> None:
-    manager, _private_skills = skill_manager
-    content = _skill_content("scripted-skill", "Runs a script.")
-
-    proposal = manager.stage(
-        name="scripted-skill",
-        files={
-            "SKILL.md": content,
-            "pyproject.toml": (
-                '[project]\nname = "scripted-skill"\nversion = "1.0.0"\n'
-                'dependencies = ["requests>=2"]\n'
-            ),
-            "scripts/run.py": "print('ok')\n",
-        },
-        source="user:test",
-    )
-
-    assert proposal["preview"]["runtime"] is None
-    assert proposal["preview"]["hasScripts"] is True
-
-
-def test_private_skill_dependency_versions_must_be_exact(
-    skill_manager: tuple[SkillManager, Path],
-) -> None:
-    manager, _private_skills = skill_manager
-    content = (
-        "---\n"
-        "name: scripted-skill\n"
-        "description: Runs a script.\n"
-        "metadata:\n"
-        "  mona:\n"
-        "    runtime:\n"
-        "      python:\n"
-        "        requirements: [requests>=2]\n"
-        "---\n"
-    )
-
-    with pytest.raises(AgentManagementError, match="name==version"):
-        manager.stage(
-            name="scripted-skill",
-            files={"SKILL.md": content, "scripts/run.py": "print('ok')\n"},
-            source="user:test",
-        )
-
-
-def test_skill_install_preview_exposes_dependency_plan(
-    skill_manager: tuple[SkillManager, Path],
-) -> None:
-    manager, _private_skills = skill_manager
-    content = (
-        "---\n"
-        "name: scripted-skill\n"
-        "description: Runs a script.\n"
-        "metadata:\n"
-        "  mona:\n"
-        "    runtime:\n"
-        "      python:\n"
-        "        requirements: [requests==2.32.5]\n"
-        "---\n"
-    )
-
-    proposal = manager.stage(
-        name="scripted-skill",
-        files={"SKILL.md": content, "scripts/run.py": "print('ok')\n"},
-        source="user:test",
-    )
-
-    assert proposal["preview"]["runtime"] == {
-        "packs": [],
-        "python": {
-            "requirements": ["requests==2.32.5"],
-        },
-    }
-
-
-def test_scripted_skill_cannot_activate_before_environment_is_ready(
-    skill_manager: tuple[SkillManager, Path],
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    manager, private_skills = skill_manager
-    monkeypatch.setattr(paths, "get_managed_runtimes_dir", lambda: tmp_path / "runtimes")
-    content = (
-        "---\n"
-        "name: scripted-skill\n"
-        "description: Runs a script.\n"
-        "metadata:\n"
-        "  mona:\n"
-        "    runtime:\n"
-        "      python:\n"
-        "        requirements: [requests==2.32.5]\n"
-        "---\n"
-    )
-    proposal = manager.stage(
-        name="scripted-skill",
-        files={"SKILL.md": content, "scripts/run.py": "print('ok')\n"},
-        source="user:test",
-    )
-
-    with pytest.raises(AgentRuntimeError, match="environment is not prepared"):
-        manager._activate(proposal)  # noqa: SLF001
-
-    assert not (private_skills / "scripted-skill").exists()
-
-
-async def test_websocket_approval_prepares_skill_environment_before_activation(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    order: list[str] = []
-    staged = tmp_path / "staged"
-    staged.mkdir()
-    spec = SkillRuntimeSpec(python=PythonSkillDependencies(requirements=["requests==2.32.5"]))
-
-    monkeypatch.setattr(
-        agent_management,
-        "get_staged_skill_for_approval",
-        lambda *args, **kwargs: (staged, spec),
-    )
-
-    def resolve(*args, **kwargs):
-        order.append("activate")
-        return {"kind": "skill_install", "status": "approved"}
-
-    monkeypatch.setattr(agent_management, "resolve_change_proposal", resolve)
-
-    async def prepare_all(self, skill_dir, runtime_spec):
-        del self
-        assert skill_dir == staged
-        assert runtime_spec == spec
-        order.append("prepare")
-
-    monkeypatch.setattr(
-        "mona.runtime.agent_env.AgentEnvironmentManager.prepare_all",
-        prepare_all,
-    )
-    channel = WebSocketChannel({}, MessageBus())
-    channel._send_event = AsyncMock()  # type: ignore[method-assign]  # noqa: SLF001
-    channel._broadcast_agent_event = AsyncMock()  # type: ignore[method-assign]  # noqa: SLF001
-
-    await channel._handle_resolve_agent_change_envelope(  # noqa: SLF001
-        object(),
-        {
-            "agent_id": AGENT_ID,
-            "proposal_id": "proposal-1",
-            "token": "token-1",
-            "approve": True,
-        },
-    )
-
-    assert order == ["prepare", "activate"]
-    assert channel._send_event.await_args.kwargs["ok"] is True  # type: ignore[union-attr]
 
 
 async def test_websocket_starts_skill_setup_without_waiting_for_install() -> None:

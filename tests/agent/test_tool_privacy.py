@@ -24,6 +24,13 @@ def test_redacts_browser_and_computer_typed_text_without_mutating_source() -> No
         _call("computer_type_text", {"pid": 42, "text": "private"})
     )
     assert json.loads(computer["function"]["arguments"])["text"] == "<redacted>"
+    facade = redact_persisted_tool_call(
+        _call(
+            "computer_act",
+            {"action": "type", "arguments": {"pid": 42, "text": "private"}},
+        )
+    )
+    assert json.loads(facade["function"]["arguments"])["arguments"]["text"] == "<redacted>"
 
 
 def test_keeps_non_sensitive_tool_arguments() -> None:

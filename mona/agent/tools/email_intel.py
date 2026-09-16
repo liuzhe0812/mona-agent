@@ -179,18 +179,18 @@ async def _read_email_scope_async() -> tuple[set[str], bool]:
 
 @tool_parameters(
     tool_parameters_schema(
-        account_id=StringSchema("限定账号 ID（可选，不填则搜索所有账号）"),
-        folder=StringSchema("限定文件夹，如 INBOX、Sent（可选）"),
-        keyword=StringSchema("关键词，在主题和正文中搜索（可选）"),
-        from_address=StringSchema("发件人邮箱筛选，支持模糊匹配（可选）"),
-        from_name=StringSchema("发件人名称筛选，支持模糊匹配（可选）"),
-        date_from=StringSchema("起始日期，ISO 格式如 2025-01-01（可选）"),
-        date_to=StringSchema("结束日期，ISO 格式如 2025-12-31（可选）"),
-        is_read=BooleanSchema(description="已读状态筛选（可选）"),
-        is_starred=BooleanSchema(description="星标状态筛选（可选）"),
-        has_attachments=BooleanSchema(description="是否有附件（可选）"),
-        limit=IntegerSchema(50, description="返回上限（默认 50，最大 200）", minimum=1, maximum=200),
-        offset=IntegerSchema(0, description="偏移量，用于分页", minimum=0),
+        account_id=StringSchema("Account ID; omit for all"),
+        folder=StringSchema("Mailbox, e.g. INBOX or Sent"),
+        keyword=StringSchema("Subject/body keyword"),
+        from_address=StringSchema("Fuzzy sender address"),
+        from_name=StringSchema("Fuzzy sender name"),
+        date_from=StringSchema("ISO start date, e.g. 2025-01-01"),
+        date_to=StringSchema("ISO end date, e.g. 2025-12-31"),
+        is_read=BooleanSchema(description="Filter read state"),
+        is_starred=BooleanSchema(description="Filter starred state"),
+        has_attachments=BooleanSchema(description="Filter attachments"),
+        limit=IntegerSchema(50, description="Result limit (default 50, max 200)", minimum=1, maximum=200),
+        offset=IntegerSchema(0, description="Pagination offset", minimum=0),
     )
 )
 class EmailSearchTool(_EmailToolBase):
@@ -203,12 +203,9 @@ class EmailSearchTool(_EmailToolBase):
     @property
     def description(self) -> str:
         return (
-            "搜索本地邮件数据库。支持按关键词、发件人、日期范围、文件夹、"
-            "已读/星标状态等条件筛选。返回邮件列表（不含正文，节省 token），"
-            "每封邮件附带一个 #mona-email: 链接。"
-            "重要：在回复中引用邮件时，必须用 [显示文字](链接) 格式的 markdown 链接，"
-            "链接直接使用工具返回的 #mona-email:... 格式，"
-            "用户点击后会在新窗口预览邮件内容。不要只输出 UID 或纯文本。"
+            "Search local email by text, sender, date, mailbox, or state. Results omit "
+            "bodies and include #mona-email links. Cite email as "
+            "[label](#mona-email:...) so it opens in Mona; never cite only a UID."
         )
 
     @property

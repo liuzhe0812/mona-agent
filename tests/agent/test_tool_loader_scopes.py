@@ -1,7 +1,9 @@
+import json
 from unittest.mock import MagicMock
 
 import pytest
 
+import mona.agent.user_config as user_config
 from mona.agent.jobs import AgentJob
 from mona.agent.partners import AgentDefinition
 from mona.agent.subagent import SubagentManager
@@ -9,6 +11,7 @@ from mona.agent.tools import knowledge_search as knowledge_module
 from mona.agent.tools.base import Tool
 from mona.agent.tools.context import ToolContext
 from mona.agent.tools.knowledge_search import (
+    KnowledgeReadTool,
     KnowledgeSearchTool,
     MaterialsReadTool,
     MaterialsSearchTool,
@@ -21,10 +24,16 @@ from mona.agent.tools.long_task import CompleteGoalTool, LongTaskTool
 from mona.agent.tools.notes import NotesCreateTool, NotesReadTool, NotesSaveImageTool
 from mona.agent.tools.registry import ToolRegistry
 from mona.agent.user_config import (
+    AGENT_EXCLUSIVE_TOOLS,
+    AGENT_USER_CONFIG_SCHEMA_VERSION,
+    COMMON_AGENT_TOOLS,
+    REQUIRED_AGENT_TOOLS,
     USER_GRANTABLE_PLATFORM_TOOLS,
     AgentUserConfig,
     configurable_agent_tools,
+    load_agent_user_config,
     resolve_effective_agent_config,
+    tool_available_to_agent,
 )
 from mona.bus.queue import MessageBus
 from mona.config.schema import ToolsConfig
@@ -89,6 +98,18 @@ class _UniversalTool(Tool):
         return "ok"
 
 
+class _ForgedStockTool(_SubagentOnlyTool):
+    @property
+    def name(self):
+        return "stock_quote"
+
+
+class _ForgedTerminalTool(_SubagentOnlyTool):
+    @property
+    def name(self):
+        return "terminal_task"
+
+
 @pytest.mark.asyncio
 async def test_loader_filters_by_scope():
     from mona.agent.tools.registry import ToolRegistry
@@ -102,6 +123,41 @@ async def test_loader_filters_by_scope():
     assert registry.has("core_only")
     assert not registry.has("sub_only")
     assert registry.has("universal")
+
+
+def test_exclusive_tool_ownership_rejects_a_forged_expert_allowlist():
+    loader = ToolLoader(test_classes=[_ForgedStockTool])
+    forged = ToolRegistry()
+    owner = ToolRegistry()
+
+    loader.load(
+        ToolContext(config={}, workspace="/tmp", agent_id="com.example.forged"),
+        forged,
+        scope="subagent",
+        tool_allowlist=["stock_quote"],
+    )
+    loader.load(
+        ToolContext(config={}, workspace="/tmp", agent_id="com.mona.a-share-analyst"),
+        owner,
+        scope="subagent",
+        tool_allowlist=["stock_quote"],
+    )
+
+    assert not forged.has("stock_quote")
+    assert owner.has("stock_quote")
+    assert tool_available_to_agent("stock_quote", "com.mona.a-share-analyst")
+
+
+def test_terminal_module_tools_are_reserved_for_mona():
+    registry = ToolRegistry()
+    ToolLoader(test_classes=[_ForgedTerminalTool]).load(
+        ToolContext(config={}, workspace="/tmp", agent_id="com.example.partner"),
+        registry,
+        scope="subagent",
+        tool_allowlist=["terminal_task"],
+    )
+
+    assert not registry.has("terminal_task")
 
 
 def test_goal_tools_are_available_to_subagents_only_when_allowlisted(tmp_path):
@@ -196,13 +252,13 @@ def test_spawn_registry_applies_trusted_subscription_state(tmp_path):
     active = _subagent_manager(tmp_path, has_subscription=True)._build_tools()
     inactive = _subagent_manager(tmp_path, has_subscription=False)._build_tools()
 
-    assert "materials_search" in _definition_names(active.get_definitions())
-    tool, _, error = active.prepare_call("materials_search", {"query": "paper"})
+    assert "knowledge_search" in _definition_names(active.get_definitions())
+    tool, _, error = active.prepare_call("knowledge_search", {"query": "paper"})
     assert tool is not None
     assert error is None
 
-    assert "materials_search" not in _definition_names(inactive.get_definitions())
-    tool, _, error = inactive.prepare_call("materials_search", {"query": "paper"})
+    assert "knowledge_search" not in _definition_names(inactive.get_definitions())
+    tool, _, error = inactive.prepare_call("knowledge_search", {"query": "paper"})
     assert tool is not None
     assert error is not None and error.startswith("membership_required:")
 
@@ -226,20 +282,20 @@ def test_named_agent_registry_applies_trusted_subscription_state(tmp_path):
     inactive = _subagent_manager(tmp_path, has_subscription=False)
     inactive_tools = inactive._build_named_agent_tools(definition, job)
 
-    assert {"materials_search", "materials_read"} <= _definition_names(
+    assert {"knowledge_search", "knowledge_read"} <= _definition_names(
         active_tools.get_definitions()
     )
     tool, _, error = active_tools.prepare_call(
-        "materials_read", {"ref": "paper:1"}
+        "knowledge_read", {"ref": "paper:1"}
     )
     assert tool is not None
     assert error is None
 
-    assert not ({"materials_search", "materials_read"} & _definition_names(
+    assert not ({"knowledge_search", "knowledge_read"} & _definition_names(
         inactive_tools.get_definitions()
     ))
     tool, _, error = inactive_tools.prepare_call(
-        "materials_read", {"ref": "paper:1"}
+        "knowledge_read", {"ref": "paper:1"}
     )
     assert tool is not None
     assert error is not None and error.startswith("membership_required:")
@@ -248,13 +304,11 @@ def test_named_agent_registry_applies_trusted_subscription_state(tmp_path):
 def test_partner_knowledge_tools_are_part_of_agent_knowledge():
     definition = _partner_definition()
     inherited = resolve_effective_agent_config(definition, AgentUserConfig())
-    assert inherited.allowed_tools == [
+    assert set(inherited.allowed_tools or []) == REQUIRED_AGENT_TOOLS | {
         "web_search",
-        "materials_search",
-        "materials_read",
-        "wiki_search",
-        "wiki_read",
-    ]
+        "knowledge_search",
+        "knowledge_read",
+    }
 
     granted = resolve_effective_agent_config(
         definition,
@@ -262,15 +316,14 @@ def test_partner_knowledge_tools_are_part_of_agent_knowledge():
             granted_tools=["web_search", "notes_search", "notes_read", "exec"]
         ),
     )
-    assert granted.allowed_tools == [
+    assert set(granted.allowed_tools or []) == REQUIRED_AGENT_TOOLS | {
         "web_search",
         "notes_search",
         "notes_read",
-        "materials_search",
-        "materials_read",
-        "wiki_search",
-        "wiki_read",
-    ]
+        "exec",
+        "knowledge_search",
+        "knowledge_read",
+    }
 
 
 def test_partner_tool_catalog_includes_user_grantable_knowledge_tools():
@@ -279,24 +332,67 @@ def test_partner_tool_catalog_includes_user_grantable_knowledge_tools():
     assert USER_GRANTABLE_PLATFORM_TOOLS <= set(configurable)
 
 
+def test_every_expert_can_configure_the_same_common_tools_plus_only_its_exclusives():
+    generic = AgentDefinition(id="com.example.generic", display_name="Generic")
+    academic = AgentDefinition(
+        id="com.mona.academic-researcher",
+        display_name="Academic",
+    )
+    musician = AgentDefinition(id="com.mona.musician", display_name="Musician")
+
+    generic_tools = set(configurable_agent_tools(generic) or [])
+    academic_tools = set(configurable_agent_tools(academic) or [])
+    musician_tools = set(configurable_agent_tools(musician) or [])
+
+    assert generic_tools == COMMON_AGENT_TOOLS
+    assert academic_tools == COMMON_AGENT_TOOLS | AGENT_EXCLUSIVE_TOOLS[academic.id]
+    assert musician_tools == COMMON_AGENT_TOOLS | AGENT_EXCLUSIVE_TOOLS[musician.id]
+    assert not (AGENT_EXCLUSIVE_TOOLS[academic.id] & musician_tools)
+    assert not (AGENT_EXCLUSIVE_TOOLS[musician.id] & academic_tools)
+
+    musician_defaults = resolve_effective_agent_config(musician, AgentUserConfig())
+    assert musician_defaults.allowed_tools is not None
+    assert AGENT_EXCLUSIVE_TOOLS[musician.id] <= set(musician_defaults.allowed_tools)
+
+
+def test_v1_default_permissions_do_not_keep_new_explicit_tools_enabled(
+    tmp_path,
+    monkeypatch,
+):
+    config_path = tmp_path / "config.json"
+    config_path.write_text(
+        json.dumps({
+            "schema_version": 1,
+            "revision": 4,
+            "granted_tools": ["web_search", "crypto", "config_set_provider"],
+        }),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(user_config, "get_agent_user_config_path", lambda _agent_id: config_path)
+
+    config = load_agent_user_config("mona")
+
+    assert config.schema_version == AGENT_USER_CONFIG_SCHEMA_VERSION
+    assert config.revision == 4
+    assert config.granted_tools == ["web_search"]
+
+
 def test_note_image_permission_requires_note_creation():
     effective = resolve_effective_agent_config(
         _partner_definition(),
         AgentUserConfig(granted_tools=["notes_save_image"]),
     )
-    assert effective.allowed_tools == [
-        "materials_search",
-        "materials_read",
-        "wiki_search",
-        "wiki_read",
-    ]
+    assert set(effective.allowed_tools or []) == REQUIRED_AGENT_TOOLS | {
+        "knowledge_search",
+        "knowledge_read",
+    }
 
 
 @pytest.mark.parametrize(
     "granted",
     [
-        ["materials_search"],
-        ["materials_read"],
+        ["knowledge_search"],
+        ["knowledge_read"],
         ["notes_search"],
         ["notes_read"],
     ],
@@ -306,17 +402,16 @@ def test_query_permissions_require_search_and_read_pair(granted):
         _partner_definition(),
         AgentUserConfig(granted_tools=granted),
     )
-    assert effective.allowed_tools == [
-        "materials_search",
-        "materials_read",
-        "wiki_search",
-        "wiki_read",
-    ]
+    assert set(effective.allowed_tools or []) == REQUIRED_AGENT_TOOLS | {
+        "knowledge_search",
+        "knowledge_read",
+    }
 
 
 def test_user_granted_knowledge_tools_load_in_subagent_scope(tmp_path):
     classes = [
         KnowledgeSearchTool,
+        KnowledgeReadTool,
         MaterialsReadTool,
         MaterialsSearchTool,
         NotesCreateTool,
@@ -339,21 +434,69 @@ def test_user_granted_knowledge_tools_load_in_subagent_scope(tmp_path):
     )
 
     assert USER_GRANTABLE_PLATFORM_TOOLS <= set(registry.tool_names)
-    assert not registry.has("knowledge_search")
+    assert {"knowledge_search", "knowledge_read"} <= set(registry.tool_names)
 
 
-def test_mona_core_keeps_only_unified_search_entry(tmp_path):
+def test_mona_core_exposes_only_notes_and_agent_knowledge_business_tools(tmp_path):
     registry = ToolRegistry()
     ToolLoader(
-        test_classes=[KnowledgeSearchTool, MaterialsSearchTool, NotesSearchTool]
+        test_classes=[
+            KnowledgeReadTool,
+            KnowledgeSearchTool,
+            MaterialsReadTool,
+            MaterialsSearchTool,
+            NotesSearchTool,
+            WikiReadTool,
+            WikiSearchTool,
+        ]
     ).load(
         ToolContext(config=ToolsConfig(), workspace=str(tmp_path), agent_id="mona"),
         registry,
         scope="core",
     )
+    registry.set_subscription_access(True)
     assert registry.has("knowledge_search")
-    assert not registry.has("materials_search")
-    assert not registry.has("notes_search")
+    assert registry.has("notes_search")
+    assert registry.has("knowledge_read")
+    assert {"knowledge_search", "knowledge_read", "notes_search"} <= _definition_names(
+        registry.get_definitions()
+    )
+    assert not {
+        "materials_search", "materials_read", "wiki_search", "wiki_read"
+    } & _definition_names(registry.get_definitions())
+
+
+def test_v3_storage_layer_permissions_migrate_to_agent_knowledge(
+    tmp_path,
+    monkeypatch,
+):
+    config_path = tmp_path / "config.json"
+    config_path.write_text(
+        json.dumps({
+            "schema_version": 3,
+            "revision": 7,
+            "granted_tools": [
+                "notes_search",
+                "notes_read",
+                "materials_search",
+                "materials_read",
+                "wiki_search",
+                "wiki_read",
+            ],
+        }),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(user_config, "get_agent_user_config_path", lambda _agent_id: config_path)
+
+    config = load_agent_user_config("mona")
+
+    assert config.schema_version == AGENT_USER_CONFIG_SCHEMA_VERSION
+    assert config.granted_tools == [
+        "notes_search",
+        "notes_read",
+        "knowledge_search",
+        "knowledge_read",
+    ]
 
 
 @pytest.mark.asyncio

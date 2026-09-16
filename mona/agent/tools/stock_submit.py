@@ -3441,6 +3441,7 @@ class SubmitStockReportTool(Tool):
     """
 
     _scopes = {"subagent"}
+    _plugin_discoverable = False
 
     def __init__(self, workspace: str | Path, tool_ctx: Any):
         self._workspace = Path(workspace)

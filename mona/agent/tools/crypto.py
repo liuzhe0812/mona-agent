@@ -277,6 +277,7 @@ class CryptoTool(Tool):
 
     _scopes = {"core", "subagent"}
     config_key = "crypto"
+    requires_explicit_permission = True
 
     name = "crypto"
     description = (

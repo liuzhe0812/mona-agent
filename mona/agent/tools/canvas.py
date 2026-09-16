@@ -84,6 +84,7 @@ class CanvasTool(Tool, ContextAware):
     """Inspect and edit the active Mona canvas through the mounted editor."""
 
     _scopes = {"core", "subagent"}
+    system_managed = True
     config_key = "canvas"
 
     name = "canvas"

@@ -543,6 +543,7 @@ class ChartTool(Tool):
     """Render data as an SVG chart and save it as an artifact."""
 
     _scopes = {"core", "subagent"}
+    agent_allowlist = frozenset({"com.mona.academic-researcher"})
     config_key = "chart"
 
     name = "chart"

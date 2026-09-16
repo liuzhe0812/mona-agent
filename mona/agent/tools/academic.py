@@ -136,6 +136,7 @@ class AcademicSearchTool(Tool):
     """Search and normalize records from the supported academic providers."""
 
     _scopes = {"core", "subagent"}
+    agent_allowlist = frozenset({"com.mona.academic-researcher"})
 
     def __init__(self, providers: dict[str, Any] | None = None) -> None:
         self._providers = {
@@ -474,6 +475,7 @@ class ResearchRecordTool(Tool):
     """Validate and persist research records in the current workspace."""
 
     _scopes = {"subagent"}
+    agent_allowlist = frozenset({"com.mona.academic-researcher"})
 
     def __init__(self, workspace: str | Path | None = None) -> None:
         from mona.config.paths import get_workspace_path
@@ -649,6 +651,7 @@ class ScientificTool(Tool):
     """Fixed discover/inspect/run/status wrapper around optional ToolUniverse."""
 
     _scopes = {"subagent"}
+    agent_allowlist = frozenset({"com.mona.academic-researcher"})
 
     def __init__(
         self,

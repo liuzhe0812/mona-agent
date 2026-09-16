@@ -1,19 +1,8 @@
-"""Personal knowledge search tools.
+"""Separate tools for user Notes and each Agent's private Knowledge.
 
-主 Mona 保留统一的 `knowledge_search`；其他 Agent 使用分权的
-`notes_search` 与 `wiki_search`。旧 `materials_search/materials_read`
-作为证据检索兼容入口保留。
-
-- 笔记搜索：通过 Tauri IPC 调用 Rust 侧 `notes_search_all`（子串匹配）
-- 资料搜索：走 `mona.materials.index` 的 FTS5 chunk 索引（结构化 segment、
-  位置标记、stale 检测）
-
-scope 参数控制搜索范围：
-- "all"（默认）：笔记 + 资料（text + wiki）
-- "notes"：仅笔记
-- "materials"：仅资料（text + wiki）
-- "wiki"：仅资料 wiki
-- "text"：仅资料 text
+Notes use Tauri's note search/read APIs. Agent Knowledge uses the private
+FTS5 index whose source text and compiled Wiki are implementation layers of
+one product concept. Legacy materials/wiki tools remain internal adapters.
 """
 
 from __future__ import annotations
@@ -30,7 +19,7 @@ from mona.agent.tools.schema import (
     StringSchema,
     tool_parameters_schema,
 )
-from mona.agent.tools.tauri_ipc import tauri_invoke, tauri_invoke_async
+from mona.agent.tools.tauri_ipc import tauri_invoke_async
 from mona.config.paths import get_agent_knowledge_dir, get_data_dir
 from mona.materials.access import allowed_library_ids, library_allowed
 from mona.materials.catalog import get_library_root, list_libraries, validate_library_id
@@ -43,21 +32,6 @@ def _notes_config(ctx: Any) -> Any:
 
 def _vault_ready() -> bool:
     return _get_vault_path() is not None
-
-
-def _search_notes(query: str, limit: int) -> list[dict[str, Any]]:
-    """通过 Tauri IPC 搜索笔记。"""
-    try:
-        results = tauri_invoke(
-            "notes_search_all",
-            {"query": query, "limit": limit},
-        )
-    except RuntimeError as e:
-        logger.warning("knowledge_search: notes_search_all failed: {}", e)
-        return []
-    if not isinstance(results, list):
-        return []
-    return [r for r in results if isinstance(r, dict)]
 
 
 async def _search_notes_async(query: str, limit: int) -> list[dict[str, Any]]:
@@ -200,13 +174,8 @@ def _decode_material_ref(ref: str) -> tuple[str, str]:
 
 _SEARCH_PARAMETERS = tool_parameters_schema(
     query=StringSchema(
-        "Search query. Matches note titles, content, tags, and materials "
-        "text/wiki pages. Supports CJK (Chinese/Japanese/Korean) keywords."
-    ),
-    scope=StringSchema(
-        "Search scope: 'all' (default, notes + materials), 'notes' (only notes), "
-        "'materials' (materials text + wiki), 'wiki' (only materials wiki), "
-        "'text' (only materials extracted text)."
+        "Search this Agent's private Knowledge. Matches uploaded source text "
+        "and compiled knowledge pages, including CJK keywords."
     ),
     limit=IntegerSchema(
         "Maximum number of results to return per source (default 10)."
@@ -325,6 +294,7 @@ class MaterialsReadTool(Tool):
 
     _scopes = {"core", "subagent"}
     _plugin_discoverable = True
+    model_visible = False
     read_only = True
     subscription_required = True
 
@@ -355,6 +325,10 @@ class MaterialsReadTool(Tool):
             "AI-compiled Wiki is navigation-only; when reading a Wiki hit this "
             "tool also returns its original evidence chunks when available."
         )
+
+    @property
+    def search_tool_name(self) -> str:
+        return "materials_search"
 
     async def execute(self, **kwargs: Any) -> Any:
         encoded_ref = str(kwargs.get("ref", "")).strip()
@@ -399,7 +373,7 @@ class MaterialsReadTool(Tool):
             if chunk is None:
                 return (
                     f"Error: ref '{ref}' not found. It may be stale — "
-                    "run materials_search again to get a fresh Ref."
+                    f"run {self.search_tool_name} again to get a fresh Ref."
                 )
             if agent_scoped:
                 from mona.materials.knowledge import ready_knowledge_access
@@ -505,11 +479,33 @@ class MaterialsReadTool(Tool):
         return "\n".join(lines)
 
 
+@tool_parameters(_READ_PARAMETERS)
+class KnowledgeReadTool(MaterialsReadTool):
+    """Read evidence located by knowledge_search."""
+
+    model_visible = True
+
+    @property
+    def name(self) -> str:
+        return "knowledge_read"
+
+    @property
+    def description(self) -> str:
+        return (
+            "Read a source or compiled page returned by knowledge_search, with "
+            "neighbor context, original evidence, and a ready-to-use citation."
+        )
+
+    @property
+    def search_tool_name(self) -> str:
+        return "knowledge_search"
+
+
 @tool_parameters(_NOTES_SEARCH_PARAMETERS)
 class NotesSearchTool(Tool):
     """Search notes without granting access to the materials library."""
 
-    _scopes = {"subagent"}
+    _scopes = {"core", "subagent"}
     _plugin_discoverable = True
     read_only = True
     subscription_required = True
@@ -547,8 +543,9 @@ class NotesSearchTool(Tool):
 class MaterialsSearchTool(Tool):
     """Search materials without granting access to personal notes."""
 
-    _scopes = {"subagent"}
+    _scopes = {"core", "subagent"}
     _plugin_discoverable = True
+    model_visible = False
     read_only = True
     subscription_required = True
 
@@ -601,6 +598,7 @@ class WikiSearchTool(Tool):
 
     _scopes = {"core", "subagent"}
     _plugin_discoverable = True
+    model_visible = False
     read_only = True
     subscription_required = True
 
@@ -658,9 +656,9 @@ class WikiReadTool(MaterialsReadTool):
 
 @tool_parameters(_SEARCH_PARAMETERS)
 class KnowledgeSearchTool(Tool):
-    """Search the user's personal knowledge base (notes + materials)."""
+    """Search the executing Agent's private Knowledge."""
 
-    _scopes = {"core"}
+    _scopes = {"core", "subagent"}
     _plugin_discoverable = True
     read_only = True
     subscription_required = True
@@ -683,15 +681,10 @@ class KnowledgeSearchTool(Tool):
     @property
     def description(self) -> str:
         return (
-            "Search the user's personal knowledge base — notes vault and "
-            "materials library (uploaded documents + AI-compiled wiki pages). "
-            "Returns matching entries with title, snippet, and source type. "
-            "Use this to find information the user has saved before answering "
-            "'I don't know'. For notes, follow up with notes_read to get full "
-            "content. For materials results with a Ref, follow up with "
-            "materials_read(ref) to read the full located chunk (page/slide/"
-            "sheet/section) before answering, and cite the material name and "
-            "location in your answer."
+            "Search this Agent's private Knowledge built from uploaded documents "
+            "and compiled pages. Returns source-backed matches and refs. Follow up "
+            "with knowledge_read(ref) before answering factual questions. This "
+            "tool never searches the user's Notes."
         )
 
     async def execute(self, **kwargs: Any) -> Any:
@@ -699,78 +692,48 @@ class KnowledgeSearchTool(Tool):
         if not query:
             return "Error: query is required."
 
-        scope = str(kwargs.get("scope", "all")).strip().lower()
-        valid_scopes = {"all", "notes", "materials", "wiki", "text"}
-        if scope not in valid_scopes:
-            return (
-                f"Error: scope must be one of {valid_scopes}. Got '{scope}'."
-            )
-
+        scope = str(kwargs.get("scope", "materials")).strip().lower()
+        if scope == "notes":
+            return "Error: use notes_search for user Notes."
+        if scope not in {"all", "materials", "wiki", "text"}:
+            return "Error: invalid legacy knowledge scope."
         limit = _search_limit(kwargs.get("limit"))
+        results = _search_materials(
+            get_data_dir(),
+            query,
+            limit,
+            "materials" if scope == "all" else scope,
+            agent_id=self._agent_id,
+        )
+        if not results:
+            return f"No Agent Knowledge found for '{query}'."
 
-        # 按范围搜索
-        notes_results: list[dict[str, Any]] = []
-        materials_results: list[dict[str, Any]] = []
-
-        if scope in ("all", "notes") and _vault_ready():
-            notes_results = await _search_notes_async(query, limit)
-
-        if scope in ("all", "materials", "wiki", "text"):
-            materials_results = _search_materials(
-                get_data_dir(),
-                query,
-                limit,
-                scope,
-                agent_id=self._agent_id,
-            )
-
-        # 合并结果
-        if not notes_results and not materials_results:
-            return f"No results found for '{query}' in scope '{scope}'."
-
-        lines = [f"Knowledge search results for '{query}' (scope: {scope}):"]
-
-        if notes_results:
-            lines.append(f"\n## Notes ({len(notes_results)})")
-            for i, item in enumerate(notes_results, 1):
-                note_id = item.get("noteId", "?")
-                title = item.get("title", "(untitled)")
-                snippet = item.get("snippet", "")
-                notebook = item.get("notebookName", "")
-                lines.append(
-                    f"\n{i}. [{note_id}] {title}"
-                    + (f" ({notebook})" if notebook else "")
-                )
-                if snippet:
-                    lines.append(f"   {snippet}")
-
-        if materials_results:
-            lines.append(f"\n## Materials ({len(materials_results)})")
-            for i, item in enumerate(materials_results, 1):
-                kind = item.get("kind", "")
-                title = item.get("title", "(untitled)")
-                path = item.get("rawPath") or item.get("path", "")
-                snippet = item.get("snippet", "")
-                kind_label = {
-                    "material_source": "source",
-                    "material_wiki": "wiki",
-                }.get(kind, kind)
-                location_label = item.get("locationLabel") or ""
-                header = f"\n{i}. [{kind_label}] {title}"
-                if location_label and location_label != title:
-                    header += f" — {location_label}"
-                lines.append(header)
-                knowledge_base = item.get("knowledgeBaseName") or item.get("knowledgeBaseId")
-                if knowledge_base:
-                    lines.append(f"   Knowledge base: {knowledge_base}")
-                ref = item.get("ref")
-                if ref:
-                    lines.append(f"   Ref: {ref}")
-                if path:
-                    lines.append(f"   Path: {path}")
-                if item.get("stale"):
-                    lines.append("   [stale: 原文件已修改，内容可能过时]")
-                if snippet:
-                    lines.append(f"   {snippet}")
+        lines = [f"Agent Knowledge results for '{query}':"]
+        for i, item in enumerate(results, 1):
+            kind = item.get("kind", "")
+            title = item.get("title", "(untitled)")
+            path = item.get("rawPath") or item.get("path", "")
+            snippet = item.get("snippet", "")
+            kind_label = {
+                "material_source": "source",
+                "material_wiki": "wiki",
+            }.get(kind, kind)
+            location_label = item.get("locationLabel") or ""
+            header = f"\n{i}. [{kind_label}] {title}"
+            if location_label and location_label != title:
+                header += f" — {location_label}"
+            lines.append(header)
+            knowledge_base = item.get("knowledgeBaseName") or item.get("knowledgeBaseId")
+            if knowledge_base:
+                lines.append(f"   Knowledge base: {knowledge_base}")
+            ref = item.get("ref")
+            if ref:
+                lines.append(f"   Ref: {ref}")
+            if path:
+                lines.append(f"   Path: {path}")
+            if item.get("stale"):
+                lines.append("   [stale: 原文件已修改，内容可能过时]")
+            if snippet:
+                lines.append(f"   {snippet}")
 
         return "\n".join(lines)

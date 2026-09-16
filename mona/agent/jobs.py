@@ -331,9 +331,6 @@ class AgentJobStore:
     def mark_failed(self, job_id: str, *, error: str) -> AgentJob:
         return self.transition(job_id, JOB_STATUS_FAILED, error=error)
 
-    def mark_cancelled(self, job_id: str, *, error: str | None = None) -> AgentJob:
-        return self.transition(job_id, JOB_STATUS_CANCELLED, error=error)
-
     def append_artifacts(
         self,
         job_id: str,

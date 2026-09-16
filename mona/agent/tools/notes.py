@@ -147,7 +147,7 @@ class NotesCreateTool(Tool):
         )
 
     async def execute(self, **kwargs: Any) -> Any:
-        title = str(kwargs.get("title", "")).strip()
+        title = _strip_markdown_for_title(str(kwargs.get("title", "")))[:40]
         content = str(kwargs.get("content_markdown", ""))
         if not content.strip():
             return "Error: content_markdown is required."

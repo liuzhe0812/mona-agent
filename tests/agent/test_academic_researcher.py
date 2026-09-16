@@ -69,23 +69,19 @@ def test_academic_researcher_manifest_and_package_skills() -> None:
     assert manifest["model"] == "inherit"
     assert manifest["canDelegate"] is False
     assert manifest["prompt"] == "prompt.md"
-    assert manifest["packageVersion"] == "2.1.1"
+    assert manifest["packageVersion"] == "2.1.2"
     assert manifest["skills"] == [f"skills/{name}" for name in SKILL_NAMES]
     assert set(manifest["toolAllowlist"]) >= {
         "academic_search",
         "web_search",
         "web_fetch",
         "http_request",
-        "browser_open",
-        "browser_snapshot",
-        "browser_type",
-        "browser_click",
-        "browser_read",
-        "browser_close",
+        "browser_observe",
+        "browser_act",
         "read_file",
         "document",
-        "materials_search",
-        "materials_read",
+        "knowledge_search",
+        "knowledge_read",
         "find_files",
         "grep",
         "research_record",
@@ -182,7 +178,13 @@ async def test_academic_skill_resources_are_readable_through_agent_scope() -> No
     assert "prepare_paper.py" in content
 
 
-async def test_academic_package_script_uses_managed_runtime() -> None:
+async def test_academic_package_script_uses_managed_runtime(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        "mona.agent.agent_management.is_skill_script_enabled",
+        lambda _agent_id, _skill: True,
+    )
     output = await SkillScriptRunTool(
         agent_id=AGENT_ID,
         track_usage=False,
@@ -207,7 +209,14 @@ class _TestRuntimeManager:
         return AgentEnvironmentResolution(executable=executable, env=os.environ.copy())
 
 
-async def test_academic_export_scripts_require_workspace_output_paths(tmp_path: Path) -> None:
+async def test_academic_export_scripts_require_workspace_output_paths(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        "mona.agent.agent_management.is_skill_script_enabled",
+        lambda _agent_id, _skill: True,
+    )
     runner = SkillScriptRunTool(
         agent_id=AGENT_ID,
         workspace=tmp_path,

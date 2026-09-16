@@ -9,10 +9,14 @@ from mona.agent.tools import browser as browser_module
 from mona.agent.tools.browser import (
     _UNTRUSTED_BROWSER_BANNER,
     BrowserActTool,
+    BrowserListTabsTool,
+    BrowserObserveTool,
+    BrowserOpenTool,
     BrowserScreenshotTool,
     _resolve_query_locator,
     _validate_navigation_url,
 )
+from mona.agent.tools.registry import ToolRegistry
 
 
 def _patch_page(monkeypatch: pytest.MonkeyPatch, page: MagicMock) -> MagicMock:
@@ -24,6 +28,80 @@ def _patch_page(monkeypatch: pytest.MonkeyPatch, page: MagicMock) -> MagicMock:
         AsyncMock(return_value=manager),
     )
     return manager
+
+
+def test_browser_model_surface_contains_only_facades() -> None:
+    registry = ToolRegistry()
+    registry.register(BrowserOpenTool())
+    registry.register(BrowserObserveTool())
+    registry.register(BrowserActTool())
+
+    names = [item["function"]["name"] for item in registry.get_definitions()]
+
+    assert names == ["browser_act", "browser_observe"]
+
+
+@pytest.mark.asyncio
+async def test_browser_observe_dispatches_tab_discovery(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(
+        browser_module,
+        "_tauri_invoke_async",
+        AsyncMock(return_value=[{"id": "tab-1", "url": "https://example.com"}]),
+    )
+
+    result = await BrowserObserveTool().execute(action="list_tabs")
+
+    assert "tabId: tab-1" in result
+
+
+@pytest.mark.asyncio
+async def test_browser_act_opens_without_existing_tab(monkeypatch: pytest.MonkeyPatch) -> None:
+    execute = AsyncMock(return_value='{"tab_id":"tab-2"}')
+    monkeypatch.setattr(BrowserOpenTool, "execute", execute)
+
+    result = await BrowserActTool().execute(kind="open", url="https://example.com")
+
+    assert result == '{"tab_id":"tab-2"}'
+    execute.assert_awaited_once_with(url="https://example.com")
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("tabs", [[], [
+    {"id": "tab-1", "url": "https://example.com", "title": "Game"},
+]])
+async def test_browser_tab_discovery_identifies_its_scope(monkeypatch, tabs) -> None:
+    monkeypatch.setattr(
+        browser_module, "_tauri_invoke_async", AsyncMock(return_value=tabs),
+    )
+
+    result = await BrowserListTabsTool().execute()
+
+    assert "Mona's built-in browser" in result
+    assert "Chrome/Edge" in result
+    if tabs:
+        assert "tabId: tab-1" in result
+        assert "https://example.com" in result
+    else:
+        assert "computer_*" in result
+        assert "do not open a replacement" in result
+
+
+def test_browser_target_scope_reaches_model_context(tmp_path) -> None:
+    from mona.agent.context import ContextBuilder
+
+    messages = ContextBuilder(workspace=tmp_path).build_messages(
+        history=[],
+        current_message="Continue this game",
+        message_metadata={"browser_tab_id": "tab-1", "browser_page_title": "Game"},
+    )
+
+    assert "Mona Built-in Browser Page: Game [Tab ID: tab-1]" in messages[-1]["content"]
+    prompt = messages[0]["content"]
+    assert "`browser_observe` and `browser_act` operate only" in prompt
+    assert "use `computer_observe` and `computer_act` automatically" in prompt
+    assert "do not require the user to name Computer Use" in prompt
+    assert "Keep its tab/window identity throughout the task" in prompt
+    assert "Mona Built-in Browser Page: Game" not in prompt
 
 
 def test_validate_navigation_url_accepts_only_absolute_http_urls() -> None:

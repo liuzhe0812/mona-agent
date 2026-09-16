@@ -3,6 +3,10 @@
 from typing import Any
 
 from mona.agent.tools.base import Tool
+from mona.agent.tools.capabilities import (
+    capabilities_for_tool,
+    tool_enabled_by_capability,
+)
 
 # Stable error identifier returned when a subscription-gated tool is invoked
 # without an active subscription or trial. The model and UI can match on this
@@ -67,13 +71,21 @@ class ToolRegistry:
         self._cached_definitions = None
 
     def invalidate_definitions_cache(self) -> None:
-        """Clear the cached tool definitions.
-
-        Call this after ``set_context`` mutates a tool's runtime availability
-        flag (``is_available``) so the next ``get_definitions`` call reflects
-        the new state.
-        """
+        """Clear cached stable tool schemas; request availability is always fresh."""
         self._cached_definitions = None
+
+    def _is_allowed(self, tool: Tool | None) -> bool:
+        if tool is None:
+            return False
+        if getattr(tool, "requires_explicit_permission", False):
+            return (
+                self._allowed_tool_names is not None
+                and tool.name in self._allowed_tool_names
+            )
+        return (
+            self._allowed_tool_names is None
+            or tool.name in self._allowed_tool_names
+        )
 
     @property
     def has_subscription_access(self) -> bool:
@@ -99,6 +111,29 @@ class ToolRegistry:
         name = schema.get("name")
         return name if isinstance(name, str) else ""
 
+    def _runtime_visible_definitions(
+        self,
+        definitions: list[dict[str, Any]],
+    ) -> list[dict[str, Any]]:
+        use_capability_filter = self.has("load_capability")
+        visible = [
+            schema
+            for schema in definitions
+            if (
+                (tool := self._tools.get(self._schema_name(schema))) is not None
+                and tool.available_in_context()
+                and (
+                    not use_capability_filter
+                    or tool_enabled_by_capability(tool.name)
+                )
+            )
+        ]
+        return definitions if len(visible) == len(definitions) else visible
+
+    def is_visible(self, name: str) -> bool:
+        """Return whether a registered tool is visible in the current request."""
+        return any(self._schema_name(schema) == name for schema in self.get_definitions())
+
     def get_definitions(self) -> list[dict[str, Any]]:
         """Get tool definitions with stable ordering for cache-friendly prompts.
 
@@ -107,24 +142,23 @@ class ToolRegistry:
         register/unregister call or subscription access change.
 
         Subscription-gated tools are excluded when the user has no active
-        subscription or trial, so the model never sees them and cannot call
-        them. Tools whose ``is_available`` flag is False (e.g. terminal tools
-        without an active terminal session) are also excluded so the model
-        does not attempt to call a tool that will always fail this turn.
+        subscription or trial. The cached list contains only stable permission
+        and schema decisions; request-scoped availability is filtered on every
+        call so concurrent sessions cannot reuse each other's tool view.
         """
         if self._cached_definitions is not None:
-            return self._cached_definitions
+            return self._runtime_visible_definitions(self._cached_definitions)
 
         definitions: list[dict[str, Any]] = []
         for tool in self._tools.values():
-            if self._allowed_tool_names is not None and tool.name not in self._allowed_tool_names:
+            if not self._is_allowed(tool):
+                continue
+            if not getattr(tool, "model_visible", True):
                 continue
             if (
                 not self._has_subscription_access
                 and getattr(tool, "subscription_required", False)
             ):
-                continue
-            if not getattr(tool, "is_available", True):
                 continue
             definitions.append(tool.to_schema())
 
@@ -140,7 +174,7 @@ class ToolRegistry:
         builtins.sort(key=self._schema_name)
         mcp_tools.sort(key=self._schema_name)
         self._cached_definitions = builtins + mcp_tools
-        return self._cached_definitions
+        return self._runtime_visible_definitions(self._cached_definitions)
 
     def prepare_call(
         self,
@@ -148,8 +182,11 @@ class ToolRegistry:
         params: dict[str, Any],
     ) -> tuple[Tool | None, dict[str, Any], str | None]:
         """Resolve, cast, and validate one tool call."""
-        if self._allowed_tool_names is not None and name not in self._allowed_tool_names:
+        tool = self._tools.get(name)
+        if tool is not None and not self._is_allowed(tool):
             return None, params, f"Error: Tool '{name}' is not permitted for this agent."
+        if tool is not None and not getattr(tool, "model_visible", True):
+            return None, params, f"Error: Tool '{name}' is internal and not model-callable."
         # Guard against invalid parameter types (e.g., list instead of dict)
         if not isinstance(params, dict) and name in ('write_file', 'read_file'):
             return None, params, (
@@ -157,7 +194,6 @@ class ToolRegistry:
                 "Use named parameters: tool_name(param1=\"value1\", param2=\"value2\")"
             )
 
-        tool = self._tools.get(name)
         if not tool:
             return None, params, (
                 f"Error: Tool '{name}' not found. Available: {', '.join(self.tool_names)}"
@@ -180,12 +216,18 @@ class ToolRegistry:
         # called from historical context. Reject with a clear, actionable
         # message so the model does not misread "tool unavailable" as
         # "tool does not exist".
-        if not getattr(tool, "is_available", True):
+        if not tool.available_in_context():
             return tool, params, (
                 f"tool_unavailable: Tool '{name}' is registered but not "
                 "available in the current context. This is a transient "
                 "state, not a missing tool. Ask the user to open the "
                 "required panel (e.g. the terminal panel) and try again."
+            )
+        if self.has("load_capability") and not tool_enabled_by_capability(name):
+            groups = ", ".join(sorted(capabilities_for_tool(name)))
+            return tool, params, (
+                f"tool_unavailable: Tool '{name}' belongs to a deferred capability "
+                f"({groups}). Call load_capability first, then retry."
             )
 
         cast_params = tool.cast_params(params)

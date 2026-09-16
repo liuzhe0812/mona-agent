@@ -68,6 +68,7 @@ class _TaskPlanMixin(ContextAware):
 )
 class UpdatePlanTool(Tool, _TaskPlanMixin):
     _scopes = {"core"}
+    system_managed = True
 
     def __init__(self, sessions: Any, bus: Any | None = None) -> None:
         _TaskPlanMixin.__init__(self, sessions, bus)

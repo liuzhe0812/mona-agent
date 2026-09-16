@@ -289,11 +289,10 @@ class GrepTool(_SearchTool):
     @property
     def description(self) -> str:
         return (
-            "Search file contents with a regex pattern. "
-            "Default output_mode is files_with_matches (file paths only); "
-            "use content mode for matching lines with context. Prefer this "
-            "over shell grep for ordinary workspace searches. "
-            "Skips binary and files >2 MB. Supports glob/type filtering."
+            "Search workspace text with regex or literal matching. Default output_mode "
+            "returns file paths; use content for matching lines or count for per-file "
+            "counts. Prefer this over shell grep. Supports filters, context, and pagination; "
+            "skips binary and files over 2 MB."
         )
 
     @property
@@ -307,80 +306,67 @@ class GrepTool(_SearchTool):
             "properties": {
                 "pattern": {
                     "type": "string",
-                    "description": "Regex or plain text pattern to search for",
+                    "description": "Regex or literal pattern",
                     "minLength": 1,
                 },
                 "path": {
                     "type": "string",
-                    "description": "File or directory to search in (default '.')",
+                    "description": "Search root (default '.')",
                 },
                 "glob": {
                     "type": "string",
-                    "description": "Optional file filter, e.g. '*.py' or 'tests/**/test_*.py'",
+                    "description": "Glob filter, e.g. '*.py'",
                 },
                 "type": {
                     "type": "string",
-                    "description": "Optional file type shorthand, e.g. 'py', 'ts', 'md', 'json'",
+                    "description": "Type filter: py, ts, md, etc.",
                 },
                 "case_insensitive": {
                     "type": "boolean",
-                    "description": "Case-insensitive search (default false)",
+                    "description": "Ignore case (default false)",
                 },
                 "fixed_strings": {
                     "type": "boolean",
-                    "description": "Treat pattern as plain text instead of regex (default false)",
+                    "description": "Use literal matching (default false)",
                 },
                 "output_mode": {
                     "type": "string",
                     "enum": ["content", "files_with_matches", "count"],
-                    "description": (
-                        "content: matching lines with optional context; "
-                        "files_with_matches: only matching file paths; "
-                        "count: matching line counts per file. "
-                        "Default: files_with_matches"
-                    ),
+                    "description": "content: lines; files_with_matches: paths (default); count: per-file counts",
                 },
                 "context_before": {
                     "type": "integer",
-                    "description": "Number of lines of context before each match",
+                    "description": "Context lines before matches",
                     "minimum": 0,
                     "maximum": 20,
                 },
                 "context_after": {
                     "type": "integer",
-                    "description": "Number of lines of context after each match",
+                    "description": "Context lines after matches",
                     "minimum": 0,
                     "maximum": 20,
                 },
                 "max_matches": {
                     "type": "integer",
-                    "description": (
-                        "Legacy alias for head_limit in content mode"
-                    ),
+                    "description": "Legacy content-mode head_limit",
                     "minimum": 1,
                     "maximum": 1000,
                 },
                 "max_results": {
                     "type": "integer",
-                    "description": (
-                        "Legacy alias for head_limit in files_with_matches or count mode"
-                    ),
+                    "description": "Legacy file/count head_limit",
                     "minimum": 1,
                     "maximum": 1000,
                 },
                 "head_limit": {
                     "type": "integer",
-                    "description": (
-                        "Maximum number of results to return. In content mode this limits "
-                        "matching line blocks; in other modes it limits file entries. "
-                        "Default 250"
-                    ),
+                    "description": "Max line blocks or file entries (default 250)",
                     "minimum": 0,
                     "maximum": 1000,
                 },
                 "offset": {
                     "type": "integer",
-                    "description": "Skip the first N results before applying head_limit",
+                    "description": "Skip N results",
                     "minimum": 0,
                     "maximum": 100000,
                 },

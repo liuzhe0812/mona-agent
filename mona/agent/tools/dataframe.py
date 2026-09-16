@@ -378,6 +378,7 @@ class DataframeTool(Tool):
     """Run SQL queries against local tabular files (CSV/JSON/Excel)."""
 
     _scopes = {"core", "subagent"}
+    agent_allowlist = frozenset({"com.mona.academic-researcher"})
     config_key = "dataframe"
 
     name = "dataframe_query"

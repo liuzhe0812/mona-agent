@@ -15,25 +15,30 @@ from mona.agent.package_store import (
     sha256_file,
 )
 from mona.agent.partners import AgentRegistry
+from mona.agent.user_config import load_agent_user_config, resolve_effective_agent_config
 
 AGENT_ID = "com.example.downloaded-expert"
 
 
-def _package_files(version: str, *, prompt: str = "You are an expert.") -> dict[str, str]:
-    return {
-        f"{AGENT_ID}/agent.json": json.dumps(
-            {
-                "schemaVersion": 1,
-                "id": AGENT_ID,
-                "displayName": "Downloaded Expert",
-                "prompt": "prompt.md",
-                "toolAllowlist": ["read_file"],
-                "skills": ["skills/research"],
-                "packageId": AGENT_ID,
-                "packageVersion": version,
-                "visibility": "partner",
-            }
-        ),
+def _package_files(
+    version: str,
+    *,
+    prompt: str = "You are an expert.",
+    avatar: str | None = None,
+) -> dict[str, str]:
+    agent = {
+        "schemaVersion": 1,
+        "id": AGENT_ID,
+        "displayName": "Downloaded Expert",
+        "prompt": "prompt.md",
+        "toolAllowlist": ["read_file"],
+        "skills": ["skills/research"],
+        "packageId": AGENT_ID,
+        "packageVersion": version,
+        "visibility": "partner",
+    }
+    files = {
+        f"{AGENT_ID}/agent.json": json.dumps(agent),
         f"{AGENT_ID}/package-manifest.json": json.dumps(
             {
                 "schemaVersion": 1,
@@ -48,6 +53,11 @@ def _package_files(version: str, *, prompt: str = "You are an expert.") -> dict[
             "---\nname: research\ndescription: Test research skill.\n---\n# Research\n"
         ),
     }
+    if avatar is not None:
+        agent["avatar"] = "avatar.png"
+        files[f"{AGENT_ID}/agent.json"] = json.dumps(agent)
+        files[f"{AGENT_ID}/avatar.png"] = avatar
+    return files
 
 
 def _write_archive(path: Path, files: dict[str, str]) -> Path:
@@ -108,28 +118,60 @@ def test_registry_reload_sees_newly_activated_package(tmp_path: Path) -> None:
     assert registry.require(AGENT_ID).package_version == "1.0.0"
 
 
-def test_install_new_version_and_rollback_keeps_private_data(tmp_path: Path) -> None:
+def test_install_new_version_and_rollback_keeps_private_data(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     store_root = tmp_path / "packages" / "agents"
     private_root = tmp_path / "agents" / AGENT_ID
     private_root.mkdir(parents=True)
     private_file = private_root / "memory" / "MEMORY.md"
     private_file.parent.mkdir()
     private_file.write_text("user-owned memory", encoding="utf-8")
+    user_avatar = "data:image/png;base64,iVBORw0KGgo="
+    private_config = private_root / "config.json"
+    private_config.write_text(
+        json.dumps({"schemaVersion": 1, "revision": 1, "avatar": user_avatar}),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(
+        "mona.agent.user_config.get_agent_user_config_path",
+        lambda _agent_id: private_config,
+    )
     store = AgentPackageStore(store_root)
 
-    first = _write_archive(tmp_path / "v1.zip", _package_files("1.0.0"))
+    first = _write_archive(
+        tmp_path / "v1.zip",
+        _package_files("1.0.0", avatar="package avatar v1"),
+    )
     second = _write_archive(
         tmp_path / "v2.zip",
-        _package_files("1.1.0", prompt="You are the updated expert."),
+        _package_files(
+            "1.1.0",
+            prompt="You are the updated expert.",
+            avatar="package avatar v2",
+        ),
     )
     _install(store, first, "1.0.0")
     _install(store, second, "1.1.0")
     assert store.active(AGENT_ID)[0].version == "1.1.0"  # type: ignore[index]
 
+    registry = AgentRegistry(
+        builtin_dir=tmp_path / "no-builtin",
+        installed_dir=tmp_path / "no-legacy",
+        package_store_dir=store_root,
+    )
+    effective = resolve_effective_agent_config(
+        registry.require(AGENT_ID),
+        load_agent_user_config(AGENT_ID),
+    )
+    assert effective.avatar == user_avatar
+
     store.activate(AGENT_ID, "1.0.0")
 
     assert store.active(AGENT_ID)[0].version == "1.0.0"  # type: ignore[index]
     assert private_file.read_text(encoding="utf-8") == "user-owned memory"
+    assert json.loads(private_config.read_text(encoding="utf-8"))["avatar"] == user_avatar
     assert (store_root / AGENT_ID / "v" / "1.1.0" / "p").is_dir()
 
 

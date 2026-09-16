@@ -57,6 +57,9 @@ def _snapshot() -> ExpertCatalogSnapshot:
 
 
 class FakeCatalogClient:
+    def load_cached_snapshot(self) -> ExpertCatalogSnapshot | None:
+        return None
+
     async def fetch(self) -> ExpertCatalogSnapshot:
         return _snapshot()
 
@@ -110,6 +113,35 @@ async def test_catalog_returns_latest_version_and_install_state(tmp_path: Path) 
             "unavailableReason": None,
         }
     ]
+
+
+async def test_catalog_returns_cached_snapshot_before_background_refresh(tmp_path: Path) -> None:
+    refreshed = _snapshot()
+    refresh_calls = 0
+
+    class CachedCatalogClient(FakeCatalogClient):
+        def load_cached_snapshot(self) -> ExpertCatalogSnapshot:
+            return _snapshot()
+
+        async def fetch(self) -> ExpertCatalogSnapshot:
+            nonlocal refresh_calls
+            refresh_calls += 1
+            return refreshed
+
+    manager = ExpertInstallJobManager(
+        catalog_client=CachedCatalogClient(),  # type: ignore[arg-type]
+        package_store=AgentPackageStore(tmp_path / "packages"),
+        state_path=tmp_path / "jobs.json",
+        installer=FakeInstaller(),
+        installed_definition=lambda _expert_id: None,
+    )
+
+    payload = await manager.catalog_payload()
+
+    assert payload["source"] == "cache"
+    assert manager._catalog_refresh_task is not None
+    await manager._catalog_refresh_task
+    assert refresh_calls == 1
 
 
 async def test_background_install_reports_progress_and_persists(tmp_path: Path) -> None:

@@ -39,8 +39,8 @@ from mona.webui.settings_api import (
 )
 
 # Provider names the agent is allowed to write. Excludes OAuth-based providers
-# (openai_codex, github_copilot) since those need interactive `mona provider
-# login` instead of an API key.
+# (openai_codex, github_copilot) since those need an interactive login instead
+# of an API key.
 _ALLOWED_PROVIDER_NAMES: frozenset[str] = frozenset(
     spec.name for spec in PROVIDERS if not spec.is_oauth
 )
@@ -60,8 +60,8 @@ _PARAMETERS = tool_parameters_schema(
         "Provider config field name (e.g. 'deepseek', 'openai', 'anthropic', "
         "'dashscope', 'siliconflow', 'agnes'). Must be one of the providers registered "
         "in Mona's provider registry. OAuth-based providers (openai_codex, "
-        "github_copilot) are not supported here — ask the user to run "
-        "`mona provider login` for those.",
+        "github_copilot) are not supported here — ask the user to sign in "
+        "from Mona settings.",
         min_length=1,
     ),
     api_key=StringSchema(
@@ -111,6 +111,7 @@ class ConfigSetProviderTool(Tool):
 
     _scopes = {"core"}
     _plugin_discoverable = True
+    requires_explicit_permission = True
 
     @property
     def name(self) -> str:
@@ -163,7 +164,7 @@ class ConfigSetProviderTool(Tool):
                 f"Error: provider '{provider_raw}' is not configurable via this "
                 "tool. Only registered non-OAuth providers are supported. Ask "
                 "the user to configure OAuth-based providers (openai_codex, "
-                "github_copilot) via `mona provider login`."
+                "github_copilot) from Mona settings."
             )
 
         if set_as_default and not default_model:

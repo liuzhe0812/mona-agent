@@ -19,6 +19,40 @@ from mona.config.paths import get_workspace_path
 DELIVER_FILES_PENDING_META = "_pending_deliver_files"
 
 
+def _musician_score_delivery_error(path: Path, agent_id: str) -> str | None:
+    if agent_id != "com.mona.musician" or path.suffix.lower() != ".abc":
+        return None
+    try:
+        source = path.read_text(encoding="utf-8")
+    except UnicodeDecodeError:
+        return "乐谱必须使用 UTF-8 编码"
+    from mona.agent.tools.music_score import validate_abc
+
+    result = validate_abc(source)
+    if result["ok"]:
+        return None
+    issue = result["issues"][0]
+    location = f"（第 {issue['line']} 行）" if issue.get("line") else ""
+    return f"{issue['message']}{location}"
+
+
+def _musician_guitar_tab_delivery_error(path: Path, agent_id: str) -> str | None:
+    if agent_id != "com.mona.musician" or path.suffix.lower() != ".atex":
+        return None
+    try:
+        source = path.read_text(encoding="utf-8")
+    except UnicodeDecodeError:
+        return "六线谱必须使用 UTF-8 编码"
+    from mona.agent.tools.guitar_tab import validate_guitar_tab
+
+    result = validate_guitar_tab(source)
+    if result["ok"]:
+        return None
+    issue = result["issues"][0]
+    location = f"（第 {issue['measure']} 小节）" if issue.get("measure") else ""
+    return f"{issue['message']}{location}"
+
+
 def _human_size(size_bytes: int) -> str:
     if size_bytes < 1024:
         return f"{size_bytes} B"
@@ -148,6 +182,13 @@ class DeliverFileTool(Tool, ContextAware):
 
             if not resolved.is_file():
                 return f"Error: file not found: {resolved}"
+
+            score_error = _musician_score_delivery_error(resolved, self._agent_id)
+            if score_error:
+                return f"Error: ABC score validation failed: {score_error}"
+            tab_error = _musician_guitar_tab_delivery_error(resolved, self._agent_id)
+            if tab_error:
+                return f"Error: guitar tablature validation failed: {tab_error}"
 
             try:
                 size = resolved.stat().st_size

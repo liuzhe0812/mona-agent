@@ -21,7 +21,6 @@ import pytest
 from mona.agent import agent_management, skill_usage
 from mona.agent.partners import MONA_AGENT_ID, AgentRegistry, normalize_agent_id
 from mona.agent.tools.context import ToolContext
-from mona.agent.tools.path_utils import reset_current_workspace, set_current_workspace
 from mona.agent.tools.skill_tools import (
     SkillAssetCopyTool,
     SkillCreateTool,
@@ -59,11 +58,6 @@ def skills_roots(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> dict[str, P
     monkeypatch.setattr(config_paths, "get_agent_skills_dir", _resolve)
     monkeypatch.setattr(skill_usage, "get_agent_skills_dir", _resolve)
     monkeypatch.setattr(agent_management, "get_agent_skills_dir", _resolve)
-    monkeypatch.setattr(
-        agent_management,
-        "is_skill_script_enabled",
-        lambda agent_id, name: normalize_agent_id(agent_id) == AGENT_A and name == "s2",
-    )
     monkeypatch.setattr(
         agent_management,
         "get_agent_memory_dir",
@@ -131,25 +125,15 @@ class TestSkillReadAgentScope:
     async def test_partner_skill_read_cannot_access_mona_only_builtin(
         self, builtin_dir: Path
     ) -> None:
-        _write_skill(builtin_dir, "mona-ppt", body="# Mona presentation skill\n")
+        _write_skill(builtin_dir, "mona-video", body="# Mona video skill\n")
         _write_skill(builtin_dir, "memory", body="# Shared memory skill\n")
 
         partner = SkillReadTool(agent_id=AGENT_A)
         mona = SkillReadTool(agent_id=MONA_AGENT_ID)
 
-        assert "not found" in await partner.execute(name="mona-ppt")
+        assert "not found" in await partner.execute(name="mona-video")
         assert await partner.execute(name="memory") == "# Shared memory skill\n"
-        assert await mona.execute(name="mona-ppt") == (
-            "Error: skill 'mona-ppt' is only available in the AI Documents PPT workflow."
-        )
-
-        ppt_document_agent = SkillReadTool(
-            agent_id=MONA_AGENT_ID,
-            agent_kind="ppt",
-        )
-        assert await ppt_document_agent.execute(name="mona-ppt") == (
-            "# Mona presentation skill\n"
-        )
+        assert await mona.execute(name="mona-video") == "# Mona video skill\n"
 
     async def test_agent_private_invisible_to_mona(
         self, skills_roots: dict[str, Path], builtin_dir: Path
@@ -193,38 +177,15 @@ class TestSkillReadAgentScope:
         default_tool = SkillReadTool.create(SimpleNamespace())
         assert default_tool._agent_id == MONA_AGENT_ID
 
-        ppt_tool = SkillReadTool.create(
-            ToolContext(
-                config=SimpleNamespace(),
-                workspace=".",
-                agent_id=MONA_AGENT_ID,
-                agent_kind="ppt",
-            )
-        )
-        assert ppt_tool._agent_kind == "ppt"
-
-
 # ---------------------------------------------------------------------------
 # skill_script_run / skill_reference_read / skill_asset_copy: agent dirs
 # ---------------------------------------------------------------------------
 
 
 class TestSkillDirToolsAgentScope:
-    async def test_mona_ppt_helpers_are_blocked_outside_ai_documents(self) -> None:
-        expected = "only available in the AI Documents PPT workflow"
-
-        assert expected in await SkillScriptRunTool(
-            agent_id=MONA_AGENT_ID,
-        ).execute(skill="mona-ppt", script="render.py")
-        assert expected in await SkillReferenceReadTool(
-            agent_id=MONA_AGENT_ID,
-        ).execute(skill="mona-ppt", ref_path="design.md")
-        assert expected in await SkillAssetCopyTool(
-            agent_id=MONA_AGENT_ID,
-        ).execute(skill="mona-ppt", asset="theme.png", dest="theme.png")
-
-    async def test_script_run_resolves_agent_private(
-        self, skills_roots: dict[str, Path], builtin_dir: Path
+    async def test_script_runs_without_approval_and_respects_skill_setting(
+        self, skills_roots: dict[str, Path], builtin_dir: Path,
+        monkeypatch: pytest.MonkeyPatch,
     ) -> None:
         skill_dir = skills_roots[AGENT_A] / "s2"
         (skill_dir / "scripts").mkdir(parents=True)
@@ -232,14 +193,25 @@ class TestSkillDirToolsAgentScope:
         (skill_dir / "scripts" / "echo.py").write_text(
             "print('hello-from-agent-a')\n", encoding="utf-8"
         )
-        skill_usage.set_scripts_approved("s2", True, agent_id=AGENT_A)
-
         partner = SkillScriptRunTool(agent_id=AGENT_A)
         out = await partner.execute(skill="s2", script="echo.py")
         assert "hello-from-agent-a" in out
 
+        (skill_dir / "scripts" / "echo.py").write_text(
+            "print('updated-without-approval')\n", encoding="utf-8"
+        )
+        assert "updated-without-approval" in await partner.execute(skill="s2", script="echo.py")
+
         mona = SkillScriptRunTool(agent_id=MONA_AGENT_ID)
         assert "not found" in await mona.execute(skill="s2", script="echo.py")
+
+        from mona.agent.user_config import AgentUserConfig
+
+        monkeypatch.setattr(
+            "mona.agent.user_config.load_agent_user_config",
+            lambda _: AgentUserConfig(disabled_skills=["s2"]),
+        )
+        assert "disabled in Agent settings" in await partner.execute(skill="s2", script="echo.py")
 
     async def test_script_run_preserves_quoted_arguments(
         self,
@@ -286,48 +258,6 @@ class TestSkillDirToolsAgentScope:
         ).execute(skill="workspace-env", script="workspace.py")
 
         assert str(tmp_path.resolve()) in out
-
-    async def test_mona_ppt_scripts_run_inside_the_active_workspace(
-        self,
-        skills_roots: dict[str, Path],
-        builtin_dir: Path,
-        monkeypatch: pytest.MonkeyPatch,
-        tmp_path: Path,
-    ) -> None:
-        skill_dir = skills_roots[MONA_AGENT_ID] / "mona-ppt"
-        (skill_dir / "scripts").mkdir(parents=True)
-        (skill_dir / "SKILL.md").write_text("# mona-ppt\n", encoding="utf-8")
-        (skill_dir / "scripts" / "workspace.py").write_text(
-            "import json, os\n"
-            "from pathlib import Path\n"
-            "print(json.dumps([str(Path.cwd()), os.environ.get('MONA_ACTIVE_WORKSPACE', '')]))\n",
-            encoding="utf-8",
-        )
-        monkeypatch.setattr(agent_management, "is_skill_script_enabled", lambda *_: True)
-
-        class FakeRuntimeManager:
-            async def prepare_for_skill(
-                self, suffix: str, _skill_dir: Path, _spec
-            ) -> AgentEnvironmentResolution:
-                assert suffix == ".py"
-                return AgentEnvironmentResolution(executable=Path(sys.executable), env={})
-
-        active_workspace = tmp_path / "active"
-        active_workspace.mkdir()
-        token = set_current_workspace(active_workspace)
-        try:
-            out = await SkillScriptRunTool(
-                agent_id=MONA_AGENT_ID,
-                agent_kind="ppt",
-                workspace=tmp_path / "fallback",
-                agent_environment=FakeRuntimeManager(),
-            ).execute(skill="mona-ppt", script="workspace.py")
-        finally:
-            reset_current_workspace(token)
-
-        cwd, env_workspace = json.loads(out.splitlines()[0])
-        assert Path(cwd) == active_workspace.resolve()
-        assert Path(env_workspace) == active_workspace.resolve()
 
     async def test_script_run_uses_declared_managed_runtime(
         self,

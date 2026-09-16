@@ -8,17 +8,32 @@ import pytest
 from mona.agent.partners import MONA_AGENT_ID, AgentRegistry
 from mona.agent.tools.canvas import CanvasTool
 from mona.agent.tools.context import RequestContext
-from mona.agent.user_config import AgentUserConfig, resolve_effective_agent_config
+from mona.agent.user_config import (
+    REQUIRED_AGENT_TOOLS,
+    AgentUserConfig,
+    resolve_effective_agent_config,
+)
 
 
-def test_canvas_stays_available_to_mona_when_an_older_tool_selection_is_saved():
+def test_system_managed_tools_stay_available_when_an_older_selection_is_saved():
     effective = resolve_effective_agent_config(
         AgentRegistry().require(MONA_AGENT_ID),
         AgentUserConfig(granted_tools=["exec", "skill_read"]),
     )
 
     assert effective.allowed_tools is not None
-    assert "canvas" in effective.allowed_tools
+    assert {
+        "canvas",
+        "complete_goal",
+        "delegate_agent",
+        "long_task",
+        "my",
+        "propose_workflow",
+        "run_collaboration",
+        "spawn",
+        "update_plan",
+    } <= set(effective.allowed_tools)
+    assert REQUIRED_AGENT_TOOLS <= set(effective.allowed_tools)
 
 
 def test_canvas_context_survives_follow_up_in_the_same_session_and_clears_on_switch(tmp_path):

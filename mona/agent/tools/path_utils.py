@@ -38,31 +38,6 @@ def get_current_workspace(fallback: Path | None = None) -> Path | None:
     return _current_workspace.get() or fallback
 
 
-# ---------------------------------------------------------------------------
-# Path rewrite rules
-# ---------------------------------------------------------------------------
-
-# Path rewrite rules: when AI uses an old path prefix, automatically redirect
-# to the correct one.  This ensures file output lands in the expected directory
-# even if the AI follows outdated instructions.
-_PATH_REWRITES: list[tuple[str, str]] = [
-    ("projects/", "ppt_projects/"),
-    ("projects\\", "ppt_projects\\"),
-]
-
-
-def _rewrite_path(path: str) -> str:
-    """Apply path prefix rewrites for common AI mistakes.
-
-    Only rewrites the *first* path component so that nested occurrences
-    (e.g. ``ppt_projects/x/projects/``) are left untouched.
-    """
-    for old, new in _PATH_REWRITES:
-        if path.startswith(old):
-            return new + path[len(old):]
-    return path
-
-
 def is_under(path: Path, directory: Path) -> bool:
     """Return True when path resolves under directory."""
     try:
@@ -79,8 +54,6 @@ def resolve_workspace_path(
     extra_allowed_dirs: list[Path] | None = None,
 ) -> Path:
     """Resolve path against workspace and enforce allowed directory containment."""
-    # Auto-rewrite common path mistakes (e.g. projects/ → ppt_projects/)
-    path = _rewrite_path(path)
     p = Path(path).expanduser()
     if not p.is_absolute() and workspace:
         p = workspace / p

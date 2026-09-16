@@ -38,6 +38,7 @@ class MyTool(Tool, ContextAware):
 
     _plugin_discoverable = False  # Requires AgentLoop reference; registered manually
     config_key = "my"
+    system_managed = True
 
     @classmethod
     def config_cls(cls):
@@ -66,6 +67,7 @@ class MyTool(Tool, ContextAware):
     READ_ONLY = frozenset({
         "subagents",  # observable but replacing it would break the system
         "_current_iteration",  # updated by runner only
+        "context_window_tokens",  # resolved from model capability metadata
         "exec_config",  # inspect allowed (e.g. check sandbox), modify blocked
         "web_config",  # inspect allowed (e.g. check enable), modify blocked
     })
@@ -93,7 +95,6 @@ class MyTool(Tool, ContextAware):
 
     RESTRICTED: dict[str, dict[str, Any]] = {
         "max_iterations":        {"type": int, "min": 1,   "max": 100},
-        "context_window_tokens": {"type": int, "min": 4096, "max": 1_000_000},
         "model":                 {"type": str, "min_len": 1},
     }
 
@@ -141,7 +142,7 @@ class MyTool(Tool, ContextAware):
             "- User asks about your model, settings, or token usage → check that key.\n"
             "- A tool fails or behaves unexpectedly → check the related config to diagnose.\n"
             "- User asks you to remember a preference for this session → set to store it in your scratchpad.\n"
-            "- About to start a large task → check context_window_tokens and max_iterations first."
+            "- About to start a large task → check max_iterations first."
         )
         if not self._modify_allowed:
             base += "\nREAD-ONLY MODE: set is disabled."
@@ -168,7 +169,7 @@ class MyTool(Tool, ContextAware):
                     "description": "Dot-path for check/set. Examples: 'max_iterations', 'workspace', 'provider_retry_mode'. "
                     "For check without key, shows all config values.",
                 },
-                "value": {"description": "New value (for set). Type must match target (int for max_iterations/context_window_tokens, str for model)."},
+                "value": {"description": "New value (for set). Type must match target (int for max_iterations, str for model)."},
             },
             "required": ["action"],
         }

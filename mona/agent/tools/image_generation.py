@@ -176,7 +176,12 @@ class ImageGenerationTool(Tool):
         parameters = self.config.model_parameters.get(self.config.model)
         from mona.providers.registry import is_custom_provider_name
 
-        if parameters and is_custom_provider_name(self.config.provider):
+        custom_provider = is_custom_provider_name(self.config.provider)
+        if custom_provider:
+            # Inline results avoid provider-local or short-lived asset URLs,
+            # which are common on self-hosted OpenAI-compatible services.
+            extra_body.setdefault("response_format", "b64_json")
+        if parameters and custom_provider:
             allowed = {"seed", "steps", "cfg", "negative_prompt"}
             extra_body.update(
                 {
@@ -200,6 +205,16 @@ class ImageGenerationTool(Tool):
             raise ImageGenerationError("分辨率格式无效，请使用 1K、2K、4K 或宽x高。", code="INVALID_IMAGE_SIZE", retry_safe=True)
         if ratio and not re.fullmatch(r"[1-9][0-9]?(?:\.[0-9]+)?:[1-9][0-9]?(?:\.[0-9]+)?", ratio):
             raise ImageGenerationError("画面比例格式无效，例如 16:9。", code="INVALID_IMAGE_SIZE", retry_safe=True)
+        from mona.providers.registry import is_custom_provider_name
+
+        if size.lower().endswith("k") and is_custom_provider_name(self.config.provider):
+            long_edge = round(float(size[:-1]) * 1024)
+            left, right = (float(part) for part in ratio.split(":"))
+            if left >= right:
+                width, height = long_edge, max(1, round(long_edge * right / left))
+            else:
+                width, height = max(1, round(long_edge * left / right)), long_edge
+            return f"{width}x{height}", ratio
         if "x" in size:
             width, height = (int(part) for part in size.split("x"))
             if width > 65536 or height > 65536:
@@ -307,12 +322,22 @@ class ImageGenerationTool(Tool):
             code = getattr(exc, "code", None)
             supported_sizes = getattr(exc, "supported_sizes", [])
             if code or artifacts:
-                return json.dumps({
-                    "ok": False, "code": code or "IMAGE_GENERATION_FAILED", "message": str(exc),
+                payload = {
+                    "ok": False,
+                    "code": code or "IMAGE_GENERATION_FAILED",
+                    "message": str(exc),
                     "supported_sizes": supported_sizes,
-                    "retry_safe": getattr(exc, "retry_safe", False), "artifacts": artifacts,
+                    "retry_safe": getattr(exc, "retry_safe", False),
+                    "artifacts": artifacts,
                     "next_step": "Keep completed artifacts. Do not automatically resubmit when retry_safe is false. Respect the user's exact size requirements.",
-                }, ensure_ascii=False)
+                }
+                result_url = getattr(exc, "result_url", None)
+                if result_url:
+                    payload["result_url"] = result_url
+                    payload["next_step"] = (
+                        "Retry downloading result_url without resubmitting the generation request."
+                    )
+                return json.dumps(payload, ensure_ascii=False)
             return f"Error: {exc}"
         except (httpx.HTTPError, ValueError) as exc:
             return json.dumps({

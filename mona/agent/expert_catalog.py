@@ -113,6 +113,19 @@ class ExpertCatalogClient:
         except (OSError, ValueError):
             return None
 
+    def load_cached_snapshot(self) -> ExpertCatalogSnapshot | None:
+        """Return the validated local catalog without making a network request."""
+        cached = self.load_cached()
+        if cached is None:
+            return None
+        return ExpertCatalogSnapshot(
+            catalog=cached.catalog,
+            source="cache",
+            source_url=cached.source_url,
+            fetched_at=cached.fetched_at,
+            stale=True,
+        )
+
     async def _fetch_one(
         self,
         client: httpx.AsyncClient,
