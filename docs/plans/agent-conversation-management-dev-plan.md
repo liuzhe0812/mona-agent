@@ -16,7 +16,7 @@
 2. 移除独立“伙伴”入口，在主内容区完成 Agent 管理。
 3. 增加用户级 Agent 配置，并在运行时统一解析生效。
 4. 补齐记忆、权限、数据和生命周期管理。
-5. 开放 Agent 指令文件与专属 Skill 管理，并支持通过 AI 对话安全安装 Skill。
+5. 开放 Agent 指令文件与专属 Skill 管理，并支持 Agent 创建自己的 Skill。
 
 本文档取代《IM UI 交互开发计划》中“伙伴独立页面”和“会话统一平铺”相关设计；房间、项目、置顶、归档等其他约定继续有效。
 
@@ -278,8 +278,7 @@ Agent 包内的声明继续作为能力上限和默认值，不允许用户直�
 
 - 列出和查看 Skill。
 - 校验目录与 `SKILL.md`。
-- 暂存创建、导入或更新内容。
-- 激活、归档、恢复和导出私有 Skill。
+- 创建、编辑、归档和恢复私有 Skill。
 - 更新现有使用台账中的来源、版本和哈希。
 - 触发 Agent Skill 缓存失效和前端刷新事件。
 
@@ -290,24 +289,10 @@ Agent 包内的声明继续作为能力上限和默认值，不允许用户直�
 - `version`
 - `contentHash`
 - `installedAt`
-- `approvedAt`
 
-### 7.3 AI 对话安装流程
+### 7.3 Agent 创建 Skill
 
-AI 不能把内容直接写入正式 Skill 目录。正常对话中的创建、导入和更新统一走以下流程：
-
-```mermaid
-flowchart LR
-    A["用户要求 Agent 安装或创建 Skill"] --> B["从运行上下文确定目标 Agent"]
-    B --> C["写入该 Agent 的 .staging/request_id"]
-    C --> D["结构、安全、权限与冲突校验"]
-    D -->|失败| E["返回问题，不改变正式目录"]
-    D -->|通过| F["生成安装提案与差异预览"]
-    F --> G{"用户批准？"}
-    G -->|否| H["删除暂存并记录拒绝"]
-    G -->|是| I["原子移动到 skills/name"]
-    I --> J["更新来源台账并刷新 Agent"]
-```
+Agent 使用 `skill_create` 创建自己的私有 Skill，校验通过后原子写入正式目录并立即启用，不设置暂存、变更提案或批准流程。
 
 目标目录固定为：
 
@@ -315,58 +300,16 @@ flowchart LR
 ~/.mona/agents/<当前执行 agent_id>/skills/<skill_name>/
 ```
 
-模型侧工具不接受 `target_agent_id`。目标 Agent 必须从可信的 `ToolContext` 得到，避免通过提示词向其他 Agent 目录写入。跨 Agent 安装只能由用户在界面明确选择目标并再次批准。
-
-暂存目录：
-
-```text
-~/.mona/agents/<agent_id>/skills/.staging/<request_id>/
-```
-
-激活前至少校验：
+模型侧工具不接受 `target_agent_id`。目标 Agent 从 `ToolContext` 得到，不能向其他 Agent 目录写入。创建时校验：
 
 - Skill 名称、目录层级和 `SKILL.md` frontmatter。
 - 路径穿越、绝对路径、符号链接和非法文件名。
-- 文件数量、单文件大小、总大小和内容哈希。
+- 内容大小和内容哈希。
 - 同名私有 Skill、包内 Skill和平台 Skill 冲突。
 - 声明的工具是否在 Agent 实际权限范围内。
-- 是否包含脚本、二进制、依赖安装或网络访问需求。
-- 更新已有 Skill 时的内容差异与来源变化。
+- 现有同名私有、包内或平台 Skill 冲突。
 
-外部来源内容与 AI 生成内容必须区分：
-
-- AI 生成：模型在暂存区生成 `SKILL.md` 和必要资源。
-- 文件、URL 或目录导入：系统保留原始字节、来源和哈希，模型不得悄悄改写。
-- 更新：必须展示差异，不直接覆盖。
-
-包含脚本的外部 Skill 默认禁用脚本能力。本期不承诺强沙箱；只有用户看过脚本风险并批准，且 Agent 已有对应工具权限时才可启用。Skill 安装永远不能自动授予工具、连接或密钥。
-
-### 7.4 统一变更提案
-
-`SOUL.md`、`AGENTS.md`、`USER.md` 的 AI 修改和 Skill 安装共用一个最小持久化提案模型，避免出现两套审批状态机：
-
-```text
-AgentChangeProposal
-  id
-  agentId
-  kind: instruction_patch | skill_install
-  status: pending | approved | rejected | expired
-  token
-  expectedRevision
-  preview
-  stagedPath?
-  createdAt
-  expiresAt
-  resolvedAt?
-```
-
-实现要求：
-
-- 提案持久化，应用重启后仍可处理。
-- 批准使用一次性随机 token 和预期版本，重复请求保持幂等。
-- 批准前正式文件和正式 Skill 目录必须保持不变。
-- 过期、拒绝或校验失败时清理暂存内容。
-- 可以复用现有工作流批准中的 token、版本检查和交互卡片模式，但不依赖 `WorkflowRun` 实体。
+用户在 Agent 设置中编辑、启停、归档和恢复 Skill；这些设置直接生效。
 
 ## 8. API 与事件
 
@@ -382,10 +325,7 @@ Agent 配置属于 CRUD 管理，使用认证后的 HTTP API；聊天、房间�
 | `GET` | `/api/agents/{id}/instructions/{key}/history` | 查看版本历史 |
 | `POST` | `/api/agents/{id}/instructions/{key}/restore` | 恢复指定版本 |
 | `GET` | `/api/agents/{id}/skills` | 返回三类 Skill、来源、状态和兼容性 |
-| `POST` | `/api/agents/{id}/skills/stage` | 用户界面导入或更新 Skill 并生成提案 |
 | `PATCH` | `/api/agents/{id}/skills/{name}` | 启停、归档或恢复私有 Skill |
-| `GET` | `/api/agent-change-proposals/{id}` | 获取提案和差异 |
-| `POST` | `/api/agent-change-proposals/{id}/resolve` | 批准或拒绝提案 |
 
 约束：
 
@@ -399,8 +339,6 @@ Agent 配置属于 CRUD 管理，使用认证后的 HTTP API；聊天、房间�
 - `agents_updated`
 - `agent_instructions_updated`
 - `agent_skills_updated`
-- `agent_change_proposal_created`
-- `agent_change_proposal_resolved`
 
 前端收到事件后只失效对应 Agent 缓存，不进行全应用刷新。
 
