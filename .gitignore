@@ -467,3 +467,14 @@ webui/step2.png
 webui/step3.png
 webui/task-align-debug.png
 webui/task-test.png
+
+# 鏈湴杩愯涓庢祴璇曚复鏃朵骇鐗╋紙涓嶅叆搴擄級
+/.codex-pytest-*/
+/.pytest-*/
+/.mona/
+/.workbuddy/
+/cron/
+/output/
+/renders/
+/sessions/
+/src-tauri/target-*/
