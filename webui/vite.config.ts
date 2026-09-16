@@ -1,5 +1,6 @@
 import { defineConfig, loadEnv } from "vite";
 import react from "@vitejs/plugin-react";
+import { alphaTab } from "@coderline/alphatab-vite";
 import path from "node:path";
 import { officeEditorDev } from "./scripts/office-editor-dev.mjs";
 
@@ -10,13 +11,18 @@ export default defineConfig(({ mode }) => {
   const isTauriBuild = mode === "tauri";
 
   return {
-    plugins: [officeEditorDev(path.resolve(__dirname, "office-editor")), react()],
+    plugins: [
+      alphaTab({ assetOutputDir: false }),
+      officeEditorDev(path.resolve(__dirname, "office-editor")),
+      react(),
+    ],
     resolve: {
       alias: {
         "@": path.resolve(__dirname, "./src"),
       },
     },
     optimizeDeps: {
+      entries: ["index.html"],
       include: ["@xyflow/react", "@dagrejs/dagre", "html-to-image"],
       exclude: ["@radix-ui/react-dialog", "@novnc/novnc"],
     },
@@ -24,7 +30,7 @@ export default defineConfig(({ mode }) => {
       target: "esnext",
       outDir: isTauriBuild
         ? path.resolve(__dirname, "../src-tauri/dist")
-        : path.resolve(__dirname, "../mona/web/dist"),
+        : path.resolve(__dirname, "./dist"),
       emptyOutDir: true,
       sourcemap: false,
       rollupOptions: {
@@ -66,6 +72,14 @@ export default defineConfig(({ mode }) => {
         ignored: ["**/office-editor/**"],
       },
       proxy: {
+        // Sidebar-state writes only exist on the gateway (aiohttp, JSON body);
+        // the ws server's process_request cannot read POST bodies, so in dev
+        // this route must bypass the generic /api target or every read marker
+        // write fails with 400 and all sessions flip back to unread.
+        "/api/webui/sidebar-state/update": {
+          target: gatewayTarget,
+          changeOrigin: true,
+        },
         "/webui": { target, changeOrigin: true },
         "/api": { target, changeOrigin: true },
         "/auth": { target, changeOrigin: true },
