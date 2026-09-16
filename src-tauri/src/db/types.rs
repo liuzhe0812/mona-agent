@@ -190,10 +190,16 @@ pub struct DatabaseObject {
     pub children: Vec<DatabaseObject>,
 }
 
-/// Database object type. Only `Table` and `View` are currently constructed by
-/// the backend; the remaining variants are reserved for future support and
-/// are retained because the frontend `dbStore.ts` hardcodes `"database"` and
-/// `"folder"` strings when building the connection tree.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct SavedQuery {
+    pub id: String,
+    pub name: String,
+    pub connection_id: String,
+    pub database: String,
+    pub sql: String,
+}
+
+/// Database object type shared by the backend catalog and frontend tree.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum DatabaseObjectType {
@@ -203,9 +209,7 @@ pub enum DatabaseObjectType {
     Database,
     Table,
     View,
-    #[allow(dead_code)]
     Procedure,
-    #[allow(dead_code)]
     Function,
     #[allow(dead_code)]
     Index,
@@ -226,15 +230,18 @@ pub struct TableInfo {
     pub engine: Option<String>,
     pub charset: Option<String>,
     pub collation: Option<String>,
-    pub row_count: Option<i64>,
+    pub row_count: Option<u64>,
     pub data_size: Option<String>,
     pub index_size: Option<String>,
-    pub auto_increment: Option<i64>,
+    pub auto_increment: Option<u64>,
     pub create_time: Option<String>,
     pub update_time: Option<String>,
     pub columns: Vec<ColumnDefinition>,
     pub indexes: Vec<IndexDefinition>,
     pub foreign_keys: Vec<ForeignKeyDefinition>,
+    pub triggers: Vec<TriggerDefinition>,
+    pub comment: Option<String>,
+    pub row_format: Option<String>,
     pub ddl: Option<String>,
 }
 
@@ -243,16 +250,17 @@ pub struct TableSummary {
     pub name: String,
     pub object_type: String,
     pub comment: Option<String>,
-    pub row_count: Option<i64>,
-    pub data_size: Option<i64>,
-    pub index_size: Option<i64>,
+    pub row_count: Option<u64>,
+    pub data_size: Option<u64>,
+    pub index_size: Option<u64>,
+    pub auto_increment: Option<u64>,
     pub engine: Option<String>,
     pub charset: Option<String>,
     pub create_time: Option<String>,
     pub update_time: Option<String>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct ColumnDefinition {
     pub name: String,
     pub data_type: String,
@@ -263,18 +271,23 @@ pub struct ColumnDefinition {
     pub is_auto_increment: bool,
     pub extra: Option<String>,
     pub comment: Option<String>,
+    #[serde(default)]
+    pub charset: Option<String>,
+    #[serde(default)]
+    pub collation: Option<String>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct IndexDefinition {
     pub name: String,
     pub columns: Vec<String>,
     pub is_unique: bool,
     pub is_primary: bool,
     pub index_type: Option<String>,
+    pub editable: bool,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct ForeignKeyDefinition {
     pub name: String,
     pub columns: Vec<String>,
@@ -282,6 +295,16 @@ pub struct ForeignKeyDefinition {
     pub ref_columns: Vec<String>,
     pub on_delete: Option<String>,
     pub on_update: Option<String>,
+    pub editable: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct TriggerDefinition {
+    pub name: String,
+    pub timing: String,
+    pub event: String,
+    pub statement: String,
+    pub editable: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

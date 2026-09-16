@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { Loader2, RotateCcw, Send, Square, Zap, AlertTriangle } from "lucide-react";
+import { Loader2, RotateCcw, Send, Square } from "lucide-react";
 import { AgentLogo } from "@/components/AgentLogo";
 import { ThreadMessages } from "@/components/thread/ThreadMessages";
 import { Button } from "@/components/ui/button";
@@ -13,22 +13,23 @@ import { cn } from "@/lib/utils";
 import { useClient } from "@/providers/ClientProvider";
 import { useDbStore } from "./store/dbStore";
 import type { DbSqlDraft } from "./types";
+import { getQueryDraft } from "./query-draft";
 import { SqlResultCard } from "./SqlResultCard";
 
 interface DbAgentPanelProps {
   collapsed?: boolean;
-  width?: number;
 }
 
 export function DbAgentPanel({
   collapsed: collapsedProp,
-  width = 320,
 }: DbAgentPanelProps) {
   const [draft, setDraft] = useState("");
   const collapsed = collapsedProp ?? false;
   const [notice, setNotice] = useState<string | null>(null);
   const [creatingChat, setCreatingChat] = useState(false);
-  const [sqlDraft, setSqlDraft] = useState<DbSqlDraft | null>(null);
+  const [sqlDraft, setSqlDraft] = useState<{ draft: DbSqlDraft; tabId: string } | null>(null);
+  const activeTabIdRef = useRef<string | null>(null);
+  const draftTargetTabIdRef = useRef<string | null>(null);
   const pendingPromptRef = useRef<string | null>(null);
   const pendingSendOptsRef = useRef<SendOptions | null>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
@@ -40,6 +41,7 @@ export function DbAgentPanel({
   const updateTabSql = useDbStore((s) => s.updateTabSql);
   const setAgentStreaming = useDbStore((s) => s.setAgentStreaming);
   const activeTab = queryTabs.find((t) => t.id === activeTabId);
+  activeTabIdRef.current = activeTabId;
 
   const activeConnection = activeTab?.connectionId
     ? activeConnections.find((c) => c.id === activeTab.connectionId)
@@ -106,7 +108,8 @@ export function DbAgentPanel({
     (async () => {
       const { listen } = await import("@tauri-apps/api/event");
       unlisten = await listen<DbSqlDraft>("db-sql-draft-ready", (event) => {
-        setSqlDraft(event.payload);
+        const tabId = draftTargetTabIdRef.current ?? activeTabIdRef.current;
+        if (tabId) setSqlDraft({ draft: event.payload, tabId });
       });
     })();
     return () => { unlisten?.(); };
@@ -125,7 +128,7 @@ export function DbAgentPanel({
       dbConnectionId: activeTab?.connectionId ?? undefined,
       dbDatabase: activeTab?.database ?? undefined,
       dbTable: activeTab?.tableName,
-      dbCurrentSql: activeTab?.sql?.trim() || undefined,
+      dbCurrentSql: activeTab ? getQueryDraft(activeTab.id, activeTab.sql).trim() || undefined : undefined,
       dbLastError: activeTab?.error ?? undefined,
     };
     if (activeConnection) {
@@ -141,6 +144,7 @@ export function DbAgentPanel({
     async (prompt: string, displayName?: string) => {
       const trimmed = prompt.trim();
       if (!trimmed || creatingChat) return;
+      draftTargetTabIdRef.current = activeTabId;
       if (isStreaming) {
         setNotice("Agent 正在处理，先停止或等它完成");
         return;
@@ -183,23 +187,6 @@ export function DbAgentPanel({
     void sendPromptToAgent(question, question);
   }, [draft, sendPromptToAgent]);
 
-  const handleContextAction = useCallback(
-    (action: "explain_sql" | "diagnose_error") => {
-      if (!activeTab?.connectionId) return;
-      let prompt = "";
-      let label = "";
-      if (action === "explain_sql") {
-        prompt = "解释当前 SQL 编辑器中的语句：分析执行计划、潜在性能问题和优化建议。";
-        label = "解释当前 SQL";
-      } else {
-        prompt = "诊断当前 SQL 执行报错的原因，并给出修复建议。";
-        label = "诊断当前错误";
-      }
-      void sendPromptToAgent(prompt, label);
-    },
-    [activeTab, sendPromptToAgent],
-  );
-
   const handleResetChat = useCallback(() => {
     setMessages([]);
     useDbStore.setState((state) => ({
@@ -214,13 +201,9 @@ export function DbAgentPanel({
     return null;
   }
 
-  const hasSql = !!activeTab?.sql?.trim();
-  const hasError = !!activeTab?.error;
-
   return (
     <aside
-      className="flex h-full shrink-0 flex-col border-l border-border/70 bg-card"
-      style={{ width }}
+      className="flex h-full w-full min-w-0 flex-col bg-card"
     >
       <div className="flex h-10 shrink-0 items-center justify-between border-b border-border/65 px-3">
         <div className="flex min-w-0 items-center gap-2">
@@ -247,32 +230,6 @@ export function DbAgentPanel({
         </div>
       </div>
 
-      <div className="shrink-0 border-b border-border/65 px-2.5 py-2">
-        <div className="flex flex-wrap gap-1.5">
-          {hasSql ? (
-            <ContextActionButton
-              icon={<Zap className="h-3.5 w-3.5" />}
-              label="解释当前 SQL"
-              disabled={creatingChat || isStreaming}
-              onClick={() => handleContextAction("explain_sql")}
-            />
-          ) : null}
-          {hasError ? (
-            <ContextActionButton
-              icon={<AlertTriangle className="h-3.5 w-3.5" />}
-              label="诊断当前错误"
-              disabled={creatingChat || isStreaming}
-              onClick={() => handleContextAction("diagnose_error")}
-            />
-          ) : null}
-          {!hasSql && !hasError ? (
-            <p className="px-1 py-1 text-micro text-muted-foreground">
-              打开 SQL 或执行出错时，这里会出现对应的快捷分析动作。
-            </p>
-          ) : null}
-        </div>
-      </div>
-
       <div
         ref={scrollRef}
         className="min-h-0 flex-1 overflow-y-auto overflow-x-hidden px-2.5 py-2 scrollbar-thin"
@@ -287,15 +244,18 @@ export function DbAgentPanel({
           hasActiveTab={!!activeTab?.connectionId}
           onDismissStreamError={dismissStreamError}
         />
-        {sqlDraft && activeTabId ? (
+        {sqlDraft && sqlDraft.tabId === activeTabId ? (
           <div className="mt-2">
             <SqlResultCard
-              draft={sqlDraft}
+              draft={sqlDraft.draft}
               onInsert={(sql) => {
-                const tab = useDbStore.getState().queryTabs.find((t) => t.id === activeTabId);
-                if (tab) updateTabSql(activeTabId, tab.kind === "table" ? sql : `${tab.sql}\n${sql}`);
+                const tab = useDbStore.getState().queryTabs.find((t) => t.id === sqlDraft.tabId);
+                if (tab) {
+                  const current = getQueryDraft(tab.id, tab.sql);
+                  updateTabSql(tab.id, tab.kind === "table" ? sql : `${current}\n${sql}`);
+                }
               }}
-              onReplace={(sql) => updateTabSql(activeTabId, sql)}
+              onReplace={(sql) => updateTabSql(sqlDraft.tabId, sql)}
               onDismiss={() => setSqlDraft(null)}
             />
           </div>
@@ -344,31 +304,6 @@ export function DbAgentPanel({
         </div>
       </div>
     </aside>
-  );
-}
-
-function ContextActionButton({
-  icon,
-  label,
-  disabled,
-  onClick,
-}: {
-  icon: React.ReactNode;
-  label: string;
-  disabled?: boolean;
-  onClick: () => void;
-}) {
-  return (
-    <Button
-      type="button"
-      variant="outline"
-      disabled={disabled}
-      onClick={onClick}
-      className="h-7 gap-1.5 rounded-md border-border/70 px-2 text-micro text-foreground/82"
-    >
-      {icon}
-      <span className="max-w-[140px] truncate">{label}</span>
-    </Button>
   );
 }
 

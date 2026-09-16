@@ -29,12 +29,26 @@ describe("database browser interactions", () => {
     }
     expect(screen.getAllByLabelText("数据库状态栏")).toHaveLength(1);
     expect(screen.queryByLabelText("SQL 编辑器")).not.toBeInTheDocument();
+    expect(screen.getByRole("table").closest(".scrollbar-thin")).toHaveClass(
+      "scrollbar-track-transparent",
+    );
+  });
+  it("shows DDL in a highlighted floating preview instead of a modal", async () => {
+    const { container } = render(<Browser />);
+    fireEvent.click(screen.getByRole("button", { name: "查看 DDL" }));
+    const preview = screen.getByRole("dialog", { name: "DDL 预览" });
+    expect(preview).toHaveAttribute("aria-modal", "false");
+    expect(preview).toHaveClass("absolute");
+    await waitFor(() => expect(container.querySelectorAll(".token").length).toBeGreaterThan(3));
+    expect(screen.queryByRole("button", { name: "在查询中打开" })).not.toBeInTheDocument();
   });
   it("edits a cell locally and enables save without sending SQL", async () => {
     const query = vi.spyOn(ipc, "dbExecuteQuery").mockRejectedValue(new Error("Unexpected query"));
     render(<Browser />);
     fireEvent.doubleClick(screen.getByText("Ada"));
     const input = screen.getByRole("textbox", { name: "编辑 name" });
+    expect(input).toHaveClass("border-0", "border-b-2", "border-info", "focus-visible:ring-0");
+    expect(screen.getByRole("button", { name: "打开完整编辑器 name" })).toBeInTheDocument();
     fireEvent.change(input, { target: { value: "Grace" } });
     fireEvent.blur(input);
     expect(useDbStore.getState().queryTabs[0].edits[0].newValue).toBe("Grace");
@@ -88,11 +102,26 @@ describe("database browser interactions", () => {
     useDbStore.setState({ queryTabs: [tab] });
     render(<Browser />);
     fireEvent.doubleClick(screen.getByTitle(long.trim()));
+    fireEvent.mouseDown(screen.getByRole("button", { name: "打开完整编辑器 name" }));
+    fireEvent.click(screen.getByRole("button", { name: "打开完整编辑器 name" }));
     expect(screen.getByRole("dialog")).toBeInTheDocument();
     expect(screen.getByRole("textbox", { name: "完整内容" })).toHaveValue(long);
     fireEvent.change(screen.getByRole("textbox", { name: "完整内容" }), { target: { value: "Shorter" } });
     fireEvent.click(screen.getByRole("button", { name: "应用" }));
     expect(useDbStore.getState().queryTabs[0].edits[0].newValue).toBe("Shorter");
+  });
+  it("opens the full editor from ellipsis with four content modes and cancels cleanly", () => {
+    render(<Browser />);
+    fireEvent.doubleClick(screen.getByText("Ada"));
+    const more = screen.getByRole("button", { name: "打开完整编辑器 name" });
+    fireEvent.mouseDown(more);
+    fireEvent.click(more);
+    expect(screen.getByRole("dialog")).toBeInTheDocument();
+    const modes = screen.getByRole("tablist", { name: "内容格式" });
+    for (const label of ["文本", "JSON", "XML", "PHP 序列化"]) expect(within(modes).getByRole("tab", { name: label })).toBeInTheDocument();
+    fireEvent.change(screen.getByRole("textbox", { name: "完整内容" }), { target: { value: "Discarded" } });
+    fireEvent.click(screen.getByRole("button", { name: "取消" }));
+    expect(useDbStore.getState().queryTabs[0].edits).toHaveLength(0);
   });
 });
 describe("query results", () => {

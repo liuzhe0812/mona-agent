@@ -2,10 +2,10 @@ import { useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Select } from "@/components/ui/select";
 import { TooltipProvider } from "@/components/ui/tooltip";
-import { DropdownMenu, DropdownMenuTrigger, DropdownMenuContent, DropdownMenuCheckboxItem } from "@/components/ui/dropdown-menu";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogFooter } from "@/components/ui/dialog";
 import { AlertDialog, AlertDialogContent, AlertDialogHeader, AlertDialogTitle, AlertDialogDescription, AlertDialogFooter, AlertDialogCancel, AlertDialogAction } from "@/components/ui/alert-dialog";
 import { DbToolButton } from "./DbToolButton";
+import { DdlPreviewPopover } from "./DdlPreviewPopover";
 import { DataGrid } from "./DataGrid";
 import { useDbStore } from "./store/dbStore";
 import { DEFAULT_BROWSE, canEditTable, hasPendingEdits } from "./table-sql";
@@ -14,10 +14,12 @@ import type { QueryTab, TableBrowse } from "./types";
 export function TableBrowser({ tab }: { tab: QueryTab }) {
   const connections = useDbStore((s) => s.activeConnections);
   const patchTab = useDbStore((s) => s.patchTab);
+  const schemaSaving = useDbStore((s) => s.queryTabs.some((item) => item.kind === "structure" && item.isSaving && item.connectionId === tab.connectionId && item.database === tab.database && item.tableName === tab.tableName));
   const connection = connections.find((c) => c.id === tab.connectionId);
-  const [detail, setDetail] = useState<"structure" | "index" | "ddl" | "sql" | null>(null);
+  const [sqlOpen, setSqlOpen] = useState(false);
+  const [ddlOpen, setDdlOpen] = useState(false);
   const [pending, setPending] = useState<{ title: string; description: string; action: () => void } | null>(null);
-  const busy = tab.isExecuting || tab.isSaving || tab.isLoadingMetadata;
+  const busy = tab.isExecuting || tab.isSaving || tab.isLoadingMetadata || schemaSaving;
   const readOnly = !canEditTable(tab);
   const modified = tab.edits.filter((e) => !tab.insertedRows.includes(e.rowIdx) && !tab.deletedRows?.includes(e.rowIdx)).length + tab.insertedRows.length + (tab.deletedRows?.length ?? 0);
   const browse = tab.browse ?? DEFAULT_BROWSE;
@@ -31,7 +33,7 @@ export function TableBrowser({ tab }: { tab: QueryTab }) {
     else void useDbStore.getState().saveEdits(tab.id);
   }
   return <TooltipProvider delayDuration={250}>
-    <div className="flex h-full min-h-0 flex-col bg-background">
+    <div className="relative flex h-full min-h-0 flex-col bg-background">
       <div role="toolbar" aria-label="数据表操作" className="flex h-10 shrink-0 items-center gap-1 overflow-x-auto border-b border-border px-2">
         <DbToolButton icon="refresh" label="刷新数据" disabled={busy || !connection} onClick={() => guard(() => { void useDbStore.getState().executeQuery(tab.id); })} />
         <DbToolButton icon="add" label="新增行" disabled={busy || readOnly || !connection} onClick={() => useDbStore.getState().insertRow(tab.id)} />
@@ -40,25 +42,20 @@ export function TableBrowser({ tab }: { tab: QueryTab }) {
         }} />
         <DbToolButton icon="save" label="保存修改" className={modified ? "text-info" : ""} disabled={busy || !modified || !connection} onClick={save} />
         <DbToolButton icon="undo" label="撤销修改" disabled={busy || !modified} onClick={() => useDbStore.getState().revertAllEdits(tab.id)} />
-        <span className="mx-1 h-4 w-px shrink-0 bg-border" />
-        <DropdownMenu><DropdownMenuTrigger asChild><DbToolButton icon="columns" label="显示列" /></DropdownMenuTrigger>
-          <DropdownMenuContent className="max-h-80 overflow-auto">{tab.result?.columns.map((col) => <DropdownMenuCheckboxItem key={col.name} checked={!tab.hiddenColumns?.includes(col.name)}
-            onSelect={(e) => e.preventDefault()} onCheckedChange={(checked) => patchTab(tab.id, { hiddenColumns: checked ? (tab.hiddenColumns ?? []).filter((n) => n !== col.name) : [...(tab.hiddenColumns ?? []), col.name] })}>{col.name}</DropdownMenuCheckboxItem>)}</DropdownMenuContent>
-        </DropdownMenu>
         {modified > 0 && <span className="shrink-0 px-2 text-caption text-warning">{modified} 处修改</span>}
-        {busy && <span role="status" className="shrink-0 px-2 text-caption text-muted-foreground">{tab.isSaving ? "正在保存…" : "正在读取…"}</span>}
+        {busy && <span role="status" className="shrink-0 px-2 text-caption text-muted-foreground">{schemaSaving ? "正在更新表结构…" : tab.isSaving ? "正在保存…" : "正在读取…"}</span>}
         <div className="flex-1" />
-        <DbToolButton icon="structure" label="查看结构" disabled={!tab.tableInfo} onClick={() => setDetail("structure")} />
-        <DbToolButton icon="index" label="查看索引" disabled={!tab.tableInfo} onClick={() => setDetail("index")} />
-        <DbToolButton icon="ddl" label="查看 DDL" disabled={!tab.tableInfo?.ddl} onClick={() => setDetail("ddl")} />
+        <DbToolButton icon="structure" label="编辑表结构" disabled={!connection || tab.objectType === "view"} onClick={() => { if (tab.connectionId && tab.database && tab.tableName) void useDbStore.getState().openTableStructure(tab.connectionId, tab.database, tab.tableName); }} />
+        <DbToolButton icon="ddl" label="查看 DDL" aria-pressed={ddlOpen} disabled={!tab.tableInfo?.ddl} onClick={() => setDdlOpen((open) => !open)} />
       </div>
+      <DdlPreviewPopover open={ddlOpen} title={`${tab.tableName ?? tab.title} · DDL`} sql={tab.tableInfo?.ddl} onClose={() => setDdlOpen(false)} />
       {(tab.error || tab.metadataError) && <div role="alert" className="max-h-32 shrink-0 overflow-auto whitespace-pre-wrap break-words border-b border-border px-3 py-2 text-caption text-destructive">{[tab.metadataError, tab.error].filter(Boolean).join("\n")}</div>}
-      <DataGrid tab={tab} onBrowse={onBrowse} />
+      <DataGrid tab={tab} onBrowse={onBrowse} onRefresh={() => guard(() => { void useDbStore.getState().executeQuery(tab.id); })} />
       <div className="flex h-8 shrink-0 items-center gap-2 overflow-x-auto whitespace-nowrap border-t border-border px-2 text-caption text-muted-foreground" aria-label="数据库状态栏">
         <span className={connection ? "text-success" : "text-destructive"} aria-label={connection ? "已连接" : "已断开"}>●</span>
         <span className="max-w-48 truncate" title={`${connection?.config.name ?? "已断开"} / ${tab.database}`}>{connection?.config.name ?? "已断开"} · {tab.database}</span>
         <span className="mx-1 h-4 w-px bg-border" />
-        <DbToolButton icon="code" label="查看 SQL" className="h-6 w-7" onClick={() => setDetail("sql")} />
+        <DbToolButton icon="code" label="查看 SQL" className="h-6 w-7" onClick={() => setSqlOpen(true)} />
         {readOnly && <span title="视图或没有可靠主键的数据表只读">只读</span>}
         <div className="flex-1" />
         <span>{tab.result?.rows.length ?? 0} 行 · {tab.result?.execution_time_ms ?? 0} ms</span>
@@ -69,19 +66,17 @@ export function TableBrowser({ tab }: { tab: QueryTab }) {
         <DbToolButton icon="chevronRight" label="下一页" className="h-6 w-6" disabled={busy || !tab.hasMore} onClick={() => onBrowse({ page: browse.page + 1 })} />
       </div>
     </div>
-    <Dialog open={detail !== null} onOpenChange={(open) => !open && setDetail(null)}>
+    <Dialog open={sqlOpen} onOpenChange={setSqlOpen}>
       <DialogContent className="max-w-3xl">
-        <DialogHeader><DialogTitle>{detail === "structure" ? "表结构" : detail === "index" ? "索引" : detail === "ddl" ? "DDL" : "当前浏览 SQL"}</DialogTitle>
+        <DialogHeader><DialogTitle>当前浏览 SQL</DialogTitle>
           <DialogDescription>{connection?.config.name} / {tab.database} / {tab.tableName}</DialogDescription></DialogHeader>
         <div className="max-h-96 overflow-auto text-caption">
-          {detail === "structure" ? <table className="w-full text-left"><thead><tr>{["字段", "类型", "主键", "可空", "默认值"].map((label) => <th key={label} className="border-b border-border p-2">{label}</th>)}</tr></thead><tbody>{tab.tableInfo?.columns.map((col) => <tr key={col.name}>{[col.name, col.data_type, col.is_primary_key ? "是" : "—", col.nullable ? "是" : "否", col.default_value ?? "—"].map((value, i) => <td key={i} className="border-b border-border/40 p-2">{value}</td>)}</tr>)}</tbody></table>
-            : detail === "index" ? <table className="w-full text-left"><thead><tr>{["名称", "字段", "类型", "唯一"].map((label) => <th key={label} className="border-b border-border p-2">{label}</th>)}</tr></thead><tbody>{tab.tableInfo?.indexes.map((index) => <tr key={index.name}>{[index.name, index.columns.join(", "), index.is_primary ? "PRIMARY" : index.index_type ?? "—", index.is_unique ? "是" : "否"].map((value, i) => <td key={i} className="border-b border-border/40 p-2">{value}</td>)}</tr>)}</tbody></table>
-            : <pre className="select-text whitespace-pre-wrap break-words font-mono">{detail === "ddl" ? tab.tableInfo?.ddl : tab.lastExecutedSql ?? tab.sql}</pre>}
+          <pre className="select-text whitespace-pre-wrap break-words font-mono">{tab.lastExecutedSql ?? tab.sql}</pre>
         </div>
-        <DialogFooter>{(detail === "ddl" || detail === "sql") && <Button variant="ghost" onClick={() => {
-          const sql = (detail === "ddl" ? tab.tableInfo?.ddl : tab.lastExecutedSql ?? tab.sql) ?? "";
-          const id = useDbStore.getState().addQueryTab(); patchTab(id, { sql, connectionId: tab.connectionId, database: tab.database }); setDetail(null);
-        }}>在查询中打开</Button>}<Button onClick={() => setDetail(null)}>关闭</Button></DialogFooter>
+        <DialogFooter><Button variant="ghost" onClick={() => {
+          const sql = tab.lastExecutedSql ?? tab.sql;
+          const id = useDbStore.getState().addQueryTab(); patchTab(id, { sql, connectionId: tab.connectionId, database: tab.database }); setSqlOpen(false);
+        }}>在查询中打开</Button><Button onClick={() => setSqlOpen(false)}>关闭</Button></DialogFooter>
       </DialogContent>
     </Dialog>
     <AlertDialog open={!!pending} onOpenChange={(open) => !open && setPending(null)}>

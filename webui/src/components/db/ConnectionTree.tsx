@@ -10,10 +10,8 @@ import {
   GitBranch,
   FileText,
   Sliders,
-  CalendarClock,
   Pencil,
   Trash2,
-  Eraser,
   Loader2,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
@@ -21,22 +19,6 @@ import { Input } from "@/components/ui/input";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Separator } from "@/components/ui/separator";
 import { StatusNotice } from "@/components/ui/status-notice";
-import {
-  AlertDialog,
-  AlertDialogAction,
-  AlertDialogCancel,
-  AlertDialogContent,
-  AlertDialogFooter,
-  AlertDialogHeader,
-  AlertDialogTitle,
-} from "@/components/ui/alert-dialog";
-import {
-  Dialog,
-  DialogContent,
-  DialogHeader,
-  DialogTitle,
-  DialogFooter,
-} from "@/components/ui/dialog";
 import {
   ContextMenu,
   ContextMenuContent,
@@ -48,7 +30,12 @@ import { cn } from "@/lib/utils";
 import { useDbStore } from "./store/dbStore";
 import type { DatabaseObject } from "./types";
 import { DbIcon } from "./DbIcon";
-import { quoteIdentifier } from "./table-sql";
+import { DatabaseContextMenu } from "./DatabaseContextMenu";
+import { DatabaseSettingsDialog } from "./DatabaseSettingsDialog";
+import { DatabaseActionIcon } from "./DatabaseActionIcon";
+import { RoutineContextMenu } from "./RoutineContextMenu";
+import { TableFolderContextMenu } from "./TableFolderContextMenu";
+import { TableContextMenu } from "./TableContextMenu";
 
 type DbObjectKind = "table" | "view";
 type OpenDatabaseAction = (
@@ -103,8 +90,14 @@ export function ConnectionTree() {
   const queryTabs = useDbStore((s) => s.queryTabs);
   const activeTabId = useDbStore((s) => s.activeTabId);
   const [searchQuery, setSearchQuery] = useState("");
+  const [searchOpen, setSearchOpen] = useState(false);
+  const [createDatabaseConnectionId, setCreateDatabaseConnectionId] = useState<string | null>(null);
 
   const isConnected = (id: string) => activeConnections.some((c) => c.id === id);
+  const closeSearch = () => {
+    setSearchOpen(false);
+    setSearchQuery("");
+  };
   const activeTab = queryTabs.find((tab) => tab.id === activeTabId) as
     | (QueryTabObject & { connectionId?: string | null; database?: string | null })
     | undefined;
@@ -119,6 +112,8 @@ export function ConnectionTree() {
     selectedConnectionId && selectedDatabase && currentObjectName && currentObjectKind
       ? `${selectedConnectionId}:${selectedDatabase}:${currentObjectKind}:${currentObjectName}`
       : null;
+  const [highlightedObjectKey, setHighlightedObjectKey] = useState(currentObjectKey);
+  useEffect(() => setHighlightedObjectKey(currentObjectKey), [currentObjectKey]);
 
   const openObjectList = (connectionId: string, database: string, objectType?: DbObjectKind) => {
     setSelectedConnectionId(connectionId);
@@ -133,6 +128,8 @@ export function ConnectionTree() {
     objectType: DbObjectKind,
     pinned = false,
   ) => {
+    setHighlightedObjectKey(`${connectionId}:${database}:${objectType}:${tableName}`);
+    if (!pinned) return;
     setSelectedConnectionId(connectionId);
     setSelectedDatabase(database);
     void selectTable(connectionId, database, tableName, pinned, objectType).catch(() => undefined);
@@ -144,10 +141,7 @@ export function ConnectionTree() {
     objectName: string,
     objectType: DbObjectKind,
   ) =>
-    selectedConnectionId === connectionId &&
-    selectedDatabase === database &&
-    currentObjectName === objectName &&
-    (!currentObjectKind || currentObjectKind === objectType);
+    highlightedObjectKey === `${connectionId}:${database}:${objectType}:${objectName}`;
 
   const visibleConnections = useMemo(
     () =>
@@ -162,12 +156,22 @@ export function ConnectionTree() {
   );
 
   return (
-    <div className="flex h-full flex-col bg-card text-foreground">
+    <div className="relative flex h-full flex-col bg-card text-foreground">
       <div className="flex items-center justify-between border-b border-sidebar-border px-3 py-2">
         <span className="text-caption font-semibold uppercase tracking-wider text-muted-foreground">
           连接
         </span>
         <div className="flex gap-1">
+          <Button
+            variant="ghost"
+            size="icon"
+            className="h-6 w-6"
+            aria-label="搜索连接或表"
+            aria-pressed={searchOpen}
+            onClick={() => setSearchOpen(true)}
+          >
+            <DbIcon name="search" className="h-3.5 w-3.5" />
+          </Button>
           <Button
             variant="ghost"
             size="icon"
@@ -179,31 +183,23 @@ export function ConnectionTree() {
           </Button>
         </div>
       </div>
-      <div className="relative px-2 py-2">
-        <DbIcon
-          name="search"
-          className="pointer-events-none absolute left-4 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-muted-foreground"
-        />
-        <Input
-          aria-label="搜索连接或表"
-          className="h-8 pl-8 pr-8 text-ui"
-          onChange={(event) => setSearchQuery(event.target.value)}
-          placeholder="搜索连接或表"
-          value={searchQuery}
-        />
-        {searchQuery && (
-          <Button
-            variant="ghost"
-            size="icon"
-            type="button"
-            aria-label="清除搜索"
-            className="absolute right-3 top-1/2 flex h-6 w-6 -translate-y-1/2 items-center justify-center rounded text-muted-foreground hover:text-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
-            onClick={() => setSearchQuery("")}
-          >
-            <DbIcon name="close" className="h-3.5 w-3.5" />
-          </Button>
-        )}
-      </div>
+      {searchOpen && (
+        <div className="absolute left-2 right-2 top-11 z-30 rounded-md border border-border bg-popover p-1 shadow-float">
+          <div className="relative">
+            <DbIcon name="search" className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
+            <Input
+              autoFocus
+              aria-label="搜索连接或表"
+              className="h-9 pl-9 pr-2 text-ui"
+              onBlur={() => window.setTimeout(closeSearch, 0)}
+              onChange={(event) => setSearchQuery(event.target.value)}
+              onKeyDown={(event) => { if (event.key === "Escape") closeSearch(); }}
+              placeholder="搜索连接或表"
+              value={searchQuery}
+            />
+          </div>
+        </div>
+      )}
       {connectError && (
         <StatusNotice
           tone="danger"
@@ -248,7 +244,16 @@ export function ConnectionTree() {
                           connecting ? (
                             <Loader2 className="h-3.5 w-3.5 animate-spin text-muted-foreground" />
                           ) : (
-                            <DbIcon name="connection" className="h-3.5 w-3.5" />
+                            <DbIcon
+                              name={
+                                config.db_type === "mysql"
+                                  ? "mysql"
+                                  : config.db_type === "sqlite"
+                                    ? "sqlite"
+                                    : "connection"
+                              }
+                              className="h-5 w-5"
+                            />
                           )
                         }
                         label={config.name}
@@ -327,6 +332,9 @@ export function ConnectionTree() {
                   <ContextMenuContent className="w-48">
                     {connected ? (
                       <>
+                        {config.db_type === "mysql" && <ContextMenuItem onSelect={() => setCreateDatabaseConnectionId(config.id)}>
+                          <DatabaseActionIcon action="create" className="mr-2" />新建数据库
+                        </ContextMenuItem>}
                         <ContextMenuItem onClick={() => refreshTree(config.id)}>
                           <DbIcon name="refresh" className="mr-2 h-3.5 w-3.5" />
                           刷新
@@ -384,6 +392,8 @@ export function ConnectionTree() {
           )}
         </div>
       </ScrollArea>
+      {createDatabaseConnectionId && <DatabaseSettingsDialog connectionId={createDatabaseConnectionId}
+        onClose={() => setCreateDatabaseConnectionId(null)} onSaved={() => { void refreshTree(createDatabaseConnectionId); }} />}
     </div>
   );
 }
@@ -417,98 +427,30 @@ function DatabaseNode({
   autoExpandKey: string | null;
   currentObjectKind?: DbObjectKind;
 }) {
-  const addQueryTab = useDbStore((s) => s.addQueryTab);
-  const setSelectedConnectionId = useDbStore((s) => s.setSelectedConnectionId);
-  const setSelectedDatabase = useDbStore((s) => s.setSelectedDatabase);
-  const activeConnections = useDbStore((s) => s.activeConnections);
-  const refreshTree = useDbStore((s) => s.refreshTree);
-  const [dropOpen, setDropOpen] = useState(false);
-  const [dropLoading, setDropLoading] = useState(false);
-  const [dropError, setDropError] = useState<string | null>(null);
-  const [createTableOpen, setCreateTableOpen] = useState(false);
-  const [createTableName, setCreateTableName] = useState("");
-  const [createTableLoading, setCreateTableLoading] = useState(false);
-  const [createTableError, setCreateTableError] = useState<string | null>(null);
-
-  const handleNewQuery = () => {
-    setSelectedConnectionId(connectionId);
-    setSelectedDatabase(node.name);
-    addQueryTab(connectionId, node.name);
-  };
-
-  const handleDropDatabase = async () => {
-    setDropLoading(true);
-    setDropError(null);
-    try {
-      const ipc = await import("./ipc");
-      await ipc.dbExecuteQuery(connectionId, `DROP DATABASE \`${node.name}\``);
-      setDropOpen(false);
-      refreshTree(connectionId);
-    } catch (e) {
-      setDropError(String(e));
-    } finally {
-      setDropLoading(false);
-    }
-  };
-
-  const handleCreateTable = async () => {
-    if (!createTableName.trim()) return;
-    setCreateTableLoading(true);
-    setCreateTableError(null);
-    try {
-      const ipc = await import("./ipc");
-      const sqlite =
-        activeConnections.find((connection) => connection.id === connectionId)?.config.db_type ===
-        "sqlite";
-      const tableTarget = sqlite
-        ? quoteIdentifier(createTableName.trim(), true)
-        : `${quoteIdentifier(node.name, false)}.${quoteIdentifier(createTableName.trim(), false)}`;
-      const idDefinition = sqlite ? "INTEGER PRIMARY KEY AUTOINCREMENT" : "INT AUTO_INCREMENT PRIMARY KEY";
-      const sql = `CREATE TABLE ${tableTarget} (\n  id ${idDefinition}\n)`;
-      await ipc.dbExecuteQuery(connectionId, sql, undefined, node.name);
-      setCreateTableOpen(false);
-      setCreateTableName("");
-      refreshTree(connectionId);
-    } catch (e) {
-      setCreateTableError(String(e));
-    } finally {
-      setCreateTableLoading(false);
-    }
-  };
-
-  const handleCopyName = () => {
-    navigator.clipboard.writeText(node.name).catch(() => {});
-  };
-
   return (
-    <>
-      <ContextMenu>
-        <ContextMenuTrigger asChild>
-          <div>
             <TreeItem
-              icon={<DbIcon name="database" className="h-3.5 w-3.5" />}
+              icon={<DbIcon name="database" className="h-5 w-5" />}
               label={node.name}
               defaultOpen={searchActive}
               forceOpen={searchActive}
               expandKey={autoExpandKey}
               onClick={() => onOpenDatabase(connectionId, node.name)}
+              rowWrapper={(row) => <DatabaseContextMenu connectionId={connectionId} database={node.name}>{row}</DatabaseContextMenu>}
             >
               {node.children.map((folder) => {
+                const isRoutineFolder = folder.name === "存储过程/函数";
+                const isQueryFolder = folder.name === "查询";
                 const objectType: DbObjectKind | undefined =
                   folder.name === "表" ? "table" : folder.name === "视图" ? "view" : undefined;
                 const folderIcon =
                   folder.name === "表" ? (
-                    <DbIcon name="table" className="h-3.5 w-3.5" />
+                    <DbIcon name="table" className="h-5 w-5" />
                   ) : folder.name === "视图" ? (
-                    <DbIcon name="view" className="h-3.5 w-3.5" />
-                  ) : folder.name === "存储过程" ? (
-                    <DbIcon name="procedure" className="h-3.5 w-3.5" />
-                  ) : folder.name === "索引" ? (
-                    <DbIcon name="index" className="h-3.5 w-3.5" />
-                  ) : folder.name === "触发器" ? (
-                    <GitBranch className="h-3.5 w-3.5" />
-                  ) : folder.name === "事件" ? (
-                    <CalendarClock className="h-3.5 w-3.5" />
+                    <DbIcon name="view" className="h-5 w-5" />
+                  ) : isQueryFolder ? (
+                    <DbIcon name="query" className="h-5 w-5" />
+                  ) : isRoutineFolder ? (
+                    <DbIcon name="procedure" className="h-5 w-5" />
                   ) : (
                     <FolderOpen className="h-3.5 w-3.5" />
                   );
@@ -518,7 +460,7 @@ function DatabaseNode({
                     key={folder.name}
                     icon={folderIcon}
                     label={folder.name}
-                    count={objectType ? folder.children.length : undefined}
+                    count={objectType || isQueryFolder || isRoutineFolder ? folder.children.length : undefined}
                     defaultOpen={searchActive || folder.name === "表"}
                     forceOpen={searchActive}
                     expandKey={
@@ -529,17 +471,42 @@ function DatabaseNode({
                         ? () => onOpenDatabase(connectionId, node.name, objectType)
                         : undefined
                     }
+                    rowWrapper={
+                      objectType === "table"
+                        ? (row) => <TableFolderContextMenu connectionId={connectionId} database={node.name}>{row}</TableFolderContextMenu>
+                        : isRoutineFolder
+                          ? (row) => <RoutineContextMenu connectionId={connectionId} database={node.name}>{row}</RoutineContextMenu>
+                          : undefined
+                    }
                   >
                     {folder.children.map((child) => {
                       const isTable = folder.name === "表";
                       const isView = folder.name === "视图";
+
+                      if (isQueryFolder && child.id) {
+                        return <TreeItem
+                          key={child.id}
+                          icon={<DbIcon name="query" className="h-4 w-4" />}
+                          label={child.name}
+                          onClick={() => useDbStore.getState().openSavedQuery(child.id!)}
+                        />;
+                      }
+
+                      if (isRoutineFolder && (child.object_type === "procedure" || child.object_type === "function")) {
+                        const routineType = child.object_type;
+                        return <TreeItem
+                          key={`${child.object_type}:${child.name}`}
+                          icon={<DbIcon name="procedure" className="h-4 w-4" />}
+                          label={child.name}
+                          rowWrapper={(row) => <RoutineContextMenu connectionId={connectionId} database={node.name} routine={{ name: child.name, type: routineType }}>{row}</RoutineContextMenu>}
+                        />;
+                      }
 
                       return (
                         <TableNode
                           key={child.name}
                           name={child.name}
                           dbName={node.name}
-                          isTable={isTable}
                           isView={isView}
                           connectionId={connectionId}
                           onSelect={(pinned = false) => {
@@ -568,116 +535,12 @@ function DatabaseNode({
                 );
               })}
             </TreeItem>
-          </div>
-        </ContextMenuTrigger>
-        <ContextMenuContent className="w-48">
-          <ContextMenuItem onClick={handleNewQuery}>
-            <DbIcon name="query" className="mr-2 h-3.5 w-3.5" />
-            新建查询
-          </ContextMenuItem>
-          <ContextMenuItem onClick={() => setCreateTableOpen(true)}>
-            <DbIcon name="add" className="mr-2 h-3.5 w-3.5" />
-            新建表
-          </ContextMenuItem>
-          <ContextMenuSeparator />
-          <ContextMenuItem onClick={handleCopyName}>
-            <DbIcon name="copy" className="mr-2 h-3.5 w-3.5" />
-            复制数据库名
-          </ContextMenuItem>
-          <ContextMenuSeparator />
-          <ContextMenuItem
-            className="text-destructive focus:text-destructive"
-            onClick={() => setDropOpen(true)}
-          >
-            <Trash2 className="mr-2 h-3.5 w-3.5" />
-            删除数据库
-          </ContextMenuItem>
-        </ContextMenuContent>
-      </ContextMenu>
-
-      <AlertDialog open={dropOpen} onOpenChange={setDropOpen}>
-        <AlertDialogContent>
-          <AlertDialogHeader>
-            <AlertDialogTitle>删除数据库</AlertDialogTitle>
-          </AlertDialogHeader>
-          <p className="text-body">
-            确定要删除数据库{" "}
-            <code className="rounded bg-muted px-1 py-0.5 text-caption">{node.name}</code>{" "}
-            吗？此操作不可撤销，所有数据将被永久删除。
-          </p>
-          {dropError && <p className="text-body text-destructive">{dropError}</p>}
-          <AlertDialogFooter>
-            <AlertDialogCancel disabled={dropLoading}>取消</AlertDialogCancel>
-            <AlertDialogAction
-              disabled={dropLoading}
-              onClick={handleDropDatabase}
-              className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
-            >
-              {dropLoading ? "删除中..." : "删除"}
-            </AlertDialogAction>
-          </AlertDialogFooter>
-        </AlertDialogContent>
-      </AlertDialog>
-
-      <Dialog open={createTableOpen} onOpenChange={setCreateTableOpen}>
-        <DialogContent className="sm:max-w-[400px]">
-          <DialogHeader>
-            <DialogTitle>新建表</DialogTitle>
-          </DialogHeader>
-          <div className="space-y-3">
-            <div>
-              <label className="mb-1 block text-caption font-medium text-muted-foreground">
-                数据库
-              </label>
-              <span className="text-caption">{node.name}</span>
-            </div>
-            <div>
-              <label className="mb-1 block text-caption font-medium text-muted-foreground">
-                表名
-              </label>
-              <Input
-                value={createTableName}
-                onChange={(e) => setCreateTableName(e.target.value)}
-                className="h-8 text-caption"
-                placeholder="table_name"
-                onKeyDown={(e) => {
-                  if (e.key === "Enter") handleCreateTable();
-                }}
-              />
-            </div>
-            <p className="text-micro text-muted-foreground">
-              将创建包含自增 id 主键的基础表，后续可通过 SQL 修改结构。
-            </p>
-            {createTableError && (
-              <p className="text-body text-destructive">{createTableError}</p>
-            )}
-          </div>
-          <DialogFooter>
-            <Button
-              variant="ghost"
-              size="sm"
-              onClick={() => setCreateTableOpen(false)}
-            >
-              取消
-            </Button>
-            <Button
-              size="sm"
-              disabled={!createTableName.trim() || createTableLoading}
-              onClick={handleCreateTable}
-            >
-              {createTableLoading ? "创建中..." : "创建"}
-            </Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
-    </>
   );
 }
 
 function TableNode({
   name,
   dbName,
-  isTable,
   isView,
   connectionId,
   onSelect,
@@ -685,226 +548,26 @@ function TableNode({
 }: {
   name: string;
   dbName: string;
-  isTable: boolean;
   isView: boolean;
   connectionId: string;
   onSelect: (pinned?: boolean) => void;
   selected: boolean;
 }) {
-  const addQueryTab = useDbStore((s) => s.addQueryTab);
-  const setSelectedConnectionId = useDbStore((s) => s.setSelectedConnectionId);
-  const setSelectedDatabase = useDbStore((s) => s.setSelectedDatabase);
-  const updateTabSql = useDbStore((s) => s.updateTabSql);
   const refreshTree = useDbStore((s) => s.refreshTree);
-  const [dropOpen, setDropOpen] = useState(false);
-  const [truncateOpen, setTruncateOpen] = useState(false);
-  const [actionLoading, setActionLoading] = useState(false);
-  const [actionError, setActionError] = useState<string | null>(null);
-
-  const handleSelectData = () => {
-    setSelectedConnectionId(connectionId);
-    setSelectedDatabase(dbName);
-    onSelect(false);
-  };
-
-  const handleNewQuery = () => {
-    setSelectedConnectionId(connectionId);
-    setSelectedDatabase(dbName);
-    const tabId = addQueryTab(connectionId, dbName);
-    updateTabSql(tabId, `SELECT * FROM \`${dbName}\`.\`${name}\` LIMIT 100`);
-  };
-
-  const handleGenerateSelect = () => {
-    setSelectedConnectionId(connectionId);
-    setSelectedDatabase(dbName);
-    const tabId = addQueryTab(connectionId, dbName);
-    updateTabSql(tabId, `SELECT * FROM \`${dbName}\`.\`${name}\``);
-  };
-
-  const handleGenerateInsert = () => {
-    setSelectedConnectionId(connectionId);
-    setSelectedDatabase(dbName);
-    const tabId = addQueryTab(connectionId, dbName);
-    updateTabSql(tabId, `INSERT INTO \`${dbName}\`.\`${name}\`\n  ()\nVALUES\n  ();`);
-  };
-
-  const handleGenerateUpdate = () => {
-    setSelectedConnectionId(connectionId);
-    setSelectedDatabase(dbName);
-    const tabId = addQueryTab(connectionId, dbName);
-    updateTabSql(tabId, `UPDATE \`${dbName}\`.\`${name}\`\nSET\n  column = value\nWHERE ;`);
-  };
-
-  const handleGenerateDelete = () => {
-    setSelectedConnectionId(connectionId);
-    setSelectedDatabase(dbName);
-    const tabId = addQueryTab(connectionId, dbName);
-    updateTabSql(tabId, `DELETE FROM \`${dbName}\`.\`${name}\`\nWHERE ;`);
-  };
-
-  const handleShowDDL = () => {
-    setSelectedConnectionId(connectionId);
-    setSelectedDatabase(dbName);
-    const tabId = addQueryTab(connectionId, dbName);
-    updateTabSql(tabId, `SHOW CREATE TABLE \`${dbName}\`.\`${name}\`;`);
-  };
-
-  const handleDropTable = async () => {
-    setActionLoading(true);
-    setActionError(null);
-    try {
-      const ipc = await import("./ipc");
-      const sql = isTable
-        ? `DROP TABLE \`${dbName}\`.\`${name}\``
-        : `DROP VIEW \`${dbName}\`.\`${name}\``;
-      await ipc.dbExecuteQuery(connectionId, sql, undefined, dbName);
-      setDropOpen(false);
-      refreshTree(connectionId);
-    } catch (e) {
-      setActionError(String(e));
-    } finally {
-      setActionLoading(false);
-    }
-  };
-
-  const handleTruncateTable = async () => {
-    setActionLoading(true);
-    setActionError(null);
-    try {
-      const ipc = await import("./ipc");
-      await ipc.dbExecuteQuery(
-        connectionId,
-        `TRUNCATE TABLE \`${dbName}\`.\`${name}\``,
-        undefined,
-        dbName,
-      );
-      setTruncateOpen(false);
-    } catch (e) {
-      setActionError(String(e));
-    } finally {
-      setActionLoading(false);
-    }
-  };
-
   return (
-    <>
-      <ContextMenu>
-        <ContextMenuTrigger asChild>
-          <div>
-            <TreeItem
-              icon={<DbIcon name={isView ? "view" : "table"} className="h-3 w-3" />}
-              label={name}
-              selected={selected}
-              onClick={() => onSelect(false)}
-              onDoubleClick={() => onSelect(true)}
-            />
-          </div>
-        </ContextMenuTrigger>
-        <ContextMenuContent className="w-48">
-          <ContextMenuItem onClick={handleSelectData}>
-            <DbIcon name={isView ? "view" : "table"} className="mr-2 h-3.5 w-3.5" />
-            查看数据
-          </ContextMenuItem>
-          <ContextMenuItem onClick={handleNewQuery}>
-            <DbIcon name="query" className="mr-2 h-3.5 w-3.5" />
-            新建查询
-          </ContextMenuItem>
-          <ContextMenuItem onClick={handleShowDDL}>
-            <DbIcon name="ddl" className="mr-2 h-3.5 w-3.5" />
-            查看 DDL
-          </ContextMenuItem>
-          <ContextMenuSeparator />
-          <ContextMenuItem onClick={handleGenerateSelect}>
-            <DbIcon name="copy" className="mr-2 h-3.5 w-3.5" />
-            生成 SELECT
-          </ContextMenuItem>
-          {isTable && (
-            <>
-              <ContextMenuItem onClick={handleGenerateInsert}>
-                <DbIcon name="add" className="mr-2 h-3.5 w-3.5" />
-                生成 INSERT
-              </ContextMenuItem>
-              <ContextMenuItem onClick={handleGenerateUpdate}>
-                <Pencil className="mr-2 h-3.5 w-3.5" />
-                生成 UPDATE
-              </ContextMenuItem>
-              <ContextMenuItem onClick={handleGenerateDelete}>
-                <Trash2 className="mr-2 h-3.5 w-3.5" />
-                生成 DELETE
-              </ContextMenuItem>
-              <ContextMenuSeparator />
-              <ContextMenuItem
-                className="text-warning focus:text-warning"
-                onClick={() => setTruncateOpen(true)}
-              >
-                <Eraser className="mr-2 h-3.5 w-3.5" />
-                清空表
-              </ContextMenuItem>
-            </>
-          )}
-          <ContextMenuSeparator />
-          <ContextMenuItem
-            className="text-destructive focus:text-destructive"
-            onClick={() => setDropOpen(true)}
-          >
-            <Trash2 className="mr-2 h-3.5 w-3.5" />
-            {isTable ? "删除表" : "删除视图"}
-          </ContextMenuItem>
-        </ContextMenuContent>
-      </ContextMenu>
-
-      <AlertDialog open={dropOpen} onOpenChange={setDropOpen}>
-        <AlertDialogContent>
-          <AlertDialogHeader>
-            <AlertDialogTitle>{isTable ? "删除表" : "删除视图"}</AlertDialogTitle>
-          </AlertDialogHeader>
-          <p className="text-body">
-            确定要删除{isTable ? "表" : "视图"}{" "}
-            <code className="rounded bg-muted px-1 py-0.5 text-caption">
-              {dbName}.{name}
-            </code>{" "}
-            吗？此操作不可撤销。
-          </p>
-          {actionError && <p className="text-body text-destructive">{actionError}</p>}
-          <AlertDialogFooter>
-            <AlertDialogCancel disabled={actionLoading}>取消</AlertDialogCancel>
-            <AlertDialogAction
-              disabled={actionLoading}
-              onClick={handleDropTable}
-              className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
-            >
-              {actionLoading ? "删除中..." : "删除"}
-            </AlertDialogAction>
-          </AlertDialogFooter>
-        </AlertDialogContent>
-      </AlertDialog>
-
-      <AlertDialog open={truncateOpen} onOpenChange={setTruncateOpen}>
-        <AlertDialogContent>
-          <AlertDialogHeader>
-            <AlertDialogTitle>清空表</AlertDialogTitle>
-          </AlertDialogHeader>
-          <p className="text-body">
-            确定要清空表{" "}
-            <code className="rounded bg-muted px-1 py-0.5 text-caption">
-              {dbName}.{name}
-            </code>{" "}
-            的所有数据吗？此操作不可撤销。
-          </p>
-          {actionError && <p className="text-body text-destructive">{actionError}</p>}
-          <AlertDialogFooter>
-            <AlertDialogCancel disabled={actionLoading}>取消</AlertDialogCancel>
-            <AlertDialogAction
-              disabled={actionLoading}
-              onClick={handleTruncateTable}
-              className="border border-warning/40 bg-warning/10 text-warning hover:bg-warning/20"
-            >
-              {actionLoading ? "清空中..." : "清空"}
-            </AlertDialogAction>
-          </AlertDialogFooter>
-        </AlertDialogContent>
-      </AlertDialog>
-    </>
+    <TableContextMenu connectionId={connectionId} database={dbName} table={name}
+      objectType={isView ? "view" : "table"} onOpen={() => onSelect(true)}
+      onRefresh={() => { void refreshTree(connectionId); }}>
+      <div>
+        <TreeItem
+          icon={<DbIcon name={isView ? "view" : "table"} className="h-5 w-5" />}
+          label={name}
+          selected={selected}
+          onClick={() => onSelect(false)}
+          onDoubleClick={() => onSelect(true)}
+        />
+      </div>
+    </TableContextMenu>
   );
 }
 
@@ -985,6 +648,7 @@ function TreeItem({
   onDoubleClick,
   selected = false,
   actions,
+  rowWrapper,
   children,
 }: {
   icon: React.ReactNode;
@@ -1000,6 +664,7 @@ function TreeItem({
   onDoubleClick?: () => void;
   selected?: boolean;
   actions?: { icon: React.ReactNode; label?: string; onClick: () => void }[];
+  rowWrapper?: (row: React.ReactElement) => React.ReactNode;
   children?: React.ReactNode;
 }) {
   const [open, setOpen] = useState(defaultOpen);
@@ -1013,12 +678,10 @@ function TreeItem({
     if (expandKey) setOpen(true);
   }, [expandKey]);
 
-  return (
-    <div>
+  const row = (
       <div
         className={cn(
-          "group relative flex cursor-pointer items-center gap-1.5 px-3 py-1 hover:bg-accent",
-          !hasChildren && "pl-5",
+          "group relative flex min-h-8 cursor-pointer items-center gap-2 px-3 py-1 hover:bg-accent data-[state=open]:bg-accent",
           selected && "border-l-2 border-info bg-foreground/5",
         )}
         onClick={() => {
@@ -1047,33 +710,13 @@ function TreeItem({
             />
           </Button>
         )}
+        {!hasChildren && !badge && (
+          <span aria-hidden="true" data-tree-leaf-indent className="h-3 w-3 shrink-0" />
+        )}
         <span className="shrink-0">{icon}</span>
-        <span className={cn("min-w-0 flex-1 truncate text-ui", selected && "font-medium")}>{label}</span>
-        {count !== undefined && (
-          <span className="shrink-0 text-micro tabular-nums text-muted-foreground">{count}</span>
-        )}
-        {actions && (
-          <div className="pointer-events-none absolute right-1 top-1/2 flex -translate-y-1/2 gap-0.5 rounded bg-card/95 px-0.5 opacity-0 transition-opacity group-focus-within:opacity-100 group-hover:opacity-100">
-            {actions.map((action, i) => (
-              <Button
-                key={i}
-                type="button"
-                variant="ghost"
-                size="icon"
-                aria-label={action.label}
-                className="pointer-events-auto h-5 w-5 text-muted-foreground hover:text-foreground"
-                onClick={(e) => {
-                  e.stopPropagation();
-                  action.onClick();
-                }}
-              >
-                {action.icon}
-              </Button>
-            ))}
-          </div>
-        )}
-        {badge && (
-          badgeDot ? (
+        {badgeDot ? (
+          <>
+            <span className={cn("max-w-48 truncate text-ui", selected && "font-medium")}>{label}</span>
             <span
               className={cn(
                 "h-1.5 w-1.5 shrink-0 rounded-full",
@@ -1087,7 +730,35 @@ function TreeItem({
             >
               <span className="sr-only">{badge}</span>
             </span>
-          ) : (
+            <span className="min-w-0 flex-1" />
+          </>
+        ) : (
+          <span className={cn("min-w-0 flex-1 truncate text-ui", selected && "font-medium")}>{label}</span>
+        )}
+        {count !== undefined && (
+          <span className="shrink-0 text-micro tabular-nums text-muted-foreground">{count}</span>
+        )}
+        {actions && (
+          <div className="pointer-events-none absolute right-1 top-1/2 flex -translate-y-1/2 gap-0 opacity-0 transition-opacity group-focus-within:opacity-100 group-hover:opacity-100">
+            {actions.map((action, i) => (
+              <Button
+                key={i}
+                type="button"
+                variant="ghost"
+                size="icon"
+                aria-label={action.label}
+                className="pointer-events-auto h-5 w-5 rounded-none p-0 text-muted-foreground hover:bg-transparent hover:text-foreground active:bg-transparent"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  action.onClick();
+                }}
+              >
+                {action.icon}
+              </Button>
+            ))}
+          </div>
+        )}
+        {badge && !badgeDot && (
             <span
               className={cn(
                 "shrink-0 rounded-full px-1.5 py-0.5 text-caption font-normal",
@@ -1100,9 +771,13 @@ function TreeItem({
             >
               {badge}
             </span>
-          )
         )}
       </div>
+  );
+
+  return (
+    <div>
+      {rowWrapper ? rowWrapper(row) : row}
       {hasChildren && open && <div className="pl-3">{children}</div>}
     </div>
   );

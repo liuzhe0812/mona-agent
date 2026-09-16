@@ -1,4 +1,5 @@
 import { DEFAULT_MARKER, NULL_MARKER, type CellValue, type QueryTab, type TableBrowse } from "./types";
+import { hasStructureChanges } from "./structure-edit";
 
 export const DEFAULT_BROWSE: TableBrowse = { page: 0, pageSize: 100, filters: [], sort: null };
 
@@ -63,7 +64,7 @@ export function buildBrowseSql(tab: QueryTab, sqlite: boolean): string {
 }
 
 export function hasPendingEdits(tab: QueryTab): boolean {
-  return !!(tab.edits.length || tab.insertedRows.length || tab.deletedRows?.length);
+  return hasStructureChanges(tab) || !!(tab.edits.length || tab.insertedRows.length || tab.deletedRows?.length);
 }
 
 export function canEditTable(tab: QueryTab): boolean {

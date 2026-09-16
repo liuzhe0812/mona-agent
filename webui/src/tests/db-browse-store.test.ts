@@ -32,6 +32,7 @@ beforeEach(() => {
   vi.spyOn(ipc, "dbGetDatabases").mockResolvedValue(["main"]);
   vi.spyOn(ipc, "dbGetTables").mockResolvedValue([]);
   vi.spyOn(ipc, "dbGetViews").mockResolvedValue([]);
+  vi.spyOn(ipc, "dbGetRoutines").mockResolvedValue([]);
   useDbStore.setState({ activeConnections: [dbConnection], queryTabs: [], activeTabId: null, objectScope: null, selectedConnectionId: dbConnection.id, selectedDatabase: "main" });
 });
 afterEach(() => { database.close(); vi.restoreAllMocks(); });
@@ -97,6 +98,14 @@ describe("database table navigation and persistence", () => {
     expect(active().deletedRows).toEqual([0]);
     store().revertAllEdits(active().id);
     expect(active().deletedRows).toEqual([]);
+  });
+  it("clones an editable row while leaving its auto-increment key empty", () => {
+    const tab = dbTab();
+    useDbStore.setState({ queryTabs: [tab], activeTabId: tab.id, activeConnections: [dbConnection] });
+    expect(store().cloneRow(tab.id, 0)).toBe(true);
+    expect(active().insertedRows).toEqual([1]);
+    expect(active().result?.rows[1]).toEqual([{ type: "null" }, { type: "text", value: "Ada" }]);
+    expect(active().edits.map((edit) => [edit.rowIdx, edit.colIdx, edit.newValue])).toEqual([[1, 1, "Ada"]]);
   });
   it("retains failed inserts without retrying successfully submitted ones", async () => {
     await store().selectTable(dbConnection.id, "main", "users");

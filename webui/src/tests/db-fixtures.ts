@@ -11,7 +11,7 @@ export const dbTableInfo: TableInfo = {
   columns: [
     { name: "id", data_type: "INTEGER", nullable: false, default_value: null, is_primary_key: true, is_unique: true, is_auto_increment: true, extra: null, comment: null },
     { name: "name", data_type: "TEXT", nullable: true, default_value: null, is_primary_key: false, is_unique: true, is_auto_increment: false, extra: null, comment: null },
-  ], indexes: [], foreign_keys: [], ddl: "CREATE TABLE users (id INTEGER PRIMARY KEY, name TEXT UNIQUE)",
+  ], indexes: [], foreign_keys: [], triggers: [], comment: null, row_format: null, ddl: "CREATE TABLE users (id INTEGER PRIMARY KEY, name TEXT UNIQUE)",
 };
 export function dbTab(overrides: Partial<QueryTab> = {}): QueryTab {
   return {

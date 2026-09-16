@@ -9,6 +9,10 @@ import type {
   ProcessInfo,
   UserInfo,
   TableSummary,
+  StructureDraft,
+  StructureApplyResult,
+  DatabaseObjectType,
+  SavedQuery,
 } from "./types";
 
 async function invoke<T>(cmd: string, args?: Record<string, unknown>): Promise<T> {
@@ -67,12 +71,41 @@ export async function dbGetViews(
   return invoke<DatabaseObject[]>("db_get_views", { connectionId, database });
 }
 
+export async function dbGetRoutines(
+  connectionId: string,
+  database: string,
+): Promise<DatabaseObject[]> {
+  return invoke<DatabaseObject[]>("db_get_routines", { connectionId, database });
+}
+
+export async function dbGetRoutineDefinition(
+  connectionId: string,
+  database: string,
+  name: string,
+  routineType: Extract<DatabaseObjectType, "procedure" | "function">,
+): Promise<string> {
+  return invoke<string>("db_get_routine_definition", {
+    connectionId,
+    database,
+    name,
+    routineType,
+  });
+}
+
 export async function dbGetTableInfo(
   connectionId: string,
   database: string,
   table: string,
 ): Promise<TableInfo> {
   return invoke<TableInfo>("db_get_table_info", { connectionId, database, table });
+}
+
+export async function dbPreviewTableStructure(connectionId: string, database: string, table: string, draft: StructureDraft): Promise<string[]> {
+  return invoke<string[]>("db_preview_table_structure", { connectionId, database, table, draft });
+}
+
+export async function dbApplyTableStructure(connectionId: string, database: string, table: string, draft: StructureDraft): Promise<StructureApplyResult> {
+  return invoke<StructureApplyResult>("db_apply_table_structure", { connectionId, database, table, draft });
 }
 
 export async function dbGetServerStats(connectionId: string): Promise<ServerStats> {
@@ -103,6 +136,15 @@ export async function dbSaveConnections(
 export async function dbLoadConnections(): Promise<DbConnectionConfig[]> {
   return invoke<DbConnectionConfig[]>("db_load_connections");
 }
+
+export async function dbLoadSavedQueries(): Promise<SavedQuery[]> {
+  return invoke<SavedQuery[]>("db_load_saved_queries");
+}
+
+export async function dbSaveQuery(query: SavedQuery): Promise<void> {
+  return invoke("db_save_query", { query });
+}
+
 
 export async function dbBackupDatabase(
   connectionId: string,

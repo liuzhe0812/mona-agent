@@ -41,6 +41,7 @@ export type DatabaseObjectType =
   | "view"
   | "procedure"
   | "function"
+  | "query"
   | "index"
   | "trigger"
   | "event"
@@ -48,6 +49,7 @@ export type DatabaseObjectType =
   | "folder";
 
 export interface DatabaseObject {
+  id?: string;
   name: string;
   schema: string | null;
   object_type: DatabaseObjectType;
@@ -88,6 +90,93 @@ export interface ColumnDefinition {
   is_auto_increment: boolean;
   extra: string | null;
   comment: string | null;
+  charset?: string | null;
+  collation?: string | null;
+}
+
+export interface SavedQuery {
+  id: string;
+  name: string;
+  connection_id: string;
+  database: string;
+  sql: string;
+}
+
+export interface StructureColumn {
+  original_name: string | null;
+  name: string;
+  data_type: string;
+  charset?: string | null;
+  collation?: string | null;
+  nullable: boolean;
+  is_primary_key: boolean;
+  is_auto_increment: boolean;
+  default_mode: "keep" | "none" | "null" | "literal" | "expression";
+  default_value: string | null;
+  comment: string;
+}
+
+export interface StructureDraft {
+  originalColumns: ColumnDefinition[];
+  columns: StructureColumn[];
+  originalIndexes: IndexDefinition[];
+  indexes: StructureIndex[];
+  originalForeignKeys: ForeignKeyDefinition[];
+  foreignKeys: StructureForeignKey[];
+  originalTriggers: TriggerDefinition[];
+  triggers: StructureTrigger[];
+  originalAdvanced: TableAdvanced;
+  advanced: StructureAdvancedOption[];
+  section: "columns" | "indexes" | "foreign_keys" | "triggers" | "advanced";
+}
+
+export interface StructureIndex {
+  original_name: string | null;
+  name: string;
+  columns: string[];
+  is_unique: boolean;
+  index_type: "BTREE";
+  editable: boolean;
+}
+
+export interface StructureForeignKey {
+  original_name: string | null;
+  name: string;
+  columns: string[];
+  ref_table: string;
+  ref_columns: string[];
+  on_delete: "RESTRICT" | "CASCADE" | "SET NULL" | "NO ACTION";
+  on_update: "RESTRICT" | "CASCADE" | "SET NULL" | "NO ACTION";
+  editable: boolean;
+}
+
+export interface StructureTrigger {
+  original_name: string | null;
+  name: string;
+  timing: "BEFORE" | "AFTER";
+  event: "INSERT" | "UPDATE" | "DELETE";
+  statement: string;
+  editable: boolean;
+}
+
+export type StructureAdvancedKey = "engine" | "charset" | "collation" | "comment" | "row_format" | "auto_increment";
+export interface StructureAdvancedOption { key: StructureAdvancedKey; value: string; }
+export type StructureListSection = "columns" | "indexes" | "foreign_keys" | "triggers" | "advanced";
+export type StructureListItem = StructureColumn | StructureIndex | StructureForeignKey | StructureTrigger | StructureAdvancedOption;
+export interface TableAdvanced {
+  engine: string | null;
+  charset: string | null;
+  collation: string | null;
+  comment: string | null;
+  row_format: string | null;
+  auto_increment: number | null;
+}
+
+export interface StructureApplyResult {
+  table_info: TableInfo | null;
+  refresh_error: string | null;
+  execution_error: string | null;
+  applied_statements: number;
 }
 
 export interface IndexDefinition {
@@ -96,6 +185,7 @@ export interface IndexDefinition {
   is_unique: boolean;
   is_primary: boolean;
   index_type: string | null;
+  editable?: boolean;
 }
 
 export interface ForeignKeyDefinition {
@@ -105,6 +195,15 @@ export interface ForeignKeyDefinition {
   ref_columns: string[];
   on_delete: string | null;
   on_update: string | null;
+  editable?: boolean;
+}
+
+export interface TriggerDefinition {
+  name: string;
+  timing: string;
+  event: string;
+  statement: string;
+  editable: boolean;
 }
 
 export interface TableInfo {
@@ -122,6 +221,9 @@ export interface TableInfo {
   columns: ColumnDefinition[];
   indexes: IndexDefinition[];
   foreign_keys: ForeignKeyDefinition[];
+  triggers?: TriggerDefinition[];
+  comment?: string | null;
+  row_format?: string | null;
   ddl: string | null;
 }
 
@@ -165,6 +267,7 @@ export interface TableSummary {
   row_count: number | null;
   data_size: number | null;
   index_size: number | null;
+  auto_increment: number | null;
   engine: string | null;
   charset: string | null;
   create_time: string | null;
@@ -195,13 +298,15 @@ export const NULL_MARKER = "\u0000NULL";
 export const DEFAULT_MARKER = "\u0000DEFAULT";
 
 export interface QueryTab {
-  kind?: "table" | "query";
+  kind?: "table" | "query" | "structure";
+  structure?: StructureDraft;
   tableName?: string;
   objectType?: "table" | "view";
   preview?: boolean;
   browse?: TableBrowse;
   hasMore?: boolean;
   selectedRows?: number[];
+  rowHighlights?: Record<string, "warning" | "success" | "destructive">;
   deletedRows?: number[];
   isSaving?: boolean;
   isLoadingMetadata?: boolean;
@@ -220,6 +325,9 @@ export interface QueryTab {
   insertedRows: number[];
   tableInfo: TableInfo | null;
   agentChatId: string | null;
+  savedQueryId?: string;
+  savedSql?: string;
+  savedDatabase?: string;
 }
 
 /** AI SQL draft operation class — mirrors Rust DbSqlDraft.operation_class. */

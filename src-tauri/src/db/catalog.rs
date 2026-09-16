@@ -49,6 +49,7 @@ fn get_sqlite_table_summaries(
             row_count: None,
             data_size: None,
             index_size: None,
+            auto_increment: None,
             engine: None,
             charset: None,
             create_time: None,
@@ -68,9 +69,10 @@ async fn get_mysql_table_summaries(
             String,
             String,
             Option<String>,
-            Option<i64>,
-            Option<i64>,
-            Option<i64>,
+            Option<u64>,
+            Option<u64>,
+            Option<u64>,
+            Option<u64>,
             Option<String>,
             Option<String>,
             Option<String>,
@@ -78,7 +80,7 @@ async fn get_mysql_table_summaries(
         ),
     >(
         "SELECT TABLE_NAME, TABLE_TYPE, TABLE_COMMENT, TABLE_ROWS, DATA_LENGTH, \
-         INDEX_LENGTH, ENGINE, TABLE_COLLATION, CAST(CREATE_TIME AS CHAR), \
+         INDEX_LENGTH, AUTO_INCREMENT, ENGINE, TABLE_COLLATION, CAST(CREATE_TIME AS CHAR), \
          CAST(UPDATE_TIME AS CHAR) \
          FROM information_schema.TABLES \
          WHERE TABLE_SCHEMA = ? AND TABLE_TYPE IN ('BASE TABLE', 'VIEW') \
@@ -99,6 +101,7 @@ async fn get_mysql_table_summaries(
                 row_count,
                 data_size,
                 index_size,
+                auto_increment,
                 engine,
                 collation,
                 create_time,
@@ -114,6 +117,7 @@ async fn get_mysql_table_summaries(
                 row_count,
                 data_size,
                 index_size,
+                auto_increment,
                 engine,
                 charset: collation
                     .as_deref()
@@ -181,6 +185,7 @@ mod tests {
                 && summary.row_count.is_none()
                 && summary.data_size.is_none()
                 && summary.index_size.is_none()
+                && summary.auto_increment.is_none()
                 && summary.engine.is_none()
                 && summary.charset.is_none()
                 && summary.create_time.is_none()
@@ -191,6 +196,10 @@ mod tests {
             .await
             .expect("read sqlite databases");
         assert!(databases.iter().any(|database| database == "main"));
+        let table = super::super::manager::get_table_info_on_handle(&handle, "main", "users")
+            .await
+            .expect("read sqlite table metadata");
+        assert_eq!(table.row_count, Some(1_u64));
     }
 
     #[test]
@@ -202,6 +211,7 @@ mod tests {
             row_count: Some(1),
             data_size: Some(64),
             index_size: None,
+            auto_increment: Some(2),
             engine: Some("InnoDB".to_string()),
             charset: Some("utf8mb4".to_string()),
             create_time: Some("2026-09-12 10:00:00".to_string()),
@@ -216,11 +226,64 @@ mod tests {
                 "row_count": 1,
                 "data_size": 64,
                 "index_size": null,
+                "auto_increment": 2,
                 "engine": "InnoDB",
                 "charset": "utf8mb4",
                 "create_time": "2026-09-12 10:00:00",
                 "update_time": null
             })
         );
+    }
+
+    #[tokio::test]
+    async fn sqlite_export_includes_live_wal_data_and_preserves_existing_files() {
+        let directory = tempfile::tempdir().expect("temporary database directory");
+        let source = directory.path().join("source.db");
+        let output = directory.path().join("export.db");
+        let conn = SqliteConnection::open(&source).expect("open source database");
+        conn.execute_batch("PRAGMA journal_mode=WAL; PRAGMA wal_autocheckpoint=0; CREATE TABLE items (id INTEGER); INSERT INTO items VALUES (42);")
+            .expect("write live WAL data");
+        let (_, mut config) = sqlite_handle();
+        config.host = source.to_string_lossy().into_owned();
+        let handle = (DbHandle::Sqlite(Arc::new(std::sync::Mutex::new(conn))), config);
+        super::super::manager::backup_on_handle(&handle, "main", output.to_str().unwrap(), true, true)
+            .await.expect("export consistent SQLite snapshot");
+        let exported = SqliteConnection::open(&output).expect("open exported database");
+        let id: i64 = exported.query_row("SELECT id FROM items", [], |row| row.get(0)).expect("read exported WAL row");
+        assert_eq!(id, 42);
+        drop(exported);
+        assert!(super::super::manager::backup_on_handle(&handle, "main", source.to_str().unwrap(), true, true).await.is_err());
+        assert!(super::super::manager::backup_on_handle(&handle, "main", output.to_str().unwrap(), true, true).await.is_err());
+    }
+
+    #[test]
+    fn mysql_table_statistics_accept_unsigned_bigint_metadata() {
+        fn assert_unsigned<T: sqlx::Type<sqlx::MySql>>(_: &T) {
+            let unsigned_bigint = <u64 as sqlx::Type<sqlx::MySql>>::type_info();
+            assert!(T::compatible(&unsigned_bigint));
+        }
+
+        let summary = TableSummary {
+            name: "large_table".to_string(),
+            object_type: "table".to_string(),
+            comment: None,
+            row_count: Some(u64::MAX),
+            data_size: Some(u64::MAX),
+            index_size: Some(u64::MAX),
+            auto_increment: Some(u64::MAX),
+            engine: None,
+            charset: None,
+            create_time: None,
+            update_time: None,
+        };
+        assert_unsigned(&summary.row_count);
+        assert_unsigned(&summary.data_size);
+        assert_unsigned(&summary.index_size);
+        assert_unsigned(&summary.auto_increment);
+        let json = serde_json::to_value(summary).expect("serialize unsigned statistics");
+        assert_eq!(json["row_count"].as_u64(), Some(u64::MAX));
+        assert_eq!(json["data_size"].as_u64(), Some(u64::MAX));
+        assert_eq!(json["index_size"].as_u64(), Some(u64::MAX));
+        assert_eq!(json["auto_increment"].as_u64(), Some(u64::MAX));
     }
 }

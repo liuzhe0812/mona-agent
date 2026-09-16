@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from contextvars import ContextVar
 from typing import Any
 
 from loguru import logger
@@ -8,6 +9,16 @@ from mona.agent.tools.base import Tool, tool_parameters
 from mona.agent.tools.context import RequestContext
 from mona.agent.tools.schema import StringSchema, tool_parameters_schema
 from mona.agent.tools.terminal import _tauri_invoke_async
+
+_DB_REQUEST_CONTEXT: ContextVar[RequestContext | None] = ContextVar(
+    "db_request_context",
+    default=None,
+)
+
+
+def _db_metadata() -> dict[str, Any]:
+    ctx = _DB_REQUEST_CONTEXT.get()
+    return dict(ctx.metadata or {}) if ctx is not None else {}
 
 
 @tool_parameters(
@@ -26,15 +37,11 @@ class DbQueryTool(Tool):
     config_key = "db_query"
     _scopes = {"core"}
     subscription_required = True
-    _request_ctx: RequestContext | None = None
-    _connection_id: str | None = None
-    _database: str | None = None
-
     def set_context(self, ctx: RequestContext) -> None:
-        self._request_ctx = ctx
-        meta = ctx.metadata or {}
-        self._connection_id = meta.get("connection_id")
-        self._database = meta.get("database")
+        _DB_REQUEST_CONTEXT.set(ctx)
+
+    def available_in_context(self) -> bool:
+        return bool(_db_metadata().get("connection_id"))
 
     @property
     def name(self) -> str:
@@ -54,17 +61,19 @@ class DbQueryTool(Tool):
         return True
 
     async def execute(self, sql: str, database: str | None = None, **kwargs: Any) -> str:
-        if not self._connection_id:
+        metadata = _db_metadata()
+        connection_id = metadata.get("connection_id")
+        if not connection_id:
             return "Error: No database connection available. The user is not currently connected to a database."
 
-        effective_db = database or self._database
+        effective_db = database or metadata.get("database")
 
-        logger.debug("db_query: sql={!r} db={} conn={}", sql, effective_db, self._connection_id)
+        logger.debug("db_query: sql={!r} db={} conn={}", sql, effective_db, connection_id)
 
         result = await _tauri_invoke_async(
             "db_execute_ai_read",
             {
-                "connectionId": self._connection_id,
+                "connectionId": connection_id,
                 "sql": sql.strip(),
                 **({"database": effective_db} if effective_db else {}),
             },
@@ -91,13 +100,11 @@ class DbInspectTool(Tool):
     config_key = "db_inspect"
     _scopes = {"core"}
     subscription_required = True
-    _connection_id: str | None = None
-    _database: str | None = None
-
     def set_context(self, ctx: RequestContext) -> None:
-        meta = ctx.metadata or {}
-        self._connection_id = meta.get("connection_id")
-        self._database = meta.get("database")
+        _DB_REQUEST_CONTEXT.set(ctx)
+
+    def available_in_context(self) -> bool:
+        return bool(_db_metadata().get("connection_id"))
 
     @property
     def name(self) -> str:
@@ -125,15 +132,21 @@ class DbInspectTool(Tool):
         sql: str | None = None,
         **kwargs: Any,
     ) -> str:
-        if not self._connection_id:
+        metadata = _db_metadata()
+        connection_id = metadata.get("connection_id")
+        if not connection_id:
             return "Error: No database connection available."
 
         result = await _tauri_invoke_async(
             "db_ai_inspect",
             {
-                "connectionId": self._connection_id,
+                "connectionId": connection_id,
                 "action": action,
-                **({"database": database or self._database} if database or self._database else {}),
+                **(
+                    {"database": database or metadata.get("database")}
+                    if database or metadata.get("database")
+                    else {}
+                ),
                 **({"table": table} if table else {}),
                 **({"sql": sql} if sql else {}),
             },

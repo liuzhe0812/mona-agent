@@ -70,6 +70,8 @@ describe("ConnectionTree", () => {
   it("opens database and object scopes from labels while the arrow only expands", async () => {
     render(<ConnectionTree />);
 
+    expect(document.querySelector("[data-symbol='mysql-dolphin']")).toBeInTheDocument();
+
     const expandDatabase = screen.getByRole("button", { name: "展开analytics" });
     fireEvent.click(expandDatabase);
     expect(useDbStore.getState().openDatabase).not.toHaveBeenCalled();
@@ -81,14 +83,58 @@ describe("ConnectionTree", () => {
     expect(useDbStore.getState().openDatabase).toHaveBeenLastCalledWith("connection-1", "analytics", "table");
 
     fireEvent.click(screen.getByText("users"));
-    expect(useDbStore.getState().selectTable).toHaveBeenLastCalledWith("connection-1", "analytics", "users", false, "table");
+    expect(useDbStore.getState().selectTable).not.toHaveBeenCalled();
+    expect(screen.getByText("users")).toHaveClass("font-medium");
+    expect(screen.getByText("users").closest(".group")?.querySelector("[data-tree-leaf-indent]")).toBeInTheDocument();
     fireEvent.doubleClick(screen.getByText("users"));
     expect(useDbStore.getState().selectTable).toHaveBeenLastCalledWith("connection-1", "analytics", "users", true, "table");
+    expect(useDbStore.getState().selectTable).toHaveBeenCalledTimes(1);
+  });
+
+  it("keeps a table context menu scoped to the table row", () => {
+    render(<ConnectionTree />);
+    fireEvent.click(screen.getByRole("button", { name: "展开analytics" }));
+    const databaseRow = screen.getByText("analytics").closest(".group");
+    fireEvent.contextMenu(screen.getByText("users"));
+    expect(screen.getByRole("menuitem", { name: "打开表" })).toBeInTheDocument();
+    expect(screen.queryByRole("menuitem", { name: "新建数据库" })).not.toBeInTheDocument();
+    expect(databaseRow).not.toHaveAttribute("data-state", "open");
+  });
+
+  it("opens the table-folder menu from the table group row", () => {
+    render(<ConnectionTree />);
+    fireEvent.click(screen.getByRole("button", { name: "展开analytics" }));
+    fireEvent.contextMenu(screen.getByText("表"));
+    expect(screen.getByRole("menuitem", { name: "新建表" })).toBeInTheDocument();
+    expect(screen.getByRole("menuitem", { name: "复制全部表结构 SQL" })).toBeInTheDocument();
+    expect(screen.queryByRole("menuitem", { name: "编辑数据库" })).not.toBeInTheDocument();
+  });
+
+  it("renders a saved query under its database and reopens it", () => {
+    useDbStore.setState({
+      savedQueries: [{ id: "query-1", name: "每日统计", connection_id: config.id, database: "analytics", sql: "SELECT 1" }],
+      connectionTree: { [config.id]: [{
+        ...tree[0],
+        children: [...tree[0].children, {
+          name: "查询", schema: "analytics", object_type: "folder", children: [
+            { id: "query-1", name: "每日统计", schema: "analytics", object_type: "query", children: [] },
+          ],
+        }],
+      }] },
+    });
+    render(<ConnectionTree />);
+    fireEvent.click(screen.getByRole("button", { name: "展开analytics" }));
+    fireEvent.click(screen.getByText("查询"));
+    fireEvent.click(screen.getByText("每日统计"));
+    expect(useDbStore.getState().queryTabs[0]).toMatchObject({
+      title: "每日统计", sql: "SELECT 1", database: "analytics", savedQueryId: "query-1",
+    });
   });
 
   it("filters connections and nested objects while keeping ancestors visible", async () => {
     render(<ConnectionTree />);
 
+    fireEvent.click(screen.getByRole("button", { name: "搜索连接或表" }));
     fireEvent.change(screen.getByRole("textbox", { name: "搜索连接或表" }), {
       target: { value: "users" },
     });
@@ -98,6 +144,20 @@ describe("ConnectionTree", () => {
     expect(screen.getByText("analytics")).toBeInTheDocument();
     expect(screen.getByText("表")).toBeInTheDocument();
     expect(screen.queryByText("视图")).not.toBeInTheDocument();
+  });
+
+  it("closes and clears the floating search when it loses focus", async () => {
+    render(<ConnectionTree />);
+
+    fireEvent.click(screen.getByRole("button", { name: "搜索连接或表" }));
+    const input = screen.getByRole("textbox", { name: "搜索连接或表" });
+    expect(input).toHaveFocus();
+    fireEvent.change(input, { target: { value: "users" } });
+    expect(screen.getByText("users")).toBeInTheDocument();
+    fireEvent.blur(input);
+
+    await waitFor(() => expect(screen.queryByRole("textbox", { name: "搜索连接或表" })).not.toBeInTheDocument());
+    expect(screen.getByText("视图")).toBeInTheDocument();
   });
 
   it("opens the current table path once and respects a later manual collapse", async () => {

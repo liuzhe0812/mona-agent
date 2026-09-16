@@ -28,6 +28,8 @@ describe("DbIcon", () => {
       <>
         <DbIcon name="database" />
         <DbIcon name="connection" />
+        <DbIcon name="mysql" />
+        <DbIcon name="sqlite" />
         <DbIcon name="table" />
         <DbIcon name="view" />
         <DbIcon name="procedure" />
@@ -35,10 +37,25 @@ describe("DbIcon", () => {
       </>,
     );
 
-    expect(container.querySelector(".text-success")).toBeInTheDocument();
-    expect(container.querySelectorAll(".text-info")).toHaveLength(3);
-    expect(container.querySelector(".text-warning")).toBeInTheDocument();
+    expect(container.querySelectorAll("svg")[0].querySelector("ellipse[rx='7.25']")).toHaveAttribute("fill", "currentColor");
+    expect(container.querySelector("[fill*='db-table-icon']")).toBeInTheDocument();
+    expect(container.querySelector("[fill*='db-procedure-icon']")).toBeInTheDocument();
     expect(container.querySelector(".text-foreground")).toBeInTheDocument();
+  });
+
+  it("uses distinct driver symbols for MySQL and SQLite connections", () => {
+    const { container } = render(<><DbIcon name="mysql" /><DbIcon name="sqlite" /></>);
+    expect(container.querySelector("[data-symbol='mysql-dolphin'] rect")).toHaveAttribute("fill", "hsl(var(--info-strong))");
+    expect(container.querySelector("[data-symbol='mysql-dolphin'] path")).toHaveAttribute("fill", "hsl(var(--primary-foreground))");
+    expect(container.querySelector("[data-symbol='sqlite-database'] ellipse")).toBeInTheDocument();
+  });
+
+  it("uses a large filled three-layer database cylinder", () => {
+    const { container } = render(<DbIcon name="database" />);
+    const svg = container.querySelector("svg")!;
+    expect(svg.querySelector("ellipse[rx='7.25']")).toHaveAttribute("fill", "currentColor");
+    expect(svg.querySelectorAll("path")).toHaveLength(2);
+    expect(svg.querySelector("path[stroke*='background']")?.getAttribute("d")).toContain("M2.75 8.9");
   });
 
   it("uses the approved professional shapes for structure, index, columns, DDL, and sort", () => {

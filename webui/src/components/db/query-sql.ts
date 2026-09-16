@@ -1,6 +1,8 @@
 import { MySQL, SQLite } from "@codemirror/lang-sql";
 
 export function singleQueryStatement(source: string, sqlite: boolean): string {
+  const routine = sqlite ? null : mysqlRoutineStatement(source);
+  if (routine) return routine;
   const tree = (sqlite ? SQLite : MySQL).language.parser.parse(source);
   const statements: string[] = [];
   for (let node = tree.topNode.firstChild; node; node = node.nextSibling) {
@@ -16,4 +18,22 @@ export function singleQueryStatement(source: string, sqlite: boolean): string {
   }
   if (/^USE\b/i.test(sql)) throw new Error("请通过工具栏选择数据库，使执行目标与当前标签保持一致。");
   return sql;
+}
+
+function mysqlRoutineStatement(source: string): string | null {
+  let sql = source.trim();
+  const delimiter = sql.match(/^DELIMITER\s+(\S+)\s*(?:\r?\n|$)/i);
+  if (delimiter) {
+    sql = sql.slice(delimiter[0].length).trim();
+    const suffix = new RegExp(`${escapeRegExp(delimiter[1])}\\s*(?:\\r?\\n\\s*DELIMITER\\s+;)?\\s*$`, "i");
+    sql = sql.replace(suffix, "").trim();
+  }
+  const withoutComments = sql.replace(/^(?:\s*--[^\r\n]*(?:\r?\n|$)|\s*\/\*[\s\S]*?\*\/\s*)*/, "");
+  return /^CREATE\s+(?:DEFINER\s*=\s*\S+\s+)?(?:PROCEDURE|FUNCTION)\b/i.test(withoutComments)
+    ? sql.replace(/;\s*$/, "").trim()
+    : null;
+}
+
+function escapeRegExp(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }

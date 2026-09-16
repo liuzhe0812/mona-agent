@@ -3,7 +3,7 @@ import { Button } from "@/components/ui/button";
 import { TooltipProvider, Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { ResizableHandle, ResizablePanel, ResizablePanelGroup } from "@/components/ui/resizable";
 import { AlertDialog, AlertDialogContent, AlertDialogHeader, AlertDialogTitle, AlertDialogDescription, AlertDialogFooter, AlertDialogCancel, AlertDialogAction } from "@/components/ui/alert-dialog";
-import { RightSidebarToggleIcon } from "@/components/notes/RightSidebarToggleIcon";
+import { AgentLogo } from "@/components/AgentLogo";
 import { cn } from "@/lib/utils";
 import { useLicense } from "@/hooks/useLicense";
 import { ConnectionTree } from "./ConnectionTree";
@@ -20,11 +20,13 @@ import { EditConnectionDialog } from "./EditConnectionDialog";
 import { TableBrowser } from "./TableBrowser";
 import { TableListView } from "./TableListView";
 import { QueryWorkspace } from "./QueryWorkspace";
+import { TableStructureEditor } from "./TableStructureEditor";
 import { DbIcon } from "./DbIcon";
 import { DbToolButton } from "./DbToolButton";
 import { useDbStore } from "./store/dbStore";
 import { hasPendingEdits } from "./table-sql";
 import type { QueryTab } from "./types";
+import { getQueryDraft } from "./query-draft";
 
 export function DbClientView({ onOpenSubscribe }: { onOpenSubscribe?: () => void }) {
   const { licenseActive } = useLicense();
@@ -61,7 +63,12 @@ export function DbClientView({ onOpenSubscribe }: { onOpenSubscribe?: () => void
   }
   function requestClose(tab: QueryTab) {
     if (tab.isExecuting || tab.isSaving) return;
-    if (hasPendingEdits(tab) || (tab.kind !== "table" && tab.sql.trim())) setCloseTab(tab);
+    const sql = (tab.kind ?? "query") === "query" ? getQueryDraft(tab.id, tab.sql) : tab.sql;
+    if ((tab.kind ?? "query") === "query" && sql !== tab.sql) useDbStore.getState().updateTabSql(tab.id, sql);
+    const queryDirty = (tab.kind ?? "query") === "query" && (tab.savedQueryId
+      ? sql !== tab.savedSql || tab.database !== tab.savedDatabase
+      : Boolean(sql.trim()));
+    if (hasPendingEdits(tab) || queryDirty) setCloseTab({ ...tab, sql });
     else useDbStore.getState().removeQueryTab(tab.id);
   }
   const adminViews = { dashboard: DashboardView, users: UsersView, variables: VariablesView,
@@ -75,32 +82,32 @@ export function DbClientView({ onOpenSubscribe }: { onOpenSubscribe?: () => void
           <ConnectionTree />
         </ResizablePanel>
         <ResizableHandle />
-        <ResizablePanel id="db-content" minSize="400px">
+        <ResizablePanel id="db-content" minSize="400px" className="min-h-0 min-w-0 overflow-hidden">
           <div className="flex h-full min-h-0 min-w-0 flex-col">
-            <div className="flex h-9 shrink-0 items-center border-b border-border">
+            <div className="flex h-8 shrink-0 items-center border-b border-border">
               <div ref={tabBar} role="tablist" aria-label="数据库工作标签" className="flex min-w-0 flex-1 overflow-x-auto scrollbar-none">
                 <Button role="tab" aria-selected={currentView === "objects"} variant="ghost"
-                  className={cn("h-9 shrink-0 gap-2 rounded-none border-b-2 px-3 text-caption", currentView === "objects" ? "border-info bg-muted/20" : "border-transparent")}
+                  className={cn("h-8 shrink-0 gap-2 rounded-none border-b-2 px-3 text-caption", currentView === "objects" ? "border-info bg-muted/20" : "border-transparent")}
                   onClick={showList}><DbIcon name="table" className="h-4 w-4" />表清单</Button>
-                {tabs.map((tab) => <div key={tab.id} className={cn("group flex h-9 shrink-0 items-center border-b-2 border-r border-r-border", currentView === "table" && activeId === tab.id ? "border-b-info bg-muted/20" : "border-b-transparent")}>
+                {tabs.map((tab) => <div key={tab.id} className={cn("group relative flex h-8 shrink-0 items-center border-b-2 border-r border-r-border", currentView === "table" && activeId === tab.id ? "border-b-info bg-muted/20" : "border-b-transparent hover:bg-accent/50")}>
                   <Button role="tab" aria-selected={currentView === "table" && activeId === tab.id} variant="ghost" title={`${tab.connectionId ? useDbStore.getState().activeConnections.find((c) => c.id === tab.connectionId)?.config.name ?? "" : ""} / ${tab.database ?? ""} / ${tab.title}`}
-                    className={cn("h-8 gap-2 rounded-none px-3 text-caption font-normal", tab.preview && "italic")}
+                    className={cn("h-8 gap-2 rounded-none px-3 pr-8 text-caption font-normal hover:bg-transparent", tab.preview && "italic")}
                     onClick={() => useDbStore.getState().setActiveTab(tab.id)} onDoubleClick={() => useDbStore.getState().pinTab(tab.id)}>
-                    <DbIcon name={tab.kind === "table" ? tab.objectType === "view" ? "view" : "table" : "query"} className="h-4 w-4" />
+                    <DbIcon name={tab.kind === "structure" ? "structure" : tab.kind === "table" ? tab.objectType === "view" ? "view" : "table" : "query"} className="h-4 w-4" />
                     <span className="max-w-44 truncate">{tab.title}</span>
                     {hasPendingEdits(tab) && <span className="text-warning" aria-label="有未保存的修改">●</span>}
                   </Button>
-                  <DbToolButton icon="close" label={`关闭 ${tab.title}`} className="mr-1 h-6 w-6" disabled={tab.isExecuting || tab.isSaving} onClick={() => requestClose(tab)} />
+                  <DbToolButton icon="close" label={`关闭 ${tab.title}`} className="absolute right-1 top-1/2 z-10 h-6 w-6 -translate-y-1/2 rounded-sm bg-background/90 opacity-0 pointer-events-none shadow-none transition-opacity group-hover:pointer-events-auto group-hover:opacity-100 focus-visible:pointer-events-auto focus-visible:opacity-100" disabled={tab.isExecuting || tab.isSaving} onClick={() => requestClose(tab)} />
                 </div>)}
                 <DbToolButton icon="add" label="新建查询" onClick={() => useDbStore.getState().addQueryTab()} />
               </div>
               <Tooltip><TooltipTrigger asChild><Button variant="ghost" size="icon" aria-label={agentOpen ? "收起 Mona" : "展开 Mona"} onClick={() => licenseActive ? setAgentOpen((open) => !open) : onOpenSubscribe?.()}>
-                <RightSidebarToggleIcon open={agentOpen} className="h-4 w-4" />
+                <AgentLogo state="idle" className="h-5 w-5" />
               </Button></TooltipTrigger><TooltipContent>{agentOpen ? "收起 Mona" : "展开 Mona"}</TooltipContent></Tooltip>
             </div>
             <div className="relative min-h-0 flex-1">
-              <div className={cn("absolute inset-0", currentView !== "objects" && "hidden")}>
-                <TableListView connectionId={connections.some((c) => c.id === objectScope?.connectionId) ? objectScope?.connectionId ?? null : null} database={objectScope?.database ?? null} objectType={objectScope?.objectType}
+              <div className={cn("absolute inset-0 overflow-hidden", currentView !== "objects" && "hidden")}>
+                <TableListView active={currentView === "objects"} connectionId={connections.some((c) => c.id === objectScope?.connectionId) ? objectScope?.connectionId ?? null : null} database={objectScope?.database ?? null} objectType={objectScope?.objectType}
                   onOpenTable={(name, pinned, objectType) => { if (objectScope) void useDbStore.getState().selectTable(objectScope.connectionId, objectScope.database, name, pinned, objectType); }}
                   onNewQuery={() => {
                     if (objectScope) { useDbStore.getState().setSelectedConnectionId(objectScope.connectionId); useDbStore.getState().setSelectedDatabase(objectScope.database); }
@@ -108,19 +115,24 @@ export function DbClientView({ onOpenSubscribe }: { onOpenSubscribe?: () => void
                   }} />
               </div>
               {tabs.map((tab) => <div key={tab.id} className={cn("absolute inset-0", (currentView !== "table" || activeId !== tab.id) && "hidden")}>
-                {tab.kind === "table" ? <TableBrowser tab={tab} /> : <QueryWorkspace tab={tab} />}
+                {tab.kind === "structure" ? <TableStructureEditor tab={tab} /> : tab.kind === "table" ? <TableBrowser tab={tab} /> : <QueryWorkspace tab={tab} />}
               </div>)}
               {AdminView && <div className="absolute inset-0 overflow-auto"><AdminView /></div>}
             </div>
           </div>
         </ResizablePanel>
+        {licenseActive && agentOpen && <>
+          <ResizableHandle aria-label="调整 Mona 侧栏宽度" className="bg-border/80 transition-colors hover:bg-info/60 active:bg-info" />
+          <ResizablePanel id="db-agent" defaultSize="320px" minSize="260px" maxSize="600px" className="min-h-0 min-w-0 overflow-hidden">
+            <DbAgentPanel />
+          </ResizablePanel>
+        </>}
       </ResizablePanelGroup>
-      {licenseActive && <DbAgentPanel collapsed={!agentOpen} width={320} />}
       <NewConnectionDialog /><EditConnectionDialog />
     </div>
     <AlertDialog open={!!closeTab} onOpenChange={(open) => !open && setCloseTab(null)}>
       <AlertDialogContent><AlertDialogHeader><AlertDialogTitle>关闭“{closeTab?.title}”？</AlertDialogTitle>
-        <AlertDialogDescription>{closeTab?.kind === "table" ? "此标签还有未保存的数据修改。关闭会放弃这些修改。" : "此查询包含 SQL 草稿，请先保存需要保留的内容。关闭后将丢弃草稿。"}</AlertDialogDescription></AlertDialogHeader>
+        <AlertDialogDescription>{closeTab?.kind === "structure" ? "此标签还有未应用的结构修改。关闭会放弃这些修改。" : closeTab?.kind === "table" ? "此标签还有未保存的数据修改。关闭会放弃这些修改。" : "此查询包含 SQL 草稿，请先保存需要保留的内容。关闭后将丢弃草稿。"}</AlertDialogDescription></AlertDialogHeader>
         <AlertDialogFooter><AlertDialogCancel>取消</AlertDialogCancel><AlertDialogAction onClick={() => { if (closeTab) { useDbStore.getState().revertAllEdits(closeTab.id); useDbStore.getState().removeQueryTab(closeTab.id); } setCloseTab(null); }}>放弃并关闭</AlertDialogAction></AlertDialogFooter>
       </AlertDialogContent>
     </AlertDialog>

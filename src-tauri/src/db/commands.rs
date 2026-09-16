@@ -106,6 +106,47 @@ pub async fn db_get_views(
 }
 
 #[tauri::command]
+pub async fn db_get_routines(
+    state: State<'_, DbState>,
+    connection_id: String,
+    database: String,
+) -> Result<Vec<DatabaseObject>, String> {
+    let handle = {
+        let manager = state.manager.lock().await;
+        manager
+            .get_handle(&connection_id)
+            .ok_or_else(|| format!("Connection {} not found", connection_id))?
+    };
+    super::manager::get_routines_on_handle(&handle, &database)
+        .await
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub async fn db_get_routine_definition(
+    state: State<'_, DbState>,
+    connection_id: String,
+    database: String,
+    name: String,
+    routine_type: DatabaseObjectType,
+) -> Result<String, String> {
+    let handle = {
+        let manager = state.manager.lock().await;
+        manager
+            .get_handle(&connection_id)
+            .ok_or_else(|| format!("Connection {} not found", connection_id))?
+    };
+    super::manager::get_routine_definition_on_handle(
+        &handle,
+        &database,
+        &name,
+        routine_type,
+    )
+    .await
+    .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
 pub async fn db_get_table_info(
     state: State<'_, DbState>,
     connection_id: String,
@@ -138,6 +179,35 @@ pub async fn db_get_table_summaries(
     super::catalog::get_table_summaries_on_handle(&handle, &database)
         .await
         .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub async fn db_preview_table_structure(
+    state: State<'_, DbState>,
+    connection_id: String,
+    database: String,
+    table: String,
+    draft: super::structure::StructureDraft,
+) -> Result<Vec<String>, String> {
+    let handle = state.manager.lock().await.get_handle(&connection_id)
+        .ok_or_else(|| format!("Connection {} not found", connection_id))?;
+    super::structure::change_structure(&handle, &database, &table, draft, false)
+        .await.map(|(sql, _)| sql).map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+pub async fn db_apply_table_structure(
+    state: State<'_, DbState>,
+    connection_id: String,
+    database: String,
+    table: String,
+    draft: super::structure::StructureDraft,
+) -> Result<super::structure::ApplyResult, String> {
+    let handle = state.manager.lock().await.get_handle(&connection_id)
+        .ok_or_else(|| format!("Connection {} not found", connection_id))?;
+    super::structure::change_structure(&handle, &database, &table, draft, true)
+        .await.map_err(|error| error.to_string())?
+        .1.ok_or_else(|| "结构修改没有返回执行结果".to_string())
 }
 
 #[tauri::command]
@@ -277,4 +347,84 @@ pub async fn db_load_connections() -> Result<Vec<DbConnectionConfig>, String> {
     let connections: Vec<DbConnectionConfig> =
         serde_json::from_str(&json).map_err(|e| e.to_string())?;
     Ok(connections)
+}
+
+fn saved_queries_path() -> Result<std::path::PathBuf, String> {
+    let data_dir = dirs::data_dir().ok_or("Cannot determine data directory")?;
+    let db_dir = data_dir.join("mona").join("db");
+    std::fs::create_dir_all(&db_dir).map_err(|e| e.to_string())?;
+    Ok(db_dir.join("queries.json"))
+}
+
+fn read_saved_queries(path: &std::path::Path) -> Result<Vec<SavedQuery>, String> {
+    if !path.exists() {
+        return Ok(vec![]);
+    }
+    let json = std::fs::read_to_string(path).map_err(|e| e.to_string())?;
+    serde_json::from_str(&json).map_err(|e| e.to_string())
+}
+
+fn write_saved_queries(path: &std::path::Path, queries: &[SavedQuery]) -> Result<(), String> {
+    let json = serde_json::to_string_pretty(queries).map_err(|e| e.to_string())?;
+    std::fs::write(path, json).map_err(|e| e.to_string())
+}
+
+fn validate_saved_query(query: &SavedQuery) -> Result<(), String> {
+    if query.id.trim().is_empty()
+        || query.name.trim().is_empty()
+        || query.connection_id.trim().is_empty()
+        || query.database.trim().is_empty()
+        || query.sql.trim().is_empty()
+    {
+        return Err("查询名称、数据库和 SQL 不能为空".to_string());
+    }
+    Ok(())
+}
+
+#[tauri::command]
+pub async fn db_load_saved_queries() -> Result<Vec<SavedQuery>, String> {
+    read_saved_queries(&saved_queries_path()?)
+}
+
+#[tauri::command]
+pub async fn db_save_query(query: SavedQuery) -> Result<(), String> {
+    validate_saved_query(&query)?;
+    let path = saved_queries_path()?;
+    let mut queries = read_saved_queries(&path)?;
+    if let Some(existing) = queries.iter_mut().find(|item| item.id == query.id) {
+        *existing = query;
+    } else {
+        queries.push(query);
+    }
+    write_saved_queries(&path, &queries)
+}
+
+#[cfg(test)]
+mod saved_query_tests {
+    use super::*;
+
+    fn query(sql: &str) -> SavedQuery {
+        SavedQuery {
+            id: "query-1".to_string(),
+            name: "每日统计".to_string(),
+            connection_id: "connection-1".to_string(),
+            database: "analytics".to_string(),
+            sql: sql.to_string(),
+        }
+    }
+
+    #[test]
+    fn saved_queries_round_trip_without_database_credentials() {
+        let directory = tempfile::tempdir().expect("temporary saved-query directory");
+        let path = directory.path().join("queries.json");
+        let queries = vec![query("SELECT 1")];
+        write_saved_queries(&path, &queries).expect("write saved queries");
+        assert_eq!(read_saved_queries(&path).expect("read saved queries"), queries);
+    }
+
+    #[test]
+    fn saved_query_requires_identity_target_and_sql() {
+        assert!(validate_saved_query(&query("SELECT 1")).is_ok());
+        assert!(validate_saved_query(&query("  ")).is_err());
+    }
 }

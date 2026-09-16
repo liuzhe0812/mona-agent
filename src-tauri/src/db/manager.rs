@@ -406,9 +406,10 @@ fn mysql_cell_value(row: &sqlx::mysql::MySqlRow, idx: usize) -> CellValue {
 
 fn get_sqlite_table_info(conn: &Arc<std::sync::Mutex<SqliteConnection>>, table: &str) -> Result<TableInfo, DbError> {
     let conn = conn.lock().map_err(|e| DbError::ConnectionFailed(e.to_string()))?;
+    let quoted_table = format!("\"{}\"", table.replace('"', "\"\""));
 
     let mut columns = Vec::new();
-    let mut stmt = conn.prepare(&format!("PRAGMA table_info(\"{}\")", table))?;
+    let mut stmt = conn.prepare(&format!("PRAGMA table_info({quoted_table})"))?;
     let mut rows = stmt.query([])?;
     while let Some(row) = rows.next()? {
         let pk: i32 = row.get(5)?;
@@ -422,16 +423,19 @@ fn get_sqlite_table_info(conn: &Arc<std::sync::Mutex<SqliteConnection>>, table: 
             is_auto_increment: pk > 0 && row.get::<_, String>(2)?.contains("INTEGER"),
             extra: None,
             comment: None,
+            charset: None,
+            collation: None,
         });
     }
 
     let mut indexes = Vec::new();
-    let mut stmt = conn.prepare(&format!("PRAGMA index_list(\"{}\")", table))?;
+    let mut stmt = conn.prepare(&format!("PRAGMA index_list({quoted_table})"))?;
     let mut idx_rows = stmt.query([])?;
     while let Some(idx_row) = idx_rows.next()? {
         let idx_name: String = idx_row.get(1)?;
         let is_unique: bool = idx_row.get(2)?;
-        let is_primary = idx_name.starts_with("sqlite_autoindex_");
+        let origin: String = idx_row.get(3)?;
+        let is_primary = origin == "pk";
 
         let mut idx_columns = Vec::new();
         let mut col_stmt = conn.prepare(&format!("PRAGMA index_info(\"{}\")", idx_name))?;
@@ -446,7 +450,33 @@ fn get_sqlite_table_info(conn: &Arc<std::sync::Mutex<SqliteConnection>>, table: 
             is_unique,
             is_primary,
             index_type: None,
+            editable: origin == "c",
         });
+    }
+
+    let mut foreign_key_map: std::collections::BTreeMap<i64, ForeignKeyDefinition> = std::collections::BTreeMap::new();
+    let mut fk_stmt = conn.prepare(&format!("PRAGMA foreign_key_list({quoted_table})"))?;
+    let mut fk_rows = fk_stmt.query([])?;
+    while let Some(row) = fk_rows.next()? {
+        let id: i64 = row.get(0)?;
+        let entry = foreign_key_map.entry(id).or_insert_with(|| ForeignKeyDefinition {
+            name: format!("fk_{table}_{id}"), columns: Vec::new(), ref_table: row.get(2).unwrap_or_default(),
+            ref_columns: Vec::new(), on_update: row.get(5).ok(), on_delete: row.get(6).ok(), editable: false,
+        });
+        entry.columns.push(row.get(3)?);
+        entry.ref_columns.push(row.get(4)?);
+    }
+    let foreign_keys = foreign_key_map.into_values().collect();
+
+    let mut triggers = Vec::new();
+    let mut trigger_stmt = conn.prepare("SELECT name, sql FROM sqlite_master WHERE type='trigger' AND tbl_name=? ORDER BY name")?;
+    let mut trigger_rows = trigger_stmt.query([table])?;
+    while let Some(row) = trigger_rows.next()? {
+        let statement = row.get::<_, Option<String>>(1)?.unwrap_or_default();
+        let words: Vec<_> = statement.split_whitespace().map(|word| word.trim_matches(|c: char| !c.is_ascii_alphabetic()).to_ascii_uppercase()).collect();
+        let timing = if words.iter().any(|word| word == "BEFORE") { "BEFORE" } else { "AFTER" };
+        let event = ["INSERT", "UPDATE", "DELETE"].into_iter().find(|event| words.iter().any(|word| word == event)).unwrap_or("INSERT");
+        triggers.push(TriggerDefinition { name: row.get(0)?, timing: timing.into(), event: event.into(), statement, editable: false });
     }
 
     let ddl: Option<String> = conn.query_row(
@@ -455,8 +485,8 @@ fn get_sqlite_table_info(conn: &Arc<std::sync::Mutex<SqliteConnection>>, table: 
         |row| row.get(0),
     ).ok();
 
-    let row_count: i64 = conn.query_row(
-        &format!("SELECT COUNT(*) FROM \"{}\"", table),
+    let row_count: u64 = conn.query_row(
+        &format!("SELECT COUNT(*) FROM {quoted_table}"),
         [],
         |row| row.get(0),
     ).unwrap_or(0);
@@ -475,22 +505,30 @@ fn get_sqlite_table_info(conn: &Arc<std::sync::Mutex<SqliteConnection>>, table: 
         update_time: None,
         columns,
         indexes,
-        foreign_keys: vec![],
+        foreign_keys,
+        triggers,
+        comment: None,
+        row_format: None,
         ddl,
     })
 }
 
 async fn get_mysql_table_info(pool: &MySqlPool, database: &str, table: &str) -> Result<TableInfo, DbError> {
-    let columns_rows = sqlx::query_as::<_, (String, String, Option<String>, String, Option<String>, Option<String>, Option<String>)>(
-        "SELECT COLUMN_NAME, COLUMN_TYPE, IS_NULLABLE, COLUMN_KEY, COLUMN_DEFAULT, EXTRA, COLUMN_COMMENT FROM information_schema.COLUMNS WHERE TABLE_SCHEMA = ? AND TABLE_NAME = ? ORDER BY ORDINAL_POSITION"
+    let mut connection = pool.acquire().await.map_err(|e| DbError::Mysql(e.to_string()))?;
+    get_mysql_table_info_connection(&mut connection, database, table).await
+}
+
+pub(super) async fn get_mysql_table_info_connection(connection: &mut sqlx::MySqlConnection, database: &str, table: &str) -> Result<TableInfo, DbError> {
+    let columns_rows = sqlx::query_as::<_, (String, String, Option<String>, String, Option<String>, Option<String>, Option<String>, Option<String>, Option<String>)>(
+        "SELECT COLUMN_NAME, COLUMN_TYPE, IS_NULLABLE, COLUMN_KEY, COLUMN_DEFAULT, EXTRA, COLUMN_COMMENT, CHARACTER_SET_NAME, COLLATION_NAME FROM information_schema.COLUMNS WHERE TABLE_SCHEMA = ? AND TABLE_NAME = ? ORDER BY ORDINAL_POSITION"
     )
     .bind(database)
     .bind(table)
-    .fetch_all(pool)
+    .fetch_all(&mut *connection)
     .await
     .map_err(|e| DbError::Mysql(e.to_string()))?;
 
-    let columns: Vec<ColumnDefinition> = columns_rows.into_iter().map(|(name, data_type, nullable, key, default, extra, comment)| {
+    let columns: Vec<ColumnDefinition> = columns_rows.into_iter().map(|(name, data_type, nullable, key, default, extra, comment, charset, collation)| {
         ColumnDefinition {
             name,
             data_type,
@@ -501,25 +539,31 @@ async fn get_mysql_table_info(pool: &MySqlPool, database: &str, table: &str) -> 
             is_auto_increment: extra.as_deref() == Some("auto_increment"),
             extra,
             comment,
+            charset,
+            collation,
         }
     }).collect();
 
-    let index_rows = sqlx::query_as::<_, (String, i64, String, String, Option<String>)>(
-        "SELECT INDEX_NAME, NON_UNIQUE, COLUMN_NAME, SEQ_IN_INDEX, INDEX_TYPE FROM information_schema.STATISTICS WHERE TABLE_SCHEMA = ? AND TABLE_NAME = ? ORDER BY INDEX_NAME, SEQ_IN_INDEX"
+    let index_rows = sqlx::query_as::<_, (String, u64, Option<String>, Option<String>)>(
+        "SELECT INDEX_NAME, CAST(NON_UNIQUE AS UNSIGNED), COLUMN_NAME, INDEX_TYPE FROM information_schema.STATISTICS WHERE TABLE_SCHEMA = ? AND TABLE_NAME = ? ORDER BY INDEX_NAME, SEQ_IN_INDEX"
     )
     .bind(database)
     .bind(table)
-    .fetch_all(pool)
+    .fetch_all(&mut *connection)
     .await
     .map_err(|e| DbError::Mysql(e.to_string()))?;
 
-    let mut index_map: std::collections::BTreeMap<String, (bool, Vec<String>, Option<String>)> = std::collections::BTreeMap::new();
-    for (idx_name, non_unique, col_name, _seq, idx_type) in index_rows {
-        let entry = index_map.entry(idx_name).or_insert((non_unique == 0, vec![], idx_type));
-        entry.1.push(col_name);
+    let mut index_map: std::collections::BTreeMap<String, (bool, Vec<String>, Option<String>, bool)> = std::collections::BTreeMap::new();
+    for (idx_name, non_unique, col_name, idx_type) in index_rows {
+        let regular = col_name.is_some() && idx_type.as_deref().is_none_or(|kind| kind.eq_ignore_ascii_case("BTREE"));
+        let entry = index_map.entry(idx_name).or_insert((non_unique == 0, vec![], idx_type, regular));
+        entry.3 &= regular;
+        if let Some(col_name) = col_name {
+            entry.1.push(col_name);
+        }
     }
 
-    let indexes: Vec<IndexDefinition> = index_map.into_iter().map(|(name, (is_unique, cols, idx_type))| {
+    let indexes: Vec<IndexDefinition> = index_map.into_iter().map(|(name, (is_unique, cols, idx_type, regular))| {
         let is_primary = name == "PRIMARY";
         IndexDefinition {
             name,
@@ -527,42 +571,54 @@ async fn get_mysql_table_info(pool: &MySqlPool, database: &str, table: &str) -> 
             is_unique,
             is_primary,
             index_type: idx_type,
+            editable: regular && !is_primary,
         }
     }).collect();
 
     let fk_rows = sqlx::query_as::<_, (String, String, String, String, Option<String>, Option<String>)>(
-        "SELECT CONSTRAINT_NAME, COLUMN_NAME, REFERENCED_TABLE_NAME, REFERENCED_COLUMN_NAME, DELETE_RULE, UPDATE_RULE FROM information_schema.KEY_COLUMN_USAGE WHERE TABLE_SCHEMA = ? AND TABLE_NAME = ? AND REFERENCED_TABLE_NAME IS NOT NULL"
+        "SELECT k.CONSTRAINT_NAME, k.COLUMN_NAME, k.REFERENCED_TABLE_NAME, k.REFERENCED_COLUMN_NAME, r.DELETE_RULE, r.UPDATE_RULE \
+         FROM information_schema.KEY_COLUMN_USAGE k \
+         LEFT JOIN information_schema.REFERENTIAL_CONSTRAINTS r \
+           ON r.CONSTRAINT_SCHEMA = k.CONSTRAINT_SCHEMA AND r.CONSTRAINT_NAME = k.CONSTRAINT_NAME AND r.TABLE_NAME = k.TABLE_NAME \
+         WHERE k.TABLE_SCHEMA = ? AND k.TABLE_NAME = ? AND k.REFERENCED_TABLE_NAME IS NOT NULL \
+         ORDER BY k.CONSTRAINT_NAME, k.ORDINAL_POSITION"
     )
     .bind(database)
     .bind(table)
-    .fetch_all(pool)
+    .fetch_all(&mut *connection)
     .await
     .map_err(|e| DbError::Mysql(e.to_string()))?;
 
-    let foreign_keys: Vec<ForeignKeyDefinition> = fk_rows.into_iter().map(|(name, col, ref_table, ref_col, on_delete, on_update)| {
-        ForeignKeyDefinition {
-            name,
-            columns: vec![col],
-            ref_table,
-            ref_columns: vec![ref_col],
-            on_delete,
-            on_update,
-        }
+    let mut foreign_key_map: std::collections::BTreeMap<String, ForeignKeyDefinition> = std::collections::BTreeMap::new();
+    for (name, col, ref_table, ref_col, on_delete, on_update) in fk_rows {
+        let entry = foreign_key_map.entry(name.clone()).or_insert(ForeignKeyDefinition {
+            name, columns: Vec::new(), ref_table, ref_columns: Vec::new(), on_delete, on_update, editable: true,
+        });
+        entry.columns.push(col);
+        entry.ref_columns.push(ref_col);
+    }
+    let foreign_keys = foreign_key_map.into_values().collect();
+
+    let trigger_rows = sqlx::query_as::<_, (String, String, String, String)>(
+        "SELECT TRIGGER_NAME, ACTION_TIMING, EVENT_MANIPULATION, ACTION_STATEMENT FROM information_schema.TRIGGERS WHERE TRIGGER_SCHEMA = ? AND EVENT_OBJECT_TABLE = ? ORDER BY TRIGGER_NAME"
+    ).bind(database).bind(table).fetch_all(&mut *connection).await.map_err(|e| DbError::Mysql(e.to_string()))?;
+    let triggers = trigger_rows.into_iter().map(|(name, timing, event, statement)| TriggerDefinition {
+        name, timing, event, statement, editable: true,
     }).collect();
 
-    let table_row = sqlx::query_as::<_, (Option<String>, Option<String>, Option<i64>, Option<i64>, Option<i64>, Option<i64>, Option<String>, Option<String>, Option<String>)>(
-        "SELECT ENGINE, TABLE_COLLATION, TABLE_ROWS, DATA_LENGTH, INDEX_LENGTH, AUTO_INCREMENT, CREATE_TIME, UPDATE_TIME, TABLE_COMMENT FROM information_schema.TABLES WHERE TABLE_SCHEMA = ? AND TABLE_NAME = ?"
+    let table_row = sqlx::query_as::<_, (Option<String>, Option<String>, Option<u64>, Option<u64>, Option<u64>, Option<u64>, Option<String>, Option<String>, Option<String>, Option<String>)>(
+        "SELECT ENGINE, TABLE_COLLATION, TABLE_ROWS, DATA_LENGTH, INDEX_LENGTH, AUTO_INCREMENT, CAST(CREATE_TIME AS CHAR), CAST(UPDATE_TIME AS CHAR), TABLE_COMMENT, ROW_FORMAT FROM information_schema.TABLES WHERE TABLE_SCHEMA = ? AND TABLE_NAME = ?"
     )
     .bind(database)
     .bind(table)
-    .fetch_one(pool)
+    .fetch_one(&mut *connection)
     .await
     .map_err(|e| DbError::Mysql(e.to_string()))?;
 
-    let (engine, collation, row_count, data_length, index_length, auto_increment, create_time, update_time, _comment) = table_row;
+    let (engine, collation, row_count, data_length, index_length, auto_increment, create_time, update_time, comment, row_format) = table_row;
 
-    let ddl = sqlx::query(&format!("SHOW CREATE TABLE `{}`.`{}`", database, table))
-        .fetch_one(pool)
+    let ddl = sqlx::query(&format!("SHOW CREATE TABLE {}.{}", quote_mysql_identifier(database), quote_mysql_identifier(table)))
+        .fetch_one(&mut *connection)
         .await
         .ok()
         .and_then(|row| {
@@ -585,6 +641,9 @@ async fn get_mysql_table_info(pool: &MySqlPool, database: &str, table: &str) -> 
         columns,
         indexes,
         foreign_keys,
+        triggers,
+        comment,
+        row_format,
         ddl,
     })
 }
@@ -906,17 +965,22 @@ pub async fn backup_on_handle(
     include_data: bool,
 ) -> Result<(), DbError> {
     match &handle.0 {
-        DbHandle::Sqlite(_) => {
-            let host = handle.1.host.clone();
+        DbHandle::Sqlite(sqlite_conn) => {
+            let conn = sqlite_conn.clone();
             let output_path = output_path.to_string();
             tokio::task::spawn_blocking(move || {
-                let db_path = resolve_sqlite_path(&host)?;
                 let output = std::path::Path::new(&output_path);
+                if !output.is_absolute() {
+                    return Err(DbError::InvalidConfig("备份目标必须是绝对路径".to_string()));
+                }
+                if output.exists() {
+                    return Err(DbError::InvalidConfig("备份目标已存在，请选择新的文件，避免覆盖已有数据库".to_string()));
+                }
                 if let Some(parent) = output.parent() {
                     std::fs::create_dir_all(parent)?;
                 }
-                std::fs::copy(&db_path, output)
-                    .map_err(|e| DbError::Mysql(format!("Failed to copy SQLite database: {}", e)))?;
+                let conn = conn.lock().map_err(|e| DbError::ConnectionFailed(e.to_string()))?;
+                conn.execute("VACUUM INTO ?1", [&output_path])?;
                 Ok(())
             })
             .await
@@ -1066,10 +1130,14 @@ async fn restore_mysql(
     let content = std::fs::read_to_string(input_path)
         .map_err(|e| DbError::Mysql(format!("Failed to read backup file: {}", e)))?;
 
+    let statements = super::sql_script::split_mysql_script(&content, MONA_STMT_SEP)
+        .map_err(DbError::Mysql)?;
+
     let mut conn = pool.acquire().await
         .map_err(|e| DbError::Mysql(format!("Failed to acquire connection: {}", e)))?;
+    conn.close_on_drop();
 
-    sqlx::query(&format!("USE `{}`", database))
+    sqlx::query(&format!("USE {}", quote_mysql_identifier(database)))
         .execute(&mut *conn)
         .await
         .map_err(|e| DbError::Mysql(format!("Failed to USE {}: {}", database, e)))?;
@@ -1079,19 +1147,8 @@ async fn restore_mysql(
         .await
         .map_err(|e| DbError::Mysql(format!("Failed to disable foreign key checks: {}", e)))?;
 
-    let statements = if content.contains(MONA_STMT_SEP) {
-        content.split(MONA_STMT_SEP).collect::<Vec<_>>()
-    } else {
-        content.split(';').collect::<Vec<_>>()
-    };
-
     for statement in &statements {
-        let sql: String = statement
-            .lines()
-            .filter(|line| !line.trim().starts_with("--"))
-            .collect::<Vec<_>>()
-            .join("\n");
-        let trimmed = sql.trim();
+        let trimmed = statement.trim();
         if trimmed.is_empty() {
             continue;
         }
@@ -1121,4 +1178,83 @@ fn build_mysql_url(config: &DbConnectionConfig) -> Result<String, DbError> {
         db,
         ssl_mode,
     ))
+}
+
+pub async fn get_routines_on_handle(
+    handle: &(DbHandle, DbConnectionConfig),
+    database: &str,
+) -> Result<Vec<DatabaseObject>, DbError> {
+    match &handle.0 {
+        DbHandle::Sqlite(_) => Ok(vec![]),
+        DbHandle::Mysql(pool) => {
+            let rows: Vec<(String, String)> = sqlx::query_as(
+                "SELECT ROUTINE_NAME, ROUTINE_TYPE FROM information_schema.ROUTINES WHERE ROUTINE_SCHEMA = ? ORDER BY ROUTINE_TYPE, ROUTINE_NAME"
+            )
+            .bind(database)
+            .fetch_all(pool)
+            .await
+            .map_err(|e| DbError::Mysql(e.to_string()))?;
+            Ok(rows.into_iter().map(|(name, routine_type)| DatabaseObject {
+                name,
+                schema: Some(database.to_string()),
+                object_type: if routine_type.eq_ignore_ascii_case("FUNCTION") {
+                    DatabaseObjectType::Function
+                } else {
+                    DatabaseObjectType::Procedure
+                },
+                children: vec![],
+            }).collect())
+        }
+    }
+}
+
+pub async fn get_routine_definition_on_handle(
+    handle: &(DbHandle, DbConnectionConfig),
+    database: &str,
+    name: &str,
+    routine_type: DatabaseObjectType,
+) -> Result<String, DbError> {
+    let DbHandle::Mysql(pool) = &handle.0 else {
+        return Err(DbError::UnsupportedType("SQLite does not support stored routines".to_string()));
+    };
+    let keyword = match routine_type {
+        DatabaseObjectType::Procedure => "PROCEDURE",
+        DatabaseObjectType::Function => "FUNCTION",
+        _ => return Err(DbError::InvalidConfig("Routine type must be procedure or function".to_string())),
+    };
+    let sql = format!(
+        "SHOW CREATE {} {}.{}",
+        keyword,
+        quote_mysql_identifier(database),
+        quote_mysql_identifier(name),
+    );
+    let row = sqlx::query(&sql)
+        .fetch_one(pool)
+        .await
+        .map_err(|e| DbError::Mysql(e.to_string()))?;
+    row.try_get::<String, _>(2)
+        .map_err(|e| DbError::Mysql(format!("Failed to read {} definition: {}", keyword, e)))
+}
+
+#[cfg(test)]
+mod metadata_tests {
+    use super::*;
+
+    // Read-only integration coverage for the actual information_schema wire types.
+    #[tokio::test]
+    #[ignore = "requires MONA_TEST_MYSQL_URL (including database) and MONA_TEST_MYSQL_TABLE with a primary key"]
+    async fn mysql_reads_table_columns_indexes_and_foreign_keys() {
+        let url = std::env::var("MONA_TEST_MYSQL_URL").expect("set the test database URL");
+        let table = std::env::var("MONA_TEST_MYSQL_TABLE").expect("set the test table name");
+        let pool = MySqlPoolOptions::new().max_connections(1).connect(&url)
+            .await.expect("connect to test database");
+        let database: String = sqlx::query_scalar("SELECT DATABASE()")
+            .fetch_one(&pool).await.expect("select a database in the test URL");
+        let info = get_mysql_table_info(&pool, &database, &table).await;
+        pool.close().await;
+        let info = info.expect("decode all MySQL table metadata");
+        assert!(!info.columns.is_empty());
+        assert!(info.indexes.iter().any(|index| index.is_primary));
+        assert!(info.ddl.is_some());
+    }
 }
