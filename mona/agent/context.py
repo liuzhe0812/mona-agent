@@ -109,6 +109,8 @@ class ContextBuilder:
         skill_names: list[str] | None = None,
         channel: str | None = None,
         session_summary: str | None = None,
+        user_profile_fields: Sequence[str] | None = None,
+        tool_names: set[str] | None = None,
     ) -> str:
         """Build the system prompt from identity, bootstrap files, memory, and skills."""
         parts = [self._get_identity(channel=channel)]
@@ -121,11 +123,11 @@ class ContextBuilder:
         if bootstrap:
             parts.append(bootstrap)
 
-        shared_profile = self._load_shared_user_profile()
+        shared_profile = self._load_shared_user_profile(user_profile_fields)
         if shared_profile:
             parts.append(shared_profile)
 
-        parts.append(render_template("agent/tool_contract.md"))
+        parts.append(render_template("agent/tool_contract.md", tool_names=tool_names))
 
         memory = self.memory.get_memory_context()
         if memory and not self._is_template_content(self.memory.read_memory(), "memory/MEMORY.md"):
@@ -138,10 +140,7 @@ class ContextBuilder:
             if always_content:
                 parts.append(f"# Active Skills\n\n{always_content}")
 
-        skill_exclusions = set(active_skills)
-        if self.agent_id == MONA_AGENT_ID:
-            skill_exclusions.add("mona-ppt")
-        skills_summary = self.skills.build_skills_summary(exclude=skill_exclusions)
+        skills_summary = self.skills.build_skills_summary(exclude=set(active_skills))
         if skills_summary:
             parts.append(render_template("agent/skills_section.md", skills_summary=skills_summary))
 
@@ -217,7 +216,7 @@ class ContextBuilder:
         if sender_id:
             lines += [f"Sender ID: {sender_id}"]
         if browser_tab_id or browser_page_url or browser_page_title:
-            page_info = "Browser Page:"
+            page_info = "Mona Built-in Browser Page:"
             if browser_page_title:
                 page_info += f" {browser_page_title}"
             if browser_page_url:
@@ -290,12 +289,14 @@ class ContextBuilder:
         return content.strip()
 
     @staticmethod
-    def _load_shared_user_profile() -> str:
+    def _load_shared_user_profile(
+        allowed_fields: Sequence[str] | None = None,
+    ) -> str:
         """Load the platform-owned, privacy-filtered user profile snapshot."""
         try:
             from mona.distill.snapshot import build_shared_user_profile_context
 
-            return build_shared_user_profile_context()
+            return build_shared_user_profile_context(allowed_fields=allowed_fields)
         except Exception:
             return ""
 
@@ -335,6 +336,7 @@ class ContextBuilder:
         session_summary: str | None = None,
         session_metadata: Mapping[str, Any] | None = None,
         message_metadata: Mapping[str, Any] | None = None,
+        tool_names: set[str] | None = None,
     ) -> list[dict[str, Any]]:
         """Build the complete message list for an LLM call."""
         extra = [
@@ -381,8 +383,20 @@ class ContextBuilder:
             merged = f"{user_content}\n\n{runtime_ctx}"
         else:
             merged = user_content + [{"type": "text", "text": runtime_ctx}]
+        user_profile_fields = None
+        if message_metadata and message_metadata.get("origin") == "profile_advice":
+            user_profile_fields = ("preferences", "work_context", "current_focus")
         messages = [
-            {"role": "system", "content": self.build_system_prompt(skill_names, channel=channel, session_summary=session_summary)},
+            {
+                "role": "system",
+                "content": self.build_system_prompt(
+                    skill_names,
+                    channel=channel,
+                    session_summary=session_summary,
+                    user_profile_fields=user_profile_fields,
+                    tool_names=tool_names,
+                ),
+            },
             *history,
         ]
         if messages[-1].get("role") == current_role:

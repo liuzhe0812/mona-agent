@@ -10,7 +10,7 @@ import weakref
 from contextlib import suppress
 from datetime import datetime
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Callable, Iterator
+from typing import TYPE_CHECKING, Any, Awaitable, Callable, Iterator
 
 import tiktoken
 from loguru import logger
@@ -470,6 +470,8 @@ class Consolidator:
         context_window_tokens: int,
         build_messages: Callable[..., list[dict[str, Any]]],
         get_tool_definitions: Callable[[], list[dict[str, Any]]],
+        auto_compact_token_limit: int | None = None,
+        context_block_limit: int | None = None,
         max_completion_tokens: int = 4096,
         consolidation_ratio: float = 0.5,
     ):
@@ -478,6 +480,8 @@ class Consolidator:
         self.model = model
         self.sessions = sessions
         self.context_window_tokens = context_window_tokens
+        self.auto_compact_token_limit = auto_compact_token_limit
+        self.context_block_limit = context_block_limit
         self.max_completion_tokens = max_completion_tokens
         self.consolidation_ratio = consolidation_ratio
         self._build_messages = build_messages
@@ -491,10 +495,12 @@ class Consolidator:
         provider: LLMProvider,
         model: str,
         context_window_tokens: int,
+        auto_compact_token_limit: int | None = None,
     ) -> None:
         self.provider = provider
         self.model = model
         self.context_window_tokens = context_window_tokens
+        self.auto_compact_token_limit = auto_compact_token_limit
         self.max_completion_tokens = provider.generation.max_tokens
 
     def get_lock(self, session_key: str) -> asyncio.Lock:
@@ -573,6 +579,7 @@ class Consolidator:
         self,
         session: Session,
         replay_max_messages: int | None,
+        on_compaction: Callable[[bool], Awaitable[None]] | None = None,
     ) -> str | None:
         """Archive messages that would be hidden by the replay message window."""
         end_idx = self._replay_overflow_boundary(session, replay_max_messages)
@@ -587,37 +594,57 @@ class Consolidator:
             len(chunk),
             replay_max_messages,
         )
-        summary = await self.archive(chunk)
+        if on_compaction is not None:
+            await on_compaction(True)
+        try:
+            summary = await self.archive(
+                chunk,
+                previous_summary=self._summary_text(session),
+            )
+        finally:
+            if on_compaction is not None:
+                await on_compaction(False)
+        if summary is None:
+            return None
         session.last_consolidated = end_idx
-        self.sessions.save(session)
+        self._persist_last_summary(session, summary)
         return summary
 
     def _persist_last_summary(self, session: Session, summary: str | None) -> None:
-        if summary and summary != "(nothing)":
+        if summary:
             session.metadata["_last_summary"] = {
                 "text": summary,
                 "last_active": session.updated_at.isoformat(),
             }
             self.sessions.save(session)
 
+    @staticmethod
+    def _summary_text(session: Session) -> str | None:
+        meta = session.metadata.get("_last_summary")
+        value = meta.get("text") if isinstance(meta, dict) else meta
+        return value.strip() if isinstance(value, str) and value.strip() else None
+
     def estimate_session_prompt_tokens(
         self,
         session: Session,
+        *,
+        current_message: str = "[token-probe]",
+        message_metadata: dict[str, Any] | None = None,
     ) -> tuple[int, str]:
         """Estimate prompt size from the full unconsolidated session tail."""
         history = self._full_unconsolidated_history(session, include_timestamps=True)
         channel, chat_id = (session.key.split(":", 1) if ":" in session.key else (None, None))
         # Include archived summary in estimation so the budget accounts for it.
-        meta = session.metadata.get("_last_summary")
-        summary = meta.get("text") if isinstance(meta, dict) else (meta if isinstance(meta, str) else None)
+        summary = self._summary_text(session)
         probe_messages = self._build_messages(
             history=history,
-            current_message="[token-probe]",
+            current_message=current_message,
             channel=channel,
             chat_id=chat_id,
             sender_id=None,
             session_summary=summary,
             session_metadata=session.metadata,
+            message_metadata=message_metadata,
         )
         return estimate_prompt_tokens_chain(
             self.provider,
@@ -629,23 +656,25 @@ class Consolidator:
     @property
     def _input_token_budget(self) -> int:
         """Available input token budget for consolidation LLM."""
-        return self.context_window_tokens - self.max_completion_tokens - self._SAFETY_BUFFER
+        model_budget = self.context_window_tokens - self.max_completion_tokens - self._SAFETY_BUFFER
+        if self.context_block_limit is None:
+            return model_budget
+        return min(model_budget, self.context_block_limit)
 
-    def _truncate_to_token_budget(self, text: str) -> str:
-        """Truncate text so it fits within the consolidation LLM's token budget."""
-        budget = self._input_token_budget
-        if budget <= 0:
-            return truncate_text(text, _RAW_ARCHIVE_MAX_CHARS)
-        try:
-            enc = tiktoken.get_encoding("cl100k_base")
-            tokens = enc.encode(text)
-            if len(tokens) <= budget:
-                return text
-            return enc.decode(tokens[:budget]) + "\n... (truncated)"
-        except Exception:
-            return truncate_text(text, budget * 4)
+    @property
+    def _auto_compact_trigger_budget(self) -> int:
+        hard_budget = self._input_token_budget
+        configured = self.auto_compact_token_limit
+        default_trigger = int(self.context_window_tokens * 0.9)
+        trigger = configured if configured is not None else default_trigger
+        return min(trigger, hard_budget)
 
-    async def archive(self, messages: list[dict]) -> str | None:
+    async def archive(
+        self,
+        messages: list[dict],
+        *,
+        previous_summary: str | None = None,
+    ) -> str | None:
         """Summarize messages via LLM and append to history.jsonl.
 
         Returns the summary text on success, None if nothing to archive.
@@ -654,7 +683,17 @@ class Consolidator:
             return None
         try:
             formatted = MemoryStore._format_messages(messages)
-            formatted = self._truncate_to_token_budget(formatted)
+            if previous_summary:
+                formatted = (
+                    "Existing handoff summary:\n"
+                    f"{previous_summary}\n\n"
+                    "Newly archived conversation:\n"
+                    f"{formatted}"
+                )
+            budget = self._input_token_budget
+            if budget <= 0 or len(tiktoken.get_encoding("cl100k_base").encode(formatted)) > budget:
+                logger.warning("Consolidation source exceeds its request budget")
+                return None
             response = await self.provider.chat_with_retry(
                 model=self.model,
                 messages=[
@@ -672,12 +711,14 @@ class Consolidator:
             )
             if response.finish_reason == "error":
                 raise RuntimeError(f"LLM returned error: {response.content}")
-            summary = response.content or "[no summary]"
+            summary = (response.content or "").strip()
+            if not summary or summary == "(nothing)" or len(summary) > _ARCHIVE_SUMMARY_MAX_CHARS:
+                logger.warning("Consolidation returned an unusable handoff summary")
+                return None
             self.store.append_history(summary, max_chars=_ARCHIVE_SUMMARY_MAX_CHARS)
             return summary
         except Exception:
-            logger.warning("Consolidation LLM call failed, raw-dumping to history")
-            self.store.raw_archive(messages)
+            logger.warning("Consolidation LLM call failed; preserving session history")
             return None
 
     async def maybe_consolidate_by_tokens(
@@ -685,6 +726,9 @@ class Consolidator:
         session: Session,
         *,
         replay_max_messages: int | None = None,
+        current_message: str | None = None,
+        message_metadata: dict[str, Any] | None = None,
+        on_compaction: Callable[[bool], Awaitable[None]] | None = None,
     ) -> None:
         """Loop: archive old messages until prompt fits within safe budget.
 
@@ -703,29 +747,39 @@ class Consolidator:
             if not session.messages:
                 return
 
-            budget = self._input_token_budget
-            target = int(budget * self.consolidation_ratio)
-            last_summary = await self._consolidate_replay_overflow(
+            trigger = self._auto_compact_trigger_budget
+            target = int(trigger * self.consolidation_ratio)
+            estimate_kwargs = (
+                {
+                    "current_message": current_message,
+                    "message_metadata": message_metadata,
+                }
+                if current_message is not None
+                else {}
+            )
+            last_summary = self._summary_text(session)
+            replay_summary = await self._consolidate_replay_overflow(
                 session,
                 replay_max_messages,
+                on_compaction=on_compaction,
             )
+            if replay_summary:
+                last_summary = replay_summary
             try:
-                estimated, source = self.estimate_session_prompt_tokens(
-                    session,
-                )
+                estimated, source = self.estimate_session_prompt_tokens(session, **estimate_kwargs)
             except Exception:
                 logger.exception("Token estimation failed for {}", session.key)
                 estimated, source = 0, "error"
             if estimated <= 0:
                 self._persist_last_summary(session, last_summary)
                 return
-            if estimated < budget:
+            if estimated < trigger:
                 unconsolidated_count = len(session.messages) - session.last_consolidated
                 logger.debug(
                     "Token consolidation idle {}: {}/{} via {}, msgs={}",
                     session.key,
                     estimated,
-                    self.context_window_tokens,
+                    trigger,
                     source,
                     unconsolidated_count,
                 )
@@ -760,23 +814,25 @@ class Consolidator:
                     source,
                     len(chunk),
                 )
-                summary = await self.archive(chunk)
-                # Advance the cursor either way: on success the chunk was
-                # summarized; on failure archive() already raw-archived it as
-                # a breadcrumb. Re-archiving the same chunk on the next call
-                # would just emit duplicate [RAW] entries.
-                if summary:
-                    last_summary = summary
-                session.last_consolidated = end_idx
-                self.sessions.save(session)
+                if on_compaction is not None:
+                    await on_compaction(True)
+                try:
+                    summary = await self.archive(chunk, previous_summary=last_summary)
+                finally:
+                    if on_compaction is not None:
+                        await on_compaction(False)
                 if not summary:
-                    # LLM is degraded — stop hammering it this call;
-                    # the next invocation can retry a fresh chunk.
+                    # Keep the source in the session so a later turn can retry
+                    # without silently discarding task context.
                     break
+                last_summary = summary
+                session.last_consolidated = end_idx
+                self._persist_last_summary(session, last_summary)
 
                 try:
                     estimated, source = self.estimate_session_prompt_tokens(
                         session,
+                        **estimate_kwargs,
                     )
                 except Exception:
                     logger.exception("Token estimation failed for {}", session.key)
@@ -833,7 +889,13 @@ class Consolidator:
             last_active = session.updated_at
             summary: str | None = ""
             if archive_msgs:
-                summary = await self.archive(archive_msgs)
+                summary = await self.archive(
+                    archive_msgs,
+                    previous_summary=self._summary_text(session),
+                )
+
+            if archive_msgs and summary is None:
+                return None
 
             if summary and summary != "(nothing)":
                 session.metadata["_last_summary"] = {

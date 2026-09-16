@@ -210,6 +210,7 @@ def build_bus_progress_callback(
         file_edit_events: list[dict[str, Any]] | None = None,
         reasoning: bool = False,
         reasoning_end: bool = False,
+        context_compacting: bool | None = None,
     ) -> None:
         meta = dict(msg.metadata or {})
         if agent_id:
@@ -220,6 +221,8 @@ def build_bus_progress_callback(
             meta["_reasoning_delta"] = True
         if reasoning_end:
             meta["_reasoning_end"] = True
+        if context_compacting is not None:
+            meta["_context_compacting"] = context_compacting
         if tool_events:
             meta["_tool_events"] = tool_events
         if file_edit_events:
@@ -242,6 +245,7 @@ def build_bus_progress_callback(
             file_edit_events: list[dict[str, Any]] | None = None,
             reasoning: bool = False,
             reasoning_end: bool = False,
+            context_compacting: bool | None = None,
         ) -> None:
             await _publish_progress(
                 content,
@@ -250,6 +254,7 @@ def build_bus_progress_callback(
                 file_edit_events=file_edit_events,
                 reasoning=reasoning,
                 reasoning_end=reasoning_end,
+                context_compacting=context_compacting,
             )
 
         return _websocket_progress
@@ -261,6 +266,7 @@ def build_bus_progress_callback(
         tool_events: list[dict[str, Any]] | None = None,
         reasoning: bool = False,
         reasoning_end: bool = False,
+        context_compacting: bool | None = None,
     ) -> None:
         await _publish_progress(
             content,
@@ -268,6 +274,7 @@ def build_bus_progress_callback(
             tool_events=tool_events,
             reasoning=reasoning,
             reasoning_end=reasoning_end,
+            context_compacting=context_compacting,
         )
 
     return _bus_progress

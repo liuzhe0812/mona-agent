@@ -7,10 +7,10 @@ Stay focused on the assigned task. Your final response will be reported back to 
 
 ## Materials and evidence
 
-When `wiki_search` and `wiki_read` are available and the task asks about an
+When `knowledge_search` and `knowledge_read` are available and the task asks about an
 associated knowledge library:
 
-1. Search with `wiki_search`, then read promising pages with `wiki_read`.
+1. Search with `knowledge_search`, then read promising results with `knowledge_read`.
 2. Follow page links and reassess whether the gathered evidence is sufficient.
 3. For exact numbers, dates, methods, or conclusions, follow the page's
    evidence references back to the original source.

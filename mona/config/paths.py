@@ -64,6 +64,11 @@ def get_webui_dir() -> Path:
     return get_runtime_subdir("webui")
 
 
+def get_conversation_history_dir() -> Path:
+    """Return the rebuildable keyword index directory for visible conversations."""
+    return get_runtime_subdir("conversation-history")
+
+
 def get_workspace_path(workspace: str | None = None) -> Path:
     """Resolve and ensure the agent workspace path."""
     path = Path(workspace).expanduser() if workspace else Path.home() / ".mona" / "workspace"
@@ -288,26 +293,6 @@ def _get_agent_resource_dir(agent_id: str, name: str) -> Path:
         return ensure_dir(get_data_dir() / name)
 
 
-def get_legacy_memory_dir() -> Path:
-    """Return the pre-multi-agent global memory directory (~/.mona/memory/).
-
-    Only used by the one-time migration to Mona's agent-private memory dir.
-    Does NOT create the directory — the migration must not manufacture an
-    empty legacy source on fresh installs.
-    """
-    return get_data_dir() / "memory"
-
-
-def get_legacy_skills_dir() -> Path:
-    """Return the pre-multi-agent global skills directory (~/.mona/skills/).
-
-    Only used by the one-time migration to Mona's agent-private skills dir.
-    Does NOT create the directory — the migration must not manufacture an
-    empty legacy source on fresh installs.
-    """
-    return get_data_dir() / "skills"
-
-
 # ---------------------------------------------------------------------------
 # Global resource directories (stored OUTSIDE workspace for hard boundary)
 # ---------------------------------------------------------------------------
@@ -317,18 +302,13 @@ def get_memory_dir() -> Path:
     """Return Mona's memory directory (~/.mona/agents/mona/memory/).
 
     Stores MEMORY.md, SOUL.md, USER.md, AGENTS.md, history.jsonl.
-    Lives outside the workspace to enforce the _FsTool hard boundary. Since
+    Lives outside the workspace to enforce the _FsTool hard boundary; since
     multi-agent phase 1 the canonical location is Mona's agent-private
-    directory; the legacy ``~/.mona/memory/`` is migrated on startup.
+    directory.
     """
     from mona.agent.partners import MONA_AGENT_ID
 
     return get_agent_memory_dir(MONA_AGENT_ID)
-
-
-def get_memory_file(name: str) -> Path:
-    """Return path to a memory file (MEMORY.md/SOUL.md/USER.md/AGENTS.md)."""
-    return get_memory_dir() / name
 
 
 def get_memory_history_path() -> Path:
@@ -339,9 +319,9 @@ def get_memory_history_path() -> Path:
 def get_skills_dir() -> Path:
     """Return Mona's user skills directory (~/.mona/agents/mona/skills/).
 
-    Lives outside the workspace to enforce the _FsTool hard boundary. Since
+    Lives outside the workspace to enforce the _FsTool hard boundary; since
     multi-agent phase 1 the canonical location is Mona's agent-private
-    directory; the legacy ``~/.mona/skills/`` is migrated on startup.
+    directory.
     """
     from mona.agent.partners import MONA_AGENT_ID
 

@@ -9,7 +9,7 @@ Reserved top-level entries that stay at the workspace root:
 
 - ``output/`` (the migration target itself)
 - ``sessions/``, ``cron/``, ``schedule/`` (runtime data)
-- ``ppt_projects/``, ``video_projects/`` (specialized project pipelines)
+- ``ppt_projects/`` (legacy data), ``video_projects/`` (specialized project pipeline)
 - ``.git/``, ``.gitignore``, ``.mona/`` (existing user/version state)
 
 Safety rules:
@@ -53,7 +53,7 @@ RESERVED_TOP_LEVEL: frozenset[str] = frozenset({
     "sessions",        # runtime data
     "cron",            # runtime data
     "schedule",        # runtime data
-    "ppt_projects",    # PPT agent pipeline
+    "ppt_projects",    # legacy PPT workflow data; preserve during migration
     "video_projects",  # video agent pipeline
     ".git",            # user/version control
     ".gitignore",      # user/version control

@@ -1,7 +1,6 @@
 """Document agent context builder: profile 驱动的 soul prompt,无 memory / 无 history。
 
-泛化自 PPTContextBuilder,从 DocumentProfile 读取 soul_template 和 skill_name,
-不再硬编码 ppt_soul.md / mona-ppt。文档 agent 是单任务聚焦 loop,不加载长期 memory、
+从 DocumentProfile 读取 soul_template 和 skill_name。文档 agent 是单任务聚焦 loop,不加载长期 memory、
 不重放历史、不加载 bootstrap 文件。
 """
 
@@ -18,7 +17,7 @@ if TYPE_CHECKING:
 
 
 class DocumentContextBuilder(ContextBuilder):
-    """Context builder for document agents (PPT / video / flowchart).
+    """Context builder for document agents (video and future focused workflows).
 
     Differences from the default ContextBuilder:
     - Identity: profile.soul_template 替代 identity.md
@@ -44,11 +43,12 @@ class DocumentContextBuilder(ContextBuilder):
         skill_names: list[str] | None = None,
         channel: str | None = None,
         session_summary: str | None = None,
+        tool_names: set[str] | None = None,
     ) -> str:
         """Build a focused system prompt: soul + tool_contract + profile.skill_name skill."""
         parts: list[str] = [self._get_identity(channel=channel)]
 
-        parts.append(render_template("agent/tool_contract.md"))
+        parts.append(render_template("agent/tool_contract.md", tool_names=tool_names))
 
         # profile.skill_name 是唯一被通告的 skill,强制 always-on
         from mona.agent.skills import SkillsLoader
@@ -106,6 +106,7 @@ class DocumentContextBuilder(ContextBuilder):
         session_summary: str | None = None,
         session_metadata: dict[str, Any] | None = None,
         message_metadata: dict[str, Any] | None = None,
+        tool_names: set[str] | None = None,
     ) -> list[dict[str, Any]]:
         """Build messages without memory/history context injection.
 
@@ -130,6 +131,7 @@ class DocumentContextBuilder(ContextBuilder):
                 "role": "system",
                 "content": self.build_system_prompt(
                     skill_names, channel=channel, session_summary=session_summary,
+                    tool_names=tool_names,
                 ),
             },
             *history,

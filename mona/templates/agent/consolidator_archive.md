@@ -1,13 +1,12 @@
-Extract key facts from this conversation. Only output items matching these categories, skip everything else:
-- User facts: personal info, preferences, stated opinions, habits
-- Decisions: choices made, conclusions reached
-- Solutions: working approaches discovered through trial and error, especially non-obvious methods that succeeded after failed attempts
-- Events: plans, deadlines, notable occurrences
-- Preferences: communication style, tool preferences
+Prepare a concise handoff for the same ongoing task. The input may start with an
+existing handoff summary; rewrite it together with the newly archived
+conversation into one complete replacement. Do not assume any earlier handoff
+will remain available.
 
-Priority: user corrections and preferences > solutions > decisions > events > environment facts. The most valuable memory prevents the user from having to repeat themselves.
+Preserve only what the next turn needs to continue: the current objective, user
+constraints and corrections, completed and pending work, decisions and their
+evidence, relevant files or artifacts, failed attempts, and the next useful
+step. Keep concrete paths and identifiers when they are needed to resume work.
 
-Skip: code patterns derivable from source, git history, or anything already captured in existing memory.
-
-Output as concise bullet points, one fact per line. No preamble, no commentary.
-If nothing noteworthy happened, output: (nothing)
+Do not include secrets, passwords, API keys, private tokens, transient runtime
+noise, or speculation. Return non-empty plain text in concise bullet points.

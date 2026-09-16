@@ -2,7 +2,6 @@
 
 Phase 0 of the multi-agent plan (docs/design/multi-agent-development-guide.md):
 
-- ``AgentExecutionContext``: uniform runtime identity carried by every agent run.
 - ``AgentDefinition``: validated manifest for a package agent (section 5.1).
 - ``ConversationMetadata``: session metadata describing direct/room shape (section 5.2).
 - ``AgentRegistry``: loads the reserved Mona definition, built-in agents shipped
@@ -88,33 +87,6 @@ def _resolve_within(package_root: Path, rel_path: str, *, field_name: str) -> Pa
             f"{field_name} path {rel_path!r} escapes package root {package_root}"
         )
     return resolved
-
-
-@dataclass(frozen=True, slots=True)
-class AgentExecutionContext:
-    """Uniform identity carried by every agent execution entry point.
-
-    Tools read the current agent from this object; a model-supplied ``agent_id``
-    is never a trusted source. In direct chats ``conversation_id`` is the
-    chat_id and ``room_id`` is empty; in rooms ``room_id`` equals
-    ``conversation_id``.
-    """
-
-    agent_id: str
-    conversation_id: str
-    conversation_type: Literal["direct", "room"]
-    room_id: str | None = None
-    job_id: str | None = None
-    workflow_run_id: str | None = None
-
-    def __post_init__(self) -> None:
-        object.__setattr__(self, "agent_id", normalize_agent_id(self.agent_id))
-        if not self.conversation_id:
-            raise ValueError("conversation_id must be non-empty")
-        if self.conversation_type == "direct" and self.room_id is not None:
-            raise ValueError("direct conversations must not set room_id")
-        if self.conversation_type == "room" and self.room_id != self.conversation_id:
-            raise ValueError("room conversations must use conversation_id as room_id")
 
 
 class AgentDefinition(Base):
@@ -524,11 +496,6 @@ class AgentRegistry:
         if definition is None:
             raise AgentNotFoundError(agent_id)
         return definition
-
-    def get_entry(self, agent_id: str) -> ResolvedAgent | None:
-        """Return the full resolved entry (definition + package root), or None."""
-        with self._lock:
-            return self._agents.get(normalize_agent_id(agent_id))
 
     def list_agents(self) -> list[AgentDefinition]:
         """List all loaded agents (Mona first, then built-ins, then installed)."""

@@ -14,7 +14,7 @@ from mona.agent.tools.context import (
 )
 from mona.agent.tools.office import OfficeTool
 from mona.agent.tools.registry import ToolRegistry
-from mona.bus.events import InboundMessage
+from mona.bus.events import InboundMessage, OutboundMessage
 from mona.bus.queue import MessageBus
 from mona.office.schemas import (
     DocumentVersion,
@@ -69,6 +69,78 @@ def test_agent_loop_llm_runtime_reflects_current_provider_and_model(tmp_path: Pa
 
     assert runtime.provider is next_provider
     assert runtime.model == "next-model"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("raw", ["/stop", "/restart", "/status"])
+async def test_idle_priority_websocket_command_publishes_turn_end_marker(
+    tmp_path: Path,
+    raw: str,
+) -> None:
+    loop = _make_full_loop(tmp_path)
+    msg = InboundMessage(
+        channel="websocket",
+        sender_id="u1",
+        chat_id="chat1",
+        content=raw,
+        metadata={"webui": True},
+    )
+    dispatch = AsyncMock(return_value=OutboundMessage(
+        channel="websocket",
+        chat_id="chat1",
+        content="status result",
+    ))
+
+    assert loop.commands.is_priority(raw)
+    await loop._dispatch_command_inline(msg, msg.session_key, raw, dispatch)
+
+    outbound = []
+    while loop.bus.outbound_size > 0:
+        outbound.append(await loop.bus.consume_outbound())
+
+    result_index = next(i for i, item in enumerate(outbound) if item.content == "status result")
+    turn_end_index = next(
+        i for i, item in enumerate(outbound) if item.metadata.get("_turn_end")
+    )
+    assert result_index < turn_end_index
+    assert any(
+        item.metadata.get("_goal_status")
+        and item.metadata.get("goal_status") == "idle"
+        for item in outbound
+    )
+
+
+@pytest.mark.asyncio
+async def test_inline_command_does_not_end_an_active_websocket_turn(
+    tmp_path: Path,
+) -> None:
+    loop = _make_full_loop(tmp_path)
+    msg = InboundMessage(
+        channel="websocket",
+        sender_id="u1",
+        chat_id="chat1",
+        content="/status",
+    )
+    active_task = asyncio.create_task(asyncio.Event().wait())
+    loop._active_tasks[msg.session_key] = [active_task]
+    dispatch = AsyncMock(return_value=OutboundMessage(
+        channel="websocket",
+        chat_id="chat1",
+        content="status result",
+    ))
+
+    try:
+        await loop._dispatch_command_inline(msg, msg.session_key, "/status", dispatch)
+    finally:
+        active_task.cancel()
+        await asyncio.gather(active_task, return_exceptions=True)
+
+    outbound = []
+    while loop.bus.outbound_size > 0:
+        outbound.append(await loop.bus.consume_outbound())
+
+    assert [item.content for item in outbound] == ["status result"]
+    assert not any(item.metadata.get("_turn_end") for item in outbound)
 
 
 @pytest.mark.asyncio

@@ -73,12 +73,15 @@ class AutoCompact:
         if key in self._archiving or self._is_expired(session.updated_at):
             logger.info("Auto-compact: reloading session {} (archiving={})", key, key in self._archiving)
             session = self.sessions.get_or_create(key)
+        return session, self.summary_for_session(session, key)
+
+    def summary_for_session(self, session: Session, key: str) -> str | None:
         # Hot path: summary from in-memory dict (process hasn't restarted).
         entry = self._summaries.pop(key, None)
         if entry:
-            return session, self._format_summary(entry[0], entry[1])
+            return self._format_summary(entry[0], entry[1])
         # Cold path: summary persisted in session metadata (process restarted).
         meta = session.metadata.get("_last_summary")
         if isinstance(meta, dict):
-            return session, self._format_summary(meta["text"], datetime.fromisoformat(meta["last_active"]))
-        return session, None
+            return self._format_summary(meta["text"], datetime.fromisoformat(meta["last_active"]))
+        return None

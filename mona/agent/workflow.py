@@ -599,13 +599,6 @@ class WorkflowStore:
             self._save(state)
             return draft
 
-    def discard_draft(self, room_id: str) -> None:
-        with self._lock_for(room_id):
-            state = self.load(room_id)
-            if state.draft is not None:
-                state.draft = None
-                self._save(state)
-
     def activate(self, room_id: str) -> WorkflowDefinition:
         """Promote the draft to an immutable active revision (guide 5.4).
 

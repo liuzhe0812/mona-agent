@@ -58,12 +58,19 @@ def load_config(config_path: Path | None = None) -> Config:
     config = Config()
     if path.exists():
         try:
-            with open(path, encoding="utf-8") as f:
-                data = json.load(f)
-            if not isinstance(data, dict):
-                raise ValueError("config root must be a JSON object")
-            data = _migrate_config(data)
-            config = Config.model_validate(data)
+            with _config_write_lock(path):
+                with open(path, encoding="utf-8") as f:
+                    data = json.load(f)
+                if not isinstance(data, dict):
+                    raise ValueError("config root must be a JSON object")
+                removed_legacy_context_config = _has_legacy_context_window_config(data)
+                data = _migrate_config(data)
+                config = Config.model_validate(data)
+                if removed_legacy_context_config:
+                    _atomic_write_json(
+                        path,
+                        config.model_dump(mode="json", by_alias=True),
+                    )
         except (json.JSONDecodeError, ValueError, pydantic.ValidationError) as e:
             logger.error("Failed to load config from {}: {}", path, e)
             raise ConfigLoadError(f"Invalid Mona config at {path}: {e}") from e
@@ -203,6 +210,22 @@ def _env_replace(match: re.Match[str]) -> str:
 def _migrate_config(data: dict) -> dict:
     """Migrate old config formats to current."""
     defaults = data.get("agents", {}).get("defaults", {})
+    defaults.pop("contextWindowTokens", None)
+    defaults.pop("context_window_tokens", None)
+    for presets_key in ("modelPresets", "model_presets"):
+        presets = data.get(presets_key, {})
+        if isinstance(presets, dict):
+            for preset in presets.values():
+                if isinstance(preset, dict):
+                    preset.pop("contextWindowTokens", None)
+                    preset.pop("context_window_tokens", None)
+    for fallbacks_key in ("fallbackModels", "fallback_models"):
+        fallbacks = defaults.get(fallbacks_key, [])
+        if isinstance(fallbacks, list):
+            for fallback in fallbacks:
+                if isinstance(fallback, dict):
+                    fallback.pop("contextWindowTokens", None)
+                    fallback.pop("context_window_tokens", None)
     if defaults.get("maxToolIterations") == 200:
         defaults["maxToolIterations"] = 100
 
@@ -266,3 +289,27 @@ def _migrate_config(data: dict) -> dict:
         providers.pop("zen", None)
 
     return data
+
+
+def _has_legacy_context_window_config(data: dict[str, Any]) -> bool:
+    defaults = data.get("agents", {}).get("defaults", {})
+    if not isinstance(defaults, dict):
+        return False
+    legacy_keys = {"contextWindowTokens", "context_window_tokens"}
+    if legacy_keys.intersection(defaults):
+        return True
+    for presets_key in ("modelPresets", "model_presets"):
+        presets = data.get(presets_key, {})
+        if isinstance(presets, dict) and any(
+            isinstance(preset, dict) and legacy_keys.intersection(preset)
+            for preset in presets.values()
+        ):
+            return True
+    for fallbacks_key in ("fallbackModels", "fallback_models"):
+        fallbacks = defaults.get(fallbacks_key, [])
+        if isinstance(fallbacks, list) and any(
+            isinstance(fallback, dict) and legacy_keys.intersection(fallback)
+            for fallback in fallbacks
+        ):
+            return True
+    return False

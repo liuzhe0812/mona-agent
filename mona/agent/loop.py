@@ -40,6 +40,7 @@ from mona.bus.queue import MessageBus
 from mona.command import CommandContext, CommandRouter, register_builtin_commands
 from mona.config.schema import AgentDefaults, ModelPresetConfig
 from mona.providers.base import LLMProvider
+from mona.providers.context_window import DEFAULT_CONTEXT_WINDOW_TOKENS
 from mona.providers.factory import ProviderSnapshot
 from mona.session.goal_state import runner_wall_llm_timeout_s
 from mona.session.manager import Session, SessionManager, normalize_message_author
@@ -95,56 +96,21 @@ def previewable_delivered_media(files: list[dict[str, Any]] | None) -> list[str]
 _FREE_TIER_CAPABILITY_NOTE = (
     "\n\n---\n\n"
     "# Subscription Status\n\n"
-    "The user does not have an active subscription or trial. The following "
-    "capabilities are **unavailable** to you right now:\n"
-    "- Searching the knowledge base (knowledge_search, notes_search, "
-    "wiki_search), reading existing notes (notes_read), traversing compiled "
-    "Wiki pages (wiki_read), or verifying source evidence (materials_read)\n"
-    "- Saving images to notes (notes_save_image)\n"
-    "- Searching, reading, or operating on emails (email_search, email_read, "
-    "email_action)\n"
-    "- Using database AI tools (db_query, db_inspect, db_sql_draft) or terminal "
-    "AI tools (terminal_task, terminal_exec, terminal_output, terminal_upload)\n"
-    "- Searching the unified memory (hoard_search) for note or email sources\n\n"
-    "You **may still**:\n"
-    "- Create new notes (notes_create)\n"
-    "- Search the unified memory (hoard_search) for browser and chat sources\n"
-    "- Use all other tools normally\n\n"
-    "Rules:\n"
-    "- Do NOT claim or imply that you have searched notes, materials, or emails.\n"
-    "- Do NOT save images to notes.\n"
-    "- If the user asks to read notes/materials/emails or search the knowledge "
-    "base, explain that an active subscription or trial is required and they "
-    "can subscribe to unlock this capability."
+    "There is no active subscription or trial. Do not search/read user Notes, "
+    "Agent Knowledge evidence, or email; save images to Notes; use database or "
+    "terminal AI tools; or use hoard results sourced from Notes/email. Never imply "
+    "that these sources were checked. Creating new notes, hoard search over browser/chat "
+    "sources, and other offered tools remain available. If the user requests a blocked "
+    "source, explain that a subscription or trial is required."
 )
 
 _TASK_PLAN_NOTE = (
     "\n\n---\n\n"
     "## Planning\n\n"
-    "You have access to an `update_plan` tool which tracks steps and progress and renders them to the user. "
-    "Using the tool helps demonstrate that you've understood the task and convey how you're approaching it. "
-    "Plans can help to make complex, ambiguous, or multi-phase work clearer and more collaborative for the user. "
-    "A good plan should break the task into meaningful, logically ordered steps that are easy to verify as you go.\n\n"
-    "Note that plans are not for padding out simple work with filler steps or stating the obvious. The content of "
-    "your plan should not involve doing anything that you aren't capable of doing (i.e. don't try to test things "
-    "that you can't test). Do not use plans for simple or single-step queries that you can just do or answer "
-    "immediately.\n\n"
-    "Do not repeat the full contents of the plan after an `update_plan` call — the harness already displays it. "
-    "Instead, summarize the change made and highlight any important context or next step.\n\n"
-    "Before running a command, consider whether or not you have completed the previous step, and make sure to mark "
-    "it as completed before moving on to the next step. It may be the case that you complete all steps in your plan "
-    "after a single pass of implementation. If this is the case, you can simply mark all the planned steps as "
-    "completed. Sometimes, you may need to change plans in the middle of a task: call `update_plan` with the updated "
-    "plan and make sure to provide an `explanation` of the rationale when doing so.\n\n"
-    "## `update_plan`\n\n"
-    "A tool named `update_plan` is available to you. You can use it to keep an up-to-date, step-by-step plan for "
-    "the task.\n\n"
-    "To create a new plan, call `update_plan` with a short list of 1-sentence steps (no more than 5-7 words each) "
-    "with a `status` for each step (`pending`, `in_progress`, or `completed`).\n\n"
-    "When steps have been completed, use `update_plan` to mark each finished step as `completed` and the next step "
-    "you are working on as `in_progress`. There should always be exactly one `in_progress` step until everything is "
-    "done. You can mark multiple items as complete in a single `update_plan` call.\n\n"
-    "If all steps are complete, ensure you call `update_plan` to mark all steps as `completed`."
+    "Use `update_plan` only for complex, ambiguous, or multi-phase work; plans are not for padding out simple work. "
+    "Use meaningful, logically ordered steps with no more than 5-7 words each and status `pending`, `in_progress`, or `completed`. "
+    "Keep exactly one step `in_progress` until all are complete; update completed work before moving on. "
+    "Revise the plan with an explanation when it changes. The harness renders it, so do not repeat it in full."
 )
 
 
@@ -255,6 +221,7 @@ class AgentLoop:
         model: str | None = None,
         max_iterations: int | None = None,
         context_window_tokens: int | None = None,
+        auto_compact_token_limit: int | None = None,
         context_block_limit: int | None = None,
         max_tool_result_chars: int | None = None,
         provider_retry_mode: str = "standard",
@@ -308,8 +275,9 @@ class AgentLoop:
         self.context_window_tokens = (
             context_window_tokens
             if context_window_tokens is not None
-            else defaults.context_window_tokens
+            else DEFAULT_CONTEXT_WINDOW_TOKENS
         )
+        self.auto_compact_token_limit = auto_compact_token_limit
         self.context_block_limit = context_block_limit
         self.max_tool_result_chars = (
             max_tool_result_chars
@@ -380,6 +348,8 @@ class AgentLoop:
         self._mcp_stacks: dict[str, AsyncExitStack] = {}
         self._mcp_connected = False
         self._mcp_connecting = False
+        self._computer_use_connection_lock = asyncio.Lock()
+        self._mcp_reconnect_lock = asyncio.Lock()
         self._active_tasks: dict[str, list[asyncio.Task]] = {}  # session_key -> tasks
         self._background_tasks: list[asyncio.Task] = []
         self._session_locks: dict[str, asyncio.Lock] = {}
@@ -398,6 +368,8 @@ class AgentLoop:
             model=self.model,
             sessions=self.sessions,
             context_window_tokens=self.context_window_tokens,
+            auto_compact_token_limit=self.auto_compact_token_limit,
+            context_block_limit=self.context_block_limit,
             build_messages=self.context.build_messages,
             get_tool_definitions=self.tools.get_definitions,
             max_completion_tokens=provider.generation.max_tokens,
@@ -456,17 +428,41 @@ class AgentLoop:
         allowing callers to override or extend the standard config-derived
         parameters (e.g. ``cron_service``, ``session_manager``).
         """
-        from mona.providers.factory import make_provider
+        from mona.providers.factory import build_provider_snapshot, make_provider
 
         if bus is None:
             bus = MessageBus()
         defaults = config.agents.defaults
-        provider = extra.pop("provider", None) or make_provider(config)
+        provider_override = extra.pop("provider", None)
         resolved = config.resolve_preset()
-        model = extra.pop("model", None) or resolved.model
-        context_window_tokens = (
-            extra.pop("context_window_tokens", None) or resolved.context_window_tokens
-        )
+        model_override = extra.pop("model", None)
+        context_window_override = extra.pop("context_window_tokens", None)
+        auto_compact_override = extra.pop("auto_compact_token_limit", None)
+        if provider_override is None and model_override is None and context_window_override is None:
+            snapshot = build_provider_snapshot(config)
+            provider = snapshot.provider
+            model = snapshot.model
+            context_window_tokens = snapshot.context_window_tokens
+            auto_compact_token_limit = (
+                auto_compact_override
+                if auto_compact_override is not None
+                else snapshot.auto_compact_token_limit
+            )
+        else:
+            from mona.providers.context_window import resolve_model_context_window
+
+            provider = provider_override or make_provider(config)
+            model = model_override or resolved.model
+            context_window_tokens = (
+                context_window_override
+                if context_window_override is not None
+                else resolve_model_context_window(config, resolved)
+            )
+            auto_compact_token_limit = (
+                auto_compact_override
+                if auto_compact_override is not None
+                else resolved.auto_compact_token_limit
+            )
         provider_snapshot_loader = extra.pop("provider_snapshot_loader", None)
         runtime_config_loader = extra.pop("runtime_config_loader", None)
         if runtime_config_loader is None and provider_snapshot_loader is not None:
@@ -489,6 +485,7 @@ class AgentLoop:
             model=model,
             max_iterations=defaults.max_tool_iterations,
             context_window_tokens=context_window_tokens,
+            auto_compact_token_limit=auto_compact_token_limit,
             context_block_limit=defaults.context_block_limit,
             max_tool_result_chars=defaults.max_tool_result_chars,
             provider_retry_mode=defaults.provider_retry_mode,
@@ -594,14 +591,25 @@ class AgentLoop:
         provider = snapshot.provider
         model = snapshot.model
         context_window_tokens = snapshot.context_window_tokens
+        auto_compact_token_limit = snapshot.auto_compact_token_limit
         old_model = self.model
         self.provider = provider
         self.model = model
         self.context_window_tokens = context_window_tokens
+        self.auto_compact_token_limit = auto_compact_token_limit
         self.runner.provider = provider
         self.subagents.set_provider(provider, model)
-        self.consolidator.set_provider(provider, model, context_window_tokens)
+        self.consolidator.set_provider(
+            provider,
+            model,
+            context_window_tokens,
+            auto_compact_token_limit,
+        )
         self.dream.set_provider(provider, model)
+        if hasattr(self, "_doc_loops"):
+            self._doc_loops.clear()
+        if hasattr(self, "_partner_loops"):
+            self._partner_loops.clear()
         self._provider_signature = snapshot.signature
         if publish_update and self._runtime_model_publisher is not None:
             self._runtime_model_publisher(
@@ -668,7 +676,7 @@ class AgentLoop:
           membership does not create a physical artifact directory.
         - Session with ``metadata.agent_kind`` in ``DOCUMENT_PROFILES``: the
           configured workspace root — dedicated agents keep their existing
-          workspace semantics (ppt_projects/, video_projects/).
+          workspace semantics (video_projects/).
         - Default session or no session: the active Agent's
           ``agent-workspaces/<agent_id>/output`` directory.
         """
@@ -812,7 +820,7 @@ class AgentLoop:
     def _ensure_document_loop(self, agent_kind: str) -> AgentLoop:
         """Lazily construct a document agent loop for the given kind.
 
-        Document loops (PPT / video) share this loop's provider,
+        Document loops (currently video) share this loop's provider,
         sessions, bus, and other runtime dependencies, but each has its own
         filtered tool registry and DocumentContextBuilder driven by the
         matching DocumentProfile. Raises if construction fails — no fallback.
@@ -828,6 +836,7 @@ class AgentLoop:
             workspace=self.workspace,
             model=self.model,
             context_window_tokens=self.context_window_tokens,
+            auto_compact_token_limit=self.auto_compact_token_limit,
             max_tool_result_chars=self.max_tool_result_chars,
             restrict_to_workspace=self.restrict_to_workspace,
             session_manager=self.sessions,
@@ -888,6 +897,7 @@ class AgentLoop:
             workspace=self.workspace,
             model=self.model,
             context_window_tokens=self.context_window_tokens,
+            auto_compact_token_limit=self.auto_compact_token_limit,
             max_tool_result_chars=self.max_tool_result_chars,
             restrict_to_workspace=self.restrict_to_workspace,
             session_manager=self.sessions,
@@ -920,6 +930,7 @@ class AgentLoop:
         ctx = ToolContext(
             config=self.tools_config,
             workspace=str(self.workspace),
+            registry=self.tools,
             services_port=self.services_port,
             bus=self.bus,
             subagent_manager=self.subagents,
@@ -1020,7 +1031,9 @@ class AgentLoop:
         from mona.agent.tools.mcp import connect_mcp_servers
 
         try:
-            self._mcp_stacks = await connect_mcp_servers(self._mcp_servers, self.tools)
+            self._mcp_stacks = await connect_mcp_servers(
+                self._mcp_servers, self.tools, self._reconnect_mcp_server_tools
+            )
             if self._mcp_stacks:
                 self._mcp_connected = True
             else:
@@ -1042,8 +1055,10 @@ class AgentLoop:
         metadata: dict | None = None,
         session_key: str | None = None,
         session: Session | None = None,
+        *,
+        reset_capabilities: bool = True,
     ) -> None:
-        """Update context for all tools that need routing info."""
+        """Update tool routing; reset capabilities only when starting a turn."""
         from mona.agent.tools.context import (
             PROJECT_WORKSPACE_META,
             ContextAware,
@@ -1088,15 +1103,24 @@ class AgentLoop:
             terminal_exec_mode=meta.get("terminal_exec_mode"),
         )
 
+        from mona.agent.tools.capabilities import bind_capability_context
+
+        if reset_capabilities:
+            bind_capability_context(request_ctx)
+            from mona.computer_use.session import bind_computer_context
+
+            bind_computer_context(request_ctx)
+        if getattr(self, "_profile", None) is not None:
+            from mona.agent.tools.capabilities import activate_capabilities
+
+            activate_capabilities({"development", "skill_resources"})
+
         for name in self.tools.tool_names:
             tool = self.tools.get(name)
             if tool and isinstance(tool, ContextAware):
                 tool.set_context(request_ctx)
-        # A tool's ``set_context`` may have toggled its ``is_available`` flag
-        # (e.g. terminal tools hidden when no terminal session is active).
-        # Invalidate the definitions cache so the next ``get_definitions``
-        # call reflects the new availability.
-        self.tools.invalidate_definitions_cache()
+        # ToolRegistry filters request availability on every read while
+        # retaining its stable schema cache across concurrent sessions.
 
     @staticmethod
     def _runtime_chat_id(msg: InboundMessage) -> str:
@@ -1167,6 +1191,14 @@ class AgentLoop:
         pending_summary: str | None,
     ) -> list[dict[str, Any]]:
         """Build the initial message list for the LLM turn."""
+        from mona.agent.tools.capabilities import (
+            activate_capabilities,
+            activate_capabilities_for_history,
+        )
+
+        activate_capabilities_for_history(history)
+        if self.tools.is_visible("generate_image"):
+            activate_capabilities({"skill_resources"})
         messages = self.context.build_messages(
             history=history,
             current_message=video_generation_prompt(
@@ -1174,7 +1206,11 @@ class AgentLoop:
                 msg.metadata,
                 media=msg.media,
             ),
-            skill_names=["image-generation"] if self.tools.has("generate_image") else None,
+            skill_names=(
+                ["image-generation"]
+                if self.tools.is_visible("generate_image")
+                else None
+            ),
             media=msg.media if msg.media else None,
             channel=msg.channel,
             chat_id=self._runtime_chat_id(msg),
@@ -1182,6 +1218,10 @@ class AgentLoop:
             session_summary=pending_summary,
             session_metadata=session.metadata,
             message_metadata=msg.metadata,
+            tool_names=(
+                {item["function"]["name"] for item in self.tools.get_definitions()}
+                if self.tools.has("load_capability") else None
+            ),
         )
         messages = self._append_room_members_context(messages, session)
         return self._append_mona_direct_mention_boundary(messages, msg, session)
@@ -1261,38 +1301,75 @@ class AgentLoop:
             await self.bus.publish_outbound(result)
         else:
             logger.warning("Command '{}' matched but dispatch returned None", raw)
+        active_tasks = self._active_tasks.get(key, ())
+        # Inline commands bypass _dispatch; close their idle WebUI turn without
+        # finalizing a model turn that is still running for the same session.
+        if msg.channel == "websocket" and not any(not task.done() for task in active_tasks):
+            await self._webui_turns.handle_turn_end(
+                msg,
+                session_key=key,
+                latency_ms=None,
+            )
+            await self._webui_turns.publish_run_status(msg, "idle")
+
+    # Grace period a cancelled task gets to unwind before /stop reports it
+    # as force-detached instead of cleanly stopped.
+    CANCEL_ACTIVE_TASKS_WAIT_SECONDS = 5.0
 
     async def _cancel_active_tasks(self, key: str) -> int:
         """Cancel and await all active tasks and subagents for *key*.
 
         Returns the total number of cancelled tasks + subagents.
         """
+        from mona.computer_use.session import (
+            mark_computer_turn_stopped,
+            stop_computer_turns,
+        )
+
+        mark_computer_turn_stopped(key)
         tasks = [task for task in self._active_tasks.get(key, []) if not task.done()]
         cancelled = sum(1 for t in tasks if not t.done() and t.cancel())
 
         async def _wait_for_turns() -> None:
             if not tasks:
                 return
-            done, pending = await asyncio.wait(tasks, timeout=5.0)
+            done, pending = await asyncio.wait(
+                tasks, timeout=self.CANCEL_ACTIVE_TASKS_WAIT_SECONDS
+            )
             if done:
                 await asyncio.gather(*done, return_exceptions=True)
             if pending:
                 logger.warning(
-                    "{} active task(s) did not stop within 5s for session {}",
+                    "{} active task(s) did not stop within {}s for session {}",
                     len(pending),
+                    self.CANCEL_ACTIVE_TASKS_WAIT_SECONDS,
                     key,
                 )
 
         from mona.agent.tools.exec_session import DEFAULT_EXEC_SESSION_MANAGER
         from mona.agent.tools.terminal import cancel_terminal_tasks_by_session
 
-        _, sub_cancelled, process_cancelled, terminal_cancelled = await asyncio.gather(
+        _, sub_cancelled, process_cancelled, _, terminal_cancelled = await asyncio.gather(
             _wait_for_turns(),
             self.subagents.cancel_by_session(key),
             DEFAULT_EXEC_SESSION_MANAGER.cancel_by_session(key),
+            stop_computer_turns(key),
             cancel_terminal_tasks_by_session(key),
         )
         return cancelled + sub_cancelled + process_cancelled + terminal_cancelled
+
+    def _count_uncancelled_tasks(self, keys: list[str]) -> int:
+        """Return turn tasks for *keys* still running after a cancel request.
+
+        A task that ignores cancellation never reaches its ``finally`` block,
+        so the run status stays "running" forever unless /stop force-resets it.
+        """
+        return sum(
+            1
+            for key in keys
+            for task in self._active_tasks.get(key, [])
+            if not task.done()
+        )
 
     def _effective_session_key(self, msg: InboundMessage) -> str:
         """Return the session key used for task routing and mid-turn injections."""
@@ -1327,7 +1404,10 @@ class AgentLoop:
         metadata: dict[str, Any] | None = None,
         session_key: str | None = None,
         pending_queue: asyncio.Queue | None = None,
-    ) -> tuple[str | None, list[str], list[dict], str, bool]:
+        return_detected_context_window: bool = False,
+    ) -> tuple[str | None, list[str], list[dict], str, bool] | tuple[
+        str | None, list[str], list[dict], str, bool, int | None
+    ]:
         """Run the agent iteration loop.
 
         *on_stream*: called with each content delta during streaming.
@@ -1349,7 +1429,9 @@ class AgentLoop:
             metadata=metadata,
             session_key=session_key,
             tool_hint_max_length=self.tool_hint_max_length,
-            set_tool_context=partial(self._set_tool_context, session=session),
+            set_tool_context=partial(
+                self._set_tool_context, session=session, reset_capabilities=False,
+            ),
             on_iteration=lambda iteration: setattr(self, "_current_iteration", iteration),
         )
         hook: AgentHook = (
@@ -1466,7 +1548,16 @@ class AgentLoop:
             )
         finally:
             reset_file_states(file_state_token)
-        self._last_usage = result.usage
+            from mona.computer_use.session import finish_computer_turn
+
+            await finish_computer_turn()
+        self._last_usage = dict(result.usage)
+        # ``usage`` is cumulative across this run's LLM calls (billing view);
+        # ``context_tokens`` carries the last call's prompt size so the WebUI
+        # can show how full the context window actually is.
+        final_prompt = (result.final_usage or {}).get("prompt_tokens")
+        if final_prompt:
+            self._last_usage["context_tokens"] = int(final_prompt)
         if result.stop_reason in {"max_iterations", "loop_detected"}:
             if result.stop_reason == "max_iterations":
                 logger.warning("Max iterations ({}) reached", self.max_iterations)
@@ -1479,13 +1570,16 @@ class AgentLoop:
                 await on_stream_end(resuming=False)
         elif result.stop_reason == "error":
             logger.error("LLM returned error: {}", (result.final_content or "")[:200])
-        return (
+        outcome = (
             result.final_content,
             result.tools_used,
             result.messages,
             result.stop_reason,
             result.had_injections,
         )
+        if return_detected_context_window:
+            return (*outcome, result.detected_context_window_tokens)
+        return outcome
 
     async def run(self) -> None:
         """Run the agent loop, dispatching messages as tasks to stay responsive to /stop."""
@@ -1726,6 +1820,53 @@ class AgentLoop:
                 logger.debug("MCP server '{}' cleanup error (can be ignored)", name)
         self._mcp_stacks.clear()
 
+    async def _sync_computer_use_runtime(self) -> None:
+        if hasattr(self, "_profile"):
+            return
+        from mona.agent.tools.mcp import BUILTIN_COMPUTER_SERVER_NAME
+        from mona.computer_use.runtime import (
+            COMPUTER_PERMISSION_TOOL_NAMES,
+            get_cua_driver_manager,
+        )
+
+        effective = (
+            getattr(self, "_effective_config", None)
+            if hasattr(self, "_partner_agent_id")
+            else getattr(self, "_mona_effective_config", None)
+        )
+        allowed = getattr(effective, "allowed_tools", None)
+        enabled = allowed is not None and set(COMPUTER_PERMISSION_TOOL_NAMES) <= set(allowed)
+        async with self._computer_use_connection_lock:
+            if not enabled:
+                if BUILTIN_COMPUTER_SERVER_NAME in self._mcp_servers:
+                    await self.remove_mcp_server(BUILTIN_COMPUTER_SERVER_NAME)
+                return
+
+            manager = get_cua_driver_manager()
+            if manager.executable is None:
+                await manager.start_install()
+                status = await manager.wait_install()
+            else:
+                manager.set_connection_result(None)
+                status = await manager.refresh_health()
+            if status.get("state") != "available":
+                return
+            if BUILTIN_COMPUTER_SERVER_NAME in self._mcp_stacks:
+                manager.set_connection_result(None)
+                return
+            if BUILTIN_COMPUTER_SERVER_NAME in self._mcp_servers:
+                result = await self.restart_mcp_server(BUILTIN_COMPUTER_SERVER_NAME)
+            else:
+                result = await self.add_mcp_server(
+                    BUILTIN_COMPUTER_SERVER_NAME,
+                    manager.mcp_config(),
+                )
+            manager.set_connection_result(
+                None
+                if result.get("ok")
+                else str(result.get("error") or "MCP connection failed")
+            )
+
     # ------------------------------------------------------------------
     # MCP server runtime management (settings panel)
     # ------------------------------------------------------------------
@@ -1767,6 +1908,23 @@ class AgentLoop:
             )
         return rows
 
+    async def _reconnect_mcp_server_tools(self, name: str):
+        """Rebuild one MCP server and map its original tool names to new wrappers.
+
+        Passed to the tool wrappers as their reconnect callback: when a stdio
+        transport dies mid-call there is no way to salvage the old session, so
+        the server process is replaced and the triggering call is retried on the
+        fresh wrapper.
+        """
+        from mona.agent.tools.mcp import collect_mcp_tool_wrappers
+
+        async with self._mcp_reconnect_lock:
+            result = await self.restart_mcp_server(name)
+            if not result.get("ok"):
+                logger.warning("MCP server '{}' reconnect failed: {}", name, result.get("error"))
+                return None
+            return collect_mcp_tool_wrappers(self.tools, name)
+
     async def restart_mcp_server(self, name: str) -> dict[str, Any]:
         """Close + reconnect a single MCP server without touching others."""
         from mona.agent.tools.mcp import connect_single_mcp_server, list_mcp_server_tools
@@ -1786,7 +1944,9 @@ class AgentLoop:
         self._unregister_mcp_server_tools(name)
         # 3. Reconnect
         try:
-            stack = await connect_single_mcp_server(name, cfg, self.tools)
+            stack = await connect_single_mcp_server(
+                name, cfg, self.tools, self._reconnect_mcp_server_tools
+            )
         except Exception as e:
             logger.exception("[mcp] restart '{}' failed", name)
             return {"ok": False, "name": name, "error": str(e)}
@@ -1994,6 +2154,8 @@ class AgentLoop:
                 on_stream_end=on_stream_end,
                 pending_queue=pending_queue,
             )
+
+        await self._sync_computer_use_runtime()
 
         key = session_key or msg.session_key
         # Pre-fetch session so the workspace contextvar can be set for the
@@ -2278,14 +2440,20 @@ class AgentLoop:
         return "dispatch"
 
     async def _state_build(self, ctx: TurnContext) -> str:
-        await self.consolidator.maybe_consolidate_by_tokens(
-            ctx.session,
-            replay_max_messages=self._max_messages,
-        )
+        if ctx.on_progress is None:
+            ctx.on_progress = await self._build_bus_progress_callback(ctx.msg)
+
+        async def report_compaction(active: bool) -> None:
+            if ctx.msg.channel == "websocket" and ctx.on_progress is not None:
+                await ctx.on_progress(
+                    "正在整理上下文" if active else "",
+                    context_compacting=active,
+                )
+
         ctx.msg.metadata[DELIVER_FILES_PENDING_META] = ctx.delivered_files
 
-        # Refresh subscription access flag before building tool context so
-        # that subscription-gated tools are hidden from the model this turn.
+        # Bind request-scoped tool state before token estimation and prompt
+        # construction so both paths see the same capability set.
         # Fail-closed: any IPC error means no access to personal data.
         await self._refresh_subscription_access()
 
@@ -2296,6 +2464,21 @@ class AgentLoop:
             ctx.msg.metadata,
             session_key=ctx.session_key,
             session=ctx.session,
+        )
+        from mona.agent.tools.capabilities import activate_capabilities_for_media
+
+        activate_capabilities_for_media(ctx.msg.media)
+
+        await self.consolidator.maybe_consolidate_by_tokens(
+            ctx.session,
+            replay_max_messages=self._max_messages,
+            current_message=ctx.msg.content,
+            message_metadata=ctx.msg.metadata,
+            on_compaction=report_compaction,
+        )
+        ctx.pending_summary = self.auto_compact.summary_for_session(
+            ctx.session,
+            ctx.session_key,
         )
         if message_tool := self.tools.get("message"):
             if isinstance(message_tool, MessageTool):
@@ -2327,8 +2510,6 @@ class AgentLoop:
 
         ctx.user_persisted_early = self._persist_user_message_early(ctx.msg, ctx.session)
 
-        if ctx.on_progress is None:
-            ctx.on_progress = await self._build_bus_progress_callback(ctx.msg)
         if ctx.on_retry_wait is None:
             ctx.on_retry_wait = await self._build_retry_wait_callback(ctx.msg)
 
@@ -2401,6 +2582,101 @@ class AgentLoop:
         result[0] = {**first, "content": first["content"] + _TASK_PLAN_NOTE}
         return result
 
+    async def _learn_context_window(self, tokens: int) -> bool:
+        """Apply and persist a provider-confirmed smaller context window."""
+        if tokens < 4_096 or tokens >= self.context_window_tokens:
+            return False
+
+        self.context_window_tokens = tokens
+        self.consolidator.set_provider(
+            self.provider,
+            self.model,
+            tokens,
+            self.auto_compact_token_limit,
+        )
+        try:
+            from mona.config.loader import load_config, save_config
+            from mona.providers.context_window import record_discovered_context_window
+
+            config = await asyncio.to_thread(load_config)
+            configured_preset = config.resolve_preset(self._active_preset)
+            if configured_preset.model != self.model:
+                logger.warning(
+                    "Learned context window for {} was kept for this run only; "
+                    "the configured active model changed to {}",
+                    self.model,
+                    configured_preset.model,
+                )
+                return True
+            if record_discovered_context_window(config, configured_preset, tokens):
+                await asyncio.to_thread(save_config, config)
+        except Exception:
+            logger.exception(
+                "Failed to persist learned context window for {}", self.model
+            )
+        return True
+
+    async def _rebuild_after_context_limit(
+        self,
+        ctx: TurnContext,
+        tokens: int,
+    ) -> bool:
+        """Learn a confirmed limit, compact the persisted turn, and rebuild it once."""
+        if not await self._learn_context_window(tokens):
+            return False
+
+        async def report_compaction(active: bool) -> None:
+            if ctx.msg.channel == "websocket" and ctx.on_progress is not None:
+                await ctx.on_progress(
+                    "正在整理上下文" if active else "",
+                    context_compacting=active,
+                )
+
+        # The current user message was persisted before the first request.
+        # Temporarily remove it so the consolidator sees the same history plus
+        # current-message shape as the original request, without summarizing
+        # or counting the new user input twice.
+        persisted_current = None
+        if ctx.user_persisted_early and ctx.session.messages:
+            last_message = ctx.session.messages[-1]
+            if last_message.get("role") == "user":
+                persisted_current = ctx.session.messages.pop()
+        try:
+            await self.consolidator.maybe_consolidate_by_tokens(
+                ctx.session,
+                replay_max_messages=self._max_messages,
+                current_message=ctx.msg.content,
+                message_metadata=ctx.msg.metadata,
+                on_compaction=report_compaction,
+            )
+        finally:
+            if persisted_current is not None:
+                ctx.session.messages.append(persisted_current)
+        ctx.pending_summary = self.auto_compact.summary_for_session(
+            ctx.session,
+            ctx.session_key,
+        )
+        history = self._build_model_history(
+            ctx.session,
+            max_messages=self._max_messages,
+            max_tokens=self._replay_token_budget(),
+            include_timestamps=True,
+        )
+        if ctx.user_persisted_early and history and history[-1].get("role") == "user":
+            history = history[:-1]
+        ctx.history = history
+        ctx.initial_messages = self._build_initial_messages(
+            ctx.msg,
+            ctx.session,
+            history,
+            ctx.pending_summary,
+        )
+        if not self.tools.has_subscription_access:
+            ctx.initial_messages = self._inject_capability_note(ctx.initial_messages)
+        if self.tools.has("update_plan"):
+            ctx.initial_messages = self._inject_task_plan_note(ctx.initial_messages)
+        return True
+
     async def _state_run(self, ctx: TurnContext) -> str:
         await self._webui_turns.publish_run_status(ctx.msg, "running")
         result = await self._run_agent_loop(
@@ -2416,8 +2692,43 @@ class AgentLoop:
             metadata=ctx.msg.metadata,
             session_key=ctx.session_key,
             pending_queue=ctx.pending_queue,
+            return_detected_context_window=True,
         )
-        final_content, tools_used, all_msgs, stop_reason, had_injections = result
+        (
+            final_content,
+            tools_used,
+            all_msgs,
+            stop_reason,
+            had_injections,
+            detected_context_window,
+        ) = result
+        if detected_context_window is not None and await self._rebuild_after_context_limit(
+            ctx,
+            detected_context_window,
+        ):
+            retry_result = await self._run_agent_loop(
+                ctx.initial_messages,
+                on_progress=ctx.on_progress,
+                on_stream=ctx.on_stream,
+                on_stream_end=ctx.on_stream_end,
+                on_retry_wait=ctx.on_retry_wait,
+                session=ctx.session,
+                channel=ctx.msg.channel,
+                chat_id=ctx.msg.chat_id,
+                message_id=ctx.msg.metadata.get("message_id"),
+                metadata=ctx.msg.metadata,
+                session_key=ctx.session_key,
+                pending_queue=ctx.pending_queue,
+                return_detected_context_window=True,
+            )
+            (
+                final_content,
+                tools_used,
+                all_msgs,
+                stop_reason,
+                had_injections,
+                _,
+            ) = retry_result
         ctx.final_content = final_content
         ctx.turn_usage = dict(self._last_usage)
         ctx.tools_used = tools_used

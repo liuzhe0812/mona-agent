@@ -1998,6 +1998,10 @@ class SubagentManager:
             skills_summary=skills_summary or "",
         )
 
+    # Grace period a cancelled subagent gets to unwind before /stop
+    # force-detaches it from session bookkeeping.
+    CANCEL_BY_SESSION_WAIT_SECONDS = 5.0
+
     async def cancel_by_session(self, session_key: str) -> int:
         """Cancel all subagents for the given session. Returns count cancelled."""
         tasks = [
@@ -2011,15 +2015,30 @@ class SubagentManager:
         for t in tasks:
             t.cancel()
         if tasks:
-            done, pending = await asyncio.wait(tasks, timeout=5.0)
+            done, pending = await asyncio.wait(
+                tasks, timeout=self.CANCEL_BY_SESSION_WAIT_SECONDS
+            )
             if done:
                 await asyncio.gather(*done, return_exceptions=True)
             if pending:
                 logger.warning(
-                    "{} subagent task(s) did not stop within 5s for session {}",
+                    "{} subagent task(s) did not stop within {}s for session {}",
                     len(pending),
+                    self.CANCEL_BY_SESSION_WAIT_SECONDS,
                     session_key,
                 )
+                # A stuck subagent never runs its untrack callback, so the
+                # running count and wall-clock start would keep the chat card
+                # in "running" forever. Force-detach it from session
+                # bookkeeping; the task itself keeps leaking until it ends.
+                stuck = {id(t) for t in pending}
+                for task_id in list(self._session_tasks.get(session_key, set())):
+                    task = (
+                        self._running_tasks.get(task_id)
+                        or self._collaboration_tasks.get(task_id)
+                    )
+                    if task is not None and not task.done() and id(task) in stuck:
+                        self._untrack_session_task(session_key, task_id)
         return len(tasks)
 
     async def recover_jobs(

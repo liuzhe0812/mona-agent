@@ -127,9 +127,21 @@ async def cmd_stop(ctx: CommandContext) -> OutboundMessage:
     if msg.session_key != ctx.key:
         keys.append(msg.session_key)
     total = sum(await asyncio.gather(*(loop._cancel_active_tasks(key) for key in keys)))
-    if total == 0:
+    # A task that ignores cancellation never reaches its finally block, so the
+    # run status would stay "running" forever. Force-reset the status when
+    # something is still winding down after the cancel grace period.
+    leftover = loop._count_uncancelled_tasks(keys)
+    if total == 0 or leftover:
         await loop._webui_turns.publish_run_status(msg, "idle")
-    content = f"Stopped {total} task(s)." if total else "No active task to stop."
+    if total == 0:
+        content = "No active task to stop."
+    elif leftover:
+        content = (
+            f"Stopped {total} task(s). "
+            f"{leftover} task(s) did not terminate; run status was force-reset."
+        )
+    else:
+        content = f"Stopped {total} task(s)."
     return OutboundMessage(
         channel=msg.channel, chat_id=msg.chat_id, content=content,
         metadata=dict(msg.metadata or {})

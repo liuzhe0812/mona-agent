@@ -19,6 +19,7 @@ from mona.agent.hook import AgentHook, AgentHookContext
 from mona.agent.tools.registry import ToolRegistry
 from mona.agent.tools.result_compress import compress_tool_result
 from mona.providers.base import LLMProvider, LLMResponse, ToolCallRequest
+from mona.providers.context_window import context_window_from_error
 from mona.utils.file_edit_events import (
     StreamingFileEditTracker,
     build_file_edit_end_event,
@@ -177,8 +178,13 @@ class AgentRunResult:
     messages: list[dict[str, Any]]
     tools_used: list[str] = field(default_factory=list)
     usage: dict[str, int] = field(default_factory=dict)
+    """Cumulative usage across every LLM call in this run (billing view)."""
+    final_usage: dict[str, int] = field(default_factory=dict)
+    """Usage of the last single LLM call; its ``prompt_tokens`` mirrors the
+    context actually sent to the model (context-window view)."""
     stop_reason: str = "completed"
     error: str | None = None
+    detected_context_window_tokens: int | None = None
     tool_events: list[dict[str, str]] = field(default_factory=list)
     had_injections: bool = False
 
@@ -379,7 +385,9 @@ class AgentRunner:
         final_content: str | None = None
         tools_used: list[str] = []
         usage: dict[str, int] = {"prompt_tokens": 0, "completion_tokens": 0}
+        raw_usage: dict[str, int] = {}
         error: str | None = None
+        detected_context_window_tokens: int | None = None
         stop_reason = "completed"
         tool_events: list[dict[str, str]] = []
         workspace_violation_counts: dict[str, int] = {}
@@ -432,6 +440,12 @@ class AgentRunner:
                     messages_for_model = self._backfill_missing_tool_results(messages_for_model)
                 except Exception:
                     messages_for_model = messages
+            if not self._fits_context_budget(spec, messages_for_model):
+                final_content = "当前请求内容超出模型可用上下文，已保留已完成进度。请缩短输入或新开会话后重试。"
+                error = final_content
+                stop_reason = "context_limit"
+                self._append_final_message(messages, final_content)
+                break
             context = AgentHookContext(iteration=iteration, messages=messages)
             await hook.before_iteration(context)
             response = await self._request_model(
@@ -735,8 +749,20 @@ class AgentRunner:
                 continue
 
             if response.finish_reason == "error":
-                final_content = clean or spec.error_message or _DEFAULT_ERROR_MESSAGE
-                stop_reason = "error"
+                detected_context_window_tokens = context_window_from_error(
+                    response.content,
+                    response.error_type,
+                    response.error_code,
+                )
+                if detected_context_window_tokens is not None:
+                    final_content = (
+                        "模型返回的上下文容量小于当前估算值。"
+                        "已保留会话并准备按实际容量重新整理上下文。"
+                    )
+                    stop_reason = "context_limit"
+                else:
+                    final_content = clean or spec.error_message or _DEFAULT_ERROR_MESSAGE
+                    stop_reason = "error"
                 error = final_content
                 self._append_model_error_placeholder(messages)
                 context.final_content = final_content
@@ -839,8 +865,10 @@ class AgentRunner:
             messages=messages,
             tools_used=tools_used,
             usage=usage,
+            final_usage=dict(raw_usage),
             stop_reason=stop_reason,
             error=error,
+            detected_context_window_tokens=detected_context_window_tokens,
             tool_events=tool_events,
             had_injections=had_injections,
         )
@@ -1740,18 +1768,8 @@ class AgentRunner:
         if not messages or not spec.context_window_tokens:
             return messages
 
-        provider_max_tokens = getattr(
-            getattr(self.provider, "generation", None), "max_tokens", 4096
-        )
-        max_output = (
-            spec.max_tokens
-            if isinstance(spec.max_tokens, int)
-            else (provider_max_tokens if isinstance(provider_max_tokens, int) else 4096)
-        )
-        budget = spec.context_block_limit or (
-            spec.context_window_tokens - max_output - _SNIP_SAFETY_BUFFER
-        )
-        if budget <= 0:
+        budget = self._context_budget(spec)
+        if budget is None:
             return messages
 
         estimate, _ = estimate_prompt_tokens_chain(
@@ -1804,6 +1822,40 @@ class AgentRunner:
             if start:
                 kept = kept[start:]
         return system_messages + kept
+
+    def _context_budget(self, spec: AgentRunSpec) -> int | None:
+        if not spec.context_window_tokens:
+            return None
+        provider_max_tokens = getattr(
+            getattr(self.provider, "generation", None), "max_tokens", 4096
+        )
+        max_output = (
+            spec.max_tokens
+            if isinstance(spec.max_tokens, int)
+            else (provider_max_tokens if isinstance(provider_max_tokens, int) else 4096)
+        )
+        hard_budget = spec.context_window_tokens - max_output - _SNIP_SAFETY_BUFFER
+        if hard_budget <= 0:
+            return spec.context_block_limit if spec.context_block_limit and spec.context_block_limit > 0 else None
+        if spec.context_block_limit is None:
+            return hard_budget
+        return min(spec.context_block_limit, hard_budget)
+
+    def _fits_context_budget(self, spec: AgentRunSpec, messages: list[dict[str, Any]]) -> bool:
+        budget = self._context_budget(spec)
+        if budget is None:
+            return True
+        try:
+            estimate, _ = estimate_prompt_tokens_chain(
+                self.provider,
+                spec.model,
+                messages,
+                spec.tools.get_definitions(),
+            )
+        except Exception:
+            logger.exception("Final context budget check failed for {}", spec.session_key or "default")
+            return True
+        return estimate <= budget
 
     def _partition_tool_batches(
         self,

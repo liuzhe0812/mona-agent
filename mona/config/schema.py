@@ -110,7 +110,6 @@ class InlineFallbackConfig(Base):
     model: str
     provider: str
     max_tokens: int | None = None
-    context_window_tokens: int | None = None
     temperature: float | None = None
     reasoning_effort: str | None = None
 
@@ -124,7 +123,12 @@ class ModelPresetConfig(Base):
     model: str
     provider: str = "auto"
     max_tokens: int = 8192
-    context_window_tokens: int = 65_536
+    auto_compact_token_limit: int | None = Field(
+        default=None,
+        ge=4_096,
+        validation_alias=AliasChoices("autoCompactTokenLimit", "auto_compact_token_limit"),
+        serialization_alias="autoCompactTokenLimit",
+    )
     temperature: float = 0.1
     reasoning_effort: str | None = None
 
@@ -145,7 +149,12 @@ class AgentDefaults(Base):
     model: str = "deepseek-v4-flash"
     provider: str = "auto"  # Provider name (e.g. "anthropic", "openrouter") or "auto" for auto-detection
     max_tokens: int = 8192
-    context_window_tokens: int = 65_536
+    auto_compact_token_limit: int | None = Field(
+        default=None,
+        ge=4_096,
+        validation_alias=AliasChoices("autoCompactTokenLimit", "auto_compact_token_limit"),
+        serialization_alias="autoCompactTokenLimit",
+    )
     context_block_limit: int | None = None
     temperature: float = 0.1
     fallback_models: list[FallbackCandidate] = Field(default_factory=list)
@@ -406,23 +415,17 @@ class TerminalExecMode(str, Enum):
     APPROVAL = "approval"
 
 
-class PPTMasterConfig(Base):
-    """PPT Master skill configuration."""
-
-    enabled: bool = False
-    projects_dir: str = "ppt_projects"
-    default_format: str = "ppt169"
-    use_mona_image_gen: bool = True
-    tts_enabled: bool = False
-    live_preview: bool = True
-    preview_port: int = 5050
-
-
 class NotesToolsConfig(Base):
     """Configuration for notes agent tools (create/search/read/save_image)."""
 
     enabled: bool = True
     allow_create: bool = True  # controls notes_create and notes_save_image
+
+
+class ConversationHistoryToolsConfig(Base):
+    """Keyword-only conversation search over locally persisted visible chats."""
+
+    enabled: bool = True
 
 
 class TerminalToolConfig(Base):
@@ -516,11 +519,13 @@ class ToolsConfig(Base):
         default_factory=lambda: _lazy_default("mona.email_intel.config", "EmailIntelConfig"),
     )
     notes_tools: NotesToolsConfig = Field(default_factory=NotesToolsConfig)
+    conversation_history: ConversationHistoryToolsConfig = Field(
+        default_factory=ConversationHistoryToolsConfig
+    )
     restrict_to_workspace: bool = False  # restrict all tool access to workspace directory
     mcp_servers: dict[str, MCPServerConfig] = Field(default_factory=dict)
     ssrf_whitelist: list[str] = Field(default_factory=list)  # CIDR ranges to exempt from SSRF blocking (e.g. ["100.64.0.0/10"] for Tailscale)
     terminal: TerminalToolConfig = Field(default_factory=TerminalToolConfig)
-    ppt_master: PPTMasterConfig = Field(default_factory=PPTMasterConfig)
 
 
 class Config(BaseSettings):
@@ -559,7 +564,7 @@ class Config(BaseSettings):
         d = self.agents.defaults
         return ModelPresetConfig(
             model=d.model, provider=d.provider, max_tokens=d.max_tokens,
-            context_window_tokens=d.context_window_tokens,
+            auto_compact_token_limit=d.auto_compact_token_limit,
             temperature=d.temperature, reasoning_effort=d.reasoning_effort,
         )
 

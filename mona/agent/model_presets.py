@@ -7,6 +7,7 @@ from typing import Any
 
 from mona.config.schema import ModelPresetConfig
 from mona.providers.base import LLMProvider
+from mona.providers.context_window import DEFAULT_CONTEXT_WINDOW_TOKENS
 from mona.providers.factory import ProviderSnapshot, build_provider_snapshot
 
 PresetSnapshotLoader = Callable[[str], ProviderSnapshot]
@@ -38,8 +39,9 @@ def build_static_preset_snapshot(
     return ProviderSnapshot(
         provider=provider,
         model=preset.model,
-        context_window_tokens=preset.context_window_tokens,
+        context_window_tokens=DEFAULT_CONTEXT_WINDOW_TOKENS,
         signature=("model_preset", name, preset.model_dump_json()),
+        auto_compact_token_limit=preset.auto_compact_token_limit,
     )
 
 
@@ -62,4 +64,3 @@ def normalize_preset_name(name: str | None, presets: dict[str, ModelPresetConfig
     if name not in presets:
         raise KeyError(f"model_preset {name!r} not found. Available: {', '.join(presets) or '(none)'}")
     return name
-

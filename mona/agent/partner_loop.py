@@ -79,6 +79,8 @@ class PartnerAgentLoop(AgentLoop):
             model=self.model,
             sessions=self.sessions,
             context_window_tokens=self.context_window_tokens,
+            auto_compact_token_limit=self.auto_compact_token_limit,
+            context_block_limit=self.context_block_limit,
             build_messages=self.context.build_messages,
             get_tool_definitions=self.tools.get_definitions,
             max_completion_tokens=self.provider.generation.max_tokens,
@@ -122,10 +124,6 @@ class PartnerAgentLoop(AgentLoop):
                 self.consolidator.provider = provider
         except Exception:
             logger.exception("Failed to apply runtime overrides for {}", self._partner_agent_id)
-
-    @property
-    def partner_agent_id(self) -> str:
-        return self._partner_agent_id
 
     def _register_default_tools(self) -> None:
         """Build the partner tool registry from effective user grants.

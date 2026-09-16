@@ -4,7 +4,6 @@ Multi-agent phase 2 (docs/design/multi-agent-development-guide.md section
 7.5). Pure functions over ``ConversationMetadata`` and raw session message
 dicts:
 
-- parse conversation metadata from a session;
 - validate agent membership in a room;
 - resolve structured ``@Agent`` targets (never fuzzy display-name matching);
 - project the shared room history for one viewing agent, adding author
@@ -14,18 +13,14 @@ dicts:
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Any, Iterable, Mapping
+from typing import Any, Iterable
 
 from mona.agent.partners import (
     MONA_AGENT_ID,
     AgentRegistry,
     ConversationMetadata,
-    conversation_from_session_metadata,
     normalize_agent_id,
 )
-
-if TYPE_CHECKING:
-    from mona.session.manager import Session
 
 # Message types that may enter the shared model-visible history. Job/run
 # status cards and approval cards are UI projections of the job/run files —
@@ -47,16 +42,6 @@ class NotARoomError(RoomError):
     """Raised when a conversation is not a collaboration room."""
 
 
-def resolve_conversation(session: Session | Mapping[str, Any] | None) -> ConversationMetadata:
-    """Parse conversation metadata from a Session or a metadata mapping.
-
-    Legacy sessions without the key resolve to a Mona direct chat; see
-    :func:`conversation_from_session_metadata`.
-    """
-    metadata = getattr(session, "metadata", session)
-    return conversation_from_session_metadata(metadata)
-
-
 def require_room(conversation: ConversationMetadata) -> ConversationMetadata:
     """Return the conversation when it is a room, else raise NotARoomError."""
     if conversation.type != "room":
@@ -64,14 +49,6 @@ def require_room(conversation: ConversationMetadata) -> ConversationMetadata:
             f"conversation is a {conversation.type} chat, not a collaboration room"
         )
     return conversation
-
-
-def is_room_member(conversation: ConversationMetadata, agent_id: str) -> bool:
-    try:
-        normalized = normalize_agent_id(agent_id)
-    except ValueError:
-        return False
-    return normalized in conversation.agent_ids
 
 
 def require_room_member(conversation: ConversationMetadata, agent_id: str) -> str:
