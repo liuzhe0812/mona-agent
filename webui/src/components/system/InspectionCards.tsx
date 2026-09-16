@@ -77,7 +77,7 @@ export function InspectionCards({ cards, pending, onAction, disabled = false }: 
               </div>
             </div>
             <div className="mt-2.5 flex justify-end">
-              <Button type="button" size="sm" variant="outline" disabled={disabled} onClick={() => onAction(card)}>
+              <Button type="button" size="sm" variant="interaction" disabled={disabled} onClick={() => onAction(card)}>
                 {card.actionLabel ?? "查看"}
               </Button>
             </div>

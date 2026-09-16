@@ -7,9 +7,9 @@ mod gateway;
 mod hoard;
 mod ipc_bridge;
 mod license;
+mod materials;
 mod notes;
 mod notes_links;
-mod materials;
 mod notification_window;
 mod python;
 mod quick_ask;
@@ -26,9 +26,9 @@ use gateway::GatewayManager;
 use services::ServicesManager;
 use settings::AppSettings;
 use std::sync::{Arc, Mutex, OnceLock};
+use tauri::utils::config::Color;
 use tauri::webview::{DownloadEvent, WebviewWindowBuilder};
 use tauri::{Emitter, Listener, Manager, WebviewUrl};
-use tauri::utils::config::Color;
 use tauri_plugin_global_shortcut::ShortcutState;
 
 const GATEWAY_START_TIMEOUT_SECS: u64 = 90;
@@ -77,7 +77,10 @@ mod trash_tests {
     fn trash_crate_is_declared_as_a_dependency() {
         let cargo = include_str!("../Cargo.toml");
 
-        assert!(cargo.contains("trash = "), "trash crate must be a dependency");
+        assert!(
+            cargo.contains("trash = "),
+            "trash crate must be a dependency"
+        );
     }
 
     #[test]
@@ -91,8 +94,14 @@ mod trash_tests {
 
         assert!(lib.contains(&cmd_fn), "move_to_trash command must exist");
         assert!(lib.contains(&trash_call), "must delete via the trash crate");
-        assert!(!lib.contains(&permanent), "must not permanently delete files");
-        assert!(lib.contains(&registered), "command must be registered in the handler");
+        assert!(
+            !lib.contains(&permanent),
+            "must not permanently delete files"
+        );
+        assert!(
+            lib.contains(&registered),
+            "command must be registered in the handler"
+        );
     }
 }
 
@@ -124,7 +133,11 @@ impl GatewayState {
         }
     }
 
-    pub fn start(&self, settings: &AppSettings, app_handle: &tauri::AppHandle) -> Result<u16, String> {
+    pub fn start(
+        &self,
+        settings: &AppSettings,
+        app_handle: &tauri::AppHandle,
+    ) -> Result<u16, String> {
         self.inner.manager.start(settings, Some(app_handle))
     }
 
@@ -140,9 +153,12 @@ impl GatewayState {
 
     pub async fn wait_ready(&self, port: u16, timeout_secs: u64) -> Result<(), String> {
         let state = self.clone();
-        gateway::wait_for_gateway(port, settings::read_mona_ws_port(), timeout_secs, move || {
-            state.exit_message()
-        })
+        gateway::wait_for_gateway(
+            port,
+            settings::read_mona_ws_port(),
+            timeout_secs,
+            move || state.exit_message(),
+        )
         .await?;
         self.mark_ready(port)
     }
@@ -186,7 +202,11 @@ impl ServicesState {
         }
     }
 
-    pub fn start(&self, settings: &AppSettings, app_handle: &tauri::AppHandle) -> Result<u16, String> {
+    pub fn start(
+        &self,
+        settings: &AppSettings,
+        app_handle: &tauri::AppHandle,
+    ) -> Result<u16, String> {
         self.inner.manager.start(settings, app_handle)
     }
 
@@ -267,7 +287,9 @@ async fn stop_gateway(state: tauri::State<'_, GatewayState>) -> Result<(), Strin
 }
 
 #[tauri::command]
-async fn gateway_status(state: tauri::State<'_, GatewayState>) -> Result<serde_json::Value, String> {
+async fn gateway_status(
+    state: tauri::State<'_, GatewayState>,
+) -> Result<serde_json::Value, String> {
     let running = state.is_running();
     let port = state.port();
     let ws_port = settings::read_mona_ws_port();
@@ -296,7 +318,9 @@ async fn stop_services(state: tauri::State<'_, ServicesState>) -> Result<(), Str
 }
 
 #[tauri::command]
-async fn services_status(state: tauri::State<'_, ServicesState>) -> Result<serde_json::Value, String> {
+async fn services_status(
+    state: tauri::State<'_, ServicesState>,
+) -> Result<serde_json::Value, String> {
     let running = state.is_running();
     let port = state.port();
     Ok(serde_json::json!({
@@ -308,8 +332,14 @@ async fn services_status(state: tauri::State<'_, ServicesState>) -> Result<serde
 #[tauri::command]
 async fn diagnose_gateway(app_handle: tauri::AppHandle) -> Result<serde_json::Value, String> {
     let gateway = python::gateway_exe_path();
-    let resource_dir = app_handle.path().resource_dir().map(|p| p.display().to_string()).unwrap_or_else(|e| format!("ERROR: {}", e));
-    let exe_path = std::env::current_exe().map(|p| p.display().to_string()).unwrap_or_else(|e| format!("ERROR: {}", e));
+    let resource_dir = app_handle
+        .path()
+        .resource_dir()
+        .map(|p| p.display().to_string())
+        .unwrap_or_else(|e| format!("ERROR: {}", e));
+    let exe_path = std::env::current_exe()
+        .map(|p| p.display().to_string())
+        .unwrap_or_else(|e| format!("ERROR: {}", e));
     let data_dir = crate::settings::app_data_dir().display().to_string();
 
     let mut resource_candidates = Vec::new();
@@ -323,7 +353,11 @@ async fn diagnose_gateway(app_handle: tauri::AppHandle) -> Result<serde_json::Va
     if let Ok(ep) = std::env::current_exe() {
         if let Some(ed) = ep.parent() {
             for sub in &["resources", ""] {
-                let c = if sub.is_empty() { ed.join(python::GATEWAY_EXE_NAME) } else { ed.join(sub).join(python::GATEWAY_EXE_NAME) };
+                let c = if sub.is_empty() {
+                    ed.join(python::GATEWAY_EXE_NAME)
+                } else {
+                    ed.join(sub).join(python::GATEWAY_EXE_NAME)
+                };
                 resource_candidates.push(serde_json::json!({
                     "path": c.display().to_string(),
                     "exists": c.exists()
@@ -349,17 +383,18 @@ async fn diagnose_gateway(app_handle: tauri::AppHandle) -> Result<serde_json::Va
 #[cfg(target_os = "windows")]
 pub(crate) fn attach_permission_allower(window: &tauri::WebviewWindow) {
     let _ = window.with_webview(|wv| {
-        use webview2_com::PermissionRequestedEventHandler;
         use webview2_com::Microsoft::Web::WebView2::Win32::{
             ICoreWebView2PermissionRequestedEventArgs, COREWEBVIEW2_PERMISSION_STATE,
         };
+        use webview2_com::PermissionRequestedEventHandler;
         unsafe {
             let core = wv.controller().CoreWebView2().ok();
             if let Some(core) = core {
                 let handler = PermissionRequestedEventHandler::create(Box::new(
                     move |_sender, args: Option<ICoreWebView2PermissionRequestedEventArgs>| {
                         if let Some(args) = args {
-                            let _ = args.SetState(COREWEBVIEW2_PERMISSION_STATE(1)); // ALLOW
+                            let _ = args.SetState(COREWEBVIEW2_PERMISSION_STATE(1));
+                            // ALLOW
                         }
                         Ok(())
                     },
@@ -387,45 +422,43 @@ pub(crate) fn attach_process_failure_logger(window: &tauri::WebviewWindow) {
 
         unsafe {
             if let Some(core) = wv.controller().CoreWebView2().ok() {
-                let handler = ProcessFailedEventHandler::create(Box::new(
-                    move |_sender, args| {
-                        if let Some(args) = args {
-                            let mut kind = COREWEBVIEW2_PROCESS_FAILED_KIND(0);
-                            let kind = if args.ProcessFailedKind(&mut kind).is_ok() {
-                                Some(kind.0)
-                            } else {
-                                None
-                            };
+                let handler = ProcessFailedEventHandler::create(Box::new(move |_sender, args| {
+                    if let Some(args) = args {
+                        let mut kind = COREWEBVIEW2_PROCESS_FAILED_KIND(0);
+                        let kind = if args.ProcessFailedKind(&mut kind).is_ok() {
+                            Some(kind.0)
+                        } else {
+                            None
+                        };
 
-                            let details = args
-                                .cast::<ICoreWebView2ProcessFailedEventArgs2>()
-                                .ok()
-                                .map(|args2| {
-                                    let mut reason = COREWEBVIEW2_PROCESS_FAILED_REASON(0);
-                                    let reason = if args2.Reason(&mut reason).is_ok() {
-                                        Some(reason.0)
-                                    } else {
-                                        None
-                                    };
-                                    let mut exit_code = 0;
-                                    let exit_code = if args2.ExitCode(&mut exit_code).is_ok() {
-                                        Some(exit_code)
-                                    } else {
-                                        None
-                                    };
-                                    (reason, exit_code)
-                                })
-                                .unwrap_or((None, None));
+                        let details = args
+                            .cast::<ICoreWebView2ProcessFailedEventArgs2>()
+                            .ok()
+                            .map(|args2| {
+                                let mut reason = COREWEBVIEW2_PROCESS_FAILED_REASON(0);
+                                let reason = if args2.Reason(&mut reason).is_ok() {
+                                    Some(reason.0)
+                                } else {
+                                    None
+                                };
+                                let mut exit_code = 0;
+                                let exit_code = if args2.ExitCode(&mut exit_code).is_ok() {
+                                    Some(exit_code)
+                                } else {
+                                    None
+                                };
+                                (reason, exit_code)
+                            })
+                            .unwrap_or((None, None));
 
-                            log::error!(
-                                "[webview2] process failed kind={kind:?} reason={:?} exit_code={:?}",
-                                details.0,
-                                details.1,
-                            );
-                        }
-                        Ok(())
-                    },
-                ));
+                        log::error!(
+                            "[webview2] process failed kind={kind:?} reason={:?} exit_code={:?}",
+                            details.0,
+                            details.1,
+                        );
+                    }
+                    Ok(())
+                }));
                 let mut token: i64 = 0;
                 if let Err(error) = core.add_ProcessFailed(&handler, &mut token) {
                     log::error!("[webview2] failed to attach process failure logger: {error}");
@@ -509,9 +542,14 @@ async fn local_http_request(
     // 以及会触发外部抓取和写入预检上下文的精确股票预检路径。
     // 与 mona/materials/auth.py 的 X-Mona-Token 校验对应。
     let needs_token = needs_services_token(parsed.path())
-        && !headers.iter().any(|(n, _)| n.eq_ignore_ascii_case("x-mona-token"));
+        && !headers
+            .iter()
+            .any(|(n, _)| n.eq_ignore_ascii_case("x-mona-token"));
 
-    let startup_read = matches!(parsed.path(), "/health" | "/webui/bootstrap" | "/api/sessions");
+    let startup_read = matches!(
+        parsed.path(),
+        "/health" | "/webui/bootstrap" | "/api/sessions"
+    );
     let mut request = client.request(method, parsed);
     if startup_read {
         request = request.timeout(std::time::Duration::from_secs(10));
@@ -613,10 +651,7 @@ async fn write_mona_provider_config(
 }
 
 #[tauri::command]
-async fn write_mona_model_config(
-    model: String,
-    provider: String,
-) -> Result<(), String> {
+async fn write_mona_model_config(model: String, provider: String) -> Result<(), String> {
     settings::write_mona_model_config(&model, &provider)
 }
 
@@ -651,9 +686,7 @@ async fn read_email_schedule_config() -> Result<serde_json::Value, String> {
 }
 
 #[tauri::command]
-async fn write_email_schedule_config(
-    schedule: serde_json::Value,
-) -> Result<(), String> {
+async fn write_email_schedule_config(schedule: serde_json::Value) -> Result<(), String> {
     settings::write_email_schedule_config(&schedule)
 }
 
@@ -748,7 +781,9 @@ pub fn run() {
     {
         let settings = settings::load_settings();
         if settings.auto_start_gateway && settings::check_mona_config().has_provider {
-            if let Err(e) = settings::ensure_desktop_config(settings.gateway_port, settings.services_port) {
+            if let Err(e) =
+                settings::ensure_desktop_config(settings.gateway_port, settings.services_port)
+            {
                 log::error!("Failed to ensure desktop config: {}", e);
             } else if let Err(e) = gateway_state.start_dev_early(&settings) {
                 log::error!("Failed to start dev Gateway early: {}", e);
@@ -917,6 +952,27 @@ pub fn run() {
             terminal::commands::terminal_request_exec,
             terminal::commands::terminal_respond_exec,
             terminal::commands::terminal_list_pending_exec,
+            terminal::docker::docker_probe,
+            terminal::docker::docker_list_containers,
+            terminal::docker::docker_inspect_container,
+            terminal::docker::docker_container_logs,
+            terminal::docker::docker_list_compose_projects,
+            terminal::docker::docker_read_compose_file,
+            terminal::docker::docker_validate_compose_file,
+            terminal::docker::docker_save_compose_file,
+            terminal::docker::docker_compose_action,
+            terminal::docker::docker_list_resources,
+            terminal::docker::docker_check_image_update,
+            terminal::docker::docker_remove_resource,
+            terminal::docker::docker_container_action,
+            terminal::docker::docker_subscribe_logs,
+            terminal::docker::docker_unsubscribe_logs,
+            terminal::docker::docker_subscribe_compose_events,
+            terminal::docker::docker_unsubscribe_stream,
+            terminal::docker::docker_open_container_terminal,
+            terminal::docker::docker_write_container_terminal,
+            terminal::docker::docker_resize_container_terminal,
+            terminal::docker::docker_close_container_terminal,
             terminal::maintenance_cmds::terminal_maintenance_get_active,
             terminal::maintenance_cmds::terminal_maintenance_list,
             terminal::maintenance_cmds::terminal_maintenance_get,
@@ -973,8 +1029,12 @@ pub fn run() {
             db::commands::db_get_databases,
             db::commands::db_get_tables,
             db::commands::db_get_views,
+            db::commands::db_get_routines,
+            db::commands::db_get_routine_definition,
             db::commands::db_get_table_info,
             db::commands::db_get_table_summaries,
+            db::commands::db_preview_table_structure,
+            db::commands::db_apply_table_structure,
             db::commands::db_get_server_stats,
             db::commands::db_get_processes,
             db::commands::db_get_users,
@@ -984,6 +1044,8 @@ pub fn run() {
             db::commands::db_list_connections,
             db::commands::db_save_connections,
             db::commands::db_load_connections,
+            db::commands::db_load_saved_queries,
+            db::commands::db_save_query,
             email::email_list_accounts,
             email::email_add_account,
             email::email_reorder_accounts,
@@ -1151,10 +1213,13 @@ pub fn run() {
             system::system_open_in_explorer,
             system::system_reveal_in_explorer,
             system::software::system_winget_status,
+            system::software::system_search_apps,
+            system::software::system_install_app,
             system::software::system_list_software,
             system::software::system_check_updates,
             system::software::system_upgrade_software,
             system::software::system_uninstall_software,
+            system::software::system_delete_software_residuals,
             system::software::system_list_windows_apps,
             system::software::system_remove_windows_app,
             system::startup::system_list_startup_items,

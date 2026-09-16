@@ -3,6 +3,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 
 import { invoke } from "@tauri-apps/api/core";
 import { cn } from "@/lib/utils";
+import { Button } from "@/components/ui/button";
 
 import { PanelCard } from "../SystemUi";
 import type { DirectorySize } from "../useSystemData";
@@ -148,9 +149,9 @@ function NodeRow({
         </span>
         {/* 文件夹图标 */}
         {expanded && hasChildren ? (
-          <FolderOpen className="h-4 w-4 shrink-0 text-warning" />
+          <FolderOpen className="h-4 w-4 shrink-0 text-muted-foreground" />
         ) : (
-          <Folder className="h-4 w-4 shrink-0 text-warning" />
+          <Folder className="h-4 w-4 shrink-0 text-muted-foreground" />
         )}
         {/* 名称 */}
         <span className="min-w-0 flex-1 truncate font-medium">{name}</span>
@@ -313,36 +314,42 @@ export function DirectoryTreeView({
       {menu && (
         <div
           ref={menuRef}
-          className="fixed z-50 min-w-[180px] overflow-hidden rounded-md border bg-popover p-1 text-popover-foreground shadow-md"
+          className="fixed z-50 min-w-[180px] overflow-hidden rounded-md border bg-popover p-1 text-popover-foreground shadow-overlay"
           style={{ left: menu.x, top: menu.y }}
         >
-          <button
+          <Button
             type="button"
+            variant="ghost"
+            size="sm"
             disabled={!menuHasChildren}
             className={cn(
-              "flex w-full cursor-default select-none items-center rounded-sm px-2 py-1.5 text-caption outline-none",
+              "h-8 w-full justify-start cursor-default select-none px-2 py-1.5 text-caption font-normal",
               menuHasChildren
                 ? "hover:bg-accent hover:text-accent-foreground"
-                : "opacity-50 pointer-events-none",
+                : "pointer-events-none opacity-50",
             )}
             onClick={() => { handleOpen(menu.path); closeMenu(); }}
           >
             打开
-          </button>
-          <button
+          </Button>
+          <Button
             type="button"
-            className="flex w-full cursor-default select-none items-center rounded-sm px-2 py-1.5 text-caption outline-none hover:bg-accent hover:text-accent-foreground"
+            variant="ghost"
+            size="sm"
+            className="h-8 w-full justify-start cursor-default select-none px-2 py-1.5 text-caption font-normal hover:bg-accent hover:text-accent-foreground"
             onClick={() => { void openInExplorer(menu.path); closeMenu(); }}
           >
             在资源管理器中打开
-          </button>
-          <button
+          </Button>
+          <Button
             type="button"
-            className="flex w-full cursor-default select-none items-center rounded-sm px-2 py-1.5 text-caption outline-none hover:bg-accent hover:text-accent-foreground"
+            variant="ghost"
+            size="sm"
+            className="h-8 w-full justify-start cursor-default select-none px-2 py-1.5 text-caption font-normal hover:bg-accent hover:text-accent-foreground"
             onClick={() => { navigator.clipboard?.writeText(menu.path).catch(() => {}); closeMenu(); }}
           >
             复制路径
-          </button>
+          </Button>
         </div>
       )}
     </PanelCard>

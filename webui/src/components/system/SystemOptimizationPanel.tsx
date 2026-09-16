@@ -123,7 +123,7 @@ function SettingSwitch({ item, onAction }: { item: ConfigurationAuditItem; onAct
     return (
       <Button
         type="button"
-        variant="outline"
+        variant="interaction"
         size="sm"
         disabled={!item.canApply || enabled}
         onClick={(event) => { event.stopPropagation(); onAction({ item, mode: "recommended" }); }}
@@ -140,7 +140,7 @@ function SettingSwitch({ item, onAction }: { item: ConfigurationAuditItem; onAct
       aria-label={`${enabled ? "恢复" : "应用"}${featureTitle(item.id, item.title)}`}
       disabled={!canChange}
       onClick={(event) => { event.stopPropagation(); onAction({ item, mode }); }}
-        className={`relative inline-flex h-6 w-11 shrink-0 items-center rounded-full p-0.5 transition-all duration-300 disabled:cursor-not-allowed disabled:opacity-40 ${enabled ? "bg-action" : "bg-muted-foreground/25"}`}
+        className={`relative inline-flex h-6 w-11 shrink-0 items-center rounded-full p-0.5 transition-all duration-300 disabled:cursor-not-allowed disabled:opacity-40 ${enabled ? "bg-info" : "bg-muted-foreground/25"}`}
     >
       <span className={`h-5 w-5 rounded-full bg-white shadow-sm transition-transform duration-300 ${enabled ? "translate-x-5" : "translate-x-0"}`} />
     </button>
@@ -218,7 +218,7 @@ export function SystemOptimizationPanel() {
     <div className="space-y-3 pb-4">
       <section className="px-1 py-2">
         <div className="relative flex flex-wrap items-center gap-3">
-          <span className="flex h-11 w-11 items-center justify-center rounded-lg bg-action text-action-foreground"><SlidersHorizontal className="h-5 w-5" /></span>
+          <span className="flex h-11 w-11 items-center justify-center rounded-lg bg-info/10 text-info"><SlidersHorizontal className="h-5 w-5" /></span>
           <div>
             <h2 className="text-title-sm tracking-tight">系统优化</h2>
             <p className="mt-1 text-caption text-muted-foreground">集中管理性能、界面、网络、安全和应用行为。</p>
@@ -273,7 +273,7 @@ export function SystemOptimizationPanel() {
                   const groupRiskValue = groupRisk(group, itemById);
                   return <article key={group.id} className="group px-3.5 py-3 transition-colors hover:bg-foreground/5">
                     <div className="flex flex-wrap items-center gap-3">
-          <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-info-soft text-info"><SlidersHorizontal className="h-4 w-4" /></span>
+          <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-info/10 text-info"><SlidersHorizontal className="h-4 w-4" /></span>
                       <div className="min-w-[180px] flex-1"><div className="flex items-center gap-2"><h3 className="text-caption font-semibold">{groupTitle(group.id, group.label)}</h3><StatusPill tone={riskMeta[groupRiskValue].tone}>{riskMeta[groupRiskValue].label}</StatusPill></div><p className="mt-1 truncate text-micro text-muted-foreground">从互斥选项中选择一个 Windows 行为</p></div>
                       <Select value={current} disabled={disabled || applying} onValueChange={(id) => { const item = itemById.get(id); if (item) openPending({ item, mode: "recommended" }); }} placeholder={disabled ? "当前版本不适用" : "选择配置"} options={group.values.map((value) => ({ value: value.featureIds[0], label: optionLabel(value.label) }))} className="h-8 w-auto min-w-[190px] max-w-[280px] text-caption" />
                     </div>
@@ -284,10 +284,10 @@ export function SystemOptimizationPanel() {
                   const riskInfo = riskMeta[item.risk];
                   return <article key={item.id} tabIndex={0} role="button" onClick={() => setDetails(item)} onKeyDown={(event) => { if (event.key === "Enter") setDetails(item); }} className={`group px-3.5 py-3 transition-colors hover:bg-foreground/5 focus-visible:ring-1 focus-visible:ring-ring focus-visible:ring-offset-1 ${item.status === "unavailable" ? "opacity-70" : ""}`}>
                     <div className="flex items-center gap-3">
-              <span className={`flex h-8 w-8 shrink-0 items-center justify-center rounded-lg ${item.risk === "high" ? "bg-destructive/10 text-destructive" : item.status === "configured" ? "bg-success/10 text-success" : "bg-info-soft text-info"}`}>{item.status === "configured" ? <Check className="h-4 w-4" /> : <SlidersHorizontal className="h-4 w-4" />}</span>
+              <span className={`flex h-8 w-8 shrink-0 items-center justify-center rounded-lg ${item.risk === "high" ? "bg-destructive/10 text-destructive" : item.status === "configured" ? "bg-success/10 text-success" : "bg-info/10 text-info"}`}>{item.status === "configured" ? <Check className="h-4 w-4" /> : <SlidersHorizontal className="h-4 w-4" />}</span>
                       <div className="min-w-0 flex-1"><div className="flex flex-wrap items-center gap-1.5"><h3 className="truncate text-caption font-semibold">{featureTitle(item.id, item.title)}</h3><StatusPill tone={meta.tone}>{meta.label}</StatusPill><StatusPill tone={riskInfo.tone}>{riskInfo.label}</StatusPill>{item.requiresRestart && <StatusPill tone="violet">需重启</StatusPill>}{item.requiresAdministrator && <StatusPill tone="orange">管理员</StatusPill>}</div><p className="mt-1 truncate text-micro text-muted-foreground">{displayDescription(item)}</p></div>
                       <SettingSwitch item={item} onAction={openPending} />
-                      <ChevronRight className="h-4 w-4 shrink-0 text-muted-foreground/50 transition group-hover:translate-x-0.5 group-hover:text-primary" />
+                      <ChevronRight className="h-4 w-4 shrink-0 text-muted-foreground/50 transition group-hover:translate-x-0.5 group-hover:text-info" />
                     </div>
                   </article>;
                 })}

@@ -284,11 +284,6 @@ export function OverviewPanel({ onNavigate, onStartStorageScan, onAcknowledgeSta
   const networkMiniPolyline = buildPolyline(history, (point) => Math.min(point.netTotalMbps, 100), 120, 48);
   const historyReady = history.length >= 2;
   const timeLabels = buildTimeLabels(history, timeRange.seconds);
-  const issueTone = {
-    red: "border-destructive/30 bg-destructive/5",
-    orange: "border-warning/30 bg-warning/5",
-    blue: "border-info/30 bg-info/5",
-  };
   const sortedProcesses = [...data.topProcesses].sort((left, right) => {
     const direction = sort.direction === "ascending" ? 1 : -1;
     if (sort.key === "name") return left.name.localeCompare(right.name) * direction;
@@ -315,19 +310,19 @@ export function OverviewPanel({ onNavigate, onStartStorageScan, onAcknowledgeSta
       <h2 className="sr-only">电脑状态概览</h2>
 
       {issues.length > 0 && (
-        <section className="rounded-lg border border-border/70 bg-card">
-          <div className="border-b border-border/60 px-4 py-3">
+        <section>
+          <div className="border-b border-border/60 px-1 pb-3">
             <h2 className="text-body font-semibold">现在值得处理</h2>
             <p className="mt-1 text-micro text-muted-foreground">基于本机实时证据，为你排序 {issues.length} 个可执行问题</p>
           </div>
-          <div className="grid gap-3 p-3 md:grid-cols-3">
+          <div className="grid gap-3 pt-3 md:grid-cols-3">
             {issues.map((issue) => {
               const Icon = issue.id === "scan-storage" ? HardDrive : Clock3;
               const pillTone = issue.tone === "red" ? "red" : issue.tone === "orange" ? "orange" : "blue";
               return (
-                <article key={issue.id} className={`flex min-w-0 flex-col rounded-lg border p-3 ${issueTone[issue.tone]}`}>
+                <article key={issue.id} className="flex min-w-0 flex-col rounded-lg border border-border/60 bg-card p-3">
                   <div className="flex items-start gap-3">
-                    <span className={`flex h-9 w-9 shrink-0 items-center justify-center rounded-lg ${issue.tone === "red" ? "bg-destructive/10 text-destructive" : issue.tone === "orange" ? "bg-warning/10 text-warning" : "bg-info/10 text-info"}`}><Icon className="h-4 w-4" /></span>
+                    <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-muted text-muted-foreground"><Icon className="h-4 w-4" /></span>
                     <div className="min-w-0 flex-1">
                       <StatusPill tone={pillTone}>{issue.priority}</StatusPill>
                       <h3 className="mt-2 text-body font-semibold">{issue.title}</h3>
@@ -336,7 +331,7 @@ export function OverviewPanel({ onNavigate, onStartStorageScan, onAcknowledgeSta
                   <p className="mt-3 text-micro leading-5 text-muted-foreground">{issue.evidence}</p>
                   <p className="mt-1 text-micro leading-5 text-muted-foreground">{issue.impact}</p>
                   <div className="mt-3 flex items-center gap-2">
-                    <Button type="button" size="sm" onClick={() => void openIssue(issue)} className="flex-1">{issue.actionLabel}</Button>
+                    <Button type="button" variant="interaction" size="sm" onClick={() => void openIssue(issue)} className="flex-1">{issue.actionLabel}</Button>
                     {issue.id === "scan-storage" && <span className="text-micro text-muted-foreground">先分析，暂不清理</span>}
                   </div>
                 </article>
@@ -361,14 +356,16 @@ export function OverviewPanel({ onNavigate, onStartStorageScan, onAcknowledgeSta
           action={
             <div className="inline-flex rounded-md border border-border/80 bg-background p-0.5">
               {TIME_RANGES.map((range) => (
-                <button
+                <Button
                   key={range.seconds}
                   type="button"
+                  variant="ghost"
+                  size="xs"
                   onClick={() => setTimeRange(range)}
-                  className={`rounded px-2.5 py-1 text-micro transition ${timeRange.seconds === range.seconds ? "bg-accent text-foreground" : "text-muted-foreground hover:text-foreground"}`}
+                  className={timeRange.seconds === range.seconds ? "bg-accent text-foreground" : "text-muted-foreground"}
                 >
                   {range.label}
-                </button>
+                </Button>
               ))}
             </div>
           }
@@ -414,7 +411,7 @@ export function OverviewPanel({ onNavigate, onStartStorageScan, onAcknowledgeSta
       <PanelCard title="资源占用较高的程序">
         <div className="overflow-x-auto">
           <table className="w-full min-w-[540px] text-left text-caption">
-            <thead className="text-muted-foreground"><tr>{PROCESS_COLUMNS.map((column) => <th key={column.key} aria-sort={sort.key === column.key ? sort.direction : "none"} className="pb-2 font-medium"><button type="button" aria-label={`按 ${column.label} 排序`} onClick={() => toggleSort(column.key)} className="inline-flex items-center gap-1 hover:text-foreground">{column.label}<span aria-hidden>{sort.key === column.key ? sort.direction === "ascending" ? "↑" : "↓" : "↕"}</span></button></th>)}</tr></thead>
+            <thead className="text-muted-foreground"><tr>{PROCESS_COLUMNS.map((column) => <th key={column.key} aria-sort={sort.key === column.key ? sort.direction : "none"} className="pb-2 font-medium"><Button type="button" variant="ghost" size="xs" aria-label={`按 ${column.label} 排序`} onClick={() => toggleSort(column.key)} className="h-auto gap-1 px-0 py-0 text-caption">{column.label}<span aria-hidden>{sort.key === column.key ? sort.direction === "ascending" ? "↑" : "↓" : "↕"}</span></Button></th>)}</tr></thead>
             <tbody>
               {sortedProcesses.map((process) => <tr key={process.pid} className="border-t border-border/50"><td className="py-2.5 font-medium">{process.name}</td><td>{process.cpuPercent.toFixed(1)}%</td><td>{process.memoryMb > 1024 ? `${(process.memoryMb / 1024).toFixed(1)} GB` : `${process.memoryMb} MB`}</td><td>{formatBytesPerSecond(process.diskReadBytesPerSec)}</td><td>{formatBytesPerSecond(process.diskWriteBytesPerSec)}</td></tr>)}
               {data.topProcesses.length === 0 && <tr className="border-t border-border/50"><td className="py-3 text-muted-foreground" colSpan={5}>当前没有可展示的进程采样数据。</td></tr>}

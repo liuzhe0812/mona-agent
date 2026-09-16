@@ -2,6 +2,8 @@
 // Replaces mock data with real sysinfo-backed readings.
 
 pub mod software;
+pub(crate) mod software_residuals;
+pub(crate) mod software_system_residuals;
 pub mod startup;
 pub mod maintenance;
 pub mod diagnostics;

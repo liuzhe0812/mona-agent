@@ -64,7 +64,7 @@ export function PerformanceSection() {
       ) : items.length === 0 ? (
         <p className="text-caption text-muted-foreground">暂无可优化的性能项。</p>
       ) : (
-        <div className="flex flex-col gap-1.5">
+        <div className="flex flex-col divide-y divide-border/60">
           {items.map((item) => {
             const isLoading = acting === item.id;
             const enabled = item.isApplied;
@@ -72,8 +72,8 @@ export function PerformanceSection() {
               <div
                 key={item.id}
                 className={cn(
-                  "flex items-center justify-between gap-3 rounded-lg border px-3 py-2.5 transition",
-                  enabled ? "border-info/30 bg-info/[0.04]" : "border-border/60",
+                  "flex items-center justify-between gap-3 px-3 py-2.5 transition",
+                  enabled ? "bg-info/[0.04]" : "",
                   isLoading && "opacity-70",
                 )}
               >
@@ -97,7 +97,7 @@ export function PerformanceSection() {
                   onClick={() => void handleToggle(item)}
                   className={cn(
                     "relative inline-flex h-6 w-11 shrink-0 items-center rounded-full p-0.5 transition-all duration-300 disabled:cursor-not-allowed disabled:opacity-40",
-                    enabled ? "bg-primary" : "bg-muted-foreground/25",
+                    enabled ? "bg-info" : "bg-muted-foreground/25",
                   )}
                 >
                   {isLoading
@@ -154,11 +154,11 @@ export function ContextMenuSection() {
       {loading ? (
         <div className="flex items-center gap-2 text-caption text-muted-foreground"><Loader2 className="h-4 w-4 animate-spin" />正在读取...</div>
       ) : (
-        <div className="flex flex-col gap-2">
+        <div className="flex flex-col divide-y divide-border/60">
           {items.map((item) => (
             <div key={item.id} className={cn(
-              "flex items-center justify-between gap-3 rounded-lg border p-3",
-              item.isApplied ? "border-info/40 bg-info/5" : "border-border/60",
+              "flex items-center justify-between gap-3 px-3 py-3",
+              item.isApplied ? "bg-info/5" : "",
             )}>
               <div className="min-w-0 flex-1">
                 <div className="flex items-center gap-2">
@@ -169,7 +169,7 @@ export function ContextMenuSection() {
               </div>
               <Button
                 type="button"
-                variant={item.isApplied ? "outline" : "default"}
+                variant={item.isApplied ? "outline" : "interaction"}
                 size="sm"
                 onClick={() => void handleToggle(item)}
                 disabled={acting === item.id}
@@ -285,9 +285,8 @@ export function DefenderSection() {
           ) : (
             <Button
               type="button"
-              variant="outline"
+              variant="interaction"
               size="sm"
-              className="border-success/60 bg-success/10 text-success hover:bg-success/20 hover:text-success"
               onClick={() => void handleEnable()}
               disabled={acting}
             >

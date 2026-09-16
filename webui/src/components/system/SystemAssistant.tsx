@@ -316,7 +316,7 @@ export function SystemAssistant({
                   </div>
                   <Button
                     type="button"
-                    variant="outline"
+                    variant="interaction"
                     size="sm"
                     className="mt-3 w-full"
                     disabled={planning || executing}
@@ -351,7 +351,7 @@ export function SystemAssistant({
               <div className="space-y-3">
                 <div className="rounded-lg border border-border/60 p-3">
                   <div className="flex items-center gap-2">
-                    <Stethoscope className="h-4 w-4 text-primary" />
+                    <Stethoscope className="h-4 w-4 text-info" />
                     <p className="text-body font-semibold">诊断结论</p>
                   </div>
                   <p className="mt-2 text-caption leading-relaxed text-muted-foreground">{diagnosis.summary}</p>
@@ -370,14 +370,16 @@ export function SystemAssistant({
                       {hypothesis.evidenceIds.length > 0 ? (
                         <div className="mt-2 flex flex-wrap gap-1.5">
                           {hypothesis.evidenceIds.map((id) => (
-                            <button
+                            <Button
                               key={id}
                               type="button"
+                              variant="ghost"
+                              size="xs"
                               onClick={() => onNavigate("overview")}
-                              className="rounded-full bg-muted px-2 py-0.5 text-micro text-muted-foreground hover:bg-foreground/[0.06] hover:text-foreground"
+                              className="h-auto rounded-full bg-muted px-2 py-0.5 text-micro text-muted-foreground hover:text-foreground"
                             >
                               {diagnosticLabel(id)}
-                            </button>
+                            </Button>
                           ))}
                         </div>
                       ) : null}
@@ -417,20 +419,22 @@ export function SystemAssistant({
                     ) : null}
                     <div className="mt-2 flex flex-wrap gap-1.5">
                       {finding.evidenceIds.map((id) => (
-                        <button
+                        <Button
                           key={id}
                           type="button"
+                          variant="ghost"
+                          size="xs"
                           onClick={() => onNavigate("storage")}
-                          className="rounded-md bg-muted px-2 py-0.5 text-micro text-muted-foreground hover:bg-foreground/[0.06] hover:text-foreground"
+                          className="h-auto bg-muted px-2 py-0.5 text-micro text-muted-foreground hover:text-foreground"
                         >
                           {storageEvidenceLabels[id] ?? "扫描证据"}
-                        </button>
+                        </Button>
                       ))}
                     </div>
                     {finding.action !== "none" ? (
                       <Button
                         type="button"
-                        variant="outline"
+                        variant="interaction"
                         size="sm"
                         className="mt-3 w-full"
                         onClick={() => {

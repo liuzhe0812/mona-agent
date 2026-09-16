@@ -1,6 +1,6 @@
 import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { invoke } from "@tauri-apps/api/core";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { SystemView } from "./SystemView";
 import type { SystemEvidence, SystemEvidenceStage } from "./systemAgentApi";
@@ -18,6 +18,8 @@ const storageScanMock = vi.hoisted(() => vi.fn<() => Promise<StorageScanResult>>
 const startupIssueMock = vi.hoisted(() => ({ isNew: false }));
 const overviewFailureMock = vi.hoisted(() => ({ message: "" }));
 const configurationApplyMock = vi.hoisted(() => vi.fn(() => Promise.resolve({ itemId: "privacy_advertising_id", success: true, detail: "操作已完成", requiresRestart: false })));
+const uninstallResultMock = vi.hoisted(() => vi.fn());
+const residualDeleteMock = vi.hoisted(() => vi.fn());
 
 const systemAgentMock = vi.hoisted(() => ({
   collect: vi.fn<(storage: StorageScanResult | null, onProgress?: (stage: SystemEvidenceStage) => void) => Promise<SystemEvidence>>(() => Promise.resolve({} as SystemEvidence)),
@@ -71,7 +73,7 @@ vi.mock("@/lib/tauri", () => ({
 }));
 
 vi.mock("@tauri-apps/api/core", () => ({
-  invoke: vi.fn((command: string) => {
+  invoke: vi.fn((command: string, args?: Record<string, unknown>) => {
     if (command === "system_get_overview" && overviewFailureMock.message) {
       return Promise.reject(new Error(overviewFailureMock.message));
     }
@@ -82,8 +84,8 @@ vi.mock("@tauri-apps/api/core", () => ({
         { id: "Microsoft.VisualStudioCode", name: "Visual Studio Code", publisher: "", currentVersion: "1.100", nextVersion: "1.101", status: "运行中" },
       ],
       installed: [
-        { id: "notepad", name: "Notepad++", publisher: "Notepad++ Team", version: "8.7", installDate: null, softwareType: "system", estimatedSizeBytes: 104857600, installLocation: "C:\\Program Files\\Notepad++" },
-        { id: "unknown", name: "Unknown Tool", publisher: "", version: "1.0", installDate: null, softwareType: "user", estimatedSizeBytes: null, installLocation: "" },
+        { id: "notepad", name: "Notepad++", publisher: "Notepad++ Team", version: "8.7", installDate: null, softwareType: "system", estimatedSizeBytes: 104857600, installLocation: "C:\\Program Files\\Notepad++", uninstallKind: "desktop", canUninstall: true },
+        { id: "unknown", name: "Unknown Tool", publisher: "", version: "1.0", installDate: null, softwareType: "user", estimatedSizeBytes: null, installLocation: "", uninstallKind: "unavailable", canUninstall: false },
       ],
       installedCount: 2,
       knownSizeBytes: 104857600,
@@ -94,13 +96,18 @@ vi.mock("@tauri-apps/api/core", () => ({
       wingetVersion: "v1.29.280",
       lastCheck: 1715472000,
     });
+    if (command === "system_search_apps") return Promise.resolve(args?.query === "xmind" ? [
+      { id: "Xmind.Xmind", name: "Xmind", version: "26.01", source: "winget" },
+      { id: "Xmind.Xmind.8", name: "XMind 8", version: "3.7", source: "winget" },
+      { id: "CorvusMindware.Portty", name: "Portty", version: "1.0", source: "winget" },
+    ] : [
+      { id: "Tencent.WeChat", name: "WeChat", version: "3.9.12", source: "winget" },
+    ]);
+    if (command === "system_install_app") return Promise.resolve({ success: true, message: "安装完成", exitCode: 0, residuals: [] });
     if (command === "system_upgrade_software") return Promise.resolve({ success: true, message: "更新完成", exitCode: 0, residuals: [] });
-    if (command === "system_uninstall_software") return Promise.resolve({
-      success: true,
-      message: "卸载完成",
-      exitCode: 0,
-      residuals: [{ path: "C:\\Users\\Mona\\AppData\\Roaming\\Notepad++", sizeBytes: 2048, category: "应用数据", requiresConfirmation: true }],
-    });
+    if (command === "system_uninstall_software") return uninstallResultMock();
+    if (command === "system_delete_software_residuals") return residualDeleteMock();
+    if (command === "system_reveal_in_explorer") return Promise.resolve();
     if (command === "system_list_startup_items") return Promise.resolve({
       items: [
         { id: "wechat", name: "WeChat", publisher: "Tencent", source: "注册表", scope: "user", command: "C:\\WeChat\\WeChat.exe", targetPath: "C:\\WeChat\\WeChat.exe", added: "2024/05/12", enabled: true, signed: true, firstSeenAt: Math.floor(Date.now() / 1000), isNew: startupIssueMock.isNew },
@@ -214,8 +221,21 @@ describe("SystemView", () => {
     overviewFailureMock.message = "";
     configurationApplyMock.mockReset();
     configurationApplyMock.mockResolvedValue({ itemId: "privacy_advertising_id", success: true, detail: "操作已完成", requiresRestart: false });
+    uninstallResultMock.mockReset();
+    uninstallResultMock.mockResolvedValue({
+      success: true,
+      message: "卸载完成",
+      exitCode: 0,
+      residuals: [{ id: "notepad-roaming", path: "C:\\Users\\Mona\\AppData\\Roaming\\Notepad++", sizeBytes: 2048, category: "应用数据", requiresConfirmation: true, kind: "directory", confidence: "high", recommended: true, canDelete: true, reason: "卸载后留下的应用数据目录" }],
+    });
+    residualDeleteMock.mockReset();
+    residualDeleteMock.mockResolvedValue({ deletedIds: ["notepad-roaming"], freedBytes: 2048, failures: [] });
     localStorage.removeItem("system.storageScan");
     localStorage.removeItem("system.assistantCollapsed");
+    vi.stubGlobal("fetch", vi.fn(() => Promise.resolve({
+      ok: true,
+      json: () => Promise.resolve({ icons: [] }),
+    })));
   });
 
   it("shows the overview recovery state when native data cannot be read", async () => {
@@ -241,6 +261,10 @@ describe("SystemView", () => {
     expect(screen.getByRole("button", { name: /重新检查/ })).toBeTruthy();
   });
 
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
   it("toggles the Mona assistant entirely through the header Mona button", () => {
     localStorage.removeItem("system.assistantCollapsed");
     render(<SystemView />);
@@ -253,7 +277,8 @@ describe("SystemView", () => {
 
     const assistant = document.querySelector('aside[aria-label="Mona 系统管家"]')!;
     expect(assistant.getAttribute("aria-hidden")).toBe("true");
-    expect(screen.getByRole("button", { name: "展开 Mona 系统管家" })).toBeTruthy();
+    const expandButton = screen.getByRole("button", { name: "展开 Mona 系统管家" });
+    expect(expandButton.querySelector('img[src="/brand/mona_app_icon.png"]')).toBeTruthy();
     expect(screen.getByTestId("system-layout").className).toContain("grid-cols-[minmax(0,1fr)]");
     expect(screen.getByTestId("system-layout").className).not.toContain("grid-cols-[minmax(0,1fr)_360px]");
 
@@ -275,7 +300,7 @@ describe("SystemView", () => {
     expect(screen.getByText(/尚未扫描/)).toBeTruthy();
 
     fireEvent.click(screen.getByRole("tab", { name: "软件管理" }));
-    expect(screen.getByRole("heading", { name: "可用更新" })).toBeTruthy();
+    expect(screen.getByRole("heading", { name: "国内常用" })).toBeTruthy();
 
     fireEvent.click(screen.getByRole("tab", { name: "启动项" }));
     expect(screen.getByRole("heading", { name: "启动应用" })).toBeTruthy();
@@ -394,13 +419,14 @@ describe("SystemView", () => {
     ]);
   });
 
-  it("uses verified software data and invokes WinGet for selected updates", async () => {
+  it("uses verified software data and invokes the installer for selected updates", async () => {
     render(<SystemView initialTab="software" />);
 
-    expect(await screen.findByText("来自 WinGet 实时检查")).toBeTruthy();
+    fireEvent.click(await screen.findByRole("tab", { name: "我的软件" }));
+    expect(await screen.findByRole("heading", { name: "我的软件" })).toBeTruthy();
     expect(screen.queryByText(/428 MB/)).toBeNull();
     expect(screen.queryByText(/19\.6 GB/)).toBeNull();
-    expect(screen.getByText("已知占用 100 MB · 覆盖 1/2")).toBeTruthy();
+    expect(screen.queryByText(/已知占用/)).toBeNull();
 
     fireEvent.click(screen.getByRole("checkbox", { name: "选择 Google Chrome" }));
     fireEvent.click(screen.getByRole("button", { name: "更新所选" }));
@@ -412,36 +438,172 @@ describe("SystemView", () => {
     expect(await screen.findByText("1 项更新完成")).toBeTruthy();
   });
 
-  it("separates software updates, installed software, and uninstall history into tabs", async () => {
+  it("combines installed software and updates under my software", async () => {
     render(<SystemView initialTab="software" />);
 
-    expect(await screen.findByRole("tab", { name: "软件更新" })).toBeTruthy();
-    expect(screen.getByRole("tab", { name: "已安装软件" })).toBeTruthy();
+    expect(await screen.findByRole("tab", { name: "我的软件" })).toBeTruthy();
+    expect(screen.queryByRole("tab", { name: "软件更新" })).toBeNull();
+    expect(screen.queryByRole("tab", { name: "已安装软件" })).toBeNull();
     expect(screen.getByRole("tab", { name: "卸载记录" })).toBeTruthy();
-    expect(screen.getByRole("heading", { name: "可用更新" })).toBeTruthy();
-    expect(screen.queryByRole("columnheader", { name: "已安装软件" })).toBeNull();
+    expect(screen.getByRole("heading", { name: "国内常用" })).toBeTruthy();
+    expect(screen.queryByRole("columnheader", { name: "软件" })).toBeNull();
 
-    fireEvent.click(screen.getByRole("tab", { name: "已安装软件" }));
-    expect(await screen.findByRole("columnheader", { name: "已安装软件" })).toBeTruthy();
+    fireEvent.click(screen.getByRole("tab", { name: "我的软件" }));
+    expect(await screen.findByRole("columnheader", { name: "软件" })).toBeTruthy();
+    expect(screen.getByRole("button", { name: "可更新 2" })).toBeTruthy();
+    expect(screen.getByRole("button", { name: "更新 Google Chrome" })).toBeTruthy();
+    expect(screen.getByRole("button", { name: "卸载 Notepad++" })).toBeTruthy();
 
     fireEvent.click(screen.getByRole("tab", { name: "卸载记录" }));
     expect(await screen.findByText("卸载 Notepad++")).toBeTruthy();
-    expect(screen.getByText("WinGet 卸载完成")).toBeTruthy();
+    expect(screen.getByText("安装服务 卸载完成")).toBeTruthy();
+  });
+
+  it("searches the app catalog and installs an exact result", async () => {
+    render(<SystemView initialTab="software" />);
+
+    expect(await screen.findByRole("heading", { name: "国内常用" })).toBeTruthy();
+    expect(screen.getAllByRole("img", { name: "微信 图标" })[0].getAttribute("src")).toContain("api.iconify.design");
+    fireEvent.change(screen.getByRole("textbox", { name: "搜索全部应用" }), {
+      target: { value: "微信" },
+    });
+
+    expect(await screen.findByText("WeChat")).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "获取 WeChat" }));
+    await waitFor(() => expect(vi.mocked(invoke)).toHaveBeenCalledWith(
+      "system_install_app",
+      { id: "Tencent.WeChat", name: "WeChat" },
+    ));
+  });
+
+  it("keeps curated apps in their functional categories", async () => {
+    render(<SystemView initialTab="software" />);
+
+    fireEvent.click(await screen.findByRole("button", { name: "社交通讯" }));
+    expect(screen.getByRole("heading", { name: "社交通讯" })).toBeTruthy();
+    expect(screen.getByRole("button", { name: /微信 聊天/ })).toBeTruthy();
+    expect(screen.getByRole("button", { name: /QQ 聊天/ })).toBeTruthy();
+    expect(screen.queryByRole("button", { name: /Visual Studio Code 轻量/ })).toBeNull();
+
+    fireEvent.click(screen.getByRole("button", { name: "开发工具" }));
+    expect(screen.getByRole("heading", { name: "开发工具" })).toBeTruthy();
+    expect(screen.getByRole("button", { name: /Visual Studio Code 轻量/ })).toBeTruthy();
+    expect(screen.getByRole("button", { name: /Git 分布式/ })).toBeTruthy();
+    expect(screen.queryByRole("button", { name: /微信 聊天/ })).toBeNull();
+  });
+
+  it("resolves and caches an icon for catalog search results", async () => {
+    vi.stubGlobal("fetch", vi.fn((input: string | URL | Request) => Promise.resolve({
+      ok: true,
+      json: () => Promise.resolve({ icons: String(input).includes("Portty") ? [] : ["arcticons:xmind"] }),
+    })));
+    render(<SystemView initialTab="software" />);
+
+    fireEvent.change(await screen.findByRole("textbox", { name: "搜索全部应用" }), {
+      target: { value: "xmind" },
+    });
+
+    expect(await screen.findByText("XMind 8")).toBeTruthy();
+    await waitFor(() => expect(screen.getByRole("img", { name: "XMind 8 图标" }).getAttribute("src"))
+      .toContain("api.iconify.design/arcticons/xmind.svg"));
+    expect(localStorage.getItem("system.appStoreIconCache.v1")).toContain("xmind.xmind.8");
   });
 
   it("requires confirmation before uninstalling and shows only detected residual candidates", async () => {
     render(<SystemView initialTab="software" />);
 
-    fireEvent.click(await screen.findByRole("tab", { name: "已安装软件" }));
+    fireEvent.click(await screen.findByRole("tab", { name: "我的软件" }));
     fireEvent.click(await screen.findByRole("button", { name: "卸载 Notepad++" }));
     fireEvent.click(screen.getByRole("button", { name: "确认卸载 Notepad++" }));
 
     await waitFor(() => expect(vi.mocked(invoke)).toHaveBeenCalledWith(
       "system_uninstall_software",
-      { id: null, name: "Notepad++", installLocation: "C:\\Program Files\\Notepad++" },
+      { id: "notepad", name: "Notepad++", installLocation: "C:\\Program Files\\Notepad++" },
     ));
     expect(await screen.findByText("C:\\Users\\Mona\\AppData\\Roaming\\Notepad++")).toBeTruthy();
     expect(screen.getByText("疑似残留，删除前需确认")).toBeTruthy();
+  });
+
+  it("opens a residual location and deletes selected candidates after confirmation", async () => {
+    const path = "C:\\Users\\Mona\\AppData\\Roaming\\Notepad++";
+    render(<SystemView initialTab="software" />);
+
+    fireEvent.click(await screen.findByRole("tab", { name: "我的软件" }));
+    fireEvent.click(await screen.findByRole("button", { name: "卸载 Notepad++" }));
+    fireEvent.click(screen.getByRole("button", { name: "确认卸载 Notepad++" }));
+    expect(await screen.findByText(path)).toBeTruthy();
+
+    fireEvent.click(screen.getByRole("button", { name: `打开 ${path}` }));
+    await waitFor(() => expect(vi.mocked(invoke)).toHaveBeenCalledWith("system_reveal_in_explorer", { path }));
+
+    expect(screen.getByRole("checkbox", { name: `选择残留 ${path}` })).toBeChecked();
+    fireEvent.click(screen.getByRole("button", { name: "删除所选残留（1 项）" }));
+    expect(await screen.findByRole("alertdialog")).toBeTruthy();
+    expect(screen.getByText("将删除选中的 1 项残留，共 2 KB。")).toBeTruthy();
+
+    fireEvent.click(screen.getByRole("button", { name: "确认删除残留" }));
+    await waitFor(() => expect(vi.mocked(invoke)).toHaveBeenCalledWith(
+      "system_delete_software_residuals",
+      { ids: ["notepad-roaming"], confirmed: true },
+    ));
+    expect(await screen.findByText("已删除 1 项，释放 2 KB。")).toBeTruthy();
+    expect(screen.queryByText(path)).toBeNull();
+  });
+
+  it("keeps failed residual candidates visible after a partial cleanup", async () => {
+    const firstPath = "C:\\Users\\Mona\\AppData\\Roaming\\Notepad++";
+    const secondPath = "C:\\Users\\Mona\\AppData\\Local\\Notepad++";
+    uninstallResultMock.mockResolvedValueOnce({
+      success: true,
+      message: "卸载完成",
+      exitCode: 0,
+      residuals: [
+        { id: "notepad-roaming", path: firstPath, sizeBytes: 2048, category: "应用数据", requiresConfirmation: true, kind: "directory", confidence: "high", recommended: true, canDelete: true, reason: "卸载后留下的应用数据目录" },
+        { id: "notepad-local", path: secondPath, sizeBytes: 4096, category: "缓存", requiresConfirmation: true, kind: "directory", confidence: "medium", recommended: false, canDelete: true, reason: "可能是应用缓存，删除前请确认" },
+        { id: "notepad-registry", path: "HKCU\\Software\\Notepad++", sizeBytes: 0, category: "注册表", requiresConfirmation: true, kind: "registry", confidence: "medium", recommended: false, canDelete: false, reason: "仅检测到可能关联的注册表项" },
+      ],
+    });
+    residualDeleteMock.mockResolvedValueOnce({
+      deletedIds: ["notepad-roaming"],
+      freedBytes: 2048,
+      failures: [{ id: "notepad-local", message: "文件正在使用" }],
+    });
+    render(<SystemView initialTab="software" />);
+
+    fireEvent.click(await screen.findByRole("tab", { name: "我的软件" }));
+    fireEvent.click(await screen.findByRole("button", { name: "卸载 Notepad++" }));
+    fireEvent.click(screen.getByRole("button", { name: "确认卸载 Notepad++" }));
+    expect(await screen.findByText(secondPath)).toBeTruthy();
+    expect(screen.getByText("建议清理")).toBeTruthy();
+    expect(screen.getByText("需要确认")).toBeTruthy();
+    expect(screen.getByText("仅检测")).toBeTruthy();
+    expect(screen.getByRole("checkbox", { name: "选择建议项" })).toBeChecked();
+    expect(screen.getByRole("checkbox", { name: `选择残留 ${firstPath}` })).toBeChecked();
+    expect(screen.getByRole("checkbox", { name: `选择残留 ${secondPath}` })).toBeEnabled();
+    expect(screen.getByRole("checkbox", { name: "选择残留 HKCU\\Software\\Notepad++" })).toBeDisabled();
+    expect(screen.queryByRole("button", { name: "打开 HKCU\\Software\\Notepad++" })).toBeNull();
+    fireEvent.click(screen.getByRole("checkbox", { name: `选择残留 ${secondPath}` }));
+    fireEvent.click(screen.getByRole("button", { name: "删除所选残留（2 项）" }));
+    fireEvent.click(await screen.findByRole("button", { name: "确认删除残留" }));
+
+    await waitFor(() => expect(vi.mocked(invoke)).toHaveBeenCalledWith(
+      "system_delete_software_residuals",
+      { ids: ["notepad-roaming", "notepad-local"], confirmed: true },
+    ));
+    expect(screen.queryByText(firstPath)).toBeNull();
+    expect(await screen.findByText(secondPath)).toBeTruthy();
+    expect(screen.getByText("部分残留未能删除")).toBeTruthy();
+    expect(screen.getByText("文件正在使用")).toBeTruthy();
+  });
+
+  it("disables uninstall for software without a registered uninstall command", async () => {
+    render(<SystemView initialTab="software" />);
+
+    fireEvent.click(await screen.findByRole("tab", { name: "我的软件" }));
+    const uninstallButton = screen.getByRole("button", { name: "卸载 Unknown Tool" });
+
+    expect(uninstallButton).toBeDisabled();
+    expect(uninstallButton).toHaveAttribute("aria-disabled", "true");
   });
 
   it("toggles a startup item without touching other rows", async () => {
@@ -600,13 +762,13 @@ describe("SystemView", () => {
   it("removes a handed-off software failure from the current task list", async () => {
     render(<SystemView initialTab="software" />);
 
+    fireEvent.click(await screen.findByRole("tab", { name: "我的软件" }));
     expect(await screen.findByText(/安装器返回 1603/)).toBeTruthy();
     expect(screen.getByTestId("system-task-failure")).toBeTruthy();
     fireEvent.click(screen.getByRole("button", { name: "交给 Mona" }));
     expect(screen.queryByTestId("system-task-failure")).toBeNull();
     expect((await screen.findByTestId("system-agent-handoff")).textContent).toContain("安装器返回 1603");
-    fireEvent.click(screen.getByRole("tab", { name: "已安装软件" }));
-    expect(screen.getByRole("columnheader", { name: "已安装软件" })).toBeTruthy();
+    expect(screen.getByRole("columnheader", { name: "软件" })).toBeTruthy();
     expect(screen.getByRole("button", { name: "卸载 Notepad++" })).toBeTruthy();
   });
 
@@ -683,7 +845,7 @@ describe("SystemView", () => {
     expect(screen.getByText("更新 Google Chrome")).toBeTruthy();
 
     fireEvent.click(screen.getByRole("button", { name: "查看软件管理依据" }));
-    expect(screen.getByRole("heading", { name: "可用更新" })).toBeTruthy();
+    expect(screen.getByRole("heading", { name: "我的软件" })).toBeTruthy();
   });
 
   it("executes only the selected real Agent actions and reports verification", async () => {

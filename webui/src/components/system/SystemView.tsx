@@ -3,6 +3,7 @@ import { useState } from "react";
 import { invokeWithTimeout } from "@/lib/tauri";
 import { cn } from "@/lib/utils";
 
+import { AgentLogo } from "@/components/AgentLogo";
 import { Button } from "@/components/ui/button";
 import { RightSidebarToggleIcon } from "@/components/notes/RightSidebarToggleIcon";
 import { MaintenancePanel } from "./MaintenancePanel";
@@ -23,6 +24,7 @@ export function SystemView({ initialTab = "overview" }: { initialTab?: SystemTab
   const [handoffTask, setHandoffTask] = useState<SystemAgentHandoffTask | null>(null);
   const [analysisRequest, setAnalysisRequest] = useState<{ goal: string; nonce: number; channel?: "plan" | "diagnose" | "storage" } | null>(null);
   const [storageSelection, setStorageSelection] = useState<DirectorySize | null>(null);
+  const [showSoftwareUpdatesRequest, setShowSoftwareUpdatesRequest] = useState(0);
   const [assistantCollapsed, setAssistantCollapsed] = useState(
     () => localStorage.getItem("system.assistantCollapsed") === "true",
   );
@@ -46,6 +48,11 @@ export function SystemView({ initialTab = "overview" }: { initialTab?: SystemTab
     if (!assistantCollapsed) return;
     localStorage.setItem("system.assistantCollapsed", "false");
     setAssistantCollapsed(false);
+  };
+
+  const handleAssistantNavigate = (tab: SystemTab) => {
+    if (tab === "software") setShowSoftwareUpdatesRequest(Date.now());
+    switchTab(tab);
   };
 
   const handleHandoff = (task: SystemAgentHandoffTask) => {
@@ -93,7 +100,11 @@ export function SystemView({ initialTab = "overview" }: { initialTab?: SystemTab
           onClick={toggleAssistant}
           className="h-7 w-7 text-muted-foreground hover:text-foreground"
         >
-          <RightSidebarToggleIcon open={!assistantCollapsed} className="h-3.5 w-3.5" />
+          {assistantCollapsed ? (
+            <AgentLogo state="idle" className="h-4 w-4" />
+          ) : (
+            <RightSidebarToggleIcon open className="h-3.5 w-3.5" />
+          )}
         </Button>
       </header>
 
@@ -145,7 +156,11 @@ export function SystemView({ initialTab = "overview" }: { initialTab?: SystemTab
 
             {hasVisitedSoftware ? (
               <div hidden={activeTab !== "software"}>
-                <SoftwarePanel onHandoff={handleHandoff} />
+                <SoftwarePanel
+                  onHandoff={handleHandoff}
+                  showUpdatesRequest={showSoftwareUpdatesRequest}
+                  showStoreDetails={assistantCollapsed}
+                />
               </div>
             ) : null}
 
@@ -159,7 +174,7 @@ export function SystemView({ initialTab = "overview" }: { initialTab?: SystemTab
           tab={activeTab}
           storage={storage}
           software={software.data}
-          onNavigate={switchTab}
+          onNavigate={handleAssistantNavigate}
           collapsed={assistantCollapsed}
           onCollapse={toggleAssistant}
           handoffTask={handoffTask}

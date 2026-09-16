@@ -148,6 +148,8 @@ export interface InstalledSoftware {
   softwareType: string;
   estimatedSizeBytes: number | null;
   installLocation: string;
+  uninstallKind: string;
+  canUninstall: boolean;
 }
 
 export interface SoftwareUpdate {
@@ -160,10 +162,16 @@ export interface SoftwareUpdate {
 }
 
 export interface ResidualCandidate {
+  id: string;
   path: string;
   sizeBytes: number;
   category: string;
   requiresConfirmation: boolean;
+  kind: string;
+  confidence: "high" | "medium";
+  recommended: boolean;
+  canDelete: boolean;
+  reason: string;
 }
 
 export interface SoftwareActionResult {
@@ -198,6 +206,91 @@ export interface UpgradeProgressEvent {
   id: string;
   line: string;
   status: string;
+}
+
+export interface SoftwareResidualDeleteFailure {
+  id: string;
+  message: string;
+}
+
+export interface SoftwareResidualDeleteResult {
+  deletedIds: string[];
+  freedBytes: number;
+  failures: SoftwareResidualDeleteFailure[];
+}
+
+export interface StoreApp {
+  id: string;
+  name: string;
+  version: string;
+  source: string;
+}
+
+export function useAppStore() {
+  const [results, setResults] = useState<StoreApp[]>([]);
+  const [searching, setSearching] = useState(false);
+  const [searchError, setSearchError] = useState<string | null>(null);
+  const [installingIds, setInstallingIds] = useState<Set<string>>(new Set());
+  const [installProgress, setInstallProgress] = useState<Record<string, string>>({});
+  const [installError, setInstallError] = useState<string | null>(null);
+
+  const search = async (query: string) => {
+    const keyword = query.trim();
+    if (!keyword) {
+      setResults([]);
+      setSearchError(null);
+      return;
+    }
+    setSearching(true);
+    try {
+      setResults(await invoke<StoreApp[]>("system_search_apps", { query: keyword }));
+      setSearchError(null);
+    } catch (error) {
+      setResults([]);
+      setSearchError(String(error));
+    } finally {
+      setSearching(false);
+    }
+  };
+
+  const install = async (app: StoreApp) => {
+    setInstallingIds((current) => new Set(current).add(app.id));
+    setInstallError(null);
+    setInstallProgress((current) => ({ ...current, [app.id]: "正在准备安装" }));
+    try {
+      const result = await invoke<SoftwareActionResult>("system_install_app", {
+        id: app.id,
+        name: app.name,
+      });
+      if (!result.success) setInstallError(result.message || "安装失败");
+      return result;
+    } catch (error) {
+      setInstallError(String(error));
+      return null;
+    } finally {
+      setInstallingIds((current) => {
+        const next = new Set(current);
+        next.delete(app.id);
+        return next;
+      });
+    }
+  };
+
+  useEffect(() => {
+    let active = true;
+    let unlisten: UnlistenFn | undefined;
+    listen<UpgradeProgressEvent>("software-install-progress", (event) => {
+      if (!active) return;
+      const { id, line } = event.payload;
+      setInstallProgress((current) => ({ ...current, [id]: line }));
+    }).then((fn) => { unlisten = fn; });
+    return () => {
+      active = false;
+      if (unlisten) unlisten();
+    };
+  }, []);
+
+  return { results, searching, searchError, installingIds, installProgress, installError, search, install };
 }
 
 export function useSoftwareManagement() {
@@ -255,7 +348,7 @@ export function useSoftwareManagement() {
     setLastUninstall(null);
     try {
       const result = await invoke<SoftwareActionResult>("system_uninstall_software", {
-        id: null,
+        id: software.id,
         name: software.name,
         installLocation: software.installLocation || null,
       });
@@ -274,6 +367,20 @@ export function useSoftwareManagement() {
     } finally {
       setWorkingIds(new Set());
     }
+  };
+
+  const deleteResiduals = async (ids: string[]) => {
+    if (ids.length === 0) {
+      return { deletedIds: [], freedBytes: 0, failures: [] } satisfies SoftwareResidualDeleteResult;
+    }
+    return invoke<SoftwareResidualDeleteResult>("system_delete_software_residuals", {
+      ids,
+      confirmed: true,
+    });
+  };
+
+  const revealInExplorer = async (path: string) => {
+    await invoke("system_reveal_in_explorer", { path });
   };
 
   useEffect(() => {
@@ -298,7 +405,7 @@ export function useSoftwareManagement() {
     refresh();
   }, []);
 
-  return { data, loading, error, workingIds, lastAction, lastUninstall, progressMap, refresh, upgrade, uninstall };
+  return { data, loading, error, workingIds, lastAction, lastUninstall, progressMap, refresh, upgrade, uninstall, deleteResiduals, revealInExplorer };
 }
 
 // ===== 存储空间扫描 =====

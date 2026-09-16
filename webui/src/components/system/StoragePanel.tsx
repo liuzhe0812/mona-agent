@@ -51,7 +51,7 @@ function AnalysisPlaceholder({
   if (status === "scanning") {
     return (
       <div className="flex h-[154px] flex-col items-center justify-center gap-2 text-center">
-        <Loader2 className="h-6 w-6 animate-spin text-primary" />
+        <Loader2 className="h-6 w-6 animate-spin text-info" />
         <p className="text-caption font-medium">正在扫描磁盘...</p>
         <p className="max-w-full truncate text-micro text-muted-foreground" title={progress?.currentPath}>
           {progress?.currentPath ?? "正在准备扫描"}
@@ -70,7 +70,7 @@ function AnalysisPlaceholder({
   }
   return (
     <div className="flex h-[154px] flex-col items-center justify-center gap-2 text-center">
-      <FolderSearch className="h-7 w-7 text-primary" />
+      <FolderSearch className="h-7 w-7 text-info" />
       <div>
         <p className="text-caption font-medium">等待深度空间分析</p>
         <p className="mt-1 text-micro text-muted-foreground">点击顶部"开始扫描"显示真实占用</p>
@@ -110,7 +110,7 @@ function ScanStatusBar({
 }) {
   const scanning = status === "scanning";
   return (
-    <div className="flex flex-wrap items-center justify-between gap-3 rounded-lg border border-border/70 bg-card px-4 py-2 text-caption">
+    <div className="flex flex-wrap items-center justify-between gap-3 rounded-md bg-muted/40 px-4 py-2 text-caption">
       <div className="flex min-w-0 items-center gap-2 text-muted-foreground">
         {driveOptions.length > 1 && (
           <Select
@@ -124,7 +124,7 @@ function ScanStatusBar({
         )}
         {scanning ? (
           <>
-            <Loader2 className="h-3.5 w-3.5 shrink-0 animate-spin text-primary" />
+            <Loader2 className="h-3.5 w-3.5 shrink-0 animate-spin text-info" />
             <span className="shrink-0">
               正在扫描{progress ? ` · 已处理 ${progress.scannedDirs} 个区域 · ${progress.elapsedSecs.toFixed(0)} 秒` : ""}
             </span>
@@ -234,7 +234,7 @@ function FileTypePanel({
   error: string | null;
 }) {
   const max = Math.max(...items.map((item) => item.sizeGb), 0);
-  const colors = ["bg-blue-500", "bg-violet-500", "bg-emerald-500", "bg-amber-500", "bg-slate-500", "bg-slate-400"];
+  const colors = ["bg-data-1", "bg-data-4", "bg-data-2", "bg-data-3", "bg-data-5", "bg-data-6"];
   return (
     <PanelCard title="文件类型（扫描区域）" className="h-full">
       {items.length === 0 ? (
@@ -325,7 +325,7 @@ function CleanupPanel({
               <thead className="text-muted-foreground"><tr><th /><th className="pb-2 font-medium">项目</th><th>扫描结果</th><th>处理方式</th></tr></thead>
               <tbody>
                 {items.map((item) => (
-                  <tr key={item.id} className="border-t border-border/50">
+                  <tr key={item.id} className="hover:bg-accent/40">
                     <td className="py-2.5"><Checkbox aria-label={`选择 ${item.name}`} checked={selected.has(item.id)} disabled={!item.cleanable} onCheckedChange={() => toggle(item.id)} /></td>
                     <td className="truncate pr-2 font-medium" title={`${item.path} · ${item.reason}`}>{item.name}</td>
                     <td>{item.sizeGb > 0 ? formatStorage(item.sizeGb) : "权限受限"}</td>
@@ -335,7 +335,7 @@ function CleanupPanel({
               </tbody>
             </table>
           </div>
-          <div className="mt-3 flex flex-wrap items-center justify-between gap-2 border-t border-border/60 pt-3 text-caption">
+          <div className="mt-3 flex flex-wrap items-center justify-between gap-2 text-caption">
             <span className="text-muted-foreground">已选择 {selectedItems.length} 项 · 可释放 {formatStorage(selectedSize)}</span>
             <div className="flex gap-2">
               <DropdownMenu>
@@ -346,7 +346,7 @@ function CleanupPanel({
                   <div className="max-h-64 overflow-y-auto scrollbar-thin p-2">
                     <ul className="space-y-2">
                       {selectedItems.map((item) => (
-                        <li key={item.id} className="rounded-md border border-border/50 px-2.5 py-2 text-caption">
+                        <li key={item.id} className="rounded-md bg-muted/50 px-2.5 py-2 text-caption">
                           <div className="flex items-center justify-between gap-2">
                             <span className="font-medium">{item.name}</span>
                             <span className="shrink-0 text-muted-foreground">{formatStorage(item.sizeGb)}</span>
@@ -359,14 +359,14 @@ function CleanupPanel({
                   </div>
                 </DropdownMenuContent>
               </DropdownMenu>
-              <Button size="sm" disabled={selectedItems.length === 0 || cleaning} onClick={() => setConfirming(true)}>安全清理</Button>
+              <Button variant="interaction" size="sm" disabled={selectedItems.length === 0 || cleaning} onClick={() => setConfirming(true)}>安全清理</Button>
             </div>
           </div>
           {confirming && (
-            <div className="mt-3 flex flex-wrap items-center gap-2 rounded-lg border border-warning/30 bg-warning/5 p-3 text-caption">
+            <div className="mt-3 flex flex-wrap items-center gap-2 rounded-md bg-warning/5 p-3 text-caption">
               <span className="min-w-0 flex-1">这些文件将被直接删除，不经过回收站。确认删除所选缓存和临时文件？正在使用的文件会自动跳过。</span>
               <Button variant="outline" size="sm" onClick={() => setConfirming(false)}>取消</Button>
-              <Button size="sm" onClick={() => void clean()} disabled={cleaning}>{cleaning ? "正在清理" : "确认清理"}</Button>
+              <Button variant="destructive" size="sm" onClick={() => void clean()} disabled={cleaning}>{cleaning ? "正在清理" : "确认清理"}</Button>
             </div>
           )}
            {notice && (

@@ -42,6 +42,7 @@ describe("InspectionCards", () => {
 
     fireEvent.click(screen.getByRole("button", { name: "一键清理" }));
     expect(onAction).toHaveBeenCalledWith(card());
+    expect(screen.getByRole("button", { name: "一键清理" }).className).toContain("mona-interaction-button");
   });
 
   it("falls back to the view label for cards without an action goal", () => {

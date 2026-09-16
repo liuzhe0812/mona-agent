@@ -1,6 +1,8 @@
 import { ArrowDown, ArrowUp, ArrowUpDown, Ban, CheckCircle2, Clock3, Loader2, Rocket, Sparkles } from "lucide-react";
 import { useMemo, useState } from "react";
 
+import { Button } from "@/components/ui/button";
+
 import { useBootHistory, useStartupChanges, useStartupItems, type StartupItem } from "./useSystemData";
 import { MetricCard, PanelCard, StatusPill, TaskFailureNotice } from "./SystemUi";
 import type { SystemAgentHandoffTask } from "./systemAgentHandoff";
@@ -67,15 +69,17 @@ function SortableHeader({
   const direction = active ? sort.direction : null;
   return (
     <th aria-sort={!direction ? "none" : direction === "asc" ? "ascending" : "descending"}>
-      <button
+      <Button
         type="button"
+        variant="ghost"
+        size="xs"
         aria-label={`按${label}排序`}
         onClick={() => onSort(column)}
-        className="inline-flex items-center gap-1 py-2 text-left font-medium transition hover:text-foreground"
+        className="h-auto gap-1 px-0 py-2 text-left font-medium hover:bg-transparent"
       >
         {label}
-        {!direction ? <ArrowUpDown className="h-3 w-3" /> : direction === "asc" ? <ArrowUp className="h-3 w-3 text-primary" /> : <ArrowDown className="h-3 w-3 text-primary" />}
-      </button>
+        {!direction ? <ArrowUpDown className="h-3 w-3" /> : direction === "asc" ? <ArrowUp className="h-3 w-3 text-info" /> : <ArrowDown className="h-3 w-3 text-info" />}
+      </Button>
     </th>
   );
 }
@@ -170,8 +174,8 @@ export function StartupPanel({ onHandoff }: StartupPanelProps) {
           {bootHistory && bootHistory.points.length > 0 ? (
             <div className="h-28">
               <svg viewBox="0 0 610 110" className="h-full w-full" preserveAspectRatio="none" aria-label="启动耗时趋势图">
-                <polyline points={sparklinePoints} fill="none" stroke="#3b82f6" strokeWidth="3" />
-                {sparklineCoords.map(([x, y]) => <circle key={x} cx={x} cy={y} r="5" fill="#3b82f6" />)}
+                <polyline points={sparklinePoints} fill="none" stroke="hsl(var(--data-1))" strokeWidth="3" />
+                {sparklineCoords.map(([x, y]) => <circle key={x} cx={x} cy={y} r="5" fill="hsl(var(--data-1))" />)}
               </svg>
             </div>
           ) : (
@@ -236,7 +240,7 @@ export function StartupPanel({ onHandoff }: StartupPanelProps) {
                     <td><StatusPill tone={item.scope === "user" ? "blue" : "violet"}>{scopeLabel(item.scope)}</StatusPill></td>
                     <td>{item.enabled ? <StatusPill tone="green">已启用</StatusPill> : <StatusPill tone="neutral">已禁用</StatusPill>}</td>
                     <td className="truncate" title={item.added || undefined}>{item.added ?? "—"}</td>
-                    <td className="text-right"><button role="switch" aria-checked={item.enabled} aria-label={`切换 ${item.name} 启动状态`} disabled={toggling} onClick={() => toggleItem(item)} className={`relative h-5 w-9 rounded-full transition disabled:opacity-50 ${item.enabled ? "bg-primary" : "bg-muted"}`}><span className={`absolute top-0.5 h-4 w-4 rounded-full bg-white shadow transition ${item.enabled ? "left-[18px]" : "left-0.5"}`} /></button></td>
+                    <td className="text-right"><button role="switch" aria-checked={item.enabled} aria-label={`切换 ${item.name} 启动状态`} disabled={toggling} onClick={() => toggleItem(item)} className={`relative h-5 w-9 rounded-full transition disabled:opacity-50 ${item.enabled ? "bg-info" : "bg-muted"}`}><span className={`absolute top-0.5 h-4 w-4 rounded-full bg-white shadow transition ${item.enabled ? "left-[18px]" : "left-0.5"}`} /></button></td>
                   </tr>
                 ))}
               </tbody>

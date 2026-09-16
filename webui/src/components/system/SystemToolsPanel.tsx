@@ -79,7 +79,7 @@ function ProcessBlacklistSection() {
             onChange={(e) => setNewName(e.target.value)}
             onKeyDown={(e) => { if (e.key === "Enter") void handleBlock(); }}
           />
-          <Button type="button" size="sm" onClick={() => void handleBlock()} disabled={acting}>
+          <Button type="button" variant="interaction" size="sm" onClick={() => void handleBlock()} disabled={acting}>
             {acting ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Ban className="h-3.5 w-3.5" />}
             阻止
           </Button>

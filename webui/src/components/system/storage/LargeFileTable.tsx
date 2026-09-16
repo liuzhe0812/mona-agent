@@ -152,7 +152,7 @@ export function LargeFileTable({ files, onAnalyze, onTrash }: Props) {
               <col className="w-16" />
               <col className="w-16" />
             </colgroup>
-            <thead className="sticky top-0 bg-background text-muted-foreground">
+            <thead className="sticky top-0 bg-card text-muted-foreground">
               <tr>
                 <th></th>
                 <th className="pb-2 font-medium">所在目录</th>
@@ -165,7 +165,7 @@ export function LargeFileTable({ files, onAnalyze, onTrash }: Props) {
               {displayFiles.map((file, index) => (
                 <tr
                   key={`${file.parentDirName}-${file.extension}-${index}`}
-                  className="border-t border-border/40 hover:bg-accent cursor-default"
+                  className="cursor-default hover:bg-accent/40"
                   onContextMenu={(e) => handleContextMenu(e, file.path)}
                   title={file.path}
                 >
@@ -182,7 +182,7 @@ export function LargeFileTable({ files, onAnalyze, onTrash }: Props) {
                   <td className="py-2 pr-2 text-muted-foreground">
                     {BUCKET_LABEL[file.modifiedBucket] ?? file.modifiedBucket}
                   </td>
-                  <td className="py-2 text-right font-medium text-warning">
+                  <td className="py-2 text-right font-medium text-foreground">
                     {formatStorage(file.sizeGb)}
                   </td>
                 </tr>
@@ -196,31 +196,37 @@ export function LargeFileTable({ files, onAnalyze, onTrash }: Props) {
       {menu && (
         <div
           ref={menuRef}
-          className="fixed z-50 min-w-[200px] overflow-hidden rounded-md border bg-popover p-1 text-popover-foreground shadow-md"
+          className="fixed z-50 min-w-[200px] overflow-hidden rounded-md border bg-popover p-1 text-popover-foreground shadow-overlay"
           style={{ left: menu.x, top: menu.y }}
         >
-          <button
+          <Button
             type="button"
-            className="flex w-full cursor-default select-none items-center rounded-sm px-2 py-1.5 text-caption outline-none hover:bg-accent hover:text-accent-foreground"
+            variant="ghost"
+            size="sm"
+            className="h-8 w-full justify-start cursor-default select-none px-2 py-1.5 text-caption font-normal hover:bg-accent hover:text-accent-foreground"
             onClick={() => { void revealInExplorer(menu.path); closeMenu(); }}
           >
             在资源管理器中显示
-          </button>
-          <button
+          </Button>
+          <Button
             type="button"
-            className="flex w-full cursor-default select-none items-center rounded-sm px-2 py-1.5 text-caption outline-none hover:bg-accent hover:text-accent-foreground"
+            variant="ghost"
+            size="sm"
+            className="h-8 w-full justify-start cursor-default select-none px-2 py-1.5 text-caption font-normal hover:bg-accent hover:text-accent-foreground"
             onClick={() => { navigator.clipboard?.writeText(menu.path).catch(() => {}); closeMenu(); }}
           >
             复制路径
-          </button>
+          </Button>
           {onTrash && (
-            <button
+            <Button
               type="button"
-              className="flex w-full cursor-default select-none items-center rounded-sm px-2 py-1.5 text-caption text-destructive outline-none hover:bg-destructive/10"
+              variant="ghost"
+              size="sm"
+              className="h-8 w-full justify-start cursor-default select-none px-2 py-1.5 text-caption font-normal text-destructive hover:bg-destructive/10 hover:text-destructive"
               onClick={() => handleTrashRequest(menu.path)}
             >
               移至回收站
-            </button>
+            </Button>
           )}
         </div>
       )}
@@ -235,17 +241,15 @@ export function LargeFileTable({ files, onAnalyze, onTrash }: Props) {
           }
         }}
       >
-        <AlertDialogContent className="w-[min(calc(100vw-2rem),22.75rem)] gap-0 rounded-2xl border border-border/60 bg-card/95 p-5 text-center shadow-lg backdrop-blur-xl sm:rounded-2xl">
+        <AlertDialogContent className="w-[min(calc(100vw-2rem),22.75rem)] gap-4 rounded-xl border-border/70 bg-popover p-5 text-center shadow-overlay">
           <AlertDialogHeader className="items-center space-y-0 text-center">
-            <div className="mb-5 grid h-16 w-16 place-items-center rounded-full bg-destructive/10 text-destructive">
-              <div className="grid h-9 w-9 place-items-center rounded-full border border-destructive/20 bg-destructive/5">
-                <Trash2 className="h-5 w-5" strokeWidth={2.4} aria-hidden />
-              </div>
+            <div className="mb-1 grid h-10 w-10 place-items-center rounded-full bg-destructive/10 text-destructive">
+              <Trash2 className="h-5 w-5" strokeWidth={2.2} aria-hidden />
             </div>
-            <AlertDialogTitle className="text-center text-title-sm tracking-[-0.02em] text-foreground">
+            <AlertDialogTitle className="text-center text-title-sm text-foreground">
               删除这个大文件？
             </AlertDialogTitle>
-            <AlertDialogDescription className="mt-3 max-w-[17rem] text-center text-body leading-6 text-muted-foreground">
+            <AlertDialogDescription className="max-w-[17rem] text-center text-body text-muted-foreground">
               {trashTarget
                 ? `「${trashTarget.parentDirName}」下的 ${trashTarget.extension === "(none)" ? "文件" : `.${trashTarget.extension} 文件`}（${formatStorage(trashTarget.sizeGb)}）将被移至系统回收站，需要时可以从回收站恢复。`
                 : ""}
@@ -256,14 +260,14 @@ export function LargeFileTable({ files, onAnalyze, onTrash }: Props) {
               </p>
             ) : null}
           </AlertDialogHeader>
-          <AlertDialogFooter className="mt-7 grid grid-cols-2 gap-3 space-x-0">
-            <AlertDialogCancel className="mt-0 h-11 rounded-full border-0 bg-muted/70 px-5 text-body-lg font-semibold text-foreground shadow-none hover:bg-muted">
+          <AlertDialogFooter className="mt-2 flex-row justify-end gap-2 space-x-0">
+            <AlertDialogCancel className="mt-0">
               取消
             </AlertDialogCancel>
             <AlertDialogAction
               onClick={handleTrashConfirm}
               disabled={trashPending}
-              className="h-11 rounded-full bg-destructive px-5 text-body-lg font-semibold text-destructive-foreground shadow-none hover:bg-destructive/90"
+              className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
             >
               {trashPending ? "正在移除…" : "移至回收站"}
             </AlertDialogAction>

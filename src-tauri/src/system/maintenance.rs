@@ -29,6 +29,7 @@ fn software_category(action: &str) -> &'static str {
     match action {
         "upgrade" => "更新",
         "uninstall" => "卸载",
+        "residual_cleanup" => "清理",
         _ => "维护",
     }
 }
@@ -398,6 +399,7 @@ mod tests {
     fn maps_persisted_software_actions_to_maintenance_categories() {
         assert_eq!(software_category("upgrade"), "更新");
         assert_eq!(software_category("uninstall"), "卸载");
+        assert_eq!(software_category("residual_cleanup"), "清理");
         assert_eq!(software_category("unknown"), "维护");
     }
 

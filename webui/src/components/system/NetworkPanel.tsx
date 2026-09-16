@@ -94,7 +94,7 @@ function DnsSection() {
           <div className="flex items-center gap-2 text-caption text-muted-foreground"><Loader2 className="h-4 w-4 animate-spin" />正在读取当前 DNS...</div>
         ) : (
           <>
-            <div className="rounded-lg border border-border/60 bg-muted/30 p-3">
+            <div className="rounded-md bg-muted/30 p-3">
               <p className="text-micro text-muted-foreground">当前 DNS</p>
               {status && status.adapters.length > 0 ? (
                 <div className="mt-2 flex flex-col gap-1.5">
@@ -125,14 +125,14 @@ function DnsSection() {
                       disabled={isActing}
                       className={cn(
                         "flex flex-col items-start gap-1 rounded-lg border p-2.5 text-left transition",
-                        isActive ? "border-primary/60 bg-accent ring-1 ring-primary/20" : "border-border/70 bg-card hover:bg-accent",
+                        isActive ? "border-info/30 bg-info/[0.05]" : "border-border/70 bg-card hover:bg-accent",
                         isActing && "opacity-60",
                       )}
                     >
                       <div className="flex w-full items-center justify-between">
                         <span className="text-caption font-semibold">{preset.label}</span>
-                        {isActing && <Loader2 className="h-3 w-3 animate-spin text-primary" />}
-                        {isActive && !isActing && <CheckCircle2 className="h-3.5 w-3.5 text-primary" />}
+                        {isActing && <Loader2 className="h-3 w-3 animate-spin text-info" />}
+                        {isActive && !isActing && <CheckCircle2 className="h-3.5 w-3.5 text-info" />}
                       </div>
                       <span className="font-mono text-micro text-muted-foreground">
                         {preset.primaryV4}{preset.secondaryV4 ? ` / ${preset.secondaryV4}` : ""}
@@ -242,7 +242,7 @@ function HostsSection() {
     <PanelCard title="HOSTS 编辑器">
       <div className="flex flex-col gap-4">
         {/* 添加条目 */}
-        <div className="rounded-lg border border-border/60 p-3">
+        <div className="rounded-md bg-muted/30 p-3">
           <p className="mb-2 text-micro text-muted-foreground">添加条目（将域名指向指定 IP）</p>
           <div className="flex flex-wrap items-center gap-2">
             <Input
@@ -263,7 +263,7 @@ function HostsSection() {
               <Checkbox checked={includeWww} onCheckedChange={(v) => setIncludeWww(v === true)} />
               同时添加 www
             </label>
-            <Button type="button" size="sm" onClick={handleAdd} disabled={acting}>
+            <Button type="button" variant="interaction" size="sm" onClick={handleAdd} disabled={acting}>
               {acting ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Globe className="h-3.5 w-3.5" />}
               添加
             </Button>
@@ -271,7 +271,7 @@ function HostsSection() {
         </div>
 
         {/* 屏蔽域名 */}
-        <div className="rounded-lg border border-border/60 p-3">
+        <div className="rounded-md bg-muted/30 p-3">
           <p className="mb-2 text-micro text-muted-foreground">屏蔽域名（指向 0.0.0.0，阻止访问）</p>
           <div className="flex flex-wrap items-center gap-2">
             <Input
@@ -281,7 +281,7 @@ function HostsSection() {
               onChange={(e) => setBlockDomain(e.target.value)}
               onKeyDown={(e) => { if (e.key === "Enter") handleBlock(); }}
             />
-            <Button type="button" size="sm" onClick={handleBlock} disabled={acting}>
+            <Button type="button" variant="interaction" size="sm" onClick={handleBlock} disabled={acting}>
               {acting ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <ShieldOff className="h-3.5 w-3.5" />}
               屏蔽
             </Button>

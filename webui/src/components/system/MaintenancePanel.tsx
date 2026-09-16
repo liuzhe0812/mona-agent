@@ -71,7 +71,7 @@ export function MaintenancePanel({ onHandoff }: MaintenancePanelProps) {
       <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
         <MetricCard label="本月维护" value={loading ? "—" : `${monthEvents.length} 次`} detail="Mona 已记录的系统操作" icon={<History className="h-4 w-4" />} accent="violet" />
         <MetricCard label="释放空间" value={loading ? "—" : formatBytes(releasedBytes)} detail="按清理前后实测" icon={<Database className="h-4 w-4" />} />
-        <MetricCard label="完成更新" value={loading ? "—" : `${completedUpdates} 项`} detail="WinGet 返回成功" icon={<CheckCircle2 className="h-4 w-4" />} accent="green" />
+        <MetricCard label="完成更新" value={loading ? "—" : `${completedUpdates} 项`} detail="软件更新已完成" icon={<CheckCircle2 className="h-4 w-4" />} accent="green" />
         <MetricCard label="失败操作" value={loading ? "—" : `${failedCount} 项`} detail={failedCount ? "保留原始失败信息" : "暂无失败"} icon={<AlertTriangle className="h-4 w-4" />} accent={failedCount ? "orange" : "green"} />
       </div>
 
@@ -85,7 +85,7 @@ export function MaintenancePanel({ onHandoff }: MaintenancePanelProps) {
       )}
 
       <div className="flex flex-wrap items-center justify-between gap-2">
-        <div className="flex flex-wrap gap-2">{filters.map((item) => item === filter ? <Button key={item} size="sm" onClick={() => setFilter(item)}>{item}</Button> : <Button key={item} variant="outline" size="sm" onClick={() => setFilter(item)}>{item}</Button>)}</div>
+        <div className="flex flex-wrap gap-2">{filters.map((item) => <Button key={item} variant={item === filter ? "interaction" : "ghost"} size="sm" onClick={() => setFilter(item)}>{item}</Button>)}</div>
         <Input aria-label="搜索维护记录" value={query} onChange={(event) => setQuery(event.target.value)} placeholder="搜索维护记录" className="w-48 rounded-full" />
       </div>
 

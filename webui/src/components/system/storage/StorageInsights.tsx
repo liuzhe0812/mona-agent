@@ -120,12 +120,12 @@ export function StorageInsights({
         <p className="text-caption text-muted-foreground">扫描结果中暂时没有可归纳的重点。</p>
       )}
 
-      <div className="mt-4 flex flex-wrap justify-end gap-2 border-t border-border/60 pt-3">
-        <Button type="button" variant="outline" size="sm" onClick={onAnalyzeScope}>
+      <div className="mt-4 flex flex-wrap justify-end gap-2">
+        <Button type="button" variant="interaction" size="sm" onClick={onAnalyzeScope}>
           分析当前范围
         </Button>
         {hasCleanable ? (
-          <Button type="button" size="sm" onClick={onPlanCleanup}>
+          <Button type="button" variant="default" size="sm" onClick={onPlanCleanup}>
             生成清理方案
           </Button>
         ) : null}

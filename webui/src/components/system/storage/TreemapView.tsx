@@ -231,7 +231,7 @@ export function TreemapView({
           正在扫描子目录...
         </div>
       ) : error ? (
-        <div className="flex h-[320px] items-center justify-center text-caption text-warning">
+        <div className="flex h-[320px] items-center justify-center text-caption text-destructive">
           {error}
         </div>
       ) : tiles.length === 0 ? (

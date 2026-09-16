@@ -23,14 +23,14 @@ export function MetricCard({
 }) {
   const tones = {
     blue: "bg-info/10 text-info",
-    violet: "bg-primary/10 text-primary",
+    violet: "bg-info/10 text-info",
     green: "bg-success/10 text-success",
     orange: "bg-warning/10 text-warning",
   };
   const className = cn(
-    "min-w-0 rounded-lg border bg-card p-3.5 text-left transition",
-    active ? "border-primary/60 ring-2 ring-primary/15" : "border-border/70 shadow-sm",
-    onClick && !active && "cursor-pointer hover:border-primary/40 hover:shadow",
+    "h-auto min-w-0 justify-start whitespace-normal rounded-lg border bg-card p-3.5 text-left transition",
+    active ? "border-info/30 bg-info/[0.05]" : "border-border/60",
+    onClick && !active && "cursor-pointer hover:border-border hover:bg-accent/40",
   );
   const content = (
     <div className="flex items-start gap-3">
@@ -46,9 +46,9 @@ export function MetricCard({
   );
   if (onClick) {
     return (
-      <button type="button" onClick={onClick} className={className}>
+      <Button type="button" variant="ghost" onClick={onClick} className={className}>
         {content}
-      </button>
+      </Button>
     );
   }
   return <div className={className}>{content}</div>;
@@ -68,7 +68,7 @@ export function PanelCard({
   action?: ReactNode;
 }) {
   return (
-    <section className={cn("min-w-0 rounded-lg border border-border/70 bg-card", className)}>
+    <section className={cn("min-w-0 rounded-lg border border-border/60 bg-card", className)}>
       <div className="flex min-h-11 items-center justify-between border-b border-border/60 px-4 py-2.5">
         <h2 className="text-body font-semibold">{title}</h2>
         {action}
@@ -83,10 +83,11 @@ export function StatusPill({
   tone = "neutral",
 }: {
   children: ReactNode;
-  tone?: "neutral" | "blue" | "green" | "orange" | "red" | "violet";
+  tone?: "neutral" | "brand" | "blue" | "green" | "orange" | "red" | "violet";
 }) {
   const tones = {
     neutral: "bg-muted text-muted-foreground",
+    brand: "border border-[hsl(var(--brand-red)/0.18)] bg-[hsl(var(--brand-red)/0.06)] text-foreground",
     blue: "bg-info/10 text-info",
     green: "bg-success/10 text-success",
     orange: "bg-warning/10 text-warning",
