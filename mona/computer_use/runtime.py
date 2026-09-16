@@ -81,6 +81,10 @@ BUILTIN_COMPUTER_TOOLS = [
     "get_screen_size",
     "get_cursor_position",
 ]
+LEGACY_COMPUTER_PERMISSION_TOOL_NAMES = tuple(
+    f"computer_{name}" for name in BUILTIN_COMPUTER_TOOLS
+)
+COMPUTER_PERMISSION_TOOL_NAMES = ("computer_observe", "computer_act")
 
 
 @dataclass(frozen=True, slots=True)
@@ -489,7 +493,7 @@ class CuaDriverManager:
         return MCPServerConfig(
             type="stdio",
             command=str(executable),
-            args=["mcp", "--direct", "--no-overlay"],
+            args=["mcp"],
             env={
                 "CUA_DRIVER_HOME": state_root,
                 "CUA_DRIVER_RS_HOME": state_root,

@@ -149,7 +149,6 @@ import { AccountSettings } from "@/components/settings/AccountSettings";
 import { CreditsView } from "@/components/CreditsView";
 import { UsageSettings } from "@/components/settings/UsageSettings";
 import { ManagedRuntimeSettings } from "@/components/settings/ManagedRuntimeSettings";
-import { AutomationSettings } from "@/components/settings/AutomationSettings";
 import { SubsectionLabel } from "@/components/ui/page-header";
 import { StatusNotice } from "@/components/ui/status-notice";
 import { Switch } from "@/components/ui/switch";
@@ -694,7 +693,7 @@ export function SettingsView({
                 isRestarting={isRestarting}
                 requiresRestartPending={pendingRestartSections.runtime}
               />
-              {isTauri() ? <DesktopSettings token={token} /> : null}
+              {isTauri() ? <DesktopSettings /> : null}
               {isTauri() ? <AgentScopeSettings /> : null}
             </>
           ) : null}
@@ -1556,7 +1555,7 @@ export function ModelsProvidersSettings({
       "- 文生视频模型 ID：agnes-video-v2.0",
       "",
       "## 执行流程",
-      "1. 用 browser_open 打开 https://platform.agnes-ai.com/。若是登录页，找“注册”或 Sign Up 链接点击进入。用 browser_snapshot 定位邮箱框、密码框、发送验证码按钮、提交按钮。",
+      "1. 用 browser_act 的 open 操作打开 https://platform.agnes-ai.com/。若是登录页，找“注册”或 Sign Up 链接点击进入。用 browser_observe 的 snapshot 操作定位邮箱框、密码框、发送验证码按钮、提交按钮。",
       "2. 用 browser_type 填入上面的邮箱和密码（不要点提交）。再点“发送验证码”按钮。",
       `3. 触发验证码后告诉我已发送到 ${email}，等我在对话中回复 6 位验证码再继续。`,
       "4. 用户回复验证码后，用 browser_type 填入验证码，点提交按钮。用 browser_snapshot 检查是否注册成功：跳转到控制台首页即成功；若出现“验证码错误”/“邮箱已注册”等错误，截图告诉我并停止；若出现图片/滑块验证码，截图让我在浏览器窗口手动完成，等我说“继续”再 snapshot。",
@@ -5219,7 +5218,7 @@ function shortcutFromKeyboardEvent(event: KeyboardEvent): string | null {
   return parts.join("+");
 }
 
-function DesktopSettings({ token }: { token: string | null }) {
+function DesktopSettings() {
   const { t } = useTranslation();
   const tx = (key: string, fallback: string) => t(key, { defaultValue: fallback });
   const [settings, setSettings] = useState<DesktopAppSettings | null>(null);
@@ -5285,8 +5284,6 @@ function DesktopSettings({ token }: { token: string | null }) {
           </SettingsRow>
         </SettingsGroup>
       </section>
-
-      <AutomationSettings token={token} />
 
       {error ? <StatusNotice tone="danger">{error}</StatusNotice> : null}
     </div>

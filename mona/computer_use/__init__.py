@@ -2,6 +2,8 @@
 
 from mona.computer_use.runtime import (
     BUILTIN_COMPUTER_TOOLS,
+    COMPUTER_PERMISSION_TOOL_NAMES,
+    LEGACY_COMPUTER_PERMISSION_TOOL_NAMES,
     CUA_DRIVER_VERSION,
     CuaDriverManager,
     get_cua_driver_manager,
@@ -9,6 +11,8 @@ from mona.computer_use.runtime import (
 
 __all__ = [
     "BUILTIN_COMPUTER_TOOLS",
+    "COMPUTER_PERMISSION_TOOL_NAMES",
+    "LEGACY_COMPUTER_PERMISSION_TOOL_NAMES",
     "CUA_DRIVER_VERSION",
     "CuaDriverManager",
     "get_cua_driver_manager",

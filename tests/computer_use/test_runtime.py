@@ -392,7 +392,7 @@ def test_mcp_config_exposes_only_allowlisted_tools_and_disables_telemetry(
 
     assert config.type == "stdio"
     assert config.command == str(executable)
-    assert config.args == ["mcp", "--direct", "--no-overlay"]
+    assert config.args == ["mcp"]
     assert config.enabled_tools == runtime.BUILTIN_COMPUTER_TOOLS
     assert "*" not in config.enabled_tools
     assert set(config.env) == {
