@@ -2,8 +2,8 @@
 name: mona-pptx
 description: >
   使用 Mona Office 实时编辑器创建和修改原生、可编辑的 PPTX；按受众、论证和内容选择布局，
-  分页小批次写入并实时预览。适用于制作、补写、重排或美化 PowerPoint 幻灯片，不用于旧的 SVG
-  导出流水线或仅需要图片原型的任务。
+  分页小批次写入并实时预览。适用于制作、补写、重排或美化 PowerPoint 幻灯片，
+  不用于仅需要图片原型的任务。
 ---
 
 # Mona PPTX 原生编辑
@@ -36,11 +36,11 @@ description: >
 
 新建、重排和混排页面先阅读 [references/design-method.md](references/design-method.md)。它负责内容取舍、受众、论证顺序、布局、字体比例、颜色、图标、密度、节奏、图表取舍和图文关系；局部改色等小修改按上面的分流直接处理，不要求固定模板、八项确认、封面、目录或结束页。
 
-原生操作和 JSON 示例见 [references/office-operations.md](references/office-operations.md)。完成结构写入后，按需阅读 [references/visual-review.md](references/visual-review.md)，先用 `inspect review` 找待观察页面，再用当前版本的 `inspect visual` 审核真实编辑器画面，最后做局部微调。
+原生操作和 JSON 示例见 [references/office-operations.md](references/office-operations.md)。完成结构写入后，按需阅读 [references/visual-review.md](references/visual-review.md)，先用 `inspect review` 找待观察页面，再用当前版本的 `inspect visual` 审核真实编辑器画面，最后做局部微调。写入成功、截图成功和布局验收通过是三个不同状态；任何一个都不能替代后一个。
 
 ## 原生操作规则
 
-- 当前直接支持的幻灯片操作是 `slide_set_text`、`slide_set_font`、`slide_set_chart_style`、`slide_set_geometry`、`slide_set_fill`、`slide_set_stroke`、`slide_add_text`、`slide_add_shape`、`slide_add_image`、`slide_add_svg`、`slide_compose`、`slide_delete_element`、`slide_add`、`slide_duplicate`、`slide_delete` 和 `slide_move`。新增文本/形状可在同一操作中携带 `font`、`align`、`fillColor`、`strokeColor`、`strokeWidthPt` 与几何字段；新增结构只创建，不替换页面或已有元素。
+- 当前直接支持的幻灯片操作是 `slide_set_text`、`slide_set_font`、`slide_set_chart_style`、`slide_set_geometry`、`slide_set_fill`、`slide_set_stroke`、`slide_add_text`、`slide_add_chart`、`slide_add_shape`、`slide_add_image`、`slide_add_svg`、`slide_compose`、`slide_delete_element`、`slide_add`、`slide_duplicate`、`slide_delete` 和 `slide_move`。新增文本/形状可在同一操作中携带 `font`、`align`、`fillColor`、`strokeColor`、`strokeWidthPt` 与几何字段；新增结构只创建，不替换页面或已有元素。
 - 已知元素类型和操作字段时直接使用，不再重复读取参考。只有需要新操作时才用 `inspect capabilities`，按具体操作名过滤（例如 `operations: ["slide_set_font"]`），并只使用该结果列出的字段；不要凭经验拼接未列出的操作或字段。`inspect` 的 `slides` 结果包含轻量 `style` 摘要并支持 `elementIds` 过滤；`selection` 一次返回当前页面、稳定 `slideId`/`elementIds`、`elements` 和版本。这些是实时编辑器状态，不是截图或底层 AST。
 - `inspect` 的 `visual` 模式接受 `slideId`，以及可选的 `elementIds` 或 `region`/`padding` 局部捕获；省略目标时使用当前选区页面，返回真实 `SlideCanvas` PNG 的 `dataUrl`、`width`、`height`、`target` 和 `warnings`。捕获前后版本必须一致；收到 `VERSION_CONFLICT` 时先重新 `inspect`，不要继续沿用旧页面或旧操作。
 - 需要后续编辑或表达数据含义的原生表格、图表、SmartArt 或段落格式时，按需阅读 [references/advanced-operations.md](references/advanced-operations.md)。只列出已验证的 `slide_apply_txn` payload；排版性自由文本可以保持普通文本，不要求把任意表格都改成原生对象。新增结构后必须取得稳定元素 ID，再做单独编辑和视觉复核。
@@ -48,12 +48,14 @@ description: >
 - 局部修改快速路径：先从 `selection` 取得选中的稳定 `slideId`、`elementId` 和最新版本，确认元素是 `chart` 还是 `text`，一次 `apply` 正确操作后依次做结构和视觉验证。用户已经提供稳定 ID 时直接使用，不要反复扫描整份文件。字段失败时按明确 schema 修正；schema 不支持就说明能力边界并停止，不循环试拼字段。
 - 图表文字改色优先使用 `slide_set_chart_style`，payload 为 `{slideId,elementId,style:{textColor?,titleColor?,axisLabelColor?,axisTitleColor?,legendColor?,dataLabelColor?}}`；颜色使用 `#RRGGBB` 或 6 位 HEX，`textColor` 统一修改图表文字，局部字段覆盖对应角色。图表只传 `slide_set_font` 的 `font.color` 时会路由为 `textColor`，其它图表字体字段会拒绝；普通文本继续使用 `slide_set_font`。
 - `setChart` 的 `patch` 只接受高级操作文档列出的字段；未知参数、空 patch、错误类型、非有限数字和数据维度不匹配会明确拒绝。实际没有变化时返回 `unchanged`，不算新编辑。
+- 新建或重做常见数据图表时，优先使用 `slide_add_chart`，直接传预览像素位置和 `{kind:"bar"|"line"|"area"|"pie"|"doughnut",categories:string[],series:[{name,values}]}`；可选 `title`、`legendPos`、`gridlines`、`dataLabels`、`valAxisTitle` 也只能按当前能力返回使用。说明性示例：`kind:"bar", categories:["阶段一","阶段二"], series:[{name:"完成率（示例）",values:[35,68]}]`。复杂图表或修改已有图表数据再阅读 [references/advanced-operations.md](references/advanced-operations.md) 使用已验证的高级操作。数据图表禁止用字符块、空格或重复符号模拟；对比对象拆成独立模块并保持比较维度一致。
 - `slide_add_image` 写入的是图片元素；它不是原生数据图表。只有使用已验证的 `addChart`/`setChart` 注册表操作，且保留数据模型，才称为原生图表。SVG/PNG 图表即使视觉上像图表，也仍是图片。
+- 编辑器支持的数据关系不要因省操作或样式方便而改用矩形加文字、SVG/PNG 代替原生图表；仅在用户明确要求图片/特殊表达或当前能力不支持时采用替代方式，并说明可编辑性限制。局部修改不据此擅自替换用户已有图表。
 - `slide_add_svg` 写入的是一个整体的 SVG 矢量图片，可移动和缩放；SVG 内部的路径、文字和形状不会因此变成可逐项编辑的原生元素。只插入封闭的静态 SVG，不用整页 SVG 取代原生页面；安全格式和外链约束见当前操作能力。
 - `slide_compose` 的完整网格 payload 与混排示例见 [references/office-operations.md](references/office-operations.md)。payload 是 `{slideId,x?,y?,width?,height?,columns,rows,gap?,items}`；`columns`/`rows` 是正权重数组，item 的 `column`/`row` 从 0 开始，可用 `columnSpan`、`rowSpan`、`inset`。默认页面边缘 48px、`gap` 24px。`items` 按数组顺序叠放，同一 grid area 可以重叠，文本仍逐项独立可编辑。按类型使用 `text`/`font`/`align`、`shape`/`fillColor`/`strokeColor`/`strokeWidthPt`、图片的 `dataUrl`/`assetPath` 或 SVG 的 `svg`。大照片优先传工作区内 `assetPath`，由 Gateway 转成 `dataUrl`，避免模型输出 base64。
 - `slide_add_text`、`slide_add_shape` 和几何字段使用 `inspect` 返回的预览像素；`slide_set_font` 的 `font.fontSize` 使用磅值。不要把像素尺寸直接写进字体字段，也不要把 EMU 直接写进几何字段。
-- 只改已明确的页面和元素。不要为了方便把整页转成一张图片、批量重建整份演示文稿、调用旧 `mona-ppt`、用脚本先生成整份 PPTX，或覆盖用户尚未保存的编辑。
+- 只改已明确的页面和元素。不要为了方便把整页转成一张图片、批量重建整份演示文稿、用脚本先生成整份 PPTX，或覆盖用户尚未保存的编辑。
 
 ## 完成判据
 
-每个页面都应有清楚的主信息、在页面边界内的元素、可读的文字、与数据含义匹配的视觉表达和一致的字体/颜色/图标系统。完成顺序是“先结构、再 review/视觉、最后微调”：先用 `inspect slides`/`selection` 验收元素和稳定 ID；布局写入或收到布局 `warnings` 后，调用 `inspect review`，按回执的 `pendingSlideIds` 用当前版本逐页 `inspect visual`，处理或明确披露可接受警告，之后才 `save`/`export`。视觉观察用于发现问题，不等于自动设计评分；自动 warning 也不全部是 bug。普通导出遇到 `REVIEW_REQUIRED` 时先完成同一流程。`allow_unreviewed` 只用于用户明确要求草稿或跳过审阅，草稿不能称为已验收。具体视觉检查见 [references/visual-review.md](references/visual-review.md)。
+每个页面都应有清楚的主信息、在页面边界内的元素、可读的文字、与数据含义匹配的视觉表达和一致的字体/颜色/图标系统。完成顺序是“先结构、再 review/视觉、最后微调”：先用 `inspect slides`/`selection` 验收元素和稳定 ID；布局写入或收到布局 `warnings` 后，调用 `inspect review`，按回执的 `pendingSlideIds` 用当前版本逐页 `inspect visual`，处理警告后才 `save`/`export`。普通内容页的纵向平衡和 70%–90%/80% 参考见 [references/design-method.md](references/design-method.md)，封面、章节、引用和刻意留白页不按该参考判断。先完成一张代表性内容页检查，再批量延续布局；同一问题连续两轮调整仍无改善时报告“待完善”，不把未通过说成完成。自动 warning 也不全部是 bug：`[错误]` 表示必须修复的越界、文字溢出或文字相互重叠；截图不会清除这类问题。`[需检查]` 表示图文交叠等需要看真实画面判断的情况：非有意叠放必须修复；有意且可读时，先用当前版本获取整页 `visual` 截图，只有确有理由才在同一版本、非局部查询中增加非空 `reviewReason` 和 `acceptWarnings: true` 明确接受，并在交付说明中列出；缺少同版本整页前置观察、仅有局部/过期截图或存在 `[错误]` 时不能接受。任何变更后都要用最新版本重新 review 和视觉观察。普通导出遇到 `REVIEW_REQUIRED` 时先完成同一流程。`allow_unreviewed` 只用于用户明确要求草稿或跳过审阅，草稿不能称为已验收。具体视觉检查见 [references/visual-review.md](references/visual-review.md)。

@@ -117,7 +117,9 @@ class SkillSetupJobManager:
                 raise ValueError("技能内容在准备期间发生变化，请重新配置")
             job.stage = "checking"
             self._touch(job)
-            manager.action(job.skill_name, "enable_scripts")
+            AgentEnvironmentManager(get_managed_runtimes_dir()).assert_skill_ready(
+                skill_dir, runtime_spec_from_skill_markdown(content)
+            )
             job.state = "completed"
             job.stage = "ready"
         except asyncio.CancelledError:

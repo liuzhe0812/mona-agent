@@ -30,6 +30,20 @@ Use the `memory_search` tool to search past events:
 
 Do NOT use `grep` to search memory — memory files are outside the workspace and `grep` cannot reach them.
 
+## Search Previous Chats
+
+Use `conversation_search` when the user asks what was said, decided, corrected,
+or specified in an earlier chat and the current context does not contain the
+original evidence. Search with concrete names, phrases, paths, numbers, or
+dates. If the first query has no result, retry once with another concrete term
+from the user's request.
+
+After a match, call `conversation_read` to inspect the original message and its
+nearby exchange before answering. Distinguish user statements, assistant
+suggestions, confirmed decisions, and later corrections. If coverage is partial
+or no source is found, say so instead of claiming to remember. Do not search
+chat history for self-contained questions.
+
 ## Important
 
 - **Do NOT edit SOUL.md, USER.md, or MEMORY.md.** They are automatically managed by Dream.

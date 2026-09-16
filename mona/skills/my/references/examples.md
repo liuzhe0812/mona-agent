@@ -28,15 +28,6 @@ Concrete scenarios showing when and how to use the my tool effectively.
 
 ## Adaptive Behavior
 
-### Large codebase analysis
-```
-→ my(action="check")
-  → context_window_tokens: 65536
-→ my(action="set", key="context_window_tokens", value=131072)
-  → "Set context_window_tokens = 131072 (was 65536)"
-→ "I've expanded my context window to handle this large codebase."
-```
-
 ### Switching to a faster model for repetitive tasks
 ```
 → my(action="set", key="model", value="anthropic/claude-haiku-4-5-20251001")

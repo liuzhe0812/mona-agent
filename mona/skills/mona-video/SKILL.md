@@ -6,6 +6,11 @@ description: >
   video maker UI then turns into HTML+GSAP scenes and exports to MP4.
   Use when user asks to "create video", "make video", "制作视频", "生成视频",
   or mentions "mona-video".
+short_description: >-
+  Plan Mona Video storyboards: convert source documents/topics into
+  scene-by-scene storyboard.md for the UI's HTML+GSAP scenes and MP4 export.
+  Use when users ask "create video", "make video", "制作视频", "生成视频", or
+  mention "mona-video".
 metadata:
   mona:
     emoji: "🎬"

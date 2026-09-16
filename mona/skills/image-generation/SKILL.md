@@ -2,6 +2,11 @@
 name: image-generation
 description: >-
   Create or revise images with generate_image using the complete awesome-gpt-image-2 template method. Use for requested images and for imagery another workflow decides to generate: select the relevant source template, adapt its composition and style, preserve user constraints, and send a production-ready prompt.
+short_description: >-
+  Create/revise images with generate_image using the complete
+  awesome-gpt-image-2 template. For requested or workflow-needed imagery,
+  choose/adapt the source template, preserve constraints, and send a
+  production-ready prompt.
 ---
 
 # Image Generation

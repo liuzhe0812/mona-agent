@@ -39,12 +39,10 @@ The skill format and metadata structure follow OpenClaw's conventions to maintai
 | `mona-xlsx` | Professional spreadsheet editing through live Office sessions. |
 | `mona-pptx` | Presentation design and editing through live Office sessions. |
 | `mona-canvas` | Create and edit content on Mona's canvas. |
-| `mona-ppt` | AI-driven multi-format SVG content generation system. Exports to PPTX through multi-role collaboration. |
 | `mona-video` | AI-driven video generation system using Hyperframes. Renders HTML+GSAP animation compositions to MP4. |
-| `my` | Check and set the agent's own runtime state (model, iterations, context window, token usage, web config). |
-| `pdf` | Comprehensive PDF manipulation toolkit for extracting text/tables, creating, merging, and splitting PDFs. |
+| `my` | Check and set the agent's own runtime state (model, iterations, token usage, web config). |
+| `pdf` | Built-in PDF text/table extraction, rendering, creation, merging, page extraction and forms; reuses Mona's bundled Python libraries. |
 | `skill-creator` | Create or update AgentSkills. |
 | `summarize` | Summarize or extract text/transcripts from URLs, podcasts, and local files (YouTube/video transcription fallback). |
 | `tmux` | Remote-control tmux sessions for interactive CLIs. |
-| `update-setup` | One-time setup wizard for the mona upgrade skill. |
 | `weather` | Get current weather and forecasts (no API key required). |

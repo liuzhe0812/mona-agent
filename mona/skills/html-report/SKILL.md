@@ -1,6 +1,11 @@
 ---
 name: html-report
-description: Create any self-contained HTML deliverable except slides — research reports, whitepapers, PRDs, dashboards, portfolios, resumes, email templates, data visualizations, and more. Use when the user wants to produce a polished, visually designed HTML page or multi-page site for any purpose. The final deliverable is a self-contained directory (<name>.html + assets + _shared) deployed to the user's workspace with zero external dependencies.
+description: Create any self-contained HTML deliverable except slides — research reports, whitepapers, PRDs, dashboards, portfolios, resumes, email templates, data visualizations, and more. Use when the user wants to produce a polished, visually designed HTML page or multi-page site for any purpose. The final deliverable is a self-contained directory (report-name.html + assets + _shared) deployed to the user's workspace with zero external dependencies.
+short_description: >-
+  Build any polished, self-contained HTML page/site except slides (reports,
+  whitepapers, PRDs, dashboards, portfolios, resumes, email templates, or data
+  visualizations); deploy <name>.html + assets + _shared with zero external
+  dependencies.
 ---
 
 ## Step 1: Plan
@@ -33,6 +38,9 @@ All styles in the final HTML use these CSS variables — no hardcoded hex elsewh
 - **Border** (`--rule`): `#xxxxxx`
 - **Accent** (`--accent`): `#xxxxxx`
 - **Accent 2** (`--accent2`): `#xxxxxx`
+- **Data series 1–6** (`--data-1` … `--data-6`): six ordered, distinguishable chart colors; do not derive a multi-series palette only by changing opacity.
+
+For dashboards or reports with quantitative charts, read [references/dashboard-colors.md](references/dashboard-colors.md) before choosing the palette. It separates brand accents, status colors, and data-series colors, and defines the Mona product palette when the deliverable belongs to Mona.
 
 ### Typography
 - **Heading font**: [font name from canvas-fonts/] — [rationale: why this font fits the topic/audience]
@@ -307,6 +315,9 @@ cp ${SKILL_DIR}/assets/js/echarts.min.js <report-dir>/_shared/js/
     var muted = style.getPropertyValue('--muted').trim();
     var rule = style.getPropertyValue('--rule').trim();
     var bg2 = style.getPropertyValue('--bg2').trim();
+    var dataColors = [1, 2, 3, 4, 5, 6].map(function(index) {
+      return style.getPropertyValue('--data-' + index).trim();
+    });
 
     // --- Chart: [name] ---
     var chart1 = echarts.init(document.getElementById('chart-[name]'), null, { renderer: 'svg' });
@@ -354,6 +365,8 @@ cp ${SKILL_DIR}/assets/js/echarts.min.js <report-dir>/_shared/js/
 
 All chart colors MUST be derived from the report's CSS variables to maintain visual consistency with the theme. Do NOT use hardcoded hex colors or library default palettes.
 
+For dashboards, first read [references/dashboard-colors.md](references/dashboard-colors.md). Brand accents identify the product or a selected entry; chart colors encode data. Do not reuse a brand red, success green, warning orange, or destructive red as the default chart palette.
+
 **Reading CSS variables (once at the top of `assets/charts.js` IIFE):**
 ```javascript
 var style = getComputedStyle(document.documentElement);
@@ -363,21 +376,24 @@ var ink = style.getPropertyValue('--ink').trim();
 var muted = style.getPropertyValue('--muted').trim();
 var rule = style.getPropertyValue('--rule').trim();
 var bg2 = style.getPropertyValue('--bg2').trim();
+var dataColors = [1, 2, 3, 4, 5, 6].map(function(index) {
+  return style.getPropertyValue('--data-' + index).trim();
+});
 ```
 
 **Color palette construction:**
-- **Single-series charts** (line, bar, area): use `accent` as primary color
-- **Multi-series charts**: build a palette by mixing `accent` and `accent2` with opacity variants:
+- **Single-series charts** (line, bar, area): use `dataColors[0]`; reserve `accent` for editorial emphasis and brand identity.
+- **Multi-series charts**: use the ordered `dataColors` palette. Keep the same metric or category on the same token across the report; add labels, markers, or line styles when series are easy to confuse.
   ```javascript
-  color: [accent, accent2, muted, accent + '99', accent2 + '99']
+  color: dataColors
   ```
-- **Heatmap / continuous color mapping**: use `visualMap.inRange.color` derived from theme:
+- **Heatmap / continuous color mapping**: use a sequential scale derived from the surface and one data hue; do not cross several unrelated hues for magnitude.
   ```javascript
-  visualMap: { inRange: { color: [bg2, accent2, accent] } }
+  visualMap: { inRange: { color: [bg2, dataColors[0] + '33', dataColors[0]] } }
   ```
-- **Diverging charts** (positive vs negative comparison): use `accent` for positive values and `accent2 + 'cc'` (or a darker muted tone) for negative values:
+- **Diverging charts** (positive vs negative comparison): define explicit semantic comparison variables or use two data hues. Use success/danger only when the values literally mean success/failure, safe/risk, or gain/loss in that domain.
   ```javascript
-  itemStyle: { color: function(params) { return params.value >= 0 ? accent : accent2; } }
+  itemStyle: { color: function(params) { return params.value >= 0 ? dataColors[1] : dataColors[4]; } }
   ```
 - **Text elements** (axis labels, legend): use `muted` for secondary text, `ink` for primary text
 - **Grid lines / axis lines**: use `rule`
@@ -386,6 +402,8 @@ var bg2 = style.getPropertyValue('--bg2').trim();
 - Rainbow or matplotlib-style colormaps (viridis, plasma, inferno, etc.)
 - Hardcoded hex values that do not come from CSS variables
 - Default ECharts color palette (the auto-assigned blues, greens, oranges)
+- Opacity-only variants presented as separate categories
+- Brand or status colors reused as ordinary series colors without a matching data meaning
 
 ### Diagram Embedding
 

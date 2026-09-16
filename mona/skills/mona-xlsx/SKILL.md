@@ -12,8 +12,8 @@ description: "Use Mona's live Office sheets sessions to create, edit, and analyz
 1. 新建用 `office` 的 `open`，设置 `document_type: "sheets"` 和 `display_name`；已有文件用 `open` 的工作区相对 `path`。`open` 回执中的当前工作表、`selection` 和 `version` 直接作为起点，不猜测 `Sheet1`。
 2. 按任务选择一个原文入口：用户选中单元格用回执中的 `selection`，已知目标用 `range`，需要工作表名或规模用 `summary`。回执已完整覆盖目标时不换工具重复读取；明确为 `partial` 时，只补读缺失行列/范围，保持范围不重叠。用户要求不损失数据时，建立“原文数据项/公式/表格区域 → 输出单元格/区域”的覆盖清单，验收后再声称完整；内容多时拆成更多范围或工作表，不静默删数据。需要核对公式或格式时按需设置 `include_formula: true`、`include_style: true`。
 3. 用最新 `version` 填入 `expected_version`，通过以数据区域、公式组或版式区域为单位的小批次 `apply` 写入，让用户能看到有意义的进展；每批操作不超过 50 个，读写大区域时拆分。已知操作字段直接使用；只有新操作才调用 `inspect capabilities`，并指定具体操作名（例如 `operations: ["set_formula"]`），再按需读取对应参考。
-4. 每批后只补读受影响区域，确认原始值、公式、真实结果、数据类型和样式；需要版式验收时再用 `visual` 检查当前可见 viewport。Excel 的视觉图只覆盖当前 viewport，必须与 `range`（必要时配合用户滚动到其它区域后再次 visual）结合，不能把一张图当作全表视觉验收。用户编辑造成版本变化时先重新读取，不覆盖用户修改。
-5. 会话断开或暂时失败时，用 `office` 的 `open` 携带原 `session_id` 恢复同一会话；不要新建会话或重建工作簿。完成后使用最新版本调用 `save` 或 `export`。导出 `output` 必须是工作区相对 `.xlsx` 路径。
+4. 每批后用 `range` 补读受影响区域，确认原始值、公式、真实结果、数据类型和样式；该读取同时完成对应目标的结构验收。随后用 `inspect review` 检查是否仍有未读回目标及本次修改公式产生的 `#REF!`、`#DIV/0!`、`#VALUE!` 等明确错误。需要版式验收时再用 `visual` 检查当前可见 viewport。Excel 的视觉图只覆盖当前 viewport，必须与 `range` 结合，不能把一张图当作全表视觉验收。用户编辑造成版本变化时先重新读取，不覆盖用户修改。
+5. 会话断开或暂时失败时，用 `office` 的 `open` 携带原 `session_id` 恢复同一会话；不要新建会话或重建工作簿。完成后使用最新版本调用 `save` 或 `export`。正常导出返回 `REVIEW_REQUIRED` 时按 `nextQueries` 读取待验收范围，修复公式 `[错误]` 后再导出；`allow_unreviewed` 仅用于用户明确要求草稿。导出 `output` 必须是工作区相对 `.xlsx` 路径。
 
 ## 可用操作
 

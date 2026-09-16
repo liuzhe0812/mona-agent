@@ -87,8 +87,8 @@
   },
   "operations": [
     {
-      "op": "insert_heading",
-      "payload": { "afterBlockId": null, "text": "项目周报", "level": 1 }
+      "op": "insert_title",
+      "payload": { "afterBlockId": null, "text": "项目周报" }
     },
     {
       "op": "insert_paragraph",
@@ -188,8 +188,12 @@
         "headerRows": 1,
         "headerFill": "#D9EAF7",
         "bodyFill": "#FFFFFF",
-        "borderColor": "#9DC3E6",
-        "cellPadding": 8
+        "borderColor": "#D9D9D9",
+        "cellPadding": 8,
+        "headerBold": true,
+        "headerAlign": "center",
+        "verticalAlign": "center",
+        "allowRowBreakAcrossPages": false
       }
     }
   ]
@@ -255,13 +259,13 @@
   "payload": {
     "kind": "footer",
     "view": "default",
-    "text": "第",
+    "text": "第 # 页",
     "pageNumber": true
   }
 }
 ```
 
-`summary` 的 `headerFooter` 只返回轻量文本和页码状态；首节、偶数页和复杂多节变体需在实际验证后再使用或报告。
+`#` 表示页码字段位置；一次 `set_header_footer` 会替换对应页眉或页脚文本，不要拆成“第”和“页”两次写入。`summary` 的 `headerFooter` 只返回轻量文本和页码状态；首节、偶数页和复杂多节变体需在实际验证后再使用或报告。
 
 ## 4. 保存或导出
 

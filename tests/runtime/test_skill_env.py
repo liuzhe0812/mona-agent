@@ -145,6 +145,7 @@ async def test_skill_setup_job_completes_and_persists(
         "mona.config.paths.get_managed_runtimes_dir", lambda: tmp_path / "runtimes"
     )
     monkeypatch.setattr(AgentEnvironmentManager, "prepare_all", prepare_all)
+    monkeypatch.setattr(AgentEnvironmentManager, "assert_skill_ready", lambda *args: None)
     state_path = tmp_path / "jobs" / "skill-setups.json"
     manager = SkillSetupJobManager(state_path)
 
@@ -156,7 +157,7 @@ async def test_skill_setup_job_completes_and_persists(
             break
 
     assert finished.state == "completed"
-    assert actions == [("analysis-experiment", "enable_scripts")]
+    assert actions == []
     assert SkillSetupJobManager(state_path).get(started.job_id).state == "completed"
 
 

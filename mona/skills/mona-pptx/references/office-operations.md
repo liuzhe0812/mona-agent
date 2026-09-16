@@ -105,9 +105,11 @@
 
 返回当前编辑器支持的操作名、payload schema 和说明；只使用返回的字段，不凭经验扩展操作。已知字段无需再次读取参考。
 
+`apply`、`inspect review` 和 `inspect visual` 可能返回布局警告。`[错误]` 会给出元素 ID 以及实际/可用文字尺寸或相互重叠范围，必须通过 `slide_set_geometry`、`slide_set_text` 或 `slide_set_font` 修复；`[需检查]` 会列出文字与图片的交叠元素，供真实画面审核。单独修改文字或字号可能改变换行，因此也会让页面重新进入视觉复核状态。`acceptWarnings: true` 只用于确有理由保留的非阻塞 `[需检查]`：必须先用同一版本、不带 `elementIds`/`region` 的 `visual` 查询获取整页画面，再以同一页面和版本传入非空 `reviewReason` 与 `acceptWarnings: true`；局部或过期截图不能代替前置观察，存在 `[错误]` 时不能接受。
+
 ## 3. 读取真实视觉画面
 
-结构写入完成后，用真实编辑器的 `SlideCanvas` 捕获目标页。`slideId` 可省略；省略时使用当前 selection 页面：
+结构写入完成后，用真实编辑器的 `SlideCanvas` 捕获目标页。新布局、代表性内容页、复杂图表或效果可疑时，先用当前版本获取整页画面；`slideId` 可省略，省略时使用当前 selection 页面：
 
 ```json
 {
@@ -122,7 +124,7 @@
 }
 ```
 
-也可以用 `region: {"x": 80, "y": 160, "width": 480, "height": 260}` 捕获页面局部；`elementIds` 和 `region` 选择一种目标即可，`padding` 适用于局部捕获。新布局、复杂图表或效果可疑时使用完整真实画面；精准局部改色优先使用结构回执，按需捕获局部图像。
+也可以用 `region: {"x": 80, "y": 160, "width": 480, "height": 260}` 捕获页面局部；`elementIds` 和 `region` 选择一种目标即可，`padding` 适用于局部捕获。局部图像只用于定位细节，不能代替整页验收或 `acceptWarnings` 的前置观察。任何变更后都要使用最新版本重新 review 和视觉检查。
 
 返回内容是原生页面 PNG：
 
@@ -137,7 +139,24 @@
 }
 ```
 
-它复用编辑器的真实渲染结果，不把整页转成可交付图片，也不把图片当成可编辑图表。捕获前后会检查同一个文档版本；若返回 `VERSION_CONFLICT`，先重新 `inspect` 目标页和 selection，再决定是否继续视觉检查或重新提交局部操作。布局写入后先按 [visual-review.md](visual-review.md) 的 review 门控确定待观察页面。
+它复用编辑器的真实渲染结果，不把整页转成可交付图片，也不把图片当成可编辑图表。捕获前后会检查同一个文档版本；若返回 `VERSION_CONFLICT`，先重新 `inspect` 目标页和 selection，再决定是否继续视觉检查或重新提交局部操作。布局写入后先按 [visual-review.md](visual-review.md) 的 review 门控确定待观察页面；任何修改后必须重新获取当前版本的整页画面。
+
+只有在上一条同版本、非局部 `visual` 查询已经成功获取整页画面，并确认 `[需检查]` 的叠放确有理由且文字可读时，才可以再次查询并明确接受：
+
+```json
+{
+  "action": "inspect",
+  "session_id": "<session-id>",
+  "query": {
+    "mode": "visual",
+    "slideId": "<stable-slide-id>",
+    "acceptWarnings": true,
+    "reviewReason": "已检查当前版本整页画面，文字位于图片留白区且保持清晰。"
+  }
+}
+```
+
+局部或过期画面、空的 `reviewReason`、或任何 `[错误]` 都不能使用 `acceptWarnings`；任何后续变更都必须重新观察。
 
 ## 4. 按完整区域小批次写入
 
@@ -199,7 +218,41 @@
 }
 ```
 
-新增元素的稳定 ID 要通过下一次 `inspect` 读取，再用 `slide_set_font`、`slide_set_geometry`、`slide_set_fill` 或 `slide_set_stroke` 做针对性调整。不要猜测新增元素 ID。
+新增元素的稳定 ID 优先使用 `apply.createdElements` 回执；缺少时才针对相关页面 `inspect`，再做局部调整，不猜测 ID 或重复读取已返回的内容。
+
+### 4.1 常见数据图表：优先原生入口
+
+有分类、系列和数值的常见 `bar`、`line`、`area`、`pie` 或 `doughnut` 图表，优先使用 `slide_add_chart`；位置和尺寸使用预览像素，不需要换算 EMU。下面的数据仅用于说明字段，不代表真实业务事实：
+
+```json
+{
+  "action": "apply",
+  "session_id": "<session-id>",
+  "expected_version": { "editorEpoch": "<latest-editor-epoch>", "modelRevision": 1 },
+  "operations": [
+    {
+      "op": "slide_add_chart",
+      "payload": {
+        "slideId": "<slide-id>",
+        "x": 96,
+        "y": 350,
+        "width": 720,
+        "height": 260,
+        "kind": "bar",
+        "title": "说明示例：各阶段完成率",
+        "categories": ["阶段一", "阶段二", "阶段三"],
+        "series": [{ "name": "完成率（示例）", "values": [35, 58, 76] }],
+        "legendPos": "none",
+        "gridlines": true,
+        "dataLabels": true,
+        "valAxisTitle": "百分比（示例）"
+      }
+    }
+  ]
+}
+```
+
+复杂图表或需要深度修改已有图表数据时，再阅读 [advanced-operations.md](advanced-operations.md) 使用已验证的高级操作。不要用字符块、空格或重复符号模拟数据图表；对比对象应拆成独立模块。
 
 ## 5. 修改已有元素
 

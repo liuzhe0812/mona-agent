@@ -14,6 +14,7 @@
 
 ## 标题语义
 
+- 新文档的文档名称使用一次 `insert_title`；其默认样式是黑色 22pt 加粗居中。章节标题使用 `insert_heading`，默认一级 16pt、二级 13pt、三级及以下 12pt，黑色加粗。不要用一级标题代替文档标题。
 - 章节标题使用 `insert_heading` 的 `level` 1–6；不要用加粗正文冒充标题。
 - 标题应表达下面内容的主题或动作，层级连续且不过深。修改已有结构时按任务使用 `outline` 或已返回的结构结果；不要凭段落顺序猜块 ID。结构回执已完整覆盖目标时，不再换入口重复扫描；明确 `partial` 时只补读缺失块。
 - 需要把已有块改成或改回标题时，使用 `set_block_style` 的 `headingLevel`；`0` 表示普通段落，`1–6` 表示标题级别。
@@ -22,12 +23,12 @@
 
 - 一个段落聚焦一个要点；长段按论点、证据、影响或行动拆分。并列的短项用 `insert_list`，有比较关系或需要对齐的内容用表格。
 - 先写清楚内容，再用 `set_block_style` 做有限的强调：`bold`、`italic`、`underline`、`color`、`highlight`、`fontSize`、`align`、`lineSpacing`、`spaceBefore`、`spaceAfter` 和 `pageBreakBefore` 都是当前支持的字段。
-- 保持同一层级的标题和正文样式一致。颜色、字号和底纹服务于层级和重点，不用多种颜色装饰普通正文。
+- 新插入正文默认使用 Microsoft YaHei/Arial、11pt、黑色、1.35 倍行距和 6pt 段后距；保持同一层级的标题和正文样式一致。颜色、字号和底纹服务于层级和重点，不用多种颜色装饰普通正文。
 - 分页按语义边界处理。标题需要从新页开始时给该块设置 `pageBreakBefore: true`；分页后复核标题、正文和表格是否仍有合理衔接。
 
 ## 表格
 
-- 表格首行明确列名，列名中写清单位或在表前说明单位；每行表达同一维度的数据，避免把多个含义塞进一个单元格。
+- 表格首行明确列名，列名中写清单位或在表前说明单位；默认表格使用 10pt 正文、浅蓝表头、浅灰边框、表头加粗居中、单元格垂直居中并避免跨页拆行。每行表达同一维度的数据，避免把多个含义塞进一个单元格。
 - `insert_table` 的 `rows` 必须是非空、矩形二维数组，每行 1–20 个单元格，最多 50 行。单元格文本要短而完整，不能用空白或合并单元格掩盖缺失数据。
 - 修改已有表格先用 `inspect` 的 `blocks` 读取 `rows`，再用 `set_table_cell`，其中行列索引从 0 开始。修改后再次读取同一表格，确认没有错行或错列。
 - 表格只承载可比较、可对齐的记录；长论述、背景解释和条件说明放在表前或表后的普通段落中。短字段使用窄列，描述或备注使用宽列。
@@ -37,7 +38,7 @@
 
 - `summary` 的 `pageSettings` 给出每个文档节的 `sectionIndex`、`widthMm`、`heightMm`、`marginTopMm`、`marginBottomMm`、`marginLeftMm` 和 `marginRightMm`。先读取真实节设置，再决定是否调整页面；不要把 OOXML 的内部单位当作输入单位。
 - 页面调整使用 `set_page_style`，`sectionIndex` 从 0 开始且缺省为 0，尺寸和页边距字段均可选并使用毫米。修改后检查正文宽度、表格宽度和分页；页边距不能挤满页面。
-- 表格需要稳定列宽、重复表头或明确底色时使用 `set_table_style`：`columnWidths` 是按列排列的像素数组，`headerRows` 是重复表头行数，`headerFill`、`bodyFill`、`borderColor` 使用 `#RRGGBB`，`cellPadding` 使用像素。列宽数组必须与表格列数一致，不能用样式掩盖缺失内容。
+- 表格需要稳定列宽、重复表头或明确底色时使用 `set_table_style`：`columnWidths` 是按列排列的像素数组，`headerRows` 是重复表头行数，`headerFill`、`bodyFill`、`borderColor` 使用 `#RRGGBB`，`cellPadding` 使用像素；`headerBold`、`headerAlign`、`verticalAlign` 和 `allowRowBreakAcrossPages` 控制表头和分页。列宽数组必须与表格列数一致，不能用样式掩盖缺失内容。
 - 用户选中一段内容时优先使用 `open` 回执中的 `selection`，仅在选区过期或缺少详情时再 `inspect selection`，以返回的 `blockIds` 和 `text` 为准；不要凭光标位置猜测目标。
 - `inspect` `visual` 返回带同一 `version` 的真实编辑器 PNG。Word 传 `pageIndex` 时使用零基页码，省略时检查当前 viewport；视觉检查和 `blocks`/`summary` 结构检查必须相互印证。
 
@@ -46,7 +47,7 @@
 - `insert_list` 使用当前编辑器识别的 `kind: "bullet"` 或 `kind: "ordered"`；不要把旧示例中的 `ordered` 当作当前字段。
 - `insert_image` 只接受编辑器支持的 PNG、JPEG 或 GIF `dataUrl`，并在确有可用图片时使用；不要把本地路径、`assetId` 或任意 URL 当作图片载荷。
 - `set_table_style` 和 `set_page_style` 只使用当前工具描述的字段，不把任意 OOXML 属性塞进 payload。
-- `set_header_footer` 使用 `{kind: "header"|"footer", view?: "default"|"first"|"even", text, pageNumber?: boolean}`；省略 `pageNumber` 时保留当前页码状态，显式 `false` 才移除。默认 view 只改当前默认页眉/页脚，页码字段由编辑器写入真实 PAGE field。默认/最终节已验证，首节、偶数页和复杂多节路由需实际验证后再报告。
+- `set_header_footer` 使用 `{kind: "header"|"footer", view?: "default"|"first"|"even", text, pageNumber?: boolean}`；`text` 中用 `#` 指定页码字段位置，例如 `第 # 页`。一次操作会替换对应页眉或页脚文本，不要拆成多次操作。省略 `pageNumber` 时保留当前页码状态，显式 `false` 才移除。默认 view 只改当前默认页眉/页脚，页码字段由编辑器写入真实 PAGE field。默认/最终节已验证，首节、偶数页和复杂多节路由需实际验证后再报告。
 - 当前 Mona Office schema 没有提供跟踪修订、批注或复杂 OOXML 的普通操作。遇到这些需求应明确说明能力边界，不能用普通文本操作冒充专业修订记录。
 
 ## 好坏对照

@@ -7,6 +7,11 @@ description: >
   style, audience, risk, and engineering concerns. Use the user's requested
   output format and route Word, Excel, and PowerPoint artifacts to
   mona-docx, mona-xlsx, and mona-pptx as needed.
+short_description: >-
+  Create PRDs/feature specs; adapt depth, structure, diagrams, and expression
+  to product stage, scenario, industry/organization constraints, audience,
+  risk, and engineering concerns; honor requested format and route
+  Word/Excel/PPT to mona-docx/mona-xlsx/mona-pptx.
 ---
 # PRD Document
 
@@ -413,5 +418,4 @@ Score the PRD holistically on these 4 dimensions (internal evaluation, not inclu
 | Skill | Relationship |
 |-------|-------------|
 | `/comparison-analysis` | Before writing the PRD, run research-guide's reference competitive analysis to gather feature references |
-
 
