@@ -201,6 +201,8 @@ export function DesktopSurface({ onOpenApp, onDesktopContextMenu }: DesktopSurfa
 
   return (
     <div
+      role="application"
+      aria-label="远程桌面"
       className="absolute inset-0 overflow-hidden p-3 pt-9"
       ref={containerRef}
       onMouseDown={handleMouseDown}
@@ -267,8 +269,12 @@ export function DesktopSurface({ onOpenApp, onDesktopContextMenu }: DesktopSurfa
             top: Math.min(contextMenu.y, window.innerHeight - 250),
             left: Math.min(contextMenu.x, window.innerWidth - 180),
           }}
+          onMouseDown={(e) => e.stopPropagation()}
           onClick={(e) => e.stopPropagation()}
-          onContextMenu={(e) => e.preventDefault()}
+          onContextMenu={(e) => {
+            e.preventDefault();
+            e.stopPropagation();
+          }}
         >
           {contextMenu.iconId ? (
             <>

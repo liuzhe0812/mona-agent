@@ -294,11 +294,12 @@ export function DesktopMode({ sessionId, aiEnabled }: DesktopModeProps) {
   } | null>(null);
   const [disconnected, setDisconnected] = useState(false);
 
-  const effectiveSessionId = backendSessionId ?? sessionId;
+  const attachedSshSessionId = session?.parentSessionId;
+  const effectiveSessionId = backendSessionId ?? attachedSshSessionId ?? sessionId;
   const effectiveSessionIdRef = useRef(effectiveSessionId);
   effectiveSessionIdRef.current = effectiveSessionId;
 
-  const showLogin = session?.status !== "connected" && !backendSessionId;
+  const showLogin = !attachedSshSessionId && session?.status !== "connected" && !backendSessionId;
 
   useEffect(() => {
     const updateSize = () => {
@@ -331,9 +332,10 @@ export function DesktopMode({ sessionId, aiEnabled }: DesktopModeProps) {
 
   useEffect(() => {
     return () => {
+      if (attachedSshSessionId) return;
       desktopDisconnect(effectiveSessionIdRef.current).catch(() => {});
     };
-  }, []);
+  }, [attachedSshSessionId]);
 
   const connectDesktop = async (config: ConnectionConfig) => {
     const newSessionId = await desktopConnect(config);
@@ -462,9 +464,11 @@ export function DesktopMode({ sessionId, aiEnabled }: DesktopModeProps) {
   };
 
   const handleDisconnect = async () => {
-    try {
-      await desktopDisconnect(effectiveSessionId);
-    } catch {}
+    if (!attachedSshSessionId) {
+      try {
+        await desktopDisconnect(effectiveSessionId);
+      } catch {}
+    }
     setDisconnected(true);
     removeSession(sessionId);
   };

@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
-import { AlertTriangle, Box, FilePlus2, HardDrive, Loader2, RefreshCw, Search, SquareTerminal } from "lucide-react";
+import { AlertTriangle, Box, FilePlus2, HardDrive, Loader2, MoreHorizontal, RefreshCw, Search, SquareTerminal } from "lucide-react";
 
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -13,9 +13,15 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
-import { PageToolbar } from "@/components/ui/page-toolbar";
 import { StatusNotice } from "@/components/ui/status-notice";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
 
 import {
   dockerContainerAction,
@@ -131,13 +137,6 @@ function containerAbnormal(container: DockerContainer): boolean {
   return exited ? exited[1] !== "0" : false;
 }
 
-function permissionLabel(probe: DockerProbe | null): string {
-  if (!probe) return "未探测";
-  if (probe.permissionMode === "direct") return "直接访问";
-  if (probe.permissionMode === "sudoNonInteractive") return "sudo -n";
-  return "权限未知";
-}
-
 function appendBoundedOutput(current: string, chunk: string): { text: string; truncated: boolean } {
   const bytes = new TextEncoder().encode(current + chunk);
   if (bytes.byteLength <= MAX_LIVE_LOG_BYTES) {
@@ -162,7 +161,7 @@ const ACTION_LABELS: Record<DockerContainerAction, string> = {
   remove: "删除",
 };
 
-export function DockerPanel({ parentSessionId, parentStatus, hostTitle, visible }: DockerPanelProps) {
+export function DockerPanel({ parentSessionId, parentStatus, visible }: DockerPanelProps) {
   const connected = parentStatus === "connected";
   const [probe, setProbe] = useState<DockerProbe | null>(null);
   const [snapshot, setSnapshot] = useState<DockerSnapshot | null>(null);
@@ -182,6 +181,7 @@ export function DockerPanel({ parentSessionId, parentStatus, hostTitle, visible 
   const [detailLoading, setDetailLoading] = useState(false);
   const [logsLoading, setLogsLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [containerError, setContainerError] = useState<string | null>(null);
   const [resourceError, setResourceError] = useState<string | null>(null);
   const [resourceMessage, setResourceMessage] = useState<string | null>(null);
   const [detailError, setDetailError] = useState<string | null>(null);
@@ -191,7 +191,7 @@ export function DockerPanel({ parentSessionId, parentStatus, hostTitle, visible 
   const [resourceBusy, setResourceBusy] = useState<string | null>(null);
   const [imageUpdateBusy, setImageUpdateBusy] = useState<string | null>(null);
   const [imageUpdates, setImageUpdates] = useState<Record<string, DockerImageUpdate>>({});
-  const [terminalOpen, setTerminalOpen] = useState(false);
+  const [terminalTarget, setTerminalTarget] = useState<{ id: string; name: string } | null>(null);
   const [associateOpen, setAssociateOpen] = useState(false);
   const [associatePath, setAssociatePath] = useState("");
   const [associateName, setAssociateName] = useState("");
@@ -242,6 +242,7 @@ export function DockerPanel({ parentSessionId, parentStatus, hostTitle, visible 
     const requestId = ++loadRequestRef.current;
     setLoading(true);
     setError(null);
+    setContainerError(null);
     let probed: DockerProbe;
     try {
       probed = await dockerProbe(parentSessionId);
@@ -266,8 +267,12 @@ export function DockerPanel({ parentSessionId, parentStatus, hostTitle, visible 
     ]);
     if (requestId !== loadRequestRef.current || !connected) return probed;
     const failures: string[] = [];
-    if (snapshotResult.status === "fulfilled") setSnapshot(snapshotResult.value);
-    else failures.push(`容器列表读取失败：${errorMessage(snapshotResult.reason)}`);
+    if (snapshotResult.status === "fulfilled") {
+      setSnapshot(snapshotResult.value);
+      setContainerError(null);
+    } else {
+      setContainerError(`容器列表读取失败：${errorMessage(snapshotResult.reason)}`);
+    }
     if (projectsResult.status === "fulfilled") setProjects(projectsResult.value);
     else if (probed.composeVersion) failures.push(`Compose 项目读取失败：${errorMessage(projectsResult.reason)}`);
     setError(failures.length > 0 ? failures.join("；") : null);
@@ -280,17 +285,20 @@ export function DockerPanel({ parentSessionId, parentStatus, hostTitle, visible 
   }, [connected, load, visible]);
 
   useEffect(() => {
-    if (!visible || activeTab !== "containers" || !connected || !probe?.available) return;
+    if (!visible || activeTab !== "containers" || !connected || !probe?.available || loading) return;
     let active = true;
     const timer = window.setInterval(() => {
       if (pollInFlightRef.current || actionBusy) return;
       pollInFlightRef.current = true;
       void dockerListContainers(parentSessionId)
         .then((next) => {
-          if (active) setSnapshot(next);
+          if (active) {
+            setSnapshot(next);
+            setContainerError(null);
+          }
         })
         .catch((reason) => {
-          if (active) setError(`容器列表刷新失败：${errorMessage(reason)}`);
+          if (active) setContainerError(`容器列表刷新失败：${errorMessage(reason)}`);
         })
         .finally(() => {
           pollInFlightRef.current = false;
@@ -300,7 +308,7 @@ export function DockerPanel({ parentSessionId, parentStatus, hostTitle, visible 
       active = false;
       window.clearInterval(timer);
     };
-  }, [actionBusy, activeTab, connected, parentSessionId, probe?.available, visible]);
+  }, [actionBusy, activeTab, connected, loading, parentSessionId, probe?.available, visible]);
 
   useEffect(() => {
     if (!connected) {
@@ -484,15 +492,17 @@ export function DockerPanel({ parentSessionId, parentStatus, hostTitle, visible 
   }, [filter, search, snapshot]);
 
   const runningCount = snapshot?.containers.filter((container) => container.state === "running").length ?? 0;
+  const readError = [error, containerError].filter(Boolean).join("；");
 
   const handleContainerAction = useCallback(
-    async (action: DockerContainerAction) => {
-      if (!visible || !connected || !selectedId || !parentSessionId) return;
+    async (containerId: string, action: DockerContainerAction) => {
+      if (!visible || !connected || !containerId || !parentSessionId) return;
+      setSelectedId(containerId);
       setActionBusy(action);
       setActionError(null);
       setActionMessage(null);
       try {
-        const result = await dockerContainerAction(parentSessionId, selectedId, action);
+        const result = await dockerContainerAction(parentSessionId, containerId, action);
         setActionMessage(result.verification);
       } catch (reason) {
         setActionError(errorMessage(reason));
@@ -502,7 +512,7 @@ export function DockerPanel({ parentSessionId, parentStatus, hostTitle, visible 
         setActionBusy(null);
       }
     },
-    [connected, load, parentSessionId, selectedId, visible],
+    [connected, load, parentSessionId, visible],
   );
 
   const handleCancelOperation = useCallback(async () => {
@@ -588,35 +598,6 @@ export function DockerPanel({ parentSessionId, parentStatus, hostTitle, visible 
 
   return (
     <div className="flex h-full min-h-0 flex-col bg-background">
-      <PageToolbar
-        className="shrink-0 border-b border-border bg-card px-3"
-        leading={
-          <div className="flex min-w-0 items-center gap-2">
-            <Box className="h-4 w-4 shrink-0 text-info" />
-            <span className="truncate font-medium">Docker · {hostTitle}</span>
-            <span className="shrink-0 rounded border border-border/70 px-1.5 py-0.5 text-micro text-muted-foreground">
-              {permissionLabel(probe)}
-            </span>
-        {probe?.composeVersion ? (
-          <span className="hidden shrink-0 text-micro text-muted-foreground sm:inline">Compose v2</span>
-        ) : null}
-          </div>
-        }
-        actions={
-          <Button
-            type="button"
-            variant="ghost"
-            size="sm"
-            disabled={!connected || loading}
-            onClick={() => void load()}
-            aria-label="刷新 Docker 状态"
-          >
-            {loading ? <Loader2 className="mr-1.5 h-3.5 w-3.5 animate-spin" /> : <RefreshCw className="mr-1.5 h-3.5 w-3.5" />}
-            刷新
-          </Button>
-        }
-      />
-
       <div className="min-h-0 flex-1 overflow-hidden p-3">
         {!connected ? (
           <StatusNotice tone="warning" title={parentStatus === "connecting" ? "SSH 会话连接中" : "SSH 会话已断开"}>
@@ -625,9 +606,9 @@ export function DockerPanel({ parentSessionId, parentStatus, hostTitle, visible 
               : "Docker 管理需要一个已连接的 SSH 会话。"}
           </StatusNotice>
         ) : null}
-        {error && connected ? (
+        {readError && connected ? (
           <StatusNotice tone="danger" title="Docker 数据读取不完整" className="mb-3">
-            {error}
+            {readError}
           </StatusNotice>
         ) : null}
         {snapshot?.warnings.length ? (
@@ -686,11 +667,25 @@ export function DockerPanel({ parentSessionId, parentStatus, hostTitle, visible 
                           : "异常"}
                   </Button>
                 ))}
-                {snapshot ? (
-                  <span className="ml-auto text-micro text-muted-foreground">
-                    更新于 {new Date(snapshot.capturedAt).toLocaleTimeString()}
-                  </span>
-                ) : null}
+                <div className="ml-auto flex items-center gap-1.5">
+                  {snapshot ? (
+                    <span className="text-micro text-muted-foreground">
+                      更新于 {new Date(snapshot.capturedAt).toLocaleTimeString()}
+                    </span>
+                  ) : null}
+                  <Button
+                    type="button"
+                    variant="ghost"
+                    size="xs"
+                    className="gap-1"
+                    disabled={!connected || loading}
+                    onClick={() => void load()}
+                    aria-label="刷新 Docker 状态"
+                  >
+                    {loading ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <RefreshCw className="h-3.5 w-3.5" />}
+                    刷新
+                  </Button>
+                </div>
               </div>
               {loading && !snapshot ? (
                 <div className="flex flex-1 items-center justify-center text-caption text-muted-foreground">
@@ -698,12 +693,12 @@ export function DockerPanel({ parentSessionId, parentStatus, hostTitle, visible 
                 </div>
               ) : snapshot ? (
                 <div className="grid min-h-0 flex-1 grid-cols-1 gap-2 lg:grid-cols-[minmax(0,1fr)_minmax(260px,34%)]">
-                  <div className="min-h-0 overflow-auto rounded-md border border-border/70 bg-card">
+                  <div className="scrollbar-thin min-h-0 overflow-auto rounded-md border border-border/70 bg-card">
                     {filteredContainers.length > 0 ? (
                       <table className="w-full border-collapse text-caption" data-testid="docker-container-table">
                         <thead>
                           <tr>
-                            {['容器', '状态', '镜像', '项目', '资源', '端口'].map((heading) => (
+                            {['容器', '状态', '镜像', '项目', '资源', '端口', '操作'].map((heading) => (
                               <th key={heading} className="sticky top-0 z-10 whitespace-nowrap bg-muted px-2.5 py-1.5 text-left text-micro font-semibold text-muted-foreground">
                                 {heading}
                               </th>
@@ -713,6 +708,11 @@ export function DockerPanel({ parentSessionId, parentStatus, hostTitle, visible 
                         <tbody>
                           {filteredContainers.map((container) => {
                             const health = containerHealth(container);
+                            const actions = containerActions(container.state);
+                            const usesHostNetwork = container.networks
+                              .split(",")
+                              .some((network) => network.trim() === "host");
+                            const ports = container.ports || (usesHostNetwork ? "Host 网络" : "未映射");
                             return (
                               <tr
                                 key={container.id}
@@ -747,7 +747,63 @@ export function DockerPanel({ parentSessionId, parentStatus, hostTitle, visible 
                                 <td className="whitespace-nowrap px-2.5 py-2 text-micro text-muted-foreground">
                                   CPU {formatPercent(container.cpuPercent)}<br />内存 {container.memoryUsage || "不可用"}
                                 </td>
-                                <td className="max-w-[160px] truncate px-2.5 py-2 text-micro text-muted-foreground" title={container.ports}>{container.ports || "-"}</td>
+                                <td
+                                  className="max-w-[160px] truncate px-2.5 py-2 text-micro text-muted-foreground"
+                                  title={container.ports || (usesHostNetwork ? "使用 Host 网络，无独立端口映射" : "未配置端口映射")}
+                                >
+                                  {ports}
+                                </td>
+                                <td className="w-12 px-2 py-1.5 text-right" onClick={(event) => event.stopPropagation()}>
+                                  <DropdownMenu>
+                                    <DropdownMenuTrigger asChild>
+                                      <Button
+                                        type="button"
+                                        variant="ghost"
+                                        size="icon"
+                                        className="h-7 w-7"
+                                        disabled={!connected || Boolean(actionBusy)}
+                                        aria-label={`容器操作 ${container.name}`}
+                                        onClick={() => setSelectedId(container.id)}
+                                      >
+                                        <MoreHorizontal className="h-4 w-4" />
+                                      </Button>
+                                    </DropdownMenuTrigger>
+                                    <DropdownMenuContent align="end" className="w-32">
+                                      {container.state === "running" ? (
+                                        <>
+                                          <DropdownMenuItem
+                                            onSelect={() => {
+                                              setSelectedId(container.id);
+                                              setTerminalTarget({ id: container.id, name: container.name });
+                                            }}
+                                          >
+                                            <SquareTerminal className="h-3.5 w-3.5" />进入终端
+                                          </DropdownMenuItem>
+                                          <DropdownMenuSeparator />
+                                        </>
+                                      ) : null}
+                                      {actions.filter((action) => action !== "remove").map((action) => (
+                                        <DropdownMenuItem
+                                          key={action}
+                                          onSelect={() => void handleContainerAction(container.id, action)}
+                                        >
+                                          {ACTION_LABELS[action]}
+                                        </DropdownMenuItem>
+                                      ))}
+                                      {actions.includes("remove") ? (
+                                        <>
+                                          <DropdownMenuSeparator />
+                                          <DropdownMenuItem
+                                            className="text-destructive focus:text-destructive"
+                                            onSelect={() => void handleContainerAction(container.id, "remove")}
+                                          >
+                                            删除
+                                          </DropdownMenuItem>
+                                        </>
+                                      ) : null}
+                                    </DropdownMenuContent>
+                                  </DropdownMenu>
+                                </td>
                               </tr>
                             );
                           })}
@@ -771,9 +827,7 @@ export function DockerPanel({ parentSessionId, parentStatus, hostTitle, visible 
                     actionError={actionError}
                     actionMessage={actionMessage}
                     actionBusy={actionBusy}
-                    onAction={handleContainerAction}
                     onCancelOperation={handleCancelOperation}
-                    onOpenTerminal={() => setTerminalOpen(true)}
                     disconnected={!connected}
                   />
                 </div>
@@ -814,7 +868,7 @@ export function DockerPanel({ parentSessionId, parentStatus, hostTitle, visible 
             </div>
           </TabsContent>
 
-          <TabsContent value="storage" className="min-h-0 flex-1 overflow-auto">
+          <TabsContent value="storage" className="min-h-0 flex-1 overflow-hidden">
             <ResourcePanel
               snapshot={resources}
               loading={resourceLoading}
@@ -831,13 +885,15 @@ export function DockerPanel({ parentSessionId, parentStatus, hostTitle, visible 
           </TabsContent>
         </Tabs>
       </div>
-      {detail ? (
+      {terminalTarget ? (
         <ContainerTerminalDialog
-          open={terminalOpen}
-          onOpenChange={setTerminalOpen}
+          open
+          onOpenChange={(open) => {
+            if (!open) setTerminalTarget(null);
+          }}
           parentSessionId={parentSessionId}
-          containerId={detail.id}
-          containerName={detail.name}
+          containerId={terminalTarget.id}
+          containerName={terminalTarget.name}
         />
       ) : null}
       <Dialog open={associateOpen} onOpenChange={setAssociateOpen}>
@@ -896,9 +952,7 @@ function ContainerDetailPanel({
   actionError,
   actionMessage,
   actionBusy,
-  onAction,
   onCancelOperation,
-  onOpenTerminal,
   disconnected,
 }: {
   detail: DockerContainerDetail | null;
@@ -914,9 +968,7 @@ function ContainerDetailPanel({
   actionError: string | null;
   actionMessage: string | null;
   actionBusy: DockerContainerAction | null;
-  onAction: (action: DockerContainerAction) => void;
   onCancelOperation: () => void;
-  onOpenTerminal: () => void;
   disconnected: boolean;
 }) {
   if (loading && !detail) {
@@ -935,7 +987,7 @@ function ContainerDetailPanel({
         </div>
         <p className="mt-1 truncate font-mono text-micro text-muted-foreground">{detail.id}</p>
       </div>
-      <div className="min-h-0 flex-1 overflow-auto p-3">
+      <div className="scrollbar-thin min-h-0 flex-1 overflow-auto p-3">
         {error ? <StatusNotice tone="danger" title="部分详情不可用" className="mb-2">{error}</StatusNotice> : null}
         {actionError ? <StatusNotice tone="danger" title="容器操作失败" className="mb-2">{actionError}</StatusNotice> : null}
         {actionMessage ? <StatusNotice tone="success" title="容器操作完成" className="mb-2">{actionMessage}</StatusNotice> : null}
@@ -973,39 +1025,15 @@ function ContainerDetailPanel({
         {detail.environmentNames.length ? (
           <DetailList title="环境变量名称" lines={detail.environmentNames} />
         ) : null}
-        <div className="mt-3 flex flex-wrap gap-1.5" data-testid="docker-container-actions">
-          {detail.state === "running" ? (
-            <Button
-              type="button"
-              size="xs"
-              variant="outline"
-              disabled={Boolean(actionBusy) || disconnected}
-              onClick={onOpenTerminal}
-            >
-              <SquareTerminal className="mr-1 h-3 w-3" />进入终端
-            </Button>
-          ) : null}
-          {containerActions(detail.state).map((action) => (
-            <Button
-              key={action}
-              type="button"
-              size="xs"
-              variant={action === "remove" ? "ghost" : "outline"}
-              className={action === "remove" ? "text-destructive hover:text-destructive" : ""}
-              disabled={Boolean(actionBusy) || disconnected}
-              onClick={() => onAction(action)}
-              aria-label={`${ACTION_LABELS[action]}容器`}
-            >
-              {actionBusy === action ? <Loader2 className="mr-1 h-3 w-3 animate-spin" /> : null}
-              {ACTION_LABELS[action]}
-            </Button>
-          ))}
-          {actionBusy ? (
+        {actionBusy ? (
+          <div className="mt-3 flex items-center gap-2 text-micro text-muted-foreground" data-testid="docker-container-actions">
+            <Loader2 className="h-3.5 w-3.5 animate-spin" />
+            正在{ACTION_LABELS[actionBusy]}容器
             <Button type="button" size="xs" variant="ghost" onClick={onCancelOperation}>
               取消操作
             </Button>
-          ) : null}
-        </div>
+          </div>
+        ) : null}
         <div className="mt-3">
           <div className="mb-1 flex items-center justify-between gap-2">
             <div className="text-micro font-semibold text-muted-foreground">{logMode === "live" ? "实时日志" : "最近日志"}</div>
@@ -1015,7 +1043,7 @@ function ContainerDetailPanel({
             </div>
           </div>
           {logMode === "live" ? <div className="mb-1 text-micro text-muted-foreground">{subscriptionId ? "订阅中" : "正在连接日志流…"}</div> : null}
-          <div className="max-h-64 overflow-auto rounded-md border border-border/70 bg-muted/20 p-2 font-mono text-micro leading-4 text-foreground/80" data-testid="docker-container-logs">
+          <div className="scrollbar-thin max-h-64 overflow-auto rounded-md border border-border/70 bg-muted/20 p-2 font-mono text-micro leading-4 text-foreground/80" data-testid="docker-container-logs">
             {logMode === "live" ? (
               liveLogs || <span className="text-muted-foreground">等待日志输出…</span>
             ) : logsLoading ? (
@@ -1083,7 +1111,7 @@ function ComposeProjects({
   ) ?? projects[0];
   return (
     <div className="grid h-full min-h-0 grid-cols-1 gap-2 lg:grid-cols-[minmax(260px,34%)_minmax(0,1fr)]">
-      <div className="overflow-auto rounded-md border border-border/70 bg-card">
+      <div className="scrollbar-thin overflow-auto rounded-md border border-border/70 bg-card">
       <table className="w-full border-collapse text-caption" data-testid="docker-compose-table">
         <thead>
           <tr>
@@ -1177,7 +1205,7 @@ function ResourcePanel({
       <StatusNotice tone="info" title="删除会再次检查引用">
         未挂载的卷仍可能保存业务数据；Mona 仅删除你明确选择并再次确认的单个资源。
       </StatusNotice>
-      <div className="min-h-0 flex-1 overflow-auto space-y-3">
+      <div className="scrollbar-thin min-h-0 flex-1 space-y-3 overflow-auto">
         <ResourceSection title={`镜像（${snapshot.images.length}）`}>
           {snapshot.images.length ? (
             <table className="w-full border-collapse text-caption" data-testid="docker-images-table">

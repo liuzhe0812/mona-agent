@@ -1,4 +1,4 @@
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const mocks = vi.hoisted(() => ({
@@ -73,6 +73,7 @@ const secondContainer = {
   name: "worker",
   state: "exited",
   ports: "",
+  networks: "host",
   composeProject: null,
 };
 
@@ -197,10 +198,21 @@ describe("DockerPanel", () => {
     await waitFor(() => expect(screen.getByText("server ready")).toBeTruthy());
     expect(screen.getByTestId("docker-container-container-1")).toBeTruthy();
     expect(screen.getByTestId("docker-container-container-2")).toBeTruthy();
+    expect(screen.getByText("Host 网络")).toBeTruthy();
+    expect(screen.getByTestId("docker-container-table").parentElement).toHaveClass("scrollbar-thin");
 
     fireEvent.click(screen.getByRole("button", { name: "已停止" }));
     expect(screen.queryByTestId("docker-container-container-1")).toBeNull();
     expect(screen.getByTestId("docker-container-container-2")).toBeTruthy();
+  });
+
+  it("places refresh beside the snapshot time without a redundant Docker header", async () => {
+    renderPanel();
+
+    const updatedAt = await screen.findByText(/更新于/);
+    const refresh = screen.getByRole("button", { name: "刷新 Docker 状态" });
+    expect(updatedAt.parentElement).toContainElement(refresh);
+    expect(screen.queryByText("Docker · server-a")).toBeNull();
   });
 
   it("waits for a successful probe before listing containers or Compose projects", async () => {
@@ -233,6 +245,59 @@ describe("DockerPanel", () => {
     });
     await waitFor(() => expect(mocks.listContainers).toHaveBeenCalledWith("ssh-session-1"));
     expect(mocks.projects).toHaveBeenCalledWith("ssh-session-1");
+  });
+
+  it("starts polling only after the initial Docker snapshot finishes", async () => {
+    let resolveSnapshot!: (value: unknown) => void;
+    mocks.listContainers.mockImplementationOnce(
+      () => new Promise((resolve) => {
+        resolveSnapshot = resolve;
+      }),
+    );
+    const setIntervalSpy = vi.spyOn(window, "setInterval");
+    try {
+      renderPanel();
+      await waitFor(() => expect(mocks.listContainers).toHaveBeenCalledWith("ssh-session-1"));
+      expect(setIntervalSpy.mock.calls.some(([, delay]) => delay === 5_000)).toBe(false);
+
+      resolveSnapshot({
+        capturedAt: 1,
+        containers: [firstContainer, secondContainer],
+        statsAvailable: true,
+        warnings: [],
+      });
+      await waitFor(() => {
+        expect(setIntervalSpy.mock.calls.some(([, delay]) => delay === 5_000)).toBe(true);
+      });
+    } finally {
+      setIntervalSpy.mockRestore();
+    }
+  });
+
+  it("clears a transient container timeout after the next successful poll", async () => {
+    let poll: (() => void) | null = null;
+    const setIntervalSpy = vi.spyOn(window, "setInterval").mockImplementation((handler) => {
+      poll = handler as () => void;
+      return 1;
+    });
+    const clearIntervalSpy = vi.spyOn(window, "clearInterval").mockImplementation(() => {});
+    mocks.listContainers.mockRejectedValueOnce(new Error("命令执行超时"));
+    try {
+      renderPanel();
+      expect(await screen.findByText("容器列表读取失败：命令执行超时")).toBeTruthy();
+
+      await act(async () => {
+        poll?.();
+      });
+
+      await waitFor(() => {
+        expect(screen.queryByText(/容器列表读取失败：命令执行超时/)).toBeNull();
+      });
+      expect(screen.getByTestId("docker-container-container-1")).toBeTruthy();
+    } finally {
+      setIntervalSpy.mockRestore();
+      clearIntervalSpy.mockRestore();
+    }
   });
 
   it("loads selected container details and recent logs", async () => {
@@ -287,10 +352,35 @@ describe("DockerPanel", () => {
     renderPanel();
     await waitFor(() => expect(screen.getByText("server ready")).toBeTruthy());
 
-    fireEvent.click(screen.getByRole("button", { name: "停止容器" }));
+    fireEvent.pointerDown(screen.getByRole("button", { name: "容器操作 web" }), {
+      button: 0,
+      ctrlKey: false,
+    });
+    fireEvent.click(await screen.findByRole("menuitem", { name: "停止" }));
     await waitFor(() => expect(mocks.action).toHaveBeenCalledWith("ssh-session-1", "container-1", "stop"));
     await waitFor(() => expect(mocks.probe).toHaveBeenCalledTimes(2));
     expect(mocks.listContainers).toHaveBeenCalledTimes(2);
+  });
+
+  it("binds a row menu action to that container instead of the current detail", async () => {
+    mocks.action.mockResolvedValueOnce({
+      action: "start",
+      containerId: "container-2",
+      containerName: "worker",
+      exitCode: 0,
+      durationMs: 100,
+      verification: "容器正在运行",
+    });
+    renderPanel();
+    await waitFor(() => expect(screen.getByText("server ready")).toBeTruthy());
+
+    fireEvent.pointerDown(screen.getByRole("button", { name: "容器操作 worker" }), {
+      button: 0,
+      ctrlKey: false,
+    });
+    fireEvent.click(await screen.findByRole("menuitem", { name: "启动" }));
+
+    await waitFor(() => expect(mocks.action).toHaveBeenCalledWith("ssh-session-1", "container-2", "start"));
   });
 
   it("loads resources on demand and removes only the selected image", async () => {

@@ -273,7 +273,7 @@ export function ComposeManager({ parentSessionId, project, connected, visible, o
           </Button>
         }
       />
-      <div className="min-h-0 flex-1 overflow-auto p-3">
+      <div className="scrollbar-thin min-h-0 flex-1 overflow-auto p-3">
         {!connected ? <StatusNotice tone="warning" className="mb-3">SSH 会话已断开；当前内容仅供查看。</StatusNotice> : null}
         {error ? <StatusNotice tone="danger" title="Compose 操作失败" className="mb-3">{error}</StatusNotice> : null}
         {message ? <StatusNotice tone="success" title="Compose 操作完成" className="mb-3">{message}</StatusNotice> : null}
@@ -301,7 +301,7 @@ export function ComposeManager({ parentSessionId, project, connected, visible, o
               onChange={(event) => setDraft(event.target.value)}
               disabled={!connected || busy !== null || readOnly}
               spellCheck={false}
-              className="min-h-[300px] flex-1 resize-y font-mono text-micro leading-5"
+              className="scrollbar-thin min-h-[300px] flex-1 resize-y font-mono text-micro leading-5"
             />
             {dirty ? <p className="text-micro text-warning">保存文件后才能执行 Compose 操作；后端会在保存时再次校验文件版本。</p> : null}
             <div className="flex flex-wrap items-center gap-1.5">
@@ -344,7 +344,7 @@ export function ComposeManager({ parentSessionId, project, connected, visible, o
             {operation ? (
               <div className="rounded-md border border-border/70 bg-muted/20 p-2">
                 <div className="mb-1 text-micro font-semibold text-muted-foreground">最近一次操作输出</div>
-                <pre className="max-h-48 overflow-auto whitespace-pre-wrap break-words font-mono text-micro leading-4 text-foreground/80">{operation.output || operation.verification}</pre>
+                <pre className="scrollbar-thin max-h-48 overflow-auto whitespace-pre-wrap break-words font-mono text-micro leading-4 text-foreground/80">{operation.output || operation.verification}</pre>
                 {operation.outputTruncated ? <p className="mt-1 text-micro text-warning">输出已裁剪。</p> : null}
               </div>
             ) : null}
@@ -358,7 +358,7 @@ export function ComposeManager({ parentSessionId, project, connected, visible, o
                   {eventsEnabled ? "停止监听" : "监听事件"}
                 </Button>
               </div>
-              {eventsEnabled ? <pre className="mt-2 max-h-52 overflow-auto whitespace-pre-wrap break-words rounded-md border border-border/70 bg-muted/20 p-2 font-mono text-micro leading-4 text-foreground/80" data-testid="compose-events">{eventText || "等待事件输出…"}</pre> : null}
+              {eventsEnabled ? <pre className="scrollbar-thin mt-2 max-h-52 overflow-auto whitespace-pre-wrap break-words rounded-md border border-border/70 bg-muted/20 p-2 font-mono text-micro leading-4 text-foreground/80" data-testid="compose-events">{eventText || "等待事件输出…"}</pre> : null}
               {eventsEnabled && eventTruncated ? <p className="mt-1 text-micro text-warning">事件输出已裁剪，仅保留最近 2 MiB。</p> : null}
             </div>
           </div>

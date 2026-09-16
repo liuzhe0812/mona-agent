@@ -27,15 +27,15 @@ export async function getIcon(
   const existing = pending.get(key);
   if (existing) return existing;
 
-  const promise = getFileTypeIcon(extension, isDir).then((b64) => {
-    pending.delete(key);
-    if (b64) {
+  const promise = getFileTypeIcon(extension, isDir)
+    .then((b64) => {
+      if (!b64) return null;
       const dataUrl = `data:image/png;base64,${b64}`;
       cache.set(key, dataUrl);
       return dataUrl;
-    }
-    return null;
-  });
+    })
+    .catch(() => null)
+    .finally(() => pending.delete(key));
 
   pending.set(key, promise);
   return promise;

@@ -925,12 +925,35 @@ fn parse_containers(output: &str) -> Result<Vec<DockerContainer>, String> {
         .into_iter()
         .map(|value| {
             let labels = value_string(&value, "Labels");
+            let status = value_string(&value, "Status");
+            let state = value_string(&value, "State");
+            let state = if state.is_empty() {
+                let normalized_status = status.to_ascii_lowercase();
+                if normalized_status.starts_with("up") {
+                    "running"
+                } else if normalized_status.starts_with("exited") {
+                    "exited"
+                } else if normalized_status.starts_with("created") {
+                    "created"
+                } else if normalized_status.starts_with("paused") {
+                    "paused"
+                } else if normalized_status.starts_with("restarting") {
+                    "restarting"
+                } else if normalized_status.starts_with("dead") {
+                    "dead"
+                } else {
+                    "unknown"
+                }
+                .to_string()
+            } else {
+                state
+            };
             Ok(DockerContainer {
                 id: value_string(&value, "ID"),
                 name: value_string(&value, "Names"),
                 image: value_string(&value, "Image"),
-                state: value_string(&value, "State"),
-                status: value_string(&value, "Status"),
+                state,
+                status,
                 ports: value_string(&value, "Ports"),
                 mounts: value_string(&value, "Mounts"),
                 networks: value_string(&value, "Networks"),
@@ -1531,12 +1554,20 @@ pub async fn docker_list_containers(
         &client,
         &docker_command(
             &target,
-            &["ps", "-a", "--no-trunc", "--size", "--format", "{{json .}}"],
+            &["ps", "-a", "--no-trunc", "--format", "{{json .}}"],
         ),
         QUERY_TIMEOUT,
     )
     .await?;
     if !successful(&result) {
+        log::warn!(
+            "[docker] container list failed session={} timed_out={} cancelled={} exit_code={:?} duration_ms={}",
+            session_id,
+            result.timed_out,
+            result.cancelled,
+            result.exit_code,
+            result.duration_ms,
+        );
         return Err(failure_message(&result));
     }
     if result.truncated {
@@ -1565,6 +1596,14 @@ pub async fn docker_list_containers(
             warnings.push(error);
         }
     } else {
+        log::warn!(
+            "[docker] container stats unavailable session={} timed_out={} cancelled={} exit_code={:?} duration_ms={}",
+            session_id,
+            stats.timed_out,
+            stats.cancelled,
+            stats.exit_code,
+            stats.duration_ms,
+        );
         warnings.push(format!("资源统计不可用: {}", failure_message(&stats)));
     }
     Ok(DockerSnapshot {
@@ -3335,11 +3374,13 @@ mod tests {
 
     #[test]
     fn parses_container_rows_and_keeps_only_compose_project_label() {
-        let input = r#"{"ID":"abc","Names":"web","Image":"nginx:1","State":"running","Status":"Up 1m","Ports":"80/tcp","Mounts":"data","Networks":"app","CreatedAt":"today","RunningFor":"1m","Size":"1kB","Command":"nginx","Labels":"secret=value,com.docker.compose.project=demo"}"#;
+        let input = r#"{"ID":"abc","Names":"web","Image":"nginx:1","Status":"Up 1m","Ports":"80/tcp","Mounts":"data","Networks":"app","CreatedAt":"today","RunningFor":"1m","Command":"nginx","Labels":"secret=value,com.docker.compose.project=demo"}"#;
         let rows = parse_containers(input).unwrap();
         assert_eq!(rows.len(), 1);
         assert_eq!(rows[0].compose_project.as_deref(), Some("demo"));
         assert_eq!(rows[0].name, "web");
+        assert_eq!(rows[0].state, "running");
+        assert!(rows[0].size.is_empty());
     }
 
     #[test]

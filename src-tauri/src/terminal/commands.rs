@@ -1440,7 +1440,9 @@ pub async fn get_file_type_icon(
     is_directory: bool,
 ) -> Result<Option<String>, String> {
     use std::os::windows::ffi::OsStrExt;
-    use windows::Win32::Storage::FileSystem::FILE_FLAGS_AND_ATTRIBUTES;
+    use windows::Win32::Storage::FileSystem::{
+        FILE_ATTRIBUTE_DIRECTORY, FILE_ATTRIBUTE_NORMAL,
+    };
     use windows::Win32::UI::Shell::{
         SHGetFileInfoW, SHFILEINFOW, SHGFI_ICON, SHGFI_SMALLICON, SHGFI_USEFILEATTRIBUTES,
     };
@@ -1462,7 +1464,11 @@ pub async fn get_file_type_icon(
     let icon_data = unsafe {
         let mut shfi: SHFILEINFOW = std::mem::zeroed();
         let flags = SHGFI_ICON | SHGFI_SMALLICON | SHGFI_USEFILEATTRIBUTES;
-        let file_attrs = FILE_FLAGS_AND_ATTRIBUTES(if is_directory { 0x10 } else { 0 });
+        let file_attrs = if is_directory {
+            FILE_ATTRIBUTE_DIRECTORY
+        } else {
+            FILE_ATTRIBUTE_NORMAL
+        };
 
         let result = SHGetFileInfoW(
             windows::core::PCWSTR(path_wide.as_ptr()),

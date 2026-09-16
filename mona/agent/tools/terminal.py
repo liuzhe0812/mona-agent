@@ -52,7 +52,43 @@ _TERMINAL_OWNER_SESSION_KEY: ContextVar[str | None] = ContextVar(
     "mona_terminal_owner_session_key",
     default=None,
 )
+_TERMINAL_REQUEST_CONTEXT: ContextVar[RequestContext | None] = ContextVar(
+    "mona_terminal_request_context",
+    default=None,
+)
+_TERMINAL_SESSION_STATE: ContextVar[dict[str, str | None] | None] = ContextVar(
+    "mona_terminal_session_state",
+    default=None,
+)
 _TERMINAL_TASKS_BY_SESSION: dict[str, set[str]] = {}
+
+
+def _terminal_request_context() -> RequestContext | None:
+    return _TERMINAL_REQUEST_CONTEXT.get()
+
+
+def _bind_terminal_context(ctx: RequestContext) -> None:
+    if _TERMINAL_REQUEST_CONTEXT.get() is ctx:
+        return
+    _TERMINAL_REQUEST_CONTEXT.set(ctx)
+    _TERMINAL_SESSION_STATE.set({"session_id": ctx.terminal_session_id})
+
+
+def _terminal_session_id() -> str | None:
+    state = _TERMINAL_SESSION_STATE.get()
+    if state is not None:
+        return state.get("session_id")
+    ctx = _terminal_request_context()
+    return ctx.terminal_session_id if ctx else None
+
+
+def _remember_terminal_session(session_id: str) -> None:
+    state = _TERMINAL_SESSION_STATE.get()
+    if state is None:
+        state = {"session_id": session_id}
+        _TERMINAL_SESSION_STATE.set(state)
+    else:
+        state["session_id"] = session_id
 
 
 def _track_terminal_task(task_id: str) -> None:
@@ -113,47 +149,6 @@ def _parse_steps(raw: Any) -> list[dict[str, str]] | str:
             return f"Error: steps[{i}].kind must be one of {', '.join(_STEP_KINDS)}"
         out.append({"title": title, "kind": kind})
     return out
-
-
-def _session_type(session_id: str) -> str | None:
-    """Best-effort lookup of a session's type ('ssh', 'local', ...)."""
-    result = _tauri_invoke("terminal_list_sessions")
-    if isinstance(result, list):
-        for s in result:
-            if isinstance(s, dict) and s.get("id") == session_id:
-                return s.get("sessionType") or s.get("session_type")
-    return None
-
-
-def _resolve_terminal_session(preferred_id: str | None) -> str | None:
-    """Resolve an effective terminal session ID without relying on the frontend.
-
-    If ``preferred_id`` is given and the session still exists, use it.
-    Otherwise fall back to the first connected SSH or Local session found.
-    This decouples the backend from the frontend's terminalSessionId
-    propagation, which is fragile and breaks easily when other modules change.
-    """
-    result = _tauri_invoke("terminal_list_sessions")
-    if not isinstance(result, list):
-        return None
-    sessions = [s for s in result if isinstance(s, dict)]
-    # Prefer the requested session if it's still alive.
-    if preferred_id:
-        for s in sessions:
-            if s.get("id") == preferred_id:
-                return preferred_id
-    # Fall back to the first connected terminal session.
-    for s in sessions:
-        stype = (s.get("sessionType") or s.get("session_type") or "").lower()
-        status = (s.get("status") or "").lower()
-        if stype in ("ssh", "local", "desktop") and "connected" in status:
-            return s.get("id")
-    # Last resort: any terminal session regardless of status.
-    for s in sessions:
-        stype = (s.get("sessionType") or s.get("session_type") or "").lower()
-        if stype in ("ssh", "local", "desktop"):
-            return s.get("id")
-    return None
 
 
 async def _session_type_async(session_id: str) -> str | None:
@@ -282,15 +277,13 @@ class TerminalTaskTool(Tool):
     _scopes = {"core", "subagent"}
     config_key = "terminal_task"
     subscription_required = True
-    _request_ctx: RequestContext | None = None
-
     def set_context(self, ctx: RequestContext) -> None:
         # Tools stay visible to the model regardless of session state — the
         # execute() path returns a clear "open the terminal panel" error when
         # no session is active. Hiding tools via is_available couples backend
         # visibility to frontend store state and breaks easily when other
         # modules change.
-        self._request_ctx = ctx
+        _bind_terminal_context(ctx)
         _TERMINAL_OWNER_SESSION_KEY.set(ctx.session_key)
 
     @property
@@ -344,9 +337,8 @@ class TerminalTaskTool(Tool):
         parsed = _parse_steps(steps)
         if isinstance(parsed, str):
             return parsed
-        preferred = session_id or (
-            self._request_ctx.terminal_session_id if self._request_ctx else None
-        )
+        request_ctx = _terminal_request_context()
+        preferred = session_id or _terminal_session_id()
         effective_session = await _resolve_terminal_session_async(preferred)
         if not effective_session:
             return (
@@ -354,9 +346,10 @@ class TerminalTaskTool(Tool):
                 "session, but the user is not currently viewing a terminal. "
                 "Ask the user to open the terminal panel and try again."
             )
+        _remember_terminal_session(effective_session)
         exec_mode = (
-            self._request_ctx.terminal_exec_mode
-            if self._request_ctx and self._request_ctx.terminal_exec_mode
+            request_ctx.terminal_exec_mode
+            if request_ctx and request_ctx.terminal_exec_mode
             else _DEFAULT_TERMINAL_CONFIG.exec_mode.value
         )
         result = await _tauri_invoke_async(
@@ -447,13 +440,11 @@ class TerminalExecTool(Tool):
     _scopes = {"core", "subagent"}
     config_key = "terminal"
     subscription_required = True
-    _request_ctx: RequestContext | None = None
-
     def set_context(self, ctx: RequestContext) -> None:
-        # Tools stay visible to the model — execute() returns a clear error
-        # when no terminal session is active. See TerminalTaskTool.set_context
-        # for rationale.
-        self._request_ctx = ctx
+        _bind_terminal_context(ctx)
+
+    def available_in_context(self) -> bool:
+        return bool(_terminal_session_id())
 
     @property
     def name(self) -> str:
@@ -488,9 +479,7 @@ class TerminalExecTool(Tool):
         timeout_secs: int | None = None,
         **kwargs: Any,
     ) -> str:
-        preferred = session_id or (
-            self._request_ctx.terminal_session_id if self._request_ctx else None
-        )
+        preferred = session_id or _terminal_session_id()
         effective_session = await _resolve_terminal_session_async(preferred)
         if not effective_session:
             return (
@@ -561,10 +550,11 @@ class TerminalOutputTool(Tool):
     _scopes = {"core", "subagent"}
     config_key = "terminal_output"
     subscription_required = True
-    _request_ctx: RequestContext | None = None
-
     def set_context(self, ctx: RequestContext) -> None:
-        self._request_ctx = ctx
+        _bind_terminal_context(ctx)
+
+    def available_in_context(self) -> bool:
+        return bool(_terminal_session_id())
 
     @property
     def name(self) -> str:
@@ -590,9 +580,7 @@ class TerminalOutputTool(Tool):
         lines: int | None = None,
         **kwargs: Any,
     ) -> str:
-        preferred = session_id or (
-            self._request_ctx.terminal_session_id if self._request_ctx else None
-        )
+        preferred = session_id or _terminal_session_id()
         effective_session = await _resolve_terminal_session_async(preferred)
         if effective_session:
             result = await _tauri_invoke_async(
@@ -652,10 +640,11 @@ class TerminalUploadTool(Tool):
     _scopes = {"core", "subagent"}
     config_key = "terminal_upload"
     subscription_required = True
-    _request_ctx: RequestContext | None = None
-
     def set_context(self, ctx: RequestContext) -> None:
-        self._request_ctx = ctx
+        _bind_terminal_context(ctx)
+
+    def available_in_context(self) -> bool:
+        return bool(_terminal_session_id())
 
     @property
     def name(self) -> str:
@@ -693,9 +682,7 @@ class TerminalUploadTool(Tool):
                 "complete plan first and pass the returned ids here."
             )
 
-        preferred = session_id or (
-            self._request_ctx.terminal_session_id if self._request_ctx else None
-        )
+        preferred = session_id or _terminal_session_id()
         effective_session = await _resolve_terminal_session_async(preferred)
         if not effective_session:
             return (

@@ -41,15 +41,12 @@ async fn get_desktop_client(
         .await
         .ok_or_else(|| TerminalError::SessionNotFound(session_id.to_string()).to_string())?;
     match handle {
-        SessionHandle::Desktop(client) => Ok(client),
+        SessionHandle::Desktop(client) | SessionHandle::Ssh(client) => Ok(client),
         _ => Err("Not a desktop session".into()),
     }
 }
 
-async fn exec_command(
-    client: &SshClient,
-    cmd: &str,
-) -> Result<String, String> {
+async fn exec_command(client: &SshClient, cmd: &str) -> Result<String, String> {
     let result = client.exec_command(cmd).await.map_err(|e| e.to_string())?;
     if result.stdout.is_empty() && !result.stderr.is_empty() {
         Ok(result.stderr)
@@ -298,7 +295,10 @@ pub async fn desktop_get_system_info(
         safe_exec(&client, "cat /proc/diskstats"),
         safe_exec(&client, "cat /proc/net/dev"),
         safe_exec(&client, "cat /proc/stat | head -1"),
-        safe_exec(&client, "ps -eo pid,stat,%cpu,%mem,comm --sort=-%cpu | head -101"),
+        safe_exec(
+            &client,
+            "ps -eo pid,stat,%cpu,%mem,comm --sort=-%cpu | head -101"
+        ),
         safe_exec(&client, "pidstat -d 1 1")
     );
 
@@ -386,12 +386,19 @@ pub async fn desktop_get_system_info(
         if parts.is_empty() || parts[0] != "cpu" {
             return None;
         }
-        Some(parts.iter().skip(1).map(|s| s.parse().unwrap_or(0)).collect())
+        Some(
+            parts
+                .iter()
+                .skip(1)
+                .map(|s| s.parse().unwrap_or(0))
+                .collect(),
+        )
     }
 
-    if let (Some(first_vals), Some(second_vals)) =
-        (parse_cpu_stat(&cpu_stat_first), parse_cpu_stat(&cpu_stat_second))
-    {
+    if let (Some(first_vals), Some(second_vals)) = (
+        parse_cpu_stat(&cpu_stat_first),
+        parse_cpu_stat(&cpu_stat_second),
+    ) {
         if first_vals.len() >= 4 && second_vals.len() >= 4 {
             let user_diff = second_vals[0].saturating_sub(first_vals[0]);
             let nice_diff = second_vals
@@ -712,8 +719,7 @@ pub async fn desktop_get_system_info(
             let rx = safe_parse_int(parts[1]) as u64;
             let tx = safe_parse_int(parts[9]) as u64;
 
-            let (rx_sec, tx_sec) = if let Some((first_rx, first_tx)) = net_io_first_map.get(iface)
-            {
+            let (rx_sec, tx_sec) = if let Some((first_rx, first_tx)) = net_io_first_map.get(iface) {
                 let rx_diff = rx.saturating_sub(*first_rx);
                 let tx_diff = tx.saturating_sub(*first_tx);
                 (rx_diff as f64, tx_diff as f64)
@@ -930,10 +936,7 @@ pub async fn desktop_resize_terminal(
     rows: u32,
 ) -> Result<(), String> {
     let client = get_desktop_client(&state, &session_id).await?;
-    client
-        .resize(cols, rows)
-        .await
-        .map_err(|e| e.to_string())?;
+    client.resize(cols, rows).await.map_err(|e| e.to_string())?;
     Ok(())
 }
 
@@ -968,10 +971,7 @@ pub async fn desktop_get_disks(
         let use_percent_str = parts[5].trim_end_matches('%');
         let use_percent = safe_parse_float(use_percent_str);
 
-        let fs_name = source
-            .strip_prefix("/dev/")
-            .unwrap_or(&source)
-            .to_string();
+        let fs_name = source.strip_prefix("/dev/").unwrap_or(&source).to_string();
 
         disks.push(DesktopDiskInfo {
             fs: fs_name,

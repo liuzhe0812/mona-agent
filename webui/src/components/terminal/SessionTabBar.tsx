@@ -288,7 +288,7 @@ export function SessionTabBar() {
             <ContextMenu key={session.id}>
               <ContextMenuTrigger asChild>
                 <div
-                  className={`relative flex h-7 cursor-pointer select-none items-center gap-1 px-2 text-caption transition-colors ${
+                  className={`group relative flex h-7 cursor-pointer select-none items-center gap-1 px-2 text-caption transition-colors ${
                     index > 0 ? "border-l border-border" : ""
                   } ${
                     isActive
@@ -316,13 +316,19 @@ export function SessionTabBar() {
                     }`}
                   />
                   <span className="max-w-[120px] truncate">{session.title}</span>
-                  <X
-                    className="h-3 w-3 shrink-0 opacity-0 hover:opacity-100"
+                  <Button
+                    type="button"
+                    variant="ghost"
+                    size="icon"
+                    aria-label={`关闭 ${session.title}`}
+                    className="ml-auto flex h-5 w-5 shrink-0 items-center justify-center rounded-sm text-muted-foreground opacity-0 transition-opacity group-hover:opacity-100 group-focus-within:opacity-100 hover:bg-destructive/20 hover:text-destructive focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
                     onClick={(e) => {
                       e.stopPropagation();
                       handleClose(session.id, session.type);
                     }}
-                  />
+                  >
+                    <X className="h-3 w-3" />
+                  </Button>
                 </div>
               </ContextMenuTrigger>
               <ContextMenuContent className="w-48 z-[100001]">

@@ -29,13 +29,7 @@ const PLAN_APPROVAL_WAIT_SECS: u64 = 300;
 /// Final adjudication happens here at the Rust boundary — the Python side
 /// only forwards the exec mode and the command.
 const DANGEROUS_PATTERNS: [&str; 7] = [
-    "mkfs",
-    "dd if=",
-    "dd of=",
-    "chown -R",
-    "shutdown",
-    "reboot",
-    "init 0",
+    "mkfs", "dd if=", "dd of=", "chown -R", "shutdown", "reboot", "init 0",
 ];
 
 fn dangerous_patterns() -> Vec<String> {
@@ -65,7 +59,12 @@ pub fn emit_task_event(app_handle: &AppHandle, session_id: &str, detail: &Mainte
     );
 }
 
-fn refresh_and_emit(app_handle: &AppHandle, state: &TerminalState, task_id: &str, session_id: &str) {
+fn refresh_and_emit(
+    app_handle: &AppHandle,
+    state: &TerminalState,
+    task_id: &str,
+    session_id: &str,
+) {
     if let Ok(detail) = state.maintenance.get_task(task_id) {
         emit_task_event(app_handle, session_id, &detail);
     }
@@ -114,7 +113,11 @@ pub async fn bridge_start(
         let _ = state
             .maintenance
             .fail_task(&active.task.id, "被新的维护任务取代");
-        emit_task_event(app_handle, session_id, &state.maintenance.get_task(&active.task.id)?);
+        emit_task_event(
+            app_handle,
+            session_id,
+            &state.maintenance.get_task(&active.task.id)?,
+        );
     }
 
     let detail = state.maintenance.start_task(
@@ -142,14 +145,8 @@ pub async fn bridge_finish(
         .get("taskId")
         .and_then(|v| v.as_str())
         .ok_or("Missing taskId")?;
-    let diagnosis = args
-        .get("diagnosis")
-        .and_then(|v| v.as_str())
-        .unwrap_or("");
-    let summary = args
-        .get("summary")
-        .and_then(|v| v.as_str())
-        .unwrap_or("");
+    let diagnosis = args.get("diagnosis").and_then(|v| v.as_str()).unwrap_or("");
+    let summary = args.get("summary").and_then(|v| v.as_str()).unwrap_or("");
     let detail = state.maintenance.finish_task(task_id, diagnosis, summary)?;
     emit_task_event(app_handle, &detail.task.session_id, &detail);
     Ok(serde_json::json!({ "status": "succeeded" }))
@@ -185,7 +182,11 @@ fn parse_steps(args: &serde_json::Value) -> Result<Vec<(String, StepKind)>, Stri
             .and_then(|v| v.as_str())
             .ok_or("Step missing title")?
             .to_string();
-        let kind = match item.get("kind").and_then(|v| v.as_str()).unwrap_or("inspect") {
+        let kind = match item
+            .get("kind")
+            .and_then(|v| v.as_str())
+            .unwrap_or("inspect")
+        {
             "inspect" => StepKind::Inspect,
             "change" => StepKind::Change,
             "verify" => StepKind::Verify,
@@ -303,7 +304,8 @@ pub async fn bridge_execute_step(
         .ok_or("Missing command")?;
     let timeout_secs = args.get("timeoutSecs").and_then(|v| v.as_u64());
 
-    let result = execute_step_inner(app_handle, state, task_id, step_id, command, timeout_secs).await?;
+    let result =
+        execute_step_inner(app_handle, state, task_id, step_id, command, timeout_secs).await?;
     serde_json::to_value(result).map_err(|e| e.to_string())
 }
 
@@ -357,9 +359,7 @@ async fn execute_step_inner(
     }
 
     // Plan-level approval: change/verify steps in approval mode.
-    if v.exec_mode == "approval"
-        && v.step.kind != StepKind::Inspect
-        && v.step.approved_at.is_none()
+    if v.exec_mode == "approval" && v.step.kind != StepKind::Inspect && v.step.approved_at.is_none()
     {
         plan_approval_gate(app_handle, state, task_id, step_id, &v.session_id).await?;
     }
@@ -405,11 +405,7 @@ async fn execute_step_inner(
     {
         Ok(r) => r,
         Err(e) => {
-            state
-                .maintenance_cancels
-                .write()
-                .await
-                .remove(task_id);
+            state.maintenance_cancels.write().await.remove(task_id);
             let _ = state.maintenance.set_step_result(
                 step_id,
                 StepStatus::Failed,
@@ -420,11 +416,7 @@ async fn execute_step_inner(
             return Err(format!("执行通道错误: {}", e));
         }
     };
-    state
-        .maintenance_cancels
-        .write()
-        .await
-        .remove(task_id);
+    state.maintenance_cancels.write().await.remove(task_id);
 
     // Only a real exit status of 0 counts as success — timeout, cancel,
     // missing exit code and non-zero exits all fail the step.
@@ -484,9 +476,7 @@ pub async fn bridge_execute_upload(
 
     let v = validate_step(state, task_id, step_id).await?;
 
-    if v.exec_mode == "approval"
-        && v.step.kind != StepKind::Inspect
-        && v.step.approved_at.is_none()
+    if v.exec_mode == "approval" && v.step.kind != StepKind::Inspect && v.step.approved_at.is_none()
     {
         plan_approval_gate(app_handle, state, task_id, step_id, &v.session_id).await?;
     }
@@ -536,12 +526,10 @@ pub async fn bridge_execute_upload(
             }))
         }
         Err(e) => {
-            let _ = state.maintenance.set_step_result(
-                step_id,
-                StepStatus::Failed,
-                None,
-                duration_ms,
-            );
+            let _ =
+                state
+                    .maintenance
+                    .set_step_result(step_id, StepStatus::Failed, None, duration_ms);
             refresh_and_emit(app_handle, state, task_id, &v.session_id);
             Err(format!("上传失败: {}", e))
         }

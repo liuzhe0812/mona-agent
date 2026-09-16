@@ -16,7 +16,7 @@ import { AgentLogo } from "@/components/AgentLogo";
 import { useTerminalStore } from "./store/terminalStore";
 import { useIdeStore } from "../ide/useIdeStore";
 import { useLicense } from "@/hooks/useLicense";
-import { sshOpenSftp, desktopConnect } from "./ipc";
+import { sshOpenSftp } from "./ipc";
 import { SessionManagerDialog } from "./Dialogs/SessionManagerDialog";
 import { cn } from "@/lib/utils";
 
@@ -32,8 +32,8 @@ export function Toolbar({ onOpenSubscribe }: { onOpenSubscribe?: () => void }) {
   const activeSessionId = useTerminalStore((s) => s.activeSessionId);
   const sessions = useTerminalStore((s) => s.sessions);
   const addSession = useTerminalStore((s) => s.addSession);
+  const setActiveSession = useTerminalStore((s) => s.setActiveSession);
   const openDockerSession = useTerminalStore((s) => s.openDockerSession);
-  const connections = useTerminalStore((s) => s.connections);
   const [sessionManagerOpen, setSessionManagerOpen] = useState(false);
 
   const fileTreeVisible = useIdeStore((s) => s.leftFileTreeVisible);
@@ -81,24 +81,24 @@ export function Toolbar({ onOpenSubscribe }: { onOpenSubscribe?: () => void }) {
     }
   };
 
-  const handleOpenDesktop = async () => {
-    if (activeSession && activeSession.type === "ssh") {
-      const conn = connections.find((c) => c.id === activeSession.configId);
-      if (conn) {
-        try {
-          const desktopSessionId = await desktopConnect(conn);
-          addSession({
-            id: desktopSessionId,
-            configId: activeSession.configId,
-            type: "desktop",
-            status: "connected",
-            title: `${activeSession.title} (桌面)`,
-          });
-          return;
-        } catch (err) {
-          console.error("Failed to open desktop:", String(err));
-        }
+  const handleOpenDesktop = () => {
+    if (activeSession?.type === "ssh" && activeSession.status === "connected") {
+      const existing = sessions.find(
+        (session) => session.type === "desktop" && session.parentSessionId === activeSession.id,
+      );
+      if (existing) {
+        setActiveSession(existing.id);
+        return;
       }
+      addSession({
+        id: `desktop:${activeSession.id}`,
+        configId: activeSession.configId,
+        type: "desktop",
+        status: "connected",
+        title: `${activeSession.title} (桌面)`,
+        parentSessionId: activeSession.id,
+      });
+      return;
     }
     addSession({
       id: crypto.randomUUID(),
