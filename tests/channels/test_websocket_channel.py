@@ -21,7 +21,6 @@ from mona.channels.websocket import (
     _is_valid_chat_id,
     _issue_route_secret_matches,
     _normalize_config_path,
-    _normalize_http_path,
     _parse_envelope,
     _parse_inbound_payload,
     _parse_query,
@@ -57,6 +56,18 @@ def bus() -> MagicMock:
     return b
 
 
+@pytest.mark.asyncio
+@pytest.mark.parametrize("path", ["/", "/index.html", "/favicon.svg", "/sessions/abc"])
+async def test_channel_does_not_serve_frontend(bus: MagicMock, path: str) -> None:
+    from websockets.datastructures import Headers
+    from websockets.http11 import Request
+
+    channel = _ch(bus, path="/")
+    response = await channel._dispatch_http(MagicMock(), Request(path, Headers()))
+    assert response.status_code == 404
+    assert response.body == b"Not Found"
+
+
 async def _http_get(url: str, headers: dict[str, str] | None = None) -> httpx.Response:
     """Run GET in a thread to avoid blocking the asyncio loop shared with websockets."""
     return await asyncio.to_thread(
@@ -64,21 +75,305 @@ async def _http_get(url: str, headers: dict[str, str] | None = None) -> httpx.Re
     )
 
 
-def test_normalize_http_path_strips_trailing_slash_except_root() -> None:
-    assert _normalize_http_path("/chat/") == "/chat"
-    assert _normalize_http_path("/chat?x=1") == "/chat"
-    assert _normalize_http_path("/") == "/"
+def test_parse_request_path_strips_trailing_slash_except_root() -> None:
+    assert _parse_request_path("/chat/")[0] == "/chat"
+    assert _parse_request_path("/chat?x=1")[0] == "/chat"
+    assert _parse_request_path("/")[0] == "/"
 
 
-def test_parse_request_path_matches_normalize_and_query() -> None:
+def test_parse_request_path_splits_path_and_query() -> None:
     path, query = _parse_request_path("/ws/?token=secret&client_id=u1")
-    assert path == _normalize_http_path("/ws/?token=secret&client_id=u1")
-    assert query == _parse_query("/ws/?token=secret&client_id=u1")
+    assert path == "/ws"
+    assert query == {"token": ["secret"], "client_id": ["u1"]}
 
 
 def test_normalize_config_path_matches_request() -> None:
     assert _normalize_config_path("/ws/") == "/ws"
     assert _normalize_config_path("/") == "/"
+
+
+def test_agent_artifact_scan_is_complete_and_projections_stay_owned(
+    bus: MagicMock, tmp_path, monkeypatch
+) -> None:
+    from types import SimpleNamespace
+    from urllib.parse import urlencode
+
+    from mona.agent.artifacts import ArtifactRef
+    from mona.agent.partners import ConversationMetadata
+    from mona.config.paths import get_agent_output_dir
+    from mona.session.manager import SessionManager
+
+    monkeypatch.setattr("mona.webui.transcript.get_webui_dir", lambda: tmp_path / "webui")
+    sessions = SessionManager(tmp_path / "sessions")
+
+    def create_session(chat_id: str, agent_id: str) -> str:
+        key = f"websocket:{chat_id}"
+        session = sessions.get_or_create(key)
+        session.metadata.pop("workspace", None)
+        session.metadata["conversation"] = ConversationMetadata.direct(agent_id).to_session_metadata()
+        sessions.save(session)
+        assert "workspace" not in session.metadata
+        return key
+
+    key = create_session("chat-musician", "com.mona.musician")
+    other_session = create_session("chat-musician-other", "com.mona.musician")
+    other_agent_session = create_session("chat-other-agent", "com.mona.other")
+    channel = _ch(bus)
+    channel._session_manager = sessions
+    channel.workspace = tmp_path
+    channel._api_tokens["live"] = 1e20
+    channel._start_artifact_task("chat-musician", "task-abc")
+
+    musician_output = get_agent_output_dir(tmp_path, "com.mona.musician")
+    delivered = musician_output / "delivered.abc"
+    task_file = musician_output / "task.abc"
+    delivered.write_text("delivered", encoding="utf-8")
+    task_file.write_text("task", encoding="utf-8")
+    (musician_output / "empty").mkdir()
+    delivered_ref = ArtifactRef.for_path(
+        owner_kind="agent",
+        owner_id="com.mona.musician",
+        root=musician_output,
+        path=delivered,
+        created_by_agent_id="com.mona.musician",
+        session_id=key,
+    )
+    channel._try_append_webui_transcript(
+        "chat-musician",
+        {
+            "event": "deliver_files",
+            "files": [
+                {
+                    "path": "delivered.abc",
+                    "absolute_path": str(delivered),
+                    "artifact_ref": delivered_ref.model_dump(mode="json"),
+                }
+            ],
+        },
+    )
+    task_ref = ArtifactRef.for_path(
+        owner_kind="agent",
+        owner_id="com.mona.musician",
+        root=musician_output,
+        path=task_file,
+        created_by_agent_id="com.mona.musician",
+        session_id=key,
+    )
+    channel._try_append_webui_transcript(
+        "chat-musician",
+        {
+            "event": "file_edit",
+            "chat_id": "chat-musician",
+            "task_id": "task-abc",
+            "edits": [
+                {
+                    "status": "done",
+                    "path": "task.abc",
+                    "absolute_path": str(task_file),
+                    "artifact_ref": task_ref.model_dump(mode="json"),
+                }
+            ],
+        },
+    )
+
+    other_output = get_agent_output_dir(tmp_path, "com.mona.other")
+    (other_output / "other.abc").write_text("other", encoding="utf-8")
+
+    def list_artifacts(session_key: str, task_id: str | None = None) -> dict[str, Any]:
+        query = {"session_key": session_key}
+        if task_id is not None:
+            query["task_id"] = task_id
+        request = SimpleNamespace(
+            headers={"Authorization": "Bearer live"},
+            path=f"/api/artifacts?{urlencode(query)}",
+        )
+        response = channel._handle_artifacts_list(request)
+        assert response.status_code == 200
+        return json.loads(response.body)
+
+    payload = list_artifacts(key, "task-abc")
+    assert {item["path"] for item in payload["files"]} == {
+        "delivered.abc",
+        "empty",
+        "task.abc",
+    }
+    assert next(item for item in payload["files"] if item["path"] == "empty")["is_dir"] is True
+    assert [item["path"] for item in payload["session_files"]] == ["delivered.abc"]
+    assert [item["path"] for item in payload["task_files"]] == ["task.abc"]
+
+    shared_payload = list_artifacts(other_session)
+    assert {item["path"] for item in shared_payload["files"]} == {
+        "delivered.abc",
+        "empty",
+        "task.abc",
+    }
+    assert shared_payload["session_files"] == []
+    assert shared_payload["task_files"] == []
+
+    other_payload = list_artifacts(other_agent_session)
+    assert [item["path"] for item in other_payload["files"]] == ["other.abc"]
+
+
+def test_artifact_listing_includes_all_entries_and_project_directories(tmp_path) -> None:
+    from mona.utils.artifact_listing import list_artifacts, list_project_files
+
+    root = tmp_path / "workspace"
+    root.mkdir()
+    (root / ".env").write_text("secret", encoding="utf-8")
+    (root / "draft.tmp").write_text("temporary", encoding="utf-8")
+    (root / "draft.part").write_text("partial", encoding="utf-8")
+    (root / "backup~").write_text("backup", encoding="utf-8")
+    (root / "img_preview_0123456789ab.json").write_text("{}", encoding="utf-8")
+    (root / "visible.txt").write_text("visible", encoding="utf-8")
+    for directory_name in (".cache", "empty", "node_modules", "dist", "build", "target"):
+        (root / directory_name).mkdir()
+    (root / ".cache" / "entry").write_text("hidden", encoding="utf-8")
+    (root / "node_modules" / "package.json").write_text("{}", encoding="utf-8")
+    (root / "dist" / "bundle.js").write_text("dist", encoding="utf-8")
+    (root / "build" / "bundle.js").write_text("build", encoding="utf-8")
+    (root / "target" / "binary").write_text("target", encoding="utf-8")
+
+    expected = {
+        ".cache",
+        ".cache/entry",
+        ".env",
+        "backup~",
+        "build",
+        "build/bundle.js",
+        "dist",
+        "dist/bundle.js",
+        "draft.part",
+        "draft.tmp",
+        "empty",
+        "img_preview_0123456789ab.json",
+        "node_modules",
+        "node_modules/package.json",
+        "target",
+        "target/binary",
+        "visible.txt",
+    }
+    for result in (list_artifacts(root), list_project_files(root)):
+        assert {item.path for item in result.files} == expected
+        assert result.truncated is False
+        assert next(item for item in result.files if item.path == "empty").is_dir is True
+        assert next(item for item in result.files if item.path == "visible.txt").is_dir is False
+
+
+def test_artifact_listing_shows_symlink_without_following_target(tmp_path) -> None:
+    from mona.utils.artifact_listing import list_artifacts, list_project_files
+
+    root = tmp_path / "workspace"
+    target = root / "target"
+    target.mkdir(parents=True)
+    (target / "nested.txt").write_text("nested", encoding="utf-8")
+    link = root / "linked-target"
+    try:
+        link.symlink_to(target, target_is_directory=True)
+    except (OSError, NotImplementedError):
+        pytest.skip("directory symlinks are unavailable")
+
+    for result in (list_artifacts(root), list_project_files(root)):
+        entries = {item.path: item for item in result.files}
+        assert entries["linked-target"].is_dir is True
+        assert entries["linked-target"].is_symlink is True
+        assert "linked-target/nested.txt" not in entries
+
+
+def test_artifact_signature_tracks_directory_and_symlink_entries(tmp_path) -> None:
+    from mona.utils.artifact_listing import artifact_signature
+
+    root = tmp_path / "workspace"
+    root.mkdir()
+    before = artifact_signature(root)
+    (root / "empty").mkdir()
+    after_directory = artifact_signature(root)
+    assert after_directory != before
+
+    target = root / "target.txt"
+    target.write_text("target", encoding="utf-8")
+    link = root / "linked-target"
+    try:
+        link.symlink_to(target)
+    except (OSError, NotImplementedError):
+        pytest.skip("file symlinks are unavailable")
+    assert artifact_signature(root) != after_directory
+
+
+def test_artifact_listing_raises_when_root_cannot_be_enumerated(tmp_path) -> None:
+    from mona.utils.artifact_listing import list_artifacts, list_project_files
+
+    missing = tmp_path / "missing"
+    with pytest.raises(FileNotFoundError):
+        list_artifacts(missing)
+    with pytest.raises(FileNotFoundError):
+        list_project_files(missing)
+
+
+def test_artifact_listing_marks_total_entry_truncation(monkeypatch, tmp_path) -> None:
+    import mona.utils.artifact_listing as artifact_listing
+
+    root = tmp_path / "workspace"
+    root.mkdir()
+    for name in ("one.txt", "two.txt", "three.txt"):
+        (root / name).write_text(name, encoding="utf-8")
+    monkeypatch.setattr(artifact_listing, "MAX_ARTIFACT_FILES", 2)
+
+    result = artifact_listing.list_artifacts(root)
+
+    assert len(result.files) == 2
+    assert result.truncated is True
+
+
+def test_artifact_listing_cap_keeps_shallow_entries(monkeypatch, tmp_path) -> None:
+    import mona.utils.artifact_listing as artifact_listing
+
+    root = tmp_path / "workspace"
+    root.mkdir()
+    (root / "root.txt").write_text("root", encoding="utf-8")
+    deep = root / "node_modules" / "package" / "dist"
+    deep.mkdir(parents=True)
+    for index in range(10):
+        (deep / f"nested-{index}.js").write_text("nested", encoding="utf-8")
+    monkeypatch.setattr(artifact_listing, "MAX_ARTIFACT_FILES", 3)
+
+    result = artifact_listing.list_artifacts(root)
+
+    assert result.truncated is True
+    assert "root.txt" in {item.path for item in result.files}
+
+
+def test_artifact_listing_stops_before_enumerating_deeper_directories(
+    monkeypatch, tmp_path
+) -> None:
+    from pathlib import Path
+
+    import mona.utils.artifact_listing as artifact_listing
+
+    root = tmp_path / "workspace"
+    root.mkdir()
+    (root / "root.txt").write_text("root", encoding="utf-8")
+    shallow = root / "dir-0"
+    shallow.mkdir()
+    for index in range(10):
+        directory = shallow / f"dir-{index}"
+        directory.mkdir()
+        (directory / "nested.txt").write_text("nested", encoding="utf-8")
+    monkeypatch.setattr(artifact_listing, "MAX_ARTIFACT_FILES", 2)
+
+    original_iterdir = Path.iterdir
+    enumerated: list[Path] = []
+
+    def counting_iterdir(path: Path):
+        enumerated.append(path)
+        return original_iterdir(path)
+
+    monkeypatch.setattr(Path, "iterdir", counting_iterdir)
+    for scanner in (artifact_listing.list_artifacts, artifact_listing.list_project_files):
+        enumerated.clear()
+        result = scanner(root)
+        assert result.truncated is True
+        assert "root.txt" in {item.path for item in result.files}
+        assert enumerated == [root.resolve(), shallow.resolve()]
 
 
 def test_parse_query_extracts_token_and_client_id() -> None:
@@ -496,6 +791,25 @@ async def test_send_progress_includes_structured_tool_events() -> None:
             "embeds": [],
         }
     ]
+
+
+@pytest.mark.asyncio
+async def test_send_progress_includes_context_compaction_state() -> None:
+    bus = MagicMock()
+    channel = WebSocketChannel({"enabled": True, "allowFrom": ["*"]}, bus)
+    mock_ws = AsyncMock()
+    channel._attach(mock_ws, "chat-1")
+
+    await channel.send(OutboundMessage(
+        channel="websocket",
+        chat_id="chat-1",
+        content="正在整理上下文",
+        metadata={"_progress": True, "_context_compacting": True},
+    ))
+
+    payload = json.loads(mock_ws.send.await_args.args[0])
+    assert payload["kind"] == "progress"
+    assert payload["context_compacting"] is True
 
 
 @pytest.mark.asyncio
@@ -1937,3 +2251,119 @@ def test_handle_webui_thread_get_returns_json(tmp_path, monkeypatch) -> None:
     assert len(body["messages"]) == 1
     assert body["messages"][0]["role"] == "user"
     assert body["messages"][0]["content"] == "hi"
+
+
+def test_tool_progress_persistence_omits_inline_media_without_mutating_live_payload(
+    monkeypatch,
+    tmp_path,
+) -> None:
+    from mona.webui.transcript import (
+        append_transcript_object,
+        read_transcript_lines,
+        replay_transcript_to_ui_messages,
+        webui_transcript_path,
+    )
+
+    monkeypatch.setattr("mona.webui.transcript.get_webui_dir", lambda: tmp_path)
+    data_url = "data:image/png;base64," + ("A" * 200_000)
+    payload = {
+        "event": "message",
+        "kind": "progress",
+        "tool_events": [{
+            "version": 1,
+            "phase": "end",
+            "call_id": "call-1",
+            "name": "computer_observe",
+            "arguments": {"detail": "high"},
+            "result": [
+                {"type": "image", "image_url": {"url": data_url}},
+                {"type": "text", "text": "Observed the active window"},
+            ],
+            "embeds": [{"image_url": data_url}],
+        }],
+    }
+
+    append_transcript_object("websocket:compact", payload)
+
+    assert payload["tool_events"][0]["result"][0]["image_url"]["url"] == data_url
+    persisted = read_transcript_lines("websocket:compact")
+    event = persisted[0]["tool_events"][0]
+    assert "embeds" not in event
+    assert event["result"][0]["image_url"]["url"] == "[inline media omitted]"
+    assert event["result"][1]["text"] == "Observed the active window"
+    assert webui_transcript_path("websocket:compact").stat().st_size < 2_000
+    replayed = replay_transcript_to_ui_messages(persisted)
+    assert replayed[0]["traces"] == ['computer_observe({"detail": "high"})']
+
+
+def test_tool_progress_persistence_bounds_event_count_and_total_size() -> None:
+    from mona.webui.transcript import compact_transcript_object
+
+    payload = {
+        "event": "message",
+        "kind": "progress",
+        "tool_events": [
+            {
+                "phase": "end",
+                "call_id": f"call-{index}",
+                "name": "web_fetch",
+                "arguments": {"url": f"https://example.com/{index}"},
+                "result": "x" * 2_000,
+            }
+            for index in range(510)
+        ],
+    }
+
+    events = compact_transcript_object(payload)["tool_events"]
+
+    assert len(events) <= 500
+    assert events[-1]["call_id"] == "call-509"
+    assert len(json.dumps(events).encode("utf-8")) <= 256 * 1024
+
+
+def test_webui_replay_compacts_inline_media_from_legacy_records(
+    monkeypatch,
+    tmp_path,
+) -> None:
+    from mona.webui.transcript import build_webui_thread_response, webui_transcript_path
+
+    monkeypatch.setattr("mona.webui.transcript.get_webui_dir", lambda: tmp_path)
+    data_url = "data:image/png;base64," + ("A" * 200_000)
+    path = webui_transcript_path("websocket:legacy-inline")
+    path.write_text(
+        json.dumps({
+            "event": "message",
+            "kind": "progress",
+            "tool_events": [{
+                "phase": "end",
+                "call_id": "legacy-call",
+                "name": "computer_observe",
+                "result": [{"type": "image", "image_url": {"url": data_url}}],
+            }],
+        }) + "\n",
+        encoding="utf-8",
+    )
+
+    response = build_webui_thread_response("websocket:legacy-inline")
+
+    assert response is not None
+    event = response["messages"][0]["toolEvents"][0]
+    assert event["result"][0]["image_url"]["url"] == "[inline media omitted]"
+
+
+def test_transcript_reader_does_not_reject_history_by_total_file_size(
+    monkeypatch,
+    tmp_path,
+) -> None:
+    from mona.webui.transcript import read_transcript_lines, webui_transcript_path
+
+    monkeypatch.setattr("mona.webui.transcript.get_webui_dir", lambda: tmp_path)
+    path = webui_transcript_path("websocket:large")
+    record = json.dumps({"event": "user", "text": "x" * 1_024}) + "\n"
+    path.write_text(record * 8_100, encoding="utf-8")
+    assert path.stat().st_size > 8 * 1024 * 1024
+
+    persisted = read_transcript_lines("websocket:large")
+
+    assert len(persisted) == 8_100
+    assert persisted[-1]["text"] == "x" * 1_024

@@ -191,25 +191,6 @@ def _read_mb_uint32(data: bytes, pos: int) -> tuple[int, int]:
     return result, pos
 
 
-def _write_mb_uint32(value: int) -> bytes:
-    """编码多字节无符号整数。"""
-    if value == 0:
-        return b"\x00"
-    parts: list[int] = []
-    v = value
-    while v > 0:
-        parts.append(v & 0x7F)
-        v >>= 7
-    parts.reverse()
-    out = bytearray()
-    for i, p in enumerate(parts):
-        if i < len(parts) - 1:
-            out.append(p | 0x80)
-        else:
-            out.append(p)
-    return bytes(out)
-
-
 # ---------------------------------------------------------------------------
 # 解码：bytes → Node
 # ---------------------------------------------------------------------------

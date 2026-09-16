@@ -477,7 +477,9 @@ class WeixinChannel(BaseChannel):
             self._token = self.config.token
         elif not self._load_state():
             if not await self._qr_login():
-                self.logger.error("login failed. Run 'mona channels login weixin' to authenticate.")
+                self.logger.error(
+                    "login failed. Run 'python -m mona channels login weixin' to authenticate."
+                )
                 self._running = False
                 return
 

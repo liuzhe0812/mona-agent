@@ -16,15 +16,13 @@ import re
 import secrets
 import shutil
 import ssl
-import subprocess
-import sys
 import time
 import uuid
 from collections.abc import Callable
 from datetime import datetime
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, ClassVar, Self
-from urllib.parse import parse_qs, quote, unquote, urlparse
+from typing import TYPE_CHECKING, Any, Self
+from urllib.parse import parse_qs, unquote, urlparse
 
 from loguru import logger
 from pydantic import Field, field_validator, model_validator
@@ -255,11 +253,6 @@ def _parse_request_path(path_with_query: str) -> tuple[str, dict[str, list[str]]
     return path, parse_qs(parsed.query, keep_blank_values=True)
 
 
-def _normalize_http_path(path_with_query: str) -> str:
-    """Return the path component (no query string), with trailing slash normalized (root stays ``/``)."""
-    return _parse_request_path(path_with_query)[0]
-
-
 def _parse_query(path_with_query: str) -> dict[str, list[str]]:
     return _parse_request_path(path_with_query)[1]
 
@@ -383,20 +376,6 @@ _VIDEO_MIME_ALLOWED: frozenset[str] = frozenset(
 
 _UPLOAD_MIME_ALLOWED: frozenset[str] = _IMAGE_MIME_ALLOWED | _VIDEO_MIME_ALLOWED
 
-_PPT_DOC_MIME_ALLOWED: frozenset[str] = frozenset(
-    {
-        "application/pdf",
-        "text/plain",
-        "text/markdown",
-        "text/csv",
-        "application/json",
-        "application/msword",
-        "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-        "application/vnd.openxmlformats-officedocument.presentationml.presentation",
-    }
-)
-_PPT_DOC_MAX_BYTES = 20 * 1024 * 1024
-
 # Conversation attachments are persisted as workspace files and then passed to
 # the Agent by path. Their format is intentionally unrestricted.
 _DOC_MAX_BYTES = 20 * 1024 * 1024
@@ -415,7 +394,7 @@ def _extract_data_url_mime(url: str) -> str | None:
     return m.group(1).strip().lower() or None
 
 
-def _decode_data_url_payload(url: str, max_bytes: int = _PPT_DOC_MAX_BYTES) -> bytes | None:
+def _decode_data_url_payload(url: str, max_bytes: int = _DOC_MAX_BYTES) -> bytes | None:
     m = _DATA_URL_RE.match(url)
     if not m:
         return None
@@ -430,9 +409,6 @@ def _decode_data_url_payload(url: str, max_bytes: int = _PPT_DOC_MAX_BYTES) -> b
 
 
 _LOCALHOSTS = frozenset({"127.0.0.1", "::1", "localhost"})
-
-# PPT project lifecycle phases pushed to clients via ``ppt_phase_changed``.
-_PPT_PHASES = frozenset({"generating", "outline", "producing", "exporting", "done"})
 
 # Matches the legacy chat-id pattern but allows file-system-safe stems too,
 # so the API can address sessions whose keys came from non-WebSocket channels.
@@ -579,112 +555,6 @@ def _issue_route_secret_matches(headers: Any, configured_secret: str) -> bool:
     return hmac.compare_digest(header_token.strip(), configured_secret)
 
 
-def _get_ppt_project_status(project_dir: Path) -> dict:
-    svg_output_dir = project_dir / "svg_output"
-    svg_final_dir = project_dir / "svg_final"
-    output_dir = project_dir / "output"
-    spec_lock = project_dir / "spec_lock.md"
-    generating_marker = project_dir / ".generating"
-    export_dir = project_dir / "exports"
-    design_spec = project_dir / "design_spec.md"
-    notes_dir = project_dir / "notes"
-    images_dir = project_dir / "images"
-    visual_plan = project_dir / "page_visual_plan.json"
-
-    svg_count = len(list(svg_output_dir.glob("*.svg"))) if svg_output_dir.is_dir() else 0
-    svg_final_count = len(list(svg_final_dir.glob("*.svg"))) if svg_final_dir.is_dir() else 0
-    # New pipeline: output/output.pptx
-    output_pptx = output_dir / "output.pptx"
-    has_output_pptx = output_pptx.is_file()
-    # New pipeline: preview images in output/preview/ (e.g. slide_1.png)
-    preview_dir = output_dir / "preview"
-    output_image_count = len(list(preview_dir.glob("slide_*.png"))) if preview_dir.is_dir() else 0
-    # Also check output/ directly for legacy preview images
-    if output_image_count == 0:
-        output_image_count = len(list(output_dir.glob("slide_*.png"))) if output_dir.is_dir() else 0
-    pptx_files = (
-        sorted(
-            export_dir.glob("*.pptx"),
-            key=lambda p: p.stat().st_mtime,
-            reverse=True,
-        )
-        if export_dir.exists()
-        else []
-    )
-
-    # --- V2 phase derivation (with meta.json) ---
-    import json as _json
-
-    meta: dict = {}
-    meta_file = project_dir / "meta.json"
-    if meta_file.is_file():
-        try:
-            meta = _json.loads(meta_file.read_text(encoding="utf-8"))
-        except Exception:
-            meta = {}
-
-    has_outline = visual_plan.is_file()
-    outline_locked = meta.get("outlineLocked", False)
-    export_requested = meta.get("exportRequestedAt") is not None
-
-    if pptx_files or has_output_pptx:
-        v2_phase = "done"
-    elif export_requested:
-        v2_phase = "exporting"
-    elif spec_lock.exists() or outline_locked:
-        v2_phase = "producing"
-    elif has_outline:
-        v2_phase = "outline"
-    elif generating_marker.exists():
-        v2_phase = "generating"
-    else:
-        v2_phase = "config"
-
-    # Legacy status (backward compat)
-    if pptx_files or has_output_pptx:
-        project_status = "done"
-    elif generating_marker.exists():
-        project_status = "generating"
-    elif svg_count > 0 or svg_final_count > 0:
-        project_status = "generating"
-    elif spec_lock.exists():
-        project_status = "planning"
-    else:
-        project_status = "init"
-
-    # Determine fine-grained pipeline stage
-    pipeline_stage = "init"
-    if project_status == "done":
-        pipeline_stage = "exported"
-    elif svg_final_count > 0:
-        pipeline_stage = "postprocess"
-    elif svg_count > 0:
-        pipeline_stage = "rendering"
-    elif spec_lock.exists():
-        pipeline_stage = "planned"
-    elif images_dir.is_dir() and any(images_dir.iterdir()):
-        pipeline_stage = "images"
-    elif design_spec.exists() or (notes_dir.is_dir() and list(notes_dir.glob("*.md"))):
-        pipeline_stage = "designing"
-
-    return {
-        "status": project_status,
-        "phase": v2_phase,
-        "hasOutline": has_outline,
-        "outlineLocked": outline_locked,
-        "hasDesignSpec": design_spec.exists(),
-        "slideCount": max(svg_count, svg_final_count, output_image_count),
-        "hasExport": len(pptx_files) > 0 or has_output_pptx,
-        "hasSvgOutput": svg_count > 0 or svg_final_count > 0,
-        "hasPptxOutput": has_output_pptx,
-        "hasSpecLock": spec_lock.exists(),
-        "exportFile": pptx_files[0].name
-        if pptx_files
-        else ("output.pptx" if has_output_pptx else None),
-        "pipelineStage": pipeline_stage,
-        "svgOutputCount": svg_count,
-        "svgFinalCount": svg_final_count,
-    }
 
 
 class WebSocketChannel(BaseChannel):
@@ -699,9 +569,9 @@ class WebSocketChannel(BaseChannel):
         bus: MessageBus,
         *,
         session_manager: "SessionManager | None" = None,
-        static_dist_path: Path | None = None,
         runtime_model_name: Callable[[], str | None] | None = None,
         subagent_manager: Any | None = None,
+        runtime_tool_registry: Any | None = None,
     ):
         if isinstance(config, dict):
             config = WebSocketConfig.model_validate(config)
@@ -730,6 +600,7 @@ class WebSocketChannel(BaseChannel):
             else get_workspace_path()
         )
         self._subagent_manager = subagent_manager
+        self._runtime_tool_registry = runtime_tool_registry
         if subagent_manager is not None:
             # Tool-proposed workflow drafts surface as workflow_updated pushes.
             subagent_manager.workflow_draft_observer = self._on_workflow_draft_proposed
@@ -737,9 +608,6 @@ class WebSocketChannel(BaseChannel):
             # hook also emits approval_requested for pending approval steps.
             subagent_manager.workflow_run_observer = self._on_workflow_run_updated
             subagent_manager.session_activity_observer = self._on_subagent_session_activity
-        self._static_dist_path: Path | None = (
-            static_dist_path.resolve() if static_dist_path is not None else None
-        )
         # chat_id -> asyncio.Task driving the room's active run loop
         self._workflow_tasks: dict[str, asyncio.Task] = {}
         # run_id -> notified waiting-approval signature (dedupe approval_requested)
@@ -1032,9 +900,6 @@ class WebSocketChannel(BaseChannel):
         if got == "/api/runtimes/cleanup":
             return self._handle_runtime_cleanup(request)
 
-        if got.startswith("/api/agent-change-proposals/"):
-            return self._handle_agent_change_proposal_get(request, got)
-
         if got == "/api/settings":
             return self._handle_settings(request)
 
@@ -1086,9 +951,7 @@ class WebSocketChannel(BaseChannel):
         if got == "/api/channels/weixin/logout":
             return self._handle_weixin_logout(request)
 
-        pro_document_http = (
-            got.startswith("/api/ppt") and got != "/api/ppt/broadcast-phase"
-        ) or got in {"/api/video/download", "/api/video/delete-project"}
+        pro_document_http = got in {"/api/video/download", "/api/video/delete-project"}
         if pro_document_http and not await _has_subscription_access():
             return _http_json_response(
                 {
@@ -1098,74 +961,14 @@ class WebSocketChannel(BaseChannel):
                 status=403,
             )
 
-        if got == "/api/ppt/templates":
-            return self._handle_ppt_templates(request)
-
-        if got == "/api/ppt/template-svg":
-            return self._handle_ppt_template_svg(request)
-
-        if got == "/api/ppt/add-sources":
-            return self._handle_ppt_add_sources(request)
-
-        if got == "/api/ppt/fetch-url":
-            return self._handle_ppt_fetch_url(request)
-
-        if got == "/api/ppt/projects":
-            return self._handle_ppt_projects(request)
-
-        if got == "/api/ppt/download":
-            return self._handle_ppt_download(request)
-
-        if got == "/api/ppt/project-path":
-            return self._handle_ppt_project_path(request)
-
-        if got == "/api/ppt/preview-port":
-            return self._handle_ppt_preview_port(request)
-
-        if got == "/api/ppt/export-status":
-            return self._handle_ppt_export_status(request)
-
-        if got == "/api/ppt/generate-preview":
-            return self._handle_ppt_generate_preview(request)
-
-        if got == "/api/ppt/mark-generating":
-            return await self._handle_ppt_mark_generating(request)
-
-        if got == "/api/ppt/save-chat-id":
-            return await self._handle_ppt_save_chat_id(request)
-
-        if got == "/api/ppt/broadcast-phase":
-            return await self._handle_ppt_broadcast_phase(connection, request)
-
         if got == "/api/video/broadcast-change":
             return await self._handle_video_broadcast_change(connection, request)
-
-        if got == "/api/ppt/delete-project":
-            return self._handle_ppt_delete_project(request)
 
         if got == "/api/video/download":
             return self._handle_video_download(request)
 
         if got == "/api/video/delete-project":
             return self._handle_video_delete_project(request)
-
-        if got == "/api/ppt/project-slides":
-            return self._handle_ppt_project_slides(request)
-
-        if got == "/api/ppt/visual-plan":
-            return self._handle_ppt_visual_plan(request)
-
-        if got == "/api/ppt/officecli-check":
-            return self._handle_ppt_officecli_check(request)
-
-        if got == "/api/ppt/officecli-download":
-            return await self._handle_ppt_officecli_download(request)
-
-        if got.startswith("/api/ppt/project-svg"):
-            return self._handle_ppt_project_svg(request)
-
-        if got.startswith("/api/ppt/project-file"):
-            return self._handle_ppt_project_file(request)
 
         m = re.match(r"^/api/sessions/([^/]+)/messages$", got)
         if m:
@@ -1227,8 +1030,7 @@ class WebSocketChannel(BaseChannel):
 
         # 4. WebSocket upgrade (the channel's primary purpose). Only run the
         # handshake gate on requests that actually ask to upgrade; otherwise
-        # a bare ``GET /`` from the browser would be rejected as an
-        # unauthorized WS handshake instead of serving the SPA's index.html.
+        # an ordinary HTTP request would be treated as a WebSocket handshake.
         expected_ws = self._expected_path()
         if got == expected_ws and _is_websocket_upgrade(request):
             client_id = _query_first(query, "client_id") or ""
@@ -1237,12 +1039,6 @@ class WebSocketChannel(BaseChannel):
             if not self.is_allowed(client_id):
                 return _http_response(b"Forbidden", status=403)
             return self._authorize_websocket_handshake(connection, query)
-
-        # 5. Static SPA serving (only if a build directory was wired in).
-        if self._static_dist_path is not None:
-            response = self._serve_static(got)
-            if response is not None:
-                return response
 
         return _http_response(b"Not Found", status=404)
 
@@ -1313,8 +1109,7 @@ class WebSocketChannel(BaseChannel):
         # Sidebar/chat listing for WS-backed sessions only — CLI / Slack / etc.
         # keys are not intended for resume over this HTTP surface.
         #
-        # Video maker keeps its own history panel. PPT now lives in the main
-        # conversation sidebar, so PPT project chats remain visible here.
+        # Video maker keeps its own history panel.
         hidden_chat_ids: set[str] = set()
         try:
             workspace_path = self.workspace
@@ -1620,7 +1415,7 @@ class WebSocketChannel(BaseChannel):
         if not self._check_api_token(request):
             return _http_error(401, "Unauthorized")
         parts = path.split("/")
-        # /api/agents/<id>[/instructions[/<key>[/history]]|/skills|/proposals]
+        # /api/agents/<id>[/instructions[/<key>[/history]]|/skills]
         if len(parts) < 4 or not parts[3]:
             return _http_error(404, "Not Found")
         from mona.agent.partners import normalize_agent_id
@@ -1666,6 +1461,7 @@ class WebSocketChannel(BaseChannel):
                             bus=self.bus,
                             subagent_manager=self._subagent_manager,
                             sessions=self._session_manager,
+                            runtime_registry=self._runtime_tool_registry,
                         ),
                     }
                 )
@@ -1693,27 +1489,9 @@ class WebSocketChannel(BaseChannel):
                 return _http_json_response(
                     {"skill": SkillManager(agent_id, registry=registry).read(suffix[1])}
                 )
-            if suffix == ["proposals"]:
-                from mona.agent.agent_management import list_change_proposals
-
-                return _http_json_response({"proposals": list_change_proposals(agent_id)})
         except ValueError as exc:
             return _http_error(400, str(exc))
         return _http_error(404, "Not Found")
-
-    def _handle_agent_change_proposal_get(self, request: WsRequest, path: str) -> Response:
-        if not self._check_api_token(request):
-            return _http_error(401, "Unauthorized")
-        proposal_id = path.rsplit("/", 1)[-1]
-        agent_id = _query_first(_parse_query(request.path), "agent_id")
-        if not agent_id:
-            return _http_error(400, "agent_id is required")
-        try:
-            from mona.agent.agent_management import get_change_proposal
-
-            return _http_json_response({"proposal": get_change_proposal(agent_id, proposal_id)})
-        except ValueError as exc:
-            return _http_error(400, str(exc))
 
     def _handle_settings(self, request: WsRequest) -> Response:
         if not self._check_api_token(request):
@@ -1783,7 +1561,7 @@ class WebSocketChannel(BaseChannel):
         if not isinstance(decoded, dict):
             return _http_error(400, "state must be an object")
         try:
-            state = write_webui_sidebar_state(decoded)
+            state = write_webui_sidebar_state(decoded, merge_markers=True)
         except ValueError as e:
             return _http_error(400, str(e))
         except OSError:
@@ -2011,676 +1789,19 @@ class WebSocketChannel(BaseChannel):
             return _http_error(500, "failed to delete weixin account state")
         return _http_json_response({"logged_in": False})
 
-    def _handle_ppt_templates(self, request: WsRequest) -> Response:
-        if not self._check_api_token(request):
-            return _http_error(401, "Unauthorized")
-        try:
-            from urllib.parse import quote
 
-            from mona.agent.skills import BUILTIN_SKILLS_DIR
 
-            skill_dir = BUILTIN_SKILLS_DIR / "mona-ppt"
-            layouts_index = (
-                skill_dir / "scripts" / "templates_full" / "layouts" / "layouts_index.json"
-            )
-            brands_index = skill_dir / "scripts" / "templates_full" / "brands" / "brands_index.json"
 
-            templates = []
-            if layouts_index.exists():
-                raw = json.loads(layouts_index.read_text(encoding="utf-8"))
-                for key, info in raw.items():
-                    templates.append(
-                        {
-                            "key": key,
-                            "kind": "layout",
-                            "group": "通用",
-                            "name": info.get("name", key),
-                            "summary": info.get("summary", ""),
-                            "pageCount": info.get("page_count", 0),
-                            "canvasFormat": info.get("canvas_format", "ppt169"),
-                            "coverSvgUrl": (
-                                f"/api/ppt/template-svg?kind=layout&key={quote(key, safe='')}&file=01_cover.svg"
-                            ),
-                        }
-                    )
 
-            if brands_index.exists():
-                raw = json.loads(brands_index.read_text(encoding="utf-8"))
-                for key, info in raw.items():
-                    # Check if cover image exists (any supported format)
-                    brand_dir = brands_index.parent / key
-                    cover_url = ""
-                    if brand_dir.is_dir():
-                        for ext in (".svg", ".png", ".jpg", ".jpeg"):
-                            if (brand_dir / f"01_cover{ext}").exists():
-                                cover_url = (
-                                    f"/api/ppt/template-svg?kind=brand"
-                                    f"&key={quote(key, safe='')}&file=01_cover{ext}"
-                                )
-                                break
-                    templates.append(
-                        {
-                            "key": key,
-                            "kind": "brand",
-                            "group": "品牌预设",
-                            "name": info.get("name", key),
-                            "summary": info.get("summary", ""),
-                            "pageCount": info.get("page_count", 0),
-                            "canvasFormat": info.get("canvas_format", "ppt169"),
-                            "primaryColor": info.get("primary_color", ""),
-                            "coverSvgUrl": cover_url,
-                            "userCreated": info.get("userCreated", False),
-                        }
-                    )
 
-            # --- Native templates ---
-            native_index = skill_dir / "scripts" / "templates_full" / "native" / "native_index.json"
-            if native_index.exists():
-                raw = json.loads(native_index.read_text(encoding="utf-8"))
-                for key, info in raw.items():
-                    native_dir = native_index.parent / key
-                    cover_url = ""
-                    if native_dir.is_dir():
-                        cover_file = native_dir / "01_cover.png"
-                        if cover_file.exists():
-                            cover_url = (
-                                f"/api/ppt/template-svg?kind=native"
-                                f"&key={quote(key, safe='')}&file=01_cover.png"
-                            )
-                    templates.append(
-                        {
-                            "key": key,
-                            "kind": "native",
-                            "group": "自定义模板",
-                            "name": info.get("name", key),
-                            "summary": info.get("summary", ""),
-                            "pageCount": info.get("page_count", 0),
-                            "canvasFormat": info.get("canvas_format", "ppt169"),
-                            "primaryColor": info.get("primary_color", ""),
-                            "coverSvgUrl": cover_url,
-                            "userCreated": info.get("userCreated", False),
-                        }
-                    )
 
-            canvas_formats = [
-                {
-                    "key": "ppt169",
-                    "label": "PPT 16:9",
-                    "viewBox": "1280x720",
-                    "desc": "商务演示",
-                },
-                {
-                    "key": "ppt43",
-                    "label": "PPT 4:3",
-                    "viewBox": "1024x768",
-                    "desc": "传统投影",
-                },
-                {"key": "xhs", "label": "小红书", "viewBox": "1242x1660", "desc": "图文分享"},
-                {
-                    "key": "square",
-                    "label": "方形海报",
-                    "viewBox": "1080x1080",
-                    "desc": "朋友圈",
-                },
-                {
-                    "key": "story",
-                    "label": "竖屏故事",
-                    "viewBox": "1080x1920",
-                    "desc": "抖音封面",
-                },
-                {
-                    "key": "wx_header",
-                    "label": "微信头图",
-                    "viewBox": "900x383",
-                    "desc": "公众号封面",
-                },
-                {
-                    "key": "banner",
-                    "label": "横幅",
-                    "viewBox": "1920x1080",
-                    "desc": "网页横幅",
-                },
-                {
-                    "key": "portrait",
-                    "label": "竖版海报",
-                    "viewBox": "1080x1920",
-                    "desc": "手机海报",
-                },
-                {
-                    "key": "a4",
-                    "label": "A4 打印",
-                    "viewBox": "1240x1754",
-                    "desc": "打印海报",
-                },
-            ]
 
-            return _http_json_response(
-                {
-                    "templates": templates,
-                    "canvasFormats": canvas_formats,
-                }
-            )
-        except Exception as e:
-            logger.exception("ppt templates error")
-            return _http_error(500, str(e))
 
-    def _handle_ppt_template_svg(self, request: WsRequest) -> Response:
-        if not self._check_api_token(request):
-            return _http_error(401, "Unauthorized")
-        try:
-            from mona.agent.skills import BUILTIN_SKILLS_DIR
-
-            query = _parse_query(request.path)
-            kind = _query_first(query, "kind") or ""
-            key = _query_first(query, "key") or ""
-            file = _query_first(query, "file") or "01_cover.svg"
-
-            if "/" in key or "\\" in key or ".." in key:
-                return _http_error(400, "invalid key")
-            # Allow subdirectory paths (e.g. assets/image1.png) but block traversal
-            if ".." in file:
-                return _http_error(400, "invalid file")
-
-            skill_dir = BUILTIN_SKILLS_DIR / "mona-ppt"
-            subdir = {"layout": "layouts", "brand": "brands", "native": "native"}.get(kind)
-            if not subdir:
-                return _http_error(400, "invalid template kind")
-            base_dir = skill_dir / "scripts" / "templates_full" / subdir / key
-
-            # Resolve file path (may include subdirectory like assets/xxx.png)
-            file_path = (base_dir / file).resolve()
-            # Security: ensure resolved path is still under base_dir
-            if not str(file_path).startswith(str(base_dir.resolve())):
-                return _http_error(400, "invalid file path")
-
-            if not file_path.exists():
-                # Auto-find cover image with any supported extension
-                stem = Path(file).stem
-                for ext in (".svg", ".png", ".jpg", ".jpeg"):
-                    candidate = (base_dir / (stem + ext)).resolve()
-                    if candidate.exists() and str(candidate).startswith(str(base_dir.resolve())):
-                        file_path = candidate
-                        break
-
-            if not file_path.exists():
-                return _http_error(404, "cover image not found")
-
-            content = file_path.read_bytes()
-            suffix = file_path.suffix.lower()
-            content_type = {
-                ".svg": "image/svg+xml",
-                ".png": "image/png",
-                ".jpg": "image/jpeg",
-                ".jpeg": "image/jpeg",
-            }.get(suffix, "application/octet-stream")
-
-            if suffix == ".svg":
-                content = self._sanitize_svg_xml(content)
-
-            return _http_response(
-                content,
-                content_type=content_type,
-                extra_headers=[("Cache-Control", "public, max-age=3600")],
-            )
-        except Exception as e:
-            logger.exception("ppt template svg error")
-            return _http_error(500, str(e))
-
-    _PPT_SOURCE_SUFFIXES = frozenset(
-        {
-            ".md",
-            ".txt",
-            ".pdf",
-            ".doc",
-            ".docx",
-            ".pptx",
-            ".csv",
-            ".json",
-            ".xls",
-            ".xlsx",
-        }
-    )
-
-    def _handle_ppt_add_sources(self, request: WsRequest) -> Response:
-        if not self._check_api_token(request):
-            return _http_error(401, "Unauthorized")
-        try:
-            workspace = self.workspace
-            query = _parse_query(request.path)
-            sources_str = _query_first(query, "sources") or ""
-            if not sources_str:
-                return _http_error(400, "missing sources")
-
-            sources_dir = workspace / "ppt_projects" / "_sources"
-            sources_dir.mkdir(parents=True, exist_ok=True)
-
-            sources = [s.strip() for s in sources_str.split("|") if s.strip()]
-            added: list[dict[str, str]] = []
-            for src_str in sources:
-                src = Path(src_str)
-                if not src.exists():
-                    continue
-                if src.is_file():
-                    if src.suffix.lower() in self._PPT_SOURCE_SUFFIXES:
-                        dest = sources_dir / src.name
-                        shutil.copy2(src, dest)
-                        rel = dest.relative_to(workspace)
-                        added.append(
-                            {
-                                "name": src.name,
-                                "path": str(rel).replace("\\", "/"),
-                            }
-                        )
-                elif src.is_dir():
-                    for fp in sorted(src.rglob("*")):
-                        if not fp.is_file():
-                            continue
-                        if fp.suffix.lower() not in self._PPT_SOURCE_SUFFIXES:
-                            continue
-                        rel_src = fp.relative_to(src)
-                        dest = sources_dir / rel_src
-                        dest.parent.mkdir(parents=True, exist_ok=True)
-                        shutil.copy2(fp, dest)
-                        rel = dest.relative_to(workspace)
-                        added.append(
-                            {
-                                "name": rel_src.as_posix(),
-                                "path": str(rel).replace("\\", "/"),
-                            }
-                        )
-
-            return _http_json_response({"files": added})
-        except Exception as e:
-            logger.exception("ppt add sources error")
-            return _http_error(500, str(e))
-
-    def _handle_ppt_fetch_url(self, request: WsRequest) -> Response:
-        """Fetch a web URL and convert to Markdown source for PPT generation."""
-        if not self._check_api_token(request):
-            return _http_error(401, "Unauthorized")
-        try:
-            import subprocess
-
-            from mona.agent.skills import BUILTIN_SKILLS_DIR
-
-            query = _parse_query(request.path)
-            url = _query_first(query, "url") or ""
-            project_name = _query_first(query, "project") or ""
-
-            if not url:
-                return _http_error(400, "url is required")
-            if not url.startswith("http://") and not url.startswith("https://"):
-                return _http_error(400, "url must start with http:// or https://")
-
-            workspace = self.workspace
-            script = BUILTIN_SKILLS_DIR / "mona-ppt" / "scripts" / "source_to_md" / "web_to_md.py"
-
-            if not script.exists():
-                return _http_error(500, "web_to_md.py not found")
-
-            # Determine output directory
-            if project_name:
-                output_dir = workspace / "ppt_projects" / project_name / "sources"
-                output_dir.mkdir(parents=True, exist_ok=True)
-            else:
-                output_dir = workspace / "ppt_projects" / "_url_cache"
-                output_dir.mkdir(parents=True, exist_ok=True)
-
-            result = subprocess.run(
-                [sys.executable, str(script), url, "--output-dir", str(output_dir)],
-                capture_output=True,
-                text=True,
-                timeout=60,
-            )
-
-            if result.returncode == 0:
-                # Find the generated markdown file
-                md_files = sorted(
-                    output_dir.glob("*.md"),
-                    key=lambda p: p.stat().st_mtime,
-                    reverse=True,
-                )
-                if md_files:
-                    try:
-                        rel_path = md_files[0].relative_to(workspace)
-                        file_path = str(rel_path).replace("\\", "/")
-                    except ValueError:
-                        file_path = str(md_files[0])
-                    return _http_json_response(
-                        {
-                            "ok": True,
-                            "file": file_path,
-                            "output": result.stdout.strip(),
-                        }
-                    )
-                return _http_json_response({"ok": True, "output": result.stdout.strip()})
-            else:
-                return _http_json_response(
-                    {
-                        "ok": False,
-                        "error": result.stderr.strip() or result.stdout.strip() or "fetch failed",
-                    }
-                )
-        except subprocess.TimeoutExpired:
-            return _http_json_response({"ok": False, "error": "fetch timed out"})
-        except Exception as e:
-            logger.exception("ppt fetch url error")
-            return _http_error(500, str(e))
-
-    def _handle_ppt_projects(self, request: WsRequest) -> Response:
-        if not self._check_api_token(request):
-            return _http_error(401, "Unauthorized")
-        try:
-            workspace = self.workspace
-            projects_dir = workspace / "ppt_projects"
-            if not projects_dir.exists():
-                return _http_json_response({"projects": []})
-
-            projects = []
-            for d in sorted(projects_dir.iterdir()):
-                if not d.is_dir():
-                    continue
-                if d.name.startswith("_"):
-                    continue
-                # 过滤前端 markPptGenerating 预创建的占位目录：
-                # 只有 .generating / .chat_id 标记文件而无 README.md / meta.json 的目录不算已初始化项目
-                existing = {p.name for p in d.iterdir()}
-                real_files = existing - {".generating", ".chat_id"}
-                if not real_files:
-                    continue
-                status_info = _get_ppt_project_status(d)
-                stat = d.stat()
-                chat_id_file = d / ".chat_id"
-                chat_id = (
-                    chat_id_file.read_text(encoding="utf-8").strip()
-                    if chat_id_file.exists()
-                    else None
-                )
-                projects.append(
-                    {
-                        "name": d.name,
-                        "createdAt": stat.st_ctime,
-                        "format": "ppt169",
-                        "slideCount": status_info["slideCount"],
-                        "hasExport": status_info["hasExport"],
-                        "hasSvgOutput": status_info["hasSvgOutput"],
-                        "hasPptxOutput": status_info["hasPptxOutput"],
-                        "hasSpecLock": status_info["hasSpecLock"],
-                        "status": status_info["status"],
-                        "phase": status_info.get("phase"),
-                        "chatId": chat_id,
-                    }
-                )
-
-            return _http_json_response({"projects": projects})
-        except Exception as e:
-            logger.exception("ppt projects error")
-            return _http_error(500, str(e))
-
-    def _handle_ppt_download(self, request: WsRequest) -> Response:
-        if not self._check_api_token(request):
-            return _http_error(401, "Unauthorized")
-        try:
-            query = _parse_query(request.path)
-            project_name = _query_first(query, "project") or ""
-            if (
-                not project_name
-                or "/" in project_name
-                or "\\" in project_name
-                or ".." in project_name
-            ):
-                return _http_error(400, "invalid project name")
-
-            workspace = self.workspace
-            project_dir = workspace / "ppt_projects" / project_name
-
-            # Try exports/ first (legacy + Step 7.3 copy), then output/ (new pipeline)
-            export_dir = project_dir / "exports"
-            output_dir = project_dir / "output"
-
-            pptx_files = []
-            if export_dir.exists():
-                pptx_files.extend(export_dir.glob("*.pptx"))
-            if output_dir.exists():
-                pptx_files.extend(output_dir.glob("*.pptx"))
-
-            if not pptx_files:
-                return _http_error(404, "no pptx found")
-
-            # Pick the most recently modified file
-            pptx_files.sort(key=lambda p: p.stat().st_mtime, reverse=True)
-            chosen = pptx_files[0]
-            content = chosen.read_bytes()
-            filename = chosen.name
-            return _http_response(
-                content,
-                content_type="application/vnd.openxmlformats-officedocument.presentationml.presentation",
-                extra_headers=[
-                    (
-                        "Content-Disposition",
-                        "attachment; filename=\"presentation.pptx\"; "
-                        f"filename*=UTF-8''{quote(filename, safe='')}",
-                    ),
-                    ("Cache-Control", "no-cache"),
-                ],
-            )
-        except Exception as e:
-            logger.exception("ppt download error")
-            return _http_error(500, str(e))
-
-    def _handle_ppt_project_path(self, request: WsRequest) -> Response:
-        if not self._check_api_token(request):
-            return _http_error(401, "Unauthorized")
-        query = _parse_query(request.path)
-        project_name = _query_first(query, "project") or ""
-        if (
-            not project_name
-            or "/" in project_name
-            or "\\" in project_name
-            or ".." in project_name
-        ):
-            return _http_error(400, "invalid project name")
-        projects_root = (self.workspace / "ppt_projects").resolve()
-        project_dir = (projects_root / project_name).resolve()
-        try:
-            project_dir.relative_to(projects_root)
-        except ValueError:
-            return _http_error(400, "invalid project name")
-        if not project_dir.is_dir():
-            return _http_error(404, "project not found")
-        return _http_json_response({"path": str(project_dir)})
-
-    def _handle_ppt_preview_port(self, request: WsRequest) -> Response:
-        if not self._check_api_token(request):
-            return _http_error(401, "Unauthorized")
-        try:
-            query = _parse_query(request.path)
-            project_name = _query_first(query, "project") or ""
-            if (
-                not project_name
-                or "/" in project_name
-                or "\\" in project_name
-                or ".." in project_name
-            ):
-                return _http_error(400, "invalid project name")
-
-            workspace = self.workspace
-            lock_file = workspace / "ppt_projects" / project_name / ".live_preview.lock"
-
-            if not lock_file.exists():
-                return _http_json_response({"port": None})
-
-            data = json.loads(lock_file.read_text(encoding="utf-8"))
-            port = data.get("port")
-            return _http_json_response({"port": port})
-        except Exception:
-            logger.exception("ppt preview port error")
-            return _http_json_response({"port": None})
-
-    def _handle_ppt_export_status(self, request: WsRequest) -> Response:
-        if not self._check_api_token(request):
-            return _http_error(401, "Unauthorized")
-        try:
-            query = _parse_query(request.path)
-            project_name = _query_first(query, "project") or ""
-            if (
-                not project_name
-                or "/" in project_name
-                or "\\" in project_name
-                or ".." in project_name
-            ):
-                return _http_error(400, "invalid project name")
-
-            workspace = self.workspace
-            projects_dir = workspace / "ppt_projects"
-            project_dir = projects_dir / project_name
-            if not project_dir.is_dir():
-                # Fallback: prefix match for renamed directories (e.g. init
-                # script appended _ppt169_YYYYMMDD to a pre-created placeholder).
-                candidates = [
-                    d
-                    for d in projects_dir.iterdir()
-                    if d.is_dir() and d.name.startswith(f"{project_name}_")
-                ]
-                if len(candidates) == 1:
-                    project_dir = candidates[0]
-                else:
-                    return _http_json_response({"status": "not_found"})
-
-            status_info = _get_ppt_project_status(project_dir)
-            return _http_json_response(
-                {
-                    "status": status_info["status"],
-                    "phase": status_info["phase"],
-                    "slideCount": status_info["slideCount"],
-                    "hasExport": status_info["hasExport"],
-                    "hasSvgOutput": status_info["hasSvgOutput"],
-                    "hasPptxOutput": status_info["hasPptxOutput"],
-                    "hasSpecLock": status_info["hasSpecLock"],
-                    "exportFile": status_info["exportFile"],
-                    "pipelineStage": status_info["pipelineStage"],
-                    "svgOutputCount": status_info["svgOutputCount"],
-                    "svgFinalCount": status_info["svgFinalCount"],
-                }
-            )
-        except Exception as e:
-            logger.exception("ppt export status error")
-            return _http_error(500, str(e))
-
-    def _handle_ppt_officecli_check(self, request: WsRequest) -> Response:
-        if not self._check_api_token(request):
-            return _http_error(401, "Unauthorized")
-        try:
-            from mona.api.officecli_runtime import OfficeCliRuntime
-
-            return _http_json_response(OfficeCliRuntime().check())
-        except Exception as e:
-            logger.exception("ppt officecli-check error")
-            return _http_error(500, str(e))
-
-    async def _handle_ppt_officecli_download(self, request: WsRequest) -> Response:
-        if not self._check_api_token(request):
-            return _http_error(401, "Unauthorized")
-        return _http_json_response(
-            {
-                "ok": False,
-                "code": "OFFICECLI_REMOVED",
-                "error": "旧 PPT 模板编辑能力已停止分发",
-            },
-            status=410,
-        )
-
-    def _handle_ppt_generate_preview(self, request: WsRequest) -> Response:
-        if not self._check_api_token(request):
-            return _http_error(401, "Unauthorized")
-        try:
-            from mona.agent.skills import BUILTIN_SKILLS_DIR
-
-            query = _parse_query(request.path)
-            project_name = _query_first(query, "project") or ""
-            if (
-                not project_name
-                or "/" in project_name
-                or "\\" in project_name
-                or ".." in project_name
-            ):
-                return _http_error(400, "invalid project name")
-
-            workspace = self.workspace
-            pptx_path = workspace / "ppt_projects" / project_name / "output" / "output.pptx"
-            if not pptx_path.exists():
-                return _http_error(404, "output.pptx not found")
-
-            script = BUILTIN_SKILLS_DIR / "mona-ppt" / "scripts" / "pptx_to_preview.py"
-            if not script.exists():
-                return _http_error(500, "preview script not found")
-
-            preview_dir = pptx_path.parent / "preview"
-            result = subprocess.run(
-                [sys.executable, str(script), str(pptx_path), str(preview_dir)],
-                capture_output=True,
-                text=True,
-                timeout=120,
-            )
-
-            if result.returncode == 0:
-                slide_count = (
-                    len(list(preview_dir.glob("slide_*.png"))) if preview_dir.exists() else 0
-                )
-                return _http_json_response({"ok": True, "slideCount": slide_count})
-            else:
-                return _http_json_response(
-                    {
-                        "ok": False,
-                        "error": result.stderr.strip() or result.stdout.strip() or "unknown error",
-                    }
-                )
-        except subprocess.TimeoutExpired:
-            return _http_json_response({"ok": False, "error": "preview generation timed out"})
-        except Exception as e:
-            logger.exception("ppt generate preview error")
-            return _http_error(500, str(e))
-
-    async def _push_ppt_phase_from_disk(self, project_dir: Path, project_name: str) -> None:
-        """Best-effort PPT phase push derived from disk state.
-
-        Notification must never fail the mutating request; the polling
-        project-status APIs remain the fallback.
-        """
-        try:
-            phase = str(_get_ppt_project_status(project_dir).get("phase") or "")
-            if phase in _PPT_PHASES:
-                await self.broadcast_ppt_phase_changed(project_name, phase)
-        except Exception:
-            logger.exception("ppt phase broadcast failed")
-
-    async def _handle_ppt_broadcast_phase(self, connection: Any, request: WsRequest) -> Response:
-        """Internal trigger letting the services process fan out a PPT phase change.
-
-        Gated like ``/webui/bootstrap``: the configured shared secret when one
-        is set, otherwise loopback only.
-        """
-        secret = self.config.token_issue_secret.strip() or self.config.token.strip()
-        if secret:
-            if not _issue_route_secret_matches(request.headers, secret):
-                return _http_error(401, "Unauthorized")
-        elif not _is_localhost(connection):
-            return _http_error(403, "ppt broadcast-phase is localhost-only")
-        query = _parse_query(request.path)
-        project_name = _query_first(query, "project") or ""
-        phase = _query_first(query, "phase") or ""
-        if not project_name or "/" in project_name or "\\" in project_name or ".." in project_name:
-            return _http_error(400, "invalid project name")
-        if phase not in _PPT_PHASES:
-            return _http_error(400, "invalid phase")
-        await self.broadcast_ppt_phase_changed(project_name, phase)
-        return _http_json_response({"ok": True})
 
     async def _handle_video_broadcast_change(self, connection: Any, request: WsRequest) -> Response:
         """Internal trigger letting the services process fan out a video project change.
 
-        Same gating as ``/api/ppt/broadcast-phase``: shared secret when set,
-        otherwise loopback only.
+        Uses the shared internal-route secret when set, otherwise loopback only.
         """
         secret = self.config.token_issue_secret.strip() or self.config.token.strip()
         if secret:
@@ -2698,98 +1819,8 @@ class WebSocketChannel(BaseChannel):
         await self.broadcast_video_project_changed(project_name, hint)
         return _http_json_response({"ok": True})
 
-    async def _handle_ppt_mark_generating(self, request: WsRequest) -> Response:
-        if not self._check_api_token(request):
-            return _http_error(401, "Unauthorized")
-        try:
-            query = _parse_query(request.path)
-            project_name = _query_first(query, "project") or ""
-            action = _query_first(query, "action") or "start"
 
-            if (
-                not project_name
-                or "/" in project_name
-                or "\\" in project_name
-                or ".." in project_name
-            ):
-                return _http_error(400, "invalid project name")
 
-            workspace = self.workspace
-            project_dir = workspace / "ppt_projects" / project_name
-            marker = project_dir / ".generating"
-
-            if action == "start":
-                project_dir.mkdir(parents=True, exist_ok=True)
-                marker.write_text("1", encoding="utf-8")
-            elif action == "finish":
-                marker.unlink(missing_ok=True)
-
-            await self._push_ppt_phase_from_disk(project_dir, project_name)
-
-            return _http_json_response({"ok": True})
-        except Exception as e:
-            logger.exception("ppt mark generating error")
-            return _http_error(500, str(e))
-
-    async def _handle_ppt_save_chat_id(self, request: WsRequest) -> Response:
-        if not self._check_api_token(request):
-            return _http_error(401, "Unauthorized")
-        try:
-            query = _parse_query(request.path)
-            project_name = _query_first(query, "project") or ""
-            chat_id = _query_first(query, "chatId") or ""
-
-            if (
-                not project_name
-                or "/" in project_name
-                or "\\" in project_name
-                or ".." in project_name
-            ):
-                return _http_error(400, "invalid project name")
-
-            workspace = self.workspace
-            project_dir = workspace / "ppt_projects" / project_name
-            if not project_dir.is_dir():
-                return _http_error(404, "project not found")
-
-            chat_id_file = project_dir / ".chat_id"
-            chat_id_file.write_text(chat_id, encoding="utf-8")
-
-            await self._push_ppt_phase_from_disk(project_dir, project_name)
-
-            return _http_json_response({"ok": True})
-        except Exception as e:
-            logger.exception("ppt save chat id error")
-            return _http_error(500, str(e))
-
-    def _handle_ppt_delete_project(self, request: WsRequest) -> Response:
-        if not self._check_api_token(request):
-            return _http_error(401, "Unauthorized")
-        try:
-            import shutil
-
-            query = _parse_query(request.path)
-            project_name = _query_first(query, "project") or ""
-
-            if (
-                not project_name
-                or "/" in project_name
-                or "\\" in project_name
-                or ".." in project_name
-            ):
-                return _http_error(400, "invalid project name")
-
-            workspace = self.workspace
-            project_dir = workspace / "ppt_projects" / project_name
-            if not project_dir.is_dir():
-                return _http_error(404, "project not found")
-
-            shutil.rmtree(project_dir)
-
-            return _http_json_response({"ok": True})
-        except Exception as e:
-            logger.exception("ppt delete project error")
-            return _http_error(500, str(e))
 
     def _handle_video_download(self, request: WsRequest) -> Response:
         if not self._check_api_token(request):
@@ -2884,345 +1915,13 @@ class WebSocketChannel(BaseChannel):
             logger.exception("video delete project error")
             return _http_error(500, str(e))
 
-    def _handle_ppt_visual_plan(self, request: WsRequest) -> Response:
-        if not self._check_api_token(request):
-            return _http_error(401, "Unauthorized")
-        try:
-            query = _parse_query(request.path)
-            project_name = _query_first(query, "project") or ""
-            if (
-                not project_name
-                or "/" in project_name
-                or "\\" in project_name
-                or ".." in project_name
-            ):
-                return _http_error(400, "invalid project name")
 
-            workspace = self.workspace
-            plan_path = workspace / "ppt_projects" / project_name / "page_visual_plan.json"
-            if not plan_path.is_file():
-                return _http_json_response({"pages": []})
 
-            data = json.loads(plan_path.read_text(encoding="utf-8"))
-            return _http_json_response(data)
-        except Exception as e:
-            logger.exception("ppt visual plan error")
-            return _http_error(500, str(e))
-
-    def _handle_ppt_project_slides(self, request: WsRequest) -> Response:
-        if not self._check_api_token(request):
-            return _http_error(401, "Unauthorized")
-        try:
-            from urllib.parse import quote
-
-            query = _parse_query(request.path)
-            project_name = _query_first(query, "project") or ""
-            if (
-                not project_name
-                or "/" in project_name
-                or "\\" in project_name
-                or ".." in project_name
-            ):
-                return _http_error(400, "invalid project name")
-
-            workspace = self.workspace
-            project_dir = workspace / "ppt_projects" / project_name
-            if not project_dir.is_dir():
-                return _http_json_response({"slides": []})
-
-            slides: list[dict[str, str]] = []
-            seen: set[str] = set()
-
-            # New pipeline: preview images in output/preview/ (slide_1.png, slide_2.png, ...)
-            output_dir = project_dir / "output"
-            preview_dir = output_dir / "preview"
-            if preview_dir.is_dir():
-                for f in sorted(preview_dir.glob("slide_*.png")):
-                    if f.name not in seen:
-                        seen.add(f.name)
-                        slides.append(
-                            {
-                                "name": f.name,
-                                "type": "image",
-                                "url": (
-                                    f"/api/ppt/project-file?project={quote(project_name, safe='')}"
-                                    f"&path=output/preview/{quote(f.name, safe='')}"
-                                ),
-                            }
-                        )
-            # Also check output/ directly for legacy preview images
-            if output_dir.is_dir():
-                for f in sorted(output_dir.glob("slide_*.png")):
-                    if f.name not in seen:
-                        seen.add(f.name)
-                        slides.append(
-                            {
-                                "name": f.name,
-                                "type": "image",
-                                "url": (
-                                    f"/api/ppt/project-file?project={quote(project_name, safe='')}"
-                                    f"&path=output/{quote(f.name, safe='')}"
-                                ),
-                            }
-                        )
-
-            # Legacy pipeline: svg_final (self-contained), fall back to svg_output
-            svg_final_dir = project_dir / "svg_final"
-            svg_output_dir = project_dir / "svg_output"
-
-            # svg_final files first (self-contained, no external refs)
-            if svg_final_dir.is_dir():
-                for f in sorted(svg_final_dir.glob("*.svg")):
-                    if f.name not in seen:
-                        seen.add(f.name)
-                        slides.append(
-                            {
-                                "name": f.name,
-                                "type": "svg",
-                                "url": (
-                                    f"/api/ppt/project-svg?project={quote(project_name, safe='')}"
-                                    f"&file={quote(f.name, safe='')}&dir=final"
-                                ),
-                            }
-                        )
-
-            # svg_output files not already in svg_final
-            if svg_output_dir.is_dir():
-                for f in sorted(svg_output_dir.glob("*.svg")):
-                    if f.name not in seen:
-                        seen.add(f.name)
-                        slides.append(
-                            {
-                                "name": f.name,
-                                "type": "svg",
-                                "url": (
-                                    f"/api/ppt/project-svg?project={quote(project_name, safe='')}"
-                                    f"&file={quote(f.name, safe='')}&dir=output"
-                                ),
-                            }
-                        )
-
-            return _http_json_response({"slides": slides})
-        except Exception:
-            logger.exception("ppt project slides error")
-            return _http_error(500, "internal error")
-
-    def _handle_ppt_project_svg(self, request: WsRequest) -> Response:
-        if not self._check_api_token(request):
-            return _http_error(401, "Unauthorized")
-        try:
-            query = _parse_query(request.path)
-            project_name = _query_first(query, "project") or ""
-            file_name = _query_first(query, "file") or ""
-            svg_dir = _query_first(query, "dir") or ""
-            if (
-                not project_name
-                or "/" in project_name
-                or "\\" in project_name
-                or ".." in project_name
-            ):
-                return _http_error(400, "invalid project name")
-            if not file_name or "/" in file_name or "\\" in file_name or ".." in file_name:
-                return _http_error(400, "invalid file name")
-
-            workspace = self.workspace
-            project_dir = workspace / "ppt_projects" / project_name
-
-            # Determine which directory to read from
-            if svg_dir == "final":
-                svg_path = project_dir / "svg_final" / file_name
-            elif svg_dir == "output":
-                svg_path = project_dir / "svg_output" / file_name
-            else:
-                # Legacy: try svg_final first, then svg_output
-                svg_path = project_dir / "svg_final" / file_name
-                if not svg_path.exists():
-                    svg_path = project_dir / "svg_output" / file_name
-
-            if not svg_path.exists():
-                return _http_error(404, "svg not found")
-
-            content = svg_path.read_bytes()
-
-            # For svg_output files, rewrite external references to use the
-            # project-file API so the browser can resolve images/icons.
-            # Must happen BEFORE _sanitize_svg_xml, because _rewrite_svg_refs
-            # introduces '&' in URL query params that need XML escaping.
-            if svg_dir == "output" or (not svg_dir and svg_path.parent.name == "svg_output"):
-                content = self._rewrite_svg_refs(content, project_name)
-
-            # Sanitize XML after all transformations: AI-generated SVGs
-            # frequently contain bare '&' or HTML named entities, and
-            # _rewrite_svg_refs adds '&' in URL query params — all of which
-            # must be well-formed XML before serving to the browser.
-            content = self._sanitize_svg_xml(content)
-
-            return _http_response(
-                content,
-                content_type="image/svg+xml",
-                extra_headers=[("Cache-Control", "public, max-age=3600")],
-            )
-        except Exception:
-            logger.exception("ppt project svg error")
-            return _http_error(500, "internal error")
 
     @staticmethod
-    def _sanitize_svg_xml(content: bytes) -> bytes:
-        """Defensively fix common XML entity errors in AI-generated SVGs.
-
-        SVG served to the browser must be well-formed XML. AI frequently emits:
-        - Bare ``&`` in text (e.g. "R&D", "A&B") which the browser parses as an
-          entity reference and fails with ``EntityRef``.
-        - HTML named entities (``&nbsp;``, ``&mdash;``, ``&copy;``…) which are
-          not predefined in XML.
-
-        We preserve existing XML builtin entities (``&amp;``, ``&lt;``, ``&gt;``,
-        ``&quot;``, ``&apos;``) and numeric character references, convert known
-        HTML named entities to raw Unicode, and escape any remaining bare ``&``.
-        """
-        import html
-        import re
-
-        text = content.decode("utf-8", errors="replace")
-
-        # XML builtin entities and numeric refs must be preserved verbatim.
-        xml_builtin = {"amp", "lt", "gt", "quot", "apos"}
-        entity_re = re.compile(r"&([A-Za-z_][A-Za-z0-9_]*|#[0-9]+|#x[0-9A-Fa-f]+);")
-
-        def _fix_entity(m: re.Match) -> str:
-            ref = m.group(1)
-            # Preserve XML builtin entities and numeric refs.
-            if ref in xml_builtin:
-                return m.group(0)
-            if re.fullmatch(r"#[0-9]+|#x[0-9A-Fa-f]+", ref):
-                return m.group(0)
-            # Convert known HTML named entities (e.g. nbsp, mdash, copy) to
-            # raw Unicode. Unknown/malformed entities are escaped as bare
-            # ampersands so the document remains well-formed.
-            expanded = html.unescape(m.group(0))
-            if expanded != m.group(0):
-                return expanded
-            return "&amp;" + ref + ";"
-
-        text = entity_re.sub(_fix_entity, text)
-
-        # Escape any remaining bare ampersands (e.g. "R&D", "A & B", "&&",
-        # malformed "&#160" without semicolon, or a trailing "&"). The
-        # negative lookahead avoids double-escaping valid builtin/numeric
-        # entities that were preserved above.
-        text = re.sub(
-            r"&(?!amp;|lt;|gt;|quot;|apos;|#[0-9]+;|#x[0-9A-Fa-f]+;)",
-            "&amp;",
-            text,
-        )
-
-        # Escape bare '<' that is not the start of a tag/declaration/comment.
-        # In XML text content, '<' must be '&lt;'. A '<' followed by a
-        # letter, '/', '!', or '?' is a tag/comment/PI start; anything else
-        # (digit, space, '<', '&', end-of-string…) is a bare '<' in text.
-        text = re.sub(r"<(?![A-Za-z/!?])", "&lt;", text)
-
-        # Escape ']]>' sequences (illegal in XML text outside CDATA).
-        text = re.sub("]]>", "]]&gt;", text)
-        return text.encode("utf-8")
 
     @staticmethod
-    def _rewrite_svg_refs(content: bytes, project_name: str) -> bytes:
-        """Rewrite external file references in SVG content to use the project-file API.
 
-        Handles patterns like:
-        - ``href="../images/photo.jpg"`` →
-          ``href="/api/ppt/project-file?project=X&path=images/photo.jpg"``
-        - ``xlink:href="../images/photo.jpg"`` → same
-        """
-        import re
-        from urllib.parse import quote
-
-        text = content.decode("utf-8", errors="replace")
-        encoded_project = quote(project_name, safe="")
-
-        def _replace_path(m: re.Match) -> str:
-            prefix = m.group(1)  # 'href="' or 'xlink:href="'
-            raw_path = m.group(2)
-            # Strip leading ../ or ./
-            clean = raw_path.lstrip("./")
-            # Only rewrite paths that look like file references (not data: or http)
-            if clean.startswith("data:") or clean.startswith("http"):
-                return m.group(0)
-            # Use &amp; for XML attribute safety — the '&' in URL query
-            # params must be escaped in XML attribute values.
-            encoded_path = quote(clean, safe="")
-            api_url = f"/api/ppt/project-file?project={encoded_project}&amp;path={encoded_path}"
-            return f'{prefix}{api_url}"'
-
-        # Match href="..." and xlink:href="..." with relative paths
-        text = re.sub(
-            r'(xlink:href="|href=")((?:\.\./|\./)[^"]+)"',
-            _replace_path,
-            text,
-        )
-        return text.encode("utf-8")
-
-    _PROJECT_FILE_EXTENSIONS: ClassVar[dict[str, str]] = {
-        ".png": "image/png",
-        ".jpg": "image/jpeg",
-        ".jpeg": "image/jpeg",
-        ".gif": "image/gif",
-        ".webp": "image/webp",
-        ".svg": "image/svg+xml",
-        ".css": "text/css",
-        ".js": "application/javascript",
-        ".json": "application/json",
-        ".woff": "font/woff",
-        ".woff2": "font/woff2",
-        ".ttf": "font/ttf",
-        ".otf": "font/otf",
-    }
-
-    def _handle_ppt_project_file(self, request: WsRequest) -> Response:
-        """Serve arbitrary files from a PPT project directory (images, fonts, etc.).
-
-        This allows SVGs in ``svg_output/`` to resolve external references like
-        ``../images/photo.jpg`` when rendered by the browser via ``<object>``.
-        """
-        if not self._check_api_token(request):
-            return _http_error(401, "Unauthorized")
-        try:
-            query = _parse_query(request.path)
-            project_name = _query_first(query, "project") or ""
-            file_path = _query_first(query, "path") or ""
-            if (
-                not project_name
-                or "/" in project_name
-                or "\\" in project_name
-                or ".." in project_name
-            ):
-                return _http_error(400, "invalid project name")
-            if not file_path or ".." in file_path:
-                return _http_error(400, "invalid file path")
-
-            workspace = self.workspace
-            project_dir = workspace / "ppt_projects" / project_name
-
-            # Resolve and verify the path stays within the project directory
-            resolved = (project_dir / file_path).resolve()
-            if not str(resolved).startswith(str(project_dir.resolve())):
-                return _http_error(403, "path outside project")
-
-            if not resolved.is_file():
-                return _http_error(404, "file not found")
-
-            ext = resolved.suffix.lower()
-            content_type = self._PROJECT_FILE_EXTENSIONS.get(ext, "application/octet-stream")
-            content = resolved.read_bytes()
-            return _http_response(
-                content,
-                content_type=content_type,
-                extra_headers=[("Cache-Control", "public, max-age=3600")],
-            )
-        except Exception:
-            logger.exception("ppt project file error")
-            return _http_error(500, "internal error")
 
     @staticmethod
     def _is_websocket_channel_session_key(key: str) -> bool:
@@ -4079,6 +2778,8 @@ class WebSocketChannel(BaseChannel):
                     "size_human": f.size_human,
                     "mime": f.mime,
                     "modified_at": f.modified_at,
+                    "is_dir": f.is_dir,
+                    "is_symlink": f.is_symlink,
                     "missing": False,
                 }
                 for f in result.files
@@ -4116,7 +2817,6 @@ class WebSocketChannel(BaseChannel):
                 str(task_state.get("id")) if task_state is not None else requested_task_id or None
             )
             task_files: list[dict[str, Any]] = []
-            task_paths: set[str] = set()
             if task_state is not None:
                 recorded_paths = {
                     ref.relative_path
@@ -4128,14 +2828,9 @@ class WebSocketChannel(BaseChannel):
                         continue
                     if any(part in _ARTIFACT_TASK_SKIP_DIRS for part in Path(path).parts[:-1]):
                         continue
-                    task_paths.add(path)
                     task_files.append(item)
             payload = {
-                "files": [
-                    item
-                    for path, item in scanned.items()
-                    if path not in session_paths and path not in task_paths
-                ],
+                "files": list(scanned.values()),
                 "session_files": session_files,
                 "task_files": task_files,
                 "task_id": active_task_id,
@@ -4262,24 +2957,6 @@ class WebSocketChannel(BaseChannel):
 
         return _http_json_response({"path": relative_path, "name": new_name})
 
-    def _room_root_for_artifacts(self, room_id: str) -> Path | None:
-        """Resolve a room's artifacts root: the room session's workspace
-        override when bound, else the Mona workspace root. ``None`` when the
-        room session does not exist."""
-        if self._session_manager is None:
-            return None
-        decoded = _decode_api_key(f"websocket:{room_id}")
-        if decoded is None:
-            return None
-        data = self._session_manager.read_session_file(decoded)
-        if data is None:
-            return None
-        metadata = data.get("metadata") or {}
-        workspace = metadata.get("workspace")
-        if isinstance(workspace, str) and workspace.strip():
-            return Path(workspace).expanduser()
-        return self.workspace
-
     def _handle_stock_reports(self, request: WsRequest) -> Response:
         """List stock reports/digests under ``<workspace>/stock_projects``.
 
@@ -4396,6 +3073,8 @@ class WebSocketChannel(BaseChannel):
                     "size_human": f.size_human,
                     "mime": f.mime,
                     "modified_at": f.modified_at,
+                    "is_dir": f.is_dir,
+                    "is_symlink": f.is_symlink,
                 }
                 for f in result.files
             ],
@@ -4434,50 +3113,6 @@ class WebSocketChannel(BaseChannel):
         # archive / title override / last-read marker alongside the session.
         remove_webui_sidebar_session(decoded_key)
         return _http_json_response({"deleted": bool(deleted)})
-
-    def _serve_static(self, request_path: str) -> Response | None:
-        """Resolve *request_path* against the built SPA directory; SPA fallback to index.html."""
-        assert self._static_dist_path is not None
-        rel = request_path.lstrip("/")
-        if not rel:
-            rel = "index.html"
-        # Reject path-traversal attempts and absolute targets.
-        if ".." in rel.split("/") or rel.startswith("/"):
-            return _http_error(403, "Forbidden")
-        candidate = (self._static_dist_path / rel).resolve()
-        try:
-            candidate.relative_to(self._static_dist_path)
-        except ValueError:
-            return _http_error(403, "Forbidden")
-        if not candidate.is_file():
-            # SPA history-mode fallback: unknown routes serve index.html so the
-            # client-side router can render them.
-            index = self._static_dist_path / "index.html"
-            if index.is_file():
-                candidate = index
-            else:
-                return None
-        try:
-            body = candidate.read_bytes()
-        except OSError as e:
-            self.logger.warning("static: failed to read {}: {}", candidate, e)
-            return _http_error(500, "Internal Server Error")
-        ctype, _ = mimetypes.guess_type(candidate.name)
-        if ctype is None:
-            ctype = "application/octet-stream"
-        if ctype.startswith("text/") or ctype in {"application/javascript", "application/json"}:
-            ctype = f"{ctype}; charset=utf-8"
-        # Hash-named build assets are cache-friendly; index.html must stay fresh.
-        if candidate.name == "index.html":
-            cache = "no-cache"
-        else:
-            cache = "public, max-age=31536000, immutable"
-        return _http_response(
-            body,
-            status=200,
-            content_type=ctype,
-            extra_headers=[("Cache-Control", cache)],
-        )
 
     def _authorize_websocket_handshake(self, connection: Any, query: dict[str, list[str]]) -> Any:
         supplied = _query_first(query, "token")
@@ -4550,7 +3185,6 @@ class WebSocketChannel(BaseChannel):
 
         self._server_task = asyncio.create_task(runner())
         self._artifact_watch_task = asyncio.create_task(self._watch_artifacts())
-        self._ppt_watch_task = asyncio.create_task(self._watch_ppt_projects())
         await self._server_task
 
     async def _watch_artifacts(self) -> None:
@@ -4592,42 +3226,6 @@ class WebSocketChannel(BaseChannel):
                 last = signature
                 await self.send_artifacts_changed()
 
-    async def _watch_ppt_projects(self) -> None:
-        """Poll ppt_projects dir; broadcast phase changes per project.
-
-        Covers generating → outline (page_visual_plan.json) and other
-        transitions that lack an explicit server-side push source.
-        """
-        from mona.utils.artifact_listing import artifact_signature
-
-        last: str | None = None
-        while True:
-            await asyncio.sleep(_ARTIFACT_WATCH_INTERVAL_S)
-            if not self._conn_chats:
-                continue
-            try:
-                projects_dir = self.workspace / "ppt_projects"
-                if not projects_dir.is_dir():
-                    continue
-                signature = await asyncio.to_thread(
-                    artifact_signature,
-                    projects_dir,
-                )
-                if last is None:
-                    last = signature
-                    continue
-                if signature != last:
-                    last = signature
-                    for d in projects_dir.iterdir():
-                        if not d.is_dir():
-                            continue
-                        if d.name.startswith("_"):
-                            continue
-                        phase = str(_get_ppt_project_status(d).get("phase") or "")
-                        if phase in _PPT_PHASES:
-                            await self.broadcast_ppt_phase_changed(d.name, phase)
-            except Exception:
-                logger.exception("ppt project watch failed")
 
     async def _connection_loop(self, connection: Any) -> None:
         request = connection.request
@@ -4760,310 +3358,8 @@ class WebSocketChannel(BaseChannel):
             paths.append(saved)
         return paths, None
 
-    async def _handle_ppt_import_native_envelope(
-        self,
-        connection: Any,
-        envelope: dict[str, Any],
-    ) -> None:
-        """Handle ppt_import_native envelope: import PPTX as a native template."""
-        file_info = envelope.get("file")
-        if not isinstance(file_info, dict):
-            await self._send_event(
-                connection,
-                "ppt_import_native_result",
-                ok=False,
-                error="no file",
-            )
-            return
-        name = file_info.get("name", "")
-        data_url = file_info.get("data_url", "")
-        mime = _extract_data_url_mime(data_url)
-        if mime != "application/vnd.openxmlformats-officedocument.presentationml.presentation":
-            await self._send_event(
-                connection,
-                "ppt_import_native_result",
-                ok=False,
-                error="not a pptx file",
-            )
-            return
 
-        try:
-            raw = _decode_data_url_payload(data_url, _PPT_DOC_MAX_BYTES)
-        except FileSizeExceeded:
-            await self._send_event(
-                connection,
-                "ppt_import_native_result",
-                ok=False,
-                error="file too large",
-            )
-            return
-        except Exception:
-            await self._send_event(
-                connection,
-                "ppt_import_native_result",
-                ok=False,
-                error="decode failed",
-            )
-            return
-        if raw is None:
-            await self._send_event(
-                connection,
-                "ppt_import_native_result",
-                ok=False,
-                error="decode failed",
-            )
-            return
 
-        try:
-            import tempfile
-            from urllib.parse import quote
-
-            from mona.agent.skills import BUILTIN_SKILLS_DIR
-
-            with tempfile.TemporaryDirectory(prefix="ppt_native_") as tmp_dir:
-                tmp_path = Path(tmp_dir) / safe_filename(name or "upload.pptx")
-                tmp_path.write_bytes(raw)
-
-                skill_dir = BUILTIN_SKILLS_DIR / "mona-ppt"
-
-                # Run native_template_inspect.py
-                inspect_script = skill_dir / "scripts" / "native_template_inspect.py"
-                output_dir = Path(tmp_dir) / "native_output"
-                result = subprocess.run(
-                    [
-                        "python",
-                        str(inspect_script),
-                        str(tmp_path),
-                        "-o",
-                        str(output_dir),
-                        "--name",
-                        Path(name).stem if name else "template",
-                    ],
-                    capture_output=True,
-                    text=True,
-                    timeout=120,
-                )
-                if result.returncode != 0:
-                    await self._send_event(
-                        connection,
-                        "ppt_import_native_result",
-                        ok=False,
-                        error=f"inspect failed: {result.stderr[:300]}",
-                    )
-                    return
-
-                # Read manifest for metadata
-                manifest_path = output_dir / "template_manifest.json"
-                manifest = {}
-                if manifest_path.exists():
-                    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
-
-                page_count = manifest.get("slide_count", 0)
-                canvas_format = manifest.get("canvas_format", "ppt169")
-
-                # Extract primary color from roles
-                primary_color = "#1A1A1A"
-
-                # Generate template_id
-                template_id = safe_filename(Path(name).stem if name else "template")
-                if not template_id or template_id == ".":
-                    template_id = f"native_{int(time.time())}"
-
-                display_name = Path(name).stem if name else template_id
-
-                # Copy to templates_full/native/<template_id>
-                target_dir = skill_dir / "scripts" / "templates_full" / "native" / template_id
-                if target_dir.exists():
-                    shutil.rmtree(target_dir)
-                shutil.copytree(output_dir, target_dir)
-
-                # Sync to templates/native/<template_id>
-                skill_target = skill_dir / "templates" / "native" / template_id
-                if skill_target.exists():
-                    shutil.rmtree(skill_target)
-                shutil.copytree(output_dir, skill_target)
-
-                # Update native_index.json (both copies)
-                for index_path in [
-                    skill_dir / "scripts" / "templates_full" / "native" / "native_index.json",
-                    skill_dir / "templates" / "native" / "native_index.json",
-                ]:
-                    index_data: dict[str, Any] = {}
-                    if index_path.exists():
-                        index_data = json.loads(index_path.read_text(encoding="utf-8"))
-                    index_data[template_id] = {
-                        "name": display_name,
-                        "summary": f"从用户上传 PPTX 导入的自定义模板，共 {page_count} 页",
-                        "canvas_format": canvas_format,
-                        "page_count": page_count,
-                        "primary_color": primary_color,
-                        "userCreated": True,
-                    }
-                    index_path.parent.mkdir(parents=True, exist_ok=True)
-                    index_path.write_text(
-                        json.dumps(index_data, ensure_ascii=False, indent=2) + "\n",
-                        encoding="utf-8",
-                    )
-
-                # Generate cover URL
-                cover_url = ""
-                cover_file = target_dir / "01_cover.png"
-                if cover_file.exists():
-                    cover_url = (
-                        f"/api/ppt/template-svg?kind=native"
-                        f"&key={quote(template_id, safe='')}&file=01_cover.png"
-                    )
-
-                # Send result
-                await self._send_event(
-                    connection,
-                    "ppt_import_native_result",
-                    ok=True,
-                    templateId=template_id,
-                    name=display_name,
-                    pageCount=page_count,
-                    coverUrl=cover_url,
-                    primaryColor=primary_color,
-                )
-
-        except Exception as exc:
-            logger.exception("ppt_import_native error")
-            await self._send_event(
-                connection,
-                "ppt_import_native_result",
-                ok=False,
-                error=str(exc)[:200],
-            )
-
-    async def _handle_ppt_delete_native(
-        self,
-        connection: Any,
-        envelope: dict[str, Any],
-    ) -> None:
-        """Handle ppt_delete_native envelope."""
-        data = envelope.get("data", {})
-        if not isinstance(data, dict):
-            data = {}
-        template_id = data.get("templateId") or envelope.get("templateId", "")
-        if (
-            not isinstance(template_id, str)
-            or not template_id
-            or "/" in template_id
-            or "\\" in template_id
-            or ".." in template_id
-        ):
-            await self._send_event(
-                connection,
-                "ppt_delete_native_result",
-                ok=False,
-                error="invalid templateId",
-            )
-            return
-
-        from mona.agent.skills import BUILTIN_SKILLS_DIR
-
-        skill_dir = BUILTIN_SKILLS_DIR / "mona-ppt"
-        primary_index = skill_dir / "scripts" / "templates_full" / "native" / "native_index.json"
-        fallback_index = skill_dir / "templates" / "native" / "native_index.json"
-
-        index_data: dict[str, Any] = {}
-        for index_path in (primary_index, fallback_index):
-            if index_path.exists():
-                index_data = json.loads(index_path.read_text(encoding="utf-8"))
-                if template_id in index_data:
-                    break
-
-        info = index_data.get(template_id)
-        if not isinstance(info, dict):
-            await self._send_event(
-                connection,
-                "ppt_delete_native_result",
-                ok=False,
-                error="template not found",
-            )
-            return
-        if info.get("userCreated") is not True:
-            await self._send_event(
-                connection,
-                "ppt_delete_native_result",
-                ok=False,
-                error="cannot delete built-in template",
-            )
-            return
-
-        for native_base in [
-            skill_dir / "scripts" / "templates_full" / "native",
-            skill_dir / "templates" / "native",
-        ]:
-            native_dir = native_base / template_id
-            if native_dir.exists():
-                shutil.rmtree(native_dir)
-
-            index_path = native_base / "native_index.json"
-            if index_path.exists():
-                index_data = json.loads(index_path.read_text(encoding="utf-8"))
-                index_data.pop(template_id, None)
-                index_path.write_text(
-                    json.dumps(index_data, ensure_ascii=False, indent=2) + "\n",
-                    encoding="utf-8",
-                )
-
-        await self._send_event(
-            connection,
-            "ppt_delete_native_result",
-            ok=True,
-            templateId=template_id,
-        )
-
-    async def _handle_ppt_upload_envelope(
-        self,
-        connection: Any,
-        envelope: dict[str, Any],
-    ) -> None:
-        files = envelope.get("files")
-        if not isinstance(files, list) or not files:
-            await self._send_event(connection, "ppt_upload_result", ok=False, error="no files")
-            return
-        try:
-            workspace = self.workspace
-            sources_dir = workspace / "ppt_projects" / "_sources"
-            sources_dir.mkdir(parents=True, exist_ok=True)
-
-            added: list[dict[str, str]] = []
-            for item in files:
-                if not isinstance(item, dict):
-                    continue
-                name = item.get("name")
-                data_url = item.get("data_url")
-                if not isinstance(name, str) or not isinstance(data_url, str):
-                    continue
-                mime = _extract_data_url_mime(data_url)
-                if mime is None or mime not in _PPT_DOC_MIME_ALLOWED:
-                    continue
-                try:
-                    raw = _decode_data_url_payload(data_url, _PPT_DOC_MAX_BYTES)
-                except FileSizeExceeded:
-                    continue
-                except Exception:
-                    continue
-                if raw is None:
-                    continue
-                safe_name = safe_filename(name)
-                dest = sources_dir / safe_name
-                dest.write_bytes(raw)
-                rel = dest.relative_to(workspace)
-                added.append({"name": safe_name, "path": str(rel).replace("\\", "/")})
-
-            await self._send_event(
-                connection,
-                "ppt_upload_result",
-                ok=len(added) > 0,
-                files=added,
-                error=None if added else "no valid files",
-            )
-        except Exception as e:
-            logger.exception("ppt_upload error")
-            await self._send_event(connection, "ppt_upload_result", ok=False, error=str(e))
 
     async def _handle_doc_upload_envelope(
         self,
@@ -5592,61 +3888,6 @@ class WebSocketChannel(BaseChannel):
                 detail=str(exc),
             )
 
-    async def _handle_agent_skill_stage_envelope(
-        self, connection: Any, envelope: dict[str, Any]
-    ) -> None:
-        request_id = self._room_request_id(envelope)
-        try:
-            from mona.agent.agent_management import SkillManager
-            from mona.agent.partners import normalize_agent_id
-
-            agent_id = normalize_agent_id(str(envelope.get("agent_id", "")))
-            registry = self._room_agent_registry()
-            if registry.get(agent_id) is None:
-                raise ValueError("agent is not installed")
-            name = envelope.get("name")
-            files = envelope.get("files")
-            content = envelope.get("content")
-            if not isinstance(name, str):
-                raise ValueError("skill name is required")
-            if files is None:
-                if not isinstance(content, str):
-                    raise ValueError("skill content is required")
-                files = {"SKILL.md": content}
-            if not isinstance(files, dict):
-                raise ValueError("skill files must be an object")
-            if not all(
-                isinstance(path, str) and isinstance(text, str) for path, text in files.items()
-            ):
-                raise ValueError("skill files must contain text values")
-            proposal = SkillManager(agent_id, registry=registry).stage(
-                name=name,
-                files=files,
-                source="user:webui",
-            )
-            await self._send_event(
-                connection,
-                "agent_skill_stage_result",
-                ok=True,
-                agent_id=agent_id,
-                proposal=proposal,
-                request_id=request_id,
-            )
-            await self._broadcast_agent_event(
-                "agent_change_proposal_created",
-                agent_id=agent_id,
-                proposal_id=proposal["id"],
-                kind="skill_install",
-            )
-        except Exception as exc:
-            await self._send_event(
-                connection,
-                "agent_skill_stage_result",
-                ok=False,
-                request_id=request_id,
-                detail=str(exc),
-            )
-
     async def _handle_agent_skill_action_envelope(
         self, connection: Any, envelope: dict[str, Any]
     ) -> None:
@@ -5835,76 +4076,6 @@ class WebSocketChannel(BaseChannel):
             await self._send_event(
                 connection,
                 "agent_skill_update_result",
-                ok=False,
-                request_id=request_id,
-                detail=str(exc),
-            )
-
-    async def _handle_resolve_agent_change_envelope(
-        self, connection: Any, envelope: dict[str, Any]
-    ) -> None:
-        request_id = self._room_request_id(envelope)
-        try:
-            from mona.agent.agent_management import (
-                get_staged_skill_for_approval,
-                resolve_change_proposal,
-            )
-            from mona.agent.partners import normalize_agent_id
-
-            agent_id = normalize_agent_id(str(envelope.get("agent_id", "")))
-            proposal_id = envelope.get("proposal_id")
-            token = envelope.get("token")
-            approve = envelope.get("approve")
-            if (
-                not isinstance(proposal_id, str)
-                or not isinstance(token, str)
-                or not isinstance(approve, bool)
-            ):
-                raise ValueError("proposal_id, token and approve are required")
-            if approve:
-                staged = get_staged_skill_for_approval(
-                    agent_id,
-                    proposal_id,
-                    token=token,
-                )
-                if staged is not None:
-                    from mona.config.paths import get_managed_runtimes_dir
-                    from mona.runtime.agent_env import AgentEnvironmentManager
-
-                    skill_dir, runtime_spec = staged
-                    await AgentEnvironmentManager(get_managed_runtimes_dir()).prepare_all(
-                        skill_dir, runtime_spec
-                    )
-            proposal = resolve_change_proposal(
-                agent_id,
-                proposal_id,
-                token=token,
-                approve=approve,
-            )
-            await self._send_event(
-                connection,
-                "resolve_agent_change_result",
-                ok=True,
-                agent_id=agent_id,
-                proposal=proposal,
-                request_id=request_id,
-            )
-            event = (
-                "agent_instructions_updated"
-                if proposal.get("kind") == "instruction_patch"
-                else "agent_skills_updated"
-            )
-            await self._broadcast_agent_event(event, agent_id=agent_id)
-            await self._broadcast_agent_event(
-                "agent_change_proposal_resolved",
-                agent_id=agent_id,
-                proposal_id=proposal_id,
-                status=proposal.get("status"),
-            )
-        except Exception as exc:
-            await self._send_event(
-                connection,
-                "resolve_agent_change_result",
                 ok=False,
                 request_id=request_id,
                 detail=str(exc),
@@ -7795,7 +5966,7 @@ class WebSocketChannel(BaseChannel):
                 workspace = workspace.strip() or None
             # ``agent_kind`` marks the session for a dedicated document agent loop.
             # Supported kinds are resolved dynamically from DOCUMENT_PROFILES
-            # (ppt / video / 3d / ...), each routing to a DocumentAgentLoop
+            # (currently video), each routing to a DocumentAgentLoop
             # with its own tool whitelist + soul prompt.
             from mona.agent.document_loop import DOCUMENT_PROFILES
 
@@ -7840,21 +6011,12 @@ class WebSocketChannel(BaseChannel):
             await self._send_event(connection, "attached", chat_id=cid)
             await self._hydrate_after_subscribe(cid)
             return
-        if t in {"ppt_upload", "doc_upload", "ppt_import_native", "ppt_delete_native"}:
+        if t == "doc_upload":
             if not await _has_subscription_access():
                 await self._send_event(connection, "error", detail="membership_required")
                 return
-        if t == "ppt_upload":
-            await self._handle_ppt_upload_envelope(connection, envelope)
-            return
         if t == "doc_upload":
             await self._handle_doc_upload_envelope(connection, envelope)
-            return
-        if t == "ppt_import_native":
-            await self._handle_ppt_import_native_envelope(connection, envelope)
-            return
-        if t == "ppt_delete_native":
-            await self._handle_ppt_delete_native(connection, envelope)
             return
         if t == "create_room":
             await self._handle_create_room_envelope(connection, envelope)
@@ -7874,9 +6036,6 @@ class WebSocketChannel(BaseChannel):
         if t == "agent_instruction_restore":
             await self._handle_agent_instruction_restore_envelope(connection, envelope)
             return
-        if t == "agent_skill_stage":
-            await self._handle_agent_skill_stage_envelope(connection, envelope)
-            return
         if t == "agent_skill_action":
             await self._handle_agent_skill_action_envelope(connection, envelope)
             return
@@ -7891,9 +6050,6 @@ class WebSocketChannel(BaseChannel):
             return
         if t == "agent_skill_update":
             await self._handle_agent_skill_update_envelope(connection, envelope)
-            return
-        if t == "resolve_agent_change":
-            await self._handle_resolve_agent_change_envelope(connection, envelope)
             return
         if t == "update_room":
             await self._handle_update_room_envelope(connection, envelope)
@@ -8497,6 +6653,8 @@ class WebSocketChannel(BaseChannel):
             payload["token_usage"] = token_usage
         if msg.metadata.get("_tool_events"):
             payload["tool_events"] = msg.metadata["_tool_events"]
+        if "_context_compacting" in msg.metadata:
+            payload["context_compacting"] = bool(msg.metadata["_context_compacting"])
         task_plan = msg.metadata.get("task_plan")
         if isinstance(task_plan, dict):
             payload["task_plan"] = task_plan
@@ -8766,21 +6924,6 @@ class WebSocketChannel(BaseChannel):
         for connection in conns:
             await self._safe_send_to(connection, raw, label=" artifact_task_started ")
 
-    async def broadcast_ppt_phase_changed(self, project_name: str, phase: str) -> None:
-        """Broadcast a PPT project phase change to every open websocket connection."""
-        conns = list(self._conn_chats)
-        if not conns:
-            return
-        raw = json.dumps(
-            {
-                "type": "ppt_phase_changed",
-                "project_name": project_name,
-                "phase": phase,
-            },
-            ensure_ascii=False,
-        )
-        for connection in conns:
-            await self._safe_send_to(connection, raw, label=" ppt_phase_changed ")
 
     async def broadcast_video_project_changed(self, project_name: str, hint: str = "") -> None:
         """Broadcast a video project state change to every open websocket connection.

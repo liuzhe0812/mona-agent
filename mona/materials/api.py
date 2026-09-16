@@ -129,17 +129,6 @@ def _archived_path(root: Path, domain: str, rel: str) -> Path | None:
     return None
 
 
-def _ensure_within_materials(path: Path, materials_root: Path) -> Path:
-    """canonical path 校验，确保路径在 materials_root 内。"""
-    resolved = path.resolve()
-    root_resolved = materials_root.resolve()
-    try:
-        resolved.relative_to(root_resolved)
-    except ValueError as exc:
-        raise web.HTTPBadRequest(reason="Path escapes materials directory") from exc
-    return resolved
-
-
 def _clean_rel(rel: str) -> str:
     """清洗相对路径输入：拒绝绝对路径、`..` 分段和空路径。
 

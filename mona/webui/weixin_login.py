@@ -102,10 +102,6 @@ class WeixinLoginSession:
         return self._state
 
     @property
-    def qr_svg(self) -> str:
-        return self._qr_svg
-
-    @property
     def error(self) -> str:
         return self._error
 

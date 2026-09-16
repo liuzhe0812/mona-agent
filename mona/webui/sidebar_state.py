@@ -247,8 +247,56 @@ def remove_webui_sidebar_session(session_key: str) -> None:
         logger.warning("prune webui sidebar state for {} failed: {}", cleaned, e)
 
 
-def write_webui_sidebar_state(raw: dict[str, Any]) -> dict[str, Any]:
+def merge_last_read_markers(
+    incoming: Mapping[str, str],
+    existing: Mapping[str, str],
+) -> dict[str, str]:
+    """Union two last-read maps, keeping the newer marker per key.
+
+    A full-state PUT from a client whose baseline is empty or stale (failed
+    sidebar-state load, dev startup race, second device) must never erase
+    markers another run stored: read markers only ever move forward, so the
+    union is always safe. Deleted sessions are cleaned by
+    ``remove_webui_sidebar_session``, not by client writes.
+    """
+    merged: dict[str, str] = dict(existing)
+    for key, timestamp in incoming.items():
+        current = merged.get(key)
+        if current is None or timestamp > current:
+            merged[key] = timestamp
+    if len(merged) > _MAX_MAP_ITEMS:
+        newest = sorted(merged.items(), key=lambda kv: kv[1], reverse=True)
+        merged = dict(newest[:_MAX_MAP_ITEMS])
+    return merged
+
+
+def _read_stored_state() -> dict[str, Any]:
+    """Best-effort raw read of the persisted state (no normalization/seed)."""
+    path = webui_sidebar_state_path()
+    if not path.is_file():
+        return {}
+    try:
+        with open(path, encoding="utf-8") as f:
+            raw = json.load(f)
+    except (OSError, json.JSONDecodeError):
+        return {}
+    return raw if isinstance(raw, dict) else {}
+
+
+def write_webui_sidebar_state(
+    raw: dict[str, Any],
+    *,
+    merge_markers: bool = False,
+) -> dict[str, Any]:
     state = normalize_webui_sidebar_state(raw)
+    if merge_markers:
+        # Client full-state PUTs are merged forward so an empty or stale
+        # client baseline cannot wipe stored read markers (sidebar state must
+        # survive restarts, IM plan 12.4).
+        state["last_read_at_by_key"] = merge_last_read_markers(
+            state["last_read_at_by_key"],
+            _clean_last_read_at_by_key(_read_stored_state().get("last_read_at_by_key")),
+        )
     state["updated_at"] = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
     encoded = json.dumps(
         state,

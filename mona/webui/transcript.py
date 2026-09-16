@@ -16,7 +16,12 @@ from mona.config.paths import get_webui_dir
 from mona.session.manager import SessionManager
 
 WEBUI_TRANSCRIPT_SCHEMA_VERSION = 3
-_MAX_TRANSCRIPT_FILE_BYTES = 8 * 1024 * 1024
+_MAX_TRANSCRIPT_LINE_BYTES = 8 * 1024 * 1024
+_MAX_PERSISTED_TOOL_VALUE_BYTES = 64 * 1024
+_MAX_PERSISTED_TOOL_EVENTS_BYTES = 256 * 1024
+_MAX_PERSISTED_TOOL_EVENTS = 500
+_OMITTED_INLINE_MEDIA = "[inline media omitted]"
+_OMITTED_OVERSIZED_VALUE = {"omitted": "oversized tool value"}
 
 _IMAGE_EXTS = {".png", ".jpg", ".jpeg", ".gif", ".webp", ".bmp", ".ico", ".tif", ".tiff"}
 _VIDEO_EXTS = {".mp4", ".webm", ".mov", ".m4v", ".avi", ".mkv", ".3gp"}
@@ -31,12 +36,18 @@ def _ui_token_usage(value: Any) -> dict[str, int] | None:
     total = int(value.get("total_tokens") or prompt + completion)
     if max(prompt, completion, cached, total) <= 0:
         return None
-    return {
+    usage = {
         "promptTokens": max(0, prompt),
         "completionTokens": max(0, completion),
         "cachedTokens": max(0, cached),
         "totalTokens": max(0, total),
     }
+    # Only carry the last-call prompt size when the backend reported one;
+    # a zero would be read as a real measurement by the composer pill.
+    context = int(value.get("context_tokens") or 0)
+    if context > 0:
+        usage["contextTokens"] = context
+    return usage
 
 
 def _infer_media_kind(name: str, url: str) -> str:
@@ -59,13 +70,13 @@ def webui_transcript_path(session_key: str) -> Path:
     return get_webui_dir() / f"{stem}.jsonl"
 
 
-def read_transcript_lines(session_key: str) -> list[dict[str, Any]]:
+def read_transcript_lines(
+    session_key: str,
+    *,
+    compact_tool_events: bool = False,
+) -> list[dict[str, Any]]:
     path = webui_transcript_path(session_key)
     if not path.is_file():
-        return []
-    size = path.stat().st_size
-    if size > _MAX_TRANSCRIPT_FILE_BYTES:
-        logger.warning("webui transcript too large, skipping: {}", path)
         return []
     lines_out: list[dict[str, Any]] = []
     try:
@@ -80,16 +91,87 @@ def read_transcript_lines(session_key: str) -> list[dict[str, Any]]:
                     logger.warning("bad jsonl at {} line {}", path, line_no)
                     continue
                 if isinstance(obj, dict):
-                    lines_out.append(obj)
+                    lines_out.append(
+                        compact_transcript_object(obj) if compact_tool_events else obj
+                    )
     except OSError as e:
         logger.warning("read transcript failed {}: {}", path, e)
         return []
     return lines_out
 
 
+def _json_size(value: Any) -> int:
+    return len(json.dumps(value, ensure_ascii=False, separators=(",", ":")).encode("utf-8"))
+
+
+def _remove_inline_media(value: Any) -> Any:
+    """Keep transcript records JSON-shaped without persisting inline binary payloads."""
+    if isinstance(value, str):
+        prefix = value[:128].lower()
+        if prefix.startswith("data:") and ";base64," in prefix:
+            return _OMITTED_INLINE_MEDIA
+        return value
+    if isinstance(value, list):
+        return [_remove_inline_media(item) for item in value]
+    if isinstance(value, dict):
+        return {str(key): _remove_inline_media(item) for key, item in value.items()}
+    return value
+
+
+def _bounded_tool_value(value: Any) -> Any:
+    compact = _remove_inline_media(value)
+    if _json_size(compact) <= _MAX_PERSISTED_TOOL_VALUE_BYTES:
+        return compact
+    return dict(_OMITTED_OVERSIZED_VALUE)
+
+
+def _compact_tool_event(value: Any) -> dict[str, Any] | None:
+    if not isinstance(value, dict):
+        return None
+    compact = {
+        str(key): _bounded_tool_value(item)
+        for key, item in value.items()
+        if key != "embeds"
+    }
+    return compact
+
+
+def _compact_tool_events(value: Any) -> list[dict[str, Any]]:
+    if not isinstance(value, list):
+        return []
+    events = [event for item in value if (event := _compact_tool_event(item)) is not None]
+    events = events[-_MAX_PERSISTED_TOOL_EVENTS:]
+    if _json_size(events) <= _MAX_PERSISTED_TOOL_EVENTS_BYTES:
+        return events
+
+    # Results are useful for small source/file projections, but the durable UI
+    # trail only requires the call identity, arguments and outcome.
+    for event in events:
+        event.pop("result", None)
+        event.pop("files", None)
+    while events and _json_size(events) > _MAX_PERSISTED_TOOL_EVENTS_BYTES:
+        events.pop(0)
+    return events
+
+
+def compact_transcript_object(obj: dict[str, Any]) -> dict[str, Any]:
+    """Return a persistence-only copy; the live WebSocket payload stays intact."""
+    compact = dict(obj)
+    if "tool_events" in compact:
+        tool_events = _compact_tool_events(compact.get("tool_events"))
+        if tool_events:
+            compact["tool_events"] = tool_events
+        else:
+            compact.pop("tool_events", None)
+    return compact
+
+
 def append_transcript_object(session_key: str, obj: dict[str, Any]) -> None:
-    raw = json.dumps(obj, ensure_ascii=False, separators=(",", ":"))
-    if len(raw.encode("utf-8")) > _MAX_TRANSCRIPT_FILE_BYTES:
+    persisted = dict(obj)
+    persisted.setdefault("_event_id", uuid.uuid4().hex)
+    persisted.setdefault("_recorded_at", time.time())
+    raw = json.dumps(compact_transcript_object(persisted), ensure_ascii=False, separators=(",", ":"))
+    if len(raw.encode("utf-8")) > _MAX_TRANSCRIPT_LINE_BYTES:
         msg = "webui transcript line too large"
         raise ValueError(msg)
     path = webui_transcript_path(session_key)
@@ -103,10 +185,19 @@ def append_transcript_object(session_key: str, obj: dict[str, Any]) -> None:
 
 def write_transcript_objects(session_key: str, objects: list[dict[str, Any]]) -> None:
     """Atomically create a WebUI transcript from validated display records."""
-    lines = [json.dumps(obj, ensure_ascii=False, separators=(",", ":")) for obj in objects]
+    prepared: list[dict[str, Any]] = []
+    for obj in objects:
+        persisted = dict(obj)
+        persisted.setdefault("_event_id", uuid.uuid4().hex)
+        persisted.setdefault("_recorded_at", time.time())
+        prepared.append(persisted)
+    lines = [
+        json.dumps(compact_transcript_object(obj), ensure_ascii=False, separators=(",", ":"))
+        for obj in prepared
+    ]
     raw = "\n".join(lines) + ("\n" if lines else "")
-    if len(raw.encode("utf-8")) > _MAX_TRANSCRIPT_FILE_BYTES:
-        raise ValueError("webui transcript too large")
+    if any(len(line.encode("utf-8")) > _MAX_TRANSCRIPT_LINE_BYTES for line in lines):
+        raise ValueError("webui transcript line too large")
     path = webui_transcript_path(session_key)
     path.parent.mkdir(parents=True, exist_ok=True)
     tmp_path = path.with_suffix(".jsonl.tmp")
@@ -1028,7 +1119,7 @@ def build_webui_thread_response(
     augment_user_media: Callable[[list[str]], list[dict[str, Any]]] | None = None,
 ) -> dict[str, Any] | None:
     """Return a payload compatible with ``WebuiThreadPersistedPayload``."""
-    lines = read_transcript_lines(session_key)
+    lines = read_transcript_lines(session_key, compact_tool_events=True)
     if not lines:
         return None
     msgs = replay_transcript_to_ui_messages(lines, augment_user_media=augment_user_media)

@@ -19,7 +19,6 @@ from urllib.parse import urlparse
 import httpx
 
 from mona.api.video_runtime import VideoRuntime
-from mona.providers.transcription import GroqTranscriptionProvider, OpenAITranscriptionProvider
 from mona.security.network import validate_url_target
 
 _MAX_AUDIO_BYTES = 25 * 1024 * 1024
@@ -454,17 +453,6 @@ class Url2NoteExtractor:
         if not output.is_file():
             raise Url2NoteError("Unable to convert video audio")
         return output
-
-
-async def _transcribe_with_config(audio: bytes, filename: str) -> str:
-    from mona.config.loader import load_config
-    channels = load_config().channels
-    language = channels.transcription_language or None
-    if channels.transcription_provider == "openai":
-        provider = OpenAITranscriptionProvider(language=language)
-    else:
-        provider = GroqTranscriptionProvider(language=language)
-    return await provider.transcribe_bytes(audio, filename=filename)
 
 
 async def _run_process(command: list[str], workdir: Path, *, timeout: float = 600) -> None:

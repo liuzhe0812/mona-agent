@@ -892,7 +892,7 @@ async def handle_webui_sidebar_state_update(request: web.Request) -> web.Respons
     if not isinstance(body, dict):
         return web.json_response({"error": "state must be an object"}, status=400)
     try:
-        state = write_webui_sidebar_state(body)
+        state = write_webui_sidebar_state(body, merge_markers=True)
     except ValueError as exc:
         return web.json_response({"error": str(exc)}, status=400)
     except OSError:
@@ -1342,57 +1342,6 @@ async def handle_profile_distill(request: web.Request) -> web.Response:
         "confidence": result.confidence,
         "code": result.code,
         "error": result.error,
-    })
-
-
-async def handle_profile_snapshots(request: web.Request) -> web.Response:
-    """GET /api/profile/snapshots — list all historical snapshots."""
-    from mona.distill.scoring import load_snapshots
-    from mona.distill.store import ensure_user_profile_store
-
-    snapshots = load_snapshots(ensure_user_profile_store())
-    return web.json_response({"snapshots": snapshots})
-
-
-async def handle_profile_comparison(request: web.Request) -> web.Response:
-    """GET /api/profile/comparison?date=YYYY-MM-DD — get current vs previous snapshot."""
-    from mona.distill.scoring import compute_growth_comparison, load_snapshots
-    from mona.distill.store import ensure_user_profile_store
-
-    current_date = request.query.get("date")
-    snapshots = load_snapshots(ensure_user_profile_store())
-    if not snapshots:
-        return web.json_response({"comparison": None, "snapshots": []})
-
-    if current_date:
-        current = next((s for s in snapshots if s.get("date") == current_date), None)
-        if current is None and snapshots:
-            current = snapshots[-1]
-    else:
-        current = snapshots[-1]
-
-    previous = None
-    if current:
-        current_date_str = current.get("date", "")
-        prev_list = [s for s in snapshots if s.get("date", "") < current_date_str]
-        previous = prev_list[-1] if prev_list else None
-
-    comparison = compute_growth_comparison(
-        {
-            "radar_scores": current.get("radar_scores", []) if current else [],
-            "keywords": current.get("keywords", []) if current else [],
-            "snapshot_date": current.get("date") if current else None,
-        },
-        {
-            "radar_scores": previous.get("radar_scores", []) if previous else [],
-            "keywords": previous.get("keywords", []) if previous else [],
-            "snapshot_date": previous.get("date") if previous else None,
-        } if previous else None,
-    )
-
-    return web.json_response({
-        "comparison": comparison,
-        "snapshots": [{"date": s.get("date"), "keywords_count": len(s.get("keywords", []))} for s in snapshots],
     })
 
 
@@ -2968,17 +2917,6 @@ async def handle_email_send(request: web.Request) -> web.Response:
         return web.json_response({"error": friendly}, status=500)
 
 
-def _append_sent_done_callback(task: asyncio.Task) -> None:
-    """异步保存副本任务的完成回调，记录成功/失败日志。"""
-    try:
-        task.result()
-        logger.debug("[email-send] 保存已发送副本异步任务完成")
-    except asyncio.CancelledError:
-        logger.warning("[email-send] 保存已发送副本异步任务被取消")
-    except Exception as e:
-        logger.warning(f"[email-send] 保存已发送副本异步任务失败: {e}")
-
-
 async def _mark_todos_replied(app: web.Application, in_reply_to: str, ref: str) -> None:
     """邮件回复成功后，给来源邮件的关联待办加"已回复"备注。
 
@@ -3836,6 +3774,89 @@ async def _set_automation_settings(**updates: bool) -> dict[str, bool]:
     }
 
 
+def _computer_use_permission_enabled(agent_id: str = "mona") -> bool:
+    from mona.agent.user_config import load_agent_user_config
+    from mona.computer_use.runtime import COMPUTER_PERMISSION_TOOL_NAMES
+
+    granted = load_agent_user_config(agent_id).granted_tools
+    return granted is not None and set(COMPUTER_PERMISSION_TOOL_NAMES) <= set(granted)
+
+
+def _browser_automation_permission_enabled() -> bool:
+    from mona.agent.tools.browser import BROWSER_PERMISSION_TOOL_NAMES
+    from mona.agent.user_config import load_agent_user_config
+
+    granted = load_agent_user_config("mona").granted_tools
+    return granted is None or set(BROWSER_PERMISSION_TOOL_NAMES) <= set(granted)
+
+
+async def _migrate_legacy_automation_permissions(app: web.Application) -> None:
+    from mona.agent.tools.browser import (
+        BROWSER_LEGACY_TOOL_NAMES,
+        BROWSER_PERMISSION_TOOL_NAMES,
+    )
+    from mona.agent.user_config import load_agent_user_config, save_agent_user_config
+    from mona.computer_use.runtime import (
+        COMPUTER_PERMISSION_TOOL_NAMES,
+        LEGACY_COMPUTER_PERMISSION_TOOL_NAMES,
+    )
+
+    settings = await _automation_settings(retries=20)
+    legacy_browser_disabled = not settings["browserAutomationEnabled"]
+    legacy_computer_enabled = settings["computerUseEnabled"]
+    config = load_agent_user_config("mona")
+    if config.granted_tools is None:
+        if not legacy_browser_disabled and not legacy_computer_enabled:
+            return
+        agent_loop = app.get("agent_loop")
+        current = list(agent_loop.tools.tool_names) if agent_loop is not None else []
+    else:
+        current = list(config.granted_tools)
+
+    current_set = set(current)
+    browser_observe_legacy = {
+        "browser_list_tabs",
+        "browser_read",
+        "browser_snapshot",
+        "browser_screenshot",
+    }
+    browser_action_legacy = set(BROWSER_LEGACY_TOOL_NAMES) - browser_observe_legacy
+    if current_set & browser_observe_legacy:
+        current.append("browser_observe")
+    if current_set & browser_action_legacy:
+        current.append("browser_act")
+    if current_set & set(LEGACY_COMPUTER_PERMISSION_TOOL_NAMES):
+        current.extend(COMPUTER_PERMISSION_TOOL_NAMES)
+    current = [
+        name
+        for name in dict.fromkeys(current)
+        if name not in set(BROWSER_LEGACY_TOOL_NAMES) - {"browser_act"}
+        and name not in LEGACY_COMPUTER_PERMISSION_TOOL_NAMES
+    ]
+    if legacy_browser_disabled:
+        current = [name for name in current if name not in BROWSER_PERMISSION_TOOL_NAMES]
+    if legacy_computer_enabled:
+        current = list(dict.fromkeys([*current, *COMPUTER_PERMISSION_TOOL_NAMES]))
+
+    if current != config.granted_tools:
+        save_agent_user_config(
+            "mona",
+            {"granted_tools": current},
+            expected_revision=config.revision,
+        )
+        agent_loop = app.get("agent_loop")
+        if agent_loop is not None:
+            agent_loop._refresh_mona_user_config()
+    if legacy_browser_disabled or legacy_computer_enabled:
+        try:
+            await _set_automation_settings(
+                browserAutomationEnabled=True,
+                computerUseEnabled=False,
+            )
+        except Exception as exc:
+            logger.warning("Failed to neutralize legacy automation switches: {}", exc)
+
+
 async def _ensure_computer_use_server(app: web.Application) -> dict[str, Any]:
     from mona.agent.tools.mcp import BUILTIN_COMPUTER_SERVER_NAME
     from mona.computer_use.runtime import get_cua_driver_manager
@@ -3873,8 +3894,7 @@ async def _activate_computer_use_when_ready(app: web.Application) -> None:
 
     manager = get_cua_driver_manager()
     status = await manager.wait_install()
-    settings = await _automation_settings(retries=20)
-    if settings["computerUseEnabled"] and status.get("state") == "available":
+    if _computer_use_permission_enabled() and status.get("state") == "available":
         result = await _ensure_computer_use_server(app)
         if not result.get("ok"):
             raise RuntimeError(str(result.get("error") or "Computer Use MCP connection failed"))
@@ -3899,40 +3919,32 @@ def _start_computer_activation_watch(app: web.Application) -> None:
 
 
 async def handle_automation_status(request: web.Request) -> web.Response:
+    from mona.agent.partners import normalize_agent_id
     from mona.computer_use.runtime import get_cua_driver_manager
 
-    settings = await _automation_settings()
+    try:
+        agent_id = normalize_agent_id(request.query.get("agent_id", "mona"))
+    except ValueError:
+        return web.json_response({"error": "invalid agent_id"}, status=400)
+    computer_enabled = _computer_use_permission_enabled(agent_id)
     manager = get_cua_driver_manager()
-    initial_status = manager.status(enabled=settings["computerUseEnabled"])
-    if settings["computerUseEnabled"] and initial_status.get("supported"):
+    initial_status = manager.status(enabled=computer_enabled)
+    if computer_enabled and initial_status.get("supported"):
         if manager.executable is None:
             await manager.start_install()
             _start_computer_activation_watch(request.app)
         else:
             manager.set_connection_result(None)
             computer_status = await manager.refresh_health()
-            if computer_status.get("state") == "available":
+            if agent_id == "mona" and computer_status.get("state") == "available":
                 await _ensure_computer_use_server(request.app)
+    elif agent_id == "mona" and not computer_enabled:
+        await _remove_computer_use_server(request.app)
     return web.json_response(
         {
-            "browserAutomationEnabled": settings["browserAutomationEnabled"],
-            "computerUse": manager.status(enabled=settings["computerUseEnabled"]),
+            "browserAutomationEnabled": _browser_automation_permission_enabled(),
+            "computerUse": manager.status(enabled=computer_enabled),
         }
-    )
-
-
-async def handle_browser_automation_update(request: web.Request) -> web.Response:
-    try:
-        body = await request.json()
-    except Exception:
-        return web.json_response({"error": "Invalid JSON body"}, status=400)
-    if not isinstance(body.get("enabled"), bool):
-        return web.json_response({"error": "enabled must be boolean"}, status=400)
-    settings = await _set_automation_settings(
-        browserAutomationEnabled=body["enabled"]
-    )
-    return web.json_response(
-        {"browserAutomationEnabled": settings["browserAutomationEnabled"]}
     )
 
 
@@ -3947,11 +3959,15 @@ async def handle_computer_use_update(request: web.Request) -> web.Response:
     if not isinstance(enabled, bool):
         return web.json_response({"error": "enabled must be boolean"}, status=400)
     manager = get_cua_driver_manager()
+    permission_enabled = _computer_use_permission_enabled()
+    if enabled != permission_enabled:
+        return web.json_response(
+            {"error": "Update the Mona Agent tool permission first"}, status=409
+        )
     if enabled and not manager.status(enabled=True).get("supported"):
         return web.json_response(
             {"error": "Computer Use is not available for this device"}, status=400
         )
-    await _set_automation_settings(computerUseEnabled=enabled)
     if not enabled:
         await _remove_computer_use_server(request.app)
         return web.json_response(manager.status(enabled=False))
@@ -3980,9 +3996,10 @@ async def handle_computer_use_cancel(request: web.Request) -> web.Response:
     manager = get_cua_driver_manager()
     try:
         await manager.cancel_install()
-        await _set_automation_settings(computerUseEnabled=False)
         await _remove_computer_use_server(request.app)
-        return web.json_response(manager.status(enabled=False))
+        return web.json_response(
+            manager.status(enabled=_computer_use_permission_enabled())
+        )
     except ValueError as exc:
         return web.json_response({"error": str(exc)}, status=409)
 
@@ -3994,8 +4011,7 @@ async def handle_computer_use_permissions(request: web.Request) -> web.Response:
         manager = get_cua_driver_manager()
         manager.set_connection_result(None)
         status = await manager.grant_permissions()
-        settings = await _automation_settings()
-        if settings["computerUseEnabled"] and status.get("state") == "available":
+        if _computer_use_permission_enabled() and status.get("state") == "available":
             await _ensure_computer_use_server(request.app)
         return web.json_response(status)
     except Exception as exc:
@@ -4005,8 +4021,8 @@ async def handle_computer_use_permissions(request: web.Request) -> web.Response:
 async def _computer_use_startup(app: web.Application) -> None:
     from mona.computer_use.runtime import get_cua_driver_manager
 
-    settings = await _automation_settings(retries=20)
-    if not settings["computerUseEnabled"]:
+    await _migrate_legacy_automation_permissions(app)
+    if not _computer_use_permission_enabled():
         return
     manager = get_cua_driver_manager()
     if not manager.status(enabled=True).get("supported"):
@@ -5636,127 +5652,19 @@ async def handle_todo_briefing(request: web.Request) -> web.Response:
     return web.json_response(await svc.get_briefing())
 
 
-# ---------------------------------------------------------------------------
-# PPT project V2 routes (/api/ppt/project/outline, /lock-outline, /pages, ...)
-# ---------------------------------------------------------------------------
 
 
-def _ppt_projects_dir() -> Path:
-    return get_workspace_path() / "ppt_projects"
 
 
-async def _push_ppt_phase_changed(project_name: str, phase: str) -> None:
-    """Best-effort push of a PPT phase change to connected webui clients.
-
-    These handlers run in the services process while the websocket channel
-    lives in the gateway process, so the fan-out is triggered via a loopback
-    call to the websocket port's internal route. The polling project-status
-    APIs remain the fallback when the push fails.
-    """
-    try:
-        import httpx
-
-        from mona.channels.websocket import WebSocketConfig
-        from mona.config.loader import load_config
-
-        section = getattr(load_config().channels, "websocket", None)
-        ws_cfg = WebSocketConfig.model_validate(section if isinstance(section, dict) else {})
-        headers = {}
-        secret = ws_cfg.token_issue_secret.strip() or ws_cfg.token.strip()
-        if secret:
-            headers["Authorization"] = f"Bearer {secret}"
-        async with httpx.AsyncClient(timeout=httpx.Timeout(5.0, connect=2.0)) as client:
-            await client.get(
-                f"http://127.0.0.1:{ws_cfg.port}/api/ppt/broadcast-phase",
-                params={"project": project_name, "phase": phase},
-                headers=headers,
-            )
-    except Exception as e:
-        logger.warning("ppt phase push failed ({} -> {}): {}", project_name, phase, e)
 
 
-def _ppt_project_dir_or_404(name: str) -> tuple[Path | None, web.Response | None]:
-    """Validate PPT project name and return (project_dir, None) or (None, error)."""
-    if not name or "/" in name or "\\" in name or ".." in name:
-        return None, web.json_response({"error": "invalid project name"}, status=400)
-    project_dir = _ppt_projects_dir() / name
-    if not project_dir.is_dir():
-        return None, web.json_response({"error": "project not found"}, status=404)
-    return project_dir, None
 
 
-def _resolve_ppt_project_dir(name: str) -> tuple[Path | None, web.Response | None]:
-    """Resolve project dir with fallback to prefix-matched directories.
-
-    Handles the case where the frontend pre-created a placeholder directory
-    (e.g. "3页介绍黄鹤楼-202608112045-gatb") and the init script appended
-    a format suffix, producing "3页介绍黄鹤楼-202608112045-gatb_ppt169_20260811".
-    The frontend keeps querying by the original name, so we resolve the
-    actual directory by prefix matching.
-    """
-    if not name or "/" in name or "\\" in name or ".." in name:
-        return None, web.json_response({"error": "invalid project name"}, status=400)
-
-    projects_dir = _ppt_projects_dir()
-    exact_dir = projects_dir / name
-    if exact_dir.is_dir():
-        return exact_dir, None
-
-    # Fallback: find directories starting with name_
-    candidates = [
-        d for d in projects_dir.iterdir()
-        if d.is_dir() and d.name.startswith(f"{name}_")
-    ]
-    if len(candidates) == 1:
-        return candidates[0], None
-
-    return None, web.json_response({"error": "project not found"}, status=404)
 
 
-def _load_ppt_meta(project_dir: Path) -> dict:
-    """Load meta.json, return empty dict if missing."""
-    meta_file = project_dir / "meta.json"
-    if not meta_file.is_file():
-        return {}
-    try:
-        return _json.loads(meta_file.read_text(encoding="utf-8"))
-    except Exception:
-        return {}
 
 
-def _save_ppt_meta_atomic(project_dir: Path, meta: dict) -> None:
-    """Atomically write meta.json via temp file + os.replace."""
-    import os
 
-    meta_file = project_dir / "meta.json"
-    tmp_file = project_dir / ".meta.json.tmp"
-    tmp_file.write_text(
-        _json.dumps(meta, ensure_ascii=False, indent=2), encoding="utf-8"
-    )
-    os.replace(tmp_file, meta_file)
-
-
-def _load_ppt_outline(project_dir: Path) -> dict | None:
-    """Load page_visual_plan.json, return None if missing."""
-    outline_file = project_dir / "page_visual_plan.json"
-    if not outline_file.is_file():
-        return None
-    try:
-        return _json.loads(outline_file.read_text(encoding="utf-8"))
-    except Exception:
-        return None
-
-
-def _save_ppt_outline_atomic(project_dir: Path, outline: dict) -> None:
-    """Atomically write page_visual_plan.json."""
-    import os
-
-    outline_file = project_dir / "page_visual_plan.json"
-    tmp_file = project_dir / ".page_visual_plan.json.tmp"
-    tmp_file.write_text(
-        _json.dumps(outline, ensure_ascii=False, indent=2), encoding="utf-8"
-    )
-    os.replace(tmp_file, outline_file)
 
 
 def _validate_outline_pages(pages: list[dict]) -> str | None:
@@ -5824,379 +5732,20 @@ def _all_pages_confirmed(project_dir: Path, meta: dict, outline: dict) -> bool:
     return True
 
 
-async def handle_ppt_outline_get(request: web.Request) -> web.Response:
-    """GET /api/ppt/project/outline?name=<n> - read outline JSON."""
-    try:
-        name = request.query.get("name") or ""
-        project_dir, err = _resolve_ppt_project_dir(name)
-        if err is not None:
-            return err
-        assert project_dir is not None
-        outline = _load_ppt_outline(project_dir)
-        meta = _load_ppt_meta(project_dir)
-        spec_lock = (project_dir / "spec_lock.md").exists()
-        if outline is None:
-            return web.json_response({"ok": False, "pages": [], "locked": False, "revision": 0})
-        return web.json_response({
-            "ok": True,
-            "pages": outline.get("pages", []),
-            "revision": outline.get("revision", 0),
-            "schemaVersion": outline.get("schemaVersion", 1),
-            "locked": meta.get("outlineLocked", False) or spec_lock,
-        })
-    except Exception as e:
-        logger.exception("ppt outline get error")
-        return web.json_response({"error": str(e)}, status=500)
 
 
-async def handle_ppt_outline_put(request: web.Request) -> web.Response:
-    """PUT /api/ppt/project/outline  body: {"name", "expectedRevision", "pages"}."""
-    try:
-        body = await request.json()
-    except Exception:
-        return web.json_response({"error": "Invalid JSON body"}, status=400)
-    try:
-        name = str(body.get("name", "") or "").strip()
-        project_dir, err = _resolve_ppt_project_dir(name)
-        if err is not None:
-            return err
-        assert project_dir is not None
-
-        # Block edits when locked
-        meta = _load_ppt_meta(project_dir)
-        spec_lock = (project_dir / "spec_lock.md").exists()
-        if meta.get("outlineLocked", False) or spec_lock:
-            return web.json_response(
-                {"error": "大纲已锁定，无法编辑"}, status=409
-            )
-
-        expected_revision = int(body.get("expectedRevision", 0) or 0)
-        pages = body.get("pages", [])
-        if not isinstance(pages, list):
-            return web.json_response({"error": "pages 必须是数组"}, status=400)
-
-        validation_error = _validate_outline_pages(pages)
-        if validation_error:
-            return web.json_response({"error": validation_error}, status=400)
-
-        # Check revision
-        existing = _load_ppt_outline(project_dir)
-        current_revision = existing.get("revision", 0) if existing else 0
-        if expected_revision != current_revision:
-            return web.json_response(
-                {
-                    "error": "revision mismatch",
-                    "currentRevision": current_revision,
-                    "expectedRevision": expected_revision,
-                },
-                status=409,
-            )
-
-        # Renumber and save
-        pages = _renumber_outline_pages(pages)
-        new_revision = current_revision + 1
-        outline = {
-            "schemaVersion": 2,
-            "revision": new_revision,
-            "pages": pages,
-        }
-        _save_ppt_outline_atomic(project_dir, outline)
-
-        return web.json_response({
-            "ok": True,
-            "revision": new_revision,
-            "pages": pages,
-        })
-    except Exception as e:
-        logger.exception("ppt outline put error")
-        return web.json_response({"error": str(e)}, status=500)
 
 
-async def handle_ppt_lock_outline(request: web.Request) -> web.Response:
-    """POST /api/ppt/project/lock-outline  body: {"name"}."""
-    try:
-        body = await request.json()
-    except Exception:
-        return web.json_response({"error": "Invalid JSON body"}, status=400)
-    try:
-        name = str(body.get("name", "") or "").strip()
-        project_dir, err = _resolve_ppt_project_dir(name)
-        if err is not None:
-            return err
-        assert project_dir is not None
-
-        outline = _load_ppt_outline(project_dir)
-        if outline is None:
-            return web.json_response({"error": "大纲不存在"}, status=400)
-
-        pages = outline.get("pages", [])
-        validation_error = _validate_outline_pages(pages)
-        if validation_error:
-            return web.json_response({"error": validation_error}, status=400)
-
-        # Lock: only update meta.json, do NOT write spec_lock.md
-        meta = _load_ppt_meta(project_dir)
-        from datetime import datetime, timezone
-
-        now = datetime.now(timezone.utc).isoformat()
-        meta["outlineLocked"] = True
-        meta["outlineRevision"] = outline.get("revision", 0)
-        meta["outlineLockedAt"] = now
-        meta["updatedAt"] = now
-        if "createdAt" not in meta:
-            meta["createdAt"] = now
-        if "projectName" not in meta:
-            meta["projectName"] = name
-        meta.setdefault("confirmedPages", {})
-        meta.setdefault("schemaVersion", 2)
-        _save_ppt_meta_atomic(project_dir, meta)
-
-        return web.json_response({
-            "ok": True,
-            "revision": outline.get("revision", 0),
-        })
-    except Exception as e:
-        logger.exception("ppt lock outline error")
-        return web.json_response({"error": str(e)}, status=500)
 
 
-async def handle_ppt_design_spec_summary_get(request: web.Request) -> web.Response:
-    """GET /api/ppt/project/design-spec-summary?name=<n> - read design_spec_summary.json.
-
-    Returns the AI-generated eight confirmations summary as structured JSON.
-    Returns {"ok": false} when the file is not yet present (AI hasn't reached
-    Step 4 yet, or hasn't written the summary file).
-    """
-    try:
-        name = request.query.get("name") or ""
-        project_dir, err = _resolve_ppt_project_dir(name)
-        if err is not None:
-            return err
-        assert project_dir is not None
-
-        summary_file = project_dir / "design_spec_summary.json"
-        if not summary_file.is_file():
-            return web.json_response({"ok": False, "summary": None})
-
-        try:
-            summary = _json.loads(summary_file.read_text(encoding="utf-8"))
-        except Exception as e:
-            return web.json_response(
-                {"ok": False, "error": f"failed to parse summary: {e}"},
-                status=500,
-            )
-
-        return web.json_response({"ok": True, "summary": summary})
-    except Exception as e:
-        logger.exception("ppt design spec summary get error")
-        return web.json_response({"error": str(e)}, status=500)
 
 
-async def handle_ppt_design_spec_summary_put(request: web.Request) -> web.Response:
-    """PUT /api/ppt/project/design-spec-summary?name=<n> - update design_spec_summary.json.
-
-    Accepts a partial JSON body and merges it into the existing summary file.
-    This lets the UI edit individual fields (e.g. primaryColor) without
-    rewriting the entire file. The Agent is notified via a
-    [DESIGN_SPEC_UPDATED] message sent by the frontend chat panel.
-    """
-    try:
-        name = request.query.get("name") or ""
-        project_dir, err = _resolve_ppt_project_dir(name)
-        if err is not None:
-            return err
-        assert project_dir is not None
-
-        body = await request.json()
-        if not isinstance(body, dict):
-            return web.json_response(
-                {"ok": False, "error": "body must be a JSON object"}, status=400
-            )
-
-        summary_file = project_dir / "design_spec_summary.json"
-
-        # Load existing or start from empty dict
-        existing: dict = {}
-        if summary_file.is_file():
-            try:
-                existing = _json.loads(summary_file.read_text(encoding="utf-8"))
-            except Exception:
-                existing = {}
-
-        # Merge user edits into existing
-        existing.update(body)
-        existing["updatedAt"] = datetime.now().isoformat() + "Z"
-
-        # Atomic write
-        import os as _os
-        import tempfile
-
-        tmp_fd, tmp_path = tempfile.mkstemp(
-            dir=str(project_dir), suffix=".tmp", prefix=".design_spec_summary_"
-        )
-        try:
-            with _os.fdopen(tmp_fd, "w", encoding="utf-8") as f:
-                _json.dump(existing, f, ensure_ascii=False, indent=2)
-            _os.replace(tmp_path, str(summary_file))
-        except Exception:
-            _os.unlink(tmp_path)
-            raise
-
-        return web.json_response({"ok": True, "summary": existing})
-    except Exception as e:
-        logger.exception("ppt design spec summary put error")
-        return web.json_response({"error": str(e)}, status=500)
 
 
-async def handle_ppt_pages_get(request: web.Request) -> web.Response:
-    """GET /api/ppt/project/pages?name=<n> - return page files, mtime, state."""
-    try:
-        name = request.query.get("name") or ""
-        project_dir, err = _resolve_ppt_project_dir(name)
-        if err is not None:
-            return err
-        assert project_dir is not None
-        meta = _load_ppt_meta(project_dir)
-        outline = _load_ppt_outline(project_dir)
-        if outline is None:
-            return web.json_response({
-                "ok": False,
-                "pages": [],
-                "outlineRevision": meta.get("outlineRevision", 0),
-            })
-        pages_out = []
-        for page in outline.get("pages", []):
-            file_name = page.get("file", "")
-            mtime = _svg_mtime(project_dir, file_name) if file_name else None
-            pages_out.append({
-                "page": page.get("page", ""),
-                "file": file_name,
-                "title": page.get("title", ""),
-                "mtime": mtime,
-                "state": _page_state(file_name, project_dir, meta) if file_name else "pending",
-            })
-        # V3: currentPageIndex = first non-confirmed page index (0-based)
-        current_page_index = None
-        for i, p in enumerate(pages_out):
-            if p["state"] != "confirmed":
-                current_page_index = i
-                break
-        if current_page_index is None:
-            current_page_index = len(pages_out)  # all confirmed
-        return web.json_response({
-            "ok": True,
-            "pages": pages_out,
-            "outlineRevision": meta.get("outlineRevision", 0),
-            "confirmedCount": sum(
-                1 for p in pages_out if p["state"] == "confirmed"
-            ),
-            "totalCount": len(pages_out),
-            "currentPageIndex": current_page_index,
-        })
-    except Exception as e:
-        logger.exception("ppt pages get error")
-        return web.json_response({"error": str(e)}, status=500)
 
 
-async def handle_ppt_page_confirm(request: web.Request) -> web.Response:
-    """POST /api/ppt/project/page/confirm  body: {"name", "file", "expectedMtime"}.
-
-    V2 §5.3: confirm a specific mtime of an SVG. 409 if disk mtime changed.
-    """
-    try:
-        body = await request.json()
-    except Exception:
-        return web.json_response({"error": "Invalid JSON body"}, status=400)
-    try:
-        name = str(body.get("name", "") or "").strip()
-        project_dir, err = _resolve_ppt_project_dir(name)
-        if err is not None:
-            return err
-        assert project_dir is not None
-        file_name = str(body.get("file", "") or "").strip()
-        if not file_name or "/" in file_name or "\\" in file_name or ".." in file_name:
-            return web.json_response({"error": "invalid file"}, status=400)
-        expected_mtime = float(body.get("expectedMtime", 0) or 0)
-
-        current_mtime = _svg_mtime(project_dir, file_name)
-        if current_mtime is None:
-            return web.json_response({"error": "SVG 文件不存在"}, status=404)
-        if abs(current_mtime - expected_mtime) >= 0.001:
-            return web.json_response(
-                {
-                    "error": "mtime mismatch",
-                    "currentMtime": current_mtime,
-                    "expectedMtime": expected_mtime,
-                },
-                status=409,
-            )
-
-        from datetime import datetime, timezone
-
-        now = datetime.now(timezone.utc).isoformat()
-        meta = _load_ppt_meta(project_dir)
-        confirmed_pages = meta.setdefault("confirmedPages", {})
-        confirmed_pages[file_name] = {"mtime": current_mtime, "confirmedAt": now}
-        meta["updatedAt"] = now
-        if "createdAt" not in meta:
-            meta["createdAt"] = now
-        if "projectName" not in meta:
-            meta["projectName"] = name
-        meta.setdefault("schemaVersion", 2)
-        _save_ppt_meta_atomic(project_dir, meta)
-
-        await _push_ppt_phase_changed(name, "producing")
-
-        return web.json_response({
-            "ok": True,
-            "file": file_name,
-            "mtime": current_mtime,
-            "confirmedAt": now,
-        })
-    except Exception as e:
-        logger.exception("ppt page confirm error")
-        return web.json_response({"error": str(e)}, status=500)
 
 
-async def handle_ppt_request_export(request: web.Request) -> web.Response:
-    """POST /api/ppt/project/request-export  body: {"name"}.
-
-    V3: record export request after all pages confirmed.
-    """
-    try:
-        body = await request.json()
-    except Exception:
-        return web.json_response({"error": "Invalid JSON body"}, status=400)
-    try:
-        name = str(body.get("name", "") or "").strip()
-        project_dir, err = _resolve_ppt_project_dir(name)
-        if err is not None:
-            return err
-        assert project_dir is not None
-
-        meta = _load_ppt_meta(project_dir)
-        outline = _load_ppt_outline(project_dir)
-        if outline is None:
-            return web.json_response({"error": "大纲不存在"}, status=400)
-
-        if not _all_pages_confirmed(project_dir, meta, outline):
-            return web.json_response(
-                {"error": "存在未确认的页面"}, status=409
-            )
-
-        from datetime import datetime, timezone
-
-        now = datetime.now(timezone.utc).isoformat()
-        meta["exportRequestedAt"] = now
-        meta["updatedAt"] = now
-        _save_ppt_meta_atomic(project_dir, meta)
-
-        await _push_ppt_phase_changed(name, "exporting")
-
-        return web.json_response({"ok": True, "exportRequestedAt": now})
-    except Exception as e:
-        logger.exception("ppt request export error")
-        return web.json_response({"error": str(e)}, status=500)
 
 
 # ---------------------------------------------------------------------------
@@ -7783,9 +7332,8 @@ def _video_project_dir_or_404(name: str) -> tuple[Path | None, web.Response | No
 async def _push_video_project_changed(name: str, hint: str = "") -> None:
     """Best-effort push of a video project change to connected webui clients.
 
-    Same cross-process fan-out as ``_push_ppt_phase_changed``: these handlers
-    run in the services process while the websocket channel lives in the
-    gateway process, so we loop back to the websocket port's internal route.
+    These handlers run in the services process while the websocket channel
+    lives in the gateway process, so we loop back to its internal route.
     Polling endpoints remain the fallback when the push fails.
     """
     try:
@@ -11944,7 +11492,6 @@ def create_app(
     app.router.add_post("/api/system/diagnose", handle_system_diagnose)
     app.router.add_post("/api/system/storage/analyze", handle_storage_analyze)
     app.router.add_get("/api/automation/status", handle_automation_status)
-    app.router.add_post("/api/automation/browser", handle_browser_automation_update)
     app.router.add_post("/api/automation/computer", handle_computer_use_update)
     app.router.add_post("/api/automation/computer/cancel", handle_computer_use_cancel)
     app.router.add_post(

@@ -90,23 +90,13 @@ from mona.api.server import (
     handle_notes_export_docx,
     handle_office_health,
     handle_office_runtime_download,
-    handle_ppt_design_spec_summary_get,
-    handle_ppt_design_spec_summary_put,
-    handle_ppt_lock_outline,
-    handle_ppt_outline_get,
-    handle_ppt_outline_put,
-    handle_ppt_page_confirm,
-    handle_ppt_pages_get,
-    handle_ppt_request_export,
     handle_profile_advice_feedback,
     handle_profile_advice_start,
     handle_profile_artifact_feedback,
-    handle_profile_comparison,
     handle_profile_context_update,
     handle_profile_distill,
     handle_profile_evidence_get,
     handle_profile_get,
-    handle_profile_snapshots,
     handle_profile_user_get,
     handle_profile_user_update,
     handle_schedule_create,
@@ -259,7 +249,6 @@ from mona.services.stock.api import (
 )
 
 _PRO_ROUTE_PREFIXES = (
-    "/api/ppt",
     "/api/video",
     "/api/stock/diagnosis",
     "/email/analyze",
@@ -546,8 +535,6 @@ def create_services_app(
     )
     app.router.add_get("/api/profile/evidence/{ref}", handle_profile_evidence_get)
     app.router.add_post("/api/profile/distill", handle_profile_distill)
-    app.router.add_get("/api/profile/snapshots", handle_profile_snapshots)
-    app.router.add_get("/api/profile/comparison", handle_profile_comparison)
 
     # Video project routes + url2note + doc2note
     app.router.add_get("/api/video/runtime-check", handle_video_runtime_check)
@@ -718,20 +705,6 @@ def create_services_app(
     app.router.add_patch(
         "/api/video/project/review", handle_video_project_review_resolve
     )
-
-    # PPT project V2 routes (outline + lock + review + export)
-    app.router.add_get("/api/ppt/project/outline", handle_ppt_outline_get)
-    app.router.add_put("/api/ppt/project/outline", handle_ppt_outline_put)
-    app.router.add_post("/api/ppt/project/lock-outline", handle_ppt_lock_outline)
-    app.router.add_get(
-        "/api/ppt/project/design-spec-summary", handle_ppt_design_spec_summary_get
-    )
-    app.router.add_put(
-        "/api/ppt/project/design-spec-summary", handle_ppt_design_spec_summary_put
-    )
-    app.router.add_get("/api/ppt/project/pages", handle_ppt_pages_get)
-    app.router.add_post("/api/ppt/project/page/confirm", handle_ppt_page_confirm)
-    app.router.add_post("/api/ppt/project/request-export", handle_ppt_request_export)
 
     # 设置 IDLE 管理器的事件循环（本进程独占）
     _idle_manager.set_loop(asyncio.get_event_loop())
