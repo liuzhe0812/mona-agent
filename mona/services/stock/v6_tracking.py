@@ -95,18 +95,6 @@ def _number(value: Any) -> float | None:
     return result if math.isfinite(result) else None
 
 
-def _midpoint(plan: Mapping[str, Any] | None) -> float | None:
-    if not isinstance(plan, Mapping):
-        return None
-    low = _number(plan.get("buy_low"))
-    high = _number(plan.get("buy_high"))
-    if low is not None and high is not None:
-        return (low + high) / 2
-    low = _number(plan.get("reference_buy_low"))
-    high = _number(plan.get("reference_buy_high"))
-    return (low + high) / 2 if low is not None and high is not None else None
-
-
 def _plan_snapshot(plan: Mapping[str, Any] | None) -> dict[str, Any] | None:
     if not isinstance(plan, Mapping):
         return None

@@ -103,11 +103,6 @@ def _is_ai_diagnosis_report(doc: dict[str, Any]) -> bool:
     return True
 
 
-def is_ai_diagnosis_report(doc: dict[str, Any]) -> bool:
-    """Public predicate for the separate standard AI-diagnosis contract."""
-    return _is_ai_diagnosis_report(doc)
-
-
 def is_v5_report(doc: dict[str, Any]) -> bool:
     """Public validity predicate for current V5 report consumers."""
     return _is_v5_deep_report(doc)
@@ -157,10 +152,6 @@ def _v5_horizon_projection(
         )
         for decision in (decisions.get(source_key) or {},)
     }
-
-
-def _v5_expired(doc: dict[str, Any], *, now: datetime | None = None) -> bool:
-    return all(_v5_expiry_states(doc, now=now).values())
 
 
 def _horizon_stances(doc: dict[str, Any]) -> dict[str, dict[str, Any]] | None:
@@ -339,45 +330,6 @@ def scan_reports(stock_dir: Path) -> list[dict[str, Any]]:
     ]
     entries.sort(key=lambda pair: pair[0], reverse=True)
     return [item for _, item in entries]
-
-
-def scan_diagnosis_reports(workspace: Path) -> list[dict[str, Any]]:
-    """List only standard ``ai_diagnosis`` reports.
-
-    The standard product is stored below ``<workspace>/stock_diagnoses``;
-    this explicit root keeps six-agent history out of the diagnosis history
-    while still exposing a small compatibility projection for callers that
-    use the report service directly.
-    """
-
-    root = Path(workspace)
-    if root.name == "stock_projects":
-        root = root.parent
-    if root.name != "stock_diagnoses":
-        root = root / "stock_diagnoses"
-    entries: list[tuple[float, dict[str, Any]]] = []
-    for mtime, run_dir, stem, doc in _iter_docs(root):
-        if stem != "report" or not _is_ai_diagnosis_report(doc):
-            continue
-        entries.append((mtime, _list_item(mtime, run_dir, doc)))
-    entries.sort(key=lambda pair: pair[0], reverse=True)
-    return [item for _mtime, item in entries]
-
-
-def load_diagnosis_report(
-    workspace: Path, diagnosis_id: str
-) -> tuple[dict[str, Any], str] | None:
-    """Read one validated standard report, never a deep-research report."""
-
-    root = Path(workspace)
-    if root.name == "stock_projects":
-        root = root.parent
-    if root.name != "stock_diagnoses":
-        root = root / "stock_diagnoses"
-    loaded = load_report(root, diagnosis_id)
-    if loaded is None or not _is_ai_diagnosis_report(loaded[0]):
-        return None
-    return loaded
 
 
 def load_report(stock_dir: Path, report_id: str) -> tuple[dict[str, Any], str] | None:

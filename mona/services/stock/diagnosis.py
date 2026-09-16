@@ -127,15 +127,6 @@ def _source_ids(value: Any) -> list[str]:
     return found
 
 
-def _source_ids_from_evidence(bundle: Mapping[str, Any]) -> list[str]:
-    values = bundle.get("source_ids")
-    result = [item for item in values or [] if isinstance(item, str) and item]
-    for item in _source_ids(bundle):
-        if item not in result:
-            result.append(item)
-    return result
-
-
 def _diagnosis_source_records(bundle: Mapping[str, Any], source_ids: Sequence[str]) -> list[dict[str, Any]]:
     allowed = set(source_ids)
     records: list[dict[str, Any]] = []
@@ -501,28 +492,6 @@ def _semantic_to_research(value: Any, *, instrument: InstrumentTag, context_id: 
     payload = dict(raw)
     payload.setdefault("status", "available")
     return DiagnosisFundamentalResearch.model_validate(payload)
-
-
-def _evidence_bundle(workspace: Path, context_id: str | None, direct: Any) -> dict[str, Any]:
-    if isinstance(direct, Mapping):
-        return dict(direct)
-    if not context_id:
-        return {}
-    # Keep the context read-only and avoid constructing an EvidenceService with
-    # a provider just to read a persisted context.
-    context_path = workspace / "stock_contexts" / f"{context_id}.json"
-    if not context_path.is_file():
-        return {}
-    payload = json.loads(context_path.read_text(encoding="utf-8"))
-    if not isinstance(payload, Mapping):
-        return {}
-    symbols = payload.get("symbols")
-    if isinstance(symbols, Mapping) and len(symbols) == 1:
-        bundle = next(iter(symbols.values()))
-        return dict(bundle) if isinstance(bundle, Mapping) else {}
-    # A direct bundle may be stored by a stage adapter under ``bundle``.
-    bundle = payload.get("bundle")
-    return dict(bundle) if isinstance(bundle, Mapping) else {}
 
 
 def _default_factor_input(bundle: Mapping[str, Any], names: tuple[str, ...]) -> Any:
@@ -891,10 +860,6 @@ def _invoke_callable(callback: Callable[..., Any], *, evidence: Mapping[str, Any
 
 async def _await_if_needed(value: Any) -> Any:
     return await value if inspect.isawaitable(value) else value
-
-
-def _fundamental_status(value: DiagnosisFundamentalResearch) -> DiagnosisAvailability:
-    return value.status
 
 
 def _data_quality(

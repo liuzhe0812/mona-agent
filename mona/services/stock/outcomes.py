@@ -1199,12 +1199,6 @@ def append_selection_outcome_observations(
     return len(additions)
 
 
-def append_selection_outcome_observation(
-    run_dir: str | Path, observation: Mapping[str, Any]
-) -> bool:
-    return bool(append_selection_outcome_observations(run_dir, [observation]))
-
-
 def read_latest_selection_outcome_observations(
     run_dir: str | Path, tracking_id: str | None = None
 ) -> list[dict[str, Any]]:

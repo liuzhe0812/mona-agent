@@ -3675,10 +3675,6 @@ class EvidenceService:
                 "percentile": sum(item <= value for item in usable) / len(usable),
             }
 
-        def status_for_old(section: str) -> str:
-            value = bundle.get(section)
-            return "available" if value not in (None, [], {}) else "missing"
-
         if rows:
             changes = [numeric(row, "change_pct") for row, _, _ in rows]
             changes = [value for value in changes if value is not None]

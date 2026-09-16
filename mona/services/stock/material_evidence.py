@@ -492,14 +492,6 @@ class MaterialBindingStore:
             )
         return rows
 
-    def confirmed_binding_ids(self, instrument_id: str) -> list[str]:
-        """Return only currently valid, user-confirmed binding IDs."""
-        return [
-            binding.binding_id
-            for binding in self.list()
-            if binding.instrument_id == instrument_id and binding.status == "confirmed"
-        ]
-
     def confirmed_projections(
         self,
         binding_ids: list[str],

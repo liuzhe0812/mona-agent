@@ -601,15 +601,6 @@ def _exit_triggered(raw: Any, horizon: str) -> bool:
     )
 
 
-def _merge_ids(*parts: Mapping[str, Any]) -> list[str]:
-    result: list[str] = []
-    for part in parts:
-        for source_id in _source_ids(part):
-            if source_id not in result:
-                result.append(source_id)
-    return result
-
-
 def _horizon_decision(
     horizon: str,
     *,

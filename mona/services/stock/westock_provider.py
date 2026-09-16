@@ -555,23 +555,6 @@ def _extract_data_as_of(data: Any, metadata: Mapping[str, Any]) -> str | None:
     return _normalize_date(value, field="data_as_of")
 
 
-def _strip_code_fields(row: Mapping[str, Any]) -> dict[str, Any]:
-    return {
-        str(key): value
-        for key, value in row.items()
-        if str(key)
-        not in {
-            "instrument_id",
-            "stock_id",
-            "symbol",
-            "code",
-            "stock_code",
-            "security_code",
-            "secu_code",
-        }
-    }
-
-
 def _validate_data(
     command: str,
     data: Any,
