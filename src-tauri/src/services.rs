@@ -58,8 +58,40 @@ impl ServicesManager {
             }
         }
 
-        // 探测目标端口：可用则启动新进程；被一个健康 services 占用则复用。
-        let (port, external) = probe_services_port(settings.services_port)?;
+        let (port, external) = if cfg!(debug_assertions) {
+            // A dev start owns a fresh source runtime, so it never reuses a
+            // services already on the port: that process keeps serving whatever
+            // code it was built with. A packaged exe left by an earlier session
+            // is the usual culprit — its /health still satisfies the release
+            // compatibility probe, so reuse would silently pin dev to old code
+            // and make routes the source tree has added look missing (404).
+            let target = settings.services_port;
+            let port_available = is_port_available(target);
+            let occupant_is_mona_services =
+                !port_available && http_services_compatible(target);
+            match dev_services_action(port_available, occupant_is_mona_services) {
+                DevServicesAction::Start => (target, false),
+                DevServicesAction::StopOccupantThenStart => {
+                    log::warn!(
+                        "Dev mode: stopping Mona services on port {} so the source tree can serve it",
+                        target
+                    );
+                    stop_external_services(target)?;
+                    (target, false)
+                }
+                DevServicesAction::Reject => {
+                    return Err(format!(
+                        "Dev services 端口 {} 已被其他进程占用。请释放端口或改用其他 services 端口后重试。",
+                        target
+                    ));
+                }
+            }
+        } else {
+            // Release builds may reuse an already-running compatible runtime: a
+            // second window, or a session kept alive in the background, shares
+            // it instead of losing the state it holds.
+            probe_services_port(settings.services_port)?
+        };
 
         if external {
             log::info!(
@@ -327,6 +359,8 @@ fn open_services_log(port: u16) -> Option<std::fs::File> {
 /// - 端口被兼容的 services 占用：`(port, true)`，调用方复用。
 /// - 端口被旧 services 占用：先优雅关闭，再启动当前版本。
 /// - 端口被占且不是 services：报错。
+///
+/// 只用于 release：dev 启动不复用外部进程，见 [`dev_services_action`]。
 fn probe_services_port(start_port: u16) -> Result<(u16, bool), String> {
     if is_port_available(start_port) {
         return Ok((start_port, false));
@@ -336,22 +370,59 @@ fn probe_services_port(start_port: u16) -> Result<(u16, bool), String> {
     }
     if http_health_ok(start_port) {
         log::warn!("Outdated Mona services on port {}, restarting it", start_port);
-        http_post_shutdown(start_port);
-        for _ in 0..20 {
-            std::thread::sleep(std::time::Duration::from_millis(100));
-            if is_port_available(start_port) {
-                return Ok((start_port, false));
-            }
-        }
-        return Err(format!(
-            "Outdated Mona services on port {} did not stop. Close it and retry.",
-            start_port
-        ));
+        stop_external_services(start_port)?;
+        return Ok((start_port, false));
     }
     Err(format!(
         "Services port {} is already in use by a non-services process. \
          Free the port or change the services port in settings.",
         start_port
+    ))
+}
+
+/// dev 启动应当如何处理目标端口。
+///
+/// dev 的运行时代码随时在变，复用意味着继续跑旧代码，因此除了「端口空闲」
+/// 之外只有两种结局：把 Mona services 请走，或者因为占用者不是 Mona 而失败。
+/// 占用者是否 Mona 由调用方通过 `/health` 判定后传入，本函数只表达决策。
+#[derive(Debug, PartialEq, Eq)]
+enum DevServicesAction {
+    /// 端口空闲：直接启动源码 services。
+    Start,
+    /// 端口被 Mona services 占用：先请它优雅退出，再启动源码 services。
+    StopOccupantThenStart,
+    /// 端口被其他进程占用：报错，不动别人的进程。
+    Reject,
+}
+
+fn dev_services_action(
+    port_available: bool,
+    occupant_is_mona_services: bool,
+) -> DevServicesAction {
+    if port_available {
+        DevServicesAction::Start
+    } else if occupant_is_mona_services {
+        DevServicesAction::StopOccupantThenStart
+    } else {
+        DevServicesAction::Reject
+    }
+}
+
+/// 请求端口上的 Mona services 退出，并等待端口释放。
+///
+/// 用 `/shutdown` 而不是按镜像名强杀：只影响占用该端口的这一个进程，且能让
+/// 它的挂起写入落盘，不会波及用户在别处开着的另一个 Mona 运行时。
+fn stop_external_services(port: u16) -> Result<(), String> {
+    http_post_shutdown(port);
+    for _ in 0..20 {
+        std::thread::sleep(std::time::Duration::from_millis(100));
+        if is_port_available(port) {
+            return Ok(());
+        }
+    }
+    Err(format!(
+        "Outdated Mona services on port {} did not stop. Close it and retry.",
+        port
     ))
 }
 
@@ -445,7 +516,7 @@ fn proc_is_alive(proc: &ServicesProcess) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use super::services_health_response_compatible;
+    use super::{dev_services_action, services_health_response_compatible, DevServicesAction};
 
     #[test]
     fn services_health_requires_current_capability() {
@@ -455,6 +526,32 @@ mod tests {
         assert!(!services_health_response_compatible(
             "HTTP/1.1 200 OK\r\n\r\n{\"status\":\"ok\"}"
         ));
+    }
+
+    #[test]
+    fn dev_starts_on_a_free_port() {
+        assert_eq!(
+            dev_services_action(true, false),
+            DevServicesAction::Start
+        );
+    }
+
+    #[test]
+    fn dev_replaces_a_mona_services_instead_of_reusing_it() {
+        // The packaged exe left by an earlier session is compatibility-healthy
+        // yet runs stale code, so dev must take the port over — never reuse it.
+        assert_eq!(
+            dev_services_action(false, true),
+            DevServicesAction::StopOccupantThenStart
+        );
+    }
+
+    #[test]
+    fn dev_never_touches_a_non_mona_occupant() {
+        assert_eq!(
+            dev_services_action(false, false),
+            DevServicesAction::Reject
+        );
     }
 }
 
