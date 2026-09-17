@@ -2,6 +2,8 @@ import { useState } from "react";
 import {
   Ban,
   CheckCircle2,
+  ChevronDown,
+  ChevronRight,
   Circle,
   Loader2,
   MinusCircle,
@@ -75,6 +77,7 @@ export function MaintenanceTaskCard({ detail }: Props) {
   const { task, steps } = detail;
   const [busy, setBusy] = useState(false);
   const [actionError, setActionError] = useState<string | null>(null);
+  const [collapsed, setCollapsed] = useState(false);
 
   const doneCount = steps.filter((s) => isDone(s.status)).length;
   const runningStep = steps.find((s) => s.status === "running");
@@ -111,7 +114,15 @@ export function MaintenanceTaskCard({ detail }: Props) {
 
   return (
     <div className="rounded-lg border border-border/70 bg-muted/30 p-2.5">
-      <div className="flex items-center gap-2">
+      <Button
+        type="button"
+        variant="ghost"
+        size="xs"
+        onClick={() => setCollapsed((value) => !value)}
+        aria-expanded={!collapsed}
+        title={collapsed ? "展开运维步骤" : "折叠运维步骤"}
+        className="h-auto w-full justify-start gap-2 rounded-md px-1 py-0.5 font-normal hover:bg-accent/60"
+      >
         <span
           className={cn(
             "shrink-0 rounded-md border px-1.5 py-0.5 text-micro font-medium",
@@ -126,14 +137,22 @@ export function MaintenanceTaskCard({ detail }: Props) {
         <span className="shrink-0 text-micro text-muted-foreground">
           {doneCount}/{steps.length}
         </span>
-      </div>
+        {collapsed ? (
+          <ChevronRight className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
+        ) : (
+          <ChevronDown className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
+        )}
+      </Button>
 
-      <div className="mt-2 max-h-44 space-y-1 overflow-y-auto scrollbar-thin">
-        {steps.map((step) => (
-          <StepRow key={step.id} step={step} highlighted={step.id === runningStep?.id} />
-        ))}
-      </div>
+      {!collapsed && (
+        <div className="mt-2 max-h-44 space-y-1 overflow-y-auto scrollbar-thin">
+          {steps.map((step) => (
+            <StepRow key={step.id} step={step} highlighted={step.id === runningStep?.id} />
+          ))}
+        </div>
+      )}
 
+      {/* 审批会阻塞任务推进，折叠时仍然保留入口，避免用户错过必须的确认。 */}
       {task.status === "waiting_approval" && (
         <div className="mt-2 rounded-md border border-warning/30 bg-warning/5 px-2 py-1.5">
           <p className="text-micro text-muted-foreground">
@@ -152,12 +171,12 @@ export function MaintenanceTaskCard({ detail }: Props) {
         </div>
       )}
 
-      {task.status === "succeeded" && task.summary && (
+      {!collapsed && task.status === "succeeded" && task.summary && (
         <p className="mt-2 whitespace-pre-wrap break-words text-micro leading-4 text-muted-foreground">
           {task.summary}
         </p>
       )}
-      {task.status === "failed" && task.error && (
+      {!collapsed && task.status === "failed" && task.error && (
         <p className="mt-2 whitespace-pre-wrap break-words text-micro leading-4 text-destructive">
           {task.error}
         </p>
@@ -166,7 +185,7 @@ export function MaintenanceTaskCard({ detail }: Props) {
         <p className="mt-1.5 text-micro text-destructive">{actionError}</p>
       )}
 
-      {isActive(task.status) && (
+      {!collapsed && isActive(task.status) && (
         <div className="mt-2 flex justify-end">
           <Button
             type="button"

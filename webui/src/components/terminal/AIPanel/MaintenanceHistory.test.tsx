@@ -7,11 +7,13 @@ import type { MaintenanceTask, MaintenanceTaskDetail } from "../ipc";
 const listTasks = vi.hoisted(() => vi.fn());
 const getTask = vi.hoisted(() => vi.fn());
 const deleteTask = vi.hoisted(() => vi.fn());
+const clearTasks = vi.hoisted(() => vi.fn());
 
 vi.mock("../ipc", () => ({
   terminalMaintenanceList: listTasks,
   terminalMaintenanceGet: getTask,
   terminalMaintenanceDelete: deleteTask,
+  terminalMaintenanceClear: clearTasks,
 }));
 
 // Select（Button + DropdownMenu 组合）的轻量测试替身：渲染为原生 <select>，
@@ -137,6 +139,7 @@ describe("MaintenanceHistory", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     listTasks.mockResolvedValue(TASKS);
+    clearTasks.mockResolvedValue(3);
     getTask.mockImplementation((id: string) =>
       Promise.resolve(makeDetail(TASKS.find((t) => t.id === id)!)),
     );
@@ -230,6 +233,58 @@ describe("MaintenanceHistory", () => {
     // 取消后确认框关闭，列表保持原样
     fireEvent.click(screen.getByRole("button", { name: "取消" }));
     await waitFor(() => expect(screen.queryByText("删除这条维护记录？")).toBeNull());
+    expect(screen.getByText("修复 nginx 502")).toBeTruthy();
+  });
+
+  it("clears every finished record from the context menu after confirmation", async () => {
+    render(<MaintenanceHistory />);
+    await screen.findByText("修复 nginx 502");
+
+    // 右键菜单项只打开确认框，不直接调用清除 API
+    fireEvent.click(screen.getAllByRole("menuitem", { name: /清除全部/ })[0]);
+    await screen.findByText("清除全部维护记录？");
+    expect(clearTasks).not.toHaveBeenCalled();
+    // 确认框说明清除范围，并给出真实条数
+    expect(screen.getByText(/全部 3 条已结束的维护记录/)).toBeTruthy();
+
+    fireEvent.click(screen.getByRole("button", { name: "清除全部" }));
+
+    await waitFor(() => expect(screen.queryByText("修复 nginx 502")).toBeNull());
+    expect(clearTasks).toHaveBeenCalledTimes(1);
+    expect(screen.queryByText("清理磁盘")).toBeNull();
+    expect(screen.queryByText("升级内核")).toBeNull();
+    expect(screen.getByText("暂无维护记录")).toBeTruthy();
+  });
+
+  it("keeps running tasks listed after clearing and disables the entry when none finished", async () => {
+    const running = makeTask({ id: "t4", goal: "部署新版本", status: "running" });
+    listTasks.mockResolvedValue([...TASKS, running]);
+    render(<MaintenanceHistory />);
+    await screen.findByText("部署新版本");
+
+    fireEvent.click(screen.getAllByRole("menuitem", { name: /清除全部/ })[0]);
+    fireEvent.click(await screen.findByRole("button", { name: "清除全部" }));
+
+    // 进行中的任务不被清除
+    await waitFor(() => expect(screen.queryByText("修复 nginx 502")).toBeNull());
+    expect(screen.getByText("部署新版本")).toBeTruthy();
+    // 只剩进行中的任务时入口失效
+    expect(screen.getAllByRole("menuitem", { name: /清除全部/ })[0]).toBeDisabled();
+  });
+
+  it("keeps the list and shows the error when clearing fails", async () => {
+    clearTasks.mockRejectedValueOnce(new Error("database is locked"));
+    render(<MaintenanceHistory />);
+    await screen.findByText("修复 nginx 502");
+
+    fireEvent.click(screen.getAllByRole("menuitem", { name: /清除全部/ })[0]);
+    fireEvent.click(await screen.findByRole("button", { name: "清除全部" }));
+
+    await screen.findByText(/清除失败：.*database is locked/);
+    expect(screen.getByText("修复 nginx 502")).toBeTruthy();
+
+    fireEvent.click(screen.getByRole("button", { name: "取消" }));
+    await waitFor(() => expect(screen.queryByText("清除全部维护记录？")).toBeNull());
     expect(screen.getByText("修复 nginx 502")).toBeTruthy();
   });
 });

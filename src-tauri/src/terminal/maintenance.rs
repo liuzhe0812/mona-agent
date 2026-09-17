@@ -905,6 +905,40 @@ impl MaintenanceStore {
         .map_err(|e| e.to_string())?;
         Ok(())
     }
+
+    /// Delete every finished (non-active) task and its steps; active tasks
+    /// are kept for the same reason `delete_task` refuses them.
+    pub fn clear_finished_tasks(&self) -> Result<u64, String> {
+        let finished = [
+            TaskStatus::Succeeded,
+            TaskStatus::Failed,
+            TaskStatus::Cancelled,
+        ];
+        let conn = self.conn.lock().map_err(|e| e.to_string())?;
+        conn.execute(
+            "DELETE FROM terminal_maintenance_steps WHERE task_id IN (
+                SELECT id FROM terminal_maintenance_tasks
+                 WHERE status IN (?1, ?2, ?3)
+            )",
+            params![
+                finished[0].as_str(),
+                finished[1].as_str(),
+                finished[2].as_str()
+            ],
+        )
+        .map_err(|e| e.to_string())?;
+        let deleted = conn
+            .execute(
+                "DELETE FROM terminal_maintenance_tasks WHERE status IN (?1, ?2, ?3)",
+                params![
+                    finished[0].as_str(),
+                    finished[1].as_str(),
+                    finished[2].as_str()
+                ],
+            )
+            .map_err(|e| e.to_string())?;
+        Ok(deleted as u64)
+    }
 }
 
 // ─── Tests ──────────────────────────────────────────────────────────────────
@@ -1121,6 +1155,28 @@ mod tests {
         assert!(s.list_tasks(None, None, 100).unwrap().is_empty());
         // Deleting twice reports not found.
         assert!(s.delete_task(&d.task.id).is_err());
+    }
+
+    #[test]
+    fn clear_finished_tasks_keeps_active_ones_with_their_steps() {
+        let s = store();
+        let finished = start(&s, "auto");
+        s.fail_task(&finished.task.id, "x").unwrap();
+        let cancelled = start(&s, "auto");
+        s.cancel_task(&cancelled.task.id).unwrap();
+        let active = start(&s, "auto");
+
+        assert_eq!(s.clear_finished_tasks().unwrap(), 2);
+
+        let remaining = s.list_tasks(None, None, 100).unwrap();
+        assert_eq!(remaining.len(), 1);
+        assert_eq!(remaining[0].id, active.task.id);
+        // The surviving task keeps its steps; finished ones are gone entirely.
+        assert!(s.get_task(&active.task.id).unwrap().steps.len() == 1);
+        assert!(s.get_task(&finished.task.id).is_err());
+        assert!(s.get_task(&cancelled.task.id).is_err());
+        // Nothing left to clear on a second run.
+        assert_eq!(s.clear_finished_tasks().unwrap(), 0);
     }
 
     #[test]

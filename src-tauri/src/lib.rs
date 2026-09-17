@@ -979,6 +979,7 @@ pub fn run() {
             terminal::maintenance_cmds::terminal_maintenance_authorize,
             terminal::maintenance_cmds::terminal_maintenance_cancel,
             terminal::maintenance_cmds::terminal_maintenance_delete,
+            terminal::maintenance_cmds::terminal_maintenance_clear,
             terminal::commands::get_file_icon,
             terminal::commands::get_file_type_icon,
             terminal::commands::local_list_dir,

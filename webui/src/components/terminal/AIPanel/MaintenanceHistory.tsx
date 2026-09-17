@@ -5,6 +5,7 @@ import {
   CheckCircle2,
   ChevronRight,
   Circle,
+  Eraser,
   Loader2,
   MinusCircle,
   RefreshCw,
@@ -31,6 +32,7 @@ import {
 import { Button } from "@/components/ui/button";
 import { Select } from "@/components/ui/select";
 import {
+  terminalMaintenanceClear,
   terminalMaintenanceDelete,
   terminalMaintenanceGet,
   terminalMaintenanceList,
@@ -86,6 +88,16 @@ function badgeForTask(task: MaintenanceTask): { label: string; tone: string } {
   return { label: STATUS_LABEL[task.status], tone: STATUS_TONE[task.status] };
 }
 
+/** Still-running tasks are never removed by 清除全部 (the backend keeps them
+ *  for the same reason single-record delete refuses them). */
+function isActiveTask(task: MaintenanceTask): boolean {
+  return (
+    task.status === "planning"
+    || task.status === "waiting_approval"
+    || task.status === "running"
+  );
+}
+
 const KIND_LABEL: Record<MaintenanceStep["kind"], string> = {
   inspect: "检查",
   change: "变更",
@@ -93,6 +105,13 @@ const KIND_LABEL: Record<MaintenanceStep["kind"], string> = {
 };
 
 type StatusFilter = "all" | "succeeded" | "failed" | "cancelled";
+
+/** One record, or every finished record. Both need the same confirmation
+ *  flow, so they share one pending-action state. */
+type PendingAction =
+  | { kind: "one"; task: MaintenanceTask }
+  | { kind: "all" }
+  | null;
 
 const STATUS_FILTER_OPTIONS: { value: StatusFilter; label: string }[] = [
   { value: "all", label: "全部结果" },
@@ -142,7 +161,7 @@ export function MaintenanceHistory() {
   const [serverFilter, setServerFilter] = useState<string>("all");
   const [statusFilter, setStatusFilter] = useState<StatusFilter>("all");
   const [selectedId, setSelectedId] = useState<string | null>(null);
-  const [pendingDelete, setPendingDelete] = useState<MaintenanceTask | null>(null);
+  const [pendingAction, setPendingAction] = useState<PendingAction>(null);
   const [deleting, setDeleting] = useState(false);
   const [deleteError, setDeleteError] = useState<string | null>(null);
 
@@ -158,21 +177,27 @@ export function MaintenanceHistory() {
     }
   }, []);
 
-  const handleDelete = useCallback(async () => {
-    if (!pendingDelete) return;
+  const handleConfirm = useCallback(async () => {
+    if (!pendingAction) return;
     setDeleting(true);
     setDeleteError(null);
     try {
-      await terminalMaintenanceDelete(pendingDelete.id);
-      setTasks((prev) => prev.filter((t) => t.id !== pendingDelete.id));
-      setPendingDelete(null);
+      if (pendingAction.kind === "all") {
+        await terminalMaintenanceClear();
+        // Active tasks survive the clear, so drop only the finished rows.
+        setTasks((prev) => prev.filter((t) => isActiveTask(t)));
+      } else {
+        await terminalMaintenanceDelete(pendingAction.task.id);
+        setTasks((prev) => prev.filter((t) => t.id !== pendingAction.task.id));
+      }
+      setPendingAction(null);
     } catch (e) {
-      // 删除失败时保留确认框并展示原因，用户可重试或取消
+      // 失败时保留确认框并展示原因，用户可重试或取消
       setDeleteError(e instanceof Error ? e.message : String(e));
     } finally {
       setDeleting(false);
     }
-  }, [pendingDelete]);
+  }, [pendingAction]);
 
   useEffect(() => {
     load();
@@ -198,6 +223,10 @@ export function MaintenanceHistory() {
       ),
     [tasks, serverFilter, statusFilter],
   );
+
+  /** 清除全部 only removes finished records; with none present the entry is inert. */
+  const finishedCount = useMemo(() => tasks.filter((t) => !isActiveTask(t)).length, [tasks]);
+  const hasFinishedTask = finishedCount > 0;
 
   if (selectedId) {
     return <HistoryDetail taskId={selectedId} onBack={() => setSelectedId(null)} />;
@@ -283,12 +312,23 @@ export function MaintenanceHistory() {
                   <ContextMenuItem
                     onClick={() => {
                       setDeleteError(null);
-                      setPendingDelete(t);
+                      setPendingAction({ kind: "one", task: t });
                     }}
                     className="text-caption text-destructive focus:text-destructive"
                   >
                     <Trash2 className="mr-2 h-3.5 w-3.5" />
                     删除记录
+                  </ContextMenuItem>
+                  <ContextMenuItem
+                    disabled={!hasFinishedTask}
+                    onClick={() => {
+                      setDeleteError(null);
+                      setPendingAction({ kind: "all" });
+                    }}
+                    className="text-caption text-destructive focus:text-destructive"
+                  >
+                    <Eraser className="mr-2 h-3.5 w-3.5" />
+                    清除全部
                   </ContextMenuItem>
                 </ContextMenuContent>
               </ContextMenu>
@@ -298,31 +338,44 @@ export function MaintenanceHistory() {
       </div>
 
       <AlertDialog
-        open={pendingDelete !== null}
+        open={pendingAction !== null}
         onOpenChange={(open) => {
-          if (!open && !deleting) setPendingDelete(null);
+          if (!open && !deleting) setPendingAction(null);
         }}
       >
         <AlertDialogContent>
           <AlertDialogHeader>
-            <AlertDialogTitle>删除这条维护记录？</AlertDialogTitle>
+            <AlertDialogTitle>
+              {pendingAction?.kind === "all" ? "清除全部维护记录？" : "删除这条维护记录？"}
+            </AlertDialogTitle>
             <AlertDialogDescription>
-              将删除「{pendingDelete?.goal}」的全部执行记录，删除后无法恢复。
+              {pendingAction?.kind === "all"
+                ? `将删除全部 ${finishedCount} 条已结束的维护记录，进行中的任务会保留。清除后无法恢复。`
+                : `将删除「${pendingAction?.task.goal}」的全部执行记录，删除后无法恢复。`}
             </AlertDialogDescription>
           </AlertDialogHeader>
           {deleteError && (
-            <p className="text-caption text-destructive">删除失败：{deleteError}</p>
+            <p className="text-caption text-destructive">
+              {pendingAction?.kind === "all" ? "清除失败：" : "删除失败："}
+              {deleteError}
+            </p>
           )}
           <AlertDialogFooter>
             <AlertDialogCancel disabled={deleting}>取消</AlertDialogCancel>
             <AlertDialogAction
               onClick={(e) => {
                 e.preventDefault();
-                void handleDelete();
+                void handleConfirm();
               }}
               disabled={deleting}
             >
-              {deleting ? "删除中..." : "删除"}
+              {pendingAction?.kind === "all"
+                ? deleting
+                  ? "清除中..."
+                  : "清除全部"
+                : deleting
+                  ? "删除中..."
+                  : "删除"}
             </AlertDialogAction>
           </AlertDialogFooter>
         </AlertDialogContent>

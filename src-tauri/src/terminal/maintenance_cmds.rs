@@ -602,3 +602,12 @@ pub async fn terminal_maintenance_delete(
 ) -> Result<(), String> {
     state.maintenance.delete_task(&task_id)
 }
+
+/// Clear every finished record; returns how many were removed so the UI can
+/// report the real count instead of assuming its whole list was deleted.
+#[tauri::command]
+pub async fn terminal_maintenance_clear(
+    state: State<'_, TerminalState>,
+) -> Result<u64, String> {
+    state.maintenance.clear_finished_tasks()
+}

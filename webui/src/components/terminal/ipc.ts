@@ -779,6 +779,11 @@ export async function terminalMaintenanceDelete(taskId: string): Promise<void> {
   return invoke<void>("terminal_maintenance_delete", { taskId });
 }
 
+/** Clear every finished record; resolves with how many were removed. */
+export async function terminalMaintenanceClear(): Promise<number> {
+  return invoke<number>("terminal_maintenance_clear", {});
+}
+
 export function onTerminalMaintenanceUpdated(
   handler: (event: TerminalMaintenanceEvent) => void,
 ): Promise<UnlistenFn> {

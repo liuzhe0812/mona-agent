@@ -197,4 +197,56 @@ describe("MaintenanceTaskCard", () => {
     );
     expect(screen.getByText("复检未通过：端口仍不可达")).toBeTruthy();
   });
+
+  it("folds the step list away and restores it from the header", () => {
+    render(<MaintenanceTaskCard detail={makeDetail()} />);
+
+    const header = screen.getByTitle("折叠运维步骤");
+    expect(header.getAttribute("aria-expanded")).toBe("true");
+    expect(screen.getByText("检查 nginx 状态")).toBeTruthy();
+
+    fireEvent.click(header);
+
+    expect(screen.queryByText("检查 nginx 状态")).toBeNull();
+    expect(screen.queryByText("验证 80 端口")).toBeNull();
+    // The header keeps status, goal and progress readable while folded.
+    expect(screen.getByText("执行中")).toBeTruthy();
+    expect(screen.getByText("修复 nginx 502")).toBeTruthy();
+    expect(screen.getByText("1/3")).toBeTruthy();
+
+    fireEvent.click(screen.getByTitle("展开运维步骤"));
+    expect(screen.getByText("检查 nginx 状态")).toBeTruthy();
+  });
+
+  it("hides the summary, failure reason and stop action while folded", () => {
+    const { unmount } = render(
+      <MaintenanceTaskCard
+        detail={makeDetail(
+          { status: "succeeded", resolution: "completed_changes", summary: "nginx 已恢复" },
+        )}
+      />,
+    );
+    fireEvent.click(screen.getByTitle("折叠运维步骤"));
+    expect(screen.queryByText("nginx 已恢复")).toBeNull();
+    unmount();
+
+    render(
+      <MaintenanceTaskCard
+        detail={makeDetail({ status: "failed", resolution: "failed", error: "复检未通过" })}
+      />,
+    );
+    fireEvent.click(screen.getByTitle("折叠运维步骤"));
+    expect(screen.queryByText("复检未通过")).toBeNull();
+    expect(screen.queryByText("停止维护")).toBeNull();
+  });
+
+  it("keeps the plan approval button reachable while folded", async () => {
+    render(<MaintenanceTaskCard detail={makeDetail({ status: "waiting_approval" })} />);
+    fireEvent.click(screen.getByTitle("折叠运维步骤"));
+
+    fireEvent.click(screen.getByText(/批准变更计划/));
+
+    await waitFor(() => expect(authorize).toHaveBeenCalledTimes(1));
+    expect(authorize).toHaveBeenCalledWith("task-1", ["s3"]);
+  });
 });
