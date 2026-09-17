@@ -11,7 +11,7 @@ import {
 import { useClipboardAndDrop } from "@/hooks/useClipboardAndDrop";
 import { useSessionHistory } from "@/hooks/useSessions";
 import { useClient } from "@/providers/ClientProvider";
-import { useTerminalStore } from "../store/terminalStore";
+import { useTerminalStore, loadPersistedAiChatId, terminalAiChatKey } from "../store/terminalStore";
 import { isTauri, openPathWithSystemApp } from "@/lib/tauri";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
@@ -42,7 +42,6 @@ interface ReportInfo {
 
 export function AIChat({ sessionId, sessionTypeOverride, onStreamingChange }: Props) {
   const [draft, setDraft] = useState("");
-  const [chatId, setChatId] = useState<string | null>(null);
   const [creatingChat, setCreatingChat] = useState(false);
   const [reports, setReports] = useState<ReportInfo[]>([]);
   const [inlineError, setInlineError] = useState<string | null>(null);
@@ -50,6 +49,10 @@ export function AIChat({ sessionId, sessionTypeOverride, onStreamingChange }: Pr
   const registry = useTerminalStore((s) => s.terminalRegistry);
   const execMode = useTerminalStore((s) => s.terminalExecMode);
   const setExecMode = useTerminalStore((s) => s.setTerminalExecMode);
+  const setAiChatId = useTerminalStore((s) => s.setAiChatId);
+  const chatId = useTerminalStore((s) =>
+    s.aiChatIds[terminalAiChatKey(sessionId)] ?? null,
+  );
   const storedSessionType = useTerminalStore(
     (s) => s.sessions.find((sess) => sess.id === sessionId)?.type ?? null,
   );
@@ -114,14 +117,30 @@ export function AIChat({ sessionId, sessionTypeOverride, onStreamingChange }: Pr
     addFiles(files);
   };
 
+  // Bind this terminal session to a Mona chat. The binding survives panel
+  // remounts and SSH reconnects, so the previous conversation is restored
+  // instead of starting an empty one.
   useEffect(() => {
-    if (!client) return;
+    if (!client || chatId) return;
+    // A panel whose terminal session is already gone (closed tab) must not
+    // provision another chat.
+    if (sessionId && storedSessionType === null) return;
+    const restored = sessionId ? loadPersistedAiChatId(sessionId) : null;
+    if (restored) {
+      setAiChatId(sessionId, restored);
+      return;
+    }
     let cancelled = false;
-    client.newChat(5_000, true).then((id) => {
-      if (!cancelled) setChatId(id);
-    }).catch(() => {});
-    return () => { cancelled = true; };
-  }, [client]);
+    client
+      .newChat(5_000, false)
+      .then((id) => {
+        if (!cancelled) setAiChatId(sessionId, id);
+      })
+      .catch(() => {});
+    return () => {
+      cancelled = true;
+    };
+  }, [client, chatId, sessionId, storedSessionType, setAiChatId]);
 
   useEffect(() => {
     if (!isTauri()) return;
@@ -211,8 +230,8 @@ export function AIChat({ sessionId, sessionTypeOverride, onStreamingChange }: Pr
     pendingPromptRef.current = enriched;
     pendingSendOptsRef.current = sendOpts;
     pendingImagesRef.current = payload;
-    client.newChat(5_000, true).then((nextChatId) => {
-      setChatId(nextChatId);
+    client.newChat(5_000, false).then((nextChatId) => {
+      setAiChatId(sessionId, nextChatId);
       setCreatingChat(false);
     }).catch(() => {
       pendingPromptRef.current = null;
@@ -220,7 +239,7 @@ export function AIChat({ sessionId, sessionTypeOverride, onStreamingChange }: Pr
       pendingImagesRef.current = undefined;
       setCreatingChat(false);
     });
-  }, [draft, chatId, effectiveSessionId, registry, client, execMode, send, readyImages, clear]);
+  }, [draft, chatId, sessionId, effectiveSessionId, registry, client, execMode, send, readyImages, clear, setAiChatId]);
 
   const handleStop = useCallback(() => {
     stop();

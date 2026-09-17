@@ -65,6 +65,8 @@ interface TerminalState {
   terminalRegistry: TerminalRegistry;
   terminalExecMode: "auto" | "approval";
   aiStreaming: boolean;
+  /** AI 会话 id bound to each终端会话，面板重新挂载（重连、切换面板、客户端重连）后仍复用同一会话。 */
+  aiChatIds: Record<string, string>;
   /** Latest maintenance task snapshot per session (drives the task card). */
   activeMaintenanceTasks: Record<string, MaintenanceTaskDetail>;
 
@@ -98,6 +100,7 @@ interface TerminalState {
   closeExecApproval: () => void;
   setTerminalExecMode: (mode: "auto" | "approval") => void;
   setAiStreaming: (streaming: boolean) => void;
+  setAiChatId: (sessionId: string | null, chatId: string | null) => void;
   setActiveMaintenanceTask: (
     sessionId: string,
     detail: MaintenanceTaskDetail | null,
@@ -105,6 +108,90 @@ interface TerminalState {
 }
 
 const registry = new TerminalRegistry();
+
+/** Binding map for terminal AI chats, persisted by connection identity so a
+ *  reconnected or restarted terminal session reopens the same conversation. */
+const AI_CHAT_STORAGE_KEY = "mona.terminal.ai-chat.v1";
+/** Bucket used when the AI panel is rendered without a terminal session. */
+const UNBOUND_AI_CHAT_KEY = "__unbound__";
+
+export function terminalAiChatKey(sessionId: string | null): string {
+  return sessionId ?? UNBOUND_AI_CHAT_KEY;
+}
+
+/** Stable identity of a terminal session across reconnects and app restarts:
+ *  the session id is a fresh UUID on every connect, but the saved connection is
+ *  not. Sessions without a saved connection (local shells, ad-hoc `ssh host`
+ *  typed in the shell) have no identity to restore against, so only the
+ *  in-memory binding applies to them. */
+function persistentAiChatKey(sessionId: string): string | null {
+  const session = useTerminalStore
+    .getState()
+    .sessions.find((item) => item.id === sessionId);
+  return session ? sessionIdentity(session) : null;
+}
+
+function sessionIdentity(session: Session): string | null {
+  if (!session.configId) return null;
+  return `${session.type}:${session.configId}`;
+}
+
+function readPersistedAiChatIds(): Record<string, string> {
+  if (typeof localStorage === "undefined") return {};
+  try {
+    const raw = localStorage.getItem(AI_CHAT_STORAGE_KEY);
+    if (!raw) return {};
+    const parsed: unknown = JSON.parse(raw);
+    if (!parsed || typeof parsed !== "object") return {};
+    const result: Record<string, string> = {};
+    for (const [key, value] of Object.entries(parsed as Record<string, unknown>)) {
+      if (typeof value === "string" && value) result[key] = value;
+    }
+    return result;
+  } catch {
+    return {};
+  }
+}
+
+function writePersistedAiChatIds(map: Record<string, string>): void {
+  if (typeof localStorage === "undefined") return;
+  try {
+    localStorage.setItem(AI_CHAT_STORAGE_KEY, JSON.stringify(map));
+  } catch {
+    // ignore storage errors (private mode, quota)
+  }
+}
+
+/** Recover the AI chat bound to a terminal session in an earlier run.
+ *
+ *  A duplicated tab (second live session on the same connection) must not
+ *  hijack the conversation its sibling is already showing, so the binding is
+ *  only returned while no other live session on that connection claims it. */
+export function loadPersistedAiChatId(sessionId: string): string | null {
+  const key = persistentAiChatKey(sessionId);
+  if (!key) return null;
+  const stored = readPersistedAiChatIds()[key];
+  if (!stored) return null;
+  const state = useTerminalStore.getState();
+  for (const other of state.sessions) {
+    if (other.id === sessionId) continue;
+    if (sessionIdentity(other) !== key) continue;
+    if (state.aiChatIds[terminalAiChatKey(other.id)]) return null;
+  }
+  return stored;
+}
+
+function persistAiChatId(sessionId: string, chatId: string | null): void {
+  const key = persistentAiChatKey(sessionId);
+  if (!key) return;
+  const map = readPersistedAiChatIds();
+  if (chatId) {
+    map[key] = chatId;
+  } else {
+    delete map[key];
+  }
+  writePersistedAiChatIds(map);
+}
 
 export const useTerminalStore = create<TerminalState>((set, get) => ({
   sessions: [],
@@ -153,6 +240,7 @@ export const useTerminalStore = create<TerminalState>((set, get) => ({
   terminalRegistry: registry,
   terminalExecMode: "auto" as const,
   aiStreaming: false,
+  aiChatIds: {},
   activeMaintenanceTasks: {},
 
   addSession: (session) => {
@@ -188,21 +276,28 @@ export const useTerminalStore = create<TerminalState>((set, get) => ({
   },
 
   removeSession: (sessionId) => {
-    const removedIds = get().sessions
-      .filter((session) => session.id === sessionId || session.parentSessionId === sessionId)
+    const removedIds = get()
+      .sessions.filter(
+        (session) => session.id === sessionId || session.parentSessionId === sessionId,
+      )
       .map((session) => session.id);
     for (const id of removedIds) {
       registry.unregister(id);
       registry.clearBuffer(id);
     }
+    // The persisted binding is kept: reopening the same saved connection
+    // continues the previous conversation instead of starting an empty one.
+    // Only 重置会话 rebinds it.
     set((state) => {
       const removed = new Set(removedIds);
       const sessions = state.sessions.filter((session) => !removed.has(session.id));
+      const aiChatIds = { ...state.aiChatIds };
+      for (const id of removed) delete aiChatIds[terminalAiChatKey(id)];
       const activeSessionId =
         state.activeSessionId !== null && removed.has(state.activeSessionId)
           ? sessions[sessions.length - 1]?.id ?? null
           : state.activeSessionId;
-      return { sessions, activeSessionId };
+      return { sessions, aiChatIds, activeSessionId };
     });
   },
 
@@ -408,6 +503,20 @@ export const useTerminalStore = create<TerminalState>((set, get) => ({
 
   setAiStreaming: (streaming) => {
     set({ aiStreaming: streaming });
+  },
+
+  setAiChatId: (sessionId, chatId) => {
+    const key = terminalAiChatKey(sessionId);
+    set((state) => {
+      const next = { ...state.aiChatIds };
+      if (chatId) {
+        next[key] = chatId;
+      } else {
+        delete next[key];
+      }
+      return { aiChatIds: next };
+    });
+    if (sessionId) persistAiChatId(sessionId, chatId);
   },
 
   setActiveMaintenanceTask: (sessionId, detail) => {

@@ -20,6 +20,7 @@ export function AIPanel({ sessionId, sessionType }: Props) {
   const [tab, setTab] = useState<PanelTab>("task");
   const [messageKey, setMessageKey] = useState(0);
   const setAiStreaming = useTerminalStore((s) => s.setAiStreaming);
+  const setAiChatId = useTerminalStore((s) => s.setAiChatId);
   const setActiveMaintenanceTask = useTerminalStore((s) => s.setActiveMaintenanceTask);
   const activeTask = useTerminalStore((s) =>
     sessionId ? (s.activeMaintenanceTasks[sessionId] ?? null) : null,
@@ -39,10 +40,12 @@ export function AIPanel({ sessionId, sessionType }: Props) {
     };
   }, [sessionId, setActiveMaintenanceTask]);
 
+  // 重置会话：解绑当前 AI 会话并重新挂载 AIChat，由它创建新的可见会话。
   const handleResetChat = useCallback(() => {
+    setAiChatId(sessionId, null);
     setMessageKey((prev) => prev + 1);
     setAiStreaming(false);
-  }, [setAiStreaming]);
+  }, [sessionId, setAiChatId, setAiStreaming]);
 
   const handleStreamingChange = useCallback(
     (streaming: boolean) => {
@@ -86,7 +89,8 @@ export function AIPanel({ sessionId, sessionType }: Props) {
           <>
             {activeTask && (
               <div className="shrink-0 border-b border-border/50 px-2.5 py-2">
-                <MaintenanceTaskCard detail={activeTask} />
+                {/* 按任务 id 重建，让新任务的步骤卡片回到展开状态。 */}
+                <MaintenanceTaskCard key={activeTask.task.id} detail={activeTask} />
               </div>
             )}
             <div className="min-h-0 flex-1">
