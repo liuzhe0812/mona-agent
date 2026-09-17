@@ -251,6 +251,7 @@ class AgentLoop:
         model_preset: str | None = None,
         preset_snapshot_loader: preset_helpers.PresetSnapshotLoader | None = None,
         runtime_model_publisher: Callable[[str, str | None], None] | None = None,
+        webui_turns: WebuiTurnCoordinator | None = None,
     ):
         from mona.config.schema import ToolsConfig
 
@@ -309,7 +310,12 @@ class AgentLoop:
         self._base_disabled_skills = set(disabled_skills or [])
         self.context = ContextBuilder(workspace, timezone=timezone, disabled_skills=disabled_skills)
         self.sessions = session_manager or SessionManager(workspace)
-        self._webui_turns = WebuiTurnCoordinator(
+        # Delegated loops (document/partner agents) execute their turn through
+        # this loop's ``_dispatch`` while ``_process_message`` runs on the
+        # delegate. Sharing the coordinator keeps the title context captured by
+        # the delegate visible to the turn-end handler, so delegated chats get
+        # a generated title like ordinary ones.
+        self._webui_turns = webui_turns or WebuiTurnCoordinator(
             bus=self.bus,
             sessions=self.sessions,
             schedule_background=lambda coro: self._schedule_background(coro),
@@ -851,6 +857,7 @@ class AgentLoop:
             hooks=list(self._extra_hooks) if self._extra_hooks else None,
             unified_session=self._unified_session,
             agent_kind=agent_kind,
+            webui_turns=self._webui_turns,
         )
         self._doc_loops[agent_kind] = loop
         logger.info("DocumentAgentLoop({}) initialized with tool whitelist", agent_kind)
@@ -917,6 +924,7 @@ class AgentLoop:
             model_presets=self.model_presets,
             preset_snapshot_loader=self._preset_snapshot_loader,
             runtime_config_loader=self._runtime_config_loader,
+            webui_turns=self._webui_turns,
         )
         self._partner_loops[agent_id] = loop
         logger.info("PartnerAgentLoop({}) initialized for direct chat", agent_id)

@@ -268,6 +268,117 @@ def test_webui_title_update_uses_captured_llm_runtime(
     assert captured["model"] == "turn-model"
 
 
+def test_delegated_document_loop_shares_the_turn_coordinator(tmp_path: Path) -> None:
+    """Title context captured by a delegated loop must reach turn end.
+
+    ``_process_message`` runs on the delegate while the turn-end handler runs on
+    the parent loop, so a per-loop coordinator silently dropped every delegated
+    chat's title: video/ppt/partner sessions never got one generated.
+    """
+    parent = _make_full_loop(tmp_path)
+    document_loop = parent._ensure_document_loop("video")
+
+    assert document_loop._webui_turns is parent._webui_turns
+
+    msg = InboundMessage(
+        channel="websocket",
+        sender_id="u1",
+        chat_id="chat-video",
+        content="build a video",
+        metadata={WEBUI_SESSION_METADATA_KEY: True},
+    )
+    runtime = LLMRuntime(MagicMock(), "video-model")
+    document_loop._webui_turns.capture_title_context(
+        "websocket:chat-video",
+        msg,
+        runtime,
+    )
+
+    assert parent._webui_turns._title_contexts["websocket:chat-video"] is runtime
+
+
+@pytest.mark.asyncio
+async def test_delegated_video_chat_gets_a_generated_title(tmp_path: Path) -> None:
+    """A video chat must end up with a real title, not a truncated reply."""
+    parent = _make_full_loop(tmp_path)
+    parent.provider.chat_with_retry = AsyncMock(
+        return_value=LLMResponse(content="产品介绍视频", finish_reason="stop")
+    )
+    document_loop = parent._ensure_document_loop("video")
+
+    session_key = "websocket:chat-video-title"
+    session = parent.sessions.get_or_create(session_key)
+    session.metadata[WEBUI_SESSION_METADATA_KEY] = True
+    session.metadata["agent_kind"] = "video"
+    session.add_message("user", "请生成一段视频。项目名：产品介绍视频")
+    session.add_message("assistant", "分镜草稿已就绪。")
+    parent.sessions.save(session)
+
+    msg = InboundMessage(
+        channel="websocket",
+        sender_id="u1",
+        chat_id="chat-video-title",
+        content="请生成一段视频。",
+        metadata={WEBUI_SESSION_METADATA_KEY: True},
+    )
+    # The delegate captures the model runtime while executing the turn...
+    document_loop._webui_turns.capture_title_context(
+        session_key,
+        msg,
+        parent.llm_runtime(),
+    )
+    await parent._webui_turns.handle_turn_end(msg, session_key=session_key, latency_ms=None)
+
+    # ...and the parent's turn end schedules the title generation.
+    assert parent._webui_turns._title_contexts == {}
+    for task in list(parent._background_tasks):
+        await task
+
+    reloaded = parent.sessions.get_or_create(session_key)
+    assert reloaded.metadata[WEBUI_TITLE_METADATA_KEY] == "产品介绍视频"
+
+
+def test_delegated_partner_loop_shares_the_turn_coordinator(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The same contract holds for direct-chat partner agents."""
+    from mona.agent.partners import AgentDefinition
+
+    parent = _make_full_loop(tmp_path)
+    definition = AgentDefinition(
+        id="com.mona.probe",
+        display_name="Probe",
+        description="test agent",
+        package_version="1.0.0",
+    )
+
+    class _Registry:
+        def get(self, agent_id: str) -> AgentDefinition:
+            return definition
+
+    class _UserConfig:
+        enabled = True
+        revision = 1
+
+    forwarded: dict[str, object] = {}
+
+    class _FakePartnerLoop:
+        def __init__(self, **kwargs: object) -> None:
+            forwarded.update(kwargs)
+
+    monkeypatch.setattr("mona.agent.partners.AgentRegistry", _Registry)
+    monkeypatch.setattr(
+        "mona.agent.user_config.load_agent_user_config",
+        lambda agent_id: _UserConfig(),
+    )
+    monkeypatch.setattr("mona.agent.partner_loop.PartnerAgentLoop", _FakePartnerLoop)
+
+    parent._ensure_partner_loop("com.mona.probe")
+
+    assert forwarded["webui_turns"] is parent._webui_turns
+
+
 def test_save_turn_skips_multimodal_user_when_only_runtime_context() -> None:
     loop = _mk_loop()
     session = Session(key="test:runtime-only")
