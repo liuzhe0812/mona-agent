@@ -351,7 +351,14 @@ mod tests {
 
         assert_eq!(implementation.matches(&native_handler).count(), 1);
         assert!(!implementation.contains(&managed_hook));
-        assert!(implementation.contains("operation: Some(operation.clone())"));
+        // The COM operation must stay on the DownloadEntry so a tab's later
+        // cancel/pause/resume can still drive it. The storing call lives in
+        // `impl DownloadStartingArgsSend::finish`, which is declared *after*
+        // this test module — so scan from that impl to EOF. rsplit, not split:
+        // the anchor also appears in the line below, and taking the first
+        // occurrence would make this assertion match its own literal.
+        let finish = source.rsplit("impl DownloadStartingArgsSend {").next().unwrap();
+        assert!(finish.contains("operation: Some(operation.clone())"));
     }
 
     #[test]
@@ -387,10 +394,14 @@ mod tests {
     #[test]
     fn browser_tabs_share_cdp_port_and_have_safe_page_markers() {
         assert_eq!(CDP_PORT, 9300);
-        assert_eq!(
-            browser_initialization_script("tab-'\"-1"),
-            "window.__mona_tab_id = \"tab-'\\\"-1\";"
-        );
+        // The tab id is JSON-encoded, so a hostile id (quotes, backslashes)
+        // cannot break out of the injected string literal. The script also
+        // carries the scrollbar style and the shortcut interception that follow
+        // the marker, so assert the marker line itself rather than the whole
+        // payload.
+        let script = browser_initialization_script("tab-'\"-1");
+        let marker = script.lines().next().unwrap_or_default();
+        assert_eq!(marker, "window.__mona_tab_id = \"tab-'\\\"-1\";");
     }
 
     #[test]
