@@ -42,10 +42,24 @@ async function officeRequest<T>(
     return response.json() as Promise<T>;
   }
   let payload: { error?: { code?: string; message?: string; retryable?: boolean } } = {};
+  let structured = false;
   try {
     payload = await response.json();
+    structured = true;
   } catch {
-    // The structured fallback below remains actionable without exposing response bodies.
+    // A route the running process does not know answers with a plain-text 404.
+    // That means the editor service is older than this WebUI (see below), not
+    // that the request was wrong.
+  }
+  // Distinguish "the session is gone" (structured SESSION_NOT_FOUND) from "the
+  // endpoint does not exist". The latter only happens when the local editor
+  // service still runs an older build, which is actionable: restart the app.
+  if (!structured && response.status === 404) {
+    throw new OfficeClientError(
+      "EDITOR_UNAVAILABLE",
+      "文档编辑服务版本过旧，缺少该功能接口。请重启 Mona 后再试。",
+      true,
+    );
   }
   throw new OfficeClientError(
     payload.error?.code ?? "EDITOR_UNAVAILABLE",
@@ -201,6 +215,18 @@ export async function closeOfficeSession(
     `/api/office/sessions/${encodeURIComponent(sessionId)}`,
     ownerSessionKey,
     { method: "DELETE" },
+  );
+}
+
+/** Close the session and delete its working files (project + files). */
+export async function deleteOfficeSession(
+  sessionId: string,
+  ownerSessionKey: string,
+): Promise<void> {
+  await officeRequest(
+    `/api/office/sessions/${encodeURIComponent(sessionId)}/delete`,
+    ownerSessionKey,
+    { method: "POST" },
   );
 }
 

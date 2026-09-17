@@ -17,6 +17,8 @@ interface DeleteConfirmProps {
   /** 可选覆盖文案；不传则保持默认「删除这个对话？」语义 */
   titleText?: string;
   descriptionText?: string;
+  /** 可选覆盖确认按钮文案；不传则保持默认「删除对话」语义 */
+  confirmText?: string;
   onCancel: () => void;
   onConfirm: () => void;
 }
@@ -26,6 +28,7 @@ export function DeleteConfirm({
   title,
   titleText,
   descriptionText,
+  confirmText,
   onCancel,
   onConfirm,
 }: DeleteConfirmProps) {
@@ -61,7 +64,7 @@ export function DeleteConfirm({
             onClick={onConfirm}
             className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
           >
-            {t("deleteConfirm.confirm")}
+            {confirmText ?? t("deleteConfirm.confirm")}
           </AlertDialogAction>
         </AlertDialogFooter>
       </AlertDialogContent>

@@ -180,6 +180,45 @@ def test_closed_session_is_not_recovered(tmp_path: Path) -> None:
     assert error.value.code == OfficeErrorCode.SESSION_NOT_FOUND
 
 
+def test_delete_session_removes_the_working_directory(tmp_path: Path) -> None:
+    """Deleting a document project must take its files with it."""
+    manager, session, _ = _create_sheet_session(tmp_path)
+    session_dir = session.session_dir
+    assert session_dir.is_dir()
+    assert session.working_path.is_file()
+
+    manager.delete_session(session.session_id)
+
+    assert not session_dir.exists()
+    # And it must not come back on the next recovery pass.
+    recovered_manager = OfficeSessionManager(sessions_root=manager.sessions_root)
+    with pytest.raises(OfficeError) as error:
+        recovered_manager.get_session(session.session_id, owner_session_key="chat:1")
+    assert error.value.code == OfficeErrorCode.SESSION_NOT_FOUND
+
+
+def test_delete_session_keeps_the_imported_source_file(tmp_path: Path) -> None:
+    """The user's own source file lives outside Mona's storage and survives."""
+    manager, session, source = _create_sheet_session(tmp_path)
+
+    manager.delete_session(session.session_id)
+
+    assert source.is_file()
+    assert source.read_bytes() == b"initial workbook"
+
+
+def test_delete_session_requires_the_owning_session(tmp_path: Path) -> None:
+    manager, session, _ = _create_sheet_session(tmp_path)
+    manager.get_session(session.session_id, owner_session_key="chat:1")
+    session_dir = session.session_dir
+
+    with pytest.raises(OfficeError) as error:
+        manager.get_session(session.session_id, owner_session_key="chat:other")
+
+    assert error.value.code == OfficeErrorCode.SESSION_NOT_FOUND
+    assert session_dir.is_dir()
+
+
 def test_corrupt_session_metadata_returns_recovery_error(tmp_path: Path) -> None:
     manager, session, _ = _create_sheet_session(tmp_path)
     (session.session_dir / "session.json").write_text("{broken", encoding="utf-8")

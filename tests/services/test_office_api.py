@@ -469,6 +469,71 @@ async def test_closing_session_notifies_editor_and_does_not_recover(
             recovered_manager.get_session(session["sessionId"], owner_session_key="chat:1")
         assert error.value.code == OfficeErrorCode.SESSION_NOT_FOUND
 
+
+async def test_delete_route_removes_session_files_and_keeps_the_source(
+    tmp_path: Path,
+    services_token: str,
+) -> None:
+    """The documented 删除 contract: project + working files go, source stays."""
+    client, workspace = await _make_client(tmp_path)
+    async with client:
+        session = await _create_session(client, workspace, services_token)
+        headers = {
+            "X-Mona-Token": services_token,
+            OFFICE_OWNER_HEADER: "chat:1",
+        }
+        session_dir = workspace.parent / "data" / "office" / "sessions" / session["sessionId"]
+        assert session_dir.is_dir()
+        source = workspace / "input.xlsx"
+
+        deleted = await client.post(
+            f"/api/office/sessions/{session['sessionId']}/delete",
+            headers=headers,
+        )
+
+        assert deleted.status == 200
+        body = await deleted.json()
+        assert body == {"ok": True, "sessionId": session["sessionId"]}
+        assert not session_dir.exists()
+        assert source.is_file()
+        assert source.read_bytes() == b"initial workbook"
+
+        recovered_manager = OfficeSessionManager(
+            sessions_root=workspace.parent / "data" / "office" / "sessions"
+        )
+        with pytest.raises(OfficeError) as error:
+            recovered_manager.get_session(session["sessionId"], owner_session_key="chat:1")
+        assert error.value.code == OfficeErrorCode.SESSION_NOT_FOUND
+
+        # The session is gone, so a repeat delete is a clean 404 rather than a crash.
+        again = await client.post(
+            f"/api/office/sessions/{session['sessionId']}/delete",
+            headers=headers,
+        )
+        assert again.status == 404
+
+
+async def test_delete_route_rejects_a_foreign_owner(
+    tmp_path: Path,
+    services_token: str,
+) -> None:
+    client, workspace = await _make_client(tmp_path)
+    async with client:
+        session = await _create_session(client, workspace, services_token)
+        session_dir = workspace.parent / "data" / "office" / "sessions" / session["sessionId"]
+
+        response = await client.post(
+            f"/api/office/sessions/{session['sessionId']}/delete",
+            headers={
+                "X-Mona-Token": services_token,
+                OFFICE_OWNER_HEADER: "chat:other",
+            },
+        )
+
+        assert response.status in (403, 404)
+        assert session_dir.is_dir()
+
+
 async def test_checkpoint_stream_export_and_file_read(
     tmp_path: Path,
     services_token: str,

@@ -6,12 +6,14 @@ import {
   Loader2,
   Search,
   Star,
+  Trash2,
   Upload,
   X,
 } from "lucide-react";
 
 import { AgentLogo } from "@/components/AgentLogo";
 import { createConversationCanvasNote } from "@/components/canvas/conversation-canvas";
+import { DeleteConfirm } from "@/components/DeleteConfirm";
 import { DocChatPanel } from "@/components/doc/DocChatPanel";
 import { RightSidebarToggleIcon } from "@/components/notes/RightSidebarToggleIcon";
 import { OfficeEditorHost } from "@/components/office/OfficeEditorHost";
@@ -28,11 +30,17 @@ import { Input } from "@/components/ui/input";
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
 import {
+  deleteVideoProject,
   fetchVideoProjects,
   saveVideoChatId,
   type VideoProject,
 } from "@/lib/api";
-import { createOfficeSession, getOfficeSession, importOfficeSession } from "@/lib/office-client";
+import {
+  createOfficeSession,
+  deleteOfficeSession,
+  getOfficeSession,
+  importOfficeSession,
+} from "@/lib/office-client";
 import {
   isTauri,
   revealItemInDir,
@@ -226,6 +234,19 @@ function nextDocumentTitle(type: OfficeDocumentType, tabs: WorkspaceTab[]): stri
   return count === 0 ? base : `${base} ${count + 1}`;
 }
 
+/** Spell out exactly what 「删除」 removes before the user confirms. An imported
+ *  document's source file lives outside Mona's storage and is never deleted. */
+function deleteHistoryDescription(item: HistoryItem): string {
+  if (item.video) {
+    return `将删除视频项目「${item.title}」及其全部文件（分镜、场景与渲染产物）。此操作不可撤销。`;
+  }
+  const sourcePath = item.office?.sourcePath;
+  if (sourcePath) {
+    return `将删除「${item.title}」在 Mona 中的编辑记录与工作文件。原文件 ${sourcePath} 不会被删除。此操作不可撤销。`;
+  }
+  return `将删除文档「${item.title}」及其工作文件。此操作不可撤销。`;
+}
+
 export function DocMakerView() {
   const { client, token } = useClient();
   const workspacePath = useWorkspaceStore((state) => state.workspacePath);
@@ -245,6 +266,8 @@ export function DocMakerView() {
   const [dragging, setDragging] = useState(false);
   const [hydrated, setHydrated] = useState(false);
   const [officeToolbarContainer, setOfficeToolbarContainer] = useState<HTMLDivElement | null>(null);
+  const [pendingDelete, setPendingDelete] = useState<HistoryItem | null>(null);
+  const [deletingKey, setDeletingKey] = useState<string | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   const activeTab = tabs.find((tab) => tab.id === activeTabId) ?? null;
@@ -534,6 +557,44 @@ export function DocMakerView() {
     });
   }, []);
 
+  const closeHistoryItemTabs = useCallback((item: HistoryItem) => {
+    const targetsTab = (tab: WorkspaceTab) => {
+      if (item.office) return tab.kind === "office" && tab.session.sessionId === item.office.sessionId;
+      if (item.video) return tab.kind === "video-workflow" && tab.project?.name === item.video.name;
+      return false;
+    };
+    const remaining = tabs.filter((tab) => !targetsTab(tab));
+    setTabs(remaining);
+    if (!remaining.some((tab) => tab.id === activeTabId)) setActiveTabId(START_TAB_ID);
+  }, [activeTabId, tabs]);
+
+  const confirmDeleteHistoryItem = useCallback(async () => {
+    const item = pendingDelete;
+    if (!item || deletingKey) return;
+    setActionError(null);
+    setDeletingKey(item.key);
+    try {
+      if (item.office) {
+        await deleteOfficeSession(item.office.sessionId, item.office.ownerSessionKey);
+        removeRecentOfficeItem(item.office);
+      } else if (item.video) {
+        await deleteVideoProject(token, item.video.name);
+        setVideoProjects((current) => current.filter((project) => project.name !== item.video!.name));
+        setFavorites((current) => {
+          const next = new Set(current);
+          next.delete(item.key);
+          return next;
+        });
+      }
+      closeHistoryItemTabs(item);
+      setPendingDelete(null);
+    } catch (error) {
+      setActionError(`删除失败：${error instanceof Error ? error.message : "未知错误"}`);
+    } finally {
+      setDeletingKey(null);
+    }
+  }, [closeHistoryItemTabs, deletingKey, pendingDelete, removeRecentOfficeItem, token]);
+
   const openHistoryDirectory = useCallback(async (item: HistoryItem) => {
     setActionError(null);
     if (!isTauri()) {
@@ -680,6 +741,15 @@ export function DocMakerView() {
                         </ContextMenuItem>
                       </>
                     ) : null}
+                    <ContextMenuSeparator />
+                    <ContextMenuItem
+                      className="text-destructive focus:text-destructive"
+                      data-testid={`document-history-delete-${item.key}`}
+                      onSelect={() => setPendingDelete(item)}
+                    >
+                      <Trash2 className="h-3.5 w-3.5" />
+                      删除
+                    </ContextMenuItem>
                   </ContextMenuContent>
                 </ContextMenu>
               );
@@ -744,6 +814,15 @@ export function DocMakerView() {
       <TooltipProvider delayDuration={150}><Tooltip><TooltipTrigger asChild><Button type="button" variant="ghost" size="icon" className="absolute right-2 top-0.5 z-10 h-7 w-7" aria-label={rightSidebarOpen ? "收起 MONA AI" : "打开 MONA AI"} onClick={() => setRightSidebarOpen((open) => !open)}><RightSidebarToggleIcon open={rightSidebarOpen} className="h-4 w-4" /></Button></TooltipTrigger><TooltipContent side="bottom">{rightSidebarOpen ? "收起 MONA AI" : "打开 MONA AI"}</TooltipContent></Tooltip></TooltipProvider>
 
       <Input ref={fileInputRef} type="file" className="hidden" accept=".docx,.xlsx,.pptx" onChange={(event) => { const file = event.target.files?.[0]; if (file) void file.arrayBuffer().then((buffer) => importOfficeFile(file.name, buffer, `browser:${file.name}:${file.size}:${file.lastModified}`)); event.target.value = ""; }} />
+      <DeleteConfirm
+        open={pendingDelete !== null}
+        title={pendingDelete?.title ?? ""}
+        titleText={pendingDelete ? `删除「${pendingDelete.title}」？` : undefined}
+        descriptionText={pendingDelete ? deleteHistoryDescription(pendingDelete) : undefined}
+        confirmText="删除"
+        onCancel={() => { if (!deletingKey) setPendingDelete(null); }}
+        onConfirm={() => void confirmDeleteHistoryItem()}
+      />
       {actionError ? <div className="absolute bottom-4 left-1/2 z-50 flex -translate-x-1/2 items-center gap-3 rounded-lg border border-destructive/30 bg-background px-3 py-2 text-caption text-destructive shadow-md" role="alert"><span>{actionError}</span><Button variant="ghost" size="sm" className="h-6 px-2 text-caption" onClick={() => setActionError(null)}>关闭</Button></div> : null}
     </div>
   );

@@ -802,6 +802,21 @@ class OfficeSessionManager:
         session.closed = True
         self._persist_session(session)
 
+    def delete_session(self, session_id: str) -> None:
+        """Close the session and remove its working directory from disk.
+
+        This is the destructive counterpart of :meth:`close_session`: the
+        session directory holds Mona's working copy, so deleting it removes the
+        project together with its files. A source file the user imported lives
+        outside ``sessions_root`` and is never touched here.
+        """
+        session = self.get_session(session_id)
+        session_dir = session.session_dir.resolve()
+        if session_dir == self.sessions_root or self.sessions_root not in session_dir.parents:
+            raise OfficeError(OfficeErrorCode.INVALID_OPERATION, "无效的 Office 会话目录。")
+        self.close_session(session_id)
+        shutil.rmtree(session_dir, ignore_errors=True)
+
     def shutdown(self) -> None:
         for session_id, session in self._sessions.items():
             self._fail_pending_for_session(session_id)

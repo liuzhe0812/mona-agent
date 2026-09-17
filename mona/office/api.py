@@ -759,6 +759,20 @@ async def handle_close_session(request: web.Request) -> web.Response:
     return web.json_response({"ok": True, "sessionId": session.session_id})
 
 
+async def handle_delete_session(request: web.Request) -> web.Response:
+    """Close the session and delete its working directory (project + files)."""
+    manager = _manager(request)
+    session = manager.get_session(
+        request.match_info["session_id"],
+        owner_session_key=_owner_session_key(request),
+    )
+    await _engine(request).close(session.session_id)
+    _checkpoint_uploads(request).cancel_session(session.session_id)
+    await _hub(request).close_session(session.session_id)
+    manager.delete_session(session.session_id)
+    return web.json_response({"ok": True, "sessionId": session.session_id})
+
+
 async def handle_office_socket(request: web.Request) -> web.WebSocketResponse:
     record = _tickets(request).consume(request.query.get("ticket", ""))
     if record is None:
@@ -882,6 +896,7 @@ def register_office_routes(
     app.router.add_post("/api/office/sessions/{session_id}/apply", handle_apply)
     app.router.add_post("/api/office/sessions/{session_id}/save", handle_save)
     app.router.add_post("/api/office/sessions/{session_id}/export", handle_export)
+    app.router.add_post("/api/office/sessions/{session_id}/delete", handle_delete_session)
     app.router.add_delete("/api/office/sessions/{session_id}", handle_close_session)
     app.router.add_get("/api/office/ws", handle_office_socket)
 

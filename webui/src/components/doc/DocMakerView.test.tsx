@@ -9,6 +9,8 @@ const mocks = vi.hoisted(() => ({
   createOfficeSession: vi.fn(),
   getOfficeSession: vi.fn(),
   importOfficeSession: vi.fn(),
+  deleteOfficeSession: vi.fn(),
+  deleteVideoProject: vi.fn(),
   fetchVideoProjects: vi.fn(),
   newChat: vi.fn(),
   sendMessage: vi.fn(),
@@ -27,10 +29,12 @@ vi.mock("@/lib/office-client", () => ({
   createOfficeSession: mocks.createOfficeSession,
   getOfficeSession: mocks.getOfficeSession,
   importOfficeSession: mocks.importOfficeSession,
+  deleteOfficeSession: mocks.deleteOfficeSession,
 }));
 
 vi.mock("@/lib/api", () => ({
   fetchVideoProjects: mocks.fetchVideoProjects,
+  deleteVideoProject: mocks.deleteVideoProject,
 }));
 
 vi.mock("@/lib/tauri", async (importOriginal) => ({
@@ -84,6 +88,8 @@ describe("DocMakerView", () => {
     mocks.createOfficeSession.mockReset();
     mocks.getOfficeSession.mockReset();
     mocks.importOfficeSession.mockReset();
+    mocks.deleteOfficeSession.mockReset().mockResolvedValue(undefined);
+    mocks.deleteVideoProject.mockReset().mockResolvedValue({ ok: true });
     mocks.fetchVideoProjects.mockReset().mockResolvedValue({ projects: [] });
     mocks.newChat.mockReset().mockResolvedValue("chat-1");
     mocks.sendMessage.mockReset();
@@ -214,6 +220,99 @@ describe("DocMakerView", () => {
     const favoriteItem = screen.getByRole("menuitem", { name: "收藏" });
     fireEvent.click(favoriteItem);
     expect(screen.getByRole("button", { name: "取消收藏 季度汇报.pptx" })).toBeInTheDocument();
+  });
+
+  it("deletes a document project with its files after an explicit confirmation", async () => {
+    localStorage.setItem("mona.ai-docs.recent-office.v1", JSON.stringify([{
+      key: "office:slides-session",
+      sessionId: "slides-session",
+      ownerSessionKey: "websocket:slides-chat",
+      chatId: "slides-chat",
+      title: "季度汇报.pptx",
+      officeType: "slides",
+      updatedAt: Date.now(),
+      sourcePath: "D:\\workspace\\季度汇报.pptx",
+    }]));
+    render(<DocMakerView />);
+
+    const row = await screen.findByTestId("document-history-row-office:slides-session");
+    fireEvent.contextMenu(row);
+    fireEvent.click(await screen.findByRole("menuitem", { name: "删除" }));
+
+    // The confirmation states the imported source file is preserved.
+    expect(await screen.findByRole("alertdialog")).toBeInTheDocument();
+    expect(screen.getByText("删除「季度汇报.pptx」？")).toBeInTheDocument();
+    expect(
+      screen.getByText(/原文件 D:\\workspace\\季度汇报\.pptx 不会被删除/),
+    ).toBeInTheDocument();
+    expect(mocks.deleteOfficeSession).not.toHaveBeenCalled();
+
+    fireEvent.click(screen.getByRole("button", { name: "删除" }));
+
+    await waitFor(() => {
+      expect(mocks.deleteOfficeSession).toHaveBeenCalledWith(
+        "slides-session",
+        "websocket:slides-chat",
+      );
+    });
+    expect(screen.queryByTestId("document-history-row-office:slides-session")).not.toBeInTheDocument();
+  });
+
+  it("deletes a video project and closes its open tab after confirmation", async () => {
+    mocks.fetchVideoProjects.mockResolvedValue({
+      projects: [{
+        name: "5个分镜介绍AI模型技术",
+        createdAt: Date.now(),
+        resolution: "1920x1080",
+        phase: "storyboard",
+        hasVideo: false,
+        outputStale: false,
+        chatId: "video-chat",
+      }],
+    });
+    render(<DocMakerView />);
+
+    const row = await screen.findByTestId("document-history-row-video:5个分镜介绍AI模型技术");
+    // Open the project, then delete it from the list: the tab must go too.
+    fireEvent.click(within(row).getByText("5个分镜介绍AI模型技术"));
+    await waitFor(() => expect(screen.getByRole("tab", { name: /5个分镜介绍AI模型技术/ })).toBeInTheDocument());
+
+    fireEvent.contextMenu(row);
+    fireEvent.click(await screen.findByRole("menuitem", { name: "删除" }));
+
+    expect(await screen.findByText("删除「5个分镜介绍AI模型技术」？")).toBeInTheDocument();
+    expect(screen.getByText(/全部文件（分镜、场景与渲染产物）/)).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: "删除" }));
+
+    await waitFor(() => {
+      expect(mocks.deleteVideoProject).toHaveBeenCalledWith("token", "5个分镜介绍AI模型技术");
+    });
+    expect(screen.queryByTestId("document-history-row-video:5个分镜介绍AI模型技术")).not.toBeInTheDocument();
+    expect(screen.queryByRole("tab", { name: /5个分镜介绍AI模型技术/ })).not.toBeInTheDocument();
+    expect(screen.getByRole("tab", { name: "开始" })).toHaveAttribute("aria-selected", "true");
+  });
+
+  it("keeps the entry and reports the failure when deletion is rejected", async () => {
+    localStorage.setItem("mona.ai-docs.recent-office.v1", JSON.stringify([{
+      key: "office:slides-session",
+      sessionId: "slides-session",
+      ownerSessionKey: "websocket:slides-chat",
+      chatId: "slides-chat",
+      title: "季度汇报.pptx",
+      officeType: "slides",
+      updatedAt: Date.now(),
+    }]));
+    mocks.deleteOfficeSession.mockRejectedValue(new Error("文档编辑服务未启动。"));
+    render(<DocMakerView />);
+
+    const row = await screen.findByTestId("document-history-row-office:slides-session");
+    fireEvent.contextMenu(row);
+    fireEvent.click(await screen.findByRole("menuitem", { name: "删除" }));
+    fireEvent.click(await screen.findByRole("button", { name: "删除" }));
+
+    expect(await screen.findByText(/删除失败：文档编辑服务未启动。/)).toBeInTheDocument();
+    expect(screen.getByTestId("document-history-row-office:slides-session")).toBeInTheDocument();
   });
 
   it("reveals a saved Office working copy when older history lacks a source path", async () => {

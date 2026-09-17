@@ -12,7 +12,13 @@ vi.mock("@/lib/tauri", () => ({
   httpFetch: mocks.httpFetch,
 }));
 
-import { createOfficeSession, importOfficeSession, uploadOfficeCheckpoint } from "./office-client";
+import {
+  createOfficeSession,
+  deleteOfficeSession,
+  importOfficeSession,
+  OfficeClientError,
+  uploadOfficeCheckpoint,
+} from "./office-client";
 
 describe("office client", () => {
   beforeEach(() => mocks.httpFetch.mockReset());
@@ -99,5 +105,46 @@ describe("office client", () => {
     expect((firstChunkInit.body as ArrayBuffer).byteLength).toBe(2);
     const [finishUrl] = mocks.httpFetch.mock.calls[3] as [string, RequestInit];
     expect(finishUrl).toContain("/finish");
+  });
+
+  it("deletes through the dedicated endpoint so the editor's close path is untouched", async () => {
+    mocks.httpFetch.mockResolvedValue(new Response(JSON.stringify({ ok: true }), {
+      status: 200,
+      headers: { "Content-Type": "application/json" },
+    }));
+
+    await deleteOfficeSession("office_1", "chat:1");
+
+    const [url, init] = mocks.httpFetch.mock.calls[0] as [string, RequestInit];
+    expect(new URL(url).pathname).toBe("/api/office/sessions/office_1/delete");
+    expect(init.method).toBe("POST");
+  });
+
+  it("reports a missing endpoint as an outdated service instead of a bare 404", async () => {
+    // An older services build answers unknown routes with a plain-text 404,
+    // which used to surface as the opaque "文档编辑请求失败（404）".
+    mocks.httpFetch.mockResolvedValue(new Response("404: Not Found", {
+      status: 404,
+      headers: { "Content-Type": "text/plain; charset=utf-8" },
+    }));
+
+    await expect(deleteOfficeSession("office_1", "chat:1")).rejects.toMatchObject({
+      code: "EDITOR_UNAVAILABLE",
+      message: expect.stringContaining("版本过旧"),
+      retryable: true,
+    });
+  });
+
+  it("keeps the structured session-not-found error from the service", async () => {
+    mocks.httpFetch.mockResolvedValue(new Response(JSON.stringify({
+      error: { code: "SESSION_NOT_FOUND", message: "Office 会话不存在。", retryable: false },
+    }), { status: 404, headers: { "Content-Type": "application/json" } }));
+
+    await expect(deleteOfficeSession("office_1", "chat:1")).rejects.toMatchObject({
+      code: "SESSION_NOT_FOUND",
+      message: "Office 会话不存在。",
+      retryable: false,
+    });
+    expect(OfficeClientError).toBeDefined();
   });
 });
