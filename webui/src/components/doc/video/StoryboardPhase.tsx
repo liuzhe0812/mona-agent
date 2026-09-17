@@ -108,6 +108,12 @@ interface StoryboardPhaseProps {
   /** 项目已过分镜锁定阶段（制作/导出中回看编辑）：底部按钮变为「返回制作」，
    * 不再重复调用锁定 API，避免服务端 phase 回退。 */
   alreadyLocked?: boolean;
+  /** The parent detected that the storyboard turn was rejected before it ran. */
+  generationError?: string | null;
+  /** Whether the Gateway has an active Agent turn for this video chat. */
+  generationRunning?: boolean;
+  /** Re-send the persisted project brief without creating a second project. */
+  onRetryGeneration?: () => void;
   /** 右侧 AI 对话面板，作为第三栏渲染（可拖拽调整宽度）。 */
   chatPanel?: ReactNode;
 }
@@ -117,6 +123,9 @@ export function StoryboardPhase({
   onLocked,
   refreshTrigger,
   alreadyLocked = false,
+  generationError = null,
+  generationRunning = false,
+  onRetryGeneration,
   chatPanel,
 }: StoryboardPhaseProps) {
   const { client, token } = useClient();
@@ -145,6 +154,9 @@ export function StoryboardPhase({
     null,
   );
   const [parseError, setParseError] = useState<string | null>(null);
+  const [generationMayNotHaveStarted, setGenerationMayNotHaveStarted] =
+    useState(false);
+  const [generationWatchToken, setGenerationWatchToken] = useState(0);
 
   // Save queue: per-scene pending field edits, merged and sent serially.
   const pendingRef = useRef<Map<number, Partial<VideoScene>>>(new Map());
@@ -327,6 +339,31 @@ export function StoryboardPhase({
     }, 2000);
     return () => clearTimeout(t);
   }, [refreshTrigger, scenes.length]);
+
+  // A project with no scenes and no active turn must not retain an unbounded
+  // loading spinner. Wait briefly for the Gateway status event, then offer a
+  // deliberate retry using the saved project brief.
+  useEffect(() => {
+    if (
+      scenes.length > 0 ||
+      storyboardExists ||
+      parseError ||
+      generationError ||
+      generationRunning
+    ) {
+      setGenerationMayNotHaveStarted(false);
+      return;
+    }
+    const timer = setTimeout(() => setGenerationMayNotHaveStarted(true), 8_000);
+    return () => clearTimeout(timer);
+  }, [
+    generationError,
+    generationRunning,
+    generationWatchToken,
+    parseError,
+    scenes.length,
+    storyboardExists,
+  ]);
 
   const selectedScene = scenes.find((s) => s.index === selectedIndex) ?? null;
 
@@ -1213,24 +1250,35 @@ export function StoryboardPhase({
                     重新加载
                   </Button>
                 </>
-              ) : aiFinishedEmpty ? (
+              ) : generationError || aiFinishedEmpty || generationMayNotHaveStarted ? (
                 <>
                   <AlertCircle className="h-6 w-6 text-amber-500" />
                   <div className="font-medium text-foreground">
-                    AI 已完成回复，但未检测到分镜文件
+                    {generationError
+                      ? "分镜生成未能启动"
+                      : aiFinishedEmpty
+                        ? "AI 已完成回复，但未检测到分镜文件"
+                        : "未检测到正在执行的分镜任务"}
                   </div>
                   <div className="max-w-md text-caption leading-relaxed">
-                    请检查右侧对话内容，确认 AI 是否成功执行了分镜生成任务。 若
-                    AI 拒绝或失败，可在对话框中重试。
+                    {generationError ?? "请重新发送分镜任务；不会创建新的视频项目。"}
                   </div>
                   <Button
                     variant="outline"
                     size="sm"
                     className="mt-1 h-8 text-caption"
-                    onClick={() => loadScenes()}
+                    onClick={() => {
+                      if (onRetryGeneration) {
+                        setGenerationMayNotHaveStarted(false);
+                        setGenerationWatchToken((current) => current + 1);
+                        onRetryGeneration();
+                        return;
+                      }
+                      loadScenes();
+                    }}
                   >
                     <RefreshCw className="mr-1.5 h-3.5 w-3.5" />
-                    重新加载
+                    {onRetryGeneration ? "重新发送分镜任务" : "重新加载"}
                   </Button>
                 </>
               ) : (

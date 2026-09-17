@@ -157,11 +157,39 @@ function makeClient() {
   const videoProjectChangedHandlers = new Set<
     (payload: { projectName: string; hint: string }) => void
   >();
+  const chatHandlers = new Map<string, Set<(event: unknown) => void>>();
+  const runStatusHandlers = new Set<
+    (chatId: string, startedAt: number | null) => void
+  >();
   return {
     status: "open" as const,
     defaultChatId: null,
     onStatus: () => () => {},
-    onChat: () => () => {},
+    onChat: (chatId: string, handler: (event: unknown) => void) => {
+      let handlers = chatHandlers.get(chatId);
+      if (!handlers) {
+        handlers = new Set();
+        chatHandlers.set(chatId, handlers);
+      }
+      handlers.add(handler);
+      return () => {
+        handlers.delete(handler);
+      };
+    },
+    onRunStatus: (handler: (chatId: string, startedAt: number | null) => void) => {
+      runStatusHandlers.add(handler);
+      return () => {
+        runStatusHandlers.delete(handler);
+      };
+    },
+    /** Test helper: simulate a chat-scoped inbound frame. */
+    __emitChat: (chatId: string, event: unknown) => {
+      for (const handler of chatHandlers.get(chatId) ?? []) handler(event);
+    },
+    /** Test helper: simulate a run-strip status change. */
+    __emitRunStatus: (chatId: string, startedAt: number | null) => {
+      for (const handler of runStatusHandlers) handler(chatId, startedAt);
+    },
     onError: () => () => {},
     onSessionUpdate: () => () => {},
     onRuntimeModelUpdate: () => () => {},
@@ -251,6 +279,30 @@ beforeEach(() => {
 });
 
 describe("StoryboardPhase", () => {
+  it("surfaces a rejected storyboard request with a retry action", async () => {
+    const onRetryGeneration = vi.fn();
+    mocks.fetchVideoStoryboard.mockResolvedValue({
+      ok: true,
+      scenes: [],
+      storyboardExists: false,
+    });
+
+    render(
+      wrap(
+        <StoryboardPhase
+          projectName="proj"
+          onLocked={() => {}}
+          generationError="视频助手会话未就绪，请重新发送分镜任务。"
+          onRetryGeneration={onRetryGeneration}
+        />,
+      ),
+    );
+
+    expect(await screen.findByText("分镜生成未能启动")).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "重新发送分镜任务" }));
+    expect(onRetryGeneration).toHaveBeenCalledOnce();
+  });
+
   it("shows generated motion summary and subtitle timing status", async () => {
     mocks.fetchVideoStoryboard.mockResolvedValue({
       ok: true,
@@ -1089,6 +1141,66 @@ describe("VideoMakerView", () => {
     expect(
       await screen.findByPlaceholderText(/描述你想制作的视频内容/),
     ).toBeEnabled();
+  });
+
+  it("surfaces a chat-scoped rejection and resends the storyboard brief", async () => {
+    const client = makeClient();
+    mocks.fetchVideoProjects.mockResolvedValue({
+      projects: [
+        {
+          name: "卡住的项目",
+          createdAt: 1,
+          resolution: "1920x1080",
+          phase: "storyboard",
+          hasVideo: false,
+          outputStale: false,
+          chatId: "chat-video",
+        },
+      ],
+    });
+    mocks.fetchVideoStoryboard.mockResolvedValue({
+      ok: true,
+      scenes: [],
+      storyboardExists: false,
+    });
+    mocks.fetchVideoProject.mockResolvedValue({
+      name: "卡住的项目",
+      resolution: "1920x1080",
+      outputStale: false,
+      phase: "storyboard",
+      hasStoryboard: false,
+    });
+
+    render(wrap(<VideoMakerView />, client));
+
+    // 打开项目 → 进入分镜阶段，此时界面仍是没有场景的加载态
+    fireEvent.click(await screen.findByText("卡住的项目"));
+    expect(
+      await screen.findByText("AI 正在生成分镜草稿..."),
+    ).toBeInTheDocument();
+
+    // 网关拒绝视频 turn → 错误帧到达该会话 → 界面给出可操作的失败态
+    act(() => {
+      client.__emitChat("chat-video", {
+        event: "error",
+        chat_id: "chat-video",
+        detail: "invalid_agent_kind_context",
+      });
+    });
+
+    expect(await screen.findByText("分镜生成未能启动")).toBeInTheDocument();
+    expect(
+      screen.getByText("视频助手会话未就绪，请重新发送分镜任务。"),
+    ).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: "重新发送分镜任务" }));
+
+    expect(client.sendMessage).toHaveBeenCalledWith(
+      "chat-video",
+      expect.stringContaining("卡住的项目"),
+      undefined,
+      expect.objectContaining({ agentKind: "video", displayContent: "重新生成分镜" }),
+    );
   });
 
   it("switches between storyboard and producing views via the step bar", async () => {

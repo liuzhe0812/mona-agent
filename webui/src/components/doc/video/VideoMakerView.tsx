@@ -139,6 +139,16 @@ const STEPS: ReadonlyArray<{ label: string; phases: VideoPhase[] }> = [
   { label: "导出交付", phases: ["exportable", "rendering", "done"] },
 ];
 
+function videoGenerationError(detail?: string): string {
+  if (detail === "membership_required") {
+    return "视频助手需要有效的 Mona Pro 订阅或试用。";
+  }
+  if (detail === "invalid_agent_kind_context") {
+    return "视频助手会话未就绪，请重新发送分镜任务。";
+  }
+  return "分镜生成未能启动，请重新发送分镜任务。";
+}
+
 function getStepStatus(
   stepIndex: number,
   currentPhase: VideoPhase,
@@ -231,7 +241,18 @@ export function VideoMakerView({
   // Incremented when AI finishes a reply (streaming → false) to trigger storyboard refresh
   const [aiTurnComplete, setAiTurnComplete] = useState(0);
   const wasStreamingRef = useRef(false);
+  const [isChatRunning, setIsChatRunning] = useState(
+    () => (chatId ? client.getRunStartedAt(chatId) !== null : false),
+  );
+  const [generationError, setGenerationError] = useState<string | null>(null);
   const onProjectChangeRef = useRef(onProjectChange);
+
+  const handleTurnState = useCallback((streaming: boolean) => {
+    if (wasStreamingRef.current && !streaming) {
+      setAiTurnComplete((current) => current + 1);
+    }
+    wasStreamingRef.current = streaming;
+  }, []);
 
   useEffect(() => {
     onProjectChangeRef.current = onProjectChange;
@@ -249,9 +270,32 @@ export function VideoMakerView({
 
   useEffect(() => {
     if (!embedded) return;
-    if (wasStreamingRef.current && !hostIsStreaming) setAiTurnComplete((current) => current + 1);
-    wasStreamingRef.current = hostIsStreaming;
-  }, [embedded, hostIsStreaming]);
+    handleTurnState(hostIsStreaming);
+  }, [embedded, handleTurnState, hostIsStreaming]);
+
+  useEffect(() => {
+    if (!chatId) {
+      setIsChatRunning(false);
+      return;
+    }
+    setIsChatRunning(client.getRunStartedAt(chatId) !== null);
+    return client.onRunStatus((id, startedAt) => {
+      if (id !== chatId) return;
+      const running = startedAt !== null;
+      setIsChatRunning(running);
+      if (running) setGenerationError(null);
+      handleTurnState(running);
+    });
+  }, [chatId, client, handleTurnState]);
+
+  useEffect(() => {
+    if (!chatId) return;
+    return client.onChat(chatId, (event) => {
+      if (event.event === "error") {
+        setGenerationError(videoGenerationError(event.detail));
+      }
+    });
+  }, [chatId, client]);
 
   useEffect(() => {
     if (!embedded) return;
@@ -729,7 +773,7 @@ export function VideoMakerView({
       // 4. Send prompt
       if (embedded && onSendVideoTurn) onSendVideoTurn(prompt, displayText);
       else client.sendMessage(newChatId, prompt, undefined, {
-        agentKind: embedded ? "video" : undefined,
+        agentKind: "video",
         displayContent: displayText,
       });
       setPhase("storyboard");
@@ -770,7 +814,7 @@ export function VideoMakerView({
     (content: string) => {
       if (!chatId) return;
       if (embedded && onSendVideoTurn) onSendVideoTurn(content);
-      else client.sendMessage(chatId, content, undefined, embedded ? { agentKind: "video" } : undefined);
+      else client.sendMessage(chatId, content, undefined, { agentKind: "video" });
     },
     [chatId, client, embedded, onSendVideoTurn],
   );
@@ -779,12 +823,22 @@ export function VideoMakerView({
   // This is more reliable than polling storyboard.md — the AI has finished
   // its reply (and any tool calls), so any storyboard.md it wrote is now on disk.
   const handleStreamingChange = useCallback((streaming: boolean) => {
-    if (wasStreamingRef.current && !streaming) {
-      // AI just finished a reply — trigger storyboard refresh
-      setAiTurnComplete((n) => n + 1);
+    handleTurnState(streaming);
+  }, [handleTurnState]);
+
+  const handleRetryStoryboardGeneration = useCallback(() => {
+    if (!projectName || !chatId) return;
+    setGenerationError(null);
+    const prompt = buildStoryboardRetryPrompt(projectName);
+    if (embedded && onSendVideoTurn) {
+      onSendVideoTurn(prompt, "重新生成分镜");
+      return;
     }
-    wasStreamingRef.current = streaming;
-  }, []);
+    client.sendMessage(chatId, prompt, undefined, {
+      agentKind: "video",
+      displayContent: "重新生成分镜",
+    });
+  }, [chatId, client, embedded, onSendVideoTurn, projectName]);
 
   const handleSelectProject = useCallback((project: VideoProject) => {
     setConfigSubview("video");
@@ -1735,6 +1789,9 @@ export function VideoMakerView({
                 onLocked={handleStoryboardDone}
                 refreshTrigger={aiTurnComplete}
                 alreadyLocked={phase !== "storyboard"}
+                generationError={generationError}
+                generationRunning={isChatRunning}
+                onRetryGeneration={handleRetryStoryboardGeneration}
                 chatPanel={embedded ? undefined : (
                   <DocChatPanel
                     chatId={chatId}
@@ -1970,4 +2027,14 @@ function buildVideoPrompt(opts: {
     "用户会在 UI 上编辑/增删/重排场景，确认后系统会自动解锁后续步骤。",
   );
   return parts.join("\n");
+}
+
+function buildStoryboardRetryPrompt(projectName: string): string {
+  return [
+    `请继续制作视频项目：${projectName}。`,
+    `项目目录：video_projects/${projectName}`,
+    "读取项目中的 outline.json 和现有风格配置，按照 mona-video SKILL 生成分镜草稿 storyboard.md。",
+    "不要新建项目，不要修改已确认的大纲，不要写 storyboard_lock.md，也不要进入场景制作或渲染。",
+    '完成后告知用户“分镜草稿已就绪，请在右侧分镜审阅界面编辑确认”，然后停止。',
+  ].join("\n");
 }
