@@ -120,6 +120,7 @@ export class RoomCommandError extends Error {
 }
 
 interface PendingNewChat {
+  requestId: string;
   resolve: (chatId: string) => void;
   reject: (err: Error) => void;
   timer: ReturnType<typeof setTimeout>;
@@ -186,6 +187,7 @@ export class MonaClient {
   private taskPlanByChatId = new Map<string, TaskPlanWsPayload>();
   private artifactTaskIdByChatId = new Map<string, string>();
   private pendingNewChat: PendingNewChat | null = null;
+  private newChatRequestSeq = 0;
   private pendingRoomCommands = new Map<string, PendingRoomCommand>();
   private roomCommandSeq = 0;
   // Frames queued while the socket is not yet OPEN
@@ -880,13 +882,14 @@ export class MonaClient {
     if (this.pendingNewChat) {
       return Promise.reject(new Error("newChat already in flight"));
     }
+    const requestId = `chat_${Date.now().toString(36)}_${(this.newChatRequestSeq++).toString(36)}`;
     return new Promise<string>((resolve, reject) => {
       const timer = setTimeout(() => {
         this.pendingNewChat = null;
         reject(new Error("newChat timed out"));
       }, timeoutMs);
-      this.pendingNewChat = { resolve, reject, timer };
-      const payload: Record<string, unknown> = { type: "new_chat" };
+      this.pendingNewChat = { requestId, resolve, reject, timer };
+      const payload: Record<string, unknown> = { type: "new_chat", request_id: requestId };
       if (ephemeral) payload.ephemeral = true;
       if (workspace) payload.workspace = workspace;
       if (agentKind) payload.agent_kind = agentKind;
@@ -904,17 +907,19 @@ export class MonaClient {
     if (this.pendingNewChat) {
       return Promise.reject(new Error("newChat already in flight"));
     }
+    const requestId = `chat_${Date.now().toString(36)}_${(this.newChatRequestSeq++).toString(36)}`;
     return new Promise<string>((resolve, reject) => {
       const timer = setTimeout(() => {
         this.pendingNewChat = null;
         reject(new Error("branchChat timed out"));
       }, timeoutMs);
-      this.pendingNewChat = { resolve, reject, timer };
+      this.pendingNewChat = { requestId, resolve, reject, timer };
       this.queueSend({
         type: "branch_chat",
         source_chat_id: sourceChatId,
         assistant_ordinal: assistantOrdinal,
         ...(sourceTaskId ? { source_task_id: sourceTaskId } : {}),
+        request_id: requestId,
       });
     });
   }
@@ -1086,7 +1091,10 @@ export class MonaClient {
 
     if (parsed.event === "attached") {
       this.knownChats.add(parsed.chat_id);
-      if (this.pendingNewChat) {
+      if (
+        this.pendingNewChat &&
+        parsed.request_id === this.pendingNewChat.requestId
+      ) {
         clearTimeout(this.pendingNewChat.timer);
         this.pendingNewChat.resolve(parsed.chat_id);
         this.pendingNewChat = null;

@@ -338,6 +338,50 @@ describe("MonaClient", () => {
     expect(chatHandler).not.toHaveBeenCalled();
   });
 
+  it("routes a chat-scoped error event to that chat's subscribers", () => {
+    const client = new MonaClient({
+      url: "ws://test",
+      reconnect: false,
+      socketFactory: (url) => new FakeSocket(url) as unknown as WebSocket,
+    });
+    const chatHandler = vi.fn();
+    client.onChat("chat-video", chatHandler);
+    client.connect();
+    lastSocket().fakeOpen();
+
+    lastSocket().fakeMessage({
+      event: "error",
+      chat_id: "chat-video",
+      detail: "invalid_agent_kind_context",
+    });
+
+    expect(chatHandler).toHaveBeenCalledWith({
+      event: "error",
+      chat_id: "chat-video",
+      detail: "invalid_agent_kind_context",
+    });
+  });
+
+  it("drops a chat-scoped error for an unsubscribed chat", () => {
+    const client = new MonaClient({
+      url: "ws://test",
+      reconnect: false,
+      socketFactory: (url) => new FakeSocket(url) as unknown as WebSocket,
+    });
+    const otherHandler = vi.fn();
+    client.onChat("other-chat", otherHandler);
+    client.connect();
+    lastSocket().fakeOpen();
+
+    lastSocket().fakeMessage({
+      event: "error",
+      chat_id: "chat-video",
+      detail: "invalid_agent_kind_context",
+    });
+
+    expect(otherHandler).not.toHaveBeenCalled();
+  });
+
   it("resolves newChat() via the server-assigned chat_id", async () => {
     const client = new MonaClient({
       url: "ws://test",
@@ -347,8 +391,21 @@ describe("MonaClient", () => {
     client.connect();
     lastSocket().fakeOpen();
     const promise = client.newChat(1_000);
-    expect(lastSocket().sent).toContain(JSON.stringify({ type: "new_chat" }));
-    lastSocket().fakeMessage({ event: "attached", chat_id: "fresh-id" });
+    const request = JSON.parse(lastSocket().sent.at(-1) ?? "{}") as Record<string, unknown>;
+    expect(request).toMatchObject({ type: "new_chat" });
+    expect(request.request_id).toEqual(expect.any(String));
+    let resolved = false;
+    void promise.then(() => {
+      resolved = true;
+    });
+    lastSocket().fakeMessage({ event: "attached", chat_id: "unrelated-id" });
+    await Promise.resolve();
+    expect(resolved).toBe(false);
+    lastSocket().fakeMessage({
+      event: "attached",
+      chat_id: "fresh-id",
+      request_id: request.request_id,
+    });
     await expect(promise).resolves.toBe("fresh-id");
   });
 
@@ -362,13 +419,19 @@ describe("MonaClient", () => {
     lastSocket().fakeOpen();
 
     const promise = client.branchChat("source-chat", 2, "task-2", 1_000);
-    expect(lastSocket().sent).toContain(JSON.stringify({
+    const request = JSON.parse(lastSocket().sent.at(-1) ?? "{}") as Record<string, unknown>;
+    expect(request).toMatchObject({
       type: "branch_chat",
       source_chat_id: "source-chat",
       assistant_ordinal: 2,
       source_task_id: "task-2",
-    }));
-    lastSocket().fakeMessage({ event: "attached", chat_id: "branch-chat" });
+    });
+    expect(request.request_id).toEqual(expect.any(String));
+    lastSocket().fakeMessage({
+      event: "attached",
+      chat_id: "branch-chat",
+      request_id: request.request_id,
+    });
     await expect(promise).resolves.toBe("branch-chat");
   });
 

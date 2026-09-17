@@ -4,6 +4,7 @@ import asyncio
 import functools
 import json
 import time
+from pathlib import Path
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock
 
@@ -345,8 +346,6 @@ def test_artifact_listing_cap_keeps_shallow_entries(monkeypatch, tmp_path) -> No
 def test_artifact_listing_stops_before_enumerating_deeper_directories(
     monkeypatch, tmp_path
 ) -> None:
-    from pathlib import Path
-
     import mona.utils.artifact_listing as artifact_listing
 
     root = tmp_path / "workspace"
@@ -615,6 +614,7 @@ async def test_webui_message_envelope_preserves_active_canvas_id(bus: MagicMock)
 async def test_plain_websocket_message_does_not_mark_webui(bus: MagicMock) -> None:
     channel = _ch(bus)
     conn = MagicMock()
+    conn.send = AsyncMock()
 
     await channel._dispatch_envelope(
         conn,
@@ -1963,6 +1963,174 @@ async def test_websocket_requires_token_without_issue_path(bus: MagicMock) -> No
 
 
 @pytest.mark.asyncio
+async def test_multiplex_new_chat_echoes_optional_request_id(bus: MagicMock) -> None:
+    channel = _ch(bus)
+    connection = MagicMock()
+    connection.send = AsyncMock()
+
+    await channel._dispatch_envelope(
+        connection,
+        "client",
+        {"type": "new_chat", "request_id": "new-chat-1"},
+    )
+    sent = [json.loads(call.args[0]) for call in connection.send.await_args_list]
+    attached = next(item for item in sent if item.get("event") == "attached")
+    assert attached["request_id"] == "new-chat-1"
+
+    connection.send.reset_mock()
+    await channel._dispatch_envelope(connection, "client", {"type": "new_chat"})
+    sent = [json.loads(call.args[0]) for call in connection.send.await_args_list]
+    legacy_attached = next(item for item in sent if item.get("event") == "attached")
+    assert "request_id" not in legacy_attached
+
+
+@pytest.mark.asyncio
+async def test_message_route_errors_carry_chat_id(bus: MagicMock) -> None:
+    """Rejected turns must be routable to the originating tab.
+
+    The WebUI only delivers ``error`` frames through ``onChat(chat_id, ...)``,
+    so a rejection without ``chat_id`` is silently dropped and the video
+    storyboard view keeps spinning with no explanation.
+    """
+    channel = _ch(bus)
+    connection = MagicMock()
+    connection.send = AsyncMock()
+
+    await channel._dispatch_envelope(
+        connection,
+        "client",
+        {
+            "type": "message",
+            "chat_id": "chat-err",
+            "content": "build",
+            "agent_kind": "video",
+        },
+    )
+    sent = [json.loads(call.args[0]) for call in connection.send.await_args_list]
+    error = next(item for item in sent if item.get("event") == "error")
+    assert error["chat_id"] == "chat-err"
+    assert error["detail"] == "invalid_agent_kind_context"
+
+
+@pytest.mark.asyncio
+async def test_message_route_promotion_requires_subscription(
+    bus: MagicMock, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Promoting an empty chat to a document agent is gated on membership."""
+    from mona.channels import websocket as websocket_module
+    from mona.session.manager import SessionManager
+
+    sessions = SessionManager(tmp_path / "sessions")
+    channel = _ch(bus)
+    channel._session_manager = sessions
+    channel._hydrate_after_subscribe = AsyncMock()
+    channel._handle_message = AsyncMock()
+    connection = MagicMock()
+    connection.send = AsyncMock()
+    monkeypatch.setattr(
+        websocket_module, "_has_subscription_access", AsyncMock(return_value=False)
+    )
+
+    await channel._dispatch_envelope(
+        connection,
+        "client",
+        {
+            "type": "message",
+            "chat_id": "chat-nosub",
+            "content": "build storyboard",
+            "agent_kind": "video",
+        },
+    )
+
+    channel._handle_message.assert_not_awaited()
+    # Nothing is persisted: the promotion is refused before the profile is saved.
+    assert sessions.read_session_file("websocket:chat-nosub") is None
+    sent = [json.loads(call.args[0]) for call in connection.send.await_args_list]
+    error = next(item for item in sent if item.get("event") == "error")
+    assert error["detail"] == "membership_required"
+    assert error["chat_id"] == "chat-nosub"
+
+
+@pytest.mark.asyncio
+async def test_message_route_promotes_empty_chat_to_video_agent(
+    bus: MagicMock, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A video tab whose chat lost its profile recovers on the next turn."""
+    from mona.channels import websocket as websocket_module
+    from mona.session.manager import SessionManager
+
+    sessions = SessionManager(tmp_path / "sessions")
+    channel = _ch(bus)
+    channel._session_manager = sessions
+    channel._hydrate_after_subscribe = AsyncMock()
+    channel._handle_message = AsyncMock()
+    connection = MagicMock()
+    connection.send = AsyncMock()
+    monkeypatch.setattr(
+        websocket_module, "_has_subscription_access", AsyncMock(return_value=True)
+    )
+
+    await channel._dispatch_envelope(
+        connection,
+        "client",
+        {
+            "type": "message",
+            "chat_id": "chat-video",
+            "content": "build storyboard",
+            "agent_kind": "video",
+        },
+    )
+
+    session = sessions.read_session_file("websocket:chat-video")
+    assert session is not None
+    assert session["metadata"]["agent_kind"] == "video"
+    assert channel._handle_message.await_args.kwargs["metadata"]["agent_kind"] == "video"
+
+
+@pytest.mark.asyncio
+async def test_message_route_rejects_video_turn_on_nonempty_chat(
+    bus: MagicMock, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """An ordinary conversation must not be silently converted to a video agent."""
+    from mona.channels import websocket as websocket_module
+    from mona.session.manager import SessionManager
+
+    sessions = SessionManager(tmp_path / "sessions")
+    session = sessions.get_or_create("websocket:chat-ordinary")
+    session.add_message("user", "hello")
+    sessions.save(session)
+    channel = _ch(bus)
+    channel._session_manager = sessions
+    channel._hydrate_after_subscribe = AsyncMock()
+    channel._handle_message = AsyncMock()
+    connection = MagicMock()
+    connection.send = AsyncMock()
+    monkeypatch.setattr(
+        websocket_module, "_has_subscription_access", AsyncMock(return_value=True)
+    )
+
+    await channel._dispatch_envelope(
+        connection,
+        "client",
+        {
+            "type": "message",
+            "chat_id": "chat-ordinary",
+            "content": "build storyboard",
+            "agent_kind": "video",
+        },
+    )
+
+    channel._handle_message.assert_not_awaited()
+    assert sessions.read_session_file("websocket:chat-ordinary")["metadata"].get(
+        "agent_kind"
+    ) is None
+    sent = [json.loads(call.args[0]) for call in connection.send.await_args_list]
+    error = next(item for item in sent if item.get("event") == "error")
+    assert error["detail"] == "invalid_agent_kind_context"
+    assert error["chat_id"] == "chat-ordinary"
+
+
+@pytest.mark.asyncio
 async def test_multiplex_legacy_still_works(bus: MagicMock) -> None:
     port = 29930
     channel = _ch(bus, port=port)
@@ -2206,6 +2374,71 @@ def test_sessions_list_includes_active_run_started_at() -> None:
             "scheduled": False,
         }
     ]
+
+
+def test_sessions_list_includes_video_project_chats(tmp_path) -> None:
+    """Video projects are ordinary sessions and must stay visible in the list.
+
+    Only their own module history panel used to exist; hiding the chat here made
+    a running video task invisible from the sidebar, so a stuck one looked like
+    it had disappeared entirely.
+    """
+    from websockets.datastructures import Headers
+    from websockets.http11 import Request
+
+    project_dir = tmp_path / "video_projects" / "介绍视频"
+    project_dir.mkdir(parents=True)
+    (project_dir / ".chat_id").write_text("chat-video", encoding="utf-8")
+
+    bus = MagicMock()
+    channel = _ch(bus)
+    channel.workspace = tmp_path
+    channel._api_tokens["tok"] = time.monotonic() + 300.0
+    channel._session_manager = MagicMock()
+    channel._session_manager.list_sessions.return_value = [
+        {
+            "key": "websocket:chat-video",
+            "created_at": "2026-05-19T10:00:00Z",
+            "updated_at": "2026-05-19T10:01:00Z",
+            "title": "介绍视频",
+            "preview": "请生成一段视频。",
+            "path": "/private/path",
+        },
+    ]
+
+    req = Request("/api/sessions", Headers([("Authorization", "Bearer tok")]))
+    resp = channel._handle_sessions_list(req)
+
+    assert resp.status_code == 200
+    body = json.loads(resp.body.decode())
+    assert [row["key"] for row in body["sessions"]] == ["websocket:chat-video"]
+
+
+def test_sessions_list_still_hides_hidden_rooms(tmp_path) -> None:
+    """Removing the video filter must not expose hidden execution rooms."""
+    from websockets.datastructures import Headers
+    from websockets.http11 import Request
+
+    bus = MagicMock()
+    channel = _ch(bus)
+    channel.workspace = tmp_path
+    channel._api_tokens["tok"] = time.monotonic() + 300.0
+    channel._session_manager = MagicMock()
+    channel._session_manager.list_sessions.return_value = [
+        {
+            "key": "websocket:chat-hidden",
+            "created_at": "2026-05-19T10:00:00Z",
+            "updated_at": "2026-05-19T10:01:00Z",
+            "conversation": {"type": "room", "hidden": True},
+        },
+    ]
+
+    req = Request("/api/sessions", Headers([("Authorization", "Bearer tok")]))
+    resp = channel._handle_sessions_list(req)
+
+    assert resp.status_code == 200
+    body = json.loads(resp.body.decode())
+    assert body["sessions"] == []
 
 
 @pytest.mark.parametrize(

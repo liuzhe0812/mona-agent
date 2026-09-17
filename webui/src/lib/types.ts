@@ -1150,7 +1150,7 @@ export type ConnectionStatus =
 
 export type InboundEvent =
   | { event: "ready"; chat_id: string; client_id: string }
-  | { event: "attached"; chat_id: string }
+  | { event: "attached"; chat_id: string; request_id?: string }
   | {
       event: "message";
       chat_id: string;
@@ -1391,8 +1391,20 @@ export interface WebuiThreadPersistedPayload {
 }
 
 export type Outbound =
-  | { type: "new_chat"; ephemeral?: boolean; workspace?: string | null; agent_kind?: string | null }
-  | { type: "branch_chat"; source_chat_id: string; source_task_id?: string; assistant_ordinal: number }
+  | {
+      type: "new_chat";
+      ephemeral?: boolean;
+      workspace?: string | null;
+      agent_kind?: string | null;
+      request_id?: string;
+    }
+  | {
+      type: "branch_chat";
+      source_chat_id: string;
+      source_task_id?: string;
+      assistant_ordinal: number;
+      request_id?: string;
+    }
   | { type: "attach"; chat_id: string }
   | {
       type: "start_discussion";

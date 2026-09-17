@@ -1108,20 +1108,6 @@ class WebSocketChannel(BaseChannel):
         sessions = self._session_manager.list_sessions()
         # Sidebar/chat listing for WS-backed sessions only — CLI / Slack / etc.
         # keys are not intended for resume over this HTTP surface.
-        #
-        # Video maker keeps its own history panel.
-        hidden_chat_ids: set[str] = set()
-        try:
-            workspace_path = self.workspace
-            for kind in ("video_projects",):
-                kind_dir = workspace_path / kind
-                if kind_dir.is_dir():
-                    for dot in kind_dir.glob("*/.chat_id"):
-                        cid = dot.read_text(encoding="utf-8").strip()
-                        if cid:
-                            hidden_chat_ids.add(cid)
-        except Exception:
-            pass
         cleaned = []
         for s in sessions:
             key = s.get("key")
@@ -1130,11 +1116,10 @@ class WebSocketChannel(BaseChannel):
             if key.startswith("websocket:ephemeral:"):
                 continue
             chat_id = key.split(":", 1)[1]
-            if chat_id in hidden_chat_ids:
-                continue
             # Hidden rooms (stock-module design §4.4) are invisible execution
-            # containers — never listed in the sidebar, same discipline as the
-            # video-owned chats above.
+            # containers — never listed in the sidebar. Video projects are
+            # ordinary sessions: they are listed like any other conversation and
+            # additionally keep the video module's own project history panel.
             conversation = s.get("conversation")
             if isinstance(conversation, dict) and conversation.get("hidden") is True:
                 continue
@@ -5820,6 +5805,7 @@ class WebSocketChannel(BaseChannel):
         connection: Any,
         envelope: dict[str, Any],
     ) -> None:
+        request_id = self._room_request_id(envelope)
         source_chat_id = envelope.get("source_chat_id")
         assistant_ordinal = envelope.get("assistant_ordinal")
         source_task_id = envelope.get("source_task_id")
@@ -5937,7 +5923,10 @@ class WebSocketChannel(BaseChannel):
             return
 
         self._attach(connection, new_chat_id)
-        await self._send_event(connection, "attached", chat_id=new_chat_id)
+        attached_fields: dict[str, Any] = {"chat_id": new_chat_id}
+        if request_id is not None:
+            attached_fields["request_id"] = request_id
+        await self._send_event(connection, "attached", **attached_fields)
         await self._hydrate_after_subscribe(new_chat_id)
 
     async def _dispatch_envelope(
@@ -5952,6 +5941,7 @@ class WebSocketChannel(BaseChannel):
             await self._handle_branch_chat_envelope(connection, envelope)
             return
         if t == "new_chat":
+            request_id = self._room_request_id(envelope)
             new_id = str(uuid.uuid4())
             ephemeral = envelope.get("ephemeral") is True
             if ephemeral:
@@ -5994,7 +5984,10 @@ class WebSocketChannel(BaseChannel):
                 if agent_kind is not None:
                     session.metadata["agent_kind"] = agent_kind
                 self._session_manager.save(session)
-            await self._send_event(connection, "attached", chat_id=new_id)
+            attached_fields: dict[str, Any] = {"chat_id": new_id}
+            if request_id is not None:
+                attached_fields["request_id"] = request_id
+            await self._send_event(connection, "attached", **attached_fields)
             await self._hydrate_after_subscribe(new_id)
             return
         if t == "attach":
@@ -6101,34 +6094,64 @@ class WebSocketChannel(BaseChannel):
                 await self._send_event(connection, "error", detail="invalid chat_id")
                 return
             if not isinstance(content, str):
-                await self._send_event(connection, "error", detail="missing content")
+                await self._send_event(
+                    connection, "error", chat_id=cid, detail="missing content"
+                )
                 return
             from mona.agent.document_loop import DOCUMENT_PROFILES
 
             message_agent_kind = envelope.get("agent_kind")
             if message_agent_kind is not None:
                 if not isinstance(message_agent_kind, str):
-                    await self._send_event(connection, "error", detail="invalid agent_kind")
+                    await self._send_event(
+                        connection, "error", chat_id=cid, detail="invalid agent_kind"
+                    )
                     return
                 message_agent_kind = message_agent_kind.strip()
                 if message_agent_kind not in DOCUMENT_PROFILES:
-                    await self._send_event(connection, "error", detail="invalid agent_kind")
+                    await self._send_event(
+                        connection, "error", chat_id=cid, detail="invalid agent_kind"
+                    )
                     return
             session_agent_kind = None
+            session = None
             if self._session_manager is not None:
                 session = self._session_manager.get_or_create(f"websocket:{cid}")
                 stored_agent_kind = session.metadata.get("agent_kind")
                 if isinstance(stored_agent_kind, str) and stored_agent_kind in DOCUMENT_PROFILES:
                     session_agent_kind = stored_agent_kind
+            # A freshly created WebSocket chat has no persisted profile yet.
+            # Accept an explicit document-agent message only while that chat
+            # is still empty, then persist the requested profile before the
+            # turn enters the Agent loop. This recovers a tab created during a
+            # reconnect without allowing an ordinary conversation to switch
+            # agent types mid-history.
+            if (
+                message_agent_kind is not None
+                and session_agent_kind is None
+                and session is not None
+                and not session.messages
+            ):
+                if not await _has_subscription_access():
+                    await self._send_event(
+                        connection, "error", chat_id=cid, detail="membership_required"
+                    )
+                    return
+                session.metadata["agent_kind"] = message_agent_kind
+                self._session_manager.save(session)
+                session_agent_kind = message_agent_kind
             if message_agent_kind is not None and message_agent_kind != session_agent_kind:
                 await self._send_event(
                     connection,
                     "error",
+                    chat_id=cid,
                     detail="invalid_agent_kind_context",
                 )
                 return
             if session_agent_kind and not await _has_subscription_access():
-                await self._send_event(connection, "error", detail="membership_required")
+                await self._send_event(
+                    connection, "error", chat_id=cid, detail="membership_required"
+                )
                 return
 
             raw_media = envelope.get("media")
@@ -6138,6 +6161,7 @@ class WebSocketChannel(BaseChannel):
                     await self._send_event(
                         connection,
                         "error",
+                        chat_id=cid,
                         detail="image_rejected",
                         reason="malformed",
                     )
@@ -6147,6 +6171,7 @@ class WebSocketChannel(BaseChannel):
                     await self._send_event(
                         connection,
                         "error",
+                        chat_id=cid,
                         detail="image_rejected",
                         reason=reason,
                     )
@@ -6180,7 +6205,9 @@ class WebSocketChannel(BaseChannel):
 
             # Allow image-only turns (content may be empty when media is attached).
             if not content.strip() and not media_paths:
-                await self._send_event(connection, "error", detail="missing content")
+                await self._send_event(
+                    connection, "error", chat_id=cid, detail="missing content"
+                )
                 return
 
             # Auto-attach on first use so clients can one-shot without a separate attach.
