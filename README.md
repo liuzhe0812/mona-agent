@@ -1,104 +1,114 @@
-# Mona Desktop
+<p align="center">
+  <img src="webui/public/brand/mona_icon.png" alt="Mona 猫咪 Logo" width="96" />
+</p>
 
-Mona 是一款 AI 原生桌面客户端，将邮件、日程、笔记、终端、浏览器、数据库等功能整合为统一工作空间，通过 AI Agent 驱动日常办公任务。
+<h1 align="center">Mona Desktop</h1>
 
-## 架构概览
+<p align="center"><strong>从一句需求，到一份可用的成果。</strong></p>
+<p align="center">把 AI、资料和工作工具放在同一个桌面工作空间。</p>
 
-Mona 采用三层服务架构：
+<p align="center">
+  <a href="https://mona-ai.cn">官网 · mona-ai.cn</a> ·
+  <a href="#开始使用">开始使用</a>
+</p>
 
-| 服务 | 端口 | 职责 |
-|------|------|------|
-| Gateway HTTP | 17173 | Agent 运行时（AI 对话、工具调用） |
-| Services HTTP | 17174 | 业务服务（邮件、日程、素材等） |
-| WebSocket | 8765 | 前端实时通信 |
+Mona 是一款 AI 原生桌面客户端。你可以用自然语言提出任务，让 AI 结合笔记、资料和工具推进工作，并在同一个工作空间中查看、编辑和保存成果。
 
-技术栈：
-- **前端**：React + TypeScript + Vite + Tauri WebView
-- **后端**：Python 3.11+ (aiohttp) + Rust (Tauri)
-- **桌面**：Tauri 2.x（Windows / macOS / Linux）
+**Mona 当前仅提供桌面客户端，不提供独立 Web 版。**
 
-项目文档入口：
+## 在 Mona 里完成什么
 
-- [Agent 开发规则](AGENTS.md)
-- [文档目录与分类](docs/README.md)
-- [工程架构边界](docs/architecture/engineering-boundaries.md)
-- [可下载运行时架构](docs/architecture/runtime-component-management.md)
+| 工作场景 | Mona 提供的能力 |
+| --- | --- |
+| 整理资料与知识 | 管理笔记和资料库，检索已有内容，为问答与写作提供参考 |
+| 制作文档与汇报 | 创建、编辑和预览文档、表格、演示文稿，让 AI 参与内容整理与修改 |
+| 处理日常事务 | 在统一工作空间中使用邮件、日程与待办，整理信息、安排工作 |
+| 浏览网页与收集信息 | 使用内置浏览器浏览页面，结合 AI 阅读与处理网页内容 |
+| 开发与技术工作 | 使用终端、SSH 和数据库工作台，执行命令、查询数据、查看结果 |
+| 扩展 AI 工作方式 | 通过 Skills、专业 Agent 和 MCP 接入适合任务的能力 |
 
-## 许可证
+## 为什么是一个桌面工作空间
 
-Mona 自有代码、文档、界面设计、图标、提示词、技能和品牌资产均为商业专有内容，统一适用根目录的 `LICENSE`。本项目不以开源许可证发布，不授予复制、修改、二次开发、再分发或再授权权利。
+- **围绕任务组织工作。** 对话、资料、工具和交付物放在一起，减少在多个窗口之间搬运上下文。
+- **成果可以继续编辑。** 从整理资料到制作文档，输出可以在工作台中继续修改、保存和导出。
+- **已有知识可以复用。** 笔记和资料库为后续任务提供参考，不必每次都从头说明背景。
+- **按任务连接能力。** 日常办公、内容创作和技术工作可以使用各自的工具与专业 Agent。
 
-商业使用、企业部署、嵌入产品或对外提供服务，必须事先取得版权方书面商业授权。未经授权不得将本项目或其组成部分用于商业场景。
+你可以从这些需求开始尝试：
 
-仓库内明确属于第三方的依赖、编辑器和资源仍保留其原始许可证与 NOTICE；这些第三方许可证不构成 Mona 自有代码的开源授权，也不改变本项目的商业专有授权边界。
+> “从我的资料库中找出与这个主题相关的内容，整理成一份有条理的摘要。”
+>
+> “把这份材料整理成汇报提纲，再制作成可以继续编辑的演示文稿。”
+>
+> “查看这个数据库的表结构，帮我写一条查询，并解释查询结果。”
 
-许可证文件：
+具体可用能力取决于所用版本、模型配置、已连接的服务和工具权限。
 
-- `LICENSE` — Mona 商业专有软件许可证
-- 第三方组件目录中的 LICENSE / NOTICE — 对应第三方内容的原始许可证
+## 开始使用
 
-如需取得商业授权，请联系版权方。
+1. 访问 [Mona 官网](https://mona-ai.cn)，查看客户端获取方式与产品信息。
+2. 安装并打开桌面客户端，按界面引导完成模型等必要配置。
+3. 从一个具体任务开始，根据需要添加资料、连接账户或启用工具。
 
-## 本地开发
+可用安装包与系统要求以官网发布信息为准。使用桌面安装包无需自行搭建前端开发环境；模型调用及部分外部服务需要网络连接。
 
-### 环境要求
+## 技术与开发
 
-- Python >= 3.11
-- Node.js >= 18
-- Rust toolchain
-- Windows 10+ / macOS 11+ / Linux
+Mona 使用 **Tauri 2 + React + TypeScript** 构建桌面界面，由 **Python** 提供 Agent 与业务服务，**Rust** 提供桌面原生能力。
 
-### 安装依赖
+| 目录 | 用途 |
+| --- | --- |
+| `src-tauri/` | 桌面宿主、原生能力与安装包构建 |
+| `webui/` | 桌面客户端的界面源码 |
+| `mona/` | Python Agent、业务服务、工具与技能 |
 
-```bash
-# Python 后端（可编辑模式安装）
-pip install -e . --no-deps
+`webui/` 的名称不代表独立 Web 产品。生产界面由 Tauri 嵌入桌面程序，后端不再托管网页客户端；本地 HTTP / WebSocket 用于客户端内部通信。
 
-# 前端
- cd webui && bun install
+<details>
+<summary>本地开发（面向维护者与获授权开发者）</summary>
+
+准备 Python 3.11+、Node.js 22.12+、npm、Rust 工具链和 Tauri 2 CLI。Windows 开发还需要 C++ 构建工具与 WebView2。
+
+在仓库根目录安装依赖：
+
+```powershell
+python -m pip install -e ".[dev]"
+npm --prefix webui install
+npm --prefix webui/office-editor install
+cargo install tauri-cli --version "^2" --locked
 ```
 
-### 启动开发服务器
-
-```bash
-# 1. 启动 Gateway（Python）
-python -m mona gateway
-
-# 2. 启动 Services（Python，可选）
-python -m mona services
-
-# 3. 启动 Tauri 桌面客户端
-cd src-tauri && cargo tauri dev
-```
-
-### 构建
-
-```bash
-# 前端生产构建
-cd webui && bun run build
-
-# Tauri 打包
-cd src-tauri && cargo tauri build
-```
-
-### Windows 正式发布签名
-
-Windows 11 的智能应用控制会拦截未知或未签名的可执行文件。正式发布必须使用受 Microsoft 信任根计划认可的 CA 代码签名证书；自签名证书不能替代它。
-
-将证书导入当前用户的 `Cert:\CurrentUser\My` 后，使用证书指纹执行签名发布构建：
+启动桌面开发模式：
 
 ```powershell
 cd src-tauri
-.\build-windows-release.ps1 -CertificateThumbprint "你的证书指纹"
+cargo tauri dev
 ```
 
-该命令会先签名 PyInstaller gateway 的可执行文件、DLL 和 PYD，再由 Tauri 签名主程序及 NSIS/MSI 安装器，并在结束时验证全部签名。证书私钥和密码不得写入仓库。
+Tauri 会启动界面开发服务，并按客户端配置管理本地后端。开发模式使用系统 Python，请确保依赖安装在桌面进程能够找到的 Python 环境中。
 
-## 社区
+仅构建桌面前端资源时，在仓库根目录运行：
 
--  issues 与功能请求请通过 GitHub Issues 提交
--  商业授权、合作与功能反馈请联系项目维护者
+```powershell
+npm --prefix webui run build:tauri
+```
 
-## 声明
+完整安装包还需打包配套后端资源。Windows 正式发布入口为 [build-windows-release.ps1](src-tauri/build-windows-release.ps1)，发布签名使用有效的代码签名证书；证书私钥和密码不得写入仓库。
 
-Mona 名称及猫头鹰品牌标识为项目维护者所有，未经授权不得用于衍生产品。
+</details>
+
+## 反馈与交流
+
+欢迎通过本仓库的 **GitHub Issues** 提交问题和功能建议。
+
+- 问题反馈请附上客户端版本、操作系统、复现步骤及预期结果；截图和日志请先移除个人信息与凭据。
+- 功能建议请描述你要完成的任务，以及目前遇到的阻碍。
+- 商业授权与合作请通过 [官网](https://mona-ai.cn) 联系项目维护者。
+
+## 许可证与品牌声明
+
+Mona 为**商业专有软件，并非开源项目**。个人学习、评估或非商业用途可在遵守 [LICENSE](LICENSE) 的前提下安装、运行；商业使用须事先取得版权方书面授权。
+
+仓库公开不授予源代码修改、二次开发、再分发或再授权的权利。具体授权范围以 [LICENSE](LICENSE) 为准。第三方依赖和资源保留各自的许可证与 NOTICE，不改变 Mona 自有内容的授权边界。
+
+Mona 名称及**猫咪品牌标识**为项目维护者所有，未经授权不得用于衍生产品。
