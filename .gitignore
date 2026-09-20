@@ -13,6 +13,10 @@ official-site/
 # 仅保留桌面客户端核心代码；项目说明与 Agent 指令在本地维护。
 AGENTS.md
 
+# 根目录临时测试脚本不上传 GitHub。
+/test_explicit_agent_tools.py
+/test_xhs_operator.py
+
 # 临时调试/部署产物
 .codex_tmp/
 
