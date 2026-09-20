@@ -7,8 +7,11 @@
 .web
 .orion
 
-# 官网与营销站点（不上传GitHub）
+# 官网与营销站点（不上传 GitHub）
 official-site/
+
+# 仅保留桌面客户端核心代码；项目说明与 Agent 指令在本地维护。
+AGENTS.md
 
 # 临时调试/部署产物
 .codex_tmp/
@@ -37,12 +40,7 @@ mona-auth/*
 mona-auth/keys/
 mona-auth/.env
 mona-auth/venv/
-scripts/*
-!scripts/build_update_package.py
-!scripts/release_upload.py
-!scripts/build_official_distribution.py
-!scripts/download_runtime_inputs.py
-!scripts/prepare_official_runtimes.py
+scripts/
 !mona/skills/mona-video/scripts/
 !mona/skills/mona-video/scripts/compile_scene_spec.py
 !mona/agents/com.mona.academic-researcher/skills/*/scripts/
@@ -204,109 +202,8 @@ design-assets/
 !tests/test_official_distribution_builder.py
 hardware/
 
-# docs/ 临时方案默认忽略；长期架构和仍有效的交付基线显式纳入版本管理
-# （git 不允许在被忽略的目录内直接取反，需逐级展开）
-docs/*
-!docs/README.md
-!docs/architecture/
-!docs/design/
-!docs/plans/
-!docs/reports/
-docs/architecture/*
-docs/design/*
-docs/plans/*
-!docs/plans/2026-09-14-harness-token-optimization.md
-!docs/plans/2026-09-14-agent-capability-exposure-audit.md
-!docs/plans/2026-09-14-conversation-memory-retrieval.md
-docs/reports/*
-!docs/architecture/runtime-component-management.md
-!docs/architecture/engineering-boundaries.md
-!docs/architecture/module-invariants.md
-!docs/architecture/retrieval-architecture.md
-!docs/architecture/user-profile-distillation.md
-!docs/architecture/browser-development-framework.md
-!docs/architecture/services-split-design.md
-!docs/architecture/mona-worker-notebook-deployment.md
-!docs/architecture/worker-queue-integration.md
-!docs/design/multi-agent-functional-design.md
-!docs/design/multi-agent-development-guide.md
-!docs/design/2026-08-20-mona-brand-ui-redesign-proposal.md
-!docs/design/session-list-ui-redesign.md
-!docs/design/2026-08-22-mona-app-brand-ui-update-plan.md
-!docs/design/mona-ui-design-system.md
-!docs/design/2026-09-10-music-agent-and-score-preview.md
-!docs/design/2026-09-11-workspace-artifact-review.md
-!docs/design/2026-09-12-ssh-docker-management-design.md
-!docs/design/2026-09-13-software-uninstall-and-residual-cleanup.md
-!docs/plans/2026-09-12-ssh-docker-management-plan.md
-!docs/design/2026-09-08-user-profile-advice-prompt.md
-!docs/design/stock-data-source-compliance-matrix.md
-!docs/design/mona-video-series-style-system-design-2026-08-26.md
-!docs/design/mona-video-series-template-visual-spec-v2.md
-!docs/design/mona-video-commercial-product-functional-design-2026-08-27.md
-!docs/design/mona-managed-skill-runtime-design-2026-08-29.md
-!docs/design/mona-genoffice-editor-functional-design-2026-09-02.md
-!docs/design/2026-09-07-ai-canvas-quality-replication-design.md
-!docs/design/2026-09-07-miniapp-three-end-design.md
-!docs/design/ai-canvas-official-demo-development.md
-!docs/design/assets/
-docs/design/assets/*
-!docs/design/assets/ai-canvas-official-demo/
-!docs/design/assets/ai-canvas-official-demo/transformer-reference.png
-!docs/design/assets/mona-miniapp-v1/
-!docs/design/assets/mona-miniapp-v1/miniapp-overview-v1.png
-!docs/design/assets/mona-miniapp-v2/
-!docs/design/assets/mona-miniapp-v2/miniapp-overview-v2.png
-!docs/design/assets/mona-miniapp-v2/mona-avatar-reference.png
-!docs/design/assets/mona-miniapp-v2/generation-notes.md
-!docs/design/assets/mona-video-series-style-prototypes-v1/
-!docs/design/assets/mona-video-series-style-prototypes-v1/*.png
-!docs/design/assets/mona-video-series-template-concepts-v2/
-!docs/design/assets/mona-video-series-template-concepts-v2/*.png
-!docs/design/assets/mona-video-series-functional-templates-v1/
-!docs/design/assets/mona-video-series-functional-templates-v1/*.png
-!docs/design/assets/profile-dashboard-20260908/
-!docs/design/assets/profile-dashboard-20260908/*
-!docs/reports/
-docs/reports/*
-!docs/reports/mona-credits-feasibility-report-2026-08-25.md
-!docs/reports/mona-credits-production-design-2026-08-26.md
-!docs/plans/multi-agent-completion-plan.md
-!docs/plans/2026-09-11-context-compaction-optimization.md
-!docs/plans/2026-09-08-user-profile-dashboard-development-plan.md
-!docs/plans/2026-08-23-mona-brand-ui-v2-implementation-plan.md
-!docs/plans/mona-credits-development-plan-2026-08-26.md
-!docs/plans/im-ui-interaction-dev-plan.md
-!docs/plans/agent-conversation-management-dev-plan.md
-!docs/plans/stock-research-best-practice-v6-development-plan.md
-!docs/plans/stock-research-best-practice-v6-acceptance-report.md
-!docs/plans/academic-research-agent-functional-design.md
-!docs/plans/academic-research-agent-development-plan.md
-!docs/plans/academic-research-agent-acceptance-report.md
-!docs/plans/mona-lazy-runtime-expert-library-development-plan-2026-08-29.md
-!docs/plans/2026-08-31-multi-agent-user-profile-remediation-plan.md
-!docs/plans/main-chat-canvas-workspace.md
-!docs/plans/database-ai-sidebar-development-plan.md
-!docs/plans/runtime-component-migration-plan.md
-!docs/plans/mona-genoffice-editor-development-plan-2026-09-03.md
-!docs/plans/mona-genoffice-editor-performance-report-2026-09-05.md
-!docs/plans/2026-09-05-office-specialist-skills.md
-!docs/plans/2026-09-06-office-chart-color-recovery.md
-!docs/plans/2026-09-06-office-efficient-mixed-layout.md
-!docs/plans/2026-09-06-agent-document-execution-integrity.md
-!docs/plans/2026-09-07-ai-canvas-quality-replication-plan.md
-!docs/plans/ai-canvas-official-demo-implementation.md
-!docs/plans/2026-09-04-system-storage-ai-assistant-development-plan.md
-!docs/plans/2026-09-05-agent-knowledge-redesign-plan.md
-!docs/reports/mona-lazy-runtime-expert-library-release-readiness-2026-08-29.md
-!docs/reports/2026-09-07-ai-canvas-quality-replication-report.md
-
-!docs/guides/
-docs/guides/*
-!docs/guides/browser-testing.md
-!docs/guides/changelog.md
-!docs/guides/mona-worker-deployment.md
-!docs/guides/ssh-docker-management.md
+# 项目文档仅在本地维护，不上传 GitHub。
+docs/
 
 # 多 Agent 开发临时产物（baseline 对比目录、patch/scratch 中转，禁止入库）
 .baseline_check/
