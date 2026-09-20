@@ -16,17 +16,33 @@ from mona.agent.tools.schema import (
     StringSchema,
     tool_parameters_schema,
 )
+from mona.agent.tools.tauri_ipc import IpcTimeoutError
 from mona.agent.tools.tauri_ipc import tauri_invoke as _shared_tauri_invoke
 from mona.agent.tools.tauri_ipc import tauri_invoke_async as _shared_tauri_invoke_async
 from mona.config.schema import TerminalToolConfig
 
 
-def _tauri_invoke(cmd: str, args: dict[str, Any] | None = None) -> Any:
+def _tauri_invoke(
+    cmd: str,
+    args: dict[str, Any] | None = None,
+    *,
+    timeout: float | None = None,
+    raise_on_timeout: bool = False,
+) -> Any:
     """Wrapper around the shared IPC helper that returns error strings
     instead of raising, matching the original terminal.py contract.
+
+    ``raise_on_timeout`` opts into ``IpcTimeoutError`` propagation instead.
+    Callers handling long-running work need it: "no answer observed" is not the
+    same as "the command failed", and only they can say what to do next.
     """
     try:
-        return _shared_tauri_invoke(cmd, args)
+        return _shared_tauri_invoke(cmd, args, timeout=timeout)
+    except IpcTimeoutError as e:
+        if raise_on_timeout:
+            raise
+        logger.warning("IPC bridge invoke failed for cmd={!r}: {}", cmd, e)
+        return f"Error: {e}"
     except RuntimeError as e:
         logger.warning("IPC bridge error for cmd={!r}: {}", cmd, e)
         return f"Error: {e}"
@@ -35,10 +51,21 @@ def _tauri_invoke(cmd: str, args: dict[str, Any] | None = None) -> Any:
         return f"Error: Tauri invoke failed: {e}"
 
 
-async def _tauri_invoke_async(cmd: str, args: dict[str, Any] | None = None) -> Any:
+async def _tauri_invoke_async(
+    cmd: str,
+    args: dict[str, Any] | None = None,
+    *,
+    timeout: float | None = None,
+    raise_on_timeout: bool = False,
+) -> Any:
     """Async counterpart that preserves the terminal wrapper's error contract."""
     try:
-        return await _shared_tauri_invoke_async(cmd, args)
+        return await _shared_tauri_invoke_async(cmd, args, timeout=timeout)
+    except IpcTimeoutError as e:
+        if raise_on_timeout:
+            raise
+        logger.warning("IPC bridge invoke failed for cmd={!r}: {}", cmd, e)
+        return f"Error: {e}"
     except RuntimeError as e:
         logger.warning("IPC bridge error for cmd={!r}: {}", cmd, e)
         return f"Error: {e}"
@@ -121,6 +148,47 @@ _NO_TASK_ERROR = (
     "first, then pass the returned ids here. Each step executes exactly one command."
 )
 
+# The Rust step runner defaults to 600s and caps at 1800s. The transport must
+# outlive the command it is waiting for, so the bridge timeout is derived from
+# the step timeout plus headroom for the app to finalise and reply.
+#
+# 600s is the default because the primary use of this flow is package installs
+# and builds, which routinely take several minutes. Timeout is not a neutral
+# event here: the wait is abandoned but the remote command keeps running, so an
+# undersized default leaves orphaned work on the server instead of failing
+# cleanly.
+_STEP_DEFAULT_TIMEOUT_SECS = 600
+_STEP_MAX_TIMEOUT_SECS = 1800
+_BRIDGE_HEADROOM_SECS = 30
+
+# An upload moves the whole file body through the bridge in one request, so it
+# gets its own bound rather than the short default meant for ordinary commands.
+_UPLOAD_BRIDGE_TIMEOUT_SECS = 300
+
+# A bridge timeout is NOT a command failure: the request reached the app and the
+# remote command was most likely started, we just stopped waiting for its answer.
+# Retrying the same step is rejected by the step state machine, and starting a
+# fresh task would abandon the plan, so point the model at observation instead.
+_STEP_BRIDGE_TIMEOUT = (
+    "Error: Mona 等待命令返回超时（{seconds}s），这不代表命令失败。\n"
+    "命令很可能已在远端开始执行，只是本地停止等待，步骤结果未知。\n"
+    "请勿重复执行同一 step（状态机会拒绝），也不要为此新建任务。\n"
+    "下一步应先观察现状再决定：用 terminal_output 读取终端输出，"
+    "或用一个只读步骤确认当前系统状态（进程是否仍在、目标是否已达成）。\n"
+    "若该命令本身耗时较长，下一次执行时通过 timeout_secs 提高上限（最大 {max_seconds}s），"
+    "或改为后台执行并轮询。"
+)
+
+# sshd refusing a new session channel means the remote host could not fork one
+# (resource exhaustion, too many processes/sessions) while the TCP connection is
+# still alive. Retrying immediately repeats the same rejection, so converge.
+_STEP_CHANNEL_REFUSED = (
+    "Error: 远端主机拒绝为本次命令打开新的 SSH 会话通道（{detail}）。\n"
+    "TCP 连接仍在，是服务器的 sshd 无法再分配会话（通常因为远端进程或会话过多）。\n"
+    "继续重试同一个命令只会得到同样的拒绝。请停止重试，并把情况告知用户："
+    "需要在终端面板对当前 SSH 会话点击「重新连接」，或先在远端释放资源。"
+)
+
 _STEP_KINDS = ("inspect", "change", "verify")
 
 
@@ -189,6 +257,51 @@ def _tail(text: str, limit: int) -> str:
     return f"[truncated, showing last {limit} chars]\n" + text[-limit:]
 
 
+# russh reports a server-side CHANNEL_OPEN_FAILURE as "Failed to open channel
+# (ConnectFailed)". The TCP connection is alive here — the remote sshd answered
+# and refused to allocate a session channel — so this is a distinct condition
+# from a dropped connection and must not be retried like a transient error.
+_CHANNEL_REFUSED_MARKERS = (
+    "Failed to open channel",
+    "ConnectFailed",
+    "ResourceShortage",
+    "AdministrativelyProhibited",
+)
+
+
+def _is_channel_refused(message: str) -> bool:
+    return any(marker in message for marker in _CHANNEL_REFUSED_MARKERS)
+
+
+# Deterministic contract rejections from the step/task state machine. Retrying
+# these can never succeed — the plan is immutable and a step runs at most once —
+# so returning the raw backend error left the model looping on the same call
+# until the tool circuit-breaker disabled it. Each one is translated into the
+# single valid next action instead.
+def _translate_step_contract_error(message: str) -> str | None:
+    text = message.removeprefix("Error: ").strip()
+    if "不能重复执行" in text or "已开始或已结束" in text:
+        return (
+            "Error: 这个 step 已经执行过，其结果已经记录在任务里，不能再次执行。\n"
+            "不要重复调用同一个 step_id（状态机会一直拒绝）。\n"
+            "下一步：查看该步骤已记录的 exit_code/stdout（或用 terminal_output 读取终端输出）确认它的实际结果，"
+            "然后执行计划里的下一个 step_id。若计划因此无法继续，调用 terminal_task(action='fail') 说明原因。"
+        )
+    if text.startswith("Step ") and "not found in task" in text:
+        return (
+            "Error: 该 step_id 不属于当前任务（可能来自旧任务或已被清除）。\n"
+            "下一步：确认你使用的是 terminal_task(action='start') 返回的 task_id 与 step_id 配对；"
+            "如果原计划已失效，用 terminal_task(action='start') 重新给出完整计划。"
+        )
+    if "维护任务已结束" in text:
+        return (
+            "Error: 该维护任务已经结束，不能继续执行步骤。\n"
+            "下一步：用 terminal_task(action='finish'/'fail') 收尾这个任务；"
+            "如果还需要继续操作，请用 terminal_task(action='start') 建立新的完整计划。"
+        )
+    return None
+
+
 def _format_step_result(result: dict[str, Any]) -> str:
     exit_code = result.get("exitCode")
     duration = result.get("durationMs", "?")
@@ -206,7 +319,39 @@ def _format_step_result(result: dict[str, Any]) -> str:
     if stderr:
         lines.append("--- stderr ---")
         lines.append(_tail(stderr, 4000))
-    if exit_code != 0 or result.get("timedOut") or result.get("cancelled"):
+    if result.get("cancelled"):
+        # CANCELLED means the wait was abandoned, not that the remote command is
+        # confirmed stopped, and no exit status was observed either way.
+        lines.append(
+            "CANCELLED: the wait was abandoned, so the result of this command is "
+            "UNKNOWN — no exit_code was observed. This does NOT confirm the "
+            "command stopped; it may still be running on the server. Do not "
+            "report to the user that the process was terminated. Stop here and "
+            "ask the user whether to wait, check, or stop it, instead of "
+            "continuing the plan."
+        )
+        return "\n".join(lines)
+
+    if result.get("timedOut"):
+        # Mona stopped waiting; the remote command was NOT killed. Verified on a
+        # real OpenSSH host that a signal request is never delivered and that
+        # dropping the channel does not make sshd reap the command, so the honest
+        # report is "still possibly running", not "terminated".
+        #
+        # The plan must not continue past this either: the next step may act on a
+        # half-applied change.
+        lines.append(
+            "TIMED OUT: Mona stopped waiting after the step timeout, but the "
+            "command was NOT stopped — it may still be running on the server. "
+            "Do not start the same work again in another step, because you may "
+            "end up with two instances running at once. Stop here and ask the "
+            "user whether to wait for it, inspect it, or stop it explicitly; do "
+            "not continue with the remaining steps on your own. For package "
+            "operations, also beware of a stale lock if it was interrupted."
+        )
+        return "\n".join(lines)
+
+    if exit_code != 0:
         lines.append(
             "Step FAILED — only exit_code 0 counts as success. Diagnose the output "
             "above and continue with the remaining planned steps; if the plan cannot "
@@ -426,8 +571,11 @@ class TerminalTaskTool(Tool):
         ),
         timeout_secs=IntegerSchema(
             description=(
-                "Max seconds to wait for the command. Default 120, max 1800. "
-                "A timed-out command counts as a failed step."
+                "Max seconds to wait for the command. Default 600, max 1800. "
+                "That default already covers ordinary package installs and "
+                "builds; raise it only for unusually slow ones. On timeout Mona "
+                "stops waiting but does not stop the command, so it may keep "
+                "running on the server."
             ),
             minimum=1,
             maximum=1800,
@@ -463,7 +611,12 @@ class TerminalExecTool(Tool):
             "confirmation; forbidden commands are blocked. The command and its output "
             "are shown live in the user's terminal. On Local (non-SSH) terminals it may "
             "run without a task as an untracked passthrough — prefer the `exec` tool "
-            "for local commands."
+            "for local commands. "
+            "Package installs and builds run synchronously: the default timeout "
+            "already covers them, so let one command finish rather than splitting "
+            "it up or polling for it. On timeout or cancel Mona stops waiting but "
+            "does NOT stop the remote command, so it may still be running — check "
+            "before retrying, and never report that it was terminated."
         )
 
     @property
@@ -514,11 +667,55 @@ class TerminalExecTool(Tool):
             "command": command,
             "source": "ai",
         }
-        if isinstance(timeout_secs, int) and timeout_secs > 0:
-            args["timeoutSecs"] = timeout_secs
-        result = await _tauri_invoke_async("terminal_maintenance_execute_step", args)
+        step_timeout = (
+            timeout_secs
+            if isinstance(timeout_secs, int) and timeout_secs > 0
+            else _STEP_DEFAULT_TIMEOUT_SECS
+        )
+        step_timeout = min(step_timeout, _STEP_MAX_TIMEOUT_SECS)
+        args["timeoutSecs"] = step_timeout
+        transport_timeout = step_timeout + _BRIDGE_HEADROOM_SECS
+
+        try:
+            result = await _tauri_invoke_async(
+                "terminal_maintenance_execute_step",
+                args,
+                timeout=transport_timeout,
+                raise_on_timeout=True,
+            )
+        except IpcTimeoutError:
+            # The backend is still working; the transport stopped waiting.
+            logger.warning(
+                "IPC bridge timed out after {}s waiting for "
+                "cmd='terminal_maintenance_execute_step'; the remote command "
+                "may still be running",
+                transport_timeout,
+            )
+            return _STEP_BRIDGE_TIMEOUT.format(
+                seconds=int(transport_timeout),
+                max_seconds=_STEP_MAX_TIMEOUT_SECS,
+            )
+        except Exception as e:
+            logger.warning(
+                "IPC bridge invoke failed for cmd='terminal_maintenance_execute_step': {}",
+                e,
+            )
+            return f"Error: Tauri invoke failed: {e}"
 
         if isinstance(result, str) and result.startswith("Error:"):
+            # The shared wrapper flattens bridge errors into this string, so the
+            # refused-channel case has to be recognised here rather than from an
+            # exception.
+            if _is_channel_refused(result):
+                logger.warning(
+                    "SSH server refused a session channel for "
+                    "cmd='terminal_maintenance_execute_step': {}",
+                    result,
+                )
+                return _STEP_CHANNEL_REFUSED.format(detail=result.removeprefix("Error: "))
+            contract_error = _translate_step_contract_error(result)
+            if contract_error is not None:
+                return contract_error
             return result
         if isinstance(result, dict):
             return _format_step_result(result)
@@ -699,18 +896,45 @@ class TerminalUploadTool(Tool):
         else:
             content_b64 = base64.b64encode(content.encode("utf-8")).decode("ascii")
 
-        result = await _tauri_invoke_async(
-            "terminal_maintenance_execute_upload",
-            {
-                "taskId": task_id,
-                "stepId": step_id,
-                "remotePath": remote_path,
-                "content": content_b64,
-                "source": "ai",
-            },
-        )
+        # Uploads carry the file body over the bridge, so the transport must be
+        # allowed more than the short default used for ordinary commands.
+        upload_timeout = _UPLOAD_BRIDGE_TIMEOUT_SECS
+        try:
+            result = await _tauri_invoke_async(
+                "terminal_maintenance_execute_upload",
+                {
+                    "taskId": task_id,
+                    "stepId": step_id,
+                    "remotePath": remote_path,
+                    "content": content_b64,
+                    "source": "ai",
+                },
+                timeout=upload_timeout,
+                raise_on_timeout=True,
+            )
+        except IpcTimeoutError:
+            logger.warning(
+                "IPC bridge timed out after {}s waiting for "
+                "cmd='terminal_maintenance_execute_upload' (path={})",
+                upload_timeout,
+                remote_path,
+            )
+            return (
+                f"Error: Mona 等待上传返回超时（{int(upload_timeout)}s），这不代表上传失败。\n"
+                "远端文件可能已经写入。请勿重复执行同一 step（状态机会拒绝）。\n"
+                "下一步先用 terminal_output 或只读步骤确认远端文件是否存在及其内容，再决定后续动作。"
+            )
+        except Exception as e:
+            logger.warning(
+                "IPC bridge invoke failed for cmd='terminal_maintenance_execute_upload': {}",
+                e,
+            )
+            return f"Error: Tauri invoke failed: {e}"
 
         if isinstance(result, str) and result.startswith("Error:"):
+            contract_error = _translate_step_contract_error(result)
+            if contract_error is not None:
+                return contract_error
             return result
 
         if isinstance(result, dict):

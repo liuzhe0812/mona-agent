@@ -122,6 +122,12 @@ pub enum StepStatus {
     Running,
     Succeeded,
     Failed,
+    /// The command was started but its outcome was never observed (the step
+    /// timed out, or the channel closed without an exit status). This is NOT a
+    /// failure: the change may well have taken effect. Kept distinct from
+    /// `Failed` so a later successful verify can confirm it, which an explicit
+    /// non-zero exit must never be able to do.
+    Unknown,
     Skipped,
     Cancelled,
 }
@@ -133,6 +139,7 @@ impl StepStatus {
             StepStatus::Running => "running",
             StepStatus::Succeeded => "succeeded",
             StepStatus::Failed => "failed",
+            StepStatus::Unknown => "unknown",
             StepStatus::Skipped => "skipped",
             StepStatus::Cancelled => "cancelled",
         }
@@ -144,10 +151,29 @@ impl StepStatus {
             "running" => StepStatus::Running,
             "succeeded" => StepStatus::Succeeded,
             "failed" => StepStatus::Failed,
+            "unknown" => StepStatus::Unknown,
             "skipped" => StepStatus::Skipped,
             "cancelled" => StepStatus::Cancelled,
             _ => return None,
         })
+    }
+
+    /// A step that reached a terminal state by starting to run, whether or not
+    /// its outcome could be observed.
+    fn is_executed(&self) -> bool {
+        matches!(
+            self,
+            StepStatus::Succeeded
+                | StepStatus::Failed
+                | StepStatus::Unknown
+                | StepStatus::Cancelled
+        )
+    }
+
+    /// The outcome is unobserved, so only an independent re-check can establish
+    /// what actually happened.
+    fn is_outcome_unknown(&self) -> bool {
+        matches!(self, StepStatus::Unknown | StepStatus::Cancelled)
     }
 }
 
@@ -676,7 +702,10 @@ impl MaintenanceStore {
     ) -> Result<(), String> {
         if !matches!(
             status,
-            StepStatus::Succeeded | StepStatus::Failed | StepStatus::Cancelled
+            StepStatus::Succeeded
+                | StepStatus::Failed
+                | StepStatus::Unknown
+                | StepStatus::Cancelled
         ) {
             return Err("Invalid final step status".to_string());
         }
@@ -732,12 +761,7 @@ impl MaintenanceStore {
         let executed: Vec<&MaintenanceStep> = detail
             .steps
             .iter()
-            .filter(|s| {
-                matches!(
-                    s.status,
-                    StepStatus::Succeeded | StepStatus::Failed | StepStatus::Cancelled
-                )
-            })
+            .filter(|s| s.status.is_executed())
             .collect();
         if executed.is_empty() {
             return Err("任务还没有任何实际执行的步骤".to_string());
@@ -745,18 +769,20 @@ impl MaintenanceStore {
         if detail.steps.iter().any(|s| s.status == StepStatus::Running) {
             return Err("存在正在执行的步骤".to_string());
         }
-        // Per-phase success check: each phase that has executed steps must
-        // have at least one successful step. If all steps in a phase failed,
-        // the task cannot be marked as succeeded.
+
+        // A phase whose steps all failed outright cannot be confirmed. A step
+        // whose outcome is merely unknown does not disqualify the phase on its
+        // own — it may have worked, and the verify step is what decides that.
         for kind in [StepKind::Inspect, StepKind::Change, StepKind::Verify] {
-            let phase_steps: Vec<&MaintenanceStep> = executed
+            let has_step = executed.iter().any(|s| s.kind == kind);
+            let has_success = executed
+                .iter()
+                .any(|s| s.kind == kind && s.status == StepStatus::Succeeded);
+            let only_failures = executed
                 .iter()
                 .filter(|s| s.kind == kind)
-                .copied()
-                .collect();
-            if !phase_steps.is_empty()
-                && !phase_steps.iter().any(|s| s.status == StepStatus::Succeeded)
-            {
+                .all(|s| s.status == StepStatus::Failed);
+            if has_step && !has_success && only_failures {
                 return Err(format!(
                     "{}阶段所有步骤均失败，无法确认结果",
                     match kind {
@@ -767,6 +793,38 @@ impl MaintenanceStore {
                 ));
             }
         }
+
+        // Every change whose outcome was not observed needs a later successful
+        // verify to establish what actually happened. This is what lets a
+        // timed-out-but-actually-fine `apt-get install` still close as success.
+        let unconfirmed_changes: Vec<&MaintenanceStep> = executed
+            .iter()
+            .filter(|s| {
+                s.kind == StepKind::Change
+                    && s.started_at.is_some()
+                    && s.status.is_outcome_unknown()
+            })
+            .copied()
+            .collect();
+        for change in &unconfirmed_changes {
+            let change_at = change.finished_at.or(change.started_at);
+            let verified = detail.steps.iter().any(|s| {
+                s.kind == StepKind::Verify
+                    && s.status == StepStatus::Succeeded
+                    && s.exit_code == Some(0)
+                    && match (s.finished_at, change_at) {
+                        (Some(done), Some(changed)) => done >= changed,
+                        _ => false,
+                    }
+            });
+            if !verified {
+                return Err(
+                    "有变更步骤结果未知（超时或未收到退出状态），必须先完成一次成功复检才能确认任务结果"
+                        .to_string(),
+                );
+            }
+        }
+
         let last_change_finish = detail
             .steps
             .iter()
@@ -1267,9 +1325,87 @@ mod tests {
     }
 
     #[test]
+    fn unknown_change_can_be_confirmed_by_later_verify() {
+        // A change whose outcome was never observed (timeout, no exit code)
+        // should not fail the task outright. A later successful verify step
+        // establishes what actually happened and lets the task close as success.
+        let s = store();
+        let d = s
+            .start_task(
+                "sess-1",
+                "cfg-1",
+                "root@example.com:22",
+                "安装 nginx",
+                "auto",
+                &[
+                    ("安装 nginx".into(), StepKind::Change),
+                    ("验证 nginx 运行".into(), StepKind::Verify),
+                ],
+            )
+            .unwrap();
+        // Change ran but the channel closed before an exit status arrived.
+        s.set_step_running(&d.steps[0].id, "apt-get install nginx").unwrap();
+        s.set_step_result(&d.steps[0].id, StepStatus::Unknown, None, 5)
+            .unwrap();
+        // Verify ran after the change and succeeded.
+        s.set_step_running(&d.steps[1].id, "curl localhost").unwrap();
+        s.set_step_result(&d.steps[1].id, StepStatus::Succeeded, Some(0), 10)
+            .unwrap();
+        let done = s.finish_task(&d.task.id, "d", "s").unwrap();
+        assert_eq!(done.task.status, TaskStatus::Succeeded);
+    }
+
+    #[test]
+    fn unknown_change_without_verify_cannot_succeed() {
+        // A change whose outcome is unknown must not close the task as success
+        // on its own — the verify step is what decides.
+        let s = store();
+        let d = start_with(
+            &s,
+            &[
+                ("安装 nginx".into(), StepKind::Change),
+                ("验证 nginx 运行".into(), StepKind::Verify),
+            ],
+        );
+        s.set_step_running(&d.steps[0].id, "apt-get install nginx").unwrap();
+        s.set_step_result(&d.steps[0].id, StepStatus::Unknown, None, 5)
+            .unwrap();
+        let err = s.finish_task(&d.task.id, "d", "s").unwrap_err();
+        assert!(err.contains("结果未知"));
+        assert!(err.contains("复检"));
+    }
+
+    #[test]
+    fn explicit_failure_cannot_be_recovered_by_verify() {
+        // A change that explicitly failed (non-zero exit) must NOT be confirmed
+        // by a later successful verify — the verify passing does not mean the
+        // change took effect.
+        let s = store();
+        let d = s
+            .start_task(
+                "sess-1",
+                "cfg-1",
+                "root@example.com:22",
+                "安装 nginx",
+                "auto",
+                &[
+                    ("安装 nginx".into(), StepKind::Change),
+                    ("验证 nginx 运行".into(), StepKind::Verify),
+                ],
+            )
+            .unwrap();
+        s.set_step_running(&d.steps[0].id, "apt-get install nginx").unwrap();
+        s.set_step_result(&d.steps[0].id, StepStatus::Failed, Some(1), 5)
+            .unwrap();
+        s.set_step_running(&d.steps[1].id, "curl localhost").unwrap();
+        s.set_step_result(&d.steps[1].id, StepStatus::Succeeded, Some(0), 10)
+            .unwrap();
+        let err = s.finish_task(&d.task.id, "d", "s").unwrap_err();
+        assert!(err.contains("失败"));
+    }
+
+    #[test]
     fn failed_step_recovered_by_remaining_planned_step() {
-        // Recovery under a locked plan: the alternative check must have been
-        // part of the original plan — plans cannot be extended after start.
         let s = store();
         let d = s
             .start_task(

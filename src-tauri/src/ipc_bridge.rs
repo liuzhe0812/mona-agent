@@ -6,6 +6,7 @@ use serde_json::Value;
 use subtle::ConstantTimeEq;
 use tauri::Emitter;
 use tauri::Manager;
+use tokio_util::sync::CancellationToken;
 
 const IPC_META_FILE_NAME: &str = "ipc_bridge.json";
 const LEGACY_PORT_FILE_NAME: &str = "ipc_bridge_port";
@@ -64,6 +65,37 @@ fn extract_token(request: &str) -> Option<&str> {
 fn token_matches(provided: &str, expected: &str) -> bool {
     let (a, b) = (provided.as_bytes(), expected.as_bytes());
     a.len() == b.len() && bool::from(a.ct_eq(b))
+}
+
+/// Resolve once the peer closes the connection, or when `client_gone` is
+/// already cancelled.
+///
+/// The bridge reads each request fully before dispatching, so a command cannot
+/// notice its caller leaving by reading the socket itself. Polling the read
+/// half is what turns "the Python side gave up waiting" into a signal the
+/// in-flight command can act on: with the body already consumed, the next read
+/// reports EOF (or an error) exactly when the caller goes away.
+async fn watch_for_client_disconnect(
+    mut reader: tokio::net::tcp::OwnedReadHalf,
+    client_gone: CancellationToken,
+) {
+    use tokio::io::AsyncReadExt;
+
+    let mut probe = [0u8; 1];
+    loop {
+        let read = reader.read(&mut probe);
+        tokio::pin!(read);
+        tokio::select! {
+            _ = client_gone.cancelled() => return,
+            result = &mut read => match result {
+                // EOF or a reset: the caller stopped waiting.
+                Ok(0) | Err(_) => return,
+                // Unexpected extra bytes — keep watching rather than
+                // misreporting this as a disconnect.
+                Ok(_) => continue,
+            },
+        }
+    }
 }
 
 pub struct IpcBridge {
@@ -202,6 +234,7 @@ impl IpcBridge {
         }
 
         let body = extract_body(&request_str);
+        let client_gone = CancellationToken::new();
 
         let response_body = match body {
             Some(body_str) => {
@@ -215,9 +248,41 @@ impl IpcBridge {
 
                 log::debug!("IPC bridge received cmd={:?}, args keys={:?}", cmd, args.as_object().map(|o| o.keys().collect::<Vec<_>>()));
 
-                let result = self
-                    .dispatch_command(cmd, args, &terminal_state)
-                    .await;
+                let dispatch = self.dispatch_command(cmd, args, &terminal_state, &client_gone);
+                tokio::pin!(dispatch);
+
+                // A caller that stops waiting (its transport timeout fires)
+                // closes the socket while the command keeps running. Nothing
+                // observed that before, so long commands ran on and left remote
+                // work behind.
+                let disconnect = watch_for_client_disconnect(reader, client_gone.clone());
+                tokio::pin!(disconnect);
+                let mut disconnect_seen = false;
+
+                let result = loop {
+                    tokio::select! {
+                        result = &mut dispatch => break result,
+                        _ = &mut disconnect, if !disconnect_seen => {
+                            disconnect_seen = true;
+                            log::warn!(
+                                "IPC bridge client disconnected before cmd={:?} finished; asking in-flight work to stop",
+                                cmd
+                            );
+                            client_gone.cancel();
+                        }
+                    }
+                };
+
+                // Release the cancellation watchers tied to this connection.
+                client_gone.cancel();
+
+                if disconnect_seen {
+                    // Nobody is waiting for this answer. The branch above
+                    // already asked in-flight work to unwind, and the dispatch
+                    // future ran to completion so a cancelled step still
+                    // records its own final state.
+                    return Ok(());
+                }
 
                 match result {
                     Ok(v) => serde_json::json!({"result": v}),
@@ -251,6 +316,7 @@ impl IpcBridge {
         cmd: &str,
         args: Value,
         state: &TerminalState,
+        client_gone: &CancellationToken,
     ) -> Result<Value, String> {
         match cmd {
             "canvas_agent_request" => {
@@ -475,7 +541,8 @@ impl IpcBridge {
                 maintenance_cmds::bridge_start(&self.app_handle, state, &args).await
             }
             "terminal_maintenance_execute_step" => {
-                maintenance_cmds::bridge_execute_step(&self.app_handle, state, &args).await
+                maintenance_cmds::bridge_execute_step(&self.app_handle, state, &args, client_gone)
+                    .await
             }
             "terminal_maintenance_execute_upload" => {
                 maintenance_cmds::bridge_execute_upload(&self.app_handle, state, &args).await
@@ -1039,5 +1106,90 @@ mod tests {
         let b = generate_token();
         assert_ne!(a, b);
         assert!(a.chars().all(|c| c.is_ascii_hexdigit() || c == '-'));
+    }
+
+    /// The watcher must fire on a real client hang-up, which is what turns a
+    /// caller's transport timeout into a signal the in-flight step can act on.
+    #[tokio::test]
+    async fn watcher_fires_when_the_client_hangs_up() {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("bind");
+        let addr = listener.local_addr().expect("addr");
+
+        let client = tokio::net::TcpStream::connect(addr)
+            .await
+            .expect("connect");
+        let (server_stream, _) = listener.accept().await.expect("accept");
+        let (server_read, _server_write) = server_stream.into_split();
+
+        let token = CancellationToken::new();
+        let watch = super::watch_for_client_disconnect(server_read, token);
+        tokio::pin!(watch);
+
+        // Let the watcher park on the read, then have the caller go away.
+        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+        drop(client);
+
+        let mut fired = false;
+        tokio::select! {
+            _ = &mut watch => fired = true,
+            _ = tokio::time::sleep(std::time::Duration::from_secs(5)) => {}
+        }
+        assert!(fired, "watcher should resolve once the peer is gone");
+    }
+
+    /// A live, healthy caller must not be mistaken for one that left.
+    #[tokio::test]
+    async fn watcher_stays_pending_while_the_client_is_connected() {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("bind");
+        let addr = listener.local_addr().expect("addr");
+
+        let client = tokio::net::TcpStream::connect(addr)
+            .await
+            .expect("connect");
+        let (server_stream, _) = listener.accept().await.expect("accept");
+        let (server_read, _server_write) = server_stream.into_split();
+
+        let token = CancellationToken::new();
+        let watch = super::watch_for_client_disconnect(server_read, token);
+        tokio::pin!(watch);
+
+        let mut fired = false;
+        tokio::select! {
+            _ = &mut watch => fired = true,
+            _ = tokio::time::sleep(std::time::Duration::from_millis(300)) => {}
+        }
+        assert!(!fired, "a connected caller must not be reported as gone");
+        drop(client);
+    }
+
+    /// Cancelling the token releases the watcher without a hang-up.
+    #[tokio::test]
+    async fn watcher_stops_when_the_command_finished_normally() {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("bind");
+        let addr = listener.local_addr().expect("addr");
+
+        let _client = tokio::net::TcpStream::connect(addr)
+            .await
+            .expect("connect");
+        let (server_stream, _) = listener.accept().await.expect("accept");
+        let (server_read, _server_write) = server_stream.into_split();
+
+        let token = CancellationToken::new();
+        let watch = super::watch_for_client_disconnect(server_read, token.clone());
+        tokio::pin!(watch);
+
+        token.cancel();
+        tokio::select! {
+            _ = &mut watch => {}
+            _ = tokio::time::sleep(std::time::Duration::from_secs(2)) => {
+                panic!("watcher should stop once cancelled");
+            }
+        }
     }
 }

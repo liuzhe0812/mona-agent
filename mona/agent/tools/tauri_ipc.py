@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import socket
 import time
 import urllib.error
 import urllib.request
@@ -39,6 +40,22 @@ _NO_PROXY_OPENER = urllib.request.build_opener(urllib.request.ProxyHandler({}))
 _ACCESS_CACHE: tuple[bool, float] | None = None
 _ACCESS_TTL_SECONDS: float = 30.0
 
+# Ordinary bridge commands answer in milliseconds; this bound only exists so a
+# wedged app cannot hang a tool call forever. Commands whose backend work can
+# legitimately take minutes (e.g. a terminal step running apt-get) must pass an
+# explicit ``timeout`` — otherwise the transport gives up while the backend is
+# still working.
+_DEFAULT_TIMEOUT_SECONDS: float = 30.0
+
+
+class IpcTimeoutError(RuntimeError):
+    """The transport gave up waiting; the backend command may still be running.
+
+    Callers must not treat this as "the command failed": the request reached
+    the app, the work was likely started, and no result was observed. Only the
+    caller that knows the command's semantics can say what to do next.
+    """
+
 
 def _read_ipc_meta() -> tuple[int, str | None]:
     """Read the bridge port + auth token written by the Tauri side.
@@ -63,11 +80,20 @@ def _read_ipc_meta() -> tuple[int, str | None]:
     return _FALLBACK_IPC_PORT, None
 
 
-def tauri_invoke(cmd: str, args: dict[str, Any] | None = None) -> Any:
+def tauri_invoke(
+    cmd: str,
+    args: dict[str, Any] | None = None,
+    *,
+    timeout: float | None = None,
+) -> Any:
     """Call a Tauri IPC command via the HTTP bridge.
 
-    Raises RuntimeError if the bridge is unavailable or the command returns
-    an error.
+    ``timeout`` bounds how long the transport waits for the response. Omit it
+    for ordinary commands; pass it when the backend work may take longer than
+    ``_DEFAULT_TIMEOUT_SECONDS``.
+
+    Raises ``IpcTimeoutError`` when the transport gave up waiting, and
+    ``RuntimeError`` for any other bridge failure or reported command error.
     """
     port, token = _read_ipc_meta()
     payload = json.dumps({"cmd": cmd, "args": args or {}}).encode()
@@ -76,23 +102,40 @@ def tauri_invoke(cmd: str, args: dict[str, Any] | None = None) -> Any:
     if token:
         headers[_TOKEN_HEADER] = token
     req = urllib.request.Request(url, data=payload, headers=headers)
+    limit = _DEFAULT_TIMEOUT_SECONDS if timeout is None else max(1.0, float(timeout))
     try:
-        with _NO_PROXY_OPENER.open(req, timeout=30) as resp:
+        with _NO_PROXY_OPENER.open(req, timeout=limit) as resp:
             result = json.loads(resp.read().decode())
             if isinstance(result, dict) and "error" in result:
                 logger.warning("IPC bridge error for cmd={!r}: {}", cmd, result["error"])
                 raise RuntimeError(result["error"])
             return result.get("result", result)
+    except (TimeoutError, socket.timeout) as e:
+        raise IpcTimeoutError(
+            f"IPC bridge timed out for {cmd!r} after {limit:.0f}s"
+        ) from e
     except urllib.error.URLError as e:
+        # urllib wraps connect-phase socket timeouts in URLError; a read-phase
+        # timeout surfaces above. Both mean "no answer yet", not "command
+        # failed", so they share one exception type.
+        if isinstance(getattr(e, "reason", None), (TimeoutError, socket.timeout)):
+            raise IpcTimeoutError(
+                f"IPC bridge timed out for {cmd!r} after {limit:.0f}s"
+            ) from e
         raise RuntimeError(
             f"IPC bridge unavailable for {cmd!r}: {e}. "
             "Is the Mona app running?"
         ) from e
 
 
-async def tauri_invoke_async(cmd: str, args: dict[str, Any] | None = None) -> Any:
+async def tauri_invoke_async(
+    cmd: str,
+    args: dict[str, Any] | None = None,
+    *,
+    timeout: float | None = None,
+) -> Any:
     """Call a Tauri IPC command without blocking the asyncio event loop."""
-    return await asyncio.to_thread(tauri_invoke, cmd, args)
+    return await asyncio.to_thread(tauri_invoke, cmd, args, timeout=timeout)
 
 
 def check_subscription_access() -> bool:

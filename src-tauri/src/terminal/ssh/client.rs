@@ -69,6 +69,23 @@ pub struct SshClient {
     scroll_buffer: Arc<ScrollBuffer>,
 }
 
+/// Stop waiting on a command whose step was cancelled or timed out.
+///
+/// This deliberately does NOT try to kill the remote process. Verified against
+/// a real OpenSSH 9.6p1 host: the SSH signal request is never delivered to the
+/// command, and neither closing the channel nor dropping the connection makes
+/// sshd reap it. The only mechanism that worked was running an explicit
+/// `kill` over a second channel, which is not worth the machinery — and for
+/// package operations it is actively harmful, since killing apt/dpkg
+/// mid-transaction is what leaves a stale lock and a half-configured database.
+///
+/// So the remote command is left running and the caller is told the outcome is
+/// unknown. The connection stays healthy for subsequent steps.
+async fn abandon_channel(channel: &mut russh::Channel<client::Msg>) {
+    let _ = channel.eof().await;
+    let _ = channel.close().await;
+}
+
 impl SshClient {
     pub async fn connect(
         host: &str,
@@ -567,7 +584,7 @@ impl SshClient {
         }
 
         if timed_out || cancelled {
-            let _ = channel.close().await;
+            abandon_channel(&mut channel).await;
         }
 
         Ok(StructuredExecResult {
@@ -643,7 +660,7 @@ impl SshClient {
         }
 
         if timed_out || cancelled {
-            let _ = channel.close().await;
+            abandon_channel(&mut channel).await;
         }
 
         Ok(StructuredExecResult {
@@ -683,5 +700,69 @@ impl SshClient {
             })?;
 
         Ok(sftp_session)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Cancelling a step must end the exec wait promptly and report why.
+    ///
+    /// Uses the verify SSH server (127.0.0.1:2223). This covers Mona's half of
+    /// the contract: the cancel token unblocks the exec loop, the result is
+    /// reported as cancelled, and the remote command is deliberately left
+    /// running (see `abandon_channel`) rather than killed. That the token is
+    /// what a caller's hang-up triggers is covered by the
+    /// `watch_for_client_disconnect` tests in `ipc_bridge`.
+    #[tokio::test]
+    #[ignore = "requires the local verify SSH server"]
+    async fn live_cancel_unblocks_the_exec_wait() {
+        let known_hosts = Arc::new(KnownHostsStore::new_in_memory());
+        let client = SshClient::connect_with_verify(
+            "127.0.0.1",
+            2223,
+            "monauser",
+            &AuthConfig::Password {
+                password: "monapass".to_string(),
+            },
+            known_hosts,
+            true,
+        )
+        .await
+        .expect("connect to local ssh server");
+
+        let token = tokio_util::sync::CancellationToken::new();
+        let cancel = token.clone();
+        // Must keep running until cancelled — `sleep` does not exist in
+        // Windows cmd.exe, which would make the command exit immediately.
+        let command = if cfg!(windows) {
+            "ping -n 300 127.0.0.1 >nul"
+        } else {
+            "sleep 300"
+        };
+        let exec = tokio::spawn(async move {
+            client
+                .exec_command_structured(command, Duration::from_secs(120), cancel, |_| {})
+                .await
+        });
+
+        tokio::time::sleep(Duration::from_millis(500)).await;
+        token.cancel();
+
+        let started = std::time::Instant::now();
+        let result = exec
+            .await
+            .expect("exec task should not panic")
+            .expect("exec should return a result");
+        assert!(result.cancelled, "step should be reported as cancelled");
+        // Must not sit out the full 120s step timeout.
+        assert!(
+            started.elapsed() < Duration::from_secs(10),
+            "cancel should unblock the exec wait promptly"
+        );
+        // The outcome is genuinely unknown: no exit status was observed, so the
+        // result must not look like a completed command either way.
+        assert_eq!(result.exit_code, None, "no exit code can have been observed");
     }
 }

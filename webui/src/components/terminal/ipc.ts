@@ -688,6 +688,7 @@ export type MaintenanceStepStatus =
   | "running"
   | "succeeded"
   | "failed"
+  | "unknown"
   | "skipped"
   | "cancelled";
 

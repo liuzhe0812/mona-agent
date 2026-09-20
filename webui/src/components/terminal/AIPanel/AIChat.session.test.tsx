@@ -37,16 +37,22 @@ vi.mock("@/hooks/useMonaStream", () => ({
   useMonaStream: () => ({
     messages: [],
     isStreaming: false,
+    stopping: false,
     send: vi.fn(),
+    inject: vi.fn(),
     stop: vi.fn(),
     setMessages: vi.fn(),
   }),
 }));
 
-vi.mock("@/lib/tauri", () => ({
-  isTauri: () => false,
-  openPathWithSystemApp: vi.fn(),
-}));
+vi.mock("@/lib/tauri", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@/lib/tauri")>();
+  return {
+    ...actual,
+    isTauri: () => false,
+    openPathWithSystemApp: vi.fn(),
+  };
+});
 
 const SSH_SESSION = {
   id: "ssh-session-1",

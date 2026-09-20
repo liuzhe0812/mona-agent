@@ -1,32 +1,17 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { Send, Shield, Square, FileText, Plus, X, Loader2 } from "lucide-react";
+import { useCallback, useEffect, useRef, useState } from "react";
+import { Shield, FileText } from "lucide-react";
 import { ThreadMessages } from "@/components/thread/ThreadMessages";
+import { ThreadComposer } from "@/components/thread/ThreadComposer";
 import { useMonaStream, type SendImage, type SendOptions } from "@/hooks/useMonaStream";
-import {
-  useAttachedImages,
-  type AttachedImage,
-  type AttachmentError,
-  MAX_IMAGES_PER_MESSAGE,
-} from "@/hooks/useAttachedImages";
-import { useClipboardAndDrop } from "@/hooks/useClipboardAndDrop";
+import { usePendingQueue } from "@/hooks/usePendingQueue";
 import { useSessionHistory } from "@/hooks/useSessions";
 import { useClient } from "@/providers/ClientProvider";
 import { useTerminalStore, loadPersistedAiChatId, terminalAiChatKey } from "../store/terminalStore";
 import { isTauri, openPathWithSystemApp } from "@/lib/tauri";
-import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
 import { Select } from "@/components/ui/select";
-import { Textarea } from "@/components/ui/textarea";
+import type { MessageQuote, UIMessage } from "@/lib/types";
 import type { SessionType } from "../types/terminal";
-
-/** Same MIME whitelist as ThreadComposer (mirrors server-side). */
-const ACCEPT_ATTR = "image/png,image/jpeg,image/webp,image/gif";
-
-function formatBytes(n: number): string {
-  if (n < 1024) return `${n} B`;
-  if (n < 1024 * 1024) return `${(n / 1024).toFixed(1)} KB`;
-  return `${(n / (1024 * 1024)).toFixed(1)} MB`;
-}
 
 interface Props {
   sessionId: string | null;
@@ -41,10 +26,9 @@ interface ReportInfo {
 }
 
 export function AIChat({ sessionId, sessionTypeOverride, onStreamingChange }: Props) {
-  const [draft, setDraft] = useState("");
   const [creatingChat, setCreatingChat] = useState(false);
   const [reports, setReports] = useState<ReportInfo[]>([]);
-  const [inlineError, setInlineError] = useState<string | null>(null);
+  const [quote, setQuote] = useState<MessageQuote | null>(null);
   const { client } = useClient();
   const registry = useTerminalStore((s) => s.terminalRegistry);
   const execMode = useTerminalStore((s) => s.terminalExecMode);
@@ -64,58 +48,8 @@ export function AIChat({ sessionId, sessionTypeOverride, onStreamingChange }: Pr
   const pendingSendOptsRef = useRef<SendOptions | null>(null);
   const pendingImagesRef = useRef<SendImage[] | undefined>(undefined);
   const scrollRef = useRef<HTMLDivElement>(null);
-  const fileInputRef = useRef<HTMLInputElement>(null);
 
-  const { images, enqueue, remove, clear, encoding, full } = useAttachedImages();
-
-  const readyImages = useMemo(
-    () => images.filter((img): img is AttachedImage & { dataUrl: string } =>
-      img.status === "ready" && typeof img.dataUrl === "string",
-    ),
-    [images],
-  );
-  const hasErrors = images.some((img) => img.status === "error");
-
-  const formatRejection = useCallback((reason: AttachmentError): string => {
-    switch (reason) {
-      case "unsupported_type":
-        return "不支持的图片类型";
-      case "too_many_images":
-        return `最多 ${MAX_IMAGES_PER_MESSAGE} 张图片`;
-      case "magic_mismatch":
-        return "文件内容与扩展名不匹配";
-      case "decode_failed":
-        return "图片解码失败";
-      case "too_large":
-        return "图片过大";
-      case "io":
-        return "文件读取失败";
-      default:
-        return "图片处理失败";
-    }
-  }, []);
-
-  const addFiles = useCallback(
-    (files: File[]) => {
-      if (files.length === 0) return;
-      const { rejected } = enqueue(files);
-      if (rejected.length > 0) {
-        setInlineError(formatRejection(rejected[0].reason));
-      } else {
-        setInlineError(null);
-      }
-    },
-    [enqueue, formatRejection],
-  );
-
-  const { isDragging, onPaste, onDragEnter, onDragOver, onDragLeave, onDrop } =
-    useClipboardAndDrop(addFiles);
-
-  const onFilePick: React.ChangeEventHandler<HTMLInputElement> = (e) => {
-    const files = Array.from(e.target.files ?? []);
-    e.target.value = "";
-    addFiles(files);
-  };
+  const pendingQueue = usePendingQueue();
 
   // Bind this terminal session to a Mona chat. The binding survives panel
   // remounts and SSH reconnects, so the previous conversation is restored
@@ -164,7 +98,9 @@ export function AIChat({ sessionId, sessionTypeOverride, onStreamingChange }: Pr
   const {
     messages,
     isStreaming,
+    stopping,
     send,
+    inject,
     stop,
     setMessages,
   } = useMonaStream(chatId, historical, hasPendingToolCalls);
@@ -199,64 +135,96 @@ export function AIChat({ sessionId, sessionTypeOverride, onStreamingChange }: Pr
     }
   }, [messages, reports]);
 
-  const handleSend = useCallback(() => {
-    const text = draft.trim();
-    if (!text && readyImages.length === 0) return;
-    setDraft("");
-    const enriched = enrichWithTerminalContext(text, effectiveSessionId, registry);
-    const sendOpts: SendOptions = {
-      terminalSessionId: effectiveSessionId ?? undefined,
-      terminalExecMode: effectiveSessionId ? execMode : undefined,
-      // IMPORTANT: displayContent shows the user's original input in the message
-      // bubble, not the enriched prompt with terminal context. Persisted to server
-      // for history replay. DO NOT remove this field.
-      displayContent: text,
-    };
-    const payload: SendImage[] | undefined =
-      readyImages.length > 0
-        ? readyImages.map((img) => ({
-            media: { data_url: img.dataUrl, name: img.file.name },
-            preview: { url: img.dataUrl, name: img.file.name },
-          }))
-        : undefined;
+  /** Build the terminal-enriched payload and terminal-specific SendOptions. */
+  const buildTerminalSend = useCallback(
+    (text: string, images?: SendImage[]): { content: string; images: SendImage[] | undefined; options: SendOptions } => {
+      const enriched = enrichWithTerminalContext(text, effectiveSessionId, registry);
+      const options: SendOptions = {
+        terminalSessionId: effectiveSessionId ?? undefined,
+        terminalExecMode: effectiveSessionId ? execMode : undefined,
+        // IMPORTANT: displayContent shows the user's original input in the message
+        // bubble, not the enriched prompt with terminal context. Persisted to server
+        // for history replay. DO NOT remove this field.
+        displayContent: text,
+      };
+      return { content: enriched, images, options };
+    },
+    [effectiveSessionId, registry, execMode],
+  );
 
-    if (chatId) {
-      send(enriched, payload, sendOpts);
-      clear();
-      return;
-    }
+  /** Called by ThreadComposer when the user submits. Routes to pending queue
+   *  while streaming, otherwise sends immediately (or provisions a new chat). */
+  const handleSubmit = useCallback(
+    (content: string, images?: SendImage[], options?: SendOptions) => {
+      const { content: enriched, images: payload, options: terminalOpts } =
+        buildTerminalSend(content, images);
+      // Merge any extra options ThreadComposer may have added (e.g. quote).
+      const mergedOptions: SendOptions = { ...terminalOpts, ...options };
 
-    setCreatingChat(true);
-    pendingPromptRef.current = enriched;
-    pendingSendOptsRef.current = sendOpts;
-    pendingImagesRef.current = payload;
-    client.newChat(5_000, false).then((nextChatId) => {
-      setAiChatId(sessionId, nextChatId);
-      setCreatingChat(false);
-    }).catch(() => {
-      pendingPromptRef.current = null;
-      pendingSendOptsRef.current = null;
-      pendingImagesRef.current = undefined;
-      setCreatingChat(false);
-    });
-  }, [draft, chatId, sessionId, effectiveSessionId, registry, client, execMode, send, readyImages, clear, setAiChatId]);
+      // While the model is streaming, stage into the pending queue so the user
+      // can append or discard before the next turn.
+      if (isStreaming) {
+        pendingQueue.enqueue(enriched, payload, mergedOptions);
+        return;
+      }
 
-  const handleStop = useCallback(() => {
-    stop();
-  }, [stop]);
+      if (chatId) {
+        send(enriched, payload, mergedOptions);
+        return;
+      }
 
-  const handleKeyDown = (e: React.KeyboardEvent) => {
-    if (e.key === "Enter" && !e.shiftKey) {
-      e.preventDefault();
-      if (!isStreaming) handleSend();
-    }
-  };
+      setCreatingChat(true);
+      pendingPromptRef.current = enriched;
+      pendingSendOptsRef.current = mergedOptions;
+      pendingImagesRef.current = payload;
+      client.newChat(5_000, false).then((nextChatId) => {
+        setAiChatId(sessionId, nextChatId);
+        setCreatingChat(false);
+      }).catch(() => {
+        pendingPromptRef.current = null;
+        pendingSendOptsRef.current = null;
+        pendingImagesRef.current = undefined;
+        setCreatingChat(false);
+      });
+    },
+    [buildTerminalSend, isStreaming, chatId, sessionId, client, send, setAiChatId, pendingQueue],
+  );
 
-  const canSend =
-    !isStreaming
-    && !encoding
-    && !hasErrors
-    && (draft.trim().length > 0 || readyImages.length > 0);
+  const handlePendingAppend = useCallback(
+    (id: string) => {
+      const msg = pendingQueue.messages.find((m) => m.id === id);
+      if (!msg) return;
+      inject(msg.content, msg.images, msg.options);
+      pendingQueue.remove(id);
+    },
+    [inject, pendingQueue],
+  );
+
+  const handleQuote = useCallback((message: UIMessage, author: string) => {
+    const content = (
+      message.role === "user"
+        ? message.displayContent ?? message.content
+        : message.content
+    ).trim();
+    if (!content) return;
+    setQuote({ author, content });
+  }, []);
+
+  const execModeSelector = canExec ? (
+    <div className="flex items-center gap-1">
+      <Shield className="h-3 w-3 text-muted-foreground" />
+      <Select
+        value={execMode}
+        onValueChange={(v) => setExecMode(v as "auto" | "approval")}
+        aria-label="执行模式"
+        options={[
+          { value: "auto", label: "自动模式" },
+          { value: "approval", label: "审批模式" },
+        ]}
+        className="h-6 min-w-0 border-transparent bg-transparent px-1 text-micro text-muted-foreground shadow-none"
+      />
+    </div>
+  ) : undefined;
 
   return (
     <div className="flex h-full flex-col">
@@ -266,7 +234,7 @@ export function AIChat({ sessionId, sessionTypeOverride, onStreamingChange }: Pr
             输入问题，AI 将基于终端上下文回答
           </p>
         )}
-        <ThreadMessages messages={messages} isStreaming={isStreaming} />
+        <ThreadMessages messages={messages} isStreaming={isStreaming} onQuote={handleQuote} />
         {reports.map((report, i) => (
           <Button
             key={`report-${i}`}
@@ -282,173 +250,24 @@ export function AIChat({ sessionId, sessionTypeOverride, onStreamingChange }: Pr
           </Button>
         ))}
       </div>
-      <div className="shrink-0 p-2">
-        {canExec && (
-          <div className="flex items-center gap-1.5 px-2.5 pb-1.5">
-            <Shield className="h-3 w-3 text-muted-foreground" />
-            <Select
-              value={execMode}
-              onValueChange={(v) => setExecMode(v as "auto" | "approval")}
-              aria-label="执行模式"
-              options={[
-                { value: "auto", label: "自动模式（普通步骤自动执行，高风险单独确认）" },
-                { value: "approval", label: "审批模式（变更计划确认一次）" },
-              ]}
-              className="h-6 min-w-0 flex-1 border-transparent bg-transparent px-1 text-micro text-muted-foreground shadow-none"
-            />
-          </div>
-        )}
-        <div
-          onDragEnter={onDragEnter}
-          onDragOver={onDragOver}
-          onDragLeave={onDragLeave}
-          onDrop={onDrop}
-          className={cn(
-            "flex min-h-[52px] flex-col gap-1.5 rounded-xl border border-border/75 bg-background px-2.5 py-1.5 shadow-sm transition-all",
-            isDragging && "ring-2 ring-primary/40 border-primary/40",
-          )}
-        >
-          {images.length > 0 ? (
-            <div className="flex flex-wrap gap-1.5">
-              {images.map((img) => (
-                <AttachmentChip
-                  key={img.id}
-                  image={img}
-                  formatError={formatRejection}
-                  onRemove={() => {
-                    remove(img.id);
-                    setInlineError(null);
-                  }}
-                />
-              ))}
-            </div>
-          ) : null}
-          {inlineError ? (
-            <div
-              role="alert"
-              className="rounded-md border border-destructive/40 bg-destructive/10 px-2 py-1 text-micro font-medium text-destructive"
-            >
-              {inlineError}
-            </div>
-          ) : null}
-          <div className="flex items-end gap-1.5">
-            <Textarea
-              value={draft}
-              onChange={(e) => setDraft(e.target.value)}
-              onKeyDown={handleKeyDown}
-              onPaste={onPaste}
-              placeholder="输入问题，AI 将基于终端上下文回答..."
-              className="min-h-[36px] flex-1 resize-none rounded-none border-0 bg-transparent px-0 py-0 text-caption text-black caret-black leading-5 shadow-none focus-visible:ring-0"
-              rows={2}
-            />
-            <input
-              ref={fileInputRef}
-              type="file"
-              accept={ACCEPT_ATTR}
-              multiple
-              hidden
-              onChange={onFilePick}
-            />
-            <Button
-              type="button"
-              variant="ghost"
-              size="icon"
-              onClick={() => fileInputRef.current?.click()}
-              disabled={full}
-              aria-label="添加图片"
-              className="h-6 w-6 shrink-0 text-muted-foreground"
-            >
-              <Plus className="h-3 w-3" />
-            </Button>
-            <Button
-              type="button"
-              variant="ghost"
-              size="icon"
-              onClick={isStreaming ? handleStop : handleSend}
-              disabled={!canSend}
-              aria-label={isStreaming ? "停止" : "发送"}
-              className={cn(
-                "h-6 w-6 shrink-0",
-                isStreaming
-                  ? "text-destructive hover:bg-destructive/10"
-                  : "bg-action text-white hover:bg-action-hover hover:text-white disabled:bg-muted disabled:text-muted-foreground",
-              )}
-            >
-              {isStreaming ? (
-                <Square className="h-3 w-3" />
-              ) : encoding ? (
-                <Loader2 className="h-3 w-3 animate-spin" />
-              ) : (
-                <Send className="h-3 w-3" />
-              )}
-            </Button>
-          </div>
-        </div>
+      <div className="shrink-0 px-2 pb-2">
+        <ThreadComposer
+          onSend={handleSubmit}
+          isStreaming={isStreaming}
+          stopping={stopping}
+          onStop={stop}
+          placeholder="输入问题，AI 将基于终端上下文回答..."
+          disabled={!chatId && creatingChat}
+          leadingActions={execModeSelector}
+          quote={quote}
+          onClearQuote={() => setQuote(null)}
+          pendingMessages={pendingQueue.messages}
+          onPendingAppend={handlePendingAppend}
+          onPendingRemove={pendingQueue.remove}
+          onPendingEdit={pendingQueue.update}
+          isPendingFull={pendingQueue.messages.length >= 3}
+        />
       </div>
-    </div>
-  );
-}
-
-interface AttachmentChipProps {
-  image: AttachedImage;
-  formatError: (reason: AttachmentError) => string;
-  onRemove: () => void;
-}
-
-function AttachmentChip({ image, formatError, onRemove }: AttachmentChipProps) {
-  const sizeLabel =
-    image.status === "ready" && image.normalized && image.encodedBytes
-      ? `${formatBytes(image.file.size)} → ${formatBytes(image.encodedBytes)}`
-      : formatBytes(image.file.size);
-  const tone =
-    image.status === "error"
-      ? "border-destructive/40 bg-destructive/5 text-destructive"
-      : "border-border/70 bg-muted/60";
-  return (
-    <div
-      className={cn(
-        "group relative flex items-center gap-1.5 rounded-md border px-1.5 py-1",
-        "transition-colors",
-        tone,
-      )}
-    >
-      <div className="relative h-8 w-8 overflow-hidden rounded bg-background">
-        {image.previewUrl ? (
-          <img
-            src={image.previewUrl}
-            alt=""
-            aria-hidden
-            loading="eager"
-            draggable={false}
-            className="h-full w-full object-cover"
-          />
-        ) : null}
-        {image.status === "encoding" ? (
-          <div className="absolute inset-0 flex items-center justify-center bg-background/60">
-            <Loader2 className="h-3 w-3 animate-spin" aria-hidden />
-          </div>
-        ) : null}
-      </div>
-      <div className="flex min-w-0 flex-col text-micro">
-        <span className="truncate max-w-[8rem]" title={image.file.name}>
-          {image.file.name}
-        </span>
-        <span className="truncate text-muted-foreground">
-          {image.status === "error" && image.error
-            ? formatError(image.error)
-            : sizeLabel}
-        </span>
-      </div>
-      <Button
-        type="button"
-        variant="ghost"
-        size="icon"
-        onClick={onRemove}
-        aria-label="移除图片"
-        className="ml-0.5 h-4 w-4 flex-none rounded-full text-muted-foreground/80 hover:text-foreground"
-      >
-        <X className="h-3 w-3" aria-hidden />
-      </Button>
     </div>
   );
 }

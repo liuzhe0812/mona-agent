@@ -108,14 +108,9 @@ export function IdeLayout({ sessionId }: IdeLayoutProps) {
     );
   }
 
-  if (sessionStatus === "error") {
-    return (
-      <div className="flex h-full items-center justify-center bg-background">
-        <span className="text-body text-destructive">连接失败</span>
-      </div>
-    );
-  }
-
+  // A failed or dropped SSH session still renders the shell so the reconnect
+  // entry inside ``XtermTerminal`` stays reachable; a dead-end message here
+  // would leave the user with no way to recover the session.
   const renderDragHandle = (panel: "fileTree" | "systemMonitor") => (
     <div
       onMouseDown={(e) => handleDragStart(panel, e)}

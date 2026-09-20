@@ -145,6 +145,8 @@ function StepStatusIcon({ status }: { status: MaintenanceStepStatus }) {
       return <CheckCircle2 className="h-3.5 w-3.5 shrink-0 text-success" />;
     case "failed":
       return <XCircle className="h-3.5 w-3.5 shrink-0 text-destructive" />;
+    case "unknown":
+      return <Circle className="h-3.5 w-3.5 shrink-0 text-warning" />;
     case "skipped":
       return <MinusCircle className="h-3.5 w-3.5 shrink-0 text-muted-foreground/70" />;
     case "cancelled":

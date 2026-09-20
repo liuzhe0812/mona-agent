@@ -21,7 +21,14 @@ use crate::terminal::session::SessionHandle;
 use crate::terminal::ssh::client::SshClient;
 use crate::terminal::TerminalState;
 
-const DEFAULT_STEP_TIMEOUT_SECS: u64 = 120;
+/// Default step timeout, in seconds.
+///
+/// Chosen for the dominant long-running case — package installs and builds,
+/// which routinely take several minutes. A timeout abandons the wait but does
+/// not stop the remote command (see `abandon_channel`), so an undersized
+/// default would leave orphaned work running on the server rather than failing
+/// cleanly.
+const DEFAULT_STEP_TIMEOUT_SECS: u64 = 600;
 const MAX_STEP_TIMEOUT_SECS: u64 = 1800;
 const PLAN_APPROVAL_WAIT_SECS: u64 = 300;
 
@@ -289,6 +296,7 @@ pub async fn bridge_execute_step(
     app_handle: &AppHandle,
     state: &TerminalState,
     args: &serde_json::Value,
+    client_gone: &CancellationToken,
 ) -> Result<serde_json::Value, String> {
     let task_id = args
         .get("taskId")
@@ -304,8 +312,16 @@ pub async fn bridge_execute_step(
         .ok_or("Missing command")?;
     let timeout_secs = args.get("timeoutSecs").and_then(|v| v.as_u64());
 
-    let result =
-        execute_step_inner(app_handle, state, task_id, step_id, command, timeout_secs).await?;
+    let result = execute_step_inner(
+        app_handle,
+        state,
+        task_id,
+        step_id,
+        command,
+        timeout_secs,
+        client_gone,
+    )
+    .await?;
     serde_json::to_value(result).map_err(|e| e.to_string())
 }
 
@@ -316,6 +332,7 @@ async fn execute_step_inner(
     step_id: &str,
     command: &str,
     timeout_secs: Option<u64>,
+    client_gone: &CancellationToken,
 ) -> Result<TerminalStepExecResult, String> {
     let v = validate_step(state, task_id, step_id).await?;
 
@@ -378,6 +395,19 @@ async fn execute_step_inner(
         .await
         .insert(task_id.to_string(), token.clone());
 
+    // The caller stopping waiting (its transport timeout fired) must stop the
+    // remote command too. Without this the command ran to its full timeout
+    // while the AI had already been told the step failed, and the abandoned
+    // work piled up on the server.
+    let caller_gone = client_gone.clone();
+    let cancel_watcher = {
+        let token = token.clone();
+        tokio::spawn(async move {
+            caller_gone.cancelled().await;
+            token.cancel();
+        })
+    };
+
     echo_to_terminal(
         app_handle,
         &v.client,
@@ -405,6 +435,7 @@ async fn execute_step_inner(
     {
         Ok(r) => r,
         Err(e) => {
+            cancel_watcher.abort();
             state.maintenance_cancels.write().await.remove(task_id);
             let _ = state.maintenance.set_step_result(
                 step_id,
@@ -416,13 +447,21 @@ async fn execute_step_inner(
             return Err(format!("执行通道错误: {}", e));
         }
     };
+    cancel_watcher.abort();
     state.maintenance_cancels.write().await.remove(task_id);
 
-    // Only a real exit status of 0 counts as success — timeout, cancel,
-    // missing exit code and non-zero exits all fail the step.
+    // Separate "the outcome was never observed" from "the command failed".
+    //
+    // A timeout, or a channel that closed without an exit status, means we do
+    // not know whether the change took effect — it may well have worked. Only a
+    // real non-zero exit is an explicit failure. Conflating the two either
+    // loses a genuine failure or wrongly fails a change that actually applied.
+    // Only a real exit status of 0 counts as success.
     let final_status = if exec.cancelled {
         StepStatus::Cancelled
-    } else if exec.timed_out || exec.exit_code != Some(0) {
+    } else if exec.timed_out || exec.exit_code.is_none() {
+        StepStatus::Unknown
+    } else if exec.exit_code != Some(0) {
         StepStatus::Failed
     } else {
         StepStatus::Succeeded
@@ -499,7 +538,7 @@ pub async fn bridge_execute_upload(
     let started = Instant::now();
     let result = async {
         let sftp = v.client.open_sftp().await.map_err(|e| e.to_string())?;
-        sftp.write(remote_path, &data)
+        crate::terminal::sftp::client::write_file_creating_parents(&sftp, remote_path, &data)
             .await
             .map_err(|e| e.to_string())
     }

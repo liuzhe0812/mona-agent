@@ -13,12 +13,34 @@ import {
   sshConnect,
 } from "./ipc";
 import { useTerminalStore } from "./store/terminalStore";
-import type { ConnectionConfig } from "./types/terminal";
+import type { ConnectionConfig, Session } from "./types/terminal";
 import { Loader2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 
 interface Props {
   sessionId: string;
+}
+
+/** Whether a terminal session should offer the reconnect entry.
+ *
+ *  A dropped or failed saved SSH connection must keep a way back: without this
+ *  the user faces a dead-end panel and has to close and re-open the tab by
+ *  hand. Local shells and ad-hoc connections have nothing to reconnect to.
+ */
+export function reconnectAvailability(
+  session: Pick<Session, "type" | "configId"> | undefined,
+  connections: Pick<ConnectionConfig, "id">[],
+  status: string | undefined,
+): { canReconnect: boolean; needsReconnect: boolean } {
+  const canReconnect =
+    session?.type !== "local"
+    && !!session
+    && connections.some((c) => c.id === session.configId);
+  return {
+    canReconnect,
+    needsReconnect:
+      canReconnect && (status === "disconnected" || status === "error"),
+  };
 }
 
 export function buildTerminalTheme(): Record<string, string> {
@@ -53,7 +75,6 @@ export function XtermTerminal({ sessionId }: Props) {
   const fitAddonRef = useRef<FitAddon | null>(null);
   const lastSizeRef = useRef<{ cols: number; rows: number } | null>(null);
   const settings = useTerminalStore((s) => s.settings);
-  const [disconnected, setDisconnected] = useState(false);
   const [reconnecting, setReconnecting] = useState(false);
   const sessions = useTerminalStore((s) => s.sessions);
   const connections = useTerminalStore((s) => s.connections);
@@ -64,6 +85,13 @@ export function XtermTerminal({ sessionId }: Props) {
   );
 
   const updateSessionTitle = useTerminalStore((s) => s.updateSessionTitle);
+
+  const session = sessions.find((s) => s.id === sessionId);
+  const { canReconnect, needsReconnect } = reconnectAvailability(
+    session,
+    connections,
+    sessionStatus,
+  );
 
   useEffect(() => {
     if (!containerRef.current) return;
@@ -308,16 +336,15 @@ export function XtermTerminal({ sessionId }: Props) {
   );
 
   const handleReconnect = async () => {
-    const session = sessions.find((s) => s.id === sessionId);
-    if (!session || session.type === "local") return;
+    const target = sessions.find((s) => s.id === sessionId);
+    if (!target || target.type === "local") return;
 
-    const config = connections.find((c) => c.id === session.configId);
+    const config = connections.find((c) => c.id === target.configId);
     if (!config) return;
 
     setReconnecting(true);
     try {
       await sshReconnect(sessionId, config);
-      setDisconnected(false);
       updateSessionStatus(sessionId, "connected");
     } catch {
     } finally {
@@ -337,7 +364,7 @@ export function XtermTerminal({ sessionId }: Props) {
             <span className="text-body">连接中…</span>
           </div>
         </div>
-      ) : sessionStatus === "error" ? (
+      ) : sessionStatus === "error" && !canReconnect ? (
         <div className="absolute inset-0 flex items-center justify-center bg-[#1a1a1a]">
           <span className="text-body text-red-500">连接失败</span>
         </div>
@@ -347,10 +374,10 @@ export function XtermTerminal({ sessionId }: Props) {
         className="h-full w-full"
         style={{ padding: "4px 0 0 4px" }}
       />
-      {disconnected && (
+      {needsReconnect && (
         <div className="absolute inset-x-0 top-0 flex items-center justify-center bg-background/80 py-2">
           <span className="mr-3 text-body text-muted-foreground">
-            连接已断开
+            {sessionStatus === "error" ? "连接失败" : "连接已断开"}
           </span>
           <Button
             onClick={handleReconnect}

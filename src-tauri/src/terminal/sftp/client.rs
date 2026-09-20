@@ -47,6 +47,65 @@ pub struct SftpClient {
     session: Arc<Mutex<Option<russh_sftp::client::SftpSession>>>,
 }
 
+/// Every directory that must exist for `remote_path` to be writable, outermost
+/// first. Handles absolute and relative paths; a bare `file` or `/file` needs
+/// no parent.
+///
+/// Split out from the SFTP calls so the path logic is testable without a live
+/// server — an upload into a not-yet-existing directory is exactly what used to
+/// fail.
+pub fn remote_parent_dirs(remote_path: &str) -> Vec<String> {
+    let parent = match remote_path.rfind('/') {
+        None | Some(0) => return Vec::new(),
+        Some(idx) => &remote_path[..idx],
+    };
+    let mut dirs = Vec::new();
+    for (idx, ch) in parent.char_indices() {
+        // Skip the leading '/' of an absolute path: it always exists.
+        if ch == '/' && idx > 0 {
+            dirs.push(parent[..idx].to_string());
+        }
+    }
+    dirs.push(parent.to_string());
+    dirs
+}
+
+/// Write one remote file, creating any missing parent directory first.
+///
+/// `SftpSession::write` opens with `WRITE` alone, so it can create neither a
+/// new file nor a missing parent — an upload to a fresh path always failed.
+/// This creates the parents and opens with `CREATE | TRUNCATE | WRITE`, which
+/// is what the GUI upload path already does.
+pub async fn write_file_creating_parents(
+    session: &russh_sftp::client::SftpSession,
+    remote_path: &str,
+    data: &[u8],
+) -> Result<(), TerminalError> {
+    let parent_dirs = remote_parent_dirs(remote_path);
+    for dir in &parent_dirs {
+        // An existing directory is the common case and reports an error here;
+        // a real permission/transport problem surfaces from the open below.
+        let _ = session.create_dir(dir).await;
+    }
+    let mut file = session.create(remote_path).await.map_err(|e| {
+        if parent_dirs.is_empty() {
+            TerminalError::SftpOperation(format!("无法创建文件: {}", e))
+        } else {
+            TerminalError::SftpOperation(format!(
+                "无法创建文件（已尝试自动创建父目录 {}）: {}",
+                parent_dirs.join("、"),
+                e
+            ))
+        }
+    })?;
+    file.write_all(data).await.map_err(|e| {
+        TerminalError::SftpOperation(format!("写入失败: {}", e))
+    })?;
+    file.shutdown().await.map_err(|e| {
+        TerminalError::SftpOperation(format!("关闭文件失败: {}", e))
+    })
+}
+
 impl SftpClient {
     pub async fn connect(
         host: &str,
@@ -318,15 +377,9 @@ impl SftpClient {
         let session = guard.as_ref().ok_or_else(|| {
             TerminalError::SftpOperation("SFTP session not connected".into())
         })?;
-        let mut file = session.create(remote_path).await.map_err(|e| {
-            TerminalError::SftpOperation(format!("create failed: {}", e))
-        })?;
-        file.write_all(&data).await.map_err(|e| {
-            TerminalError::SftpOperation(format!("write failed: {}", e))
-        })?;
-        file.shutdown().await.map_err(|e| {
-            TerminalError::SftpOperation(format!("close failed: {}", e))
-        })
+        // Same contract as the maintenance upload path: creating a file in a
+        // directory that does not exist yet must work.
+        write_file_creating_parents(session, remote_path, &data).await
     }
 
     pub async fn touch(&self, path: &str) -> Result<(), TerminalError> {
@@ -334,7 +387,9 @@ impl SftpClient {
         let session = guard.as_ref().ok_or_else(|| {
             TerminalError::SftpOperation("SFTP session not connected".into())
         })?;
-        session.write(path, &[]).await.map_err(|e| {
+        // `write` opens with WRITE only, so it cannot create the file or its
+        // parent — "new file" would fail on both counts.
+        write_file_creating_parents(session, path, &[]).await.map_err(|e| {
             TerminalError::SftpOperation(format!("touch failed: {}", e))
         })
     }
@@ -691,4 +746,99 @@ pub async fn download_file_streaming(
         TerminalError::SftpOperation(format!("Failed to close local file: {}", e))
     })?;
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::remote_parent_dirs;
+
+    #[test]
+    fn creates_each_missing_ancestor_outermost_first() {
+        // The regression case: uploading into a directory that does not exist
+        // yet ("/root/sglang-gateway-docker/Dockerfile") failed with
+        // "No such file" because nothing created the parent.
+        assert_eq!(
+            remote_parent_dirs("/root/sglang-gateway-docker/Dockerfile"),
+            vec!["/root", "/root/sglang-gateway-docker"],
+        );
+        assert_eq!(
+            remote_parent_dirs("/a/b/c/file.txt"),
+            vec!["/a", "/a/b", "/a/b/c"],
+        );
+    }
+
+    #[test]
+    fn needs_no_parent_for_root_level_or_bare_names() {
+        assert!(remote_parent_dirs("/file.txt").is_empty());
+        assert!(remote_parent_dirs("file.txt").is_empty());
+        assert!(remote_parent_dirs("Dockerfile").is_empty());
+    }
+
+    #[test]
+    fn handles_relative_and_nested_paths() {
+        assert_eq!(
+            remote_parent_dirs("build/docker/Dockerfile"),
+            vec!["build", "build/docker"],
+        );
+    }
+
+    #[test]
+    fn ignores_a_trailing_separator_on_the_parent() {
+        assert_eq!(
+            remote_parent_dirs("/root/dir/"),
+            vec!["/root", "/root/dir"],
+        );
+    }
+
+    /// Verification against a live SFTP server (127.0.0.1:2222).
+    ///
+    /// Not a committed regression test — CI has no SFTP server — but this is
+    /// what proves the fix, since the original bug hid behind mocked IPC.
+    #[tokio::test]
+    #[ignore = "requires the local verify SFTP server"]
+    async fn live_upload_creates_missing_parent_dirs() {
+        use crate::terminal::config::AuthConfig;
+
+        let client = super::SftpClient::connect(
+            "127.0.0.1",
+            2222,
+            "monauser",
+            &AuthConfig::Password {
+                password: "monapass".to_string(),
+            },
+        )
+        .await
+        .expect("connect to local sftp server");
+
+        let guard = client.session.lock().await;
+        let session = guard.as_ref().expect("sftp session");
+
+        // The exact shape that failed in production: a new file inside a
+        // directory that does not exist yet.
+        super::write_file_creating_parents(
+            session,
+            "/newdir/sub/Dockerfile",
+            b"FROM scratch\n",
+        )
+        .await
+        .expect("upload into a not-yet-existing directory");
+
+        // And the previous primitive must still fail there, which is the bug.
+        let old = session.write("/otherdir/Dockerfile", b"x").await;
+        assert!(
+            old.is_err(),
+            "sanity check: plain write() is expected to fail on a new path"
+        );
+        drop(guard);
+
+        // The GUI single-file upload and "new file" share the fixed primitive.
+        client
+            .upload("/gui/deep/file.conf", b"k=v\n".to_vec())
+            .await
+            .expect("gui upload into a not-yet-existing directory");
+        client
+            .touch("/gui/deep/created-by-touch.conf")
+            .await
+            .expect("create a new empty file");
+    }
 }

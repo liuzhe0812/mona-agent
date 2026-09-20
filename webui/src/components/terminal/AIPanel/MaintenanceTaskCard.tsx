@@ -47,6 +47,10 @@ function StepStatusIcon({ status }: { status: MaintenanceStepStatus }) {
       return <CheckCircle2 className="h-3.5 w-3.5 shrink-0 text-success" />;
     case "failed":
       return <XCircle className="h-3.5 w-3.5 shrink-0 text-destructive" />;
+    case "unknown":
+      // Outcome was never observed (timeout, channel closed without exit).
+      // Distinct from "failed": the change may still have taken effect.
+      return <Circle className="h-3.5 w-3.5 shrink-0 text-warning" />;
     case "skipped":
       return <MinusCircle className="h-3.5 w-3.5 shrink-0 text-muted-foreground/70" />;
     case "cancelled":
@@ -61,7 +65,12 @@ function isActive(status: MaintenanceTaskStatus): boolean {
 }
 
 function isDone(status: MaintenanceStepStatus): boolean {
-  return status === "succeeded" || status === "failed" || status === "skipped";
+  return (
+    status === "succeeded" ||
+    status === "failed" ||
+    status === "unknown" ||
+    status === "skipped"
+  );
 }
 
 function formatDuration(ms: number): string {
