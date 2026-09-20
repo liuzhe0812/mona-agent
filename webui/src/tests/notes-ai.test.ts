@@ -1,5 +1,11 @@
 import { describe, expect, it } from "vitest";
-import { buildAgentActionPrompt, buildFlowchartFreeformPrompt } from "@/components/notes/notes-ai";
+import {
+  buildAgentActionPrompt,
+  buildFlowchartFreeformPrompt,
+  buildFreeformAgentPrompt,
+  inferNoteActionDisplayLabel,
+} from "@/components/notes/notes-ai";
+import { computeNoteBaseHash } from "@/components/notes/note-apply";
 import type { OperationNote } from "@/components/notes/notes-data";
 import { createConversationCanvasNote, conversationCanvasBaseHash } from "@/components/canvas/conversation-canvas";
 
@@ -27,6 +33,26 @@ describe("note AI artifact paths", () => {
 
     expect(prompt).toContain("当前工作区的 notes/ 子目录");
     expect(prompt).not.toContain(".mona/output");
+  });
+});
+
+describe("note freeform patch contract", () => {
+  it("携带 baseHash 与结构化修改规则，同时保持可推断显示标签的结构", () => {
+    const baseHash = computeNoteBaseHash(note.contentMarkdown);
+    const prompt = buildFreeformAgentPrompt(note, "把结论改成留存下降 5%", baseHash);
+
+    expect(prompt).toContain("```note-patch");
+    expect(prompt).toContain("```note-replace");
+    expect(prompt).toContain(`"baseHash":"${baseHash}"`);
+    expect(prompt).toContain(`- 正文哈希：${baseHash}`);
+    expect(inferNoteActionDisplayLabel(prompt)).toBe("把结论改成留存下降 5%");
+  });
+
+  it("未提供 baseHash 时不注入修改规则", () => {
+    const prompt = buildFreeformAgentPrompt(note, "总结一下");
+
+    expect(prompt).not.toContain("note-patch");
+    expect(inferNoteActionDisplayLabel(prompt)).toBe("总结一下");
   });
 });
 

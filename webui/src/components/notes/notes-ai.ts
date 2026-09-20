@@ -561,13 +561,45 @@ export function buildAgentActionPrompt(
   return "";
 }
 
-export function buildFreeformAgentPrompt(note: OperationNote, question: string): string {
-  return `用户正在笔记页面里处理当前笔记，请只围绕这篇笔记回答。
+/**
+ * 普通笔记的正文修改契约。
+ *
+ * 与思维导图 `mindmap-patch` / 流程图 `mona-flowchart-patch` 对齐：AI 输出结构化 block，
+ * 前端由 `note-apply.ts` 解析 + baseHash 乐观锁校验后应用，避免把普通回答当成新正文覆盖笔记。
+ */
+export function buildNotePatchSpec(baseHash: string): string {
+  return [
+    "修改笔记的规则（重要）：",
+    "1. 需要局部修改正文时，只输出一个 ```note-patch fenced block，内容为 JSON：",
+    `{"baseHash":"${baseHash}","edits":[{"find":"当前正文中逐字存在且唯一的片段","replace":"替换后的内容"}]}`,
+    "   - find 必须是当前正文的原文片段（含换行与缩进，建议带 2~5 行上下文以保证唯一），不要改写或省略；",
+    '   - 删除内容时 replace 传空字符串 ""；',
+    "   - 可包含多组 edits，按数组顺序依次应用，任一条定位失败则整次修改不生效；",
+    "   - baseHash 必须原样使用上面给出的值。",
+    "2. 需要整篇重写时，只输出一个 ```note-replace fenced block，内容为完整的新 Markdown 正文。",
+    "3. 不需要改动笔记（只是回答问题、解读内容）时，直接用 Markdown 正常回答，不要输出上述 block。",
+    "4. 输出 block 时不要在 block 前后重复正文，不要追问，不要解释修改过程。",
+  ].join("\n");
+}
 
-用户问题：
-${question}
-
-${formatNoteContext(note)}`;
+export function buildFreeformAgentPrompt(
+  note: OperationNote,
+  question: string,
+  baseHash?: string,
+): string {
+  const context = formatNoteContext(note, baseHash);
+  const parts = [
+    `用户正在笔记页面里处理当前笔记，请只围绕这篇笔记回答。`,
+    "",
+    `用户问题：`,
+    question,
+    "",
+    context,
+  ];
+  if (baseHash) {
+    parts.push("", buildNotePatchSpec(baseHash));
+  }
+  return parts.join("\n");
 }
 
 /**
@@ -680,13 +712,14 @@ export function stripMarkdown(markdown: string): string {
     .replace(/[*_~|]/g, " ");
 }
 
-function formatNoteContext(note: OperationNote): string {
+function formatNoteContext(note: OperationNote, baseHash?: string): string {
   const content = note.contentMarkdown.slice(0, 12000);
   const truncated = note.contentMarkdown.length > content.length;
+  const hashLine = baseHash ? `\n- 正文哈希：${baseHash}` : "";
 
   return `当前笔记：
 - 标题：${note.title}
-- 来源：${note.source.label}
+- 来源：${note.source.label}${hashLine}
 
 Markdown 内容：
 \`\`\`markdown

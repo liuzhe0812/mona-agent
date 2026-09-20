@@ -373,11 +373,6 @@ export function NotesView({
     [],
   );
 
-  const activeNotebook = useMemo(
-    () => notebooks.find((notebook) => notebook.id === activeNotebookId) ?? null,
-    [activeNotebookId, notebooks],
-  );
-
   const notebookNotes = useMemo(
     () => notes.filter((note) => note.notebookId === activeNotebookId && !isStructuredCanvasNote(note)),
     [activeNotebookId, notes],
@@ -2856,7 +2851,6 @@ export function NotesView({
       ) : (
         <NoteAgentPanel
           note={activeNote}
-          notebook={activeNotebook}
           transformations={transformations}
           collapsed={agentPanelCollapsed}
           width={agentPanelWidth}

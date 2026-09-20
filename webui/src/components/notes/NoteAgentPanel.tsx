@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import {
+  AlertTriangle,
   Check,
   Clipboard,
   Copy,
@@ -11,20 +12,20 @@ import {
   Plus,
   Replace,
   RotateCcw,
-  Send,
   Settings2,
   Sparkles,
-  Square,
   Trash2,
   Wand2,
+  X,
 } from "lucide-react";
 
 import { MessageBubble } from "@/components/MessageBubble";
 import { AgentLogo } from "@/components/AgentLogo";
 import { AgentActivityCluster } from "@/components/thread/AgentActivityCluster";
 import { buildDisplayUnits, type DisplayUnit } from "@/components/thread/ThreadMessages";
+import { ThreadComposer } from "@/components/thread/ThreadComposer";
 import { deriveNoteTitle } from "@/lib/note-title";
-import { useMonaStream } from "@/hooks/useMonaStream";
+import { useMonaStream, type SendImage } from "@/hooks/useMonaStream";
 import { useSessionHistory } from "@/hooks/useSessions";
 import type { UIMessage } from "@/lib/types";
 import { useClientOptional } from "@/providers/ClientProvider";
@@ -47,6 +48,13 @@ import {
   buildTransformationPrompt,
   inferNoteActionDisplayLabel,
 } from "./notes-ai";
+import {
+  applyPendingNotePatch,
+  computeNoteBaseHash,
+  hasStructuredNoteEdit,
+  prepareNotePatch,
+  type PendingNotePatch,
+} from "./note-apply";
 import { ConfirmDialog } from "./NotesDialogs";
 import {
   TRANSFORMATION_VARIABLES,
@@ -58,7 +66,6 @@ import { nowTimestamp } from "./notes-data";
 
 interface NoteAgentPanelProps {
   note: OperationNote | null;
-  notebook: import("./notes-data").Notebook | null;
   transformations: NoteTransformation[];
   collapsed?: boolean;
   width?: number;
@@ -72,7 +79,6 @@ interface NoteAgentPanelProps {
 
 export function NoteAgentPanel({
   note,
-  notebook,
   transformations,
   collapsed: collapsedProp,
   width = 306,
@@ -83,16 +89,26 @@ export function NoteAgentPanel({
   onClearChat,
   onStreamingChange,
 }: NoteAgentPanelProps) {
-  const [draft, setDraft] = useState("");
   const collapsed = collapsedProp ?? false;
   const [notice, setNotice] = useState<string | null>(null);
   const [creatingChat, setCreatingChat] = useState(false);
   const [replaceConfirmMessage, setReplaceConfirmMessage] = useState<UIMessage | null>(null);
   const pendingPromptRef = useRef<string | null>(null);
   const pendingDisplayContentRef = useRef<string | null>(null);
+  const pendingImagesRef = useRef<SendImage[] | null>(null);
   // 普通笔记 action 中只有 translate 自动应用
   const pendingActionRef = useRef<Exclude<NoteAiActionId, "freeform"> | null>(null);
   const autoAppliedMessageIdsRef = useRef<Set<string>>(new Set());
+  /** 发起 note-patch 请求时快照的正文哈希（undefined 表示当前回答不参与自动修改） */
+  const requestBaseHashRef = useRef<string | null>(null);
+  /** 已 dry-run 过的 message ID，避免重复解析 */
+  const preparedMessageIdsRef = useRef<Set<string>>(new Set());
+  /** 是否已回看过历史中的结构化修改（每个会话只回看一次） */
+  const historyScannedRef = useRef(false);
+  /** 待确认的笔记修改（按 message ID 索引） */
+  const [pendingPatches, setPendingPatches] = useState<Map<string, PendingNotePatch>>(
+    () => new Map(),
+  );
   const lastNoteIdRef = useRef<string | null | undefined>(note?.id);
   const { client } = useClientOptional();
 
@@ -124,10 +140,13 @@ export function NoteAgentPanel({
     const noteId = note?.id ?? null;
     if (lastNoteIdRef.current === noteId) return;
     lastNoteIdRef.current = noteId;
-    setDraft("");
     setNotice(null);
     pendingActionRef.current = null;
     autoAppliedMessageIdsRef.current = new Set();
+    requestBaseHashRef.current = null;
+    preparedMessageIdsRef.current = new Set();
+    historyScannedRef.current = false;
+    setPendingPatches(new Map());
     if (!note?.agentChatId) setMessages([]);
   }, [note?.id, note?.agentChatId, setMessages]);
 
@@ -152,9 +171,15 @@ export function NoteAgentPanel({
     const pendingPrompt = pendingPromptRef.current;
     if (!pendingPrompt) return;
     const pendingDisplay = pendingDisplayContentRef.current;
+    const pendingImages = pendingImagesRef.current ?? undefined;
     pendingPromptRef.current = null;
     pendingDisplayContentRef.current = null;
-    send(pendingPrompt, undefined, pendingDisplay ? { displayContent: pendingDisplay } : undefined);
+    pendingImagesRef.current = null;
+    send(
+      pendingPrompt,
+      pendingImages,
+      pendingDisplay ? { displayContent: pendingDisplay } : undefined,
+    );
   }, [chatId, creatingChat, loading, send]);
 
   useEffect(() => {
@@ -189,20 +214,127 @@ export function NoteAgentPanel({
     setNotice("已替换笔记正文");
   }, [creatingChat, isStreaming, loading, messages, note, onApplyResult]);
 
+  // AI 回答完成后解析结构化修改指令：baseHash 仍匹配的 note-patch 自动应用，
+  // 否则（笔记在生成期间被改过 / 整篇重写）留给用户手动确认。
+  useEffect(() => {
+    if (loading || creatingChat || isStreaming) return;
+    if (!note) return;
+    // translate 等快速操作走上面的自动替换路径
+    if (pendingActionRef.current === "translate") return;
+
+    const appliedIds = new Set(note.appliedAgentMessageIds ?? []);
+    const candidates = messages.filter(
+      (item) =>
+        item.role === "assistant" &&
+        !item.isStreaming &&
+        item.content.trim().length > 0 &&
+        !preparedMessageIdsRef.current.has(item.id) &&
+        !appliedIds.has(item.id),
+    );
+
+    const liveBaseHash = requestBaseHashRef.current;
+    let completedMessage = liveBaseHash ? candidates[candidates.length - 1] : undefined;
+    if (!completedMessage && !liveBaseHash) {
+      // 本次会话没有发起过修改请求：回看历史里最后一条未应用的结构化修改（重启后可手动应用）
+      if (historyScannedRef.current) return;
+      completedMessage = [...candidates]
+        .reverse()
+        .find((item) => hasStructuredNoteEdit(item.content));
+    }
+    if (!completedMessage) return;
+    historyScannedRef.current = true;
+
+    preparedMessageIdsRef.current.add(completedMessage.id);
+    requestBaseHashRef.current = null;
+
+    const result = prepareNotePatch(
+      completedMessage.content,
+      note.contentMarkdown,
+      completedMessage.id,
+      liveBaseHash ?? computeNoteBaseHash(note.contentMarkdown),
+    );
+    // 普通回答（无结构化 block）：不展示变更卡片，保留追加/替换按钮
+    if (!result.ok) return;
+
+    const currentHash = computeNoteBaseHash(note.contentMarkdown);
+    const basisHash = liveBaseHash ?? result.pending.patch?.baseHash ?? currentHash;
+    if (result.pending.status === "ready" && result.pending.mode === "patch") {
+      const applied = applyPendingNotePatch(result.pending, note.contentMarkdown);
+      if (applied.ok) {
+        autoAppliedMessageIdsRef.current.add(completedMessage.id);
+        onApplyResult("replace", applied.markdown, completedMessage.id);
+        setNotice(applied.notice);
+      } else {
+        setPendingPatches((prev) =>
+          new Map(prev).set(completedMessage.id, {
+            ...result.pending,
+            status: "stale",
+            error: applied.message,
+          }),
+        );
+      }
+      return;
+    }
+
+    setPendingPatches((prev) =>
+      new Map(prev).set(completedMessage.id, {
+        ...result.pending,
+        requestBaseHash: basisHash,
+        status:
+          result.pending.status === "invalid"
+            ? "invalid"
+            : basisHash === currentHash
+              ? "ready"
+              : "stale",
+      }),
+    );
+  }, [creatingChat, isStreaming, loading, messages, note, onApplyResult]);
+
+  // 笔记正文变化时刷新待确认卡片状态：patch 的 baseHash 与当前正文一致才可应用。
+  const currentNoteHash = note ? computeNoteBaseHash(note.contentMarkdown) : "";
+  useEffect(() => {
+    if (!currentNoteHash) return;
+    setPendingPatches((prev) => {
+      let changed = false;
+      const next = new Map(prev);
+      for (const [messageId, pending] of next) {
+        if (
+          pending.mode !== "patch"
+          || pending.status === "applied"
+          || pending.status === "ignored"
+          || pending.status === "invalid"
+        ) {
+          continue;
+        }
+        const canApplyNow = pending.patch?.baseHash === currentNoteHash;
+        if (pending.status === "ready" && !canApplyNow) {
+          next.set(messageId, { ...pending, status: "stale" });
+          changed = true;
+        } else if (pending.status === "stale" && canApplyNow) {
+          next.set(messageId, { ...pending, status: "ready" });
+          changed = true;
+        }
+      }
+      return changed ? next : prev;
+    });
+  }, [currentNoteHash]);
+
   const sendPromptToAgent = useCallback(
-    async (prompt: string, displayContent?: string) => {
+    async (prompt: string, displayContent?: string, images?: SendImage[]) => {
       if (!note) return false;
       const trimmed = prompt.trim();
-      if (!trimmed || creatingChat) return false;
+      const hasImages = !!images && images.length > 0;
+      if ((!trimmed && !hasImages) || creatingChat) return false;
       if (isStreaming) {
         setNotice("Agent 正在处理，先停止或等它完成");
         return false;
       }
 
       const finalPrompt = trimmed;
+      const options = displayContent ? { displayContent } : undefined;
 
       if (chatId) {
-        send(finalPrompt, undefined, displayContent ? { displayContent } : undefined);
+        send(finalPrompt, images, options);
         return true;
       }
 
@@ -215,6 +347,7 @@ export function NoteAgentPanel({
       setNotice("正在创建笔记专属会话");
       pendingPromptRef.current = finalPrompt;
       pendingDisplayContentRef.current = displayContent ?? null;
+      pendingImagesRef.current = images ?? null;
       try {
         const nextChatId = await client.newChat(5_000, true);
         onAgentChatIdChange(nextChatId);
@@ -222,13 +355,14 @@ export function NoteAgentPanel({
       } catch {
         pendingPromptRef.current = null;
         pendingDisplayContentRef.current = null;
+        pendingImagesRef.current = null;
         setNotice("创建会话失败");
         return false;
       } finally {
         setCreatingChat(false);
       }
     },
-    [chatId, client, creatingChat, isStreaming, note, notebook, onAgentChatIdChange, send],
+    [chatId, client, creatingChat, isStreaming, note, onAgentChatIdChange, send],
   );
 
   const runAction = useCallback(
@@ -265,13 +399,61 @@ export function NoteAgentPanel({
     [note, sendPromptToAgent],
   );
 
-  const sendDraft = useCallback(() => {
-    if (!note) return;
-    const question = draft.trim();
-    if (!question) return;
-    setDraft("");
-    void sendPromptToAgent(buildFreeformAgentPrompt(note, question), question);
-  }, [draft, note, sendPromptToAgent]);
+  // 自由对话：带上正文哈希，AI 才能返回可自动应用的 note-patch。
+  const sendDraft = useCallback(
+    async (text: string, images?: SendImage[], displayContent?: string) => {
+      if (!note) return;
+      const question = text.trim();
+      if (!question && (!images || images.length === 0)) return;
+      const baseHash = computeNoteBaseHash(note.contentMarkdown);
+      requestBaseHashRef.current = baseHash;
+      const sent = await sendPromptToAgent(
+        buildFreeformAgentPrompt(note, question, baseHash),
+        displayContent ?? question,
+        images,
+      );
+      if (!sent) requestBaseHashRef.current = null;
+    },
+    [note, sendPromptToAgent],
+  );
+
+  // 应用待确认修改：再次校验 baseHash 后提交
+  const applyPatchFromCard = useCallback(
+    (messageId: string) => {
+      if (!note) return;
+      const pending = pendingPatches.get(messageId);
+      if (!pending) return;
+      const result = applyPendingNotePatch(pending, note.contentMarkdown);
+      if (!result.ok) {
+        setNotice(result.notice);
+        setPendingPatches((prev) => {
+          const next = new Map(prev);
+          const item = next.get(messageId);
+          if (item) next.set(messageId, { ...item, status: "stale", error: result.message });
+          return next;
+        });
+        return;
+      }
+      onApplyResult("replace", result.markdown, messageId);
+      setNotice(result.notice);
+      setPendingPatches((prev) => {
+        const next = new Map(prev);
+        const item = next.get(messageId);
+        if (item) next.set(messageId, { ...item, status: "applied" });
+        return next;
+      });
+    },
+    [note, onApplyResult, pendingPatches],
+  );
+
+  const ignorePatch = useCallback((messageId: string) => {
+    setPendingPatches((prev) => {
+      const next = new Map(prev);
+      const item = next.get(messageId);
+      if (item) next.set(messageId, { ...item, status: "ignored" });
+      return next;
+    });
+  }, []);
 
   const applyResult = useCallback(
     (mode: "append" | "replace", message: UIMessage, skipConfirm = false) => {
@@ -374,6 +556,12 @@ export function NoteAgentPanel({
     [onTransformationsChange, transformations],
   );
 
+  /** 含结构化修改指令的回答：隐藏「追加/替换」，避免把 JSON block 写进正文 */
+  const structuredEditMessageIds = useMemo(
+    () => messages.filter((message) => hasStructuredNoteEdit(message.content)).map((m) => m.id),
+    [messages],
+  );
+
   if (collapsed) {
     return null;
   }
@@ -396,6 +584,10 @@ export function NoteAgentPanel({
               disabled={isStreaming || creatingChat}
               onClick={() => {
                 setMessages([]);
+                setPendingPatches(new Map());
+                preparedMessageIdsRef.current = new Set();
+                historyScannedRef.current = false;
+                requestBaseHashRef.current = null;
                 onClearChat?.();
               }}
               className="h-7 w-7 rounded-lg p-0 text-muted-foreground hover:bg-foreground/[0.06] hover:text-foreground"
@@ -429,6 +621,7 @@ export function NoteAgentPanel({
           creatingChat={creatingChat}
           appliedMessageIds={note?.appliedAgentMessageIds ?? []}
           autoAppliedMessageIds={autoAppliedMessageIdsRef.current}
+          structuredEditMessageIds={structuredEditMessageIds}
           canSaveAsNote={!!onSaveAsNote}
           canAppend={true}
           onAppend={(message) => applyResult("append", message)}
@@ -437,45 +630,34 @@ export function NoteAgentPanel({
           onSaveAsNote={saveAsNote}
           onDismissStreamError={dismissStreamError}
         />
+
+        {/* 待确认的笔记修改卡片 */}
+        {pendingPatches.size > 0 && (
+          <div className="mt-3 flex flex-col gap-2">
+            {Array.from(pendingPatches.entries()).map(([messageId, pending]) => (
+              <NotePatchCard
+                key={messageId}
+                pending={pending}
+                onApply={() => applyPatchFromCard(messageId)}
+                onIgnore={() => ignorePatch(messageId)}
+              />
+            ))}
+          </div>
+        )}
       </div>
 
-      <div className="shrink-0 p-2">
-        <div className="flex min-h-[52px] items-end gap-1.5 rounded-xl border border-border/75 bg-background px-2.5 py-1.5 shadow-sm">
-          <Textarea
-            value={draft}
-            onChange={(event) => setDraft(event.target.value)}
-            onKeyDown={(event) => {
-              if ((event.ctrlKey || event.metaKey) && event.key === "Enter") {
-                event.preventDefault();
-                sendDraft();
-              }
-            }}
-            disabled={!note || creatingChat}
-            className="min-h-[36px] flex-1 resize-none rounded-none border-0 bg-transparent px-0 py-0 text-caption focus-visible:ring-0 disabled:opacity-60"
-            rows={2}
-            placeholder="问当前笔记、总结内容..."
-          />
-          <Button
-            type="button"
-            variant="ghost"
-            aria-label={isStreaming ? "停止生成" : "发送"}
-            disabled={!isStreaming && (!note || !draft.trim() || creatingChat)}
-            onClick={isStreaming ? stop : sendDraft}
-            className={`h-6 w-6 shrink-0 rounded-lg p-0 ${
-              isStreaming
-                ? "text-destructive hover:bg-destructive/10 hover:text-destructive"
-                : "bg-action text-white hover:bg-action-hover hover:text-white disabled:bg-muted disabled:text-muted-foreground"
-            }`}
-          >
-            {isStreaming ? (
-              <Square className="h-3 w-3" />
-            ) : creatingChat ? (
-              <Loader2 className="h-3 w-3 animate-spin" />
-            ) : (
-              <Send className="h-3 w-3" />
-            )}
-          </Button>
-        </div>
+      <div className="shrink-0">
+        {/* 与终端模块的输入框保持一致（ThreadComposer） */}
+        <ThreadComposer
+          key={note?.id ?? "no-note"}
+          onSend={(content, images, options) =>
+            sendDraft(content, images, options?.displayContent)
+          }
+          disabled={!note || creatingChat}
+          placeholder="输入问题，AI 将基于当前笔记回答..."
+          isStreaming={isStreaming}
+          onStop={stop}
+        />
       </div>
     </aside>
 
@@ -526,6 +708,7 @@ export function AgentChat({
   creatingChat,
   appliedMessageIds,
   autoAppliedMessageIds,
+  structuredEditMessageIds = [],
   canSaveAsNote,
   canAppend,
   onAppend,
@@ -542,6 +725,8 @@ export function AgentChat({
   creatingChat: boolean;
   appliedMessageIds: string[];
   autoAppliedMessageIds: Set<string>;
+  /** 含 note-patch / note-replace 结构化指令的消息，交由变更卡片处理 */
+  structuredEditMessageIds?: string[];
   canSaveAsNote: boolean;
   canAppend: boolean;
   onAppend: (message: UIMessage) => void;
@@ -586,6 +771,7 @@ export function AgentChat({
                 message={unit.message}
                 appliedMessageIds={appliedMessageIds}
                 autoAppliedMessageIds={autoAppliedMessageIds}
+                structuredEdit={structuredEditMessageIds.includes(unit.message.id)}
                 canSaveAsNote={canSaveAsNote}
                 canAppend={canAppend}
                 onAppend={onAppend}
@@ -608,6 +794,7 @@ function SingleMessageWithActions({
   message,
   appliedMessageIds,
   autoAppliedMessageIds,
+  structuredEdit,
   canSaveAsNote,
   canAppend,
   onAppend,
@@ -618,6 +805,7 @@ function SingleMessageWithActions({
   message: UIMessage;
   appliedMessageIds: string[];
   autoAppliedMessageIds: Set<string>;
+  structuredEdit: boolean;
   canSaveAsNote: boolean;
   canAppend: boolean;
   onAppend: (message: UIMessage) => void;
@@ -632,6 +820,7 @@ function SingleMessageWithActions({
         message={message}
         applied={appliedMessageIds.includes(message.id)}
         autoApplied={autoAppliedMessageIds.has(message.id)}
+        structuredEdit={structuredEdit}
         canSaveAsNote={canSaveAsNote}
         canAppend={canAppend}
         onAppend={onAppend}
@@ -994,6 +1183,7 @@ function NoteMessageActions({
   message,
   applied,
   autoApplied,
+  structuredEdit,
   canSaveAsNote,
   canAppend,
   onAppend,
@@ -1004,6 +1194,7 @@ function NoteMessageActions({
   message: UIMessage;
   applied: boolean;
   autoApplied: boolean;
+  structuredEdit: boolean;
   canSaveAsNote: boolean;
   canAppend: boolean;
   onAppend: (message: UIMessage) => void;
@@ -1042,14 +1233,24 @@ function NoteMessageActions({
       ) : null}
       {canApply ? (
         <>
-          {canAppend ? (
-            <MiniAction label={applied ? "已追加" : "追加"} disabled={applied} onClick={() => onAppend(message)}>
-              <Clipboard className="h-3.5 w-3.5" />
-            </MiniAction>
-          ) : null}
-          <MiniAction label="替换" onClick={() => onReplace(message)}>
-            <Replace className="h-3.5 w-3.5" />
-          </MiniAction>
+          {structuredEdit ? (
+            // 结构化修改指令由变更卡片应用，不能把 JSON block 当正文写入
+            <span className="inline-flex h-7 items-center gap-1 rounded-md border border-border/70 bg-muted/25 px-2 text-micro text-muted-foreground">
+              <Sparkles className="h-3.5 w-3.5" />
+              已生成修改建议
+            </span>
+          ) : (
+            <>
+              {canAppend ? (
+                <MiniAction label={applied ? "已追加" : "追加"} disabled={applied} onClick={() => onAppend(message)}>
+                  <Clipboard className="h-3.5 w-3.5" />
+                </MiniAction>
+              ) : null}
+              <MiniAction label="替换" onClick={() => onReplace(message)}>
+                <Replace className="h-3.5 w-3.5" />
+              </MiniAction>
+            </>
+          )}
           <MiniAction label="复制" onClick={() => onCopy(message)}>
             <Copy className="h-3.5 w-3.5" />
           </MiniAction>
@@ -1060,6 +1261,95 @@ function NoteMessageActions({
           ) : null}
         </>
       ) : null}
+    </div>
+  );
+}
+
+/** 变更卡片：展示结构化修改摘要，提供应用/忽略按钮 */
+function NotePatchCard({
+  pending,
+  onApply,
+  onIgnore,
+}: {
+  pending: PendingNotePatch;
+  onApply: () => void;
+  onIgnore: () => void;
+}) {
+  const { summary, status, error } = pending;
+
+  if (status === "applied") {
+    return (
+      <div className="rounded-md border border-success/30 bg-success/5 px-2.5 py-2 text-micro text-success">
+        <div className="flex items-center gap-1.5 font-medium">
+          <Check className="h-3.5 w-3.5" />
+          已应用到笔记
+        </div>
+      </div>
+    );
+  }
+
+  if (status === "ignored") return null;
+
+  if (status === "invalid") {
+    return (
+      <div className="rounded-md border border-destructive/30 bg-destructive/5 px-2.5 py-2 text-micro text-destructive">
+        <div className="flex items-center gap-1.5 font-medium">
+          <AlertTriangle className="h-3.5 w-3.5" />
+          修改无效
+        </div>
+        {error ? <div className="mt-1 text-destructive/80">{error}</div> : null}
+      </div>
+    );
+  }
+
+  const isStale = status === "stale";
+  const isReplace = "replaced" in summary && summary.replaced;
+
+  return (
+    <div
+      className={`rounded-md border px-2.5 py-2 text-micro ${
+        isStale ? "border-warning/40 bg-warning/5" : "border-border/70 bg-muted/40"
+      }`}
+    >
+      <div className="flex items-center justify-between gap-2">
+        <span className="font-medium text-foreground">
+          {isStale ? "笔记已修改，该建议已过期" : "AI 建议修改笔记"}
+        </span>
+        <button
+          type="button"
+          aria-label="忽略"
+          title="忽略"
+          onClick={onIgnore}
+          className="grid h-5 w-5 place-items-center rounded text-muted-foreground hover:bg-foreground/[0.06] hover:text-foreground"
+        >
+          <X className="h-3 w-3" />
+        </button>
+      </div>
+
+      <div className="mt-1.5 text-muted-foreground">
+        {isReplace ? (
+          <span>将重写整篇笔记正文</span>
+        ) : (
+          <span>修改 {("edited" in summary && summary.edited) || 0} 处内容</span>
+        )}
+      </div>
+
+      {!isStale ? (
+        <div className="mt-2 flex gap-1.5">
+          <button
+            type="button"
+            onClick={onApply}
+            className="inline-flex h-7 items-center gap-1 rounded-md bg-action px-2.5 text-micro font-medium text-white hover:bg-action-hover hover:text-white"
+          >
+            <Check className="h-3 w-3" />
+            应用到笔记
+          </button>
+        </div>
+      ) : (
+        <div className="mt-1.5 text-warning">
+          {pending.mode === "patch" ? "请基于最新笔记重新生成" : "笔记已变化，请确认后再应用"}
+        </div>
+      )}
     </div>
   );
 }
