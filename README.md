@@ -24,44 +24,20 @@ Mona 采用三层服务架构：
 - [工程架构边界](docs/architecture/engineering-boundaries.md)
 - [可下载运行时架构](docs/architecture/runtime-component-management.md)
 
-## 开源范围
+## 许可证
 
-本项目采用**分区许可证**策略：
+Mona 自有代码、文档、界面设计、图标、提示词、技能和品牌资产均为商业专有内容，统一适用根目录的 `LICENSE`。本项目不以开源许可证发布，不授予复制、修改、二次开发、再分发或再授权权利。
 
-### 开源部分（MIT License）
+商业使用、企业部署、嵌入产品或对外提供服务，必须事先取得版权方书面商业授权。未经授权不得将本项目或其组成部分用于商业场景。
 
-以下模块采用 MIT 许可证开源，允许自由使用、修改和分发：
+仓库内明确属于第三方的依赖、编辑器和资源仍保留其原始许可证与 NOTICE；这些第三方许可证不构成 Mona 自有代码的开源授权，也不改变本项目的商业专有授权边界。
 
-- `mona/email/` — IMAP/SMTP 邮件客户端
-- `mona/contacts/` — CardDAV/ActiveSync 通讯录同步
-- `mona/schedule/` — 日历与待办管理
-- `mona/notes/` — Markdown 笔记引擎
-- `mona/hoard/` — 知识库与素材管理
-- `mona/channels/` — 多平台 IM 接入（钉钉、飞书、企业微信、QQ、微信）
-- `mona/cron/` — 定时任务调度
-- `src-tauri/src/terminal/` — 终端（SSH/SFTP/VNC/本地 Shell）
-- `src-tauri/src/browser/` — 内嵌浏览器
-- `src-tauri/src/db/` — 数据库客户端
-- `src-tauri/src/system/` — Windows 系统优化工具
-- `webui/src/components/` — 前端 UI 组件（常规功能模块）
+许可证文件：
 
-### 闭源部分（保留所有权利）
+- `LICENSE` — Mona 商业专有软件许可证
+- 第三方组件目录中的 LICENSE / NOTICE — 对应第三方内容的原始许可证
 
-以下模块为 Mona 的核心差异化能力，**代码可见但受专有许可证保护**，未经许可不得用于商业目的：
-
-- `mona/agent/` — AI Agent 执行引擎（loop、runner、context、memory、subagent）
-- `mona/providers/` — LLM Provider 多模型适配层
-- `mona/templates/` — Agent 系统提示词与人格模板
-- `mona/skills/mona-*` — 自研 AI 技能工作流（PPT 生成、视频制作、Office 自动化）
-- `mona/distill/` — 用户画像蒸馏与成长轨迹分析
-- `src-tauri/src/license.rs` — 订阅授权与许可证校验
-
-### 许可证文件
-
-- `LICENSE` — 专有软件许可证（闭源部分）
-- `LICENSE-MIT` — MIT 许可证（开源部分）
-
-使用本项目时，请遵守各文件头部标注的许可证声明。如有疑问，请联系项目维护者。
+如需取得商业授权，请联系版权方。
 
 ## 本地开发
 
@@ -121,7 +97,7 @@ cd src-tauri
 ## 社区
 
 -  issues 与功能请求请通过 GitHub Issues 提交
--  欢迎对**开源模块**提交 Pull Request
+-  商业授权、合作与功能反馈请联系项目维护者
 
 ## 声明
 
