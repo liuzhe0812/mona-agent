@@ -8,7 +8,7 @@ from importlib.resources import files as pkg_files
 from unittest.mock import AsyncMock, MagicMock
 
 from mona.agent.document_loop import DOCUMENT_PROFILES, DocumentAgentLoop
-from mona.agent.loop import _FREE_TIER_CAPABILITY_NOTE, _TASK_PLAN_NOTE
+from mona.agent.loop import _FREE_TIER_CAPABILITY_NOTE, _TASK_PLAN_NOTE, AgentLoop
 from mona.agent.runner import AgentRunner, AgentRunSpec
 from mona.agent.tools.base import Tool
 from mona.agent.tools.capabilities import (
@@ -34,11 +34,16 @@ from mona.agent.tools.terminal import (
 )
 from mona.bus.events import InboundMessage
 from mona.bus.queue import MessageBus
+from mona.config.schema import ProviderConfig, ToolsConfig, VideoGenerationToolConfig
 from mona.providers.base import LLMResponse, ToolCallRequest
 from mona.session.goal_state import GOAL_STATE_KEY
 from mona.session.manager import SessionManager
 from mona.utils.helpers import estimate_message_tokens
 from mona.utils.prompt_templates import render_template
+from mona.utils.video_generation_intent import (
+    is_video_generation_request,
+    video_generation_prompt,
+)
 
 
 def _text_tokens(text: str) -> int:
@@ -494,6 +499,65 @@ def test_ui_context_and_media_preload_capabilities() -> None:
 
     activate_capabilities_for_media(["clip.mp4"])
     assert tool_enabled_by_capability("generate_video") is True
+
+
+def test_explicit_video_generation_request_preloads_video_tool(tmp_path) -> None:
+    provider = MagicMock()
+    provider.get_default_model.return_value = "test-model"
+    provider.generation.max_tokens = 4096
+    loop = AgentLoop(
+        bus=MessageBus(),
+        provider=provider,
+        workspace=tmp_path,
+        model="test-model",
+        tools_config=ToolsConfig(
+            video_generation=VideoGenerationToolConfig(enabled=True),
+        ),
+        video_generation_provider_configs={"agnes": ProviderConfig(api_key="test-key")},
+    )
+    session = loop.sessions.get_or_create("websocket:chat-video")
+    loop._set_tool_context("websocket", "chat-video", session=session)
+
+    assert loop.tools.is_visible("generate_video") is False
+    messages = loop._build_initial_messages(
+        InboundMessage(
+            channel="websocket",
+            sender_id="user",
+            chat_id="chat-video",
+            content="重试生成视频",
+        ),
+        session,
+        [],
+        None,
+    )
+
+    assert loop.tools.is_visible("generate_video") is True
+    assert "Use the generate_video tool directly" in messages[-1]["content"]
+
+
+def test_video_generation_intent_is_explicit_and_does_not_capture_diagnosis() -> None:
+    content = "重试生成视频"
+    assert is_video_generation_request(content, {}) is True
+    prompt = video_generation_prompt(content, {})
+    assert "Use the generate_video tool directly" in prompt
+    assert "do not use terminal tools" in prompt
+
+    diagnostic = "为什么视频生成会失败？"
+    assert is_video_generation_request(diagnostic, {}) is False
+    assert video_generation_prompt(diagnostic, {}) == diagnostic
+
+
+def test_unavailable_tool_does_not_assume_a_terminal_panel() -> None:
+    registry = ToolRegistry()
+    tool = _NamedTool("terminal_exec")
+    tool.is_available = False
+    registry.register(tool)
+
+    _tool, _params, error = registry.prepare_call("terminal_exec", {})
+
+    assert error is not None
+    assert "Only ask the user to open a UI panel" in error
+    assert "terminal panel" not in error
 
 
 def test_runner_expands_capability_tools_on_the_next_model_call(tmp_path) -> None:

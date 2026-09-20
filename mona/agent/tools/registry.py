@@ -220,8 +220,9 @@ class ToolRegistry:
             return tool, params, (
                 f"tool_unavailable: Tool '{name}' is registered but not "
                 "available in the current context. This is a transient "
-                "state, not a missing tool. Ask the user to open the "
-                "required panel (e.g. the terminal panel) and try again."
+                "state, not a missing tool. Only ask the user to open a UI "
+                "panel when their request explicitly requires that panel; "
+                "otherwise choose an available tool that matches the user's goal."
             )
         if self.has("load_capability") and not tool_enabled_by_capability(name):
             groups = ", ".join(sorted(capabilities_for_tool(name)))

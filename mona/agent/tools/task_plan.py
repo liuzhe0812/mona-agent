@@ -90,7 +90,10 @@ class UpdatePlanTool(Tool, _TaskPlanMixin):
         return (
             "Updates the task plan.\n"
             "Provide an optional explanation and a list of plan items, each with a step and status.\n"
-            "At most one step can be in_progress at a time."
+            "At most one step can be in_progress at a time.\n"
+            "Plan granularity: 3-7 steps. Merge similar or sequential sub-steps into one milestone.\n"
+            "Focus on WHAT to achieve, not HOW. Use business milestones, not implementation details.\n"
+            "Example: instead of 'read file → parse JSON → extract fields → write DB', use 'data import → validation → output'."
         )
 
     async def execute(

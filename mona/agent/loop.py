@@ -61,7 +61,10 @@ from mona.utils.helpers import truncate_text as truncate_text_fn
 from mona.utils.image_generation_intent import image_generation_prompt
 from mona.utils.llm_runtime import LLMRuntime
 from mona.utils.runtime import EMPTY_FINAL_RESPONSE_MESSAGE
-from mona.utils.video_generation_intent import video_generation_prompt
+from mona.utils.video_generation_intent import (
+    is_video_generation_request,
+    video_generation_prompt,
+)
 
 if TYPE_CHECKING:
     from mona.config.schema import (
@@ -1205,6 +1208,11 @@ class AgentLoop:
         )
 
         activate_capabilities_for_history(history)
+        if (
+            self.tools.has("generate_video")
+            and is_video_generation_request(msg.content, msg.metadata)
+        ):
+            activate_capabilities({"video"})
         if self.tools.is_visible("generate_image"):
             activate_capabilities({"skill_resources"})
         messages = self.context.build_messages(
