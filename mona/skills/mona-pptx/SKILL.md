@@ -27,14 +27,16 @@ description: >
 ## 按任务分流
 
 - 精准局部修改（例如已知元素的简单改色、改字或微调几何）不需要先读完整设计指南。先使用 `open` 回执中的 `selection`；只有选区过期或缺少目标详情时才 `inspect selection`。已知操作字段直接提交；只有要做新操作时才 `inspect capabilities`，并在查询中指定具体操作名，随后只阅读对应的操作参考。
-- 新建页面、重排、混排或其它布局任务按需阅读 [references/design-method.md](references/design-method.md)，再按需阅读 [references/office-operations.md](references/office-operations.md)。不要为了同一个已知字段重复打开多本参考。网格只负责对齐和留白，不要求填满每个格子或把页面做成同质卡片模板。
+- 新建页面、重排、混排或其它布局任务按需阅读 [references/design-method.md](references/design-method.md)，再按需阅读 [references/office-operations.md](references/office-operations.md)。新建整稿、产品发布或明显需要设计提升时，再阅读 [references/visual-recipes.md](references/visual-recipes.md) 选择一个视觉方向和页面家族。不要为了同一个已知字段重复打开多本参考。网格只负责对齐和留白，不要求填满每个格子或把页面做成同质卡片模板。
 - `inspect` 的 `slides` 支持 `slideIds` 和 `elementIds`；已有稳定 ID 时只读取相关页面和元素。`selection` 的结果包含当前选区元素详情，不能只依赖元素 ID 猜类型。读取返回 `partial` 时按缺失 ID 或页面补读，并保持范围不重叠。
 - `inspect visual` 支持 `slideId`，也支持 `elementIds` 或 `region` 搭配 `padding` 的局部捕获。新布局、复杂图表或修改效果可疑时保留真实画面验证；精准局部改色优先依据结构回执，只有需要确认视觉效果时才截图。
 - 成功的 `apply` 回执包含 `createdElements`、`updatedElements` 和 `warnings` 时，优先使用回执继续工作，避免为了取得刚刚已返回的 ID 而无必要地重复 `inspect`。版本冲突或回执缺少继续操作所需信息时才重新读取。
 
 ## 设计先行
 
-新建、重排和混排页面先阅读 [references/design-method.md](references/design-method.md)。它负责内容取舍、受众、论证顺序、布局、字体比例、颜色、图标、密度、节奏、图表取舍和图文关系；局部改色等小修改按上面的分流直接处理，不要求固定模板、八项确认、封面、目录或结束页。
+场景与构图示例不是封闭选项。按用户目的、受众、观看方式和内容结构组织整稿，逐页选择表达；支持其它场景及混合场景，不要求用户从汇报、产品介绍、培训中三选一。选择与追问原则见下述设计指南。
+
+新建、重排和混排页面先阅读 [references/design-method.md](references/design-method.md)。它负责内容取舍、受众、论证顺序、布局、字体比例、颜色、图标、密度、节奏、图表取舍和图文关系；局部改色等小修改按上面的分流直接处理，不要求固定模板、八项确认、封面、目录或结束页。新建整稿默认只写一个最终版本；只有用户明确要求比较或备选方案时才复制页面。页面文案要保持标题（结论）、摘要（范围/口径）、含义/行动（影响/下一步）和要点列表（同维度事实）的语义边界，无需另建 JSON 文案包，不能为了填满版式重复或拼接字段。
 
 原生操作和 JSON 示例见 [references/office-operations.md](references/office-operations.md)。完成结构写入后，按需阅读 [references/visual-review.md](references/visual-review.md)，先用 `inspect review` 找待观察页面，再用当前版本的 `inspect visual` 审核真实编辑器画面，最后做局部微调。写入成功、截图成功和布局验收通过是三个不同状态；任何一个都不能替代后一个。
 
