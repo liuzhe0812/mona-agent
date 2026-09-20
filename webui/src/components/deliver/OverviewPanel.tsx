@@ -10,9 +10,10 @@ import {
   Sparkles,
 } from "lucide-react";
 
+import { Button } from "@/components/ui/button";
 import { openExternalUrl } from "@/lib/tauri";
 import { cn } from "@/lib/utils";
-import type { TaskPlanWsPayload, ToolProgressEvent, UIMessage } from "@/lib/types";
+import type { DeliveredFile, TaskPlanWsPayload, ToolProgressEvent, UIMessage } from "@/lib/types";
 
 export interface OverviewTodoItem {
   id: string;
@@ -138,23 +139,28 @@ export function collectOverviewReferences(messages: UIMessage[]): OverviewRefere
 
 function OverviewSection({
   title,
+  action,
   children,
 }: {
   title: string;
+  action?: ReactNode;
   children: ReactNode;
 }) {
   const [expanded, setExpanded] = useState(true);
   return (
     <section className="border-b border-border/45 py-1.5 last:border-b-0">
-      <button
-        type="button"
-        className="flex w-full items-center gap-1 px-3 py-1.5 text-left text-ui font-medium text-foreground hover:bg-muted/35"
-        aria-expanded={expanded}
-        onClick={() => setExpanded((value) => !value)}
-      >
-        <ChevronRight className={cn("h-3.5 w-3.5 text-muted-foreground transition-transform", expanded && "rotate-90")} />
-        {title}
-      </button>
+      <div className="flex items-center">
+        <button
+          type="button"
+          className="flex min-w-0 flex-1 items-center gap-1 px-3 py-1.5 text-left text-ui font-medium text-foreground hover:bg-muted/35"
+          aria-expanded={expanded}
+          onClick={() => setExpanded((value) => !value)}
+        >
+          <ChevronRight className={cn("h-3.5 w-3.5 text-muted-foreground transition-transform", expanded && "rotate-90")} />
+          {title}
+        </button>
+        {action ? <div className="flex shrink-0 items-center pr-2">{action}</div> : null}
+      </div>
       {expanded ? children : null}
     </section>
   );
@@ -233,23 +239,83 @@ function ReferenceList({ references }: { references: OverviewReference[] }) {
   );
 }
 
+export type DeliverablesRange = "today" | "all";
+
+/** 本地时区当天零点。 */
+function startOfToday(now: Date): number {
+  const start = new Date(now);
+  start.setHours(0, 0, 0, 0);
+  return start.getTime();
+}
+
+/** 按时间范围过滤交付物：优先文件 mtime，回退交付记录时间；无法确定时间
+ *  的行默认保留，避免刚交付的文件在默认视图里消失。 */
+export function filterDeliverablesByRange(
+  files: DeliveredFile[],
+  range: DeliverablesRange,
+  now: Date = new Date(),
+): DeliveredFile[] {
+  if (range === "all") return files;
+  const todayStart = startOfToday(now);
+  return files.filter((file) => {
+    const raw = file.modified_at ?? file.artifact_ref?.modified_at;
+    if (!raw) return true;
+    const timestamp = Date.parse(raw);
+    return Number.isNaN(timestamp) || timestamp >= todayStart;
+  });
+}
+
+const DELIVERABLES_RANGE_OPTIONS: { value: DeliverablesRange; label: string }[] = [
+  { value: "today", label: "今日" },
+  { value: "all", label: "全部" },
+];
+
+export function DeliverablesRangeFilter({
+  value,
+  onChange,
+}: {
+  value: DeliverablesRange;
+  onChange: (value: DeliverablesRange) => void;
+}) {
+  return (
+    <div className="flex items-center gap-0.5" role="group" aria-label="筛选交付物">
+      {DELIVERABLES_RANGE_OPTIONS.map((option) => (
+        <Button
+          key={option.value}
+          type="button"
+          variant={value === option.value ? "secondary" : "ghost"}
+          size="sm"
+          aria-pressed={value === option.value}
+          className="h-6 px-2 text-caption"
+          onClick={() => onChange(option.value)}
+        >
+          {option.label}
+        </Button>
+      ))}
+    </div>
+  );
+}
+
 export function OverviewPanel({
   messages,
   deliverables,
   processArtifacts,
   taskPlan,
+  deliverablesAction,
 }: {
   messages: UIMessage[];
   deliverables: ReactNode;
   processArtifacts: ReactNode;
   taskPlan?: TaskPlanWsPayload;
+  /** Rendered at the right edge of the deliverables section header. */
+  deliverablesAction?: ReactNode;
 }) {
   const todo = useMemo(() => collectOverviewTodo(messages, taskPlan), [messages, taskPlan]);
   const references = useMemo(() => collectOverviewReferences(messages), [messages]);
   return (
     <div className="scrollbar-hover h-full overflow-y-auto bg-card">
       <OverviewSection title="计划"><TodoList items={todo} /></OverviewSection>
-      <OverviewSection title="交付物">{deliverables}</OverviewSection>
+      <OverviewSection title="交付物" action={deliverablesAction}>{deliverables}</OverviewSection>
       <OverviewSection title="当前过程产物">{processArtifacts}</OverviewSection>
       <OverviewSection title="参考资料"><ReferenceList references={references} /></OverviewSection>
     </div>

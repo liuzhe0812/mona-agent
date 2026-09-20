@@ -1,12 +1,14 @@
-import { render, screen } from "@testing-library/react";
-import { describe, expect, it } from "vitest";
+import { fireEvent, render, screen } from "@testing-library/react";
+import { describe, expect, it, vi } from "vitest";
 
 import {
+  DeliverablesRangeFilter,
   OverviewPanel,
   collectOverviewReferences,
   collectOverviewTodo,
+  filterDeliverablesByRange,
 } from "@/components/deliver/OverviewPanel";
-import type { UIMessage } from "@/lib/types";
+import type { DeliveredFile, UIMessage } from "@/lib/types";
 
 function message(overrides: Partial<UIMessage>): UIMessage {
   return {
@@ -150,5 +152,62 @@ describe("OverviewPanel", () => {
     expect(collectOverviewReferences(messages)).toEqual([
       { id: "web:https://example.com/legacy", kind: "web", label: "example.com", url: "https://example.com/legacy" },
     ]);
+  });
+});
+
+describe("filterDeliverablesByRange", () => {
+  const now = new Date("2026-09-18T15:00:00");
+  function file(overrides: Partial<DeliveredFile>): DeliveredFile {
+    return {
+      path: "a.png",
+      absolute_path: "/ws/output/a.png",
+      name: "a.png",
+      size: 1,
+      size_human: "1 B",
+      mime: "image/png",
+      ...overrides,
+    };
+  }
+
+  it("defaults to today and keeps undated rows", () => {
+    const files = [
+      file({ path: "today.png", modified_at: "2026-09-18T08:00:00" }),
+      file({ path: "yesterday.png", modified_at: "2026-09-17T23:00:00" }),
+      file({ path: "undated.png" }),
+      file({ path: "invalid.png", modified_at: "not-a-date" }),
+    ];
+    expect(filterDeliverablesByRange(files, "today", now).map((f) => f.path)).toEqual([
+      "today.png",
+      "undated.png",
+      "invalid.png",
+    ]);
+  });
+
+  it("falls back to the artifact ref timestamp when the scan has no mtime", () => {
+    const files = [
+      file({ path: "old.png", artifact_ref: { modified_at: "2026-09-01T00:00:00" } as DeliveredFile["artifact_ref"] }),
+      file({ path: "new.png", artifact_ref: { modified_at: "2026-09-18T00:00:00" } as DeliveredFile["artifact_ref"] }),
+    ];
+    expect(filterDeliverablesByRange(files, "today", now).map((f) => f.path)).toEqual(["new.png"]);
+  });
+
+  it("returns every file in the all range", () => {
+    const files = [file({ path: "old.png", modified_at: "2020-01-01T00:00:00" })];
+    expect(filterDeliverablesByRange(files, "all", now)).toBe(files);
+  });
+});
+
+describe("DeliverablesRangeFilter", () => {
+  it("renders the 今日/全部 toggle with the active state and reports changes", () => {
+    const onChange = vi.fn();
+    render(<DeliverablesRangeFilter value="today" onChange={onChange} />);
+
+    const today = screen.getByRole("button", { name: "今日" });
+    const all = screen.getByRole("button", { name: "全部" });
+    expect(today).toHaveAttribute("aria-pressed", "true");
+    expect(all).toHaveAttribute("aria-pressed", "false");
+
+    fireEvent.click(all);
+    expect(onChange).toHaveBeenCalledWith("all");
   });
 });

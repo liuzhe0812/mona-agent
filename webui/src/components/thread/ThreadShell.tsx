@@ -32,7 +32,12 @@ import { SplitPane } from "@/components/deliver/SplitPane";
 import { FilePreviewPanel } from "@/components/deliver/FilePreviewPanel";
 import { WorkspacePanel, flattenFilesForDisplay } from "@/components/deliver/WorkspacePanel";
 import { ArtifactSidebar, OVERVIEW_TAB_ID, type ArtifactPreviewTab, type ArtifactSidebarTab, type OfficeSidebarTab, type SidebarNewTabKind, type ToolSidebarTab } from "@/components/deliver/ArtifactSidebar";
-import { OverviewPanel } from "@/components/deliver/OverviewPanel";
+import {
+  OverviewPanel,
+  DeliverablesRangeFilter,
+  filterDeliverablesByRange,
+  type DeliverablesRange,
+} from "@/components/deliver/OverviewPanel";
 import { SidebarBrowserPanel, type SidebarBrowserController } from "@/components/deliver/SidebarBrowserPanel";
 import { useFilePreviewStore, type PreviewScope, isArtifactTombstoned, normalizeArtifactPath } from "@/components/deliver/filePreviewStore";
 import { useMonaStream, type SendImage, type SendOptions } from "@/hooks/useMonaStream";
@@ -1759,6 +1764,14 @@ export function ThreadShell({
     return out;
   }, [isRoomSession, isProjectSession, sessionFilesForPanel, visibleTaskFiles]);
 
+  // 交付物默认只看今天交付/更新的文件，可切换到全部。
+  const [deliverablesRange, setDeliverablesRange] = useState<DeliverablesRange>("today");
+  useEffect(() => setDeliverablesRange("today"), [historyKey]);
+  const deliverablesFilesForPanel = useMemo(
+    () => filterDeliverablesByRange(sessionFilesForPanel ?? [], deliverablesRange),
+    [sessionFilesForPanel, deliverablesRange],
+  );
+
   const hasFiles = workspaceFiles.length > 0;
 
   // Preview prev/next cycles in the same visual order the workspace panel
@@ -2123,10 +2136,16 @@ export function ThreadShell({
               <OverviewPanel
                 messages={displayMessages}
                 taskPlan={taskPlan}
+                deliverablesAction={
+                  <DeliverablesRangeFilter
+                    value={deliverablesRange}
+                    onChange={setDeliverablesRange}
+                  />
+                }
                 deliverables={
                   <WorkspacePanel
                     files={[]}
-                    sessionFiles={sessionFilesForPanel}
+                    sessionFiles={deliverablesFilesForPanel}
                     scope={workspaceScope}
                     sessionKey={sessionKey}
                     ownerKey={`${artifactOwnerKey}:deliverables`}
