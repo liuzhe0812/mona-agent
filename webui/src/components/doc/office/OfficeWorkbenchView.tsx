@@ -115,9 +115,9 @@ export function OfficeWorkbenchView() {
     setDocs((prev) => prev.filter((d) => d.path !== path));
   }, []);
 
-  const onSend = useCallback(
-    (content: string): string => {
-      if (!chatId) return content;
+  const getSendOptions = useCallback(
+    (content: string) => {
+      if (!chatId) return undefined;
       const docPaths = docs.map((d) => d.path);
       // Build a display string that mentions the attached documents so the
       // user can see in history which docs were attached to this turn. The
@@ -127,15 +127,16 @@ export function OfficeWorkbenchView() {
         docPaths.length > 0
           ? `${content}\n\n[已附文档: ${docs.map((d) => d.name).join(", ")}]`
           : content;
-      client.sendMessage(chatId, content, undefined, {
+      const options = {
         displayContent,
         ...(docPaths.length > 0 ? { docPaths } : {}),
-      });
+        ...(docPaths.length > 0 ? { documentNames: docs.map((doc) => doc.name) } : {}),
+      };
       // Clear docs after the message is sent — they've been attached.
       setDocs([]);
-      return displayContent;
+      return options;
     },
-    [chatId, client, docs],
+    [chatId, docs],
   );
 
   const hasDocs = docs.length > 0;
@@ -236,7 +237,7 @@ export function OfficeWorkbenchView() {
               left={
                 <DocChatPanel
                   chatId={chatId}
-                  onSend={onSend}
+                  getSendOptions={getSendOptions}
                   placeholder="拖入文档后提问，或点击上方文档芯片预览..."
                 />
               }

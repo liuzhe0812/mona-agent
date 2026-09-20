@@ -51,10 +51,10 @@ vi.mock("@/components/office/OfficeEditorHost", () => ({
 }));
 
 vi.mock("@/components/doc/DocChatPanel", () => ({
-  DocChatPanel: ({ chatId, onSend }: { chatId: string; onSend: (content: string) => void }) => (
+  DocChatPanel: ({ chatId, getSendOptions }: { chatId: string; getSendOptions?: (content: string) => Record<string, unknown> | undefined }) => (
     <div>
       <span>AI 对话：{chatId}</span>
-      <button type="button" onClick={() => onSend("修改当前文档")}>发送测试消息</button>
+      <button type="button" onClick={() => mocks.sendMessage(chatId, "修改当前文档", undefined, getSendOptions?.("修改当前文档"))}>发送测试消息</button>
     </div>
   ),
 }));

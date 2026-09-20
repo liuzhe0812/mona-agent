@@ -1,28 +1,33 @@
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
-import { Loader2, Send, Square } from "lucide-react";
+import { Loader2 } from "lucide-react";
 
-import { Button } from "@/components/ui/button";
-import { Textarea } from "@/components/ui/textarea";
+import { ThreadComposer } from "@/components/thread/ThreadComposer";
 import { ThreadMessages } from "@/components/thread/ThreadMessages";
-import { useMonaStream } from "@/hooks/useMonaStream";
+import { Button } from "@/components/ui/button";
+import { useMonaStream, type SendImage, type SendOptions } from "@/hooks/useMonaStream";
+import { usePendingQueue } from "@/hooks/usePendingQueue";
 import { useSessionHistory } from "@/hooks/useSessions";
-import type { UIMessage } from "@/lib/types";
+import type { MessageQuote, UIMessage } from "@/lib/types";
 
 interface DocChatPanelProps {
   chatId: string | null;
-  /** Send the user's draft. May return a displayContent string to override
-   *  the optimistic message's text (e.g. an "[已附文档: ...]" suffix). */
-  onSend: (content: string) => string | void;
+  /** Adds document- or workflow-specific context to composer sends. */
+  getSendOptions?: (content: string) => SendOptions | undefined;
   placeholder?: string;
   /** Notified when streaming state changes (true = AI replying, false = idle). */
   onStreamingChange?: (streaming: boolean) => void;
 }
 
-export function DocChatPanel({ chatId, onSend, placeholder, onStreamingChange }: DocChatPanelProps) {
-  const [draft, setDraft] = useState("");
-  const [awaitingResponse, setAwaitingResponse] = useState(false);
+export function DocChatPanel({
+  chatId,
+  getSendOptions,
+  placeholder,
+  onStreamingChange,
+}: DocChatPanelProps) {
+  const [quote, setQuote] = useState<MessageQuote | null>(null);
   const bottomRef = useRef<HTMLDivElement>(null);
   const onStreamingChangeRef = useRef(onStreamingChange);
+  const pendingQueue = usePendingQueue();
 
   useEffect(() => {
     onStreamingChangeRef.current = onStreamingChange;
@@ -39,28 +44,22 @@ export function DocChatPanel({ chatId, onSend, placeholder, onStreamingChange }:
   const {
     messages,
     isStreaming,
+    isAwaitingModelResponse,
+    stopping,
     stop,
+    send,
+    inject,
     setMessages,
     streamError,
     dismissStreamError,
   } = useMonaStream(chatId, historical, hasPendingToolCalls);
 
-  const busy = isStreaming || awaitingResponse;
-
-  // Clear awaitingResponse once the server starts streaming back
-  useEffect(() => {
-    if (isStreaming) setAwaitingResponse(false);
-  }, [isStreaming]);
-
-  // Notify parent of streaming state changes
   useEffect(() => {
     onStreamingChangeRef.current?.(isStreaming);
   }, [isStreaming]);
 
   useEffect(() => {
-    if (!chatId) {
-      setMessages([]);
-    }
+    if (!chatId) setMessages([]);
   }, [chatId, setMessages]);
 
   useEffect(() => {
@@ -76,28 +75,36 @@ export function DocChatPanel({ chatId, onSend, placeholder, onStreamingChange }:
     bottomRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [messagesLen]);
 
-  const sendDraft = useCallback(() => {
-    const trimmed = draft.trim();
-    if (!trimmed || !chatId || busy) return;
-    setDraft("");
-    // Parent's onSend handles the actual WS send and may return a displayContent
-    // string (e.g. with an "[已附文档: ...]" suffix) to show in the optimistic
-    // user message. Falls back to the trimmed draft.
-    const displayContent = onSend(trimmed);
-    setMessages((prev: UIMessage[]) => [
-      ...prev,
-      {
-        id: crypto.randomUUID(),
-        role: "user",
-        content: trimmed,
-        ...(typeof displayContent === "string" && displayContent !== trimmed
-          ? { displayContent }
-          : {}),
-        createdAt: Date.now(),
-      },
-    ]);
-    setAwaitingResponse(true);
-  }, [chatId, draft, busy, setMessages, onSend]);
+  const handleSubmit = useCallback((
+    content: string,
+    images?: SendImage[],
+    composerOptions?: SendOptions,
+  ) => {
+    if (!chatId) return;
+    const contextOptions = getSendOptions?.(content);
+    const options: SendOptions = {
+      ...contextOptions,
+      ...composerOptions,
+      displayContent: composerOptions?.displayContent ?? contextOptions?.displayContent ?? content,
+    };
+    if (isStreaming) {
+      pendingQueue.enqueue(content, images, options);
+      return;
+    }
+    send(content, images, options);
+  }, [chatId, getSendOptions, isStreaming, pendingQueue, send]);
+
+  const handlePendingAppend = useCallback((id: string) => {
+    const pending = pendingQueue.messages.find((message) => message.id === id);
+    if (!pending) return;
+    inject(pending.content, pending.images, pending.options);
+    pendingQueue.remove(id);
+  }, [inject, pendingQueue]);
+
+  const handleQuote = useCallback((message: UIMessage, author: string) => {
+    const content = (message.role === "user" ? message.displayContent ?? message.content : message.content).trim();
+    if (content) setQuote({ author, content });
+  }, []);
 
   if (!chatId) {
     return (
@@ -127,51 +134,34 @@ export function DocChatPanel({ chatId, onSend, placeholder, onStreamingChange }:
               </Button>
             </div>
           ) : null}
-
           {loading ? (
             <div className="flex items-center gap-1.5 text-caption text-muted-foreground">
               <Loader2 className="h-3 w-3 animate-spin" />
               <span>正在加载会话...</span>
             </div>
           ) : null}
-
-          <ThreadMessages messages={messages} isStreaming={isStreaming} />
-
+          <ThreadMessages messages={messages} isStreaming={isStreaming} onQuote={handleQuote} />
           <div ref={bottomRef} />
         </div>
       </div>
 
-      <div className="shrink-0 p-2">
-        <div className="flex min-h-[52px] items-end gap-1.5 rounded-xl border border-border/75 bg-background px-2.5 py-1.5 shadow-sm">
-          <Textarea
-            value={draft}
-            onChange={(event) => setDraft(event.target.value)}
-            onKeyDown={(event) => {
-              if ((event.ctrlKey || event.metaKey) && event.key === "Enter") {
-                event.preventDefault();
-                sendDraft();
-              }
-            }}
-            disabled={!chatId || busy}
-            className="min-h-[36px] flex-1 resize-none rounded-none border-0 bg-transparent px-0 py-0 text-caption leading-5 shadow-none focus-visible:ring-0 focus-visible:ring-offset-0 placeholder:text-muted-foreground disabled:cursor-not-allowed disabled:opacity-60"
-            rows={2}
-            placeholder={placeholder ?? "输入消息..."}
-          />
-          <Button
-            type="button"
-            aria-label={isStreaming ? "停止生成" : "发送"}
-            variant={isStreaming ? "outline" : "default"}
-            disabled={isStreaming ? false : busy || !draft.trim()}
-            onClick={isStreaming ? stop : sendDraft}
-            className="h-6 w-6 shrink-0 rounded-lg p-0"
-          >
-            {isStreaming ? (
-              <Square className="h-3 w-3" />
-            ) : (
-              <Send className="h-3 w-3" />
-            )}
-          </Button>
-        </div>
+      <div className="shrink-0 px-2 pb-2">
+        <ThreadComposer
+          onSend={handleSubmit}
+          isStreaming={isStreaming}
+          isAwaitingModelResponse={isAwaitingModelResponse}
+          stopping={stopping}
+          onStop={stop}
+          disabled={!chatId}
+          placeholder={placeholder ?? "输入消息..."}
+          quote={quote}
+          onClearQuote={() => setQuote(null)}
+          pendingMessages={pendingQueue.messages}
+          onPendingAppend={handlePendingAppend}
+          onPendingRemove={pendingQueue.remove}
+          onPendingEdit={pendingQueue.update}
+          isPendingFull={pendingQueue.messages.length >= 3}
+        />
       </div>
     </div>
   );

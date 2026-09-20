@@ -810,15 +810,6 @@ export function VideoMakerView({
     token,
   ]);
 
-  const handleSendMessage = useCallback(
-    (content: string) => {
-      if (!chatId) return;
-      if (embedded && onSendVideoTurn) onSendVideoTurn(content);
-      else client.sendMessage(chatId, content, undefined, { agentKind: "video" });
-    },
-    [chatId, client, embedded, onSendVideoTurn],
-  );
-
   // Detect AI turn completion: streaming transitions from true → false.
   // This is more reliable than polling storyboard.md — the AI has finished
   // its reply (and any tool calls), so any storyboard.md it wrote is now on disk.
@@ -1795,7 +1786,7 @@ export function VideoMakerView({
                 chatPanel={embedded ? undefined : (
                   <DocChatPanel
                     chatId={chatId}
-                    onSend={handleSendMessage}
+                    getSendOptions={() => ({ agentKind: "video" })}
                     onStreamingChange={handleStreamingChange}
                     placeholder="与视频助手对话调整分镜..."
                   />
