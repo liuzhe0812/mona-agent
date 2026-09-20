@@ -1,1 +1,0 @@
-"""Mona Worker ASR service."""

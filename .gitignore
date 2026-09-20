@@ -24,26 +24,9 @@ AGENTS.md
 *PLAN*.md
 *SOLUTION*.md
 
-# 清理：屏蔽非核心目录（配置、文档、测试、素材、硬件相关）
-# tests/ 锚定根目录：仅忽略 Python tests/，不误伤 webui/src/tests/ 前端测试
-# Mona Auth 是积分/支付服务端源码；只纳入代码、迁移、测试与部署模板，永不纳入密钥和环境文件。
-mona-auth/*
-!mona-auth/.gitignore
-!mona-auth/.env.example
-!mona-auth/pyproject.toml
-!mona-auth/alembic.ini
-!mona-auth/setup.sh
-!mona-auth/app/
-!mona-auth/app/**
-!mona-auth/alembic/
-!mona-auth/alembic/**
-!mona-auth/deploy/
-!mona-auth/deploy/**
-!mona-auth/tests/
-!mona-auth/tests/**
-mona-auth/keys/
-mona-auth/.env
-mona-auth/venv/
+# 非桌面端服务仅在本地部署与维护。
+mona-auth/
+mona-worker/
 scripts/
 !mona/skills/mona-video/scripts/
 !mona/skills/mona-video/scripts/compile_scene_spec.py
