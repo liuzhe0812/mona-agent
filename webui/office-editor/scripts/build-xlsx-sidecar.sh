@@ -38,7 +38,7 @@ cargo_manifest="$engine_root/Cargo.toml"
 
 [[ -f "$cargo_manifest" ]] || die "xlsx-sidecar Cargo.toml was not found: $cargo_manifest"
 
-rust_host="$(rustc -vV | awk '$1 == "host:" { print $2; exit }')"
+rust_host="$(rustc -vV | awk '$1 == "host:" { print $2 }')"
 [[ "$rust_host" == "$rust_target" ]] || die \
   "native macOS build requires Rust host $rust_target; found '$rust_host'."
 
