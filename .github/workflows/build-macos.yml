@@ -103,6 +103,7 @@ jobs:
           APPLE_ID: ${{ inputs.publish && secrets.APPLE_ID || '' }}
           APPLE_PASSWORD: ${{ inputs.publish && secrets.APPLE_PASSWORD || '' }}
           APPLE_TEAM_ID: ${{ inputs.publish && secrets.APPLE_TEAM_ID || '' }}
+          NODE_OPTIONS: --max-old-space-size=4096
         run: |
           log="$RUNNER_TEMP/mona-macos-${{ matrix.arch }}-build.log"
           set +e
@@ -110,7 +111,7 @@ jobs:
           status=${PIPESTATUS[0]}
           set -e
           if [ "$status" -ne 0 ]; then
-            detail="$(tail -n 10 "$log" | tr '\n' ' ' | sed 's/%/%25/g; s/\r/%0D/g; s/\n/%0A/g')"
+            detail="$(tail -n 50 "$log" | tr '\n' ' ' | sed 's/%/%25/g; s/\r/%0D/g; s/\n/%0A/g')"
             echo "::error title=macOS package build failed::${detail}"
             exit "$status"
           fi
