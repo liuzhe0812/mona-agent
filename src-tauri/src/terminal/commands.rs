@@ -1434,6 +1434,16 @@ pub async fn get_file_icon(path: String) -> Result<String, String> {
     Ok(data_encoding::BASE64.encode(&png_data))
 }
 
+#[cfg(not(windows))]
+#[tauri::command]
+pub async fn get_file_type_icon(
+    _extension: String,
+    _is_directory: bool,
+) -> Result<Option<String>, String> {
+    Ok(None)
+}
+
+#[cfg(windows)]
 #[tauri::command]
 pub async fn get_file_type_icon(
     extension: String,
@@ -1493,6 +1503,7 @@ pub async fn get_file_type_icon(
     }
 }
 
+#[cfg(windows)]
 unsafe fn icon_to_png_simple(
     hicon: windows::Win32::UI::WindowsAndMessaging::HICON,
 ) -> Option<Vec<u8>> {

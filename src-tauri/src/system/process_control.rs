@@ -93,6 +93,12 @@ fn ifeo_base_path() -> &'static str {
     r"HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Image File Execution Options"
 }
 
+#[cfg(not(windows))]
+fn ifeo_base_path() -> &'static str {
+    // 非 Windows 平台不会执行下面的 PowerShell 脚本，这里只需满足编译。
+    ""
+}
+
 #[cfg(windows)]
 fn read_blocked_processes_inner() -> Result<Vec<BlockedProcess>, String> {
     let script = format!(

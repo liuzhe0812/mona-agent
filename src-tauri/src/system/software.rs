@@ -1487,6 +1487,7 @@ async fn remove_appx_package(_name: &str) -> Result<std::process::Output, String
     Err("仅 Windows 支持".to_string())
 }
 
+#[cfg(windows)]
 async fn run_winget(args: Vec<String>) -> Result<std::process::Output, String> {
     tokio::task::spawn_blocking(move || {
         std::process::Command::new("winget")
@@ -1497,6 +1498,11 @@ async fn run_winget(args: Vec<String>) -> Result<std::process::Output, String> {
     .await
     .map_err(|e| format!("执行 WinGet 失败: {e}"))?
     .map_err(|e| format!("启动 WinGet 失败: {e}"))
+}
+
+#[cfg(not(windows))]
+async fn run_winget(_args: Vec<String>) -> Result<std::process::Output, String> {
+    Err("winget 仅在 Windows 上可用".to_string())
 }
 
 #[cfg(windows)]

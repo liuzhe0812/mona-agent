@@ -64,23 +64,24 @@ fn detect_shell() -> (&'static str, bool) {
     ("/bin/sh", true)
 }
 
+#[cfg(windows)]
 fn which_exists(cmd: &str) -> bool {
-    if cfg!(windows) {
-        #[cfg(windows)]
-        use std::os::windows::process::CommandExt;
-        std::process::Command::new("where")
-            .arg(cmd)
-            .creation_flags(0x08000000)
-            .output()
-            .map(|o| o.status.success())
-            .unwrap_or(false)
-    } else {
-        std::process::Command::new("which")
-            .arg(cmd)
-            .output()
-            .map(|o| o.status.success())
-            .unwrap_or(false)
-    }
+    use std::os::windows::process::CommandExt;
+    std::process::Command::new("where")
+        .arg(cmd)
+        .creation_flags(0x08000000)
+        .output()
+        .map(|o| o.status.success())
+        .unwrap_or(false)
+}
+
+#[cfg(not(windows))]
+fn which_exists(cmd: &str) -> bool {
+    std::process::Command::new("which")
+        .arg(cmd)
+        .output()
+        .map(|o| o.status.success())
+        .unwrap_or(false)
 }
 
 fn decode_pty_output(raw: &[u8]) -> String {
