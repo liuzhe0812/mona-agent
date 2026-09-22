@@ -1,8 +1,5 @@
 [CmdletBinding()]
 param(
-  [Parameter(Mandatory = $true)]
-  [string]$CertificateThumbprint,
-  [string]$TimestampUrl = "http://timestamp.digicert.com",
   [switch]$NoBundle
 )
 
@@ -216,12 +213,12 @@ function Update-OfficeSidecarManifest {
 }
 
 $srcTauriDirectory = (Resolve-Path -LiteralPath $PSScriptRoot -ErrorAction Stop).Path
-$signer = Join-Path $srcTauriDirectory "sign-windows-artifact.ps1"
+$releaseSigner = Join-Path $srcTauriDirectory "sign-update-artifact.mjs"
 $gatewayDirectory = Join-Path $srcTauriDirectory "resources\mona-gateway"
 $tauriConfigPath = Join-Path $srcTauriDirectory "tauri.conf.json"
 
-if (-not (Test-Path -LiteralPath $signer -PathType Leaf)) {
-  throw "Windows artifact signer was not found: $signer"
+if (-not (Test-Path -LiteralPath $releaseSigner -PathType Leaf)) {
+  throw "Windows update signer was not found: $releaseSigner"
 }
 if (-not (Test-Path -LiteralPath $gatewayDirectory -PathType Container)) {
   throw "Bundled gateway directory was not found: $gatewayDirectory"
@@ -260,30 +257,7 @@ $installerPath = Join-Path $installerDirectory $installerFileName
 
 # Validate the unsigned bytes before any signer can mutate them. This reads
 # only the packaged Gateway copy; the source manifest is never rewritten.
-$officeManifestState = Get-OfficeSidecarManifestState -GatewayDirectory $gatewayDirectory
-$gatewayBinaries = @(Get-ChildItem -LiteralPath $gatewayDirectory -Recurse -File |
-  Where-Object { $_.Extension -in ".exe", ".dll", ".pyd" } |
-  Sort-Object FullName)
-if ($gatewayBinaries.Count -eq 0) {
-  throw "No executable gateway files were found in $gatewayDirectory"
-}
-
-$env:MONA_SIGNING_CERT_THUMBPRINT = $CertificateThumbprint
-$env:MONA_SIGNING_TIMESTAMP_URL = $TimestampUrl
-
-# Tauri signs the primary executable and installer. The PyInstaller gateway
-# is a resource directory, so sign its native binaries before Tauri copies
-# them into the desktop bundle.
-foreach ($binary in $gatewayBinaries) {
-  & $signer -Path $binary.FullName
-  if ($LASTEXITCODE -ne 0) {
-    throw "Gateway artifact signing failed: $($binary.FullName)"
-  }
-}
-
-# Authenticode changes the sidecar bytes. Refresh only its size/hash after
-# every Gateway signature succeeds so the client validator accepts the copy.
-Update-OfficeSidecarManifest -ManifestState $officeManifestState
+$null = Get-OfficeSidecarManifestState -GatewayDirectory $gatewayDirectory
 
 $buildStartedAt = [DateTime]::UtcNow
 Push-Location $srcTauriDirectory
@@ -310,11 +284,6 @@ $mainProductVersion = [string]$mainFile.VersionInfo.ProductVersion
 if ($mainProductVersion -ne $releaseVersion) {
   throw "Built Mona executable version $mainProductVersion does not match Tauri version $($releaseVersion): $mainExecutable"
 }
-& $signer -Path $mainExecutable -VerifyOnly
-if ($LASTEXITCODE -ne 0) {
-  throw "Mona executable signature verification failed: $mainExecutable"
-}
-
 if (-not $NoBundle) {
   # Verify exactly this release's NSIS output. Do not accept an older MSI or
   # installer merely because it happens to be present under target/release.
@@ -325,10 +294,13 @@ if (-not $NoBundle) {
   if ($installerFile.LastWriteTimeUtc -lt $buildStartedAt) {
     throw "NSIS installer was not refreshed by this build: $installerPath"
   }
-  & $signer -Path $installerPath -VerifyOnly
+  & node $releaseSigner $installerPath
   if ($LASTEXITCODE -ne 0) {
-    throw "NSIS installer signature verification failed: $installerPath"
+    throw "NSIS installer Ed25519 signing failed: $installerPath"
+  }
+  if (-not (Test-Path -LiteralPath "$installerPath.sig" -PathType Leaf)) {
+    throw "NSIS installer signature was not produced: $installerPath.sig"
   }
 }
 
-Write-Host "Signed Windows release verification passed for Mona $releaseVersion."
+Write-Host "Windows release verification passed for Mona $releaseVersion (free Ed25519 update signature)."

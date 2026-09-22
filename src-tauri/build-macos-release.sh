@@ -12,19 +12,9 @@ if [[ "$(uname -s)" != "Darwin" ]]; then
   die "macOS release builds must run on Darwin."
 fi
 
-case "$(uname -m)" in
-  arm64)
-    arch="arm64"
-    rust_target="aarch64-apple-darwin"
-    ;;
-  x86_64)
-    arch="x64"
-    rust_target="x86_64-apple-darwin"
-    ;;
-  *)
-    die "unsupported macOS architecture: $(uname -m)"
-    ;;
-esac
+[[ "$(uname -m)" == "arm64" ]] || die "Mona macOS releases require an Apple Silicon runner."
+arch="arm64"
+rust_target="aarch64-apple-darwin"
 
 script_dir="$(CDPATH= cd "$(dirname "$0")" && pwd -P)"
 repo_root="$(CDPATH= cd "$script_dir/.." && pwd -P)"
@@ -151,7 +141,7 @@ dmg_source="$(find "$bundle_root/dmg" -maxdepth 1 -type f -name '*.dmg' -print -
 [[ -n "$dmg_source" && -f "$dmg_source" ]] || die "macOS DMG was not produced."
 
 case "$release_output" in
-  "$repo_root"/dist/macos/arm64|"$repo_root"/dist/macos/x64) ;;
+  "$repo_root"/dist/macos/arm64) ;;
   *) die "release output path is outside the repository" ;;
 esac
 rm -rf "$release_output"
