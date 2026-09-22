@@ -116,7 +116,7 @@ os.replace(temporary, manifest_path)
 PY
 }
 
-"$repo_root/webui/office-editor/scripts/build-xlsx-sidecar.sh"
+bash "$repo_root/webui/office-editor/scripts/build-xlsx-sidecar.sh"
 [[ -x "$office_sidecar" ]] || die "macOS XLSX sidecar was not produced."
 sign_file "$office_sidecar"
 verify_office_manifest
