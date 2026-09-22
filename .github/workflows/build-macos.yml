@@ -1,115 +1,163 @@
-name: Build macOS
+name: Package macOS
 
 on:
   push:
     paths:
-      - '.github/workflows/build-macos.yml'
+      - ".github/workflows/build-macos.yml"
+      - ".github/scripts/upload_qiniu_artifact.py"
+      - "src-tauri/build-macos-release.sh"
+      - "mona-gateway.spec"
+      - "src-tauri/**"
+      - "webui/**"
+      - "mona/**"
+      - "pyproject.toml"
   workflow_dispatch:
     inputs:
-      version:
-        description: 'Version to build (e.g. 1.0.2)'
+      publish:
+        description: "Notarize and publish both DMGs to Qiniu"
         required: true
-        default: '1.0.2'
+        default: false
+        type: boolean
+
+permissions:
+  contents: read
+
+concurrency:
+  group: macos-package-${{ github.ref }}
+  cancel-in-progress: true
 
 jobs:
   build:
-    runs-on: macos-latest
+    name: Build ${{ matrix.arch }}
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: arm64
+            runner: macos-15
+          - arch: x64
+            runner: macos-15-intel
     steps:
       - uses: actions/checkout@v4
 
-      - name: Setup Node.js
+      - name: Set up Node.js
         uses: actions/setup-node@v4
         with:
-          node-version: 20
+          node-version: 22
+          cache: npm
+          cache-dependency-path: |
+            webui/package-lock.json
+            webui/office-editor/package-lock.json
 
-      - name: Setup Rust
-        uses: dtolnay/rust-toolchain@stable
+      - name: Set up Rust
+        uses: dtolnay/rust-toolchain@master
         with:
-          targets: aarch64-apple-darwin,x86_64-apple-darwin
+          toolchain: 1.98.1
 
-      - name: Setup Python
+      - name: Install matching Tauri CLI
+        run: cargo install tauri-cli --version 2.11.2 --locked
+
+      - name: Set up Python
         uses: actions/setup-python@v5
         with:
-          python-version: '3.12'
+          python-version: "3.12"
 
       - name: Install frontend dependencies
-        working-directory: webui
-        run: npm install
+        run: |
+          npm ci --prefix webui
+          npm ci --prefix webui/office-editor
 
       - name: Install Python dependencies
         run: |
-          pip install --upgrade pip
-          pip install pyinstaller ".[api,wecom,weixin,pdf]"
+          python -m pip install --upgrade pip
+          python -m pip install pyinstaller ".[api,wecom,weixin,pdf]"
 
-      - name: Build mona-gateway binary
-        run: |
-          GATEWAY_ENTRY=$(python -c "from mona.gateway import main; print('mona.gateway:main')" 2>/dev/null || echo "mona.gateway:main")
-          pyinstaller --onefile --name mona-gateway \
-            --hidden-import=mona \
-            --hidden-import=mona.gateway \
-            --hidden-import=mona.api \
-            --hidden-import=aiohttp \
-            -c \
-            "$GATEWAY_ENTRY"
-          cp dist/mona-gateway src-tauri/resources/mona-gateway
-          chmod +x src-tauri/resources/mona-gateway
-
-      - name: Download Python runtime
-        run: |
-          PYTHON_VERSION="3.12.13"
-          RELEASE_TAG="20260510"
-          PLATFORM="aarch64-apple-darwin"
-          BASE_URL="https://github.com/astral-sh/python-build-standalone/releases/download/$RELEASE_TAG"
-          FILE_NAME="cpython-$PYTHON_VERSION+$RELEASE_TAG-$PLATFORM-install_only.tar.gz"
-
-          RESOURCES_DIR="src-tauri/resources"
-          PYTHON_ARCHIVE="$RESOURCES_DIR/python.tar.gz"
-
-          echo "Downloading python-build-standalone for $PLATFORM..."
-          curl -fSL -o "$PYTHON_ARCHIVE" "$BASE_URL/$FILE_NAME"
-
-          # Extract, install mona-ai, repack
-          TEMP_DIR=$(mktemp -d)
-          tar -xzf "$PYTHON_ARCHIVE" -C "$TEMP_DIR"
-
-          PYTHON_DIR=$(find "$TEMP_DIR" -name "python3*" -type f -path "*/bin/*" | head -1 | xargs dirname | xargs dirname)
-          PYTHON_BIN="$PYTHON_DIR/bin/python3"
-
-          echo "Found Python at: $PYTHON_BIN"
-          $PYTHON_BIN -m pip install ".[api,wecom,weixin,pdf]" --no-warn-script-location
-
-          # Verify
-          pushd /tmp
-          MONA_FILE=$($PYTHON_BIN -c "import mona; print(mona.__file__)" 2>&1)
-          popd
-          echo "mona.__file__ = $MONA_FILE"
-
-          # Strip caches
-          find "$PYTHON_DIR" -type d -name "__pycache__" -exec rm -rf {} + 2>/dev/null || true
-          find "$PYTHON_DIR" -type f -name "*.pyc" -delete 2>/dev/null || true
-          find "$PYTHON_DIR" -type f -name "*.pyo" -delete 2>/dev/null || true
-
-          # Repack
-          PARENT_DIR=$(dirname "$PYTHON_DIR")
-          DIR_NAME=$(basename "$PYTHON_DIR")
-          tar -czf "$PYTHON_ARCHIVE" -C "$PARENT_DIR" "$DIR_NAME"
-
-          rm -rf "$TEMP_DIR"
-
-      - name: Build Tauri (Universal Binary)
-        working-directory: src-tauri
-        run: cargo tauri build --target universal-apple-darwin
+      - name: Import Apple signing certificate
+        if: ${{ inputs.publish == true }}
         env:
-          CI: ""
+          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
+          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+          APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
+          KEYCHAIN_PASSWORD: ${{ secrets.KEYCHAIN_PASSWORD }}
+        run: |
+          test -n "$APPLE_CERTIFICATE"
+          test -n "$APPLE_CERTIFICATE_PASSWORD"
+          test -n "$APPLE_SIGNING_IDENTITY"
+          test -n "$KEYCHAIN_PASSWORD"
+          keychain="$RUNNER_TEMP/mona-build.keychain-db"
+          certificate="$RUNNER_TEMP/mona-certificate.p12"
+          printf '%s' "$APPLE_CERTIFICATE" | base64 -D -o "$certificate"
+          security create-keychain -p "$KEYCHAIN_PASSWORD" "$keychain"
+          security set-keychain-settings -lut 21600 "$keychain"
+          security unlock-keychain -p "$KEYCHAIN_PASSWORD" "$keychain"
+          security import "$certificate" -k "$keychain" -P "$APPLE_CERTIFICATE_PASSWORD" -T /usr/bin/codesign
+          security list-keychain -d user -s "$keychain" login.keychain-db
+          security default-keychain -d user -s "$keychain"
+          security set-key-partition-list -S apple-tool:,apple:,codesign: -s -k "$KEYCHAIN_PASSWORD" "$keychain"
+          security find-identity -v -p codesigning "$keychain" | grep -F -- "$APPLE_SIGNING_IDENTITY"
 
-      - name: Upload DMG
+      - name: Build macOS package
+        env:
+          APPLE_SIGNING_IDENTITY: ${{ inputs.publish && secrets.APPLE_SIGNING_IDENTITY || '-' }}
+          APPLE_ID: ${{ inputs.publish && secrets.APPLE_ID || '' }}
+          APPLE_PASSWORD: ${{ inputs.publish && secrets.APPLE_PASSWORD || '' }}
+          APPLE_TEAM_ID: ${{ inputs.publish && secrets.APPLE_TEAM_ID || '' }}
+        run: ./src-tauri/build-macos-release.sh
+
+      - name: Verify notarization
+        if: ${{ inputs.publish == true }}
+        run: |
+          version="$(python -c 'import tomllib; print(tomllib.load(open("pyproject.toml", "rb"))["project"]["version"])')"
+          dmg="dist/macos/${{ matrix.arch }}/Mona_${version}_${{ matrix.arch }}.dmg"
+          xcrun stapler validate "$dmg"
+          spctl --assess --type open --context context:primary-signature -vv "$dmg"
+
+      - name: Upload GitHub artifact
         uses: actions/upload-artifact@v4
         with:
-          name: Mona-macOS-DMG
-          path: src-tauri/target/universal-apple-darwin/release/bundle/dmg/*.dmg
+          name: Mona-macOS-${{ matrix.arch }}
+          path: dist/macos/${{ matrix.arch }}
+          if-no-files-found: error
 
-      - name: Upload App
-        uses: actions/upload-artifact@v4
+  publish:
+    name: Publish notarized DMGs
+    needs: build
+    if: ${{ inputs.publish == true && needs.build.result == 'success' }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Download DMG artifacts
+        uses: actions/download-artifact@v4
         with:
-          name: Mona-macOS-App
-          path: src-tauri/target/universal-apple-darwin/release/bundle/macos/*.app
+          pattern: Mona-macOS-*
+          path: artifacts
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Upload and verify Qiniu files
+        env:
+          QINIU_AK: ${{ secrets.QINIU_AK }}
+          QINIU_SK: ${{ secrets.QINIU_SK }}
+          QINIU_BUCKET: ${{ secrets.QINIU_BUCKET }}
+          QINIU_DOMAIN: ${{ secrets.QINIU_DOMAIN }}
+        run: |
+          test -n "$QINIU_DOMAIN"
+          python -m pip install qiniu
+          version="$(python -c 'import tomllib; print(tomllib.load(open("pyproject.toml", "rb"))["project"]["version"])')"
+          found=0
+          while IFS= read -r dmg; do
+            found=1
+            object_key="macos/${version}/$(basename "$dmg")"
+            python .github/scripts/upload_qiniu_artifact.py --artifact "$dmg" --object-key "$object_key"
+            public_url="${QINIU_DOMAIN%/}/${object_key}"
+            downloaded="$RUNNER_TEMP/$(basename "$dmg")"
+            curl --fail --location --retry 3 --retry-delay 5 --output "$downloaded" "$public_url"
+            test "$(sha256sum "$dmg" | cut -d ' ' -f 1)" = "$(sha256sum "$downloaded" | cut -d ' ' -f 1)"
+            echo "- ${public_url}" >> "$GITHUB_STEP_SUMMARY"
+          done < <(find artifacts -type f -name '*.dmg' -print | sort)
+          test "$found" = 1
