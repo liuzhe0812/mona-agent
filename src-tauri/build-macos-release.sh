@@ -53,6 +53,11 @@ PY
 
 signing_identity="${APPLE_SIGNING_IDENTITY:--}"
 
+# Tauri 只判断这些变量是否存在，空值同样会触发公证，因此 ad-hoc 构建必须移除它们。
+if [[ "$signing_identity" == "-" ]]; then
+  unset APPLE_ID APPLE_PASSWORD APPLE_TEAM_ID
+fi
+
 sign_file() {
   local path="$1"
   local args=(--force --sign "$signing_identity")
