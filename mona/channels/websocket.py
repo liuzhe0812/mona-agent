@@ -43,18 +43,20 @@ from mona.session.goal_state import goal_state_ws_blob
 from mona.session.task_plan import reset_task_plan, task_plan_ws_blob
 from mona.session.webui_turns import websocket_turn_wall_started_at
 from mona.utils.helpers import safe_filename
-from mona.utils.media_decode import (
-    FileSizeExceeded,
-    save_base64_data_url,
-)
+from mona.utils.media_cleanup import MediaCleanupState, cleanup_duplicate_websocket_media
+from mona.utils.media_decode import FileSizeExceeded
+from mona.utils.media_store import stage_media_file, store_media_bytes
 from mona.utils.subagent_channel_display import scrub_subagent_messages_for_channel
 from mona.webui.settings_api import (
     WebUISettingsError,
     probe_provider_model_details,
     settings_payload,
     update_agent_settings,
+    update_browser_settings,
     update_channel_settings,
+    update_computer_use_settings,
     update_image_generation_settings,
+    update_jev_settings,
     update_provider_settings,
     update_stock_settings,
     update_tts_settings,
@@ -189,7 +191,7 @@ def _http_json_response(data: dict[str, Any], *, status: int = 200) -> Response:
             ("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS"),
             (
                 "Access-Control-Allow-Headers",
-                "Content-Type, Authorization, X-Mona-Provider-Key",
+                "Content-Type, Authorization, X-Mona-Provider-Key, X-Mona-Jev-Key",
             ),
         ]
     )
@@ -453,7 +455,7 @@ def _http_response(
         ("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS"),
         (
             "Access-Control-Allow-Headers",
-            "Content-Type, Authorization, X-Mona-Provider-Key",
+            "Content-Type, Authorization, X-Mona-Provider-Key, X-Mona-Jev-Key",
         ),
     ]
     if extra_headers:
@@ -590,6 +592,8 @@ class WebSocketChannel(BaseChannel):
         self._stop_event: asyncio.Event | None = None
         self._server_task: asyncio.Task[None] | None = None
         self._artifact_watch_task: asyncio.Task[None] | None = None
+        self._media_cleanup_task: asyncio.Task[None] | None = None
+        self._media_cleanup_state = MediaCleanupState()
         self._session_manager = session_manager
         from mona.config.paths import get_workspace_path
 
@@ -920,6 +924,15 @@ class WebSocketChannel(BaseChannel):
 
         if got == "/api/settings/provider/models":
             return await self._handle_settings_provider_models(request)
+
+        if got == "/api/settings/jev/update":
+            return self._handle_settings_jev_update(request)
+
+        if got == "/api/settings/browser/update":
+            return self._handle_settings_browser_update(request)
+
+        if got == "/api/settings/computer-use/update":
+            return self._handle_settings_computer_use_update(request)
 
         if got == "/api/settings/web-search/update":
             return self._handle_settings_web_search_update(request)
@@ -1579,6 +1592,45 @@ class WebSocketChannel(BaseChannel):
             return _http_error(e.status, e.message)
         return _http_json_response(self._with_settings_restart_state(payload, section="providers"))
 
+    def _handle_settings_jev_update(self, request: WsRequest) -> Response:
+        if not self._check_api_token(request):
+            return _http_error(401, "Unauthorized")
+        query = _parse_query(request.path)
+        api_key = request.headers.get("X-Mona-Jev-Key")
+        if api_key is not None:
+            query["api_key"] = [api_key]
+        try:
+            payload = update_jev_settings(query)
+        except WebUISettingsError as e:
+            return _http_error(e.status, e.message)
+        return _http_json_response(
+            self._with_settings_restart_state(payload, section="providers")
+        )
+
+    def _handle_settings_browser_update(self, request: WsRequest) -> Response:
+        if not self._check_api_token(request):
+            return _http_error(401, "Unauthorized")
+        query = _parse_query(request.path)
+        try:
+            payload = update_browser_settings(query)
+        except WebUISettingsError as e:
+            return _http_error(e.status, e.message)
+        return _http_json_response(
+            self._with_settings_restart_state(payload, section="runtime")
+        )
+
+    def _handle_settings_computer_use_update(self, request: WsRequest) -> Response:
+        if not self._check_api_token(request):
+            return _http_error(401, "Unauthorized")
+        query = _parse_query(request.path)
+        try:
+            payload = update_computer_use_settings(query)
+        except WebUISettingsError as e:
+            return _http_error(e.status, e.message)
+        return _http_json_response(
+            self._with_settings_restart_state(payload, section="runtime")
+        )
+
     async def _handle_settings_provider_models(self, request: WsRequest) -> Response:
         if not self._check_api_token(request):
             return _http_error(401, "Unauthorized")
@@ -2078,6 +2130,8 @@ class WebSocketChannel(BaseChannel):
         try:
             media_root = get_media_dir().resolve()
             rel = abs_path.resolve().relative_to(media_root)
+            if state := getattr(self, "_media_cleanup_state", None):
+                state.protect(abs_path)
         except (OSError, ValueError):
             return None
         payload = _b64url_encode(rel.as_posix().encode("utf-8"))
@@ -2100,9 +2154,7 @@ class WebSocketChannel(BaseChannel):
             if not path.is_file():
                 return None
             media_dir = get_media_dir("websocket")
-            safe_name = safe_filename(path.name) or "attachment"
-            staged = media_dir / f"{uuid.uuid4().hex[:12]}-{safe_name}"
-            shutil.copyfile(path, staged)
+            staged = stage_media_file(path, media_dir)
         except OSError as exc:
             self.logger.warning("failed to stage outbound media {}: {}", path, exc)
             return None
@@ -2137,6 +2189,8 @@ class WebSocketChannel(BaseChannel):
             media_root = get_media_dir().resolve()
             candidate = (media_root / rel_str).resolve()
             candidate.relative_to(media_root)
+            if state := getattr(self, "_media_cleanup_state", None):
+                state.protect(candidate)
         except (OSError, ValueError):
             return _http_error(404, "not found")
         if not candidate.is_file():
@@ -3119,6 +3173,22 @@ class WebSocketChannel(BaseChannel):
             self._take_issued_token_if_valid(supplied)
         return None
 
+    async def _cleanup_duplicate_media(self) -> None:
+        if self._session_manager is not None:
+            try:
+                await asyncio.to_thread(
+                    cleanup_duplicate_websocket_media,
+                    get_media_dir("websocket"),
+                    [
+                        get_data_dir() / "webui",
+                        self._session_manager.sessions_dir,
+                        self._session_manager.legacy_sessions_dir,
+                    ],
+                    self._media_cleanup_state,
+                )
+            except (OSError, ValueError) as exc:
+                self.logger.warning("WebSocket duplicate media cleanup skipped: {}", exc)
+
     async def start(self) -> None:
         from mona.utils.logging_bridge import redirect_lib_logging
 
@@ -3126,6 +3196,7 @@ class WebSocketChannel(BaseChannel):
 
         self._running = True
         self._stop_event = asyncio.Event()
+        self._media_cleanup_state.stopped.clear()
 
         ssl_context = self._build_ssl_context()
         scheme = "wss" if ssl_context else "ws"
@@ -3166,6 +3237,7 @@ class WebSocketChannel(BaseChannel):
                         _normalize_config_path(self.config.token_issue_path),
                     )
                 assert self._stop_event is not None
+                self._media_cleanup_task = asyncio.create_task(self._cleanup_duplicate_media())
                 await self._stop_event.wait()
 
         self._server_task = asyncio.create_task(runner())
@@ -3282,8 +3354,8 @@ class WebSocketChannel(BaseChannel):
         Returns ``(paths, None)`` on success or ``([], reason)`` on the first
         failure — the caller is expected to surface ``reason`` to the client
         and skip publishing so no half-formed message ever reaches the agent.
-        On failure, any files already written to disk earlier in the same
-        call are unlinked so partial ingress doesn't leak orphan files.
+        Validate the entire batch before writing. Content-addressed files are
+        shared by messages, so failed requests must never unlink reused media.
         ``reason`` is a short, stable token suitable for UI localization.
 
         Shape: ``list[{"data_url": str, "name"?: str | None}]``.
@@ -3304,43 +3376,37 @@ class WebSocketChannel(BaseChannel):
             return [], "too_many_videos"
 
         media_dir = get_media_dir("websocket")
-        paths: list[str] = []
-
-        def _abort(reason: str) -> tuple[list[str], str]:
-            for p in paths:
-                try:
-                    Path(p).unlink(missing_ok=True)
-                except OSError as exc:
-                    self.logger.warning("failed to unlink partial media {}: {}", p, exc)
-            return [], reason
-
+        decoded: list[tuple[bytes, str]] = []
         for item in media:
             if not isinstance(item, dict):
-                return _abort("malformed")
+                return [], "malformed"
             data_url = item.get("data_url")
             if not isinstance(data_url, str) or not data_url:
-                return _abort("malformed")
+                return [], "malformed"
             mime = _extract_data_url_mime(data_url)
             if mime is None:
-                return _abort("decode")
+                return [], "decode"
             if mime not in _UPLOAD_MIME_ALLOWED:
-                return _abort("mime")
+                return [], "mime"
             is_video = mime in _VIDEO_MIME_ALLOWED
             max_bytes = _MAX_VIDEO_BYTES if is_video else _MAX_IMAGE_BYTES
             try:
-                saved = save_base64_data_url(
-                    data_url,
-                    media_dir,
-                    max_bytes=max_bytes,
-                )
+                raw = _decode_data_url_payload(data_url, max_bytes)
             except FileSizeExceeded:
-                return _abort("size")
+                return [], "size"
             except Exception as exc:
                 self.logger.warning("media decode failed: {}", exc)
-                return _abort("decode")
-            if saved is None:
-                return _abort("decode")
-            paths.append(saved)
+                return [], "decode"
+            if raw is None:
+                return [], "decode"
+            decoded.append((raw, mimetypes.guess_extension(mime) or ".bin"))
+        paths: list[str] = []
+        try:
+            for raw, suffix in decoded:
+                paths.append(str(store_media_bytes(raw, media_dir, suffix)))
+        except OSError as exc:
+            self.logger.warning("media persistence failed: {}", exc)
+            return [], "decode"
         return paths, None
 
 
@@ -6372,6 +6438,7 @@ class WebSocketChannel(BaseChannel):
         if not self._running:
             return
         self._running = False
+        self._media_cleanup_state.stopped.set()
         if self._stop_event:
             self._stop_event.set()
         if self._server_task:
@@ -6380,6 +6447,9 @@ class WebSocketChannel(BaseChannel):
             except Exception as e:
                 self.logger.warning("server task error during shutdown: {}", e)
             self._server_task = None
+        if self._media_cleanup_task:
+            await self._media_cleanup_task
+            self._media_cleanup_task = None
         if self._artifact_watch_task:
             self._artifact_watch_task.cancel()
             try:

@@ -30,6 +30,7 @@ from mona.channels.websocket import (
 )
 from mona.config.loader import load_config, save_config
 from mona.config.schema import Config, ModelPresetConfig
+from mona.webui import settings_api
 from mona.webui.settings_api import settings_payload
 
 # -- Shared helpers (aligned with test_websocket_integration.py) ---------------
@@ -67,6 +68,92 @@ async def test_channel_does_not_serve_frontend(bus: MagicMock, path: str) -> Non
     response = await channel._dispatch_http(MagicMock(), Request(path, Headers()))
     assert response.status_code == 404
     assert response.body == b"Not Found"
+
+
+@pytest.mark.asyncio
+async def test_jev_and_browser_settings_routes_preserve_secret_header(
+    bus: MagicMock,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from websockets.datastructures import Headers
+    from websockets.http11 import Request
+
+    channel = _ch(bus)
+    channel._api_tokens["tok"] = time.monotonic() + 300
+    jev_update = MagicMock(return_value={"requires_restart": True})
+    browser_update = MagicMock(return_value={"requires_restart": True})
+    computer_update = MagicMock(return_value={"requires_restart": True})
+    monkeypatch.setattr("mona.channels.websocket.update_jev_settings", jev_update)
+    monkeypatch.setattr("mona.channels.websocket.update_browser_settings", browser_update)
+    monkeypatch.setattr(
+        "mona.channels.websocket.update_computer_use_settings", computer_update
+    )
+    headers = Headers(
+        {
+            "Authorization": "Bearer tok",
+            "X-Mona-Jev-Key": "secret-key",
+        }
+    )
+
+    jev_response = await channel._dispatch_http(
+        MagicMock(),
+        Request("/api/settings/jev/update?model=jev-latest", headers),
+    )
+    browser_response = await channel._dispatch_http(
+        MagicMock(),
+        Request("/api/settings/browser/update?use_jev=true", headers),
+    )
+    computer_response = await channel._dispatch_http(
+        MagicMock(),
+        Request("/api/settings/computer-use/update?use_decision_model=true", headers),
+    )
+
+    assert jev_response.status_code == 200
+    assert browser_response.status_code == 200
+    assert computer_response.status_code == 200
+    assert jev_update.call_args.args[0]["api_key"] == ["secret-key"]
+    assert browser_update.call_args.args[0]["use_jev"] == ["true"]
+    assert computer_update.call_args.args[0]["use_decision_model"] == ["true"]
+
+
+def test_computer_use_settings_persist_decision_and_vision_options(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    config_path = tmp_path / "config.json"
+    config = Config()
+    config.tools.jev.api_key = "jev-secret"
+    save_config(config, config_path)
+    monkeypatch.setattr("mona.config.loader._current_config_path", config_path)
+    monkeypatch.setattr(
+        settings_api,
+        "_computer_use_model_options",
+        lambda _config: [
+            {"value": "", "label": "跟随当前模型"},
+            {"value": "qwen3.7-plus", "label": "Mona AI · qwen3.7-plus"},
+        ],
+    )
+    monkeypatch.setattr(
+        settings_api,
+        "settings_payload",
+        lambda **_kwargs: {"computer_use": {"use_decision_model": True}},
+    )
+
+    result = settings_api.update_computer_use_settings(
+        {
+            "use_decision_model": ["true"],
+            "vision_model_preset": ["qwen3.7-plus"],
+            "max_steps": ["32"],
+            "max_duration_seconds": ["180"],
+        }
+    )
+
+    assert result["computer_use"]["use_decision_model"] is True
+    saved = load_config(config_path)
+    assert saved.tools.computer_use.use_decision_model is True
+    assert saved.tools.computer_use.vision_model_preset == "qwen3.7-plus"
+    assert saved.tools.computer_use.max_steps == 32
+    assert saved.tools.computer_use.max_duration_seconds == 180
 
 
 async def _http_get(url: str, headers: dict[str, str] | None = None) -> httpx.Response:
@@ -719,7 +806,10 @@ async def test_send_stages_external_media_as_signed_url(monkeypatch, tmp_path) -
     assert payload["media"] == [str(external)]
     assert payload["media_urls"][0]["name"] == "clip.mp4"
     assert payload["media_urls"][0]["url"].startswith("/api/media/")
-    assert any(p.name.endswith("-clip.mp4") for p in ws_media.iterdir())
+    staged = list(ws_media.iterdir())
+    assert len(staged) == 1
+    assert staged[0].suffix == ".mp4"
+    assert staged[0].read_bytes() == external.read_bytes()
 
 
 @pytest.mark.asyncio
