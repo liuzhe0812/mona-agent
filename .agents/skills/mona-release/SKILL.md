@@ -57,7 +57,7 @@ description: Build, validate, and publish Mona Desktop Windows and macOS release
 - 核对内置 Skill 的按路径执行脚本已作为真实文件进入 Gateway，至少覆盖 PPT 导出、PDF helpers、Office helpers、技能创建和视频脚本及子模块。不能仅检查 Python import 是否成功；普通模块源码、测试、缓存和开发依赖不要随之全量拷入。
 - Tauri 的 `beforeBuildCommand` 已运行 WebUI `build:tauri`，包括 Office 前端，不无理由重复完整构建。另行检查 `resources/office-editor/` 的清单、sidecar 平台/架构、大小及 SHA；前端构建不代表这些外置资源已生成。按需下载运行时不塞入安装包。
 - 使用已核对的 `src-tauri/build-windows-release.ps1` 构建 NSIS，再对最终安装包生成并真实验证 Ed25519 `.exe.sig`。Office sidecar 不做 Authenticode 变异，manifest 大小与 SHA 必须在打包前精确匹配。构建必须显式仅 NSIS，避免额外 MSI/WiX。
-- 使用独立 staging，把同次构建且已签名的 `mona-desktop.exe` 复制为根级 `Mona.exe`，把同一份已签名 Gateway 复制为根级 `mona-gateway/`。不重命名原始构建产物。
+- 使用独立 staging，把同次构建的 `mona-desktop.exe` 复制为根级 `Mona.exe`，把安装包内同一份 Gateway 复制为根级 `mona-gateway/`。Windows 免费签名覆盖最终 NSIS 安装包，不意味着主程序或 Gateway 获得 Authenticode 签名。不重命名原始构建产物。
 
 ### macOS 构建与发布
 

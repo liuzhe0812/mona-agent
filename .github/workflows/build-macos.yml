@@ -120,6 +120,20 @@ jobs:
           xcrun stapler validate "$dmg"
           spctl --assess --type open --context context:primary-signature -vv "$dmg"
 
+      - name: Record release metadata
+        env:
+          SIGNING_MODE: ${{ inputs.publish == 'notarized' && 'notarized' || 'ad-hoc' }}
+        run: |
+          python - <<'PY'
+          import hashlib, json, os, tomllib
+          from pathlib import Path
+          version = tomllib.loads(Path("pyproject.toml").read_text())["project"]["version"]
+          root = Path("dist/macos/arm64")
+          dmg = root / f"Mona_{version}_arm64.dmg"
+          metadata = {"version": version, "git_hash": os.environ["GITHUB_SHA"], "platform": "macos", "arch": "arm64", "signing": os.environ["SIGNING_MODE"], "file": dmg.name, "size": dmg.stat().st_size, "sha256": hashlib.sha256(dmg.read_bytes()).hexdigest()}
+          (root / "release-metadata.json").write_text(json.dumps(metadata, indent=2) + "\n")
+          PY
+
       - name: Upload GitHub artifact
         uses: actions/upload-artifact@v4
         with:
