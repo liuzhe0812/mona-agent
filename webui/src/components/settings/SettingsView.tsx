@@ -97,6 +97,9 @@ import {
   startWeixinLogin,
   updateChannelSettings,
   updateImageGenerationSettings,
+  updateComputerUseSettings,
+  updateBrowserSettings,
+  updateJevSettings,
   updateProviderSettings,
   updateSettings,
   updateTtsSettings,
@@ -683,6 +686,18 @@ export function SettingsView({
                 onReset={resetWebSearchDraft}
                 onSave={saveWebSearch}
               />
+              <BrowserJevSettings
+                settings={settings}
+                token={token}
+                onSettingsChanged={(payload) => {
+                  applyPayload(payload);
+                  if (payload.requires_restart) {
+                    setPendingRestartSections((prev) => ({ ...prev, runtime: true }));
+                  }
+                }}
+                onRestart={onRestart}
+                isRestarting={isRestarting}
+              />
               <RuntimeSettings
                 form={form}
                 setForm={setForm}
@@ -707,7 +722,23 @@ export function SettingsView({
       return <UsageSettings />;
     }
     if (activeSection === "resources") {
-      return <ManagedRuntimeSettings token={token} />;
+      return (
+        <div className="space-y-10">
+          <ManagedRuntimeSettings token={token} />
+          {settings ? (
+            <ComputerUseSettings
+              settings={settings}
+              token={token}
+              onSettingsChanged={(payload) => {
+                applyPayload(payload);
+                if (payload.requires_restart) {
+                  setPendingRestartSections((prev) => ({ ...prev, runtime: true }));
+                }
+              }}
+            />
+          ) : null}
+        </div>
+      );
     }
     if (!settings) return null;
     switch (activeSection) {
@@ -1232,6 +1263,269 @@ function SidebarModulesSettings() {
   );
 }
 
+function JevConnectionSettings({
+  settings,
+  token,
+  onSettingsChanged,
+  onRestart,
+  isRestarting = false,
+}: {
+  settings: SettingsPayload;
+  token: string;
+  onSettingsChanged: (payload: SettingsPayload) => void;
+  onRestart?: () => void;
+  isRestarting?: boolean;
+}) {
+  const [apiKey, setApiKey] = useState("");
+  const [apiBase, setApiBase] = useState(settings.jev.api_base);
+  const [model, setModel] = useState(settings.jev.model);
+  const [timeoutSeconds, setTimeoutSeconds] = useState(settings.jev.timeout_seconds);
+  const [keyVisible, setKeyVisible] = useState(false);
+  const [saving, setSaving] = useState(false);
+  const [message, setMessage] = useState<string | null>(null);
+
+  useEffect(() => {
+    setApiBase(settings.jev.api_base);
+    setModel(settings.jev.model);
+    setTimeoutSeconds(settings.jev.timeout_seconds);
+  }, [settings.jev.api_base, settings.jev.model, settings.jev.timeout_seconds]);
+
+  const dirty = Boolean(apiKey.trim())
+    || apiBase.trim() !== settings.jev.api_base
+    || model.trim() !== settings.jev.model
+    || timeoutSeconds !== settings.jev.timeout_seconds;
+
+  const save = async () => {
+    setSaving(true);
+    setMessage(null);
+    try {
+      const payload = await updateJevSettings(token, {
+        apiKey: apiKey.trim() || undefined,
+        apiBase: apiBase.trim(),
+        model: model.trim(),
+        timeoutSeconds,
+      });
+      setApiKey("");
+      onSettingsChanged(payload);
+      setMessage("已保存，重启后应用到浏览器执行器");
+    } catch (err) {
+      setMessage(err instanceof Error ? err.message : "保存决策模型配置失败");
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const clearKey = async () => {
+    setSaving(true);
+    setMessage(null);
+    try {
+      const payload = await updateJevSettings(token, { clearKey: true });
+      setApiKey("");
+      onSettingsChanged(payload);
+      setMessage("已移除决策模型凭据，并关闭浏览器加速");
+    } catch (err) {
+      setMessage(err instanceof Error ? err.message : "移除决策模型凭据失败");
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  return (
+    <form className="min-w-0 space-y-4" onSubmit={(event) => { event.preventDefault(); void save(); }}>
+      <p className="text-caption text-muted-foreground">
+        {settings.jev.configured ? `已配置 ${settings.jev.api_key_hint ?? ""}` : "尚未配置连接"}
+      </p>
+      <fieldset disabled={saving} className="min-w-0 space-y-4">
+        <div className="space-y-1.5">
+          <label htmlFor="jev-api-key" className="text-caption font-medium">API Key</label>
+          <div className="flex min-w-0 items-center gap-2">
+            <Input
+              id="jev-api-key"
+              type={keyVisible ? "text" : "password"}
+              value={apiKey}
+              onChange={(event) => setApiKey(event.target.value)}
+              placeholder={settings.jev.configured ? "留空保持当前凭据" : "输入 API Key"}
+              autoComplete="new-password"
+              className="h-9 min-w-0 flex-1"
+            />
+            <Button type="button" variant="ghost" size="icon" className="shrink-0" aria-label={keyVisible ? "隐藏密钥" : "显示密钥"} onClick={() => setKeyVisible((value) => !value)}>
+              {keyVisible ? <EyeOff className="h-3.5 w-3.5" /> : <Eye className="h-3.5 w-3.5" />}
+            </Button>
+          </div>
+          <p className="text-caption text-muted-foreground">凭据保存在本地；留空保持当前凭据。</p>
+        </div>
+        <div className="space-y-1.5">
+          <label htmlFor="jev-api-base" className="text-caption font-medium">API Base</label>
+          <Input id="jev-api-base" value={apiBase} onChange={(event) => setApiBase(event.target.value)} className="h-9" required />
+        </div>
+        <div className="grid min-w-0 gap-4 sm:grid-cols-2">
+          <div className="min-w-0 space-y-1.5">
+            <label htmlFor="jev-model" className="text-caption font-medium">模型</label>
+            <Input id="jev-model" value={model} onChange={(event) => setModel(event.target.value)} className="h-9" required />
+          </div>
+          <div className="min-w-0 space-y-1.5">
+            <label htmlFor="jev-timeout" className="text-caption font-medium">单次请求超时</label>
+            <div className="flex items-center gap-2">
+              <Input
+                id="jev-timeout"
+                type="number"
+                min={1}
+                max={60}
+                value={timeoutSeconds}
+                onChange={(event) => setTimeoutSeconds(Number(event.target.value))}
+                step="any"
+                required
+                className="h-9 min-w-0 flex-1"
+              />
+              <span className="text-caption text-muted-foreground">秒</span>
+            </div>
+          </div>
+        </div>
+      </fieldset>
+      {message ? <p role="status" className="text-caption text-muted-foreground">{message}</p> : null}
+      <div className="flex flex-wrap items-center justify-end gap-2 border-t border-border pt-4">
+        {settings.jev.configured ? <Button type="button" variant="ghost" size="sm" onClick={() => void clearKey()} disabled={saving}>移除凭据</Button> : null}
+        <Button type="submit" size="sm" disabled={saving || !dirty || !apiBase.trim() || !model.trim()}>
+          {saving ? <Loader2 className="mr-1.5 h-3.5 w-3.5 animate-spin" /> : null}
+          保存决策模型配置
+        </Button>
+        {settings.requires_restart && onRestart ? (
+          <Button type="button" variant="outline" size="sm" onClick={onRestart} disabled={isRestarting}>
+            {isRestarting ? <Loader2 className="mr-1.5 h-3.5 w-3.5 animate-spin" /> : null}
+            重启应用
+          </Button>
+        ) : null}
+      </div>
+    </form>
+  );
+}
+
+function BrowserJevSettings({
+  settings,
+  token,
+  onSettingsChanged,
+  onRestart,
+  isRestarting = false,
+}: {
+  settings: SettingsPayload;
+  token: string;
+  onSettingsChanged: (payload: SettingsPayload) => void;
+  onRestart?: () => void;
+  isRestarting?: boolean;
+}) {
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  const toggle = async (useJev: boolean) => {
+    setSaving(true);
+    setError(null);
+    try {
+      onSettingsChanged(await updateBrowserSettings(token, { useJev }));
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "更新浏览器设置失败");
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  return (
+    <section>
+      <SubsectionLabel className="mb-2 px-1">浏览器</SubsectionLabel>
+      <SettingsGroup>
+        <SettingsRow
+          title="使用决策模型加速操作"
+          description="开启后，常规点击和填表可连续执行；关闭或未配置时保持当前主模型操作方式。"
+        >
+          <Switch
+            checked={settings.browser.use_jev}
+            disabled={saving || !settings.browser.jev_ready}
+            onCheckedChange={(checked) => void toggle(checked)}
+            aria-label="使用决策模型加速浏览器操作"
+          />
+        </SettingsRow>
+        {!settings.browser.jev_ready ? (
+          <SettingsRow title="状态">
+            <span className="text-caption text-muted-foreground">请先在模型设置中配置决策模型</span>
+          </SettingsRow>
+        ) : null}
+      </SettingsGroup>
+      {error ? <p className="mt-2 px-1 text-caption text-destructive">{error}</p> : null}
+      {settings.browser.use_jev && settings.requires_restart && onRestart ? (
+        <div className="mt-3 flex justify-end px-1">
+          <Button type="button" variant="outline" size="sm" onClick={onRestart} disabled={isRestarting}>
+            {isRestarting ? <Loader2 className="mr-1.5 h-3.5 w-3.5 animate-spin" /> : null}
+            重启后启用
+          </Button>
+        </div>
+      ) : null}
+    </section>
+  );
+}
+
+function ComputerUseSettings({
+  settings,
+  token,
+  onSettingsChanged,
+}: {
+  settings: SettingsPayload;
+  token: string;
+  onSettingsChanged: (payload: SettingsPayload) => void;
+}) {
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const options = settings.computer_use.vision_model_options;
+
+  const update = async (patch: Parameters<typeof updateComputerUseSettings>[1]) => {
+    setSaving(true);
+    setError(null);
+    try {
+      onSettingsChanged(await updateComputerUseSettings(token, patch));
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : "更新电脑操作设置失败");
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  return (
+    <section>
+      <SubsectionLabel className="mb-2 px-1">电脑操作</SubsectionLabel>
+      <SettingsGroup>
+        <SettingsRow
+          title="使用决策模型加速"
+          description="开启后，电脑操作可使用决策模型减少主模型往返；Agent 工具授权仍单独控制。"
+        >
+          <Switch
+            checked={settings.computer_use.use_decision_model}
+            disabled={saving || !settings.computer_use.decision_model_ready}
+            onCheckedChange={(checked) => void update({ useDecisionModel: checked })}
+            aria-label="使用决策模型加速电脑操作"
+          />
+        </SettingsRow>
+        <SettingsRow
+          title="视觉识别模型"
+          description="默认跟随当前模型；可选择已启用且支持图像识别的模型。"
+        >
+          <Select
+            aria-label="视觉识别模型"
+            value={settings.computer_use.vision_model_preset ?? ""}
+            options={options}
+            disabled={saving || options.length === 0}
+            onValueChange={(value) => void update({ visionModelPreset: value || null })}
+            className="min-w-52"
+          />
+        </SettingsRow>
+        {!settings.computer_use.decision_model_ready ? (
+          <SettingsRow title="状态">
+            <span className="text-caption text-muted-foreground">请先配置决策模型</span>
+          </SettingsRow>
+        ) : null}
+      </SettingsGroup>
+      {error ? <p role="status" className="mt-2 px-1 text-caption text-destructive">{error}</p> : null}
+    </section>
+  );
+}
+
 function AiModelsSettings({
   settings,
   token,
@@ -1321,7 +1615,7 @@ function AiModelsSettings({
   onRestart?: () => void;
   isRestarting?: boolean;
 }) {
-  const [mediaSettings, setMediaSettings] = useState<"image" | "video" | "tts" | null>(null);
+  const [mediaSettings, setMediaSettings] = useState<"image" | "video" | "tts" | "jev" | null>(null);
 
   const openImageSettings = (provider: string, model?: string) => {
     onImageFormChange((current) => {
@@ -1373,14 +1667,17 @@ function AiModelsSettings({
         onOpenImageSettings={openImageSettings}
         onOpenVideoSettings={openVideoSettings}
         onOpenTtsSettings={() => setMediaSettings("tts")}
+        onOpenJevSettings={() => setMediaSettings("jev")}
       />
 
       <Dialog open={mediaSettings !== null} onOpenChange={(open) => !open && setMediaSettings(null)}>
-        <DialogContent className="max-h-[85vh] max-w-3xl overflow-y-auto">
+        <DialogContent className={cn("max-h-[85vh] overflow-y-auto", mediaSettings === "jev" ? "relative max-w-lg" : "max-w-3xl")}>
           <DialogHeader>
-            <DialogTitle>{mediaSettings === "image" ? "图像模型配置" : mediaSettings === "video" ? "视频模型配置" : "语音合成配置"}</DialogTitle>
+            <DialogTitle>{mediaSettings === "image" ? "图像模型配置" : mediaSettings === "video" ? "视频模型配置" : mediaSettings === "jev" ? "决策模型配置" : "语音合成配置"}</DialogTitle>
             <DialogDescription>
-              配置专用生成模型及默认参数；保存后由对应生成工具读取，不会进入聊天模型选择器。
+              {mediaSettings === "jev"
+                ? "各模块共用此连接。配置后，在通用设置的浏览器选项中开启浏览器加速。"
+                : "配置专用生成模型及默认参数；保存后由对应生成工具读取，不会进入聊天模型选择器。"}
             </DialogDescription>
           </DialogHeader>
           {mediaSettings === "image" ? (
@@ -1418,6 +1715,14 @@ function AiModelsSettings({
               onApiKeyDraftChange={onVideoApiKeyDraftChange}
               keyVisible={videoKeyVisible}
               onToggleKeyVisible={onToggleVideoKeyVisible}
+            />
+          ) : mediaSettings === "jev" ? (
+            <JevConnectionSettings
+              settings={settings}
+              token={token}
+              onSettingsChanged={onSettingsChanged}
+              onRestart={onRestart}
+              isRestarting={isRestarting}
             />
           ) : mediaSettings === "tts" ? (
             <TtsSettings

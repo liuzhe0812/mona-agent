@@ -95,6 +95,7 @@ interface ChatProvidersSettingsProps {
   onOpenImageSettings?: (provider: string, model?: string) => void;
   onOpenVideoSettings?: (provider: string, model?: string) => void;
   onOpenTtsSettings?: () => void;
+  onOpenJevSettings?: () => void;
 }
 
 function providerInitials(label: string): string {
@@ -170,6 +171,7 @@ export function ChatProvidersSettings({
   onOpenImageSettings,
   onOpenVideoSettings,
   onOpenTtsSettings,
+  onOpenJevSettings,
 }: ChatProvidersSettingsProps) {
   const { licenseInfo } = useLicense();
   const providers = settings.chat_providers ?? [];
@@ -739,13 +741,14 @@ export function ChatProvidersSettings({
 
   return (
     <div className="space-y-3">
-      <div className="flex items-center justify-between gap-3">
+      <div className="flex flex-wrap items-center justify-between gap-3">
         <div>
           <h2 className="text-title-md font-semibold">模型供应商</h2>
           <p className="text-caption text-muted-foreground">管理模型来源、对话显示和图片/视频默认模型</p>
         </div>
-        <div className="flex items-center gap-2">
+        <div className="flex flex-wrap items-center gap-2">
           {error ? <span className="text-caption text-destructive">{error}</span> : null}
+          {onOpenJevSettings ? <Button type="button" variant="ghost" size="sm" className="rounded-full" onClick={onOpenJevSettings}>决策模型</Button> : null}
           {onOpenTtsSettings ? <Button type="button" variant="ghost" size="sm" className="rounded-full" onClick={onOpenTtsSettings}>语音合成</Button> : null}
         </div>
       </div>

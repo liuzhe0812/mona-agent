@@ -85,8 +85,8 @@ export type OfficeInspectQuery =
   | { mode: "summary" }
   | { mode: "selection" }
   | { mode: "review" }
-  | { mode: "visual"; pageIndex?: number; slideId?: string; elementIds?: string[]; region?: { x: number; y: number; width: number; height: number }; padding?: number; acceptWarnings?: boolean; reviewReason?: string }
-  | { mode: "capabilities"; documentType?: OfficeDocumentType; elementType?: string; operations?: string[] }
+  | { mode: "visual"; slideIds?: string[]; columns?: number; pageIndex?: number; slideId?: string; elementIds?: string[]; region?: { x: number; y: number; width: number; height: number }; padding?: number; acceptWarnings?: boolean; reviewReason?: string; presetId?: string; presetContent?: Record<string, unknown>; presetContentRef?: string }
+  | { mode: "capabilities"; documentType?: OfficeDocumentType; elementType?: string; operations?: string[]; presetContent?: Record<string, unknown>; presetRole?: string; presetRelation?: "none" | "parallel" | "sequence" | "hierarchy" | "matrix" | "cycle" | "network"; usedPresetIds?: string[]; presetLimit?: number; presetContentRef?: string; presetFamily?: string; presetTheme?: string }
   | { mode: "changed_since"; version: DocumentVersion }
   | { mode: "outline"; limit?: number }
   | { mode: "search"; text: string; limit?: number }
@@ -146,8 +146,8 @@ export interface SheetCell {
 
 export type SheetInspectResult =
   | { mode: "review"; documentType: OfficeDocumentType; pendingSlideIds?: string[]; pendingTargets?: string[]; warnings: string[] }
-  | { mode: "capabilities"; documentType: OfficeDocumentType; operations: Array<Record<string, unknown>> }
-  | { mode: "visual"; dataUrl: string; width: number; height: number; target: string; warnings: string[]; pendingVisualSlideIds?: string[]; pendingReviewTargets?: string[]; reviewReason?: string }
+  | { mode: "capabilities"; documentType: OfficeDocumentType; operations: Array<Record<string, unknown>>; designs?: Array<Record<string, unknown>> | null; presets?: Array<Record<string, unknown>> | null; contentRef?: string | null; presetRoles?: Array<Record<string, unknown>> | null; presetDiagnostics?: Array<Record<string, unknown>> | null }
+  | { mode: "visual"; overview?: boolean; slideIds?: string[]; dataUrl: string; width: number; height: number; target: string; warnings: string[]; pendingVisualSlideIds?: string[]; pendingReviewTargets?: string[]; reviewReason?: string }
   | { mode: "selection"; documentType: OfficeDocumentType; blockIds?: string[]; text?: string; sheet?: string | null; range?: string | null; slideId?: string | null; elementIds?: string[]; elements?: Array<Record<string, unknown>>; slideWidth?: number; slideHeight?: number }
   | {
       mode: "summary";
@@ -260,6 +260,7 @@ export type SheetOperation =
         | "slide_add_image"
         | "slide_add_svg"
         | "slide_compose"
+        | "slide_add_preset"
         | "slide_delete_element"
         | "slide_add"
         | "slide_duplicate"
@@ -283,6 +284,17 @@ export type OfficeCommandResult =
       createdElements?: Array<Record<string, unknown>>;
       createdSlides?: Array<{ id: string; index: number; width: number; height: number }>;
       updatedElements?: Array<Record<string, unknown>>;
+      presetPages?: Array<{
+        presetId?: string | null;
+        slideId?: string | null;
+        roles: string[];
+        elements: Record<string, string>;
+        pendingChartStyles: Array<{
+          role: string;
+          elementId: string | null;
+          style: Record<string, unknown>;
+        }>;
+      }>;
       warnings?: string[];
       pendingVisualSlideIds?: string[];
       pendingReviewTargets?: string[];

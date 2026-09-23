@@ -40,6 +40,15 @@ describe("detectConversationCanvasIntent", () => {
     expect(detectConversationCanvasIntent("退款审批流程图应该包含哪些节点？")).toBeNull();
     expect(detectConversationCanvasIntent("我们讨论一下架构图应该怎么画")).toBeNull();
   });
+
+  it("PPT 和配图请求不被改道成流程图", () => {
+    expect(detectConversationCanvasIntent(
+      "制作一个PPT介绍最近爆火的模型，页面信息密度高，图表展示相关数据，合理配图",
+    )).toBeNull();
+    expect(detectConversationCanvasIntent("做一个商业汇报 PPT，可视化展示经营数据")).toBeNull();
+    expect(detectConversationCanvasIntent("在 PowerPoint 里制作一页产品流程图")).toBeNull();
+    expect(detectConversationCanvasIntent("制作一个产品介绍，合理配图")).toBeNull();
+  });
 });
 
 describe("deriveConversationCanvasTitle", () => {

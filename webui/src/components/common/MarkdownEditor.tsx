@@ -114,6 +114,37 @@ export interface MarkdownEditorProps {
   isEmbedFlowchart?: (title: string) => boolean;
 }
 
+function escapePlainTextForEditor(text: string): string {
+  return text
+    .replaceAll("&", "&amp;")
+    .replaceAll("<", "&lt;")
+    .replaceAll(">", "&gt;")
+    .replaceAll('"', "&quot;")
+    .replaceAll("'", "&#39;")
+    .replace(/\r?\n/g, "<br>");
+}
+
+function looksLikeMarkdown(text: string): boolean {
+  return (
+    /(^|\n)\s{0,3}(#{1,6}\s|>\s|(?:[-+*]|\d+[.)])\s|```|~~~)/.test(text) ||
+    /(?:\*\*|__)[^\n]+(?:\*\*|__)|`[^`\n]+`|!?\[[^\]]+\]\([^)]+\)/.test(text) ||
+    /^\s*\|?.+\|.+\r?\n\s*\|?\s*:?-{3,}/m.test(text)
+  );
+}
+
+export function insertClipboardText(
+  editor: Editor,
+  text: string,
+  format: "markdown" | "plain",
+): void {
+  const chain = editor.chain().focus();
+  if (format === "markdown") {
+    chain.insertContent(text, { contentType: "markdown" }).run();
+    return;
+  }
+  chain.insertContent(escapePlainTextForEditor(text)).run();
+}
+
 // Custom Image extension that serializes `assets/xxx.png` from title/alt instead of data URL
 const NoteImage = TiptapImage.extend({
   addAttributes() {
@@ -683,16 +714,28 @@ export function MarkdownEditor({
       },
       handlePaste: (view, event) => {
         const items = event.clipboardData?.items;
-        if (!items) return false;
-        for (const item of items) {
-          if (item.type.startsWith("image/")) {
-            event.preventDefault();
-            const file = item.getAsFile();
-            if (file) insertImageFile(file, view);
-            return true;
+        if (items) {
+          for (const item of items) {
+            if (item.type.startsWith("image/")) {
+              event.preventDefault();
+              const file = item.getAsFile();
+              if (file) insertImageFile(file, view);
+              return true;
+            }
           }
         }
-        return false;
+
+        const markdownText = event.clipboardData?.getData("text/markdown") ?? "";
+        const plainText = event.clipboardData?.getData("text/plain") ?? "";
+        const htmlText = event.clipboardData?.getData("text/html") ?? "";
+        if (!markdownText && htmlText && !looksLikeMarkdown(plainText)) return false;
+
+        const text = markdownText || plainText;
+        const currentEditor = editorRef.current;
+        if (!text || !currentEditor) return false;
+        event.preventDefault();
+        insertClipboardText(currentEditor, text, "markdown");
+        return true;
       },
       handleDrop: (view, event, _slice, moved) => {
         if (moved) return false;
@@ -1439,7 +1482,7 @@ function EditorContextMenu({ editor, children, onMoveSelectionToNote }: { editor
     if (!editor) return;
     try {
       const text = await navigator.clipboard.readText();
-      editor.chain().focus().insertContent(text).run();
+      insertClipboardText(editor, text, "markdown");
     } catch {}
   };
 
@@ -1447,7 +1490,7 @@ function EditorContextMenu({ editor, children, onMoveSelectionToNote }: { editor
     if (!editor) return;
     try {
       const text = await navigator.clipboard.readText();
-      editor.chain().focus().insertContent(text).run();
+      insertClipboardText(editor, text, "plain");
     } catch {}
   };
 

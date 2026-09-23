@@ -921,6 +921,28 @@ export interface SettingsPayload {
       timeout: number;
     };
   };
+  jev: {
+    configured: boolean;
+    api_key_hint?: string | null;
+    api_base: string;
+    model: string;
+    timeout_seconds: number;
+  };
+  browser: {
+    use_jev: boolean;
+    jev_ready: boolean;
+  };
+  computer_use: {
+    use_decision_model: boolean;
+    vision_model_preset: string | null;
+    max_steps: number;
+    max_duration_seconds: number;
+    decision_model_ready: boolean;
+    vision_model_options: Array<{
+      value: string;
+      label: string;
+    }>;
+  };
   image_generation: {
     enabled: boolean;
     provider: string;
@@ -1073,6 +1095,25 @@ export interface ProviderSettingsUpdate {
     inputModalities?: string[] | null;
   }>;
   delete?: boolean;
+}
+
+export interface JevSettingsUpdate {
+  apiKey?: string;
+  apiBase?: string;
+  model?: string;
+  timeoutSeconds?: number;
+  clearKey?: boolean;
+}
+
+export interface BrowserSettingsUpdate {
+  useJev: boolean;
+}
+
+export interface ComputerUseSettingsUpdate {
+  useDecisionModel?: boolean;
+  visionModelPreset?: string | null;
+  maxSteps?: number;
+  maxDurationSeconds?: number;
 }
 
 export interface WebSearchSettingsUpdate {

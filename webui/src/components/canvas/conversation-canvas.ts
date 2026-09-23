@@ -42,16 +42,19 @@ const FLOWCHART_KIND_RE = /(?:流程图|架构图|系统图|拓扑图|泳道图|
 const MINDMAP_KIND_RE = /(?:思维导图|思维图|脑图|mind\s*map)/i;
 const CREATE_RE = /^(?:(?:你好[,，]?\s*)?(?:请|麻烦)?(?:帮我|给我)?\s*(?:画|绘制|创建|生成|制作|做|新建|整理|转换|draw|create|generate|make|visualize)|(?:把|将)[\s\S]{0,200}?(?:整理|转换|画)成)/i;
 const GENERIC_DIAGRAM_CREATE_RE = /(?:画|绘制|创建|生成|制作|做|新建)\s*(?:一个|一张|一份)?\s*([^,，。.!！?？:：\n]{2,60}图)(?=[\s,，。.!！?？:：]|$)/iu;
-const NON_DIAGRAM_RE = /(?:图片|图像|截图|地图|图标|封面图)$/u;
+const OFFICE_DELIVERABLE_RE = /(?:\bpptx?\b|power\s*point|幻灯片|演示文稿|\bdocx?\b|\bword\b|\bxlsx?\b|\bexcel\b)/i;
+const NON_DIAGRAM_RE = /(?:图片|图像|截图|地图|图标|封面图|配图|插图|图表)$/u;
 
 export function detectConversationCanvasIntent(content: string): ConversationCanvasIntent | null {
   const text = content.trim();
-  if (!text || !CREATE_RE.test(text)) return null;
+  if (!text || !CREATE_RE.test(text) || OFFICE_DELIVERABLE_RE.test(text)) return null;
   const genericDiagram = GENERIC_DIAGRAM_CREATE_RE.exec(text)?.[1]?.trim();
-  const kind = FLOWCHART_KIND_RE.test(text) || (genericDiagram && !NON_DIAGRAM_RE.test(genericDiagram))
-    ? "flowchart"
-    : MINDMAP_KIND_RE.test(text)
-      ? "mindmap"
+  const explicitFlowchart = FLOWCHART_KIND_RE.test(text);
+  const explicitMindmap = MINDMAP_KIND_RE.test(text);
+  const kind = explicitMindmap && !explicitFlowchart
+    ? "mindmap"
+    : explicitFlowchart || (genericDiagram && !NON_DIAGRAM_RE.test(genericDiagram))
+      ? "flowchart"
       : null;
   if (!kind) return null;
   return { kind, title: deriveConversationCanvasTitle(text, kind) };

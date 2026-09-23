@@ -6,6 +6,7 @@ import type {
   AgentSkillDetail,
   AgentSummary,
   AutomationStatus,
+  ComputerUseSettingsUpdate,
   ComputerUseStatus,
   ExpertCatalogPayload,
   ExpertInstallJob,
@@ -16,6 +17,8 @@ import type {
   ConversationMeta,
   DeliveredFile,
   ImageGenerationSettingsUpdate,
+  JevSettingsUpdate,
+  BrowserSettingsUpdate,
   MessageType,
   ProviderSettingsUpdate,
   SettingsPayload,
@@ -720,6 +723,65 @@ export async function updateProviderSettings(
     `${effectiveBase}/api/settings/provider/update?${query}`,
     token,
     headers ? { headers } : undefined,
+  );
+}
+
+export async function updateJevSettings(
+  token: string,
+  update: JevSettingsUpdate,
+  base?: string,
+): Promise<SettingsPayload> {
+  const effectiveBase = base ?? (await getApiBase());
+  const query = new URLSearchParams();
+  if (update.apiBase !== undefined) query.set("api_base", update.apiBase);
+  if (update.model !== undefined) query.set("model", update.model);
+  if (update.timeoutSeconds !== undefined) {
+    query.set("timeout_seconds", String(update.timeoutSeconds));
+  }
+  if (update.clearKey) query.set("clear_key", "true");
+  const headers =
+    update.apiKey === undefined ? undefined : { "X-Mona-Jev-Key": update.apiKey };
+  return request<SettingsPayload>(
+    `${effectiveBase}/api/settings/jev/update?${query}`,
+    token,
+    headers ? { headers } : undefined,
+  );
+}
+
+export async function updateBrowserSettings(
+  token: string,
+  update: BrowserSettingsUpdate,
+  base?: string,
+): Promise<SettingsPayload> {
+  const effectiveBase = base ?? (await getApiBase());
+  const query = new URLSearchParams();
+  query.set("use_jev", String(update.useJev));
+  return request<SettingsPayload>(
+    `${effectiveBase}/api/settings/browser/update?${query}`,
+    token,
+  );
+}
+
+export async function updateComputerUseSettings(
+  token: string,
+  update: ComputerUseSettingsUpdate,
+  base?: string,
+): Promise<SettingsPayload> {
+  const effectiveBase = base ?? (await getApiBase());
+  const query = new URLSearchParams();
+  if (update.useDecisionModel !== undefined) {
+    query.set("use_decision_model", String(update.useDecisionModel));
+  }
+  if (update.visionModelPreset !== undefined) {
+    query.set("vision_model_preset", update.visionModelPreset ?? "");
+  }
+  if (update.maxSteps !== undefined) query.set("max_steps", String(update.maxSteps));
+  if (update.maxDurationSeconds !== undefined) {
+    query.set("max_duration_seconds", String(update.maxDurationSeconds));
+  }
+  return request<SettingsPayload>(
+    `${effectiveBase}/api/settings/computer-use/update?${query}`,
+    token,
   );
 }
 
