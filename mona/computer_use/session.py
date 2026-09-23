@@ -22,6 +22,16 @@ class ComputerUseTurn:
     driver_label: str = field(default_factory=lambda: f"Mona-{uuid.uuid4().hex[:8]}")
     stopped: bool = False
     observation: dict | None = None
+    pending_action: dict | None = None
+    last_action_signature: str | None = None
+    consecutive_no_progress: int = 0
+    last_action_effect: dict | None = None
+    perception_cache: dict = field(default_factory=dict, repr=False)
+    decision_handoffs: set[str] = field(default_factory=set)
+    decision_running: bool = False
+    dispatch_guard: Any = field(default=None, repr=False)
+    progress: Any = field(default=None, repr=False)
+    model_response_timeout_seconds: float | None = None
     drivers: list[tuple[Any, str]] = field(default_factory=list, repr=False)
     close_task: asyncio.Task[None] | None = field(default=None, repr=False)
 
@@ -172,6 +182,9 @@ async def _close_and_release(turn: ComputerUseTurn) -> None:
     try:
         await _close_computer_turn(turn)
     finally:
+        turn.observation = None
+        turn.pending_action = None
+        turn.perception_cache.clear()
         _release_computer_turn(turn)
 
 

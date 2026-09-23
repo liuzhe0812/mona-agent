@@ -155,6 +155,45 @@ def _mask_secret_hint(secret: str | None) -> str | None:
     return f"{secret[:4]}••••{secret[-4:]}"
 
 
+def _computer_use_model_options(
+    config: Any,
+    chat_providers: list[dict[str, Any]] | None = None,
+) -> list[dict[str, str]]:
+    """Return explicit provider/model pairs with advertised image input."""
+    options = [{"value": "", "label": "跟随当前模型"}]
+    seen: set[str] = {""}
+    for provider in chat_providers if chat_providers is not None else _chat_provider_rows(config):
+        if not provider.get("configured"):
+            continue
+        provider_id = str(provider.get("name") or "").strip()
+        provider_label = str(provider.get("label") or provider_id).strip()
+        if not provider_id:
+            continue
+        for model in provider.get("models") or []:
+            if not isinstance(model, dict) or not model.get("enabled"):
+                continue
+            model_id = str(model.get("id") or "").strip()
+            model_type = str(model.get("type") or "").strip().lower()
+            modalities = model.get("input_modalities")
+            if not model_id or model_type not in {"", "chat", "language", "text", "llm"}:
+                continue
+            if not isinstance(modalities, list) or "image" not in {
+                str(value).strip().lower() for value in modalities
+            }:
+                continue
+            value = f"{provider_id}:{model_id}"
+            if value in seen:
+                continue
+            seen.add(value)
+            options.append(
+                {
+                    "value": value,
+                    "label": f"{provider_label} · {model.get('name') or model_id}",
+                }
+            )
+    return options
+
+
 def _validate_custom_api_base(value: str | None) -> str:
     """Validate the user-entered HTTP endpoint without making a request."""
     base = (value or "").strip().rstrip("/")
@@ -739,6 +778,7 @@ def settings_payload(*, requires_restart: bool = False) -> dict[str, Any]:
     search_config = config.tools.web.search
     image_config = config.tools.image_generation
     video_config = config.tools.video_generation
+    computer_use_config = config.tools.computer_use
     search_provider = (
         search_config.provider
         if search_config.provider in _WEB_SEARCH_PROVIDER_BY_NAME
@@ -841,6 +881,25 @@ def settings_payload(*, requires_restart: bool = False) -> dict[str, Any]:
                 "max_results": search_config.max_results,
                 "timeout": search_config.timeout,
             },
+        },
+        "jev": {
+            "configured": bool(config.tools.jev.api_key),
+            "api_key_hint": _mask_secret_hint(config.tools.jev.api_key),
+            "api_base": config.tools.jev.api_base,
+            "model": config.tools.jev.model,
+            "timeout_seconds": config.tools.jev.timeout_seconds,
+        },
+        "browser": {
+            "use_jev": config.tools.browser.use_jev,
+            "jev_ready": bool(config.tools.jev.api_key),
+        },
+        "computer_use": {
+            "use_decision_model": computer_use_config.use_decision_model,
+            "vision_model_preset": computer_use_config.vision_model_preset,
+            "max_steps": computer_use_config.max_steps,
+            "max_duration_seconds": computer_use_config.max_duration_seconds,
+            "decision_model_ready": bool(config.tools.jev.api_key),
+            "vision_model_options": _computer_use_model_options(config, chat_providers),
         },
         "image_generation": {
             "enabled": image_config.enabled,
@@ -1084,6 +1143,147 @@ def update_agent_settings(query: QueryParams) -> dict[str, Any]:
             ws.mkdir(parents=True, exist_ok=True)
             sync_workspace_templates(ws)
     return settings_payload(requires_restart=restart_required)
+
+
+def update_jev_settings(query: QueryParams) -> dict[str, Any]:
+    """Update the global Jev connection without exposing the saved secret."""
+    config = load_config()
+    jev = config.tools.jev
+    changed = False
+
+    api_key = _query_first_alias(query, "api_key", "apiKey")
+    if api_key is not None and api_key.strip():
+        value = api_key.strip()
+        if jev.api_key != value:
+            jev.api_key = value
+            changed = True
+
+    clear_key = _query_first_alias(query, "clear_key", "clearKey")
+    if clear_key is not None and _parse_bool(clear_key, "clear_key"):
+        if jev.api_key:
+            jev.api_key = ""
+            changed = True
+        if config.tools.browser.use_jev:
+            config.tools.browser.use_jev = False
+            changed = True
+        if config.tools.computer_use.use_decision_model:
+            config.tools.computer_use.use_decision_model = False
+            changed = True
+
+    api_base = _query_first_alias(query, "api_base", "apiBase")
+    if api_base is not None:
+        value = _validate_custom_api_base(api_base)
+        if jev.api_base != value:
+            jev.api_base = value
+            changed = True
+
+    model = _query_first(query, "model")
+    if model is not None:
+        value = model.strip()
+        if not value:
+            raise WebUISettingsError("Jev 模型不能为空")
+        if len(value) > 200:
+            raise WebUISettingsError("Jev 模型名称过长")
+        if jev.model != value:
+            jev.model = value
+            changed = True
+
+    timeout_raw = _query_first_alias(query, "timeout_seconds", "timeoutSeconds")
+    if timeout_raw is not None:
+        try:
+            timeout = float(timeout_raw)
+        except ValueError:
+            raise WebUISettingsError("Jev 超时必须是数字") from None
+        if timeout < 1 or timeout > 60:
+            raise WebUISettingsError("Jev 超时必须在 1 到 60 秒之间")
+        if jev.timeout_seconds != timeout:
+            jev.timeout_seconds = timeout
+            changed = True
+
+    if changed:
+        save_config(config)
+    return settings_payload(requires_restart=changed)
+
+
+def update_browser_settings(query: QueryParams) -> dict[str, Any]:
+    """Update browser execution preferences independently of tool permission."""
+    config = load_config()
+    enabled_raw = _query_first_alias(query, "use_jev", "useJev")
+    if enabled_raw is None:
+        return settings_payload()
+    enabled = _parse_bool(enabled_raw, "use_jev")
+    if enabled and not config.tools.jev.api_key:
+        raise WebUISettingsError("请先在模型设置中配置 Jev")
+    changed = config.tools.browser.use_jev != enabled
+    if changed:
+        config.tools.browser.use_jev = enabled
+        save_config(config)
+    return settings_payload(requires_restart=changed)
+
+
+def update_computer_use_settings(query: QueryParams) -> dict[str, Any]:
+    """Update optional Computer Use decision-loop settings."""
+    config = load_config()
+    computer_use = config.tools.computer_use
+    changed = False
+
+    use_decision_model_raw = _query_first_alias(
+        query, "use_decision_model", "useDecisionModel"
+    )
+    if use_decision_model_raw is not None:
+        use_decision_model = _parse_bool(use_decision_model_raw, "use_decision_model")
+        if use_decision_model and not config.tools.jev.api_key.strip():
+            raise WebUISettingsError("请先配置决策模型")
+        if computer_use.use_decision_model != use_decision_model:
+            computer_use.use_decision_model = use_decision_model
+            changed = True
+
+    vision_model_raw = _query_first_alias(
+        query, "vision_model_preset", "visionModelPreset"
+    )
+    if vision_model_raw is not None:
+        vision_model = vision_model_raw.strip() or None
+        if vision_model is not None:
+            valid_values = {
+                option["value"]
+                for option in _computer_use_model_options(config)
+                if option["value"]
+            }
+            if vision_model not in valid_values:
+                raise WebUISettingsError("视觉识别模型必须选择已启用聊天模型")
+        if computer_use.vision_model_preset != vision_model:
+            computer_use.vision_model_preset = vision_model
+            changed = True
+
+    max_steps_raw = _query_first_alias(query, "max_steps", "maxSteps")
+    if max_steps_raw is not None:
+        try:
+            max_steps = int(max_steps_raw)
+        except ValueError:
+            raise WebUISettingsError("最大决策步数必须是整数") from None
+        if not 1 <= max_steps <= 100:
+            raise WebUISettingsError("最大决策步数必须在 1 到 100 之间")
+        if computer_use.max_steps != max_steps:
+            computer_use.max_steps = max_steps
+            changed = True
+
+    max_duration_raw = _query_first_alias(
+        query, "max_duration_seconds", "maxDurationSeconds"
+    )
+    if max_duration_raw is not None:
+        try:
+            max_duration = int(max_duration_raw)
+        except ValueError:
+            raise WebUISettingsError("最大执行时长必须是整数") from None
+        if not 1 <= max_duration <= 600:
+            raise WebUISettingsError("最大执行时长必须在 1 到 600 秒之间")
+        if computer_use.max_duration_seconds != max_duration:
+            computer_use.max_duration_seconds = max_duration
+            changed = True
+
+    if changed:
+        save_config(config)
+    return settings_payload(requires_restart=False)
 
 
 def update_provider_settings(query: QueryParams) -> dict[str, Any]:

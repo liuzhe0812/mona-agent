@@ -17,6 +17,7 @@ import base64
 import json
 import time
 import urllib.request
+from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 from urllib.parse import urlparse
@@ -81,6 +82,7 @@ class BrowserToolsConfig(Base):
     cdp_host: str = "127.0.0.1"
     cdp_port: int = 9300
     default_timeout: int = 30
+    use_jev: bool = False
 
 
 BROWSER_LEGACY_TOOL_NAMES = (
@@ -112,7 +114,8 @@ class BrowserTool(Tool):
 
     @classmethod
     def enabled(cls, ctx: Any) -> bool:
-        return _playwright_available()
+        config = getattr(ctx.config, "browser", None)
+        return _playwright_available() and (config is None or config.enable)
 
 
 # ---------------------------------------------------------------------------
@@ -120,6 +123,7 @@ class BrowserTool(Tool):
 # ---------------------------------------------------------------------------
 
 _connection_manager: BrowserConnectionManager | None = None
+_jev_tab_locks: dict[str, asyncio.Lock] = {}
 
 
 async def _get_connection_manager() -> BrowserConnectionManager:
@@ -434,6 +438,7 @@ class BrowserConnectionManager:
     async def close_tab(self, tab_id: str) -> None:
         """Close a browser tab via Tauri IPC."""
         self._pages.pop(tab_id, None)
+        _jev_tab_locks.pop(tab_id, None)
         await _tauri_invoke_async("browser_close_tab", {"id": tab_id})
 
 
@@ -681,6 +686,7 @@ _ELEMENT_QUERY_SCHEMA = ObjectSchema(
                 "close",
                 "back",
                 "forward",
+                "run",
             ),
         ),
         target=StringSchema(
@@ -715,6 +721,17 @@ _ELEMENT_QUERY_SCHEMA = ObjectSchema(
             enum=("accept", "dismiss"),
         ),
         promptText=StringSchema("Prompt text used when accepting a dialog"),
+        goal=StringSchema("Complete browser goal for Jev accelerated execution", max_length=12000),
+        textValues=ArraySchema(
+            StringSchema("Exact value Jev may enter", max_length=2000),
+            description="Candidate text values extracted from the user request",
+            max_items=20,
+        ),
+        maxSteps=IntegerSchema(
+            description="Maximum Jev decision steps",
+            minimum=1,
+            maximum=60,
+        ),
         required=["kind"],
     )
 )
@@ -727,15 +744,37 @@ class BrowserActTool(BrowserTool):
     description = (
         "Perform one browser action in the current Mona browser tab. Supports click, "
         "doubleClick, type, fill, press, hover, drag, select, scroll, wait, upload, "
+        "evaluate, reload, open, navigate, close, back, and forward. When Jev acceleration "
+        "is configured and enabled, prefer run for multi-step browser goals; it can complete "
+        "a bounded browser goal using supplied "
+        "textValues without returning to the main model after every click. Call "
+        "browser_observe(action='snapshot') first and prefer its ref targets. Use query "
+        "when a snapshot ref is unavailable."
+    )
+    _legacy_description = (
+        "Perform one browser action in the current Mona browser tab. Supports click, "
+        "doubleClick, type, fill, press, hover, drag, select, scroll, wait, upload, "
         "evaluate, reload, open, navigate, close, back, and forward. Call "
         "browser_observe(action='snapshot') first and prefer its ref targets. Use query "
         "when a snapshot ref is unavailable."
     )
     config_key = "browser"
 
-    def __init__(self, workspace: str | None = None, restrict_to_workspace: bool = False):
+    def __init__(
+        self,
+        workspace: str | None = None,
+        restrict_to_workspace: bool = False,
+        browser_config: BrowserToolsConfig | None = None,
+        jev_config: Any | None = None,
+        runtime_config_loader: Callable[[], Any] | None = None,
+    ):
         self._workspace = Path(workspace).expanduser().resolve() if workspace else None
         self._restrict_to_workspace = restrict_to_workspace
+        self._browser_config = browser_config or BrowserToolsConfig()
+        self._jev_config = jev_config
+        self._runtime_config_loader = runtime_config_loader
+        if not self._browser_config.use_jev or not getattr(jev_config, "api_key", ""):
+            self.description = self._legacy_description
 
     @classmethod
     def config_cls(cls):
@@ -743,9 +782,14 @@ class BrowserActTool(BrowserTool):
 
     @classmethod
     def create(cls, ctx: Any) -> Tool:
+        from mona.config.loader import load_config
+
         return cls(
             workspace=ctx.workspace,
             restrict_to_workspace=bool(ctx.config.restrict_to_workspace),
+            browser_config=getattr(ctx.config, "browser", None),
+            jev_config=getattr(ctx.config, "jev", None),
+            runtime_config_loader=load_config,
         )
 
     @property
@@ -777,6 +821,46 @@ class BrowserActTool(BrowserTool):
     ) -> Any:
         timeout_ms = int(kwargs.get("timeoutMs") or 10000)
         try:
+            active_lock = _jev_tab_locks.get(tabId) if tabId else None
+            if kind != "run" and active_lock is not None and active_lock.locked():
+                raise ValueError("该标签页正在执行 Jev 任务")
+            if kind == "run":
+                browser_config = self._browser_config
+                jev_config = self._jev_config
+                if self._runtime_config_loader is not None:
+                    runtime_tools = self._runtime_config_loader().tools
+                    browser_config = runtime_tools.browser
+                    jev_config = runtime_tools.jev
+                if not browser_config.use_jev:
+                    raise ValueError("浏览器未开启 Jev 加速")
+                if jev_config is None or not jev_config.api_key.strip():
+                    raise ValueError("Jev 尚未配置 API Key")
+                if tabId is None:
+                    raise ValueError("run requires tabId")
+                goal = kwargs.get("goal")
+                if not isinstance(goal, str) or not goal.strip():
+                    raise ValueError("run requires goal")
+                raw_values = kwargs.get("textValues") or []
+                if not isinstance(raw_values, list) or any(
+                    not isinstance(value, str) for value in raw_values
+                ):
+                    raise ValueError("run textValues must be strings")
+                mgr = await _get_connection_manager()
+                page = await mgr.get_page(tabId)
+                from mona.agent.browser_jev import run_jev_browser
+
+                lock = _jev_tab_locks.setdefault(tabId, asyncio.Lock())
+                if lock.locked():
+                    raise ValueError("该标签页已有 Jev 任务在执行")
+                async with lock:
+                    result = await run_jev_browser(
+                        page,
+                        goal=goal.strip(),
+                        text_values=raw_values,
+                        config=jev_config,
+                        max_steps=int(kwargs.get("maxSteps") or 20),
+                    )
+                return f"{_UNTRUSTED_BROWSER_BANNER}\n{_bounded_json(result, limit=16000)}"
             if kind == "open":
                 url = kwargs.get("url")
                 if not isinstance(url, str) or not url:

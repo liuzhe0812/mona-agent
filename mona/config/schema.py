@@ -15,6 +15,7 @@ MONA_BOT_NAME = "Mona"
 MONA_BOT_ICON = ""
 
 if TYPE_CHECKING:
+    from mona.agent.tools.browser import BrowserToolsConfig
     from mona.agent.tools.canvas import CanvasToolConfig
     from mona.agent.tools.chart import ChartToolConfig
     from mona.agent.tools.crypto import CryptoToolConfig
@@ -356,6 +357,28 @@ class RuntimeConfig(Base):
     auto_download: bool = True
 
 
+class JevConfig(Base):
+    """Global TypeSafe Jev decision-model connection."""
+
+    api_key: str = ""
+    api_base: str = "https://api.typesafe.ai/v1"
+    model: str = "jev-latest"
+    timeout_seconds: float = Field(default=15.0, ge=1.0, le=60.0)
+
+
+class ComputerUseConfig(Base):
+    """Optional fast decision loop settings for Computer Use."""
+
+    use_decision_model: bool = False
+    vision_model_preset: str | None = None
+    max_steps: int = Field(default=20, ge=1, le=100)
+    max_duration_seconds: int = Field(default=120, ge=1, le=600)
+    min_confidence: float = Field(default=0.6, ge=0, le=1)
+    perception_timeout_seconds: float = Field(default=10, gt=0, le=60)
+    model_response_timeout_seconds: float = Field(default=30, gt=0, le=120)
+    settle_seconds: float = Field(default=0.15, ge=0, le=2)
+
+
 class VideoModuleConfig(Base):
     """Video production engine rollout and fallback controls."""
 
@@ -486,6 +509,11 @@ class ToolsConfig(Base):
     """
 
     web: WebToolsConfig = Field(default_factory=lambda: _lazy_default("mona.agent.tools.web", "WebToolsConfig"))
+    browser: BrowserToolsConfig = Field(
+        default_factory=lambda: _lazy_default("mona.agent.tools.browser", "BrowserToolsConfig")
+    )
+    jev: JevConfig = Field(default_factory=JevConfig)
+    computer_use: ComputerUseConfig = Field(default_factory=ComputerUseConfig)
     exec: ExecToolConfig = Field(default_factory=lambda: _lazy_default("mona.agent.tools.shell", "ExecToolConfig"))
     my: MyToolConfig = Field(default_factory=lambda: _lazy_default("mona.agent.tools.self", "MyToolConfig"))
     image_generation: ImageGenerationToolConfig = Field(
@@ -736,6 +764,7 @@ def _resolve_tool_config_refs() -> None:
     """
     import sys
 
+    from mona.agent.tools.browser import BrowserToolsConfig
     from mona.agent.tools.canvas import CanvasToolConfig
     from mona.agent.tools.chart import ChartToolConfig
     from mona.agent.tools.crypto import CryptoToolConfig
@@ -753,6 +782,7 @@ def _resolve_tool_config_refs() -> None:
     # Re-export into this module's namespace
     mod = sys.modules[__name__]
     mod.ExecToolConfig = ExecToolConfig  # type: ignore[attr-defined]
+    mod.BrowserToolsConfig = BrowserToolsConfig  # type: ignore[attr-defined]
     mod.WebToolsConfig = WebToolsConfig  # type: ignore[attr-defined]
     mod.WebSearchConfig = WebSearchConfig  # type: ignore[attr-defined]
     mod.WebFetchConfig = WebFetchConfig  # type: ignore[attr-defined]

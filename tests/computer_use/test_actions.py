@@ -9,7 +9,12 @@ from types import SimpleNamespace
 import pytest
 from PIL import Image
 
-from mona.computer_use.actions import remember_observation, validate_action
+from mona.computer_use.actions import (
+    remember_observation,
+    remember_pending_action,
+    repeated_no_progress_error,
+    validate_action,
+)
 
 
 def _image_result(width: int, height: int, elements=()) -> SimpleNamespace:
@@ -35,6 +40,32 @@ def _observe(scope: str, elements=()) -> dict:
     return turn.observation
 
 
+def test_repeated_unchanged_coordinate_action_is_blocked_after_two_attempts() -> None:
+    turn = SimpleNamespace(
+        observation=None,
+        pending_action=None,
+        last_action_signature=None,
+        consecutive_no_progress=0,
+        last_action_effect=None,
+    )
+    arguments = {"pid": 7, "window_id": "window-11", "x": 4, "y": 4}
+    result = _image_result(12, 8)
+    remember_observation(turn, "get_window_state", {"pid": 7, "window_id": "window-11"}, result)
+
+    for _ in range(2):
+        remember_pending_action(turn, "click", arguments)
+        turn.observation = None
+        remember_observation(
+            turn,
+            "get_window_state",
+            {"pid": 7, "window_id": "window-11"},
+            result,
+        )
+
+    assert turn.consecutive_no_progress == 2
+    assert repeated_no_progress_error(turn, "click", arguments) is not None
+
+
 @pytest.mark.parametrize(
     ("name", "arguments", "scope", "pid", "window_id"),
     [
@@ -58,7 +89,10 @@ def test_remember_observation_records_screenshot_size_and_tokens(
 
     remember_observation(turn, name, arguments, result)
 
-    assert turn.observation == {
+    assert {
+        key: turn.observation[key]
+        for key in ("scope", "pid", "window_id", "width", "height", "tokens")
+    } == {
         "scope": scope,
         "pid": pid,
         "window_id": window_id,
@@ -66,6 +100,12 @@ def test_remember_observation_records_screenshot_size_and_tokens(
         "height": 8,
         "tokens": {"fresh-control", "another-control"},
     }
+    assert turn.observation["observation_id"].startswith("obs-")
+    assert turn.observation["screenshot_sha256"]
+    assert [candidate["element_token"] for candidate in turn.observation["candidates"]] == [
+        "fresh-control",
+        "another-control",
+    ]
 
 
 def test_tree_only_observation_cannot_ground_coordinate_actions() -> None:

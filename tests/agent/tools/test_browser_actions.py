@@ -17,6 +17,7 @@ from mona.agent.tools.browser import (
     _validate_navigation_url,
 )
 from mona.agent.tools.registry import ToolRegistry
+from mona.config.schema import JevConfig
 
 
 def _patch_page(monkeypatch: pytest.MonkeyPatch, page: MagicMock) -> MagicMock:
@@ -63,6 +64,15 @@ async def test_browser_act_opens_without_existing_tab(monkeypatch: pytest.Monkey
 
     assert result == '{"tab_id":"tab-2"}'
     execute.assert_awaited_once_with(url="https://example.com")
+
+
+@pytest.mark.asyncio
+async def test_browser_act_run_keeps_legacy_mode_when_jev_is_disabled() -> None:
+    tool = BrowserActTool(jev_config=JevConfig(api_key="secret"))
+
+    result = await tool.execute(kind="run", tabId="tab-1", goal="Search")
+
+    assert result == "Error performing browser action 'run': 浏览器未开启 Jev 加速"
 
 
 @pytest.mark.asyncio
