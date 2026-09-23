@@ -71,7 +71,6 @@ from mona.webui.sidebar_state import (
 from mona.webui.thread_disk import delete_webui_thread
 from mona.webui.transcript import (
     append_transcript_object,
-    build_webui_thread_response,
     read_transcript_lines,
     replay_transcript_to_ui_messages,
     write_transcript_objects,
@@ -989,7 +988,7 @@ class WebSocketChannel(BaseChannel):
 
         m = re.match(r"^/api/sessions/([^/]+)/webui-thread$", got)
         if m:
-            return self._handle_webui_thread_get(request, m.group(1))
+            return await asyncio.to_thread(self._handle_webui_thread_get, request, m.group(1))
 
         # NOTE: websockets' HTTP parser only accepts GET, so we cannot expose a
         # true ``DELETE`` verb. The action is folded into the path instead.
@@ -1991,6 +1990,12 @@ class WebSocketChannel(BaseChannel):
         return _http_json_response(data)
 
     def _handle_webui_thread_get(self, request: WsRequest, key: str) -> Response:
+        from mona.webui.history_cache import (
+            HistoryRevisionChangedError,
+            build_cached_thread_response,
+        )
+
+        started = time.perf_counter()
         if not self._check_api_token(request):
             return _http_error(401, "Unauthorized")
         decoded_key = _decode_api_key(key)
@@ -1998,13 +2003,28 @@ class WebSocketChannel(BaseChannel):
             return _http_error(400, "invalid session key")
         if not self._is_websocket_channel_session_key(decoded_key):
             return _http_error(404, "session not found")
-        data = build_webui_thread_response(
-            decoded_key,
-            augment_user_media=self._augment_transcript_user_media,
-        )
+        query = _parse_query(request.path)
+        try:
+            limit = int(_query_first(query, "limit")) if "limit" in query else None
+            before = int(_query_first(query, "before")) if "before" in query else None
+            data = build_cached_thread_response(
+                decoded_key, limit=limit, before=before,
+                revision=_query_first(query, "revision") or None,
+                augment_user_media=self._augment_transcript_user_media,
+            )
+        except HistoryRevisionChangedError as error:
+            return _http_error(409, str(error))
+        except (ValueError, TypeError) as error:
+            return _http_error(400, str(error))
+        except (OSError, RuntimeError):
+            self.logger.exception("WebUI history load failed")
+            return _http_error(500, "history read failed")
         if data is None:
             return _http_error(404, "webui thread not found")
-        return _http_json_response(data)
+        response = _http_json_response(data)
+        response.headers["Cache-Control"] = "no-store"
+        response.headers["Server-Timing"] = f"history;dur={(time.perf_counter() - started) * 1000:.1f}"
+        return response
 
     def _try_append_webui_transcript(self, chat_id: str, wire: dict[str, Any]) -> None:
         sk = f"websocket:{chat_id}"

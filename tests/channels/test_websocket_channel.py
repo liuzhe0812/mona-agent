@@ -1834,9 +1834,13 @@ def test_settings_payload_normalizes_camel_case_provider(
 
 
 @pytest.mark.asyncio
-async def test_end_to_end_server_pushes_streaming_deltas_to_client(bus: MagicMock) -> None:
+async def test_end_to_end_server_pushes_streaming_deltas_to_client(
+    bus: MagicMock, tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr("mona.config.loader._current_config_path", tmp_path / "config.json")
     port = 29880
     channel = _ch(bus, port=port, streaming=True)
+    channel.workspace = tmp_path / "workspace"
 
     server_task = asyncio.create_task(channel.start())
     await asyncio.sleep(0.3)
@@ -1846,6 +1850,12 @@ async def test_end_to_end_server_pushes_streaming_deltas_to_client(bus: MagicMoc
             ready_raw = await client.recv()
             ready = json.loads(ready_raw)
             chat_id = ready["chat_id"]
+
+            async def next_stream_event() -> dict[str, Any]:
+                while True:
+                    event = json.loads(await asyncio.wait_for(client.recv(), timeout=3))
+                    if event.get("event") != "artifacts_changed":
+                        return event
 
             # Server pushes deltas directly
             await channel.send_delta(
@@ -1858,17 +1868,17 @@ async def test_end_to_end_server_pushes_streaming_deltas_to_client(bus: MagicMoc
                 chat_id, "", {"_stream_end": True, "_stream_id": "s1"}
             )
 
-            delta1 = json.loads(await client.recv())
+            delta1 = await next_stream_event()
             assert delta1["event"] == "delta"
             assert delta1["text"] == "Hello "
             assert delta1["stream_id"] == "s1"
 
-            delta2 = json.loads(await client.recv())
+            delta2 = await next_stream_event()
             assert delta2["event"] == "delta"
             assert delta2["text"] == "world"
             assert delta2["stream_id"] == "s1"
 
-            end = json.loads(await client.recv())
+            end = await next_stream_event()
             assert end["event"] == "stream_end"
             assert end["stream_id"] == "s1"
 
@@ -1879,7 +1889,7 @@ async def test_end_to_end_server_pushes_streaming_deltas_to_client(bus: MagicMoc
                 metadata={"_turn_end": True},
             ))
 
-            turn_end = json.loads(await client.recv())
+            turn_end = await next_stream_event()
             assert turn_end == {"event": "turn_end", "chat_id": chat_id}
     finally:
         await channel.stop()

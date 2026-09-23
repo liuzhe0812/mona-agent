@@ -213,12 +213,16 @@ def write_transcript_objects(session_key: str, objects: list[dict[str, Any]]) ->
 
 
 def delete_webui_transcript(session_key: str) -> bool:
+    from mona.webui.history_cache import delete_cached_thread, thread_history_lock
+
     path = webui_transcript_path(session_key)
-    if not path.is_file():
-        return False
     try:
-        path.unlink()
-        return True
+        with thread_history_lock(session_key):
+            delete_cached_thread(session_key)
+            if not path.is_file():
+                return False
+            path.unlink()
+            return True
     except OSError as e:
         logger.warning("Failed to delete webui transcript {}: {}", path, e)
         return False
@@ -294,8 +298,12 @@ def replay_transcript_to_ui_messages(
     paths to ``{url, name?}`` / attachment dicts the client expects.
     """
     messages: list[dict[str, Any]] = []
-    buffer_message_id: str | None = None
+    buffer_message_index: int | None = None
     buffer_parts: list[str] = []
+    buffer_source_index: int | None = None
+    buffer_task_id: str | None = None
+    reasoning_message_index: int | None = None
+    reasoning_parts: list[str] = []
     suppress_until_turn_end = False
     active_activity_segment_id: str | None = None
     active_file_edit_segment_id: str | None = None
@@ -303,9 +311,14 @@ def replay_transcript_to_ui_messages(
     pending_delivered_files: list[dict[str, Any]] = []
     pending_delivered_media: list[dict[str, Any]] = []
     _ts_base = int(time.time() * 1000)
+    id_counts: dict[tuple[str, int], int] = {}
 
     def _new_id(prefix: str, idx: int) -> str:
-        return f"{prefix}-{idx}-{uuid.uuid4().hex[:8]}"
+        key = (prefix, idx)
+        occurrence = id_counts.get(key, 0) + 1
+        id_counts[key] = occurrence
+        suffix = f"-{occurrence}" if occurrence > 1 else ""
+        return f"{prefix}-{idx}{suffix}"
 
     def _new_activity_segment(*, activate: bool = True) -> str:
         nonlocal active_activity_segment_id, activity_segment_counter
@@ -329,7 +342,7 @@ def replay_transcript_to_ui_messages(
             active_activity_segment_id = None
             active_file_edit_segment_id = None
 
-    def attach_reasoning_chunk(prev: list[dict[str, Any]], chunk: str, idx: int) -> None:
+    def attach_reasoning_chunk(prev: list[dict[str, Any]], chunk: str, idx: int) -> int:
         for i in range(len(prev) - 1, -1, -1):
             candidate = prev[i]
             if candidate.get("role") == "user":
@@ -352,7 +365,7 @@ def replay_transcript_to_ui_messages(
                     "reasoningStreaming": True,
                     "activitySegmentId": candidate.get("activitySegmentId") or _ensure_activity_segment(),
                 }
-                return
+                return i
             if not has_answer and candidate.get("isStreaming"):
                 prev[i] = {
                     **candidate,
@@ -360,7 +373,7 @@ def replay_transcript_to_ui_messages(
                     "reasoningStreaming": True,
                     "activitySegmentId": candidate.get("activitySegmentId") or _ensure_activity_segment(),
                 }
-                return
+                return i
             break
         segment = _ensure_activity_segment()
         prev.append(
@@ -375,8 +388,9 @@ def replay_transcript_to_ui_messages(
                 "createdAt": _ts_base + idx,
             },
         )
+        return len(prev) - 1
 
-    def find_active_placeholder(prev: list[dict[str, Any]]) -> str | None:
+    def find_active_placeholder(prev: list[dict[str, Any]]) -> int | None:
         last = prev[-1] if prev else None
         if not last:
             return None
@@ -386,7 +400,38 @@ def replay_transcript_to_ui_messages(
             return None
         if not last.get("isStreaming"):
             return None
-        return str(last.get("id"))
+        return len(prev) - 1
+
+    def flush_delta_buffer() -> None:
+        nonlocal buffer_parts, buffer_source_index, buffer_task_id
+        if buffer_message_index is None or buffer_source_index is None or not buffer_parts:
+            return
+        message = messages[buffer_message_index]
+        update: dict[str, Any] = {
+            **message,
+            "content": str(message.get("content") or "") + "".join(buffer_parts),
+            "isStreaming": True,
+            "sourceTranscriptIndex": buffer_source_index,
+        }
+        if buffer_task_id:
+            update["taskId"] = buffer_task_id
+        messages[buffer_message_index] = update
+        buffer_parts = []
+        buffer_source_index = None
+        buffer_task_id = None
+
+    def flush_reasoning_buffer() -> None:
+        nonlocal reasoning_message_index, reasoning_parts
+        if reasoning_message_index is None or not reasoning_parts:
+            return
+        message = messages[reasoning_message_index]
+        messages[reasoning_message_index] = {
+            **message,
+            "reasoning": str(message.get("reasoning") or "") + "".join(reasoning_parts),
+            "reasoningStreaming": True,
+        }
+        reasoning_message_index = None
+        reasoning_parts = []
 
     def close_reasoning(prev: list[dict[str, Any]]) -> None:
         for i in range(len(prev) - 1, -1, -1):
@@ -700,6 +745,10 @@ def replay_transcript_to_ui_messages(
 
     for idx, rec in enumerate(lines):
         ev = rec.get("event")
+        if ev != "delta":
+            flush_delta_buffer()
+        if ev != "reasoning_delta":
+            flush_reasoning_buffer()
         if ev == "user":
             active_activity_segment_id = None
             active_file_edit_segment_id = None
@@ -805,17 +854,16 @@ def replay_transcript_to_ui_messages(
             if not isinstance(chunk, str):
                 continue
             close_activity_for_answer()
-            adopted = find_active_placeholder(messages) if buffer_message_id is None else None
-            if buffer_message_id is None:
-                if adopted:
-                    buffer_message_id = adopted
+            if buffer_message_index is None:
+                adopted = find_active_placeholder(messages)
+                if adopted is not None:
+                    buffer_message_index = adopted
                 else:
-                    buffer_message_id = _new_id("buf", idx)
                     buffer_author_id = rec.get("author_id")
                     buffer_task_id = rec.get("task_id")
                     messages.append(
                         {
-                            "id": buffer_message_id,
+                            "id": _new_id("buf", idx),
                             "role": "assistant",
                             "content": "",
                             "isStreaming": True,
@@ -835,31 +883,26 @@ def replay_transcript_to_ui_messages(
                             ),
                         },
                     )
+                    buffer_message_index = len(messages) - 1
+                buffer_task_id = None
             buffer_parts.append(chunk)
-            combined = "".join(buffer_parts)
-            for i, m in enumerate(messages):
-                if m.get("id") == buffer_message_id:
-                    messages[i] = {
-                        **m,
-                        "content": combined,
-                        "isStreaming": True,
-                        "sourceTranscriptIndex": idx,
-                        **(
-                            {"taskId": rec["task_id"]}
-                            if isinstance(rec.get("task_id"), str) and rec.get("task_id")
-                            else {}
-                        ),
-                    }
-                    break
+            buffer_source_index = idx
+            rec_task_id = rec.get("task_id")
+            if isinstance(rec_task_id, str) and rec_task_id:
+                buffer_task_id = rec_task_id
             continue
 
         if ev == "stream_end":
             if suppress_until_turn_end:
-                buffer_message_id = None
+                buffer_message_index = None
                 buffer_parts = []
+                buffer_source_index = None
+                buffer_task_id = None
                 continue
-            buffer_message_id = None
+            buffer_message_index = None
             buffer_parts = []
+            buffer_source_index = None
+            buffer_task_id = None
             continue
 
         if ev == "reasoning_delta":
@@ -869,7 +912,9 @@ def replay_transcript_to_ui_messages(
             if not isinstance(chunk, str) or not chunk:
                 continue
             close_file_edit_phase_before_activity()
-            attach_reasoning_chunk(messages, chunk, idx)
+            if reasoning_message_index is None:
+                reasoning_message_index = attach_reasoning_chunk(messages, "", idx)
+            reasoning_parts.append(chunk)
             continue
 
         if ev == "reasoning_end":
@@ -941,8 +986,10 @@ def replay_transcript_to_ui_messages(
                     )
                 continue
 
-            buffer_message_id = None
+            buffer_message_index = None
             buffer_parts = []
+            buffer_source_index = None
+            buffer_task_id = None
             text = rec.get("text")
             content_s = text if isinstance(text, str) else ""
             media: list[dict[str, Any]] = []
@@ -1019,10 +1066,14 @@ def replay_transcript_to_ui_messages(
                 _ui_token_usage(rec.get("token_usage")),
                 turn_task_id if isinstance(turn_task_id, str) else None,
             )
-            buffer_message_id = None
+            buffer_message_index = None
             buffer_parts = []
+            buffer_source_index = None
+            buffer_task_id = None
             continue
 
+    flush_delta_buffer()
+    flush_reasoning_buffer()
     for m in messages:
         m.pop("isStreaming", None)
         m.pop("reasoningStreaming", None)
