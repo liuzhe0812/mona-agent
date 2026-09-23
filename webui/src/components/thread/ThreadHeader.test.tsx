@@ -37,6 +37,51 @@ describe("ThreadHeader conversation tools", () => {
     expect(onJumpToMessage).toHaveBeenCalledWith("a1");
   });
 
+  it("loads full history only when search opens so older messages remain searchable", () => {
+    const older: UIMessage = {
+      id: "u-old",
+      role: "user",
+      content: "earlier project requirement",
+      createdAt: 1_699_999_000_000,
+    };
+    const onEnsureFullHistory = vi.fn(async () => [older, ...messages]);
+    const onJumpToMessage = vi.fn();
+    const props = {
+      title: "会话",
+      onToggleSidebar: () => {},
+      onJumpToMessage,
+      onEnsureFullHistory,
+    };
+    const view = render(<ThreadHeader {...props} messages={messages} />);
+
+    expect(onEnsureFullHistory).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByRole("button", { name: "搜索会话" }));
+    expect(onEnsureFullHistory).toHaveBeenCalledOnce();
+    view.rerender(<ThreadHeader {...props} messages={[older, ...messages]} />);
+    fireEvent.change(screen.getByPlaceholderText("搜索当前会话内容"), { target: { value: "earlier project" } });
+    fireEvent.click(screen.getByText("earlier project requirement"));
+
+    expect(onJumpToMessage).toHaveBeenCalledWith("u-old");
+  });
+
+  it("reloads full history if a revision changes while the search dialog is open", () => {
+    const onEnsureFullHistory = vi.fn(async () => messages);
+    const props = {
+      title: "会话",
+      onToggleSidebar: () => {},
+      messages,
+      onJumpToMessage: () => {},
+      onEnsureFullHistory,
+    };
+    const view = render(<ThreadHeader {...props} hasMoreHistory={false} />);
+
+    fireEvent.click(screen.getByRole("button", { name: "搜索会话" }));
+    expect(onEnsureFullHistory).toHaveBeenCalledTimes(1);
+    view.rerender(<ThreadHeader {...props} hasMoreHistory fullHistoryLoading={false} />);
+
+    expect(onEnsureFullHistory).toHaveBeenCalledTimes(2);
+  });
+
   it("lists user inputs newest first and jumps to the selected input", () => {
     const onJumpToMessage = vi.fn();
     render(<ThreadHeader title="会话" onToggleSidebar={() => {}} messages={messages} onJumpToMessage={onJumpToMessage} />);

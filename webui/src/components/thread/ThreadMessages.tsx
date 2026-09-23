@@ -23,6 +23,9 @@ interface ThreadMessagesProps {
   /** Rooms use group-chat bubbles and show every assistant author, including Mona. */
   isGroupChat?: boolean;
   hiddenMessageCount?: number;
+  hasMoreHistory?: boolean;
+  loadingEarlier?: boolean;
+  earlierError?: string | null;
   onLoadEarlier?: () => void;
   onQuote?: (message: UIMessage, author: string) => void;
   onBranch?: (message: UIMessage, author: string) => void;
@@ -217,6 +220,9 @@ export function ThreadMessages({
   isStreaming = false,
   isGroupChat = false,
   hiddenMessageCount = 0,
+  hasMoreHistory = false,
+  loadingEarlier = false,
+  earlierError = null,
   onLoadEarlier,
   onQuote,
   onBranch,
@@ -244,18 +250,21 @@ export function ThreadMessages({
 
   return (
     <div className="flex w-full flex-col">
-      {hiddenMessageCount > 0 && onLoadEarlier ? (
-        <div className="mb-4 flex justify-center">
+      {(hiddenMessageCount > 0 || hasMoreHistory) && onLoadEarlier ? (
+        <div className="mb-4 flex flex-col items-center gap-2">
           <button
             type="button"
             onClick={onLoadEarlier}
-            className="rounded-full border border-border/60 bg-background/85 px-3 py-1.5 text-xs font-medium text-muted-foreground shadow-sm transition-colors hover:bg-muted/55 hover:text-foreground"
+            disabled={loadingEarlier}
+            className="rounded-full border border-border/60 bg-background/85 px-3 py-1.5 text-xs font-medium text-muted-foreground shadow-sm transition-colors hover:bg-muted/55 hover:text-foreground disabled:cursor-wait disabled:opacity-70"
           >
-            {t("thread.loadEarlier", {
-              count: hiddenMessageCount,
-              defaultValue: "Load earlier messages",
-            })}
+            {loadingEarlier
+              ? "正在加载更早消息…"
+              : hiddenMessageCount > 0
+                ? t("thread.loadEarlier", { count: hiddenMessageCount, defaultValue: "Load earlier messages" })
+                : t("thread.loadEarlier", { defaultValue: "Load earlier messages" })}
           </button>
+          {earlierError ? <p role="alert" className="text-caption text-destructive">{earlierError}</p> : null}
         </div>
       ) : null}
       {units.map((unit, index) => {

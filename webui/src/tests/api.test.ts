@@ -48,6 +48,24 @@ describe("webui API helpers", () => {
     );
   });
 
+  it("sends paging cursors when fetching an older transcript page", async () => {
+    const controller = new AbortController();
+    await fetchWebuiThread("tok", "websocket:chat-1", undefined, {
+      limit: 160,
+      before: 320,
+      revision: "rev-1",
+      signal: controller.signal,
+    });
+
+    expect(fetch).toHaveBeenCalledWith(
+      "/api/sessions/websocket%3Achat-1/webui-thread?limit=160&before=320&revision=rev-1",
+      expect.objectContaining({
+        headers: { Authorization: "Bearer tok" },
+        signal: expect.any(AbortSignal),
+      }),
+    );
+  });
+
   it("percent-encodes websocket keys when deleting a session", async () => {
     await deleteSession("tok", "websocket:chat-1");
 

@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { History, Search, Users } from "lucide-react";
 import { useTranslation } from "react-i18next";
 
@@ -25,6 +25,10 @@ interface ThreadHeaderProps {
   workspaceHasContent?: boolean;
   messages?: UIMessage[];
   onJumpToMessage?: (messageId: string) => void;
+  onEnsureFullHistory?: () => Promise<UIMessage[]>;
+  hasMoreHistory?: boolean;
+  fullHistoryLoading?: boolean;
+  fullHistoryError?: string | null;
 }
 
 function messageText(message: UIMessage): string {
@@ -46,9 +50,17 @@ function messageTime(createdAt: number): string {
 function ConversationTools({
   messages,
   onJumpToMessage,
+  onEnsureFullHistory,
+  hasMoreHistory = false,
+  fullHistoryLoading = false,
+  fullHistoryError = null,
 }: {
   messages: UIMessage[];
   onJumpToMessage: (messageId: string) => void;
+  onEnsureFullHistory?: () => Promise<UIMessage[]>;
+  hasMoreHistory?: boolean;
+  fullHistoryLoading?: boolean;
+  fullHistoryError?: string | null;
 }) {
   const [searchOpen, setSearchOpen] = useState(false);
   const [historyOpen, setHistoryOpen] = useState(false);
@@ -68,10 +80,22 @@ function ConversationTools({
     () => searchable.filter((message) => message.role === "user").slice().reverse(),
     [searchable],
   );
+  useEffect(() => {
+    if (!(searchOpen || historyOpen) || !hasMoreHistory || fullHistoryLoading || fullHistoryError) return;
+    void onEnsureFullHistory?.().catch(() => undefined);
+  }, [fullHistoryError, fullHistoryLoading, hasMoreHistory, historyOpen, onEnsureFullHistory, searchOpen]);
   const jump = (messageId: string, close: "search" | "history") => {
     onJumpToMessage(messageId);
     if (close === "search") setSearchOpen(false);
     else setHistoryOpen(false);
+  };
+  const ensureFullHistory = () => {
+    setSearchOpen(true);
+    void onEnsureFullHistory?.().catch(() => undefined);
+  };
+  const ensureInputHistory = () => {
+    setHistoryOpen(true);
+    void onEnsureFullHistory?.().catch(() => undefined);
   };
 
   return (
@@ -82,7 +106,7 @@ function ConversationTools({
           size="icon"
           aria-label="搜索会话"
           title="搜索会话"
-          onClick={() => setSearchOpen(true)}
+          onClick={ensureFullHistory}
           className="h-7 w-7 rounded-md text-muted-foreground hover:bg-accent hover:text-foreground"
         >
           <Search className="h-3.5 w-3.5" />
@@ -92,7 +116,7 @@ function ConversationTools({
           size="icon"
           aria-label="用户输入历史"
           title="用户输入历史"
-          onClick={() => setHistoryOpen(true)}
+          onClick={ensureInputHistory}
           className="h-7 w-7 rounded-md text-muted-foreground hover:bg-accent hover:text-foreground"
         >
           <History className="h-3.5 w-3.5" />
@@ -104,6 +128,8 @@ function ConversationTools({
           <DialogHeader><DialogTitle>搜索会话</DialogTitle><DialogDescription className="sr-only">搜索当前会话中的用户和助手消息</DialogDescription></DialogHeader>
           <Input autoFocus value={query} onChange={(event) => setQuery(event.target.value)} placeholder="搜索当前会话内容" />
           <div className="max-h-[55vh] overflow-y-auto">
+            {fullHistoryLoading ? <p role="status" className="py-3 text-center text-caption text-muted-foreground">正在加载完整会话…</p> : null}
+            {fullHistoryError ? <p role="alert" className="py-3 text-center text-caption text-destructive">完整会话加载失败：{fullHistoryError}</p> : null}
             {!query.trim() ? <p className="py-8 text-center text-caption text-muted-foreground">输入关键词开始搜索</p> : results.length ? (
               <div className="grid gap-1">
                 {results.map((message) => (
@@ -113,7 +139,7 @@ function ConversationTools({
                   </button>
                 ))}
               </div>
-            ) : <p className="py-8 text-center text-caption text-muted-foreground">没有匹配内容</p>}
+            ) : fullHistoryLoading ? null : <p className="py-8 text-center text-caption text-muted-foreground">没有匹配内容</p>}
           </div>
         </DialogContent>
       </Dialog>
@@ -122,6 +148,8 @@ function ConversationTools({
         <DialogContent className="max-w-xl gap-4">
           <DialogHeader><DialogTitle>用户输入历史</DialogTitle><DialogDescription className="sr-only">点击一条输入可跳转到原消息</DialogDescription></DialogHeader>
           <div className="max-h-[60vh] overflow-y-auto">
+            {fullHistoryLoading ? <p role="status" className="py-3 text-center text-caption text-muted-foreground">正在加载完整会话…</p> : null}
+            {fullHistoryError ? <p role="alert" className="py-3 text-center text-caption text-destructive">完整会话加载失败：{fullHistoryError}</p> : null}
             {userHistory.length ? (
               <div className="grid gap-1">
                 {userHistory.map((message) => (
@@ -131,7 +159,7 @@ function ConversationTools({
                   </button>
                 ))}
               </div>
-            ) : <p className="py-8 text-center text-caption text-muted-foreground">当前会话还没有用户输入</p>}
+            ) : fullHistoryLoading ? null : <p className="py-8 text-center text-caption text-muted-foreground">当前会话还没有用户输入</p>}
           </div>
         </DialogContent>
       </Dialog>
@@ -151,6 +179,10 @@ export function ThreadHeader({
   workspaceHasContent = false,
   messages = [],
   onJumpToMessage,
+  onEnsureFullHistory,
+  hasMoreHistory = false,
+  fullHistoryLoading = false,
+  fullHistoryError = null,
 }: ThreadHeaderProps) {
   const { t } = useTranslation();
   if (minimal) {
@@ -218,7 +250,16 @@ export function ThreadHeader({
       </div>
 
       <div className="flex shrink-0 items-center gap-1">
-        {messages.length > 0 && onJumpToMessage ? <ConversationTools messages={messages} onJumpToMessage={onJumpToMessage} /> : null}
+        {messages.length > 0 && onJumpToMessage ? (
+          <ConversationTools
+            messages={messages}
+            onJumpToMessage={onJumpToMessage}
+            onEnsureFullHistory={onEnsureFullHistory}
+            hasMoreHistory={hasMoreHistory}
+            fullHistoryLoading={fullHistoryLoading}
+            fullHistoryError={fullHistoryError}
+          />
+        ) : null}
         {workspaceHasContent && onToggleWorkspace && (!workspaceOpen || isRoom) ? (
           <Button
             variant="ghost"

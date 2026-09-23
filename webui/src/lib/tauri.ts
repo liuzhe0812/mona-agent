@@ -63,6 +63,33 @@ async function serializeRequestBody(body: BodyInit | null | undefined): Promise<
   return { supported: false };
 }
 
+function abortError(signal: AbortSignal): unknown {
+  return signal.reason ?? new DOMException("The operation was aborted.", "AbortError");
+}
+
+function withAbortSignal<T>(operation: Promise<T>, signal?: AbortSignal): Promise<T> {
+  if (!signal) return operation;
+  if (signal.aborted) return Promise.reject(abortError(signal));
+  return new Promise<T>((resolve, reject) => {
+    const cleanup = () => signal.removeEventListener("abort", onAbort);
+    const onAbort = () => {
+      cleanup();
+      reject(abortError(signal));
+    };
+    signal.addEventListener("abort", onAbort, { once: true });
+    operation.then(
+      (value) => {
+        cleanup();
+        resolve(value);
+      },
+      (error) => {
+        cleanup();
+        reject(error);
+      },
+    );
+  });
+}
+
 export async function httpFetch(url: string, init?: RequestInit): Promise<Response> {
   if (isTauri()) {
     if (isLoopbackHttpUrl(url)) {
@@ -71,14 +98,18 @@ export async function httpFetch(url: string, init?: RequestInit): Promise<Respon
       }
 
       const serializedBody = await serializeRequestBody(init?.body);
+      if (init?.signal?.aborted) throw abortError(init.signal);
       if (serializedBody.supported) {
         const headers = Array.from(new Headers(init?.headers).entries());
-        const result = await invoke<LocalHttpBridgeResponse>("local_http_request", {
-          method: init?.method ?? "GET",
-          url,
-          headers,
-          body: serializedBody.body,
-        });
+        const result = await withAbortSignal(
+          invoke<LocalHttpBridgeResponse>("local_http_request", {
+            method: init?.method ?? "GET",
+            url,
+            headers,
+            body: serializedBody.body,
+          }),
+          init?.signal ?? undefined,
+        );
         const responseBody =
           result.status === 204 || result.status === 304
             ? null

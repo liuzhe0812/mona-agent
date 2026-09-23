@@ -476,15 +476,45 @@ export async function fetchWebuiThread(
   token: string,
   key: string,
   base?: string,
+  options: {
+    limit?: number;
+    before?: number;
+    revision?: string;
+    signal?: AbortSignal;
+  } = {},
 ): Promise<WebuiThreadPersistedPayload | null> {
   const effectiveBase = base ?? (await getApiBase());
-  const url = `${effectiveBase}/api/sessions/${encodeURIComponent(key)}/webui-thread`;
-  const res = await httpFetch(url, {
-    headers: { Authorization: `Bearer ${token}` },
-  });
-  if (res.status === 404) return null;
-  if (!res.ok) throw new ApiError(res.status, `HTTP ${res.status}`);
-  return (await res.json()) as WebuiThreadPersistedPayload;
+  const query = new URLSearchParams();
+  if (options.limit !== undefined) query.set("limit", String(options.limit));
+  if (options.before !== undefined) query.set("before", String(options.before));
+  if (options.revision !== undefined) query.set("revision", options.revision);
+  const encodedQuery = query.toString();
+  const suffix = encodedQuery ? `?${encodedQuery}` : "";
+  const url = `${effectiveBase}/api/sessions/${encodeURIComponent(key)}/webui-thread${suffix}`;
+  const controller = new AbortController();
+  let timedOut = false;
+  const timeout = setTimeout(() => {
+    timedOut = true;
+    controller.abort(new DOMException("Session history request timed out", "TimeoutError"));
+  }, 30_000);
+  const abortFromCaller = () => controller.abort(options.signal?.reason);
+  if (options.signal?.aborted) abortFromCaller();
+  else options.signal?.addEventListener("abort", abortFromCaller, { once: true });
+  try {
+    const res = await httpFetch(url, {
+      headers: { Authorization: `Bearer ${token}` },
+      signal: controller.signal,
+    });
+    if (res.status === 404) return null;
+    if (!res.ok) throw new ApiError(res.status, `HTTP ${res.status}`);
+    return (await res.json()) as WebuiThreadPersistedPayload;
+  } catch (error) {
+    if (timedOut) throw new Error("会话加载超时，请重试");
+    throw error;
+  } finally {
+    clearTimeout(timeout);
+    options.signal?.removeEventListener("abort", abortFromCaller);
+  }
 }
 
 export async function deleteSession(

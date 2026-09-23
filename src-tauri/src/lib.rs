@@ -550,9 +550,13 @@ async fn local_http_request(
         parsed.path(),
         "/health" | "/webui/bootstrap" | "/api/sessions"
     );
+    let history_read = parsed.path().starts_with("/api/sessions/")
+        && parsed.path().ends_with("/webui-thread");
     let mut request = client.request(method, parsed);
     if startup_read {
         request = request.timeout(std::time::Duration::from_secs(10));
+    } else if history_read {
+        request = request.timeout(std::time::Duration::from_secs(30));
     }
 
     if needs_token {
