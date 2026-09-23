@@ -1,0 +1,3677 @@
+// Vitest Snapshot v1, https://vitest.dev/guide/snapshot.html
+
+exports[`预设页面渲染快照（CI 回归） > 冻结全部预设页的几何、样式、换行与图表主题，且没有阻塞性布局问题 1`] = `
+{
+  "coverage": [
+    0.84,
+    0.78,
+    0.82,
+    0.74,
+    0.73,
+    0.81,
+    0.8,
+    0.78,
+    0.73,
+    0.85,
+    0.84,
+    0.83,
+    0.82,
+    0.8,
+    0.85,
+    0.84,
+    0.83,
+    0.82,
+  ],
+  "pages": [
+    [
+      {
+        "background": true,
+        "box": [
+          0,
+          0,
+          1280,
+          720,
+        ],
+        "fill": "#0B1020",
+        "type": "shape",
+      },
+      {
+        "box": [
+          72,
+          59,
+          1136,
+          112,
+        ],
+        "contentHeight": 46.4,
+        "font": {
+          "bold": true,
+          "color": "#F5F7FA",
+          "family": "Microsoft YaHei",
+          "size": 38.7,
+        },
+        "lines": [
+          "复用素材缩短准备时间",
+        ],
+        "type": "text",
+      },
+      {
+        "box": [
+          72,
+          179,
+          736,
+          42,
+        ],
+        "contentHeight": 32,
+        "font": {
+          "bold": false,
+          "color": "#9AA6BD",
+          "family": "Microsoft YaHei",
+          "size": 26.7,
+        },
+        "lines": [
+          "内部设计示例，单位：分钟",
+        ],
+        "type": "text",
+      },
+      {
+        "box": [
+          72,
+          249,
+          736,
+          412,
+        ],
+        "chart": {
+          "colors": [
+            "#72DFC1",
+          ],
+          "dataLabels": true,
+          "gapWidthPct": 150,
+          "gridlines": true,
+          "kind": "bar",
+          "legendPos": "none",
+          "valAxisTitle": "分钟（示例）",
+        },
+        "type": "chart",
+      },
+      {
+        "box": [
+          850,
+          249,
+          358,
+          190,
+        ],
+        "contentHeight": 89.6,
+        "font": {
+          "bold": true,
+          "color": "#72DFC1",
+          "family": "Microsoft YaHei",
+          "size": 74.7,
+        },
+        "lines": [
+          "-40%",
+        ],
+        "type": "text",
+      },
+      {
+        "box": [
+          850,
+          459,
+          358,
+          72,
+        ],
+        "contentHeight": 22.4,
+        "font": {
+          "bold": false,
+          "color": "#9AA6BD",
+          "family": "Microsoft YaHei",
+          "size": 18.7,
+        },
+        "lines": [
+          "手动准备 50 分钟，复用流程 30 分钟",
+        ],
+        "type": "text",
+      },
+      {
+        "box": [
+          850,
+          549,
+          358,
+          72,
+        ],
+        "contentHeight": 22.4,
+        "font": {
+          "bold": false,
+          "color": "#9AA6BD",
+          "family": "Microsoft YaHei",
+          "size": 18.7,
+        },
+        "lines": [
+          "示例用于表达差距，不是实测结果",
+        ],
+        "type": "text",
+      },
+    ],
+    [
+      {
+        "background": true,
+        "box": [
+          0,
+          0,
+          1280,
+          720,
+        ],
+        "fill": "#0B1020",
+        "type": "shape",
+      },
+      {
+        "box": [
+          72,
+          88,
+          460,
+          185,
+        ],
+        "contentHeight": 115.2,
+        "font": {
+          "bold": true,
+          "color": "#F5F7FA",
+          "family": "Microsoft YaHei",
+          "size": 48,
+        },
+        "lines": [
+          "视频任务集中在一",
+          "个工作台",
+        ],
+        "type": "text",
+      },
+      {
+        "box": [
+          72,
+          320,
+          420,
+          90,
+        ],
+        "contentHeight": 22.4,
+        "font": {
+          "bold": false,
+          "color": "#9AA6BD",
+          "family": "Microsoft YaHei",
+          "size": 18.7,
+        },
+        "lines": [
+          "从主题输入进入制作过程",
+        ],
+        "type": "text",
+      },
+      {
+        "box": [
+          72,
+          430,
+          420,
+          90,
+        ],
+        "contentHeight": 22.4,
+        "font": {
+          "bold": false,
+          "color": "#9AA6BD",
+          "family": "Microsoft YaHei",
+          "size": 18.7,
+        },
+        "lines": [
+          "在同一入口查看已有项目",
+        ],
+        "type": "text",
+      },
+      {
+        "box": [
+          560,
+          152.3,
+          648,
+          383.4,
+        ],
+        "hasImage": true,
+        "type": "picture",
+      },
+      {
+        "box": [
+          560,
+          620,
+          648,
+          30,
+        ],
+        "contentHeight": 19.2,
+        "font": {
+          "bold": false,
+          "color": "#9AA6BD",
+          "family": "Microsoft YaHei",
+          "size": 16,
+        },
+        "lines": [
+          "Mona 历史界面截图，2026 年 7 月",
+        ],
+        "type": "text",
+      },
+    ],
+    [
+      {
+        "background": true,
+        "box": [
+          0,
+          0,
+          1280,
+          720,
+        ],
+        "fill": "#F5F3ED",
+        "type": "shape",
+      },
+      {
+        "box": [
+          64,
+          64,
+          1152,
+          72,
+        ],
+        "contentHeight": 57.6,
+        "font": {
+          "bold": true,
+          "color": "#20242B",
+          "family": "Microsoft YaHei",
+          "size": 48,
+        },
+        "lines": [
+          "第三季度收入超过目标",
+        ],
+        "type": "text",
+      },
+      {
+        "box": [
+          64,
+          152,
+          1152,
+          42,
+        ],
+        "contentHeight": 32,
+        "font": {
+          "bold": false,
+          "color": "#5A6270",
+          "family": "Microsoft YaHei",
+          "size": 26.7,
+        },
+        "lines": [
+          "单位：万元；以下为演示数据",
+        ],
+        "type": "text",
+      },
+      {
+        "box": [
+          64,
+          214,
+          400,
+          190,
+        ],
+        "contentHeight": 89.6,
+        "font": {
+          "bold": true,
+          "color": "#3458B4",
+          "family": "Microsoft YaHei",
+          "size": 74.7,
+        },
+        "lines": [
+          "+8%",
+        ],
+        "type": "text",
+      },
+      {
+        "box": [
+          496,
+          214,
+          336,
+          90,
+        ],
+        "contentHeight": 22.4,
+        "font": {
+          "bold": false,
+          "color": "#5A6270",
+          "family": "Microsoft YaHei",
+          "size": 18.7,
+        },
+        "lines": [
+          "实际收入 108 万元，比目标高 8 万元",
+        ],
+        "type": "text",
+      },
+      {
+        "box": [
+          856,
+          214,
+          360,
+          90,
+        ],
+        "contentHeight": 22.4,
+        "font": {
+          "bold": false,
+          "color": "#5A6270",
+          "family": "Microsoft YaHei",
+          "size": 18.7,
+        },
+        "lines": [
+          "收入连续三个季度增长",
+        ],
+        "type": "text",
+      },
+      {
+        "box": [
+          64,
+          395,
+          1152,
+          261,
+        ],
+        "chart": {
+          "colors": [
+            "#3458B4",
+            "#20242B",
+          ],
+          "dataLabels": true,
+          "gapWidthPct": 150,
+          "gridlines": true,
+          "kind": "bar",
+          "legendPos": "b",
+          "valAxisTitle": "万元（示例）",
+        },
+        "type": "chart",
+      },
+    ],
+    [
+      {
+        "background": true,
+        "box": [
+          0,
+          0,
+          1280,
+          720,
+        ],
+        "fill": "#F5F3ED",
+        "type": "shape",
+      },
+      {
+        "box": [
+          64,
+          64,
+          1152,
+          72,
+        ],
+        "contentHeight": 57.6,
+        "font": {
+          "bold": true,
+          "color": "#20242B",
+          "family": "Microsoft YaHei",
+          "size": 48,
+        },
+        "lines": [
+          "两种交付方案的取舍",
+        ],
+        "type": "text",
+      },
+      {
+        "box": [
+          64,
+          152,
+          1152,
+          42,
+        ],
+        "contentHeight": 32,
+        "font": {
+          "bold": false,
+          "color": "#5A6270",
+          "family": "Microsoft YaHei",
+          "size": 26.7,
+        },
+        "lines": [
+          "同口径对比，数据仅用于排版验收",
+        ],
+        "type": "text",
+      },
+      {
+        "box": [
+          64,
+          214,
+          560,
+          380,
+        ],
+        "fill": "#FFFFFF",
+        "stroke": "#D8D2C4 1pt",
+        "type": "shape",
+      },
+      {
+        "box": [
+          88,
+          238,
+          512,
+          332,
+        ],
+        "contentHeight": 89.6,
+        "font": {
+          "bold": false,
+          "color": "#20242B",
+          "family": "Microsoft YaHei",
+          "size": 18.7,
+        },
+        "lines": [
+          "标准方案",
+          "交付周期：4 周",
+          "项目预算：12 万元",
+          "适用条件：需求稳定",
+        ],
+        "type": "text",
+      },
+      {
+        "box": [
+          656,
+          214,
+          560,
+          380,
+        ],
+        "fill": "#FFFFFF",
+        "stroke": "#D8D2C4 1pt",
+        "type": "shape",
+      },
+      {
+        "box": [
+          680,
+          238,
+          512,
+          332,
+        ],
+        "contentHeight": 89.6,
+        "font": {
+          "bold": false,
+          "color": "#20242B",
+          "family": "Microsoft YaHei",
+          "size": 18.7,
+        },
+        "lines": [
+          "快速方案",
+          "交付周期：2 周",
+          "项目预算：18 万元",
+          "适用条件：时间紧迫",
+        ],
+        "type": "text",
+      },
+    ],
+    [
+      {
+        "background": true,
+        "box": [
+          0,
+          0,
+          1280,
+          720,
+        ],
+        "fill": "#F5F3ED",
+        "type": "shape",
+      },
+      {
+        "box": [
+          64,
+          64,
+          1152,
+          72,
+        ],
+        "contentHeight": 57.6,
+        "font": {
+          "bold": true,
+          "color": "#20242B",
+          "family": "Microsoft YaHei",
+          "size": 48,
+        },
+        "lines": [
+          "下一季度实施路径",
+        ],
+        "type": "text",
+      },
+      {
+        "box": [
+          64,
+          152,
+          1152,
+          42,
+        ],
+        "contentHeight": 32,
+        "font": {
+          "bold": false,
+          "color": "#5A6270",
+          "family": "Microsoft YaHei",
+          "size": 26.7,
+        },
+        "lines": [
+          "每个阶段均有明确交付物",
+        ],
+        "type": "text",
+      },
+      {
+        "box": [
+          96,
+          226,
+          330.7,
+          50,
+        ],
+        "contentHeight": 38.4,
+        "font": {
+          "bold": true,
+          "color": "#3458B4",
+          "family": "Microsoft YaHei",
+          "size": 32,
+        },
+        "lines": [
+          "01",
+        ],
+        "type": "text",
+      },
+      {
+        "box": [
+          96,
+          282,
+          330.7,
+          104,
+        ],
+        "fill": "#FFFFFF",
+        "stroke": "#D8D2C4 1pt",
+        "type": "shape",
+      },
+      {
+        "box": [
+          112,
+          312,
+          298.7,
+          65,
+        ],
+        "contentHeight": 32,
+        "font": {
+          "bold": false,
+          "color": "#20242B",
+          "family": "Microsoft YaHei",
+          "size": 26.7,
+        },
+        "lines": [
+          "需求确认",
+        ],
+        "type": "text",
+      },
+      {
+        "box": [
+          438.7,
+          324,
+          24,
+          18,
+        ],
+        "fill": "#3458B4",
+        "type": "shape",
+      },
+      {
+        "box": [
+          474.7,
+          226,
+          330.7,
+          50,
+        ],
+        "contentHeight": 38.4,
+        "font": {
+          "bold": true,
+          "color": "#3458B4",
+          "family": "Microsoft YaHei",
+          "size": 32,
+        },
+        "lines": [
+          "02",
+        ],
+        "type": "text",
+      },
+      {
+        "box": [
+          474.7,
+          282,
+          330.7,
+          104,
+        ],
+        "fill": "#FFFFFF",
+        "stroke": "#D8D2C4 1pt",
+        "type": "shape",
+      },
+      {
+        "box": [
+          490.7,
+          312,
+          298.7,
+          65,
+        ],
+        "contentHeight": 32,
+        "font": {
+          "bold": false,
+          "color": "#20242B",
+          "family": "Microsoft YaHei",
+          "size": 26.7,
+        },
+        "lines": [
+          "试点交付",
+        ],
+        "type": "text",
+      },
+      {
+        "box": [
+          817.3,
+          324,
+          24,
+          18,
+        ],
+        "fill": "#3458B4",
+        "type": "shape",
+      },
+      {
+        "box": [
+          853.3,
+          226,
+          330.7,
+          50,
+        ],
+        "contentHeight": 38.4,
+        "font": {
+          "bold": true,
+          "color": "#3458B4",
+          "family": "Microsoft YaHei",
+          "size": 32,
+        },
+        "lines": [
+          "03",
+        ],
+        "type": "text",
+      },
+      {
+        "box": [
+          853.3,
+          282,
+          330.7,
+          104,
+        ],
+        "fill": "#FFFFFF",
+        "stroke": "#D8D2C4 1pt",
+        "type": "shape",
+      },
+      {
+        "box": [
+          869.3,
+          312,
+          298.7,
+          65,
+        ],
+        "contentHeight": 32,
+        "font": {
+          "bold": false,
+          "color": "#20242B",
+          "family": "Microsoft YaHei",
+          "size": 26.7,
+        },
+        "lines": [
+          "规模推广",
+        ],
+        "type": "text",
+      },
+      {
+        "box": [
+          64,
+          480,
+          352,
+          112,
+        ],
+        "contentHeight": 22.4,
+        "font": {
+          "bold": false,
+          "color": "#5A6270",
+          "family": "Microsoft YaHei",
+          "size": 18.7,
+        },
+        "lines": [
+          "锁定业务范围与验收标准",
+        ],
+        "type": "text",
+      },
+      {
+        "box": [
+          464,
+          480,
+          352,
+          112,
+        ],
+        "contentHeight": 22.4,
+        "font": {
+          "bold": false,
+          "color": "#5A6270",
+          "family": "Microsoft YaHei",
+          "size": 18.7,
+        },
+        "lines": [
+          "完成一组真实客户试点",
+        ],
+        "type": "text",
+      },
+      {
+        "box": [
+          864,
+          480,
+          352,
+          112,
+        ],
+        "contentHeight": 22.4,
+        "font": {
+          "bold": false,
+          "color": "#5A6270",
+          "family": "Microsoft YaHei",
+          "size": 18.7,
+        },
+        "lines": [
+          "复用验证过的流程和资产",
+        ],
+        "type": "text",
+      },
+    ],
+    [
+      {
+        "background": true,
+        "box": [
+          0,
+          0,
+          1280,
+          720,
+        ],
+        "fill": "#F5F3ED",
+        "type": "shape",
+      },
+      {
+        "box": [
+          64,
+          42,
+          46,
+          4,
+        ],
+        "fill": "#3458B4",
+        "type": "shape",
+      },
+      {
+        "box": [
+          64,
+          62,
+          1152,
+          100,
+        ],
+        "contentHeight": 57.6,
+        "font": {
+          "bold": true,
+          "color": "#20242B",
+          "family": "Microsoft YaHei",
+          "size": 48,
+        },
+        "lines": [
+          "视频任务集中在一个工作台",
+        ],
+        "type": "text",
+      },
+      {
+        "box": [
+          64,
+          169,
+          1152,
+          48,
+        ],
+        "contentHeight": 17.6,
+        "font": {
+          "bold": false,
+          "color": "#5A6270",
+          "family": "Microsoft YaHei",
+          "size": 14.7,
+        },
+        "lines": [
+          "Mona 历史界面截图，2026 年 7 月",
+        ],
+        "type": "text",
+      },
+      {
+        "box": [
+          114.9,
+          244,
+          642.3,
+          380,
+        ],
+        "hasImage": true,
+        "type": "picture",
+      },
+      {
+        "box": [
+          856,
+          290,
+          360,
+          190,
+        ],
+        "contentHeight": 32,
+        "font": {
+          "bold": true,
+          "color": "#20242B",
+          "family": "Microsoft YaHei",
+          "size": 26.7,
+        },
+        "lines": [
+          "从主题输入进入制作过程",
+        ],
+        "type": "text",
+      },
+      {
+        "box": [
+          856,
+          465,
+          360,
+          2,
+        ],
+        "fill": "#D8D2C4",
+        "type": "shape",
+      },
+      {
+        "box": [
+          856,
+          484,
+          360,
+          130,
+        ],
+        "contentHeight": 22.4,
+        "font": {
+          "bold": false,
+          "color": "#5A6270",
+          "family": "Microsoft YaHei",
+          "size": 18.7,
+        },
+        "lines": [
+          "在同一入口查看已有项目",
+        ],
+        "type": "text",
+      },
+    ],
+    [
+      {
+        "background": true,
+        "box": [
+          0,
+          0,
+          1280,
+          720,
+        ],
+        "fill": "#0B1020",
+        "type": "shape",
+      },
+      {
+        "box": [
+          64,
+          42,
+          46,
+          4,
+        ],
+        "fill": "#72DFC1",
+        "type": "shape",
+      },
+      {
+        "box": [
+          64,
+          62,
+          1152,
+          100,
+        ],
+        "contentHeight": 46.4,
+        "font": {
+          "bold": true,
+          "color": "#F5F7FA",
+          "family": "Microsoft YaHei",
+          "size": 38.7,
+        },
+        "lines": [
+          "目标是减少重复准备",
+        ],
+        "type": "text",
+      },
+      {
+        "box": [
+          64,
+          169,
+          1152,
+          48,
+        ],
+        "contentHeight": 19.2,
+        "font": {
+          "bold": false,
+          "color": "#9AA6BD",
+          "family": "Microsoft YaHei",
+          "size": 16,
+        },
+        "lines": [
+          "概念验证示例，非真实性能承诺",
+        ],
+        "type": "text",
+      },
+      {
+        "box": [
+          64,
+          275,
+          740,
+          200,
+        ],
+        "contentHeight": 140.8,
+        "font": {
+          "bold": true,
+          "color": "#72DFC1",
+          "family": "Microsoft YaHei",
+          "size": 117.3,
+        },
+        "lines": [
+          "4 步",
+        ],
+        "type": "text",
+      },
+      {
+        "box": [
+          856,
+          270,
+          3,
+          345,
+        ],
+        "fill": "#27324A",
+        "type": "shape",
+      },
+      {
+        "box": [
+          908,
+          292,
+          308,
+          155,
+        ],
+        "contentHeight": 64,
+        "font": {
+          "bold": true,
+          "color": "#F5F7FA",
+          "family": "Microsoft YaHei",
+          "size": 26.7,
+        },
+        "lines": [
+          "输入主题、配置内容、",
+          "制作场景、导出",
+        ],
+        "type": "text",
+      },
+      {
+        "box": [
+          908,
+          460,
+          308,
+          135,
+        ],
+        "contentHeight": 22.4,
+        "font": {
+          "bold": false,
+          "color": "#9AA6BD",
+          "family": "Microsoft YaHei",
+          "size": 18.7,
+        },
+        "lines": [
+          "把分散的准备动作组织成可见进度",
+        ],
+        "type": "text",
+      },
+    ],
+    [
+      {
+        "background": true,
+        "box": [
+          0,
+          0,
+          1280,
+          720,
+        ],
+        "fill": "#0B1020",
+        "type": "shape",
+      },
+      {
+        "box": [
+          64,
+          42,
+          46,
+          4,
+        ],
+        "fill": "#72DFC1",
+        "type": "shape",
+      },
+      {
+        "box": [
+          64,
+          62,
+          1152,
+          100,
+        ],
+        "contentHeight": 46.4,
+        "font": {
+          "bold": true,
+          "color": "#F5F7FA",
+          "family": "Microsoft YaHei",
+          "size": 38.7,
+        },
+        "lines": [
+          "两种交付方案的取舍",
+        ],
+        "type": "text",
+      },
+      {
+        "box": [
+          64,
+          169,
+          1152,
+          48,
+        ],
+        "contentHeight": 19.2,
+        "font": {
+          "bold": false,
+          "color": "#9AA6BD",
+          "family": "Microsoft YaHei",
+          "size": 16,
+        },
+        "lines": [
+          "同口径对比，数据仅用于排版验收",
+        ],
+        "type": "text",
+      },
+      {
+        "box": [
+          64,
+          247,
+          500,
+          3,
+        ],
+        "fill": "#27324A",
+        "type": "shape",
+      },
+      {
+        "box": [
+          688,
+          247,
+          528,
+          3,
+        ],
+        "fill": "#72DFC1",
+        "type": "shape",
+      },
+      {
+        "box": [
+          64,
+          275,
+          500,
+          325,
+        ],
+        "contentHeight": 128,
+        "font": {
+          "bold": false,
+          "color": "#9AA6BD",
+          "family": "Microsoft YaHei",
+          "size": 26.7,
+        },
+        "lines": [
+          "标准方案",
+          "交付周期：4 周",
+          "项目预算：12 万元",
+          "适用条件：需求稳定",
+        ],
+        "type": "text",
+      },
+      {
+        "box": [
+          688,
+          275,
+          528,
+          325,
+        ],
+        "contentHeight": 128,
+        "font": {
+          "bold": false,
+          "color": "#F5F7FA",
+          "family": "Microsoft YaHei",
+          "size": 26.7,
+        },
+        "lines": [
+          "快速方案",
+          "交付周期：2 周",
+          "项目预算：18 万元",
+          "适用条件：时间紧迫",
+        ],
+        "type": "text",
+      },
+    ],
+    [
+      {
+        "background": true,
+        "box": [
+          0,
+          0,
+          1280,
+          720,
+        ],
+        "fill": "#0B1020",
+        "type": "shape",
+      },
+      {
+        "box": [
+          64,
+          64,
+          1152,
+          72,
+        ],
+        "contentHeight": 46.4,
+        "font": {
+          "bold": true,
+          "color": "#F5F7FA",
+          "family": "Microsoft YaHei",
+          "size": 38.7,
+        },
+        "lines": [
+          "下一季度实施路径",
+        ],
+        "type": "text",
+      },
+      {
+        "box": [
+          64,
+          152,
+          1152,
+          42,
+        ],
+        "contentHeight": 32,
+        "font": {
+          "bold": false,
+          "color": "#9AA6BD",
+          "family": "Microsoft YaHei",
+          "size": 26.7,
+        },
+        "lines": [
+          "每个阶段均有明确交付物",
+        ],
+        "type": "text",
+      },
+      {
+        "box": [
+          96,
+          226,
+          330.7,
+          50,
+        ],
+        "contentHeight": 38.4,
+        "font": {
+          "bold": true,
+          "color": "#72DFC1",
+          "family": "Microsoft YaHei",
+          "size": 32,
+        },
+        "lines": [
+          "01",
+        ],
+        "type": "text",
+      },
+      {
+        "box": [
+          96,
+          282,
+          330.7,
+          104,
+        ],
+        "fill": "#141B30",
+        "stroke": "#27324A 1pt",
+        "type": "shape",
+      },
+      {
+        "box": [
+          112,
+          312,
+          298.7,
+          65,
+        ],
+        "contentHeight": 32,
+        "font": {
+          "bold": false,
+          "color": "#F5F7FA",
+          "family": "Microsoft YaHei",
+          "size": 26.7,
+        },
+        "lines": [
+          "需求确认",
+        ],
+        "type": "text",
+      },
+      {
+        "box": [
+          438.7,
+          324,
+          24,
+          18,
+        ],
+        "fill": "#72DFC1",
+        "type": "shape",
+      },
+      {
+        "box": [
+          474.7,
+          226,
+          330.7,
+          50,
+        ],
+        "contentHeight": 38.4,
+        "font": {
+          "bold": true,
+          "color": "#72DFC1",
+          "family": "Microsoft YaHei",
+          "size": 32,
+        },
+        "lines": [
+          "02",
+        ],
+        "type": "text",
+      },
+      {
+        "box": [
+          474.7,
+          282,
+          330.7,
+          104,
+        ],
+        "fill": "#141B30",
+        "stroke": "#27324A 1pt",
+        "type": "shape",
+      },
+      {
+        "box": [
+          490.7,
+          312,
+          298.7,
+          65,
+        ],
+        "contentHeight": 32,
+        "font": {
+          "bold": false,
+          "color": "#F5F7FA",
+          "family": "Microsoft YaHei",
+          "size": 26.7,
+        },
+        "lines": [
+          "试点交付",
+        ],
+        "type": "text",
+      },
+      {
+        "box": [
+          817.3,
+          324,
+          24,
+          18,
+        ],
+        "fill": "#72DFC1",
+        "type": "shape",
+      },
+      {
+        "box": [
+          853.3,
+          226,
+          330.7,
+          50,
+        ],
+        "contentHeight": 38.4,
+        "font": {
+          "bold": true,
+          "color": "#72DFC1",
+          "family": "Microsoft YaHei",
+          "size": 32,
+        },
+        "lines": [
+          "03",
+        ],
+        "type": "text",
+      },
+      {
+        "box": [
+          853.3,
+          282,
+          330.7,
+          104,
+        ],
+        "fill": "#141B30",
+        "stroke": "#27324A 1pt",
+        "type": "shape",
+      },
+      {
+        "box": [
+          869.3,
+          312,
+          298.7,
+          65,
+        ],
+        "contentHeight": 32,
+        "font": {
+          "bold": false,
+          "color": "#F5F7FA",
+          "family": "Microsoft YaHei",
+          "size": 26.7,
+        },
+        "lines": [
+          "规模推广",
+        ],
+        "type": "text",
+      },
+      {
+        "box": [
+          64,
+          480,
+          352,
+          112,
+        ],
+        "contentHeight": 22.4,
+        "font": {
+          "bold": false,
+          "color": "#9AA6BD",
+          "family": "Microsoft YaHei",
+          "size": 18.7,
+        },
+        "lines": [
+          "锁定业务范围与验收标准",
+        ],
+        "type": "text",
+      },
+      {
+        "box": [
+          464,
+          480,
+          352,
+          112,
+        ],
+        "contentHeight": 22.4,
+        "font": {
+          "bold": false,
+          "color": "#9AA6BD",
+          "family": "Microsoft YaHei",
+          "size": 18.7,
+        },
+        "lines": [
+          "完成一组真实客户试点",
+        ],
+        "type": "text",
+      },
+      {
+        "box": [
+          864,
+          480,
+          352,
+          112,
+        ],
+        "contentHeight": 22.4,
+        "font": {
+          "bold": false,
+          "color": "#9AA6BD",
+          "family": "Microsoft YaHei",
+          "size": 18.7,
+        },
+        "lines": [
+          "复用验证过的流程和资产",
+        ],
+        "type": "text",
+      },
+    ],
+    [
+      {
+        "background": true,
+        "box": [
+          0,
+          0,
+          1280,
+          720,
+        ],
+        "fill": "#0B1020",
+        "type": "shape",
+      },
+      {
+        "box": [
+          64,
+          42,
+          46,
+          4,
+        ],
+        "fill": "#72DFC1",
+        "type": "shape",
+      },
+      {
+        "box": [
+          64,
+          62,
+          1152,
+          100,
+        ],
+        "contentHeight": 46.4,
+        "font": {
+          "bold": true,
+          "color": "#F5F7FA",
+          "family": "Microsoft YaHei",
+          "size": 38.7,
+        },
+        "lines": [
+          "一个工作台连接三类能力",
+        ],
+        "type": "text",
+      },
+      {
+        "box": [
+          64,
+          169,
+          1152,
+          48,
+        ],
+        "contentHeight": 19.2,
+        "font": {
+          "bold": false,
+          "color": "#9AA6BD",
+          "family": "Microsoft YaHei",
+          "size": 16,
+        },
+        "lines": [
+          "产品结构示意，不代表内部部署架构",
+        ],
+        "type": "text",
+      },
+      {
+        "box": [
+          485,
+          245,
+          310,
+          74,
+        ],
+        "fill": "#141B30",
+        "stroke": "#27324A 1pt",
+        "type": "shape",
+      },
+      {
+        "box": [
+          505,
+          260,
+          270,
+          52,
+        ],
+        "contentHeight": 32,
+        "font": {
+          "bold": true,
+          "color": "#72DFC1",
+          "family": "Microsoft YaHei",
+          "size": 26.7,
+        },
+        "lines": [
+          "视频工作台",
+        ],
+        "type": "text",
+      },
+      {
+        "box": [
+          640,
+          319,
+          2,
+          50,
+        ],
+        "fill": "#72DFC1",
+        "type": "shape",
+      },
+      {
+        "box": [
+          272,
+          369,
+          736,
+          2,
+        ],
+        "fill": "#72DFC1",
+        "type": "shape",
+      },
+      {
+        "box": [
+          272,
+          369,
+          2,
+          53,
+        ],
+        "fill": "#72DFC1",
+        "type": "shape",
+      },
+      {
+        "box": [
+          98,
+          422,
+          348,
+          83,
+        ],
+        "fill": "#141B30",
+        "stroke": "#27324A 1pt",
+        "type": "shape",
+      },
+      {
+        "box": [
+          113,
+          440,
+          318,
+          58,
+        ],
+        "contentHeight": 27.2,
+        "font": {
+          "bold": false,
+          "color": "#F5F7FA",
+          "family": "Microsoft YaHei",
+          "size": 22.7,
+        },
+        "lines": [
+          "内容组织",
+        ],
+        "type": "text",
+      },
+      {
+        "box": [
+          640,
+          369,
+          2,
+          53,
+        ],
+        "fill": "#72DFC1",
+        "type": "shape",
+      },
+      {
+        "box": [
+          466,
+          422,
+          348,
+          83,
+        ],
+        "fill": "#141B30",
+        "stroke": "#27324A 1pt",
+        "type": "shape",
+      },
+      {
+        "box": [
+          481,
+          440,
+          318,
+          58,
+        ],
+        "contentHeight": 27.2,
+        "font": {
+          "bold": false,
+          "color": "#F5F7FA",
+          "family": "Microsoft YaHei",
+          "size": 22.7,
+        },
+        "lines": [
+          "场景制作",
+        ],
+        "type": "text",
+      },
+      {
+        "box": [
+          1008,
+          369,
+          2,
+          53,
+        ],
+        "fill": "#72DFC1",
+        "type": "shape",
+      },
+      {
+        "box": [
+          834,
+          422,
+          348,
+          83,
+        ],
+        "fill": "#141B30",
+        "stroke": "#27324A 1pt",
+        "type": "shape",
+      },
+      {
+        "box": [
+          849,
+          440,
+          318,
+          58,
+        ],
+        "contentHeight": 27.2,
+        "font": {
+          "bold": false,
+          "color": "#F5F7FA",
+          "family": "Microsoft YaHei",
+          "size": 22.7,
+        },
+        "lines": [
+          "文件交付",
+        ],
+        "type": "text",
+      },
+      {
+        "box": [
+          64,
+          551,
+          352,
+          105,
+        ],
+        "contentHeight": 22.4,
+        "font": {
+          "bold": false,
+          "color": "#9AA6BD",
+          "family": "Microsoft YaHei",
+          "size": 18.7,
+        },
+        "lines": [
+          "先确定主题和叙述顺序",
+        ],
+        "type": "text",
+      },
+      {
+        "box": [
+          464,
+          551,
+          352,
+          105,
+        ],
+        "contentHeight": 22.4,
+        "font": {
+          "bold": false,
+          "color": "#9AA6BD",
+          "family": "Microsoft YaHei",
+          "size": 18.7,
+        },
+        "lines": [
+          "逐个制作并检查场景",
+        ],
+        "type": "text",
+      },
+      {
+        "box": [
+          864,
+          551,
+          352,
+          105,
+        ],
+        "contentHeight": 22.4,
+        "font": {
+          "bold": false,
+          "color": "#9AA6BD",
+          "family": "Microsoft YaHei",
+          "size": 18.7,
+        },
+        "lines": [
+          "导出可使用的最终文件",
+        ],
+        "type": "text",
+      },
+    ],
+    [
+      {
+        "background": true,
+        "box": [
+          0,
+          0,
+          1280,
+          720,
+        ],
+        "fill": "#0B1020",
+        "type": "shape",
+      },
+      {
+        "box": [
+          64,
+          42,
+          46,
+          4,
+        ],
+        "fill": "#72DFC1",
+        "type": "shape",
+      },
+      {
+        "box": [
+          64,
+          62,
+          1152,
+          100,
+        ],
+        "contentHeight": 46.4,
+        "font": {
+          "bold": true,
+          "color": "#F5F7FA",
+          "family": "Microsoft YaHei",
+          "size": 38.7,
+        },
+        "lines": [
+          "主题输入决定后续内容范围",
+        ],
+        "type": "text",
+      },
+      {
+        "box": [
+          64,
+          169,
+          1152,
+          48,
+        ],
+        "contentHeight": 19.2,
+        "font": {
+          "bold": false,
+          "color": "#9AA6BD",
+          "family": "Microsoft YaHei",
+          "size": 16,
+        },
+        "lines": [
+          "Mona 历史界面截图，用于功能说明",
+        ],
+        "type": "text",
+      },
+      {
+        "box": [
+          134,
+          255,
+          600,
+          355,
+        ],
+        "hasImage": true,
+        "type": "picture",
+      },
+      {
+        "box": [
+          842,
+          245,
+          2,
+          376,
+        ],
+        "fill": "#27324A",
+        "type": "shape",
+      },
+      {
+        "box": [
+          880,
+          247,
+          330,
+          36,
+        ],
+        "contentHeight": 19.2,
+        "font": {
+          "bold": true,
+          "color": "#72DFC1",
+          "family": "Microsoft YaHei",
+          "size": 16,
+        },
+        "lines": [
+          "主题",
+        ],
+        "type": "text",
+      },
+      {
+        "box": [
+          880,
+          287,
+          330,
+          92,
+        ],
+        "contentHeight": 22.4,
+        "font": {
+          "bold": false,
+          "color": "#F5F7FA",
+          "family": "Microsoft YaHei",
+          "size": 18.7,
+        },
+        "lines": [
+          "清楚描述对象、目标与主要内容",
+        ],
+        "type": "text",
+      },
+      {
+        "box": [
+          880,
+          382,
+          330,
+          36,
+        ],
+        "contentHeight": 19.2,
+        "font": {
+          "bold": true,
+          "color": "#72DFC1",
+          "family": "Microsoft YaHei",
+          "size": 16,
+        },
+        "lines": [
+          "比例",
+        ],
+        "type": "text",
+      },
+      {
+        "box": [
+          880,
+          422,
+          330,
+          92,
+        ],
+        "contentHeight": 22.4,
+        "font": {
+          "bold": false,
+          "color": "#F5F7FA",
+          "family": "Microsoft YaHei",
+          "size": 18.7,
+        },
+        "lines": [
+          "根据观看场景选择画面比例",
+        ],
+        "type": "text",
+      },
+      {
+        "box": [
+          880,
+          517,
+          330,
+          36,
+        ],
+        "contentHeight": 19.2,
+        "font": {
+          "bold": true,
+          "color": "#72DFC1",
+          "family": "Microsoft YaHei",
+          "size": 16,
+        },
+        "lines": [
+          "项目",
+        ],
+        "type": "text",
+      },
+      {
+        "box": [
+          880,
+          557,
+          330,
+          92,
+        ],
+        "contentHeight": 22.4,
+        "font": {
+          "bold": false,
+          "color": "#F5F7FA",
+          "family": "Microsoft YaHei",
+          "size": 18.7,
+        },
+        "lines": [
+          "从项目列表继续已有工作",
+        ],
+        "type": "text",
+      },
+    ],
+    [
+      {
+        "background": true,
+        "box": [
+          0,
+          0,
+          1280,
+          720,
+        ],
+        "fill": "#0B1020",
+        "type": "shape",
+      },
+      {
+        "box": [
+          64,
+          42,
+          46,
+          4,
+        ],
+        "fill": "#72DFC1",
+        "type": "shape",
+      },
+      {
+        "box": [
+          64,
+          62,
+          1152,
+          100,
+        ],
+        "contentHeight": 46.4,
+        "font": {
+          "bold": true,
+          "color": "#F5F7FA",
+          "family": "Microsoft YaHei",
+          "size": 38.7,
+        },
+        "lines": [
+          "经营复盘的四项关注",
+        ],
+        "type": "text",
+      },
+      {
+        "box": [
+          64,
+          169,
+          1152,
+          48,
+        ],
+        "contentHeight": 19.2,
+        "font": {
+          "bold": false,
+          "color": "#9AA6BD",
+          "family": "Microsoft YaHei",
+          "size": 16,
+        },
+        "lines": [
+          "讨论重点与负责团队",
+        ],
+        "type": "text",
+      },
+      {
+        "box": [
+          64,
+          255,
+          34,
+          34,
+        ],
+        "hasImage": true,
+        "type": "picture",
+      },
+      {
+        "box": [
+          119,
+          252,
+          485,
+          52,
+        ],
+        "contentHeight": 32,
+        "font": {
+          "bold": true,
+          "color": "#F5F7FA",
+          "family": "Microsoft YaHei",
+          "size": 26.7,
+        },
+        "lines": [
+          "收入",
+        ],
+        "type": "text",
+      },
+      {
+        "box": [
+          64,
+          321,
+          552,
+          1,
+        ],
+        "fill": "#27324A",
+        "type": "shape",
+      },
+      {
+        "box": [
+          64,
+          342,
+          525,
+          95,
+        ],
+        "contentHeight": 22.4,
+        "font": {
+          "bold": false,
+          "color": "#9AA6BD",
+          "family": "Microsoft YaHei",
+          "size": 18.7,
+        },
+        "lines": [
+          "销售团队核对目标与实际差异",
+        ],
+        "type": "text",
+      },
+      {
+        "box": [
+          656,
+          255,
+          34,
+          34,
+        ],
+        "hasImage": true,
+        "type": "picture",
+      },
+      {
+        "box": [
+          711,
+          252,
+          485,
+          52,
+        ],
+        "contentHeight": 32,
+        "font": {
+          "bold": true,
+          "color": "#F5F7FA",
+          "family": "Microsoft YaHei",
+          "size": 26.7,
+        },
+        "lines": [
+          "成本",
+        ],
+        "type": "text",
+      },
+      {
+        "box": [
+          656,
+          321,
+          552,
+          1,
+        ],
+        "fill": "#27324A",
+        "type": "shape",
+      },
+      {
+        "box": [
+          656,
+          342,
+          525,
+          95,
+        ],
+        "contentHeight": 22.4,
+        "font": {
+          "bold": false,
+          "color": "#9AA6BD",
+          "family": "Microsoft YaHei",
+          "size": 18.7,
+        },
+        "lines": [
+          "财务团队复核主要成本变化",
+        ],
+        "type": "text",
+      },
+      {
+        "box": [
+          64,
+          455,
+          34,
+          34,
+        ],
+        "hasImage": true,
+        "type": "picture",
+      },
+      {
+        "box": [
+          119,
+          452,
+          485,
+          52,
+        ],
+        "contentHeight": 32,
+        "font": {
+          "bold": true,
+          "color": "#F5F7FA",
+          "family": "Microsoft YaHei",
+          "size": 26.7,
+        },
+        "lines": [
+          "交付",
+        ],
+        "type": "text",
+      },
+      {
+        "box": [
+          64,
+          521,
+          552,
+          1,
+        ],
+        "fill": "#27324A",
+        "type": "shape",
+      },
+      {
+        "box": [
+          64,
+          542,
+          525,
+          95,
+        ],
+        "contentHeight": 22.4,
+        "font": {
+          "bold": false,
+          "color": "#9AA6BD",
+          "family": "Microsoft YaHei",
+          "size": 18.7,
+        },
+        "lines": [
+          "项目团队识别延期与资源缺口",
+        ],
+        "type": "text",
+      },
+      {
+        "box": [
+          656,
+          455,
+          34,
+          34,
+        ],
+        "hasImage": true,
+        "type": "picture",
+      },
+      {
+        "box": [
+          711,
+          452,
+          485,
+          52,
+        ],
+        "contentHeight": 32,
+        "font": {
+          "bold": true,
+          "color": "#F5F7FA",
+          "family": "Microsoft YaHei",
+          "size": 26.7,
+        },
+        "lines": [
+          "留存",
+        ],
+        "type": "text",
+      },
+      {
+        "box": [
+          656,
+          521,
+          552,
+          1,
+        ],
+        "fill": "#27324A",
+        "type": "shape",
+      },
+      {
+        "box": [
+          656,
+          542,
+          525,
+          95,
+        ],
+        "contentHeight": 22.4,
+        "font": {
+          "bold": false,
+          "color": "#9AA6BD",
+          "family": "Microsoft YaHei",
+          "size": 18.7,
+        },
+        "lines": [
+          "客户团队跟进续约与使用反馈",
+        ],
+        "type": "text",
+      },
+    ],
+    [
+      {
+        "background": true,
+        "box": [
+          0,
+          0,
+          1280,
+          720,
+        ],
+        "fill": "#0B1020",
+        "type": "shape",
+      },
+      {
+        "box": [
+          64,
+          42,
+          46,
+          4,
+        ],
+        "fill": "#72DFC1",
+        "type": "shape",
+      },
+      {
+        "box": [
+          64,
+          62,
+          1152,
+          100,
+        ],
+        "contentHeight": 46.4,
+        "font": {
+          "bold": true,
+          "color": "#F5F7FA",
+          "family": "Microsoft YaHei",
+          "size": 38.7,
+        },
+        "lines": [
+          "下一季度实施路径",
+        ],
+        "type": "text",
+      },
+      {
+        "box": [
+          64,
+          169,
+          1152,
+          48,
+        ],
+        "contentHeight": 19.2,
+        "font": {
+          "bold": false,
+          "color": "#9AA6BD",
+          "family": "Microsoft YaHei",
+          "size": 16,
+        },
+        "lines": [
+          "每个阶段均有明确交付物",
+        ],
+        "type": "text",
+      },
+      {
+        "box": [
+          64,
+          248,
+          100,
+          64,
+        ],
+        "contentHeight": 44.8,
+        "font": {
+          "bold": true,
+          "color": "#72DFC1",
+          "family": "Microsoft YaHei",
+          "size": 37.3,
+        },
+        "lines": [
+          "01",
+        ],
+        "type": "text",
+      },
+      {
+        "box": [
+          180,
+          248,
+          270,
+          60,
+        ],
+        "contentHeight": 32,
+        "font": {
+          "bold": false,
+          "color": "#F5F7FA",
+          "family": "Microsoft YaHei",
+          "size": 26.7,
+        },
+        "lines": [
+          "需求确认",
+        ],
+        "type": "text",
+      },
+      {
+        "box": [
+          469,
+          248,
+          747,
+          123.7,
+        ],
+        "contentHeight": 25.6,
+        "font": {
+          "bold": false,
+          "color": "#F5F7FA",
+          "family": "Microsoft YaHei",
+          "size": 21.3,
+        },
+        "lines": [
+          "锁定业务范围与验收标准",
+        ],
+        "type": "text",
+      },
+      {
+        "box": [
+          180,
+          369.7,
+          1036,
+          1,
+        ],
+        "fill": "#72DFC1",
+        "type": "shape",
+      },
+      {
+        "box": [
+          64,
+          379.7,
+          100,
+          64,
+        ],
+        "contentHeight": 44.8,
+        "font": {
+          "bold": true,
+          "color": "#72DFC1",
+          "family": "Microsoft YaHei",
+          "size": 37.3,
+        },
+        "lines": [
+          "02",
+        ],
+        "type": "text",
+      },
+      {
+        "box": [
+          180,
+          379.7,
+          270,
+          60,
+        ],
+        "contentHeight": 32,
+        "font": {
+          "bold": false,
+          "color": "#F5F7FA",
+          "family": "Microsoft YaHei",
+          "size": 26.7,
+        },
+        "lines": [
+          "试点交付",
+        ],
+        "type": "text",
+      },
+      {
+        "box": [
+          469,
+          379.7,
+          747,
+          123.7,
+        ],
+        "contentHeight": 25.6,
+        "font": {
+          "bold": false,
+          "color": "#F5F7FA",
+          "family": "Microsoft YaHei",
+          "size": 21.3,
+        },
+        "lines": [
+          "完成一组真实客户试点",
+        ],
+        "type": "text",
+      },
+      {
+        "box": [
+          180,
+          501.3,
+          1036,
+          1,
+        ],
+        "fill": "#72DFC1",
+        "type": "shape",
+      },
+      {
+        "box": [
+          64,
+          511.3,
+          100,
+          64,
+        ],
+        "contentHeight": 44.8,
+        "font": {
+          "bold": true,
+          "color": "#72DFC1",
+          "family": "Microsoft YaHei",
+          "size": 37.3,
+        },
+        "lines": [
+          "03",
+        ],
+        "type": "text",
+      },
+      {
+        "box": [
+          180,
+          511.3,
+          270,
+          60,
+        ],
+        "contentHeight": 32,
+        "font": {
+          "bold": false,
+          "color": "#F5F7FA",
+          "family": "Microsoft YaHei",
+          "size": 26.7,
+        },
+        "lines": [
+          "规模推广",
+        ],
+        "type": "text",
+      },
+      {
+        "box": [
+          469,
+          511.3,
+          747,
+          123.7,
+        ],
+        "contentHeight": 25.6,
+        "font": {
+          "bold": false,
+          "color": "#F5F7FA",
+          "family": "Microsoft YaHei",
+          "size": 21.3,
+        },
+        "lines": [
+          "复用验证过的流程和资产",
+        ],
+        "type": "text",
+      },
+    ],
+    [
+      {
+        "background": true,
+        "box": [
+          0,
+          0,
+          1280,
+          720,
+        ],
+        "fill": "#F5F3ED",
+        "type": "shape",
+      },
+      {
+        "box": [
+          64,
+          42,
+          46,
+          4,
+        ],
+        "fill": "#3458B4",
+        "type": "shape",
+      },
+      {
+        "box": [
+          64,
+          62,
+          1152,
+          100,
+        ],
+        "contentHeight": 57.6,
+        "font": {
+          "bold": true,
+          "color": "#20242B",
+          "family": "Microsoft YaHei",
+          "size": 48,
+        },
+        "lines": [
+          "经营目标超额完成",
+        ],
+        "type": "text",
+      },
+      {
+        "box": [
+          64,
+          169,
+          1152,
+          48,
+        ],
+        "contentHeight": 17.6,
+        "font": {
+          "bold": false,
+          "color": "#5A6270",
+          "family": "Microsoft YaHei",
+          "size": 14.7,
+        },
+        "lines": [
+          "2026 年第三季度，内部培训示例数据",
+        ],
+        "type": "text",
+      },
+      {
+        "box": [
+          64,
+          275,
+          740,
+          200,
+        ],
+        "contentHeight": 140.8,
+        "font": {
+          "bold": true,
+          "color": "#3458B4",
+          "family": "Microsoft YaHei",
+          "size": 117.3,
+        },
+        "lines": [
+          "108%",
+        ],
+        "type": "text",
+      },
+      {
+        "box": [
+          856,
+          270,
+          3,
+          345,
+        ],
+        "fill": "#D8D2C4",
+        "type": "shape",
+      },
+      {
+        "box": [
+          908,
+          292,
+          308,
+          155,
+        ],
+        "contentHeight": 64,
+        "font": {
+          "bold": true,
+          "color": "#20242B",
+          "family": "Microsoft YaHei",
+          "size": 26.7,
+        },
+        "lines": [
+          "实际收入 108 万元，目",
+          "标 100 万元",
+        ],
+        "type": "text",
+      },
+      {
+        "box": [
+          908,
+          460,
+          308,
+          135,
+        ],
+        "contentHeight": 22.4,
+        "font": {
+          "bold": false,
+          "color": "#5A6270",
+          "family": "Microsoft YaHei",
+          "size": 18.7,
+        },
+        "lines": [
+          "下一季度优先保障高毛利业务交付",
+        ],
+        "type": "text",
+      },
+    ],
+    [
+      {
+        "background": true,
+        "box": [
+          0,
+          0,
+          1280,
+          720,
+        ],
+        "fill": "#F5F3ED",
+        "type": "shape",
+      },
+      {
+        "box": [
+          64,
+          42,
+          46,
+          4,
+        ],
+        "fill": "#3458B4",
+        "type": "shape",
+      },
+      {
+        "box": [
+          64,
+          62,
+          1152,
+          100,
+        ],
+        "contentHeight": 57.6,
+        "font": {
+          "bold": true,
+          "color": "#20242B",
+          "family": "Microsoft YaHei",
+          "size": 48,
+        },
+        "lines": [
+          "一个工作台连接三类能力",
+        ],
+        "type": "text",
+      },
+      {
+        "box": [
+          64,
+          169,
+          1152,
+          48,
+        ],
+        "contentHeight": 17.6,
+        "font": {
+          "bold": false,
+          "color": "#5A6270",
+          "family": "Microsoft YaHei",
+          "size": 14.7,
+        },
+        "lines": [
+          "产品结构示意，不代表内部部署架构",
+        ],
+        "type": "text",
+      },
+      {
+        "box": [
+          485,
+          245,
+          310,
+          74,
+        ],
+        "fill": "#FFFFFF",
+        "stroke": "#D8D2C4 1pt",
+        "type": "shape",
+      },
+      {
+        "box": [
+          505,
+          260,
+          270,
+          52,
+        ],
+        "contentHeight": 32,
+        "font": {
+          "bold": true,
+          "color": "#3458B4",
+          "family": "Microsoft YaHei",
+          "size": 26.7,
+        },
+        "lines": [
+          "视频工作台",
+        ],
+        "type": "text",
+      },
+      {
+        "box": [
+          640,
+          319,
+          2,
+          50,
+        ],
+        "fill": "#3458B4",
+        "type": "shape",
+      },
+      {
+        "box": [
+          272,
+          369,
+          736,
+          2,
+        ],
+        "fill": "#3458B4",
+        "type": "shape",
+      },
+      {
+        "box": [
+          272,
+          369,
+          2,
+          53,
+        ],
+        "fill": "#3458B4",
+        "type": "shape",
+      },
+      {
+        "box": [
+          98,
+          422,
+          348,
+          83,
+        ],
+        "fill": "#FFFFFF",
+        "stroke": "#D8D2C4 1pt",
+        "type": "shape",
+      },
+      {
+        "box": [
+          113,
+          440,
+          318,
+          58,
+        ],
+        "contentHeight": 27.2,
+        "font": {
+          "bold": false,
+          "color": "#20242B",
+          "family": "Microsoft YaHei",
+          "size": 22.7,
+        },
+        "lines": [
+          "内容组织",
+        ],
+        "type": "text",
+      },
+      {
+        "box": [
+          640,
+          369,
+          2,
+          53,
+        ],
+        "fill": "#3458B4",
+        "type": "shape",
+      },
+      {
+        "box": [
+          466,
+          422,
+          348,
+          83,
+        ],
+        "fill": "#FFFFFF",
+        "stroke": "#D8D2C4 1pt",
+        "type": "shape",
+      },
+      {
+        "box": [
+          481,
+          440,
+          318,
+          58,
+        ],
+        "contentHeight": 27.2,
+        "font": {
+          "bold": false,
+          "color": "#20242B",
+          "family": "Microsoft YaHei",
+          "size": 22.7,
+        },
+        "lines": [
+          "场景制作",
+        ],
+        "type": "text",
+      },
+      {
+        "box": [
+          1008,
+          369,
+          2,
+          53,
+        ],
+        "fill": "#3458B4",
+        "type": "shape",
+      },
+      {
+        "box": [
+          834,
+          422,
+          348,
+          83,
+        ],
+        "fill": "#FFFFFF",
+        "stroke": "#D8D2C4 1pt",
+        "type": "shape",
+      },
+      {
+        "box": [
+          849,
+          440,
+          318,
+          58,
+        ],
+        "contentHeight": 27.2,
+        "font": {
+          "bold": false,
+          "color": "#20242B",
+          "family": "Microsoft YaHei",
+          "size": 22.7,
+        },
+        "lines": [
+          "文件交付",
+        ],
+        "type": "text",
+      },
+      {
+        "box": [
+          64,
+          551,
+          352,
+          105,
+        ],
+        "contentHeight": 22.4,
+        "font": {
+          "bold": false,
+          "color": "#5A6270",
+          "family": "Microsoft YaHei",
+          "size": 18.7,
+        },
+        "lines": [
+          "先确定主题和叙述顺序",
+        ],
+        "type": "text",
+      },
+      {
+        "box": [
+          464,
+          551,
+          352,
+          105,
+        ],
+        "contentHeight": 22.4,
+        "font": {
+          "bold": false,
+          "color": "#5A6270",
+          "family": "Microsoft YaHei",
+          "size": 18.7,
+        },
+        "lines": [
+          "逐个制作并检查场景",
+        ],
+        "type": "text",
+      },
+      {
+        "box": [
+          864,
+          551,
+          352,
+          105,
+        ],
+        "contentHeight": 22.4,
+        "font": {
+          "bold": false,
+          "color": "#5A6270",
+          "family": "Microsoft YaHei",
+          "size": 18.7,
+        },
+        "lines": [
+          "导出可使用的最终文件",
+        ],
+        "type": "text",
+      },
+    ],
+    [
+      {
+        "background": true,
+        "box": [
+          0,
+          0,
+          1280,
+          720,
+        ],
+        "fill": "#F5F3ED",
+        "type": "shape",
+      },
+      {
+        "box": [
+          64,
+          42,
+          46,
+          4,
+        ],
+        "fill": "#3458B4",
+        "type": "shape",
+      },
+      {
+        "box": [
+          64,
+          62,
+          1152,
+          100,
+        ],
+        "contentHeight": 57.6,
+        "font": {
+          "bold": true,
+          "color": "#20242B",
+          "family": "Microsoft YaHei",
+          "size": 48,
+        },
+        "lines": [
+          "把模糊主题改成具体任务",
+        ],
+        "type": "text",
+      },
+      {
+        "box": [
+          64,
+          169,
+          1152,
+          48,
+        ],
+        "contentHeight": 17.6,
+        "font": {
+          "bold": false,
+          "color": "#5A6270",
+          "family": "Microsoft YaHei",
+          "size": 14.7,
+        },
+        "lines": [
+          "历史产品界面，用于教学演示",
+        ],
+        "type": "text",
+      },
+      {
+        "box": [
+          134,
+          255,
+          600,
+          355,
+        ],
+        "hasImage": true,
+        "type": "picture",
+      },
+      {
+        "box": [
+          842,
+          245,
+          2,
+          376,
+        ],
+        "fill": "#D8D2C4",
+        "type": "shape",
+      },
+      {
+        "box": [
+          880,
+          247,
+          330,
+          36,
+        ],
+        "contentHeight": 17.6,
+        "font": {
+          "bold": true,
+          "color": "#3458B4",
+          "family": "Microsoft YaHei",
+          "size": 14.7,
+        },
+        "lines": [
+          "对象",
+        ],
+        "type": "text",
+      },
+      {
+        "box": [
+          880,
+          287,
+          330,
+          92,
+        ],
+        "contentHeight": 22.4,
+        "font": {
+          "bold": false,
+          "color": "#20242B",
+          "family": "Microsoft YaHei",
+          "size": 18.7,
+        },
+        "lines": [
+          "明确视频面向的观众",
+        ],
+        "type": "text",
+      },
+      {
+        "box": [
+          880,
+          382,
+          330,
+          36,
+        ],
+        "contentHeight": 17.6,
+        "font": {
+          "bold": true,
+          "color": "#3458B4",
+          "family": "Microsoft YaHei",
+          "size": 14.7,
+        },
+        "lines": [
+          "目标",
+        ],
+        "type": "text",
+      },
+      {
+        "box": [
+          880,
+          422,
+          330,
+          92,
+        ],
+        "contentHeight": 22.4,
+        "font": {
+          "bold": false,
+          "color": "#20242B",
+          "family": "Microsoft YaHei",
+          "size": 18.7,
+        },
+        "lines": [
+          "说明需要解释的具体问题",
+        ],
+        "type": "text",
+      },
+      {
+        "box": [
+          880,
+          517,
+          330,
+          36,
+        ],
+        "contentHeight": 17.6,
+        "font": {
+          "bold": true,
+          "color": "#3458B4",
+          "family": "Microsoft YaHei",
+          "size": 14.7,
+        },
+        "lines": [
+          "材料",
+        ],
+        "type": "text",
+      },
+      {
+        "box": [
+          880,
+          557,
+          330,
+          92,
+        ],
+        "contentHeight": 22.4,
+        "font": {
+          "bold": false,
+          "color": "#20242B",
+          "family": "Microsoft YaHei",
+          "size": 18.7,
+        },
+        "lines": [
+          "给出已有素材与限制条件",
+        ],
+        "type": "text",
+      },
+    ],
+    [
+      {
+        "background": true,
+        "box": [
+          0,
+          0,
+          1280,
+          720,
+        ],
+        "fill": "#F5F3ED",
+        "type": "shape",
+      },
+      {
+        "box": [
+          64,
+          42,
+          46,
+          4,
+        ],
+        "fill": "#3458B4",
+        "type": "shape",
+      },
+      {
+        "box": [
+          64,
+          62,
+          1152,
+          100,
+        ],
+        "contentHeight": 57.6,
+        "font": {
+          "bold": true,
+          "color": "#20242B",
+          "family": "Microsoft YaHei",
+          "size": 48,
+        },
+        "lines": [
+          "经营复盘的四项关注",
+        ],
+        "type": "text",
+      },
+      {
+        "box": [
+          64,
+          169,
+          1152,
+          48,
+        ],
+        "contentHeight": 17.6,
+        "font": {
+          "bold": false,
+          "color": "#5A6270",
+          "family": "Microsoft YaHei",
+          "size": 14.7,
+        },
+        "lines": [
+          "讨论重点与负责团队",
+        ],
+        "type": "text",
+      },
+      {
+        "box": [
+          64,
+          255,
+          34,
+          34,
+        ],
+        "hasImage": true,
+        "type": "picture",
+      },
+      {
+        "box": [
+          119,
+          252,
+          485,
+          52,
+        ],
+        "contentHeight": 32,
+        "font": {
+          "bold": true,
+          "color": "#20242B",
+          "family": "Microsoft YaHei",
+          "size": 26.7,
+        },
+        "lines": [
+          "收入",
+        ],
+        "type": "text",
+      },
+      {
+        "box": [
+          64,
+          321,
+          552,
+          1,
+        ],
+        "fill": "#D8D2C4",
+        "type": "shape",
+      },
+      {
+        "box": [
+          64,
+          342,
+          525,
+          95,
+        ],
+        "contentHeight": 22.4,
+        "font": {
+          "bold": false,
+          "color": "#5A6270",
+          "family": "Microsoft YaHei",
+          "size": 18.7,
+        },
+        "lines": [
+          "销售团队核对目标与实际差异",
+        ],
+        "type": "text",
+      },
+      {
+        "box": [
+          656,
+          255,
+          34,
+          34,
+        ],
+        "hasImage": true,
+        "type": "picture",
+      },
+      {
+        "box": [
+          711,
+          252,
+          485,
+          52,
+        ],
+        "contentHeight": 32,
+        "font": {
+          "bold": true,
+          "color": "#20242B",
+          "family": "Microsoft YaHei",
+          "size": 26.7,
+        },
+        "lines": [
+          "成本",
+        ],
+        "type": "text",
+      },
+      {
+        "box": [
+          656,
+          321,
+          552,
+          1,
+        ],
+        "fill": "#D8D2C4",
+        "type": "shape",
+      },
+      {
+        "box": [
+          656,
+          342,
+          525,
+          95,
+        ],
+        "contentHeight": 22.4,
+        "font": {
+          "bold": false,
+          "color": "#5A6270",
+          "family": "Microsoft YaHei",
+          "size": 18.7,
+        },
+        "lines": [
+          "财务团队复核主要成本变化",
+        ],
+        "type": "text",
+      },
+      {
+        "box": [
+          64,
+          455,
+          34,
+          34,
+        ],
+        "hasImage": true,
+        "type": "picture",
+      },
+      {
+        "box": [
+          119,
+          452,
+          485,
+          52,
+        ],
+        "contentHeight": 32,
+        "font": {
+          "bold": true,
+          "color": "#20242B",
+          "family": "Microsoft YaHei",
+          "size": 26.7,
+        },
+        "lines": [
+          "交付",
+        ],
+        "type": "text",
+      },
+      {
+        "box": [
+          64,
+          521,
+          552,
+          1,
+        ],
+        "fill": "#D8D2C4",
+        "type": "shape",
+      },
+      {
+        "box": [
+          64,
+          542,
+          525,
+          95,
+        ],
+        "contentHeight": 22.4,
+        "font": {
+          "bold": false,
+          "color": "#5A6270",
+          "family": "Microsoft YaHei",
+          "size": 18.7,
+        },
+        "lines": [
+          "项目团队识别延期与资源缺口",
+        ],
+        "type": "text",
+      },
+      {
+        "box": [
+          656,
+          455,
+          34,
+          34,
+        ],
+        "hasImage": true,
+        "type": "picture",
+      },
+      {
+        "box": [
+          711,
+          452,
+          485,
+          52,
+        ],
+        "contentHeight": 32,
+        "font": {
+          "bold": true,
+          "color": "#20242B",
+          "family": "Microsoft YaHei",
+          "size": 26.7,
+        },
+        "lines": [
+          "留存",
+        ],
+        "type": "text",
+      },
+      {
+        "box": [
+          656,
+          521,
+          552,
+          1,
+        ],
+        "fill": "#D8D2C4",
+        "type": "shape",
+      },
+      {
+        "box": [
+          656,
+          542,
+          525,
+          95,
+        ],
+        "contentHeight": 22.4,
+        "font": {
+          "bold": false,
+          "color": "#5A6270",
+          "family": "Microsoft YaHei",
+          "size": 18.7,
+        },
+        "lines": [
+          "客户团队跟进续约与使用反馈",
+        ],
+        "type": "text",
+      },
+    ],
+    [
+      {
+        "background": true,
+        "box": [
+          0,
+          0,
+          1280,
+          720,
+        ],
+        "fill": "#F5F3ED",
+        "type": "shape",
+      },
+      {
+        "box": [
+          64,
+          42,
+          46,
+          4,
+        ],
+        "fill": "#3458B4",
+        "type": "shape",
+      },
+      {
+        "box": [
+          64,
+          62,
+          1152,
+          100,
+        ],
+        "contentHeight": 57.6,
+        "font": {
+          "bold": true,
+          "color": "#20242B",
+          "family": "Microsoft YaHei",
+          "size": 48,
+        },
+        "lines": [
+          "制作前的四步准备",
+        ],
+        "type": "text",
+      },
+      {
+        "box": [
+          64,
+          169,
+          1152,
+          48,
+        ],
+        "contentHeight": 17.6,
+        "font": {
+          "bold": false,
+          "color": "#5A6270",
+          "family": "Microsoft YaHei",
+          "size": 14.7,
+        },
+        "lines": [
+          "每一步完成后再推进下一步",
+        ],
+        "type": "text",
+      },
+      {
+        "box": [
+          64,
+          248,
+          100,
+          64,
+        ],
+        "contentHeight": 44.8,
+        "font": {
+          "bold": true,
+          "color": "#3458B4",
+          "family": "Microsoft YaHei",
+          "size": 37.3,
+        },
+        "lines": [
+          "01",
+        ],
+        "type": "text",
+      },
+      {
+        "box": [
+          180,
+          248,
+          270,
+          60,
+        ],
+        "contentHeight": 32,
+        "font": {
+          "bold": false,
+          "color": "#20242B",
+          "family": "Microsoft YaHei",
+          "size": 26.7,
+        },
+        "lines": [
+          "确认目标",
+        ],
+        "type": "text",
+      },
+      {
+        "box": [
+          469,
+          248,
+          747,
+          90.8,
+        ],
+        "contentHeight": 25.6,
+        "font": {
+          "bold": false,
+          "color": "#20242B",
+          "family": "Microsoft YaHei",
+          "size": 21.3,
+        },
+        "lines": [
+          "写清楚读者是谁，以及读完需要作什么决定",
+        ],
+        "type": "text",
+      },
+      {
+        "box": [
+          180,
+          336.8,
+          1036,
+          1,
+        ],
+        "fill": "#3458B4",
+        "type": "shape",
+      },
+      {
+        "box": [
+          64,
+          346.8,
+          100,
+          64,
+        ],
+        "contentHeight": 44.8,
+        "font": {
+          "bold": true,
+          "color": "#3458B4",
+          "family": "Microsoft YaHei",
+          "size": 37.3,
+        },
+        "lines": [
+          "02",
+        ],
+        "type": "text",
+      },
+      {
+        "box": [
+          180,
+          346.8,
+          270,
+          60,
+        ],
+        "contentHeight": 32,
+        "font": {
+          "bold": false,
+          "color": "#20242B",
+          "family": "Microsoft YaHei",
+          "size": 26.7,
+        },
+        "lines": [
+          "整理材料",
+        ],
+        "type": "text",
+      },
+      {
+        "box": [
+          469,
+          346.8,
+          747,
+          90.8,
+        ],
+        "contentHeight": 25.6,
+        "font": {
+          "bold": false,
+          "color": "#20242B",
+          "family": "Microsoft YaHei",
+          "size": 21.3,
+        },
+        "lines": [
+          "标记来源、单位和必须保留的事实",
+        ],
+        "type": "text",
+      },
+      {
+        "box": [
+          180,
+          435.5,
+          1036,
+          1,
+        ],
+        "fill": "#3458B4",
+        "type": "shape",
+      },
+      {
+        "box": [
+          64,
+          445.5,
+          100,
+          64,
+        ],
+        "contentHeight": 44.8,
+        "font": {
+          "bold": true,
+          "color": "#3458B4",
+          "family": "Microsoft YaHei",
+          "size": 37.3,
+        },
+        "lines": [
+          "03",
+        ],
+        "type": "text",
+      },
+      {
+        "box": [
+          180,
+          445.5,
+          270,
+          60,
+        ],
+        "contentHeight": 32,
+        "font": {
+          "bold": false,
+          "color": "#20242B",
+          "family": "Microsoft YaHei",
+          "size": 26.7,
+        },
+        "lines": [
+          "选择表达",
+        ],
+        "type": "text",
+      },
+      {
+        "box": [
+          469,
+          445.5,
+          747,
+          90.8,
+        ],
+        "contentHeight": 25.6,
+        "font": {
+          "bold": false,
+          "color": "#20242B",
+          "family": "Microsoft YaHei",
+          "size": 21.3,
+        },
+        "lines": [
+          "按数据、关系或案例选择主视觉",
+        ],
+        "type": "text",
+      },
+      {
+        "box": [
+          180,
+          534.2,
+          1036,
+          1,
+        ],
+        "fill": "#3458B4",
+        "type": "shape",
+      },
+      {
+        "box": [
+          64,
+          544.2,
+          100,
+          64,
+        ],
+        "contentHeight": 44.8,
+        "font": {
+          "bold": true,
+          "color": "#3458B4",
+          "family": "Microsoft YaHei",
+          "size": 37.3,
+        },
+        "lines": [
+          "04",
+        ],
+        "type": "text",
+      },
+      {
+        "box": [
+          180,
+          544.2,
+          270,
+          60,
+        ],
+        "contentHeight": 32,
+        "font": {
+          "bold": false,
+          "color": "#20242B",
+          "family": "Microsoft YaHei",
+          "size": 26.7,
+        },
+        "lines": [
+          "检查输出",
+        ],
+        "type": "text",
+      },
+      {
+        "box": [
+          469,
+          544.2,
+          747,
+          90.8,
+        ],
+        "contentHeight": 25.6,
+        "font": {
+          "bold": false,
+          "color": "#20242B",
+          "family": "Microsoft YaHei",
+          "size": 21.3,
+        },
+        "lines": [
+          "同时检查事实完整、文字可读和文件可编辑",
+        ],
+        "type": "text",
+      },
+    ],
+  ],
+}
+`;

@@ -1,0 +1,2491 @@
+{
+  "schemaVersion": 1,
+  "themes": {
+    "dark-product": {
+      "id": "dark-product",
+      "reference": "dashi theme02 炫光紫绿（产品科技深色）",
+      "fontFamily": "Microsoft YaHei",
+      "background": "#0B1020",
+      "surface": "#141B30",
+      "text": "#F5F7FA",
+      "muted": "#9AA6BD",
+      "accent": "#72DFC1",
+      "line": "#27324A",
+      "sizes": {
+        "metric": 56,
+        "hero": 36,
+        "title": 29,
+        "subtitle": 20,
+        "body": 14,
+        "caption": 12
+      },
+      "pad": {
+        "x": 72,
+        "y": 59
+      },
+      "gap": 21,
+      "chart": {
+        "textColor": "#F5F7FA",
+        "axisLabelColor": "#9AA6BD",
+        "legendColor": "#9AA6BD",
+        "dataLabelColor": "#F5F7FA",
+        "seriesColors": [
+          "#72DFC1",
+          "#6C7CFF",
+          "#FFB86B",
+          "#B9F24A",
+          "#E86FAE"
+        ],
+        "gridColor": "#27324A",
+        "axisLineColor": "#27324A",
+        "axisLabelFontSize": 12
+      }
+    },
+    "light-editorial": {
+      "id": "light-editorial",
+      "reference": "dashi theme07 冷白调研（研究报告）",
+      "fontFamily": "Microsoft YaHei",
+      "background": "#F5F3ED",
+      "surface": "#FFFFFF",
+      "text": "#20242B",
+      "muted": "#5A6270",
+      "accent": "#3458B4",
+      "line": "#D8D2C4",
+      "sizes": {
+        "metric": 56,
+        "hero": 36,
+        "title": 36,
+        "subtitle": 20,
+        "body": 14,
+        "caption": 11
+      },
+      "pad": {
+        "x": 64,
+        "y": 64
+      },
+      "gap": 16,
+      "chart": {
+        "textColor": "#20242B",
+        "axisLabelColor": "#5A6270",
+        "legendColor": "#5A6270",
+        "dataLabelColor": "#20242B",
+        "seriesColors": [
+          "#3458B4",
+          "#20242B",
+          "#9AA08F",
+          "#C2761E",
+          "#B7BBB0"
+        ],
+        "gridColor": "#D8D2C4",
+        "axisLineColor": "#D8D2C4",
+        "axisLabelFontSize": 12
+      }
+    }
+  },
+  "presets": [
+    {
+      "schemaVersion": 1,
+      "id": "dark-chart-insight",
+      "family": "chart-insight",
+      "theme": "dark-product",
+      "capacity": {
+        "titleCharsMax": 52,
+        "summaryCharsMax": 25,
+        "takeawayCharsMax": 8,
+        "itemsMax": 2,
+        "itemCharsMax": 34,
+        "nodesMax": 0,
+        "nodeCharsMax": 0,
+        "seriesMax": 3,
+        "categoriesMax": 6,
+        "imageRequired": false
+      },
+      "elements": [
+        {
+          "role": "background",
+          "kind": "rect",
+          "box": {
+            "x": 0,
+            "y": 0,
+            "width": 1280,
+            "height": 720
+          },
+          "fill": "background"
+        },
+        {
+          "role": "title",
+          "kind": "text",
+          "box": {
+            "x": 72,
+            "y": 59,
+            "width": 1136,
+            "height": 112
+          },
+          "bind": "title",
+          "size": "title",
+          "color": "text",
+          "bold": true
+        },
+        {
+          "role": "summary",
+          "kind": "text",
+          "box": {
+            "x": 72,
+            "y": 179,
+            "width": 736,
+            "height": 42
+          },
+          "bind": "summary",
+          "size": "subtitle",
+          "color": "muted"
+        },
+        {
+          "role": "chart",
+          "kind": "chart",
+          "box": {
+            "x": 72,
+            "y": 249,
+            "width": 736,
+            "height": 412
+          }
+        },
+        {
+          "role": "takeaway",
+          "kind": "text",
+          "box": {
+            "x": 850,
+            "y": 249,
+            "width": 358,
+            "height": 190
+          },
+          "bind": "takeaway",
+          "size": "metric",
+          "color": "accent",
+          "bold": true
+        },
+        {
+          "role": "evidence-1",
+          "kind": "text",
+          "box": {
+            "x": 850,
+            "y": 459,
+            "width": 358,
+            "height": 72
+          },
+          "bind": "items[0]",
+          "size": "body",
+          "color": "muted"
+        },
+        {
+          "role": "evidence-2",
+          "kind": "text",
+          "box": {
+            "x": 850,
+            "y": 549,
+            "width": 358,
+            "height": 72
+          },
+          "bind": "items[1]",
+          "size": "body",
+          "color": "muted"
+        }
+      ]
+    },
+    {
+      "schemaVersion": 1,
+      "id": "dark-product-hero",
+      "family": "claim-image",
+      "theme": "dark-product",
+      "capacity": {
+        "titleCharsMax": 24,
+        "summaryCharsMax": 36,
+        "takeawayCharsMax": 0,
+        "itemsMax": 2,
+        "itemCharsMax": 40,
+        "nodesMax": 0,
+        "nodeCharsMax": 0,
+        "seriesMax": 0,
+        "categoriesMax": 0,
+        "imageRequired": true
+      },
+      "elements": [
+        {
+          "role": "background",
+          "kind": "rect",
+          "box": {
+            "x": 0,
+            "y": 0,
+            "width": 1280,
+            "height": 720
+          },
+          "fill": "background"
+        },
+        {
+          "role": "title",
+          "kind": "text",
+          "box": {
+            "x": 72,
+            "y": 88,
+            "width": 460,
+            "height": 185
+          },
+          "bind": "title",
+          "size": "hero",
+          "color": "text",
+          "bold": true
+        },
+        {
+          "role": "value-1",
+          "kind": "text",
+          "box": {
+            "x": 72,
+            "y": 320,
+            "width": 420,
+            "height": 90
+          },
+          "bind": "items[0]",
+          "size": "body",
+          "color": "muted"
+        },
+        {
+          "role": "value-2",
+          "kind": "text",
+          "box": {
+            "x": 72,
+            "y": 430,
+            "width": 420,
+            "height": 90
+          },
+          "bind": "items[1]",
+          "size": "body",
+          "color": "muted"
+        },
+        {
+          "role": "hero",
+          "kind": "image",
+          "box": {
+            "x": 560,
+            "y": 88,
+            "width": 648,
+            "height": 512
+          }
+        },
+        {
+          "role": "caption",
+          "kind": "text",
+          "box": {
+            "x": 560,
+            "y": 620,
+            "width": 648,
+            "height": 30
+          },
+          "bind": "summary",
+          "size": "caption",
+          "color": "muted"
+        }
+      ]
+    },
+    {
+      "schemaVersion": 1,
+      "id": "light-chart-insight",
+      "family": "chart-insight",
+      "theme": "light-editorial",
+      "capacity": {
+        "titleCharsMax": 22,
+        "summaryCharsMax": 40,
+        "takeawayCharsMax": 8,
+        "itemsMax": 2,
+        "itemCharsMax": 40,
+        "nodesMax": 0,
+        "nodeCharsMax": 0,
+        "seriesMax": 3,
+        "categoriesMax": 8,
+        "imageRequired": false
+      },
+      "elements": [
+        {
+          "role": "background",
+          "kind": "rect",
+          "box": {
+            "x": 0,
+            "y": 0,
+            "width": 1280,
+            "height": 720
+          },
+          "fill": "background"
+        },
+        {
+          "role": "title",
+          "kind": "text",
+          "box": {
+            "x": 64,
+            "y": 64,
+            "width": 1152,
+            "height": 72
+          },
+          "bind": "title",
+          "size": "title",
+          "color": "text",
+          "bold": true
+        },
+        {
+          "role": "summary",
+          "kind": "text",
+          "box": {
+            "x": 64,
+            "y": 152,
+            "width": 1152,
+            "height": 42
+          },
+          "bind": "summary",
+          "size": "subtitle",
+          "color": "muted"
+        },
+        {
+          "role": "takeaway",
+          "kind": "text",
+          "box": {
+            "x": 64,
+            "y": 214,
+            "width": 400,
+            "height": 190
+          },
+          "bind": "takeaway",
+          "size": "metric",
+          "color": "accent",
+          "bold": true
+        },
+        {
+          "role": "evidence-1",
+          "kind": "text",
+          "box": {
+            "x": 496,
+            "y": 214,
+            "width": 336,
+            "height": 90
+          },
+          "bind": "items[0]",
+          "size": "body",
+          "color": "muted"
+        },
+        {
+          "role": "evidence-2",
+          "kind": "text",
+          "box": {
+            "x": 856,
+            "y": 214,
+            "width": 360,
+            "height": 90
+          },
+          "bind": "items[1]",
+          "size": "body",
+          "color": "muted"
+        },
+        {
+          "role": "chart",
+          "kind": "chart",
+          "box": {
+            "x": 64,
+            "y": 395,
+            "width": 1152,
+            "height": 261
+          }
+        }
+      ]
+    },
+    {
+      "schemaVersion": 1,
+      "id": "light-comparison",
+      "family": "comparison",
+      "theme": "light-editorial",
+      "capacity": {
+        "titleCharsMax": 22,
+        "summaryCharsMax": 40,
+        "takeawayCharsMax": 0,
+        "itemsMax": 2,
+        "itemCharsMax": 144,
+        "nodesMax": 0,
+        "nodeCharsMax": 0,
+        "seriesMax": 0,
+        "categoriesMax": 0,
+        "imageRequired": false
+      },
+      "elements": [
+        {
+          "role": "background",
+          "kind": "rect",
+          "box": {
+            "x": 0,
+            "y": 0,
+            "width": 1280,
+            "height": 720
+          },
+          "fill": "background"
+        },
+        {
+          "role": "title",
+          "kind": "text",
+          "box": {
+            "x": 64,
+            "y": 64,
+            "width": 1152,
+            "height": 72
+          },
+          "bind": "title",
+          "size": "title",
+          "color": "text",
+          "bold": true
+        },
+        {
+          "role": "summary",
+          "kind": "text",
+          "box": {
+            "x": 64,
+            "y": 152,
+            "width": 1152,
+            "height": 42
+          },
+          "bind": "summary",
+          "size": "subtitle",
+          "color": "muted"
+        },
+        {
+          "role": "left-panel",
+          "kind": "rect",
+          "box": {
+            "x": 64,
+            "y": 214,
+            "width": 560,
+            "height": 380
+          },
+          "fill": "surface",
+          "stroke": "line",
+          "strokeWidthPt": 1
+        },
+        {
+          "role": "left-body",
+          "kind": "text",
+          "box": {
+            "x": 88,
+            "y": 238,
+            "width": 512,
+            "height": 332
+          },
+          "bind": "items[0]",
+          "size": "body",
+          "color": "text"
+        },
+        {
+          "role": "right-panel",
+          "kind": "rect",
+          "box": {
+            "x": 656,
+            "y": 214,
+            "width": 560,
+            "height": 380
+          },
+          "fill": "surface",
+          "stroke": "line",
+          "strokeWidthPt": 1
+        },
+        {
+          "role": "right-body",
+          "kind": "text",
+          "box": {
+            "x": 680,
+            "y": 238,
+            "width": 512,
+            "height": 332
+          },
+          "bind": "items[1]",
+          "size": "body",
+          "color": "text"
+        }
+      ]
+    },
+    {
+      "schemaVersion": 1,
+      "id": "light-process-map",
+      "family": "process-map",
+      "theme": "light-editorial",
+      "capacity": {
+        "titleCharsMax": 22,
+        "summaryCharsMax": 40,
+        "takeawayCharsMax": 0,
+        "itemsMax": 3,
+        "itemCharsMax": 60,
+        "nodesMax": 3,
+        "nodeCharsMax": 8,
+        "seriesMax": 0,
+        "categoriesMax": 0,
+        "imageRequired": false,
+        "nodesMin": 3
+      },
+      "elements": [
+        {
+          "role": "background",
+          "kind": "rect",
+          "box": {
+            "x": 0,
+            "y": 0,
+            "width": 1280,
+            "height": 720
+          },
+          "fill": "background"
+        },
+        {
+          "role": "title",
+          "kind": "text",
+          "box": {
+            "x": 64,
+            "y": 64,
+            "width": 1152,
+            "height": 72
+          },
+          "bind": "title",
+          "size": "title",
+          "color": "text",
+          "bold": true
+        },
+        {
+          "role": "summary",
+          "kind": "text",
+          "box": {
+            "x": 64,
+            "y": 152,
+            "width": 1152,
+            "height": 42
+          },
+          "bind": "summary",
+          "size": "subtitle",
+          "color": "muted"
+        },
+        {
+          "role": "flow",
+          "kind": "diagram",
+          "box": {
+            "x": 96,
+            "y": 216,
+            "width": 1088,
+            "height": 240
+          },
+          "layout": "process"
+        },
+        {
+          "role": "step-1",
+          "kind": "text",
+          "box": {
+            "x": 64,
+            "y": 480,
+            "width": 352,
+            "height": 112
+          },
+          "bind": "items[0]",
+          "size": "body",
+          "color": "muted"
+        },
+        {
+          "role": "step-2",
+          "kind": "text",
+          "box": {
+            "x": 464,
+            "y": 480,
+            "width": 352,
+            "height": 112
+          },
+          "bind": "items[1]",
+          "size": "body",
+          "color": "muted"
+        },
+        {
+          "role": "step-3",
+          "kind": "text",
+          "box": {
+            "x": 864,
+            "y": 480,
+            "width": 352,
+            "height": 112
+          },
+          "bind": "items[2]",
+          "size": "body",
+          "color": "muted"
+        }
+      ]
+    },
+    {
+      "schemaVersion": 1,
+      "id": "light-product-hero",
+      "family": "claim-image",
+      "theme": "light-editorial",
+      "capacity": {
+        "titleCharsMax": 22,
+        "summaryCharsMax": 48,
+        "takeawayCharsMax": 0,
+        "itemsMax": 2,
+        "itemCharsMax": 50,
+        "nodesMax": 0,
+        "nodeCharsMax": 10,
+        "seriesMax": 0,
+        "categoriesMax": 0,
+        "imageRequired": true
+      },
+      "elements": [
+        {
+          "role": "background",
+          "kind": "rect",
+          "box": {
+            "x": 0,
+            "y": 0,
+            "width": 1280,
+            "height": 720
+          },
+          "fill": "background"
+        },
+        {
+          "role": "eyebrow",
+          "kind": "rect",
+          "box": {
+            "x": 64,
+            "y": 42,
+            "width": 46,
+            "height": 4
+          },
+          "fill": "accent"
+        },
+        {
+          "role": "title",
+          "kind": "text",
+          "box": {
+            "x": 64,
+            "y": 62,
+            "width": 1152,
+            "height": 100
+          },
+          "bind": "title",
+          "size": "title",
+          "color": "text",
+          "bold": true
+        },
+        {
+          "role": "summary",
+          "kind": "text",
+          "box": {
+            "x": 64,
+            "y": 169,
+            "width": 1152,
+            "height": 48
+          },
+          "bind": "summary",
+          "size": "caption",
+          "color": "muted"
+        },
+        {
+          "role": "hero",
+          "kind": "image",
+          "box": {
+            "x": 64,
+            "y": 244,
+            "width": 744,
+            "height": 380
+          }
+        },
+        {
+          "role": "value-1",
+          "kind": "text",
+          "box": {
+            "x": 856,
+            "y": 290,
+            "width": 360,
+            "height": 190
+          },
+          "bind": "items[0]",
+          "size": "subtitle",
+          "color": "text",
+          "bold": true
+        },
+        {
+          "role": "divider",
+          "kind": "rect",
+          "box": {
+            "x": 856,
+            "y": 465,
+            "width": 360,
+            "height": 2
+          },
+          "fill": "line"
+        },
+        {
+          "role": "value-2",
+          "kind": "text",
+          "box": {
+            "x": 856,
+            "y": 484,
+            "width": 360,
+            "height": 130
+          },
+          "bind": "items[1]",
+          "size": "body",
+          "color": "muted"
+        }
+      ]
+    },
+    {
+      "schemaVersion": 1,
+      "id": "dark-metric",
+      "family": "spotlight",
+      "theme": "dark-product",
+      "capacity": {
+        "titleCharsMax": 22,
+        "summaryCharsMax": 48,
+        "takeawayCharsMax": 5,
+        "itemsMax": 2,
+        "itemCharsMax": 32,
+        "nodesMax": 0,
+        "nodeCharsMax": 10,
+        "seriesMax": 0,
+        "categoriesMax": 0,
+        "imageRequired": false
+      },
+      "elements": [
+        {
+          "role": "background",
+          "kind": "rect",
+          "box": {
+            "x": 0,
+            "y": 0,
+            "width": 1280,
+            "height": 720
+          },
+          "fill": "background"
+        },
+        {
+          "role": "eyebrow",
+          "kind": "rect",
+          "box": {
+            "x": 64,
+            "y": 42,
+            "width": 46,
+            "height": 4
+          },
+          "fill": "accent"
+        },
+        {
+          "role": "title",
+          "kind": "text",
+          "box": {
+            "x": 64,
+            "y": 62,
+            "width": 1152,
+            "height": 100
+          },
+          "bind": "title",
+          "size": "title",
+          "color": "text",
+          "bold": true
+        },
+        {
+          "role": "summary",
+          "kind": "text",
+          "box": {
+            "x": 64,
+            "y": 169,
+            "width": 1152,
+            "height": 48
+          },
+          "bind": "summary",
+          "size": "caption",
+          "color": "muted"
+        },
+        {
+          "role": "takeaway",
+          "kind": "text",
+          "box": {
+            "x": 64,
+            "y": 275,
+            "width": 740,
+            "height": 200
+          },
+          "bind": "takeaway",
+          "size": "metric",
+          "color": "accent",
+          "bold": true,
+          "fontSize": 88
+        },
+        {
+          "role": "rule",
+          "kind": "rect",
+          "box": {
+            "x": 856,
+            "y": 270,
+            "width": 3,
+            "height": 345
+          },
+          "fill": "line"
+        },
+        {
+          "role": "evidence-1",
+          "kind": "text",
+          "box": {
+            "x": 908,
+            "y": 292,
+            "width": 308,
+            "height": 155
+          },
+          "bind": "items[0]",
+          "size": "subtitle",
+          "color": "text",
+          "bold": true
+        },
+        {
+          "role": "evidence-2",
+          "kind": "text",
+          "box": {
+            "x": 908,
+            "y": 460,
+            "width": 308,
+            "height": 135
+          },
+          "bind": "items[1]",
+          "size": "body",
+          "color": "muted"
+        }
+      ]
+    },
+    {
+      "schemaVersion": 1,
+      "id": "dark-comparison",
+      "family": "comparison",
+      "theme": "dark-product",
+      "capacity": {
+        "titleCharsMax": 22,
+        "summaryCharsMax": 40,
+        "takeawayCharsMax": 0,
+        "itemsMax": 2,
+        "itemCharsMax": 100,
+        "nodesMax": 0,
+        "nodeCharsMax": 0,
+        "seriesMax": 0,
+        "categoriesMax": 0,
+        "imageRequired": false
+      },
+      "elements": [
+        {
+          "role": "background",
+          "kind": "rect",
+          "box": {
+            "x": 0,
+            "y": 0,
+            "width": 1280,
+            "height": 720
+          },
+          "fill": "background"
+        },
+        {
+          "role": "eyebrow",
+          "kind": "rect",
+          "box": {
+            "x": 64,
+            "y": 42,
+            "width": 46,
+            "height": 4
+          },
+          "fill": "accent"
+        },
+        {
+          "role": "title",
+          "kind": "text",
+          "box": {
+            "x": 64,
+            "y": 62,
+            "width": 1152,
+            "height": 100
+          },
+          "bind": "title",
+          "size": "title",
+          "color": "text",
+          "bold": true
+        },
+        {
+          "role": "summary",
+          "kind": "text",
+          "box": {
+            "x": 64,
+            "y": 169,
+            "width": 1152,
+            "height": 48
+          },
+          "bind": "summary",
+          "size": "caption",
+          "color": "muted"
+        },
+        {
+          "role": "left-rule",
+          "kind": "rect",
+          "box": {
+            "x": 64,
+            "y": 247,
+            "width": 500,
+            "height": 3
+          },
+          "fill": "line"
+        },
+        {
+          "role": "right-rule",
+          "kind": "rect",
+          "box": {
+            "x": 688,
+            "y": 247,
+            "width": 528,
+            "height": 3
+          },
+          "fill": "accent"
+        },
+        {
+          "role": "left-body",
+          "kind": "text",
+          "box": {
+            "x": 64,
+            "y": 275,
+            "width": 500,
+            "height": 325
+          },
+          "bind": "items[0]",
+          "size": "subtitle",
+          "color": "muted"
+        },
+        {
+          "role": "right-body",
+          "kind": "text",
+          "box": {
+            "x": 688,
+            "y": 275,
+            "width": 528,
+            "height": 325
+          },
+          "bind": "items[1]",
+          "size": "subtitle",
+          "color": "text"
+        }
+      ]
+    },
+    {
+      "schemaVersion": 1,
+      "id": "dark-process-map",
+      "family": "process-map",
+      "theme": "dark-product",
+      "capacity": {
+        "titleCharsMax": 22,
+        "summaryCharsMax": 40,
+        "takeawayCharsMax": 0,
+        "itemsMax": 3,
+        "itemCharsMax": 60,
+        "nodesMax": 3,
+        "nodeCharsMax": 8,
+        "seriesMax": 0,
+        "categoriesMax": 0,
+        "imageRequired": false,
+        "nodesMin": 3
+      },
+      "elements": [
+        {
+          "role": "background",
+          "kind": "rect",
+          "box": {
+            "x": 0,
+            "y": 0,
+            "width": 1280,
+            "height": 720
+          },
+          "fill": "background"
+        },
+        {
+          "role": "title",
+          "kind": "text",
+          "box": {
+            "x": 64,
+            "y": 64,
+            "width": 1152,
+            "height": 72
+          },
+          "bind": "title",
+          "size": "title",
+          "color": "text",
+          "bold": true
+        },
+        {
+          "role": "summary",
+          "kind": "text",
+          "box": {
+            "x": 64,
+            "y": 152,
+            "width": 1152,
+            "height": 42
+          },
+          "bind": "summary",
+          "size": "subtitle",
+          "color": "muted"
+        },
+        {
+          "role": "flow",
+          "kind": "diagram",
+          "box": {
+            "x": 96,
+            "y": 216,
+            "width": 1088,
+            "height": 240
+          },
+          "layout": "process"
+        },
+        {
+          "role": "step-1",
+          "kind": "text",
+          "box": {
+            "x": 64,
+            "y": 480,
+            "width": 352,
+            "height": 112
+          },
+          "bind": "items[0]",
+          "size": "body",
+          "color": "muted"
+        },
+        {
+          "role": "step-2",
+          "kind": "text",
+          "box": {
+            "x": 464,
+            "y": 480,
+            "width": 352,
+            "height": 112
+          },
+          "bind": "items[1]",
+          "size": "body",
+          "color": "muted"
+        },
+        {
+          "role": "step-3",
+          "kind": "text",
+          "box": {
+            "x": 864,
+            "y": 480,
+            "width": 352,
+            "height": 112
+          },
+          "bind": "items[2]",
+          "size": "body",
+          "color": "muted"
+        }
+      ]
+    },
+    {
+      "schemaVersion": 1,
+      "id": "dark-architecture",
+      "family": "hierarchy",
+      "theme": "dark-product",
+      "capacity": {
+        "titleCharsMax": 22,
+        "summaryCharsMax": 45,
+        "takeawayCharsMax": 0,
+        "itemsMax": 3,
+        "itemCharsMax": 55,
+        "nodesMax": 4,
+        "nodeCharsMax": 8,
+        "seriesMax": 0,
+        "categoriesMax": 0,
+        "imageRequired": false,
+        "nodesMin": 4
+      },
+      "elements": [
+        {
+          "role": "background",
+          "kind": "rect",
+          "box": {
+            "x": 0,
+            "y": 0,
+            "width": 1280,
+            "height": 720
+          },
+          "fill": "background"
+        },
+        {
+          "role": "eyebrow",
+          "kind": "rect",
+          "box": {
+            "x": 64,
+            "y": 42,
+            "width": 46,
+            "height": 4
+          },
+          "fill": "accent"
+        },
+        {
+          "role": "title",
+          "kind": "text",
+          "box": {
+            "x": 64,
+            "y": 62,
+            "width": 1152,
+            "height": 100
+          },
+          "bind": "title",
+          "size": "title",
+          "color": "text",
+          "bold": true
+        },
+        {
+          "role": "summary",
+          "kind": "text",
+          "box": {
+            "x": 64,
+            "y": 169,
+            "width": 1152,
+            "height": 48
+          },
+          "bind": "summary",
+          "size": "caption",
+          "color": "muted"
+        },
+        {
+          "role": "structure",
+          "kind": "diagram",
+          "layout": "hierarchy",
+          "box": {
+            "x": 88,
+            "y": 245,
+            "width": 1104,
+            "height": 280
+          }
+        },
+        {
+          "role": "detail-1",
+          "kind": "text",
+          "box": {
+            "x": 64,
+            "y": 551,
+            "width": 352,
+            "height": 105
+          },
+          "bind": "items[0]",
+          "size": "body",
+          "color": "muted"
+        },
+        {
+          "role": "detail-2",
+          "kind": "text",
+          "box": {
+            "x": 464,
+            "y": 551,
+            "width": 352,
+            "height": 105
+          },
+          "bind": "items[1]",
+          "size": "body",
+          "color": "muted"
+        },
+        {
+          "role": "detail-3",
+          "kind": "text",
+          "box": {
+            "x": 864,
+            "y": 551,
+            "width": 352,
+            "height": 105
+          },
+          "bind": "items[2]",
+          "size": "body",
+          "color": "muted"
+        }
+      ]
+    },
+    {
+      "schemaVersion": 1,
+      "id": "dark-case",
+      "family": "case",
+      "theme": "dark-product",
+      "capacity": {
+        "titleCharsMax": 22,
+        "summaryCharsMax": 55,
+        "takeawayCharsMax": 0,
+        "itemsMax": 3,
+        "itemCharsMax": 40,
+        "nodesMax": 3,
+        "nodeCharsMax": 8,
+        "seriesMax": 0,
+        "categoriesMax": 0,
+        "imageRequired": true,
+        "nodesMin": 3
+      },
+      "elements": [
+        {
+          "role": "background",
+          "kind": "rect",
+          "box": {
+            "x": 0,
+            "y": 0,
+            "width": 1280,
+            "height": 720
+          },
+          "fill": "background"
+        },
+        {
+          "role": "eyebrow",
+          "kind": "rect",
+          "box": {
+            "x": 64,
+            "y": 42,
+            "width": 46,
+            "height": 4
+          },
+          "fill": "accent"
+        },
+        {
+          "role": "title",
+          "kind": "text",
+          "box": {
+            "x": 64,
+            "y": 62,
+            "width": 1152,
+            "height": 100
+          },
+          "bind": "title",
+          "size": "title",
+          "color": "text",
+          "bold": true
+        },
+        {
+          "role": "summary",
+          "kind": "text",
+          "box": {
+            "x": 64,
+            "y": 169,
+            "width": 1152,
+            "height": 48
+          },
+          "bind": "summary",
+          "size": "caption",
+          "color": "muted"
+        },
+        {
+          "role": "case-image",
+          "kind": "image",
+          "box": {
+            "x": 64,
+            "y": 255,
+            "width": 740,
+            "height": 355
+          }
+        },
+        {
+          "role": "note-rule",
+          "kind": "rect",
+          "box": {
+            "x": 842,
+            "y": 245,
+            "width": 2,
+            "height": 376
+          },
+          "fill": "line"
+        },
+        {
+          "role": "label-0",
+          "kind": "text",
+          "box": {
+            "x": 880,
+            "y": 247,
+            "width": 330,
+            "height": 36
+          },
+          "bind": "nodes[0]",
+          "size": "caption",
+          "color": "accent",
+          "bold": true
+        },
+        {
+          "role": "note-0",
+          "kind": "text",
+          "box": {
+            "x": 880,
+            "y": 287,
+            "width": 330,
+            "height": 92
+          },
+          "bind": "items[0]",
+          "size": "body",
+          "color": "text"
+        },
+        {
+          "role": "label-1",
+          "kind": "text",
+          "box": {
+            "x": 880,
+            "y": 382,
+            "width": 330,
+            "height": 36
+          },
+          "bind": "nodes[1]",
+          "size": "caption",
+          "color": "accent",
+          "bold": true
+        },
+        {
+          "role": "note-1",
+          "kind": "text",
+          "box": {
+            "x": 880,
+            "y": 422,
+            "width": 330,
+            "height": 92
+          },
+          "bind": "items[1]",
+          "size": "body",
+          "color": "text"
+        },
+        {
+          "role": "label-2",
+          "kind": "text",
+          "box": {
+            "x": 880,
+            "y": 517,
+            "width": 330,
+            "height": 36
+          },
+          "bind": "nodes[2]",
+          "size": "caption",
+          "color": "accent",
+          "bold": true
+        },
+        {
+          "role": "note-2",
+          "kind": "text",
+          "box": {
+            "x": 880,
+            "y": 557,
+            "width": 330,
+            "height": 92
+          },
+          "bind": "items[2]",
+          "size": "body",
+          "color": "text"
+        }
+      ]
+    },
+    {
+      "schemaVersion": 1,
+      "id": "dark-overview",
+      "family": "overview",
+      "theme": "dark-product",
+      "capacity": {
+        "titleCharsMax": 22,
+        "summaryCharsMax": 45,
+        "takeawayCharsMax": 0,
+        "itemsMax": 4,
+        "itemCharsMax": 50,
+        "nodesMax": 4,
+        "nodeCharsMax": 10,
+        "seriesMax": 0,
+        "categoriesMax": 0,
+        "imageRequired": false,
+        "nodesMin": 4
+      },
+      "elements": [
+        {
+          "role": "background",
+          "kind": "rect",
+          "box": {
+            "x": 0,
+            "y": 0,
+            "width": 1280,
+            "height": 720
+          },
+          "fill": "background"
+        },
+        {
+          "role": "eyebrow",
+          "kind": "rect",
+          "box": {
+            "x": 64,
+            "y": 42,
+            "width": 46,
+            "height": 4
+          },
+          "fill": "accent"
+        },
+        {
+          "role": "title",
+          "kind": "text",
+          "box": {
+            "x": 64,
+            "y": 62,
+            "width": 1152,
+            "height": 100
+          },
+          "bind": "title",
+          "size": "title",
+          "color": "text",
+          "bold": true
+        },
+        {
+          "role": "summary",
+          "kind": "text",
+          "box": {
+            "x": 64,
+            "y": 169,
+            "width": 1152,
+            "height": 48
+          },
+          "bind": "summary",
+          "size": "caption",
+          "color": "muted"
+        },
+        {
+          "role": "icon-0",
+          "kind": "icon",
+          "icon": "target",
+          "box": {
+            "x": 64,
+            "y": 255,
+            "width": 34,
+            "height": 34
+          },
+          "color": "accent"
+        },
+        {
+          "role": "label-0",
+          "kind": "text",
+          "box": {
+            "x": 119,
+            "y": 252,
+            "width": 485,
+            "height": 52
+          },
+          "bind": "nodes[0]",
+          "size": "subtitle",
+          "color": "text",
+          "bold": true
+        },
+        {
+          "role": "rule-0",
+          "kind": "rect",
+          "box": {
+            "x": 64,
+            "y": 321,
+            "width": 552,
+            "height": 1
+          },
+          "fill": "line"
+        },
+        {
+          "role": "description-0",
+          "kind": "text",
+          "box": {
+            "x": 64,
+            "y": 342,
+            "width": 525,
+            "height": 95
+          },
+          "bind": "items[0]",
+          "size": "body",
+          "color": "muted"
+        },
+        {
+          "role": "icon-1",
+          "kind": "icon",
+          "icon": "layers",
+          "box": {
+            "x": 656,
+            "y": 255,
+            "width": 34,
+            "height": 34
+          },
+          "color": "accent"
+        },
+        {
+          "role": "label-1",
+          "kind": "text",
+          "box": {
+            "x": 711,
+            "y": 252,
+            "width": 485,
+            "height": 52
+          },
+          "bind": "nodes[1]",
+          "size": "subtitle",
+          "color": "text",
+          "bold": true
+        },
+        {
+          "role": "rule-1",
+          "kind": "rect",
+          "box": {
+            "x": 656,
+            "y": 321,
+            "width": 552,
+            "height": 1
+          },
+          "fill": "line"
+        },
+        {
+          "role": "description-1",
+          "kind": "text",
+          "box": {
+            "x": 656,
+            "y": 342,
+            "width": 525,
+            "height": 95
+          },
+          "bind": "items[1]",
+          "size": "body",
+          "color": "muted"
+        },
+        {
+          "role": "icon-2",
+          "kind": "icon",
+          "icon": "workflow",
+          "box": {
+            "x": 64,
+            "y": 455,
+            "width": 34,
+            "height": 34
+          },
+          "color": "accent"
+        },
+        {
+          "role": "label-2",
+          "kind": "text",
+          "box": {
+            "x": 119,
+            "y": 452,
+            "width": 485,
+            "height": 52
+          },
+          "bind": "nodes[2]",
+          "size": "subtitle",
+          "color": "text",
+          "bold": true
+        },
+        {
+          "role": "rule-2",
+          "kind": "rect",
+          "box": {
+            "x": 64,
+            "y": 521,
+            "width": 552,
+            "height": 1
+          },
+          "fill": "line"
+        },
+        {
+          "role": "description-2",
+          "kind": "text",
+          "box": {
+            "x": 64,
+            "y": 542,
+            "width": 525,
+            "height": 95
+          },
+          "bind": "items[2]",
+          "size": "body",
+          "color": "muted"
+        },
+        {
+          "role": "icon-3",
+          "kind": "icon",
+          "icon": "check",
+          "box": {
+            "x": 656,
+            "y": 455,
+            "width": 34,
+            "height": 34
+          },
+          "color": "accent"
+        },
+        {
+          "role": "label-3",
+          "kind": "text",
+          "box": {
+            "x": 711,
+            "y": 452,
+            "width": 485,
+            "height": 52
+          },
+          "bind": "nodes[3]",
+          "size": "subtitle",
+          "color": "text",
+          "bold": true
+        },
+        {
+          "role": "rule-3",
+          "kind": "rect",
+          "box": {
+            "x": 656,
+            "y": 521,
+            "width": 552,
+            "height": 1
+          },
+          "fill": "line"
+        },
+        {
+          "role": "description-3",
+          "kind": "text",
+          "box": {
+            "x": 656,
+            "y": 542,
+            "width": 525,
+            "height": 95
+          },
+          "bind": "items[3]",
+          "size": "body",
+          "color": "muted"
+        }
+      ]
+    },
+    {
+      "schemaVersion": 1,
+      "id": "dark-process-long",
+      "family": "process-map",
+      "theme": "dark-product",
+      "capacity": {
+        "titleCharsMax": 22,
+        "summaryCharsMax": 45,
+        "takeawayCharsMax": 0,
+        "itemsMax": 4,
+        "itemCharsMax": 64,
+        "nodesMax": 4,
+        "nodeCharsMax": 8,
+        "seriesMax": 0,
+        "categoriesMax": 0,
+        "imageRequired": false,
+        "nodesMin": 2,
+        "itemsMin": 2
+      },
+      "elements": [
+        {
+          "role": "background",
+          "kind": "rect",
+          "box": {
+            "x": 0,
+            "y": 0,
+            "width": 1280,
+            "height": 720
+          },
+          "fill": "background"
+        },
+        {
+          "role": "eyebrow",
+          "kind": "rect",
+          "box": {
+            "x": 64,
+            "y": 42,
+            "width": 46,
+            "height": 4
+          },
+          "fill": "accent"
+        },
+        {
+          "role": "title",
+          "kind": "text",
+          "box": {
+            "x": 64,
+            "y": 62,
+            "width": 1152,
+            "height": 100
+          },
+          "bind": "title",
+          "size": "title",
+          "color": "text",
+          "bold": true
+        },
+        {
+          "role": "summary",
+          "kind": "text",
+          "box": {
+            "x": 64,
+            "y": 169,
+            "width": 1152,
+            "height": 48
+          },
+          "bind": "summary",
+          "size": "caption",
+          "color": "muted"
+        },
+        {
+          "role": "steps",
+          "kind": "diagram",
+          "layout": "vertical",
+          "box": {
+            "x": 64,
+            "y": 248,
+            "width": 1152,
+            "height": 395
+          }
+        }
+      ]
+    },
+    {
+      "schemaVersion": 1,
+      "id": "light-metric",
+      "family": "spotlight",
+      "theme": "light-editorial",
+      "capacity": {
+        "titleCharsMax": 22,
+        "summaryCharsMax": 48,
+        "takeawayCharsMax": 5,
+        "itemsMax": 2,
+        "itemCharsMax": 32,
+        "nodesMax": 0,
+        "nodeCharsMax": 10,
+        "seriesMax": 0,
+        "categoriesMax": 0,
+        "imageRequired": false
+      },
+      "elements": [
+        {
+          "role": "background",
+          "kind": "rect",
+          "box": {
+            "x": 0,
+            "y": 0,
+            "width": 1280,
+            "height": 720
+          },
+          "fill": "background"
+        },
+        {
+          "role": "eyebrow",
+          "kind": "rect",
+          "box": {
+            "x": 64,
+            "y": 42,
+            "width": 46,
+            "height": 4
+          },
+          "fill": "accent"
+        },
+        {
+          "role": "title",
+          "kind": "text",
+          "box": {
+            "x": 64,
+            "y": 62,
+            "width": 1152,
+            "height": 100
+          },
+          "bind": "title",
+          "size": "title",
+          "color": "text",
+          "bold": true
+        },
+        {
+          "role": "summary",
+          "kind": "text",
+          "box": {
+            "x": 64,
+            "y": 169,
+            "width": 1152,
+            "height": 48
+          },
+          "bind": "summary",
+          "size": "caption",
+          "color": "muted"
+        },
+        {
+          "role": "takeaway",
+          "kind": "text",
+          "box": {
+            "x": 64,
+            "y": 275,
+            "width": 740,
+            "height": 200
+          },
+          "bind": "takeaway",
+          "size": "metric",
+          "color": "accent",
+          "bold": true,
+          "fontSize": 88
+        },
+        {
+          "role": "rule",
+          "kind": "rect",
+          "box": {
+            "x": 856,
+            "y": 270,
+            "width": 3,
+            "height": 345
+          },
+          "fill": "line"
+        },
+        {
+          "role": "evidence-1",
+          "kind": "text",
+          "box": {
+            "x": 908,
+            "y": 292,
+            "width": 308,
+            "height": 155
+          },
+          "bind": "items[0]",
+          "size": "subtitle",
+          "color": "text",
+          "bold": true
+        },
+        {
+          "role": "evidence-2",
+          "kind": "text",
+          "box": {
+            "x": 908,
+            "y": 460,
+            "width": 308,
+            "height": 135
+          },
+          "bind": "items[1]",
+          "size": "body",
+          "color": "muted"
+        }
+      ]
+    },
+    {
+      "schemaVersion": 1,
+      "id": "light-architecture",
+      "family": "hierarchy",
+      "theme": "light-editorial",
+      "capacity": {
+        "titleCharsMax": 22,
+        "summaryCharsMax": 45,
+        "takeawayCharsMax": 0,
+        "itemsMax": 3,
+        "itemCharsMax": 55,
+        "nodesMax": 4,
+        "nodeCharsMax": 8,
+        "seriesMax": 0,
+        "categoriesMax": 0,
+        "imageRequired": false,
+        "nodesMin": 4
+      },
+      "elements": [
+        {
+          "role": "background",
+          "kind": "rect",
+          "box": {
+            "x": 0,
+            "y": 0,
+            "width": 1280,
+            "height": 720
+          },
+          "fill": "background"
+        },
+        {
+          "role": "eyebrow",
+          "kind": "rect",
+          "box": {
+            "x": 64,
+            "y": 42,
+            "width": 46,
+            "height": 4
+          },
+          "fill": "accent"
+        },
+        {
+          "role": "title",
+          "kind": "text",
+          "box": {
+            "x": 64,
+            "y": 62,
+            "width": 1152,
+            "height": 100
+          },
+          "bind": "title",
+          "size": "title",
+          "color": "text",
+          "bold": true
+        },
+        {
+          "role": "summary",
+          "kind": "text",
+          "box": {
+            "x": 64,
+            "y": 169,
+            "width": 1152,
+            "height": 48
+          },
+          "bind": "summary",
+          "size": "caption",
+          "color": "muted"
+        },
+        {
+          "role": "structure",
+          "kind": "diagram",
+          "layout": "hierarchy",
+          "box": {
+            "x": 88,
+            "y": 245,
+            "width": 1104,
+            "height": 280
+          }
+        },
+        {
+          "role": "detail-1",
+          "kind": "text",
+          "box": {
+            "x": 64,
+            "y": 551,
+            "width": 352,
+            "height": 105
+          },
+          "bind": "items[0]",
+          "size": "body",
+          "color": "muted"
+        },
+        {
+          "role": "detail-2",
+          "kind": "text",
+          "box": {
+            "x": 464,
+            "y": 551,
+            "width": 352,
+            "height": 105
+          },
+          "bind": "items[1]",
+          "size": "body",
+          "color": "muted"
+        },
+        {
+          "role": "detail-3",
+          "kind": "text",
+          "box": {
+            "x": 864,
+            "y": 551,
+            "width": 352,
+            "height": 105
+          },
+          "bind": "items[2]",
+          "size": "body",
+          "color": "muted"
+        }
+      ]
+    },
+    {
+      "schemaVersion": 1,
+      "id": "light-case",
+      "family": "case",
+      "theme": "light-editorial",
+      "capacity": {
+        "titleCharsMax": 22,
+        "summaryCharsMax": 55,
+        "takeawayCharsMax": 0,
+        "itemsMax": 3,
+        "itemCharsMax": 40,
+        "nodesMax": 3,
+        "nodeCharsMax": 8,
+        "seriesMax": 0,
+        "categoriesMax": 0,
+        "imageRequired": true,
+        "nodesMin": 3
+      },
+      "elements": [
+        {
+          "role": "background",
+          "kind": "rect",
+          "box": {
+            "x": 0,
+            "y": 0,
+            "width": 1280,
+            "height": 720
+          },
+          "fill": "background"
+        },
+        {
+          "role": "eyebrow",
+          "kind": "rect",
+          "box": {
+            "x": 64,
+            "y": 42,
+            "width": 46,
+            "height": 4
+          },
+          "fill": "accent"
+        },
+        {
+          "role": "title",
+          "kind": "text",
+          "box": {
+            "x": 64,
+            "y": 62,
+            "width": 1152,
+            "height": 100
+          },
+          "bind": "title",
+          "size": "title",
+          "color": "text",
+          "bold": true
+        },
+        {
+          "role": "summary",
+          "kind": "text",
+          "box": {
+            "x": 64,
+            "y": 169,
+            "width": 1152,
+            "height": 48
+          },
+          "bind": "summary",
+          "size": "caption",
+          "color": "muted"
+        },
+        {
+          "role": "case-image",
+          "kind": "image",
+          "box": {
+            "x": 64,
+            "y": 255,
+            "width": 740,
+            "height": 355
+          }
+        },
+        {
+          "role": "note-rule",
+          "kind": "rect",
+          "box": {
+            "x": 842,
+            "y": 245,
+            "width": 2,
+            "height": 376
+          },
+          "fill": "line"
+        },
+        {
+          "role": "label-0",
+          "kind": "text",
+          "box": {
+            "x": 880,
+            "y": 247,
+            "width": 330,
+            "height": 36
+          },
+          "bind": "nodes[0]",
+          "size": "caption",
+          "color": "accent",
+          "bold": true
+        },
+        {
+          "role": "note-0",
+          "kind": "text",
+          "box": {
+            "x": 880,
+            "y": 287,
+            "width": 330,
+            "height": 92
+          },
+          "bind": "items[0]",
+          "size": "body",
+          "color": "text"
+        },
+        {
+          "role": "label-1",
+          "kind": "text",
+          "box": {
+            "x": 880,
+            "y": 382,
+            "width": 330,
+            "height": 36
+          },
+          "bind": "nodes[1]",
+          "size": "caption",
+          "color": "accent",
+          "bold": true
+        },
+        {
+          "role": "note-1",
+          "kind": "text",
+          "box": {
+            "x": 880,
+            "y": 422,
+            "width": 330,
+            "height": 92
+          },
+          "bind": "items[1]",
+          "size": "body",
+          "color": "text"
+        },
+        {
+          "role": "label-2",
+          "kind": "text",
+          "box": {
+            "x": 880,
+            "y": 517,
+            "width": 330,
+            "height": 36
+          },
+          "bind": "nodes[2]",
+          "size": "caption",
+          "color": "accent",
+          "bold": true
+        },
+        {
+          "role": "note-2",
+          "kind": "text",
+          "box": {
+            "x": 880,
+            "y": 557,
+            "width": 330,
+            "height": 92
+          },
+          "bind": "items[2]",
+          "size": "body",
+          "color": "text"
+        }
+      ]
+    },
+    {
+      "schemaVersion": 1,
+      "id": "light-overview",
+      "family": "overview",
+      "theme": "light-editorial",
+      "capacity": {
+        "titleCharsMax": 22,
+        "summaryCharsMax": 45,
+        "takeawayCharsMax": 0,
+        "itemsMax": 4,
+        "itemCharsMax": 50,
+        "nodesMax": 4,
+        "nodeCharsMax": 10,
+        "seriesMax": 0,
+        "categoriesMax": 0,
+        "imageRequired": false,
+        "nodesMin": 4
+      },
+      "elements": [
+        {
+          "role": "background",
+          "kind": "rect",
+          "box": {
+            "x": 0,
+            "y": 0,
+            "width": 1280,
+            "height": 720
+          },
+          "fill": "background"
+        },
+        {
+          "role": "eyebrow",
+          "kind": "rect",
+          "box": {
+            "x": 64,
+            "y": 42,
+            "width": 46,
+            "height": 4
+          },
+          "fill": "accent"
+        },
+        {
+          "role": "title",
+          "kind": "text",
+          "box": {
+            "x": 64,
+            "y": 62,
+            "width": 1152,
+            "height": 100
+          },
+          "bind": "title",
+          "size": "title",
+          "color": "text",
+          "bold": true
+        },
+        {
+          "role": "summary",
+          "kind": "text",
+          "box": {
+            "x": 64,
+            "y": 169,
+            "width": 1152,
+            "height": 48
+          },
+          "bind": "summary",
+          "size": "caption",
+          "color": "muted"
+        },
+        {
+          "role": "icon-0",
+          "kind": "icon",
+          "icon": "target",
+          "box": {
+            "x": 64,
+            "y": 255,
+            "width": 34,
+            "height": 34
+          },
+          "color": "accent"
+        },
+        {
+          "role": "label-0",
+          "kind": "text",
+          "box": {
+            "x": 119,
+            "y": 252,
+            "width": 485,
+            "height": 52
+          },
+          "bind": "nodes[0]",
+          "size": "subtitle",
+          "color": "text",
+          "bold": true
+        },
+        {
+          "role": "rule-0",
+          "kind": "rect",
+          "box": {
+            "x": 64,
+            "y": 321,
+            "width": 552,
+            "height": 1
+          },
+          "fill": "line"
+        },
+        {
+          "role": "description-0",
+          "kind": "text",
+          "box": {
+            "x": 64,
+            "y": 342,
+            "width": 525,
+            "height": 95
+          },
+          "bind": "items[0]",
+          "size": "body",
+          "color": "muted"
+        },
+        {
+          "role": "icon-1",
+          "kind": "icon",
+          "icon": "layers",
+          "box": {
+            "x": 656,
+            "y": 255,
+            "width": 34,
+            "height": 34
+          },
+          "color": "accent"
+        },
+        {
+          "role": "label-1",
+          "kind": "text",
+          "box": {
+            "x": 711,
+            "y": 252,
+            "width": 485,
+            "height": 52
+          },
+          "bind": "nodes[1]",
+          "size": "subtitle",
+          "color": "text",
+          "bold": true
+        },
+        {
+          "role": "rule-1",
+          "kind": "rect",
+          "box": {
+            "x": 656,
+            "y": 321,
+            "width": 552,
+            "height": 1
+          },
+          "fill": "line"
+        },
+        {
+          "role": "description-1",
+          "kind": "text",
+          "box": {
+            "x": 656,
+            "y": 342,
+            "width": 525,
+            "height": 95
+          },
+          "bind": "items[1]",
+          "size": "body",
+          "color": "muted"
+        },
+        {
+          "role": "icon-2",
+          "kind": "icon",
+          "icon": "workflow",
+          "box": {
+            "x": 64,
+            "y": 455,
+            "width": 34,
+            "height": 34
+          },
+          "color": "accent"
+        },
+        {
+          "role": "label-2",
+          "kind": "text",
+          "box": {
+            "x": 119,
+            "y": 452,
+            "width": 485,
+            "height": 52
+          },
+          "bind": "nodes[2]",
+          "size": "subtitle",
+          "color": "text",
+          "bold": true
+        },
+        {
+          "role": "rule-2",
+          "kind": "rect",
+          "box": {
+            "x": 64,
+            "y": 521,
+            "width": 552,
+            "height": 1
+          },
+          "fill": "line"
+        },
+        {
+          "role": "description-2",
+          "kind": "text",
+          "box": {
+            "x": 64,
+            "y": 542,
+            "width": 525,
+            "height": 95
+          },
+          "bind": "items[2]",
+          "size": "body",
+          "color": "muted"
+        },
+        {
+          "role": "icon-3",
+          "kind": "icon",
+          "icon": "check",
+          "box": {
+            "x": 656,
+            "y": 455,
+            "width": 34,
+            "height": 34
+          },
+          "color": "accent"
+        },
+        {
+          "role": "label-3",
+          "kind": "text",
+          "box": {
+            "x": 711,
+            "y": 452,
+            "width": 485,
+            "height": 52
+          },
+          "bind": "nodes[3]",
+          "size": "subtitle",
+          "color": "text",
+          "bold": true
+        },
+        {
+          "role": "rule-3",
+          "kind": "rect",
+          "box": {
+            "x": 656,
+            "y": 521,
+            "width": 552,
+            "height": 1
+          },
+          "fill": "line"
+        },
+        {
+          "role": "description-3",
+          "kind": "text",
+          "box": {
+            "x": 656,
+            "y": 542,
+            "width": 525,
+            "height": 95
+          },
+          "bind": "items[3]",
+          "size": "body",
+          "color": "muted"
+        }
+      ]
+    },
+    {
+      "schemaVersion": 1,
+      "id": "light-process-long",
+      "family": "process-map",
+      "theme": "light-editorial",
+      "capacity": {
+        "titleCharsMax": 22,
+        "summaryCharsMax": 45,
+        "takeawayCharsMax": 0,
+        "itemsMax": 4,
+        "itemCharsMax": 64,
+        "nodesMax": 4,
+        "nodeCharsMax": 8,
+        "seriesMax": 0,
+        "categoriesMax": 0,
+        "imageRequired": false,
+        "nodesMin": 2,
+        "itemsMin": 2
+      },
+      "elements": [
+        {
+          "role": "background",
+          "kind": "rect",
+          "box": {
+            "x": 0,
+            "y": 0,
+            "width": 1280,
+            "height": 720
+          },
+          "fill": "background"
+        },
+        {
+          "role": "eyebrow",
+          "kind": "rect",
+          "box": {
+            "x": 64,
+            "y": 42,
+            "width": 46,
+            "height": 4
+          },
+          "fill": "accent"
+        },
+        {
+          "role": "title",
+          "kind": "text",
+          "box": {
+            "x": 64,
+            "y": 62,
+            "width": 1152,
+            "height": 100
+          },
+          "bind": "title",
+          "size": "title",
+          "color": "text",
+          "bold": true
+        },
+        {
+          "role": "summary",
+          "kind": "text",
+          "box": {
+            "x": 64,
+            "y": 169,
+            "width": 1152,
+            "height": 48
+          },
+          "bind": "summary",
+          "size": "caption",
+          "color": "muted"
+        },
+        {
+          "role": "steps",
+          "kind": "diagram",
+          "layout": "vertical",
+          "box": {
+            "x": 64,
+            "y": 248,
+            "width": 1152,
+            "height": 395
+          }
+        }
+      ]
+    }
+  ]
+}

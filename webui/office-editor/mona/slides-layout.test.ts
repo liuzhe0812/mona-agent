@@ -78,6 +78,18 @@ describe('native mixed slide composition', () => {
     expect(ops[3]!.payload).toEqual(expect.objectContaining({ x: 872, y: 242, width: 344, height: 414 }))
   })
 
+  it('composes a native chart and its creation style without losing data', () => {
+    const series = [{ name: '交付周期', values: [50, 30] }]
+    const style = { seriesColors: ['#25856B'], axisLabelColor: '#223344' }
+    const [operation] = composeSlide({ ...layout, items: [{
+      type: 'chart', column: 0, row: 1, kind: 'bar', categories: ['基期', '当前'],
+      series, style, valAxisTitle: '分钟',
+    }] }, slide)
+    expect(operation).toMatchObject({ op: 'slide_add_chart', payload: {
+      slideId: 's_1', x: 40, y: 218, width: 784, height: 462, series, style, valAxisTitle: '分钟',
+    } })
+  })
+
   it.each([
     { columns: [0, 1] }, { rows: [Infinity] }, { gap: 1000 }, { width: 2000 },
     { items: [{ type: 'text', row: 0, column: 2, text: 'outside' }] },

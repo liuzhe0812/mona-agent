@@ -12,6 +12,8 @@ import {
   addPicture,
   addSmartArt,
   addTable,
+  elementDurableId,
+  matchesElementRef,
   pasteElements,
   replacePictureBytes,
   type NewChartKind,
@@ -71,6 +73,7 @@ register({
       ...(typeof op.fill === 'string' ? { fillColor: op.fill } : {}),
       ...(op.stroke ? { stroke: op.stroke as NewElementOptions['stroke'] } : {}),
       ...(op.bodyPr ? { bodyPr: op.bodyPr as NewElementOptions['bodyPr'] } : {}),
+      ...(op.customPath ? { customPath: op.customPath as NewElementOptions['customPath'] } : {}),
     })
     return { op, created: [el.id] }
   },
@@ -181,7 +184,9 @@ register({
         ), {}),
     })
     if (!r) throw new GuidedError('op "addChart": the chart could not be inserted.')
-    return { op, created: [r.elementId] }
+    // Another chart insertion reparses the slide and replaces parse-time IDs.
+    const element = r.slide.elements.find((item) => matchesElementRef(item, r.elementId))
+    return { op, created: [element ? elementDurableId(element) ?? r.elementId : r.elementId] }
   },
 })
 

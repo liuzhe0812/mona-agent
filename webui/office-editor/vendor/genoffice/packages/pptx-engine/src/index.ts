@@ -50,6 +50,7 @@ import { escapeXmlAttr } from './xml-utils'
 import { elementSpid } from './animation'
 import { ensureCreationId, matchesElementRef } from './identity'
 import { CHART_TEXT_COLOR_KEYS, patchChartTextColors, preserveChartTextProperties, type ChartTextColors } from './chart-text'
+import { patchChartStyles, type ChartStylePatch } from './chart-style'
 import { listMasterParts, parseMasterPart } from './master-edit'
 import type {
   Paragraph,
@@ -223,6 +224,7 @@ export {
   type ChartKind,
   type ChartAxisStyle,
 } from './chart'
+export { patchChartStyles, type ChartStylePatch } from './chart-style'
 export { parseChartExXml } from './chartex'
 export { getSlideNotes, setSlideNotes, notesPathForSlide, unescapeXml } from './notes'
 export {
@@ -2553,7 +2555,7 @@ export function editChartElement(
     switchRowCol?: boolean
     /** Per-point fill overrides, seriesIdx → pointIdx → color; null clears back to the series color */
     pointColors?: Record<number, Record<number, string | null>>
-  } & ChartTextColors,
+  } & ChartTextColors & ChartStylePatch,
 ): boolean {
   const slide = opened.deck.slides[slideIndex]
   if (!slide) return false
@@ -2661,7 +2663,7 @@ export function editChartElement(
     patch.legendPos ??
     (existing.legendPos == null ? 'none' : existing.legendPos === 'tr' ? 'r' : existing.legendPos)
   const dataLabels = patch.dataLabels ?? !!existing.dataLabels
-  const gridlines = patch.gridlines ?? !!existing.valAxis?.gridColor
+  const gridlines = patch.gridlines ?? (patch.gridColor !== undefined || !!existing.valAxis?.gridColor)
   const catAxisTitle = patch.catAxisTitle ?? existing.catAxis?.title
   const valAxisTitle = patch.valAxisTitle ?? existing.valAxis?.title
   const gapWidthPct = patch.gapWidthPct ?? existing.gapWidthPct
@@ -2686,10 +2688,30 @@ export function editChartElement(
     ...(barDir ? { barDir } : {}),
     ...(pointColors.some((row) => row?.some((c) => c != null)) ? { pointColors } : {}),
   }
-  const newXml = patchChartTextColors(
-    preserveChartTextProperties(originalXml, buildChartSpaceXmlWithColors(opts, colorScheme)),
-    patch,
-  )
+  // Rebuilds must keep the three native chart styles that are not represented
+  // in NewChartOptions. Preserve explicit values from the current model when
+  // this patch only changes another chart field; auto grid defaults remain
+  // auto so the renderer can choose the style-aware fallback.
+  const existingGridColor =
+    existing.valAxis?.gridColor && !existing.valAxis.gridColorAuto
+      ? existing.valAxis.gridColor
+      : undefined
+  const existingAxisLineColor = existing.valAxis?.lineColor ?? existing.catAxis?.lineColor
+  const existingAxisLabelFontSize = existing.valAxis?.labelSizePt ?? existing.catAxis?.labelSizePt
+  const stylePatch: ChartStylePatch = {
+    ...(patch.gridColor !== undefined || existingGridColor !== undefined
+      ? { gridColor: patch.gridColor ?? existingGridColor }
+      : {}),
+    ...(patch.axisLineColor !== undefined || existingAxisLineColor !== undefined
+      ? { axisLineColor: patch.axisLineColor ?? existingAxisLineColor }
+      : {}),
+    ...(patch.axisLabelFontSize !== undefined || existingAxisLabelFontSize !== undefined
+      ? { axisLabelFontSize: patch.axisLabelFontSize ?? existingAxisLabelFontSize }
+      : {}),
+  }
+  const rebuilt = preserveChartTextProperties(originalXml, buildChartSpaceXmlWithColors(opts, colorScheme))
+  const styled = patchChartStyles(rebuilt, stylePatch)
+  const newXml = patchChartTextColors(styled, patch)
   archive.entries.set(chartPath, Buffer.from(newXml, 'utf8'))
   slide.structureDirty = true
   materializeSlide(opened, slideIndex)

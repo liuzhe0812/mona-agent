@@ -141,11 +141,33 @@ class SlidesQuery(OfficeWireModel):
     limit: int = Field(default=20, ge=1, le=100)
 
 
+class PaletteQuery(OfficeWireModel):
+    mode: Literal["palette"]
+    slide_ids: list[str] = Field(default_factory=list, max_length=50)
+    element_ids: list[str] = Field(default_factory=list, max_length=100)
+
+
 class CapabilitiesQuery(OfficeWireModel):
     mode: Literal["capabilities"]
     document_type: OfficeDocumentType | None = None
     element_type: str | None = Field(default=None, min_length=1)
     operations: list[str] = Field(default_factory=list, max_length=20)
+    preset_content: dict[str, object] | None = None
+    preset_role: str | None = None
+    preset_relation: Literal[
+        "none",
+        "parallel",
+        "sequence",
+        "hierarchy",
+        "matrix",
+        "cycle",
+        "network",
+    ] | None = None
+    used_preset_ids: list[str] = Field(default_factory=list, max_length=100)
+    preset_limit: int = Field(default=3, ge=1, le=5)
+    preset_content_ref: str | None = None
+    preset_family: str | None = None
+    preset_theme: str | None = None
 
 
 class VisualRegion(OfficeWireModel):
@@ -157,6 +179,8 @@ class VisualRegion(OfficeWireModel):
 
 class VisualQuery(OfficeWireModel):
     mode: Literal["visual"]
+    slide_ids: list[str] = Field(default_factory=list, max_length=12)
+    columns: int = Field(default=2, ge=1, le=3)
     page_index: int | None = Field(default=None, ge=0)
     slide_id: str | None = None
     element_ids: list[str] = Field(default_factory=list, max_length=50)
@@ -164,6 +188,9 @@ class VisualQuery(OfficeWireModel):
     padding: float = Field(default=16, ge=0, le=100)
     accept_warnings: bool = False
     review_reason: str | None = Field(default=None, min_length=1, max_length=1000)
+    preset_id: str | None = None
+    preset_content: dict[str, object] | None = None
+    preset_content_ref: str | None = None
 
 
 class ReviewQuery(OfficeWireModel):
@@ -182,6 +209,7 @@ OfficeInspectQuery: TypeAlias = Annotated[
     | SearchQuery
     | BlocksQuery
     | SlidesQuery
+    | PaletteQuery
     | CapabilitiesQuery
     | VisualQuery
     | ReviewQuery
@@ -349,10 +377,31 @@ class SlidesResult(OfficeWireModel):
     slides: list[SlideInfo]
 
 
+class PaletteResult(OfficeWireModel):
+    mode: Literal["palette"]
+    slide_ids: list[str]
+    colors: list[dict[str, object]]
+    total_colors: int = Field(ge=0)
+    truncated: bool
+    inherited_references: int = Field(ge=0)
+    skipped_objects: int = Field(ge=0)
+    note: str
+
+
 class CapabilitiesResult(OfficeWireModel):
     mode: Literal["capabilities"]
     document_type: OfficeDocumentType
     operations: list[dict[str, object]]
+    available_operations: list[str] | None = None
+    unsupported_operations: list[str] | None = None
+    inapplicable_operations: list[str] | None = None
+    next_operations: list[str] | None = None
+    note: str | None = None
+    designs: list[dict[str, object]] | None = None
+    presets: list[dict[str, object]] | None = None
+    content_ref: str | None = None
+    preset_roles: list[dict[str, object]] | None = None
+    preset_diagnostics: list[dict[str, object]] | None = None
 
 
 class SelectionResult(OfficeWireModel):
@@ -371,6 +420,8 @@ class SelectionResult(OfficeWireModel):
 
 class VisualResult(OfficeWireModel):
     mode: Literal["visual"]
+    overview: bool = False
+    slide_ids: list[str] | None = None
     data_url: str = Field(max_length=16_000_000, pattern=r"^data:image/png;base64,[A-Za-z0-9+/=]+$")
     width: int = Field(gt=0, le=4096)
     height: int = Field(gt=0, le=8192)
@@ -397,6 +448,7 @@ OfficeInspectPayload: TypeAlias = Annotated[
     | SearchResult
     | DocBlocksResult
     | SlidesResult
+    | PaletteResult
     | CapabilitiesResult
     | SelectionResult
     | VisualResult
@@ -526,6 +578,7 @@ class DocsOperation(OfficeWireModel):
 
 class SlidesOperation(OfficeWireModel):
     op: Literal[
+        "slide_replace_colors",
         "slide_set_text",
         "slide_set_font",
         "slide_set_chart_style",
@@ -538,7 +591,10 @@ class SlidesOperation(OfficeWireModel):
         "slide_add_image",
         "slide_add_svg",
         "slide_compose",
+        "slide_add_preset",
         "slide_delete_element",
+        "slide_add_design",
+        "slide_add_path",
         "slide_add",
         "slide_duplicate",
         "slide_delete",
@@ -568,6 +624,20 @@ class OfficeApplyCommand(OfficeWireModel):
     operations: list[OfficeOperation] = Field(min_length=1, max_length=50)
 
 
+class SlidePresetChartStyle(OfficeWireModel):
+    role: str
+    element_id: str | None = None
+    style: dict[str, object]
+
+
+class SlidePresetPageResult(OfficeWireModel):
+    roles: list[str]
+    elements: dict[str, str]
+    pending_chart_styles: list[SlidePresetChartStyle] = Field(default_factory=list)
+    preset_id: str | None = None
+    slide_id: str | None = None
+
+
 class OfficeCommandSuccess(OfficeWireModel):
     ok: Literal[True]
     session_id: str = Field(min_length=1)
@@ -579,6 +649,8 @@ class OfficeCommandSuccess(OfficeWireModel):
     created_elements: list[SlideElementInfo] | None = None
     created_slides: list[SlideInfo] | None = None
     updated_elements: list[SlideElementInfo] | None = None
+    preset_pages: list[SlidePresetPageResult] | None = None
+    color_changes: list[dict[str, object]] | None = None
     warnings: list[str] | None = None
     pending_visual_slide_ids: list[str] | None = None
     pending_review_targets: list[str] | None = None

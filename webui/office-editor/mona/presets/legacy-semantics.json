@@ -1,0 +1,92 @@
+{
+  "dark-chart-insight": {
+    "roles": ["metrics", "trend", "distribution", "comparison", "observation"],
+    "relation": "none",
+    "composition": "chart-side"
+  },
+  "dark-product-hero": {
+    "roles": ["cover", "statement", "image"],
+    "relation": "none",
+    "composition": "hero-copy-left"
+  },
+  "light-chart-insight": {
+    "roles": ["metrics", "trend", "distribution", "comparison", "observation"],
+    "relation": "none",
+    "composition": "chart-bottom"
+  },
+  "light-comparison": {
+    "roles": ["comparison", "context", "observation"],
+    "relation": "parallel",
+    "composition": "comparison-split"
+  },
+  "light-process-map": {
+    "roles": ["process", "actions", "breakdown"],
+    "relation": "sequence",
+    "composition": "process-horizontal"
+  },
+  "light-product-hero": {
+    "roles": ["cover", "statement", "image"],
+    "relation": "none",
+    "composition": "hero-image-left"
+  },
+  "dark-metric": {
+    "roles": ["metrics", "result", "statement"],
+    "relation": "none",
+    "composition": "metric-side"
+  },
+  "dark-comparison": {
+    "roles": ["comparison", "context", "observation"],
+    "relation": "parallel",
+    "composition": "comparison-split"
+  },
+  "dark-process-map": {
+    "roles": ["process", "actions", "breakdown"],
+    "relation": "sequence",
+    "composition": "process-horizontal"
+  },
+  "dark-architecture": {
+    "roles": ["relationship", "context", "breakdown"],
+    "relation": "hierarchy",
+    "composition": "hierarchy-top"
+  },
+  "dark-case": {
+    "roles": ["case", "image", "observation"],
+    "relation": "parallel",
+    "composition": "case-image-left"
+  },
+  "dark-overview": {
+    "roles": ["breakdown", "context", "observation"],
+    "relation": "parallel",
+    "composition": "overview-grid"
+  },
+  "dark-process-long": {
+    "roles": ["process", "actions", "breakdown"],
+    "relation": "sequence",
+    "composition": "process-vertical"
+  },
+  "light-metric": {
+    "roles": ["metrics", "result", "statement"],
+    "relation": "none",
+    "composition": "metric-side"
+  },
+  "light-architecture": {
+    "roles": ["relationship", "context", "breakdown"],
+    "relation": "hierarchy",
+    "composition": "hierarchy-top"
+  },
+  "light-case": {
+    "roles": ["case", "image", "observation"],
+    "relation": "parallel",
+    "composition": "case-image-left"
+  },
+  "light-overview": {
+    "roles": ["breakdown", "context", "observation"],
+    "relation": "parallel",
+    "composition": "overview-grid"
+  },
+  "light-process-long": {
+    "roles": ["process", "actions", "breakdown"],
+    "relation": "sequence",
+    "composition": "process-vertical"
+  }
+}

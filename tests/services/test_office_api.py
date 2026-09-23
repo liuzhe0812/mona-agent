@@ -628,6 +628,81 @@ async def test_checkpoint_stream_export_and_file_read(
         await socket.close()
 
 
+async def test_preset_result_advances_version_and_allows_checkpoint(
+    tmp_path: Path,
+    services_token: str,
+) -> None:
+    client, _workspace = await _make_client(tmp_path)
+    async with client:
+        headers = {"X-Mona-Token": services_token, OFFICE_OWNER_HEADER: "chat:1"}
+        response = await client.post("/api/office/sessions", json={
+            "ownerSessionKey": "chat:1", "type": "slides",
+        }, headers=headers)
+        assert response.status == 201
+        session = await response.json()
+        base = f"/api/office/sessions/{session['sessionId']}"
+        ticket_response = await client.post(f"{base}/socket-ticket", json={
+            "renewEditor": False,
+        }, headers=headers)
+        socket = await client.ws_connect(
+            f"/api/office/ws?ticket={(await ticket_response.json())['ticket']}"
+        )
+        await socket.receive_json()
+        await socket.send_json({"event": "office_editor_ready", "sessionId": session["sessionId"],
+                                "version": session["version"]})
+        await socket.receive_json()
+        operation_id = "preset-result-roundtrip"
+        apply_task = asyncio.create_task(client.post(f"{base}/apply", json={
+            "sessionId": session["sessionId"], "operationId": operation_id,
+            "expectedVersion": session["version"],
+            "operations": [{"op": "slide_add_preset", "payload": {
+                "slideId": "s_1", "presetId": "dark-chart-insight", "content": {"title": "季度报告"},
+            }}],
+        }, headers=headers))
+        try:
+            assert (await socket.receive_json(timeout=2))["event"] == "office_command"
+            version = {**session["version"], "modelRevision": 1}
+            preset_pages = [{
+                "presetId": "dark-chart-insight", "slideId": "s_1",
+                "roles": ["title", "chart"], "elements": {"title": "e_title", "chart": "e_chart"},
+                "pendingChartStyles": [{"role": "chart", "elementId": "e_chart", "style": {
+                    "seriesColors": ["#72DFC1"], "axisLabelFontSize": 12,
+                }}],
+            }]
+            await socket.send_json({"event": "office_command_result", "result": {
+                "ok": True, "sessionId": session["sessionId"], "operationId": operation_id,
+                "version": version, "changedTargets": ["s_1"],
+                "presetPages": preset_pages, "pendingVisualSlideIds": ["s_1"],
+            }})
+            # This used to be rejected as an extra field and close the socket.
+            state = await socket.receive_json(timeout=2)
+            assert state["event"] == "office_session_state"
+            assert state["session"]["version"] == version
+            applied = await asyncio.wait_for(apply_task, timeout=2)
+            assert applied.status == 200
+            assert (await applied.json())["presetPages"] == preset_pages
+            payload = await (await client.get(f"{base}/file", headers=headers)).read()
+            start = await client.post(f"{base}/checkpoint-uploads", json={
+                "version": version, "size": len(payload),
+                "sha256": hashlib.sha256(payload).hexdigest(),
+            }, headers=headers)
+            assert start.status == 201
+            upload_id = (await start.json())["uploadId"]
+            chunk = await client.put(f"/api/office/checkpoint-uploads/{upload_id}?offset=0",
+                                     data=payload, headers=headers)
+            assert chunk.status == 200
+            saved = await client.post(f"/api/office/checkpoint-uploads/{upload_id}/finish", headers=headers)
+            assert saved.status == 200
+            assert (await saved.json())["version"] == version
+            current = await (await client.get(base, headers=headers)).json()
+            assert current["version"] == current["checkpointVersion"] == version
+            assert not socket.closed
+        finally:
+            apply_task.cancel()
+            await asyncio.gather(apply_task, return_exceptions=True)
+            await socket.close()
+
+
 async def test_checkpoint_route_enforces_its_own_size_limit(
     tmp_path: Path,
     services_token: str,

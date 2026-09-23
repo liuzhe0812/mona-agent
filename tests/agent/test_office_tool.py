@@ -132,6 +132,35 @@ class _ConnectedOfficeClient(_FakeOfficeClient):
         )
 
 
+class _BlankSlidesOfficeClient(_FakeOfficeClient):
+    async def get(self, _session_id: str, *, owner_session_key: str) -> OfficeSessionState:
+        self.owner = owner_session_key
+        return OfficeSessionState(
+            session_id="office_slides",
+            display_name="blank.pptx",
+            type="slides",
+            version=DocumentVersion(editor_epoch="epoch_1", model_revision=0),
+            editor_connected=True,
+        )
+
+    async def inspect(self, request, *, owner_session_key: str):
+        if request.query.mode != "slides":
+            return await super().inspect(request, owner_session_key=owner_session_key)
+        return OfficeInspectSuccess(
+            ok=True,
+            request_id="inspect_blank_slides",
+            session_id=request.session_id,
+            version=DocumentVersion(editor_epoch="epoch_1", model_revision=0),
+            result={
+                "mode": "slides",
+                "slides": [{
+                    "id": "s_1", "index": 0, "title": "", "width": 1280,
+                    "height": 720, "elements": [],
+                }],
+            },
+        )
+
+
 def _tool(tmp_path: Path) -> OfficeTool:
     tool = OfficeTool(workspace=tmp_path, restrict_to_workspace=True)
     tool.set_context(RequestContext(channel="web", chat_id="1", session_key="web:chat:1"))
@@ -457,6 +486,33 @@ async def test_apply_defaults_to_the_active_office_session(tmp_path: Path, monke
     assert fake.applied_session_id == "office_active"
 
 
+async def test_blank_slides_allow_direct_native_creation(tmp_path: Path, monkeypatch) -> None:
+    fake = _BlankSlidesOfficeClient()
+    monkeypatch.setattr(
+        "mona.agent.tools.office.OfficeServiceClient.from_port",
+        lambda _port: fake,
+    )
+    tool = _tool(tmp_path)
+
+    payload = json.loads(await tool.execute(
+        action="apply",
+        session_id="office_slides",
+        expected_version={"editorEpoch": "epoch_1", "modelRevision": 0},
+        operations=[{"op": "slide_add_text", "payload": {
+            "slideId": "s_1", "text": "原生设计", "x": 10, "y": 10,
+            "width": 300, "height": 60,
+        }}],
+    ))
+
+    assert payload["ok"] is True
+    assert payload["version"] == {"editorEpoch": "epoch_1", "modelRevision": 1}
+    assert fake.applied_session_id == "office_slides"
+    assert fake.owner == "web:chat:1"
+    assert fake.applied_operations[0].op == "slide_add_text"
+    assert fake.applied_operations[0].payload["text"] == "原生设计"
+    assert fake.inspect_queries == []
+
+
 async def test_inspect_defaults_to_the_active_office_session(
     tmp_path: Path,
     monkeypatch,
@@ -663,6 +719,112 @@ async def test_slide_compose_converts_only_image_asset_paths(
     assert "assetPath" not in items[0]
     assert items[0]["dataUrl"].startswith("data:image/svg+xml;base64,")
     assert items[1]["assetPath"] == "keep"
+
+
+async def test_slide_add_preset_converts_only_the_required_image_asset_path(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    asset = tmp_path / "product.png"
+    asset.write_bytes(b"png-bytes")
+    fake = _FakeOfficeClient()
+    monkeypatch.setattr(
+        "mona.agent.tools.office.OfficeServiceClient.from_port",
+        lambda _port: fake,
+    )
+    tool = _tool(tmp_path)
+
+    result = await tool.execute(
+        action="apply",
+        session_id="office_1",
+        expected_version={"editorEpoch": "epoch_1", "modelRevision": 0},
+        operations=[
+            {
+                "op": "slide_add_preset",
+                "payload": {
+                    "slideId": "slide_1",
+                    "presetId": "dark-product-hero",
+                    "content": {"title": "产品发布", "image": {"assetPath": "product.png"}},
+                },
+            },
+            {
+                "op": "slide_add_preset",
+                "payload": {
+                    "slideId": "slide_1",
+                    "presetId": "light-process-map",
+                    "content": {"title": "实施路径"},
+                },
+            },
+        ],
+    )
+
+    assert fake.applied_operations, result
+    content = fake.applied_operations[0].payload["content"]
+    assert "assetPath" not in content["image"]
+    assert content["image"]["dataUrl"] == (
+        "data:image/png;base64," + base64.b64encode(b"png-bytes").decode("ascii")
+    )
+    assert fake.applied_operations[1].payload["content"] == {"title": "实施路径"}
+
+
+async def test_slide_add_preset_rejects_an_asset_path_outside_the_workspace(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    outside = tmp_path.parent / "outside.png"
+    outside.write_bytes(b"png-bytes")
+    fake = _FakeOfficeClient()
+    monkeypatch.setattr(
+        "mona.agent.tools.office.OfficeServiceClient.from_port",
+        lambda _port: fake,
+    )
+    tool = _tool(tmp_path)
+
+    result = await tool.execute(
+        action="apply",
+        session_id="office_1",
+        expected_version={"editorEpoch": "epoch_1", "modelRevision": 0},
+        operations=[
+            {
+                "op": "slide_add_preset",
+                "payload": {
+                    "slideId": "slide_1",
+                    "presetId": "dark-product-hero",
+                    "content": {"title": "产品发布", "image": {"assetPath": str(outside)}},
+                },
+            }
+        ],
+    )
+
+    assert result.startswith("Error:")
+    assert fake.applied_operations == []
+
+
+async def test_preset_preview_resolves_asset_and_preserves_read_only_contract(tmp_path: Path, monkeypatch) -> None:
+    (tmp_path / "product.png").write_bytes(b"png-bytes")
+    fake = _FakeOfficeClient()
+    monkeypatch.setattr("mona.agent.tools.office.OfficeServiceClient.from_port", lambda _port: fake)
+    result = await _tool(tmp_path).execute(action="inspect", session_id="office_1", query={
+        "mode": "visual", "presetId": "dark-product-hero",
+        "presetContent": {"title": "产品", "image": {"assetPath": "product.png"}},
+    })
+    assert fake.inspect_queries, result
+    query = fake.inspect_queries[0]
+    assert query.preset_id == "dark-product-hero"
+    assert query.preset_content["image"] == {"dataUrl": "data:image/png;base64,cG5nLWJ5dGVz"}
+    assert fake.applied_operations == []
+
+
+def test_preset_candidate_query_and_result_cross_process_schema() -> None:
+    query = CapabilitiesQuery.model_validate({"mode": "capabilities", "presetContent": {"title": "季度复盘"}, "presetTheme": "light-editorial"})
+    assert query.model_dump(by_alias=True)["presetContent"]["title"] == "季度复盘"
+    result = OfficeInspectSuccess.model_validate({
+        "ok": True, "requestId": "q", "sessionId": "s",
+        "version": {"editorEpoch": "e", "modelRevision": 0},
+        "result": {"mode": "capabilities", "documentType": "slides", "operations": [],
+                   "presets": [{"id": "light-metric", "family": "spotlight"}]},
+    })
+    assert result.result.model_dump(by_alias=True)["presets"][0]["id"] == "light-metric"
 
 
 @pytest.mark.parametrize(

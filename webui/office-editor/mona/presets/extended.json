@@ -1,0 +1,514 @@
+{
+  "presets": [
+    {
+      "schemaVersion": 1,
+      "id": "dark-cover-split",
+      "family": "cover",
+      "roles": ["cover", "statement", "image"],
+      "relation": "none",
+      "composition": "cover-split",
+      "theme": "dark-product",
+      "capacity": {"titleCharsMax": 18, "summaryCharsMax": 30, "takeawayCharsMax": 18, "itemsMax": 0, "itemCharsMax": 0, "nodesMax": 0, "nodeCharsMax": 0, "seriesMax": 0, "categoriesMax": 0, "imageRequired": false, "imagesMin": 1, "imagesMax": 1},
+      "elements": [
+        {"role": "background", "kind": "rect", "box": {"x": 0, "y": 0, "width": 1280, "height": 720}, "fill": "background"},
+        {"role": "title", "kind": "text", "box": {"x": 72, "y": 155, "width": 590, "height": 128}, "bind": "title", "size": "hero", "fontSize": 36, "color": "text", "bold": true},
+        {"role": "summary", "kind": "text", "box": {"x": 72, "y": 304, "width": 560, "height": 76}, "bind": "summary", "size": "subtitle", "fontSize": 20, "color": "muted"},
+        {"role": "takeaway", "kind": "text", "box": {"x": 72, "y": 565, "width": 560, "height": 42}, "bind": "takeaway", "size": "body", "fontSize": 18, "color": "accent", "bold": true},
+        {"role": "hero", "kind": "layout", "layout": "cover-split", "box": {"x": 720, "y": 112, "width": 480, "height": 500}, "minImages": 1, "maxImages": 1}
+      ]
+    },
+    {
+      "schemaVersion": 1,
+      "id": "light-cover-split",
+      "family": "cover",
+      "roles": ["cover", "statement", "image"],
+      "relation": "none",
+      "composition": "cover-split",
+      "theme": "light-editorial",
+      "capacity": {"titleCharsMax": 18, "summaryCharsMax": 30, "takeawayCharsMax": 18, "itemsMax": 0, "itemCharsMax": 0, "nodesMax": 0, "nodeCharsMax": 0, "seriesMax": 0, "categoriesMax": 0, "imageRequired": false, "imagesMin": 1, "imagesMax": 1},
+      "elements": [
+        {"role": "background", "kind": "rect", "box": {"x": 0, "y": 0, "width": 1280, "height": 720}, "fill": "background"},
+        {"role": "title", "kind": "text", "box": {"x": 72, "y": 155, "width": 590, "height": 128}, "bind": "title", "size": "hero", "fontSize": 36, "color": "text", "bold": true},
+        {"role": "summary", "kind": "text", "box": {"x": 72, "y": 304, "width": 560, "height": 76}, "bind": "summary", "size": "subtitle", "fontSize": 20, "color": "muted"},
+        {"role": "takeaway", "kind": "text", "box": {"x": 72, "y": 565, "width": 560, "height": 42}, "bind": "takeaway", "size": "body", "fontSize": 18, "color": "accent", "bold": true},
+        {"role": "hero", "kind": "layout", "layout": "cover-split", "box": {"x": 720, "y": 112, "width": 480, "height": 500}, "minImages": 1, "maxImages": 1}
+      ]
+    },
+    {
+      "schemaVersion": 1,
+      "id": "dark-transition-statement",
+      "family": "editorial",
+      "roles": ["transition", "statement", "ambient"],
+      "relation": "none",
+      "composition": "transition-statement",
+      "theme": "dark-product",
+      "capacity": {"titleCharsMax": 18, "summaryCharsMax": 30, "takeawayCharsMax": 18, "itemsMax": 0, "itemCharsMax": 0, "nodesMax": 0, "nodeCharsMax": 0, "seriesMax": 0, "categoriesMax": 0, "imageRequired": false},
+      "elements": [
+        {"role": "background", "kind": "rect", "box": {"x": 0, "y": 0, "width": 1280, "height": 720}, "fill": "background"},
+        {"role": "title", "kind": "text", "box": {"x": 160, "y": 155, "width": 960, "height": 96}, "bind": "title", "size": "hero", "fontSize": 36, "color": "text", "bold": true, "align": "center"},
+        {"role": "summary", "kind": "text", "box": {"x": 190, "y": 270, "width": 900, "height": 70}, "bind": "summary", "size": "subtitle", "fontSize": 20, "color": "muted", "align": "center"},
+        {"role": "takeaway", "kind": "text", "box": {"x": 194, "y": 586, "width": 892, "height": 42}, "bind": "takeaway", "size": "body", "fontSize": 18, "color": "accent", "bold": true, "align": "center"},
+        {"role": "statement", "kind": "layout", "layout": "transition-statement", "box": {"x": 160, "y": 388, "width": 960, "height": 158}}
+      ]
+    },
+    {
+      "schemaVersion": 1,
+      "id": "light-transition-statement",
+      "family": "editorial",
+      "roles": ["transition", "statement", "ambient"],
+      "relation": "none",
+      "composition": "transition-statement",
+      "theme": "light-editorial",
+      "capacity": {"titleCharsMax": 18, "summaryCharsMax": 30, "takeawayCharsMax": 18, "itemsMax": 0, "itemCharsMax": 0, "nodesMax": 0, "nodeCharsMax": 0, "seriesMax": 0, "categoriesMax": 0, "imageRequired": false},
+      "elements": [
+        {"role": "background", "kind": "rect", "box": {"x": 0, "y": 0, "width": 1280, "height": 720}, "fill": "background"},
+        {"role": "title", "kind": "text", "box": {"x": 160, "y": 155, "width": 960, "height": 96}, "bind": "title", "size": "hero", "fontSize": 36, "color": "text", "bold": true, "align": "center"},
+        {"role": "summary", "kind": "text", "box": {"x": 190, "y": 270, "width": 900, "height": 70}, "bind": "summary", "size": "subtitle", "fontSize": 20, "color": "muted", "align": "center"},
+        {"role": "takeaway", "kind": "text", "box": {"x": 194, "y": 586, "width": 892, "height": 42}, "bind": "takeaway", "size": "body", "fontSize": 18, "color": "accent", "bold": true, "align": "center"},
+        {"role": "statement", "kind": "layout", "layout": "transition-statement", "box": {"x": 160, "y": 388, "width": 960, "height": 158}}
+      ]
+    },
+    {
+      "schemaVersion": 1,
+      "id": "dark-closing-callout",
+      "family": "closing",
+      "roles": ["closing", "result", "actions"],
+      "relation": "none",
+      "composition": "closing-callout",
+      "theme": "dark-product",
+      "capacity": {"titleCharsMax": 18, "summaryCharsMax": 30, "takeawayCharsMax": 18, "itemsMax": 3, "itemsMin": 0, "itemCharsMax": 28, "nodesMax": 0, "nodeCharsMax": 0, "seriesMax": 0, "categoriesMax": 0, "imageRequired": false},
+      "elements": [
+        {"role": "background", "kind": "rect", "box": {"x": 0, "y": 0, "width": 1280, "height": 720}, "fill": "background"},
+        {"role": "title", "kind": "text", "box": {"x": 160, "y": 118, "width": 960, "height": 92}, "bind": "title", "size": "hero", "fontSize": 36, "color": "text", "bold": true, "align": "center"},
+        {"role": "summary", "kind": "text", "box": {"x": 190, "y": 224, "width": 900, "height": 60}, "bind": "summary", "size": "subtitle", "fontSize": 20, "color": "muted", "align": "center"},
+        {"role": "takeaway", "kind": "text", "box": {"x": 160, "y": 622, "width": 960, "height": 44}, "bind": "takeaway", "size": "body", "fontSize": 20, "color": "accent", "bold": true, "align": "center"},
+        {"role": "closing", "kind": "layout", "layout": "closing-callout", "box": {"x": 160, "y": 318, "width": 960, "height": 260}, "maxItems": 3}
+      ]
+    },
+    {
+      "schemaVersion": 1,
+      "id": "light-closing-callout",
+      "family": "closing",
+      "roles": ["closing", "result", "actions"],
+      "relation": "none",
+      "composition": "closing-callout",
+      "theme": "light-editorial",
+      "capacity": {"titleCharsMax": 18, "summaryCharsMax": 30, "takeawayCharsMax": 18, "itemsMax": 3, "itemsMin": 0, "itemCharsMax": 28, "nodesMax": 0, "nodeCharsMax": 0, "seriesMax": 0, "categoriesMax": 0, "imageRequired": false},
+      "elements": [
+        {"role": "background", "kind": "rect", "box": {"x": 0, "y": 0, "width": 1280, "height": 720}, "fill": "background"},
+        {"role": "title", "kind": "text", "box": {"x": 160, "y": 118, "width": 960, "height": 92}, "bind": "title", "size": "hero", "fontSize": 36, "color": "text", "bold": true, "align": "center"},
+        {"role": "summary", "kind": "text", "box": {"x": 190, "y": 224, "width": 900, "height": 60}, "bind": "summary", "size": "subtitle", "fontSize": 20, "color": "muted", "align": "center"},
+        {"role": "takeaway", "kind": "text", "box": {"x": 160, "y": 622, "width": 960, "height": 44}, "bind": "takeaway", "size": "body", "fontSize": 20, "color": "accent", "bold": true, "align": "center"},
+        {"role": "closing", "kind": "layout", "layout": "closing-callout", "box": {"x": 160, "y": 318, "width": 960, "height": 260}, "maxItems": 3}
+      ]
+    },
+    {
+      "schemaVersion": 1,
+      "id": "dark-editorial-essay",
+      "family": "editorial",
+      "roles": ["statement", "context", "observation"],
+      "relation": "none",
+      "composition": "editorial-essay",
+      "theme": "dark-product",
+      "capacity": {"titleCharsMax": 18, "summaryCharsMax": 30, "takeawayCharsMax": 16, "itemsMax": 4, "itemCharsMax": 24, "nodesMax": 0, "nodeCharsMax": 0, "seriesMax": 0, "categoriesMax": 0, "imageRequired": false},
+      "elements": [
+        {"role": "background", "kind": "rect", "box": {"x": 0, "y": 0, "width": 1280, "height": 720}, "fill": "background"},
+        {"role": "title", "kind": "text", "box": {"x": 72, "y": 70, "width": 1136, "height": 68}, "bind": "title", "size": "title", "fontSize": 32, "color": "text", "bold": true},
+        {"role": "summary", "kind": "text", "box": {"x": 72, "y": 145, "width": 1136, "height": 48}, "bind": "summary", "size": "subtitle", "fontSize": 20, "color": "muted"},
+        {"role": "takeaway", "kind": "text", "box": {"x": 72, "y": 240, "width": 530, "height": 260}, "bind": "takeaway", "size": "hero", "fontSize": 32, "color": "text", "bold": true},
+        {"role": "body", "kind": "layout", "layout": "editorial-essay", "box": {"x": 700, "y": 220, "width": 508, "height": 360}, "maxItems": 4}
+      ]
+    },
+    {
+      "schemaVersion": 1,
+      "id": "light-editorial-essay",
+      "family": "editorial",
+      "roles": ["statement", "context", "observation"],
+      "relation": "none",
+      "composition": "editorial-essay",
+      "theme": "light-editorial",
+      "capacity": {"titleCharsMax": 18, "summaryCharsMax": 30, "takeawayCharsMax": 16, "itemsMax": 4, "itemCharsMax": 24, "nodesMax": 0, "nodeCharsMax": 0, "seriesMax": 0, "categoriesMax": 0, "imageRequired": false},
+      "elements": [
+        {"role": "background", "kind": "rect", "box": {"x": 0, "y": 0, "width": 1280, "height": 720}, "fill": "background"},
+        {"role": "title", "kind": "text", "box": {"x": 72, "y": 70, "width": 1136, "height": 68}, "bind": "title", "size": "title", "fontSize": 32, "color": "text", "bold": true},
+        {"role": "summary", "kind": "text", "box": {"x": 72, "y": 145, "width": 1136, "height": 48}, "bind": "summary", "size": "subtitle", "fontSize": 20, "color": "muted"},
+        {"role": "takeaway", "kind": "text", "box": {"x": 72, "y": 240, "width": 530, "height": 260}, "bind": "takeaway", "size": "hero", "fontSize": 32, "color": "text", "bold": true},
+        {"role": "body", "kind": "layout", "layout": "editorial-essay", "box": {"x": 700, "y": 220, "width": 508, "height": 360}, "maxItems": 4}
+      ]
+    },
+    {
+      "schemaVersion": 1,
+      "id": "dark-team-grid",
+      "family": "team",
+      "roles": ["team", "relationship", "context"],
+      "relation": "hierarchy",
+      "composition": "team-grid",
+      "theme": "dark-product",
+      "capacity": {"titleCharsMax": 18, "summaryCharsMax": 30, "takeawayCharsMax": 18, "itemsMax": 4, "itemsMin": 2, "itemCharsMax": 18, "nodesMax": 4, "nodesMin": 2, "nodeCharsMax": 12, "seriesMax": 0, "categoriesMax": 0, "imageRequired": false, "imagesMax": 4},
+      "elements": [
+        {"role": "background", "kind": "rect", "box": {"x": 0, "y": 0, "width": 1280, "height": 720}, "fill": "background"},
+        {"role": "title", "kind": "text", "box": {"x": 72, "y": 70, "width": 1136, "height": 68}, "bind": "title", "size": "title", "fontSize": 32, "color": "text", "bold": true},
+        {"role": "summary", "kind": "text", "box": {"x": 72, "y": 145, "width": 1136, "height": 48}, "bind": "summary", "size": "subtitle", "fontSize": 20, "color": "muted"},
+        {"role": "takeaway", "kind": "text", "box": {"x": 72, "y": 624, "width": 1136, "height": 44}, "bind": "takeaway", "size": "body", "fontSize": 18, "color": "accent", "bold": true},
+        {"role": "team", "kind": "layout", "layout": "team-grid", "box": {"x": 72, "y": 220, "width": 1136, "height": 390}, "minNodes": 2, "maxNodes": 4, "maxItems": 4, "maxImages": 4}
+      ]
+    },
+    {
+      "schemaVersion": 1,
+      "id": "light-team-grid",
+      "family": "team",
+      "roles": ["team", "relationship", "context"],
+      "relation": "hierarchy",
+      "composition": "team-grid",
+      "theme": "light-editorial",
+      "capacity": {"titleCharsMax": 18, "summaryCharsMax": 30, "takeawayCharsMax": 18, "itemsMax": 4, "itemsMin": 2, "itemCharsMax": 18, "nodesMax": 4, "nodesMin": 2, "nodeCharsMax": 12, "seriesMax": 0, "categoriesMax": 0, "imageRequired": false, "imagesMax": 4},
+      "elements": [
+        {"role": "background", "kind": "rect", "box": {"x": 0, "y": 0, "width": 1280, "height": 720}, "fill": "background"},
+        {"role": "title", "kind": "text", "box": {"x": 72, "y": 70, "width": 1136, "height": 68}, "bind": "title", "size": "title", "fontSize": 32, "color": "text", "bold": true},
+        {"role": "summary", "kind": "text", "box": {"x": 72, "y": 145, "width": 1136, "height": 48}, "bind": "summary", "size": "subtitle", "fontSize": 20, "color": "muted"},
+        {"role": "takeaway", "kind": "text", "box": {"x": 72, "y": 624, "width": 1136, "height": 44}, "bind": "takeaway", "size": "body", "fontSize": 18, "color": "accent", "bold": true},
+        {"role": "team", "kind": "layout", "layout": "team-grid", "box": {"x": 72, "y": 220, "width": 1136, "height": 390}, "minNodes": 2, "maxNodes": 4, "maxItems": 4, "maxImages": 4}
+      ]
+    },
+    {
+      "schemaVersion": 1,
+      "id": "dark-parallel-columns",
+      "family": "parallel",
+      "roles": ["breakdown", "comparison", "context"],
+      "relation": "parallel",
+      "composition": "parallel-columns",
+      "theme": "dark-product",
+      "capacity": {"titleCharsMax": 18, "summaryCharsMax": 30, "takeawayCharsMax": 18, "itemsMax": 4, "itemsMin": 2, "itemCharsMax": 40, "nodesMax": 4, "nodesMin": 2, "nodeCharsMax": 10, "seriesMax": 0, "categoriesMax": 0, "imageRequired": false},
+      "elements": [
+        {"role": "background", "kind": "rect", "box": {"x": 0, "y": 0, "width": 1280, "height": 720}, "fill": "background"},
+        {"role": "title", "kind": "text", "box": {"x": 72, "y": 70, "width": 1136, "height": 68}, "bind": "title", "size": "title", "fontSize": 32, "color": "text", "bold": true},
+        {"role": "summary", "kind": "text", "box": {"x": 72, "y": 145, "width": 1136, "height": 48}, "bind": "summary", "size": "subtitle", "fontSize": 20, "color": "muted"},
+        {"role": "takeaway", "kind": "text", "box": {"x": 72, "y": 624, "width": 1136, "height": 44}, "bind": "takeaway", "size": "body", "fontSize": 18, "color": "accent", "bold": true},
+        {"role": "parallel", "kind": "layout", "layout": "parallel-columns", "box": {"x": 72, "y": 220, "width": 1136, "height": 390}, "minItems": 2, "maxItems": 4, "minNodes": 2, "maxNodes": 4}
+      ]
+    },
+    {
+      "schemaVersion": 1,
+      "id": "light-parallel-columns",
+      "family": "parallel",
+      "roles": ["breakdown", "comparison", "context"],
+      "relation": "parallel",
+      "composition": "parallel-columns",
+      "theme": "light-editorial",
+      "capacity": {"titleCharsMax": 18, "summaryCharsMax": 30, "takeawayCharsMax": 18, "itemsMax": 4, "itemsMin": 2, "itemCharsMax": 40, "nodesMax": 4, "nodesMin": 2, "nodeCharsMax": 10, "seriesMax": 0, "categoriesMax": 0, "imageRequired": false},
+      "elements": [
+        {"role": "background", "kind": "rect", "box": {"x": 0, "y": 0, "width": 1280, "height": 720}, "fill": "background"},
+        {"role": "title", "kind": "text", "box": {"x": 72, "y": 70, "width": 1136, "height": 68}, "bind": "title", "size": "title", "fontSize": 32, "color": "text", "bold": true},
+        {"role": "summary", "kind": "text", "box": {"x": 72, "y": 145, "width": 1136, "height": 48}, "bind": "summary", "size": "subtitle", "fontSize": 20, "color": "muted"},
+        {"role": "takeaway", "kind": "text", "box": {"x": 72, "y": 624, "width": 1136, "height": 44}, "bind": "takeaway", "size": "body", "fontSize": 18, "color": "accent", "bold": true},
+        {"role": "parallel", "kind": "layout", "layout": "parallel-columns", "box": {"x": 72, "y": 220, "width": 1136, "height": 390}, "minItems": 2, "maxItems": 4, "minNodes": 2, "maxNodes": 4}
+      ]
+    },
+    {
+      "schemaVersion": 1,
+      "id": "dark-parallel-grid",
+      "family": "parallel",
+      "roles": ["breakdown", "comparison", "distribution"],
+      "relation": "parallel",
+      "composition": "parallel-grid",
+      "theme": "dark-product",
+      "capacity": {"titleCharsMax": 18, "summaryCharsMax": 30, "takeawayCharsMax": 18, "itemsMax": 6, "itemsMin": 5, "itemCharsMax": 24, "nodesMax": 6, "nodesMin": 5, "nodeCharsMax": 6, "seriesMax": 0, "categoriesMax": 0, "imageRequired": false},
+      "elements": [
+        {"role": "background", "kind": "rect", "box": {"x": 0, "y": 0, "width": 1280, "height": 720}, "fill": "background"},
+        {"role": "title", "kind": "text", "box": {"x": 72, "y": 70, "width": 1136, "height": 68}, "bind": "title", "size": "title", "fontSize": 32, "color": "text", "bold": true},
+        {"role": "summary", "kind": "text", "box": {"x": 72, "y": 145, "width": 1136, "height": 48}, "bind": "summary", "size": "subtitle", "fontSize": 20, "color": "muted"},
+        {"role": "takeaway", "kind": "text", "box": {"x": 72, "y": 624, "width": 1136, "height": 44}, "bind": "takeaway", "size": "body", "fontSize": 18, "color": "accent", "bold": true},
+        {"role": "parallel-grid", "kind": "layout", "layout": "parallel-grid", "box": {"x": 72, "y": 220, "width": 1136, "height": 390}, "minItems": 5, "maxItems": 6, "minNodes": 5, "maxNodes": 6, "columns": 3}
+      ]
+    },
+    {
+      "schemaVersion": 1,
+      "id": "light-parallel-grid",
+      "family": "parallel",
+      "roles": ["breakdown", "comparison", "distribution"],
+      "relation": "parallel",
+      "composition": "parallel-grid",
+      "theme": "light-editorial",
+      "capacity": {"titleCharsMax": 18, "summaryCharsMax": 30, "takeawayCharsMax": 18, "itemsMax": 6, "itemsMin": 5, "itemCharsMax": 24, "nodesMax": 6, "nodesMin": 5, "nodeCharsMax": 6, "seriesMax": 0, "categoriesMax": 0, "imageRequired": false},
+      "elements": [
+        {"role": "background", "kind": "rect", "box": {"x": 0, "y": 0, "width": 1280, "height": 720}, "fill": "background"},
+        {"role": "title", "kind": "text", "box": {"x": 72, "y": 70, "width": 1136, "height": 68}, "bind": "title", "size": "title", "fontSize": 32, "color": "text", "bold": true},
+        {"role": "summary", "kind": "text", "box": {"x": 72, "y": 145, "width": 1136, "height": 48}, "bind": "summary", "size": "subtitle", "fontSize": 20, "color": "muted"},
+        {"role": "takeaway", "kind": "text", "box": {"x": 72, "y": 624, "width": 1136, "height": 44}, "bind": "takeaway", "size": "body", "fontSize": 18, "color": "accent", "bold": true},
+        {"role": "parallel-grid", "kind": "layout", "layout": "parallel-grid", "box": {"x": 72, "y": 220, "width": 1136, "height": 390}, "minItems": 5, "maxItems": 6, "minNodes": 5, "maxNodes": 6, "columns": 3}
+      ]
+    },
+    {
+      "schemaVersion": 1,
+      "id": "dark-timeline",
+      "family": "timeline",
+      "roles": ["trend", "process", "actions"],
+      "relation": "sequence",
+      "composition": "timeline",
+      "theme": "dark-product",
+      "capacity": {"titleCharsMax": 18, "summaryCharsMax": 30, "takeawayCharsMax": 18, "itemsMax": 5, "itemsMin": 2, "itemCharsMax": 24, "nodesMax": 5, "nodesMin": 2, "nodeCharsMax": 8, "seriesMax": 0, "categoriesMax": 0, "imageRequired": false},
+      "elements": [
+        {"role": "background", "kind": "rect", "box": {"x": 0, "y": 0, "width": 1280, "height": 720}, "fill": "background"},
+        {"role": "title", "kind": "text", "box": {"x": 72, "y": 70, "width": 1136, "height": 68}, "bind": "title", "size": "title", "fontSize": 32, "color": "text", "bold": true},
+        {"role": "summary", "kind": "text", "box": {"x": 72, "y": 145, "width": 1136, "height": 48}, "bind": "summary", "size": "subtitle", "fontSize": 20, "color": "muted"},
+        {"role": "takeaway", "kind": "text", "box": {"x": 72, "y": 624, "width": 1136, "height": 44}, "bind": "takeaway", "size": "body", "fontSize": 18, "color": "accent", "bold": true},
+        {"role": "timeline", "kind": "layout", "layout": "timeline", "box": {"x": 72, "y": 220, "width": 1136, "height": 390}, "minNodes": 2, "maxNodes": 5, "minItems": 2, "maxItems": 5}
+      ]
+    },
+    {
+      "schemaVersion": 1,
+      "id": "light-timeline",
+      "family": "timeline",
+      "roles": ["trend", "process", "actions"],
+      "relation": "sequence",
+      "composition": "timeline",
+      "theme": "light-editorial",
+      "capacity": {"titleCharsMax": 18, "summaryCharsMax": 30, "takeawayCharsMax": 18, "itemsMax": 5, "itemsMin": 2, "itemCharsMax": 24, "nodesMax": 5, "nodesMin": 2, "nodeCharsMax": 8, "seriesMax": 0, "categoriesMax": 0, "imageRequired": false},
+      "elements": [
+        {"role": "background", "kind": "rect", "box": {"x": 0, "y": 0, "width": 1280, "height": 720}, "fill": "background"},
+        {"role": "title", "kind": "text", "box": {"x": 72, "y": 70, "width": 1136, "height": 68}, "bind": "title", "size": "title", "fontSize": 32, "color": "text", "bold": true},
+        {"role": "summary", "kind": "text", "box": {"x": 72, "y": 145, "width": 1136, "height": 48}, "bind": "summary", "size": "subtitle", "fontSize": 20, "color": "muted"},
+        {"role": "takeaway", "kind": "text", "box": {"x": 72, "y": 624, "width": 1136, "height": 44}, "bind": "takeaway", "size": "body", "fontSize": 18, "color": "accent", "bold": true},
+        {"role": "timeline", "kind": "layout", "layout": "timeline", "box": {"x": 72, "y": 220, "width": 1136, "height": 390}, "minNodes": 2, "maxNodes": 5, "minItems": 2, "maxItems": 5}
+      ]
+    },
+    {
+      "schemaVersion": 1,
+      "id": "dark-matrix-2x2",
+      "family": "matrix",
+      "roles": ["comparison", "distribution", "risks"],
+      "relation": "matrix",
+      "composition": "matrix-2x2",
+      "theme": "dark-product",
+      "capacity": {"titleCharsMax": 18, "summaryCharsMax": 30, "takeawayCharsMax": 18, "itemsMax": 4, "itemsMin": 4, "itemCharsMax": 30, "nodesMax": 4, "nodesMin": 4, "nodeCharsMax": 18, "seriesMax": 0, "categoriesMax": 0, "imageRequired": false},
+      "elements": [
+        {"role": "background", "kind": "rect", "box": {"x": 0, "y": 0, "width": 1280, "height": 720}, "fill": "background"},
+        {"role": "title", "kind": "text", "box": {"x": 72, "y": 70, "width": 1136, "height": 68}, "bind": "title", "size": "title", "fontSize": 32, "color": "text", "bold": true},
+        {"role": "summary", "kind": "text", "box": {"x": 72, "y": 145, "width": 1136, "height": 48}, "bind": "summary", "size": "subtitle", "fontSize": 20, "color": "muted"},
+        {"role": "takeaway", "kind": "text", "box": {"x": 72, "y": 624, "width": 1136, "height": 44}, "bind": "takeaway", "size": "body", "fontSize": 18, "color": "accent", "bold": true},
+        {"role": "matrix", "kind": "layout", "layout": "matrix-2x2", "box": {"x": 72, "y": 214, "width": 1136, "height": 398}}
+      ]
+    },
+    {
+      "schemaVersion": 1,
+      "id": "light-matrix-2x2",
+      "family": "matrix",
+      "roles": ["comparison", "distribution", "risks"],
+      "relation": "matrix",
+      "composition": "matrix-2x2",
+      "theme": "light-editorial",
+      "capacity": {"titleCharsMax": 18, "summaryCharsMax": 30, "takeawayCharsMax": 18, "itemsMax": 4, "itemsMin": 4, "itemCharsMax": 30, "nodesMax": 4, "nodesMin": 4, "nodeCharsMax": 18, "seriesMax": 0, "categoriesMax": 0, "imageRequired": false},
+      "elements": [
+        {"role": "background", "kind": "rect", "box": {"x": 0, "y": 0, "width": 1280, "height": 720}, "fill": "background"},
+        {"role": "title", "kind": "text", "box": {"x": 72, "y": 70, "width": 1136, "height": 68}, "bind": "title", "size": "title", "fontSize": 32, "color": "text", "bold": true},
+        {"role": "summary", "kind": "text", "box": {"x": 72, "y": 145, "width": 1136, "height": 48}, "bind": "summary", "size": "subtitle", "fontSize": 20, "color": "muted"},
+        {"role": "takeaway", "kind": "text", "box": {"x": 72, "y": 624, "width": 1136, "height": 44}, "bind": "takeaway", "size": "body", "fontSize": 18, "color": "accent", "bold": true},
+        {"role": "matrix", "kind": "layout", "layout": "matrix-2x2", "box": {"x": 72, "y": 214, "width": 1136, "height": 398}}
+      ]
+    },
+    {
+      "schemaVersion": 1,
+      "id": "dark-gallery",
+      "family": "gallery",
+      "roles": ["image", "case", "ambient"],
+      "relation": "parallel",
+      "composition": "gallery",
+      "theme": "dark-product",
+      "capacity": {"titleCharsMax": 18, "summaryCharsMax": 30, "takeawayCharsMax": 18, "itemsMax": 4, "itemCharsMax": 24, "nodesMax": 4, "nodesMin": 0, "nodeCharsMax": 16, "seriesMax": 0, "categoriesMax": 0, "imageRequired": false, "imagesMin": 2, "imagesMax": 4},
+      "elements": [
+        {"role": "background", "kind": "rect", "box": {"x": 0, "y": 0, "width": 1280, "height": 720}, "fill": "background"},
+        {"role": "title", "kind": "text", "box": {"x": 72, "y": 70, "width": 1136, "height": 68}, "bind": "title", "size": "title", "fontSize": 32, "color": "text", "bold": true},
+        {"role": "summary", "kind": "text", "box": {"x": 72, "y": 145, "width": 1136, "height": 48}, "bind": "summary", "size": "subtitle", "fontSize": 20, "color": "muted"},
+        {"role": "takeaway", "kind": "text", "box": {"x": 72, "y": 624, "width": 1136, "height": 44}, "bind": "takeaway", "size": "body", "fontSize": 18, "color": "accent", "bold": true},
+        {"role": "gallery", "kind": "layout", "layout": "gallery", "box": {"x": 72, "y": 212, "width": 1136, "height": 400}, "minImages": 2, "maxImages": 4}
+      ]
+    },
+    {
+      "schemaVersion": 1,
+      "id": "light-gallery",
+      "family": "gallery",
+      "roles": ["image", "case", "ambient"],
+      "relation": "parallel",
+      "composition": "gallery",
+      "theme": "light-editorial",
+      "capacity": {"titleCharsMax": 18, "summaryCharsMax": 30, "takeawayCharsMax": 18, "itemsMax": 4, "itemCharsMax": 24, "nodesMax": 4, "nodesMin": 0, "nodeCharsMax": 16, "seriesMax": 0, "categoriesMax": 0, "imageRequired": false, "imagesMin": 2, "imagesMax": 4},
+      "elements": [
+        {"role": "background", "kind": "rect", "box": {"x": 0, "y": 0, "width": 1280, "height": 720}, "fill": "background"},
+        {"role": "title", "kind": "text", "box": {"x": 72, "y": 70, "width": 1136, "height": 68}, "bind": "title", "size": "title", "fontSize": 32, "color": "text", "bold": true},
+        {"role": "summary", "kind": "text", "box": {"x": 72, "y": 145, "width": 1136, "height": 48}, "bind": "summary", "size": "subtitle", "fontSize": 20, "color": "muted"},
+        {"role": "takeaway", "kind": "text", "box": {"x": 72, "y": 624, "width": 1136, "height": 44}, "bind": "takeaway", "size": "body", "fontSize": 18, "color": "accent", "bold": true},
+        {"role": "gallery", "kind": "layout", "layout": "gallery", "box": {"x": 72, "y": 212, "width": 1136, "height": 400}, "minImages": 2, "maxImages": 4}
+      ]
+    },
+    {
+      "schemaVersion": 1,
+      "id": "dark-comparison-split",
+      "family": "comparison",
+      "roles": ["comparison", "context", "result"],
+      "relation": "parallel",
+      "composition": "comparison-split",
+      "theme": "dark-product",
+      "capacity": {"titleCharsMax": 18, "summaryCharsMax": 30, "takeawayCharsMax": 18, "itemsMax": 2, "itemsMin": 2, "itemCharsMax": 90, "nodesMax": 2, "nodesMin": 2, "nodeCharsMax": 12, "seriesMax": 0, "categoriesMax": 0, "imageRequired": false},
+      "elements": [
+        {"role": "background", "kind": "rect", "box": {"x": 0, "y": 0, "width": 1280, "height": 720}, "fill": "background"},
+        {"role": "title", "kind": "text", "box": {"x": 72, "y": 70, "width": 1136, "height": 68}, "bind": "title", "size": "title", "fontSize": 32, "color": "text", "bold": true},
+        {"role": "summary", "kind": "text", "box": {"x": 72, "y": 145, "width": 1136, "height": 48}, "bind": "summary", "size": "subtitle", "fontSize": 20, "color": "muted"},
+        {"role": "takeaway", "kind": "text", "box": {"x": 72, "y": 624, "width": 1136, "height": 44}, "bind": "takeaway", "size": "body", "fontSize": 18, "color": "accent", "bold": true},
+        {"role": "comparison", "kind": "layout", "layout": "comparison-split", "box": {"x": 72, "y": 220, "width": 1136, "height": 392}}
+      ]
+    },
+    {
+      "schemaVersion": 1,
+      "id": "light-comparison-split",
+      "family": "comparison",
+      "roles": ["comparison", "context", "result"],
+      "relation": "parallel",
+      "composition": "comparison-split",
+      "theme": "light-editorial",
+      "capacity": {"titleCharsMax": 18, "summaryCharsMax": 30, "takeawayCharsMax": 18, "itemsMax": 2, "itemsMin": 2, "itemCharsMax": 90, "nodesMax": 2, "nodesMin": 2, "nodeCharsMax": 12, "seriesMax": 0, "categoriesMax": 0, "imageRequired": false},
+      "elements": [
+        {"role": "background", "kind": "rect", "box": {"x": 0, "y": 0, "width": 1280, "height": 720}, "fill": "background"},
+        {"role": "title", "kind": "text", "box": {"x": 72, "y": 70, "width": 1136, "height": 68}, "bind": "title", "size": "title", "fontSize": 32, "color": "text", "bold": true},
+        {"role": "summary", "kind": "text", "box": {"x": 72, "y": 145, "width": 1136, "height": 48}, "bind": "summary", "size": "subtitle", "fontSize": 20, "color": "muted"},
+        {"role": "takeaway", "kind": "text", "box": {"x": 72, "y": 624, "width": 1136, "height": 44}, "bind": "takeaway", "size": "body", "fontSize": 18, "color": "accent", "bold": true},
+        {"role": "comparison", "kind": "layout", "layout": "comparison-split", "box": {"x": 72, "y": 220, "width": 1136, "height": 392}}
+      ]
+    },
+    {
+      "schemaVersion": 1,
+      "id": "dark-metric-spotlight",
+      "family": "metric",
+      "roles": ["metrics", "result", "statement"],
+      "relation": "none",
+      "composition": "metric-spotlight",
+      "theme": "dark-product",
+      "capacity": {"titleCharsMax": 18, "summaryCharsMax": 30, "takeawayCharsMax": 8, "itemsMax": 4, "itemsMin": 1, "itemCharsMax": 20, "nodesMax": 0, "nodeCharsMax": 0, "seriesMax": 0, "categoriesMax": 0, "imageRequired": false},
+      "elements": [
+        {"role": "background", "kind": "rect", "box": {"x": 0, "y": 0, "width": 1280, "height": 720}, "fill": "background"},
+        {"role": "title", "kind": "text", "box": {"x": 72, "y": 70, "width": 1136, "height": 68}, "bind": "title", "size": "title", "fontSize": 32, "color": "text", "bold": true},
+        {"role": "summary", "kind": "text", "box": {"x": 72, "y": 145, "width": 1136, "height": 48}, "bind": "summary", "size": "subtitle", "fontSize": 20, "color": "muted"},
+        {"role": "metric", "kind": "layout", "layout": "metric-spotlight", "box": {"x": 250, "y": 232, "width": 780, "height": 320}, "minItems": 1, "maxItems": 4}
+      ]
+    },
+    {
+      "schemaVersion": 1,
+      "id": "light-metric-spotlight",
+      "family": "metric",
+      "roles": ["metrics", "result", "statement"],
+      "relation": "none",
+      "composition": "metric-spotlight",
+      "theme": "light-editorial",
+      "capacity": {"titleCharsMax": 18, "summaryCharsMax": 30, "takeawayCharsMax": 8, "itemsMax": 4, "itemsMin": 1, "itemCharsMax": 20, "nodesMax": 0, "nodeCharsMax": 0, "seriesMax": 0, "categoriesMax": 0, "imageRequired": false},
+      "elements": [
+        {"role": "background", "kind": "rect", "box": {"x": 0, "y": 0, "width": 1280, "height": 720}, "fill": "background"},
+        {"role": "title", "kind": "text", "box": {"x": 72, "y": 70, "width": 1136, "height": 68}, "bind": "title", "size": "title", "fontSize": 32, "color": "text", "bold": true},
+        {"role": "summary", "kind": "text", "box": {"x": 72, "y": 145, "width": 1136, "height": 48}, "bind": "summary", "size": "subtitle", "fontSize": 20, "color": "muted"},
+        {"role": "metric", "kind": "layout", "layout": "metric-spotlight", "box": {"x": 250, "y": 232, "width": 780, "height": 320}, "minItems": 1, "maxItems": 4}
+      ]
+    },
+    {
+      "schemaVersion": 1,
+      "id": "dark-process-steps",
+      "family": "process-map",
+      "roles": ["process", "actions", "breakdown"],
+      "relation": "sequence",
+      "composition": "process-steps",
+      "theme": "dark-product",
+      "capacity": {"titleCharsMax": 18, "summaryCharsMax": 30, "takeawayCharsMax": 18, "itemsMax": 5, "itemsMin": 2, "itemCharsMax": 18, "nodesMax": 5, "nodesMin": 2, "nodeCharsMax": 8, "seriesMax": 0, "categoriesMax": 0, "imageRequired": false},
+      "elements": [
+        {"role": "background", "kind": "rect", "box": {"x": 0, "y": 0, "width": 1280, "height": 720}, "fill": "background"},
+        {"role": "title", "kind": "text", "box": {"x": 72, "y": 70, "width": 1136, "height": 68}, "bind": "title", "size": "title", "fontSize": 32, "color": "text", "bold": true},
+        {"role": "summary", "kind": "text", "box": {"x": 72, "y": 145, "width": 1136, "height": 48}, "bind": "summary", "size": "subtitle", "fontSize": 20, "color": "muted"},
+        {"role": "takeaway", "kind": "text", "box": {"x": 72, "y": 624, "width": 1136, "height": 44}, "bind": "takeaway", "size": "body", "fontSize": 18, "color": "accent", "bold": true},
+        {"role": "process", "kind": "layout", "layout": "process-steps", "box": {"x": 250, "y": 210, "width": 780, "height": 400}, "minNodes": 2, "maxNodes": 5, "minItems": 2, "maxItems": 5}
+      ]
+    },
+    {
+      "schemaVersion": 1,
+      "id": "light-process-steps",
+      "family": "process-map",
+      "roles": ["process", "actions", "breakdown"],
+      "relation": "sequence",
+      "composition": "process-steps",
+      "theme": "light-editorial",
+      "capacity": {"titleCharsMax": 18, "summaryCharsMax": 30, "takeawayCharsMax": 18, "itemsMax": 5, "itemsMin": 2, "itemCharsMax": 18, "nodesMax": 5, "nodesMin": 2, "nodeCharsMax": 8, "seriesMax": 0, "categoriesMax": 0, "imageRequired": false},
+      "elements": [
+        {"role": "background", "kind": "rect", "box": {"x": 0, "y": 0, "width": 1280, "height": 720}, "fill": "background"},
+        {"role": "title", "kind": "text", "box": {"x": 72, "y": 70, "width": 1136, "height": 68}, "bind": "title", "size": "title", "fontSize": 32, "color": "text", "bold": true},
+        {"role": "summary", "kind": "text", "box": {"x": 72, "y": 145, "width": 1136, "height": 48}, "bind": "summary", "size": "subtitle", "fontSize": 20, "color": "muted"},
+        {"role": "takeaway", "kind": "text", "box": {"x": 72, "y": 624, "width": 1136, "height": 44}, "bind": "takeaway", "size": "body", "fontSize": 18, "color": "accent", "bold": true},
+        {"role": "process", "kind": "layout", "layout": "process-steps", "box": {"x": 250, "y": 210, "width": 780, "height": 400}, "minNodes": 2, "maxNodes": 5, "minItems": 2, "maxItems": 5}
+      ]
+    },
+    {
+      "schemaVersion": 1,
+      "id": "dark-hierarchy-branch",
+      "family": "hierarchy",
+      "roles": ["relationship", "team", "breakdown"],
+      "relation": "hierarchy",
+      "composition": "hierarchy-branch",
+      "theme": "dark-product",
+      "capacity": {"titleCharsMax": 18, "summaryCharsMax": 30, "takeawayCharsMax": 18, "itemsMax": 4, "itemCharsMax": 36, "nodesMax": 5, "nodesMin": 3, "nodeCharsMax": 8, "seriesMax": 0, "categoriesMax": 0, "imageRequired": false},
+      "elements": [
+        {"role": "background", "kind": "rect", "box": {"x": 0, "y": 0, "width": 1280, "height": 720}, "fill": "background"},
+        {"role": "title", "kind": "text", "box": {"x": 72, "y": 70, "width": 1136, "height": 68}, "bind": "title", "size": "title", "fontSize": 32, "color": "text", "bold": true},
+        {"role": "summary", "kind": "text", "box": {"x": 72, "y": 145, "width": 1136, "height": 48}, "bind": "summary", "size": "subtitle", "fontSize": 20, "color": "muted"},
+        {"role": "takeaway", "kind": "text", "box": {"x": 72, "y": 624, "width": 1136, "height": 44}, "bind": "takeaway", "size": "body", "fontSize": 18, "color": "accent", "bold": true},
+        {"role": "hierarchy", "kind": "layout", "layout": "hierarchy-branch", "box": {"x": 72, "y": 212, "width": 1136, "height": 400}, "minNodes": 3, "maxNodes": 5}
+      ]
+    },
+    {
+      "schemaVersion": 1,
+      "id": "light-hierarchy-branch",
+      "family": "hierarchy",
+      "roles": ["relationship", "team", "breakdown"],
+      "relation": "hierarchy",
+      "composition": "hierarchy-branch",
+      "theme": "light-editorial",
+      "capacity": {"titleCharsMax": 18, "summaryCharsMax": 30, "takeawayCharsMax": 18, "itemsMax": 4, "itemCharsMax": 36, "nodesMax": 5, "nodesMin": 3, "nodeCharsMax": 8, "seriesMax": 0, "categoriesMax": 0, "imageRequired": false},
+      "elements": [
+        {"role": "background", "kind": "rect", "box": {"x": 0, "y": 0, "width": 1280, "height": 720}, "fill": "background"},
+        {"role": "title", "kind": "text", "box": {"x": 72, "y": 70, "width": 1136, "height": 68}, "bind": "title", "size": "title", "fontSize": 32, "color": "text", "bold": true},
+        {"role": "summary", "kind": "text", "box": {"x": 72, "y": 145, "width": 1136, "height": 48}, "bind": "summary", "size": "subtitle", "fontSize": 20, "color": "muted"},
+        {"role": "takeaway", "kind": "text", "box": {"x": 72, "y": 624, "width": 1136, "height": 44}, "bind": "takeaway", "size": "body", "fontSize": 18, "color": "accent", "bold": true},
+        {"role": "hierarchy", "kind": "layout", "layout": "hierarchy-branch", "box": {"x": 72, "y": 212, "width": 1136, "height": 400}, "minNodes": 3, "maxNodes": 5}
+      ]
+    },
+    {
+      "schemaVersion": 1,
+      "id": "dark-chart-evidence",
+      "family": "chart-insight",
+      "roles": ["observation", "metrics", "result"],
+      "relation": "none",
+      "composition": "chart-evidence",
+      "theme": "dark-product",
+      "capacity": {"titleCharsMax": 18, "summaryCharsMax": 30, "takeawayCharsMax": 18, "itemsMax": 4, "itemsMin": 3, "itemCharsMax": 24, "nodesMax": 4, "nodesMin": 0, "nodeCharsMax": 6, "seriesMax": 3, "categoriesMax": 6, "imageRequired": false},
+      "elements": [
+        {"role": "background", "kind": "rect", "box": {"x": 0, "y": 0, "width": 1280, "height": 720}, "fill": "background"},
+        {"role": "title", "kind": "text", "box": {"x": 72, "y": 70, "width": 1136, "height": 68}, "bind": "title", "size": "title", "fontSize": 32, "color": "text", "bold": true},
+        {"role": "summary", "kind": "text", "box": {"x": 72, "y": 145, "width": 1136, "height": 48}, "bind": "summary", "size": "subtitle", "fontSize": 20, "color": "muted"},
+        {"role": "takeaway", "kind": "text", "box": {"x": 72, "y": 624, "width": 1136, "height": 44}, "bind": "takeaway", "size": "body", "fontSize": 18, "color": "accent", "bold": true},
+        {"role": "chart", "kind": "chart", "box": {"x": 72, "y": 212, "width": 620, "height": 400}},
+        {"role": "evidence", "kind": "layout", "layout": "chart-evidence", "box": {"x": 730, "y": 212, "width": 478, "height": 400}, "minItems": 3, "maxItems": 4}
+      ]
+    },
+    {
+      "schemaVersion": 1,
+      "id": "light-chart-evidence",
+      "family": "chart-insight",
+      "roles": ["observation", "metrics", "result"],
+      "relation": "none",
+      "composition": "chart-evidence",
+      "theme": "light-editorial",
+      "capacity": {"titleCharsMax": 18, "summaryCharsMax": 30, "takeawayCharsMax": 18, "itemsMax": 4, "itemsMin": 3, "itemCharsMax": 24, "nodesMax": 4, "nodesMin": 0, "nodeCharsMax": 6, "seriesMax": 3, "categoriesMax": 6, "imageRequired": false},
+      "elements": [
+        {"role": "background", "kind": "rect", "box": {"x": 0, "y": 0, "width": 1280, "height": 720}, "fill": "background"},
+        {"role": "title", "kind": "text", "box": {"x": 72, "y": 70, "width": 1136, "height": 68}, "bind": "title", "size": "title", "fontSize": 32, "color": "text", "bold": true},
+        {"role": "summary", "kind": "text", "box": {"x": 72, "y": 145, "width": 1136, "height": 48}, "bind": "summary", "size": "subtitle", "fontSize": 20, "color": "muted"},
+        {"role": "takeaway", "kind": "text", "box": {"x": 72, "y": 624, "width": 1136, "height": 44}, "bind": "takeaway", "size": "body", "fontSize": 18, "color": "accent", "bold": true},
+        {"role": "chart", "kind": "chart", "box": {"x": 72, "y": 212, "width": 620, "height": 400}},
+        {"role": "evidence", "kind": "layout", "layout": "chart-evidence", "box": {"x": 730, "y": 212, "width": 478, "height": 400}, "minItems": 3, "maxItems": 4}
+      ]
+    }
+  ]
+}

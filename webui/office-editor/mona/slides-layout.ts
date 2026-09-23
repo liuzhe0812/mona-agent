@@ -10,7 +10,7 @@ export const COMPOSE_FIELDS = {
   height: 'Optional preview pixels; default slide height minus 96',
   columns: '1–24 positive column weights', rows: '1–24 positive row weights',
   gap: 'Optional spacing in preview pixels; default 24',
-  items: '1–50 items in back-to-front order: {type:text|shape|image|svg,column,row,columnSpan?:1,rowSpan?:1,inset?:0, ...native add fields}. Row/column are zero-based. Shared cells intentionally overlap. Image uses assetPath or dataUrl; svg uses svg markup.',
+  items: '1–50 items in back-to-front order: {type:text|shape|image|svg|chart,column,row,columnSpan?:1,rowSpan?:1,inset?:0, ...native add fields}. Row/column are zero-based. Shared cells intentionally overlap. Image uses assetPath or dataUrl; svg uses svg markup.',
 }
 
 function number(value: unknown, name: string, fallback?: number): number {
@@ -53,18 +53,19 @@ export function composeSlide(payload: Payload, slide: Pick<RenderSlide, 'widthPx
     throw new Error('items 必须包含 1–50 个元素。')
   }
   const operations: Record<string, string> = {
-    text: 'slide_add_text', shape: 'slide_add_shape', image: 'slide_add_image', svg: 'slide_add_svg',
+    text: 'slide_add_text', shape: 'slide_add_shape', image: 'slide_add_image', svg: 'slide_add_svg', chart: 'slide_add_chart',
   }
   const fields: Record<string, string[]> = {
-    text: ['text', 'font', 'align', 'fillColor', 'strokeColor', 'strokeWidthPt'],
-    shape: ['shape', 'text', 'font', 'align', 'fillColor', 'strokeColor', 'strokeWidthPt'],
+    text: ['text', 'paragraphs', 'body', 'font', 'align', 'fillColor', 'strokeColor', 'strokeWidthPt'],
+    shape: ['shape', 'text', 'paragraphs', 'body', 'font', 'align', 'fillColor', 'strokeColor', 'strokeWidthPt'],
     image: ['dataUrl'], svg: ['svg'],
+    chart: ['kind', 'title', 'categories', 'series', 'legendPos', 'gridlines', 'dataLabels', 'catAxisTitle', 'valAxisTitle', 'gapWidthPct', 'style'],
   }
   return payload.items.map((item: unknown, index) => {
     if (!item || typeof item !== 'object' || Array.isArray(item)) throw new Error(`items[${index}] 无效。`)
     const entry = item as Payload
     const type = String(entry.type)
-    if (!operations[type]) throw new Error(`items[${index}].type 必须是 text、shape、image 或 svg。`)
+    if (!operations[type]) throw new Error(`items[${index}].type 必须是 text、shape、image、svg 或 chart。`)
     const allowed = ['type', 'column', 'row', 'columnSpan', 'rowSpan', 'inset', ...fields[type]!]
     const extras = Object.keys(entry).filter((key) => !allowed.includes(key))
     if (extras.length) throw new Error(`items[${index}] 不支持字段：${extras.join(', ')}。`)

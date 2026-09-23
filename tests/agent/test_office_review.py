@@ -59,15 +59,17 @@ async def test_export_requires_visual_observation_and_resolved_errors(tmp_path, 
 
 
 @pytest.mark.asyncio
-async def test_explicit_draft_retains_unreviewed_status(tmp_path, monkeypatch):
+async def test_agent_cannot_self_authorize_unreviewed_ppt_export(tmp_path, monkeypatch):
     client = EditorClient()
     monkeypatch.setattr('mona.agent.tools.office.OfficeServiceClient.from_port', lambda _: client)
     result = json.loads(await OfficeTool(workspace=tmp_path).execute(
         action='export', session_id='office_1', output='draft.pptx', allow_unreviewed=True))
-    assert result['ok']
-    assert result['review']['status'] == 'draft'
-    assert result['review']['pendingSlideIds'] == ['s_2']
+    assert result['ok'] is False
+    assert result['error']['code'] == 'REVIEW_REQUIRED'
+    assert '不能自行跳过' in result['error']['message']
     assert client.pending == ['s_2']
+    assert not client.exports
+    assert not (tmp_path / 'draft.pptx').exists()
 
 
 @pytest.mark.asyncio

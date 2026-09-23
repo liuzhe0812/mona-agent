@@ -254,3 +254,39 @@ export async function captureSlide(
     host.remove()
   }
 }
+
+/** Contact sheet of real editor captures. It never marks a page reviewed. */
+export async function captureContactSheet(
+  pages: Array<{ id: string; slide: RenderSlide }>,
+  version: DocumentVersion,
+  getVersion: () => DocumentVersion | null,
+  columns = 2,
+): Promise<CapturedSlide> {
+  if (!pages.length || pages.length > 12 || !Number.isInteger(columns) || columns < 1 || columns > 3) throw new Error('总览支持 1–12 页、1–3 列。')
+  const width = 600, gap = 16, label = 28
+  const height = Math.round(width * pages[0]!.slide.heightPx / pages[0]!.slide.widthPx)
+  const actualColumns = Math.min(columns, pages.length)
+  const canvas = document.createElement('canvas')
+  canvas.width = actualColumns * (width + gap) + gap
+  canvas.height = Math.ceil(pages.length / actualColumns) * (height + label + gap) + gap
+  if (canvas.height > 8192) throw new Error('总览过高，请减少页面或增加列数。')
+  const ctx = canvas.getContext('2d')
+  if (!ctx) throw new Error('无法创建页面总览。')
+  ctx.fillStyle = '#e7e9e6'
+  ctx.fillRect(0, 0, canvas.width, canvas.height)
+  for (const [index, page] of pages.entries()) {
+    const captured = await captureSlide(page.slide, version, getVersion)
+    const image = await loadImage(captured.dataUrl)
+    const x = gap + index % actualColumns * (width + gap)
+    const y = gap + Math.floor(index / actualColumns) * (height + label + gap)
+    ctx.drawImage(image, x, y + label, width, height)
+    ctx.fillStyle = '#202921'
+    ctx.font = '15px sans-serif'
+    ctx.fillText(page.id, x, y + 19)
+  }
+  const after = getVersion()
+  if (!after || !sameDocumentVersion(version, after)) throw new VisualVersionConflict('总览生成时文档已变化，请重新检查。')
+  const dataUrl = canvas.toDataURL('image/png')
+  if (dataUrl.length > 16_000_000) throw new Error('总览过大，请分批检查。')
+  return { dataUrl, width: canvas.width, height: canvas.height }
+}

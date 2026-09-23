@@ -18,7 +18,7 @@
 
 ## 导入范围
 
-以下目录从固定 commit 按原始字节导入，未修改上游 Engine 实现：
+以下目录最初从固定 commit 按原始字节导入；后续本地改动见下方补丁记录，导入清单保留为原始基线：
 
 | 路径 | 文件数 | 字节数 |
 | --- | ---: | ---: |
@@ -48,6 +48,10 @@
 
 ## 明确排除项
 
+### 2026-09-21 图表主题补丁
+
+为原生 PPT 明暗主题补齐 `setChart.patch` 的 `gridColor`、`axisLineColor` 和 `axisLabelFontSize`（pt），修改了 `packages/pptx-engine/src/chart-style.ts`、`packages/pptx-engine/src/index.ts`、`apps/slides/src/main/ops/table-ops.ts` 和 `apps/slides/src/shared/op-docs.ts`。使用 OOXML 的轴文字与线条属性，复用既有解析、渲染与保存路径；不改变数据模型。对应回归为 `mona/chart-style-roundtrip.test.ts`。`SOURCE-MANIFEST.sha256` 仍描述原始导入内容，不冒充已修改文件的当前摘要。
+
 - `ee/`：企业模块。
 - `apps/pdf/`、`apps/markdown/`、`apps/shell/`：不属于 Mona 三编辑器入口。
 - `packages/pdf2docx/`：PDF 转换能力不在本计划范围内。
@@ -55,6 +59,14 @@
 - `node_modules/`、`out/`、`dist/`、`release/`、Rust `target/` 等生成或下载目录；本次未提交构建产物。
 
 Docs/Sheets/Slides 源码中原有的 Electron main/preload、AI、更新器、遥测相关代码和品牌资源保持为上游来源的一部分，但不被 Mona 的独立入口引用；Mona 不使用这些能力，也不复制其桌面壳、账户、云服务或品牌 UI。后续 adapter/build patch 必须继续保持该边界。
+
+## 2026-09-23 原生图表创建回执
+
+`apps/slides/src/main/ops/insert-ops.ts` 在 `addChart` 创建时立即返回原生对象的 durable ID，避免同一事务中后续图表插入重解析页面后使前一个 `chart_N` 临时 ID 失效。数据与保存格式不变；`mona/slides-entry.test.ts` 覆盖双图表创建、独立样式、保存重开及失败回滚。导入清单仍保留原始基线。
+
+## 2026-09-23 原生自由形状与文字体属性
+
+为数据驱动的可编辑信息图形新增 `packages/pptx-engine/src/custom-path.ts`，只接受有限、归一化的 M/L/C/Z 指令，生成原生 `a:custGeom`，不接受任意 XML/SVG 或外部资源。`insert.ts` 与 `apps/slides/src/main/ops/insert-ops.ts` 将该结构接入既有原子插入和保存路径；同时使创建时的正文内边距、换行与垂直对齐在内存模型和保存文件中一致。原始导入清单保持不变。对应回归见 `mona/slides-design.test.ts` 与 `mona/slides-entry.test.ts`，包括原生曲线保存重开及拒绝畸形输入。
 
 ## 许可证与品牌
 

@@ -1,10 +1,20 @@
 import { describe, expect, it, vi } from 'vitest'
+import type { RenderNode, RenderSlide } from '@genoffice/pptx-render'
+import { elementDurableId, slideDurableId } from '@genoffice/pptx-engine'
+import { mapXmlColors } from './slides-colors'
+import type { SlidesApi } from '../vendor/genoffice/apps/slides/src/shared/ipc'
 
 import {
   openSlidesDocument,
   saveSlidesDocument,
   slideText,
 } from './slides-engine'
+import { isBlockingLayoutWarning, slideLayoutWarnings } from './slides-layout'
+import { PRESETS, presetWarnings, type PresetContent } from './slides-presets'
+import { presetBoundaryContent } from './slides-preset-capacity'
+import qualityFixture from '../tests/presets/quality-content.json'
+import workflowFixture from '../tests/presets/workflow-content.json'
+import designFixture from '../tests/design/components.json'
 
 interface TestBridgeLike {
   emit: (message: unknown) => void
@@ -191,6 +201,143 @@ async function inspectError(bridge: TestBridgeLike, sessionId: string, requestId
 }
 
 describe('Slides Mona entry', () => {
+  it('recolors the same document after human edits, preserving IDs, layout, data, exclusions and undo', async () => {
+    vi.resetModules()
+    harness.posts = []; harness.cleanups = []; harness.bridge = undefined
+    ;(globalThis as { document?: unknown }).document = { getElementById: () => ({}), fonts: { load: async () => [] } }
+    ;(globalThis as { window?: unknown }).window = { addEventListener: vi.fn(), removeEventListener: vi.fn(), devicePixelRatio: 1 }
+    await import('./slides-entry')
+    const bridge = harness.bridge!, sessionId = 'inplace-recolor'
+    let version = { editorEpoch: 'inplace-epoch', modelRevision: 0 }
+    bridge.emit({ type: 'office_open', sessionId, documentType: 'slides', version, file: asArrayBuffer(await fsPromises.readFile(bundledBlankPath)) })
+    await waitForPost((m) => m.type === 'office_editor_ready')
+    const built = await apply(bridge, sessionId, version, 'color-source', [
+      { op: 'slide_add_text', payload: { slideId: 's_1', x: 70, y: 60, width: 1100, height: 80, text: '原始标题', font: { fontSize: 30, color: '#25856B' } } },
+      { op: 'slide_add_text', payload: { slideId: 's_1', x: 70, y: 180, width: 500, height: 120, paragraphs: [{ runs: [{ text: '2,052.51', fontSize: 54, color: '#25856B' }, { text: ' 万元', fontSize: 18, color: '#172621' }] }] } },
+      { op: 'slide_add_shape', payload: { slideId: 's_1', x: 70, y: 380, width: 180, height: 80, shape: 'rect', fillColor: '#25856B', text: '人工保护色' } },
+      { op: 'slide_add_shape', payload: { slideId: 's_1', x: 70, y: 510, width: 180, height: 80, shape: 'rect', fillColor: '#AA0000', text: '风险' } },
+      { op: 'slide_add_path', payload: { slideId: 's_1', x: 350, y: 380, width: 180, height: 80, path: [['M', 0, 0], ['C', 0.3, 0, 0.5, 1, 1, 1], ['L', 0, 1], ['Z']], fillColor: '#25856B88' } },
+      { op: 'slide_add_chart', payload: { slideId: 's_1', x: 640, y: 180, width: 550, height: 400, kind: 'bar', categories: ['基期', '当前'], series: [{ name: '收入', values: [56, 75] }, { name: '亏损', values: [-20, -15] }], style: { seriesColors: ['#25856B', '#AA0000'], axisLabelColor: '#172621' } } },
+    ])
+    expect(built.ok, JSON.stringify(built.error)).toBe(true)
+    version = built.version as typeof version
+    const elements = built.createdElements as Array<{ id: string; text: string }>
+    const title = elements.find((e) => e.text === '原始标题')!, protectedId = elements.find((e) => e.text === '人工保护色')!.id
+    const api = (window as unknown as { slidesApi: SlidesApi }).slidesApi
+    await api.editText({ slideIndex: 0, sourceId: title.id, paragraphs: [{ runs: [{ text: '人工修改已确认，#25856B是文本', fontSize: 30, color: '#25856B' }] }] })
+    const user = await waitForPost((m) => m.type === 'office_user_change')
+    version = user.version as typeof version
+    const capture = async () => {
+      bridge.emit({ type: 'office_checkpoint_request', sessionId, version })
+      const m = await waitForPost((x) => x.type === 'office_checkpoint' && (x.version as typeof version)?.modelRevision === version.modelRevision)
+      return openSlidesDocument(m.file as ArrayBuffer)
+    }
+    const before = await capture()
+    const palette = await inspect(bridge, sessionId, version, 'color-inventory', { mode: 'palette' })
+    expect(JSON.stringify(palette)).toContain('#25856B')
+    const caps = await inspect(bridge, sessionId, version, 'color-caps', { mode: 'capabilities', operations: ['slide_set_style', 'slide_set_fill'] })
+    expect(caps.unsupportedOperations).toEqual(['slide_set_style'])
+    expect((caps.operations as Array<{op:string}>).map((o) => o.op)).toEqual(['slide_set_fill'])
+    const oldVersion = version
+    const payload = { replacements: [{ from: '#25856B', to: '#E56B20' }], excludeElementIds: [protectedId] }
+    const changed = await apply(bridge, sessionId, version, 'color-change', [{ op: 'slide_replace_colors', payload }])
+    expect(changed.ok, JSON.stringify(changed.error)).toBe(true)
+    expect(changed.sessionId).toBe(sessionId)
+    expect(changed.createdSlides).toEqual([])
+    expect(changed.createdElements).toEqual([])
+    expect((changed.colorChanges as Array<{colorReplacements:number}>)[0]!.colorReplacements).toBeGreaterThan(3)
+    version = changed.version as typeof version
+    expect(version.modelRevision).toBe(oldVersion.modelRevision + 1)
+    const after = await capture()
+    const identity = (d: typeof before) => d.opened.deck.slides.map((s) => ({ slide: slideDurableId(s), elements: s.elements.map((e) => ({ id: elementDurableId(e), type: e.type, transform: e.transform })) }))
+    expect(identity(after)).toEqual(identity(before))
+    expect(after.slides.map(slideText)).toEqual(before.slides.map(slideText))
+    expect(after.slides.map(slideText).join('')).toContain('人工修改已确认')
+    for (const [name, bytes] of before.opened.archive.entries) {
+      const updated = after.opened.archive.entries.get(name)!
+      if (/^ppt\/(slides|charts)\/[^/]+\.xml$/.test(name)) {
+        expect(mapXmlColors(new TextDecoder().decode(updated), () => '000000').text, name)
+          .toBe(mapXmlColors(new TextDecoder().decode(bytes), () => '000000').text)
+      } else expect(updated, name).toEqual(bytes)
+    }
+    const oldProtected = before.opened.deck.slides[0]!.elements.find((e) => elementDurableId(e) === protectedId)!
+    expect(after.opened.deck.slides[0]!.elements.find((e) => elementDurableId(e) === protectedId)!.anchor.originalXml).toBe(oldProtected.anchor.originalXml)
+    const stale = await apply(bridge, sessionId, oldVersion, 'color-stale', [{ op: 'slide_replace_colors', payload }])
+    expect((stale.error as {code:string}).code).toBe('VERSION_CONFLICT')
+    const noop = await apply(bridge, sessionId, version, 'color-noop', [{ op: 'slide_replace_colors', payload }])
+    expect(noop.unchanged).toBe(true); expect(noop.version).toEqual(version)
+    const failed = await apply(bridge, sessionId, version, 'color-rollback', [
+      { op: 'slide_replace_colors', payload: { replacements: [{ from: '#E56B20', to: '#0000FF' }] } },
+      { op: 'slide_set_fill', payload: { slideId: 's_1', elementId: 'nonexistent', color: '#000000' } },
+    ])
+    expect(failed.ok).toBe(false)
+    const current = await inspect(bridge, sessionId, version, 'color-still-orange', { mode: 'palette' })
+    expect(JSON.stringify(current)).toContain('#E56B20'); expect(JSON.stringify(current)).not.toContain('#0000FF')
+    await api.undo()
+    version = { ...version, modelRevision: version.modelRevision + 1 }
+    const undone = await capture()
+    expect(undone.opened.archive.readText('ppt/slides/slide1.xml')).toBe(before.opened.archive.readText('ppt/slides/slide1.xml'))
+    await api.redo()
+    version = { ...version, modelRevision: version.modelRevision + 1 }
+    const redone = await capture()
+    expect(redone.opened.archive.readText('ppt/slides/slide1.xml')).toBe(after.opened.archive.readText('ppt/slides/slide1.xml'))
+  })
+
+  it('creates all native designs through the production bridge and preserves freeform geometry and rich text on reopen', async () => {
+    vi.resetModules()
+    harness.posts = []; harness.cleanups = []; harness.bridge = undefined
+    ;(globalThis as { document?: unknown }).document = { getElementById: () => ({}), fonts: { load: async () => [] } }
+    ;(globalThis as { window?: unknown }).window = { addEventListener: vi.fn(), removeEventListener: vi.fn(), devicePixelRatio: 1 }
+    await import('./slides-entry')
+    const bridge = harness.bridge!
+    const sessionId = 'native-components'
+    let version = { editorEpoch: 'native-components-epoch', modelRevision: 0 }
+    bridge.emit({ type: 'office_open', sessionId, documentType: 'slides', version, file: asArrayBuffer(await fsPromises.readFile(bundledBlankPath)) })
+    await waitForPost((message)=>message.type==='office_editor_ready')
+    const initial = await inspect(bridge,sessionId,version,'design-initial',{mode:'slides'})
+    let slideId = String((initial.slides as Array<{id:string}>)[0]!.id)
+    for (const [index,page] of designFixture.decks[0]!.pages.entries()) {
+      if (index) { const added=await apply(bridge,sessionId,version,`design-add-${index}`,[{op:'slide_add',payload:{slideId}}]); expect(added.ok).toBe(true); version=added.version as typeof version; slideId=(added.createdSlides as Array<{id:string}>)[0]!.id }
+      const payload = {...structuredClone(page.operations[0]!.payload),slideId} as Record<string,unknown>
+      if(page.name==='image') {
+        const bytes=Buffer.from(await fsPromises.readFile(urlModule.fileURLToPath(new URL('../tests/design/product-workspace.png',import.meta.url))))
+        ;(payload.content as Record<string,unknown>).image={dataUrl:`data:image/png;base64,${bytes.toString('base64')}`,width:bytes.readUInt32BE(16),height:bytes.readUInt32BE(20)}
+      }
+      const result=await apply(bridge,sessionId,version,`design-build-${index}`,[{op:'slide_add_design',payload}])
+      expect(result.ok,`${page.name}: ${JSON.stringify(result.error)}`).toBe(true)
+      expect((result.warnings as string[]).filter((w)=>w.startsWith('[错误]')),page.name).toEqual([])
+      version=result.version as typeof version
+    }
+    const budget = await apply(bridge,sessionId,version,'design-cannot-expand-raw-budget',[
+      {op:'slide_add_design',payload:{slideId,design:'items',region:{x:20,y:20,width:320,height:220},content:{title:'',items:[{label:'预算检查'}]}}},
+      ...Array.from({length:26},()=>({op:'slide_add_chart',payload:{slideId,x:20,y:20,width:200,height:200,kind:'bar',categories:['A'],series:[{name:'数据',values:[1]}],style:{textColor:'#172621'}}})),
+    ])
+    expect(budget.ok).toBe(false)
+    expect(JSON.stringify(budget.error)).toContain('50 个原始操作')
+    const revision=version.modelRevision
+    const failed=await apply(bridge,sessionId,version,'design-path-invalid',[
+      {op:'slide_add_text',payload:{slideId,x:70,y:620,width:900,height:40,text:'不应留下'}},
+      {op:'slide_add_path',payload:{slideId,x:50,y:150,width:300,height:300,path:[['M',0,0],['C',1,1,2,2,3,3]],fillColor:'#FFFFFF'}},
+    ])
+    expect(failed.ok).toBe(false)
+    const unsafe = await apply(bridge,sessionId,version,'design-path-unsafe-color',[
+      {op:'slide_add_path',payload:{slideId,x:50,y:150,width:300,height:300,path:[['M',0,0],['L',1,1]],fillColor:'\"/><a:bad/>'}},
+    ])
+    expect(unsafe.ok).toBe(false)
+    bridge.emit({type:'office_checkpoint_request',sessionId,version})
+    const checkpoint=await waitForPost((m)=>m.type==='office_checkpoint' && (m.version as typeof version)?.modelRevision===revision)
+    const reopened=await openSlidesDocument(checkpoint.file as ArrayBuffer)
+    expect(reopened.slides).toHaveLength(11)
+    expect(reopened.slides.map(slideText).join('')).not.toContain('不应留下')
+    expect(reopened.opened.deck.slides[4]!.elements.some((el)=>'customGeometry' in el && !!el.customGeometry)).toBe(true)
+    const xml=reopened.opened.archive.readText('ppt/slides/slide2.xml')!
+    expect(xml).toContain('2,052.51')
+    expect(xml).toContain('万元')
+    const fonts=[...xml.matchAll(/sz="(\d+)"/g)].map((m)=>Number(m[1]))
+    expect(Math.max(...fonts)).toBeGreaterThan(6000)
+    expect(reopened.opened.archive.readText('ppt/slides/slide5.xml')).toContain('a:cubicBezTo')
+  })
+
   it('opens and reopens a blank PPTX checkpoint', async () => {
     const blank = await fsPromises.readFile(bundledBlankPath)
     const document = await openSlidesDocument(asArrayBuffer(blank))
@@ -498,6 +645,317 @@ describe('Slides Mona entry', () => {
       op: 'slide_set_font', payload: { slideId, elementId, font: { size: 24 } },
     }])
     expect(fontRejected.ok).toBe(false)
+  })
+
+  it('applies themed chart series colors through seriesColors and keeps them in the saved file', async () => {
+    vi.resetModules()
+    harness.posts = []
+    harness.cleanups = []
+    harness.bridge = undefined
+    ;(globalThis as { document?: unknown }).document = { getElementById: () => ({}), fonts: { load: async () => [] } }
+    ;(globalThis as { window?: unknown }).window = { addEventListener: vi.fn(), removeEventListener: vi.fn(), devicePixelRatio: 1 }
+    await import('./slides-entry')
+    const bridge = harness.bridge!
+    const sessionId = 'chart-theme-session'
+    let version = { editorEpoch: 'chart-theme-epoch', modelRevision: 0 }
+    bridge.emit({ type: 'office_open', sessionId, documentType: 'slides', version,
+      file: asArrayBuffer(await fsPromises.readFile(bundledBlankPath)) })
+    await waitForPost((message) => message.type === 'office_editor_ready')
+    const pages = await inspect(bridge, sessionId, version, 'chart-theme-pages', { mode: 'slides' })
+    const slideId = String((pages.slides as Array<Record<string, unknown>>)[0]!.id)
+
+    // 创建阶段的轴标题与柱间距现在可用；系列色不是创建字段，必须被明确拒绝而不是静默忽略。
+    const createRejected = await apply(bridge, sessionId, version, 'chart-theme-create-color', [{
+      op: 'slide_add_chart', payload: {
+        slideId, x: 100, y: 150, width: 700, height: 350, kind: 'bar',
+        categories: ['Q1', 'Q2'], series: [{ name: '收入', values: [12, 18] }],
+        seriesColors: ['#72DFC1'],
+      },
+    }])
+    expect(createRejected.ok).toBe(false)
+    expect(createRejected.currentVersion).toEqual(version)
+
+    const created = await apply(bridge, sessionId, version, 'chart-theme-create', [{
+      op: 'slide_add_chart', payload: {
+        slideId, x: 100, y: 150, width: 700, height: 350, kind: 'bar',
+        title: '季度收入', categories: ['Q1', 'Q2'],
+        series: [{ name: '收入', values: [12, 18] }, { name: '成本', values: [7, 9] }],
+        legendPos: 'b', gridlines: true, dataLabels: true,
+        catAxisTitle: '季度', valAxisTitle: '千美元', gapWidthPct: 60,
+      },
+    }])
+    expect(created.ok).toBe(true)
+    version = created.version as typeof version
+    const elements = await inspect(bridge, sessionId, version, 'chart-theme-elements', { mode: 'slides' })
+    const elementId = String(((elements.slides as Array<Record<string, unknown>>)[0]!.elements as Array<Record<string, unknown>>)
+      .find((item) => item.type === 'chart')!.id)
+
+    const badColors = await apply(bridge, sessionId, version, 'chart-theme-bad', [{
+      op: 'slide_set_chart_style', payload: { slideId, elementId, style: { seriesColors: ['FFF'] } },
+    }])
+    expect(badColors.ok).toBe(false)
+    expect(JSON.stringify(badColors)).toContain('seriesColors')
+
+    const themed = await apply(bridge, sessionId, version, 'chart-theme-apply', [{
+      op: 'slide_set_chart_style', payload: {
+        slideId, elementId,
+        style: { seriesColors: ['#72DFC1', '#6C7CFF'], textColor: '#F5F7FA', axisLabelColor: '#B8C2D6' },
+      },
+    }])
+    expect(themed.ok).toBe(true)
+    version = themed.version as typeof version
+
+    bridge.emit({ type: 'office_checkpoint_request', sessionId, version })
+    const checkpoint = await waitForPost((message) => message.type === 'office_checkpoint'
+      && (message.version as typeof version)?.modelRevision === version.modelRevision)
+    const reopened = await openSlidesDocument(checkpoint.file as ArrayBuffer)
+    const chartPath = [...reopened.opened.archive.entries.keys()].find((path) => (
+      /^ppt\/charts\/chart\d+\.xml$/.test(path)
+    ))!
+    const xml = reopened.opened.archive.readText(chartPath)
+    if (xml == null) throw new Error('saved chart part is empty')
+    // 逐系列填充色与文字色都必须落到导出的图表部件里，不能被编辑器内预览吃掉。
+    const seriesBlocks = xml.split('<c:ser>').slice(1)
+    expect(seriesBlocks.map((block) => /<c:spPr><a:solidFill><a:srgbClr val="([0-9A-F]{6})"/.exec(block)?.[1]))
+      .toEqual(['72DFC1', '6C7CFF'])
+    expect(xml).toContain('val="F5F7FA"')
+    expect(xml).toContain('val="B8C2D6"')
+  })
+
+  it('instantiates preset pages, maps roles to real IDs, and themes charts after creation', async () => {
+    vi.resetModules()
+    harness.posts = []
+    harness.cleanups = []
+    harness.bridge = undefined
+    ;(globalThis as { document?: unknown }).document = { getElementById: () => ({}), fonts: { load: async () => [] } }
+    ;(globalThis as { window?: unknown }).window = { addEventListener: vi.fn(), removeEventListener: vi.fn(), devicePixelRatio: 1 }
+    await import('./slides-entry')
+    const bridge = harness.bridge!
+    const sessionId = 'preset-session'
+    let version = { editorEpoch: 'preset-epoch', modelRevision: 0 }
+    bridge.emit({ type: 'office_open', sessionId, documentType: 'slides', version,
+      file: asArrayBuffer(await fsPromises.readFile(bundledBlankPath)) })
+    await waitForPost((message) => message.type === 'office_editor_ready')
+
+    const slideIds = async (): Promise<string[]> => {
+      const result = await inspect(bridge, sessionId, version, `preset-slides-${version.modelRevision}`, { mode: 'slides' })
+      return (result.slides as Array<Record<string, unknown>>).map((slide) => String(slide.id))
+    }
+    const addSlideAfter = async (afterId: string, tag: string): Promise<string> => {
+      const added = await apply(bridge, sessionId, version, tag, [{ op: 'slide_add', payload: { slideId: afterId } }])
+      expect(added.ok).toBe(true)
+      version = added.version as typeof version
+      const ids = await slideIds()
+      const index = ids.indexOf(afterId)
+      const next = ids[index + 1]
+      if (!next) throw new Error('slide_add 没有产生新页面')
+      return next
+    }
+
+    const firstId = (await slideIds())[0]!
+    const chartPage = await apply(bridge, sessionId, version, 'preset-chart', [{
+      op: 'slide_add_preset', payload: {
+        slideId: firstId, presetId: 'dark-chart-insight',
+        content: {
+          title: '收入差距来自结构化升级',
+          summary: '2025 全年，单位：千美元，来源：经营台账',
+          takeaway: '8 个百分点',
+          items: ['A 相比 B 的差距来自高端线占比', '低端线毛利率同比下降 3 个百分点'],
+          chart: {
+            kind: 'bar', categories: ['方案 A', '方案 B', '方案 C'],
+            series: [{ name: '完成率', values: [72, 64, 58] }],
+            legendPos: 'none', gridlines: true, dataLabels: true,
+            catAxisTitle: '方案', valAxisTitle: '百分比', gapWidthPct: 60,
+          },
+        },
+      },
+    }])
+    expect(chartPage.ok).toBe(true)
+    version = chartPage.version as typeof version
+    const presetPage = (chartPage.presetPages as Array<Record<string, unknown>>)[0]!
+    expect(presetPage.roles).toEqual(['background', 'title', 'summary', 'chart', 'takeaway', 'evidence-1', 'evidence-2'])
+    const elements = presetPage.elements as Record<string, string>
+    expect(Object.keys(elements).length).toBeGreaterThanOrEqual(7)
+    const chartId = elements.chart!
+    expect(chartId).toMatch(/^e_/)
+    // 创建与主题为同一命令；下文重开 PPTX 验证实际图表 XML 的主题色。
+    expect(presetPage.pendingChartStyles).toEqual([])
+    expect(version.modelRevision).toBe(1)
+
+    const heroId = await addSlideAfter(firstId, 'preset-add-hero')
+    const heroPage = await apply(bridge, sessionId, version, 'preset-hero', [{
+      op: 'slide_add_preset', payload: {
+        slideId: heroId, presetId: 'dark-product-hero',
+        content: {
+          title: '一屏掌握用户画像', summary: '产品实拍，2026 年 9 月',
+          items: ['实时聚合行为与画像', '支持按分群下钻'],
+          image: { dataUrl: 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==' },
+        },
+      },
+    }])
+    expect(heroPage.ok).toBe(true)
+    version = heroPage.version as typeof version
+    expect((heroPage.presetPages as Array<Record<string, unknown>>)[0]!.pendingChartStyles).toEqual([])
+
+    const processId = await addSlideAfter(heroId, 'preset-add-process')
+    const selection = await inspect(bridge, sessionId, version, 'preset-select-process', {
+      mode: 'capabilities', operations:['slide_add_preset'], presetRelation:'sequence', presetRole:'process',
+      presetContent: {
+        title: '实施路径分三步推进', summary: '每个阶段都有明确验收口径，避免返工',
+        nodes: ['输入', '判断', '执行'],
+        items: ['先冻结输入范围', '再验证判断口径', '最后按执行结果复盘'],
+      },
+    })
+    expect(selection.contentRef).toMatch(/^preset-content:/)
+    expect((selection.presets as Array<Record<string,unknown>>).every((preset) => preset.relation === 'sequence')).toBe(true)
+    const processPage = await apply(bridge, sessionId, version, 'preset-process', [{
+      op: 'slide_add_preset', payload: {
+        slideId: processId, presetId: 'light-process-map',
+        contentRef: selection.contentRef,
+      },
+    }])
+    expect(processPage.ok).toBe(true)
+    version = processPage.version as typeof version
+
+    // 超容量必须在写入前失败，并且不产生半页内容
+    const before = await slideIds()
+    const occupied = await apply(bridge, sessionId, version, 'preset-occupied-page', [{
+      op: 'slide_add_preset', payload: {slideId:processId,presetId:'light-process-map',
+        content:{title:'不能覆盖已有内容',nodes:['输入','判断','执行'],items:['a','b','c']}},
+    }])
+    expect(occupied.ok).toBe(false)
+    expect(JSON.stringify(occupied)).toContain('空白页')
+    const overCapacity = await apply(bridge, sessionId, version, 'preset-over-capacity', [{
+      op: 'slide_add_preset', payload: {
+        slideId: processId, presetId: 'dark-chart-insight',
+        content: { title: '标题', chart: { kind: 'bar', categories: ['A'], series: [{ name: 'x', values: [1] }, { name: 'y', values: [2] }, { name: 'z', values: [3] }, { name: 'w', values: [4] }] } },
+      },
+    }])
+    expect(overCapacity.ok).toBe(false)
+    expect(JSON.stringify(overCapacity)).toContain('超过声明容量')
+    expect(await slideIds()).toEqual(before)
+
+    bridge.emit({ type: 'office_checkpoint_request', sessionId, version })
+    const checkpoint = await waitForPost((message) => message.type === 'office_checkpoint'
+      && (message.version as typeof version)?.modelRevision === version.modelRevision)
+    const reopened = await openSlidesDocument(checkpoint.file as ArrayBuffer)
+    const slides = reopened.opened.deck.slides
+    expect(slides.length).toBe(3)
+    const types = slides.map((slide) => slide.elements.map((element) => element.type))
+    expect(types[0]).toEqual(expect.arrayContaining(['shape', 'text', 'chart']))
+    expect(types[1]).toEqual(expect.arrayContaining(['picture', 'text']))
+    expect(types[2]).toEqual(expect.arrayContaining(['shape', 'text']))
+
+    const chartPath = [...reopened.opened.archive.entries.keys()].find((path) => (
+      /^ppt\/charts\/chart\d+\.xml$/.test(path)
+    ))!
+    const xml = reopened.opened.archive.readText(chartPath)
+    if (xml == null) throw new Error('saved chart part is empty')
+    expect(xml).toContain('val="72DFC1"')
+    expect(xml).toContain('<c:gapWidth val="60"/>')
+  })
+
+  it('supports explicitly requested basic drafts, applies brand charts and inherits the deck theme', async () => {
+    vi.resetModules()
+    harness.posts = []
+    harness.cleanups = []
+    harness.bridge = undefined
+    ;(globalThis as { document?: unknown }).document = { getElementById: () => ({}), fonts: { load: async () => [] } }
+    ;(globalThis as { window?: unknown }).window = { addEventListener: vi.fn(), removeEventListener: vi.fn(), devicePixelRatio: 1 }
+    await import('./slides-entry')
+    const bridge = harness.bridge!
+    const sessionId = 'automatic-content'
+    let version = {editorEpoch:'automatic-epoch',modelRevision:0}
+    bridge.emit({type:'office_open',sessionId,documentType:'slides',version,file:asArrayBuffer(await fsPromises.readFile(bundledBlankPath))})
+    await waitForPost((message)=>message.type==='office_editor_ready')
+    const pages = await inspect(bridge,sessionId,version,'auto-slides',{mode:'slides'})
+    const firstId = String((pages.slides as Array<Record<string,unknown>>)[0]!.id)
+    const created = await apply(bridge,sessionId,version,'auto-finance',[{op:'slide_add_preset',payload:{slideId:firstId,presetId:'auto-content',content:workflowFixture.pages[0]!.content}}])
+    expect(created.ok,JSON.stringify(created.error)).toBe(true)
+    expect(created.version).toMatchObject({modelRevision:1})
+    const preset = (created.presetPages as Array<Record<string,unknown>>)[0]!
+    expect(preset.presetId).toBe('auto-content')
+    expect(preset.pendingChartStyles).toEqual([])
+    expect((created.warnings as string[]).filter(isBlockingLayoutWarning)).toEqual([])
+    version = created.version as typeof version
+    bridge.emit({type:'office_checkpoint_request',sessionId,version})
+    const firstCheckpoint = await waitForPost((message)=>message.type==='office_checkpoint' && (message.version as typeof version)?.modelRevision===1)
+    bridge.emit({type:'office_open',sessionId,documentType:'slides',version,file:firstCheckpoint.file})
+    await waitForPost((message)=>message.type==='office_editor_ready' && (message.version as typeof version)?.modelRevision===1)
+    const added = await apply(bridge,sessionId,version,'auto-add',[{op:'slide_add',payload:{slideId:firstId}}])
+    version = added.version as typeof version
+    const listed = await inspect(bridge,sessionId,version,'auto-slides-2',{mode:'slides'})
+    const secondId = String((listed.slides as Array<Record<string,unknown>>)[1]!.id)
+    const following = await apply(bridge,sessionId,version,'auto-following',[{op:'slide_add_preset',payload:{slideId:secondId,content:workflowFixture.pages[1]!.content}}])
+    expect(following.ok,JSON.stringify(following.error)).toBe(true)
+    version = following.version as typeof version
+    bridge.emit({type:'office_checkpoint_request',sessionId,version})
+    const checkpoint = await waitForPost((message)=>message.type==='office_checkpoint' && (message.version as typeof version)?.modelRevision===version.modelRevision)
+    const reopened = await openSlidesDocument(checkpoint.file as ArrayBuffer)
+    const allXml = [...reopened.opened.archive.entries.keys()].filter((name)=>/ppt\/(slides|charts)\/.*\.xml$/.test(name))
+      .map((name)=>reopened.opened.archive.readText(name) ?? '')
+    for (const fact of workflowFixture.pages[0]!.content.facts!) expect(allXml.join('')).toContain(fact.text)
+    const chartPath = [...reopened.opened.archive.entries.keys()].find((name)=>/^ppt\/charts\/chart\d+\.xml$/.test(name))!
+    expect(reopened.opened.archive.readText(chartPath)).toContain('D85A00')
+    expect(reopened.opened.archive.readText(reopened.opened.deck.slides[1]!.path)).toContain('D85A00')
+    const rejected = await inspect(bridge,sessionId,version,'auto-diagnostics',{mode:'capabilities',operations:['slide_add_preset'],
+      presetContent:{title:'不能猜关系',nodes:['甲','乙'],items:['说明一','说明二']}})
+    expect(rejected.presets).toEqual([])
+    expect(JSON.stringify(rejected.presetDiagnostics)).toContain('relation')
+  })
+
+  it('continues with styled native charts after a preset mismatch and rolls back invalid styles', async () => {
+    vi.resetModules()
+    harness.posts = []
+    harness.cleanups = []
+    harness.bridge = undefined
+    ;(globalThis as { document?: unknown }).document = { getElementById: () => ({}), fonts: { load: async () => [] } }
+    ;(globalThis as { window?: unknown }).window = { addEventListener: vi.fn(), removeEventListener: vi.fn(), devicePixelRatio: 1 }
+    await import('./slides-entry')
+    const bridge = harness.bridge!
+    const sessionId = 'native-design'
+    let version = { editorEpoch: 'native-design-epoch', modelRevision: 0 }
+    bridge.emit({ type: 'office_open', sessionId, documentType: 'slides', version, file: asArrayBuffer(await fsPromises.readFile(bundledBlankPath)) })
+    await waitForPost((message) => message.type === 'office_editor_ready')
+    const initial = await inspect(bridge, sessionId, version, 'native-initial', { mode: 'slides' })
+    const slideId = String((initial.slides as Array<Record<string, unknown>>)[0]!.id)
+    const content = { title: '复杂关联不应被模板限制', relation: 'network', nodes: ['甲', '乙'], items: ['说明一', '说明二'] }
+    const candidates = await inspect(bridge, sessionId, version, 'native-candidates', { mode: 'capabilities', operations: ['slide_add_preset'], presetContent: content })
+    expect(candidates.presets).toEqual([])
+    const mismatch = await apply(bridge, sessionId, version, 'native-mismatch', [{ op: 'slide_add_preset', payload: { slideId, content } }])
+    expect(mismatch.ok).toBe(false)
+    expect(JSON.stringify(mismatch.error)).toContain('slide_compose')
+    const empty = await inspect(bridge, sessionId, version, 'native-empty', { mode: 'slides' })
+    expect((empty.slides as Array<{ elements: unknown[] }>)[0]!.elements).toEqual([])
+
+    const chart = { kind: 'bar', categories: ['基期', '当前'], series: [{ name: '周期', values: [50, 30] }], valAxisTitle: '分钟' }
+    const created = await apply(bridge, sessionId, version, 'native-create', [
+      { op: 'slide_add_text', payload: { slideId, x: 48, y: 36, width: 1180, height: 90, text: '交付周期缩短', font: { fontSize: 30 } } },
+      { op: 'slide_compose', payload: { slideId, x: 48, y: 150, width: 1184, height: 470, columns: [1, 1], rows: [1], gap: 40, items: [
+        { type: 'chart', column: 0, row: 0, ...chart, style: { seriesColors: ['#25856B'], axisLabelColor: '#223344', axisLabelFontSize: 14 } },
+        { type: 'chart', column: 1, row: 0, ...chart, style: { seriesColors: ['#D85A00'], gridColor: '#DDDDDD' } },
+      ] } },
+    ])
+    expect(created.ok, JSON.stringify(created.error)).toBe(true)
+    expect(created.version).toMatchObject({ modelRevision: 1 })
+    expect(created.presetPages).toBeUndefined()
+    expect((created.createdElements as Array<{ type: string }>).filter((element) => element.type === 'chart')).toHaveLength(2)
+    version = created.version as typeof version
+    const invalid = await apply(bridge, sessionId, version, 'native-invalid-style', [{ op: 'slide_add_chart', payload: { slideId, x: 100, y: 160, width: 600, height: 300, ...chart, style: { unsupported: true } } }])
+    expect(invalid.ok).toBe(false)
+    expect(JSON.stringify(invalid.error)).toContain('不支持的图表样式')
+    const after = await inspect(bridge, sessionId, version, 'native-after', { mode: 'slides' })
+    expect((after.slides as Array<{ elements: unknown[] }>)[0]!.elements).toHaveLength(3)
+    bridge.emit({ type: 'office_checkpoint_request', sessionId, version })
+    const checkpoint = await waitForPost((message) => message.type === 'office_checkpoint' && (message.version as typeof version)?.modelRevision === 1)
+    const reopened = await openSlidesDocument(checkpoint.file as ArrayBuffer)
+    expect(reopened.opened.deck.slides[0]!.elements.filter((element) => element.type === 'chart')).toHaveLength(2)
+    const chartXml = [...reopened.opened.archive.entries.keys()].filter((name) => /^ppt\/charts\/chart\d+\.xml$/.test(name))
+      .map((name) => reopened.opened.archive.readText(name) ?? '').join('\n')
+    expect(chartXml).toContain('25856B')
+    expect(chartXml).toContain('D85A00')
+    expect(chartXml).toContain('50')
+    expect(chartXml).toContain('分钟')
   })
 
   it('creates native mixed elements, returns exact IDs and supports local edit, old checkpoints and undo', async () => {
@@ -1220,4 +1678,285 @@ describe('Slides Mona entry', () => {
       vi.doUnmock('./slides-visual')
     }
   })
+})
+
+/**
+ * 预设页面的制作期回归：把「几何 + 样式 + 文字换行 + 图表样式」冻结成可 diff 的快照。
+ * 浏览器里的 SlideCanvas PNG 仍是最终画面验收，这里负责在没有浏览器时也能拦截回归。
+ */
+interface PresetRenderSnapshot {
+  type: string
+  box: [number, number, number, number]
+  background?: true
+  fill?: string
+  stroke?: string
+  font?: { size: number; family: string; bold: boolean; color: string }
+  lines?: string[]
+  contentHeight?: number
+  hasImage?: true
+  chart?: {
+    kind: string
+    legendPos: string
+    gridlines: boolean
+    dataLabels: boolean
+    catAxisTitle?: string
+    valAxisTitle?: string
+    gapWidthPct?: number
+    colors: string[]
+  }
+  children?: PresetRenderSnapshot[]
+}
+
+/**
+ * 每个变体的人工代表内容与预期对象类型。新增变体必须在这里补一条，
+ * 否则快照用例直接失败——这就是"变体清单驱动"，避免漏测。
+ */
+const PRESET_SAMPLES: Record<string, { content: PresetContent; expects: string[] }> = Object.fromEntries(
+  PRESETS.filter((preset) => !preset.elements.some((element) => element.kind === 'layout')).map((preset) => {
+    const pages = qualityFixture.decks.flatMap((deck) => deck.pages)
+    const match = pages.find((page) => page.presetId === preset.id)
+      ?? pages.find((page) => PRESETS.find((item) => item.id === page.presetId)?.family === preset.family)
+    if (!match) throw new Error(`缺少 ${preset.id} 的代表内容`)
+    const expects = ['shape', 'text']
+    if (preset.elements.some((element) => element.kind === 'chart')) expects.push('chart')
+    if (preset.elements.some((element) => element.kind === 'image' || element.kind === 'icon')) expects.push('picture')
+    return [preset.id, {content: structuredClone(match.content) as unknown as PresetContent, expects}]
+  }),
+)
+
+function roundTo(value: number, digits = 1): number {
+  const factor = 10 ** digits
+  return Math.round(value * factor) / factor
+}
+
+function solidColor(fill: unknown): string | undefined {
+  const value = fill as { kind?: string; color?: string } | undefined
+  if (!value?.kind || value.kind === 'none') return undefined
+  return value.kind === 'solid' ? value.color : value.kind
+}
+
+function snapshotNode(node: RenderNode): PresetRenderSnapshot {
+  const snapshot: PresetRenderSnapshot = {
+    type: node.type,
+    box: [roundTo(node.box.x), roundTo(node.box.y), roundTo(node.box.w), roundTo(node.box.h)],
+  }
+  if (node.background) snapshot.background = true
+  if (node.type === 'shape' || node.type === 'text') {
+    const fill = solidColor(node.fill)
+    if (fill) snapshot.fill = fill
+    const stroke = node.stroke as { color?: string; widthPt?: number } | undefined
+    if (stroke?.color) snapshot.stroke = `${stroke.color} ${roundTo(stroke.widthPt ?? 0)}pt`
+    if (node.text) {
+      const lines = node.text.lines.map((line) => line.runs.map((item) => item.text).join(''))
+      // 空文本框（预设的背景色块）不进入字体快照，避免噪声。
+      if (lines.join('').trim()) {
+        const run = node.text.lines.flatMap((line) => line.runs).find((item) => item.text.trim())
+        if (run) {
+          snapshot.font = {
+            size: roundTo(run.fontSizePx), family: run.fontFamily, bold: !!run.bold, color: run.color,
+          }
+        }
+        snapshot.lines = lines
+        snapshot.contentHeight = roundTo(node.text.contentHeight)
+      }
+    }
+  }
+  if (node.type === 'picture') snapshot.hasImage = true
+  if (node.type === 'chart') {
+    const info = node.styleInfo
+    const colors = new Set<string>()
+    for (const bar of node.bars ?? []) colors.add(bar.color)
+    for (const wedge of node.wedges ?? []) colors.add(wedge.color)
+    snapshot.chart = {
+      kind: info?.kind ?? 'unknown',
+      legendPos: info?.legendPos ?? 'none',
+      gridlines: !!info?.gridlines,
+      dataLabels: !!info?.dataLabels,
+      ...(info?.catAxisTitle ? { catAxisTitle: info.catAxisTitle } : {}),
+      ...(info?.valAxisTitle ? { valAxisTitle: info.valAxisTitle } : {}),
+      ...(info?.gapWidthPct != null ? { gapWidthPct: info.gapWidthPct } : {}),
+      colors: [...colors],
+    }
+  }
+  if (node.type === 'group') snapshot.children = node.children.map(snapshotNode)
+  return snapshot
+}
+
+/** 内容纵向占比：排除页面背景和母版装饰，只看真实内容外接框。 */
+function contentCoverage(slide: RenderSlide): number {
+  const boxes = slide.nodes.filter((node) => !node.decoration && !node.background).map((node) => node.box)
+  if (!boxes.length) return 0
+  const top = Math.min(...boxes.map((box) => box.y))
+  const bottom = Math.max(...boxes.map((box) => box.y + box.h))
+  return roundTo((bottom - top) / slide.heightPx, 2)
+}
+
+function durableIds(slide: RenderSlide): Set<string> {
+  const ids = new Set<string>()
+  const visit = (nodes: RenderNode[]): void => {
+    for (const node of nodes) {
+      if (node.durableId) ids.add(node.durableId)
+      if (node.type === 'group') visit(node.children)
+    }
+  }
+  visit(slide.nodes)
+  return ids
+}
+
+describe('预设页面渲染快照（CI 回归）', () => {
+  it('冻结全部预设页的几何、样式、换行与图表主题，且没有阻塞性布局问题', async () => {
+    vi.resetModules()
+    harness.posts = []
+    harness.cleanups = []
+    harness.bridge = undefined
+    ;(globalThis as { document?: unknown }).document = { getElementById: () => ({}), fonts: { load: async () => [] } }
+    ;(globalThis as { window?: unknown }).window = { addEventListener: vi.fn(), removeEventListener: vi.fn(), devicePixelRatio: 1 }
+    await import('./slides-entry')
+    const bridge = harness.bridge!
+    const sessionId = 'preset-snapshot-session'
+    let version = { editorEpoch: 'preset-snapshot-epoch', modelRevision: 0 }
+    bridge.emit({ type: 'office_open', sessionId, documentType: 'slides', version,
+      file: asArrayBuffer(await fsPromises.readFile(bundledBlankPath)) })
+    await waitForPost((message) => message.type === 'office_editor_ready')
+
+    const slideIds = async (): Promise<string[]> => {
+      const result = await inspect(bridge, sessionId, version, `snapshot-slides-${version.modelRevision}`, { mode: 'slides' })
+      return (result.slides as Array<Record<string, unknown>>).map((slide) => String(slide.id))
+    }
+
+    // 变体清单驱动：逐个预索取代表内容，缺一条就失败，不会静默漏测。
+    const productBytes = await fsPromises.readFile(pathModule.resolve(pathModule.dirname(here), '../tests/presets/assets/product-workspace.png'))
+    // 新布局由 extended-content 的真实浏览器图集验收；此快照保留旧目录回归。
+    const samples = PRESETS.filter((preset) => !preset.elements.some((element) => element.kind === 'layout')).map((preset) => {
+      const sample = PRESET_SAMPLES[preset.id]
+      if (!sample) throw new Error(`缺少 ${preset.id} 的代表内容：新增变体必须补 PRESET_SAMPLES`)
+      if (preset.capacity.imageRequired) sample.content.image = {dataUrl: `data:image/png;base64,${Buffer.from(productBytes).toString('base64')}`,width:2880,height:1704,fit:'contain'}
+      expect(presetWarnings(preset, sample.content), `${preset.id} 代表内容必须在声明容量内`).toEqual([])
+      return { preset, sample }
+    })
+
+    let target = (await slideIds())[0]!
+    for (const [index, { preset, sample }] of samples.entries()) {
+      if (index > 0) {
+        const added = await apply(bridge, sessionId, version, `snapshot-add-${index}`, [
+          { op: 'slide_add', payload: { slideId: target } },
+        ])
+        expect(added.ok).toBe(true)
+        version = added.version as typeof version
+        const ids = await slideIds()
+        target = ids[ids.indexOf(target) + 1]!
+      }
+      const created = await apply(bridge, sessionId, version, `snapshot-page-${index}`, [
+        { op: 'slide_add_preset', payload: { slideId: target, presetId: preset.id, content: sample.content } },
+      ])
+      expect(created.ok, `${preset.id}: ${JSON.stringify(created.error ?? '')}`).toBe(true)
+      expect(created.createdElements).toBeTruthy()
+      version = created.version as typeof version
+      const pending = ((created.presetPages as Array<Record<string, unknown>>)[0]!
+        .pendingChartStyles as Array<Record<string, unknown>>)
+      for (const style of pending) {
+        const styled = await apply(bridge, sessionId, version, `snapshot-style-${index}`, [{
+          op: 'slide_set_chart_style',
+          payload: { slideId: target, elementId: style.elementId, style: style.style },
+        }])
+        expect(styled.ok).toBe(true)
+        version = styled.version as typeof version
+      }
+    }
+
+    bridge.emit({ type: 'office_checkpoint_request', sessionId, version })
+    const checkpoint = await waitForPost((message) => message.type === 'office_checkpoint'
+      && (message.version as typeof version)?.modelRevision === version.modelRevision)
+    const document = await openSlidesDocument(checkpoint.file as ArrayBuffer)
+    const slides = document.slides
+    expect(slides).toHaveLength(samples.length)
+
+    // 硬门控：任何越界、溢出或文字重叠都必须先修好，再谈快照。
+    for (const [index, slide] of slides.entries()) {
+      const warnings = slideLayoutWarnings(slide, durableIds(slide))
+      expect(warnings.filter(isBlockingLayoutWarning), `page ${samples[index]!.preset.id}`).toEqual([])
+    }
+
+    // 每个变体都要真的产出自己声明的对象类型。
+    const pageTypes = document.opened.deck.slides.map((slide) => slide.elements.map((element) => element.type))
+    for (const [index, { preset, sample }] of samples.entries()) {
+      expect(pageTypes[index], preset.id).toEqual(expect.arrayContaining(sample.expects))
+    }
+
+    const themedCharts = [...document.opened.archive.entries.keys()]
+      .filter((path) => /^ppt\/charts\/chart\d+\.xml$/.test(path))
+      .map((path) => document.opened.archive.readText(path) ?? '')
+    // 两个主题的图表各自拿到自己的系列色，而不是共用一套默认调色板
+    expect(themedCharts).toHaveLength(2)
+    expect(themedCharts.some((xml) => xml.includes('val="72DFC1"'))).toBe(true)
+    expect(themedCharts.some((xml) => xml.includes('val="3458B4"'))).toBe(true)
+
+    expect({
+      pages: slides.map((slide) => slide.nodes.map(snapshotNode)),
+      coverage: slides.map(contentCoverage),
+    }).toMatchSnapshot()
+  })
+
+  it('每个预设在声明容量上限上都不溢出', async () => {
+    vi.resetModules()
+    harness.posts = []
+    harness.cleanups = []
+    harness.bridge = undefined
+    ;(globalThis as { document?: unknown }).document = { getElementById: () => ({}), fonts: { load: async () => [] } }
+    ;(globalThis as { window?: unknown }).window = { addEventListener: vi.fn(), removeEventListener: vi.fn(), devicePixelRatio: 1 }
+    await import('./slides-entry')
+    const bridge = harness.bridge!
+    const sessionId = 'preset-capacity-session'
+    let version = { editorEpoch: 'preset-capacity-epoch', modelRevision: 0 }
+    bridge.emit({ type: 'office_open', sessionId, documentType: 'slides', version,
+      file: asArrayBuffer(await fsPromises.readFile(bundledBlankPath)) })
+    await waitForPost((message) => message.type === 'office_editor_ready')
+
+    const slideIds = async (): Promise<string[]> => {
+      const result = await inspect(bridge, sessionId, version, `capacity-slides-${version.modelRevision}`, { mode: 'slides', limit: 100 })
+      return (result.slides as Array<Record<string, unknown>>).map((slide) => String(slide.id))
+    }
+
+    let target = (await slideIds())[0]!
+    for (const [index, preset] of PRESETS.entries()) {
+      if (index > 0) {
+        const added = await apply(bridge, sessionId, version, `capacity-add-${index}`, [
+          { op: 'slide_add', payload: { slideId: target } },
+        ])
+        expect(added.ok).toBe(true)
+        version = added.version as typeof version
+        const ids = await slideIds()
+        target = ids[ids.indexOf(target) + 1]!
+      }
+      const created = await apply(bridge, sessionId, version, `capacity-${preset.id}`, [{
+        op: 'slide_add_preset',
+        payload: { slideId: target, presetId: preset.id, content: presetBoundaryContent(preset) },
+      }])
+      expect(created.ok, `${preset.id}: ${JSON.stringify(created.error ?? '')}`).toBe(true)
+      version = created.version as typeof version
+      const pending = ((created.presetPages as Array<Record<string, unknown>>)[0]!
+        .pendingChartStyles as Array<Record<string, unknown>>)
+      for (const style of pending) {
+        const styled = await apply(bridge, sessionId, version, `capacity-style-${preset.id}`, [{
+          op: 'slide_set_chart_style',
+          payload: { slideId: target, elementId: style.elementId, style: style.style },
+        }])
+        expect(styled.ok).toBe(true)
+        version = styled.version as typeof version
+      }
+    }
+
+    bridge.emit({ type: 'office_checkpoint_request', sessionId, version })
+    const checkpoint = await waitForPost((message) => message.type === 'office_checkpoint'
+      && (message.version as typeof version)?.modelRevision === version.modelRevision)
+    const document = await openSlidesDocument(checkpoint.file as ArrayBuffer)
+    expect(document.slides).toHaveLength(PRESETS.length)
+    // 一次列出所有越界页面，避免逐页迭代
+    const violations = document.slides.flatMap((slide, index) => (
+      slideLayoutWarnings(slide, durableIds(slide))
+        .filter(isBlockingLayoutWarning)
+        .map((warning) => `${PRESETS[index]!.id}: ${warning}`)
+    ))
+    expect(violations).toEqual([])
+  }, 20000)
 })

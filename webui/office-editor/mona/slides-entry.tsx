@@ -28,7 +28,11 @@ import {
   type OpenedPptx,
   type SlideBundle,
 } from '@genoffice/pptx-engine'
-import { buildRenderSlide, type RenderNode, type RenderSlide } from '@genoffice/pptx-render'
+import { buildRenderSlide, makeViewport, type RenderNode, type RenderSlide } from '@genoffice/pptx-render'
+import { nativeParagraphs, nativeBodyPr } from './slides-typography'
+import { expandSlideDesign } from './slides-design'
+import { colorOperations, inspectSlideColors } from './slides-colors'
+import { customPathXml } from '../vendor/genoffice/packages/pptx-engine/src/custom-path'
 import { runTxn, type Op } from '../vendor/genoffice/apps/slides/src/main/ops'
 import {
   App as GenOfficeSlidesApp,
@@ -54,6 +58,8 @@ import {
   type SlidesDocument,
 } from './slides-engine'
 import { composeSlide, isBlockingLayoutWarning, slideLayoutWarnings } from './slides-layout'
+import { expandPreset, rankPresets, presetCatalog, presetDiagnostics, findPreset, resolvePresetTheme, PRESET_ROLES, type PresetContent, type PresetRelation } from './slides-presets'
+import { PresetContentStore } from './slides-preset-content'
 import { dataUrlImage, svgImage } from './slides-assets'
 import { getSlidesCapabilities } from './slides-capabilities'
 import {
@@ -66,7 +72,7 @@ import {
   resetSlidesReviewState,
   type SlidesReviewState,
 } from './slides-review'
-import { captureSlide, VisualVersionConflict } from './slides-visual'
+import { captureSlide, captureContactSheet, VisualVersionConflict } from './slides-visual'
 import './entry.css'
 import '@genoffice/ui/tokens.css'
 import '@genoffice/ui/screentip.css'
@@ -338,31 +344,102 @@ function paragraphAlign(value: unknown): 'left' | 'center' | 'right' | 'justify'
     : undefined
 }
 
-function addedTextParagraphs(payload: Record<string, unknown>): Array<Record<string, unknown>> | undefined {
-  if (typeof payload.text !== 'string') return undefined
-  const font = isRecord(payload.font) ? payload.font : {}
-  const run: Record<string, unknown> = { text: payload.text }
-  if (typeof font.fontFamily === 'string') run.fontFamily = font.fontFamily
-  if (Number.isFinite(Number(font.fontSize))) run.fontSize = Number(font.fontSize)
-  if (typeof font.bold === 'boolean') run.bold = font.bold
-  if (typeof font.italic === 'boolean') run.italic = font.italic
-  if (typeof font.color === 'string') run.color = font.color
-  const align = paragraphAlign(payload.align)
-  return [{ runs: [run], ...(align ? { align } : {}) }]
+function addedTextParagraphs(payload: Record<string, unknown>) {
+  return nativeParagraphs(payload)
+}
+
+async function preparePresetImage(operation: SlidesCommand['operations'][number]): Promise<SlidesCommand['operations'][number]> {
+  if (!['slide_add_preset', 'slide_add_design'].includes(operation.op) || !isRecord(operation.payload.content)) return operation
+  if (typeof Image === 'undefined') return operation
+  const measure = async (image: unknown) => {
+    if (!isRecord(image) || typeof image.dataUrl !== 'string') throw new Error('预设图片需要合法数据。')
+    dataUrlImage(image.dataUrl)
+    const bitmap = new Image()
+    bitmap.src = image.dataUrl
+    await bitmap.decode()
+    if (!bitmap.naturalWidth || !bitmap.naturalHeight) throw new Error('预设图片无法解码。')
+    return {...image,width:bitmap.naturalWidth,height:bitmap.naturalHeight,fit:'contain'}
+  }
+  const content = {...operation.payload.content}
+  if (content.image) content.image = await measure(content.image)
+  if (Array.isArray(content.images)) content.images = await Promise.all(content.images.map(measure))
+  return {...operation,payload:{...operation.payload,content}}
 }
 
 function translateOperation(
   document: SlidesDocument,
   operation: SlidesCommand['operations'][number],
-): { op?: Op; ops?: Op[]; targets: string[] } {
+): {
+  op?: Op
+  ops?: Op[]
+  targets: string[]
+  chartStyles?: Array<{ opOffset: number; slideId: string; style: Record<string, unknown> }>
+  preset?: {
+    presetId: string
+    slideId: string
+    roles: string[]
+    design: Pick<PresetContent, 'theme' | 'accentColor'>
+    pendingChartStyles: Array<{ role: string; style: Record<string, unknown> }>
+  }
+} {
   if (!isRecord(operation) || typeof operation.op !== 'string' || !isRecord(operation.payload)) {
     throw new Error('幻灯片操作格式无效。')
   }
   const payload = operation.payload
+  if (operation.op === 'slide_replace_colors') {
+    const ops = colorOperations(document.opened, payload)
+    return { ops, targets: ops.map((op) => String(op.target!.slide)) }
+  }
+  if (operation.op === 'slide_add_design') {
+    const index = slideIndex(document, payload.slideId)
+    if (payload.region === undefined && document.opened.deck.slides[index]!.elements.length) {
+      throw new Error('完整设计页只写入空白页；已有内容请按真实 ID 局部修改，或指定明确 region 组合组件。')
+    }
+    const native = expandSlideDesign(payload, document).map((item) => translateOperation(document, item))
+    const ops: Op[] = []
+    const chartStyles: NonNullable<ReturnType<typeof translateOperation>['chartStyles']> = []
+    for (const item of native) {
+      for (const pending of item.chartStyles ?? []) chartStyles.push({ ...pending, opOffset: ops.length + pending.opOffset })
+      ops.push(...(item.ops ?? (item.op ? [item.op] : [])))
+    }
+    return { ops, chartStyles, targets: [String(payload.slideId)] }
+  }
   if (operation.op === 'slide_compose') {
     const slide = document.slides[slideIndex(document, payload.slideId)]!
     const translated = composeSlide(payload, slide).map((item) => translateOperation(document, item))
-    return { ops: translated.flatMap((item) => item.ops ?? (item.op ? [item.op] : [])), targets: [String(payload.slideId)] }
+    const ops: Op[] = []
+    const chartStyles: NonNullable<ReturnType<typeof translateOperation>['chartStyles']> = []
+    for (const item of translated) {
+      for (const pending of item.chartStyles ?? []) chartStyles.push({ ...pending, opOffset: ops.length + pending.opOffset })
+      ops.push(...(item.ops ?? (item.op ? [item.op] : [])))
+    }
+    return { ops, chartStyles, targets: [String(payload.slideId)] }
+  }
+  if (operation.op === 'slide_add_preset') {
+    const unknown = Object.keys(payload).filter((key) => !['slideId','presetId','content'].includes(key))
+    if (unknown.length) throw new Error(`slide_add_preset 不支持字段：${unknown.join(', ')}`)
+    const slide = document.slides[slideIndex(document, payload.slideId)]!
+    const modelSlide = document.opened.deck.slides[slideIndex(document, payload.slideId)]!
+    if (!isRecord(payload.content)) throw new Error('slide_add_preset 需要 content 对象。')
+    const expanded = expandPreset({
+      slideId: requiredText(payload.slideId, 'slideId'),
+      presetId: payload.presetId === undefined ? 'auto' : requiredText(payload.presetId, 'presetId'),
+      content: payload.content as unknown as PresetContent,
+      page: { width: slide.widthPx, height: slide.heightPx },
+      // 预设按页面真实尺寸布局：EMU 比例取自当前文档，不假定所有预览尺度相同。
+      scale: {
+        x: document.opened.deck.size.cx / slide.widthPx,
+        y: document.opened.deck.size.cy / slide.heightPx,
+      },
+    })
+    if (modelSlide.elements.length) throw new Error('整页预设只能写入空白页；已有页面请按稳定元素 ID 局部修改或新建页面。')
+    const translated = expanded.operations.map((item) => translateOperation(document, item))
+    return {
+      ops: translated.flatMap((item) => item.ops ?? (item.op ? [item.op] : [])),
+      targets: [String(payload.slideId)],
+      preset: { presetId: expanded.presetId, slideId: String(payload.slideId), roles: expanded.roles,
+        design:{theme:expanded.theme,accentColor:(payload.content as unknown as PresetContent).accentColor}, pendingChartStyles: expanded.pendingChartStyles },
+    }
   }
   if (operation.op === 'slide_apply_txn') {
     if (!Array.isArray(payload.ops) || payload.ops.length === 0 || payload.ops.length > 50
@@ -388,16 +465,17 @@ function translateOperation(
   const target = targetOf(payload)
   const changed = [target.el ? `${target.slide}/${target.el}` : target.slide]
   if (operation.op === 'slide_add_chart') {
-    const allowed = ['slideId', 'x', 'y', 'width', 'height', 'kind', 'title', 'categories', 'series', 'legendPos', 'gridlines', 'dataLabels', 'valAxisTitle']
+    const allowed = ['slideId', 'x', 'y', 'width', 'height', 'kind', 'title', 'categories', 'series', 'legendPos', 'gridlines', 'dataLabels', 'catAxisTitle', 'valAxisTitle', 'gapWidthPct', 'style']
     const extras = Object.keys(payload).filter((key) => !allowed.includes(key))
     if (extras.length) throw new Error(`slide_add_chart 不支持字段：${extras.join(', ')}。`)
     if (['x', 'y', 'width', 'height'].some((key) => typeof payload[key] !== 'number' || !Number.isFinite(payload[key]))) {
       throw new Error('slide_add_chart 需要有限数值的 x、y、width、height（预览像素）。')
     }
-    if (['title', 'valAxisTitle'].some((key) => key in payload && typeof payload[key] !== 'string')
+    if (['title', 'catAxisTitle', 'valAxisTitle'].some((key) => key in payload && typeof payload[key] !== 'string')
       || ['gridlines', 'dataLabels'].some((key) => key in payload && typeof payload[key] !== 'boolean')
+      || ('gapWidthPct' in payload && (typeof payload.gapWidthPct !== 'number' || !Number.isFinite(payload.gapWidthPct) || payload.gapWidthPct <= 0))
       || ('legendPos' in payload && !['none', 'b', 't', 'l', 'r'].includes(String(payload.legendPos)))) {
-      throw new Error('图表 title/valAxisTitle 必须是文本，gridlines/dataLabels 必须是布尔值，legendPos 必须是 none/b/t/l/r。')
+      throw new Error('图表 title/catAxisTitle/valAxisTitle 必须是文本，gridlines/dataLabels 必须是布尔值，gapWidthPct 必须是正数，legendPos 必须是 none/b/t/l/r。')
     }
     if (!['bar', 'line', 'area', 'pie', 'doughnut'].includes(String(payload.kind))) {
       throw new Error('slide_add_chart.kind 必须是 bar、line、area、pie 或 doughnut。')
@@ -411,20 +489,46 @@ function translateOperation(
         || series.values.some((value) => typeof value !== 'number' || !Number.isFinite(value)))) {
       throw new Error('图表需要非空 categories 和 series，每个系列的有限数值数量必须与分类一致。')
     }
-    const chart = Object.fromEntries(['kind', 'title', 'categories', 'series', 'legendPos', 'gridlines', 'dataLabels', 'valAxisTitle']
+    const chart = Object.fromEntries(['kind', 'title', 'categories', 'series', 'legendPos', 'gridlines', 'dataLabels', 'catAxisTitle', 'valAxisTitle', 'gapWidthPct']
       .filter((key) => key in payload).map((key) => [key, payload[key]]))
-    return { op: { ...chart, op: 'addChart', target, offset: operationBox(document, payload) } as Op, targets: changed }
+    if (payload.style !== undefined && !isRecord(payload.style)) throw new Error('slide_add_chart.style 必须是图表样式对象。')
+    return {
+      op: { ...chart, op: 'addChart', target, offset: operationBox(document, payload) } as Op,
+      targets: changed,
+      ...(isRecord(payload.style) ? { chartStyles: [{ opOffset: 0, slideId: target.slide, style: payload.style }] } : {}),
+    }
   }
   if (operation.op === 'slide_set_chart_style') {
     if (!isRecord(payload.style)) throw new Error('slide_set_chart_style 需要 style 对象。')
-    return { op: { op: 'setChart', target, patch: payload.style }, targets: changed }
+    const style = payload.style
+    const colors = ['textColor', 'titleColor', 'axisLabelColor', 'axisTitleColor', 'legendColor', 'dataLabelColor', 'gridColor', 'axisLineColor']
+    const unknown = Object.keys(style).filter((key) => ![...colors, 'seriesColors', 'axisLabelFontSize'].includes(key))
+    if (unknown.length) throw new Error(`不支持的图表样式：${unknown.join(', ')}。`)
+    if (colors.some((key) => key in style && (typeof style[key] !== 'string' || !/^#?[0-9a-fA-F]{6}$/.test(style[key] as string)))) {
+      throw new Error('图表样式颜色必须是 #RRGGBB。')
+    }
+    if ('axisLabelFontSize' in payload.style && (typeof payload.style.axisLabelFontSize !== 'number' || !Number.isFinite(payload.style.axisLabelFontSize) || payload.style.axisLabelFontSize <= 0)) {
+      throw new Error('axisLabelFontSize 必须是正数磅值。')
+    }
+    const { seriesColors, ...textStyle } = payload.style
+    const patch: Record<string, unknown> = { ...textStyle }
+    if (seriesColors !== undefined) {
+      if (!Array.isArray(seriesColors) || !seriesColors.length
+        || seriesColors.some((color) => typeof color !== 'string' || !/^#?[0-9a-fA-F]{6}$/.test(color))) {
+        throw new Error('slide_set_chart_style.seriesColors 必须是 1 个以上 #RRGGBB 颜色。')
+      }
+      // 引擎的系列调色板字段名是 colorScheme；这里做一层显式映射，避免模型直接猜底层字段。
+      patch.colorScheme = seriesColors
+    }
+    if (!Object.keys(patch).length) throw new Error('slide_set_chart_style.style 至少需要一个字段。')
+    return { op: { op: 'setChart', target, patch }, targets: changed }
   }
   if (operation.op === 'slide_set_text') {
     return {
       op: {
         op: 'setText',
         target,
-        paragraphs: [{ runs: [{ text: requiredText(payload.text, 'text') }] }],
+        paragraphs: nativeParagraphs(payload) ?? (() => { throw new Error('需要 text 或 paragraphs。') })(),
       },
       targets: changed,
     }
@@ -475,8 +579,16 @@ function translateOperation(
   if (operation.op === 'slide_delete_element') {
     return { op: { op: 'deleteElement', target }, targets: changed }
   }
-  if (operation.op === 'slide_add_text' || operation.op === 'slide_add_shape') {
+  if (operation.op === 'slide_add_text' || operation.op === 'slide_add_shape' || operation.op === 'slide_add_path') {
     const box = operationBox(document, payload)
+    const vp = makeViewport(document.opened.deck.size, document.slides[slideIndex(document, payload.slideId)]!.widthPx)
+    const bodyPr = nativeBodyPr(payload.body, vp)
+    if (operation.op === 'slide_add_path') {
+      customPathXml(payload.path)
+      if (payload.fillColor !== undefined && (typeof payload.fillColor !== 'string' || !/^#[0-9a-f]{6}([0-9a-f]{2})?$/i.test(payload.fillColor))) throw new Error('自由形状填充必须是 #RRGGBB 或 #RRGGBBAA。')
+      if (payload.strokeColor !== undefined && payload.strokeColor !== null && (typeof payload.strokeColor !== 'string' || !/^#[0-9a-f]{6}$/i.test(payload.strokeColor))) throw new Error('自由形状描边必须是 #RRGGBB。')
+      if (payload.strokeWidthPt !== undefined && (typeof payload.strokeWidthPt !== 'number' || !Number.isFinite(payload.strokeWidthPt) || payload.strokeWidthPt <= 0)) throw new Error('自由形状描边宽度必须是正数。')
+    }
     const kind = operation.op === 'slide_add_text'
       ? 'textbox'
       : requiredText(payload.shape ?? 'rect', 'shape')
@@ -490,6 +602,8 @@ function translateOperation(
         offset: box,
         ...(paragraphs ? { paragraphs } : {}),
         ...(typeof payload.fillColor === 'string' ? { fill: payload.fillColor } : {}),
+        ...(bodyPr ? { bodyPr } : {}),
+        ...(operation.op === 'slide_add_path' ? { customPath: payload.path } : {}),
         ...(strokeColor ? {
           stroke: {
             color: strokeColor,
@@ -567,6 +681,7 @@ function unchangedDocument(document: SlidesDocument, before: SlidesSnapshot): bo
 }
 
 const LOCAL_OPERATIONS = new Set([
+  'monaReplaceColors',
   'setText', 'setFont', 'setParagraphFormat', 'setTransform', 'setFill', 'setStroke',
   'setChart', 'addElement', 'addPicture', 'addChart', 'addTable', 'deleteElement',
   'setTableCell', 'setTableStyle', 'setPictureSrcRect', 'setPictureOpacity',
@@ -667,6 +782,9 @@ function MonaSlidesEditor(): React.JSX.Element {
   const selectionRef = useRef<SlidesSelectionState>({ slideIndex: 0, elementIds: [] })
   const revisionFilesRef = useRef(new Map<number, () => Promise<ArrayBuffer>>())
   const operationCacheRef = useRef(new Map<string, { fingerprint: string; result: unknown }>())
+  const presetContentsRef = useRef(new PresetContentStore())
+  const presetHistoryRef = useRef(new Map<string, { presetId: string; anchor: string }>())
+  const presetDesignRef = useRef<Pick<PresetContent, 'theme' | 'accentColor'>>({})
   const undoRef = useRef<SlidesSnapshot[]>([])
   const redoRef = useRef<SlidesSnapshot[]>([])
   const deckListenersRef = useRef(new Set<(state: { slides: RenderSlide[]; size: { cx: number; cy: number } }) => void>())
@@ -754,6 +872,7 @@ function MonaSlidesEditor(): React.JSX.Element {
   }
 
   async function openDocument(message: OfficeOpenMessage): Promise<void> {
+    const sameSession = sessionRef.current?.sessionId === message.sessionId
     observedSlideVersionsRef.current.clear()
     if (message.documentType !== 'slides' || !isVersion(message.version)) {
       throw new Error('当前入口不能打开这个文档。')
@@ -773,6 +892,9 @@ function MonaSlidesEditor(): React.JSX.Element {
     revisionFilesRef.current.clear()
     revisionFilesRef.current.set(message.version.modelRevision, () => Promise.resolve(message.file.slice(0)))
     operationCacheRef.current.clear()
+    presetContentsRef.current.clear()
+    presetHistoryRef.current.clear()
+    if (!sameSession) presetDesignRef.current = {}
     undoRef.current = []
     redoRef.current = []
     await displayDocument(loaded)
@@ -880,7 +1002,9 @@ function MonaSlidesEditor(): React.JSX.Element {
         }
       }
       let result: unknown
-      if (mode === 'capabilities') {
+      if (mode === 'palette') {
+        result = inspectSlideColors(document.opened, command.query)
+      } else if (mode === 'capabilities') {
         const elementType = typeof command.query.elementType === 'string'
           ? command.query.elementType
           : undefined
@@ -889,7 +1013,43 @@ function MonaSlidesEditor(): React.JSX.Element {
           : Array.isArray(command.query.operations)
             ? command.query.operations.map((operation, index) => requiredText(operation, `operations[${index}]`))
             : (() => { throw new Error('operations 必须是字符串数组。') })()
-        result = getSlidesCapabilities(elementType, requestedOperations)
+        const capabilities = getSlidesCapabilities(elementType, requestedOperations)
+        if (isRecord(command.query.presetContent) || typeof command.query.presetContentRef === 'string') {
+          const content = {...presetDesignRef.current,...presetContentsRef.current.resolve(command.query.presetContent, command.query.presetContentRef)}
+          if (typeof command.query.presetTheme === 'string') content.theme = command.query.presetTheme as PresetContent['theme']
+          content.theme = resolvePresetTheme(content).id
+          if (typeof command.query.presetRelation === 'string') {
+            if (content.relation && content.relation !== command.query.presetRelation) throw new Error('候选关系与原始内容声明不一致，请先确认本页真实关系。')
+            content.relation = command.query.presetRelation as PresetRelation
+          }
+          if (!content.role && typeof command.query.presetRole === 'string') content.role = command.query.presetRole
+          const used = document.opened.deck.slides.flatMap((slide) => {
+            const entry = presetHistoryRef.current.get(slideDurableId(slide))
+            return entry && slide.elements.some((element) => matchesElementRef(element, entry.anchor)) ? [entry.presetId] : []
+          })
+          const provided = Array.isArray(command.query.usedPresetIds) ? command.query.usedPresetIds.filter((id): id is string => typeof id === 'string') : []
+          const candidates = rankPresets(content, {
+            family: typeof command.query.presetFamily === 'string' ? command.query.presetFamily : undefined,
+            theme: typeof command.query.presetTheme === 'string' ? command.query.presetTheme : undefined,
+            role: typeof command.query.presetRole === 'string' ? command.query.presetRole : undefined,
+            relation: typeof command.query.presetRelation === 'string' ? command.query.presetRelation as PresetRelation : undefined,
+            usedPresetIds: provided.length ? provided : used,
+            limit: typeof command.query.presetLimit === 'number' ? command.query.presetLimit : undefined,
+          })
+          const presets: Array<Record<string,unknown>> = candidates.map(({preset,score,reasons})=>({id:preset.id,family:preset.family,theme:preset.theme,
+            roles:preset.roles,relation:preset.relation,composition:preset.composition,capacity:preset.capacity,score,reasons}))
+          const diagnostics = candidates.length ? [] : presetDiagnostics(content,
+            typeof command.query.presetFamily === 'string' ? command.query.presetFamily : undefined, content.theme)
+          result = {...capabilities, contentRef: presetContentsRef.current.register(content),presets,
+            ...(diagnostics.length ? {presetDiagnostics:diagnostics} : {})}
+        } else {
+          const theme = typeof command.query.presetTheme === 'string' ? command.query.presetTheme : undefined
+          result = {
+            ...capabilities,
+            presetRoles: PRESET_ROLES,
+            presets: presetCatalog().filter((item) => !theme || item.theme === theme),
+          }
+        }
       } else if (mode === 'summary') {
         const elementCount = document.slides.reduce(
           (sum, slide) => sum + slide.nodes.filter((node) => !node.decoration && !!node.durableId).length,
@@ -997,6 +1157,39 @@ function MonaSlidesEditor(): React.JSX.Element {
           pendingSlideIds: pending,
           warnings: reviewWarnings(document, slideIdsOf(document)),
         }
+      } else if (mode === 'visual' && Array.isArray(command.query.slideIds) && command.query.slideIds.length) {
+        if (command.query.slideIds.length > 12 || command.query.slideId || command.query.presetId || command.query.region || command.query.acceptWarnings || (Array.isArray(command.query.elementIds) && command.query.elementIds.length)) throw new Error('总览请只提供 1–12 个 slideIds；不能代替单页验收或接受警告。')
+        const indexes = pageIndexes(command.query)
+        const pages = indexes.map((index) => ({ id: slideId(document, index), slide: document.slides[index]! }))
+        const captured = await captureContactSheet(pages, version, () => versionRef.current, command.query.columns === undefined ? 2 : Number(command.query.columns))
+        result = { mode: 'visual', ...captured, target: 'overview', overview: true, slideIds: pages.map((p) => p.id),
+          warnings: reviewWarnings(document, pages.map((p) => p.id)), pendingVisualSlideIds: currentPendingVisualSlideIds(document) }
+      } else if (mode === 'visual' && command.query.presetId) {
+        const content = presetContentsRef.current.resolve(command.query.presetContent, command.query.presetContentRef)
+        if (command.query.acceptWarnings || command.query.region || (Array.isArray(command.query.elementIds) && command.query.elementIds.length)) throw new Error('预设候选只支持整页预览，不能接受当前文档的审核提示。')
+        const scratch = await openSlidesDocument(await snapshotSlidesDocument(document.opened)())
+        const blank = runTxn(scratch.opened, { isolation: 'atomic', ops: [{op:'addBlankSlide',target:{slide:0}}] })
+        if (!blank.applied) throw new Error('无法创建临时预览页。')
+        const prepared = refreshSlidesDocument(scratch)
+        const target = slideId(prepared,1)
+        const operation = await preparePresetImage({op:'slide_add_preset',payload:{
+          slideId:target,presetId:command.query.presetId,content,
+        }})
+        const translated = translateOperation(prepared,operation)
+        const outcome = runTxn(prepared.opened,{isolation:'atomic',ops:translated.ops ?? []})
+        if (!outcome.applied) throw new Error(outcome.failures?.map((f)=>f.error).join('\n') || '预设预览失败。')
+        for (const pending of translated.preset?.pendingChartStyles ?? []) {
+          const position=translated.preset!.roles.indexOf(pending.role)
+          const id=outcome.records?.[position]?.created?.[0]
+          if (!id) throw new Error('预览图表缺少稳定 ID。')
+          const styled=translateOperation(prepared,{op:'slide_set_chart_style',payload:{slideId:target,elementId:id,style:pending.style}})
+          const applied=runTxn(prepared.opened,{isolation:'atomic',ops:styled.op ? [styled.op] : []})
+          if (!applied.applied) throw new Error('预览图表主题无法应用。')
+        }
+        const rendered=refreshSlidesDocument(prepared).slides[1]!
+        const captured=await captureSlide(rendered,version,()=>versionRef.current)
+        result={mode:'visual',...captured,target:`preset:${String(command.query.presetId)}`,
+          warnings:slideLayoutWarnings(rendered,slideElementIds(rendered))}
       } else if (mode === 'visual') {
         const requestedSlideId = command.query.slideId === undefined || command.query.slideId === null
           ? null
@@ -1112,13 +1305,67 @@ function MonaSlidesEditor(): React.JSX.Element {
     if (command.operations.length === 0 || command.operations.length > 50) return
     let before: SlidesSnapshot | undefined
     try {
-      const translated = command.operations.map((operation) => translateOperation(document, operation))
-      const ops = translated.flatMap((item) => item.ops ?? (item.op ? [item.op] : []))
-      if (ops.length === 0 || ops.length > 50) throw new Error('单次幻灯片事务最多包含 50 个操作。')
+      const resolved = command.operations.map((operation) => {
+        if (operation.op !== 'slide_add_preset' || !isRecord(operation.payload)) return operation
+        const {contentRef, content, ...payload} = operation.payload
+        const explicitPreset = typeof payload.presetId === 'string' ? findPreset(payload.presetId) : undefined
+        const canonical = {...presetDesignRef.current,...(explicitPreset ? {theme:explicitPreset.theme} : {}),
+          ...presetContentsRef.current.resolve(content,contentRef)}
+        canonical.theme = resolvePresetTheme(canonical).id
+        const presetId = payload.presetId === undefined || payload.presetId === 'auto'
+          ? rankPresets(canonical,{theme:canonical.theme,usedPresetIds:[...presetHistoryRef.current.values()].map((entry)=>entry.presetId),limit:1})[0]?.preset.id ?? 'auto'
+          : payload.presetId
+        return {...operation, payload:{...payload,presetId,content:canonical}}
+      })
+      const preparedOperations = await Promise.all(resolved.map(preparePresetImage))
+      if (!sameVersion(versionRef.current, currentVersion)) throw new VisualVersionConflict('准备素材时文档已变化，请重新读取后编辑。')
+      const translated = preparedOperations.map((operation) => translateOperation(document, operation))
+      const ops: Op[] = []
+      const presetPlans: Array<NonNullable<ReturnType<typeof translateOperation>['preset']> & {opOffset:number}> = []
+      const chartStyles: NonNullable<ReturnType<typeof translateOperation>['chartStyles']> = []
+      for (const item of translated) {
+        const itemOps = item.ops ?? (item.op ? [item.op] : [])
+        if (item.preset) presetPlans.push({ ...item.preset, opOffset: ops.length })
+        for (const pending of item.chartStyles ?? []) chartStyles.push({ ...pending, opOffset: ops.length + pending.opOffset })
+        ops.push(...itemOps)
+      }
+      for (const plan of presetPlans) for (const pending of plan.pendingChartStyles) {
+        chartStyles.push({ opOffset: plan.opOffset + plan.roles.indexOf(pending.role), slideId: plan.slideId, style: pending.style })
+      }
+      const hasDesign = command.operations.some((operation) => operation.op === 'slide_add_design')
+      // Public requests stay bounded at 50; vetted semantic components expand internally.
+      const limit = hasDesign ? 256 : 50
+      const rawCount = translated.reduce((sum, item, index) => sum + (command.operations[index]!.op === 'slide_add_design' ? 0
+        : (item.ops?.length ?? (item.op ? 1 : 0)) + (item.chartStyles?.length ?? 0) + (item.preset?.pendingChartStyles.length ?? 0)), 0)
+      if (ops.length === 0 || rawCount > 50 || ops.length + chartStyles.length > limit) throw new Error(`单次事务最多 50 个原始操作，设计组件展开后最多 ${limit} 个操作；请按页或区域提交。`)
       const paths = affectedSlidePaths(document, ops)
       before = takeSnapshot(document, paths)
       const outcome = runTxn(document.opened, { isolation: 'atomic', ops })
       if (!outcome.applied) throw new Error(outcome.failures?.map((failure) => failure.error).join('\n') || '幻灯片事务失败。')
+      const presetElementIds = new Map<string,string>()
+      for (const plan of presetPlans) {
+        const slide = document.opened.deck.slides[slideIndex(document,plan.slideId)]!
+        plan.roles.forEach((_role,position) => {
+          const created = outcome.records?.[plan.opOffset+position]?.created?.[0]
+          const element = created ? slide.elements.find((item)=>matchesElementRef(item,created)) : undefined
+          if (created && element) presetElementIds.set(`${plan.slideId}/${created}`,elementDurableId(element) ?? created)
+        })
+      }
+      const styleOps = chartStyles.flatMap((pending) => {
+        const created = outcome.records?.[pending.opOffset]?.created?.[0]
+        const slide = document.opened.deck.slides[slideIndex(document, pending.slideId)]!
+        const element = created ? slide.elements.find((item) => matchesElementRef(item, created)) : undefined
+        // New native nodes receive durable IDs during refresh; the engine's
+        // returned ID is authoritative inside this uncommitted transaction.
+        const elementId = element ? elementDurableId(element) ?? created : undefined
+        if (!elementId) throw new Error(`第 ${pending.opOffset + 1} 个操作的图表 ${created ?? '(无 ID)'} 无法在页面 ${pending.slideId} 定位，已取消本页写入。`)
+        const styled = translateOperation(document, { op: 'slide_set_chart_style', payload: { slideId: pending.slideId, elementId, style: pending.style } })
+        return styled.op ? [styled.op] : []
+      })
+      if (styleOps.length) {
+        const result = runTxn(document.opened, { isolation: 'atomic', ops: styleOps })
+        if (!result.applied) throw new Error(`图表样式应用失败，已取消本页写入：${result.failures?.map((failure) => failure.error).join('；') ?? ''}`)
+      }
       if (unchangedDocument(document, before)) {
         await displayDocument(restoreSnapshot(document, before))
         const result = {
@@ -1152,6 +1399,10 @@ function MonaSlidesEditor(): React.JSX.Element {
         const previousElements = new Map(previous?.elements.map((element) => [elementDurableId(element), element]) ?? [])
         const requested = new Set(ops.filter((op) => op.target?.slide === slideDurableId(slide) || op.target?.slide === index)
           .map((op) => op.target?.el))
+        for (const record of outcome.records ?? []) {
+          if (record.slideId !== slideDurableId(slide) || record.op.op !== 'monaReplaceColors' || !isRecord(record.after)) continue
+          for (const id of Array.isArray(record.after.elementIds) ? record.after.elementIds : []) requested.add(String(id))
+        }
         const changed = new Set<string>()
         for (const view of elementViews(refreshed.slides[index]!)) {
           const old = previousElements.get(view.id)
@@ -1172,6 +1423,32 @@ function MonaSlidesEditor(): React.JSX.Element {
         }
         warnings.push(...slideLayoutWarnings(refreshed.slides[index]!, changed))
       }
+      // 预设的局部角色与实际创建 ID 一一对应（原子事务里 records 与 ops 同序）；
+      // 系列色等只能创建后应用的样式在这里以真实 ID 交回，不假造元素 ID。
+      const durableIdOf = (createdId: string): string => {
+        for (const slide of refreshed.opened.deck.slides) {
+          const element = slide.elements.find((item) => matchesElementRef(item, createdId))
+          if (element) return elementDurableId(element) ?? createdId
+        }
+        return createdId
+      }
+      const presetPages = presetPlans.map((plan) => {
+        const elements: Record<string, string> = {}
+        plan.roles.forEach((role, position) => {
+          const created = outcome.records?.[plan.opOffset + position]?.created?.[0]
+          if (created) elements[role] = presetElementIds.get(`${plan.slideId}/${created}`) ?? durableIdOf(created)
+        })
+        const anchor = Object.values(elements)[0]
+        if (anchor) presetHistoryRef.current.set(plan.slideId, {presetId:plan.presetId,anchor})
+        presetDesignRef.current = plan.design
+        return {
+          presetId: plan.presetId,
+          slideId: plan.slideId,
+          roles: plan.roles,
+          elements,
+          pendingChartStyles: [],
+        }
+      })
       const result = {
         ok: true,
         sessionId: session.sessionId,
@@ -1182,6 +1459,10 @@ function MonaSlidesEditor(): React.JSX.Element {
         createdSlides: createdSlidesOf(before, refreshed),
         updatedElements,
         warnings,
+        ...(command.operations.some((op) => op.op === 'slide_replace_colors') ? {
+          colorChanges: (outcome.records ?? []).filter((r) => r.op.op === 'monaReplaceColors').map((r) => ({ slideId: r.slideId, ...(isRecord(r.after) ? r.after : {}) })),
+        } : {}),
+        ...(presetPages.length ? { presetPages } : {}),
         pendingVisualSlideIds: currentPendingVisualSlideIds(refreshed),
         summary: `已完成 ${command.operations.length} 项幻灯片修改`,
       }
@@ -1189,16 +1470,17 @@ function MonaSlidesEditor(): React.JSX.Element {
       bridgeRef.current?.post({ type: 'office_command_result', result })
     } catch (reason) {
       if (before) await displayDocument(restoreSnapshot(document, before))
+      const conflict = reason instanceof VisualVersionConflict
       const result = {
         ok: false,
         sessionId: session.sessionId,
         operationId: command.operationId,
-        currentVersion,
+        currentVersion: conflict ? versionRef.current : currentVersion,
         changedTargets: [],
         error: {
-          code: 'INVALID_OPERATION',
+          code: conflict ? 'VERSION_CONFLICT' : 'INVALID_OPERATION',
           message: reason instanceof Error ? reason.message : '幻灯片修改失败。',
-          retryable: false,
+          retryable: conflict,
         },
       }
       operationCacheRef.current.set(command.operationId, { fingerprint, result })

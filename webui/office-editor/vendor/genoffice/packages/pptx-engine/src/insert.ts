@@ -14,6 +14,8 @@ import { creationIdXml, escapeXmlAttr } from './xml-utils'
 import { relsPathFor } from './zip'
 import type { OpenedPptx } from './index'
 import { cleanupDeletedElementResources } from './resource-cleanup'
+import { customPathXml, type NativePathCommand } from './custom-path'
+import { parseCustGeom } from './custgeom'
 
 /**
  * 'textbox' is a special value (plain text box without prstGeom); anything else is
@@ -47,6 +49,8 @@ export interface NewElementOptions {
   stroke?: { color: string; widthEmu: number }
   /** body geometry overrides; absent = `wrap="square" rtlCol="0"` as before */
   bodyPr?: NewElementBodyPr
+  /** Normalized M/L/C/Z commands, serialized as editable DrawingML custom geometry. */
+  customPath?: NativePathCommand[]
 }
 
 /**
@@ -146,7 +150,7 @@ export function buildSpXml(slide: Slide, opts: NewElementOptions): string {
   const o = opts.offset
   const xfrm = `<a:xfrm><a:off x="${o.x}" y="${o.y}"/><a:ext cx="${o.cx}" cy="${o.cy}"/></a:xfrm>`
   // Parser convention: has txBody and no prstGeom → 'text'; textbox omits prstGeom
-  const geom = isTextbox
+  const geom = opts.customPath ? customPathXml(opts.customPath) : isTextbox
     ? ''
     : `<a:prstGeom prst="${escapeXmlAttr(opts.kind)}"><a:avLst/></a:prstGeom>`
   const fill = opts.fillColor ? `<a:solidFill>${srgbClrXml(opts.fillColor)}</a:solidFill>` : ''
@@ -197,7 +201,8 @@ export function addElement(slide: Slide, opts: NewElementOptions): TextElement {
     type: opts.kind === 'textbox' ? 'text' : 'shape',
     anchor: { spIndex: slide.elements.length, originalXml: xml, range: [0, 0] },
     transform: { offset: { ...opts.offset }, rot: 0, flipH: false, flipV: false },
-    ...(opts.kind !== 'textbox' ? { presetGeometry: opts.kind } : {}),
+    ...(opts.customPath ? { customGeometry: parseCustGeom(xml, opts.offset.cx, opts.offset.cy) }
+      : opts.kind !== 'textbox' ? { presetGeometry: opts.kind } : {}),
     ...(opts.fillColor ? { fill: { type: 'solid' as const, color: opts.fillColor } } : {}),
     ...(opts.stroke
       ? {
@@ -207,7 +212,12 @@ export function addElement(slide: Slide, opts: NewElementOptions): TextElement {
           },
         }
       : {}),
-    text: { paragraphs: opts.paragraphs?.length ? opts.paragraphs : [{ runs: [{ text: '' }] }] },
+    text: {
+      paragraphs: opts.paragraphs?.length ? opts.paragraphs : [{ runs: [{ text: '' }] }],
+      ...(opts.bodyPr?.insetsEmu ? { insets: { ...opts.bodyPr.insetsEmu } } : {}),
+      ...(opts.bodyPr?.anchor ? { anchor: ({ t: 'top', ctr: 'middle', b: 'bottom' } as const)[opts.bodyPr.anchor] } : {}),
+      ...(opts.bodyPr?.wrap ? { wrap: opts.bodyPr.wrap !== 'none' } : {}),
+    },
   }
   slide.elements.push(el)
   slide.structureDirty = true

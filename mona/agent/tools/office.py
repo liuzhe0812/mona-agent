@@ -112,7 +112,7 @@ def _sha256(path: Path) -> str:
 @tool_parameters(
     tool_parameters_schema(
         action=StringSchema(
-            "Operation: list | open | inspect | apply | save | export | close",
+            "Operation: list | open | inspect | apply | save | export | close. close only when the user asks to close; never use it as edit/error recovery.",
             enum=[
                 "list",
                 "open",
@@ -133,6 +133,7 @@ def _sha256(path: Path) -> str:
             enum=["docs", "sheets", "slides"],
             nullable=True,
         ),
+        new_document=BooleanSchema(description="For open only: explicitly create an additional blank document when the user requests a NEW document. Default false reuses the active session even when document_type is supplied. Not for recoloring or other edits."),
         display_name=StringSchema("Visible file name for a new Office document", nullable=True),
         query=ObjectSchema(
             {
@@ -146,6 +147,7 @@ def _sha256(path: Path) -> str:
                         "blocks",
                         "slides",
                         "capabilities",
+                        "palette",
                         "selection",
                         "visual",
                         "review",
@@ -164,10 +166,34 @@ def _sha256(path: Path) -> str:
                 ),
                 "operations": ArraySchema(
                     StringSchema("Capability operation name"),
-                    description="Optional operation names to return, up to 20",
+                    description="For slides: omit for a compact operation directory; request actual names for full schemas (3 per response; nextOperations continues). Unknown names are reported alongside known operations.",
                     max_items=20,
                 ),
                 "includeData": BooleanSchema(description="For slides, false returns chart text style without categories and series; default true"),
+                "presetId": StringSchema("For visual: render this preset in an isolated copy; does not change or review the live deck", nullable=True),
+                "presetContent": ObjectSchema({}, description="Real preset content for capacity matching or visual preview; image.assetPath uses the workspace", additional_properties=True),
+                "presetRole": StringSchema("For capabilities: optional preset role filter", nullable=True),
+                "presetRelation": StringSchema(
+                    "For capabilities: optional preset relation filter",
+                    enum=["none", "parallel", "sequence", "hierarchy", "matrix", "cycle", "network"],
+                    nullable=True,
+                ),
+                "usedPresetIds": ArraySchema(
+                    StringSchema("Previously used preset ID"),
+                    description="For capabilities: preset IDs already used in this deck, up to 100",
+                    max_items=100,
+                ),
+                "presetLimit": IntegerSchema(
+                    description="For capabilities: maximum matching presets to return",
+                    minimum=1,
+                    maximum=5,
+                ),
+                "presetContentRef": StringSchema(
+                    "For capabilities or visual: reference to previously registered preset content",
+                    nullable=True,
+                ),
+                "presetFamily": StringSchema("For capabilities: optional preset family filter", nullable=True),
+                "presetTheme": StringSchema("For capabilities: dark-product or light-editorial", nullable=True),
                 "slideIds": ArraySchema(
                     StringSchema("Stable slide ID"),
                     description="Slides to inspect, up to 50",
@@ -238,16 +264,17 @@ def _sha256(path: Path) -> str:
             description=(
                 "Atomic operations, up to 50 per apply. Use the relevant Office Skill for known "
                 "fields; inspect capabilities with operations when a field schema is unknown. "
-                "Use selection and slides inspection for stable target IDs. For slide_add_image and "
-                "slide_compose image items, assetPath may reference an image in the current workspace; "
-                "the tool converts it to dataUrl. Detailed examples are in the specialist Skill references."
+                "Use selection and slides inspection for stable target IDs. For slide_add_image, "
+                "slide_compose image items and slide_add_preset content.image/content.images items, assetPath "
+                "may reference an image in the current workspace; the tool converts it to dataUrl. Detailed examples are "
+                "in the specialist Skill references."
             ),
             max_items=_MAX_BATCH_ITEMS,
             nullable=True,
         ),
         output=StringSchema("Workspace-relative native Office export path", nullable=True),
         overwrite_source=BooleanSchema(description="Explicitly overwrite the unchanged source file"),
-        allow_unreviewed=BooleanSchema(description="Export a clearly labelled draft only when the user explicitly requests skipping review; default false"),
+        allow_unreviewed=BooleanSchema(description="Legacy draft option for non-slide documents. PPT agents cannot self-authorize bypassing review; save progress or let the user export directly in the editor."),
         required=["action"],
     )
 )
@@ -260,7 +287,14 @@ class OfficeTool(Tool, ContextAware):
     name = "office"
     description = (
         "Open and edit .docx, .xlsx, and .pptx files in Mona's live Office editor. "
-        "Use the active session from runtime context, or open a path/new document. "
+        "Continue edits in the active session: brand color, fonts, layout and text changes NEVER require close/new/rebuilding. "
+        "Inspect palette then use slide_replace_colors for exact in-place color changes. "
+        "open(session_id) resumes; open(document_type) reuses an active document; new_document=true explicitly creates a new one. "
+        "On an unknown operation inspect the compact capability directory, not close/recreate. "
+        "Create presentations progressively with native text, shapes, images, charts and grid "
+        "composition. slide_add_design creates polished, adjustable native designs (metric, evidence, "
+        "waterfall, sankey, agenda, comparison, roadmap, matrix, image, items, statement); "
+        "whole pages and explicit regions share the same components. Designs are starting points, not gates. "
         "Inspect reads the current in-memory document; open returns its latest version and "
         "connected selection. Use that version for apply. Follow the relevant Office Skill; "
         "inspect capabilities with operations only when a field schema is unknown. "
@@ -419,6 +453,31 @@ class OfficeTool(Tool, ContextAware):
                         else:
                             copied_items.append(item)
                     copied_payload["items"] = copied_items
+            elif operation.get("op") in {"slide_add_preset", "slide_add_design"}:
+                content = payload.get("content")
+                if isinstance(content, dict):
+                    copied_content = dict(content)
+                    image = content.get("image")
+                    if isinstance(image, dict) and "assetPath" in image:
+                        copied_image = dict(image)
+                        copied_image["dataUrl"] = _asset_data_url(image["assetPath"], workspace)
+                        copied_image.pop("assetPath", None)
+                        copied_content["image"] = copied_image
+                    images = content.get("images")
+                    if isinstance(images, list):
+                        copied_images: list[object] = []
+                        for item in images:
+                            if isinstance(item, dict) and "assetPath" in item:
+                                copied_item = dict(item)
+                                copied_item["dataUrl"] = _asset_data_url(
+                                    item["assetPath"], workspace
+                                )
+                                copied_item.pop("assetPath", None)
+                                copied_images.append(copied_item)
+                            else:
+                                copied_images.append(item)
+                        copied_content["images"] = copied_images
+                    copied_payload["content"] = copied_content
             copied_operation["payload"] = copied_payload
             prepared.append(copied_operation)
         return prepared
@@ -476,6 +535,7 @@ class OfficeTool(Tool, ContextAware):
         output: str | None = None,
         overwrite_source: bool = False,
         allow_unreviewed: bool = False,
+        new_document: bool = False,
         selector: str | None = None,
         node_path: str | None = None,
         mode: str | None = None,
@@ -487,7 +547,7 @@ class OfficeTool(Tool, ContextAware):
         if action in {"list", "open", "inspect", "apply", "save", "export", "close"} or session_id:
             recovery_session_id = session_id
             if recovery_session_id is None and (
-                action != "open" or (not path and document_type is None)
+                action != "open" or (not path and not new_document)
             ):
                 recovery_session_id = self._active_session_id
             try:
@@ -503,6 +563,7 @@ class OfficeTool(Tool, ContextAware):
                     output=output,
                     overwrite_source=overwrite_source,
                     allow_unreviewed=allow_unreviewed,
+                    new_document=new_document,
                 )
             except OfficeError as exc:
                 return self._session_error_json(
@@ -640,10 +701,15 @@ class OfficeTool(Tool, ContextAware):
         output: str | None,
         overwrite_source: bool,
         allow_unreviewed: bool = False,
+        new_document: bool = False,
     ) -> str | list[dict[str, Any]]:
         client = OfficeServiceClient.from_port(self._services_port)
         owner = self._owner_session_key
-        if not session_id and action != "list":
+        if not isinstance(new_document, bool):
+            return "Error: new_document must be a boolean"
+        if new_document and (action != "open" or session_id or path or document_type is None):
+            return "Error: new_document requires open + document_type, without session_id or path"
+        if not session_id and action != "list" and not new_document:
             session_id = self._active_session_id
         if action == "list":
             sessions = await client.list(owner_session_key=owner)
@@ -657,8 +723,10 @@ class OfficeTool(Tool, ContextAware):
                 indent=2,
             )
         if action == "open":
-            if session_id and not path and document_type is None:
+            if session_id and not path and not new_document:
                 result = await client.get(session_id, owner_session_key=owner)
+                if document_type is not None and document_type != result.type:
+                    return "Error: active document type differs; use its session_id to edit, or new_document=true only for an explicitly requested new file"
                 await self._publish_session_open(result.model_dump(by_alias=True, mode="json"))
             else:
                 resolved: Path | None = None
@@ -682,6 +750,7 @@ class OfficeTool(Tool, ContextAware):
                 )
                 await self._publish_session_open(result.model_dump(by_alias=True, mode="json"))
 
+            self._active_session_id = result.session_id
             if (not result.editor_connected and self._bus is not None and self._request_ctx is not None
                 and self._request_ctx.channel == "websocket"):
                 for _ in range(40):
@@ -743,6 +812,11 @@ class OfficeTool(Tool, ContextAware):
         if action == "inspect":
             if query is None:
                 return "Error: 'query' is required for 'inspect'"
+            if isinstance(query.get("presetContent"), dict):
+                prepared = self._prepare_slide_assets([{
+                    "op": "slide_add_preset", "payload": {"content": query["presetContent"]},
+                }])
+                query = {**query, "presetContent": prepared[0]["payload"]["content"]}
             request = OfficeInspectRequest(session_id=session_id, query=query)
             if request.query.mode == "capabilities":
                 session = await client.get(session_id, owner_session_key=owner)
@@ -829,6 +903,11 @@ class OfficeTool(Tool, ContextAware):
                 return f"Error: path not allowed: {exc}"
             session = await client.get(session_id, owner_session_key=owner)
             review_payload = None
+            if session.type == 'slides' and allow_unreviewed:
+                return json.dumps({'ok': False, 'error': {
+                    'code': OfficeErrorCode.REVIEW_REQUIRED, 'retryable': False,
+                    'message': 'Agent 不能自行跳过 PPT 验收。可 save 保存进度；用户可在编辑器中直接导出草稿，或继续检查并修复后正常导出。',
+                }}, ensure_ascii=False)
             export_version = expected_version
             if session.type in {"docs", "sheets", "slides"}:
                 review = await client.inspect(

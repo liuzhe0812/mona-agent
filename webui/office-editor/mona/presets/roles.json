@@ -1,0 +1,122 @@
+[
+  {
+    "id": "cover",
+    "label": "封面",
+    "description": "建立主题与受众预期的开场标题页或封面页。",
+    "families": ["claim-image", "cover", "gallery", "editorial"]
+  },
+  {
+    "id": "statement",
+    "label": "论点",
+    "description": "呈现单一主张、结论、引语或明确判断。",
+    "families": ["spotlight", "editorial", "hero", "claim-image"]
+  },
+  {
+    "id": "breakdown",
+    "label": "拆解",
+    "description": "呈现议程、章节地图或主题的结构化拆分。",
+    "families": ["overview", "parallel", "matrix", "editorial"]
+  },
+  {
+    "id": "transition",
+    "label": "过渡",
+    "description": "作为叙事段落之间停顿的章节分隔页。",
+    "families": ["editorial", "ambient", "closing"]
+  },
+  {
+    "id": "context",
+    "label": "背景",
+    "description": "说明背景、市场环境、定位或解释框架。",
+    "families": ["overview", "comparison", "matrix", "editorial"]
+  },
+  {
+    "id": "metrics",
+    "label": "指标",
+    "description": "呈现一个或多个关键数字、度量值或计分板。",
+    "families": ["spotlight", "chart-insight", "metric", "editorial"]
+  },
+  {
+    "id": "trend",
+    "label": "趋势",
+    "description": "呈现随时间变化、阶段推进或方向性移动。",
+    "families": ["chart-insight", "timeline", "editorial"]
+  },
+  {
+    "id": "comparison",
+    "label": "比较",
+    "description": "并列或多维度对照不同方案、对象或选择。",
+    "families": ["comparison", "parallel", "matrix", "chart-insight"]
+  },
+  {
+    "id": "distribution",
+    "label": "分布",
+    "description": "呈现占比、比例、漏斗阶段、排名区间或构成。",
+    "families": ["chart-insight", "matrix", "parallel"]
+  },
+  {
+    "id": "relationship",
+    "label": "关系",
+    "description": "呈现连接、层级、网络、交集或径向关系。",
+    "families": ["hierarchy", "overview", "matrix", "team"]
+  },
+  {
+    "id": "case",
+    "label": "案例",
+    "description": "呈现具体实例、案例研究、人物证言或带细节的场景。",
+    "families": ["case", "claim-image", "gallery", "editorial"]
+  },
+  {
+    "id": "image",
+    "label": "图片",
+    "description": "以图片为主的全景、拼贴、画廊或视觉陈列页。",
+    "families": ["claim-image", "case", "gallery"]
+  },
+  {
+    "id": "process",
+    "label": "流程",
+    "description": "呈现有序步骤、流向、生命周期、实施路径或产业链。",
+    "families": ["process-map", "timeline"]
+  },
+  {
+    "id": "risks",
+    "label": "风险",
+    "description": "呈现风险、不确定性、预测、限制条件或决策问题。",
+    "families": ["chart-insight", "comparison", "editorial", "matrix"]
+  },
+  {
+    "id": "observation",
+    "label": "洞察",
+    "description": "呈现解读、展望、洞察或由证据支持的观点。",
+    "families": ["spotlight", "chart-insight", "case", "editorial"]
+  },
+  {
+    "id": "ambient",
+    "label": "氛围",
+    "description": "营造视觉氛围或情绪的章节背景页。",
+    "families": ["claim-image", "editorial", "gallery"]
+  },
+  {
+    "id": "actions",
+    "label": "行动",
+    "description": "呈现建议行动、方案选项、落地计划或下一步。",
+    "families": ["process-map", "overview", "timeline", "editorial"]
+  },
+  {
+    "id": "result",
+    "label": "结果",
+    "description": "呈现最终结论、核心成果或海报式关键结果。",
+    "families": ["spotlight", "chart-insight", "closing", "editorial"]
+  },
+  {
+    "id": "team",
+    "label": "团队",
+    "description": "呈现人员、职责、组织结构或团队介绍。",
+    "families": ["overview", "hierarchy", "team", "editorial"]
+  },
+  {
+    "id": "closing",
+    "label": "结尾",
+    "description": "收束叙事并留下最终信息的结束页。",
+    "families": ["claim-image", "spotlight", "closing", "editorial"]
+  }
+]

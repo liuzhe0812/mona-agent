@@ -208,6 +208,9 @@ const CHART_PATCH_FIELDS = [
   'axisTitleColor',
   'legendColor',
   'dataLabelColor',
+  'gridColor',
+  'axisLineColor',
+  'axisLabelFontSize',
 ] as const
 
 const CHART_TEXT_COLOR_FIELDS = [
@@ -371,10 +374,16 @@ function validateChartPatch(
     }
   }
 
-  for (const field of CHART_TEXT_COLOR_FIELDS) {
+  for (const field of [...CHART_TEXT_COLOR_FIELDS, 'gridColor', 'axisLineColor'] as const) {
     if (patch[field] !== undefined && !isHexColor(patch[field])) {
       chartPatchError(`"${field}" must be a #RRGGBB or 6-digit HEX color.`, patch)
     }
+  }
+  if (
+    patch.axisLabelFontSize !== undefined &&
+    (!isFiniteNumber(patch.axisLabelFontSize) || patch.axisLabelFontSize <= 0)
+  ) {
+    chartPatchError('"axisLabelFontSize" must be a finite number greater than 0 (points).', patch)
   }
 }
 

@@ -151,7 +151,7 @@ export const OP_DOCS: Record<string, OpDoc> = {
     aiCallable: false,
   },
   setChart: {
-    sig: '{patch:{kind?,barDir?,categories?,series?,title?,colorScheme?,legendPos?,dataLabels?,gridlines?,catAxisTitle?,valAxisTitle?,gapWidthPct?,switchRowCol?,pointColors?,textColor?,titleColor?,axisLabelColor?,axisTitleColor?,legendColor?,dataLabelColor?}} — color fields accept #RRGGBB or 6-digit HEX; textColor applies to all chart text and the named fields override their local role',
+    sig: '{patch:{kind?,barDir?,categories?,series?,title?,colorScheme?,legendPos?,dataLabels?,gridlines?,catAxisTitle?,valAxisTitle?,gapWidthPct?,switchRowCol?,pointColors?,textColor?,titleColor?,axisLabelColor?,axisTitleColor?,legendColor?,dataLabelColor?,gridColor?,axisLineColor?,axisLabelFontSize?}} — color fields accept #RRGGBB or 6-digit HEX; axisLabelFontSize is in points; textColor applies to all chart text and the named fields override their local role',
     group: 'table',
     aiCallable: false,
   },
