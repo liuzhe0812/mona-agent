@@ -43,7 +43,7 @@ export function ScheduleView({ onOpenInbox }: ScheduleViewProps) {
   const [selectedDate, setSelectedDate] = useState<Date>(() => startOfDay(new Date()));
   const [viewMode, setViewMode] = useState<CalendarViewMode>(() => {
     const saved = localStorage.getItem("schedule.viewMode");
-    return isCalendarViewMode(saved) ? saved : "week";
+    return isCalendarViewMode(saved) ? saved : "month";
   });
   const [dialogOpen, setDialogOpen] = useState(false);
   const [editingItem, setEditingItem] = useState<ScheduleItem | null>(null);
