@@ -5,7 +5,9 @@ description: Build, validate, and publish Mona Desktop Windows and macOS release
 
 # Mona 发版
 
-正式发布必须同时交付 Windows 和 macOS。Windows 交付 x64 NSIS 安装包、配套免费 Ed25519 `.exe.sig`、热更新包和经过线上验证的更新清单；macOS 交付 Apple Silicon 签名、公证 DMG，不构建 Intel x64 包。免费签名用于防篡改，不是 Authenticode，不能宣称消除 SmartScreen。单平台只适用于本地打包、CI 验证和故障排查，不算正式发布。修改本技能不执行构建、签名或发布。
+正式发布必须同时交付 Windows 和 macOS，并固定采用用户已选择的免费发布方式。Windows 交付 x64 NSIS 安装包、配套免费 Ed25519 `.exe.sig`、热更新包和经过线上验证的更新清单；macOS 默认交付 Apple Silicon ad-hoc 签名、未经 Apple 公证的 DMG，不构建 Intel x64 包。免费 Ed25519 签名用于防篡改，不是 Authenticode，不能宣称消除 SmartScreen；Mac ad-hoc 签名不等于 Developer ID 签名或 Apple 公证。单平台交付不算正式双端发布。修改本技能不执行构建、签名或发布。
+
+用户已明确只使用免费发布方式：缺少 Apple Developer ID 或公证凭据时直接使用 `publish=ad-hoc`，不得每次发版再询问是否购买、配置 Apple 付费签名或是否允许未公证包。仅在已有可用且无需新增付费的正式签名、公证条件时使用 `publish=notarized`。官网下载说明必须明确 Mac 包未经公证及相应首次打开提示，不得声称已获 Apple 认可。
 
 默认发布流程：识别全部未提交改动 → 按主题拆分提交 → 更新并提交本地更新日志 → 升版本并提交 → 打包与验收 → 上传产物 → 更新官网日志 → 更新清单并验证线上结果。明确要求发布即包含上述本地整理和提交步骤；不自动 push、打 tag、清理用户修改或升级依赖。签名是现有上传脚本的要求。已经明确授权发布时直接推进，不重复确认；授权范围外的同版本覆盖、降级或发布方式变更，才在产物可审阅后确认。
 
@@ -18,9 +20,9 @@ description: Build, validate, and publish Mona Desktop Windows and macOS release
 ## 双端正式发布门槛
 
 1. 完成本机 Windows NSIS、`.exe.sig` 和热更新包构建，验收版本、哈希与 Ed25519 签名。此时暂不运行会写入官网日志或更新清单的完整上传 CLI。
-2. 在 macOS GitHub Actions 中运行 `publish=notarized`，构建并公证 Apple Silicon DMG；验证 App、Gateway、Office sidecar、DMG 公证状态及七牛公开下载 SHA-256。
+2. 在 macOS GitHub Actions 中默认运行 `publish=ad-hoc`，构建并上传 Apple Silicon DMG；验证 App、Gateway、Office sidecar 的架构与签名完整性、DMG 内容及七牛公开下载 SHA-256。只有实际使用 `notarized` 时才要求通过公证验收。
 3. 只有 Mac 阶段成功后，才运行 [references/windows-release.md](references/windows-release.md) 中的完整 Windows 发布 CLI。该步骤上传 Windows EXE、`.sig` 和热更新包，随后发布官网日志并最后更新 `update.json`。
-4. 最后同时核对 Windows 安装包与 `.sig`、Windows 热更新清单，以及 macOS 版本化 DMG 的公开 URL 和 SHA-256。任一端构建、签名、公证、上传或公开下载校验失败，发布状态为未完成；修复后从失败阶段续跑，不宣布单端成功为双端发版。
+4. 最后同时核对 Windows 安装包与 `.sig`、Windows 热更新清单，以及 macOS 版本化 DMG 的公开 URL 和 SHA-256。任一端构建、所选模式的签名验收、上传或公开下载校验失败，发布状态为未完成；ad-hoc 模式没有公证凭据不是失败。修复后从失败阶段续跑，不宣布单端成功为双端发版。
 
 不得先运行 Windows 完整发布 CLI、再尝试 Mac：它会先发布官网日志并更新 Windows 清单，届时 Mac 失败会留下已对用户开放的半次发布。
 
@@ -35,6 +37,7 @@ description: Build, validate, and publish Mona Desktop Windows and macOS release
 ## 发布前定位
 
 - 以当前 Mona 仓库为根目录。检查 Git 状态，记录 HEAD、dirty 状态和构建开始时间。未跟踪文件过多时先用 `git status --short --untracked-files=no`，再完整检查未跟踪项；此快捷检查不能替代全部改动盘点。按上一节完成提交后才构建，不把用户缓存或凭据打入包。
+- 用户指定从 master 等发布分支工作、保留另一开发分支时，在独立 worktree 完成修改与构建，不切换或整理原开发目录。只纳入该发布分支需要的改动；收尾保留最终产物并清理本次临时 worktree，不擅自合并回开发分支。
 - 阅读项目 `AGENTS.md`、`docs/architecture/engineering-boundaries.md`、`docs/architecture/runtime-component-management.md`、`docs/architecture/module-invariants.md`。路径和命令以当前源码为准。
 - 核对 `src-tauri/tauri.conf.json`、`src-tauri/Cargo.toml`、`pyproject.toml` 的产品版本，以及 `src-tauri/Cargo.lock` 中本包版本。同步用户要求的版本，不全局替换依赖版本。WebUI 和 Office 子包的独立版本不要求同步。
 - 读取 `https://www.mona-ai.cn/updates/update.json` 并保存旧清单用于诊断。用户未指定版本且仓库产品版本一致、高于线上时，使用仓库版本；否则先完成独立检查，再询问目标版本。不要自行覆盖同版本的不同字节或降级；线上读取失败不代表没有已发布版本。
@@ -58,10 +61,10 @@ description: Build, validate, and publish Mona Desktop Windows and macOS release
 
 ### macOS 构建与发布
 
-- 只通过 `.github/workflows/build-macos.yml` 构建 macOS 产物。默认 `publish=false` 只生成 Actions artifact；`publish=true` 才导入 Developer ID 证书、公证并上传七牛。
+- 只通过 `.github/workflows/build-macos.yml` 构建 macOS 产物。`publish=none` 只生成 Actions artifact；免费正式发布使用 `publish=ad-hoc` 上传七牛；`publish=notarized` 是已有正式签名、公证条件时的可选模式。输入是这三个字符串，不使用 true/false。
 - 只在 Apple Silicon runner 构建 `arm64` DMG，不构建 Intel x64 或 Universal DMG。内置 XLSX sidecar 的 manifest 必须为 `platform=macos`、`arch=arm64`，不匹配时拒绝发布。
 - 每个 macOS 包必须使用目录模式的 `mona-gateway`，并在其 `_internal/desktop-resources/office-editor/` 中包含当前平台 sidecar、清单、模板和许可证。不得退回单文件 PyInstaller，也不得依赖未打包的 Python 运行时。
-- macOS 公证及 Apple Silicon 包的签名验收成功后，才允许上传七牛。对象使用版本化路径，不覆盖 Windows 的固定对象或 Windows 更新清单。
+- macOS Apple Silicon 包通过所选模式的签名和资源验收后，才允许上传七牛。默认 ad-hoc 模式不运行公证门槛；对象使用版本化路径及独立 Mac 固定下载对象，不覆盖 Windows 的固定对象或更新清单。
 
 ## 发布验收门槛
 

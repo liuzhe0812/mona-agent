@@ -58,7 +58,7 @@ Get-FileHash -Algorithm SHA256 -LiteralPath $releaseInstaller, $releaseArchive
 
 ## 分阶段上传与恢复
 
-正式双端发布时，先完成本节前述 Windows 本地构建、免费签名与热更新包验收，然后暂停在这里，先执行 [macOS 发布](macos-release.md) 的 `publish=notarized` 并验证 Apple Silicon DMG 已可从七牛下载。Mac 成功前不要运行下面的完整 Windows 上传 CLI；Mac 通过后再继续本节，以便官网日志和 Windows 更新清单在两端产物均可用后再更新。
+正式双端发布时，先完成本节前述 Windows 本地构建、免费签名与热更新包验收，然后执行 [macOS 发布](macos-release.md)，默认使用已获用户授权的免费 `publish=ad-hoc`，并验证 Apple Silicon DMG 已可从七牛下载。Mac 成功前不要运行下面的完整 Windows 上传 CLI；Mac 通过后再继续本节，以便官网日志和 Windows 更新清单在两端产物均可用后再更新。
 
 完整 CLI 有六个位置参数，且必须提供更新条目 JSON 文件，无 dry-run/resume 参数：
 
