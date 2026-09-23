@@ -278,7 +278,7 @@ def _render_tool_result_reference(
         f"Preview:\n{preview}"
     )
     if truncated_preview:
-        result += "\n...\n(Read the saved file if you need the full output.)"
+        result += "\n...\n(Read the saved file for full output. For long/minified lines use read_file char_offset=0, char_limit=4000, then its next offset; increasing the line limit will not split a long line.)"
     return result
 
 

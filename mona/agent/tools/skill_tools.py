@@ -114,7 +114,7 @@ class SkillReadTool(Tool):
             required=["name"],
         )
 
-    async def execute(self, name: str | None = None, **kwargs: Any) -> str:
+    async def execute(self, name: str | None = None, **kwargs: Any) -> str | list[dict[str, Any]]:
         if not name:
             return "Error: name parameter is required."
         loader = _skills_loader(self._agent_id)
@@ -124,13 +124,16 @@ class SkillReadTool(Tool):
         from mona.agent.tools.capabilities import activate_capabilities
 
         activate_capabilities({"skill_resources"})
-        if name == "pdf":
+        if name in {"pdf", "mona-docx", "mona-xlsx", "mona-pptx"}:
             activate_capabilities({"office"})
         if self._track_usage:
             from mona.agent import skill_usage
 
             skill_usage.bump_access(name, agent_id=self._agent_id)
-        return content
+        from mona.agent.skill_previews import with_skill_previews
+
+        directory = loader.resolve_skill_dir(name)
+        return with_skill_previews(directory, content) if directory else content
 
 
 class SkillCreateTool(Tool):
@@ -428,7 +431,7 @@ class SkillReferenceReadTool(Tool):
         skill: str | None = None,
         ref_path: str | None = None,
         **kwargs: Any,
-    ) -> str:
+    ) -> str | list[dict[str, Any]]:
         if not skill or not ref_path:
             return "Error: skill and ref_path parameters are required."
         # Prevent path traversal
@@ -437,8 +440,15 @@ class SkillReferenceReadTool(Tool):
         skill_dir = _skills_loader(self._agent_id).resolve_skill_dir(skill)
         if skill_dir is None:
             return f"Error: skill '{skill}' not found."
-        ref_file = skill_dir / "references" / ref_path
-        if not ref_file.exists():
+        ref_path = ref_path.replace("\\", "/")
+        if ref_path.startswith("references/"):
+            ref_path = ref_path[len("references/"):]
+        root = skill_dir.resolve()
+        reference_root = root / "references"
+        ref_file = (reference_root / ref_path).resolve()
+        if not ref_file.is_relative_to(reference_root) or not ref_file.is_relative_to(root):
+            return "Error: reference path is outside the current skill."
+        if not ref_file.is_file():
             return f"Error: reference '{ref_path}' not found in skill '{skill}' (expected at {ref_file})."
         try:
             content = ref_file.read_text(encoding="utf-8")
@@ -446,7 +456,9 @@ class SkillReferenceReadTool(Tool):
                 from mona.agent import skill_usage
 
                 skill_usage.bump_access(skill, agent_id=self._agent_id)
-            return content
+            from mona.agent.skill_previews import with_skill_previews
+
+            return with_skill_previews(skill_dir, content, ref_path)
         except Exception as e:
             return f"Error reading reference '{ref_path}': {e}"
 

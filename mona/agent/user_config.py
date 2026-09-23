@@ -243,6 +243,15 @@ def _normalize_knowledge_tool_names(names: list[str]) -> list[str]:
     return list(dict.fromkeys(normalized))
 
 
+# Retire the former PPT workflow grants without granting the broader Office
+# capability. An existing explicit Office grant remains unchanged.
+_RETIRED_PPT_TOOLS = frozenset({"ppt", "ppt-design"})
+
+
+def _normalize_ppt_tool_names(names: list[str]) -> list[str]:
+    return list(dict.fromkeys(name for name in names if name not in _RETIRED_PPT_TOOLS))
+
+
 class AgentConfigConflictError(ValueError):
     """Raised when a caller saves against a stale configuration revision."""
 
@@ -482,6 +491,7 @@ def resolve_effective_agent_config(
     if allowed_tools is not None:
         allowed_tools = _normalize_browser_tool_names(allowed_tools)
         allowed_tools = _normalize_knowledge_tool_names(allowed_tools)
+        allowed_tools = _normalize_ppt_tool_names(allowed_tools)
         allowed_tools = [
             name for name in allowed_tools if name not in AGENT_KNOWLEDGE_TOOLS
         ] + list(AGENT_KNOWLEDGE_TOOLS)

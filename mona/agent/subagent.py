@@ -287,6 +287,8 @@ class SubagentManager:
         return ToolsConfig(
             exec=self.tools_config.exec,
             web=self.tools_config.web,
+            browser=self.tools_config.browser,
+            jev=self.tools_config.jev,
             notes_tools=self.tools_config.notes_tools,
             restrict_to_workspace=self.restrict_to_workspace,
         )

@@ -6,6 +6,7 @@ import json
 import os
 import re
 import shutil
+import time
 import urllib.parse
 import uuid
 from contextlib import AsyncExitStack, suppress
@@ -112,21 +113,18 @@ def _computer_structured_context(result: Any) -> str | None:
             width=structured.get("screenshot_width"),
             height=structured.get("screenshot_height"),
         ),
-        "Prefer element_token for controls. Use x/y only for canvas content in this screenshot.",
+        "Prefer element_token for controls. Use x/y only for canvas content in this screenshot. "
+        "The screenshot origin is its top-left pixel, including the title/menu bars. "
+        "Do not apply Windows display scaling or add the screen/window position; the driver maps screenshot pixels.",
     ]
     for element in elements:
         if not isinstance(element, dict) or not element.get("element_token"):
             continue
-        frame = element.get("frame") if isinstance(element.get("frame"), dict) else {}
         line = (
-            "- element_token={token} role={role} label={label} frame=({x},{y},{w},{h})".format(
+            "- element_token={token} role={role} label={label}".format(
                 token=element["element_token"],
                 role=element.get("role", ""),
                 label=json.dumps(str(element.get("label", ""))[:200], ensure_ascii=False),
-                x=frame.get("x", ""),
-                y=frame.get("y", ""),
-                w=frame.get("w", ""),
-                h=frame.get("h", ""),
             )
         )
         if sum(len(item) + 1 for item in lines) + len(line) > _COMPUTER_STRUCTURED_CONTEXT_MAX_CHARS:
@@ -463,6 +461,10 @@ class MCPToolWrapper(Tool):
         for attempt in range(2):  # At most 1 retry
             if turn is not None and turn.stopped:
                 return _computer_error("COMPUTER_STOPPED", "Computer operation was stopped by the user.")
+            if turn is not None and turn.dispatch_guard is not None:
+                reason = turn.dispatch_guard()
+                if reason:
+                    return _computer_error("COMPUTER_HANDOFF", reason)
             try:
                 result = await asyncio.wait_for(
                     self._session.call_tool(self._original_name, arguments=kwargs),
@@ -593,10 +595,11 @@ class MCPToolWrapper(Tool):
                         "content": blocks,
                     }, ensure_ascii=False)
                 if is_computer:
+                    observation = None
                     if turn is not None:
                         from mona.computer_use.actions import remember_observation
 
-                        remember_observation(turn, self._original_name, kwargs, result)
+                        observation = remember_observation(turn, self._original_name, kwargs, result)
                     structured_context = _computer_structured_context(result)
                     if structured_context:
                         parts.append(structured_context)
@@ -616,6 +619,20 @@ class MCPToolWrapper(Tool):
                         receipt = json.dumps(structured, ensure_ascii=False)
                         parts.append(receipt)
                         blocks.append({"type": "text", "text": receipt})
+                    if observation is not None:
+                        from mona.computer_use.perception import observation_context
+
+                        context = observation_context(observation)
+                        parts.append(context)
+                        image_index = next(
+                            (
+                                index
+                                for index, item in enumerate(blocks)
+                                if item.get("type") == "image_url"
+                            ),
+                            len(blocks),
+                        )
+                        blocks.insert(image_index, {"type": "text", "text": context})
                 if any(item.get("type") == "image_url" for item in blocks):
                     return blocks or [{"type": "text", "text": "(no output)"}]
                 return "\n".join(parts) or "(no output)"
@@ -628,8 +645,27 @@ class _ComputerFacadeTool(Tool):
     requires_explicit_permission = True
     _actions: dict[str, str] = {}
 
-    def __init__(self, registry: ToolRegistry):
+    def __init__(
+        self, registry: ToolRegistry, *, provider=None, model=None,
+        runtime_config_loader=None, provider_loader=None, permission_check=None, geometry_reader=None,
+    ):
         self._registry = registry
+        self._provider = provider
+        self._model = model
+        self._runtime_config_loader = runtime_config_loader
+        self._provider_loader = provider_loader
+        self._permission_check = permission_check
+        self._geometry_reader = geometry_reader
+
+    def _config(self):
+        from mona.config.loader import load_config, resolve_config_env_vars
+
+        return resolve_config_env_vars((self._runtime_config_loader or load_config)())
+
+    def _geometry(self, args):
+        if self._geometry_reader and args.get("pid") is not None and args.get("window_id") is not None:
+            return self._geometry_reader(args["pid"], args["window_id"])
+        return None
 
     @property
     def exclusive(self) -> bool:
@@ -641,6 +677,7 @@ class _ComputerFacadeTool(Tool):
         properties: dict[str, Any] = {}
         for name in self._actions.values():
             properties.update(_computer_action_schema(self._registry.get(name))["properties"])
+        properties["image_id"] = {"type": "string", "description": "Image ID from the current original screenshot or latest zoom. Omit only for original screenshot coordinates."}
         return {
             "type": "object",
             "properties": {
@@ -681,14 +718,43 @@ class _ComputerFacadeTool(Tool):
             return _computer_error("COMPUTER_STOPPED", "Start a new turn before operating the computer.")
         if not claim_computer_turn(turn):
             return _computer_error("COMPUTER_BUSY", "Another task is operating the computer. Wait until it finishes.")
+        if self._permission_check and not self._permission_check():
+            return _computer_error("COMPUTER_PERMISSION_REVOKED", "Computer operation permission was revoked.")
         args = dict(arguments or {})
         if "session" in args or "screenshot_out_file" in args:
             return _computer_error("INVALID_COMPUTER_ARGUMENTS", "Session and screenshot paths are managed by Mona.")
         is_action = self.name == "computer_act"
         if is_action:
-            error = validate_action(action, args, turn.observation)
+            from mona.computer_use.actions import (
+                image_point_to_original,
+                repeated_no_progress_error,
+            )
+
+            if turn.observation is None and action != "launch":
+                return _computer_error("INVALID_COMPUTER_TARGET", validate_action(action, args, None))
+            image_id = args.pop("image_id", None)
+            if (turn.observation or {}).get("detail_view") and image_id is None and any(key in args for key in ("x", "y", "from_x", "from_y", "to_x", "to_y")):
+                return _computer_error("INVALID_COMPUTER_TARGET", "A detail image exists. Specify the original or detail image_id before using pixel coordinates.")
+            try:
+                for x_key, y_key in (("x", "y"), ("from_x", "from_y"), ("to_x", "to_y")):
+                    if x_key in args or y_key in args:
+                        args[x_key], args[y_key] = image_point_to_original(
+                            turn.observation or {}, args.get(x_key), args.get(y_key), image_id=image_id,
+                        )
+                if image_id is not None and not any(key in args for key in ("x", "from_x", "to_x")):
+                    return _computer_error("INVALID_COMPUTER_ARGUMENTS", "image_id is only used with pixel coordinates")
+            except ValueError as exc:
+                return _computer_error("INVALID_COMPUTER_TARGET", str(exc))
+
+            error = validate_action(action, args, turn.observation) or repeated_no_progress_error(
+                turn, action, args
+            )
             if error:
                 return _computer_error("INVALID_COMPUTER_TARGET", error)
+            before_geometry = (turn.observation or {}).get("geometry")
+            if before_geometry is not None and self._geometry(args) != before_geometry:
+                turn.observation = None
+                return _computer_error("STALE_COMPUTER_TARGET", "Window moved or resized. Observe it again.")
         args.pop("delivery_mode", None)
         schema = getattr(target, "parameters", {})
         if isinstance(target, MCPToolWrapper):
@@ -710,6 +776,9 @@ class _ComputerFacadeTool(Tool):
                 return _computer_error("INVALID_COMPUTER_ARGUMENTS", "; ".join(errors))
         if is_action:
             # Consumed even if dispatch fails: its outcome may be uncertain.
+            from mona.computer_use.actions import remember_pending_action
+
+            remember_pending_action(turn, action, args)
             turn.observation = None
             if action not in {"launch", "focus"} and args.get("scope", "window") == "window":
                 focus = self._registry.get("computer_bring_to_front")
@@ -717,9 +786,19 @@ class _ComputerFacadeTool(Tool):
                     return _computer_error("COMPUTER_UNAVAILABLE", "Cannot focus the target window.")
                 focused = await focus.execute(pid=args["pid"], window_id=args["window_id"])
                 if _computer_failed(focused):
+                    turn.pending_action = None
                     return focused
                 if turn.stopped:
                     return _computer_error("COMPUTER_STOPPED", "Computer operation was stopped by the user.")
+                if before_geometry is not None and self._geometry(args) != before_geometry:
+                    turn.pending_action = None
+                    return _computer_error("STALE_COMPUTER_TARGET", "Window geometry changed while focusing; observe again.")
+            if self._permission_check and not self._permission_check():
+                turn.pending_action = None
+                return _computer_error("COMPUTER_PERMISSION_REVOKED", "Computer operation permission was revoked.")
+            if turn.dispatch_guard and (reason := turn.dispatch_guard()):
+                turn.pending_action = None
+                return _computer_error("COMPUTER_HANDOFF", reason)
         elif action in {"window", "desktop"}:
             turn.observation = None
         result = await target.execute(**args)
@@ -736,9 +815,12 @@ class ComputerObserveTool(_ComputerFacadeTool):
     description = (
         "Observe the local desktop without changing it. Actions: desktop (screenshot), "
         "apps, windows, window (UI tree plus screenshot; arguments pid/window_id), "
-        "verify, health, permissions, accessibility, and zoom. Observe the same target "
+        "verify, health, permissions, accessibility, zoom (crop the current screenshot using x1/y1/x2/y2), "
+        "and preview (mark a planned x/y or candidate_id without input). "
+        "Start with windows to identify the target; window/desktop return screenshots directly. Observe the same target "
         "again after every computer_act operation. Window/desktop screenshots authorize "
-        "the next action only; lists and zoom previews do not."
+        "the next action only. Zoom preserves that observation and returns an image_id; "
+        "pass that exact image_id when using zoom pixel coordinates. Preview does not send input."
     )
     _actions = {
         "desktop": "computer_get_desktop_state",
@@ -756,6 +838,123 @@ class ComputerObserveTool(_ComputerFacadeTool):
     def read_only(self) -> bool:
         return True
 
+    @property
+    def parameters(self) -> dict[str, Any]:
+        schema = super().parameters
+        schema["properties"]["action"]["enum"].append("preview")
+        properties = schema["properties"]["arguments"]["properties"]
+        for key in ("x", "y", "x1", "y1", "x2", "y2"):
+            properties[key] = {"type": "number"}
+        properties["candidate_id"] = {"type": "string", "description": "One candidate from the current observation to preview; do not combine with coordinates."}
+        schema["properties"]["goal"] = {"type": "string", "maxLength": 12000, "description": "Current phase goal to focus visual perception."}
+        return schema
+
+    def _image_operation(self, action: str, arguments: dict | None):
+        from mona.computer_use.actions import image_point_to_original, validate_action
+        from mona.computer_use.perception import (
+            make_detail_view,
+            observation_data_url,
+            preview_point,
+        )
+        from mona.computer_use.session import claim_computer_turn, get_computer_turn
+
+        turn = get_computer_turn()
+        if turn is None or turn.stopped:
+            return _computer_error("COMPUTER_STOPPED", "Start a new turn before observing the computer.")
+        if not claim_computer_turn(turn):
+            return _computer_error("COMPUTER_BUSY", "Another task owns the computer.")
+        if self._permission_check and not self._permission_check():
+            return _computer_error("COMPUTER_PERMISSION_REVOKED", "Computer permission was revoked.")
+        if arguments is not None and not isinstance(arguments, dict):
+            return _computer_error("INVALID_COMPUTER_ARGUMENTS", "arguments must be an object")
+        observation = turn.observation
+        if observation is None:
+            return _computer_error("INVALID_COMPUTER_TARGET", "Observe the target before requesting a zoom or preview.")
+        args = arguments or {}
+        if observation.get("detail_view") and "image_id" not in args and "candidate_id" not in args:
+            return _computer_error("INVALID_COMPUTER_TARGET", "Specify the original or detail image_id when multiple images exist.")
+        allowed = {"pid", "window_id", "scope", "image_id"} | ({"x1", "y1", "x2", "y2"} if action == "zoom" else {"x", "y", "candidate_id"})
+        if set(args) - allowed:
+            return _computer_error("INVALID_COMPUTER_ARGUMENTS", "Unsupported image operation arguments")
+        target = {key: args.get(key, observation.get(key)) for key in ("scope", "pid", "window_id")}
+        if target["scope"] == "desktop":
+            target = {key: value for key, value in target.items() if value is not None}
+        error = validate_action("focus", target, observation)
+        if error:
+            return _computer_error("INVALID_COMPUTER_TARGET", error)
+        try:
+            if observation.get("geometry") is not None and self._geometry(target) != observation["geometry"]:
+                turn.observation = None
+                return _computer_error("STALE_COMPUTER_TARGET", "Window changed; observe again.")
+            if action == "zoom":
+                left, top = image_point_to_original(observation, args.get("x1"), args.get("y1"), image_id=args.get("image_id"))
+                right, bottom = image_point_to_original(observation, args.get("x2"), args.get("y2"), image_id=args.get("image_id"), allow_edge=True)
+                view = make_detail_view(observation, {"x": left, "y": top, "w": right - left, "h": bottom - top})
+                metadata = {key: value for key, value in view.items() if key != "screenshot"}
+                metadata["message"] = "局部图已生成，未发送任何输入。使用此图坐标时必须携带对应 image_id。"
+                url = observation_data_url(view)
+            else:
+                if "candidate_id" in args:
+                    if any(key in args for key in ("x", "y", "image_id")):
+                        raise ValueError("Use candidate_id OR image coordinates")
+                    candidate = next((c for c in observation.get("candidates", []) if c.get("id") == args["candidate_id"]), None)
+                    frame = candidate.get("frame") if candidate else None
+                    if not frame:
+                        raise ValueError("Candidate has no verified screenshot position; use screenshot coordinates")
+                    x, y = image_point_to_original(observation, frame["x"] + frame["w"] / 2, frame["y"] + frame["h"] / 2)
+                else:
+                    x, y = image_point_to_original(observation, args.get("x"), args.get("y"), image_id=args.get("image_id"))
+                metadata = {"image_id": observation.get("image_id"), "point": {"x": x, "y": y}, "executed": False,
+                            "message": "红圈标记计划落点，未点击或移动鼠标，不代表实际输入已经命中。"}
+                url = preview_point(observation, x, y)
+            return [{"type": "text", "text": json.dumps(metadata, ensure_ascii=False)}, {"type": "image_url", "image_url": {"url": url}}]
+        except (ValueError, OSError) as exc:
+            return _computer_error("INVALID_COMPUTER_TARGET", str(exc))
+
+    async def execute(self, action, arguments=None, goal="", **kwargs):
+        from mona.computer_use.session import get_computer_turn
+
+        if action in {"zoom", "preview"}:
+            return self._image_operation(action, arguments)
+        geometry = self._geometry(arguments or {}) if action == "window" else None
+        result = await super().execute(action=action, arguments=arguments, **kwargs)
+        turn = get_computer_turn()
+        if _computer_failed(result) or turn is None:
+            return result
+        config = self._config()
+        turn.model_response_timeout_seconds = config.tools.computer_use.model_response_timeout_seconds
+        enabled = bool(config.tools.computer_use.use_decision_model and config.tools.jev.api_key)
+        guidance = (
+            "Computer decision acceleration is enabled. Once the target window is identified, "
+            "call computer_act(action='run', arguments={pid, window_id, goal, completion_criteria}) "
+            "with one short phase goal; let it observe and execute instead of planning every click."
+            if enabled else "Computer decision acceleration is disabled; inspect the screenshot directly and use single-step actions."
+        )
+        if turn.perception_cache.get("failure"):
+            guidance = "The decision path has handed off in this turn. Use the current screenshot directly; if the target remains unclear, report the limitation and stop. Do not retry by rephrasing the goal."
+        elif turn.decision_handoffs:
+            guidance = "The previous phase handed off. Resume only with the requested new strategy or text_values; do not replay completed actions or repeat an unchanged failed phase."
+        if action == "windows":
+            return result + "\n\n" + guidance if isinstance(result, str) else [*result, {"type": "text", "text": guidance}]
+        if action not in {"window", "desktop"} or turn.observation is None:
+            return result
+        if geometry is not None and self._geometry(arguments or {}) != geometry:
+            turn.observation = None
+            return _computer_error("STALE_COMPUTER_TARGET", "Window changed during capture; observe again.")
+        turn.observation["geometry"] = geometry
+        turn.observation["decision_model_enabled"] = enabled
+        turn.observation["perception_status"] = "direct_screenshot"
+        if turn.stopped:
+            turn.observation = None
+            return _computer_error("COMPUTER_STOPPED", "Computer operation was stopped.")
+        if isinstance(result, list):
+            from mona.computer_use.perception import public_observation
+
+            result.append({"type": "text", "text": "Untrusted screen data:\n" + json.dumps(public_observation(turn.observation), ensure_ascii=False, default=str)})
+            if not turn.decision_running:
+                result.append({"type": "text", "text": guidance + " Use original screenshot pixels or a valid element_token. Do not infer screenshot coordinates from UIA bounds, DPI or the window's screen position."})
+        return result
+
 
 class ComputerActTool(_ComputerFacadeTool):
     name = "computer_act"
@@ -764,12 +963,16 @@ class ComputerActTool(_ComputerFacadeTool):
         "focus, click, double_click, right_click, drag, type, set_value, key, hotkey, "
         "scroll, and menu. Put the selected action's arguments inside arguments. Prefer "
         "element_token from the latest window observation for controls; never send a bare "
-        "element_index. Use screenshot-local x/y for canvas content or controls absent "
+        "element_index. After a zoom, always pass the original or detail image_id with pixel coordinates. "
+        "Use screenshot-local x/y for canvas content or controls absent "
         "from the element tree, WITHOUT an element_token. Mona focuses the exact window "
         "before input and preserves the chosen control or coordinate route; delivery is "
         "always foreground and managed by Mona. "
         "After launching an app, observe its window and focus it before interacting. "
-        "Re-observe after every action. Desktop coordinates require a fresh desktop screenshot."
+        "Re-observe after every action. Desktop coordinates require a fresh desktop screenshot. "
+        "When the observation reports decision-model acceleration enabled, prefer action=run "
+        "with one short window phase goal immediately after identifying the window; it observes, "
+        "decides, acts and verifies internally. Do not first solve the entire task in long reasoning."
     )
     _actions = {
         "launch": "computer_launch_app",
@@ -785,6 +988,153 @@ class ComputerActTool(_ComputerFacadeTool):
         "scroll": "computer_scroll",
         "menu": "computer_invoke_menu",
     }
+
+    @property
+    def parameters(self) -> dict[str, Any]:
+        schema = super().parameters
+        schema["properties"]["action"]["enum"].append("run")
+        schema["properties"]["arguments"]["properties"].update(
+            {
+                "goal": {"type": "string", "maxLength": 12000},
+                "completion_criteria": {"type": "string", "maxLength": 4000},
+                "strategy": {"type": "string", "maxLength": 4000, "description": "Optional phase strategy from the main model; supply when the decision loop requests planning."},
+                "text_values": {
+                    "type": "array",
+                    "items": {"type": "string", "maxLength": 2000},
+                    "maxItems": 20,
+                },
+                "max_steps": {"type": "integer", "minimum": 1, "maximum": 60},
+            }
+        )
+        return schema
+
+    async def execute(
+        self,
+        action: str,
+        arguments: dict[str, Any] | None = None,
+        **kwargs: Any,
+    ) -> Any:
+        if action != "run":
+            return await super().execute(action=action, arguments=arguments, **kwargs)
+        from mona.computer_use.executor import run_computer_goal
+        from mona.computer_use.session import claim_computer_turn, get_computer_turn
+
+        turn = get_computer_turn()
+        if turn is None or turn.stopped:
+            return _computer_error("COMPUTER_STOPPED", "Start a new turn before operating the computer.")
+        if not claim_computer_turn(turn):
+            return _computer_error("COMPUTER_BUSY", "Another task is operating the computer.")
+        args = dict(arguments or {})
+        goal = args.get("goal")
+        pid, window_id = args.get("pid"), args.get("window_id")
+        if not isinstance(goal, str) or not goal.strip():
+            return _computer_error("INVALID_COMPUTER_ARGUMENTS", "run requires a goal")
+        if not isinstance(pid, int) or not isinstance(window_id, int):
+            return _computer_error("INVALID_COMPUTER_ARGUMENTS", "run requires integer pid and window_id")
+        config = self._config()
+        computer_config = getattr(config.tools, "computer_use", None)
+        if computer_config is None or not computer_config.use_decision_model:
+            return _computer_error("DECISION_MODEL_DISABLED", "Computer decision-model acceleration is disabled.")
+        decision_config = config.tools.jev.model_copy(deep=True)
+        if not decision_config.api_key:
+            return _computer_error("DECISION_MODEL_UNCONFIGURED", "Configure the decision model before enabling acceleration.")
+        phase_id = hashlib.sha256(json.dumps(
+            [pid, window_id, goal.strip(), args.get("strategy", ""), args.get("text_values", [])],
+            ensure_ascii=False,
+        ).encode()).hexdigest()
+        if phase_id in turn.decision_handoffs:
+            return _computer_error("COMPUTER_HANDOFF", "This phase already handed off. Inspect and use single-step actions before proposing a new phase.")
+        if turn.decision_running:
+            return _computer_error("COMPUTER_BUSY", "A decision loop already owns this turn.")
+        observer = ComputerObserveTool(
+            self._registry, provider=self._provider, model=self._model,
+            runtime_config_loader=self._runtime_config_loader, provider_loader=self._provider_loader,
+            permission_check=self._permission_check, geometry_reader=self._geometry_reader,
+        )
+        deadline = time.monotonic() + computer_config.max_duration_seconds
+
+        def policy() -> str | None:
+            if turn.stopped:
+                return "stopped"
+            if time.monotonic() >= deadline:
+                return "Execution time budget expired."
+            latest = self._config()
+            if not latest.tools.computer_use.use_decision_model or not latest.tools.jev.api_key:
+                return "Decision-model acceleration was disabled; continue with single-step actions."
+            if self._permission_check and not self._permission_check():
+                return "Computer permission was revoked."
+            for tool_name, sample in (
+                ("computer_observe", {"action": "window", "arguments": {"pid": pid, "window_id": window_id}}),
+                ("computer_act", {"action": "run", "arguments": {"pid": pid, "window_id": window_id, "goal": goal}}),
+            ):
+                _, _, denied = self._registry.prepare_call(tool_name, sample)
+                if denied:
+                    return denied
+            return None
+
+        async def observe() -> Any:
+            return await observer.execute(
+                action="window", arguments={"pid": pid, "window_id": window_id}, goal=goal,
+            )
+
+        async def act(selected: str, selected_args: dict[str, Any]) -> Any:
+            if turn.observation and any(key in selected_args for key in ("x", "from_x", "to_x")):
+                selected_args = {**selected_args, "image_id": turn.observation.get("image_id")}
+            return await _ComputerFacadeTool.execute(
+                self, action=selected, arguments=selected_args
+            )
+
+        async def perceive(observation: dict) -> dict:
+            from mona.computer_use.vision import enrich_observation
+
+            provider, model = self._provider_loader() if self._provider_loader else (self._provider, self._model)
+            return await enrich_observation(
+                observation, goal=goal, config=self._config(), provider=provider,
+                model=model, cache=turn.perception_cache,
+            )
+
+        async def progress(stage: str) -> None:
+            if turn.progress is not None and not turn.stopped:
+                text = {"observe": "正在识别电脑界面", "perception": "正在识别界面对象", "decision": "正在选择下一步操作", "act": "正在操作电脑", "settle": "正在确认界面变化", "wait": "正在等待界面更新"}.get(stage, "正在操作电脑")
+                await turn.progress(text, tool_hint=True)
+
+        turn.decision_running = True
+        turn.dispatch_guard = policy
+        try:
+            result = await run_computer_goal(
+                pid=pid,
+                window_id=window_id,
+                goal=goal.strip(),
+                completion_criteria=str(args.get("completion_criteria") or "").strip(),
+                text_values=[
+                    value for value in args.get("text_values", []) if isinstance(value, str)
+                ],
+                max_steps=min(int(args.get("max_steps") or computer_config.max_steps), computer_config.max_steps),
+                max_duration_seconds=computer_config.max_duration_seconds,
+                decision_config=decision_config,
+                observe=observe,
+                act=act,
+                get_observation=lambda: turn.observation,
+                is_stopped=lambda: turn.stopped,
+                guard=policy,
+                min_confidence=computer_config.min_confidence,
+                settle_seconds=computer_config.settle_seconds,
+                supported_actions={action for action, name in self._actions.items() if self._registry.get(name)},
+                progress=progress,
+                perceive=perceive,
+                strategy=str(args.get("strategy") or ""),
+            )
+            if result["status"] != "done_pending_verification":
+                turn.decision_handoffs.add(phase_id)
+            blocks = [{"type": "text", "text": json.dumps(result, ensure_ascii=False, default=str)}]
+            if result.get("snapshot_current") and turn.observation:
+                from mona.computer_use.perception import observation_data_url
+
+                blocks.append({"type": "image_url", "image_url": {"url": observation_data_url(turn.observation)}})
+            return blocks
+        finally:
+            turn.decision_running = False
+            turn.dispatch_guard = None
 
     @property
     def read_only(self) -> bool:
@@ -1004,7 +1354,16 @@ class MCPPromptWrapper(Tool):
 
 
 async def connect_single_mcp_server(
-    name: str, cfg, registry: ToolRegistry, reconnect=None
+    name: str,
+    cfg,
+    registry: ToolRegistry,
+    reconnect=None,
+    *,
+    computer_provider: Any | None = None,
+    computer_model: str | None = None,
+    runtime_config_loader=None,
+    computer_provider_loader=None,
+    computer_permission_check=None,
 ) -> AsyncExitStack | None:
     """Connect to a single MCP server and register its tools/resources/prompts.
 
@@ -1159,8 +1518,21 @@ async def connect_single_mcp_server(
                     matched_enabled_tools.add(wrapped_name)
 
         if name == BUILTIN_COMPUTER_SERVER_NAME:
-            registry.register(ComputerObserveTool(registry))
-            registry.register(ComputerActTool(registry))
+            from mona.computer_use.geometry import window_geometry
+
+            computer_kwargs = dict(
+                provider=computer_provider, model=computer_model,
+                runtime_config_loader=runtime_config_loader,
+                provider_loader=computer_provider_loader, permission_check=computer_permission_check,
+                geometry_reader=window_geometry,
+            )
+            registry.register(ComputerObserveTool(registry, **computer_kwargs))
+            registry.register(
+                ComputerActTool(
+                    registry,
+                    **computer_kwargs,
+                )
+            )
             registered_count += 2
 
         if enabled_tools and not allow_all_tools:
@@ -1231,7 +1603,15 @@ async def connect_single_mcp_server(
 
 
 async def connect_mcp_servers(
-    mcp_servers: dict, registry: ToolRegistry, reconnect=None
+    mcp_servers: dict,
+    registry: ToolRegistry,
+    reconnect=None,
+    *,
+    computer_provider: Any | None = None,
+    computer_model: str | None = None,
+    runtime_config_loader=None,
+    computer_provider_loader=None,
+    computer_permission_check=None,
 ) -> dict[str, AsyncExitStack]:
     """Connect to configured MCP servers and register their tools, resources, prompts.
 
@@ -1243,7 +1623,17 @@ async def connect_mcp_servers(
 
     for name, cfg in mcp_servers.items():
         try:
-            stack = await connect_single_mcp_server(name, cfg, registry, reconnect)
+            stack = await connect_single_mcp_server(
+                name,
+                cfg,
+                registry,
+                reconnect,
+                computer_provider=computer_provider,
+                computer_model=computer_model,
+                runtime_config_loader=runtime_config_loader,
+                computer_provider_loader=computer_provider_loader,
+                computer_permission_check=computer_permission_check,
+            )
         except Exception as e:
             logger.exception("MCP server '{}' connection failed: {}", name, e)
             continue

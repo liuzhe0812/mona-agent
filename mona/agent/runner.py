@@ -925,6 +925,16 @@ class AgentRunner:
             messages,
             tools=tool_defs,
         )
+        from mona.computer_use.session import get_computer_turn
+
+        computer_turn = get_computer_turn()
+        computer_timeout = None
+        if (
+            computer_turn is not None and not computer_turn.stopped
+            and messages and messages[-1].get("role") == "tool"
+            and messages[-1].get("name") in {"computer_observe", "computer_act"}
+        ):
+            computer_timeout = computer_turn.model_response_timeout_seconds
         wants_streaming = hook.wants_streaming()
         wants_progress_streaming = (
             not wants_streaming
@@ -1013,6 +1023,8 @@ class AgentRunner:
         outer_timeout_s = (
             None if is_streaming and not spec.enforce_llm_timeout_for_streaming else timeout_s
         )
+        if computer_timeout is not None:
+            outer_timeout_s = min(outer_timeout_s, computer_timeout) if outer_timeout_s else computer_timeout
         try:
             response = (
                 await coro
@@ -1028,6 +1040,11 @@ class AgentRunner:
                     "Tool call did not complete.",
                 )
         except asyncio.TimeoutError:
+            if computer_timeout is not None:
+                return LLMResponse(
+                    content="电脑操作模型响应超时，已停止本次操作。请缩小操作目标或切换响应更快的模型后重试。",
+                    finish_reason="error", error_kind="timeout",
+                )
             if outer_timeout_s is None:
                 return LLMResponse(
                     content="Error calling LLM: stream stalled",

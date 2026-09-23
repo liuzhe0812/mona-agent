@@ -478,7 +478,8 @@ def test_document_loop_preloads_pipeline_tools_and_matching_contract(tmp_path) -
         session, [], None,
     )
     assert "## Process Execution" in messages[0]["content"]
-    assert "## Browser and Computer Use" not in messages[0]["content"]
+    assert "## Browser Use" not in messages[0]["content"]
+    assert "## Computer Use" not in messages[0]["content"]
 
 
 def test_ui_context_and_media_preload_capabilities() -> None:
@@ -638,19 +639,27 @@ def test_capability_contract_follows_loaded_tools_without_changing_base_rules(tm
         registry.register(tool)
     bind_capability_context(RequestContext(channel="websocket", chat_id="plain"))
     initial = render_template("agent/tool_contract.md", tool_names={"load_capability"})
-    assert "Browser and Computer Use" not in initial
+    assert "## Browser Use" not in initial
+    assert "## Computer Use" not in initial
     assert "Remote Terminal and SSH Sessions" not in initial
     assert "Do not use `exec` as a universal workaround" in initial
     result = asyncio.run(loader.execute(["browser", "terminal", "development"]))
-    assert "element_token" in result
+    assert "## Browser Use" in result
+    assert "## Computer Use" not in result
     assert "independent verify step" in result
     assert "deliver_file" in result
     repeated = asyncio.run(loader.execute(["browser", "terminal", "development"]))
-    assert "element_token" not in repeated
+    assert "## Browser Use" not in repeated
     assert "independent verify step" not in repeated
     preloaded = render_template("agent/tool_contract.md", tool_names={"browser_observe"})
-    assert "element_token" in preloaded
+    assert "## Browser Use" in preloaded
+    assert "## Computer Use" not in preloaded
     assert "Remote Terminal and SSH Sessions" not in preloaded
+    computer = render_template("agent/tool_contract.md", tool_names={"computer_observe", "computer_act"})
+    assert "## Computer Use" in computer
+    assert "element_token" in computer
+    assert "## Browser Use" not in computer
+    assert "Do not ask the user to upload a screenshot before trying" in computer
 
 
 def test_skill_read_unlocks_resources_only_after_success(monkeypatch, tmp_path) -> None:

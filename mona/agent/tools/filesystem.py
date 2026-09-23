@@ -1,6 +1,7 @@
 """File system tools: read, write, edit, list."""
 
 import difflib
+import hashlib
 import mimetypes
 import os
 from dataclasses import dataclass
@@ -140,6 +141,9 @@ def _parse_page_range(pages: str, total: int) -> tuple[int, int]:
             description="Maximum number of lines to read (default 2000)",
             minimum=1,
         ),
+        char_offset=IntegerSchema(description="Optional zero-based decoded character offset for long/minified text; do not combine with line offset/limit", minimum=0, nullable=True),
+        char_limit=IntegerSchema(4000, description="Character-window length, 1–8000; useful for single-line JSON", minimum=1, maximum=8000),
+        expected_sha256=StringSchema("Optional source SHA256 from the preceding character read; rejects changed files", nullable=True),
         pages=StringSchema("Page range for PDF files, e.g. '1-5' (default: all, max 20 pages)"),
         force=BooleanSchema(
             description="Bypass same-file read deduplication and return content again.",
@@ -170,7 +174,7 @@ class ReadFileTool(_FsTool):
             "Use find_files/list_dir first when the path is uncertain. "
             "Read the relevant range before editing so replacements or patches "
             "are based on current content. "
-            "Use offset and limit for large text files. "
+            "Use offset/limit for lines; for a long line or persisted JSON use char_offset=0 and char_limit=4000, then the returned next offset and SHA. "
             "Use force=true to re-read content even if unchanged. "
             "Reads exceeding ~128K chars are truncated."
         )
@@ -186,6 +190,9 @@ class ReadFileTool(_FsTool):
         limit: int | None = None,
         pages: str | None = None,
         force: bool = False,
+        char_offset: int | None = None,
+        char_limit: int = 4000,
+        expected_sha256: str | None = None,
         **kwargs: Any,
     ) -> Any:
         try:
@@ -219,6 +226,34 @@ class ReadFileTool(_FsTool):
             mime = detect_image_mime(raw) or mimetypes.guess_type(path)[0]
             if mime and mime.startswith("image/"):
                 return build_image_content_blocks(raw, mime, str(fp), f"(Image file: {path})")
+
+            if isinstance(char_limit, bool) or not isinstance(char_limit, int) or not 1 <= char_limit <= 8000:
+                return "Error: char_limit must be an integer from 1 to 8000"
+            if char_offset is not None and (isinstance(char_offset, bool) or not isinstance(char_offset, int) or char_offset < 0):
+                return "Error: char_offset must be a non-negative integer"
+            if char_offset is not None and (offset != 1 or limit is not None):
+                return "Error: character windows and line offset/limit are mutually exclusive"
+            digest = hashlib.sha256(raw).hexdigest()
+            if expected_sha256 is not None and digest != expected_sha256:
+                return f"Error: file changed; expected_sha256 does not match current SHA256 {digest}. Restart the read."
+            try:
+                character_text = raw.decode("utf-8").replace("\r\n", "\n")
+            except UnicodeDecodeError:
+                character_text = None
+            if character_text is not None:
+                lines_with_ends = character_text.splitlines(keepends=True)
+                selected = lines_with_ends[max(0, offset - 1):max(0, offset - 1) + (limit or self._DEFAULT_LIMIT)]
+                long_line = any(len(line) > 8000 for line in selected)
+                if char_offset is not None or long_line:
+                    start_char = char_offset if char_offset is not None else sum(map(len, lines_with_ends[:max(0, offset - 1)]))
+                    if start_char > len(character_text):
+                        return f"Error: char_offset exceeds file length ({len(character_text)} characters)"
+                    end_char = min(start_char + char_limit, len(character_text))
+                    continuation = (f"Continue with char_offset={end_char}, char_limit={char_limit}, expected_sha256=\"{digest}\"."
+                                    if end_char < len(character_text) else "End of file.")
+                    self._file_states.record_read(fp, offset=offset, limit=limit)
+                    return (f"[Character window {start_char}:{end_char} of {len(character_text)}; zero-based, end-exclusive. "
+                            f"SHA256={digest}. {continuation}]\n" + character_text[start_char:end_char])
 
             # Read dedup: same path + offset + limit + unchanged mtime → stub
             # Always check for external modifications before dedup

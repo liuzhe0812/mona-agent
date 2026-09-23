@@ -37,9 +37,8 @@ CAPABILITY_TOOL_GROUPS: dict[str, frozenset[str]] = {
     "saved_memory": frozenset({"hoard_capture", "hoard_search"}),
     "messaging": frozenset({"message"}),
     "automation": frozenset({"heartbeat_update", "schedule", "todo"}),
-    "browser": frozenset(
-        {"browser_act", "browser_observe", "computer_act", "computer_observe"}
-    ),
+    "browser": frozenset({"browser_act", "browser_observe"}),
+    "computer": frozenset({"computer_act", "computer_observe"}),
 }
 CAPABILITY_NAMES = tuple(CAPABILITY_TOOL_GROUPS)
 _TOOL_CAPABILITIES: dict[str, frozenset[str]] = {
@@ -85,6 +84,8 @@ def _metadata_capabilities(metadata: dict[str, Any]) -> set[str]:
 def bind_capability_context(ctx: RequestContext) -> None:
     """Start an isolated capability view for one request."""
     active = _metadata_capabilities(ctx.metadata or {})
+    # Common desktop tools are visible immediately; registry permissions still apply.
+    active.add("computer")
     if ctx.terminal_session_id:
         active.add("terminal")
     _ACTIVE_CAPABILITIES.set(active)
@@ -144,7 +145,9 @@ def activate_capabilities_for_history(history: list[dict[str, Any]]) -> None:
                         arguments = json.loads(arguments)
                     except (ValueError, TypeError):
                         arguments = {}
-                if isinstance(arguments, dict) and arguments.get("name") == "pdf":
+                if isinstance(arguments, dict) and arguments.get("name") in {
+                    "pdf", "mona-docx", "mona-xlsx", "mona-pptx",
+                }:
                     active.add("office")
             else:
                 groups = capabilities_for_tool(name)
@@ -190,7 +193,9 @@ class LoadCapabilityTool(Tool):
         "http (direct API requests), office (documents/spreadsheets/slides/PDF), image, "
         "video, email, database, terminal, notes_write (create/save notes), saved_memory "
         "(previously saved links/fragments), messaging (proactive/cross-channel), "
-        "automation (reminders/todos/heartbeat), browser (interactive browser/desktop). "
+        "automation (reminders/todos/heartbeat), browser (Mona's built-in browser), "
+        "computer (desktop screenshots, applications, external browsers and games; "
+        "already visible when authorized). "
         "Load every pack required by a mixed task before using its tools."
     )
 

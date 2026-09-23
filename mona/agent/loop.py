@@ -1043,7 +1043,14 @@ class AgentLoop:
 
         try:
             self._mcp_stacks = await connect_mcp_servers(
-                self._mcp_servers, self.tools, self._reconnect_mcp_server_tools
+                self._mcp_servers,
+                self.tools,
+                self._reconnect_mcp_server_tools,
+                computer_provider=self.provider,
+                computer_model=self.model,
+                runtime_config_loader=self._runtime_config_loader,
+                computer_provider_loader=lambda: (self.provider, self.model),
+                computer_permission_check=self._live_computer_permission,
             )
             if self._mcp_stacks:
                 self._mcp_connected = True
@@ -1434,6 +1441,12 @@ class AgentLoop:
         Returns (final_content, tools_used, messages, stop_reason, had_injections).
         """
         self._sync_subagent_runtime_limits()
+
+        from mona.computer_use.session import get_computer_turn
+
+        computer_turn = get_computer_turn()
+        if computer_turn is not None:
+            computer_turn.progress = on_progress
 
         loop_hook = AgentProgressHook(
             on_progress=on_progress,
@@ -1836,6 +1849,13 @@ class AgentLoop:
                 logger.debug("MCP server '{}' cleanup error (can be ignored)", name)
         self._mcp_stacks.clear()
 
+    def _live_computer_permission(self) -> bool:
+        from mona.agent.user_config import load_agent_user_config
+        from mona.computer_use.runtime import COMPUTER_PERMISSION_TOOL_NAMES
+
+        user = load_agent_user_config(getattr(self, "_partner_agent_id", "mona"))
+        return user.enabled and user.granted_tools is not None and set(COMPUTER_PERMISSION_TOOL_NAMES) <= set(user.granted_tools)
+
     async def _sync_computer_use_runtime(self) -> None:
         if hasattr(self, "_profile"):
             return
@@ -1961,7 +1981,15 @@ class AgentLoop:
         # 3. Reconnect
         try:
             stack = await connect_single_mcp_server(
-                name, cfg, self.tools, self._reconnect_mcp_server_tools
+                name,
+                cfg,
+                self.tools,
+                self._reconnect_mcp_server_tools,
+                computer_provider=self.provider,
+                computer_model=self.model,
+                runtime_config_loader=self._runtime_config_loader,
+                computer_provider_loader=lambda: (self.provider, self.model),
+                computer_permission_check=self._live_computer_permission,
             )
         except Exception as e:
             logger.exception("[mcp] restart '{}' failed", name)
