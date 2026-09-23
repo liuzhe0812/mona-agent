@@ -1,0 +1,5 @@
+# 固定 Rust 工具链版本，避免 stable 漂移导致同一提交在不同机器上构建结果不一致。
+[toolchain]
+channel = "1.98.1"
+profile = "minimal"
+components = ["rustfmt", "clippy"]
