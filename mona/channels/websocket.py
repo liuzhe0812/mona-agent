@@ -3236,6 +3236,8 @@ class WebSocketChannel(BaseChannel):
                 self.config.host,
                 self.config.port,
                 process_request=process_request,
+                # REST history shares this handshake; allow its 30s client budget.
+                open_timeout=35,
                 max_size=self.config.max_message_bytes,
                 ping_interval=self.config.ping_interval_s,
                 ping_timeout=self.config.ping_timeout_s,
