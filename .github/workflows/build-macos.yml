@@ -155,12 +155,15 @@ jobs:
           found=0
           while IFS= read -r dmg; do
             found=1
-            object_key="macos/${version}/$(basename "$dmg")"
-            python .github/scripts/upload_qiniu_artifact.py --artifact "$dmg" --object-key "$object_key"
-            public_url="${QINIU_DOMAIN%/}/${object_key}"
-            downloaded="$RUNNER_TEMP/$(basename "$dmg")"
-            curl --fail --location --retry 3 --retry-delay 5 --output "$downloaded" "$public_url"
-            test "$(sha256sum "$dmg" | cut -d ' ' -f 1)" = "$(sha256sum "$downloaded" | cut -d ' ' -f 1)"
-            echo "- ${public_url}" >> "$GITHUB_STEP_SUMMARY"
+            digest="$(sha256sum "$dmg" | cut -d ' ' -f 1)"
+            # 版本化路径供归档，固定路径供官网下载按钮长期使用。
+            for object_key in "macos/${version}/$(basename "$dmg")" "macos/Mona-latest.dmg"; do
+              python .github/scripts/upload_qiniu_artifact.py --artifact "$dmg" --object-key "$object_key"
+              public_url="${QINIU_DOMAIN%/}/${object_key}"
+              downloaded="$RUNNER_TEMP/verify-$(basename "$dmg")"
+              curl --fail --location --retry 3 --retry-delay 5 --output "$downloaded" "$public_url"
+              test "$digest" = "$(sha256sum "$downloaded" | cut -d ' ' -f 1)"
+              echo "- ${public_url}" >> "$GITHUB_STEP_SUMMARY"
+            done
           done < <(find artifacts -type f -name '*.dmg' -print | sort)
           test "$found" = 1
