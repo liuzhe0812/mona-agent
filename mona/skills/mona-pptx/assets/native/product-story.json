@@ -1,0 +1,189 @@
+{
+  "schemaVersion": 1,
+  "canvas": {
+    "width": 1280,
+    "height": 720
+  },
+  "name": "product-story",
+  "intent": "以真实产品画面为主视觉。标题、解释和页脚仍为原生文本，不把整页做成图片。",
+  "operations": [
+    {
+      "op": "slide_add_shape",
+      "payload": {
+        "slideId": "$slideId",
+        "shape": "rect",
+        "x": 0,
+        "y": 0,
+        "width": 1280,
+        "height": 720,
+        "fillColor": "#111D2D"
+      }
+    },
+    {
+      "op": "slide_add_text",
+      "payload": {
+        "slideId": "$slideId",
+        "text": "MONA  /  WORKSPACE",
+        "x": 72,
+        "y": 43,
+        "width": 850,
+        "height": 40,
+        "font": {
+          "fontFamily": "Microsoft YaHei",
+          "fontSize": 11,
+          "color": "#B2BECC",
+          "bold": false
+        }
+      }
+    },
+    {
+      "op": "slide_add_shape",
+      "payload": {
+        "slideId": "$slideId",
+        "shape": "rect",
+        "x": 72,
+        "y": 126,
+        "width": 57,
+        "height": 4,
+        "fillColor": "#DFF08B"
+      }
+    },
+    {
+      "op": "slide_add_text",
+      "payload": {
+        "slideId": "$slideId",
+        "text": "让 AI 的成果\n成为可编辑的工作",
+        "x": 72,
+        "y": 168,
+        "width": 452,
+        "height": 183,
+        "font": {
+          "fontFamily": "Microsoft YaHei",
+          "fontSize": 33,
+          "color": "#F7F5F0",
+          "bold": true
+        }
+      }
+    },
+    {
+      "op": "slide_add_text",
+      "payload": {
+        "slideId": "$slideId",
+        "text": "从资料、分析到演示文稿，\n在同一个空间里完成与修改。",
+        "x": 72,
+        "y": 388,
+        "width": 420,
+        "height": 106,
+        "font": {
+          "fontFamily": "Microsoft YaHei",
+          "fontSize": 18,
+          "color": "#B2BECC",
+          "bold": false
+        }
+      }
+    },
+    {
+      "op": "slide_add_text",
+      "payload": {
+        "slideId": "$slideId",
+        "text": "看得见过程，也接得住结果。",
+        "x": 72,
+        "y": 561,
+        "width": 422,
+        "height": 55,
+        "font": {
+          "fontFamily": "Microsoft YaHei",
+          "fontSize": 15,
+          "color": "#DFF08B",
+          "bold": true
+        }
+      }
+    },
+    {
+      "op": "slide_add_shape",
+      "payload": {
+        "slideId": "$slideId",
+        "shape": "rect",
+        "x": 548,
+        "y": 159,
+        "width": 660,
+        "height": 416,
+        "fillColor": "#233044"
+      }
+    },
+    {
+      "op": "slide_add_image",
+      "payload": {
+        "slideId": "$slideId",
+        "assetPath": "product-workspace.png",
+        "x": 552.6478873239437,
+        "y": 174,
+        "width": 650.7042253521126,
+        "height": 385
+      }
+    },
+    {
+      "op": "slide_add_text",
+      "payload": {
+        "slideId": "$slideId",
+        "text": "产品历史界面截图 · 展示工作空间，不代表当前版本",
+        "x": 548,
+        "y": 590,
+        "width": 660,
+        "height": 36,
+        "font": {
+          "fontFamily": "Microsoft YaHei",
+          "fontSize": 11,
+          "color": "#B2BECC",
+          "bold": false
+        }
+      }
+    },
+    {
+      "op": "slide_add_shape",
+      "payload": {
+        "slideId": "$slideId",
+        "shape": "rect",
+        "x": 72,
+        "y": 647,
+        "width": 1136,
+        "height": 1,
+        "fillColor": "#354354"
+      }
+    },
+    {
+      "op": "slide_add_text",
+      "payload": {
+        "slideId": "$slideId",
+        "text": "MONA  /  原生设计示例 · 数据仅作演示",
+        "x": 72,
+        "y": 661,
+        "width": 980,
+        "height": 30,
+        "font": {
+          "fontFamily": "Microsoft YaHei",
+          "fontSize": 10,
+          "color": "#B2BECC",
+          "bold": false
+        }
+      }
+    },
+    {
+      "op": "slide_add_text",
+      "payload": {
+        "slideId": "$slideId",
+        "text": "03",
+        "x": 1160,
+        "y": 661,
+        "width": 48,
+        "height": 30,
+        "font": {
+          "fontFamily": "Microsoft YaHei",
+          "fontSize": 10,
+          "color": "#B2BECC",
+          "bold": false
+        }
+      }
+    }
+  ]
+}

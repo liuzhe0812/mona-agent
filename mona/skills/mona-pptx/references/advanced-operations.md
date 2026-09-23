@@ -2,6 +2,8 @@
 
 仅在任务确实需要可编辑表格、原生数据图表、SmartArt 形状组或段落格式时阅读本文件。这里的操作放在 `office.apply.operations` 的 `slide_apply_txn` 中，`payload.ops` 每批 1–50 个注册表操作；字段来自当前 GenOffice 注册表和引擎测试。
 
+普通新建页面使用 `slide_add_preset` 自动完成图表与主题。下文“创建后再设置样式”针对直接图表操作和局部修改，不是预设页面的额外步骤。
+
 ## 坐标和 ID
 
 高级注册表操作的 `target.slide`、`target.el` 和 `offset` 使用底层模型地址：页面/元素优先使用 `inspect` 返回的稳定 ID，`offset` 使用 EMU。直接 `slide_add_*`/`slide_set_geometry` 操作使用 `slides` 结果里的预览像素，不能混用。
@@ -214,7 +216,9 @@ cyEmu = round(heightPx * slideHeightEmu / slideHeightPx)
             "legendPos": "none",
             "gridlines": true,
             "dataLabels": false,
-            "valAxisTitle": "千美元"
+            "catAxisTitle": "季度",
+            "valAxisTitle": "千美元",
+            "gapWidthPct": 60
           }
         ]
       }
@@ -223,11 +227,20 @@ cyEmu = round(heightPx * slideHeightEmu / slideHeightPx)
 }
 ```
 
+`addChart` 不支持 `colorScheme` 系列色；主题化图表按“先 `slide_add_chart` 拿到稳定 ID → 再 `slide_set_chart_style` 应用 `seriesColors` 与文字颜色”的顺序完成。
+
 图表添加后优先使用回执中的稳定图表 ID，缺少时再 `inspect slides`；用 `inspect visual` 检查轴、单位、标签、裁切和阅读顺序。数据趋势适合图表，精确查值适合表格；原生图表仍需要视觉复核。
 
-## 4. 修改原生图表文字颜色
+## 4. 修改原生图表样式
 
-图表文字颜色使用 `slide_set_chart_style` 的 `style` 字段，支持 `textColor`、`titleColor`、`axisLabelColor`、`axisTitleColor`、`legendColor` 和 `dataLabelColor`；颜色必须是 `#RRGGBB` 或 6 位 HEX。`textColor` 先统一设置全部图表文字，局部字段再覆盖对应角色。已知图表稳定 ID 时直接提交一次局部操作：
+图表样式使用 `slide_set_chart_style` 的 `style` 字段：
+
+- 文字颜色：`textColor`、`titleColor`、`axisLabelColor`、`axisTitleColor`、`legendColor`、`dataLabelColor`；颜色必须是 `#RRGGBB` 或 6 位 HEX。`textColor` 先统一设置全部图表文字，局部字段再覆盖对应角色。
+- 系列填充色：`seriesColors`，按系列顺序覆盖默认调色板。深色或品牌主题必须显式设置，否则默认调色板在深色背景上不受控；单系列也可以用它把重点分类改成强调色。
+
+创建阶段支持 `legendPos`、`gridlines`、`dataLabels`、`catAxisTitle`、`valAxisTitle`、`gapWidthPct`，不写系列色。图表创建并返回稳定 ID 后再用 `slide_set_chart_style` 应用主题。当前也支持 `gridColor`（网格线 HEX）、`axisLineColor`（轴线 HEX）和 `axisLabelFontSize`（正数，单位 pt）；这些属性保存在原生图表中。不能假设同一批次能引用未来 ID。
+
+已知图表稳定 ID 时直接提交一次局部操作：
 
 ```json
 {
@@ -245,7 +258,8 @@ cyEmu = round(heightPx * slideHeightEmu / slideHeightPx)
         "elementId": "<stable-chart-element-id>",
         "style": {
           "textColor": "#FFFFFF",
-          "axisLabelColor": "D9D9D9"
+          "axisLabelColor": "D9D9D9",
+          "seriesColors": ["#72DFC1", "#6C7CFF"]
         }
       }
     }
@@ -268,7 +282,8 @@ cyEmu = round(heightPx * slideHeightEmu / slideHeightPx)
         },
         "patch": {
           "textColor": "#FFFFFF",
-          "axisLabelColor": "D9D9D9"
+          "axisLabelColor": "#D9D9D9",
+          "colorScheme": ["#72DFC1", "#6C7CFF"]
         }
       }
     ]
@@ -276,11 +291,13 @@ cyEmu = round(heightPx * slideHeightEmu / slideHeightPx)
 }
 ```
 
-`setChart.patch` 的未知字段、空 patch、错误类型、非有限数字和数据维度不匹配都会拒绝，并返回可用字段与实际 payload；不要猜字段。若提交后实际内容没有变化，结果为 `unchanged`，不算新编辑。普通文本使用 `slide_set_font` 的 `font.color`，不要用图表样式操作。
+`setChart.patch` 的未知字段、空 patch、错误类型、非有限数字和数据维度不匹配都会拒绝，并返回可用字段与实际 payload；不要猜字段。系列填充色的底层字段名是 `colorScheme`；`slide_set_chart_style` 的 `seriesColors` 是同一能力的直接入口，优先使用它，不要绕过它直接猜底层字段。若提交后实际内容没有变化，结果为 `unchanged`，不算新编辑。普通文本使用 `slide_set_font` 的 `font.color`，不要用图表样式操作。
 
 ## 5. SmartArt 形状组
 
 `addSmartArt` 的布局是 `list`、`process`、`cycle`、`hierarchy`、`pyramid`、`matrix` 或 `venn`，`items` 是 1–8 个字符串，`offset` 使用 EMU。当前引擎生成可编辑的形状组来表达 SmartArt 结构；它仍要按普通图文关系做视觉审核。
+
+节点配色和字体都由引擎默认值决定，**不能随主题设置**：深色或品牌主题里 SmartArt 会带上 Office 默认强调色和默认字体，节点字号还会随盒子高度自动缩放（盒子收窄后标签会变小）。需要主题化的关系图时，用带连接线、箭头或层级位置的原生形状组自己着色和设字体，并保持节点数与内容一致；不要用缩高盒子来"调大小"，也不要把 SmartArt 的默认外观描述为已适配主题。
 
 ```json
 {
@@ -313,5 +330,61 @@ cyEmu = round(heightPx * slideHeightEmu / slideHeightPx)
   ]
 }
 ```
+
+## 6. 形状圆角、描边与视觉效果
+
+以下操作都经 `slide_apply_txn` 下发，需要先用回执或 `inspect` 取得稳定元素 ID；`offset` 与 `blurRad`/`dist` 是 EMU，`softEdge` 的半径也是 EMU。
+
+- **圆角面板**：先用 `addElement` 的 `kind: "roundRect"` 建形状，再用 `setShapeAdjust` 调 `avLst`。`adj` 的 50000 约等于胶囊/半圆，数值越大越圆。
+- **圆角图片**：`roundRect` + `setImageFill`（默认 stretch 铺满）。代价是**元素类型会从 `picture` 变成 `shape`**；如果用户明确要求"配图"、或验收规则要求页面里存在图片元素，就保持方形 `picture`，不要为了圆角丢掉可替换的图片对象。
+- **图片裁切与透明度**：`setPictureSrcRect`（`{l,t,r,b}` 为 0–1 比例）、`setPictureOpacity`（0–1）。
+- **描边**：`setStroke` 的 `{color, widthEmu}`。
+- **阴影与柔化**：`setEffects` 的 `effects`，可含 `shadow`（`inner: true` 即内阴影，颜色支持 `#RRGGBBAA`）、`glow`、`reflection`、`softEdge`。
+- **不支持**：图片本身没有几何圆角或裁剪入口（`setPictureClip`/`setPictureRadius` 不存在），改图片的 `setShapeGeometry` 也会被拒绝。
+
+```json
+{
+  "op": "slide_apply_txn",
+  "payload": {
+    "ops": [
+      {
+        "op": "addElement",
+        "target": { "slide": "<stable-slide-id>" },
+        "kind": "roundRect",
+        "offset": { "x": 914400, "y": 914400, "cx": 2743200, "cy": 1371600 }
+      }
+    ]
+  }
+}
+```
+
+```json
+{
+  "op": "slide_apply_txn",
+  "payload": {
+    "ops": [
+      {
+        "op": "setShapeAdjust",
+        "target": { "slide": "<stable-slide-id>", "el": "<stable-element-id>" },
+        "adjust": { "adj": 12000 }
+      },
+      {
+        "op": "setStroke",
+        "target": { "slide": "<stable-slide-id>", "el": "<stable-element-id>" },
+        "stroke": { "color": "#27324A", "widthEmu": 12700 }
+      },
+      {
+        "op": "setEffects",
+        "target": { "slide": "<stable-slide-id>", "el": "<stable-element-id>" },
+        "effects": {
+          "shadow": { "color": "#72DFC155", "blurRad": 254000, "dist": 0, "dirDeg": 0, "inner": true }
+        }
+      }
+    ]
+  }
+}
+```
+
+圆角、描边和阴影都改变元素外观，改完仍要走同一套 `inspect review` + 视觉复核；它们是版式装饰，不承担内容表达，不要用它们替代图表、关系图或真实配图。
 
 高级操作提交后统一遵循：使用回执或按需 `inspect` 取得稳定 ID → `inspect review` 确定待观察页 → 用当前版本视觉复核 → 必要时小批次微调。不要把注册表字段扩展成自定义 JavaScript，也不要把 SVG/PNG 图表当成原生数据图表。

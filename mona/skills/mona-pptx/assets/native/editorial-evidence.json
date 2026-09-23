@@ -1,0 +1,253 @@
+{
+  "schemaVersion": 1,
+  "canvas": {
+    "width": 1280,
+    "height": 720
+  },
+  "name": "editorial-evidence",
+  "intent": "图表承担证据，大数字突出变化，解释独立排列；不是等权卡片墙。",
+  "operations": [
+    {
+      "op": "slide_add_shape",
+      "payload": {
+        "slideId": "$slideId",
+        "shape": "rect",
+        "x": 0,
+        "y": 0,
+        "width": 1280,
+        "height": 720,
+        "fillColor": "#F6F4EF"
+      }
+    },
+    {
+      "op": "slide_add_text",
+      "payload": {
+        "slideId": "$slideId",
+        "text": "运营观察  /  DELIVERY",
+        "x": 72,
+        "y": 34,
+        "width": 850,
+        "height": 34,
+        "font": {
+          "fontFamily": "Microsoft YaHei",
+          "fontSize": 11,
+          "color": "#5B6D68",
+          "bold": false
+        }
+      }
+    },
+    {
+      "op": "slide_add_text",
+      "payload": {
+        "slideId": "$slideId",
+        "text": "交付提速，来自流程重构",
+        "x": 72,
+        "y": 82,
+        "width": 1136,
+        "height": 84,
+        "font": {
+          "fontFamily": "Microsoft YaHei",
+          "fontSize": 34,
+          "color": "#172C2B",
+          "bold": true
+        }
+      }
+    },
+    {
+      "op": "slide_add_text",
+      "payload": {
+        "slideId": "$slideId",
+        "text": "平均交付周期由 50 分钟降至 30 分钟，比较口径保持一致。",
+        "x": 72,
+        "y": 182,
+        "width": 1136,
+        "height": 50,
+        "font": {
+          "fontFamily": "Microsoft YaHei",
+          "fontSize": 17,
+          "color": "#5B6D68",
+          "bold": false
+        }
+      }
+    },
+    {
+      "op": "slide_add_shape",
+      "payload": {
+        "slideId": "$slideId",
+        "shape": "rect",
+        "x": 834,
+        "y": 270,
+        "width": 1,
+        "height": 322,
+        "fillColor": "#C9D2CC"
+      }
+    },
+    {
+      "op": "slide_compose",
+      "payload": {
+        "slideId": "$slideId",
+        "x": 72,
+        "y": 266,
+        "width": 718,
+        "height": 335,
+        "columns": [
+          1
+        ],
+        "rows": [
+          1
+        ],
+        "gap": 0,
+        "items": [
+          {
+            "type": "chart",
+            "row": 0,
+            "column": 0,
+            "kind": "bar",
+            "categories": [
+              "调整前",
+              "调整后"
+            ],
+            "series": [
+              {
+                "name": "平均交付周期",
+                "values": [
+                  50,
+                  30
+                ]
+              }
+            ],
+            "valAxisTitle": "分钟",
+            "legendPos": "none",
+            "gridlines": true,
+            "dataLabels": true,
+            "gapWidthPct": 140,
+            "style": {
+              "seriesColors": [
+                "#25856B"
+              ],
+              "textColor": "#172C2B",
+              "axisLabelColor": "#5B6D68",
+              "gridColor": "#DFE4DE",
+              "axisLineColor": "#BCC8C0",
+              "axisLabelFontSize": 14
+            }
+          }
+        ]
+      }
+    },
+    {
+      "op": "slide_add_text",
+      "payload": {
+        "slideId": "$slideId",
+        "text": "−40%",
+        "x": 876,
+        "y": 255,
+        "width": 335,
+        "height": 104,
+        "font": {
+          "fontFamily": "Microsoft YaHei",
+          "fontSize": 55,
+          "color": "#25856B",
+          "bold": true
+        }
+      }
+    },
+    {
+      "op": "slide_add_text",
+      "payload": {
+        "slideId": "$slideId",
+        "text": "周期缩短",
+        "x": 879,
+        "y": 372,
+        "width": 310,
+        "height": 50,
+        "font": {
+          "fontFamily": "Microsoft YaHei",
+          "fontSize": 21,
+          "color": "#172C2B",
+          "bold": true
+        }
+      }
+    },
+    {
+      "op": "slide_add_text",
+      "payload": {
+        "slideId": "$slideId",
+        "text": "标准化交付检查\n减少重复确认与返工",
+        "x": 879,
+        "y": 446,
+        "width": 310,
+        "height": 101,
+        "font": {
+          "fontFamily": "Microsoft YaHei",
+          "fontSize": 17,
+          "color": "#5B6D68",
+          "bold": false
+        }
+      }
+    },
+    {
+      "op": "slide_add_text",
+      "payload": {
+        "slideId": "$slideId",
+        "text": "下一步：检验跨团队复用效果",
+        "x": 879,
+        "y": 566,
+        "width": 320,
+        "height": 45,
+        "font": {
+          "fontFamily": "Microsoft YaHei",
+          "fontSize": 13,
+          "color": "#172C2B",
+          "bold": false
+        }
+      }
+    },
+    {
+      "op": "slide_add_shape",
+      "payload": {
+        "slideId": "$slideId",
+        "shape": "rect",
+        "x": 72,
+        "y": 647,
+        "width": 1136,
+        "height": 1,
+        "fillColor": "#C9D2CC"
+      }
+    },
+    {
+      "op": "slide_add_text",
+      "payload": {
+        "slideId": "$slideId",
+        "text": "MONA  /  原生设计示例 · 数据仅作演示",
+        "x": 72,
+        "y": 661,
+        "width": 980,
+        "height": 30,
+        "font": {
+          "fontFamily": "Microsoft YaHei",
+          "fontSize": 10,
+          "color": "#5B6D68",
+          "bold": false
+        }
+      }
+    },
+    {
+      "op": "slide_add_text",
+      "payload": {
+        "slideId": "$slideId",
+        "text": "01",
+        "x": 1160,
+        "y": 661,
+        "width": 48,
+        "height": 30,
+        "font": {
+          "fontFamily": "Microsoft YaHei",
+          "fontSize": 10,
+          "color": "#5B6D68",
+          "bold": false
+        }
+      }
+    }
+  ]
+}

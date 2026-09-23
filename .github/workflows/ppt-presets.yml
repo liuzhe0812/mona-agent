@@ -1,0 +1,109 @@
+name: PPT preset visual
+
+on:
+  pull_request:
+    paths:
+      - '.github/workflows/ppt-presets.yml'
+      - 'webui/office-editor/package.json'
+      - 'webui/office-editor/package-lock.json'
+      - 'webui/office-editor/mona/slides-presets.ts'
+      - 'webui/office-editor/mona/slides-presets.test.ts'
+      - 'webui/office-editor/mona/slides-preset-capacity.ts'
+      - 'webui/office-editor/mona/slides-preset-content.ts'
+      - 'webui/office-editor/mona/slides-content-page.ts'
+      - 'webui/office-editor/mona/slides-preset-layouts.ts'
+      - 'webui/office-editor/mona/slides-preset-selection.test.ts'
+      - 'webui/office-editor/mona/slides-capabilities.ts'
+      - 'webui/office-editor/mona/slides-capabilities.test.ts'
+      - 'webui/office-editor/mona/presets/**'
+      - 'webui/office-editor/mona/slides-entry.tsx'
+      - 'webui/office-editor/mona/slides-layout.ts'
+      - 'webui/office-editor/mona/slides-visual.tsx'
+      - 'webui/office-editor/mona/slides-font-metrics.ts'
+      - 'webui/office-editor/vendor/genoffice/packages/pptx-render/src/**'
+      - 'webui/office-editor/vendor/genoffice/packages/pptx-engine/src/chart-style.ts'
+      - 'webui/office-editor/vendor/genoffice/packages/pptx-engine/src/**/chart*.ts'
+      - 'webui/office-editor/tests/presets/**'
+      - 'webui/office-editor/scripts/preset-visual.mjs'
+      - 'webui/office-editor/scripts/preset-assets.mjs'
+  push:
+    paths:
+      - '.github/workflows/ppt-presets.yml'
+      - 'webui/office-editor/package.json'
+      - 'webui/office-editor/package-lock.json'
+      - 'webui/office-editor/mona/slides-presets.ts'
+      - 'webui/office-editor/mona/slides-presets.test.ts'
+      - 'webui/office-editor/mona/slides-preset-capacity.ts'
+      - 'webui/office-editor/mona/slides-preset-content.ts'
+      - 'webui/office-editor/mona/slides-content-page.ts'
+      - 'webui/office-editor/mona/slides-preset-layouts.ts'
+      - 'webui/office-editor/mona/slides-preset-selection.test.ts'
+      - 'webui/office-editor/mona/slides-capabilities.ts'
+      - 'webui/office-editor/mona/slides-capabilities.test.ts'
+      - 'webui/office-editor/mona/presets/**'
+      - 'webui/office-editor/mona/slides-entry.tsx'
+      - 'webui/office-editor/mona/slides-layout.ts'
+      - 'webui/office-editor/mona/slides-visual.tsx'
+      - 'webui/office-editor/mona/slides-font-metrics.ts'
+      - 'webui/office-editor/vendor/genoffice/packages/pptx-render/src/**'
+      - 'webui/office-editor/vendor/genoffice/packages/pptx-engine/src/chart-style.ts'
+      - 'webui/office-editor/vendor/genoffice/packages/pptx-engine/src/**/chart*.ts'
+      - 'webui/office-editor/tests/presets/**'
+      - 'webui/office-editor/scripts/preset-visual.mjs'
+      - 'webui/office-editor/scripts/preset-assets.mjs'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  preset-visual:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: webui/office-editor/package-lock.json
+
+      - name: Install locked Office dependencies
+        working-directory: webui/office-editor
+        run: npm ci
+
+      - name: Install browser harness dependency
+        working-directory: webui/office-editor
+        run: npm install --no-save --package-lock=false --ignore-scripts playwright@1.62.1
+
+      - name: Install Chromium
+        working-directory: webui/office-editor
+        run: npx playwright install --with-deps chromium
+
+      - name: Capture real preset snapshots
+        working-directory: webui/office-editor
+        env:
+          CI: 'true'
+          RUNTIME_NODE_MODULES: ${{ github.workspace }}/webui/office-editor/node_modules
+        run: node scripts/preset-visual.mjs --fixture tests/presets/catalog-content.json --check-candidates --max-pages 50 --output .artifacts/preset-visual-ci
+
+      - name: Capture extended preset snapshots
+        working-directory: webui/office-editor
+        env:
+          CI: 'true'
+          RUNTIME_NODE_MODULES: ${{ github.workspace }}/webui/office-editor/node_modules
+        run: node scripts/preset-visual.mjs --fixture tests/presets/extended-content.json --check-candidates --max-pages 50 --output .artifacts/preset-visual-extended-ci
+
+      - name: Upload visual evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ppt-preset-visual-${{ github.run_id }}
+          path: |
+            webui/office-editor/.artifacts/preset-visual-ci/**
+            webui/office-editor/.artifacts/preset-visual-extended-ci/**
+          if-no-files-found: ignore
+          retention-days: 7

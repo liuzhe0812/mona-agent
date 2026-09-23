@@ -1,0 +1,423 @@
+{
+  "schemaVersion": 1,
+  "canvas": {
+    "width": 1280,
+    "height": 720
+  },
+  "name": "parallel-five",
+  "intent": "五项真实并列内容采用编辑式对齐与分隔，不删成四项，不伪造流程箭头。",
+  "operations": [
+    {
+      "op": "slide_add_shape",
+      "payload": {
+        "slideId": "$slideId",
+        "shape": "rect",
+        "x": 0,
+        "y": 0,
+        "width": 1280,
+        "height": 720,
+        "fillColor": "#F6F4EF"
+      }
+    },
+    {
+      "op": "slide_add_text",
+      "payload": {
+        "slideId": "$slideId",
+        "text": "能力地图  /  CAPABILITIES",
+        "x": 72,
+        "y": 34,
+        "width": 950,
+        "height": 34,
+        "font": {
+          "fontFamily": "Microsoft YaHei",
+          "fontSize": 11,
+          "color": "#5B6D68",
+          "bold": false
+        }
+      }
+    },
+    {
+      "op": "slide_add_text",
+      "payload": {
+        "slideId": "$slideId",
+        "text": "五条路径，服务同一个交付目标",
+        "x": 72,
+        "y": 82,
+        "width": 1140,
+        "height": 85,
+        "font": {
+          "fontFamily": "Microsoft YaHei",
+          "fontSize": 31,
+          "color": "#172C2B",
+          "bold": true
+        }
+      }
+    },
+    {
+      "op": "slide_add_text",
+      "payload": {
+        "slideId": "$slideId",
+        "text": "各项能力并列协作，而不是必须依次执行的五个步骤。",
+        "x": 72,
+        "y": 179,
+        "width": 1140,
+        "height": 47,
+        "font": {
+          "fontFamily": "Microsoft YaHei",
+          "fontSize": 16,
+          "color": "#5B6D68",
+          "bold": false
+        }
+      }
+    },
+    {
+      "op": "slide_add_text",
+      "payload": {
+        "slideId": "$slideId",
+        "text": "01",
+        "x": 72,
+        "y": 252,
+        "width": 74,
+        "height": 50,
+        "font": {
+          "fontFamily": "Microsoft YaHei",
+          "fontSize": 22,
+          "color": "#25856B",
+          "bold": false
+        }
+      }
+    },
+    {
+      "op": "slide_add_text",
+      "payload": {
+        "slideId": "$slideId",
+        "text": "资料检索",
+        "x": 175,
+        "y": 252,
+        "width": 255,
+        "height": 52,
+        "font": {
+          "fontFamily": "Microsoft YaHei",
+          "fontSize": 21,
+          "color": "#172C2B",
+          "bold": true
+        }
+      }
+    },
+    {
+      "op": "slide_add_text",
+      "payload": {
+        "slideId": "$slideId",
+        "text": "把相关资料与来源放到工作上下文，而不是反复复制粘贴。",
+        "x": 473,
+        "y": 254,
+        "width": 725,
+        "height": 56,
+        "font": {
+          "fontFamily": "Microsoft YaHei",
+          "fontSize": 16,
+          "color": "#5B6D68",
+          "bold": false
+        }
+      }
+    },
+    {
+      "op": "slide_add_shape",
+      "payload": {
+        "slideId": "$slideId",
+        "shape": "rect",
+        "x": 175,
+        "y": 314,
+        "width": 1033,
+        "height": 1,
+        "fillColor": "#C9D2CC"
+      }
+    },
+    {
+      "op": "slide_add_text",
+      "payload": {
+        "slideId": "$slideId",
+        "text": "02",
+        "x": 72,
+        "y": 325,
+        "width": 74,
+        "height": 50,
+        "font": {
+          "fontFamily": "Microsoft YaHei",
+          "fontSize": 22,
+          "color": "#25856B",
+          "bold": false
+        }
+      }
+    },
+    {
+      "op": "slide_add_text",
+      "payload": {
+        "slideId": "$slideId",
+        "text": "内容组织",
+        "x": 175,
+        "y": 325,
+        "width": 255,
+        "height": 52,
+        "font": {
+          "fontFamily": "Microsoft YaHei",
+          "fontSize": 21,
+          "color": "#172C2B",
+          "bold": true
+        }
+      }
+    },
+    {
+      "op": "slide_add_text",
+      "payload": {
+        "slideId": "$slideId",
+        "text": "按目标重组信息，保留关键事实和证据之间的对应关系。",
+        "x": 473,
+        "y": 327,
+        "width": 725,
+        "height": 56,
+        "font": {
+          "fontFamily": "Microsoft YaHei",
+          "fontSize": 16,
+          "color": "#5B6D68",
+          "bold": false
+        }
+      }
+    },
+    {
+      "op": "slide_add_shape",
+      "payload": {
+        "slideId": "$slideId",
+        "shape": "rect",
+        "x": 175,
+        "y": 387,
+        "width": 1033,
+        "height": 1,
+        "fillColor": "#C9D2CC"
+      }
+    },
+    {
+      "op": "slide_add_text",
+      "payload": {
+        "slideId": "$slideId",
+        "text": "03",
+        "x": 72,
+        "y": 398,
+        "width": 74,
+        "height": 50,
+        "font": {
+          "fontFamily": "Microsoft YaHei",
+          "fontSize": 22,
+          "color": "#25856B",
+          "bold": false
+        }
+      }
+    },
+    {
+      "op": "slide_add_text",
+      "payload": {
+        "slideId": "$slideId",
+        "text": "图表表达",
+        "x": 175,
+        "y": 398,
+        "width": 255,
+        "height": 52,
+        "font": {
+          "fontFamily": "Microsoft YaHei",
+          "fontSize": 21,
+          "color": "#172C2B",
+          "bold": true
+        }
+      }
+    },
+    {
+      "op": "slide_add_text",
+      "payload": {
+        "slideId": "$slideId",
+        "text": "用可编辑数据图表解释变化，明确单位与比较口径。",
+        "x": 473,
+        "y": 400,
+        "width": 725,
+        "height": 56,
+        "font": {
+          "fontFamily": "Microsoft YaHei",
+          "fontSize": 16,
+          "color": "#5B6D68",
+          "bold": false
+        }
+      }
+    },
+    {
+      "op": "slide_add_shape",
+      "payload": {
+        "slideId": "$slideId",
+        "shape": "rect",
+        "x": 175,
+        "y": 460,
+        "width": 1033,
+        "height": 1,
+        "fillColor": "#C9D2CC"
+      }
+    },
+    {
+      "op": "slide_add_text",
+      "payload": {
+        "slideId": "$slideId",
+        "text": "04",
+        "x": 72,
+        "y": 471,
+        "width": 74,
+        "height": 50,
+        "font": {
+          "fontFamily": "Microsoft YaHei",
+          "fontSize": 22,
+          "color": "#25856B",
+          "bold": false
+        }
+      }
+    },
+    {
+      "op": "slide_add_text",
+      "payload": {
+        "slideId": "$slideId",
+        "text": "实时协作",
+        "x": 175,
+        "y": 471,
+        "width": 255,
+        "height": 52,
+        "font": {
+          "fontFamily": "Microsoft YaHei",
+          "fontSize": 21,
+          "color": "#172C2B",
+          "bold": true
+        }
+      }
+    },
+    {
+      "op": "slide_add_text",
+      "payload": {
+        "slideId": "$slideId",
+        "text": "用户可以修改任何已完成页面，后续工作尊重当前文档。",
+        "x": 473,
+        "y": 473,
+        "width": 725,
+        "height": 56,
+        "font": {
+          "fontFamily": "Microsoft YaHei",
+          "fontSize": 16,
+          "color": "#5B6D68",
+          "bold": false
+        }
+      }
+    },
+    {
+      "op": "slide_add_shape",
+      "payload": {
+        "slideId": "$slideId",
+        "shape": "rect",
+        "x": 175,
+        "y": 533,
+        "width": 1033,
+        "height": 1,
+        "fillColor": "#C9D2CC"
+      }
+    },
+    {
+      "op": "slide_add_text",
+      "payload": {
+        "slideId": "$slideId",
+        "text": "05",
+        "x": 72,
+        "y": 544,
+        "width": 74,
+        "height": 50,
+        "font": {
+          "fontFamily": "Microsoft YaHei",
+          "fontSize": 22,
+          "color": "#25856B",
+          "bold": false
+        }
+      }
+    },
+    {
+      "op": "slide_add_text",
+      "payload": {
+        "slideId": "$slideId",
+        "text": "成果交付",
+        "x": 175,
+        "y": 544,
+        "width": 255,
+        "height": 52,
+        "font": {
+          "fontFamily": "Microsoft YaHei",
+          "fontSize": 21,
+          "color": "#172C2B",
+          "bold": true
+        }
+      }
+    },
+    {
+      "op": "slide_add_text",
+      "payload": {
+        "slideId": "$slideId",
+        "text": "保存原生对象并导出 PPTX，让输出可以继续使用和修改。",
+        "x": 473,
+        "y": 546,
+        "width": 725,
+        "height": 56,
+        "font": {
+          "fontFamily": "Microsoft YaHei",
+          "fontSize": 16,
+          "color": "#5B6D68",
+          "bold": false
+        }
+      }
+    },
+    {
+      "op": "slide_add_shape",
+      "payload": {
+        "slideId": "$slideId",
+        "shape": "rect",
+        "x": 72,
+        "y": 647,
+        "width": 1136,
+        "height": 1,
+        "fillColor": "#C9D2CC"
+      }
+    },
+    {
+      "op": "slide_add_text",
+      "payload": {
+        "slideId": "$slideId",
+        "text": "MONA  /  原生设计示例 · 数据仅作演示",
+        "x": 72,
+        "y": 661,
+        "width": 980,
+        "height": 30,
+        "font": {
+          "fontFamily": "Microsoft YaHei",
+          "fontSize": 10,
+          "color": "#5B6D68",
+          "bold": false
+        }
+      }
+    },
+    {
+      "op": "slide_add_text",
+      "payload": {
+        "slideId": "$slideId",
+        "text": "02",
+        "x": 1160,
+        "y": 661,
+        "width": 48,
+        "height": 30,
+        "font": {
+          "fontFamily": "Microsoft YaHei",
+          "fontSize": 10,
+          "color": "#5B6D68",
+          "bold": false
+        }
+      }
+    }
+  ]
+}

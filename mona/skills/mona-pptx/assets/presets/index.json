@@ -1,0 +1,1499 @@
+{
+  "schemaVersion": 1,
+  "catalogSha256": "bbfc4a1017790750d1cd8d2a90a7ea27c29112dfea3d407b031c2e7484fbe0d2",
+  "extendedCatalogSha256": "19415f1946d3ee7ac7894b95a15cd30ce6e58b1eac87abc80e473a6bfb1c34a4",
+  "extendedBuilderSha256": "5437ee942feca511e794dd73f2b523b91643be6e571188626a51f6723c513754",
+  "fixtureSha256": "1a4038406127269b09b65d944a01ec332bbec2e342e1e2fc47ecd35128035e82",
+  "groups": {
+    "catalog": {
+      "fixtureSha256": "1a4038406127269b09b65d944a01ec332bbec2e342e1e2fc47ecd35128035e82",
+      "pages": [
+        {
+          "id": "dark-chart-insight",
+          "sha256": "c41217c6d9037dba0357748ad6075ffef717a37884888db6609bf0d485639108"
+        },
+        {
+          "id": "dark-product-hero",
+          "sha256": "c7ef8aff2a0751bf11ad696db6d29db8ff793864ad9ff6e9f2c56c9a92ea7ad2"
+        },
+        {
+          "id": "light-chart-insight",
+          "sha256": "7c204e14c71b30f5c9987f79636077060daecb2e68169bbc7ed72e8a8021a030"
+        },
+        {
+          "id": "light-comparison",
+          "sha256": "3317d03cb3f44ed8a4a3d88cf3924ea2008c433c7ef2b2435beddf40e0ad6128"
+        },
+        {
+          "id": "light-process-map",
+          "sha256": "2489af455d51b104214b3d2c4cb6a68f7d897a13e811ed6bd5e0796b19305f8a"
+        },
+        {
+          "id": "light-product-hero",
+          "sha256": "14a4d2194b49394d6b621258591f241f66e7c001d8224f0845f40ae623f6ea08"
+        },
+        {
+          "id": "dark-metric",
+          "sha256": "2b92c9fb5c819c37a8f8d1d2bfe1e7f28788a66962e933f33deaab1f53d818d7"
+        },
+        {
+          "id": "dark-comparison",
+          "sha256": "0c58760150a75c2039c05bd0cd4f2c7fc910c769bbab314607291f545da030d4"
+        },
+        {
+          "id": "dark-process-map",
+          "sha256": "de647bc365bde49417388da5904e485f7a16b070c27facb0103760c8d54875cf"
+        },
+        {
+          "id": "dark-architecture",
+          "sha256": "5593ae9b5bdc3cb85887648be7fc36d8563d62c3b9bf6c1a66667ca00809296b"
+        },
+        {
+          "id": "dark-case",
+          "sha256": "4a538e80106baa82a229383f4111137997a437fd6ee74ce6b76a0c156473fe52"
+        },
+        {
+          "id": "dark-overview",
+          "sha256": "a4c2871df58fadde6cec9de88466d1450a51e088cbfde90a2ed1f438ec6c3795"
+        },
+        {
+          "id": "dark-process-long",
+          "sha256": "0c888dbfdfff08d26d84c081fcaa06863d67fd9ff42e873282730f5ac5b56976"
+        },
+        {
+          "id": "light-metric",
+          "sha256": "eaf17824c710441ea0f9f543bfea7e3cf0e565655b68822549be30c657dcfdc6"
+        },
+        {
+          "id": "light-architecture",
+          "sha256": "4c8c55554048c298e8b089fa4a75cc938a6225993c3b4615681595076aabf8f6"
+        },
+        {
+          "id": "light-case",
+          "sha256": "604da5106212ea68f7dd3201dd256b1f8a02f856f2b9f3227e9a6463fea81338"
+        },
+        {
+          "id": "light-overview",
+          "sha256": "c2aa2d96caea2cae97f2e2eaada649745be27a1d291ac1836f1c9f0d4551adba"
+        },
+        {
+          "id": "light-process-long",
+          "sha256": "5c1869a009a78df552f797dc36bfb5c6a52ab248a1ed5909cbb278cc9d4081e1"
+        }
+      ]
+    },
+    "extended": {
+      "fixtureSha256": "d3c6554435be436188ec56d7f1bafdfb52feb2e108ed55937151af90ba183902",
+      "pages": [
+        {
+          "id": "dark-cover-split",
+          "sha256": "a44c5f4e528676b21cff1c312217dd8f0e3f06838a3eecd762c8d05678ffd357"
+        },
+        {
+          "id": "light-cover-split",
+          "sha256": "dfb4e133cabc3ec2770325c8cc2861c5cf7c00e48ca43b8ee8aafa8dd0520619"
+        },
+        {
+          "id": "dark-transition-statement",
+          "sha256": "c8ecdb11944cc6651844b42d166d892955c0880ecb8fd070fde395f9e17b1ad2"
+        },
+        {
+          "id": "light-transition-statement",
+          "sha256": "1ce4dfd1f842fb447034dbf437c734f75d8ba92b67c735a13f15ead525928cf7"
+        },
+        {
+          "id": "dark-closing-callout",
+          "sha256": "c72f8ba8f9e410009091ef1471cdf3d5fc7a78198348849cb3a3ed235276a51d"
+        },
+        {
+          "id": "light-closing-callout",
+          "sha256": "d86a72c174ba5bb068427ab20a305ef6d464280fb730a2ab2de82bc320ef0f94"
+        },
+        {
+          "id": "dark-editorial-essay",
+          "sha256": "90bcdab5943b0d48d3451ba4bc6a58e7fff6fe28f6e262bd60523d81f4c70bd5"
+        },
+        {
+          "id": "light-editorial-essay",
+          "sha256": "279d66edc872dffd513d9cc8f09fe583583076733d8e764db48b325f01d30496"
+        },
+        {
+          "id": "dark-team-grid",
+          "sha256": "5c5fe5ad45abf9d46c012ef923a9bbfb612e818b65b50f5fac2a455af0767a56"
+        },
+        {
+          "id": "light-team-grid",
+          "sha256": "5c2b8b97e5fa84f4b530de947fde43878e02ca7b13b9b9b4aa5ccef5bdf0b30b"
+        },
+        {
+          "id": "dark-parallel-columns",
+          "sha256": "1f4e4263029d3212d782ec15407697fa81303f09507c1d6b411fb65093e8cbb8"
+        },
+        {
+          "id": "light-parallel-columns",
+          "sha256": "500bd6bdeea108d4567970a10e0bfaeca271aa4b18f7fc3f1ac3a710c66bae1e"
+        },
+        {
+          "id": "dark-parallel-grid",
+          "sha256": "e930a9580b7c32a9b42e3cec7a03b3d604e7d1c252bc4cceea4a5efa4c2193f0"
+        },
+        {
+          "id": "light-parallel-grid",
+          "sha256": "a814aeea3aacc22b53e64b7c710966b1cdca9005f37b9a3182409368b4f9df9a"
+        },
+        {
+          "id": "dark-timeline",
+          "sha256": "771c071ae6a69c4c5074d969aca5dba78c05a0d3170497851779aab9d7ad9aed"
+        },
+        {
+          "id": "light-timeline",
+          "sha256": "f48abeab7ee507d81ab1dde254bf9f751782d9ff39fb3a7bdb8c6d9953eec5e8"
+        },
+        {
+          "id": "dark-matrix-2x2",
+          "sha256": "ac9eab0e24f1846e7d5f29acba3938fdab4fb76c0160abf52d9abd7afa50c2b6"
+        },
+        {
+          "id": "light-matrix-2x2",
+          "sha256": "3a96eb12383c4e45c6eb038b7a4dd53b37278561f6391b7df548ebd758400c1d"
+        },
+        {
+          "id": "dark-gallery",
+          "sha256": "42999f47029c7e5e7511a3365587e69d0fa149b42b6cb5fb14382308964cd370"
+        },
+        {
+          "id": "light-gallery",
+          "sha256": "d97557e058148fc4306b943ff18fb5e3f6fa69c6c0bce6289c0922b9de831157"
+        },
+        {
+          "id": "dark-comparison-split",
+          "sha256": "35d0dac1413a6fc5285a170deb56aee1be448132420c30d6b3ad3fa571f4d941"
+        },
+        {
+          "id": "light-comparison-split",
+          "sha256": "7aaaf401180c4842631afdfc1650a18f5366299f0e91afd964391ca84cc3b607"
+        },
+        {
+          "id": "dark-metric-spotlight",
+          "sha256": "6b8d38cf47b4a3c0cd99801ba6b61ceddc2387597b39aea67afa718955d11b6b"
+        },
+        {
+          "id": "light-metric-spotlight",
+          "sha256": "cdfcb8349350db1cadf38c9293aa260c142502658340d0c2ad81a0e4747ff6d3"
+        },
+        {
+          "id": "dark-process-steps",
+          "sha256": "b878ed2a5fd02c09a961b0c8ccdd7b9d0d7eec39e957c35cdf42f32d907f6ed5"
+        },
+        {
+          "id": "light-process-steps",
+          "sha256": "4aa907f0424a3d4465e832194627de6d2455cecac38acb8b5894066377ea5d88"
+        },
+        {
+          "id": "dark-hierarchy-branch",
+          "sha256": "bf2f01266143df3323e574a15760a916617b3369758082c6041f4716f47f987d"
+        },
+        {
+          "id": "light-hierarchy-branch",
+          "sha256": "5d43684577db0d88c4d3106c1daa44a5f5459d80427a261686c52f8fa995f921"
+        },
+        {
+          "id": "dark-chart-evidence",
+          "sha256": "9d751cd8428db10c0d5a5285a56c839846a86bd0823ad194c39c1b5e50359d24"
+        },
+        {
+          "id": "light-chart-evidence",
+          "sha256": "19de2e89cd2da580d7e816bf32620dc1c2b76e148723f904b16ba55eb262a045"
+        }
+      ]
+    }
+  },
+  "entries": [
+    {
+      "id": "dark-chart-insight",
+      "family": "chart-insight",
+      "theme": "dark-product",
+      "capacity": {
+        "titleCharsMax": 52,
+        "summaryCharsMax": 25,
+        "takeawayCharsMax": 8,
+        "itemsMax": 2,
+        "itemCharsMax": 34,
+        "nodesMax": 0,
+        "nodeCharsMax": 0,
+        "seriesMax": 3,
+        "categoriesMax": 6,
+        "imageRequired": false
+      },
+      "asset": "presets/dark-chart-insight.png",
+      "sha256": "c41217c6d9037dba0357748ad6075ffef717a37884888db6609bf0d485639108",
+      "sourceGroup": "catalog",
+      "roles": [],
+      "relation": null,
+      "fixtureSha256": "1a4038406127269b09b65d944a01ec332bbec2e342e1e2fc47ecd35128035e82"
+    },
+    {
+      "id": "dark-product-hero",
+      "family": "claim-image",
+      "theme": "dark-product",
+      "capacity": {
+        "titleCharsMax": 24,
+        "summaryCharsMax": 36,
+        "takeawayCharsMax": 0,
+        "itemsMax": 2,
+        "itemCharsMax": 40,
+        "nodesMax": 0,
+        "nodeCharsMax": 0,
+        "seriesMax": 0,
+        "categoriesMax": 0,
+        "imageRequired": true
+      },
+      "asset": "presets/dark-product-hero.png",
+      "sha256": "c7ef8aff2a0751bf11ad696db6d29db8ff793864ad9ff6e9f2c56c9a92ea7ad2",
+      "sourceGroup": "catalog",
+      "roles": [],
+      "relation": null,
+      "fixtureSha256": "1a4038406127269b09b65d944a01ec332bbec2e342e1e2fc47ecd35128035e82"
+    },
+    {
+      "id": "light-chart-insight",
+      "family": "chart-insight",
+      "theme": "light-editorial",
+      "capacity": {
+        "titleCharsMax": 22,
+        "summaryCharsMax": 40,
+        "takeawayCharsMax": 8,
+        "itemsMax": 2,
+        "itemCharsMax": 40,
+        "nodesMax": 0,
+        "nodeCharsMax": 0,
+        "seriesMax": 3,
+        "categoriesMax": 8,
+        "imageRequired": false
+      },
+      "asset": "presets/light-chart-insight.png",
+      "sha256": "7c204e14c71b30f5c9987f79636077060daecb2e68169bbc7ed72e8a8021a030",
+      "sourceGroup": "catalog",
+      "roles": [],
+      "relation": null,
+      "fixtureSha256": "1a4038406127269b09b65d944a01ec332bbec2e342e1e2fc47ecd35128035e82"
+    },
+    {
+      "id": "light-comparison",
+      "family": "comparison",
+      "theme": "light-editorial",
+      "capacity": {
+        "titleCharsMax": 22,
+        "summaryCharsMax": 40,
+        "takeawayCharsMax": 0,
+        "itemsMax": 2,
+        "itemCharsMax": 144,
+        "nodesMax": 0,
+        "nodeCharsMax": 0,
+        "seriesMax": 0,
+        "categoriesMax": 0,
+        "imageRequired": false
+      },
+      "asset": "presets/light-comparison.png",
+      "sha256": "3317d03cb3f44ed8a4a3d88cf3924ea2008c433c7ef2b2435beddf40e0ad6128",
+      "sourceGroup": "catalog",
+      "roles": [],
+      "relation": null,
+      "fixtureSha256": "1a4038406127269b09b65d944a01ec332bbec2e342e1e2fc47ecd35128035e82"
+    },
+    {
+      "id": "light-process-map",
+      "family": "process-map",
+      "theme": "light-editorial",
+      "capacity": {
+        "titleCharsMax": 22,
+        "summaryCharsMax": 40,
+        "takeawayCharsMax": 0,
+        "itemsMax": 3,
+        "itemCharsMax": 60,
+        "nodesMax": 3,
+        "nodeCharsMax": 8,
+        "seriesMax": 0,
+        "categoriesMax": 0,
+        "imageRequired": false,
+        "nodesMin": 3
+      },
+      "asset": "presets/light-process-map.png",
+      "sha256": "2489af455d51b104214b3d2c4cb6a68f7d897a13e811ed6bd5e0796b19305f8a",
+      "sourceGroup": "catalog",
+      "roles": [],
+      "relation": null,
+      "fixtureSha256": "1a4038406127269b09b65d944a01ec332bbec2e342e1e2fc47ecd35128035e82"
+    },
+    {
+      "id": "light-product-hero",
+      "family": "claim-image",
+      "theme": "light-editorial",
+      "capacity": {
+        "titleCharsMax": 22,
+        "summaryCharsMax": 48,
+        "takeawayCharsMax": 0,
+        "itemsMax": 2,
+        "itemCharsMax": 50,
+        "nodesMax": 0,
+        "nodeCharsMax": 10,
+        "seriesMax": 0,
+        "categoriesMax": 0,
+        "imageRequired": true
+      },
+      "asset": "presets/light-product-hero.png",
+      "sha256": "14a4d2194b49394d6b621258591f241f66e7c001d8224f0845f40ae623f6ea08",
+      "sourceGroup": "catalog",
+      "roles": [],
+      "relation": null,
+      "fixtureSha256": "1a4038406127269b09b65d944a01ec332bbec2e342e1e2fc47ecd35128035e82"
+    },
+    {
+      "id": "dark-metric",
+      "family": "spotlight",
+      "theme": "dark-product",
+      "capacity": {
+        "titleCharsMax": 22,
+        "summaryCharsMax": 48,
+        "takeawayCharsMax": 5,
+        "itemsMax": 2,
+        "itemCharsMax": 32,
+        "nodesMax": 0,
+        "nodeCharsMax": 10,
+        "seriesMax": 0,
+        "categoriesMax": 0,
+        "imageRequired": false
+      },
+      "asset": "presets/dark-metric.png",
+      "sha256": "2b92c9fb5c819c37a8f8d1d2bfe1e7f28788a66962e933f33deaab1f53d818d7",
+      "sourceGroup": "catalog",
+      "roles": [],
+      "relation": null,
+      "fixtureSha256": "1a4038406127269b09b65d944a01ec332bbec2e342e1e2fc47ecd35128035e82"
+    },
+    {
+      "id": "dark-comparison",
+      "family": "comparison",
+      "theme": "dark-product",
+      "capacity": {
+        "titleCharsMax": 22,
+        "summaryCharsMax": 40,
+        "takeawayCharsMax": 0,
+        "itemsMax": 2,
+        "itemCharsMax": 100,
+        "nodesMax": 0,
+        "nodeCharsMax": 0,
+        "seriesMax": 0,
+        "categoriesMax": 0,
+        "imageRequired": false
+      },
+      "asset": "presets/dark-comparison.png",
+      "sha256": "0c58760150a75c2039c05bd0cd4f2c7fc910c769bbab314607291f545da030d4",
+      "sourceGroup": "catalog",
+      "roles": [],
+      "relation": null,
+      "fixtureSha256": "1a4038406127269b09b65d944a01ec332bbec2e342e1e2fc47ecd35128035e82"
+    },
+    {
+      "id": "dark-process-map",
+      "family": "process-map",
+      "theme": "dark-product",
+      "capacity": {
+        "titleCharsMax": 22,
+        "summaryCharsMax": 40,
+        "takeawayCharsMax": 0,
+        "itemsMax": 3,
+        "itemCharsMax": 60,
+        "nodesMax": 3,
+        "nodeCharsMax": 8,
+        "seriesMax": 0,
+        "categoriesMax": 0,
+        "imageRequired": false,
+        "nodesMin": 3
+      },
+      "asset": "presets/dark-process-map.png",
+      "sha256": "de647bc365bde49417388da5904e485f7a16b070c27facb0103760c8d54875cf",
+      "sourceGroup": "catalog",
+      "roles": [],
+      "relation": null,
+      "fixtureSha256": "1a4038406127269b09b65d944a01ec332bbec2e342e1e2fc47ecd35128035e82"
+    },
+    {
+      "id": "dark-architecture",
+      "family": "hierarchy",
+      "theme": "dark-product",
+      "capacity": {
+        "titleCharsMax": 22,
+        "summaryCharsMax": 45,
+        "takeawayCharsMax": 0,
+        "itemsMax": 3,
+        "itemCharsMax": 55,
+        "nodesMax": 4,
+        "nodeCharsMax": 8,
+        "seriesMax": 0,
+        "categoriesMax": 0,
+        "imageRequired": false,
+        "nodesMin": 4
+      },
+      "asset": "presets/dark-architecture.png",
+      "sha256": "5593ae9b5bdc3cb85887648be7fc36d8563d62c3b9bf6c1a66667ca00809296b",
+      "sourceGroup": "catalog",
+      "roles": [],
+      "relation": null,
+      "fixtureSha256": "1a4038406127269b09b65d944a01ec332bbec2e342e1e2fc47ecd35128035e82"
+    },
+    {
+      "id": "dark-case",
+      "family": "case",
+      "theme": "dark-product",
+      "capacity": {
+        "titleCharsMax": 22,
+        "summaryCharsMax": 55,
+        "takeawayCharsMax": 0,
+        "itemsMax": 3,
+        "itemCharsMax": 40,
+        "nodesMax": 3,
+        "nodeCharsMax": 8,
+        "seriesMax": 0,
+        "categoriesMax": 0,
+        "imageRequired": true,
+        "nodesMin": 3
+      },
+      "asset": "presets/dark-case.png",
+      "sha256": "4a538e80106baa82a229383f4111137997a437fd6ee74ce6b76a0c156473fe52",
+      "sourceGroup": "catalog",
+      "roles": [],
+      "relation": null,
+      "fixtureSha256": "1a4038406127269b09b65d944a01ec332bbec2e342e1e2fc47ecd35128035e82"
+    },
+    {
+      "id": "dark-overview",
+      "family": "overview",
+      "theme": "dark-product",
+      "capacity": {
+        "titleCharsMax": 22,
+        "summaryCharsMax": 45,
+        "takeawayCharsMax": 0,
+        "itemsMax": 4,
+        "itemCharsMax": 50,
+        "nodesMax": 4,
+        "nodeCharsMax": 10,
+        "seriesMax": 0,
+        "categoriesMax": 0,
+        "imageRequired": false,
+        "nodesMin": 4
+      },
+      "asset": "presets/dark-overview.png",
+      "sha256": "a4c2871df58fadde6cec9de88466d1450a51e088cbfde90a2ed1f438ec6c3795",
+      "sourceGroup": "catalog",
+      "roles": [],
+      "relation": null,
+      "fixtureSha256": "1a4038406127269b09b65d944a01ec332bbec2e342e1e2fc47ecd35128035e82"
+    },
+    {
+      "id": "dark-process-long",
+      "family": "process-map",
+      "theme": "dark-product",
+      "capacity": {
+        "titleCharsMax": 22,
+        "summaryCharsMax": 45,
+        "takeawayCharsMax": 0,
+        "itemsMax": 4,
+        "itemCharsMax": 64,
+        "nodesMax": 4,
+        "nodeCharsMax": 8,
+        "seriesMax": 0,
+        "categoriesMax": 0,
+        "imageRequired": false,
+        "nodesMin": 2,
+        "itemsMin": 2
+      },
+      "asset": "presets/dark-process-long.png",
+      "sha256": "0c888dbfdfff08d26d84c081fcaa06863d67fd9ff42e873282730f5ac5b56976",
+      "sourceGroup": "catalog",
+      "roles": [],
+      "relation": null,
+      "fixtureSha256": "1a4038406127269b09b65d944a01ec332bbec2e342e1e2fc47ecd35128035e82"
+    },
+    {
+      "id": "light-metric",
+      "family": "spotlight",
+      "theme": "light-editorial",
+      "capacity": {
+        "titleCharsMax": 22,
+        "summaryCharsMax": 48,
+        "takeawayCharsMax": 5,
+        "itemsMax": 2,
+        "itemCharsMax": 32,
+        "nodesMax": 0,
+        "nodeCharsMax": 10,
+        "seriesMax": 0,
+        "categoriesMax": 0,
+        "imageRequired": false
+      },
+      "asset": "presets/light-metric.png",
+      "sha256": "eaf17824c710441ea0f9f543bfea7e3cf0e565655b68822549be30c657dcfdc6",
+      "sourceGroup": "catalog",
+      "roles": [],
+      "relation": null,
+      "fixtureSha256": "1a4038406127269b09b65d944a01ec332bbec2e342e1e2fc47ecd35128035e82"
+    },
+    {
+      "id": "light-architecture",
+      "family": "hierarchy",
+      "theme": "light-editorial",
+      "capacity": {
+        "titleCharsMax": 22,
+        "summaryCharsMax": 45,
+        "takeawayCharsMax": 0,
+        "itemsMax": 3,
+        "itemCharsMax": 55,
+        "nodesMax": 4,
+        "nodeCharsMax": 8,
+        "seriesMax": 0,
+        "categoriesMax": 0,
+        "imageRequired": false,
+        "nodesMin": 4
+      },
+      "asset": "presets/light-architecture.png",
+      "sha256": "4c8c55554048c298e8b089fa4a75cc938a6225993c3b4615681595076aabf8f6",
+      "sourceGroup": "catalog",
+      "roles": [],
+      "relation": null,
+      "fixtureSha256": "1a4038406127269b09b65d944a01ec332bbec2e342e1e2fc47ecd35128035e82"
+    },
+    {
+      "id": "light-case",
+      "family": "case",
+      "theme": "light-editorial",
+      "capacity": {
+        "titleCharsMax": 22,
+        "summaryCharsMax": 55,
+        "takeawayCharsMax": 0,
+        "itemsMax": 3,
+        "itemCharsMax": 40,
+        "nodesMax": 3,
+        "nodeCharsMax": 8,
+        "seriesMax": 0,
+        "categoriesMax": 0,
+        "imageRequired": true,
+        "nodesMin": 3
+      },
+      "asset": "presets/light-case.png",
+      "sha256": "604da5106212ea68f7dd3201dd256b1f8a02f856f2b9f3227e9a6463fea81338",
+      "sourceGroup": "catalog",
+      "roles": [],
+      "relation": null,
+      "fixtureSha256": "1a4038406127269b09b65d944a01ec332bbec2e342e1e2fc47ecd35128035e82"
+    },
+    {
+      "id": "light-overview",
+      "family": "overview",
+      "theme": "light-editorial",
+      "capacity": {
+        "titleCharsMax": 22,
+        "summaryCharsMax": 45,
+        "takeawayCharsMax": 0,
+        "itemsMax": 4,
+        "itemCharsMax": 50,
+        "nodesMax": 4,
+        "nodeCharsMax": 10,
+        "seriesMax": 0,
+        "categoriesMax": 0,
+        "imageRequired": false,
+        "nodesMin": 4
+      },
+      "asset": "presets/light-overview.png",
+      "sha256": "c2aa2d96caea2cae97f2e2eaada649745be27a1d291ac1836f1c9f0d4551adba",
+      "sourceGroup": "catalog",
+      "roles": [],
+      "relation": null,
+      "fixtureSha256": "1a4038406127269b09b65d944a01ec332bbec2e342e1e2fc47ecd35128035e82"
+    },
+    {
+      "id": "light-process-long",
+      "family": "process-map",
+      "theme": "light-editorial",
+      "capacity": {
+        "titleCharsMax": 22,
+        "summaryCharsMax": 45,
+        "takeawayCharsMax": 0,
+        "itemsMax": 4,
+        "itemCharsMax": 64,
+        "nodesMax": 4,
+        "nodeCharsMax": 8,
+        "seriesMax": 0,
+        "categoriesMax": 0,
+        "imageRequired": false,
+        "nodesMin": 2,
+        "itemsMin": 2
+      },
+      "asset": "presets/light-process-long.png",
+      "sha256": "5c1869a009a78df552f797dc36bfb5c6a52ab248a1ed5909cbb278cc9d4081e1",
+      "sourceGroup": "catalog",
+      "roles": [],
+      "relation": null,
+      "fixtureSha256": "1a4038406127269b09b65d944a01ec332bbec2e342e1e2fc47ecd35128035e82"
+    },
+    {
+      "id": "dark-cover-split",
+      "family": "cover",
+      "theme": "dark-product",
+      "capacity": {
+        "titleCharsMax": 18,
+        "summaryCharsMax": 30,
+        "takeawayCharsMax": 18,
+        "itemsMax": 0,
+        "itemCharsMax": 0,
+        "nodesMax": 0,
+        "nodeCharsMax": 0,
+        "seriesMax": 0,
+        "categoriesMax": 0,
+        "imageRequired": false,
+        "imagesMin": 1,
+        "imagesMax": 1
+      },
+      "asset": "presets/dark-cover-split.png",
+      "sha256": "a44c5f4e528676b21cff1c312217dd8f0e3f06838a3eecd762c8d05678ffd357",
+      "sourceGroup": "extended",
+      "roles": [
+        "cover",
+        "statement",
+        "image"
+      ],
+      "relation": "none",
+      "fixtureSha256": "d3c6554435be436188ec56d7f1bafdfb52feb2e108ed55937151af90ba183902"
+    },
+    {
+      "id": "light-cover-split",
+      "family": "cover",
+      "theme": "light-editorial",
+      "capacity": {
+        "titleCharsMax": 18,
+        "summaryCharsMax": 30,
+        "takeawayCharsMax": 18,
+        "itemsMax": 0,
+        "itemCharsMax": 0,
+        "nodesMax": 0,
+        "nodeCharsMax": 0,
+        "seriesMax": 0,
+        "categoriesMax": 0,
+        "imageRequired": false,
+        "imagesMin": 1,
+        "imagesMax": 1
+      },
+      "asset": "presets/light-cover-split.png",
+      "sha256": "dfb4e133cabc3ec2770325c8cc2861c5cf7c00e48ca43b8ee8aafa8dd0520619",
+      "sourceGroup": "extended",
+      "roles": [
+        "cover",
+        "statement",
+        "image"
+      ],
+      "relation": "none",
+      "fixtureSha256": "d3c6554435be436188ec56d7f1bafdfb52feb2e108ed55937151af90ba183902"
+    },
+    {
+      "id": "dark-transition-statement",
+      "family": "editorial",
+      "theme": "dark-product",
+      "capacity": {
+        "titleCharsMax": 18,
+        "summaryCharsMax": 30,
+        "takeawayCharsMax": 18,
+        "itemsMax": 0,
+        "itemCharsMax": 0,
+        "nodesMax": 0,
+        "nodeCharsMax": 0,
+        "seriesMax": 0,
+        "categoriesMax": 0,
+        "imageRequired": false
+      },
+      "asset": "presets/dark-transition-statement.png",
+      "sha256": "c8ecdb11944cc6651844b42d166d892955c0880ecb8fd070fde395f9e17b1ad2",
+      "sourceGroup": "extended",
+      "roles": [
+        "transition",
+        "statement",
+        "ambient"
+      ],
+      "relation": "none",
+      "fixtureSha256": "d3c6554435be436188ec56d7f1bafdfb52feb2e108ed55937151af90ba183902"
+    },
+    {
+      "id": "light-transition-statement",
+      "family": "editorial",
+      "theme": "light-editorial",
+      "capacity": {
+        "titleCharsMax": 18,
+        "summaryCharsMax": 30,
+        "takeawayCharsMax": 18,
+        "itemsMax": 0,
+        "itemCharsMax": 0,
+        "nodesMax": 0,
+        "nodeCharsMax": 0,
+        "seriesMax": 0,
+        "categoriesMax": 0,
+        "imageRequired": false
+      },
+      "asset": "presets/light-transition-statement.png",
+      "sha256": "1ce4dfd1f842fb447034dbf437c734f75d8ba92b67c735a13f15ead525928cf7",
+      "sourceGroup": "extended",
+      "roles": [
+        "transition",
+        "statement",
+        "ambient"
+      ],
+      "relation": "none",
+      "fixtureSha256": "d3c6554435be436188ec56d7f1bafdfb52feb2e108ed55937151af90ba183902"
+    },
+    {
+      "id": "dark-closing-callout",
+      "family": "closing",
+      "theme": "dark-product",
+      "capacity": {
+        "titleCharsMax": 18,
+        "summaryCharsMax": 30,
+        "takeawayCharsMax": 18,
+        "itemsMax": 3,
+        "itemsMin": 0,
+        "itemCharsMax": 28,
+        "nodesMax": 0,
+        "nodeCharsMax": 0,
+        "seriesMax": 0,
+        "categoriesMax": 0,
+        "imageRequired": false
+      },
+      "asset": "presets/dark-closing-callout.png",
+      "sha256": "c72f8ba8f9e410009091ef1471cdf3d5fc7a78198348849cb3a3ed235276a51d",
+      "sourceGroup": "extended",
+      "roles": [
+        "closing",
+        "result",
+        "actions"
+      ],
+      "relation": "none",
+      "fixtureSha256": "d3c6554435be436188ec56d7f1bafdfb52feb2e108ed55937151af90ba183902"
+    },
+    {
+      "id": "light-closing-callout",
+      "family": "closing",
+      "theme": "light-editorial",
+      "capacity": {
+        "titleCharsMax": 18,
+        "summaryCharsMax": 30,
+        "takeawayCharsMax": 18,
+        "itemsMax": 3,
+        "itemsMin": 0,
+        "itemCharsMax": 28,
+        "nodesMax": 0,
+        "nodeCharsMax": 0,
+        "seriesMax": 0,
+        "categoriesMax": 0,
+        "imageRequired": false
+      },
+      "asset": "presets/light-closing-callout.png",
+      "sha256": "d86a72c174ba5bb068427ab20a305ef6d464280fb730a2ab2de82bc320ef0f94",
+      "sourceGroup": "extended",
+      "roles": [
+        "closing",
+        "result",
+        "actions"
+      ],
+      "relation": "none",
+      "fixtureSha256": "d3c6554435be436188ec56d7f1bafdfb52feb2e108ed55937151af90ba183902"
+    },
+    {
+      "id": "dark-editorial-essay",
+      "family": "editorial",
+      "theme": "dark-product",
+      "capacity": {
+        "titleCharsMax": 18,
+        "summaryCharsMax": 30,
+        "takeawayCharsMax": 16,
+        "itemsMax": 4,
+        "itemCharsMax": 24,
+        "nodesMax": 0,
+        "nodeCharsMax": 0,
+        "seriesMax": 0,
+        "categoriesMax": 0,
+        "imageRequired": false
+      },
+      "asset": "presets/dark-editorial-essay.png",
+      "sha256": "90bcdab5943b0d48d3451ba4bc6a58e7fff6fe28f6e262bd60523d81f4c70bd5",
+      "sourceGroup": "extended",
+      "roles": [
+        "statement",
+        "context",
+        "observation"
+      ],
+      "relation": "none",
+      "fixtureSha256": "d3c6554435be436188ec56d7f1bafdfb52feb2e108ed55937151af90ba183902"
+    },
+    {
+      "id": "light-editorial-essay",
+      "family": "editorial",
+      "theme": "light-editorial",
+      "capacity": {
+        "titleCharsMax": 18,
+        "summaryCharsMax": 30,
+        "takeawayCharsMax": 16,
+        "itemsMax": 4,
+        "itemCharsMax": 24,
+        "nodesMax": 0,
+        "nodeCharsMax": 0,
+        "seriesMax": 0,
+        "categoriesMax": 0,
+        "imageRequired": false
+      },
+      "asset": "presets/light-editorial-essay.png",
+      "sha256": "279d66edc872dffd513d9cc8f09fe583583076733d8e764db48b325f01d30496",
+      "sourceGroup": "extended",
+      "roles": [
+        "statement",
+        "context",
+        "observation"
+      ],
+      "relation": "none",
+      "fixtureSha256": "d3c6554435be436188ec56d7f1bafdfb52feb2e108ed55937151af90ba183902"
+    },
+    {
+      "id": "dark-team-grid",
+      "family": "team",
+      "theme": "dark-product",
+      "capacity": {
+        "titleCharsMax": 18,
+        "summaryCharsMax": 30,
+        "takeawayCharsMax": 18,
+        "itemsMax": 4,
+        "itemsMin": 2,
+        "itemCharsMax": 18,
+        "nodesMax": 4,
+        "nodesMin": 2,
+        "nodeCharsMax": 12,
+        "seriesMax": 0,
+        "categoriesMax": 0,
+        "imageRequired": false,
+        "imagesMax": 4
+      },
+      "asset": "presets/dark-team-grid.png",
+      "sha256": "5c5fe5ad45abf9d46c012ef923a9bbfb612e818b65b50f5fac2a455af0767a56",
+      "sourceGroup": "extended",
+      "roles": [
+        "team",
+        "relationship",
+        "context"
+      ],
+      "relation": "hierarchy",
+      "fixtureSha256": "d3c6554435be436188ec56d7f1bafdfb52feb2e108ed55937151af90ba183902"
+    },
+    {
+      "id": "light-team-grid",
+      "family": "team",
+      "theme": "light-editorial",
+      "capacity": {
+        "titleCharsMax": 18,
+        "summaryCharsMax": 30,
+        "takeawayCharsMax": 18,
+        "itemsMax": 4,
+        "itemsMin": 2,
+        "itemCharsMax": 18,
+        "nodesMax": 4,
+        "nodesMin": 2,
+        "nodeCharsMax": 12,
+        "seriesMax": 0,
+        "categoriesMax": 0,
+        "imageRequired": false,
+        "imagesMax": 4
+      },
+      "asset": "presets/light-team-grid.png",
+      "sha256": "5c2b8b97e5fa84f4b530de947fde43878e02ca7b13b9b9b4aa5ccef5bdf0b30b",
+      "sourceGroup": "extended",
+      "roles": [
+        "team",
+        "relationship",
+        "context"
+      ],
+      "relation": "hierarchy",
+      "fixtureSha256": "d3c6554435be436188ec56d7f1bafdfb52feb2e108ed55937151af90ba183902"
+    },
+    {
+      "id": "dark-parallel-columns",
+      "family": "parallel",
+      "theme": "dark-product",
+      "capacity": {
+        "titleCharsMax": 18,
+        "summaryCharsMax": 30,
+        "takeawayCharsMax": 18,
+        "itemsMax": 4,
+        "itemsMin": 2,
+        "itemCharsMax": 40,
+        "nodesMax": 4,
+        "nodesMin": 2,
+        "nodeCharsMax": 10,
+        "seriesMax": 0,
+        "categoriesMax": 0,
+        "imageRequired": false
+      },
+      "asset": "presets/dark-parallel-columns.png",
+      "sha256": "1f4e4263029d3212d782ec15407697fa81303f09507c1d6b411fb65093e8cbb8",
+      "sourceGroup": "extended",
+      "roles": [
+        "breakdown",
+        "comparison",
+        "context"
+      ],
+      "relation": "parallel",
+      "fixtureSha256": "d3c6554435be436188ec56d7f1bafdfb52feb2e108ed55937151af90ba183902"
+    },
+    {
+      "id": "light-parallel-columns",
+      "family": "parallel",
+      "theme": "light-editorial",
+      "capacity": {
+        "titleCharsMax": 18,
+        "summaryCharsMax": 30,
+        "takeawayCharsMax": 18,
+        "itemsMax": 4,
+        "itemsMin": 2,
+        "itemCharsMax": 40,
+        "nodesMax": 4,
+        "nodesMin": 2,
+        "nodeCharsMax": 10,
+        "seriesMax": 0,
+        "categoriesMax": 0,
+        "imageRequired": false
+      },
+      "asset": "presets/light-parallel-columns.png",
+      "sha256": "500bd6bdeea108d4567970a10e0bfaeca271aa4b18f7fc3f1ac3a710c66bae1e",
+      "sourceGroup": "extended",
+      "roles": [
+        "breakdown",
+        "comparison",
+        "context"
+      ],
+      "relation": "parallel",
+      "fixtureSha256": "d3c6554435be436188ec56d7f1bafdfb52feb2e108ed55937151af90ba183902"
+    },
+    {
+      "id": "dark-parallel-grid",
+      "family": "parallel",
+      "theme": "dark-product",
+      "capacity": {
+        "titleCharsMax": 18,
+        "summaryCharsMax": 30,
+        "takeawayCharsMax": 18,
+        "itemsMax": 6,
+        "itemsMin": 5,
+        "itemCharsMax": 24,
+        "nodesMax": 6,
+        "nodesMin": 5,
+        "nodeCharsMax": 6,
+        "seriesMax": 0,
+        "categoriesMax": 0,
+        "imageRequired": false
+      },
+      "asset": "presets/dark-parallel-grid.png",
+      "sha256": "e930a9580b7c32a9b42e3cec7a03b3d604e7d1c252bc4cceea4a5efa4c2193f0",
+      "sourceGroup": "extended",
+      "roles": [
+        "breakdown",
+        "comparison",
+        "distribution"
+      ],
+      "relation": "parallel",
+      "fixtureSha256": "d3c6554435be436188ec56d7f1bafdfb52feb2e108ed55937151af90ba183902"
+    },
+    {
+      "id": "light-parallel-grid",
+      "family": "parallel",
+      "theme": "light-editorial",
+      "capacity": {
+        "titleCharsMax": 18,
+        "summaryCharsMax": 30,
+        "takeawayCharsMax": 18,
+        "itemsMax": 6,
+        "itemsMin": 5,
+        "itemCharsMax": 24,
+        "nodesMax": 6,
+        "nodesMin": 5,
+        "nodeCharsMax": 6,
+        "seriesMax": 0,
+        "categoriesMax": 0,
+        "imageRequired": false
+      },
+      "asset": "presets/light-parallel-grid.png",
+      "sha256": "a814aeea3aacc22b53e64b7c710966b1cdca9005f37b9a3182409368b4f9df9a",
+      "sourceGroup": "extended",
+      "roles": [
+        "breakdown",
+        "comparison",
+        "distribution"
+      ],
+      "relation": "parallel",
+      "fixtureSha256": "d3c6554435be436188ec56d7f1bafdfb52feb2e108ed55937151af90ba183902"
+    },
+    {
+      "id": "dark-timeline",
+      "family": "timeline",
+      "theme": "dark-product",
+      "capacity": {
+        "titleCharsMax": 18,
+        "summaryCharsMax": 30,
+        "takeawayCharsMax": 18,
+        "itemsMax": 5,
+        "itemsMin": 2,
+        "itemCharsMax": 24,
+        "nodesMax": 5,
+        "nodesMin": 2,
+        "nodeCharsMax": 8,
+        "seriesMax": 0,
+        "categoriesMax": 0,
+        "imageRequired": false
+      },
+      "asset": "presets/dark-timeline.png",
+      "sha256": "771c071ae6a69c4c5074d969aca5dba78c05a0d3170497851779aab9d7ad9aed",
+      "sourceGroup": "extended",
+      "roles": [
+        "trend",
+        "process",
+        "actions"
+      ],
+      "relation": "sequence",
+      "fixtureSha256": "d3c6554435be436188ec56d7f1bafdfb52feb2e108ed55937151af90ba183902"
+    },
+    {
+      "id": "light-timeline",
+      "family": "timeline",
+      "theme": "light-editorial",
+      "capacity": {
+        "titleCharsMax": 18,
+        "summaryCharsMax": 30,
+        "takeawayCharsMax": 18,
+        "itemsMax": 5,
+        "itemsMin": 2,
+        "itemCharsMax": 24,
+        "nodesMax": 5,
+        "nodesMin": 2,
+        "nodeCharsMax": 8,
+        "seriesMax": 0,
+        "categoriesMax": 0,
+        "imageRequired": false
+      },
+      "asset": "presets/light-timeline.png",
+      "sha256": "f48abeab7ee507d81ab1dde254bf9f751782d9ff39fb3a7bdb8c6d9953eec5e8",
+      "sourceGroup": "extended",
+      "roles": [
+        "trend",
+        "process",
+        "actions"
+      ],
+      "relation": "sequence",
+      "fixtureSha256": "d3c6554435be436188ec56d7f1bafdfb52feb2e108ed55937151af90ba183902"
+    },
+    {
+      "id": "dark-matrix-2x2",
+      "family": "matrix",
+      "theme": "dark-product",
+      "capacity": {
+        "titleCharsMax": 18,
+        "summaryCharsMax": 30,
+        "takeawayCharsMax": 18,
+        "itemsMax": 4,
+        "itemsMin": 4,
+        "itemCharsMax": 30,
+        "nodesMax": 4,
+        "nodesMin": 4,
+        "nodeCharsMax": 18,
+        "seriesMax": 0,
+        "categoriesMax": 0,
+        "imageRequired": false
+      },
+      "asset": "presets/dark-matrix-2x2.png",
+      "sha256": "ac9eab0e24f1846e7d5f29acba3938fdab4fb76c0160abf52d9abd7afa50c2b6",
+      "sourceGroup": "extended",
+      "roles": [
+        "comparison",
+        "distribution",
+        "risks"
+      ],
+      "relation": "matrix",
+      "fixtureSha256": "d3c6554435be436188ec56d7f1bafdfb52feb2e108ed55937151af90ba183902"
+    },
+    {
+      "id": "light-matrix-2x2",
+      "family": "matrix",
+      "theme": "light-editorial",
+      "capacity": {
+        "titleCharsMax": 18,
+        "summaryCharsMax": 30,
+        "takeawayCharsMax": 18,
+        "itemsMax": 4,
+        "itemsMin": 4,
+        "itemCharsMax": 30,
+        "nodesMax": 4,
+        "nodesMin": 4,
+        "nodeCharsMax": 18,
+        "seriesMax": 0,
+        "categoriesMax": 0,
+        "imageRequired": false
+      },
+      "asset": "presets/light-matrix-2x2.png",
+      "sha256": "3a96eb12383c4e45c6eb038b7a4dd53b37278561f6391b7df548ebd758400c1d",
+      "sourceGroup": "extended",
+      "roles": [
+        "comparison",
+        "distribution",
+        "risks"
+      ],
+      "relation": "matrix",
+      "fixtureSha256": "d3c6554435be436188ec56d7f1bafdfb52feb2e108ed55937151af90ba183902"
+    },
+    {
+      "id": "dark-gallery",
+      "family": "gallery",
+      "theme": "dark-product",
+      "capacity": {
+        "titleCharsMax": 18,
+        "summaryCharsMax": 30,
+        "takeawayCharsMax": 18,
+        "itemsMax": 4,
+        "itemCharsMax": 24,
+        "nodesMax": 4,
+        "nodesMin": 0,
+        "nodeCharsMax": 16,
+        "seriesMax": 0,
+        "categoriesMax": 0,
+        "imageRequired": false,
+        "imagesMin": 2,
+        "imagesMax": 4
+      },
+      "asset": "presets/dark-gallery.png",
+      "sha256": "42999f47029c7e5e7511a3365587e69d0fa149b42b6cb5fb14382308964cd370",
+      "sourceGroup": "extended",
+      "roles": [
+        "image",
+        "case",
+        "ambient"
+      ],
+      "relation": "parallel",
+      "fixtureSha256": "d3c6554435be436188ec56d7f1bafdfb52feb2e108ed55937151af90ba183902"
+    },
+    {
+      "id": "light-gallery",
+      "family": "gallery",
+      "theme": "light-editorial",
+      "capacity": {
+        "titleCharsMax": 18,
+        "summaryCharsMax": 30,
+        "takeawayCharsMax": 18,
+        "itemsMax": 4,
+        "itemCharsMax": 24,
+        "nodesMax": 4,
+        "nodesMin": 0,
+        "nodeCharsMax": 16,
+        "seriesMax": 0,
+        "categoriesMax": 0,
+        "imageRequired": false,
+        "imagesMin": 2,
+        "imagesMax": 4
+      },
+      "asset": "presets/light-gallery.png",
+      "sha256": "d97557e058148fc4306b943ff18fb5e3f6fa69c6c0bce6289c0922b9de831157",
+      "sourceGroup": "extended",
+      "roles": [
+        "image",
+        "case",
+        "ambient"
+      ],
+      "relation": "parallel",
+      "fixtureSha256": "d3c6554435be436188ec56d7f1bafdfb52feb2e108ed55937151af90ba183902"
+    },
+    {
+      "id": "dark-comparison-split",
+      "family": "comparison",
+      "theme": "dark-product",
+      "capacity": {
+        "titleCharsMax": 18,
+        "summaryCharsMax": 30,
+        "takeawayCharsMax": 18,
+        "itemsMax": 2,
+        "itemsMin": 2,
+        "itemCharsMax": 90,
+        "nodesMax": 2,
+        "nodesMin": 2,
+        "nodeCharsMax": 12,
+        "seriesMax": 0,
+        "categoriesMax": 0,
+        "imageRequired": false
+      },
+      "asset": "presets/dark-comparison-split.png",
+      "sha256": "35d0dac1413a6fc5285a170deb56aee1be448132420c30d6b3ad3fa571f4d941",
+      "sourceGroup": "extended",
+      "roles": [
+        "comparison",
+        "context",
+        "result"
+      ],
+      "relation": "parallel",
+      "fixtureSha256": "d3c6554435be436188ec56d7f1bafdfb52feb2e108ed55937151af90ba183902"
+    },
+    {
+      "id": "light-comparison-split",
+      "family": "comparison",
+      "theme": "light-editorial",
+      "capacity": {
+        "titleCharsMax": 18,
+        "summaryCharsMax": 30,
+        "takeawayCharsMax": 18,
+        "itemsMax": 2,
+        "itemsMin": 2,
+        "itemCharsMax": 90,
+        "nodesMax": 2,
+        "nodesMin": 2,
+        "nodeCharsMax": 12,
+        "seriesMax": 0,
+        "categoriesMax": 0,
+        "imageRequired": false
+      },
+      "asset": "presets/light-comparison-split.png",
+      "sha256": "7aaaf401180c4842631afdfc1650a18f5366299f0e91afd964391ca84cc3b607",
+      "sourceGroup": "extended",
+      "roles": [
+        "comparison",
+        "context",
+        "result"
+      ],
+      "relation": "parallel",
+      "fixtureSha256": "d3c6554435be436188ec56d7f1bafdfb52feb2e108ed55937151af90ba183902"
+    },
+    {
+      "id": "dark-metric-spotlight",
+      "family": "metric",
+      "theme": "dark-product",
+      "capacity": {
+        "titleCharsMax": 18,
+        "summaryCharsMax": 30,
+        "takeawayCharsMax": 8,
+        "itemsMax": 4,
+        "itemsMin": 1,
+        "itemCharsMax": 20,
+        "nodesMax": 0,
+        "nodeCharsMax": 0,
+        "seriesMax": 0,
+        "categoriesMax": 0,
+        "imageRequired": false
+      },
+      "asset": "presets/dark-metric-spotlight.png",
+      "sha256": "6b8d38cf47b4a3c0cd99801ba6b61ceddc2387597b39aea67afa718955d11b6b",
+      "sourceGroup": "extended",
+      "roles": [
+        "metrics",
+        "result",
+        "statement"
+      ],
+      "relation": "none",
+      "fixtureSha256": "d3c6554435be436188ec56d7f1bafdfb52feb2e108ed55937151af90ba183902"
+    },
+    {
+      "id": "light-metric-spotlight",
+      "family": "metric",
+      "theme": "light-editorial",
+      "capacity": {
+        "titleCharsMax": 18,
+        "summaryCharsMax": 30,
+        "takeawayCharsMax": 8,
+        "itemsMax": 4,
+        "itemsMin": 1,
+        "itemCharsMax": 20,
+        "nodesMax": 0,
+        "nodeCharsMax": 0,
+        "seriesMax": 0,
+        "categoriesMax": 0,
+        "imageRequired": false
+      },
+      "asset": "presets/light-metric-spotlight.png",
+      "sha256": "cdfcb8349350db1cadf38c9293aa260c142502658340d0c2ad81a0e4747ff6d3",
+      "sourceGroup": "extended",
+      "roles": [
+        "metrics",
+        "result",
+        "statement"
+      ],
+      "relation": "none",
+      "fixtureSha256": "d3c6554435be436188ec56d7f1bafdfb52feb2e108ed55937151af90ba183902"
+    },
+    {
+      "id": "dark-process-steps",
+      "family": "process-map",
+      "theme": "dark-product",
+      "capacity": {
+        "titleCharsMax": 18,
+        "summaryCharsMax": 30,
+        "takeawayCharsMax": 18,
+        "itemsMax": 5,
+        "itemsMin": 2,
+        "itemCharsMax": 18,
+        "nodesMax": 5,
+        "nodesMin": 2,
+        "nodeCharsMax": 8,
+        "seriesMax": 0,
+        "categoriesMax": 0,
+        "imageRequired": false
+      },
+      "asset": "presets/dark-process-steps.png",
+      "sha256": "b878ed2a5fd02c09a961b0c8ccdd7b9d0d7eec39e957c35cdf42f32d907f6ed5",
+      "sourceGroup": "extended",
+      "roles": [
+        "process",
+        "actions",
+        "breakdown"
+      ],
+      "relation": "sequence",
+      "fixtureSha256": "d3c6554435be436188ec56d7f1bafdfb52feb2e108ed55937151af90ba183902"
+    },
+    {
+      "id": "light-process-steps",
+      "family": "process-map",
+      "theme": "light-editorial",
+      "capacity": {
+        "titleCharsMax": 18,
+        "summaryCharsMax": 30,
+        "takeawayCharsMax": 18,
+        "itemsMax": 5,
+        "itemsMin": 2,
+        "itemCharsMax": 18,
+        "nodesMax": 5,
+        "nodesMin": 2,
+        "nodeCharsMax": 8,
+        "seriesMax": 0,
+        "categoriesMax": 0,
+        "imageRequired": false
+      },
+      "asset": "presets/light-process-steps.png",
+      "sha256": "4aa907f0424a3d4465e832194627de6d2455cecac38acb8b5894066377ea5d88",
+      "sourceGroup": "extended",
+      "roles": [
+        "process",
+        "actions",
+        "breakdown"
+      ],
+      "relation": "sequence",
+      "fixtureSha256": "d3c6554435be436188ec56d7f1bafdfb52feb2e108ed55937151af90ba183902"
+    },
+    {
+      "id": "dark-hierarchy-branch",
+      "family": "hierarchy",
+      "theme": "dark-product",
+      "capacity": {
+        "titleCharsMax": 18,
+        "summaryCharsMax": 30,
+        "takeawayCharsMax": 18,
+        "itemsMax": 4,
+        "itemCharsMax": 36,
+        "nodesMax": 5,
+        "nodesMin": 3,
+        "nodeCharsMax": 8,
+        "seriesMax": 0,
+        "categoriesMax": 0,
+        "imageRequired": false
+      },
+      "asset": "presets/dark-hierarchy-branch.png",
+      "sha256": "bf2f01266143df3323e574a15760a916617b3369758082c6041f4716f47f987d",
+      "sourceGroup": "extended",
+      "roles": [
+        "relationship",
+        "team",
+        "breakdown"
+      ],
+      "relation": "hierarchy",
+      "fixtureSha256": "d3c6554435be436188ec56d7f1bafdfb52feb2e108ed55937151af90ba183902"
+    },
+    {
+      "id": "light-hierarchy-branch",
+      "family": "hierarchy",
+      "theme": "light-editorial",
+      "capacity": {
+        "titleCharsMax": 18,
+        "summaryCharsMax": 30,
+        "takeawayCharsMax": 18,
+        "itemsMax": 4,
+        "itemCharsMax": 36,
+        "nodesMax": 5,
+        "nodesMin": 3,
+        "nodeCharsMax": 8,
+        "seriesMax": 0,
+        "categoriesMax": 0,
+        "imageRequired": false
+      },
+      "asset": "presets/light-hierarchy-branch.png",
+      "sha256": "5d43684577db0d88c4d3106c1daa44a5f5459d80427a261686c52f8fa995f921",
+      "sourceGroup": "extended",
+      "roles": [
+        "relationship",
+        "team",
+        "breakdown"
+      ],
+      "relation": "hierarchy",
+      "fixtureSha256": "d3c6554435be436188ec56d7f1bafdfb52feb2e108ed55937151af90ba183902"
+    },
+    {
+      "id": "dark-chart-evidence",
+      "family": "chart-insight",
+      "theme": "dark-product",
+      "capacity": {
+        "titleCharsMax": 18,
+        "summaryCharsMax": 30,
+        "takeawayCharsMax": 18,
+        "itemsMax": 4,
+        "itemsMin": 3,
+        "itemCharsMax": 24,
+        "nodesMax": 4,
+        "nodesMin": 0,
+        "nodeCharsMax": 6,
+        "seriesMax": 3,
+        "categoriesMax": 6,
+        "imageRequired": false
+      },
+      "asset": "presets/dark-chart-evidence.png",
+      "sha256": "9d751cd8428db10c0d5a5285a56c839846a86bd0823ad194c39c1b5e50359d24",
+      "sourceGroup": "extended",
+      "roles": [
+        "observation",
+        "metrics",
+        "result"
+      ],
+      "relation": "none",
+      "fixtureSha256": "d3c6554435be436188ec56d7f1bafdfb52feb2e108ed55937151af90ba183902"
+    },
+    {
+      "id": "light-chart-evidence",
+      "family": "chart-insight",
+      "theme": "light-editorial",
+      "capacity": {
+        "titleCharsMax": 18,
+        "summaryCharsMax": 30,
+        "takeawayCharsMax": 18,
+        "itemsMax": 4,
+        "itemsMin": 3,
+        "itemCharsMax": 24,
+        "nodesMax": 4,
+        "nodesMin": 0,
+        "nodeCharsMax": 6,
+        "seriesMax": 3,
+        "categoriesMax": 6,
+        "imageRequired": false
+      },
+      "asset": "presets/light-chart-evidence.png",
+      "sha256": "19de2e89cd2da580d7e816bf32620dc1c2b76e148723f904b16ba55eb262a045",
+      "sourceGroup": "extended",
+      "roles": [
+        "observation",
+        "metrics",
+        "result"
+      ],
+      "relation": "none",
+      "fixtureSha256": "d3c6554435be436188ec56d7f1bafdfb52feb2e108ed55937151af90ba183902"
+    }
+  ]
+}

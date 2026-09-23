@@ -1,0 +1,11 @@
+{
+  "skill": [
+    "design/overview.png"
+  ],
+  "references": {
+    "components.md": [
+      "design/overview.png",
+      "design/composition.png"
+    ]
+  }
+}
