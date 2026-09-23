@@ -556,6 +556,22 @@ class ToolsConfig(Base):
     terminal: TerminalToolConfig = Field(default_factory=TerminalToolConfig)
 
 
+class DevelopmentConfig(Base):
+    """Development-only resource bounds and explicit native executable paths.
+
+    Project-only context and disabled custom MCP/Hooks are fixed boundaries,
+    not switches that silently relax execution isolation.
+    """
+
+    model_preset: str | None = None
+    codex_path: str | None = None
+    claude_path: str | None = None
+    codebuddy_path: str | None = None
+    max_rule_bytes: int = Field(default=65_536, ge=1024, le=262_144)
+    max_skill_bytes: int = Field(default=131_072, ge=1024, le=524_288)
+    max_project_skills: int = Field(default=128, ge=1, le=512)
+
+
 class Config(BaseSettings):
     """Root configuration for mona."""
 
@@ -570,6 +586,7 @@ class Config(BaseSettings):
     profile: ProfileConfig = Field(default_factory=ProfileConfig)
     tools: ToolsConfig = Field(default_factory=ToolsConfig)
     stock: StockConfig = Field(default_factory=StockConfig)
+    development: DevelopmentConfig = Field(default_factory=DevelopmentConfig)
     model_presets: dict[str, ModelPresetConfig] = Field(
         default_factory=dict,
         validation_alias=AliasChoices("modelPresets", "model_presets"),
