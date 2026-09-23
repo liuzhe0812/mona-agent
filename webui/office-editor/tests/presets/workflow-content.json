@@ -1,0 +1,38 @@
+{
+  "name": "automatic-workflow",
+  "note": "第一张复用失败任务的输入验证流程恢复，不代表已核实财报或认可其图表表达。第二张验证品牌继承。",
+  "pages": [
+    {
+      "presetId": "auto",
+      "content": {
+        "title": "营收稳健增长，亏损大幅收窄",
+        "summary": "2026年上半年核心财务指标",
+        "theme": "light-editorial",
+        "accentColor": "#D85A00",
+        "role": "metrics",
+        "relation": "none",
+        "takeaway": "7,560万",
+        "facts": [
+          {"id": "revenue", "text": "营业收入7,560.39万元，同比+0.86%"},
+          {"id": "profit", "text": "归母净利润-930.40万元，同比减亏422.63万"}
+        ],
+        "items": ["销售费用同比下降5.75%", "管理费用同比下降0.73%", "研发费用同比下降13.24%"],
+        "chart": {"kind": "bar", "categories": ["营业收入", "归母净利润"], "series": [{"name": "2026H1", "values": [7560, -930]}], "legendPos": "none", "dataLabels": true, "valAxisTitle": "万元"}
+      }
+    },
+    {
+      "presetId": "auto",
+      "content": {
+        "title": "费用变化需要结合投入判断",
+        "summary": "沿用同一品牌主题，保留口径说明",
+        "role": "observation",
+        "takeaway": "关注投入效率",
+        "facts": [
+          {"id": "sales", "text": "销售费用同比下降5.75%"},
+          {"id": "admin", "text": "管理费用同比下降0.73%"},
+          {"id": "research", "text": "研发费用同比下降13.24%"}
+        ]
+      }
+    }
+  ]
+}

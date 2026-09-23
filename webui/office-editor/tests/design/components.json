@@ -1,0 +1,789 @@
+{
+  "schemaVersion": 1,
+  "decks": [
+    {
+      "name": "native-components",
+      "pages": [
+        {
+          "name": "statement",
+          "operations": [
+            {
+              "op": "slide_add_design",
+              "payload": {
+                "slideId": "$slideId",
+                "design": "statement",
+                "content": {
+                  "title": "把复杂信息，\n变成清楚的判断。",
+                  "emphasis": "清楚的判断",
+                  "summary": "从事实、证据到行动，建立可以讨论、可以继续编辑的汇报。",
+                  "items": [
+                    {
+                      "label": "先看变化",
+                      "detail": "找出值得解释的核心差异"
+                    },
+                    {
+                      "label": "再看原因",
+                      "detail": "让证据支撑观点，而非装饰"
+                    },
+                    {
+                      "label": "最后看行动",
+                      "detail": "将结论转为具体工作安排"
+                    }
+                  ],
+                  "source": "设计验证资料 · 所有数据均为演示，不代表实际公司业绩",
+                  "pageLabel": "01 / DESIGN"
+                }
+              }
+            }
+          ]
+        },
+        {
+          "name": "metric",
+          "operations": [
+            {
+              "op": "slide_add_design",
+              "payload": {
+                "slideId": "$slideId",
+                "design": "metric",
+                "content": {
+                  "title": "投入集中，推动交付方式改变",
+                  "metric": {
+                    "label": "累计研发投入",
+                    "value": "2,052.51",
+                    "unit": "万元",
+                    "detail": "持续投入产品底层能力，\n让技术建设服务于\n可重复的交付。"
+                  },
+                  "items": [
+                    {
+                      "label": "研发人员",
+                      "value": 119,
+                      "unit": "人"
+                    },
+                    {
+                      "label": "团队占比",
+                      "value": 63.98,
+                      "unit": "%"
+                    },
+                    {
+                      "label": "复用项目",
+                      "value": 36,
+                      "unit": "项"
+                    }
+                  ],
+                  "source": "设计验证资料 · 所有数据均为演示，不代表实际公司业绩",
+                  "pageLabel": "02 / DESIGN"
+                },
+                "palette": {
+                  "background": "#111A18",
+                  "ink": "#F2F4EC",
+                  "muted": "#A4B0A5",
+                  "accent": "#B8DE70",
+                  "surface": "#23322B",
+                  "line": "#344139",
+                  "positive": "#76B795",
+                  "negative": "#E8907A"
+                }
+              }
+            }
+          ]
+        },
+        {
+          "name": "evidence",
+          "operations": [
+            {
+              "op": "slide_add_design",
+              "payload": {
+                "slideId": "$slideId",
+                "design": "evidence",
+                "content": {
+                  "title": "交付周期下降，来自流程标准化",
+                  "summary": "同样的比较口径，让效率变化可以被复核。",
+                  "chart": {
+                    "kind": "bar",
+                    "categories": [
+                      "调整前",
+                      "调整后"
+                    ],
+                    "series": [
+                      {
+                        "name": "平均交付周期",
+                        "values": [
+                          50,
+                          30
+                        ]
+                      }
+                    ],
+                    "unit": "分钟"
+                  },
+                  "items": [
+                    {
+                      "label": "减少重复确认",
+                      "detail": "关键资料统一归档，跨岗位协作不再反复传递相同信息。"
+                    },
+                    {
+                      "label": "固化检查步骤",
+                      "detail": "验收清单随交付推进，问题在移交前解决。"
+                    }
+                  ],
+                  "source": "设计验证资料 · 所有数据均为演示，不代表实际公司业绩",
+                  "pageLabel": "03 / DESIGN"
+                }
+              }
+            }
+          ]
+        },
+        {
+          "name": "waterfall",
+          "operations": [
+            {
+              "op": "slide_add_design",
+              "payload": {
+                "slideId": "$slideId",
+                "design": "waterfall",
+                "content": {
+                  "title": "新增投入与成本优化共同改变结果",
+                  "summary": "从期初到期末，分别展示正向贡献与负向变化。",
+                  "start": {
+                    "label": "期初",
+                    "value": 120
+                  },
+                  "steps": [
+                    {
+                      "label": "存量增长",
+                      "value": 46
+                    },
+                    {
+                      "label": "新增业务",
+                      "value": 38
+                    },
+                    {
+                      "label": "研发增加",
+                      "value": -29
+                    },
+                    {
+                      "label": "费用优化",
+                      "value": 17
+                    },
+                    {
+                      "label": "其他",
+                      "value": 0
+                    }
+                  ],
+                  "totalLabel": "期末",
+                  "unit": "万元",
+                  "source": "设计验证资料 · 所有数据均为演示，不代表实际公司业绩",
+                  "pageLabel": "04 / DESIGN"
+                }
+              }
+            }
+          ]
+        },
+        {
+          "name": "sankey",
+          "operations": [
+            {
+              "op": "slide_add_design",
+              "payload": {
+                "slideId": "$slideId",
+                "design": "sankey",
+                "content": {
+                  "title": "资金流向，体现业务投入的重点",
+                  "summary": "带宽由流量决定；节点与标签分别排版，避免小额项目挤在一起。",
+                  "sources": [
+                    {
+                      "id": "m",
+                      "label": "通用模型"
+                    },
+                    {
+                      "id": "a",
+                      "label": "垂直应用"
+                    },
+                    {
+                      "id": "i",
+                      "label": "基础设施"
+                    },
+                    {
+                      "id": "c",
+                      "label": "芯片硬件"
+                    },
+                    {
+                      "id": "o",
+                      "label": "其他方向"
+                    }
+                  ],
+                  "targets": [
+                    {
+                      "id": "u",
+                      "label": "上游 · 基础设施"
+                    },
+                    {
+                      "id": "mid",
+                      "label": "中游 · 模型层"
+                    },
+                    {
+                      "id": "d",
+                      "label": "下游 · 应用层"
+                    }
+                  ],
+                  "links": [
+                    {
+                      "source": "m",
+                      "target": "mid",
+                      "value": 420
+                    },
+                    {
+                      "source": "a",
+                      "target": "d",
+                      "value": 245
+                    },
+                    {
+                      "source": "i",
+                      "target": "u",
+                      "value": 158
+                    },
+                    {
+                      "source": "c",
+                      "target": "u",
+                      "value": 97
+                    },
+                    {
+                      "source": "o",
+                      "target": "d",
+                      "value": 50
+                    }
+                  ],
+                  "unit": "万元",
+                  "source": "设计验证资料 · 所有数据均为演示，不代表实际公司业绩",
+                  "pageLabel": "05 / DESIGN"
+                },
+                "palette": {
+                  "background": "#111A18",
+                  "ink": "#F2F4EC",
+                  "muted": "#A4B0A5",
+                  "accent": "#B8DE70",
+                  "surface": "#23322B",
+                  "line": "#344139",
+                  "positive": "#76B795",
+                  "negative": "#E8907A"
+                }
+              }
+            }
+          ]
+        },
+        {
+          "name": "agenda",
+          "operations": [
+            {
+              "op": "slide_add_design",
+              "payload": {
+                "slideId": "$slideId",
+                "design": "agenda",
+                "content": {
+                  "title": "报告结构",
+                  "summary": "先建立框架，再进入证据和判断。",
+                  "items": [
+                    {
+                      "label": "经营概览",
+                      "detail": "目标与关键变化"
+                    },
+                    {
+                      "label": "财务分析",
+                      "detail": "规模、利润与回款"
+                    },
+                    {
+                      "label": "业务进展",
+                      "detail": "产品与交付结果"
+                    },
+                    {
+                      "label": "研发建设",
+                      "detail": "投入与能力沉淀"
+                    },
+                    {
+                      "label": "风险审视",
+                      "detail": "不确定性与约束"
+                    },
+                    {
+                      "label": "下一步行动",
+                      "detail": "优先级与协作安排"
+                    }
+                  ],
+                  "source": "设计验证资料 · 所有数据均为演示，不代表实际公司业绩",
+                  "pageLabel": "06 / DESIGN"
+                }
+              }
+            }
+          ]
+        },
+        {
+          "name": "comparison",
+          "operations": [
+            {
+              "op": "slide_add_design",
+              "payload": {
+                "slideId": "$slideId",
+                "design": "comparison",
+                "content": {
+                  "title": "同一目标，两种交付方式",
+                  "groups": [
+                    {
+                      "label": "分散交付",
+                      "detail": "每个项目重新组织资料和检查步骤。",
+                      "items": [
+                        {
+                          "label": "资料管理",
+                          "detail": "文件分布在多个目录"
+                        },
+                        {
+                          "label": "过程确认",
+                          "detail": "依赖人工逐项沟通"
+                        },
+                        {
+                          "label": "成果移交",
+                          "detail": "交付后再补充说明"
+                        }
+                      ]
+                    },
+                    {
+                      "label": "标准化交付",
+                      "detail": "让资料、检查与交付目标保持一致。",
+                      "items": [
+                        {
+                          "label": "资料管理",
+                          "detail": "统一来源与版本"
+                        },
+                        {
+                          "label": "过程确认",
+                          "detail": "复用检查清单"
+                        },
+                        {
+                          "label": "成果移交",
+                          "detail": "保留可编辑工作成果"
+                        }
+                      ]
+                    }
+                  ],
+                  "source": "设计验证资料 · 所有数据均为演示，不代表实际公司业绩",
+                  "pageLabel": "07 / DESIGN"
+                }
+              }
+            }
+          ]
+        },
+        {
+          "name": "roadmap",
+          "operations": [
+            {
+              "op": "slide_add_design",
+              "payload": {
+                "slideId": "$slideId",
+                "design": "roadmap",
+                "content": {
+                  "title": "下半年的重点，是把能力做成结果",
+                  "summary": "里程碑对应具体行动，不把并列能力伪装成流程。",
+                  "items": [
+                    {
+                      "label": "验证方法",
+                      "detail": "以代表性项目验证交付清单与数据口径。"
+                    },
+                    {
+                      "label": "复制经验",
+                      "detail": "跨团队复用已验证流程，记录例外。"
+                    },
+                    {
+                      "label": "形成标准",
+                      "detail": "把稳定方法沉淀为日常协作规范。"
+                    },
+                    {
+                      "label": "复盘改进",
+                      "detail": "对照目标检查效果，调整下一轮重点。"
+                    }
+                  ],
+                  "source": "设计验证资料 · 所有数据均为演示，不代表实际公司业绩",
+                  "pageLabel": "08 / DESIGN"
+                }
+              }
+            }
+          ]
+        },
+        {
+          "name": "matrix",
+          "operations": [
+            {
+              "op": "slide_add_design",
+              "payload": {
+                "slideId": "$slideId",
+                "design": "matrix",
+                "content": {
+                  "title": "投入优先级，从价值与可行性出发",
+                  "axes": {
+                    "x": "实施可行性：低 → 高",
+                    "y": "价值"
+                  },
+                  "items": [
+                    {
+                      "label": "重点验证",
+                      "detail": "价值明确但需要先解决实施约束。"
+                    },
+                    {
+                      "label": "优先落地",
+                      "detail": "价值与可行性兼备，优先配置资源。"
+                    },
+                    {
+                      "label": "暂缓投入",
+                      "detail": "证据不足，保留观察而非盲目扩张。"
+                    },
+                    {
+                      "label": "低成本试验",
+                      "detail": "容易开展的小规模试验，设置退出条件。"
+                    }
+                  ],
+                  "source": "设计验证资料 · 所有数据均为演示，不代表实际公司业绩",
+                  "pageLabel": "09 / DESIGN"
+                }
+              }
+            }
+          ]
+        },
+        {
+          "name": "items",
+          "operations": [
+            {
+              "op": "slide_add_design",
+              "payload": {
+                "slideId": "$slideId",
+                "design": "items",
+                "content": {
+                  "title": "五项并列能力，服务同一个交付目标",
+                  "items": [
+                    {
+                      "label": "资料检索",
+                      "detail": "将相关证据与来源放在同一个工作上下文。"
+                    },
+                    {
+                      "label": "内容组织",
+                      "detail": "围绕受众目的组织信息，保留事实之间的关系。"
+                    },
+                    {
+                      "label": "图表表达",
+                      "detail": "解释变化，明确数值、单位与比较口径。"
+                    },
+                    {
+                      "label": "实时协作",
+                      "detail": "用户继续修改已完成内容，后续工作尊重当前版本。"
+                    },
+                    {
+                      "label": "成果交付",
+                      "detail": "保留原生对象，让成果可以继续使用和调整。"
+                    }
+                  ],
+                  "source": "设计验证资料 · 所有数据均为演示，不代表实际公司业绩",
+                  "pageLabel": "10 / DESIGN"
+                }
+              }
+            }
+          ]
+        },
+        {
+          "name": "image",
+          "operations": [
+            {
+              "op": "slide_add_design",
+              "payload": {
+                "slideId": "$slideId",
+                "design": "image",
+                "content": {
+                  "title": "看得见过程，也接得住结果",
+                  "image": {
+                    "assetPath": "product-workspace.png"
+                  },
+                  "items": [
+                    {
+                      "label": "真实工作空间",
+                      "detail": "示例使用仓库已有历史界面截图，不代表当前产品版本。"
+                    },
+                    {
+                      "label": "原生编辑",
+                      "detail": "图之外的标题、说明和图形均保留编辑能力。"
+                    }
+                  ],
+                  "source": "设计验证资料 · 所有数据均为演示，不代表实际公司业绩",
+                  "pageLabel": "11 / DESIGN"
+                },
+                "palette": {
+                  "background": "#111A18",
+                  "ink": "#F2F4EC",
+                  "muted": "#A4B0A5",
+                  "accent": "#B8DE70",
+                  "surface": "#23322B",
+                  "line": "#344139",
+                  "positive": "#76B795",
+                  "negative": "#E8907A"
+                }
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "native-composition",
+      "pages": [
+        {
+          "name": "original-composition",
+          "operations": [
+            {
+              "op": "slide_add_shape",
+              "payload": {
+                "slideId": "$slideId",
+                "x": 0,
+                "y": 0,
+                "width": 1280,
+                "height": 720,
+                "fillColor": "#F6F0EB"
+              }
+            },
+            {
+              "op": "slide_add_text",
+              "payload": {
+                "slideId": "$slideId",
+                "x": 64,
+                "y": 32,
+                "width": 1000,
+                "height": 30,
+                "text": "工作方式的改变",
+                "font": {
+                  "fontFamily": "Microsoft YaHei",
+                  "fontSize": 12,
+                  "bold": false,
+                  "color": "#292332"
+                },
+                "body": {
+                  "insets": {
+                    "l": 0,
+                    "t": 0,
+                    "r": 0,
+                    "b": 0
+                  }
+                }
+              }
+            },
+            {
+              "op": "slide_add_text",
+              "payload": {
+                "slideId": "$slideId",
+                "x": 64,
+                "y": 74,
+                "width": 1152,
+                "height": 76,
+                "text": "把时间留给判断，而不是重复操作",
+                "font": {
+                  "fontFamily": "Microsoft YaHei",
+                  "fontSize": 32,
+                  "bold": true,
+                  "color": "#292332"
+                },
+                "body": {
+                  "insets": {
+                    "l": 0,
+                    "t": 0,
+                    "r": 0,
+                    "b": 0
+                  }
+                }
+              }
+            },
+            {
+              "op": "slide_add_design",
+              "payload": {
+                "slideId": "$slideId",
+                "design": "metric",
+                "region": {
+                  "x": 44,
+                  "y": 176,
+                  "width": 450,
+                  "height": 388
+                },
+                "palette": {
+                  "background": "#F6F0EB",
+                  "ink": "#292332",
+                  "muted": "#706677",
+                  "accent": "#C65B35",
+                  "surface": "#EDE2D9",
+                  "line": "#D6CCC6",
+                  "positive": "#447C70",
+                  "negative": "#C65B35"
+                },
+                "content": {
+                  "title": "从重复劳动中释放时间",
+                  "metric": {
+                    "label": "单次交付周期减少",
+                    "value": 40,
+                    "unit": "%",
+                    "detail": "50 分钟 → 30 分钟\n演示结果，不推断因果。"
+                  }
+                }
+              }
+            },
+            {
+              "op": "slide_add_design",
+              "payload": {
+                "slideId": "$slideId",
+                "design": "waterfall",
+                "region": {
+                  "x": 524,
+                  "y": 176,
+                  "width": 712,
+                  "height": 388
+                },
+                "palette": {
+                  "background": "#F6F0EB",
+                  "ink": "#292332",
+                  "muted": "#706677",
+                  "accent": "#C65B35",
+                  "surface": "#EDE2D9",
+                  "line": "#D6CCC6",
+                  "positive": "#447C70",
+                  "negative": "#C65B35"
+                },
+                "content": {
+                  "title": "改善并非单点优化",
+                  "start": {
+                    "label": "原流程",
+                    "value": 50
+                  },
+                  "steps": [
+                    {
+                      "label": "资料查找",
+                      "value": -8
+                    },
+                    {
+                      "label": "重复确认",
+                      "value": -7
+                    },
+                    {
+                      "label": "执行检查",
+                      "value": -5
+                    }
+                  ],
+                  "unit": "分钟",
+                  "totalLabel": "改进后"
+                }
+              }
+            },
+            {
+              "op": "slide_add_shape",
+              "payload": {
+                "slideId": "$slideId",
+                "x": 64,
+                "y": 594,
+                "width": 1152,
+                "height": 1.2,
+                "fillColor": "#D6CCC6"
+              }
+            },
+            {
+              "op": "slide_add_text",
+              "payload": {
+                "slideId": "$slideId",
+                "x": 64,
+                "y": 614,
+                "width": 330,
+                "height": 35,
+                "text": "01  统一资料",
+                "font": {
+                  "fontFamily": "Microsoft YaHei",
+                  "fontSize": 17,
+                  "bold": true,
+                  "color": "#292332"
+                },
+                "body": {
+                  "insets": {
+                    "l": 0,
+                    "t": 0,
+                    "r": 0,
+                    "b": 0
+                  }
+                }
+              }
+            },
+            {
+              "op": "slide_add_text",
+              "payload": {
+                "slideId": "$slideId",
+                "x": 464,
+                "y": 614,
+                "width": 330,
+                "height": 35,
+                "text": "02  调整协作",
+                "font": {
+                  "fontFamily": "Microsoft YaHei",
+                  "fontSize": 17,
+                  "bold": true,
+                  "color": "#292332"
+                },
+                "body": {
+                  "insets": {
+                    "l": 0,
+                    "t": 0,
+                    "r": 0,
+                    "b": 0
+                  }
+                }
+              }
+            },
+            {
+              "op": "slide_add_text",
+              "payload": {
+                "slideId": "$slideId",
+                "x": 864,
+                "y": 614,
+                "width": 330,
+                "height": 35,
+                "text": "03  复核效果",
+                "font": {
+                  "fontFamily": "Microsoft YaHei",
+                  "fontSize": 17,
+                  "bold": true,
+                  "color": "#292332"
+                },
+                "body": {
+                  "insets": {
+                    "l": 0,
+                    "t": 0,
+                    "r": 0,
+                    "b": 0
+                  }
+                }
+              }
+            },
+            {
+              "op": "slide_add_text",
+              "payload": {
+                "slideId": "$slideId",
+                "x": 64,
+                "y": 672,
+                "width": 1152,
+                "height": 28,
+                "text": "设计验证资料 · 所有数据均为演示，不代表实际公司业绩",
+                "font": {
+                  "fontFamily": "Microsoft YaHei",
+                  "fontSize": 9,
+                  "bold": false,
+                  "color": "#292332"
+                },
+                "body": {
+                  "insets": {
+                    "l": 0,
+                    "t": 0,
+                    "r": 0,
+                    "b": 0
+                  }
+                }
+              }
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

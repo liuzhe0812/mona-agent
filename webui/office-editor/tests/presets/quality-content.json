@@ -1,0 +1,308 @@
+{
+  "schemaVersion": 1,
+  "note": "冻结设计验收输入。所有数值均为明确标注的示例；图片为仓库既有历史产品截图。",
+  "decks": [
+    {
+      "name": "report",
+      "pages": [
+        {
+          "presetId": "light-metric",
+          "content": {
+            "title": "经营目标超额完成",
+            "summary": "2026 年第三季度，内部培训示例数据",
+            "takeaway": "108%",
+            "items": [
+              "实际收入 108 万元，目标 100 万元",
+              "下一季度优先保障高毛利业务交付"
+            ]
+          }
+        },
+        {
+          "presetId": "light-chart-insight",
+          "content": {
+            "title": "第三季度收入超过目标",
+            "summary": "单位：万元；以下为演示数据",
+            "takeaway": "+8%",
+            "items": [
+              "实际收入 108 万元，比目标高 8 万元",
+              "收入连续三个季度增长"
+            ],
+            "chart": {
+              "kind": "bar",
+              "categories": [
+                "第一季",
+                "第二季",
+                "第三季"
+              ],
+              "series": [
+                {
+                  "name": "实际收入",
+                  "values": [
+                    72,
+                    88,
+                    108
+                  ]
+                },
+                {
+                  "name": "目标收入",
+                  "values": [
+                    80,
+                    90,
+                    100
+                  ]
+                }
+              ],
+              "legendPos": "b",
+              "gridlines": true,
+              "dataLabels": true,
+              "valAxisTitle": "万元（示例）"
+            }
+          }
+        },
+        {
+          "presetId": "light-comparison",
+          "content": {
+            "title": "两种交付方案的取舍",
+            "summary": "同口径对比，数据仅用于排版验收",
+            "items": [
+              "标准方案\n交付周期：4 周\n项目预算：12 万元\n适用条件：需求稳定",
+              "快速方案\n交付周期：2 周\n项目预算：18 万元\n适用条件：时间紧迫"
+            ]
+          }
+        },
+        {
+          "presetId": "light-process-map",
+          "content": {
+            "title": "下一季度实施路径",
+            "summary": "每个阶段均有明确交付物",
+            "nodes": [
+              "需求确认",
+              "试点交付",
+              "规模推广"
+            ],
+            "items": [
+              "锁定业务范围与验收标准",
+              "完成一组真实客户试点",
+              "复用验证过的流程和资产"
+            ]
+          }
+        },
+        {
+          "presetId": "light-overview",
+          "content": {
+            "title": "经营复盘的四项关注",
+            "summary": "讨论重点与负责团队",
+            "nodes": [
+              "收入",
+              "成本",
+              "交付",
+              "留存"
+            ],
+            "items": [
+              "销售团队核对目标与实际差异",
+              "财务团队复核主要成本变化",
+              "项目团队识别延期与资源缺口",
+              "客户团队跟进续约与使用反馈"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "product",
+      "pages": [
+        {
+          "presetId": "dark-product-hero",
+          "content": {
+            "title": "视频任务集中在一个工作台",
+            "summary": "Mona 历史界面截图，2026 年 7 月",
+            "items": [
+              "从主题输入进入制作过程",
+              "在同一入口查看已有项目"
+            ],
+            "image": {
+              "assetPath": "assets/product-workspace.png",
+              "width": 2880,
+              "height": 1704,
+              "fit": "contain"
+            }
+          }
+        },
+        {
+          "presetId": "dark-metric",
+          "content": {
+            "title": "目标是减少重复准备",
+            "summary": "概念验证示例，非真实性能承诺",
+            "takeaway": "4 步",
+            "items": [
+              "输入主题、配置内容、制作场景、导出",
+              "把分散的准备动作组织成可见进度"
+            ]
+          }
+        },
+        {
+          "presetId": "dark-architecture",
+          "content": {
+            "title": "一个工作台连接三类能力",
+            "summary": "产品结构示意，不代表内部部署架构",
+            "nodes": [
+              "视频工作台",
+              "内容组织",
+              "场景制作",
+              "文件交付"
+            ],
+            "items": [
+              "先确定主题和叙述顺序",
+              "逐个制作并检查场景",
+              "导出可使用的最终文件"
+            ]
+          }
+        },
+        {
+          "presetId": "dark-chart-insight",
+          "content": {
+            "title": "复用素材缩短准备时间",
+            "summary": "内部设计示例，单位：分钟",
+            "takeaway": "-40%",
+            "items": [
+              "手动准备 50 分钟，复用流程 30 分钟",
+              "示例用于表达差距，不是实测结果"
+            ],
+            "chart": {
+              "kind": "bar",
+              "categories": [
+                "手动准备",
+                "复用流程"
+              ],
+              "series": [
+                {
+                  "name": "准备时间",
+                  "values": [
+                    50,
+                    30
+                  ]
+                }
+              ],
+              "legendPos": "none",
+              "gridlines": true,
+              "dataLabels": true,
+              "valAxisTitle": "分钟（示例）"
+            }
+          }
+        },
+        {
+          "presetId": "dark-case",
+          "content": {
+            "title": "主题输入决定后续内容范围",
+            "summary": "Mona 历史界面截图，用于功能说明",
+            "nodes": [
+              "主题",
+              "比例",
+              "项目"
+            ],
+            "items": [
+              "清楚描述对象、目标与主要内容",
+              "根据观看场景选择画面比例",
+              "从项目列表继续已有工作"
+            ],
+            "image": {
+              "assetPath": "assets/product-workspace.png",
+              "width": 2880,
+              "height": 1704,
+              "fit": "contain"
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "training",
+      "pages": [
+        {
+          "presetId": "light-overview",
+          "content": {
+            "title": "从需求到交付的学习地图",
+            "summary": "本节掌握四项具体操作",
+            "nodes": [
+              "目标",
+              "内容",
+              "制作",
+              "检查"
+            ],
+            "items": [
+              "描述受众与交付目的",
+              "整理事实和必须保留的材料",
+              "选择合适的表达形式",
+              "核对内容、布局与文件"
+            ]
+          }
+        },
+        {
+          "presetId": "light-process-long",
+          "content": {
+            "title": "制作前的四步准备",
+            "summary": "每一步完成后再推进下一步",
+            "nodes": [
+              "确认目标",
+              "整理材料",
+              "选择表达",
+              "检查输出"
+            ],
+            "items": [
+              "写清楚读者是谁，以及读完需要作什么决定",
+              "标记来源、单位和必须保留的事实",
+              "按数据、关系或案例选择主视觉",
+              "同时检查事实完整、文字可读和文件可编辑"
+            ]
+          }
+        },
+        {
+          "presetId": "light-case",
+          "content": {
+            "title": "把模糊主题改成具体任务",
+            "summary": "历史产品界面，用于教学演示",
+            "nodes": [
+              "对象",
+              "目标",
+              "材料"
+            ],
+            "items": [
+              "明确视频面向的观众",
+              "说明需要解释的具体问题",
+              "给出已有素材与限制条件"
+            ],
+            "image": {
+              "assetPath": "assets/product-workspace.png",
+              "width": 2880,
+              "height": 1704,
+              "fit": "contain"
+            }
+          }
+        },
+        {
+          "presetId": "light-comparison",
+          "content": {
+            "title": "两种任务描述的差别",
+            "summary": "比较维度：对象、目的、材料",
+            "items": [
+              "模糊描述\n对象：未说明\n目的：做一个好看的视频\n材料：自行寻找",
+              "具体描述\n对象：新入职同事\n目的：解释报销流程\n材料：操作截图和制度文件"
+            ]
+          }
+        },
+        {
+          "presetId": "light-metric",
+          "content": {
+            "title": "交付前检查四件事",
+            "summary": "每项都能从实际产物中确认",
+            "takeaway": "4 项",
+            "items": [
+              "事实完整、画面可读",
+              "对象可编辑、文件可打开"
+            ]
+          }
+        }
+      ]
+    }
+  ]
+}

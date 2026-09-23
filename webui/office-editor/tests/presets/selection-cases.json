@@ -1,0 +1,58 @@
+{
+  "schemaVersion": 1,
+  "cases": [
+    {
+      "id": "3parallelconcepts",
+      "roles": ["breakdown", "context"],
+      "relation": "parallel",
+      "content": {
+        "title": "三项核心概念",
+        "summary": "三项内容并列展开",
+        "nodes": ["目标", "方法", "结果"],
+        "items": ["目标定义", "方法选择", "结果判断"]
+      },
+      "expect": {
+        "excludeFamilies": ["process-map", "hierarchy"],
+        "preserveFields": ["nodes", "items"]
+      }
+    },
+    {
+      "id": "3sequentialsteps",
+      "roles": ["process", "actions"],
+      "relation": "sequence",
+      "content": {
+        "title": "三步实施路径",
+        "summary": "每一步完成后再进入下一步",
+        "nodes": ["确认", "执行", "复盘"],
+        "items": ["确认范围和标准", "执行验证过的方案", "复盘结果并沉淀资产"]
+      },
+      "expect": {
+        "excludeRelations": ["none", "parallel", "hierarchy", "matrix", "cycle", "network"],
+        "preserveFields": ["nodes", "items"]
+      }
+    },
+    {
+      "id": "chart3requiredevidence",
+      "roles": ["metrics", "trend", "observation"],
+      "content": {
+        "title": "三项证据共同支持结论",
+        "summary": "图表与三条必要证据",
+        "takeaway": "+12%",
+        "items": ["第一条必要证据", "第二条必要证据", "第三条必要证据"],
+        "chart": {
+          "kind": "bar",
+          "categories": ["一季度", "二季度", "三季度"],
+          "series": [{"name": "实际值", "values": [80, 92, 101]}],
+          "legendPos": "none",
+          "gridlines": true
+        }
+      },
+      "expect": {
+        "outcome": "capacity-appropriate-or-none",
+        "requiredItemCount": 3,
+        "preserveFields": ["items", "chart"],
+        "allowTruncation": false
+      }
+    }
+  ]
+}
