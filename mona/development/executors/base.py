@@ -3,11 +3,27 @@
 from __future__ import annotations
 
 from collections.abc import AsyncIterator
+from dataclasses import dataclass
 from typing import Any, Literal, Protocol
 
 from pydantic import Field
 
-from mona.development.contracts import Binding, Capabilities, Contract, ExecutorId
+from mona.development.context import ProjectContext
+from mona.development.contracts import (
+    Binding,
+    Capabilities,
+    Contract,
+    DevelopmentSession,
+    ExecutorId,
+)
+
+
+@dataclass(frozen=True)
+class SessionStart:
+    session: DevelopmentSession
+    context: ProjectContext
+    model: str | None = None
+    readonly: bool = False
 
 
 class ExecutorProbe(Contract):
@@ -47,12 +63,13 @@ class Executor(Protocol):
     id: ExecutorId
 
     async def probe(self) -> ExecutorProbe: ...
-    async def create_session(self, project_context: dict[str, Any], model: str | None) -> Binding: ...
+    async def create_session(self, start: SessionStart) -> Binding: ...
     async def resume_session(self, binding: Binding) -> Binding: ...
     async def send(self, binding: Binding, input_id: str, message: str) -> DispatchReceipt: ...
     async def steer(self, binding: Binding, input_id: str, message: str) -> DispatchReceipt: ...
     async def interrupt(self, binding: Binding) -> InterruptReceipt: ...
     async def close_runtime(self, binding: Binding) -> None: ...
     async def get_status(self, binding: Binding) -> str: ...
+    async def inspect_turn(self, binding: Binding, native_turn_id: str) -> list[NativeEvent]: ...
     async def list_models(self) -> list[str]: ...
     def events(self, binding: Binding) -> AsyncIterator[NativeEvent]: ...

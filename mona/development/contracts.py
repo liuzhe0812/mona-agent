@@ -77,12 +77,24 @@ class DevelopmentSession(Contract):
         return f"development:{self.id}"
 
 
+class PendingHandoff(Contract):
+    id: Identifier = Field(default_factory=lambda: new_id("handoff"))
+    mode: Literal["full", "delta"] = "full"
+    content: str = Field(min_length=1, max_length=48_000)
+    source_fingerprint: str = Field(pattern=r"^[a-f0-9]{64}$")
+    source_message_count: int = Field(ge=0)
+    state: Literal["pending", "reserved", "accepted", "unknown"] = "pending"
+    input_id: Identifier | None = None
+
+
 class Binding(Contract):
     id: Identifier = Field(default_factory=lambda: new_id("binding"))
     session_id: Identifier
     executor: ExecutorId
     native_session_id: str = Field(min_length=1, max_length=512)
     working_directory: str = Field(min_length=1)
+    readonly: bool = False
+    handoff: PendingHandoff | None = None
     state: Literal["active", "parked", "unavailable", "stale"] = "active"
     capabilities: Capabilities = Field(default_factory=Capabilities)
     protocol_version: str | None = None
@@ -128,6 +140,7 @@ class Run(Contract):
     request_message_id: Identifier
     executor: ExecutorId
     binding_id: Identifier | None = None
+    native_turn_id: str | None = Field(default=None, min_length=1, max_length=512)
     status: RunStatus = RunStatus.QUEUED
     revision: int = Field(default=0, ge=0)
     result_message_id: Identifier | None = None
