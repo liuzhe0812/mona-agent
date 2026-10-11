@@ -16,7 +16,7 @@ describe("CustomExpertDialog", () => {
 
     expect(screen.queryByText(/uploaded|server/i)).not.toBeInTheDocument();
 
-    fireEvent.change(screen.getByLabelText("Expert name"), {
+    fireEvent.change(screen.getByLabelText("Partner name"), {
       target: { value: "Contract reviewer" },
     });
     fireEvent.change(screen.getByLabelText("Expertise"), {

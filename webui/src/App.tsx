@@ -38,7 +38,6 @@ import { BrowserTabView } from "@/components/browser/BrowserTabView";
 import { HistoryPage } from "@/components/browser/HistoryPage";
 import { DownloadsPage } from "@/components/browser/DownloadsPage";
 import { useBrowserTabs } from "@/hooks/useBrowserTabs";
-import { TerminalView } from "@/components/terminal/TerminalView";
 import { useTerminalStore } from "@/components/terminal/store/terminalStore";
 import { useDbStore } from "@/components/db/store/dbStore";
 import { useMdReaderStore } from "@/components/md-reader/mdReaderStore";
@@ -149,10 +148,26 @@ const PlanningView = lazy(() =>
   })),
 );
 
+const EmailExtractionSettingsDialog = lazy(() =>
+  import("@/components/schedule/EmailExtractionSettingsDialog").then((module) => ({
+    default: module.EmailExtractionSettingsDialog,
+  })),
+);
+
+const NewEmailAccountDialog = lazy(() =>
+  import("@/components/email/NewAccountDialog").then((module) => ({
+    default: module.NewAccountDialog,
+  })),
+);
+
 const ProfileView = lazy(() =>
   import("@/components/profile/ProfileView").then((module) => ({
     default: module.ProfileView,
   })),
+);
+
+const DevelopmentView = lazy(() =>
+  import("@/components/development/DevelopmentView").then((module) => ({ default: module.DevelopmentView })),
 );
 
 const StockView = lazy(() =>
@@ -566,6 +581,14 @@ function Shell({
   const [view, setView] = useState<ShellView>(
     new URLSearchParams(window.location.search).get("noteId") ? "note" : "chat",
   );
+  const [emailExtractionOpen, setEmailExtractionOpen] = useState(false);
+  const [newEmailAccountOpen, setNewEmailAccountOpen] = useState(false);
+  const emailGatewayUrl = useEmailStore((state) => state.gatewayUrl);
+  const [operationsMounted, setOperationsMounted] = useState(false);
+  const operationsVisible = view === "ssh" || view === "db";
+  useEffect(() => { if (operationsVisible) setOperationsMounted(true); }, [operationsVisible]);
+  const [developmentMounted, setDevelopmentMounted] = useState(false);
+  useEffect(() => { if (view === "development") setDevelopmentMounted(true); }, [view]);
   // 首次进入 note 后保持挂载，让网页转笔记可在切换模块后继续完成。
   const [noteMounted, setNoteMounted] = useState(view === "note");
   useEffect(() => {
@@ -608,6 +631,21 @@ function Shell({
   } = useBrowserTabs();
   const [sidebarBrowserTabId, setSidebarBrowserTabId] = useState<string | null>(null);
   const [sidebarBrowserVisible, setSidebarBrowserVisible] = useState(false);
+  const [developmentBrowserIds, setDevelopmentBrowserIds] = useState<string[]>([]);
+  const [developmentBrowserVisibleId, setDevelopmentBrowserVisibleId] = useState<string | null>(null);
+  const createDevelopmentBrowser = useCallback(() => {
+    const id = addEmptyTab({ activate: false });
+    setDevelopmentBrowserIds((old) => [...old, id]);
+    return id;
+  }, [addEmptyTab]);
+  const developmentBrowserHost = useMemo(() => ({
+    tabs: browserTabs, create: createDevelopmentBrowser,
+    retain: (id: string) => setDevelopmentBrowserIds((old) => old.includes(id) ? old : [...old, id]),
+    navigate: (id: string, url: string) => { void navigateToUrl(id, url); },
+    goBack: (id: string) => { void goBack(id); }, goForward: (id: string) => { void goForward(id); },
+    reload: (id: string) => { void reload(id); }, updateUrl: updateTabUrl,
+    openDevtools: (id: string) => { void openDevtools(id); }, setVisible: setDevelopmentBrowserVisibleId,
+  }), [browserTabs, createDevelopmentBrowser, navigateToUrl, goBack, goForward, reload, updateTabUrl, openDevtools]);
   const sidebarBrowserTab = browserTabs.find((tab) => tab.id === sidebarBrowserTabId) ?? null;
   const ensureSidebarBrowser = useCallback(() => {
     if (sidebarBrowserTabId && browserTabs.some((tab) => tab.id === sidebarBrowserTabId)) return;
@@ -617,8 +655,8 @@ function Shell({
     if (sidebarBrowserVisible && !sidebarBrowserTab) ensureSidebarBrowser();
   }, [ensureSidebarBrowser, sidebarBrowserTab, sidebarBrowserVisible]);
   const titleBarBrowserTabs = useMemo(
-    () => browserTabs.filter((tab) => tab.id !== sidebarBrowserTabId),
-    [browserTabs, sidebarBrowserTabId],
+    () => browserTabs.filter((tab) => tab.id !== sidebarBrowserTabId && !developmentBrowserIds.includes(tab.id)),
+    [browserTabs, sidebarBrowserTabId, developmentBrowserIds],
   );
   const sidebarBrowserController = useMemo(() => ({
     tab: sidebarBrowserTab,
@@ -1136,6 +1174,11 @@ function Shell({
     setMobileSidebarOpen(false);
   }, [switchToMonaTab]);
 
+  const onOpenEmailExtraction = useCallback(() => {
+    onOpenSchedule();
+    setEmailExtractionOpen(true);
+  }, [onOpenSchedule]);
+
   const onOpenSystem = useCallback(() => {
     setView("system");
     switchToMonaTab();
@@ -1144,6 +1187,12 @@ function Shell({
 
   const onOpenProfile = useCallback(() => {
     setView("profile");
+    switchToMonaTab();
+    setMobileSidebarOpen(false);
+  }, [switchToMonaTab]);
+
+  const onOpenDevelopment = useCallback(() => {
+    setView("development");
     switchToMonaTab();
     setMobileSidebarOpen(false);
   }, [switchToMonaTab]);
@@ -1542,7 +1591,7 @@ function Shell({
       // 启动默认模块：仅在初次启动且没有 ?noteId 深链时应用
       if (!new URLSearchParams(window.location.search).get("noteId")) {
         const dv = typeof s.default_view === "string" ? s.default_view : "";
-        const VALID_VIEWS: ShellView[] = ["chat", "note", "doc", "ssh", "email", "schedule", "db", "system", "profile", "stock", "settings"];
+        const VALID_VIEWS: ShellView[] = ["chat", "note", "doc", "ssh", "email", "schedule", "db", "system", "profile", "stock", "development", "settings"];
         if (dv && VALID_VIEWS.includes(dv as ShellView)) {
           setView(dv as ShellView);
         }
@@ -1907,6 +1956,8 @@ function Shell({
     && sidebarBrowserVisible
     && !!sidebarBrowserTab
     && !loginDialogOpen;
+  const developmentBrowserSurfaceVisible = view === "development" && !isBrowserTabActive && !loginDialogOpen
+    && !!developmentBrowserVisibleId && developmentBrowserIds.includes(developmentBrowserVisibleId);
   // 主内容表面：非浏览器原生 WebView 模式时启用圆角裁切与画布边缘。
   // browser 类型标签走原生 WebView，必须边到边布局（见 redesign-plan §4.7）。
   const showContentSurface = !browserFullscreen && activeBrowserTab.type !== "browser";
@@ -1914,13 +1965,15 @@ function Shell({
   useEffect(() => {
     if (!isTauri()) return;
     void browserHideTabsExcept(
-      sidebarBrowserSurfaceVisible
+      developmentBrowserSurfaceVisible
+        ? developmentBrowserVisibleId!
+        : sidebarBrowserSurfaceVisible
         ? sidebarBrowserTab.id
         : browserSurfaceVisible
           ? activeBrowserTab.id
           : undefined,
     ).catch(() => {});
-  }, [activeBrowserTab.id, browserSurfaceVisible, sidebarBrowserSurfaceVisible, sidebarBrowserTab]);
+  }, [activeBrowserTab.id, browserSurfaceVisible, sidebarBrowserSurfaceVisible, sidebarBrowserTab, developmentBrowserSurfaceVisible, developmentBrowserVisibleId]);
 
   useEffect(() => {
     if (view === "settings") {
@@ -2048,6 +2101,7 @@ function Shell({
                 onOpenSystem={onOpenSystem}
                 onOpenProfile={onOpenProfile}
                 onOpenStock={onOpenStock}
+                onOpenDevelopment={onOpenDevelopment}
                 onOpenSettings={onOpenSettings}
                 onOpenLogin={onOpenLogin}
                 onOpenSubscribe={onOpenSubscribe}
@@ -2105,7 +2159,7 @@ function Shell({
               <div
                 className={cn(
                   "absolute inset-0 flex flex-col bg-background",
-                  (view === "settings" || view === "note" || view === "ssh" || view === "db" || view === "doc" || view === "email" || view === "schedule" || view === "system" || view === "profile" || view === "stock" || activeBrowserTab.type !== "mona") &&
+                  (view === "settings" || view === "note" || view === "ssh" || view === "db" || view === "doc" || view === "email" || view === "schedule" || view === "system" || view === "profile" || view === "stock" || view === "development" || activeBrowserTab.type !== "mona") &&
                     "hidden",
                 )}
               >
@@ -2199,34 +2253,19 @@ function Shell({
                   />
                 </div>
               )}
-              <div
-                className={cn(
-                  "absolute inset-0 flex flex-col bg-background",
-                  (view !== "ssh" || isBrowserTabActive) && "invisible pointer-events-none",
-                )}
-              >
-                <TerminalView onOpenSubscribe={onOpenSubscribe} />
-              </div>
-              {view === "db" && (
-                <div className={cn("absolute inset-0 flex min-h-0 flex-col overflow-hidden", isBrowserTabActive && "hidden")}>
-                  {client ? (
-                    <Suspense fallback={<ModuleLoading title="正在打开数据库客户端" />}>
-                      <DbClientView onOpenSubscribe={onOpenSubscribe} />
-                    </Suspense>
-                  ) : (
-                    <RuntimePlaceholder
-                      status={runtimeStatus}
-                      message={runtimeError}
-                      onRetry={onRetryConnection}
-                    />
-                  )}
+              {(operationsMounted || operationsVisible) && (
+                <div className={cn("absolute inset-0 flex min-h-0 flex-col overflow-hidden", (!operationsVisible || isBrowserTabActive) && "invisible pointer-events-none")}
+                  aria-hidden={!operationsVisible || isBrowserTabActive} inert={!operationsVisible || isBrowserTabActive}>
+                  <Suspense fallback={<ModuleLoading title="正在打开运维" />}>
+                    <DbClientView visible={operationsVisible && !isBrowserTabActive} preferTerminal={view === "ssh"} onOpenSubscribe={onOpenSubscribe} />
+                  </Suspense>
                 </div>
               )}
               {view === "email" && (
                 <div className={cn("absolute inset-0 flex flex-col", isBrowserTabActive && "hidden")}>
                   {client ? (
                     <Suspense fallback={<ModuleLoading title="正在打开邮件" />}>
-                      <EmailClientView onOpenSubscribe={onOpenSubscribe} />
+                      <EmailClientView onOpenSubscribe={onOpenSubscribe} onOpenEmailExtraction={onOpenEmailExtraction} />
                     </Suspense>
                   ) : (
                     <RuntimePlaceholder
@@ -2241,7 +2280,7 @@ function Shell({
                 <div className={cn("absolute inset-0 flex flex-col", isBrowserTabActive && "hidden")}>
                   {client ? (
                     <Suspense fallback={<ModuleLoading title="正在打开计划" />}>
-                      <PlanningView />
+                      <PlanningView onOpenEmailExtraction={onOpenEmailExtraction} />
                     </Suspense>
                   ) : (
                     <RuntimePlaceholder
@@ -2261,6 +2300,13 @@ function Shell({
                       onOpenSession={onSelectChat}
                       onOpenArtifact={onOpenProfileArtifact}
                     />
+                  </Suspense>
+                </div>
+              )}
+              {developmentMounted && (
+                <div className={cn("absolute inset-0 flex min-h-0 flex-col", (view !== "development" || isBrowserTabActive) && "hidden")}>
+                  <Suspense fallback={<ModuleLoading title="正在打开开发工作台" />}>
+                    <DevelopmentView visible={view === "development" && !isBrowserTabActive && !loginDialogOpen} browserHost={developmentBrowserHost} onOpenModelSettings={() => onOpenSettings("models_providers")} />
                   </Suspense>
                 </div>
               )}
@@ -2410,6 +2456,25 @@ function Shell({
           initialView={loginDialogInitialView}
           autoSubscribeAfterLogin={loginDialogSubscribeIntent}
         />
+
+        <Suspense fallback={null}>
+          <EmailExtractionSettingsDialog
+            open={emailExtractionOpen}
+            onOpenChange={setEmailExtractionOpen}
+            onOpenSubscribe={onOpenSubscribe}
+            onOpenEmail={() => { setEmailExtractionOpen(false); onOpenEmail(); }}
+            onAddEmailAccount={() => {
+              setEmailExtractionOpen(false);
+              onOpenEmail();
+              setNewEmailAccountOpen(true);
+            }}
+          />
+          <NewEmailAccountDialog
+            open={newEmailAccountOpen}
+            onOpenChange={setNewEmailAccountOpen}
+            gatewayUrl={emailGatewayUrl}
+          />
+        </Suspense>
 
         <UpdateNotification
           onUpdateAvailable={setUpdateAvailable}

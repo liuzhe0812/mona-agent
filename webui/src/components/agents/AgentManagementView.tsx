@@ -102,6 +102,7 @@ type CompositeTool = {
   names: string[];
   label: string;
   description: string;
+  authoritativeName?: string;
 };
 
 type PermissionRow = {
@@ -147,9 +148,14 @@ function normalizeCompositeToolPermissions(
   composites: CompositeTool[],
 ): string[] {
   const next = new Set(tools);
-  composites.forEach(({ names }) => {
-    if (names.every((name) => next.has(name))) return;
-    names.forEach((name) => next.delete(name));
+  composites.forEach(({ names: compositeNames, authoritativeName }) => {
+    if (authoritativeName) {
+      if (next.has(authoritativeName)) compositeNames.forEach((name) => next.add(name));
+      else compositeNames.forEach((name) => next.delete(name));
+      return;
+    }
+    if (compositeNames.every((name) => next.has(name))) return;
+    compositeNames.forEach((name) => next.delete(name));
   });
   return [...next];
 }
@@ -551,14 +557,6 @@ function PermissionFields({
     .filter((tool) => !tool.requiresExplicitPermission)
     .map((tool) => tool.name);
   const configurableToolNames = new Set(configurableCatalog.map((tool) => tool.name));
-  const initialTools = detail.config.grantedTools ?? detail.effective.allowedTools ?? defaultTools;
-  const [selectedTools, setSelectedTools] = useState<string[]>(
-    initialTools.filter((name) => configurableToolNames.has(name)),
-  );
-  const [automationStatus, setAutomationStatus] = useState<AutomationStatus | null>(null);
-  const [saving, setSaving] = useState(false);
-  const [query, setQuery] = useState("");
-  const normalizedQuery = query.trim().toLocaleLowerCase();
   const browserTools = configurableCatalog.filter((tool) => tool.name.startsWith("browser_")).map((tool) => tool.name);
   const computerTools = configurableCatalog.filter((tool) => tool.name.startsWith("computer_")).map((tool) => tool.name);
   const compositeTools: CompositeTool[] = [
@@ -569,9 +567,25 @@ function PermissionFields({
       label: "查询笔记",
       description: "搜索并读取允许访问的笔记。",
     },
+    {
+      id: "url2note",
+      groupId: "notes",
+      names: ["url2note", "video_extract_frame"],
+      label: "网页转笔记",
+      description: "将公开文章或视频整理为 Markdown 笔记，并可保存视频关键画面。",
+      authoritativeName: "url2note",
+    },
     ...(browserTools.length > 0 ? [{ id: "browser_automation", groupId: "automation" as const, names: browserTools, label: "浏览器自动操作", description: "读取并操作 Mona 内置浏览器中的页面，默认开启。" }] : []),
     ...(computerTools.length > 0 ? [{ id: "computer_automation", groupId: "automation" as const, names: computerTools, label: "电脑操作自动化", description: "观察并操作电脑上的其他应用；首次开启会下载驱动。" }] : []),
   ];
+  const initialTools = detail.config.grantedTools ?? detail.effective.allowedTools ?? defaultTools;
+  const [selectedTools, setSelectedTools] = useState<string[]>(
+    normalizeCompositeToolPermissions(initialTools.filter((name) => configurableToolNames.has(name)), compositeTools),
+  );
+  const [automationStatus, setAutomationStatus] = useState<AutomationStatus | null>(null);
+  const [saving, setSaving] = useState(false);
+  const [query, setQuery] = useState("");
+  const normalizedQuery = query.trim().toLocaleLowerCase();
   const compositeToolNames = new Set(compositeTools.flatMap((tool) => tool.names));
   const visibleGroups = TOOL_GROUPS.map((group) => {
     const groupCatalogTools = configurableCatalog.filter(

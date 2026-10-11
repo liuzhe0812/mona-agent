@@ -4,6 +4,8 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 const MOCK_MODULE_DEFS = vi.hoisted(() => [
   { key: "note", label: "笔记", icon: null },
   { key: "stock", label: "股票", icon: null },
+  { key: "development", label: "开发", icon: null },
+  { key: "db", label: "运维", icon: null },
 ]);
 const mockLicense = vi.hoisted(() => ({
   loggedIn: false,
@@ -82,6 +84,25 @@ describe("AppRail", () => {
     const messages = screen.getByRole("button", { name: "Sessions" });
     expect(within(messages).getByText("3")).toBeInTheDocument();
     expect(messages.querySelector("[aria-hidden]"))?.toHaveClass("text-theme");
+  });
+
+  it.each(["ssh", "db"] as const)("uses the same operations entry for %s", (activeView) => {
+    const onOpenDb = vi.fn();
+    renderRail({ activeView, onOpenDb });
+    const operations = screen.getByRole("button", { name: "Operations", exact: true });
+    expect(operations).toHaveAttribute("aria-current", "page");
+    expect(screen.queryByRole("button", { name: "Terminal", exact: true })).not.toBeInTheDocument();
+    fireEvent.click(operations);
+    expect(onOpenDb).toHaveBeenCalledOnce();
+  });
+
+  it("opens the development module and marks its navigation active", () => {
+    const onOpenDevelopment = vi.fn();
+    renderRail({ activeView: "development", onOpenDevelopment });
+    const button = screen.getByRole("button", { name: "开发", exact: true });
+    expect(button).toHaveAttribute("aria-current", "page");
+    fireEvent.click(button);
+    expect(onOpenDevelopment).toHaveBeenCalledOnce();
   });
 
   it("routes stock module clicks to onOpenStock when the module is available", () => {

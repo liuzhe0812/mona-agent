@@ -2,6 +2,7 @@ import { useEffect, useRef, useState, type ReactNode } from "react";
 import {
   Archive,
   ArchiveRestore,
+  Code2,
   ChevronDown,
   ChevronUp,
   Download,
@@ -29,7 +30,6 @@ import { useTodoStore } from "@/components/schedule/todoStore";
 import sidebarMonaIcon from "@/assets/icons/sidebar-mona.png";
 import sidebarNoteIcon from "@/assets/icons/sidebar-note.png";
 import sidebarTerminalIcon from "@/assets/icons/sidebar-terminal.png";
-import sidebarDatabaseIcon from "@/assets/icons/sidebar-database.png";
 import sidebarDocIcon from "@/assets/icons/sidebar-doc.png";
 import sidebarEmailIcon from "@/assets/icons/sidebar-email.png";
 import sidebarScheduleIcon from "@/assets/icons/sidebar-schedule.png";
@@ -85,6 +85,7 @@ interface SidebarProps {
   onOpenSystem?: () => void;
   onOpenProfile?: () => void;
   onOpenStock?: () => void;
+  onOpenDevelopment?: () => void;
   onOpenSearch: () => void;
   onToggleArchived: () => void;
   onUpdateView: (view: Partial<SidebarViewState>) => void;
@@ -177,6 +178,7 @@ export function Sidebar(props: SidebarProps) {
         onOpenSystem={props.onOpenSystem ?? (() => {})}
         onOpenProfile={props.onOpenProfile ?? (() => {})}
         onOpenStock={props.onOpenStock ?? (() => {})}
+        onOpenDevelopment={props.onOpenDevelopment ?? (() => {})}
         onGoHome={props.onGoHome ?? (() => {})}
         emailUnreadCount={emailUnreadCount}
         planInboxCount={planInboxCount}
@@ -449,12 +451,12 @@ function isMacOS() {
 // 模块元信息表：key 与 ShellView 一致；label/icon 用于侧栏渲染和设置页展示
 export const MODULE_DEFS: ToolboxItem[] = [
   { key: "chat", label: "新会话", icon: <img src={sidebarMonaIcon} className="h-5 w-5 object-contain" alt="" draggable={false} /> },
+  { key: "development", label: "开发", icon: <Code2 className="h-5 w-5" /> },
   { key: "note", label: "笔记", icon: <img src={sidebarNoteIcon} className="h-5 w-5 object-contain" alt="" draggable={false} /> },
   { key: "doc", label: "文档", icon: <img src={sidebarDocIcon} className="h-5 w-5 object-contain" alt="" draggable={false} /> },
   { key: "email", label: "邮件", icon: <img src={sidebarEmailIcon} className="h-5 w-5 object-contain" alt="" draggable={false} /> },
   { key: "schedule", label: "计划", icon: <img src={sidebarScheduleIcon} className="h-5 w-5 object-contain" alt="" draggable={false} /> },
-  { key: "ssh", label: "终端", icon: <img src={sidebarTerminalIcon} className="h-5 w-5 object-contain" alt="" draggable={false} /> },
-  { key: "db", label: "数据库", icon: <img src={sidebarDatabaseIcon} className="h-5 w-5 object-contain" alt="" draggable={false} /> },
+  { key: "db", label: "运维", icon: <img src={sidebarTerminalIcon} className="h-5 w-5 object-contain" alt="" draggable={false} /> },
   { key: "system", label: "系统", icon: <img src={sidebarSystemIcon} className="h-5 w-5 object-contain" alt="" draggable={false} />, windowsOnly: true },
   { key: "profile", label: "画像", icon: <img src={sidebarProfileIcon} className="h-5 w-5 object-contain" alt="" draggable={false} /> },
   { key: "stock", label: "股票", icon: <img src={sidebarStockIcon} className="h-5 w-5 object-contain" alt="" draggable={false} /> },
@@ -505,6 +507,13 @@ export function mergeSidebarModules(
   const hasLegacyDefaultOrder = userMap.size > 0 && [...userMap.values()].every(
     (module) => LEGACY_DEFAULT_SIDEBAR_MODULE_ORDER.indexOf(module.key) === module.order,
   );
+  const previousTerminal = userModules?.find((module) => module?.key === "ssh");
+  if (previousTerminal) {
+    const database = userMap.get("db");
+    const terminalOrder = typeof previousTerminal.order === "number" ? previousTerminal.order : 0;
+    userMap.set("db", { key: "db", visible: Boolean(previousTerminal.visible || database?.visible),
+      order: Math.min(terminalOrder, database?.order ?? terminalOrder) });
+  }
   const merged: SidebarModuleConfig[] = MODULE_DEFS.map((d, i) => {
     const u = userMap.get(d.key);
     return u
@@ -525,6 +534,7 @@ function getToolboxHandler(key: string, handlers: {
   onOpenSystem: () => void;
   onOpenProfile: () => void;
   onOpenStock: () => void;
+  onOpenDevelopment: () => void;
   onGoHome: () => void;
 }): () => void {
   switch (key) {
@@ -538,6 +548,7 @@ function getToolboxHandler(key: string, handlers: {
     case "system": return handlers.onOpenSystem;
     case "profile": return handlers.onOpenProfile;
     case "stock": return handlers.onOpenStock;
+    case "development": return handlers.onOpenDevelopment;
     default: return handlers.onGoHome;
   }
 }
@@ -554,6 +565,7 @@ function ToolboxNavigation({
   onOpenSystem,
   onOpenProfile,
   onOpenStock,
+  onOpenDevelopment,
   onGoHome,
   emailUnreadCount,
   planInboxCount,
@@ -571,6 +583,7 @@ function ToolboxNavigation({
   onOpenSystem: () => void;
   onOpenProfile: () => void;
   onOpenStock: () => void;
+  onOpenDevelopment: () => void;
   onGoHome: () => void;
   emailUnreadCount: number;
   planInboxCount: number;
@@ -588,6 +601,7 @@ function ToolboxNavigation({
     onOpenSystem,
     onOpenProfile,
     onOpenStock,
+    onOpenDevelopment,
     onGoHome,
   };
   const merged = mergeSidebarModules(modules);

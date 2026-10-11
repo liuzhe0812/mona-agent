@@ -1,5 +1,5 @@
 /**
- * 笔记 Agent 侧边栏的通用输入组件：支持文本、图片粘贴/拖放/选择。
+ * 笔记 Agent 侧边栏的通用输入组件：支持文本、文件选择/拖放和图片粘贴。
  *
  * 与 ThreadComposer 保持相同图片处理语义（useAttachedImages + useClipboardAndDrop），
  * 但尺寸更紧凑，适配侧边栏宽度。
@@ -15,25 +15,26 @@ import {
 } from "react";
 import { ImageIcon, Loader2, Plus, Send, Square, X } from "lucide-react";
 
+import { OfficeDocChip } from "@/components/doc/office/OfficeDocChip";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
 import {
   useAttachedImages,
+  isInlineImage,
   MAX_IMAGES_PER_MESSAGE,
   type AttachedImage,
   type AttachmentError,
 } from "@/hooks/useAttachedImages";
+import { useAttachedDocuments } from "@/hooks/useAttachedDocuments";
 import { useClipboardAndDrop } from "@/hooks/useClipboardAndDrop";
-import type { SendImage } from "@/hooks/useMonaStream";
-
-/** 与服务器 MIME 白名单一致；SVG 被排除以避免 XSS。 */
-const ACCEPT_ATTR = "image/png,image/jpeg,image/webp,image/gif";
+import type { SendImage, SendOptions } from "@/hooks/useMonaStream";
 
 interface AgentComposerProps {
   value: string;
   onChange: (value: string) => void;
-  onSend: (text: string, images?: SendImage[]) => void;
+  onSend: (text: string, images?: SendImage[], options?: SendOptions) => void;
+  chatId?: string | null;
   disabled?: boolean;
   placeholder?: string;
   isStreaming?: boolean;
@@ -45,6 +46,7 @@ export function AgentComposer({
   value,
   onChange,
   onSend,
+  chatId,
   disabled = false,
   placeholder = "输入消息...",
   isStreaming = false,
@@ -56,7 +58,15 @@ export function AgentComposer({
   const chipRefs = useRef(new Map<string, HTMLButtonElement>());
   const [inlineError, setInlineError] = useState<string | null>(null);
 
-  const { images, enqueue, remove, clear, encoding, full } = useAttachedImages();
+  const { images, enqueue, remove, clear, encoding } = useAttachedImages();
+  const {
+    documents,
+    uploading: documentsUploading,
+    error: documentUploadError,
+    add: addDocuments,
+    remove: removeDocument,
+    clear: clearDocuments,
+  } = useAttachedDocuments(chatId);
 
   const readyImages = useMemo(
     () =>
@@ -69,23 +79,37 @@ export function AgentComposer({
   const hasErrors = images.some((img) => img.status === "error");
 
   const canSend =
-    !disabled && !encoding && !hasErrors && (value.trim().length > 0 || readyImages.length > 0);
+    !disabled
+    && !encoding
+    && !documentsUploading
+    && !hasErrors
+    && (value.trim().length > 0 || readyImages.length > 0 || documents.length > 0);
 
   const addFiles = useCallback(
     (files: File[]) => {
-      if (files.length === 0) return;
-      const { rejected } = enqueue(files);
+      if (files.length === 0 || disabled || documentsUploading) return;
+      const imageFiles = files.filter(isInlineImage);
+      const documentFiles = files.filter((file) => !isInlineImage(file));
+      const { rejected } = enqueue(imageFiles);
       if (rejected.length > 0) {
         setInlineError(formatRejection(rejected[0].reason));
       } else {
         setInlineError(null);
       }
+      if (documentFiles.length > 0) void addDocuments(documentFiles);
     },
-    [enqueue],
+    [addDocuments, disabled, documentsUploading, enqueue],
+  );
+
+  const addDroppedFiles = useCallback(
+    (files: File[]) => {
+      if (files.length > 0 && !disabled && !documentsUploading) void addDocuments(files);
+    },
+    [addDocuments, disabled, documentsUploading],
   );
 
   const { isDragging, onPaste, onDragEnter, onDragOver, onDragLeave, onDrop } =
-    useClipboardAndDrop(addFiles);
+    useClipboardAndDrop(addFiles, { acceptAllFiles: true, onDropFiles: addDroppedFiles });
 
   const submit = useCallback(() => {
     if (!canSend) return;
@@ -96,11 +120,21 @@ export function AgentComposer({
             preview: { url: img.dataUrl, name: img.file.name },
           }))
         : undefined;
-    onSend(value.trim(), payload);
+    onSend(
+      value.trim(),
+      payload,
+      documents.length > 0
+        ? {
+            docPaths: documents.map((document) => document.path),
+            documentNames: documents.map((document) => document.name),
+          }
+        : undefined,
+    );
     onChange("");
     clear();
+    clearDocuments();
     setInlineError(null);
-  }, [canSend, clear, onChange, onSend, readyImages, value]);
+  }, [canSend, clear, clearDocuments, documents, onChange, onSend, readyImages, value]);
 
   const handleKeyDown = (event: KeyboardEvent<HTMLTextAreaElement>) => {
     if ((event.ctrlKey || event.metaKey) && event.key === "Enter") {
@@ -129,7 +163,7 @@ export function AgentComposer({
   const onFilePick: React.ChangeEventHandler<HTMLInputElement> = (event) => {
     const files = Array.from(event.target.files ?? []);
     event.target.value = "";
-    addFiles(files);
+    if (files.length > 0) void addDocuments(files);
   };
 
   return (
@@ -146,13 +180,12 @@ export function AgentComposer({
       <input
         ref={fileInputRef}
         type="file"
-        accept={ACCEPT_ATTR}
         multiple
         hidden
         onChange={onFilePick}
       />
 
-      {images.length > 0 ? (
+      {images.length > 0 || documents.length > 0 ? (
         <div className="flex flex-wrap gap-1.5">
           {images.map((img) => (
             <AttachmentChip
@@ -165,12 +198,20 @@ export function AgentComposer({
               }}
             />
           ))}
+          {documents.map((document) => (
+            <OfficeDocChip
+              key={document.path}
+              name={document.name}
+              size={document.size}
+              onRemove={() => removeDocument(document.path)}
+            />
+          ))}
         </div>
       ) : null}
 
-      {inlineError ? (
+      {inlineError || documentUploadError ? (
         <div className="rounded-md border border-destructive/40 bg-destructive/8 px-2 py-0.5 text-micro text-destructive">
-          {inlineError}
+          {inlineError ?? documentUploadError}
         </div>
       ) : null}
 
@@ -189,13 +230,13 @@ export function AgentComposer({
         <Button
           type="button"
           variant="ghost"
-          disabled={disabled || full}
-          aria-label="添加图片"
-          title="添加图片"
+          disabled={disabled || documentsUploading}
+          aria-label="添加文件"
+          title="添加文件"
           onClick={() => fileInputRef.current?.click()}
           className="h-6 w-6 shrink-0 rounded-md p-0 text-muted-foreground hover:bg-accent hover:text-foreground"
         >
-          {encoding ? (
+          {encoding || documentsUploading ? (
             <Loader2 className="h-3.5 w-3.5 animate-spin" />
           ) : (
             <Plus className="h-3 w-3" />

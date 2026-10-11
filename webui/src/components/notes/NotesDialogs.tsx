@@ -69,7 +69,7 @@ export function PromptDialog({
             placeholder={placeholder}
             autoFocus
             disabled={loading}
-            className="h-8 w-full rounded-lg border-border/70 bg-background px-2.5 text-caption shadow-none focus-visible:ring-0 focus:border-border"
+            className="h-8 w-full rounded-lg border-border/70 bg-background px-2.5 text-caption shadow-none focus-visible:ring-0"
           />
         </div>
         <DialogFooter className="border-t border-border/65 px-4 py-2.5">

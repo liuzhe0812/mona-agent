@@ -1,7 +1,7 @@
 import { useLayoutEffect, useRef, useState, type ReactNode } from "react";
 import {
   CalendarDays,
-  Database,
+  Code2,
   Download,
   FileText,
   LogIn,
@@ -56,6 +56,7 @@ interface AppRailProps {
   onOpenSystem: () => void;
   onOpenProfile: () => void;
   onOpenStock: () => void;
+  onOpenDevelopment?: () => void;
   onOpenSettings: (section?: string) => void;
   onOpenLogin?: () => void;
   onOpenSubscribe?: () => void;
@@ -87,10 +88,11 @@ export const MODULE_ICONS: Record<string, ReactNode> = {
   ssh: <SquareTerminal className="h-5 w-5" />,
   email: <Mail className="h-5 w-5" />,
   schedule: <CalendarDays className="h-5 w-5" />,
-  db: <Database className="h-5 w-5" />,
+  db: <SquareTerminal className="h-5 w-5" />,
   system: <MonitorCog className="h-5 w-5" />,
   profile: <ScanFace className="h-5 w-5" />,
   stock: <TrendingUp className="h-5 w-5" />,
+  development: <Code2 className="h-5 w-5" />,
 };
 
 function RailItem({
@@ -145,6 +147,7 @@ export function AppRail(props: AppRailProps) {
   const planInboxCount = useTodoStore((s) => s.inboxCount);
   const [overflowOpen, setOverflowOpen] = useState(false);
 
+  const activeView = props.activeView === "ssh" ? "db" : props.activeView;
   const moduleHandlers: Record<string, () => void> = {
     note: props.onOpenNote,
     doc: props.onOpenDoc,
@@ -155,6 +158,7 @@ export function AppRail(props: AppRailProps) {
     system: props.onOpenSystem,
     profile: props.onOpenProfile,
     stock: props.onOpenStock,
+    development: props.onOpenDevelopment ?? (() => {}),
   };
   const moduleBadge = (key: string) => {
     if (key === "email" && emailUnreadCount > 0) return emailUnreadCount;
@@ -210,7 +214,7 @@ export function AppRail(props: AppRailProps) {
     (total, item) => total + (moduleBadge(item.key) ?? 0),
     0,
   );
-  const secondaryActive = secondary.some((item) => item.key === props.activeView);
+  const secondaryActive = secondary.some((item) => item.key === activeView);
   const openNativeOverflowMenu = async () => {
     const { Menu } = await import("@tauri-apps/api/menu");
     const menu = await Menu.new({
@@ -219,7 +223,7 @@ export function AppRail(props: AppRailProps) {
         const label = t(`rail.modules.${item.key}`, item.label);
         return {
           text: badge ? `${label} (${badge > 99 ? "99+" : badge})` : label,
-          checked: props.activeView === item.key,
+          checked: activeView === item.key,
           action: moduleHandlers[item.key] ?? (() => {}),
         };
       }),
@@ -280,7 +284,7 @@ export function AppRail(props: AppRailProps) {
               key={item.key}
               label={t(`rail.modules.${item.key}`, item.label)}
               icon={MODULE_ICONS[item.key] ?? item.icon}
-              active={props.activeView === item.key}
+              active={activeView === item.key}
               badge={moduleBadge(item.key)}
               onClick={moduleHandlers[item.key] ?? (() => {})}
             />
@@ -297,14 +301,14 @@ export function AppRail(props: AppRailProps) {
                       key={item.key}
                       className={cn(
                         "gap-2 px-2.5 py-1.5 text-[13px]",
-                        props.activeView === item.key && "bg-accent",
+                        activeView === item.key && "bg-accent",
                       )}
                       onSelect={() => (moduleHandlers[item.key] ?? (() => {}))()}
                     >
                       <span
                         className={cn(
                           "flex h-4 w-4 items-center justify-center [&_svg]:h-4 [&_svg]:w-4",
-                          props.activeView === item.key && "text-theme",
+                          activeView === item.key && "text-theme",
                         )}
                         aria-hidden
                       >

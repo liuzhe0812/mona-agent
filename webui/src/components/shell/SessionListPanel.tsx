@@ -162,7 +162,7 @@ export function SessionListPanel(props: SessionListPanelProps) {
       )}
     >
       <div className="flex h-11 shrink-0 items-center gap-2 border-b border-border/35 px-3">
-        <div className="flex h-8 min-w-0 flex-1 items-center gap-2 rounded-md border border-border/55 bg-muted/45 px-2.5 transition-colors focus-within:border-primary/35 focus-within:bg-background focus-within:ring-1 focus-within:ring-primary/20">
+        <div className="flex h-8 min-w-0 flex-1 items-center gap-2 rounded-md border border-border/55 bg-muted/45 px-2.5 transition-colors focus-within:bg-background">
           <Search className="h-4 w-4 shrink-0 text-muted-foreground" aria-hidden />
           <input
             type="search"

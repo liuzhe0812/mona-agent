@@ -25,7 +25,7 @@ import { AgentActivityCluster } from "@/components/thread/AgentActivityCluster";
 import { buildDisplayUnits, type DisplayUnit } from "@/components/thread/ThreadMessages";
 import { ThreadComposer } from "@/components/thread/ThreadComposer";
 import { deriveNoteTitle } from "@/lib/note-title";
-import { useMonaStream, type SendImage } from "@/hooks/useMonaStream";
+import { useMonaStream, type SendImage, type SendOptions } from "@/hooks/useMonaStream";
 import { useSessionHistory } from "@/hooks/useSessions";
 import type { UIMessage } from "@/lib/types";
 import { useClientOptional } from "@/providers/ClientProvider";
@@ -94,8 +94,8 @@ export function NoteAgentPanel({
   const [creatingChat, setCreatingChat] = useState(false);
   const [replaceConfirmMessage, setReplaceConfirmMessage] = useState<UIMessage | null>(null);
   const pendingPromptRef = useRef<string | null>(null);
-  const pendingDisplayContentRef = useRef<string | null>(null);
   const pendingImagesRef = useRef<SendImage[] | null>(null);
+  const pendingSendOptionsRef = useRef<SendOptions | null>(null);
   // 普通笔记 action 中只有 translate 自动应用
   const pendingActionRef = useRef<Exclude<NoteAiActionId, "freeform"> | null>(null);
   const autoAppliedMessageIdsRef = useRef<Set<string>>(new Set());
@@ -170,16 +170,12 @@ export function NoteAgentPanel({
     if (!chatId || loading || creatingChat) return;
     const pendingPrompt = pendingPromptRef.current;
     if (!pendingPrompt) return;
-    const pendingDisplay = pendingDisplayContentRef.current;
     const pendingImages = pendingImagesRef.current ?? undefined;
+    const pendingOptions = pendingSendOptionsRef.current ?? undefined;
     pendingPromptRef.current = null;
-    pendingDisplayContentRef.current = null;
     pendingImagesRef.current = null;
-    send(
-      pendingPrompt,
-      pendingImages,
-      pendingDisplay ? { displayContent: pendingDisplay } : undefined,
-    );
+    pendingSendOptionsRef.current = null;
+    send(pendingPrompt, pendingImages, pendingOptions);
   }, [chatId, creatingChat, loading, send]);
 
   useEffect(() => {
@@ -320,18 +316,27 @@ export function NoteAgentPanel({
   }, [currentNoteHash]);
 
   const sendPromptToAgent = useCallback(
-    async (prompt: string, displayContent?: string, images?: SendImage[]) => {
+    async (
+      prompt: string,
+      displayContent?: string,
+      images?: SendImage[],
+      sendOptions?: SendOptions,
+    ) => {
       if (!note) return false;
       const trimmed = prompt.trim();
       const hasImages = !!images && images.length > 0;
-      if ((!trimmed && !hasImages) || creatingChat) return false;
+      const hasDocuments = !!sendOptions?.docPaths?.length;
+      if ((!trimmed && !hasImages && !hasDocuments) || creatingChat) return false;
       if (isStreaming) {
         setNotice("Agent 正在处理，先停止或等它完成");
         return false;
       }
 
       const finalPrompt = trimmed;
-      const options = displayContent ? { displayContent } : undefined;
+      const options: SendOptions = {
+        ...sendOptions,
+        ...(displayContent ? { displayContent } : {}),
+      };
 
       if (chatId) {
         send(finalPrompt, images, options);
@@ -346,16 +351,16 @@ export function NoteAgentPanel({
       setCreatingChat(true);
       setNotice("正在创建笔记专属会话");
       pendingPromptRef.current = finalPrompt;
-      pendingDisplayContentRef.current = displayContent ?? null;
       pendingImagesRef.current = images ?? null;
+      pendingSendOptionsRef.current = options;
       try {
         const nextChatId = await client.newChat(5_000, true);
         onAgentChatIdChange(nextChatId);
         return true;
       } catch {
         pendingPromptRef.current = null;
-        pendingDisplayContentRef.current = null;
         pendingImagesRef.current = null;
+        pendingSendOptionsRef.current = null;
         setNotice("创建会话失败");
         return false;
       } finally {
@@ -401,16 +406,17 @@ export function NoteAgentPanel({
 
   // 自由对话：带上正文哈希，AI 才能返回可自动应用的 note-patch。
   const sendDraft = useCallback(
-    async (text: string, images?: SendImage[], displayContent?: string) => {
+    async (text: string, images?: SendImage[], options?: SendOptions) => {
       if (!note) return;
       const question = text.trim();
-      if (!question && (!images || images.length === 0)) return;
+      if (!question && (!images || images.length === 0) && !options?.docPaths?.length) return;
       const baseHash = computeNoteBaseHash(note.contentMarkdown);
       requestBaseHashRef.current = baseHash;
       const sent = await sendPromptToAgent(
         buildFreeformAgentPrompt(note, question, baseHash),
-        displayContent ?? question,
+        options?.displayContent ?? question,
         images,
+        options,
       );
       if (!sent) requestBaseHashRef.current = null;
     },
@@ -650,9 +656,8 @@ export function NoteAgentPanel({
         {/* 与终端模块的输入框保持一致（ThreadComposer） */}
         <ThreadComposer
           key={note?.id ?? "no-note"}
-          onSend={(content, images, options) =>
-            sendDraft(content, images, options?.displayContent)
-          }
+          chatId={chatId}
+          onSend={sendDraft}
           disabled={!note || creatingChat}
           placeholder="输入问题，AI 将基于当前笔记回答..."
           isStreaming={isStreaming}

@@ -6,7 +6,7 @@ import {
   X,
 } from "lucide-react";
 
-import { useMonaStream, type SendImage } from "@/hooks/useMonaStream";
+import { useMonaStream, type SendImage, type SendOptions } from "@/hooks/useMonaStream";
 import { useSessionHistory } from "@/hooks/useSessions";
 import type { UIMessage } from "@/lib/types";
 import { useClientOptional } from "@/providers/ClientProvider";
@@ -48,8 +48,8 @@ export function MindMapAgentPanel({
   const [notice, setNotice] = useState<string | null>(null);
   const [creatingChat, setCreatingChat] = useState(false);
   const pendingPromptRef = useRef<string | null>(null);
-  const pendingDisplayContentRef = useRef<string | null>(null);
   const pendingImagesRef = useRef<SendImage[] | null>(null);
+  const pendingSendOptionsRef = useRef<SendOptions | null>(null);
   const pendingActionRef = useRef<string | null>(null);
   const autoAppliedMessageIdsRef = useRef<Set<string>>(new Set());
   /** 发起请求时记录的 baseHash，用于检测生成期间语义变化 */
@@ -118,17 +118,13 @@ export function MindMapAgentPanel({
   useEffect(() => {
     if (!chatId || loading || creatingChat) return;
     const pendingPrompt = pendingPromptRef.current;
-    if (!pendingPrompt && !pendingImagesRef.current) return;
-    const pendingDisplay = pendingDisplayContentRef.current;
+    const pendingOptions = pendingSendOptionsRef.current;
+    if (!pendingPrompt && !pendingImagesRef.current && !pendingOptions?.docPaths?.length) return;
     const pendingImages = pendingImagesRef.current;
     pendingPromptRef.current = null;
-    pendingDisplayContentRef.current = null;
     pendingImagesRef.current = null;
-    send(
-      pendingPrompt ?? "",
-      pendingImages ?? undefined,
-      pendingDisplay ? { displayContent: pendingDisplay } : undefined,
-    );
+    pendingSendOptionsRef.current = null;
+    send(pendingPrompt ?? "", pendingImages ?? undefined, pendingOptions ?? undefined);
   }, [chatId, creatingChat, loading, send]);
 
   useEffect(() => {
@@ -219,10 +215,15 @@ export function MindMapAgentPanel({
   }, [currentBaseHash]);
 
   const sendPromptToAgent = useCallback(
-    async (prompt: string, images?: SendImage[], displayContent?: string) => {
+    async (
+      prompt: string,
+      images?: SendImage[],
+      displayContent?: string,
+      sendOptions?: SendOptions,
+    ) => {
       if (!note) return false;
       const trimmed = prompt.trim();
-      if ((!trimmed && (!images || images.length === 0)) || creatingChat) return false;
+      if ((!trimmed && !images?.length && !sendOptions?.docPaths?.length) || creatingChat) return false;
       if (isStreaming) {
         setNotice("Agent 正在处理，先停止或等它完成");
         return false;
@@ -232,7 +233,10 @@ export function MindMapAgentPanel({
       requestBaseHashRef.current = mindMapSelectionCtx.baseHash ?? null;
 
       if (chatId) {
-        send(trimmed, images, displayContent ? { displayContent } : undefined);
+        send(trimmed, images, {
+          ...sendOptions,
+          ...(displayContent ? { displayContent } : {}),
+        });
         return true;
       }
 
@@ -244,16 +248,19 @@ export function MindMapAgentPanel({
       setCreatingChat(true);
       setNotice("正在创建导图专属会话");
       pendingPromptRef.current = trimmed;
-      pendingDisplayContentRef.current = displayContent ?? null;
       pendingImagesRef.current = images ?? null;
+      pendingSendOptionsRef.current = {
+        ...sendOptions,
+        ...(displayContent ? { displayContent } : {}),
+      };
       try {
         const nextChatId = await client.newChat(5_000, true);
         onAgentChatIdChange(nextChatId);
         return true;
       } catch {
         pendingPromptRef.current = null;
-        pendingDisplayContentRef.current = null;
         pendingImagesRef.current = null;
+        pendingSendOptionsRef.current = null;
         setNotice("创建会话失败");
         return false;
       } finally {
@@ -263,10 +270,10 @@ export function MindMapAgentPanel({
     [chatId, client, creatingChat, isStreaming, note, onAgentChatIdChange, send, mindMapSelectionCtx.baseHash],
   );
 
-  const sendDraft = useCallback((text: string, images?: SendImage[]) => {
+  const sendDraft = useCallback((text: string, images?: SendImage[], options?: SendOptions) => {
     if (!note) return;
     const question = text.trim();
-    if (!question && (!images || images.length === 0)) return;
+    if (!question && !images?.length && !options?.docPaths?.length) return;
     const baseHash = mindMapSelectionCtx.baseHash ?? "";
     const selection =
       mindMapSelectionCtx.noteId === note.id ? mindMapSelectionCtx.selection : null;
@@ -275,7 +282,8 @@ export function MindMapAgentPanel({
     void sendPromptToAgent(
       buildMindMapFreeformPrompt(note, question, selection, baseHash),
       images,
-      question,
+      options?.displayContent ?? question,
+      options,
     );
   }, [note, mindMapSelectionCtx, sendPromptToAgent]);
 
@@ -404,6 +412,7 @@ export function MindMapAgentPanel({
 
       <div className="shrink-0 p-2">
         <AgentComposer
+          chatId={chatId}
           value={draft}
           onChange={setDraft}
           onSend={sendDraft}

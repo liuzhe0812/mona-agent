@@ -23,9 +23,11 @@ const SYSTEM_MONITOR_MAX_WIDTH = 480;
 
 interface IdeLayoutProps {
   sessionId: string;
+  active?: boolean;
+  showFileTree?: boolean;
 }
 
-export function IdeLayout({ sessionId }: IdeLayoutProps) {
+export function IdeLayout({ sessionId, active = true, showFileTree = true }: IdeLayoutProps) {
   const ideVisible = useIdeStore((s) => s.ideVisible);
   const openProject = useIdeStore((s) => s.openProject);
   const currentSessionId = useIdeStore((s) => s.sessionId);
@@ -92,10 +94,10 @@ export function IdeLayout({ sessionId }: IdeLayoutProps) {
   }, []);
 
   useEffect(() => {
-    if (sessionStatus !== "connected") return;
+    if (!showFileTree || !active || sessionStatus !== "connected") return;
     if (currentSessionId === sessionId) return;
     openProject(sessionId, "~").catch(console.error);
-  }, [sessionId, openProject, sessionStatus, currentSessionId]);
+  }, [showFileTree, active, sessionId, openProject, sessionStatus, currentSessionId]);
 
   if (sessionStatus === "connecting") {
     return (
@@ -123,7 +125,7 @@ export function IdeLayout({ sessionId }: IdeLayoutProps) {
 
   return (
     <div className="flex h-full">
-      {fileTreeVisible && (
+      {showFileTree && fileTreeVisible && (
         <>
           <div
             className="shrink-0 overflow-hidden"
