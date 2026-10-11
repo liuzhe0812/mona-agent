@@ -13,7 +13,7 @@ import {
   Container,
 } from "lucide-react";
 import { useTerminalStore } from "./store/terminalStore";
-import { sshConnect, sshDisconnect, shellKill, shellSpawn, sshOpenSftp, vncDisconnect } from "./ipc";
+import { sshConnect, sshDisconnect, shellKill, shellSpawn, vncDisconnect } from "./ipc";
 import { isTauri } from "@/lib/tauri";
 import {
   ContextMenu,
@@ -31,8 +31,11 @@ import {
 } from "@/components/ui/dialog";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import terminalIcon from "@/assets/icons/sidebar-terminal.png";
 
-export function SessionTabBar() {
+export function SessionTabBar({ embedded = false, active = true, onActivate }: {
+  embedded?: boolean; active?: boolean; onActivate?: () => void;
+}) {
   const sessions = useTerminalStore((s) => s.sessions);
   const activeSessionId = useTerminalStore((s) => s.activeSessionId);
   const setActiveSession = useTerminalStore((s) => s.setActiveSession);
@@ -134,20 +137,12 @@ export function SessionTabBar() {
   );
 
   const handleOpenSftp = useCallback(
-    async (session: { id: string; configId: string }) => {
-      try {
-        const sftpSessionId = await sshOpenSftp(session.id);
-        const config = connections.find((c) => c.id === session.configId);
-        addSession({
-          id: sftpSessionId,
-          configId: session.configId,
-          type: "sftp",
-          status: "connected",
-          title: config ? `SFTP ${config.host}` : "SFTP",
-        });
-      } catch {}
+    (session: { id: string }) => {
+      useTerminalStore.getState().updateSession(session.id, { sftpVisible: true });
+      setActiveSession(session.id);
+      onActivate?.();
     },
-    [connections, addSession],
+    [setActiveSession, onActivate],
   );
 
   const handleOpenDocker = useCallback(
@@ -276,9 +271,9 @@ export function SessionTabBar() {
 
   return (
     <>
-      <div className="flex h-8 shrink-0 items-end border-b border-border bg-card px-1">
+      <div className={embedded ? "flex shrink-0 items-end" : "flex h-8 shrink-0 items-end border-b border-border bg-card px-1"}>
         {sessions.map((session, index) => {
-          const isActive = session.id === activeSessionId;
+          const isActive = active && session.id === activeSessionId;
           const isSsh = session.type === "ssh";
           const canDuplicate = session.type === "ssh" || session.type === "sftp" || session.type === "local";
           const canExport = session.type === "ssh" || session.type === "local";
@@ -288,40 +283,44 @@ export function SessionTabBar() {
             <ContextMenu key={session.id}>
               <ContextMenuTrigger asChild>
                 <div
-                  className={`group relative flex h-7 cursor-pointer select-none items-center gap-1 px-2 text-caption transition-colors ${
-                    index > 0 ? "border-l border-border" : ""
-                  } ${
-                    isActive
-                      ? "bg-background text-foreground"
-                      : "text-muted-foreground hover:bg-accent"
-                  }`}
-                  onClick={() => setActiveSession(session.id)}
+                  className={embedded
+                    ? `group relative flex h-8 shrink-0 cursor-pointer select-none items-center gap-2 border-b-2 border-r border-r-border px-3 pr-8 text-caption font-normal transition-colors ${isActive ? "border-b-info bg-muted/20 text-foreground" : "border-b-transparent text-muted-foreground hover:bg-accent/50"}`
+                    : `group relative flex h-7 cursor-pointer select-none items-center gap-1 px-2 text-caption transition-colors ${index > 0 ? "border-l border-border" : ""} ${isActive ? "bg-background text-foreground" : "text-muted-foreground hover:bg-accent"}`}
+                  role={embedded ? "tab" : undefined}
+                  aria-selected={embedded ? isActive : undefined}
+                  tabIndex={0}
+                  onKeyDown={(event) => { if (event.target === event.currentTarget && (event.key === "Enter" || event.key === " ")) { event.preventDefault(); setActiveSession(session.id); onActivate?.(); } }}
+                  onClick={() => { setActiveSession(session.id); onActivate?.(); }}
                 >
-                  {isActive && (
+                  {!embedded && isActive && (
+                    <span className="absolute bottom-0 left-0 right-0 h-px bg-foreground/60" />
+                  )}
+                  {embedded ? (
+                    <img src={terminalIcon} alt="" draggable={false} className="h-4 w-4 shrink-0 object-contain" />
+                  ) : (
                     <span
-                      className="absolute bottom-0 left-0 right-0 h-px bg-foreground/60"
+                      className={`h-1.5 w-1.5 rounded-full shrink-0 ${
+                        session.type === "local"
+                          ? "bg-warning"
+                          : session.status === "connected"
+                            ? "bg-success-indicator"
+                            : session.status === "connecting"
+                              ? "bg-warning"
+                              : session.status === "error"
+                                ? "bg-destructive"
+                                : "bg-muted-foreground/40"
+                      }`}
                     />
                   )}
-                  <span
-                    className={`h-1.5 w-1.5 rounded-full shrink-0 ${
-                      session.type === "local"
-                        ? "bg-warning"
-                        : session.status === "connected"
-                          ? "bg-success-indicator"
-                          : session.status === "connecting"
-                            ? "bg-warning"
-                            : session.status === "error"
-                              ? "bg-destructive"
-                              : "bg-muted-foreground/40"
-                    }`}
-                  />
-                  <span className="max-w-[120px] truncate">{session.title}</span>
+                  <span className={embedded ? "max-w-44 truncate" : "max-w-[120px] truncate"}>{session.title}</span>
                   <Button
                     type="button"
                     variant="ghost"
                     size="icon"
                     aria-label={`关闭 ${session.title}`}
-                    className="ml-auto flex h-5 w-5 shrink-0 items-center justify-center rounded-sm text-muted-foreground opacity-0 transition-opacity group-hover:opacity-100 group-focus-within:opacity-100 hover:bg-destructive/20 hover:text-destructive focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
+                    className={embedded
+                      ? "pointer-events-none absolute right-1 top-1/2 z-10 h-6 w-6 -translate-y-1/2 rounded-sm bg-background/90 text-muted-foreground opacity-0 shadow-none transition-opacity group-hover:pointer-events-auto group-hover:opacity-100 focus-visible:pointer-events-auto focus-visible:opacity-100"
+                      : "ml-auto flex h-5 w-5 shrink-0 items-center justify-center rounded-sm text-muted-foreground opacity-0 transition-opacity group-hover:opacity-100 group-focus-within:opacity-100 hover:bg-destructive/20 hover:text-destructive focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"}
                     onClick={(e) => {
                       e.stopPropagation();
                       handleClose(session.id, session.type);
@@ -384,7 +383,7 @@ export function SessionTabBar() {
             </ContextMenu>
           );
         })}
-        <Button
+        {!embedded && <Button
           variant="ghost"
           size="icon"
           onClick={handleNewShell}
@@ -393,7 +392,7 @@ export function SessionTabBar() {
           title="新建 Shell"
         >
           <Plus className="h-3.5 w-3.5" />
-        </Button>
+        </Button>}
       </div>
 
       <Dialog open={renameOpen} onOpenChange={(open) => { if (!open) { setRenameOpen(false); setRenameTarget(null); } }}>

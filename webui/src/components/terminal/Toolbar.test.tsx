@@ -36,6 +36,17 @@ describe("Toolbar desktop entry", () => {
     });
   });
 
+  it.each([true, false])("omits the redundant SFTP toolbar button (embedded=%s)", (embedded) => {
+    render(<Toolbar embedded={embedded} />);
+
+    expect(screen.queryByRole("button", { name: "SFTP", exact: true })).not.toBeInTheDocument();
+    for (const name of ["批量", "桌面", "Docker", "设置"]) {
+      expect(screen.getByRole("button", { name, exact: true })).toBeInTheDocument();
+    }
+    expect(useTerminalStore.getState().sessions).toHaveLength(1);
+    expect(useTerminalStore.getState().sessions[0].sftpVisible).toBeUndefined();
+  });
+
   it("opens desktop from the active SSH session without asking for credentials again", () => {
     render(<Toolbar />);
 

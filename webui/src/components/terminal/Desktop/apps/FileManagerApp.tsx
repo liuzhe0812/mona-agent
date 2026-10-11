@@ -808,7 +808,7 @@ export function FileManagerApp({
               type="text"
               value={newState.name}
               onChange={(e) => setNewState({ ...newState, name: e.target.value })}
-              className="mb-4 w-full rounded border border-white/10 bg-black/20 px-3 py-2 text-sm text-white focus:border-blue-500 focus:outline-none"
+              className="mb-4 w-full rounded border border-white/10 bg-black/20 px-3 py-2 text-sm text-white focus:outline-none"
               autoFocus
               onKeyDown={(e) => e.key === "Enter" && (newState.type === "folder" ? handleNewFolder() : handleNewFile())}
             />
@@ -832,7 +832,7 @@ export function FileManagerApp({
               type="text"
               value={renameState.name}
               onChange={(e) => setRenameState({ ...renameState, name: e.target.value })}
-              className="mb-4 w-full rounded border border-white/10 bg-black/20 px-3 py-2 text-sm text-white focus:border-blue-500 focus:outline-none"
+              className="mb-4 w-full rounded border border-white/10 bg-black/20 px-3 py-2 text-sm text-white focus:outline-none"
               autoFocus
               onKeyDown={(e) => e.key === "Enter" && handleRename()}
             />
@@ -857,7 +857,7 @@ export function FileManagerApp({
                 type="text"
                 value={archiveState.name}
                 onChange={(e) => setArchiveState({ ...archiveState, name: e.target.value })}
-                className="flex-1 rounded border border-white/10 bg-black/20 px-3 py-2 text-sm text-white focus:border-blue-500 focus:outline-none"
+                className="flex-1 rounded border border-white/10 bg-black/20 px-3 py-2 text-sm text-white focus:outline-none"
                 autoFocus
                 onKeyDown={(e) => e.key === "Enter" && handleArchive()}
               />

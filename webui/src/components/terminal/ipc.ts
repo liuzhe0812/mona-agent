@@ -150,6 +150,12 @@ export async function shellKill(sessionId: string): Promise<void> {
   return invoke("shell_kill", { sessionId });
 }
 
+export interface NativeTerminalSession { id: string; session_type: string; status: string }
+
+export async function terminalListSessions(): Promise<NativeTerminalSession[]> {
+  return invoke<NativeTerminalSession[]>("terminal_list_sessions");
+}
+
 export async function sftpList(sessionId: string, path: string): Promise<FileInfo[]> {
   return invoke<FileInfo[]>("sftp_list", { sessionId, path });
 }

@@ -525,7 +525,7 @@ export function TerminalApp({ sessionId, aiEnabled }: TerminalAppProps) {
                 placeholder="搜索命令..."
                 value={searchQuery}
                 onChange={(e) => setSearchQuery(e.target.value)}
-                className="w-full bg-[#252526] border border-white/10 rounded-md py-1.5 pl-9 pr-3 text-sm text-white/80 placeholder:text-white/30 focus:outline-none focus:border-blue-500/50"
+                className="w-full bg-[#252526] border border-white/10 rounded-md py-1.5 pl-9 pr-3 text-sm text-white/80 placeholder:text-white/30 focus:outline-none"
               />
             </div>
           </div>

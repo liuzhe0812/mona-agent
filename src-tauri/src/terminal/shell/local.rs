@@ -1,5 +1,6 @@
 use std::io::{Read, Write};
 use std::path::Path;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex as StdMutex};
 
 use encoding_rs::GBK;
@@ -213,6 +214,8 @@ impl LocalShell {
         let handle = app_handle.clone();
         let sid = session_id.clone();
         let sb = scroll_buffer.clone();
+        let exited = Arc::new(AtomicBool::new(false));
+        let reader_exited = exited.clone();
         std::thread::spawn(move || {
             let mut reader = reader;
             let mut buf = [0u8; 4096];
@@ -241,9 +244,40 @@ impl LocalShell {
                         let _ = handle.emit("terminal-output", payload);
                     }
                     Err(e) => {
-                        log::error!("PTY reader error for session {}: {}", sid, e);
+                        if !reader_exited.load(Ordering::Acquire) {
+                            log::error!("PTY reader error for session {}: {}", sid, e);
+                            let _ = handle.emit("terminal-session-status", serde_json::json!({
+                                "sessionId": sid, "status": "error",
+                            }));
+                        }
                         break;
                     }
+                }
+            }
+        });
+
+        // ConPTY may keep its output pipe open after the child exits. Observe the
+        // process itself; waiting for reader EOF leaves hidden terminals marked alive.
+        let monitored_child = child.clone();
+        std::thread::spawn(move || loop {
+            let status = monitored_child.lock()
+                .map_err(|error| error.to_string())
+                .and_then(|mut process| process.try_wait().map_err(|error| error.to_string()));
+            match status {
+                Ok(None) => std::thread::sleep(std::time::Duration::from_millis(100)),
+                Ok(Some(_)) => {
+                    exited.store(true, Ordering::Release);
+                    let _ = app_handle.emit("terminal-session-status", serde_json::json!({
+                        "sessionId": session_id, "status": "disconnected",
+                    }));
+                    break;
+                }
+                Err(error) => {
+                    log::error!("Could not observe shell exit for {}: {}", session_id, error);
+                    let _ = app_handle.emit("terminal-session-status", serde_json::json!({
+                        "sessionId": session_id, "status": "error",
+                    }));
+                    break;
                 }
             }
         });
@@ -256,11 +290,21 @@ impl LocalShell {
         })
     }
 
+    pub fn is_running(&self) -> Result<bool, TerminalError> {
+        let mut child = self.child.lock()
+            .map_err(|e| TerminalError::ShellSpawn(e.to_string()))?;
+        child.try_wait().map(|status| status.is_none())
+            .map_err(|e| TerminalError::ShellSpawn(e.to_string()))
+    }
+
     pub fn kill(&self) -> Result<(), TerminalError> {
         let mut child = self
             .child
             .lock()
             .map_err(|e| TerminalError::ShellSpawn(e.to_string()))?;
+        if child.try_wait().map_err(|e| TerminalError::ShellSpawn(e.to_string()))?.is_some() {
+            return Ok(());
+        }
         child.kill().map_err(|e| TerminalError::ShellSpawn(e.to_string()))
     }
 
@@ -306,3 +350,7 @@ impl Drop for LocalShell {
         }
     }
 }
+
+#[cfg(all(test, target_os = "windows"))]
+#[path = "lifecycle_native_tests.rs"]
+mod lifecycle_native_tests;

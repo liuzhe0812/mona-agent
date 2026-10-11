@@ -19,6 +19,8 @@ import { Button } from "@/components/ui/button";
 
 interface Props {
   sessionId: string;
+  interceptSsh?: boolean;
+  readOnly?: boolean;
 }
 
 /** Whether a terminal session should offer the reconnect entry.
@@ -69,11 +71,13 @@ export function buildTerminalTheme(): Record<string, string> {
   };
 }
 
-export function XtermTerminal({ sessionId }: Props) {
+export function XtermTerminal({ sessionId, interceptSsh = true, readOnly = false }: Props) {
   const containerRef = useRef<HTMLDivElement>(null);
   const terminalRef = useRef<Terminal | null>(null);
   const fitAddonRef = useRef<FitAddon | null>(null);
   const lastSizeRef = useRef<{ cols: number; rows: number } | null>(null);
+  const readOnlyRef = useRef(readOnly);
+  readOnlyRef.current = readOnly;
   const settings = useTerminalStore((s) => s.settings);
   const [reconnecting, setReconnecting] = useState(false);
   const sessions = useTerminalStore((s) => s.sessions);
@@ -110,6 +114,7 @@ export function XtermTerminal({ sessionId }: Props) {
       scrollback: settings.scrollback,
       theme: buildTerminalTheme(),
       allowProposedApi: true,
+      disableStdin: readOnlyRef.current,
     });
 
     const fitAddon = new FitAddon();
@@ -153,9 +158,9 @@ export function XtermTerminal({ sessionId }: Props) {
     let sshIntercepted = false;
 
     const dataDisposable = terminal.onData((data) => {
-      if (sshIntercepted) return;
+      if (sshIntercepted || readOnlyRef.current) return;
 
-      if (sessionType === "local") {
+      if (sessionType === "local" && interceptSsh) {
         if (data === "\r" || data === "\n") {
           const parsed = parseSshCommand(inputBuffer);
           if (parsed) {
@@ -258,7 +263,11 @@ export function XtermTerminal({ sessionId }: Props) {
       fitAddonRef.current = null;
       lastSizeRef.current = null;
     };
-  }, [sessionId, registry]);
+  }, [sessionId, registry, interceptSsh]);
+
+  useEffect(() => {
+    if (terminalRef.current) terminalRef.current.options.disableStdin = readOnly;
+  }, [readOnly]);
 
   // When session becomes connected, trigger initial fit + resize
   useEffect(() => {
@@ -321,12 +330,12 @@ export function XtermTerminal({ sessionId }: Props) {
           await invoke("plugin:clipboard-manager|write_text", { text: selection });
         } catch {}
         terminal.clearSelection();
-      } else {
+      } else if (!readOnlyRef.current) {
         // 无选中：粘贴
         try {
           const { invoke } = await import("@tauri-apps/api/core");
           const text = await invoke<string>("plugin:clipboard-manager|read_text");
-          if (text) {
+          if (text && !readOnlyRef.current && terminalRef.current === terminal) {
             terminal.paste(text);
           }
         } catch {}

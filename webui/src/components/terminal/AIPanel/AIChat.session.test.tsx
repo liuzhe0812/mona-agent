@@ -1,12 +1,15 @@
-import { act, render, waitFor } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import { AIChat } from "./AIChat";
 import { useTerminalStore } from "../store/terminalStore";
+import type { SendImage, SendOptions } from "@/hooks/useMonaStream";
 
 const chatMock = vi.hoisted(() => ({
   newChat: vi.fn(),
 }));
+
+const streamMock = vi.hoisted(() => ({ send: vi.fn() }));
 
 const historyMock = vi.hoisted(() => ({
   keys: [] as (string | null)[],
@@ -38,11 +41,29 @@ vi.mock("@/hooks/useMonaStream", () => ({
     messages: [],
     isStreaming: false,
     stopping: false,
-    send: vi.fn(),
+    send: streamMock.send,
     inject: vi.fn(),
     stop: vi.fn(),
     setMessages: vi.fn(),
   }),
+}));
+
+vi.mock("@/components/thread/ThreadComposer", () => ({
+  ThreadComposer: ({ chatId, onSend }: {
+    chatId?: string | null;
+    onSend: (content: string, images?: SendImage[], options?: SendOptions) => void;
+  }) => (
+    <button
+      type="button"
+      data-chat-id={chatId ?? ""}
+      onClick={() => onSend("检查文件", undefined, {
+        docPaths: ["uploads/terminal/input.bin"],
+        documentNames: ["input.bin"],
+      })}
+    >
+      发送测试消息
+    </button>
+  ),
 }));
 
 vi.mock("@/lib/tauri", async (importOriginal) => {
@@ -68,6 +89,7 @@ describe("AIChat terminal session binding", () => {
     historyMock.keys = [];
     chatMock.newChat.mockReset();
     chatMock.newChat.mockResolvedValue("chat-1");
+    streamMock.send.mockReset();
     useTerminalStore.setState({ sessions: [SSH_SESSION], aiChatIds: {} });
   });
 
@@ -146,6 +168,26 @@ describe("AIChat terminal session binding", () => {
       expect(useTerminalStore.getState().aiChatIds["local-1"]).toBe("chat-1"),
     );
     expect(localStorage.getItem("mona.terminal.ai-chat.v1")).toBeNull();
+  });
+
+  it("passes composer document paths through the terminal send path", async () => {
+    render(<AIChat sessionId="ssh-session-1" />);
+    await waitFor(() =>
+      expect(useTerminalStore.getState().aiChatIds["ssh-session-1"]).toBe("chat-1"),
+    );
+
+    const sendButton = screen.getByRole("button", { name: "发送测试消息" });
+    expect(sendButton).toHaveAttribute("data-chat-id", "chat-1");
+    fireEvent.click(sendButton);
+
+    expect(streamMock.send).toHaveBeenCalledWith(
+      expect.stringContaining("检查文件"),
+      undefined,
+      expect.objectContaining({
+        docPaths: ["uploads/terminal/input.bin"],
+        documentNames: ["input.bin"],
+      }),
+    );
   });
 
   it("starts a fresh conversation after 重置会话", async () => {

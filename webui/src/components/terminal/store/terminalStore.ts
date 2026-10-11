@@ -428,8 +428,9 @@ export const useTerminalStore = create<TerminalState>((set, get) => ({
     set({ savedConnections: updated });
     try {
       await terminalSaveConnections(updated);
-    } catch {
+    } catch (error) {
       set({ savedConnections: savedConnections });
+      throw error;
     }
   },
 

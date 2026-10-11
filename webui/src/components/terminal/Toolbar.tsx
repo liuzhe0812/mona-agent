@@ -1,12 +1,8 @@
-import { useState } from "react";
 import {
   Plus,
-  FolderOpen,
   Server,
   Settings,
-  HardDrive,
   Monitor,
-  FolderTree,
   Activity,
   Container,
   LockKeyhole,
@@ -16,11 +12,9 @@ import { AgentLogo } from "@/components/AgentLogo";
 import { useTerminalStore } from "./store/terminalStore";
 import { useIdeStore } from "../ide/useIdeStore";
 import { useLicense } from "@/hooks/useLicense";
-import { sshOpenSftp } from "./ipc";
-import { SessionManagerDialog } from "./Dialogs/SessionManagerDialog";
 import { cn } from "@/lib/utils";
 
-export function Toolbar({ onOpenSubscribe }: { onOpenSubscribe?: () => void }) {
+export function Toolbar({ onOpenSubscribe, embedded = false }: { onOpenSubscribe?: () => void; embedded?: boolean }) {
   const { licenseActive } = useLicense();
   const toggleAIPanel = useTerminalStore((s) => s.toggleAIPanel);
   const aiPanelVisible = useTerminalStore((s) => s.aiPanelVisible);
@@ -34,11 +28,8 @@ export function Toolbar({ onOpenSubscribe }: { onOpenSubscribe?: () => void }) {
   const addSession = useTerminalStore((s) => s.addSession);
   const setActiveSession = useTerminalStore((s) => s.setActiveSession);
   const openDockerSession = useTerminalStore((s) => s.openDockerSession);
-  const [sessionManagerOpen, setSessionManagerOpen] = useState(false);
 
-  const fileTreeVisible = useIdeStore((s) => s.leftFileTreeVisible);
   const systemMonitorVisible = useIdeStore((s) => s.leftSystemMonitorVisible);
-  const toggleFileTree = useIdeStore((s) => s.toggleLeftFileTree);
   const toggleSystemMonitor = useIdeStore((s) => s.toggleLeftSystemMonitor);
 
   const activeSession = sessions.find((s) => s.id === activeSessionId);
@@ -60,25 +51,6 @@ export function Toolbar({ onOpenSubscribe }: { onOpenSubscribe?: () => void }) {
       status: "connected",
       title: "批量模式",
     });
-  };
-
-  const handleOpenSftp = async () => {
-    if (activeSession && activeSession.type === "ssh") {
-      try {
-        const sftpSessionId = await sshOpenSftp(activeSession.id);
-        addSession({
-          id: sftpSessionId,
-          configId: activeSession.configId,
-          type: "sftp",
-          status: "connected",
-          title: `${activeSession.title} (SFTP)`,
-        });
-      } catch (err) {
-        console.error("Failed to open SFTP:", String(err));
-      }
-    } else {
-      setNewConnectionDialogOpen(true, "sftp");
-    }
   };
 
   const handleOpenDesktop = () => {
@@ -115,7 +87,7 @@ export function Toolbar({ onOpenSubscribe }: { onOpenSubscribe?: () => void }) {
 
   return (
     <div className="flex h-9 shrink-0 items-center gap-1 border-b border-border bg-card px-2">
-      <Button
+      {!embedded && <Button
         variant="ghost"
         size="sm"
         className="gap-1.5"
@@ -123,28 +95,10 @@ export function Toolbar({ onOpenSubscribe }: { onOpenSubscribe?: () => void }) {
       >
         <Plus className="h-3.5 w-3.5" />
         新建
-      </Button>
-      <Button
-        variant="ghost"
-        size="sm"
-        className="gap-1.5"
-        onClick={() => setSessionManagerOpen(true)}
-      >
-        <FolderOpen className="h-3.5 w-3.5" />
-        打开
-      </Button>
+      </Button>}
       <Button variant="ghost" size="sm" className="gap-1.5" onClick={handleBatch}>
         <Server className="h-3.5 w-3.5" />
         批量
-      </Button>
-      <Button
-        variant="ghost"
-        size="sm"
-        className="gap-1.5"
-        onClick={handleOpenSftp}
-      >
-        <HardDrive className="h-3.5 w-3.5" />
-        SFTP
       </Button>
       <Button
         variant="ghost"
@@ -185,19 +139,6 @@ export function Toolbar({ onOpenSubscribe }: { onOpenSubscribe?: () => void }) {
             size="icon"
             className={cn(
               "h-7 w-7 text-muted-foreground hover:bg-foreground/5 hover:text-foreground",
-              fileTreeVisible && "text-foreground",
-            )}
-            onClick={toggleFileTree}
-            aria-label={fileTreeVisible ? "隐藏文件树" : "显示文件树"}
-            title={fileTreeVisible ? "隐藏文件树" : "显示文件树"}
-          >
-            <FolderTree className="h-4 w-4" />
-          </Button>
-          <Button
-            variant="ghost"
-            size="icon"
-            className={cn(
-              "h-7 w-7 text-muted-foreground hover:bg-foreground/5 hover:text-foreground",
               systemMonitorVisible && "text-foreground",
             )}
             onClick={toggleSystemMonitor}
@@ -208,7 +149,7 @@ export function Toolbar({ onOpenSubscribe }: { onOpenSubscribe?: () => void }) {
           </Button>
         </>
       )}
-      {activeSession?.type !== "desktop" && activeSession?.type !== "docker" && (licenseActive ? (
+      {!embedded && activeSession?.type !== "desktop" && activeSession?.type !== "docker" && (licenseActive ? (
         <Button
           variant="ghost"
           size="icon"
@@ -234,10 +175,6 @@ export function Toolbar({ onOpenSubscribe }: { onOpenSubscribe?: () => void }) {
           <LockKeyhole className="h-4 w-4" />
         </Button>
       ))}
-      <SessionManagerDialog
-        open={sessionManagerOpen}
-        onOpenChange={setSessionManagerOpen}
-      />
     </div>
   );
 }
