@@ -22,6 +22,14 @@ export interface CreateTabResult {
   cdp_port: number;
 }
 
+export interface BrowserExtension { id: string; name: string; enabled: boolean }
+export const browserListExtensions = (id: string) => invoke<BrowserExtension[]>("browser_extensions", { id, action: "list" });
+export const browserInstallExtension = (id: string, path: string) => invoke<void>("browser_extensions", { id, action: "install", path });
+export const browserSetExtensionEnabled = (id: string, extensionId: string, enabled: boolean) => invoke<void>("browser_extensions", { id, action: "enable", extensionId, enabled });
+export const browserRemoveExtension = (id: string, extensionId: string) => invoke<void>("browser_extensions", { id, action: "remove", extensionId });
+export const browserPageAction = (id: string, action: "capture" | "device" | "device_off" | "clear_cache" | "clear_cookies", size?: { width: number; height: number }) =>
+  invoke<{ data?: string }>("browser_page_action", { id, action, ...size });
+
 /** 创建浏览器标签（Rust 侧创建 WebView） */
 export async function browserCreateTab(id: string, url: string, isIncognito?: boolean, adBlockEnabled?: boolean): Promise<CreateTabResult> {
   return invoke<CreateTabResult>("browser_create_tab", { id, url, isIncognito: isIncognito ?? false, adBlockEnabled: adBlockEnabled ?? true });

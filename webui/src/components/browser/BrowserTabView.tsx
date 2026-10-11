@@ -1,4 +1,7 @@
-import { useEffect, useRef, useCallback, useState } from "react";
+import { useEffect, useRef, useCallback, useState, useMemo } from "react";
+import { createTabBoundsOwner, type WebviewBounds } from "./webviewBoundsQueue";
+export { sameWebviewBounds } from "./webviewBoundsQueue";
+export type { WebviewBounds } from "./webviewBoundsQueue";
 import { BrowserToolbar } from "./BrowserToolbar";
 import { AiAssistantPanel } from "./AiAssistantPanel";
 import { BookmarkBar } from "./BookmarkBar";
@@ -24,6 +27,8 @@ interface BrowserTabViewProps {
   tab: Tab;
   isVisible: boolean;
   layoutVersion?: unknown;
+  showToolbar?: boolean;
+  findRequest?: number;
   isFullscreen?: boolean;
   onToggleFullscreen?: () => void;
   onExitFullscreen?: () => void;
@@ -41,27 +46,12 @@ interface BrowserTabViewProps {
   onOpenDevtools?: () => void;
 }
 
-export interface WebviewBounds {
-  left: number;
-  top: number;
-  width: number;
-  height: number;
-  visible: boolean;
-}
-
-export function sameWebviewBounds(a: WebviewBounds | null, b: WebviewBounds): boolean {
-  return !!a
-    && a.left === b.left
-    && a.top === b.top
-    && a.width === b.width
-    && a.height === b.height
-    && a.visible === b.visible;
-}
-
 export function BrowserTabView({
   tab,
   isVisible,
   layoutVersion,
+  showToolbar = true,
+  findRequest = 0,
   isFullscreen = false,
   onToggleFullscreen,
   onExitFullscreen,
@@ -81,12 +71,10 @@ export function BrowserTabView({
   const { token } = useClientOptional();
   const webviewContainerRef = useRef<HTMLDivElement>(null);
   const lastVisibleBoundsRef = useRef<Omit<WebviewBounds, "visible"> | null>(null);
-  const lastAppliedBoundsRef = useRef<WebviewBounds | null>(null);
-  const pendingBoundsRef = useRef<WebviewBounds | null>(null);
-  const boundsUpdateRunningRef = useRef(false);
   const [isAiPanelOpen, setIsAiPanelOpen] = useState(false);
   const [bookmarkBarVisible, setBookmarkBarVisible] = useState(true);
   const [findBarVisible, setFindBarVisible] = useState(false);
+  useEffect(() => { if (findRequest) setFindBarVisible(true); }, [findRequest]);
   const [navError, setNavError] = useState(false);
   const [zoomFactor, setZoomFactor] = useState(1.0);
   const [cookieManagerOpen, setCookieManagerOpen] = useState(false);
@@ -98,35 +86,17 @@ export function BrowserTabView({
   const [editorOpen, setEditorOpen] = useState(false);
   const modalSurfaceOpen = cookieManagerOpen || shareDialogOpen || editorOpen;
 
+  const boundsQueue = useMemo(() => createTabBoundsOwner(tab.id,
+    (bounds) => browserSetTabBounds(tab.id, bounds.left, bounds.top, bounds.width, bounds.height, bounds.visible),
+    (error) => console.debug("[BrowserTabView] updateWebviewBounds error:", error),
+  ), [tab.id]);
+  useEffect(() => {
+    boundsQueue.activate();
+    return () => { void boundsQueue.dispose(); };
+  }, [boundsQueue]);
   const applyWebviewBounds = useCallback((bounds: WebviewBounds) => {
-    if (sameWebviewBounds(lastAppliedBoundsRef.current, bounds)) return;
-    pendingBoundsRef.current = bounds;
-    if (boundsUpdateRunningRef.current) return;
-
-    boundsUpdateRunningRef.current = true;
-    void (async () => {
-      try {
-        while (pendingBoundsRef.current) {
-          const next = pendingBoundsRef.current;
-          pendingBoundsRef.current = null;
-          if (sameWebviewBounds(lastAppliedBoundsRef.current, next)) continue;
-          await browserSetTabBounds(
-            tab.id,
-            next.left,
-            next.top,
-            next.width,
-            next.height,
-            next.visible,
-          );
-          lastAppliedBoundsRef.current = next;
-        }
-      } catch (e) {
-        console.debug("[BrowserTabView] updateWebviewBounds error:", e);
-      } finally {
-        boundsUpdateRunningRef.current = false;
-      }
-    })();
-  }, [tab.id]);
+    void boundsQueue.update(bounds);
+  }, [boundsQueue]);
 
   const updateWebviewBounds = useCallback(() => {
     if (!isTauri() || !tab.webviewCreated) return;
@@ -465,7 +435,7 @@ export function BrowserTabView({
       className="relative flex h-full flex-col"
       style={{ display: isVisible ? "flex" : "none" }}
     >
-      <BrowserToolbar
+      {showToolbar && <><BrowserToolbar
         url={tab.url ?? ""}
         title={tab.title ?? ""}
         isAiControlled={tab.isAiControlled}
@@ -500,7 +470,7 @@ export function BrowserTabView({
         isCreatingNote={isCreatingNote}
         onShare={() => setShareDialogOpen(true)}
       />
-      <BookmarkBar onNavigate={onNavigate} visible={bookmarkBarVisible} />
+      <BookmarkBar onNavigate={onNavigate} visible={bookmarkBarVisible} /></>}
       <FindBar
         tabId={tab.id}
         visible={findBarVisible && tab.webviewCreated}

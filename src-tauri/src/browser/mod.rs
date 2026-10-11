@@ -1,5 +1,7 @@
 pub mod commands;
 pub mod downloads;
+pub mod extensions;
+pub mod page_actions;
 pub mod storage;
 pub mod tab;
 
@@ -21,16 +23,6 @@ pub const CDP_PORT: u16 = 9300;
 pub async fn browser_open_internal_page(app: AppHandle, kind: String) -> Result<(), String> {
     app.emit("browser-open-internal-page", kind)
         .map_err(|e| e.to_string())
-}
-
-pub fn configure_webview2_cdp() {
-    #[cfg(target_os = "windows")]
-    if std::env::var_os("WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS").is_none() {
-        std::env::set_var(
-            "WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS",
-            format!("--remote-debugging-port={CDP_PORT}"),
-        );
-    }
 }
 
 fn browser_initialization_script(id: &str) -> String {
@@ -111,31 +103,26 @@ fn next_available_download_path(directory: &Path, filename: &str) -> PathBuf {
     unreachable!()
 }
 
+async fn close_native_webview(webview: tauri::Webview) -> Result<(), String> {
+    let window = webview.window();
+    webview.close().map_err(|error| error.to_string())?;
+
+    // Webview::close only queues the runtime close message. Wait for a
+    // following main-thread task so a subsequent add_child cannot race
+    // the WebView2 controller teardown.
+    let (tx, rx) = tokio::sync::oneshot::channel();
+    window.run_on_main_thread(move || { let _ = tx.send(()); })
+        .map_err(|error| error.to_string())?;
+    match tokio::time::timeout(std::time::Duration::from_secs(5), rx).await {
+        Ok(Ok(_)) => Ok(()),
+        Ok(Err(_)) => Err("Browser tab close barrier was cancelled".to_string()),
+        Err(_) => Err("Timed out waiting for browser tab to close".to_string()),
+    }
+}
+
 async fn remove_native_webview(app: &AppHandle, id: &str) -> Result<(), String> {
     if let Some(webview) = app.get_webview(&format!("browser-{}", id)) {
-        webview.close().map_err(|error| error.to_string())?;
-
-        // Webview::close only queues the runtime close message. Wait for a
-        // following main-thread task so a subsequent add_child cannot race
-        // the WebView2 controller teardown.
-        let window = app
-            .get_window("main")
-            .ok_or_else(|| "Main window not found".to_string())?;
-        let (tx, rx) = tokio::sync::oneshot::channel();
-        window
-            .run_on_main_thread(move || {
-                let _ = tx.send(());
-            })
-            .map_err(|error| error.to_string())?;
-        match tokio::time::timeout(std::time::Duration::from_secs(5), rx).await {
-            Ok(Ok(_)) => {}
-            Ok(Err(_)) => {
-                return Err("Browser tab close barrier was cancelled".to_string());
-            }
-            Err(_) => {
-                return Err("Timed out waiting for browser tab to close".to_string());
-            }
-        }
+        close_native_webview(webview).await?;
     }
     Ok(())
 }
@@ -323,23 +310,25 @@ mod tests {
     fn browser_webview_lifecycle_is_serialized_and_close_is_acknowledged() {
         let source = include_str!("mod.rs");
         let close = source
-            .split("async fn remove_native_webview")
+            .split("async fn close_native_webview")
             .nth(1)
             .and_then(|source| source.split("fn get_browser_webview").next())
             .unwrap();
 
-        assert!(source.contains("lifecycle: tokio::sync::Mutex<()>"));
-        assert!(source.matches("self.lifecycle.lock().await").count() >= 2);
+        assert!(source.contains("lifecycle: Arc<tokio::sync::Mutex<()>>"));
+        assert!(source.contains("self.lifecycle.clone().lock_owned().await"));
+        assert!(source.contains("self.lifecycle.lock().await"));
         assert!(close.contains("run_on_main_thread"));
         assert!(close.contains("tokio::time::timeout"));
     }
 
     #[test]
-    fn browser_webviews_share_the_main_webview2_environment() {
-        let source = include_str!("mod.rs");
-
-        assert!(source.contains("get_webview(\"main\")"));
-        assert!(source.contains("with_environment(webview.environment())"));
+    fn browser_webviews_share_an_isolated_extension_profile() {
+        let source = include_str!("mod.rs").rsplit("pub async fn create_tab(").next().unwrap()
+            .split("pub async fn close_tab(").next().unwrap();
+        assert!(source.contains(".join(\"browser\")"));
+        assert!(source.contains(".data_directory(profile).browser_extensions_enabled(true)"));
+        assert!(!source.contains(".with_environment("));
     }
 
     #[test]
@@ -668,11 +657,45 @@ fn register_download_progress_handlers(
     }
 }
 
+// Ownership follows the native callback and its reply, even if the caller cancels.
+struct PendingBrowserTab {
+    tabs: Arc<DashMap<String, BrowserTab>>,
+    id: String,
+    webview: Option<tauri::Webview>,
+    lifecycle: Option<tokio::sync::OwnedMutexGuard<()>>,
+    retained: bool,
+}
+
+impl Drop for PendingBrowserTab {
+    fn drop(&mut self) {
+        if self.retained {
+            return;
+        }
+        if let Some(webview) = self.webview.take() {
+            let tabs = self.tabs.clone();
+            let id = self.id.clone();
+            let lifecycle = self.lifecycle.take();
+            // Keep the original label reserved until this exact native view closes.
+            tauri::async_runtime::spawn(async move {
+                let _lifecycle = lifecycle;
+                match close_native_webview(webview).await {
+                    Ok(()) => { tabs.remove(&id); }
+                    Err(error) => {
+                        log::error!("Failed to release unfinished browser tab {id}: {error}");
+                    }
+                }
+            });
+        } else {
+            self.tabs.remove(&self.id);
+        }
+    }
+}
+
 pub struct BrowserState {
     tabs: Arc<DashMap<String, BrowserTab>>,
     downloads: Arc<DashMap<String, DownloadEntry>>,
     next_download_id: Arc<AtomicU64>,
-    lifecycle: tokio::sync::Mutex<()>,
+    lifecycle: Arc<tokio::sync::Mutex<()>>,
 }
 
 impl BrowserState {
@@ -681,7 +704,7 @@ impl BrowserState {
             tabs: Arc::new(DashMap::new()),
             downloads: Arc::new(DashMap::new()),
             next_download_id: Arc::new(AtomicU64::new(1)),
-            lifecycle: tokio::sync::Mutex::new(()),
+            lifecycle: Arc::new(tokio::sync::Mutex::new(())),
         }
     }
 
@@ -694,7 +717,7 @@ impl BrowserState {
         is_incognito: bool,
         ad_block_enabled: bool,
     ) -> Result<CreateTabResult, String> {
-        let _lifecycle_guard = self.lifecycle.lock().await;
+        let lifecycle = self.lifecycle.clone().lock_owned().await;
         let cdp_port = CDP_PORT;
         let webview_label = format!("browser-{}", id);
 
@@ -720,6 +743,10 @@ impl BrowserState {
             is_incognito,
             is_muted: false,
         };
+        let mut creation = PendingBrowserTab {
+            tabs: self.tabs.clone(), id: id.to_string(), webview: None,
+            lifecycle: Some(lifecycle), retained: false,
+        };
         self.tabs.insert(id.to_string(), tab);
 
         // 获取主窗口
@@ -743,6 +770,8 @@ impl BrowserState {
             .get_window("main")
             .ok_or_else(|| "Main window not found".to_string())?;
         let webview_builder = WebviewBuilder::new(&webview_label, WebviewUrl::External(parsed_url))
+            // Tabs start hidden; focusing here can fail on a hidden/minimized parent.
+            .focused(false)
             .initialization_script(browser_initialization_script(id))
             .incognito(is_incognito)
             .on_new_window(move |url, _features| {
@@ -792,54 +821,52 @@ impl BrowserState {
         };
 
         #[cfg(target_os = "windows")]
-        let child_result = {
+        let mut creation = {
+            // Extensions share the browser profile, never the privileged app profile.
+            let profile = app.path().app_local_data_dir().map_err(|e| e.to_string())?.join("browser");
+            let webview_builder = webview_builder.data_directory(profile).browser_extensions_enabled(true)
+                // Keep Wry's default feature flags; only the browser environment owns CDP.
+                .additional_browser_args(&format!("--disable-features=msWebOOUI,msPdfOOUI,msSmartScreenProtection --remote-debugging-port={CDP_PORT}"));
             let main = app
                 .get_webview("main")
                 .ok_or_else(|| "Main webview not found".to_string())?;
             let (tx, rx) = tokio::sync::oneshot::channel();
-            main.with_webview(move |webview| {
-                let result = window
-                    .add_child(
-                        webview_builder.with_environment(webview.environment()),
-                        tauri::LogicalPosition::new(-9999, -9999),
-                        tauri::LogicalSize::new(1, 1),
-                    )
-                    .map_err(|error| error.to_string());
-                let _ = tx.send(result);
+            main.with_webview(move |_webview| {
+                if tx.is_closed() {
+                    return;
+                }
+                match window.add_child(
+                    webview_builder,
+                    tauri::LogicalPosition::new(-9999, -9999),
+                    tauri::LogicalSize::new(1, 1),
+                ) {
+                    Ok(webview) => {
+                        creation.webview = Some(webview);
+                        let _ = tx.send(Ok(creation));
+                    }
+                    Err(error) => { let _ = tx.send(Err(error.to_string())); }
+                }
             })
             .map_err(|error| error.to_string())?;
             match tokio::time::timeout(std::time::Duration::from_secs(15), rx).await {
-                Ok(Ok(r)) => r,
-                Ok(Err(_)) => {
-                    return Err("Browser tab creation was cancelled".to_string());
-                }
-                Err(_) => {
-                    return Err("Timed out creating browser tab".to_string());
-                }
+                Ok(Ok(result)) => result.map_err(|error| format!("Failed to create browser tab: {error}"))?,
+                Ok(Err(_)) => return Err("Browser tab creation was cancelled".to_string()),
+                Err(_) => return Err("Timed out creating browser tab".to_string()),
             }
         };
 
         #[cfg(not(target_os = "windows"))]
-        let child_result = window
-            .add_child(
+        {
+            creation.webview = Some(window.add_child(
                 webview_builder,
                 tauri::LogicalPosition::new(-9999, -9999),
                 tauri::LogicalSize::new(1, 1),
-            )
-            .map_err(|error| error.to_string());
-
-        let child_webview = match child_result {
-            Ok(webview) => webview,
-            Err(error) => {
-                self.tabs.remove(id);
-                return Err(format!("Failed to create browser tab: {error}"));
-            }
-        };
-        if let Err(error) = child_webview.hide() {
-            let _ = child_webview.close();
-            self.tabs.remove(id);
-            return Err(error.to_string());
+            ).map_err(|error| format!("Failed to create browser tab: {error}"))?);
         }
+
+        let child_webview = creation.webview.as_ref()
+            .ok_or_else(|| "Browser tab creation returned no native view".to_string())?;
+        child_webview.hide().map_err(|error| error.to_string())?;
 
         // Tauri 没有历史状态 Hook，且页面加载 Hook 不提供导航成功状态；
         // 这里只保留这两个 WebView2 事件的唯一处理器。
@@ -1025,10 +1052,9 @@ impl BrowserState {
                 let _ = wv;
             }
         }) {
-            let _ = child_webview.close();
-            self.tabs.remove(id);
             return Err(format!("Failed to register browser events: {error}"));
         }
+        creation.retained = true;
 
         // 通知前端新标签已创建（AI 通过 IPC 创建时前端不知道）
         let _ = app.emit(
@@ -1137,12 +1163,15 @@ impl BrowserState {
             .map(|tab| tab.key().clone())
             .collect::<Vec<_>>();
 
+        let mut failure = None;
         for id in ids {
-            get_browser_webview(app, &id)?
-                .hide()
-                .map_err(|error| error.to_string())?;
+            let result = get_browser_webview(app, &id)
+                .and_then(|webview| webview.hide().map_err(|error| error.to_string()));
+            if let Err(error) = result {
+                failure.get_or_insert(error);
+            }
         }
-        Ok(())
+        failure.map_or(Ok(()), Err)
     }
 
     pub async fn navigate_tab(&self, app: &AppHandle, id: &str, url: &str) -> Result<(), String> {

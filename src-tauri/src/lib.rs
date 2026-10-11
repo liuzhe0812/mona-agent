@@ -1223,6 +1223,8 @@ pub fn run() {
             updater::get_current_version,
             updater::take_update_error,
             browser::commands::browser_create_tab,
+            browser::extensions::browser_extensions,
+            browser::page_actions::browser_page_action,
             browser::commands::browser_close_tab,
             browser::commands::browser_update_tab_url,
             browser::commands::browser_update_tab_title,
