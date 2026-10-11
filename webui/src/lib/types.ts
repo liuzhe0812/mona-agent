@@ -621,6 +621,10 @@ export interface UIMessage {
   id: string;
   role: Role;
   content: string;
+  /** Global 1-based assistant reply ordinal used by server-side branching. */
+  assistantOrdinal?: number;
+  /** Global 0-based position in the canonical UI transcript. */
+  historyPosition?: number;
   /** Stable backend task identity shared by the initial request and injected follow-ups. */
   taskId?: string;
   /** Short display text for user messages (e.g. action label). Falls back to ``content``. */
@@ -1424,11 +1428,20 @@ export interface OutboundMedia {
 }
 
 /** Response shape for ``GET .../webui-thread`` (server-built transcript replay). */
+export interface WebuiThreadPagination {
+  hasMore: boolean;
+  /** Exclusive upper bound for the next older page. */
+  before: number | null;
+  revision: string;
+  total: number;
+}
+
 export interface WebuiThreadPersistedPayload {
   schemaVersion: number;
   sessionKey?: string;
   savedAt?: string;
   messages: UIMessage[];
+  pagination?: WebuiThreadPagination;
 }
 
 export type Outbound =

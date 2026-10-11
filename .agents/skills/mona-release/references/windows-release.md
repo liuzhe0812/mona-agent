@@ -54,11 +54,11 @@ if ($LASTEXITCODE -ne 0) { throw 'Update packaging failed' }
 Get-FileHash -Algorithm SHA256 -LiteralPath $releaseInstaller, $releaseArchive
 ```
 
-热更新构建会在写出前检查 Office 完整性与 sidecar 哈希、文件路径及重复 WebUI；验证失败时修复构建输入，不绕过检查。安装包和热更新必须使用同一次签名完成后的 Gateway，后续若修改资源需要重新打包两份产物。
+热更新构建会在写出前检查 Office 完整性与 sidecar 哈希、文件路径及重复 WebUI；验证失败时修复构建输入，不绕过检查。安装包和热更新必须使用同次构建的同一份 Gateway，后续若修改资源需要重新打包两份产物；免费 Ed25519 `.sig` 对最终 NSIS 安装包验签，不给 Gateway 或主程序添加 Authenticode。
 
 ## 分阶段上传与恢复
 
-正式双端发布时，先完成本节前述 Windows 本地构建、免费签名与热更新包验收，然后暂停在这里，先执行 [macOS 发布](macos-release.md) 的 `publish=notarized` 并验证 Apple Silicon DMG 已可从七牛下载。Mac 成功前不要运行下面的完整 Windows 上传 CLI；Mac 通过后再继续本节，以便官网日志和 Windows 更新清单在两端产物均可用后再更新。
+正式双端发布时，先完成本节前述 Windows 本地构建、免费签名与热更新包验收，然后执行 [macOS 发布](macos-release.md)，默认使用已获用户授权的免费 `publish=ad-hoc`，并验证 Apple Silicon DMG 已可从七牛下载。Mac 成功前不要运行下面的完整 Windows 上传 CLI；Mac 通过后再继续本节，以便官网日志和 Windows 更新清单在两端产物均可用后再更新。
 
 完整 CLI 有六个位置参数，且必须提供更新条目 JSON 文件，无 dry-run/resume 参数：
 

@@ -15,6 +15,8 @@ import type {
   ChatSummary,
   ConversationListStatus,
   UIMessage,
+  WebuiThreadPagination,
+  WebuiThreadPersistedPayload,
 } from "@/lib/types";
 
 const EMPTY_MESSAGES: UIMessage[] = [];
@@ -253,8 +255,169 @@ export function useSessions(): {
   return { sessions, loading, loaded, error, refresh, createChat, branchChat, deleteChat, updateWorkspace };
 }
 
-/** Lazy-load a session's on-disk messages the first time the UI displays it. */
-export function useSessionHistory(key: string | null): {
+function normalizeHistoryMessages(
+  payload: WebuiThreadPersistedPayload | null,
+  fallbackStart = 0,
+): UIMessage[] {
+  return (payload?.messages ?? []).map((message, index) => ({
+    ...message,
+    id: message.id ?? `hist-${fallbackStart + index}`,
+    createdAt: typeof message.createdAt === "number" ? message.createdAt : Date.now(),
+    images: resolveUIImageUrls(message.images),
+    media: resolveMediaAttachmentUrls(message.media),
+  }));
+}
+
+export function mergeHistoryMessages(
+  current: UIMessage[],
+  incoming: UIMessage[],
+): UIMessage[] {
+  const merged = new Map(current.map((message) => [message.id, message]));
+  for (const message of incoming) {
+    const previous = merged.get(message.id);
+    merged.set(
+      message.id,
+      previous?.isStreaming || previous?.reasoningStreaming
+        ? { ...message, ...previous }
+        : message,
+    );
+  }
+  const rows = Array.from(merged.values());
+  return rows.sort((left, right) => {
+    if (left.historyPosition != null && right.historyPosition != null) {
+      return left.historyPosition - right.historyPosition;
+    }
+    if (left.historyPosition != null || right.historyPosition != null) {
+      return left.historyPosition != null ? -1 : 1;
+    }
+    if (left.sourceTranscriptIndex != null && right.sourceTranscriptIndex != null) {
+      return left.sourceTranscriptIndex - right.sourceTranscriptIndex;
+    }
+    if (left.sourceTranscriptIndex != null || right.sourceTranscriptIndex != null) {
+      return left.sourceTranscriptIndex != null ? -1 : 1;
+    }
+    return left.createdAt - right.createdAt;
+  });
+}
+
+function samePersistedMessage(left: UIMessage, right: UIMessage): boolean {
+  if (left.id === right.id) return true;
+  if (left.historyPosition != null && right.historyPosition != null) {
+    return left.historyPosition === right.historyPosition;
+  }
+  if (left.role !== right.role || left.kind !== right.kind || left.content !== right.content) {
+    return false;
+  }
+  if (left.taskId && right.taskId) return left.taskId === right.taskId;
+  return left.createdAt === right.createdAt;
+}
+
+function isActiveLiveMessage(
+  message: UIMessage,
+  options: { isStreaming?: boolean; currentTaskId?: string | null },
+): boolean {
+  return message.isStreaming
+    || message.reasoningStreaming
+    || Boolean(options.isStreaming && options.currentTaskId && message.taskId === options.currentTaskId);
+}
+
+function unmatchedLiveTail(
+  current: UIMessage[],
+  incoming: UIMessage[],
+  options: { isStreaming?: boolean; currentTaskId?: string | null },
+): UIMessage[] {
+  return current.filter((message) =>
+    message.historyPosition == null
+    && isActiveLiveMessage(message, options)
+    && !incoming.some((canonical) => samePersistedMessage(message, canonical)),
+  );
+}
+
+/** Reconcile a refreshed page from the same revision, preserving loaded prefix rows. */
+export function reconcileHistoryMessages(
+  current: UIMessage[],
+  incoming: UIMessage[],
+  options: { isStreaming?: boolean; currentTaskId?: string | null; missing?: boolean } = {},
+): UIMessage[] {
+  if (!incoming.length) return options.missing ? current.filter((message) => isActiveLiveMessage(message, options)) : current;
+  const firstPosition = incoming.find((message) => message.historyPosition != null)?.historyPosition ?? 0;
+  const prefix = current.filter(
+    (message) => message.historyPosition != null && message.historyPosition < firstPosition,
+  );
+  const liveTail = unmatchedLiveTail(current, incoming, options);
+  return mergeHistoryMessages([], [...prefix, ...incoming, ...liveTail]);
+}
+
+/** Replace all canonical rows after a revision change, retaining only active live tail rows. */
+export function replaceHistoryRevision(
+  current: UIMessage[],
+  incoming: UIMessage[],
+  options: { isStreaming?: boolean; currentTaskId?: string | null; missing?: boolean } = {},
+): UIMessage[] {
+  if (!incoming.length) return options.missing ? current.filter((message) => isActiveLiveMessage(message, options)) : [];
+  return mergeHistoryMessages([], [...incoming, ...unmatchedLiveTail(current, incoming, options)]);
+}
+
+/** Return the server's global branch ordinal, falling back only for live tail rows. */
+export function assistantOrdinalForMessage(
+  messages: UIMessage[],
+  messageId: string,
+): number | null {
+  let lastOrdinal = 0;
+  for (const message of messages) {
+    if (
+      message.role !== "assistant"
+      || message.kind === "trace"
+      || message.kind === "workflowRun"
+      || message.kind === "discussion"
+      || !message.content.trim()
+    ) {
+      continue;
+    }
+    lastOrdinal = message.assistantOrdinal ?? lastOrdinal + 1;
+    if (message.id === messageId) return lastOrdinal;
+  }
+  return null;
+}
+
+interface SessionHistoryState {
+  key: string | null;
+  messages: UIMessage[];
+  loading: boolean;
+  error: string | null;
+  missing: boolean;
+  hasPendingToolCalls: boolean;
+  version: number;
+  updateKind: "latest" | "earlier" | "full" | null;
+  pagination: WebuiThreadPagination | null;
+  loadingEarlier: boolean;
+  earlierError: string | null;
+  fullHistoryReady: boolean;
+  fullHistoryLoading: boolean;
+  fullHistoryError: string | null;
+}
+
+function emptySessionHistory(key: string | null, loading = false): SessionHistoryState {
+  return {
+    key,
+    messages: [],
+    loading,
+    error: null,
+    missing: false,
+    hasPendingToolCalls: false,
+    version: 0,
+    updateKind: null,
+    pagination: null,
+    loadingEarlier: false,
+    earlierError: null,
+    fullHistoryReady: false,
+    fullHistoryLoading: false,
+    fullHistoryError: null,
+  };
+}
+
+/** Lazy-load a session's on-disk messages. Pass a page size only for paged UIs. */
+export function useSessionHistory(key: string | null, pageSize?: number): {
   messages: UIMessage[];
   loading: boolean;
   error: string | null;
@@ -262,122 +425,327 @@ export function useSessionHistory(key: string | null): {
   missing: boolean;
   refresh: () => void;
   version: number;
+  revision: string | null;
+  updateKind: "latest" | "earlier" | "full" | null;
   /** ``true`` when the replayed transcript ends with a trace row (turn still in flight). */
   hasPendingToolCalls: boolean;
+  hasMore: boolean;
+  loadingEarlier: boolean;
+  earlierError: string | null;
+  loadEarlier: () => Promise<boolean>;
+  fullHistoryLoading: boolean;
+  fullHistoryError: string | null;
+  loadAllHistory: () => Promise<UIMessage[]>;
 } {
   const { token } = useClientOptional();
   const [refreshSeq, setRefreshSeq] = useState(0);
   const refresh = useCallback(() => {
     setRefreshSeq((value) => value + 1);
   }, []);
-  const [state, setState] = useState<{
-    key: string | null;
-    messages: UIMessage[];
-    loading: boolean;
-    error: string | null;
-    missing: boolean;
-    hasPendingToolCalls: boolean;
-    version: number;
-  }>({
-    key: null,
-    messages: [],
-    loading: false,
-    error: null,
-    missing: false,
-    hasPendingToolCalls: false,
-    version: 0,
-  });
+  const [state, setState] = useState<SessionHistoryState>(() => emptySessionHistory(null));
+  const stateRef = useRef(state);
+  stateRef.current = state;
+  const keyRef = useRef(key);
+  keyRef.current = key;
+  const controllersRef = useRef(new Set<AbortController>());
+  const loadingEarlierRef = useRef(false);
+  const fullHistoryRequestRef = useRef<{
+    key: string;
+    promise: Promise<UIMessage[]>;
+  } | null>(null);
+
+  const trackController = useCallback(() => {
+    const controller = new AbortController();
+    controllersRef.current.add(controller);
+    return controller;
+  }, []);
+
+  const untrackController = useCallback((controller: AbortController) => {
+    controllersRef.current.delete(controller);
+  }, []);
 
   useEffect(() => {
     if (!key) {
-      setState({
-        key: null,
-        messages: [],
-        loading: false,
-        error: null,
-        missing: false,
-        hasPendingToolCalls: false,
-        version: 0,
-      });
+      setState(emptySessionHistory(null));
       return;
     }
     let cancelled = false;
+    const controller = trackController();
     // Mark the new key as loading immediately so callers never see stale
     // messages from the previous session during the render right after a switch.
-    setState((prev) => prev.key === key
-      ? { ...prev, loading: true, error: null }
-      : {
-          key,
-          messages: [],
-          loading: true,
-          error: null,
-          missing: false,
-          hasPendingToolCalls: false,
-          version: 0,
-        });
+    setState((prev) => ({
+      ...(prev.key === key ? prev : emptySessionHistory(key)),
+      key,
+      loading: true,
+      error: null,
+      missing: false,
+      loadingEarlier: false,
+      earlierError: null,
+      fullHistoryLoading: false,
+      fullHistoryError: null,
+    }));
+    loadingEarlierRef.current = false;
     (async () => {
       try {
-        const body = await fetchWebuiThread(token, key);
-        if (cancelled) return;
-        if (!body?.messages?.length) {
-          setState((prev) => ({
+        const body = await fetchWebuiThread(
+          token,
+          key,
+          undefined,
+          pageSize === undefined
+            ? { signal: controller.signal }
+            : { limit: pageSize, signal: controller.signal },
+        );
+        if (cancelled || keyRef.current !== key) return;
+        const ui = normalizeHistoryMessages(
+          body,
+          Math.max(0, (body?.pagination?.total ?? body?.messages.length ?? 0) - (body?.messages.length ?? 0)),
+        );
+        const pagination = body?.pagination ?? null;
+        setState((prev) => {
+          const sameKey = prev.key === key;
+          const base = sameKey ? prev : emptySessionHistory(key);
+          const oldRevision = base.pagination?.revision;
+          const newRevision = pagination?.revision;
+          const revisionChanged = sameKey && oldRevision !== newRevision
+            && (oldRevision != null || newRevision != null);
+          const sameRevision = oldRevision != null && oldRevision === newRevision;
+          const messages = !sameKey
+            ? ui
+            : body === null
+              ? []
+              : revisionChanged
+                ? replaceHistoryRevision(base.messages, ui)
+                : reconcileHistoryMessages(base.messages, ui);
+          const keepFull = sameRevision && base.fullHistoryReady;
+          const nextPagination = pagination
+            ? {
+                ...pagination,
+                before: sameRevision && base.pagination ? base.pagination.before : pagination.before,
+                hasMore: sameRevision && base.pagination
+                  ? base.pagination.hasMore && pagination.hasMore && !keepFull
+                  : pagination.hasMore,
+              }
+            : null;
+          return {
+            ...base,
             key,
-            messages: [],
+            messages,
             loading: false,
             error: null,
             missing: body === null,
-            hasPendingToolCalls: false,
-            version: prev.key === key ? prev.version + 1 : 1,
-          }));
-          return;
-        }
-        const ui: UIMessage[] = body.messages.map((m, idx) => ({
-          ...m,
-          id: m.id ?? `hist-${idx}`,
-          createdAt: typeof m.createdAt === "number" ? m.createdAt : Date.now(),
-          images: resolveUIImageUrls(m.images),
-          media: resolveMediaAttachmentUrls(m.media),
-        }));
-        const last = ui[ui.length - 1];
-        const hasPending = last?.kind === "trace";
-        setState((prev) => ({
-          key,
-          messages: ui,
-          loading: false,
-          error: null,
-          missing: false,
-          hasPendingToolCalls: hasPending,
-          version: prev.key === key ? prev.version + 1 : 1,
-        }));
+            hasPendingToolCalls: ui.at(-1)?.kind === "trace",
+            version: (sameKey ? base.version : 0) + 1,
+            updateKind: "latest",
+            pagination: nextPagination,
+            fullHistoryReady:
+              pageSize === undefined || !nextPagination?.hasMore || keepFull,
+            loadingEarlier: false,
+            earlierError: null,
+            fullHistoryLoading: false,
+          };
+        });
       } catch (e) {
-        if (cancelled) return;
+        if (cancelled || keyRef.current !== key || controller.signal.aborted) return;
         if (e instanceof ApiError && e.status === 404) {
           setState((prev) => ({
+            ...(prev.key === key ? prev : emptySessionHistory(key)),
             key,
-            messages: [],
             loading: false,
             error: null,
             missing: true,
             hasPendingToolCalls: false,
-            version: prev.key === key ? prev.version + 1 : 1,
+            version: (prev.key === key ? prev.version : 0) + 1,
+            updateKind: "latest",
+            pagination: null,
+            fullHistoryReady: true,
           }));
         } else {
           setState((prev) => ({
+            ...(prev.key === key ? prev : emptySessionHistory(key)),
             key,
-            messages: [],
             loading: false,
             error: (e as Error).message,
             missing: false,
             hasPendingToolCalls: false,
-            version: prev.key === key ? prev.version : 0,
           }));
         }
+      } finally {
+        untrackController(controller);
       }
     })();
     return () => {
       cancelled = true;
+      controller.abort();
+      for (const pending of controllersRef.current) pending.abort();
+      controllersRef.current.clear();
+      fullHistoryRequestRef.current = null;
     };
-  }, [key, token, refreshSeq]);
+  }, [key, pageSize, refreshSeq, token, trackController, untrackController]);
+
+  const loadEarlier = useCallback(async (): Promise<boolean> => {
+    if (!key || pageSize === undefined || loadingEarlierRef.current) return false;
+    const current = stateRef.current;
+    const page = current.key === key ? current.pagination : null;
+    if (!page?.hasMore || page.before == null) return false;
+    loadingEarlierRef.current = true;
+    const controller = trackController();
+    setState((prev) => prev.key === key
+      ? { ...prev, loadingEarlier: true, earlierError: null }
+      : prev);
+    const isCurrent = () => keyRef.current === key && !controller.signal.aborted;
+    try {
+      const body = await fetchWebuiThread(token, key, undefined, {
+        limit: pageSize,
+        before: page.before,
+        revision: page.revision,
+        signal: controller.signal,
+      });
+      if (!isCurrent() || !body) return false;
+      if (body.pagination?.revision !== page.revision) {
+        throw new ApiError(409, "Session history revision changed");
+      }
+      const pageMessages = normalizeHistoryMessages(
+        body,
+        Math.max(0, page.before - body.messages.length),
+      );
+      const currentMessages = stateRef.current.key === key ? stateRef.current.messages : [];
+      const sameRevision = body.pagination?.revision === page.revision;
+      const mergedMessages = sameRevision
+        ? mergeHistoryMessages(currentMessages, pageMessages)
+        : reconcileHistoryMessages(currentMessages, pageMessages);
+      const added = mergedMessages.length > currentMessages.length;
+      setState((prev) => {
+        if (prev.key !== key) return prev;
+        const pagination = body.pagination ?? null;
+        return {
+          ...prev,
+          messages: sameRevision
+            ? mergeHistoryMessages(prev.messages, pageMessages)
+            : reconcileHistoryMessages(prev.messages, pageMessages),
+          pagination: pagination
+            ? { ...pagination, hasMore: pagination.hasMore && !prev.fullHistoryReady }
+            : null,
+          hasPendingToolCalls: mergedMessages.at(-1)?.kind === "trace",
+          version: prev.version + 1,
+          updateKind: "earlier",
+          fullHistoryReady: prev.fullHistoryReady || !pagination?.hasMore,
+        };
+      });
+      return added;
+    } catch (error) {
+      if (!isCurrent()) return false;
+      if (error instanceof ApiError && error.status === 409) {
+        try {
+          const latest = await fetchWebuiThread(token, key, undefined, {
+            limit: pageSize,
+            signal: controller.signal,
+          });
+          if (!isCurrent()) return false;
+          const latestMessages = normalizeHistoryMessages(
+            latest,
+            Math.max(0, (latest?.pagination?.total ?? latest?.messages.length ?? 0) - (latest?.messages.length ?? 0)),
+          );
+          setState((prev) => prev.key === key
+            ? {
+                ...prev,
+                messages: latest === null
+                  ? []
+                  : replaceHistoryRevision(prev.messages, latestMessages),
+                pagination: latest?.pagination ?? null,
+                missing: latest === null,
+                hasPendingToolCalls: latestMessages.at(-1)?.kind === "trace",
+                version: prev.version + 1,
+                updateKind: "latest",
+                fullHistoryReady: !latest?.pagination?.hasMore,
+                earlierError: "会话记录已更新，已刷新最近消息，请重试加载更早内容。",
+              }
+            : prev);
+        } catch (refreshError) {
+          if (isCurrent()) {
+            setState((prev) => prev.key === key
+              ? { ...prev, earlierError: (refreshError as Error).message }
+              : prev);
+          }
+        }
+      } else if (isCurrent()) {
+        setState((prev) => prev.key === key
+          ? { ...prev, earlierError: (error as Error).message }
+          : prev);
+      }
+      return false;
+    } finally {
+      untrackController(controller);
+      if (keyRef.current === key) {
+        loadingEarlierRef.current = false;
+        setState((prev) => prev.key === key ? { ...prev, loadingEarlier: false } : prev);
+      }
+    }
+  }, [key, pageSize, token, trackController, untrackController]);
+
+  const loadAllHistory = useCallback(async (): Promise<UIMessage[]> => {
+    if (!key) return EMPTY_MESSAGES;
+    const current = stateRef.current;
+    if (current.key === key && current.fullHistoryReady) return current.messages;
+    const pending = fullHistoryRequestRef.current;
+    if (pending?.key === key) return pending.promise;
+
+    const controller = trackController();
+    setState((prev) => prev.key === key
+      ? { ...prev, fullHistoryLoading: true, fullHistoryError: null }
+      : prev);
+    let request!: Promise<UIMessage[]>;
+    request = (async () => {
+      try {
+        const body = await fetchWebuiThread(token, key, undefined, { signal: controller.signal });
+        if (keyRef.current !== key || controller.signal.aborted) return EMPTY_MESSAGES;
+        const complete = normalizeHistoryMessages(body);
+        let result = complete;
+        setState((prev) => {
+          if (prev.key !== key) return prev;
+          const sameRevision = prev.pagination?.revision != null
+            && prev.pagination.revision === body?.pagination?.revision;
+          result = body === null
+            ? []
+            : sameRevision
+              ? reconcileHistoryMessages(prev.messages, complete)
+              : replaceHistoryRevision(prev.messages, complete);
+          return {
+            ...prev,
+            messages: result,
+            pagination: body?.pagination
+              ? { ...body.pagination, hasMore: false, before: null }
+              : null,
+            fullHistoryReady: true,
+            fullHistoryLoading: false,
+            fullHistoryError: null,
+            missing: body === null,
+            hasPendingToolCalls: complete.at(-1)?.kind === "trace",
+            version: prev.version + 1,
+            updateKind: "full",
+          };
+        });
+        return result;
+      } catch (error) {
+        if (keyRef.current === key && !controller.signal.aborted) {
+          setState((prev) => prev.key === key
+            ? {
+                ...prev,
+                fullHistoryLoading: false,
+                fullHistoryError: (error as Error).message,
+              }
+            : prev);
+        }
+        return stateRef.current.key === key ? stateRef.current.messages : EMPTY_MESSAGES;
+      } finally {
+        untrackController(controller);
+        if (fullHistoryRequestRef.current?.promise === request) {
+          fullHistoryRequestRef.current = null;
+        }
+      }
+    })();
+    fullHistoryRequestRef.current = { key, promise: request };
+    return request;
+  }, [key, token, trackController, untrackController]);
 
   if (!key) {
     return {
@@ -387,7 +755,16 @@ export function useSessionHistory(key: string | null): {
       missing: false,
       refresh,
       version: 0,
+      revision: null,
+      updateKind: null,
       hasPendingToolCalls: false,
+      hasMore: false,
+      loadingEarlier: false,
+      earlierError: null,
+      loadEarlier,
+      fullHistoryLoading: false,
+      fullHistoryError: null,
+      loadAllHistory,
     };
   }
 
@@ -401,7 +778,16 @@ export function useSessionHistory(key: string | null): {
       missing: false,
       refresh,
       version: 0,
+      revision: null,
+      updateKind: null,
       hasPendingToolCalls: false,
+      hasMore: false,
+      loadingEarlier: false,
+      earlierError: null,
+      loadEarlier,
+      fullHistoryLoading: false,
+      fullHistoryError: null,
+      loadAllHistory,
     };
   }
 
@@ -412,7 +798,16 @@ export function useSessionHistory(key: string | null): {
     missing: state.missing,
     refresh,
     version: state.version,
+    revision: state.pagination?.revision ?? null,
+    updateKind: state.updateKind,
     hasPendingToolCalls: state.hasPendingToolCalls,
+    hasMore: state.pagination?.hasMore ?? false,
+    loadingEarlier: state.loadingEarlier,
+    earlierError: state.earlierError,
+    loadEarlier,
+    fullHistoryLoading: state.fullHistoryLoading,
+    fullHistoryError: state.fullHistoryError,
+    loadAllHistory,
   };
 }
 

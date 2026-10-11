@@ -527,6 +527,249 @@ describe("useSessions", () => {
     expect(result.current.error).toBe("HTTP 500");
   });
 
+  it("requests a bounded first page and prepends older pages in transcript order", async () => {
+    vi.mocked(api.fetchWebuiThread)
+      .mockResolvedValueOnce({
+        schemaVersion: 3,
+        messages: [
+          { id: "u3", role: "user", content: "third", createdAt: 3, historyPosition: 2 },
+          { id: "a3", role: "assistant", content: "answer", createdAt: 4, historyPosition: 3, assistantOrdinal: 2 },
+        ],
+        pagination: { hasMore: true, before: 2, revision: "rev-1", total: 4 },
+      })
+      .mockResolvedValueOnce({
+        schemaVersion: 3,
+        messages: [
+          { id: "u1", role: "user", content: "first", createdAt: 1, historyPosition: 0 },
+          { id: "a1", role: "assistant", content: "reply", createdAt: 2, historyPosition: 1, assistantOrdinal: 1 },
+        ],
+        pagination: { hasMore: false, before: null, revision: "rev-1", total: 4 },
+      });
+
+    const { result } = renderHook(() => useSessionHistory("websocket:chat-paged", 2), {
+      wrapper: wrap(fakeClient()),
+    });
+
+    await waitFor(() => expect(result.current.messages.map((message) => message.id)).toEqual(["u3", "a3"]));
+    expect(api.fetchWebuiThread).toHaveBeenNthCalledWith(
+      1,
+      "tok",
+      "websocket:chat-paged",
+      undefined,
+      expect.objectContaining({ limit: 2, signal: expect.any(AbortSignal) }),
+    );
+    let added = false;
+    await act(async () => {
+      added = await result.current.loadEarlier();
+    });
+
+    expect(added).toBe(true);
+    expect(result.current.messages.map((message) => message.id)).toEqual(["u1", "a1", "u3", "a3"]);
+    expect(result.current.hasMore).toBe(false);
+    expect(result.current.messages[1]?.assistantOrdinal).toBe(1);
+    expect(api.fetchWebuiThread).toHaveBeenNthCalledWith(
+      2,
+      "tok",
+      "websocket:chat-paged",
+      undefined,
+      expect.objectContaining({ limit: 2, before: 2, revision: "rev-1" }),
+    );
+  });
+
+  it("keeps the earliest loaded cursor when refreshing within the same revision", async () => {
+    vi.mocked(api.fetchWebuiThread)
+      .mockResolvedValueOnce({
+        schemaVersion: 3,
+        messages: [
+          { id: "m3", role: "user", content: "three", createdAt: 3, historyPosition: 3 },
+          { id: "m4", role: "assistant", content: "four", createdAt: 4, historyPosition: 4 },
+        ],
+        pagination: { hasMore: true, before: 3, revision: "rev-1", total: 5 },
+      })
+      .mockResolvedValueOnce({
+        schemaVersion: 3,
+        messages: [
+          { id: "m1", role: "user", content: "one", createdAt: 1, historyPosition: 1 },
+          { id: "m2", role: "assistant", content: "two", createdAt: 2, historyPosition: 2 },
+        ],
+        pagination: { hasMore: true, before: 1, revision: "rev-1", total: 5 },
+      })
+      .mockResolvedValueOnce({
+        schemaVersion: 3,
+        messages: [
+          { id: "m3", role: "user", content: "three", createdAt: 3, historyPosition: 3 },
+          { id: "m4", role: "assistant", content: "four", createdAt: 4, historyPosition: 4 },
+        ],
+        pagination: { hasMore: true, before: 3, revision: "rev-1", total: 5 },
+      })
+      .mockResolvedValueOnce({
+        schemaVersion: 3,
+        messages: [{ id: "m0", role: "user", content: "zero", createdAt: 0, historyPosition: 0 }],
+        pagination: { hasMore: false, before: null, revision: "rev-1", total: 5 },
+      });
+
+    const { result } = renderHook(() => useSessionHistory("websocket:chat-cursor", 2), {
+      wrapper: wrap(fakeClient()),
+    });
+    await waitFor(() => expect(result.current.messages.map((message) => message.id)).toEqual(["m3", "m4"]));
+    await act(async () => {
+      await result.current.loadEarlier();
+    });
+    await waitFor(() => expect(result.current.messages.map((message) => message.id)).toEqual(["m1", "m2", "m3", "m4"]));
+
+    act(() => result.current.refresh());
+    await waitFor(() => expect(result.current.loading).toBe(false));
+    await act(async () => {
+      await result.current.loadEarlier();
+    });
+
+    expect(api.fetchWebuiThread).toHaveBeenNthCalledWith(
+      4,
+      "tok",
+      "websocket:chat-cursor",
+      undefined,
+      expect.objectContaining({ limit: 2, before: 1, revision: "rev-1" }),
+    );
+    expect(result.current.messages.map((message) => message.id)).toEqual(["m0", "m1", "m2", "m3", "m4"]);
+  });
+
+  it("does not apply a slow history response after switching sessions", async () => {
+    let resolveOld: ((value: Awaited<ReturnType<typeof api.fetchWebuiThread>>) => void) | undefined;
+    vi.mocked(api.fetchWebuiThread).mockImplementation((_token, key) => {
+      if (key === "websocket:chat-old") {
+        return new Promise((resolve) => { resolveOld = resolve; });
+      }
+      return Promise.resolve({
+        schemaVersion: 3,
+        messages: [{ id: "new", role: "user", content: "new session", createdAt: 2 }],
+      });
+    });
+    const { result, rerender } = renderHook(
+      ({ sessionKey }) => useSessionHistory(sessionKey, 160),
+      { initialProps: { sessionKey: "websocket:chat-old" }, wrapper: wrap(fakeClient()) },
+    );
+
+    await waitFor(() => expect(api.fetchWebuiThread).toHaveBeenCalledTimes(1));
+    rerender({ sessionKey: "websocket:chat-new" });
+    await waitFor(() => expect(result.current.messages[0]?.content).toBe("new session"));
+
+    await act(async () => {
+      resolveOld?.({
+        schemaVersion: 3,
+        messages: [{ id: "old", role: "user", content: "old session", createdAt: 1 }],
+      });
+    });
+
+    expect(result.current.messages.map((message) => message.id)).toEqual(["new"]);
+  });
+
+  it("recovers a stale page revision by reloading the latest page", async () => {
+    vi.mocked(api.fetchWebuiThread)
+      .mockResolvedValueOnce({
+        schemaVersion: 3,
+        messages: [{ id: "old-head", role: "user", content: "old", createdAt: 2, historyPosition: 1 }],
+        pagination: { hasMore: true, before: 1, revision: "rev-1", total: 2 },
+      })
+      .mockRejectedValueOnce(new api.ApiError(409, "stale revision"))
+      .mockResolvedValueOnce({
+        schemaVersion: 3,
+        messages: [{ id: "new-head", role: "user", content: "new", createdAt: 3, historyPosition: 2 }],
+        pagination: { hasMore: true, before: 2, revision: "rev-2", total: 3 },
+      });
+
+    const { result } = renderHook(() => useSessionHistory("websocket:chat-stale", 1), {
+      wrapper: wrap(fakeClient()),
+    });
+    await waitFor(() => expect(result.current.hasMore).toBe(true));
+
+    await act(async () => {
+      expect(await result.current.loadEarlier()).toBe(false);
+    });
+
+    expect(result.current.messages.map((message) => message.id)).toEqual(["new-head"]);
+    expect(result.current.hasMore).toBe(true);
+    expect(result.current.earlierError).toContain("会话记录已更新");
+    expect(api.fetchWebuiThread).toHaveBeenNthCalledWith(
+      3,
+      "tok",
+      "websocket:chat-stale",
+      undefined,
+      expect.objectContaining({ limit: 1, signal: expect.any(AbortSignal) }),
+    );
+  });
+
+  it("replaces the canonical tail on a new revision and clears full-history state", async () => {
+    vi.mocked(api.fetchWebuiThread)
+      .mockResolvedValueOnce({
+        schemaVersion: 3,
+        messages: [
+          { id: "old-middle", role: "assistant", content: "middle", createdAt: 2, historyPosition: 1 },
+          { id: "old-tail", role: "assistant", content: "old", createdAt: 3, historyPosition: 2 },
+        ],
+        pagination: { hasMore: true, before: 1, revision: "rev-1", total: 3 },
+      })
+      .mockResolvedValueOnce({
+        schemaVersion: 3,
+        messages: [
+          { id: "old-prefix", role: "user", content: "prefix", createdAt: 1, historyPosition: 0 },
+          { id: "old-middle", role: "assistant", content: "middle", createdAt: 2, historyPosition: 1 },
+          { id: "old-tail", role: "assistant", content: "old", createdAt: 3, historyPosition: 2 },
+        ],
+        pagination: { hasMore: false, before: null, revision: "rev-1", total: 3 },
+      })
+      .mockResolvedValueOnce({
+        schemaVersion: 3,
+        messages: [
+          { id: "new-tail", role: "assistant", content: "new", createdAt: 4, historyPosition: 2 },
+          { id: "latest", role: "user", content: "latest", createdAt: 5, historyPosition: 3 },
+        ],
+        pagination: { hasMore: true, before: 2, revision: "rev-2", total: 4 },
+      });
+
+    const { result } = renderHook(() => useSessionHistory("websocket:chat-refresh", 2), {
+      wrapper: wrap(fakeClient()),
+    });
+    await waitFor(() => expect(result.current.hasMore).toBe(true));
+    await act(async () => {
+      await result.current.loadAllHistory();
+    });
+    expect(result.current.hasMore).toBe(false);
+
+    act(() => result.current.refresh());
+    await waitFor(() => expect(result.current.messages.some((message) => message.id === "latest")).toBe(true));
+
+    expect(result.current.messages.map((message) => message.id)).toEqual([
+      "new-tail",
+      "latest",
+    ]);
+    expect(result.current.hasMore).toBe(true);
+    expect(result.current.fullHistoryLoading).toBe(false);
+  });
+
+  it("does not carry full-history state when switching to a longer session", async () => {
+    vi.mocked(api.fetchWebuiThread)
+      .mockResolvedValueOnce({
+        schemaVersion: 3,
+        messages: [{ id: "small", role: "user", content: "small", createdAt: 1 }],
+        pagination: { hasMore: false, before: null, revision: "small-rev", total: 1 },
+      })
+      .mockResolvedValueOnce({
+        schemaVersion: 3,
+        messages: [{ id: "large-tail", role: "user", content: "large", createdAt: 2, historyPosition: 1 }],
+        pagination: { hasMore: true, before: 1, revision: "large-rev", total: 2 },
+      });
+    const { result, rerender } = renderHook(
+      ({ sessionKey }) => useSessionHistory(sessionKey, 160),
+      { initialProps: { sessionKey: "websocket:small" }, wrapper: wrap(fakeClient()) },
+    );
+
+    await waitFor(() => expect(result.current.hasMore).toBe(false));
+    rerender({ sessionKey: "websocket:large" });
+    await waitFor(() => expect(result.current.messages[0]?.id).toBe("large-tail"));
+
+    expect(result.current.hasMore).toBe(true);
+  });
+
   it("keeps the session in the list when delete fails", async () => {
     vi.mocked(api.listSessions).mockResolvedValue([
       {

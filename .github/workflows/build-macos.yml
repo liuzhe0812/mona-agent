@@ -14,7 +14,7 @@ on:
   workflow_dispatch:
     inputs:
       publish:
-        description: "none = 只出 artifact；ad-hoc = 免签直接上传；notarized = 签名公证后上传"
+        description: "none = 只出 artifact；ad-hoc = 免费签名上传（未公证）；notarized = 正式签名公证后上传"
         required: true
         default: none
         type: choice
@@ -120,6 +120,20 @@ jobs:
           xcrun stapler validate "$dmg"
           spctl --assess --type open --context context:primary-signature -vv "$dmg"
 
+      - name: Record release metadata
+        env:
+          SIGNING_MODE: ${{ inputs.publish == 'notarized' && 'notarized' || 'ad-hoc' }}
+        run: |
+          python - <<'PY'
+          import hashlib, json, os, tomllib
+          from pathlib import Path
+          version = tomllib.loads(Path("pyproject.toml").read_text())["project"]["version"]
+          root = Path("dist/macos/arm64")
+          dmg = root / f"Mona_{version}_arm64.dmg"
+          metadata = {"version": version, "git_hash": os.environ["GITHUB_SHA"], "platform": "macos", "arch": "arm64", "signing": os.environ["SIGNING_MODE"], "file": dmg.name, "size": dmg.stat().st_size, "sha256": hashlib.sha256(dmg.read_bytes()).hexdigest()}
+          (root / "release-metadata.json").write_text(json.dumps(metadata, indent=2) + "\n")
+          PY
+
       - name: Upload GitHub artifact
         uses: actions/upload-artifact@v4
         with:
@@ -154,6 +168,9 @@ jobs:
           QINIU_DOMAIN: ${{ secrets.QINIU_DOMAIN }}
         run: |
           test -n "$QINIU_DOMAIN"
+          domain="${QINIU_DOMAIN#https://}"
+          domain="${domain#http://}"
+          domain="${domain%/}"
           python -m pip install qiniu
           version="$(python -c 'import tomllib; print(tomllib.load(open("pyproject.toml", "rb"))["project"]["version"])')"
           found=0
@@ -163,7 +180,7 @@ jobs:
             # 版本化路径供归档，固定路径供官网下载按钮长期使用。
             for object_key in "macos/${version}/$(basename "$dmg")" "macos/Mona-latest.dmg"; do
               python .github/scripts/upload_qiniu_artifact.py --artifact "$dmg" --object-key "$object_key"
-              public_url="${QINIU_DOMAIN%/}/${object_key}"
+              public_url="https://${domain}/${object_key}"
               downloaded="$RUNNER_TEMP/verify-$(basename "$dmg")"
               curl --fail --location --retry 3 --retry-delay 5 --output "$downloaded" "$public_url"
               test "$digest" = "$(sha256sum "$downloaded" | cut -d ' ' -f 1)"

@@ -42,7 +42,13 @@ import { SidebarBrowserPanel, type SidebarBrowserController } from "@/components
 import { useFilePreviewStore, type PreviewScope, isArtifactTombstoned, normalizeArtifactPath } from "@/components/deliver/filePreviewStore";
 import { useMonaStream, type SendImage, type SendOptions } from "@/hooks/useMonaStream";
 import { usePendingQueue } from "@/hooks/usePendingQueue";
-import { useSessionHistory } from "@/hooks/useSessions";
+import {
+  assistantOrdinalForMessage,
+  mergeHistoryMessages,
+  reconcileHistoryMessages,
+  replaceHistoryRevision,
+  useSessionHistory,
+} from "@/hooks/useSessions";
 import { useArtifacts } from "@/hooks/useArtifacts";
 import { fetchSettings, listSlashCommands, renameArtifact, updateSettings } from "@/lib/api";
 import type { ChatSummary, DeliveredFile, DiscussionLaunchOptions, MessageQuote, RoomAgentInfo, SettingsPayload, SlashCommand, UIFileEdit, UIMessage, WorkflowRun } from "@/lib/types";
@@ -258,27 +264,41 @@ export function buildSharedOutputDir(
 }
 
 function preserveDeliveredFiles(oldMessages: UIMessage[], newMessages: UIMessage[]): UIMessage[] {
-  const deliveredByAssistantIdx = new Map<number, DeliveredFile[]>();
-  let assistantIdx = 0;
+  const deliveredByMessageId = new Map<string, DeliveredFile[]>();
+  const deliveredByAssistantOrdinal = new Map<number, DeliveredFile[]>();
+  let lastAssistantOrdinal = 0;
   for (const m of oldMessages) {
-    if (m.role === "assistant" && m.kind !== "trace") {
+    if (m.deliveredFiles?.length) deliveredByMessageId.set(m.id, m.deliveredFiles);
+    if (
+      m.role === "assistant"
+      && m.kind !== "trace"
+      && m.kind !== "workflowRun"
+      && m.kind !== "discussion"
+      && m.content.trim()
+    ) {
+      lastAssistantOrdinal = m.assistantOrdinal ?? lastAssistantOrdinal + 1;
       if (m.deliveredFiles?.length) {
-        deliveredByAssistantIdx.set(assistantIdx, m.deliveredFiles);
+        deliveredByAssistantOrdinal.set(lastAssistantOrdinal, m.deliveredFiles);
       }
-      assistantIdx++;
     }
   }
-  if (deliveredByAssistantIdx.size === 0) return newMessages;
+  if (deliveredByMessageId.size === 0 && deliveredByAssistantOrdinal.size === 0) return newMessages;
   const result = [...newMessages];
-  let newAssistantIdx = 0;
+  let newLastAssistantOrdinal = 0;
   for (let i = 0; i < result.length; i++) {
-    if (result[i].role === "assistant" && result[i].kind !== "trace") {
-      const files = deliveredByAssistantIdx.get(newAssistantIdx);
-      if (files) {
-        result[i] = { ...result[i], deliveredFiles: files };
-      }
-      newAssistantIdx++;
+    const message = result[i];
+    let files = deliveredByMessageId.get(message.id);
+    if (
+      message.role === "assistant"
+      && message.kind !== "trace"
+      && message.kind !== "workflowRun"
+      && message.kind !== "discussion"
+      && message.content.trim()
+    ) {
+      newLastAssistantOrdinal = message.assistantOrdinal ?? newLastAssistantOrdinal + 1;
+      files ??= deliveredByAssistantOrdinal.get(newLastAssistantOrdinal);
     }
+    if (files) result[i] = { ...message, deliveredFiles: files };
   }
   return result;
 }
@@ -451,7 +471,16 @@ export function ThreadShell({
     hasPendingToolCalls,
     refresh: refreshHistory,
     version: historyVersion,
-  } = useSessionHistory(historyKey);
+    hasMore: hasMoreHistory,
+    loadingEarlier,
+    earlierError,
+    loadEarlier,
+    fullHistoryLoading,
+    fullHistoryError,
+    loadAllHistory,
+    revision: historyRevision,
+    updateKind: historyUpdateKind,
+  } = useSessionHistory(historyKey, 160);
   const { client, modelName, token } = useClient();
   const conversation = session?.conversation ?? null;
   const [booting, setBooting] = useState(false);
@@ -486,6 +515,7 @@ export function ThreadShell({
   const appliedHistoryVersionRef = useRef<Map<string, number>>(new Map());
   const pendingCanonicalHydrateRef = useRef<Set<string>>(new Set());
   const sessionKeyByChatIdRef = useRef<Map<string, string>>(new Map());
+  const historyRevisionByChatIdRef = useRef<Map<string, string | null>>(new Map());
 
   const initial = useMemo(() => {
     if (!chatId) return historical;
@@ -649,6 +679,16 @@ export function ThreadShell({
 
   useEffect(() => {
     if (!chatId || loading) return;
+    const hadRevision = historyRevisionByChatIdRef.current.has(chatId);
+    const previousRevision = historyRevisionByChatIdRef.current.get(chatId);
+    const revisionChanged = hadRevision && previousRevision !== historyRevision;
+    historyRevisionByChatIdRef.current.set(chatId, historyRevision);
+    const reconcile = (current: UIMessage[], incoming: UIMessage[], missing = false) => {
+      const options = { isStreaming, currentTaskId, missing };
+      return revisionChanged
+        ? replaceHistoryRevision(current, incoming, options)
+        : reconcileHistoryMessages(current, incoming, options);
+    };
     const cached = messageCacheRef.current.get(chatId);
     const appliedVersion = appliedHistoryVersionRef.current.get(chatId) ?? 0;
     const hasPendingCanonicalHydrate = pendingCanonicalHydrateRef.current.has(chatId);
@@ -663,12 +703,31 @@ export function ThreadShell({
         pendingCanonicalHydrateRef.current.delete(chatId);
         appliedHistoryVersionRef.current.set(chatId, historyVersion);
         const normalized = projectWebuiThreadMessages(historical);
-        const preserved = preserveDeliveredFiles(prev, normalized);
+        const merged = reconcile(prev, normalized);
+        const preserved = preserveDeliveredFiles(prev, merged);
+        messageCacheRef.current.set(chatId, preserved);
+        return preserved;
+      }
+      if (historyMissing && historical.length === 0) {
+        pendingCanonicalHydrateRef.current.delete(chatId);
+        const local = cached?.length ? cached : projectWebuiThreadMessages(prev);
+        const preserved = preserveDeliveredFiles(local, local);
         messageCacheRef.current.set(chatId, preserved);
         return preserved;
       }
       if (cached && cached.length > 0) {
-        return preserveDeliveredFiles(prev, projectWebuiThreadMessages(cached));
+        const incoming = projectWebuiThreadMessages(historical);
+        const prior = cached;
+        const shouldReplaceRevision = revisionChanged && incoming.length > 0;
+        const shouldMergePage = historyUpdateKind === "earlier" || historyUpdateKind === "full";
+        const next = shouldReplaceRevision
+          ? replaceHistoryRevision(prior, incoming, { isStreaming, currentTaskId })
+          : shouldMergePage
+            ? mergeHistoryMessages(prior, incoming)
+            : prior;
+        const preserved = preserveDeliveredFiles(prior, next);
+        messageCacheRef.current.set(chatId, preserved);
+        return preserved;
       }
       if (historical.length === 0 && prev.length > 0) return projectWebuiThreadMessages(prev);
       appliedHistoryVersionRef.current.set(chatId, historyVersion);
@@ -678,7 +737,7 @@ export function ThreadShell({
       return preserved;
     });
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [loading, chatId, historical, historyVersion]);
+  }, [loading, chatId, historical, historyVersion, historyUpdateKind]);
 
   useEffect(() => {
     if (!chatId) return;
@@ -694,7 +753,7 @@ export function ThreadShell({
   useEffect(() => {
     if (!chatId || loading) return;
     setScrollToBottomSignal((value) => value + 1);
-  }, [chatId, loading, historical]);
+  }, [chatId, loading]);
 
   useEffect(() => {
     if (chatId) return;
@@ -977,20 +1036,8 @@ export function ThreadShell({
   }, []);
 
   const handleBranchMessage = useCallback((message: UIMessage) => {
-    let assistantOrdinal = 0;
-    for (const candidate of transcriptMessages) {
-      if (
-        candidate.role === "assistant"
-        && candidate.kind !== "trace"
-        && candidate.kind !== "workflowRun"
-        && candidate.kind !== "discussion"
-        && candidate.content.trim()
-      ) {
-        assistantOrdinal += 1;
-      }
-      if (candidate.id === message.id) break;
-    }
-    if (assistantOrdinal <= 0) return;
+    const assistantOrdinal = assistantOrdinalForMessage(transcriptMessages, message.id);
+    if (assistantOrdinal == null) return;
     setBranchCandidate({ assistantOrdinal, taskId: message.taskId });
   }, [transcriptMessages]);
 
@@ -1582,7 +1629,7 @@ export function ThreadShell({
   // project sessions scan the bound project directory (all files — project
   // sessions have no "artifact" concept, the directory IS the list).
   const artifacts = useArtifacts(
-    !isHome ? token : null,
+    !isHome && (historyVersion > 0 || !loading) ? token : null,
     `${historyKey ?? "home"}-${currentTaskId ?? "current"}-${artifactsRefreshSignal}`,
     {
       scope: workspaceScope,
@@ -2079,6 +2126,10 @@ export function ThreadShell({
               workspaceHasContent={isRoomSession ? true : !isHome}
               messages={transcriptMessages}
               onJumpToMessage={jumpToMessage}
+              onEnsureFullHistory={loadAllHistory}
+              hasMoreHistory={hasMoreHistory}
+              fullHistoryLoading={fullHistoryLoading}
+              fullHistoryError={fullHistoryError}
             />
           ) : null}
           {missingInstalledPartner ? (
@@ -2103,6 +2154,10 @@ export function ThreadShell({
             showScrollToBottomButton={!!session}
             onQuote={handleQuote}
             onBranch={onBranchChat ? handleBranchMessage : undefined}
+            hasMoreHistory={hasMoreHistory}
+            loadingEarlier={loadingEarlier}
+            earlierError={earlierError}
+            onLoadEarlier={loadEarlier}
           />
         </section>
       }

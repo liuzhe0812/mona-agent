@@ -29,6 +29,10 @@ interface ThreadViewportProps {
   focusMessage?: { id: string; requestId: number } | null;
   conversationKey?: string | null;
   showScrollToBottomButton?: boolean;
+  hasMoreHistory?: boolean;
+  loadingEarlier?: boolean;
+  earlierError?: string | null;
+  onLoadEarlier?: () => Promise<boolean>;
   onQuote?: (message: UIMessage, author: string) => void;
   onBranch?: (message: UIMessage, author: string) => void;
 }
@@ -62,6 +66,10 @@ export function ThreadViewport({
   focusMessage = null,
   conversationKey = null,
   showScrollToBottomButton = true,
+  hasMoreHistory = false,
+  loadingEarlier = false,
+  earlierError = null,
+  onLoadEarlier,
   onQuote,
   onBranch,
 }: ThreadViewportProps) {
@@ -74,13 +82,21 @@ export function ThreadViewport({
   const pendingConversationScrollRef = useRef(true);
   const scrollFrameIdsRef = useRef<number[]>([]);
   const restoreScrollAfterPrependRef =
-    useRef<{ height: number; top: number } | null>(null);
+    useRef<{
+      height: number;
+      top: number;
+      visibleLength: number;
+      messageLength: number;
+      remote: boolean;
+    } | null>(null);
   /** User scrolled away from the bottom; do not auto-yank until they return or we reset (new chat / send). */
   const userReadingHistoryRef = useRef(false);
   const [atBottom, setAtBottom] = useState(true);
   const [composerDockHeight, setComposerDockHeight] = useState(0);
   const [visibleMessageCount, setVisibleMessageCount] =
     useState(INITIAL_HISTORY_WINDOW);
+  const messagesRef = useRef(messages);
+  messagesRef.current = messages;
   const hasMessages = messages.length > 0;
   const visibleMessages = useMemo(
     () => windowMessages(messages, visibleMessageCount),
@@ -131,19 +147,46 @@ export function ThreadViewport({
   );
 
   const loadEarlierMessages = useCallback(() => {
+    const remote = hiddenMessageCount === 0;
     const el = scrollRef.current;
     if (el) {
       restoreScrollAfterPrependRef.current = {
         height: el.scrollHeight,
         top: el.scrollTop,
+        visibleLength: visibleMessages.length,
+        messageLength: messages.length,
+        remote,
       };
     }
     userReadingHistoryRef.current = true;
     setAtBottom(false);
-    setVisibleMessageCount((count) =>
-      Math.min(messages.length, count + HISTORY_WINDOW_INCREMENT),
-    );
-  }, [messages.length]);
+    if (hiddenMessageCount > 0) {
+      setVisibleMessageCount((count) =>
+        Math.min(messages.length, count + HISTORY_WINDOW_INCREMENT),
+      );
+      return;
+    }
+    if (!hasMoreHistory || !onLoadEarlier || loadingEarlier) {
+      restoreScrollAfterPrependRef.current = null;
+      return;
+    }
+    // Reserve room for the next local window while the remote page is loading.
+    // Once prepended, the same anchor is restored against the taller content.
+    setVisibleMessageCount((count) => count + HISTORY_WINDOW_INCREMENT);
+    void onLoadEarlier()
+      .then((added) => {
+        if (!added) {
+          setVisibleMessageCount((count) =>
+            Math.max(INITIAL_HISTORY_WINDOW, Math.min(messagesRef.current.length, count - HISTORY_WINDOW_INCREMENT)),
+          );
+        }
+      })
+      .catch(() => {
+        setVisibleMessageCount((count) =>
+          Math.max(INITIAL_HISTORY_WINDOW, Math.min(messagesRef.current.length, count - HISTORY_WINDOW_INCREMENT)),
+        );
+      });
+  }, [hasMoreHistory, hiddenMessageCount, loadingEarlier, messages.length, onLoadEarlier, visibleMessages.length]);
 
   const measureComposerDock = useCallback(() => {
     const el = composerDockRef.current;
@@ -198,6 +241,7 @@ export function ThreadViewport({
     lastConversationKeyRef.current = conversationKey;
     pendingConversationScrollRef.current = true;
     userReadingHistoryRef.current = false;
+    restoreScrollAfterPrependRef.current = null;
     setAtBottom(true);
     setVisibleMessageCount(INITIAL_HISTORY_WINDOW);
   }, [conversationKey]);
@@ -205,12 +249,23 @@ export function ThreadViewport({
   useLayoutEffect(() => {
     const pending = restoreScrollAfterPrependRef.current;
     if (!pending) return;
+    if (pending.remote
+      ? messages.length <= pending.messageLength
+      : visibleMessages.length <= pending.visibleLength) return;
     const el = scrollRef.current;
     restoreScrollAfterPrependRef.current = null;
     if (!el) return;
     const delta = el.scrollHeight - pending.height;
     el.scrollTop = pending.top + delta;
-  }, [visibleMessages.length]);
+  }, [hiddenMessageCount, messages.length, visibleMessages.length]);
+
+  useEffect(() => {
+    const pending = restoreScrollAfterPrependRef.current;
+    if (!pending || loadingEarlier) return;
+    if (messages.length <= pending.messageLength && visibleMessages.length <= pending.visibleLength) {
+      restoreScrollAfterPrependRef.current = null;
+    }
+  }, [loadingEarlier, messages.length, visibleMessages.length]);
 
   useLayoutEffect(() => {
     if (!pendingConversationScrollRef.current) return;
@@ -286,6 +341,9 @@ export function ThreadViewport({
                   isStreaming={isStreaming}
                   isGroupChat={isGroupChat}
                   hiddenMessageCount={hiddenMessageCount}
+                  hasMoreHistory={hasMoreHistory}
+                  loadingEarlier={loadingEarlier}
+                  earlierError={earlierError}
                   onLoadEarlier={loadEarlierMessages}
                   onQuote={onQuote}
                   onBranch={onBranch}
