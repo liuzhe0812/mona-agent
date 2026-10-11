@@ -10,13 +10,16 @@ import {
   type ReactNode,
 } from "react";
 
+import { ModelSelector } from "@/components/models/ModelSelector";
+import type { ModelOption as ComposerModelOption } from "@/components/models/model-sources";
+export type { ModelOption as ComposerModelOption } from "@/components/models/model-sources";
+
 import { MarkdownText, preloadMarkdownText } from "@/components/MarkdownText";
 import {
   Activity,
   ArrowUp,
   AtSign,
   BookOpen,
-  Check,
   ChevronDown,
   ChevronUp,
   CircleHelp,
@@ -30,7 +33,6 @@ import {
   Monitor,
   Plus,
   RotateCw,
-  Search,
   Sparkles,
   Square,
   SquarePen,
@@ -42,24 +44,16 @@ import {
 import { useTranslation } from "react-i18next";
 
 import { Button } from "@/components/ui/button";
-import { Input } from "@/components/ui/input";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
 import { OfficeDocChip } from "@/components/doc/office/OfficeDocChip";
 import {
-  DropdownMenu,
-  DropdownMenuContent,
-  DropdownMenuItem,
-  DropdownMenuSub,
-  DropdownMenuSubContent,
-  DropdownMenuSubTrigger,
-  DropdownMenuTrigger,
-} from "@/components/ui/dropdown-menu";
-import {
   useAttachedImages,
+  isInlineImage,
   type AttachedImage,
   type AttachmentError,
   MAX_IMAGES_PER_MESSAGE,
 } from "@/hooks/useAttachedImages";
+import { useAttachedDocuments, type AttachedDocument } from "@/hooks/useAttachedDocuments";
 import { useClipboardAndDrop } from "@/hooks/useClipboardAndDrop";
 import type { SendImage, SendOptions } from "@/hooks/useMonaStream";
 import type { PendingMessage } from "@/hooks/usePendingQueue";
@@ -73,48 +67,12 @@ import {
 import { cn } from "@/lib/utils";
 import { PendingQueueStrip } from "@/components/thread/PendingQueueStrip";
 
-const IMAGE_ACCEPT_ATTR = "image/png,image/jpeg,image/webp,image/gif";
 const MAX_QUOTE_CONTENT_CHARS = 4_000;
 
 function formatBytes(n: number): string {
   if (n < 1024) return `${n} B`;
   if (n < 1024 * 1024) return `${(n / 1024).toFixed(1)} KB`;
   return `${(n / (1024 * 1024)).toFixed(1)} MB`;
-}
-
-export interface ComposerModelOption {
-  provider: string;
-  providerLabel: string;
-  model: string;
-  label: string;
-  active: boolean;
-  isBuiltin?: boolean;
-  description?: string | null;
-  contextWindow?: number | null;
-  recommended?: boolean;
-  tags?: string[];
-  priceTier?: string | null;
-  reasoningEfforts?: string[];
-  reasoningEffort?: string | null;
-  inputAmountPerMillion?: string | null;
-  cachedInputAmountPerMillion?: string | null;
-  outputAmountPerMillion?: string | null;
-  promotionLabel?: string | null;
-  promotionName?: string | null;
-  discountPercent?: number | null;
-  originalInputAmountPerMillion?: string | null;
-  originalCachedInputAmountPerMillion?: string | null;
-  originalOutputAmountPerMillion?: string | null;
-}
-
-function modelReasoningLabel(value?: string | null): string {
-  return ({ low: "低", medium: "中", high: "高", max: "最高", adaptive: "自动" } as Record<string, string>)[value ?? ""] ?? "默认";
-}
-
-function modelContextLabel(value?: number | null): string | null {
-  if (!value) return null;
-  if (value >= 1_000_000) return `${Math.round(value / 1_000_000)}M`;
-  return `${Math.round(value / 1_000)}K`;
 }
 
 function formatContextTokens(value: number): string {
@@ -127,7 +85,7 @@ function resolvedContextUsage(usage?: ThreadComposerProps["contextUsage"]): {
   label: string;
 } {
   if (!usage) return { percent: 0, label: "暂无上下文用量" };
-  if (!usage.total || usage.total <= 0 || usage.used < 0 || usage.used > usage.total) {
+  if (!usage.total || usage.total <= 0 || usage.used < 0) {
     return {
       percent: 0,
       label: `已使用 ${formatContextTokens(Math.max(0, usage.used))}，模型上下文窗口未知`,
@@ -135,7 +93,7 @@ function resolvedContextUsage(usage?: ThreadComposerProps["contextUsage"]): {
   }
   const percent = (usage.used / usage.total) * 100;
   return {
-    percent,
+    percent: Math.min(100, percent),
     label: `${percent.toFixed(1)}% · ${formatContextTokens(usage.used)} / ${formatContextTokens(usage.total)} 上下文已使用`,
   };
 }
@@ -177,12 +135,22 @@ function ContextUsageIndicator({ usage }: { usage?: ThreadComposerProps["context
   );
 }
 
-export type ComposerAttachment = File | { name: string; localPath: string };
-
 interface ThreadComposerProps {
-  onSend: (content: string, images?: SendImage[], options?: SendOptions) => void;
+  chatId?: string | null;
+  onSend: (content: string, images?: SendImage[], options?: SendOptions) => void | boolean | Promise<void | boolean>;
+  awaitSendResult?: boolean;
+  documentDraft?: AttachedDocument[];
+  onDocumentDraftChange?: (value: AttachedDocument[]) => void;
+  value?: string;
+  onValueChange?: (value: string) => void;
+  clearOnSend?: boolean;
   disabled?: boolean;
+  sendDisabled?: boolean;
   placeholder?: string;
+  inputLabel?: string;
+  sendLabel?: string;
+  stopLabel?: string;
+  autoFocus?: boolean;
   isStreaming?: boolean;
   /** True after a computer_act tool has started in the active run. */
   computerUseActive?: boolean;
@@ -194,7 +162,10 @@ interface ThreadComposerProps {
   stopping?: boolean;
   modelLabel?: string | null;
   modelOptions?: ComposerModelOption[];
-  onModelSwitch?: (provider: string, model: string, reasoningEffort?: string | null) => void;
+  onModelSwitch?: (provider: string, model: string, reasoningEffort?: string | null) => void | Promise<void>;
+  onModelSelect?: (option: ComposerModelOption, effort?: string | null) => void | Promise<void>;
+  modelDisabled?: boolean;
+  currentExecutor?: string;
   /** Latest turn context usage vs the active model's context window.
    * ``total`` is ``null`` when the active model has no known context window. */
   contextUsage?: {
@@ -218,20 +189,18 @@ interface ThreadComposerProps {
   heroBrand?: ReactNode;
   showHeroPromptChips?: boolean;
   onOpenSettings?: (section?: string) => void;
+  attachmentsEnabled?: boolean;
+  onAttach?: () => void;
+  attachLabel?: string;
   /** Pending message queue for mid-turn staging. */
   pendingMessages?: PendingMessage[];
   onPendingAppend?: (id: string) => void;
   onPendingRemove?: (id: string) => void;
-  onPendingEdit?: (id: string, content: string) => void;
+  onPendingEdit?: (id: string, content: string) => void | Promise<void>;
   isPendingFull?: boolean;
   /** Room members offered by the ``@`` picker (multi-agent guide 7.5). When
    * empty the picker is disabled (direct chats). */
   mentionableAgents?: RoomAgentInfo[];
-  documents?: Array<{ name: string; path: string; size?: number }>;
-  documentsUploading?: boolean;
-  documentUploadError?: string | null;
-  onAddDocuments?: (files: ComposerAttachment[]) => void;
-  onRemoveDocument?: (path: string) => void;
   quote?: MessageQuote | null;
   onClearQuote?: () => void;
 }
@@ -593,9 +562,21 @@ function RunElapsedStrip({
 }
 
 export function ThreadComposer({
+  chatId,
   onSend,
+  awaitSendResult = false,
+  documentDraft,
+  onDocumentDraftChange,
+  value: controlledValue,
+  onValueChange,
+  clearOnSend = true,
   disabled,
+  sendDisabled = false,
   placeholder,
+  inputLabel,
+  sendLabel,
+  stopLabel,
+  autoFocus = true,
   isStreaming = false,
   computerUseActive = false,
   isAwaitingModelResponse = false,
@@ -604,6 +585,9 @@ export function ThreadComposer({
   modelLabel = null,
   modelOptions = [],
   onModelSwitch,
+  onModelSelect,
+  modelDisabled = false,
+  currentExecutor,
   contextUsage = null,
   imageInputEnabled = true,
   variant = "thread",
@@ -621,18 +605,44 @@ export function ThreadComposer({
   heroBrand,
   showHeroPromptChips = true,
   onOpenSettings,
+  attachmentsEnabled = true,
+  onAttach,
+  attachLabel: customAttachLabel,
   mentionableAgents = [],
-  documents = [],
-  documentsUploading = false,
-  documentUploadError = null,
-  onAddDocuments,
-  onRemoveDocument,
+  onPendingEdit,
   quote = null,
   onClearQuote,
 }: ThreadComposerProps) {
   const { t } = useTranslation();
-  const attachLabel = t(onAddDocuments ? "thread.composer.attachFile" : "thread.composer.attachImage");
-  const [value, setValue] = useState("");
+  const fileAttachLabel = t("thread.composer.attachFile");
+  const resolvedAttachLabel = customAttachLabel ?? fileAttachLabel;
+  const {
+    documents,
+    uploading: documentsUploading,
+    error: documentUploadError,
+    add: addDocuments,
+    remove: removeDocument,
+    clear: clearDocuments,
+  } = useAttachedDocuments(chatId, documentDraft, onDocumentDraftChange);
+  const submitting = useRef(false);
+  const submitScope = useRef(chatId); submitScope.current = chatId;
+  const mounted = useRef(true);
+  useEffect(() => { mounted.current = true; return () => { mounted.current = false; }; }, []);
+  const [internalValue, setInternalValue] = useState("");
+  const isControlled = controlledValue !== undefined;
+  const value = isControlled ? controlledValue : internalValue;
+  const isControlledRef = useRef(isControlled);
+  isControlledRef.current = isControlled;
+  const onValueChangeRef = useRef(onValueChange);
+  onValueChangeRef.current = onValueChange;
+  const valueRef = useRef(value);
+  valueRef.current = value;
+  const setValue = useCallback((next: string | ((current: string) => string)) => {
+    const resolved = typeof next === "function" ? next(valueRef.current) : next;
+    valueRef.current = resolved;
+    if (!isControlledRef.current) setInternalValue(resolved);
+    onValueChangeRef.current?.(resolved);
+  }, []);
   const [sendMessageShortcut, setSendMessageShortcut] = useState<SendMessageShortcut>("enter");
   const [inlineError, setInlineError] = useState<string | null>(null);
   const [slashMenuDismissed, setSlashMenuDismissed] = useState(false);
@@ -647,30 +657,10 @@ export function ThreadComposer({
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const formRef = useRef<HTMLFormElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
-  const [modelMenuOpen, setModelMenuOpen] = useState(false);
-  const [modelQuery, setModelQuery] = useState("");
-  const [modelDetailsKey, setModelDetailsKey] = useState<string | null>(null);
   const chipRefs = useRef(new Map<string, HTMLButtonElement>());
   const isHero = variant === "hero";
   const activeModelOption = modelOptions.find((option) => option.active) ?? null;
-  const normalizedModelQuery = modelQuery.trim().toLowerCase();
-  const filteredModelOptions = normalizedModelQuery
-    ? modelOptions.filter((option) =>
-        `${option.label} ${option.model} ${option.description ?? ""} ${(option.tags ?? []).join(" ")}`
-          .toLowerCase()
-          .includes(normalizedModelQuery),
-      )
-    : modelOptions;
-  const groupedModelOptions = useMemo(() => {
-    const groups = new Map<string, { label: string; options: ComposerModelOption[] }>();
-    for (const option of filteredModelOptions) {
-      const group = groups.get(option.provider);
-      if (group) group.options.push(option);
-      else groups.set(option.provider, { label: option.providerLabel, options: [option] });
-    }
-    return [...groups.entries()];
-  }, [filteredModelOptions]);
-  const triggerModelLabel = activeModelOption?.model ?? modelLabel;
+  const triggerModelLabel = activeModelOption?.model || modelLabel;
   const resolvedPlaceholder = isCompacting
     ? t("thread.composer.placeholderCompacting")
     : isAwaitingModelResponse
@@ -683,6 +673,22 @@ export function ThreadComposer({
     if (!quote) return;
     requestAnimationFrame(() => textareaRef.current?.focus());
   }, [quote]);
+
+  useLayoutEffect(() => {
+    if (isControlled) return;
+    // Clear stale inline sizing after hot reload without measuring on ordinary value changes.
+    const el = textareaRef.current;
+    if (!el || valueRef.current.trim()) return;
+    el.style.removeProperty("height");
+  }, [isControlled]);
+
+  useLayoutEffect(() => {
+    if (!isControlled) return;
+    const el = textareaRef.current;
+    if (!el) return;
+    el.style.height = "auto";
+    el.style.height = `${Math.min(el.scrollHeight, 260)}px`;
+  }, [isControlled, value]);
 
   useEffect(() => {
     let cancelled = false;
@@ -707,7 +713,7 @@ export function ThreadComposer({
     };
   }, []);
 
-  const { images, enqueue, remove, clear, encoding, full } =
+  const { images, enqueue, remove, clear, encoding } =
     useAttachedImages();
 
   const formatRejection = useCallback(
@@ -717,6 +723,9 @@ export function ThreadComposer({
     },
     [t],
   );
+  const attachmentsDisabledMessage = t("thread.composer.attachmentsDisabled", {
+    defaultValue: "当前模式不支持附件。",
+  });
 
   const addFiles = useCallback(
     (files: File[]) => {
@@ -737,31 +746,33 @@ export function ThreadComposer({
 
   const addAttachments = useCallback(
     (files: File[]) => {
-      if (files.length === 0 || disabled || documentsUploading) return;
-      if (!onAddDocuments) {
-        addFiles(files);
+      if (files.length === 0 || disabled) return;
+      if (!attachmentsEnabled) {
+        setInlineError(attachmentsDisabledMessage);
         return;
       }
+      if (documentsUploading) return;
       const images = imageInputEnabled
-        ? files.filter((file) => file.type.startsWith("image/"))
+        ? files.filter(isInlineImage)
         : [];
       const attachments = files.filter((file) => !images.includes(file));
       if (images.length > 0) addFiles(images);
-      if (attachments.length > 0) onAddDocuments(attachments);
+      if (attachments.length > 0) void addDocuments(attachments);
     },
-    [addFiles, disabled, documentsUploading, imageInputEnabled, onAddDocuments],
+    [addFiles, addDocuments, attachmentsDisabledMessage, attachmentsEnabled, disabled, documentsUploading, imageInputEnabled],
   );
 
   const addDroppedAttachments = useCallback(
     (files: File[]) => {
-      if (files.length === 0 || disabled || documentsUploading) return;
-      if (onAddDocuments) {
-        onAddDocuments(files);
+      if (files.length === 0 || disabled) return;
+      if (!attachmentsEnabled) {
+        setInlineError(attachmentsDisabledMessage);
         return;
       }
-      addFiles(files);
+      if (documentsUploading) return;
+      void addDocuments(files);
     },
-    [addFiles, disabled, documentsUploading, onAddDocuments],
+    [addDocuments, attachmentsDisabledMessage, attachmentsEnabled, disabled, documentsUploading],
   );
 
   const {
@@ -772,17 +783,17 @@ export function ThreadComposer({
     onDragLeave,
     onDrop,
   } = useClipboardAndDrop(addAttachments, {
-    acceptAllFiles: Boolean(onAddDocuments),
+    acceptAllFiles: true,
     onDropFiles: addDroppedAttachments,
   });
 
   useEffect(() => {
-    if (disabled) return;
+    if (!autoFocus || disabled) return;
     const el = textareaRef.current;
     if (!el) return;
     const id = requestAnimationFrame(() => el.focus());
     return () => cancelAnimationFrame(id);
-  }, [disabled]);
+  }, [autoFocus, disabled]);
 
   const readyImages = useMemo(
     () => images.filter((img): img is AttachedImage & { dataUrl: string } =>
@@ -794,6 +805,8 @@ export function ThreadComposer({
 
   const canSend =
     !disabled
+    && !sendDisabled
+    && !(isStreaming && isPendingFull)
     && !encoding
     && !documentsUploading
     && !hasErrors
@@ -1003,8 +1016,9 @@ export function ThreadComposer({
     [mention, value],
   );
 
-  const submit = useCallback(() => {
-    if (!canSend) return;
+  const submit = useCallback(async () => {
+    if (!canSend || submitting.current) return;
+    const owner = chatId;
     const trimmed = value.trim();
     // Share the same normalized ``data:`` URL with both the wire payload and
     // the optimistic bubble preview: data URLs are self-contained (no blob
@@ -1036,28 +1050,38 @@ export function ThreadComposer({
     const content = quotedMessage
       ? `引用 ${quotedMessage.author} 的消息：\n${quotedMessage.content}\n\n${trimmed}`
       : trimmed;
-    const options = targetAgentIds.length > 0 || quotedMessage
+    const options = targetAgentIds.length > 0 || quotedMessage || documents.length > 0
       ? {
           ...(targetAgentIds.length > 0 ? { targetAgentIds } : {}),
           ...(quotedMessage ? { quote: quotedMessage, displayContent: trimmed } : {}),
+          ...(documents.length > 0 ? {
+            docPaths: documents.map((document) => document.path),
+            documentNames: documents.map((document) => document.name),
+          } : {}),
         }
       : undefined;
-    onSend(
-      content,
-      payload,
-      options,
-    );
+    submitting.current = true;
+    try {
+      const result = onSend(content, payload, options);
+      if (awaitSendResult && await result !== true) return;
+      if (!mounted.current || submitScope.current !== owner) return;
+    } catch (cause) {
+      if (mounted.current && submitScope.current === owner) setInlineError(cause instanceof Error ? cause.message : "发送失败，原输入已保留。");
+      return;
+    } finally { submitting.current = false; }
     mentionedRef.current.clear();
-    setValue("");
+    if (clearOnSend) setValue("");
     setInlineError(null);
     // Bubble owns the data URL copy; safe to revoke every staged blob
     // preview here without affecting the rendered message.
     clear();
+    if (awaitSendResult) documents.forEach((document) => removeDocument(document.path));
+    else clearDocuments();
     setSlashMenuDismissed(false);
     setMention(null);
     onClearQuote?.();
     resizeTextarea();
-  }, [canSend, clear, onClearQuote, onSend, quote, readyImages, resizeTextarea, value]);
+  }, [awaitSendResult, canSend, chatId, clear, clearDocuments, clearOnSend, documents, onClearQuote, onSend, quote, readyImages, removeDocument, resizeTextarea, setValue, value]);
 
   const onKeyDown = (e: ReactKeyboardEvent<HTMLTextAreaElement>) => {
     if (showMentionMenu) {
@@ -1135,11 +1159,15 @@ export function ThreadComposer({
   const onFilePick: React.ChangeEventHandler<HTMLInputElement> = (e) => {
     const files = Array.from(e.target.files ?? []);
     e.target.value = "";
-    addAttachments(files);
+    addDroppedAttachments(files);
   };
 
   const openAttachmentPicker = useCallback(async () => {
-    if (!onAddDocuments || !isTauri()) {
+    if (!attachmentsEnabled) {
+      setInlineError(attachmentsDisabledMessage);
+      return;
+    }
+    if (!isTauri()) {
       fileInputRef.current?.click();
       return;
     }
@@ -1148,14 +1176,14 @@ export function ThreadComposer({
       const selected = await open({ multiple: true, directory: false, title: "添加文件" });
       const paths = Array.isArray(selected) ? selected : selected ? [selected] : [];
       if (paths.length === 0) return;
-      onAddDocuments(paths.map((localPath) => ({
+      void addDocuments(paths.map((localPath) => ({
         localPath,
         name: localPath.replace(/\\/g, "/").split("/").at(-1) || localPath,
       })));
     } catch (error) {
       setInlineError(error instanceof Error ? error.message : "选择文件失败");
     }
-  }, [onAddDocuments]);
+  }, [addDocuments, attachmentsDisabledMessage, attachmentsEnabled]);
 
   const removeChip = useCallback(
     (id: string) => {
@@ -1173,6 +1201,23 @@ export function ThreadComposer({
     [remove],
   );
 
+  const editPendingMessage = useCallback(async (id: string) => {
+    const message = pendingMessages.find((item) => item.id === id);
+    if (!message || message.locked) return;
+    setInlineError(null);
+    try {
+      if (onPendingEdit) {
+        await onPendingEdit(id, message.content);
+      } else {
+        setValue(message.content);
+        onPendingRemove?.(id);
+      }
+      resizeTextarea();
+    } catch (error) {
+      setInlineError(error instanceof Error ? error.message : "无法编辑这条待发消息。");
+    }
+  }, [onPendingEdit, onPendingRemove, pendingMessages, resizeTextarea, setValue]);
+
   const onChipKey = useCallback(
     (id: string) => (e: ReactKeyboardEvent<HTMLButtonElement>) => {
       if (
@@ -1188,11 +1233,12 @@ export function ThreadComposer({
     [removeChip],
   );
 
-  const attachButtonDisabled = disabled || documentsUploading || (full && !onAddDocuments) || (!imageInputEnabled && !onAddDocuments);
+  const attachButtonDisabled = disabled || documentsUploading;
   const showStopButton = (isStreaming || stopping) && !!onStop;
   const stopButtonLabel = stopping
     ? t("thread.composer.stopping")
-    : t("thread.composer.stop");
+    : stopLabel ?? t("thread.composer.stop");
+  const resolvedSendLabel = sendLabel ?? t("thread.composer.send");
 
   return (
     <form
@@ -1329,9 +1375,9 @@ export function ThreadComposer({
           isHero
             ? "max-w-[58rem] rounded-2xl border border-border/60 bg-card dark:border-white/10"
             : "max-w-[49.5rem] rounded-2xl border border-border/60 bg-card dark:border-white/10",
-          "focus-within:ring-1 focus-within:ring-foreground/8",
+
           disabled && "opacity-60",
-          isDragging && "ring-2 ring-primary/40 motion-reduce:ring-0 motion-reduce:border-primary",
+          isDragging && attachmentsEnabled && "ring-2 ring-primary/40 motion-reduce:ring-0 motion-reduce:border-primary",
           goalState?.active &&
             "goal-shell-glow ring-1 ring-sky-400/35 motion-reduce:ring-sky-400/25 dark:ring-sky-400/45",
         )}
@@ -1339,7 +1385,7 @@ export function ThreadComposer({
         {images.length > 0 || documents.length > 0 ? (
           <div
             className="flex flex-wrap gap-2 px-3 pt-3"
-            aria-label={attachLabel}
+            aria-label={resolvedAttachLabel}
           >
             {images.map((img) => (
               <AttachmentChip
@@ -1367,7 +1413,7 @@ export function ThreadComposer({
                 key={document.path}
                 name={document.name}
                 size={document.size}
-                onRemove={onRemoveDocument ? () => onRemoveDocument(document.path) : undefined}
+                onRemove={() => removeDocument(document.path)}
               />
             ))}
           </div>
@@ -1382,17 +1428,9 @@ export function ThreadComposer({
         ) : null}
         <PendingQueueStrip
           messages={pendingMessages}
-          onAppend={onPendingAppend ?? (() => {})}
+          onAppend={onPendingAppend}
           onRemove={onPendingRemove ?? (() => {})}
-          onEdit={(id) => {
-            const msg = pendingMessages.find((m) => m.id === id);
-            if (msg) {
-              setValue(msg.content);
-              onPendingRemove?.(id);
-              resizeTextarea();
-              textareaRef.current?.focus();
-            }
-          }}
+          onEdit={(id) => void editPendingMessage(id)}
           isFull={isPendingFull}
         />
         {quote ? (
@@ -1437,7 +1475,7 @@ export function ThreadComposer({
           rows={1}
           placeholder={resolvedPlaceholder}
           disabled={disabled}
-          aria-label={t("thread.composer.inputAria")}
+          aria-label={inputLabel ?? t("thread.composer.inputAria")}
           className={cn(
             "w-full resize-none bg-transparent",
             isHero
@@ -1466,35 +1504,38 @@ export function ThreadComposer({
           )}
         >
           <div className="flex min-w-0 items-center gap-2">
-            <input
-              ref={fileInputRef}
-              type="file"
-              accept={onAddDocuments ? undefined : IMAGE_ACCEPT_ATTR}
-              multiple
-              hidden
-              onChange={onFilePick}
-            />
-            <Button
+            {attachmentsEnabled && <>
+              <input ref={fileInputRef} type="file" multiple hidden onChange={onFilePick} />
+              <Button
+                type="button"
+                size="icon"
+                variant="ghost"
+                disabled={attachButtonDisabled}
+                aria-label={fileAttachLabel}
+                title={fileAttachLabel}
+                onClick={() => void openAttachmentPicker()}
+                className={cn(
+                  "rounded-md text-foreground",
+                  isHero
+                    ? "h-7 w-7"
+                    : "h-6 w-6",
+                )}
+              >
+                <Plus className={cn(isHero ? "h-4 w-4" : "h-3.5 w-3.5")} />
+              </Button>
+            </>}
+            {onAttach && <Button
               type="button"
               size="icon"
               variant="ghost"
-              disabled={attachButtonDisabled}
-              aria-label={attachLabel}
-              title={
-                !imageInputEnabled && !onAddDocuments
-                  ? t("thread.composer.imageNotSupported")
-                  : attachLabel
-              }
-              onClick={() => void openAttachmentPicker()}
-              className={cn(
-                "rounded-full text-muted-foreground hover:text-foreground",
-                isHero
-                  ? "h-7 w-7 border border-border/55 bg-card hover:bg-card"
-                  : "h-6 w-6 border border-border/55 bg-card hover:bg-card",
-              )}
+              disabled={disabled}
+              aria-label={resolvedAttachLabel}
+              title={resolvedAttachLabel}
+              onClick={onAttach}
+              className={cn("rounded-full text-muted-foreground hover:text-foreground", isHero ? "h-7 w-7" : "h-6 w-6")}
             >
-              <Plus className={cn(isHero ? "h-4 w-4" : "h-3.5 w-3.5")} />
-            </Button>
+              <Folder className={cn(isHero ? "h-4 w-4" : "h-3.5 w-3.5")} />
+            </Button>}
             {leadingActions ? (
               <div className="flex min-w-0 items-center gap-1">{leadingActions}</div>
             ) : null}
@@ -1509,185 +1550,13 @@ export function ThreadComposer({
           <div className="flex min-w-0 items-center gap-2">
             {triggerModelLabel ? <ContextUsageIndicator usage={contextUsage} /> : null}
             {triggerModelLabel ? (
-              modelOptions.length > 0 && onModelSwitch ? (
-                <DropdownMenu
-                  open={modelMenuOpen}
-                  onOpenChange={(open) => {
-                    setModelMenuOpen(open);
-                    setModelDetailsKey(null);
-                    if (open) setModelQuery("");
-                  }}
-                >
-                  <DropdownMenuTrigger asChild>
-                    <button
-                      type="button"
-                      title={triggerModelLabel}
-                      className={cn(
-                        "inline-flex h-7 min-w-0 items-center gap-1 rounded-md px-1",
-                        "font-medium text-caption text-foreground/85 transition-colors hover:bg-muted",
-                        "focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring",
-                        isHero ? "max-w-[20rem]" : "max-w-[16rem]",
-                      )}
-                    >
-                      <span className="truncate">{triggerModelLabel}</span>
-                      <ChevronDown className="h-3.5 w-3.5 flex-none text-muted-foreground" aria-hidden />
-                    </button>
-                  </DropdownMenuTrigger>
-                  <DropdownMenuContent
-                    align="end"
-                    side="top"
-                    sideOffset={8}
-                    className="w-[min(320px,calc(100vw-24px))] overflow-hidden rounded-[14px] p-2"
-                  >
-                    <div className="relative mb-1">
-                      <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
-                      <Input
-                        value={modelQuery}
-                        onChange={(event) => {
-                          setModelQuery(event.target.value);
-                          setModelDetailsKey(null);
-                        }}
-                        onKeyDown={(event) => event.stopPropagation()}
-                        placeholder="搜索模型…"
-                        aria-label="搜索模型"
-                        className="h-9 rounded-full bg-muted/45 pl-9 text-sm"
-                      />
-                    </div>
-                    <div
-                      className="max-h-[min(56vh,300px)] overflow-y-auto overscroll-contain"
-                      onScroll={() => setModelDetailsKey(null)}
-                    >
-                      {groupedModelOptions.length ? groupedModelOptions.map(([provider, group], groupIndex) => (
-                        <div key={provider} role="group" aria-label={group.label}>
-                          {groupIndex > 0 ? <div className="mx-2 my-1 h-px bg-border/60" /> : null}
-                          <p className="px-3 pb-1 pt-2 text-xs font-medium text-muted-foreground">
-                            {group.label}
-                          </p>
-                          {group.options.map((option) => {
-                            const hasPromotion = Boolean(
-                              option.promotionLabel
-                              || option.promotionName
-                              || option.discountPercent != null,
-                            );
-                            return (
-                              <DropdownMenuSub
-                                key={`${option.provider}/${option.model}`}
-                                open={modelDetailsKey === `${option.provider}/${option.model}`}
-                                onOpenChange={(open) => {
-                                  const key = `${option.provider}/${option.model}`;
-                                  setModelDetailsKey((current) => open ? key : current === key ? null : current);
-                                }}
-                              >
-                          <DropdownMenuSubTrigger
-                            aria-label={`${option.providerLabel} · ${option.label}`}
-                            className={cn(
-                              "mb-0.5 flex min-h-9 items-center rounded-[10px] px-3 py-2 text-sm [&>svg:last-child]:hidden",
-                              option.active && "bg-muted/80",
-                            )}
-                            onPointerEnter={() => setModelDetailsKey(`${option.provider}/${option.model}`)}
-                            onFocus={() => setModelDetailsKey(`${option.provider}/${option.model}`)}
-                            onClick={() => {
-                              onModelSwitch(option.provider, option.model, option.reasoningEffort);
-                              setModelMenuOpen(false);
-                            }}
-                            onKeyDown={(event) => {
-                              if (event.key !== "Enter" && event.key !== " ") return;
-                              event.preventDefault();
-                              onModelSwitch(option.provider, option.model, option.reasoningEffort);
-                              setModelMenuOpen(false);
-                            }}
-                          >
-                            <span className="min-w-0 flex-1 inline-flex items-center gap-1.5 truncate font-medium">
-                              <span className="truncate">{option.label}</span>
-                              {option.promotionLabel ? (
-                                <span className="shrink-0 rounded-full bg-success/10 px-1.5 py-0.5 text-micro font-medium text-success">
-                                  {option.promotionLabel}
-                                </span>
-                              ) : null}
-                            </span>
-                            {option.reasoningEffort ? (
-                              <span className="shrink-0 text-sm text-muted-foreground">
-                                {modelReasoningLabel(option.reasoningEffort)}
-                              </span>
-                            ) : null}
-                            {option.active ? <Check className="h-4 w-4 shrink-0 text-foreground" aria-label="当前模型" /> : null}
-                          </DropdownMenuSubTrigger>
-                          <DropdownMenuSubContent
-                            sideOffset={8}
-                            className="max-h-[min(70vh,480px)] w-[248px] overflow-y-auto rounded-[12px] p-2"
-                          >
-                            <div className="px-2 py-1.5">
-                              <p className="text-sm font-semibold text-foreground">{option.label}</p>
-                              {option.description ? (
-                                <p className="mt-1 line-clamp-2 text-xs leading-5 text-muted-foreground">
-                                  {option.description}
-                                </p>
-                              ) : null}
-                              {hasPromotion && option.promotionName ? (
-                                <p className="mt-2 text-xs font-medium text-foreground">{option.promotionName}</p>
-                              ) : null}
-                              {hasPromotion && option.discountPercent != null ? (
-                                <p className="mt-1 text-xs text-success">
-                                  折扣中，较标准价省 {option.discountPercent}%
-                                </p>
-                              ) : null}
-                            </div>
-                            {option.reasoningEfforts?.length ? (
-                              <>
-                                <div className="mx-1 my-1 h-px bg-border/70" />
-                                <p className="px-2 pb-1 pt-1 text-xs font-medium text-muted-foreground">推理强度</p>
-                                {option.reasoningEfforts.map((effort) => (
-                                  <DropdownMenuItem
-                                    key={effort}
-                                    className={cn(
-                                      "flex min-h-9 items-center justify-between rounded-lg px-3 py-2 text-sm",
-                                      option.reasoningEffort === effort && "bg-muted/80 font-medium",
-                                    )}
-                                    onSelect={() => onModelSwitch(option.provider, option.model, effort)}
-                                  >
-                                    <span>{modelReasoningLabel(effort)}</span>
-                                    {option.reasoningEffort === effort ? <Check className="h-4 w-4" aria-label="当前推理强度" /> : null}
-                                  </DropdownMenuItem>
-                                ))}
-                              </>
-                            ) : null}
-                            {option.inputAmountPerMillion || option.outputAmountPerMillion || option.cachedInputAmountPerMillion ? (
-                              <>
-                                <div className="mx-1 my-1 h-px bg-border/70" />
-                                <p className="px-2 pb-1 pt-1 text-xs font-medium text-muted-foreground">每百万 Token</p>
-                                <div className="space-y-1 px-2 py-1 text-xs text-muted-foreground">
-                                  {option.inputAmountPerMillion ? <div className="flex justify-between gap-3"><span>输入</span><span className="text-foreground">¥{option.inputAmountPerMillion}{hasPromotion && option.originalInputAmountPerMillion ? <span className="ml-1 text-muted-foreground line-through">¥{option.originalInputAmountPerMillion}</span> : null}</span></div> : null}
-                                  {option.outputAmountPerMillion ? <div className="flex justify-between gap-3"><span>输出</span><span className="text-foreground">¥{option.outputAmountPerMillion}{hasPromotion && option.originalOutputAmountPerMillion ? <span className="ml-1 text-muted-foreground line-through">¥{option.originalOutputAmountPerMillion}</span> : null}</span></div> : null}
-                                  {option.cachedInputAmountPerMillion ? <div className="flex justify-between gap-3"><span>缓存读取</span><span className="text-foreground">¥{option.cachedInputAmountPerMillion}{hasPromotion && option.originalCachedInputAmountPerMillion ? <span className="ml-1 text-muted-foreground line-through">¥{option.originalCachedInputAmountPerMillion}</span> : null}</span></div> : null}
-                                  {!hasPromotion ? <p className="pt-0.5">模型标准价格</p> : null}
-                                </div>
-                              </>
-                            ) : null}
-                            <div className="mx-1 my-1 h-px bg-border/70" />
-                            <div className="flex flex-wrap gap-x-2 gap-y-1 px-2 py-1.5 text-xs text-muted-foreground">
-                              <span>来源：{option.providerLabel}</span>
-                              {modelContextLabel(option.contextWindow) ? <span>{modelContextLabel(option.contextWindow)} 上下文</span> : null}
-                            </div>
-                            </DropdownMenuSubContent>
-                              </DropdownMenuSub>
-                            );
-                          })}
-                        </div>
-                      )) : <p className="px-3 py-6 text-center text-sm text-muted-foreground">没有匹配的模型</p>}
-                    </div>
-                    {onOpenSettings ? (
-                      <div className="mt-1 flex items-center justify-between border-t border-border/65 pt-1">
-                        <button
-                          type="button"
-                          className="flex items-center gap-2 rounded-lg px-3 py-2 text-sm text-muted-foreground hover:bg-accent"
-                          onClick={() => { setModelMenuOpen(false); onOpenSettings("models_providers"); }}
-                        >
-                          <Plus className="h-4 w-4" />添加模型
-                        </button>
-                      </div>
-                    ) : null}
-                  </DropdownMenuContent>
-                </DropdownMenu>
+              modelOptions.length > 0 && (onModelSelect || onModelSwitch) ? (
+                <ModelSelector options={modelOptions} label={triggerModelLabel} disabled={disabled || modelDisabled} currentExecutor={currentExecutor}
+                  className={cn("rounded-md border-0 bg-transparent px-2", isHero ? "max-w-[20rem]" : "max-w-[16rem]")}
+                  onSelect={(option, effort) => onModelSelect
+                    ? onModelSelect(option, effort)
+                    : onModelSwitch?.(option.provider, option.model, effort)}
+                  onManage={onOpenSettings ? () => onOpenSettings("models_providers") : undefined} />
               ) : (
                 <span
                   title={triggerModelLabel}
@@ -1705,13 +1574,13 @@ export function ThreadComposer({
             type={showStopButton ? "button" : "submit"}
             size="icon"
             disabled={showStopButton ? disabled || stopping : !canSend}
-            aria-label={showStopButton ? stopButtonLabel : t("thread.composer.send")}
+            aria-label={showStopButton ? stopButtonLabel : resolvedSendLabel}
             title={showStopButton ? stopButtonLabel : undefined}
             onClick={showStopButton && !stopping ? onStop : undefined}
             className={cn(
-              "h-8 w-8 rounded-full transition-transform",
+              "h-8 w-8 rounded-full border-0 transition-transform",
               showStopButton
-                ? "border border-destructive bg-destructive text-destructive-foreground hover:bg-destructive/90 hover:text-destructive-foreground disabled:bg-destructive/60 disabled:text-destructive-foreground/75"
+                ? "bg-destructive text-destructive-foreground hover:bg-destructive/90 hover:text-destructive-foreground disabled:bg-destructive/60 disabled:text-destructive-foreground/75"
                 : "bg-action text-action-foreground hover:bg-action-hover disabled:bg-muted disabled:text-muted-foreground",
               (canSend || showStopButton) && "hover:scale-105 active:scale-95",
             )}
@@ -1784,8 +1653,8 @@ function WorkspaceSelector({ workspace, onChange, disabled }: WorkspaceSelectorP
           onClick={pickWorkspace}
           title={workspace}
           className={cn(
-            "inline-flex min-w-0 h-7 items-center gap-1.5 rounded-lg border px-2.5",
-            "border-border/60 bg-muted/60 text-[12px] font-medium text-foreground/80",
+            "inline-flex min-w-0 h-7 items-center gap-1.5 rounded-lg px-2.5",
+            "bg-transparent text-[12px] font-medium text-foreground/80",
             "hover:bg-muted/80 transition-colors cursor-pointer",
             (disabled || picking) && "pointer-events-none opacity-55",
           )}
@@ -1818,8 +1687,8 @@ function WorkspaceSelector({ workspace, onChange, disabled }: WorkspaceSelectorP
       disabled={disabled || picking}
       onClick={pickWorkspace}
       className={cn(
-        "inline-flex h-7 items-center gap-1.5 rounded-lg border px-2.5",
-        "border-transparent bg-muted/80 text-[12px] font-medium text-foreground/65",
+        "inline-flex h-7 items-center gap-1.5 rounded-lg px-2.5",
+        "bg-transparent text-[12px] font-medium text-foreground/65",
         "hover:bg-muted transition-colors cursor-pointer",
         (disabled || picking) && "pointer-events-none opacity-55",
       )}

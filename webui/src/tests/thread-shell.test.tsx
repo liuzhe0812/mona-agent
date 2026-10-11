@@ -3,6 +3,7 @@ import { useEffect, useState, type ReactNode } from "react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import { ThreadShell } from "@/components/thread/ThreadShell";
+import { DeliveredFileCard } from "@/components/deliver/DeliveredFileCard";
 import { invalidateAgents } from "@/components/room/useAgents";
 import { useFilePreviewStore } from "@/components/deliver/filePreviewStore";
 import { ClientProvider } from "@/providers/ClientProvider";
@@ -127,6 +128,8 @@ vi.mock("@/components/terminal/FileManager/iconCache", () => ({
   },
 }));
 function makeClient() {
+  type UploadResultHandler = Parameters<import("@/lib/mona-client").MonaClient["onDocUploadResult"]>[0];
+  const uploadHandlers = new Set<UploadResultHandler>();
   const errorHandlers = new Set<(err: { kind: string }) => void>();
   const chatHandlers = new Map<string, Set<(ev: import("@/lib/types").InboundEvent) => void>>();
   const sessionUpdateHandlers = new Set<(chatId: string, scope?: string) => void>();
@@ -168,7 +171,13 @@ function makeClient() {
         artifactsChangedHandlers.delete(handler);
       };
     },
-    onDocUploadResult: () => () => {},
+    onDocUploadResult(handler: UploadResultHandler) {
+      uploadHandlers.add(handler);
+      return () => { uploadHandlers.delete(handler); };
+    },
+    _emitUpload(result: Parameters<UploadResultHandler>[0]) {
+      for (const handler of uploadHandlers) handler(result);
+    },
     _emitError(err: { kind: string }) {
       for (const h of errorHandlers) h(err);
     },
@@ -1204,6 +1213,53 @@ describe("ThreadShell", () => {
     expect(client.sendMessage).not.toHaveBeenCalled();
   });
 
+  it("sends arbitrary file references with the first message from the landing", async () => {
+    const client = makeClient();
+    const onCreateChat = vi.fn().mockResolvedValue("chat-new");
+    render(wrap(client, <WelcomeSessionHost client={client} onCreateChat={onCreateChat} />));
+    const input = screen.getByLabelText("Message input").closest("form")!.querySelector('input[type="file"]')!;
+    const file = new File(["custom bytes"], "asset.custom");
+    Object.defineProperty(file, "path", { value: "D:/input/asset.custom" });
+    fireEvent.change(input, { target: { files: [file] } });
+    await waitFor(() => expect(client.sendDocUpload).toHaveBeenCalledTimes(1));
+    expect(onCreateChat).not.toHaveBeenCalled();
+    const uploadId = client.sendDocUpload.mock.calls[0][0];
+    const path = `uploads/${uploadId}/asset.custom`;
+    act(() => client._emitUpload({ ok: true, chatId: uploadId, files: [{ name: file.name, path }] }));
+    fireEvent.click(screen.getByRole("button", { name: "Send message" }));
+    await waitFor(() => expect(client.sendMessage).toHaveBeenCalledWith(
+      "chat-new", "", undefined,
+      expect.objectContaining({ docPaths: [path] }),
+    ));
+  });
+
+  it("preserves file references when appending a queued message to a running task", async () => {
+    const client = makeClient();
+    const chatId = "chat-attachments";
+    render(wrap(client, <ThreadShell session={session(chatId)} title="Attachments" onToggleSidebar={() => {}} />));
+    act(() => client._emitChat(chatId, {
+      event: "goal_status", chat_id: chatId, status: "running", started_at: Date.now() / 1000,
+    }));
+    const textarea = screen.getByLabelText("Message input");
+    const input = textarea.closest("form")!.querySelector('input[type="file"]')!;
+    const file = new File(["bytes"], "archive.zip");
+    Object.defineProperty(file, "path", { value: "D:/input/archive.zip" });
+    fireEvent.change(input, { target: { files: [file] } });
+    await waitFor(() => expect(client.sendDocUpload).toHaveBeenCalledTimes(1));
+    const uploadId = client.sendDocUpload.mock.calls[0][0];
+    act(() => client._emitUpload({
+      ok: true, chatId: uploadId, files: [{ name: file.name, path: "uploads/archive.zip" }],
+    }));
+    fireEvent.keyDown(textarea, { key: "Enter" });
+    expect(client.sendMessage).not.toHaveBeenCalled();
+    expect(screen.getByText("archive.zip")).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Edit message" })).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Append to current task" }));
+    expect(client.sendMessage).toHaveBeenCalledWith(
+      chatId, "", undefined, expect.objectContaining({ docPaths: ["uploads/archive.zip"] }),
+    );
+  });
+
   it("keeps the first landing message when new chat history is still empty", async () => {
     const client = makeClient();
     const onCreateChat = vi.fn().mockResolvedValue("chat-new");
@@ -2131,8 +2187,9 @@ describe("ThreadShell", () => {
     });
   });
 
-  it("keeps the overview selected when workspace files arrive", async () => {
+  it("keeps the workspace closed by default when files arrive and allows manual expansion", async () => {
     const client = makeClient();
+    useFilePreviewStore.setState(useFilePreviewStore.getInitialState());
     vi.stubGlobal(
       "fetch",
       vi.fn(async (input: RequestInfo | URL) => {
@@ -2163,10 +2220,35 @@ describe("ThreadShell", () => {
       />,
     ));
 
+    await waitFor(() => {
+      expect(screen.getByTitle("展开工作区")).toBeInTheDocument();
+      expect(screen.queryByRole("button", { name: "概览" })).not.toBeInTheDocument();
+    });
+    expect(useFilePreviewStore.getState().workspaceCollapsed).toBe(true);
+
+    fireEvent.click(screen.getByTitle("展开工作区"));
     await waitFor(() =>
       expect(screen.getByRole("button", { name: "概览" })).toHaveAttribute("aria-current", "page"),
     );
     expect(screen.queryByRole("tab", { name: "工作区" })).not.toBeInTheDocument();
+  });
+
+  it("expands the collapsed workspace when a delivered file is clicked", () => {
+    useFilePreviewStore.setState(useFilePreviewStore.getInitialState());
+    const file = {
+      path: "report.md",
+      absolute_path: "/ws/output/report.md",
+      name: "report.md",
+      size: 1,
+      size_human: "1 B",
+      mime: "text/markdown",
+    };
+    render(<DeliveredFileCard file={file} />);
+
+    fireEvent.click(screen.getByRole("button", { name: /report\.md/ }));
+
+    expect(useFilePreviewStore.getState().workspaceCollapsed).toBe(false);
+    expect(useFilePreviewStore.getState().file).toEqual(file);
   });
 
   it("shows this session's delivered files in a dedicated section above the scan tree", async () => {

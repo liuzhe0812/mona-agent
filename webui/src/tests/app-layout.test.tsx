@@ -10,15 +10,20 @@ const deleteChatSpy = vi.fn();
 const toggleThemeSpy = vi.fn();
 const updateUrlSpy = vi.fn();
 const attachSpy = vi.fn();
+const warmNativeProviderConnectionsSpy = vi.hoisted(() => vi.fn().mockResolvedValue(undefined));
 const runStatusHandlers = new Set<(chatId: string, startedAt: number | null) => void>();
+let observedSessionTokens: string[] = [];
+let reauthHandler: (() => Promise<string | null>) | null = null;
 let mockSessions: ChatSummary[] = [];
 
 vi.mock("@/hooks/useSessions", async (importOriginal) => {
   const React = await import("react");
   const actual = await importOriginal<typeof import("@/hooks/useSessions")>();
+  const provider = await import("@/providers/ClientProvider");
   return {
     ...actual,
     useSessions: () => {
+      observedSessionTokens.push(provider.useClientOptional().token);
       const [sessions, setSessions] = React.useState(mockSessions);
       return {
         sessions,
@@ -68,16 +73,19 @@ vi.mock("@/lib/bootstrap", () => ({
   fetchBootstrap: vi.fn().mockResolvedValue({
     token: "tok",
     ws_path: "/",
-    expires_in: 300,
   }),
   deriveWsUrl: vi.fn(() => "ws://test"),
   loadSavedSecret: vi.fn(() => ""),
   saveSecret: vi.fn(),
   clearSavedSecret: vi.fn(),
+  resetGatewayBaseUrl: vi.fn(),
 }));
 
 vi.mock("@/lib/mona-client", () => {
   class MockClient {
+    constructor(options?: { onReauth?: () => Promise<string | null> }) {
+      reauthHandler = options?.onReauth ?? null;
+    }
     status = "idle" as const;
     defaultChatId: string | null = null;
     connect = connectSpy;
@@ -106,6 +114,10 @@ vi.mock("@/lib/mona-client", () => {
   return { MonaClient: MockClient };
 });
 
+vi.mock("@/lib/native-provider-bootstrap", () => ({
+  warmNativeProviderConnections: warmNativeProviderConnectionsSpy,
+}));
+
 vi.mock("@/components/terminal/VncViewer", () => ({
   VncViewer: () => null,
 }));
@@ -120,7 +132,8 @@ vi.mock("@/lib/tauri", async (importOriginal) => {
   };
 });
 
-import { deriveWsUrl, fetchBootstrap } from "@/lib/bootstrap";
+import { deriveWsUrl, fetchBootstrap, resetGatewayBaseUrl } from "@/lib/bootstrap";
+import * as api from "@/lib/api";
 import App from "@/App";
 
 function getSessionPanel() {
@@ -137,14 +150,17 @@ describe("App layout", () => {
     deleteChatSpy.mockReset();
     toggleThemeSpy.mockReset();
     attachSpy.mockReset();
+    warmNativeProviderConnectionsSpy.mockClear();
     runStatusHandlers.clear();
+    observedSessionTokens = [];
+    reauthHandler = null;
     localStorage.removeItem("mona-webui.sidebar.completed-runs.v1");
     localStorage.removeItem("mona-webui.sidebar");
     vi.mocked(fetchBootstrap).mockReset().mockResolvedValue({
       token: "tok",
       ws_path: "/",
-      expires_in: 300,
     });
+    vi.mocked(resetGatewayBaseUrl).mockClear();
     vi.mocked(deriveWsUrl).mockReset().mockReturnValue("ws://test");
     vi.stubGlobal(
       "fetch",
@@ -157,6 +173,11 @@ describe("App layout", () => {
 
   afterEach(() => {
     vi.useRealTimers();
+  });
+
+  it("warms native provider connection state after bootstrap without opening settings", async () => {
+    render(<App />);
+    await waitFor(() => expect(warmNativeProviderConnectionsSpy).toHaveBeenCalledTimes(1));
   });
 
   it("keeps sidebar layout out of the main thread width contract", async () => {
@@ -179,7 +200,20 @@ describe("App layout", () => {
     expect(getSessionPanel()).toBeInTheDocument();
   });
 
-  it("toggles the desktop session list from the conversation header", async () => {
+  it("keeps the session list available at 768px and collapses below that width", async () => {
+    let onWidthChange: ((event: MediaQueryListEvent) => void) | undefined;
+    vi.stubGlobal("matchMedia", vi.fn((query: string) => ({
+      matches: Number(query.match(/min-width:\s*(\d+)px/)?.[1] ?? Infinity) <= 768,
+      media: query,
+      onchange: null,
+      addListener: vi.fn(),
+      removeListener: vi.fn(),
+      addEventListener: (_event: string, handler: (event: MediaQueryListEvent) => void) => {
+        if (query === "(min-width: 768px)") onWidthChange = handler;
+      },
+      removeEventListener: vi.fn(),
+      dispatchEvent: vi.fn(),
+    })));
     render(<App />);
     await waitFor(() => expect(connectSpy).toHaveBeenCalled());
 
@@ -190,6 +224,13 @@ describe("App layout", () => {
     });
     fireEvent.click(screen.getByRole("button", { name: "展开会话列表" }));
     await waitFor(() => expect(getSessionPanel()).toBeInTheDocument());
+    expect(getSessionPanel()).toHaveClass("md:flex");
+
+    expect(onWidthChange).toBeTypeOf("function");
+    act(() => onWidthChange!({ matches: false } as MediaQueryListEvent));
+    await waitFor(() => {
+      expect(screen.queryByRole("region", { name: "Sessions" })).not.toBeInTheDocument();
+    });
   });
 
   it("lets a maximized right workspace cover the session list", async () => {
@@ -288,7 +329,7 @@ describe("App layout", () => {
     vi.stubGlobal(
       "matchMedia",
       vi.fn().mockImplementation((query: string) => ({
-        matches: !query.includes("1024px"),
+        matches: !query.includes("768px"),
         media: query,
         onchange: null,
         addListener: vi.fn(),
@@ -1156,7 +1197,7 @@ describe("App layout", () => {
     ];
 
     const matchMedia = vi.fn().mockImplementation((query: string) => ({
-      matches: query.includes("1024px"),
+      matches: query.includes("768px"),
       media: query,
       onchange: null,
       addListener: vi.fn(),
@@ -1199,22 +1240,8 @@ describe("App layout", () => {
     expect(within(sidebar).getByText("Existing chat")).toBeInTheDocument();
   });
 
-  it("refreshes the bootstrap token before REST settings auth expires", async () => {
+  it("does not re-bootstrap the token during a long-running session", async () => {
     vi.useFakeTimers();
-    vi.mocked(fetchBootstrap)
-      .mockResolvedValueOnce({
-        token: "tok-1",
-        ws_path: "/",
-        expires_in: 30,
-      })
-      .mockResolvedValueOnce({
-        token: "tok-2",
-        ws_path: "/",
-        expires_in: 300,
-      });
-    vi.mocked(deriveWsUrl).mockImplementation(
-      (_wsPath: string, token: string) => `ws://test?token=${token}`,
-    );
 
     const { unmount } = render(<App />);
     await act(async () => {});
@@ -1223,11 +1250,37 @@ describe("App layout", () => {
     expect(fetchBootstrap).toHaveBeenCalledTimes(1);
 
     await act(async () => {
-      await vi.advanceTimersByTimeAsync(15_000);
+      await vi.advanceTimersByTimeAsync(60 * 60 * 1000);
     });
 
-    expect(fetchBootstrap).toHaveBeenCalledTimes(2);
-    expect(updateUrlSpy).toHaveBeenCalledWith("ws://test?token=tok-2");
+    expect(fetchBootstrap).toHaveBeenCalledTimes(1);
     unmount();
+  });
+
+  it("refreshes the bootstrap token before a WebSocket reconnect", async () => {
+    vi.mocked(fetchBootstrap)
+      .mockResolvedValueOnce({ token: "tok-1", ws_path: "/" })
+      .mockResolvedValueOnce({ token: "tok-2", ws_path: "/" });
+    vi.mocked(deriveWsUrl).mockImplementation(
+      (_wsPath: string, token: string) => `ws://test?token=${token}`,
+    );
+    const resetApiBaseSpy = vi.spyOn(api, "resetApiBase");
+
+    render(<App />);
+    await waitFor(() => expect(connectSpy).toHaveBeenCalled());
+    expect(fetchBootstrap).toHaveBeenCalledTimes(1);
+    expect(reauthHandler).toBeTypeOf("function");
+
+    let reconnectUrl: string | null = null;
+    await act(async () => {
+      reconnectUrl = await reauthHandler!();
+    });
+
+    expect(resetApiBaseSpy).toHaveBeenCalledTimes(1);
+    expect(resetGatewayBaseUrl).toHaveBeenCalledTimes(1);
+    expect(fetchBootstrap).toHaveBeenCalledTimes(2);
+    expect(reconnectUrl).toBe("ws://test?token=tok-2");
+    await waitFor(() => expect(observedSessionTokens).toContain("tok-2"));
+    resetApiBaseSpy.mockRestore();
   });
 });

@@ -109,8 +109,7 @@ describe("ThreadComposer", () => {
     expect(input.parentElement?.className).toContain("max-w-[49.5rem]");
     expect(input.parentElement?.className).toContain("rounded-2xl");
     expect(input.parentElement?.className).not.toContain("shadow-sm");
-    expect(input.parentElement?.className).toContain("focus-within:ring-foreground/8");
-    expect(screen.getByRole("button", { name: "Attach image" }).className).toContain("bg-card");
+    expect(input.parentElement?.className).not.toContain("focus-within:ring");
     expect(screen.getByRole("button", { name: "Send message" }).className).toContain("bg-action");
   });
 
@@ -225,19 +224,35 @@ describe("ThreadComposer", () => {
     expect(screen.getByText("Qwen 3.7 Plus")).toBeInTheDocument();
     expect(screen.queryByText("免费")).not.toBeInTheDocument();
     const modelRow = screen.getByText("DeepSeek V4 Flash");
-    fireEvent.pointerEnter(modelRow);
-    expect(await screen.findByText("编程主力，响应快，适合大多数代码任务")).toBeInTheDocument();
+    fireEvent.pointerMove(screen.getByRole("menuitem", { name: "Mona AI · DeepSeek V4 Flash" }), { pointerType: "mouse" });
+    expect((await screen.findAllByText("编程主力，响应快，适合大多数代码任务")).length).toBeGreaterThanOrEqual(1);
     expect(screen.getByText("↓50%")).toBeInTheDocument();
-    expect(screen.getByText("新用户限时优惠")).toBeInTheDocument();
+    expect(await screen.findByText("新用户限时优惠")).toBeInTheDocument();
     expect(screen.getByText("折扣中，较标准价省 50%")).toBeInTheDocument();
     expect(screen.getAllByText("¥2").length).toBeGreaterThanOrEqual(1);
     expect(screen.getByText("¥4")).toBeInTheDocument();
-    expect(screen.getByText("推理强度")).toBeInTheDocument();
+    expect(screen.getByRole("slider", { name: "思考强度" })).toBeInTheDocument();
     expect(screen.getByText("每百万 Token")).toBeInTheDocument();
     expect(screen.getByText("缓存读取")).toBeInTheDocument();
-    expect(screen.getByText("1M 上下文")).toBeInTheDocument();
+    expect(screen.getByText(/1M 上下文/)).toBeInTheDocument();
     fireEvent.click(modelRow);
     expect(onModelSwitch).toHaveBeenCalledWith("mona_managed", "deepseek-v4-flash", "high");
+  });
+
+  it("reports a failed effort save and keeps the previous setting", async () => {
+    const onModelSwitch = vi.fn().mockRejectedValue(new Error("private upstream detail"));
+    render(<ThreadComposer onSend={vi.fn()} autoFocus={false} modelLabel="当前模型"
+      modelOptions={[{ provider: "mona_managed", providerLabel: "Mona AI", model: "deepseek-v4-pro-0813",
+        label: "DeepSeek V4 Pro", active: true, isBuiltin: true,
+        reasoningEfforts: ["high", "max"], reasoningEffort: "high", defaultReasoningEffort: "high" }]}
+      onModelSwitch={onModelSwitch} />);
+    fireEvent.pointerDown(screen.getByRole("button", { name: "deepseek-v4-pro-0813" }), { button: 0, ctrlKey: false });
+    fireEvent.pointerMove(await screen.findByRole("menuitem", { name: "Mona AI · DeepSeek V4 Pro" }), { pointerType: "mouse" });
+    const slider = await screen.findByRole("slider", { name: "思考强度" });
+    fireEvent.keyDown(slider, { key: "End" });
+    expect(onModelSwitch).toHaveBeenCalledWith("mona_managed", "deepseek-v4-pro-0813", "max");
+    expect(await screen.findByRole("alertdialog")).toHaveTextContent("思考强度未保存");
+    expect(screen.queryByText("private upstream detail")).not.toBeInTheDocument();
   });
 
   it("shows only the active model id in the composer trigger", () => {
@@ -553,8 +568,7 @@ describe("ThreadComposer", () => {
     expect(screen.getByRole("img", { name: "已使用 59.6K，模型上下文窗口未知" })).toBeInTheDocument();
   });
 
-  it("keeps the context indicator visible for legacy cumulative usage", () => {
-    // Legacy turns stored cumulative usage; never render a nonsensical ratio.
+  it("keeps the known window when measured usage exceeds capacity", () => {
     render(
       <ThreadComposer
         onSend={vi.fn()}
@@ -563,7 +577,7 @@ describe("ThreadComposer", () => {
       />,
     );
 
-    expect(screen.getByRole("img", { name: "已使用 3.9M，模型上下文窗口未知" })).toBeInTheDocument();
+    expect(screen.getByRole("img", { name: "5947.0% · 3.9M / 65.5K 上下文已使用" })).toBeInTheDocument();
   });
 
   it("shows an empty context indicator without usage data", () => {
@@ -572,26 +586,27 @@ describe("ThreadComposer", () => {
     expect(screen.getByRole("img", { name: "暂无上下文用量" })).toBeInTheDocument();
   });
 
-  it("renders the model selector without a leading icon", () => {
+  it("shows the supplying source on the shared model selector without changing its accessible name", () => {
     render(
       <ThreadComposer
         onSend={vi.fn()}
         modelLabel="Deepseek-V4"
         modelOptions={[{
-          provider: "mona",
-          providerLabel: "Mona",
+          provider: "mona_managed",
+          providerLabel: "Mona AI",
           model: "Deepseek-V4",
           label: "Deepseek V4",
           active: true,
+          isBuiltin: true,
         }]}
         onModelSwitch={vi.fn()}
       />,
     );
 
-    const trigger = screen.getByTitle("Deepseek-V4");
-    expect(trigger.className).toContain("h-7");
+    const trigger = screen.getByRole("button", { name: "Deepseek-V4" });
+    expect(trigger.className).toContain("h-8");
     expect(trigger.className).toContain("text-caption");
-    expect(trigger.querySelector("img")).toBeNull();
+    expect(trigger.querySelector("img")).toHaveAttribute("src", "/brand/mona_icon.png");
     expect(trigger.querySelector("svg")).toHaveAttribute("aria-hidden", "true");
   });
 
@@ -615,5 +630,114 @@ describe("ThreadComposer", () => {
     const trigger = screen.getByTitle("hy4-preview");
     const send = screen.getByRole("button", { name: "Send message" });
     expect(trigger.parentElement).toBe(send.parentElement);
+  });
+
+  it("supports an externally controlled draft and lets its owner clear after send confirmation", () => {
+    const onSend = vi.fn();
+    const onValueChange = vi.fn();
+    const props = { onSend, onValueChange, clearOnSend: false, autoFocus: false };
+    const view = render(<ThreadComposer {...props} value="initial" />);
+    const input = screen.getByRole("textbox", { name: "Message input" });
+    Object.defineProperty(input, "scrollHeight", { configurable: true, get: () => 128 });
+
+    view.rerender(<ThreadComposer {...props} value="external insertion" />);
+    expect(input).toHaveValue("external insertion");
+    expect(input.style.height).toBe("128px");
+    fireEvent.change(input, { target: { value: "updated draft" } });
+    expect(onValueChange).toHaveBeenCalledWith("updated draft");
+
+    view.rerender(<ThreadComposer {...props} value="updated draft" />);
+    fireEvent.keyDown(input, { key: "Enter" });
+    expect(onSend).toHaveBeenCalledWith("updated draft", undefined, undefined);
+    expect(input).toHaveValue("updated draft");
+
+    view.rerender(<ThreadComposer {...props} value="" />);
+    expect(input).toHaveValue("");
+  });
+
+  it("keeps the ordinary uncontrolled hero composer free of an initial inline height", () => {
+    render(<ThreadComposer onSend={vi.fn()} variant="hero" autoFocus={false} />);
+    expect(screen.getByRole("textbox", { name: "Message input" }).style.height).toBe("");
+  });
+
+  it("keeps editing and the run stop action available when sending is disabled", () => {
+    const onStop = vi.fn();
+    render(<ThreadComposer onSend={vi.fn()} sendDisabled isStreaming onStop={onStop} inputLabel="Draft" stopLabel="Stop run" autoFocus={false} />);
+    const input = screen.getByRole("textbox", { name: "Draft" });
+    expect(input).toBeEnabled();
+    fireEvent.change(input, { target: { value: "editable draft" } });
+    expect(input).toHaveValue("editable draft");
+    const stop = screen.getByRole("button", { name: "Stop run" });
+    expect(stop).toBeEnabled();
+    fireEvent.click(stop);
+    expect(onStop).toHaveBeenCalledOnce();
+  });
+
+  it("can disable model selection without disabling the draft input", () => {
+    render(<ThreadComposer onSend={vi.fn()} modelDisabled modelLabel="Qwen test" modelOptions={[{
+      provider: "mona_managed", providerLabel: "Mona AI", model: "", label: "Qwen test", active: true,
+    }]} onModelSelect={vi.fn()} autoFocus={false} />);
+    expect(screen.getByRole("textbox", { name: "Message input" })).toBeEnabled();
+    expect(screen.getByRole("button", { name: "Qwen test" })).toBeDisabled();
+  });
+
+  it("blocks keyboard sending only when a streaming pending queue is full", () => {
+    const onSend = vi.fn();
+    const pendingMessages = ["one", "two", "three"].map((content, index) => ({ id: String(index), content }));
+    const view = render(<ThreadComposer onSend={onSend} isStreaming isPendingFull pendingMessages={pendingMessages} autoFocus={false} />);
+    const input = screen.getByRole("textbox", { name: "Message input" });
+    fireEvent.change(input, { target: { value: "keep this draft" } });
+    fireEvent.keyDown(input, { key: "Enter" });
+    expect(onSend).not.toHaveBeenCalled();
+    expect(input).toHaveValue("keep this draft");
+    expect(screen.getByRole("button", { name: "Send message" })).toBeDisabled();
+
+    view.rerender(<ThreadComposer onSend={onSend} isPendingFull pendingMessages={pendingMessages} autoFocus={false} />);
+    fireEvent.click(screen.getByRole("button", { name: "Send message" }));
+    expect(onSend).toHaveBeenCalledWith("keep this draft", undefined, undefined);
+  });
+
+  it("waits for a pending edit delegate before resizing and focusing the draft", async () => {
+    let complete!: () => void;
+    const deferred = new Promise<void>((resolve) => { complete = resolve; });
+    const onPendingEdit = vi.fn(() => deferred);
+    const onPendingRemove = vi.fn();
+    render(<ThreadComposer onSend={vi.fn()} autoFocus={false} pendingMessages={[{ id: "pending-a", content: "Queued text" }]}
+      onPendingEdit={onPendingEdit} onPendingRemove={onPendingRemove} />);
+
+    const input = screen.getByRole("textbox", { name: "Message input" });
+    fireEvent.click(screen.getByRole("button", { name: "Edit message" }));
+    expect(onPendingEdit).toHaveBeenCalledWith("pending-a", "Queued text");
+    expect(onPendingRemove).not.toHaveBeenCalled();
+    expect(input).not.toHaveFocus();
+
+    complete();
+    await waitFor(() => expect(input).toHaveFocus());
+  });
+
+  it("keeps the ordinary pending edit behavior when no delegate is supplied", () => {
+    const onPendingRemove = vi.fn();
+    render(<ThreadComposer onSend={vi.fn()} autoFocus={false} pendingMessages={[{ id: "pending-b", content: "Move to draft" }]}
+      onPendingRemove={onPendingRemove} />);
+    fireEvent.click(screen.getByRole("button", { name: "Edit message" }));
+    expect(screen.getByRole("textbox", { name: "Message input" })).toHaveValue("Move to draft");
+    expect(onPendingRemove).toHaveBeenCalledWith("pending-b");
+  });
+
+  it("forwards the full model option and active executor to the shared selector", async () => {
+    const onModelSelect = vi.fn();
+    const option = {
+      provider: "mona_managed", providerLabel: "Mona AI", model: "qwen-test", label: "Qwen test",
+      active: false, isBuiltin: true, executor: "mona", reasoningEfforts: ["low", "high"], reasoningEffort: "high",
+    };
+    render(<ThreadComposer onSend={vi.fn()} modelLabel="默认模型" modelOptions={[option]} onModelSelect={onModelSelect} currentExecutor="codex" autoFocus={false} />);
+    fireEvent.pointerDown(screen.getByRole("button", { name: "默认模型" }), { button: 0, ctrlKey: false });
+    const choice = await screen.findByRole("menuitem", { name: "Mona AI · Qwen test" });
+    expect(screen.queryByText("Mona Coding · 切换执行者")).not.toBeInTheDocument();
+    fireEvent.pointerMove(choice, { pointerType: "mouse" });
+    expect(await screen.findByRole("slider", { name: "思考强度" })).toBeInTheDocument();
+    expect(screen.queryByText("将切换执行者，使用交接内容继续；不会清空当前任务。")).not.toBeInTheDocument();
+    fireEvent.click(choice);
+    await waitFor(() => expect(onModelSelect).toHaveBeenCalledWith(option, "high"));
   });
 });

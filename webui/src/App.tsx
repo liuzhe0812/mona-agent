@@ -721,7 +721,7 @@ function Shell({
   });
 
   useEffect(() => {
-    const mql = window.matchMedia("(min-width: 1024px)");
+    const mql = window.matchMedia("(min-width: 768px)");
     const handler = (e: MediaQueryListEvent) => {
       if (!e.matches) setDesktopSidebarOpen(false);
     };
@@ -1028,7 +1028,7 @@ function Shell({
   const toggleSidebar = useCallback(() => {
     const isDesktop =
       typeof window !== "undefined" &&
-      window.matchMedia("(min-width: 1024px)").matches;
+      window.matchMedia("(min-width: 768px)").matches;
     if (isDesktop) {
       setDesktopSidebarOpen((v) => !v);
     } else {
@@ -2073,7 +2073,7 @@ function Shell({
                 side="left"
                 showCloseButton={false}
                 aria-describedby={undefined}
-                className="w-[min(320px,100vw)] max-w-[100vw] p-0 lg:hidden"
+                className="w-[min(320px,100vw)] max-w-[100vw] p-0 md:hidden"
               >
                 <SheetTitle className="sr-only">{t("sidebar.navigation")}</SheetTitle>
                 <SessionListPanel {...sessionListProps} className="w-full border-r-0" />
@@ -2093,7 +2093,7 @@ function Shell({
               {!browserFullscreen && showSessionList && view === "chat" && desktopSidebarOpen && !rightWorkspaceMaximized ? (
                 <SessionListPanel
                   {...sessionListProps}
-                  className="hidden lg:flex"
+                  className="hidden md:flex"
                 />
               ) : null}
 
@@ -2147,7 +2147,7 @@ function Shell({
                   />
                 ) : (
                   <div className="flex h-full min-h-0 flex-col">
-                    <div className="flex h-12 shrink-0 items-center gap-2 border-b border-border/40 px-3 lg:hidden">
+                    <div className="flex h-12 shrink-0 items-center gap-2 border-b border-border/40 px-3 md:hidden">
                       <Button
                         variant="ghost"
                         size="icon"

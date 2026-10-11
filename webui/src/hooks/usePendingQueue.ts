@@ -7,6 +7,7 @@ export interface PendingMessage {
   content: string;
   images?: SendImage[];
   options?: SendOptions;
+  locked?: boolean;
 }
 
 const MAX_PENDING = 3;

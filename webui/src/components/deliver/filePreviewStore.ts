@@ -85,7 +85,7 @@ export const useFilePreviewStore = create<FilePreviewState>((set, get) => ({
   sessionKey: null,
   roomId: null,
   splitRatio: 0.72,
-  workspaceCollapsed: false,
+  workspaceCollapsed: true,
   fullscreen: false,
   treeCollapsedByOwner: {},
   treeExpansionInitializedByOwner: {},
@@ -97,7 +97,7 @@ export const useFilePreviewStore = create<FilePreviewState>((set, get) => ({
       const key = file.absolute_path || file.path || file.name;
       const viewedArtifactPaths = new Set(s.viewedArtifactPaths);
       viewedArtifactPaths.add(key);
-      return { file, scope, sessionKey, roomId, fullscreen: false, viewedArtifactPaths };
+      return { file, scope, sessionKey, roomId, workspaceCollapsed: false, fullscreen: false, viewedArtifactPaths };
     }),
   // Owner context belongs to the preview, not to the panel that happens to
   // be mounted. Clearing it on close prevents a later shared/project preview

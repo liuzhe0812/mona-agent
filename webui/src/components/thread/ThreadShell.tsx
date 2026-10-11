@@ -17,14 +17,12 @@ import { RoomContextPanel } from "@/components/room/RoomContextPanel";
 import { useAgents } from "@/components/room/useAgents";
 import {
   ThreadComposer,
-  type ComposerAttachment,
   type ComposerModelOption,
 } from "@/components/thread/ThreadComposer";
 import { ThreadHeader } from "@/components/thread/ThreadHeader";
 import { StreamErrorNotice } from "@/components/thread/StreamErrorNotice";
 import { ThreadViewport } from "@/components/thread/ThreadViewport";
 import { NewChatDashboard } from "@/components/thread/NewChatDashboard";
-import { readFileAsDataUrl } from "@/components/doc/office/useDocDrop";
 import { DiscussionDialog } from "@/components/discussion/DiscussionDialog";
 import { stripConversationCanvasBlocks } from "@/components/canvas/conversation-canvas";
 import { useConversationCanvases } from "@/components/canvas/useConversationCanvases";
@@ -60,6 +58,7 @@ import { useClient } from "@/providers/ClientProvider";
 import { useScheduleStore } from "@/components/schedule/scheduleStore";
 import { deriveTitle } from "@/lib/format";
 import { cn } from "@/lib/utils";
+import { workContextUsage } from "@/lib/context-usage";
 import type { OfficeSessionState } from "@/components/office/types";
 import { closeOfficeSession, createOfficeSession } from "@/lib/office-client";
 
@@ -195,6 +194,7 @@ export function buildComposerProviderOptions(
           tags: model.tags,
           priceTier: model.price_tier,
           reasoningEfforts: model.reasoning_efforts,
+          defaultReasoningEffort: model.default_reasoning_effort,
           reasoningEffort:
             provider.name === settings.agent.provider && model.id === settings.agent.model
               ? settings.agent.reasoning_effort ?? model.default_reasoning_effort
@@ -408,12 +408,6 @@ interface QueuedPrompt {
   profileAdviceId?: string;
 }
 
-interface AttachedDocument {
-  name: string;
-  path: string;
-  size?: number;
-}
-
 export function ThreadShell({
   session,
   title,
@@ -484,9 +478,6 @@ export function ThreadShell({
   const { client, modelName, token } = useClient();
   const conversation = session?.conversation ?? null;
   const [booting, setBooting] = useState(false);
-  const [attachedDocuments, setAttachedDocuments] = useState<AttachedDocument[]>([]);
-  const [documentsUploading, setDocumentsUploading] = useState(false);
-  const [documentUploadError, setDocumentUploadError] = useState<string | null>(null);
   const [slashCommands, setSlashCommands] = useState<SlashCommand[]>([]);
   const [providerOptions, setProviderOptions] = useState<ComposerModelOption[]>([]);
   const managedModelPricesRef = useRef<ManagedModelPrice[]>([]);
@@ -532,6 +523,7 @@ export function ThreadShell({
   }, [onTurnEnd]);
   const {
     messages,
+    liveTokenUsage,
     isStreaming,
     isAwaitingModelResponse,
     isCompacting,
@@ -562,74 +554,22 @@ export function ThreadShell({
   }, [currentTaskId, isStreaming, messages, runStartedAt]);
 
   useEffect(() => {
-    setAttachedDocuments([]);
-    setDocumentUploadError(null);
-    setDocumentsUploading(false);
     setQuote(null);
     setBranchCandidate(null);
   }, [chatId]);
   useEffect(() => setFocusMessage(null), [historyKey]);
 
-  useEffect(() => client.onDocUploadResult((result) => {
-    if (result.chatId !== chatId) return;
-    setDocumentsUploading(false);
-    if (!result.ok) {
-      setDocumentUploadError(result.error ?? "文件上传失败");
-      return;
-    }
-    setAttachedDocuments((current) => [
-      ...current,
-      ...(result.files ?? []).map((file) => ({
-        name: file.name,
-        path: file.path,
-        size: file.size,
-      })),
-    ]);
-    setDocumentUploadError(null);
-  }), [chatId, client]);
-
-  const addDocuments = useCallback(async (files: ComposerAttachment[]) => {
-    if (!chatId || files.length === 0) return;
-    setDocumentsUploading(true);
-    setDocumentUploadError(null);
-    try {
-      client.sendDocUpload(chatId, await Promise.all(files.map(async (file) => {
-        if ("localPath" in file) return { name: file.name, local_path: file.localPath };
-        const localPath = (file as File & { path?: unknown }).path;
-        if (typeof localPath === "string" && /^(?:[A-Za-z]:[\\/]|\/)/.test(localPath)) {
-          return { name: file.name, local_path: localPath };
-        }
-        return { name: file.name, data_url: await readFileAsDataUrl(file) };
-      })));
-    } catch (error) {
-      setDocumentsUploading(false);
-      setDocumentUploadError(error instanceof Error ? error.message : "文件读取失败");
-    }
-  }, [chatId, client]);
-
   const activeModelOptions = useMemo(() => providerOptions, [providerOptions]);
 
-  // Composer context pill: latest provider-reported turn usage vs the active
-  // model's context window.
+  // Compaction invalidates the previous request's occupancy until remeasured.
   const composerContextUsage = useMemo(() => {
+    if (isCompacting) return null;
     const total = contextWindowTokens
       ?? activeModelOptions.find((option) => option.active)?.contextWindow
       ?? null;
-    for (let i = messages.length - 1; i >= 0; i--) {
-      const usage = messages[i]?.tokenUsage;
-      if (usage?.promptTokens) {
-        // ``contextTokens`` is the last LLM call's prompt size (true window
-        // occupancy); cumulative promptTokens would overstate tool-heavy turns.
-        // Zero (or absent) means the backend did not report it; fall back.
-        const contextTokens = usage.contextTokens;
-        const used = contextTokens && contextTokens > 0
-          ? contextTokens
-          : usage.promptTokens + usage.completionTokens;
-        return { used, total };
-      }
-    }
-    return null;
-  }, [messages, activeModelOptions, contextWindowTokens]);
+    const selected = activeModelOptions.find((option) => option.active);
+    return workContextUsage(messages, total, selected?.model ?? modelName, liveTokenUsage, selected?.provider);
+  }, [messages, activeModelOptions, contextWindowTokens, modelName, liveTokenUsage, isCompacting]);
 
   useEffect(() => {
     if (chatId && historyKey) sessionKeyByChatIdRef.current.set(chatId, historyKey);
@@ -882,7 +822,7 @@ export function ThreadShell({
           const activePreset = settings.model_presets.find((p) => p.active);
           setImageInputEnabled(activePreset?.capabilities?.supports_vision !== false);
           setContextWindowTokens(
-            activePreset?.context_window_tokens ?? settings.agent?.context_window_tokens ?? null,
+            settings.agent.context_window_source === "default" ? null : settings.agent?.context_window_tokens ?? activePreset?.context_window_tokens ?? null,
           );
           if (settings.runtime?.workspace_path) {
             setWorkspacePath(settings.runtime.workspace_path);
@@ -922,7 +862,7 @@ export function ThreadShell({
         );
         setImageInputEnabled(activePreset?.capabilities?.supports_vision !== false);
         setContextWindowTokens(
-          activePreset?.context_window_tokens ?? payload.agent?.context_window_tokens ?? null,
+          payload.agent.context_window_source === "default" ? null : payload.agent?.context_window_tokens ?? activePreset?.context_window_tokens ?? null,
         );
         if (payload.chat_providers) {
           const options = buildComposerProviderOptions(payload, managedModelPricesRef.current);
@@ -930,6 +870,7 @@ export function ThreadShell({
         }
       } catch (error) {
         console.error("Failed to switch chat model:", error);
+        throw error;
       }
     },
     [token, onModelNameChange],
@@ -1002,31 +943,20 @@ export function ThreadShell({
         : canvasRouteMessageRef.current(content);
       const routedCanvasPath = routed.canvasPath
         ?? (routed.canvasPathReady ? await routed.canvasPathReady : undefined);
-      const docPaths = attachedDocuments.map((document) => document.path);
       const baseDisplayContent = _options?.displayContent ?? routed.displayContent;
-      const options = docPaths.length > 0
-        ? {
-            ..._options,
-            docPaths,
-            documentNames: attachedDocuments.map((document) => document.name),
-            canvasId: routed.canvasId ?? _options?.canvasId,
-            canvasPath: routedCanvasPath ?? _options?.canvasPath,
-            displayContent: baseDisplayContent ?? content,
-          }
-        : baseDisplayContent
-          ? { ..._options, displayContent: baseDisplayContent, canvasId: routed.canvasId ?? _options?.canvasId, canvasPath: routedCanvasPath ?? _options?.canvasPath }
-          : routed.canvasId || routedCanvasPath
-            ? { ..._options, canvasId: routed.canvasId, canvasPath: routedCanvasPath }
-            : _options;
+      const options = baseDisplayContent
+        ? { ..._options, displayContent: baseDisplayContent, canvasId: routed.canvasId ?? _options?.canvasId, canvasPath: routedCanvasPath ?? _options?.canvasPath }
+        : routed.canvasId || routedCanvasPath
+          ? { ..._options, canvasId: routed.canvasId, canvasPath: routedCanvasPath }
+          : _options;
       const officeContext = activeOfficeContextRef.current;
       send(
         routed.content,
         _images,
         officeContext ? { ...(options ?? {}), ...officeContext } : options,
       );
-      setAttachedDocuments([]);
     },
-    [attachedDocuments, conversation?.type, isStreaming, pendingQueue, send],
+    [conversation?.type, isStreaming, pendingQueue, send],
   );
 
   const handleQuote = useCallback((message: UIMessage, author: string) => {
@@ -1126,7 +1056,7 @@ export function ThreadShell({
   }, [booting, chatId, conversation?.type, isStreaming, onQueuedPromptConsumed, queuedPrompt, send]);
 
   const composerPlaceholder = showHeroComposer
-    ? "有什么事情，交给Mona吧"
+    ? "与 Mona 协作"
     : t("thread.composer.placeholderThread");
 
   const openingPlaceholder = booting
@@ -1172,6 +1102,7 @@ export function ThreadShell({
       ) : null}
       {session ? (
         <ThreadComposer
+          chatId={chatId}
           onSend={handleThreadSend}
           disabled={!chatId || Boolean(historyUnavailable)}
           isStreaming={isStreaming}
@@ -1206,15 +1137,9 @@ export function ThreadShell({
           pendingMessages={pendingQueue.messages}
           onPendingAppend={handlePendingAppend}
           onPendingRemove={pendingQueue.remove}
-          onPendingEdit={pendingQueue.update}
           isPendingFull={pendingQueue.messages.length >= 3}
           mentionableAgents={mentionableAgents}
           onOpenSettings={onOpenSettings}
-          documents={attachedDocuments}
-          documentsUploading={documentsUploading}
-          documentUploadError={documentUploadError}
-          onAddDocuments={addDocuments}
-          onRemoveDocument={(path) => setAttachedDocuments((current) => current.filter((document) => document.path !== path))}
           quote={quote}
           onClearQuote={() => setQuote(null)}
         />
@@ -1240,7 +1165,6 @@ export function ThreadShell({
           pendingMessages={pendingQueue.messages}
           onPendingAppend={handlePendingAppend}
           onPendingRemove={pendingQueue.remove}
-          onPendingEdit={pendingQueue.update}
           isPendingFull={pendingQueue.messages.length >= 3}
           workspace={selectedWorkspace}
           onWorkspaceChange={setSelectedWorkspace}
@@ -2327,6 +2251,7 @@ export function ThreadShell({
                 <FilePreviewPanel
                   files={previewNavFiles}
                   embedded
+                  active={activeRightTabId === tab.id}
                   previewFile={tab.file}
                   previewScope={workspaceScope}
                   previewSessionKey={sessionKey}

@@ -934,6 +934,9 @@ span[class*="rounded"][class*="px-"] {
     width: 6px;
     height: 6px;
   }
+  .scrollbar-thin::-webkit-scrollbar-button {
+    display: none;
+  }
   .scrollbar-thin::-webkit-scrollbar-track {
     background: transparent;
   }
@@ -1033,6 +1036,18 @@ span[class*="rounded"][class*="px-"] {
   [contenteditable="true"]
 ) {
   cursor: var(--mona-cursor-text) !important;
+}
+
+/* 文本输入保留常态边框；焦点不再添加彩色光圈。非文本控件与错误态不受影响。 */
+:where(
+  input:not([type="button"]):not([type="checkbox"]):not([type="color"]):not([type="file"]):not([type="hidden"]):not([type="image"]):not([type="radio"]):not([type="range"]):not([type="reset"]):not([type="submit"]),
+  textarea,
+  [contenteditable="true"]
+):not([aria-invalid="true"]):is(:focus, :focus-visible) {
+  outline: none !important;
+  --tw-ring-shadow: 0 0 #0000 !important;
+  --tw-ring-offset-shadow: 0 0 #0000 !important;
+  box-shadow: var(--tw-shadow, 0 0 #0000) !important;
 }
 
 /* xterm 终端滚动条：细窄、深色、hover 才显示 thumb */
