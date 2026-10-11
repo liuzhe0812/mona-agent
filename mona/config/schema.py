@@ -556,6 +556,89 @@ class ToolsConfig(Base):
     terminal: TerminalToolConfig = Field(default_factory=TerminalToolConfig)
 
 
+BUILTIN_DEVELOPMENT_SUBAGENT_IDS = ("builtin_explorer", "builtin_worker")
+# Verbatim Codex role descriptions (Apache-2.0); see development/CODEX-NOTICE.
+BUILTIN_DEVELOPMENT_SUBAGENT_PROMPTS = {
+    "builtin_explorer": """Use `explorer` for specific codebase questions.
+Explorers are fast and authoritative.
+They must be used to ask specific, well-scoped questions on the codebase.
+Rules:
+- In order to avoid redundant work, you should avoid exploring the same problem that explorers have already covered. Typically, you should trust the explorer results without additional verification. You are still allowed to inspect the code yourself to gain the needed context!
+- You are encouraged to spawn up multiple explorers in parallel when you have multiple distinct questions to ask about the codebase that can be answered independently. This allows you to get more information faster without waiting for one question to finish before asking the next. While waiting for the explorer results, you can continue working on other local tasks that do not depend on those results. This parallelism is a key advantage of delegation, so use it whenever you have multiple questions to ask.
+- Reuse existing explorers for related questions.""",
+    "builtin_worker": """Use for execution and production work.
+Typical tasks:
+- Implement part of a feature
+- Fix tests or bugs
+- Split large refactors into independent chunks
+Rules:
+- Explicitly assign **ownership** of the task (files / responsibility). When the subtask involves code changes, you should clearly specify which files or modules the worker is responsible for. This helps avoid merge conflicts and ensures accountability. For example, you can say "Worker 1 is responsible for updating the authentication module, while Worker 2 will handle the database layer." By defining clear ownership, you can delegate more effectively and reduce coordination overhead.
+- Always tell workers they are **not alone in the codebase**, and they should not revert the edits made by others, and they should adjust their implementation to accommodate the changes made by others. This is important because there may be multiple workers making changes in parallel, and they need to be aware of each other's work to avoid conflicts and ensure a cohesive final product.""",
+}
+
+
+class DevelopmentSubagentConfig(Base):
+    """Project-owned collaborator preset; credentials stay in provider settings."""
+
+    model_config = ConfigDict(alias_generator=to_camel, populate_by_name=True, extra="forbid")
+    id: str = Field(pattern=r"^[a-z][a-z0-9_-]{1,95}$")
+    name: str = Field(min_length=1, max_length=80)
+    description: str = Field(default="", max_length=8000)
+    instructions: str = Field(min_length=1, max_length=8000)
+    executor: Literal["mona", "codex", "claude", "codebuddy"] = "mona"
+    inherit_model: bool = False
+    model: str | None = Field(default=None, max_length=200)
+    provider: str | None = Field(default=None, max_length=200)
+    effort: str | None = Field(default=None, max_length=32)
+    readonly: bool = True
+    enabled: bool = True
+
+    @model_validator(mode="after")
+    def validate_route(self):
+        if not self.name.strip() or not self.instructions.strip():
+            raise ValueError("子智能体名称和职责不能为空。")
+        if self.id in BUILTIN_DEVELOPMENT_SUBAGENT_IDS and self.name != self.id.removeprefix("builtin_"):
+            raise ValueError("内置子智能体名称不能修改。")
+        configured_native = self.executor in {"codex", "claude"} and self.provider is not None and self.model
+        if self.executor != "mona" and not configured_native and self.provider is not None:
+            raise ValueError("当前原生执行者不接受其他供应商路由。")
+        if self.executor != "mona" and self.effort is not None and not self.model:
+            raise ValueError("请先选择支持思考强度的模型。")
+        return self
+
+
+def builtin_development_subagents() -> list[DevelopmentSubagentConfig]:
+    return [
+        DevelopmentSubagentConfig(
+            id="builtin_explorer", name="explorer", inherit_model=True, readonly=True,
+            description=BUILTIN_DEVELOPMENT_SUBAGENT_PROMPTS["builtin_explorer"],
+            instructions=BUILTIN_DEVELOPMENT_SUBAGENT_PROMPTS["builtin_explorer"]),
+        DevelopmentSubagentConfig(
+            id="builtin_worker", name="worker", inherit_model=True, readonly=False,
+            description=BUILTIN_DEVELOPMENT_SUBAGENT_PROMPTS["builtin_worker"],
+            instructions=BUILTIN_DEVELOPMENT_SUBAGENT_PROMPTS["builtin_worker"]),
+    ]
+
+
+class CodingConfig(Base):
+    """Mode-owned execution policy; tools and model sources remain reusable."""
+
+    max_tool_iterations: int = Field(default=100, ge=1, le=1000)
+    max_tool_result_chars: int = Field(default=16_000, ge=1000, le=128_000)
+    context_block_limit: int | None = Field(default=None, ge=4096)
+    max_tokens: int = Field(default=8192, ge=1)
+    temperature: float | None = 0.1
+    reasoning_effort: str | None = None
+    extensions: list[Literal["plan", "collaboration", "browser"]] = Field(default_factory=lambda: ["plan", "collaboration", "browser"])
+    exec: ExecToolConfig = Field(default_factory=lambda: _lazy_default("mona.agent.tools.shell", "ExecToolConfig"))
+
+
+class DevelopmentPermissionsConfig(Base):
+    default_mode: Literal["ask", "auto", "full_access"] = "ask"
+    review_timeout_seconds: int = Field(default=15, ge=3, le=60)
+    review_model_preset: str | None = None
+
+
 class DevelopmentConfig(Base):
     """Development-only resource bounds and explicit native executable paths.
 
@@ -564,9 +647,18 @@ class DevelopmentConfig(Base):
     """
 
     model_preset: str | None = None
+    coding: CodingConfig = Field(default_factory=CodingConfig)
+    enabled_engines: list[Literal["codex", "claude", "codebuddy"]] = Field(default_factory=list)
     codex_path: str | None = None
     claude_path: str | None = None
     codebuddy_path: str | None = None
+    claude_api_key_env: str = "ANTHROPIC_API_KEY"
+    codebuddy_api_key_env: str = "CODEBUDDY_API_KEY"
+    codebuddy_environment: Literal["internal", "external"] = "internal"
+    decision_timeout_seconds: int = Field(default=600, ge=30, le=3600)
+    permissions: DevelopmentPermissionsConfig = Field(default_factory=DevelopmentPermissionsConfig)
+    max_parallel_subagents: int = Field(default=4, ge=1, le=16)
+    max_collaboration_continuations: int = Field(default=4, ge=1, le=16)
     max_rule_bytes: int = Field(default=65_536, ge=1024, le=262_144)
     max_skill_bytes: int = Field(default=131_072, ge=1024, le=524_288)
     max_project_skills: int = Field(default=128, ge=1, le=512)
@@ -816,6 +908,8 @@ def _resolve_tool_config_refs() -> None:
     mod.EmailIntelConfig = EmailIntelConfig  # type: ignore[attr-defined]
 
     ToolsConfig.model_rebuild()
+    CodingConfig.model_rebuild()
+    DevelopmentConfig.model_rebuild()
     Config.model_rebuild()
 
 

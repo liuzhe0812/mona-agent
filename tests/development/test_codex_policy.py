@@ -1,27 +1,55 @@
 import copy
+import subprocess
 import sys
 from pathlib import Path
 
 import pytest
 
 from mona.development.context import load_project_context
-from mona.development.contracts import Project
+from mona.development.contracts import ExecutorId, Project
 from mona.development.executors.codex_policy import (
     disabled_skill_overrides,
     prepare_codex_profile,
     validate_effective_config,
 )
 from mona.development.executors.rpc import RpcError
+from mona.development.executors.sdk_policy import prepare_sdk_profile
 
 
 def effective():
     return {"config": {
         "features": {"hooks": False, "memories": False, "apps": False, "plugins": False,
-                     "remote_plugin": False, "goals": False},
+                     "remote_plugin": False, "goals": False, "multi_agent": False, "multi_agent_v2": False},
+        "agents": {"enabled": False},
         "notify": [], "mcp_servers": {}, "project_doc_max_bytes": 0,
         "project_doc_fallback_filenames": [], "project_root_markers": [], "allow_login_shell": False,
         "shell_environment_policy": {"inherit": "core", "ignore_default_excludes": False},
+        "windows": {"sandbox": "unelevated"},
     }}
+
+
+@pytest.mark.skipif(sys.platform != "win32", reason="Windows known-folder API")
+@pytest.mark.parametrize("executor", [ExecutorId.CODEX, ExecutorId.CLAUDE, ExecutorId.CODEBUDDY])
+def test_isolated_native_environment_resolves_windows_system_folders(tmp_path, executor):
+    project = tmp_path / "project"
+    project.mkdir()
+    if executor == ExecutorId.CODEX:
+        profile = prepare_codex_profile(Path(sys.executable), tmp_path / "native", project)
+    else:
+        profile = prepare_sdk_profile(executor, Path(sys.executable), tmp_path / "native", project)
+    # ProgramData is expanded by Windows through SystemDrive, even with an isolated HOME.
+    script = """import ctypes, uuid
+guid = (ctypes.c_byte * 16).from_buffer_copy(uuid.UUID('62ab5d82-fdc1-4dc3-a9dd-070d1d495d97').bytes_le)
+folder = ctypes.c_wchar_p()
+result = ctypes.windll.shell32.SHGetKnownFolderPath(ctypes.byref(guid), 0, None, ctypes.byref(folder))
+if result:
+    raise SystemExit(hex(result & 0xffffffff))
+assert folder.value
+ctypes.windll.ole32.CoTaskMemFree(folder)
+"""
+    result = subprocess.run([sys.executable, "-c", script], env=profile.environment,
+        capture_output=True, text=True, timeout=10, creationflags=subprocess.CREATE_NO_WINDOW)
+    assert result.returncode == 0, result.stderr
 
 
 def test_launch_profile_excludes_environment_injection_and_keeps_project_untouched(tmp_path):
@@ -39,11 +67,44 @@ def test_launch_profile_excludes_environment_injection_and_keeps_project_untouch
     assert profile.environment["HTTP_PROXY"] == env["HTTP_PROXY"]
     assert not set(profile.environment) & {"PYTHONPATH", "NODE_OPTIONS", "OPENAI_API_KEY", "MONA_TOKEN", "CLAUDE_CODE_OAUTH_TOKEN"}
     assert "features.hooks=false" in profile.command
+    assert "agents.enabled=false" in profile.command
+    assert "features.multi_agent_v2=false" in profile.command
     assert "project_doc_max_bytes=0" in profile.command
     assert any("trust_level=\"untrusted\"" in arg for arg in profile.command)
     assert {str(p.relative_to(project)): p.read_bytes() for p in project.rglob("*") if p.is_file()} == original
     assert "test-marker" not in repr(profile)
     assert prepare_codex_profile(Path(sys.executable), profile.home, project, environment={}).home == profile.home
+
+
+@pytest.mark.parametrize("platform", ["win32", "linux"])
+def test_platform_sandbox_is_explicit_without_relaxing_project_trust(tmp_path, monkeypatch, platform):
+    monkeypatch.setattr(sys, "platform", platform)
+    project = tmp_path / "project"
+    project.mkdir()
+    profile = prepare_codex_profile(Path(sys.executable), tmp_path / "native", project, environment={})
+    assert ('windows.sandbox="unelevated"' in profile.command) == (platform == "win32")
+    assert any('trust_level="untrusted"' in value for value in profile.command)
+    assert not any("danger-full-access" in value for value in profile.command)
+
+
+@pytest.mark.parametrize("path", ["agents.enabled", "features.multi_agent", "features.multi_agent_v2"])
+def test_native_agent_tools_cannot_bypass_project_presets(path):
+    config = effective()
+    parent, key = path.split(".")
+    config["config"][parent][key] = True
+    with pytest.raises(RpcError) as error:
+        validate_effective_config(config)
+    assert error.value.code == "isolation_unverified"
+
+
+@pytest.mark.parametrize("mode", [None, "disabled", "danger-full-access"])
+def test_windows_sandbox_missing_or_disabled_is_not_claimed_safe(monkeypatch, mode):
+    monkeypatch.setattr(sys, "platform", "win32")
+    config = effective()
+    config["config"]["windows"] = {} if mode is None else {"sandbox": mode}
+    with pytest.raises(RpcError) as error:
+        validate_effective_config(config)
+    assert error.value.code == "isolation_unverified"
 
 
 def test_never_adopts_user_codex_home_or_worktree_as_runtime_state(tmp_path):

@@ -4,7 +4,13 @@ import sys
 from pathlib import Path
 
 import pytest
+from aiohttp import web
+from aiohttp.test_utils import TestClient, TestServer
+from test_native_workbench import setup as setup_workbench
+from test_native_workbench import trace
 
+from mona.development.api import RUNTIME_KEY, register_development_routes
+from mona.development.contracts import ExecutorId
 from mona.development.executors.rpc import JsonRpcProcess, RemoteRpcError, RpcError
 
 PEER = Path(__file__).with_name("native_peer.py").resolve()
@@ -138,5 +144,45 @@ async def test_cancelled_pending_request_never_replays(tmp_path):
         await asyncio.sleep(0.2)
         assert await client.request("echo", {"after": True}) == {"after": True}
         assert not client._pending
+    finally:
+        await client.close()
+
+
+@pytest.mark.asyncio
+async def test_provider_codex_logout_disconnects_chatgpt_over_authenticated_http(tmp_path, monkeypatch):
+    runtime, project, root, host = await setup_workbench(tmp_path)
+    runtime.native.hosts[("", ExecutorId.CODEX)] = host
+    monkeypatch.setenv("MONA_SERVICES_TOKEN", "synthetic-logout-test")
+    app = web.Application()
+    app[RUNTIME_KEY] = runtime
+    register_development_routes(app)
+    client = TestClient(TestServer(app))
+    await client.start_server()
+    base = "/api/development/provider-executors/codex"
+    headers = {"X-Mona-Token": "synthetic-logout-test"}
+    try:
+        assert (await client.post(base + "/logout")).status == 401
+        assert host._client is None
+
+        login = await (await client.post(base + "/login", headers=headers)).json()
+        assert login["state"] == "waiting"
+        await host._client.request("test/auth/complete", {"loginId": "auth-1", "success": True})
+        connected = await (await client.post(base + "/probe", headers=headers)).json()
+        assert connected["authentication"] == "ready"
+        assert connected["authMode"] == "chatgpt"
+
+        response = await client.post(base + "/logout", headers=headers)
+        assert response.status == 200 and await response.json() == {"ok": True}
+        logout = next(call for call in trace(root) if call.get("method") == "account/logout")
+        assert "params" not in logout
+
+        status = await (await client.get(base + "/login", headers=headers)).json()
+        assert status["state"] == "idle"
+        disconnected = await (await client.post(base + "/probe", headers=headers)).json()
+        assert disconnected["authentication"] == "required"
+        assert disconnected["authMode"] == "unknown"
+        methods = [call.get("method") for call in trace(root)]
+        assert "thread/start" not in methods and "turn/start" not in methods
+        assert not runtime.tasks and runtime.store.list_sessions(project.id) == []
     finally:
         await client.close()

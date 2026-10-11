@@ -271,7 +271,7 @@ def test_events_paginate_without_crossing_sessions(store, project):
         store.events_after(a.id, -1)
 
 
-@pytest.mark.parametrize("version", [0, 2])
+@pytest.mark.parametrize("version", [0, 1, 2, 3, 99])
 def test_foreign_or_future_schema_is_never_recreated(tmp_path, version):
     path = tmp_path / "existing.sqlite3"
     with sqlite3.connect(path) as db:
@@ -284,6 +284,19 @@ def test_foreign_or_future_schema_is_never_recreated(tmp_path, version):
     assert path.read_bytes() == before
     with sqlite3.connect(path) as db:
         assert db.execute("SELECT content FROM user_data").fetchone()[0] == "keep"
+
+
+def test_migration_rejects_missing_active_run_guard_without_rebuilding_data(tmp_path):
+    path = tmp_path / "missing-guard.sqlite3"
+    DevelopmentStore(path)
+    with sqlite3.connect(path) as db:
+        db.execute("DROP INDEX runs_one_active_session")
+        db.execute("PRAGMA user_version=2")
+        db.execute("PRAGMA wal_checkpoint(TRUNCATE)")
+    before = path.read_bytes()
+    with pytest.raises(DevelopmentError, match="不兼容"):
+        DevelopmentStore(path)
+    assert path.read_bytes() == before
 
 
 def test_archiving_does_not_cancel_and_repeated_request_still_returns_original(store, project):

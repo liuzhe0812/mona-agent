@@ -11526,4 +11526,7 @@ def create_app(
     app.router.add_post("/api/projects/remove", handle_project_remove)
     app.router.add_post("/api/webui/sidebar-state/update", handle_webui_sidebar_state_update)
 
+    from mona.development.api import register_development_routes
+    register_development_routes(app)
+
     return app

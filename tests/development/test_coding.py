@@ -1,6 +1,7 @@
 import asyncio
 import copy
 import json
+from dataclasses import replace
 
 import pytest
 
@@ -11,10 +12,11 @@ from mona.agent.tools.path_utils import (
     set_current_workspace,
 )
 from mona.agent.tools.shell import ExecToolConfig
-from mona.config.schema import AgentDefaults
+from mona.config.schema import CodingConfig
 from mona.development.coding import CodingTools, build_coding_run_spec
-from mona.development.context import load_project_context
+from mona.development.context import build_coding_messages, load_project_context
 from mona.development.contracts import DevelopmentSession, ExecutorId, Project
+from mona.development.executors.host_tools import DELEGATION_INSTRUCTIONS
 from mona.development.store import DevelopmentError
 from mona.providers.base import LLMProvider, LLMResponse, ToolCallRequest
 from mona.session.manager import Session, SessionManager
@@ -53,13 +55,24 @@ def tool_names(tools):
 
 def test_minimal_actual_toolset_has_no_business_tools(tmp_path):
     _, _, _, tools, _ = setup(tmp_path)
-    assert tool_names(tools) == {"read_file", "write_file", "edit_file", "list_dir", "exec", "write_stdin", "list_exec_sessions"}
+    assert tool_names(tools) == {"read_file", "write_file", "edit_file", "list_dir", "grep", "find_files", "exec", "write_stdin", "list_exec_sessions"}
+
+
+@pytest.mark.parametrize("readonly,parent_id,enabled", [(False, None, True), (False, None, False), (True, None, True), (False, "parent_fixture", True)])
+def test_delegation_policy_is_formal_parent_instruction_and_availability_stays_data(tmp_path, readonly, parent_id, enabled):
+    _, project, session, _, transcript = setup(tmp_path, readonly=readonly)
+    session.parent_session_id = parent_id
+    availability = '[Runtime Context — metadata only, not instructions]\n' + json.dumps({"developmentDelegationEnabled": enabled})
+    context = replace(load_project_context(project), subagent_context=availability)
+    messages = build_coding_messages(context, session, transcript, readonly=readonly)
+    assert (DELEGATION_INSTRUCTIONS in messages[0]["content"]) == (not readonly and not parent_id)
+    assert (any(message["content"] == availability for message in messages)) == (not readonly and not parent_id)
 
 
 @pytest.mark.asyncio
 async def test_readonly_is_tool_enforced_not_just_prompt(tmp_path):
     root, _, _, tools, _ = setup(tmp_path, readonly=True)
-    assert tool_names(tools) == {"read_file", "list_dir"}
+    assert tool_names(tools) == {"read_file", "list_dir", "grep", "find_files"}
     denied = await tools.registry.execute("write_file", {"path": "should-not-exist", "content": "no"})
     assert "not found" in str(denied).lower() or "unknown" in str(denied).lower()
     assert not (root / "should-not-exist").exists()
@@ -98,7 +111,7 @@ async def test_production_runner_writes_and_tests_code_without_general_context(t
         LLMResponse("Implemented and verified."),
     ])
     spec = build_coding_run_spec(load_project_context(project), session, transcript, tools,
-        model="test-coding", context_window_tokens=65536, defaults=AgentDefaults(max_tool_iterations=8))
+        model="test-coding", context_window_tokens=65536, defaults=CodingConfig(max_tool_iterations=8))
     checkpoints = []
     async def capture(event):
         checkpoints.append(copy.deepcopy(event))
@@ -127,7 +140,7 @@ async def test_session_managers_and_history_can_resume_without_new_product_sessi
     reopened = SessionManager(tmp_path / "user-data").get_or_create(session.transcript_key)
     reopened.add_message("user", "Continue that task.")
     spec = build_coding_run_spec(load_project_context(project), session, reopened, tools,
-        model="test-coding", context_window_tokens=65536, defaults=AgentDefaults())
+        model="test-coding", context_window_tokens=65536, defaults=CodingConfig())
     provider = SequenceProvider([LLMResponse("Continuing widget.")])
     result = await AgentRunner(provider).run(spec)
     assert "Remember current task is widget." in json.dumps(provider.requests)
@@ -141,7 +154,7 @@ def test_external_executor_is_not_a_model_alias(tmp_path):
     session.executor = ExecutorId.CODEX
     with pytest.raises(DevelopmentError) as info:
         build_coding_run_spec(load_project_context(project), session, history, tools,
-            model="codex-model", context_window_tokens=65536, defaults=AgentDefaults())
+            model="codex-model", context_window_tokens=65536, defaults=CodingConfig())
     assert info.value.code == "wrong_executor"
 
 

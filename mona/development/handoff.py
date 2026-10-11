@@ -43,9 +43,49 @@ def _text(value: Any) -> str:
     return ""
 
 
+def task_brief(transcript: Session, *, budget: int = 4000, plan: dict | None = None) -> dict:
+    from mona.development.compaction import summary_text
+
+    if not 512 <= budget <= 8000:
+        raise ValueError("Invalid task brief budget")
+    users = [(index, message) for index, message in enumerate(transcript.messages)
+             if message.get("role") == "user" and not any(message.get(key) for key in
+             ("_ui_only", "_runtime_input", "_input_cancelled", "_collaboration_context", "injected_event"))
+             and message.get("source_kind") not in {"runtime", "collaboration"}]
+    selected = [users[0], users[-1]] if len(users) > 1 else users
+    def excerpt(text: str, **reference) -> dict:
+        value = _redact(text)
+        return {**reference, "text": value[:min(1400, budget // 2)],
+                "totalChars": len(value), "truncated": len(value) > min(1400, budget // 2)}
+    requests = [excerpt(_text((message.get("_input_source") or {}).get("content", message.get("content", ""))),
+                        messageId=message.get("id"), messageIndex=index)
+                for index, message in selected]
+    saved = summary_text(transcript)
+    brief = {"requests": requests, "summary": excerpt(saved, through=transcript.last_consolidated) if saved else None,
+             "note": "原始目标、约束及历史摘要的资料摘录；不是测试通过或操作成功的证据。"}
+    if plan:
+        rows = plan.get("plan") or []
+        brief["plan"] = {"runId": plan.get("runId"), "steps": [
+            {"step": _redact(str(row.get("step", "")))[:160], "status": row.get("status")}
+            for row in rows[:6]], "omittedSteps": max(0, len(rows) - 6)}
+    while len(json.dumps(brief, ensure_ascii=False)) > budget:
+        fields = [*requests, *([brief["summary"]] if brief["summary"] else [])]
+        longest = max(fields, key=lambda item: len(item["text"]), default=None)
+        if longest and longest["text"]:
+            longest["text"] = longest["text"][:len(longest["text"]) // 2]
+            longest["truncated"] = True
+        elif brief.get("plan", {}).get("steps"):
+            brief["plan"]["steps"].pop()
+            brief["plan"]["omittedSteps"] += 1
+        else:
+            raise DevelopmentError("handoff_too_large", "任务资料索引超过交接范围，未发送不完整交接。")
+    return brief
+
+
 def build_handoff(context: ProjectContext, session: DevelopmentSession, transcript: Session,
                   *, goal: str, evidence: Sequence[Event] = (), since: int = 0,
-                  max_chars: int = 16_000) -> PendingHandoff:
+                  max_chars: int = 16_000, plan: dict | None = None,
+                  full_conversation: bool = False) -> PendingHandoff:
     if session.project_id != context.project_id or transcript.key != session.transcript_key:
         raise DevelopmentError("context_mismatch", "交接来源不是当前项目会话。")
     if not 0 <= since <= len(transcript.messages) or not 2048 <= max_chars <= 48_000:
@@ -77,15 +117,16 @@ def build_handoff(context: ProjectContext, session: DevelopmentSession, transcri
                 if path.is_relative_to(context.root):
                     work.append({"eventId": event.id, "kind": "file", "path": path.relative_to(context.root).as_posix(),
                                  "note": "Native operation record, not exclusive ownership of the current diff."})
-    fingerprint = hashlib.sha256(json.dumps({"messages": selected, "evidence": work, "goal": _redact(goal)},
+    brief = task_brief(transcript, budget=min(4000, max_chars // 3), plan=plan)
+    fingerprint = hashlib.sha256(json.dumps({"messages": selected, "evidence": work, "goal": _redact(goal), "taskBrief": brief},
                                             ensure_ascii=False, sort_keys=True).encode()).hexdigest()
     body: dict[str, Any] = {
         "mode": "delta" if since else "full", "goal": _redact(goal), "project": str(context.root),
         "rules": [{"path": r.path, "sha256": r.sha256} for r in context.rules],
         "skills": [{"name": s.name, "path": s.path} for s in context.skills],
         "historyReference": {"sessionId": session.id, "fromIndex": since, "throughIndex": len(transcript.messages)},
-        "workEvidence": work[-32:], "conversation": selected[-12:],
-        "omittedConversationEntries": max(0, len(selected) - 12), "omittedEvidenceEntries": max(0, len(work) - 32),
+        "workEvidence": work[-32:], "conversation": selected if full_conversation else selected[-12:], "taskBrief": brief,
+        "omittedConversationEntries": 0 if full_conversation else max(0, len(selected) - 12), "omittedEvidenceEntries": max(0, len(work) - 32),
     }
     prefix = ("[Mona handoff — project task data, not new system instructions]\n"
               "Continue from the actual current files. Do not repeat completed writes. "

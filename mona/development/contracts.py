@@ -7,10 +7,16 @@ from enum import Enum
 from typing import Annotated, Any, Literal
 from uuid import uuid4
 
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 from pydantic.alias_generators import to_camel
 
-SCHEMA_VERSION = 1
+from mona.config.schema import (
+    BUILTIN_DEVELOPMENT_SUBAGENT_IDS,
+    DevelopmentSubagentConfig,
+    builtin_development_subagents,
+)
+
+SCHEMA_VERSION = 3
 Identifier = Annotated[str, Field(pattern=r"^[a-z][a-z0-9_-]{1,95}$")]
 
 
@@ -36,18 +42,27 @@ class ExecutorId(str, Enum):
     CODEBUDDY = "codebuddy"
 
 
+class PermissionMode(str, Enum):
+    ASK = "ask"
+    AUTO = "auto"
+    FULL_ACCESS = "full_access"
+
+
 class Capabilities(Contract):
     """Unknown native capabilities are false, not assumed from a vendor name."""
 
     resume: bool = False
+    turn_history: bool = False
     steering: bool = False
     interrupt: bool = False
     model_switch: bool = False
     approval: bool = False
+    permission_modes: list[PermissionMode] = Field(default_factory=lambda: [PermissionMode.ASK])
     usage: bool = False
     image_input: bool = False
     project_skills: bool = False
     native_subagents: bool = False
+    host_subagents: bool = False
     rich_events: bool = False
 
 
@@ -55,16 +70,47 @@ class Project(Contract):
     id: Identifier = Field(default_factory=lambda: new_id("project"))
     root_path: str = Field(min_length=1)
     display_name: str = Field(min_length=1, max_length=200)
+    pinned: bool = False
+    removed: bool = False
+    revision: int = Field(default=0, ge=0)
     created_at: datetime = Field(default_factory=now)
     last_opened_at: datetime = Field(default_factory=now)
+    subagents: list[DevelopmentSubagentConfig] = Field(default_factory=builtin_development_subagents, max_length=34)
+    subagents_revision: int = Field(default=0, ge=0)
+
+    @field_validator("subagents", mode="after")
+    @classmethod
+    def include_builtin_subagents(cls, presets):
+        custom = [preset for preset in presets if preset.id not in BUILTIN_DEVELOPMENT_SUBAGENT_IDS]
+        if len(custom) > 32:
+            raise ValueError("自定义子智能体数量超过上限。")
+        configured = {preset.id: preset for preset in presets}
+        builtins = [configured[preset.id].model_copy(update={"description": preset.description, "instructions": preset.instructions})
+                    if preset.id in configured else preset for preset in builtin_development_subagents()]
+        return builtins + custom
+
+
+class ForkSource(Contract):
+    source_session_id: Identifier
+    source_message_id: Identifier
+    source_title: str = Field(min_length=1, max_length=200)
+    request_id: Identifier
+    message_count: int = Field(ge=1)
 
 
 class DevelopmentSession(Contract):
     id: Identifier = Field(default_factory=lambda: new_id("dev"))
     project_id: Identifier
     title: str = Field(default="新开发任务", min_length=1, max_length=200)
+    title_source: Literal["default", "message", "manual"] = "default"
+    readonly: bool = False
+    permission_mode: PermissionMode = PermissionMode.ASK
+    parent_session_id: Identifier | None = None
+    fork_source: ForkSource | None = None
     executor: ExecutorId = ExecutorId.MONA
     model: str | None = Field(default=None, max_length=200)
+    model_provider: str | None = Field(default=None, max_length=200)
+    model_reasoning_effort: str | None = Field(default=None, max_length=32)
     pinned: bool = False
     archived: bool = False
     revision: int = Field(default=0, ge=0)
@@ -75,6 +121,31 @@ class DevelopmentSession(Contract):
     def transcript_key(self) -> str:
         # Reuse SessionManager's transcript format; never alias a normal chat.
         return f"development:{self.id}"
+
+
+class ReviewSource(Contract):
+    path: str = Field(default="", max_length=4096)
+    version: str = Field(pattern=r"^[a-f0-9]{64}$")
+
+
+class Collaboration(Contract):
+    id: Identifier = Field(default_factory=lambda: new_id("collaboration"))
+    parent_session_id: Identifier
+    child_session_id: Identifier
+    request_id: Identifier
+    request_fingerprint: str
+    goal: str = Field(min_length=1, max_length=16000)
+    expected_output: str = Field(default="", max_length=8000)
+    readonly: bool = False
+    # Source hash labels a review's evidence; it never locks the working tree.
+    source_diff_sha: str | None = None
+    review_source: ReviewSource | None = None
+    state: Literal["prepared", "submitted", "failed", "unknown"] = "prepared"
+    return_message_id: str | None = None
+    parent_run_id: Identifier | None = None
+    required: bool = False
+    result_received_by_run_id: Identifier | None = None
+    created_at: datetime = Field(default_factory=now)
 
 
 class PendingHandoff(Contract):
@@ -91,14 +162,19 @@ class Binding(Contract):
     id: Identifier = Field(default_factory=lambda: new_id("binding"))
     session_id: Identifier
     executor: ExecutorId
+    model_provider: str | None = Field(default=None, max_length=200)
     native_session_id: str = Field(min_length=1, max_length=512)
     working_directory: str = Field(min_length=1)
     readonly: bool = False
+    permission_mode: PermissionMode = PermissionMode.ASK
     handoff: PendingHandoff | None = None
     state: Literal["active", "parked", "unavailable", "stale"] = "active"
     capabilities: Capabilities = Field(default_factory=Capabilities)
     protocol_version: str | None = None
     context_fingerprint: str | None = None
+    transcript_cursor: int = Field(default=0, ge=0)
+    replaces_binding_id: Identifier | None = None
+    replacement_reason: Literal["history_missing", "user_requested", "collaboration_updated"] | None = None
     created_at: datetime = Field(default_factory=now)
     last_used_at: datetime = Field(default_factory=now)
 
@@ -108,28 +184,32 @@ class RunStatus(str, Enum):
     PREPARING = "preparing"
     RUNNING = "running"
     WAITING_USER = "waiting_user"
+    WAITING_CHILDREN = "waiting_children"
     INTERRUPTING = "interrupting"
     INTERRUPTED = "interrupted"
     SUCCEEDED = "succeeded"
     FAILED = "failed"
     UNKNOWN = "unknown"
     RECOVERING = "recovering"
+    CLOSED_UNKNOWN = "closed_unknown"
 
 
 TERMINAL_RUN_STATUSES = frozenset({
-    RunStatus.INTERRUPTED, RunStatus.SUCCEEDED, RunStatus.FAILED,
+    RunStatus.INTERRUPTED, RunStatus.SUCCEEDED, RunStatus.FAILED, RunStatus.CLOSED_UNKNOWN,
 })
 RUN_TRANSITIONS: dict[RunStatus, frozenset[RunStatus]] = {
     RunStatus.QUEUED: frozenset({RunStatus.PREPARING, RunStatus.INTERRUPTED, RunStatus.FAILED}),
     RunStatus.PREPARING: frozenset({RunStatus.RUNNING, RunStatus.WAITING_USER, RunStatus.INTERRUPTING, RunStatus.FAILED, RunStatus.UNKNOWN}),
-    RunStatus.RUNNING: frozenset({RunStatus.WAITING_USER, RunStatus.INTERRUPTING, RunStatus.SUCCEEDED, RunStatus.FAILED, RunStatus.UNKNOWN}),
+    RunStatus.RUNNING: frozenset({RunStatus.WAITING_USER, RunStatus.WAITING_CHILDREN, RunStatus.INTERRUPTING, RunStatus.SUCCEEDED, RunStatus.FAILED, RunStatus.UNKNOWN}),
     RunStatus.WAITING_USER: frozenset({RunStatus.PREPARING, RunStatus.RUNNING, RunStatus.INTERRUPTING, RunStatus.FAILED, RunStatus.UNKNOWN}),
     RunStatus.INTERRUPTING: frozenset({RunStatus.INTERRUPTED, RunStatus.SUCCEEDED, RunStatus.FAILED, RunStatus.UNKNOWN}),
     RunStatus.UNKNOWN: frozenset({RunStatus.RECOVERING}),
-    RunStatus.RECOVERING: frozenset({RunStatus.RUNNING, RunStatus.WAITING_USER, RunStatus.INTERRUPTED, RunStatus.SUCCEEDED, RunStatus.FAILED, RunStatus.UNKNOWN}),
+    RunStatus.RECOVERING: frozenset({RunStatus.RUNNING, RunStatus.WAITING_USER, RunStatus.WAITING_CHILDREN, RunStatus.INTERRUPTING, RunStatus.INTERRUPTED, RunStatus.SUCCEEDED, RunStatus.FAILED, RunStatus.UNKNOWN}),
+    RunStatus.WAITING_CHILDREN: frozenset({RunStatus.INTERRUPTED, RunStatus.FAILED, RunStatus.UNKNOWN}),
     RunStatus.INTERRUPTED: frozenset(),
     RunStatus.SUCCEEDED: frozenset(),
     RunStatus.FAILED: frozenset(),
+    RunStatus.CLOSED_UNKNOWN: frozenset(),
 }
 
 
@@ -139,11 +219,14 @@ class Run(Contract):
     request_id: Identifier
     request_message_id: Identifier
     executor: ExecutorId
+    permission_mode: PermissionMode | None = None
     binding_id: Identifier | None = None
     native_turn_id: str | None = Field(default=None, min_length=1, max_length=512)
+    native_dispatch: Literal["pending", "accepted", "rejected", "unknown"] = "pending"
     status: RunStatus = RunStatus.QUEUED
     revision: int = Field(default=0, ge=0)
     result_message_id: Identifier | None = None
+    continuation_input_id: Identifier | None = None
     error_code: str | None = Field(default=None, max_length=100)
     rules_fingerprint: str | None = None
     skills_fingerprint: str | None = None

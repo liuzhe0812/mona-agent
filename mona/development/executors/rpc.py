@@ -29,6 +29,13 @@ class RpcError(DevelopmentError):
         self.outcome_unknown = outcome_unknown
 
 
+class MissingNativeSessionError(RpcError):
+    """An exact correlated native resume rejection, never a timeout heuristic."""
+
+    def __init__(self):
+        super().__init__("native_session_not_found", "原生执行者明确返回原会话历史不存在；产品会话和项目文件仍保留。")
+
+
 class RemoteRpcError(RpcError):
     def __init__(self, rpc_code: int):
         # Native error text/data may contain prompts, paths or credentials.
@@ -63,6 +70,7 @@ class JsonRpcProcess:
         self._max_pending = max_pending
         self._next_id = 0
         self._pending: dict[JsonId, asyncio.Future[Any]] = {}
+        self._error_classifiers: dict[JsonId, Callable[[dict[str, Any]], RpcError | None]] = {}
         self._inbound: dict[tuple[type, JsonId], asyncio.Task[None]] = {}
         self._write_lock = asyncio.Lock()
         self._closed = False
@@ -95,6 +103,10 @@ class JsonRpcProcess:
         ))
         try:
             process = await asyncio.shield(spawning)
+        except OSError as exc:
+            code = "executable_access_denied" if isinstance(exc, PermissionError) else (
+                "invalid_executable_format" if getattr(exc, "winerror", None) in {193, 216} or exc.errno == 8 else "native_launch_failed")
+            raise RpcError(code, "本地程序未能启动；请核对路径、平台和访问权限。未发送任务。") from exc
         except asyncio.CancelledError:
             # A cancelled caller may already have created a child. Observe that
             # same spawn, drain/reap it, and never start another process.
@@ -120,7 +132,9 @@ class JsonRpcProcess:
         return raw
 
     async def request(self, method: str, params: dict[str, Any] | None = None,
-                      *, timeout: float | None = None) -> Any:
+                      *, timeout: float | None = None,
+                      omit_params: bool = False,
+                      classify_error: Callable[[dict[str, Any]], RpcError | None] | None = None) -> Any:
         budget = self._timeout if timeout is None else timeout
         if not math.isfinite(budget) or budget <= 0:
             raise ValueError("RPC timeout must be positive and finite")
@@ -130,9 +144,14 @@ class JsonRpcProcess:
             raise RpcError("rpc_busy", "原生连接待处理请求过多，请等待已有请求结果。")
         self._next_id += 1
         request_id = f"mona-{self._next_id}"
-        raw = self._encode({"id": request_id, "method": method, "params": params or {}})
+        message = {"id": request_id, "method": method}
+        if not omit_params:
+            message["params"] = params or {}
+        raw = self._encode(message)
         future = asyncio.get_running_loop().create_future()
         self._pending[request_id] = future
+        if classify_error is not None:
+            self._error_classifiers[request_id] = classify_error
         written = False
 
         async def exchange() -> Any:
@@ -155,6 +174,7 @@ class JsonRpcProcess:
                            outcome_unknown=written) from exc
         finally:
             self._pending.pop(request_id, None)
+            self._error_classifiers.pop(request_id, None)
             if not future.done():
                 future.cancel()
             elif not future.cancelled():
@@ -241,7 +261,11 @@ class JsonRpcProcess:
             error = message["error"]
             if not isinstance(error, dict) or type(error.get("code")) is not int:
                 raise ValueError("invalid error")
-            future.set_exception(RemoteRpcError(error["code"]))
+            classifier = self._error_classifiers.get(request_id)
+            classified = classifier(error) if classifier else None
+            # Only a sanitized category escapes this correlated reply; arbitrary
+            # vendor diagnostics are neither retained nor passed to the model.
+            future.set_exception(classified or RemoteRpcError(error["code"]))
         else:
             future.set_result(message["result"])
 

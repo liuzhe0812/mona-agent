@@ -7,13 +7,64 @@ from pathlib import Path
 import pytest
 
 from mona.development.context import load_project_context
-from mona.development.contracts import DevelopmentSession, ExecutorId, Project
-from mona.development.executors.base import SessionStart
-from mona.development.executors.codex import CodexExecutor
+from mona.development.contracts import DevelopmentSession, ExecutorId, PermissionMode, Project
+from mona.development.executors.base import NativeEvent, SessionStart
+from mona.development.executors.codex import _CAPABILITIES, CodexExecutor, _thread_permissions
 from mona.development.executors.codex_policy import CodexProfile
-from mona.development.executors.rpc import RpcError
+from mona.development.executors.rpc import RemoteRpcError, RpcError
 
 PEER = Path(__file__).with_name("native_peer.py").resolve()
+
+
+@pytest.mark.asyncio
+async def test_queued_command_fragments_are_combined_without_crossing_boundaries(tmp_path):
+    adapter, start = setup(tmp_path)
+    binding = await adapter.create_session(start)
+    runtime = adapter._threads[binding.native_session_id]
+    try:
+        fragments = ["行一\n", "second\n", "末尾\n"] * 1000
+        for delta in fragments:
+            runtime.publish(NativeEvent(native_turn_id="turn-output", type="command.output",
+                payload={"itemId": "command-a", "delta": delta}))
+        runtime.publish(NativeEvent(native_turn_id="turn-output", type="command.completed", payload={"id": "command-a"}))
+        runtime.publish(NativeEvent(native_turn_id="turn-output", type="command.output", payload={"itemId": "command-b", "delta": "other"}))
+        runtime.queue.put_nowait((None, 0))
+        events = [event async for event in adapter.events(binding)]
+        boundary = next(index for index, event in enumerate(events) if event.type == "command.completed")
+        output = [event for event in events[:boundary] if event.type == "command.output"]
+        assert "".join(event.payload["delta"] for event in output) == "".join(fragments)
+        assert all(event.payload["itemId"] == "command-a" for event in output)
+        assert events[boundary + 1].payload == {"itemId": "command-b", "delta": "other"}
+        assert len(events) < 20 and runtime.queued_bytes == 0 and not runtime.desynchronized
+    finally:
+        await adapter.shutdown()
+
+
+@pytest.mark.parametrize(("mode", "expected"), [
+    (PermissionMode.ASK, ("on-request", "user", "workspace-write")),
+    (PermissionMode.AUTO, ("on-request", "user", "workspace-write")),
+    (PermissionMode.FULL_ACCESS, ("never", "user", "danger-full-access")),
+])
+def test_codex_permission_mode_maps_to_native_thread_policy(mode, expected):
+    assert _thread_permissions(mode, readonly=False) == expected
+    assert _thread_permissions(mode, readonly=True) == ("on-request", "user", "read-only")
+    assert _CAPABILITIES.permission_modes == [PermissionMode.ASK, PermissionMode.AUTO, PermissionMode.FULL_ACCESS]
+
+
+@pytest.mark.asyncio
+async def test_full_access_thread_request_is_rejected_when_server_returns_weaker_policy(tmp_path):
+    executor, start = setup(tmp_path, mode="weaker_policy")
+    start.session.permission_mode = PermissionMode.FULL_ACCESS
+    try:
+        with pytest.raises(RpcError) as error:
+            await executor.create_session(start)
+        assert error.value.code == "project_policy_violation"
+        request = next(row for row in trace(executor) if row.get("method") == "thread/start")
+        assert request["params"]["approvalPolicy"] == "never"
+        assert request["params"]["approvalsReviewer"] == "user"
+        assert request["params"]["sandbox"] == "danger-full-access"
+    finally:
+        await executor.shutdown()
 
 
 @pytest.mark.asyncio
@@ -95,6 +146,121 @@ async def collect_until(executor, binding, kind):
 
 
 @pytest.mark.asyncio
+async def test_modern_codex_status_and_send_do_not_depend_on_turn_history(tmp_path):
+    executor, start = setup(tmp_path, mode="codex_modern")
+    try:
+        binding = await executor.create_session(start)
+        assert await executor.get_status(binding) == "idle"
+
+        receipt = await executor.send(binding, "safe-pipe-input", "instant")
+        assert receipt.outcome == "accepted"
+        assert receipt.native_turn_id
+        events = await collect_until(executor, binding, "run.completed")
+        assert any(event.type == "agent.message.completed" for event in events)
+
+        with pytest.raises(RpcError) as error:
+            await executor.inspect_turn(binding, receipt.native_turn_id)
+        assert error.value.code == "native_history_unavailable_idle"
+        assert await executor.get_status(binding) == "idle"
+
+        requests = trace(executor)
+        initialize = next(request for request in requests if request.get("method") == "initialize")
+        assert initialize["params"]["capabilities"]["experimentalApi"] is True
+        reads = [request for request in requests if request.get("method") == "thread/read"]
+        assert any(request["params"].get("includeTurns") is False for request in reads)
+        assert any(request["params"].get("includeTurns") is True for request in reads)
+        assert len([request for request in requests if request.get("method") == "turn/start"]) == 1
+        executor._runtime(binding).fault("native_result_unconfirmed")
+        assert await executor.get_status(binding) == "unknown"
+        assert (await executor.send(binding, "do-not-replay", "instant")).outcome == "unknown"
+        assert len([request for request in trace(executor) if request.get("method") == "turn/start"]) == 1
+    finally:
+        await executor.shutdown()
+
+
+@pytest.mark.asyncio
+async def test_metadata_only_resume_preserves_unobserved_native_activity(tmp_path):
+    executor, start = setup(tmp_path, mode="codex_modern")
+    try:
+        binding = await executor.create_session(start)
+        assert (await executor.send(binding, "persisted-input", "instant")).outcome == "accepted"
+        await collect_until(executor, binding, "run.completed")
+        await executor._client.close()
+        state_path = executor.profile.project_root / "peer-state.json"
+        state = json.loads(state_path.read_text(encoding="utf8"))
+        state["threads"][binding.native_session_id]["status"] = {"type": "active"}
+        state_path.write_text(json.dumps(state), encoding="utf8")
+
+        restored = await executor.resume_session(binding)
+        assert await executor.get_status(restored) == "unknown"
+        assert (await executor.send(restored, "blocked-input", "instant")).outcome == "unknown"
+        assert len([request for request in trace(executor) if request.get("method") == "turn/start"]) == 1
+    finally:
+        await executor.shutdown()
+
+
+@pytest.mark.asyncio
+async def test_modern_codex_resume_avoids_loading_turn_history(tmp_path):
+    executor, start = setup(tmp_path, mode="codex_modern")
+    try:
+        binding = await executor.create_session(start)
+        receipt = await executor.send(binding, "before-restart", "instant")
+        assert receipt.outcome == "accepted"
+        await collect_until(executor, binding, "run.completed")
+        persisted_thread = json.loads((executor.profile.project_root / "peer-state.json").read_text(encoding="utf8"))["threads"][binding.native_session_id]
+        assert any(turn.get("id") == receipt.native_turn_id and turn.get("status") == "completed"
+                   for turn in persisted_thread["turns"])
+
+        await executor._client.close()
+        client = await executor._ensure_started()
+        with pytest.raises(RemoteRpcError) as unsupported_resume:
+            await client.request("thread/resume", {"threadId": binding.native_session_id})
+        assert unsupported_resume.value.rpc_code == -32601
+
+        restored = await executor.resume_session(binding)
+        assert restored.id == binding.id
+        assert restored.native_session_id == binding.native_session_id
+        assert await executor.get_status(restored) == "idle"
+
+        requests = trace(executor)
+        resume = next(request for request in reversed(requests) if request.get("method") == "thread/resume")
+        assert resume["params"]["excludeTurns"] is True
+        assert not any(request.get("method") == "thread/read" and request.get("params", {}).get("includeTurns") is True
+                       for request in requests)
+    finally:
+        await executor.shutdown()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(("mode", "user_agent"), [
+    ("codex_old", "codex_cli_rs/0.124.0"),
+    ("codex_unknown", None),
+])
+async def test_resume_omits_exclude_turns_for_old_or_unknown_cli_version(tmp_path, mode, user_agent):
+    executor, start = setup(tmp_path, mode=mode)
+    try:
+        binding = await executor.create_session(start)
+        assert executor._version == user_agent
+        receipt = await executor.send(binding, "before-restart", "instant")
+        assert receipt.outcome == "accepted"
+        await collect_until(executor, binding, "run.completed")
+        persisted_thread = json.loads((executor.profile.project_root / "peer-state.json").read_text(encoding="utf8"))["threads"][binding.native_session_id]
+        assert any(turn.get("id") == receipt.native_turn_id and turn.get("status") == "completed"
+                   for turn in persisted_thread["turns"])
+
+        await executor._client.close()
+        restored = await executor.resume_session(binding)
+        assert restored.native_session_id == binding.native_session_id
+
+        requests = trace(executor)
+        resume = next(request for request in reversed(requests) if request.get("method") == "thread/resume")
+        assert "excludeTurns" not in resume["params"]
+        assert resume["params"]["threadId"] == binding.native_session_id
+    finally:
+        await executor.shutdown()
+
+
+@pytest.mark.asyncio
 async def test_native_threads_share_host_but_not_input_or_events(tmp_path):
     executor, start = setup(tmp_path)
     try:
@@ -157,12 +323,18 @@ async def test_steer_and_interrupt_ack_is_not_termination(tmp_path):
 
 @pytest.mark.asyncio
 async def test_timeout_keeps_same_request_unknown_without_replay(tmp_path):
-    executor, start = setup(tmp_path, timeout=1)
+    executor, start = setup(tmp_path, mode="codex_modern", timeout=1)
     try:
         binding = await executor.create_session(start)
+        normal_timeout = executor._client._timeout
         executor._client._timeout = 0.03
-        receipt = await executor.send(binding, "uncertain", "lost_ack")
+        try:
+            receipt = await executor.send(binding, "uncertain", "lost_ack")
+        finally:
+            # Inject a timeout only into dispatch, not the later real status read.
+            executor._client._timeout = normal_timeout
         assert receipt.outcome == "unknown"
+        assert await executor.get_status(binding) == "unknown"
         assert (await executor.send(binding, "uncertain", "lost_ack")).outcome == "unknown"
         await collect_until(executor, binding, "run.completed")
         assert await executor.get_status(binding) == "idle"

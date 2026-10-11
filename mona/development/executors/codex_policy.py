@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import json
 import os
+import sys
 from collections.abc import Mapping
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -17,10 +18,24 @@ from mona.development.context import ProjectContext
 from mona.development.executors.rpc import RpcError
 
 _ENV_KEYS = frozenset({
-    "PATH", "PATHEXT", "SYSTEMROOT", "WINDIR", "COMSPEC", "TEMP", "TMP", "TMPDIR",
+    "PATH", "PATHEXT", "SYSTEMROOT", "SYSTEMDRIVE", "WINDIR", "COMSPEC", "TEMP", "TMP", "TMPDIR",
     "LANG", "LC_ALL", "HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY", "NO_PROXY",
     "SSL_CERT_FILE", "SSL_CERT_DIR", "NUMBER_OF_PROCESSORS", "PROCESSOR_ARCHITECTURE",
 })
+
+
+def similar_command_prefix(params: dict[str, Any]) -> list[str] | None:
+    prefix = params.get("proposedExecpolicyAmendment")
+    if not isinstance(prefix, list) or not 1 <= len(prefix) <= 32 or any(
+            not isinstance(part, str) or not part.strip() or len(part) > 2048 or "\x00" in part or "\n" in part for part in prefix):
+        return None
+    choices = params.get("availableDecisions")
+    if choices is not None and (not isinstance(choices, list) or not any(
+            value == "acceptWithExecpolicyAmendment" or isinstance(value, dict) and "acceptWithExecpolicyAmendment" in value for value in choices)):
+        return None
+    return prefix
+
+
 _FIXED_CONFIG: dict[str, Any] = {
     "features.hooks": False,
     "features.memories": False,
@@ -28,6 +43,9 @@ _FIXED_CONFIG: dict[str, Any] = {
     "features.plugins": False,
     "features.remote_plugin": False,
     "features.goals": False,
+    "features.multi_agent": False,
+    "features.multi_agent_v2": False,
+    "agents.enabled": False,
     "notify": [],
     "mcp_servers": {},
     "project_doc_max_bytes": 0,
@@ -37,6 +55,12 @@ _FIXED_CONFIG: dict[str, Any] = {
     "shell_environment_policy.inherit": "core",
     "shell_environment_policy.ignore_default_excludes": False,
 }
+
+
+def _fixed_config() -> dict[str, Any]:
+    # Windows otherwise downgrades workspace-write to read-only. Enable the
+    # restricted-token backend without an elevated setup or unrestricted access.
+    return {**_FIXED_CONFIG, **({"windows.sandbox": "unelevated"} if sys.platform == "win32" else {})}
 
 
 def _toml(value: Any) -> str:
@@ -60,10 +84,12 @@ class CodexProfile:
     home: Path
     project_root: Path
     environment: Mapping[str, str] = field(repr=False)
+    model_endpoint: str | None = None
 
 
 def prepare_codex_profile(executable: Path, home: Path, project_root: Path,
-                          *, environment: Mapping[str, str] | None = None) -> CodexProfile:
+                          *, environment: Mapping[str, str] | None = None,
+                          model_endpoint: str | None = None, model_token: str | None = None) -> CodexProfile:
     """Home is a host-owned persistent directory outside the source project."""
     executable = Path(executable).resolve(strict=True)
     project_root = Path(project_root).resolve(strict=True)
@@ -94,20 +120,37 @@ def prepare_codex_profile(executable: Path, home: Path, project_root: Path,
     env.update({"HOME": str(home), "USERPROFILE": str(home), "CODEX_HOME": str(home),
                 "PYTHONUTF8": "1", "PYTHONIOENCODING": "utf-8", "NO_COLOR": "1"})
     args = [str(executable), "app-server"]
-    config = {**_FIXED_CONFIG, f"projects.{json.dumps(str(project_root))}.trust_level": "untrusted"}
+    config = {**_fixed_config(), f"projects.{json.dumps(str(project_root))}.trust_level": "untrusted"}
+    if model_endpoint and model_token:
+        env["MONA_MODEL_ROUTE_TOKEN"] = model_token
+        config.update({"model_provider": "mona_models", "model_providers.mona_models.name": "Mona Models",
+            "model_providers.mona_models.base_url": model_endpoint + "/v1",
+            "model_providers.mona_models.wire_api": "responses",
+            "model_providers.mona_models.env_key": "MONA_MODEL_ROUTE_TOKEN",
+            "model_providers.mona_models.requires_openai_auth": False,
+            "model_providers.mona_models.supports_websockets": False,
+            "features.enable_request_compression": False, "web_search": "disabled"})
     for key, value in config.items():
         args.extend(("-c", f"{key}={_toml(value)}"))
-    return CodexProfile(tuple(args), home, project_root, env)
+    return CodexProfile(tuple(args), home, project_root, env, model_endpoint)
 
 
-def validate_effective_config(response: Any) -> None:
+def validate_effective_config(response: Any, *, model_endpoint: str | None = None) -> None:
     if not isinstance(response, dict) or not isinstance(response.get("config"), dict):
         raise RpcError("isolation_unverified", "原生执行者未返回有效配置，未启动开发会话。")
     config = response["config"]
+    if model_endpoint:
+        for key, expected in {"model_provider": "mona_models",
+                "model_providers.mona_models.base_url": model_endpoint + "/v1",
+                "model_providers.mona_models.wire_api": "responses",
+                "model_providers.mona_models.env_key": "MONA_MODEL_ROUTE_TOKEN",
+                "model_providers.mona_models.requires_openai_auth": False}.items():
+            if _get(config, key) != expected:
+                raise RpcError("model_route_unverified", "模型来源配置未生效，未启动任务。")
     # Do not mistake an empty-table override for removal after recursive merging.
     if config.get("mcp_servers") or config.get("hooks") or config.get("plugins"):
         raise RpcError("project_policy_violation", "原生配置仍包含自定义 MCP、Hooks 或插件，未启动开发会话。")
-    for key, expected in _FIXED_CONFIG.items():
+    for key, expected in _fixed_config().items():
         if key in {"mcp_servers", "project_root_markers", "project_doc_fallback_filenames", "notify"}:
             actual = _get(config, key)
             if actual not in (None, expected):
