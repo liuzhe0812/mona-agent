@@ -111,7 +111,7 @@ async def main(output: str) -> int:
         session = store.create_session(project.id, title="Coding real-provider acceptance")
         manager = SessionManager(target / "state")
         transcript = manager.get_or_create(session.transcript_key)
-        tools = CodingTools(project_dir, session.transcript_key, config.tools.exec)
+        tools = CodingTools(project_dir, session.transcript_key, config.development.coding.exec)
         report["sessionId"] = session.id
         report["turns"] = []
         checkpoints = []
@@ -133,7 +133,7 @@ async def main(output: str) -> int:
             context = load_project_context(project, config.development)
             spec = build_coding_run_spec(context, session, transcript, tools, model=snapshot.model,
                 context_window_tokens=snapshot.context_window_tokens,
-                defaults=config.agents.defaults.model_copy(update={"max_tool_iterations": 24}))
+                defaults=config.development.coding.model_copy(update={"max_tool_iterations": 24}))
             spec.llm_timeout_s = 150
             spec.enforce_llm_timeout_for_streaming = True
             baseline = copy.deepcopy(transcript.messages)

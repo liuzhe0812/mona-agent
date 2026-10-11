@@ -1,0 +1,12 @@
+OpenAI Codex
+Copyright 2025 OpenAI
+
+This product includes the unmodified explorer and worker role descriptions from
+codex-rs/core/src/agent/role.rs and delegation guidance excerpts from
+codex-rs/core/src/tools/handlers/multi_agents_spec.rs in OpenAI Codex,
+licensed under Apache-2.0. Dispatch and wait references in the excerpts are
+adapted to Mona's host-tool actions.
+Project authorization, coordination and cross-engine routing guidance is
+Mona-specific; only the applicable bounded-task and wait guidance is reused.
+Source: https://github.com/openai/codex
+The accompanying license is provided in CODEX-LICENSE.

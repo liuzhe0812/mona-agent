@@ -28,6 +28,16 @@ AGENTS.md
 mona-auth/
 mona-worker/
 scripts/
+!/scripts/
+/scripts/*
+!/scripts/build_update_package.py
+!/scripts/release_upload.py
+!/scripts/prepare_development_sandbox.py
+!webui/scripts/
+webui/scripts/*
+!webui/scripts/build-zcode-stream-css.mjs
+!webui/scripts/build-zcode-stream-css.test.mjs
+!webui/scripts/vite-cache-isolation.test.mjs
 !mona/skills/mona-video/scripts/
 !mona/skills/mona-video/scripts/compile_scene_spec.py
 !mona/agents/com.mona.academic-researcher/skills/*/scripts/
@@ -38,12 +48,27 @@ design-assets/
 # local tests ignored.
 !/tests/
 /tests/*
+!/tests/development/
+/tests/development/*
+!/tests/development/test_model_bridge.py
+!/tests/development/test_claude_account.py
+!/tests/development/test_account_usage.py
+!/tests/development/test_git_operations.py
+!/tests/development/test_git_generation.py
+!/tests/development/test_native_host_tools.py
+!/tests/development/test_native_collaboration_flow.py
+!/tests/development/test_permissions.py
+!/tests/development/test_sandbox.py
+!/tests/development/test_fork.py
+!/tests/development/test_fork_native.py
+!/tests/development/test_session_titles.py
 !/tests/test_media_provider_clients.py
 !/tests/providers/
 /tests/providers/*
 !tests/providers/test_image_generation.py
 !tests/providers/test_custom_provider_network.py
 !tests/providers/test_video_generation.py
+!tests/providers/test_vision_fallback.py
 !/tests/test_video_style_system.py
 !/tests/test_video_storyboard_schema.py
 !/tests/test_video_series_project_integration.py
@@ -59,6 +84,7 @@ design-assets/
 !/tests/test_video_runtime_download_resume.py
 !/tests/tools/
 !/tests/test_mona_managed_provider.py
+!/tests/test_chat_model_type_override.py
 !/tests/test_config_loader.py
 !/tests/test_runner_repeat_guard.py
 !/tests/test_automation_api.py
@@ -75,7 +101,20 @@ design-assets/
 !tests/tools/test_scientific_backend.py
 !/tests/agent/
 /tests/agent/*
+!tests/agent/test_consolidation_backoff.py
+!tests/agent/conftest.py
+!tests/agent/test_consolidator.py
+!tests/agent/test_consolidation_ratio.py
+!tests/agent/test_loop_consolidation_tokens.py
+!tests/agent/test_max_messages_config.py
+!tests/agent/test_session_manager_history.py
+!tests/agent/test_auto_compact.py
+!tests/agent/test_message_flow_recovery.py
+!tests/agent/test_tool_dispatch_recovery.py
+!tests/agent/test_token_estimate_consistency.py
+!tests/agent/test_parallel_tool_budget.py
 !tests/agent/test_harness_prompt_budget.py
+!tests/agent/test_prompt_bootstrap.py
 !tests/agent/test_skill_catalog_budget.py
 !tests/agent/test_academic_researcher.py
 !tests/agent/test_academic_research_acceptance.py
@@ -91,6 +130,7 @@ design-assets/
 !tests/agent/test_runner_persistence.py
 !tests/agent/test_loop_save_turn.py
 !tests/agent/test_attachment_access.py
+!tests/agent/test_pdf_visual.py
 !tests/agent/test_agent_package_store.py
 !tests/agent/test_agent_management.py
 !tests/agent/test_expert_catalog.py
@@ -126,6 +166,7 @@ design-assets/
 !tests/e2e/test_video_series_style_e2e.py
 !/tests/services/
 /tests/services/*
+!tests/services/test_server.py
 !tests/services/test_office_api.py
 !/tests/services/stock/
 /tests/services/stock/*
@@ -155,11 +196,17 @@ design-assets/
 !/tests/channels/
 /tests/channels/*
 !tests/channels/test_websocket_channel.py
+!tests/channels/test_websocket_file_upload.py
+!tests/channels/test_file_preview_performance.py
 !/tests/office/
 /tests/office/*
 !tests/office/**
+!/tests/cli/
+/tests/cli/*
+!tests/cli/test_gateway_shutdown.py
 !/tests/runtime/
 /tests/runtime/*
+!tests/runtime/test_desktop_process.py
 !tests/runtime/test_verified_download.py
 !tests/runtime/test_runtime_manager.py
 !tests/runtime/test_runtime_catalog.py
@@ -186,11 +233,32 @@ design-assets/
 !tests/materials/test_visual_knowledge.py
 !tests/materials/test_materials_phase1.py
 !tests/materials/test_wiki_compile.py
+!/tests/email_intel/
+/tests/email_intel/*
+!tests/email_intel/test_schedule_extract.py
+!tests/email_intel/test_schedule_extract_api.py
 !tests/test_official_distribution_builder.py
+!tests/test_webui_history_cache.py
+!tests/test_webui_replay_hotpath.py
 hardware/
 
 # 项目文档仅在本地维护，不上传 GitHub。
 docs/
+!docs/
+docs/*
+!docs/architecture/
+docs/architecture/*
+!docs/architecture/services-split-design.md
+!docs/architecture/pdf-visual-reading.md
+!docs/architecture/agent-prompt-policy.md
+!docs/architecture/engineering-boundaries.md
+!docs/architecture/module-invariants.md
+!docs/architecture/browser-development-framework.md
+!docs/architecture/development-permissions.md
+!docs/plans/
+docs/plans/*
+!docs/plans/2026-10-08-dsh-message-flow-improvements.md
+!docs/plans/2026-10-08-development-permissions.md
 
 # 多 Agent 开发临时产物（baseline 对比目录、patch/scratch 中转，禁止入库）
 .baseline_check/
@@ -232,6 +300,7 @@ webui/node_modules/
 webui/dist/
 webui/coverage/
 webui/.vite/
+webui/src/components/development/zcode/zcode-stream.css
 *.tsbuildinfo
 
 # Tauri desktop client

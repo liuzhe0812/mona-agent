@@ -69,6 +69,10 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
+development = [
+    "claude-agent-sdk>=0.2.134,<0.3.0",
+    "codebuddy-agent-sdk>=0.3.264,<0.4.0",
+]
 api = [
     "aiohttp>=3.9.0,<4.0.0",
 ]
@@ -118,6 +122,11 @@ exclude = ["mona/web/**"]
 include = [
     "mona/**/*.py",
     "mona/templates/**/*.md",
+    "mona/development/sandbox_node/**",
+    "mona/development/CINDY-LICENSE",
+    "mona/development/CINDY-NOTICE",
+    "mona/development/CODEX-LICENSE",
+    "mona/development/CODEX-NOTICE",
     "mona/skills/**/*.md",
     "mona/skills/**/*.sh",
     "mona/skills/**/*.ps1",

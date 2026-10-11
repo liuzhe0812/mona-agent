@@ -4,7 +4,7 @@ import typography from "@tailwindcss/typography";
 /** @type {import('tailwindcss').Config} */
 export default {
   darkMode: ["class"],
-  content: ["./index.html", "./src/**/*.{ts,tsx}"],
+  content: ["./index.html", "./src/**/*.{ts,tsx}", "!./src/components/development/zcode/**/*"],
   theme: {
     container: {
       center: true,
