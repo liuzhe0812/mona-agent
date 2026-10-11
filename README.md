@@ -78,14 +78,15 @@ npm --prefix webui/office-editor install
 cargo install tauri-cli --version "^2" --locked
 ```
 
-启动桌面开发模式：
+在仓库根目录启动桌面开发模式：
 
 ```powershell
-cd src-tauri
-cargo tauri dev
+npm run dev
 ```
 
 Tauri 会启动界面开发服务，并按客户端配置管理本地后端。开发模式使用系统 Python，请确保依赖安装在桌面进程能够找到的 Python 环境中。
+
+默认启动关闭桌面宿主的文件监听重启，避免 Code 任务执行期间被自动重启打断；前端 Vite 热更新仍然保留。修改 Rust 代码后需手动重启。需要调试 Rust 热重载时，使用 `npm run dev:watch`，该模式会在文件变化时中断当前任务并重启桌面程序。
 
 仅构建桌面前端资源时，在仓库根目录运行：
 
