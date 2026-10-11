@@ -295,11 +295,13 @@ class MCPToolWrapper(Tool):
         tool_timeout: int = 30,
         computer_session_nonce: str | None = None,
         reconnect=None,
+        computer_capture=None,
     ):
         self._session = session
         self._server_name = server_name
         self.model_visible = server_name != BUILTIN_COMPUTER_SERVER_NAME
         self._computer_session_nonce = computer_session_nonce
+        self._computer_capture = computer_capture
         self._computer_session_context: ContextVar[str | None] = ContextVar(
             f"computer_session_{id(self)}", default=None,
         )
@@ -552,6 +554,15 @@ class MCPToolWrapper(Tool):
                         "COMPUTER_SESSION_CLOSED",
                         "Computer session was closed by the driver and could not be restarted.",
                     )
+                if is_computer and self._original_name == "get_window_state" and self._computer_capture:
+                    try:
+                        result = self._computer_capture(result, kwargs)
+                    except (ValueError, OSError) as exc:
+                        if turn is not None:
+                            turn.observation = None
+                        logger.warning("Computer window capture rejected: {}", exc)
+                        return _computer_error("COMPUTER_CAPTURE_UNRELIABLE",
+                                               "Window screenshot cannot safely locate pixels. Focus the exact window and observe again; do not guess coordinates.")
                 # Success — extract result
                 parts: list[str] = []
                 blocks: list[dict[str, Any]] = []
@@ -677,7 +688,7 @@ class _ComputerFacadeTool(Tool):
         properties: dict[str, Any] = {}
         for name in self._actions.values():
             properties.update(_computer_action_schema(self._registry.get(name))["properties"])
-        properties["image_id"] = {"type": "string", "description": "Image ID from the current original screenshot or latest zoom. Omit only for original screenshot coordinates."}
+        properties["image_id"] = {"type": "string", "description": "Required for all pixel coordinates: exact image_id of the current original screenshot or latest zoom. Never use an earlier image."}
         return {
             "type": "object",
             "properties": {
@@ -724,17 +735,19 @@ class _ComputerFacadeTool(Tool):
         if "session" in args or "screenshot_out_file" in args:
             return _computer_error("INVALID_COMPUTER_ARGUMENTS", "Session and screenshot paths are managed by Mona.")
         is_action = self.name == "computer_act"
+        source_observation = turn.observation
+        uses_coordinates = any(key in args for key in ("x", "y", "from_x", "from_y", "to_x", "to_y"))
         if is_action:
             from mona.computer_use.actions import (
                 image_point_to_original,
                 repeated_no_progress_error,
             )
 
-            if turn.observation is None and action != "launch":
+            if turn.observation is None and action not in {"launch", "focus"}:
                 return _computer_error("INVALID_COMPUTER_TARGET", validate_action(action, args, None))
             image_id = args.pop("image_id", None)
-            if (turn.observation or {}).get("detail_view") and image_id is None and any(key in args for key in ("x", "y", "from_x", "from_y", "to_x", "to_y")):
-                return _computer_error("INVALID_COMPUTER_TARGET", "A detail image exists. Specify the original or detail image_id before using pixel coordinates.")
+            if uses_coordinates and not isinstance(image_id, str):
+                return _computer_error("INVALID_COMPUTER_TARGET", "Pixel coordinates require the exact current image_id. Observe the target before locating it.")
             try:
                 for x_key, y_key in (("x", "y"), ("from_x", "from_y"), ("to_x", "to_y")):
                     if x_key in args or y_key in args:
@@ -793,6 +806,28 @@ class _ComputerFacadeTool(Tool):
                 if before_geometry is not None and self._geometry(args) != before_geometry:
                     turn.pending_action = None
                     return _computer_error("STALE_COMPUTER_TARGET", "Window geometry changed while focusing; observe again.")
+            if uses_coordinates and source_observation is not None:
+                from mona.computer_use.perception import coordinate_target_is_current
+
+                # Focusing and model latency can change content without changing window bounds.
+                # Re-capture through the same driver, preserving its authoritative pixel mapping.
+                turn.pending_action = None
+                observer = ComputerObserveTool(
+                    self._registry, provider=self._provider, model=self._model,
+                    runtime_config_loader=self._runtime_config_loader, provider_loader=self._provider_loader,
+                    permission_check=self._permission_check, geometry_reader=self._geometry_reader,
+                )
+                scope = source_observation["scope"]
+                target_args = ({"pid": source_observation["pid"], "window_id": source_observation["window_id"]}
+                               if scope == "window" else {})
+                fresh = await observer.execute(action="window" if scope == "window" else "desktop", arguments=target_args)
+                if _computer_failed(fresh):
+                    turn.observation = None
+                    return fresh
+                if not coordinate_target_is_current(source_observation, turn.observation, args):
+                    return _computer_error("STALE_COMPUTER_TARGET", "The target image changed before input. No requested input was sent. Observe and locate the target again.")
+                remember_pending_action(turn, action, args)
+                turn.observation = None
             if self._permission_check and not self._permission_check():
                 turn.pending_action = None
                 return _computer_error("COMPUTER_PERMISSION_REVOKED", "Computer operation permission was revoked.")
@@ -813,11 +848,12 @@ class _ComputerFacadeTool(Tool):
 class ComputerObserveTool(_ComputerFacadeTool):
     name = "computer_observe"
     description = (
-        "Observe the local desktop without changing it. Actions: desktop (screenshot), "
+        "Read current local desktop or application state for tasks requiring live computer information. "
+        "Actions: desktop (screenshot), "
         "apps, windows, window (UI tree plus screenshot; arguments pid/window_id), "
         "verify, health, permissions, accessibility, zoom (crop the current screenshot using x1/y1/x2/y2), "
         "and preview (mark a planned x/y or candidate_id without input). "
-        "Start with windows to identify the target; window/desktop return screenshots directly. Observe the same target "
+        "windows lists target identifiers; window/desktop return screenshots directly. Observe the same target "
         "again after every computer_act operation. Window/desktop screenshots authorize "
         "the next action only. Zoom preserves that observation and returns an image_id; "
         "pass that exact image_id when using zoom pixel coordinates. Preview does not send input."
@@ -925,9 +961,9 @@ class ComputerObserveTool(_ComputerFacadeTool):
         turn.model_response_timeout_seconds = config.tools.computer_use.model_response_timeout_seconds
         enabled = bool(config.tools.computer_use.use_decision_model and config.tools.jev.api_key)
         guidance = (
-            "Computer decision acceleration is enabled. Once the target window is identified, "
-            "call computer_act(action='run', arguments={pid, window_id, goal, completion_criteria}) "
-            "with one short phase goal; let it observe and execute instead of planning every click."
+            "Computer decision acceleration is enabled. "
+            "computer_act(action='run', arguments={pid, window_id, goal, completion_criteria}) "
+            "can perform a requested interaction phase and report completion or handoff."
             if enabled else "Computer decision acceleration is disabled; inspect the screenshot directly and use single-step actions."
         )
         if turn.perception_cache.get("failure"):
@@ -964,15 +1000,16 @@ class ComputerActTool(_ComputerFacadeTool):
         "scroll, and menu. Put the selected action's arguments inside arguments. Prefer "
         "element_token from the latest window observation for controls; never send a bare "
         "element_index. After a zoom, always pass the original or detail image_id with pixel coordinates. "
+        "All pixel coordinates require the current image_id. Mona rechecks the target image before input. "
         "Use screenshot-local x/y for canvas content or controls absent "
         "from the element tree, WITHOUT an element_token. Mona focuses the exact window "
         "before input and preserves the chosen control or coordinate route; delivery is "
         "always foreground and managed by Mona. "
-        "After launching an app, observe its window and focus it before interacting. "
+        "Focus accepts an exact pid/window_id from windows even before a screenshot. "
+        "For a covered or newly launched window, focus it, then observe before interacting. "
         "Re-observe after every action. Desktop coordinates require a fresh desktop screenshot. "
-        "When the observation reports decision-model acceleration enabled, prefer action=run "
-        "with one short window phase goal immediately after identifying the window; it observes, "
-        "decides, acts and verifies internally. Do not first solve the entire task in long reasoning."
+        "When decision acceleration is enabled, action=run accepts a window phase goal "
+        "and completion criteria, then observes, acts and verifies internally."
     )
     _actions = {
         "launch": "computer_launch_app",
@@ -1365,11 +1402,76 @@ async def connect_single_mcp_server(
     computer_provider_loader=None,
     computer_permission_check=None,
 ) -> AsyncExitStack | None:
-    """Connect to a single MCP server and register its tools/resources/prompts.
+    """Keep transport contexts in one task; callers receive a close-only stack."""
+    ready = asyncio.get_running_loop().create_future()
+    stop = asyncio.Event()
+
+    async def own_connection() -> None:
+        try:
+            # MCP 的 AnyIO cancel scope 必须在同一 Task 内进出；后台连接不能绑在
+            # 启动/HTTP 请求 Task 上，否则动态增删或异常清理会取消整个 Gateway。
+            async with AsyncExitStack() as server_stack:
+                connected = await _open_mcp_server(
+                    name, cfg, registry, server_stack, reconnect,
+                    computer_provider=computer_provider, computer_model=computer_model,
+                    runtime_config_loader=runtime_config_loader,
+                    computer_provider_loader=computer_provider_loader,
+                    computer_permission_check=computer_permission_check,
+                )
+                ready.set_result(connected is not None)
+                if connected is not None:
+                    await stop.wait()
+        except BaseException as error:
+            if not ready.done():
+                ready.set_exception(error)
+            raise
+
+    owner = asyncio.create_task(own_connection(), name=f"mcp-connection:{name}")
+
+    def observe_close(task: asyncio.Task) -> None:
+        if not task.cancelled() and (error := task.exception()) is not None:
+            logger.warning("MCP server '{}' connection ended ({})", name, type(error).__name__)
+
+    owner.add_done_callback(observe_close)
+    try:
+        connected = await asyncio.shield(ready)
+    except BaseException:
+        owner.cancel()
+        await asyncio.gather(owner, return_exceptions=True)
+        if ready.done() and not ready.cancelled():
+            ready.exception()
+        raise
+    if not connected:
+        await owner
+        return None
+
+    async def close() -> None:
+        stop.set()
+        result, = await asyncio.gather(owner, return_exceptions=True)
+        if isinstance(result, BaseException) and not isinstance(result, asyncio.CancelledError):
+            raise result
+
+    handle = AsyncExitStack()
+    handle.push_async_callback(close)
+    return handle
+
+
+async def _open_mcp_server(
+    name: str,
+    cfg,
+    registry: ToolRegistry,
+    server_stack: AsyncExitStack,
+    reconnect=None,
+    *,
+    computer_provider: Any | None = None,
+    computer_model: str | None = None,
+    runtime_config_loader=None,
+    computer_provider_loader=None,
+    computer_permission_check=None,
+) -> AsyncExitStack | None:
+    """Connect and register capabilities inside the connection's owner task.
 
     Returns the server's dedicated AsyncExitStack on success, or None on failure.
-    Each server gets its own stack to prevent cancel scope conflicts
-    when multiple MCP servers are configured.
 
     ``reconnect`` is an optional async callback taking the server name and
     returning the replacement tool wrapper (or None). Wrappers use it to rebuild
@@ -1379,9 +1481,6 @@ async def connect_single_mcp_server(
     from mcp.client.sse import sse_client
     from mcp.client.stdio import stdio_client
     from mcp.client.streamable_http import streamable_http_client
-
-    server_stack = AsyncExitStack()
-    await server_stack.__aenter__()
 
     try:
         transport_type = cfg.type
@@ -1483,6 +1582,11 @@ async def connect_single_mcp_server(
 
             return _reconnect_tool
 
+        computer_capture = None
+        if name == BUILTIN_COMPUTER_SERVER_NAME:
+            from mona.computer_use.window_capture import correct_scaled_window_capture
+
+            computer_capture = correct_scaled_window_capture
         for tool_def in tools.tools:
             wrapped_name = _wrapped_tool_name(name, tool_def.name)
             if (
@@ -1502,6 +1606,7 @@ async def connect_single_mcp_server(
                 tool_def,
                 tool_timeout=cfg.tool_timeout,
                 computer_session_nonce=computer_session_nonce,
+                computer_capture=computer_capture,
                 reconnect=(
                     make_reconnect(tool_def.name)
                     if reconnect is not None and name == BUILTIN_COMPUTER_SERVER_NAME
@@ -1616,29 +1721,33 @@ async def connect_mcp_servers(
     """Connect to configured MCP servers and register their tools, resources, prompts.
 
     Returns a dict mapping server name -> its dedicated AsyncExitStack.
-    Each server gets its own stack to prevent cancel scope conflicts
-    when multiple MCP servers are configured.
+    Each handle closes its connection in the task that opened it.
     """
     server_stacks: dict[str, AsyncExitStack] = {}
 
-    for name, cfg in mcp_servers.items():
-        try:
-            stack = await connect_single_mcp_server(
-                name,
-                cfg,
-                registry,
-                reconnect,
-                computer_provider=computer_provider,
-                computer_model=computer_model,
-                runtime_config_loader=runtime_config_loader,
-                computer_provider_loader=computer_provider_loader,
-                computer_permission_check=computer_permission_check,
-            )
-        except Exception as e:
-            logger.exception("MCP server '{}' connection failed: {}", name, e)
-            continue
-        if stack is not None:
-            server_stacks[name] = stack
+    try:
+        # 内置服务可在 await 连接期间加入配置，不能跨 await 遍历可变字典视图。
+        for name, cfg in list(mcp_servers.items()):
+            try:
+                stack = await connect_single_mcp_server(
+                    name,
+                    cfg,
+                    registry,
+                    reconnect,
+                    computer_provider=computer_provider,
+                    computer_model=computer_model,
+                    runtime_config_loader=runtime_config_loader,
+                    computer_provider_loader=computer_provider_loader,
+                    computer_permission_check=computer_permission_check,
+                )
+            except Exception as e:
+                logger.exception("MCP server '{}' connection failed: {}", name, e)
+                continue
+            if stack is not None:
+                server_stacks[name] = stack
+    except BaseException:
+        await asyncio.gather(*(stack.aclose() for stack in server_stacks.values()), return_exceptions=True)
+        raise
 
     return server_stacks
 

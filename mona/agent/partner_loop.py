@@ -84,7 +84,7 @@ class PartnerAgentLoop(AgentLoop):
             build_messages=self.context.build_messages,
             get_tool_definitions=self.tools.get_definitions,
             max_completion_tokens=self.provider.generation.max_tokens,
-            consolidation_ratio=kwargs.get("consolidation_ratio", 0.5),
+            consolidation_ratio=kwargs.get("consolidation_ratio", 0.2),
         )
         self.auto_compact = AutoCompact(
             sessions=self.sessions,

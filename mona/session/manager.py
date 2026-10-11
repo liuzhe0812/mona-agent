@@ -278,19 +278,18 @@ class Session:
 
     def get_history(
         self,
-        max_messages: int = 120,
+        max_messages: int = 0,
         *,
         max_tokens: int = 0,
         include_timestamps: bool = False,
     ) -> list[dict[str, Any]]:
         """Return unconsolidated messages for LLM input.
 
-        History is sliced by message count first (``max_messages``), then by
-        token budget from the tail (``max_tokens``) when provided.
+        Replay the full legal history unless the caller explicitly requests
+        a message-count or token limit. Zero means no limit.
         """
         unconsolidated = self.messages[self.last_consolidated:]
-        max_messages = max_messages if max_messages > 0 else 120
-        sliced = unconsolidated[-max_messages:]
+        sliced = unconsolidated[-max_messages:] if max_messages > 0 else unconsolidated
 
         # Avoid starting mid-turn when possible, except for proactive
         # assistant deliveries that the user may be replying to.
@@ -425,8 +424,11 @@ class Session:
         on_archive: Any = None,
         limit: int = FILE_MAX_MESSAGES,
     ) -> None:
-        """Bound session message growth by archiving and trimming old prefixes."""
+        """Reclaim summarized prefixes without evicting unconsolidated history."""
         if limit <= 0 or len(self.messages) <= limit:
+            return
+        # Only reclaim summarized prefixes; message count cannot evict an active goal.
+        if len(self.messages) - self.last_consolidated > limit:
             return
 
         before = list(self.messages)
@@ -451,6 +453,10 @@ class Session:
         )
 
 
+class SessionDeletedError(RuntimeError):
+    """A late write attempted to recreate a permanently deleted conversation."""
+
+
 class SessionManager:
     """
     Manages conversation sessions.
@@ -463,6 +469,7 @@ class SessionManager:
         self.sessions_dir = ensure_dir(self.workspace / "sessions")
         self.legacy_sessions_dir = get_legacy_sessions_dir()
         self._cache: dict[str, Session] = {}
+        self._deleted_keys: set[str] = set()
         # Legacy files without a persisted UI summary need one transcript scan
         # the first time they appear in the list. Keep that result for the
         # unchanged file so repeated sidebar refreshes stay metadata-only.
@@ -491,6 +498,8 @@ class SessionManager:
         Returns:
             The session.
         """
+        if key in self._deleted_keys:
+            raise SessionDeletedError("Session has been permanently deleted")
         if key in self._cache:
             return self._cache[key]
 
@@ -635,6 +644,8 @@ class SessionManager:
         write-back caching (e.g. rclone VFS, NFS, FUSE mounts) do not lose
         the most recent writes.
         """
+        if session.key in self._deleted_keys:
+            raise SessionDeletedError("Session has been permanently deleted")
         path = self._get_session_path(session.key)
         tmp_path = path.with_suffix(".jsonl.tmp")
 
@@ -708,11 +719,13 @@ class SessionManager:
         self._cache.pop(key, None)
         self._list_summary_cache.pop(self._get_session_path(key), None)
 
-    def delete_session(self, key: str) -> bool:
+    def delete_session(self, key: str, *, prevent_recreation: bool = False) -> bool:
         """Remove a session from disk and the in-memory cache.
 
         Returns True if a JSONL file was found and unlinked.
         """
+        if prevent_recreation:
+            self._deleted_keys.add(key)
         path = self._get_session_path(key)
         self.invalidate(key)
         if not path.exists():
@@ -722,6 +735,8 @@ class SessionManager:
             return True
         except OSError as e:
             logger.warning("Failed to delete session file {}: {}", path, e)
+            if prevent_recreation:
+                raise
             return False
 
     def read_session_file(self, key: str) -> dict[str, Any] | None:

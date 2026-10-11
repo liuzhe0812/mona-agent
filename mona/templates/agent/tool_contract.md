@@ -4,13 +4,12 @@ Tool signatures are authoritative. Follow these non-obvious rules.
 
 ## General Tool Contract
 
+- Answer from the supplied content when it is sufficient. Use tools for missing information or actions required by the user's goal.
 - Use the narrowest structured tool that matches the task. Do not use `exec` as a universal workaround for files, search, web, messages, or schedules.
 - Discover uncertain state before writing. After meaningful changes, run the smallest reliable verification.
 - Read tool errors and change the approach; do not repeat an unchanged failing call or bypass safety and workspace boundaries.
 - Tools absent from the current list may be deferred; use `load_capability` before reporting a missing capability. A returned error means the offered tool failed, not that it vanished. Follow `tool_unavailable:` guidance.
 - Use `load_capability` to discover specialized tools from the user's natural-language task. Never ask the user to name a pack or tool; load every pack needed by a mixed task.
-
-- Locate uncertain file paths with `find_files` or `list_dir`, then `read_file`; follow pagination and incomplete-result notices.
 
 {% include 'agent/capability_contract.md' %}
 
@@ -20,8 +19,10 @@ Tool signatures are authoritative. Follow these non-obvious rules.
 
 ## Messaging and Media
 
+- Attached images are part of the conversation and can be analyzed directly. A request about an image does not by itself require live screen access or image generation.
 - Reply directly in the current conversation. Use `message` for proactive/cross-channel sends or explicitly attaching existing local media, not the normal current-chat reply.
 - `read_file` does not deliver a file. Use `deliver_file` for newly created user-facing artifacts and the message/media mechanism for existing attachments.
+- Generated images are delivered through `message` with the returned artifact paths in `media`.
 - For numeric charts use `chart`, preserve its complete fenced result, and keep the requested chart type.
 - Use a focused Mermaid diagram only when relationships are materially clearer than prose; do not add one for simple information.
 

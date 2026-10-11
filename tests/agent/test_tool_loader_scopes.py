@@ -23,6 +23,8 @@ from mona.agent.tools.loader import ToolLoader
 from mona.agent.tools.long_task import CompleteGoalTool, LongTaskTool
 from mona.agent.tools.notes import NotesCreateTool, NotesReadTool, NotesSaveImageTool
 from mona.agent.tools.registry import ToolRegistry
+from mona.agent.tools.url2note import Url2NoteTool
+from mona.agent.tools.video_extract_frame import VideoExtractFrameTool
 from mona.agent.user_config import (
     AGENT_EXCLUSIVE_TOOLS,
     AGENT_USER_CONFIG_SCHEMA_VERSION,
@@ -33,6 +35,7 @@ from mona.agent.user_config import (
     configurable_agent_tools,
     load_agent_user_config,
     resolve_effective_agent_config,
+    save_agent_user_config,
     tool_available_to_agent,
 )
 from mona.bus.queue import MessageBus
@@ -330,6 +333,73 @@ def test_partner_tool_catalog_includes_user_grantable_knowledge_tools():
     configurable = configurable_agent_tools(_partner_definition())
     assert configurable is not None
     assert USER_GRANTABLE_PLATFORM_TOOLS <= set(configurable)
+
+
+@pytest.mark.parametrize(
+    "agent_id",
+    ["mona", "com.example.writer", "com.mona.academic-researcher", "com.mona.musician"],
+)
+def test_url_note_permission_loads_both_tools_for_every_agent_and_revokes_together(
+    agent_id, tmp_path,
+):
+    definition = AgentDefinition(id=agent_id, display_name="Writer")
+    configurable = configurable_agent_tools(definition)
+    assert configurable is None or {"url2note", "video_extract_frame"} <= set(configurable)
+
+    effective = resolve_effective_agent_config(
+        definition, AgentUserConfig(granted_tools=["url2note", "notes_create"]),
+    )
+    registry = ToolRegistry()
+    ToolLoader(test_classes=[Url2NoteTool, VideoExtractFrameTool, NotesCreateTool]).load(
+        ToolContext(config=ToolsConfig(), workspace=str(tmp_path), agent_id=agent_id),
+        registry,
+        scope="core" if agent_id == "mona" else "subagent",
+        tool_allowlist=effective.allowed_tools,
+    )
+    registry.set_allowed_tool_names(set(effective.allowed_tools or []))
+    assert {"url2note", "video_extract_frame", "notes_create"} <= set(registry.tool_names)
+    assert registry.prepare_call("url2note", {"url": "https://example.com"})[2] is None
+    assert registry.prepare_call(
+        "video_extract_frame", {"url": "https://example.com", "timestamps": ["00:01:00"]},
+    )[2] is None
+
+    revoked = resolve_effective_agent_config(
+        definition, AgentUserConfig(granted_tools=["video_extract_frame", "notes_create"]),
+    )
+    registry.set_allowed_tool_names(set(revoked.allowed_tools or []))
+    assert not registry.is_visible("url2note")
+    assert not registry.is_visible("video_extract_frame")
+    for name in ("url2note", "video_extract_frame"):
+        assert "not permitted" in registry.prepare_call(name, {})[2]
+
+
+@pytest.mark.parametrize(
+    ("granted", "expected"),
+    [
+        (["url2note"], ["url2note", "video_extract_frame"]),
+        (["video_extract_frame"], []),
+        ([], []),
+        (["url2note", "video_extract_frame"], ["url2note", "video_extract_frame"]),
+    ],
+)
+def test_url_note_saved_and_legacy_permissions_follow_parent(granted, expected, tmp_path, monkeypatch):
+    config_path = tmp_path / "config.json"
+    monkeypatch.setattr(user_config, "get_agent_user_config_path", lambda _agent_id: config_path)
+    config_path.write_text(json.dumps({"granted_tools": granted}), encoding="utf-8")
+
+    assert load_agent_user_config("mona").granted_tools == expected
+    saved = save_agent_user_config("mona", {"granted_tools": granted}, expected_revision=0)
+    assert saved.granted_tools == expected
+    assert json.loads(config_path.read_text(encoding="utf-8"))["grantedTools"] == expected
+
+
+def test_url_note_manifest_default_includes_keyframes():
+    definition = AgentDefinition(
+        id="com.example.writer", display_name="Writer", tool_allowlist=["url2note"],
+    )
+    inherited = resolve_effective_agent_config(definition, AgentUserConfig())
+
+    assert {"url2note", "video_extract_frame"} <= set(inherited.allowed_tools or [])
 
 
 def test_every_expert_can_configure_the_same_common_tools_plus_only_its_exclusives():

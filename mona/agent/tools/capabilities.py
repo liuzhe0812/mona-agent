@@ -63,6 +63,11 @@ def _metadata_capabilities(metadata: dict[str, Any]) -> set[str]:
     active: set[str] = set()
     if metadata.get("office_session_id") or metadata.get("office_document_type"):
         active.add("office")
+    attachments = metadata.get("_attachment_paths")
+    if isinstance(attachments, list) and any(
+        isinstance(path, str) and Path(path).suffix.lower() == ".pdf" for path in attachments
+    ):
+        active.add("office")
     if metadata.get("connection_id"):
         active.add("database")
     if metadata.get("terminal_session_id"):
@@ -107,10 +112,10 @@ def activate_capabilities_for_media(media: list[str] | None) -> None:
     active: set[str] = set()
     for raw_path in media or []:
         suffix = Path(raw_path).suffix.lower()
-        if suffix in {".png", ".jpg", ".jpeg", ".gif", ".webp", ".bmp"}:
-            active.add("image")
-        elif suffix in {".mp4", ".mov", ".mkv", ".webm", ".avi", ".m4v"}:
+        if suffix in {".mp4", ".mov", ".mkv", ".webm", ".avi", ".m4v"}:
             active.add("video")
+        elif suffix == ".pdf":
+            active.add("office")
     if active:
         activate_capabilities(active)
 
@@ -190,7 +195,7 @@ class LoadCapabilityTool(Tool):
         "Load specialized tools from natural-language intent without asking the user "
         "to name a tool or mode. Packs: development (edit/write files, search code, run commands), "
         "skill_resources (skill references/scripts/assets; also enabled by skill_read), "
-        "http (direct API requests), office (documents/spreadsheets/slides/PDF), image, "
+        "http (direct API requests), office (documents/spreadsheets/slides/PDF), image (generate/edit images), "
         "video, email, database, terminal, notes_write (create/save notes), saved_memory "
         "(previously saved links/fragments), messaging (proactive/cross-channel), "
         "automation (reminders/todos/heartbeat), browser (Mona's built-in browser), "

@@ -160,6 +160,7 @@ class AgentDefaults(Base):
     temperature: float = 0.1
     fallback_models: list[FallbackCandidate] = Field(default_factory=list)
     max_tool_iterations: int = 100
+    max_parallel_tool_calls: int = Field(default=10, ge=1)
     max_concurrent_subagents: int = Field(default=1, ge=1)
     max_tool_result_chars: int = 16_000
     provider_retry_mode: Literal["standard", "persistent"] = "standard"
@@ -180,17 +181,13 @@ class AgentDefaults(Base):
         validation_alias=AliasChoices("idleCompactAfterMinutes", "sessionTtlMinutes"),
         serialization_alias="idleCompactAfterMinutes",
     )  # Auto-compact idle threshold in minutes (0 = disabled)
-    max_messages: int = Field(
-        default=120,
-        ge=0,
-    )  # Max messages to replay from session history (0 = use default 120, respects token budget)
     consolidation_ratio: float = Field(
-        default=0.5,
+        default=0.2,
         ge=0.1,
         le=0.95,
         validation_alias=AliasChoices("consolidationRatio"),
         serialization_alias="consolidationRatio",
-    )  # Consolidation target ratio (0.5 = 50% of budget retained after compression)
+    )  # Retained fraction of the trigger budget (0.2 = about 16% of the window by default)
     dream: DreamConfig = Field(default_factory=DreamConfig)
 
     @property

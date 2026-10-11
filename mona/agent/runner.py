@@ -153,12 +153,15 @@ class AgentRunSpec:
     error_message: str | None = _DEFAULT_ERROR_MESSAGE
     max_iterations_message: str | None = None
     concurrent_tools: bool = False
+    max_parallel_tool_calls: int | None = None
     fail_on_tool_error: bool = False
     max_tool_failures: int = 3
     repeat_guard_enabled: bool = False
     workspace: Path | None = None
     session_key: str | None = None
     context_window_tokens: int | None = None
+    context_window_verified: bool = True
+    context_provider: str | None = None
     context_block_limit: int | None = None
     provider_retry_mode: str = "standard"
     progress_callback: Any | None = None
@@ -166,6 +169,10 @@ class AgentRunSpec:
     retry_wait_callback: Any | None = None
     checkpoint_callback: Any | None = None
     injection_callback: Any | None = None
+    model_context_callback: Any | None = None
+    context_limit_callback: Any | None = None
+    strict_injections: bool = False
+    max_injection_cycles: int = _MAX_INJECTION_CYCLES
     llm_timeout_s: float | None = None
     enforce_llm_timeout_for_streaming: bool = False
 
@@ -179,9 +186,8 @@ class AgentRunResult:
     tools_used: list[str] = field(default_factory=list)
     usage: dict[str, int] = field(default_factory=dict)
     """Cumulative usage across every LLM call in this run (billing view)."""
-    final_usage: dict[str, int] = field(default_factory=dict)
-    """Usage of the last single LLM call; its ``prompt_tokens`` mirrors the
-    context actually sent to the model (context-window view)."""
+    final_usage: dict[str, Any] = field(default_factory=dict)
+    """Provider usage and context-window details for the latest LLM request."""
     stop_reason: str = "completed"
     error: str | None = None
     detected_context_window_tokens: int | None = None
@@ -275,10 +281,12 @@ class AgentRunner:
         cls,
         messages: list[dict[str, Any]],
         injections: list[dict[str, Any]],
+        *, preserve_identity: bool = False,
     ) -> None:
-        """Append injected user messages while preserving role alternation."""
+        """Keep the default Work merge; explicit context owners can retain IDs."""
         for injection in injections:
-            if messages and injection.get("role") == "user" and messages[-1].get("role") == "user":
+            identified = preserve_identity and injection.get("id")
+            if messages and not identified and injection.get("role") == "user" and messages[-1].get("role") == "user":
                 merged = dict(messages[-1])
                 merged["content"] = cls._merge_message_content(
                     merged.get("content"),
@@ -305,9 +313,9 @@ class AgentRunner:
         and *iteration* are both provided) and return (True, cycles+1) so the
         caller continues the iteration loop.  Otherwise return (False, cycles).
         """
-        if injection_cycles >= _MAX_INJECTION_CYCLES:
+        if injection_cycles >= spec.max_injection_cycles:
             return False, injection_cycles
-        injections = await self._drain_injections(spec)
+        injections = await self._drain_injections(spec, phase=phase)
         if not injections:
             return False, injection_cycles
         injection_cycles += 1
@@ -325,17 +333,17 @@ class AgentRunner:
                         "pending_tool_calls": [],
                     },
                 )
-        self._append_injected_messages(messages, injections)
+        self._append_injected_messages(messages, injections, preserve_identity=spec.model_context_callback is not None)
         logger.debug(
             "Injected {} follow-up message(s) {} ({}/{})",
             len(injections),
             phase,
             injection_cycles,
-            _MAX_INJECTION_CYCLES,
+            spec.max_injection_cycles,
         )
         return True, injection_cycles
 
-    async def _drain_injections(self, spec: AgentRunSpec) -> list[dict[str, Any]]:
+    async def _drain_injections(self, spec: AgentRunSpec, *, phase: str = "") -> list[dict[str, Any]]:
         """Drain pending user messages via the injection callback.
 
         Returns normalized user messages (capped by
@@ -351,11 +359,13 @@ class AgentRunner:
                 parameter.kind is inspect.Parameter.VAR_KEYWORD
                 for parameter in signature.parameters.values()
             )
-            if accepts_limit:
-                items = await spec.injection_callback(limit=_MAX_INJECTIONS_PER_TURN)
-            else:
-                items = await spec.injection_callback()
+            kwargs = {"limit": _MAX_INJECTIONS_PER_TURN} if accepts_limit else {}
+            if "phase" in signature.parameters:
+                kwargs["phase"] = phase
+            items = await spec.injection_callback(**kwargs)
         except Exception:
+            if spec.strict_injections:
+                raise
             logger.exception("injection_callback failed")
             return []
         if not items:
@@ -385,7 +395,7 @@ class AgentRunner:
         final_content: str | None = None
         tools_used: list[str] = []
         usage: dict[str, int] = {"prompt_tokens": 0, "completion_tokens": 0}
-        raw_usage: dict[str, int] = {}
+        raw_usage: dict[str, Any] = {}
         error: str | None = None
         detected_context_window_tokens: int | None = None
         stop_reason = "completed"
@@ -404,6 +414,8 @@ class AgentRunner:
         length_recovery_count = 0
         had_injections = False
         injection_cycles = 0
+        context_recovery_used = False
+        force_context_compaction = False
 
         def reset_repeat_guard() -> None:
             nonlocal last_tool_step_signature
@@ -416,20 +428,34 @@ class AgentRunner:
             blocked_office_edits.clear()
 
         for iteration in range(spec.max_iterations):
+            # Explicit projections leave the execution log append-only. They
+            # may summarize completed batches, but never silently drop history.
+            prepared = None
+            if spec.model_context_callback is not None:
+                import copy
+                prepared = await spec.model_context_callback(copy.deepcopy(messages), force=force_context_compaction)
+                force_context_compaction = False
+                if not isinstance(prepared, list) or any(not isinstance(m, dict) for m in prepared):
+                    raise ValueError("Model context callback must return messages")
+                if [m for m in prepared if m.get("role") == "system"] != [m for m in spec.initial_messages if m.get("role") == "system"]:
+                    raise ValueError("Model context callback cannot alter the turn system prompt")
             try:
                 # Keep the persisted conversation untouched. Context governance
                 # may repair or compact historical messages for the model, but
                 # those synthetic edits must not shift the append boundary used
                 # later when the caller saves only the new turn.
-                messages_for_model = self._drop_orphan_tool_results(messages)
+                messages_for_model = self._drop_orphan_tool_results(prepared if prepared is not None else messages)
                 messages_for_model = self._backfill_missing_tool_results(messages_for_model)
-                messages_for_model = self._microcompact(messages_for_model)
-                messages_for_model = self._apply_tool_result_budget(spec, messages_for_model)
-                messages_for_model = self._snip_history(spec, messages_for_model)
+                if prepared is None:
+                    messages_for_model = self._microcompact(messages_for_model)
+                    messages_for_model = self._apply_tool_result_budget(spec, messages_for_model)
+                    messages_for_model = self._snip_history(spec, messages_for_model)
                 # Snipping may have created new orphans; clean them up.
                 messages_for_model = self._drop_orphan_tool_results(messages_for_model)
                 messages_for_model = self._backfill_missing_tool_results(messages_for_model)
             except Exception:
+                if prepared is not None:
+                    raise
                 logger.exception(
                     "Context governance failed on turn {} for {}; applying minimal repair",
                     iteration,
@@ -455,11 +481,13 @@ class AgentRunner:
                 context,
                 disabled_tools=disabled_tools or None,
             )
-            raw_usage = self._usage_dict(response.usage)
+            response_usage = self._usage_dict(response.usage)
+            raw_usage = self._contextualize_usage(response_usage, spec)
             context.response = response
             context.usage = dict(raw_usage)
             context.tool_calls = list(response.tool_calls)
-            self._accumulate_usage(usage, raw_usage)
+            self._accumulate_usage(usage, response_usage)
+            await self._publish_context_usage(spec, raw_usage)
 
             reasoning_text, cleaned_content = extract_reasoning(
                 response.reasoning_content,
@@ -500,12 +528,24 @@ class AgentRunner:
                         "assistant_message": assistant_message,
                         "completed_tool_results": [],
                         "pending_tool_calls": persisted_tool_calls,
+                        "started_tool_call_ids": [],
                     },
                 )
 
                 await hook.before_execute_tools(context)
 
                 partial_results: dict[str, dict[str, Any]] = {}
+                started_tool_call_ids: set[str] = set()
+
+                async def checkpoint_started(call: ToolCallRequest) -> None:
+                    started_tool_call_ids.add(call.id)
+                    await self._emit_checkpoint(spec, {
+                        "phase": "tools_started", "iteration": iteration, "model": spec.model,
+                        "assistant_message": assistant_message,
+                        "completed_tool_results": [partial_results[tc.id] for tc in response.tool_calls if tc.id in partial_results],
+                        "pending_tool_calls": [tc for tc in persisted_tool_calls if tc["id"] not in partial_results],
+                        "started_tool_call_ids": [tc.id for tc in response.tool_calls if tc.id in started_tool_call_ids],
+                    })
 
                 async def checkpoint_completed(call: ToolCallRequest, value: Any) -> None:
                     partial_results[call.id] = {
@@ -517,6 +557,7 @@ class AgentRunner:
                         "assistant_message": assistant_message,
                         "completed_tool_results": [partial_results[tc.id] for tc in response.tool_calls if tc.id in partial_results],
                         "pending_tool_calls": [tc for tc in persisted_tool_calls if tc["id"] not in partial_results],
+                        "started_tool_call_ids": [tc.id for tc in response.tool_calls if tc.id in started_tool_call_ids],
                     })
 
                 results, new_events, fatal_error = await self._execute_tools(
@@ -528,6 +569,7 @@ class AgentRunner:
                         blocked_tool_call_signature if spec.repeat_guard_enabled else None
                     ),
                     blocked_office_edits=blocked_office_edits,
+                    checkpoint_started=checkpoint_started if spec.checkpoint_callback else None,
                     checkpoint_completed=checkpoint_completed if spec.checkpoint_callback else None,
                 )
                 tool_events.extend(new_events)
@@ -682,12 +724,14 @@ class AgentRunner:
                 if hook.wants_streaming():
                     await hook.on_stream_end(context, resuming=False)
                 response = await self._request_finalization_retry(spec, messages_for_model)
-                retry_usage = self._usage_dict(response.usage)
-                self._accumulate_usage(usage, retry_usage)
-                raw_usage = self._merge_usage(raw_usage, retry_usage)
+                retry_provider_usage = self._usage_dict(response.usage)
+                retry_usage = self._contextualize_usage(retry_provider_usage, spec)
+                self._accumulate_usage(usage, retry_provider_usage)
+                raw_usage = retry_usage
                 context.response = response
                 context.usage = dict(raw_usage)
                 context.tool_calls = list(response.tool_calls)
+                await self._publish_context_usage(spec, raw_usage)
                 clean = hook.finalize_content(context, response.content)
 
             if response.finish_reason == "length" and not is_blank_text(clean):
@@ -754,6 +798,28 @@ class AgentRunner:
                     response.error_type,
                     response.error_code,
                 )
+                if detected_context_window_tokens is not None:
+                    spec.context_window_verified = True
+                    if (
+                        spec.context_window_tokens is None
+                        or detected_context_window_tokens < spec.context_window_tokens
+                    ):
+                        spec.context_window_tokens = detected_context_window_tokens
+                if detected_context_window_tokens is not None and spec.model_context_callback is not None and not context_recovery_used:
+                    context_recovery_used = True
+                    force_context_compaction = True
+                    spec.context_window_tokens = min(spec.context_window_tokens or detected_context_window_tokens, detected_context_window_tokens)
+                    # Only the failed model request is retried; completed tools
+                    # remain in the log and are never dispatched again.
+                    continue
+                if (
+                    detected_context_window_tokens is not None
+                    and not context_recovery_used
+                    and spec.context_limit_callback is not None
+                    and await spec.context_limit_callback(detected_context_window_tokens)
+                ):
+                    context_recovery_used = True
+                    continue
                 if detected_context_window_tokens is not None:
                     final_content = (
                         "模型返回的上下文容量小于当前估算值。"
@@ -838,11 +904,13 @@ class AgentRunner:
                     max_iterations=spec.max_iterations,
                 )
             )
-            final_content, finalization_usage = await self._finalize_without_tools(
+            final_content, finalization_provider_usage = await self._finalize_without_tools(
                 spec,
                 messages,
             )
-            self._accumulate_usage(usage, finalization_usage)
+            self._accumulate_usage(usage, finalization_provider_usage)
+            raw_usage = self._contextualize_usage(finalization_provider_usage, spec)
+            await self._publish_context_usage(spec, raw_usage)
             final_content = final_content or fallback_content
             self._append_final_message(messages, final_content)
             # Drain any remaining injections so they are appended to the
@@ -929,6 +997,15 @@ class AgentRunner:
 
         computer_turn = get_computer_turn()
         computer_timeout = None
+        if computer_turn is not None and not computer_turn.stopped and any(
+            message.get("role") == "tool"
+            and message.get("name") in {"computer_observe", "computer_act"}
+            and isinstance(message.get("content"), list)
+            and any(isinstance(block, dict) and block.get("type") == "image_url"
+                    for block in message["content"])
+            for message in messages
+        ):
+            kwargs["require_image"] = True
         if (
             computer_turn is not None and not computer_turn.stopped
             and messages and messages[-1].get("role") == "tool"
@@ -1098,7 +1175,49 @@ class AgentRunner:
                 "Tool-free finalization failed for {}",
                 spec.session_key or "default",
             )
-            return None, {}
+        return None, {}
+
+    @staticmethod
+    def _contextualize_usage(
+        usage: dict[str, int],
+        spec: AgentRunSpec,
+    ) -> dict[str, Any]:
+        """Add request-local context details without changing billing counters."""
+        result: dict[str, Any] = dict(usage)
+        if "prompt_tokens" not in usage:
+            return result
+        result["context_tokens"] = usage.get("prompt_tokens", 0) + usage.get(
+            "completion_tokens", 0
+        )
+        if (
+            spec.context_window_verified
+            and spec.context_window_tokens
+            and spec.context_window_tokens > 0
+        ):
+            result["context_window_tokens"] = int(spec.context_window_tokens)
+        result["context_model"] = spec.model
+        if spec.context_provider:
+            result["context_provider"] = spec.context_provider
+        return result
+
+    async def _publish_context_usage(
+        self,
+        spec: AgentRunSpec,
+        usage: dict[str, Any],
+    ) -> None:
+        callback = spec.progress_callback
+        if "context_tokens" not in usage or callback is None:
+            return
+        try:
+            signature = inspect.signature(callback)
+        except (TypeError, ValueError):
+            return
+        accepts_usage = "token_usage" in signature.parameters or any(
+            parameter.kind == inspect.Parameter.VAR_KEYWORD
+            for parameter in signature.parameters.values()
+        )
+        if accepts_usage:
+            await callback("", token_usage=dict(usage))
 
     @staticmethod
     def _structured_tool_receipt(result: Any) -> dict[str, Any] | None:
@@ -1202,13 +1321,6 @@ class AgentRunner:
         for key, value in addition.items():
             target[key] = target.get(key, 0) + value
 
-    @staticmethod
-    def _merge_usage(left: dict[str, int], right: dict[str, int]) -> dict[str, int]:
-        merged = dict(left)
-        for key, value in right.items():
-            merged[key] = merged.get(key, 0) + value
-        return merged
-
     async def _execute_tools(
         self,
         spec: AgentRunSpec,
@@ -1218,20 +1330,30 @@ class AgentRunner:
         disabled_tools: set[str] | None = None,
         blocked_tool_call_signature: str | None = None,
         blocked_office_edits: set[str] | None = None,
+        checkpoint_started: Any | None = None,
         checkpoint_completed: Any | None = None,
     ) -> tuple[list[Any], list[dict[str, str]], BaseException | None]:
         batches = self._partition_tool_batches(spec, tool_calls)
         tool_results: list[tuple[Any, dict[str, str], BaseException | None]] = []
-        async def execute(call: ToolCallRequest):
+        pool = asyncio.Semaphore(spec.max_parallel_tool_calls) if spec.max_parallel_tool_calls is not None else None
+
+        async def execute_call(call: ToolCallRequest):
             outcome = await self._run_tool(
                 spec, call, workspace_violation_counts,
                 disabled_tools=disabled_tools,
                 blocked_tool_call_signature=blocked_tool_call_signature,
                 blocked_office_edits=blocked_office_edits,
+                checkpoint_started=checkpoint_started,
             )
             if checkpoint_completed is not None:
                 await checkpoint_completed(call, outcome[0])
             return outcome
+
+        async def execute(call: ToolCallRequest):
+            if pool is None:
+                return await execute_call(call)
+            async with pool:
+                return await execute_call(call)
 
         for batch in batches:
             if spec.concurrent_tools and len(batch) > 1:
@@ -1239,8 +1361,12 @@ class AgentRunner:
                     *(
                         execute(tool_call)
                         for tool_call in batch
-                    )
+                    ),
+                    return_exceptions=True,
                 )
+                for result in batch_results:
+                    if isinstance(result, BaseException):
+                        raise result
                 tool_results.extend(batch_results)
             else:
                 batch_results = []
@@ -1326,6 +1452,7 @@ class AgentRunner:
         disabled_tools: set[str] | None = None,
         blocked_tool_call_signature: str | None = None,
         blocked_office_edits: set[str] | None = None,
+        checkpoint_started: Any | None = None,
     ) -> tuple[Any, dict[str, str], BaseException | None]:
         hint = "\n\n[Analyze the error above and try a different approach.]"
         if blocked_office_edits and self._office_edit_key(tool_call) in blocked_office_edits:
@@ -1410,6 +1537,8 @@ class AgentRunner:
                     for file_edit_tracker in file_edit_trackers
                 ],
             )
+        if checkpoint_started is not None:
+            await checkpoint_started(tool_call)
         try:
             if tool is not None:
                 result = await tool.execute(**params)

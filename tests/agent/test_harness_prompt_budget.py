@@ -34,7 +34,12 @@ from mona.agent.tools.terminal import (
 )
 from mona.bus.events import InboundMessage
 from mona.bus.queue import MessageBus
-from mona.config.schema import ProviderConfig, ToolsConfig, VideoGenerationToolConfig
+from mona.config.schema import (
+    ImageGenerationToolConfig,
+    ProviderConfig,
+    ToolsConfig,
+    VideoGenerationToolConfig,
+)
 from mona.providers.base import LLMResponse, ToolCallRequest
 from mona.session.goal_state import GOAL_STATE_KEY
 from mona.session.manager import SessionManager
@@ -101,7 +106,10 @@ def test_fixed_prompt_sections_stay_compact_and_keep_required_contracts() -> Non
     for rule in required_rules:
         assert rule in contract
 
-    assert "Do not use the 'message' tool for normal replies" in identity
+    assert "Reply directly in the current conversation" in contract
+    assert "Wait for the tool results, then answer once" not in identity
+    assert "Attached images are part of the conversation" in contract
+    assert "Start by observing the available windows" not in contract
     assert "knowledge_read(ref)" in identity
     assert "mona-docx" in skills
     assert "mona-xlsx" in skills
@@ -431,6 +439,7 @@ def test_capability_loader_keeps_core_tools_and_loads_image_skill(tmp_path) -> N
     ]
     assert tool_enabled_by_capability("office") is False
     assert "natural-language intent" in loader.description
+    assert "image (generate/edit images)" in loader.description
 
     result = asyncio.run(loader.execute(["image"]))
 
@@ -500,6 +509,57 @@ def test_ui_context_and_media_preload_capabilities() -> None:
 
     activate_capabilities_for_media(["clip.mp4"])
     assert tool_enabled_by_capability("generate_video") is True
+
+
+def test_image_attachment_does_not_preload_generation_and_keeps_native_vision(tmp_path) -> None:
+    provider = MagicMock()
+    provider.get_default_model.return_value = "test-model"
+    loop = AgentLoop(
+        bus=MessageBus(), provider=provider, workspace=tmp_path, model="test-model",
+        tools_config=ToolsConfig(image_generation=ImageGenerationToolConfig(enabled=True)),
+    )
+    image = tmp_path / "question.png"
+    image.write_bytes(b"\x89PNG\r\n\x1a\n" + b"\x00" * 32)
+    session = loop.sessions.get_or_create("websocket:read-image")
+    loop._set_tool_context("websocket", "read-image", session=session)
+    activate_capabilities_for_media([str(image)])
+    message = InboundMessage(
+        channel="websocket", sender_id="user", chat_id="read-image",
+        content="解释这张图", media=[str(image)],
+    )
+    messages = loop._build_initial_messages(message, session, [], None)
+    assert not loop.tools.is_visible("generate_image")
+    assert "### Skill: image-generation" not in messages[0]["content"]
+    assert any(block["type"] == "image_url" for block in messages[-1]["content"])
+    assert tool_enabled_by_capability("computer_observe") is True
+
+    # Retaining a previous generation call does not make this turn a generation task.
+    history = [{"role": "assistant", "content": "", "tool_calls": [{
+        "id": "previous-image", "type": "function",
+        "function": {"name": "load_capability", "arguments": '{"capabilities":["image"]}'},
+    }]}]
+    messages = loop._build_initial_messages(message, session, history, None)
+    assert loop.tools.is_visible("generate_image")
+    assert "### Skill: image-generation" not in messages[0]["content"]
+
+
+def test_explicit_image_mode_keeps_generation_skill_and_resources(tmp_path) -> None:
+    provider = MagicMock()
+    provider.get_default_model.return_value = "test-model"
+    loop = AgentLoop(
+        bus=MessageBus(), provider=provider, workspace=tmp_path, model="test-model",
+        tools_config=ToolsConfig(image_generation=ImageGenerationToolConfig(enabled=True)),
+    )
+    session = loop.sessions.get_or_create("websocket:make-image")
+    metadata = {"image_generation": {"enabled": True}}
+    loop._set_tool_context("websocket", "make-image", metadata=metadata, session=session)
+    messages = loop._build_initial_messages(
+        InboundMessage(channel="websocket", sender_id="user", chat_id="make-image", content="画一只猫", metadata=metadata),
+        session, [], None,
+    )
+    assert loop.tools.is_visible("generate_image")
+    assert loop.tools.is_visible("skill_reference_read")
+    assert "### Skill: image-generation" in messages[0]["content"]
 
 
 def test_explicit_video_generation_request_preloads_video_tool(tmp_path) -> None:
@@ -657,9 +717,14 @@ def test_capability_contract_follows_loaded_tools_without_changing_base_rules(tm
     assert "Remote Terminal and SSH Sessions" not in preloaded
     computer = render_template("agent/tool_contract.md", tool_names={"computer_observe", "computer_act"})
     assert "## Computer Use" in computer
-    assert "element_token" in computer
+    assert "task needs live computer state or interaction" in computer
     assert "## Browser Use" not in computer
-    assert "Do not ask the user to upload a screenshot before trying" in computer
+    assert "Do not ask the user to upload a screenshot before trying" not in computer
+    from mona.agent.tools.mcp import ComputerActTool, ComputerObserveTool
+
+    assert "element_token" in ComputerActTool.description
+    assert "fresh desktop screenshot" in ComputerActTool.description
+    assert "exact image_id" in ComputerObserveTool.description
 
 
 def test_skill_read_unlocks_resources_only_after_success(monkeypatch, tmp_path) -> None:

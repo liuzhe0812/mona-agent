@@ -44,7 +44,7 @@ from mona.api.url2note import Url2NoteError, Url2NoteExtractor
 class VideoExtractFrameTool(Tool):
     """Extract keyframes from a video and save them to the notes vault."""
 
-    _scopes = {"core"}
+    _scopes = {"core", "subagent"}
     _plugin_discoverable = True
 
     def __init__(self, extractor: Url2NoteExtractor | None = None) -> None:

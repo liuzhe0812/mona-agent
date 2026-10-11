@@ -611,10 +611,19 @@ export interface UITokenUsage {
   completionTokens: number;
   cachedTokens: number;
   totalTokens: number;
-  /** Prompt size of the last single LLM call in the turn — the actual
+  /** Input plus output of the last single LLM call in the turn — the actual
    * context-window occupancy. Cumulative ``promptTokens`` counts every
    * iteration, so it overstates the window on tool-heavy turns. */
   contextTokens?: number;
+  contextWindowTokens?: number;
+  contextModel?: string;
+  contextProvider?: string;
+}
+
+export interface RawTokenUsage {
+  prompt_tokens?: number; completion_tokens?: number; cached_tokens?: number;
+  cache_read_input_tokens?: number; total_tokens?: number; context_tokens?: number;
+  context_window_tokens?: number; context_model?: string; context_provider?: string;
 }
 
 export interface UIMessage {
@@ -869,17 +878,20 @@ export interface SettingsPayload {
   chat_providers?: Array<{
     name: string;
     label: string;
+    source_group?: "mona" | "openai" | "anthropic" | "custom";
     is_custom?: boolean;
     is_builtin?: boolean;
     configured: boolean;
     api_key_required: boolean;
     api_key_hint?: string | null;
+    image_api_key_hint?: string | null;
     api_base: string;
     default_api_base: string;
     model?: string | null;
     models: Array<{
       id: string;
       name: string;
+      engine?: "mona" | "codex" | "claude";
       type?: string | null;
       context_window?: number | null;
       input_modalities?: string[] | null;
@@ -1218,7 +1230,7 @@ export type InboundEvent =
       /** Server-measured turn wall time when this frame finishes an assistant reply. */
       latency_ms?: number;
       task_id?: string;
-      token_usage?: Record<string, number>;
+      token_usage?: RawTokenUsage;
       /** Optional structured payload on progress frames (channel-specific). */
       agent_ui?: AgentUIBlob;
       /** Set when this message is a fired personal schedule reminder;
@@ -1281,10 +1293,11 @@ export type InboundEvent =
       chat_id: string;
       latency_ms?: number;
       task_id?: string;
-      token_usage?: Record<string, number>;
+      token_usage?: RawTokenUsage;
       /** Authoritative sustained-goal snapshot for this chat (same shape as ``goal_state`` events). */
       goal_state?: GoalStateWsPayload;
     }
+  | { event: "context_usage"; chat_id: string; token_usage?: RawTokenUsage; job_id?: string | null }
   | {
       event: "goal_status";
       chat_id: string;

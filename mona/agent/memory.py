@@ -6,6 +6,7 @@ import asyncio
 import json
 import os
 import re
+import time
 import weakref
 from contextlib import suppress
 from datetime import datetime
@@ -23,7 +24,6 @@ from mona.utils.gitstore import GitStore
 from mona.utils.helpers import (
     estimate_message_tokens,
     estimate_prompt_tokens_chain,
-    find_legal_message_start,
     strip_think,
     truncate_text,
 )
@@ -458,6 +458,7 @@ class Consolidator:
     """Lightweight consolidation: summarizes evicted messages into history.jsonl."""
 
     _MAX_CONSOLIDATION_ROUNDS = 5
+    _FAILURE_RETRY_DELAY_SECONDS = 60.0
 
     _SAFETY_BUFFER = 1024  # extra headroom for tokenizer estimation drift
 
@@ -473,7 +474,7 @@ class Consolidator:
         auto_compact_token_limit: int | None = None,
         context_block_limit: int | None = None,
         max_completion_tokens: int = 4096,
-        consolidation_ratio: float = 0.5,
+        consolidation_ratio: float = 0.2,
     ):
         self.store = store
         self.provider = provider
@@ -489,6 +490,7 @@ class Consolidator:
         self._locks: weakref.WeakValueDictionary[str, asyncio.Lock] = (
             weakref.WeakValueDictionary()
         )
+        self._retry_after: dict[str, float] = {}
 
     def set_provider(
         self,
@@ -497,6 +499,8 @@ class Consolidator:
         context_window_tokens: int,
         auto_compact_token_limit: int | None = None,
     ) -> None:
+        if provider is not self.provider or model != self.model:
+            self._retry_after.clear()
         self.provider = provider
         self.model = model
         self.context_window_tokens = context_window_tokens
@@ -543,72 +547,6 @@ class Consolidator:
             max_messages=unconsolidated_count,
             include_timestamps=include_timestamps,
         )
-
-    @staticmethod
-    def _replay_overflow_boundary(
-        session: Session,
-        replay_max_messages: int | None,
-    ) -> int | None:
-        if not replay_max_messages or replay_max_messages <= 0:
-            return None
-        tail = list(enumerate(session.messages[session.last_consolidated:], session.last_consolidated))
-        if len(tail) <= replay_max_messages:
-            return None
-
-        sliced = tail[-replay_max_messages:]
-        for i, (_idx, message) in enumerate(sliced):
-            if message.get("role") == "user":
-                start = i
-                if i > 0 and sliced[i - 1][1].get("_channel_delivery"):
-                    start = i - 1
-                sliced = sliced[start:]
-                break
-
-        legal_start = find_legal_message_start([message for _idx, message in sliced])
-        if legal_start:
-            sliced = sliced[legal_start:]
-        if not sliced:
-            return len(session.messages)
-
-        first_visible_idx = sliced[0][0]
-        if first_visible_idx <= session.last_consolidated:
-            return None
-        return first_visible_idx
-
-    async def _consolidate_replay_overflow(
-        self,
-        session: Session,
-        replay_max_messages: int | None,
-        on_compaction: Callable[[bool], Awaitable[None]] | None = None,
-    ) -> str | None:
-        """Archive messages that would be hidden by the replay message window."""
-        end_idx = self._replay_overflow_boundary(session, replay_max_messages)
-        if end_idx is None:
-            return None
-        chunk = session.messages[session.last_consolidated:end_idx]
-        if not chunk:
-            return None
-        logger.debug(
-            "Replay-window consolidation for {}: chunk={} msgs, replay_max={}",
-            session.key,
-            len(chunk),
-            replay_max_messages,
-        )
-        if on_compaction is not None:
-            await on_compaction(True)
-        try:
-            summary = await self.archive(
-                chunk,
-                previous_summary=self._summary_text(session),
-            )
-        finally:
-            if on_compaction is not None:
-                await on_compaction(False)
-        if summary is None:
-            return None
-        session.last_consolidated = end_idx
-        self._persist_last_summary(session, summary)
-        return summary
 
     def _persist_last_summary(self, session: Session, summary: str | None) -> None:
         if summary:
@@ -665,9 +603,26 @@ class Consolidator:
     def _auto_compact_trigger_budget(self) -> int:
         hard_budget = self._input_token_budget
         configured = self.auto_compact_token_limit
-        default_trigger = int(self.context_window_tokens * 0.9)
+        default_trigger = int(self.context_window_tokens * 0.8)
         trigger = configured if configured is not None else default_trigger
         return min(trigger, hard_budget)
+
+    async def _archive_session(
+        self,
+        session: Session,
+        messages: list[dict],
+        *,
+        previous_summary: str | None = None,
+    ) -> str | None:
+        provider, model = self.provider, self.model
+        summary = await self.archive(messages, previous_summary=previous_summary)
+        if provider is not self.provider or model != self.model:
+            return summary
+        if summary:
+            self._retry_after.pop(session.key, None)
+        else:
+            self._retry_after[session.key] = time.monotonic() + self._FAILURE_RETRY_DELAY_SECONDS
+        return summary
 
     async def archive(
         self,
@@ -710,26 +665,33 @@ class Consolidator:
                 tool_choice=None,
             )
             if response.finish_reason == "error":
-                raise RuntimeError(f"LLM returned error: {response.content}")
+                logger.warning(
+                    "Consolidation LLM call failed (status={}, kind={}); preserving session history",
+                    response.error_status_code,
+                    response.error_kind,
+                )
+                return None
             summary = (response.content or "").strip()
             if not summary or summary == "(nothing)" or len(summary) > _ARCHIVE_SUMMARY_MAX_CHARS:
                 logger.warning("Consolidation returned an unusable handoff summary")
                 return None
             self.store.append_history(summary, max_chars=_ARCHIVE_SUMMARY_MAX_CHARS)
             return summary
-        except Exception:
-            logger.warning("Consolidation LLM call failed; preserving session history")
+        except Exception as exc:
+            logger.warning(
+                "Consolidation failed (exception={}); preserving session history",
+                type(exc).__name__,
+            )
             return None
 
     async def maybe_consolidate_by_tokens(
         self,
         session: Session,
         *,
-        replay_max_messages: int | None = None,
         current_message: str | None = None,
         message_metadata: dict[str, Any] | None = None,
         on_compaction: Callable[[bool], Awaitable[None]] | None = None,
-    ) -> None:
+    ) -> int | None:
         """Loop: archive old messages until prompt fits within safe budget.
 
         The budget reserves space for completion tokens and a safety buffer
@@ -747,6 +709,12 @@ class Consolidator:
             if not session.messages:
                 return
 
+            # Foreground and post-turn calls share the lock and failure backoff.
+            # A waiter must recheck after the previous archive has finished.
+            if time.monotonic() < self._retry_after.get(session.key, 0):
+                return
+            self._retry_after.pop(session.key, None)
+
             trigger = self._auto_compact_trigger_budget
             target = int(trigger * self.consolidation_ratio)
             estimate_kwargs = (
@@ -758,13 +726,6 @@ class Consolidator:
                 else {}
             )
             last_summary = self._summary_text(session)
-            replay_summary = await self._consolidate_replay_overflow(
-                session,
-                replay_max_messages,
-                on_compaction=on_compaction,
-            )
-            if replay_summary:
-                last_summary = replay_summary
             try:
                 estimated, source = self.estimate_session_prompt_tokens(session, **estimate_kwargs)
             except Exception:
@@ -784,7 +745,7 @@ class Consolidator:
                     unconsolidated_count,
                 )
                 self._persist_last_summary(session, last_summary)
-                return
+                return estimated
 
             for round_num in range(self._MAX_CONSOLIDATION_ROUNDS):
                 if estimated <= target:
@@ -817,7 +778,7 @@ class Consolidator:
                 if on_compaction is not None:
                     await on_compaction(True)
                 try:
-                    summary = await self.archive(chunk, previous_summary=last_summary)
+                    summary = await self._archive_session(session, chunk, previous_summary=last_summary)
                 finally:
                     if on_compaction is not None:
                         await on_compaction(False)
@@ -844,6 +805,7 @@ class Consolidator:
             # into the runtime context on the next prepare_session() call, aligning
             # the summary injection strategy with AutoCompact._archive().
             self._persist_last_summary(session, last_summary)
+            return estimated if estimated > 0 else None
 
     async def compact_idle_session(
         self,

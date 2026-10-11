@@ -106,6 +106,21 @@ async function flushStreamFrame() {
 }
 
 describe("useMonaStream", () => {
+  it("updates context usage without adding messages and clears it when changing chats", () => {
+    const fake = fakeClient();
+    const { result, rerender } = renderHook(({ chat }) => useMonaStream(chat, EMPTY_MESSAGES), {
+      initialProps: { chat: "usage-a" }, wrapper: wrap(fake.client),
+    });
+    act(() => fake.emit("usage-a", { event: "context_usage", chat_id: "usage-a", token_usage: {
+      context_tokens: 12000, context_window_tokens: 200000, context_model: "model-a",
+    } }));
+    expect(result.current.liveTokenUsage).toMatchObject({ contextTokens: 12000, contextWindowTokens: 200000, contextModel: "model-a" });
+    expect(result.current.messages).toHaveLength(0);
+    act(() => fake.emit("usage-a", { event: "context_usage", chat_id: "usage-a", job_id: "child", token_usage: { context_tokens: 99999 } }));
+    expect(result.current.liveTokenUsage?.contextTokens).toBe(12000);
+    rerender({ chat: "usage-b" });
+    expect(result.current.liveTokenUsage).toBeUndefined();
+  });
   it("attaches early delivered files to the final assistant message", () => {
     const fake = fakeClient();
     const { result } = renderHook(() => useMonaStream("chat-deliver", EMPTY_MESSAGES), {
