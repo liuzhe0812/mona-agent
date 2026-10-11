@@ -14,7 +14,7 @@ import { FileManager } from "./FileManager/FileManager";
 import { BatchModeView } from "./BatchMode/BatchModeView";
 import { DesktopMode } from "./Desktop/DesktopMode";
 import { DockerPanel } from "./Docker/DockerPanel";
-import { IdeLayout } from "../ide/IdeLayout";
+import { SshWorkspace } from "./SshWorkspace";
 import { EmptyState } from "@/components/ui/empty-state";
 import { useTerminalStore } from "./store/terminalStore";
 import { useLicense } from "@/hooks/useLicense";
@@ -24,7 +24,9 @@ const AI_PANEL_DEFAULT_WIDTH = 320;
 const AI_PANEL_MIN_WIDTH = 240;
 const AI_PANEL_MAX_WIDTH = 600;
 
-export function TerminalView({ onOpenSubscribe }: { onOpenSubscribe?: () => void }) {
+export function TerminalView({ onOpenSubscribe, embedded = false, visible = true }: {
+  onOpenSubscribe?: () => void; embedded?: boolean; visible?: boolean;
+}) {
   const { licenseActive } = useLicense();
   const sessions = useTerminalStore((s) => s.sessions);
   const activeSessionId = useTerminalStore((s) => s.activeSessionId);
@@ -78,7 +80,7 @@ export function TerminalView({ onOpenSubscribe }: { onOpenSubscribe?: () => void
   }, []);
 
   useEffect(() => {
-    if (initializedRef.current) return;
+    if (embedded || initializedRef.current) return;
     if (sessions.length > 0) return;
     initializedRef.current = true;
 
@@ -102,13 +104,13 @@ export function TerminalView({ onOpenSubscribe }: { onOpenSubscribe?: () => void
           title: "本地终端",
         });
       });
-  }, [sessions.length, addSession, updateSessionStatus]);
+  }, [embedded, sessions.length, addSession, updateSessionStatus]);
 
   return (
     <div className="flex h-full">
       <div className="flex min-w-0 flex-1 flex-col">
-        <Toolbar onOpenSubscribe={onOpenSubscribe} />
-        <SessionTabBar />
+        <Toolbar onOpenSubscribe={onOpenSubscribe} embedded={embedded} />
+        {!embedded && <SessionTabBar />}
         <div className="min-h-0 flex-1">
           <div
             className="h-full"
@@ -116,8 +118,7 @@ export function TerminalView({ onOpenSubscribe }: { onOpenSubscribe?: () => void
           >
             <BatchModeView />
           </div>
-          {activeSession?.type !== "batch" && (
-            sessions
+          {sessions
               .filter((s) => s.type !== "batch")
               .map((session) => {
                 const isActive = session.id === activeSessionId;
@@ -128,7 +129,7 @@ export function TerminalView({ onOpenSubscribe }: { onOpenSubscribe?: () => void
                       className="h-full"
                       style={{ display: isActive ? "block" : "none" }}
                     >
-                      <FileManager sessionId={session.id} />
+                      <FileManager sessionId={session.id} active={isActive && visible} connected={session.status === "connected"} />
                     </div>
                   );
                 }
@@ -160,7 +161,7 @@ export function TerminalView({ onOpenSubscribe }: { onOpenSubscribe?: () => void
                         parentSessionId={session.parentSessionId ?? ""}
                         parentStatus={parent?.status ?? "disconnected"}
                         hostTitle={parent?.title ?? session.title}
-                        visible={isActive}
+                        visible={isActive && visible}
                       />
                     </div>
                   );
@@ -172,7 +173,7 @@ export function TerminalView({ onOpenSubscribe }: { onOpenSubscribe?: () => void
                       className="h-full"
                       style={{ display: isActive ? "block" : "none" }}
                     >
-                      <IdeLayout sessionId={session.id} />
+                      <SshWorkspace sessionId={session.id} active={isActive && visible} />
                     </div>
                   );
                 }
@@ -210,11 +211,10 @@ export function TerminalView({ onOpenSubscribe }: { onOpenSubscribe?: () => void
                     <XtermTerminal sessionId={session.id} />
                   </div>
                 );
-              })
-          )}
+              })}
           {!activeSession && <TerminalEmptyState />}
         </div>
-        <StatusBar sessionId={activeParentSession?.id ?? null} />
+        {activeSession?.type !== "ssh" && <StatusBar sessionId={activeParentSession?.id ?? null} />}
       </div>
       {licenseActive &&
         aiPanelVisible &&
@@ -244,7 +244,7 @@ export function TerminalView({ onOpenSubscribe }: { onOpenSubscribe?: () => void
           </div>
         </>
       )}
-      <NewConnectionDialog />
+      <NewConnectionDialog fixedType={embedded ? "ssh" : undefined} />
       <HostKeyConfirmDialog />
       <SshPasswordDialog />
       <ExecApprovalDialog />

@@ -1,0 +1,143 @@
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import type { DevProject, DevSession } from "@/lib/development-api";
+import { DevelopmentGitTools } from "./DevelopmentGitTools";
+import { DevelopmentReview } from "./DevelopmentReview";
+import { useGitActionDrafts } from "./git-action-drafts";
+import { useDevelopmentStore } from "./store";
+
+const api = vi.hoisted(() => ({ git: vi.fn(), reviewDiff: vi.fn(), delegate: vi.fn() }));
+const external = vi.hoisted(() => vi.fn().mockResolvedValue(undefined));
+const actions = vi.hoisted(() => ({ branches: vi.fn(), prepare: vi.fn(), execute: vi.fn(), get: vi.fn() }));
+vi.mock("./git-actions-api", () => ({ gitActionsApi: actions }));
+vi.mock("@/lib/development-api", async (original) => ({ ...(await original<typeof import("@/lib/development-api")>()), developmentApi: api }));
+vi.mock("@/lib/tauri", async (original) => ({ ...(await original<typeof import("@/lib/tauri")>()), openExternalUrl: external }));
+vi.mock("./DevelopmentGitActions", () => ({ DevelopmentGitActions: ({ open }: { open: boolean }) => open ? <div role="dialog" aria-label="Git 操作" /> : null }));
+vi.mock("./DevelopmentBranchDialog", () => ({ DevelopmentBranchDialog: ({ open, mode }: { open: boolean; mode: "create" | "switch" }) => open ? <div role="dialog" aria-label={mode === "create" ? "创建分支" : "切换分支"} /> : null }));
+vi.mock("./collaboration-requests", () => ({ dispatchCollaboration: vi.fn(), PendingCollaborationNotice: () => null }));
+const project: DevProject = { id: "project_git", rootPath: "D:/project", displayName: "项目", lastOpenedAt: "" };
+const session: DevSession = { id: "dev_git", projectId: project.id, executor: "mona", title: "任务", model: null,
+  readonly: false, parentSessionId: null, pinned: false, archived: false, revision: 0, updatedAt: "" };
+const missing = { available: false, reasonCode: "git_unavailable", reason: "未检测到可运行的 Git", files: [] };
+const ready = { available: true, branch: "main", count: 1, additions: 4, deletions: 2, files: [{ path: "a.ts", status: " M" }] };
+beforeEach(() => { vi.clearAllMocks(); api.git.mockResolvedValue(missing); actions.branches.mockResolvedValue({ branch: "main", branches: ["main", "feature/test"], head: "head", pendingAction: null }); useDevelopmentStore.setState(useDevelopmentStore.getInitialState(), true); useGitActionDrafts.setState({ drafts: {} }); });
+afterEach(() => { cleanup(); vi.useRealTimers(); });
+
+describe("Git environment degradation", () => {
+  it("shows three direct Git rows and opens changes and commit without an intermediate card", async () => {
+    api.git.mockResolvedValue(ready);
+    render(<DevelopmentGitTools project={project} session={session} visible embedded />);
+    await screen.findByText("main");
+    expect(screen.getByText("+4")).toBeInTheDocument();
+    const rows = within(screen.getByRole("region", { name: "Git 工具" })).getAllByRole("button");
+    expect(rows).toHaveLength(3);
+    fireEvent.click(rows[0]);
+    expect(useDevelopmentStore.getState().sides[session.id].tab).toBe("review");
+    fireEvent.click(screen.getByRole("button", { name: "提交或推送" }));
+    expect(useGitActionDrafts.getState().drafts[session.id].kind).toBe("commit");
+    expect(screen.getByRole("dialog", { name: "Git 操作" })).toBeInTheDocument();
+  });
+  it("opens branch creation from the searchable branch dropdown", async () => {
+    api.git.mockResolvedValue(ready);
+    render(<DevelopmentGitTools project={project} session={session} visible embedded />);
+    await screen.findByText("main");
+    fireEvent.click(screen.getByRole("button", { name: "切换 Git 分支" }));
+    await screen.findByRole("option", { name: "feature/test" });
+    fireEvent.click(screen.getByRole("button", { name: "创建并检出新分支…" }));
+    expect(screen.getByRole("dialog", { name: "创建分支" })).toBeInTheDocument();
+  });
+  it("filters and switches to the selected existing branch once", async () => {
+    api.git.mockResolvedValue(ready);
+    actions.prepare.mockResolvedValue({ id: "switch_once", sessionId: session.id, status: "prepared" });
+    actions.execute.mockResolvedValue({ id: "switch_once", sessionId: session.id, status: "succeeded" });
+    render(<DevelopmentGitTools project={project} session={session} visible embedded />);
+    await screen.findByText("main");
+    fireEvent.click(screen.getByRole("button", { name: "切换 Git 分支" }));
+    const search = await screen.findByRole("textbox", { name: "搜索分支" });
+    await screen.findByRole("option", { name: "feature/test" });
+    fireEvent.change(search, { target: { value: "feature" } });
+    expect(screen.getAllByRole("option")).toHaveLength(1);
+    fireEvent.keyDown(search, { key: "Enter" });
+    await waitFor(() => expect(actions.execute).toHaveBeenCalledTimes(1));
+    expect(actions.execute).toHaveBeenCalledWith(session.id, "switch_once");
+    expect(actions.prepare).toHaveBeenCalledWith(session.id, expect.objectContaining({ kind: "switch_branch", branch: "feature/test", paths: [] }));
+    await waitFor(() => expect(api.git.mock.calls.length).toBeGreaterThan(1));
+  });
+  it("keeps an uncertain branch switch for inspection without repeating the write", async () => {
+    api.git.mockResolvedValue(ready);
+    actions.prepare.mockResolvedValue({ id: "uncertain", sessionId: session.id, status: "prepared" });
+    actions.execute.mockRejectedValue(new Error("lost response"));
+    actions.get.mockResolvedValue({ id: "uncertain", sessionId: session.id, status: "unknown" });
+    render(<DevelopmentGitTools project={project} session={session} visible embedded />);
+    await screen.findByText("main");
+    fireEvent.click(screen.getByRole("button", { name: "切换 Git 分支" }));
+    fireEvent.click(await screen.findByRole("option", { name: "feature/test" }));
+    await screen.findByRole("dialog", { name: "切换分支" });
+    expect(actions.execute).toHaveBeenCalledTimes(1);
+    expect(actions.get).toHaveBeenCalledWith(session.id, "uncertain");
+  });
+  it("shows missing Git rather than fake zero counts, with explicit install help only", async () => {
+    useDevelopmentStore.getState().setDraft(session.id, "keep my task");
+    render(<DevelopmentGitTools project={project} session={session} visible />);
+    await screen.findByText("未检测到 Git");
+    fireEvent.click(screen.getByRole("button", { name: "Git 工具", exact: true }));
+    const panel = await screen.findByRole("region", { name: "Git 环境状态" });
+    expect(screen.queryByText("+0")).not.toBeInTheDocument();
+    expect(screen.queryByText("待刷新")).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "提交或推送" })).not.toBeInTheDocument();
+    fireEvent.click(within(panel).getByRole("button", { name: "安装说明" }));
+    expect(external).not.toHaveBeenCalled();
+    fireEvent.click(within(panel).getByRole("button", { name: "打开 Git 官方安装页" }));
+    expect(external).toHaveBeenCalledWith("https://git-scm.com/install/");
+    expect(useDevelopmentStore.getState().drafts[session.id]).toBe("keep my task");
+  });
+  it("rechecks the actual environment and restores repository actions without sending tasks", async () => {
+    render(<DevelopmentGitTools project={project} session={session} visible />);
+    await screen.findByText("未检测到 Git");
+    fireEvent.click(screen.getByRole("button", { name: "Git 工具", exact: true }));
+    await screen.findByRole("region", { name: "Git 环境状态" });
+    api.git.mockResolvedValue(ready);
+    fireEvent.click(screen.getByRole("button", { name: "重新检测" }));
+    await waitFor(() => expect(screen.getAllByText("+4")).toHaveLength(2));
+    expect(api.git).toHaveBeenCalledWith(project.id, true);
+    expect(screen.getByRole("button", { name: "提交或推送" })).toBeEnabled();
+    expect(api.delegate).not.toHaveBeenCalled();
+  });
+  it("does not keep polling a known missing installation", async () => {
+    vi.useFakeTimers();
+    render(<DevelopmentGitTools project={project} session={session} visible />);
+    await act(async () => { await Promise.resolve(); });
+    const calls = api.git.mock.calls.length;
+    await act(async () => { await vi.advanceTimersByTimeAsync(65000); });
+    expect(api.git).toHaveBeenCalledTimes(calls);
+  });
+  it("distinguishes a non-repository from a clean repository and a query failure", async () => {
+    api.git.mockResolvedValue({ available: false, reasonCode: "not_repository", files: [] });
+    render(<DevelopmentGitTools project={project} session={session} visible />);
+    await screen.findByText("非 Git 仓库");
+    fireEvent.click(screen.getByRole("button", { name: "Git 工具", exact: true }));
+    await screen.findByText("当前目录不是 Git 仓库");
+    expect(screen.queryByRole("button", { name: "安装说明" })).not.toBeInTheDocument();
+    api.git.mockResolvedValue({ ...ready, count: 0, files: [], additions: 0, deletions: 0 });
+    fireEvent.click(screen.getByRole("button", { name: "重新检测" }));
+    await waitFor(() => expect(screen.getAllByText("+0")).toHaveLength(2));
+    api.git.mockRejectedValueOnce(new Error("仓库读取失败"));
+    fireEvent.click(screen.getByRole("button", { name: "刷新 Git 状态" }));
+    await screen.findByRole("alert");
+    expect(screen.getByText("Git 状态异常")).toBeInTheDocument();
+    expect(screen.queryByText("+0")).not.toBeInTheDocument();
+  });
+  it("review clears stale diff and confirmation when Git becomes unavailable", async () => {
+    api.git.mockResolvedValueOnce(ready);
+    api.reviewDiff.mockResolvedValue({ diff: "diff --git a/a.ts b/a.ts\n@@ -1 +1 @@\n-before\n+after", sha256: "sha", source: { path: "a.ts", version: "a".repeat(64) } });
+    render(<DevelopmentReview project={project} session={session} executors={[]} presets={[]} onOpenAgent={vi.fn()} />);
+    fireEvent.click(await screen.findByRole("button", { name: /a.ts/ }));
+    await waitFor(() => expect(screen.getByRole("button", { name: "只读审查" })).toBeEnabled());
+    api.git.mockResolvedValue(missing);
+    fireEvent.click(screen.getByRole("button", { name: "刷新工作区变更" }));
+    await screen.findByRole("region", { name: "Git 环境状态" });
+    expect(screen.queryByRole("button", { name: "只读审查" })).not.toBeInTheDocument();
+    expect(screen.queryByText("审查资料版本 aaaaaaaaaa")).not.toBeInTheDocument();
+    expect(api.delegate).not.toHaveBeenCalled();
+  });
+});

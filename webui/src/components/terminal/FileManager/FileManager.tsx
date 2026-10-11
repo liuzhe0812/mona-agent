@@ -8,6 +8,7 @@ import {
 } from "@/components/ui/dialog";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import { ResizableHandle, ResizablePanel, ResizablePanelGroup } from "@/components/ui/resizable";
 import { FilePane } from "./FilePane";
 import type { UnifiedFileItem } from "./FilePane";
 import {
@@ -37,6 +38,8 @@ import type { TransferTask, TransferFileInfo } from "./types";
 
 interface Props {
   sessionId: string;
+  active?: boolean;
+  connected?: boolean;
 }
 
 interface ClipboardEntry {
@@ -74,22 +77,30 @@ function remoteToUnified(f: FileInfo): UnifiedFileItem {
   };
 }
 
-export function FileManager({ sessionId }: Props) {
+export function FileManager({ sessionId, active = true, connected = true }: Props) {
   const [localPath, setLocalPath] = useState("");
   const [localFiles, setLocalFiles] = useState<UnifiedFileItem[]>([]);
   const [localLoading, setLocalLoading] = useState(false);
+  const [localError, setLocalError] = useState<string | null>(null);
+  const localRequest = useRef(0);
+  const localInitialized = useRef(false);
   const [localShowHidden, setLocalShowHidden] = useState(false);
   const [localSelectedPaths, setLocalSelectedPaths] = useState<Set<string>>(new Set());
 
   const [remotePath, setRemotePath] = useState("/");
   const [remoteFiles, setRemoteFiles] = useState<UnifiedFileItem[]>([]);
   const [remoteLoading, setRemoteLoading] = useState(false);
+  const [remoteError, setRemoteError] = useState<string | null>(null);
+  const remoteRequest = useRef(0);
+  const remoteInitialized = useRef(false);
+  const remotePathRef = useRef<string | null>(null);
+  const connectedRef = useRef(connected);
+  connectedRef.current = connected;
   const [remoteShowHidden, setRemoteShowHidden] = useState(false);
   const [remoteSelectedPaths, setRemoteSelectedPaths] = useState<Set<string>>(new Set());
 
   const [clipboard, setClipboard] = useState<ClipboardEntry | null>(null);
   const activeSideRef = useRef<"local" | "remote">("local");
-  const [leftWidth, setLeftWidth] = useState(50);
   const containerRef = useRef<HTMLDivElement>(null);
 
   const [mkdirDialogOpen, setMkdirDialogOpen] = useState(false);
@@ -119,6 +130,8 @@ export function FileManager({ sessionId }: Props) {
   const [transferTask, setTransferTask] = useState<TransferTask | null>(null);
   const taskIdRef = useRef<string | null>(null);
 
+  useEffect(() => () => { taskIdRef.current = null; }, []);
+
   function formatSpeed(bytesPerSec: number): string {
     if (bytesPerSec === 0) return "-";
     const units = ["B/s", "KB/s", "MB/s", "GB/s"];
@@ -132,47 +145,68 @@ export function FileManager({ sessionId }: Props) {
   }
 
   const loadLocalDir = useCallback(async (path: string) => {
+    const request = ++localRequest.current;
     setLocalLoading(true);
+    setLocalError(null);
     try {
       const entries = await localListDir(path);
+      if (request !== localRequest.current) return;
       setLocalFiles(entries.map(localToUnified));
       setLocalPath(path);
-    } catch {
-      setLocalFiles([]);
+    } catch (error) {
+      if (request === localRequest.current) setLocalError("读取本地目录失败：" + String(error));
     } finally {
-      setLocalLoading(false);
+      if (request === localRequest.current) setLocalLoading(false);
     }
   }, []);
 
   const loadRemoteDir = useCallback(
     async (path: string) => {
+      if (!connectedRef.current) return;
+      const request = ++remoteRequest.current;
       setRemoteLoading(true);
+      setRemoteError(null);
       try {
         const entries = await sftpList(sessionId, path);
+        if (request !== remoteRequest.current || !connectedRef.current) return;
         setRemoteFiles(entries.map(remoteToUnified));
         setRemotePath(path);
-      } catch {
-        setRemoteFiles([]);
+        remotePathRef.current = path;
+      } catch (error) {
+        if (request === remoteRequest.current) setRemoteError("读取远程目录失败：" + String(error));
       } finally {
-        setRemoteLoading(false);
+        if (request === remoteRequest.current) setRemoteLoading(false);
       }
     },
     [sessionId],
   );
 
   useEffect(() => {
+    if (!active || localInitialized.current) return;
+    localInitialized.current = true;
     localDesktopDir()
       .then((desktop) => loadLocalDir(desktop))
-      .catch(() => loadLocalDir("C:\\"));
-  }, [loadLocalDir]);
+      .catch((error) => setLocalError("读取本地目录失败：" + String(error)));
+  }, [active, loadLocalDir]);
 
   useEffect(() => {
-    if (sessionId) {
-      sftpCanonicalize(sessionId, ".")
-        .then((home) => loadRemoteDir(home))
-        .catch(() => loadRemoteDir("/"));
+    if (!connected) {
+      remoteInitialized.current = false;
+      remoteRequest.current++;
+      setRemoteLoading(false);
+      return;
     }
-  }, [sessionId, loadRemoteDir]);
+    if (!active || !sessionId || remoteInitialized.current) return;
+    remoteInitialized.current = true;
+    if (remotePathRef.current) {
+      void loadRemoteDir(remotePathRef.current);
+    } else {
+      const request = ++remoteRequest.current;
+      sftpCanonicalize(sessionId, ".")
+        .then((home) => { if (request === remoteRequest.current) void loadRemoteDir(home); })
+        .catch((error) => { if (request === remoteRequest.current) setRemoteError("读取远程目录失败：" + String(error)); });
+    }
+  }, [sessionId, connected, active, loadRemoteDir]);
 
   const handleLocalNavigate = useCallback(
     (path: string) => {
@@ -776,6 +810,9 @@ export function FileManager({ sessionId }: Props) {
 
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
+      const target = e.target;
+      if (!active || !connected || !(target instanceof HTMLElement) || !containerRef.current?.contains(target)
+        || target.closest("input, textarea, [contenteditable=true]")) return;
       if ((e.ctrlKey || e.metaKey) && e.key === "c") {
         const side = activeSideRef.current;
         const selectedPaths = side === "local" ? localSelectedPaths : remoteSelectedPaths;
@@ -796,17 +833,19 @@ export function FileManager({ sessionId }: Props) {
     };
     document.addEventListener("keydown", handleKeyDown);
     return () => document.removeEventListener("keydown", handleKeyDown);
-  }, [localSelectedPaths, remoteSelectedPaths, localFiles, remoteFiles, handleCopy, handleCut, handlePaste]);
+  }, [active, connected, localSelectedPaths, remoteSelectedPaths, localFiles, remoteFiles, handleCopy, handleCut, handlePaste]);
 
   return (
-    <div className="flex h-full flex-col">
-      <div className="flex flex-1 min-h-0" ref={containerRef}>
-        <div style={{ width: `${leftWidth}%` }} className="min-w-0 border-r">
+    <div className="flex h-full flex-col" inert={!active || !connected} aria-hidden={!active}>
+      <ResizablePanelGroup direction="horizontal" elementRef={containerRef} className="min-h-0 flex-1"
+        id={`sftp-panes-${sessionId}`} aria-label="本地与远程文件">
+        <ResizablePanel id={`sftp-local-${sessionId}`} defaultSize="50%" minSize="20%" className="min-h-0 min-w-0 overflow-hidden">
           <FilePane
             label="本地"
             currentPath={localPath}
             files={localFiles}
             loading={localLoading}
+            error={localError}
             onNavigate={handleLocalNavigate}
             onOpen={handleLocalOpen}
             onDelete={(file) => handleDelete(file, "local")}
@@ -828,33 +867,15 @@ export function FileManager({ sessionId }: Props) {
             onDropFiles={handleDropToLocal}
             isTransferring={transferTask?.status === "transferring" || transferTask?.status === "waiting"}
           />
-        </div>
-        <div
-          className="w-1 cursor-col-resize bg-border hover:bg-primary/40 active:bg-primary/60 shrink-0 transition-colors"
-          onMouseDown={(e) => {
-            e.preventDefault();
-            const startX = e.clientX;
-            const startWidth = leftWidth;
-            const containerWidth = containerRef.current?.clientWidth ?? 800;
-            const handleMove = (ev: MouseEvent) => {
-              const delta = ev.clientX - startX;
-              const pct = startWidth + (delta / containerWidth) * 100;
-              setLeftWidth(Math.max(20, Math.min(80, pct)));
-            };
-            const handleUp = () => {
-              document.removeEventListener("mousemove", handleMove);
-              document.removeEventListener("mouseup", handleUp);
-            };
-            document.addEventListener("mousemove", handleMove);
-            document.addEventListener("mouseup", handleUp);
-          }}
-        />
-        <div className="flex-1 min-w-0">
+        </ResizablePanel>
+        <ResizableHandle aria-label="调整本地与远程文件区域宽度" className="z-20" />
+        <ResizablePanel id={`sftp-remote-${sessionId}`} defaultSize="50%" minSize="20%" className="min-h-0 min-w-0 overflow-hidden">
           <FilePane
             label="远程"
             currentPath={remotePath}
             files={remoteFiles}
             loading={remoteLoading}
+            error={remoteError}
             onNavigate={handleRemoteNavigate}
             onOpen={handleRemoteOpen}
             onDelete={(file) => handleDelete(file, "remote")}
@@ -877,8 +898,8 @@ export function FileManager({ sessionId }: Props) {
             onDropFiles={handleDropToRemote}
             isTransferring={transferTask?.status === "transferring" || transferTask?.status === "waiting"}
           />
-        </div>
-      </div>
+        </ResizablePanel>
+      </ResizablePanelGroup>
 
       <TransferPanel
         task={transferTask}

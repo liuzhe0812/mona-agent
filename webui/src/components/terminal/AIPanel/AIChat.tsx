@@ -252,6 +252,7 @@ export function AIChat({ sessionId, sessionTypeOverride, onStreamingChange }: Pr
       </div>
       <div className="shrink-0 px-2 pb-2">
         <ThreadComposer
+          chatId={chatId}
           onSend={handleSubmit}
           isStreaming={isStreaming}
           stopping={stopping}
@@ -264,7 +265,6 @@ export function AIChat({ sessionId, sessionTypeOverride, onStreamingChange }: Pr
           pendingMessages={pendingQueue.messages}
           onPendingAppend={handlePendingAppend}
           onPendingRemove={pendingQueue.remove}
-          onPendingEdit={pendingQueue.update}
           isPendingFull={pendingQueue.messages.length >= 3}
         />
       </div>

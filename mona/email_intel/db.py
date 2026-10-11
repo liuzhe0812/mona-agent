@@ -301,6 +301,18 @@ def search_messages(
     return results
 
 
+def get_account_identity(account_id: str) -> dict[str, str] | None:
+    """读取提取本人事项所需的邮箱身份，不读取账户凭据。"""
+    with _connect() as conn:
+        row = conn.execute(
+            "SELECT from_address, from_name FROM accounts WHERE id = ?",
+            [account_id],
+        ).fetchone()
+    if row is None:
+        return None
+    return {"address": row["from_address"], "name": row["from_name"] or ""}
+
+
 def get_message(
     uid: str,
     account_id: str,

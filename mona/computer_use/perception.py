@@ -9,6 +9,7 @@ import json
 import math
 import re
 import time
+import uuid
 from typing import Any
 
 from PIL import Image, ImageChops, ImageDraw, ImageStat
@@ -216,8 +217,8 @@ def build_observation(
         candidates.append(candidate)
     scope = "desktop" if name == "get_desktop_state" else "window"
     return {
-        "observation_id": str(structured.get("snapshot_id") or f"obs-{time.time_ns()}"),
-        "image_id": f"image-{time.time_ns()}",
+        "observation_id": str(structured.get("snapshot_id") or f"obs-{uuid.uuid4().hex}"),
+        "image_id": f"image-{uuid.uuid4().hex}",
         "captured_at": time.time(),
         "scope": scope,
         "pid": arguments.get("pid"),
@@ -271,7 +272,7 @@ def make_detail_view(observation: dict[str, Any], region: dict) -> dict:
         output = io.BytesIO()
         detail.save(output, format="PNG")
     view = {
-        "image_id": f"detail-{time.time_ns()}", "width": detail.width, "height": detail.height,
+        "image_id": f"detail-{uuid.uuid4().hex}", "width": detail.width, "height": detail.height,
         "crop": [left, top, right - left, bottom - top], "screenshot": output.getvalue(),
         "mime_type": "image/png",
     }
@@ -454,13 +455,21 @@ def _visual_candidates_from_payload(
         for field in ("value", "checked", "disabled", "enabled", "selected"):
             if field in item:
                 candidate[field] = item[field]
-        try:
-            confidence = float(item.get("confidence", 0.5) or 0.5)
-        except (TypeError, ValueError):
-            confidence = 0.5
-        candidate["confidence"] = confidence if math.isfinite(confidence) else 0.5
+        confidence = _finite_number(item.get("confidence"))
+        candidate["confidence"] = confidence if confidence is not None and 0 <= confidence <= 1 else 0.0
         candidates.append(candidate)
     return candidates, invalid
+
+
+def candidate_is_grounded(candidate: dict[str, Any], min_confidence: float = 0.6) -> bool:
+    """A decision's confidence cannot substitute for visual localization evidence."""
+    if candidate.get("source") != "vision":
+        return True
+    confidence = _finite_number(candidate.get("confidence"))
+    return bool(
+        confidence is not None and 0 < confidence <= 1 and confidence >= min_confidence
+        and _raw_frame(candidate.get("frame")) is not None
+    )
 
 
 def _merged_summary(global_summary: str, local_update: str = "") -> str:
@@ -582,10 +591,15 @@ async def add_visual_candidates(
         '{"summary":"short current state","candidates":[{"label":"what the object is and its '
         'current state","state":"short state string","relations":["short relation"],'
         '"role":"button|field|menu|unit|tile|item|region","frame":{"x":0,"y":0,'
-        '"w":1,"h":1},"actions":["click"]}],"unknown":false}. Coordinates must be '
+        '"w":1,"h":1},"actions":["click"],"confidence":0.0}],"unknown":false}. Coordinates must be '
         f"window-local pixels within {request_observation['width']}x{request_observation['height']}. "
         "Keep state under 160 characters and each relation under 160 characters; return at most 24 relations. "
-        "Include only useful objects missing from the accessibility tree. Do not invent actions; "
+        "Locate targets relevant to the current goal, not an inventory of the whole screen. "
+        "Include only useful objects missing from the accessibility tree. Do not invent actions. "
+        "Confidence (0..1) describes the precision of the clickable location, not recognition of its label. "
+        "Boxes must tightly enclose the clickable target; never use a containing panel as a button. "
+        "Coordinates are pixels of THIS supplied image (including when cropped), not screen, CSS, "
+        "normalized coordinates or Windows logical pixels. Do not multiply by system scaling. "
         "If small details prevent reliable identification but their region is known, return unknown:true "
         "and refine_region:{x,y,w,h} in this image's pixels. Otherwise omit refine_region. "
         "for a changed local region, summary is a local update and must not claim the whole window changed. "
@@ -610,6 +624,7 @@ async def add_visual_candidates(
             temperature=0,
             reasoning_effort="none",
             retry_mode="standard",
+            require_image=True,
         )
     except Exception as exc:
         _set_perception_status(
@@ -718,6 +733,33 @@ async def add_visual_candidates(
             "perception_status": dict(observation.get("perception_status") or {}),
         }
     return observation
+
+
+def coordinate_target_is_current(before: dict, after: dict | None, arguments: dict) -> bool:
+    """Revalidate screenshot pixels, not DPI-scaled or screen-space coordinates."""
+    if not after or not _same_target(before, after):
+        return False
+    if any(before.get(key) != after.get(key) for key in ("width", "height", "geometry")):
+        return False
+    if not before.get("screenshot") or not after.get("screenshot"):
+        return False
+    points = [(arguments[x], arguments[y]) for x, y in (("x", "y"), ("from_x", "from_y"), ("to_x", "to_y"))
+              if x in arguments and y in arguments]
+    if not points:
+        return False
+    with Image.open(io.BytesIO(before["screenshot"])) as old, Image.open(io.BytesIO(after["screenshot"])) as new:
+        if old.size != new.size:
+            return False
+        # Only the target/path neighborhood matters; distant spinners do not.
+        margin = 12
+        box = (max(0, math.floor(min(x for x, _ in points)) - margin),
+               max(0, math.floor(min(y for _, y in points)) - margin),
+               min(old.width, math.ceil(max(x for x, _ in points)) + margin + 1),
+               min(old.height, math.ceil(max(y for _, y in points)) + margin + 1))
+        if box[2] <= box[0] or box[3] <= box[1]:
+            return False
+        difference = ImageChops.difference(old.convert("RGB").crop(box), new.convert("RGB").crop(box))
+        return max(high for _, high in difference.getextrema()) <= 8
 
 
 def target_change_score(

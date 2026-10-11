@@ -19,7 +19,7 @@ from mona.utils.helpers import (
     detect_image_mime,
     truncate_text,
 )
-from mona.utils.prompt_templates import render_template
+from mona.utils.prompt_templates import current_bootstrap_content, render_template
 
 
 def _build_db_runtime_context(metadata: Mapping[str, Any]) -> str | None:
@@ -265,7 +265,7 @@ class ContextBuilder:
         for filename in self.BOOTSTRAP_FILES:
             file_path = self.memory.memory_dir / filename
             if file_path.exists():
-                content = file_path.read_text(encoding="utf-8")
+                content = current_bootstrap_content(filename, file_path.read_text(encoding="utf-8"))
                 if filename == "USER.md" and self.agent_id == MONA_AGENT_ID:
                     content = self._strip_legacy_generated_profile_sections(content)
                 parts.append(f"## {filename}\n\n{content}")

@@ -1,5 +1,6 @@
 import {
   act,
+  createEvent,
   fireEvent,
   render,
   screen,
@@ -9,6 +10,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { ThreadComposer } from "@/components/thread/ThreadComposer";
 import type { EncodeResponse } from "@/lib/imageEncode";
+import type { MonaClient } from "@/lib/mona-client";
+import { ClientProvider } from "@/providers/ClientProvider";
 
 const encodeImage = vi.fn<(file: File) => Promise<EncodeResponse>>();
 
@@ -36,6 +39,36 @@ function resolveReady(file: File): EncodeResponse {
   };
 }
 
+function pasteFiles(element: HTMLElement, files: File[]) {
+  fireEvent.paste(element, {
+    clipboardData: {
+      items: files.map((file) => ({ kind: "file", type: file.type, getAsFile: () => file })),
+    },
+  });
+}
+
+function attachmentClient() {
+  const handlers = new Set<Parameters<MonaClient["onDocUploadResult"]>[0]>();
+  return {
+    onDocUploadResult(handler: Parameters<MonaClient["onDocUploadResult"]>[0]) {
+      handlers.add(handler);
+      return () => { handlers.delete(handler); };
+    },
+    sendDocUpload: vi.fn(),
+    complete(chatId: string, files: Array<{ name: string; path: string }>) {
+      for (const handler of handlers) handler({ ok: true, chatId, files });
+    },
+  };
+}
+
+function withClient(client: ReturnType<typeof attachmentClient>, children: React.ReactNode) {
+  return (
+    <ClientProvider client={client as unknown as MonaClient} token="" runtimeStatus="ready">
+      {children}
+    </ClientProvider>
+  );
+}
+
 beforeEach(() => {
   encodeImage.mockReset();
   let id = 0;
@@ -54,67 +87,103 @@ afterEach(() => {
   delete window.__TAURI_INTERNALS__;
 });
 
-describe("ThreadComposer — image attachments", () => {
-  it("routes a picked file of any format to the document uploader", () => {
-    const onAddDocuments = vi.fn();
-    const file = new File(["video"], "clip.mp4", { type: "video/mp4" });
-    render(<ThreadComposer onSend={vi.fn()} onAddDocuments={onAddDocuments} />);
+describe("ThreadComposer — attachments", () => {
+  it("blocks file paste and drop when attachments are disabled but keeps the custom attach action", async () => {
+    const client = attachmentClient();
+    const onAttach = vi.fn();
+    render(withClient(client, <ThreadComposer onSend={vi.fn()} attachmentsEnabled={false} onAttach={onAttach} attachLabel="引用项目文件" />));
 
-    const fileInput = screen
-      .getByLabelText(/message input/i)
-      .closest("form")!
-      .querySelector('input[type="file"]') as HTMLInputElement;
-    fireEvent.change(fileInput, { target: { files: [file] } });
+    const textarea = screen.getByRole("textbox", { name: "Message input" });
+    const form = textarea.closest("form")!;
+    expect(screen.queryByRole("button", { name: "Attach files" })).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "引用项目文件" }));
+    expect(onAttach).toHaveBeenCalledOnce();
 
-    expect(fileInput).not.toHaveAttribute("accept");
-    expect(onAddDocuments).toHaveBeenCalledWith([file]);
-    expect(encodeImage).not.toHaveBeenCalled();
-  });
+    const textPaste = createEvent.paste(textarea, { clipboardData: { items: [] } });
+    const preventDefault = vi.spyOn(textPaste, "preventDefault");
+    fireEvent(textarea, textPaste);
+    expect(preventDefault).not.toHaveBeenCalled();
 
-  it("routes a dropped video to the document uploader", () => {
-    const onAddDocuments = vi.fn();
-    const file = new File(["video"], "clip.mp4", { type: "video/mp4" });
-    render(<ThreadComposer onSend={vi.fn()} onAddDocuments={onAddDocuments} />);
-
-    const form = screen.getByLabelText(/message input/i).closest("form")!;
-    fireEvent.dragEnter(form, { dataTransfer: { files: [file], types: ["Files"] } });
+    const file = new File(["document"], "notes.txt", { type: "text/plain" });
+    pasteFiles(textarea, [file]);
     fireEvent.drop(form, { dataTransfer: { files: [file], types: ["Files"] } });
-
-    expect(onAddDocuments).toHaveBeenCalledWith([file]);
+    expect(await screen.findByRole("alert")).toHaveTextContent("当前模式不支持附件。");
+    expect(client.sendDocUpload).not.toHaveBeenCalled();
     expect(encodeImage).not.toHaveBeenCalled();
   });
 
-  it("uses the document uploader for desktop file drops just like the add-file picker", () => {
-    Object.defineProperty(window, "__TAURI_INTERNALS__", {
-      value: {},
-      configurable: true,
+  it.each(["pick", "drop", "paste"])("accepts arbitrary file formats via %s before a chat exists", async (entry) => {
+    const client = attachmentClient();
+    const onSend = vi.fn();
+    const files = [
+      new File(["script"], "task.py", { type: "text/x-python" }),
+      new File(["archive"], "data.zip", { type: "application/zip" }),
+      new File(["vector"], "drawing.svg", { type: "image/svg+xml" }),
+      new File(["photo"], "photo.heic", { type: "image/heic" }),
+      new File(["photo"], "photo.avif", { type: "image/avif" }),
+      new File(["unknown"], "custom", { type: "" }),
+    ];
+    render(withClient(client, <ThreadComposer onSend={onSend} />));
+    const textarea = screen.getByLabelText(/message input/i);
+    const form = textarea.closest("form")!;
+    const input = form.querySelector('input[type="file"]')!;
+    expect(input).not.toHaveAttribute("accept");
+    if (entry === "pick") fireEvent.change(input, { target: { files } });
+    else if (entry === "paste") pasteFiles(textarea, files);
+    else fireEvent.drop(form, { dataTransfer: { files, types: ["Files"] } });
+
+    await waitFor(() => expect(client.sendDocUpload).toHaveBeenCalledTimes(1));
+    const [uploadId, payload] = client.sendDocUpload.mock.calls[0];
+    expect(payload.map((file: { name: string }) => file.name)).toEqual(files.map((file) => file.name));
+    expect(encodeImage).not.toHaveBeenCalled();
+    expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+    const uploaded = files.map((file) => ({ name: file.name, path: `uploads/${uploadId}/${file.name}` }));
+    act(() => client.complete(uploadId, uploaded));
+    fireEvent.keyDown(textarea, { key: "Enter" });
+    expect(onSend).toHaveBeenCalledWith("", undefined, {
+      docPaths: uploaded.map((file) => file.path),
+      documentNames: files.map((file) => file.name),
     });
-    const onAddDocuments = vi.fn();
+  });
+
+  it("keeps a selected image as its original file when the model has no vision", async () => {
+    const client = attachmentClient();
     const file = pngFile("reference.png");
-    render(<ThreadComposer onSend={vi.fn()} onAddDocuments={onAddDocuments} />);
-
-    const form = screen.getByLabelText(/message input/i).closest("form")!;
-    fireEvent.dragEnter(form, { dataTransfer: { files: [file], types: ["Files"] } });
-    fireEvent.drop(form, { dataTransfer: { files: [file], types: ["Files"] } });
-
-    expect(onAddDocuments).toHaveBeenCalledWith([file]);
+    Object.defineProperty(file, "path", { value: "D:/pictures/reference.png" });
+    render(withClient(client, <ThreadComposer onSend={vi.fn()} imageInputEnabled={false} />));
+    expect(screen.getByLabelText("Attach files")).toBeEnabled();
+    const input = screen.getByLabelText(/message input/i).closest("form")!.querySelector('input[type="file"]')!;
+    fireEvent.change(input, { target: { files: [file] } });
+    await waitFor(() => expect(client.sendDocUpload).toHaveBeenCalledWith(
+      expect.any(String), [{ name: file.name, local_path: "D:/pictures/reference.png" }],
+    ));
     expect(encodeImage).not.toHaveBeenCalled();
   });
 
-  it("attaches a picked image and includes its data url on send", async () => {
+  it("ignores an old upload result after switching conversations", async () => {
+    const client = attachmentClient();
+    const onSend = vi.fn();
+    const { rerender } = render(withClient(client, <ThreadComposer chatId="one" onSend={onSend} />));
+    pasteFiles(screen.getByLabelText(/message input/i), [new File(["data"], "old.bin")]);
+    await waitFor(() => expect(client.sendDocUpload).toHaveBeenCalledTimes(1));
+    const uploadId = client.sendDocUpload.mock.calls[0][0];
+    rerender(withClient(client, <ThreadComposer chatId="two" onSend={onSend} />));
+    act(() => client.complete(uploadId, [{ name: "old.bin", path: "uploads/old.bin" }]));
+    expect(screen.queryByText("old.bin")).not.toBeInTheDocument();
+    fireEvent.change(screen.getByLabelText(/message input/i), { target: { value: "next" } });
+    fireEvent.keyDown(screen.getByLabelText(/message input/i), { key: "Enter" });
+    expect(onSend).toHaveBeenCalledWith("next", undefined, undefined);
+  });
+
+  it("attaches a pasted image and includes its data url on send", async () => {
     const file = pngFile("a.png");
     encodeImage.mockResolvedValueOnce(resolveReady(file));
     const onSend = vi.fn();
 
     render(<ThreadComposer onSend={onSend} />);
 
-    const input = screen
-      .getByLabelText(/message input/i)
-      .closest("form")!
-      .querySelector('input[type="file"]') as HTMLInputElement;
-
     await act(async () => {
-      fireEvent.change(input, { target: { files: [file] } });
+      pasteFiles(screen.getByLabelText(/message input/i), [file]);
     });
 
     await waitFor(() =>
@@ -145,13 +214,8 @@ describe("ThreadComposer — image attachments", () => {
 
     render(<ThreadComposer onSend={onSend} />);
 
-    const fileInput = screen
-      .getByLabelText(/message input/i)
-      .closest("form")!
-      .querySelector('input[type="file"]') as HTMLInputElement;
-
     await act(async () => {
-      fireEvent.change(fileInput, { target: { files: [file] } });
+      pasteFiles(screen.getByLabelText(/message input/i), [file]);
     });
 
     const textarea = screen.getByLabelText(/message input/i);
@@ -201,13 +265,8 @@ describe("ThreadComposer — image attachments", () => {
     const onSend = vi.fn();
 
     render(<ThreadComposer onSend={onSend} />);
-    const fileInput = screen
-      .getByLabelText(/message input/i)
-      .closest("form")!
-      .querySelector('input[type="file"]') as HTMLInputElement;
-
     await act(async () => {
-      fireEvent.change(fileInput, { target: { files: [file] } });
+      pasteFiles(screen.getByLabelText(/message input/i), [file]);
     });
 
     await waitFor(() => {

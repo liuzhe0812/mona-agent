@@ -285,6 +285,10 @@ def validate_action(action: str, arguments: dict, observation: dict | None) -> s
         return "Use pid/window_id for a window, or scope='desktop' after a desktop observation."
     if action == "launch":
         return None
+    if action == "focus" and observation is None:
+        if all(type(arguments.get(key)) is int and arguments[key] > 0 for key in ("pid", "window_id")):
+            return None
+        return "Focus requires exact positive pid and window_id from the window list."
     if observation is None:
         return "Observe the target with computer_observe window/desktop before acting again."
     scope = arguments.get("scope", "window")

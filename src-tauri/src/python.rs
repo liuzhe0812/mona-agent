@@ -142,7 +142,7 @@ fn deployed_gateway_version_matches(dest_dir: &Path, version: &str) -> bool {
 /// Windows, while renaming it on the same volume is fast and atomic.
 fn remove_old_gateway_dir(dir: &PathBuf) -> Result<(), String> {
     #[cfg(windows)]
-    kill_stale_gateway_processes();
+    kill_stale_gateway_processes(dir)?;
 
     let suffix = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
@@ -209,19 +209,105 @@ fn sweep_stale_gateway_dirs() {
     }
 }
 
-/// Kill any lingering `mona-gateway.exe` processes from previous app sessions.
-/// Only called when the deployed directory is about to be replaced, so any
-/// running instance is necessarily an outdated orphan that would hold locks
-/// on the exe/DLLs inside.
+/// Stop Gateway processes running from this deployment before rotating its files.
 #[cfg(windows)]
-pub(crate) fn kill_stale_gateway_processes() {
-    let mut cmd = std::process::Command::new("taskkill");
-    cmd.args(["/IM", GATEWAY_EXE_NAME, "/T", "/F"]);
-    use std::os::windows::process::CommandExt;
-    cmd.creation_flags(0x08000000); // CREATE_NO_WINDOW
-                                    // taskkill exits non-zero when no matching process exists — that is fine.
-    if let Err(e) = cmd.status() {
-        log::warn!("Failed to taskkill stale gateway processes: {}", e);
+fn kill_stale_gateway_processes(dir: &Path) -> Result<(), String> {
+    use sysinfo::{ProcessesToUpdate, System};
+
+    let executable = dir.join(GATEWAY_EXE_NAME);
+    let canonical_executable = executable
+        .canonicalize()
+        .or_else(|error| {
+            if error.kind() == std::io::ErrorKind::NotFound {
+                dir.canonicalize().map(|path| path.join(GATEWAY_EXE_NAME))
+            } else {
+                Err(error)
+            }
+        })
+        .map_err(|error| {
+            format!(
+                "Failed to resolve deployed Gateway executable {:?}: {}",
+                executable, error
+            )
+        })?;
+    let canonical_dir = canonical_executable.parent().unwrap();
+
+    let mut system = System::new();
+    system.refresh_processes(ProcessesToUpdate::All, true);
+    let mut matching_pids = Vec::new();
+    for (pid, process) in system.processes() {
+        let Some(process_executable) = process.exe().filter(|path| {
+            path.file_name()
+                .is_some_and(|name| name.to_string_lossy().eq_ignore_ascii_case(GATEWAY_EXE_NAME))
+        }) else {
+            continue;
+        };
+        match canonical_executable_matches(process_executable, &canonical_executable) {
+            Ok(true) => matching_pids.push(*pid),
+            Ok(false) => {}
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+            Err(error) if process_parent_matches(process_executable, canonical_dir) => {
+                return Err(format!(
+                    "Failed to resolve deployed Gateway process with PID {}: {}",
+                    pid, error
+                ));
+            }
+            Err(_) => {}
+        }
+    }
+
+    for pid in matching_pids {
+        let Some(process) = system.process(pid) else {
+            continue;
+        };
+        crate::backend_process::terminate(process)
+            .map_err(|error| format!("Failed to terminate deployed Gateway process {}: {}", pid, error))?;
+
+        for _ in 0..20 {
+            std::thread::sleep(std::time::Duration::from_millis(100));
+            system.refresh_processes(ProcessesToUpdate::Some(&[pid]), true);
+            if system.process(pid).is_none() {
+                break;
+            }
+        }
+        if system.process(pid).is_some() {
+            return Err(format!(
+                "Could not confirm termination of deployed Gateway process with PID {}",
+                pid
+            ));
+        }
+    }
+
+    Ok(())
+}
+
+fn canonical_executable_matches(
+    process_executable: &Path,
+    canonical_deployed_executable: &Path,
+) -> std::io::Result<bool> {
+    let canonical_process_executable = process_executable.canonicalize()?;
+    Ok(canonical_paths_match(
+        &canonical_process_executable,
+        canonical_deployed_executable,
+    ))
+}
+
+fn process_parent_matches(process_executable: &Path, canonical_deployed_dir: &Path) -> bool {
+    process_executable
+        .parent()
+        .and_then(|parent| parent.canonicalize().ok())
+        .is_some_and(|parent| canonical_paths_match(&parent, canonical_deployed_dir))
+}
+
+fn canonical_paths_match(left: &Path, right: &Path) -> bool {
+    #[cfg(windows)]
+    {
+        left.to_string_lossy()
+            .eq_ignore_ascii_case(&right.to_string_lossy())
+    }
+    #[cfg(not(windows))]
+    {
+        left == right
     }
 }
 
@@ -413,7 +499,10 @@ fn find_windows_python() -> Option<PathBuf> {
 
 #[cfg(test)]
 mod gateway_rotation_tests {
-    use super::{deployed_gateway_version_matches, deploy_gateway_directory, rename_gateway_dir, GATEWAY_EXE_NAME};
+    use super::{
+        canonical_executable_matches, deployed_gateway_version_matches, deploy_gateway_directory,
+        rename_gateway_dir, GATEWAY_EXE_NAME,
+    };
     use std::sync::{Arc, Barrier};
 
     #[test]
@@ -444,6 +533,27 @@ mod gateway_rotation_tests {
             b"payload"
         );
         std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn process_match_requires_the_canonical_deployment_path() {
+        let root = tempfile::tempdir().unwrap();
+        let deployed_dir = root.path().join("deployed");
+        let other_dir = root.path().join("other");
+        std::fs::create_dir_all(&deployed_dir).unwrap();
+        std::fs::create_dir_all(&other_dir).unwrap();
+        let deployed_exe = deployed_dir.join(GATEWAY_EXE_NAME);
+        let other_exe = other_dir.join(GATEWAY_EXE_NAME);
+        std::fs::write(&deployed_exe, b"deployed").unwrap();
+        std::fs::write(&other_exe, b"other").unwrap();
+
+        let canonical_deployed_exe = deployed_exe.canonicalize().unwrap();
+        assert!(canonical_executable_matches(
+            &deployed_exe,
+            &canonical_deployed_exe
+        )
+        .unwrap());
+        assert!(!canonical_executable_matches(&other_exe, &canonical_deployed_exe).unwrap());
     }
 
     #[test]

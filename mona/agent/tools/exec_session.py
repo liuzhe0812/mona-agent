@@ -6,6 +6,7 @@ import asyncio
 import shutil
 import time
 import uuid
+from collections.abc import Callable
 from contextlib import suppress
 from dataclasses import dataclass
 from typing import Any
@@ -59,6 +60,7 @@ class _ExecSession:
         cwd: str,
         timeout: int,
         owner_session_key: str | None,
+        diagnostics: Callable[[int | None, str], str] | None = None,
     ) -> None:
         self.session_id = session_id
         self.process = process
@@ -67,6 +69,8 @@ class _ExecSession:
         self.started_at = time.monotonic()
         self.deadline = time.monotonic() + timeout
         self.owner_session_key = owner_session_key
+        self._diagnostics = diagnostics
+        self._stderr_tail = ""
         self.last_access = time.monotonic()
         self._chunks: list[str] = []
         self._lock = asyncio.Lock()
@@ -92,6 +96,8 @@ class _ExecSession:
                 first = False
             async with self._lock:
                 self._chunks.append(text)
+                if prefix and self._diagnostics:
+                    self._stderr_tail = (self._stderr_tail + text)[-4096:]
 
     async def write(self, chars: str) -> str | None:
         if self.process.returncode is not None:
@@ -143,6 +149,10 @@ class _ExecSession:
             self._chunks.clear()
 
         output, truncated = _truncate_output(output, max_output_chars)
+        if self.process.returncode is not None and not (terminated or self._timed_out) and self._diagnostics:
+            diagnostics = self._diagnostics(self.process.returncode, self._stderr_tail)
+            if diagnostics:
+                output = f"{output}\n{diagnostics}" if output else diagnostics
         return _SessionPoll(
             output=output,
             done=self.process.returncode is not None,
@@ -193,6 +203,7 @@ class ExecSessionManager:
                 cwd=cwd,
                 timeout=timeout,
                 owner_session_key=owner_session_key,
+                diagnostics=self._execution_diagnostics(),
             )
             self._sessions[session_id] = session
 
@@ -201,6 +212,9 @@ class ExecSessionManager:
             async with self._lock:
                 self._sessions.pop(session_id, None)
         return session_id, poll
+
+    def _execution_diagnostics(self) -> Callable[[int | None, str], str] | None:
+        return None
 
     async def write(
         self,

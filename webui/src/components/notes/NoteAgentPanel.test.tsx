@@ -14,6 +14,17 @@ const streamMock = vi.hoisted(() => ({
   setMessages: vi.fn(),
 }));
 
+vi.mock("@/hooks/useAttachedDocuments", () => ({
+  useAttachedDocuments: () => ({
+    documents: [{ name: "support.bin", path: "uploads/chat-1/support.bin" }],
+    uploading: false,
+    error: null,
+    add: vi.fn(),
+    remove: vi.fn(),
+    clear: vi.fn(),
+  }),
+}));
+
 vi.mock("@/providers/ClientProvider", () => ({
   useClient: () => ({ client: null, token: "test" }),
   useClientOptional: () => ({ client: null, token: "test" }),
@@ -152,5 +163,20 @@ describe("NoteAgentPanel 结构化修改", () => {
     expect(
       screen.getByPlaceholderText("输入问题，AI 将基于当前笔记回答..."),
     ).toBeInTheDocument();
+  });
+
+  it("把附件路径和名称传给笔记 Agent", async () => {
+    renderPanel();
+
+    await userEvent.click(screen.getByRole("button", { name: "Send message" }));
+
+    expect(streamMock.send).toHaveBeenCalledWith(
+      expect.any(String),
+      undefined,
+      expect.objectContaining({
+        docPaths: ["uploads/chat-1/support.bin"],
+        documentNames: ["support.bin"],
+      }),
+    );
   });
 });

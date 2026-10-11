@@ -1,0 +1,18 @@
+{
+  "repository": "https://github.com/deepseek-ai/deepseek-harness",
+  "commit": "46a7f68b0922371ce7144b668b90e377d8e799f4",
+  "target": "windows-x64",
+  "package": "@deepseek-ai/dsh-sandbox-windows-acl",
+  "packageVersion": "0.1.7-rc.1",
+  "componentId": "development-sandbox",
+  "componentVersion": "0.1.7-rc.1+46a7f68",
+  "archiveFile": "development-sandbox.zip",
+  "archiveSha256": "b947be9f282bdd542dd01259b387fd74685c0e0d3c9263972aa9173d5e7a1f5b",
+  "archiveSizeBytes": 437672,
+  "win32ProcessVersion": "0.1.7-rc.1",
+  "lazyRequireVersion": "0.1.7-rc.1",
+  "subprocessVersion": "0.1.7-rc.1",
+  "nodeBaseVersion": "22.23.2",
+  "koffiVersion": "3.1.1",
+  "esbuildVersion": "0.28.1"
+}

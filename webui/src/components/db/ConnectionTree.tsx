@@ -36,6 +36,8 @@ import { DatabaseActionIcon } from "./DatabaseActionIcon";
 import { RoutineContextMenu } from "./RoutineContextMenu";
 import { TableFolderContextMenu } from "./TableFolderContextMenu";
 import { TableContextMenu } from "./TableContextMenu";
+import { OperationsCreateMenu } from "../operations/OperationsCreateMenu";
+import { SshConnections } from "../operations/SshConnections";
 
 type DbObjectKind = "table" | "view";
 type OpenDatabaseAction = (
@@ -62,7 +64,9 @@ export function filterDatabaseTree(nodes: DatabaseObject[], query: string): Data
   });
 }
 
-export function ConnectionTree() {
+export function ConnectionTree({ onOpenTerminal, onActivateDatabase, terminalActive = false }: {
+  onOpenTerminal?: () => void; onActivateDatabase?: () => void; terminalActive?: boolean;
+}) {
   const savedConnections = useDbStore((s) => s.savedConnections);
   const activeConnections = useDbStore((s) => s.activeConnections);
   const connectionTree = useDbStore((s) => s.connectionTree);
@@ -116,6 +120,7 @@ export function ConnectionTree() {
   useEffect(() => setHighlightedObjectKey(currentObjectKey), [currentObjectKey]);
 
   const openObjectList = (connectionId: string, database: string, objectType?: DbObjectKind) => {
+    onActivateDatabase?.();
     setSelectedConnectionId(connectionId);
     setSelectedDatabase(database);
     openDatabase(connectionId, database, objectType);
@@ -130,6 +135,7 @@ export function ConnectionTree() {
   ) => {
     setHighlightedObjectKey(`${connectionId}:${database}:${objectType}:${tableName}`);
     if (!pinned) return;
+    onActivateDatabase?.();
     setSelectedConnectionId(connectionId);
     setSelectedDatabase(database);
     void selectTable(connectionId, database, tableName, pinned, objectType).catch(() => undefined);
@@ -172,15 +178,9 @@ export function ConnectionTree() {
           >
             <DbIcon name="search" className="h-3.5 w-3.5" />
           </Button>
-          <Button
-            variant="ghost"
-            size="icon"
-            className="h-6 w-6"
-            aria-label="新建连接"
-            onClick={() => setNewConnectionDialogOpen(true)}
-          >
-            <DbIcon name="add" className="h-3.5 w-3.5" />
-          </Button>
+          {onOpenTerminal ? <OperationsCreateMenu /> : <Button
+            variant="ghost" size="icon" className="h-6 w-6" aria-label="新建连接"
+            onClick={() => setNewConnectionDialogOpen(true)}><DbIcon name="add" className="h-3.5 w-3.5" /></Button>}
         </div>
       </div>
       {searchOpen && (
@@ -222,6 +222,7 @@ export function ConnectionTree() {
       )}
       <ScrollArea className="flex-1">
         <div className="py-1">
+          {onOpenTerminal && <SshConnections query={searchQuery} active={terminalActive} onOpen={onOpenTerminal} />}
           {visibleConnections.map((config) => {
             const connected = isConnected(config.id);
             const connecting = connectingId === config.id;
@@ -264,28 +265,18 @@ export function ConnectionTree() {
                         forceOpen={Boolean(searchQuery.trim())}
                         onClick={() => {
                           if (connecting) return;
-                          if (!connected) {
-                            void connect(config).catch(() => undefined);
-                          } else {
-                            setSelectedConnectionId(config.id);
-                          }
+                          onActivateDatabase?.();
+                          setSelectedConnectionId(config.id);
+                          setSelectedDatabase(null);
+                          useDbStore.setState({ objectScope: null, selectedTable: null, currentView: "objects" });
+                          if (!connected) void connect(config).catch(() => undefined);
                         }}
-                        actions={
-                          connected
-                            ? [
-                                {
-                                  icon: <DbIcon name="refresh" className="h-3 w-3" />,
-                                  label: "刷新连接树",
-                                  onClick: () => refreshTree(config.id),
-                                },
-                                {
-                                  icon: <Unplug className="h-3 w-3" />,
-                                  label: "断开连接",
-                                  onClick: () => disconnect(config.id),
-                                },
-                              ]
-                            : undefined
-                        }
+                        actions={[{
+                          icon: <Unplug className="h-3 w-3" />,
+                          label: "断开连接",
+                          disabled: !connected,
+                          onClick: () => disconnect(config.id),
+                        }]}
                       >
                         {connected && visibleTree.length > 0 && (
                           <>
@@ -313,12 +304,14 @@ export function ConnectionTree() {
                             <Separator className="my-1 mx-3" />
                             <AdminSection
                               onShowDashboard={() => {
+                                onActivateDatabase?.();
                                 setSelectedConnectionId(config.id);
                                 refreshServerStats(config.id);
                                 refreshProcesses(config.id);
                                 setCurrentView("dashboard");
                               }}
                               onShowUsers={() => {
+                                onActivateDatabase?.();
                                 setSelectedConnectionId(config.id);
                                 refreshUsers(config.id);
                                 setCurrentView("users");
@@ -385,7 +378,7 @@ export function ConnectionTree() {
               </div>
             );
           })}
-          {visibleConnections.length === 0 && (
+          {visibleConnections.length === 0 && !onOpenTerminal && (
             <div className="px-3 py-5 text-center text-caption text-muted-foreground">
               {searchQuery.trim() ? "未找到匹配的连接或表" : "暂无连接"}
             </div>
@@ -663,7 +656,7 @@ function TreeItem({
   onClick?: () => void;
   onDoubleClick?: () => void;
   selected?: boolean;
-  actions?: { icon: React.ReactNode; label?: string; onClick: () => void }[];
+  actions?: { icon: React.ReactNode; label?: string; disabled?: boolean; onClick: () => void }[];
   rowWrapper?: (row: React.ReactElement) => React.ReactNode;
   children?: React.ReactNode;
 }) {
@@ -681,8 +674,8 @@ function TreeItem({
   const row = (
       <div
         className={cn(
-          "group relative flex min-h-8 cursor-pointer items-center gap-2 px-3 py-1 hover:bg-accent data-[state=open]:bg-accent",
-          selected && "border-l-2 border-info bg-foreground/5",
+          "group relative flex min-h-8 cursor-pointer items-center gap-1.5 px-3 py-1 hover:bg-accent data-[state=open]:bg-accent",
+          selected && "bg-foreground/5 before:absolute before:inset-y-0 before:left-0 before:w-0.5 before:bg-info",
         )}
         onClick={() => {
           if (hasChildren && !onClick) {
@@ -692,13 +685,15 @@ function TreeItem({
         }}
         onDoubleClick={onDoubleClick}
       >
+        <span data-tree-expand-slot data-tree-leaf-indent={!hasChildren ? "" : undefined}
+          aria-hidden={!hasChildren || undefined} className="flex h-4 w-3 shrink-0 items-center justify-center">
         {hasChildren && (
           <Button
             variant="ghost"
             size="icon"
             type="button"
             aria-label={`${open ? "收起" : "展开"}${label}`}
-            className="flex h-4 w-4 shrink-0 items-center justify-center rounded text-muted-foreground hover:text-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
+            className="flex h-4 w-3 shrink-0 items-center justify-center rounded text-muted-foreground hover:text-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
             onClick={(event) => {
               event.stopPropagation();
               setOpen(!open);
@@ -706,17 +701,15 @@ function TreeItem({
           >
             <DbIcon
               name="chevronRight"
-              className={cn("h-3 w-3 transition-transform", open && "rotate-90")}
+              className={cn("h-2.5 w-2.5 transition-transform", open && "rotate-90")}
             />
           </Button>
         )}
-        {!hasChildren && !badge && (
-          <span aria-hidden="true" data-tree-leaf-indent className="h-3 w-3 shrink-0" />
-        )}
-        <span className="shrink-0">{icon}</span>
+        </span>
+        <span data-tree-type-icon className="flex h-5 w-5 shrink-0 items-center justify-center">{icon}</span>
         {badgeDot ? (
           <>
-            <span className={cn("max-w-48 truncate text-ui", selected && "font-medium")}>{label}</span>
+            <span data-tree-label className={cn("max-w-48 truncate text-ui", selected && "font-medium")}>{label}</span>
             <span
               className={cn(
                 "h-1.5 w-1.5 shrink-0 rounded-full",
@@ -733,7 +726,7 @@ function TreeItem({
             <span className="min-w-0 flex-1" />
           </>
         ) : (
-          <span className={cn("min-w-0 flex-1 truncate text-ui", selected && "font-medium")}>{label}</span>
+          <span data-tree-label className={cn("min-w-0 flex-1 truncate text-ui", selected && "font-medium")}>{label}</span>
         )}
         {count !== undefined && (
           <span className="shrink-0 text-micro tabular-nums text-muted-foreground">{count}</span>
@@ -747,7 +740,8 @@ function TreeItem({
                 variant="ghost"
                 size="icon"
                 aria-label={action.label}
-                className="pointer-events-auto h-5 w-5 rounded-none p-0 text-muted-foreground hover:bg-transparent hover:text-foreground active:bg-transparent"
+                disabled={action.disabled}
+                className="pointer-events-auto h-5 w-5 rounded-none p-0 text-muted-foreground hover:bg-transparent hover:text-foreground active:bg-transparent disabled:opacity-35"
                 onClick={(e) => {
                   e.stopPropagation();
                   action.onClick();
@@ -778,7 +772,7 @@ function TreeItem({
   return (
     <div>
       {rowWrapper ? rowWrapper(row) : row}
-      {hasChildren && open && <div className="pl-3">{children}</div>}
+      {hasChildren && open && <div className="pl-2">{children}</div>}
     </div>
   );
 }

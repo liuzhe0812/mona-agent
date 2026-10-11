@@ -158,3 +158,26 @@ def test_runtime_prune_keeps_active_and_newest_versions(tmp_path: Path) -> None:
     assert removed == ["2"]
     assert store.active("scientific")[0].version == "1"  # type: ignore[index]
     assert (root / "components" / "scientific" / "versions" / "3").is_dir()
+
+
+def test_component_removal_validates_all_targets_before_deleting(tmp_path: Path) -> None:
+    store = RuntimeComponentStore(tmp_path / "runtimes")
+    store.install_archive(_runtime_archive(
+        tmp_path / "cli.zip", component_id="codex-cli", version="1",
+    ))
+    outside = tmp_path / "external-program"
+    outside.mkdir()
+    marker = outside / "keep.txt"
+    marker.write_text("external program", encoding="utf-8")
+    cache = store.root / "downloads" / "codex-cli"
+    cache.parent.mkdir()
+    try:
+        cache.symlink_to(outside, target_is_directory=True)
+    except OSError:
+        pytest.skip("Directory symlinks are not available")
+
+    with pytest.raises(RuntimeManagerError, match="managed root"):
+        store.remove_component("codex-cli")
+
+    assert store.active("codex-cli") is not None
+    assert marker.read_text(encoding="utf-8") == "external program"

@@ -135,8 +135,8 @@ export function ExpertPanel({
     <section className="space-y-4 px-4 py-4" data-testid="expert-panel">
       <header className="flex items-start justify-between gap-3">
         <div>
-          <h1 className="text-title font-semibold">专家团论证</h1>
-          {!run && !report && <p className="mt-1 text-caption text-muted-foreground">六位专家会交叉复核 AI 诊股结论，耗时和数据调用较多，仅在你主动启动后运行。</p>}
+          <h1 className="text-title font-semibold">伙伴论证</h1>
+          {!run && !report && <p className="mt-1 text-caption text-muted-foreground">六位伙伴会交叉复核 AI 诊股结论，耗时和数据调用较多，仅在你主动启动后运行。</p>}
         </div>
         {starting ? (
           <Button type="button" size="xs" variant="outline" disabled><Loader2 className="mr-1 h-3.5 w-3.5 animate-spin" aria-hidden />准备中</Button>
@@ -146,13 +146,13 @@ export function ExpertPanel({
           </Button>
         ) : (
           <Button type="button" size="xs" onClick={onStart}>
-            <Play className="mr-1 h-3.5 w-3.5" aria-hidden />{failed || hasReport ? "重新论证" : "启动专家团论证"}
+            <Play className="mr-1 h-3.5 w-3.5" aria-hidden />{failed || hasReport ? "重新论证" : "启动伙伴论证"}
           </Button>
         )}
       </header>
 
-      {run?.status === "failed" && <p className="rounded border border-destructive/30 bg-destructive/5 px-3 py-2 text-caption text-destructive">本次专家团论证失败，请重新论证。</p>}
-      {run?.status === "cancelled" && <p className="rounded border border-warning/30 bg-warning/5 px-3 py-2 text-caption text-warning">本次专家团论证已取消。</p>}
+      {run?.status === "failed" && <p className="rounded border border-destructive/30 bg-destructive/5 px-3 py-2 text-caption text-destructive">本次伙伴论证失败，请重新论证。</p>}
+      {run?.status === "cancelled" && <p className="rounded border border-warning/30 bg-warning/5 px-3 py-2 text-caption text-warning">本次伙伴论证已取消。</p>}
 
       {run || report ? (
         <div className="grid gap-2 sm:grid-cols-2" data-testid="expert-role-list">
@@ -193,7 +193,7 @@ export function ExpertPanel({
         </section>
       )}
 
-      {historyCount > 0 && <p className="text-micro text-muted-foreground" data-testid="expert-history-count">专家团历史记录：{historyCount} 份</p>}
+      {historyCount > 0 && <p className="text-micro text-muted-foreground" data-testid="expert-history-count">伙伴论证历史记录：{historyCount} 份</p>}
     </section>
   );
 }

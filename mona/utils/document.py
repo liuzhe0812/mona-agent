@@ -262,19 +262,23 @@ def extract_documents(
     media_paths: list[str],
     *,
     max_file_size: int = _MAX_EXTRACT_FILE_SIZE,
+    pdf_previews: bool = False,
 ) -> tuple[str, list[str]]:
     """Separate images from documents in *media_paths*.
 
     Documents (PDF, DOCX, XLSX, PPTX, plain-text, …) have their text
     extracted and appended to *text*.  Only image paths are kept in the
     returned list so that downstream layers only need to handle vision
-    blocks.
+    blocks. Agent conversations can request bounded PDF page previews too.
 
     Files larger than *max_file_size* bytes are skipped with a warning
     to avoid unbounded memory / CPU usage.
     """
     image_paths: list[str] = []
     doc_texts: list[str] = []
+    from mona.utils.pdf_visual import MAX_VISUAL_PAGES, render_pdf_previews
+
+    preview_budget = MAX_VISUAL_PAGES
 
     for path_str in media_paths:
         p = Path(path_str)
@@ -290,6 +294,8 @@ def extract_documents(
                 "Skipping oversized file for extraction: {} ({:.1f} MB > {} MB limit)",
                 p.name, size / (1024 * 1024), max_file_size // (1024 * 1024),
             )
+            if pdf_previews and p.suffix.lower() == ".pdf":
+                doc_texts.append(f"[File: {p.name}]\nPDF exceeds the automatic parsing size limit; content was not read. Path: {p}")
             continue
 
         with open(p, "rb") as f:
@@ -306,6 +312,35 @@ def extract_documents(
                     f"[File: {p.name}]\nPath: {p}\n"
                     "This file format is attached and available by path, but has no automatic text extraction."
                 )
+            if pdf_previews and p.suffix.lower() == ".pdf":
+                if extracted and extracted.startswith("[error:"):
+                    doc_texts.append(f"[File: {p.name}]\nText extraction failed: {extracted}")
+                guidance = (
+                    f"[PDF visual content: {p.name}]\nPath: {p}\n"
+                    "Page images preserve pictures, vector charts and scanned text. "
+                    "If images are omitted, only selectable text is available; visual content has NOT been read. "
+                    "Use pdf(action='inspect', path=the PDF path, pages=[...]) for further pages, at most 4 per call."
+                )
+                if preview_budget == 0:
+                    doc_texts.append(guidance + "\nNo page images included: this message's PDF preview limit was reached.")
+                    continue
+                try:
+                    previews = render_pdf_previews(p, limit=preview_budget)
+                    for item in previews["visual_pages"]:
+                        image_paths.append(item["image_path"])
+                    preview_budget -= len(previews["visual_pages"])
+                    mapping = "\n".join(
+                        f"Page {item['page']}: {item['image_path']}" for item in previews["visual_pages"]
+                    )
+                    remaining = previews["remaining_pages"]
+                    status = (
+                        f"Page images {remaining[0]}–{remaining[-1]} have not been included."
+                        if remaining else "Page images for all pages are included."
+                    )
+                    doc_texts.append(f"{guidance}\n{mapping}\n{status}")
+                except Exception as exc:
+                    logger.warning("PDF page preview failed for {}: {}", p.name, exc)
+                    doc_texts.append(f"{guidance}\nPage images unavailable: {exc}. Use extracted text only and disclose this limitation.")
 
     if doc_texts:
         text = text + "\n\n" + "\n\n".join(doc_texts)

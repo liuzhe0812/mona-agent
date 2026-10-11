@@ -7,6 +7,8 @@ from typing import Any
 import httpx
 import pytest
 
+import mona.webui.settings_api as settings_api
+from mona.config.loader import load_config
 from mona.config.schema import Config, ProviderConfig, ProvidersConfig
 from mona.providers.image_generation import (
     AIHubMixImageGenerationClient,
@@ -98,6 +100,27 @@ def test_image_generation_provider_configs_skip_cindy_mapping() -> None:
 
     assert "cindy" not in result
     assert result["openrouter"].api_key == "sk-or-test"
+
+
+def test_openai_image_key_is_saved_separately(monkeypatch, tmp_path) -> None:
+    config = load_config(tmp_path / "config.json")
+    config.providers.openai.api_key = "chat-key-placeholder"
+    monkeypatch.setattr(settings_api, "load_config", lambda: config)
+    monkeypatch.setattr(settings_api, "save_config", lambda _config: None)
+    monkeypatch.setattr(settings_api, "_managed_model_catalog", lambda: {"available": False, "models": []})
+
+    payload = settings_api.update_provider_settings({
+        "provider": ["openai_images"], "api_key": ["image-key-placeholder"],
+    })
+    assert config.providers.openai.api_key == "chat-key-placeholder"
+    assert image_gen_provider_configs(config)["openai"].api_key == "image-key-placeholder"
+    openai = next(row for row in payload["chat_providers"] if row["name"] == "openai")
+    assert openai["image_api_key_hint"]
+    assert "image-key-placeholder" not in str(payload)
+
+    settings_api.update_provider_settings({"provider": ["openai_images"], "api_key": [""]})
+    assert image_gen_provider_configs(config)["openai"].api_key is None
+    assert next(row for row in settings_api._image_generation_provider_rows(config) if row["name"] == "openai")["configured"] is False
 
 
 @pytest.mark.asyncio

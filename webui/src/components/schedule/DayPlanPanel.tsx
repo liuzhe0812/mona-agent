@@ -335,13 +335,6 @@ function ScheduleRow({
       )}
       onClick={onSelect}
     >
-      <div
-        className={cn(
-          "w-0.5 self-stretch rounded-full flex-shrink-0",
-          "bg-primary",
-          item.done && "bg-muted",
-        )}
-      />
       <div className="flex-shrink-0 w-12 pt-0.5">
         {item.allDay ? (
           <span className="text-micro text-muted-foreground">全天</span>

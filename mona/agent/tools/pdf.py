@@ -7,7 +7,6 @@ import io
 import json
 from contextlib import ExitStack
 from pathlib import Path
-from threading import Lock
 from typing import Any
 
 from mona.agent.tools.base import Tool, tool_parameters
@@ -20,15 +19,16 @@ from mona.agent.tools.schema import (
     StringSchema,
     tool_parameters_schema,
 )
+from mona.utils.helpers import build_image_content_blocks
+from mona.utils.pdf_visual import MAX_VISUAL_PAGES, PDF_LOCK, render_pdf_previews
 
 _ACTIONS = [
-    "read", "tables", "render", "merge", "extract", "rotate",
+    "inspect", "read", "tables", "render", "merge", "extract", "rotate",
     "forms", "fill", "create", "annotate",
 ]
 _MAX_PAGES = 20
 _MAX_CREATE_PAGES = 100
 _MAX_CHARS = 100_000
-_PDF_LOCK = Lock()
 _ANNOTATION_SCHEMA = ObjectSchema(
     {
         "page": IntegerSchema(description="1-based page number", minimum=1),
@@ -62,7 +62,7 @@ _ANNOTATION_SCHEMA = ObjectSchema(
         ),
         pages=ArraySchema(
             IntegerSchema(description="1-based page number", minimum=1),
-            description="Page numbers (1-based), up to 20 per call. Omit to use the first 20 pages.",
+            description="Page numbers (1-based), up to 4 for inspect, 20 otherwise. Omit for the first batch.",
             min_items=1,
             max_items=_MAX_PAGES,
             nullable=True,
@@ -90,13 +90,13 @@ _ANNOTATION_SCHEMA = ObjectSchema(
             nullable=True,
         ),
         max_chars=IntegerSchema(
-            description="Output character limit for read/tables (default 30000, maximum 100000)",
+            description="Output character limit for inspect/read/tables (default 30000, maximum 100000)",
             minimum=1000,
             maximum=_MAX_CHARS,
             nullable=True,
         ),
         offset=IntegerSchema(
-            description="Character offset for continuing read of one page; use returned next_offset",
+            description="Character offset for continuing inspect/read of one page; use returned next_offset",
             minimum=0,
             nullable=True,
         ),
@@ -110,7 +110,10 @@ class PdfTool(Tool):
     config_key = "pdf"
     name = "pdf"
     description = (
-        "Read PDF text and tables, render pages, merge or extract pages, rotate pages, "
+        "Inspect PDF text together with page images (up to 4 pages) to understand pictures, "
+        "charts and scanned pages using the current model's vision. No script or output path is needed. "
+        "If vision is unavailable, only extracted text is readable; disclose unexamined visual content. "
+        "Also read text and tables, render pages to files, merge or extract pages, rotate pages, "
         "inspect/fill interactive forms, create PDFs, and place positioned text. "
         "All paths must be inside the current workspace. Every output must be new."
     )
@@ -213,7 +216,7 @@ class PdfTool(Tool):
         max_chars: int | None = None,
         offset: int = 0,
         **kwargs: Any,
-    ) -> str:
+    ) -> str | list[dict[str, Any]]:
         return await asyncio.to_thread(
             self._run_locked,
             action,
@@ -229,9 +232,9 @@ class PdfTool(Tool):
             offset or 0,
         )
 
-    def _run_locked(self, *args: Any) -> str:
+    def _run_locked(self, *args: Any) -> str | list[dict[str, Any]]:
         # MuPDF operations must not run concurrently on worker threads.
-        with _PDF_LOCK:
+        with PDF_LOCK:
             return self._execute(*args)
 
     def _execute(
@@ -247,7 +250,7 @@ class PdfTool(Tool):
         annotations: list[dict[str, Any]] | None,
         max_chars: int | None,
         offset: int,
-    ) -> str:
+    ) -> str | list[dict[str, Any]]:
         try:
             if action not in _ACTIONS:
                 raise ValueError(f"unsupported action: {action}")
@@ -256,6 +259,8 @@ class PdfTool(Tool):
             if action == "create":
                 return self._create(texts, output)
             source = self._resolve_path(self._require(path, "path"))
+            if action == "inspect":
+                return self._inspect(source, pages, max_chars or 30_000, offset)
             if action == "read":
                 return self._read(source, pages, max_chars or 30_000, offset)
             if action == "tables":
@@ -277,6 +282,32 @@ class PdfTool(Tool):
             raise ValueError(f"unsupported action: {action}")
         except Exception as exc:
             return f"Error: {type(exc).__name__}: {exc}"
+
+    def _inspect(
+        self, source: Path, pages: list[int] | None, limit: int, offset: int,
+    ) -> list[dict[str, Any]]:
+        if pages is not None and len(pages) > MAX_VISUAL_PAGES:
+            raise ValueError(f"inspect accepts at most {MAX_VISUAL_PAGES} pages per call")
+        if offset and (pages is None or len(pages) != 1):
+            raise ValueError("offset is only valid when pages selects exactly one page")
+        previews = render_pdf_previews(source, pages)
+        selected = [item["page"] for item in previews["visual_pages"]]
+        result = json.loads(self._read(source, selected, limit, offset))
+        result.update(action="inspect", path=str(source), visual_pages=previews["visual_pages"])
+        result["remaining_pages"] = sorted(set(result["remaining_pages"] + previews["remaining_pages"]))
+        result["truncated"] = bool(result["remaining_pages"] or result["next_offset"] is not None)
+        result["visual_note"] = (
+            "Use the attached page images with extracted text. Images contain pictures, vector charts "
+            "and scanned text. If images are omitted, those contents have NOT been read. "
+            "Inspect remaining pages in batches of at most 4; do not claim full-document review prematurely."
+        )
+        blocks = [{"type": "text", "text": self._json(result)}]
+        for item in previews["visual_pages"]:
+            image = Path(item["image_path"])
+            blocks.extend(build_image_content_blocks(
+                image.read_bytes(), "image/png", str(image), f"PDF {source.name}, page {item['page']}",
+            ))
+        return blocks
 
     def _read(self, source: Path, pages: list[int] | None, limit: int, offset: int) -> str:
         import pymupdf

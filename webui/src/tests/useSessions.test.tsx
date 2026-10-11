@@ -60,12 +60,12 @@ function fakeClient() {
   };
 }
 
-function wrap(client: ReturnType<typeof fakeClient>) {
+function wrap(client: ReturnType<typeof fakeClient>, getToken: () => string = () => "tok") {
   return function Wrapper({ children }: { children: ReactNode }) {
     return (
       <ClientProvider
         client={client as unknown as import("@/lib/mona-client").MonaClient}
-        token="tok"
+        token={getToken()}
       >
         {children}
       </ClientProvider>
@@ -122,6 +122,29 @@ describe("useSessions", () => {
     expect(api.listSessions).toHaveBeenCalledTimes(4);
     expect(result.current.loaded).toBe(false);
     expect(result.current.error).toBe("temporarily unavailable");
+  });
+
+  it("refreshes sessions with a new token after an authorization error", async () => {
+    let token = "tok-1";
+    vi.mocked(api.listSessions)
+      .mockRejectedValueOnce(new api.ApiError(401, "Unauthorized"))
+      .mockResolvedValueOnce([]);
+
+    const { result, rerender } = renderHook(() => useSessions(), {
+      wrapper: wrap(fakeClient(), () => token),
+    });
+
+    await waitFor(() => expect(result.current.error).toBe("Unauthorized"));
+    expect(api.listSessions).toHaveBeenCalledTimes(1);
+
+    token = "tok-2";
+    rerender();
+
+    await waitFor(() => {
+      expect(api.listSessions).toHaveBeenCalledTimes(2);
+      expect(api.listSessions).toHaveBeenLastCalledWith("tok-2");
+      expect(result.current.error).toBeNull();
+    });
   });
 
   it("does not use low-information greetings as fallback session titles", () => {

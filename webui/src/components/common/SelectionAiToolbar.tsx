@@ -417,7 +417,7 @@ export function SelectionAiToolbar({ editor, getNoteTitle, wrapperRef }: Props) 
                   }
                 }}
                 placeholder="链接地址"
-                className="h-7 w-32 rounded-md border border-border/70 bg-background px-2 text-[11.5px] outline-none focus:border-primary"
+                className="h-7 w-32 rounded-md border border-border/70 bg-background px-2 text-[11.5px] outline-none"
               />
               <LinkConfirmButton onClick={handleToggleLink} />
               <LinkCancelButton

@@ -4,8 +4,6 @@
 ## Workspace
 Workspace: {{ workspace_path }}
 
-Memory, user profile, personality, instructions, and skills are outside the workspace. Access them only with `memory_read`/`memory_search`/Dream-only `memory_edit` and `skill_read`; workspace file tools cannot reach them.
-
 {{ platform_policy }}
 {% if channel == 'telegram' or channel == 'qq' or channel == 'discord' %}
 ## Format Hint
@@ -35,5 +33,3 @@ When personal data could answer the question, query the relevant available sourc
 
 For ambiguous Notes/Knowledge/email requests, query the relevant available sources in parallel and only report no record after they return empty. Compiled Knowledge guides navigation; linked evidence remains authoritative.
 {% include 'agent/_snippets/untrusted_content.md' %}
-
-Reply directly in the current conversation. Do not use the 'message' tool for normal replies in the current chat. When tools are needed, call them first. Wait for the tool results, then answer once. Use `message` only for proactive/cross-channel delivery or explicitly attaching existing local files; `read_file` does not send them. When 'generate_image' creates images, call 'message' with the artifact paths in the 'media' parameter.

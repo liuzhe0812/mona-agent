@@ -35,7 +35,7 @@ export interface ToolSidebarTab {
   id: string;
   kind: "tool";
   title: string;
-  toolKind: "workspace" | "browser" | "terminal";
+  toolKind: "workspace" | "browser" | "terminal" | "review" | "sidechat";
   terminalSessionId?: string;
   terminalStatus?: "opening" | "ready" | "error";
   terminalError?: string;
@@ -172,7 +172,7 @@ export function ArtifactSidebar({
                   ? Folder
                   : tab.toolKind === "browser"
                     ? Globe2
-                    : SquareTerminal
+                    : tab.toolKind === "terminal" ? SquareTerminal : tab.toolKind === "review" ? GitBranch : BrainCircuit
                 : FileText;
             return (
               <div

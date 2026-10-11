@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import json
-import time
 from unittest.mock import MagicMock
 
 from mona.agent.expert_jobs import ExpertInstallJob
@@ -21,7 +20,7 @@ def _request(path: str, *, token: str | None = "tok") -> MagicMock:
 
 def _channel() -> WebSocketChannel:
     channel = WebSocketChannel({}, MessageBus())
-    channel._api_tokens["tok"] = time.monotonic() + 60
+    channel._runtime_token = "tok"
     return channel
 
 

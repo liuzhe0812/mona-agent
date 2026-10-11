@@ -3,6 +3,7 @@ import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import { DocChatPanel } from "./DocChatPanel";
+import type { SendImage, SendOptions } from "@/hooks/useMonaStream";
 
 const mocks = vi.hoisted(() => ({
   onStreamingChange: vi.fn(),
@@ -41,8 +42,22 @@ vi.mock("@/components/thread/ThreadMessages", () => ({
 }));
 
 vi.mock("@/components/thread/ThreadComposer", () => ({
-  ThreadComposer: ({ onSend }: { onSend: (content: string) => void }) => (
-    <button type="button" onClick={() => onSend("修改标题")}>发送文档请求</button>
+  ThreadComposer: ({ chatId, onSend }: {
+    chatId?: string | null;
+    onSend: (content: string, images?: SendImage[], options?: SendOptions) => void;
+  }) => (
+    <>
+      <div data-testid="composer-chat-id">{chatId}</div>
+      <button
+        type="button"
+        onClick={() => onSend("修改标题", undefined, {
+          docPaths: ["uploads/office/appendix.bin"],
+          documentNames: ["appendix.bin"],
+        })}
+      >
+        发送文档请求
+      </button>
+    </>
   ),
 }));
 
@@ -89,10 +104,13 @@ describe("DocChatPanel", () => {
 
     fireEvent.click(screen.getByRole("button", { name: "发送文档请求" }));
 
+    expect(screen.getByTestId("composer-chat-id")).toHaveTextContent("office-chat");
     expect(mocks.send).toHaveBeenCalledWith(
       "修改标题",
       undefined,
       expect.objectContaining({
+        docPaths: ["uploads/office/appendix.bin"],
+        documentNames: ["appendix.bin"],
         displayContent: "修改标题",
         officeSessionId: "office-session",
         officeDocumentType: "slides",

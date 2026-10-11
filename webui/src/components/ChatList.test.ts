@@ -234,7 +234,7 @@ describe("SessionListPanel create menu", () => {
 
     const createButton = screen.getByRole("button", { name: "Create conversation" });
     fireEvent.keyDown(createButton, { key: "Enter" });
-    fireEvent.click(await screen.findByRole("button", { name: "Agent Settings: Mona" }));
+    fireEvent.click(await screen.findByRole("button", { name: "Partner settings: Mona" }));
     expect(onSelectAgent).toHaveBeenCalledWith("mona");
     expect(onStartDirect).not.toHaveBeenCalled();
 
@@ -243,7 +243,7 @@ describe("SessionListPanel create menu", () => {
     expect(onStartDirect).toHaveBeenCalledWith("mona");
 
     fireEvent.keyDown(createButton, { key: "Enter" });
-    fireEvent.click(await screen.findByRole("menuitem", { name: "Summon expert" }));
+    fireEvent.click(await screen.findByRole("menuitem", { name: "Summon a partner" }));
     expect(onOpenExpertLibrary).toHaveBeenCalledOnce();
 
     fireEvent.keyDown(createButton, { key: "Enter" });

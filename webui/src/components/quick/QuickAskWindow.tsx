@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useState } from "react";
 
 import { ThreadComposer } from "@/components/thread/ThreadComposer";
-import type { SendImage } from "@/hooks/useMonaStream";
+import type { SendImage, SendOptions } from "@/hooks/useMonaStream";
 import { useTheme } from "@/hooks/useTheme";
 import { listSlashCommands } from "@/lib/api";
 import {
@@ -55,13 +55,18 @@ export function QuickAskWindow() {
   }, []);
 
   const handleSend = useCallback(
-    async (content: string, images?: SendImage[]) => {
+    async (content: string, images?: SendImage[], options?: SendOptions) => {
       if (submitting) return;
       setSubmitting(true);
       setError(null);
       try {
         const chatId = await client.newChat();
-        client.sendMessage(chatId, content, images?.map((image) => image.media));
+        client.sendMessage(chatId, content, images?.map((image) => image.media), {
+          ...(options?.displayContent ? { displayContent: options.displayContent } : {}),
+          ...(options?.quote ? { quote: options.quote } : {}),
+          ...(options?.targetAgentIds ? { targetAgentIds: options.targetAgentIds } : {}),
+          ...(options?.docPaths ? { docPaths: options.docPaths } : {}),
+        });
         await quickAskFocusChat(chatId);
         await quickAskHide();
       } catch (e) {

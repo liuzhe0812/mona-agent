@@ -27,14 +27,14 @@ _IMAGE_EXTS = {".png", ".jpg", ".jpeg", ".gif", ".webp", ".bmp", ".ico", ".tif",
 _VIDEO_EXTS = {".mp4", ".webm", ".mov", ".m4v", ".avi", ".mkv", ".3gp"}
 
 
-def _ui_token_usage(value: Any) -> dict[str, int] | None:
+def _ui_token_usage(value: Any) -> dict[str, Any] | None:
     if not isinstance(value, dict):
         return None
     prompt = int(value.get("prompt_tokens") or 0)
     completion = int(value.get("completion_tokens") or 0)
     cached = int(value.get("cached_tokens") or value.get("cache_read_input_tokens") or 0)
     total = int(value.get("total_tokens") or prompt + completion)
-    if max(prompt, completion, cached, total) <= 0:
+    if max(prompt, completion, cached, total) <= 0 and "context_tokens" not in value:
         return None
     usage = {
         "promptTokens": max(0, prompt),
@@ -42,11 +42,16 @@ def _ui_token_usage(value: Any) -> dict[str, int] | None:
         "cachedTokens": max(0, cached),
         "totalTokens": max(0, total),
     }
-    # Only carry the last-call prompt size when the backend reported one;
-    # a zero would be read as a real measurement by the composer pill.
-    context = int(value.get("context_tokens") or 0)
-    if context > 0:
+    context = value.get("context_tokens")
+    if isinstance(context, int) and not isinstance(context, bool) and context >= 0:
         usage["contextTokens"] = context
+    window = value.get("context_window_tokens")
+    if isinstance(window, int) and not isinstance(window, bool) and window > 0:
+        usage["contextWindowTokens"] = window
+    if isinstance(value.get("context_model"), str):
+        usage["contextModel"] = value["context_model"]
+    if isinstance(value.get("context_provider"), str):
+        usage["contextProvider"] = value["context_provider"]
     return usage
 
 

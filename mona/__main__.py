@@ -13,7 +13,18 @@ if sys.stdout is None:
 if sys.stderr is None:
     sys.stderr = open(os.devnull, "w", encoding="utf-8", errors="replace")
 
-from mona.cli.commands import app
+from mona.runtime.desktop_process import start_parent_stdin_watchdog
+
+start_parent_stdin_watchdog()
+
+# The private SDK owner starts before general CLI configuration.
+if __name__ == "__main__" and sys.argv[1:] == ["--development-sdk-worker"]:
+    from mona.development.executors.sdk_worker import main
+
+    main()
+    raise SystemExit(0)
+
+from mona.cli.commands import app  # noqa: E402
 
 if __name__ == "__main__":
     app()

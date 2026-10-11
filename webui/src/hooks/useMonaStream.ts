@@ -476,7 +476,7 @@ export interface SendOptions {
   taskId?: string;
 }
 
-function normalizedTokenUsage(value: Record<string, number> | undefined): UIMessage["tokenUsage"] {
+function normalizedTokenUsage(value: import("@/lib/types").RawTokenUsage | undefined): UIMessage["tokenUsage"] {
   if (!value) return undefined;
   const promptTokens = Math.max(0, Math.round(value.prompt_tokens ?? 0));
   const completionTokens = Math.max(0, Math.round(value.completion_tokens ?? 0));
@@ -488,14 +488,17 @@ function normalizedTokenUsage(value: Record<string, number> | undefined): UIMess
     0,
     Math.round(value.total_tokens ?? promptTokens + completionTokens),
   );
-  if (Math.max(promptTokens, completionTokens, cachedTokens, totalTokens) === 0) return undefined;
+  if (Math.max(promptTokens, completionTokens, cachedTokens, totalTokens) === 0 && value.context_tokens === undefined) return undefined;
   const contextTokens = Math.max(0, Math.round(value.context_tokens ?? 0));
   return {
     promptTokens,
     completionTokens,
     cachedTokens,
     totalTokens,
-    ...(contextTokens ? { contextTokens } : {}),
+    ...(value.context_tokens !== undefined ? { contextTokens } : {}),
+    ...((value.context_window_tokens ?? 0) > 0 ? { contextWindowTokens: value.context_window_tokens } : {}),
+    ...(typeof value.context_model === "string" ? { contextModel: value.context_model } : {}),
+    ...(typeof value.context_provider === "string" ? { contextProvider: value.context_provider } : {}),
   };
 }
 
@@ -573,6 +576,7 @@ export function useMonaStream(
   onTurnEnd?: () => void,
 ): {
   messages: UIMessage[];
+  liveTokenUsage?: UIMessage["tokenUsage"];
   isStreaming: boolean;
   /** True after sending a turn until Mona emits its first visible activity. */
   isAwaitingModelResponse: boolean;
@@ -620,6 +624,7 @@ export function useMonaStream(
   const [goalState, setGoalState] = useState<GoalStateWsPayload | undefined>(undefined);
   const [taskPlan, setTaskPlan] = useState<TaskPlanWsPayload | undefined>(undefined);
   const [currentTaskId, setCurrentTaskId] = useState<string | null>(null);
+  const [liveTokenUsage, setLiveTokenUsage] = useState<UIMessage["tokenUsage"]>();
   const currentTaskIdRef = useRef<string | null>(null);
   const [streamError, setStreamError] = useState<StreamError | null>(null);
   const buffer = useRef<StreamBuffer | null>(null);
@@ -972,6 +977,7 @@ export function useMonaStream(
     setRunStartedAt(restoredRunStartedAt);
     setGoalState(chatId && client ? client.getGoalState(chatId) : undefined);
     setTaskPlan(chatId && client ? client.getTaskPlan?.(chatId) : undefined);
+    setLiveTokenUsage(undefined);
     stoppingRef.current = false;
     setStopping(false);
     buffer.current = null;
@@ -999,6 +1005,10 @@ export function useMonaStream(
     if (!chatId || !client) return;
 
     const handle = (ev: InboundEvent) => {
+      if (ev.event === "context_usage") {
+        if (ev.chat_id === chatId && !ev.job_id) setLiveTokenUsage(normalizedTokenUsage(ev.token_usage));
+        return;
+      }
       const identity = eventIdentity(ev);
       // Any incoming event while the debounce timer is alive means the model
       // is still working (e.g. tool result arrived, more text to stream).
@@ -1159,6 +1169,7 @@ export function useMonaStream(
       }
 
       if (ev.event === "turn_end") {
+        setLiveTokenUsage(normalizedTokenUsage(ev.token_usage));
         if ("goal_state" in ev && ev.goal_state != null && typeof ev.goal_state === "object") {
           setGoalState(ev.goal_state);
         }
@@ -1660,7 +1671,7 @@ export function useMonaStream(
     (content: string, images?: SendImage[], options?: SendOptions) => {
       if (!chatId || !client) return;
       const hasImages = !!images && images.length > 0;
-      if (!hasImages && !content.trim()) return;
+      if (!hasImages && !options?.docPaths?.length && !content.trim()) return;
 
       let taskId = currentTaskIdRef.current;
       if (!taskId) {
@@ -1679,7 +1690,11 @@ export function useMonaStream(
           taskId,
           createdAt: Date.now(),
           isInjected: true,
+          ...(options?.displayContent ? { displayContent: options.displayContent } : {}),
           ...(previews ? { images: previews } : {}),
+          ...(options?.documentNames?.length ? {
+            media: options.documentNames.map((name): UIMediaAttachment => ({ kind: "file", name })),
+          } : {}),
         },
       ]);
       const wireMedia = hasImages ? images!.map((i) => i.media) : undefined;
@@ -1711,6 +1726,7 @@ export function useMonaStream(
 
   return {
     messages,
+    liveTokenUsage,
     isStreaming,
     isAwaitingModelResponse,
     isCompacting,

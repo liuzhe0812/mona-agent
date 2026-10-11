@@ -35,6 +35,8 @@ const detail = {
     { name: "notes_read", description: "Read notes", available: true, readOnly: true },
     { name: "notes_create", description: "Create notes", available: true, readOnly: false },
     { name: "notes_save_image", description: "Save note image", available: true, readOnly: false },
+    { name: "url2note", description: "Convert a page to a note", available: true, readOnly: false },
+    { name: "video_extract_frame", description: "Extract video frames", available: true, readOnly: false },
     { name: "knowledge_search", description: "Search Agent Knowledge", available: true, readOnly: true },
     { name: "knowledge_read", description: "Read Agent Knowledge", available: true, readOnly: true },
     { name: "materials_search", description: "Search materials", available: true, readOnly: true },
@@ -51,6 +53,22 @@ const partialDetail = {
   definition: { ...detail.definition, id: "agent.partial" },
   config: { ...detail.config, grantedTools: ["web_search", "notes_search", "notes_read", "materials_search", "removed_tool"] },
   effective: { ...detail.effective, agentId: "agent.partial", displayName: "Partial Agent" },
+};
+
+const legacyUrlNoteDetail = {
+  ...detail,
+  agent: { ...detail.agent, id: "agent.url-note", displayName: "URL Note Agent" },
+  definition: { ...detail.definition, id: "agent.url-note" },
+  config: { ...detail.config, grantedTools: ["url2note"] },
+  effective: { ...detail.effective, agentId: "agent.url-note", displayName: "URL Note Agent" },
+};
+
+const legacyFrameOnlyDetail = {
+  ...detail,
+  agent: { ...detail.agent, id: "agent.frame-only", displayName: "Frame Only Agent" },
+  definition: { ...detail.definition, id: "agent.frame-only" },
+  config: { ...detail.config, grantedTools: ["video_extract_frame"] },
+  effective: { ...detail.effective, agentId: "agent.frame-only", displayName: "Frame Only Agent" },
 };
 
 const skills = [
@@ -219,7 +237,9 @@ vi.mock("@/lib/api", () => ({
           { name: "my", description: "Inspect runtime state", available: true, readOnly: true, systemManaged: true },
         ],
       }
-    : agentId === "agent.partial" ? partialDetail : detail),
+    : agentId === "agent.url-note" ? legacyUrlNoteDetail
+      : agentId === "agent.frame-only" ? legacyFrameOnlyDetail
+        : agentId === "agent.partial" ? partialDetail : detail),
   listAgentInstructions: vi.fn(async () => [
     { key: "soul", filename: "SOUL.md", content: "", contentHash: "" },
     { key: "agents", filename: "AGENTS.md", content: "", contentHash: "" },
@@ -343,6 +363,50 @@ describe("AgentManagementView navigation surfaces", () => {
     expect(screen.queryByText("继承推荐工具")).not.toBeInTheDocument();
   });
 
+  it("combines webpage notes and video frame extraction into one permission", async () => {
+    const user = userEvent.setup();
+    render(<AgentManagementView agentId="agent.demo" onBack={() => {}} onStartDirect={() => {}} />);
+    await user.click(await screen.findByRole("tab", { name: "工具" }));
+
+    expect(screen.getByRole("switch", { name: "网页转笔记工具" })).toHaveAttribute("aria-checked", "true");
+    expect(screen.getByText("将公开文章或视频整理为 Markdown 笔记，并可保存视频关键画面。")).toBeInTheDocument();
+    expect(screen.queryByRole("switch", { name: "提取视频帧工具" })).not.toBeInTheDocument();
+    expect(screen.queryByText("提取视频帧")).not.toBeInTheDocument();
+  });
+
+  it("treats url2note as the authority for legacy combined permissions", async () => {
+    const user = userEvent.setup();
+    clientMocks.updateAgentConfig.mockClear();
+    render(<AgentManagementView agentId="agent.url-note" onBack={() => {}} onStartDirect={() => {}} />);
+    await user.click(await screen.findByRole("tab", { name: "工具" }));
+
+    const permission = screen.getByRole("switch", { name: "网页转笔记工具" });
+    expect(permission).toHaveAttribute("aria-checked", "true");
+    await user.click(permission);
+    await waitFor(() => expect(clientMocks.updateAgentConfig).toHaveBeenCalledWith(
+      "agent.url-note",
+      { granted_tools: [] },
+      1,
+    ));
+    expect(permission).toHaveAttribute("aria-checked", "false");
+
+    await user.click(permission);
+    await waitFor(() => expect(clientMocks.updateAgentConfig).toHaveBeenNthCalledWith(
+      2,
+      "agent.url-note",
+      { granted_tools: ["url2note", "video_extract_frame"] },
+      1,
+    ));
+  });
+
+  it("does not enable webpage notes for a legacy frame-only grant", async () => {
+    const user = userEvent.setup();
+    render(<AgentManagementView agentId="agent.frame-only" onBack={() => {}} onStartDirect={() => {}} />);
+    await user.click(await screen.findByRole("tab", { name: "工具" }));
+
+    expect(screen.getByRole("switch", { name: "网页转笔记工具" })).toHaveAttribute("aria-checked", "false");
+  });
+
   it("uses the Agent tool tab as the only automation permission entry", async () => {
     const user = userEvent.setup();
     render(<AgentManagementView agentId="mona" onBack={() => {}} onStartDirect={() => {}} />);
@@ -391,7 +455,7 @@ describe("AgentManagementView navigation surfaces", () => {
     await user.click(await screen.findByRole("tab", { name: "工具" }));
 
     expect(screen.getByRole("heading", { name: "工具权限" })).toBeInTheDocument();
-    expect(screen.getByText("已启用 4 / 4")).toBeInTheDocument();
+    expect(screen.getByText("已启用 5 / 5")).toBeInTheDocument();
     const search = screen.getByRole("searchbox", { name: "搜索工具" });
     expect(search).toBeInTheDocument();
 

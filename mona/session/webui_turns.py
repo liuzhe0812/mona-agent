@@ -208,6 +208,7 @@ def build_bus_progress_callback(
         tool_hint: bool = False,
         tool_events: list[dict[str, Any]] | None = None,
         file_edit_events: list[dict[str, Any]] | None = None,
+        token_usage: dict[str, Any] | None = None,
         reasoning: bool = False,
         reasoning_end: bool = False,
         context_compacting: bool | None = None,
@@ -227,6 +228,9 @@ def build_bus_progress_callback(
             meta["_tool_events"] = tool_events
         if file_edit_events:
             meta["_file_edit_events"] = file_edit_events
+        if token_usage:
+            meta["token_usage"] = dict(token_usage)
+            meta["_context_usage"] = True
         await bus.publish_outbound(
             OutboundMessage(
                 channel=msg.channel,
@@ -243,6 +247,7 @@ def build_bus_progress_callback(
             tool_hint: bool = False,
             tool_events: list[dict[str, Any]] | None = None,
             file_edit_events: list[dict[str, Any]] | None = None,
+            token_usage: dict[str, Any] | None = None,
             reasoning: bool = False,
             reasoning_end: bool = False,
             context_compacting: bool | None = None,
@@ -252,6 +257,7 @@ def build_bus_progress_callback(
                 tool_hint=tool_hint,
                 tool_events=tool_events,
                 file_edit_events=file_edit_events,
+                token_usage=token_usage,
                 reasoning=reasoning,
                 reasoning_end=reasoning_end,
                 context_compacting=context_compacting,
@@ -310,7 +316,7 @@ class WebuiTurnCoordinator:
         *,
         session_key: str,
         latency_ms: int | None,
-        token_usage: dict[str, int] | None = None,
+        token_usage: dict[str, Any] | None = None,
     ) -> None:
         if msg.channel != "websocket":
             return

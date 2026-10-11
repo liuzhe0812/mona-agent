@@ -55,7 +55,7 @@ class ExpertInstallJobManager:
         state_path: Path,
         installer: ExpertInstaller | None,
         installed_definition: Callable[[str], object | None] | None = None,
-        unavailable_reason: str = "官方专家服务暂不可用",
+        unavailable_reason: str = "官方伙伴服务暂不可用",
     ) -> None:
         self.catalog_client = catalog_client
         self.package_store = package_store
@@ -148,7 +148,7 @@ class ExpertInstallJobManager:
             raise ExpertInstallUnavailableError(self.unavailable_reason)
         expert_id = expert_id.strip()
         if not expert_id:
-            raise ValueError("expert_id is required")
+            raise ValueError("partner id is required")
         for job in self._jobs.values():
             if (
                 job.expert_id == expert_id
@@ -175,7 +175,7 @@ class ExpertInstallJobManager:
         try:
             return self._jobs[job_id].model_copy(deep=True)
         except KeyError as exc:
-            raise KeyError("expert install job not found") from exc
+            raise KeyError("partner install job not found") from exc
 
     def list(self) -> list[ExpertInstallJob]:
         return [
@@ -187,9 +187,9 @@ class ExpertInstallJobManager:
         job = self._jobs.get(job_id)
         task = self._tasks.get(job_id)
         if job is None:
-            raise KeyError("expert install job not found")
+            raise KeyError("partner install job not found")
         if task is None or task.done() or job.state not in {"queued", "running"}:
-            raise ValueError("expert install job is not running")
+            raise ValueError("partner install job is not running")
         task.cancel()
         await asyncio.gather(task, return_exceptions=True)
         return self.get(job_id)

@@ -468,7 +468,7 @@ def image_gen_provider_configs(config: Any) -> dict[str, Any]:
     # Also include any other provider that has credentials configured — they
     # will fall back to the OpenAI-compatible image generation client.
     for field_name in providers_cfg.model_fields_set:
-        if field_name in result:
+        if field_name in result or field_name == "openai_images":
             continue
         pc = getattr(providers_cfg, field_name, None)
         if isinstance(pc, ProviderConfig) and (pc.api_key or pc.api_base):
@@ -476,6 +476,8 @@ def image_gen_provider_configs(config: Any) -> dict[str, Any]:
     for field_name, pc in getattr(providers_cfg, "cindy", {}).items():
         if isinstance(pc, ProviderConfig):
             result[field_name] = pc
+    if providers_cfg.openai_images.api_base:
+        result["openai"] = providers_cfg.openai_images
     return result
 
 
@@ -1192,12 +1194,10 @@ _AGNES_IMAGE_ASPECT_RATIO_SIZES = {
 
 
 class OpenAIImageGenerationClient(ImageGenerationProvider):
-    """OpenAI Images API using an API key (``providers.openai.apiKey``)."""
+    """OpenAI Images API using its dedicated key, with legacy key fallback."""
 
     provider_name = "openai"
-    missing_key_message = (
-        "OpenAI API key is not configured. Set providers.openai.apiKey."
-    )
+    missing_key_message = "请在模型供应商中配置 OpenAI 图像生成 API Key。"
 
     def _default_base_url(self) -> str:
         return "https://api.openai.com/v1"

@@ -110,10 +110,8 @@ _FREE_TIER_CAPABILITY_NOTE = (
 _TASK_PLAN_NOTE = (
     "\n\n---\n\n"
     "## Planning\n\n"
-    "Use `update_plan` only for complex, ambiguous, or multi-phase work; plans are not for padding out simple work. "
-    "Use meaningful, logically ordered steps with no more than 5-7 words each and status `pending`, `in_progress`, or `completed`. "
-    "Keep exactly one step `in_progress` until all are complete; update completed work before moving on. "
-    "Revise the plan with an explanation when it changes. The harness renders it, so do not repeat it in full."
+    "Use `update_plan` when tracking progress would help with the task. "
+    "Keep it current; the interface displays it, so a separate copy in the reply is unnecessary."
 )
 
 
@@ -169,7 +167,7 @@ class TurnContext:
 
     turn_wall_started_at: float = field(default_factory=time.time)
     turn_latency_ms: int | None = None
-    turn_usage: dict[str, int] = field(default_factory=dict)
+    turn_usage: dict[str, Any] = field(default_factory=dict)
 
     delivered_files: list[dict[str, Any]] = field(default_factory=list)
     trace: list[StateTraceEntry] = field(default_factory=list)
@@ -223,7 +221,10 @@ class AgentLoop:
         workspace: Path,
         model: str | None = None,
         max_iterations: int | None = None,
+        max_parallel_tool_calls: int | None = None,
         context_window_tokens: int | None = None,
+        context_window_verified: bool = True,
+        context_provider: str | None = None,
         auto_compact_token_limit: int | None = None,
         context_block_limit: int | None = None,
         max_tool_result_chars: int | None = None,
@@ -238,8 +239,7 @@ class AgentLoop:
         channels_config: ChannelsConfig | None = None,
         timezone: str | None = None,
         session_ttl_minutes: int = 0,
-        consolidation_ratio: float = 0.5,
-        max_messages: int = 120,
+        consolidation_ratio: float = 0.2,
         hooks: list[AgentHook] | None = None,
         unified_session: bool = False,
         disabled_skills: list[str] | None = None,
@@ -276,11 +276,16 @@ class AgentLoop:
         self.max_iterations = (
             max_iterations if max_iterations is not None else defaults.max_tool_iterations
         )
+        self.max_parallel_tool_calls = (
+            max_parallel_tool_calls if max_parallel_tool_calls is not None else defaults.max_parallel_tool_calls
+        )
         self.context_window_tokens = (
             context_window_tokens
             if context_window_tokens is not None
             else DEFAULT_CONTEXT_WINDOW_TOKENS
         )
+        self.context_window_verified = context_window_verified
+        self.context_provider = context_provider
         self.auto_compact_token_limit = auto_compact_token_limit
         self.context_block_limit = context_block_limit
         self.max_tool_result_chars = (
@@ -305,9 +310,9 @@ class AgentLoop:
         self.todo_service = todo_service
         self.restrict_to_workspace = restrict_to_workspace
         self._start_time = time.time()
-        self._last_usage: dict[str, int] = {}
+        self._last_usage: dict[str, Any] = {}
         self._pending_turn_latency_ms: dict[str, int] = {}
-        self._pending_turn_usage: dict[str, dict[str, int]] = {}
+        self._pending_turn_usage: dict[str, dict[str, Any]] = {}
         self._extra_hooks: list[AgentHook] = hooks or []
 
         self._base_disabled_skills = set(disabled_skills or [])
@@ -351,7 +356,6 @@ class AgentLoop:
             subscription_access_resolver=self._resolve_subagent_subscription_access,
         )
         self._unified_session = unified_session
-        self._max_messages = max_messages if max_messages > 0 else 120
         self._running = False
         self._mcp_servers = mcp_servers or {}
         self._mcp_stacks: dict[str, AsyncExitStack] = {}
@@ -452,21 +456,36 @@ class AgentLoop:
             provider = snapshot.provider
             model = snapshot.model
             context_window_tokens = snapshot.context_window_tokens
+            context_window_verified = snapshot.context_window_verified
+            context_provider = snapshot.context_provider
             auto_compact_token_limit = (
                 auto_compact_override
                 if auto_compact_override is not None
                 else snapshot.auto_compact_token_limit
             )
         else:
-            from mona.providers.context_window import resolve_model_context_window
+            from mona.providers.context_window import resolve_model_context_window_details
 
             provider = provider_override or make_provider(config)
             model = model_override or resolved.model
-            context_window_tokens = (
-                context_window_override
-                if context_window_override is not None
-                else resolve_model_context_window(config, resolved)
-            )
+            if context_window_override is not None:
+                context_window_tokens = context_window_override
+                context_window_verified = True
+                context_provider = (
+                    config.get_provider_name(model, preset=resolved)
+                    if provider_override is None
+                    else None
+                )
+            elif provider_override is None:
+                context_preset = resolved.model_copy(update={"model": model})
+                resolved_window = resolve_model_context_window_details(config, context_preset)
+                context_window_tokens = resolved_window.tokens
+                context_window_verified = resolved_window.source != "default"
+                context_provider = config.get_provider_name(model, preset=context_preset)
+            else:
+                context_window_tokens = DEFAULT_CONTEXT_WINDOW_TOKENS
+                context_window_verified = False
+                context_provider = None
             auto_compact_token_limit = (
                 auto_compact_override
                 if auto_compact_override is not None
@@ -493,7 +512,10 @@ class AgentLoop:
             workspace=config.workspace_path,
             model=model,
             max_iterations=defaults.max_tool_iterations,
+            max_parallel_tool_calls=extra.pop("max_parallel_tool_calls", defaults.max_parallel_tool_calls),
             context_window_tokens=context_window_tokens,
+            context_window_verified=context_window_verified,
+            context_provider=context_provider,
             auto_compact_token_limit=auto_compact_token_limit,
             context_block_limit=defaults.context_block_limit,
             max_tool_result_chars=defaults.max_tool_result_chars,
@@ -507,7 +529,6 @@ class AgentLoop:
             disabled_skills=defaults.disabled_skills,
             session_ttl_minutes=defaults.session_ttl_minutes,
             consolidation_ratio=defaults.consolidation_ratio,
-            max_messages=defaults.max_messages,
             tools_config=config.tools,
             services_port=extra.pop("services_port", config.services.port),
             runtime_config_loader=runtime_config_loader,
@@ -600,11 +621,15 @@ class AgentLoop:
         provider = snapshot.provider
         model = snapshot.model
         context_window_tokens = snapshot.context_window_tokens
+        context_window_verified = snapshot.context_window_verified
+        context_provider = snapshot.context_provider
         auto_compact_token_limit = snapshot.auto_compact_token_limit
         old_model = self.model
         self.provider = provider
         self.model = model
         self.context_window_tokens = context_window_tokens
+        self.context_window_verified = context_window_verified
+        self.context_provider = context_provider
         self.auto_compact_token_limit = auto_compact_token_limit
         self.runner.provider = provider
         self.subagents.set_provider(provider, model)
@@ -719,7 +744,7 @@ class AgentLoop:
         self,
         session: Session,
         *,
-        max_messages: int,
+        max_messages: int = 0,
         max_tokens: int = 0,
         include_timestamps: bool = False,
     ) -> list[dict[str, Any]]:
@@ -844,13 +869,15 @@ class AgentLoop:
             provider=self.provider,
             workspace=self.workspace,
             model=self.model,
+            max_parallel_tool_calls=self.max_parallel_tool_calls,
             context_window_tokens=self.context_window_tokens,
+            context_window_verified=self.context_window_verified,
+            context_provider=self.context_provider,
             auto_compact_token_limit=self.auto_compact_token_limit,
             max_tool_result_chars=self.max_tool_result_chars,
             restrict_to_workspace=self.restrict_to_workspace,
             session_manager=self.sessions,
             timezone=self.context.timezone,
-            max_messages=self._max_messages,
             disabled_skills=None,
             tools_config=self.tools_config,
             services_port=self.services_port,
@@ -906,13 +933,15 @@ class AgentLoop:
             provider=self.provider,
             workspace=self.workspace,
             model=self.model,
+            max_parallel_tool_calls=self.max_parallel_tool_calls,
             context_window_tokens=self.context_window_tokens,
+            context_window_verified=self.context_window_verified,
+            context_provider=self.context_provider,
             auto_compact_token_limit=self.auto_compact_token_limit,
             max_tool_result_chars=self.max_tool_result_chars,
             restrict_to_workspace=self.restrict_to_workspace,
             session_manager=self.sessions,
             timezone=self.context.timezone,
-            max_messages=self._max_messages,
             disabled_skills=None,
             tools_config=self.tools_config,
             services_port=self.services_port,
@@ -1042,7 +1071,7 @@ class AgentLoop:
         from mona.agent.tools.mcp import connect_mcp_servers
 
         try:
-            self._mcp_stacks = await connect_mcp_servers(
+            connected = await connect_mcp_servers(
                 self._mcp_servers,
                 self.tools,
                 self._reconnect_mcp_server_tools,
@@ -1052,16 +1081,18 @@ class AgentLoop:
                 computer_provider_loader=lambda: (self.provider, self.model),
                 computer_permission_check=self._live_computer_permission,
             )
+            # 等待初始连接时，内置服务可能已独立接入；保留它的连接所有者。
+            self._mcp_stacks.update(connected)
             if self._mcp_stacks:
                 self._mcp_connected = True
             else:
                 logger.warning("No MCP servers connected successfully (will retry next message)")
         except asyncio.CancelledError:
             logger.warning("MCP connection cancelled (will retry next message)")
-            self._mcp_stacks.clear()
+            if asyncio.current_task().cancelling():
+                raise
         except BaseException as e:
             logger.warning("Failed to connect MCP servers (will retry next message): {}", e)
-            self._mcp_stacks.clear()
         finally:
             self._mcp_connecting = False
 
@@ -1220,7 +1251,12 @@ class AgentLoop:
             and is_video_generation_request(msg.content, msg.metadata)
         ):
             activate_capabilities({"video"})
-        if self.tools.is_visible("generate_image"):
+        image_mode = msg.metadata.get("image_generation")
+        preload_image_skill = (
+            isinstance(image_mode, dict) and image_mode.get("enabled") is True
+            and self.tools.is_visible("generate_image")
+        )
+        if preload_image_skill:
             activate_capabilities({"skill_resources"})
         messages = self.context.build_messages(
             history=history,
@@ -1231,7 +1267,7 @@ class AgentLoop:
             ),
             skill_names=(
                 ["image-generation"]
-                if self.tools.is_visible("generate_image")
+                if preload_image_skill
                 else None
             ),
             media=msg.media if msg.media else None,
@@ -1427,10 +1463,7 @@ class AgentLoop:
         metadata: dict[str, Any] | None = None,
         session_key: str | None = None,
         pending_queue: asyncio.Queue | None = None,
-        return_detected_context_window: bool = False,
-    ) -> tuple[str | None, list[str], list[dict], str, bool] | tuple[
-        str | None, list[str], list[dict], str, bool, int | None
-    ]:
+    ) -> tuple[str | None, list[str], list[dict], str, bool]:
         """Run the agent iteration loop.
 
         *on_stream*: called with each content delta during streaming.
@@ -1484,11 +1517,26 @@ class AgentLoop:
             if pending_queue is None:
                 return []
 
-            def _to_user_message(pending_msg: InboundMessage) -> dict[str, Any]:
+            async def _to_user_message(pending_msg: InboundMessage) -> dict[str, Any]:
                 content = pending_msg.content
                 media = pending_msg.media if pending_msg.media else None
                 if media:
-                    content, media = extract_documents(content, media)
+                    from mona.agent.tools.capabilities import activate_capabilities_for_media
+                    from mona.config.paths import get_media_dir
+                    from mona.utils.media_store import stage_media_file
+
+                    # Follow-ups can arrive from another upload workspace. Keep PDFs
+                    # accessible to subsequent paginated tool reads, as on turn entry.
+                    media = list(media)
+                    workspace = get_current_workspace(self.workspace).resolve()
+                    for index, path in enumerate(media):
+                        source = Path(path).resolve()
+                        if source.suffix.lower() == ".pdf" and source.is_file() and not source.is_relative_to(workspace):
+                            media[index] = str(await asyncio.to_thread(stage_media_file, source, get_media_dir()))
+                    activate_capabilities_for_media(media)
+                    content, media = await asyncio.to_thread(
+                        extract_documents, content, media, pdf_previews=True,
+                    )
                     media = media or None
                 user_content = self.context._build_user_content(content, media)
                 return {"role": "user", "content": user_content}
@@ -1496,7 +1544,7 @@ class AgentLoop:
             items: list[dict[str, Any]] = []
             while len(items) < limit:
                 try:
-                    items.append(_to_user_message(pending_queue.get_nowait()))
+                    items.append(await _to_user_message(pending_queue.get_nowait()))
                 except asyncio.QueueEmpty:
                     break
 
@@ -1523,10 +1571,10 @@ class AgentLoop:
                             session.key,
                         )
                         break
-                    items.append(_to_user_message(msg))
+                    items.append(await _to_user_message(msg))
                     while len(items) < limit:
                         try:
-                            items.append(_to_user_message(pending_queue.get_nowait()))
+                            items.append(await _to_user_message(pending_queue.get_nowait()))
                         except asyncio.QueueEmpty:
                             break
                     break
@@ -1555,15 +1603,19 @@ class AgentLoop:
                     hook=hook,
                     error_message="Sorry, I encountered an error calling the AI model.",
                     concurrent_tools=True,
+                    max_parallel_tool_calls=self.max_parallel_tool_calls,
                     workspace=effective_ws,
                     session_key=session.key if session else None,
                     context_window_tokens=self.context_window_tokens,
+                    context_window_verified=self.context_window_verified,
+                    context_provider=self.context_provider,
                     context_block_limit=self.context_block_limit,
                     provider_retry_mode=self.provider_retry_mode,
                     progress_callback=on_progress,
                     stream_progress_deltas=on_stream is not None,
                     retry_wait_callback=on_retry_wait,
                     checkpoint_callback=_checkpoint,
+                    context_limit_callback=self._learn_context_window,
                     injection_callback=_drain_pending,
                     repeat_guard_enabled=True,
                     # Sustained goals may legitimately exceed mona_LLM_TIMEOUT_S; idle stall
@@ -1581,12 +1633,16 @@ class AgentLoop:
 
             await finish_computer_turn()
         self._last_usage = dict(result.usage)
-        # ``usage`` is cumulative across this run's LLM calls (billing view);
-        # ``context_tokens`` carries the last call's prompt size so the WebUI
-        # can show how full the context window actually is.
-        final_prompt = (result.final_usage or {}).get("prompt_tokens")
-        if final_prompt:
-            self._last_usage["context_tokens"] = int(final_prompt)
+        # Billing counters include every model call; context fields describe
+        # only the latest request that actually reached the provider.
+        for key in (
+            "context_tokens",
+            "context_window_tokens",
+            "context_model",
+            "context_provider",
+        ):
+            if key in result.final_usage:
+                self._last_usage[key] = result.final_usage[key]
         if result.stop_reason in {"max_iterations", "loop_detected"}:
             if result.stop_reason == "max_iterations":
                 logger.warning("Max iterations ({}) reached", self.max_iterations)
@@ -1606,8 +1662,6 @@ class AgentLoop:
             result.stop_reason,
             result.had_injections,
         )
-        if return_detected_context_window:
-            return (*outcome, result.detected_context_window_tokens)
         return outcome
 
     async def run(self) -> None:
@@ -1842,7 +1896,7 @@ class AgentLoop:
         if self._background_tasks:
             await asyncio.gather(*self._background_tasks, return_exceptions=True)
             self._background_tasks.clear()
-        for name, stack in self._mcp_stacks.items():
+        for name, stack in list(self._mcp_stacks.items()):
             try:
                 await stack.aclose()
             except (RuntimeError, BaseExceptionGroup):
@@ -2085,8 +2139,8 @@ class AgentLoop:
 
         await self.consolidator.maybe_consolidate_by_tokens(
             session,
-            replay_max_messages=self._max_messages,
         )
+        pending = self.auto_compact.summary_for_session(session, key) or pending
         is_subagent = msg.sender_id == "subagent"
         if is_subagent and self._persist_subagent_followup(session, msg):
             logger.debug("Subagent result persisted for session {}", key)
@@ -2100,7 +2154,6 @@ class AgentLoop:
             session=session,
         )
         _hist_kwargs: dict[str, Any] = {
-            "max_messages": self._max_messages,
             "max_tokens": self._replay_token_budget(),
             "include_timestamps": True,
         }
@@ -2155,7 +2208,6 @@ class AgentLoop:
         self._schedule_background(
             self.consolidator.maybe_consolidate_by_tokens(
                 session,
-                replay_max_messages=self._max_messages,
             )
         )
         content = final_content or "Background task completed."
@@ -2340,7 +2392,7 @@ class AgentLoop:
         on_stream: Callable[[str], Awaitable[None]] | None,
         *,
         turn_latency_ms: int | None = None,
-        token_usage: dict[str, int] | None = None,
+        token_usage: dict[str, Any] | None = None,
         delivered_files: list[dict[str, Any]] | None = None,
         task_plan: dict[str, Any] | None = None,
     ) -> OutboundMessage | None:
@@ -2435,7 +2487,9 @@ class AgentLoop:
                 metadata["_attachment_paths"] = staged_attachment_paths
             msg = dataclasses.replace(msg, media=staged_media, metadata=metadata)
             ctx.msg = msg
-            new_content, image_only = extract_documents(msg.content, msg.media)
+            new_content, image_only = await asyncio.to_thread(
+                extract_documents, msg.content, msg.media, pdf_previews=True,
+            )
             ctx.msg = dataclasses.replace(msg, content=new_content, media=image_only)
             msg = ctx.msg
 
@@ -2483,6 +2537,16 @@ class AgentLoop:
             return "shortcut"
         return "dispatch"
 
+    async def _report_context_usage(self, ctx: TurnContext, tokens: int | None) -> None:
+        if tokens is None or ctx.msg.channel != "websocket" or ctx.on_progress is None:
+            return
+        usage: dict[str, Any] = {"context_tokens": tokens, "context_model": self.model}
+        if self.context_window_verified:
+            usage["context_window_tokens"] = self.context_window_tokens
+        if self.context_provider:
+            usage["context_provider"] = self.context_provider
+        await ctx.on_progress("", token_usage=usage)
+
     async def _state_build(self, ctx: TurnContext) -> str:
         if ctx.on_progress is None:
             ctx.on_progress = await self._build_bus_progress_callback(ctx.msg)
@@ -2513,13 +2577,13 @@ class AgentLoop:
 
         activate_capabilities_for_media(ctx.msg.media)
 
-        await self.consolidator.maybe_consolidate_by_tokens(
+        estimated = await self.consolidator.maybe_consolidate_by_tokens(
             ctx.session,
-            replay_max_messages=self._max_messages,
             current_message=ctx.msg.content,
             message_metadata=ctx.msg.metadata,
             on_compaction=report_compaction,
         )
+        await self._report_context_usage(ctx, estimated)
         ctx.pending_summary = self.auto_compact.summary_for_session(
             ctx.session,
             ctx.session_key,
@@ -2529,7 +2593,6 @@ class AgentLoop:
                 message_tool.start_turn()
 
         _hist_kwargs: dict[str, Any] = {
-            "max_messages": self._max_messages,
             "max_tokens": self._replay_token_budget(),
             "include_timestamps": True,
         }
@@ -2632,6 +2695,7 @@ class AgentLoop:
             return False
 
         self.context_window_tokens = tokens
+        self.context_window_verified = True
         self.consolidator.set_provider(
             self.provider,
             self.model,
@@ -2660,67 +2724,6 @@ class AgentLoop:
             )
         return True
 
-    async def _rebuild_after_context_limit(
-        self,
-        ctx: TurnContext,
-        tokens: int,
-    ) -> bool:
-        """Learn a confirmed limit, compact the persisted turn, and rebuild it once."""
-        if not await self._learn_context_window(tokens):
-            return False
-
-        async def report_compaction(active: bool) -> None:
-            if ctx.msg.channel == "websocket" and ctx.on_progress is not None:
-                await ctx.on_progress(
-                    "正在整理上下文" if active else "",
-                    context_compacting=active,
-                )
-
-        # The current user message was persisted before the first request.
-        # Temporarily remove it so the consolidator sees the same history plus
-        # current-message shape as the original request, without summarizing
-        # or counting the new user input twice.
-        persisted_current = None
-        if ctx.user_persisted_early and ctx.session.messages:
-            last_message = ctx.session.messages[-1]
-            if last_message.get("role") == "user":
-                persisted_current = ctx.session.messages.pop()
-        try:
-            await self.consolidator.maybe_consolidate_by_tokens(
-                ctx.session,
-                replay_max_messages=self._max_messages,
-                current_message=ctx.msg.content,
-                message_metadata=ctx.msg.metadata,
-                on_compaction=report_compaction,
-            )
-        finally:
-            if persisted_current is not None:
-                ctx.session.messages.append(persisted_current)
-        ctx.pending_summary = self.auto_compact.summary_for_session(
-            ctx.session,
-            ctx.session_key,
-        )
-        history = self._build_model_history(
-            ctx.session,
-            max_messages=self._max_messages,
-            max_tokens=self._replay_token_budget(),
-            include_timestamps=True,
-        )
-        if ctx.user_persisted_early and history and history[-1].get("role") == "user":
-            history = history[:-1]
-        ctx.history = history
-        ctx.initial_messages = self._build_initial_messages(
-            ctx.msg,
-            ctx.session,
-            history,
-            ctx.pending_summary,
-        )
-        if not self.tools.has_subscription_access:
-            ctx.initial_messages = self._inject_capability_note(ctx.initial_messages)
-        if self.tools.has("update_plan"):
-            ctx.initial_messages = self._inject_task_plan_note(ctx.initial_messages)
-        return True
-
     async def _state_run(self, ctx: TurnContext) -> str:
         await self._webui_turns.publish_run_status(ctx.msg, "running")
         result = await self._run_agent_loop(
@@ -2736,7 +2739,6 @@ class AgentLoop:
             metadata=ctx.msg.metadata,
             session_key=ctx.session_key,
             pending_queue=ctx.pending_queue,
-            return_detected_context_window=True,
         )
         (
             final_content,
@@ -2744,35 +2746,7 @@ class AgentLoop:
             all_msgs,
             stop_reason,
             had_injections,
-            detected_context_window,
         ) = result
-        if detected_context_window is not None and await self._rebuild_after_context_limit(
-            ctx,
-            detected_context_window,
-        ):
-            retry_result = await self._run_agent_loop(
-                ctx.initial_messages,
-                on_progress=ctx.on_progress,
-                on_stream=ctx.on_stream,
-                on_stream_end=ctx.on_stream_end,
-                on_retry_wait=ctx.on_retry_wait,
-                session=ctx.session,
-                channel=ctx.msg.channel,
-                chat_id=ctx.msg.chat_id,
-                message_id=ctx.msg.metadata.get("message_id"),
-                metadata=ctx.msg.metadata,
-                session_key=ctx.session_key,
-                pending_queue=ctx.pending_queue,
-                return_detected_context_window=True,
-            )
-            (
-                final_content,
-                tools_used,
-                all_msgs,
-                stop_reason,
-                had_injections,
-                _,
-            ) = retry_result
         ctx.final_content = final_content
         ctx.turn_usage = dict(self._last_usage)
         ctx.tools_used = tools_used
@@ -2807,7 +2781,6 @@ class AgentLoop:
         self._schedule_background(
             self.consolidator.maybe_consolidate_by_tokens(
                 ctx.session,
-                replay_max_messages=self._max_messages,
             )
         )
         return "ok"
@@ -2936,7 +2909,7 @@ class AgentLoop:
         skip: int,
         *,
         turn_latency_ms: int | None = None,
-        token_usage: dict[str, int] | None = None,
+        token_usage: dict[str, Any] | None = None,
         task_id: str | None = None,
     ) -> None:
         """Save new-turn messages into session, truncating large tool results."""
@@ -3089,6 +3062,7 @@ class AgentLoop:
         assistant_message = checkpoint.get("assistant_message")
         completed_tool_results = checkpoint.get("completed_tool_results") or []
         pending_tool_calls = checkpoint.get("pending_tool_calls") or []
+        started_tool_call_ids = checkpoint.get("started_tool_call_ids")
 
         restored_messages: list[dict[str, Any]] = [
             {**message, "timestamp": message.get("timestamp") or datetime.now().isoformat()}
@@ -3109,12 +3083,20 @@ class AgentLoop:
                 continue
             tool_id = tool_call.get("id")
             name = ((tool_call.get("function") or {}).get("name")) or "tool"
+            if started_tool_call_ids is not None and tool_id not in started_tool_call_ids:
+                content = "Error: TOOL_NOT_STARTED: This tool call was not dispatched. Retry it if still needed."
+            else:
+                content = (
+                    "Error: TOOL_OUTCOME_UNKNOWN: This tool call may have executed, but its result "
+                    "was not recorded. Retry only read-only or idempotent operations; for side "
+                    "effects, verify external state or ask the user. Do not retry blindly."
+                )
             restored_messages.append(
                 {
                     "role": "tool",
                     "tool_call_id": tool_id,
                     "name": name,
-                    "content": "Error: Task interrupted before this tool finished.",
+                    "content": content,
                     "timestamp": datetime.now().isoformat(),
                 }
             )

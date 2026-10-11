@@ -22,7 +22,7 @@ async def test_native_coverage_controls_dispatch_and_vision(monkeypatch, route):
         current = {"pid": 1, "window_id": 2, "candidates": [dict(native)], "perception_status": "direct_screenshot"}
 
     async def visual(observation):
-        observation["candidates"] = [{"id": "vision:0", "source": "vision", "label": "Target", "actions": ["click"], "frame": {"x": 2, "y": 4, "w": 10, "h": 10}, "state": "ready", "relations": "below search"}]
+        observation["candidates"] = [{"id": "vision:0", "source": "vision", "confidence": 0.95, "label": "Target", "actions": ["click"], "frame": {"x": 2, "y": 4, "w": 10, "h": 10}, "state": "ready", "relations": "below search"}]
         observation["perception_status"] = {"status": "ready"}
         return observation
 

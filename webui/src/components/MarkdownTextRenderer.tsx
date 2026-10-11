@@ -16,6 +16,13 @@ import { isTauri, openPathWithSystemApp, openExternalUrl, revealItemInDir } from
 import { useMaterialsOpenStore } from "@/lib/materials-open-store";
 import { useWorkspaceStore, resolveToAbsolutePath } from "@/lib/workspace-store";
 import { cn } from "@/lib/utils";
+import { useMarkdownContext, isProjectReference } from "./markdown/MarkdownContext";
+import { MarkdownMedia, ProjectFileLink } from "./markdown/MarkdownMedia";
+import { MarkdownTable } from "./markdown/MarkdownTable";
+import { normalizeConversationMarkdown } from "./markdown/normalize-markdown";
+import { remarkProjectAssets } from "./markdown/remark-project-assets";
+import { MarkdownGallery } from "./markdown/MarkdownGallery";
+import "./markdown/conversation-markdown.css";
 
 import "katex/dist/katex.min.css";
 
@@ -23,6 +30,7 @@ interface MarkdownTextRendererProps {
   children: string;
   className?: string;
   highlightCode?: boolean;
+  streaming?: boolean;
 }
 
 const remarkPlugins = [remarkBreaks, remarkGfm, remarkMath];
@@ -44,7 +52,8 @@ const sanitizeSchema = {
   },
   protocols: {
     ...defaultSchema.protocols,
-    href: [...(defaultSchema.protocols?.href ?? []), "mona"],
+    href: [...(defaultSchema.protocols?.href ?? []), "mona", "mona-project"],
+    src: [...(defaultSchema.protocols?.src ?? []), "mona-project", "data"],
   },
 } as typeof defaultSchema;
 
@@ -69,10 +78,29 @@ export default function MarkdownTextRenderer({
   children,
   className,
   highlightCode = true,
+  streaming = false,
 }: MarkdownTextRendererProps) {
+  const context = useMarkdownContext();
+  const conversation = context !== null;
+  const source = useMemo(() => conversation ? normalizeConversationMarkdown(children, streaming) : children, [children, streaming, conversation]);
+  const plugins = useMemo(() => conversation ? [...remarkPlugins, remarkProjectAssets] : remarkPlugins, [conversation]);
+  const decodeSource = (src: string) => src.startsWith("mona-project:") ? decodeURIComponent(src.slice(13)) : src;
   const components = useMemo<Components>(
     () => ({
+      ...(conversation ? {
+        table: ({ children: content }: { children?: React.ReactNode }) => <MarkdownTable>{content}</MarkdownTable>,
+        img: ({ src, alt }: { src?: string; alt?: string }) => <MarkdownMedia src={decodeSource(src ?? "")} alt={alt} />,
+        p: ({ children: content, node }: { children?: React.ReactNode; node?: import("hast").Element }) => {
+          const onlyImages = node?.children.every((child) => child.type === "element" && ["img", "br"].includes(child.tagName) || child.type === "text" && !child.value.trim());
+          return onlyImages ? <div className={cn("my-4 grid grid-cols-1 items-start gap-3 [&>br]:hidden", (node?.children.filter((child) => child.type === "element" && child.tagName === "img").length ?? 0) > 1 && "sm:grid-cols-2")}>{content}</div> : <p>{content}</p>;
+        },
+      } : {}),
       code({ className: cls, children: kids, ...props }) {
+        if (conversation) {
+          const value = String(kids);
+          return isLikelyFilePath(value) ? <ProjectFileLink path={value}>{value}</ProjectFileLink>
+            : <code className="rounded bg-muted px-1 py-0.5 font-mono text-ui">{kids}</code>;
+        }
         const match = /language-(\w+)/.exec(cls || "");
         if (match) {
           const code = String(kids).replace(/\n$/, "");
@@ -123,7 +151,17 @@ export default function MarkdownTextRenderer({
           </code>
         );
       },
-      pre({ children: markdownChildren }) {
+      pre({ children: markdownChildren, node }) {
+        if (conversation) {
+          const child = node?.children.find((item) => item.type === "element" && item.tagName === "code");
+          if (child?.type === "element") {
+            const code = child.children.map((item) => item.type === "text" ? item.value : "").join("").replace(/\n$/, "");
+            const language = /language-(\S+)/.exec(String(child.properties.className ?? ""))?.[1];
+            if (language === "mermaid" && highlightCode) return <MermaidDiagram code={code} />;
+            if (language === "chart" && highlightCode) return <ChatChart source={code} />;
+            return <CodeBlock conversation code={code} language={language} highlight={highlightCode} className="my-4" />;
+          }
+        }
         const mermaid = unwrapMermaidPre(markdownChildren);
         if (mermaid) return <>{mermaid}</>;
         const kids = Children.toArray(markdownChildren);
@@ -149,6 +187,9 @@ export default function MarkdownTextRenderer({
         );
       },
       a({ href, children: markdownChildren, ...props }) {
+        if (conversation && href && (href.startsWith("mona-project:") || isProjectReference(href))) {
+          return <ProjectFileLink path={decodeSource(href)}>{markdownChildren}</ProjectFileLink>;
+        }
         if (href && isLikelyFilePath(href)) {
           return (
             <FileLink href={href}>{markdownChildren}</FileLink>
@@ -188,10 +229,10 @@ export default function MarkdownTextRenderer({
         );
       },
     }),
-    [highlightCode],
+    [highlightCode, conversation],
   );
 
-  return (
+  const rendered = (
     <div
       className={cn(
         "markdown-content prose min-w-0 max-w-none dark:prose-invert break-words",
@@ -206,20 +247,26 @@ export default function MarkdownTextRenderer({
         "prose-pre:my-0 prose-pre:bg-transparent prose-pre:p-0",
         "prose-code:before:content-none prose-code:after:content-none prose-code:font-normal",
         "prose-table:my-3 prose-th:text-left prose-th:font-medium",
+        conversation && "conversation-markdown",
         className,
       )}
       style={{ lineHeight: "var(--cjk-line-height)" }}
     >
       <ReactMarkdown
-        remarkPlugins={remarkPlugins}
+        remarkPlugins={plugins}
         rehypePlugins={rehypePlugins}
         components={components}
-        urlTransform={markdownUrlTransform}
+        urlTransform={(url, key) => {
+          if (conversation && url.startsWith("mona-project:")) return url;
+          if (conversation && key === "src" && /^data:image\/(?:png|jpeg|gif|webp|avif|bmp);base64,/i.test(url)) return url;
+          return markdownUrlTransform(url);
+        }}
       >
-        {children}
+        {source}
       </ReactMarkdown>
     </div>
   );
+  return conversation ? <MarkdownGallery>{rendered}</MarkdownGallery> : rendered;
 }
 
 function FileLink({ href, children }: { href: string; children: React.ReactNode }) {

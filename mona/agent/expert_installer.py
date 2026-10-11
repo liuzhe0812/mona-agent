@@ -118,7 +118,7 @@ class ExpertInstaller:
         if entry.runtime_packs:
             if self.runtime_pack_installer is None:
                 raise ExpertInstallError(
-                    "expert package requires runtime packs that are not installed"
+                    "partner package requires runtime packs that are not installed"
                 )
             self._report(progress, "runtime", detail=", ".join(entry.runtime_packs))
             await self.runtime_pack_installer(entry.runtime_packs, progress)
@@ -136,7 +136,7 @@ class ExpertInstaller:
                     await result
         except Exception as exc:
             await self._rollback_activation(entry, previous_active)
-            raise ExpertInstallError("expert activation failed; previous version restored") from exc
+            raise ExpertInstallError("partner activation failed; previous version restored") from exc
         try:
             self.package_store.prune_inactive(entry.id)
         except Exception as exc:
@@ -167,24 +167,24 @@ class ExpertInstaller:
 
     def _validate_compatibility(self, entry: ExpertCatalogEntry) -> None:
         if entry.platforms and self.current_platform not in entry.platforms:
-            raise ExpertInstallError(f"expert does not support platform {self.current_platform}")
+            raise ExpertInstallError(f"partner does not support platform {self.current_platform}")
         if entry.architectures and self.current_architecture not in entry.architectures:
             raise ExpertInstallError(
-                f"expert does not support architecture {self.current_architecture}"
+                f"partner does not support architecture {self.current_architecture}"
             )
         missing_tools = sorted(set(entry.required_tools) - self.known_tool_names)
         if missing_tools:
             raise ExpertInstallError(
-                "expert requires a newer Mona tool set: " + ", ".join(missing_tools)
+                "partner requires a newer Mona tool set: " + ", ".join(missing_tools)
             )
         if entry.min_mona_version:
             try:
                 if Version(self.mona_version) < Version(entry.min_mona_version):
                     raise ExpertInstallError(
-                        f"expert requires Mona {entry.min_mona_version} or newer"
+                        f"partner requires Mona {entry.min_mona_version} or newer"
                     )
             except InvalidVersion as exc:
-                raise ExpertInstallError("expert or client version metadata is invalid") from exc
+                raise ExpertInstallError("partner or client version metadata is invalid") from exc
 
     def compatibility_error(self, entry: ExpertCatalogEntry) -> str | None:
         try:
@@ -205,13 +205,13 @@ class ExpertInstaller:
             if entry.id == expert_id and (version is None or entry.version == version)
         ]
         if not candidates:
-            raise ExpertInstallError(f"expert {expert_id!r} is not in the catalog")
+            raise ExpertInstallError(f"partner {expert_id!r} is not in the catalog")
         if version is not None:
             return candidates[0]
         try:
             return max(candidates, key=lambda entry: Version(entry.version))
         except InvalidVersion as exc:
-            raise ExpertInstallError("expert catalog contains an invalid version") from exc
+            raise ExpertInstallError("partner catalog contains an invalid version") from exc
 
     @staticmethod
     def _report(

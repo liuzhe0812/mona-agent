@@ -11,6 +11,7 @@ import tempfile
 from collections.abc import Callable
 from datetime import datetime, timezone
 from pathlib import Path
+from typing import Literal
 from urllib.parse import urljoin
 
 import httpx
@@ -46,6 +47,15 @@ class RuntimeCatalogEntry(Base):
     dependencies: list[str] = Field(default_factory=list)
     platforms: list[str] = Field(default_factory=list)
     architectures: list[str] = Field(default_factory=list)
+    artifact_format: Literal["runtime-zip", "native-binary", "native-tar-gz", "native-zip"] = "runtime-zip"
+    native_entrypoint: str | None = None
+
+    @field_validator("native_entrypoint")
+    @classmethod
+    def _native_entrypoint(cls, value: str | None) -> str | None:
+        if value is not None:
+            RuntimeComponentManifest._validate_entrypoints({"binary": value})
+        return value
 
     @field_validator("schema_version")
     @classmethod
@@ -144,6 +154,19 @@ class RuntimeCatalogClient:
         self.max_bytes = max_bytes
         self.transport = transport
 
+    async def fetch_resource(self, resource: str) -> RuntimeCatalog:
+        from mona.runtime.executors import EXECUTOR_RUNTIMES
+        from mona.runtime.native_releases import native_release_entry
+        if resource not in EXECUTOR_RUNTIMES:
+            return await self.fetch()
+        entry = await native_release_entry(resource, transport=self.transport)
+        cached = self.load_cached()
+        components = [item for item in cached.catalog.components if (item.id, item.version) != (entry.id, entry.version)] if cached else []
+        now = datetime.now(timezone.utc).isoformat()
+        catalog = RuntimeCatalog(generated_at=cached.catalog.generated_at if cached else now, components=[*components, entry])
+        self._write_cache(RuntimeCatalogCache(fetched_at=now, source_url=str(entry.download_url), catalog=catalog))
+        return catalog
+
     async def fetch(self, *, timeout_seconds: float = 15.0) -> RuntimeCatalog:
         errors: list[str] = []
         cached = self.load_cached()
@@ -173,7 +196,7 @@ class RuntimeCatalogClient:
                         if len(body) > self.max_bytes:
                             raise RuntimeCatalogError("runtime catalog exceeds size limit")
                         catalog = RuntimeCatalog.model_validate_json(body)
-                        if cached is not None and _catalog_time(
+                        if cached is not None and any(item.artifact_format == "runtime-zip" for item in cached.catalog.components) and _catalog_time(
                             catalog.generated_at
                         ) < _catalog_time(cached.catalog.generated_at):
                             raise RuntimeCatalogError("runtime catalog rollback was rejected")
@@ -205,6 +228,12 @@ class RuntimeCatalogClient:
     def _write_cache(self, cache: RuntimeCatalogCache) -> None:
         self.cache_path.parent.mkdir(parents=True, exist_ok=True)
         with FileLock(str(self.cache_path) + ".lock", timeout=30):
+            current = self.load_cached()
+            if current is not None:
+                identities = {(item.id, item.version, tuple(item.platforms), tuple(item.architectures)) for item in cache.catalog.components}
+                cache.catalog.components.extend(item for item in current.catalog.components
+                    if item.artifact_format != "runtime-zip" and
+                    (item.id, item.version, tuple(item.platforms), tuple(item.architectures)) not in identities)
             fd, temporary_name = tempfile.mkstemp(
                 prefix=f".{self.cache_path.name}.", dir=self.cache_path.parent
             )
@@ -311,7 +340,8 @@ class RuntimeInstaller:
                     return
                 if progress:
                     progress(ref, 0, entry.size)
-                destination = self.cache_dir / component_id / f"{version}.zip"
+                extension = {"runtime-zip": "zip", "native-binary": "bin", "native-tar-gz": "tar.gz", "native-zip": "zip"}[entry.artifact_format]
+                destination = self.cache_dir / component_id / f"{version}.{extension}"
                 await self.downloader.download(
                     [str(entry.download_url), *(str(url) for url in entry.mirrors)],
                     destination,
@@ -321,8 +351,14 @@ class RuntimeInstaller:
                         (lambda current, total: progress(ref, current, total)) if progress else None
                     ),
                 )
+                bundle = destination
+                if entry.artifact_format != "runtime-zip":
+                    from mona.runtime.native_packaging import normalize_engine_archive
+                    bundle = await asyncio.to_thread(normalize_engine_archive, destination, entry,
+                        destination.with_name(f"{version}.runtime.zip"), current_platform=self.current_platform,
+                        current_architecture=self.current_architecture)
                 manifest = self.store.install_archive(
-                    destination,
+                    bundle,
                     activate=False,
                     replace=force,
                 )
@@ -365,6 +401,8 @@ class RuntimeInstaller:
             if has_wheel_pack:
                 await self.python_environment_builder.ensure(python_refs)
             for component_id in selected_versions:
+                if component_id in {"codex-cli", "claude-code-cli", "codebuddy-cli"}:
+                    continue  # Running native hosts may still need the old program's helpers.
                 try:
                     self.store.prune_inactive(component_id)
                 except Exception as exc:

@@ -59,7 +59,7 @@ const defaultVncForm: VncFormState = {
   sessionName: "",
 };
 
-export function NewConnectionDialog() {
+export function NewConnectionDialog({ fixedType }: { fixedType?: "ssh" }) {
   const open = useTerminalStore((s) => s.newConnectionDialogOpen);
   const setOpen = useTerminalStore((s) => s.setNewConnectionDialogOpen);
   const defaultType = useTerminalStore((s) => s.newConnectionDialogDefaultType);
@@ -69,15 +69,15 @@ export function NewConnectionDialog() {
   const showHostKeyDialog = useTerminalStore((s) => s.showHostKeyDialog);
   const saveConnection = useTerminalStore((s) => s.saveConnection);
 
-  const [connectionType, setConnectionType] = useState<ConnectionType>(defaultType);
+  const [connectionType, setConnectionType] = useState<ConnectionType>(fixedType ?? defaultType);
   const [sshForm, setSshForm] = useState<SshFormState>(defaultSshForm);
   const [vncForm, setVncForm] = useState<VncFormState>(defaultVncForm);
 
   useEffect(() => {
     if (open) {
-      setConnectionType(defaultType);
+      setConnectionType(fixedType ?? defaultType);
     }
-  }, [open, defaultType]);
+  }, [open, defaultType, fixedType]);
 
   const resetAndClose = () => {
     setSshForm(defaultSshForm);
@@ -216,12 +216,12 @@ export function NewConnectionDialog() {
     <Dialog open={open} onOpenChange={setOpen}>
       <DialogContent className="sm:max-w-md">
         <DialogHeader>
-          <DialogTitle>新建连接</DialogTitle>
-          <DialogDescription>选择连接类型并配置参数</DialogDescription>
+          <DialogTitle>{fixedType ? "新建 SSH 连接" : "新建连接"}</DialogTitle>
+          <DialogDescription>{fixedType ? "填写主机地址和认证信息" : "选择连接类型并配置参数"}</DialogDescription>
         </DialogHeader>
 
         <div className="space-y-4">
-          <div className="flex gap-2">
+          {!fixedType && <div className="flex gap-2">
             <ConnectionTypeButton
               active={connectionType === "ssh"}
               onClick={() => setConnectionType("ssh")}
@@ -237,7 +237,7 @@ export function NewConnectionDialog() {
               onClick={() => setConnectionType("vnc")}
               label="VNC"
             />
-          </div>
+          </div>}
 
           {connectionType === "vnc" ? (
             <div className="space-y-3">

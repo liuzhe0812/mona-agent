@@ -82,7 +82,7 @@ describe("ExpertLibraryDialog", () => {
       document.querySelector('img[src="/brand/agents/academic-researcher.png"]'),
     ).toBeInTheDocument();
     expect(
-      expertTitle.compareDocumentPosition(screen.getByText("Custom expert"))
+      expertTitle.compareDocumentPosition(screen.getByText("Custom partner"))
       & Node.DOCUMENT_POSITION_FOLLOWING,
     ).toBeTruthy();
     fireEvent.click(await screen.findByRole("button", { name: "Download and use" }));
@@ -114,7 +114,7 @@ describe("ExpertLibraryDialog", () => {
     );
 
     expect(
-      await screen.findByText("No official experts are currently available"),
+      await screen.findByText("No official partners are currently available"),
     ).toBeInTheDocument();
     expect(screen.queryByText(/503/)).not.toBeInTheDocument();
   });
@@ -144,7 +144,7 @@ describe("ExpertLibraryDialog", () => {
 
     const customAction = await screen.findByRole("button", { name: "New" });
     expect(customAction).toBeEnabled();
-    expect(screen.getByText("No official experts are currently available")).toBeInTheDocument();
+    expect(screen.getByText("No official partners are currently available")).toBeInTheDocument();
 
     fireEvent.click(customAction);
     expect(onOpenChange).toHaveBeenCalledWith(false);

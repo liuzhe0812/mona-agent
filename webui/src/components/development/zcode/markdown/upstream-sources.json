@@ -1,0 +1,216 @@
+{
+  "sourceRepository": "D:\\liuzhe\\Desktop\\code\\ZCode",
+  "license": "Apache-2.0",
+  "records": [
+    {
+      "source": "packages/ui/src/components/ai-elements/message.tsx",
+      "target": "MessageResponse.tsx",
+      "sha256": "6c35829ed11321e850cd59e20c1c88fdd452e8e2d9b5da45f808371021aabf99",
+      "note": "Copied MessageResponse and its normalization/Streamdown pipeline; preserved all three host callbacks and adapted Mona path/media context."
+    },
+    {
+      "source": "packages/ui/src/components/ai-elements/code-block.tsx",
+      "target": "ai-elements/code-block.tsx",
+      "sha256": "ae4f975537ebb9c8ef905b7b9de39bc37180f81511bffc027dc4da1929037f18",
+      "note": "Copied renderer and controls; exported CodeBlockProps and adapted imports."
+    },
+    {
+      "source": "packages/ui/src/components/ui/code-viewer.tsx",
+      "target": "ui/code-viewer.tsx",
+      "sha256": "dfccd2feaccc62af84f3e92dc5b8e25e7025b6c64cbd16f177586b1dc763affe",
+      "note": "Copied display component; adapted shared imports and retained optional comments path."
+    },
+    {
+      "source": "packages/ui/src/components/ai-elements/markdown-blockquote.tsx",
+      "target": "ai-elements/markdown-blockquote.tsx",
+      "sha256": "0c76599780a464136703d40d07172dcc62730dee1ce01a155100cf4712440a7f",
+      "note": "Copied blockquote renderer; adapted cn import."
+    },
+    {
+      "source": "packages/ui/src/components/ai-elements/markdown-list.tsx",
+      "target": "ai-elements/markdown-list.tsx",
+      "sha256": "ecf50ad4f48cd460ddcf90db7b463671f915d8c22c7cb8e7760ff3b02282c7f1",
+      "note": "Copied list renderers; adapted cn import."
+    },
+    {
+      "source": "packages/ui/src/components/ai-elements/markdown-table.tsx",
+      "target": "ai-elements/markdown-table.tsx",
+      "sha256": "612d78092eaeb950931070fff2a194a244e84c5c2d63c6df645e6b91391953da",
+      "note": "Copied table rendering, copy, CSV export, scroll, and preview interactions; adapted UI and toast imports."
+    },
+    {
+      "source": "packages/ui/src/components/ai-elements/markdown-image.tsx",
+      "target": "ai-elements/markdown-image.tsx",
+      "sha256": "aedf797b19d4f5d37fc7e8833b2824a9d1a1a4fca440b69519b43a43eb122e90",
+      "note": "Copied gallery, preview and loading UI; local reads use Mona MarkdownContext.readMedia."
+    },
+    {
+      "source": "packages/ui/src/components/ai-elements/streamdown-controls.ts",
+      "target": "ai-elements/streamdown-controls.ts",
+      "sha256": "13dc740d133c75a9d6eec6e23e673b29d0361a87ba4ee0e7d44a4b7ad047984a",
+      "note": "Copied Streamdown controls."
+    },
+    {
+      "source": "packages/ui/src/components/ai-elements/image-preview-dialog.tsx",
+      "target": "ai-elements/image-preview-dialog.tsx",
+      "sha256": "47d4ecdefc84d39f2deda93119ce400b36224276bb6c7dab6a914868914ac8de",
+      "note": "Copied image/video preview UI; unavailable platform saveFile follows browser-download branch."
+    },
+    {
+      "source": "packages/ui/src/components/ai-elements/image-thumbnail-gallery.tsx",
+      "target": "ai-elements/image-thumbnail-gallery.tsx",
+      "sha256": "185766c039c6c4852ae12360360f7cf29e844a1463358b8cc2c6de972dcdaf43",
+      "note": "Copied thumbnail gallery."
+    },
+    {
+      "source": "packages/ui/src/components/ai-elements/mermaid-block.tsx",
+      "target": "ai-elements/mermaid-block.tsx",
+      "sha256": "4cc6783097a6ecbb1896ee1f3dd1d89115ca81f3efb15d9fbabcf448063818ae",
+      "note": "Copied Mermaid renderer; adapted theme and logger imports."
+    },
+    {
+      "source": "packages/ui/src/components/ai-elements/diagram-preview-dialog.tsx",
+      "target": "ai-elements/diagram-preview-dialog.tsx",
+      "sha256": "cc142f8808370897dfc40cd7aea3f1aa42fd07ce471a7fbb284d9ae728b1299a",
+      "note": "Copied diagram pan/zoom preview; adapted shared UI and portal class."
+    },
+    {
+      "source": "packages/ui/src/ControlHintTooltip.tsx",
+      "target": "ControlHintTooltip.tsx",
+      "sha256": "2da7e41f22f9eed6cda1259e403618f1f8cca5f4350665aeee8008e10a8753bd",
+      "note": "Copied tooltip behavior; imported the sibling ZCode tooltip primitive."
+    },
+    {
+      "source": "packages/ui/src/components/ui/toast.tsx",
+      "target": "ui/toast.tsx",
+      "sha256": "0f8894c6fc30e4cec44caa4cffe70e111f9c41ff9bf3699ec8e91696ea631671",
+      "note": "Copied toast service/view; toast host adds zcode-stream class."
+    },
+    {
+      "source": "packages/ui/src/components/ui/select.tsx",
+      "target": "ui/select.tsx",
+      "sha256": "e6d73ae0bf6916256fd86005d8a94e3dfb004c8107f51882cfd2d52e7751ca09",
+      "note": "Copied Radix Select primitive; adapted utility import and portal scope class."
+    },
+    {
+      "source": "packages/ui/src/lib/codePreviewSettings.ts",
+      "target": "lib/codePreviewSettings.ts",
+      "sha256": "3808a2b6df90f4b3e0be4010f6125a1f4977ad80b3a239d81b373f23dc76b2d2",
+      "note": "Copied preview settings type and defaults."
+    },
+    {
+      "source": "packages/ui/src/lib/markdownFileLink.ts",
+      "target": "lib/markdownFileLink.ts",
+      "sha256": "f53ac9aa97af7632a83b2ff33f349ac60fe413041d96e354039b86f055adb8a7",
+      "note": "Copied local-link parsing and workspace containment rules."
+    },
+    {
+      "source": "packages/ui/src/lib/zcodeFileCitation.ts",
+      "target": "lib/zcodeFileCitation.ts",
+      "sha256": "ce89a253a42c3377cfeca927b443ad0b943118cb0186558b1aaeebef0432f771",
+      "note": "Copied citation normalization and projection."
+    },
+    {
+      "source": "packages/ui/src/lib/zcodeFileCitationRemarkPlugin.ts",
+      "target": "lib/zcodeFileCitationRemarkPlugin.ts",
+      "sha256": "127a63cbbdb70a4f50787ee98d57d82fbef3efd1e4ef61d09eeb3b925f9c5f70",
+      "note": "Copied citation remark plugin; resolved through copied Markdown link containment."
+    },
+    {
+      "source": "packages/ui/src/lib/windowsFileLinkEscapeRemarkPlugin.ts",
+      "target": "lib/windowsFileLinkEscapeRemarkPlugin.ts",
+      "sha256": "93606cd59cdf3e0acdd5158ad01b6f43f5d33552d369cefff00c03ce45d3aa7f",
+      "note": "Copied Windows file-link remark normalization."
+    },
+    {
+      "source": "packages/ui/src/lib/path.ts",
+      "target": "lib/path.ts",
+      "sha256": "f030a18c3c5baed3e5c9a3b5787e7450d1fb0386fe1e2d747de1947cedbe941a",
+      "note": "Copied path normalization helpers."
+    },
+    {
+      "source": "packages/ui/src/lib/assistantPathQuotes.ts",
+      "target": "lib/assistantPathQuotes.ts",
+      "sha256": "c9370e926371c7e7e718396180f6a60782a82af9cd2e5b544179318adcf6f0df",
+      "note": "Copied balanced path quote handling."
+    },
+    {
+      "source": "packages/ui/src/lib/mermaidLanguage.ts",
+      "target": "lib/mermaidLanguage.ts",
+      "sha256": "14163b7f78c21dc2a7f21211e978ca7179e0b01a5002177025643a18f3d8b024",
+      "note": "Copied Mermaid language classification."
+    },
+    {
+      "source": "packages/ui/src/lib/mermaidRenderBudget.ts",
+      "target": "lib/mermaidRenderBudget.ts",
+      "sha256": "e04965a3bfedf94f57196247f6cfbb934e5474079677515b29312feec851a9ae",
+      "note": "Copied Mermaid render budget."
+    },
+    {
+      "source": "packages/ui/src/lib/diagramViewport.ts",
+      "target": "lib/diagramViewport.ts",
+      "sha256": "60399e9d45a6c9e7be2a85b8681bd89d24b106901a642416ac23f0122071de04",
+      "note": "Copied diagram pan/zoom geometry."
+    },
+    {
+      "source": "packages/ui/src/lib/keyboardShortcuts.ts",
+      "target": "lib/keyboardShortcuts.ts",
+      "sha256": "659f8cc892c92a411e81842282f6620c15701fec11e6937cd9b19e5a1494ec73",
+      "note": "Copied shortcut platform labels used by tooltip."
+    },
+    {
+      "source": "packages/ui/src/lib/diffsHighlighterEngine.ts",
+      "target": "lib/diffsHighlighterEngine.ts",
+      "sha256": "e3b1d95db15b7ed41f84a6e9490226ca8e8fa522887e5902ae7dafba49267214",
+      "note": "Copied @pierre/diffs highlighter configuration."
+    },
+    {
+      "source": "packages/ui/src/lib/codePreviewPreferences.ts",
+      "target": "lib/codePreviewPreferences.ts",
+      "sha256": "6ed19d40a6e918fe4b2ed0349cfb6d7478612cc4e41668858e3cfd03cf8425ef",
+      "note": "Copied preview theme classification; settings type points to local source copy."
+    },
+    {
+      "source": "packages/ui/src/lib/assistantDirectiveParser.ts",
+      "target": "lib/assistantDirectiveParser.ts",
+      "sha256": "21f17b684efaf977c7c6969c3c9590929d6b959d2e0a84e978345f9f42ce1e94",
+      "note": "Copied directive and code-fence parsing for citation projection."
+    },
+    {
+      "source": "packages/shared/src/markdown-artifact-images.ts",
+      "target": "lib/markdown-artifact-images.ts",
+      "sha256": "5ad24f3c59525415f6897049f36d0bb614257c22b3327166dca6ff4422360dcd",
+      "note": "Copied fenced-Markdown-aware artifact image source rewrite."
+    },
+    {
+      "source": "packages/ui/src/useTheme.ts",
+      "target": "lib/theme.ts",
+      "sha256": "a286aa3596dd05140184d60318f014ff1cea6637d0fae104137701fc2dd1ce0e",
+      "note": "Copied Theme type and resolveTheme helper only."
+    },
+    {
+      "source": "packages/ui/src/lib/codeViewer.ts",
+      "target": "lib/imagePreviewPath.ts",
+      "sha256": "28183b949c881fcd49ad3840979333de4f682b8d23f9702a4121b1decd3c47b1",
+      "note": "Copied IMAGE_EXTENSION_TO_MEDIA_TYPE and isImagePreviewPath behavior only."
+    },
+    {
+      "source": "packages/ui/src/lib/codeCommentContext.ts",
+      "target": "ui/codeCommentTypes.ts",
+      "sha256": "6659b751dc2a3d7163e7b851ce82b3b7d00733eb5907ae73899960464c439bd9",
+      "note": "Copied CodeCommentRange and CodeCommentPreview type definitions."
+    },
+    {
+      "source": "packages/ui/src/components/ai-elements/message.tsx",
+      "target": "ai-elements/message.tsx",
+      "sha256": "6c35829ed11321e850cd59e20c1c88fdd452e8e2d9b5da45f808371021aabf99",
+      "note": "Copied MessageActions/MessageAction for the transcript row copy action; adapted imports."
+    },
+    {
+      "source": "packages/ui/src/lib/assistantFileReferences.ts",
+      "target": "lib/assistantFileReferences.ts",
+      "sha256": "26a503a0352b1adfac00b02289402a2c3e40c1050bc682a7259501fef19bd64e",
+      "note": "Copied path cleanup and resolution used by assistant file citations; omitted unrelated preview-card extraction."
+    }
+  ]
+}

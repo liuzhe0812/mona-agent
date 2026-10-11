@@ -518,11 +518,23 @@ def test_save_turn_stamps_task_and_token_usage_on_assistant() -> None:
         [{"role": "assistant", "content": "Done"}],
         skip=0,
         task_id="task-usage",
-        token_usage={"prompt_tokens": 100, "completion_tokens": 25, "total_tokens": 125},
+        token_usage={
+            "prompt_tokens": 100,
+            "completion_tokens": 25,
+            "total_tokens": 125,
+            "context_tokens": 125,
+            "context_window_tokens": 32_000,
+            "context_model": "test-model",
+            "context_provider": "openai",
+        },
     )
 
     assert session.messages[-1]["task_id"] == "task-usage"
     assert session.messages[-1]["token_usage"]["total_tokens"] == 125
+    assert session.messages[-1]["token_usage"]["context_tokens"] == 125
+    assert session.messages[-1]["token_usage"]["context_window_tokens"] == 32_000
+    assert session.messages[-1]["token_usage"]["context_model"] == "test-model"
+    assert session.messages[-1]["token_usage"]["context_provider"] == "openai"
 
 
 def test_restore_runtime_checkpoint_rehydrates_completed_and_pending_tools() -> None:
@@ -573,7 +585,7 @@ def test_restore_runtime_checkpoint_rehydrates_completed_and_pending_tools() -> 
     assert session.messages[0]["role"] == "assistant"
     assert session.messages[1]["tool_call_id"] == "call_done"
     assert session.messages[2]["tool_call_id"] == "call_pending"
-    assert "interrupted before this tool finished" in session.messages[2]["content"].lower()
+    assert "TOOL_OUTCOME_UNKNOWN" in session.messages[2]["content"]
 
 
 def test_restore_runtime_checkpoint_dedupes_overlapping_tail() -> None:
@@ -1125,6 +1137,9 @@ async def test_stop_preserves_runtime_checkpoint_for_next_turn(tmp_path: Path) -
     assert result.content == "next answer"
 
     session = loop.sessions.get_or_create("feishu:c4")
+    unknown_result = session.messages[3]["content"]
+    assert "TOOL_OUTCOME_UNKNOWN" in unknown_result
+    assert "Do not retry blindly" in unknown_result
     assert [
         {k: v for k, v in m.items() if k in {"role", "content", "tool_call_id", "name"}}
         for m in session.messages
@@ -1136,7 +1151,7 @@ async def test_stop_preserves_runtime_checkpoint_for_next_turn(tmp_path: Path) -
             "role": "tool",
             "tool_call_id": "call_pending",
             "name": "exec",
-            "content": "Error: Task interrupted before this tool finished.",
+            "content": unknown_result,
         },
         {"role": "user", "content": "continue here"},
         {"role": "assistant", "content": "next answer"},

@@ -854,7 +854,7 @@ export function SettingsView({
   };
 
   const isIndependentSection = ["general", "billing", "usage", "resources"].includes(activeSection);
-
+  const isModelSettings = activeSection === "models_providers";
   return (
     <div className="flex min-h-0 flex-1 flex-col overflow-hidden md:flex-row">
       <SettingsSidebar
@@ -863,8 +863,8 @@ export function SettingsView({
         onBackToChat={onBackToChat}
       />
 
-      <main className="min-w-0 flex-1 overflow-y-auto">
-        <div className="mx-auto w-full max-w-[920px] px-5 py-8 sm:px-8 lg:py-12">
+      <main className={cn("min-w-0 flex-1", isModelSettings ? "overflow-hidden" : "overflow-y-auto")}>
+        <div className={cn("mx-auto w-full max-w-[920px] px-5 sm:px-8", isModelSettings ? "flex h-full min-h-0 flex-col py-6 lg:py-8" : "py-8 lg:py-12")}>
           {isIndependentSection ? (
             renderSection()
           ) : loading ? (
@@ -879,7 +879,7 @@ export function SettingsView({
               </SettingsRow>
             </SettingsGroup>
           ) : settings ? (
-            <div className="space-y-5">
+            <div className={cn(isModelSettings ? "flex min-h-0 flex-1 flex-col gap-5" : "space-y-5")}>
               {error ? <StatusNotice tone="danger">{error}</StatusNotice> : null}
               {renderSection()}
             </div>

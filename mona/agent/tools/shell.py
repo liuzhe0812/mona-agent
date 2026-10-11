@@ -387,8 +387,8 @@ class ExecTool(Tool):
             if stdout:
                 output_parts.append(stdout.decode("utf-8", errors="replace"))
 
+            stderr_text = stderr.decode("utf-8", errors="replace") if stderr else ""
             if stderr:
-                stderr_text = stderr.decode("utf-8", errors="replace")
                 if stderr_text.strip():
                     output_parts.append(f"STDERR:\n{stderr_text}")
 
@@ -405,10 +405,14 @@ class ExecTool(Tool):
                     + result[-half:]
                 )
 
-            return result
+            diagnostics = self._execution_diagnostics(process.returncode, stderr_text)
+            return f"{result}\n{diagnostics}" if diagnostics else result
 
         except Exception as e:
             return f"Error executing command: {str(e)}"
+
+    def _execution_diagnostics(self, exit_code: int | None, stderr: str) -> str:
+        return ""
 
     async def _execute_session(
         self,

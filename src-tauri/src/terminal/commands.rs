@@ -619,24 +619,13 @@ pub async fn shell_resize(
 
 #[tauri::command]
 pub async fn shell_kill(state: State<'_, TerminalState>, session_id: String) -> Result<(), String> {
-    let handle = state
-        .manager
-        .get_handle(&session_id)
-        .await
-        .ok_or_else(|| TerminalError::SessionNotFound(session_id.clone()).to_string())?;
-
+    let Some(handle) = state.manager.get_handle(&session_id).await else {
+        return Ok(());
+    };
     match handle {
-        SessionHandle::Local(shell) => {
-            shell.kill().map_err(|e| e.to_string())?;
-        }
-        _ => {}
+        SessionHandle::Local(shell) => shell.kill().map_err(|e| e.to_string())?,
+        _ => return Err("Not a local shell session".into()),
     }
-
-    state
-        .manager
-        .update_status(&session_id, SessionStatus::Disconnected)
-        .await
-        .map_err(|e| e.to_string())?;
     state.manager.remove(&session_id).await;
     Ok(())
 }
@@ -1237,7 +1226,17 @@ pub struct SessionInfo {
 pub async fn terminal_list_sessions(
     state: State<'_, TerminalState>,
 ) -> Result<Vec<SessionInfo>, String> {
-    let sessions = state.manager.list_sessions().await;
+    let mut sessions = state.manager.list_sessions().await;
+    // Local shell status comes from the process, not its original spawn record.
+    for session in &mut sessions {
+        if let Some(SessionHandle::Local(shell)) = state.manager.get_handle(&session.id).await {
+            session.status = match shell.is_running() {
+                Ok(true) => SessionStatus::Connected,
+                Ok(false) => SessionStatus::Disconnected,
+                Err(error) => SessionStatus::Error(error.to_string()),
+            };
+        }
+    }
     Ok(sessions
         .into_iter()
         .map(|s| SessionInfo {

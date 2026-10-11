@@ -259,7 +259,7 @@ def test_expert_catalog_rejects_duplicate_identity() -> None:
         "requiredTools": ["read_file"],
     }
 
-    with pytest.raises(ValueError, match="duplicate expert catalog entry"):
+    with pytest.raises(ValueError, match="duplicate partner catalog entry"):
         ExpertCatalog.model_validate(
             {
                 "schemaVersion": 1,

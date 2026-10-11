@@ -3,7 +3,7 @@
 import tomllib
 from pathlib import Path
 
-from PyInstaller.utils.hooks import collect_all, collect_submodules
+from PyInstaller.utils.hooks import collect_all, collect_submodules, copy_metadata
 from packaging.version import Version
 
 datas = []
@@ -32,6 +32,36 @@ for package in (
     datas += package_datas
     binaries += package_binaries
     hiddenimports += package_hidden
+
+# The pinned sandbox component must reach both fresh and upgraded desktops.
+sandbox_assets = Path("mona/development/sandbox_node")
+for asset in sandbox_assets.iterdir():
+    if asset.is_file() and not any(Path(item[0]).resolve() == asset.resolve() for item in datas):
+        datas.append((str(asset), sandbox_assets.as_posix()))
+
+# SDKs are imported dynamically by the isolated worker. Require compatible
+# Python modules + distribution metadata; native CLIs use existing local installs.
+from mona.development.executors.sdk_policy import SDK_MODULES, SDK_PACKAGES, sdk_version
+
+for executor, module in SDK_MODULES.items():
+    sdk_version(executor)
+    sdk_datas, _, sdk_hidden = collect_all(module)
+    sdk_native_root = {
+        "claude_agent_sdk": (module, "_bundled"),
+        "codebuddy_agent_sdk": (module, "bin"),
+    }[module]
+    def python_sdk_resource(item):
+        for part in item:
+            parts = tuple(value.casefold() for value in Path(str(part).replace("\\", "/")).parts)
+            if any(parts[index:index + len(sdk_native_root)] == sdk_native_root
+                   for index in range(len(parts) - len(sdk_native_root) + 1)):
+                return False
+        return True
+    datas += [item for item in sdk_datas if python_sdk_resource(item)]
+    sdk_native_module = ".".join(sdk_native_root)
+    hiddenimports += [name for name in sdk_hidden
+                      if name != sdk_native_module and not name.startswith(sdk_native_module + ".")]
+    datas += copy_metadata(SDK_PACKAGES[executor], recursive=True)
 
 datas = [
     item for item in datas

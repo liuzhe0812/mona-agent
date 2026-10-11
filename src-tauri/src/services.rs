@@ -3,6 +3,7 @@ use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 use tauri::Manager;
 
+use crate::backend_process::{self, http_request, BackendChild};
 use crate::python;
 use crate::settings::{self, AppSettings};
 
@@ -21,7 +22,7 @@ pub(crate) fn office_resources_root(resource_dir: &Path, development: bool) -> P
 }
 
 pub struct ServicesProcess {
-    child: Option<std::process::Child>,
+    child: Option<BackendChild>,
     port: u16,
     /// true 表示复用一个已在外部运行的 services（本进程未 spawn 它）。
     /// 此时 `child` 为 None，stop 时通过 POST /shutdown 关闭。
@@ -57,41 +58,13 @@ impl ServicesManager {
                 return Ok(proc.port);
             }
         }
+        *guard = None;
 
-        let (port, external) = if cfg!(debug_assertions) {
-            // A dev start owns a fresh source runtime, so it never reuses a
-            // services already on the port: that process keeps serving whatever
-            // code it was built with. A packaged exe left by an earlier session
-            // is the usual culprit — its /health still satisfies the release
-            // compatibility probe, so reuse would silently pin dev to old code
-            // and make routes the source tree has added look missing (404).
-            let target = settings.services_port;
-            let port_available = is_port_available(target);
-            let occupant_is_mona_services =
-                !port_available && http_services_compatible(target);
-            match dev_services_action(port_available, occupant_is_mona_services) {
-                DevServicesAction::Start => (target, false),
-                DevServicesAction::StopOccupantThenStart => {
-                    log::warn!(
-                        "Dev mode: stopping Mona services on port {} so the source tree can serve it",
-                        target
-                    );
-                    stop_external_services(target)?;
-                    (target, false)
-                }
-                DevServicesAction::Reject => {
-                    return Err(format!(
-                        "Dev services 端口 {} 已被其他进程占用。请释放端口或改用其他 services 端口后重试。",
-                        target
-                    ));
-                }
-            }
-        } else {
-            // Release builds may reuse an already-running compatible runtime: a
-            // second window, or a session kept alive in the background, shares
-            // it instead of losing the state it holds.
-            probe_services_port(settings.services_port)?
-        };
+        let port = settings.services_port;
+        let external = backend_process::prepare_ports(
+            &[(port, "mona-services", "stock-v1")],
+            !cfg!(debug_assertions),
+        )?;
 
         if external {
             log::info!(
@@ -206,8 +179,7 @@ impl ServicesManager {
             }
         }
 
-        let child = cmd
-            .spawn()
+        let child = backend_process::spawn(&mut cmd)
             .map_err(|e| format!("Failed to start services: {}", e))?;
 
         log::info!("Services started on port {} (PID: {:?})", port, child.id());
@@ -227,16 +199,11 @@ impl ServicesManager {
         if let Some(ref mut proc) = *guard {
             if proc.external {
                 // 复用的外部 services：通过 HTTP /shutdown 优雅关闭。
-                http_post_shutdown(proc.port);
+                backend_process::stop(proc.port, &[proc.port])?;
             } else if let Some(ref mut child) = proc.child {
                 #[cfg(windows)]
                 {
-                    let pid = child.id();
-                    let mut kill_cmd = std::process::Command::new("taskkill");
-                    kill_cmd.args(["/PID", &pid.to_string(), "/T", "/F"]);
-                    use std::os::windows::process::CommandExt;
-                    kill_cmd.creation_flags(0x08000000);
-                    let _ = kill_cmd.status();
+                    child.kill().map_err(|error| format!("Failed to stop Services: {error}"))?;
                 }
                 #[cfg(not(windows))]
                 {
@@ -353,108 +320,8 @@ fn open_services_log(port: u16) -> Option<std::fs::File> {
     Some(file)
 }
 
-/// 探测目标端口，返回 (port, external)。
-///
-/// - 端口可绑定：`(port, false)`，调用方需 spawn 新 services。
-/// - 端口被兼容的 services 占用：`(port, true)`，调用方复用。
-/// - 端口被旧 services 占用：先优雅关闭，再启动当前版本。
-/// - 端口被占且不是 services：报错。
-///
-/// 只用于 release：dev 启动不复用外部进程，见 [`dev_services_action`]。
-fn probe_services_port(start_port: u16) -> Result<(u16, bool), String> {
-    if is_port_available(start_port) {
-        return Ok((start_port, false));
-    }
-    if http_services_compatible(start_port) {
-        return Ok((start_port, true));
-    }
-    if http_health_ok(start_port) {
-        log::warn!("Outdated Mona services on port {}, restarting it", start_port);
-        stop_external_services(start_port)?;
-        return Ok((start_port, false));
-    }
-    Err(format!(
-        "Services port {} is already in use by a non-services process. \
-         Free the port or change the services port in settings.",
-        start_port
-    ))
-}
-
-/// dev 启动应当如何处理目标端口。
-///
-/// dev 的运行时代码随时在变，复用意味着继续跑旧代码，因此除了「端口空闲」
-/// 之外只有两种结局：把 Mona services 请走，或者因为占用者不是 Mona 而失败。
-/// 占用者是否 Mona 由调用方通过 `/health` 判定后传入，本函数只表达决策。
-#[derive(Debug, PartialEq, Eq)]
-enum DevServicesAction {
-    /// 端口空闲：直接启动源码 services。
-    Start,
-    /// 端口被 Mona services 占用：先请它优雅退出，再启动源码 services。
-    StopOccupantThenStart,
-    /// 端口被其他进程占用：报错，不动别人的进程。
-    Reject,
-}
-
-fn dev_services_action(
-    port_available: bool,
-    occupant_is_mona_services: bool,
-) -> DevServicesAction {
-    if port_available {
-        DevServicesAction::Start
-    } else if occupant_is_mona_services {
-        DevServicesAction::StopOccupantThenStart
-    } else {
-        DevServicesAction::Reject
-    }
-}
-
-/// 请求端口上的 Mona services 退出，并等待端口释放。
-///
-/// 用 `/shutdown` 而不是按镜像名强杀：只影响占用该端口的这一个进程，且能让
-/// 它的挂起写入落盘，不会波及用户在别处开着的另一个 Mona 运行时。
-fn stop_external_services(port: u16) -> Result<(), String> {
-    http_post_shutdown(port);
-    for _ in 0..20 {
-        std::thread::sleep(std::time::Duration::from_millis(100));
-        if is_port_available(port) {
-            return Ok(());
-        }
-    }
-    Err(format!(
-        "Outdated Mona services on port {} did not stop. Close it and retry.",
-        port
-    ))
-}
-
-fn is_port_available(port: u16) -> bool {
-    use std::net::TcpListener;
-    TcpListener::bind(("127.0.0.1", port)).is_ok()
-}
-
-/// 同步 GET /health，判断端口上是否跑着 Mona services。
-fn http_health_ok(port: u16) -> bool {
-    http_request(port, "GET", "/health").map_or(false, |body| {
-        // 响应体应包含 {"status":"ok"}；只做宽松包含判断以兼容空白差异。
-        body.contains("\"ok\"") || body.contains("ok")
-    })
-}
-
-fn http_services_compatible(port: u16) -> bool {
-    http_request(port, "GET", "/health")
-        .map_or(false, |response| services_health_response_compatible(&response))
-}
-
 fn services_health_response_compatible(response: &str) -> bool {
-    let status_ok = response
-        .lines()
-        .next()
-        .map_or(false, |line| line.contains(" 200 "));
-    if !status_ok {
-        return false;
-    }
-    let body = response.split_once("\r\n\r\n").map_or("", |(_, body)| body);
-    serde_json::from_str::<serde_json::Value>(body)
-        .is_ok_and(|payload| services_payload_compatible(&payload))
+    backend_process::health_response_compatible(response, "mona-services", "stock-v1")
 }
 
 fn services_payload_compatible(payload: &serde_json::Value) -> bool {
@@ -466,57 +333,18 @@ fn services_payload_compatible(payload: &serde_json::Value) -> bool {
             .is_some_and(|values| values.iter().any(|value| value.as_str() == Some("stock-v1")))
 }
 
-/// 同步 POST /shutdown，通知外部 services 优雅退出。
-fn http_post_shutdown(port: u16) {
-    let _ = http_request(port, "POST", "/shutdown");
-}
-
-/// 用 std::net 同步发一个无 body 的 HTTP 请求，返回响应体字符串（失败返回 None）。
-/// 仅用于 127.0.0.1 本地探测，不处理代理/重定向/HTTPS。
-fn http_request(port: u16, method: &str, path: &str) -> Option<String> {
-    use std::io::{Read, Write};
-    use std::net::TcpStream;
-    use std::time::Duration;
-
-    let addr = format!("127.0.0.1:{}", port);
-    let Ok(socket_addr) = addr.parse() else {
-        return None;
-    };
-    let Ok(mut stream) = TcpStream::connect_timeout(&socket_addr, Duration::from_secs(1)) else {
-        return None;
-    };
-    let _ = stream.set_read_timeout(Some(Duration::from_secs(2)));
-    let _ = stream.set_write_timeout(Some(Duration::from_secs(2)));
-
-    let request = format!(
-        "{} {} HTTP/1.1\r\nHost: 127.0.0.1:{}\r\nContent-Length: 0\r\nConnection: close\r\n\r\n",
-        method, path, port
-    );
-    if stream.write_all(request.as_bytes()).is_err() {
-        return None;
-    }
-    let mut buf = Vec::with_capacity(512);
-    if stream.read_to_end(&mut buf).is_err() {
-        // 即使读不全，只要写出了请求也算成功（shutdown 场景不关心响应）。
-        if method == "POST" {
-            return Some(String::new());
-        }
-        return None;
-    }
-    Some(String::from_utf8_lossy(&buf).into_owned())
-}
-
 /// 判断当前复用中的外部 services 是否仍健康。
 fn proc_is_alive(proc: &ServicesProcess) -> bool {
     if !proc.external {
         return false;
     }
-    http_services_compatible(proc.port)
+    http_request(proc.port, "GET", "/health")
+        .is_some_and(|response| services_health_response_compatible(&response))
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{dev_services_action, services_health_response_compatible, DevServicesAction};
+    use super::services_health_response_compatible;
 
     #[test]
     fn services_health_requires_current_capability() {
@@ -526,32 +354,6 @@ mod tests {
         assert!(!services_health_response_compatible(
             "HTTP/1.1 200 OK\r\n\r\n{\"status\":\"ok\"}"
         ));
-    }
-
-    #[test]
-    fn dev_starts_on_a_free_port() {
-        assert_eq!(
-            dev_services_action(true, false),
-            DevServicesAction::Start
-        );
-    }
-
-    #[test]
-    fn dev_replaces_a_mona_services_instead_of_reusing_it() {
-        // The packaged exe left by an earlier session is compatibility-healthy
-        // yet runs stale code, so dev must take the port over — never reuse it.
-        assert_eq!(
-            dev_services_action(false, true),
-            DevServicesAction::StopOccupantThenStart
-        );
-    }
-
-    #[test]
-    fn dev_never_touches_a_non_mona_occupant() {
-        assert_eq!(
-            dev_services_action(false, false),
-            DevServicesAction::Reject
-        );
     }
 }
 

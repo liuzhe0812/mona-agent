@@ -211,7 +211,7 @@ function MermaidCodeBlockView({
                     }
                   }}
                   placeholder="搜索语言..."
-                  className="m-1 h-7 rounded border border-border/60 bg-background px-2 text-[11.5px] outline-none focus:border-primary"
+                  className="m-1 h-7 rounded border border-border/60 bg-background px-2 text-[11.5px] outline-none"
                 />
                 <div className="min-h-0 flex-1 overflow-y-auto scrollbar-thin py-0.5">
                   {filteredLangs.length === 0 ? (

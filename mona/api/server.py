@@ -1635,10 +1635,13 @@ async def handle_audio_speech(request: web.Request) -> web.Response:
 
 async def handle_health(request: web.Request) -> web.Response:
     """GET /health"""
+    from mona import __version__
+
     return web.json_response(
         {
             "status": "ok",
             "service": "mona-gateway",
+            "version": __version__,
             "capabilities": ["agent-http-v1"],
         }
     )
@@ -4830,11 +4833,14 @@ async def handle_email_schedule_extract(request: web.Request) -> web.Response:
 
     from datetime import datetime
 
-    from mona.email_intel.db import get_message
+    from mona.email_intel.db import get_account_identity, get_message
     from mona.email_intel.schedule_extract import process_email_for_schedule
 
+    identity = get_account_identity(account_id)
+    if identity is None:
+        return web.json_response({"error": "邮件账号不存在"}, status=404)
     tz = getattr(config, "timezone", None) or "Asia/Shanghai"
-    now_iso = datetime.now().isoformat()
+    now_iso = datetime.now().astimezone().isoformat()
     model = getattr(config, "model", None) or getattr(agent_loop, "model_name", None)
 
     results: dict[str, int] = {"created": 0, "pending": 0, "skipped": 0, "error": 0}
@@ -4863,6 +4869,12 @@ async def handle_email_schedule_extract(request: web.Request) -> web.Response:
                 now_iso=now_iso,
                 tz=tz,
                 model=model,
+                user_address=identity["address"],
+                user_name=identity["name"],
+                to_addresses=msg.get("toAddresses") or "",
+                cc_addresses=msg.get("ccAddresses") or "",
+                todo_svc=request.app.get("todo_service"),
+                message_id=msg.get("messageId"),
             )
             # error 表示 LLM 超时、网络错误或非法 JSON，等待 1 秒后重试一次
             if result == "error":
@@ -4884,6 +4896,12 @@ async def handle_email_schedule_extract(request: web.Request) -> web.Response:
                         now_iso=now_iso,
                         tz=tz,
                         model=model,
+                        user_address=identity["address"],
+                        user_name=identity["name"],
+                        to_addresses=msg.get("toAddresses") or "",
+                        cc_addresses=msg.get("ccAddresses") or "",
+                        todo_svc=request.app.get("todo_service"),
+                        message_id=msg.get("messageId"),
                     )
                 except Exception:
                     logger.exception("Schedule extract retry failed: uid={}", uid_str)
@@ -4987,12 +5005,15 @@ async def handle_email_schedule_extract_manual(request: web.Request) -> web.Resp
     from datetime import datetime
 
     from mona.email_intel.config import EmailScheduleConfig
-    from mona.email_intel.db import get_message
+    from mona.email_intel.db import get_account_identity, get_message
     from mona.email_intel.schedule_extract import process_email_for_schedule
 
     msg = get_message(uid, account_id, folder)
     if not msg:
         return web.json_response({"error": "邮件不存在"}, status=404)
+    identity = get_account_identity(account_id)
+    if identity is None:
+        return web.json_response({"error": "邮件账号不存在"}, status=404)
 
     # 手动触发：临时配置，confirm 模式，不跳过发件人
     manual_config = EmailScheduleConfig(enabled=True, folders=[], create_mode="confirm")
@@ -5010,9 +5031,15 @@ async def handle_email_schedule_extract_manual(request: web.Request) -> web.Resp
         date=msg.get("date") or "",
         body_text=msg.get("bodyText") or "",
         body_html=msg.get("bodyHtml"),
-        now_iso=datetime.now().isoformat(),
+        now_iso=datetime.now().astimezone().isoformat(),
         tz=tz,
         model=model,
+        user_address=identity["address"],
+        user_name=identity["name"],
+        to_addresses=msg.get("toAddresses") or "",
+        cc_addresses=msg.get("ccAddresses") or "",
+        todo_svc=request.app.get("todo_service"),
+        message_id=msg.get("messageId"),
     )
 
     return web.json_response({"result": result})
@@ -11522,5 +11549,8 @@ def create_app(
     app.router.add_get("/api/projects", handle_projects_list)
     app.router.add_post("/api/projects/remove", handle_project_remove)
     app.router.add_post("/api/webui/sidebar-state/update", handle_webui_sidebar_state_update)
+
+    from mona.development.api import register_development_routes
+    register_development_routes(app)
 
     return app

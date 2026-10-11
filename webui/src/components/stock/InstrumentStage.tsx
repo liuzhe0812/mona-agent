@@ -717,7 +717,7 @@ export function InstrumentStage({
     { key: "fundamentals", label: "基本面" },
     { key: "news", label: "资讯公告" },
     { key: "diagnosis", label: "AI诊股", locked: diagnosisLocked },
-    { key: "expert", label: "专家团论证" },
+    { key: "expert", label: "伙伴论证" },
   ];
 
   return (
@@ -1070,7 +1070,7 @@ export function InstrumentStage({
             <div className="flex min-h-56 flex-col items-center justify-center px-6 text-center" data-testid="ai-diagnosis-empty">
               <FileText className="mb-2 h-5 w-5 text-muted-foreground" aria-hidden />
               <p className="text-ui">尚未生成 AI 诊股结论</p>
-              <p className="mt-1 max-w-md text-caption text-muted-foreground">AI 诊股使用一次语义研究和确定性因子计算，专家团论证不会在此自动启动。</p>
+              <p className="mt-1 max-w-md text-caption text-muted-foreground">AI 诊股使用一次语义研究和确定性因子计算，伙伴论证不会在此自动启动。</p>
             </div>
           )}
           {diagnosisReports.length > 0 && (
@@ -1208,7 +1208,7 @@ export function InstrumentStage({
           <AlertDialogHeader>
             <AlertDialogTitle>重新论证{item.name}？</AlertDialogTitle>
             <AlertDialogDescription>
-              将使用最新行情、公告、财务和行业资料更新专家团论证，历史报告会保留。
+              将使用最新行情、公告、财务和行业资料更新伙伴论证，历史报告会保留。
             </AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>

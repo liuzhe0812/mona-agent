@@ -589,9 +589,9 @@ export function MailView({ onOpenSubscribe }: { onOpenSubscribe?: () => void }) 
         result === "created"
           ? { title: "日程已创建", description: "已从邮件创建日程" }
           : result === "pending"
-            ? { title: "已加入待确认", description: "请前往计划收集箱确认日程" }
+            ? { title: "已加入待确认", description: "请前往计划收集箱确认日程或待办" }
             : result === "skipped"
-              ? { title: "未识别到日程", description: "这封邮件中没有可提取的日程信息" }
+              ? { title: "未发现新的计划事项", description: "没有发现需要你参与或处理的新事项" }
               : { title: "提取日程失败", description: "请稍后重试" };
       setScheduleExtractResult(resultInfo);
     } catch (e) {

@@ -1331,6 +1331,8 @@ def _run_gateway(
 
     console.print(f"[green]✓[/green] Heartbeat: every {hb_cfg.interval_s}s")
 
+    shutdown_event = asyncio.Event()
+
     async def _http_server(host: str, http_port: int):
         """Run the aiohttp gateway app (create_app) on the gateway port.
 
@@ -1354,6 +1356,7 @@ def _run_gateway(
 
         app.on_cleanup.append(on_cleanup)
 
+        app["shutdown_event"] = shutdown_event
         runner = web.AppRunner(app)
         await runner.setup()
         site = web.TCPSite(runner, host, http_port)
@@ -1440,6 +1443,8 @@ def _run_gateway(
             console.print(f"[yellow]Could not open browser ({e}); visit {open_browser_url}[/yellow]")
 
     async def run():
+        runtime_task = None
+        shutdown_task = None
         try:
             await cron.start()
             await heartbeat.start()
@@ -1462,7 +1467,13 @@ def _run_gateway(
             ]
             if open_browser_url:
                 tasks.append(_open_browser_when_ready())
-            await asyncio.gather(*tasks)
+            runtime_task = asyncio.gather(*tasks)
+            shutdown_task = asyncio.create_task(shutdown_event.wait())
+            done, _ = await asyncio.wait(
+                (runtime_task, shutdown_task), return_when=asyncio.FIRST_COMPLETED
+            )
+            for task in done:
+                task.result()
         except KeyboardInterrupt:
             console.print("\nShutting down...")
         except Exception:
@@ -1471,6 +1482,10 @@ def _run_gateway(
             console.print("\n[red]Error: Gateway crashed unexpectedly[/red]")
             console.print(traceback.format_exc())
         finally:
+            pending_tasks = [task for task in (runtime_task, shutdown_task) if task is not None]
+            for task in pending_tasks:
+                task.cancel()
+            await asyncio.gather(*pending_tasks, return_exceptions=True)
             await agent.close_mcp()
             heartbeat.stop()
             cron.stop()

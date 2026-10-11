@@ -95,7 +95,7 @@ def build_official_expert_jobs(
         state_path=packages_root / "jobs" / "expert-installs.json",
         installer=installer,
         installed_definition=registry.get,
-        unavailable_reason="官方专家服务暂不可用",
+        unavailable_reason="官方伙伴服务暂不可用",
     )
 
 

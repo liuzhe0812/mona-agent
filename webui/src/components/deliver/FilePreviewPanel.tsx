@@ -171,7 +171,8 @@ async function inlineCssResources(
           artifactId: null,
         });
         replacements.set(url, await blobAsDataUrl(blob, mime));
-      } catch {
+      } catch (error) {
+        if (params.signal?.aborted) throw error;
         // Keep the original URL when an optional font/image is unavailable.
       }
     }),
@@ -218,7 +219,8 @@ async function inlineHtmlResources(
           ? await inlineCssResources(await blob.text(), path, token, params)
           : await blobAsDataUrl(blob, mime);
         element.setAttribute(attr, await blobAsDataUrl(new Blob([resource]), mime));
-      } catch {
+      } catch (error) {
+        if (params.signal?.aborted) throw error;
         // Keep the original URL when an optional asset is unavailable.
       }
     }),
@@ -238,6 +240,7 @@ function FileIcon({ file }: { file: DeliveredFile }) {
 export function FilePreviewPanel({
   files = [],
   embedded = false,
+  active = true,
   previewFile,
   previewScope,
   previewSessionKey,
@@ -249,6 +252,8 @@ export function FilePreviewPanel({
   files?: DeliveredFile[];
   /** The surrounding sidebar owns the tab/header controls. */
   embedded?: boolean;
+  /** Hidden tabs stay mounted, so inactive previews pause pending requests. */
+  active?: boolean;
   /** Explicit tab target. Omit to use the legacy single-preview store. */
   previewFile?: DeliveredFile;
   previewScope?: PreviewScope;
@@ -281,29 +286,40 @@ export function FilePreviewPanel({
   const [blobUrl, setBlobUrl] = useState<string | null>(null);
   const [blobError, setBlobError] = useState<string | null>(null);
   const [textSource, setTextSource] = useState<string | null>(null);
-  const [settledPreviewKey, setSettledPreviewKey] = useState<string | null>(null);
+  const [settledPreview, setSettledPreview] = useState<{
+    file: DeliveredFile;
+    key: string;
+    token: string;
+  } | null>(null);
   const currentUrlRef = useRef<string | null>(null);
   const previewKey = file && token && !officeDocumentType(file.name) && !isCanvas
     ? `${scope}:${sessionKey ?? ""}:${roomId ?? ""}:${fileKey(file)}`
     : null;
-  const previewLoading = previewKey !== null && settledPreviewKey !== previewKey;
+  const previewIsSettled = !!file
+    && !!token
+    && settledPreview?.file === file
+    && settledPreview.key === previewKey
+    && settledPreview.token === token;
+  const previewLoading = previewKey !== null && !previewIsSettled;
 
   useEffect(() => {
     if (!file || !token) {
       setBlobUrl(null);
       setTextSource(null);
       setBlobError(null);
-      setSettledPreviewKey(null);
+      setSettledPreview(null);
       return;
     }
     if (officeDocumentType(file.name) || isCanvas) {
       setBlobUrl(null);
       setTextSource(null);
       setBlobError(null);
-      setSettledPreviewKey(null);
+      setSettledPreview(null);
       return;
     }
+    if (!active || previewIsSettled) return;
     let cancelled = false;
+    const abortController = new AbortController();
     setBlobError(null);
     setTextSource(null);
     setBlobUrl(null);
@@ -320,11 +336,13 @@ export function FilePreviewPanel({
           sessionKey: scope === "project" || scope === "shared" ? sessionKey : null,
           room: scope === "room" ? roomId : null,
           artifactId: file.artifact_ref?.id ?? null,
+          signal: abortController.signal,
         } as const;
         let preview;
         try {
           preview = await fetchFilePreviewBlob(token, previewParams);
         } catch (error) {
+          if (abortController.signal.aborted) throw error;
           if (!previewParams.artifactId) throw error;
           preview = await fetchFilePreviewBlob(token, {
             ...previewParams,
@@ -377,14 +395,15 @@ export function FilePreviewPanel({
         setBlobUrl(null);
         setTextSource(null);
       } finally {
-        if (!cancelled) setSettledPreviewKey(previewKey);
+        if (!cancelled && previewKey) setSettledPreview({ file, key: previewKey, token });
       }
     })();
 
     return () => {
       cancelled = true;
+      abortController.abort();
     };
-  }, [file, scope, sessionKey, roomId, token, previewKey, isCanvas]);
+  }, [file, scope, sessionKey, roomId, token, previewKey, isCanvas, active, previewIsSettled]);
 
   // Revoke the lingering Blob URL on unmount.
   useEffect(() => {

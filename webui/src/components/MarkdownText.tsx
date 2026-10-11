@@ -8,6 +8,8 @@ import {
   useLayoutEffect,
   useRef,
   useState,
+  Component,
+  type ReactNode,
 } from "react";
 
 import { cn } from "@/lib/utils";
@@ -25,13 +27,15 @@ const MemoizedMarkdownRenderer = memo(function MemoizedMarkdownRenderer({
   source,
   className,
   highlightCode,
+  streaming,
 }: {
   source: string;
   className?: string;
   highlightCode: boolean;
+  streaming: boolean;
 }) {
   return (
-    <LazyMarkdownRenderer className={className} highlightCode={highlightCode}>
+    <LazyMarkdownRenderer className={className} highlightCode={highlightCode} streaming={streaming}>
       {source}
     </LazyMarkdownRenderer>
   );
@@ -43,6 +47,20 @@ const LONG_STREAM_COMMIT_MS = 220;
 
 export function preloadMarkdownText(): void {
   void loadMarkdownRenderer();
+}
+
+class MarkdownBoundary extends Component<{ source: string; children: ReactNode }, { failed: boolean }> {
+  state = { failed: false };
+  static getDerivedStateFromError() { return { failed: true }; }
+  componentDidUpdate(previous: { source: string }) {
+    if (this.state.failed && previous.source !== this.props.source) this.setState({ failed: false });
+  }
+  render() {
+    return this.state.failed ? <div className="min-w-0 text-body">
+      <p role="status" className="text-caption text-muted-foreground">此内容暂时无法排版，已显示原文。</p>
+      <div className="whitespace-pre-wrap break-words">{this.props.source}</div>
+    </div> : this.props.children;
+  }
 }
 
 /**
@@ -63,6 +81,7 @@ export function MarkdownText({
   }, [streaming]);
 
   return (
+    <MarkdownBoundary source={renderedSource}>
     <Suspense
       fallback={
         <div
@@ -79,8 +98,10 @@ export function MarkdownText({
         source={renderedSource}
         className={className}
         highlightCode={highlightCode}
+        streaming={streaming}
       />
     </Suspense>
+    </MarkdownBoundary>
   );
 }
 

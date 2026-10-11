@@ -280,6 +280,21 @@ class RuntimeComponentStore:
         with FileLock(str(component_root) + ".install.lock", timeout=120):
             (component_root / "current.json").unlink(missing_ok=True)
 
+    def remove_component(self, component_id: str) -> None:
+        """Remove only component program files; user state is stored elsewhere."""
+        component_id = RuntimeComponentManifest._validate_id(component_id)
+        component_root = self.root / "components" / component_id
+        with FileLock(str(component_root) + ".install.lock", timeout=120):
+            targets = []
+            for target in (component_root, self.root / "downloads" / component_id):
+                if target.exists() or target.is_symlink():
+                    resolved = target.resolve(strict=True)
+                    if target.is_symlink() or not resolved.is_relative_to(self.root) or resolved.parent != target.parent.resolve():
+                        raise RuntimeManagerError("runtime removal target escaped its managed root")
+                    targets.append(target)
+            for target in targets:
+                shutil.rmtree(target)
+
     def prune_inactive(self, component_id: str, *, keep: int = 2) -> list[str]:
         if keep < 1:
             raise ValueError("keep must be at least 1")

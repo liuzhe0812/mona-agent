@@ -55,6 +55,11 @@ const EXCLUDE_FILE = [
 /** 路径白名单：只覆盖 refactor-plan §3.3 定义的真实特殊区域 */
 const ALLOWLIST = [
   {
+    path: "src/components/development/zcode",
+    categories: "*",
+    reason: "用户要求直接保留 ZCode 首版实现；隔离的第三方源码及必要宿主适配，来源和哈希见同目录 NOTICE",
+  },
+  {
     path: "src/components/terminal/Desktop",
     categories: "*",
     reason: "终端虚拟桌面例外",

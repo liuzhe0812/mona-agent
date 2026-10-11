@@ -1,5 +1,19 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
+import openaiIcon from "@lobehub/icons-static-svg/icons/openai.svg";
+import anthropicIcon from "@lobehub/icons-static-svg/icons/anthropic.svg";
+import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } from "@/components/ui/dialog";
+import { PRIMARY_SOURCES, modelKey, orderedSources, sourceId, useModelPreferences } from "@/components/models/model-sources";
+import { developmentApi, executorLabels, isCodeBuddyConnected, type DevExecutor, type ExecutorSettings, type NativeExecutorId } from "@/lib/development-api";
+import { useNativeProviderState } from "@/lib/native-provider-state";
+import { ProviderNativeConnection } from "./ProviderNativeConnection";
+import { ProviderMark } from "@/components/models/ProviderMark";
+import { OpenAiSubscriptionAction } from "./OpenAiSubscriptionAction";
+import { NativeAccountQuota, formatNativePlan } from "./NativeAccountQuota";
+import { useNativeAccountUsage } from "./useNativeAccountUsage";
+import { modelPresentation } from "./model-presentation";
+import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { ModelEngineProgramDialog } from "./ModelEngineProgramDialog";
 import alibabaCloudIcon from "@lobehub/icons-static-svg/icons/alibabacloud-color.svg";
 import deepSeekIcon from "@lobehub/icons-static-svg/icons/deepseek-color.svg";
 import geminiIcon from "@lobehub/icons-static-svg/icons/gemini-color.svg";
@@ -17,7 +31,9 @@ import zhipuIcon from "@lobehub/icons-static-svg/icons/zhipu-color.svg";
 import {
   Check,
   ChevronLeft,
+  ChevronDown,
   Image as ImageIcon,
+  GripVertical,
   KeyRound,
   Loader2,
   Pencil,
@@ -36,15 +52,20 @@ import {
   DropdownMenuContent,
   DropdownMenuItem,
   DropdownMenuLabel,
+  DropdownMenuRadioGroup,
+  DropdownMenuRadioItem,
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { Input } from "@/components/ui/input";
+import { Select } from "@/components/ui/select";
+import { Switch } from "@/components/ui/switch";
 import { useLicense } from "@/hooks/useLicense";
 import { formatBalanceAmount } from "@/lib/money";
 import { isTauri } from "@/lib/tauri";
 import {
   fetchProviderModels,
+  fetchSettings,
   updateProviderSettings,
   updateSettings,
 } from "@/lib/api";
@@ -53,6 +74,64 @@ import { cn } from "@/lib/utils";
 
 type ChatProvider = NonNullable<SettingsPayload["chat_providers"]>[number];
 type ChatModel = ChatProvider["models"][number];
+const ENGINE_SOURCE_LABELS: Record<string, string> = {
+  configured: "指定路径",
+  path: "系统路径",
+  standard_location: "标准位置",
+  npm_platform_package: "系统安装包",
+  desktop_application: "桌面应用",
+  system: "系统程序",
+  managed: "Mona 管理",
+  managed_runtime: "Mona 管理",
+  not_detected: "尚未检测到",
+  unavailable: "程序暂不可用",
+  invalid_path: "程序路径需检查",
+};
+const NATIVE_VERSION_MARKERS: Record<NativeExecutorId, RegExp> = {
+  codex: /\bcodex(?:[_ -]cli(?:[_ -]rs)?|[_ -]rs)?[/\s]+v?(\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?)/i,
+  claude: /\bclaude(?:[_ -]code)?[/\s]+v?(\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?)/i,
+  codebuddy: /\bcodebuddy(?:[_ -]cli)?[/\s]+v?(\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?)/i,
+};
+
+function engineSourceLabel(source: string | undefined, programAvailable: boolean): string {
+  if (!source) return programAvailable ? "本机程序" : "尚未检测到";
+  return ENGINE_SOURCE_LABELS[source] ?? "本机程序";
+}
+
+function nativeProgramVersion(executor: NativeExecutorId, value?: string | null): string {
+  if (!value) return "未检测";
+  const version = value.trim();
+  const direct = version.match(/^v?(\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?)$/i);
+  if (direct) return direct[1];
+  return NATIVE_VERSION_MARKERS[executor].exec(version)?.[1] ?? "未检测";
+}
+
+type ModelReasoningMetadata = Pick<
+  ChatModel,
+  | "reasoning_efforts"
+  | "default_reasoning_effort"
+  | "supports_adaptive_thinking"
+>;
+
+function isPositiveContextWindow(value: unknown): value is number {
+  return typeof value === "number" && Number.isSafeInteger(value) && value > 0;
+}
+
+function reasoningMetadataFor(
+  model: ModelReasoningMetadata,
+): ModelReasoningMetadata | undefined {
+  const metadata: ModelReasoningMetadata = {};
+  if (model.reasoning_efforts !== undefined) {
+    metadata.reasoning_efforts = model.reasoning_efforts;
+  }
+  if (Object.prototype.hasOwnProperty.call(model, "default_reasoning_effort")) {
+    metadata.default_reasoning_effort = model.default_reasoning_effort;
+  }
+  if (model.supports_adaptive_thinking !== undefined) {
+    metadata.supports_adaptive_thinking = model.supports_adaptive_thinking;
+  }
+  return Object.keys(metadata).length ? metadata : undefined;
+}
 
 function isLanguageModel(modelType?: string | null, allowUnknown = true): boolean {
   return !modelType
@@ -60,7 +139,19 @@ function isLanguageModel(modelType?: string | null, allowUnknown = true): boolea
     : ["chat", "language", "text", "llm"].includes(modelType.toLowerCase());
 }
 
-type ModelCapability = "chat" | "image" | "video" | "audio" | "3d" | "other";
+type ModelCapability = "chat" | "image" | "video" | "audio" | "tts" | "stt" | "embedding" | "rerank" | "3d" | "other";
+const MODEL_TYPE_OPTIONS: Array<{ value: ModelCapability; label: string }> = [
+  { value: "chat", label: "对话" },
+  { value: "image", label: "图片" },
+  { value: "video", label: "视频" },
+  { value: "audio", label: "音频" },
+  { value: "tts", label: "语音合成" },
+  { value: "stt", label: "语音识别" },
+  { value: "embedding", label: "向量" },
+  { value: "rerank", label: "重排序" },
+  { value: "3d", label: "3D" },
+  { value: "other", label: "其他" },
+];
 
 interface ModelTypeInfo {
   label: string;
@@ -76,6 +167,10 @@ function modelTypeInfo(modelType?: string | null): ModelTypeInfo {
   if (normalized === "image") return { label: "图片", capability: "image", known: true };
   if (normalized === "video") return { label: "视频", capability: "video", known: true };
   if (normalized === "audio") return { label: "音频", capability: "audio", known: true };
+  if (["tts", "speech", "text_to_speech"].includes(normalized ?? "")) return { label: "语音合成", capability: "tts", known: true };
+  if (["stt", "transcription", "speech_to_text"].includes(normalized ?? "")) return { label: "语音识别", capability: "stt", known: true };
+  if (["embedding", "embeddings"].includes(normalized ?? "")) return { label: "向量", capability: "embedding", known: true };
+  if (["rerank", "reranker"].includes(normalized ?? "")) return { label: "重排序", capability: "rerank", known: true };
   if (["3d", "world3d", "world_3d"].includes(normalized ?? "")) {
     return { label: "3D", capability: "3d", known: true };
   }
@@ -106,6 +201,8 @@ function providerInitials(label: string): string {
 }
 
 const PROVIDER_ICON_BY_ID: Record<string, string> = {
+  openai: openaiIcon,
+  anthropic: anthropicIcon,
   openrouter: openRouterIcon,
   deepseek: deepSeekIcon,
   "zhipu-glm-cn": zhipuIcon,
@@ -175,42 +272,69 @@ export function ChatProvidersSettings({
 }: ChatProvidersSettingsProps) {
   const { licenseInfo } = useLicense();
   const providers = settings.chat_providers ?? [];
+  const { providerOrder, moveProvider, hiddenNative, setNativeVisible } = useModelPreferences();
+  const [nativeExecutors, setNativeExecutors] = useState<DevExecutor[]>([]);
+  const [executorSettings, setExecutorSettings] = useState<ExecutorSettings>();
+  const codebuddy = nativeExecutors.find((item) => item.id === "codebuddy");
+  const [nativeRefresh, setNativeRefresh] = useState(0);
+  const providerRevision = useNativeProviderState((state) => state.revision);
+  const [nativeError, setNativeError] = useState("");
+  const [engineError, setEngineError] = useState("");
+  const [engineBusy, setEngineBusy] = useState<NativeExecutorId | null>(null);
+  const [engineDialogTarget, setEngineDialogTarget] = useState<NativeExecutorId | null>(null);
+  const [connectionSource, setConnectionSource] = useState<"anthropic" | "codebuddy" | null>(null);
+  const probedSources = useRef(new Set<string>());
+  const primary = (name: string) => (PRIMARY_SOURCES as readonly string[]).includes(name);
+  const nativeFor = (name: string) => nativeExecutors.find((item) => sourceId(`native:${item.id}`) === name);
+  const nativeConnected = (name: string) => name === "native:codebuddy" ? isCodeBuddyConnected(codebuddy) : name === "openai"
+    ? nativeFor(name)?.probe?.authMode === "chatgpt"
+    : nativeFor(name)?.probe?.authentication === "ready";
+  const sourceSearchAlias = (id: string) => id === "openai" ? "ChatGPT 订阅 · Codex"
+    : id === "anthropic" ? "Claude Code 账号" : "";
+  const isAccountSource = (id: string) => id === "openai" || id === "anthropic" || id === "native:codebuddy";
+  const nativeEnabled = (executor: DevExecutor) => executorSettings?.enabledEngines !== undefined
+    ? executorSettings.enabledEngines.includes(executor.id as NativeExecutorId)
+    : executor.enabled ?? executor.available;
+  const nativeProgramAvailable = (executor: DevExecutor) => executor.programAvailable ?? executor.available;
+  const connectionProvider = connectionSource ? providers.find((provider) => provider.name === connectionSource) : undefined;
+  const connectionExecutor = connectionSource === "codebuddy" ? codebuddy : connectionSource ? nativeFor(connectionSource) : undefined;
+  useEffect(() => {
+    let active = true;
+    void developmentApi.providerExecutors().then((data) => { if (active) { setNativeExecutors(data.executors); setNativeError(""); } })
+      .catch(() => { if (active) setNativeError("部分连接暂不可用，其他模型仍可使用。"); });
+    void developmentApi.executorSettings().then((data) => { if (active) { setExecutorSettings(data); setEngineError(""); } })
+      .catch(() => { if (active) setEngineError("暂时无法读取引擎设置。"); });
+    return () => { active = false; };
+  }, [nativeRefresh, providerRevision]);
   const builtinProvider = providers.find((provider) => provider.is_builtin) ?? null;
   const [managedBalance, setManagedBalance] = useState<string | null>(null);
   const manageableProviders = useMemo(
-    () => providers.filter((provider) => !provider.is_builtin),
+    () => providers.filter((provider) => !provider.is_builtin && !["openai", "anthropic"].includes(provider.name)),
     [providers],
   );
-  const configured = useMemo(
-    () =>
-      providers
-        .filter((provider) => provider.is_builtin || provider.configured)
-        .slice()
-        .sort((a, b) => Number(Boolean(b.is_builtin)) - Number(Boolean(a.is_builtin)) || Number(b.region === "cn") - Number(a.region === "cn")),
-    [providers],
-  );
-  const modelCountByProvider = useMemo(() => {
-    const modelIds = new Map<string, Set<string>>();
-    const addModels = (provider: string, models: string[]) => {
-      const ids = modelIds.get(provider) ?? new Set<string>();
-      models.forEach((model) => ids.add(model));
-      modelIds.set(provider, ids);
-    };
-    for (const provider of providers) {
-      addModels(provider.name, provider.models.map((model) => model.id));
-    }
-    for (const provider of settings.image_generation?.providers ?? []) {
-      addModels(provider.name, provider.image_models ?? []);
-    }
-    for (const provider of settings.video_generation?.providers ?? []) {
-      addModels(provider.name, provider.video_models ?? []);
-    }
-    return new Map([...modelIds].map(([provider, ids]) => [provider, ids.size]));
-  }, [providers, settings.image_generation?.providers, settings.video_generation?.providers]);
+  const configured = useMemo(() => {
+    const visible = providers.filter((provider) => provider.is_builtin || provider.configured || (PRIMARY_SOURCES as readonly string[]).includes(provider.name));
+    const order = orderedSources(visible.map((provider) => provider.name), providerOrder);
+    return visible.slice().sort((a, b) => order.indexOf(a.name) - order.indexOf(b.name));
+  }, [providers, providerOrder]);
   const [selectedId, setSelectedId] = useState<string | null>(builtinProvider?.name ?? configured[0]?.name ?? null);
+  const selectedCodebuddy = selectedId === "native:codebuddy" ? codebuddy : undefined;
+  useEffect(() => {
+    const executor = nativeFor(selectedId ?? "");
+    if (!executor || !nativeProgramAvailable(executor) || probedSources.current.has(executor.id)) return;
+    probedSources.current.add(executor.id);
+    void developmentApi.probe(undefined, executor.id)
+      .then(() => setNativeRefresh((value) => value + 1))
+      .catch(() => setNativeError("暂时无法检查连接，请稍后重试。"));
+  }, [selectedId, nativeExecutors]);
   const [providerQuery, setProviderQuery] = useState("");
   const [wizardQuery, setWizardQuery] = useState("");
   const [modelQuery, setModelQuery] = useState("");
+  const [modelFilter, setModelFilter] = useState("all");
+  const [collapsedBrands, setCollapsedBrands] = useState<string[]>(["hidden"]);
+  const [managementView, setManagementView] = useState<"brand" | "model">("brand");
+  useEffect(() => { setModelFilter("all"); setCollapsedBrands(["hidden"]); }, [selectedId]);
+  const [adjustModels, setAdjustModels] = useState(false);
   const [wizardOpen, setWizardOpen] = useState(false);
   const [wizardEditing, setWizardEditing] = useState(false);
   const [wizardCustom, setWizardCustom] = useState(false);
@@ -231,15 +355,31 @@ export function ChatProvidersSettings({
     };
   }, [builtinProvider, licenseInfo?.account, licenseInfo?.email]);
   useEffect(() => {
+    if (selectedId === "native:codebuddy" && codebuddy) return;
     if (!configured.some((provider) => provider.name === selectedId)) {
       setSelectedId(builtinProvider?.name ?? configured[0]?.name ?? null);
     }
-  }, [builtinProvider?.name, configured, selectedId]);
+  }, [builtinProvider?.name, configured, selectedId, codebuddy]);
+  useEffect(() => {
+    const connected = connectionSource === "anthropic"
+      ? nativeFor("anthropic")?.probe?.authentication === "ready"
+      : connectionSource === "codebuddy"
+        ? codebuddy?.probe?.authentication === "ready"
+        : false;
+    if (!connectionSource || !connected) return;
+    const nextSource = connectionSource;
+    setConnectionSource(null);
+    setSelectedId(nextSource === "codebuddy" ? "native:codebuddy" : nextSource);
+    setModelQuery("");
+    setAdjustModels(false);
+  }, [connectionSource, nativeExecutors, codebuddy]);
   const [customApiBase, setCustomApiBase] = useState("");
   const [customApiKey, setCustomApiKey] = useState("");
   const [customModels, setCustomModels] = useState<string[]>([]);
   const [customModelTypes, setCustomModelTypes] = useState<Record<string, string>>({});
   const [customModelModalities, setCustomModelModalities] = useState<Record<string, string[]>>({});
+  const [customModelContextWindows, setCustomModelContextWindows] = useState<Record<string, number>>({});
+  const [customModelReasoning, setCustomModelReasoning] = useState<Record<string, ModelReasoningMetadata>>({});
   const [customSelectedModels, setCustomSelectedModels] = useState<string[]>([]);
   const [customManualModel, setCustomManualModel] = useState("");
   const [wizardStep, setWizardStep] = useState<1 | 2 | 3>(1);
@@ -249,6 +389,8 @@ export function ChatProvidersSettings({
   const [wizardModels, setWizardModels] = useState<string[]>([]);
   const [wizardModelTypes, setWizardModelTypes] = useState<Record<string, string>>({});
   const [wizardModelModalities, setWizardModelModalities] = useState<Record<string, string[]>>({});
+  const [wizardModelContextWindows, setWizardModelContextWindows] = useState<Record<string, number>>({});
+  const [wizardModelReasoning, setWizardModelReasoning] = useState<Record<string, ModelReasoningMetadata>>({});
   const [wizardSelectedModels, setWizardSelectedModels] = useState<string[]>([]);
   const [wizardManualModel, setWizardManualModel] = useState("");
   const [wizardLoading, setWizardLoading] = useState(false);
@@ -257,31 +399,77 @@ export function ChatProvidersSettings({
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  const selected = configured.find((provider) => provider.name === selectedId) ?? configured[0];
+  const selected = selectedCodebuddy ? undefined : configured.find((provider) => provider.name === selectedId) ?? configured[0];
+  const accountUsage = useNativeAccountUsage(selected?.name === "openai", Boolean(nativeConnected("openai")), nativeRefresh);
+  const usageIdentity = useRef<string | null>(null);
+  useEffect(() => {
+    const usage = accountUsage.usage;
+    if (!usage) return;
+    if (!usage.connected) {
+      usageIdentity.current = null;
+      if (nativeFor("openai")?.probe?.authMode === "chatgpt") setNativeRefresh((value) => value + 1);
+      return;
+    }
+    const identity = JSON.stringify([usage.accountKey, usage.email, usage.planType]);
+    const previous = usageIdentity.current;
+    usageIdentity.current = identity;
+    if (previous !== null && previous !== identity) {
+      void developmentApi.probe(undefined, "codex").then(() => setNativeRefresh((value) => value + 1))
+        .catch(() => setNativeError("账号已更新，模型目录暂未刷新，请重试。"));
+    }
+  }, [accountUsage.usage]);
   const filteredConfigured = configured.filter((provider) =>
-    `${provider.label} ${provider.name}`.toLowerCase().includes(providerQuery.trim().toLowerCase()),
+    `${provider.label} ${provider.name} ${sourceSearchAlias(provider.name)}`.toLowerCase().includes(providerQuery.trim().toLowerCase()),
   );
+  const allSourceIds = orderedSources([...configured.map((provider) => provider.name), ...(codebuddy ? ["native:codebuddy"] : [])], providerOrder);
+  const visibleSourceIds = allSourceIds.filter((id) => id === "native:codebuddy"
+    ? `CodeBuddy 腾讯 ${codebuddy?.name ?? ""}`.toLowerCase().includes(providerQuery.trim().toLowerCase())
+    : filteredConfigured.some((provider) => provider.name === id));
+  const apiSourceIds = visibleSourceIds.filter((id) => !isAccountSource(id));
+  const accountSourceIds = visibleSourceIds.filter(isAccountSource);
+  const isSuggestedSource = (id: string) => id === "anthropic" ? !nativeConnected(id)
+    : id === "native:codebuddy" && codebuddy?.probe?.authentication !== "ready";
+  const sortableSourceIds = allSourceIds.filter((id) => !isSuggestedSource(id));
+  const [orderAnnouncement, setOrderAnnouncement] = useState("");
+  const moveSource = (source: string, before: string | null) => {
+    moveProvider(source, before, sortableSourceIds);
+    const order = sortableSourceIds.filter((id) => id !== source);
+    const index = before === null ? order.length : order.indexOf(before);
+    setOrderAnnouncement(`已移到第 ${index + 1} 项，共 ${sortableSourceIds.length} 项`);
+  };
   const wizardProvider = manageableProviders.find((provider) => provider.name === wizardProviderId);
   const wizardCandidates = useMemo(() => {
     if (!wizardProvider) return [];
     const discovered = modelRowsFromIds(wizardProvider, wizardModels);
-    return [...wizardProvider.models, ...discovered.map((model) => ({
+    return [...wizardProvider.models.map((model) => ({
+      ...model,
+      type: wizardModelTypes[model.id] ?? model.type,
+      context_window: wizardModelContextWindows[model.id] ?? model.context_window,
+      ...(wizardModelReasoning[model.id] ?? {}),
+    })), ...discovered.map((model) => ({
       ...model,
       type: wizardModelTypes[model.id],
       input_modalities: wizardModelModalities[model.id],
+      ...(isPositiveContextWindow(wizardModelContextWindows[model.id])
+        ? { context_window: wizardModelContextWindows[model.id] }
+        : {}),
+      ...(wizardModelReasoning[model.id] ?? {}),
     }))];
-  }, [wizardModelModalities, wizardModelTypes, wizardModels, wizardProvider]);
+  }, [wizardModelContextWindows, wizardModelModalities, wizardModelReasoning, wizardModelTypes, wizardModels, wizardProvider]);
   const customCandidates = useMemo<ChatModel[]>(
     () => customModels.map((id) => ({
       id,
       name: id,
       type: customModelTypes[id],
       input_modalities: customModelModalities[id],
-      context_window: null,
+      ...(isPositiveContextWindow(customModelContextWindows[id])
+        ? { context_window: customModelContextWindows[id] }
+        : {}),
+      ...(customModelReasoning[id] ?? {}),
       enabled: customSelectedModels.includes(id),
       recommended: false,
     })),
-    [customModelModalities, customModelTypes, customModels, customSelectedModels],
+    [customModelContextWindows, customModelModalities, customModelReasoning, customModelTypes, customModels, customSelectedModels],
   );
 
   const openWizard = () => {
@@ -297,6 +485,8 @@ export function ChatProvidersSettings({
     setWizardModels([]);
     setWizardModelTypes({});
     setWizardModelModalities({});
+    setWizardModelContextWindows({});
+    setWizardModelReasoning({});
     setWizardSelectedModels([]);
     setWizardManualModel("");
     setWizardError(null);
@@ -306,6 +496,8 @@ export function ChatProvidersSettings({
     setCustomModels([]);
     setCustomModelTypes({});
     setCustomModelModalities({});
+    setCustomModelContextWindows({});
+    setCustomModelReasoning({});
     setCustomSelectedModels([]);
     setCustomManualModel("");
   };
@@ -322,12 +514,15 @@ export function ChatProvidersSettings({
     setCustomApiKey("");
     setCustomModels([]);
     setCustomModelTypes({});
+    setCustomModelModalities({});
+    setCustomModelContextWindows({});
+    setCustomModelReasoning({});
     setCustomSelectedModels([]);
     setCustomManualModel("");
   };
 
   const openEditWizard = () => {
-    if (!selected || selected.is_builtin) return;
+    if (!selected || selected.is_builtin || ["openai", "anthropic"].includes(selected.name)) return;
     if (selected.is_custom) {
       setWizardOpen(true);
       setWizardEditing(true);
@@ -341,6 +536,13 @@ export function ChatProvidersSettings({
       setCustomModels(ids);
       setCustomModelTypes(Object.fromEntries(selected.models.flatMap((model) => model.type ? [[model.id, model.type]] : [])));
       setCustomModelModalities(Object.fromEntries(selected.models.flatMap((model) => model.input_modalities ? [[model.id, model.input_modalities]] : [])));
+      setCustomModelContextWindows(Object.fromEntries(selected.models.flatMap((model) =>
+        isPositiveContextWindow(model.context_window) ? [[model.id, model.context_window] as const] : [],
+      )));
+      setCustomModelReasoning(Object.fromEntries(selected.models.flatMap((model) => {
+        const metadata = reasoningMetadataFor(model);
+        return metadata ? [[model.id, metadata]] : [];
+      })));
       setCustomSelectedModels(selected.models.filter((model) => model.enabled).map((model) => model.id));
       setCustomManualModel("");
       setWizardError(null);
@@ -355,8 +557,17 @@ export function ChatProvidersSettings({
     setWizardApiKey("");
     setWizardApiBase(selected.api_base || selected.default_api_base);
     setWizardModels([]);
-    setWizardModelTypes({});
+    setWizardModelTypes(Object.fromEntries(selected.models.flatMap((model) =>
+      model.type ? [[model.id, model.type] as const] : [],
+    )));
     setWizardModelModalities({});
+    setWizardModelContextWindows(Object.fromEntries(selected.models.flatMap((model) =>
+      isPositiveContextWindow(model.context_window) ? [[model.id, model.context_window] as const] : [],
+    )));
+    setWizardModelReasoning(Object.fromEntries(selected.models.flatMap((model) => {
+      const metadata = reasoningMetadataFor(model);
+      return metadata ? [[model.id, metadata]] : [];
+    })));
     setWizardSelectedModels(
       selected.models.filter((model) => model.enabled).map((model) => model.id),
     );
@@ -365,6 +576,8 @@ export function ChatProvidersSettings({
   };
 
   const chooseWizardProvider = (provider: ChatProvider) => {
+    setWizardOpen(true);
+    setWizardEditing(false);
     setWizardCustom(false);
     setWizardProviderId(provider.name);
     setWizardApiBase(provider.api_base || provider.default_api_base);
@@ -372,6 +585,8 @@ export function ChatProvidersSettings({
     setWizardModels([]);
     setWizardModelTypes({});
     setWizardModelModalities({});
+    setWizardModelContextWindows({});
+    setWizardModelReasoning({});
     setWizardSelectedModels(provider.models[0] ? [provider.models[0].id] : []);
     setWizardManualModel("");
     setWizardError(null);
@@ -401,11 +616,11 @@ export function ChatProvidersSettings({
       const candidates = [...new Set([...customModels, ...fetched.map((id) => id.trim()).filter(Boolean)])];
       setCustomModels(candidates);
       setCustomModelTypes((current) => ({
-        ...current,
         ...Object.fromEntries(
           (result.model_details ?? [])
             .flatMap((model) => model.type ? [[model.id, model.type] as const] : []),
         ),
+        ...current,
       }));
       setCustomModelModalities((current) => ({
         ...current,
@@ -414,10 +629,27 @@ export function ChatProvidersSettings({
             model.input_modalities ? [[model.id, model.input_modalities] as const] : []),
         ),
       }));
+      setCustomModelContextWindows((current) => ({
+        ...current,
+        ...Object.fromEntries(
+          (result.model_details ?? []).flatMap((model) =>
+            isPositiveContextWindow(model.context_window)
+              ? [[model.id, model.context_window] as const]
+              : [],
+          ),
+        ),
+      }));
+      setCustomModelReasoning((current) => ({
+        ...current,
+        ...Object.fromEntries((result.model_details ?? []).flatMap((model) => {
+          const metadata = reasoningMetadataFor(model);
+          return metadata ? [[model.id, metadata] as const] : [];
+        })),
+      }));
       setCustomSelectedModels((current) => current.filter((id) => candidates.includes(id)));
-      if (result.error) setWizardError(result.error);
+      if (result.error) setWizardError("暂时无法获取模型，请检查连接设置后重试。");
     } catch (err) {
-      setWizardError(err instanceof Error ? err.message : String(err));
+      setWizardError("暂时无法获取模型，请检查连接设置后重试。");
     } finally {
       setWizardLoading(false);
       setWizardStep(3);
@@ -468,6 +700,18 @@ export function ChatProvidersSettings({
           name: id,
           type: customModelTypes[id],
           inputModalities: customModelModalities[id],
+          ...(isPositiveContextWindow(customModelContextWindows[id])
+            ? { contextWindow: customModelContextWindows[id] }
+            : {}),
+          ...(customModelReasoning[id]?.reasoning_efforts !== undefined
+            ? { reasoningEfforts: customModelReasoning[id].reasoning_efforts }
+            : {}),
+          ...(customModelReasoning[id] && Object.prototype.hasOwnProperty.call(customModelReasoning[id], "default_reasoning_effort")
+            ? { defaultReasoningEffort: customModelReasoning[id].default_reasoning_effort }
+            : {}),
+          ...(customModelReasoning[id]?.supports_adaptive_thinking !== undefined
+            ? { supportsAdaptiveThinking: customModelReasoning[id].supports_adaptive_thinking }
+            : {}),
         })),
         ...(apiKey ? { apiKey } : {}),
       });
@@ -481,7 +725,7 @@ export function ChatProvidersSettings({
       setSelectedId(nextId);
       setWizardOpen(false);
     } catch (err) {
-      setWizardError(err instanceof Error ? err.message : String(err));
+      setWizardError("保存失败，请检查设置后重试。");
     } finally {
       setWizardLoading(false);
     }
@@ -500,11 +744,11 @@ export function ChatProvidersSettings({
       const fetched = result.models ?? [];
       setWizardModels(fetched);
       setWizardModelTypes((current) => ({
-        ...current,
         ...Object.fromEntries(
           (result.model_details ?? [])
             .flatMap((model) => model.type ? [[model.id, model.type] as const] : []),
         ),
+        ...current,
       }));
       setWizardModelModalities((current) => ({
         ...current,
@@ -513,14 +757,31 @@ export function ChatProvidersSettings({
             model.input_modalities ? [[model.id, model.input_modalities] as const] : []),
         ),
       }));
+      setWizardModelContextWindows((current) => ({
+        ...current,
+        ...Object.fromEntries(
+          (result.model_details ?? []).flatMap((model) =>
+            isPositiveContextWindow(model.context_window)
+              ? [[model.id, model.context_window] as const]
+              : [],
+          ),
+        ),
+      }));
+      setWizardModelReasoning((current) => ({
+        ...current,
+        ...Object.fromEntries((result.model_details ?? []).flatMap((model) => {
+          const metadata = reasoningMetadataFor(model);
+          return metadata ? [[model.id, metadata] as const] : [];
+        })),
+      }));
       const candidates = [...wizardProvider.models.map((model) => model.id), ...fetched];
       setWizardSelectedModels((current) => {
         const valid = current.filter((id) => candidates.includes(id));
         return valid.length > 0 ? valid : candidates.slice(0, 1);
       });
-      if (result.error) setWizardError(result.error);
+      if (result.error) setWizardError("暂时无法获取模型，请检查连接设置后重试。");
     } catch (err) {
-      setWizardError(err instanceof Error ? err.message : String(err));
+      setWizardError("暂时无法获取模型，请检查连接设置后重试。");
     } finally {
       setWizardLoading(false);
       setWizardStep(3);
@@ -564,11 +825,17 @@ export function ChatProvidersSettings({
         apiBase: wizardApiBase.trim(),
         model: selectedModels[0],
         enabledModels: selectedModels,
-        discoveredModels: wizardModels.map((id) => ({
-          id,
-          name: id,
-          type: wizardModelTypes[id],
-          inputModalities: wizardModelModalities[id],
+        discoveredModels: wizardCandidates.map((candidate) => ({
+          id: candidate.id,
+          name: candidate.name,
+          type: candidate.type,
+          inputModalities: candidate.input_modalities,
+          ...(isPositiveContextWindow(wizardModelContextWindows[candidate.id])
+            ? { contextWindow: wizardModelContextWindows[candidate.id] }
+            : {}),
+          reasoningEfforts: candidate.reasoning_efforts,
+          defaultReasoningEffort: candidate.default_reasoning_effort,
+          supportsAdaptiveThinking: candidate.supports_adaptive_thinking,
         })),
         ...(apiKey ? { apiKey } : {}),
       });
@@ -576,7 +843,7 @@ export function ChatProvidersSettings({
       setSelectedId(wizardProvider.name);
       setWizardOpen(false);
     } catch (err) {
-      setWizardError(err instanceof Error ? err.message : String(err));
+      setWizardError("保存失败，请检查设置后重试。");
     } finally {
       setWizardLoading(false);
     }
@@ -606,24 +873,58 @@ export function ChatProvidersSettings({
       onSettingsChanged(payload);
       setError(null);
     } catch (err) {
-      setError(err instanceof Error ? err.message : String(err));
+      setError("保存失败，请稍后重试。");
     } finally {
       setSaving(false);
     }
   };
 
-  const toggleAllModels = async () => {
+  const changeModelType = async (model: ChatModel, type: string) => {
+    if (!selected || selected.is_builtin || saving) return;
+    setSaving(true);
+    try {
+      const payload = await updateProviderSettings(token, {
+        provider: selected.name,
+        discoveredModels: [{
+          id: model.id,
+          name: model.name,
+          type,
+          ...(isPositiveContextWindow(model.context_window)
+            ? { contextWindow: model.context_window }
+            : {}),
+        }],
+      });
+      onSettingsChanged(payload);
+      setError(null);
+    } catch (err) {
+      setError("保存失败，请稍后重试。");
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const toggleAllModels = async (action: "show" | "hide" | "reset") => {
     if (!selected || saving) return;
+    const native = nativeFor(selected.name);
+    if (native) {
+      const keys = native.models.filter((model) => model.id).map((model) =>
+        modelKey({ provider: `native:${native.id}`, model: model.id, executor: native.id }),
+      );
+      if (keys.length) {
+        setNativeVisible(keys, action !== "hide");
+        return;
+      }
+    }
+    if (["openai", "anthropic"].includes(selected.name)) return;
     const chatModels = selected.models.filter((model) => isLanguageModel(model.type, !selected.is_custom));
     if (!chatModels.length) return;
-    const allEnabled = chatModels.every((model) => model.enabled);
-    const next = allEnabled ? [] : chatModels.map((model) => model.id);
+    const next = action === "reset" ? null : action === "hide" ? [] : chatModels.map((model) => model.id);
     const anotherProviderHasEnabledModel = providers.some((provider) =>
       provider.name !== selected.name
       && provider.configured
       && provider.models.some((model) => model.enabled),
     );
-    if (next.length === 0 && !anotherProviderHasEnabledModel) {
+    if (next?.length === 0 && !anotherProviderHasEnabledModel) {
       setError("请至少保留一个可用模型");
       return;
     }
@@ -636,33 +937,53 @@ export function ChatProvidersSettings({
       onSettingsChanged(payload);
       setError(null);
     } catch (err) {
-      setError(err instanceof Error ? err.message : String(err));
+      setError("保存失败，请稍后重试。");
     } finally {
       setSaving(false);
     }
   };
 
   const refreshModels = async () => {
-    if (!selected || selected.is_builtin || refreshing) return;
+    if (!selected || refreshing) return;
     setRefreshing(true);
     setError(null);
     try {
+      if (selected.is_builtin) {
+        onSettingsChanged(await fetchSettings(token));
+        return;
+      }
+      const native = nativeFor(selected.name);
+      if (native && nativeProgramAvailable(native)) {
+        try {
+          await developmentApi.probe(undefined, native.id);
+          setNativeRefresh((value) => value + 1);
+        } catch (cause) {
+          setError("暂时无法刷新模型，请稍后重试。");
+        }
+      }
+      if (["openai", "anthropic"].includes(selected.name) || !selected.configured) return;
       const result = await fetchProviderModels(token, {
         provider: selected.name,
         apiBase: selected.api_base,
       });
       if (result.error) throw new Error(result.error);
+      const existingTypes = new Map(selected.models.map((model) => [model.id, model.type]));
       const discovered: Array<{
         id: string;
         name?: string;
         type?: string | null;
         input_modalities?: string[] | null;
-      }> =
-        result.model_details ?? (result.models ?? []).map((id) => ({ id, name: id }));
+        context_window?: number | null;
+        reasoning_efforts?: string[];
+        default_reasoning_effort?: string | null;
+        supports_adaptive_thinking?: boolean;
+      }> = (result.model_details ?? (result.models ?? []).map((id) => ({ id, name: id, type: null })))
+        .map((model) => ({ ...model, type: existingTypes.get(model.id) ?? model.type }));
       if (!discovered.length) return;
       const existingEnabled = selected.models.filter((model) => model.enabled).map((model) => model.id);
+      const knownIds = new Set(selected.models.map((model) => model.id));
       const newChatModels = discovered
-        .filter((model) => !model.type || isLanguageModel(model.type))
+        .filter((model) => !knownIds.has(model.id) && (!model.type || isLanguageModel(model.type)))
         .map((model) => model.id);
       const payload = await updateProviderSettings(token, {
         provider: selected.name,
@@ -671,14 +992,55 @@ export function ChatProvidersSettings({
           name: model.name,
           type: model.type,
           inputModalities: model.input_modalities,
+          ...(isPositiveContextWindow(model.context_window)
+            ? { contextWindow: model.context_window }
+            : {}),
+          reasoningEfforts: model.reasoning_efforts,
+          defaultReasoningEffort: model.default_reasoning_effort,
+          supportsAdaptiveThinking: model.supports_adaptive_thinking,
         })),
         enabledModels: [...new Set([...existingEnabled, ...newChatModels])],
       });
       onSettingsChanged(payload);
     } catch (err) {
-      setError(err instanceof Error ? err.message : String(err));
+      setError("暂时无法刷新模型，请稍后重试。");
     } finally {
       setRefreshing(false);
+    }
+  };
+
+  const refreshNativeModels = async (executor: DevExecutor) => {
+    if (refreshing) return;
+    setRefreshing(true);
+    setNativeError("");
+    try {
+      await developmentApi.probe(undefined, executor.id);
+      setNativeRefresh((value) => value + 1);
+    } catch {
+      setNativeError("暂时无法刷新模型，请稍后重试。");
+    } finally {
+      setRefreshing(false);
+    }
+  };
+
+  const updateNativeEnabled = async (executor: DevExecutor, enabled: boolean) => {
+    if (!executorSettings || engineBusy) return;
+    const current = executorSettings.enabledEngines
+      ?? nativeExecutors.filter((item) => item.id !== "mona" && (item.enabled ?? item.available)).map((item) => item.id as NativeExecutorId);
+    const next = new Set(current);
+    if (enabled) next.add(executor.id as NativeExecutorId);
+    else next.delete(executor.id as NativeExecutorId);
+    setEngineBusy(executor.id as NativeExecutorId);
+    setEngineError("");
+    try {
+      const saved = await developmentApi.updateExecutorSettings(executorSettings, {}, [...next]);
+      setExecutorSettings(saved);
+      developmentApi.refreshNativeProviders();
+      setNativeRefresh((value) => value + 1);
+    } catch {
+      setEngineError("引擎状态未更新，请重试。");
+    } finally {
+      setEngineBusy(null);
     }
   };
 
@@ -695,7 +1057,7 @@ export function ChatProvidersSettings({
       onModelNameChange(payload.agent.model || null);
       setError(null);
     } catch (err) {
-      setError(err instanceof Error ? err.message : String(err));
+      setError("保存失败，请稍后重试。");
     } finally {
       setSaving(false);
     }
@@ -710,7 +1072,7 @@ export function ChatProvidersSettings({
       setSelectedId(payload.chat_providers?.find((provider) => provider.configured)?.name ?? null);
       setError(null);
     } catch (err) {
-      setError(err instanceof Error ? err.message : String(err));
+      setError("删除失败，请稍后重试。");
     } finally {
       setSaving(false);
     }
@@ -720,31 +1082,142 @@ export function ChatProvidersSettings({
   const selectedImageProvider = settings.image_generation?.providers.find((provider) => provider.name === selected?.name);
   const selectedVideoProvider = settings.video_generation?.providers.find((provider) => provider.name === selected?.name);
   const chatModelIds = new Set(selected?.models.map((model) => model.id) ?? []);
-  const unifiedModels = selected ? [
+  const unifiedModels = selected && !["openai", "anthropic"].includes(selected.name) ? [
     ...selected.models,
     ...modelRowsFromIds(selected, [
-      ...(selectedImageProvider?.image_models ?? []),
-      ...(selectedVideoProvider?.video_models ?? []),
-    ]).map((model) => ({ ...model, enabled: false })),
+      ...(selected.name === "openai" ? [] : selectedImageProvider?.image_models ?? []),
+      ...(selected.name === "openai" ? [] : selectedVideoProvider?.video_models ?? []),
+    ]).map((model) => ({ ...model, enabled: false,
+      type: selectedImageProvider?.image_models?.includes(model.id) && !selectedVideoProvider?.video_models?.includes(model.id) ? "image"
+        : selectedVideoProvider?.video_models?.includes(model.id) && !selectedImageProvider?.image_models?.includes(model.id) ? "video" : "other",
+    })),
   ] : [];
-  const visibleModels = unifiedModels.filter((model) =>
-    `${model.name} ${model.id}`.toLowerCase().includes(normalizedModelQuery),
-  );
-  const selectedImageModel = settings.image_generation?.provider === selected?.name ? settings.image_generation.model : null;
-  const selectedVideoModel = settings.video_generation?.provider === selected?.name ? settings.video_generation.model : null;
+  const visibleModels = unifiedModels.filter((model) => {
+    const presentation = modelPresentation(model, { id: selected!.name, label: selected!.label });
+    const capability = isLanguageModel(model.type, !selected!.is_custom) && chatModelIds.has(model.id) ? "chat" : modelTypeInfo(model.type).capability;
+    return (modelFilter === "all" || capability === modelFilter)
+      && `${presentation.name} ${presentation.brandLabel} ${model.name} ${model.id}`.toLowerCase().includes(normalizedModelQuery);
+  });
+  const modelGroups = new Map<string, { label: string; kind: string; models: typeof visibleModels }>();
+  const namedModels = visibleModels.slice().sort((a, b) => modelPresentation(a, { id: selected!.name, label: selected!.label }).name
+    .localeCompare(modelPresentation(b, { id: selected!.name, label: selected!.label }).name, undefined, { numeric: true }));
+  const hiddenModels: typeof visibleModels = [];
+  for (const model of managementView === "model" ? namedModels : visibleModels) {
+    if (chatModelIds.has(model.id) && isLanguageModel(model.type, !selected!.is_custom) && !model.enabled) {
+      hiddenModels.push(model);
+      continue;
+    }
+    const presentation = modelPresentation(model, { id: selected!.name, label: selected!.label });
+    const capability = chatModelIds.has(model.id) && isLanguageModel(model.type, !selected!.is_custom) ? "chat" : modelTypeInfo(model.type).capability;
+    const groupId = capability === "chat" && managementView === "brand" ? presentation.brandId : capability;
+    const group = modelGroups.get(groupId);
+    if (group) group.models.push(model);
+    else modelGroups.set(groupId, { label: capability === "chat" && managementView === "brand" ? presentation.brandLabel : MODEL_TYPE_OPTIONS.find((option) => option.value === capability)!.label, kind: capability, models: [model] });
+  }
+  if (hiddenModels.length) modelGroups.set("hidden", { label: "未显示", kind: "hidden", models: hiddenModels });
+  const kindOrder = [...MODEL_TYPE_OPTIONS.map((option) => option.value), "hidden"];
+  const orderedModelGroups = [...modelGroups].sort(([, a], [, b]) => kindOrder.indexOf(a.kind) - kindOrder.indexOf(b.kind));
+  const nativeSource = nativeFor(selected?.name ?? "");
+  const selectedModelCount = (selected?.configured && !["openai", "anthropic"].includes(selected.name) ? selected.models.filter((model) => model.enabled && isLanguageModel(model.type, !selected.is_custom)).length : 0)
+    + (nativeConnected(selected?.name ?? "") ? nativeSource?.models.filter((model) => model.id && !hiddenNative.includes(modelKey({ provider: `native:${nativeSource.id}`, model: model.id, executor: nativeSource.id }))).length ?? 0 : 0);
+  const presentCapabilities = new Set(unifiedModels.map((model) => chatModelIds.has(model.id) && isLanguageModel(model.type, !selected?.is_custom)
+    ? "chat" : modelTypeInfo(model.type).capability));
+  if (nativeSource?.models.some((model) => model.id)) presentCapabilities.add("chat");
+  const selectableModelCount = nativeSource ? nativeSource.models.filter((model) => model.id).length
+    : unifiedModels.filter((model) => chatModelIds.has(model.id) && isLanguageModel(model.type, !selected?.is_custom)).length;
+  const modelFilters = [["all", "全部"], ...MODEL_TYPE_OPTIONS.filter((option) => presentCapabilities.has(option.value))
+    .map((option) => [option.value, option.value === "image" ? "图像" : option.label])];
+  useEffect(() => {
+    if (!modelFilters.some(([value]) => value === modelFilter)) setModelFilter("all");
+  }, [modelFilters.map(([value]) => value).join(","), modelFilter]);
+  const selectionAvailable = Boolean((selected?.configured && !["openai", "anthropic"].includes(selected.name)) || nativeConnected(selected?.name ?? ""));
+  const selectedImageModel = selected && settings.image_generation?.provider === selected.name ? settings.image_generation.model : null;
+  const selectedVideoModel = selected && settings.video_generation?.provider === selected.name ? settings.video_generation.model : null;
   const hasVisibleModels = visibleModels.length > 0;
+  const visibleNative = (modelFilter === "all" || modelFilter === "chat") && (nativeFor(selected?.name ?? "")?.models.some((model) => model.id && `${model.label} ${model.id}`.toLowerCase().includes(normalizedModelQuery)) ?? false);
   const availableToAdd = manageableProviders
     .filter((provider) => !provider.configured)
     .slice()
-    .sort((a, b) => Number(b.region === "cn") - Number(a.region === "cn"))
+    .sort((a, b) => Number(primary(b.name)) - Number(primary(a.name)) || Number(b.region === "cn") - Number(a.region === "cn"))
     .filter((provider) => `${provider.label} ${provider.name}`.toLowerCase().includes(wizardQuery.trim().toLowerCase()));
 
+  const renderNativeEngineSummary = (executor?: DevExecutor) => {
+    if (!executor || executor.id === "mona") return null;
+    const id = executor.id as NativeExecutorId;
+    const enabled = nativeEnabled(executor);
+    const programAvailable = nativeProgramAvailable(executor);
+    const source = engineSourceLabel(executor.probe?.source ?? executor.detection, programAvailable);
+    const statusNote = [
+      !programAvailable ? "尚未找到本机程序，可在引擎管理中设置路径或准备程序。" : "",
+      !enabled ? "账号和模型偏好会保留，停用期间不会用于新调用。" : "",
+    ].filter(Boolean).join(" ");
+    return <>
+      <div className="flex flex-wrap items-center gap-x-4 gap-y-2 border-b border-border/60 bg-accent/30 px-5 py-2.5">
+        <div className="flex shrink-0 items-center gap-2">
+          <Switch checked={enabled} disabled={!executorSettings || engineBusy === id}
+            aria-label={`${executorLabels[id]} 启用状态`} onCheckedChange={(next) => void updateNativeEnabled(executor, next)} />
+          <span className="text-caption">{enabled ? "已启用" : "已停用"}</span>
+        </div>
+        <div className="flex min-w-0 flex-1 flex-wrap items-center gap-x-3 gap-y-1 text-caption">
+          <span className="font-medium">{executorLabels[id]}</span>
+          <span className="text-muted-foreground">来源：{source}</span>
+          <span className="text-muted-foreground">版本：{nativeProgramVersion(id, executor.probe?.version)}</span>
+        </div>
+        <Button type="button" variant="outline" size="sm" className="shrink-0" onClick={() => setEngineDialogTarget(id)}>引擎管理</Button>
+      </div>
+      {statusNote && <p role="status" className="border-b border-border/60 px-5 py-2 text-caption text-muted-foreground">{statusNote}</p>}
+      {engineError && <p role="alert" className="border-b border-border/60 px-5 py-2 text-caption text-destructive">{engineError}</p>}
+    </>;
+  };
+
+  const renderSource = (id: string) => {
+    const provider = configured.find((item) => item.name === id);
+    const buddy = id === "native:codebuddy";
+    if (!provider && !buddy) return null;
+    const label = buddy ? "CodeBuddy" : provider!.label;
+    const suggested = isSuggestedSource(id);
+    const position = sortableSourceIds.indexOf(id);
+    const active = buddy ? !!selectedCodebuddy : selected?.name === id;
+    return <div key={id} data-provider-id={id} className="group relative mb-1" draggable={!suggested && sortableSourceIds.length > 1}
+      onDragStart={(event) => event.dataTransfer.setData("application/mona-provider", id)}
+      onDragOver={(event) => { if (!suggested && event.dataTransfer.types.includes("application/mona-provider")) event.preventDefault(); }}
+      onDrop={(event) => {
+        const source = event.dataTransfer.getData("application/mona-provider");
+        if (suggested || !sortableSourceIds.includes(source) || source === id || isAccountSource(source) !== isAccountSource(id)) return;
+        event.preventDefault();
+        const bounds = event.currentTarget.getBoundingClientRect();
+        const remaining = sortableSourceIds.filter((value) => value !== source);
+        const before = event.clientY > bounds.top + bounds.height / 2 ? remaining[remaining.indexOf(id) + 1] ?? null : id;
+        moveSource(source, before);
+      }}>
+      {!suggested && sortableSourceIds.length > 1 && <button type="button" aria-label="调整顺序" aria-describedby={`source-name-${id}`}
+        aria-keyshortcuts="ArrowUp ArrowDown" title="使用上下方向键调整顺序"
+        className="absolute inset-y-0 left-0 my-auto flex h-8 w-4 items-center justify-center rounded-md text-muted-foreground opacity-0 hover:opacity-100 focus-visible:opacity-100 focus-visible:ring-2 focus-visible:ring-ring group-hover:opacity-100"
+        onKeyDown={(event) => {
+          if (event.key !== "ArrowUp" && event.key !== "ArrowDown") return;
+          event.preventDefault();
+          if (event.key === "ArrowUp" && position > 0) moveSource(id, sortableSourceIds[position - 1]);
+          if (event.key === "ArrowDown" && position < sortableSourceIds.length - 1) moveSource(id, sortableSourceIds[position + 2] ?? null);
+        }}><GripVertical className="h-3 w-3" /></button>}
+      <button type="button" aria-label={buddy ? "CodeBuddy 连接设置" : undefined} aria-current={active ? "true" : undefined}
+        onClick={() => {
+          if (suggested) { setConnectionSource(buddy ? "codebuddy" : "anthropic"); return; }
+          setSelectedId(id); setModelQuery(""); setAdjustModels(false);
+        }}
+        className={cn("flex w-full items-center gap-2 rounded-xl py-2 pr-3 text-left transition-colors", suggested ? "pl-3" : "pl-4", active ? "bg-accent text-accent-foreground" : "hover:bg-accent/60")}>
+        <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-white shadow-sm">{buddy ? <ProviderMark provider={id} label={label} /> : <ProviderIcon provider={provider!} size={22} />}</span>
+        <span id={`source-name-${id}`} className="min-w-0 flex-1 truncate text-ui font-medium">{label}</span>
+        {suggested && <span className="shrink-0 rounded-full border border-border/70 px-2 py-0.5 text-micro text-muted-foreground">{buddy ? "连接账号" : "使用本机账号"}</span>}
+      </button>
+    </div>;
+  };
+
   return (
-    <div className="space-y-3">
+    <div data-testid="model-provider-settings" className="flex h-full min-h-0 flex-col gap-3">
       <div className="flex flex-wrap items-center justify-between gap-3">
         <div>
-          <h2 className="text-title-md font-semibold">模型供应商</h2>
-          <p className="text-caption text-muted-foreground">管理模型来源、对话显示和图片/视频默认模型</p>
+          <h2 className="text-title-md font-semibold">模型来源</h2>
+          <p className="text-caption text-muted-foreground">管理 API 供应商、本机订阅与账号中的模型。</p>
         </div>
         <div className="flex flex-wrap items-center gap-2">
           {error ? <span className="text-caption text-destructive">{error}</span> : null}
@@ -752,7 +1225,7 @@ export function ChatProvidersSettings({
           {onOpenTtsSettings ? <Button type="button" variant="ghost" size="sm" className="rounded-full" onClick={onOpenTtsSettings}>语音合成</Button> : null}
         </div>
       </div>
-      <div className="grid h-[min(70vh,680px)] min-h-[420px] max-h-[calc(100dvh-260px)] grid-cols-[240px_minmax(0,1fr)] overflow-hidden rounded-2xl border border-border/70 bg-card shadow-sm max-[760px]:grid-cols-1">
+      <div data-testid="model-provider-panel" className="grid min-h-0 flex-1 grid-cols-[240px_minmax(0,1fr)] overflow-hidden rounded-2xl border border-border/70 bg-card shadow-sm max-[760px]:min-h-[420px] max-[760px]:grid-cols-1">
         <aside className="flex min-h-0 flex-col border-r border-border/70 bg-muted/20 max-[760px]:max-h-56 max-[760px]:border-b max-[760px]:border-r-0">
           <div className="border-b border-border/60 p-3">
             <div className="relative">
@@ -760,21 +1233,13 @@ export function ChatProvidersSettings({
               <Input value={providerQuery} onChange={(event) => setProviderQuery(event.target.value)} placeholder="搜索供应商" className="h-8 rounded-full pl-9 text-caption" />
             </div>
           </div>
-          <div className="min-h-0 flex-1 overflow-y-auto p-2">
-            {filteredConfigured.length ? filteredConfigured.map((provider) => (
-              <button
-                key={provider.name}
-                type="button"
-                onClick={() => { setSelectedId(provider.name); setModelQuery(""); }}
-                className={cn("mb-1 flex w-full items-center gap-2 rounded-xl px-3 py-2 text-left transition-colors", selected?.name === provider.name ? "bg-accent text-accent-foreground" : "hover:bg-accent/60")}
-              >
-                <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-white shadow-sm"><ProviderIcon provider={provider} size={22} /></span>
-                <span className="min-w-0 flex-1 truncate text-ui font-medium">{provider.label}</span>
-                <span className="shrink-0 text-[11px] text-muted-foreground">{modelCountByProvider.get(provider.name) ?? provider.models.length} 个模型</span>
-                {provider.is_builtin ? <span className={cn("h-2 w-2 shrink-0 rounded-full", provider.configured ? "bg-emerald-500" : "bg-muted-foreground/30")} aria-label={provider.configured ? "已配置" : "未配置"} /> : provider.is_custom ? <span className="shrink-0 rounded-full bg-muted px-1.5 py-0.5 text-[10px] text-muted-foreground">自定义</span> : null}
-                {provider.configured && provider.name === settings.agent.provider ? <Check className="h-4 w-4 shrink-0 text-emerald-600" aria-label="默认" /> : null}
-              </button>
-            )) : <p className="p-3 text-caption text-muted-foreground">还没有添加供应商</p>}
+          <div data-testid="provider-list-scroll" className="scrollbar-thin scrollbar-track-transparent min-h-0 flex-1 overflow-y-auto p-2">
+            {apiSourceIds.length > 0 && <p className="px-3 pb-2 pt-1 text-micro text-muted-foreground">API 来源</p>}
+            {apiSourceIds.map(renderSource)}
+            {accountSourceIds.length > 0 && <p className="px-3 pb-2 pt-4 text-micro text-muted-foreground">订阅与账号</p>}
+            {accountSourceIds.map(renderSource)}
+            <span className="sr-only" aria-live="polite" aria-atomic="true">{orderAnnouncement}</span>
+            {!visibleSourceIds.length && <p className="p-3 text-caption text-muted-foreground">没有匹配的供应商</p>}
           </div>
           <div className="border-t border-border/60 p-3">
             <Button type="button" variant="outline" className="w-full rounded-xl border-dashed" onClick={openWizard}>
@@ -784,23 +1249,70 @@ export function ChatProvidersSettings({
         </aside>
 
         <section className="flex min-h-0 min-w-0 flex-col overflow-hidden">
-          {selected ? (
+          {selectedCodebuddy ? <>
+            <header className="flex items-center gap-3 border-b border-border/70 p-5">
+              <ProviderMark provider="native:codebuddy" label="CodeBuddy" className="h-9 w-9" />
+              <div className="min-w-0 flex-1"><h3 className="text-title-sm font-semibold">CodeBuddy</h3><p className="text-caption text-muted-foreground">默认连接国内服务，使用账号中的模型。</p></div>
+              <ProviderNativeConnection executor={selectedCodebuddy} showModels={false} onChanged={() => setNativeRefresh((n) => n + 1)} />
+            </header>
+            {renderNativeEngineSummary(selectedCodebuddy)}
+            <div className="flex flex-wrap items-center gap-2 border-b border-border/60 px-5 py-2.5">
+              <span className="text-caption text-muted-foreground">已选 {nativeConnected("native:codebuddy") ? selectedCodebuddy.models.filter((model) => model.id && !hiddenNative.includes(modelKey({ provider: "native:codebuddy", model: model.id, executor: "codebuddy" }))).length : 0} 个模型</span>
+              <div className="ml-auto flex min-w-0 flex-1 flex-wrap items-center justify-end gap-2">
+                <Button type="button" variant="ghost" size="icon" className="h-8 w-8 rounded-full" onClick={() => void refreshNativeModels(selectedCodebuddy)} disabled={refreshing || !nativeProgramAvailable(selectedCodebuddy)} title="刷新模型" aria-label="刷新模型">
+                  {refreshing ? <Loader2 className="h-4 w-4 animate-spin" /> : <RefreshCw className="h-4 w-4" />}
+                </Button>
+                <DropdownMenu>
+                  <DropdownMenuTrigger asChild><Button type="button" variant="outline" size="sm" className="gap-2 rounded-full">管理<ChevronDown className="h-3.5 w-3.5" /></Button></DropdownMenuTrigger>
+                  <DropdownMenuContent align="end">
+                    <DropdownMenuLabel>排列</DropdownMenuLabel>
+                    <DropdownMenuRadioGroup value={managementView} onValueChange={(value) => { if (value === "brand" || value === "model") setManagementView(value); }}>
+                      <DropdownMenuRadioItem value="brand">按品牌分组</DropdownMenuRadioItem>
+                      <DropdownMenuRadioItem value="model">按名称排序</DropdownMenuRadioItem>
+                    </DropdownMenuRadioGroup>
+                    <DropdownMenuSeparator />
+                    <DropdownMenuLabel>显示选择</DropdownMenuLabel>
+                    {([ ["show", "全部显示"], ["hide", "全部隐藏"], ["reset", "重置显示偏好"] ] as const).map(([action, label]) => {
+                      const keys = selectedCodebuddy.models.map((model) => modelKey({ provider: "native:codebuddy", model: model.id, executor: "codebuddy" }));
+                      const visibleCount = keys.filter((key) => !hiddenNative.includes(key)).length;
+                      return <DropdownMenuItem key={action} disabled={!nativeConnected("native:codebuddy") || !keys.length || (action === "show" && visibleCount === keys.length) || (action === "hide" && visibleCount === 0)} onSelect={() => setNativeVisible(keys, action !== "hide")}>{label}</DropdownMenuItem>;
+                    })}
+                  </DropdownMenuContent>
+                </DropdownMenu>
+                <div className="relative min-w-32 max-w-56 flex-1">
+                <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" aria-hidden />
+                <Input value={modelQuery} onChange={(event) => setModelQuery(event.target.value)} placeholder="搜索模型" className="h-8 rounded-full pl-9 text-caption" />
+                </div>
+              </div>
+            </div>
+            <div data-testid="model-list-scroll" className="scrollbar-thin scrollbar-track-transparent min-h-0 flex-1 overflow-y-auto px-5 py-2">
+              <ProviderNativeConnection executor={selectedCodebuddy} showControls={false} search={modelQuery} managementView={managementView} onChanged={() => setNativeRefresh((n) => n + 1)} />
+              {nativeError && <p role="status" className="mt-3 text-caption text-muted-foreground">{nativeError}</p>}
+            </div>
+          </> : selected ? (
             <>
               <header className="flex items-center gap-3 border-b border-border/70 p-5">
                 <span className="flex h-11 w-11 shrink-0 items-center justify-center rounded-xl bg-white shadow-sm"><ProviderIcon provider={selected} size={30} /></span>
                 <div className="min-w-0 flex-1">
                   <div className="flex items-center gap-2">
                     <h3 className="truncate text-title-sm font-semibold">{selected.label}</h3>
-                    {selected.is_builtin ? <span className="rounded-full bg-muted px-2 py-0.5 text-[10px] text-muted-foreground">内置</span> : null}
+                    {selected.is_builtin ? <span className="rounded-full bg-muted px-2 py-0.5 text-micro text-muted-foreground">内置</span> : null}
+                    {selected.name === "openai" ? <Badge variant="outline" className="min-w-0 max-w-[65%] truncate" title={formatNativePlan(accountUsage.usage?.planType)}>{formatNativePlan(accountUsage.usage?.planType)}</Badge> : null}
                   </div>
-                  <p className="truncate text-caption text-muted-foreground">{selected.is_builtin ? (selected.configured ? "全部模型 · 按实际 Token 从 Mona AI 余额扣费" : "服务端尚未开放可用的托管模型") : selected.api_base}</p>
+                  <p className="truncate text-caption text-muted-foreground">{selected.is_builtin ? (selected.configured ? "全部模型 · 按实际 Token 从 Mona AI 余额扣费" : "暂无可用模型") : selected.name === "openai" ? (accountUsage.usage?.email ? `ChatGPT 订阅 · Codex · ${accountUsage.usage.email}` : "ChatGPT 订阅 · Codex") : selected.name === "anthropic" ? "Claude Code 账号 · Anthropic 模型" : selected.api_base}</p>
                 </div>
-                <span className={cn("flex shrink-0 items-center gap-1.5 text-caption", selected.configured ? "text-emerald-600" : "text-muted-foreground")}><span className={cn("h-2 w-2 rounded-full", selected.configured ? "bg-emerald-500" : "bg-muted-foreground/30")} />{selected.configured ? "已配置" : "未配置"}</span>
-                {!selected.is_builtin ? <>
+                {!["openai", "anthropic"].includes(selected.name) && <span className={cn("flex shrink-0 items-center gap-1.5 text-caption", selected.configured || nativeConnected(selected.name) ? "text-success" : "text-muted-foreground")}><span className={cn("h-1.5 w-1.5 rounded-full", selected.configured || nativeConnected(selected.name) ? "bg-success" : "bg-muted-foreground/30")} />{nativeConnected(selected.name) ? "已连接" : selected.is_builtin ? selected.configured ? "可用" : "暂无模型" : selected.configured ? "已配置" : "未配置"}</span>}
+                {["openai", "anthropic"].includes(selected.name) ? selected.name === "openai" ? <>
+                  <span className={cn("flex shrink-0 items-center gap-1.5 rounded-full px-2 py-1 text-caption text-muted-foreground", nativeConnected(selected.name) && "bg-muted/40")}>{nativeConnected(selected.name) && <Check className="h-3.5 w-3.5" />}{nativeConnected(selected.name) ? "已连接" : "未连接"}</span>
+                  <OpenAiSubscriptionAction executor={nativeFor("openai")} onChanged={() => setNativeRefresh((value) => value + 1)} />
+                </> : nativeFor("anthropic") ? <ProviderNativeConnection executor={nativeFor("anthropic")!} showModels={false} onChanged={() => setNativeRefresh((value) => value + 1)} /> : null : !selected.is_builtin ? <>
                   <Button type="button" variant="ghost" size="icon" onClick={openEditWizard} disabled={saving} title="编辑供应商" aria-label="编辑供应商"><Pencil className="h-4 w-4" /></Button>
                   <Button type="button" variant="ghost" size="icon" onClick={deleteSelected} disabled={saving} title="删除供应商" aria-label="删除供应商"><Trash2 className="h-4 w-4 text-destructive" /></Button>
                 </> : null}
               </header>
+              {renderNativeEngineSummary(nativeSource)}
+              <div data-testid="model-list-scroll" className="scrollbar-thin scrollbar-track-transparent min-h-0 flex-1 overflow-y-auto">
+              {selected.name === "openai" && accountUsage.usage?.connected && <NativeAccountQuota usage={accountUsage.usage} />}
               {selected.is_builtin && selected.configured ? (
                 <div className="flex flex-wrap items-center gap-3 border-b border-border/60 px-5 py-4">
                   <div className="min-w-0 flex-1">
@@ -810,40 +1322,60 @@ export function ChatProvidersSettings({
                   {onOpenUsage ? <Button type="button" variant="ghost" size="sm" className="rounded-full" onClick={onOpenUsage}>查看用量</Button> : null}
                   {onOpenBilling ? <Button type="button" size="sm" className="rounded-full" onClick={onOpenBilling}>余额充值</Button> : null}
                 </div>
-              ) : selected.is_builtin ? (
-                <div className="border-b border-border/60 px-5 py-4 text-caption text-muted-foreground">
-                  VPS 尚未启用托管模型，或没有配置生效价格；配置完成后模型会自动出现。
-                </div>
               ) : null}
-              <div className="flex items-center gap-3 border-b border-border/60 p-4">
-                <div className="shrink-0">
-                  <p className="text-ui font-medium">模型列表</p>
-                  <p className="text-caption text-muted-foreground">开关控制对话，设置按钮指定图片和视频默认模型</p>
-                </div>
-                <div className="relative min-w-0 flex-1">
-                  <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" aria-hidden />
-                  <Input value={modelQuery} onChange={(event) => setModelQuery(event.target.value)} placeholder="搜索模型" className="h-8 rounded-full pl-9 text-caption" />
-                </div>
-                {!selected.is_builtin ? (
-                  <Button type="button" variant="ghost" size="icon" className="h-8 w-8 rounded-full" onClick={refreshModels} disabled={refreshing || saving} title="刷新模型" aria-label="刷新模型">
+              <div className="sticky top-0 z-10 flex flex-wrap items-center gap-2 border-b border-border/60 bg-card px-5 py-2.5">
+                <span className="shrink-0 text-caption text-muted-foreground">已选 {selectedModelCount} 个模型</span>
+                <div className="ml-auto flex min-w-0 flex-1 flex-wrap items-center justify-end gap-2">
+                  <Button type="button" variant="ghost" size="icon" className="h-8 w-8 rounded-full" onClick={refreshModels} disabled={refreshing || saving || (!selected.configured && (!nativeSource || !nativeProgramAvailable(nativeSource)))} title="刷新模型" aria-label="刷新模型">
                     {refreshing ? <Loader2 className="h-4 w-4 animate-spin" /> : <RefreshCw className="h-4 w-4" />}
                   </Button>
-                ) : null}
-                <Button type="button" variant="ghost" size="sm" className="shrink-0 rounded-full" onClick={() => void toggleAllModels()} disabled={saving || !selected.models.some((model) => isLanguageModel(model.type, !selected.is_custom))} title="批量控制是否在对话模型选择中显示">
-                  {selected.models.filter((model) => isLanguageModel(model.type, !selected.is_custom)).every((model) => model.enabled) ? "全部隐藏" : "全部显示"}
-                </Button>
+                  <DropdownMenu>
+                      <DropdownMenuTrigger asChild><Button type="button" variant="outline" size="sm" className="gap-2 rounded-full">管理<ChevronDown className="h-3.5 w-3.5" /></Button></DropdownMenuTrigger>
+                      <DropdownMenuContent align="end">
+                        <DropdownMenuLabel>排列</DropdownMenuLabel>
+                        <DropdownMenuRadioGroup value={managementView} onValueChange={(value) => { if (value === "brand" || value === "model") setManagementView(value); }}>
+                          <DropdownMenuRadioItem value="brand">按品牌分组</DropdownMenuRadioItem>
+                          <DropdownMenuRadioItem value="model">按名称排序</DropdownMenuRadioItem>
+                        </DropdownMenuRadioGroup>
+                        <DropdownMenuSeparator />
+                        <DropdownMenuLabel>显示选择</DropdownMenuLabel>
+                        <DropdownMenuItem onSelect={() => void toggleAllModels("show")} disabled={saving || !selectionAvailable || selectedModelCount === selectableModelCount}>全部显示</DropdownMenuItem>
+                        <DropdownMenuItem onSelect={() => void toggleAllModels("hide")} disabled={saving || !selectionAvailable || selectedModelCount === 0}>全部隐藏</DropdownMenuItem>
+                        <DropdownMenuItem onSelect={() => void toggleAllModels("reset")} disabled={saving || !selectionAvailable || !selectableModelCount}>重置显示偏好</DropdownMenuItem>
+                        <DropdownMenuSeparator />
+                        {!nativeSource && <DropdownMenuItem onSelect={() => setAdjustModels((value) => !value)}>分别调整{adjustModels && <Check className="ml-auto h-4 w-4" />}</DropdownMenuItem>}
+                      </DropdownMenuContent>
+                  </DropdownMenu>
+                  {modelFilters.length > 2 && <Tabs value={modelFilter} onValueChange={setModelFilter}>
+                    <TabsList className="h-8 rounded-full p-0.5" aria-label="模型分类">
+                      {modelFilters.map(([value, label]) => <TabsTrigger key={value} value={value} className="rounded-full px-3 py-1">{label}</TabsTrigger>)}
+                    </TabsList>
+                  </Tabs>}
+                  <div className="relative min-w-32 max-w-56 flex-1">
+                    <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" aria-hidden />
+                    <Input value={modelQuery} onChange={(event) => setModelQuery(event.target.value)} placeholder="搜索模型" className="h-8 rounded-full pl-9 text-caption" />
+                  </div>
+                </div>
               </div>
-              <div className="min-h-0 flex-1 overflow-y-auto p-3">
+              <div className="px-5 py-2">
+                {(modelFilter === "all" || modelFilter === "chat") && nativeFor(selected.name) && <ProviderNativeConnection key={selected.name} executor={nativeFor(selected.name)!} showControls={false} search={modelQuery} managementView={managementView} onChanged={() => setNativeRefresh((n) => n + 1)} />}
+                {nativeError && ["openai", "anthropic"].includes(selected.name) && <p role="status" className="px-3 py-2 text-caption text-muted-foreground">{nativeError}</p>}
                 {hasVisibleModels ? (
                   <section>
-                    {visibleModels.map((model) => {
+                    {nativeFor(selected.name)?.models.some((model) => model.id) && <p className="px-3 pb-2 pt-4 text-caption text-muted-foreground">API 模型</p>}
+                    {orderedModelGroups.map(([brandId, group]) => <div key={brandId} className="mb-4">
+                      {group.label && <button type="button" className="flex h-8 w-full items-center gap-1.5 text-left text-caption text-muted-foreground hover:text-foreground" aria-expanded={!collapsedBrands.includes(brandId) || !!normalizedModelQuery} onClick={() => setCollapsedBrands((current) => current.includes(brandId) ? current.filter((id) => id !== brandId) : [...current, brandId])}>
+                        <ChevronDown className={cn("h-3.5 w-3.5 transition-transform", collapsedBrands.includes(brandId) && !normalizedModelQuery && "-rotate-90")} />{group.label}<span className="tabular-nums">{group.models.length}</span>
+                      </button>}
+                      {(!collapsedBrands.includes(brandId) || !!normalizedModelQuery) && group.models.map((model) => {
+                      const presentation = modelPresentation(model, { id: selected.name, label: selected.label });
                       const isChatModel = chatModelIds.has(model.id) && isLanguageModel(model.type, !selected.is_custom);
-                      const typeInfo = modelTypeInfo(model.type);
+                      const typeInfo = modelTypeInfo(model.type || (isChatModel ? "chat" : undefined));
                       const showImageActions =
-                        (!typeInfo.known || typeInfo.capability === "image")
+                        typeInfo.capability === "image"
                         && Boolean(onSelectImageModel || onOpenImageSettings);
                       const showVideoActions =
-                        (!typeInfo.known || typeInfo.capability === "video")
+                        typeInfo.capability === "video"
                         && Boolean(onSelectVideoModel || onOpenVideoSettings);
                       const isDefaultChat = settings.agent.provider === selected.name && settings.agent.model === model.id;
                       const isDefaultImage = selectedImageModel === model.id;
@@ -853,42 +1385,39 @@ export function ChatProvidersSettings({
                         model.context_window ? `${formatContextWindow(model.context_window)} 上下文` : null,
                       ].filter(Boolean).join(" · ");
                       return (
-                        <div key={model.id} className="flex items-center gap-3 rounded-xl px-3 py-3 hover:bg-accent/40">
+                        <div key={model.id} className={cn("group flex min-h-10 items-center gap-3 rounded-lg px-1 py-1 hover:bg-accent/40", isChatModel && !selected.configured && "opacity-50")}>
+                          {presentation.icon ? <img src={presentation.icon} alt="" className="h-5 w-5 shrink-0 opacity-60 dark:invert" /> : <span className="flex h-5 w-5 shrink-0 items-center justify-center opacity-60" aria-hidden><ProviderIcon provider={selected} size={20} /></span>}
                           <div className="min-w-0 flex-1">
                             <div className="flex min-w-0 flex-wrap items-center gap-2">
-                              <span className="truncate text-ui font-medium">{model.name}</span>
-                              <Badge variant="outline">{typeInfo.label}</Badge>
-                              {model.recommended ? <Badge variant="secondary">推荐</Badge> : null}
-                              {isDefaultChat ? <Badge variant="secondary">默认对话</Badge> : null}
+                              <span className="truncate text-ui" title={model.id}>{presentation.name}</span>
+                              {model.price_tier && <span className="text-micro text-muted-foreground">{model.price_tier}</span>}
+                              {adjustModels && <Badge variant="outline">{typeInfo.label}</Badge>}
+                              {adjustModels && model.recommended ? <Badge variant="secondary">推荐</Badge> : null}
+                              {adjustModels && isDefaultChat ? <Badge variant="secondary">默认对话</Badge> : null}
                               {isDefaultImage ? <Badge variant="secondary" className="gap-1"><ImageIcon className="h-3.5 w-3.5" />默认图片</Badge> : null}
                               {isDefaultVideo ? <Badge variant="secondary" className="gap-1"><VideoIcon className="h-3.5 w-3.5" />默认视频</Badge> : null}
                             </div>
-                            {modelMeta ? <p className="truncate font-mono text-micro text-muted-foreground">{modelMeta}</p> : null}
+                            {adjustModels && modelMeta ? <p className="truncate font-mono text-micro text-muted-foreground">{modelMeta}</p> : null}
                           </div>
-                          {isChatModel && model.enabled && !isDefaultChat && !isDefaultImage && !isDefaultVideo ? <Button type="button" variant="outline" size="sm" onClick={() => setDefault(model)} disabled={saving}>设为默认</Button> : null}
-                          {isChatModel ? (
-                            <button
-                              type="button"
-                              role="switch"
-                              aria-checked={model.enabled}
-                              aria-label={`${model.name} ${model.enabled ? "不在对话中显示" : "在对话中显示"}`}
-                              title={model.enabled ? "不在对话模型选择中显示" : "在对话模型选择中显示"}
-                              onClick={() => toggleModel(model)}
-                              disabled={saving}
-                              className={cn("relative h-6 w-10 shrink-0 rounded-full transition-colors", model.enabled ? "bg-emerald-500" : "bg-muted", saving && "cursor-not-allowed opacity-60")}
-                            >
-                              <span className={cn("absolute top-1 h-4 w-4 rounded-full bg-white shadow transition-transform", model.enabled ? "left-5" : "left-1")} />
-                            </button>
-                          ) : <span className="w-10 shrink-0" aria-hidden />}
-                          {showImageActions || showVideoActions ? (
+                          {adjustModels && isChatModel && model.enabled && !isDefaultChat && !isDefaultImage && !isDefaultVideo ? <Button type="button" variant="outline" size="sm" onClick={() => setDefault(model)} disabled={saving}>设为默认</Button> : null}
+                          {!isChatModel || selected.configured ? (
                             <DropdownMenu>
                               <DropdownMenuTrigger asChild>
-                                <Button type="button" variant="ghost" size="icon" className="h-8 w-8 shrink-0 rounded-md" disabled={saving} title="模型设置" aria-label={`设置 ${model.name}`}>
+                                <Button type="button" variant="ghost" size="icon" className={cn("h-8 w-8 shrink-0 rounded-md", isChatModel && !adjustModels && "opacity-0 group-hover:opacity-100 group-focus-within:opacity-100 data-[state=open]:opacity-100")} disabled={saving} title="模型设置" aria-label={`设置 ${model.name}`}>
                                   <Settings2 className="h-4 w-4" />
                                 </Button>
                               </DropdownMenuTrigger>
-                              <DropdownMenuContent align="end" className="w-56">
-                                <DropdownMenuLabel>生成模型</DropdownMenuLabel>
+                              <DropdownMenuContent align="end" className="w-64">
+                                <DropdownMenuLabel className="truncate" title={model.name}>{model.name}</DropdownMenuLabel>
+                                <DropdownMenuSeparator />
+                                <DropdownMenuLabel className="font-normal text-muted-foreground">模型类型</DropdownMenuLabel>
+                                {selected.is_builtin ? <p className="px-2 pb-2 text-caption text-muted-foreground">{typeInfo.label} · 由供应商提供</p> : (
+                                  <DropdownMenuRadioGroup value={typeInfo.capability} onValueChange={(type) => void changeModelType(model, type)} aria-label={`${model.name} 模型类型`} className="grid grid-cols-2 gap-1">
+                                    {MODEL_TYPE_OPTIONS.map((option) => <DropdownMenuRadioItem key={option.value} value={option.value} disabled={saving}>{option.label}</DropdownMenuRadioItem>)}
+                                  </DropdownMenuRadioGroup>
+                                )}
+                                {(showImageActions || showVideoActions) && <DropdownMenuSeparator />}
+                                {typeInfo.capability === "other" && <p className="px-2 py-2 text-caption text-muted-foreground">选择模型类型后显示对应设置。</p>}
                                 {showImageActions ? (
                                   <>
                                     {onSelectImageModel ? (
@@ -931,15 +1460,25 @@ export function ChatProvidersSettings({
                               </DropdownMenuContent>
                             </DropdownMenu>
                           ) : null}
+                          {isChatModel ? (
+                            <Switch
+                              checked={selected.configured && model.enabled}
+                              onCheckedChange={() => void toggleModel(model)}
+                              aria-label={`${model.name} ${model.enabled ? "不在对话中显示" : "在对话中显示"}`}
+                              title={model.enabled ? "不在对话模型选择中显示" : "在对话模型选择中显示"}
+                              disabled={saving || !selected.configured}
+                            />
+                          ) : null}
                         </div>
                       );
-                    })}
+                    })}</div>)}
                   </section>
-                ) : (
+                ) : !visibleNative ? (
                   <p className="p-6 text-center text-caption text-muted-foreground">
-                    {selected.is_builtin && !selected.configured ? "服务端暂无可用模型" : "没有匹配的模型"}
+                    {selected.is_builtin && !selected.configured ? "暂无可用模型" : "没有匹配的模型"}
                   </p>
-                )}
+                ) : null}
+              </div>
               </div>
             </>
           ) : (
@@ -951,10 +1490,44 @@ export function ChatProvidersSettings({
         </section>
       </div>
 
+      {connectionSource ? (
+        <Dialog open onOpenChange={(open) => { if (!open) setConnectionSource(null); }}>
+          <DialogContent className="max-w-xl gap-5 rounded-2xl p-6" aria-label={`连接 · ${connectionSource === "anthropic" ? "Anthropic" : "CodeBuddy"}`}>
+            <DialogHeader>
+              <DialogTitle>连接 · {connectionSource === "anthropic" ? "Anthropic" : "CodeBuddy"}</DialogTitle>
+              <DialogDescription>{connectionSource === "anthropic" ? "使用 Claude Code 账号连接 Anthropic 模型。" : "登录账号后即可在开发任务中使用 CodeBuddy 模型。"}</DialogDescription>
+            </DialogHeader>
+            <div className="flex items-center gap-3">
+              <span className="flex h-11 w-11 shrink-0 items-center justify-center rounded-xl bg-white shadow-sm">
+                {connectionSource === "anthropic" && connectionProvider
+                  ? <ProviderIcon provider={connectionProvider} size={30} />
+                  : <ProviderMark provider="native:codebuddy" label="CodeBuddy" className="h-8 w-8" />}
+              </span>
+              <div className="min-w-0 flex-1">
+                <p className="text-title-sm font-semibold">{connectionSource === "anthropic" ? "Anthropic" : "CodeBuddy"}</p>
+                <p className="text-caption text-muted-foreground">{connectionSource === "anthropic" ? "使用本机 Claude Code 账号连接。" : "登录 CodeBuddy 账号连接。"}</p>
+              </div>
+            </div>
+            {connectionExecutor ? (
+              <ProviderNativeConnection executor={connectionExecutor} showModels={false} dialogLayout
+                loginActionLabel={connectionSource === "anthropic" ? "使用 Claude Code 登录" : "连接 CodeBuddy"}
+                onChanged={() => setNativeRefresh((value) => value + 1)} />
+            ) : (
+              <p className="text-caption text-muted-foreground">正在检查可用的登录方式…</p>
+            )}
+            <div className="flex justify-end">
+              <Button type="button" variant="outline" onClick={() => setConnectionSource(null)}>取消</Button>
+            </div>
+          </DialogContent>
+        </Dialog>
+      ) : null}
+      {engineDialogTarget && <ModelEngineProgramDialog open executor={engineDialogTarget}
+        onOpenChange={(open) => { if (!open) setEngineDialogTarget(null); }}
+        onChanged={() => setNativeRefresh((value) => value + 1)} />}
       {wizardOpen ? (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4" role="dialog" aria-modal="true" aria-label={wizardCustom ? (wizardEditing ? "编辑自定义供应商" : "添加自定义供应商") : (wizardEditing ? "编辑供应商" : "添加供应商")}>
-          <div className="grid w-full max-w-lg gap-4 rounded-2xl border bg-background p-6 shadow-lg">
-            <div className="flex items-center justify-between"><div><h3 className="text-title-sm font-semibold">{wizardCustom ? (wizardEditing ? "编辑自定义供应商" : "添加自定义供应商") : (wizardEditing ? "编辑供应商" : "添加供应商")}</h3><p className="text-caption text-muted-foreground">步骤 {wizardStep} / 3</p></div><Button type="button" variant="ghost" onClick={() => setWizardOpen(false)}>取消</Button></div>
+        <Dialog open={wizardOpen} onOpenChange={(open) => { if (!wizardLoading) setWizardOpen(open); }}>
+          <DialogContent className="max-h-[85vh] max-w-2xl gap-5 overflow-y-auto rounded-2xl p-6">
+            <DialogHeader><DialogTitle>{wizardCustom ? (wizardEditing ? "编辑自定义供应商" : "添加自定义供应商") : `${wizardEditing ? "编辑" : "添加"}${wizardProvider ? ` · ${wizardProvider.label}` : "供应商"}`}</DialogTitle><DialogDescription>{wizardStep === 1 ? "1 选择供应商" : wizardStep === 2 ? "✓ 选择供应商　2 连接" : "✓ 连接　3 选择模型"}</DialogDescription></DialogHeader>
             {wizardCustom ? wizardStep === 2 ? (
               <div className="space-y-4">
                 <div><p className="text-ui font-medium">自定义端点</p><p className="text-caption text-muted-foreground">接入任意 OpenAI 兼容的模型来源</p></div>
@@ -966,9 +1539,9 @@ export function ChatProvidersSettings({
               </div>
             ) : (
               <div className="space-y-4">
-                <div><p className="text-ui font-medium">选择对话模型</p><p className="text-caption text-muted-foreground">这里只控制对话模型；图片和视频模型可在供应商详情中分别选择。</p></div>
+                 <div><p className="text-ui font-medium">选择对话模型</p><p className="text-caption text-muted-foreground">类型识别有误时，可在模型右侧修改；图片和视频模型可在供应商详情中分别选择。</p></div>
                 {wizardError ? <p className="rounded-lg bg-destructive/10 p-2 text-caption text-destructive">{wizardError}</p> : null}
-                <div className="max-h-48 space-y-1 overflow-y-auto rounded-xl border p-2">{customCandidates.map((model) => <label key={model.id} className="flex items-center gap-2 rounded-lg px-2 py-2 text-ui hover:bg-accent"><input type="checkbox" checked={customSelectedModels.includes(model.id)} onChange={() => setCustomSelectedModels((current) => current.includes(model.id) ? current.filter((id) => id !== model.id) : [...current, model.id])} /><span className="min-w-0 flex-1 truncate">{model.name}</span>{model.recommended ? <span className="text-[11px] text-emerald-600">推荐</span> : null}</label>)}</div>
+                <div className="max-h-48 space-y-1 overflow-y-auto rounded-xl border p-2">{customCandidates.map((model) => <div key={model.id} className="flex items-center gap-2 rounded-lg px-2 py-2 text-ui hover:bg-accent"><label className="flex min-w-0 flex-1 items-center gap-2"><input type="checkbox" checked={customSelectedModels.includes(model.id)} onChange={() => setCustomSelectedModels((current) => current.includes(model.id) ? current.filter((id) => id !== model.id) : [...current, model.id])} /><span className="min-w-0 flex-1 truncate">{model.name}</span>{adjustModels && model.recommended ? <span className="text-[11px] text-emerald-600">推荐</span> : null}</label><Select aria-label={`${model.name} 模型类型`} value={modelTypeInfo(model.type).capability} options={MODEL_TYPE_OPTIONS} onValueChange={(type) => setCustomModelTypes((current) => ({ ...current, [model.id]: type }))} className="h-8 w-24 text-caption" /></div>)}</div>
                 <div className="flex gap-2"><Input value={customManualModel} onChange={(event) => setCustomManualModel(event.target.value)} placeholder="手动添加模型 ID（逗号分隔）" onKeyDown={(event) => { if (event.key === "Enter") { event.preventDefault(); addCustomManualModel(); } }} /><Button type="button" variant="outline" onClick={addCustomManualModel}>添加</Button></div>
                 <div className="flex justify-between"><Button type="button" variant="ghost" onClick={() => setWizardStep(2)}><ChevronLeft className="mr-1 h-4 w-4" />返回</Button><Button type="button" onClick={finishCustomWizard} disabled={wizardLoading || customModels.length === 0}>{wizardLoading ? <Loader2 className="mr-1.5 h-4 w-4 animate-spin" /> : null}完成</Button></div>
               </div>
@@ -991,15 +1564,15 @@ export function ChatProvidersSettings({
               </div>
             ) : wizardProvider ? (
               <div className="space-y-4">
-                <p className="text-ui font-medium">选择可用模型</p>
+                 <p className="text-ui font-medium">选择可用模型；类型识别有误时可在右侧修改</p>
                 {wizardError ? <p className="rounded-lg bg-destructive/10 p-2 text-caption text-destructive">{wizardError}</p> : null}
-                <div className="max-h-48 space-y-1 overflow-y-auto rounded-xl border p-2">{wizardCandidates.map((model) => <label key={model.id} className="flex items-center gap-2 rounded-lg px-2 py-2 text-ui hover:bg-accent"><input type="checkbox" checked={wizardSelectedModels.includes(model.id)} onChange={() => setWizardSelectedModels((current) => current.includes(model.id) ? current.filter((id) => id !== model.id) : [...current, model.id])} /><span className="min-w-0 flex-1 truncate">{model.name}</span>{model.recommended ? <span className="text-[11px] text-emerald-600">推荐</span> : null}</label>)}</div>
+                <div className="max-h-48 space-y-1 overflow-y-auto rounded-xl border p-2">{wizardCandidates.map((model) => <div key={model.id} className="flex items-center gap-2 rounded-lg px-2 py-2 text-ui hover:bg-accent"><label className="flex min-w-0 flex-1 items-center gap-2"><input type="checkbox" checked={wizardSelectedModels.includes(model.id)} onChange={() => setWizardSelectedModels((current) => current.includes(model.id) ? current.filter((id) => id !== model.id) : [...current, model.id])} /><span className="min-w-0 flex-1 truncate">{model.name}</span>{adjustModels && model.recommended ? <span className="text-[11px] text-emerald-600">推荐</span> : null}</label><Select aria-label={`${model.name} 模型类型`} value={modelTypeInfo(model.type).capability} options={MODEL_TYPE_OPTIONS} onValueChange={(type) => setWizardModelTypes((current) => ({ ...current, [model.id]: type }))} className="h-8 w-24 text-caption" /></div>)}</div>
                 <div className="flex gap-2"><Input value={wizardManualModel} onChange={(event) => setWizardManualModel(event.target.value)} placeholder="手动添加模型 ID（逗号分隔）" onKeyDown={(event) => { if (event.key === "Enter") { event.preventDefault(); addManualModel(); } }} /><Button type="button" variant="outline" onClick={addManualModel}>添加</Button></div>
                 <div className="flex justify-between"><Button type="button" variant="ghost" onClick={() => setWizardStep(2)}><ChevronLeft className="mr-1 h-4 w-4" />返回</Button><Button type="button" onClick={finishWizard} disabled={wizardLoading || wizardSelectedModels.length === 0}>{wizardLoading ? <Loader2 className="mr-1.5 h-4 w-4 animate-spin" /> : null}完成</Button></div>
               </div>
             ) : null}
-          </div>
-        </div>
+          </DialogContent>
+        </Dialog>
       ) : null}
     </div>
   );

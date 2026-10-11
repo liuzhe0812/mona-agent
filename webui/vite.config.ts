@@ -11,6 +11,8 @@ export default defineConfig(({ mode }) => {
   const isTauriBuild = mode === "tauri";
 
   return {
+    // Auxiliary Vite servers must not replace the running app's optimized deps.
+    cacheDir: path.resolve(__dirname, "node_modules/.vite", mode === "test" ? "vitest" : "mona"),
     plugins: [
       alphaTab({ assetOutputDir: false }),
       officeEditorDev(path.resolve(__dirname, "office-editor")),
@@ -80,6 +82,7 @@ export default defineConfig(({ mode }) => {
           target: gatewayTarget,
           changeOrigin: true,
         },
+        "/api/development": { target: gatewayTarget, changeOrigin: true },
         "/webui": { target, changeOrigin: true },
         "/api": { target, changeOrigin: true },
         "/auth": { target, changeOrigin: true },

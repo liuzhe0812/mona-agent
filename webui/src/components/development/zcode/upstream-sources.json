@@ -1,0 +1,105 @@
+[
+  {
+    "source": "packages/ui/src/v4/conversationTurnFlowItems.ts",
+    "sha256": "270b548d423f1fb30fe6d00244d3b07089ac0fd72248b8eab8256cd079f9a2fe"
+  },
+  {
+    "source": "packages/ui/src/v4/conversationTurnWorkSegments.ts",
+    "sha256": "62e6bd39801b0f600681f8178d73254fe0c311a21401cbc17b945e9473b39c94"
+  },
+  {
+    "source": "packages/ui/src/lib/exploreToolCall.ts",
+    "sha256": "f21e7ba8c7f4205be7b51f244f006dc1bf11ae96b2b30a7a701fa7679fb55bbe"
+  },
+  {
+    "source": "packages/ui/src/v4/conversationWorkDuration.ts",
+    "sha256": "a6a19f995cee4e32f6adfccdf25479ab00634808c274debfa0d158e1d904457e"
+  },
+  {
+    "source": "packages/ui/src/components/ai-elements/chat-loading.tsx",
+    "sha256": "b75d4398d778179f78209debde63547410d76e01cdaf3887f60b13ef9a35331f"
+  },
+  {
+    "source": "packages/ui/src/v4/ConversationTurnGroup.tsx",
+    "sha256": "8faf4a22fdeb885a51553dcefdb12dcaf36549ade25b38bc7b48286597297be6",
+    "adaptedInto": "DevelopmentTranscript.tsx / DevelopmentActivity.tsx"
+  },
+  {
+    "source": "packages/ui/src/v4/conversationAssistantWorkItems.ts",
+    "sha256": "5376dad21419a98b1cf86bb2c07782028e207081448ad63eb652ad29b3b99531",
+    "adaptedInto": "DevelopmentTranscript.tsx / DevelopmentActivity.tsx"
+  },
+  {
+    "source": "packages/ui/src/ToolCallBlocks/ToolSummaryRow.tsx",
+    "sha256": "81a0c2f954a73b81ff4ed113d56a3fb6b594d66e3a8358c910a2a25cef922715",
+    "adaptedInto": "DevelopmentTranscript.tsx / DevelopmentActivity.tsx"
+  },
+  {
+    "source": "packages/ui/src/styles.css",
+    "sha256": "22d5b58e44cdebdbe7154c418ee05fef6dde689e384f0dd590d4057739487be7"
+  },
+  {
+    "source": "packages/ui/src/components/lib/utils.ts",
+    "sha256": "b083c2359de5f521e00ead8c39b8c8b68934d0e052b1c83384660614198b810d"
+  },
+  {
+    "source": "packages/ui/src/v4/conversationLayout.ts",
+    "sha256": "13a9986849b51b79be3206bb0d44b1b18c28b93cdb255ad00555b45e9ba6588a"
+  },
+  {
+    "source": "packages/ui/src/v4/timelineScrollAnchor.ts",
+    "sha256": "89a067d2693b27edb57d8ace7647c0dcb00d7ce503fc141f03565ca64ef53083"
+  },
+  {
+    "source": "packages/ui/src/v4/timelineRowHeightCache.ts",
+    "sha256": "43bb13461e7405361aa845e9171a031b809e92f2c78f67653dbb8c17ded35149"
+  },
+  {
+    "source": "packages/ui/src/v4/conversationTimelineLiveTail.ts",
+    "sha256": "2ee3be3a1265c6cc66458c60356f3669a4c0c290fac8713385b88745577eafef"
+  },
+  {
+    "source": "packages/ui/src/lib/chatSessionScrollMemory.ts",
+    "sha256": "399922e79456aab4c1b992eff1ea87d4de0b6785309de59c0e2349f228a7c03b"
+  },
+  {
+    "source": "packages/ui/src/v4/chatLoadingVisibility.ts",
+    "sha256": "fdea086ff0ca14a4f99987616101138b8d6825498d8c6bea5cde2faf5347ec80"
+  },
+  {
+    "source": "packages/ui/src/v4/messageTimeLabel.ts",
+    "sha256": "d2522fa18b9d99966afae4a4af1e1814e092f1c46f13c4fde2e76f4f31d4311c"
+  },
+  {
+    "source": "packages/ui/src/lib/mapToolStatus.ts",
+    "sha256": "18eeb4bb413c7b8f0ccd17bd569fbb5c08fdfa4ec48bd1c03cdfffc2b838d49f"
+  },
+  {
+    "source": "packages/shared/src/tool-call-summary.ts",
+    "sha256": "a3f5684ad53d3d7e489024ee041c6ff0a9f7e83ce4513b867a45a6d6df065043"
+  },
+  {
+    "source": "packages/ui/src/components/ui/dialog.tsx",
+    "sha256": "53dc10761bd894a5e86278d9354aac47920c81b4aab8b414b840af095f7c0b31"
+  },
+  {
+    "source": "packages/ui/src/components/ui/context-menu.tsx",
+    "sha256": "3820461fd68ca7a345fc919ab356bdefbbead23abb3ac0f4e8d46898f7522a6f"
+  },
+  {
+    "source": "packages/ui/src/components/ui/dropdown-menu.tsx",
+    "sha256": "34c5b79489756aa3467ec26d2b44587f3d47eafcb2cb16402686aac15e4debdb"
+  },
+  {
+    "source": "packages/ui/src/components/ui/textarea.tsx",
+    "sha256": "a839574ce1301fbaa9ba917fdb980900eb9118bffa7c6c4e469f3293b122ed30"
+  },
+  {
+    "source": "packages/ui/src/components/ui/diff-viewer.tsx",
+    "sha256": "f02208b316e6dc4043ed1794455422bc74cdd521285fcac5a2c0d589c2eb9af2"
+  },
+  {
+    "source": "packages/ui/src/previewPanePatchFallbackContent.tsx",
+    "sha256": "9ccd7d474c867f9d6635c2f9498f7c6e8b3cf281701036d16191663cb3c704f4"
+  }
+]

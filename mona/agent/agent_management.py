@@ -138,18 +138,18 @@ def create_custom_agent(
     description: str = "",
     instructions: str = "",
 ) -> AgentDefinition:
-    """Create one user-owned local expert without publishing it remotely."""
+    """Create one user-owned local partner without publishing it remotely."""
     name = display_name.strip()
     summary = description.strip()
     role = instructions.strip()
     if not name:
-        raise AgentManagementError("expert name is required")
+        raise AgentManagementError("partner name is required")
     if len(name) > 80:
-        raise AgentManagementError("expert name must be 80 characters or fewer")
+        raise AgentManagementError("partner name must be 80 characters or fewer")
     if len(summary) > 500:
-        raise AgentManagementError("expert description must be 500 characters or fewer")
+        raise AgentManagementError("partner description must be 500 characters or fewer")
     if len(role) > 20_000:
-        raise AgentManagementError("expert instructions must be 20000 characters or fewer")
+        raise AgentManagementError("partner instructions must be 20000 characters or fewer")
 
     agent_id = f"local.custom.{uuid.uuid4().hex}"
     manifest = {
@@ -176,8 +176,8 @@ def create_custom_agent(
             json.dumps(manifest, ensure_ascii=False, indent=2) + "\n",
         )
         prompt = [
-            f"You are {name}, a user-created local expert in Mona.",
-            "Follow the user's current request and the local expert instructions below.",
+            f"You are {name}, a user-created local partner in Mona.",
+            "Follow the user's current request and the local partner instructions below.",
         ]
         if summary:
             prompt.append(f"Expertise: {summary}")

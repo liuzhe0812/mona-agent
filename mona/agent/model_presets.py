@@ -40,6 +40,7 @@ def build_static_preset_snapshot(
         provider=provider,
         model=preset.model,
         context_window_tokens=DEFAULT_CONTEXT_WINDOW_TOKENS,
+        context_window_verified=False,
         signature=("model_preset", name, preset.model_dump_json()),
         auto_compact_token_limit=preset.auto_compact_token_limit,
     )

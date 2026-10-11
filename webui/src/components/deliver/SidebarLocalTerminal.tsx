@@ -8,6 +8,8 @@ interface SidebarLocalTerminalProps {
   status?: "opening" | "ready" | "error";
   error?: string;
   onRetry: () => void;
+  interceptSsh?: boolean;
+  readOnly?: boolean;
 }
 
 export function SidebarLocalTerminal({
@@ -15,11 +17,13 @@ export function SidebarLocalTerminal({
   status = "opening",
   error,
   onRetry,
+  interceptSsh,
+  readOnly,
 }: SidebarLocalTerminalProps) {
   if (status === "ready" && sessionId) {
     return (
       <div className="h-full min-h-0 bg-[#1a1a1a] p-1">
-        <XtermTerminal sessionId={sessionId} />
+        <XtermTerminal sessionId={sessionId} interceptSsh={interceptSsh} readOnly={readOnly} />
       </div>
     );
   }

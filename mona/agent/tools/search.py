@@ -73,7 +73,7 @@ def _pagination_note(limit: int | None, offset: int, truncated: bool) -> str | N
     if truncated:
         if limit is None:
             return f"(pagination: offset={offset})"
-        return f"(pagination: limit={limit}, offset={offset})"
+        return f"(pagination: limit={limit}, offset={offset}; more results, continue with offset={offset + limit})"
     if offset > 0:
         return f"(pagination: offset={offset})"
     return None
@@ -112,10 +112,14 @@ class _SearchTool(_FsTool):
             return
 
         for dirpath, dirnames, filenames in os.walk(root):
-            dirnames[:] = sorted(d for d in dirnames if d not in self._IGNORE_DIRS)
             current = Path(dirpath)
+            dirnames[:] = sorted(d for d in dirnames if d not in self._IGNORE_DIRS
+                                 and not (current / d).is_symlink()
+                                 and (current / d).resolve().is_relative_to(root.resolve()))
             for filename in sorted(filenames):
-                yield current / filename
+                candidate = current / filename
+                if not candidate.is_symlink() and candidate.resolve().is_relative_to(root.resolve()) and candidate.is_file():
+                    yield candidate
 
 
 class FindFilesTool(_SearchTool):
@@ -195,12 +199,16 @@ class FindFilesTool(_SearchTool):
         if include_dirs:
             yield root
         for dirpath, dirnames, filenames in os.walk(root):
-            dirnames[:] = sorted(d for d in dirnames if d not in self._IGNORE_DIRS)
             current = Path(dirpath)
+            dirnames[:] = sorted(d for d in dirnames if d not in self._IGNORE_DIRS
+                                 and not (current / d).is_symlink()
+                                 and (current / d).resolve().is_relative_to(root.resolve()))
             if include_dirs and current != root:
                 yield current
             for filename in sorted(filenames):
-                yield current / filename
+                candidate = current / filename
+                if not candidate.is_symlink() and candidate.resolve().is_relative_to(root.resolve()) and candidate.is_file():
+                    yield candidate
 
     async def execute(
         self,
@@ -442,13 +450,16 @@ class GrepTool(_SearchTool):
             root = target if target.is_dir() else target.parent
 
             for file_path in self._iter_files(target):
+                checked = self._resolve(str(file_path))
                 rel_path = file_path.relative_to(root).as_posix()
                 if glob and not _match_glob(rel_path, file_path.name, glob):
                     continue
                 if not _matches_type(file_path.name, type):
                     continue
 
-                raw = file_path.read_bytes()
+                # Bound reads before allocating the full content of a large file.
+                with checked.open("rb") as stream:
+                    raw = stream.read(self._MAX_FILE_BYTES + 1)
                 if len(raw) > self._MAX_FILE_BYTES:
                     skipped_large += 1
                     continue

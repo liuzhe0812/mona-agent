@@ -2,14 +2,19 @@
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Any
 
 from loguru import logger
 
 from mona.config.schema import Config, InlineFallbackConfig, ModelPresetConfig
 from mona.providers.base import LLMProvider
-from mona.providers.context_window import resolve_model_context_window
+from mona.providers.context_window import (
+    resolve_model_context_window,
+    resolve_model_context_window_details,
+)
 from mona.providers.fallback_provider import FallbackProvider
 from mona.providers.registry import find_by_name
 
@@ -21,6 +26,8 @@ class ProviderSnapshot:
     context_window_tokens: int
     signature: tuple[object, ...]
     auto_compact_token_limit: int | None = None
+    context_window_verified: bool = True
+    context_provider: str | None = None
 
 
 def _resolve_model_preset(
@@ -38,6 +45,7 @@ def _make_provider_core(
     preset_name: str | None = None,
     preset: ModelPresetConfig | None = None,
     model: str | None = None,
+    http_client_factory: Callable[[], Any] | None = None,
 ) -> LLMProvider:
     """Create a plain LLM provider without failover wrapping."""
     resolved = _resolve_model_preset(config, preset_name=preset_name, preset=preset)
@@ -89,6 +97,8 @@ def _make_provider_core(
             api_base=config.get_api_base(model, preset=resolved),
             default_model=model,
             extra_headers=p.extra_headers if p else None,
+            model_metadata=p.discovered_models if p else None,
+            http_client=http_client_factory() if http_client_factory else None,
         )
     elif backend == "bedrock":
         from mona.providers.bedrock_provider import BedrockProvider
@@ -119,6 +129,7 @@ def _make_provider_core(
             no_auth=(not spec.api_key_required and not api_key) if spec else False,
         )
 
+    provider.http_client_factory = http_client_factory
     provider.generation = resolved.to_generation_settings()
     provider.spec = spec
     provider.model_input_modalities = {}
@@ -184,6 +195,7 @@ def make_provider(
     preset_name: str | None = None,
     preset: ModelPresetConfig | None = None,
     model: str | None = None,
+    http_client_factory: Callable[[], Any] | None = None,
 ) -> LLMProvider:
     """Create the LLM provider implied by config.
 
@@ -191,7 +203,8 @@ def make_provider(
     the failover path to create providers for fallback models.
     """
     resolved = _resolve_model_preset(config, preset_name=preset_name, preset=preset)
-    provider = _make_provider_core(config, preset_name=preset_name, preset=preset, model=model)
+    provider = _make_provider_core(config, preset_name=preset_name, preset=preset, model=model,
+                                   http_client_factory=http_client_factory)
     fallback_presets = _resolve_fallback_presets(config, resolved)
 
     if fallback_presets:
@@ -199,7 +212,7 @@ def make_provider(
             primary=provider,
             fallback_presets=fallback_presets,
             provider_factory=lambda fb: _make_provider_core(
-                config, preset_name=preset_name, preset=fb
+                config, preset_name=preset_name, preset=fb, http_client_factory=http_client_factory
             ),
         )
 
@@ -264,14 +277,19 @@ def build_provider_snapshot(
     resolved = _resolve_model_preset(config, preset_name=preset_name, preset=preset)
     fallback_presets = _resolve_fallback_presets(config, resolved)
     fallback_windows = [resolve_model_context_window(config, fallback) for fallback in fallback_presets]
+    window = resolve_model_context_window_details(config, resolved)
     return ProviderSnapshot(
         provider=make_provider(config, preset=resolved),
         model=resolved.model,
+        context_provider=config.get_provider_name(resolved.model, preset=resolved),
         context_window_tokens=min([
-            resolve_model_context_window(config, resolved),
+            window.tokens,
             *fallback_windows,
         ]),
         signature=provider_signature(config, preset=resolved),
+        context_window_verified=window.source != "default" and all(
+            resolve_model_context_window_details(config, fallback).source != "default" for fallback in fallback_presets
+        ),
         auto_compact_token_limit=_effective_auto_compact_token_limit(
             resolved,
             fallback_presets,

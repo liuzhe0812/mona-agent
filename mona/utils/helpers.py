@@ -416,41 +416,43 @@ def build_assistant_message(
     return msg
 
 
+def _message_token_text(message: dict[str, Any]) -> list[str]:
+    content = message.get("content")
+    parts: list[str] = []
+    if isinstance(content, str):
+        parts.append(content)
+    elif isinstance(content, list):
+        for part in content:
+            if isinstance(part, dict) and part.get("type") in {"image", "image_url"}:
+                continue  # Binary transport size is not a visual token price.
+            if isinstance(part, dict) and part.get("type") == "text":
+                text = part.get("text", "")
+                if text:
+                    parts.append(text)
+            else:
+                parts.append(json.dumps(part, ensure_ascii=False))
+    elif content is not None:
+        parts.append(json.dumps(content, ensure_ascii=False))
+    if message.get("tool_calls"):
+        parts.append(json.dumps(message["tool_calls"], ensure_ascii=False))
+    reasoning = message.get("reasoning_content")
+    if isinstance(reasoning, str) and reasoning:
+        parts.append(reasoning)
+    for key in ("name", "tool_call_id"):
+        value = message.get(key)
+        if isinstance(value, str) and value:
+            parts.append(value)
+    return parts
+
+
 def estimate_prompt_tokens(
     messages: list[dict[str, Any]],
     tools: list[dict[str, Any]] | None = None,
 ) -> int:
-    """Estimate prompt tokens with tiktoken.
-
-    Counts all fields that providers send to the LLM: content, tool_calls,
-    reasoning_content, tool_call_id, name, plus per-message framing overhead.
-    """
+    """Estimate text/protocol tokens; visual costs require provider-owned pricing."""
     try:
         enc = tiktoken.get_encoding("cl100k_base")
-        parts: list[str] = []
-        for msg in messages:
-            content = msg.get("content")
-            if isinstance(content, str):
-                parts.append(content)
-            elif isinstance(content, list):
-                for part in content:
-                    if isinstance(part, dict) and part.get("type") == "text":
-                        txt = part.get("text", "")
-                        if txt:
-                            parts.append(txt)
-
-            tc = msg.get("tool_calls")
-            if tc:
-                parts.append(json.dumps(tc, ensure_ascii=False))
-
-            rc = msg.get("reasoning_content")
-            if isinstance(rc, str) and rc:
-                parts.append(rc)
-
-            for key in ("name", "tool_call_id"):
-                value = msg.get(key)
-                if isinstance(value, str) and value:
-                    parts.append(value)
+        parts = [part for message in messages for part in _message_token_text(message)]
 
         if tools:
             parts.append(json.dumps(tools, ensure_ascii=False))
@@ -462,34 +464,8 @@ def estimate_prompt_tokens(
 
 
 def estimate_message_tokens(message: dict[str, Any]) -> int:
-    """Estimate prompt tokens contributed by one persisted message."""
-    content = message.get("content")
-    parts: list[str] = []
-    if isinstance(content, str):
-        parts.append(content)
-    elif isinstance(content, list):
-        for part in content:
-            if isinstance(part, dict) and part.get("type") == "text":
-                text = part.get("text", "")
-                if text:
-                    parts.append(text)
-            else:
-                parts.append(json.dumps(part, ensure_ascii=False))
-    elif content is not None:
-        parts.append(json.dumps(content, ensure_ascii=False))
-
-    for key in ("name", "tool_call_id"):
-        value = message.get(key)
-        if isinstance(value, str) and value:
-            parts.append(value)
-    if message.get("tool_calls"):
-        parts.append(json.dumps(message["tool_calls"], ensure_ascii=False))
-
-    rc = message.get("reasoning_content")
-    if isinstance(rc, str) and rc:
-        parts.append(rc)
-
-    payload = "\n".join(parts)
+    """Use the same text/protocol basis as the full prompt estimate."""
+    payload = "\n".join(_message_token_text(message))
     if not payload:
         return 4
     try:

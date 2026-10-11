@@ -176,6 +176,10 @@ class LLMProvider(ABC):
         # Set by the factory (or tests) so get_capabilities() can resolve
         # provider-level defaults. None for ad-hoc constructed providers.
         self.spec: ProviderSpec | None = None
+        self.http_client_factory: Callable[[], Any] | None = None
+
+    async def aclose(self) -> None:
+        """Release owned transport resources after active requests have finished."""
 
     def get_capabilities(self, model: str) -> ModelCapabilities:
         """Return what this (provider, model) pair can do.
@@ -495,8 +499,27 @@ class LLMProvider(ABC):
         return merged
 
     @staticmethod
-    def _strip_image_content(messages: list[dict[str, Any]]) -> list[dict[str, Any]] | None:
-        """Replace image_url blocks with text placeholder. Returns None if no images found."""
+    def _image_downgrade_placeholder(
+        block: dict[str, Any],
+        *,
+        model_supports_vision: bool | None,
+    ) -> str:
+        path = (block.get("_meta") or {}).get("path", "")
+        placeholder = image_placeholder_text(path, empty="[image omitted]")
+        note = "Image omitted; visual content was not read. Use accompanying text only."
+        if model_supports_vision is False:
+            note += " The current model does not support image input."
+        else:
+            note += " The image request failed, and the reason is unknown."
+        return f"{placeholder}\n[{note}]"
+
+    @staticmethod
+    def _strip_image_content(
+        messages: list[dict[str, Any]],
+        *,
+        model_supports_vision: bool | None = None,
+    ) -> list[dict[str, Any]] | None:
+        """Replace image_url blocks with text placeholders. Returns None if none found."""
         found = False
         result = []
         for msg in messages:
@@ -505,8 +528,10 @@ class LLMProvider(ABC):
                 new_content = []
                 for b in content:
                     if isinstance(b, dict) and b.get("type") == "image_url":
-                        path = (b.get("_meta") or {}).get("path", "")
-                        placeholder = image_placeholder_text(path, empty="[image omitted]")
+                        placeholder = LLMProvider._image_downgrade_placeholder(
+                            b,
+                            model_supports_vision=model_supports_vision,
+                        )
                         new_content.append({"type": "text", "text": placeholder})
                         found = True
                     else:
@@ -517,7 +542,11 @@ class LLMProvider(ABC):
         return result if found else None
 
     @staticmethod
-    def _strip_image_content_inplace(messages: list[dict[str, Any]]) -> bool:
+    def _strip_image_content_inplace(
+        messages: list[dict[str, Any]],
+        *,
+        model_supports_vision: bool | None = None,
+    ) -> bool:
         """Replace image_url blocks with text placeholder *in-place*.
 
         Mutates the content lists of the original message dicts so that
@@ -530,8 +559,10 @@ class LLMProvider(ABC):
             if isinstance(content, list):
                 for i, b in enumerate(content):
                     if isinstance(b, dict) and b.get("type") == "image_url":
-                        path = (b.get("_meta") or {}).get("path", "")
-                        placeholder = image_placeholder_text(path, empty="[image omitted]")
+                        placeholder = LLMProvider._image_downgrade_placeholder(
+                            b,
+                            model_supports_vision=model_supports_vision,
+                        )
                         content[i] = {"type": "text", "text": placeholder}
                         found = True
         return found
@@ -603,8 +634,9 @@ class LLMProvider(ABC):
         on_tool_call_delta: Callable[[dict[str, Any]], Awaitable[None]] | None = None,
         retry_mode: str = "standard",
         on_retry_wait: Callable[[str], Awaitable[None]] | None = None,
+        require_image: bool = False,
     ) -> LLMResponse:
-        """Call chat_stream() with retry on transient provider failures."""
+        """Call chat_stream() with retry; required images cannot be downgraded."""
         if max_tokens is self._SENTINEL or max_tokens is None:
             max_tokens = self.generation.max_tokens
         if temperature is self._SENTINEL or temperature is None:
@@ -626,6 +658,7 @@ class LLMProvider(ABC):
             messages,
             retry_mode=retry_mode,
             on_retry_wait=on_retry_wait,
+            require_image=require_image,
         )
         from mona.usage import record_provider_usage
 
@@ -643,6 +676,7 @@ class LLMProvider(ABC):
         tool_choice: str | dict[str, Any] | None = None,
         retry_mode: str = "standard",
         on_retry_wait: Callable[[str], Awaitable[None]] | None = None,
+        require_image: bool = False,
     ) -> LLMResponse:
         """Call chat() with retry on transient provider failures.
 
@@ -671,6 +705,7 @@ class LLMProvider(ABC):
             messages,
             retry_mode=retry_mode,
             on_retry_wait=on_retry_wait,
+            require_image=require_image,
         )
         from mona.usage import record_provider_usage
 
@@ -780,6 +815,7 @@ class LLMProvider(ABC):
         *,
         retry_mode: str,
         on_retry_wait: Callable[[str], Awaitable[None]] | None,
+        require_image: bool = False,
     ) -> LLMResponse:
         attempt = 0
         delays = list(self._CHAT_RETRY_DELAYS)
@@ -787,6 +823,31 @@ class LLMProvider(ABC):
         last_response: LLMResponse | None = None
         last_error_key: str | None = None
         identical_error_count = 0
+        model = kw.get("model") or self.get_default_model()
+        if require_image:
+            has_image = any(
+                isinstance(message.get("content"), list)
+                and any(isinstance(block, dict) and block.get("type") == "image_url"
+                        and (block.get("image_url") or {}).get("url")
+                        for block in message["content"])
+                for message in original_messages
+            )
+            if not has_image or self.get_capabilities(model).supports_vision is False:
+                return LLMResponse(
+                    content="当前截图无法交给模型读取，已停止视觉定位。请使用支持图片的模型后重试。",
+                    finish_reason="error", error_code="IMAGE_INPUT_REQUIRED",
+                )
+        if self.get_capabilities(model).supports_vision is False:
+            stripped = self._strip_image_content(
+                original_messages,
+                model_supports_vision=False,
+            )
+            if stripped is not None:
+                kw = {**kw, "messages": stripped}
+                self._strip_image_content_inplace(
+                    original_messages,
+                    model_supports_vision=False,
+                )
         while True:
             attempt += 1
             response = await call(**kw)
@@ -801,6 +862,9 @@ class LLMProvider(ABC):
                 identical_error_count = 1 if error_key else 0
 
             if not self._is_transient_response(response):
+                # Coordinate decisions cannot come from a text-only retry.
+                if require_image:
+                    return response
                 stripped = self._strip_image_content(original_messages)
                 if stripped is not None and stripped != kw["messages"]:
                     logger.warning(

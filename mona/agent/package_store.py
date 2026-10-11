@@ -161,7 +161,7 @@ class ExpertCatalog(Base):
     @classmethod
     def _validate_schema_version(cls, value: int) -> int:
         if value != 1:
-            raise ValueError(f"unsupported expert catalog schema version {value}")
+            raise ValueError(f"unsupported partner catalog schema version {value}")
         return value
 
     @field_validator("generated_at")
@@ -182,7 +182,7 @@ class ExpertCatalog(Base):
         for entry in experts:
             identity = (entry.id, entry.version)
             if identity in identities:
-                raise ValueError(f"duplicate expert catalog entry {entry.id}@{entry.version}")
+                raise ValueError(f"duplicate partner catalog entry {entry.id}@{entry.version}")
             identities.add(identity)
         return experts
 

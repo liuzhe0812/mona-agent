@@ -1,0 +1,6 @@
+.development-conversation { container: development-conversation / inline-size; }
+.development-turn-navigator { display: none; }
+@container development-conversation (min-width: 864px) {
+  .development-turn-navigator { display: flex; }
+  .development-conversation-content { padding-left: 4rem; padding-right: 4rem; }
+}

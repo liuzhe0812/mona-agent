@@ -39,7 +39,7 @@ class ExpertCatalogCache(Base):
     @classmethod
     def _validate_schema_version(cls, value: int) -> int:
         if value != 1:
-            raise ValueError(f"unsupported expert catalog cache schema version {value}")
+            raise ValueError(f"unsupported partner catalog cache schema version {value}")
         return value
 
 
@@ -65,7 +65,7 @@ class ExpertCatalogClient:
         transport: httpx.AsyncBaseTransport | None = None,
     ) -> None:
         if not urls:
-            raise ValueError("at least one expert catalog URL is required")
+            raise ValueError("at least one partner catalog URL is required")
         self.urls = list(dict.fromkeys(urls))
         self.cache_path = cache_path
         self.timeout_seconds = timeout_seconds
@@ -101,7 +101,7 @@ class ExpertCatalogClient:
                 fetched_at=cached.fetched_at,
                 stale=True,
             )
-        raise ExpertCatalogError("expert catalog unavailable: " + "; ".join(errors))
+        raise ExpertCatalogError("partner catalog unavailable: " + "; ".join(errors))
 
     def load_cached(self) -> ExpertCatalogCache | None:
         try:
@@ -157,25 +157,25 @@ class ExpertCatalogClient:
             response.raise_for_status()
             length = response.headers.get("content-length")
             if length and int(length) > self.max_bytes:
-                raise ExpertCatalogError("expert catalog exceeds size limit")
+                raise ExpertCatalogError("partner catalog exceeds size limit")
             payload = await response.aread()
             if len(payload) > self.max_bytes:
-                raise ExpertCatalogError("expert catalog exceeds size limit")
+                raise ExpertCatalogError("partner catalog exceeds size limit")
             try:
                 catalog = ExpertCatalog.model_validate_json(payload)
             except ValueError as exc:
-                raise ExpertCatalogError(f"invalid expert catalog: {exc}") from exc
+                raise ExpertCatalogError(f"invalid partner catalog: {exc}") from exc
             if cached is not None and _catalog_time(catalog.generated_at) < _catalog_time(
                 cached.catalog.generated_at
             ):
-                raise ExpertCatalogError("expert catalog rollback was rejected")
+                raise ExpertCatalogError("partner catalog rollback was rejected")
             return ExpertCatalogCache(
                 fetchedAt=datetime.now(timezone.utc).isoformat(),
                 sourceUrl=current,
                 etag=response.headers.get("etag"),
                 catalog=catalog,
             )
-        raise ExpertCatalogError("expert catalog redirect limit exceeded")
+        raise ExpertCatalogError("partner catalog redirect limit exceeded")
 
     def _write_cache(self, cache: ExpertCatalogCache) -> None:
         self.cache_path.parent.mkdir(parents=True, exist_ok=True)

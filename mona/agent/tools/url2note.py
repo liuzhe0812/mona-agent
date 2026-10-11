@@ -18,7 +18,7 @@ from mona.api.url2note import Url2NoteError, Url2NoteExtractor
 class Url2NoteTool(Tool):
     """Extract a URL only after the user explicitly asks for a note."""
 
-    _scopes = {"core"}
+    _scopes = {"core", "subagent"}
 
     def __init__(self, extractor: Url2NoteExtractor | None = None) -> None:
         self._extractor = extractor or Url2NoteExtractor()

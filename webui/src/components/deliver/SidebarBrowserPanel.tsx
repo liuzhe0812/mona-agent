@@ -24,11 +24,15 @@ export function SidebarBrowserPanel({
   visible,
   layoutVersion,
   controller,
+  showToolbar,
+  findRequest,
 }: {
   session: ChatSummary | null;
   visible: boolean;
   layoutVersion?: unknown;
   controller?: SidebarBrowserController;
+  showToolbar?: boolean;
+  findRequest?: number;
 }) {
   if (!controller?.tab) {
     return (
@@ -40,9 +44,12 @@ export function SidebarBrowserPanel({
   }
   return (
     <BrowserTabView
+      key={controller.tab.id}
       tab={controller.tab}
       isVisible={visible}
       layoutVersion={layoutVersion}
+      showToolbar={showToolbar}
+      findRequest={findRequest}
       session={session}
       onNavigate={controller.navigate}
       onGoBack={controller.goBack}

@@ -108,8 +108,6 @@ def project_history_for_agent(
     - The stored message dicts are never modified; new dicts are returned.
     """
     viewer = normalize_agent_id(viewer_agent_id)
-    if max_messages <= 0:
-        max_messages = _DEFAULT_MAX_MESSAGES
     projected: list[dict[str, Any]] = []
     # Filter internal/tool records before applying the cap. Session history
     # can contain many tool calls between two visible turns; slicing first
@@ -135,4 +133,4 @@ def project_history_for_agent(
         else:
             label = author_label(author, registry)
             projected.append({"role": "assistant", "content": f"[{label}] {content}"})
-    return projected[-max_messages:]
+    return projected[-max_messages:] if max_messages > 0 else projected

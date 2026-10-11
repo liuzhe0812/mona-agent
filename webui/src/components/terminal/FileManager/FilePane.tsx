@@ -1,6 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
-  ChevronRight,
   FolderPlus,
   RefreshCw,
   ArrowUp,
@@ -84,6 +83,7 @@ interface Props {
   currentPath: string;
   files: UnifiedFileItem[];
   loading: boolean;
+  error?: string | null;
   onNavigate: (path: string) => void;
   onOpen: (file: UnifiedFileItem) => void;
   onDelete: (file: UnifiedFileItem) => void;
@@ -192,6 +192,7 @@ export function FilePane({
   currentPath,
   files,
   loading,
+  error,
   onNavigate,
   onOpen,
   onDelete,
@@ -219,6 +220,7 @@ export function FilePane({
   const [selectedPaths, setSelectedPaths] = useState<Set<string>>(new Set());
   const lastSelectedIndexRef = useRef(-1);
   const [searchQuery, setSearchQuery] = useState("");
+  const [searchOpen, setSearchOpen] = useState(false);
   const [isDragOver, setIsDragOver] = useState(false);
   const dragCounterRef = useRef(0);
 
@@ -273,6 +275,7 @@ export function FilePane({
 
   const handleKeyDown = useCallback(
     (e: React.KeyboardEvent) => {
+      if ((e.target as HTMLElement).closest("input, textarea, [contenteditable=true]")) return;
       if ((e.ctrlKey || e.metaKey) && e.key === "a") {
         e.preventDefault();
         const all = new Set(displayFiles.map((f) => f.path));
@@ -422,20 +425,6 @@ export function FilePane({
     return currentPath.split("/").filter(Boolean);
   }, [currentPath, side]);
 
-  const handleBreadcrumbClick = (index: number) => {
-    if (side === "local") {
-      const normalized = currentPath.replace(/\\/g, "/");
-      const parts = normalized.split("/").filter(Boolean);
-      const path = parts.slice(0, index + 1).join("/");
-      onNavigate(
-        path.length >= 2 && path[1] === ":" ? path.replace(/\//g, "\\") : path,
-      );
-    } else {
-      const path = "/" + segments.slice(0, index + 1).join("/");
-      onNavigate(path);
-    }
-  };
-
   const handlePathSubmit = () => {
     if (editPath.trim()) {
       onNavigate(editPath.trim());
@@ -454,7 +443,7 @@ export function FilePane({
       const parts = currentPath.split(sep).filter(Boolean);
       if (parts.length <= 1) return;
       const parent = parts.slice(0, -1).join(sep);
-      onNavigate(parent || (currentPath.includes("\\") ? "C:\\" : "/"));
+      onNavigate(/^[A-Za-z]:$/.test(parent) ? parent + sep : currentPath.startsWith("/") ? "/" + parent : parent || "/");
     } else {
       const parent = segments.slice(0, -1).join("/");
       onNavigate(parent ? "/" + parent : "/");
@@ -470,6 +459,13 @@ export function FilePane({
     <div
       className="flex h-full flex-col outline-none relative"
       tabIndex={0}
+      role="region"
+      aria-label={`${label}文件`}
+      onMouseDown={(event) => {
+        if (!(event.target as HTMLElement).closest("button, input, textarea, [contenteditable=true]")) {
+          event.currentTarget.focus({ preventScroll: true });
+        }
+      }}
       onKeyDown={handleKeyDown}
       onFocus={onFocus}
       onDragEnter={handleDragEnter}
@@ -477,155 +473,50 @@ export function FilePane({
       onDragLeave={handleDragLeave}
       onDrop={handleDrop}
     >
-      <div className="flex h-8 shrink-0 items-center gap-1 border-b px-2 bg-muted/20">
-        <span className="text-micro font-medium text-muted-foreground uppercase tracking-wider shrink-0">
-          {label}
-        </span>
-        <div className="flex-1" />
-        <div className="relative">
-          <Search className="absolute left-1.5 top-1/2 -translate-y-1/2 h-3 w-3 text-muted-foreground" />
-          <Input
-            value={searchQuery}
-            onChange={(e) => setSearchQuery(e.target.value)}
-            placeholder="搜索..."
-            className="h-6 w-20 pl-6 pr-1.5 py-0 text-caption"
-          />
-        </div>
-        <Button
-          variant="ghost"
-          size="sm"
-          className="h-6 w-6 p-0"
-          onClick={onToggleHiddenFiles}
-          title={showHiddenFiles ? "隐藏隐藏文件" : "显示隐藏文件"}
-        >
-          {showHiddenFiles ? (
-            <Eye className="h-3 w-3" />
-          ) : (
-            <EyeOff className="h-3 w-3" />
-          )}
-        </Button>
-        {onUploadByPicker && (
-          <Button
-            variant="ghost"
-            size="sm"
-            className="h-6 gap-1 px-1.5 text-caption"
-            onClick={onUploadByPicker}
-            title="上传文件"
-          >
-            <Upload className="h-3 w-3" />
-          </Button>
-        )}
-        <Button
-          variant="ghost"
-          size="sm"
-          className="h-6 gap-1 px-1.5 text-caption"
-          onClick={onCreateFolder}
-          title="新建文件夹"
-        >
-          <FolderPlus className="h-3 w-3" />
-        </Button>
-        <Button
-          variant="ghost"
-          size="sm"
-          className="h-6 w-6 p-0"
-          onClick={onRefresh}
-          title="刷新"
-        >
-          <RefreshCw className="h-3 w-3" />
-        </Button>
-      </div>
-
-      <div className="flex h-8 shrink-0 items-center gap-1 border-b px-2">
-        <Button
-          variant="ghost"
-          size="sm"
-          className="h-6 w-6 p-0"
-          onClick={() => {
-            if (side === "local") {
-              onNavigate(currentPath.includes("\\") ? "C:\\" : "/");
-            } else {
-              onNavigate("/");
-            }
-          }}
-          title="根目录"
-        >
+      <div role="toolbar" aria-label={label + "文件工具栏"}
+        className="flex h-8 min-w-0 shrink-0 flex-nowrap items-center gap-1 border-b border-border bg-muted/20 px-2">
+        <span className="shrink-0 text-caption font-medium text-muted-foreground">{label}</span>
+        <Button variant="ghost" size="icon" className="h-6 w-6 shrink-0" title="根目录" aria-label={label + "根目录"}
+          onClick={() => onNavigate(side === "local" && /^[A-Za-z]:/.test(currentPath) ? currentPath.slice(0, 2) + "\\" : "/")}>
           <Home className="h-3 w-3" />
         </Button>
-        <Button
-          variant="ghost"
-          size="sm"
-          className="h-6 w-6 p-0"
-          onClick={handleParentDir}
-          disabled={isRoot}
-          title="上级目录"
-        >
-          <ArrowUp className="h-3 w-3" />
-        </Button>
-
-        <div className="min-w-0 flex-1 overflow-hidden">
+        <Button variant="ghost" size="icon" className="h-6 w-6 shrink-0" title="上级目录" aria-label={label + "上级目录"}
+          disabled={isRoot} onClick={handleParentDir}><ArrowUp className="h-3 w-3" /></Button>
+        <div className="min-w-0 flex-1">
           {editing ? (
-            <form
-              onSubmit={(e) => {
-                e.preventDefault();
-                handlePathSubmit();
-              }}
-              className="flex items-center"
-            >
-              <Input
-                value={editPath}
-                onChange={(e) => setEditPath(e.target.value)}
-                onBlur={handlePathSubmit}
-                onKeyDown={(e) => {
-                  if (e.key === "Escape") setEditing(false);
-                }}
-                className="h-5 px-1.5 py-0 text-caption"
-                autoFocus
-              />
+            <form onSubmit={(event) => { event.preventDefault(); handlePathSubmit(); }}>
+              <Input value={editPath} aria-label={label + "路径"} autoFocus
+                onChange={(event) => setEditPath(event.target.value)} onBlur={() => setEditing(false)}
+                onKeyDown={(event) => { if (event.key === "Escape") { event.preventDefault(); setEditing(false); } }}
+                className="h-6 min-w-0 px-1.5 py-0 text-caption" />
             </form>
           ) : (
-            <div
-              className="flex items-center gap-0.5 overflow-x-auto text-caption text-muted-foreground scrollbar-none"
-              onDoubleClick={handleStartEdit}
-            >
-              {side === "local" ? (
-                segments.map((seg, i) => (
-                  <span key={i} className="flex items-center gap-0.5">
-                    {i > 0 && (
-                      <ChevronRight className="h-3 w-3 shrink-0 opacity-40" />
-                    )}
-                    <button
-                      onClick={() => handleBreadcrumbClick(i)}
-                      className="shrink-0 rounded px-1 hover:bg-accent hover:text-foreground"
-                    >
-                      {seg}
-                    </button>
-                  </span>
-                ))
-              ) : (
-                <>
-                  <button
-                    onClick={() => onNavigate("/")}
-                    className="shrink-0 rounded px-1 hover:bg-accent hover:text-foreground"
-                  >
-                    /
-                  </button>
-                  {segments.map((seg, i) => (
-                    <span key={i} className="flex items-center gap-0.5">
-                      <ChevronRight className="h-3 w-3 shrink-0 opacity-40" />
-                      <button
-                        onClick={() => handleBreadcrumbClick(i)}
-                        className="shrink-0 rounded px-1 hover:bg-accent hover:text-foreground"
-                      >
-                        {seg}
-                      </button>
-                    </span>
-                  ))}
-                </>
-              )}
-            </div>
+            <button type="button" aria-label={label + "路径"} title={currentPath} onClick={handleStartEdit}
+              className="h-6 w-full min-w-0 truncate rounded px-1.5 text-left text-caption text-muted-foreground hover:bg-accent hover:text-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring">
+              {currentPath || "/"}
+            </button>
           )}
         </div>
+        {searchOpen && <Input value={searchQuery} autoFocus aria-label={"搜索" + label + "文件"} placeholder="搜索…"
+          onChange={(event) => setSearchQuery(event.target.value)}
+          onKeyDown={(event) => { if (event.key === "Escape") { setSearchOpen(false); setSearchQuery(""); } }}
+          className="h-6 w-24 shrink-0 px-1.5 py-0 text-caption" />}
+        <Button variant="ghost" size="icon" className="h-6 w-6 shrink-0" aria-label={"搜索" + label + "文件"}
+          title="搜索文件" aria-pressed={searchOpen} onClick={() => { setSearchOpen(!searchOpen); if (searchOpen) setSearchQuery(""); }}>
+          <Search className="h-3 w-3" />
+        </Button>
+        <Button variant="ghost" size="icon" className="h-6 w-6 shrink-0" onClick={onToggleHiddenFiles}
+          aria-label={label + (showHiddenFiles ? "隐藏隐藏文件" : "显示隐藏文件")} title={showHiddenFiles ? "隐藏隐藏文件" : "显示隐藏文件"}>
+          {showHiddenFiles ? <Eye className="h-3 w-3" /> : <EyeOff className="h-3 w-3" />}
+        </Button>
+        {onUploadByPicker && <Button variant="ghost" size="icon" className="h-6 w-6 shrink-0" onClick={onUploadByPicker}
+          aria-label="上传文件" title="上传文件"><Upload className="h-3 w-3" /></Button>}
+        <Button variant="ghost" size="icon" className="h-6 w-6 shrink-0" onClick={onCreateFolder}
+          aria-label={label + "新建文件夹"} title="新建文件夹"><FolderPlus className="h-3 w-3" /></Button>
+        <Button variant="ghost" size="icon" className="h-6 w-6 shrink-0" onClick={onRefresh}
+          aria-label={"刷新" + label + "目录"} title="刷新"><RefreshCw className="h-3 w-3" /></Button>
       </div>
+      {error && <div role="alert" className="shrink-0 break-words border-b border-border px-2 py-1 text-caption text-destructive">{error}</div>}
 
       <div className="flex-1 min-h-0 overflow-auto">
         {loading ? (

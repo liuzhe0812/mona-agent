@@ -213,6 +213,75 @@ describe("FilePreviewPanel", () => {
     expect(useFilePreviewStore.getState().file).toBeNull();
   });
 
+  it("pauses hidden downloads without retrying and reuses a completed image tab", async () => {
+    const file: DeliveredFile = {
+      ...artifact("picture.png"),
+      artifact_ref: {
+        id: "picture-ref", owner_kind: "agent", owner_id: "mona",
+        relative_path: "picture.png", created_by_agent_id: "mona",
+        created_at: "2026-09-30T00:00:00Z",
+      },
+    };
+    vi.mocked(fetchFilePreviewBlob).mockImplementationOnce((_token, params) => new Promise((_resolve, reject) => {
+      params.signal?.addEventListener("abort", () => reject(new DOMException("Cancelled", "AbortError")));
+    }));
+    const panel = render(wrap(<FilePreviewPanel previewFile={file} active={false} />));
+    expect(fetchFilePreviewBlob).not.toHaveBeenCalled();
+    panel.rerender(wrap(<FilePreviewPanel previewFile={file} active />));
+    await waitFor(() => expect(fetchFilePreviewBlob).toHaveBeenCalledOnce());
+    const signal = vi.mocked(fetchFilePreviewBlob).mock.calls[0][1].signal;
+    await act(async () => panel.rerender(wrap(<FilePreviewPanel previewFile={file} active={false} />)));
+    expect(signal?.aborted).toBe(true);
+    expect(fetchFilePreviewBlob).toHaveBeenCalledOnce();
+    expect(screen.queryByText(/加载预览失败/)).not.toBeInTheDocument();
+
+    panel.rerender(wrap(<FilePreviewPanel previewFile={file} active />));
+    const image = await screen.findByRole("img", { name: file.name });
+    const source = image.getAttribute("src");
+    expect(fetchFilePreviewBlob).toHaveBeenCalledTimes(2);
+    panel.rerender(wrap(<FilePreviewPanel previewFile={file} active={false} />));
+    panel.rerender(wrap(<FilePreviewPanel previewFile={file} active />));
+    expect(screen.getByRole("img", { name: file.name })).toHaveAttribute("src", source);
+    expect(fetchFilePreviewBlob).toHaveBeenCalledTimes(2);
+  });
+
+  it("reloads a changed file at the same path", async () => {
+    const file = { ...artifact("picture.png"), modified_at: "2026-09-30T00:00:00Z" };
+    const panel = render(wrap(<FilePreviewPanel previewFile={file} />));
+    await screen.findByRole("img", { name: file.name });
+    expect(fetchFilePreviewBlob).toHaveBeenCalledOnce();
+    panel.rerender(wrap(<FilePreviewPanel previewFile={{ ...file, modified_at: "2026-09-30T00:01:00Z" }} />));
+    await waitFor(() => expect(fetchFilePreviewBlob).toHaveBeenCalledTimes(2));
+    await screen.findByRole("img", { name: file.name });
+  });
+
+  it("cancels a pending preview when its panel closes", async () => {
+    vi.mocked(fetchFilePreviewBlob).mockImplementationOnce((_token, params) => new Promise((_resolve, reject) => {
+      params.signal?.addEventListener("abort", () => reject(new DOMException("Cancelled", "AbortError")));
+    }));
+    const panel = render(wrap(<FilePreviewPanel previewFile={artifact("pending.png")} />));
+    const signal = vi.mocked(fetchFilePreviewBlob).mock.calls[0][1].signal;
+    await act(async () => panel.unmount());
+    expect(signal?.aborted).toBe(true);
+    expect(fetchFilePreviewBlob).toHaveBeenCalledOnce();
+  });
+
+  it("cancels the HTML resource download with its preview", async () => {
+    vi.mocked(fetchFilePreviewBlob)
+      .mockResolvedValueOnce({ blob: new Blob(['<img src="picture.png">']), mime: "text/html" })
+      .mockImplementationOnce((_token, params) => new Promise((_resolve, reject) => {
+        params.signal?.addEventListener("abort", () => reject(new DOMException("Cancelled", "AbortError")));
+      }));
+    const file = artifact("page.html");
+    const panel = render(wrap(<FilePreviewPanel previewFile={file} active />));
+    await waitFor(() => expect(fetchFilePreviewBlob).toHaveBeenCalledTimes(2));
+    const signal = vi.mocked(fetchFilePreviewBlob).mock.calls[1][1].signal;
+    await act(async () => panel.rerender(wrap(<FilePreviewPanel previewFile={file} active={false} />)));
+    expect(signal?.aborted).toBe(true);
+    expect(fetchFilePreviewBlob).toHaveBeenCalledTimes(2);
+    expect(screen.queryByText(/加载预览失败/)).not.toBeInTheDocument();
+  });
+
   it("cycles through the scope file list with prev/next", async () => {
     const a = artifact("a.txt");
     const b = artifact("b.txt");
