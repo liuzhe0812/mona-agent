@@ -69,6 +69,7 @@ import { removeProject, resetApiBase } from "@/lib/api";
 import { browserHideTabsExcept } from "@/lib/browser-ipc";
 import { deriveTitle } from "@/lib/format";
 import { MonaClient } from "@/lib/mona-client";
+import { warmNativeProviderConnections } from "@/lib/native-provider-bootstrap";
 import type { ProfileArtifact, ProfileStartRequest } from "@/lib/profile-api";
 import { ClientProvider, useClientOptional, type RuntimeStatus } from "@/providers/ClientProvider";
 import type { ArtifactRef, ChatSummary, DeliveredFile } from "@/lib/types";
@@ -419,6 +420,11 @@ export default function App() {
   useEffect(() => {
     return connectRuntime();
   }, [connectRuntime]);
+
+  useEffect(() => {
+    if (state.status !== "ready") return;
+    void warmNativeProviderConnections();
+  }, [state.status]);
 
   const runtimeStatus: RuntimeStatus =
     state.status === "loading" ? "connecting" : state.status;

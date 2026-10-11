@@ -608,7 +608,11 @@ export interface ProviderModelsResult {
     id: string;
     name?: string;
     type?: string | null;
+    context_window?: number | null;
     input_modalities?: string[] | null;
+    reasoning_efforts?: string[];
+    default_reasoning_effort?: string | null;
+    supports_adaptive_thinking?: boolean;
   }>;
   /** Friendly Chinese error message from the backend; empty on success. */
   error?: string;
@@ -734,6 +738,7 @@ export async function updateProviderSettings(
   const effectiveBase = base ?? (await getApiBase());
   const query = new URLSearchParams();
   query.set("provider", update.provider);
+  if (update.modelEngines !== undefined) query.set("model_engines", JSON.stringify(update.modelEngines));
   if (update.customName !== undefined)
     query.set("custom_name", update.customName);
   if (update.apiBase !== undefined) query.set("api_base", update.apiBase);

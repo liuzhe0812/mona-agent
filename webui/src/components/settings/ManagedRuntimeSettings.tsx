@@ -223,7 +223,7 @@ export function ManagedRuntimeSettings({ token }: { token: string | null }) {
             onCheckedChange={(value) => void updateAutoDownload(value)}
           />
         </div>
-        {status?.components.map((component) => (
+        {status?.components.filter((component) => !["codex", "claude", "codebuddy"].includes(component.component)).map((component) => (
           <RuntimeRow
             key={component.component}
             component={component}

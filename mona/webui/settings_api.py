@@ -21,13 +21,18 @@ from loguru import logger
 from mona.config.loader import get_config_path, load_config, save_config
 from mona.config.schema import ModelGenerationParameters, ProviderConfig
 from mona.providers.capabilities import resolve_capabilities
-from mona.providers.cindy_catalog import CINDY_CHAT_PROVIDER_BY_ID, CINDY_CHAT_PROVIDERS
 from mona.providers.context_window import (
     resolve_model_context_window,
     resolve_model_context_window_details,
 )
 from mona.providers.image_generation import get_image_gen_provider
 from mona.providers.managed_catalog import managed_model_catalog as _managed_model_catalog
+from mona.providers.model_sources import (
+    CHAT_SOURCE_PROVIDER_BY_ID,
+    CHAT_SOURCE_PROVIDERS,
+    source_group,
+)
+from mona.providers.reasoning import managed_reasoning_metadata, normalize_reasoning_metadata
 from mona.providers.registry import (
     PROVIDERS,
     custom_provider_spec,
@@ -392,6 +397,9 @@ def _image_generation_provider_rows(config: Any) -> list[dict[str, Any]]:
             if provider_config is not None
             else False
         )
+        separate_image_key = spec.name == "openai" and bool(config.providers.openai_images.api_base)
+        image_key = config.providers.openai_images.api_key if separate_image_key else None
+        configured = bool(image_key) if separate_image_key else configured
         image_models = list(spec.image_models) if spec.image_models else []
         rows.append(
             {
@@ -399,9 +407,9 @@ def _image_generation_provider_rows(config: Any) -> list[dict[str, Any]]:
                 "label": spec.label,
                 "configured": configured,
                 "api_key_hint": _mask_secret_hint(
-                    getattr(provider_config, "api_key", None)
+                    (image_key if separate_image_key else getattr(provider_config, "api_key", None))
                     if provider_config is not None
-                    else None
+                    else image_key
                 ),
                 "api_base": getattr(provider_config, "api_base", None) if provider_config else None,
                 "default_api_base": spec.default_api_base or None,
@@ -737,7 +745,7 @@ def settings_payload(*, requires_restart: bool = False) -> dict[str, Any]:
         effective_preset,
         provider_name=selected_provider,
         managed_catalog=managed_catalog,
-    ).tokens
+    )
 
     providers = []
     for spec in PROVIDERS:
@@ -855,7 +863,8 @@ def settings_payload(*, requires_restart: bool = False) -> dict[str, Any]:
             "has_api_key": bool(provider and provider.api_key),
             "model_preset": active_preset_name,
             "max_tokens": effective_preset.max_tokens,
-            "context_window_tokens": effective_context_window,
+            "context_window_tokens": effective_context_window.tokens,
+            "context_window_source": effective_context_window.source,
             "auto_compact_token_limit": effective_preset.auto_compact_token_limit,
             "temperature": effective_preset.temperature,
             "reasoning_effort": effective_preset.reasoning_effort,
@@ -1056,8 +1065,12 @@ def update_agent_settings(query: QueryParams) -> dict[str, Any]:
     reasoning_effort = _query_first_alias(query, "reasoning_effort", "reasoningEffort")
     if reasoning_effort is not None:
         reasoning_effort = reasoning_effort.strip().lower()
-        if reasoning_effort not in {"none", "low", "medium", "high", "max", "adaptive"}:
-            raise WebUISettingsError("reasoning_effort is invalid")
+        current_model = next((item for row in _chat_provider_rows(config) if row["name"] == defaults.provider
+                              for item in row["models"] if item["id"] == defaults.model), {})
+        declared_efforts = current_model.get("reasoning_efforts")
+        allowed_efforts = declared_efforts if declared_efforts is not None else {"low", "medium", "high", "max", "adaptive"}
+        if reasoning_effort != "none" and reasoning_effort not in allowed_efforts:
+            raise WebUISettingsError("当前模型不支持所选思考强度，请重新选择。")
         normalized_effort = None if reasoning_effort == "none" else reasoning_effort
         if defaults.reasoning_effort != normalized_effort:
             defaults.reasoning_effort = normalized_effort
@@ -1291,6 +1304,18 @@ def update_provider_settings(query: QueryParams) -> dict[str, Any]:
     if not raw_provider_name:
         raise WebUISettingsError("provider is required")
     config = load_config()
+    if raw_provider_name == "openai_images":
+        if set(query) - {"provider", "api_key", "apiKey"}:
+            raise WebUISettingsError("图片 API Key 只支持保存或清除")
+        raw_key = _query_first_alias(query, "api_key", "apiKey")
+        if raw_key is None:
+            raise WebUISettingsError("请输入图片 API Key")
+        image_key = raw_key.strip() or None
+        if config.providers.openai_images.api_key != image_key or not config.providers.openai_images.api_base:
+            config.providers.openai_images.api_key = image_key
+            config.providers.openai_images.api_base = "https://api.openai.com/v1"
+            save_config(config)
+        return settings_payload()
     custom_name = _query_first_alias(query, "custom_name", "customName")
     creating_custom = raw_provider_name == "custom" and custom_name is not None
 
@@ -1316,7 +1341,7 @@ def update_provider_settings(query: QueryParams) -> dict[str, Any]:
             raise WebUISettingsError("unknown provider")
         provider_name = spec.name
         custom_entry = is_custom_provider_name(provider_name)
-        catalog_entry = CINDY_CHAT_PROVIDER_BY_ID.get(provider_name)
+        catalog_entry = CHAT_SOURCE_PROVIDER_BY_ID.get(provider_name)
         if custom_entry and provider_name not in config.providers.cindy:
             raise WebUISettingsError("unknown provider")
         provider_config = None
@@ -1365,7 +1390,7 @@ def update_provider_settings(query: QueryParams) -> dict[str, Any]:
                 for row in _chat_provider_rows(config)
                 if row["name"] != provider_name and row["configured"] and not row.get("is_builtin")
             ]
-            order = {entry.id: index for index, entry in enumerate(CINDY_CHAT_PROVIDERS)}
+            order = {entry.id: index for index, entry in enumerate(CHAT_SOURCE_PROVIDERS)}
             remaining.sort(
                 key=lambda row: (
                     row.get("region") != "cn",
@@ -1425,6 +1450,9 @@ def update_provider_settings(query: QueryParams) -> dict[str, Any]:
 
     changed = False
     models_updated = False
+    raw_engines = _query_first_alias(query, "model_engines", "modelEngines")
+    if raw_engines is not None:
+        raise WebUISettingsError("模型来源使用固定引擎，API 供应商模型由 Mona 调用。")
     if (
         catalog_entry is not None
         and not catalog_entry.api_base_editable
@@ -1486,11 +1514,13 @@ def update_provider_settings(query: QueryParams) -> dict[str, Any]:
             enabled = json.loads(raw_enabled or "[]")
         except json.JSONDecodeError:
             raise WebUISettingsError("enabled_models must be a JSON array") from None
-        if not isinstance(enabled, list) or not all(
+        if enabled is not None and (not isinstance(enabled, list) or not all(
             isinstance(item, str) for item in enabled
-        ):
+        )):
             raise WebUISettingsError("enabled_models must be a JSON array of strings")
         known_models = {item.id for item in catalog_entry.models} if catalog_entry else set()
+        if provider_name in {"openai", "anthropic"} and provider_config.model:
+            known_models.add(provider_config.model)
         if managed_entry:
             known_models.update(
                 str(item.get("id") or "").strip()
@@ -1516,9 +1546,9 @@ def update_provider_settings(query: QueryParams) -> dict[str, Any]:
                     for item in raw_items
                     if isinstance(item, dict) and item.get("id")
                 )
-        if any(item not in known_models for item in enabled):
+        if any(item not in known_models for item in enabled or []):
             raise WebUISettingsError("enabled_models contains an unknown model")
-        normalized_enabled = list(dict.fromkeys(enabled))
+        normalized_enabled = list(dict.fromkeys(enabled)) if enabled is not None else None
         if provider_config.enabled_models != normalized_enabled:
             provider_config.enabled_models = normalized_enabled
             changed = True
@@ -1546,10 +1576,12 @@ def update_provider_settings(query: QueryParams) -> dict[str, Any]:
                 continue
             context_window = item.get("contextWindow")
             if context_window is not None and (
-                isinstance(context_window, bool) or not isinstance(context_window, int)
+                isinstance(context_window, bool)
+                or not isinstance(context_window, int)
+                or context_window <= 0
             ):
                 raise WebUISettingsError(
-                    "discovered_models.contextWindow must be an integer"
+                    "discovered_models.contextWindow must be a positive integer"
                 )
             model_type = item.get("type")
             if model_type is not None and not isinstance(model_type, str):
@@ -1584,6 +1616,12 @@ def update_provider_settings(query: QueryParams) -> dict[str, Any]:
                     raise WebUISettingsError(
                         "discovered_models.inputModalities is too large"
                     )
+            try:
+                reasoning_metadata = normalize_reasoning_metadata(item, strict=True)
+            except ValueError as exc:
+                raise WebUISettingsError(
+                    f"discovered_models.{exc}"
+                ) from None
             if model_id in seen_discovered:
                 continue
             seen_discovered.add(model_id)
@@ -1602,6 +1640,7 @@ def update_provider_settings(query: QueryParams) -> dict[str, Any]:
                         if input_modalities is not None
                         else {}
                     ),
+                    **reasoning_metadata,
                 }
             )
         existing_discovered = list(provider_config.discovered_models or [])
@@ -1619,9 +1658,25 @@ def update_provider_settings(query: QueryParams) -> dict[str, Any]:
             updates: dict[str, Any] = {}
             if incoming and incoming.get("type"):
                 updates["type"] = incoming["type"]
+            if incoming and "context_window" in incoming:
+                updates["context_window"] = incoming["context_window"]
             if incoming and "input_modalities" in incoming:
                 updates["input_modalities"] = incoming["input_modalities"]
-            merged_discovered.append({**item, **updates})
+            merged_item = {**item, **updates}
+            for field in ("default_reasoning_effort", "supports_adaptive_thinking"):
+                if incoming and field in incoming:
+                    merged_item[field] = incoming[field]
+            if incoming and "reasoning_efforts" in incoming:
+                merged_item["reasoning_efforts"] = incoming["reasoning_efforts"]
+                if "default_reasoning_effort" in incoming:
+                    merged_item["default_reasoning_effort"] = incoming[
+                        "default_reasoning_effort"
+                    ]
+                elif item.get("default_reasoning_effort") not in incoming[
+                    "reasoning_efforts"
+                ]:
+                    merged_item.pop("default_reasoning_effort", None)
+            merged_discovered.append(merged_item)
         merged_discovered.extend(
             item for item in normalized_discovered if item["id"] not in existing_ids
         )
@@ -1631,6 +1686,8 @@ def update_provider_settings(query: QueryParams) -> dict[str, Any]:
 
         if provider_config.enabled_models is not None:
             known_models = {item.id for item in catalog_entry.models} if catalog_entry else set()
+            if provider_name in {"openai", "anthropic"} and provider_config.model:
+                known_models.add(provider_config.model)
             known_models.update(
                 str(item.get("id"))
                 for item in merged_discovered
@@ -2162,9 +2219,9 @@ def _chat_provider_config(config: Any, provider_name: str) -> Any:
 
 
 def _chat_provider_rows(config: Any) -> list[dict[str, Any]]:
-    """Return Cindy's chat catalog with persisted state and no secrets."""
+    """Return official and user-added model sources without credential values."""
     rows: list[dict[str, Any]] = []
-    for entry in CINDY_CHAT_PROVIDERS:
+    for entry in CHAT_SOURCE_PROVIDERS:
         provider_config = _chat_provider_config(config, entry.id)
         configured = bool(provider_config) and (
             bool(provider_config.api_key) or not entry.api_key_required
@@ -2184,10 +2241,24 @@ def _chat_provider_rows(config: Any) -> list[dict[str, Any]]:
             }
             for model in entry.models
         ]
-        seen_ids = {model["id"] for model in catalog_models}
+        if entry.id in {"openai", "anthropic"} and provider_config and provider_config.model:
+            catalog_models.append({"id": provider_config.model, "name": provider_config.model, "type": "chat", "context_window": None})
+        catalog_by_id = {model["id"]: model for model in catalog_models}
+        seen_ids = set(catalog_by_id)
         for model in (provider_config.discovered_models if provider_config else None) or []:
             model_id = str(model.get("id") or "").strip()
-            if not model_id or model_id in seen_ids:
+            if not model_id:
+                continue
+            reasoning_metadata = normalize_reasoning_metadata(model)
+            if model_id in seen_ids:
+                declared_type = str(model.get("type") or "").strip().lower()
+                if declared_type:
+                    catalog_by_id[model_id]["type"] = declared_type
+                if model.get("context_window") is not None:
+                    catalog_by_id[model_id]["context_window"] = model[
+                        "context_window"
+                    ]
+                catalog_by_id[model_id].update(reasoning_metadata)
                 continue
             seen_ids.add(model_id)
             catalog_models.append(
@@ -2197,17 +2268,22 @@ def _chat_provider_rows(config: Any) -> list[dict[str, Any]]:
                     "type": str(model.get("type") or "").strip().lower() or None,
                     "context_window": model.get("context_window"),
                     "input_modalities": model.get("input_modalities"),
+                    **reasoning_metadata,
                 }
             )
         rows.append(
             {
                 "name": entry.id,
                 "label": entry.name,
+                "source_group": source_group(entry.id),
                 "configured": configured,
                 "api_key_required": entry.api_key_required,
                 "api_key_hint": _mask_secret_hint(
                     provider_config.api_key if provider_config else None
                 ),
+                **({"image_api_key_hint": _mask_secret_hint(
+                    config.providers.openai_images.api_key
+                )} if entry.id == "openai" else {}),
                 "api_base": (
                     provider_config.api_base
                     if provider_config and entry.api_base_editable
@@ -2266,6 +2342,7 @@ def _chat_provider_rows(config: Any) -> list[dict[str, Any]]:
                     "cached_input_amount_per_million": item.get("cached_input_amount_per_million"),
                     "output_amount_per_million": item.get("output_amount_per_million"),
                     "billing_type": "token",
+                    **managed_reasoning_metadata(item),
                     **promotion_fields,
                 }
             )
@@ -2280,6 +2357,7 @@ def _chat_provider_rows(config: Any) -> list[dict[str, Any]]:
             {
                 "name": managed.name,
                 "label": managed.display_name,
+                "source_group": "mona",
                 "configured": managed_catalog["available"] is True and bool(managed_models),
                 "api_key_required": False,
                 "api_base": managed.default_api_base,
@@ -2321,13 +2399,17 @@ def _chat_provider_rows(config: Any) -> list[dict[str, Any]]:
                     "type": str(model.get("type") or "").strip().lower() or None,
                     "context_window": model.get("context_window"),
                     "input_modalities": model.get("input_modalities"),
+                    **normalize_reasoning_metadata(model),
                 }
             )
-        selected = list(provider_config.enabled_models or [])
+        selected = list(provider_config.enabled_models) if provider_config.enabled_models is not None else [
+            model["id"] for model in discovered_models if model.get("type") in {"chat", "language", "text", "llm"}
+        ]
         rows.append(
             {
                 "name": provider_name,
                 "label": provider_config.display_name or provider_name,
+                "source_group": "custom",
                 "configured": bool(
                     provider_config.display_name
                     and provider_config.api_base
@@ -2352,6 +2434,9 @@ def _chat_provider_rows(config: Any) -> list[dict[str, Any]]:
                 "is_custom": True,
             }
         )
+    for row in rows:
+        for model in row["models"]:
+            model["engine"] = "mona"
     return rows
 
 
@@ -2383,7 +2468,7 @@ def _ensure_enabled_model_default(config: Any) -> bool:
         return False
 
     preferred = [choice for choice in choices if not choice[0].get("is_builtin")]
-    order = {entry.id: index for index, entry in enumerate(CINDY_CHAT_PROVIDERS)}
+    order = {entry.id: index for index, entry in enumerate(CHAT_SOURCE_PROVIDERS)}
     preferred.sort(
         key=lambda choice: (
             choice[0].get("region") != "cn",
@@ -2436,8 +2521,7 @@ def _models_url_for(backend: str, api_base: str, provider_name: str = "") -> str
             return f"{base.rstrip('/')}/models"
         return f"{base.rstrip('/')}/compatible-mode/v1/models"
 
-    # Anthropic native API has no public /v1/models, but relays that
-    # expose Claude through an OpenAI shim usually do — still try /v1/models.
+    # Official and compatible APIs expose their catalog at /v1/models.
     if backend_l in ("openai_compat", "anthropic"):
         # Normalise: strip trailing /v1/chat/completions, /chat/completions,
         # or /v1 so we can re-append a canonical /v1/models.
@@ -2472,8 +2556,25 @@ def _model_input_modalities(item: dict[str, Any]) -> list[str] | None:
     return None
 
 
+def _model_context_window(item: dict[str, Any]) -> int | None:
+    for field in (
+        "context_window",
+        "contextWindow",
+        "context_length",
+        "contextLength",
+        "max_context_length",
+        "max_input_tokens",
+        "inputTokenLimit",
+        "input_token_limit",
+    ):
+        value = item.get(field)
+        if isinstance(value, int) and not isinstance(value, bool) and value > 0:
+            return value
+    return None
+
+
 def _parse_model_details_payload(payload: Any) -> list[dict[str, Any]]:
-    """Extract model IDs and optional model types from arbitrary shapes.
+    """Extract model IDs and optional model metadata from arbitrary shapes.
 
     Accepted shapes (any of):
       - ``{"data": [{"id": "gpt-4o"}, ...]}``        (OpenAI standard)
@@ -2501,12 +2602,14 @@ def _parse_model_details_payload(payload: Any) -> list[dict[str, Any]]:
             label = name
             model_type = None
             input_modalities = None
+            context_window = None
         elif isinstance(item, dict):
             name = str(item.get("id") or item.get("name") or "").strip()
             label = str(item.get("name") or name).strip() or name
             raw_type = item.get("type")
             model_type = raw_type.strip().lower() if isinstance(raw_type, str) else None
             input_modalities = _model_input_modalities(item)
+            context_window = _model_context_window(item)
         else:
             continue
         if not name or name in seen:
@@ -2518,6 +2621,16 @@ def _parse_model_details_payload(payload: Any) -> list[dict[str, Any]]:
                 "name": label,
                 "type": model_type,
                 "input_modalities": input_modalities,
+                **(
+                    {"context_window": context_window}
+                    if context_window is not None
+                    else {}
+                ),
+                **(
+                    normalize_reasoning_metadata(item)
+                    if isinstance(item, dict)
+                    else {}
+                ),
             }
         )
     return out
@@ -2539,7 +2652,7 @@ async def probe_provider_model_details(
     spec = find_by_name(provider_name)
     if spec is None:
         raise WebUISettingsError("unknown provider")
-    catalog_entry = CINDY_CHAT_PROVIDER_BY_ID.get(spec.name)
+    catalog_entry = CHAT_SOURCE_PROVIDER_BY_ID.get(spec.name)
 
     # OAuth / non-HTTP providers (Codex, Copilot, Bedrock) can't be probed.
     if spec.is_oauth or spec.backend in ("openai_codex", "github_copilot", "bedrock", "azure_openai"):

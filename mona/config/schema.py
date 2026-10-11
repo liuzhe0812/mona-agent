@@ -222,9 +222,10 @@ class ProviderConfig(Base):
     api_key: str | None = None
     api_base: str | None = None
     model: str | None = None  # Last-used model for this provider
-    # Chat settings only: an empty value follows the provider catalog defaults;
-    # a populated list is the user's explicit visible-model selection.
+    # Chat settings only: None follows catalog defaults; an empty list hides all
+    # models, while a populated list is the explicit visible-model selection.
     enabled_models: list[str] | None = None
+    model_engines: dict[str, Literal["mona", "codex", "claude"]] = Field(default_factory=dict)
     discovered_models: list[dict[str, Any]] | None = None
     extra_headers: dict[str, str] | None = None  # Custom headers (e.g. APP-Code for AiHubMix)
     extra_body: dict[str, Any] | None = None  # Extra fields merged into every request body
@@ -246,6 +247,7 @@ class ProvidersConfig(Base):
     bedrock: BedrockProviderConfig = Field(default_factory=BedrockProviderConfig)  # AWS Bedrock Converse
     anthropic: ProviderConfig = Field(default_factory=ProviderConfig)
     openai: ProviderConfig = Field(default_factory=ProviderConfig)
+    openai_images: ProviderConfig = Field(default_factory=ProviderConfig)
     openrouter: ProviderConfig = Field(default_factory=ProviderConfig)
     huggingface: ProviderConfig = Field(default_factory=ProviderConfig)
     skywork: ProviderConfig = Field(default_factory=ProviderConfig)  # Skywork / APIFree API gateway

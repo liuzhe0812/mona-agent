@@ -13,6 +13,7 @@ import time
 import uuid
 from collections import deque
 from collections.abc import Awaitable, Callable
+from contextlib import aclosing
 from ipaddress import ip_address
 from typing import TYPE_CHECKING, Any
 from urllib.parse import urlparse
@@ -274,6 +275,29 @@ def _deep_merge(base: dict[str, Any], override: dict[str, Any]) -> dict[str, Any
     return merged
 
 
+async def _read_stream(stream: Any, idle_timeout_s: float):
+    """Own both the SDK response and its iterator, including interrupted reads."""
+    iterator = stream.__aiter__()
+    try:
+        while True:
+            try:
+                yield await asyncio.wait_for(iterator.__anext__(), timeout=idle_timeout_s)
+            except StopAsyncIteration:
+                return
+    finally:
+        try:
+            close_iterator = getattr(iterator, "aclose", None)
+            if close_iterator is not None:
+                await close_iterator()
+        finally:
+            # SDK AsyncStream uses close(); plain async generators use aclose().
+            close = getattr(stream, "close", None)
+            if close is None and stream is not iterator:
+                close = getattr(stream, "aclose", None)
+            if close is not None:
+                await close()
+
+
 class OpenAICompatProvider(LLMProvider):
     """Unified provider for all OpenAI-compatible APIs.
 
@@ -327,8 +351,8 @@ class OpenAICompatProvider(LLMProvider):
         import httpx
 
         timeout_s = _openai_compat_timeout_s()
-        http_client: httpx.AsyncClient | None = None
-        if self._is_local:
+        http_client: httpx.AsyncClient | None = self.http_client_factory() if self.http_client_factory else None
+        if http_client is None and self._is_local:
             # Local model servers (Ollama, llama.cpp, vLLM) often close idle
             # HTTP connections before the client-side keepalive expires. When
             # two LLM calls happen seconds apart (e.g. heartbeat _decide then
@@ -342,7 +366,7 @@ class OpenAICompatProvider(LLMProvider):
                 limits=httpx.Limits(keepalive_expiry=0),
                 timeout=timeout_s,
             )
-        elif self._no_auth:
+        elif http_client is None and self._no_auth:
             # Keyless providers reject Authorization headers; strip them.
             async def _strip_auth(request: httpx.Request) -> None:
                 request.headers.pop("authorization", None)
@@ -353,6 +377,18 @@ class OpenAICompatProvider(LLMProvider):
                     "request": [_strip_auth],
                 },
             )
+        if http_client is None:
+            # Keep the transport on Mona's declared HTTPX dependency. SDK v3's
+            # implicit HTTPX2 pool leaves nested async generators during shutdown;
+            # explicit transport ownership avoids sleeps or suppressed cleanup errors.
+            http_client = httpx.AsyncClient(
+                timeout=timeout_s, follow_redirects=True,
+                limits=httpx.Limits(max_connections=1000, max_keepalive_connections=100),
+            )
+        if self.http_client_factory and self._no_auth:
+            async def _strip_bridge_auth(request: httpx.Request) -> None:
+                request.headers.pop("authorization", None)
+            http_client.event_hooks["request"].append(_strip_bridge_auth)
         self._client = AsyncOpenAI(
             api_key=self._api_key_for_client,
             base_url=self._effective_base,
@@ -384,6 +420,12 @@ class OpenAICompatProvider(LLMProvider):
 
             self._build_client()
             return self._client
+
+    async def aclose(self) -> None:
+        """Release this provider's client after its owner has finished all requests."""
+        if self._client is not None:
+            await self._client.close()
+            self._client = None
 
     def _setup_env(self, api_key: str, api_base: str | None) -> None:
         """Set environment variables based on provider spec."""
@@ -1324,28 +1366,18 @@ class OpenAICompatProvider(LLMProvider):
                         timeout=idle_timeout_s,
                     )
 
-                    async def _timed_stream():
-                        stream_iter = stream.__aiter__()
-                        while True:
-                            try:
-                                yield await asyncio.wait_for(
-                                    stream_iter.__anext__(),
-                                    timeout=idle_timeout_s,
-                                )
-                            except StopAsyncIteration:
-                                break
-
-                    (
-                        content,
-                        tool_calls,
-                        finish_reason,
-                        usage,
-                        reasoning_content,
-                    ) = await consume_sdk_stream(
-                        _timed_stream(),
-                        on_content_delta,
-                        on_tool_call_delta=on_tool_call_delta,
-                    )
+                    async with aclosing(_read_stream(stream, idle_timeout_s)) as events:
+                        (
+                            content,
+                            tool_calls,
+                            finish_reason,
+                            usage,
+                            reasoning_content,
+                        ) = await consume_sdk_stream(
+                            events,
+                            on_content_delta,
+                            on_tool_call_delta=on_tool_call_delta,
+                        )
                     self._record_responses_success(model, reasoning_effort)
                     return LLMResponse(
                         content=content or None,
@@ -1381,51 +1413,44 @@ class OpenAICompatProvider(LLMProvider):
                 timeout=idle_timeout_s,
             )
             chunks: list[Any] = []
-            stream_iter = stream.__aiter__()
-            while True:
-                try:
-                    chunk = await asyncio.wait_for(
-                        stream_iter.__anext__(),
-                        timeout=idle_timeout_s,
-                    )
-                except StopAsyncIteration:
-                    break
-                chunks.append(chunk)
-                if chunk.choices:
-                    delta_obj = chunk.choices[0].delta
-                    if on_content_delta:
-                        text = getattr(delta_obj, "content", None)
-                        if text:
-                            await on_content_delta(text)
-                    if on_thinking_delta:
-                        reasoning = getattr(delta_obj, "reasoning_content", None) or getattr(
-                            delta_obj, "reasoning", None,
-                        )
-                        r_text = self._extract_text_content(reasoning)
-                        if r_text:
-                            await on_thinking_delta(r_text)
-                    if on_tool_call_delta:
-                        for idx, tool_delta in enumerate(
-                            getattr(delta_obj, "tool_calls", None) or []
-                        ):
-                            fn = _get(tool_delta, "function")
-                            tool_index = _get(tool_delta, "index")
-                            await on_tool_call_delta({
-                                "index": tool_index if tool_index is not None else idx,
-                                "call_id": str(_get(tool_delta, "id") or ""),
-                                "name": str(_get(fn, "name") or "") if fn is not None else "",
-                                "arguments_delta": (
-                                    str(_get(fn, "arguments") or "") if fn is not None else ""
-                                ),
-                            })
-                        function_call = getattr(delta_obj, "function_call", None)
-                        if function_call:
-                            await on_tool_call_delta({
-                                "index": 0,
-                                "call_id": "",
-                                "name": str(_get(function_call, "name") or ""),
-                                "arguments_delta": str(_get(function_call, "arguments") or ""),
-                            })
+            async with aclosing(_read_stream(stream, idle_timeout_s)) as events:
+                async for chunk in events:
+                    chunks.append(chunk)
+                    if chunk.choices:
+                        delta_obj = chunk.choices[0].delta
+                        if on_content_delta:
+                            text = getattr(delta_obj, "content", None)
+                            if text:
+                                await on_content_delta(text)
+                        if on_thinking_delta:
+                            reasoning = getattr(delta_obj, "reasoning_content", None) or getattr(
+                                delta_obj, "reasoning", None,
+                            )
+                            r_text = self._extract_text_content(reasoning)
+                            if r_text:
+                                await on_thinking_delta(r_text)
+                        if on_tool_call_delta:
+                            for idx, tool_delta in enumerate(
+                                getattr(delta_obj, "tool_calls", None) or []
+                            ):
+                                fn = _get(tool_delta, "function")
+                                tool_index = _get(tool_delta, "index")
+                                await on_tool_call_delta({
+                                    "index": tool_index if tool_index is not None else idx,
+                                    "call_id": str(_get(tool_delta, "id") or ""),
+                                    "name": str(_get(fn, "name") or "") if fn is not None else "",
+                                    "arguments_delta": (
+                                        str(_get(fn, "arguments") or "") if fn is not None else ""
+                                    ),
+                                })
+                            function_call = getattr(delta_obj, "function_call", None)
+                            if function_call:
+                                await on_tool_call_delta({
+                                    "index": 0,
+                                    "call_id": "",
+                                    "name": str(_get(function_call, "name") or ""),
+                                    "arguments_delta": str(_get(function_call, "arguments") or ""),
+                                })
             return self._parse_chunks(chunks)
         except asyncio.TimeoutError:
             return LLMResponse(

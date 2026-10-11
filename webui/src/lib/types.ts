@@ -828,6 +828,7 @@ export interface SettingsPayload {
     model_preset: string | null;
     max_tokens: number;
     context_window_tokens: number;
+    context_window_source?: string;
     auto_compact_token_limit: number | null;
     temperature: number;
     reasoning_effort: string | null;
@@ -889,6 +890,7 @@ export interface SettingsPayload {
       price_tier?: string | null;
       reasoning_efforts?: string[];
       default_reasoning_effort?: string | null;
+      supports_adaptive_thinking?: boolean;
       input_amount_per_million?: string | null;
       cached_input_amount_per_million?: string | null;
       output_amount_per_million?: string | null;
@@ -1085,17 +1087,21 @@ export interface SettingsUpdate {
 
 export interface ProviderSettingsUpdate {
   provider: string;
+  modelEngines?: Record<string, "mona" | "codex" | "claude">;
   customName?: string;
   apiKey?: string;
   apiBase?: string;
   model?: string;
-  enabledModels?: string[];
+  enabledModels?: string[] | null;
   discoveredModels?: Array<{
     id: string;
     name?: string;
     type?: string | null;
     contextWindow?: number | null;
     inputModalities?: string[] | null;
+    reasoningEfforts?: string[];
+    defaultReasoningEffort?: string | null;
+    supportsAdaptiveThinking?: boolean;
   }>;
   delete?: boolean;
 }

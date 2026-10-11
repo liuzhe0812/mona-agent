@@ -8,6 +8,7 @@ import {
   fetchProviderModels,
   fetchSidebarState,
   fetchWebuiThread,
+  fetchFilePreviewBlob,
   listSessions,
   listSlashCommands,
   removeProject,
@@ -124,6 +125,29 @@ describe("webui API helpers", () => {
           Authorization: "Bearer tok",
           "X-Mona-Provider-Key": "sk-deepseek",
         },
+      }),
+    );
+  });
+
+  it("forwards file preview cancellation to the fetch request", async () => {
+    const signal = new AbortController().signal;
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(new Response("pixels", {
+      headers: { "Content-Type": "image/png" },
+    })));
+
+    const result = await fetchFilePreviewBlob("tok", {
+      scope: "shared",
+      path: "images/example.png",
+      signal,
+    }, "");
+
+    expect(result.mime).toBe("image/png");
+    expect(await result.blob.text()).toBe("pixels");
+    expect(fetch).toHaveBeenCalledWith(
+      "/api/file-preview?scope=shared&path=images%2Fexample.png",
+      expect.objectContaining({
+        headers: { Authorization: "Bearer tok" },
+        signal,
       }),
     );
   });

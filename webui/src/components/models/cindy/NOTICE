@@ -1,0 +1,14 @@
+Cindy EffortSlider adaptation
+
+webui/src/components/models/EffortSlider.tsx is adapted from Cindy's
+apps/desktop/src/renderer/components/ui/effort-slider.tsx.
+Copyright 2026 XD Inc.
+Licensed under the Apache License, Version 2.0; see LICENSE in this directory.
+
+The adaptation uses Mona's semantic styles, labels and model-selection callback.
+The Python model metadata normalization in mona/providers/reasoning.py follows
+Cindy packages/model-providers/src/modelDiscovery.ts, with Mona field names and
+additional DeepSeek / Anthropic capability response support.
+The managed model baseline uses selected explicit entries from Cindy
+packages/model-providers/catalog/provider-models.json, scoped to Mona's
+reviewed managed model IDs; other provider routes do not inherit these entries.
