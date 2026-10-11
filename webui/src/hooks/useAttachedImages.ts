@@ -40,13 +40,17 @@ export type AttachmentError =
 
 export const MAX_IMAGES_PER_MESSAGE = 4;
 
-/** MIME whitelist — mirrors the server's and the ``<input accept>`` attr. */
+/** Formats supported by the inline image encoder and server. */
 const ACCEPTED_MIMES: ReadonlySet<string> = new Set([
   "image/png",
   "image/jpeg",
   "image/webp",
   "image/gif",
 ]);
+
+export function isInlineImage(file: File): boolean {
+  return ACCEPTED_MIMES.has(file.type);
+}
 
 function uuid(): string {
   if (typeof crypto !== "undefined" && "randomUUID" in crypto) {
@@ -121,7 +125,7 @@ export function useAttachedImages(): UseAttachedImagesApi {
       let slot = MAX_IMAGES_PER_MESSAGE - imagesRef.current.length;
 
       for (const file of files) {
-        if (!ACCEPTED_MIMES.has(file.type)) {
+        if (!isInlineImage(file)) {
           rejected.push({ file, reason: "unsupported_type" });
           continue;
         }

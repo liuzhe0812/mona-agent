@@ -3161,6 +3161,8 @@ export interface FilePreviewParams {
   /** Structured owner reference id when the row came from an explicit
    *  session/room delivery. */
   artifactId?: string | null;
+  /** Abort in-flight preview and resource requests when the target changes. */
+  signal?: AbortSignal;
 }
 
 /** Fetch a file preview as a Blob using an authenticated request.
@@ -3185,6 +3187,7 @@ export async function fetchFilePreviewBlob(
   const url = `${effectiveBase}/api/file-preview?${query.toString()}`;
   const res = await httpFetch(url, {
     headers: { Authorization: `Bearer ${token}` },
+    ...(params.signal ? { signal: params.signal } : {}),
   });
   if (!res.ok) {
     throw new ApiError(res.status, `HTTP ${res.status}`);

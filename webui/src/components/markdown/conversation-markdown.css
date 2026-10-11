@@ -1,0 +1,24 @@
+  .conversation-markdown {
+    @apply text-body text-foreground;
+    overflow-wrap: anywhere;
+    line-height: 1.8;
+  }
+  .conversation-markdown :is(h1, h2, h3, h4, h5, h6) {
+    @apply mb-2 mt-6 font-semibold tracking-tight text-foreground;
+  }
+  .conversation-markdown h1 { @apply text-title; }
+  .conversation-markdown h2 { @apply text-title-sm; }
+  .conversation-markdown :is(h3, h4, h5, h6) { @apply text-body font-semibold; }
+  .conversation-markdown p { @apply my-3; }
+  .conversation-markdown :is(ul, ol) { @apply my-3 pl-6; }
+  .conversation-markdown li { @apply my-1 pl-1; }
+  .conversation-markdown li > :is(ul, ol) { @apply my-1; }
+  .conversation-markdown blockquote { @apply my-4 border-l-2 border-border pl-4 font-normal not-italic text-muted-foreground; }
+  .conversation-markdown blockquote p::before,
+  .conversation-markdown blockquote p::after { content: none; }
+  .conversation-markdown hr { @apply my-6 border-border; }
+  .conversation-markdown .katex-display { @apply my-4 max-w-full overflow-x-auto overflow-y-hidden py-2; }
+  .conversation-markdown .katex { font-size: 1.1em; }
+  .conversation-markdown pre { overflow-wrap: normal; }
+  .conversation-markdown > :first-child { margin-top: 0; }
+  .conversation-markdown > :last-child { margin-bottom: 0; }

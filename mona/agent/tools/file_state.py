@@ -125,6 +125,11 @@ class FileStates:
         """Return the raw ReadState entry for a path, or None."""
         return self._state.get(str(Path(path).resolve()))
 
+    def invalidate_read_dedup(self) -> None:
+        """After context compaction, return content again but keep freshness hashes."""
+        for entry in self._state.values():
+            entry.can_dedup = False
+
     def clear(self) -> None:
         """Clear all tracked state (useful for testing)."""
         self._state.clear()

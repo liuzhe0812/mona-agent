@@ -2,6 +2,7 @@
 
 import difflib
 import hashlib
+import json
 import mimetypes
 import os
 from dataclasses import dataclass
@@ -12,6 +13,7 @@ from mona.agent.tools.base import Tool, tool_parameters
 from mona.agent.tools.file_state import FileStates, _hash_file, current_file_states
 from mona.agent.tools.path_utils import get_current_workspace, resolve_workspace_path
 from mona.agent.tools.schema import (
+    ArraySchema,
     BooleanSchema,
     IntegerSchema,
     StringSchema,
@@ -433,8 +435,8 @@ class WriteFileTool(_FsTool):
         return (
             "Create a new file or intentionally replace an entire file with "
             "the provided content. Overwrites existing files and creates parent "
-            "directories as needed. For code changes or partial edits, prefer "
-            "apply_patch; use edit_file only for small exact replacements."
+            "directories as needed. For partial changes, use edit_file with "
+            "exact text from the current file; multiple disjoint edits can share one call."
         )
 
     async def execute(self, path: str | None = None, content: str | None = None, **kwargs: Any) -> str:
@@ -726,7 +728,12 @@ def _best_window(old_text: str, content: str) -> tuple[float, int, list[str], li
             minimum=1,
             nullable=True,
         ),
-        required=["path", "old_text", "new_text"],
+        edits=ArraySchema(items={"type": "object", "properties": {
+            "old_text": {"type": "string", "minLength": 1}, "new_text": {"type": "string"}},
+            "required": ["old_text", "new_text"], "additionalProperties": False},
+            description="Optional batch: each unique non-overlapping old_text matches the ORIGINAL file, not earlier replacements. Do not combine with single-edit arguments.", min_items=1, max_items=100),
+        expected_sha256=StringSchema("Optional current source SHA256; rejects stale edits", nullable=True),
+        required=["path"],
     )
 )
 class EditFileTool(_FsTool):
@@ -743,10 +750,10 @@ class EditFileTool(_FsTool):
     @property
     def description(self) -> str:
         return (
-            "Perform a small, exact replacement in one file by replacing "
-            "old_text with new_text. Use this for narrow text substitutions "
-            "with old_text copied from read_file. For multi-file, structural, "
-            "or generated code edits, prefer apply_patch. If old_text matches "
+            "Edit one file using exact text from its current content. Use edits[] "
+            "for multiple disjoint replacements: all targets must be unique in the "
+            "ORIGINAL file; overlap or any mismatch rejects the whole batch. "
+            "Single replacements also accept old_text/new_text. If old_text matches "
             "multiple times, provide more context or set occurrence, line_hint, "
             "replace_all, and expected_replacements. Shows closest-match "
             "diagnostics on failure."
@@ -761,11 +768,22 @@ class EditFileTool(_FsTool):
         self, path: str | None = None, old_text: str | None = None,
         new_text: str | None = None,
         replace_all: bool = False, occurrence: int | None = None,
-        line_hint: int | None = None, expected_replacements: int | None = None, **kwargs: Any,
-    ) -> str:
+        line_hint: int | None = None, expected_replacements: int | None = None,
+        edits: list[dict] | None = None, expected_sha256: str | None = None, **kwargs: Any,
+    ) -> Any:
         try:
             if not path:
                 raise ValueError("Unknown path")
+            if edits is not None:
+                from mona.agent.tools.file_edits import apply_exact_edits
+                if old_text is not None or new_text is not None or replace_all or occurrence is not None or line_hint is not None or expected_replacements is not None:
+                    return "Error: edits cannot be combined with single-edit arguments."
+                target = self._resolve(path)
+                previous = self._file_states.get(target)
+                source_sha = expected_sha256 or (previous.content_hash if previous else None)
+                result = apply_exact_edits(target, edits, source_sha)
+                self._file_states.record_write(target)
+                return json.dumps(result, ensure_ascii=False)
             if old_text is None:
                 raise ValueError("Unknown old_text")
             if new_text is None:
@@ -810,6 +828,8 @@ class EditFileTool(_FsTool):
             warning = self._file_states.check_read(fp)
 
             raw = fp.read_bytes()
+            if expected_sha256 is not None and hashlib.sha256(raw).hexdigest() != expected_sha256:
+                return "Error: File changed since the supplied SHA256; re-read before editing."
             uses_crlf = b"\r\n" in raw
             content = raw.decode("utf-8").replace("\r\n", "\n")
             norm_old = old_text.replace("\r\n", "\n")
