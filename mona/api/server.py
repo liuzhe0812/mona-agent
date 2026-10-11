@@ -1635,10 +1635,13 @@ async def handle_audio_speech(request: web.Request) -> web.Response:
 
 async def handle_health(request: web.Request) -> web.Response:
     """GET /health"""
+    from mona import __version__
+
     return web.json_response(
         {
             "status": "ok",
             "service": "mona-gateway",
+            "version": __version__,
             "capabilities": ["agent-http-v1"],
         }
     )

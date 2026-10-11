@@ -50,6 +50,12 @@ def _cleanup_legacy() -> dict[str, int]:
 
 
 def _local_component_available(component: str) -> bool:
+    if component in {"codex", "claude", "codebuddy"}:
+        from mona.config.loader import load_config
+        from mona.development.executors.discovery import discover_executors
+
+        probe = next(item for item in discover_executors(load_config().development) if item.executor.value == component)
+        return probe.state == "detected" and probe.source != "managed_runtime"
     if component in {"ffmpeg", "yt_dlp", "asr"}:
         from mona.api.video_runtime import VideoRuntime
 

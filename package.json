@@ -1,0 +1,8 @@
+{
+  "name": "mona",
+  "private": true,
+  "scripts": {
+    "dev": "cd src-tauri && cargo tauri dev --no-watch",
+    "dev:watch": "cd src-tauri && cargo tauri dev"
+  }
+}

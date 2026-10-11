@@ -291,10 +291,13 @@ async def _subscription_middleware(
 
 async def handle_services_health(request: web.Request) -> web.Response:
     """Identify a compatible services process, not merely a live HTTP server."""
+    from mona import __version__
+
     return web.json_response(
         {
             "status": "ok",
             "service": "mona-services",
+            "version": __version__,
             "capabilities": ["stock-v1", "office-editor-v1"],
         }
     )

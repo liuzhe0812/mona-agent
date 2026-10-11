@@ -1,11 +1,14 @@
 use std::io::Write;
 use std::sync::Mutex;
 
+use crate::backend_process::{self, health_response_compatible, http_request, BackendChild};
 use crate::python;
 use crate::settings::{self, AppSettings};
 
+const WEBUI_AUTH_CAPABILITY: &str = "webui-runtime-token-v1";
+
 pub struct GatewayProcess {
-    child: Option<std::process::Child>,
+    child: Option<BackendChild>,
     port: u16,
     ws_port: u16,
     /// true 表示复用一个已在外部运行的 gateway（本进程未 spawn 它）。
@@ -47,32 +50,16 @@ impl GatewayManager {
                 return Ok(proc.port);
             }
         }
+        *guard = None;
 
-        let (port, external) = if cfg!(debug_assertions) {
-            // A normal dev start owns a fresh source runtime. Avoid the costly
-            // image-wide taskkill unless one of its ports is actually occupied,
-            // and never reuse an external process whose code may be stale.
-            if !is_port_available(settings.gateway_port) || !is_port_available(ws_port) {
-                #[cfg(windows)]
-                python::kill_stale_gateway_processes();
-                for _ in 0..20 {
-                    if is_port_available(settings.gateway_port) && is_port_available(ws_port) {
-                        break;
-                    }
-                    std::thread::sleep(std::time::Duration::from_millis(100));
-                }
-            }
-            if !is_port_available(settings.gateway_port) || !is_port_available(ws_port) {
-                return Err(format!(
-                    "Dev Gateway 端口 {} / {} 已被占用。请关闭残留的 Mona 运行时后重试。",
-                    settings.gateway_port, ws_port
-                ));
-            }
-            (settings.gateway_port, false)
-        } else {
-            // Release builds may reuse an already-running compatible runtime.
-            probe_gateway_port(settings.gateway_port, ws_port)?
-        };
+        let port = settings.gateway_port;
+        let external = backend_process::prepare_ports(
+            &[
+                (port, "mona-gateway", "agent-http-v1"),
+                (ws_port, "mona-websocket", WEBUI_AUTH_CAPABILITY),
+            ],
+            !cfg!(debug_assertions),
+        )?;
 
         if external {
             log::info!(
@@ -185,8 +172,7 @@ impl GatewayManager {
             }
         }
 
-        let child = cmd
-            .spawn()
+        let child = backend_process::spawn(&mut cmd)
             .map_err(|e| format!("Failed to start gateway: {}", e))?;
 
         log::info!("Gateway started on port {} (PID: {:?})", port, child.id());
@@ -208,16 +194,11 @@ impl GatewayManager {
             if proc.external {
                 // 复用的外部 gateway：通过 HTTP /shutdown 优雅关闭，
                 // 让其主循环走 finally 清理（flush session、关 MCP 等）。
-                http_post_shutdown(proc.port);
+                backend_process::stop(proc.port, &[proc.port, proc.ws_port])?;
             } else if let Some(ref mut child) = proc.child {
                 #[cfg(windows)]
                 {
-                    let pid = child.id();
-                    let mut kill_cmd = std::process::Command::new("taskkill");
-                    kill_cmd.args(["/PID", &pid.to_string(), "/T", "/F"]);
-                    use std::os::windows::process::CommandExt;
-                    kill_cmd.creation_flags(0x08000000);
-                    let _ = kill_cmd.status();
+                    child.kill().map_err(|error| format!("Failed to stop Gateway: {error}"))?;
                 }
                 #[cfg(not(windows))]
                 {
@@ -335,111 +316,16 @@ fn open_gateway_log(port: u16) -> Option<std::fs::File> {
     Some(file)
 }
 
-/// 探测目标端口，返回 (port, external)。
-///
-/// - 端口可绑定：`(port, false)`，调用方需 spawn 新 gateway。
-/// - 端口被兼容的 Gateway HTTP 与 WebUI 会话服务共同占用：复用。
-/// - 端口被占且不是 gateway：报错。
-fn probe_gateway_port(start_port: u16, ws_port: u16) -> Result<(u16, bool), String> {
-    if is_port_available(start_port) {
-        if is_port_available(ws_port) {
-            return Ok((start_port, false));
-        }
-        return Err(format!(
-            "WebUI 会话端口 {} 已被占用。请关闭残留的 Mona 运行时或释放端口后重试。",
-            ws_port
-        ));
-    }
-    if http_gateway_compatible(start_port) && http_websocket_compatible(ws_port) {
-        return Ok((start_port, true));
-    }
-    Err(format!(
-        "Gateway 端口 {} / {} 被不兼容的进程占用。请关闭残留的 Mona 运行时或释放端口后重试。",
-        start_port, ws_port
-    ))
-}
-
-fn is_port_available(port: u16) -> bool {
-    use std::net::TcpListener;
-    TcpListener::bind(("127.0.0.1", port)).is_ok()
-}
-
-fn http_gateway_compatible(port: u16) -> bool {
-    http_request(port, "GET", "/health")
-        .map_or(false, |response| health_response_compatible(&response, "mona-gateway", "agent-http-v1"))
-}
-
-fn http_websocket_compatible(port: u16) -> bool {
-    http_request(port, "GET", "/health")
-        .map_or(false, |response| health_response_compatible(&response, "mona-websocket", "sessions-v1"))
-}
-
-fn health_response_compatible(response: &str, service: &str, capability: &str) -> bool {
-    let status_ok = response
-        .lines()
-        .next()
-        .map_or(false, |line| line.contains(" 200 "));
-    if !status_ok {
-        return false;
-    }
-    let body = response.split_once("\r\n\r\n").map_or("", |(_, body)| body);
-    let Ok(payload) = serde_json::from_str::<serde_json::Value>(body) else {
-        return false;
-    };
-    payload.get("status").and_then(|value| value.as_str()) == Some("ok")
-        && payload.get("service").and_then(|value| value.as_str()) == Some(service)
-        && payload
-            .get("capabilities")
-            .and_then(|value| value.as_array())
-            .is_some_and(|values| values.iter().any(|value| value.as_str() == Some(capability)))
-}
-
-/// 同步 POST /shutdown，通知外部 gateway 优雅退出。
-fn http_post_shutdown(port: u16) {
-    let _ = http_request(port, "POST", "/shutdown");
-}
-
-/// 用 std::net 同步发一个无 body 的 HTTP 请求，返回响应体字符串（失败返回 None）。
-/// 仅用于 127.0.0.1 本地探测，不处理代理/重定向/HTTPS。
-fn http_request(port: u16, method: &str, path: &str) -> Option<String> {
-    use std::io::{Read, Write};
-    use std::net::TcpStream;
-    use std::time::Duration;
-
-    let addr = format!("127.0.0.1:{}", port);
-    let Ok(socket_addr) = addr.parse() else {
-        return None;
-    };
-    let Ok(mut stream) = TcpStream::connect_timeout(&socket_addr, Duration::from_secs(1)) else {
-        return None;
-    };
-    let _ = stream.set_read_timeout(Some(Duration::from_secs(2)));
-    let _ = stream.set_write_timeout(Some(Duration::from_secs(2)));
-
-    let request = format!(
-        "{} {} HTTP/1.1\r\nHost: 127.0.0.1:{}\r\nContent-Length: 0\r\nConnection: close\r\n\r\n",
-        method, path, port
-    );
-    if stream.write_all(request.as_bytes()).is_err() {
-        return None;
-    }
-    let mut buf = Vec::with_capacity(512);
-    if stream.read_to_end(&mut buf).is_err() {
-        // 即使读不全，只要写出了请求也算成功（shutdown 场景不关心响应）。
-        if method == "POST" {
-            return Some(String::new());
-        }
-        return None;
-    }
-    Some(String::from_utf8_lossy(&buf).into_owned())
-}
-
 /// 判断当前复用中的外部 gateway 是否仍健康。
 fn proc_is_alive(proc: &GatewayProcess) -> bool {
     if !proc.external {
         return false;
     }
-    http_gateway_compatible(proc.port) && http_websocket_compatible(proc.ws_port)
+    http_request(proc.port, "GET", "/health").is_some_and(|response| {
+        health_response_compatible(&response, "mona-gateway", "agent-http-v1")
+    }) && http_request(proc.ws_port, "GET", "/health").is_some_and(|response| {
+        health_response_compatible(&response, "mona-websocket", WEBUI_AUTH_CAPABILITY)
+    })
 }
 
 /// Strip environment variables that can interfere with the packaged gateway.
@@ -550,7 +436,7 @@ where
         }
 
         if endpoint_compatible(&client, &gateway_url, "mona-gateway", "agent-http-v1").await
-            && endpoint_compatible(&client, &websocket_url, "mona-websocket", "sessions-v1").await
+            && endpoint_compatible(&client, &websocket_url, "mona-websocket", WEBUI_AUTH_CAPABILITY).await
         {
             log::info!("Gateway is ready on ports {} / {}", port, ws_port);
             return Ok(());
@@ -589,7 +475,15 @@ async fn endpoint_compatible(
 
 #[cfg(test)]
 mod readiness_tests {
-    use super::health_response_compatible;
+    use super::{health_response_compatible, WEBUI_AUTH_CAPABILITY};
+
+    #[test]
+    fn websocket_health_requires_runtime_token_auth() {
+        let legacy = "HTTP/1.1 200 OK\r\n\r\n{\"status\":\"ok\",\"service\":\"mona-websocket\",\"capabilities\":[\"webui-bootstrap-v1\",\"sessions-v1\"]}";
+        assert!(!health_response_compatible(legacy, "mona-websocket", WEBUI_AUTH_CAPABILITY));
+        let current = legacy.replace("webui-bootstrap-v1", WEBUI_AUTH_CAPABILITY);
+        assert!(health_response_compatible(&current, "mona-websocket", WEBUI_AUTH_CAPABILITY));
+    }
 
     #[test]
     fn gateway_health_requires_identity_and_capability() {

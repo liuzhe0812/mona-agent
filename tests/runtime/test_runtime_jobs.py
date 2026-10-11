@@ -3,15 +3,23 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
+import io
 import json
+import sys
+import zipfile
 from pathlib import Path
 
+import httpx
 import pytest
 
 from mona.runtime import jobs as runtime_jobs
-from mona.runtime.catalog import RuntimeCatalog
+from mona.runtime.catalog import RuntimeCatalog, RuntimeCatalogClient, RuntimeInstaller
+from mona.runtime.download import VerifiedDownloader
+from mona.runtime.executors import managed_executor_path
 from mona.runtime.jobs import (
     RuntimeAutoDownloadDisabledError,
+    RuntimeInstallJob,
     RuntimeInstallJobManager,
     RuntimeInstallUnavailableError,
 )
@@ -65,6 +73,19 @@ class SlowCatalogClient:
         self.started.set()
         await self.release.wait()
         return _catalog()
+
+
+class ResourceCatalogClient:
+    def __init__(self, client: RuntimeCatalogClient) -> None:
+        self.client = client
+        self.resources: list[str] = []
+
+    async def fetch(self) -> RuntimeCatalog:
+        return await self.client.fetch()
+
+    async def fetch_resource(self, resource: str) -> RuntimeCatalog:
+        self.resources.append(resource)
+        return await self.client.fetch()
 
 
 class FakeInstaller:
@@ -184,6 +205,156 @@ async def test_runtime_job_installs_latest_compatible_pack(tmp_path: Path) -> No
     assert finished.downloaded_bytes == finished.total_bytes == 20_000_000
     persisted = json.loads((tmp_path / "jobs.json").read_text(encoding="utf-8"))
     assert persisted["jobs"][0]["state"] == "completed"
+
+
+@pytest.mark.parametrize(
+    ("executor", "component_id", "kind"),
+    [
+        ("codex", "codex-cli", "codex-runtime"),
+        ("claude", "claude-code-cli", "claude-code-runtime"),
+        ("codebuddy", "codebuddy-cli", "codebuddy-runtime"),
+    ],
+)
+async def test_executor_jobs_install_through_shared_runtime_pipeline(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    executor: str,
+    component_id: str,
+    kind: str,
+) -> None:
+    import mona.runtime.catalog as catalog_module
+    import mona.runtime.download as download_module
+
+    monkeypatch.setattr(catalog_module, "validate_url_target", lambda _url: (True, ""))
+    monkeypatch.setattr(download_module, "validate_url_target", lambda _url: (True, ""))
+    version = "1.0.0+test"
+    entrypoint = f"bin/{executor}.exe" if sys.platform == "win32" else f"bin/{executor}"
+    payload = io.BytesIO()
+    with zipfile.ZipFile(payload, "w") as archive:
+        archive.writestr(
+            "runtime-manifest.json",
+            json.dumps(
+                {
+                    "schemaVersion": 1,
+                    "id": component_id,
+                    "version": version,
+                    "kind": kind,
+                    "entrypoints": {executor: entrypoint, "metadata": "executor.json"},
+                }
+            ),
+        )
+        archive.writestr(entrypoint, "synthetic fixture executable")
+        archive.writestr(
+            "executor.json",
+            json.dumps(
+                {
+                    "schemaVersion": 1,
+                    "executor": executor,
+                    "platform": sys.platform,
+                    "architecture": runtime_jobs._architecture(),
+                }
+            ),
+        )
+    archive_bytes = payload.getvalue()
+    catalog = {
+        "schemaVersion": 1,
+        "generatedAt": "2026-10-08T00:00:00Z",
+        "components": [
+            {
+                "schemaVersion": 1,
+                "id": component_id,
+                "version": version,
+                "kind": kind,
+                "downloadUrl": f"https://cdn.example.test/{component_id}.zip",
+                "size": len(archive_bytes),
+                "sha256": hashlib.sha256(archive_bytes).hexdigest(),
+                "platforms": [sys.platform],
+                "architectures": [runtime_jobs._architecture()],
+            }
+        ],
+    }
+
+    def respond(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/catalog.json":
+            return httpx.Response(200, json=catalog, request=request)
+        return httpx.Response(200, content=archive_bytes, request=request)
+
+    transport = httpx.MockTransport(respond)
+    runtime_catalog = RuntimeCatalogClient(
+        ["https://cdn.example.test/catalog.json"],
+        tmp_path / "catalog.json",
+        transport=transport,
+    )
+    resource_catalog = ResourceCatalogClient(runtime_catalog)
+    store = RuntimeComponentStore(tmp_path / "runtimes")
+    installer = RuntimeInstaller(
+        catalog_client=runtime_catalog,
+        downloader=VerifiedDownloader(transport=transport),
+        store=store,
+        cache_dir=tmp_path / "downloads",
+        current_platform=sys.platform,
+        current_architecture=runtime_jobs._architecture(),
+    )
+    manager = RuntimeInstallJobManager(
+        catalog_client=resource_catalog,  # type: ignore[arg-type]
+        component_store=store,
+        state_path=tmp_path / "jobs.json",
+        installer=installer,
+        current_platform=sys.platform,
+        current_architecture=runtime_jobs._architecture(),
+    )
+
+    started = await manager.start(executor)
+    await manager._tasks[started.job_id]
+    finished = manager.get(started.job_id)
+    pack_ref = f"{component_id}@{version}"
+
+    assert resource_catalog.resources == [executor]
+    assert started.pack_refs == [pack_ref]
+    assert finished.state == "completed"
+    assert store.active(component_id) is not None
+    assert managed_executor_path(executor, store) == store.active(component_id)[1] / entrypoint  # type: ignore[index]
+
+    exact = await manager.ensure_packs(executor, [pack_ref])
+    assert exact.state == "completed"
+
+
+def test_runtime_jobs_recover_legacy_cli_installs(tmp_path: Path) -> None:
+    legacy_cli_job = RuntimeInstallJob(
+        jobId="legacy-cli",
+        component="codex",
+        packRef="codex-cli@0.147.0",
+        state="queued",
+        createdAt=1,
+        updatedAt=1,
+    )
+    regular_job = RuntimeInstallJob(
+        jobId="python-job",
+        component="python",
+        packRef="python-base@3.13.15",
+        state="completed",
+        createdAt=2,
+        updatedAt=2,
+        finishedAt=2,
+    )
+    (tmp_path / "jobs.json").write_text(
+        json.dumps(
+            {
+                "schemaVersion": 1,
+                "jobs": [
+                    legacy_cli_job.model_dump(by_alias=True, mode="json"),
+                    regular_job.model_dump(by_alias=True, mode="json"),
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    manager = _manager(tmp_path, FakeInstaller())
+
+    jobs = {job.job_id: job for job in manager.list()}
+    assert set(jobs) == {"legacy-cli", "python-job"}
+    assert jobs["legacy-cli"].state == "failed"
 
 
 async def test_runtime_repair_forces_same_version_redeployment(tmp_path: Path) -> None:

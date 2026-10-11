@@ -1,3 +1,4 @@
+mod backend_process;
 mod browser;
 mod canvas_agent;
 mod contacts;
@@ -841,8 +842,6 @@ fn set_window_background_color(
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
-    browser::configure_webview2_cdp();
-
     let gateway_state = GatewayState::new();
     let services_state = ServicesState::new();
     let gateway_state_for_exit = gateway_state.clone();
@@ -1288,6 +1287,7 @@ pub fn run() {
             system::clean_storage,
             system::system_trash_storage_files,
             system::system_open_in_explorer,
+            system::system_open_in_terminal,
             system::system_reveal_in_explorer,
             system::software::system_winget_status,
             system::software::system_search_apps,

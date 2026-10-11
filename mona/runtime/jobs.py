@@ -25,6 +25,7 @@ from mona.runtime.catalog import (
     RuntimeCatalogEntry,
     RuntimeInstaller,
 )
+from mona.runtime.executors import EXECUTOR_RUNTIMES
 from mona.runtime.manager import RuntimeComponentStore, parse_runtime_pack_ref
 
 RUNTIME_KINDS = {
@@ -36,6 +37,7 @@ RUNTIME_KINDS = {
     "pandoc": "pandoc-runtime",
     "computer_use": "computer-use-runtime",
     "westock": "stock-data-runtime",
+    **{name: kind for name, (_component_id, kind) in EXECUTOR_RUNTIMES.items()},
 }
 
 _RUNTIME_COMPONENT_IDS = {
@@ -47,6 +49,7 @@ _RUNTIME_COMPONENT_IDS = {
     "pandoc": ("pandoc",),
     "computer_use": ("cua-driver",),
     "westock": ("westock-data",),
+    **{name: (component_id,) for name, (component_id, _kind) in EXECUTOR_RUNTIMES.items()},
 }
 _STATUS_CATALOG_WAIT_SECONDS = 2.0
 
@@ -118,6 +121,10 @@ class RuntimeInstallJobManager:
             if catalog is not None
             else self._components_without_catalog()
         )
+        if catalog is not None:
+            visible = {item["component"] for item in components}
+            components.extend(item for item in self._components_without_catalog()
+                              if item["installed"] and item["component"] not in visible)
         payload: dict[str, object] = {
             "schemaVersion": 1,
             "autoDownload": bool(self.auto_download_enabled()),
@@ -221,17 +228,27 @@ class RuntimeInstallJobManager:
         except Exception:
             return False
 
-    async def start(self, component: str, *, repair: bool = False) -> RuntimeInstallJob:
+    async def start(self, component: str, *, repair: bool = False,
+                    expected_pack_ref: str | None = None, allow_system_install: bool = False) -> RuntimeInstallJob:
         if self.installer is None:
             raise RuntimeInstallUnavailableError(self.unavailable_reason)
         normalized = component.strip().lower()
         kind = RUNTIME_KINDS.get(normalized)
         if kind is None:
             raise ValueError("unknown runtime resource")
-        catalog = await self.catalog_client.fetch()
+        fetch_resource = getattr(self.catalog_client, "fetch_resource", None)
+        catalog = await (
+            fetch_resource(normalized)
+            if callable(fetch_resource)
+            else self.catalog_client.fetch()
+        )
         entry = self._latest(catalog, kind)
         if entry is None:
             raise ValueError(f"{normalized} runtime is unavailable for this device")
+        if expected_pack_ref is not None and expected_pack_ref != f"{entry.id}@{entry.version}":
+            raise ValueError("运行环境目录已更新，请刷新并确认当前版本后再准备。")
+        if not allow_system_install and normalized in EXECUTOR_RUNTIMES and self._available_locally(normalized):
+            raise ValueError("已发现系统程序，请使用原应用更新；Mona 不重复安装。")
         return self._start_job(
             normalized,
             [f"{entry.id}@{entry.version}"],
@@ -254,6 +271,9 @@ class RuntimeInstallJobManager:
         total_bytes = 0
         for ref in normalized_refs:
             component_id, version = parse_runtime_pack_ref(ref)
+            engine = next((name for name, (identifier, _kind) in EXECUTOR_RUNTIMES.items() if identifier == component_id), None)
+            if engine and self._available_locally(engine):
+                raise ValueError("已发现系统程序，Mona 不重复安装模型引擎。")
             entry = self._select(catalog, component_id, version)
             total_bytes += entry.size
         job = self._start_job(

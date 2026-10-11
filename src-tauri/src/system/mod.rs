@@ -100,7 +100,7 @@ mod tests {
         bytes_per_second, cleanup_is_allowed, cleanup_path, decode_windows_output, file_type_category,
         generated_artifact_kind, history_window_secs, is_thumbcache_file, modified_bucket,
         normalize_scan_drive, refresh_readings, sample, scan_directory_tree, storage_entry_id,
-        trash_path_check, whole_machine_cpu_percent, Connection, Disks, Inner, Networks,
+        prepare_terminal_command, trash_path_check, whole_machine_cpu_percent, Connection, Disks, Inner, Networks,
         DirectoryInsightSummary, DirectorySize, FileExtensionBucket, FileTypeSize,
         ScanProgressEmitter, StorageSizeBucket, System, HISTORY_WINDOW_SECS,
     };
@@ -109,6 +109,50 @@ mod tests {
     use std::sync::atomic::AtomicBool;
     use std::sync::Arc;
     use std::time::Instant;
+
+    #[test]
+    fn terminal_command_uses_canonical_project_directory() {
+        let root = tempfile::tempdir().expect("create temporary test root");
+        #[cfg(windows)]
+        let project = root.path().join("项目 with spaces");
+        #[cfg(not(windows))]
+        let project = root.path().join("项目 \"with quotes\" and spaces");
+        std::fs::create_dir_all(&project).expect("create project directory");
+
+        let canonical = std::fs::canonicalize(&project).expect("canonical project directory");
+        let command = prepare_terminal_command(&project).expect("prepare terminal command");
+        assert_eq!(command.get_current_dir(), Some(canonical.as_path()));
+    }
+
+    #[test]
+    fn terminal_command_rejects_relative_missing_and_file_paths() {
+        let root = tempfile::tempdir().expect("create temporary test root");
+        let file = root.path().join("project.txt");
+        std::fs::write(&file, b"project file").expect("create project file");
+
+        assert!(prepare_terminal_command(Path::new(".")).is_err());
+        assert!(prepare_terminal_command(&root.path().join("missing")).is_err());
+        assert!(prepare_terminal_command(&file).is_err());
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn windows_terminal_command_uses_absolute_powershell_without_script_arguments() {
+        let root = tempfile::tempdir().expect("create temporary test root");
+        let project = root.path().join("项目 with spaces");
+        std::fs::create_dir_all(&project).expect("create project directory");
+
+        let command = prepare_terminal_command(&project).expect("prepare terminal command");
+        assert!(Path::new(command.get_program()).is_absolute());
+        assert_eq!(
+            command
+                .get_args()
+                .map(|argument| argument.to_string_lossy().into_owned())
+                .collect::<Vec<_>>(),
+            vec!["-NoExit".to_string()]
+        );
+        assert!(command.get_current_dir().is_some_and(Path::is_absolute));
+    }
 
     #[test]
     fn only_allows_the_supported_history_windows() {
@@ -1932,6 +1976,70 @@ pub fn cancel_storage_scan(state: State<'_, SystemState>) -> Result<(), String> 
     let inner = state.0.lock().map_err(|e| format!("State lock: {}", e))?;
     inner.scan_cancel.store(true, Ordering::Relaxed);
     Ok(())
+}
+
+#[cfg(windows)]
+const CREATE_NEW_CONSOLE: u32 = 0x0000_0010;
+
+fn prepare_terminal_command(path: &Path) -> Result<std::process::Command, String> {
+    if !path.is_absolute() {
+        return Err(format!("项目目录必须是绝对路径: {}", path.display()));
+    }
+    let project_dir = std::fs::canonicalize(path)
+        .map_err(|error| format!("项目目录不存在或无法访问 ({}): {error}", path.display()))?;
+    if !project_dir.is_dir() {
+        return Err(format!("项目路径不是目录: {}", project_dir.display()));
+    }
+
+    #[cfg(windows)]
+    {
+        let system_root = std::env::var_os("SystemRoot")
+            .map(PathBuf::from)
+            .ok_or_else(|| "无法获取 Windows 系统目录".to_string())?;
+        if !system_root.is_absolute() {
+            return Err(format!("Windows 系统目录不是绝对路径: {}", system_root.display()));
+        }
+        let powershell = system_root
+            .join("System32")
+            .join("WindowsPowerShell")
+            .join("v1.0")
+            .join("powershell.exe");
+        let mut command = std::process::Command::new(powershell);
+        command.arg("-NoExit").current_dir(&project_dir);
+        use std::os::windows::process::CommandExt;
+        command.creation_flags(CREATE_NEW_CONSOLE);
+        Ok(command)
+    }
+
+    #[cfg(target_os = "macos")]
+    {
+        let mut command = std::process::Command::new("/usr/bin/open");
+        command
+            .args(["-a", "Terminal"])
+            .arg(&project_dir)
+            .current_dir(&project_dir);
+        Ok(command)
+    }
+
+    #[cfg(not(any(windows, target_os = "macos")))]
+    {
+        let mut command = std::process::Command::new("x-terminal-emulator");
+        command.current_dir(&project_dir);
+        Ok(command)
+    }
+}
+
+#[tauri::command]
+pub async fn system_open_in_terminal(path: String) -> Result<bool, String> {
+    tokio::task::spawn_blocking(move || {
+        let mut command = prepare_terminal_command(Path::new(&path))?;
+        command
+            .spawn()
+            .map_err(|error| format!("打开终端失败 ({}): {error}", path))?;
+        Ok(true)
+    })
+    .await
+    .map_err(|error| format!("打开终端任务失败: {error}"))?
 }
 
 /// 在 Windows 资源管理器中打开指定目录（绕过 Tauri opener 权限限制）
