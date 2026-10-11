@@ -771,7 +771,7 @@ class TestVisibilityAcceptance:
             },
             MagicMock(),
         )
-        channel._api_tokens["tok"] = time.monotonic() + 300.0
+        channel._runtime_token = "tok"
         channel._session_manager = harness.sessions
         # A normal room for contrast.
         normal = harness.sessions.get_or_create("websocket:room-normal")

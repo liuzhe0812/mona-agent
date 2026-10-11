@@ -610,8 +610,8 @@ describe("StockView", () => {
   it("starts a deep-research run with the selected instrument as inputs", async () => {
     render(<StockView />);
     fireEvent.click(await screen.findByText("平安银行"));
-    fireEvent.click(screen.getByRole("tab", { name: "专家团论证" }));
-    const button = await screen.findByRole("button", { name: "启动专家团论证" });
+    fireEvent.click(screen.getByRole("tab", { name: "伙伴论证" }));
+    const button = await screen.findByRole("button", { name: "启动伙伴论证" });
     await waitFor(() => expect(button.hasAttribute("disabled")).toBe(false));
     await act(async () => {
       fireEvent.click(button);
@@ -628,8 +628,8 @@ describe("StockView", () => {
     preflightStockResearch.mockRejectedValueOnce(new Error("Failed to fetch"));
     render(<StockView />);
     fireEvent.click(await screen.findByText("平安银行"));
-    fireEvent.click(screen.getByRole("tab", { name: "专家团论证" }));
-    fireEvent.click(await screen.findByRole("button", { name: "启动专家团论证" }));
+    fireEvent.click(screen.getByRole("tab", { name: "伙伴论证" }));
+    fireEvent.click(await screen.findByRole("button", { name: "启动伙伴论证" }));
 
     const error = await screen.findByText("投研启动失败：研究资料准备失败，请稍后重试");
     expect(error).toBeInTheDocument();
@@ -642,8 +642,8 @@ describe("StockView", () => {
     preflightStockResearch.mockRejectedValueOnce(new Error("industry_context 缺失"));
     render(<StockView />);
     fireEvent.click(await screen.findByText("平安银行"));
-    fireEvent.click(screen.getByRole("tab", { name: "专家团论证" }));
-    fireEvent.click(await screen.findByRole("button", { name: "启动专家团论证" }));
+    fireEvent.click(screen.getByRole("tab", { name: "伙伴论证" }));
+    fireEvent.click(await screen.findByRole("button", { name: "启动伙伴论证" }));
 
     const error = await screen.findByText("投研启动失败：研究资料准备失败，请稍后重试");
     expect(error).toBeInTheDocument();
@@ -653,8 +653,8 @@ describe("StockView", () => {
   it("does not load financial-material selection during research startup", async () => {
     render(<StockView />);
     fireEvent.click(await screen.findByText("平安银行"));
-    fireEvent.click(screen.getByRole("tab", { name: "专家团论证" }));
-    fireEvent.click(await screen.findByRole("button", { name: "启动专家团论证" }));
+    fireEvent.click(screen.getByRole("tab", { name: "伙伴论证" }));
+    fireEvent.click(await screen.findByRole("button", { name: "启动伙伴论证" }));
     await waitFor(() => expect(runWorkflow).toHaveBeenCalledWith(STOCK_ROOM_CHAT_ID, {
       symbols: ["XSHE:000001"],
       evidence_context_id: "ctx_preflightabc123",
@@ -674,18 +674,18 @@ describe("StockView", () => {
     );
     render(<StockView />);
     fireEvent.click(await screen.findByText("平安银行"));
-    fireEvent.click(screen.getByRole("tab", { name: "专家团论证" }));
-    fireEvent.click(await screen.findByRole("button", { name: "启动专家团论证" }));
+    fireEvent.click(screen.getByRole("tab", { name: "伙伴论证" }));
+    fireEvent.click(await screen.findByRole("button", { name: "启动伙伴论证" }));
 
     expect(screen.getByRole("button", { name: "准备中" })).toBeDisabled();
     expect(screen.queryByText("正在准备最新资料并启动投研")).not.toBeInTheDocument();
-    expect(screen.getByRole("tab", { name: "专家团论证" }).getAttribute("aria-selected")).toBe("true");
-    expect(screen.getByRole("heading", { name: "专家团论证" })).toBeTruthy();
+    expect(screen.getByRole("tab", { name: "伙伴论证" }).getAttribute("aria-selected")).toBe("true");
+    expect(screen.getByRole("heading", { name: "伙伴论证" })).toBeTruthy();
     expect(screen.queryByText(/六位研究助手|证据包/)).not.toBeInTheDocument();
     getWorkflowRun.mockResolvedValueOnce({ ...makeRunPush(), inputs: { symbols: ["XSHE:000001"] } });
     await act(async () => release?.());
     expect(await screen.findByTestId("expert-panel")).toBeInTheDocument();
-    expect(screen.getByRole("tab", { name: "专家团论证" })).toHaveAttribute("aria-selected", "true");
+    expect(screen.getByRole("tab", { name: "伙伴论证" })).toHaveAttribute("aria-selected", "true");
     const radar = screen.getByTestId("decision-radar");
     expect(within(radar).queryByText(/报告后变化|新增事件与未来催化|已完成.*\/6/)).not.toBeInTheDocument();
   });
@@ -700,7 +700,7 @@ describe("StockView", () => {
       runUpdatedHandler?.(STOCK_ROOM_CHAT_ID, makeRunPush());
     });
 
-    fireEvent.click(screen.getByRole("tab", { name: "专家团论证" }));
+    fireEvent.click(screen.getByRole("tab", { name: "伙伴论证" }));
     const cancel = await screen.findByRole("button", { name: "取消论证" });
     let releaseCancel: ((runId: string) => void) | undefined;
     cancelWorkflowRun.mockImplementationOnce(
@@ -729,7 +729,7 @@ describe("StockView", () => {
       runUpdatedHandler?.(STOCK_ROOM_CHAT_ID, makeRunPush());
     });
 
-    fireEvent.click(screen.getByRole("tab", { name: "专家团论证" }));
+    fireEvent.click(screen.getByRole("tab", { name: "伙伴论证" }));
     const runningRun = makeRunPush();
     getWorkflowRun.mockResolvedValueOnce(runningRun);
     cancelWorkflowRun.mockResolvedValueOnce("run_1");
@@ -757,7 +757,7 @@ describe("StockView", () => {
       runUpdatedHandler?.(STOCK_ROOM_CHAT_ID, makeRunPush());
     });
 
-    fireEvent.click(screen.getByRole("tab", { name: "专家团论证" }));
+    fireEvent.click(screen.getByRole("tab", { name: "伙伴论证" }));
     fireEvent.click(await screen.findByRole("button", { name: "取消论证" }));
     expect(await screen.findByText("取消投研失败：取消请求失败，请稍后重试")).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "取消论证" })).toBeInTheDocument();
@@ -781,8 +781,8 @@ describe("StockView", () => {
   it("shows a warning when the accepted run has no synchronized state", async () => {
     render(<StockView />);
     fireEvent.click(await screen.findByText("平安银行"));
-    fireEvent.click(screen.getByRole("tab", { name: "专家团论证" }));
-    fireEvent.click(await screen.findByRole("button", { name: "启动专家团论证" }));
+    fireEvent.click(screen.getByRole("tab", { name: "伙伴论证" }));
+    fireEvent.click(await screen.findByRole("button", { name: "启动伙伴论证" }));
     expect(await screen.findByText(/运行状态暂未同步/)).toBeTruthy();
   });
 
@@ -850,7 +850,7 @@ describe("StockView", () => {
 
     render(<StockView />);
     fireEvent.click(await screen.findByText("平安银行"));
-    fireEvent.click(screen.getByRole("tab", { name: "专家团论证" }));
+    fireEvent.click(screen.getByRole("tab", { name: "伙伴论证" }));
 
     expect(await screen.findByTestId("expert-panel")).toBeInTheDocument();
     expect(screen.getByTestId("expert-role-list")).toHaveTextContent("技术分析师");
@@ -862,7 +862,7 @@ describe("StockView", () => {
   it("confirms before starting a new run when a report already exists", async () => {
     render(<StockView />);
     await screen.findAllByText("贵州茅台");
-    fireEvent.click(screen.getByRole("tab", { name: "专家团论证" }));
+    fireEvent.click(screen.getByRole("tab", { name: "伙伴论证" }));
     const button = await screen.findByRole("button", { name: "重新论证" });
     fireEvent.click(button);
 
@@ -887,7 +887,7 @@ describe("StockView", () => {
     act(() => {
       runUpdatedHandler?.(STOCK_ROOM_CHAT_ID, makeRunPush());
     });
-    fireEvent.click(await screen.findByRole("tab", { name: "专家团论证" }));
+    fireEvent.click(await screen.findByRole("tab", { name: "伙伴论证" }));
     expect(await screen.findByTestId("expert-role-technical")).toBeTruthy();
     // A run push from another room must not leak into the stock view.
     act(() => {
@@ -923,7 +923,7 @@ describe("StockView", () => {
       runUpdatedHandler?.(STOCK_ROOM_CHAT_ID, makeRunPush());
     });
     await waitFor(() =>
-      expect(screen.getByRole("tab", { name: "专家团论证" })).toHaveAttribute("aria-selected", "true"),
+      expect(screen.getByRole("tab", { name: "伙伴论证" })).toHaveAttribute("aria-selected", "true"),
     );
     expect(await screen.findByTestId("expert-role-technical")).toBeTruthy();
   });
@@ -958,7 +958,7 @@ describe("StockView", () => {
         ],
       });
     });
-    fireEvent.click(await screen.findByRole("tab", { name: "专家团论证" }));
+    fireEvent.click(await screen.findByRole("tab", { name: "伙伴论证" }));
     expect(await screen.findByTestId("expert-role-technical")).toHaveTextContent("进行中");
   });
 
@@ -975,7 +975,7 @@ describe("StockView", () => {
       markdown: "# 贵州茅台研究报告",
     });
     render(<StockView />);
-    fireEvent.click(await screen.findByRole("tab", { name: "专家团论证" }));
+    fireEvent.click(await screen.findByRole("tab", { name: "伙伴论证" }));
     expect(screen.getByTestId("expert-panel")).toBeInTheDocument();
   });
 
@@ -989,8 +989,8 @@ describe("StockView", () => {
         steps: { technical: { status: "queued" } },
       });
     });
-    fireEvent.click(screen.getByRole("tab", { name: "专家团论证" }));
-    expect(await screen.findByText(/本次专家团论证失败/)).toBeTruthy();
+    fireEvent.click(screen.getByRole("tab", { name: "伙伴论证" }));
+    expect(await screen.findByText(/本次伙伴论证失败/)).toBeTruthy();
   });
 
   it("loads the kline of the newly selected instrument", async () => {
@@ -1090,7 +1090,7 @@ describe("StockView", () => {
       "基本面",
       "资讯公告",
       "AI诊股",
-      "专家团论证",
+      "伙伴论证",
     ]);
   });
 
@@ -1110,7 +1110,7 @@ describe("StockView", () => {
       markdown: "# 贵州茅台研究报告",
     });
     render(<StockView />);
-    fireEvent.click(await screen.findByRole("tab", { name: "专家团论证" }));
+    fireEvent.click(await screen.findByRole("tab", { name: "伙伴论证" }));
     expect(await screen.findByTestId("expert-panel")).toBeInTheDocument();
     expect(screen.getByTestId("expert-role-list")).toHaveTextContent("主审");
     expect(screen.queryByTestId("ai-diagnosis-result")).not.toBeInTheDocument();
@@ -1119,7 +1119,7 @@ describe("StockView", () => {
   it("restores an active run on mount via getWorkflowRun", async () => {
     getWorkflowRun.mockResolvedValueOnce(makeRunPush());
     render(<StockView />);
-    fireEvent.click(await screen.findByRole("tab", { name: "专家团论证" }));
+    fireEvent.click(await screen.findByRole("tab", { name: "伙伴论证" }));
     expect(await screen.findByTestId("expert-role-technical")).toBeTruthy();
     expect(getWorkflowRun).toHaveBeenCalledWith(STOCK_ROOM_CHAT_ID);
   });
@@ -1172,7 +1172,7 @@ describe("StockView", () => {
       },
     ]);
     render(<StockView />);
-    fireEvent.click(await screen.findByRole("tab", { name: "专家团论证" }));
+    fireEvent.click(await screen.findByRole("tab", { name: "伙伴论证" }));
     const history = await screen.findByText("历史版本（1）");
     expect((history.closest("details") as HTMLDetailsElement).open).toBe(false);
     fireEvent.click(history);
@@ -1202,7 +1202,7 @@ describe("StockView", () => {
       modifiedAt: "2026-08-14T07:10:00Z",
     }]);
     render(<StockView />);
-    fireEvent.click(await screen.findByRole("tab", { name: "专家团论证" }));
+    fireEvent.click(await screen.findByRole("tab", { name: "伙伴论证" }));
     const history = await screen.findByText("历史版本（1）");
     fireEvent.click(history);
     fireEvent.click(await screen.findByRole("button", { name: /深度投研 看多/ }));
@@ -1232,7 +1232,7 @@ describe("StockView", () => {
       modifiedAt: "2026-08-14T07:10:00Z",
     }]);
     render(<StockView />);
-    fireEvent.click(await screen.findByRole("tab", { name: "专家团论证" }));
+    fireEvent.click(await screen.findByRole("tab", { name: "伙伴论证" }));
     fireEvent.click(await screen.findByText("历史版本（1）"));
     const card = await screen.findByRole("button", { name: /深度投研 看多/ });
 
@@ -1582,8 +1582,8 @@ describe("StockView", () => {
     render(<StockView />);
     await screen.findAllByText("贵州茅台");
     expect(runWorkflow).not.toHaveBeenCalled();
-    fireEvent.click(screen.getByRole("tab", { name: "专家团论证" }));
-    fireEvent.click(screen.getByRole("button", { name: /启动专家团论证|重新论证/ }));
+    fireEvent.click(screen.getByRole("tab", { name: "伙伴论证" }));
+    fireEvent.click(screen.getByRole("button", { name: /启动伙伴论证|重新论证/ }));
     const confirm = screen.queryByRole("button", { name: "确认重新论证" });
     if (confirm) fireEvent.click(confirm);
     await waitFor(() => expect(runWorkflow).toHaveBeenCalledWith(STOCK_ROOM_CHAT_ID, expect.objectContaining({ symbols: ["XSHG:600519"] })));
@@ -1608,8 +1608,8 @@ describe("StockView", () => {
     expect(diagnosis).not.toHaveTextContent("四层分析");
     expect(screen.queryByTestId("diagnosis-single-stock-outcome-pending")).not.toBeInTheDocument();
     expect(screen.queryByText("深度投研")).not.toBeInTheDocument();
-    fireEvent.click(screen.getByRole("tab", { name: "专家团论证" }));
-    expect(await screen.findByText(/专家团历史记录/)).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("tab", { name: "伙伴论证" }));
+    expect(await screen.findByText(/伙伴论证历史记录/)).toBeInTheDocument();
   });
 
   it("deletes a terminal AI diagnosis from the history context menu", async () => {
@@ -1662,7 +1662,7 @@ describe("StockView", () => {
     act(() => runUpdatedHandler?.(STOCK_ROOM_CHAT_ID, expertRun));
     cancelWorkflowRun.mockResolvedValueOnce("run_1");
     getWorkflowRun.mockResolvedValueOnce({ ...expertRun, status: "cancelled" });
-    fireEvent.click(screen.getByRole("tab", { name: "专家团论证" }));
+    fireEvent.click(screen.getByRole("tab", { name: "伙伴论证" }));
     fireEvent.click(await screen.findByRole("button", { name: "取消论证" }));
     await waitFor(() => expect(cancelWorkflowRun).toHaveBeenCalledWith(STOCK_ROOM_CHAT_ID, "run_1"));
   });

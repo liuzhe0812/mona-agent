@@ -163,7 +163,7 @@ describe("InstrumentStage attention radar collapse", () => {
     });
     await waitFor(() => expect(openStockIntradayStream).toHaveBeenCalled());
 
-    fireEvent.click(screen.getByRole("tab", { name: "专家团论证" }));
+    fireEvent.click(screen.getByRole("tab", { name: "伙伴论证" }));
     expect(screen.getByTestId("expert-panel")).toBeInTheDocument();
     expect(screen.queryByTestId("ai-diagnosis-result")).not.toBeInTheDocument();
   });

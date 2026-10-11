@@ -10,7 +10,7 @@ function run(status: "running" | "succeeded" | "failed" = "running") {
     roomId: "stock_research",
     workflowId: "stock-deep-research",
     workflowRevision: 1,
-    workflow: { schemaVersion: 1, id: "stock-deep-research", roomId: "stock_research", revision: 1, status: "active", goal: "六位专家" },
+    workflow: { schemaVersion: 1, id: "stock-deep-research", roomId: "stock_research", revision: 1, status: "active", goal: "六位伙伴" },
     status,
     triggerType: "manual",
     startedBy: "user",
@@ -40,7 +40,7 @@ describe("ExpertPanel", () => {
     const onStart = vi.fn();
     render(<ExpertPanel run={null} report={null} onStart={onStart} onCancel={vi.fn()} />);
     expect(onStart).not.toHaveBeenCalled();
-    fireEvent.click(screen.getByRole("button", { name: "启动专家团论证" }));
+    fireEvent.click(screen.getByRole("button", { name: "启动伙伴论证" }));
     expect(onStart).toHaveBeenCalledTimes(1);
   });
 });
