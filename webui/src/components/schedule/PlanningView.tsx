@@ -19,12 +19,12 @@ import { Sheet, SheetContent, SheetHeader, SheetTitle } from "@/components/ui/sh
 import { ScheduleView } from "./ScheduleView";
 import { TodoInbox } from "./TodoInbox";
 
-export function PlanningView() {
+export function PlanningView({ onOpenEmailExtraction }: { onOpenEmailExtraction: () => void }) {
   const [inboxOpen, setInboxOpen] = useState(false);
 
   return (
     <>
-      <ScheduleView onOpenInbox={() => setInboxOpen(true)} />
+      <ScheduleView onOpenInbox={() => setInboxOpen(true)} onOpenEmailExtraction={onOpenEmailExtraction} />
       <Sheet open={inboxOpen} onOpenChange={setInboxOpen}>
         <SheetContent
           side="right"

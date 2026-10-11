@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { Loader2, LockKeyhole, Plus, Trash2, Star, Edit3, Check, X as XIcon, Filter, PlayCircle, CalendarClock } from "lucide-react";
+import { Loader2, Plus, Trash2, Star, Edit3, Check, X as XIcon, Filter, PlayCircle, CalendarClock } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -38,30 +38,21 @@ import {
 import { useEmailStore } from "./store/emailStore";
 import type { EmailAccount, EmailRule, EmailSignature } from "./lib/types";
 import * as emailApi from "./lib/emailApi";
-import { getFolderDisplayName } from "./lib/folderUtils";
-import {
-  readEmailScheduleConfig,
-  writeEmailScheduleConfig,
-  isTauri,
-  type EmailScheduleConfig,
-} from "@/lib/tauri";
 import { cn } from "@/lib/utils";
-import { useLicense } from "@/hooks/useLicense";
 
 interface AccountSettingsDialogProps {
   open: boolean;
   onOpenChange: (open: boolean) => void;
   account: EmailAccount | null;
-  onOpenSubscribe?: () => void;
+  onOpenEmailExtraction?: () => void;
 }
 
 export function AccountSettingsDialog({
   open,
   onOpenChange,
   account,
-  onOpenSubscribe,
+  onOpenEmailExtraction,
 }: AccountSettingsDialogProps) {
-  const { licenseActive } = useLicense();
   const updateAccount = useEmailStore((s) => s.updateAccount);
   const gatewayUrl = useEmailStore((s) => s.gatewayUrl);
   const foldersByAccount = useEmailStore((s) => s.foldersByAccount);
@@ -88,10 +79,6 @@ export function AccountSettingsDialog({
   const [applyConfirmOpen, setApplyConfirmOpen] = useState(false);
   const [applyResultOpen, setApplyResultOpen] = useState(false);
   const [applyResultText, setApplyResultText] = useState("");
-  // AI 日程提取配置（全局共享，UI 入口在账号设置里）
-  const [scheduleConfig, setScheduleConfig] = useState<EmailScheduleConfig | null>(null);
-  const [scheduleSaveError, setScheduleSaveError] = useState<string | null>(null);
-
   useEffect(() => {
     if (!open || !account) return;
     setDisplayName(account.displayName);
@@ -113,14 +100,6 @@ export function AccountSettingsDialog({
     setError(null);
     // 加载规则
     void emailApi.listRules(account.id).then(setRules).catch(() => setRules([]));
-    // 加载 AI 日程提取配置（全局，每次打开对话框刷新一次）
-    setScheduleConfig(null);
-    setScheduleSaveError(null);
-    if (isTauri()) {
-      void readEmailScheduleConfig()
-        .then((cfg) => setScheduleConfig(cfg))
-        .catch((e) => setScheduleSaveError(`加载配置失败: ${e}`));
-    }
   }, [open, account]);
 
   // 注意：不能在这里 return null（即使 !open），否则 Radix Dialog 会被立即卸载，
@@ -329,46 +308,6 @@ export function AccountSettingsDialog({
     }
   };
 
-  // AI 日程提取配置：更新单个字段并立即保存到 config.json
-  const updateScheduleField = <K extends keyof EmailScheduleConfig>(
-    key: K,
-    value: EmailScheduleConfig[K],
-  ) => {
-    setScheduleConfig((prev) => {
-      if (!prev) return prev;
-      const next = { ...prev, [key]: value };
-      if (isTauri()) {
-        void writeEmailScheduleConfig(next)
-          .then(() => setScheduleSaveError(null))
-          .catch((e) => setScheduleSaveError(`保存配置失败: ${e}`));
-      }
-      return next;
-    });
-  };
-
-  // 切换当前账号某文件夹的启用状态
-  const toggleScheduleFolder = (folderKey: string, checked: boolean) => {
-    setScheduleConfig((prev) => {
-      if (!prev) return prev;
-      const exists = prev.folders.includes(folderKey);
-      let folders: string[];
-      if (checked && !exists) {
-        folders = [...prev.folders, folderKey];
-      } else if (!checked && exists) {
-        folders = prev.folders.filter((f) => f !== folderKey);
-      } else {
-        folders = prev.folders;
-      }
-      const next = { ...prev, folders };
-      if (isTauri()) {
-        void writeEmailScheduleConfig(next)
-          .then(() => setScheduleSaveError(null))
-          .catch((e) => setScheduleSaveError(`保存配置失败: ${e}`));
-      }
-      return next;
-    });
-  };
-
   return (
     <Dialog
       open={open}
@@ -392,7 +331,7 @@ export function AccountSettingsDialog({
               <TabsTrigger value="password" className="text-caption">密码</TabsTrigger>
               <TabsTrigger value="signatures" className="text-caption">签名</TabsTrigger>
               <TabsTrigger value="rules" className="text-caption">规则</TabsTrigger>
-              <TabsTrigger value="schedule" className="text-caption">AI日程</TabsTrigger>
+              <TabsTrigger value="schedule" className="text-caption">邮件提取</TabsTrigger>
             </TabsList>
             <TabsContent value="basic" className="mt-4 max-h-[60vh] space-y-5 overflow-y-auto pr-1">
           {/* 基础 */}
@@ -842,189 +781,25 @@ export function AccountSettingsDialog({
             </div>
           </section>
             </TabsContent>
-            <TabsContent value="schedule" className="mt-4 max-h-[60vh] space-y-5 overflow-y-auto pr-1">
-          {!licenseActive ? (
-            <div className="flex min-h-48 flex-col items-center justify-center gap-3 rounded-md border border-dashed px-6 text-center">
-              <LockKeyhole className="h-5 w-5 text-muted-foreground" aria-hidden />
-              <div>
-                <p className="text-ui font-medium">AI 日程提取是 Pro 功能</p>
-                <p className="mt-1 text-caption text-muted-foreground">升级后可从邮件自动识别并创建日程。</p>
-              </div>
-              <Button type="button" size="sm" onClick={onOpenSubscribe}>升级 Pro</Button>
-            </div>
-          ) : (
-          <section className="space-y-3">
-            <div className="flex items-center justify-between">
-              <h3 className="flex items-center gap-1 text-caption font-medium text-muted-foreground">
-                <CalendarClock className="h-3 w-3" />
-                AI 日程提取
-              </h3>
-            </div>
-            <p className="text-micro text-muted-foreground">
-              配置全局生效。新邮件到达所选文件夹时，AI 自动分析邮件内容并提取日程信息。
-            </p>
-            {scheduleSaveError && (
-              <StatusNotice tone="danger">{scheduleSaveError}</StatusNotice>
-            )}
-            {!scheduleConfig ? (
-              <div className="flex items-center gap-2 text-micro text-muted-foreground">
-                <Loader2 className="h-3 w-3 animate-spin" />
-                加载配置中…
-              </div>
-            ) : (
-              <>
-                {/* 总开关 */}
-                <label className="flex items-center gap-2 text-caption">
-                  <Checkbox
-                    checked={scheduleConfig.enabled}
-                    onCheckedChange={(v) => updateScheduleField("enabled", v === true)}
-                  />
-                  启用 AI 日程提取
-                </label>
-
-                {/* 文件夹多选 */}
-                <div className="space-y-2">
-                  <Label className="text-caption">启用提取的文件夹（当前账号）</Label>
-                  {(() => {
-                    const folders = (account && foldersByAccount[account.id]) || [];
-                    // 过滤掉垃圾邮件、已删除、草稿箱等系统文件夹
-                    const excludeFolders = (name: string): boolean => {
-                      const lower = name.toLowerCase();
-                      const decoded = getFolderDisplayName(name);
-                      return (
-                        lower.includes("junk") ||
-                        lower.includes("spam") ||
-                        lower.includes("trash") ||
-                        lower.includes("deleted") ||
-                        lower.includes("draft") ||
-                        decoded.includes("垃圾") ||
-                        decoded.includes("已删除") ||
-                        decoded.includes("草稿") ||
-                        decoded.includes("回收站")
-                      );
-                    };
-                    const visibleFolders = folders.filter((f) => !excludeFolders(f.name));
-                    if (visibleFolders.length === 0) {
-                      return (
-                        <p className="text-micro text-muted-foreground">
-                          请先同步文件夹
-                        </p>
-                      );
-                    }
-                    return (
-                      <div className="space-y-1.5 rounded-md border border-border/60 bg-muted/20 p-2">
-                        {visibleFolders.map((f) => {
-                          const folderKey = `${account!.id}:${f.name}`;
-                          const checked = scheduleConfig.folders.includes(folderKey);
-                          return (
-                            <label
-                              key={f.name}
-                              className="flex items-center gap-2 text-caption"
-                            >
-                              <Checkbox
-                                checked={checked}
-                                onCheckedChange={(v) =>
-                                  toggleScheduleFolder(folderKey, v === true)
-                                }
-                              />
-                              <span className="truncate">{getFolderDisplayName(f.name)}</span>
-                              {(f.unreadCount ?? 0) > 0 && (
-                                <span className="ml-auto text-micro text-muted-foreground">
-                                  {f.unreadCount} 未读
-                                </span>
-                              )}
-                            </label>
-                          );
-                        })}
-                      </div>
-                    );
-                  })()}
-                </div>
-
-                {/* 创建模式 */}
-                <div className="space-y-1.5">
-                  <Label className="text-caption">创建模式</Label>
-                  <div className="grid grid-cols-2 gap-2">
-                    <Button
-                      type="button"
-                      variant="outline"
-                      onClick={() => updateScheduleField("createMode", "auto")}
-                      className={cn(
-                        "h-auto min-w-0 flex-col items-start gap-0 whitespace-normal rounded-md px-2 py-1.5 text-left text-caption font-normal transition-colors",
-                        scheduleConfig.createMode === "auto"
-                          ? "border-primary bg-primary/10 text-foreground hover:bg-primary/10 hover:text-foreground"
-                          : "border-border bg-background text-muted-foreground hover:bg-muted/40 hover:text-muted-foreground"
-                      )}
-                    >
-                      <div className="font-medium">直接创建</div>
-                      <div className="min-w-0 break-words text-micro text-muted-foreground">不进入收集箱，AI 解析成功后直接创建日程</div>
-                    </Button>
-                    <Button
-                      type="button"
-                      variant="outline"
-                      onClick={() => updateScheduleField("createMode", "confirm")}
-                      className={cn(
-                        "h-auto min-w-0 flex-col items-start gap-0 whitespace-normal rounded-md px-2 py-1.5 text-left text-caption font-normal transition-colors",
-                        scheduleConfig.createMode === "confirm"
-                          ? "border-primary bg-primary/10 text-foreground hover:bg-primary/10 hover:text-foreground"
-                          : "border-border bg-background text-muted-foreground hover:bg-muted/40 hover:text-muted-foreground"
-                      )}
-                    >
-                      <div className="font-medium">确认后创建</div>
-                      <div className="min-w-0 break-words text-micro text-muted-foreground">进入计划收集箱，等待你确认后再创建</div>
-                    </Button>
-                  </div>
-                </div>
-
-                {/* 提前提醒量 */}
+            <TabsContent value="schedule" className="mt-4">
+              <div className="flex min-h-48 flex-col items-center justify-center gap-3 px-6 text-center">
+                <CalendarClock className="h-5 w-5 text-muted-foreground" aria-hidden />
                 <div className="space-y-1">
-                  <Label htmlFor="sched-lead" className="text-caption">
-                    提前提醒量（分钟）
-                  </Label>
-                  <Input
-                    id="sched-lead"
-                    type="number"
-                    min={0}
-                    value={String(scheduleConfig.leadMinutes)}
-                    onChange={(e) => {
-                      const n = parseInt(e.target.value, 10);
-                      if (!isNaN(n) && n >= 0) {
-                        updateScheduleField("leadMinutes", n);
-                      }
-                    }}
-                    className="h-8 text-ui"
-                  />
-                  <p className="text-micro text-muted-foreground">
-                    日程开始时间 = 邮件中提到的事件时间 - 提前提醒量
-                  </p>
+                  <p className="text-ui font-medium">邮件提取</p>
+                  <p className="text-caption text-muted-foreground">在计划页面统一管理从新邮件提取日程和待办的设置。</p>
                 </div>
-
-                {/* 跳过发件人 */}
-                <div className="space-y-1">
-                  <Label htmlFor="sched-skip" className="text-caption">
-                    跳过的发件人（逗号分隔）
-                  </Label>
-                  <Textarea
-                    id="sched-skip"
-                    value={scheduleConfig.skipSenders.join(", ")}
-                    onChange={(e) => {
-                      const list = e.target.value
-                        .split(/[,，\n]/)
-                        .map((s) => s.trim())
-                        .filter(Boolean);
-                      updateScheduleField("skipSenders", list);
-                    }}
-                    placeholder="noreply.github.com, notifications@slack.com"
-                    className="min-h-[60px] text-caption"
-                  />
-                  <p className="text-micro text-muted-foreground">
-                    匹配发件人邮箱地址，避免自动化邮件反复触发
-                  </p>
-                </div>
-              </>
-            )}
-          </section>
-          )}
+                <Button
+                  type="button"
+                  size="sm"
+                  disabled={!onOpenEmailExtraction}
+                  onClick={() => {
+                    onOpenChange(false);
+                    onOpenEmailExtraction?.();
+                  }}
+                >
+                  管理邮件提取
+                </Button>
+              </div>
             </TabsContent>
           </Tabs>
 

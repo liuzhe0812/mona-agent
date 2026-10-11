@@ -211,7 +211,7 @@ export function TodoInbox() {
               ) : (
                 <ChevronDown className="h-3.5 w-3.5" />
               )}
-              对话建议 ({suggestions.length})
+              待办建议 ({suggestions.length})
             </button>
             <div className="space-y-1.5">
               {visibleSuggestions.map((it) => (

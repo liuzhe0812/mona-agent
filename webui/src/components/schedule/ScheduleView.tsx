@@ -8,7 +8,7 @@
  */
 
 import { useEffect, useState } from "react";
-import { Inbox as InboxIcon, Plus } from "lucide-react";
+import { Inbox as InboxIcon, Mail, Plus } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
 import { StatusNotice } from "@/components/ui/status-notice";
@@ -25,9 +25,10 @@ import { isCalendarViewMode, ViewSwitcher, type CalendarViewMode } from "./ViewS
 
 interface ScheduleViewProps {
   onOpenInbox: () => void;
+  onOpenEmailExtraction: () => void;
 }
 
-export function ScheduleView({ onOpenInbox }: ScheduleViewProps) {
+export function ScheduleView({ onOpenInbox, onOpenEmailExtraction }: ScheduleViewProps) {
   const inboxCount = useTodoStore((s) => s.inboxCount);
   const {
     items,
@@ -96,6 +97,9 @@ export function ScheduleView({ onOpenInbox }: ScheduleViewProps) {
   const toolbarActions = (
     <>
       <ViewSwitcher mode={viewMode} onChange={handleViewModeChange} />
+      <Button type="button" variant="ghost" size="sm" className="h-7 gap-1.5 px-2 text-caption" onClick={onOpenEmailExtraction}>
+        <Mail className="h-3.5 w-3.5" />邮件提取
+      </Button>
       <Button
         type="button"
         variant="ghost"

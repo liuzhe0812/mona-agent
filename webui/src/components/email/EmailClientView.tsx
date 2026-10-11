@@ -28,7 +28,10 @@ const MIN_LIST_WIDTH = 240;
 const MAX_LIST_WIDTH = 600;
 const FOLDER_TREE_WIDTH = 180;
 
-export function EmailClientView({ onOpenSubscribe }: { onOpenSubscribe?: () => void }) {
+export function EmailClientView({ onOpenSubscribe, onOpenEmailExtraction }: {
+  onOpenSubscribe?: () => void;
+  onOpenEmailExtraction?: () => void;
+}) {
   const { licenseActive } = useLicense();
   const loadAccounts = useEmailStore((s) => s.loadAccounts);
   const selectedAccountId = useEmailStore((s) => s.selectedAccountId);
@@ -319,7 +322,7 @@ export function EmailClientView({ onOpenSubscribe }: { onOpenSubscribe?: () => v
             gatewayUrl={gatewayUrl}
             view={view}
             onViewChange={setView}
-            onOpenSubscribe={onOpenSubscribe}
+            onOpenEmailExtraction={onOpenEmailExtraction}
           />
         </div>
         {view === "contacts" ? (

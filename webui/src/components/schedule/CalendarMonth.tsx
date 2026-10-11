@@ -84,7 +84,7 @@ export function CalendarMonth({
   return (
     <div className="flex h-full flex-col bg-editor-surface">
       {/* Toolbar */}
-      <div className="flex items-center justify-between px-3 py-1.5 border-b border-border/40">
+      <div className="flex flex-wrap items-center justify-between gap-y-1.5 px-3 py-1.5 border-b border-border/40">
         <div className="flex items-center gap-1">
           <Button variant="ghost" size="icon" onClick={goPrev} className="h-6 w-6">
             <ChevronLeft className="h-3.5 w-3.5" />
@@ -158,7 +158,7 @@ export function CalendarMonth({
           </Button>
         </div>
         {toolbarActions && (
-          <div className="flex items-center gap-2">{toolbarActions}</div>
+          <div className="flex flex-wrap items-center gap-2">{toolbarActions}</div>
         )}
       </div>
 
@@ -230,7 +230,6 @@ export function CalendarMonth({
                     )}
                     title={item.title}
                   >
-                    <span className="h-3 w-0.5 flex-shrink-0 rounded-full bg-primary" />
                     {!item.allDay && (
                       <span className="font-mono text-micro text-muted-foreground">
                         {formatTime(item.startAtMs)}
