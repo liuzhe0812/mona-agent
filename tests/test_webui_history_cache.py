@@ -1,10 +1,11 @@
 import asyncio
 import json
+import socket
 import threading
-import time
 from unittest.mock import MagicMock
 from urllib.parse import quote
 
+import httpx
 import pytest
 
 from mona.webui import history_cache as cache
@@ -129,13 +130,12 @@ def test_invalid_pagination_is_rejected(history_root, options):
 
 @pytest.mark.asyncio
 async def test_history_dispatch_does_not_block_event_loop(history_root):
-    from websockets.datastructures import Headers
-    from websockets.http11 import Request
+    from mona.channels.websocket import WebSocketChannel
 
-    from mona.channels.websocket import WebSocketChannel, WebSocketConfig
-
-    channel = WebSocketChannel(WebSocketConfig(enabled=True, token="test"), MagicMock())
-    channel._api_tokens["test"] = time.monotonic() + 300
+    with socket.socket() as listener:
+        listener.bind(("127.0.0.1", 0))
+        port = listener.getsockname()[1]
+    channel = WebSocketChannel({"enabled": True, "host": "127.0.0.1", "port": port}, MagicMock())
     entered = threading.Event()
     release = threading.Event()
     original = channel._handle_webui_thread_get
@@ -149,14 +149,36 @@ async def test_history_dispatch_does_not_block_event_loop(history_root):
         return original(request, encoded_key)
 
     channel._handle_webui_thread_get = delayed
-    request = Request(f"/api/sessions/{quote(key, safe='')}/webui-thread?limit=2", Headers([("Authorization", "Bearer test")]))
-    task = asyncio.create_task(channel._dispatch_http(MagicMock(), request))
+    base_url = f"http://127.0.0.1:{port}"
+    server_task = asyncio.create_task(channel.start())
     try:
-        assert await asyncio.to_thread(entered.wait, 2)
-        await asyncio.sleep(0)
-        release.set()
-        response = await task
-        assert response.status_code == 200
-        assert json.loads(response.body)["pagination"]["total"] == 2
+        async with httpx.AsyncClient(trust_env=False, timeout=5.0) as client:
+            for _ in range(50):
+                try:
+                    health = await client.get(f"{base_url}/health")
+                    assert health.status_code == 200
+                    break
+                except httpx.ConnectError:
+                    await asyncio.sleep(0.02)
+            else:
+                pytest.fail("WebSocket HTTP bridge did not start")
+
+            bootstrap = await client.get(f"{base_url}/webui/bootstrap")
+            assert bootstrap.status_code == 200
+            token = bootstrap.json()["token"]
+            assert token.startswith("nbwt_")
+
+            task = asyncio.create_task(client.get(
+                f"{base_url}/api/sessions/{quote(key, safe='')}/webui-thread?limit=2",
+                headers={"Authorization": f"Bearer {token}"},
+            ))
+            assert await asyncio.to_thread(entered.wait, 2)
+            await asyncio.sleep(0)
+            release.set()
+            response = await task
+            assert response.status_code == 200
+            assert response.json()["pagination"]["total"] == 2
     finally:
         release.set()
+        await channel.stop()
+        await server_task

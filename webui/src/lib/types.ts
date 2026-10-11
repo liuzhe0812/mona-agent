@@ -816,7 +816,6 @@ export interface SidebarStatePayload {
 export interface BootstrapResponse {
   token: string;
   ws_path: string;
-  expires_in: number;
   model_name?: string | null;
 }
 

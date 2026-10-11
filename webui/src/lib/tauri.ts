@@ -63,8 +63,8 @@ async function serializeRequestBody(body: BodyInit | null | undefined): Promise<
   return { supported: false };
 }
 
-function abortError(signal: AbortSignal): unknown {
-  return signal.reason ?? new DOMException("The operation was aborted.", "AbortError");
+function abortError(signal?: AbortSignal): unknown {
+  return signal?.reason ?? new DOMException("The operation was aborted.", "AbortError");
 }
 
 function withAbortSignal<T>(operation: Promise<T>, signal?: AbortSignal): Promise<T> {
@@ -93,32 +93,58 @@ function withAbortSignal<T>(operation: Promise<T>, signal?: AbortSignal): Promis
 export async function httpFetch(url: string, init?: RequestInit): Promise<Response> {
   if (isTauri()) {
     if (isLoopbackHttpUrl(url)) {
-      if (init?.signal?.aborted) {
-        throw new DOMException("The operation was aborted.", "AbortError");
-      }
-
+      const signal = init?.signal;
+      if (signal?.aborted) throw abortError(signal);
       const serializedBody = await serializeRequestBody(init?.body);
-      if (init?.signal?.aborted) throw abortError(init.signal);
+      if (signal?.aborted) throw abortError(signal);
       if (serializedBody.supported) {
         const headers = Array.from(new Headers(init?.headers).entries());
-        const result = await withAbortSignal(
-          invoke<LocalHttpBridgeResponse>("local_http_request", {
-            method: init?.method ?? "GET",
-            url,
-            headers,
-            body: serializedBody.body,
-          }),
-          init?.signal ?? undefined,
-        );
-        const responseBody =
-          result.status === 204 || result.status === 304
-            ? null
-            : new Uint8Array(result.body);
-        return new Response(responseBody, {
-          status: result.status,
-          statusText: result.statusText,
-          headers: new Headers(result.headers),
-        });
+        let cancellationId: number | undefined;
+        let cancelPromise: Promise<void> | undefined;
+        const cancelRequest = () => {
+          if (cancellationId === undefined) return Promise.resolve();
+          cancelPromise ??= invoke<void>("local_http_cancel", { cancellationId }).catch(() => {
+            console.warn("[tauri] Local HTTP request cancellation failed.");
+          });
+          return cancelPromise;
+        };
+        const onAbort = () => {
+          void cancelRequest();
+        };
+        try {
+          if (signal) {
+            cancellationId = await invoke<number>("local_http_prepare_cancel");
+            if (signal.aborted) throw abortError(signal);
+            signal.addEventListener("abort", onAbort, { once: true });
+            if (signal.aborted) throw abortError(signal);
+          }
+          const result = await withAbortSignal(
+            invoke<LocalHttpBridgeResponse>("local_http_request", {
+              method: init?.method ?? "GET",
+              url,
+              headers,
+              body: serializedBody.body,
+              ...(cancellationId === undefined ? {} : { cancellationId }),
+            }),
+            signal ?? undefined,
+          );
+          if (signal?.aborted) throw abortError(signal);
+          const responseBody =
+            result.status === 204 || result.status === 304
+              ? null
+              : new Uint8Array(result.body);
+          return new Response(responseBody, {
+            status: result.status,
+            statusText: result.statusText,
+            headers: new Headers(result.headers),
+          });
+        } catch (error) {
+          if (signal?.aborted) throw abortError(signal);
+          throw error;
+        } finally {
+          signal?.removeEventListener("abort", onAbort);
+          if (cancellationId !== undefined) await cancelRequest();
+        }
       }
     }
     return tauriFetch(url, init);

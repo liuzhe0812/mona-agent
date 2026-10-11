@@ -20,6 +20,7 @@ import time
 import uuid
 from collections.abc import Callable
 from datetime import datetime
+from functools import cache
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Self
 from urllib.parse import parse_qs, unquote, urlparse
@@ -114,7 +115,8 @@ class WebSocketConfig(Base):
       blocking ``urllib`` or synchronous ``httpx`` from inside a coroutine.
     - ``token_issue_secret``: If non-empty, token requests must send ``Authorization: Bearer <secret>`` or
       ``X-mona-Auth: <secret>``.
-    - ``websocket_requires_token``: If True, the handshake must include a valid token (static or issued and not expired).
+    - ``websocket_requires_token``: If True, the handshake must include a valid runtime, static,
+      or unexpired single-use token. Desktop bootstrap tokens last until this runtime stops.
     - Each connection has its own session: a unique ``chat_id`` maps to the agent session internally.
     - ``media`` field in outbound messages contains local filesystem paths; remote clients need a
       shared filesystem or an HTTP file server to access these files.
@@ -586,8 +588,8 @@ class WebSocketChannel(BaseChannel):
         self._conn_default: dict[Any, str] = {}
         # Single-use tokens consumed at WebSocket handshake.
         self._issued_tokens: dict[str, float] = {}
-        # Multi-use tokens for HTTP routes served beside WS; checked but not consumed.
-        self._api_tokens: dict[str, float] = {}
+        # Shared by desktop windows for this runtime; never persisted or time-expired.
+        self._runtime_token = f"nbwt_{secrets.token_urlsafe(32)}"
         self._stop_event: asyncio.Event | None = None
         self._server_task: asyncio.Task[None] | None = None
         self._artifact_watch_task: asyncio.Task[None] | None = None
@@ -847,13 +849,16 @@ class WebSocketChannel(BaseChannel):
             if got == issue_expected:
                 return self._handle_token_issue_http(connection, request)
 
-        # 2. Bootstrap (`/webui/bootstrap`): mint WS/API tokens + shared session metadata.
+        # 2. Bootstrap (`/webui/bootstrap`): runtime token + shared session metadata.
         if got == "/health":
+            from mona import __version__
+
             return _http_json_response(
                 {
                     "status": "ok",
                     "service": "mona-websocket",
-                    "capabilities": ["webui-bootstrap-v1", "sessions-v1"],
+                    "version": __version__,
+                    "capabilities": ["webui-runtime-token-v1", "sessions-v1"],
                 }
             )
 
@@ -1002,10 +1007,11 @@ class WebSocketChannel(BaseChannel):
         # these URLs when replaying a session.
         m = re.match(r"^/api/media/([A-Za-z0-9_-]+)/([A-Za-z0-9_-]+)$", got)
         if m:
-            return self._handle_media_fetch(m.group(1), m.group(2))
+            return await asyncio.to_thread(self._handle_media_fetch, m.group(1), m.group(2))
 
         if got.startswith("/api/file-preview"):
-            return self._handle_file_preview(
+            return await asyncio.to_thread(
+                self._handle_file_preview,
                 request,
                 scope=_query_first(query, "scope") or "",
                 session_key=_query_first(query, "session_key") or "",
@@ -1015,7 +1021,7 @@ class WebSocketChannel(BaseChannel):
             )
 
         if got == "/api/artifacts":
-            return self._handle_artifacts_list(request)
+            return await asyncio.to_thread(self._handle_artifacts_list, request)
 
         if got == "/api/artifact-rename":
             return self._handle_artifact_rename(request)
@@ -1038,7 +1044,9 @@ class WebSocketChannel(BaseChannel):
             return self._handle_stock_dashboard(request)
 
         if got == "/api/project-files":
-            return self._handle_project_files_list(request, _query_first(query, "key") or "")
+            return await asyncio.to_thread(
+                self._handle_project_files_list, request, _query_first(query, "key") or "",
+            )
 
         # 4. WebSocket upgrade (the channel's primary purpose). Only run the
         # handshake gate on requests that actually ask to upgrade; otherwise
@@ -1057,22 +1065,9 @@ class WebSocketChannel(BaseChannel):
     # -- HTTP route handlers ------------------------------------------------
 
     def _check_api_token(self, request: WsRequest) -> bool:
-        """Validate a request against the API token pool (multi-use, TTL-bound)."""
-        self._purge_expired_api_tokens()
+        """Validate the token for the current runtime."""
         token = _bearer_token(request.headers) or _query_first(_parse_query(request.path), "token")
-        if not token:
-            return False
-        expiry = self._api_tokens.get(token)
-        if expiry is None or time.monotonic() > expiry:
-            self._api_tokens.pop(token, None)
-            return False
-        return True
-
-    def _purge_expired_api_tokens(self) -> None:
-        now = time.monotonic()
-        for token_key, expiry in list(self._api_tokens.items()):
-            if now > expiry:
-                self._api_tokens.pop(token_key, None)
+        return bool(token) and hmac.compare_digest(token, self._runtime_token)
 
     def _handle_bootstrap(self, connection: Any, request: Any) -> Response:
         # When a secret is configured (token_issue_secret or static token),
@@ -1085,32 +1080,15 @@ class WebSocketChannel(BaseChannel):
         elif not _is_localhost(connection):
             # No secret configured: only allow localhost (local dev mode).
             return _http_error(403, "bootstrap is localhost-only")
-        # Cap outstanding tokens to avoid runaway growth from a misbehaving client.
-        self._purge_expired_issued_tokens()
-        self._purge_expired_api_tokens()
-        if (
-            len(self._issued_tokens) >= self._MAX_ISSUED_TOKENS
-            or len(self._api_tokens) >= self._MAX_ISSUED_TOKENS
-        ):
-            return _http_response(
-                json.dumps({"error": "too many outstanding tokens"}).encode("utf-8"),
-                status=429,
-                content_type="application/json; charset=utf-8",
-            )
-        token = f"nbwt_{secrets.token_urlsafe(32)}"
-        expiry = time.monotonic() + float(self.config.token_ttl_s)
-        # Same string registered in both pools: the WS handshake consumes one copy
-        # while the REST surface keeps validating the other until TTL expiry.
-        self._issued_tokens[token] = expiry
-        self._api_tokens[token] = expiry
-        return _http_json_response(
+        response = _http_json_response(
             {
-                "token": token,
+                "token": self._runtime_token,
                 "ws_path": self._expected_path(),
-                "expires_in": self.config.token_ttl_s,
                 "model_name": _resolve_bootstrap_model_name(self._runtime_model_name),
             }
         )
+        response.headers["Cache-Control"] = "no-store"
+        return response
 
     def _handle_sessions_list(self, request: WsRequest) -> Response:
         if not self._check_api_token(request):
@@ -1231,7 +1209,7 @@ class WebSocketChannel(BaseChannel):
             if isinstance(exc, ExpertInstallUnavailableError):
                 return _http_error(503, str(exc))
             self.logger.exception("failed to start expert install")
-            return _http_error(500, "无法启动专家安装")
+            return _http_error(500, "无法启动伙伴安装")
         return _http_json_response(
             {"ok": True, "job": job.model_dump(by_alias=True, mode="json")},
             status=202,
@@ -1250,7 +1228,7 @@ class WebSocketChannel(BaseChannel):
                 {"jobs": [job.model_dump(by_alias=True, mode="json") for job in manager.list()]}
             )
         except KeyError:
-            return _http_error(404, "expert install job not found")
+            return _http_error(404, "partner install job not found")
 
     async def _handle_expert_install_cancel(self, request: WsRequest) -> Response:
         if not self._check_api_token(request):
@@ -1261,7 +1239,7 @@ class WebSocketChannel(BaseChannel):
         try:
             job = await self._expert_install_job_manager().cancel(job_id)
         except KeyError:
-            return _http_error(404, "expert install job not found")
+            return _http_error(404, "partner install job not found")
         except ValueError as exc:
             return _http_error(409, str(exc))
         return _http_json_response({"ok": True, "job": job.model_dump(by_alias=True, mode="json")})
@@ -2266,8 +2244,10 @@ class WebSocketChannel(BaseChannel):
     ) -> dict[str, Any] | None:
         if self._session_manager is None:
             return None
-        session = self._session_manager.get_or_create(session_key)
-        state = session.metadata.get(_ARTIFACT_TASK_STATE_KEY)
+        data = self._session_manager.read_session_file(session_key)
+        if data is None:
+            return None
+        state = (data.get("metadata") or {}).get(_ARTIFACT_TASK_STATE_KEY)
         if not isinstance(state, dict):
             return None
         current_id = state.get("id")
@@ -2306,6 +2286,11 @@ class WebSocketChannel(BaseChannel):
 
         refs: list[Any] = []
         current_task_id = None
+
+        @cache
+        def legacy_owner() -> tuple[Path, str, str | None] | None:
+            return self._session_artifact_owner(session_key)
+
         for record in read_transcript_lines(session_key):
             if record.get("event") == "user":
                 current_task_id = record.get("task_id")
@@ -2336,12 +2321,14 @@ class WebSocketChannel(BaseChannel):
                     continue
                 ref = coerce_artifact_ref(edit.get("artifact_ref"))
                 if ref is None:
-                    ref = self._legacy_session_artifact_ref(session_key, edit)
+                    ref = self._legacy_session_artifact_ref(session_key, edit, legacy_owner())
                 if ref is not None and ref.session_id in (None, session_key):
                     refs.append(ref)
         return refs
 
-    def _artifact_refs_from_session(self, session_key: str) -> list[Any]:
+    def _artifact_refs_from_session(
+        self, session_key: str, *, owner: tuple[Path, str, str | None] | None = None,
+    ) -> list[Any]:
         """Read explicit delivery references from the session projection."""
         from mona.agent.artifacts import coerce_artifact_ref
         from mona.webui.transcript import read_transcript_lines
@@ -2349,6 +2336,11 @@ class WebSocketChannel(BaseChannel):
         refs: list[Any] = []
         seen_paths: set[tuple[str, str, str]] = set()
         records = read_transcript_lines(session_key)
+
+        @cache
+        def legacy_owner() -> tuple[Path, str, str | None] | None:
+            # Reuse only within this projection; the next request revalidates ownership.
+            return owner if owner is not None else self._session_artifact_owner(session_key)
 
         def add_refs(raw_files: list[Any]) -> None:
             for item in reversed(raw_files):
@@ -2359,7 +2351,7 @@ class WebSocketChannel(BaseChannel):
                     # ``path``/``absolute_path``. Convert those records in
                     # memory, bounded by the session's resolved Agent root;
                     # never persist or trust the legacy absolute path.
-                    ref = self._legacy_session_artifact_ref(session_key, item)
+                    ref = self._legacy_session_artifact_ref(session_key, item, legacy_owner())
                 if ref is None:
                     continue
                 key = (ref.owner_kind, ref.owner_id, ref.relative_path)
@@ -2448,6 +2440,7 @@ class WebSocketChannel(BaseChannel):
         self,
         session_key: str,
         item: dict[str, Any],
+        owner: tuple[Path, str, str | None] | None,
     ) -> Any | None:
         """Convert one pre-ArtifactRef delivery record safely for replay.
 
@@ -2460,10 +2453,9 @@ class WebSocketChannel(BaseChannel):
         from mona.agent.artifacts import ArtifactRef
         from mona.config.paths import get_agent_output_dir
 
-        owner = self._session_artifact_owner(session_key)
         if owner is None:
             return None
-        base, agent_id = owner
+        base, agent_id, room_id = owner
         try:
             root = get_agent_output_dir(base, agent_id).resolve()
         except (OSError, ValueError):
@@ -2505,14 +2497,6 @@ class WebSocketChannel(BaseChannel):
         if not relative_path or relative_path == ".":
             return None
 
-        room_id: str | None = None
-        if self._session_manager is not None:
-            try:
-                session = self._session_manager.get_or_create(session_key)
-                if session.conversation_metadata.type == "room":
-                    room_id = session_key.removeprefix("websocket:")
-            except Exception:
-                logger.exception("Cannot resolve legacy artifact room for {}", session_key)
         size = item.get("size")
         if not isinstance(size, int) or size < 0:
             size = None
@@ -2546,7 +2530,7 @@ class WebSocketChannel(BaseChannel):
         except ValueError:
             return None
 
-    def _session_artifact_owner(self, session_key: str) -> tuple[Path, str] | None:
+    def _session_artifact_owner(self, session_key: str) -> tuple[Path, str, str | None] | None:
         if self._session_manager is None:
             return None
         data = self._session_manager.read_session_file(session_key)
@@ -2563,11 +2547,14 @@ class WebSocketChannel(BaseChannel):
             base = self.workspace
         conversation = metadata.get("conversation")
         agent_id = "mona"
+        room_id = None
         if isinstance(conversation, dict):
             direct = conversation.get("directAgentId") or conversation.get("direct_agent_id")
             if isinstance(direct, str) and direct.strip():
                 agent_id = direct.strip()
-        return base.resolve(), agent_id
+            if conversation.get("type") == "room":
+                room_id = session_key.removeprefix("websocket:")
+        return base.resolve(), agent_id, room_id
 
     def _room_artifact_ref(self, room_id: str, path: str) -> Any | None:
         """Find a room-owned reference by relative path without scanning roots."""
@@ -2654,9 +2641,9 @@ class WebSocketChannel(BaseChannel):
             owner = self._session_artifact_owner(decoded_key)
             if owner is None:
                 return _http_error(404, "session not found")
-            base, agent_id = owner
+            base, agent_id, _ = owner
             if artifact_id:
-                session_refs = self._artifact_refs_from_session(decoded_key)
+                session_refs = self._artifact_refs_from_session(decoded_key, owner=owner)
                 ref = next(
                     (item for item in session_refs if getattr(item, "id", None) == artifact_id),
                     None,
@@ -2821,7 +2808,7 @@ class WebSocketChannel(BaseChannel):
             owner = self._session_artifact_owner(decoded_key)
             if owner is None:
                 return _http_error(404, "session not found")
-            base, agent_id = owner
+            base, agent_id, _ = owner
             output_dir = get_agent_output_dir(base, agent_id)
             try:
                 result = list_artifacts(output_dir)
@@ -2845,7 +2832,7 @@ class WebSocketChannel(BaseChannel):
             }
             session_refs = [
                 ref
-                for ref in self._artifact_refs_from_session(decoded_key)
+                for ref in self._artifact_refs_from_session(decoded_key, owner=owner)
                 if ref.owner_kind == "agent" and ref.owner_id == agent_id
             ]
             session_files: list[dict[str, Any]] = []
@@ -2930,7 +2917,7 @@ class WebSocketChannel(BaseChannel):
             owner = self._session_artifact_owner(decoded_key)
             if owner is None:
                 return _http_error(404, "session not found")
-            base, agent_id = owner
+            base, agent_id, _ = owner
             root = get_agent_output_dir(base, agent_id)
         elif scope == "project":
             if self._session_manager is None:
@@ -3175,6 +3162,8 @@ class WebSocketChannel(BaseChannel):
 
     def _authorize_websocket_handshake(self, connection: Any, query: dict[str, list[str]]) -> Any:
         supplied = _query_first(query, "token")
+        if supplied and hmac.compare_digest(supplied, self._runtime_token):
+            return None
         static_token = self.config.token.strip()
 
         if static_token:
@@ -6483,7 +6472,7 @@ class WebSocketChannel(BaseChannel):
         self._conn_chats.clear()
         self._conn_default.clear()
         self._issued_tokens.clear()
-        self._api_tokens.clear()
+        self._runtime_token = f"nbwt_{secrets.token_urlsafe(32)}"
 
     async def _safe_send_to(self, connection: Any, raw: str, *, label: str = "") -> None:
         """Send a raw frame to one connection, cleaning up on ConnectionClosed."""
@@ -6570,7 +6559,7 @@ class WebSocketChannel(BaseChannel):
         owner = self._session_artifact_owner(f"websocket:{chat_id}")
         if owner is None:
             return False
-        base, default_agent_id = owner
+        base, default_agent_id, _ = owner
         agent_id = str(metadata.get("_artifact_agent_id") or default_agent_id)
         try:
             root = get_agent_output_dir(base, agent_id).resolve()
@@ -6622,6 +6611,13 @@ class WebSocketChannel(BaseChannel):
 
         # Snapshot the subscriber set so ConnectionClosed cleanups mid-iteration are safe.
         conns = list(self._subs.get(msg.chat_id, ()))
+        if msg.metadata.get("_context_usage"):
+            raw = json.dumps({"event": "context_usage", "chat_id": msg.chat_id,
+                              "token_usage": msg.metadata.get("token_usage"),
+                              "job_id": msg.metadata.get("job_id")}, ensure_ascii=False)
+            for connection in conns:
+                await self._safe_send_to(connection, raw, label="context_usage")
+            return
         if not conns:
             # Durable branches below still append their canonical transcript
             # records; only the final socket fan-out becomes a no-op.

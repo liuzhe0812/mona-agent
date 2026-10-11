@@ -7,6 +7,7 @@ vi.mock("@tauri-apps/api/core", () => ({ invoke: mocks.invoke }));
 import {
   createNoteFromChat,
   deleteDesktopNotes,
+  httpFetch,
   listWorkspaceCanvases,
   migrateLegacyCanvases,
   openWorkspaceCanvasFile,
@@ -15,6 +16,16 @@ import {
   saveWorkspaceCanvas,
   writeWorkspaceCanvasFile,
 } from "./tauri";
+
+function deferred<T>() {
+  let resolve!: (value: T) => void;
+  let reject!: (reason?: unknown) => void;
+  const promise = new Promise<T>((resolvePromise, rejectPromise) => {
+    resolve = resolvePromise;
+    reject = rejectPromise;
+  });
+  return { promise, resolve, reject };
+}
 
 describe("createNoteFromChat", () => {
   beforeEach(() => {
@@ -164,6 +175,140 @@ describe("createNoteFromChat", () => {
     expect(mocks.invoke).toHaveBeenLastCalledWith("workspace_canvas_write_file", {
       path: saved.path,
       canvas,
+    });
+  });
+});
+
+describe("httpFetch cancellation", () => {
+  beforeEach(() => {
+    Object.defineProperty(window, "__TAURI_INTERNALS__", {
+      configurable: true,
+      value: {},
+    });
+    mocks.invoke.mockReset();
+  });
+
+  afterEach(() => {
+    delete window.__TAURI_INTERNALS__;
+  });
+
+  it("passes an abort handle through the loopback bridge", async () => {
+    mocks.invoke
+      .mockResolvedValueOnce(41)
+      .mockResolvedValueOnce({
+        status: 200,
+        statusText: "OK",
+        headers: [["content-type", "image/png"]],
+        body: [112, 110, 103],
+      });
+    const signal = new AbortController().signal;
+
+    const response = await httpFetch("http://127.0.0.1:17173/api/file-preview", { signal });
+
+    expect(await response.text()).toBe("png");
+    expect(mocks.invoke).toHaveBeenNthCalledWith(1, "local_http_prepare_cancel", undefined);
+    expect(mocks.invoke).toHaveBeenNthCalledWith(2, "local_http_request", {
+      method: "GET",
+      url: "http://127.0.0.1:17173/api/file-preview",
+      headers: [],
+      body: null,
+      cancellationId: 41,
+    });
+  });
+
+  it("cancels a prepared handle if aborted while preparing it", async () => {
+    const prepare = deferred<number>();
+    mocks.invoke.mockImplementation((command: string) => {
+      if (command === "local_http_prepare_cancel") return prepare.promise;
+      return Promise.resolve(undefined);
+    });
+    const controller = new AbortController();
+
+    const pending = httpFetch("http://127.0.0.1:17173/api/file-preview", {
+      signal: controller.signal,
+    });
+    await vi.waitFor(() => expect(mocks.invoke).toHaveBeenCalledWith(
+      "local_http_prepare_cancel",
+      undefined,
+    ));
+    controller.abort();
+    prepare.resolve(52);
+
+    await expect(pending).rejects.toMatchObject({ name: "AbortError" });
+    expect(mocks.invoke).toHaveBeenCalledWith("local_http_cancel", { cancellationId: 52 });
+    expect(mocks.invoke).not.toHaveBeenCalledWith("local_http_request", expect.anything());
+  });
+
+  it("cancels an in-flight loopback request and reports AbortError", async () => {
+    const request = deferred<{
+      status: number;
+      statusText: string;
+      headers: Array<[string, string]>;
+      body: number[];
+    }>();
+    mocks.invoke.mockImplementation((command: string) => {
+      if (command === "local_http_prepare_cancel") return Promise.resolve(63);
+      if (command === "local_http_request") return request.promise;
+      if (command === "local_http_cancel") {
+        request.reject(new Error("request cancelled"));
+        return Promise.resolve(undefined);
+      }
+      return Promise.resolve(undefined);
+    });
+    const controller = new AbortController();
+    const pending = httpFetch("http://127.0.0.1:17173/api/file-preview", {
+      signal: controller.signal,
+    });
+
+    await vi.waitFor(() => expect(mocks.invoke).toHaveBeenCalledWith(
+      "local_http_request",
+      expect.objectContaining({ cancellationId: 63 }),
+    ));
+    controller.abort();
+
+    await expect(pending).rejects.toMatchObject({ name: "AbortError" });
+    expect(mocks.invoke).toHaveBeenCalledWith("local_http_cancel", { cancellationId: 63 });
+  });
+
+  it("preserves the timeout reason and cancels the native request without waiting for it", async () => {
+    const request = deferred<never>();
+    mocks.invoke.mockImplementation((command: string) => {
+      if (command === "local_http_prepare_cancel") return Promise.resolve(74);
+      if (command === "local_http_request") return request.promise;
+      return Promise.resolve(undefined);
+    });
+    const controller = new AbortController();
+    const pending = httpFetch("http://127.0.0.1:17173/api/webui/history", {
+      signal: controller.signal,
+    });
+    await vi.waitFor(() => expect(mocks.invoke).toHaveBeenCalledWith(
+      "local_http_request",
+      expect.objectContaining({ cancellationId: 74 }),
+    ));
+
+    const timeout = new DOMException("The request timed out.", "TimeoutError");
+    controller.abort(timeout);
+
+    await expect(pending).rejects.toBe(timeout);
+    expect(mocks.invoke).toHaveBeenCalledWith("local_http_cancel", { cancellationId: 74 });
+  });
+
+  it("keeps uncancellable loopback calls on the existing request contract", async () => {
+    mocks.invoke.mockResolvedValueOnce({
+      status: 200,
+      statusText: "OK",
+      headers: [],
+      body: [],
+    });
+
+    await httpFetch("http://127.0.0.1:17173/api/file-preview");
+
+    expect(mocks.invoke).toHaveBeenCalledOnce();
+    expect(mocks.invoke).toHaveBeenCalledWith("local_http_request", {
+      method: "GET",
+      url: "http://127.0.0.1:17173/api/file-preview",
+      headers: [],
+      body: null,
     });
   });
 });

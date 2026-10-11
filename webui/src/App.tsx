@@ -84,15 +84,12 @@ type BootState =
       status: "ready";
       client: MonaClient;
       token: string;
-      tokenExpiresAt: number;
       modelName: string | null;
     };
 
 const COMPLETED_RUNS_STORAGE_KEY = "mona-webui.sidebar.completed-runs.v1";
 const RESTART_STARTED_KEY = "mona-webui.restartStartedAt";
-const TOKEN_REFRESH_MARGIN_MS = 30_000;
-const TOKEN_REFRESH_MIN_DELAY_MS = 5_000;
-type ShellView = "chat" | "settings" | "note" | "ssh" | "db" | "doc" | "email" | "schedule" | "system" | "profile" | "stock";
+type ShellView = "chat" | "settings" | "note" | "ssh" | "db" | "doc" | "email" | "schedule" | "system" | "profile" | "stock" | "development";
 
 export function openNewBrowserTab(
   setView: (view: ShellView) => void,
@@ -192,19 +189,6 @@ const DownloadsWindow = lazy(() =>
     default: module.DownloadsWindow,
   })),
 );
-
-function bootstrapTokenExpiresAt(expiresInSeconds: number): number {
-  return Date.now() + Math.max(0, expiresInSeconds) * 1000;
-}
-
-function tokenRefreshDelayMs(expiresAt: number): number {
-  const remaining = Math.max(0, expiresAt - Date.now());
-  const margin = Math.min(
-    TOKEN_REFRESH_MARGIN_MS,
-    Math.max(1_000, remaining / 2),
-  );
-  return Math.max(TOKEN_REFRESH_MIN_DELAY_MS, remaining - margin);
-}
 
 function isQuickAskRoute(): boolean {
   return typeof window !== "undefined" && window.location.hash.startsWith("#/quick-ask");
@@ -351,15 +335,15 @@ export default function App() {
             url,
             onReauth: async () => {
               try {
+                resetApiBase();
+                resetGatewayBaseUrl();
                 const refreshed = await fetchBootstrap("", bootstrapSecretRef.current);
                 const refreshedUrl = await deriveWsUrl(refreshed.ws_path, refreshed.token);
-                const tokenExpiresAt = bootstrapTokenExpiresAt(refreshed.expires_in);
                 setState((current) =>
                   current.status === "ready" && current.client === client
                     ? {
                         ...current,
                         token: refreshed.token,
-                        tokenExpiresAt,
                         modelName: refreshed.model_name ?? current.modelName,
                       }
                     : current,
@@ -376,7 +360,6 @@ export default function App() {
             status: "ready",
             client,
             token: boot.token,
-            tokenExpiresAt: bootstrapTokenExpiresAt(boot.expires_in),
             modelName: boot.model_name ?? null,
           });
         } catch (e) {
@@ -395,35 +378,6 @@ export default function App() {
     },
     [],
   );
-
-  useEffect(() => {
-    if (state.status !== "ready") return;
-    const client = state.client;
-    const timer = window.setTimeout(async () => {
-      try {
-        const boot = await fetchBootstrap("", bootstrapSecretRef.current);
-        const url = await deriveWsUrl(boot.ws_path, boot.token);
-        const tokenExpiresAt = bootstrapTokenExpiresAt(boot.expires_in);
-        client.updateUrl(url);
-        setState((current) =>
-          current.status === "ready" && current.client === client
-            ? {
-                ...current,
-                token: boot.token,
-                tokenExpiresAt,
-                modelName: boot.model_name ?? current.modelName,
-              }
-            : current,
-        );
-      } catch (e) {
-        const msg = (e as Error).message;
-        if (msg.includes("HTTP 401") || msg.includes("HTTP 403")) {
-          setState({ status: "auth", failed: true });
-        }
-      }
-    }, tokenRefreshDelayMs(state.tokenExpiresAt));
-    return () => window.clearTimeout(timer);
-  }, [state]);
 
   const connectRuntime = useCallback(() => {
     if (!isTauri()) {

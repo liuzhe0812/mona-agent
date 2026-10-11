@@ -496,8 +496,14 @@ mod local_http_auth_tests {
         assert!(needs_services_token("/api/office/sessions"));
         assert!(needs_services_token("/api/office/sessions/id/checkpoint"));
         assert!(!needs_services_token("/api/office/ws"));
+        assert!(needs_services_token("/api/development/projects"));
+        assert!(needs_services_token("/api/development/sessions/id/send"));
+        assert!(!needs_services_token("/api/development-other"));
     }
 }
+
+#[cfg(test)]
+mod local_http_tests;
 
 fn local_http_client() -> Result<&'static reqwest::Client, String> {
     static CLIENT: OnceLock<reqwest::Client> = OnceLock::new();
@@ -517,13 +523,77 @@ fn local_http_client() -> Result<&'static reqwest::Client, String> {
 
 fn needs_services_token(path: &str) -> bool {
     path.starts_with("/api/materials")
+        || path == "/api/development"
+        || path.starts_with("/api/development/")
         || path.starts_with("/api/profile")
         || (path.starts_with("/api/office") && path != "/api/office/ws")
         || path == "/api/stock/research/preflight"
 }
 
 #[tauri::command]
+fn local_http_prepare_cancel(webview: tauri::Webview) -> u32 {
+    webview.resources_table().add(LocalHttpCancellation::default())
+}
+
+#[derive(Default)]
+struct LocalHttpCancellation(tokio_util::sync::CancellationToken);
+
+impl tauri::Resource for LocalHttpCancellation {
+    fn close(self: Arc<Self>) {
+        self.0.cancel();
+    }
+}
+
+impl LocalHttpCancellation {
+    async fn run<T>(&self, request: impl std::future::Future<Output = Result<T, String>>) -> Result<T, String> {
+        tokio::select! {
+            biased;
+            _ = self.0.cancelled() => Err("Local HTTP request cancelled".to_string()),
+            result = request => result,
+        }
+    }
+}
+
+#[tauri::command]
+fn local_http_cancel(webview: tauri::Webview, cancellation_id: u32) {
+    let mut resources = webview.resources_table();
+    if resources.get::<LocalHttpCancellation>(cancellation_id).is_ok() {
+        let _ = resources.close(cancellation_id);
+    }
+}
+
+struct LocalHttpCancelGuard {
+    webview: tauri::Webview,
+    id: u32,
+}
+
+impl Drop for LocalHttpCancelGuard {
+    fn drop(&mut self) {
+        let _ = self.webview.resources_table().close(self.id);
+    }
+}
+
+#[tauri::command]
 async fn local_http_request(
+    webview: tauri::Webview,
+    method: String,
+    url: String,
+    headers: Vec<(String, String)>,
+    body: Option<Vec<u8>>,
+    cancellation_id: Option<u32>,
+) -> Result<LocalHttpResponse, String> {
+    let request = perform_local_http_request(method, url, headers, body);
+    if let Some(id) = cancellation_id {
+        let cancellation = webview.resources_table().get::<LocalHttpCancellation>(id)
+            .map_err(|_| "Local HTTP request cancelled".to_string())?;
+        let _guard = LocalHttpCancelGuard { webview, id };
+        cancellation.run(request).await
+    } else {
+        request.await
+    }
+}
+
+async fn perform_local_http_request(
     method: String,
     url: String,
     headers: Vec<(String, String)>,
@@ -864,6 +934,8 @@ pub fn run() {
             diagnose_gateway,
             gateway::read_gateway_log,
             local_http_request,
+            local_http_prepare_cancel,
+            local_http_cancel,
             open_in_browser,
             mona_config_status,
             write_mona_provider_config,

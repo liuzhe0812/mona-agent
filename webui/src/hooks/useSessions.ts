@@ -158,7 +158,7 @@ export function useSessions(): {
 
   useEffect(() => {
     void refresh();
-  }, [refresh]);
+  }, [refresh, token]);
 
   useEffect(() => {
     if (!client) return;
