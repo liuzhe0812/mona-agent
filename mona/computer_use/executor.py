@@ -10,7 +10,11 @@ from typing import Any
 
 import httpx
 
-from mona.computer_use.perception import add_visual_candidates, public_observation
+from mona.computer_use.perception import (
+    add_visual_candidates,
+    candidate_is_grounded,
+    public_observation,
+)
 from mona.config.schema import JevConfig
 from mona.providers.decision import request_decisions, validated_choice
 
@@ -36,8 +40,11 @@ def _questions(
     candidates: list[dict[str, Any]],
     text_values: list[str],
     check_coverage: bool = False,
+    min_confidence: float = 0.6,
 ) -> tuple[dict[str, Any], dict[str, dict[str, Any]], dict[str, tuple[str, str]]]:
-    by_id = {str(c["id"]): c for c in candidates[:240] if not c.get("disabled") and c.get("enabled") is not False}
+    by_id = {str(c["id"]): c for c in candidates[:240]
+             if not c.get("disabled") and c.get("enabled") is not False
+             and candidate_is_grounded(c, min_confidence)}
     click_targets = {
         candidate_id: _candidate_text(candidate)
         for candidate_id, candidate in by_id.items()
@@ -136,7 +143,11 @@ def _questions(
     return questions, by_id, type_pairs
 
 
-def _target_arguments(candidate: dict[str, Any], pid: int, window_id: int) -> dict[str, Any]:
+def _target_arguments(
+    candidate: dict[str, Any], pid: int, window_id: int, min_confidence: float = 0.6,
+) -> dict[str, Any]:
+    if not candidate_is_grounded(candidate, min_confidence):
+        raise ValueError("Selected visual target needs reliable localization before input")
     arguments: dict[str, Any] = {"pid": pid, "window_id": window_id, "scope": "window"}
     token = candidate.get("element_token")
     if token:
@@ -263,6 +274,7 @@ async def run_computer_goal(
         questions, by_id, type_pairs = _questions(
             goal=goal, completion_criteria=completion_criteria,
             candidates=candidates, text_values=values, check_coverage=check_coverage,
+            min_confidence=min_confidence,
         )
         operation_actions = {
             "CLICK": "click", "RIGHT_CLICK": "right_click", "DOUBLE_CLICK": "double_click",
@@ -377,7 +389,7 @@ async def run_computer_goal(
                         "DOUBLE_CLICK": ("double_target", "double_click"),
                     }[operation]
                     candidate = by_id[choose(answers, question, questions[question]["criteria"])]
-                    args = _target_arguments(candidate, pid, window_id)
+                    args = _target_arguments(candidate, pid, window_id, min_confidence)
                 elif operation == "TYPE_TEXT":
                     pair = choose(answers, "type_target", questions["type_target"]["criteria"])
                     candidate_id, value = type_pairs[pair]
@@ -385,7 +397,7 @@ async def run_computer_goal(
                     action = "set_value" if candidate.get("element_token") and "set_value" in candidate.get("actions", []) and "set_value" in allowed else "type"
                     if action not in allowed or action not in candidate.get("actions", []):
                         raise ValueError("Selected field does not support text input")
-                    args = _target_arguments(candidate, pid, window_id)
+                    args = _target_arguments(candidate, pid, window_id, min_confidence)
                     args["value" if action == "set_value" else "text"] = value
                 elif operation in {"PRESS_ENTER", "PRESS_ESCAPE"}:
                     action = "key"

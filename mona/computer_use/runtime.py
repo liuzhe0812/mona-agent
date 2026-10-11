@@ -493,7 +493,9 @@ class CuaDriverManager:
         return MCPServerConfig(
             type="stdio",
             command=str(executable),
-            args=["mcp"],
+            # The driver's full-desktop cursor overlay obscures the physical
+            # capture needed for DPI-virtualized windows. Mona owns Stop/status.
+            args=["mcp", "--no-overlay"],
             env={
                 "CUA_DRIVER_HOME": state_root,
                 "CUA_DRIVER_RS_HOME": state_root,

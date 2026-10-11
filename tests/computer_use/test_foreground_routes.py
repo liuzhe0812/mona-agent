@@ -171,7 +171,9 @@ async def _observe_window(harness) -> None:
         action="window",
         arguments={"pid": _PID, "window_id": _WINDOW_ID},
     )
-    assert harness.turn.observation == {
+    assert harness.turn.observation is not None
+    assert harness.turn.observation["image_id"]
+    assert {key: harness.turn.observation[key] for key in ("scope", "pid", "window_id", "width", "height", "tokens")} == {
         "scope": "window",
         "pid": _PID,
         "window_id": _WINDOW_ID,
@@ -224,12 +226,13 @@ async def test_coordinate_click_focuses_first_and_preserves_coordinates(computer
 
     result = await computer_tools.registry.get("computer_act").execute(
         action="click",
-        arguments={"pid": _PID, "window_id": _WINDOW_ID, "x": x, "y": y},
+        arguments={"pid": _PID, "window_id": _WINDOW_ID, "x": x, "y": y,
+                   "image_id": computer_tools.turn.observation["image_id"]},
     )
 
     assert result == "clicked"
     calls = _action_calls(computer_tools)
-    assert [name for name, _ in calls] == ["get_window_state", "bring_to_front", "click"]
+    assert [name for name, _ in calls] == ["get_window_state", "bring_to_front", "get_window_state", "click"]
     click_arguments = calls[-1][1]
     assert click_arguments == {
         "pid": _PID,
