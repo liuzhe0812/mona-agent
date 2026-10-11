@@ -1,0 +1,24 @@
+.development-list-title {
+  mask-image: linear-gradient(to right, black calc(100% - 1em), transparent);
+}
+
+.development-list-row:is(:hover, :focus-within, [data-actions-visible="true"]) .development-list-title {
+  mask-image: linear-gradient(to right, black calc(100% - var(--dev-list-title-covered) - 1em), transparent calc(100% - var(--dev-list-title-covered)));
+}
+
+@media (hover: none) {
+  .development-list-title {
+    mask-image: linear-gradient(to right, black calc(100% - var(--dev-list-title-covered) - 1em), transparent calc(100% - var(--dev-list-title-covered)));
+  }
+}
+
+@media (prefers-reduced-motion: no-preference) {
+  .development-list-row:is(:hover, :focus-within, [data-actions-visible="true"]) .development-list-title[data-overflow="true"] .development-list-title-text {
+    animation: development-list-title-scroll var(--dev-list-title-duration) linear infinite alternate;
+  }
+}
+
+@keyframes development-list-title-scroll {
+  0%, 20% { transform: translateX(0); }
+  80%, 100% { transform: translateX(var(--dev-list-title-offset)); }
+}

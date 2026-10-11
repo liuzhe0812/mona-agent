@@ -1,0 +1,254 @@
+[
+  {
+    "source": "packages/ui/src/v4/conversationAssistantWorkItems.ts",
+    "sha256": "5376dad21419a98b1cf86bb2c07782028e207081448ad63eb652ad29b3b99531",
+    "adaptedInto": "conversationAssistantWorkItems.ts",
+    "adaptation": "Retains consecutive Explore/Execute/Changes algorithms and first-row identity; bridges Mona WorkRow/Activity, live input preview and statuses; CUA/agent rows are absent from Mona row contract."
+  },
+  {
+    "source": "packages/ui/src/ToolCallBlocks/renderers/execute.tsx",
+    "sha256": "9b6ef1e3b544395284c7e0a493f961732dcc79225cc1509030b5ace014b58d29",
+    "adaptedInto": "renderers/execute.tsx",
+    "adaptation": "Renderer copied; imports use local schema, context and primitive adapters."
+  },
+  {
+    "source": "packages/ui/src/ToolCallBlocks/renderers/execute-group.tsx",
+    "sha256": "495fcd4c73056b797f265fd26c278e05d125069a81ebfda916ff13ca994751d7",
+    "adaptedInto": "renderers/execute-group.tsx",
+    "adaptation": "Renderer copied; recursive child cards call Mona host renderer callback."
+  },
+  {
+    "source": "packages/ui/src/ToolCallBlocks/renderers/explore.tsx",
+    "sha256": "a66a735531fcc11fcd9dbde0fb4aeb3dbef85145da83257ae347fb4d18ea24e7",
+    "adaptedInto": "renderers/explore.tsx",
+    "adaptation": "Renderer copied; children and external file preview use Mona props; local plan and tool identity helpers."
+  },
+  {
+    "source": "packages/ui/src/ToolCallBlocks/renderers/read.tsx",
+    "sha256": "aab42216196aa06ae75eb57f363acbf87d99666f7babf4e00eedc4492dfcff5c",
+    "adaptedInto": "renderers/read.tsx",
+    "adaptation": "Renderer copied; file preview stays behind onOpenCodeViewer callback."
+  },
+  {
+    "source": "packages/ui/src/ToolCallBlocks/renderers/search.tsx",
+    "sha256": "97cd974e71436c500dd1b73c49e2bd79469022235cd4f593ac4d535238dae2fa",
+    "adaptedInto": "renderers/search.tsx",
+    "adaptation": "Renderer copied; local i18n and summary primitives."
+  },
+  {
+    "source": "packages/ui/src/ToolCallBlocks/renderers/ExecuteOutput.tsx",
+    "sha256": "631b4ee9d0301e3d217156c6edba2409416030b1673a27550937bc086b45d3d1",
+    "adaptedInto": "renderers/ExecuteOutput.tsx",
+    "adaptation": "Preserves stream auto-follow and user scroll freeze using a native div in place of unavailable ScrollFadeViewport; removes diagnostics-only logs."
+  },
+  {
+    "source": "packages/ui/src/ToolCallBlocks/ToolSnapshotFieldNotice.tsx",
+    "sha256": "c04dff304f34907149d3a7c5849e38c95e032a88ce676239bd33c8c57aeb8d72",
+    "adaptedInto": "ToolSnapshotFieldNotice.tsx",
+    "adaptation": "Component copied; snapshot reference type bridged locally."
+  },
+  {
+    "source": "packages/ui/src/ToolCallBlocks/renderers/edit.tsx",
+    "sha256": "152cb2f2e9d41cc2a85e92e3023522904e6fd89fdd76350d899f14eb28cb575e",
+    "adaptedInto": "renderers/edit.tsx",
+    "adaptation": "Edit/Write renderer copied; tool preview callbacks and full-output action are Mona host props."
+  },
+  {
+    "source": "packages/ui/src/ToolCallBlocks/renderers/fallback.tsx",
+    "sha256": "399fb5dac88e21a2e0b3d33c8b089bd2ac170024f9c0a303355fef7f80f71c05",
+    "adaptedInto": "renderers/fallback.tsx",
+    "adaptation": "Generic unknown-tool fallback copied; full Mona tool payload and host actions stay available."
+  },
+  {
+    "source": "packages/ui/src/ToolCallBlocks/renderers/EditInlineDiffContent.tsx",
+    "sha256": "3220e06fbf214f5073ab51f55ba12f329d6ea503e09111d26376593957760786",
+    "adaptedInto": "renderers/EditInlineDiffContent.tsx",
+    "adaptation": "Inline diff renderer copied; local CodeViewer, Shiki, diff and settings imports."
+  },
+  {
+    "source": "packages/ui/src/ToolCallBlocks/ToolCallBody.tsx",
+    "sha256": "cdd414be07cef7af8adebb85f72633d7b1736ed6a3e266eed6ce9bff5e2b7aa5",
+    "adaptedInto": "ToolCallBody.tsx",
+    "adaptation": "Tool input/output, markdown, plan, media and code previews preserved; media reads through Mona MarkdownContext."
+  },
+  {
+    "source": "packages/ui/src/components/ai-elements/tool.tsx",
+    "sha256": "c4ca6fee5ecb3cfa597e8e99a2786c1bca28a6af36c4e8d05626b979e0f5963c",
+    "adaptedInto": "ToolInput.tsx, ToolOutput.tsx",
+    "adaptation": "ToolInput/ToolOutput source implementations retained with local CodeBlock import and structural output type."
+  },
+  {
+    "source": "packages/ui/src/ToolCallBlocks/renderers.tsx",
+    "sha256": "ed59e96a1b471735aa4d6f9a391ec7117c1d2acbe1263da947001ecca80a1c08",
+    "adaptedInto": "shared.tsx",
+    "adaptation": "File path, file chip, diff count and edit label helpers copied into local renderer contract."
+  },
+  {
+    "source": "packages/ui/src/ToolCallBlocks/resolveRenderer.ts",
+    "sha256": "a114a75d32a2ba148bf0998b500a23b5f5402bb0fa10da4acbdb69431c383e92",
+    "adaptedInto": "ToolCallBlock.tsx",
+    "adaptation": "Dispatcher retains file-read/write, shell, search, todo, Explore/Execute groups and unknown fallback branches applicable to Mona."
+  },
+  {
+    "source": "packages/ui/src/ToolCallBlocks/fileSummaryTypes.ts",
+    "sha256": "f41ddd84e4437d3d1f1fd7eac7ff73b8ad9b9b7c0e29100e720cbd0159f98690",
+    "adaptedInto": "fileSummaryTypes.ts",
+    "adaptation": "Types/utilities copied; protocol, viewer, theme and workspace request types bridge locally."
+  },
+  {
+    "source": "packages/ui/src/ToolCallBlocks/fileSummaryHeuristics.ts",
+    "sha256": "1d0db55e2bdbec49bebefd42c5b2441e6350a64c59c9ee69a7c9480c6b451744",
+    "adaptedInto": "fileSummaryHeuristics.ts",
+    "adaptation": "File write/edit operation heuristics copied; canonical identity comes from copied ZCode registry."
+  },
+  {
+    "source": "packages/ui/src/ToolCallBlocks/fileSummaries.ts",
+    "sha256": "42d6a0c776c936ea2f81aa595c303f5cde18a81d1af7ef39a15584049d88541d",
+    "adaptedInto": "fileSummaries.ts",
+    "adaptation": "Multi-file summaries, patch extraction and line counts copied; imports point to local dependencies."
+  },
+  {
+    "source": "packages/ui/src/lib/toolDiffPreview.ts",
+    "sha256": "f2bada72ba6badae5dda0d74e3fa4780e664d225375e4c790cea9033906fd497",
+    "adaptedInto": "toolDiffPreview.ts",
+    "adaptation": "Pure diff extraction/generation copied; @pierre/diffs remains the runtime dependency."
+  },
+  {
+    "source": "packages/ui/src/lib/patchDiffPreview.ts",
+    "sha256": "777f24e72685d824af0a53633e57d959eea1530984b5bfa8b4ad4a2f30b7b3d8",
+    "adaptedInto": "patchDiffPreview.ts",
+    "adaptation": "Patch parsing, safety limits and preview helpers copied; @pierre/diffs remains the runtime dependency."
+  },
+  {
+    "source": "packages/ui/src/lib/toolDisplay.ts",
+    "sha256": "c46080622cf3d2c3594bb0198f94eb8df03a438f77b19bca0c0a2dfca95b1a17",
+    "adaptedInto": "toolDisplay.ts",
+    "adaptation": "All source display strategies copied; tool/code viewer types are structural local copies."
+  },
+  {
+    "source": "packages/ui/src/lib/toolError.ts",
+    "sha256": "bd0f58cd4a8904c54864ba8e138053bf36e0a2633ae18570c81cf80ff5bc3f37",
+    "adaptedInto": "toolError.ts",
+    "adaptation": "Error text extraction copied; local tool call structural type."
+  },
+  {
+    "source": "packages/ui/src/lib/codeViewer.ts",
+    "sha256": "28183b949c881fcd49ad3840979333de4f682b8d23f9702a4121b1decd3c47b1",
+    "adaptedInto": "codeViewer.ts",
+    "adaptation": "Code/text/patch/image preview extraction copied; shared protocol and tool identity imports bridge locally."
+  },
+  {
+    "source": "packages/ui/src/lib/codeViewerWorkspaceScope.ts",
+    "sha256": "1325053ff79a80990c87054c7e3a6ef9e6e0fde2cccf64ab1ca6e659044a9aec",
+    "adaptedInto": "codeViewerWorkspaceScope.ts",
+    "adaptation": "Workspace source scope type copied."
+  },
+  {
+    "source": "packages/ui/src/lib/codeViewerSource.ts",
+    "sha256": "9c27f8a757e1fcd65eb96986de68e4f635917d32600125f685c29a4598a4b994",
+    "adaptedInto": "codeViewerSource.ts",
+    "adaptation": "Viewer source normalization copied; local path helper import."
+  },
+  {
+    "source": "packages/ui/src/lib/toolIdentity.ts",
+    "sha256": "dd370a7b04136871923196beac9f5385214a4be6486a28fe9243efc89f5bcad5",
+    "adaptedInto": "toolIdentity.ts",
+    "adaptation": "Full ZCode canonical identity implementation copied; only shared registry and ask-user parser imports are local copies."
+  },
+  {
+    "source": "packages/ui/src/lib/askUserQuestion.ts",
+    "sha256": "863cbc961162048b9a0a7a36cf15601c2988e0ef8d8d220948d44762e42c310b",
+    "adaptedInto": "askUserQuestion.ts",
+    "adaptation": "Identity resolver dependency copied without behavior changes."
+  },
+  {
+    "source": "packages/shared/src/tool-identity.ts",
+    "sha256": "6239f7855bf07d2af9b7738cccdabff1427208d026303d330b72512839237949",
+    "adaptedInto": "zcodeToolNames.ts",
+    "adaptation": "Canonical tool names and family registry copied without behavior changes."
+  },
+  {
+    "source": "packages/shared/src/tool-plan-adapter.ts",
+    "sha256": "0445f8dbeca1f21ad64a65a1ad3d0a4a824292eb09ab03aae1e69a49080b4882",
+    "adaptedInto": "tool-plan-adapter.ts",
+    "adaptation": "Plan extraction copied; plan step interface is a Mona structural type."
+  },
+  {
+    "source": "packages/shared/src/bash-output-display.ts",
+    "sha256": "3dc88eb1f016259e220be9f02f07c344de51b4fed081a9cd59a40a5cd525cc0a",
+    "adaptedInto": "bash-output-display.ts",
+    "adaptation": "Runtime schema copied."
+  },
+  {
+    "source": "packages/shared/src/execution-output-preview.ts",
+    "sha256": "49baa10419388ea695d87458f2c0fa614bdd7cfeb57543cc7f0437403b753282",
+    "adaptedInto": "execution-output-preview.ts",
+    "adaptation": "Runtime schema copied."
+  },
+  {
+    "source": "packages/shared/src/streaming-tool-input-preview.ts",
+    "sha256": "3c4bbf4bfc3ce8e00a319fa6e53a335c8969dc2774a3b54ce5f61a9cfd6733ea",
+    "adaptedInto": "streaming-tool-input-preview.ts",
+    "adaptation": "Streaming JSON parser and preview rules copied; Activity.inputStreaming is the host completeness signal."
+  },
+  {
+    "source": "packages/shared/src/lineChangeStat.ts",
+    "sha256": "cf5124855da67dbe78f920e9f19f27cb7ffa506acd3f18f6c8fb6c6ac1205655",
+    "adaptedInto": "lineChangeStat.ts",
+    "adaptation": "Line delta calculation copied without behavior changes."
+  },
+  {
+    "source": "packages/shared/src/media-preview.ts",
+    "sha256": "cb5662582f863a3c1c679324c3707d2c028cef2b5d5e02350e82042455f4f76e",
+    "adaptedInto": "media-preview.ts",
+    "adaptation": "Audio/video preview format registry copied without behavior changes."
+  },
+  {
+    "source": "packages/ui/src/lib/fileDisplay.tsx",
+    "sha256": "e0bb3dc5c8200fadabc4f498f82efc1b0ca73b76d772347f686b71cc04c2dc80",
+    "adaptedInto": "fileDisplay.tsx",
+    "adaptation": "Renderer copied; dynamic material icon URLs are replaced with Vite-bundled local asset URLs."
+  },
+  {
+    "source": "packages/ui/src/lib/fileDisplayHelpers.ts",
+    "sha256": "ad22ec674ec83b106c1dc503d941d734999c4f6c2dc4efda51eff8eda173ba9d",
+    "adaptedInto": "fileDisplayHelpers.ts",
+    "adaptation": "Icon registry and path helpers copied without behavior changes."
+  },
+  {
+    "source": "packages/ui/src/lib/path.ts",
+    "sha256": "f030a18c3c5baed3e5c9a3b5787e7450d1fb0386fe1e2d747de1947cedbe941a",
+    "adaptedInto": "path.ts",
+    "adaptation": "Path helpers copied without behavior changes."
+  },
+  {
+    "source": "packages/ui/src/components/ui/highlighted-lightweight-diff-preview.tsx",
+    "sha256": "c04bb6009683ab74cb72ff8f1e1157ffbdd06be4a46dc3c725c63e0bc43fea72",
+    "adaptedInto": "ui/highlighted-lightweight-diff-preview.tsx",
+    "adaptation": "Component copied; local Shiki, logger and settings imports."
+  },
+  {
+    "source": "packages/ui/src/components/ui/lightweight-diff-preview.tsx",
+    "sha256": "7d1ff2a02815d988f5ffd2d6549848920c98488a4dba43f67ba9d81a3da49d01",
+    "adaptedInto": "ui/lightweight-diff-preview.tsx",
+    "adaptation": "Component copied; local patch parser, intl, utilities and settings imports."
+  },
+  {
+    "source": "packages/ui/src/lib/shikiHighlighter.ts",
+    "sha256": "bb4efc8fcaddcb4a1eb3101fe61ae0f43148d2a72568b58cec200bbbc37c73bd",
+    "adaptedInto": "shikiHighlighter.ts",
+    "adaptation": "Syntax highlighting cache copied; memory diagnostics are omitted and failures use Mona logger warning."
+  },
+  {
+    "source": "packages/ui/src/components/ui/flip-metric-value.tsx",
+    "sha256": "ce2d6cf063003e1023191b0fa4e3eb9b365e04a14eb0d498b897326600bf4071",
+    "adaptedInto": "ui/FlipMetricValue.tsx",
+    "adaptation": "Animated diff count component copied; local cn import."
+  },
+  {
+    "source": "packages/ui/src/ToolCallBlocks/renderers/todo.tsx",
+    "sha256": "9bdbe818a192cb87ea52be8790c95dc43d0cf7c53f507dfd111cb43a3ddc9933",
+    "adaptedInto": "renderers/todo.tsx",
+    "adaptation": "Todo plan renderer copied; Mona TodoWrite identity, local plan parser and host callbacks."
+  }
+]
