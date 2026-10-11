@@ -83,6 +83,8 @@ COMMON_AGENT_TOOLS = frozenset({
     "generate_image",
     "generate_video",
     "office",
+    "url2note",
+    "video_extract_frame",
 })
 AGENT_EXCLUSIVE_TOOLS: dict[str, frozenset[str]] = {
     "com.mona.a-share-analyst": frozenset({
@@ -252,6 +254,13 @@ def _normalize_ppt_tool_names(names: list[str]) -> list[str]:
     return list(dict.fromkeys(name for name in names if name not in _RETIRED_PPT_TOOLS))
 
 
+def _normalize_url_note_tool_names(names: list[str]) -> list[str]:
+    normalized = [name for name in names if name != "video_extract_frame"]
+    if "url2note" in normalized:
+        normalized.append("video_extract_frame")
+    return normalized
+
+
 class AgentConfigConflictError(ValueError):
     """Raised when a caller saves against a stale configuration revision."""
 
@@ -340,6 +349,11 @@ class AgentUserConfig(Base):
             if name not in names:
                 names.append(name)
         return names
+
+    @field_validator("granted_tools")
+    @classmethod
+    def _normalize_url_note_permission(cls, value: list[str] | None) -> list[str] | None:
+        return _normalize_url_note_tool_names(value) if value is not None else None
 
     @field_validator("script_enabled_skill_hashes")
     @classmethod
@@ -492,6 +506,7 @@ def resolve_effective_agent_config(
         allowed_tools = _normalize_browser_tool_names(allowed_tools)
         allowed_tools = _normalize_knowledge_tool_names(allowed_tools)
         allowed_tools = _normalize_ppt_tool_names(allowed_tools)
+        allowed_tools = _normalize_url_note_tool_names(allowed_tools)
         allowed_tools = [
             name for name in allowed_tools if name not in AGENT_KNOWLEDGE_TOOLS
         ] + list(AGENT_KNOWLEDGE_TOOLS)

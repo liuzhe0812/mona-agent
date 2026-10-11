@@ -134,22 +134,18 @@ def test_expert_tool_catalogs_share_common_tools_and_isolate_exclusive_tools(
     academic = registry.require("com.mona.academic-researcher")
     musician = registry.require("com.mona.musician")
 
-    academic_names = {
-        row["name"]
-        for row in agent_tool_catalog(
-            academic,
-            workspace=tmp_path,
-            sessions=SessionManager(tmp_path / "academic-sessions"),
-        )
-    }
-    musician_names = {
-        row["name"]
-        for row in agent_tool_catalog(
-            musician,
-            workspace=tmp_path,
-            sessions=SessionManager(tmp_path / "musician-sessions"),
-        )
-    }
+    academic_rows = agent_tool_catalog(
+        academic,
+        workspace=tmp_path,
+        sessions=SessionManager(tmp_path / "academic-sessions"),
+    )
+    musician_rows = agent_tool_catalog(
+        musician,
+        workspace=tmp_path,
+        sessions=SessionManager(tmp_path / "musician-sessions"),
+    )
+    academic_names = {row["name"] for row in academic_rows}
+    musician_names = {row["name"] for row in musician_rows}
 
     assert COMMON_AGENT_TOOLS <= academic_names
     assert COMMON_AGENT_TOOLS <= musician_names
@@ -159,6 +155,10 @@ def test_expert_tool_catalogs_share_common_tools_and_isolate_exclusive_tools(
     assert AGENT_EXCLUSIVE_TOOLS[musician.id] <= musician_names
     assert not (AGENT_EXCLUSIVE_TOOLS[academic.id] & musician_names)
     assert not (AGENT_EXCLUSIVE_TOOLS[musician.id] & academic_names)
+    for rows in (academic_rows, musician_rows):
+        by_name = {row["name"]: row for row in rows}
+        assert by_name["url2note"]["available"] is True
+        assert by_name["video_extract_frame"]["available"] is True
 
 
 @pytest.fixture
@@ -315,7 +315,9 @@ def test_create_custom_agent_is_local_and_registry_loadable(
     package_root = agents_dir / definition.id
     assert definition.id.startswith("local.custom.")
     assert (package_root / "agent.json").is_file()
-    assert "识别风险" in (package_root / "prompt.md").read_text(encoding="utf-8")
+    prompt = (package_root / "prompt.md").read_text(encoding="utf-8")
+    assert "user-created local partner" in prompt
+    assert "识别风险" in prompt
     registry = AgentRegistry(
         builtin_dir=tmp_path / "builtin",
         installed_dir=agents_dir,

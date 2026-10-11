@@ -110,6 +110,22 @@ def test_room_model_history_keeps_agent_author_labels(tmp_path: Path) -> None:
     ]
 
 
+def test_room_model_history_keeps_the_goal_beyond_fifty_messages(tmp_path: Path) -> None:
+    sessions = SessionManager(tmp_path / "sessions")
+    _room_session(sessions)
+    session = sessions.get_or_create(f"websocket:{ROOM_ID}")
+    session.add_message("user", "原始目标：完成一份可核验的报告")
+    for i in range(80):
+        session.add_message("assistant", f"进展 {i}", author_id=AGENT_A)
+    fake_loop = SimpleNamespace(_room_agent_registry=_registry(tmp_path))
+
+    history = AgentLoop._build_model_history(fake_loop, session)
+
+    assert len(history) == 81
+    assert history[0]["content"] == "原始目标：完成一份可核验的报告"
+    assert history[-1]["content"] == "[分析师 A] 进展 79"
+
+
 def test_room_model_context_includes_goal_and_all_members(tmp_path: Path) -> None:
     sessions = SessionManager(tmp_path / "sessions")
     _room_session(sessions)
@@ -650,7 +666,7 @@ def test_artifact_task_tracks_recorded_process_files_without_deleting_workspace(
             ],
         },
     )
-    channel._api_tokens["live"] = 1e20
+    channel._runtime_token = "live"
     request = SimpleNamespace(
         headers={"Authorization": "Bearer live"},
         path=(
@@ -817,7 +833,7 @@ def test_artifact_rename_keeps_an_explicit_delivery_in_the_session_list(
             }],
         },
     )
-    channel._api_tokens["live"] = 1e20
+    channel._runtime_token = "live"
     request = SimpleNamespace(
         headers={"Authorization": "Bearer live"},
         path=(
