@@ -86,10 +86,18 @@ Auth 修复提交为 `402d5a1245764eb47b136f3dad3a70c5ed0f5f4d`。实测的 68 �
 
 本次结果与源码指纹保存在 `output/pro-cloud/local-continuation-20261013/`。交付时分别报告已编码、已提交、本地验证、真实环境验收和已上线状态。
 
-## 下一阶段的隔离三机服务方案（待授权）
+## 隔离三机服务（已授权并部署）
 
-为三台 Windows 连接同一测试控制面，使用现有 `www.mona-ai.cn` HTTPS 站点的独立路径 `/pro-cloud-test-9cf250a1/`，代理到新增的 loopback Auth `127.0.0.1:18001`。拟使用目录 `/opt/mona-auth-test-9cf250a1`、进程名 `mona-auth-pro-cloud-test-9cf250a1` 和临时库 `mona_auth_pro_cloud_test_20261013_9cf250a1`，仅放合成账户、设备和内容；不升级既有 Auth，也不迁移正式 `mona_auth`。费用仍受已批准的合成内容传输范围约束。
+用户已明确授权并完成部署：现有 `www.mona-ai.cn` HTTPS 站点的独立路径 `/pro-cloud-test-9cf250a1/` 代理到新增的 loopback Auth `127.0.0.1:18001`。目录为 `/opt/mona-auth-test-9cf250a1`，PM2 进程为 `mona-auth-pro-cloud-test-9cf250a1`，临时库为 `mona_auth_pro_cloud_test_20261013_9cf250a1`，已使用冻结 Auth `5c54d92c` 并升级到 `cloud_trash`。仅放合成账户、设备和内容，正式 Auth 和正式库未升级。
 
-需要备份并在 `/etc/nginx/conf.d/mona-ai-cn.conf` 的既有 HTTPS server 内新增这一精确路径，通过配置检查后重载 Nginx。测试客户端仅在隔离源码中指向该路径，重新构建签名并记录该覆盖。回退为停止该测试进程、删除该位置块并检查后重载，核对正式站点恢复；结束后回收精确临时库、目录和测试对象。现有签名候选包仍指向正式 Auth，不能将它写成已连接此测试服务。
+已备份 `/etc/nginx/conf.d/mona-ai-cn.conf`，在其既有 HTTPS server 内新增这一个精确路径，通过配置检查后重载 Nginx。路径只开放本次需要的桌面认证、云、配置、通知及余额接口；注册、管理、模型及付款入口不开放。模型与支付配置关闭，Uvicorn 不启动后台生命周期任务。密钥只在进程内，未写入 PM2 启动快照；VPS 重启后需重新准备测试服务。
 
-这是具体待执行方案，不是已部署结果。根据 `mona-vps-ops`，新进程、数据库创建和反向代理配置调整需要用户在执行前明确确认。正式上线仍需单独批准，并处理旧客户端与新绑定设备模型令牌的兼容和发布顺序。
+真实公网 HTTPS、MariaDB 与私有七牛的 7 组检查通过：两个 HTTPS 域名就绪且模型/支付关闭；未认证云请求及注册/管理入口拒绝；Pro 3 台及第 4 个身份的明确替换；免费 1 台及替换撤销旧设备；加密上传、配额结算、复用、同身份提交重放和其他设备拉取；另一身份直连下载及撤销拒绝；明确移入、恢复、彻底删除及旧身份封存。这里是合成 API 设备身份，不算三台实体 Windows 已通过。
+
+本轮测试文件和设备/云目录夹具均已清理，七牛完整列举为空。累计保守传输记录为 361,044 字节，仍低于已授权 10MB。保留两个合成测试账号供实体设备验收：一个有效 14 天的 Pro、一个免费账号；密码保存于本机 Windows 凭据库，未写入报告、源码或聊天。正式进程 PID/目录、源码指纹、数据库 revision/原行数及全局隔离级别与部署前逐项一致；测试运行源码与独立 Auth 提交逐一核对一致。
+
+新的测试客户端仅在专用冻结工作树中指向此路径，使用独立产品身份、资料/凭据目录和服务端口，构建覆盖在报告与 patch 中记录。此前 `windows-candidate/` 的签名候选包仍指向正式 Auth，不用于本轮三机联调。实体设备操作见 [Windows 三机验收](pro-cloud-windows-acceptance.md)。用户已选择自行安装另外两台，不需要额外远程入口。
+
+该测试客户端已完成构建与最终 Ed25519 验签，专用本地分支 `codex/pro-cloud-test-9cf250a1` 的提交为 `f1948684f4ddbf14d78d720236b074a2c7d74dc9`，基于前述冻结桌面基线，仅覆盖测试入口与实例身份/路径/端口，没有合入产品分支。安装包为 `windows-isolated-test/MonaCloudTest-9cf250a1_1.7.1_x64-setup.exe`，200,224,928 字节，SHA-256 为 `b8f6071d4afbc45f3148fb7ad27e71ec201e31f244a62e76e9514a92d1f1be04`。已从实际桌面二进制核对测试 Auth 入口及资料前缀；构建中的覆盖源码指纹保持一致。主界面、Office 和 Gateway 构建通过；打包 Services 在一次性本地资料环境实际启动，产品版本及 Office 状态路由的本地令牌鉴权通过，随后回收进程和该一次性目录。未将这些结果描述为原生安装或物理三机通过。
+
+本轮证据为 `isolated-service-deployment.json`、`isolated-service-https-acceptance.json`、`isolated-service-post-deployment.json`，新测试包以 `isolated-client-build-report.json` 的最终状态、指纹和验签结果为准。验收结束后仅回收授权的测试进程、站点位置块、临时库、精确目录、测试对象和测试凭据，已准备精确回收入口。正式上线仍需单独批准，并处理旧客户端与新绑定设备模型令牌的兼容和发布顺序。
