@@ -86,7 +86,9 @@ Auth 修复提交为 `402d5a1245764eb47b136f3dad3a70c5ed0f5f4d`。实测的 68 �
 
 本次结果与源码指纹保存在 `output/pro-cloud/local-continuation-20261013/`。交付时分别报告已编码、已提交、本地验证、真实环境验收和已上线状态。
 
-## 隔离三机服务（已授权并部署）
+## 隔离联调记录（已完成并回收）
+
+用户已澄清当前范围：只开发功能并执行必要测试，整体开发尚未完成；人工测试、打包和发布须等用户明确要求。本轮提前生成了本地测试包，未安装或发布，不作为当前交付或后续发布输入。以下部署和构建结果仅为历史证据，不再推进三机安装。
 
 用户已明确授权并完成部署：现有 `www.mona-ai.cn` HTTPS 站点的独立路径 `/pro-cloud-test-9cf250a1/` 代理到新增的 loopback Auth `127.0.0.1:18001`。目录为 `/opt/mona-auth-test-9cf250a1`，PM2 进程为 `mona-auth-pro-cloud-test-9cf250a1`，临时库为 `mona_auth_pro_cloud_test_20261013_9cf250a1`，已使用冻结 Auth `5c54d92c` 并升级到 `cloud_trash`。仅放合成账户、设备和内容，正式 Auth 和正式库未升级。
 
@@ -94,10 +96,10 @@ Auth 修复提交为 `402d5a1245764eb47b136f3dad3a70c5ed0f5f4d`。实测的 68 �
 
 真实公网 HTTPS、MariaDB 与私有七牛的 7 组检查通过：两个 HTTPS 域名就绪且模型/支付关闭；未认证云请求及注册/管理入口拒绝；Pro 3 台及第 4 个身份的明确替换；免费 1 台及替换撤销旧设备；加密上传、配额结算、复用、同身份提交重放和其他设备拉取；另一身份直连下载及撤销拒绝；明确移入、恢复、彻底删除及旧身份封存。这里是合成 API 设备身份，不算三台实体 Windows 已通过。
 
-本轮测试文件和设备/云目录夹具均已清理，七牛完整列举为空。累计保守传输记录为 361,044 字节，仍低于已授权 10MB。保留两个合成测试账号供实体设备验收：一个有效 14 天的 Pro、一个免费账号；密码保存于本机 Windows 凭据库，未写入报告、源码或聊天。正式进程 PID/目录、源码指纹、数据库 revision/原行数及全局隔离级别与部署前逐项一致；测试运行源码与独立 Auth 提交逐一核对一致。
+本轮测试文件和设备/云目录夹具均已清理，七牛完整列举为空。累计保守传输记录为 361,044 字节，仍低于已授权 10MB。原先创建的两个合成账号及其密码也已随测试库和本机测试凭据回收。正式进程 PID/目录、源码指纹、数据库 revision/原行数及全局隔离级别与部署前逐项一致；测试运行源码曾与独立 Auth 提交逐一核对一致。
 
-新的测试客户端仅在专用冻结工作树中指向此路径，使用独立产品身份、资料/凭据目录和服务端口，构建覆盖在报告与 patch 中记录。此前 `windows-candidate/` 的签名候选包仍指向正式 Auth，不用于本轮三机联调。实体设备操作见 [Windows 三机验收](pro-cloud-windows-acceptance.md)。用户已选择自行安装另外两台，不需要额外远程入口。
+历史测试客户端仅在专用冻结工作树中指向此路径，使用独立产品身份、资料/凭据目录和服务端口，构建覆盖在报告与 patch 中记录。此前 `windows-candidate/` 的签名候选包仍指向正式 Auth。两者均不用于当前人工验收或发布；后续打包必须等整体开发完成并收到用户明确要求，再冻结当时源码。原三机步骤只留作[验收模板](pro-cloud-windows-acceptance.md)。
 
 该测试客户端已完成构建与最终 Ed25519 验签，专用本地分支 `codex/pro-cloud-test-9cf250a1` 的提交为 `f1948684f4ddbf14d78d720236b074a2c7d74dc9`，基于前述冻结桌面基线，仅覆盖测试入口与实例身份/路径/端口，没有合入产品分支。安装包为 `windows-isolated-test/MonaCloudTest-9cf250a1_1.7.1_x64-setup.exe`，200,224,928 字节，SHA-256 为 `b8f6071d4afbc45f3148fb7ad27e71ec201e31f244a62e76e9514a92d1f1be04`。已从实际桌面二进制核对测试 Auth 入口及资料前缀；构建中的覆盖源码指纹保持一致。主界面、Office 和 Gateway 构建通过；打包 Services 在一次性本地资料环境实际启动，产品版本及 Office 状态路由的本地令牌鉴权通过，随后回收进程和该一次性目录。未将这些结果描述为原生安装或物理三机通过。
 
-本轮证据为 `isolated-service-deployment.json`、`isolated-service-https-acceptance.json`、`isolated-service-post-deployment.json`，新测试包以 `isolated-client-build-report.json` 的最终状态、指纹和验签结果为准。验收结束后仅回收授权的测试进程、站点位置块、临时库、精确目录、测试对象和测试凭据，已准备精确回收入口。正式上线仍需单独批准，并处理旧客户端与新绑定设备模型令牌的兼容和发布顺序。
+本轮证据为 `isolated-service-deployment.json`、`isolated-service-https-acceptance.json`、`isolated-service-post-deployment.json`，历史测试包指纹在 `isolated-client-build-report.json`。已精确回收授权的测试进程、站点位置块、临时库、部署目录、测试对象及测试凭据；Nginx 配置指纹恢复到部署前，结果为 `isolated-service-final-cleanup.json`。保留功能代码和必要测试记录，当前停止后续人工验收、打包和发布。正式上线还需处理旧客户端与新绑定设备模型令牌的兼容和发布顺序。
