@@ -16,8 +16,10 @@ import asyncio
 import json
 import time
 import uuid
+from datetime import datetime
 from pathlib import Path
 from typing import Any
+from zoneinfo import ZoneInfo
 
 from filelock import FileLock
 from loguru import logger
@@ -33,17 +35,17 @@ def _cron_expr_for_recurrence(item: ScheduleItem) -> str | None:
     """Map a recurrence to a cron expression, or return the explicit cron_expr."""
     if item.recurrence == "cron_expr":
         return item.cron_expr
+    if item.recurrence not in {"daily", "weekly", "monthly"}:
+        return None
+    # Recurrences travel with the event's timezone, not the receiving computer's.
+    dt = datetime.fromtimestamp(item.start_at_ms / 1000, ZoneInfo(item.tz) if item.tz else None)
     if item.recurrence == "daily":
-        dt = time.localtime(item.start_at_ms / 1000)
-        return f"{dt.tm_min} {dt.tm_hour} * * *"
+        return f"{dt.minute} {dt.hour} * * *"
     if item.recurrence == "weekly":
-        dt = time.localtime(item.start_at_ms / 1000)
-        # tm_wday: 0=Mon .. 6=Sun; cron day-of-week: 0=Sun .. 6=Sat.
-        cron_dow = (dt.tm_wday + 1) % 7
-        return f"{dt.tm_min} {dt.tm_hour} * * {cron_dow}"
+        cron_dow = (dt.weekday() + 1) % 7
+        return f"{dt.minute} {dt.hour} * * {cron_dow}"
     if item.recurrence == "monthly":
-        dt = time.localtime(item.start_at_ms / 1000)
-        return f"{dt.tm_min} {dt.tm_hour} {dt.tm_mday} * *"
+        return f"{dt.minute} {dt.hour} {dt.day} * *"
     return None
 
 

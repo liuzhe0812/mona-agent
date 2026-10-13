@@ -3190,7 +3190,15 @@ export async function fetchFilePreviewBlob(
     ...(params.signal ? { signal: params.signal } : {}),
   });
   if (!res.ok) {
-    throw new ApiError(res.status, `HTTP ${res.status}`);
+    let message = `HTTP ${res.status}`;
+    if (res.headers.get("content-type")?.includes("application/json")) {
+      try {
+        const data = await res.json();
+        if (typeof data?.error?.code === "string" && typeof data.error.message === "string"
+          && data.error.message.length <= 600) message = data.error.message;
+      } catch { /* Keep the status when a failed preview has no structured error. */ }
+    }
+    throw new ApiError(res.status, message);
   }
   const blob = await res.blob();
   const mime = res.headers.get("content-type") ?? "application/octet-stream";

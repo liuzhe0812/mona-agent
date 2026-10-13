@@ -1,4 +1,6 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
+import { DeviceLimitError, type DeviceReplacement } from "@/lib/account-devices";
+import { LoginDeviceSelection } from "@/components/account/LoginDeviceSelection";
 import { useLicense } from "@/hooks/useLicense";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -42,6 +44,8 @@ export function LoginDialog({
   const [codeCooldown, setCodeCooldown] = useState(0);
   const [subscribeLoading, setSubscribeLoading] = useState(false);
   const [pendingSubscribe, setPendingSubscribe] = useState(false);
+  const [deviceConflict, setDeviceConflict] = useState<DeviceLimitError | null>(null);
+  const loginRequestId = useRef<string | null>(null);
 
   useEffect(() => {
     if (open) {
@@ -76,17 +80,21 @@ export function LoginDialog({
       setResetCode("");
       setOldPassword("");
       setNewPassword("");
+      setPassword("");
+      setConfirmPassword("");
+      setDeviceConflict(null);
+      loginRequestId.current = null;
       setCodeSent(false);
     }
     onOpenChange(v);
   };
 
-  const handleLogin = async (e: React.FormEvent) => {
-    e.preventDefault();
+  const submitLogin = async (replacements: DeviceReplacement[] = []) => {
     setError("");
     setLoading(true);
+    loginRequestId.current ??= crypto.randomUUID().replaceAll("-", "");
     try {
-      await login(accountInput, password);
+      await login(accountInput, password, { requestId: loginRequestId.current, replacements });
       if (pendingSubscribe) {
         setPendingSubscribe(false);
         setView("subscribe");
@@ -94,11 +102,15 @@ export function LoginDialog({
         handleClose(false);
       }
     } catch (err) {
-      setError(String(err).replace(/^Error:\s*/, ""));
+      if (err instanceof DeviceLimitError) {
+        setDeviceConflict(err); loginRequestId.current = null;
+      } else setError(String(err).replace(/^Error:\s*/, ""));
     } finally {
       setLoading(false);
     }
   };
+
+  const handleLogin = (event: React.FormEvent) => { event.preventDefault(); void submitLogin(); };
 
   const passwordMismatch = confirmPassword.length > 0 && password !== confirmPassword;
 
@@ -330,10 +342,14 @@ export function LoginDialog({
             {error && <p className="text-sm text-destructive">{error}</p>}
             {success && <p className="text-sm text-green-600">{success}</p>}
 
-            {view === "login" && (
+            {view === "login" && deviceConflict && <LoginDeviceSelection key={deviceConflict.devices.map((d) => `${d.id}:${d.revision}`).join(",")}
+              conflict={deviceConflict} busy={loading} onConfirm={(devices) => void submitLogin(devices)}
+              onSelectionChange={() => { loginRequestId.current = null; }}
+              onBack={() => { setDeviceConflict(null); setError(""); loginRequestId.current = null; }} />}
+            {view === "login" && !deviceConflict && (
               <form onSubmit={handleLogin} className="flex flex-col gap-3">
-                <Input type="text" placeholder="账号或邮箱" value={accountInput} onChange={(e) => setAccountInput(e.target.value)} disabled={loading} autoFocus />
-                <Input type="password" placeholder="密码" value={password} onChange={(e) => setPassword(e.target.value)} disabled={loading} />
+                <Input type="text" placeholder="账号或邮箱" value={accountInput} onChange={(e) => { setAccountInput(e.target.value); loginRequestId.current = null; }} disabled={loading} autoFocus />
+                <Input type="password" placeholder="密码" value={password} onChange={(e) => { setPassword(e.target.value); loginRequestId.current = null; }} disabled={loading} />
                 <Button type="submit" disabled={!accountInput || !password || loading}>
                   {loading ? "登录中..." : "登录"}
                 </Button>

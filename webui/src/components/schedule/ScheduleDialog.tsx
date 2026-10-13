@@ -137,7 +137,7 @@ export function ScheduleDialog({
       allDay,
       recurrence,
       cronExpr: recurrence === "cron_expr" ? cronExpr.trim() : null,
-      tz: null,
+      tz: item?.tz ?? Intl.DateTimeFormat().resolvedOptions().timeZone,
       kind,
       aiMessage: kind === "ai_task" ? aiMessage.trim() : null,
       aiDeliver,

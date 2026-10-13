@@ -66,7 +66,7 @@ vi.mock("@/lib/api", () => ({
   fetchFilePreviewBlob: vi.fn(async (_token: string, params: { path: string }) => {
     if (params.path.endsWith(".mp4")) {
       if ((params as { artifactId?: string | null }).artifactId) {
-        throw new Error("HTTP 404");
+        throw Object.assign(new Error("HTTP 404"), { status: 404 });
       }
       return {
         blob: new Blob(["video"], { type: "text/plain" }),
@@ -280,6 +280,17 @@ describe("FilePreviewPanel", () => {
     expect(signal?.aborted).toBe(true);
     expect(fetchFilePreviewBlob).toHaveBeenCalledTimes(2);
     expect(screen.queryByText(/加载预览失败/)).not.toBeInTheDocument();
+  });
+
+  it.each([401, 409, 503])("does not retry an unverified cloud file with another path (%s)", async (status) => {
+    const file = { ...artifact("report.md"), artifact_ref: {
+      id: "cloud-file", owner_kind: "agent" as const, owner_id: "mona", relative_path: "report.md",
+      created_by_agent_id: "mona", created_at: "2026-10-12T00:00:00Z",
+    } };
+    vi.mocked(fetchFilePreviewBlob).mockRejectedValueOnce(Object.assign(new Error("云文件暂不可用，请核对账号。"), { status }));
+    render(wrap(<FilePreviewPanel previewFile={file} />));
+    await screen.findByText(/云文件暂不可用，请核对账号/);
+    expect(fetchFilePreviewBlob).toHaveBeenCalledOnce();
   });
 
   it("cycles through the scope file list with prev/next", async () => {

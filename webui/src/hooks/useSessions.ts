@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 
 import { useClientOptional } from "@/providers/ClientProvider";
+import { useCloudUpdates } from "@/hooks/useCloudUpdates";
 import i18n from "@/i18n";
 import {
   ApiError,
@@ -178,6 +179,10 @@ export function useSessions(): {
       }
     });
   }, [client, refresh]);
+
+  useCloudUpdates((change) => {
+    if (change.work_keys.length) void refresh();
+  });
 
   const createChat = useCallback(async (workspace?: string | null): Promise<string> => {
     if (!client) {
@@ -439,6 +444,9 @@ export function useSessionHistory(key: string | null, pageSize?: number): {
 } {
   const { token } = useClientOptional();
   const [refreshSeq, setRefreshSeq] = useState(0);
+  useCloudUpdates((change) => {
+    if (key && change.work_keys.includes(key)) setRefreshSeq((value) => value + 1);
+  });
   const refresh = useCallback(() => {
     setRefreshSeq((value) => value + 1);
   }, []);

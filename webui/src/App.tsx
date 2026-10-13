@@ -56,6 +56,8 @@ import { LoginDialog } from "@/components/LoginDialog";
 import { UpdateNotification } from "@/components/UpdateNotification";
 import { useEmailStore } from "@/components/email/store/emailStore";
 import { useTodoStore } from "@/components/schedule/todoStore";
+import { useScheduleStore } from "@/components/schedule/scheduleStore";
+import { useCloudUpdates } from "@/hooks/useCloudUpdates";
 import { cn } from "@/lib/utils";
 import {
   deriveWsUrl,
@@ -881,6 +883,13 @@ function Shell({
       })();
     };
   }, []);
+
+  useCloudUpdates((change) => {
+    if (change.planning) {
+      void useTodoStore.getState().loadAll();
+      void useScheduleStore.getState().loadItems();
+    }
+  });
 
   // 全局初始化计划收集箱数量（用于主菜单“计划”角标）
   // 策略：services 就绪后加载 todos + 待确认邮件日程，并每 5 分钟轮询刷新

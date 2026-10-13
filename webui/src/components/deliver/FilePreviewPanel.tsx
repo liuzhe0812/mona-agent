@@ -343,7 +343,7 @@ export function FilePreviewPanel({
           preview = await fetchFilePreviewBlob(token, previewParams);
         } catch (error) {
           if (abortController.signal.aborted) throw error;
-          if (!previewParams.artifactId) throw error;
+          if (!previewParams.artifactId || !(error instanceof Error) || !("status" in error) || error.status !== 404) throw error;
           preview = await fetchFilePreviewBlob(token, {
             ...previewParams,
             artifactId: null,

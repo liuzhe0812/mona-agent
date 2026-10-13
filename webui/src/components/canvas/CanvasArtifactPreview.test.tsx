@@ -90,7 +90,7 @@ describe("CanvasArtifactPreview", () => {
       contentMarkdown: "# 产品规划",
     };
     mocks.fetchFilePreviewBlob
-      .mockRejectedValueOnce(new Error("HTTP 404"))
+      .mockRejectedValueOnce(Object.assign(new Error("HTTP 404"), { status: 404 }))
       .mockResolvedValueOnce({
         blob: { text: async () => JSON.stringify(canvas) } as Blob,
         mime: "text/plain",
@@ -112,6 +112,7 @@ describe("CanvasArtifactPreview", () => {
       sessionKey: "websocket:chat-1",
       room: null,
       artifactId: "stale-artifact-id",
+      signal: expect.any(AbortSignal),
     });
     expect(mocks.fetchFilePreviewBlob).toHaveBeenNthCalledWith(2, "tok", {
       scope: "shared",
@@ -119,7 +120,15 @@ describe("CanvasArtifactPreview", () => {
       sessionKey: "websocket:chat-1",
       room: null,
       artifactId: null,
+      signal: expect.any(AbortSignal),
     });
+  });
+
+  it("does not fall back after cloud validation fails", async () => {
+    mocks.fetchFilePreviewBlob.mockRejectedValueOnce(Object.assign(new Error("云文件校验失败"), { status: 409 }));
+    render(<CanvasArtifactPreview file={file} scope="shared" sessionKey="websocket:one" />);
+    await screen.findByText(/云文件校验失败/);
+    expect(mocks.fetchFilePreviewBlob).toHaveBeenCalledOnce();
   });
 
   it("opens a local desktop canvas in the editable file view", () => {

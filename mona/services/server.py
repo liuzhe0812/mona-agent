@@ -337,6 +337,8 @@ def create_services_app(
     app["schedule_service"] = schedule_service
     app["todo_service"] = todo_service
     app["workspace"] = workspace
+    from mona.schedule.sync_api import register_planning_sync_routes
+    register_planning_sync_routes(app)
 
     app.router.add_get("/health", handle_services_health)
     app.router.add_post("/shutdown", handle_shutdown)

@@ -5,6 +5,7 @@ import hashlib
 import json
 import mimetypes
 import os
+from contextvars import ContextVar
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -158,6 +159,20 @@ class ReadFileTool(_FsTool):
     """Read file contents with optional line-based pagination."""
     _scopes = {"core", "subagent", "memory"}
 
+    def __init__(self, *args, sessions=None, **kwargs):
+        super().__init__(*args, **kwargs)
+        self._sessions = sessions
+        self._read_context = ContextVar("read_file_session", default=None)
+
+    @classmethod
+    def create(cls, ctx: Any) -> Tool:
+        tool = super().create(ctx)
+        tool._sessions = ctx.sessions
+        return tool
+
+    def set_context(self, ctx) -> None:
+        self._read_context.set(ctx.session_key or f"{ctx.channel}:{ctx.chat_id}")
+
     _MAX_CHARS = 128_000
     _DEFAULT_LIMIT = 2000
     _MAX_PDF_PAGES = 20
@@ -209,7 +224,15 @@ class ReadFileTool(_FsTool):
             if _is_blocked_device(fp):
                 return f"Error: Reading {fp} is blocked (device path that could hang or produce infinite output)."
             if not fp.exists():
-                return f"Error: File not found: {path}"
+                session_key = self._read_context.get()
+                if self._sessions is not None and session_key:
+                    from mona.cloud.file_access import ensure_session_file
+                    await ensure_session_file(self._sessions, session_key, fp)
+                    # Recheck normal permissions after asynchronous work.
+                    if self._resolve(path) != fp:
+                        return "Error: 文件路径已变化，请重新读取。"
+                if not fp.exists():
+                    return f"Error: File not found: {path}"
             if not fp.is_file():
                 return f"Error: Not a file: {path}"
 

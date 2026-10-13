@@ -320,6 +320,7 @@ class OfficeTool(Tool, ContextAware):
             bus=ctx.bus,
         )
         tool._agent_id = str(getattr(ctx, "agent_id", "mona") or "mona")
+        tool._sessions = ctx.sessions
         return tool
 
     def __init__(
@@ -342,6 +343,7 @@ class OfficeTool(Tool, ContextAware):
         self._active_session_id: str | None = None
         self._request_ctx: RequestContext | None = None
         self._agent_id = "mona"
+        self._sessions = None
         # source_path -> working_copy_path (accumulates edits across turns)
         self._working_copies: dict[str, Path] = {}
         # working_copy_path -> last known mtime (conflict detection: if the
@@ -740,6 +742,19 @@ class OfficeTool(Tool, ContextAware):
                         return f"Error: path not allowed: {exc}"
                     if resolved.suffix.lower() not in _OFFICE_EXTS:
                         return "Error: the live editor supports .docx, .xlsx, and .pptx files only"
+                    if not resolved.is_file() and self._sessions is not None:
+                        from mona.cloud.crypto import CloudCryptoError
+                        from mona.cloud.file_access import ensure_session_file
+                        from mona.cloud.transfer import CloudTransferError
+                        from mona.cloud.work_files import WorkFileError
+                        try:
+                            await ensure_session_file(self._sessions, owner, resolved)
+                        except (CloudTransferError, CloudCryptoError, WorkFileError) as exc:
+                            return json.dumps({"ok": False, "error": {
+                                "code": getattr(exc, "code", "cloud_file_unavailable"), "message": str(exc),
+                            }}, ensure_ascii=False)
+                        if resolve_workspace_path(path, workspace, workspace) != resolved:
+                            return "Error: 文件位置已变化，请重新打开。"
                 elif document_type is None:
                     return "Error: 'path', 'document_type', or a recoverable 'session_id' is required for 'open'"
                 result = await client.open(

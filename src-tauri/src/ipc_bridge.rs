@@ -946,6 +946,10 @@ impl IpcBridge {
                 let has_access = crate::license::check_license_access();
                 Ok(Value::Bool(has_access))
             }
+            "cloud_sync_context" => crate::license::cloud_bridge::context().await,
+            "cloud_sync_request" => crate::license::cloud_bridge::request(&args).await,
+            "cloud_sync_store_key" => crate::license::cloud_bridge::store_key(&args).await,
+            "cloud_sync_notify" => crate::license::cloud_bridge::notify(&self.app_handle, &args).await,
             "get_model_access_credentials" => {
                 crate::license::get_model_access_credentials().await
             }

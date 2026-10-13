@@ -78,17 +78,20 @@ export function CanvasArtifactPreview({ file, scope, sessionKey, roomId }: Canva
       };
     }
 
+    const controller = new AbortController();
     const previewParams = {
       scope,
       path: file.artifact_ref?.relative_path || file.path,
       sessionKey: scope === "project" || scope === "shared" ? sessionKey ?? null : null,
       room: scope === "room" ? roomId ?? null : null,
       artifactId: file.artifact_ref?.id ?? null,
+      signal: controller.signal,
     } as const;
 
     void fetchFilePreviewBlob(token, previewParams)
       .catch((cause) => {
-        if (!previewParams.artifactId) throw cause;
+        if (controller.signal.aborted || !previewParams.artifactId || !(cause instanceof Error)
+          || !("status" in cause) || cause.status !== 404) throw cause;
         return fetchFilePreviewBlob(token, { ...previewParams, artifactId: null });
       })
       .then(async ({ blob }) => parseCanvasDocument(await blob.text()))
@@ -101,6 +104,7 @@ export function CanvasArtifactPreview({ file, scope, sessionKey, roomId }: Canva
 
     return () => {
       cancelled = true;
+      controller.abort();
     };
   }, [file.artifact_ref?.id, file.artifact_ref?.relative_path, file.path, localFilePath, roomId, scope, sessionKey, token]);
 

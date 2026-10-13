@@ -11552,5 +11552,7 @@ def create_app(
 
     from mona.development.api import register_development_routes
     register_development_routes(app)
+    from mona.cloud.api import register_cloud_routes
+    register_cloud_routes(app)
 
     return app

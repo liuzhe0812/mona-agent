@@ -240,6 +240,9 @@ design-assets/
 !tests/test_official_distribution_builder.py
 !tests/test_webui_history_cache.py
 !tests/test_webui_replay_hotpath.py
+!/tests/cloud/
+/tests/cloud/*
+!/tests/cloud/*.py
 hardware/
 
 # 项目文档仅在本地维护，不上传 GitHub。
@@ -255,6 +258,7 @@ docs/architecture/*
 !docs/architecture/module-invariants.md
 !docs/architecture/browser-development-framework.md
 !docs/architecture/development-permissions.md
+!docs/architecture/pro-cloud-services.md
 !docs/plans/
 docs/plans/*
 !docs/plans/2026-10-08-dsh-message-flow-improvements.md

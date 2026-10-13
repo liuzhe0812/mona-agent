@@ -9,6 +9,9 @@ use tauri_plugin_opener::OpenerExt;
 #[cfg(windows)]
 use std::os::windows::process::CommandExt;
 
+pub(crate) mod device_sessions;
+pub(crate) mod cloud_bridge;
+
 const LICENSE_FILENAME: &str = "license.jwt";
 const AUTH_TOKEN_SECRET_NAME: &str = "mona_auth_token";
 const AUTH_SERVER_URL_PRIMARY: &str = "https://mona-ai.cn";
@@ -88,6 +91,24 @@ struct LicenseCache {
     account: Option<String>,
     #[serde(default)]
     verified_at: Option<String>,
+    #[serde(default)]
+    plan: Option<String>,
+    #[serde(default)]
+    device_limit: Option<u8>,
+    #[serde(default)]
+    device_session_id: Option<String>,
+    #[serde(default)]
+    account_token_sha256: Option<String>,
+}
+
+fn clear_license_cache() {
+    if let Ok(path) = license_cache_path() {
+        if path.exists() { let _ = std::fs::remove_file(path); }
+    }
+}
+
+fn token_fingerprint(token: &str) -> String {
+    hex::encode(Sha256::digest(token.as_bytes()))
 }
 
 fn save_license_cache(cache: &LicenseCache) {
@@ -151,7 +172,8 @@ where
 async fn service_json(resp: reqwest::Response) -> Result<serde_json::Value, String> {
     let status = resp.status();
     if status == reqwest::StatusCode::UNAUTHORIZED {
-        let _ = remove_auth_token();
+        // The response may belong to an older account. Only a status check
+        // bound to the current token is allowed to clear its credentials.
         return Err("登录已过期，请重新登录 (401)".to_string());
     }
     let content_type = resp
@@ -275,6 +297,11 @@ fn translate_error(error: &str) -> String {
         "email_send_failed" => "验证码邮件发送失败，请稍后重试",
         "device_limit_exceeded" => "设备绑定数量已达上限",
         "device_mismatch" => "设备不匹配，请先绑定当前设备",
+        "device_list_changed" => "设备状态已变化，请重新检查设备列表",
+        "device_request_conflict" => "登录请求已变化，请重新选择设备",
+        "device_session_expired" => "此设备的登录已结束，请重新登录",
+        "device_session_revoked" => "此设备的登录已结束，请重新登录",
+        "device_login_required" => "请在当前设备重新登录 Mona",
         "rate_limit_exceeded" => "操作过于频繁，请稍后再试",
         "subscription_expired" => "订阅已过期",
         "subscription_not_found" => "未找到有效订阅",
@@ -313,6 +340,7 @@ pub async fn send_register_code(email: String, account: String) -> Result<serde_
 
 #[tauri::command]
 pub async fn auth_register(email: String, password: String, code: String, account: String) -> Result<serde_json::Value, String> {
+    let _guard = device_sessions::ACCOUNT_LOCK.lock().await;
     let machine_fp = get_machine_fingerprint();
     let resp = auth_send(|client, base| {
         client
@@ -323,9 +351,9 @@ pub async fn auth_register(email: String, password: String, code: String, accoun
 
     let body: serde_json::Value = resp.json().await.map_err(|e| format!("Parse error: {}", e))?;
 
-    if let Some(token) = body.get("access_token").and_then(|v| v.as_str()) {
-        save_auth_token(token)?;
-        return Ok(serde_json::json!({ "success": true }));
+    if body.get("access_token").and_then(|v| v.as_str()).is_some() {
+        return device_sessions::login(account, password, None, None).await
+            .map_err(|message| format!("账号已创建，但设备登录未完成：{message}"));
     }
 
     let error = body.get("error").and_then(|v| v.as_str()).unwrap_or("Unknown error");
@@ -333,35 +361,21 @@ pub async fn auth_register(email: String, password: String, code: String, accoun
 }
 
 #[tauri::command]
-pub async fn auth_login(app: AppHandle, account: String, password: String) -> Result<serde_json::Value, String> {
-    let resp = auth_send(|client, base| {
-        client
-            .post(format!("{}/auth/login", base))
-            .json(&serde_json::json!({ "account": account, "password": password }))
-    })
-    .await?;
-
-    let body: serde_json::Value = resp.json().await.map_err(|e| format!("Parse error: {}", e))?;
-
-    if let Some(token) = body.get("access_token").and_then(|v| v.as_str()) {
-        save_auth_token(token)?;
+pub async fn auth_login(app: AppHandle, account: String, password: String,
+    request_id: Option<String>, replacements: Option<Vec<device_sessions::DeviceReplacement>>,
+) -> Result<serde_json::Value, String> {
+    let _guard = device_sessions::ACCOUNT_LOCK.lock().await;
+    let result = device_sessions::login(account, password, request_id, replacements).await?;
+    if result["success"] == true {
         let _ = app.emit("auth-state-changed", serde_json::json!({ "loggedIn": true }));
-        return Ok(serde_json::json!({ "success": true }));
     }
-
-    let error = body.get("error").and_then(|v| v.as_str()).unwrap_or("Unknown error");
-    Err(translate_error(error))
+    Ok(result)
 }
 
 #[tauri::command]
 pub async fn auth_logout(app: AppHandle) -> Result<serde_json::Value, String> {
-    remove_auth_token()?;
-    // Also remove license cache
-    if let Ok(path) = license_cache_path() {
-        if path.exists() {
-            let _ = std::fs::remove_file(&path);
-        }
-    }
+    let _guard = device_sessions::ACCOUNT_LOCK.lock().await;
+    device_sessions::logout().await?;
     let _ = app.emit("auth-state-changed", serde_json::json!({ "loggedIn": false }));
     Ok(serde_json::json!({ "success": true }))
 }
@@ -922,63 +936,45 @@ pub async fn open_payment_url(app: AppHandle, url: String) -> Result<(), String>
 
 #[tauri::command]
 pub async fn check_license() -> Result<serde_json::Value, String> {
-    // 1. If there's a license.jwt file, verify locally (paid license)
-    let path = license_path()?;
-    if path.exists() {
-        match check_paid_license(&path) {
-            Ok(result) => {
-                // Only return immediately if the license is still valid
-                let status = result.get("status").and_then(|v| v.as_str()).unwrap_or("");
-                if status == "valid" || status == "machine_mismatch" {
-                    return Ok(result);
-                }
-                // License expired or invalid — fall through to server check
-                // so admin changes (extended trial, new subscription) can take effect
-            }
-            Err(_) => {
-                // Failed to read license file — fall through to server check
-            }
-        }
-    }
-
-    // 2. If logged in, check via server
+    let _guard = device_sessions::ACCOUNT_LOCK.lock().await;
     if let Some(token) = load_auth_token() {
-        match check_license_server(&token).await {
+        match device_sessions::status(&token).await {
             Ok(result) => {
                 save_license_cache(&result);
-                return Ok(serde_json::to_value(&result).unwrap_or_default());
+                return Ok(serde_json::to_value(result).unwrap_or_default());
             }
-            Err(_) => {
-                // Network error — fall back to local cache
-                if let Some(mut cache) = load_license_cache() {
-                    if !cached_license_has_access(&cache) {
-                        cache.status = "expired".to_string();
+            Err(device_sessions::StatusError::Rejected) => {
+                return Ok(serde_json::json!({"status":"signed_out","email":null,"account":null,
+                    "trial":false,"expires_at":null,"reason":"此设备的登录已结束，请重新登录。"}));
+            }
+            Err(device_sessions::StatusError::Invalid(message)) => return Err(message),
+            Err(device_sessions::StatusError::Unavailable) => {
+                if let Some(mut cache) = load_license_cache().filter(|cache|
+                    cache.account_token_sha256.as_deref() == Some(token_fingerprint(&token).as_str())) {
+                    if cache.status == "valid" && !cached_license_has_access(&cache) {
+                        cache.status = "free".into();
+                        cache.plan = Some("free".into());
+                        cache.device_limit = Some(1);
                     }
-                    return Ok(serde_json::to_value(&cache).unwrap_or_default());
+                    let mut result = serde_json::to_value(cache).unwrap_or_default();
+                    result["offline"] = serde_json::json!(true);
+                    return Ok(result);
                 }
-                // No cache and offline — no access. User must register/login
-                // to obtain a trial; there is no machine-local trial anymore.
-                return Ok(serde_json::json!({
-                    "status": "missing",
-                    "expires_at": null,
-                    "trial": false,
-                    "remaining_days": 0,
-                    "email": null,
-                    "account": null
-                }));
+                return Err("暂时无法核对账号，请联网后重试。".into());
             }
         }
     }
-
-    // 3. Not logged in — no local trial, prompt to register/login
-    Ok(serde_json::json!({
-        "status": "missing",
-        "expires_at": null,
-        "trial": false,
-        "remaining_days": 0,
-        "email": null,
-        "account": null
-    }))
+    // Imported software licenses remain local-only; they do not log into an
+    // account or authorize cloud access without a server-bound device session.
+    let path = license_path()?;
+    if path.exists() {
+        if let Ok(mut result) = check_paid_license(&path) {
+            result["logged_in"] = serde_json::json!(false);
+            return Ok(result);
+        }
+    }
+    Ok(serde_json::json!({"status":"missing","expires_at":null,"trial":false,
+        "remaining_days":0,"email":null,"account":null}))
 }
 
 /// Read-only local license state check for Agent subscription gating.
@@ -1042,37 +1038,6 @@ fn is_expired(expires_at: &str) -> bool {
         Some(exp) => chrono::Utc::now() >= exp,
         None => true,
     }
-}
-
-async fn check_license_server(token: &str) -> Result<LicenseCache, String> {
-    let machine_fp = get_machine_fingerprint();
-    let resp = auth_send(|client, base| {
-        client
-            .get(format!("{}/license/check?device_fingerprint={}", base, machine_fp))
-            .header("Authorization", format!("Bearer {}", token))
-    })
-    .await?;
-
-    if resp.status() == reqwest::StatusCode::UNAUTHORIZED {
-        // Token expired or invalid
-        let _ = remove_auth_token();
-        return Err("Token expired".to_string());
-    }
-
-    if !resp.status().is_success() {
-        return Err(format!("Server error: {}", resp.status()));
-    }
-
-    let body: serde_json::Value = resp.json().await.map_err(|e| format!("Parse error: {}", e))?;
-
-    Ok(LicenseCache {
-        status: body.get("status").and_then(|v| v.as_str()).unwrap_or("missing").to_string(),
-        expires_at: body.get("expires_at").and_then(|v| v.as_str()).map(|s| s.to_string()),
-        trial: body.get("trial").and_then(|v| v.as_bool()).unwrap_or(false),
-        email: body.get("email").and_then(|v| v.as_str()).map(|s| s.to_string()),
-        account: body.get("account").and_then(|v| v.as_str()).map(|s| s.to_string()),
-        verified_at: Some(chrono::Utc::now().to_rfc3339()),
-    })
 }
 
 fn check_paid_license(path: &PathBuf) -> Result<serde_json::Value, String> {
@@ -1221,6 +1186,10 @@ mod subscription_access_tests {
             email: None,
             account: None,
             verified_at: Some(chrono::Utc::now().to_rfc3339()),
+            plan: Some("pro".into()),
+            device_limit: Some(3),
+            device_session_id: None,
+            account_token_sha256: None,
         };
         assert!(cached_license_has_access(&cache));
 

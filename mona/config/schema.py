@@ -663,6 +663,19 @@ class DevelopmentConfig(Base):
     max_project_skills: int = Field(default=128, ge=1, le=512)
 
 
+class CloudSyncConfig(Base):
+    """Local opt-in only; keys stay in the desktop credential store."""
+
+    enabled: bool = False
+    account_id: str = Field(default="", max_length=32)
+    vault_id: str = Field(default="", max_length=32)
+    interval_seconds: int = Field(default=60, ge=30, le=3600)
+    session_keys: list[str] = Field(default_factory=list, max_length=10_000)
+    sync_new_conversations: bool = False
+    sync_planning: bool = False
+    excluded_session_keys: list[str] = Field(default_factory=list, max_length=10_000)
+
+
 class Config(BaseSettings):
     """Root configuration for mona."""
 
@@ -678,6 +691,7 @@ class Config(BaseSettings):
     tools: ToolsConfig = Field(default_factory=ToolsConfig)
     stock: StockConfig = Field(default_factory=StockConfig)
     development: DevelopmentConfig = Field(default_factory=DevelopmentConfig)
+    cloud_sync: CloudSyncConfig = Field(default_factory=CloudSyncConfig)
     model_presets: dict[str, ModelPresetConfig] = Field(
         default_factory=dict,
         validation_alias=AliasChoices("modelPresets", "model_presets"),

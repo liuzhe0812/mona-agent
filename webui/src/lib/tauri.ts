@@ -425,7 +425,8 @@ export function readWorkspaceCanvas(
   return invoke<SavedWorkspaceCanvas>("workspace_canvas_read", { workspaceRoot, path });
 }
 
-export function openWorkspaceCanvasFile(path: string): Promise<SavedWorkspaceCanvas> {
+export async function openWorkspaceCanvasFile(path: string): Promise<SavedWorkspaceCanvas> {
+  await prepareSyncedFile(path);
   return invoke<SavedWorkspaceCanvas>("workspace_canvas_open_file", { path });
 }
 
@@ -606,8 +607,27 @@ export async function listMocNotes(): Promise<unknown[]> {
   return invoke<unknown[]>("notes_moc_list");
 }
 
+async function prepareSyncedFile(path: string): Promise<void> {
+  if (!isTauri() || !/(?:^|[\\/])cloud[\\/][a-f0-9]{32}[\\/][a-f0-9]{64}[\\/][^\\/]+$/.test(path)) return;
+  const { ensureCloudFile } = await import("./cloud-sync");
+  await ensureCloudFile(path);
+}
+
+async function prepareExternalFileOpen(path: string): Promise<boolean> {
+  try {
+    await prepareSyncedFile(path);
+    return true;
+  } catch (error) {
+    const { message } = await import("@tauri-apps/plugin-dialog");
+    await message(error instanceof Error ? error.message : "云端文件暂时无法下载，请稍后重试。", {
+      title: "文件尚未打开", kind: "error",
+    });
+    return false;
+  }
+}
+
 export async function openPathWithSystemApp(path: string): Promise<void> {
-  if (!isTauri()) return;
+  if (!isTauri() || !await prepareExternalFileOpen(path)) return;
   try {
     const { openPath } = await import("@tauri-apps/plugin-opener");
     await openPath(path);
@@ -639,7 +659,7 @@ export async function quickAskOpenSsh(): Promise<void> {
 }
 
 export async function revealItemInDir(path: string): Promise<void> {
-  if (!isTauri()) return;
+  if (!isTauri() || !await prepareExternalFileOpen(path)) return;
   const { revealItemInDir } = await import("@tauri-apps/plugin-opener");
   await revealItemInDir(path);
 }

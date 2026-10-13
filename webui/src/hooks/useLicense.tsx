@@ -1,11 +1,17 @@
 import { createContext, useCallback, useContext, useEffect, useRef, useState } from "react";
 import { isTauri } from "@/lib/tauri";
+import { parseDeviceRemoval, requireLoginAccepted, type DeviceLoginOptions, type DeviceRemovalResult, type DeviceReplacement } from "@/lib/account-devices";
 
 interface LicenseInfo {
   status: string;
   expires_at: string | null;
   trial: boolean;
   remaining_days?: number;
+  plan?: "free" | "pro";
+  device_limit?: number;
+  device_session_id?: string;
+  logged_in?: boolean;
+  offline?: boolean;
   email: string | null;
   account: string | null;
 }
@@ -45,10 +51,11 @@ interface LicenseContextValue {
   pricingConfig: PricingConfig | null;
   pricingError: string | null;
   fetchPricing: () => Promise<void>;
-  login: (account: string, password: string) => Promise<void>;
+  login: (account: string, password: string, options?: DeviceLoginOptions) => Promise<void>;
   register: (email: string, password: string, code: string, account: string) => Promise<void>;
   sendRegisterCode: (email: string, account: string) => Promise<string>;
   logout: () => Promise<void>;
+  removeLoginDevice: (device: DeviceReplacement) => Promise<DeviceRemovalResult>;
   forgotPassword: (email: string) => Promise<string>;
   resetPassword: (email: string, code: string, newPassword: string) => Promise<string>;
   changePassword: (oldPassword: string, newPassword: string) => Promise<string>;
@@ -71,6 +78,7 @@ const LicenseContext = createContext<LicenseContextValue>({
   register: async () => {},
   sendRegisterCode: async () => "",
   logout: async () => {},
+  removeLoginDevice: async () => { throw new Error("账号状态未就绪，请重新打开设置。"); },
   forgotPassword: async () => "",
   resetPassword: async () => "",
   changePassword: async () => "",
@@ -96,6 +104,7 @@ export function LicenseProvider({ children }: { children: React.ReactNode }) {
   const [pricingConfig, setPricingConfig] = useState<PricingConfig | null>(null);
   const [pricingError, setPricingError] = useState<string | null>(null);
   const licenseCheckGeneration = useRef(0);
+  const authMutationGeneration = useRef(0);
 
   const invokeTauri = useCallback(async <T,>(cmd: string, args?: Record<string, unknown>): Promise<T> => {
     const { invoke } = await import("@tauri-apps/api/core");
@@ -117,7 +126,7 @@ export function LicenseProvider({ children }: { children: React.ReactNode }) {
       setLicenseInfo(result);
       setLicenseActive(result.status === "valid");
       // 登录状态基于是否有账号信息
-      const hasAccount = !!(result.email || result.account);
+      const hasAccount = result.logged_in !== false && !!(result.email || result.account);
       setLoggedIn(hasAccount);
       setServerTrial(!!result.trial && result.status === "valid");
       setRemainingDays(result.remaining_days ?? remainingDaysUntil(result.expires_at));
@@ -183,20 +192,38 @@ export function LicenseProvider({ children }: { children: React.ReactNode }) {
     }
   }, [invokeTauri]);
 
-  const login = useCallback(async (account: string, password: string) => {
-    const result = await invokeTauri<{ success: boolean }>("auth_login", { account, password });
-    if (result.success) {
-      setLoggedIn(true);
-      await checkLicense();
-    }
+  const clearAccountState = useCallback(() => {
+    licenseCheckGeneration.current += 1;
+    setLoggedIn(false);
+    setLicenseActive(false);
+    setLicenseInfo(null);
+    setServerTrial(false);
+    setRemainingDays(0);
+    setDeviceMismatch(false);
+    setChecking(false);
+  }, []);
+
+  const login = useCallback(async (account: string, password: string, options?: DeviceLoginOptions) => {
+    const mutation = ++authMutationGeneration.current;
+    licenseCheckGeneration.current += 1;
+    const result = await invokeTauri<unknown>("auth_login", { account, password,
+      requestId: options?.requestId ?? crypto.randomUUID().replaceAll("-", ""),
+      replacements: options?.replacements ?? [],
+    });
+    requireLoginAccepted(result);
+    if (authMutationGeneration.current !== mutation) return;
+    setLoggedIn(true);
+    await checkLicense();
   }, [invokeTauri, checkLicense]);
 
   const register = useCallback(async (email: string, password: string, code: string, account: string) => {
-    const result = await invokeTauri<{ success: boolean }>("auth_register", { email, password, code, account });
-    if (result.success) {
-      setLoggedIn(true);
-      await checkLicense();
-    }
+    const mutation = ++authMutationGeneration.current;
+    licenseCheckGeneration.current += 1;
+    const result = await invokeTauri<unknown>("auth_register", { email, password, code, account });
+    requireLoginAccepted(result);
+    if (authMutationGeneration.current !== mutation) return;
+    setLoggedIn(true);
+    await checkLicense();
   }, [invokeTauri, checkLicense]);
 
   const sendRegisterCode = useCallback(async (email: string, account: string): Promise<string> => {
@@ -205,14 +232,20 @@ export function LicenseProvider({ children }: { children: React.ReactNode }) {
   }, [invokeTauri]);
 
   const logout = useCallback(async () => {
+    const mutation = ++authMutationGeneration.current;
     licenseCheckGeneration.current += 1;
-    await invokeTauri("auth_logout");
-    setLoggedIn(false);
-    setLicenseActive(false);
-    setLicenseInfo(null);
-    setServerTrial(false);
-    setDeviceMismatch(false);
-  }, [invokeTauri]);
+    const result = await invokeTauri<{ success?: boolean }>("auth_logout");
+    if (result?.success !== true) throw new Error("尚未确认退出结果，请联网后重试。");
+    if (authMutationGeneration.current === mutation) clearAccountState();
+  }, [invokeTauri, clearAccountState]);
+
+  const removeLoginDevice = useCallback(async (device: DeviceReplacement): Promise<DeviceRemovalResult> => {
+    const mutation = ++authMutationGeneration.current;
+    licenseCheckGeneration.current += 1;
+    const result = parseDeviceRemoval(await invokeTauri("revoke_login_device", { device }), device.id);
+    if (authMutationGeneration.current === mutation && result.current_device_removed) clearAccountState();
+    return result;
+  }, [invokeTauri, clearAccountState]);
 
   const forgotPassword = useCallback(async (email: string): Promise<string> => {
     const result = await invokeTauri<{ success: boolean; message?: string }>("auth_forgot_password", { email });
@@ -252,16 +285,30 @@ export function LicenseProvider({ children }: { children: React.ReactNode }) {
   }, [checkLicense, fetchPricing]);
 
   useEffect(() => {
-    if (!isTauri() || !licenseActive) return;
-    const timer = window.setInterval(() => {
-      void invokeTauri<boolean>("license_has_access")
-        .then((hasAccess) => {
-          if (!hasAccess) void checkLicense();
-        })
-        .catch(() => undefined);
-    }, 60_000);
-    return () => window.clearInterval(timer);
-  }, [checkLicense, invokeTauri, licenseActive]);
+    if (!isTauri() || !loggedIn) return;
+    // Free accounts also need revocation checks; local tasks are not stopped.
+    let lastCheck = Date.now();
+    const refresh = () => {
+      if (Date.now() - lastCheck < 300_000) return;
+      lastCheck = Date.now();
+      void checkLicense();
+    };
+    const timer = window.setInterval(refresh, 300_000);
+    window.addEventListener("focus", refresh);
+    return () => { window.clearInterval(timer); window.removeEventListener("focus", refresh); };
+  }, [checkLicense, loggedIn]);
+
+  useEffect(() => {
+    if (!isTauri()) return;
+    let disposed = false;
+    let unlisten: (() => void) | undefined;
+    void import("@tauri-apps/api/event").then(({ listen }) =>
+      listen<{ loggedIn?: boolean }>("auth-state-changed", ({ payload }) => {
+        if (!disposed && payload.loggedIn === false) clearAccountState();
+      }),
+    ).then((stop) => { if (disposed) stop(); else unlisten = stop; }).catch(() => undefined);
+    return () => { disposed = true; unlisten?.(); };
+  }, [clearAccountState]);
 
   return (
     <LicenseContext.Provider value={{
@@ -279,6 +326,7 @@ export function LicenseProvider({ children }: { children: React.ReactNode }) {
       register,
       sendRegisterCode,
       logout,
+      removeLoginDevice,
       forgotPassword,
       resetPassword,
       changePassword,

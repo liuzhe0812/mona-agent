@@ -1007,10 +1007,14 @@ class WebSocketChannel(BaseChannel):
         # these URLs when replaying a session.
         m = re.match(r"^/api/media/([A-Za-z0-9_-]+)/([A-Za-z0-9_-]+)$", got)
         if m:
-            return await asyncio.to_thread(self._handle_media_fetch, m.group(1), m.group(2))
+            return await self._serve_with_cloud_file(self._handle_media_fetch, m.group(1), m.group(2))
+
+        m = re.match(r"^/api/cloud-attachment/([A-Za-z0-9_-]+)/([A-Za-z0-9_-]+)$", got)
+        if m:
+            return await self._serve_with_cloud_file(self._handle_cloud_attachment_fetch, m.group(1), m.group(2))
 
         if got.startswith("/api/file-preview"):
-            return await asyncio.to_thread(
+            return await self._serve_with_cloud_file(
                 self._handle_file_preview,
                 request,
                 scope=_query_first(query, "scope") or "",
@@ -2107,7 +2111,7 @@ class WebSocketChannel(BaseChannel):
             for entry in media:
                 if not isinstance(entry, str) or not entry:
                     continue
-                signed = self._sign_media_path(Path(entry))
+                signed = self._sign_media_path(Path(entry)) or self._sign_cloud_attachment(Path(entry))
                 if signed is None:
                     continue
                 urls.append({"url": signed, "name": Path(entry).name})
@@ -2145,7 +2149,7 @@ class WebSocketChannel(BaseChannel):
         can fetch them through the existing signed media route without
         exposing arbitrary filesystem paths.
         """
-        signed = self._sign_media_path(path)
+        signed = self._sign_media_path(path) or self._sign_cloud_attachment(path)
         if signed is not None:
             return {"url": signed, "name": path.name}
         try:
@@ -2161,7 +2165,70 @@ class WebSocketChannel(BaseChannel):
             return None
         return {"url": signed, "name": path.name}
 
-    def _handle_media_fetch(self, sig: str, payload: str) -> Response:
+    def _sign_cloud_attachment(self, path: Path) -> str | None:
+        """Lazy uploaded documents stay in their approved uploads root, not a second copy."""
+        from mona.cloud.file_access import is_cloud_file_path
+        if not is_cloud_file_path(path):
+            return None
+        try:
+            relative = path.resolve().relative_to((self.workspace / "uploads").resolve())
+        except (OSError, ValueError):
+            return None
+        payload = _b64url_encode(relative.as_posix().encode("utf-8"))
+        signed = b"cloud-attachment-v1\n" + payload.encode("ascii")
+        mac = hmac.new(self._media_secret, signed, hashlib.sha256).digest()[:16]
+        return f"/api/cloud-attachment/{_b64url_encode(mac)}/{payload}"
+
+    def _handle_cloud_attachment_fetch(self, sig: str, payload: str, *, cloud_missing=None) -> Response:
+        from mona.cloud.file_access import is_cloud_file_path
+        from mona.cloud.work_files import portable_path
+        try:
+            provided = _b64url_decode(sig)
+            expected = hmac.new(self._media_secret,
+                b"cloud-attachment-v1\n" + payload.encode("ascii"), hashlib.sha256).digest()[:16]
+            if not hmac.compare_digest(provided, expected):
+                return _http_error(401, "invalid signature")
+        except (ValueError, binascii.Error, UnicodeError):
+            return _http_error(401, "invalid signature")
+        try:
+            relative = portable_path(_b64url_decode(payload).decode("utf-8"))
+            root = (self.workspace / "uploads").resolve()
+            target = (root / relative).resolve()
+            target.relative_to(root)
+            if not is_cloud_file_path(target):
+                return _http_error(404, "not found")
+        except (ValueError, OSError, binascii.Error, UnicodeError):
+            return _http_error(404, "not found")
+        return self._media_file_response(target, cloud_missing)
+
+    async def _serve_with_cloud_file(self, handler, *args, **kwargs) -> Response:
+        from mona.cloud.crypto import CloudCryptoError
+        from mona.cloud.file_access import ensure_session_file
+        from mona.cloud.transfer import CloudTransferError
+        from mona.cloud.work_files import WorkFileError
+
+        missing = []
+        response = await asyncio.to_thread(handler, *args, **kwargs, cloud_missing=missing)
+        if not missing:
+            return response
+        session_key, target = missing[0]
+        try:
+            if not await ensure_session_file(self._session_manager, session_key, target):
+                return response
+        except (CloudTransferError, CloudCryptoError, WorkFileError) as exc:
+            return _http_json_response({"error": {"code": getattr(exc, "code", "cloud_file_unavailable"),
+                "message": str(exc)}}, status=409)
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:
+            self.logger.warning("Cloud file preview unavailable ({})", type(exc).__name__)
+            return _http_json_response({"error": {"code": "cloud_file_unavailable",
+                "message": "云端文件暂时无法下载，请检查登录和网络后重试。"}}, status=503)
+        # Authorization/path checks run again after network work. No alternate
+        # file or earlier local version is used when hydration failed.
+        return await asyncio.to_thread(handler, *args, **kwargs)
+
+    def _handle_media_fetch(self, sig: str, payload: str, *, cloud_missing: list | None = None) -> Response:
         """Serve a single media file previously signed via
         :meth:`_sign_media_path`. Validates the signature, decodes the
         payload to a relative path, and streams the file bytes with a
@@ -2191,7 +2258,13 @@ class WebSocketChannel(BaseChannel):
                 state.protect(candidate)
         except (OSError, ValueError):
             return _http_error(404, "not found")
+        return self._media_file_response(candidate, cloud_missing)
+
+    @staticmethod
+    def _media_file_response(candidate: Path, cloud_missing: list | None = None) -> Response:
         if not candidate.is_file():
+            if cloud_missing is not None:
+                cloud_missing.append((None, candidate))
             return _http_error(404, "not found")
         try:
             body = candidate.read_bytes()
@@ -2616,6 +2689,7 @@ class WebSocketChannel(BaseChannel):
         path: str,
         room: str = "",
         artifact_id: str = "",
+        cloud_missing: list | None = None,
     ) -> Response:
         # 1. Auth: every file-preview request must carry a valid API token.
         if not self._check_api_token(request):
@@ -2716,6 +2790,9 @@ class WebSocketChannel(BaseChannel):
 
         # 5. File existence and read.
         if not target.is_file():
+            if cloud_missing is not None and scope in {"shared", "room"}:
+                owner_key = decoded_key if scope == "shared" else f"websocket:{room}"
+                cloud_missing.append((owner_key, target))
             return _http_error(404, "file not found")
         try:
             data = target.read_bytes()

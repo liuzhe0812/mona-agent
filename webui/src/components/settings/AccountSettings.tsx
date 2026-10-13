@@ -3,6 +3,10 @@ import { invoke } from "@tauri-apps/api/core";
 import { Loader2, LogOut } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
+import { AccountDevices } from "@/components/account/AccountDevices";
+import { CloudSyncSettings } from "@/components/account/CloudSyncSettings";
+import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
+import { accountDeviceErrorMessage } from "@/lib/account-devices";
 import { SubsectionLabel } from "@/components/ui/page-header";
 import { useLicense } from "@/hooks/useLicense";
 import { formatBalanceAmount } from "@/lib/money";
@@ -70,10 +74,11 @@ export function AccountSettings({
     remainingDays,
     logout,
   } = useLicense();
-  const dataOwnerKey = `${licenseInfo?.account ?? ""}:${licenseInfo?.email ?? ""}`;
+  const dataOwnerKey = `${licenseInfo?.account ?? ""}:${licenseInfo?.email ?? ""}:${licenseInfo?.device_session_id ?? ""}`;
   const [balance, setBalance] = useState<CreditBalance | null>(null);
   const [balanceUnavailable, setBalanceUnavailable] = useState(false);
   const [loggingOut, setLoggingOut] = useState(false);
+  const [logoutError, setLogoutError] = useState("");
 
   useEffect(() => {
     setBalance(null);
@@ -153,6 +158,9 @@ export function AccountSettings({
         </AccountSettingsGroup>
       </section>
 
+      <AccountDevices key={dataOwnerKey} />
+      <CloudSyncSettings key={`cloud:${dataOwnerKey}`} onUpgrade={onManageSubscription} />
+
       <section>
         <SubsectionLabel className="mb-2 px-1">账户安全</SubsectionLabel>
         <AccountSettingsGroup>
@@ -164,7 +172,9 @@ export function AccountSettings({
               disabled={loggingOut}
               onClick={() => {
                 setLoggingOut(true);
-                void logout().finally(() => setLoggingOut(false));
+                void logout()
+                  .catch((error) => setLogoutError(accountDeviceErrorMessage(error, "logout")))
+                  .finally(() => setLoggingOut(false));
               }}
             >
               {loggingOut ? <Loader2 className="mr-1.5 h-3.5 w-3.5 animate-spin" /> : <LogOut className="mr-1.5 h-3.5 w-3.5" />}
@@ -173,6 +183,12 @@ export function AccountSettings({
           </AccountSettingsRow>
         </AccountSettingsGroup>
       </section>
+      <Dialog open={!!logoutError} onOpenChange={(open) => { if (!open) setLogoutError(""); }}>
+        <DialogContent>
+          <DialogHeader><DialogTitle>退出登录未确认</DialogTitle><DialogDescription>{logoutError}</DialogDescription></DialogHeader>
+          <DialogFooter><Button variant="outline" onClick={() => setLogoutError("")}>关闭</Button></DialogFooter>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }

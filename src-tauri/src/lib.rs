@@ -500,6 +500,9 @@ mod local_http_auth_tests {
         assert!(needs_services_token("/api/development/projects"));
         assert!(needs_services_token("/api/development/sessions/id/send"));
         assert!(!needs_services_token("/api/development-other"));
+        assert!(needs_services_token("/api/cloud-sync/status"));
+        assert!(needs_services_token("/api/cloud-sync/enable"));
+        assert!(!needs_services_token("/api/cloud-sync-other"));
     }
 }
 
@@ -526,6 +529,8 @@ fn needs_services_token(path: &str) -> bool {
     path.starts_with("/api/materials")
         || path == "/api/development"
         || path.starts_with("/api/development/")
+        || path == "/api/cloud-sync"
+        || path.starts_with("/api/cloud-sync/")
         || path.starts_with("/api/profile")
         || (path.starts_with("/api/office") && path != "/api/office/ws")
         || path == "/api/stock/research/preflight"
@@ -1192,6 +1197,8 @@ pub fn run() {
             license::send_register_code,
             license::auth_login,
             license::auth_logout,
+            license::device_sessions::list_login_devices,
+            license::device_sessions::revoke_login_device,
             license::auth_forgot_password,
             license::auth_reset_password,
             license::auth_change_password,
