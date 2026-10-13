@@ -123,7 +123,12 @@ class CloudRecycle:
                             or type(content.get("version")) is not int or not 0 < content["version"] < row["version"]):
                         invalid()
                     if transfer is not None:
-                        title = await asyncio.to_thread(self.title, transfer, content)
+                        try:
+                            title = await asyncio.to_thread(self.title, transfer, content)
+                        except CloudTransferError as error:
+                            if error.code != "cloud_download_expired":
+                                raise
+                            title = KINDS[row["kind"]] + "（下载期已结束）"
                 else:
                     title = KINDS[row["kind"]] + "（无可恢复内容）"
                 items.append({key: row[key] for key in ("resource_id", "kind", "version", "deleted_at")}

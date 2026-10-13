@@ -6,6 +6,7 @@ import pytest
 from test_cloud_coordinator import desktops as desktop_fixture
 from test_cloud_local_api import local_api as api_fixture
 
+from mona.cloud.crypto import VaultCipher
 from mona.cloud.transfer import CloudTransferError
 
 desktops = desktop_fixture
@@ -109,3 +110,36 @@ async def test_invalid_trash_lists_never_become_an_empty_success(desktops, paylo
     native.server.control = lambda *_: payload
     with pytest.raises(CloudTransferError):
         await owner.recycle.list()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("code", ["cloud_download_expired", "download_unavailable"])
+async def test_trash_remains_manageable_when_only_content_download_has_expired(desktops, code):
+    _, create = desktops
+    owner, native = create("expired")
+    cipher = VaultCipher.generate()
+    native.recovery = cipher.recovery_text()
+    native.plan = "free"
+    native.server.space = {"vault_id": cipher.vault_id, "key_check": cipher.key_check()}
+    manifest = "b" * 64
+    content = {"resource_id": RID, "kind": "work_conversation", "version": 1,
+               "manifest_id": manifest, "object_ids": [manifest], "deleted": False}
+
+    def control(method, path, body=None):
+        if path.startswith("/trash"):
+            return {"items": [{"resource_id": RID, "kind": "work_conversation", "version": 2,
+                               "sequence": 2, "deleted_at": "2026-10-13T00:00:00Z", "content": content}],
+                    "has_more": False, "next_before": 2}
+        if path.endswith("/download"):
+            raise CloudTransferError(code, "Content cannot be downloaded")
+        raise AssertionError(path)
+
+    native.server.control = control
+    if code == "cloud_download_expired":
+        page = await owner.recycle.list()
+        assert page["items"][0]["title"] == "工作会话（下载期已结束）"
+        assert page["items"][0]["recoverable"] is True
+    else:
+        with pytest.raises(CloudTransferError) as error:
+            await owner.recycle.list()
+        assert error.value.code == code

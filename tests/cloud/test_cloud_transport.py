@@ -39,6 +39,15 @@ def test_malformed_server_error_is_not_treated_as_success(monkeypatch):
     assert "internal" not in str(error.value)
 
 
+def test_expired_download_explains_renewal_without_exposing_server_details(monkeypatch):
+    monkeypatch.setattr(transport, "tauri_invoke", lambda *a, **k: {
+        "status": 403, "data": {"error": "cloud_download_expired", "detail": "internal-server-details"}})
+    with pytest.raises(CloudTransferError) as error:
+        BridgeCloudTransport(BINDING).control("POST", "/objects/" + "b" * 64 + "/download")
+    assert error.value.code == "cloud_download_expired"
+    assert "续订 Pro" in str(error.value) and "internal" not in str(error.value)
+
+
 @pytest.mark.parametrize("url,upload", [
     ("http://files.qiniup.com", True), ("https://untrusted.invalid", True),
     ("https://files.qiniup.com/private?x=1", True), ("https://user:password@example.invalid", False),

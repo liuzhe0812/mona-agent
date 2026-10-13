@@ -34,6 +34,7 @@ class BridgeCloudTransport:
             code = raw_code if isinstance(raw_code, str) else "sync_unavailable"
             messages = {
                 "cloud_pro_required": "云同步需要 Pro，本地工作不受影响。",
+                "cloud_download_expired": "云内容下载期已结束，续订 Pro 后可再次下载；本地资料仍可使用。",
                 "cloud_quota_exceeded": "云空间不足，请清理空间后重试。",
                 "cloud_version_conflict": "另一台设备已修改此会话，已保留本地版本。",
                 "cloud_unavailable": "云同步服务暂未开放。",
