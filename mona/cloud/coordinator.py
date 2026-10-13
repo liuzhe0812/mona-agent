@@ -79,6 +79,8 @@ class CloudCoordinator:
         self.transferred_bytes = 0
         self.draft = None
         self.cleanup_draft = None
+        from mona.cloud.history_retention import HistoryRetention
+        self.history_retention = HistoryRetention(self)
 
     async def _context(self) -> dict:
         context = await asyncio.to_thread(self.invoke, "cloud_sync_context", timeout=65)

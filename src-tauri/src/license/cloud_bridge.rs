@@ -14,6 +14,7 @@ fn route_allowed(method: &str, path: &str) -> bool {
     let allowed = match (method, parts.as_slice()) {
         ("GET", ["", "space"]) | ("GET", ["", "changes"]) => true,
         ("GET" | "POST", ["", "cleanup"]) => query.is_empty(),
+        ("GET", ["", "retention"]) | ("POST", ["", "retention"]) => query.is_empty(),
         ("POST", ["", "space"]) | ("POST", ["", "objects", "reserve"])
             | ("POST", ["", "resources", "commit"]) => query.is_empty(),
         ("POST", ["", "objects", id, operation]) => hex(id, 64)
@@ -202,6 +203,10 @@ mod tests {
     #[test]
     fn only_bounded_cloud_control_routes_are_allowed() {
         assert!(route_allowed("GET", "/space"));
+        assert!(route_allowed("GET", "/retention"));
+        assert!(route_allowed("POST", "/retention"));
+        assert!(!route_allowed("DELETE", "/retention"));
+        assert!(!route_allowed("POST", "/retention?all=1"));
         assert!(route_allowed("GET", "/cleanup"));
         assert!(route_allowed("POST", "/cleanup"));
         assert!(!route_allowed("DELETE", "/cleanup"));

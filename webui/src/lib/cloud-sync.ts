@@ -31,6 +31,13 @@ export interface CloudCleanupResult {
   failed: number; pending: number; released_bytes: number;
 }
 
+export interface CloudRetentionPreview {
+  draft_id: string | null; count: number; retention_days: number; has_more: boolean; expires_at: number;
+}
+export interface CloudRetentionResult {
+  complete: true; retired: number; already_retired: number; retained: number; released_bytes: 0;
+}
+
 const id32 = /^[a-f0-9]{32}$/;
 const id64 = /^[a-f0-9]{64}$/;
 const workKey = /^websocket:[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$/;
@@ -77,6 +84,25 @@ async function restoreVersion(resource_id: string, version: number, request_id: 
   if (!Number.isSafeInteger(version) || version < 1 || version > 2_000_000_000 || !id32.test(request_id)) invalidResponse();
   const data = await request<CloudRestoreResult>("restore", "POST", { resource_id, version, request_id, confirmed: true });
   if (data.restored !== true || typeof data.key !== "string" || !workKey.test(data.key) || typeof data.reused !== "boolean") invalidResponse();
+  return data;
+}
+
+async function retentionPreview(signal?: AbortSignal): Promise<CloudRetentionPreview> {
+  const data = await request<CloudRetentionPreview>("retention-preview", "POST", {}, signal);
+  if (!data || !Number.isSafeInteger(data.count) || data.count < 0 || data.count > 50
+    || !Number.isSafeInteger(data.retention_days) || data.retention_days < 1 || data.retention_days > 3650
+    || typeof data.has_more !== "boolean" || data.has_more && data.count !== 50
+    || !Number.isSafeInteger(data.expires_at) || data.expires_at <= 0
+    || (data.count ? typeof data.draft_id !== "string" || !id32.test(data.draft_id) : data.draft_id !== null)) invalidResponse();
+  return data;
+}
+async function retireHistory(draft_id: string): Promise<CloudRetentionResult> {
+  if (!id32.test(draft_id)) invalidResponse();
+  const data = await request<CloudRetentionResult>("retention", "POST", { draft_id, confirmed: true });
+  const counts = [data?.retired, data?.already_retired, data?.retained];
+  if (!data || data.complete !== true || data.released_bytes !== 0
+    || counts.some((count) => !Number.isSafeInteger(count) || count < 0)
+    || counts.reduce((a, b) => a + b, 0) < 1 || counts.reduce((a, b) => a + b, 0) > 50) invalidResponse();
   return data;
 }
 
@@ -134,6 +160,8 @@ async function request<T>(path: string, method = "GET", body?: unknown, signal?:
   }
 }
 export const cloudSyncApi = {
+  retentionPreview,
+  retireHistory,
   cleanupPreview,
   cleanup: cleanupUploads,
   status: (signal?: AbortSignal) => request<CloudStatus>("status", "GET", undefined, signal),

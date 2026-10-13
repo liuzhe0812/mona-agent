@@ -9,6 +9,8 @@ import { cloudSyncApi, type CloudDraft, type CloudStatus } from "@/lib/cloud-syn
 import { CloudHistoryDialog } from "./CloudHistoryDialog";
 import { CloudCleanupDialog } from "./CloudCleanupDialog";
 
+import { CloudHistoryRetentionDialog } from "./CloudHistoryRetentionDialog";
+
 const phases: Record<string, string> = { idle: "已同步", syncing: "同步中", paused: "已暂停", waiting: "等待当前任务结束", pending: "等待继续同步", error: "同步未完成" };
 function size(bytes: number) { return `${(bytes / 1_000_000_000).toLocaleString("zh-CN", { maximumFractionDigits: 2 })} GB`; }
 function message(error: unknown) { return error instanceof Error ? error.message : "操作尚未完成，请稍后重试。"; }
@@ -123,7 +125,7 @@ export function CloudSyncSettings({ onUpgrade }: { onUpgrade?: () => void }) {
         <Button size="sm" variant="outline" disabled={busy} onClick={() => { setKeys(state.selected_keys ?? []); setSyncNew(state.sync_new_conversations === true); setSyncPlanning(state.sync_planning === true); setSyncNotes(state.sync_notes === true); setSyncPreferences(state.sync_preferences === true); setView("scope"); }}>同步范围</Button>
         {state.last_sync && <span className="text-caption text-muted-foreground">最近同步 {new Date(state.last_sync * 1000).toLocaleString("zh-CN")}</span>}
       </div>}
-      {state?.available && space && <div className="mt-3"><CloudCleanupDialog disabled={busy} onCleaned={() => void refresh()} /></div>}
+      {state?.available && space && <div className="mt-3 flex flex-wrap gap-2"><CloudHistoryRetentionDialog disabled={busy} onChanged={() => void refresh()} /><CloudCleanupDialog disabled={busy} onCleaned={() => void refresh()} /></div>}
       {state?.available && !!state.conversations?.some((item) => item.version > 0) && <div className="mt-3">
         <CloudHistoryDialog conversations={state.conversations} candidates={state.candidates ?? []} onRestored={() => void refresh()} />
       </div>}

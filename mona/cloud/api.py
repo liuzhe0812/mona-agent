@@ -139,6 +139,16 @@ async def cleanup_uploads(request):
     return web.json_response(await (await get_coordinator(request)).cleanup_uploads(data.draft_id, data.confirmed))
 
 
+async def retention_preview(request):
+    await body(request, RequestBody)
+    return web.json_response(await (await get_coordinator(request)).history_retention.preview())
+
+
+async def retention_apply(request):
+    data = await body(request, CleanupRequest)
+    return web.json_response(await (await get_coordinator(request)).history_retention.apply(data.draft_id, data.confirmed))
+
+
 async def prepare(request):
     data = await body(request, Prepare)
     return web.json_response(await (await get_coordinator(request)).prepare(data.recovery))
@@ -248,5 +258,7 @@ def register_cloud_routes(app: web.Application) -> None:
                           ("history", history), ("files", files), ("download", download), ("ensure-file", ensure_file), ("restore", restore),
                           ("cleanup-preview", cleanup_preview), ("cleanup", cleanup_uploads)]:
         app.router.add_post(PREFIX + "/" + path, handler)
+    app.router.add_post(PREFIX + "/retention-preview", retention_preview)
+    app.router.add_post(PREFIX + "/retention", retention_apply)
     app.on_startup.append(startup)
     app.on_cleanup.append(cleanup)
