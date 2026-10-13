@@ -21,6 +21,11 @@ class RequestBody(BaseModel):
     model_config = ConfigDict(extra="forbid", strict=True)
 
 
+class CleanupRequest(RequestBody):
+    draft_id: str = Field(pattern=r"^[a-f0-9]{32}$")
+    confirmed: bool = False
+
+
 class Prepare(RequestBody):
     recovery: str | None = Field(default=None, max_length=160, repr=False)
 
@@ -120,6 +125,16 @@ async def cloud_auth(request, handler):
 
 async def status(request):
     return web.json_response(await (await get_coordinator(request)).status())
+
+
+async def cleanup_preview(request):
+    await body(request, RequestBody)
+    return web.json_response(await (await get_coordinator(request)).cleanup_preview())
+
+
+async def cleanup_uploads(request):
+    data = await body(request, CleanupRequest)
+    return web.json_response(await (await get_coordinator(request)).cleanup_uploads(data.draft_id, data.confirmed))
 
 
 async def prepare(request):
@@ -228,7 +243,8 @@ def register_cloud_routes(app: web.Application) -> None:
     app.middlewares.append(cloud_auth)
     app.router.add_get(PREFIX + "/status", status)
     for path, handler in [("prepare", prepare), ("enable", enable), ("scope", scope), ("pause", pause), ("sync", sync),
-                          ("history", history), ("files", files), ("download", download), ("ensure-file", ensure_file), ("restore", restore)]:
+                          ("history", history), ("files", files), ("download", download), ("ensure-file", ensure_file), ("restore", restore),
+                          ("cleanup-preview", cleanup_preview), ("cleanup", cleanup_uploads)]:
         app.router.add_post(PREFIX + "/" + path, handler)
     app.on_startup.append(startup)
     app.on_cleanup.append(cleanup)

@@ -20,6 +20,14 @@ export interface CloudHistoryVersion { version: number; created_at: string; dele
 export interface CloudHistoryPage { items: CloudHistoryVersion[]; has_more: boolean; next_before: number }
 export interface CloudFile { id: string; name: string; size: number; local: boolean }
 export interface CloudRestoreResult { restored: true; key: string; reused: boolean }
+export interface CloudCleanupPreview {
+  draft_id: string | null; count: number; bytes: number; has_more: boolean;
+  expires_at: number; minimum_age_seconds: number;
+}
+export interface CloudCleanupResult {
+  complete: boolean; removed: number; already_removed: number; retained: number;
+  failed: number; pending: number; released_bytes: number;
+}
 
 const id32 = /^[a-f0-9]{32}$/;
 const id64 = /^[a-f0-9]{64}$/;
@@ -70,6 +78,28 @@ async function restoreVersion(resource_id: string, version: number, request_id: 
   return data;
 }
 
+async function cleanupPreview(signal?: AbortSignal): Promise<CloudCleanupPreview> {
+  const data = await request<CloudCleanupPreview>("cleanup-preview", "POST", {}, signal);
+  if (!data || !Number.isSafeInteger(data.count) || data.count < 0 || data.count > 10
+    || !Number.isSafeInteger(data.bytes) || data.bytes < 0 || data.bytes > data.count * 8 * 1024 * 1024
+    || typeof data.has_more !== "boolean" || data.has_more && data.count !== 10
+    || !Number.isSafeInteger(data.expires_at) || data.expires_at <= 0
+    || !Number.isSafeInteger(data.minimum_age_seconds) || data.minimum_age_seconds < 3600
+    || data.minimum_age_seconds > 604800
+    || (data.count === 0 ? data.draft_id !== null : typeof data.draft_id !== "string" || !id32.test(data.draft_id))) invalidResponse();
+  return data;
+}
+async function cleanupUploads(draft_id: string): Promise<CloudCleanupResult> {
+  if (!id32.test(draft_id)) invalidResponse();
+  const data = await request<CloudCleanupResult>("cleanup", "POST", { draft_id, confirmed: true });
+  const counts = [data?.removed, data?.already_removed, data?.retained, data?.failed, data?.pending];
+  if (!data || typeof data.complete !== "boolean" || counts.some((value) => !Number.isSafeInteger(value) || value < 0)
+    || counts.reduce((sum, value) => sum + value, 0) < 1 || counts.reduce((sum, value) => sum + value, 0) > 10
+    || data.complete !== (data.failed === 0 && data.pending === 0)
+    || !Number.isSafeInteger(data.released_bytes) || data.released_bytes < 0 || data.released_bytes > data.removed * 8 * 1024 * 1024) invalidResponse();
+  return data;
+}
+
 export async function ensureCloudFile(path: string, sessionKey?: string | null, signal?: AbortSignal): Promise<void> {
   const normalized = path.replaceAll("\\", "/");
   // Ordinary local opens never contact the account or cloud service.
@@ -102,6 +132,8 @@ async function request<T>(path: string, method = "GET", body?: unknown, signal?:
   }
 }
 export const cloudSyncApi = {
+  cleanupPreview,
+  cleanup: cleanupUploads,
   status: (signal?: AbortSignal) => request<CloudStatus>("status", "GET", undefined, signal),
   prepare: (recovery?: string) => request<CloudDraft>("prepare", "POST", { recovery: recovery || null }),
   enable: (draft_id: string, session_keys: string[], sync_new_conversations?: boolean, sync_planning?: boolean) => request<{ enabled: boolean }>("enable", "POST", { draft_id, session_keys, confirmed: true,

@@ -76,6 +76,7 @@ class CloudCoordinator:
         self.phase, self.problem, self.last_sync = "idle", None, None
         self.transferred_bytes = 0
         self.draft = None
+        self.cleanup_draft = None
 
     async def _context(self) -> dict:
         context = await asyncio.to_thread(self.invoke, "cloud_sync_context", timeout=65)
@@ -133,6 +134,68 @@ class CloudCoordinator:
             result.update(available=False, problem={"code": getattr(exc, "code", "service_unavailable"),
                 "message": str(exc) if isinstance(exc, CloudTransferError) else "暂时无法读取云空间，请登录并联网后重试。"})
         return result
+
+    async def cleanup_preview(self) -> dict:
+        async with self.lock:
+            self.cleanup_draft = None
+            context = await self._context()
+            self._cloud_ready(context)
+            if not isinstance(context.get("space"), dict):
+                raise CloudTransferError("cloud_space_missing", "当前账号尚未创建云空间。")
+            transport = self.transport_factory(context["binding"])
+            data = await asyncio.to_thread(transport.control, "GET", "/cleanup")
+            current = await self._context()
+            if current["binding"] != context["binding"]:
+                raise CloudTransferError("account_changed", "账号已变化，请重新检查可释放空间。")
+            if (not isinstance(data, dict) or type(data.get("count")) is not int or not 0 <= data["count"] <= 10
+                    or type(data.get("bytes")) is not int or not 0 <= data["bytes"] <= data["count"] * 8 * 1024 * 1024
+                    or type(data.get("expires_at")) is not int or data["expires_at"] <= time.time()
+                    or type(data.get("has_more")) is not bool or data["has_more"] and data["count"] != 10
+                    or type(data.get("minimum_age_seconds")) is not int or not 3600 <= data["minimum_age_seconds"] <= 604800
+                    or data["count"] and (not isinstance(data.get("receipt"), str) or not 20 <= len(data["receipt"]) <= 16_000)):
+                raise CloudTransferError("cleanup_invalid", "云空间检查结果无效，未清理任何内容。")
+            public = {key: data[key] for key in ("count", "bytes", "expires_at", "has_more", "minimum_age_seconds")}
+            public["draft_id"] = uuid.uuid4().hex if data["count"] else None
+            if data["count"]:
+                self.cleanup_draft = {"id": public["draft_id"], "binding": context["binding"],
+                    "expires": time.monotonic() + min(600, data["expires_at"] - time.time()),
+                    "receipt": data["receipt"], "public": public, "result": None}
+            # React sees counts and a local confirmation id, not the signed
+            # control-plane receipt or its internal object storage keys.
+            return public
+
+    async def cleanup_uploads(self, draft_id: str, confirmed: bool) -> dict:
+        if not confirmed:
+            raise CloudTransferError("cleanup_confirmation_required", "请先确认清理上传残留。")
+        async with self.lock:
+            draft = self.cleanup_draft
+            if not draft or draft["id"] != draft_id or draft["expires"] <= time.monotonic():
+                raise CloudTransferError("cleanup_preview_expired", "清理确认已失效，请重新检查。")
+            context = await self._context()
+            self._cloud_ready(context)
+            if draft["binding"] != context["binding"]:
+                self.cleanup_draft = None
+                raise CloudTransferError("account_changed", "账号已变化，请重新检查可释放空间。")
+            if draft["result"] is not None:
+                return copy.deepcopy(draft["result"])
+            result = await asyncio.to_thread(self.transport_factory(context["binding"]).control,
+                "POST", "/cleanup", {"receipt": draft["receipt"], "confirmed": True})
+            current = await self._context()
+            if current["binding"] != context["binding"]:
+                self.cleanup_draft = None
+                raise CloudTransferError("account_changed", "账号已变化，请切回原账号核对清理结果。")
+            counts = ("removed", "already_removed", "retained", "failed", "pending")
+            if (not isinstance(result, dict) or type(result.get("complete")) is not bool
+                    or any(type(result.get(key)) is not int or not 0 <= result[key] <= draft["public"]["count"] for key in counts)
+                    or sum(result[key] for key in counts) != draft["public"]["count"]
+                    or result["complete"] != (result["failed"] == 0 and result["pending"] == 0)
+                    or type(result.get("released_bytes")) is not int or not 0 <= result["released_bytes"] <= draft["public"]["bytes"]
+                    or result["removed"] == 0 and result["released_bytes"] != 0):
+                raise CloudTransferError("cleanup_unconfirmed", "清理结果尚未确认，请重试核对，未重复扩大清理范围。")
+            result = {key: result[key] for key in (*counts, "released_bytes", "complete")}
+            if result["complete"]:
+                draft["result"] = copy.deepcopy(result)
+            return result
 
     async def prepare(self, recovery: str | None = None) -> dict:
         async with self.lock:

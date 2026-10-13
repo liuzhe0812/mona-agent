@@ -13,6 +13,7 @@ fn route_allowed(method: &str, path: &str) -> bool {
     let parts: Vec<_> = base.split('/').collect();
     let allowed = match (method, parts.as_slice()) {
         ("GET", ["", "space"]) | ("GET", ["", "changes"]) => true,
+        ("GET" | "POST", ["", "cleanup"]) => query.is_empty(),
         ("POST", ["", "space"]) | ("POST", ["", "objects", "reserve"])
             | ("POST", ["", "resources", "commit"]) => query.is_empty(),
         ("POST", ["", "objects", id, operation]) => hex(id, 64)
@@ -169,6 +170,12 @@ mod tests {
     #[test]
     fn only_bounded_cloud_control_routes_are_allowed() {
         assert!(route_allowed("GET", "/space"));
+        assert!(route_allowed("GET", "/cleanup"));
+        assert!(route_allowed("POST", "/cleanup"));
+        assert!(!route_allowed("DELETE", "/cleanup"));
+        assert!(!route_allowed("GET", "/cleanup?user_id=1"));
+        assert!(!route_allowed("POST", "/cleanup/all"));
+        assert!(!route_allowed("POST", "/objects/a/delete"));
         assert!(route_allowed("GET", "/changes?after=1&limit=10"));
         assert!(route_allowed("POST", &format!("/objects/{}/download", "a".repeat(64))));
         for path in ["https://other.invalid", "/../admin", "/space?x=1", "/changes?limit=1&limit=2", "/changes#x", "/objects/a/download"] {
