@@ -706,6 +706,7 @@ fn is_inside_wiki_link(content: &str, offset: usize) -> bool {
 /// across all .md files in the vault. Only exact title matches are replaced
 /// (the part before `#`, `|`, or `]]`).
 fn rename_sync(old_title: &str, new_title: &str) -> Result<RenameResult, String> {
+    let _guard = notes::STORE_LOCK.lock().map_err(|_| "笔记存储正在恢复，请重试。")?;
     let vault = notes::read_vault_path().ok_or_else(|| "No vault configured".to_string())?;
     let scanned = scan_vault_links(&vault);
     let mut updated_files = 0usize;

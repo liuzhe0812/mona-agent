@@ -947,6 +947,7 @@ impl IpcBridge {
                 Ok(Value::Bool(has_access))
             }
             "cloud_sync_context" => crate::license::cloud_bridge::context().await,
+            "cloud_notes" => crate::license::cloud_bridge::notes_request(&self.app_handle, &args).await,
             "cloud_sync_request" => crate::license::cloud_bridge::request(&args).await,
             "cloud_sync_store_key" => crate::license::cloud_bridge::store_key(&args).await,
             "cloud_sync_notify" => crate::license::cloud_bridge::notify(&self.app_handle, &args).await,

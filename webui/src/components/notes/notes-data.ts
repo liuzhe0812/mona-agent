@@ -92,6 +92,7 @@ export interface Notebook {
 }
 
 export interface OperationNote {
+  storageRevision?: string;
   id: string;
   notebookId: string;
   title: string;

@@ -673,6 +673,8 @@ class CloudSyncConfig(Base):
     session_keys: list[str] = Field(default_factory=list, max_length=10_000)
     sync_new_conversations: bool = False
     sync_planning: bool = False
+    sync_notes: bool = False
+    notes_vault_token: str = Field(default="", pattern=r"^(?:[a-f0-9]{64})?$")
     excluded_session_keys: list[str] = Field(default_factory=list, max_length=10_000)
 
 

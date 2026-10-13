@@ -81,10 +81,13 @@ describe("createNoteFromChat", () => {
   it("deletes only the explicitly selected notes", async () => {
     mocks.invoke.mockResolvedValueOnce(undefined);
 
-    await expect(deleteDesktopNotes(["note-1", "note-2"])).resolves.toBeUndefined();
+    const vaultToken = "a".repeat(64);
+    const expected = { "note-1": "b".repeat(64), "note-2": null };
+    await expect(deleteDesktopNotes(["note-1", "note-2"], vaultToken, expected)).resolves.toBeUndefined();
 
     expect(mocks.invoke).toHaveBeenCalledWith("notes_delete", {
       noteIds: ["note-1", "note-2"],
+      vaultToken, expected,
     });
   });
 

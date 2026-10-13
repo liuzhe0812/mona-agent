@@ -373,12 +373,12 @@ export async function loadDesktopNotesState(): Promise<unknown | null> {
   return invoke<unknown>("notes_load_state");
 }
 
-export async function saveDesktopNotesState(state: unknown): Promise<void> {
-  return invoke<void>("notes_save_state", { state });
+export async function saveDesktopNotesState(state: unknown): Promise<Record<string, string>> {
+  return invoke<Record<string, string>>("notes_save_state", { state });
 }
 
-export async function deleteDesktopNotes(noteIds: string[]): Promise<void> {
-  return invoke<void>("notes_delete", { noteIds });
+export async function deleteDesktopNotes(noteIds: string[], vaultToken: string, expected: Record<string, string | null>): Promise<void> {
+  return invoke<void>("notes_delete", { noteIds, vaultToken, expected });
 }
 
 export interface WorkspaceCanvasDocument {

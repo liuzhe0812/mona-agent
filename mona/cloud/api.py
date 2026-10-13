@@ -34,6 +34,7 @@ class Scope(RequestBody):
     session_keys: list[str] = Field(default_factory=list, max_length=10_000)
     sync_new_conversations: bool | None = None
     sync_planning: bool | None = None
+    sync_notes: bool | None = None
 
     @field_validator("session_keys")
     @classmethod
@@ -146,13 +147,13 @@ async def enable(request):
     data = await body(request, Enable)
     return web.json_response(await (await get_coordinator(request)).enable(
         data.draft_id, data.session_keys, data.confirmed, data.sync_new_conversations is True,
-        data.sync_planning is True))
+        data.sync_planning is True, data.sync_notes is True))
 
 
 async def scope(request):
     data = await body(request, Scope)
     return web.json_response(await (await get_coordinator(request)).select(
-        data.session_keys, data.sync_new_conversations, data.sync_planning))
+        data.session_keys, data.sync_new_conversations, data.sync_planning, data.sync_notes))
 
 
 async def pause(request):

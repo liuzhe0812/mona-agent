@@ -2,6 +2,7 @@ import {
   isTauri,
   loadDesktopNotesState,
   saveDesktopNotesState,
+  deleteDesktopNotes,
 } from "@/lib/tauri";
 
 import type { WorkspaceState } from "./Workspace";
@@ -20,6 +21,7 @@ import {
 } from "./flowchart/flowchart-document";
 
 export interface NotesStorageState {
+  vaultToken?: string;
   notebooks: Notebook[];
   notes: OperationNote[];
   activeNotebookId: string;
@@ -36,9 +38,51 @@ export async function loadNotesState(): Promise<NotesStorageState> {
   return loadDesktopNotesState() as Promise<NotesStorageState>;
 }
 
-export async function saveNotesState(state: NotesStorageState): Promise<void> {
+let saveQueue: Promise<unknown> = Promise.resolve();
+const localWrites = new Map<string, { original: string | undefined; current: string }>();
+
+export function saveNotesState(state: NotesStorageState): Promise<Record<string, string>> {
   ensureDesktopRuntime();
-  await saveDesktopNotesState(state);
+  state = structuredClone(state);
+  const vault = state.vaultToken;
+  if (!vault || !/^[a-f0-9]{64}$/.test(vault)) return Promise.reject(new Error("请重新打开笔记仓库后再保存。"));
+  const pending = saveQueue.catch(() => undefined).then(async () => {
+    const notes = state.notes.map((note) => {
+      const own = localWrites.get(`${vault}:${note.id}`);
+      return own && note.storageRevision === own.original ? { ...note, storageRevision: own.current } : note;
+    });
+    const result = await saveDesktopNotesState({ ...state, notes });
+    if (!result || typeof result !== "object" || notes.some((n) => !/^[a-f0-9]{64}$/.test(result[n.id] ?? ""))) {
+      throw new Error("笔记保存结果尚未确认，请稍后重试。");
+    }
+    for (const note of state.notes) {
+      const own = localWrites.get(`${vault}:${note.id}`);
+      localWrites.set(`${vault}:${note.id}`, { original: own && note.storageRevision === own.original ? own.original : note.storageRevision,
+        current: result[note.id] });
+    }
+    for (const id of localWrites.keys()) {
+      if (id.startsWith(`${vault}:`) && !state.notes.some((note) => `${vault}:${note.id}` === id)) localWrites.delete(id);
+    }
+    return result;
+  });
+  saveQueue = pending;
+  return pending;
+}
+
+export function deleteNotesState(selected: OperationNote[], vault: string | undefined): Promise<void> {
+  ensureDesktopRuntime();
+  if (!vault || !/^[a-f0-9]{64}$/.test(vault)) return Promise.reject(new Error("请重新打开笔记仓库后再删除。"));
+  selected = structuredClone(selected);
+  const pending = saveQueue.catch(() => undefined).then(async () => {
+    const expected = Object.fromEntries(selected.map((note) => {
+      const own = localWrites.get(`${vault}:${note.id}`);
+      return [note.id, (own && note.storageRevision === own.original ? own.current : note.storageRevision) ?? null];
+    }));
+    await deleteDesktopNotes(selected.map((note) => note.id), vault, expected);
+    for (const note of selected) localWrites.delete(`${vault}:${note.id}`);
+  });
+  saveQueue = pending;
+  return pending;
 }
 
 export function createBlankNote(

@@ -67,7 +67,6 @@ import {
 } from "@/lib/api";
 import { useClientOptional } from "@/providers/ClientProvider";
 import {
-  deleteDesktopNotes,
   getNotesVaultPath,
   isTauri,
   openPathWithSystemApp,
@@ -126,7 +125,9 @@ import {
   createNoteId,
   loadNotesState,
   saveNotesState,
+  deleteNotesState,
 } from "./notes-storage";
+import { mergeNotesRefresh } from "./notes-refresh";
 
 const AGENT_PANEL_MIN_WIDTH = 240;
 const AGENT_PANEL_MAX_WIDTH = 480;
@@ -240,6 +241,7 @@ export function NotesView({
   const dragRef = useRef<{ startX: number; startWidth: number } | null>(null);
   const rightDragRef = useRef<{ startX: number; startWidth: number } | null>(null);
   const lastSavedSnapshotRef = useRef<string | null>(null);
+  const vaultTokenRef = useRef<string | undefined>(undefined);
   const latestSnapshotRef = useRef<string | null>(null);
 
   // 思维导图选中上下文 Provider value（避免每次渲染都创建新对象）
@@ -689,6 +691,7 @@ export function NotesView({
             });
           }
         }
+        vaultTokenRef.current = nextState.vaultToken;
         lastSavedSnapshotRef.current = serializeNotesState({
           ...nextState,
           activeNotebookId: restoredNotebookId,
@@ -729,15 +732,13 @@ export function NotesView({
           const existingIds = new Set(notes.map((n) => n.id));
           const hasNew = nextState.notes.some((n) => !existingIds.has(n.id));
           const hasRemoved = notes.some((n) => !nextState.notes.some((n2) => n2.id === n.id));
+          const hasChanged = nextState.notes.some((n) => notes.find((v) => v.id === n.id)?.storageRevision !== n.storageRevision);
+          if (nextState.vaultToken !== vaultTokenRef.current) return;
           const isInAppSave = event?.type === "mona:notes-changed";
-          if (!hasNew && !hasRemoved && !isInAppSave) return;
-          setNotebooks(nextState.notebooks);
-          setNotes((current) => {
-            const nextById = new Map(nextState.notes.map((n) => [n.id, n]));
-            return current
-              .map((n) => nextById.get(n.id) ?? n)
-              .concat(nextState.notes.filter((n) => !current.some((c) => c.id === n.id)));
-          });
+          if (!hasNew && !hasRemoved && !hasChanged && !isInAppSave) return;
+          if (cancelled) return;
+          setNotebooks((current) => [...nextState.notebooks, ...current.filter((n) => !nextState.notebooks.some((v) => v.id === n.id))]);
+          setNotes((current) => mergeNotesRefresh(current, nextState.notes, lastSavedSnapshotRef.current));
           setTransformations(nextState.transformations ?? []);
         } catch {
           // Ignore refresh errors; the existing state is still valid.
@@ -766,9 +767,10 @@ export function NotesView({
   }, [storageReady, storageError, notes]);
 
   useEffect(() => {
-    if (!storageReady || storageError || notebooks.length === 0) return;
+    if (!storageReady || storageError) return;
 
     const state = {
+      vaultToken: vaultTokenRef.current,
       notebooks,
       notes,
       transformations,
@@ -786,14 +788,22 @@ export function NotesView({
     setSaveStatus("saving");
     const timer = window.setTimeout(() => {
       void saveNotesState(state)
-        .then(() => {
+        .then((revisions) => {
+          if (vaultTokenRef.current !== state.vaultToken) return;
           lastSavedSnapshotRef.current = snapshot;
+          setNotes((current) => current.map((note) => {
+            const saved = state.notes.find((value) => value.id === note.id);
+            return saved && note.storageRevision === saved.storageRevision && revisions[note.id]
+              ? { ...note, storageRevision: revisions[note.id] } : note;
+          }));
           if (latestSnapshotRef.current === snapshot) setSaveStatus("saved");
         })
         .catch((error) => {
+          if (vaultTokenRef.current !== state.vaultToken) return;
           if (latestSnapshotRef.current === snapshot) setSaveStatus("error");
           const msg = error instanceof Error ? error.message : String(error);
           notifyError(`笔记保存失败：${msg}`);
+          window.dispatchEvent(new Event("mona:notes-changed"));
         });
     }, 450);
 
@@ -1347,10 +1357,10 @@ export function NotesView({
   const handleDeleteNotebook = useCallback(async (notebookId: string) => {
     const target = notebooks.find((n) => n.id === notebookId);
     if (!target) return;
+    const vault = vaultTokenRef.current;
     try {
-      await deleteDesktopNotes(
-        notes.filter((note) => note.notebookId === notebookId).map((note) => note.id),
-      );
+      await deleteNotesState(notes.filter((note) => note.notebookId === notebookId), vault);
+      if (vaultTokenRef.current !== vault) return;
     } catch (error) {
       notifyError(`删除分类失败：${error instanceof Error ? error.message : String(error)}`);
       return;
@@ -1423,6 +1433,7 @@ export function NotesView({
       setRightSidebarOpen(nextState.rightSidebarOpen ?? true);
       setRightSidebarWidth(clampRightSidebarWidth(nextState.rightSidebarWidth));
       setRightActiveTab(sanitizeRightActiveTab(nextState.rightActiveTab));
+      vaultTokenRef.current = nextState.vaultToken;
       lastSavedSnapshotRef.current = serializeNotesState({
         ...nextState,
         activeNotebookId: restoredActiveNote?.notebookId ?? nextState.activeNotebookId,
@@ -1821,8 +1832,10 @@ export function NotesView({
 
   const handleDeleteManyNotes = useCallback(
     async (noteIds: string[]) => {
+      const vault = vaultTokenRef.current;
       try {
-        await deleteDesktopNotes(noteIds);
+        await deleteNotesState(notes.filter((note) => noteIds.includes(note.id)), vault);
+        if (vaultTokenRef.current !== vault) return;
       } catch (error) {
         notifyError(`删除笔记失败：${error instanceof Error ? error.message : String(error)}`);
         return;
@@ -1863,8 +1876,10 @@ export function NotesView({
     async (noteId: string) => {
       const note = notes.find((n) => n.id === noteId);
       if (!note) return;
+      const vault = vaultTokenRef.current;
       try {
-        await deleteDesktopNotes([noteId]);
+        await deleteNotesState([note], vault);
+        if (vaultTokenRef.current !== vault) return;
       } catch (error) {
         notifyError(`删除笔记失败：${error instanceof Error ? error.message : String(error)}`);
         return;
@@ -3408,7 +3423,7 @@ function serializeNotesState(state: {
   rightSidebarWidth: number;
   rightActiveTab: RightTab;
 }): string {
-  return JSON.stringify(state);
+  return JSON.stringify(state, (key, value) => key === "storageRevision" ? undefined : value);
 }
 
 function clampRightSidebarWidth(width: unknown): number {

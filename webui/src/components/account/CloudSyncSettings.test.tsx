@@ -53,7 +53,7 @@ describe("cloud sync settings", () => {
     fireEvent.click(screen.getByRole("checkbox", { name: "我已将恢复密钥保存到安全位置" }));
     api.status.mockResolvedValue(active);
     fireEvent.click(screen.getByRole("button", { name: "确认开启" }));
-    await waitFor(() => expect(api.enable).toHaveBeenCalledWith(draft.draft_id, candidates.map((c) => c.key), true, false));
+    await waitFor(() => expect(api.enable).toHaveBeenCalledWith(draft.draft_id, candidates.map((c) => c.key), true, false, false));
     await screen.findByRole("button", { name: "暂停同步" });
     expect(screen.queryByLabelText("请保存恢复密钥")).not.toBeInTheDocument();
     expect(screen.getByLabelText("云空间使用量")).toHaveAttribute("aria-valuenow", "25");
@@ -91,7 +91,7 @@ describe("cloud sync settings", () => {
     fireEvent.click(screen.getByRole("checkbox", { name: "工作会话一" }));
     fireEvent.click(screen.getByRole("checkbox", { name: "工作会话二" }));
     fireEvent.click(screen.getByRole("button", { name: "保存范围" }));
-    await waitFor(() => expect(api.scope).toHaveBeenCalledWith(["websocket:work-2"], false, false));
+    await waitFor(() => expect(api.scope).toHaveBeenCalledWith(["websocket:work-2"], false, false, false));
     expect(api.pause).not.toHaveBeenCalled();
     expect(api.enable).not.toHaveBeenCalled();
   });
@@ -129,7 +129,7 @@ describe("cloud sync settings", () => {
     expect(screen.getByRole("checkbox", { name: "工作会话一" })).not.toBeChecked();
     expect(screen.getByRole("checkbox", { name: "自动同步此后新建的工作会话" })).not.toBeChecked();
     fireEvent.click(screen.getByRole("button", { name: "确认开启" }));
-    await waitFor(() => expect(api.enable).toHaveBeenCalledWith(draft.draft_id, [], false, false));
+    await waitFor(() => expect(api.enable).toHaveBeenCalledWith(draft.draft_id, [], false, false, false));
   });
 
   it("allows explicitly switching new-conversation auto-sync without selecting old conversations", async () => {
@@ -138,7 +138,7 @@ describe("cloud sync settings", () => {
     fireEvent.click(await screen.findByRole("button", { name: "同步范围" }));
     fireEvent.click(screen.getByRole("checkbox", { name: "自动同步此后新建的工作会话" }));
     fireEvent.click(screen.getByRole("button", { name: "保存范围" }));
-    await waitFor(() => expect(api.scope).toHaveBeenCalledWith([], true, false));
+    await waitFor(() => expect(api.scope).toHaveBeenCalledWith([], true, false, false));
   });
 
   it("planning stays opt-in and is saved independently of conversation selection", async () => {
@@ -150,7 +150,7 @@ describe("cloud sync settings", () => {
     fireEvent.click(option);
     expect(api.scope).not.toHaveBeenCalled();
     fireEvent.click(screen.getByRole("button", { name: "保存范围" }));
-    await waitFor(() => expect(api.scope).toHaveBeenCalledWith([], false, true));
+    await waitFor(() => expect(api.scope).toHaveBeenCalledWith([], false, true, false));
   });
 
   it("allows disabling planning without disabling Work synchronization", async () => {
@@ -161,8 +161,20 @@ describe("cloud sync settings", () => {
     expect(option).toBeChecked();
     fireEvent.click(option);
     fireEvent.click(screen.getByRole("button", { name: "保存范围" }));
-    await waitFor(() => expect(api.scope).toHaveBeenCalledWith([candidates[0].key], false, false));
+    await waitFor(() => expect(api.scope).toHaveBeenCalledWith([candidates[0].key], false, false, false));
     expect(api.pause).not.toHaveBeenCalled();
+  });
+
+  it("notes and their attachments require separate opt-in", async () => {
+    api.status.mockResolvedValue({ ...active, selected_keys: [] });
+    render(<CloudSyncSettings />);
+    fireEvent.click(await screen.findByRole("button", { name: "同步范围" }));
+    const option = screen.getByRole("checkbox", { name: "同步本机笔记仓库及关联附件" });
+    expect(option).not.toBeChecked();
+    fireEvent.click(option);
+    expect(api.scope).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByRole("button", { name: "保存范围" }));
+    await waitFor(() => expect(api.scope).toHaveBeenCalledWith([], false, false, true));
   });
 
   it("shows the real waiting state before the first completed sync", async () => {

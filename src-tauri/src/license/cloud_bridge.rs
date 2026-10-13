@@ -128,6 +128,22 @@ pub(crate) async fn store_key(args: &Value) -> Result<Value, String> {
     Ok(json!({"saved":true}))
 }
 
+pub(crate) async fn notes_request(app: &tauri::AppHandle, args: &Value) -> Result<Value, String> {
+    use tauri::Emitter;
+    let _guard = device_sessions::ACCOUNT_LOCK.lock().await;
+    bound_token(args["binding"].as_str().ok_or("缺少账号绑定。")?)?;
+    if args.to_string().len() > 12 * 1024 * 1024 { return Err("笔记同步请求过大。".into()); }
+    let request = args.clone();
+    let result = tauri::async_runtime::spawn_blocking(move || crate::notes::sync::request(&request)).await
+        .map_err(|_| "笔记同步尚未完成，请稍后核对。")??;
+    if args["action"] == "apply" && result["applied"] == true && result["reused"] == false {
+        if app.emit("notes-changed", json!({"source": "cloud"})).is_err() {
+            log::warn!("Notes sync committed; view notification deferred");
+        }
+    }
+    Ok(result)
+}
+
 fn update_payload(args: &Value) -> Result<Value, String> {
     let keys = args["work_keys"].as_array().ok_or("同步通知无效。")?;
     let planning = args["planning"].as_bool().ok_or("同步通知无效。")?;

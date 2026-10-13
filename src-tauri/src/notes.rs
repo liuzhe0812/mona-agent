@@ -9,6 +9,9 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use tauri_plugin_dialog::DialogExt;
 
+pub(crate) mod sync;
+pub(crate) static STORE_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
 const NOTES_DB_FILE: &str = "notes.sqlite3";
 const VAULT_PATH_FILE: &str = "vault_path.txt";
 const DEFAULT_NOTEBOOK_NAME: &str = "默认分类";
@@ -17,6 +20,8 @@ const MAX_NOTE_IMAGE_BYTES: usize = 10 * 1024 * 1024;
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct NotesState {
+    #[serde(default)]
+    pub vault_token: Option<String>,
     pub notebooks: Vec<Notebook>,
     pub notes: Vec<OperationNote>,
     pub active_notebook_id: String,
@@ -55,6 +60,9 @@ pub struct Notebook {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct OperationNote {
+    /// Local compare-before-save token; never persisted into note frontmatter.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub storage_revision: Option<String>,
     pub id: String,
     pub notebook_id: String,
     pub title: String,
@@ -268,6 +276,7 @@ pub(crate) fn read_vault_path() -> Option<PathBuf> {
 }
 
 fn write_vault_path(path: &Path) -> Result<(), String> {
+    let _guard = STORE_LOCK.lock().map_err(|_| "笔记存储正在恢复，请重试。")?;
     let file = vault_path_file();
     let parent = file.parent().ok_or("Invalid vault path file location")?;
     fs::create_dir_all(parent).map_err(|e| format!("Failed to create notes dir: {}", e))?;
@@ -498,6 +507,7 @@ fn migrate_legacy_sqlite_to_vault(vault: &Path) -> Result<Option<usize>, String>
             let applied_ids: Vec<String> =
                 serde_json::from_str(&applied_ids_json).unwrap_or_default();
             let note = OperationNote {
+                storage_revision: None,
                 id: id.clone(),
                 notebook_id: folder_name.clone(),
                 title: title.clone(),
@@ -674,36 +684,22 @@ struct ParsedFrontmatter {
 /// Split a markdown file into (frontmatter lines, body). If the file does not
 /// start with a `---` frontmatter block, returns (None, full content).
 fn split_frontmatter(content: &str) -> (Option<Vec<String>>, String) {
-    let mut lines = content.lines();
-    let first = match lines.next() {
-        Some(l) => l,
-        None => return (None, String::new()),
-    };
-    if first.trim_end() != "---" {
-        return (None, content.to_string());
-    }
-
-    let mut fm_lines: Vec<String> = Vec::new();
-    let mut body_lines: Vec<String> = Vec::new();
-    let mut found_close = false;
+    let mut lines = content.split_inclusive('\n');
+    let Some(first) = lines.next() else { return (None, String::new()); };
+    if first.trim_end() != "---" { return (None, content.to_string()); }
+    let mut offset = first.len();
+    let mut frontmatter = Vec::new();
     for line in lines {
-        if !found_close {
-            if line.trim_end() == "---" {
-                found_close = true;
-            } else {
-                fm_lines.push(line.to_string());
-            }
-        } else {
-            body_lines.push(line.to_string());
+        offset += line.len();
+        if line.trim_end() == "---" {
+            let body = &content[offset..];
+            // Remove only our metadata separator, never the user's whitespace.
+            let body = body.strip_prefix("\r\n").or_else(|| body.strip_prefix('\n')).unwrap_or(body);
+            return (Some(frontmatter), body.to_string());
         }
+        frontmatter.push(line.trim_end_matches(['\r', '\n']).to_string());
     }
-
-    if !found_close {
-        return (None, content.to_string());
-    }
-
-    let body = body_lines.join("\n").trim_start_matches(['\n', '\r']).to_string();
-    (Some(fm_lines), body)
+    (None, content.to_string())
 }
 
 fn yaml_value(raw: &str) -> String {
@@ -1126,6 +1122,7 @@ pub(crate) fn parse_note_file(path: &Path, notebook_name: &str) -> Result<Operat
     let updated_at = fm.updated_at.or(fm.created_at).unwrap_or_default();
 
     Ok(OperationNote {
+        storage_revision: Some({ use sha2::Digest; hex::encode(sha2::Sha256::digest(content.as_bytes())) }),
         id,
         notebook_id,
         title,
@@ -1317,6 +1314,7 @@ fn scan_existing_note_files(vault: &Path) -> Result<HashMap<String, PathBuf>, St
 
 #[tauri::command]
 pub async fn notes_load_state() -> Result<NotesState, String> {
+    let _guard = STORE_LOCK.lock().map_err(|_| "笔记存储正在恢复，请重试。")?;
     let vault_path = read_vault_path();
     let vault_meta = match &vault_path {
         Some(vault) => read_vault_meta(vault).unwrap_or_default(),
@@ -1356,6 +1354,7 @@ pub async fn notes_load_state() -> Result<NotesState, String> {
     }
 
     Ok(NotesState {
+        vault_token: vault_path.as_ref().and_then(|path| path.canonicalize().ok()).map(|path| sync::root_token(&path)),
         notebooks,
         notes,
         active_notebook_id,
@@ -1365,7 +1364,8 @@ pub async fn notes_load_state() -> Result<NotesState, String> {
 }
 
 #[tauri::command]
-pub async fn notes_save_state(mut state: NotesState) -> Result<(), String> {
+pub async fn notes_save_state(mut state: NotesState) -> Result<HashMap<String, String>, String> {
+    let _guard = STORE_LOCK.lock().map_err(|_| "笔记存储正在恢复，请重试。")?;
     // 自动修复：将引用不存在 notebook 的 note 移到根目录（notebook_id = ""）。
     // 这通常发生在早期前端生成的 notebook UUID 与 Rust 文件夹名 ID 不一致时。
     let notebook_ids: HashSet<&str> = state.notebooks.iter().map(|n| n.id.as_str()).collect();
@@ -1389,8 +1389,12 @@ pub async fn notes_save_state(mut state: NotesState) -> Result<(), String> {
 
     let vault = match read_vault_path() {
         Some(p) => p,
-        None => return Ok(()),
+        None => return Err("请先选择笔记仓库再保存。".into()),
     };
+
+    let existing_files = scan_existing_note_files(&vault)?;
+    sync::check_vault_token(&vault, state.vault_token.as_deref())?;
+    sync::check_local_revisions(&state.notes, &existing_files)?;
 
     let notebook_name_by_id: HashMap<String, String> = state
         .notebooks
@@ -1531,7 +1535,10 @@ pub async fn notes_save_state(mut state: NotesState) -> Result<(), String> {
     // full rebuild. Fire-and-forget: does not block the save return.
     notes_links::refresh_cache_background(vault.clone());
 
-    Ok(())
+    state.notes.iter().map(|note| {
+        let path = files_by_id.get(&note.id).ok_or("笔记保存位置尚未确认。")?;
+        Ok((note.id.clone(), sync::file_revision(path)?))
+    }).collect()
 }
 
 fn validate_state(state: &NotesState) -> Result<(), String> {
@@ -1610,6 +1617,8 @@ pub async fn notes_create_from_chat(
     let vault = read_vault_path()
         .ok_or_else(|| "Notes vault is not configured".to_string())?;
 
+    let _guard = STORE_LOCK.lock().map_err(|_| "笔记存储正在恢复，请重试。")?;
+
     // Chat-saved notes default to a dedicated notebook; explicit user choices win.
     let folder_name = chat_notebook_name(notebook_id);
     let notebook_dir = vault.join(&folder_name);
@@ -1619,6 +1628,7 @@ pub async fn notes_create_from_chat(
     let note_id = format!("note-{}", uuid::Uuid::new_v4());
     let now_iso = chrono::Utc::now().to_rfc3339();
     let note = OperationNote {
+        storage_revision: None,
         id: note_id.clone(),
         notebook_id: folder_name,
         title: title.clone(),
@@ -1911,8 +1921,9 @@ fn cleanup_orphaned_assets_vault(vault: &Path, notes: &[OperationNote]) -> Resul
     Ok(())
 }
 
-fn delete_note_files(vault: &Path, note_ids: &[String]) -> Result<(), String> {
+fn delete_note_files(vault: &Path, note_ids: &[String], expected: &HashMap<String, Option<String>>) -> Result<(), String> {
     let files_by_id = scan_existing_note_files(vault)?;
+    sync::check_delete_revisions(vault, note_ids, expected, &files_by_id)?;
     for note_id in note_ids {
         if let Some(path) = files_by_id.get(note_id) {
             fs::remove_file(path)
@@ -1923,10 +1934,13 @@ fn delete_note_files(vault: &Path, note_ids: &[String]) -> Result<(), String> {
 }
 
 #[tauri::command]
-pub async fn notes_delete(note_ids: Vec<String>) -> Result<(), String> {
+pub async fn notes_delete(note_ids: Vec<String>, vault_token: String,
+    expected: HashMap<String, Option<String>>) -> Result<(), String> {
+    let _guard = STORE_LOCK.lock().map_err(|_| "笔记存储正在恢复，请重试。")?;
     let vault = read_vault_path()
         .ok_or_else(|| "Notes vault is not configured".to_string())?;
-    delete_note_files(&vault, &note_ids)?;
+    sync::check_vault_token(&vault, Some(&vault_token))?;
+    delete_note_files(&vault, &note_ids, &expected)?;
     let remaining_notes = scan_vault_notes(&vault)?;
     cleanup_orphaned_assets_vault(&vault, &remaining_notes)?;
     notes_links::refresh_cache_background(vault);
@@ -1985,6 +1999,7 @@ pub async fn notes_save_image(
     file_path: String,
     file_name: Option<String>,
 ) -> Result<String, String> {
+    let _guard = STORE_LOCK.lock().map_err(|_| "笔记存储正在恢复，请重试。")?;
     let src = PathBuf::from(&file_path);
     if !src.exists() {
         return Err(format!("Source image not found: {}", file_path));
@@ -2010,6 +2025,7 @@ pub async fn notes_save_image_data(
     image_data: String,
     file_name: String,
 ) -> Result<String, String> {
+    let _guard = STORE_LOCK.lock().map_err(|_| "笔记存储正在恢复，请重试。")?;
     let bytes = decode_note_image_data(&image_data)?;
     let final_name = sanitize_note_asset_file_name(&file_name)?;
     let assets_dir = assets_dir_create()?;
@@ -2128,7 +2144,10 @@ mod tests {
         std::fs::write(&deleted, "---\nid: note-deleted\n---\n删除").unwrap();
         std::fs::write(&preserved, "---\nid: note-preserved\n---\n保留").unwrap();
 
-        delete_note_files(&vault, &["note-deleted".to_string()]).unwrap();
+        let expected = std::collections::HashMap::from([
+            ("note-deleted".to_string(), Some(super::sync::file_revision(&deleted).unwrap())),
+        ]);
+        delete_note_files(&vault, &["note-deleted".to_string()], &expected).unwrap();
 
         assert!(!deleted.exists());
         assert!(preserved.exists());
