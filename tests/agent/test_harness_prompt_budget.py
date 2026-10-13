@@ -8,7 +8,7 @@ from importlib.resources import files as pkg_files
 from unittest.mock import AsyncMock, MagicMock
 
 from mona.agent.document_loop import DOCUMENT_PROFILES, DocumentAgentLoop
-from mona.agent.loop import _FREE_TIER_CAPABILITY_NOTE, _TASK_PLAN_NOTE, AgentLoop
+from mona.agent.loop import _TASK_PLAN_NOTE, AgentLoop
 from mona.agent.runner import AgentRunner, AgentRunSpec
 from mona.agent.tools.base import Tool
 from mona.agent.tools.capabilities import (
@@ -90,7 +90,6 @@ def test_fixed_prompt_sections_stay_compact_and_keep_required_contracts() -> Non
     assert _text_tokens(contract) < 1_800
     assert _text_tokens(skills) < 250
     assert _text_tokens(_TASK_PLAN_NOTE) < 200
-    assert _text_tokens(_FREE_TIER_CAPABILITY_NOTE) < 180
 
     required_rules = (
         "Do not use `exec` as a universal workaround",

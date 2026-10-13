@@ -17,7 +17,6 @@ import { DockerPanel } from "./Docker/DockerPanel";
 import { SshWorkspace } from "./SshWorkspace";
 import { EmptyState } from "@/components/ui/empty-state";
 import { useTerminalStore } from "./store/terminalStore";
-import { useLicense } from "@/hooks/useLicense";
 import { shellSpawn, vncReconnect } from "./ipc";
 
 const AI_PANEL_DEFAULT_WIDTH = 320;
@@ -27,7 +26,6 @@ const AI_PANEL_MAX_WIDTH = 600;
 export function TerminalView({ onOpenSubscribe, embedded = false, visible = true }: {
   onOpenSubscribe?: () => void; embedded?: boolean; visible?: boolean;
 }) {
-  const { licenseActive } = useLicense();
   const sessions = useTerminalStore((s) => s.sessions);
   const activeSessionId = useTerminalStore((s) => s.activeSessionId);
   const aiPanelVisible = useTerminalStore((s) => s.aiPanelVisible);
@@ -142,7 +140,7 @@ export function TerminalView({ onOpenSubscribe, embedded = false, visible = true
                     >
                       <DesktopMode
                         sessionId={session.id}
-                        aiEnabled={licenseActive}
+                        aiEnabled
                       />
                     </div>
                   );
@@ -216,15 +214,14 @@ export function TerminalView({ onOpenSubscribe, embedded = false, visible = true
         </div>
         {activeSession?.type !== "ssh" && <StatusBar sessionId={activeParentSession?.id ?? null} />}
       </div>
-      {licenseActive &&
-        aiPanelVisible &&
+      {aiPanelVisible &&
         activeSession?.type !== "batch" &&
         activeSession?.type !== "desktop" &&
         activeSession?.type !== "docker" && (
         <>
           <div
             onMouseDown={handleDragStart}
-            className="w-px shrink-0 cursor-col-resize bg-border active:bg-primary/40"
+            className="mona-resize-handle relative w-px shrink-0 cursor-col-resize"
           />
           <div
             className="shrink-0 flex flex-col"

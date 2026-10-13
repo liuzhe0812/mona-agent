@@ -47,7 +47,7 @@ class ProviderSpec:
 
     # gateway / local detection
     is_gateway: bool = False  # routes any model (OpenRouter, AiHubMix)
-    chat_only: bool = False  # Cindy catalog entries are not media providers
+    chat_only: bool = False  # Chat presets are not media providers
     is_local: bool = False  # local deployment (vLLM, Ollama)
     detect_by_key_prefix: str = ""  # match api_key prefix, e.g. "sk-or-"
     detect_by_base_keyword: str = ""  # match substring in api_base URL
@@ -626,7 +626,7 @@ PROVIDERS: tuple[ProviderSpec, ...] = (
     ),
 )
 
-# Cindy chat presets are OpenAI-compatible runtime providers.  Keep them in
+# Dynamic chat presets are OpenAI-compatible runtime providers. Keep them in
 # the same registry so default-provider selection and the factory can resolve
 # them, while their hyphenated IDs are persisted in ``providers.cindy``.
 PROVIDERS = PROVIDERS + tuple(

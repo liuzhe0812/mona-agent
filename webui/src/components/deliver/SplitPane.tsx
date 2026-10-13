@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
 import { cn } from "@/lib/utils";
+import { resizeHandleInteractionClass } from "@/components/ui/resizable";
 
 interface SplitPaneProps {
   left: ReactNode;
@@ -174,14 +175,8 @@ function Divider({ onPointerDown }: { onPointerDown: (e: React.PointerEvent) => 
   return (
     <div
       onPointerDown={onPointerDown}
-      className={cn(
-        "z-10 flex shrink-0 cursor-col-resize items-center justify-center",
-        "bg-transparent hover:bg-primary/10 active:bg-primary/20",
-        "transition-colors",
-      )}
+      className={cn("relative z-10 shrink-0 cursor-col-resize", resizeHandleInteractionClass)}
       style={{ width: DIVIDER_WIDTH }}
-    >
-      <div className="h-full w-px bg-border/60" />
-    </div>
+    />
   );
 }

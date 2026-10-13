@@ -69,7 +69,7 @@ def with_usage(identity: AccountUsage, reply: dict) -> AccountUsage:
     buckets = reply.get("rateLimitsByLimitId")
     selected = None
     now_ms = time.time() * 1000
-    # Cindy settings show only the generic account bucket, never a model-specific pool.
+    # Display account-wide limits, excluding model-specific pools.
     if isinstance(buckets, dict):
         selected = next((buckets[key] for key in ("codex", "__default__")
             if isinstance(buckets.get(key), dict) and not _stale_bucket(buckets[key], now_ms)), None)

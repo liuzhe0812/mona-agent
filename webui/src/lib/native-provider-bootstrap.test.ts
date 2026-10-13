@@ -18,7 +18,7 @@ describe("warmNativeProviderConnections", () => {
     api.probe.mockResolvedValue({ state: "ready" });
   });
 
-  it("probes available Codex and CodeBuddy accounts without starting login", async () => {
+  it("probes available native accounts without starting login", async () => {
     api.providerExecutors.mockResolvedValue({
       executors: [
         { id: "codex", available: true },
@@ -30,9 +30,10 @@ describe("warmNativeProviderConnections", () => {
 
     await warmNativeProviderConnections();
 
-    expect(api.probe).toHaveBeenCalledTimes(2);
+    expect(api.probe).toHaveBeenCalledTimes(3);
     expect(api.probe).toHaveBeenCalledWith(undefined, "codex");
     expect(api.probe).toHaveBeenCalledWith(undefined, "codebuddy");
+    expect(api.probe).toHaveBeenCalledWith(undefined, "claude");
     expect(api.login).not.toHaveBeenCalled();
   });
 

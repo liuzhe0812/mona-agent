@@ -1,15 +1,18 @@
 import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { useEffect, useState, type ReactNode } from "react";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { ThreadShell } from "@/components/thread/ThreadShell";
 import { DeliveredFileCard } from "@/components/deliver/DeliveredFileCard";
 import { invalidateAgents } from "@/components/room/useAgents";
 import { useFilePreviewStore } from "@/components/deliver/filePreviewStore";
 import { ClientProvider } from "@/providers/ClientProvider";
-import type { UIMessage } from "@/lib/types";
+import type { SettingsPayload, UIMessage } from "@/lib/types";
 import { useWorkspaceStore } from "@/lib/workspace-store";
+import * as api from "@/lib/api";
 import { fetchFilePreviewBlob } from "@/lib/api";
+import { developmentApi, type DevExecutor } from "@/lib/development-api";
+import { nativeProvidersChanged, useNativeProviderState } from "@/lib/native-provider-state";
 import type { OfficeSessionState } from "@/components/office/types";
 import {
   computeFlowchartSemanticHash,
@@ -314,8 +317,15 @@ async function chooseNewSidebarTab(label: string): Promise<void> {
 }
 
 describe("ThreadShell", () => {
+  let restoreModelSourceSpies: Array<() => void> = [];
+  let restoreProviderRequest: (() => void) | undefined;
+
   beforeEach(() => {
+    restoreModelSourceSpies = [];
+    const providerRequest = vi.spyOn(developmentApi, "providerExecutors").mockResolvedValue({ executors: [] });
+    restoreProviderRequest = () => providerRequest.mockRestore();
     localStorage.clear();
+    useNativeProviderState.setState({ revision: 0 });
     useWorkspaceStore.setState({ workspacePath: "D:\\workspace" });
     officePreviewState.fetchFilePreviewBlob.mockReset();
     officePreviewState.importOfficeSession.mockReset();
@@ -357,6 +367,11 @@ describe("ThreadShell", () => {
     vi.mocked(remove).mockClear();
   });
 
+  afterEach(() => {
+    restoreModelSourceSpies.forEach((restore) => restore());
+    restoreProviderRequest?.();
+  });
+
   it("does not navigate away when clicking the chat title", async () => {
     const client = makeClient();
     const onGoHome = vi.fn();
@@ -375,6 +390,81 @@ describe("ThreadShell", () => {
     fireEvent.click(screen.getByText("Important conversation"));
 
     expect(onGoHome).not.toHaveBeenCalled();
+  });
+
+  it("loads native catalog options for ordinary chat, refreshes on revision, and saves both source types", async () => {
+    useNativeProviderState.setState({ revision: 0 });
+    let currentSettings = {
+      agent: {
+        model: "shared-model", provider: "example", executor: "mona", native_model: null,
+        native_reasoning_effort: null, context_window_source: "catalog", context_window_tokens: 64000,
+      },
+      model_presets: [],
+      chat_providers: [{
+        name: "example", label: "Example API", configured: true, api_base: "", default_api_base: "",
+        api_key_required: false, api_base_editable: false,
+        models: [{ id: "shared-model", name: "API Shared", enabled: true, recommended: false }],
+      }],
+    } as SettingsPayload;
+    const codex: DevExecutor = {
+      id: "codex", name: "Codex", available: true, reason: "已连接",
+      probe: { state: "ready", authentication: "ready", authMode: "chatgpt", reason: "已连接" },
+      models: [{
+        id: "codex-model", label: "原生 Codex", reasoningEfforts: ["low", "high"], reasoningEffort: "high",
+      }],
+    };
+    const settingsRequest = vi.spyOn(api, "fetchSettings").mockImplementation(async () => currentSettings);
+    const slashRequest = vi.spyOn(api, "listSlashCommands").mockResolvedValue([]);
+    const providerRequest = vi.mocked(developmentApi.providerExecutors);
+    providerRequest.mockResolvedValue({ executors: [codex] });
+    const selectionRequest = vi.spyOn(developmentApi, "selectWorkModelSource").mockImplementation(async (body) => {
+      currentSettings = {
+        ...currentSettings,
+        agent: body.executor === "mona"
+          ? { ...currentSettings.agent, executor: "mona", provider: body.provider!, model: body.model, reasoning_effort: body.effort ?? null }
+          : { ...currentSettings.agent, executor: body.executor, native_model: body.model, native_reasoning_effort: body.effort ?? null },
+      };
+      return currentSettings;
+    });
+    restoreModelSourceSpies.push(
+      () => settingsRequest.mockRestore(),
+      () => slashRequest.mockRestore(),
+      () => selectionRequest.mockRestore(),
+    );
+    const client = makeClient();
+
+    render(wrap(client, <ThreadShell onToggleSidebar={() => {}} onNewChat={() => {}} />));
+
+    const trigger = await screen.findByRole("button", { name: "shared-model" });
+    await waitFor(() => expect(providerRequest).toHaveBeenCalledTimes(1));
+    fireEvent.pointerDown(trigger, { button: 0, ctrlKey: false });
+    await waitFor(() => expect(
+      [...document.querySelectorAll<HTMLElement>("[data-model-choice]")].map((item) => item.getAttribute("aria-label")),
+    ).toContain("OpenAI · 原生 Codex"));
+    fireEvent.click(screen.getByRole("menuitem", { name: "OpenAI · 原生 Codex" }));
+    await waitFor(() => expect(selectionRequest).toHaveBeenCalledWith({
+      executor: "codex", model: "codex-model", effort: "high",
+    }));
+    await screen.findByRole("button", { name: "codex-model" });
+
+    providerRequest.mockResolvedValue({ executors: [{
+      ...codex,
+      models: [...codex.models, { id: "new-model", label: "目录更新模型" }],
+    }] });
+    act(() => nativeProvidersChanged());
+    await waitFor(() => expect(providerRequest).toHaveBeenCalledTimes(2));
+    await waitFor(() => expect(settingsRequest).toHaveBeenCalledTimes(2));
+    expect(currentSettings.agent.executor).toBe("codex");
+    expect(currentSettings.agent.native_model).toBe("codex-model");
+    fireEvent.pointerDown(screen.getByRole("button", { name: "codex-model" }), { button: 0, ctrlKey: false });
+    expect(await screen.findByRole("menuitem", { name: "OpenAI · 目录更新模型" })).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("menuitem", { name: "Example API · API Shared" }));
+    await waitFor(() => expect(selectionRequest).toHaveBeenLastCalledWith({
+      executor: "mona", model: "shared-model", provider: "example", effort: null,
+    }));
+
+    expect(settingsRequest).toHaveBeenCalled();
+    expect(slashRequest).toHaveBeenCalled();
   });
 
   it("warns during computer control, stops for takeover, and clears when the run ends", async () => {

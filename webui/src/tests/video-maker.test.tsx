@@ -21,9 +21,8 @@ const mocks = vi.hoisted(() => ({
   buildVideoDownloadUrl: vi.fn(() => "http://download/url"),
   buildVideoPreviewFullUrl: vi.fn(() => "http://preview/full"),
   cancelVideoExport: vi.fn(async () => ({ ok: true, stage: "cancelling" })),
-  changeVideoProjectAspect: vi.fn(),
-  confirmVideoScene: vi.fn(),
   copyVideoProject: vi.fn(),
+  confirmVideoProjectPlan: vi.fn(),
   createVideoSeries: vi.fn(),
   createVideoProject: vi.fn(),
   createVideoReview: vi.fn(),
@@ -97,17 +96,11 @@ const mocks = vi.hoisted(() => ({
   deleteVideoBackgroundAsset: vi.fn(),
   buildVideoBackgroundAssetPreviewUrl: vi.fn(() => "http://background/preview"),
   fetchVideoStoryboard: vi.fn(),
-  generateSceneHtml: vi.fn(),
   getApiBase: vi.fn(async () => "http://localhost:8765"),
   getServicesHttpBase: vi.fn(async () => "http://localhost:17174"),
   importVideoProjectAsset: vi.fn(),
-  lockVideoStoryboard: vi.fn(),
-  localizeVideoProject: vi.fn(),
-  planVideoProject: vi.fn(),
-  regenerateVideoScene: vi.fn(),
   renameVideoProject: vi.fn(),
   reorderVideoScenes: vi.fn(),
-  rewriteVideoScene: vi.fn(),
   restoreVideoProjectVersion: vi.fn(async () => ({
     ok: true,
     phase: "producing",
@@ -117,6 +110,7 @@ const mocks = vi.hoisted(() => ({
   startVideoRuntimeDownload: vi.fn(),
   fetchVideoRuntimeDownloadJobs: vi.fn(async () => ({ jobs: [] })),
   updateVideoScene: vi.fn(),
+  updateVideoProjectSettings: vi.fn(),
   updateVideoProjectAsset: vi.fn(),
   updateVideoSeries: vi.fn(),
   upgradeVideoProjectStyle: vi.fn(),
@@ -251,6 +245,16 @@ function scene(index: number, overrides: Partial<VideoScene> = {}): VideoScene {
 
 beforeEach(() => {
   vi.clearAllMocks();
+  mocks.fetchVideoProject.mockReset().mockResolvedValue({
+    name: "proj",
+    resolution: "1920x1080",
+    outputStale: false,
+    phase: "storyboard",
+    meta: { narrationEnabled: false },
+  });
+  mocks.createVideoProject.mockReset();
+  mocks.saveVideoChatId.mockReset().mockResolvedValue({ ok: true });
+  mocks.fetchSceneNarrationBytes.mockReset().mockResolvedValue(null);
   mocks.fetchVideoSeries.mockResolvedValue({ series: [] });
   mocks.fetchVideoProjects.mockResolvedValue({ projects: [] });
   mocks.fetchVideoProjectsIncludingArchived.mockResolvedValue({ projects: [] });
@@ -279,51 +283,80 @@ beforeEach(() => {
 });
 
 describe("StoryboardPhase", () => {
-  it("surfaces a rejected storyboard request with a retry action", async () => {
-    const onRetryGeneration = vi.fn();
-    mocks.fetchVideoStoryboard.mockResolvedValue({
-      ok: true,
-      scenes: [],
-      storyboardExists: false,
-    });
-
-    render(
-      wrap(
-        <StoryboardPhase
-          projectName="proj"
-          onLocked={() => {}}
-          generationError="视频助手会话未就绪，请重新发送分镜任务。"
-          onRetryGeneration={onRetryGeneration}
-        />,
-      ),
-    );
-
-    expect(await screen.findByText("分镜生成未能启动")).toBeInTheDocument();
-    fireEvent.click(screen.getByRole("button", { name: "重新发送分镜任务" }));
-    expect(onRetryGeneration).toHaveBeenCalledOnce();
+  it("keeps content editing optional and hides fixed-layout internals", async () => {
+    mocks.fetchVideoStoryboard.mockResolvedValue({ ok: true, scenes: [scene(1, { audioTimingSource: "provider-boundary" })] });
+    render(wrap(<StoryboardPhase projectName="proj" />));
+    await screen.findByDisplayValue("场景1");
+    expect(screen.getByText("字幕已同步")).toBeInTheDocument();
+    expect(screen.queryByLabelText("场景角色")).not.toBeInTheDocument();
+    expect(screen.queryByLabelText("场景布局")).not.toBeInTheDocument();
+    expect(screen.queryByLabelText("背景槽位")).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /确认分镜/ })).not.toBeInTheDocument();
   });
 
-  it("shows generated motion summary and subtitle timing status", async () => {
+  it("makes project assets available before any scene exists", async () => {
+    mocks.fetchVideoStoryboard.mockResolvedValue({ ok: true, scenes: [] });
+    render(wrap(<StoryboardPhase projectName="proj" section="assets" />));
+    expect(await screen.findByRole("button", { name: "导入素材" })).toBeInTheDocument();
+    expect(screen.getByText(/还没有素材/)).toBeInTheDocument();
+  });
+
+  it("disables narration audition when the project has no voice track", async () => {
+    mocks.fetchVideoProject.mockResolvedValue({
+      name: "proj",
+      resolution: "1920x1080",
+      outputStale: false,
+      phase: "storyboard",
+      meta: { narrationEnabled: false },
+    });
     mocks.fetchVideoStoryboard.mockResolvedValue({
       ok: true,
-      scenes: [
-        scene(1, {
-          motionPlanSummary: "标题淡入上浮 → 要点依次出现",
-          audioTimingSource: "provider-boundary",
-        }),
-      ],
+      scenes: [scene(1)],
       storyboardExists: true,
     });
 
-    render(wrap(<StoryboardPhase projectName="proj" onLocked={() => {}} />));
+    render(wrap(<StoryboardPhase projectName="proj" />));
 
-    expect(
-      await screen.findByText("标题淡入上浮 → 要点依次出现"),
-    ).toBeInTheDocument();
-    expect(screen.getByText("字幕精确同步")).toBeInTheDocument();
-    expect(
-      screen.queryByPlaceholderText(/GSAP timeline/),
-    ).not.toBeInTheDocument();
+    const audition = await screen.findByRole("button", { name: "未启用旁白" });
+    expect(audition).toBeDisabled();
+    fireEvent.click(audition);
+    expect(mocks.fetchSceneNarrationBytes).not.toHaveBeenCalled();
+  });
+
+  it("shows a dialog when storyboard narration audition fails", async () => {
+    mocks.fetchVideoProject.mockResolvedValue({
+      name: "proj",
+      resolution: "1920x1080",
+      outputStale: false,
+      phase: "storyboard",
+      meta: { narrationEnabled: true },
+    });
+    mocks.fetchVideoStoryboard.mockResolvedValue({
+      ok: true,
+      scenes: [scene(1)],
+      storyboardExists: true,
+    });
+    mocks.fetchSceneNarrationBytes.mockRejectedValue(new Error("HTTP 502"));
+
+    render(wrap(<StoryboardPhase projectName="proj" />));
+    fireEvent.click(await screen.findByRole("button", { name: "试听" }));
+
+    expect(await screen.findByRole("dialog", { name: "试听旁白失败" })).toHaveTextContent("试听旁白失败");
+    expect(screen.getByRole("dialog")).toHaveTextContent("请检查网络连接后重试");
+  });
+
+  it("shows the speech component remedy without suggesting a network or voice change", async () => {
+    const { ApiError } = await import("@/lib/api");
+    mocks.fetchVideoProject.mockResolvedValue({ name: "proj", phase: "producing", meta: { narrationEnabled: true } });
+    mocks.fetchVideoStoryboard.mockResolvedValue({ ok: true, scenes: [scene(1)], storyboardExists: true });
+    mocks.fetchSceneNarrationBytes.mockRejectedValue(Object.assign(
+      new ApiError(503, "配音组件未准备好，请更新应用后重试。"), { code: "TTS_COMPONENT_MISSING" },
+    ));
+    render(wrap(<StoryboardPhase projectName="proj" />));
+    fireEvent.click(await screen.findByRole("button", { name: "试听" }));
+    const dialog = await screen.findByRole("dialog", { name: "试听旁白失败" });
+    expect(dialog).toHaveTextContent("配音组件未准备好");
+    expect(dialog).not.toHaveTextContent("请检查网络连接");
   });
 
   it("binds registered assets and exposes unconfirmed commercial rights", async () => {
@@ -354,7 +387,7 @@ describe("StoryboardPhase", () => {
     });
     mocks.updateVideoScene.mockResolvedValue({ ok: true });
 
-    render(wrap(<StoryboardPhase projectName="proj" onLocked={() => {}} />));
+    render(wrap(<StoryboardPhase projectName="proj" />));
     const assetButton = await screen.findByRole("button", {
       name: /产品参考图.png/,
     });
@@ -380,7 +413,7 @@ describe("StoryboardPhase", () => {
     });
     mocks.updateVideoScene.mockResolvedValue({ ok: true, scene: scene(1) });
 
-    render(wrap(<StoryboardPhase projectName="proj" onLocked={() => {}} />));
+    render(wrap(<StoryboardPhase projectName="proj" />));
 
     const titleInput = await screen.findByDisplayValue("开场");
     fireEvent.change(titleInput, { target: { value: "新标题一" } });
@@ -397,25 +430,63 @@ describe("StoryboardPhase", () => {
     expect(await screen.findByText("已保存")).toBeInTheDocument();
   });
 
-  it("shows save failure and blocks locking until retry succeeds", async () => {
+  it("keeps failed edits until an explicit save retry succeeds", async () => {
+    mocks.fetchVideoStoryboard.mockResolvedValue({ ok: true, scenes: [scene(1)] });
+    mocks.updateVideoScene.mockResolvedValue({ ok: false, error: "boom" });
+    render(wrap(<StoryboardPhase projectName="proj" />));
+    fireEvent.change(await screen.findByDisplayValue("场景1"), { target: { value: "改动" } });
+    expect(await screen.findByText("保存失败")).toBeInTheDocument();
+    expect(screen.getByDisplayValue("改动")).toBeInTheDocument();
+    mocks.updateVideoScene.mockResolvedValue({ ok: true });
+    fireEvent.click(screen.getByRole("button", { name: "重试" }));
+    expect(await screen.findByText("已保存")).toBeInTheDocument();
+    expect(mocks.updateVideoScene).toHaveBeenLastCalledWith("tok", "proj", { index: 1, title: "改动" });
+  });
+
+  it("keeps pending edits when scene reordering cannot save them", async () => {
     mocks.fetchVideoStoryboard.mockResolvedValue({
       ok: true,
-      scenes: [scene(1), scene(2)],
+      scenes: [scene(1, { title: "开场" }), scene(2, { title: "结尾" })],
       storyboardExists: true,
     });
-    mocks.updateVideoScene.mockResolvedValue({ ok: false, error: "boom" });
+    mocks.updateVideoScene.mockResolvedValue({ ok: false, error: "保存失败" });
 
-    render(wrap(<StoryboardPhase projectName="proj" onLocked={() => {}} />));
-
-    const titleInput = await screen.findByDisplayValue("场景1");
-    fireEvent.change(titleInput, { target: { value: "改动" } });
+    render(wrap(<StoryboardPhase projectName="proj" />));
+    const title = await screen.findByDisplayValue("开场");
+    fireEvent.change(title, { target: { value: "已编辑开场" } });
+    fireEvent.click(screen.getByTitle("下移"));
 
     expect(await screen.findByText("保存失败")).toBeInTheDocument();
-    const lockButton = screen.getByRole("button", {
-      name: /确认分镜，进入制作/,
+    expect(screen.getByDisplayValue("已编辑开场")).toBeInTheDocument();
+    expect(mocks.reorderVideoScenes).not.toHaveBeenCalled();
+
+    mocks.updateVideoScene.mockResolvedValue({ ok: true });
+    fireEvent.click(screen.getByRole("button", { name: "重试" }));
+    await waitFor(() => expect(mocks.updateVideoScene).toHaveBeenCalledTimes(2));
+    expect(mocks.updateVideoScene).toHaveBeenLastCalledWith("tok", "proj", {
+      index: 1,
+      title: "已编辑开场",
     });
-    expect(lockButton).toBeDisabled();
-    expect(mocks.lockVideoStoryboard).not.toHaveBeenCalled();
+    expect(mocks.reorderVideoScenes).not.toHaveBeenCalled();
+  });
+
+  it("does not delete a scene while its edits remain unsaved", async () => {
+    mocks.fetchVideoStoryboard.mockResolvedValue({
+      ok: true,
+      scenes: [scene(1, { title: "开场" }), scene(2, { title: "结尾" })],
+      storyboardExists: true,
+    });
+    mocks.updateVideoScene.mockResolvedValue({ ok: false, error: "保存失败" });
+
+    render(wrap(<StoryboardPhase projectName="proj" />));
+    const title = await screen.findByDisplayValue("开场");
+    fireEvent.change(title, { target: { value: "已编辑开场" } });
+    fireEvent.click(screen.getByRole("button", { name: "删除场景" }));
+    fireEvent.click(await screen.findByRole("button", { name: "删除" }));
+
+    expect(await screen.findByText("保存失败")).toBeInTheDocument();
+    expect(screen.getByDisplayValue("已编辑开场")).toBeInTheDocument();
+    expect(mocks.deleteVideoScene).not.toHaveBeenCalled();
   });
 
   it("deletes a scene only after confirmation", async () => {
@@ -429,7 +500,7 @@ describe("StoryboardPhase", () => {
       scenes: [scene(1, { title: "结尾" })],
     });
 
-    render(wrap(<StoryboardPhase projectName="proj" onLocked={() => {}} />));
+    render(wrap(<StoryboardPhase projectName="proj" />));
 
     const deleteButton = await screen.findByRole("button", {
       name: "删除场景",
@@ -460,6 +531,60 @@ describe("ProducingPhase", () => {
     });
   });
 
+  it("retries reading a failed project without sending another creation task", async () => {
+    const onRequestAgent = vi.fn();
+    mocks.fetchVideoStoryboard.mockResolvedValueOnce({ ok: false, error: "internal parse trace" });
+    render(wrap(<ProducingPhase projectName="proj" onRequestAgent={onRequestAgent} />));
+    expect(await screen.findByText("视频内容暂时无法读取")).toBeInTheDocument();
+    mocks.fetchVideoStoryboard.mockResolvedValue({ ok: true, scenes: [producingScene(1)] });
+    fireEvent.click(screen.getByRole("button", { name: "重新加载" }));
+    expect(await screen.findByRole("button", { name: "制作这个场景" })).toBeInTheDocument();
+    expect(onRequestAgent).not.toHaveBeenCalled();
+    expect(screen.queryByText("internal parse trace")).not.toBeInTheDocument();
+  });
+
+  it("asks the Agent to make a scene once and refreshes from its saved result", async () => {
+    const client = makeClient();
+    const onRequestAgent = vi.fn();
+    mocks.fetchVideoStoryboard.mockResolvedValue({ ok: true, scenes: [producingScene(1)] });
+    mocks.fetchScenePreviewHtml.mockResolvedValue({ html: "<html>new scene</html>", needsGeneration: false });
+    render(wrap(<ProducingPhase projectName="proj" onRequestAgent={onRequestAgent} />, client));
+    fireEvent.click(await screen.findByRole("button", { name: "制作这个场景" }));
+    await waitFor(() => expect(onRequestAgent).toHaveBeenCalledOnce());
+    expect(onRequestAgent).toHaveBeenCalledWith(expect.stringContaining("场景 1"));
+    mocks.fetchVideoStoryboard.mockResolvedValue({ ok: true, scenes: [producingScene(1, { htmlStatus: "previewing", htmlMtime: 100 })] });
+    act(() => client.__emitVideoProjectChanged({ projectName: "proj", hint: "scenes" }));
+    await waitFor(() => expect(screen.getByRole("button", { name: "导出视频" })).toBeEnabled());
+    expect(await screen.findByRole("button", { name: "播放当前场景" })).toBeEnabled();
+    expect(onRequestAgent).toHaveBeenCalledOnce();
+  });
+
+  it("sends regeneration and a user adjustment to the same Agent callback", async () => {
+    const onRequestAgent = vi.fn();
+    mocks.fetchVideoStoryboard.mockResolvedValue({ ok: true, scenes: [producingScene(1, { htmlStatus: "previewing", htmlMtime: 100 })] });
+    mocks.fetchScenePreviewHtml.mockResolvedValue({ html: "<html>scene</html>", needsGeneration: false });
+    render(wrap(<ProducingPhase projectName="proj" onRequestAgent={onRequestAgent} />));
+    fireEvent.click(await screen.findByRole("button", { name: "设置" }));
+    fireEvent.click(screen.getByRole("button", { name: "重新生成" }));
+    await waitFor(() => expect(onRequestAgent).toHaveBeenCalledOnce());
+    fireEvent.click(screen.getByRole("button", { name: "调整内容" }));
+    fireEvent.change(screen.getByLabelText("调整要求"), { target: { value: "用趋势图解释数据" } });
+    fireEvent.click(screen.getByRole("button", { name: "发送要求" }));
+    await waitFor(() => expect(onRequestAgent).toHaveBeenCalledTimes(2));
+    expect(onRequestAgent).toHaveBeenLastCalledWith(expect.stringContaining("用趋势图解释数据"));
+  });
+
+  it("keeps a failed request explicit and never replays it on refresh", async () => {
+    const client = makeClient();
+    const onRequestAgent = vi.fn().mockRejectedValue(new Error("timeout"));
+    mocks.fetchVideoStoryboard.mockResolvedValue({ ok: true, scenes: [producingScene(1)] });
+    render(wrap(<ProducingPhase projectName="proj" onRequestAgent={onRequestAgent} />, client));
+    fireEvent.click(await screen.findByRole("button", { name: "制作这个场景" }));
+    expect(await screen.findByRole("dialog", { name: "制作要求未能发送" })).toBeInTheDocument();
+    act(() => client.__emitVideoProjectChanged({ projectName: "proj", hint: "scenes" }));
+    expect(onRequestAgent).toHaveBeenCalledOnce();
+  });
+
   it("disables export until every scene has generated HTML", async () => {
     mocks.fetchVideoStoryboard.mockResolvedValue({
       ok: true,
@@ -476,47 +601,23 @@ describe("ProducingPhase", () => {
     render(wrap(<ProducingPhase projectName="proj" />));
 
     expect(
-      await screen.findByText("场景制作 · 1/2 已生成"),
+      await screen.findByText("场景 · 2 段"),
     ).toBeInTheDocument();
     const exportButton = screen.getByRole("button", { name: /导出视频/ });
     expect(exportButton).toBeDisabled();
-    expect(screen.getByText("生成全部场景后可导出（1/2）")).toBeInTheDocument();
   });
 
-  it("switches a series project to a responsive aspect variant", async () => {
-    mocks.fetchVideoProject.mockResolvedValue({
-      name: "proj",
-      resolution: "1920x1080",
-      outputStale: false,
-      phase: "done",
-      seriesId: "series-a",
-      seriesName: "商业系列",
-      styleVersion: 1,
-      aspectVariant: "16:9",
-    });
-    mocks.fetchVideoStoryboard.mockResolvedValue({
-      ok: true,
-      scenes: [producingScene(1, { htmlStatus: "pending" })],
-    });
-    mocks.changeVideoProjectAspect.mockResolvedValue({
-      ok: true,
-      aspectVariant: "9:16",
-      resolution: "1080x1920",
-      phase: "producing",
-    });
-    render(wrap(<ProducingPhase projectName="proj" />));
-
-    fireEvent.click(await screen.findByRole("button", { name: "切换画幅" }));
+  it("requests a new orientation through the existing Agent conversation", async () => {
+    const onRequestAgent = vi.fn();
+    mocks.fetchVideoProject.mockResolvedValue({ name: "proj", resolution: "1920x1080", phase: "done", aspectVariant: "16:9" });
+    mocks.fetchVideoStoryboard.mockResolvedValue({ ok: true, scenes: [producingScene(1)] });
+    render(wrap(<ProducingPhase projectName="proj" onRequestAgent={onRequestAgent} />));
+    fireEvent.click(await screen.findByRole("button", { name: "设置" }));
+    fireEvent.click(screen.getByRole("button", { name: "横屏与竖屏" }));
     fireEvent.click(screen.getByRole("radio", { name: /竖屏/ }));
-    fireEvent.click(screen.getByRole("button", { name: "切换并重新制作" }));
-
-    await waitFor(() =>
-      expect(mocks.changeVideoProjectAspect).toHaveBeenCalledWith(
-        expect.any(String),
-        "proj",
-        "9:16",
-      ),
-    );
+    fireEvent.click(screen.getByRole("button", { name: "调整分镜方案" }));
+    await waitFor(() => expect(onRequestAgent).toHaveBeenCalledOnce());
+    expect(onRequestAgent).toHaveBeenCalledWith(expect.stringContaining("竖屏"));
   });
 
   it("enables export when all scenes are previewing without confirmation", async () => {
@@ -536,12 +637,9 @@ describe("ProducingPhase", () => {
     render(wrap(<ProducingPhase projectName="proj" />));
 
     expect(
-      await screen.findByText("场景制作 · 2/2 已生成"),
+      await screen.findByText("场景 · 2 段"),
     ).toBeInTheDocument();
     expect(screen.getByRole("button", { name: /导出视频/ })).toBeEnabled();
-    expect(
-      screen.getByText("全部场景已生成，可以导出视频"),
-    ).toBeInTheDocument();
   });
 
   it("checks the system browser only when export starts", async () => {
@@ -582,7 +680,7 @@ describe("ProducingPhase", () => {
 
     render(wrap(<ProducingPhase projectName="proj" />));
 
-    await screen.findByText("场景制作 · 1/1 已生成");
+    await screen.findByText("场景 · 1 段");
     expect(
       screen.queryByRole("button", { name: /确认通过/ }),
     ).not.toBeInTheDocument();
@@ -608,6 +706,13 @@ describe("ProducingPhase", () => {
     mocks.fetchSceneNarrationBytes.mockResolvedValue(
       new Blob(["audio"], { type: "audio/mpeg" }),
     );
+    mocks.fetchVideoProject.mockResolvedValue({
+      name: "proj",
+      resolution: "1920x1080",
+      outputStale: false,
+      phase: "producing",
+      meta: { narrationEnabled: true },
+    });
     mocks.fetchVideoStoryboard.mockResolvedValue({
       ok: true,
       scenes: [producingScene(1, { htmlStatus: "previewing", htmlMtime: 100 })],
@@ -618,9 +723,8 @@ describe("ProducingPhase", () => {
     });
 
     render(wrap(<ProducingPhase projectName="proj" />));
-    fireEvent.click(await screen.findByRole("button", { name: "精细时间轴" }));
     fireEvent.click(
-      await screen.findByRole("button", { name: "播放时间轴" }),
+      await screen.findByRole("button", { name: "播放当前场景" }),
     );
 
     await waitFor(() => expect(play).toHaveBeenCalled());
@@ -641,667 +745,439 @@ describe("ProducingPhase", () => {
       value: originalRevokeObjectUrl,
     });
   });
-});
 
-describe("VideoMakerView", () => {
-  it("routes history projects by phase and shows Chinese phase labels", async () => {
-    mocks.fetchVideoProjects.mockResolvedValue({
-      projects: [
-        {
-          name: "新项目",
-          createdAt: 1,
-          resolution: "1920x1080",
-          phase: "storyboard",
-          hasVideo: false,
-          outputStale: false,
-          chatId: null,
-        },
-        {
-          name: "旧项目",
-          createdAt: 2,
-          resolution: "1920x1080",
-          phase: "done",
-          hasVideo: true,
-          outputStale: true,
-          chatId: null,
-        },
-      ],
-    });
-    mocks.fetchVideoStoryboard.mockResolvedValue({
-      ok: true,
-      scenes: [scene(1)],
-      storyboardExists: true,
-    });
+  it("reports a failed narration request and keeps the timeline stopped", async () => {
     mocks.fetchVideoProject.mockResolvedValue({
-      name: "新项目",
-      resolution: "1920x1080",
-      outputStale: false,
-      phase: "storyboard",
-      hasStoryboard: true,
-    });
-
-    render(wrap(<VideoMakerView />));
-
-    // 历史项目直接展示在侧边栏列表（无 tab 切换），阶段以中文标签呈现
-    expect(await screen.findByText("分镜中")).toBeInTheDocument();
-    expect(screen.getByText("已完成")).toBeInTheDocument();
-    expect(screen.getByText("内容已变化")).toBeInTheDocument();
-
-    // storyboard-phase project routes to the storyboard editor
-    fireEvent.click(screen.getByText("新项目"));
-    expect(
-      await screen.findByRole("button", { name: /确认分镜，进入制作/ }),
-    ).toBeInTheDocument();
-  });
-
-  it("keeps the create form always editable", async () => {
-    render(wrap(<VideoMakerView />));
-
-    const topicInput = screen.getByPlaceholderText(/描述你想制作的视频内容/);
-    expect(topicInput).toBeEnabled();
-    fireEvent.change(topicInput, { target: { value: "产品介绍视频" } });
-    expect(screen.getByRole("button", { name: "生成制作方案" })).toBeEnabled();
-  });
-
-  it("batch upgrades eligible videos in one series after confirmation", async () => {
-    mocks.fetchVideoProjects.mockResolvedValue({
-      projects: [
-        {
-          name: "第 01 期",
-          createdAt: 2,
-          resolution: "1920x1080",
-          phase: "done",
-          hasVideo: true,
-          outputStale: false,
-          chatId: null,
-          seriesId: "series-a",
-          seriesName: "商业系列",
-          styleVersion: 1,
-          latestSeriesStyleVersion: 2,
-          styleUpdateAvailable: true,
-        },
-        {
-          name: "第 02 期",
-          createdAt: 1,
-          resolution: "1920x1080",
-          phase: "done",
-          hasVideo: true,
-          outputStale: false,
-          chatId: null,
-          seriesId: "series-a",
-          seriesName: "商业系列",
-          styleVersion: 1,
-          latestSeriesStyleVersion: 2,
-          styleUpdateAvailable: true,
-        },
-      ],
-    });
-    mocks.upgradeVideoSeriesProjects.mockResolvedValue({
-      ok: true,
-      styleVersion: 2,
-      updatedProjectNames: ["第 01 期", "第 02 期"],
-      skipped: [],
-    });
-    render(wrap(<VideoMakerView />));
-
-    fireEvent.click(await screen.findByRole("button", { name: "全部升级" }));
-    expect(
-      screen.getByRole("heading", { name: "升级系列历史视频？" }),
-    ).toBeInTheDocument();
-    fireEvent.click(screen.getByRole("button", { name: "升级所选视频" }));
-
-    await waitFor(() =>
-      expect(mocks.upgradeVideoSeriesProjects).toHaveBeenCalledWith(
-        expect.any(String),
-        "series-a",
-        2,
-        ["第 01 期", "第 02 期"],
-      ),
-    );
-  });
-
-  it("searches projects and exposes recoverable archived items", async () => {
-    const active = {
-      name: "产品发布会",
-      createdAt: 2,
-      resolution: "1920x1080",
-      phase: "done" as const,
-      hasVideo: true,
-      outputStale: false,
-      chatId: null,
-    };
-    const other = { ...active, name: "内部培训", createdAt: 1 };
-    mocks.fetchVideoProjects.mockResolvedValue({ projects: [active, other] });
-    mocks.fetchVideoProjectsIncludingArchived.mockResolvedValue({
-      projects: [
-        active,
-        other,
-        { ...active, name: "往期复盘", archived: true, createdAt: 0 },
-      ],
-    });
-    render(wrap(<VideoMakerView />));
-    expect(await screen.findByText("产品发布会")).toBeInTheDocument();
-
-    fireEvent.change(screen.getByRole("textbox", { name: "搜索视频项目" }), {
-      target: { value: "培训" },
-    });
-    expect(screen.getByText("内部培训")).toBeInTheDocument();
-    expect(screen.queryByText("产品发布会")).not.toBeInTheDocument();
-    fireEvent.change(screen.getByRole("textbox", { name: "搜索视频项目" }), {
-      target: { value: "" },
-    });
-    fireEvent.click(screen.getByRole("button", { name: "查看已归档项目" }));
-
-    expect(await screen.findByText("往期复盘")).toBeInTheDocument();
-    expect(screen.getByText("已归档")).toBeInTheDocument();
-  });
-
-  it("uses voice presets without technical identifier inputs", async () => {
-    render(wrap(<VideoMakerView />));
-    fireEvent.click(screen.getByRole("button", { name: "未启用" }));
-
-    expect(screen.getByRole("button", { name: "配音音色" })).toHaveTextContent(
-      "晓伊（女·温柔）",
-    );
-    expect(
-      screen.queryByPlaceholderText("zh-CN-XiaoyiNeural"),
-    ).not.toBeInTheDocument();
-    expect(
-      screen.queryByLabelText("自定义 TTS Voice ID"),
-    ).not.toBeInTheDocument();
-    expect(screen.queryByText("自定义 ID...")).not.toBeInTheDocument();
-    fireEvent.pointerDown(
-      screen.getByRole("button", { name: "背景音乐混音方式" }),
-      { button: 0 },
-    );
-    fireEvent.click(await screen.findByRole("menuitem", { name: /轻背景/ }));
-    expect(screen.getByText("尚未选择音乐文件")).toBeInTheDocument();
-  });
-
-  it("reviews and removes outline items before creating the project", async () => {
-    mocks.planVideoProject.mockResolvedValue({
-      ok: true,
-      plan: {
-        schemaVersion: 1,
-        contentSummary: "先确认覆盖范围",
-        outline: [
-          {
-            id: "outline-01",
-            title: "保留章节",
-            goal: "讲清核心内容",
-            keyPoints: ["要点一"],
-            sourceRefs: [],
-            estimatedSeconds: 40,
-            role: "content",
-          },
-          {
-            id: "outline-02",
-            title: "删除章节",
-            goal: "不应进入分镜",
-            keyPoints: ["无关内容"],
-            sourceRefs: [],
-            estimatedSeconds: 30,
-            role: "content",
-          },
-        ],
-        estimatedSceneCount: 2,
-        estimatedDurationSeconds: 70,
-        estimatedAssetCount: 2,
-        stages: ["确认方案", "生成分镜", "制作场景", "导出交付"],
-        billing: { monaCredits: 0, note: "本地规划" },
-      },
-    });
-    mocks.createVideoProject.mockResolvedValue({
-      ok: false,
-      error: "测试结束",
-    });
-    render(wrap(<VideoMakerView />));
-    fireEvent.change(screen.getByPlaceholderText(/描述你想制作的视频内容/), {
-      target: { value: "产品介绍" },
-    });
-
-    fireEvent.click(screen.getByRole("button", { name: "生成制作方案" }));
-    expect(await screen.findByText("制作方案待确认")).toBeInTheDocument();
-    fireEvent.click(screen.getByRole("button", { name: "删除大纲：删除章节" }));
-    expect(screen.queryByText("删除章节")).not.toBeInTheDocument();
-    fireEvent.click(screen.getByRole("button", { name: "确认方案并生成分镜" }));
-
-    await waitFor(() =>
-      expect(mocks.createVideoProject).toHaveBeenCalledWith(
-        expect.any(String),
-        expect.any(String),
-        "1920x1080",
-        expect.objectContaining({
-          plan: expect.objectContaining({
-            outline: [expect.objectContaining({ title: "保留章节" })],
-          }),
-        }),
-      ),
-    );
-  });
-
-  it("selects a locked series and inherits its aspect ratio", async () => {
-    mocks.fetchVideoSeries.mockResolvedValue({
-      series: [
-        {
-          id: "ai-course",
-          name: "AI 编程实战课",
-          latestStyleVersion: 1,
-          defaultAspectRatio: "9:16",
-          episodeCount: 2,
-          styleSummary: { name: "科技深色", primaryColor: "#2563EB" },
-        },
-      ],
-    });
-
-    render(wrap(<VideoMakerView />));
-    fireEvent.click(screen.getByRole("button", { name: "系列视频" }));
-    fireEvent.click(
-      await screen.findByRole("button", { name: /^AI 编程实战课/ }),
-    );
-
-    expect(screen.getByText("科技深色 · v1")).toBeInTheDocument();
-    expect(screen.getByText("继承系列")).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "竖屏" })).toHaveAttribute(
-      "aria-pressed",
-      "true",
-    );
-    const topicInput = screen.getByPlaceholderText(/描述你想制作的视频内容/);
-    fireEvent.change(topicInput, { target: { value: "第 03 期" } });
-    expect(screen.getByRole("button", { name: "生成制作方案" })).toBeEnabled();
-  });
-
-  it("opens the in-context create-series flow", async () => {
-    render(wrap(<VideoMakerView />));
-    fireEvent.click(screen.getByRole("button", { name: "系列视频" }));
-    fireEvent.click(await screen.findByRole("button", { name: "创建新系列" }));
-
-    expect(
-      screen.getByRole("heading", { name: "创建系列" }),
-    ).toBeInTheDocument();
-    expect(screen.getByText("选择基础风格")).toBeInTheDocument();
-    expect(screen.getByAltText("霓虹智核真实编译预览")).toBeInTheDocument();
-    expect(screen.getByAltText("山河新章真实编译预览")).toBeInTheDocument();
-    expect(screen.getByAltText("奇想实验室真实编译预览")).toBeInTheDocument();
-    expect(screen.getByAltText("时代切片真实编译预览")).toBeInTheDocument();
-    expect(screen.queryByText("极简商务")).not.toBeInTheDocument();
-    expect(screen.queryByText("配置主题")).not.toBeInTheDocument();
-  });
-
-  it("binds the latest brand version during series creation", async () => {
-    mocks.fetchVideoBrandKits.mockResolvedValue({
-      brandKits: [
-        {
-          id: "company-brand",
-          name: "企业品牌",
-          revision: 0,
-          latestVersion: 3,
-          tokens: {},
-          brand: { displayName: "MONA" },
-          lockedFields: [],
-          createdAt: "2026-08-28",
-          updatedAt: "2026-08-28",
-        },
-      ],
-    });
-    mocks.createVideoSeries.mockResolvedValue({
-      ok: false,
-      error: "测试结束",
-    });
-    render(wrap(<VideoMakerView />));
-    fireEvent.click(screen.getByRole("button", { name: "系列视频" }));
-    fireEvent.click(await screen.findByRole("button", { name: "创建新系列" }));
-
-    fireEvent.change(screen.getByPlaceholderText("例如：AI 编程实战课"), {
-      target: { value: "品牌系列" },
-    });
-    fireEvent.click(await screen.findByRole("button", { name: /企业品牌/ }));
-    fireEvent.click(screen.getByRole("button", { name: "下一步：编辑风格" }));
-
-    await waitFor(() =>
-      expect(mocks.createVideoSeries).toHaveBeenCalledWith(
-        expect.any(String),
-        expect.objectContaining({
-          name: "品牌系列",
-          brandKitId: "company-brand",
-          brandKitVersion: 3,
-        }),
-      ),
-    );
-  });
-
-  it("deletes a series only after confirmation", async () => {
-    const disposableSeries = {
-      id: "draft-series",
-      name: "待删除系列",
-      latestStyleVersion: 0,
-      defaultAspectRatio: "16:9" as const,
-      episodeCount: 0,
-    };
-    mocks.fetchVideoSeries
-      .mockResolvedValueOnce({ series: [disposableSeries] })
-      .mockResolvedValue({ series: [] });
-    mocks.deleteVideoSeries.mockResolvedValue({
-      ok: true,
-      deletedSeriesId: disposableSeries.id,
-      detachedEpisodeCount: 0,
-    });
-
-    render(wrap(<VideoMakerView />));
-    fireEvent.click(screen.getByRole("button", { name: "系列视频" }));
-    fireEvent.click(
-      await screen.findByRole("button", { name: "删除系列 待删除系列" }),
-    );
-
-    expect(
-      screen.getByRole("heading", { name: /删除系列“待删除系列”/ }),
-    ).toBeInTheDocument();
-    expect(mocks.deleteVideoSeries).not.toHaveBeenCalled();
-    fireEvent.click(
-      screen.getByRole("button", { name: "删除系列", exact: true }),
-    );
-
-    await waitFor(() =>
-      expect(mocks.deleteVideoSeries).toHaveBeenCalledWith(
-        "tok",
-        disposableSeries.id,
-        false,
-      ),
-    );
-  });
-
-  it("renames and archives a series without deleting its videos", async () => {
-    const editableSeries = {
-      id: "editable-series",
-      name: "旧系列名",
-      latestStyleVersion: 1,
-      defaultAspectRatio: "16:9" as const,
-      episodeCount: 2,
-    };
-    mocks.fetchVideoSeries.mockResolvedValue({ series: [editableSeries] });
-    mocks.updateVideoSeries.mockResolvedValue({
-      ok: true,
-      series: { ...editableSeries, name: "新系列名" },
-    });
-    render(wrap(<VideoMakerView />));
-    fireEvent.click(screen.getByRole("button", { name: "系列视频" }));
-
-    fireEvent.click(
-      await screen.findByRole("button", { name: "重命名系列 旧系列名" }),
-    );
-    fireEvent.change(screen.getByRole("textbox", { name: "系列新名称" }), {
-      target: { value: "新系列名" },
-    });
-    fireEvent.click(screen.getByRole("button", { name: "保存名称" }));
-    await waitFor(() =>
-      expect(mocks.updateVideoSeries).toHaveBeenCalledWith(
-        expect.any(String),
-        "editable-series",
-        { name: "新系列名" },
-      ),
-    );
-
-    mocks.updateVideoSeries.mockResolvedValue({
-      ok: true,
-      series: { ...editableSeries, archivedAt: "2026-08-28" },
-    });
-    fireEvent.click(screen.getByRole("button", { name: "归档系列 旧系列名" }));
-    await waitFor(() =>
-      expect(mocks.updateVideoSeries).toHaveBeenCalledWith(
-        expect.any(String),
-        "editable-series",
-        { archived: true },
-      ),
-    );
-  });
-
-  it("does not check or download runtime dependencies while creating a video", async () => {
-    mocks.fetchVideoRuntimeCheck.mockResolvedValue({
-      node: { ok: false },
-      ffmpeg: { ok: false },
-      chrome: { ok: false },
-    });
-
-    render(wrap(<VideoMakerView />));
-
-    expect(
-      screen.queryByText("视频依赖未安装，点击此处下载"),
-    ).not.toBeInTheDocument();
-    expect(mocks.fetchVideoRuntimeCheck).not.toHaveBeenCalled();
-    expect(mocks.startVideoRuntimeDownload).not.toHaveBeenCalled();
-  });
-
-  it("collapses and expands the sidebar like the PPT module", async () => {
-    mocks.fetchVideoProjects.mockResolvedValue({
-      projects: [
-        {
-          name: "新项目",
-          createdAt: 1,
-          resolution: "1920x1080",
-          phase: "storyboard",
-          hasVideo: false,
-          outputStale: false,
-          chatId: null,
-        },
-      ],
-    });
-
-    render(wrap(<VideoMakerView />));
-
-    // 展开态：项目名可见
-    expect(await screen.findByText("新项目")).toBeInTheDocument();
-
-    // 收起：项目名让位给图标 rail
-    fireEvent.click(screen.getByRole("button", { name: "收起侧栏" }));
-    expect(screen.queryByText("新项目")).not.toBeInTheDocument();
-    expect(
-      screen.getByRole("button", { name: "展开侧栏" }),
-    ).toBeInTheDocument();
-
-    // 再展开：项目名恢复
-    fireEvent.click(screen.getByRole("button", { name: "展开侧栏" }));
-    expect(await screen.findByText("新项目")).toBeInTheDocument();
-  });
-
-  it("returns to the config form via 新建视频 after opening a project", async () => {
-    mocks.fetchVideoProjects.mockResolvedValue({
-      projects: [
-        {
-          name: "新项目",
-          createdAt: 1,
-          resolution: "1920x1080",
-          phase: "storyboard",
-          hasVideo: false,
-          outputStale: false,
-          chatId: null,
-        },
-      ],
-    });
-    mocks.fetchVideoStoryboard.mockResolvedValue({
-      ok: true,
-      scenes: [scene(1)],
-      storyboardExists: true,
-    });
-    mocks.fetchVideoProject.mockResolvedValue({
-      name: "新项目",
-      resolution: "1920x1080",
-      outputStale: false,
-      phase: "storyboard",
-      hasStoryboard: true,
-    });
-
-    render(wrap(<VideoMakerView />));
-
-    fireEvent.click(await screen.findByText("新项目"));
-    expect(
-      await screen.findByRole("button", { name: /确认分镜，进入制作/ }),
-    ).toBeInTheDocument();
-
-    fireEvent.click(screen.getByRole("button", { name: /新建视频/ }));
-    expect(
-      await screen.findByPlaceholderText(/描述你想制作的视频内容/),
-    ).toBeEnabled();
-  });
-
-  it("surfaces a chat-scoped rejection and resends the storyboard brief", async () => {
-    const client = makeClient();
-    mocks.fetchVideoProjects.mockResolvedValue({
-      projects: [
-        {
-          name: "卡住的项目",
-          createdAt: 1,
-          resolution: "1920x1080",
-          phase: "storyboard",
-          hasVideo: false,
-          outputStale: false,
-          chatId: "chat-video",
-        },
-      ],
-    });
-    mocks.fetchVideoStoryboard.mockResolvedValue({
-      ok: true,
-      scenes: [],
-      storyboardExists: false,
-    });
-    mocks.fetchVideoProject.mockResolvedValue({
-      name: "卡住的项目",
-      resolution: "1920x1080",
-      outputStale: false,
-      phase: "storyboard",
-      hasStoryboard: false,
-    });
-
-    render(wrap(<VideoMakerView />, client));
-
-    // 打开项目 → 进入分镜阶段，此时界面仍是没有场景的加载态
-    fireEvent.click(await screen.findByText("卡住的项目"));
-    expect(
-      await screen.findByText("AI 正在生成分镜草稿..."),
-    ).toBeInTheDocument();
-
-    // 网关拒绝视频 turn → 错误帧到达该会话 → 界面给出可操作的失败态
-    act(() => {
-      client.__emitChat("chat-video", {
-        event: "error",
-        chat_id: "chat-video",
-        detail: "invalid_agent_kind_context",
-      });
-    });
-
-    expect(await screen.findByText("分镜生成未能启动")).toBeInTheDocument();
-    expect(
-      screen.getByText("视频助手会话未就绪，请重新发送分镜任务。"),
-    ).toBeInTheDocument();
-
-    fireEvent.click(screen.getByRole("button", { name: "重新发送分镜任务" }));
-
-    expect(client.sendMessage).toHaveBeenCalledWith(
-      "chat-video",
-      expect.stringContaining("卡住的项目"),
-      undefined,
-      expect.objectContaining({ agentKind: "video", displayContent: "重新生成分镜" }),
-    );
-  });
-
-  it("switches between storyboard and producing views via the step bar", async () => {
-    mocks.fetchVideoProjects.mockResolvedValue({
-      projects: [
-        {
-          name: "制作中项目",
-          createdAt: 1,
-          resolution: "1920x1080",
-          phase: "producing",
-          hasVideo: false,
-          outputStale: false,
-          chatId: null,
-        },
-      ],
-    });
-    mocks.fetchVideoStoryboard.mockResolvedValue({
-      ok: true,
-      scenes: [scene(1, { title: "开场" })],
-      storyboardExists: true,
-    });
-    mocks.fetchVideoProject.mockResolvedValue({
-      name: "制作中项目",
+      name: "proj",
       resolution: "1920x1080",
       outputStale: false,
       phase: "producing",
+      meta: { narrationEnabled: true },
+    });
+    mocks.fetchVideoStoryboard.mockResolvedValue({
+      ok: true,
+      scenes: [producingScene(1, { htmlStatus: "previewing", htmlMtime: 100 })],
+    });
+    mocks.fetchScenePreviewHtml.mockResolvedValue({
+      html: "<html>scene</html>",
+      needsGeneration: false,
+    });
+    mocks.fetchSceneNarrationBytes.mockRejectedValue(new Error("HTTP 500"));
+
+    render(wrap(<ProducingPhase projectName="proj" />));
+    const playTimeline = await screen.findByRole("button", {
+      name: "播放当前场景",
+    });
+    await waitFor(() => expect(playTimeline).toBeEnabled());
+    expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+    fireEvent.click(playTimeline);
+
+    expect(await screen.findByRole("dialog")).toHaveTextContent("场景播放失败");
+    expect(screen.getByRole("dialog")).toHaveTextContent(
+      "请打开设置试听旁白后重试",
+    );
+    fireEvent.click(screen.getByRole("button", { name: "关闭" }));
+    expect(screen.getByRole("button", { name: "播放当前场景" })).toBeInTheDocument();
+  });
+
+  it("reports a rejected narration preview and releases its audio URL", async () => {
+    const originalCreateObjectUrl = URL.createObjectURL;
+    const originalRevokeObjectUrl = URL.revokeObjectURL;
+    const revokeObjectUrl = vi.fn();
+    Object.defineProperty(URL, "createObjectURL", {
+      configurable: true,
+      value: vi.fn(() => "blob:scene-narration"),
+    });
+    Object.defineProperty(URL, "revokeObjectURL", {
+      configurable: true,
+      value: revokeObjectUrl,
+    });
+    const play = vi
+      .spyOn(HTMLMediaElement.prototype, "play")
+      .mockRejectedValue(new Error("playback blocked"));
+    mocks.fetchVideoProject.mockResolvedValue({
+      name: "proj",
+      resolution: "1920x1080",
+      outputStale: false,
+      phase: "producing",
+      meta: { narrationEnabled: true },
+    });
+    mocks.fetchVideoStoryboard.mockResolvedValue({
+      ok: true,
+      scenes: [producingScene(1, { htmlStatus: "previewing", htmlMtime: 100 })],
+    });
+    mocks.fetchScenePreviewHtml.mockResolvedValue({
+      html: "<html>scene</html>",
+      needsGeneration: false,
+    });
+    mocks.fetchSceneNarrationBytes.mockResolvedValue(
+      new Blob(["audio"], { type: "audio/mpeg" }),
+    );
+
+    render(wrap(<ProducingPhase projectName="proj" />));
+    fireEvent.click(await screen.findByRole("button", { name: "设置" }));
+    const playNarration = screen.getByRole("button", { name: "试听旁白" });
+    await waitFor(() => expect(playNarration).toBeEnabled());
+    fireEvent.click(playNarration);
+
+    expect(await screen.findByRole("dialog", { name: "试听旁白失败" })).toHaveTextContent("试听旁白失败");
+    expect(screen.getAllByRole("dialog")).toHaveLength(1);
+    expect(screen.getByRole("dialog")).toHaveTextContent(
+      "请检查网络连接后重试",
+    );
+    expect(revokeObjectUrl).toHaveBeenCalledTimes(1);
+    expect(revokeObjectUrl).toHaveBeenCalledWith("blob:scene-narration");
+    fireEvent.click(screen.getByRole("button", { name: "关闭" }));
+    fireEvent.click(screen.getByRole("button", { name: "设置" }));
+    expect(screen.getByRole("button", { name: "试听旁白" })).toBeEnabled();
+
+    play.mockRestore();
+    Object.defineProperty(URL, "createObjectURL", {
+      configurable: true,
+      value: originalCreateObjectUrl,
+    });
+    Object.defineProperty(URL, "revokeObjectURL", {
+      configurable: true,
+      value: originalRevokeObjectUrl,
+    });
+  });
+
+  it("plays a silent visual timeline without requesting narration when narration is disabled", async () => {
+    mocks.fetchVideoProject.mockResolvedValue({
+      name: "proj",
+      resolution: "1920x1080",
+      outputStale: false,
+      phase: "producing",
+      meta: { narrationEnabled: false },
+    });
+    mocks.fetchVideoStoryboard.mockResolvedValue({
+      ok: true,
+      scenes: [producingScene(1, { htmlStatus: "previewing", htmlMtime: 100 })],
     });
     mocks.fetchScenePreviewHtml.mockResolvedValue({
       html: "<html>scene</html>",
       needsGeneration: false,
     });
 
-    render(wrap(<VideoMakerView />));
-    fireEvent.click(await screen.findByText("制作中项目"));
+    render(wrap(<ProducingPhase projectName="proj" />));
+    fireEvent.click(await screen.findByRole("button", { name: "播放当前场景" }));
 
-    // producing 阶段 → 初始进入制作视图
-    expect(await screen.findByText(/场景制作 ·/)).toBeInTheDocument();
-
-    // 步骤条回退到「编辑分镜」：已锁定项目显示「返回制作」，不再重复锁定
-    fireEvent.click(screen.getByRole("button", { name: "切换到编辑分镜" }));
     expect(
-      await screen.findByRole("button", { name: "返回制作" }),
+      await screen.findByRole("button", { name: "暂停当前场景" }),
     ).toBeInTheDocument();
-    expect(mocks.lockVideoStoryboard).not.toHaveBeenCalled();
-
-    // 点击「返回制作」切回制作视图（不调用锁定 API，phase 不回退）
-    fireEvent.click(screen.getByRole("button", { name: "返回制作" }));
-    expect(await screen.findByText(/场景制作 ·/)).toBeInTheDocument();
-    expect(mocks.lockVideoStoryboard).not.toHaveBeenCalled();
-
-    // 步骤条「导出交付」与制作场景同视图
-    fireEvent.click(screen.getByRole("button", { name: "切换到编辑分镜" }));
-    expect(
-      await screen.findByRole("button", { name: "返回制作" }),
-    ).toBeInTheDocument();
-    fireEvent.click(screen.getByRole("button", { name: "切换到导出交付" }));
-    expect(await screen.findByText(/场景制作 ·/)).toBeInTheDocument();
+    expect(mocks.fetchSceneNarrationBytes).not.toHaveBeenCalled();
+    expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
   });
 
-  it("keeps forward steps disabled until the storyboard is locked", async () => {
-    mocks.fetchVideoProjects.mockResolvedValue({
-      projects: [
-        {
-          name: "分镜项目",
-          createdAt: 1,
-          resolution: "1920x1080",
-          phase: "storyboard",
-          hasVideo: false,
-          outputStale: false,
-          chatId: null,
-        },
-      ],
+  it("retries timeline audio after narration audition succeeds", async () => {
+    const originalCreateObjectUrl = URL.createObjectURL;
+    const originalRevokeObjectUrl = URL.revokeObjectURL;
+    Object.defineProperty(URL, "createObjectURL", {
+      configurable: true,
+      value: vi.fn(() => "blob:scene-narration"),
+    });
+    Object.defineProperty(URL, "revokeObjectURL", {
+      configurable: true,
+      value: vi.fn(),
+    });
+    const mediaElements: HTMLMediaElement[] = [];
+    const play = vi
+      .spyOn(HTMLMediaElement.prototype, "play")
+      .mockImplementation(function (this: HTMLMediaElement) {
+        mediaElements.push(this);
+        return Promise.resolve();
+      });
+    const audioBlob = new Blob(["audio"], { type: "audio/mpeg" });
+    mocks.fetchVideoProject.mockResolvedValue({
+      name: "proj",
+      resolution: "1920x1080",
+      outputStale: false,
+      phase: "producing",
+      meta: { narrationEnabled: true },
     });
     mocks.fetchVideoStoryboard.mockResolvedValue({
       ok: true,
-      scenes: [scene(1)],
-      storyboardExists: true,
+      scenes: [producingScene(1, { htmlStatus: "previewing", htmlMtime: 100 })],
     });
-    mocks.fetchVideoProject.mockResolvedValue({
-      name: "分镜项目",
-      resolution: "1920x1080",
-      outputStale: false,
-      phase: "storyboard",
-      hasStoryboard: true,
+    mocks.fetchScenePreviewHtml.mockResolvedValue({
+      html: "<html>scene</html>",
+      needsGeneration: false,
     });
+    mocks.fetchSceneNarrationBytes
+      .mockRejectedValueOnce(new Error("HTTP 500"))
+      .mockResolvedValue(audioBlob);
 
-    render(wrap(<VideoMakerView />));
-    fireEvent.click(await screen.findByText("分镜项目"));
+    render(wrap(<ProducingPhase projectName="proj" />));
+    const playTimeline = await screen.findByRole("button", {
+      name: "播放当前场景",
+    });
+    await waitFor(() => expect(playTimeline).toBeEnabled());
+    expect(mocks.fetchSceneNarrationBytes).toHaveBeenCalledTimes(1);
+
+    fireEvent.click(await screen.findByRole("button", { name: "设置" }));
+    fireEvent.click(screen.getByRole("button", { name: "试听旁白" }));
+    await waitFor(() =>
+      expect(mocks.fetchSceneNarrationBytes).toHaveBeenCalledTimes(3),
+    );
+    await waitFor(() => expect(playTimeline).toBeEnabled());
+    act(() => mediaElements[0]?.dispatchEvent(new Event("ended")));
+    fireEvent.click(screen.getByRole("button", { name: "返回视频" }));
+    fireEvent.click(playTimeline);
 
     expect(
-      await screen.findByRole("button", { name: /确认分镜，进入制作/ }),
+      await screen.findByRole("button", { name: "暂停当前场景" }),
     ).toBeInTheDocument();
-    // 未锁定前：制作场景 / 导出交付 步骤不可点击，防止跳过确认流程
-    expect(
-      screen.getByRole("button", { name: "切换到制作场景" }),
-    ).toBeDisabled();
-    expect(
-      screen.getByRole("button", { name: "切换到导出交付" }),
-    ).toBeDisabled();
-    // 配置主题不提供点击回退（新建按钮已覆盖该语义）
-    expect(screen.getByRole("button", { name: "配置主题" })).toBeDisabled();
+    expect(play).toHaveBeenCalledTimes(2);
+
+    play.mockRestore();
+    Object.defineProperty(URL, "createObjectURL", {
+      configurable: true,
+      value: originalCreateObjectUrl,
+    });
+    Object.defineProperty(URL, "revokeObjectURL", {
+      configurable: true,
+      value: originalRevokeObjectUrl,
+    });
+  });
+});
+
+describe("VideoMakerView director workspace", () => {
+  beforeEach(() => {
+    mocks.fetchVideoStoryboard.mockReset().mockResolvedValue({ ok: true, planRevision: 1, scenes: [] });
+    mocks.fetchVideoProject.mockImplementation(async (_token: string, name: string) => ({ name, resolution: "1920x1080", phase: "storyboard", meta: { narrationEnabled: true, requirePlanApproval: true, planRevision: 1, approvedPlanRevision: null } }));
+    mocks.confirmVideoProjectPlan.mockReset().mockResolvedValue({ ok: true, planRevision: 1 });
+    mocks.updateVideoProjectSettings.mockReset();
+    mocks.fetchScenePreviewHtml.mockResolvedValue({ html: "<html>scene</html>", needsGeneration: false });
+    mocks.fetchVideoExportStatus.mockResolvedValue({ stage: "idle", progress: 0 });
+    mocks.createVideoProject.mockResolvedValue({ ok: true });
+  });
+
+  it("starts with one description and progressive optional settings", async () => {
+    render(wrap(<VideoMakerView />));
+    expect(screen.getByLabelText("想做什么视频？")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "准备分镜" })).toBeDisabled();
+    expect(screen.queryByText("创建方式")).not.toBeInTheDocument();
+    expect(screen.queryByText("系列视频")).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "开始制作" })).not.toBeInTheDocument();
+    expect(screen.queryByLabelText("视频名称")).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "更多设置" }));
+    expect(screen.getByLabelText("视频名称")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "竖屏" })).toBeInTheDocument();
+    expect(screen.getByRole("checkbox", { name: "配音" })).toBeInTheDocument();
+  });
+
+  it("creates once and prepares a plan before the user confirms production", async () => {
+    const client = makeClient();
+    client.newChat.mockResolvedValue("video-chat");
+    render(wrap(<VideoMakerView />, client));
+    fireEvent.change(screen.getByLabelText("想做什么视频？"), { target: { value: "介绍我的产品" } });
+    fireEvent.click(screen.getByRole("button", { name: "准备分镜" }));
+    await waitFor(() => expect(client.sendMessage).toHaveBeenCalledOnce());
+    expect(mocks.createVideoProject).toHaveBeenCalledOnce();
+    const prompt = client.sendMessage.mock.calls[0][1];
+    expect(prompt).toContain("画面：横屏");
+    expect(prompt).toContain("用 video.plan 保存方案");
+    expect(prompt).toContain("不编写场景源码");
+    expect(mocks.confirmVideoProjectPlan).not.toHaveBeenCalled();
+    expect(mocks.fetchSceneNarrationBytes).not.toHaveBeenCalled();
+    expect(prompt).not.toMatch(/项目目录|video_projects|1920x1080|Role|Background Slot|锁定|Step/);
+    expect(client.sendMessage).toHaveBeenCalledWith("video-chat", expect.any(String), undefined, { agentKind: "video", displayContent: "介绍我的产品" });
+    expect(await screen.findByRole("heading", { name: /导演台/ })).toBeInTheDocument();
+    expect(screen.getByTestId("doc-chat-panel")).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /切换到编辑分镜/ })).not.toBeInTheDocument();
+    expect(mocks.fetchVideoRuntimeCheck).not.toHaveBeenCalled();
+  });
+
+  it("saves a chosen name, orientation, style, and voice as optional inputs", async () => {
+    const client = makeClient();
+    client.newChat.mockResolvedValue("video-chat");
+    render(wrap(<VideoMakerView />, client));
+    fireEvent.change(screen.getByLabelText("想做什么视频？"), { target: { value: "介绍产品" } });
+    fireEvent.click(screen.getByRole("button", { name: "更多设置" }));
+    fireEvent.change(screen.getByLabelText("视频名称"), { target: { value: "产品介绍" } });
+    fireEvent.click(screen.getByRole("button", { name: "竖屏" }));
+    fireEvent.click(screen.getByRole("button", { name: /简洁浅色/ }));
+    expect(screen.getByRole("checkbox", { name: "配音" })).toBeChecked();
+    fireEvent.click(screen.getByRole("button", { name: "准备分镜" }));
+    await waitFor(() => expect(client.sendMessage).toHaveBeenCalledOnce());
+    expect(mocks.createVideoProject).toHaveBeenCalledWith("tok", "产品介绍", "1080x1920", expect.objectContaining({ templateId: "minimal-business", narrationEnabled: true, ttsProvider: "edge", subtitleMode: "burned" }));
+  });
+
+  it("reuses a saved style without making users choose a series", async () => {
+    mocks.fetchVideoSeries.mockResolvedValue({ series: [{ id: "style-a", name: "我的简洁风格", latestStyleVersion: 2, defaultAspectRatio: "9:16", styleSummary: { enabledAspectRatios: ["9:16"] } }] });
+    const client = makeClient();
+    client.newChat.mockResolvedValue("video-chat");
+    render(wrap(<VideoMakerView />, client));
+    fireEvent.change(screen.getByLabelText("想做什么视频？"), { target: { value: "介绍产品" } });
+    fireEvent.click(screen.getByRole("button", { name: "更多设置" }));
+    fireEvent.click(screen.getByRole("button", { name: "我的风格" }));
+    fireEvent.click((await screen.findByText("我的简洁风格")).closest("button")!);
+    expect(screen.getByRole("button", { name: "竖屏" })).toHaveAttribute("aria-pressed", "true");
+    fireEvent.click(screen.getByRole("button", { name: "准备分镜" }));
+    await waitFor(() => expect(client.sendMessage).toHaveBeenCalledOnce());
+    expect(mocks.createVideoProject.mock.calls[0][3]).toMatchObject({ styleSeriesId: "style-a", styleVersion: 2, aspectVariant: "9:16" });
+    expect(mocks.createVideoProject.mock.calls[0][3]).not.toHaveProperty("seriesId");
+  });
+
+  it("retries the existing project if creating its conversation fails", async () => {
+    const client = makeClient();
+    client.newChat.mockRejectedValueOnce(new Error("connection failed")).mockResolvedValue("video-chat");
+    render(wrap(<VideoMakerView />, client));
+    fireEvent.change(screen.getByLabelText("想做什么视频？"), { target: { value: "介绍产品" } });
+    fireEvent.click(screen.getByRole("button", { name: "准备分镜" }));
+    const retry = await screen.findByRole("button", { name: "继续准备分镜" });
+    expect(client.sendMessage).not.toHaveBeenCalled();
+    fireEvent.click(retry);
+    await waitFor(() => expect(client.sendMessage).toHaveBeenCalledOnce());
+    expect(mocks.createVideoProject).toHaveBeenCalledOnce();
+    expect(client.newChat).toHaveBeenCalledTimes(2);
+  });
+
+  it("retries saving the same conversation instead of creating another video", async () => {
+    const client = makeClient();
+    client.newChat.mockResolvedValue("video-chat");
+    mocks.saveVideoChatId.mockRejectedValueOnce(new Error("save link failed")).mockResolvedValue({ ok: true });
+    render(wrap(<VideoMakerView />, client));
+    fireEvent.change(screen.getByLabelText("想做什么视频？"), { target: { value: "介绍产品" } });
+    fireEvent.click(screen.getByRole("button", { name: "准备分镜" }));
+    fireEvent.click(await screen.findByRole("button", { name: "继续准备分镜" }));
+    await waitFor(() => expect(client.sendMessage).toHaveBeenCalledOnce());
+    expect(client.newChat).toHaveBeenCalledOnce();
+    expect(mocks.createVideoProject).toHaveBeenCalledOnce();
+    expect(mocks.saveVideoChatId).toHaveBeenCalledTimes(2);
+  });
+
+  it("verifies an uncertain creation result before retrying the existing project", async () => {
+    const client = makeClient();
+    client.newChat.mockResolvedValue("video-chat");
+    mocks.createVideoProject.mockRejectedValueOnce(new Error("response lost"));
+    mocks.fetchVideoProject.mockImplementation(async (_token: string, name: string) => ({ name, phase: "storyboard", resolution: "1920x1080", meta: { narrationEnabled: false } }));
+    render(wrap(<VideoMakerView />, client));
+    fireEvent.change(screen.getByLabelText("想做什么视频？"), { target: { value: "产品介绍" } });
+    fireEvent.click(screen.getByRole("button", { name: "准备分镜" }));
+    fireEvent.click(await screen.findByRole("button", { name: "继续准备分镜" }));
+    await waitFor(() => expect(client.sendMessage).toHaveBeenCalledOnce());
+    expect(mocks.createVideoProject).toHaveBeenCalledOnce();
+    expect(mocks.fetchVideoProject).toHaveBeenCalledWith("tok", "产品介绍");
+  });
+
+  it("uses the embedded video conversation and ordinary visible user text", async () => {
+    const client = makeClient();
+    const onSendVideoTurn = vi.fn();
+    render(wrap(<VideoMakerView embedded hostChatId="host-chat" onSendVideoTurn={onSendVideoTurn} />, client));
+    fireEvent.change(screen.getByLabelText("想做什么视频？"), { target: { value: "给新用户介绍产品" } });
+    fireEvent.click(screen.getByRole("button", { name: "准备分镜" }));
+    await waitFor(() => expect(onSendVideoTurn).toHaveBeenCalledOnce());
+    expect(onSendVideoTurn).toHaveBeenCalledWith(expect.stringContaining("用 video.plan 保存方案"), "给新用户介绍产品");
+    expect(client.newChat).not.toHaveBeenCalled();
+    expect(client.sendMessage).not.toHaveBeenCalled();
+    expect(screen.queryByTestId("doc-chat-panel")).not.toBeInTheDocument();
+  });
+
+  it("opens unconfirmed projects in the main director workspace", async () => {
+    render(wrap(<VideoMakerView embedded hostChatId="chat" initialProject={{ name: "旧项目", phase: "storyboard", chatId: "chat" }} />));
+    expect(await screen.findByRole("heading", { name: /导演台/ })).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "素材" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "与 Mona 讨论" })).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "确认并生成" })).toBeDisabled();
+  });
+
+  it("keeps the director open and does not confirm or generate when scene saving fails", async () => {
+    mocks.fetchVideoProject.mockResolvedValue({ name: "项目", phase: "storyboard", meta: { narrationEnabled: true, requirePlanApproval: true, planRevision: 1, approvedPlanRevision: null } });
+    mocks.fetchVideoStoryboard.mockResolvedValue({ ok: true, planRevision: 1, scenes: [scene(1)] });
+    mocks.updateVideoScene.mockResolvedValue({ ok: false, error: "save failed" });
+    const onSendVideoTurn = vi.fn();
+    render(wrap(<VideoMakerView embedded hostChatId="chat" initialProject={{ name: "项目", phase: "storyboard", chatId: "chat" }} onSendVideoTurn={onSendVideoTurn} />));
+    fireEvent.change(await screen.findByLabelText("标题"), { target: { value: "新标题" } });
+    fireEvent.click(screen.getByRole("button", { name: "确认并生成" }));
+    expect(await screen.findByText("保存失败")).toBeInTheDocument();
+    expect(screen.getByDisplayValue("新标题")).toBeInTheDocument();
+    expect(mocks.confirmVideoProjectPlan).not.toHaveBeenCalled();
+    expect(onSendVideoTurn).not.toHaveBeenCalled();
+  });
+
+  it("flushes animation changes and confirms the saved revision before starting production", async () => {
+    mocks.fetchVideoProject.mockResolvedValue({ name: "项目", phase: "storyboard", meta: { narrationEnabled: true, requirePlanApproval: true, planRevision: 1, approvedPlanRevision: null } });
+    mocks.fetchVideoStoryboard.mockResolvedValue({ ok: true, planRevision: 1, scenes: [scene(1)] });
+    mocks.updateVideoScene.mockResolvedValue({ ok: true, planRevision: 2 });
+    mocks.confirmVideoProjectPlan.mockResolvedValue({ ok: true, planRevision: 2 });
+    const onSendVideoTurn = vi.fn();
+    render(wrap(<VideoMakerView embedded hostChatId="chat" initialProject={{ name: "项目", phase: "storyboard", chatId: "chat" }} onSendVideoTurn={onSendVideoTurn} />));
+    const animation = await screen.findByLabelText("画面如何变化");
+    fireEvent.change(animation, { target: { value: "口播到比较时，两种方案左右展开，结果逐渐高亮" } });
+    expect(screen.getByRole("button", { name: "预览视频" })).toBeDisabled();
+    expect(mocks.fetchSceneNarrationBytes).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByRole("button", { name: "确认并生成" }));
+    await waitFor(() => expect(onSendVideoTurn).toHaveBeenCalledOnce());
+    expect(mocks.updateVideoScene).toHaveBeenCalledWith("tok", "项目", { index: 1, animation: "口播到比较时，两种方案左右展开，结果逐渐高亮", expectedPlanRevision: 1 });
+    expect(mocks.confirmVideoProjectPlan).toHaveBeenCalledWith("tok", "项目", 2);
+    expect(mocks.updateVideoScene.mock.invocationCallOrder[0]).toBeLessThan(mocks.confirmVideoProjectPlan.mock.invocationCallOrder[0]);
+    expect(mocks.confirmVideoProjectPlan.mock.invocationCallOrder[0]).toBeLessThan(onSendVideoTurn.mock.invocationCallOrder[0]);
+    expect(onSendVideoTurn).toHaveBeenCalledWith(expect.stringContaining("修订号 2"), expect.any(String));
+    expect(onSendVideoTurn.mock.calls[0][0]).toContain("不能以静态 PPT 页面切换代替");
+    expect(await screen.findByRole("button", { name: "导演台" })).toBeInTheDocument();
+  });
+
+  it("does not generate after a confirmation conflict and refreshes the changed plan", async () => {
+    mocks.fetchVideoProject.mockResolvedValue({ name: "项目", phase: "storyboard", meta: { narrationEnabled: true, requirePlanApproval: true, planRevision: 3, approvedPlanRevision: null } });
+    mocks.fetchVideoStoryboard.mockResolvedValue({ ok: true, planRevision: 3, scenes: [scene(1)] });
+    const { ApiError } = await import("@/lib/api");
+    mocks.confirmVideoProjectPlan.mockRejectedValue(new ApiError(409, "plan changed"));
+    const onSendVideoTurn = vi.fn();
+    render(wrap(<VideoMakerView embedded hostChatId="chat" initialProject={{ name: "项目", phase: "storyboard", chatId: "chat" }} onSendVideoTurn={onSendVideoTurn} />));
+    await screen.findByLabelText("画面如何变化");
+    fireEvent.click(screen.getByRole("button", { name: "确认并生成" }));
+    expect(await screen.findByRole("dialog")).toHaveTextContent("分镜方案已发生变化");
+    expect(onSendVideoTurn).not.toHaveBeenCalled();
+    expect(mocks.confirmVideoProjectPlan).toHaveBeenCalledWith("tok", "项目", 3);
+    await waitFor(() => expect(mocks.fetchVideoStoryboard.mock.calls.length).toBeGreaterThan(1));
+  });
+
+  it("preserves local edits when saving conflicts with a newer plan and waits for another confirmation", async () => {
+    const { ApiError } = await import("@/lib/api");
+    mocks.fetchVideoProject.mockResolvedValue({ name: "项目", phase: "storyboard", meta: { narrationEnabled: true, requirePlanApproval: true, planRevision: 3, approvedPlanRevision: null } });
+    mocks.fetchVideoStoryboard.mockResolvedValueOnce({ ok: true, planRevision: 3, scenes: [scene(1)] }).mockResolvedValue({ ok: true, planRevision: 4, scenes: [scene(1, { title: "远端标题", narration: "远端修改的旁白" })] });
+    mocks.updateVideoScene.mockRejectedValueOnce(new ApiError(409, "plan changed")).mockResolvedValue({ ok: true, planRevision: 5 });
+    mocks.confirmVideoProjectPlan.mockResolvedValue({ ok: true, planRevision: 5 });
+    const onSendVideoTurn = vi.fn();
+    render(wrap(<VideoMakerView embedded hostChatId="chat" initialProject={{ name: "项目", phase: "storyboard", chatId: "chat" }} onSendVideoTurn={onSendVideoTurn} />));
+    fireEvent.change(await screen.findByLabelText("标题"), { target: { value: "我的修改" } });
+    fireEvent.click(screen.getByRole("button", { name: "确认并生成" }));
+    expect(await screen.findByDisplayValue("远端修改的旁白")).toBeInTheDocument();
+    expect(screen.getByDisplayValue("我的修改")).toBeInTheDocument();
+    expect(mocks.updateVideoScene).toHaveBeenCalledWith("tok", "项目", { index: 1, title: "我的修改", expectedPlanRevision: 3 });
+    expect(mocks.confirmVideoProjectPlan).not.toHaveBeenCalled();
+    expect(onSendVideoTurn).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByRole("button", { name: "确认并生成" }));
+    await waitFor(() => expect(onSendVideoTurn).toHaveBeenCalledOnce());
+    expect(mocks.updateVideoScene).toHaveBeenLastCalledWith("tok", "项目", { index: 1, title: "我的修改", expectedPlanRevision: 4 });
+    expect(mocks.confirmVideoProjectPlan).toHaveBeenCalledWith("tok", "项目", 5);
+  });
+
+  it("saves voice settings in the director without starting a generation turn", async () => {
+    mocks.fetchVideoProject.mockResolvedValue({ name: "项目", phase: "storyboard", meta: { narrationEnabled: true, requirePlanApproval: true, planRevision: 1, approvedPlanRevision: null } });
+    mocks.fetchVideoStoryboard.mockResolvedValue({ ok: true, planRevision: 1, scenes: [scene(1)] });
+    mocks.updateVideoProjectSettings.mockResolvedValue({ ok: true, meta: { narrationEnabled: false } });
+    const onSendVideoTurn = vi.fn();
+    render(wrap(<VideoMakerView embedded hostChatId="chat" initialProject={{ name: "项目", phase: "storyboard", chatId: "chat" }} onSendVideoTurn={onSendVideoTurn} />));
+    await screen.findByLabelText("画面如何变化");
+    fireEvent.click(screen.getByRole("button", { name: "声音与字幕" }));
+    fireEvent.click(screen.getByRole("checkbox", { name: "启用旁白配音" }));
+    fireEvent.click(screen.getByRole("button", { name: "保存设置" }));
+    await waitFor(() => expect(mocks.updateVideoProjectSettings).toHaveBeenCalledOnce());
+    expect(mocks.confirmVideoProjectPlan).not.toHaveBeenCalled();
+    expect(onSendVideoTurn).not.toHaveBeenCalled();
+  });
+
+  it("does not replay a failed Agent turn from a project-refresh event", async () => {
+    const client = makeClient();
+    render(wrap(<VideoMakerView embedded hostChatId="chat" initialProject={{ name: "项目", phase: "storyboard", chatId: "chat" }} onSendVideoTurn={vi.fn()} />, client));
+    await screen.findByRole("heading", { name: /导演台/ });
+    act(() => client.__emitChat("chat", { event: "error", detail: "invalid_agent_kind_context" }));
+    expect(await screen.findByText("视频会话未就绪，请重试准备分镜。")).toBeInTheDocument();
+    act(() => client.__emitVideoProjectChanged({ projectName: "项目", hint: "scenes" }));
+    expect(client.sendMessage).not.toHaveBeenCalled();
+    expect(mocks.createVideoProject).not.toHaveBeenCalled();
   });
 });
 
@@ -1356,6 +1232,8 @@ describe("video_project_changed events (WS push replaces polling)", () => {
       client.__emitVideoProjectChanged({ projectName: "proj", hint: "status" });
     });
 
+    expect(await screen.findByRole("button", { name: "保存视频" })).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "设置" }));
     expect(
       await screen.findByRole("button", { name: "单独下载 MP4" }),
     ).toBeInTheDocument();
@@ -1396,8 +1274,8 @@ describe("video_project_changed events (WS push replaces polling)", () => {
     });
 
     render(wrap(<ProducingPhase projectName="proj" />, client));
-    expect(await screen.findByText(/帧 10\/150/)).toBeInTheDocument();
-    expect(screen.getByText("HyperFrames")).toBeInTheDocument();
+    expect(await screen.findByRole("status")).toHaveTextContent("正在导出 15%");
+    expect(screen.queryByText("HyperFrames")).not.toBeInTheDocument();
 
     // 帧进度事件 → 立即刷新（不依赖轮询节拍）
     mocks.fetchVideoExportStatus.mockResolvedValue({
@@ -1415,11 +1293,9 @@ describe("video_project_changed events (WS push replaces polling)", () => {
       });
     });
 
-    expect(await screen.findByText(/帧 60\/150/)).toBeInTheDocument();
-    expect(screen.getByText("兼容渲染器")).toBeInTheDocument();
-    expect(
-      screen.getByText(/HyperFrames 已回退：preflight failed/),
-    ).toBeInTheDocument();
+    await waitFor(() => expect(screen.getByRole("status")).toHaveTextContent("正在导出 42%"));
+    expect(screen.queryByText("兼容渲染器")).not.toBeInTheDocument();
+    expect(screen.queryByText(/HyperFrames 已回退|preflight failed/)).not.toBeInTheDocument();
   });
 
   it("allows a running export to be stopped without leaving the workbench", async () => {
@@ -1453,7 +1329,8 @@ describe("video_project_changed events (WS push replaces polling)", () => {
     });
 
     render(wrap(<ProducingPhase projectName="proj" />, client));
-    fireEvent.click(await screen.findByRole("button", { name: "停止导出" }));
+    fireEvent.click(await screen.findByRole("button", { name: "查看进度" }));
+    fireEvent.click(screen.getByRole("button", { name: "停止导出" }));
 
     await waitFor(() => {
       expect(mocks.cancelVideoExport).toHaveBeenCalledWith("tok", "proj");
@@ -1503,7 +1380,8 @@ describe("video_project_changed events (WS push replaces polling)", () => {
     });
 
     render(wrap(<ProducingPhase projectName="proj" />, client));
-    fireEvent.click(await screen.findByRole("button", { name: "版本历史" }));
+    fireEvent.click(await screen.findByRole("button", { name: "设置" }));
+    fireEvent.click(screen.getByRole("button", { name: "版本历史" }));
 
     expect(await screen.findByText("重写场景 1 前")).toBeInTheDocument();
     fireEvent.click(screen.getByRole("button", { name: "恢复" }));
@@ -1516,9 +1394,22 @@ describe("video_project_changed events (WS push replaces polling)", () => {
     });
   });
 
-  it("creates a language version from built-in locale choices", async () => {
+  it("shows restore failures without hiding them behind the settings panel", async () => {
+    mocks.fetchVideoStoryboard.mockResolvedValue({ ok: true, scenes: [scene(1)] });
+    mocks.fetchVideoProjectVersions.mockResolvedValue({ ok: true, versions: [{ id: "backup-1", createdAt: "2026-10-12T10:00:00", label: "之前的版本", reason: "ai-change", changedSceneIndices: [1] }] });
+    mocks.restoreVideoProjectVersion.mockResolvedValueOnce({ ok: false, error: "internal restore trace" });
+    render(wrap(<ProducingPhase projectName="proj" />));
+    fireEvent.click(await screen.findByRole("button", { name: "设置" }));
+    fireEvent.click(screen.getByRole("button", { name: "版本历史" }));
+    fireEvent.click(await screen.findByRole("button", { name: "恢复" }));
+    expect(await screen.findByRole("dialog", { name: "操作遇到问题" })).toHaveTextContent("请检查当前视频后重试");
+    expect(screen.queryByText("internal restore trace")).not.toBeInTheDocument();
+    expect(mocks.restoreVideoProjectVersion).toHaveBeenCalledOnce();
+  });
+
+  it("requests changing text, voice, and subtitles in the same Agent turn", async () => {
     const client = makeClient();
-    const onLocalized = vi.fn();
+    const onRequestAgent = vi.fn();
     mocks.fetchVideoProject.mockResolvedValue({
       name: "proj",
       resolution: "1920x1080",
@@ -1545,38 +1436,26 @@ describe("video_project_changed events (WS push replaces polling)", () => {
       stage: "idle",
       progress: 0,
     });
-    mocks.localizeVideoProject.mockResolvedValue({
-      ok: true,
-      name: "proj-en_us",
-      language: "en-US",
-    });
 
     render(
       wrap(
-        <ProducingPhase projectName="proj" onLocalized={onLocalized} />,
+        <ProducingPhase projectName="proj" onRequestAgent={onRequestAgent} />,
         client,
       ),
     );
-    fireEvent.click(
-      await screen.findByRole("button", { name: "创建语言版本" }),
-    );
+    fireEvent.click(await screen.findByRole("button", { name: "设置" }));
+    fireEvent.click(screen.getByRole("button", { name: "换语言" }));
     expect(
       screen.getByRole("radio", { name: "简体中文（当前）" }),
     ).toBeDisabled();
     fireEvent.click(screen.getByRole("radio", { name: "English" }));
     const createButtons = screen.getAllByRole("button", {
-      name: "创建语言版本",
+      name: "换语言",
     });
     fireEvent.click(createButtons[createButtons.length - 1]);
 
-    await waitFor(() => {
-      expect(mocks.localizeVideoProject).toHaveBeenCalledWith(
-        "tok",
-        "proj",
-        "en-US",
-      );
-      expect(onLocalized).toHaveBeenCalledWith("proj-en_us");
-    });
+    await waitFor(() => expect(onRequestAgent).toHaveBeenCalledOnce());
+    expect(onRequestAgent).toHaveBeenCalledWith(expect.stringMatching(/English.*旁白与画面文字.*等待导演台确认/));
   });
 
   it("opens a script-aligned fine timeline without exposing code", async () => {
@@ -1635,14 +1514,15 @@ describe("video_project_changed events (WS push replaces polling)", () => {
     });
 
     render(wrap(<ProducingPhase projectName="proj" />, client));
-    fireEvent.click(await screen.findByRole("button", { name: "精细时间轴" }));
 
     expect(
-      screen.getByRole("slider", { name: "场景播放位置" }),
+      await screen.findByRole("slider", { name: "场景播放位置" }),
     ).toBeInTheDocument();
+    fireEvent.click(await screen.findByRole("button", { name: "设置" }));
+    fireEvent.click(screen.getByRole("button", { name: "显示字幕与动画位置" }));
     expect(screen.getByText("画面节拍")).toBeInTheDocument();
     expect(screen.getByText("字幕与画面同步")).toBeInTheDocument();
-    expect(screen.getByTitle("标题 · fade-rise")).toBeInTheDocument();
+    expect(screen.getByTitle("标题 · 0.0–0.8 秒")).toBeInTheDocument();
   });
 
   it("records time-based reviews and blocks final delivery until resolved", async () => {
@@ -1699,6 +1579,7 @@ describe("video_project_changed events (WS push replaces polling)", () => {
     });
 
     render(wrap(<ProducingPhase projectName="proj" />, client));
+    fireEvent.click(await screen.findByRole("button", { name: "设置" }));
     expect(await screen.findByText("1 条未解决")).toBeInTheDocument();
     fireEvent.change(screen.getByLabelText("审阅意见"), {
       target: { value: "补充品牌标识" },
@@ -1717,7 +1598,7 @@ describe("video_project_changed events (WS push replaces polling)", () => {
     fireEvent.click(screen.getByRole("button", { name: /导出视频/ }));
     expect(screen.getByRole("radio", { name: /正式版/ })).toBeDisabled();
     expect(screen.getByText("先解决 2 条意见")).toBeInTheDocument();
-    expect(await screen.findByText("150 帧")).toBeInTheDocument();
+    expect(await screen.findByText("预计时长")).toBeInTheDocument();
     expect(
       screen.getByText("本地渲染与 Edge 配音不扣 Mona 积分"),
     ).toBeInTheDocument();
@@ -1777,7 +1658,7 @@ describe("video_project_changed events (WS push replaces polling)", () => {
     });
 
     render(
-      wrap(<StoryboardPhase projectName="proj" onLocked={() => {}} />, client),
+      wrap(<StoryboardPhase projectName="proj" />, client),
     );
     expect(await screen.findByDisplayValue("开场")).toBeInTheDocument();
     const callsBefore = mocks.fetchVideoStoryboard.mock.calls.length;
@@ -1815,16 +1696,16 @@ describe("video_project_changed events (WS push replaces polling)", () => {
     });
 
     render(wrap(<VideoMakerView />, client));
-    expect(await screen.findByText("分镜中")).toBeInTheDocument();
+    expect(await screen.findByText("制作中")).toBeInTheDocument();
 
-    // 锁定分镜 → 服务端推送 phase 事件 → 列表阶段标签原地更新
+    // 画面制作完成后，历史列表同步可导出状态。
     mocks.fetchVideoProjects.mockResolvedValue({
       projects: [
         {
           name: "新项目",
           createdAt: 1,
           resolution: "1920x1080",
-          phase: "producing",
+          phase: "exportable",
           hasVideo: false,
           outputStale: false,
           chatId: null,
@@ -1838,7 +1719,7 @@ describe("video_project_changed events (WS push replaces polling)", () => {
       });
     });
 
-    expect(await screen.findByText("制作中")).toBeInTheDocument();
-    expect(screen.queryByText("分镜中")).not.toBeInTheDocument();
+    expect(await screen.findByText("待导出")).toBeInTheDocument();
+    expect(screen.queryByText("制作中")).not.toBeInTheDocument();
   });
 });

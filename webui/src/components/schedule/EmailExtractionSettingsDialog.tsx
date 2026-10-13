@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { Loader2, LockKeyhole } from "lucide-react";
+import { Loader2 } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
@@ -16,7 +16,6 @@ import {
 import { getFolders, listAccounts } from "@/components/email/lib/emailApi";
 import { getFolderDisplayName } from "@/components/email/lib/folderUtils";
 import type { EmailAccount, EmailFolder } from "@/components/email/lib/types";
-import { useLicense } from "@/hooks/useLicense";
 import {
   readEmailScheduleConfig, writeEmailScheduleConfig, type EmailScheduleConfig,
 } from "@/lib/tauri";
@@ -30,9 +29,8 @@ interface EmailExtractionSettingsDialogProps {
 }
 
 export function EmailExtractionSettingsDialog({
-  open, onOpenChange, onOpenSubscribe, onAddEmailAccount, onOpenEmail,
+  open, onOpenChange, onAddEmailAccount, onOpenEmail,
 }: EmailExtractionSettingsDialogProps) {
-  const { licenseActive } = useLicense();
   const [config, setConfig] = useState<EmailScheduleConfig | null>(null);
   const [sources, setSources] = useState<{ account: EmailAccount; folders: EmailFolder[] }[]>([]);
   const [leadMinutes, setLeadMinutes] = useState("");
@@ -43,7 +41,7 @@ export function EmailExtractionSettingsDialog({
   const [error, setError] = useState<"load" | "save" | null>(null);
 
   useEffect(() => {
-    if (!open || !licenseActive) return;
+    if (!open) return;
     let cancelled = false;
     setConfig(null);
     setFieldError(null);
@@ -71,10 +69,10 @@ export function EmailExtractionSettingsDialog({
       }
     })();
     return () => { cancelled = true; };
-  }, [open, licenseActive]);
+  }, [open]);
 
   const save = async () => {
-    if (!config || saving || !licenseActive) return;
+    if (!config || saving) return;
     if (config.enabled && config.folders.length === 0) {
       setFieldError("folders");
       return;
@@ -111,13 +109,7 @@ export function EmailExtractionSettingsDialog({
               从新邮件识别与你有关的日程和待办。这些设置对下方所有邮箱生效。
             </DialogDescription>
           </DialogHeader>
-          {!licenseActive ? (
-            <div className="flex flex-col items-center gap-3 py-6 text-center">
-              <LockKeyhole className="h-5 w-5 text-muted-foreground" aria-hidden />
-              <p className="text-ui">邮件提取是 Pro 功能</p>
-              <Button onClick={() => { onOpenChange(false); onOpenSubscribe(); }}>升级 Pro</Button>
-            </div>
-          ) : loading ? (
+          {loading ? (
             <div className="flex items-center gap-2 py-6 text-caption text-muted-foreground" role="status">
               <Loader2 className="h-4 w-4 animate-spin" />正在加载邮件提取设置…
             </div>
@@ -216,9 +208,9 @@ export function EmailExtractionSettingsDialog({
           )}
           <DialogFooter>
             <Button variant="outline" disabled={saving} onClick={() => onOpenChange(false)}>关闭</Button>
-            {licenseActive && <Button disabled={!config || loading || saving || sources.length === 0} onClick={() => void save()}>
+            <Button disabled={!config || loading || saving || sources.length === 0} onClick={() => void save()}>
               {saving && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}保存
-            </Button>}
+            </Button>
           </DialogFooter>
         </DialogContent>
       </Dialog>

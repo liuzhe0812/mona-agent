@@ -93,19 +93,6 @@ def previewable_delivered_media(files: list[dict[str, Any]] | None) -> list[str]
     return media
 
 
-# Appended to the system prompt when the user has no active subscription or
-# trial, so the model knows which capabilities are unavailable and does not
-# hallucinate having searched notes or emails.
-_FREE_TIER_CAPABILITY_NOTE = (
-    "\n\n---\n\n"
-    "# Subscription Status\n\n"
-    "There is no active subscription or trial. Do not search/read user Notes, "
-    "Agent Knowledge evidence, or email; save images to Notes; use database or "
-    "terminal AI tools; or use hoard results sourced from Notes/email. Never imply "
-    "that these sources were checked. Creating new notes, hoard search over browser/chat "
-    "sources, and other offered tools remain available. If the user requests a blocked "
-    "source, explain that a subscription or trial is required."
-)
 
 _TASK_PLAN_NOTE = (
     "\n\n---\n\n"
@@ -1162,7 +1149,7 @@ class AgentLoop:
         if getattr(self, "_profile", None) is not None:
             from mona.agent.tools.capabilities import activate_capabilities
 
-            activate_capabilities({"development", "skill_resources"})
+            activate_capabilities({"development", "skill_resources", "video", "image"})
 
         for name in self.tools.tool_names:
             tool = self.tools.get(name)
@@ -1539,7 +1526,10 @@ class AgentLoop:
                     )
                     media = media or None
                 user_content = self.context._build_user_content(content, media)
-                return {"role": "user", "content": user_content}
+                message = {"role": "user", "content": user_content}
+                if pending_msg.channel == "system" or pending_msg.sender_id == "subagent":
+                    message["source_kind"] = "runtime"
+                return message
 
             items: list[dict[str, Any]] = []
             while len(items) < limit:
@@ -1590,6 +1580,10 @@ class AgentLoop:
         effective_ws = get_current_workspace(self.workspace)
         try:
             temperature, max_tokens, reasoning_effort = self._mona_generation_overrides
+            from mona.providers.native_work_provider import NativeWorkProvider
+
+            if isinstance(self.provider, NativeWorkProvider):
+                reasoning_effort = self.provider.config.agents.defaults.native_reasoning_effort
             result = await self.runner.run(
                 AgentRunSpec(
                     initial_messages=initial_messages,
@@ -2399,7 +2393,7 @@ class AgentLoop:
         """Assemble the final outbound message from turn results."""
         # MessageTool suppression
         if (mt := self.tools.get("message")) and isinstance(mt, MessageTool) and mt._sent_in_turn:
-            if not delivered_files and (
+            if stop_reason != "loop_detected" and not delivered_files and (
                 not had_injections or stop_reason == "empty_final_response"
             ):
                 return None
@@ -2607,11 +2601,6 @@ class AgentLoop:
             ctx.msg, ctx.session, ctx.history, ctx.pending_summary
         )
 
-        # When the user has no active subscription/trial, append a capability
-        # note to the system prompt so the model knows notes/email search is
-        # unavailable and does not hallucinate having queried them.
-        if not self.tools.has_subscription_access:
-            ctx.initial_messages = self._inject_capability_note(ctx.initial_messages)
         if self.tools.has("update_plan"):
             ctx.initial_messages = self._inject_task_plan_note(ctx.initial_messages)
 
@@ -2629,10 +2618,12 @@ class AgentLoop:
         ``asyncio.to_thread`` because ``tauri_invoke`` is a blocking HTTP
         call to the IPC bridge. Fail-closed: any error means no access.
 
-        ``check_subscription_access`` caches its result with a short TTL, so
-        mid-turn tool-level checks (e.g. hoard_search) reuse the same value
-        without another IPC round-trip.
+        Base local tools do not require a software subscription. Keep paid
+        extension checks independent of data access and tool permissions.
         """
+        if not self.tools.requires_subscription_check:
+            self.tools.set_subscription_access(False)
+            return
         try:
             from mona.agent.tools.tauri_ipc import (
                 check_subscription_access,
@@ -2659,24 +2650,6 @@ class AgentLoop:
 
         return bool(check_subscription_access())
 
-    @staticmethod
-    def _inject_capability_note(
-        messages: list[dict[str, Any]],
-    ) -> list[dict[str, Any]]:
-        """Append the free-tier capability note to the system prompt."""
-        if not messages:
-            return messages
-        result = list(messages)
-        first = result[0]
-        if first.get("role") == "system":
-            content = first.get("content", "")
-            result[0] = {
-                **first,
-                "content": (
-                    content + _FREE_TIER_CAPABILITY_NOTE if isinstance(content, str) else content
-                ),
-            }
-        return result
 
     @staticmethod
     def _inject_task_plan_note(messages: list[dict[str, Any]]) -> list[dict[str, Any]]:

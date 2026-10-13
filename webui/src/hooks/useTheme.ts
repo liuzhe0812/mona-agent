@@ -32,7 +32,7 @@ function applyTheme(theme: Theme): void {
 /** 同步主窗口背景色到当前主题，避免拖动调整大小时露出对比色残影。 */
 function syncWindowBackground(theme: Theme): void {
   if (!isTauri()) return;
-  // Match the neutral Cindy-inspired shell surfaces in index.html.
+  // Keep the neutral shell surfaces consistent with index.html.
   const color = theme === "dark" ? [24, 24, 24, 255] : [242, 242, 237, 255];
   void setWindowBackgroundColor(color[0], color[1], color[2], color[3]).catch(
     () => {

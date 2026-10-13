@@ -24,6 +24,7 @@ export interface VideoSeriesSelectorProps {
   loading?: boolean;
   disabled?: boolean;
   className?: string;
+  labelMode?: "series" | "style";
 }
 
 /** Compact series picker for the existing video configuration surface. */
@@ -38,18 +39,20 @@ export function VideoSeriesSelector({
   loading = false,
   disabled = false,
   className,
+  labelMode = "series",
 }: VideoSeriesSelectorProps) {
+  const isStyle = labelMode === "style";
   return (
     <div className={cn("space-y-2", className)}>
       {loading ? (
         <div className="flex items-center justify-center gap-2 rounded-lg border border-border/70 px-3 py-5 text-caption text-muted-foreground">
           <Loader2 className="h-3.5 w-3.5 animate-spin" />
-          加载系列…
+          {isStyle ? "加载我的风格…" : "加载系列…"}
         </div>
       ) : series.length === 0 ? (
         <div className="rounded-lg border border-dashed border-border px-3 py-4 text-center text-caption text-muted-foreground">
           <Palette className="mx-auto mb-1.5 h-4 w-4 opacity-60" />
-          还没有视频系列
+          {isStyle ? "还没有保存的风格" : "还没有视频系列"}
         </div>
       ) : (
         <div className="max-h-52 space-y-1.5 overflow-y-auto pr-0.5">
@@ -88,15 +91,25 @@ export function VideoSeriesSelector({
                     <span className="min-w-0 flex-1">
                       <span className="block truncate text-caption font-medium">
                         {item.name}
-                        {archived ? "（已归档）" : ""}
+                        {archived ? (isStyle ? "（已停用）" : "（已归档）") : ""}
                       </span>
                       <span className="mt-0.5 flex items-center gap-1.5 text-micro text-muted-foreground">
-                        <span>{item.episodeCount ?? 0} 期</span>
+                        <span>
+                          {isStyle
+                            ? item.episodeCount
+                              ? `已用于 ${item.episodeCount} 个视频`
+                              : "尚未用于视频"
+                            : `${item.episodeCount ?? 0} 期`}
+                        </span>
                         <span>·</span>
                         <span>
                           {item.latestStyleVersion
-                            ? `风格 v${item.latestStyleVersion}`
-                            : "待设置风格"}
+                            ? isStyle
+                              ? "可用于新视频"
+                              : `风格 v${item.latestStyleVersion}`
+                            : isStyle
+                              ? "尚未保存"
+                              : "待设置风格"}
                         </span>
                       </span>
                     </span>
@@ -110,7 +123,7 @@ export function VideoSeriesSelector({
                       variant="ghost"
                       size="icon"
                       disabled={disabled}
-                      aria-label={`重命名系列 ${item.name}`}
+                      aria-label={`${isStyle ? "重命名风格" : "重命名系列"} ${item.name}`}
                       onClick={() => onRename(item)}
                       className="h-auto w-8 shrink-0 text-muted-foreground"
                     >
@@ -123,7 +136,7 @@ export function VideoSeriesSelector({
                       variant="ghost"
                       size="icon"
                       disabled={disabled}
-                      aria-label={`${archived ? "恢复" : "归档"}系列 ${item.name}`}
+                      aria-label={`${archived ? (isStyle ? "启用" : "恢复") : (isStyle ? "停用" : "归档")}${isStyle ? "风格" : "系列"} ${item.name}`}
                       onClick={() => onArchive(item, !archived)}
                       className="h-auto w-8 shrink-0 text-muted-foreground"
                     >
@@ -140,8 +153,8 @@ export function VideoSeriesSelector({
                       variant="ghost"
                       size="icon"
                       disabled={disabled}
-                      aria-label={`删除系列 ${item.name}`}
-                      title={`删除系列 ${item.name}`}
+                      aria-label={`删除${isStyle ? "风格" : "系列"} ${item.name}`}
+                      title={`删除${isStyle ? "风格" : "系列"} ${item.name}`}
                       onClick={() => onDelete(item)}
                       className="h-auto w-8 shrink-0 text-muted-foreground hover:bg-destructive/10 hover:text-destructive"
                     >
@@ -164,7 +177,7 @@ export function VideoSeriesSelector({
           onClick={onCreate}
         >
           <FolderPlus className="mr-1.5 h-3.5 w-3.5" />
-          创建新系列
+          {isStyle ? "新建风格" : "创建新系列"}
         </Button>
       ) : null}
     </div>

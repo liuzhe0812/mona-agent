@@ -178,7 +178,7 @@ export function MdFileView({ filePath }: MdFileViewProps) {
       {aiPanelOpen && (
         <div
           onMouseDown={handleDragStart}
-          className="w-[1px] shrink-0 cursor-col-resize bg-border"
+          className="mona-resize-handle relative w-[1px] shrink-0 cursor-col-resize"
         />
       )}
       {aiPanelOpen && (

@@ -11,6 +11,7 @@ import {
   MoreHorizontal,
   NotebookPen,
   ScanFace,
+  Settings,
   SquareTerminal,
   TrendingUp,
   User,
@@ -372,6 +373,22 @@ export function AppRail(props: AppRailProps) {
                 </Button>
               </TooltipTrigger>
               <TooltipContent side="right">{t("rail.login")}</TooltipContent>
+            </Tooltip>
+          )}
+          {!loggedIn && (
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <Button
+                  variant="ghost"
+                  size="icon"
+                  aria-label={t("settings.sidebar.title")}
+                  onClick={() => props.onOpenSettings("general")}
+                  className="h-9 w-9 rounded-full text-sidebar-foreground/85 hover:bg-[hsl(var(--sidebar-hover-surface)/0.04)]"
+                >
+                  <Settings className="h-4 w-4" />
+                </Button>
+              </TooltipTrigger>
+              <TooltipContent side="right">{t("settings.sidebar.title")}</TooltipContent>
             </Tooltip>
           )}
         </div>

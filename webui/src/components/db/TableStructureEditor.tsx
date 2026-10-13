@@ -238,7 +238,7 @@ function EmptySection({ label, onAdd, disabled, message }: { label: string; onAd
 }
 
 function EditableHeader({ children, className, onResizeStart }: { children: ReactNode; className?: string; onResizeStart?: (event: React.MouseEvent<HTMLSpanElement>) => void }) {
-  return <th className={cn("relative h-8 border-b border-r border-border/40 px-2 text-left font-medium text-muted-foreground", className)}>{children}{onResizeStart && <span aria-hidden="true" data-testid={`structure-resize-${children}`} className="absolute right-0 top-0 z-10 h-full w-2 cursor-col-resize touch-none" onMouseDown={onResizeStart} />}</th>;
+  return <th className={cn("relative h-8 border-b border-r border-border/40 px-2 text-left font-medium text-muted-foreground", className)}>{children}{onResizeStart && <span aria-hidden="true" data-testid={`structure-resize-${children}`} className="mona-resize-handle absolute right-0 top-0 z-10 h-full w-2 cursor-col-resize touch-none" onMouseDown={onResizeStart} />}</th>;
 }
 
 function MoveHandleIcon() {

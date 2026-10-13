@@ -96,17 +96,26 @@ class Client:
     async def connect(self, prompt=None):
         assert self.options.setting_sources == []
         assert set(self.options.hooks).issubset({"PreToolUse"})
-        assert set(self.options.mcp_servers).issubset({"mona_development"})
-        if self.options.mcp_servers:
+        assert set(self.options.mcp_servers).issubset({"mona_development", "mona_work"})
+        if "mona_work" in self.options.mcp_servers:
+            assert self.options.tools == []
+            assert self.options.allowed_tools == ["mcp__mona_work__mona_tool"]
+            assert isinstance(self.options.system_prompt, str)
+        elif self.options.mcp_servers:
             assert self.options.allowed_tools == ["mcp__mona_development__development_collaboration"]
         assert self.options.env == {} and self.options.permission_mode == "default"
         assert "Skill" in self.options.disallowed_tools
         self.owner = asyncio.current_task()
+        system = self.options.system_prompt
+        if isinstance(system, dict):
+            system = system
+        elif hasattr(system, "append"):
+            system = system.append
         trace({"method": "connect", "localOAuth": bool(os.environ.get("CLAUDE_CODE_OAUTH_TOKEN")),
                "apiKeyPresent": bool(os.environ.get("ANTHROPIC_API_KEY")),
                "hostManaged": os.environ.get("CLAUDE_CODE_PROVIDER_MANAGED_BY_HOST") == "1", "nativeId": self.id, "resume": self.options.resume,
                "model": self.options.model, "effort": self.options.effort,
-               "system": self.options.system_prompt if isinstance(self.options.system_prompt, dict) else self.options.system_prompt.append})
+               "system": system})
 
         if prompt is not None:
             async for message in prompt:
@@ -127,7 +136,10 @@ class Client:
             text = "\n\n".join(block["text"] for block in structured if block["type"] == "text")
         trace({"method": "query", "nativeId": self.id, "input": text, "sessionId": session_id,
                **({"content": structured} if structured is not None else {})})
+        text = text.rsplit("[/Mona handoff — current user request follows]", 1)[-1].strip()
         text = text.rsplit("[/Runtime Context]", 1)[-1].strip()
+        if text.startswith("协作目标：hold\n"):
+            text = "hold"
         if text == "require_history":
             history = Path(f"sdk-peer-history-{self.id}")
             if self.options.resume and not history.exists():
@@ -141,6 +153,9 @@ class Client:
                                "mcp_servers": [{"name": name} for name in self.options.mcp_servers]})
         if text in {"delegate_host", "delegate_early"}:
             self.tasks.append(asyncio.create_task(self.delegate_host(skip_wait=text == "delegate_early")))
+            return
+        if text == "work_tool":
+            self.tasks.append(asyncio.create_task(self.call_work_tool()))
             return
         if text == "hold":
             return
@@ -201,6 +216,20 @@ class Client:
             await self.finish("HOST_RESULT_CONSUMED:" + value.get("result", ""))
         except Exception as exc:
             await self.finish("Host callback failed: " + type(exc).__name__, "error")
+
+    async def call_work_tool(self):
+        wrapped = self.options.mcp_servers["mona_work"]["instance"]["mona_tool"]
+        arguments = {"tool": "read_file", "arguments": {"path": "manual.txt"}}
+        name = "mcp__mona_work__mona_tool"
+        permission = await self.options.can_use_tool(name, arguments, None)
+        assert isinstance(permission, Allow)
+        await self.events.put({"type": "assistant", "content": [{"type": "tool_use",
+            "id": "work-tool-call", "name": name, "input": arguments}]})
+        result = await wrapped.handler(arguments)
+        await self.events.put({"type": "user", "content": [{"type": "tool_result",
+            "tool_use_id": "work-tool-call", "content": result["content"],
+            "is_error": result.get("isError", False)}]})
+        await self.finish("WORK_TOOL_RESULT:" + result["content"][0]["text"])
 
     async def request_decision(self, text):
         arguments = {"questions": [{"question": "选择目标环境", "header": "环境", "options": [{"label": "内网"}, {"label": "测试"}]}]} if text == "question" else {"command": "echo harmless"}

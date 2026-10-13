@@ -200,17 +200,40 @@ describe("App layout", () => {
     expect(getSessionPanel()).toBeInTheDocument();
   });
 
-  it("keeps the session list available at 768px and collapses below that width", async () => {
-    let onWidthChange: ((event: MediaQueryListEvent) => void) | undefined;
+  it("opens the session list after the startup window grows to desktop width", async () => {
+    let viewportWidth = 640;
+    const widthListeners = new Set<(event: MediaQueryListEvent) => void>();
+    vi.stubGlobal("matchMedia", vi.fn((query: string) => ({
+      get matches() { return Number(query.match(/min-width:\s*(\d+)px/)?.[1] ?? Infinity) <= viewportWidth; },
+      media: query,
+      onchange: null,
+      addListener: vi.fn(),
+      removeListener: vi.fn(),
+      addEventListener: (_event: string, handler: (event: MediaQueryListEvent) => void) => {
+        if (query === "(min-width: 768px)") widthListeners.add(handler);
+      },
+      removeEventListener: (_event: string, handler: (event: MediaQueryListEvent) => void) => widthListeners.delete(handler),
+      dispatchEvent: vi.fn(),
+    })));
+    render(<App />);
+    await waitFor(() => expect(connectSpy).toHaveBeenCalled());
+
+    act(() => {
+      viewportWidth = 1280;
+      widthListeners.forEach((handler) => handler({ matches: true } as MediaQueryListEvent));
+      fireEvent(window, new Event("resize"));
+    });
+    expect(getSessionPanel()).toBeInTheDocument();
+  });
+
+  it("keeps the session list available at 768px and allows manual toggling", async () => {
     vi.stubGlobal("matchMedia", vi.fn((query: string) => ({
       matches: Number(query.match(/min-width:\s*(\d+)px/)?.[1] ?? Infinity) <= 768,
       media: query,
       onchange: null,
       addListener: vi.fn(),
       removeListener: vi.fn(),
-      addEventListener: (_event: string, handler: (event: MediaQueryListEvent) => void) => {
-        if (query === "(min-width: 768px)") onWidthChange = handler;
-      },
+      addEventListener: vi.fn(),
       removeEventListener: vi.fn(),
       dispatchEvent: vi.fn(),
     })));
@@ -226,11 +249,6 @@ describe("App layout", () => {
     await waitFor(() => expect(getSessionPanel()).toBeInTheDocument());
     expect(getSessionPanel()).toHaveClass("md:flex");
 
-    expect(onWidthChange).toBeTypeOf("function");
-    act(() => onWidthChange!({ matches: false } as MediaQueryListEvent));
-    await waitFor(() => {
-      expect(screen.queryByRole("region", { name: "Sessions" })).not.toBeInTheDocument();
-    });
   });
 
   it("lets a maximized right workspace cover the session list", async () => {

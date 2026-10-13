@@ -2,7 +2,6 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Loader2 } from "lucide-react";
 
 import { useClient } from "@/providers/ClientProvider";
-import { useLicense } from "@/hooks/useLicense";
 import { Button } from "@/components/ui/button";
 import { StatusNotice } from "@/components/ui/status-notice";
 import { fetchSettings, updateStockSettings } from "@/lib/api";
@@ -198,10 +197,8 @@ export function StockView({
   onConsumeFocusRun,
   autoRunSymbol,
   onConsumeAutoRun,
-  onOpenSubscribe,
 }: StockViewProps) {
   const { client, token } = useClient();
-  const { licenseActive } = useLicense();
   const [items, setItems] = useState<StockDashboardItem[]>([]);
   const [quotes, setQuotes] = useState<Record<string, StockQuote>>({});
   const [watchSignals, setWatchSignals] = useState<
@@ -357,7 +354,7 @@ export function StockView({
 
   const refreshDiagnoses = useCallback(async (instrumentId: string | null) => {
     const requestId = ++diagnosisRequestId.current;
-    if (!instrumentId || !licenseActive) {
+    if (!instrumentId) {
       setDiagnosisReports([]);
       setDiagnosisReport(null);
       setDiagnosisOutcome(null);
@@ -395,13 +392,9 @@ export function StockView({
       setDiagnosisReport(null);
       setDiagnosisOutcome(null);
     }
-  }, [licenseActive]);
+  }, []);
 
   const handleOpenDiagnosis = useCallback(async (diagnosisId: string) => {
-    if (!licenseActive) {
-      onOpenSubscribe?.();
-      return;
-    }
     try {
       const detail = await fetchStockDiagnosis(diagnosisId);
       const outcome = await fetchStockDiagnosisOutcome(diagnosisId).catch(() => null);
@@ -412,13 +405,9 @@ export function StockView({
     } catch {
       if (mounted.current) setActionError("AI诊股历史详情打开失败，请稍后重试");
     }
-  }, [licenseActive, onOpenSubscribe]);
+  }, []);
 
   const handleDeleteDiagnosis = useCallback(async (diagnosisId: string) => {
-    if (!licenseActive) {
-      onOpenSubscribe?.();
-      return;
-    }
     try {
       await deleteStockDiagnosis(diagnosisId);
       if (!mounted.current) return;
@@ -428,7 +417,7 @@ export function StockView({
     } catch {
       if (mounted.current) setActionError("AI诊股历史删除失败，请稍后重试");
     }
-  }, [licenseActive, onOpenSubscribe, refreshDiagnoses, selectedId]);
+  }, [refreshDiagnoses, selectedId]);
 
   useEffect(() => {
     void refreshDiagnoses(selectedId);
@@ -798,10 +787,6 @@ export function StockView({
   }, [selectedId, requestPreflight]);
 
   const handleStartDiagnosis = useCallback(async () => {
-    if (!licenseActive) {
-      onOpenSubscribe?.();
-      return;
-    }
     if (!selectedId || diagnosisStarting) return;
     const previousRunId = diagnosisRun?.id ?? null;
     setActionError(null);
@@ -824,7 +809,7 @@ export function StockView({
     } finally {
       if (mounted.current) setDiagnosisStarting(false);
     }
-  }, [client, diagnosisRun?.id, diagnosisStarting, items, licenseActive, onOpenSubscribe, selectedId]);
+  }, [client, diagnosisRun?.id, diagnosisStarting, items, selectedId]);
 
   const handleCancelDiagnosis = useCallback(async () => {
     const activeRun = diagnosisRun;
@@ -1187,8 +1172,7 @@ export function StockView({
                     onCancelDiagnosis={() => void handleCancelDiagnosis()}
                     onOpenDiagnosis={(id) => void handleOpenDiagnosis(id)}
                     onDeleteDiagnosis={(id) => void handleDeleteDiagnosis(id)}
-                    diagnosisLocked={!licenseActive}
-                    onRequestDiagnosisAccess={onOpenSubscribe}
+                    diagnosisLocked={false}
                     reports={selectedReports}
                     reportDetail={contextReport}
                     decisionEvaluation={decisionEvaluation}

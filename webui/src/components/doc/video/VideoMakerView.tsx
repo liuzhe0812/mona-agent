@@ -1,18 +1,14 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import {
-  Check,
+  ChevronDown,
   Clapperboard,
   FilePlus2,
-  ImagePlus,
-  ListChecks,
   Loader2,
   Music2,
   PanelLeft,
   PanelLeftClose,
-  Play,
   Plus,
   Trash2,
-  Volume2,
 } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
@@ -35,27 +31,26 @@ import {
 } from "@/components/ui/tooltip";
 import { useClient } from "@/providers/ClientProvider";
 import {
+  ApiError,
+  confirmVideoProjectPlan,
   createVideoProject,
   deleteVideoSeries,
-  buildVideoBackgroundAssetPreviewUrl,
   fetchVideoProject,
   fetchVideoProjects,
   fetchVideoSeries,
-  getServicesHttpBase,
-  planVideoProject,
   saveVideoChatId,
-  uploadVideoBackgroundAsset,
   updateVideoSeries,
-  type BackgroundAsset,
+  updateVideoProjectSettings,
   type VideoAssetRightsStatus,
+  type VideoAspectVariant,
   type VideoProject,
   type VideoProjectPhase,
-  type VideoProjectPlan,
+  type VideoProjectCreateOptions,
   type VideoSeries,
   type VideoStyleDraft,
   type VideoStyleVersion,
+  type VideoTtsConfig,
 } from "@/lib/api";
-import { EDGE_TTS_VOICES } from "@/lib/constants";
 import { generateProjectName } from "@/lib/project-name";
 import { useBreakpoint } from "@/hooks/useBreakpoint";
 import { cn } from "@/lib/utils";
@@ -68,12 +63,30 @@ import { CreateVideoSeriesView } from "./style/CreateVideoSeriesView";
 import { SeriesStyleEditor } from "./style/SeriesStyleEditor";
 import { AssetRightsDialog } from "./style/AssetRightsDialog";
 import { VideoSeriesSelector } from "./style/VideoSeriesSelector";
+import { VideoNarrationSettingsDialog } from "./VideoNarrationSettingsDialog";
+import { VoicePreviewButton } from "./VoicePreviewButton";
+import {
+  EDGE_TTS_VOICES,
+  TTS_PROVIDERS,
+  TTS_RATE_OPTIONS,
+  type TtsProvider,
+} from "./video-tts-options";
+
+export { EDGE_TTS_VOICES, TTS_PROVIDERS, TTS_RATE_OPTIONS } from "./video-tts-options";
+export type { TtsProvider } from "./video-tts-options";
 
 type VideoPhase = "config" | VideoProjectPhase;
-type VideoRatio = "16:9" | "9:16" | "1:1";
-type TtsProvider = "edge" | "custom";
-type VideoCreationMode = "single" | "series";
+type VideoRatio = VideoAspectVariant;
 type ConfigSubview = "video" | "create-series" | "style-editor";
+
+interface PendingVideoGeneration {
+  name: string;
+  prompt: string;
+  displayText: string;
+  chatId: string | null;
+  chatIdSaved: boolean;
+  creation?: { resolution: string; options: VideoProjectCreateOptions };
+}
 
 export interface EmbeddedVideoProject {
   name: string;
@@ -88,33 +101,37 @@ interface VideoMakerViewProps {
   initialProject?: EmbeddedVideoProject | null;
   onProjectChange?: (project: EmbeddedVideoProject | null) => void;
   onSendVideoTurn?: (content: string, displayContent?: string) => void;
+  onOpenChat?: () => void;
 }
 
-const RATIOS: Array<{ value: VideoRatio; label: string; resolution: string }> =
+const RATIOS: Array<{ value: VideoRatio; label: string }> =
   [
-    { value: "16:9", label: "横屏", resolution: "1920×1080" },
-    { value: "9:16", label: "竖屏", resolution: "1080×1920" },
-    { value: "1:1", label: "方形", resolution: "1080×1080" },
+    { value: "16:9", label: "横屏" },
+    { value: "9:16", label: "竖屏" },
+    { value: "1:1", label: "方形" },
   ];
 
-const TTS_PROVIDERS: Array<{
-  value: TtsProvider;
-  label: string;
-  hint: string;
-}> = [
-  { value: "edge", label: "内置配音", hint: "无需额外配置" },
-  { value: "custom", label: "我的语音服务", hint: "使用设置中的默认音色" },
-];
-
-/** 语速选项（百分比），默认 0 表示正常语速。 */
-const TTS_RATE_OPTIONS = [
-  { value: "+0%", label: "正常" },
-  { value: "+10%", label: "稍快 (+10%)" },
-  { value: "+20%", label: "较快 (+20%)" },
-  { value: "+30%", label: "很快 (+30%)" },
-  { value: "-10%", label: "稍慢 (-10%)" },
-  { value: "-20%", label: "较慢 (-20%)" },
-  { value: "-30%", label: "很慢 (-30%)" },
+const SINGLE_VIDEO_TEMPLATES = [
+  {
+    id: "minimal-business",
+    name: "简洁浅色",
+    description: "浅色背景与清晰文字",
+  },
+  {
+    id: "tech-dark",
+    name: "专业深色",
+    description: "深色背景与醒目标题",
+  },
+  {
+    id: "editorial-magazine",
+    name: "编辑排版",
+    description: "对比鲜明的文字层级",
+  },
+  {
+    id: "knowledge-cards",
+    name: "清晰教学",
+    description: "清晰分组的信息样式",
+  },
 ] as const;
 
 const RATIO_RESOLUTION_MAP: Record<VideoRatio, string> = {
@@ -132,34 +149,14 @@ const DEFAULT_SIDEBAR_WIDTH = 260;
 const MIN_SIDEBAR_WIDTH = 200;
 const MAX_SIDEBAR_WIDTH = 360;
 
-const STEPS: ReadonlyArray<{ label: string; phases: VideoPhase[] }> = [
-  { label: "配置主题", phases: ["config"] },
-  { label: "编辑分镜", phases: ["storyboard"] },
-  { label: "制作场景", phases: ["producing"] },
-  { label: "导出交付", phases: ["exportable", "rendering", "done"] },
-];
-
 function videoGenerationError(detail?: string): string {
   if (detail === "membership_required") {
     return "视频助手需要有效的 Mona Pro 订阅或试用。";
   }
   if (detail === "invalid_agent_kind_context") {
-    return "视频助手会话未就绪，请重新发送分镜任务。";
+    return "视频会话未就绪，请重试准备分镜。";
   }
-  return "分镜生成未能启动，请重新发送分镜任务。";
-}
-
-function getStepStatus(
-  stepIndex: number,
-  currentPhase: VideoPhase,
-): "completed" | "current" | "pending" {
-  const currentStepIndex = STEPS.findIndex((s) =>
-    s.phases.includes(currentPhase),
-  );
-  if (currentStepIndex === -1) return "pending";
-  if (stepIndex < currentStepIndex) return "completed";
-  if (stepIndex === currentStepIndex) return "current";
-  return "pending";
+  return "视频任务未能启动，请重试。";
 }
 
 export function VideoMakerView({
@@ -169,15 +166,19 @@ export function VideoMakerView({
   initialProject = null,
   onProjectChange,
   onSendVideoTurn,
+  onOpenChat,
 }: VideoMakerViewProps = {}) {
   const { client, token } = useClient();
   const bp = useBreakpoint();
   const [topic, setTopic] = useState("");
   const [sourcePaths, setSourcePaths] = useState<string[]>([]);
-  const [plan, setPlan] = useState<VideoProjectPlan | null>(null);
-  const [planning, setPlanning] = useState(false);
+  const [starting, setStarting] = useState(false);
+  const [moreSettingsOpen, setMoreSettingsOpen] = useState(false);
+  const [draftProjectName, setDraftProjectName] = useState("");
   const [ratio, setRatio] = useState<VideoRatio>("16:9");
-  const [creationMode, setCreationMode] = useState<VideoCreationMode>("single");
+  const [templateId, setTemplateId] = useState<string>("tech-dark");
+  const [singleStyleSource, setSingleStyleSource] = useState<"template" | "series">("template");
+  const [styleSeriesId, setStyleSeriesId] = useState<string | null>(null);
   const [configSubview, setConfigSubview] = useState<ConfigSubview>("video");
   const [series, setSeries] = useState<VideoSeries[]>([]);
   const [seriesLoading, setSeriesLoading] = useState(true);
@@ -198,18 +199,7 @@ export function VideoMakerView({
   const [seriesRenameValue, setSeriesRenameValue] = useState("");
   const [seriesUpdating, setSeriesUpdating] = useState(false);
   const [styleDraft, setStyleDraft] = useState<VideoStyleDraft | null>(null);
-  const [customEpisodeBackground, setCustomEpisodeBackground] = useState(false);
-  const [episodeBackground, setEpisodeBackground] =
-    useState<BackgroundAsset | null>(null);
-  const [episodeBackgroundPreview, setEpisodeBackgroundPreview] = useState<
-    string | null
-  >(null);
-  const [backgroundUploading, setBackgroundUploading] = useState(false);
-  const [pendingEpisodeBackgroundPath, setPendingEpisodeBackgroundPath] =
-    useState<string | null>(null);
-  const [episodeBackgroundRights, setEpisodeBackgroundRights] =
-    useState<VideoAssetRightsStatus>("unknown");
-  const [narrationEnabled, setNarrationEnabled] = useState(false);
+  const [narrationEnabled, setNarrationEnabled] = useState(true);
   const [ttsProvider, setTtsProvider] = useState<TtsProvider>("edge");
   const [ttsVoice, setTtsVoice] = useState("");
   const [ttsRate, setTtsRate] = useState("");
@@ -224,11 +214,8 @@ export function VideoMakerView({
   const [musicRights, setMusicRights] =
     useState<VideoAssetRightsStatus>("unknown");
   const [phase, setPhase] = useState<VideoPhase>(initialProject?.phase ?? "config");
-  // 视图模式与服务端 phase 解耦：phase 驱动步骤条高亮，viewMode 驱动视图。
-  // 步骤条点击回退只改 viewMode，不回退服务端阶段。
-  const [viewMode, setViewMode] = useState<"storyboard" | "producing">(
-    "storyboard",
-  );
+  const [workspaceView, setWorkspaceView] = useState<"director" | "preview">(initialProject?.phase && initialProject.phase !== "storyboard" ? "preview" : "director");
+  const [contentOpen, setContentOpen] = useState(false);
   const [chatId, setChatId] = useState<string | null>(initialProject?.chatId ?? hostChatId);
   const [projectName, setProjectName] = useState<string | null>(initialProject?.name ?? null);
   const [createError, setCreateError] = useState<string | null>(null);
@@ -245,7 +232,33 @@ export function VideoMakerView({
     () => (chatId ? client.getRunStartedAt(chatId) !== null : false),
   );
   const [generationError, setGenerationError] = useState<string | null>(null);
+  const [agentActivity, setAgentActivity] = useState<string | null>(null);
+  const [agentStartedAt, setAgentStartedAt] = useState<number | null>(null);
   const onProjectChangeRef = useRef(onProjectChange);
+  const pendingGenerationRef = useRef<PendingVideoGeneration | null>(null);
+  const storyboardFlushRef = useRef<(() => Promise<boolean>) | null>(null);
+  const [leavingStoryboard, setLeavingStoryboard] = useState(false);
+  const [planDetails, setPlanDetails] = useState({ planRevision: null as number | null, sceneCount: 0, duration: 0 });
+  const planDetailsRef = useRef(planDetails);
+  const [approvedRevision, setApprovedRevision] = useState<number | null>(null);
+  const [currentPlanRevision, setCurrentPlanRevision] = useState<number | null>(null);
+  const [requiresApproval, setRequiresApproval] = useState(true);
+  const [confirming, setConfirming] = useState(false);
+  const [confirmationError, setConfirmationError] = useState<string | null>(null);
+  const [projectSettings, setProjectSettings] = useState<VideoTtsConfig>({ narrationEnabled: true });
+  const [narrationSettingsOpen, setNarrationSettingsOpen] = useState(false);
+  const [narrationSettingsSaving, setNarrationSettingsSaving] = useState(false);
+  const [narrationSettingsError, setNarrationSettingsError] = useState<string | null>(null);
+  const loadedProjectRef = useRef<string | null>(null);
+  const activeProjectRef = useRef(projectName);
+  activeProjectRef.current = projectName;
+  const [elapsed, setElapsed] = useState(0);
+  const reusableStyleSeries = series.filter(
+    (item) => !item.archivedAt && Boolean(item.latestStyleVersion),
+  );
+  const selectedStyleSeries = reusableStyleSeries.find(
+    (item) => item.id === styleSeriesId,
+  ) ?? null;
 
   const handleTurnState = useCallback((streaming: boolean) => {
     if (wasStreamingRef.current && !streaming) {
@@ -264,9 +277,19 @@ export function VideoMakerView({
     if (initialProject) {
       setProjectName(initialProject.name);
       setPhase(initialProject.phase);
-      setViewMode(initialProject.phase === "storyboard" ? "storyboard" : "producing");
     }
   }, [embedded, hostChatId, initialProject?.chatId, initialProject?.name, initialProject?.phase]);
+
+  useEffect(() => {
+    if (!agentStartedAt || !(isChatRunning || hostIsStreaming)) {
+      setElapsed(0);
+      return;
+    }
+    const tick = () => setElapsed(Math.max(0, Math.floor(Date.now() / 1000 - agentStartedAt)));
+    tick();
+    const timer = setInterval(tick, 1000);
+    return () => clearInterval(timer);
+  }, [agentStartedAt, isChatRunning, hostIsStreaming]);
 
   useEffect(() => {
     if (!embedded) return;
@@ -279,10 +302,13 @@ export function VideoMakerView({
       return;
     }
     setIsChatRunning(client.getRunStartedAt(chatId) !== null);
+    setAgentStartedAt(client.getRunStartedAt(chatId));
     return client.onRunStatus((id, startedAt) => {
       if (id !== chatId) return;
       const running = startedAt !== null;
       setIsChatRunning(running);
+      setAgentStartedAt(startedAt);
+      if (!running) setAgentActivity(null);
       if (running) setGenerationError(null);
       handleTurnState(running);
     });
@@ -294,8 +320,53 @@ export function VideoMakerView({
       if (event.event === "error") {
         setGenerationError(videoGenerationError(event.detail));
       }
+      if (event.event === "turn_end") {
+        setIsChatRunning(false);
+        setAgentActivity(null);
+        handleTurnState(false);
+      }
+      if (event.event === "file_edit") {
+        const path = event.edits?.at(-1)?.path ?? "";
+        const match = path.match(/drafts[/\\]scene_(\d+)\.(?:html|tsx)$/);
+        if (match) setAgentActivity(`正在准备第 ${Number(match[1])} 段画面草稿`);
+      }
+      if (event.event === "message") {
+        const operation = [...(event.tool_events ?? [])].reverse().find((tool) => tool.name === "video");
+        const parameters = operation?.arguments as Record<string, unknown> | undefined;
+        const action = parameters?.action;
+        const index = parameters?.scene_index;
+        if (action === "plan") setAgentActivity("正在整理旁白与动画方案");
+        if (action === "preview" && typeof index === "number") setAgentActivity(`正在检查第 ${index} 段画面和声音`);
+        if (action === "sync" && typeof index === "number") setAgentActivity(`正在处理第 ${index} 段画面`);
+        if (action === "export") setAgentActivity("正在导出视频");
+      }
     });
-  }, [chatId, client]);
+  }, [chatId, client, handleTurnState]);
+
+  const refreshProject = useCallback(async () => {
+    if (!projectName) return;
+    const project = await fetchVideoProject(token, projectName);
+    if (activeProjectRef.current !== projectName) return;
+    setProjectSettings(project.meta ?? {});
+    const needsApproval = project.meta?.requirePlanApproval ?? project.requirePlanApproval ?? false;
+    const approved = project.meta?.approvedPlanRevision ?? project.approvedPlanRevision ?? null;
+    const revision = project.meta?.planRevision ?? project.planRevision;
+    setCurrentPlanRevision(revision ?? null);
+    setRequiresApproval(needsApproval);
+    setApprovedRevision(approved);
+    if (project.phase) setPhase(project.phase);
+    if (loadedProjectRef.current !== projectName) {
+      loadedProjectRef.current = projectName;
+      setWorkspaceView(needsApproval && approved !== revision || project.phase === "storyboard" ? "director" : "preview");
+    } else if (needsApproval && approved !== revision) {
+      setWorkspaceView("director");
+    }
+  }, [projectName, token]);
+
+  useEffect(() => {
+    if (!projectName) return;
+    void refreshProject().catch(() => setGenerationError("视频信息暂时无法读取，请重试。"));
+  }, [refreshProject, aiTurnComplete]);
 
   useEffect(() => {
     if (!embedded) return;
@@ -326,14 +397,25 @@ export function VideoMakerView({
     void refreshSeries();
   }, [refreshSeries]);
 
-  const handleSelectSeries = useCallback((value: VideoSeries) => {
-    setSelectedSeries(value);
-    setCustomEpisodeBackground(false);
-    setEpisodeBackground(null);
-    setEpisodeBackgroundPreview(null);
-    const aspect = value.defaultAspectRatio;
-    if (aspect === "16:9" || aspect === "9:16" || aspect === "1:1") {
-      setRatio(aspect);
+  const handleSelectStyleSeries = useCallback((value: VideoSeries) => {
+    setStyleSeriesId(value.id);
+    const enabled = value.styleSummary?.enabledAspectRatios?.filter(
+      (aspect): aspect is VideoRatio =>
+        aspect === "16:9" || aspect === "9:16" || aspect === "1:1",
+    );
+    const defaultAspect = value.defaultAspectRatio;
+    if (enabled?.length) {
+      setRatio(
+        defaultAspect && enabled.includes(defaultAspect)
+          ? defaultAspect
+          : enabled[0],
+      );
+    } else if (
+      defaultAspect === "16:9" ||
+      defaultAspect === "9:16" ||
+      defaultAspect === "1:1"
+    ) {
+      setRatio(defaultAspect);
     }
   }, []);
 
@@ -361,7 +443,7 @@ export function VideoMakerView({
       const message = error instanceof Error ? error.message : String(error);
       setSeriesDeleteError(
         message === "SERIES_DELETE_UNSAFE"
-          ? "部分视频缺少风格快照，暂不能安全删除该系列"
+          ? "部分视频的风格尚未保存完整，暂时无法删除。"
           : `删除失败：${message}`,
       );
     } finally {
@@ -376,7 +458,7 @@ export function VideoMakerView({
       setSeriesError(null);
       try {
         const result = await updateVideoSeries(token, value.id, { archived });
-        if (!result.ok) throw new Error(result.error || "系列归档操作失败");
+        if (!result.ok) throw new Error(result.error || "风格归档失败");
         if (archived) {
           setSelectedSeries((current) =>
             current?.id === value.id ? null : current,
@@ -405,7 +487,7 @@ export function VideoMakerView({
         name: seriesRenameValue.trim(),
       });
       if (!result.ok || !result.series) {
-        throw new Error(result.error || "系列重命名失败");
+        throw new Error(result.error || "风格重命名失败");
       }
       const updatedSeries = result.series;
       setSelectedSeries((current) =>
@@ -424,76 +506,6 @@ export function VideoMakerView({
     }
   }, [refreshSeries, seriesRenameValue, seriesToRename, seriesUpdating, token]);
 
-  const handleEpisodeBackgroundUpload = useCallback(async () => {
-    if (!selectedSeries || !isTauri()) return;
-    setCreateError(null);
-    try {
-      const { open } = await import("@tauri-apps/plugin-dialog");
-      const selected = await open({
-        multiple: false,
-        filters: [
-          { name: "背景图片", extensions: ["png", "jpg", "jpeg", "webp"] },
-        ],
-      });
-      const filePath = Array.isArray(selected) ? selected[0] : selected;
-      if (!filePath || typeof filePath !== "string") return;
-      setPendingEpisodeBackgroundPath(filePath);
-      setEpisodeBackgroundRights("unknown");
-    } catch (error) {
-      setCreateError(error instanceof Error ? error.message : String(error));
-    }
-  }, [selectedSeries]);
-
-  const handleConfirmEpisodeBackground = useCallback(async () => {
-    if (!selectedSeries || !pendingEpisodeBackgroundPath || backgroundUploading)
-      return;
-    setBackgroundUploading(true);
-    setCreateError(null);
-    try {
-      const sourceType =
-        episodeBackgroundRights === "ai-generated"
-          ? "ai-generated"
-          : episodeBackgroundRights === "licensed"
-            ? "licensed-library"
-            : "user-upload";
-      const result = await uploadVideoBackgroundAsset(
-        token,
-        selectedSeries.id,
-        pendingEpisodeBackgroundPath,
-        {
-          sourceType,
-          rightsStatus: episodeBackgroundRights,
-          licenseName:
-            episodeBackgroundRights === "licensed" ? "已获商业授权" : undefined,
-        },
-      );
-      if (!result.ok || !result.asset)
-        throw new Error(result.error || "背景上传失败");
-      setEpisodeBackground(result.asset);
-      const base = await getServicesHttpBase();
-      setEpisodeBackgroundPreview(
-        result.asset.previewUrl ??
-          buildVideoBackgroundAssetPreviewUrl(
-            base,
-            token,
-            selectedSeries.id,
-            result.asset.id,
-          ),
-      );
-      setPendingEpisodeBackgroundPath(null);
-    } catch (error) {
-      setCreateError(error instanceof Error ? error.message : String(error));
-    } finally {
-      setBackgroundUploading(false);
-    }
-  }, [
-    backgroundUploading,
-    episodeBackgroundRights,
-    pendingEpisodeBackgroundPath,
-    selectedSeries,
-    token,
-  ]);
-
   const handleSeriesCreated = useCallback(
     (value: VideoSeries, draft: VideoStyleDraft) => {
       setSeries((current) => [
@@ -502,7 +514,8 @@ export function VideoMakerView({
       ]);
       setSelectedSeries(value);
       setStyleDraft(draft);
-      setCreationMode("series");
+      setSingleStyleSource("series");
+      setStyleSeriesId(value.id);
       setConfigSubview("style-editor");
       const aspect = value.defaultAspectRatio;
       if (aspect === "16:9" || aspect === "9:16" || aspect === "1:1") {
@@ -590,7 +603,6 @@ export function VideoMakerView({
       setSourcePaths((current) =>
         Array.from(new Set([...current, ...paths])).slice(0, 10),
       );
-      setPlan(null);
     } catch (error) {
       setCreateError(error instanceof Error ? error.message : String(error));
     }
@@ -618,65 +630,67 @@ export function VideoMakerView({
     }
   }, []);
 
-  const handleBuildPlan = useCallback(async () => {
-    if (planning || (!topic.trim() && sourcePaths.length === 0)) return;
-    setPlanning(true);
-    setCreateError(null);
-    try {
-      const result = await planVideoProject(token, {
-        topic: topic.trim(),
-        sourcePaths,
-      });
-      if (!result.ok || !result.plan) {
-        throw new Error(result.error || "制作方案生成失败");
+  const resumePendingGeneration = useCallback(async () => {
+    const pending = pendingGenerationRef.current;
+    if (!pending) return;
+    setGenerationError(null);
+    if (pending.creation) {
+      try {
+        const existing = await fetchVideoProject(token, pending.name);
+        if (existing.name !== pending.name) throw new Error("创建结果尚未确定");
+      } catch (creationCheckError) {
+        if (!(creationCheckError instanceof ApiError) || creationCheckError.status !== 404) {
+          throw new Error("视频创建情况暂时无法确认，请稍后重试。");
+        }
+        const created = await createVideoProject(token, pending.name, pending.creation.resolution, pending.creation.options);
+        if (!created.ok) throw new Error("视频未能创建，请重试。");
       }
-      setPlan(result.plan);
-    } catch (error) {
-      setCreateError(error instanceof Error ? error.message : String(error));
-    } finally {
-      setPlanning(false);
+      delete pending.creation;
     }
-  }, [planning, sourcePaths, token, topic]);
-
-  const removePlanItem = useCallback((id: string) => {
-    setPlan((current) => {
-      if (!current || current.outline.length <= 1) return current;
-      const outline = current.outline.filter((item) => item.id !== id);
-      return {
-        ...current,
-        outline,
-        estimatedSceneCount: outline.length,
-        estimatedDurationSeconds: outline.reduce(
-          (total, item) => total + item.estimatedSeconds,
-          0,
-        ),
-      };
-    });
-  }, []);
+    const newChatId =
+      pending.chatId ??
+      (embedded ? hostChatId : await client.newChat(5_000, false, null, "video"));
+    if (!newChatId) throw new Error("当前视频会话尚未就绪");
+    pending.chatId = newChatId;
+    setChatId(newChatId);
+    if (!pending.chatIdSaved) {
+      const saved = await saveVideoChatId(token, pending.name, newChatId);
+      if (!saved?.ok) throw new Error("视频项目已创建，但会话信息尚未保存。请重试。");
+      pending.chatIdSaved = true;
+    }
+    if (embedded && onSendVideoTurn) {
+      onSendVideoTurn(pending.prompt, pending.displayText);
+    } else {
+      client.sendMessage(newChatId, pending.prompt, undefined, {
+        agentKind: "video",
+        displayContent: pending.displayText,
+      });
+    }
+    pendingGenerationRef.current = null;
+    setPhase("storyboard");
+    setWorkspaceView("director");
+    setHistoryKey((current) => current + 1);
+  }, [client, embedded, hostChatId, onSendVideoTurn, token]);
 
   const handleStartGeneration = useCallback(async () => {
     if (generatingRef.current) return;
     setCreateError(null);
     generatingRef.current = true;
+    setStarting(true);
     try {
-      if (!plan || !plan.outline.length) {
-        throw new Error("请先生成并确认制作方案");
+      const pending = pendingGenerationRef.current;
+      if (pending) {
+        setProjectName(pending.name);
+        setPhase("storyboard");
+        await resumePendingGeneration();
+        return;
       }
+      if (!topic.trim() && sourcePaths.length === 0) return;
       if (musicPreset !== "none" && !musicFilePath) {
         throw new Error("请选择背景音乐文件并确认使用权");
       }
-      if (
-        creationMode === "series" &&
-        (!selectedSeries || !selectedSeries.latestStyleVersion)
-      ) {
-        throw new Error("请先选择一个已锁定风格的系列");
-      }
-      if (
-        creationMode === "series" &&
-        customEpisodeBackground &&
-        !episodeBackground
-      ) {
-        throw new Error("请选择本期背景图片");
+      if (singleStyleSource === "series" && !selectedStyleSeries) {
+        throw new Error("请选择一个已保存的风格");
       }
       // 拉取已有项目名用于重名去重；失败不阻塞创建（服务端 409 兜底）
       let existingNames: string[] = [];
@@ -686,8 +700,7 @@ export function VideoMakerView({
       } catch {
         // best-effort
       }
-      const name = generateProjectName(topic, existingNames, "未命名视频");
-      setProjectName(name);
+      const name = generateProjectName(draftProjectName.trim() || topic, existingNames, "未命名视频");
       const resolution = RATIO_RESOLUTION_MAP[ratio];
       const ttsConfig = narrationEnabled
         ? {
@@ -702,45 +715,26 @@ export function VideoMakerView({
         topic,
         ratio,
         name,
-        resolution,
-        narration: narrationEnabled
-          ? {
-              provider: ttsProvider,
-              voice: ttsVoice.trim(),
-              rate: ttsRate.trim(),
-              subtitleMode,
-            }
-          : undefined,
-        series:
-          creationMode === "series" && selectedSeries
-            ? {
-                id: selectedSeries.id,
-                name: selectedSeries.name,
-                styleVersion: selectedSeries.latestStyleVersion ?? 0,
-              }
-            : undefined,
-        plan,
-        music: {
-          preset: musicPreset,
-          fileName: musicFilePath?.split(/[\\/]/).pop() ?? "",
-        },
+        styleName: singleStyleSource === "series"
+          ? selectedStyleSeries?.name
+          : SINGLE_VIDEO_TEMPLATES.find((style) => style.id === templateId)?.name,
+        narrationEnabled,
+        sourceCount: sourcePaths.length,
+        hasMusic: musicPreset !== "none",
       });
-      const displayText = topic.trim() || "请生成视频。";
-      // 1. Create project
-      const created = await createVideoProject(token, name, resolution, {
+      const displayText = topic.trim() || "请准备视频分镜。";
+      const options: VideoProjectCreateOptions = {
+        requirePlanApproval: true,
         ...(ttsConfig ?? {}),
-        ...(creationMode === "series" && selectedSeries
-          ? {
-              seriesId: selectedSeries.id,
-              styleVersion: selectedSeries.latestStyleVersion ?? undefined,
-              episodeNumber: (selectedSeries.episodeCount ?? 0) + 1,
-              aspectVariant: ratio,
-              ...(customEpisodeBackground && episodeBackground
-                ? { backgroundBindings: { content: episodeBackground.id } }
-                : {}),
-            }
-          : {}),
-        plan,
+        ...(singleStyleSource === "template"
+          ? { templateId }
+          : selectedStyleSeries
+            ? {
+                styleSeriesId: selectedStyleSeries.id,
+                styleVersion: selectedStyleSeries.latestStyleVersion ?? undefined,
+                aspectVariant: ratio,
+              }
+            : {}),
         music:
           musicPreset === "none"
             ? { preset: "none" }
@@ -758,56 +752,57 @@ export function VideoMakerView({
                   musicRights === "licensed" ? "已获商业授权" : undefined,
               },
         sourcePaths,
-      });
+      };
+      pendingGenerationRef.current = {
+        name,
+        prompt,
+        displayText,
+        chatId: null,
+        chatIdSaved: false,
+        creation: { resolution, options },
+      };
+      const created = await createVideoProject(token, name, resolution, options);
       if (!created.ok) {
-        throw new Error(created.error || "创建项目失败");
+        pendingGenerationRef.current = null;
+        throw new Error("视频未能创建，请重试。");
       }
-      // 2. Create session
-      const newChatId = embedded
-        ? hostChatId
-        : await client.newChat(5_000, false, null, "video");
-      if (!newChatId) throw new Error("当前视频会话尚未就绪");
-      setChatId(newChatId);
-      // 3. Save chat_id
-      await saveVideoChatId(token, name, newChatId);
-      // 4. Send prompt
-      if (embedded && onSendVideoTurn) onSendVideoTurn(prompt, displayText);
-      else client.sendMessage(newChatId, prompt, undefined, {
-        agentKind: "video",
-        displayContent: displayText,
-      });
+      delete pendingGenerationRef.current.creation;
+      setProjectName(name);
       setPhase("storyboard");
-      setViewMode("storyboard");
-      setHistoryKey((k) => k + 1);
+      setWorkspaceView("director");
+      loadedProjectRef.current = name;
+      setRequiresApproval(true);
+      setApprovedRevision(null);
+      setHistoryKey((current) => current + 1);
+      await resumePendingGeneration();
     } catch (e) {
       console.error("Failed to start video generation", e);
-      setProjectName(null);
-      setCreateError(e instanceof Error ? e.message : String(e));
+      if (pendingGenerationRef.current?.creation && e instanceof ApiError && e.status >= 400 && e.status < 500) {
+        pendingGenerationRef.current = null;
+      }
+      const pending = pendingGenerationRef.current;
+      if (pending) {
+        setProjectName(pending.name);
+        setPhase("storyboard");
+        setGenerationError(
+          pending.creation
+            ? "视频创建情况暂时无法确认，请点击继续准备分镜检查。"
+            : "视频已创建，分镜方案尚未准备。请点击继续准备分镜。",
+        );
+        setHistoryKey((current) => current + 1);
+      } else {
+        setPhase("config");
+        setProjectName(null);
+        setCreateError("视频未能创建，请重试。");
+      }
     } finally {
       generatingRef.current = false;
+      setStarting(false);
     }
   }, [
-    client,
-    embedded,
-    hostChatId,
-    onSendVideoTurn,
-    topic,
-    ratio,
-    creationMode,
-    selectedSeries,
-    customEpisodeBackground,
-    episodeBackground,
-    narrationEnabled,
-    ttsProvider,
-    ttsVoice,
-    ttsRate,
-    subtitleMode,
-    plan,
-    sourcePaths,
-    musicFilePath,
-    musicPreset,
-    musicRights,
-    token,
+    topic, draftProjectName, ratio, singleStyleSource, selectedStyleSeries,
+    templateId, narrationEnabled, ttsProvider, ttsVoice, ttsRate, subtitleMode,
+    sourcePaths, musicFilePath, musicPreset, musicRights, resumePendingGeneration, token,
   ]);
 
   // Detect AI turn completion: streaming transitions from true → false.
@@ -817,29 +812,155 @@ export function VideoMakerView({
     handleTurnState(streaming);
   }, [handleTurnState]);
 
+  const registerStoryboardFlush = useCallback(
+    (flush: (() => Promise<boolean>) | null) => {
+      storyboardFlushRef.current = flush;
+    },
+    [],
+  );
+
+  const handlePlanChange = useCallback((next: typeof planDetails) => {
+    planDetailsRef.current = next;
+    setPlanDetails(next);
+  }, []);
+
+  const handlePlanEdited = useCallback(() => setApprovedRevision(null), []);
+
   const handleRetryStoryboardGeneration = useCallback(() => {
-    if (!projectName || !chatId) return;
+    if (!projectName) return;
     setGenerationError(null);
-    const prompt = buildStoryboardRetryPrompt(projectName);
+    if (pendingGenerationRef.current) {
+      void handleStartGeneration();
+      return;
+    }
+    if (!chatId) {
+      pendingGenerationRef.current = {
+        name: projectName,
+        prompt: buildVideoResumePrompt(projectName),
+        displayText: "继续准备分镜",
+        chatId: null,
+        chatIdSaved: false,
+      };
+      void handleStartGeneration();
+      return;
+    }
+    const prompt = buildVideoResumePrompt(projectName);
     if (embedded && onSendVideoTurn) {
-      onSendVideoTurn(prompt, "重新生成分镜");
+      onSendVideoTurn(prompt, "继续准备分镜");
       return;
     }
     client.sendMessage(chatId, prompt, undefined, {
       agentKind: "video",
-      displayContent: "重新生成分镜",
+      displayContent: "继续准备分镜",
     });
-  }, [chatId, client, embedded, onSendVideoTurn, projectName]);
+  }, [chatId, client, embedded, handleStartGeneration, onSendVideoTurn, projectName]);
 
-  const handleSelectProject = useCallback((project: VideoProject) => {
-    setConfigSubview("video");
-    setProjectName(project.name);
-    setChatId(project.chatId);
-    // Route by the server-recorded phase: storyboard → 分镜页,其他均进入制作页
-    setPhase(project.phase);
-    // 初始 viewMode 由服务端 phase 推导；之后步骤条点击只改 viewMode
-    setViewMode(project.phase === "storyboard" ? "storyboard" : "producing");
-  }, []);
+  const handleRequestAgent = useCallback(async (request: string, displayText = request) => {
+    if (!projectName || isChatRunning || hostIsStreaming) return;
+    const currentChatId = chatId ?? (embedded
+      ? hostChatId
+      : await client.newChat(5_000, false, null, "video"));
+    if (!currentChatId) throw new Error("视频会话尚未就绪，请稍后重试。");
+    if (!chatId) {
+      const saved = await saveVideoChatId(token, projectName, currentChatId);
+      if (!saved.ok) throw new Error("会话尚未保存，请重试。");
+      setChatId(currentChatId);
+    }
+    setGenerationError(null);
+    const prompt = `当前视频：${projectName}\n${request}`;
+    if (embedded && onSendVideoTurn) {
+      onSendVideoTurn(prompt, displayText);
+    } else {
+      client.sendMessage(currentChatId, prompt, undefined, {
+        agentKind: "video",
+        displayContent: displayText,
+      });
+    }
+  }, [chatId, client, embedded, hostChatId, hostIsStreaming, isChatRunning, onSendVideoTurn, projectName, token]);
+
+  const handleConfirmPlan = useCallback(async () => {
+    if (!projectName || confirming || isChatRunning || hostIsStreaming) return;
+    setConfirming(true);
+    setConfirmationError(null);
+    try {
+      if (!storyboardFlushRef.current || !await storyboardFlushRef.current()) return;
+      const { planRevision, sceneCount } = planDetailsRef.current;
+      if (planRevision === null || sceneCount === 0) throw new Error("请先准备好分镜方案，再确认生成。");
+      const confirmed = await confirmVideoProjectPlan(token, projectName, planRevision);
+      if (!confirmed.ok) throw new Error("分镜尚未确认，请检查方案后重试。");
+      setApprovedRevision(confirmed.planRevision);
+      setCurrentPlanRevision(confirmed.planRevision);
+      await handleRequestAgent(buildVideoProductionPrompt(confirmed.planRevision), "确认分镜，开始生成视频");
+      setWorkspaceView("preview");
+      setPhase("producing");
+    } catch (error) {
+      if (error instanceof ApiError && error.status === 409) {
+        setConfirmationError("分镜方案已发生变化。请查看更新后的内容，再确认生成。");
+        setAiTurnComplete((value) => value + 1);
+      } else {
+        setConfirmationError(error instanceof Error ? error.message : "生成尚未开始，请重试。");
+      }
+    } finally {
+      setConfirming(false);
+    }
+  }, [confirming, handleRequestAgent, hostIsStreaming, isChatRunning, projectName, token]);
+
+  const handleContinueProduction = useCallback(() => {
+    if (requiresApproval && (approvedRevision === null || approvedRevision !== currentPlanRevision)) {
+      setWorkspaceView("director");
+      return;
+    }
+    void handleRequestAgent(buildVideoProductionPrompt(approvedRevision), "继续制作视频");
+  }, [approvedRevision, currentPlanRevision, handleRequestAgent, requiresApproval]);
+
+  const handleSaveNarrationSettings = useCallback(async (settings: VideoTtsConfig) => {
+    setNarrationSettingsSaving(true);
+    setNarrationSettingsError(null);
+    try {
+      const result = await updateVideoProjectSettings(token, projectName ?? "", settings);
+      if (!result.ok) throw new Error("保存失败");
+      setProjectSettings(result.meta ?? settings);
+      setNarrationSettingsOpen(false);
+      setAiTurnComplete((value) => value + 1);
+    } catch {
+      setNarrationSettingsError("配音设置保存失败，请重试。");
+    } finally {
+      setNarrationSettingsSaving(false);
+    }
+  }, [projectName, token]);
+
+  const leaveStoryboardWhenSaved = useCallback(
+    (action: () => void) => {
+      const flush = storyboardFlushRef.current;
+      if ((workspaceView !== "director" && !contentOpen) || !projectName || !flush) {
+        action();
+        return;
+      }
+      if (leavingStoryboard) return;
+      setLeavingStoryboard(true);
+      void flush()
+        .then((saved) => {
+          if (saved) action();
+        })
+        .finally(() => setLeavingStoryboard(false));
+    },
+    [leavingStoryboard, projectName, contentOpen, workspaceView],
+  );
+
+  const handleSelectProject = useCallback(
+    (project: VideoProject) => {
+      leaveStoryboardWhenSaved(() => {
+        setConfigSubview("video");
+        setProjectName(project.name);
+        setChatId(project.chatId);
+        setPhase(project.phase);
+        setWorkspaceView(project.phase === "storyboard" ? "director" : "preview");
+        loadedProjectRef.current = null;
+        setContentOpen(false);
+      });
+    },
+    [leaveStoryboardWhenSaved],
+  );
 
   const handleDeleteProject = useCallback(
     (name: string) => {
@@ -856,28 +977,41 @@ export function VideoMakerView({
   );
 
   const handleNewProject = useCallback(() => {
-    setPhase("config");
-    setConfigSubview("video");
-    setViewMode("storyboard");
-    setProjectName(null);
-    setChatId(null);
-    setCreateError(null);
-    try {
-      localStorage.removeItem(ACTIVE_PROJECT_KEY);
-    } catch {}
-  }, []);
+    leaveStoryboardWhenSaved(() => {
+      setPhase("config");
+      setConfigSubview("video");
+      setContentOpen(false);
+      setWorkspaceView("director");
+      loadedProjectRef.current = null;
+      pendingGenerationRef.current = null;
+      setProjectName(null);
+      setChatId(null);
+      setCreateError(null);
+      try {
+        localStorage.removeItem(ACTIVE_PROJECT_KEY);
+      } catch {}
+    });
+  }, [leaveStoryboardWhenSaved]);
 
-  // StoryboardPhase 完成回调：首次锁定推进阶段到 producing；已锁定项目回看
-  // 分镜后返回只切视图，不改服务端 phase（done/exportable 不回退）。
-  const handleStoryboardDone = useCallback(() => {
-    setPhase((prev) => (prev === "storyboard" ? "producing" : prev));
-    setViewMode("producing");
-  }, []);
+  const handleProjectRenamed = useCallback(
+    (oldName: string, newName: string) => {
+      setProjectName((current) => (current === oldName ? newName : current));
+      setHistoryKey((current) => current + 1);
+    },
+    [],
+  );
 
-  // ProducingPhase 阶段回传：驱动步骤条；渲染完成时刷新历史列表状态
+  const handleProjectArchived = useCallback(
+    (name: string, archived: boolean) => {
+      if (archived && projectName === name) handleNewProject();
+      setHistoryKey((current) => current + 1);
+    },
+    [handleNewProject, projectName],
+  );
+
   const handleProjectPhaseChange = useCallback((next: VideoProjectPhase) => {
     setPhase((prev) => {
-      if (prev === "config" || prev === "storyboard") return prev;
+      if (prev === "config") return prev;
       return prev === next ? prev : next;
     });
     if (next === "done") {
@@ -892,17 +1026,16 @@ export function VideoMakerView({
     if (!projectName) return;
     return client.onVideoProjectChanged(({ projectName: name, hint }) => {
       if (name !== projectName) return;
-      if (hint !== "phase" && hint !== "status") return;
+      if (!["phase", "status", "scenes", "settings"].includes(hint)) return;
       void (async () => {
         try {
-          const res = await fetchVideoProject(token, projectName);
-          if (res.phase) handleProjectPhaseChange(res.phase);
+          await refreshProject();
         } catch {
           // ignore transient errors
         }
       })();
     });
-  }, [client, projectName, token, handleProjectPhaseChange]);
+  }, [client, projectName, refreshProject]);
 
   // Persist only the active project name; the authoritative phase is always
   // read back from the server on restore.
@@ -1002,6 +1135,8 @@ export function VideoMakerView({
                   collapsed
                   onSelect={handleSelectProject}
                   onDelete={handleDeleteProject}
+                  onProjectRenamed={handleProjectRenamed}
+                  onProjectArchived={handleProjectArchived}
                 />
               </div>
 
@@ -1064,6 +1199,8 @@ export function VideoMakerView({
                 currentProjectName={projectName}
                 onSelect={handleSelectProject}
                 onDelete={handleDeleteProject}
+                onProjectRenamed={handleProjectRenamed}
+                onProjectArchived={handleProjectArchived}
               />
             </div>
 
@@ -1080,10 +1217,8 @@ export function VideoMakerView({
 
             {/* 拖拽调整宽度 */}
             <div
-              className={cn(
-                "absolute right-0 top-0 bottom-0 w-1 -translate-x-1/2 cursor-col-resize transition-colors",
-                isResizing ? "bg-primary/40" : "hover:bg-primary/25",
-              )}
+              className="mona-resize-handle absolute right-0 top-0 bottom-0 w-1 -translate-x-1/2 cursor-col-resize"
+              data-resizing={isResizing || undefined}
               onMouseDown={startResize}
               aria-hidden="true"
             />
@@ -1091,87 +1226,6 @@ export function VideoMakerView({
         ))}
 
         <div className="flex min-h-0 flex-1 flex-col">
-          {/* 步骤条：phase 驱动高亮；有项目时「编辑分镜」可点击回退，
-              「制作场景」「导出交付」在分镜锁定后可点击前进（同一视图） */}
-          {configSubview === "video" ? (
-            <div className="flex shrink-0 items-center justify-center gap-1 border-b border-border/70 bg-background px-4 py-3">
-              {STEPS.map((step, i) => {
-                const status = getStepStatus(i, phase);
-                const navTarget =
-                  i === 1
-                    ? ("storyboard" as const)
-                    : i === 2 || i === 3
-                      ? ("producing" as const)
-                      : null;
-                const navEnabled =
-                  navTarget === "storyboard"
-                    ? projectName != null
-                    : navTarget === "producing"
-                      ? projectName != null &&
-                        phase !== "config" &&
-                        phase !== "storyboard"
-                      : false;
-                return (
-                  <div key={step.label} className="flex items-center">
-                    {i > 0 && (
-                      <div
-                        className={cn(
-                          "mx-2 h-px w-5",
-                          getStepStatus(i - 1, phase) !== "pending"
-                            ? "bg-foreground/30"
-                            : "bg-border",
-                        )}
-                      />
-                    )}
-                    <button
-                      type="button"
-                      disabled={!navEnabled}
-                      onClick={
-                        navTarget && navEnabled
-                          ? () => setViewMode(navTarget)
-                          : undefined
-                      }
-                      aria-label={
-                        navTarget ? `切换到${step.label}` : step.label
-                      }
-                      className={cn(
-                        "flex items-center gap-1.5 rounded-md px-1 py-0.5 transition-colors",
-                        navEnabled ? "hover:bg-accent" : "cursor-default",
-                      )}
-                    >
-                      <div
-                        className={cn(
-                          "flex h-5 w-5 shrink-0 items-center justify-center rounded-full text-micro font-medium",
-                          status === "completed" &&
-                            "bg-emerald-500/15 text-emerald-600",
-                          status === "current" && "bg-action text-white",
-                          status === "pending" &&
-                            "border border-border bg-background text-muted-foreground",
-                        )}
-                      >
-                        {status === "completed" ? (
-                          <Check className="h-3 w-3" />
-                        ) : (
-                          <span>{i + 1}</span>
-                        )}
-                      </div>
-                      <span
-                        className={cn(
-                          "text-micro font-medium",
-                          status === "completed" && "text-muted-foreground",
-                          status === "current" && "text-foreground",
-                          status === "pending" && "text-muted-foreground/50",
-                        )}
-                      >
-                        {step.label}
-                      </span>
-                    </button>
-                  </div>
-                );
-              })}
-            </div>
-          ) : null}
-
           {phase === "config" && configSubview === "create-series" ? (
             <CreateVideoSeriesView
               onCancel={() => setConfigSubview("video")}
@@ -1184,642 +1238,248 @@ export function VideoMakerView({
               seriesId={selectedSeries.id}
               initialDraft={styleDraft}
               currentVersion={selectedSeries.latestStyleVersion ?? 0}
+              defaultAspectRatio={selectedSeries.defaultAspectRatio ?? "16:9"}
               onCancel={() => setConfigSubview("video")}
               onLocked={handleStyleLocked}
             />
           ) : phase === "config" ? (
             <div className="flex min-h-0 flex-1 flex-col items-center overflow-y-auto scrollbar-hover px-4 py-8">
-              <div className="w-full max-w-[560px]">
-                <h2 className="mb-6 text-title-sm font-medium">新建视频</h2>
-
-                <div className="space-y-5">
-                  <section>
-                    <h3 className="mb-1.5 text-ui font-medium text-foreground">
-                      创建方式
-                    </h3>
-                    <div className="grid grid-cols-2 gap-1 rounded-lg bg-muted p-1">
-                      {(["single", "series"] as VideoCreationMode[]).map(
-                        (mode) => (
-                          <Button
-                            key={mode}
-                            type="button"
-                            variant="ghost"
-                            size="sm"
-                            aria-pressed={creationMode === mode}
-                            className={cn(
-                              "h-8 rounded-md px-2 text-ui font-medium transition-colors",
-                              creationMode === mode
-                                ? "bg-card text-foreground"
-                                : "text-muted-foreground hover:text-foreground",
-                            )}
-                            onClick={() => {
-                              setCreationMode(mode);
-                              if (
-                                mode === "series" &&
-                                !selectedSeries &&
-                                series[0]
-                              ) {
-                                handleSelectSeries(series[0]);
-                              }
-                            }}
-                          >
-                            {mode === "single" ? "单条视频" : "系列视频"}
-                          </Button>
-                        ),
-                      )}
-                    </div>
-                  </section>
-
-                  {creationMode === "series" ? (
-                    <section>
-                      <h3 className="mb-1.5 text-ui font-medium text-foreground">
-                        选择系列
-                      </h3>
-                      <VideoSeriesSelector
-                        series={series}
-                        selectedSeriesId={selectedSeries?.id}
-                        loading={seriesLoading}
-                        onSelect={handleSelectSeries}
-                        onDelete={(value) => {
-                          setSeriesDeleteError(null);
-                          setSeriesToDelete(value);
-                        }}
-                        onRename={(value) => {
-                          setSeriesToRename(value);
-                          setSeriesRenameValue(value.name);
-                        }}
-                        onArchive={(value, archived) =>
-                          void handleArchiveSeries(value, archived)
-                        }
-                        disabled={seriesUpdating}
-                        onCreate={() => setConfigSubview("create-series")}
-                      />
-                      {seriesError ? (
-                        <div className="mt-1.5 text-caption text-destructive">
-                          系列加载失败：{seriesError}
-                        </div>
-                      ) : null}
-                      {selectedSeries ? (
-                        <div className="mt-2 space-y-2">
-                          <div className="flex items-center justify-between rounded-md border border-border/70 px-2.5 py-2">
-                            <div className="min-w-0">
-                              <div className="truncate text-caption font-medium">
-                                {selectedSeries.styleSummary?.name ??
-                                  "系列风格"}
-                                {selectedSeries.latestStyleVersion
-                                  ? ` · v${selectedSeries.latestStyleVersion}`
-                                  : " · 尚未锁定"}
-                              </div>
-                              <div className="mt-0.5 text-micro text-muted-foreground">
-                                {selectedSeries.defaultAspectRatio ?? "16:9"} ·
-                                配色、字幕与背景规则自动继承
-                              </div>
-                            </div>
-                            <Button
-                              type="button"
-                              variant="ghost"
-                              size="sm"
-                              className="h-7 shrink-0 px-2 text-caption"
-                              onClick={() => {
-                                setStyleDraft(selectedSeries.draft ?? null);
-                                setConfigSubview("style-editor");
-                              }}
-                            >
-                              {selectedSeries.latestStyleVersion
-                                ? "编辑风格"
-                                : "设置风格"}
-                            </Button>
-                          </div>
-
-                          <div>
-                            <div className="mb-1 flex items-center justify-between">
-                              <span className="text-caption font-medium text-muted-foreground">
-                                本期背景
-                              </span>
-                              <div className="flex rounded-md bg-muted p-0.5">
-                                {[false, true].map((custom) => (
-                                  <Button
-                                    key={String(custom)}
-                                    type="button"
-                                    variant="ghost"
-                                    size="sm"
-                                    className={cn(
-                                      "h-6 rounded px-2 text-micro",
-                                      customEpisodeBackground === custom
-                                        ? "bg-card text-foreground"
-                                        : "text-muted-foreground",
-                                    )}
-                                    onClick={() =>
-                                      setCustomEpisodeBackground(custom)
-                                    }
-                                  >
-                                    {custom ? "自定义本期" : "使用系列默认"}
-                                  </Button>
-                                ))}
-                              </div>
-                            </div>
-                            {customEpisodeBackground ? (
-                              <div className="flex items-center gap-2 rounded-md border border-border/70 p-2">
-                                {episodeBackgroundPreview ? (
-                                  <img
-                                    src={episodeBackgroundPreview}
-                                    alt="本期背景预览"
-                                    className="h-12 w-20 rounded object-cover"
-                                  />
-                                ) : (
-                                  <div className="flex h-12 w-20 items-center justify-center rounded bg-muted">
-                                    <ImagePlus className="h-4 w-4 text-muted-foreground" />
-                                  </div>
-                                )}
-                                <div className="min-w-0 flex-1">
-                                  <div className="truncate text-caption font-medium">
-                                    {episodeBackground?.name ?? "尚未选择图片"}
-                                  </div>
-                                  <div className="mt-0.5 text-micro text-muted-foreground">
-                                    仅替换图片，遮罩、字体与裁切规则继续继承
-                                  </div>
-                                </div>
-                                <Button
-                                  type="button"
-                                  variant="outline"
-                                  size="sm"
-                                  className="h-7 shrink-0 px-2 text-micro"
-                                  disabled={!isTauri() || backgroundUploading}
-                                  onClick={() =>
-                                    void handleEpisodeBackgroundUpload()
-                                  }
-                                >
-                                  {backgroundUploading
-                                    ? "上传中…"
-                                    : episodeBackground
-                                      ? "更换"
-                                      : "选择图片"}
-                                </Button>
-                              </div>
-                            ) : null}
-                          </div>
-                        </div>
-                      ) : null}
-                    </section>
-                  ) : null}
-
-                  <section>
-                    <h3 className="mb-1.5 text-ui font-medium text-foreground">
-                      视频主题
-                    </h3>
-                    <Textarea
-                      className="min-h-[96px] resize-none text-ui"
-                      placeholder="描述你想制作的视频内容..."
-                      value={topic}
-                      onChange={(event) => {
-                        setTopic(event.target.value);
-                        setPlan(null);
-                      }}
-                    />
-                  </section>
-
-                  <section>
-                    <div className="mb-1.5 flex items-center justify-between gap-3">
-                      <div>
-                        <h3 className="text-ui font-medium text-foreground">
-                          来源文档
-                        </h3>
-                        <div className="mt-0.5 text-micro text-muted-foreground">
-                          支持 PDF、Word、PPT、Markdown 和文本，最多 10 个
-                        </div>
-                      </div>
-                      <Button
-                        type="button"
-                        variant="outline"
-                        size="sm"
-                        disabled={!isTauri() || planning}
-                        onClick={() => void handleAddSources()}
-                      >
-                        <FilePlus2 className="mr-1.5 h-3.5 w-3.5" />
-                        添加文档
-                      </Button>
-                    </div>
-                    {sourcePaths.length ? (
-                      <div className="space-y-1.5">
-                        {sourcePaths.map((path) => (
-                          <div
-                            key={path}
-                            className="flex items-center gap-2 rounded-md border border-border/70 px-2.5 py-2"
-                          >
-                            <span className="min-w-0 flex-1 truncate text-caption">
-                              {path.split(/[\\/]/).pop()}
-                            </span>
-                            <Button
-                              type="button"
-                              variant="ghost"
-                              size="icon"
-                              className="h-6 w-6 shrink-0"
-                              aria-label={`移除 ${path.split(/[\\/]/).pop()}`}
-                              onClick={() => {
-                                setSourcePaths((current) =>
-                                  current.filter((item) => item !== path),
-                                );
-                                setPlan(null);
-                              }}
-                            >
-                              <Trash2 className="h-3.5 w-3.5" />
-                            </Button>
-                          </div>
-                        ))}
-                      </div>
-                    ) : null}
-                  </section>
-
-                  {plan ? (
-                    <section className="rounded-lg border border-primary/25 bg-primary/[0.03] p-3">
-                      <div className="flex items-start gap-2">
-                        <ListChecks className="mt-0.5 h-4 w-4 shrink-0 text-primary" />
-                        <div className="min-w-0 flex-1">
-                          <h3 className="text-ui font-medium">
-                            制作方案待确认
-                          </h3>
-                          <p className="mt-1 text-caption text-muted-foreground">
-                            {plan.contentSummary ||
-                              "请检查内容范围，删除不需要的章节后再生成分镜。"}
-                          </p>
-                        </div>
-                      </div>
-                      <div className="mt-3 grid grid-cols-3 gap-2 text-center">
-                        <div className="rounded-md bg-card px-2 py-2">
-                          <div className="text-ui font-semibold">
-                            {plan.estimatedSceneCount}
-                          </div>
-                          <div className="text-micro text-muted-foreground">
-                            场景
-                          </div>
-                        </div>
-                        <div className="rounded-md bg-card px-2 py-2">
-                          <div className="text-ui font-semibold">
-                            {Math.max(
-                              1,
-                              Math.round(plan.estimatedDurationSeconds / 60),
-                            )}{" "}
-                            分钟
-                          </div>
-                          <div className="text-micro text-muted-foreground">
-                            预计时长
-                          </div>
-                        </div>
-                        <div className="rounded-md bg-card px-2 py-2">
-                          <div className="text-ui font-semibold">
-                            {plan.estimatedAssetCount}
-                          </div>
-                          <div className="text-micro text-muted-foreground">
-                            建议素材
-                          </div>
-                        </div>
-                      </div>
-                      <div className="mt-3 space-y-1.5">
-                        {plan.outline.map((item, index) => (
-                          <div
-                            key={item.id}
-                            className="flex items-start gap-2 rounded-md border border-border/70 bg-card px-2.5 py-2"
-                          >
-                            <span className="flex h-5 w-5 shrink-0 items-center justify-center rounded-full bg-muted text-micro font-medium">
-                              {index + 1}
-                            </span>
-                            <div className="min-w-0 flex-1">
-                              <div className="text-caption font-medium">
-                                {item.title}
-                              </div>
-                              <div className="mt-0.5 line-clamp-2 text-micro text-muted-foreground">
-                                {item.goal || item.keyPoints.join(" · ")}
-                              </div>
-                            </div>
-                            <Button
-                              type="button"
-                              variant="ghost"
-                              size="icon"
-                              className="h-6 w-6 shrink-0"
-                              disabled={plan.outline.length <= 1}
-                              aria-label={`删除大纲：${item.title}`}
-                              onClick={() => removePlanItem(item.id)}
-                            >
-                              <Trash2 className="h-3.5 w-3.5" />
-                            </Button>
-                          </div>
-                        ))}
-                      </div>
-                      <div className="mt-2 text-micro text-muted-foreground">
-                        {plan.billing.note}
-                      </div>
-                    </section>
-                  ) : null}
-
-                  <section>
-                    <div className="mb-1.5 flex items-center justify-between">
-                      <h3 className="text-ui font-medium text-foreground">
-                        画面比例
-                      </h3>
-                      {creationMode === "series" ? (
-                        <span className="text-micro text-muted-foreground">
-                          继承系列
-                        </span>
-                      ) : null}
-                    </div>
-                    <div className="grid grid-cols-3 gap-1 rounded-lg bg-muted p-1">
-                      {RATIOS.map((r) => (
-                        <button
-                          key={r.value}
-                          type="button"
-                          title={r.resolution}
-                          disabled={creationMode === "series"}
-                          aria-pressed={ratio === r.value}
-                          className={cn(
-                            "rounded-md px-1.5 py-1.5 text-ui font-medium transition-all disabled:cursor-not-allowed disabled:opacity-70",
-                            ratio === r.value
-                              ? "bg-card text-foreground"
-                              : "text-muted-foreground hover:text-foreground",
-                          )}
-                          onClick={() => setRatio(r.value)}
-                        >
-                          {r.label}
-                        </button>
-                      ))}
-                    </div>
-                  </section>
-
-                  <section>
-                    <div className="flex items-center justify-between">
-                      <h3 className="flex items-center gap-1.5 text-ui font-medium text-foreground">
-                        <Volume2 className="h-3.5 w-3.5" />
-                        旁白配音
-                      </h3>
-                      <button
-                        type="button"
-                        aria-pressed={narrationEnabled}
-                        className={cn(
-                          "rounded-full px-2.5 py-0.5 text-caption font-medium transition-colors",
-                          narrationEnabled
-                            ? "bg-muted text-foreground"
-                            : "text-muted-foreground hover:text-foreground hover:bg-muted/50",
-                        )}
-                        onClick={() => setNarrationEnabled((v) => !v)}
-                      >
-                        {narrationEnabled ? "已启用" : "未启用"}
-                      </button>
-                    </div>
-                    {narrationEnabled ? (
-                      <div className="mt-2 space-y-3">
-                        <div>
-                          <div className="mb-1 text-micro text-muted-foreground">
-                            配音来源
-                          </div>
-                          <div className="grid grid-cols-2 gap-1 rounded-lg bg-muted p-1">
-                            {TTS_PROVIDERS.map((p) => (
-                              <button
-                                key={p.value}
-                                type="button"
-                                title={p.hint}
-                                aria-pressed={ttsProvider === p.value}
-                                className={cn(
-                                  "rounded-md px-1 py-1.5 text-ui font-medium transition-all",
-                                  ttsProvider === p.value
-                                    ? "bg-card text-foreground"
-                                    : "text-muted-foreground hover:text-foreground",
-                                )}
-                                onClick={() => {
-                                  setTtsProvider(p.value);
-                                  setTtsVoice("");
-                                }}
-                              >
-                                {p.label}
-                              </button>
-                            ))}
-                          </div>
-                        </div>
-
-                        {ttsProvider === "edge" ? (
-                          <div>
-                            <div className="mb-1 text-micro text-muted-foreground">
-                              音色
-                            </div>
-                            <Select
-                              aria-label="配音音色"
-                              value={ttsVoice || "zh-CN-XiaoyiNeural"}
-                              options={EDGE_TTS_VOICES}
-                              onValueChange={setTtsVoice}
-                              className="h-8 text-caption"
-                            />
-                          </div>
-                        ) : (
-                          <div className="rounded-md border border-border/70 bg-muted/30 px-3 py-2 text-micro text-muted-foreground">
-                            使用「设置 →
-                            语音合成」中已配置的默认音色，不需要在这里填写技术参数。
-                          </div>
-                        )}
-
-                        <div>
-                          <div className="mb-1 text-micro text-muted-foreground">
-                            语速
-                          </div>
-                          <Select
-                            aria-label="语速"
-                            value={ttsRate || "+0%"}
-                            options={TTS_RATE_OPTIONS.map((option) => ({
-                              value: option.value,
-                              label: option.label,
-                            }))}
-                            onValueChange={setTtsRate}
-                            className="h-8 text-caption"
-                          />
-                        </div>
-                        <div>
-                          <div className="mb-1 text-micro text-muted-foreground">
-                            字幕交付
-                          </div>
-                          <Select
-                            aria-label="字幕交付方式"
-                            value={subtitleMode}
-                            options={[
-                              { value: "burned", label: "视频内字幕" },
-                              { value: "external", label: "外挂字幕文件" },
-                              { value: "off", label: "关闭字幕" },
-                            ]}
-                            onValueChange={(value) =>
-                              setSubtitleMode(
-                                value as "burned" | "external" | "off",
-                              )
-                            }
-                            className="h-8 text-caption"
-                          />
-                        </div>
-                      </div>
-                    ) : null}
-                  </section>
-
-                  <section>
-                    <div className="mb-1.5 flex items-center justify-between gap-3">
-                      <h3 className="flex items-center gap-1.5 text-ui font-medium text-foreground">
-                        <Music2 className="h-3.5 w-3.5" />
-                        背景音乐
-                      </h3>
-                      <span className="text-micro text-muted-foreground">
-                        自动压低音乐，优先保证旁白清晰
-                      </span>
-                    </div>
-                    <Select
-                      aria-label="背景音乐混音方式"
-                      value={musicPreset}
-                      options={[
-                        { value: "none", label: "无背景音乐" },
-                        { value: "ambient", label: "轻背景" },
-                        { value: "rhythmic", label: "节奏增强" },
-                        { value: "brand", label: "品牌原声" },
-                      ]}
-                      onValueChange={(value) => {
-                        setMusicPreset(
-                          value as "none" | "ambient" | "rhythmic" | "brand",
-                        );
-                        if (value === "none") setMusicFilePath(null);
-                      }}
-                      className="h-8 text-caption"
-                    />
-                    {musicPreset !== "none" ? (
-                      <div className="mt-2 flex items-center gap-2 rounded-md border border-border/70 px-2.5 py-2">
-                        <div className="min-w-0 flex-1">
-                          <div className="truncate text-caption font-medium">
-                            {musicFilePath?.split(/[\\/]/).pop() ??
-                              "尚未选择音乐文件"}
-                          </div>
-                          <div className="mt-0.5 text-micro text-muted-foreground">
-                            支持 MP3、WAV、M4A、WebM；正式导出会检查商业使用权
-                          </div>
-                        </div>
-                        <Button
-                          type="button"
-                          variant="outline"
-                          size="sm"
-                          disabled={!isTauri()}
-                          onClick={() => void handlePickMusic()}
-                        >
-                          {musicFilePath ? "更换音乐" : "选择音乐"}
-                        </Button>
-                      </div>
-                    ) : null}
-                  </section>
-
-                  {createError ? (
-                    <div
-                      className="flex items-center justify-between gap-2 rounded-md border border-destructive/30 bg-destructive/5 px-3 py-2 text-caption text-destructive"
-                      role="alert"
-                    >
-                      <span className="min-w-0 flex-1 break-words">
-                        {createError}
-                      </span>
-                      <Button
-                        variant="ghost"
-                        size="sm"
-                        className="h-6 shrink-0 px-2 text-caption text-destructive hover:text-destructive"
-                        onClick={() =>
-                          void (plan
-                            ? handleStartGeneration()
-                            : handleBuildPlan())
-                        }
-                        disabled={
-                          planning ||
-                          (!topic.trim() && sourcePaths.length === 0) ||
-                          (creationMode === "series" &&
-                            !selectedSeries?.latestStyleVersion) ||
-                          (creationMode === "series" &&
-                            customEpisodeBackground &&
-                            !episodeBackground) ||
-                          (Boolean(plan) &&
-                            musicPreset !== "none" &&
-                            !musicFilePath)
-                        }
-                      >
-                        重试
-                      </Button>
-                    </div>
-                  ) : null}
-
-                  <Button
-                    className="h-9 w-full gap-1.5 text-ui"
-                    disabled={
-                      planning ||
-                      (!topic.trim() && sourcePaths.length === 0) ||
-                      (creationMode === "series" &&
-                        !selectedSeries?.latestStyleVersion) ||
-                      (creationMode === "series" &&
-                        customEpisodeBackground &&
-                        !episodeBackground) ||
-                      (Boolean(plan) &&
-                        musicPreset !== "none" &&
-                        !musicFilePath)
-                    }
-                    onClick={() =>
-                      void (plan ? handleStartGeneration() : handleBuildPlan())
-                    }
-                  >
-                    {planning ? (
-                      <Loader2 className="h-4 w-4 animate-spin" />
-                    ) : plan ? (
-                      <Play className="h-4 w-4" />
-                    ) : (
-                      <ListChecks className="h-4 w-4" />
-                    )}
-                    {planning
-                      ? "正在生成方案…"
-                      : plan
-                        ? "确认方案并生成分镜"
-                        : "生成制作方案"}
-                  </Button>
+              <div className="w-full max-w-xl space-y-5">
+                <div>
+                  <h2 className="text-title-sm font-medium">制作视频</h2>
+                  <p className="mt-2 text-caption text-muted-foreground">先准备分镜方案，在导演台确认和调整后，再生成视频。</p>
                 </div>
+                <section>
+                  <label htmlFor="video-brief" className="mb-2 block text-ui font-medium">想做什么视频？</label>
+                  <Textarea
+                    id="video-brief"
+                    className="min-h-32 resize-none text-ui"
+                    placeholder="例如：做一段一分钟的产品介绍，面向第一次了解它的人，清楚介绍用途和使用方法。"
+                    value={topic}
+                    onChange={(event) => setTopic(event.target.value)}
+                    disabled={starting}
+                  />
+                </section>
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  onClick={() => setMoreSettingsOpen((open) => !open)}
+                  aria-expanded={moreSettingsOpen}
+                  aria-controls="video-create-settings"
+                >
+                  <ChevronDown className={cn("mr-1.5 h-4 w-4 transition-transform", moreSettingsOpen && "rotate-180")} />
+                  更多设置
+                </Button>
+                {moreSettingsOpen ? (
+                  <div id="video-create-settings" className="space-y-5 border-t border-border/70 pt-4">
+                    <section>
+                      <label htmlFor="video-name" className="mb-1.5 block text-caption font-medium">视频名称</label>
+                      <Input id="video-name" value={draftProjectName} onChange={(event) => setDraftProjectName(event.target.value)} placeholder="留空会根据描述命名" disabled={starting} />
+                    </section>
+                    <section>
+                      <h3 className="mb-1.5 text-caption font-medium">画面方向</h3>
+                      <div className="grid grid-cols-3 gap-2">
+                        {RATIOS.map((option) => (
+                          <Button
+                            key={option.value}
+                            variant="outline"
+                            aria-pressed={ratio === option.value}
+                            disabled={starting}
+                            onClick={() => setRatio(option.value)}
+                            className={cn(ratio === option.value && "border-primary bg-accent")}
+                          >{option.label}</Button>
+                        ))}
+                      </div>
+                    </section>
+                    <section>
+                      <h3 className="mb-1.5 text-caption font-medium">风格</h3>
+                      <p className="mb-2 text-micro text-muted-foreground">统一配色和字体，画面根据内容安排。</p>
+                      <div className="grid grid-cols-2 gap-2">
+                        {SINGLE_VIDEO_TEMPLATES.map((style) => (
+                          <Button
+                            key={style.id}
+                            variant="outline"
+                            aria-pressed={singleStyleSource === "template" && templateId === style.id}
+                            onClick={() => { setSingleStyleSource("template"); setTemplateId(style.id); }}
+                            className={cn("h-auto flex-col items-start gap-1 px-3 py-2", singleStyleSource === "template" && templateId === style.id && "border-primary bg-accent")}
+                          >
+                            <span>{style.name}</span>
+                            <span className="text-micro font-normal text-muted-foreground">{style.description}</span>
+                          </Button>
+                        ))}
+                      </div>
+                      <Button variant="ghost" size="sm" className="mt-2" aria-pressed={singleStyleSource === "series"} onClick={() => setSingleStyleSource("series")}>我的风格</Button>
+                      {singleStyleSource === "series" ? (
+                        <div className="mt-2 space-y-2">
+                          <VideoSeriesSelector
+                            labelMode="style"
+                            series={series}
+                            selectedSeriesId={styleSeriesId}
+                            loading={seriesLoading}
+                            disabled={seriesUpdating || starting}
+                            onSelect={(value) => { handleSelectStyleSeries(value); setSelectedSeries(value); }}
+                            onDelete={(value) => { setSeriesDeleteError(null); setSeriesToDelete(value); }}
+                            onRename={(value) => { setSeriesToRename(value); setSeriesRenameValue(value.name); }}
+                            onArchive={(value, archived) => void handleArchiveSeries(value, archived)}
+                            onCreate={() => setConfigSubview("create-series")}
+                          />
+                          {selectedStyleSeries ? (
+                            <Button variant="outline" size="sm" onClick={() => { setSelectedSeries(selectedStyleSeries); setStyleDraft(selectedStyleSeries.draft ?? null); setConfigSubview("style-editor"); }}>编辑风格</Button>
+                          ) : null}
+                          {seriesError ? <p className="text-caption text-destructive">风格加载失败，请重试。</p> : null}
+                        </div>
+                      ) : null}
+                    </section>
+                    <section>
+                      <div className="flex items-center justify-between gap-3">
+                        <div>
+                          <h3 className="text-caption font-medium">参考资料</h3>
+                          <p className="mt-0.5 text-micro text-muted-foreground">可以添加文档，让 Mona 根据已有内容制作。</p>
+                        </div>
+                        <Button variant="outline" size="sm" disabled={!isTauri() || starting} onClick={() => void handleAddSources()}><FilePlus2 className="mr-1.5 h-3.5 w-3.5" />添加资料</Button>
+                      </div>
+                      {sourcePaths.map((path) => (
+                        <div key={path} className="mt-2 flex items-center gap-2 text-caption">
+                          <span className="min-w-0 flex-1 truncate">{path.split(/[\\/]/).pop()}</span>
+                          <Button variant="ghost" size="icon" className="h-7 w-7" aria-label={`移除 ${path.split(/[\\/]/).pop()}`} onClick={() => setSourcePaths((current) => current.filter((item) => item !== path))}><Trash2 className="h-3.5 w-3.5" /></Button>
+                        </div>
+                      ))}
+                    </section>
+                    <section>
+                      <label className="flex items-center gap-2 text-caption font-medium">
+                        <input type="checkbox" checked={narrationEnabled} onChange={(event) => setNarrationEnabled(event.target.checked)} />
+                        配音
+                      </label>
+                      {narrationEnabled ? (
+                        <div className="mt-3 space-y-3">
+                          <label className="block text-caption">声音服务
+                            <Select className="mt-1" value={ttsProvider} onValueChange={(value) => { setTtsProvider(value as TtsProvider); setTtsVoice(""); }} options={TTS_PROVIDERS.map((option) => ({ value: option.value, label: option.label }))} aria-label="声音服务" />
+                          </label>
+                          {ttsProvider === "edge" ? (
+                            <div className="text-caption"><span>声音</span>
+                              <div className="mt-1 flex items-center gap-2"><Select className="min-w-0 flex-1" value={ttsVoice || "zh-CN-XiaoyiNeural"} onValueChange={setTtsVoice} options={EDGE_TTS_VOICES} aria-label="声音" />
+                                <VoicePreviewButton provider={ttsProvider} voice={ttsVoice || "zh-CN-XiaoyiNeural"} rate={ttsRate || "+0%"} disabled={starting} />
+                              </div>
+                            </div>
+                          ) : <div className="flex items-center gap-2"><Input value={ttsVoice} onChange={(event) => setTtsVoice(event.target.value)} placeholder="使用已配置的默认声音" aria-label="声音" /><VoicePreviewButton provider={ttsProvider} voice={ttsVoice} rate={ttsRate || "+0%"} disabled={starting} /></div>}
+                          <label className="block text-caption">语速
+                            <Select className="mt-1" value={ttsRate || "+0%"} onValueChange={setTtsRate} options={TTS_RATE_OPTIONS.map((rate) => ({ value: rate.value, label: rate.label }))} aria-label="语速" />
+                          </label>
+                          <label className="block text-caption">字幕
+                            <Select className="mt-1" value={subtitleMode} onValueChange={(value) => setSubtitleMode(value as "burned" | "external" | "off")} options={[{ value: "burned", label: "显示在视频中" }, { value: "external", label: "单独保存字幕" }, { value: "off", label: "关闭" }]} aria-label="字幕" />
+                          </label>
+                        </div>
+                      ) : null}
+                    </section>
+                    <section>
+                      <h3 className="mb-1.5 text-caption font-medium">背景音乐</h3>
+                      <Select value={musicPreset} onValueChange={(value) => setMusicPreset(value as typeof musicPreset)} options={[{ value: "none", label: "无" }, { value: "ambient", label: "轻背景" }, { value: "rhythmic", label: "有节奏" }, { value: "brand", label: "自选音乐" }]} aria-label="背景音乐" />
+                      {musicPreset !== "none" ? (
+                        <div className="mt-2 flex items-center justify-between gap-2">
+                          <span className="truncate text-caption text-muted-foreground">{musicFilePath?.split(/[\\/]/).pop() ?? "请选择音乐文件"}</span>
+                          <Button variant="outline" size="sm" disabled={!isTauri()} onClick={() => void handlePickMusic()}><Music2 className="mr-1.5 h-3.5 w-3.5" />选择音乐</Button>
+                        </div>
+                      ) : null}
+                    </section>
+                  </div>
+                ) : null}
+                {createError ? <p className="text-caption text-destructive" role="alert">{createError}</p> : null}
+                <Button
+                  className="w-full"
+                  disabled={starting || (!topic.trim() && sourcePaths.length === 0) || (singleStyleSource === "series" && !selectedStyleSeries) || (musicPreset !== "none" && !musicFilePath)}
+                  onClick={() => void handleStartGeneration()}
+                >
+                  {starting ? <Loader2 className="mr-1.5 h-4 w-4 animate-spin" /> : <Clapperboard className="mr-1.5 h-4 w-4" />}
+                  {starting ? "正在准备…" : "准备分镜"}
+                </Button>
               </div>
             </div>
-          ) : viewMode === "storyboard" ? (
-            <div className="h-full min-h-0">
-              <StoryboardPhase
-                projectName={projectName ?? ""}
-                onLocked={handleStoryboardDone}
-                refreshTrigger={aiTurnComplete}
-                alreadyLocked={phase !== "storyboard"}
-                generationError={generationError}
-                generationRunning={isChatRunning}
-                onRetryGeneration={handleRetryStoryboardGeneration}
-                chatPanel={embedded ? undefined : (
-                  <DocChatPanel
-                    chatId={chatId}
-                    getSendOptions={() => ({ agentKind: "video" })}
-                    onStreamingChange={handleStreamingChange}
-                    placeholder="与视频助手对话调整分镜..."
-                  />
-                )}
-              />
+          ) : workspaceView === "director" ? (
+            <div className="flex min-h-0 flex-1 flex-col">
+              <div className="flex shrink-0 items-center justify-between gap-3 border-b border-border/70 px-4 py-2">
+                <div className="min-w-0">
+                  <h2 className="truncate text-ui font-medium">导演台 · {projectName}</h2>
+                </div>
+                <div className="flex shrink-0 items-center gap-1">
+                  <Button variant="ghost" size="sm" onClick={() => { setNarrationSettingsError(null); setNarrationSettingsOpen(true); }} disabled={isChatRunning || hostIsStreaming}>声音与字幕</Button>
+                  <Button variant="outline" size="sm" disabled={requiresApproval && (approvedRevision === null || approvedRevision !== planDetails.planRevision) || leavingStoryboard} onClick={() => leaveStoryboardWhenSaved(() => setWorkspaceView("preview"))}>预览视频</Button>
+                </div>
+              </div>
+              {isChatRunning || hostIsStreaming ? (
+                <div className="flex shrink-0 items-center gap-2 border-b border-border/70 px-4 py-2 text-caption text-muted-foreground" role="status">
+                  <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                  <span>{agentActivity ?? "Mona 正在准备旁白和动画方案，完成后请在这里确认。"}</span>
+                  {agentStartedAt !== null ? <span>已用时 {Math.floor(elapsed / 60)} 分 {elapsed % 60} 秒</span> : null}
+                </div>
+              ) : null}
+              <div className="min-h-0 flex-1">
+                <StoryboardPhase
+                  key={projectName}
+                  projectName={projectName ?? ""}
+                  refreshTrigger={aiTurnComplete}
+                  onSaveFlushReady={registerStoryboardFlush}
+                  onPlanChange={handlePlanChange}
+                  onPlanEdited={handlePlanEdited}
+                  busy={isChatRunning || hostIsStreaming || confirming}
+                  chatPanel={embedded ? undefined : <DocChatPanel chatId={chatId} getSendOptions={() => ({ agentKind: "video" })} onStreamingChange={handleStreamingChange} placeholder="告诉 Mona 分镜和动画要怎么调整…" />}
+                />
+              </div>
+              <div className="flex shrink-0 items-center justify-between gap-3 border-t border-border/70 px-4 py-1.5">
+                <div className="min-w-0 text-caption text-muted-foreground">
+                  {generationError ? <span className="text-destructive">{generationError}</span> : planDetails.sceneCount ? `${planDetails.sceneCount} 段 · 预计 ${planDetails.duration} 秒，修改会自动保存。` : "方案准备好后，会显示旁白和对应的动画安排。"}
+                </div>
+                {planDetails.sceneCount === 0 || generationError ? <Button variant="outline" size="sm" onClick={handleRetryStoryboardGeneration} disabled={isChatRunning || hostIsStreaming || starting}>继续准备分镜</Button> : null}
+                <Button size="sm" disabled={isChatRunning || hostIsStreaming || confirming || planDetails.sceneCount === 0 || planDetails.planRevision === null} onClick={() => void handleConfirmPlan()}>
+                  {confirming ? <Loader2 className="mr-1.5 h-4 w-4 animate-spin" /> : <Clapperboard className="mr-1.5 h-4 w-4" />}
+                  {confirming ? "正在开始…" : "确认并生成"}
+                </Button>
+              </div>
             </div>
           ) : (
             <ProducingPhase
               projectName={projectName ?? ""}
               onPhaseChange={handleProjectPhaseChange}
-              onLocalized={(localizedName) => {
-                setProjectName(localizedName);
-                setPhase("storyboard");
-                setViewMode("storyboard");
-                setHistoryKey((current) => current + 1);
-              }}
+              onRequestAgent={handleRequestAgent}
+              agentRunning={isChatRunning || hostIsStreaming}
+              agentActivity={agentActivity}
+              agentStartedAt={agentStartedAt}
+              onOpenChat={onOpenChat}
+              refreshTrigger={aiTurnComplete}
+              generationError={generationError}
+              onRetryGeneration={handleContinueProduction}
+              onEditContent={(section) => { if (section === "assets") setContentOpen(true); else setWorkspaceView("director"); }}
+              chatPanel={embedded ? undefined : (
+                <DocChatPanel chatId={chatId} getSendOptions={() => ({ agentKind: "video" })} onStreamingChange={handleStreamingChange} placeholder="告诉 Mona 你想调整哪里…" />
+              )}
             />
           )}
         </div>
       </div>
 
-      <AssetRightsDialog
-        open={pendingEpisodeBackgroundPath !== null}
-        fileName={
-          pendingEpisodeBackgroundPath?.split(/[\\/]/).pop() ?? "本期背景图片"
-        }
-        value={episodeBackgroundRights}
-        loading={backgroundUploading}
-        title="确认本期背景使用权"
-        onChange={setEpisodeBackgroundRights}
-        onCancel={() => setPendingEpisodeBackgroundPath(null)}
-        onConfirm={() => void handleConfirmEpisodeBackground()}
-      />
+      <Dialog open={contentOpen} onOpenChange={(open) => {
+        if (open) setContentOpen(true);
+        else leaveStoryboardWhenSaved(() => setContentOpen(false));
+      }}>
+        <DialogContent className="flex h-[80vh] max-w-5xl flex-col" showCloseButton={!leavingStoryboard}>
+          <DialogHeader>
+            <DialogTitle>视频素材</DialogTitle>
+            <DialogDescription>添加自己的图片、视频或声音，让 Mona 在制作中使用。</DialogDescription>
+          </DialogHeader>
+          <div className="min-h-0 flex-1">
+            {projectName ? <StoryboardPhase projectName={projectName} section="assets" refreshTrigger={aiTurnComplete} /> : null}
+          </div>
+          <DialogFooter><Button disabled={leavingStoryboard} onClick={() => leaveStoryboardWhenSaved(() => setContentOpen(false))}>{leavingStoryboard ? "保存中…" : "返回视频"}</Button></DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      <VideoNarrationSettingsDialog open={narrationSettingsOpen} value={projectSettings} saving={narrationSettingsSaving} error={narrationSettingsError} onOpenChange={setNarrationSettingsOpen} onSave={handleSaveNarrationSettings} />
+      <Dialog open={confirmationError !== null} onOpenChange={(open) => { if (!open) setConfirmationError(null); }}>
+        <DialogContent>
+          <DialogHeader><DialogTitle>视频生成尚未开始</DialogTitle><DialogDescription>{confirmationError}</DialogDescription></DialogHeader>
+          <DialogFooter><Button onClick={() => setConfirmationError(null)}>返回导演台</Button></DialogFooter>
+        </DialogContent>
+      </Dialog>
+
       <AssetRightsDialog
         open={pendingMusicPath !== null}
         fileName={pendingMusicPath?.split(/[\\/]/).pop() ?? "背景音乐"}
@@ -1842,15 +1502,15 @@ export function VideoMakerView({
       >
         <DialogContent className="max-w-sm" showCloseButton={!seriesUpdating}>
           <DialogHeader>
-            <DialogTitle>重命名视频系列</DialogTitle>
+            <DialogTitle>重命名风格</DialogTitle>
             <DialogDescription>
-              只更新系列显示名称，已有视频、风格版本和素材快照都会保留。
+              修改风格名称，不影响已有视频。
             </DialogDescription>
           </DialogHeader>
           <Input
             value={seriesRenameValue}
             onChange={(event) => setSeriesRenameValue(event.target.value)}
-            aria-label="系列新名称"
+            aria-label="风格新名称"
             autoFocus
           />
           <DialogFooter>
@@ -1878,11 +1538,11 @@ export function VideoMakerView({
       >
         <DialogContent className="max-w-md" showCloseButton={!seriesDeleting}>
           <DialogHeader>
-            <DialogTitle>删除系列“{seriesToDelete?.name}”？</DialogTitle>
+            <DialogTitle>删除风格“{seriesToDelete?.name}”？</DialogTitle>
             <DialogDescription>
               {(seriesToDelete?.episodeCount ?? 0) > 0
-                ? `系列内已有 ${seriesToDelete?.episodeCount} 个视频。删除系列后，视频会保留并转入“单条视频”，仍使用各自的本地风格快照。`
-                : "该系列尚无视频。删除后，系列风格与草稿将无法恢复。"}
+                ? `已有 ${seriesToDelete?.episodeCount} 个视频使用这个风格。删除后，这些视频仍会保留。`
+                : "删除后，这个风格将无法恢复。"}
             </DialogDescription>
           </DialogHeader>
           {seriesDeleteError ? (
@@ -1912,8 +1572,8 @@ export function VideoMakerView({
                 <Loader2 className="mr-1.5 h-4 w-4 animate-spin" />
               ) : null}
               {(seriesToDelete?.episodeCount ?? 0) > 0
-                ? "删除系列，保留视频"
-                : "删除系列"}
+                ? "删除风格，保留视频"
+                : "删除风格"}
             </Button>
           </DialogFooter>
         </DialogContent>
@@ -1926,106 +1586,36 @@ function buildVideoPrompt(opts: {
   topic: string;
   ratio: VideoRatio;
   name: string;
-  resolution: string;
-  narration?: {
-    provider: TtsProvider;
-    voice: string;
-    rate: string;
-    subtitleMode: "burned" | "external" | "off";
-  };
-  series?: {
-    id: string;
-    name: string;
-    styleVersion: number;
-  };
-  plan: VideoProjectPlan;
-  music: {
-    preset: "none" | "ambient" | "rhythmic" | "brand";
-    fileName: string;
-  };
+  styleName?: string;
+  narrationEnabled: boolean;
+  sourceCount: number;
+  hasMusic: boolean;
 }): string {
-  const parts: string[] = [];
-  parts.push("请生成一段视频。");
-  parts.push(`项目名：${opts.name}`);
-  parts.push(`项目目录：video_projects/${opts.name}`);
-  parts.push(`分辨率：${opts.resolution}`);
-  parts.push(`画面比例：${opts.ratio}`);
-  if (opts.series) {
-    parts.push(`视频系列：${opts.series.name}（${opts.series.id}）`);
-    parts.push(`锁定风格版本：v${opts.series.styleVersion}`);
-    parts.push(
-      "分镜必须使用 Role、Layout 和 Background Slot 字段，并且只选择锁定风格允许的值。",
-    );
-  }
-  if (opts.narration) {
-    parts.push(`旁白：启用`);
-    parts.push(`TTS供应商：${opts.narration.provider}`);
-    parts.push(
-      `音色：${opts.narration.voice || (opts.narration.provider === "custom" ? "使用全局默认音色" : "zh-CN-XiaoyiNeural")}`,
-    );
-    parts.push(`语速：${opts.narration.rate || "+0%"}（留空用默认）`);
-    parts.push(
-      `字幕：${
-        opts.narration.subtitleMode === "burned"
-          ? "视频内字幕"
-          : opts.narration.subtitleMode === "external"
-            ? "仅外挂字幕文件"
-            : "关闭"
-      }`,
-    );
-  } else {
-    parts.push(`旁白：未启用`);
-  }
-  if (opts.topic.trim()) {
-    parts.push(`主题：${opts.topic.trim()}`);
-  }
-  parts.push("已确认制作方案：");
-  opts.plan.outline.forEach((item, index) => {
-    parts.push(
-      `${index + 1}. ${item.title}｜目标：${item.goal || "讲清本节内容"}｜要点：${item.keyPoints.join("；")}｜建议角色：${item.role}｜预计 ${item.estimatedSeconds} 秒`,
-    );
-  });
-  parts.push(
-    `背景音乐：${
-      opts.music.preset === "none"
-        ? "无"
-        : `${
-            {
-              ambient: "轻背景",
-              rhythmic: "节奏增强",
-              brand: "品牌原声",
-            }[opts.music.preset]
-          }（${opts.music.fileName}）`
-    }`,
-  );
-  parts.push("");
-  parts.push(
-    "请按照 mona-video SKILL 的流程执行 Step 1-4，并严格依据已确认制作方案生成分镜草稿（storyboard.md）。不得恢复用户已删除的大纲项。",
-  );
-  if (opts.narration) {
-    parts.push(
-      "每个场景的 storyboard.md 必须包含 - Narration: <纯文本> 字段，文本字数应与 Duration 匹配（中文约 4 字/秒）。",
-    );
-  }
-  parts.push("");
-  parts.push(
-    '重要：生成分镜草稿后必须停止。告知用户"分镜草稿已就绪，请在右侧分镜审阅界面编辑确认"，然后等待用户操作。',
-  );
-  parts.push("- 不要主动写 storyboard_lock.md");
-  parts.push("- 不要主动进入 Step 5 编写 HTML");
-  parts.push("- 不要主动调用任何渲染脚本");
-  parts.push(
-    "用户会在 UI 上编辑/增删/重排场景，确认后系统会自动解锁后续步骤。",
-  );
-  return parts.join("\n");
+  return [
+    `请为视频「${opts.name}」准备分镜方案。`,
+    `我的要求：${opts.topic.trim() || "请根据提供的资料制作视频。"}`,
+    `画面：${RATIOS.find((option) => option.value === opts.ratio)?.label ?? "横屏"}。`,
+    opts.styleName ? `使用风格：${opts.styleName}` : "",
+    opts.narrationEnabled ? "配音已开启，请使用项目中保存的声音与字幕设置。" : "配音未开启。",
+    opts.sourceCount ? `已添加 ${opts.sourceCount} 份资料，请阅读。` : "",
+    opts.hasMusic ? "请使用已添加的背景音乐。" : "",
+    "先阅读资料，设计完整口播内容及对应动画：每段包括标题、时长、旁白、画面内容、画面如何随口播展开或变化。用 video.plan 保存方案。",
+    "本轮只准备方案，不编写场景源码、不生成图片或配音、不渲染或导出视频。保存后停下，等待用户在导演台确认。",
+  ].filter(Boolean).join("\n");
 }
 
-function buildStoryboardRetryPrompt(projectName: string): string {
+function buildVideoResumePrompt(projectName: string): string {
   return [
-    `请继续制作视频项目：${projectName}。`,
-    `项目目录：video_projects/${projectName}`,
-    "读取项目中的 outline.json 和现有风格配置，按照 mona-video SKILL 生成分镜草稿 storyboard.md。",
-    "不要新建项目，不要修改已确认的大纲，不要写 storyboard_lock.md，也不要进入场景制作或渲染。",
-    '完成后告知用户“分镜草稿已就绪，请在右侧分镜审阅界面编辑确认”，然后停止。',
+    `请继续准备视频「${projectName}」的分镜方案。`,
+    "先检查已有方案，完善口播及对应的动画设计，并用 video.plan 保存。只准备方案，不写场景源码、不生成配音或视频。等待用户在导演台确认。",
+  ].join("\n");
+}
+
+function buildVideoProductionPrompt(planRevision: number | null): string {
+  return [
+    planRevision === null ? "请继续制作已有视频。" : `我已在导演台确认分镜方案，修订号 ${planRevision}，现在开始生成。`,
+    "先用 video.inspect 核对当前已确认方案，保持旁白、时长和动画意图；如果方案已变化，先停下等待重新确认。",
+    "制作与口播内容逐句对应的视频动画：设计动作、节奏、视觉关系及镜头变化，不能以静态 PPT 页面切换代替。",
+    "使用 Remotion React 场景，源码写入 drafts/scene_NN.tsx，用 video.sync 同步；准备旁白时间后按实际口播调整动画，逐场预览检查并改进，完成视频。",
   ].join("\n");
 }

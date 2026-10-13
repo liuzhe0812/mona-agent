@@ -3,6 +3,7 @@ import ReactDOM from "react-dom/client";
 
 import App from "./App";
 import "./globals.css";
+import "./styles/resize-handles.css";
 import "./i18n";
 
 const NotificationWindow = lazy(() =>

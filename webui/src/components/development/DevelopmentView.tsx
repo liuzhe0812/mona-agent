@@ -309,7 +309,7 @@ export function DevelopmentView({ visible = true, browserHost, onOpenModelSettin
           onRename={(value) => { setRename(value); setName(value.title); setRenameError(""); }} onUpdate={(value, changes) => void update(value, changes)}
           onDelete={deleteTask} onOpenTerminal={openTaskTerminal} />
       </ResizablePanel>
-      <ResizableHandle aria-label="调整项目列表宽度" className="z-10 bg-border/50 hover:bg-primary/30 focus-visible:bg-primary/30" />
+      <ResizableHandle aria-label="调整项目列表宽度" className="z-10" />
     </>}
     <ResizablePanel id="development-conversation" minSize="320px" style={{ overflow: "hidden" }}>
       <ResizablePanelGroup id="development-workspace-columns" direction="horizontal" defaultLayout={workspaceDefaultLayout} onLayoutChanged={onWorkspaceLayoutChanged}
@@ -336,7 +336,7 @@ export function DevelopmentView({ visible = true, browserHost, onOpenModelSettin
           </main>
         </ResizablePanel>
         {project && focused && hasWorkspace && <>
-          <ResizableHandle aria-label="调整工作侧栏宽度" className="z-10 bg-border/50 hover:bg-primary/30 focus-visible:bg-primary/30" />
+          <ResizableHandle aria-label="调整工作侧栏宽度" className="z-10" />
           <ResizablePanel id="development-workspace" defaultSize="384px" minSize="280px" maxSize="55%" groupResizeBehavior="preserve-pixel-size" style={{ overflow: "visible" }}>
             <Suspense fallback={<DevelopmentLoading label="正在打开工作侧栏…" />}><DevelopmentSidebar key={focused.id} project={project} session={focused} executors={executors} visible={visible} browserHost={browserHost} onManageModels={onOpenModelSettings} /></Suspense>
           </ResizablePanel>

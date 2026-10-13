@@ -1,6 +1,8 @@
 import { describe, expect, it } from "vitest";
 
-import { buildComposerProviderOptions } from "@/components/thread/ThreadShell";
+import { buildComposerModelOptions, buildComposerProviderOptions } from "@/components/thread/ThreadShell";
+import { modelKey } from "@/components/models/model-sources";
+import type { DevExecutor } from "@/lib/development-api";
 import type { SettingsPayload } from "@/lib/types";
 
 describe("chat model options", () => {
@@ -100,5 +102,52 @@ describe("chat model options", () => {
     } as SettingsPayload;
 
     expect(buildComposerProviderOptions(settings).map((option) => option.model)).toEqual(["qwen"]);
+  });
+
+  it("adds native catalog models to ordinary chat while keeping same-named sources distinct", () => {
+    const settings = {
+      agent: { provider: "example", model: "shared", executor: "mona", native_model: null },
+      chat_providers: [{
+        name: "example", label: "Example API", configured: true,
+        models: [{ id: "shared", name: "API Shared", enabled: true }],
+      }],
+    } as SettingsPayload;
+    const codex: DevExecutor = {
+      id: "codex", name: "Codex", available: true, reason: "已连接",
+      probe: { state: "ready", authentication: "ready", authMode: "chatgpt", reason: "已连接" },
+      models: [{ id: "shared", label: "原生 Shared", contextWindow: 128_000 }],
+    };
+
+    const options = buildComposerModelOptions(settings, [codex]);
+    const api = options.find((option) => option.provider === "example");
+    const native = options.find((option) => option.provider === "native:codex");
+
+    expect(api).toMatchObject({ model: "shared", label: "API Shared", active: true });
+    expect(native).toMatchObject({
+      model: "shared", label: "原生 Shared", executor: "codex", active: false,
+      contextWindow: 128_000, disabledReason: null,
+    });
+    expect(modelKey(api!)).not.toBe(modelKey(native!));
+  });
+
+  it("uses the saved native source as active and disables options without ready authentication", () => {
+    const settings = {
+      agent: { provider: "example", model: "shared", executor: "codex", native_model: "shared", native_reasoning_effort: "high" },
+      chat_providers: [{ name: "example", label: "Example API", configured: true,
+        models: [{ id: "shared", name: "API Shared", enabled: true }] }],
+    } as SettingsPayload;
+    const codex: DevExecutor = {
+      id: "codex", name: "Codex", available: true, reason: "",
+      probe: { state: "detected", authentication: "required", reason: "请连接账号" },
+      models: [{ id: "shared", label: "原生 Shared", reasoningEfforts: ["low", "high"] }, { id: "", label: "执行者默认模型" }],
+    };
+
+    const options = buildComposerModelOptions(settings, [codex]);
+
+    expect(options.find((option) => option.provider === "example")).toMatchObject({ active: false });
+    expect(options).toHaveLength(2);
+    expect(options.find((option) => option.executor === "codex")).toMatchObject({
+      active: true, reasoningEffort: "high", disabledReason: "请连接账号",
+    });
   });
 });

@@ -13,6 +13,8 @@ dicts:
 
 from __future__ import annotations
 
+import hashlib
+import json
 from typing import Any, Iterable
 
 from mona.agent.partners import (
@@ -21,6 +23,7 @@ from mona.agent.partners import (
     ConversationMetadata,
     normalize_agent_id,
 )
+from mona.agent.tools.base import Tool, tool_parameters
 
 # Message types that may enter the shared model-visible history. Job/run
 # status cards and approval cards are UI projections of the job/run files —
@@ -28,6 +31,67 @@ from mona.agent.partners import (
 _SHAREABLE_MESSAGE_TYPES = frozenset({"message"})
 
 _DEFAULT_MAX_MESSAGES = 50
+
+
+def shared_context_ref(scope: str, text: str) -> str:
+    return f"{scope}:{hashlib.sha256(text.encode('utf-8')).hexdigest()}"
+
+
+class RoomContextSnapshot(str):
+    """Prompt preview carrying its immutable, public-only source documents."""
+
+    sources: dict[str, str]
+
+    def __new__(cls, preview: str, sources: dict[str, str]) -> RoomContextSnapshot:
+        snapshot = super().__new__(cls, preview)
+        snapshot.sources = dict(sources)
+        return snapshot
+
+
+@tool_parameters({
+    "type": "object",
+    "properties": {
+        "reference": {"type": "string", "description": "Exact reference from this job's shared context."},
+        "offset": {"type": "integer", "minimum": 0, "default": 0},
+        "limit": {"type": "integer", "minimum": 1, "maximum": 8000, "default": 8000},
+    },
+    "required": ["reference"],
+    "additionalProperties": False,
+})
+class CollaborationReadTool(Tool):
+    """Read only the public documents explicitly handed to this job."""
+
+    name = "collaboration_read"
+    description = (
+        "Read a page of the complete room context or upstream result using a reference "
+        "from this job's context. Sources stay fixed at job start; offsets count characters."
+    )
+    read_only = True
+    system_managed = True
+    _plugin_discoverable = False
+
+    def __init__(self, sources: dict[str, str]):
+        self._sources = dict(sources)
+
+    async def execute(self, reference: str, offset: int = 0, limit: int = 8000, **kwargs: Any) -> str:
+        if not isinstance(reference, str):
+            return "Error: reference must be a string."
+        text = self._sources.get(reference)
+        if text is None:
+            return "Error: This reference was not shared with the current job."
+        if type(offset) is not int or type(limit) is not int or offset < 0 or not 1 <= limit <= 8000:
+            return "Error: offset must be nonnegative and limit must be between 1 and 8000."
+        if offset > len(text):
+            return "Error: offset exceeds the source length."
+        end = min(len(text), offset + limit)
+        return json.dumps({
+            "reference": reference,
+            "offset": offset,
+            "total_chars": len(text),
+            "content": text[offset:end],
+            "complete": end == len(text),
+            "next_offset": end if end < len(text) else None,
+        }, ensure_ascii=False)
 
 
 class RoomError(ValueError):
@@ -113,7 +177,11 @@ def project_history_for_agent(
     # can contain many tool calls between two visible turns; slicing first
     # would otherwise hide the older shared messages that matter to the room.
     for message in messages:
-        if message.get("_ui_only") or message.get("injected_event"):
+        if (
+            message.get("_ui_only") or message.get("_command") or message.get("injected_event")
+            or message.get("source_kind") == "runtime"
+            or message.get("_runtime_input") or message.get("_input_cancelled")
+        ):
             continue
         message_type = message.get("message_type") or "message"
         if message_type not in _SHAREABLE_MESSAGE_TYPES:

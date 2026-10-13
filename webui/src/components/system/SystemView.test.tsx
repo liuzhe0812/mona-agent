@@ -4,7 +4,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { SystemView } from "./SystemView";
 import type { SystemEvidence, SystemEvidenceStage } from "./systemAgentApi";
-import type { StorageScanResult } from "./useSystemData";
+import type { SoftwareActionResult, SoftwareCheckResult, StorageCleanupResult, StorageScanResult } from "./useSystemData";
 
 const storageScanMock = vi.hoisted(() => vi.fn<() => Promise<StorageScanResult>>(() => Promise.resolve({
   scanId: "scan-empty",
@@ -15,11 +15,16 @@ const storageScanMock = vi.hoisted(() => vi.fn<() => Promise<StorageScanResult>>
   totalScannedGb: 0,
 })));
 
-const startupIssueMock = vi.hoisted(() => ({ isNew: false }));
+const startupIssueMock = vi.hoisted(() => ({ isNew: false, reviewFailure: false }));
+const overviewDriveMock = vi.hoisted(() => ({ value: "C 盘" }));
+const bootDeltaMock = vi.hoisted(() => ({ value: null as number | null }));
 const overviewFailureMock = vi.hoisted(() => ({ message: "" }));
 const configurationApplyMock = vi.hoisted(() => vi.fn(() => Promise.resolve({ itemId: "privacy_advertising_id", success: true, detail: "操作已完成", requiresRestart: false })));
 const uninstallResultMock = vi.hoisted(() => vi.fn());
 const residualDeleteMock = vi.hoisted(() => vi.fn());
+const nativeUpgradeMock = vi.hoisted(() => vi.fn());
+const cleanupMock = vi.hoisted(() => vi.fn());
+const softwareCheckControl = vi.hoisted(() => ({ results: [] as unknown[], failNext: false }));
 
 const systemAgentMock = vi.hoisted(() => ({
   collect: vi.fn<(storage: StorageScanResult | null, onProgress?: (stage: SystemEvidenceStage) => void) => Promise<SystemEvidence>>(() => Promise.resolve({} as SystemEvidence)),
@@ -68,7 +73,9 @@ vi.mock("./SystemAgentChat", () => ({
   ),
 }));
 
-vi.mock("@/lib/tauri", () => ({
+vi.mock("@/lib/tauri", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@/lib/tauri")>()),
+  isTauri: () => false,
   invokeWithTimeout: <T,>(command: string, args?: Record<string, unknown>) => invoke<T>(command, args),
 }));
 
@@ -78,24 +85,31 @@ vi.mock("@tauri-apps/api/core", () => ({
       return Promise.reject(new Error(overviewFailureMock.message));
     }
     if (command === "system_get_history") return Promise.resolve([]);
-    if (command === "system_check_updates") return Promise.resolve({
-      updates: [
-        { id: "Google.Chrome.EXE", name: "Google Chrome", publisher: "Google LLC", currentVersion: "138.0", nextVersion: "139.0", status: "可更新" },
-        { id: "Microsoft.VisualStudioCode", name: "Visual Studio Code", publisher: "", currentVersion: "1.100", nextVersion: "1.101", status: "运行中" },
-      ],
-      installed: [
-        { id: "notepad", name: "Notepad++", publisher: "Notepad++ Team", version: "8.7", installDate: null, softwareType: "system", estimatedSizeBytes: 104857600, installLocation: "C:\\Program Files\\Notepad++", uninstallKind: "desktop", canUninstall: true },
-        { id: "unknown", name: "Unknown Tool", publisher: "", version: "1.0", installDate: null, softwareType: "user", estimatedSizeBytes: null, installLocation: "", uninstallKind: "unavailable", canUninstall: false },
-      ],
-      installedCount: 2,
-      knownSizeBytes: 104857600,
-      knownSizeCount: 1,
-      failedCount: 1,
-      failures: [{ packageId: "Broken.Tool", name: "Broken Tool", action: "upgrade", ts: 1715472000, message: "安装器返回 1603" }],
-      wingetAvailable: true,
-      wingetVersion: "v1.29.280",
-      lastCheck: 1715472000,
-    });
+    if (command === "system_check_updates") {
+      if (softwareCheckControl.failNext) {
+        softwareCheckControl.failNext = false;
+        return Promise.reject(new Error("软件列表刷新失败"));
+      }
+      if (softwareCheckControl.results.length > 0) return Promise.resolve(softwareCheckControl.results.shift());
+      return Promise.resolve({
+        updates: [
+          { id: "Google.Chrome.EXE", name: "Google Chrome", publisher: "Google LLC", currentVersion: "138.0", nextVersion: "139.0", status: "可更新" },
+          { id: "Microsoft.VisualStudioCode", name: "Visual Studio Code", publisher: "", currentVersion: "1.100", nextVersion: "1.101", status: "运行中" },
+        ],
+        installed: [
+          { id: "notepad", name: "Notepad++", publisher: "Notepad++ Team", version: "8.7", installDate: null, softwareType: "system", estimatedSizeBytes: 104857600, installLocation: "C:\\Program Files\\Notepad++", uninstallKind: "desktop", canUninstall: true },
+          { id: "unknown", name: "Unknown Tool", publisher: "", version: "1.0", installDate: null, softwareType: "user", estimatedSizeBytes: null, installLocation: "", uninstallKind: "unavailable", canUninstall: false },
+        ],
+        installedCount: 2,
+        knownSizeBytes: 104857600,
+        knownSizeCount: 1,
+        failedCount: 1,
+        failures: [{ packageId: "Broken.Tool", name: "Broken Tool", action: "upgrade", ts: 1715472000, message: "安装器返回 1603" }],
+        wingetAvailable: true,
+        wingetVersion: "v1.29.280",
+        lastCheck: 1715472000,
+      });
+    }
     if (command === "system_search_apps") return Promise.resolve(args?.query === "xmind" ? [
       { id: "Xmind.Xmind", name: "Xmind", version: "26.01", source: "winget" },
       { id: "Xmind.Xmind.8", name: "XMind 8", version: "3.7", source: "winget" },
@@ -104,7 +118,8 @@ vi.mock("@tauri-apps/api/core", () => ({
       { id: "Tencent.WeChat", name: "WeChat", version: "3.9.12", source: "winget" },
     ]);
     if (command === "system_install_app") return Promise.resolve({ success: true, message: "安装完成", exitCode: 0, residuals: [] });
-    if (command === "system_upgrade_software") return Promise.resolve({ success: true, message: "更新完成", exitCode: 0, residuals: [] });
+    if (command === "system_upgrade_software") return nativeUpgradeMock();
+    if (command === "clean_storage") return cleanupMock();
     if (command === "system_uninstall_software") return uninstallResultMock();
     if (command === "system_delete_software_residuals") return residualDeleteMock();
     if (command === "system_reveal_in_explorer") return Promise.resolve();
@@ -121,8 +136,9 @@ vi.mock("@tauri-apps/api/core", () => ({
     });
     if (command === "system_toggle_startup_item") return Promise.resolve();
     if (command === "system_batch_toggle_startup_items") return Promise.resolve(1);
-    if (command === "system_get_boot_history") return Promise.resolve({ points: [], lastDurationMs: null, lastDeltaMs: null });
+    if (command === "system_get_boot_history") return Promise.resolve({ points: [], lastDurationMs: null, lastDeltaMs: bootDeltaMock.value });
     if (command === "system_acknowledge_startup_items") {
+      if (startupIssueMock.reviewFailure) return Promise.reject(new Error("本机记录无法更新"));
       startupIssueMock.isNew = false;
       return Promise.resolve();
     }
@@ -199,7 +215,7 @@ vi.mock("@tauri-apps/api/core", () => ({
     return Promise.resolve({
       cpu: { usagePercent: 18, frequencyGhz: 2.1, coreCount: 8 },
       memory: { usagePercent: 62, usedGb: 9.9, totalGb: 15.8 },
-      disks: [{ driveLetter: "C 盘", usagePercent: 81, usedGb: 86.5, totalGb: 106.1, availableGb: 19.6 }],
+      disks: [{ driveLetter: overviewDriveMock.value, usagePercent: 81, usedGb: 86.5, totalGb: 106.1, availableGb: 19.6 }],
       network: { totalMbps: 2.4, uploadMbps: 1.2, downloadMbps: 1.2 },
       topProcesses: [
         { pid: 2, name: "Chrome.exe", cpuPercent: 11.2, memoryMb: 800, diskReadBytesPerSec: 1_200_000, diskWriteBytesPerSec: 300_000 },
@@ -215,9 +231,31 @@ vi.mock("@tauri-apps/api/event", () => ({
   listen: vi.fn(() => Promise.resolve(() => {})),
 }));
 
+function makeSoftwareCheck(overrides: Partial<SoftwareCheckResult> = {}): SoftwareCheckResult {
+  return {
+    updates: [],
+    installed: [],
+    installedCount: 0,
+    knownSizeBytes: 0,
+    knownSizeCount: 0,
+    failedCount: 0,
+    failures: [],
+    wingetAvailable: true,
+    wingetVersion: "v1",
+    lastCheck: 1715472000,
+    ...overrides,
+  };
+}
+
 describe("SystemView", () => {
   beforeEach(() => {
     startupIssueMock.isNew = false;
+    startupIssueMock.reviewFailure = false;
+    overviewDriveMock.value = "C 盘";
+    bootDeltaMock.value = null;
+    vi.clearAllMocks();
+    softwareCheckControl.results = [];
+    softwareCheckControl.failNext = false;
     overviewFailureMock.message = "";
     configurationApplyMock.mockReset();
     configurationApplyMock.mockResolvedValue({ itemId: "privacy_advertising_id", success: true, detail: "操作已完成", requiresRestart: false });
@@ -230,6 +268,10 @@ describe("SystemView", () => {
     });
     residualDeleteMock.mockReset();
     residualDeleteMock.mockResolvedValue({ deletedIds: ["notepad-roaming"], freedBytes: 2048, failures: [] });
+    nativeUpgradeMock.mockReset();
+    nativeUpgradeMock.mockResolvedValue({ success: true, message: "更新完成", exitCode: 0, residuals: [] });
+    cleanupMock.mockReset();
+    cleanupMock.mockResolvedValue({ freedGb: 0.5, cleanedIds: ["temp"], failures: [], verification: [{ id: "temp", path: "C:\\Temp", beforeBytes: 1_610_612_736, afterBytes: 1_073_741_824 }] });
     localStorage.removeItem("system.storageScan");
     localStorage.removeItem("system.assistantCollapsed");
     vi.stubGlobal("fetch", vi.fn(() => Promise.resolve({
@@ -250,15 +292,55 @@ describe("SystemView", () => {
     render(<SystemView />);
 
     expect(await screen.findByRole("heading", { name: "系统健康检查" })).toBeTruthy();
-    expect((await screen.findAllByText("待重启状态")).length).toBeGreaterThan(0);
+    expect(screen.queryByRole("heading", { name: "巡检问题" })).toBeNull();
+    expect(screen.getAllByRole("heading", { name: "系统健康检查" })).toHaveLength(1);
+    const health = screen.getByRole("heading", { name: "系统健康检查" }).closest("section")!;
+    const trends = screen.getByRole("heading", { name: "性能趋势" }).closest("section")!;
+    const processes = screen.getByRole("heading", { name: "资源占用较高的程序" }).closest("section")!;
+    expect(trends.compareDocumentPosition(health) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(health.compareDocumentPosition(processes) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(screen.queryByText(/来源：Windows 更新/)).toBeNull();
+    expect((await screen.findAllByText("待重启状态")).length).toBe(1);
     expect(screen.getAllByText("检测到待重启状态").length).toBeGreaterThan(0);
     expect(screen.getAllByText("需关注").length).toBeGreaterThan(0);
     expect(screen.getAllByText("正常").length).toBeGreaterThan(0);
 
     fireEvent.click(screen.getByRole("button", { name: /待重启状态/ }));
     expect(screen.getByText(/来源：Windows 更新/)).toBeTruthy();
+    expect(screen.getByRole("button", { name: "待重启状态" })).toHaveAttribute("aria-expanded", "true");
+    fireEvent.click(screen.getByRole("button", { name: "待重启状态" }));
+    expect(screen.queryByText(/来源：Windows 更新/)).toBeNull();
 
     expect(screen.getByRole("button", { name: /重新检查/ })).toBeTruthy();
+  });
+
+  it("omits privileged and informational diagnostics on load and recheck", async () => {
+    const omittedChecks = [
+      ["system_check_component_health", "组件存储健康"],
+      ["system_check_power_events", "电源唤醒事件"],
+      ["system_check_recovery_status", "恢复与磁盘保护"],
+      ["system_check_network_configuration", "网络代理配置"],
+    ];
+    render(<SystemView />);
+    const recheck = await screen.findByRole("button", { name: "重新检查" });
+    await waitFor(() => expect(recheck).toBeEnabled());
+    const health = screen.getByRole("list", { name: "系统健康检查" });
+    expect(within(health).getByRole("button", { name: "待重启状态" })).toBeTruthy();
+    expect(within(health).getByRole("button", { name: "设备驱动异常" })).toBeTruthy();
+    for (const [command, label] of omittedChecks) {
+      expect(vi.mocked(invoke)).not.toHaveBeenCalledWith(command);
+      expect(within(health).queryByText(label)).toBeNull();
+    }
+
+    vi.mocked(invoke).mockClear();
+    fireEvent.click(recheck);
+    await waitFor(() => expect(recheck).toBeEnabled());
+    expect(vi.mocked(invoke)).toHaveBeenCalledWith("system_check_pending_reboot");
+    expect(vi.mocked(invoke)).toHaveBeenCalledWith("system_check_driver_issues");
+    for (const [command, label] of omittedChecks) {
+      expect(vi.mocked(invoke)).not.toHaveBeenCalledWith(command);
+      expect(within(health).queryByText(label)).toBeNull();
+    }
   });
 
   afterEach(() => {
@@ -279,13 +361,12 @@ describe("SystemView", () => {
     expect(assistant.getAttribute("aria-hidden")).toBe("true");
     const expandButton = screen.getByRole("button", { name: "展开 Mona 系统管家" });
     expect(expandButton.querySelector('img[src="/brand/mona_app_icon.png"]')).toBeTruthy();
-    expect(screen.getByTestId("system-layout").className).toContain("grid-cols-[minmax(0,1fr)]");
-    expect(screen.getByTestId("system-layout").className).not.toContain("grid-cols-[minmax(0,1fr)_360px]");
+    expect(screen.queryByRole("separator", { name: "调整系统管家宽度" })).toBeNull();
 
     fireEvent.click(screen.getByRole("button", { name: "展开 Mona 系统管家" }));
     expect(document.querySelector('aside[aria-label="Mona 系统管家"]')?.getAttribute("aria-hidden")).toBe("false");
     expect(screen.getByRole("button", { name: "收起 Mona 系统管家" })).toBeTruthy();
-    expect(screen.getByTestId("system-layout").className).toContain("grid-cols-[minmax(0,1fr)_360px]");
+    expect(screen.getByRole("separator", { name: "调整系统管家宽度" })).toBeInTheDocument();
 
     localStorage.removeItem("system.assistantCollapsed");
   });
@@ -316,17 +397,252 @@ describe("SystemView", () => {
     render(<SystemView />);
 
     expect(await screen.findByRole("button", { name: "10 分钟" })).toBeTruthy();
-    expect(screen.getByRole("heading", { name: "Mona 系统管家" })).toBeTruthy();
-    expect(await screen.findByText("巡检发现")).toBeTruthy();
+    const heading = screen.getByRole("heading", { name: "Mona", exact: true });
+    expect(heading.closest("header")?.parentElement?.tagName).toBe("ASIDE");
+    expect(screen.getByRole("tablist", { name: "系统模块导航" }).closest('[data-panel]')).toHaveAttribute("id", "system-main");
+    expect(heading.closest('[data-panel]')).toHaveAttribute("id", "system-assistant");
+    expect(heading.closest("header")).toContainElement(screen.getByRole("button", { name: "收起 Mona 系统管家" }));
+    const list = await screen.findByRole("list", { name: "系统健康检查" });
+    expect(list.closest('[data-panel]')).toHaveAttribute("id", "system-main");
+    expect(within(list).getByRole("button", { name: "待重启状态", exact: true })).toBeInTheDocument();
+    expect(within(screen.getByRole("complementary", { name: "Mona 系统管家" })).queryByText("巡检发现")).toBeNull();
     expect(screen.getByTestId("inspection-card-software")).toBeTruthy();
-    expect(screen.getByRole("button", { name: "生成更新方案" })).toBeTruthy();
+    expect(screen.getByTestId("inspection-card-software").closest("ul")).toBe(list);
+    expect(within(list).queryByRole("button", { name: "软件更新", exact: true })).toBeNull();
+    const update = screen.getByRole("button", { name: "全部更新" });
+    expect(update).toHaveClass("bg-background", "border-input", "h-8");
+    expect(update).not.toHaveClass("mona-interaction-button", "w-28");
+    expect(screen.queryByRole("button", { name: "生成更新方案" })).toBeNull();
     expect(screen.queryByRole("button", { name: "释放 C 盘可清理空间" })).toBeNull();
-    expect(screen.getByTestId("system-layout").className).toContain(
-      "grid-cols-[minmax(0,1fr)_360px]",
-    );
-    expect(screen.getByTestId("system-layout").className).not.toContain(
-      "grid-cols-[minmax(0,1fr)]",
-    );
+    expect(screen.getByRole("separator", { name: "调整系统管家宽度" })).toBeInTheDocument();
+  });
+
+  it("executes all updates directly from the health row without opening Mona or requesting a plan", async () => {
+    render(<SystemView />);
+    const list = await screen.findByRole("list", { name: "系统健康检查" });
+    fireEvent.click(screen.getByRole("button", { name: "收起 Mona 系统管家" }));
+    fireEvent.click(await within(list).findByRole("button", { name: "全部更新" }));
+
+    await waitFor(() => expect(vi.mocked(invoke)).toHaveBeenCalledWith("system_upgrade_software", { id: "Google.Chrome.EXE", name: "Google Chrome" }));
+    expect(vi.mocked(invoke)).toHaveBeenCalledWith("system_upgrade_software", { id: "Microsoft.VisualStudioCode", name: "Visual Studio Code" });
+    expect(await screen.findByText("2 项更新完成")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "展开 Mona 系统管家" })).toBeInTheDocument();
+    expect(systemAgentMock.collect).not.toHaveBeenCalled();
+    expect(systemAgentMock.plan).not.toHaveBeenCalled();
+    expect(systemAgentMock.execute).not.toHaveBeenCalled();
+  });
+
+  it("confirms the direct cleanup scope and keeps the measured remaining space", async () => {
+    storageScanMock.mockResolvedValueOnce({
+      scanId: "direct-cleanup",
+      disks: [], directories: [], fileTypes: [], totalScannedGb: 2,
+      cleanupItems: [
+        { id: "temp", name: "临时文件", sizeGb: 1.5, path: "C:\\Temp", cleanable: true, recommended: true, reason: "缓存" },
+        { id: "optional", name: "需自行审查", sizeGb: 2, path: "C:\\Optional", cleanable: true, recommended: false, reason: "需审查" },
+        { id: "windows_old", name: "旧系统", sizeGb: 8, path: "C:\\Windows.old", cleanable: false, recommended: false, reason: "交由系统" },
+      ],
+    });
+    render(<SystemView initialTab="storage" />);
+    fireEvent.click(screen.getByRole("button", { name: "开始扫描" }));
+    await screen.findByText("临时文件");
+    fireEvent.click(screen.getByRole("tab", { name: "概览" }));
+    const row = await screen.findByTestId("inspection-card-storage");
+    fireEvent.click(within(row).getByRole("button", { name: "清理", exact: true }));
+    const dialog = await screen.findByRole("alertdialog");
+    expect(within(dialog).getByText("临时文件")).toBeInTheDocument();
+    expect(within(dialog).queryByText("需自行审查")).toBeNull();
+    expect(within(dialog).queryByText("旧系统")).toBeNull();
+    expect(cleanupMock).not.toHaveBeenCalled();
+    fireEvent.click(within(dialog).getByRole("button", { name: "确认清理" }));
+
+    await waitFor(() => expect(vi.mocked(invoke)).toHaveBeenCalledWith("clean_storage", { ids: ["temp"] }));
+    expect(await screen.findByText("清理完成，实际释放 0.5 GB")).toBeInTheDocument();
+    expect(within(row).getByText("1.0 GB")).toBeInTheDocument();
+    expect(systemAgentMock.plan).not.toHaveBeenCalled();
+    expect(screen.queryByRole("alertdialog")).toBeNull();
+  });
+
+  it("closes the overview cleanup dialog while cleaning and keeps its busy action across tabs", async () => {
+    let resolveCleanup!: (result: StorageCleanupResult) => void;
+    cleanupMock.mockReturnValueOnce(new Promise<StorageCleanupResult>((resolve) => { resolveCleanup = resolve; }));
+    storageScanMock.mockResolvedValueOnce({
+      scanId: "pending-direct-cleanup",
+      disks: [], directories: [], fileTypes: [], totalScannedGb: 2,
+      cleanupItems: [{ id: "temp", name: "临时文件", sizeGb: 1.5, path: "C:\\Temp", cleanable: true, recommended: true, reason: "缓存" }],
+    });
+    render(<SystemView initialTab="storage" />);
+    fireEvent.click(screen.getByRole("button", { name: "开始扫描" }));
+    await screen.findByText("临时文件");
+    fireEvent.click(screen.getByRole("tab", { name: "概览" }));
+
+    const row = await screen.findByTestId("inspection-card-storage");
+    fireEvent.click(within(row).getByRole("button", { name: "清理", exact: true }));
+    const dialog = await screen.findByRole("alertdialog");
+    fireEvent.click(within(dialog).getByRole("button", { name: "确认清理" }));
+    await waitFor(() => expect(vi.mocked(invoke)).toHaveBeenCalledWith("clean_storage", { ids: ["temp"] }));
+
+    expect(screen.queryByRole("alertdialog")).toBeNull();
+    const busyButton = within(row).getByRole("button", { name: "正在清理" });
+    expect(busyButton).toBeDisabled();
+    expect(busyButton).toHaveAttribute("aria-busy", "true");
+    expect(busyButton.querySelector("svg.animate-spin")).toBeTruthy();
+
+    fireEvent.click(screen.getByRole("tab", { name: "启动项" }));
+    expect(await screen.findByRole("columnheader", { name: "发布者" })).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("tab", { name: "概览" }));
+    const returnedRow = await screen.findByTestId("inspection-card-storage");
+    const returnedBusyButton = within(returnedRow).getByRole("button", { name: "正在清理" });
+    expect(returnedBusyButton).toBeDisabled();
+    expect(returnedBusyButton).toHaveAttribute("aria-busy", "true");
+    expect(returnedBusyButton.querySelector("svg.animate-spin")).toBeTruthy();
+
+    await act(async () => {
+      resolveCleanup({
+        freedGb: 0.5,
+        cleanedIds: ["temp"],
+        failures: [],
+        verification: [{ id: "temp", path: "C:\\Temp", beforeBytes: 1_610_612_736, afterBytes: 1_073_741_824 }],
+      });
+    });
+    expect(await screen.findByText("清理完成，实际释放 0.5 GB")).toBeInTheDocument();
+    expect(within(returnedRow).getByText("1.0 GB")).toBeInTheDocument();
+  });
+
+  it("closes storage-panel cleanup confirmation and shows its busy action until the result arrives", async () => {
+    let resolveCleanup!: (result: StorageCleanupResult) => void;
+    cleanupMock.mockReturnValueOnce(new Promise<StorageCleanupResult>((resolve) => { resolveCleanup = resolve; }));
+    storageScanMock.mockResolvedValueOnce({
+      scanId: "pending-panel-cleanup",
+      disks: [], directories: [], fileTypes: [], totalScannedGb: 2,
+      cleanupItems: [{ id: "temp", name: "临时文件", sizeGb: 1.5, path: "C:\\Temp", cleanable: true, recommended: true, reason: "缓存" }],
+    });
+    render(<SystemView initialTab="storage" />);
+    fireEvent.click(screen.getByRole("button", { name: "开始扫描" }));
+    await screen.findByText("临时文件");
+    fireEvent.click(screen.getByRole("checkbox", { name: "选择 临时文件" }));
+    fireEvent.click(screen.getByRole("button", { name: "安全清理" }));
+    expect(await screen.findByText(/这些文件将被直接删除，不经过回收站/)).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "确认清理" }));
+
+    await waitFor(() => expect(vi.mocked(invoke)).toHaveBeenCalledWith("clean_storage", { ids: ["temp"] }));
+    expect(screen.queryByText(/这些文件将被直接删除，不经过回收站/)).toBeNull();
+    const busyButton = screen.getByRole("button", { name: "正在清理" });
+    expect(busyButton).toBeDisabled();
+    expect(busyButton).toHaveAttribute("aria-busy", "true");
+    expect(busyButton.querySelector("svg.animate-spin")).toBeTruthy();
+
+    await act(async () => {
+      resolveCleanup({
+        freedGb: 0.5,
+        cleanedIds: ["temp"],
+        failures: [],
+        verification: [{ id: "temp", path: "C:\\Temp", beforeBytes: 1_610_612_736, afterBytes: 1_073_741_824 }],
+      });
+    });
+    expect(await screen.findByText("清理完成，实际释放 0.5 GB")).toBeInTheDocument();
+  });
+
+  it.each(["failed", "unknown"])("shows an incomplete native update with a link to verify its result: %s", async (status) => {
+    if (status === "failed") nativeUpgradeMock.mockResolvedValueOnce({ success: false, message: "更新失败", exitCode: 1, residuals: [] });
+    else nativeUpgradeMock.mockRejectedValueOnce(new Error("更新结果未返回"));
+    render(<SystemView />);
+    fireEvent.click(await screen.findByRole("button", { name: "全部更新" }));
+    const dialog = await screen.findByRole("alertdialog");
+    expect(within(dialog).getByText("部分软件更新未完成")).toBeInTheDocument();
+    expect(within(dialog).getByText(status === "failed" ? /1 项完成，1 项失败/ : /1 项完成，1 项结果待确认/)).toBeInTheDocument();
+    expect(screen.queryByText("2 项更新完成")).toBeNull();
+    fireEvent.click(within(dialog).getByRole("button", { name: "查看更新" }));
+    expect(await screen.findByRole("button", { name: "更新 Google Chrome" })).toBeInTheDocument();
+    expect(systemAgentMock.plan).not.toHaveBeenCalled();
+  });
+
+  it("keeps uncleaned space visible and shows an actionable cleanup failure", async () => {
+    storageScanMock.mockResolvedValueOnce({
+      scanId: "cleanup-failure",
+      disks: [], directories: [], fileTypes: [], totalScannedGb: 2,
+      cleanupItems: [{ id: "temp", name: "临时文件", sizeGb: 1.5, path: "C:\\Temp", cleanable: true, recommended: true, reason: "缓存" }],
+    });
+    cleanupMock.mockResolvedValueOnce({ freedGb: 0, cleanedIds: [], failures: ["清理项无法读取"], verification: [] });
+    render(<SystemView initialTab="storage" />);
+    fireEvent.click(screen.getByRole("button", { name: "开始扫描" }));
+    await screen.findByText("临时文件");
+    fireEvent.click(screen.getByRole("tab", { name: "概览" }));
+    const row = await screen.findByTestId("inspection-card-storage");
+    fireEvent.click(within(row).getByRole("button", { name: "清理", exact: true }));
+    fireEvent.click(within(await screen.findByRole("alertdialog")).getByRole("button", { name: "确认清理" }));
+    const error = await screen.findByRole("heading", { name: "清理未完成" });
+    expect(within(row).getByText("1.5 GB")).toBeInTheDocument();
+    expect(within(error.closest('[role="alertdialog"]')!).getByRole("button", { name: "查看清理项" })).toBeInTheDocument();
+    expect(screen.queryByText(/清理完成，实际释放/)).toBeNull();
+    expect(systemAgentMock.plan).not.toHaveBeenCalled();
+  });
+
+  it("resizes the assistant by dragging and restores its width and draft after reopening", async () => {
+    const initialStyleSheets = [...document.adoptedStyleSheets];
+    let measured = false;
+    const panelWidth = (element: HTMLElement) => {
+      if (!measured) return element.id === "system-main" ? 840 : 360;
+      const percentage = parseFloat(element.style.flexGrow);
+      return (Number.isFinite(percentage) ? percentage : element.id === "system-main" ? 70 : 30) * 12;
+    };
+    const originalWidth = Object.getOwnPropertyDescriptor(HTMLElement.prototype, "offsetWidth")!.get!;
+    const originalLeft = Object.getOwnPropertyDescriptor(HTMLElement.prototype, "offsetLeft")!.get!;
+    const widthMock = vi.spyOn(HTMLElement.prototype, "offsetWidth", "get").mockImplementation(function (this: HTMLElement) {
+      return this.hasAttribute("data-panel") ? panelWidth(this) : originalWidth.call(this);
+    });
+    const leftMock = vi.spyOn(HTMLElement.prototype, "offsetLeft", "get").mockImplementation(function (this: HTMLElement) {
+      const mainWidth = document.getElementById("system-main")?.offsetWidth ?? 840;
+      if (this.id === "system-main") return 0;
+      if (this.hasAttribute("data-separator")) return mainWidth;
+      if (this.id === "system-assistant") return mainWidth + 1;
+      return originalLeft.call(this);
+    });
+    const boundsMock = vi.spyOn(HTMLElement.prototype, "getBoundingClientRect").mockImplementation(function (this: HTMLElement) {
+      const mainWidth = document.getElementById("system-main")?.offsetWidth ?? 840;
+      if (this.id === "system-layout") return new DOMRect(0, 0, 1201, 600);
+      if (this.hasAttribute("data-separator")) return new DOMRect(mainWidth, 0, 1, 600);
+      if (this.id === "system-main") return new DOMRect(0, 0, this.offsetWidth, 600);
+      if (this.id === "system-assistant") return new DOMRect(mainWidth + 1, 0, this.offsetWidth, 600);
+      return new DOMRect();
+    });
+    try {
+      render(<SystemView />);
+      await screen.findByRole("list", { name: "系统健康检查" });
+      measured = true;
+      const assistant = screen.getByTestId("system-assistant");
+      const input = screen.getByLabelText("描述系统维护目标");
+      fireEvent.change(input, { target: { value: "保留我的问题" } });
+      expect(assistant.offsetWidth).toBeCloseTo(360);
+
+      const separator = screen.getByRole("separator", { name: "调整系统管家宽度" });
+      const collapse = screen.getByRole("button", { name: "收起 Mona 系统管家" });
+      // happy-dom lacks the browser's nullable ARIA attribute reflection.
+      Object.defineProperty(separator, "ariaDisabled", { configurable: true, get: () => separator.getAttribute("aria-disabled") });
+      const start = separator.getBoundingClientRect().left;
+      fireEvent.pointerDown(separator, { pointerId: 1, pointerType: "mouse", button: 0, buttons: 1, clientX: start, clientY: 100 });
+      fireEvent.pointerMove(document, { pointerId: 1, pointerType: "mouse", buttons: 1, clientX: start - 120, clientY: 100 });
+      fireEvent.pointerUp(document, { pointerId: 1, pointerType: "mouse", buttons: 0, clientX: start - 120, clientY: 100 });
+      expect(assistant.offsetWidth).toBeCloseTo(480);
+
+      separator.focus();
+      fireEvent.keyDown(separator, { key: "ArrowLeft" });
+      expect(assistant.offsetWidth).toBeCloseTo(540);
+      fireEvent.keyDown(separator, { key: "ArrowLeft" });
+      fireEvent.keyDown(separator, { key: "ArrowLeft" });
+      expect(assistant.offsetWidth).toBeCloseTo(600);
+
+      fireEvent.click(collapse);
+      expect(assistant.offsetWidth).toBe(0);
+      fireEvent.click(document.querySelector('button[aria-label="展开 Mona 系统管家"]')!);
+      expect(assistant.offsetWidth).toBeCloseTo(600);
+      expect(screen.getByLabelText("描述系统维护目标")).toBe(input);
+      expect(input).toHaveValue("保留我的问题");
+    } finally {
+      boundsMock.mockRestore();
+      leftMock.mockRestore();
+      widthMock.mockRestore();
+      document.adoptedStyleSheets = initialStyleSheets;
+    }
   });
 
   it("consolidates persistent configuration under system optimization", async () => {
@@ -366,8 +682,12 @@ describe("SystemView", () => {
     try {
       render(<SystemView />);
 
-      expect(await screen.findByRole("heading", { name: "现在值得处理" })).toBeTruthy();
-      expect(screen.getByRole("heading", { name: "C 盘空间紧张" })).toBeTruthy();
+      expect(await screen.findByRole("heading", { name: "系统健康检查" })).toBeTruthy();
+      const row = screen.getByTestId("inspection-card-scan-storage");
+      expect(within(row).getByText("C 盘空间紧张")).toBeTruthy();
+      expect(within(row).getAllByRole("button")).toHaveLength(1);
+      expect(within(row).getByRole("button", { name: "查看并扫描" })).not.toHaveAttribute("aria-expanded");
+      expect(storageScanMock).not.toHaveBeenCalled();
       fireEvent.click(screen.getByRole("button", { name: "查看并扫描" }));
       expect(await screen.findByRole("heading", { name: "重点路径占用" })).toBeTruthy();
 
@@ -379,21 +699,97 @@ describe("SystemView", () => {
   it("does not treat the initial startup inventory as newly added", async () => {
     render(<SystemView />);
 
-    await screen.findByRole("heading", { name: "现在值得处理" });
-    expect(screen.queryByRole("heading", { name: "启动项有新增" })).toBeNull();
+    await screen.findByRole("heading", { name: "系统健康检查" });
+    expect(screen.queryByText("启动项有新增", { exact: true })).toBeNull();
   });
 
-  it("acknowledges reviewed startup items before returning to the overview", async () => {
+  it("scans the drive named in the health warning instead of the previously selected drive", async () => {
+    overviewDriveMock.value = "D:\\";
+    render(<SystemView />);
+    expect(await screen.findByText("D:\\空间紧张", { exact: true })).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "查看并扫描" }));
+
+    await waitFor(() => expect(vi.mocked(invoke)).toHaveBeenCalledWith("scan_storage", { drive: "D:" }));
+    expect(vi.mocked(invoke)).not.toHaveBeenCalledWith("scan_storage", { drive: "C:" });
+  });
+
+  it("shows a failed review confirmation and retains the pending startup review", async () => {
+    startupIssueMock.isNew = true;
+    startupIssueMock.reviewFailure = true;
+    render(<SystemView initialTab="startup" />);
+    fireEvent.click(await screen.findByRole("button", { name: "标记已审查" }));
+
+    const dialog = await screen.findByRole("alertdialog");
+    expect(within(dialog).getByText("无法确认审查状态")).toBeInTheDocument();
+    expect(within(dialog).getByRole("button", { name: "重新读取" })).toBeInTheDocument();
+    expect(startupIssueMock.isNew).toBe(true);
+  });
+
+  it("only marks startup items reviewed after the user explicitly confirms review", async () => {
     startupIssueMock.isNew = true;
     render(<SystemView />);
 
-    expect(await screen.findByRole("heading", { name: "启动项有新增" })).toBeTruthy();
+    expect(await screen.findByText("启动项有新增", { exact: true })).toBeTruthy();
     fireEvent.click(screen.getByRole("button", { name: "审查启动项" }));
-    await waitFor(() => expect(vi.mocked(invoke)).toHaveBeenCalledWith("system_acknowledge_startup_items", {}));
     expect(await screen.findByRole("heading", { name: "启动应用" })).toBeTruthy();
+    expect(vi.mocked(invoke)).not.toHaveBeenCalledWith("system_acknowledge_startup_items", {});
+    fireEvent.click(await screen.findByRole("button", { name: "标记已审查" }));
+    await waitFor(() => expect(vi.mocked(invoke)).toHaveBeenCalledWith("system_acknowledge_startup_items", {}));
 
     fireEvent.click(screen.getByRole("tab", { name: "概览" }));
-    await waitFor(() => expect(screen.queryByRole("heading", { name: "启动项有新增" })).toBeNull());
+    await waitFor(() => expect(screen.queryByText("启动项有新增", { exact: true })).toBeNull());
+  });
+
+  it("refreshes the lightweight health sources without starting a full disk scan", async () => {
+    render(<SystemView />);
+    const recheck = await screen.findByRole("button", { name: "重新检查" });
+    await waitFor(() => expect(recheck).toBeEnabled());
+    vi.mocked(invoke).mockClear();
+    storageScanMock.mockClear();
+    fireEvent.click(recheck);
+
+    await waitFor(() => expect(vi.mocked(invoke)).toHaveBeenCalledWith("system_check_updates"));
+    expect(vi.mocked(invoke)).toHaveBeenCalledWith("system_check_pending_reboot");
+    expect(vi.mocked(invoke)).toHaveBeenCalledWith("system_list_startup_items");
+    expect(vi.mocked(invoke)).toHaveBeenCalledWith("system_get_boot_history");
+    expect(storageScanMock).not.toHaveBeenCalled();
+    await waitFor(() => expect(recheck).toBeEnabled());
+  });
+
+  it("does not warn about insignificant boot-time fluctuations", async () => {
+    bootDeltaMock.value = 100;
+    render(<SystemView />);
+    await screen.findByRole("heading", { name: "系统健康检查" });
+    expect(screen.queryByText("启动耗时增加", { exact: true })).toBeNull();
+  });
+
+  it("offers the startup trend for a slower boot without clearing startup review flags", async () => {
+    bootDeltaMock.value = 5_000;
+    render(<SystemView />);
+    fireEvent.click(await screen.findByRole("button", { name: "查看启动趋势" }));
+    expect(await screen.findByRole("heading", { name: "启动耗时趋势（最近 7 次启动）" })).toBeInTheDocument();
+    expect(vi.mocked(invoke)).not.toHaveBeenCalledWith("system_acknowledge_startup_items", {});
+  });
+
+  it("prevents duplicate native updates across the overview and software list", async () => {
+    let finishUpgrade!: () => void;
+    nativeUpgradeMock.mockReturnValueOnce(new Promise((resolve) => {
+      finishUpgrade = () => resolve({ success: true, message: "完成", exitCode: 0, residuals: [] });
+    }));
+    render(<SystemView />);
+    const update = await screen.findByRole("button", { name: "全部更新" });
+    fireEvent.click(update);
+    await waitFor(() => expect(nativeUpgradeMock).toHaveBeenCalledTimes(1));
+    expect(update).toBeDisabled();
+    fireEvent.click(update);
+    expect(nativeUpgradeMock).toHaveBeenCalledTimes(1);
+    fireEvent.click(screen.getByRole("tab", { name: /^软件管理/ }));
+    fireEvent.click(screen.getByRole("tab", { name: "我的软件" }));
+    expect(await screen.findByRole("button", { name: "正在更新 Google Chrome" })).toBeDisabled();
+    await act(async () => finishUpgrade());
+    await waitFor(() => expect(nativeUpgradeMock).toHaveBeenCalledTimes(2));
+    expect(await screen.findByText("2 项更新完成")).toBeInTheDocument();
+    expect(systemAgentMock.plan).not.toHaveBeenCalled();
   });
 
   it("shows real process disk read and write rates without a network placeholder", async () => {
@@ -410,9 +806,11 @@ describe("SystemView", () => {
     render(<SystemView />);
 
     await screen.findByRole("columnheader", { name: "CPU" });
-    fireEvent.click(screen.getByRole("button", { name: "按 CPU 排序" }));
+    const sortButton = screen.getByRole("button", { name: "按 CPU 排序" });
+    const table = sortButton.closest("table")!;
+    fireEvent.click(sortButton);
 
-    expect(screen.getAllByRole("row").slice(1).map((row) => (row as HTMLTableRowElement).cells[0].textContent)).toEqual([
+    expect(within(table).getAllByRole("row").slice(1).map((row) => (row as HTMLTableRowElement).cells[0].textContent)).toEqual([
       "Slack.exe",
       "Code.exe",
       "Chrome.exe",
@@ -522,6 +920,90 @@ describe("SystemView", () => {
     ));
     expect(await screen.findByText("C:\\Users\\Mona\\AppData\\Roaming\\Notepad++")).toBeTruthy();
     expect(screen.getByText("疑似残留，删除前需确认")).toBeTruthy();
+  });
+
+  it("shows uninstall progress ahead of an old failure for a name-matched update and handles pending without retry", async () => {
+    const installed = { id: "installed.notepad", name: "Notepad++", publisher: "Notepad++ Team", version: "8.7", installDate: null, softwareType: "system", estimatedSizeBytes: 104857600, installLocation: "C:\\Program Files\\Notepad++", uninstallKind: "desktop", canUninstall: true };
+    const update = { id: "update.notepad", name: "Notepad++", publisher: "Notepad++ Team", currentVersion: "8.7", nextVersion: "8.8", status: "可更新" };
+    const oldFailure = { packageId: installed.id, name: installed.name, action: "uninstall", ts: 1715472000, message: "上次卸载未完成" };
+    const inventory = makeSoftwareCheck({ updates: [update], installed: [installed], installedCount: 1, failures: [oldFailure], failedCount: 1 });
+    const refreshedInventory = makeSoftwareCheck({ updates: [update], installed: [], installedCount: 0, failures: [oldFailure], failedCount: 1 });
+    softwareCheckControl.results.push(inventory, refreshedInventory);
+    let resolveUninstall!: (result: SoftwareActionResult) => void;
+    uninstallResultMock.mockReturnValueOnce(new Promise<SoftwareActionResult>((resolve) => { resolveUninstall = resolve; }));
+    render(<SystemView initialTab="software" />);
+
+    fireEvent.click(await screen.findByRole("tab", { name: "我的软件" }));
+    expect(await screen.findByText("Notepad++ · 卸载失败")).toBeInTheDocument();
+    fireEvent.click(await screen.findByRole("button", { name: "卸载 Notepad++" }));
+    fireEvent.click(screen.getByRole("button", { name: "确认卸载 Notepad++" }));
+    expect(screen.queryByRole("button", { name: "确认卸载 Notepad++" })).toBeNull();
+    await waitFor(() => expect(vi.mocked(invoke)).toHaveBeenCalledWith("system_uninstall_software", {
+      id: installed.id,
+      name: installed.name,
+      installLocation: installed.installLocation,
+    }));
+    expect(screen.getByText("正在卸载", { exact: true })).toBeInTheDocument();
+    expect(screen.queryByText("Notepad++ · 卸载失败")).toBeNull();
+    const updateButton = screen.getByRole("button", { name: "更新 Notepad++" });
+    expect(updateButton).toBeDisabled();
+    expect(updateButton.querySelector("svg.animate-spin")).toBeNull();
+    expect(vi.mocked(invoke).mock.calls.filter(([command]) => command === "system_uninstall_software")).toHaveLength(1);
+
+    await act(async () => {
+      resolveUninstall({ success: false, pending: true, message: "卸载登记尚未确认", exitCode: null, residuals: [] });
+    });
+    expect(await screen.findByText("卸载结果待确认")).toBeInTheDocument();
+    expect(screen.queryByTestId("system-task-failure")).toBeNull();
+    expect(screen.queryByRole("button", { name: "重试" })).toBeNull();
+    expect(within(screen.getByText("卸载结果待确认").closest('[role="alert"]')!).getByRole("button", { name: "重新扫描" })).toBeEnabled();
+    expect(vi.mocked(invoke).mock.calls.filter(([command]) => command === "system_uninstall_software")).toHaveLength(1);
+  });
+
+  it("treats a disconnected uninstall IPC as pending and performs only a read-only refresh", async () => {
+    uninstallResultMock.mockRejectedValueOnce(new Error("IPC disconnected"));
+    render(<SystemView initialTab="software" />);
+    fireEvent.click(await screen.findByRole("tab", { name: "我的软件" }));
+    fireEvent.click(await screen.findByRole("button", { name: "卸载 Notepad++" }));
+    fireEvent.click(screen.getByRole("button", { name: "确认卸载 Notepad++" }));
+
+    expect(await screen.findByText("卸载结果待确认")).toBeInTheDocument();
+    const pendingNotice = screen.getByText("卸载结果待确认").closest('[role="alert"]')!;
+    const diagnosticDetails = within(pendingNotice).getByText("查看详情").closest("details")!;
+    expect(diagnosticDetails).not.toHaveAttribute("open");
+    fireEvent.click(within(pendingNotice).getByText("查看详情"));
+    expect(diagnosticDetails).toHaveAttribute("open");
+    expect(within(pendingNotice).getByText("Error: IPC disconnected")).toBeInTheDocument();
+    expect(screen.queryByText("卸载 Notepad++ 失败")).toBeNull();
+    expect(screen.queryByRole("button", { name: "重试" })).toBeNull();
+    expect(vi.mocked(invoke).mock.calls.filter(([command]) => command === "system_uninstall_software")).toHaveLength(1);
+    expect(vi.mocked(invoke).mock.calls.filter(([command]) => command === "system_check_updates")).toHaveLength(2);
+  });
+
+  it("keeps a confirmed uninstall successful when the follow-up inventory refresh fails", async () => {
+    uninstallResultMock.mockResolvedValueOnce({ success: true, message: "卸载完成", exitCode: 0, residuals: [] });
+    render(<SystemView initialTab="software" />);
+    fireEvent.click(await screen.findByRole("tab", { name: "我的软件" }));
+    fireEvent.click(await screen.findByRole("button", { name: "卸载 Notepad++" }));
+    softwareCheckControl.failNext = true;
+    fireEvent.click(screen.getByRole("button", { name: "确认卸载 Notepad++" }));
+
+    expect(await screen.findByText("已确认卸载完成，未发现高置信度残留候选。")).toBeInTheDocument();
+    expect(screen.getByText("软件信息读取失败：Error: 软件列表刷新失败")).toBeInTheDocument();
+    expect(screen.queryByText("卸载 Notepad++ 失败")).toBeNull();
+  });
+
+  it.each([1641, 3010])("keeps MSI exit code %s successful and tells the user to restart", async (exitCode) => {
+    uninstallResultMock.mockResolvedValueOnce({ success: true, message: "安装程序已完成卸载操作", exitCode, residuals: [] });
+    render(<SystemView initialTab="software" />);
+    fireEvent.click(await screen.findByRole("tab", { name: "我的软件" }));
+    fireEvent.click(await screen.findByRole("button", { name: "卸载 Notepad++" }));
+    fireEvent.click(screen.getByRole("button", { name: "确认卸载 Notepad++" }));
+
+    expect(await screen.findByText("卸载已完成，需要重启")).toBeInTheDocument();
+    expect(screen.getByText(/重启电脑后即可完成卸载/)).toBeInTheDocument();
+    expect(screen.queryByText("已确认卸载完成，未发现高置信度残留候选。")).toBeNull();
+    expect(screen.queryByText("卸载 Notepad++ 失败")).toBeNull();
   });
 
   it("opens a residual location and deletes selected candidates after confirmation", async () => {
@@ -688,7 +1170,8 @@ describe("SystemView", () => {
     expect((await screen.findAllByText("1.5 GB")).length).toBeGreaterThan(0);
     expect(screen.getByRole("heading", { name: "Mona 发现" })).toBeTruthy();
     expect(screen.getAllByRole("button", { name: "分析当前范围" }).length).toBeGreaterThan(0);
-    expect(screen.getByRole("button", { name: "生成清理方案" })).toBeTruthy();
+    expect(screen.queryByRole("button", { name: "生成清理方案" })).toBeNull();
+    expect(screen.getByRole("button", { name: "安全清理" })).toBeTruthy();
     expect(screen.getByText("应用")).toBeTruthy();
     // 扫描覆盖率说明：totalScannedGb(20) / 系统盘已用(50) = 40%
     expect((await screen.findAllByText(/约占 C: 已用的 40%/)).length).toBeGreaterThan(0);
@@ -838,7 +1321,7 @@ describe("SystemView", () => {
 
     expect(await screen.findByText("已发现 1 项可更新软件")).toBeTruthy();
     expect(systemAgentMock.collect).toHaveBeenCalled();
-    expect(systemAgentMock.plan).toHaveBeenCalledWith("释放 C 盘可清理空间", {});
+    expect(systemAgentMock.plan).toHaveBeenCalledWith("释放 C 盘可清理空间", {}, expect.any(AbortSignal));
     expect(screen.getByText("更新 Google Chrome")).toBeTruthy();
 
     fireEvent.click(screen.getByRole("tab", { name: "启动项" }));

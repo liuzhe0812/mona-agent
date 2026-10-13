@@ -14,8 +14,13 @@ import sys
 import tomllib
 from pathlib import Path
 
-from PyInstaller.utils.hooks import collect_all, collect_submodules, collect_data_files
 from packaging.version import Version
+from PyInstaller.utils.hooks import (
+    collect_all,
+    collect_data_files,
+    collect_submodules,
+    copy_metadata,
+)
 
 block_cipher = None
 
@@ -194,6 +199,7 @@ hidden_imports = (
     + hidden_imports_third_party
     + collect_submodules("mona")
     + collect_submodules("playwright")
+    + collect_submodules("edge_tts")
 )
 
 # ============== Excludes ==============
@@ -231,6 +237,10 @@ excludes = [
 # ============== Data Files ==============
 
 datas = []
+video_runtime = MONA_PKG / "skills/mona-video/runtime"
+if not (video_runtime / "remotion.js").is_file():
+    raise FileNotFoundError("Video animation runtime missing: run npm run build:video-runtime in webui")
+datas.append((str(video_runtime), "mona/skills/mona-video/runtime"))
 binaries = []
 
 for package in ("trafilatura", "curl_cffi"):
@@ -241,6 +251,10 @@ for package in ("trafilatura", "curl_cffi"):
 
 # Playwright data files (driver binaries, browsers metadata)
 datas += collect_data_files("playwright")
+
+# Default TTS needs Edge TTS resources and its distribution metadata at runtime.
+datas += collect_data_files("edge_tts")
+datas += copy_metadata("edge-tts")
 
 # Mona templates (Jinja2 markdown files used at runtime)
 mona_templates = MONA_PKG / "templates"

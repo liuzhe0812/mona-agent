@@ -1,21 +1,17 @@
 import {
   Plus,
-  Server,
   Settings,
   Monitor,
   Activity,
   Container,
-  LockKeyhole,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { AgentLogo } from "@/components/AgentLogo";
 import { useTerminalStore } from "./store/terminalStore";
 import { useIdeStore } from "../ide/useIdeStore";
-import { useLicense } from "@/hooks/useLicense";
 import { cn } from "@/lib/utils";
 
-export function Toolbar({ onOpenSubscribe, embedded = false }: { onOpenSubscribe?: () => void; embedded?: boolean }) {
-  const { licenseActive } = useLicense();
+export function Toolbar({ embedded = false }: { onOpenSubscribe?: () => void; embedded?: boolean }) {
   const toggleAIPanel = useTerminalStore((s) => s.toggleAIPanel);
   const aiPanelVisible = useTerminalStore((s) => s.aiPanelVisible);
   const aiStreaming = useTerminalStore((s) => s.aiStreaming);
@@ -36,21 +32,6 @@ export function Toolbar({ onOpenSubscribe, embedded = false }: { onOpenSubscribe
 
   const handleNew = () => {
     setNewConnectionDialogOpen(true);
-  };
-
-  const handleBatch = () => {
-    const existing = sessions.find((s) => s.type === "batch");
-    if (existing) {
-      useTerminalStore.getState().setActiveSession(existing.id);
-      return;
-    }
-    addSession({
-      id: crypto.randomUUID(),
-      configId: "",
-      type: "batch",
-      status: "connected",
-      title: "批量模式",
-    });
   };
 
   const handleOpenDesktop = () => {
@@ -96,10 +77,6 @@ export function Toolbar({ onOpenSubscribe, embedded = false }: { onOpenSubscribe
         <Plus className="h-3.5 w-3.5" />
         新建
       </Button>}
-      <Button variant="ghost" size="sm" className="gap-1.5" onClick={handleBatch}>
-        <Server className="h-3.5 w-3.5" />
-        批量
-      </Button>
       <Button
         variant="ghost"
         size="sm"
@@ -149,7 +126,7 @@ export function Toolbar({ onOpenSubscribe, embedded = false }: { onOpenSubscribe
           </Button>
         </>
       )}
-      {!embedded && activeSession?.type !== "desktop" && activeSession?.type !== "docker" && (licenseActive ? (
+      {!embedded && activeSession?.type !== "desktop" && activeSession?.type !== "docker" && (
         <Button
           variant="ghost"
           size="icon"
@@ -163,18 +140,7 @@ export function Toolbar({ onOpenSubscribe, embedded = false }: { onOpenSubscribe
             className="h-5 w-5"
           />
         </Button>
-      ) : (
-        <Button
-          variant="ghost"
-          size="icon"
-          className="h-7 w-7 text-muted-foreground"
-          onClick={onOpenSubscribe}
-          aria-label="升级 Pro 解锁终端 AI"
-          title="升级 Pro 解锁终端 AI"
-        >
-          <LockKeyhole className="h-4 w-4" />
-        </Button>
-      ))}
+      )}
     </div>
   );
 }

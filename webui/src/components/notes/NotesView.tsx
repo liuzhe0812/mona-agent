@@ -16,7 +16,6 @@ import {
   FolderPlus,
   GitFork,
   Loader2,
-  LockKeyhole,
   Mic,
   MicOff,
   MoreHorizontal,
@@ -30,8 +29,9 @@ import {
   X,
 } from "lucide-react";
 
-import { AgentLogo } from "@/components/AgentLogo";
 import { Button } from "@/components/ui/button";
+import { TooltipButton } from "@/components/ui/tooltip";
+import { resizeHandleInteractionClass } from "@/components/ui/resizable";
 import { Input } from "@/components/ui/input";
 import {
   ContextMenu,
@@ -78,7 +78,6 @@ import {
   setNotesVaultPath,
   showNotification,
 } from "@/lib/tauri";
-import { useLicense } from "@/hooks/useLicense";
 
 import { GlobalSearchDialog } from "./GlobalSearchDialog";
 import { ConfirmDialog, PromptDialog, TemplatePickerDialog } from "./NotesDialogs";
@@ -129,13 +128,9 @@ import {
 } from "./notes-storage";
 import { mergeNotesRefresh } from "./notes-refresh";
 
-const AGENT_PANEL_MIN_WIDTH = 240;
-const AGENT_PANEL_MAX_WIDTH = 480;
-const AGENT_PANEL_DEFAULT_WIDTH = 306;
-
-const RIGHT_SIDEBAR_MIN_WIDTH = 200;
-const RIGHT_SIDEBAR_MAX_WIDTH = 420;
-const RIGHT_SIDEBAR_DEFAULT_WIDTH = 260;
+const RIGHT_SIDEBAR_MIN_WIDTH = 240;
+const RIGHT_SIDEBAR_MAX_WIDTH = 480;
+const RIGHT_SIDEBAR_DEFAULT_WIDTH = 306;
 
 function isStructuredCanvasNote(note: Pick<OperationNote, "type"> | null | undefined): boolean {
   return note?.type === "mindmap" || note?.type === "flowchart" || note?.type === "diagram";
@@ -167,12 +162,10 @@ interface NotesViewProps {
 }
 
 export function NotesView({
-  onOpenSubscribe,
   initialNoteId,
   createOnOpen = false,
   onCreateOnOpenHandled,
 }: NotesViewProps) {
-  const { licenseActive } = useLicense();
   const [notebooks, setNotebooks] = useState<Notebook[]>([]);
   const [activeNotebookId, setActiveNotebookId] = useState("");
   const [notes, setNotes] = useState<OperationNote[]>([]);
@@ -206,8 +199,6 @@ export function NotesView({
   }, [pendingMaterialOpen]);
   const [vaultBusy, setVaultBusy] = useState(false);
   const [saveStatus, setSaveStatus] = useState<"idle" | "saving" | "saved" | "error">("idle");
-  const [agentPanelCollapsed, setAgentPanelCollapsed] = useState(true);
-  const [agentPanelWidth, setAgentPanelWidth] = useState(AGENT_PANEL_DEFAULT_WIDTH);
   // 流程图多标签页写者租约：noteId → writerInstanceId（设计文档 §8.5）
   const [flowchartWriterByNote, setFlowchartWriterByNote] = useState<Record<string, string>>({});
   // 流程图多标签页 revision：noteId → revision（设计文档 §8.5-3）
@@ -227,8 +218,10 @@ export function NotesView({
   const [workspace, setWorkspace] = useState<WorkspaceState>(() => createInitialWorkspace(null));
   const [rightSidebarOpen, setRightSidebarOpen] = useState(false);
   const [rightSidebarWidth, setRightSidebarWidth] = useState(RIGHT_SIDEBAR_DEFAULT_WIDTH);
-  const [rightActiveTab, setRightActiveTab] = useState<RightTab>("outline");
+  const [rightActiveTab, setRightActiveTab] = useState<RightTab>("ai");
   const [leftSidebarOpen, setLeftSidebarOpen] = useState(true);
+  // 切换标签由右侧栏隐藏助手，保留输入框内容和当前会话。
+  const agentPanelCollapsed = !rightSidebarOpen;
   // 思维导图节点定位桥接器：MindMapDocumentEditor 注册 selectNode，
   // RightSidebar 大纲面板点击节点时调用，实现定位
   const mindMapBridgeRef = useRef<MindMapSelectNodeFn | null>(null);
@@ -238,7 +231,6 @@ export function NotesView({
   const [flowchartSelection, setFlowchartSelection] = useState<FlowchartSelectionCtx | null>(null);
   const [flowchartSelectionNoteId, setFlowchartSelectionNoteId] = useState<string | null>(null);
   const [flowchartBaseHash, setFlowchartBaseHash] = useState<string | null>(null);
-  const dragRef = useRef<{ startX: number; startWidth: number } | null>(null);
   const rightDragRef = useRef<{ startX: number; startWidth: number } | null>(null);
   const lastSavedSnapshotRef = useRef<string | null>(null);
   const vaultTokenRef = useRef<string | undefined>(undefined);
@@ -1972,37 +1964,14 @@ export function NotesView({
     [],
   );
 
-  const handleDragStart = useCallback(
-    (event: React.MouseEvent) => {
-      event.preventDefault();
-      dragRef.current = { startX: event.clientX, startWidth: agentPanelWidth };
-      const handleMove = (e: MouseEvent) => {
-        if (!dragRef.current) return;
-        const delta = dragRef.current.startX - e.clientX;
-        const next = Math.min(
-          AGENT_PANEL_MAX_WIDTH,
-          Math.max(AGENT_PANEL_MIN_WIDTH, dragRef.current.startWidth + delta),
-        );
-        setAgentPanelWidth(next);
-      };
-      const handleUp = () => {
-        dragRef.current = null;
-        document.removeEventListener("mousemove", handleMove);
-        document.removeEventListener("mouseup", handleUp);
-      };
-      document.addEventListener("mousemove", handleMove);
-      document.addEventListener("mouseup", handleUp);
-    },
-    [agentPanelWidth],
-  );
-
   const handleRightDragStart = useCallback(
     (event: React.MouseEvent) => {
+      if (event.button !== 0) return;
       event.preventDefault();
       rightDragRef.current = { startX: event.clientX, startWidth: rightSidebarWidth };
       const handleMove = (e: MouseEvent) => {
         if (!rightDragRef.current) return;
-        const delta = e.clientX - rightDragRef.current.startX;
+        const delta = rightDragRef.current.startX - e.clientX;
         const next = Math.min(
           RIGHT_SIDEBAR_MAX_WIDTH,
           Math.max(RIGHT_SIDEBAR_MIN_WIDTH, rightDragRef.current.startWidth + delta),
@@ -2170,7 +2139,7 @@ export function NotesView({
                         className="h-auto min-w-0 flex-1 border-0 bg-transparent px-0 py-0 text-caption shadow-none focus-visible:ring-0"
                       />
                       {searchQuery ? (
-                        <Button
+                        <TooltipButton
                           type="button"
                           variant="ghost"
                           size="icon"
@@ -2180,7 +2149,7 @@ export function NotesView({
                           className="h-5 w-5 rounded-md text-muted-foreground hover:bg-accent hover:text-foreground"
                         >
                           <X className="h-3.5 w-3.5" />
-                        </Button>
+                        </TooltipButton>
                       ) : null}
                     </div>
                   ) : null}
@@ -2192,7 +2161,7 @@ export function NotesView({
                         </IconButton>
                         <DropdownMenu>
                           <DropdownMenuTrigger asChild>
-                            <Button
+                            <TooltipButton
                               type="button"
                               variant="ghost"
                               size="icon"
@@ -2201,7 +2170,7 @@ export function NotesView({
                               className="h-7 w-7 rounded-md text-muted-foreground hover:bg-accent hover:text-foreground"
                             >
                               <MoreHorizontal className="h-3.5 w-3.5" />
-                            </Button>
+                            </TooltipButton>
                           </DropdownMenuTrigger>
                           <DropdownMenuContent align="end" className="w-48">
                             <DropdownMenuItem onSelect={createNotebook}>
@@ -2538,7 +2507,7 @@ export function NotesView({
                     const isRecordingThis = recordingActive && recordingNoteRef.current === noteId;
                     return (
                       <>
-                        <Button
+                        <TooltipButton
                           type="button"
                           variant="ghost"
                           size="icon"
@@ -2566,7 +2535,7 @@ export function NotesView({
                           ) : (
                             <Mic className="h-4 w-4" />
                           )}
-                        </Button>
+                        </TooltipButton>
                         <IconButton
                           label="网页转笔记"
                           disabled={urlNoteLoading}
@@ -2595,7 +2564,7 @@ export function NotesView({
                   }}
                   toolbarTrailing={
                     <>
-                      <Button
+                      <TooltipButton
                         type="button"
                         variant="ghost"
                         size="icon"
@@ -2608,8 +2577,8 @@ export function NotesView({
                         )}
                       >
                         <GitFork className="h-4 w-4" />
-                      </Button>
-                      <Button
+                      </TooltipButton>
+                      <TooltipButton
                         type="button"
                         variant="ghost"
                         size="icon"
@@ -2622,13 +2591,14 @@ export function NotesView({
                         )}
                       >
                         <LeftSidebarToggleIcon open={leftSidebarOpen} className="h-4 w-4" />
-                      </Button>
-                      <Button
+                      </TooltipButton>
+                      <TooltipButton
                         type="button"
                         variant="ghost"
                         size="icon"
-                        title={rightSidebarOpen ? "收起右侧面板" : "展开右侧面板"}
+                        title="展开右侧面板"
                         aria-label={rightSidebarOpen ? "收起右侧面板" : "展开右侧面板"}
+                        aria-expanded={rightSidebarOpen}
                         onClick={() => setRightSidebarOpen((v) => !v)}
                         className={cn(
                           "bg-transparent hover:bg-transparent hover:text-foreground",
@@ -2636,35 +2606,7 @@ export function NotesView({
                         )}
                       >
                         <RightSidebarToggleIcon open={rightSidebarOpen} className="h-4 w-4" />
-                      </Button>
-                      {licenseActive ? (
-                        <Button
-                          type="button"
-                          variant="ghost"
-                          size="icon"
-                          title={agentPanelCollapsed ? "展开 Agent 联动" : "收起 Agent 联动"}
-                          aria-label={agentPanelCollapsed ? "展开 Agent 联动" : "收起 Agent 联动"}
-                          onClick={() => setAgentPanelCollapsed((current) => !current)}
-                          className={cn(
-                            "bg-transparent hover:bg-transparent hover:text-foreground",
-                            !agentPanelCollapsed ? "text-foreground" : "text-muted-foreground",
-                          )}
-                        >
-                          <AgentLogo state={agentStreaming ? "working" : "idle"} className="h-4 w-4" />
-                        </Button>
-                      ) : (
-                        <Button
-                          type="button"
-                          variant="ghost"
-                          size="icon"
-                          title="升级 Pro 解锁 AI"
-                          aria-label="升级 Pro 解锁 AI"
-                          onClick={onOpenSubscribe}
-                          className="bg-transparent text-muted-foreground hover:bg-transparent hover:text-foreground"
-                        >
-                          <LockKeyhole className="h-4 w-4" />
-                        </Button>
-                      )}
+                      </TooltipButton>
                     </>
                   }
                   toolbarExtra={(noteId) => {
@@ -2676,7 +2618,7 @@ export function NotesView({
                       <div className="flex items-center gap-1">
                         {!isStructuredDoc && (
                         <>
-                        <Button
+                        <TooltipButton
                           type="button"
                           variant="ghost"
                           size="icon"
@@ -2690,10 +2632,10 @@ export function NotesView({
                           ) : (
                             <Pencil className="h-4 w-4" />
                           )}
-                        </Button>
+                        </TooltipButton>
                         <DropdownMenu>
                           <DropdownMenuTrigger asChild>
-                            <Button
+                            <TooltipButton
                               type="button"
                               variant="ghost"
                               size="icon"
@@ -2702,7 +2644,7 @@ export function NotesView({
                               className="h-7 w-7 rounded-md bg-transparent text-muted-foreground hover:bg-transparent hover:text-foreground"
                             >
                               <MoreHorizontal className="h-4 w-4" />
-                            </Button>
+                            </TooltipButton>
                           </DropdownMenuTrigger>
                           <DropdownMenuContent align="end" className="w-48">
                             <DropdownMenuItem
@@ -2801,23 +2743,6 @@ export function NotesView({
                 /> : moduleView === "materials" ? (
                   <MaterialsPreview selection={materialsSelection} />
                 ) : null}
-                {moduleView === "notes" && rightSidebarOpen && (
-                  <>
-                    <div
-                      onMouseDown={handleRightDragStart}
-                      className="w-[1px] shrink-0 cursor-col-resize bg-border"
-                    />
-                    <RightSidebar
-                      width={rightSidebarWidth}
-                      note={activeNote}
-                      activeTab={rightActiveTab}
-                      onTabChange={setRightActiveTab}
-                      onSelectNote={selectNoteInWorkspace}
-                      onOpenNoteByTitle={openNoteByTitle}
-                      allNotes={notes}
-                    />
-                  </>
-                )}
               </div>
               </MindMapBridgeContext.Provider>
               </div>
@@ -2826,57 +2751,90 @@ export function NotesView({
         </div>
       </section>
 
-      {!agentPanelCollapsed && (
+      {moduleView === "notes" && rightSidebarOpen && (
         <div
-          onMouseDown={handleDragStart}
-          className="w-[1px] shrink-0 cursor-col-resize bg-border"
+          role="separator"
+          aria-label="调整右侧面板宽度"
+          aria-orientation="vertical"
+          aria-valuemin={RIGHT_SIDEBAR_MIN_WIDTH}
+          aria-valuemax={RIGHT_SIDEBAR_MAX_WIDTH}
+          aria-valuenow={rightSidebarWidth}
+          tabIndex={0}
+          onMouseDown={handleRightDragStart}
+          onKeyDown={(event) => {
+            const delta = event.key === "ArrowLeft" ? 8 : event.key === "ArrowRight" ? -8 : 0;
+            if (!delta) return;
+            event.preventDefault();
+            setRightSidebarWidth((width) => clampRightSidebarWidth(width + delta));
+          }}
+          className={cn(
+            "relative z-10 w-px shrink-0 cursor-col-resize focus-visible:outline-none",
+            resizeHandleInteractionClass,
+          )}
         />
       )}
 
-      {activeNote?.type === "mindmap" ? (
-        <MindMapAgentPanel
+      <MindMapBridgeContext.Provider value={mindMapBridgeRef}>
+        <RightSidebar
+          open={moduleView === "notes" && rightSidebarOpen}
+          width={rightSidebarWidth}
           note={activeNote}
-          collapsed={agentPanelCollapsed}
-          width={agentPanelWidth}
-          onAgentChatIdChange={(agentChatId) => updateActiveNote({ agentChatId })}
-          onApplyResult={applyAiResult}
-          onClearChat={() => updateActiveNote({ agentChatId: undefined })}
-          onStreamingChange={setAgentStreaming}
-        />
-      ) : activeNote?.type === "flowchart" ? (
-        <FlowchartAgentPanel
-          note={activeNote}
-          collapsed={agentPanelCollapsed}
-          width={agentPanelWidth}
-          onAgentChatIdChange={(agentChatId) => updateActiveNote({ agentChatId })}
-          onApplyResult={applyAiResult}
-          onClearChat={() => updateActiveNote({ agentChatId: undefined })}
-          onStreamingChange={setAgentStreaming}
-          initialPrompt={
-            flowchartInitialPrompt && flowchartInitialPrompt.noteId === activeNote?.id
-              ? {
-                  prompt: flowchartInitialPrompt.prompt,
-                  displayContent: flowchartInitialPrompt.displayContent,
-                  requestId: flowchartInitialPrompt.requestId,
-                }
-              : null
+          activeTab={rightActiveTab}
+          onTabChange={setRightActiveTab}
+          onSelectNote={selectNoteInWorkspace}
+          onOpenNoteByTitle={openNoteByTitle}
+          allNotes={notes}
+          aiStreaming={agentStreaming}
+          aiPanel={
+            <>
+              {activeNote?.type === "mindmap" ? (
+                <MindMapAgentPanel
+                  note={activeNote}
+                  collapsed={agentPanelCollapsed}
+                  width={rightSidebarWidth}
+                  onAgentChatIdChange={(agentChatId) => updateActiveNote({ agentChatId })}
+                  onApplyResult={applyAiResult}
+                  onClearChat={() => updateActiveNote({ agentChatId: undefined })}
+                  onStreamingChange={setAgentStreaming}
+                />
+              ) : activeNote?.type === "flowchart" ? (
+                <FlowchartAgentPanel
+                  note={activeNote}
+                  collapsed={agentPanelCollapsed}
+                  width={rightSidebarWidth}
+                  onAgentChatIdChange={(agentChatId) => updateActiveNote({ agentChatId })}
+                  onApplyResult={applyAiResult}
+                  onClearChat={() => updateActiveNote({ agentChatId: undefined })}
+                  onStreamingChange={setAgentStreaming}
+                  initialPrompt={
+                    flowchartInitialPrompt && flowchartInitialPrompt.noteId === activeNote?.id
+                      ? {
+                          prompt: flowchartInitialPrompt.prompt,
+                          displayContent: flowchartInitialPrompt.displayContent,
+                          requestId: flowchartInitialPrompt.requestId,
+                        }
+                      : null
+                  }
+                  onInitialPromptHandled={handleFlowchartInitialPromptHandled}
+                />
+              ) : (
+                <NoteAgentPanel
+                  note={activeNote}
+                  transformations={transformations}
+                  collapsed={agentPanelCollapsed}
+                  width={rightSidebarWidth}
+                  onAgentChatIdChange={(agentChatId) => updateActiveNote({ agentChatId })}
+                  onApplyResult={applyAiResult}
+                  onSaveAsNote={saveAgentResultAsNote}
+                  onTransformationsChange={setTransformations}
+                  onClearChat={() => updateActiveNote({ agentChatId: undefined })}
+                  onStreamingChange={setAgentStreaming}
+                />
+              )}
+            </>
           }
-          onInitialPromptHandled={handleFlowchartInitialPromptHandled}
         />
-      ) : (
-        <NoteAgentPanel
-          note={activeNote}
-          transformations={transformations}
-          collapsed={agentPanelCollapsed}
-          width={agentPanelWidth}
-          onAgentChatIdChange={(agentChatId) => updateActiveNote({ agentChatId })}
-          onApplyResult={applyAiResult}
-          onSaveAsNote={saveAgentResultAsNote}
-          onTransformationsChange={setTransformations}
-          onClearChat={() => updateActiveNote({ agentChatId: undefined })}
-          onStreamingChange={setAgentStreaming}
-        />
-      )}
+      </MindMapBridgeContext.Provider>
 
       <PromptDialog
         open={promptState !== null}
@@ -2993,7 +2951,7 @@ function IconButton({
   onClick?: () => void;
 }) {
   return (
-    <Button
+    <TooltipButton
       type="button"
       variant="ghost"
       size="icon"
@@ -3007,7 +2965,7 @@ function IconButton({
       )}
     >
       {children}
-    </Button>
+    </TooltipButton>
   );
 }
 
@@ -3432,5 +3390,5 @@ function clampRightSidebarWidth(width: unknown): number {
 }
 
 function sanitizeRightActiveTab(tab: unknown): RightTab {
-  return tab === "links" ? tab : "outline";
+  return tab === "outline" || tab === "links" ? tab : "ai";
 }

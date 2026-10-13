@@ -4,6 +4,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import { NoteAgentPanel } from "@/components/notes/NoteAgentPanel";
 import { computeNoteBaseHash } from "@/components/notes/note-apply";
+import { ResetNoteChatButton } from "@/components/notes/ResetNoteChatButton";
 import type { OperationNote } from "@/components/notes/notes-data";
 import type { UIMessage } from "@/lib/types";
 
@@ -83,7 +84,7 @@ function patchReply(baseHash: string, find: string, replace: string): string {
   return `\`\`\`note-patch\n${JSON.stringify({ baseHash, edits: [{ find, replace }] })}\n\`\`\``;
 }
 
-function renderPanel(note: OperationNote = NOTE) {
+function renderPanel(note: OperationNote = NOTE, onClearChat = vi.fn()) {
   const onApplyResult = vi.fn();
   render(
     <NoteAgentPanel
@@ -92,9 +93,10 @@ function renderPanel(note: OperationNote = NOTE) {
       onAgentChatIdChange={vi.fn()}
       onApplyResult={onApplyResult}
       onTransformationsChange={vi.fn()}
+      onClearChat={onClearChat}
     />,
   );
-  return { onApplyResult };
+  return { onApplyResult, onClearChat };
 }
 
 describe("NoteAgentPanel 结构化修改", () => {
@@ -163,6 +165,54 @@ describe("NoteAgentPanel 结构化修改", () => {
     expect(
       screen.getByPlaceholderText("输入问题，AI 将基于当前笔记回答..."),
     ).toBeInTheDocument();
+  });
+
+  it("重置聊天需先确认，取消不清空，确认后才清空", async () => {
+    streamMock.messages = [assistantMessage("m-reset", "当前聊天记录")];
+    const onClearChat = vi.fn();
+    renderPanel(NOTE, onClearChat);
+
+    await screen.findByText("当前聊天记录");
+    streamMock.setMessages.mockClear();
+    streamMock.setMessages.mockImplementation((next) => {
+      streamMock.messages = typeof next === "function" ? next(streamMock.messages) : next;
+    });
+
+    await userEvent.click(screen.getByRole("button", { name: "重置会话" }));
+    expect(screen.getByRole("dialog")).toHaveTextContent("当前笔记正文会保留");
+    expect(streamMock.setMessages).not.toHaveBeenCalledWith([]);
+    expect(onClearChat).not.toHaveBeenCalled();
+
+    await userEvent.click(screen.getByRole("button", { name: "取消" }));
+    expect(await screen.findByText("当前聊天记录")).toBeInTheDocument();
+    expect(streamMock.setMessages).not.toHaveBeenCalledWith([]);
+    expect(onClearChat).not.toHaveBeenCalled();
+
+    await userEvent.click(screen.getByRole("button", { name: "重置会话" }));
+    await userEvent.click(screen.getByRole("button", { name: "开始新会话" }));
+    expect(streamMock.setMessages).toHaveBeenCalledWith([]);
+    expect(onClearChat).toHaveBeenCalledTimes(1);
+    expect(screen.queryByText("当前聊天记录")).toBeNull();
+  });
+
+  it("不显示总结快捷按钮，仍提供翻译和 HTML 生成", () => {
+    renderPanel();
+
+    expect(screen.queryByRole("button", { name: "总结当前笔记" })).toBeNull();
+    expect(screen.getByRole("button", { name: "翻译" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "生成HTML文档" })).toBeInTheDocument();
+  });
+
+  it("禁用时不打开重置确认", async () => {
+    const onReset = vi.fn();
+    render(<ResetNoteChatButton disabled onReset={onReset} />);
+
+    const reset = screen.getByRole("button", { name: "重置会话" });
+    expect(reset).toBeDisabled();
+    await userEvent.click(reset);
+
+    expect(screen.queryByRole("dialog")).toBeNull();
+    expect(onReset).not.toHaveBeenCalled();
   });
 
   it("把附件路径和名称传给笔记 Agent", async () => {

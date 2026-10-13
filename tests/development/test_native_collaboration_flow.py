@@ -212,6 +212,35 @@ async def test_native_child_context_is_sent_once_after_engine_switch(tmp_path, m
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("leader", NATIVE)
+async def test_engine_switch_keeps_result_body_from_unreplayed_mona_tool_history(tmp_path, monkeypatch, leader):
+    runtime, project, root, client, model_calls = await setup(tmp_path, monkeypatch)
+    parent = runtime.store.create_session(project.id, ExecutorId.MONA)
+    try:
+        async with client:
+            await runtime.collaboration.start(parent.id, "review_before_switch", ExecutorId.CODEX,
+                "Review the current project", readonly=True)
+            record = await returned(runtime, parent.id)
+            result = runtime.collaboration.read_result(parent.id, record["id"])
+            assert result["result"]
+            history = runtime.sessions.get_or_create(parent.transcript_key)
+            history.add_message("assistant", "", tool_calls=[{"id": "read_before_switch", "type": "function",
+                "function": {"name": "development_collaboration", "arguments": json.dumps({"action": "read_result", "task_id": record["id"]})}}])
+            history.add_message("tool", json.dumps(result), tool_call_id="read_before_switch")
+            runtime.sessions.save(history, fsync=True)
+            await runtime.switch_executor(parent.id, runtime.store.get_session(parent.id).revision, leader, None)
+            await runtime.submit(parent.id, "continue_after_switch", "instant")
+            await settle(runtime)
+            binding = next(item for item in runtime.store.list_bindings(parent.id) if item.state == "active")
+            sent = wire_inputs(root, binding)[-1]
+            assert result["result"] in sent
+            assert sent.count(result["result"]) == 1
+            assert not model_calls
+    finally:
+        await runtime.close()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("leader", NATIVE)
 async def test_native_result_queues_behind_permission_and_is_consumed_once(tmp_path, monkeypatch, leader):
     runtime, project, root, client, model_calls = await setup(tmp_path, monkeypatch)
     parent = runtime.store.create_session(project.id, leader)

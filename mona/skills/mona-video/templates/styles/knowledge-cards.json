@@ -1,20 +1,20 @@
 {
   "schemaVersion": 1,
   "id": "knowledge-cards",
-  "name": "奇想实验室",
-  "description": "清晰的知识卡片风格，以分区底色、模块卡片和步骤层级承载科普、课程与方法拆解。",
+  "name": "清晰教学",
+  "description": "浅色背景、清楚的步骤和内容分组，适合教程与知识讲解。",
   "baseTemplateId": "knowledge-cards",
   "mode": "light",
   "tokens": {
     "colors": {
-      "primary": "#2356A8",
-      "secondary": "#ED6A4A",
-      "accent": "#F2B83F",
-      "background": "#F3E5CC",
-      "surface": "#FFF9ED",
-      "textPrimary": "#1E2C44",
-      "textSecondary": "#5C6879",
-      "border": "#E7C99B",
+      "primary": "#315F9A",
+      "secondary": "#5B6F86",
+      "accent": "#315F9A",
+      "background": "#F5F7FA",
+      "surface": "#FFFFFF",
+      "textPrimary": "#243243",
+      "textSecondary": "#546171",
+      "border": "#D7DEE7",
       "success": "#2A978C",
       "warning": "#F2B83F",
       "error": "#D94B41"
@@ -22,19 +22,19 @@
     "typography": {
       "headingFamily": "Noto Sans SC",
       "bodyFamily": "Noto Sans SC",
-      "scale": "large",
-      "headingWeight": 800,
-      "bodyWeight": 500,
-      "headingLineHeight": 1.12,
-      "bodyLineHeight": 1.5
+      "scale": "standard",
+      "headingWeight": 700,
+      "bodyWeight": 400,
+      "headingLineHeight": 1.15,
+      "bodyLineHeight": 1.6
     },
     "shape": {
-      "cardRadius": 18,
+      "cardRadius": 8,
       "cardStyle": "solid",
       "density": "standard",
-      "shadow": "soft",
-      "borderWidth": 2,
-      "shadowOpacity": 0.2
+      "shadow": "none",
+      "borderWidth": 1,
+      "shadowOpacity": 0
     },
     "spacing": {
       "unit": 8,
@@ -61,27 +61,27 @@
     "quote-bubble",
     "outro-card"
   ],
-  "allowedAnimations": ["fade-rise", "stagger-rise", "soft-pulse", "cross-fade"],
+  "allowedAnimations": ["fade-rise", "stagger-rise", "cross-fade"],
   "motion": {
-    "intensity": "active",
-    "enterPreset": "stagger-rise",
-    "emphasisPreset": "soft-pulse",
+    "intensity": "restrained",
+    "enterPreset": "fade-rise",
+    "emphasisPreset": "fade-rise",
     "transitionPreset": "cross-fade",
     "enterDurationMs": 420,
-    "staggerMs": 72,
-    "transitionDurationMs": 460
+    "staggerMs": 0,
+    "transitionDurationMs": 420
   },
   "backgrounds": {
     "default": {
       "assetPolicy": "none",
       "fit": "cover",
       "focalPoint": {"x": 0.5, "y": 0.5},
-      "overlay": {"type": "solid", "color": "#F3E5CC", "opacity": 0.9, "direction": "none"},
+      "overlay": {"type": "solid", "color": "#F5F7FA", "opacity": 0.9, "direction": "none"},
       "blur": 0,
       "tint": 0,
       "contrastMode": "auto",
       "safeArea": {"top": 0.08, "right": 0.08, "bottom": 0.1, "left": 0.08},
-      "fallback": "#F3E5CC"
+      "fallback": "#F5F7FA"
     },
     "roles": {
       "cover": {"inherit": "default"},
@@ -94,7 +94,7 @@
       "outro": {"inherit": "default"}
     }
   },
-  "subtitle": {"position": "bottom-center", "style": "caption-rail", "maxLines": 2},
+  "subtitle": {"position": "bottom-center", "style": "caption-rail", "fontSize": 36, "lineHeight": 1.35, "safeAreaBottom": 0.08, "maxLines": 2},
   "aspectVariants": {
     "16:9": {"enabled": true},
     "9:16": {"enabled": true},

@@ -176,6 +176,8 @@ export interface ResidualCandidate {
 
 export interface SoftwareActionResult {
   success: boolean;
+  pending?: boolean;
+  diagnostic?: string;
   message: string;
   exitCode: number | null;
   residuals: ResidualCandidate[];
@@ -298,11 +300,14 @@ export function useSoftwareManagement() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [workingIds, setWorkingIds] = useState<Set<string>>(new Set());
+  const [updatingIds, setUpdatingIds] = useState<Set<string>>(new Set());
+  const [uninstallingId, setUninstallingId] = useState<string | null>(null);
   const [lastAction, setLastAction] = useState("");
   const [lastUninstall, setLastUninstall] = useState<SoftwareActionResult | null>(null);
   const [progressMap, setProgressMap] = useState<Record<string, string[]>>({});
 
   const hasDataRef = useRef(false);
+  const uninstallInFlightRef = useRef(false);
   // 已有数据时后台刷新替换，避免整列表进入 loading 闪烁
   const refresh = async () => {
     if (!hasDataRef.current) setLoading(true);
@@ -321,10 +326,13 @@ export function useSoftwareManagement() {
   const upgrade = async (updates: SoftwareUpdate[]) => {
     if (updates.length === 0) return;
     setWorkingIds(new Set(updates.map((update) => update.id)));
+    setUpdatingIds(new Set(updates.map((update) => update.id)));
     setLastAction("");
     setProgressMap({});
     let completed = 0;
     let failed = 0;
+    let uncertain = 0;
+    const details: string[] = [];
     for (const update of updates) {
       try {
         const result = await invoke<SoftwareActionResult>("system_upgrade_software", {
@@ -332,19 +340,30 @@ export function useSoftwareManagement() {
           name: update.name,
         });
         if (result.success) completed += 1;
-        else failed += 1;
-      } catch {
-        failed += 1;
+        else {
+          failed += 1;
+          details.push(`${update.name}：${result.message || "更新未完成"}`);
+        }
+      } catch (error) {
+        uncertain += 1;
+        details.push(`${update.name}：${String(error)}`);
       }
     }
     setWorkingIds(new Set());
+    setUpdatingIds(new Set());
     setProgressMap({});
-    setLastAction(failed === 0 ? `${completed} 项更新完成` : `${completed} 项完成，${failed} 项失败`);
+    const summary = failed + uncertain === 0 ? `${completed} 项更新完成` : [`${completed} 项完成`, failed > 0 ? `${failed} 项失败` : "", uncertain > 0 ? `${uncertain} 项结果待确认` : ""].filter(Boolean).join("，");
+    setLastAction(summary);
     await refresh();
+    return { completed, failed, uncertain, summary, detail: details.join("\n") };
   };
 
   const uninstall = async (software: InstalledSoftware) => {
+    if (uninstallInFlightRef.current) return null;
+    uninstallInFlightRef.current = true;
     setWorkingIds(new Set([software.id]));
+    setUninstallingId(software.id);
+    setLastAction("");
     setLastUninstall(null);
     try {
       const result = await invoke<SoftwareActionResult>("system_uninstall_software", {
@@ -353,19 +372,26 @@ export function useSoftwareManagement() {
         installLocation: software.installLocation || null,
       });
       setLastUninstall(result);
+      setUninstallingId(null);
       await refresh();
       return result;
-    } catch (e) {
+    } catch (error) {
       const result: SoftwareActionResult = {
         success: false,
-        message: String(e),
+        pending: true,
+        diagnostic: String(error),
+        message: "卸载请求已发出，但执行结果尚未确认。请刷新软件列表核对当前状态；不会自动重复卸载。",
         exitCode: null,
         residuals: [],
       };
       setLastUninstall(result);
+      setUninstallingId(null);
+      await refresh();
       return result;
     } finally {
       setWorkingIds(new Set());
+      setUninstallingId(null);
+      uninstallInFlightRef.current = false;
     }
   };
 
@@ -405,7 +431,7 @@ export function useSoftwareManagement() {
     refresh();
   }, []);
 
-  return { data, loading, error, workingIds, lastAction, lastUninstall, progressMap, refresh, upgrade, uninstall, deleteResiduals, revealInExplorer };
+  return { data, loading, error, workingIds, updatingIds, uninstallingId, lastAction, lastUninstall, progressMap, refresh, upgrade, uninstall, deleteResiduals, revealInExplorer };
 }
 
 // ===== 存储空间扫描 =====
@@ -720,7 +746,18 @@ export function useStorageScan() {
     await invoke("cancel_storage_scan");
   };
 
-  return { status, result, lastScanAt, progress, error, cleaning, start, cancel, clean, trashFiles, selectedDrive, selectDrive: setSelectedDrive };
+  const selectDrive = (drive: string) => {
+    if (drive === selectedDrive || status === "scanning" || cleaning) return;
+    scanSessionRef.current += 1;
+    setResult(null);
+    setLastScanAt(null);
+    setError(null);
+    setProgress(null);
+    setStatus("idle");
+    setSelectedDrive(drive);
+  };
+
+  return { status, result, lastScanAt, progress, error, cleaning, start, cancel, clean, trashFiles, selectedDrive, selectDrive };
 }
 
 // ===== 启动项管理 =====
@@ -858,21 +895,27 @@ export function useStartupItems() {
 export function useBootHistory() {
   const [data, setData] = useState<BootHistoryResult | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const mounted = useRef(false);
+
+  const refresh = async () => {
+    try {
+      const result = await invoke<BootHistoryResult>("system_get_boot_history");
+      if (mounted.current) {
+        setData(result);
+        setError(null);
+      }
+    } catch (e) {
+      if (mounted.current) setError(String(e));
+    }
+  };
 
   useEffect(() => {
-    let active = true;
-    (async () => {
-      try {
-        const result = await invoke<BootHistoryResult>("system_get_boot_history");
-        if (active) setData(result);
-      } catch (e) {
-        if (active) setError(String(e));
-      }
-    })();
-    return () => { active = false; };
+    mounted.current = true;
+    void refresh();
+    return () => { mounted.current = false; };
   }, []);
 
-  return { data, error };
+  return { data, error, refresh };
 }
 
 export function useStartupChanges() {
@@ -909,13 +952,10 @@ export interface DiagnosticDefinition {
   label: string;
 }
 
+// 日常检查只保留普通权限可读取、且有明确处理价值的项目。
 export const DIAGNOSTIC_CHECKS: DiagnosticDefinition[] = [
   { command: "system_check_pending_reboot", label: "待重启状态" },
-  { command: "system_check_component_health", label: "组件存储健康" },
   { command: "system_check_driver_issues", label: "设备驱动异常" },
-  { command: "system_check_power_events", label: "电源唤醒事件" },
-  { command: "system_check_network_configuration", label: "网络代理配置" },
-  { command: "system_check_recovery_status", label: "恢复与磁盘保护" },
 ];
 
 export function useSystemDiagnostics() {

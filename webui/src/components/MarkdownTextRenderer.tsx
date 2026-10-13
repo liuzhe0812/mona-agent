@@ -1,5 +1,5 @@
 import { Children, isValidElement, useMemo } from "react";
-import type { Components } from "react-markdown";
+import type { Components, ExtraProps } from "react-markdown";
 import ReactMarkdown, { defaultUrlTransform } from "react-markdown";
 import rehypeKatex from "rehype-katex";
 import rehypeRaw from "rehype-raw";
@@ -90,7 +90,7 @@ export default function MarkdownTextRenderer({
       ...(conversation ? {
         table: ({ children: content }: { children?: React.ReactNode }) => <MarkdownTable>{content}</MarkdownTable>,
         img: ({ src, alt }: { src?: string; alt?: string }) => <MarkdownMedia src={decodeSource(src ?? "")} alt={alt} />,
-        p: ({ children: content, node }: { children?: React.ReactNode; node?: import("react-markdown").ExtraProps["node"] }) => {
+        p: ({ children: content, node }: { children?: React.ReactNode; node?: ExtraProps["node"] }) => {
           const onlyImages = node?.children.every((child) => child.type === "element" && ["img", "br"].includes(child.tagName) || child.type === "text" && !child.value.trim());
           return onlyImages ? <div className={cn("my-4 grid grid-cols-1 items-start gap-3 [&>br]:hidden", (node?.children.filter((child) => child.type === "element" && child.tagName === "img").length ?? 0) > 1 && "sm:grid-cols-2")}>{content}</div> : <p>{content}</p>;
         },

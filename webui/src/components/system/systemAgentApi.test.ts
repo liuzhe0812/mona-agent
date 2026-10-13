@@ -6,8 +6,11 @@ import {
   collectSystemEvidence,
   executeSystemAction,
   requestStorageAnalysis,
+  requestSystemDiagnosis,
+  requestSystemPlan,
   type SystemAgentAction,
   type StorageAnalysisEvidence,
+  type SystemEvidence,
 } from "./systemAgentApi";
 import type { StorageScanResult } from "./useSystemData";
 
@@ -18,6 +21,7 @@ vi.mock("@/lib/tauri", () => ({ httpFetch: httpFetchMock }));
 vi.mock("@tauri-apps/api/core", () => ({
   invoke: vi.fn((command: string) => {
     if (command === "clean_storage") return Promise.resolve({ freedGb: 1.25, cleanedIds: ["temp"], failures: [] });
+    if (command === "system_upgrade_software") return Promise.resolve({ success: true, message: "更新完成", exitCode: 0, residuals: [] });
     if (command === "system_get_overview") return Promise.resolve({ cpu: {}, memory: {}, disks: [], network: {}, topProcesses: [] });
     if (command === "system_check_updates") return Promise.resolve({ updates: [], wingetAvailable: true, failedCount: 0 });
     if (command === "system_list_startup_items") return Promise.resolve({
@@ -106,6 +110,18 @@ describe("collectSystemEvidence", () => {
     expect(evidence.startup.items[0]).not.toHaveProperty("targetPath");
   });
 
+  it.each([
+    [false, true],
+    [true, false],
+  ])("does not verify an update with success=%s and available recheck=%s", async (success, available) => {
+    vi.mocked(invoke).mockResolvedValueOnce({ success, message: "更新未完成" });
+    vi.mocked(invoke).mockResolvedValueOnce({ updates: [], wingetAvailable: available, failedCount: 0 });
+    const action: SystemAgentAction = { id: "update-1", type: "software_update", targetIds: ["app-1"], targetNames: ["应用"], title: "更新应用", reason: "有可用更新", risk: "medium", evidenceTab: "software" };
+
+    const result = await executeSystemAction(action);
+    expect(result.verified).toBe(false);
+  });
+
   it("builds path-free storage analysis evidence for the selected directory", () => {
     const storage: StorageScanResult = {
       scanId: "scan-1",
@@ -153,6 +169,25 @@ describe("collectSystemEvidence", () => {
     expect(serialized).not.toContain("SecretProject");
     expect(serialized).not.toContain("private-backup.zip");
     expect(serialized).not.toContain("path");
+  });
+});
+
+describe("system analysis cancellation", () => {
+  it.each([
+    ["plan", requestSystemPlan],
+    ["diagnose", requestSystemDiagnosis],
+    ["storage/analyze", requestStorageAnalysis],
+  ] as const)("passes the abort signal to %s", async (route, request) => {
+    const controller = new AbortController();
+    httpFetchMock.mockResolvedValueOnce({ ok: true, json: async () => ({ summary: "完成", findings: [], actions: [], hypotheses: [], cautions: [] }) });
+    const evidence = { scanId: "scan-1", scope: { id: "root" }, children: [], largeFiles: [], cleanupItems: [] };
+
+    await request("分析当前状态", evidence as unknown as SystemEvidence & StorageAnalysisEvidence, controller.signal);
+
+    expect(httpFetchMock).toHaveBeenLastCalledWith(
+      `http://mona.local/api/system/${route}`,
+      expect.objectContaining({ method: "POST", signal: controller.signal }),
+    );
   });
 });
 

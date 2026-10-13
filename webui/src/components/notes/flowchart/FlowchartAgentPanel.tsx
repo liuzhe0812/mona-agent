@@ -19,7 +19,6 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   AlertTriangle,
   Check,
-  RotateCcw,
   X,
 } from "lucide-react";
 
@@ -41,6 +40,7 @@ import { useFlowchartSelection } from "./FlowchartSelectionContext";
 import { computeFlowchartDocumentHash, parseFlowchartMarkdown } from "./flowchart-document";
 import { AgentChat } from "../NoteAgentPanel";
 import { AgentComposer } from "../AgentComposer";
+import { ResetNoteChatButton } from "../ResetNoteChatButton";
 
 interface FlowchartAgentPanelProps {
   note: OperationNote | null;
@@ -375,28 +375,23 @@ export function FlowchartAgentPanel({
 
   return (
     <aside className="flex h-full shrink-0 flex-col border-l border-border/70 bg-card" style={{ width }}>
-      <div className="flex h-12 shrink-0 items-center justify-between border-b border-border/65 px-3">
+      <div className="flex h-8 shrink-0 items-center justify-between px-3">
         <div className="flex min-w-0 items-center gap-2">
           <h2 className="truncate text-[13px] font-semibold text-foreground">Mona</h2>
         </div>
         <div className="flex items-center gap-1">
           {notice ? <span className="max-w-28 truncate text-[11px] text-muted-foreground">{notice}</span> : null}
           {chatId ? (
-            <button
-              type="button"
-              aria-label="重置会话"
-              title="重置会话"
+            <ResetNoteChatButton
+              key={chatId}
               disabled={isStreaming || creatingChat}
-              onClick={() => {
+              onReset={() => {
                 setMessages([]);
                 setPendingPatches(new Map());
                 preparedMessageIdsRef.current = new Set();
                 onClearChat?.();
               }}
-              className="grid h-7 w-7 place-items-center rounded-lg text-muted-foreground hover:bg-foreground/[0.06] hover:text-foreground disabled:pointer-events-none disabled:opacity-50"
-            >
-              <RotateCcw className="h-3.5 w-3.5" />
-            </button>
+            />
           ) : null}
         </div>
       </div>
@@ -444,7 +439,7 @@ export function FlowchartAgentPanel({
         )}
       </div>
 
-      <div className="shrink-0 p-2">
+      <div className="shrink-0 p-3">
         <AgentComposer
           chatId={chatId}
           value={draft}

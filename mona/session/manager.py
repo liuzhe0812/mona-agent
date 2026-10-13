@@ -6,10 +6,12 @@ import json
 import os
 import re
 import shutil
+import tempfile
 from contextlib import suppress
 from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
+from threading import Lock
 from typing import TYPE_CHECKING, Any
 
 from loguru import logger
@@ -375,6 +377,7 @@ class Session:
         self.last_consolidated = 0
         self.updated_at = datetime.now()
         self.metadata.pop("_last_summary", None)
+        self.metadata.pop("_shared_room_summary", None)
         self.metadata.pop(_UI_SUMMARY_KEY, None)
 
     def retain_recent_legal_suffix(self, max_messages: int) -> None:
@@ -474,6 +477,72 @@ class SessionManager:
         # the first time they appear in the list. Keep that result for the
         # unchanged file so repeated sidebar refreshes stay metadata-only.
         self._list_summary_cache: dict[Path, tuple[int, int, dict[str, Any]]] = {}
+        self._list_summary_cache_path = self.sessions_dir / ".list-summaries.json"
+        self._list_summary_generation = object()
+        self._persisted_list_summary_generation = self._list_summary_generation
+        self._list_summary_persist_lock = Lock()
+        self._load_list_summaries()
+
+    def _load_list_summaries(self) -> None:
+        if not self._list_summary_cache_path.exists():
+            return
+        try:
+            payload = json.loads(self._list_summary_cache_path.read_text(encoding="utf-8"))
+            if not isinstance(payload, dict) or payload.get("schema_version") != 1:
+                raise ValueError("unsupported summary cache schema")
+            entries = payload.get("sessions")
+            if not isinstance(entries, dict):
+                raise ValueError("invalid summary cache entries")
+            for name, entry in entries.items():
+                if not isinstance(name, str) or Path(name).name != name or not name.endswith(".jsonl"):
+                    continue
+                if not isinstance(entry, dict):
+                    continue
+                mtime, size, summary = entry.get("mtime_ns"), entry.get("size"), entry.get("summary")
+                if type(mtime) is not int or type(size) is not int or mtime < 0 or size < 0:
+                    continue
+                if summary != {} and _valid_ui_summary(summary) is None:
+                    continue
+                self._list_summary_cache[self.sessions_dir / name] = (mtime, size, summary)
+        except (OSError, ValueError) as exc:
+            logger.warning("Session list summary cache unavailable ({}); rebuilding", type(exc).__name__)
+
+    def _remember_list_summary(
+        self, path: Path, signature: tuple[int, int], summary: dict[str, Any],
+    ) -> None:
+        value = (signature[0], signature[1], summary)
+        if self._list_summary_cache.get(path) != value:
+            self._list_summary_cache[path] = value
+            self._list_summary_generation = object()
+
+    def persist_list_summaries(self) -> None:
+        """Persist only derived previews; never rewrite conversation files."""
+        with self._list_summary_persist_lock:
+            if self._persisted_list_summary_generation is self._list_summary_generation:
+                return
+            generation = self._list_summary_generation
+            snapshot = dict(self._list_summary_cache)
+            entries = {}
+            for path, (mtime, size, summary) in snapshot.items():
+                try:
+                    stat = path.stat()
+                except FileNotFoundError:
+                    continue
+                if (stat.st_mtime_ns, stat.st_size) == (mtime, size):
+                    entries[path.name] = {"mtime_ns": mtime, "size": size, "summary": summary}
+            temporary: Path | None = None
+            try:
+                with tempfile.NamedTemporaryFile(
+                    mode="w", encoding="utf-8", dir=self.sessions_dir,
+                    prefix=".list-summaries-", suffix=".tmp", delete=False,
+                ) as stream:
+                    temporary = Path(stream.name)
+                    json.dump({"schema_version": 1, "sessions": entries}, stream, ensure_ascii=False)
+                temporary.replace(self._list_summary_cache_path)
+                self._persisted_list_summary_generation = generation
+            finally:
+                if temporary is not None:
+                    temporary.unlink(missing_ok=True)
 
     @staticmethod
     def safe_key(key: str) -> str:
@@ -692,11 +761,15 @@ class SessionManager:
             # Cache the in-memory summary after the atomic replace. This also
             # avoids rescanning a legacy session that was saved without a
             # visible message (and therefore still has no persisted summary).
-            self._list_summary_cache[path] = (
-                stat.st_mtime_ns,
-                stat.st_size,
-                session.ui_summary(),
-            )
+            summary = session.ui_summary()
+            self._remember_list_summary(path, (stat.st_mtime_ns, stat.st_size), summary)
+            if not summary:
+                try:
+                    with self._list_summary_persist_lock:
+                        self._list_summary_cache_path.unlink(missing_ok=True)
+                except OSError as exc:
+                    logger.warning("Session list summary cache could not be invalidated ({})", type(exc).__name__)
+                self._list_summary_generation = object()
 
     def flush_all(self) -> int:
         """Re-save every cached session with fsync for durable shutdown.
@@ -718,6 +791,7 @@ class SessionManager:
         """Remove a session from the in-memory cache."""
         self._cache.pop(key, None)
         self._list_summary_cache.pop(self._get_session_path(key), None)
+        self._list_summary_generation = object()
 
     def delete_session(self, key: str, *, prevent_recreation: bool = False) -> bool:
         """Remove a session from disk and the in-memory cache.
@@ -727,17 +801,19 @@ class SessionManager:
         if prevent_recreation:
             self._deleted_keys.add(key)
         path = self._get_session_path(key)
-        self.invalidate(key)
-        if not path.exists():
-            return False
-        try:
-            path.unlink()
-            return True
-        except OSError as e:
-            logger.warning("Failed to delete session file {}: {}", path, e)
-            if prevent_recreation:
-                raise
-            return False
+        with self._list_summary_persist_lock:
+            self.invalidate(key)
+            try:
+                self._list_summary_cache_path.unlink(missing_ok=True)
+                if not path.exists():
+                    return False
+                path.unlink()
+                return True
+            except OSError as e:
+                logger.warning("Failed to delete session file {}: {}", path, e)
+                if prevent_recreation:
+                    raise
+                return False
 
     def read_session_file(self, key: str) -> dict[str, Any] | None:
         """Load a session from disk without caching; intended for read-only HTTP endpoints.
@@ -831,17 +907,9 @@ class SessionManager:
                                         candidate = build_ui_summary(item)
                                         if candidate is not None:
                                             summary = candidate
-                                    self._list_summary_cache[path] = (
-                                        signature[0],
-                                        signature[1],
-                                        summary,
-                                    )
+                                    self._remember_list_summary(path, signature, summary)
                             else:
-                                self._list_summary_cache[path] = (
-                                    signature[0],
-                                    signature[1],
-                                    summary,
-                                )
+                                self._remember_list_summary(path, signature, summary)
                             summary = summary or {}
                             row = {
                                 "key": key,

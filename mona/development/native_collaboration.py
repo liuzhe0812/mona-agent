@@ -60,6 +60,9 @@ class NativeCollaboration:
                                             consumer_run_id=run.id)
             elif call.action == "stop":
                 value = await manager.stop(session.id, call.task_id)
+            elif call.action == "send_message":
+                value = await manager.send_message(session.id, call.task_id, call.request_id, call.message,
+                    parent_run_id=run.id, authorize=lambda: self._owner(binding, turn_id))
             else:
                 try:
                     value = await manager.wait(session.id, call.task_id, call.seconds, consumer_run_id=run.id)

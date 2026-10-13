@@ -99,6 +99,48 @@ async def test_runner_persists_large_tool_results_for_follow_up_calls(tmp_path):
     assert (tmp_path / ".mona" / "tool-results" / "test_runner" / "call_big.txt").exists()
 
 
+@pytest.mark.asyncio
+async def test_video_preview_images_set_require_image_on_follow_up_request(tmp_path):
+    from mona.agent.runner import AgentRunner, AgentRunSpec
+
+    provider = MagicMock()
+    request_kwargs = []
+
+    async def chat_with_retry(**kwargs):
+        request_kwargs.append(kwargs)
+        if len(request_kwargs) == 1:
+            return LLMResponse(content=None, tool_calls=[
+                ToolCallRequest(id="call_video", name="video", arguments={}),
+            ])
+        return LLMResponse(content="preview checked")
+
+    provider.chat_with_retry = chat_with_retry
+    tools = MagicMock()
+    tools.get_definitions.return_value = []
+    tools.execute = AsyncMock(return_value=[
+        {"type": "image_url", "image_url": {"url": "data:image/png;base64,fixture"}},
+        {"type": "text", "text": "Three preview frames attached"},
+    ])
+
+    result = await AgentRunner(provider).run(AgentRunSpec(
+        initial_messages=[{"role": "user", "content": "Review this preview"}],
+        tools=tools,
+        model="text-only-model",
+        max_iterations=2,
+        max_tool_result_chars=4096,
+        workspace=tmp_path,
+    ))
+
+    assert result.final_content == "preview checked"
+    assert request_kwargs[1]["require_image"] is True
+    assert any(
+        isinstance(block, dict) and block.get("type") == "image_url"
+        for message in request_kwargs[1]["messages"]
+        if isinstance(message.get("content"), list)
+        for block in message["content"]
+    )
+
+
 def test_persist_tool_result_prunes_old_session_buckets(tmp_path):
     from mona.utils.helpers import maybe_persist_tool_result
 

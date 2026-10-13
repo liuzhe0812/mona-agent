@@ -17,6 +17,7 @@ from mona.development.context import ProjectContext
 from mona.development.contracts import DevelopmentSession, Event, PendingHandoff
 from mona.development.store import DevelopmentError
 from mona.session.manager import Session
+from mona.utils.helpers import estimate_message_tokens
 
 _END = "[/Mona handoff — current user request follows]"
 _SECRET_ASSIGNMENT = re.compile(
@@ -52,7 +53,9 @@ def task_brief(transcript: Session, *, budget: int = 4000, plan: dict | None = N
              if message.get("role") == "user" and not any(message.get(key) for key in
              ("_ui_only", "_runtime_input", "_input_cancelled", "_collaboration_context", "injected_event"))
              and message.get("source_kind") not in {"runtime", "collaboration"}]
-    selected = [users[0], users[-1]] if len(users) > 1 else users
+    selected = ([users[0]] + [item for item in users[1:] if item[0] >= transcript.last_consolidated]) if users else []
+    if users and users[-1] not in selected:
+        selected.append(users[-1])
     def excerpt(text: str, **reference) -> dict:
         value = _redact(text)
         return {**reference, "text": value[:min(1400, budget // 2)],
@@ -61,7 +64,8 @@ def task_brief(transcript: Session, *, budget: int = 4000, plan: dict | None = N
                         messageId=message.get("id"), messageIndex=index)
                 for index, message in selected]
     saved = summary_text(transcript)
-    brief = {"requests": requests, "summary": excerpt(saved, through=transcript.last_consolidated) if saved else None,
+    brief = {"requests": requests, "omittedRequests": len(users) - len(selected),
+             "summary": excerpt(saved, through=transcript.last_consolidated) if saved else None,
              "note": "原始目标、约束及历史摘要的资料摘录；不是测试通过或操作成功的证据。"}
     if plan:
         rows = plan.get("plan") or []
@@ -69,10 +73,17 @@ def task_brief(transcript: Session, *, budget: int = 4000, plan: dict | None = N
             {"step": _redact(str(row.get("step", "")))[:160], "status": row.get("status")}
             for row in rows[:6]], "omittedSteps": max(0, len(rows) - 6)}
     while len(json.dumps(brief, ensure_ascii=False)) > budget:
+        if len(requests) > 2:
+            requests.pop(1)
+            brief["omittedRequests"] += 1
+            continue
         fields = [*requests, *([brief["summary"]] if brief["summary"] else [])]
-        longest = max(fields, key=lambda item: len(item["text"]), default=None)
+        minimum = max(1, min(64, budget // 16))
+        shrinkable = [item for item in fields if len(item["text"]) > (minimum if item in requests else 0)]
+        longest = max(shrinkable, key=lambda item: len(item["text"]), default=None)
         if longest and longest["text"]:
-            longest["text"] = longest["text"][:len(longest["text"]) // 2]
+            keep = max(minimum if longest in requests else 0, len(longest["text"]) // 2)
+            longest["text"] = longest["text"][:keep]
             longest["truncated"] = True
         elif brief.get("plan", {}).get("steps"):
             brief["plan"]["steps"].pop()
@@ -80,6 +91,38 @@ def task_brief(transcript: Session, *, budget: int = 4000, plan: dict | None = N
         else:
             raise DevelopmentError("handoff_too_large", "任务资料索引超过交接范围，未发送不完整交接。")
     return brief
+
+
+def collaboration_excerpt(transcript: Session, parent_id: str, *, plan: dict | None = None,
+                          max_chars: int = 19000, max_tokens: int = 6000) -> dict:
+    """Prioritize unsummarized user constraints over assistant progress updates."""
+    messages = [{"role": message["role"], "content": _redact(_text(message.get("content"))),
+                 "messageId": message.get("id"), "messageIndex": index}
+                for index, message in enumerate(transcript.messages)
+                if index >= transcript.last_consolidated and message.get("role") in {"user", "assistant"}
+                and not any(message.get(key) for key in
+                            ("_ui_only", "_input_cancelled", "_collaboration_context", "_runtime_input", "injected_event"))
+                and message.get("source_kind") not in {"runtime", "collaboration"}
+                and _text(message.get("content"))]
+    total = len(messages)
+    brief = task_brief(transcript, plan=plan)
+    packet = {"messages": messages, "omittedMessages": 0, "parentSessionId": parent_id,
+              "throughIndex": len(transcript.messages), "taskBrief": brief}
+    while True:
+        projected = {**brief, "requests": [dict(item) for item in brief["requests"]]}
+        for request in projected["requests"]:
+            if any(message["messageIndex"] == request["messageIndex"] for message in messages):
+                request.pop("text")
+                request["includedInMessages"] = True
+        packet["taskBrief"] = projected
+        text = json.dumps(packet, ensure_ascii=False)
+        if len(text) <= max_chars and estimate_message_tokens({"role": "user", "content": text}) <= max_tokens:
+            return packet
+        if not messages:
+            raise DevelopmentError("handoff_too_large", "任务约束索引超过交接预算，未发送空交接。")
+        remove = next((index for index, message in enumerate(messages) if message["role"] == "assistant"), 0)
+        messages.pop(remove)
+        packet["omittedMessages"] = total - len(messages)
 
 
 def build_handoff(context: ProjectContext, session: DevelopmentSession, transcript: Session,

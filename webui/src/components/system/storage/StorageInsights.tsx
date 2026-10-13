@@ -84,15 +84,12 @@ export function StorageInsights({
   result,
   selectedDirectory,
   onAnalyzeScope,
-  onPlanCleanup,
 }: {
   result: StorageScanResult;
   selectedDirectory: DirectorySize | null;
   onAnalyzeScope: () => void;
-  onPlanCleanup: () => void;
 }) {
   const insights = buildStorageQuickInsights(result, selectedDirectory);
-  const hasCleanable = insights.some((insight) => insight.id === "cleanable");
 
   return (
     <PanelCard title="Mona 发现">
@@ -121,14 +118,9 @@ export function StorageInsights({
       )}
 
       <div className="mt-4 flex flex-wrap justify-end gap-2">
-        <Button type="button" variant="interaction" size="sm" onClick={onAnalyzeScope}>
+        <Button type="button" variant="outline" size="sm" onClick={onAnalyzeScope}>
           分析当前范围
         </Button>
-        {hasCleanable ? (
-          <Button type="button" variant="default" size="sm" onClick={onPlanCleanup}>
-            生成清理方案
-          </Button>
-        ) : null}
       </div>
     </PanelCard>
   );

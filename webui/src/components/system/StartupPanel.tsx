@@ -2,6 +2,8 @@ import { ArrowDown, ArrowUp, ArrowUpDown, Ban, CheckCircle2, Clock3, Loader2, Ro
 import { useMemo, useState } from "react";
 
 import { Button } from "@/components/ui/button";
+import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle } from "@/components/ui/alert-dialog";
+import { invokeWithTimeout } from "@/lib/tauri";
 
 import { useBootHistory, useStartupChanges, useStartupItems, type StartupItem } from "./useSystemData";
 import { MetricCard, PanelCard, StatusPill, TaskFailureNotice } from "./SystemUi";
@@ -96,6 +98,8 @@ export function StartupPanel({ onHandoff }: StartupPanelProps) {
   const [sort, setSort] = useState<StartupSort | null>(null);
   const [failedTask, setFailedTask] = useState<SystemAgentHandoffTask | null>(null);
   const [handoffAcknowledged, setHandoffAcknowledged] = useState(false);
+  const [reviewing, setReviewing] = useState(false);
+  const [reviewError, setReviewError] = useState<string | null>(null);
 
   const items = data?.items ?? [];
   const recentCount = useMemo(
@@ -139,6 +143,18 @@ export function StartupPanel({ onHandoff }: StartupPanelProps) {
     setSort((current) => current?.key === key
       ? { key, direction: current.direction === "asc" ? "desc" : "asc" }
       : { key, direction: "asc" });
+  };
+
+  const markReviewed = async () => {
+    setReviewing(true);
+    try {
+      await invokeWithTimeout<void>("system_acknowledge_startup_items", {}, 10_000);
+      await refresh();
+    } catch (cause) {
+      setReviewError(cause instanceof Error ? cause.message : String(cause));
+    } finally {
+      setReviewing(false);
+    }
   };
 
   const sparklinePoints = bootHistory ? buildSparklinePoints(bootHistory.points.map((p) => p.durationMs)) : "";
@@ -203,7 +219,11 @@ export function StartupPanel({ onHandoff }: StartupPanelProps) {
         </PanelCard>
       </div>
 
-      <PanelCard title="启动应用">
+      <PanelCard title="启动应用" action={recentCount > 0 ? (
+        <Button type="button" variant="outline" size="sm" onClick={() => void markReviewed()} disabled={reviewing || toggling || loading}>
+          {reviewing && <Loader2 className="h-3.5 w-3.5 animate-spin" />}标记已审查
+        </Button>
+      ) : undefined}>
         {loading ? (
           <div className="flex h-40 items-center justify-center text-caption text-muted-foreground"><Loader2 className="mr-2 h-4 w-4 animate-spin" /> 正在扫描启动项...</div>
         ) : items.length === 0 ? (
@@ -250,6 +270,19 @@ export function StartupPanel({ onHandoff }: StartupPanelProps) {
       </PanelCard>
 
       {notice && <p role="status" className="text-caption text-success">{notice}</p>}
+      <AlertDialog open={reviewError !== null} onOpenChange={(open) => { if (!open) setReviewError(null); }}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>无法确认审查状态</AlertDialogTitle>
+            <AlertDialogDescription>请重新读取启动项列表，确认标记结果后再重试。</AlertDialogDescription>
+          </AlertDialogHeader>
+          <details className="text-caption text-muted-foreground"><summary>查看诊断详情</summary><p className="mt-2 whitespace-pre-wrap">{reviewError}</p></details>
+          <AlertDialogFooter>
+            <AlertDialogCancel>关闭</AlertDialogCancel>
+            <AlertDialogAction onClick={() => { setReviewError(null); void refresh(); }}>重新读取</AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </div>
   );
 }

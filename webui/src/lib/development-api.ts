@@ -1,6 +1,7 @@
 import { getGatewayHttpBase } from "@/lib/api";
 import { httpFetch } from "@/lib/tauri";
 import { nativeProvidersChanged } from "@/lib/native-provider-state";
+import type { SettingsPayload } from "@/lib/types";
 
 export type ExecutorId = "mona" | "codex" | "claude" | "codebuddy";
 export type DevelopmentPermissionMode = "ask" | "auto" | "full_access";
@@ -199,6 +200,7 @@ export const developmentApi = {
   collaborationRequest: (sessionId: string, requestId: string) => request<DevCollaboration | null>(`/sessions/${id(sessionId)}/collaboration-requests/${id(requestId)}`),
   bindBrowser: (sessionId: string, tabId: string | null, expectedId: string | null) => request<{ binding: DevBrowserBinding | null }>(`/sessions/${id(sessionId)}/browser`, "PUT", { tabId, expectedId }),
   selectModelSource: (session: DevSession, body: { executor: ExecutorId; model: string | null; provider: string | null; effort?: string | null }) => request<DevSession>(`/sessions/${id(session.id)}/model-source`, "PUT", { revision: session.revision, ...body }),
+  selectWorkModelSource: (body: { executor: ExecutorId; model: string; provider?: string; effort?: string | null }) => request<SettingsPayload>("/work-model-source", "PUT", body),
   providerExecutors: () => request<{ executors: DevExecutor[] }>("/provider-executors"),
   collaborations: (sessionId: string) => request<DevCollaboration[]>(`/sessions/${id(sessionId)}/collaborations`),
   capabilities: (projectId?: string) => request<{ executors: DevExecutor[] }>(`/capabilities${projectId ? `?projectId=${id(projectId)}` : ""}`),

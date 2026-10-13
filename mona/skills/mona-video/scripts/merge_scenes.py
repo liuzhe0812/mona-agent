@@ -15,6 +15,7 @@ from __future__ import annotations
 import argparse
 import io
 import json
+import math
 import os
 import re
 import sys
@@ -48,9 +49,7 @@ def parse_storyboard(storyboard_path: Path) -> dict:
     Returns ``{"resolution": (w, h) | None, "scenes": {num: duration}}``.
     """
     result: dict = {"resolution": None, "scenes": {}}
-    if not storyboard_path.exists():
-        return result
-    text = storyboard_path.read_text(encoding="utf-8")
+    text = storyboard_path.read_text(encoding="utf-8") if storyboard_path.exists() else ""
 
     res_match = RESOLUTION_RE.search(text)
     if res_match:
@@ -66,6 +65,19 @@ def parse_storyboard(storyboard_path: Path) -> dict:
             dur = DURATION_LINE_RE.search(line)
             if dur:
                 result["scenes"][current_scene] = float(dur.group(1))
+    meta_path = storyboard_path.parent / "meta.json"
+    if meta_path.is_file():
+        meta = json.loads(meta_path.read_text(encoding="utf-8"))
+        for scene in meta.get("scenes") or []:
+            index, duration = int(scene.get("index") or 0), float(scene.get("duration") or 0)
+            if index > 0 and duration > 0:
+                result["scenes"][index] = duration
+        resolution = RESOLUTION_RE.search("Resolution: " + str(meta.get("resolution") or ""))
+        if resolution:
+            result["resolution"] = (int(resolution.group(1)), int(resolution.group(2)))
+    style_path = storyboard_path.parent / "style" / "design-system.json"
+    if style_path.is_file():
+        result["motion"] = json.loads(style_path.read_text(encoding="utf-8")).get("motion") or {}
     return result
 
 
@@ -96,7 +108,7 @@ def compute_timeline(
 ) -> tuple[list[tuple[int, Path, float, float]], float]:
     """Compute (start, duration) for each scene and the total duration.
 
-    Duration precedence: storyboard > scene HTML data-duration > default.
+    Duration precedence: project metadata > storyboard > scene HTML > default.
     """
     scene_durations: dict[int, float] = storyboard.get("scenes", {})
     timeline: list[tuple[int, Path, float, float]] = []
@@ -117,6 +129,20 @@ def _fmt(value: float) -> str:
     return f"{value:.3f}".rstrip("0").rstrip(".")
 
 
+def read_scene_transition(scene_path: Path, duration: float, motion: dict | None = None) -> tuple[str, float]:
+    if motion is None:
+        style_path = scene_path.parent.parent / "style" / "design-system.json"
+        motion = json.loads(style_path.read_text(encoding="utf-8")).get("motion") or {} if style_path.is_file() else {}
+    text = scene_path.read_text(encoding="utf-8")
+    preset_match = re.search(r'data-transition-preset=["\']([^"\']+)["\']', text)
+    duration_match = re.search(r'data-transition-duration-ms=["\']([^"\']+)["\']', text)
+    preset = preset_match.group(1) if preset_match else str(motion.get("transitionPreset") or "cross-fade")
+    milliseconds = float(duration_match.group(1) if duration_match else motion.get("transitionDurationMs", 420 if motion else 0))
+    if preset not in {"cross-fade", "fade-rise", "stagger-rise"} or not math.isfinite(milliseconds) or not 0 <= milliseconds <= 5000:
+        raise ValueError("场景切换配置无效")
+    return preset, min(duration, milliseconds / 1000)
+
+
 def build_index_html(
     scenes: list[tuple[int, Path]],
     storyboard: dict,
@@ -124,15 +150,20 @@ def build_index_html(
     """Build the root composition HTML referencing all scenes."""
     width, height = storyboard.get("resolution") or (DEFAULT_WIDTH, DEFAULT_HEIGHT)
     timeline, total = compute_timeline(scenes, storyboard)
+    transitions = [read_scene_transition(path, duration, storyboard.get("motion")) for _num, path, _start, duration in timeline]
 
     entries: list[str] = []
-    for num, path, start, duration in timeline:
+    for position, (num, path, start, duration) in enumerate(timeline):
         rel = f"scenes/{path.name}"
+        preset, transition_duration = transitions[position]
+        hold = transitions[position + 1][1] if position + 1 < len(timeline) else 0
+        animation = f"animation:mona-{preset} {_fmt(transition_duration)}s linear both paused;" if position and transition_duration else ""
         entries.append(
             f'    <div id="scene-host-{num}" data-composition-id="scene-host-{num}" '
             f'data-composition-src="{rel}" '
-            f'data-start="{_fmt(start)}" data-duration="{_fmt(duration)}" '
-            f'data-track-index="0"></div>'
+            f'data-start="{_fmt(start)}" data-duration="{_fmt(duration + hold)}" '
+            f'data-scene-duration="{_fmt(duration)}" data-track-index="0" '
+            f'class="scene-host" style="z-index:{position};{animation}"></div>'
         )
     entries_block = "\n".join(entries)
 
@@ -143,6 +174,25 @@ def build_index_html(
         '  <meta charset="UTF-8">',
         "  <title>Video</title>",
         f'  <script src="{GSAP_CDN}"></script>',
+        "  <style>",
+        f"    html,body {{ margin:0; width:{width}px; height:{height}px; overflow:hidden; background:#000; }}",
+        f"    main {{ position:relative; width:{width}px; height:{height}px; overflow:hidden; }}",
+        "    .scene-host { position:absolute; inset:0; }",
+        "    @keyframes mona-cross-fade { from { opacity:0; } to { opacity:1; } }",
+        "    @keyframes mona-fade-rise { from { opacity:0; transform:translateY(5%); } to { opacity:1; transform:translateY(0); } }",
+        "    @property --mona-band-0 { syntax:'<number>'; inherits:false; initial-value:0; }",
+        "    @property --mona-band-1 { syntax:'<number>'; inherits:false; initial-value:0; }",
+        "    @property --mona-band-2 { syntax:'<number>'; inherits:false; initial-value:0; }",
+        "    [style*='mona-stagger-rise'] { mask-image:linear-gradient(to right,rgba(0,0,0,var(--mona-band-0)) 0 33.333%,rgba(0,0,0,var(--mona-band-1)) 33.333% 66.667%,rgba(0,0,0,var(--mona-band-2)) 66.667% 100%); }",
+        "    @keyframes mona-stagger-rise {",
+        "      0% { --mona-band-0:0; --mona-band-1:0; --mona-band-2:0; }",
+        "      18% { --mona-band-0:.28125; --mona-band-1:0; --mona-band-2:0; }",
+        "      36% { --mona-band-0:.5625; --mona-band-1:.28125; --mona-band-2:0; }",
+        "      64% { --mona-band-0:1; --mona-band-1:.71875; --mona-band-2:.4375; }",
+        "      82% { --mona-band-0:1; --mona-band-1:1; --mona-band-2:.71875; }",
+        "      100% { --mona-band-0:1; --mona-band-1:1; --mona-band-2:1; }",
+        "    }",
+        "  </style>",
         "</head>",
         "<body>",
         f'  <main data-composition-id="main" data-start="0" '
@@ -153,6 +203,7 @@ def build_index_html(
         "  <script>",
         "    window.__timelines = window.__timelines || [];",
         '    window.__timelines["main"] = gsap.timeline({ paused: true });',
+        f'    window.__timelines["main"].to({{}}, {{ duration:{_fmt(total)} }});',
         "  </script>",
         "</body>",
         "</html>",

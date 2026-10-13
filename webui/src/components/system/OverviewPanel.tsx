@@ -1,4 +1,4 @@
-import { ChevronDown, Clock3, HardDrive, RefreshCw } from "lucide-react";
+import { ChevronDown, Loader2, RefreshCw } from "lucide-react";
 import { useState } from "react";
 
 import { Button } from "@/components/ui/button";
@@ -6,8 +6,8 @@ import { StatusNotice } from "@/components/ui/status-notice";
 
 import type { SystemTab } from "./systemTabs";
 import { PanelCard, StatusPill } from "./SystemUi";
+import { BOOT_SLOWDOWN_MS, buildInspectionCards, diagnosticLabel, type InspectionCard } from "./inspectionModel";
 import {
-  DIAGNOSTIC_CHECKS,
   formatGb,
   formatMbps,
   formatPercent,
@@ -20,7 +20,9 @@ import {
   type DiagnosticCheck,
   type DiskInfo,
   type SamplePoint,
+  type SoftwareCheckResult,
   type StartupItem,
+  type StorageScanResult,
 } from "./useSystemData";
 
 const TIME_RANGES = [
@@ -97,9 +99,9 @@ type OverviewAction = "scan-storage" | "open-startup";
 
 interface Issue {
   id: OverviewAction;
+  drive: string | null;
   title: string;
   evidence: string;
-  impact: string;
   actionLabel: string;
   priority: string;
   tone: "red" | "orange" | "blue";
@@ -118,9 +120,9 @@ function buildIssues(disks: DiskInfo[], startupItems: StartupItem[], bootHistory
   if (disk) {
     issues.push({
       id: "scan-storage",
+      drive: `${disk.driveLetter.charAt(0).toUpperCase()}:`,
       title: `${disk.driveLetter}空间紧张`,
       evidence: `可用空间 ${formatGb(disk.availableGb)} GB · 占用 ${formatPercent(disk.usagePercent)}`,
-      impact: "可能影响更新与文件保存",
       actionLabel: "查看并扫描",
       priority: critical ? "需关注" : "建议处理",
       tone: critical ? "red" : "orange",
@@ -129,17 +131,18 @@ function buildIssues(disks: DiskInfo[], startupItems: StartupItem[], bootHistory
 
   const recentStartupCount = startupItems.filter((item) => item.isNew).length;
   const bootDelta = bootHistory?.lastDeltaMs ?? 0;
-  if (recentStartupCount > 0 || bootDelta > 0) {
+  const bootSlowed = bootDelta >= BOOT_SLOWDOWN_MS;
+  if (recentStartupCount > 0 || bootSlowed) {
     const evidence = [
       recentStartupCount > 0 ? `新增 ${recentStartupCount} 项启动项待审查` : "",
-      bootDelta > 0 ? `比上次慢 ${formatDuration(bootDelta)}` : "",
+      bootSlowed ? `比上次慢 ${formatDuration(bootDelta)}` : "",
     ].filter(Boolean).join(" · ");
     issues.push({
       id: "open-startup",
-      title: bootDelta > 0 ? "启动耗时增加" : "启动项有新增",
+      drive: null,
+      title: bootSlowed ? "启动耗时增加" : "启动项有新增",
       evidence,
-      impact: "可能延长开机等待时间",
-      actionLabel: "审查启动项",
+      actionLabel: recentStartupCount > 0 ? "审查启动项" : "查看启动趋势",
       priority: "建议检查",
       tone: "orange",
     });
@@ -184,9 +187,19 @@ function OverviewMetric({
 }
 
 interface OverviewPanelProps {
+  diagnostics: ReturnType<typeof useSystemDiagnostics>;
+  storage: StorageScanResult | null;
+  software: SoftwareCheckResult | null;
   onNavigate: (tab: SystemTab) => void;
-  onStartStorageScan: () => void;
-  onAcknowledgeStartupItems: () => Promise<void>;
+  onClean: () => void;
+  cleaning: boolean;
+  cleanupNotice: string;
+  onUpgrade: () => void;
+  updating: boolean;
+  updateNotice: string;
+  onRecheckSoftware: () => Promise<void>;
+  onStartStorageScan: (drive: string) => void;
+  storageScanning: boolean;
 }
 
 const DIAGNOSTIC_TONE: Record<DiagnosticCheck["status"], { tone: "green" | "orange" | "blue" | "neutral"; label: string }> = {
@@ -196,63 +209,14 @@ const DIAGNOSTIC_TONE: Record<DiagnosticCheck["status"], { tone: "green" | "oran
   unavailable: { tone: "neutral", label: "不可用" },
 };
 
-function DiagnosticsCard() {
-  const { checks, loading, recheck } = useSystemDiagnostics();
-  const [expandedId, setExpandedId] = useState<string | null>(null);
-  // 后端返回短 id（如 pending_reboot），命令名为 system_check_<id>
-  const labelOf = (id: string) =>
-    DIAGNOSTIC_CHECKS.find((item) => item.command === id || item.command === `system_check_${id}`)?.label ?? id;
-
-  return (
-    <PanelCard
-      title="系统健康检查"
-      action={
-        <Button variant="outline" size="sm" onClick={() => void recheck()} disabled={loading}>
-          <RefreshCw className={loading ? "h-3.5 w-3.5 animate-spin" : "h-3.5 w-3.5"} />
-          重新检查
-        </Button>
-      }
-    >
-      {loading && checks.length === 0 ? (
-        <div className="space-y-2">
-          {[0, 1, 2].map((index) => <div key={index} className="h-8 animate-pulse rounded-lg bg-muted/40" />)}
-        </div>
-      ) : (
-        <ul className="divide-y divide-border/50">
-          {checks.map((check) => {
-            const tone = DIAGNOSTIC_TONE[check.status] ?? DIAGNOSTIC_TONE.unavailable;
-            const expanded = expandedId === check.id;
-            return (
-              <li key={check.id}>
-                <button
-                  type="button"
-                  aria-expanded={expanded}
-                  onClick={() => setExpandedId(expanded ? null : check.id)}
-                  className="flex w-full items-center gap-3 py-2.5 text-left"
-                >
-                  <span className="w-28 shrink-0 text-ui font-medium">{labelOf(check.id)}</span>
-                  <StatusPill tone={tone.tone}>{tone.label}</StatusPill>
-                  <span className="min-w-0 flex-1 truncate text-caption text-muted-foreground">{check.summary}</span>
-                  <ChevronDown className={`h-3.5 w-3.5 shrink-0 text-muted-foreground transition-transform ${expanded ? "rotate-180" : ""}`} />
-                </button>
-                {expanded ? (
-                  <pre className="mb-3 max-h-48 overflow-y-auto whitespace-pre-wrap rounded-lg bg-muted/40 p-3 font-mono text-micro leading-5 text-muted-foreground scrollbar-thin">{check.detail}</pre>
-                ) : null}
-              </li>
-            );
-          })}
-        </ul>
-      )}
-    </PanelCard>
-  );
-}
-
-export function OverviewPanel({ onNavigate, onStartStorageScan, onAcknowledgeStartupItems }: OverviewPanelProps) {
+export function OverviewPanel({ diagnostics, storage, software, onNavigate, onClean, cleaning, cleanupNotice, onUpgrade, updating, updateNotice, onRecheckSoftware, onStartStorageScan, storageScanning }: OverviewPanelProps) {
   const { data, error } = useSystemOverview();
-  const { data: startup } = useStartupItems();
-  const { data: bootHistory } = useBootHistory();
+  const { data: startup, refresh: refreshStartup } = useStartupItems();
+  const { data: bootHistory, refresh: refreshBoot } = useBootHistory();
+  const [rechecking, setRechecking] = useState(false);
   const [timeRange, setTimeRange] = useState<(typeof TIME_RANGES)[number]>(TIME_RANGES[0]);
   const [sort, setSort] = useState<{ key: ProcessSortKey; direction: SortDirection }>({ key: "cpuPercent", direction: "descending" });
+  const [expandedIssueId, setExpandedIssueId] = useState<string | null>(null);
   const { data: history } = useSystemHistory(timeRange.seconds);
 
   if (!data) {
@@ -277,6 +241,14 @@ export function OverviewPanel({ onNavigate, onStartStorageScan, onAcknowledgeSta
 
   const cDrive = data.disks[0];
   const issues = buildIssues(data.disks, startup?.items ?? [], bootHistory);
+  const inspectionIssues = buildInspectionCards({
+    diagnostics: [],
+    storage,
+    software,
+    startup: null,
+    boot: null,
+    maintenance: null,
+  }, Infinity);
   const cpuPolyline = buildPolyline(history, (point) => point.cpuUsage);
   const memoryPolyline = buildPolyline(history, (point) => point.memUsage);
   const cpuMiniPolyline = buildPolyline(history, (point) => point.cpuUsage, 120, 48);
@@ -295,51 +267,45 @@ export function OverviewPanel({ onNavigate, onStartStorageScan, onAcknowledgeSta
       direction: current.key === key && current.direction === "descending" ? "ascending" : "descending",
     }));
   };
-  const openIssue = async (issue: Issue) => {
-    if (issue.id === "scan-storage") {
-      onNavigate("storage");
-      onStartStorageScan();
+  const openIssue = (issue: Issue) => {
+    if (issue.id === "scan-storage" && issue.drive) {
+      onStartStorageScan(issue.drive);
       return;
     }
-    if (issue.id === "open-startup") await onAcknowledgeStartupItems();
     onNavigate("startup");
+  };
+  const openInspection = (issue: InspectionCard) => {
+    if (issue.id === "storage") onClean();
+    else if (issue.id === "software") onUpgrade();
+    else onNavigate(issue.tab);
+  };
+  const rows = [
+    ...diagnostics.checks.map((check) => ({
+      id: `diagnostic:${check.id}`,
+      title: diagnosticLabel(check.id),
+      summary: check.summary,
+      detail: check.detail,
+      metric: DIAGNOSTIC_TONE[check.status].label,
+      tone: DIAGNOSTIC_TONE[check.status].tone,
+      actionLabel: null,
+      onAction: null,
+    })),
+    ...issues.map((issue) => ({ id: issue.id, title: issue.title, summary: issue.evidence, detail: issue.evidence, metric: issue.priority, tone: issue.tone, actionLabel: issue.actionLabel, onAction: () => void openIssue(issue) })),
+    ...inspectionIssues.map((issue) => ({ id: issue.id, title: issue.title, summary: issue.detail, detail: issue.detail, metric: issue.metric, tone: issue.tone === "warning" ? "orange" as const : "blue" as const, actionLabel: issue.actionLabel ?? "查看", onAction: () => openInspection(issue) })),
+  ];
+  const recheck = async () => {
+    setRechecking(true);
+    try {
+      await Promise.all([diagnostics.recheck(), refreshStartup(), refreshBoot(), onRecheckSoftware()]);
+    } finally {
+      setRechecking(false);
+    }
   };
 
   return (
     <div className="space-y-3">
       <h2 className="sr-only">电脑状态概览</h2>
 
-      {issues.length > 0 && (
-        <section>
-          <div className="border-b border-border/60 px-1 pb-3">
-            <h2 className="text-body font-semibold">现在值得处理</h2>
-            <p className="mt-1 text-micro text-muted-foreground">基于本机实时证据，为你排序 {issues.length} 个可执行问题</p>
-          </div>
-          <div className="grid gap-3 pt-3 md:grid-cols-3">
-            {issues.map((issue) => {
-              const Icon = issue.id === "scan-storage" ? HardDrive : Clock3;
-              const pillTone = issue.tone === "red" ? "red" : issue.tone === "orange" ? "orange" : "blue";
-              return (
-                <article key={issue.id} className="flex min-w-0 flex-col rounded-lg border border-border/60 bg-card p-3">
-                  <div className="flex items-start gap-3">
-                    <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-muted text-muted-foreground"><Icon className="h-4 w-4" /></span>
-                    <div className="min-w-0 flex-1">
-                      <StatusPill tone={pillTone}>{issue.priority}</StatusPill>
-                      <h3 className="mt-2 text-body font-semibold">{issue.title}</h3>
-                    </div>
-                  </div>
-                  <p className="mt-3 text-micro leading-5 text-muted-foreground">{issue.evidence}</p>
-                  <p className="mt-1 text-micro leading-5 text-muted-foreground">{issue.impact}</p>
-                  <div className="mt-3 flex items-center gap-2">
-                    <Button type="button" variant="interaction" size="sm" onClick={() => void openIssue(issue)} className="flex-1">{issue.actionLabel}</Button>
-                    {issue.id === "scan-storage" && <span className="text-micro text-muted-foreground">先分析，暂不清理</span>}
-                  </div>
-                </article>
-              );
-            })}
-          </div>
-        </section>
-      )}
 
       <section>
         <h2 className="mb-2 text-body font-semibold">系统状态</h2>
@@ -406,7 +372,76 @@ export function OverviewPanel({ onNavigate, onStartStorageScan, onAcknowledgeSta
         )}
       </div>
 
-      <DiagnosticsCard />
+      <PanelCard
+        title="系统健康检查"
+        headerClassName="border-b-0"
+        action={
+          <Button variant="outline" size="sm" onClick={() => void recheck()} disabled={diagnostics.loading || rechecking}>
+            <RefreshCw className={diagnostics.loading || rechecking ? "h-3.5 w-3.5 animate-spin" : "h-3.5 w-3.5"} />
+            重新检查
+          </Button>
+        }
+      >
+        <ul aria-label="系统健康检查" className="space-y-1">
+          {rows.map((row) => {
+            const hasDetails = Boolean(row.detail.trim()) && row.detail.trim() !== row.summary.trim();
+            const expanded = hasDetails && expandedIssueId === row.id;
+            const content = (
+              <>
+                <span className="w-28 shrink-0 text-ui font-medium">{row.title}</span>
+                <StatusPill tone={row.tone}>{row.metric}</StatusPill>
+                <span className="min-w-0 flex-1 whitespace-normal break-words text-caption text-muted-foreground">{row.summary}</span>
+              </>
+            );
+            const action = row.onAction && (
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                className="ml-auto shrink-0"
+                onClick={row.onAction}
+                aria-busy={row.id === "storage" && cleaning}
+                disabled={row.id === "scan-storage" ? storageScanning || cleaning : row.id === "storage" ? cleaning || storageScanning : row.id === "software" && updating}
+              >
+                {row.id === "storage" && cleaning && <Loader2 aria-hidden="true" className="h-3.5 w-3.5 animate-spin" />}
+                {row.id === "storage" && cleaning ? "正在清理" : row.id === "software" && updating ? "正在更新" : row.actionLabel}
+              </Button>
+            );
+            return (
+              <li key={row.id} data-testid={`inspection-card-${row.id}`}>
+                {hasDetails ? (
+                  <Button
+                    type="button"
+                    variant="ghost"
+                    aria-label={row.title}
+                    aria-expanded={expanded}
+                    aria-controls={`inspection-detail-${row.id}`}
+                    onClick={() => setExpandedIssueId(expanded ? null : row.id)}
+                    className="h-auto w-full justify-start gap-3 px-0 py-2.5 text-left hover:bg-transparent active:bg-transparent"
+                  >
+                    {content}
+                    <ChevronDown className={expanded ? "h-3.5 w-3.5 shrink-0 rotate-180" : "h-3.5 w-3.5 shrink-0"} />
+                  </Button>
+                ) : (
+                  <div className="flex flex-wrap items-center gap-3 py-2.5">
+                    <div className="flex min-w-0 flex-1 basis-80 items-center gap-3">{content}</div>
+                    {action}
+                  </div>
+                )}
+                {expanded && (
+                  <div id={`inspection-detail-${row.id}`} className="pb-3">
+                    <pre className="max-h-48 overflow-y-auto whitespace-pre-wrap py-2 font-sans text-ui leading-6 text-muted-foreground scrollbar-thin">{row.detail}</pre>
+                    {action && <div className="pt-2 flex justify-end">{action}</div>}
+                  </div>
+                )}
+              </li>
+            );
+          })}
+          {rows.length === 0 && <li className="py-3 text-ui text-muted-foreground">{diagnostics.loading ? "正在检查..." : "暂未发现需要处理的问题。"}</li>}
+        </ul>
+        {cleanupNotice && <p role="status" className="mt-2 text-caption text-muted-foreground">{cleanupNotice}</p>}
+        {updateNotice && <p role="status" className="mt-2 text-caption text-muted-foreground">{updateNotice}</p>}
+      </PanelCard>
 
       <PanelCard title="资源占用较高的程序">
         <div className="overflow-x-auto">

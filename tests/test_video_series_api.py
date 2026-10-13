@@ -3,9 +3,11 @@
 import json
 from unittest.mock import AsyncMock, MagicMock
 
+import pytest
 from PIL import Image
 
 from mona.api import video_series
+from mona.video_style import VideoStyleError, import_background_asset
 
 
 def _request(body: dict | None = None, **match_info: str) -> MagicMock:
@@ -75,6 +77,7 @@ async def test_series_api_matches_style_editor_contract(monkeypatch, tmp_path) -
     listed = _body(await video_series.handle_video_series_list(_request()))
     assert listed["series"][0]["latestStyleVersion"] == 1
     assert listed["series"][0]["styleSummary"]["primaryColor"] == "#2563EB"
+    assert listed["series"][0]["styleSummary"]["enabledAspectRatios"] == ["16:9", "9:16", "1:1"]
 
 
 async def test_style_draft_revision_conflict_is_409(monkeypatch, tmp_path) -> None:
@@ -301,7 +304,7 @@ async def test_style_preview_uses_the_production_scene_compiler(
     draft = created["draft"]
 
     previews = {}
-    for role in ("cover", "content", "data", "outro"):
+    for role in ("cover", "chapter", "content", "data", "comparison", "process", "quote", "outro"):
         preview_style = draft
         if role == "outro":
             preview_style = {**draft, "brand": {"displayName": "MONA LAB"}}
@@ -315,9 +318,46 @@ async def test_style_preview_uses_the_production_scene_compiler(
         html = _body(response)["html"]
         assert 'data-template="neon-core"' in html
         assert f'data-role="{role}"' in html
+        assert 'data-width="1920" data-height="1080"' in html
+        assert "window.innerWidth / 1920" in html
         previews[role] = html
-    assert len(set(previews.values())) == 4
+    assert len(set(previews.values())) == 8
     assert "MONA LAB" in previews["outro"]
+
+
+async def test_style_preview_embeds_imported_background_and_rejects_unsafe_asset_id(monkeypatch, tmp_path) -> None:
+    monkeypatch.setattr(video_series, "_root", lambda: tmp_path)
+    created = _body(await video_series.handle_video_series_create(_request({"name": "背景预览", "baseTemplateId": "tech-dark"})))
+    series_id = created["series"]["id"]
+    source = tmp_path / "背景.png"
+    Image.new("RGB", (1920, 1080), (120, 60, 30)).save(source)
+    asset = import_background_asset(tmp_path, series_id, source, rights_status="owned")
+    draft = created["draft"]
+    draft["backgrounds"]["default"]["assetId"] = asset["assetId"]
+    response = await video_series.handle_video_style_preview(_request({"style": draft, "role": "cover", "aspectRatio": "9:16"}, series_id=series_id))
+    assert response.status == 200
+    output = _body(response)["html"]
+    assert 'background-image: url("data:image/webp;base64,' in output
+    assert 'data-width="1080" data-height="1920"' in output
+    draft["backgrounds"]["default"]["assetId"] = "../../outside"
+    blocked = await video_series.handle_video_style_preview(_request({"style": draft, "role": "cover"}, series_id=series_id))
+    assert blocked.status == 400
+    assert _body(blocked)["error"] == "BACKGROUND_ASSET_ID_INVALID"
+
+
+def test_preview_image_rejects_a_link_outside_the_asset_directory(monkeypatch, tmp_path) -> None:
+    monkeypatch.setattr(video_series, "_root", lambda: tmp_path)
+    directory = tmp_path / "video_series" / "safe" / "draft" / "assets"
+    directory.mkdir(parents=True)
+    outside = tmp_path / "outside.webp"
+    outside.write_bytes(b"outside")
+    try:
+        (directory / "escape.webp").symlink_to(outside)
+    except OSError:
+        pytest.skip("Symbolic links are unavailable on this host")
+    with pytest.raises(VideoStyleError) as exc:
+        video_series._draft_image_data_uri("safe", "escape")
+    assert exc.value.code == "BACKGROUND_ASSET_PATH_INVALID"
 
 
 async def test_empty_series_can_be_deleted(monkeypatch, tmp_path) -> None:
@@ -435,3 +475,27 @@ async def test_series_delete_requires_explicit_detach_and_preserves_episodes(
     assert meta["detachedFromSeries"] is True
     assert (project / "style" / "design-system.json").is_file()
     assert not (tmp_path / "video_series" / series_id).exists()
+
+
+async def test_series_counts_and_detaches_archived_episodes(monkeypatch, tmp_path) -> None:
+    monkeypatch.setattr(video_series, "_root", lambda: tmp_path)
+    created = _body(await video_series.handle_video_series_create(_request({"name": "归档引用", "baseTemplateId": "tech-dark"})))
+    series_id = created["series"]["id"]
+    for folder in ("video_projects", "video_projects_archived"):
+        project = tmp_path / folder / "episode"
+        (project / "style").mkdir(parents=True)
+        (project / "style" / "design-system.json").write_text("{}", encoding="utf-8")
+        (project / "meta.json").write_text(json.dumps({"name": "episode", "seriesId": series_id}), encoding="utf-8")
+    summary = _body(await video_series.handle_video_series_get(_request(series_id=series_id)))
+    assert summary["episodeCount"] == 2
+    blocked = await video_series.handle_video_series_delete(_request(series_id=series_id))
+    assert blocked.status == 409
+    assert _body(blocked)["details"]["episodeCount"] == 2
+    request = _request(series_id=series_id)
+    request.query = {"detachEpisodes": "true"}
+    deleted = await video_series.handle_video_series_delete(request)
+    assert _body(deleted)["detachedEpisodeCount"] == 2
+    for folder in ("video_projects", "video_projects_archived"):
+        project = tmp_path / folder / "episode"
+        assert "seriesId" not in json.loads((project / "meta.json").read_text(encoding="utf-8"))
+        assert (project / "style" / "design-system.json").is_file()

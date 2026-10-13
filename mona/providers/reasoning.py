@@ -1,4 +1,4 @@
-"""Provider-declared levels, following Cindy modelDiscovery.ts metadata parsing.
+"""Provider-declared reasoning levels from model metadata.
 
 Unknown routes never imply effort levels. Managed routes also use a reviewed
 exact-ID catalog when the server omits capabilities.
@@ -24,10 +24,8 @@ _EFFORT_ORDER = (
     "adaptive",
 )
 
-# Mona's managed OpenAI-compatible route needs the same catalog fallback as
-# Cindy. Exact deployed IDs only; explicit server metadata always wins.
-# Baseline: Cindy catalog/provider-models.json (Z.AI, Moonshot, Qwen Token Plan)
-# and DeepSeek's /models effort schema. Never apply these to arbitrary relays.
+# Apply this fallback only to known managed model IDs; explicit server metadata
+# always wins. Never apply it to arbitrary relays.
 # Reviewed 2026-09-30 for Mona's managed OpenAI-compatible Alibaba route.
 _MANAGED_EFFORTS: dict[str, tuple[tuple[str, ...], str]] = {
     "glm-5.3": (("low", "high", "max"), "high"),

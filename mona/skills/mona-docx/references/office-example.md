@@ -297,5 +297,3 @@
 ```
 
 版本冲突时不要重试旧 `expected_version`；重新 `inspect` 受影响块，合并用户修改后再按相同格式提交。会话断开或暂时失败时，用 `office` 的 `open` 携带原 `session_id` 恢复同一会话，不要新建会话或重建文档。
-
-> 可迁移原则参考 Codex 内置 documents 26.904.11930；示例仍只使用 Mona 实时 `office` 工具。

@@ -1,0 +1,17 @@
+@import "../../src/styles/resize-handles.css";
+
+:root {
+  --mona-resize-border: color-mix(in srgb, var(--border) 60%, transparent);
+  --mona-resize-hover: color-mix(in srgb, var(--text) 10%, transparent);
+  --mona-resize-active: color-mix(in srgb, var(--text) 20%, transparent);
+}
+
+.thumb-resizer,
+.notes-resize-handle,
+.notes-pull-zone {
+  position: relative;
+}
+
+#univer-container [data-u-comp="sidebar"] > [role="separator"][aria-label="Resize sidebar"] {
+  background: transparent;
+}

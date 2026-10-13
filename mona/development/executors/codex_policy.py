@@ -10,9 +10,10 @@ import json
 import os
 import sys
 from collections.abc import Mapping
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Any
+from uuid import uuid4
 
 from mona.development.context import ProjectContext
 from mona.development.executors.rpc import RpcError
@@ -85,6 +86,7 @@ class CodexProfile:
     project_root: Path
     environment: Mapping[str, str] = field(repr=False)
     model_endpoint: str | None = None
+    work_model_catalog: Path | None = None
 
 
 def prepare_codex_profile(executable: Path, home: Path, project_root: Path,
@@ -135,10 +137,57 @@ def prepare_codex_profile(executable: Path, home: Path, project_root: Path,
     return CodexProfile(tuple(args), home, project_root, env, model_endpoint)
 
 
-def validate_effective_config(response: Any, *, model_endpoint: str | None = None) -> None:
+def prepare_codex_work_profile(executable: Path, home: Path, root: Path) -> tuple[CodexProfile, Path]:
+    """Use the native catalog's metadata with all filesystem tools removed."""
+    profile = prepare_codex_profile(executable, home, root)
+    try:
+        catalog = json.loads((profile.home / "models_cache.json").read_text(encoding="utf-8"))
+        models = catalog["models"]
+        if not isinstance(models, list) or not models or not all(isinstance(model, dict) and model.get("slug") for model in models):
+            raise ValueError("invalid native model catalog")
+    except (OSError, ValueError, KeyError) as exc:
+        raise RpcError("native_catalog_unavailable", "模型目录尚未同步，请在模型设置中刷新后重试。") from exc
+    for model in models:
+        model.update(shell_type="disabled", apply_patch_tool_type=None, experimental_supported_tools=[],
+                     tool_mode="direct", node_repl_disabled=True, include_skills_usage_instructions=False,
+                     include_apps_usage_instructions=False, include_plugin_usage_instructions=False)
+    path = profile.home / f".mona-work-models-{uuid4().hex}.json"
+    with path.open("x", encoding="utf-8") as stream:
+        json.dump({"models": models}, stream, ensure_ascii=False)
+    overrides = {
+        "model_catalog_json": str(path), "features.shell_tool": False, "features.shell_snapshot": False,
+        "features.view_image": False,
+        "features.image_generation": False, "features.standalone_web_search": False,
+        "web_search": "disabled", "features.js_repl": False, "features.code_mode": False,
+        "features.code_mode_only": False,
+        "model_provider": "mona_work_openai", "model_providers.mona_work_openai.name": "OpenAI",
+        "model_providers.mona_work_openai.requires_openai_auth": True,
+        "model_providers.mona_work_openai.wire_api": "responses",
+        "model_providers.mona_work_openai.supports_websockets": False,
+        "model_providers.mona_work_openai.include_internal_metadata": True,
+    }
+    command = list(profile.command)
+    for key, value in overrides.items():
+        command.extend(("-c", f"{key}={_toml(value)}"))
+    return replace(profile, command=tuple(command), work_model_catalog=path), path
+
+
+def validate_effective_config(response: Any, *, model_endpoint: str | None = None,
+                              work_model_catalog: Path | None = None) -> None:
     if not isinstance(response, dict) or not isinstance(response.get("config"), dict):
         raise RpcError("isolation_unverified", "原生执行者未返回有效配置，未启动开发会话。")
     config = response["config"]
+    if work_model_catalog is not None:
+        for key, expected in {"model_catalog_json": str(work_model_catalog), "features.shell_tool": False,
+                              "features.view_image": False, "web_search": "disabled",
+                              "model_provider": "mona_work_openai",
+                              "model_providers.mona_work_openai.name": "OpenAI",
+                              "model_providers.mona_work_openai.wire_api": "responses",
+                              "model_providers.mona_work_openai.requires_openai_auth": True,
+                              "model_providers.mona_work_openai.supports_websockets": False,
+                              "model_providers.mona_work_openai.base_url": None}.items():
+            if _get(config, key) != expected:
+                raise RpcError("work_policy_unverified", "模型引擎的工具权限未生效，未发送会话请求。")
     if model_endpoint:
         for key, expected in {"model_provider": "mona_models",
                 "model_providers.mona_models.base_url": model_endpoint + "/v1",

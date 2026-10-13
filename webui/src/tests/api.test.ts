@@ -4,8 +4,11 @@ import {
   cancelExpertInstall,
   cancelManagedRuntimeInstall,
   cleanupManagedRuntimes,
+  confirmVideoProjectPlan,
   deleteSession,
   fetchProviderModels,
+  fetchSceneNarrationBytes,
+  fetchVoicePreviewBytes,
   fetchSidebarState,
   fetchWebuiThread,
   fetchFilePreviewBlob,
@@ -20,6 +23,7 @@ import {
   updateSettings,
   updateStockSettings,
   updateVideoGenerationSettings,
+  updateVideoProjectSettings,
   updateWebSearchSettings,
 } from "@/lib/api";
 
@@ -36,6 +40,26 @@ describe("webui API helpers", () => {
         json: async () => ({ deleted: true, key: "websocket:chat-1", messages: [] }),
       }),
     );
+  });
+
+  it("saves video narration settings through the services API", async () => {
+    await updateVideoProjectSettings("tok", "演示视频", {
+      narrationEnabled: true, ttsProvider: "custom", ttsVoice: "", ttsRate: "+10%", subtitleMode: "external",
+    }, "http://services.local");
+    expect(fetch).toHaveBeenCalledWith("http://services.local/api/video/project/settings", expect.objectContaining({
+      method: "PUT",
+      body: JSON.stringify({ name: "演示视频", narrationEnabled: true, ttsProvider: "custom", ttsVoice: "", ttsRate: "+10%", subtitleMode: "external" }),
+      headers: expect.objectContaining({ Authorization: "Bearer tok" }),
+    }));
+  });
+
+  it("confirms the observed video plan revision through the services API", async () => {
+    await confirmVideoProjectPlan("tok", "演示视频", 4, "http://services.local");
+    expect(fetch).toHaveBeenCalledWith("http://services.local/api/video/project/confirm", expect.objectContaining({
+      method: "POST",
+      body: JSON.stringify({ name: "演示视频", expectedPlanRevision: 4 }),
+      headers: expect.objectContaining({ Authorization: "Bearer tok" }),
+    }));
   });
 
   it("percent-encodes websocket keys when fetching webui-thread snapshot", async () => {
@@ -150,6 +174,54 @@ describe("webui API helpers", () => {
         signal,
       }),
     );
+  });
+
+  it("preserves narration request errors and rejects empty audio responses", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue(
+        new Response(JSON.stringify({ error: "narration is unavailable", code: "TTS_COMPONENT_MISSING" }), {
+          status: 502,
+          headers: { "Content-Type": "application/json" },
+        }),
+      ),
+    );
+
+    await expect(
+      fetchSceneNarrationBytes("tok", "proj", 1, ""),
+    ).rejects.toMatchObject({
+      name: "ApiError",
+      status: 502,
+      message: "narration is unavailable",
+      code: "TTS_COMPONENT_MISSING",
+    });
+
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue(
+        new Response(new Uint8Array(), {
+          status: 200,
+          headers: { "Content-Type": "audio/mpeg" },
+        }),
+      ),
+    );
+    await expect(
+      fetchSceneNarrationBytes("tok", "proj", 1, ""),
+    ).rejects.toThrow("服务器没有返回可播放的旁白音频");
+  });
+
+  it("auditions unsaved voice settings through Services without a project request", async () => {
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(new Response(new Uint8Array([1, 2]), {
+      status: 200, headers: {"Content-Type": "audio/mpeg"},
+    })));
+    const controller = new AbortController();
+    const settings = {ttsProvider: "edge" as const, ttsVoice: "zh-CN-YunxiNeural", ttsRate: "+10%"};
+    const blob = await fetchVoicePreviewBytes("fixture", settings, controller.signal, "http://services.local");
+    expect(blob.size).toBe(2);
+    expect(fetch).toHaveBeenCalledWith("http://services.local/api/video/voice-preview", expect.objectContaining({
+      method: "POST", signal: controller.signal, body: JSON.stringify(settings),
+    }));
+    expect(fetch).toHaveBeenCalledOnce();
   });
 
   it("uses GET-compatible requests for websocket-hosted install actions", async () => {

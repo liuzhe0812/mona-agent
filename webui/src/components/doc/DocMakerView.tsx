@@ -1,4 +1,4 @@
-import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { lazy, Suspense, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import {
   FolderOpen,
   Home,
@@ -15,10 +15,17 @@ import { AgentLogo } from "@/components/AgentLogo";
 import { createConversationCanvasNote } from "@/components/canvas/conversation-canvas";
 import { DeleteConfirm } from "@/components/DeleteConfirm";
 import { DocChatPanel } from "@/components/doc/DocChatPanel";
+import { VideoHistory } from "@/components/doc/video/VideoHistory";
 import { RightSidebarToggleIcon } from "@/components/notes/RightSidebarToggleIcon";
 import { OfficeEditorHost } from "@/components/office/OfficeEditorHost";
 import type { OfficeDocumentType, OfficeSessionState } from "@/components/office/types";
 import { Button } from "@/components/ui/button";
+import {
+  Dialog,
+  DialogContent,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
 import {
   ContextMenu,
   ContextMenuContent,
@@ -27,6 +34,7 @@ import {
   ContextMenuTrigger,
 } from "@/components/ui/context-menu";
 import { Input } from "@/components/ui/input";
+import { ResizableHandle, ResizablePanel, ResizablePanelGroup } from "@/components/ui/resizable";
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
 import {
@@ -51,6 +59,7 @@ import { cn } from "@/lib/utils";
 import { useWorkspaceStore } from "@/lib/workspace-store";
 import { useClient } from "@/providers/ClientProvider";
 import type { EmbeddedVideoProject } from "@/components/doc/video/VideoMakerView";
+import type { PanelImperativeHandle } from "react-resizable-panels";
 
 const VideoMakerView = lazy(() =>
   import("@/components/doc/video/VideoMakerView").then((module) => ({ default: module.VideoMakerView })),
@@ -253,12 +262,15 @@ export function DocMakerView() {
   const [tabs, setTabs] = useState<WorkspaceTab[]>([]);
   const [activeTabId, setActiveTabId] = useState(() => readStoredString(ACTIVE_TAB_STORAGE_KEY, START_TAB_ID));
   const [rightSidebarOpen, setRightSidebarOpen] = useState(false);
+  const rightSidebarPanelRef = useRef<PanelImperativeHandle | null>(null);
   const [streamingByTab, setStreamingByTab] = useState<Record<string, boolean>>({});
   const [recentOffice, setRecentOffice] = useState<RecentOfficeDocument[]>(() => readStoredArray<RecentOfficeDocument>(RECENT_OFFICE_STORAGE_KEY));
   const [favorites, setFavorites] = useState<Set<string>>(() => new Set(readStoredArray<string>(FAVORITES_STORAGE_KEY)));
   const [historyMode, setHistoryMode] = useState<"recent" | "favorites">("recent");
   const [query, setQuery] = useState("");
   const [videoProjects, setVideoProjects] = useState<VideoProject[]>([]);
+  const [videoManagerOpen, setVideoManagerOpen] = useState(false);
+  const [videoHistoryRefreshKey, setVideoHistoryRefreshKey] = useState(0);
   const [historyLoading, setHistoryLoading] = useState(true);
   const [historyError, setHistoryError] = useState<string | null>(null);
   const [actionError, setActionError] = useState<string | null>(null);
@@ -271,6 +283,22 @@ export function DocMakerView() {
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   const activeTab = tabs.find((tab) => tab.id === activeTabId) ?? null;
+  useEffect(() => client.onRunStatus((chatId, startedAt) => {
+    const matching = tabs.filter((tab) => tab.chatId === chatId);
+    setStreamingByTab((current) => {
+      const running = startedAt !== null;
+      if (matching.every((tab) => Boolean(current[tab.id]) === running)) return current;
+      return { ...current, ...Object.fromEntries(matching.map((tab) => [tab.id, running])) };
+    });
+  }), [client, tabs]);
+  const activeTabIsVideo = activeTab?.kind === "video-workflow";
+
+  useLayoutEffect(() => {
+    const panel = rightSidebarPanelRef.current;
+    if (!panel) return;
+    if (rightSidebarOpen) panel.expand();
+    else panel.collapse();
+  }, [rightSidebarOpen]);
   const canvasWorkspaceRoot = workspacePath.trim()
     ? `${workspacePath.replace(/\\/g, "/").replace(/\/+$/, "")}/agent-workspaces/mona/output`
     : null;
@@ -311,6 +339,12 @@ export function DocMakerView() {
       }
       if (cancelled) return;
       setTabs(restored);
+      const restoredActiveTabId = activeTabId === START_TAB_ID || restored.some((tab) => tab.id === activeTabId)
+        ? activeTabId
+        : START_TAB_ID;
+      if (restored.some((tab) => tab.id === restoredActiveTabId && tab.kind === "video-workflow")) {
+        setRightSidebarOpen(true);
+      }
       setActiveTabId((current) => current === START_TAB_ID || restored.some((tab) => tab.id === current) ? current : START_TAB_ID);
       setHydrated(true);
     })();
@@ -345,6 +379,7 @@ export function DocMakerView() {
       return next;
     });
     setActiveTabId(tab.id);
+    if (tab.kind === "video-workflow") setRightSidebarOpen(true);
   }, []);
 
   const updateTab = useCallback((tabId: string, update: (tab: WorkspaceTab) => WorkspaceTab) => {
@@ -452,7 +487,6 @@ export function DocMakerView() {
     try {
       const chatId = await createChat("video");
       addTab({ id: `video:new:${crypto.randomUUID()}`, kind: "video-workflow", title: "新建视频", chatId, project: null, createdAt: Date.now() });
-      setRightSidebarOpen(true);
     } catch (error) {
       setActionError(error instanceof Error ? error.message : "视频项目创建失败。");
     } finally {
@@ -522,6 +556,118 @@ export function DocMakerView() {
       setActionError(error instanceof Error ? error.message : "项目打开失败。");
     }
   }, [addTab, createChat, token]);
+
+  const closeVideoProjectTabs = useCallback(
+    (name: string) => {
+      const remaining = tabs.filter(
+        (tab) => !(tab.kind === "video-workflow" && tab.project?.name === name),
+      );
+      setTabs(remaining);
+      if (!remaining.some((tab) => tab.id === activeTabId)) {
+        setActiveTabId(START_TAB_ID);
+      }
+    },
+    [activeTabId, tabs],
+  );
+
+  const handleVideoProjectDeleted = useCallback(
+    (name: string) => {
+      setVideoProjects((current) => current.filter((project) => project.name !== name));
+      setFavorites((current) => {
+        const next = new Set(current);
+        next.delete(`video:${name}`);
+        return next;
+      });
+      closeVideoProjectTabs(name);
+    },
+    [closeVideoProjectTabs],
+  );
+
+  const handleVideoProjectRenamed = useCallback(
+    (oldName: string, newName: string) => {
+      const oldId = `video:${oldName}`;
+      const newId = `video:${newName}`;
+      setVideoProjects((current) =>
+        current.map((project) =>
+          project.name === oldName ? { ...project, name: newName } : project,
+        ),
+      );
+      setFavorites((current) => {
+        if (!current.has(oldId)) return current;
+        const next = new Set(current);
+        next.delete(oldId);
+        next.add(newId);
+        return next;
+      });
+      setTabs((current) =>
+        current.map((tab) => {
+          if (tab.kind !== "video-workflow" || tab.project?.name !== oldName) {
+            return tab;
+          }
+          return {
+            ...tab,
+            id: tab.id === oldId ? newId : tab.id,
+            title: newName,
+            project: { ...tab.project, name: newName },
+          };
+        }),
+      );
+      setActiveTabId((current) => (current === oldId ? newId : current));
+      setStreamingByTab((current) => {
+        if (!(oldId in current)) return current;
+        const next = { ...current, [newId]: current[oldId] };
+        delete next[oldId];
+        return next;
+      });
+    },
+    [],
+  );
+
+  const handleVideoProjectArchived = useCallback(
+    (name: string, archived: boolean) => {
+      if (archived) {
+        setVideoProjects((current) => current.filter((project) => project.name !== name));
+        closeVideoProjectTabs(name);
+      } else {
+        void refreshHistory();
+      }
+    },
+    [closeVideoProjectTabs, refreshHistory],
+  );
+
+  const handleSelectVideoProject = useCallback(
+    (project: VideoProject) => {
+      setVideoManagerOpen(false);
+      void openHistoryItem({
+        key: `video:${project.name}`,
+        kind: "video",
+        title: project.name,
+        createdAt: project.createdAt,
+        detail: project.phase === "done" ? "视频 · 已完成" : "视频 · 制作中",
+        video: project,
+      });
+    },
+    [openHistoryItem],
+  );
+
+  const handleEmbeddedProjectChange = useCallback(
+    (tabId: string, project: EmbeddedVideoProject | null) => {
+      updateTab(tabId, (current) =>
+        current.kind === "video-workflow"
+          ? {
+              ...current,
+              title: project?.name ?? (current.project ? "新建视频" : current.title),
+              project,
+            }
+          : current,
+      );
+      if (project) {
+        void refreshHistory();
+        setVideoHistoryRefreshKey((current) => current + 1);
+      }
+    },
+    [refreshHistory, updateTab],
+  );
 
   const closeTab = useCallback((tabId: string) => {
     setTabs((current) => current.filter((tab) => tab.id !== tabId));
@@ -696,7 +842,18 @@ export function DocMakerView() {
             <Tabs value={historyMode} onValueChange={(value) => setHistoryMode(value as "recent" | "favorites")}>
               <TabsList className="h-8"><TabsTrigger value="recent" className="h-7 px-3 text-caption">最近</TabsTrigger><TabsTrigger value="favorites" className="h-7 px-3 text-caption">收藏</TabsTrigger></TabsList>
             </Tabs>
-            <div className="relative w-64"><Search className="pointer-events-none absolute left-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-muted-foreground" /><Input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="搜索文档和项目" className="h-8 pl-8 text-caption" /></div>
+            <div className="flex items-center gap-2">
+              <div className="relative w-64"><Search className="pointer-events-none absolute left-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-muted-foreground" /><Input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="搜索文档和项目" className="h-8 pl-8 text-caption" /></div>
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                className="h-8 shrink-0 text-caption"
+                onClick={() => setVideoManagerOpen(true)}
+              >
+                管理视频
+              </Button>
+            </div>
           </div>
           <h2 id="document-history-heading" className="sr-only">文档历史</h2>
           <div className="border-y border-border/70">
@@ -766,54 +923,95 @@ export function DocMakerView() {
 
   return (
     <div className="relative flex h-full min-h-0 bg-background" data-testid="document-workspace">
-      <div className="flex min-w-0 flex-1 flex-col">
-        <div className="flex h-8 shrink-0 items-center border-b border-border/70 bg-background pl-2 pr-11">
-          <div className="flex min-w-0 flex-1 items-stretch overflow-x-auto" role="tablist" aria-label="打开的文档">
-            <Button type="button" variant="ghost" role="tab" aria-selected={activeTabId === START_TAB_ID} className={cn("relative h-8 shrink-0 gap-1.5 rounded-none px-2.5 text-caption text-muted-foreground hover:bg-transparent hover:text-foreground", activeTabId === START_TAB_ID && "font-medium text-foreground after:absolute after:inset-x-2 after:bottom-0 after:h-px after:bg-foreground")} onClick={() => setActiveTabId(START_TAB_ID)}><Home className="h-3.5 w-3.5" />开始</Button>
-            {tabs.map((tab) => {
-              const icon = tabIcon(tab);
-              const active = activeTabId === tab.id;
-              return (
-                <div key={tab.id} className={cn("relative flex h-8 min-w-32 max-w-56 shrink-0 items-center border-l border-border/55 pl-2.5 pr-1 text-caption text-muted-foreground", active && "bg-muted/35 font-medium text-foreground after:absolute after:inset-x-2 after:bottom-0 after:h-px after:bg-foreground")}>
-                  <Button type="button" variant="ghost" role="tab" aria-selected={active} className="h-full min-w-0 flex-1 justify-start gap-1.5 rounded-none px-0 hover:bg-transparent" onClick={() => setActiveTabId(tab.id)}><DocumentTypeIcon kind={icon} size={16} /><span className="truncate" title={tab.title}>{tab.title}</span></Button>
-                  <Button type="button" variant="ghost" size="icon" className="h-5 w-5 shrink-0" aria-label={`关闭 ${tab.title}`} onClick={() => closeTab(tab.id)}><X className="h-3 w-3" /></Button>
-                </div>
-              );
-            })}
-          </div>
-          <div ref={setOfficeToolbarContainer} className="flex shrink-0 items-center" data-testid="document-office-controls" />
-        </div>
-
-        <main className="relative isolate min-w-0 flex-1 overflow-hidden">
-          <div className={cn("absolute inset-0", activeTabId !== START_TAB_ID && "invisible pointer-events-none")}>{renderStartPage()}</div>
-          {tabs.map((tab) => (
-            <div key={tab.id} className={cn("absolute inset-0 flex min-h-0 flex-col bg-background", activeTabId !== tab.id && "invisible pointer-events-none")}>
-              {tab.kind === "office" ? (
-                <div className="absolute inset-0 flex min-h-0 flex-col">
-                  <div className="min-h-0 flex-1"><OfficeEditorHost key={tab.session.sessionId} initialSession={tab.session} ownerSessionKey={tab.ownerSessionKey} generating={Boolean(streamingByTab[tab.id])} onClosed={(sessionId) => handleOfficeClosed(tab.id, sessionId)} onAiRequest={(prompt, displayText) => { setRightSidebarOpen(true); sendForTab(tab, prompt, displayText); }} toolbarContainer={activeTabId === tab.id ? officeToolbarContainer : null} /></div>
-                </div>
-              ) : tab.kind === "canvas" ? (
-                <Suspense fallback={<LoadingLabel label="正在打开画布…" />}><CanvasFileView filePath={tab.filePath} /></Suspense>
-              ) : (
-                <Suspense fallback={<LoadingLabel label="正在打开视频工作流…" />}><VideoMakerView embedded hostChatId={tab.chatId} hostIsStreaming={Boolean(streamingByTab[tab.id])} initialProject={tab.project} onProjectChange={(project) => updateTab(tab.id, (current) => current.kind === "video-workflow" ? { ...current, title: project?.name ?? current.title, project } : current)} onSendVideoTurn={(content, displayContent) => sendForTab(tab, content, displayContent)} /></Suspense>
-              )}
+      <ResizablePanelGroup id="document-workspace-layout" direction="horizontal" className="min-h-0 min-w-0 flex-1">
+        <ResizablePanel id="document-workspace-main" defaultSize="80%" minSize="480px" className="min-h-0 min-w-0 overflow-hidden">
+          <div className="flex h-full min-h-0 min-w-0 flex-col">
+            <div className="flex h-8 shrink-0 items-center border-b border-border/70 bg-background pl-2 pr-11">
+              <div className="flex min-w-0 flex-1 items-stretch overflow-x-auto" role="tablist" aria-label="打开的文档">
+                <Button type="button" variant="ghost" role="tab" aria-selected={activeTabId === START_TAB_ID} className={cn("relative h-8 shrink-0 gap-1.5 rounded-none px-2.5 text-caption text-muted-foreground hover:bg-transparent hover:text-foreground", activeTabId === START_TAB_ID && "font-medium text-foreground after:absolute after:inset-x-2 after:bottom-0 after:h-px after:bg-foreground")} onClick={() => setActiveTabId(START_TAB_ID)}><Home className="h-3.5 w-3.5" />开始</Button>
+                {tabs.map((tab) => {
+                  const icon = tabIcon(tab);
+                  const active = activeTabId === tab.id;
+                  return (
+                    <div key={tab.id} className={cn("relative flex h-8 min-w-32 max-w-56 shrink-0 items-center border-l border-border/55 pl-2.5 pr-1 text-caption text-muted-foreground", active && "bg-muted/35 font-medium text-foreground after:absolute after:inset-x-2 after:bottom-0 after:h-px after:bg-foreground")}>
+                      <Button type="button" variant="ghost" role="tab" aria-selected={active} className="h-full min-w-0 flex-1 justify-start gap-1.5 rounded-none px-0 hover:bg-transparent" onClick={() => { setActiveTabId(tab.id); if (tab.kind === "video-workflow") setRightSidebarOpen(true); }}><DocumentTypeIcon kind={icon} size={16} /><span className="truncate" title={tab.title}>{tab.title}</span></Button>
+                      <Button type="button" variant="ghost" size="icon" className="h-5 w-5 shrink-0" aria-label={`关闭 ${tab.title}`} onClick={() => closeTab(tab.id)}><X className="h-3 w-3" /></Button>
+                    </div>
+                  );
+                })}
+              </div>
+              <div ref={setOfficeToolbarContainer} className="flex shrink-0 items-center" data-testid="document-office-controls" />
             </div>
-          ))}
-        </main>
-      </div>
 
-      {rightSidebarOpen ? (
-        <aside aria-label="MONA AI 文档助手" className="flex h-full w-80 shrink-0 flex-col border-l border-border/70 bg-background">
-          <div className="flex h-8 shrink-0 items-center border-b border-border/70 px-3 pr-11"><div className="flex min-w-0 items-center gap-2"><AgentLogo state={activeTab && streamingByTab[activeTab.id] ? "working" : "idle"} className="h-5 w-5 shrink-0" title="Mona" /><div className="text-ui font-semibold">MONA AI</div></div></div>
-          <div className="min-h-0 flex-1">
-            {activeTab ? <DocChatPanel key={activeTab.chatId} chatId={activeTab.chatId} getSendOptions={() => activeTab.kind === "office" ? { officeSessionId: activeTab.session.sessionId, officeDocumentType: activeTab.officeType, officeDisplayName: activeTab.title } : activeTab.kind === "video-workflow" ? { agentKind: "video" } : undefined} onStreamingChange={(streaming) => setStreamingByTab((current) => ({ ...current, [activeTab.id]: streaming }))} placeholder={activeTab.kind === "video-workflow" ? "和 MONA AI 一起调整当前视频…" : activeTab.kind === "canvas" ? "让 MONA AI 协助完善当前画布…" : "让 MONA AI 阅读或修改当前文档…"} /> : <div className="flex h-full flex-col items-center justify-center gap-2 px-6 text-center text-caption text-muted-foreground"><AgentLogo state="idle" className="h-8 w-8" title="Mona" /><span>打开一个文档后，MONA AI 会在这里协助你。</span></div>}
+            <main className="relative isolate min-w-0 flex-1 overflow-hidden">
+              <div className={cn("absolute inset-0", activeTabId !== START_TAB_ID && "invisible pointer-events-none")}>{renderStartPage()}</div>
+              {tabs.map((tab) => (
+                <div key={tab.id} className={cn("absolute inset-0 flex min-h-0 flex-col bg-background", activeTabId !== tab.id && "invisible pointer-events-none")}>
+                  {tab.kind === "office" ? (
+                    <div className="absolute inset-0 flex min-h-0 flex-col">
+                      <div className="min-h-0 flex-1"><OfficeEditorHost key={tab.session.sessionId} initialSession={tab.session} ownerSessionKey={tab.ownerSessionKey} generating={Boolean(streamingByTab[tab.id])} onClosed={(sessionId) => handleOfficeClosed(tab.id, sessionId)} onAiRequest={(prompt, displayText) => { setRightSidebarOpen(true); sendForTab(tab, prompt, displayText); }} toolbarContainer={activeTabId === tab.id ? officeToolbarContainer : null} /></div>
+                    </div>
+                  ) : tab.kind === "canvas" ? (
+                    <Suspense fallback={<LoadingLabel label="正在打开画布…" />}><CanvasFileView filePath={tab.filePath} /></Suspense>
+                  ) : (
+                    <Suspense fallback={<LoadingLabel label="正在打开视频…" />}><VideoMakerView embedded hostChatId={tab.chatId} hostIsStreaming={Boolean(streamingByTab[tab.id])} onOpenChat={() => setRightSidebarOpen(true)} initialProject={tab.project} onProjectChange={(project) => handleEmbeddedProjectChange(tab.id, project)} onSendVideoTurn={(content, displayContent) => sendForTab(tab, content, displayContent)} /></Suspense>
+                  )}
+                </div>
+              ))}
+            </main>
           </div>
-        </aside>
-      ) : null}
+        </ResizablePanel>
 
-      <TooltipProvider delayDuration={150}><Tooltip><TooltipTrigger asChild><Button type="button" variant="ghost" size="icon" className="absolute right-2 top-0.5 z-10 h-7 w-7" aria-label={rightSidebarOpen ? "收起 MONA AI" : "打开 MONA AI"} onClick={() => setRightSidebarOpen((open) => !open)}><RightSidebarToggleIcon open={rightSidebarOpen} className="h-4 w-4" /></Button></TooltipTrigger><TooltipContent side="bottom">{rightSidebarOpen ? "收起 MONA AI" : "打开 MONA AI"}</TooltipContent></Tooltip></TooltipProvider>
+        {rightSidebarOpen ? <ResizableHandle aria-label="调整右侧栏宽度" className="z-10" /> : null}
+        <ResizablePanel
+          id="document-workspace-right-sidebar"
+          panelRef={rightSidebarPanelRef}
+          collapsible
+          collapsedSize="0px"
+          defaultSize="20%"
+          minSize="280px"
+          maxSize="600px"
+          groupResizeBehavior="preserve-pixel-size"
+          className="min-h-0 min-w-0 overflow-hidden"
+        >
+          {rightSidebarOpen ? (
+            <aside aria-label={activeTabIsVideo ? "制作对话" : "MONA AI 文档助手"} className="flex h-full min-w-0 flex-col bg-background">
+              <div className="flex h-8 shrink-0 items-center border-b border-border/70 px-3 pr-11"><div className="flex min-w-0 items-center gap-2"><AgentLogo state={activeTab && streamingByTab[activeTab.id] ? "working" : "idle"} className="h-5 w-5 shrink-0" title="Mona" /><div className="text-ui font-semibold">{activeTabIsVideo ? "制作对话" : "MONA AI"}</div></div></div>
+              <div className="min-h-0 flex-1">
+                {activeTab ? <DocChatPanel key={activeTab.chatId} chatId={activeTab.chatId} getSendOptions={() => activeTab.kind === "office" ? { officeSessionId: activeTab.session.sessionId, officeDocumentType: activeTab.officeType, officeDisplayName: activeTab.title } : activeTab.kind === "video-workflow" ? { agentKind: "video" } : undefined} onStreamingChange={(streaming) => setStreamingByTab((current) => ({ ...current, [activeTab.id]: streaming }))} placeholder={activeTab.kind === "video-workflow" ? "和 MONA AI 一起调整当前视频…" : activeTab.kind === "canvas" ? "让 MONA AI 协助完善当前画布…" : "让 MONA AI 阅读或修改当前文档…"} /> : <div className="flex h-full flex-col items-center justify-center gap-2 px-6 text-center text-caption text-muted-foreground"><AgentLogo state="idle" className="h-8 w-8" title="Mona" /><span>打开一个文档后，MONA AI 会在这里协助你。</span></div>}
+              </div>
+            </aside>
+          ) : null}
+        </ResizablePanel>
+      </ResizablePanelGroup>
+
+      <TooltipProvider delayDuration={150}><Tooltip><TooltipTrigger asChild><Button type="button" variant="ghost" size="icon" className="absolute right-2 top-0.5 z-10 h-7 w-7" aria-label={rightSidebarOpen ? (activeTabIsVideo ? "收起制作对话" : "收起 MONA AI") : (activeTabIsVideo ? "展开制作对话" : "打开 MONA AI")} onClick={() => setRightSidebarOpen((open) => !open)}><RightSidebarToggleIcon open={rightSidebarOpen} className="h-4 w-4" /></Button></TooltipTrigger><TooltipContent side="bottom">{rightSidebarOpen ? (activeTabIsVideo ? "收起制作对话" : "收起 MONA AI") : (activeTabIsVideo ? "展开制作对话" : "打开 MONA AI")}</TooltipContent></Tooltip></TooltipProvider>
 
       <Input ref={fileInputRef} type="file" className="hidden" accept=".docx,.xlsx,.pptx" onChange={(event) => { const file = event.target.files?.[0]; if (file) void file.arrayBuffer().then((buffer) => importOfficeFile(file.name, buffer, `browser:${file.name}:${file.size}:${file.lastModified}`)); event.target.value = ""; }} />
+      {videoManagerOpen ? (
+        <Dialog open onOpenChange={setVideoManagerOpen}>
+          <DialogContent className="flex h-[min(80vh,720px)] max-w-md flex-col">
+            <DialogHeader>
+              <DialogTitle>管理视频</DialogTitle>
+            </DialogHeader>
+            <div className="min-h-0 flex-1">
+              <VideoHistory
+                key={videoHistoryRefreshKey}
+                refreshKey={videoHistoryRefreshKey}
+                currentProjectName={
+                  activeTab?.kind === "video-workflow"
+                    ? activeTab.project?.name
+                    : null
+                }
+                onSelect={handleSelectVideoProject}
+                onDelete={handleVideoProjectDeleted}
+                onProjectRenamed={handleVideoProjectRenamed}
+                onProjectArchived={handleVideoProjectArchived}
+              />
+            </div>
+          </DialogContent>
+        </Dialog>
+      ) : null}
       <DeleteConfirm
         open={pendingDelete !== null}
         title={pendingDelete?.title ?? ""}

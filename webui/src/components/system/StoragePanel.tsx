@@ -110,8 +110,8 @@ function ScanStatusBar({
 }) {
   const scanning = status === "scanning";
   return (
-    <div className="flex flex-wrap items-center justify-between gap-3 rounded-md bg-muted/40 px-4 py-2 text-caption">
-      <div className="flex min-w-0 items-center gap-2 text-muted-foreground">
+    <div className="flex items-center justify-between gap-3 rounded-md bg-muted/40 px-4 py-2 text-caption">
+      <div className="flex min-w-0 flex-1 items-center gap-2 overflow-hidden whitespace-nowrap text-muted-foreground">
         {driveOptions.length > 1 && (
           <Select
             value={selectedDrive}
@@ -125,11 +125,11 @@ function ScanStatusBar({
         {scanning ? (
           <>
             <Loader2 className="h-3.5 w-3.5 shrink-0 animate-spin text-info" />
-            <span className="shrink-0">
+            <span className="min-w-0 truncate">
               正在扫描{progress ? ` · 已处理 ${progress.scannedDirs} 个区域 · ${progress.elapsedSecs.toFixed(0)} 秒` : ""}
             </span>
             {progress?.currentPath && (
-              <span className="min-w-0 truncate text-micro text-muted-foreground/70" title={progress.currentPath}>
+              <span className="min-w-0 flex-1 truncate text-micro text-muted-foreground/70" title={progress.currentPath}>
                 {progress.currentPath}
               </span>
             )}
@@ -151,7 +151,7 @@ function ScanStatusBar({
         ) : (
           <>
             <span className="h-1.5 w-1.5 shrink-0 rounded-full bg-muted-foreground/40" />
-            <span>尚未扫描，点击右侧按钮开始分析磁盘占用</span>
+            <span className="truncate">尚未扫描，点击右侧按钮开始分析磁盘占用</span>
           </>
         )}
       </div>
@@ -285,15 +285,19 @@ function CleanupPanel({
   });
 
   const clean = async () => {
+    if (cleaning || selectedItems.length === 0) return;
+    const targets = selectedItems;
+    const targetIds = targets.map((item) => item.id);
+    setConfirming(false);
     try {
-      const result = await onClean(selectedItems.map((item) => item.id));
+      const result = await onClean(targetIds);
       setNotice(result.failures.length > 0 ? `已释放 ${formatStorage(result.freedGb)}，${result.failures.length} 项未完成` : `清理完成，实际释放 ${formatStorage(result.freedGb)}`);
       setFailedTask(result.failures.length > 0 ? {
         id: crypto.randomUUID(),
         title: "清理存储空间",
         action: "清理存储空间",
-        target: selectedItems.map((item) => item.name).join("、"),
-        arguments: { ids: selectedItems.map((item) => item.id) },
+        target: targets.map((item) => item.name).join("、"),
+        arguments: { ids: targetIds },
         error: result.failures.join("；"),
       } : null);
       setSelected(new Set());
@@ -304,8 +308,8 @@ function CleanupPanel({
         id: crypto.randomUUID(),
         title: "清理存储空间",
         action: "清理存储空间",
-        target: selectedItems.map((item) => item.name).join("、"),
-        arguments: { ids: selectedItems.map((item) => item.id) },
+        target: targets.map((item) => item.name).join("、"),
+        arguments: { ids: targetIds },
         error,
       });
     } finally {
@@ -359,7 +363,10 @@ function CleanupPanel({
                   </div>
                 </DropdownMenuContent>
               </DropdownMenu>
-              <Button variant="interaction" size="sm" disabled={selectedItems.length === 0 || cleaning} onClick={() => setConfirming(true)}>安全清理</Button>
+              <Button variant="outline" size="sm" aria-busy={cleaning} disabled={selectedItems.length === 0 || cleaning} onClick={() => setConfirming(true)}>
+                {cleaning && <Loader2 aria-hidden="true" className="h-3.5 w-3.5 animate-spin" />}
+                {cleaning ? "正在清理" : "安全清理"}
+              </Button>
             </div>
           </div>
           {confirming && (
@@ -402,13 +409,11 @@ export function StoragePanel({
   scan,
   onHandoff,
   onAnalyzeScope,
-  onPlanCleanup,
   onSelectionChange,
 }: {
   scan: ReturnType<typeof useStorageScan>;
   onHandoff: (task: SystemAgentHandoffTask) => void;
   onAnalyzeScope?: (directory: DirectorySize | null) => void;
-  onPlanCleanup?: () => void;
   onSelectionChange?: (directory: DirectorySize | null) => void;
 }) {
   const { status, result, lastScanAt, progress, error, cleaning, start, clean, selectedDrive, selectDrive } = scan;
@@ -526,7 +531,6 @@ export function StoragePanel({
           result={result}
           selectedDirectory={selectedDirectory}
           onAnalyzeScope={() => onAnalyzeScope?.(selectedDirectory)}
-          onPlanCleanup={() => onPlanCleanup?.()}
         />
       ) : null}
 
@@ -574,7 +578,7 @@ export function StoragePanel({
       {isSystemDrive && (
         <div className="grid gap-3 lg:grid-cols-[1fr_1fr]">
           <HotspotPanel hotspots={hotspots} />
-          <CleanupPanel items={cleanupItems} status={status} progress={progress} error={error} onClean={clean} cleaning={cleaning} onHandoff={onHandoff} />
+          <div id="storage-cleanup"><CleanupPanel items={cleanupItems} status={status} progress={progress} error={error} onClean={clean} cleaning={cleaning} onHandoff={onHandoff} /></div>
         </div>
       )}
     </div>

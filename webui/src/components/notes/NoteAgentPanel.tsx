@@ -11,7 +11,6 @@ import {
   Pencil,
   Plus,
   Replace,
-  RotateCcw,
   Settings2,
   Sparkles,
   Trash2,
@@ -56,6 +55,7 @@ import {
   type PendingNotePatch,
 } from "./note-apply";
 import { ConfirmDialog } from "./NotesDialogs";
+import { ResetNoteChatButton } from "./ResetNoteChatButton";
 import {
   TRANSFORMATION_VARIABLES,
   type NoteAiActionId,
@@ -575,20 +575,17 @@ export function NoteAgentPanel({
   return (
     <>
     <aside className="flex h-full shrink-0 flex-col border-l border-border/70 bg-card" style={{ width }}>
-      <div className="flex h-12 shrink-0 items-center justify-between border-b border-border/65 px-3">
+      <div className="flex h-8 shrink-0 items-center justify-between px-3">
         <div className="flex min-w-0 items-center gap-2">
           <h2 className="truncate text-ui font-semibold text-foreground">Mona</h2>
         </div>
         <div className="flex items-center gap-1">
           {notice ? <span className="max-w-28 truncate text-micro text-muted-foreground">{notice}</span> : null}
           {chatId ? (
-            <Button
-              type="button"
-              variant="ghost"
-              aria-label="重置会话"
-              title="重置会话"
+            <ResetNoteChatButton
+              key={chatId}
               disabled={isStreaming || creatingChat}
-              onClick={() => {
+              onReset={() => {
                 setMessages([]);
                 setPendingPatches(new Map());
                 preparedMessageIdsRef.current = new Set();
@@ -596,26 +593,10 @@ export function NoteAgentPanel({
                 requestBaseHashRef.current = null;
                 onClearChat?.();
               }}
-              className="h-7 w-7 rounded-lg p-0 text-muted-foreground hover:bg-foreground/[0.06] hover:text-foreground"
-            >
-              <RotateCcw className="h-3.5 w-3.5" />
-            </Button>
+            />
           ) : null}
         </div>
       </div>
-
-      <QuickActionSection
-        note={note}
-        disabled={creatingChat || isStreaming}
-        onAction={runAction}
-      />
-
-      <TransformationSection
-        transformations={transformations}
-        disabled={!note || creatingChat || isStreaming}
-        onRun={runTransformation}
-        onManage={() => setManagerOpen(true)}
-      />
 
       <div className="min-h-0 flex-1 overflow-y-auto overflow-x-hidden p-3 scrollbar-thin">
         <AgentChat
@@ -652,7 +633,20 @@ export function NoteAgentPanel({
         )}
       </div>
 
-      <div className="shrink-0">
+      <div className="shrink-0 px-3 pb-3">
+        <div className="mb-2 flex flex-wrap items-center gap-1">
+          <QuickActionSection
+            note={note}
+            disabled={creatingChat || isStreaming}
+            onAction={runAction}
+          />
+          <TransformationSection
+            transformations={transformations}
+            disabled={!note || creatingChat || isStreaming}
+            onRun={runTransformation}
+            onManage={() => setManagerOpen(true)}
+          />
+        </div>
         {/* 与终端模块的输入框保持一致（ThreadComposer） */}
         <ThreadComposer
           key={note?.id ?? "no-note"}
@@ -874,42 +868,32 @@ function QuickActionSection({
   onAction: (actionId: Exclude<NoteAiActionId, "freeform">) => void;
 }) {
   const btnClass =
-    "h-9 justify-start gap-2 rounded-lg border-border/70 px-2.5 text-left text-micro font-medium text-foreground/82 hover:bg-foreground/[0.06] hover:text-foreground";
+    "h-7 justify-start gap-1.5 px-2 text-caption font-normal text-muted-foreground hover:text-foreground";
 
   return (
-    <div className="shrink-0 border-b border-border/65 px-2.5 py-2.5">
-      <div className="grid grid-cols-2 gap-1.5">
-        <Button
-          type="button"
-          variant="outline"
-          disabled={!note || disabled}
-          onClick={() => onAction("summary")}
-          className={btnClass}
-        >
-          <Sparkles className="h-4 w-4 shrink-0 text-muted-foreground" />
-          <span className="min-w-0 truncate">总结当前笔记</span>
-        </Button>
-        <Button
-          type="button"
-          variant="outline"
-          disabled={!note || disabled}
-          onClick={() => onAction("translate")}
-          className={btnClass}
-        >
-          <Languages className="h-4 w-4 shrink-0 text-muted-foreground" />
-          <span className="min-w-0 truncate">翻译</span>
-        </Button>
-        <Button
-          type="button"
-          variant="outline"
-          disabled={!note || disabled}
-          onClick={() => onAction("generateHtml")}
-          className={btnClass}
-        >
-          <FileCode2 className="h-4 w-4 shrink-0 text-muted-foreground" />
-          <span className="min-w-0 truncate">生成HTML文档</span>
-        </Button>
-      </div>
+    <div className="flex items-center gap-1">
+      <Button
+        type="button"
+        variant="ghost"
+        size="sm"
+        disabled={!note || disabled}
+        onClick={() => onAction("translate")}
+        className={btnClass}
+      >
+        <Languages className="h-3.5 w-3.5 shrink-0" />
+        <span className="min-w-0 truncate">翻译</span>
+      </Button>
+      <Button
+        type="button"
+        variant="ghost"
+        size="sm"
+        disabled={!note || disabled}
+        onClick={() => onAction("generateHtml")}
+        className={btnClass}
+      >
+        <FileCode2 className="h-3.5 w-3.5 shrink-0" />
+        <span className="min-w-0 truncate">生成HTML文档</span>
+      </Button>
     </div>
   );
 }
@@ -928,24 +912,23 @@ function TransformationSection({
   if (transformations.length === 0) {
     // Show a compact entry point when there are no custom templates yet.
     return (
-      <div className="shrink-0 border-b border-border/65 px-2.5 py-2">
-        <Button
-          type="button"
-          variant="ghost"
-          onClick={onManage}
-          className="h-8 w-full gap-1.5 rounded-lg border border-dashed border-border/70 text-micro font-normal text-muted-foreground hover:bg-foreground/[0.06] hover:text-foreground"
-        >
-          <Wand2 className="h-3.5 w-3.5" />
-          <span>自定义 AI 模板</span>
-        </Button>
-      </div>
+      <Button
+        type="button"
+        variant="ghost"
+        size="sm"
+        onClick={onManage}
+        className="h-7 gap-1.5 px-2 text-caption font-normal text-muted-foreground hover:text-foreground"
+      >
+        <Wand2 className="h-3.5 w-3.5" />
+        <span>自定义模板</span>
+      </Button>
     );
   }
 
   return (
-    <div className="shrink-0 border-b border-border/65 px-2.5 py-2.5">
+    <div className="w-full pt-1">
       <div className="mb-1.5 flex items-center justify-between">
-        <span className="text-micro font-medium uppercase tracking-wide text-muted-foreground">
+        <span className="text-caption font-medium text-muted-foreground">
           自定义模板
         </span>
         <Button
@@ -964,11 +947,12 @@ function TransformationSection({
           <Button
             key={transformation.id}
             type="button"
-            variant="outline"
+            variant="ghost"
+            size="sm"
             disabled={disabled}
             onClick={() => onRun(transformation)}
             title={transformation.description || transformation.name}
-            className="h-8 justify-start gap-2 rounded-lg border-border/70 px-2.5 text-left text-micro font-medium text-foreground/82 hover:bg-foreground/[0.06] hover:text-foreground"
+            className="h-7 justify-start gap-1.5 px-2 text-left text-caption font-normal text-muted-foreground hover:text-foreground"
           >
             <Wand2 className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
             <span className="min-w-0 truncate">{transformation.name}</span>

@@ -1,3 +1,4 @@
+import ast
 import runpy
 import sys
 import tomllib
@@ -34,6 +35,29 @@ def test_desktop_package_does_not_publish_global_cli() -> None:
     assert "scripts" not in project
 
 
+def test_default_tts_dependency_and_gateway_specs_include_edge_tts() -> None:
+    root = Path(__file__).resolve().parents[1]
+    project = tomllib.loads((root / "pyproject.toml").read_text(encoding="utf-8"))
+
+    assert "edge-tts==7.2.8" in project["project"]["dependencies"]
+
+    for spec_path in (root / "mona-gateway.spec", root / "src-tauri" / "mona-gateway.spec"):
+        tree = ast.parse(spec_path.read_text(encoding="utf-8"))
+        package_hooks = {
+            (node.func.id, node.args[0].value)
+            for node in ast.walk(tree)
+            if isinstance(node, ast.Call)
+            and isinstance(node.func, ast.Name)
+            and node.func.id in {"collect_submodules", "collect_data_files", "copy_metadata"}
+            and node.args
+            and isinstance(node.args[0], ast.Constant)
+        }
+
+        assert ("collect_submodules", "edge_tts") in package_hooks
+        assert ("collect_data_files", "edge_tts") in package_hooks
+        assert ("copy_metadata", "edge-tts") in package_hooks
+
+
 def _write_fixture_file(root: Path, relative: str) -> None:
     path = root / relative
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -51,6 +75,8 @@ def _prepare_fixture(root: Path, *, include_office: bool) -> None:
     (root / "pyproject.toml").write_text('[project]\nversion = "9.8.7"\n', encoding="utf-8")
     for relative in _ALLOWED_SCRIPTS | _EXCLUDED_SCRIPTS | {_ORDINARY_MODULE} | _WEB_DIST_FILES:
         _write_fixture_file(root, relative)
+    _write_fixture_file(root, "mona/development/sandbox_node/component.json")
+    _write_fixture_file(root, "mona/skills/mona-video/runtime/remotion.js")
     if include_office:
         _write_fixture_file(root, f"{_OFFICE_ROOT}/manifest.json")
 
@@ -75,6 +101,12 @@ def _run_root_spec(monkeypatch, tmp_path):
     hooks = types.ModuleType("PyInstaller.utils.hooks")
     hooks.collect_all = collect_all
     hooks.collect_submodules = lambda package: []
+    hooks.collect_data_files = lambda package: []
+    hooks.copy_metadata = lambda package, **kwargs: []
+    sdk_policy = types.ModuleType("mona.development.executors.sdk_policy")
+    sdk_policy.SDK_MODULES = {}
+    sdk_policy.SDK_PACKAGES = {}
+    sdk_policy.sdk_version = lambda executor: ""
     pyinstaller = types.ModuleType("PyInstaller")
     pyinstaller.__path__ = []
     utils = types.ModuleType("PyInstaller.utils")
@@ -108,6 +140,7 @@ def _run_root_spec(monkeypatch, tmp_path):
     monkeypatch.setitem(sys.modules, "PyInstaller", pyinstaller)
     monkeypatch.setitem(sys.modules, "PyInstaller.utils", utils)
     monkeypatch.setitem(sys.modules, "PyInstaller.utils.hooks", hooks)
+    monkeypatch.setitem(sys.modules, "mona.development.executors.sdk_policy", sdk_policy)
 
     spec_globals = {
         "Analysis": StubAnalysis,

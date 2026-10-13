@@ -37,7 +37,7 @@ export interface InspectionInput {
 
 const MAX_CARDS = 3;
 /** 开机变慢超过该阈值才出卡 */
-const BOOT_SLOWDOWN_MS = 3_000;
+export const BOOT_SLOWDOWN_MS = 3_000;
 /** 可清理空间低于该值不出卡（单位 GB） */
 const MIN_CLEANABLE_GB = 0.1;
 /** 维护事件超过该窗口不再计入「最近维护」 */
@@ -59,7 +59,7 @@ function formatRelativeTime(ms: number): string {
   return `${days} 天前`;
 }
 
-export function buildInspectionCards(input: InspectionInput): InspectionCard[] {
+export function buildInspectionCards(input: InspectionInput, limit = MAX_CARDS): InspectionCard[] {
   const cards: InspectionCard[] = [];
 
   // 健康检查异常：每个 attention 检查项一张卡，优先级最高
@@ -79,7 +79,7 @@ export function buildInspectionCards(input: InspectionInput): InspectionCard[] {
   }
 
   // 可清理空间（有扫描结果时）
-  const cleanable = (input.storage?.cleanupItems ?? []).filter((item) => item.cleanable);
+  const cleanable = (input.storage?.cleanupItems ?? []).filter((item) => item.cleanable && item.recommended && item.sizeGb > 0);
   const cleanableGb = cleanable.reduce((sum, item) => sum + item.sizeGb, 0);
   if (cleanable.length > 0 && cleanableGb >= MIN_CLEANABLE_GB) {
     cards.push({
@@ -87,10 +87,10 @@ export function buildInspectionCards(input: InspectionInput): InspectionCard[] {
       tone: "info",
       priority: 80,
       title: "可清理空间",
-      detail: `${cleanable.length} 类缓存/临时文件可安全清理`,
+      detail: `${cleanable.length} 项可直接清理`,
       metric: `${cleanableGb.toFixed(1)} GB`,
-      goal: "释放磁盘可清理空间",
-      actionLabel: "生成清理方案",
+      goal: null,
+      actionLabel: "清理",
       tab: "storage",
     });
   }
@@ -103,10 +103,10 @@ export function buildInspectionCards(input: InspectionInput): InspectionCard[] {
       tone: "info",
       priority: 60,
       title: "软件更新",
-      detail: "WinGet 检测到可用更新",
+      detail: "检测到可用软件更新",
       metric: `${updateCount} 项`,
-      goal: "更新所有可升级的软件",
-      actionLabel: "生成更新方案",
+      goal: null,
+      actionLabel: "全部更新",
       tab: "software",
     });
   }
@@ -136,7 +136,7 @@ export function buildInspectionCards(input: InspectionInput): InspectionCard[] {
       tone: "info",
       priority: 40,
       title: "开机变慢",
-      detail: "最近一次启动耗时高于近期均值",
+      detail: "最近一次启动耗时高于上次启动",
       metric: `慢 ${formatDeltaMs(bootDelta)}`,
       goal: "分析开机变慢的原因",
       actionLabel: "一键诊断",
@@ -191,5 +191,5 @@ export function buildInspectionCards(input: InspectionInput): InspectionCard[] {
     });
   }
 
-  return cards.sort((a, b) => b.priority - a.priority).slice(0, MAX_CARDS);
+  return cards.sort((a, b) => b.priority - a.priority).slice(0, limit);
 }

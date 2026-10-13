@@ -5,7 +5,6 @@ import { ResizableHandle, ResizablePanel, ResizablePanelGroup } from "@/componen
 import { AlertDialog, AlertDialogContent, AlertDialogHeader, AlertDialogTitle, AlertDialogDescription, AlertDialogFooter, AlertDialogCancel, AlertDialogAction } from "@/components/ui/alert-dialog";
 import { AgentLogo } from "@/components/AgentLogo";
 import { cn } from "@/lib/utils";
-import { useLicense } from "@/hooks/useLicense";
 import { ConnectionTree } from "./ConnectionTree";
 import { DbAgentPanel } from "./DbAgentPanel";
 import { DashboardView } from "./DashboardView";
@@ -35,7 +34,6 @@ import { OperationsConnectionList } from "../operations/OperationsConnectionList
 export function DbClientView({ onOpenSubscribe, visible = true, preferTerminal = false }: {
   onOpenSubscribe?: () => void; visible?: boolean; preferTerminal?: boolean;
 }) {
-  const { licenseActive } = useLicense();
   const tabs = useDbStore((s) => s.queryTabs);
   const activeId = useDbStore((s) => s.activeTabId);
   const currentView = useDbStore((s) => s.currentView);
@@ -120,7 +118,7 @@ export function DbClientView({ onOpenSubscribe, visible = true, preferTerminal =
                 <SessionTabBar embedded active={terminalActive} onActivate={() => setTerminalActive(true)} />
                 <DbToolButton icon="add" label="新建查询" onClick={() => { setTerminalActive(false); useDbStore.getState().addQueryTab(); }} />
               </div>
-              <Tooltip><TooltipTrigger asChild><Button variant="ghost" size="icon" aria-label={currentAgentOpen ? "收起 Mona" : "展开 Mona"} disabled={terminalActive && !terminalAgentAvailable} onClick={() => { if (!licenseActive) onOpenSubscribe?.(); else if (terminalActive) useTerminalStore.getState().toggleAIPanel(); else setAgentOpen((open) => !open); }}>
+              <Tooltip><TooltipTrigger asChild><Button variant="ghost" size="icon" aria-label={currentAgentOpen ? "收起 Mona" : "展开 Mona"} disabled={terminalActive && !terminalAgentAvailable} onClick={() => { if (terminalActive) useTerminalStore.getState().toggleAIPanel(); else setAgentOpen((open) => !open); }}>
                 <AgentLogo state="idle" className="h-5 w-5" />
               </Button></TooltipTrigger><TooltipContent>{currentAgentOpen ? "收起 Mona" : "展开 Mona"}</TooltipContent></Tooltip>
             </div>
@@ -147,8 +145,8 @@ export function DbClientView({ onOpenSubscribe, visible = true, preferTerminal =
             </div>
           </div>
         </ResizablePanel>
-        {licenseActive && agentOpen && !terminalActive && <>
-          <ResizableHandle aria-label="调整 Mona 侧栏宽度" className="bg-border/80 transition-colors hover:bg-info/60 active:bg-info" />
+        {agentOpen && !terminalActive && <>
+          <ResizableHandle aria-label="调整 Mona 侧栏宽度" />
           <ResizablePanel id="db-agent" defaultSize="320px" minSize="260px" maxSize="600px" className="min-h-0 min-w-0 overflow-hidden">
             <DbAgentPanel />
           </ResizablePanel>

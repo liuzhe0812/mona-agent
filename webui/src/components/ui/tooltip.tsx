@@ -1,6 +1,7 @@
 import * as React from "react";
 import * as TooltipPrimitive from "@radix-ui/react-tooltip";
 
+import { Button, type ButtonProps } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 
 const TooltipProvider = TooltipPrimitive.Provider;
@@ -28,4 +29,23 @@ const TooltipContent = React.forwardRef<
 ));
 TooltipContent.displayName = TooltipPrimitive.Content.displayName;
 
-export { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger };
+const TooltipButton = React.forwardRef<HTMLButtonElement, ButtonProps>(
+  ({ title, disabled, ...props }, ref) => {
+    const button = (
+      <Button {...props} ref={ref} disabled={disabled} aria-label={props["aria-label"] ?? title} />
+    );
+    return (
+      <TooltipProvider delayDuration={300}>
+        <Tooltip>
+          <TooltipTrigger asChild>
+            {disabled ? <span className="inline-flex shrink-0">{button}</span> : button}
+          </TooltipTrigger>
+          <TooltipContent side="bottom">{title}</TooltipContent>
+        </Tooltip>
+      </TooltipProvider>
+    );
+  },
+);
+TooltipButton.displayName = "TooltipButton";
+
+export { Tooltip, TooltipButton, TooltipContent, TooltipProvider, TooltipTrigger };

@@ -1,4 +1,4 @@
-"""Build the pinned DSH Windows ACL runner as a managed runtime component."""
+"""Build the pinned Windows ACL sandbox runner as a managed runtime component."""
 
 from __future__ import annotations
 

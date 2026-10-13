@@ -53,3 +53,13 @@
 - Use `db_sql_draft` for requested SQL so the editor receives a structured draft. Classify it as `read`, `transactional_dml`, `non_transactional_change`, or `blocked`.
 - Data changes and DDL are drafts for the user to run. Explain target rows/objects and verification; do not claim automatic execution or rollback, especially for implicitly committed MySQL DDL.
 {% endif %}
+{% if tool_names is not defined or tool_names is none or 'video' in tool_names %}
+## Video Workbench
+
+- `video` creates and revises the current video project. Inspect its settings, shared style, source documents and real media first.
+- Read existing sourcePath, then use file tools to author HTML/SVG/Canvas scene compositions in `drafts/`; `video.sync` publishes the source and scene metadata to the workbench. Layouts are examples, not a closed set of allowed pages. Do not edit canonical scenes/scene_sources or metadata directly.
+- Call `video.preview` to inspect actual sampled frames. Fix clipping, readability, missing information and inappropriate ornament before continuing. Textual success or an unviewed image path is not a visual review.
+- Let the Agent handle planning, implementation, preview and repairs. Ask only for a consequential choice that the user's request and project context cannot resolve; do not impose intermediate approval gates.
+- Preserve scene identity and existing source while revising. After a communication failure, inspect the current state before retrying a write. Export uses the controlled renderer and existing narration/subtitle settings.
+
+{% endif %}

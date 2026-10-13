@@ -48,8 +48,11 @@ import {
   useSessionHistory,
 } from "@/hooks/useSessions";
 import { useArtifacts } from "@/hooks/useArtifacts";
-import { fetchSettings, listSlashCommands, renameArtifact, updateSettings } from "@/lib/api";
+import { fetchSettings, listSlashCommands, renameArtifact } from "@/lib/api";
 import type { ChatSummary, DeliveredFile, DiscussionLaunchOptions, MessageQuote, RoomAgentInfo, SettingsPayload, SlashCommand, UIFileEdit, UIMessage, WorkflowRun } from "@/lib/types";
+import { developmentApi, isCodeBuddyConnected, type DevExecutor, type ExecutorId } from "@/lib/development-api";
+import { useNativeProviderState } from "@/lib/native-provider-state";
+import { sourceLabel } from "@/components/models/model-sources";
 import { useWorkspaceStore } from "@/lib/workspace-store";
 import { normalizeLegacyLongTaskMessages } from "@/lib/thread-display-compat";
 import { scrubSubagentUiMessages } from "@/lib/subagent-channel-display";
@@ -213,6 +216,52 @@ export function buildComposerProviderOptions(
              managedPrice?.original_output_amount_per_million ?? model.original_output_amount_per_million,
          };
       }));
+}
+
+function buildComposerNativeOptions(settings: SettingsPayload, executors: DevExecutor[]): ComposerModelOption[] {
+  return executors
+    .filter((executor) => executor.id !== "mona")
+    .flatMap((executor) => executor.models.flatMap((model) => {
+      if (!model.id) return [];
+      const provider = `native:${executor.id}`;
+      const active = settings.agent.executor === executor.id && settings.agent.native_model === model.id;
+      const disabledReason = !executor.available
+        ? executor.reason || "此模型来源当前不可用，请在模型设置中检查连接。"
+        : executor.probe?.authentication !== "ready"
+          ? executor.probe?.reason || "请先在模型设置中连接此账号。"
+          : executor.id === "codebuddy" && !isCodeBuddyConnected(executor)
+            ? executor.probe?.reason || "模型目录暂不可用，请在模型设置中检查连接。"
+            : null;
+      return [{
+        provider,
+        providerLabel: sourceLabel(provider, executor.name),
+        model: model.id,
+        label: model.label || model.id,
+        executor: executor.id,
+        active,
+        disabledReason,
+        description: model.description,
+        contextWindow: model.contextWindow,
+        reasoningEfforts: model.reasoningEfforts,
+        reasoningEffort: active ? settings.agent.native_reasoning_effort ?? model.reasoningEffort : model.reasoningEffort,
+        defaultReasoningEffort: model.reasoningEffort,
+      }];
+    }));
+}
+
+export function buildComposerModelOptions(
+  settings: SettingsPayload,
+  executors: DevExecutor[] = [],
+  managedPrices: ManagedModelPrice[] = [],
+): ComposerModelOption[] {
+  const monaActive = (settings.agent.executor ?? "mona") === "mona";
+  return [
+    ...buildComposerProviderOptions(settings, managedPrices).map((option) => ({
+      ...option,
+      active: monaActive && option.active,
+    })),
+    ...buildComposerNativeOptions(settings, executors),
+  ];
 }
 
 function artifactIdentity(file: DeliveredFile): string {
@@ -481,6 +530,9 @@ export function ThreadShell({
   const [slashCommands, setSlashCommands] = useState<SlashCommand[]>([]);
   const [providerOptions, setProviderOptions] = useState<ComposerModelOption[]>([]);
   const managedModelPricesRef = useRef<ManagedModelPrice[]>([]);
+  const settingsRef = useRef<SettingsPayload | null>(null);
+  const nativeExecutorsRef = useRef<DevExecutor[]>([]);
+  const nativeProviderRevision = useNativeProviderState((state) => state.revision);
   // Whether the active model preset accepts image input. ``supports_vision``
   // is tri-state server-side; only an explicit ``false`` disables upload.
   const [imageInputEnabled, setImageInputEnabled] = useState(true);
@@ -560,6 +612,11 @@ export function ThreadShell({
   useEffect(() => setFocusMessage(null), [historyKey]);
 
   const activeModelOptions = useMemo(() => providerOptions, [providerOptions]);
+  const selectedModelName = activeModelOptions.find((option) => option.active)?.model
+    ?? (settingsRef.current?.agent.executor && settingsRef.current.agent.executor !== "mona"
+      ? settingsRef.current.agent.native_model
+      : null)
+    ?? modelName;
 
   // Compaction invalidates the previous request's occupancy until remeasured.
   const composerContextUsage = useMemo(() => {
@@ -817,13 +874,15 @@ export function ThreadShell({
       try {
         const settings = await fetchSettings(token);
         if (!cancelled) {
-          const options = buildComposerProviderOptions(settings);
+          settingsRef.current = settings;
+          const options = buildComposerModelOptions(settings, nativeExecutorsRef.current, managedModelPricesRef.current);
           setProviderOptions(options);
           const activePreset = settings.model_presets.find((p) => p.active);
-          setImageInputEnabled(activePreset?.capabilities?.supports_vision !== false);
-          setContextWindowTokens(
-            settings.agent.context_window_source === "default" ? null : settings.agent?.context_window_tokens ?? activePreset?.context_window_tokens ?? null,
-          );
+          const native = (settings.agent.executor ?? "mona") !== "mona";
+          setImageInputEnabled(native || activePreset?.capabilities?.supports_vision !== false);
+          setContextWindowTokens(native
+            ? settings.agent.native_context_window_tokens ?? null
+            : settings.agent.context_window_source === "default" ? null : settings.agent?.context_window_tokens ?? activePreset?.context_window_tokens ?? null);
           if (settings.runtime?.workspace_path) {
             setWorkspacePath(settings.runtime.workspace_path);
           }
@@ -844,36 +903,60 @@ export function ThreadShell({
       cancelled = true;
       if (managedPriceTimer !== undefined) window.clearInterval(managedPriceTimer);
     };
-  }, [token, setWorkspacePath]);
+  }, [token, setWorkspacePath, nativeProviderRevision]);
 
-  const handleModelSwitch = useCallback(
-    async (provider: string, model: string, reasoningEffort?: string | null) => {
+  useEffect(() => {
+    let cancelled = false;
+    void developmentApi.providerExecutors().then(({ executors }) => {
+      if (cancelled) return;
+      nativeExecutorsRef.current = executors;
+      const settings = settingsRef.current;
+      if (settings) {
+        setProviderOptions(buildComposerModelOptions(settings, executors, managedModelPricesRef.current));
+      }
+    }).catch(() => {
+      // A local model catalog failure must not hide the configured API models.
+    });
+    return () => { cancelled = true; };
+  }, [nativeProviderRevision]);
+
+  const handleModelSelect = useCallback(
+    async (option: ComposerModelOption, reasoningEffort?: string | null) => {
+      if (option.disabledReason) return;
       try {
-        const payload = await updateSettings(token, {
-          provider,
-          model: model || undefined,
-          providerModel: model || undefined,
-          reasoningEffort,
+        const executor = (option.executor ?? "mona") as ExecutorId;
+        const payload = await developmentApi.selectWorkModelSource({
+          executor,
+          model: option.model,
+          ...(executor === "mona" ? { provider: option.provider } : {}),
+          effort: reasoningEffort ?? null,
         });
-        const newModel = payload.agent.model || null;
+        settingsRef.current = payload;
+        const options = buildComposerModelOptions(payload, nativeExecutorsRef.current, managedModelPricesRef.current);
+        setProviderOptions(options);
+        const native = (payload.agent.executor ?? "mona") !== "mona";
+        const newModel = native
+          ? payload.agent.native_model || option.model
+          : payload.agent.model || null;
         onModelNameChange?.(newModel);
-        const activePreset = payload.model_presets?.find(
-          (p: { active: boolean; context_window_tokens?: number | null }) => p.active,
-        );
-        setImageInputEnabled(activePreset?.capabilities?.supports_vision !== false);
-        setContextWindowTokens(
-          payload.agent.context_window_source === "default" ? null : payload.agent?.context_window_tokens ?? activePreset?.context_window_tokens ?? null,
-        );
-        if (payload.chat_providers) {
-          const options = buildComposerProviderOptions(payload, managedModelPricesRef.current);
-          setProviderOptions(options);
+        if (native) {
+          setImageInputEnabled(true);
+          setContextWindowTokens(payload.agent.native_context_window_tokens ?? options.find((item) => item.active)?.contextWindow ?? null);
+        } else {
+          const activePreset = payload.model_presets?.find(
+            (p: { active: boolean; context_window_tokens?: number | null }) => p.active,
+          );
+          setImageInputEnabled(activePreset?.capabilities?.supports_vision !== false);
+          setContextWindowTokens(
+            payload.agent.context_window_source === "default" ? null : payload.agent?.context_window_tokens ?? activePreset?.context_window_tokens ?? null,
+          );
         }
       } catch (error) {
         console.error("Failed to switch chat model:", error);
         throw error;
       }
     },
-    [token, onModelNameChange],
+    [onModelNameChange],
   );
 
   // Multi-agent: room members offered by the composer ``@`` picker. The
@@ -1111,9 +1194,9 @@ export function ThreadShell({
           isCompacting={isCompacting}
           stopping={stopping}
           placeholder={composerPlaceholder}
-          modelLabel={toModelBadgeLabel(modelName)}
+          modelLabel={toModelBadgeLabel(selectedModelName)}
           modelOptions={activeModelOptions}
-          onModelSwitch={handleModelSwitch}
+          onModelSelect={handleModelSelect}
           contextUsage={composerContextUsage}
           imageInputEnabled={imageInputEnabled}
           variant={showHeroComposer ? "hero" : "thread"}
@@ -1152,9 +1235,9 @@ export function ThreadShell({
           isAwaitingModelResponse={isAwaitingModelResponse}
           isCompacting={isCompacting}
           placeholder={openingPlaceholder}
-          modelLabel={toModelBadgeLabel(modelName)}
+          modelLabel={toModelBadgeLabel(selectedModelName)}
           modelOptions={activeModelOptions}
-          onModelSwitch={handleModelSwitch}
+          onModelSelect={handleModelSelect}
           imageInputEnabled={imageInputEnabled}
           variant="hero"
           heroBrand={monaHeroBrand}

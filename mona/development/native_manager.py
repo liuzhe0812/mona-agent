@@ -1,4 +1,4 @@
-"""Product/native session boundary, following Cindy's host + binding + handoff split."""
+"""Product/native session boundary for host ownership, bindings and handoff."""
 
 from __future__ import annotations
 

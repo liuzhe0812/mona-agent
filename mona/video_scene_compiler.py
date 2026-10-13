@@ -32,10 +32,11 @@ LAYOUT_ALIASES = {
     "cover-title-right": "cover-split",
     "cover-editorial-masthead": "cover-split",
     "cover-card-stack": "cover-split",
-    "chapter-numbered": "content-standard",
-    "chapter-glow": "content-standard",
-    "chapter-rule": "content-standard",
-    "chapter-sticker": "content-standard",
+    "chapter-title": "chapter-title",
+    "chapter-numbered": "chapter-title",
+    "chapter-glow": "chapter-title",
+    "chapter-rule": "chapter-title",
+    "chapter-sticker": "chapter-title",
     "content-standard": "content-standard",
     "content-outline": "content-standard",
     "content-column": "content-standard",
@@ -48,10 +49,11 @@ LAYOUT_ALIASES = {
     "comparison-columns": "comparison-columns",
     "comparison-ledger": "comparison-columns",
     "comparison-card-pair": "comparison-columns",
-    "process-horizontal": "content-standard",
-    "process-node-line": "content-standard",
-    "process-numbered": "content-standard",
-    "process-step-cards": "content-standard",
+    "process-steps": "process-steps",
+    "process-horizontal": "process-steps",
+    "process-node-line": "process-steps",
+    "process-numbered": "process-steps",
+    "process-step-cards": "process-steps",
     "quote-focus": "quote-focus",
     "quote-accent": "quote-focus",
     "quote-terminal": "quote-focus",
@@ -120,11 +122,6 @@ class SceneSpecValidationError(SceneCompileError):
 
 class SceneStyleValidationError(SceneCompileError):
     code = "SCENE_STYLE_INVALID"
-
-
-# Names used by adapters that prefer a single domain exception.
-SceneCompilerError = SceneCompileError
-SceneSpecError = SceneCompileError
 
 
 def _error(
@@ -400,6 +397,71 @@ def validate_scene_spec(
     normalized["layout"] = layout
     normalized["backgroundSlot"] = background_slot
     normalized["animationPreset"] = animation
+    if isinstance(content, Mapping) and "columns" in content:
+        columns = content["columns"]
+        if not isinstance(columns, list) or any(
+            not isinstance(item, (Mapping, str)) for item in columns
+        ):
+            raise _error(
+                "关键词卡片必须是文字或包含 title、body 的对象列表",
+                "SCENE_SPEC_INVALID_CONTENT",
+                path="$.content.columns",
+            )
+        for index, column in enumerate(columns):
+            label = column.get("title") or column.get("heading") or column.get("label") if isinstance(column, Mapping) else column
+            if not isinstance(label, str) or not label.strip():
+                raise _error("关键词卡片缺少标题", "SCENE_SPEC_INVALID_CONTENT", path=f"$.content.columns[{index}].title")
+    if role == "process":
+        if not isinstance(content, Mapping):
+            raise _error(
+                "流程场景 content 必须是对象",
+                "SCENE_SPEC_INVALID_CONTENT",
+                path="$.content",
+            )
+        step_key = "steps" if content.get("steps") else (
+            "bullets" if content.get("bullets") else "items"
+        )
+        step_values = content.get(step_key)
+        if step_values is not None:
+            if not isinstance(step_values, list) or any(
+                not isinstance(item, (Mapping, str)) for item in step_values
+            ):
+                raise _error(
+                    "流程步骤必须是文字或包含标题与说明的对象列表",
+                    "SCENE_SPEC_INVALID_CONTENT",
+                    path=f"$.content.{step_key}",
+                )
+            for index, item in enumerate(step_values):
+                if isinstance(item, str):
+                    has_text = bool(item.strip())
+                else:
+                    has_text = any(
+                        item.get(key) is not None and str(item.get(key)).strip()
+                        for key in (
+                            "title",
+                            "heading",
+                            "label",
+                            "text",
+                            "body",
+                            "description",
+                            "detail",
+                        )
+                    )
+                if not has_text:
+                    raise _error(
+                        "流程步骤不能为空",
+                        "SCENE_SPEC_INVALID_CONTENT",
+                        path=f"$.content.{step_key}[{index}]",
+                    )
+        elif not any(
+            content.get(key) is not None and str(content.get(key)).strip()
+            for key in ("body", "description", "text")
+        ):
+            raise _error(
+                "流程场景至少需要一个步骤或说明",
+                "SCENE_SPEC_INVALID_CONTENT",
+                path="$.content.steps",
+            )
 
     source_scene = scene or {}
     source_role = str(source_scene.get("role") or "").strip().lower()
@@ -471,11 +533,13 @@ def _font(value: Any, field: str) -> str:
     return value.strip()
 
 
-def _tokens(style: Mapping[str, Any]) -> dict[str, Any]:
+def _tokens(style: Mapping[str, Any], background_slot_name: str | None = None) -> dict[str, Any]:
     tokens = _as_mapping(style.get("tokens"))
     colors = _as_mapping(tokens.get("colors") or style.get("colors"))
     typography = _as_mapping(tokens.get("typography") or style.get("typography"))
     shape = _as_mapping(tokens.get("shape") or style.get("shape"))
+    spacing = _as_mapping(tokens.get("spacing") or style.get("spacing"))
+    subtitle = _as_mapping(style.get("subtitle"))
     result = {
         "primary": _color(colors.get("primary"), "tokens.colors.primary"),
         "secondary": _color(colors.get("secondary"), "tokens.colors.secondary"),
@@ -491,6 +555,85 @@ def _tokens(style: Mapping[str, Any]) -> dict[str, Any]:
     if isinstance(radius, bool) or not isinstance(radius, (int, float)) or not math.isfinite(float(radius)) or not 0 <= float(radius) <= 96:
         raise SceneStyleValidationError("tokens.shape.cardRadius 必须是 0 到 96 的数字", code="SCENE_STYLE_INVALID_RADIUS")
     result["radius"] = _format_number(float(radius)) + "px"
+    for name, source, default, minimum, maximum, integer in (
+        ("headingWeight", typography.get("headingWeight"), 700, 100, 900, True),
+        ("bodyWeight", typography.get("bodyWeight"), 400, 100, 900, True),
+        ("headingLineHeight", typography.get("headingLineHeight"), 1.15, 1, 2.5, False),
+        ("bodyLineHeight", typography.get("bodyLineHeight"), 1.5, 1, 2.5, False),
+        ("spacingUnit", spacing.get("unit"), 8, 2, 64, False),
+        ("contentPadding", spacing.get("contentPadding"), 80, 0, 256, False),
+        ("borderWidth", shape.get("borderWidth"), 1, 0, 8, False),
+        ("shadowOpacity", shape.get("shadowOpacity"), 0.12, 0, 1, False),
+        ("subtitleFontSize", subtitle.get("fontSize"), 36, 12, 128, False),
+        ("subtitleLineHeight", subtitle.get("lineHeight"), 1.35, 1, 2.5, False),
+        ("subtitleSafeAreaBottom", subtitle.get("safeAreaBottom"), 0.08, 0, 0.4, False),
+        ("subtitleSafeAreaTop", subtitle.get("safeAreaTop"), 0.08, 0, 0.4, False),
+        ("subtitleSafeAreaLeft", subtitle.get("safeAreaLeft"), 0.08, 0, 0.4, False),
+        ("subtitleSafeAreaRight", subtitle.get("safeAreaRight"), 0.08, 0, 0.4, False),
+    ):
+        value = source if source is not None else default
+        if (
+            isinstance(value, bool)
+            or not isinstance(value, (int, float))
+            or not math.isfinite(float(value))
+            or not minimum <= float(value) <= maximum
+            or (integer and not float(value).is_integer())
+        ):
+            raise SceneStyleValidationError(
+                f"风格参数 {name} 无效", code="SCENE_STYLE_INVALID_TOKEN",
+                details={"field": name},
+            )
+        result[name] = int(value) if integer else float(value)
+    shadow = shape.get("shadow", "none")
+    if not isinstance(shadow, str) or shadow not in {"none", "soft", "paper", "glow"}:
+        raise SceneStyleValidationError(
+            "风格参数 shadow 无效", code="SCENE_STYLE_INVALID_TOKEN",
+            details={"field": "tokens.shape.shadow"},
+        )
+    result["shadow"] = "none" if shadow == "none" else "soft"
+    backgrounds = _as_mapping(style.get("backgrounds"))
+    default_background = _as_mapping(backgrounds.get("default"))
+    roles = _as_mapping(backgrounds.get("roles") or backgrounds.get("slots"))
+    selected_background = _as_mapping(roles.get(background_slot_name))
+    if selected_background.get("inherit") == "default":
+        resolved_background = {**default_background, **selected_background}
+    else:
+        resolved_background = selected_background or default_background
+    safe_area = _as_mapping(resolved_background.get("safeArea"))
+    result["backgroundSafeArea"] = {}
+    for side in ("top", "right", "bottom", "left"):
+        value = safe_area.get(side, 0.08)
+        if (
+            isinstance(value, bool)
+            or not isinstance(value, (int, float))
+            or not math.isfinite(float(value))
+            or not 0 <= float(value) <= 0.4
+        ):
+            raise SceneStyleValidationError(
+                f"背景安全区 {side} 无效", code="SCENE_STYLE_INVALID_SAFE_AREA",
+                details={"field": f"backgrounds.safeArea.{side}"},
+            )
+        result["backgroundSafeArea"][side] = float(value)
+    if (
+        result["backgroundSafeArea"]["left"] + result["backgroundSafeArea"]["right"] >= 0.8
+        or result["backgroundSafeArea"]["top"] + result["backgroundSafeArea"]["bottom"] >= 0.8
+    ):
+        raise SceneStyleValidationError(
+            "背景安全区不能占满画面", code="SCENE_STYLE_INVALID_SAFE_AREA",
+            details={"field": "backgrounds.safeArea"},
+        )
+    for name, source, choices, default in (
+        ("typeScale", typography.get("scale"), {"compact", "standard", "large"}, "standard"),
+        ("cardStyle", shape.get("cardStyle"), {"solid", "outline", "glass", "none"}, "solid"),
+        ("density", shape.get("density"), {"compact", "standard", "spacious"}, "standard"),
+    ):
+        value = source if source is not None else default
+        if not isinstance(value, str) or value not in choices:
+            raise SceneStyleValidationError(
+                f"风格参数 {name} 无效", code="SCENE_STYLE_INVALID_TOKEN",
+                details={"field": name},
+            )
+        result[name] = value
     return result
 
 
@@ -514,10 +657,16 @@ def _content(spec: Mapping[str, Any], scene: Mapping[str, Any] | None) -> dict[s
     if scene:
         if not result.get("title") and scene.get("title") is not None:
             result["title"] = scene.get("title")
-        if not result.get("body") and scene.get("visual") is not None:
-            result["body"] = scene.get("visual")
     if not result.get("title") and spec.get("title") is not None:
         result["title"] = spec.get("title")
+    if spec.get("role") == "chapter" and not (
+        result.get("chapterNumber") or result.get("number")
+    ):
+        result["chapterNumber"] = (
+            scene.get("chapterNumber") or scene.get("index")
+            if scene
+            else spec.get("sceneIndex")
+        )
     return result
 
 
@@ -548,28 +697,6 @@ def _component_id(style: Mapping[str, Any], role: str) -> str:
             details={"role": role},
         )
     return component
-
-
-def _template_decor(theme: str) -> str:
-    decorations = {
-        "neon-core": (
-            '<div class="template-decor" aria-hidden="true">'
-            '<i class="decor-axis"></i><i class="decor-signal"></i></div>'
-        ),
-        "new-guochao": (
-            '<div class="template-decor" aria-hidden="true">'
-            '<i class="decor-rule"></i><i class="decor-seal"></i></div>'
-        ),
-        "idea-lab": (
-            '<div class="template-decor" aria-hidden="true">'
-            '<i class="decor-band"></i><i class="decor-tab"></i></div>'
-        ),
-        "documentary-collage": (
-            '<div class="template-decor" aria-hidden="true">'
-            '<i class="decor-index"></i><i class="decor-rule"></i></div>'
-        ),
-    }
-    return decorations[theme]
 
 
 def _subtitle_markup(content: Mapping[str, Any], style: Mapping[str, Any]) -> str:
@@ -690,13 +817,87 @@ def _layout_markup(
     bullets = _bullet_list(_items(content.get("bullets") or content.get("items")))
 
     if layout == "cover-split":
-        visual = _text(content.get("visual") or content.get("highlight") or content.get("subtitle"), "系列主题")
+        columns = _items(content.get("columns"))
+        visual = _text(content.get("visual") or content.get("highlight"))
+        if columns:
+            visual_markup = '<div class="cover-keywords">' + "".join(
+                '<div class="card keyword-card" '
+                f'data-motion-target="item.{index}"><h2>{_text(_as_mapping(column).get("title") or _as_mapping(column).get("heading") or _as_mapping(column).get("label") or column)}</h2>'
+                f'<p>{_text(_as_mapping(column).get("body") or _as_mapping(column).get("text") or _as_mapping(column).get("description"))}</p>'
+                f'{_bullet_list(_items(_as_mapping(column).get("items") or _as_mapping(column).get("bullets")))}</div>'
+                for index, column in enumerate(columns)
+            ) + "</div>"
+        elif visual:
+            visual_markup = f'<div class="visual-label">{visual}</div>'
+        else:
+            visual_markup = ""
         return (
-            '<div class="scene-content cover-copy"><div class="eyebrow">'
+            f'<div class="scene-content cover-copy{" cover-simple-copy" if not visual_markup else ""}"><div class="eyebrow">'
             f'{eyebrow}</div><h1 data-motion-target="title">{title}</h1>'
             f'<p class="lede" data-motion-target="body">{body}</p></div>'
-            '<div class="scene-visual cover-visual" data-motion-target="visual"><div class="visual-orbit"></div>'
-            f"<div class=\"visual-label\">{visual}</div></div>"
+            + (
+                '<div class="scene-visual cover-visual" data-motion-target="visual">'
+                f"{visual_markup}</div>"
+                if visual_markup
+                else ""
+            )
+        )
+    if layout == "chapter-title":
+        chapter_raw = str(content.get("chapterNumber") or content.get("number") or "1").strip()
+        chapter_number = _text(chapter_raw, "1")
+        chapter_label = (
+            chapter_number
+            if chapter_raw.startswith("第") or chapter_raw.lower().startswith("chapter")
+            else f"第 {chapter_number} 章"
+        )
+        return (
+            '<div class="scene-content chapter-copy"><div class="chapter-number" '
+            f'data-motion-target="chapter.number">{chapter_label}</div>'
+            f'<div class="eyebrow">{eyebrow}</div>'
+            f'<h1 data-motion-target="title">{title}</h1>'
+            f'<p data-motion-target="body">{body}</p>{bullets}</div>'
+        )
+    if layout == "process-steps":
+        steps = _items(content.get("steps"))
+        if not steps:
+            steps = _items(content.get("bullets") or content.get("items"))
+        fallback_step = content.get("body") or content.get("description") or content.get("text")
+        if not steps and fallback_step:
+            steps = [fallback_step]
+        rendered_steps = []
+        for index, step in enumerate(steps):
+            heading = (
+                _item_text(step, "title")
+                or _item_text(step, "heading")
+                or _item_text(step, "label")
+                or _item_text(step, "text", str(step) if not isinstance(step, Mapping) else "")
+                or f"步骤 {index + 1}"
+            )
+            detail = (
+                _item_text(step, "body")
+                or _item_text(step, "description")
+                or _item_text(step, "detail")
+                or (
+                    _item_text(step, "text")
+                    if isinstance(step, Mapping)
+                    and _item_text(step, "text") != heading
+                    else ""
+                )
+            )
+            if detail == heading:
+                detail = ""
+            rendered_steps.append(
+                f'<li class="process-step" data-motion-target="step.{index}">'
+                f'<span class="process-step-number" aria-hidden="true">{index + 1}</span>'
+                '<div class="card process-step-card">'
+                f'<h2>{heading}</h2>{f"<p>{detail}</p>" if detail else ""}</div></li>'
+            )
+        return (
+            '<div class="scene-content process-copy"><div class="eyebrow">'
+            f'{eyebrow}</div><h1 data-motion-target="title">{title}</h1>'
+            f'<p data-motion-target="body">{body}</p>'
+            f'<ol class="process-step-list" style="--process-step-count:{max(1, len(steps))}">'
+            f'{"".join(rendered_steps)}</ol></div>'
         )
     if layout == "content-standard":
         return (
@@ -810,7 +1011,7 @@ def _safe_image_data_uri(value: str) -> str:
         r"data:image/(?:png|jpeg|webp);base64,[A-Za-z0-9+/=]+", raw
     ):
         raise SceneCompileError(
-            "品牌 Logo 预览数据无效", code="SCENE_BRAND_LOGO_DATA_INVALID"
+            "预览图片数据无效", code="SCENE_BRAND_LOGO_DATA_INVALID"
         )
     return raw
 
@@ -838,10 +1039,11 @@ def _background_css(
     style: Mapping[str, Any],
     slot_name: str,
     background_path: str | Path | None,
+    background_data_uri: str | None = None,
 ) -> str:
     slot = _background_slot(style, slot_name)
     path_value = background_path if background_path is not None else slot.get("assetPath")
-    path = _safe_relative_path(path_value)
+    path = _safe_image_data_uri(background_data_uri) if background_data_uri else _safe_relative_path(path_value)
     focal = _as_mapping(slot.get("focalPoint"))
     x = focal.get("x", 0.5)
     y = focal.get("y", 0.5)
@@ -896,7 +1098,7 @@ def _motion_script(animation: str) -> str:
     selectors = {
         "fade-rise": "timeline.fromTo('.scene-content, .scene-visual', {opacity: 0, y: 24}, {opacity: 1, y: 0, duration: 0.6, ease: 'power2.out'});",
         "stagger-rise": "timeline.fromTo('.scene-content > *, .scene-visual, .card, .bullet-list li', {opacity: 0, y: 18}, {opacity: 1, y: 0, duration: 0.45, stagger: 0.08, ease: 'power2.out'});",
-        "soft-pulse": "timeline.fromTo('.accent, .visual-orbit, .brand-mark', {scale: 1}, {scale: 1.04, duration: 0.7, repeat: 1, yoyo: true, ease: 'sine.inOut'});",
+        "soft-pulse": "timeline.fromTo('.accent, .brand-mark', {scale: 1}, {scale: 1.04, duration: 0.7, repeat: 1, yoyo: true, ease: 'sine.inOut'});",
         "cross-fade": "timeline.fromTo('.scene-content, .scene-visual', {opacity: 0}, {opacity: 1, duration: 0.7, ease: 'power1.inOut'});",
     }
     return selectors[animation]
@@ -946,57 +1148,26 @@ def _motion_plan_script(plan: Mapping[str, Any]) -> str:
 
 
 def _theme_css(theme: str, width: int, height: int) -> str:
-    scale = max(1, round(width / 960, 3))
     themes = {
-        "neon-core": f"""
-.template-neon-core {{ background-image: radial-gradient(circle at 82% 24%, color-mix(in srgb, var(--mona-primary) 18%, transparent), transparent 34%), linear-gradient(145deg, #070b18 0%, var(--mona-bg) 62%, #0c1428 100%); }}
-.template-neon-core::after {{ content: ""; position: absolute; top: 0; right: 0; bottom: 0; width: 36%; z-index: 0; border-left: 1px solid color-mix(in srgb, var(--mona-secondary) 22%, transparent); background: linear-gradient(180deg, color-mix(in srgb, var(--mona-primary) 8%, transparent), transparent 72%); }}
-.template-neon-core .decor-axis {{ position: absolute; left: 6.5%; top: 8%; bottom: 8%; width: 1px; background: color-mix(in srgb, var(--mona-secondary) 54%, transparent); }}
-.template-neon-core .decor-signal {{ position: absolute; top: 8%; right: 7%; width: 9%; height: {max(2, round(2 * scale))}px; background: var(--mona-secondary); box-shadow: calc(-1 * {round(18 * scale)}px) 0 0 color-mix(in srgb, var(--mona-primary) 78%, transparent); }}
-.template-neon-core .card, .template-neon-core .cover-visual {{ border: 1px solid color-mix(in srgb, var(--mona-secondary) 38%, var(--mona-border)); background: linear-gradient(145deg, color-mix(in srgb, var(--mona-surface) 94%, transparent), color-mix(in srgb, var(--mona-primary) 5%, var(--mona-surface))); box-shadow: 0 {round(18 * scale)}px {round(48 * scale)}px rgba(0,0,0,.28); }}
-.template-neon-core h1 {{ letter-spacing: -.015em; }}
-.template-neon-core .eyebrow {{ color: var(--mona-secondary); }}
-.template-neon-core .metric-value {{ color: var(--mona-secondary); }}
-.template-neon-core .visual-orbit {{ position: relative; width: 72%; aspect-ratio: 1.55; border: 1px solid var(--mona-secondary); border-radius: {round(8 * scale)}px; background: linear-gradient(90deg, color-mix(in srgb, var(--mona-secondary) 8%, transparent), transparent); }}
-.template-neon-core .visual-orbit::before {{ content: ""; position: absolute; left: 10%; right: 10%; top: 24%; height: 1px; background: color-mix(in srgb, var(--mona-secondary) 52%, transparent); box-shadow: 0 {round(28 * scale)}px 0 color-mix(in srgb, var(--mona-primary) 42%, transparent), 0 {round(56 * scale)}px 0 color-mix(in srgb, var(--mona-secondary) 28%, transparent); }}
-.template-neon-core .visual-label {{ right: 18%; bottom: 28%; }}
+        "neon-core": """
+.template-neon-core { background: var(--mona-bg); }
+.template-neon-core h1, .template-neon-core blockquote { color: var(--mona-text-primary); }
+.template-neon-core .eyebrow, .template-neon-core .metric-value { color: var(--mona-secondary); }
 """,
-        "new-guochao": f"""
-.template-new-guochao {{ background-image: linear-gradient(120deg, rgba(121,87,48,.045) 0 1px, transparent 1px), linear-gradient(145deg, #f6eddd, var(--mona-bg)); background-size: {round(72 * scale)}px 100%, auto; color: var(--mona-text-primary); }}
-.template-new-guochao::after {{ content: ""; position: absolute; left: 6.5%; right: 6.5%; bottom: 8%; height: 1px; background: color-mix(in srgb, var(--mona-secondary) 42%, transparent); pointer-events: none; z-index: 0; }}
-.template-new-guochao .decor-rule {{ position: absolute; left: 6.5%; top: 8%; bottom: 8%; width: {max(2, round(3 * scale))}px; background: var(--mona-secondary); }}
-.template-new-guochao .decor-seal {{ position: absolute; right: 7%; top: 8%; width: 5.5%; aspect-ratio: 1; background: var(--mona-primary); opacity: .9; }}
-.template-new-guochao h1 {{ color: var(--mona-primary); letter-spacing: .025em; }}
-.template-new-guochao .eyebrow {{ display: inline-block; padding-bottom: .35em; color: var(--mona-secondary); border-bottom: 1px solid color-mix(in srgb, var(--mona-secondary) 58%, transparent); }}
-.template-new-guochao .card, .template-new-guochao .cover-visual {{ background: color-mix(in srgb, var(--mona-surface) 94%, #fff); border: 1px solid color-mix(in srgb, var(--mona-secondary) 48%, var(--mona-border)); border-radius: 2px; box-shadow: 0 {round(14 * scale)}px {round(34 * scale)}px rgba(65,42,18,.13); }}
-.template-new-guochao .metric-value {{ color: var(--mona-primary); }}
-.template-new-guochao blockquote {{ color: var(--mona-primary); }}
+        "new-guochao": """
+.template-new-guochao { background: var(--mona-bg); }
+.template-new-guochao h1, .template-new-guochao blockquote { color: var(--mona-primary); }
+.template-new-guochao .eyebrow, .template-new-guochao .metric-value { color: var(--mona-primary); }
 """,
-        "idea-lab": f"""
-.template-idea-lab {{ background-image: linear-gradient(150deg, #f8f5ed 0%, var(--mona-bg) 58%, #eef3f8 100%); }}
-.template-idea-lab::after {{ content: ""; position: absolute; top: 0; right: 0; bottom: 0; width: 31%; background: color-mix(in srgb, var(--mona-primary) 5%, transparent); z-index: 0; }}
-.template-idea-lab .decor-band {{ position: absolute; left: 6.5%; right: 6.5%; top: 8%; height: {max(2, round(2 * scale))}px; background: color-mix(in srgb, var(--mona-primary) 62%, transparent); }}
-.template-idea-lab .decor-tab {{ position: absolute; right: 7%; top: 8%; width: 8%; height: 6%; background: var(--mona-secondary); opacity: .92; }}
-.template-idea-lab h1 {{ color: var(--mona-primary); letter-spacing: -.01em; }}
-.template-idea-lab .card, .template-idea-lab .cover-visual {{ border: 1px solid color-mix(in srgb, var(--mona-border) 72%, var(--mona-primary)); background: color-mix(in srgb, var(--mona-surface) 96%, #fff); box-shadow: 0 {round(14 * scale)}px {round(36 * scale)}px rgba(35,50,80,.12); }}
-.template-idea-lab .metric-card:nth-child(2n) {{ border-top: {max(2, round(3 * scale))}px solid var(--mona-secondary); }}
-.template-idea-lab .visual-orbit {{ position: relative; width: 72%; aspect-ratio: 1.5; border: 0; border-radius: {round(10 * scale)}px; background: linear-gradient(90deg, var(--mona-surface) 0 48%, transparent 48% 52%, var(--mona-surface) 52%); box-shadow: 0 {round(10 * scale)}px {round(24 * scale)}px rgba(35,50,80,.12); }}
-.template-idea-lab .visual-orbit::before {{ content: ""; position: absolute; left: 8%; top: 15%; width: 27%; height: {max(3, round(4 * scale))}px; background: var(--mona-primary); box-shadow: 0 {round(24 * scale)}px 0 color-mix(in srgb, var(--mona-primary) 28%, transparent), 0 {round(48 * scale)}px 0 color-mix(in srgb, var(--mona-primary) 16%, transparent); }}
-.template-idea-lab .visual-label {{ right: 18%; bottom: 28%; }}
+        "idea-lab": """
+.template-idea-lab { background: var(--mona-bg); }
+.template-idea-lab h1, .template-idea-lab blockquote { color: var(--mona-primary); }
+.template-idea-lab .eyebrow, .template-idea-lab .metric-value { color: var(--mona-primary); }
 """,
-        "documentary-collage": f"""
-.template-documentary-collage {{ background-image: linear-gradient(145deg, #171716 0%, var(--mona-bg) 66%, #20201d 100%); }}
-.template-documentary-collage::after {{ content: ""; position: absolute; inset: 0; background: repeating-linear-gradient(90deg, transparent 0 calc(25% - 1px), rgba(255,255,255,.035) calc(25% - 1px) 25%); z-index: 0; }}
-.template-documentary-collage .decor-index {{ position: absolute; left: 6.5%; top: 8%; width: {max(5, round(6 * scale))}px; height: 18%; background: var(--mona-primary); }}
-.template-documentary-collage .decor-rule {{ position: absolute; left: 6.5%; right: 6.5%; bottom: 8%; height: 1px; background: rgba(255,255,255,.22); }}
-.template-documentary-collage h1 {{ letter-spacing: -.025em; }}
-.template-documentary-collage .eyebrow {{ display: inline-block; color: var(--mona-primary); padding-bottom: .35em; border-bottom: 1px solid color-mix(in srgb, var(--mona-primary) 64%, transparent); }}
-.template-documentary-collage .card, .template-documentary-collage .cover-visual {{ background: #e7ddca; color: #171514; border: 1px solid rgba(255,255,255,.08); border-radius: 0; box-shadow: 0 {round(18 * scale)}px {round(46 * scale)}px rgba(0,0,0,.32); }}
-.template-documentary-collage .card p, .template-documentary-collage .card li, .template-documentary-collage .metric-label, .template-documentary-collage .metric-detail {{ color: #403b35; }}
-.template-documentary-collage .comparison-card.emphasis {{ border-top: {max(2, round(3 * scale))}px solid var(--mona-primary); }}
-.template-documentary-collage .metric-value {{ color: var(--mona-primary); }}
-.template-documentary-collage .visual-orbit {{ width: 58%; aspect-ratio: .82; border: 0; border-left: {max(4, round(5 * scale))}px solid var(--mona-primary); border-radius: 0; background: rgba(255,255,255,.34); }}
-.template-documentary-collage .cover-visual .visual-label {{ color: #171514; }}
+        "documentary-collage": """
+.template-documentary-collage { background: var(--mona-bg); }
+.template-documentary-collage h1, .template-documentary-collage blockquote { color: var(--mona-text-primary); }
+.template-documentary-collage .eyebrow, .template-documentary-collage .metric-value { color: var(--mona-primary); }
 """,
     }
     return themes[theme]
@@ -1009,6 +1180,8 @@ def _aspect_css(width: int, height: int) -> str:
 .scene h1 {{ font-size: {max(34, round(width * 0.075))}px; }}
 .scene h2 {{ font-size: {max(20, round(width * 0.045))}px; }}
 .scene p, .scene li {{ font-size: {max(16, round(width * 0.035))}px; line-height: 1.45; }}
+.chapter-copy {{ width: 86%; }} .chapter-number {{ margin-bottom: .7em; }}
+.process-steps {{ gap: 2%; padding-bottom: 4%; }} .process-copy h1, .process-copy > p {{ margin-left: 8%; margin-right: 8%; }} .process-step-list {{ grid-template-columns: 1fr; gap: {max(8, round(width * 0.012))}px; width: 84%; margin: 3% auto 6%; }} .process-step {{ display: grid; grid-template-columns: 2.2em minmax(0, 1fr); align-items: start; justify-items: stretch; gap: .8em; padding: 0; text-align: left; }} .process-step:not(:last-child)::after {{ top: 2.2em; right: auto; bottom: -.8em; left: 1.05em; width: 2px; height: auto; }} .process-step-card {{ margin: 0; padding: .8em; }}
 .cover-split {{ grid-template-columns: 1fr; grid-template-rows: 1.05fr .95fr; gap: 0; }}
 .cover-copy {{ align-self: end; }} .cover-copy h1, .cover-copy .lede {{ max-width: 100%; }}
 .cover-copy .lede {{ margin-top: 14px; }}
@@ -1029,6 +1202,7 @@ blockquote {{ font-size: {max(28, round(width * 0.065))}px; }}
         return f"""
 .scene-content {{ padding: {max(28, round(width * 0.075))}px; }}
 .scene h1 {{ font-size: {max(38, round(width * 0.06))}px; }}
+.process-step-list {{ grid-template-columns: 1fr; gap: {max(10, round(width * 0.015))}px; width: 86%; margin: 3% auto 5%; }} .process-step {{ display: grid; grid-template-columns: 2.2em minmax(0, 1fr); align-items: start; justify-items: stretch; gap: .8em; padding: 0; text-align: left; }} .process-step:not(:last-child)::after {{ top: 2.2em; right: auto; bottom: -.8em; left: 1.05em; width: 2px; height: auto; }} .process-step-card {{ margin: 0; padding: .8em; }}
 .cover-split {{ grid-template-columns: 1fr; grid-template-rows: 1fr .85fr; gap: 0; }}
 .cover-copy {{ align-self: end; }} .cover-copy h1, .cover-copy .lede {{ max-width: 100%; }}
 .cover-visual {{ margin: 0 18% 10%; min-height: 0; }}
@@ -1036,6 +1210,93 @@ blockquote {{ font-size: {max(28, round(width * 0.065))}px; }}
 .comparison-grid {{ gap: 14px; padding-inline: 7%; }} .comparison-card {{ padding: 18px; }}
 """
     return ""
+
+
+def _style_options_css(tokens: Mapping[str, Any], width: int, height: int) -> str:
+    type_scale = {"compact": 0.88, "standard": 1, "large": 1.14}[tokens["typeScale"]]
+    density = {"compact": 0.8, "standard": 1, "spacious": 1.2}[tokens["density"]]
+    portrait = height > width
+    square = height == width
+    title = max(34, round(width * 0.075)) if portrait else (
+        max(38, round(width * 0.06)) if square else max(24, round(width * 0.045))
+    )
+    heading = max(20, round(width * 0.045)) if portrait else max(16, round(width * 0.022))
+    body = max(16, round(width * 0.035)) if portrait else max(12, round(width * 0.017))
+    card_style = {
+        "solid": "background: var(--mona-surface);",
+        "outline": "background: transparent; box-shadow: none;",
+        "glass": "background: var(--mona-surface);",
+        "none": "background: transparent; border: 0; box-shadow: none;",
+    }[tokens["cardStyle"]]
+    safe_area = tokens["backgroundSafeArea"]
+    reference_width = 1080 if portrait or square else 1920
+    reference_height = 1920 if portrait else 1080
+    padding_x = max(
+        round(tokens["contentPadding"] * width / reference_width),
+        round(width * safe_area["left"]),
+        round(width * safe_area["right"]),
+    )
+    padding_y = max(
+        round(tokens["contentPadding"] * height / reference_height),
+        round(height * safe_area["top"]),
+        round(height * safe_area["bottom"]),
+    )
+    spacing_unit = max(1, round(tokens["spacingUnit"] * width / 960))
+    subtitle_scale = width / 1080 if portrait or square else height / 1080
+    subtitle_minimum = 48 if portrait else (40 if square else 36)
+    subtitle_size = max(
+        round(subtitle_minimum * subtitle_scale),
+        round(tokens["subtitleFontSize"] * subtitle_scale),
+    )
+    shadow_opacity = 0 if tokens["shadow"] == "none" else tokens["shadowOpacity"]
+    card_shadow = (
+        "box-shadow: none;"
+        if tokens["cardStyle"] in {"outline", "none"} or shadow_opacity == 0
+        else "box-shadow: 0 .3em 1em rgba(0,0,0,var(--mona-shadow-opacity));"
+    )
+    card_text = ""
+    if tokens["cardStyle"] in {"outline", "none"}:
+        card_text = """
+.scene .card, .scene .cover-visual, .scene .cover-visual .visual-label { color: var(--mona-text-primary); }
+.scene .card p, .scene .card li, .scene .metric-label, .scene .metric-detail { color: var(--mona-text-secondary); }
+.scene .card h2 { color: inherit; }
+"""
+    return f"""
+:root {{
+  --mona-heading-weight: {tokens['headingWeight']};
+  --mona-body-weight: {tokens['bodyWeight']};
+  --mona-heading-line-height: {_format_number(tokens['headingLineHeight'])};
+  --mona-body-line-height: {_format_number(tokens['bodyLineHeight'])};
+  --mona-spacing-unit: {spacing_unit}px;
+  --mona-border-width: {_format_number(tokens['borderWidth'])}px;
+  --mona-shadow-opacity: {_format_number(shadow_opacity)};
+  --mona-subtitle-font-size: {subtitle_size}px;
+  --mona-subtitle-line-height: {_format_number(tokens['subtitleLineHeight'])};
+  --mona-subtitle-safe-top: {round(height * tokens['subtitleSafeAreaTop'])}px;
+  --mona-subtitle-safe-right: {round(width * tokens['subtitleSafeAreaRight'])}px;
+  --mona-subtitle-safe-bottom: {round(height * tokens['subtitleSafeAreaBottom'])}px;
+  --mona-subtitle-safe-left: {round(width * tokens['subtitleSafeAreaLeft'])}px;
+}}
+.scene h1 {{ font-size: {round(title * type_scale)}px; }}
+.scene h2 {{ font-size: {round(heading * type_scale)}px; }}
+.scene p, .scene li {{ font-size: {round(body * type_scale)}px; }}
+.scene .scene-content {{ padding: {round(padding_y * density)}px {round(padding_x * density)}px; }}
+.scene h1, .scene h2 {{ font-weight: var(--mona-heading-weight); line-height: var(--mona-heading-line-height); }}
+.scene p, .scene li {{ font-weight: var(--mona-body-weight); line-height: var(--mona-body-line-height); }}
+.scene .metric-copy, .scene .comparison-copy {{ padding-bottom: 0; }}
+.scene .metric-grid, .scene .comparison-grid {{ gap: {round(spacing_unit * 1.5 * density)}px; }}
+.scene .metric-card, .scene .comparison-card {{ padding: {round(spacing_unit * 1.75 * density)}px; }}
+.scene .bullet-list {{ margin-top: {round(spacing_unit * 1.5 * density)}px; }}
+.scene .bullet-list li + li {{ margin-top: {round(spacing_unit * 0.75 * density)}px; }}
+.scene .card, .scene .cover-visual, .scene .scene-media {{ {card_style} border-radius: var(--mona-card-radius); color: var(--mona-text-primary); }}
+.scene .card, .scene .cover-visual, .scene .scene-media {{ {card_shadow} }}
+.scene.cover-simple {{ grid-template-columns: 1fr; grid-template-rows: 1fr; gap: 0; padding-bottom: 0; }}
+.scene.cover-simple .cover-simple-copy {{ width: 84%; max-width: 84%; align-self: center; }}
+{card_text}
+.cover-keywords {{ width: 100%; display: grid; gap: {round(spacing_unit * density)}px; padding: {round(spacing_unit * density)}px; }}
+.keyword-card {{ padding: {round(spacing_unit * 1.5 * density)}px; }}
+.keyword-card p {{ margin-top: .4em; }}
+"""
 
 
 def _css(
@@ -1064,14 +1325,12 @@ body {{ font-family: var(--mona-body-family); color: var(--mona-text-primary); }
 .scene-background {{ position: absolute; inset: -2%; z-index: 0; background-repeat: no-repeat; filter: blur(var(--mona-bg-blur)); transform: scale(1.04); }}
 .scene-background::after {{ content: ""; position: absolute; inset: 0; background: var(--mona-primary); opacity: var(--mona-bg-tint); }}
 .scene::before {{ content: ""; position: absolute; inset: 0; pointer-events: none; background: var(--mona-overlay); opacity: var(--mona-overlay-opacity); z-index: 1; }}
-.template-decor {{ position: absolute; inset: 0; z-index: 2; pointer-events: none; }}
-.template-decor i {{ display: block; }}
 .scene-content, .scene-visual {{ position: relative; z-index: 3; }}
-.scene-subtitle {{ position: absolute; z-index: 4; left: 50%; bottom: 3%; max-width: 78%; padding: .55em 1em; color: var(--mona-text-primary); background: color-mix(in srgb, var(--mona-bg) 82%, transparent); border: 1px solid color-mix(in srgb, var(--mona-border) 72%, transparent); border-radius: calc(var(--mona-card-radius) * .55); font-size: {max(12, round(width * 0.012))}px; line-height: 1.45; text-align: center; transform: translateX(-50%); display: -webkit-box; -webkit-line-clamp: var(--subtitle-lines); -webkit-box-orient: vertical; overflow: hidden; }}
-.scene-subtitle.subtitle-bottom-left {{ left: 7%; transform: none; text-align: left; }}
-.scene-subtitle.subtitle-top-center {{ top: 5%; bottom: auto; }}
-.scene-subtitle.style-caption-card {{ padding: .7em 1.15em; background: color-mix(in srgb, var(--mona-surface) 94%, transparent); box-shadow: 0 .45em 1.4em rgba(0,0,0,.18); }}
-.scene-subtitle.style-caption-outline {{ background: transparent; border-color: transparent; font-weight: 700; text-shadow: -1px -1px 0 var(--mona-bg), 1px -1px 0 var(--mona-bg), -1px 1px 0 var(--mona-bg), 1px 1px 0 var(--mona-bg), 0 .15em .45em rgba(0,0,0,.55); }}
+.scene-subtitle {{ position: absolute; z-index: 4; left: 50%; right: auto; bottom: var(--mona-subtitle-safe-bottom); width: max-content; max-width: calc(100% - var(--mona-subtitle-safe-left) - var(--mona-subtitle-safe-right)); padding: .45em .8em; color: var(--mona-text-primary); background: var(--mona-bg); border: 1px solid var(--mona-border); border-radius: calc(var(--mona-card-radius) * .4); font-size: var(--mona-subtitle-font-size); line-height: var(--mona-subtitle-line-height); text-align: center; transform: translateX(-50%); display: -webkit-box; -webkit-line-clamp: var(--subtitle-lines); -webkit-box-orient: vertical; overflow: hidden; }}
+.scene-subtitle.subtitle-bottom-left {{ left: var(--mona-subtitle-safe-left); right: var(--mona-subtitle-safe-right); transform: none; text-align: left; }}
+.scene-subtitle.subtitle-top-center {{ top: var(--mona-subtitle-safe-top); bottom: auto; }}
+.scene-subtitle.style-caption-card {{ background: var(--mona-surface); }}
+.scene-subtitle.style-caption-outline {{ background: var(--mona-bg); border-color: transparent; font-weight: 700; }}
 .subtitle-cue {{ display: none; }}
 .subtitle-cue.is-active {{ display: block; }}
 .subtitle-word {{ transition: color .12s linear, opacity .12s linear; }}
@@ -1088,13 +1347,14 @@ body {{ font-family: var(--mona-body-family); color: var(--mona-text-primary); }
 .scene h2 {{ font-family: var(--mona-heading-family); font-size: {max(16, round(width * 0.022))}px; line-height: 1.2; }}
 .scene p, .scene li {{ color: var(--mona-text-secondary); font-size: {max(12, round(width * 0.017))}px; line-height: 1.55; }}
 .eyebrow {{ color: var(--mona-secondary); font-size: {max(10, round(width * 0.012))}px; letter-spacing: 0.12em; text-transform: uppercase; margin-bottom: {max(10, round(height * 0.025))}px; }}
-.card {{ background: var(--mona-surface); border: 1px solid var(--mona-border); border-radius: var(--mona-card-radius); }}
+.card {{ background: var(--mona-surface); border: var(--mona-border-width) solid var(--mona-border); border-radius: var(--mona-card-radius); }}
 .cover-split {{ display: grid; grid-template-columns: 1.05fr .95fr; align-items: center; gap: 4%; padding-bottom: 7%; }}
 .cover-copy h1 {{ max-width: 92%; }} .cover-copy .lede {{ margin-top: 24px; max-width: 80%; }}
-.cover-visual {{ margin: 8%; min-height: 56%; display: grid; place-items: center; border: 1px solid var(--mona-border); border-radius: var(--mona-card-radius); background: var(--mona-surface); }}
-.visual-orbit {{ width: 46%; aspect-ratio: 1; border: max(2px, {round(width * 0.002)}px) solid var(--mona-primary); border-radius: 50%; }}
-.visual-label {{ position: absolute; color: var(--mona-text-primary); font-size: {max(20, round(width * 0.018))}px; }}
+.cover-visual {{ margin: 8%; min-height: 56%; display: grid; place-items: center; border: var(--mona-border-width) solid var(--mona-border); border-radius: var(--mona-card-radius); background: var(--mona-surface); }}
+.visual-label {{ color: var(--mona-text-primary); font-size: {max(20, round(width * 0.018))}px; text-align: center; }}
 .content-standard {{ display: grid; place-items: center; }} .content-copy {{ width: 78%; }} .content-copy p {{ margin-top: 28px; }}
+.chapter-title {{ display: grid; place-items: center; text-align: left; }} .chapter-copy {{ width: 78%; max-width: 88%; }} .chapter-number {{ display: inline-block; margin-bottom: 1.1em; padding-bottom: .35em; color: var(--mona-primary); border-bottom: 2px solid var(--mona-primary); font-family: var(--mona-heading-family); font-size: {max(14, round(width * 0.018))}px; font-weight: 700; letter-spacing: .08em; }} .chapter-copy h1 {{ margin-top: .25em; }} .chapter-copy p {{ margin-top: 24px; }}
+.process-steps {{ display: grid; align-content: center; gap: 4%; padding-bottom: 7%; }} .process-copy {{ width: 100%; padding-bottom: 0; }} .process-copy h1, .process-copy > p {{ margin-left: 8%; margin-right: 8%; }} .process-copy > p {{ margin-top: 16px; }} .process-step-list {{ display: grid; grid-template-columns: repeat(var(--process-step-count), minmax(0, 1fr)); gap: 0; margin: 4% 8% 7%; padding: 0; list-style: none; }} .process-step {{ position: relative; display: flex; min-width: 0; flex-direction: column; align-items: center; padding: 0 3%; text-align: center; }} .process-step:not(:last-child)::after {{ position: absolute; top: 1.05em; right: calc(-50% + 1.1em); left: calc(50% + 1.1em); z-index: 0; height: 2px; background: var(--mona-border); content: ""; }} .process-step-number {{ position: relative; z-index: 1; display: grid; width: 2.2em; height: 2.2em; flex: 0 0 auto; place-items: center; border: 2px solid var(--mona-primary); border-radius: 50%; background: var(--mona-surface); color: var(--mona-primary); font-family: var(--mona-heading-family); font-weight: 700; }} .process-step-card {{ width: 100%; margin-top: 1em; padding: 1.1em; }} .process-step-card h2 {{ color: var(--mona-text-primary); }} .process-step-card p {{ margin-top: .5em; }}
 .bullet-list {{ margin: 28px 0 0; padding-left: 1.4em; }} .bullet-list li + li {{ margin-top: 12px; }}
 .metric-comparison {{ display: grid; align-content: center; gap: 6%; padding-bottom: 7%; }} .metric-copy {{ padding-bottom: 0; }} .metric-copy p {{ margin-top: 20px; }}
 .metric-grid {{ display: grid; grid-template-columns: repeat(3, 1fr); gap: 24px; padding: 0 8%; position: relative; z-index: 1; }} .metric-card {{ padding: 28px; }}
@@ -1105,6 +1365,7 @@ body {{ font-family: var(--mona-body-family); color: var(--mona-text-primary); }
 .outro-brand {{ display: grid; place-items: center; text-align: center; }} .outro-copy {{ width: 72%; }} .brand-mark {{ color: var(--mona-primary); font-family: var(--mona-heading-family); font-size: {max(24, round(width * 0.02))}px; font-weight: 700; margin-bottom: 26px; }} .outro-copy p {{ margin: 24px auto 0; max-width: 80%; }}
 {_aspect_css(width, height)}
 {_theme_css(theme, width, height)}
+{_style_options_css(tokens, width, height)}
 """
 
 
@@ -1244,12 +1505,14 @@ def compile_scene_spec(
     scene: Mapping[str, Any] | None = None,
     resolution: Any = None,
     background_path: str | Path | None = None,
+    background_data_uri: str | None = None,
     motion_plan: Mapping[str, Any] | None = None,
     subtitle_track: Mapping[str, Any] | None = None,
     asset_media: Iterable[Mapping[str, Any]] | None = None,
     brand_logo_path: str | Path | None = None,
     brand_logo_data_uri: str | None = None,
     show_subtitles: bool = True,
+    preview: bool = False,
 ) -> str:
     """Validate and compile one spec into deterministic, self-contained HTML."""
 
@@ -1259,12 +1522,12 @@ def compile_scene_spec(
         if resolution is not None
         else (scene or {}).get("resolution", style.get("resolution", "1920x1080"))
     )
-    tokens = _tokens(style)
+    tokens = _tokens(style, normalized["backgroundSlot"])
     layout = normalized["layout"]
     theme = _template_theme(style)
     component = _component_id(style, normalized["role"])
     content = _content(normalized, scene)
-    background = _background_css(style, normalized["backgroundSlot"], background_path)
+    background = _background_css(style, normalized["backgroundSlot"], background_path, background_data_uri)
     # The class is also used as a stable selector by fixed animation presets.
     markup = _layout_markup(
         layout,
@@ -1284,6 +1547,13 @@ def compile_scene_spec(
         subtitle_markup = _subtitle_track_markup(subtitle_track, style)
     else:
         subtitle_markup = _subtitle_markup(content, style)
+    cover_has_visual_content = bool(
+        _items(content.get("columns"))
+        or _text(content.get("visual") or "").strip()
+        or _text(content.get("highlight") or "").strip()
+        or media_markup
+    )
+    cover_simple = layout == "cover-split" and not cover_has_visual_content
     start = _format_number(float(normalized["start"]))
     duration = _format_number(float(normalized["duration"]))
     animation = normalized["animationPreset"]
@@ -1293,22 +1563,54 @@ def compile_scene_spec(
         validate_motion_plan(motion_plan, allowed_effects=_animation_values(style))
         animation_line = _motion_plan_script(motion_plan)
     else:
+        animation = str(_as_mapping(style.get("motion")).get("enterPreset") or animation)
+        if animation not in ANIMATION_NAMES:
+            raise SceneStyleValidationError("入场动效预设无效", code="SCENE_STYLE_INVALID_ANIMATION")
         animation_line = _motion_script(animation)
     subtitle_script = _subtitle_track_script(subtitle_track is not None)
     css = _css(tokens, width, height, theme)
+    motion = _as_mapping(style.get("motion"))
+    transition = str((motion_plan or {}).get("transitionPreset") or motion.get("transitionPreset") or "cross-fade")
+    if transition not in {"cross-fade", "fade-rise", "stagger-rise"}:
+        raise SceneStyleValidationError("场景切换动效无效", code="SCENE_STYLE_INVALID_ANIMATION")
+    transition_ms = (motion_plan or {}).get("transitionDurationMs", motion.get("transitionDurationMs", 420))
+    if isinstance(transition_ms, bool) or not isinstance(transition_ms, (int, float)) or not 0 <= transition_ms <= 5000:
+        raise SceneStyleValidationError("场景切换时长无效", code="SCENE_STYLE_INVALID_ANIMATION")
+    preview_script = ""
+    if preview:
+        preview_script = f"""
+(function () {{
+  function fitPreview() {{
+    var scene = document.querySelector('.scene');
+    scene.style.transformOrigin = 'top left';
+    scene.style.transform = 'scale(' + Math.min(window.innerWidth / {width}, window.innerHeight / {height}) + ')';
+  }}
+  window.addEventListener('resize', fitPreview);
+  fitPreview();
+  var started = performance.now();
+  function animatePreview(now) {{
+    var seconds = ((now - started) / 1000) % ({duration} + 2);
+    var reduced = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+    var local = reduced ? {duration} : Math.min(seconds, {duration});
+    var timelines = Array.isArray(window.__timelines) ? window.__timelines : Object.values(window.__timelines || {{}});
+    timelines.forEach(function (timeline) {{ timeline.seek(local); }});
+    if (!reduced) window.requestAnimationFrame(animatePreview);
+  }}
+  window.requestAnimationFrame(animatePreview);
+}})();
+"""
     return f"""<!DOCTYPE html>
 <html lang="zh-CN">
 <head>
   <meta charset="UTF-8">
-  <meta name="viewport" content="width={width}, initial-scale=1">
+  <meta name="viewport" content="width={'device-width' if preview else width}, initial-scale=1">
   <title>Scene {normalized['sceneIndex']}</title>
   <style>
 {css}  </style>
 </head>
 <body>
-  <div id="scene-{normalized['sceneIndex']}" class="scene {layout} template-{theme} component-{component}{' has-media' if media_markup else ''}" data-composition-id="scene-{normalized['sceneIndex']}" data-width="{width}" data-height="{height}" data-start="{start}" data-duration="{duration}" data-role="{html.escape(normalized['role'], quote=True)}" data-layout="{html.escape(layout, quote=True)}" data-template="{theme}" data-component="{component}">
+  <div id="scene-{normalized['sceneIndex']}" class="scene {layout} template-{theme} component-{component}{' has-media' if media_markup else ''}{' cover-simple' if cover_simple else ''}" data-composition-id="scene-{normalized['sceneIndex']}" data-width="{width}" data-height="{height}" data-start="{start}" data-duration="{duration}" data-role="{html.escape(normalized['role'], quote=True)}" data-layout="{html.escape(layout, quote=True)}" data-template="{theme}" data-component="{component}" data-transition-preset="{transition}" data-transition-duration-ms="{_format_number(float(transition_ms))}">
 <div class="scene-background" data-layout-allow-overflow style="{background}"></div>
-{_template_decor(theme)}
 {markup}
 {media_markup}
 {subtitle_markup}
@@ -1328,20 +1630,38 @@ def compile_scene_spec(
   if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', setup);
   else setup();
 }})();
+{preview_script}
   </script>
 </body>
 </html>
 """
 
 
-def compile_scene_html(
-    spec: Mapping[str, Any],
-    style: Mapping[str, Any],
-    **kwargs: Any,
-) -> str:
-    """Compatibility alias used by callers that name the output explicitly."""
+def style_preview_spec(style: Mapping[str, Any], role: str) -> dict[str, Any]:
+    """Use the same sample scene for draft and published style previews."""
 
-    return compile_scene_spec(spec, style, **kwargs)
+    if role not in ROLE_NAMES:
+        raise _error("不支持的预览场景", "STYLE_PREVIEW_ROLE_INVALID")
+    layout, content = {
+        "cover": ("cover-split", {
+            "title": "让画面清楚易读", "body": "配色、字体和留白保持协调",
+            "columns": [{"title": "配色", "body": "颜色搭配统一"}, {"title": "文字", "body": "重点清楚易读"}, {"title": "留白", "body": "画面舒适清晰"}],
+        }),
+        "chapter": ("chapter-title", {"chapterNumber": 2, "eyebrow": "章节导读", "title": "从想法到作品", "body": "开始一个新的知识章节"}),
+        "content": ("content-standard", {"title": "简洁清楚的画面", "body": "统一配色和文字样式，让内容清楚易读。", "bullets": ["标题层级清晰", "画面留白舒适", "字幕清楚易读"]}),
+        "data": ("metric-comparison", {"title": "效率持续提升", "metrics": [{"value": "72%", "label": "示例指标"}, {"value": "3.6×", "label": "示例产能"}, {"value": "98%", "label": "示例一致性"}]}),
+        "comparison": ("comparison-columns", {"title": "对比两种方式", "left": {"title": "之前", "body": "逐项处理"}, "right": {"title": "现在", "body": "统一流程"}}),
+        "process": ("process-steps", {"title": "三步完成制作", "steps": ["明确目标", "预览修改", "导出交付"]}),
+        "quote": ("quote-focus", {"title": "内容引言", "quote": "让表达清晰，让知识易懂。", "author": "系列主张"}),
+        "outro": ("outro-brand", {"title": "下一期见", "summary": "风格延续，内容继续。"}),
+    }[role]
+    content.setdefault("subtitle", "让重点更清楚地呈现。")
+    return {
+        "schemaVersion": 1, "sceneIndex": ROLE_NAMES.index(role) + 1,
+        "role": role, "layout": layout, "backgroundSlot": role,
+        "animationPreset": str(_as_mapping(style.get("motion")).get("enterPreset") or "fade-rise"),
+        "duration": 6, "start": 0, "content": content,
+    }
 
 
 __all__ = [
@@ -1349,13 +1669,11 @@ __all__ = [
     "LAYOUT_ALIASES",
     "ROLE_NAMES",
     "SceneCompileError",
-    "SceneCompilerError",
-    "SceneSpecError",
     "SceneSpecParseError",
     "SceneSpecValidationError",
     "SceneStyleValidationError",
-    "compile_scene_html",
     "compile_scene_spec",
     "parse_scene_spec",
+    "style_preview_spec",
     "validate_scene_spec",
 ]

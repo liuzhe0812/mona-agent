@@ -736,7 +736,7 @@ _ELEMENT_QUERY_SCHEMA = ObjectSchema(
     )
 )
 class BrowserActTool(BrowserTool):
-    """Unified Cindy/OpenClaw-style action surface over Mona's current WebView tab."""
+    """Browser actions on Mona's current WebView tab."""
 
     _scopes = {"core", "subagent"}
     model_visible = True

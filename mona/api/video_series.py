@@ -14,7 +14,12 @@ from aiohttp import web
 from loguru import logger
 
 from mona.config.paths import get_workspace_path
-from mona.video_scene_compiler import SceneCompileError, compile_scene_spec
+from mona.video_scene_compiler import (
+    ROLE_NAMES,
+    SceneCompileError,
+    compile_scene_spec,
+    style_preview_spec,
+)
 from mona.video_style import (
     VideoStyleError,
     create_series,
@@ -35,6 +40,7 @@ from mona.video_style import (
     validate_series_id,
     validate_style,
 )
+from mona.video_timeline import VideoTimelineError, build_motion_plan, build_subtitle_track
 
 _ASSET_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$")
 
@@ -64,21 +70,7 @@ async def handle_video_style_templates(request: web.Request) -> web.Response:
 
 def _series_summary(series: dict[str, Any]) -> dict[str, Any]:
     result = dict(series)
-    result["episodeCount"] = 0
-    projects = get_workspace_path() / "video_projects"
-    if projects.is_dir():
-        for project in projects.iterdir():
-            meta = project / "meta.json"
-            if not meta.is_file():
-                continue
-            try:
-                import json
-
-                value = json.loads(meta.read_text(encoding="utf-8"))
-            except Exception:
-                continue
-            if value.get("seriesId") == series.get("id"):
-                result["episodeCount"] += 1
+    result["episodeCount"] = len(_referencing_projects(str(series.get("id") or "")))
     version = int(series.get("latestStyleVersion") or 0)
     if version:
         try:
@@ -93,6 +85,10 @@ def _series_summary(series: dict[str, Any]) -> dict[str, Any]:
                 "primaryColor": colors.get("primary"),
                 "backgroundAssetId": background.get("assetId"),
                 "hasBackground": bool(background.get("assetId")),
+                "enabledAspectRatios": [
+                    aspect for aspect in ("16:9", "9:16", "1:1")
+                    if ((style.get("aspectVariants") or {}).get(aspect) or {}).get("enabled")
+                ],
             }
         except VideoStyleError:
             pass
@@ -226,20 +222,22 @@ async def handle_video_series_get(request: web.Request) -> web.Response:
 
 
 def _referencing_projects(series_id: str) -> list[tuple[Path, dict[str, Any]]]:
-    projects = _root() / "video_projects"
     references: list[tuple[Path, dict[str, Any]]] = []
-    if not projects.is_dir():
-        return references
-    for project in projects.iterdir():
-        meta_path = project / "meta.json"
-        if not meta_path.is_file():
+    workspace = _root().resolve()
+    for folder in ("video_projects", "video_projects_archived"):
+        projects = workspace / folder
+        if not projects.resolve().is_relative_to(workspace) or not projects.is_dir():
             continue
-        try:
-            meta = json.loads(meta_path.read_text(encoding="utf-8"))
-        except (OSError, UnicodeError, json.JSONDecodeError):
-            continue
-        if isinstance(meta, dict) and meta.get("seriesId") == series_id:
-            references.append((meta_path, meta))
+        for project in projects.iterdir():
+            meta_path = project / "meta.json"
+            if not meta_path.resolve().is_relative_to(projects.resolve()) or not meta_path.is_file():
+                continue
+            try:
+                meta = json.loads(meta_path.read_text(encoding="utf-8"))
+            except (OSError, UnicodeError, json.JSONDecodeError):
+                continue
+            if isinstance(meta, dict) and meta.get("seriesId") == series_id:
+                references.append((meta_path, meta))
     return references
 
 
@@ -364,47 +362,20 @@ async def handle_video_style_validate(request: web.Request) -> web.Response:
         return _domain_error(exc)
 
 
-_PREVIEW_SCENES: dict[str, tuple[str, dict[str, Any]]] = {
-    "cover": (
-        "cover-split",
-        {
-            "eyebrow": "系列封面",
-            "title": "让复杂知识变得清晰",
-            "body": "一套风格贯穿每一期内容",
-            "visual": "01 / 08",
-            "subtitle": "配色、组件、背景与字幕规则自动继承",
-        },
-    ),
-    "content": (
-        "content-standard",
-        {
-            "eyebrow": "核心内容",
-            "title": "稳定的视觉语言",
-            "body": "固定组件、版式与动效，只让内容发生变化。",
-            "bullets": ["统一标题层级", "统一信息组件", "统一字幕安全区"],
-        },
-    ),
-    "data": (
-        "metric-comparison",
-        {
-            "eyebrow": "数据洞察",
-            "title": "效率持续提升",
-            "metrics": [
-                {"value": "72%", "label": "制作效率"},
-                {"value": "3.6×", "label": "内容产能"},
-                {"value": "98%", "label": "风格一致"},
-            ],
-        },
-    ),
-    "outro": (
-        "outro-brand",
-        {
-            "eyebrow": "系列片尾",
-            "title": "下一期见",
-            "summary": "风格延续，内容继续。",
-        },
-    ),
-}
+def _draft_image_data_uri(series_id: str, asset_id: str) -> str | None:
+    if not asset_id:
+        return None
+    if not _ASSET_ID_RE.fullmatch(asset_id):
+        raise VideoStyleError("图片资产编号无效", code="BACKGROUND_ASSET_ID_INVALID")
+    directory = series_directory(_root()) / validate_series_id(series_id) / "draft" / "assets"
+    path = (directory / f"{asset_id}.webp").resolve()
+    if not directory.resolve().is_relative_to(_root().resolve()) or not path.is_relative_to(directory.resolve()):
+        raise VideoStyleError("图片资产路径无效", code="BACKGROUND_ASSET_PATH_INVALID")
+    if not path.is_file():
+        raise VideoStyleError("图片资产不存在", code="BACKGROUND_ASSET_NOT_FOUND", status_code=404)
+    if path.stat().st_size > 10 * 1024 * 1024:
+        raise VideoStyleError("预览图片过大", code="BACKGROUND_ASSET_TOO_LARGE")
+    return "data:image/webp;base64," + base64.b64encode(path.read_bytes()).decode("ascii")
 
 
 async def handle_video_style_preview(request: web.Request) -> web.Response:
@@ -413,33 +384,31 @@ async def handle_video_style_preview(request: web.Request) -> web.Response:
         series_id = request.match_info["series_id"]
         get_series(_root(), series_id)
         role = str(body.get("role") or "cover").strip().lower()
-        if role not in _PREVIEW_SCENES:
+        if role not in ROLE_NAMES:
             raise VideoStyleError("不支持的预览场景", code="STYLE_PREVIEW_ROLE_INVALID")
         aspect = str(body.get("aspectRatio") or "16:9")
         resolution = {
-            "16:9": "432x243",
-            "9:16": "243x432",
-            "1:1": "360x360",
+            "16:9": "1920x1080",
+            "9:16": "1080x1920",
+            "1:1": "1080x1080",
         }.get(aspect)
         if resolution is None:
             raise VideoStyleError("不支持的预览比例", code="STYLE_PREVIEW_ASPECT_INVALID")
         style = body.get("style")
         if not isinstance(style, dict):
             style = read_style_draft(_root(), series_id)
-        layout, content = _PREVIEW_SCENES[role]
-        spec = {
-            "schemaVersion": 1,
-            "sceneIndex": {"cover": 1, "content": 2, "data": 3, "outro": 4}[role],
-            "role": role,
-            "layout": layout,
-            "backgroundSlot": role,
-            "animationPreset": str(
-                ((style.get("motion") or {}).get("enterPreset")) or "fade-rise"
-            ),
-            "duration": 6,
-            "start": 0,
-            "content": content,
-        }
+        spec = style_preview_spec(style, role)
+        backgrounds = style.get("backgrounds") if isinstance(style.get("backgrounds"), dict) else {}
+        default = backgrounds.get("default") or {}
+        selected = (backgrounds.get("roles") or {}).get(role) or {}
+        slot = {**default, **selected} if selected.get("inherit") == "default" else selected or default
+        background_data_uri = _draft_image_data_uri(series_id, str(slot.get("assetId") or ""))
+        track = build_subtitle_track(str(spec["content"]["subtitle"]), 6000)
+        motion = build_motion_plan(
+            {"index": spec["sceneIndex"], "role": role}, track,
+            allowed_effects=style.get("allowedAnimations") or ("fade-rise", "stagger-rise", "soft-pulse", "cross-fade"),
+            motion_preferences=style.get("motion") if isinstance(style.get("motion"), dict) else {},
+        )
         brand_logo_data_uri = None
         if role == "outro":
             brand = style.get("brand") if isinstance(style.get("brand"), dict) else {}
@@ -448,30 +417,23 @@ async def handle_video_style_preview(request: web.Request) -> web.Response:
             logo_record = logo.get(preferred) or logo.get("dark") or logo.get("light")
             if isinstance(logo_record, dict):
                 asset_id = str(logo_record.get("assetId") or "")
-                if _ASSET_ID_RE.fullmatch(asset_id):
-                    logo_path = (
-                        series_directory(_root())
-                        / validate_series_id(series_id)
-                        / "draft"
-                        / "assets"
-                        / f"{asset_id}.webp"
-                    )
-                    if logo_path.is_file():
-                        brand_logo_data_uri = (
-                            "data:image/webp;base64,"
-                            + base64.b64encode(logo_path.read_bytes()).decode("ascii")
-                        )
+                brand_logo_data_uri = _draft_image_data_uri(series_id, asset_id)
         html = compile_scene_spec(
             spec,
             style,
             resolution=resolution,
+            background_data_uri=background_data_uri,
             brand_logo_data_uri=brand_logo_data_uri,
+            motion_plan=motion,
+            preview=True,
         )
         return web.json_response({"ok": True, "html": html})
     except VideoStyleError as exc:
         return _domain_error(exc)
     except SceneCompileError as exc:
         return web.json_response(exc.to_dict(), status=exc.status_code)
+    except VideoTimelineError as exc:
+        return web.json_response(exc.to_dict(), status=422)
 
 
 async def handle_video_style_lock(request: web.Request) -> web.Response:

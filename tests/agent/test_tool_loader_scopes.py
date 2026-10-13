@@ -251,7 +251,7 @@ def test_subagent_tools_config_inherits_notes_controls(tmp_path):
     assert config.notes_tools.allow_create is False
 
 
-def test_spawn_registry_applies_trusted_subscription_state(tmp_path):
+def test_spawn_registry_keeps_local_knowledge_available_without_subscription(tmp_path):
     active = _subagent_manager(tmp_path, has_subscription=True)._build_tools()
     inactive = _subagent_manager(tmp_path, has_subscription=False)._build_tools()
 
@@ -260,13 +260,13 @@ def test_spawn_registry_applies_trusted_subscription_state(tmp_path):
     assert tool is not None
     assert error is None
 
-    assert "knowledge_search" not in _definition_names(inactive.get_definitions())
+    assert "knowledge_search" in _definition_names(inactive.get_definitions())
     tool, _, error = inactive.prepare_call("knowledge_search", {"query": "paper"})
     assert tool is not None
-    assert error is not None and error.startswith("membership_required:")
+    assert error is None
 
 
-def test_named_agent_registry_applies_trusted_subscription_state(tmp_path):
+def test_named_agent_registry_keeps_granted_knowledge_available_without_subscription(tmp_path):
     definition = AgentDefinition(
         id="com.example.materials-runtime-scope-test",
         display_name="Materials test agent",
@@ -294,14 +294,14 @@ def test_named_agent_registry_applies_trusted_subscription_state(tmp_path):
     assert tool is not None
     assert error is None
 
-    assert not ({"knowledge_search", "knowledge_read"} & _definition_names(
+    assert {"knowledge_search", "knowledge_read"} <= _definition_names(
         inactive_tools.get_definitions()
-    ))
+    )
     tool, _, error = inactive_tools.prepare_call(
         "knowledge_read", {"ref": "paper:1"}
     )
     assert tool is not None
-    assert error is not None and error.startswith("membership_required:")
+    assert error is None
 
 
 def test_partner_knowledge_tools_are_part_of_agent_knowledge():

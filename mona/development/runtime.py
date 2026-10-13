@@ -317,7 +317,8 @@ class DevelopmentRuntime:
 
     async def submit(self, session_id: str, request_id: str, content: str, *, intent: str = "follow_up",
                      expected_revision: int | None = None, doc_paths: list[str] | None = None,
-                     document_names: list[str] | None = None, target_run_id: str | None = None) -> dict:
+                     document_names: list[str] | None = None, target_run_id: str | None = None,
+                     follow_up_allowed: bool = True, authorize: Callable[[], None] | None = None) -> dict:
         if self._closed:
             raise DevelopmentError("shutting_down", "开发服务正在退出，请稍后重试。")
         async with self._lock(session_id):
@@ -347,7 +348,8 @@ class DevelopmentRuntime:
             except NotFoundError:
                 previous_input = None
             if previous_input:
-                if previous_input.session_id != session_id or previous_input.intent != intent:
+                if (previous_input.session_id != session_id or previous_input.intent != intent
+                        or previous_input.follow_up_allowed != follow_up_allowed):
                     raise ConflictError("相同请求标识不能更换会话或发送方式。")
                 if target_run_id is not None and previous_input.run_id != target_run_id:
                     raise ConflictError("引导目标轮次已变化，原请求没有重复执行。")
@@ -368,12 +370,21 @@ class DevelopmentRuntime:
                     raise ConflictError("当前执行尚未确认结束，输入草稿已保留。请先核对实际状态或使用另一会话。")
                 if intent == "steering" and session.executor != ExecutorId.MONA:
                     self.native.service.check_steering(active)
+                if not follow_up_allowed:
+                    if intent != "steering" or active.status not in {RunStatus.RUNNING, RunStatus.WAITING_USER}:
+                        raise ConflictError("原子任务尚未运行或已经结束，没有启动后续任务。")
+                    outstanding = [i for i in self.store.list_inputs(active.id) if not i.follow_up_allowed
+                                   and i.state in {InputState.PENDING, InputState.RESERVED, InputState.ACCEPTED, InputState.UNKNOWN}]
+                    if len(outstanding) >= 8:
+                        raise DevelopmentError("steering_queue_full", "子任务待确认纠偏已达上限，请先核对已有消息。")
+                if authorize is not None:
+                    authorize()
                 if not prior:
                     transcript.add_message("user", content, id=message_id, request_id=request_id, _ui_only=True,
                                            input_intent=intent, _display_content=display_content, _input_source=input_source)
                     self.sessions.save(transcript, fsync=True)
                 queued = self.store.enqueue_input(RunInput(id=request_id, session_id=session_id,
-                    run_id=active.id, message_id=message_id, intent=intent))
+                    run_id=active.id, message_id=message_id, intent=intent, follow_up_allowed=follow_up_allowed))
                 if intent == "steering" and session.executor != ExecutorId.MONA:
                     accepted = await self.native.service.steer(queued, content)
                     return {"input": accepted.model_dump(mode="json", by_alias=True), "queued": False}
@@ -416,7 +427,13 @@ class DevelopmentRuntime:
                 if source_count > 1:
                     raise DevelopmentError("invalid_handoff_context", "原生交接资料重复包含协作摘录，未派发新任务。")
                 include_source = source_count == 0
-        shared = collaboration_context(transcript, include_source=include_source)
+        consumed = frozenset(record.id for record in self.store.list_collaborations(session.id)
+                             if record.result_preview_received_by_run_id
+                             and (consumer := self.store.get_run(record.result_preview_received_by_run_id)).binding_id == binding.id
+                             and consumer.status == RunStatus.SUCCEEDED)
+        incoming = content if (input_source or {}).get("kind") == "collaboration_result" else None
+        shared = collaboration_context(transcript, include_source=include_source,
+                                       replay_start=None, incoming_content=incoming, consumed_task_ids=consumed)
         if binding.capabilities.host_subagents:
             shared = "\n\n".join(part for part in [self.collaboration.scheduling_context(session.id), shared] if part)
         run = await self.native.service.submit(session.id, request_id, content, message_id=message_id,
@@ -690,7 +707,7 @@ class DevelopmentRuntime:
 
     async def _next_input_locked(self, session_id: str, run_id: str) -> None:
         owner = self.store.get_run(run_id)
-        candidates = [i for i in self.store.list_inputs(run_id) if i.state == InputState.PENDING]
+        candidates = [i for i in self.store.list_inputs(run_id) if i.state == InputState.PENDING and i.follow_up_allowed]
         pending = next((i for i in candidates if i.id == owner.continuation_input_id), next(iter(candidates), None))
         if pending is None:
             return

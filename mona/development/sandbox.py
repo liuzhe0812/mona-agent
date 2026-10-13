@@ -36,9 +36,8 @@ _NODE_HOST_ENV = {
 _WINDOWS_COMPONENT_ID = "development-sandbox"
 _WINDOWS_COMPONENT_ARCHIVE = "development-sandbox.zip"
 
-# Mirror DSH packages/sandbox/sandbox-local/src/index.ts denial and runner
-# rules, plus packages/shell/pwsh-sandbox/src/helpers.ts classification. Its
-# Landlock launcher exits 125; the partial-enforcement line is informational.
+# Classify denials and runner failures by backend signatures. The Landlock
+# launcher exits 125; its partial-enforcement line is informational.
 _DENIAL_SIGNATURES = {
     "bwrap": ("read-only file system",),
     "landlock": ("permission denied",),
@@ -379,7 +378,7 @@ class DevelopmentSandbox:
 
     def diagnostics(self, exit_code: int | None, stderr: str) -> str:
         """Describe only backend-signature denials and runner failures."""
-        # Python uses negative return codes for signal termination; DSH treats that as null.
+        # Negative Python return codes indicate signal termination, not a sandbox denial.
         if exit_code is None or exit_code <= 0:
             return ""
 

@@ -21,6 +21,7 @@ from __future__ import annotations
 import argparse
 import asyncio
 import base64
+import io
 import json
 import os
 import socket
@@ -40,6 +41,7 @@ from merge_scenes import (  # noqa: E402
     compute_timeline,
     list_scenes,
     parse_storyboard,
+    read_scene_transition,
 )
 
 __all__ = ("render_project", "render_project_async")
@@ -197,7 +199,7 @@ def _start_chrome(browser: str, port: int, width: int, height: int, user_data_di
         browser,
         "--headless=new",
         f"--remote-debugging-port={port}",
-        f"--window-size={width},{height}",
+        f"--window-size={max(320, width)},{max(180, height)}",
         f"--user-data-dir={user_data_dir}",
         "--no-first-run",
         "--no-default-browser-check",
@@ -258,8 +260,12 @@ def _read_devtools_url(proc: subprocess.Popen, port: int, *, timeout: float = 15
 # ---------------------------------------------------------------------------
 
 _SEEK_JS_TEMPLATE = """
-(() => {
+(async () => {
   const t = __TIME__;
+  if (typeof window.__monaSeek === 'function') {
+    await window.__monaSeek(t);
+    return true;
+  }
   if (window.__timelines) {
     for (const k in window.__timelines) {
       const tl = window.__timelines[k];
@@ -278,6 +284,8 @@ _SEEK_JS_TEMPLATE = """
 
 _WAIT_GSAP_JS = """
 (() => {
+  if (window.__monaSceneError) throw new Error(window.__monaSceneError);
+  if (typeof window.__monaReady === 'boolean') return window.__monaReady;
   if (typeof window.gsap === 'undefined') return false;
   if (window.__timelines) {
     for (const k in window.__timelines) {
@@ -295,6 +303,27 @@ def _build_seek_js(t: float) -> str:
     return _SEEK_JS_TEMPLATE.replace("__TIME__", repr(float(t)))
 
 
+def _transition_frame(previous, current, preset: str, progress: float):
+    from PIL import Image
+
+    progress = max(0.0, min(1.0, progress))
+    previous, current = previous.convert("RGB"), current.convert("RGB")
+    if preset == "cross-fade":
+        return Image.blend(previous, current, progress)
+    if preset == "fade-rise":
+        frame = previous.copy()
+        overlay = current.convert("RGBA")
+        overlay.putalpha(round(255 * progress))
+        frame.paste(overlay, (0, round(current.height * .05 * (1 - progress))), overlay)
+        return frame
+    frame = previous.copy()
+    for band in range(3):
+        box = (round(current.width * band / 3), 0, round(current.width * (band + 1) / 3), current.height)
+        alpha = max(0, min(1, (progress - band * .18) / .64))
+        frame.paste(Image.blend(previous.crop(box), current.crop(box), alpha), box)
+    return frame
+
+
 async def _render_scene(
     ws,
     scene_path: Path,
@@ -306,6 +335,8 @@ async def _render_scene(
     frame_offset: int,
     frame_cb: Callable[[int], None] | None = None,
     cancel_event: Any | None = None,
+    design_size: tuple[int, int] | None = None,
+    sample_times: list[float] | None = None,
 ) -> int:
     """Render one scene to a sequence of PNGs. Returns frame count.
 
@@ -317,10 +348,8 @@ async def _render_scene(
 
     # Some Chromium builds (e.g. chrome-headless-shell) do not expose the Page
     # domain. Enable it when available and fall back to ready-state polling.
-    page_enabled = False
     try:
         await _cdp_call(ws, "Page.enable")
-        page_enabled = True
     except RuntimeError as e:
         if "wasn't found" in str(e):
             print("Warning: Page.enable not supported, using polling fallback", file=sys.stderr)
@@ -328,11 +357,12 @@ async def _render_scene(
             raise
 
     # chrome-headless-shell may not expose the Emulation domain either.
+    design_width, design_height = design_size or (width, height)
     try:
         await _cdp_call(ws, "Emulation.setDeviceMetricsOverride", {
-            "width": width,
-            "height": height,
-            "deviceScaleFactor": 1,
+            "width": design_width,
+            "height": design_height,
+            "deviceScaleFactor": min(width / design_width, height / design_height),
             "mobile": False,
         })
     except RuntimeError as e:
@@ -355,18 +385,17 @@ async def _render_scene(
         else:
             raise
 
-    if page_enabled:
-        await _wait_for_event(ws, "Page.loadEventFired", timeout=30.0)
+    for _ in range(300):
+        _raise_if_cancelled(cancel_event)
+        result = await _cdp_call(ws, "Runtime.evaluate", {
+            "expression": f"location.href === {json.dumps(file_url)} && document.readyState === 'complete'",
+            "returnByValue": True,
+        })
+        if result.get("result", {}).get("value") is True:
+            break
+        await asyncio.sleep(0.1)
     else:
-        for _ in range(300):
-            _raise_if_cancelled(cancel_event)
-            result = await _cdp_call(ws, "Runtime.evaluate", {
-                "expression": "document.readyState === 'complete'",
-                "returnByValue": True,
-            })
-            if result.get("result", {}).get("value") is True:
-                break
-            await asyncio.sleep(0.1)
+        raise RuntimeError("场景画面加载超时")
 
     # Wait for GSAP to be ready (poll up to 5s)
     for _ in range(50):
@@ -375,6 +404,8 @@ async def _render_scene(
             "expression": _WAIT_GSAP_JS,
             "returnByValue": True,
         })
+        if result.get("exceptionDetails"):
+            raise RuntimeError("场景动画加载失败，请检查场景代码后重试")
         if result.get("result", {}).get("value") is True:
             break
         await asyncio.sleep(0.1)
@@ -383,22 +414,36 @@ async def _render_scene(
         pass
 
     # Initial pause at t=0
-    await _cdp_call(ws, "Runtime.evaluate", {
+    initial = await _cdp_call(ws, "Runtime.evaluate", {
         "expression": _build_seek_js(0),
         "returnByValue": True,
+        "awaitPromise": True,
     })
+    if initial.get("exceptionDetails"):
+        raise RuntimeError("场景动画执行失败，请检查场景代码后重试")
     await asyncio.sleep(0.1)
 
-    total_frames = max(1, int(round(duration * fps)))
+    total_frames = len(sample_times) if sample_times else max(1, int(round(duration * fps)))
+    preset, transition_duration = read_scene_transition(scene_path, duration)
+    previous = None
+    previous_path = frames_dir / f"frame_{frame_offset - 1:06d}.png"
+    if frame_offset and transition_duration and previous_path.is_file():
+        from PIL import Image
+
+        with Image.open(previous_path) as image:
+            previous = image.convert("RGB")
     for i in range(total_frames):
         _raise_if_cancelled(cancel_event)
-        t = (i + 0.5) / fps  # sample mid-frame
+        t = sample_times[i] if sample_times else (i + 0.5) / fps
         if t > duration:
             t = duration
-        await _cdp_call(ws, "Runtime.evaluate", {
+        sought = await _cdp_call(ws, "Runtime.evaluate", {
             "expression": _build_seek_js(round(t, 4)),
             "returnByValue": True,
+            "awaitPromise": True,
         })
+        if sought.get("exceptionDetails"):
+            raise RuntimeError("场景动画执行失败，请检查场景代码后重试")
         # Allow layout/paint to settle
         await asyncio.sleep(0.04)
         result = await _cdp_call(ws, "Page.captureScreenshot", {
@@ -409,6 +454,14 @@ async def _render_scene(
         if not data_b64:
             continue
         png_bytes = base64.b64decode(data_b64)
+        if previous is not None and t < transition_duration:
+            from PIL import Image
+
+            with Image.open(io.BytesIO(png_bytes)) as current:
+                frame = _transition_frame(previous, current, preset, t / transition_duration)
+            stream = io.BytesIO()
+            frame.save(stream, format="PNG")
+            png_bytes = stream.getvalue()
         frame_idx = frame_offset + i
         out_path = frames_dir / f"frame_{frame_idx:06d}.png"
         out_path.write_bytes(png_bytes)
@@ -473,6 +526,7 @@ def _mux_audio(
         "-c:v", "copy",
         "-c:a", "aac",
         "-b:a", "192k",
+        "-af", "apad",
         "-shortest",
         "-movflags", "+faststart",
         str(output_mp4),
@@ -486,28 +540,36 @@ def _mux_audio(
 
 
 def _concat_scene_audio(
-    scene_mp3s: list[Path],
+    scene_mp3s: list[Path | None],
     output_mp3: Path,
     cancel_event: Any | None = None,
     ffmpeg_path: str | None = None,
+    *,
+    durations: list[float],
 ) -> bool:
-    """Concatenate per-scene MP3s into a single narration.mp3 via FFmpeg concat demuxer."""
+    """Align narration to each scene, including its trailing or full silence."""
     ffmpeg = _resolve_ffmpeg(ffmpeg_path)
     if ffmpeg is None or not scene_mp3s:
         return False
-    concat_list = output_mp3.parent / "concat_list.txt"
-    # 用绝对路径避免 ffmpeg concat demuxer 的相对路径解析问题
-    concat_lines = [f"file '{p.resolve().as_posix()}'" for p in scene_mp3s]
-    concat_list.write_text("\n".join(concat_lines) + "\n", encoding="utf-8")
-    cmd = [
-        ffmpeg,
-        "-y",
-        "-f", "concat",
-        "-safe", "0",
-        "-i", str(concat_list),
-        "-c", "copy",
-        str(output_mp3),
-    ]
+    if len(durations) != len(scene_mp3s) or any(value <= 0 for value in durations):
+        raise ValueError("Audio durations must match the scene timeline")
+    output_mp3.parent.mkdir(parents=True, exist_ok=True)
+    cmd = [ffmpeg, "-y"]
+    filters = []
+    for index, (path, duration) in enumerate(zip(scene_mp3s, durations, strict=True)):
+        if path is None:
+            cmd += ["-f", "lavfi", "-t", str(duration), "-i", "anullsrc=r=24000:cl=mono"]
+        else:
+            cmd += ["-i", str(path)]
+        filters.append(
+            f"[{index}:a]aresample=24000,aformat=channel_layouts=mono,"
+            f"apad,atrim=duration={duration},asetpts=PTS-STARTPTS[a{index}]"
+        )
+    filters.append(
+        "".join(f"[a{index}]" for index in range(len(scene_mp3s)))
+        + f"concat=n={len(scene_mp3s)}:v=0:a=1[out]"
+    )
+    cmd += ["-filter_complex", ";".join(filters), "-map", "[out]", "-c:a", "libmp3lame", "-b:a", "192k", str(output_mp3)]
     try:
         _run_ffmpeg(cmd, cancel_event)
         return True
@@ -556,6 +618,7 @@ async def render_project_async(
 
     storyboard = parse_storyboard(project / "storyboard.md")
     width, height = storyboard.get("resolution") or (DEFAULT_WIDTH, DEFAULT_HEIGHT)
+    design_size = (width, height)
     timeline, total_duration = compute_timeline(scenes, storyboard)
 
     # Apply quality preset
@@ -628,7 +691,7 @@ async def render_project_async(
             progress_cb(
                 "rendering",
                 _frame_progress(done, total_frames_budget),
-                f"正在渲染场景 {scene_pos}/{len(timeline)} · 帧 {done}/{total_frames_budget}",
+                f"正在生成画面（片段 {scene_pos}/{len(timeline)}）...",
             )
 
         async with websockets.connect(ws_url, max_size=64 * 1024 * 1024) as ws:
@@ -642,6 +705,7 @@ async def render_project_async(
                     frames_dir, frame_offset,
                     frame_cb=lambda done, pos=scene_pos: _report_frames(pos, done),
                     cancel_event=cancel_event,
+                    design_size=design_size,
                 )
                 scene_results.append({
                     "scene": num,
@@ -654,7 +718,7 @@ async def render_project_async(
 
         # Encode silent MP4
         if progress_cb is not None:
-            progress_cb("encoding", 92, "正在编码 MP4...")
+            progress_cb("encoding", 92, "正在保存视频...")
         _raise_if_cancelled(cancel_event)
         _encode_mp4(frames_dir, silent_mp4, fps, crf, cancel_event, ffmpeg)
 
@@ -663,16 +727,18 @@ async def render_project_async(
         # 若 narration.mp3 不存在但已有分镜音频,自动拼接(synthesize_narration
         # 可能因单场景失败中断而未执行 concat)
         if not narration_mp3.is_file():
-            scene_mp3s = sorted((project / "audio").glob("scene_*.mp3"))
-            if scene_mp3s:
+            scene_mp3s = [project / "audio" / f"scene_{num:02d}.mp3" for num, *_rest in timeline]
+            if any(path.is_file() for path in scene_mp3s):
                 if progress_cb is not None:
-                    progress_cb("muxing", 97, "正在合成音频...")
+                    progress_cb("muxing", 97, "正在准备声音...")
                 _concat_scene_audio(
-                    scene_mp3s, narration_mp3, cancel_event, ffmpeg
+                    [path if path.is_file() else None for path in scene_mp3s],
+                    narration_mp3, cancel_event, ffmpeg,
+                    durations=[duration for _num, _path, _start, duration in timeline],
                 )
         if narration_mp3.is_file():
             if progress_cb is not None:
-                progress_cb("muxing", 98, "正在混流音视频...")
+                progress_cb("muxing", 98, "正在为视频加入声音...")
             _mux_audio(
                 silent_mp4, narration_mp3, output_mp4, cancel_event, ffmpeg
             )

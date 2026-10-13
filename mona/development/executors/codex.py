@@ -40,8 +40,11 @@ from mona.development.executors.host_tools import (
     HOST_DESCRIPTION,
     HOST_TOOL,
     SUBAGENT_INSTRUCTIONS,
+    WORK_DESCRIPTION,
+    WORK_TOOL,
     HostToolCall,
     HostToolHandler,
+    WorkToolCall,
     call_in_turn,
     tool_unavailable,
 )
@@ -239,7 +242,8 @@ class CodexExecutor:
 
     async def _check_policy(self, client: JsonRpcProcess) -> None:
         reply = await client.request("config/read", {"includeLayers": False, "cwd": str(self.profile.project_root)})
-        validate_effective_config(reply, model_endpoint=self.profile.model_endpoint)
+        validate_effective_config(reply, model_endpoint=self.profile.model_endpoint,
+                                  work_model_catalog=self.profile.work_model_catalog)
         self._isolation_checked = True
 
     async def probe(self) -> ExecutorProbe:
@@ -374,6 +378,9 @@ class CodexExecutor:
 
     async def _open(self, start: SessionStart, binding: Binding | None) -> Binding:
         self._validate_start(start)
+        work_mode = start.work_prompt is not None
+        if work_mode and self.profile.work_model_catalog is None:
+            raise RpcError("work_policy_unverified", "此模型引擎尚未启用普通会话的工具权限。")
         async with self._opening_lock:
             if binding is not None:
                 self._validate_binding(binding)
@@ -388,28 +395,32 @@ class CodexExecutor:
                 self._auth = "required"
                 raise RpcError("authentication_required", "请先在执行器设置中完成官方认证，原会话仍保留。")
             self._auth = "ready"
-            skills = await client.request("skills/list", {"cwds": [str(start.context.root)], "forceReload": True})
-            disabled = disabled_skill_overrides(skills, start.context)
+            skills = await client.request("skills/list", {"cwds": [str(start.context.root)], "forceReload": True}) if not work_mode else {}
+            disabled = disabled_skill_overrides(skills, start.context) if not work_mode else []
             approval_policy, approvals_reviewer, sandbox_policy = _thread_permissions(
-                start.session.permission_mode, start.readonly)
+                start.session.permission_mode, start.readonly or work_mode)
             params: dict[str, Any] = {
                 "cwd": str(start.context.root), "approvalPolicy": approval_policy,
                 "approvalsReviewer": approvals_reviewer, "sandbox": sandbox_policy,
-                "developerInstructions": start.context.model_context(),
+                "developerInstructions": WORK_DESCRIPTION if work_mode else start.context.model_context(),
                 "config": {"skills.config": disabled},
             }
             host_tools = (self._tool_handler is not None and not start.readonly
                           and not start.session.parent_session_id
                           and (binding is None or binding.capabilities.host_subagents))
-            if host_tools:
+            if work_mode:
+                params["baseInstructions"] = start.work_prompt
+                params["environments"] = []
+            elif host_tools:
                 params["developerInstructions"] += "\n" + DELEGATION_INSTRUCTIONS
             elif start.session.parent_session_id:
                 params["developerInstructions"] += "\n" + SUBAGENT_INSTRUCTIONS
             # Dynamic tools persist at thread/start; resume cannot add them.
             # Legacy contexts gain them only through a safe idle replacement.
             if binding is None and host_tools:
-                params["dynamicTools"] = [{"type": "function", "name": HOST_TOOL,
-                    "description": HOST_DESCRIPTION, "inputSchema": HostToolCall.model_json_schema()}]
+                params["dynamicTools"] = [{"type": "function", "name": WORK_TOOL if work_mode else HOST_TOOL,
+                    "description": WORK_DESCRIPTION if work_mode else HOST_DESCRIPTION,
+                    "inputSchema": WorkToolCall.model_json_schema() if work_mode else HostToolCall.model_json_schema()}]
             if start.model:
                 params["model"] = start.model
             if start.session.model_provider:
@@ -752,7 +763,8 @@ class CodexExecutor:
             self._early.append((method, params))
 
     def _deliver(self, runtime: _Thread, method: str, params: dict[str, Any]) -> None:
-        event = normalize_codex_event(method, params, host_tools=runtime.binding.capabilities.host_subagents)
+        event = normalize_codex_event(method, params, host_tools=runtime.binding.capabilities.host_subagents,
+                                      work_tools=runtime.start.work_prompt is not None)
         if event is None:
             return
         turn_id = event.native_turn_id
@@ -788,18 +800,25 @@ class CodexExecutor:
         if method == "item/tool/call":
             value = tool_unavailable()
             if (is_current and runtime is not None and runtime.binding.capabilities.host_subagents
-                    and self._tool_handler is not None and params.get("tool") == HOST_TOOL
+                    and self._tool_handler is not None
+                    and params.get("tool") == (WORK_TOOL if runtime.start.work_prompt is not None else HOST_TOOL)
                     and params.get("namespace") is None and isinstance(params.get("arguments"), dict)
                     and isinstance(params.get("callId"), str) and 0 < len(params["callId"]) <= 512):
                 value = await call_in_turn(self._tool_handler, runtime.binding, turn_id, params["arguments"],
                     lambda: runtime.turn_id == turn_id and runtime.status in {"running", "waiting_user"}
-                    and not runtime.desynchronized and self._client is not None and not self._client.closed)
-            return {"success": not value.get("isError", False),
-                    "contentItems": [{"type": "inputText", "text": item["text"]} for item in value["content"]]}
+                    and not runtime.desynchronized and self._client is not None and not self._client.closed,
+                    timeout_s=None if runtime.start.work_prompt is not None else 90)
+            content_items = []
+            for item in value["content"]:
+                if item.get("type") == "text":
+                    content_items.append({"type": "inputText", "text": item["text"]})
+                elif item.get("type") == "image":
+                    content_items.append({"type": "inputImage", "imageUrl": f"data:{item['mimeType']};base64,{item['data']}"})
+            return {"success": not value.get("isError", False), "contentItems": content_items}
         if method == "item/permissions/requestApproval":
             return {"permissions": {}, "scope": "turn"}
         if method in {"item/commandExecution/requestApproval", "item/fileChange/requestApproval"}:
-            if not is_current or runtime is None or runtime.start.readonly or self._approval_handler is None:
+            if not is_current or runtime is None or runtime.start.readonly or runtime.start.work_prompt is not None or self._approval_handler is None:
                 return {"decision": "decline"}
             runtime.status = "waiting_user"
             runtime.publish(NativeEvent(native_turn_id=turn_id, type="approval.requested",

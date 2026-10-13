@@ -761,16 +761,6 @@ function Shell({
     db: "Alt+6",
   });
 
-  useEffect(() => {
-    const mql = window.matchMedia("(min-width: 768px)");
-    const handler = (e: MediaQueryListEvent) => {
-      if (!e.matches) setDesktopSidebarOpen(false);
-    };
-    mql.addEventListener("change", handler);
-    if (!mql.matches) setDesktopSidebarOpen(false);
-    return () => mql.removeEventListener("change", handler);
-  }, []);
-
   // 全局邮件自动同步 + IMAP IDLE 实时推送
   // 策略：gateway 就绪后首次静默同步 → 启动 IDLE 实时监听 → 兜底轮询 10 分钟
   useEffect(() => {

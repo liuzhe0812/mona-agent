@@ -7,6 +7,8 @@ from __future__ import annotations
 import asyncio
 import itertools
 import json
+import sys
+from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
@@ -14,19 +16,28 @@ from pydantic import ValidationError
 from test_native_collaboration_flow import NATIVE, setup, wire_inputs
 from test_native_workbench import settle, wait_run
 
-from mona.development.contracts import ExecutorId, ReviewSource, RunStatus
+from mona.development.context import ProjectContext
+from mona.development.contracts import DevelopmentSession, ExecutorId, ReviewSource, RunStatus
+from mona.development.executors.base import SessionStart
 from mona.development.executors.codex_events import normalize_codex_event
 from mona.development.executors.host_tools import (
     HOST_SERVER,
     HOST_TOOL,
     SDK_HOST_TOOL,
+    SDK_WORK_TOOL,
     SUBAGENT_INSTRUCTIONS,
+    WORK_DESCRIPTION,
+    WORK_SERVER,
+    WORK_TOOL,
     HostToolCall,
+    WorkToolCall,
     call_in_turn,
     host_servers_valid,
 )
 from mona.development.executors.rpc import RpcError
+from mona.development.executors.sdk import SDKExecutor
 from mona.development.executors.sdk_events import SDKEventProjector
+from mona.development.executors.sdk_policy import prepare_sdk_profile
 
 
 def enable_bridge(runtime):
@@ -502,3 +513,188 @@ async def test_enabled_host_capability_survives_idle_transport_restore(tmp_path,
     finally:
         await client.close()
         await runtime.close()
+
+
+def test_work_tool_call_is_strict_and_contains_one_mona_tool_request():
+    request = WorkToolCall.model_validate({"tool": "read_file", "arguments": {"path": "notes.txt"}})
+    assert request.model_dump() == {"tool": "read_file", "arguments": {"path": "notes.txt"}}
+    schema = WorkToolCall.model_json_schema()
+    assert schema["additionalProperties"] is False
+    assert schema["properties"]["tool"]["minLength"] == 1
+    assert set(schema["required"]) == {"tool", "arguments"}
+    with pytest.raises(ValidationError):
+        WorkToolCall.model_validate({"tool": "  ", "arguments": {}})
+    with pytest.raises(ValidationError):
+        WorkToolCall.model_validate({"tool": "read_file", "arguments": {}, "extra": True})
+
+
+@pytest.mark.asyncio
+async def test_work_callback_can_wait_without_the_code_timeout():
+    from mona.development.contracts import Binding
+
+    binding = Binding(session_id="session_id", executor=ExecutorId.CLAUDE,
+                      native_session_id="native", working_directory=".")
+    async def handler(*_args):
+        await asyncio.sleep(0.03)
+        return {"content": [{"type": "text", "text": "runner result"}], "isError": False}
+
+    result = await call_in_turn(handler, binding, "turn", {}, lambda: True, timeout_s=None)
+    assert result["content"][0]["text"] == "runner result"
+
+
+@pytest.mark.parametrize("executor", [ExecutorId.CLAUDE, ExecutorId.CODEBUDDY])
+def test_sdk_work_options_use_only_the_full_prompt_and_work_tool(tmp_path, monkeypatch, executor):
+    import sdk_peer
+
+    from mona.development.executors import sdk_worker
+
+    module = SimpleNamespace(
+        ClaudeAgentOptions=sdk_peer.Options,
+        CodeBuddyAgentOptions=sdk_peer.Options,
+        ClaudeSDKClient=sdk_peer.Client,
+        CodeBuddySDKClient=sdk_peer.Client,
+        PermissionResultAllow=sdk_peer.Allow,
+        PermissionResultDeny=sdk_peer.Deny,
+        AppendSystemPrompt=sdk_peer.AppendPrompt,
+        HookMatcher=sdk_peer.HookMatcher,
+        tool=sdk_peer.tool,
+        create_sdk_mcp_server=sdk_peer.create_sdk_mcp_server,
+    )
+    original_import = sdk_worker.importlib.import_module
+    monkeypatch.setattr(sdk_worker, "sdk_version", lambda _executor: "test-peer")
+    monkeypatch.setattr(sdk_worker.importlib, "import_module", lambda name, *args:
+                        module if name in {"claude_agent_sdk", "codebuddy_agent_sdk"}
+                        else original_import(name, *args))
+    prompt = "FULL WORK SYSTEM PROMPT"
+    start = {"executor": executor.value, "cwd": str(tmp_path), "executable": "test-only",
+        "nativeSessionId": "test-session", "readonly": False, "isSubagent": False, "context": "CODE_CONTEXT",
+        "model": None, "resume": False, "hostCollaboration": False, "workPrompt": prompt,
+        "permissionMode": "ask", "effort": None}
+    worker = sdk_worker.Worker()
+    worker.build_options(start)
+    assert worker.options.system_prompt == prompt
+    assert worker.options.tools == []
+    assert worker.options.allowed_tools == [SDK_WORK_TOOL]
+    assert "mcp__*" not in worker.options.disallowed_tools
+    assert set(worker.options.mcp_servers) == {WORK_SERVER}
+    server_tool = worker.options.mcp_servers[WORK_SERVER]["instance"][WORK_TOOL]
+    assert server_tool.description == WORK_DESCRIPTION
+    assert server_tool.input_schema == WorkToolCall.model_json_schema()
+
+    worker.start = start
+    worker.active = "turn"
+    worker.projector.begin("turn")
+    allowed = asyncio.run(worker.permission(SDK_WORK_TOOL, {"tool": "read_file", "arguments": {}}, None))
+    denied = asyncio.run(worker.permission("Bash", {"command": "echo side effect"}, None))
+    assert isinstance(allowed, sdk_peer.Allow)
+    assert isinstance(denied, sdk_peer.Deny)
+
+
+def _sdk_without_tools_option(monkeypatch):
+    import sdk_peer
+
+    from mona.development.executors import sdk_worker
+
+    class NoToolsOptions:
+        def __init__(self, cwd, setting_sources, mcp_servers, hooks, can_use_tool, extra_args,
+                     include_partial_messages, resume=None, permission_mode="default",
+                     codebuddy_code_path=None, **kwargs):
+            self.extra_args = extra_args
+            self.resume = resume
+            self.session_id = kwargs.get("session_id")
+            self.permission_mode = permission_mode
+            self.kwargs = kwargs
+
+    module = SimpleNamespace(ClaudeAgentOptions=NoToolsOptions, CodeBuddyAgentOptions=NoToolsOptions,
+        ClaudeSDKClient=sdk_peer.Client, CodeBuddySDKClient=sdk_peer.Client,
+        PermissionResultAllow=sdk_peer.Allow, PermissionResultDeny=sdk_peer.Deny,
+        AppendSystemPrompt=sdk_peer.AppendPrompt, HookMatcher=sdk_peer.HookMatcher,
+        tool=sdk_peer.tool, create_sdk_mcp_server=sdk_peer.create_sdk_mcp_server)
+    original_import = sdk_worker.importlib.import_module
+    monkeypatch.setattr(sdk_worker, "sdk_version", lambda _executor: "test-peer")
+    monkeypatch.setattr(sdk_worker.importlib, "import_module", lambda name, *args:
+                        module if name in {"claude_agent_sdk", "codebuddy_agent_sdk"}
+                        else original_import(name, *args))
+    return sdk_worker
+
+
+def test_codebuddy_without_tools_option_uses_empty_cli_tools(tmp_path, monkeypatch):
+    sdk_worker = _sdk_without_tools_option(monkeypatch)
+    start = {"executor": ExecutorId.CODEBUDDY.value, "cwd": str(tmp_path), "executable": "test-only",
+        "nativeSessionId": "test-session", "readonly": False, "isSubagent": False, "context": "CODE_CONTEXT",
+        "model": None, "resume": False, "hostCollaboration": False, "workPrompt": "WORK PROMPT",
+        "permissionMode": "ask", "effort": None}
+    worker = sdk_worker.Worker()
+    worker.build_options(start)
+    assert worker.options.extra_args["tools"] == ""
+    assert worker.options.kwargs["allowed_tools"] == [SDK_WORK_TOOL]
+    assert "tools" not in worker.options.kwargs
+    assert worker.options.kwargs["system_prompt"] == "WORK PROMPT"
+
+
+def test_claude_without_tools_option_fails_closed_for_work(tmp_path, monkeypatch):
+    sdk_worker = _sdk_without_tools_option(monkeypatch)
+    start = {"executor": ExecutorId.CLAUDE.value, "cwd": str(tmp_path), "executable": "test-only",
+        "nativeSessionId": "test-session", "readonly": False, "isSubagent": False, "context": "CODE_CONTEXT",
+        "model": None, "resume": False, "hostCollaboration": False, "workPrompt": "WORK PROMPT",
+        "permissionMode": "ask", "effort": None}
+    with pytest.raises(ValueError, match="sdk_isolation_unsupported"):
+        sdk_worker.Worker().build_options(start)
+
+
+def test_sdk_event_projector_allows_only_the_work_mcp_tool():
+    projector = SDKEventProjector("native", work_tool=True)
+    projector.consume({"type": "system", "subtype": "init", "session_id": "native",
+                       "mcp_servers": [{"name": WORK_SERVER}]})
+    projector.begin("turn")
+    projector.consume({"type": "assistant", "session_id": "native", "content": [{"type": "tool_use",
+        "id": "work-call", "name": SDK_WORK_TOOL, "input": {"tool": "read_file", "arguments": {}}}]})
+    with pytest.raises(RpcError, match="未授权"):
+        projector.consume({"type": "assistant", "session_id": "native", "content": [{"type": "tool_use",
+            "id": "wrong-call", "name": SDK_HOST_TOOL, "input": {"action": "presets"}}]})
+
+
+@pytest.mark.asyncio
+async def test_sdk_executor_sends_work_prompt_and_routes_tool_result(tmp_path, monkeypatch):
+    from mona.development.executors.sdk import call_in_turn as original_call
+
+    root = (tmp_path / "work").resolve()
+    root.mkdir()
+    prompt = "FULL WORK SYSTEM PROMPT"
+    profile = prepare_sdk_profile(ExecutorId.CLAUDE, Path(sys.executable), tmp_path / "native", root)
+    monkeypatch.setattr("mona.development.executors.sdk.sdk_version", lambda _executor: "test-peer")
+    monkeypatch.setattr("mona.development.executors.sdk.worker_command",
+        lambda: (sys.executable, "-u", str(Path(__file__).with_name("sdk_peer.py").resolve())))
+    observed_timeouts = []
+    async def tracked_call(*args, timeout_s=90):
+        observed_timeouts.append(timeout_s)
+        return await original_call(*args, timeout_s=timeout_s)
+    monkeypatch.setattr("mona.development.executors.sdk.call_in_turn", tracked_call)
+    calls = []
+    async def run_tool(binding, turn_id, arguments):
+        calls.append((binding.native_session_id, turn_id, arguments))
+        await asyncio.sleep(0.03)
+        return {"content": [{"type": "text", "text": "AUTHORIZED_RUNNER_RESULT"}], "isError": False}
+
+    host = SDKExecutor(profile, tool_handler=run_tool)
+    context = ProjectContext("work", root, (), (), (), "rules", "skills")
+    session = DevelopmentSession(project_id="work", executor=ExecutorId.CLAUDE)
+    try:
+        binding = await host.create_session(SessionStart(session, context, work_prompt=prompt))
+        async def collect_events():
+            collected = []
+            async for event in host.events(binding):
+                collected.append(event)
+                if event.type in {"run.completed", "run.failed", "run.unknown"}:
+                    return collected
+            return collected
+        event_task = asyncio.create_task(collect_events())
+        receipt = await host.send(binding, "work_input", "work_tool")
+        assert receipt.outcome == "accepted"
+        terminal = await asyncio.wait_for(event_task, 5)
+        assert terminal and terminal[-1].type == "run.completed"
+        assert calls and calls[0][1] == receipt.native_turn_id
+        assert calls[0][2] == {"tool": "read_file", "arguments": {"path": "manual.txt"}}
+        assert observed_timeouts == [None]
+    finally:
+        await host.shutdown()

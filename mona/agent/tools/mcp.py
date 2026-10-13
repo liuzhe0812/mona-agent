@@ -1456,6 +1456,15 @@ async def connect_single_mcp_server(
     return handle
 
 
+def _load_mcp_client_sdk() -> tuple[Any, ...]:
+    from mcp import ClientSession, StdioServerParameters
+    from mcp.client.sse import sse_client
+    from mcp.client.stdio import stdio_client
+    from mcp.client.streamable_http import streamable_http_client
+
+    return ClientSession, StdioServerParameters, sse_client, stdio_client, streamable_http_client
+
+
 async def _open_mcp_server(
     name: str,
     cfg,
@@ -1477,10 +1486,10 @@ async def _open_mcp_server(
     returning the replacement tool wrapper (or None). Wrappers use it to rebuild
     the server process when its stdio transport dies mid-call.
     """
-    from mcp import ClientSession, StdioServerParameters
-    from mcp.client.sse import sse_client
-    from mcp.client.stdio import stdio_client
-    from mcp.client.streamable_http import streamable_http_client
+    # Cold imports build SDK schemas synchronously; HTTP must remain responsive.
+    client_session, stdio_server_parameters, sse_client, stdio_client, streamable_http_client = (
+        await asyncio.to_thread(_load_mcp_client_sdk)
+    )
 
     try:
         transport_type = cfg.type
@@ -1502,7 +1511,7 @@ async def _open_mcp_server(
                 cfg.args,
                 cfg.env or None,
             )
-            params = StdioServerParameters(
+            params = stdio_server_parameters(
                 command=command,
                 args=args,
                 env=env,
@@ -1555,7 +1564,7 @@ async def _open_mcp_server(
             await server_stack.aclose()
             return None
 
-        session = await server_stack.enter_async_context(ClientSession(read, write))
+        session = await server_stack.enter_async_context(client_session(read, write))
         await session.initialize()
 
         tools = await session.list_tools()

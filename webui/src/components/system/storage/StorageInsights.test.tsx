@@ -21,7 +21,7 @@ function directory(path: string, sizeGb: number, fileCount = 10): DirectorySize 
 }
 
 describe("StorageInsights", () => {
-  it("summarizes only positive cleanable items and exposes the cleanup action", () => {
+  it("summarizes only positive cleanable items without adding a cleanup planning step", () => {
     const insights = buildStorageQuickInsights(result({
       cleanupItems: [
         { id: "cache", name: "缓存", sizeGb: 2.5, path: "C:\\cache", cleanable: true, recommended: true, reason: "缓存" },
@@ -35,7 +35,6 @@ describe("StorageInsights", () => {
       detail: "1 项，仅包含扫描标记为可清理的系统项",
     });
 
-    const onPlanCleanup = vi.fn();
     render(
       <StorageInsights
         result={result({
@@ -45,12 +44,10 @@ describe("StorageInsights", () => {
         })}
         selectedDirectory={null}
         onAnalyzeScope={vi.fn()}
-        onPlanCleanup={onPlanCleanup}
       />,
     );
 
-    fireEvent.click(screen.getByRole("button", { name: "生成清理方案" }));
-    expect(onPlanCleanup).toHaveBeenCalledTimes(1);
+    expect(screen.queryByRole("button", { name: "生成清理方案" })).toBeNull();
   });
 
   it("describes old large files without calling them safe to delete", () => {
@@ -89,7 +86,6 @@ describe("StorageInsights", () => {
         result={result()}
         selectedDirectory={null}
         onAnalyzeScope={onAnalyzeScope}
-        onPlanCleanup={vi.fn()}
       />,
     );
 

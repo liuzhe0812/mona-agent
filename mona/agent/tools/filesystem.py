@@ -5,6 +5,7 @@ import hashlib
 import json
 import mimetypes
 import os
+import re
 from contextvars import ContextVar
 from dataclasses import dataclass
 from pathlib import Path
@@ -81,6 +82,14 @@ class _FsTool(Tool):
             allowed,
             self._extra_allowed_dirs,
         )
+
+    def _source_sha256(self, path: Path, expected_sha256: str | None) -> str | None:
+        if expected_sha256 is not None:
+            if not re.fullmatch(r"[a-f0-9]{64}", expected_sha256):
+                raise ValueError("expected_sha256 must be a 64-character lowercase SHA256")
+            return expected_sha256
+        state = self._file_states.get(path)
+        return state.content_hash if state else None
 
 
 # ---------------------------------------------------------------------------
@@ -246,6 +255,7 @@ class ReadFileTool(_FsTool):
 
             raw = fp.read_bytes()
             if not raw:
+                self._file_states.record_read(fp, offset=offset, limit=limit)
                 return f"(Empty file: {path})"
 
             mime = detect_image_mime(raw) or mimetypes.guess_type(path)[0]
@@ -442,6 +452,10 @@ class ReadFileTool(_FsTool):
     tool_parameters_schema(
         path=StringSchema("The file path to write to"),
         content=StringSchema("The content to write"),
+        expected_sha256=StringSchema(
+            "Optional SHA256 of the source version to overwrite; an existing file must have been read in this session or match this value.",
+            nullable=True,
+        ),
         required=["path", "content"],
     )
 )
@@ -457,12 +471,16 @@ class WriteFileTool(_FsTool):
     def description(self) -> str:
         return (
             "Create a new file or intentionally replace an entire file with "
-            "the provided content. Overwrites existing files and creates parent "
+            "the provided content. Read an existing file first, or pass its SHA256 "
+            "as expected_sha256; changed files are rejected. Creates parent "
             "directories as needed. For partial changes, use edit_file with "
             "exact text from the current file; multiple disjoint edits can share one call."
         )
 
-    async def execute(self, path: str | None = None, content: str | None = None, **kwargs: Any) -> str:
+    async def execute(
+        self, path: str | None = None, content: str | None = None,
+        expected_sha256: str | None = None, **kwargs: Any,
+    ) -> str:
         try:
             if not path:
                 raise ValueError("Unknown path")
@@ -470,7 +488,23 @@ class WriteFileTool(_FsTool):
                 raise ValueError("Unknown content")
             fp = self._resolve(path)
             fp.parent.mkdir(parents=True, exist_ok=True)
-            fp.write_text(content, encoding="utf-8")
+            if not fp.exists():
+                if expected_sha256 is not None or self._file_states.get(fp) is not None:
+                    return "Error: File changed since it was read; the source file no longer exists."
+                # Exclusive creation prevents a file appearing after the check
+                # from being silently overwritten.
+                with fp.open("x", encoding="utf-8") as stream:
+                    stream.write(content)
+            else:
+                source_sha = self._source_sha256(fp, expected_sha256)
+                if source_sha is None:
+                    return "Error: File has not been read; read it first or supply expected_sha256 before overwriting."
+                original = fp.read_bytes()
+                if hashlib.sha256(original).hexdigest() != source_sha:
+                    return "Error: File changed since it was read; re-read before overwriting."
+                if fp.read_bytes() != original:
+                    return "Error: File changed during write preparation; no changes applied."
+                fp.write_text(content, encoding="utf-8")
             self._file_states.record_write(fp)
             return f"Successfully wrote {len(content)} characters to {fp}"
         except PermissionError as e:
@@ -823,8 +857,11 @@ class EditFileTool(_FsTool):
             # Create-file semantics: old_text='' + file doesn't exist → create
             if not fp.exists():
                 if old_text == "":
+                    if expected_sha256 is not None or self._file_states.get(fp) is not None:
+                        return "Error: File changed since it was read; the source file no longer exists."
                     fp.parent.mkdir(parents=True, exist_ok=True)
-                    fp.write_text(new_text, encoding="utf-8")
+                    with fp.open("x", encoding="utf-8") as stream:
+                        stream.write(new_text)
                     self._file_states.record_write(fp)
                     return f"Successfully created {fp}"
                 return self._file_not_found_msg(path, fp)
@@ -843,16 +880,23 @@ class EditFileTool(_FsTool):
                 content = raw.decode("utf-8")
                 if content.strip():
                     return f"Error: Cannot create file — {path} already exists and is not empty."
+                source_sha = self._source_sha256(fp, expected_sha256)
+                if source_sha is None:
+                    return "Error: File has not been read; read it first or supply expected_sha256 before editing."
+                if hashlib.sha256(raw).hexdigest() != source_sha:
+                    return "Error: File changed since it was read; re-read before editing."
+                if fp.read_bytes() != raw:
+                    return "Error: File changed during edit preparation; no edits applied."
                 fp.write_text(new_text, encoding="utf-8")
                 self._file_states.record_write(fp)
                 return f"Successfully edited {fp}"
 
-            # Read-before-edit check
-            warning = self._file_states.check_read(fp)
-
+            source_sha = self._source_sha256(fp, expected_sha256)
+            if source_sha is None:
+                return "Error: File has not been read; read it first or supply expected_sha256 before editing."
             raw = fp.read_bytes()
-            if expected_sha256 is not None and hashlib.sha256(raw).hexdigest() != expected_sha256:
-                return "Error: File changed since the supplied SHA256; re-read before editing."
+            if hashlib.sha256(raw).hexdigest() != source_sha:
+                return "Error: File changed since it was read; re-read before editing."
             uses_crlf = b"\r\n" in raw
             content = raw.decode("utf-8").replace("\r\n", "\n")
             norm_old = old_text.replace("\r\n", "\n")
@@ -931,11 +975,11 @@ class EditFileTool(_FsTool):
             if uses_crlf:
                 new_content = new_content.replace("\n", "\r\n")
 
+            if fp.read_bytes() != raw:
+                return "Error: File changed during edit preparation; no edits applied."
             fp.write_bytes(new_content.encode("utf-8"))
             self._file_states.record_write(fp)
             msg = f"Successfully edited {fp}"
-            if warning:
-                msg = f"{warning}\n{msg}"
             return msg
         except PermissionError as e:
             return f"Error: {e}"

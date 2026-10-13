@@ -62,7 +62,7 @@ import {
   Undo2,
 } from "lucide-react";
 
-import { Button } from "@/components/ui/button";
+import { TooltipButton } from "@/components/ui/tooltip";
 import { SelectionAiToolbar } from "./SelectionAiToolbar";
 import {
   ContextMenu,
@@ -926,8 +926,10 @@ export function MarkdownEditor({
           <div className="flex items-center gap-1.5">
             {onModeChange ? (
               <div className="flex items-center gap-0.5 rounded-lg border border-border/70 bg-muted/30 p-0.5">
-                <button
+                <TooltipButton
                   type="button"
+                  variant="ghost"
+                  size="icon"
                   title="可视化编辑"
                   aria-label="可视化编辑"
                   onClick={() => onModeChange("visual")}
@@ -939,9 +941,11 @@ export function MarkdownEditor({
                   )}
                 >
                   <Type className="h-3.5 w-3.5" />
-                </button>
-                <button
+                </TooltipButton>
+                <TooltipButton
                   type="button"
+                  variant="ghost"
+                  size="icon"
                   title="MD 源码"
                   aria-label="MD 源码"
                   onClick={() => onModeChange("markdown")}
@@ -953,7 +957,7 @@ export function MarkdownEditor({
                   )}
                 >
                   <FileCode2 className="h-3.5 w-3.5" />
-                </button>
+                </TooltipButton>
               </div>
             ) : null}
             {toolbarTrailingExtra}
@@ -1079,21 +1083,6 @@ export function MarkdownEditor({
                 bottom: 0;
                 width: 8px;
                 cursor: col-resize;
-                background-color: transparent;
-              }
-              .ProseMirror .tableResizeHandle:hover {
-                background-color: hsl(var(--primary) / 0.5);
-              }
-              .ProseMirror .tableResizeHandle::before {
-                content: '';
-                position: absolute;
-                left: 50%;
-                top: 50%;
-                transform: translate(-50%, -50%);
-                width: 4px;
-                height: 20px;
-                background-color: hsl(var(--primary) / 0.3);
-                border-radius: 2px;
               }
               /* 暗色模式表格适配 */
               .dark .ProseMirror table tbody tr:nth-child(2n) {
@@ -1917,7 +1906,7 @@ function ToolbarButton({
   onClick?: () => void;
 }) {
   return (
-    <Button
+    <TooltipButton
       type="button"
       variant="ghost"
       size="icon"
@@ -1931,6 +1920,6 @@ function ToolbarButton({
       )}
     >
       {children}
-    </Button>
+    </TooltipButton>
   );
 }

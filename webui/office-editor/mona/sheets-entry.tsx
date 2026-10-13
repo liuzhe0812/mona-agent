@@ -50,6 +50,7 @@ import { captureEditorElement, VisualVersionConflict } from './visual'
 import './sheets-editor.css'
 import '../vendor/genoffice/apps/sheets/src/renderer/styles.css'
 import './ribbon-overflow.css'
+import './resize-handles.css'
 
 if (typeof document.addEventListener === 'function') installScreenTips()
 setModuleLang('zh')

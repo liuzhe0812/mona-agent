@@ -73,94 +73,17 @@ def _confirmed_scene(project_dir: Path, index: int) -> dict:
 # --- project creation -------------------------------------------------------
 
 
-async def test_video_plan_returns_reviewable_outline_before_project_creation(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
-) -> None:
-    _patch_projects_dir(monkeypatch, tmp_path)
-
-    class Provider:
-        def get_default_model(self) -> str:
-            return "test-model"
-
-        async def chat_with_retry(self, **_kwargs):
-            return types.SimpleNamespace(
-                content=json.dumps(
-                    {
-                        "contentSummary": "从问题到解决方案",
-                        "estimatedAssetCount": 3,
-                        "outline": [
-                            {
-                                "title": "问题背景",
-                                "goal": "解释现状",
-                                "keyPoints": ["现状", "影响"],
-                                "sourceRefs": [],
-                                "estimatedSeconds": 35,
-                                "role": "cover",
-                            },
-                            {
-                                "title": "解决方案",
-                                "goal": "给出做法",
-                                "keyPoints": ["步骤一", "步骤二"],
-                                "sourceRefs": [],
-                                "estimatedSeconds": 55,
-                                "role": "process",
-                            },
-                        ],
-                    },
-                    ensure_ascii=False,
-                )
-            )
-
-    request = _post_request({"topic": "产品改版", "sourcePaths": []})
-    request.app = {"agent_loop": None, "request_timeout": 10}
-    monkeypatch.setattr(server, "_resolve_llm_provider", lambda _request: Provider())
-
-    response = await server.handle_video_project_plan(request)
-
-    assert response.status == 200
-    plan = _body(response)["plan"]
-    assert [item["title"] for item in plan["outline"]] == [
-        "问题背景",
-        "解决方案",
-    ]
-    assert plan["estimatedSceneCount"] == 2
-    assert plan["estimatedDurationSeconds"] == 90
-    assert not (tmp_path / "video_projects").exists()
-
-
-async def test_create_project_snapshots_only_the_confirmed_outline_and_sources(
+async def test_create_project_copies_sources_without_requiring_outline(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
     _patch_projects_dir(monkeypatch, tmp_path)
     source = tmp_path / "brief.md"
     source.write_text("# 原始资料\n\n保留第一章，删除第二章。", encoding="utf-8")
-    plan = server._video_plan_payload(
-        json.dumps(
-            {
-                "contentSummary": "已删除不需要的章节",
-                "estimatedAssetCount": 1,
-                "outline": [
-                    {
-                        "title": "保留的章节",
-                        "goal": "讲清核心内容",
-                        "keyPoints": ["核心要点"],
-                        "sourceRefs": ["brief.md"],
-                        "estimatedSeconds": 40,
-                        "role": "content",
-                    }
-                ],
-            },
-            ensure_ascii=False,
-        ),
-        {"brief.md"},
-    )
-
     response = await server.handle_video_project_create(
         _post_request(
             {
                 "name": "planned",
                 "resolution": "1920x1080",
-                "plan": plan,
                 "sourcePaths": [str(source)],
             }
         )
@@ -168,11 +91,11 @@ async def test_create_project_snapshots_only_the_confirmed_outline_and_sources(
 
     assert response.status == 200
     project = tmp_path / "video_projects" / "planned"
-    saved_plan = json.loads((project / "outline.json").read_text(encoding="utf-8"))
-    assert [item["title"] for item in saved_plan["outline"]] == ["保留的章节"]
     meta = _read_meta(project)
-    assert meta["outlineLocked"] is True
-    assert meta["outlineSceneCount"] == 1
+    assert meta["sourceCount"] == 1
+    assert not (project / "outline.json").exists()
+    assert not meta.get("outlineLocked")
+    assert (project / "sources" / "source-01.md").read_text(encoding="utf-8") == source.read_text(encoding="utf-8")
     source_manifest = json.loads(
         (project / "sources" / "manifest.json").read_text(encoding="utf-8")
     )
@@ -191,7 +114,11 @@ async def test_create_project_starts_in_storyboard_phase(
     meta = _read_meta(tmp_path / "video_projects" / "demo")
     assert meta["phase"] == "storyboard"
     assert meta["outputStale"] is False
-    assert meta["structuredCompiler"] is True
+    assert meta["structuredCompiler"] is False
+    assert meta["authoringMode"] == "remotion"
+    assert meta["requirePlanApproval"] is True
+    assert meta["planRevision"] == 0
+    assert meta["approvedPlanRevision"] is None
     assert (
         tmp_path
         / "video_projects"
@@ -199,68 +126,6 @@ async def test_create_project_starts_in_storyboard_phase(
         / "style"
         / "design-system.json"
     ).is_file()
-
-
-async def test_single_video_without_narration_still_gets_semantic_motion_plan(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
-) -> None:
-    _patch_projects_dir(monkeypatch, tmp_path)
-    await server.handle_video_project_create(
-        _post_request({"name": "silent-structured", "resolution": "1920x1080"})
-    )
-    project = tmp_path / "video_projects" / "silent-structured"
-    meta = server._load_video_meta(project)
-    scene = {
-        "index": 1,
-        "title": "无旁白也要有动画",
-        "role": "content",
-        "layout": "content-standard",
-        "backgroundSlot": "content",
-        "duration": 4,
-        "visual": "标题和要点按视觉脚本出现",
-        "narration": "",
-    }
-
-    class Provider:
-        async def chat_with_retry(self, **_kwargs):
-            return types.SimpleNamespace(
-                content=json.dumps(
-                    {
-                        "schemaVersion": 1,
-                        "sceneIndex": 1,
-                        "role": "content",
-                        "layout": "content-standard",
-                        "backgroundSlot": "content",
-                        "animationPreset": "stagger-rise",
-                        "duration": 4,
-                        "content": {
-                            "title": "无旁白也要有动画",
-                            "bullets": ["第一点", "第二点"],
-                        },
-                    },
-                    ensure_ascii=False,
-                )
-            )
-
-    import mona.providers.factory as factory
-
-    monkeypatch.setattr(
-        factory,
-        "load_provider_snapshot",
-        lambda: types.SimpleNamespace(provider=Provider(), model="test"),
-    )
-
-    html = await server._generate_scene_html_via_llm(project, scene, meta)
-
-    assert "无旁白也要有动画" in html
-    assert (project / "scene_specs" / "scene_01.motion.json").is_file()
-    assert not (project / "audio" / "scene_01.timing.json").exists()
-    motion = json.loads(
-        (project / "scene_specs" / "scene_01.motion.json").read_text(
-            encoding="utf-8"
-        )
-    )
-    assert motion["beats"]
 
 
 async def test_create_project_never_stores_tts_api_key(
@@ -425,78 +290,6 @@ def test_normalize_legacy_rendering_state(tmp_path: Path) -> None:
     assert meta["phase"] == "rendering"
 
 
-# --- scene confirmation ------------------------------------------------------
-
-
-async def test_confirm_pending_scene_returns_409(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
-) -> None:
-    _patch_projects_dir(monkeypatch, tmp_path)
-    project_dir = _make_project(tmp_path)
-    _write_meta(
-        project_dir,
-        {"phase": "producing", "scenes": [{"index": 1, "htmlStatus": "pending"}]},
-    )
-    response = await server.handle_video_project_scene_confirm(
-        _post_request({"name": "proj", "index": 1})
-    )
-    assert response.status == 409
-    assert _body(response)["error"] == "SCENE_NOT_PREVIEWABLE"
-
-
-async def test_confirm_with_stale_expected_mtime_returns_409(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
-) -> None:
-    _patch_projects_dir(monkeypatch, tmp_path)
-    project_dir = _make_project(tmp_path)
-    scene_path = project_dir / "scenes" / "scene_01.html"
-    scene_path.write_text("<html>v1</html>", encoding="utf-8")
-    _write_meta(
-        project_dir,
-        {"phase": "producing", "scenes": [{"index": 1, "htmlStatus": "previewing"}]},
-    )
-    stale_mtime = scene_path.stat().st_mtime + 100
-    response = await server.handle_video_project_scene_confirm(
-        _post_request({"name": "proj", "index": 1, "expectedMtime": stale_mtime})
-    )
-    assert response.status == 409
-    assert _body(response)["error"] == "SCENE_VERSION_CHANGED"
-
-
-async def test_confirm_binds_current_mtime_and_marks_exportable(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
-) -> None:
-    _patch_projects_dir(monkeypatch, tmp_path)
-    project_dir = _make_project(tmp_path)
-    scene_path = project_dir / "scenes" / "scene_01.html"
-    scene_path.write_text("<html>v1</html>", encoding="utf-8")
-    mtime = scene_path.stat().st_mtime
-    _write_meta(
-        project_dir,
-        {"phase": "producing", "scenes": [{"index": 1, "htmlStatus": "previewing"}]},
-    )
-    response = await server.handle_video_project_scene_confirm(
-        _post_request({"name": "proj", "index": 1, "expectedMtime": mtime})
-    )
-    assert response.status == 200
-    payload = _body(response)
-    assert payload["allConfirmed"] is True
-    assert payload["phase"] == "exportable"
-    meta = _read_meta(project_dir)
-    assert meta["scenes"][0]["htmlStatus"] == "confirmed"
-    assert meta["scenes"][0]["confirmedMtime"] == mtime
-
-
-def test_confirmation_invalidated_by_html_file_change(tmp_path: Path) -> None:
-    project_dir = _make_project(tmp_path)
-    scene = _confirmed_scene(project_dir, 1)
-    assert server._video_scene_confirmed_current(project_dir, scene) is True
-    scene_path = project_dir / "scenes" / "scene_01.html"
-    mtime = scene_path.stat().st_mtime
-    os.utime(scene_path, (mtime + 10, mtime + 10))
-    assert server._video_scene_confirmed_current(project_dir, scene) is False
-
-
 # --- export gating (P3: ready-based, snapshot export) -------------------------
 
 
@@ -596,7 +389,9 @@ async def test_scene_update_invalidates_only_target_scene(
     assert "confirmedMtime" not in scene1
     assert scene2["htmlStatus"] == "confirmed"
     assert "confirmedMtime" in scene2
-    assert meta["phase"] == "producing"
+    assert meta["phase"] == "storyboard"
+    assert meta["requirePlanApproval"] is True
+    assert meta["planRevision"] == 1
     assert meta["outputStale"] is True
 
 
@@ -614,11 +409,11 @@ async def test_scene_delete_invalidates_all_scenes(
     assert len(meta["scenes"]) == 1
     assert meta["scenes"][0]["htmlStatus"] == "pending"
     assert "confirmedMtime" not in meta["scenes"][0]
-    assert meta["phase"] == "producing"
+    assert meta["phase"] == "storyboard"
     assert meta["outputStale"] is True
 
 
-async def test_scene_add_invalidates_all_scenes(
+async def test_scene_add_keeps_existing_scene_previews(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
     _patch_projects_dir(monkeypatch, tmp_path)
@@ -630,9 +425,10 @@ async def test_scene_add_invalidates_all_scenes(
     assert response.status == 200
     meta = _read_meta(project_dir)
     assert len(meta["scenes"]) == 3
-    assert all(s["htmlStatus"] == "pending" for s in meta["scenes"])
-    assert all("confirmedMtime" not in s for s in meta["scenes"])
-    assert meta["phase"] == "producing"
+    assert all(s["htmlStatus"] == "confirmed" for s in meta["scenes"][:2])
+    assert all("confirmedMtime" in s for s in meta["scenes"][:2])
+    assert meta["scenes"][2]["htmlStatus"] == "pending"
+    assert meta["phase"] == "storyboard"
     assert meta["outputStale"] is True
 
 
@@ -649,32 +445,8 @@ async def test_scene_reorder_invalidates_all_scenes(
     meta = _read_meta(project_dir)
     assert [s["index"] for s in meta["scenes"]] == [1, 2]
     assert all(s["htmlStatus"] == "pending" for s in meta["scenes"])
-    assert meta["phase"] == "producing"
+    assert meta["phase"] == "storyboard"
     assert meta["outputStale"] is True
-
-
-async def test_scene_regenerate_invalidates_confirmation(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
-) -> None:
-    _patch_projects_dir(monkeypatch, tmp_path)
-    project_dir = _setup_confirmed_project(tmp_path)
-
-    async def _fake_llm(project_dir: Path, scene: dict, meta: dict) -> str:
-        return "<html>regenerated</html>"
-
-    monkeypatch.setattr(server, "_generate_scene_html_via_llm", _fake_llm)
-    response = await server.handle_video_project_scene_regenerate(
-        _post_request({"name": "proj", "index": 1})
-    )
-    assert response.status == 200
-    meta = _read_meta(project_dir)
-    scene1 = next(s for s in meta["scenes"] if s["index"] == 1)
-    assert scene1["htmlStatus"] == "previewing"
-    assert "confirmedMtime" not in scene1
-    assert meta["phase"] == "producing"
-    assert meta["outputStale"] is True
-    html = (project_dir / "scenes" / "scene_01.html").read_text(encoding="utf-8")
-    assert html == "<html>regenerated</html>"
 
 
 # --- render task phase transitions ---------------------------------------------
@@ -695,6 +467,10 @@ class _FakeRenderLoader:
         def _render_project(*args, **kwargs):
             if calls is not None:
                 calls.append({"args": args, "kwargs": kwargs})
+            if result.get("ok"):
+                output = Path(args[0]) / result.get("output", "renders/output.mp4")
+                output.parent.mkdir(parents=True, exist_ok=True)
+                output.write_bytes(b"rendered-video-fixture")
             return result
 
         module.render_project = _render_project
@@ -713,11 +489,14 @@ class _FakeRenderSpec:
 def _patch_render_module(
     monkeypatch: pytest.MonkeyPatch, result: dict, calls: list | None = None
 ) -> None:
+    original = importlib.util.spec_from_file_location
     monkeypatch.setattr(
         importlib.util,
         "spec_from_file_location",
-        lambda *args, **kwargs: _FakeRenderSpec(result, calls),
+        lambda name, path, **kwargs: _FakeRenderSpec(result, calls)
+        if name == "render" else original(name, path, **kwargs),
     )
+    monkeypatch.setattr(server, "_validate_rendered_video", AsyncMock())
 
 
 async def test_render_task_success_marks_project_done(
@@ -1162,29 +941,6 @@ async def test_project_version_restore_recovers_scene_and_keeps_video_stale(
     assert _body(response)["backupVersionId"] != version["id"]
 
 
-async def test_ai_scene_rewrite_returns_undo_version(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
-) -> None:
-    _patch_projects_dir(monkeypatch, tmp_path)
-    project_dir = _setup_confirmed_project(tmp_path)
-    monkeypatch.setattr(server, "_sync_storyboard", lambda *_args, **_kwargs: None)
-
-    async def _rewrite(_project_dir: Path, scene: dict, _requirement: str, _meta: dict):
-        return {**scene, "title": "AI 新标题"}
-
-    monkeypatch.setattr(server, "_rewrite_scene_via_llm", _rewrite)
-    response = await server.handle_video_ai_scene_rewrite(
-        _post_request({"name": "proj", "index": 1, "requirement": "突出重点"})
-    )
-
-    payload = _body(response)
-    assert response.status == 200
-    assert payload["scene"]["title"] == "AI 新标题"
-    assert server._VIDEO_VERSION_ID_RE.fullmatch(payload["undoVersionId"])
-    versions = server._list_video_project_versions(project_dir)
-    assert versions[0]["reason"] == "ai-scene-rewrite"
-
-
 async def test_scene_timeline_api_returns_motion_and_subtitle_tracks(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
@@ -1233,6 +989,26 @@ def test_scene_preview_accepts_semantic_seek_messages() -> None:
     )
     assert "mona-video-seek" in preview
     assert "__monaApplySubtitleTime" in preview
+
+
+def test_scene_preview_embeds_style_and_project_images(tmp_path) -> None:
+    from PIL import Image
+
+    (tmp_path / "assets").mkdir()
+    (tmp_path / "style" / "assets").mkdir(parents=True)
+    Image.new("RGB", (8, 8), "blue").save(tmp_path / "assets" / "cover image.png")
+    Image.new("RGB", (8, 8), "green").save(tmp_path / "style" / "assets" / "brand.webp")
+    html = '<img src="../assets/cover%20image.png"><img src="../style/assets/brand.webp"><style>.bg{background-image:url("../style/assets/brand.webp")}</style>'
+    preview = server._prepare_scene_html_for_preview(html, "项目", 1920, 1080, project_dir=tmp_path)
+    assert preview.count("data:image/webp;base64,") == 2
+    assert "data:image/png;base64," in preview
+    assert "../assets/" not in preview
+    assert "../style/assets/" not in preview
+
+
+def test_scene_preview_rejects_asset_escape(tmp_path) -> None:
+    with pytest.raises(ValueError, match="超出项目"):
+        server._prepare_scene_html_for_preview('<img src="../assets/../../outside.png">', "项目", 1920, 1080, project_dir=tmp_path)
 
 
 async def test_review_comments_block_final_but_not_draft_export(
@@ -1452,99 +1228,6 @@ async def test_unconfirmed_asset_blocks_final_export_at_preflight(
     assert _body(response)["error"] == "ASSET_RIGHTS_BLOCKED"
 
 
-async def test_project_localization_clones_structure_and_translates_content(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
-) -> None:
-    import mona.providers.factory as provider_factory
-
-    _patch_projects_dir(monkeypatch, tmp_path)
-    project_dir = _setup_confirmed_project(tmp_path)
-    meta = _read_meta(project_dir)
-    meta.update(
-        {
-            "language": "zh-CN",
-            "localeGroupId": "course-locales",
-            "narrationEnabled": True,
-            "ttsProvider": "edge",
-            "ttsVoice": "zh-CN-XiaoyiNeural",
-        }
-    )
-    meta["scenes"][0].update(
-        {"title": "欢迎", "visual": "产品画面", "narration": "欢迎学习。"}
-    )
-    meta["scenes"][1].update(
-        {"title": "总结", "visual": "总结画面", "narration": "下次再见。"}
-    )
-    _write_meta(project_dir, meta)
-    (project_dir / "assets").mkdir(exist_ok=True)
-    (project_dir / "assets" / "manifest.json").write_text(
-        json.dumps({"schemaVersion": 1, "assets": []}), encoding="utf-8"
-    )
-
-    class _Provider:
-        async def chat_with_retry(self, **_kwargs):
-            return types.SimpleNamespace(
-                content=json.dumps(
-                    {
-                        "scenes": [
-                            {
-                                "index": 1,
-                                "title": "Welcome",
-                                "visual": "Product visual",
-                                "narration": "Welcome to the course.",
-                            },
-                            {
-                                "index": 2,
-                                "title": "Summary",
-                                "visual": "Summary visual",
-                                "narration": "See you next time.",
-                            },
-                        ]
-                    }
-                )
-            )
-
-    monkeypatch.setattr(
-        provider_factory,
-        "load_provider_snapshot",
-        lambda: types.SimpleNamespace(provider=_Provider(), model="test"),
-    )
-
-    response = await server.handle_video_project_localize(
-        _post_request({"name": "proj", "targetLanguage": "en-US"})
-    )
-
-    assert response.status == 201
-    localized_dir = tmp_path / "video_projects" / "proj-en_us"
-    localized = _read_meta(localized_dir)
-    assert localized["language"] == "en-US"
-    assert localized["sourceProject"] == "proj"
-    assert localized["localeGroupId"] == "course-locales"
-    assert localized["ttsVoice"] == "en-US-JennyNeural"
-    assert localized["phase"] == "storyboard"
-    assert localized["storyboardLocked"] is False
-    assert localized["scenes"][0]["title"] == "Welcome"
-    assert localized["scenes"][0]["htmlStatus"] == "pending"
-    assert not list((localized_dir / "scenes").glob("*.html"))
-    assert (localized_dir / "assets" / "manifest.json").is_file()
-    assert "Welcome" in (localized_dir / "storyboard.md").read_text(encoding="utf-8")
-    assert _read_meta(project_dir)["scenes"][0]["title"] == "欢迎"
-
-
-async def test_project_localization_rejects_same_language(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
-) -> None:
-    _patch_projects_dir(monkeypatch, tmp_path)
-    project_dir = _setup_confirmed_project(tmp_path)
-    meta = _read_meta(project_dir)
-    meta["language"] = "zh-CN"
-    _write_meta(project_dir, meta)
-    response = await server.handle_video_project_localize(
-        _post_request({"name": "proj", "targetLanguage": "zh-CN"})
-    )
-    assert response.status == 409
-
-
 async def test_projects_list_returns_has_video(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
@@ -1652,7 +1335,9 @@ async def test_render_task_synthesizes_narration_per_scene(
     for s in meta["scenes"]:
         s["narration"] = f"旁白 {s['index']}"
     _write_meta(project_dir, meta)
-    _patch_render_module(monkeypatch, {"ok": True, "output": "renders/output.mp4"})
+    _patch_render_module(
+        monkeypatch, {"ok": True, "output": "renders/output.mp4", "audio": True}
+    )
 
     calls: list[int] = []
 
@@ -1677,13 +1362,20 @@ async def test_render_task_synthesizes_narration_per_scene(
         (project_dir / ".render_status.json").read_text(encoding="utf-8")
     )
     assert status["stage"] == "done"
-    assert status["message"] == "渲染完成"
+    assert status["message"] == "导出完成"
 
 
-async def test_render_task_narration_failure_degrades_gracefully(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+@pytest.mark.parametrize(
+    ("failed_indices", "failed_audio"),
+    [({1, 2}, None), ({1, 2}, b""), ({2}, None)],
+)
+async def test_render_task_narration_failure_stops_export(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    failed_indices: set[int],
+    failed_audio: bytes | None,
 ) -> None:
-    """全部场景 TTS 失败不阻塞导出；done message 注明无声降级。"""
+    """部分或全部旁白失败都停止导出，保留旧视频和成功场景的音频。"""
     _patch_projects_dir(monkeypatch, tmp_path)
     project_dir = _setup_confirmed_project(tmp_path)
     meta = _read_meta(project_dir)
@@ -1692,10 +1384,22 @@ async def test_render_task_narration_failure_degrades_gracefully(
     for s in meta["scenes"]:
         s["narration"] = f"旁白 {s['index']}"
     _write_meta(project_dir, meta)
-    _patch_render_module(monkeypatch, {"ok": True, "output": "renders/output.mp4"})
+    previous_output = project_dir / "renders" / "output.mp4"
+    previous_output.write_bytes(b"previous-video")
+    render_calls: list = []
+    _patch_render_module(
+        monkeypatch, {"ok": True, "output": "renders/output.mp4"}, render_calls
+    )
 
-    async def _fail_tts(*args, **kwargs):
-        return None
+    async def _fail_tts(pdir: Path, scene: dict, _meta: dict):
+        if scene["index"] in failed_indices:
+            return failed_audio
+        audio_dir = pdir / "audio"
+        audio_dir.mkdir(exist_ok=True)
+        path = audio_dir / f"scene_{scene['index']:02d}.mp3"
+        path.write_bytes(b"mp3")
+        scene["audioMtime"] = path.stat().st_mtime
+        return b"mp3"
 
     monkeypatch.setattr(server, "_synthesize_scene_narration", _fail_tts)
     await server._run_render_task(project_dir, 0, "standard")
@@ -1703,8 +1407,16 @@ async def test_render_task_narration_failure_degrades_gracefully(
     status = json.loads(
         (project_dir / ".render_status.json").read_text(encoding="utf-8")
     )
-    assert status["stage"] == "done"
-    assert "旁白合成失败，导出为无声视频" in status["message"]
+    assert status["stage"] == "error"
+    failed_scenes = "、".join(str(index) for index in sorted(failed_indices))
+    assert f"场景 {failed_scenes} 的旁白合成失败" in status["message"]
+    assert "视频未导出" in status["message"]
+    assert render_calls == []
+    assert previous_output.read_bytes() == b"previous-video"
+    persisted = _read_meta(project_dir)
+    assert persisted["phase"] == "exportable"
+    if 1 not in failed_indices:
+        assert persisted["scenes"][0]["audioMtime"] is not None
 
 
 async def test_render_task_removes_orphan_and_stale_audio(
@@ -1723,7 +1435,9 @@ async def test_render_task_removes_orphan_and_stale_audio(
     audio_dir.mkdir(exist_ok=True)
     (audio_dir / "scene_99.mp3").write_bytes(b"orphan")
     (audio_dir / "narration.mp3").write_bytes(b"stale")
-    _patch_render_module(monkeypatch, {"ok": True, "output": "renders/output.mp4"})
+    _patch_render_module(
+        monkeypatch, {"ok": True, "output": "renders/output.mp4", "audio": True}
+    )
 
     async def _fake_tts(pdir: Path, scene: dict, m: dict, *, force: bool = False):
         p = pdir / "audio" / f"scene_{scene['index']:02d}.mp3"
@@ -1738,6 +1452,56 @@ async def test_render_task_removes_orphan_and_stale_audio(
     assert not (audio_dir / "narration.mp3").exists()  # 删除后由 render 重拼
     assert (audio_dir / "scene_01.mp3").is_file()
     assert (audio_dir / "scene_02.mp3").is_file()
+
+
+async def test_render_task_rejects_output_without_required_narration(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    _patch_projects_dir(monkeypatch, tmp_path)
+    project_dir = _setup_confirmed_project(tmp_path)
+    meta = _read_meta(project_dir)
+    meta["narrationEnabled"] = True
+    for scene in meta["scenes"]:
+        scene["narration"] = "旁白"
+    _write_meta(project_dir, meta)
+    previous_output = project_dir / "renders" / "output.mp4"
+    previous_output.write_bytes(b"previous-video")
+    _patch_render_module(
+        monkeypatch,
+        {"ok": True, "output": "renders/output.pending.mp4", "audio": False},
+    )
+    monkeypatch.setattr(server, "_validate_rendered_video", AsyncMock(side_effect=RuntimeError("旁白未加入视频，视频未导出。请重试导出。")))
+    monkeypatch.setattr(
+        server, "_synthesize_scene_narration", AsyncMock(return_value=b"mp3")
+    )
+
+    await server._run_render_task(project_dir, 0, "standard")
+
+    status = server._read_render_status(project_dir)
+    assert status["stage"] == "error"
+    assert "旁白未加入视频" in status["message"]
+    assert previous_output.read_bytes() == b"previous-video"
+    assert _read_meta(project_dir)["phase"] == "exportable"
+
+
+async def test_synthesize_scene_narration_rejects_empty_provider_audio(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    import mona.providers.tts as tts_mod
+
+    provider = MagicMock()
+    provider.synthesize_with_timings = AsyncMock(
+        return_value=tts_mod.TTSSynthesisResult(audio=b"")
+    )
+    monkeypatch.setattr(tts_mod, "EdgeTTSProvider", lambda **_kwargs: provider)
+    project_dir = _make_project(tmp_path)
+    scene = {"index": 1, "narration": "旁白"}
+
+    audio = await server._synthesize_scene_narration(project_dir, scene, {})
+
+    assert audio is None
+    assert not (project_dir / "audio" / "scene_01.mp3").exists()
+    assert "audioMtime" not in scene
 
 
 async def test_synthesize_scene_narration_cache_hit_skips_tts(
@@ -2031,7 +1795,7 @@ async def test_render_task_forwards_progress_to_status_file(
                     progress_cb("rendering", 20.0, "正在渲染场景 1/2 · 帧 30/300")
                     snapshots.append(
                         json.loads(
-                            (Path(path) / ".render_status.json").read_text(
+                            (project_dir / ".render_status.json").read_text(
                                 encoding="utf-8"
                             )
                         )
@@ -2045,11 +1809,14 @@ async def test_render_task_forwards_progress_to_status_file(
             super().__init__({})
             self.loader = _ProgressLoader()
 
+    original = importlib.util.spec_from_file_location
     monkeypatch.setattr(
         importlib.util,
         "spec_from_file_location",
-        lambda *args, **kwargs: _ProgressSpec(),
+        lambda name, path, **kwargs: _ProgressSpec()
+        if name == "render" else original(name, path, **kwargs),
     )
+    monkeypatch.setattr(server, "_validate_rendered_video", AsyncMock())
     await server._run_render_task(project_dir, 0, "standard")
 
     assert len(snapshots) == 1
@@ -2060,6 +1827,251 @@ async def test_render_task_forwards_progress_to_status_file(
 
 
 # --- storyboard dual-source consistency (P0-1) ------------------------------
+
+
+@pytest.mark.parametrize("template_id", ["minimal-business", "tech-dark", "editorial-magazine", "knowledge-cards"])
+async def test_single_video_uses_selected_template(monkeypatch, tmp_path, template_id) -> None:
+    _patch_projects_dir(monkeypatch, tmp_path)
+    response = await server.handle_video_project_create(_post_request({"name": "chosen", "templateId": template_id}))
+    assert response.status == 200
+    project = tmp_path / "video_projects" / "chosen"
+    assert _read_meta(project)["templateId"] == template_id
+    style = json.loads((project / "style" / "design-system.json").read_text(encoding="utf-8"))
+    assert style["baseTemplateId"] == template_id
+
+
+async def test_single_video_reuses_style_without_becoming_an_episode(monkeypatch, tmp_path) -> None:
+    from mona.video_style import create_series, lock_style
+
+    _patch_projects_dir(monkeypatch, tmp_path)
+    monkeypatch.setattr(server, "get_workspace_path", lambda: tmp_path)
+    series = create_series(tmp_path, "custom", "个人模板", template_id="minimal-business")
+    locked = lock_style(tmp_path, series["id"], expected_revision=0)
+    response = await server.handle_video_project_create(_post_request({"name": "single", "styleSeriesId": series["id"], "styleVersion": locked["version"], "aspectVariant": "16:9", "narrationEnabled": True, "ttsProvider": "custom"}))
+    assert response.status == 200
+    project = tmp_path / "video_projects" / "single"
+    meta = _read_meta(project)
+    assert meta["styleSourceSeriesId"] == "custom"
+    assert "seriesId" not in meta
+    assert "episodeNumber" not in meta
+    assert meta["ttsVoice"] == ""
+    assert meta["structuredCompiler"] is False
+    assert meta["authoringMode"] == "remotion"
+    assert (project / "style" / "design-system.json").is_file()
+
+
+async def test_narration_cannot_overwrite_edits_made_during_synthesis(monkeypatch, tmp_path) -> None:
+    import mona.providers.tts as tts
+
+    _patch_projects_dir(monkeypatch, tmp_path)
+    project = _setup_confirmed_project(tmp_path)
+    original = _read_meta(project)
+    original["scenes"][0]["narration"] = "旧旁白"
+    _write_meta(project, original)
+
+    class Provider:
+        async def synthesize_with_timings(self, *_args, **_kwargs):
+            edited = _read_meta(project)
+            edited["scenes"][0]["narration"] = "新旁白"
+            _write_meta(project, edited)
+            return tts.TTSSynthesisResult(audio=b"old-audio")
+
+    monkeypatch.setattr(tts, "EdgeTTSProvider", lambda **_kwargs: Provider())
+    with pytest.raises(server._VideoNarrationInputChangedError):
+        await server._synthesize_scene_narration(project, original["scenes"][0], original)
+    assert _read_meta(project)["scenes"][0]["narration"] == "新旁白"
+    assert not (project / "audio" / "scene_01.mp3").exists()
+
+
+@pytest.mark.parametrize("project_provider,global_provider", [
+    ("custom", "custom"), ("custom", "minimax"), ("custom", "cosyvoice"),
+    ("minimax", "minimax"), ("cosyvoice", "cosyvoice"),
+])
+def test_video_narration_resolves_configured_protocol(monkeypatch, project_provider, global_provider) -> None:
+    import mona.config.loader as loader
+    import mona.providers.tts as tts
+    from mona.config.schema import ChannelsConfig
+
+    channels = ChannelsConfig(tts_provider=global_provider, tts_api_base="https://speech.example.test", tts_api_key="test-only", tts_model="test-model", tts_voice="test-voice")
+    monkeypatch.setattr(loader, "load_config", lambda: types.SimpleNamespace(channels=channels))
+    name, settings = server._video_narration_settings({"ttsProvider": project_provider})
+    provider = tts.get_tts_provider(name, **settings)
+    assert provider.name == global_provider
+    assert provider.voice == "test-voice"
+    assert provider.api_key == "test-only"
+    assert provider.model == "test-model"
+    assert provider.api_url.startswith("https://speech.example.test/")
+
+
+def test_video_narration_preserves_legacy_local_custom_settings(monkeypatch) -> None:
+    import mona.config.loader as loader
+    from mona.config.schema import ChannelsConfig
+
+    channels = ChannelsConfig(tts_provider="minimax", tts_api_base="https://global.example.test", tts_api_key="global-test-only", tts_model="global-model", tts_voice="global-voice")
+    monkeypatch.setattr(loader, "load_config", lambda: types.SimpleNamespace(channels=channels))
+    name, settings = server._video_narration_settings({"ttsProvider": "custom", "ttsApiBase": "https://legacy.example.test", "ttsApiKey": "legacy-test-only", "ttsModel": "legacy-model", "ttsVoice": "legacy-voice"})
+    assert name == "custom"
+    assert settings == {"api_base": "https://legacy.example.test", "api_key": "legacy-test-only", "model": "legacy-model", "voice": "legacy-voice", "rate": "+0%"}
+
+
+@pytest.mark.parametrize("field,value", [
+    ("tts_api_base", "https://other.example.test"), ("tts_api_key", "changed-test-only"),
+    ("tts_model", "other-model"), ("tts_voice", "other-voice"), ("tts_provider", "minimax"),
+])
+async def test_video_narration_cache_tracks_effective_global_settings(monkeypatch, tmp_path, field, value) -> None:
+    import mona.config.loader as loader
+    import mona.providers.tts as tts
+    from mona.config.schema import ChannelsConfig
+
+    channels = ChannelsConfig(tts_provider="custom", tts_api_base="https://speech.example.test", tts_api_key="test-only", tts_voice="test-voice")
+    monkeypatch.setattr(loader, "load_config", lambda: types.SimpleNamespace(channels=channels))
+    calls = []
+
+    class Provider:
+        async def synthesize_with_timings(self, *_args, **_kwargs):
+            return tts.TTSSynthesisResult(audio=b"audio", boundaries=({"text": "旁白", "startMs": 0, "endMs": 500},), timing_source="provider-boundary")
+
+    def create_provider(name, **settings):
+        calls.append((name, settings))
+        return Provider()
+
+    monkeypatch.setattr(tts, "get_tts_provider", create_provider)
+    monkeypatch.setattr(server, "_extend_scene_for_audio", AsyncMock(return_value=False))
+    project = _make_project(tmp_path)
+    scene = {"index": 1, "duration": 2, "narration": "旁白"}
+    meta = {"ttsProvider": "custom", "scenes": [scene]}
+    _write_meta(project, meta)
+    assert await server._synthesize_scene_narration(project, scene, meta) == b"audio"
+    first_hash = scene["audioInputHash"]
+    assert await server._synthesize_scene_narration(project, scene, meta) == b"audio"
+    assert len(calls) == 1
+    setattr(channels, field, value)
+    assert await server._synthesize_scene_narration(project, scene, meta) == b"audio"
+    assert len(calls) == 2
+    assert scene["audioInputHash"] != first_hash
+    assert "test-only" not in json.dumps(scene)
+
+
+async def test_video_narration_drops_audio_after_global_settings_change(monkeypatch, tmp_path) -> None:
+    import mona.config.loader as loader
+    import mona.providers.tts as tts
+    from mona.config.schema import ChannelsConfig
+
+    channels = ChannelsConfig(tts_provider="custom", tts_api_base="https://speech.example.test", tts_api_key="test-only")
+    monkeypatch.setattr(loader, "load_config", lambda: types.SimpleNamespace(channels=channels))
+
+    class Provider:
+        async def synthesize_with_timings(self, *_args, **_kwargs):
+            channels.tts_api_base = "https://changed.example.test"
+            return tts.TTSSynthesisResult(audio=b"old-settings-audio")
+
+    monkeypatch.setattr(tts, "get_tts_provider", lambda *_args, **_kwargs: Provider())
+    project = _make_project(tmp_path)
+    scene = {"index": 1, "duration": 2, "narration": "旁白"}
+    meta = {"ttsProvider": "custom", "scenes": [scene]}
+    _write_meta(project, meta)
+    with pytest.raises(server._VideoNarrationInputChangedError):
+        await server._synthesize_scene_narration(project, scene, meta)
+    assert not (project / "audio" / "scene_01.mp3").exists()
+
+
+async def test_pending_scene_does_not_preview_old_html(monkeypatch, tmp_path) -> None:
+    _patch_projects_dir(monkeypatch, tmp_path)
+    project = _setup_confirmed_project(tmp_path)
+    meta = _read_meta(project)
+    meta["scenes"][0]["htmlStatus"] = "pending"
+    _write_meta(project, meta)
+    response = await server.handle_video_project_scene_preview(MagicMock(query={"name": "proj", "index": "1"}))
+    assert response.status == 404
+    assert _body(response)["needsGeneration"] is True
+
+
+async def test_project_name_cannot_select_projects_root(monkeypatch, tmp_path) -> None:
+    _patch_projects_dir(monkeypatch, tmp_path)
+    (tmp_path / "video_projects").mkdir()
+    project, error = server._video_project_dir_or_404(".")
+    assert project is None
+    assert error.status == 400
+    response = await server.handle_video_project_create(_post_request({"name": "."}))
+    assert response.status == 400
+    assert not (tmp_path / "video_projects" / "meta.json").exists()
+
+
+def test_merge_unchanged_scene_retains_cache_and_confirmation() -> None:
+    content = {"index": 1, "title": "同一个场景", "role": "content", "duration": 5, "assets": []}
+    previous = {**content, "htmlStatus": "confirmed", "confirmedMtime": 123, "audioInputHash": "hash"}
+    updated = {**content, "duration": 5.0, "visual": "", "animation": "", "narration": ""}
+    server._merge_scene_status([previous], [updated])
+    assert updated["htmlStatus"] == "confirmed"
+    assert updated["confirmedMtime"] == 123
+    assert updated["audioInputHash"] == "hash"
+
+
+async def test_narration_settings_invalidates_audio_without_discarding_scene(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    _patch_projects_dir(monkeypatch, tmp_path)
+    project_dir = _setup_confirmed_project(tmp_path)
+    meta = _read_meta(project_dir)
+    meta.update({"narrationEnabled": True, "ttsVoice": "old-voice", "subtitleMode": "burned",
+                 "requirePlanApproval": True, "planRevision": 3, "approvedPlanRevision": 3})
+    meta["scenes"][0].update({"audioMtime": 123, "audioInputHash": "old-hash"})
+    _write_meta(project_dir, meta)
+    (project_dir / "audio").mkdir()
+    (project_dir / "audio" / "scene_01.mp3").write_bytes(b"old-audio")
+    response = await server.handle_video_project_settings(_post_request({"name": "proj", "ttsVoice": "new-voice"}))
+    assert response.status == 200
+    saved = _read_meta(project_dir)
+    assert saved["ttsVoice"] == "new-voice"
+    assert saved["outputStale"] is True
+    assert saved["phase"] == "exportable"
+    assert saved["planRevision"] == saved["approvedPlanRevision"] == 3
+    assert saved["scenes"][0]["htmlStatus"] == "previewing"
+    assert "audioMtime" not in saved["scenes"][0]
+    assert not (project_dir / "audio" / "scene_01.mp3").exists()
+    assert (project_dir / "scenes" / "scene_01.html").read_text() == "<html>scene 1</html>"
+
+
+@pytest.mark.parametrize("settings", [{"narrationEnabled": "false"}, {"ttsProvider": "bad"}, {"subtitleMode": "bad"}, {"ttsRate": "fast"}])
+async def test_narration_settings_rejects_invalid_fields(monkeypatch, tmp_path, settings) -> None:
+    _patch_projects_dir(monkeypatch, tmp_path)
+    project_dir = _setup_confirmed_project(tmp_path)
+    original = (project_dir / "meta.json").read_bytes()
+    response = await server.handle_video_project_settings(_post_request({"name": "proj", **settings}))
+    assert response.status == 400
+    assert (project_dir / "meta.json").read_bytes() == original
+
+
+async def test_export_does_not_clear_staleness_after_concurrent_edit(monkeypatch, tmp_path) -> None:
+    _patch_projects_dir(monkeypatch, tmp_path)
+    project_dir = _setup_confirmed_project(tmp_path)
+    _patch_render_module(monkeypatch, {"ok": True, "output": "renders/output.pending.mp4"})
+
+    async def edit_while_validating(*_args):
+        meta = _read_meta(project_dir)
+        meta["scenes"][0]["narration"] = "制作期间修改的新旁白"
+        meta["scenes"][0]["htmlStatus"] = "pending"
+        meta["phase"] = "producing"
+        _write_meta(project_dir, meta)
+
+    monkeypatch.setattr(server, "_validate_rendered_video", edit_while_validating)
+    await server._run_render_task(project_dir, 30, "standard")
+    saved = _read_meta(project_dir)
+    assert saved["hasVideo"] is True
+    assert saved["outputStale"] is True
+    assert saved["phase"] == "producing"
+    assert saved["scenes"][0]["narration"] == "制作期间修改的新旁白"
+
+
+async def test_quality_check_failure_cannot_fall_back(monkeypatch, tmp_path) -> None:
+    _patch_projects_dir(monkeypatch, tmp_path)
+    project_dir = _setup_confirmed_project(tmp_path)
+    calls: list = []
+    _patch_render_module(monkeypatch, {"ok": True}, calls)
+    monkeypatch.setattr(server, "_run_hyperframes_engine", AsyncMock(return_value={"ok": False, "error": "HyperFrames check failed"}))
+    await server._run_render_task(project_dir, 30, "standard", "auto", True)
+    assert calls == []
+    assert json.loads((project_dir / ".render_status.json").read_text(encoding="utf-8"))["stage"] == "error"
 
 
 _STORYBOARD_MD = """# 分镜
@@ -2087,7 +2099,7 @@ def _get_storyboard_request(name: str) -> MagicMock:
 async def test_storyboard_get_reparses_when_storyboard_md_newer(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
-    """AI 裸写 storyboard.md（mtime > scenesUpdatedAt）→ GET 重解析并保留旧状态。"""
+    """AI 改写分镜内容后，旧的画面确认和配音不再属于新内容。"""
     _patch_projects_dir(monkeypatch, tmp_path)
     project_dir = _make_project(tmp_path)
     _write_meta(project_dir, {
@@ -2116,11 +2128,10 @@ async def test_storyboard_get_reparses_when_storyboard_md_newer(
     assert payload["source"] == "storyboard"
     scenes = payload["scenes"]
     assert [s["title"] for s in scenes] == ["新开场", "新场景二"]
-    # index 1 保留运行状态；index 2 是新解析内容 + 保留旧 ready 状态
-    assert scenes[0]["htmlStatus"] == "confirmed"
-    assert scenes[0]["confirmedMtime"] == 123.0
-    assert scenes[0]["audioMtime"] == 456.0
-    assert scenes[1]["htmlStatus"] == "ready"
+    assert scenes[0]["htmlStatus"] == "pending"
+    assert "confirmedMtime" not in scenes[0]
+    assert "audioMtime" not in scenes[0]
+    assert scenes[1]["htmlStatus"] == "pending"
     # 重解析结果缓存回 meta.json
     meta = _read_meta(project_dir)
     assert meta["scenes"][0]["title"] == "新开场"
@@ -2175,3 +2186,80 @@ async def test_storyboard_get_legacy_project_reparses_once(
     )
     assert _body(second)["source"] == "meta"
     assert _body(second)["scenes"][0]["title"] == "新开场"
+
+
+async def test_authored_scene_reorder_and_remove_keep_correct_sources_and_no_extra_render_files(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    from mona.api.video_director import OWNER_HEADER, handle_video_agent
+    from mona.materials.auth import SERVICES_TOKEN_HEADER, get_services_token
+
+    _patch_projects_dir(monkeypatch, tmp_path)
+    response = await server.handle_video_project_create(_post_request({"name": "ordered"}))
+    assert response.status == 200
+    project = tmp_path / "video_projects" / "ordered"
+    legacy = _read_meta(project)
+    legacy.update({"requirePlanApproval": False, "authoringMode": "agent"})
+    _write_meta(project, legacy)
+    (project / ".chat_id").write_text("director-chat", encoding="utf-8")
+
+    async def action(payload: dict):
+        request = _post_request({"name": "ordered", **payload})
+        request.headers = {SERVICES_TOKEN_HEADER: get_services_token(), OWNER_HEADER: "director-chat"}
+        return await handle_video_agent(request)
+
+    for index, label in enumerate(("FIRST", "SECOND", "THIRD"), start=1):
+        (project / "drafts" / f"scene_{index:02d}.html").write_text(f'<svg><text>{label}</text></svg>', encoding="utf-8")
+        response = await action({"action": "sync", "scene_index": index, "scene": {"title": label, "duration": 3}})
+        assert response.status == 200
+        (project / "audio" / f"scene_{index:02d}.mp3").write_bytes(b"old voice cache")
+    (project / "renders" / "output.mp4").write_bytes(b"old finished file")
+
+    response = await action({"action": "reorder", "order": [3, 1, 2]})
+    assert response.status == 200
+    meta = _read_meta(project)
+    assert [scene["title"] for scene in meta["scenes"]] == ["THIRD", "FIRST", "SECOND"]
+    assert not list((project / "audio").glob("scene_*.mp3"))
+    for scene in meta["scenes"]:
+        assert scene["title"] in (project / scene["sourcePath"]).read_text(encoding="utf-8")
+        assert scene["title"] in (project / scene["htmlPath"]).read_text(encoding="utf-8")
+        assert server._video_scene_ready(project, scene)
+    assert meta["outputStale"] is True
+
+    response = await action({"action": "remove", "scene_index": 2})
+    assert response.status == 200
+    meta = _read_meta(project)
+    assert [scene["title"] for scene in meta["scenes"]] == ["THIRD", "SECOND"]
+    assert not (project / "scenes" / "scene_03.html").exists()
+    assert not (project / "scene_sources" / "scene_03.html").exists()
+    assert all(server._video_scene_ready(project, scene) for scene in meta["scenes"])
+    assert meta["phase"] == "storyboard"
+    assert meta["requirePlanApproval"] is True
+
+
+async def test_director_rejects_invalid_combined_settings_without_partial_changes(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    from mona.api.video_director import OWNER_HEADER, handle_video_agent
+    from mona.materials.auth import SERVICES_TOKEN_HEADER, get_services_token
+
+    _patch_projects_dir(monkeypatch, tmp_path)
+    await server.handle_video_project_create(_post_request({"name": "settings"}))
+    project = tmp_path / "video_projects" / "settings"
+    (project / ".chat_id").write_text("director-chat", encoding="utf-8")
+    before = (project / "meta.json").read_bytes()
+    request = _post_request({"action": "settings", "name": "settings", "settings": {
+        "resolution": "1080x1920", "ttsRate": "invalid rate",
+    }})
+    request.headers = {SERVICES_TOKEN_HEADER: get_services_token(), OWNER_HEADER: "director-chat"}
+    response = await handle_video_agent(request)
+    assert response.status == 422
+    assert (project / "meta.json").read_bytes() == before
+
+    request = _post_request({"action": "assets", "name": "settings", "asset": {
+        "name": "another-project", "sourcePath": str(tmp_path / "image.png"),
+    }})
+    request.headers = {SERVICES_TOKEN_HEADER: get_services_token(), OWNER_HEADER: "director-chat"}
+    response = await handle_video_agent(request)
+    assert response.status == 422
+    assert not (tmp_path / "video_projects" / "another-project").exists()

@@ -3,8 +3,13 @@
 import tomllib
 from pathlib import Path
 
-from PyInstaller.utils.hooks import collect_all, collect_submodules, copy_metadata
 from packaging.version import Version
+from PyInstaller.utils.hooks import (
+    collect_all,
+    collect_data_files,
+    collect_submodules,
+    copy_metadata,
+)
 
 datas = []
 binaries = []
@@ -32,6 +37,12 @@ for package in (
     datas += package_datas
     binaries += package_binaries
     hiddenimports += package_hidden
+
+# Default TTS imports Edge TTS dynamically; include its package resources and
+# distribution metadata explicitly so the packaged Gateway can discover it.
+hiddenimports += collect_submodules("edge_tts")
+datas += collect_data_files("edge_tts")
+datas += copy_metadata("edge-tts")
 
 # The pinned sandbox component must reach both fresh and upgraded desktops.
 sandbox_assets = Path("mona/development/sandbox_node")
@@ -72,6 +83,10 @@ datas = [
 
 # Skills execute these files by path; Python's import archive is not sufficient.
 skill_root = Path("mona/skills")
+video_runtime = skill_root / "mona-video/runtime"
+if not (video_runtime / "remotion.js").is_file():
+    raise FileNotFoundError("Video animation runtime missing: run npm run build:video-runtime in webui")
+datas.append((str(video_runtime), video_runtime.as_posix()))
 for path in sorted(skill_root.rglob("*.py")):
     if not {"tests", "test", "__pycache__", "node_modules", ".git"}.intersection(
         path.relative_to(skill_root).parts

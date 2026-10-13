@@ -59,17 +59,19 @@ export function PanelCard({
   children,
   className,
   bodyClassName,
+  headerClassName,
   action,
 }: {
   title: string;
   children: ReactNode;
   className?: string;
   bodyClassName?: string;
+  headerClassName?: string;
   action?: ReactNode;
 }) {
   return (
     <section className={cn("min-w-0 rounded-lg border border-border/60 bg-card", className)}>
-      <div className="flex min-h-11 items-center justify-between border-b border-border/60 px-4 py-2.5">
+      <div className={cn("flex min-h-11 items-center justify-between border-b border-border/60 px-4 py-2.5", headerClassName)}>
         <h2 className="text-body font-semibold">{title}</h2>
         {action}
       </div>

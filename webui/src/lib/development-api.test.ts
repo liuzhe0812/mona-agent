@@ -83,6 +83,23 @@ it("does not retry a malformed success response", async () => {
   expect(transport.fetch).toHaveBeenCalledTimes(1);
 });
 
+it("selects the ordinary chat model source through the development API", async () => {
+  const settings = { agent: { executor: "codex", native_model: "fixture-model" } };
+  transport.fetch.mockResolvedValue(json(settings));
+
+  await expect(developmentApi.selectWorkModelSource({
+    executor: "codex", model: "fixture-model", effort: "high",
+  })).resolves.toEqual(settings);
+
+  expect(transport.fetch).toHaveBeenCalledWith(
+    "http://localhost/api/development/work-model-source",
+    expect.objectContaining({
+      method: "PUT",
+      body: JSON.stringify({ executor: "codex", model: "fixture-model", effort: "high" }),
+    }),
+  );
+});
+
 it("keeps a non-JSON response failure visible after retries are exhausted", async () => {
   transport.fetch.mockImplementation(async () => new Response("temporarily unavailable", { status: 503 }));
   const check = expect(developmentApi.projects()).rejects.toBeInstanceOf(DevelopmentApiError);

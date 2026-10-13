@@ -2,8 +2,10 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 import re
+from collections.abc import Coroutine
 from typing import Any
 
 from aiohttp import web
@@ -510,6 +512,24 @@ async def generate_system_plan(
     }
 
 
+async def _await_analysis_request(
+    request: web.Request,
+    operation: Coroutine[Any, Any, Any],
+) -> Any:
+    task = asyncio.create_task(operation)
+    try:
+        while not task.done():
+            transport = request.transport
+            if transport is None or transport.is_closing():
+                raise asyncio.CancelledError
+            await asyncio.wait({task}, timeout=0.1)
+        return task.result()
+    finally:
+        if not task.done():
+            task.cancel()
+        await asyncio.gather(task, return_exceptions=True)
+
+
 async def handle_system_plan(request: web.Request) -> web.Response:
     """Gateway endpoint for the System sidebar's read-only planning request."""
     try:
@@ -530,7 +550,11 @@ async def handle_system_plan(request: web.Request) -> web.Response:
     config = getattr(agent_loop, "config", None)
     model = getattr(config, "model", None) or getattr(agent_loop, "model_name", None)
     try:
-        return web.json_response(await generate_system_plan(provider, goal, evidence, model=model))
+        result = await _await_analysis_request(
+            request,
+            generate_system_plan(provider, goal, evidence, model=model),
+        )
+        return web.json_response(result)
     except ValueError as error:
         return web.json_response({"error": str(error)}, status=422)
     except Exception as error:
@@ -557,7 +581,11 @@ async def handle_system_diagnose(request: web.Request) -> web.Response:
     config = getattr(agent_loop, "config", None)
     model = getattr(config, "model", None) or getattr(agent_loop, "model_name", None)
     try:
-        return web.json_response(await generate_diagnostic_report(provider, symptom, evidence, model=model))
+        result = await _await_analysis_request(
+            request,
+            generate_diagnostic_report(provider, symptom, evidence, model=model),
+        )
+        return web.json_response(result)
     except ValueError as error:
         return web.json_response({"error": str(error)}, status=422)
     except Exception as error:
@@ -584,9 +612,11 @@ async def handle_storage_analyze(request: web.Request) -> web.Response:
     config = getattr(agent_loop, "config", None)
     model = getattr(config, "model", None) or getattr(agent_loop, "model_name", None)
     try:
-        return web.json_response(
-            await generate_storage_assessment(provider, goal, evidence, model=model)
+        result = await _await_analysis_request(
+            request,
+            generate_storage_assessment(provider, goal, evidence, model=model),
         )
+        return web.json_response(result)
     except ValueError as error:
         return web.json_response({"error": str(error)}, status=422)
     except Exception as error:

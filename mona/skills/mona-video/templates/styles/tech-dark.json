@@ -1,20 +1,20 @@
 {
   "schemaVersion": 1,
   "id": "tech-dark",
-  "name": "霓虹智核",
-  "description": "深色科技发布风格，以清晰的信息分区、冷色标尺和低干扰数据面板承载 AI、软件与数字化内容。",
+  "name": "专业深色",
+  "description": "深色背景、清晰文字与少量冷色重点，适合科技和工具内容。",
   "baseTemplateId": "tech-dark",
   "mode": "dark",
   "tokens": {
     "colors": {
-      "primary": "#7A4DFF",
-      "secondary": "#19D8FF",
-      "accent": "#F338FF",
-      "background": "#050816",
-      "surface": "#10172B",
-      "textPrimary": "#F5F8FF",
-      "textSecondary": "#B5C0D8",
-      "border": "#26345A",
+      "primary": "#91B2E8",
+      "secondary": "#A6C8EF",
+      "accent": "#91B2E8",
+      "background": "#101318",
+      "surface": "#1A1F27",
+      "textPrimary": "#F2F4F7",
+      "textSecondary": "#C0C5CE",
+      "border": "#333B46",
       "success": "#44E0B6",
       "warning": "#FFC857",
       "error": "#FF6B9A"
@@ -22,19 +22,19 @@
     "typography": {
       "headingFamily": "Noto Sans SC",
       "bodyFamily": "Noto Sans SC",
-      "scale": "large",
-      "headingWeight": 800,
-      "bodyWeight": 500,
-      "headingLineHeight": 1.08,
+      "scale": "standard",
+      "headingWeight": 700,
+      "bodyWeight": 400,
+      "headingLineHeight": 1.15,
       "bodyLineHeight": 1.5
     },
     "shape": {
-      "cardRadius": 12,
-      "cardStyle": "glass",
+      "cardRadius": 8,
+      "cardStyle": "solid",
       "density": "standard",
-      "shadow": "glow",
+      "shadow": "none",
       "borderWidth": 1,
-      "shadowOpacity": 0.3
+      "shadowOpacity": 0
     },
     "spacing": {
       "unit": 8,
@@ -61,14 +61,14 @@
     "quote-terminal",
     "outro-brand"
   ],
-  "allowedAnimations": ["fade-rise", "stagger-rise", "soft-pulse", "cross-fade"],
+  "allowedAnimations": ["fade-rise", "stagger-rise", "cross-fade"],
   "motion": {
-    "intensity": "active",
+    "intensity": "restrained",
     "enterPreset": "fade-rise",
-    "emphasisPreset": "soft-pulse",
+    "emphasisPreset": "fade-rise",
     "transitionPreset": "cross-fade",
-    "enterDurationMs": 360,
-    "staggerMs": 60,
+    "enterDurationMs": 420,
+    "staggerMs": 0,
     "transitionDurationMs": 420
   },
   "backgrounds": {
@@ -76,12 +76,12 @@
       "assetPolicy": "fixed",
       "fit": "cover",
       "focalPoint": {"x": 0.5, "y": 0.45},
-      "overlay": {"type": "linear-gradient", "color": "#050816", "opacity": 0.56, "direction": "left-to-right"},
+      "overlay": {"type": "solid", "color": "#101318", "opacity": 0.9, "direction": "none"},
       "blur": 0,
-      "tint": 0.12,
+      "tint": 0,
       "contrastMode": "auto",
       "safeArea": {"top": 0.1, "right": 0.08, "bottom": 0.12, "left": 0.08},
-      "fallback": "#050816"
+      "fallback": "#101318"
     },
     "roles": {
       "cover": {"inherit": "default"},
@@ -94,7 +94,7 @@
       "outro": {"inherit": "default"}
     }
   },
-  "subtitle": {"position": "bottom-center", "style": "caption-rail", "maxLines": 2},
+  "subtitle": {"position": "bottom-center", "style": "caption-rail", "fontSize": 36, "lineHeight": 1.35, "safeAreaBottom": 0.08, "maxLines": 2},
   "aspectVariants": {
     "16:9": {"enabled": true},
     "9:16": {"enabled": true},

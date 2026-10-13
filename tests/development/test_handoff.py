@@ -4,9 +4,10 @@ import pytest
 
 from mona.development.context import load_project_context
 from mona.development.contracts import Binding, ExecutorId, RunStatus
-from mona.development.handoff import build_handoff
+from mona.development.handoff import build_handoff, collaboration_excerpt, task_brief
 from mona.development.store import ConflictError, DevelopmentError, DevelopmentStore
 from mona.session.manager import Session
+from mona.utils.helpers import estimate_message_tokens
 
 
 def setup(tmp_path):
@@ -46,6 +47,54 @@ def test_full_and_delta_are_bounded_and_exclude_tool_privacy(tmp_path):
     assert "current user request follows" in bounded.content
     with pytest.raises(DevelopmentError):
         build_handoff(context, session, Session(key="another"), goal="Review")
+
+
+def test_delegation_keeps_middle_user_constraints_beyond_recent_thirty_messages():
+    transcript = Session(key="development:parent")
+    transcript.add_message("user", "ORIGINAL_GOAL", id="goal")
+    transcript.add_message("user", "PRESERVE_PUBLIC_API", id="constraint")
+    for index in range(40):
+        transcript.add_message("assistant", f"Progress {index} " * 100, id=f"progress_{index}")
+    transcript.add_message("user", "LATEST_REQUEST", id="latest")
+    transcript.add_message("tool", "PRIVATE_TOOL_MARKER")
+    transcript.add_message("user", "PRIVATE_RUNTIME_MARKER", _runtime_input=True)
+    packet = collaboration_excerpt(transcript, "parent")
+    serialized = json.dumps(packet, ensure_ascii=False)
+    assert "ORIGINAL_GOAL" in serialized and "PRESERVE_PUBLIC_API" in serialized and "LATEST_REQUEST" in serialized
+    assert serialized.count("PRESERVE_PUBLIC_API") == 1
+    assert "PRIVATE_" not in serialized
+    assert packet["omittedMessages"] > 0
+    assert len(serialized) <= 19000 and estimate_message_tokens({"role": "user", "content": serialized}) <= 6000
+    assert any(item.get("includedInMessages") for item in packet["taskBrief"]["requests"])
+
+
+def test_task_brief_keeps_steering_and_reuses_summary_without_private_history():
+    transcript = Session(key="development:parent")
+    transcript.add_message("user", "ORIGINAL_GOAL", id="goal")
+    transcript.add_message("assistant", "Old work")
+    transcript.last_consolidated = 2
+    transcript.metadata["development_compaction"] = {"text": "VERIFIED_ARCHIVED_WORK", "through": 2}
+    transcript.add_message("user", "NEW_CONSTRAINT", id="constraint", source_kind="steering")
+    transcript.add_message("user", "LATEST_REQUEST", id="latest")
+    brief = task_brief(transcript)
+    assert [item["messageId"] for item in brief["requests"]] == ["goal", "constraint", "latest"]
+    assert brief["summary"]["text"] == "VERIFIED_ARCHIVED_WORK"
+
+
+def test_budget_pressure_never_empties_the_original_or_latest_goal():
+    transcript = Session(key="development:parent")
+    transcript.add_message("user", "ORIGINAL_GOAL " * 100, id="goal")
+    for index in range(60):
+        transcript.add_message("user", f"Constraint {index} " * 100, id=f"constraint_{index}")
+    transcript.add_message("user", "LATEST_REQUEST " * 100, id="latest")
+    brief = task_brief(transcript)
+    assert brief["requests"][0]["text"].startswith("ORIGINAL_GOAL")
+    assert brief["requests"][-1]["text"].startswith("LATEST_REQUEST")
+    assert brief["omittedRequests"] > 0 and len(json.dumps(brief, ensure_ascii=False)) <= 4000
+    packet = collaboration_excerpt(transcript, "parent")
+    serialized = json.dumps(packet, ensure_ascii=False)
+    assert "ORIGINAL_GOAL" in serialized and "LATEST_REQUEST" in serialized
+    assert packet["omittedMessages"] > 0 and len(serialized) <= 19000
 
 
 def test_handoff_reserved_survives_restart_as_unknown_and_is_not_consumed(tmp_path):

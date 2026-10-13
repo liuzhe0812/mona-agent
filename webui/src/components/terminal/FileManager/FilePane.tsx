@@ -604,7 +604,7 @@ export function FilePane({
                     <th className="px-1.5 py-1 font-medium relative group/name">
                       名称
                       <span
-                        className="absolute right-0 top-0 bottom-0 w-1 cursor-col-resize hover:bg-primary/40 active:bg-primary/60"
+                        className="mona-resize-handle absolute right-0 top-0 bottom-0 w-1 cursor-col-resize"
                         onMouseDown={(e) => {
                           e.preventDefault();
                           resizeRef.current = { key: "name", startX: e.clientX, startWidth: colWidths.name };
@@ -626,7 +626,7 @@ export function FilePane({
                     <th className="px-1.5 py-1 font-medium relative">
                       大小
                       <span
-                        className="absolute right-0 top-0 bottom-0 w-1 cursor-col-resize hover:bg-primary/40 active:bg-primary/60"
+                        className="mona-resize-handle absolute right-0 top-0 bottom-0 w-1 cursor-col-resize"
                         onMouseDown={(e) => {
                           e.preventDefault();
                           resizeRef.current = { key: "size", startX: e.clientX, startWidth: colWidths.size };
@@ -649,7 +649,7 @@ export function FilePane({
                       <th className="px-1.5 py-1 font-medium relative">
                         权限
                         <span
-                          className="absolute right-0 top-0 bottom-0 w-1 cursor-col-resize hover:bg-primary/40 active:bg-primary/60"
+                          className="mona-resize-handle absolute right-0 top-0 bottom-0 w-1 cursor-col-resize"
                           onMouseDown={(e) => {
                             e.preventDefault();
                             resizeRef.current = { key: "permissions", startX: e.clientX, startWidth: colWidths.permissions };

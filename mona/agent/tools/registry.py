@@ -88,6 +88,12 @@ class ToolRegistry:
         )
 
     @property
+    def requires_subscription_check(self) -> bool:
+        """Only explicit paid extensions need a local entitlement lookup."""
+        return any(self._is_allowed(tool) and getattr(tool, "subscription_required", False)
+                   for tool in self._tools.values())
+
+    @property
     def has_subscription_access(self) -> bool:
         return self._has_subscription_access
 
@@ -206,9 +212,7 @@ class ToolRegistry:
             return tool, params, (
                 f"{MEMBERSHIP_REQUIRED_ERROR}: Tool '{name}' requires an active "
                 "subscription or trial. The user's subscription has expired or is "
-                "not active. Do not claim to have searched notes or emails. Tell "
-                "the user they can subscribe to unlock Agent access to existing "
-                "notes and emails."
+                "not active. Do not claim this paid extension completed its work."
             )
 
         # Defense-in-depth: a tool hidden via ``is_available=False`` (e.g.

@@ -66,7 +66,7 @@ import {
 } from "@/components/ui/dialog";
 
 export const VIDEO_PHASE_LABELS: Record<VideoProjectPhase, string> = {
-  storyboard: "分镜中",
+  storyboard: "制作中",
   producing: "制作中",
   exportable: "待导出",
   rendering: "导出中",
@@ -92,6 +92,8 @@ interface VideoHistoryProps {
   refreshKey?: number;
   onSelect: (project: VideoProject) => void;
   onDelete?: (name: string) => void;
+  onProjectRenamed?: (oldName: string, newName: string) => void;
+  onProjectArchived?: (name: string, archived: boolean) => void;
 }
 
 function formatRelativeTime(epoch: number): string {
@@ -114,6 +116,8 @@ export function VideoHistory({
   refreshKey = 0,
   onSelect,
   onDelete,
+  onProjectRenamed,
+  onProjectArchived,
 }: VideoHistoryProps) {
   const { client, token } = useClient();
   const workspacePath = useWorkspaceStore((s) => s.workspacePath);
@@ -249,6 +253,7 @@ export function VideoHistory({
       try {
         const result = await archiveVideoProject(token, project.name, archived);
         if (!result.ok) throw new Error(result.error || "归档操作失败");
+        onProjectArchived?.(project.name, archived);
         await loadProjects(true);
       } catch (archiveError) {
         setActionError(
@@ -258,7 +263,7 @@ export function VideoHistory({
         );
       }
     },
-    [loadProjects, token],
+    [loadProjects, onProjectArchived, token],
   );
 
   const handleProjectAction = useCallback(async () => {
@@ -281,7 +286,7 @@ export function VideoHistory({
             );
       if (!result.ok) throw new Error(result.error || "项目操作失败");
       if (projectAction.mode === "rename") {
-        onDelete?.(projectAction.project.name);
+        onProjectRenamed?.(projectAction.project.name, projectActionName.trim());
       }
       setProjectAction(null);
       await loadProjects(true);
@@ -296,7 +301,7 @@ export function VideoHistory({
     }
   }, [
     loadProjects,
-    onDelete,
+    onProjectRenamed,
     projectAction,
     projectActionLoading,
     projectActionName,
@@ -579,7 +584,9 @@ export function VideoHistory({
         const upgradeCandidates = p.seriesId
           ? orderedProjects.filter(
               (item) =>
-                item.seriesId === p.seriesId && item.styleUpdateAvailable,
+                !item.archived &&
+                item.seriesId === p.seriesId &&
+                item.styleUpdateAvailable,
             )
           : [];
         return (
@@ -597,7 +604,8 @@ export function VideoHistory({
                   {p.seriesId && p.styleVersion ? (
                     <span>v{p.styleVersion}</span>
                   ) : null}
-                  {p.seriesId &&
+                  {!p.archived &&
+                  p.seriesId &&
                   p.latestSeriesStyleVersion &&
                   upgradeCandidates.length ? (
                     <Button

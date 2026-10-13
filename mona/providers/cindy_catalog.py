@@ -1,7 +1,7 @@
-"""Cindy's chat-provider catalog, reduced to Mona's chat runtime needs.
+"""Chat-provider presets and OpenAI-compatible model metadata.
 
 The catalog intentionally contains only provider presets and OpenAI-compatible
-model metadata.  Harness-specific routing/auth data stays in Cindy.
+model metadata. Routing and authentication are handled by the providers.
 """
 
 from __future__ import annotations
@@ -53,8 +53,7 @@ def _models(*rows: tuple[str, str, int | None]) -> tuple[CindyModel, ...]:
     )
 
 
-# Keep this list in Cindy preset order; Chinese Mainland entries are sorted
-# first by the settings UI.
+# Preserve preset order; the settings UI places Chinese Mainland entries first.
 CINDY_CHAT_PROVIDERS: tuple[CindyChatProvider, ...] = (
     CindyChatProvider(
         "openrouter", "OpenRouter", "https://openrouter.ai/api/v1",

@@ -285,15 +285,21 @@ class SDKExecutor:
             if not prior.queue.full():
                 prior.queue.put_nowait(None)
         runtime = _SDKSession(binding.model_copy(deep=True), start)
-        host_tools = self.tool_handler is not None and not start.readonly and not start.session.parent_session_id
+        work_mode = start.work_prompt is not None
+        if work_mode and self.tool_handler is None:
+            raise RpcError("sdk_host_tools_unsupported", "Work 工具宿主未连接，未启动原生会话。")
+        host_tools = (not work_mode and self.tool_handler is not None and not start.readonly
+                      and not start.session.parent_session_id)
+        work_tools = work_mode and self.tool_handler is not None
         async def request(_identifier, method, params):
             if method == "host/collaboration":
                 turn_id = params.get("turnId")
-                if not host_tools or self.tool_handler is None or not isinstance(params.get("arguments"), dict):
+                if not (host_tools or work_tools) or self.tool_handler is None or not isinstance(params.get("arguments"), dict):
                     return tool_unavailable()
                 return await call_in_turn(self.tool_handler, runtime.binding, turn_id, params["arguments"],
                     lambda: runtime.turn_id == turn_id and runtime.status in {"starting", "running", "waiting_user"}
-                    and runtime.connection is not None and not runtime.connection.closed)
+                    and runtime.connection is not None and not runtime.connection.closed,
+                    timeout_s=None if work_mode else 90)
             fallback = {} if method == "question" else "decline"
             if method not in {"permission", "question"} or params.get("turnId") != runtime.turn_id or runtime.status not in {"running", "starting", "waiting_user"}:
                 return fallback
@@ -340,7 +346,7 @@ class SDKExecutor:
                 "context": start.context.model_context(), "model": start.model, "resume": resume,
                 "permissionMode": start.session.permission_mode.value,
                 "effort": start.session.model_reasoning_effort if not start.session.model_provider else None,
-                "hostCollaboration": host_tools},
+                "hostCollaboration": host_tools, "workPrompt": start.work_prompt},
                 classify_error=_worker_error)
             if not isinstance(reply, dict) or reply.get("nativeSessionId") != binding.native_session_id:
                 raise RpcError("native_protocol_error", "SDK 初始化回执身份不一致。", outcome_unknown=True)
@@ -349,6 +355,8 @@ class SDKExecutor:
             runtime.binding.state = "active"
             if reply.get("hostCollaboration", False) is not host_tools:
                 raise RpcError("native_protocol_error", "SDK 宿主协作能力未按要求装配。")
+            if reply.get("workMode", False) is not work_mode:
+                raise RpcError("native_protocol_error", "SDK Work 工具通道未按要求装配。")
             if reply.get("permissionMode") != start.session.permission_mode.value:
                 raise RpcError("native_protocol_error", "SDK 初始化没有应用所选权限模式。", outcome_unknown=True)
             permission_modes = _permission_modes(reply.get("permissionModes"))

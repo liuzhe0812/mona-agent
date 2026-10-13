@@ -421,7 +421,6 @@ _STEP_ITEM_SCHEMA = ObjectSchema(
 class TerminalTaskTool(Tool):
     _scopes = {"core", "subagent"}
     config_key = "terminal_task"
-    subscription_required = True
     def set_context(self, ctx: RequestContext) -> None:
         # Tools stay visible to the model regardless of session state — the
         # execute() path returns a clear "open the terminal panel" error when
@@ -587,7 +586,6 @@ class TerminalTaskTool(Tool):
 class TerminalExecTool(Tool):
     _scopes = {"core", "subagent"}
     config_key = "terminal"
-    subscription_required = True
     def set_context(self, ctx: RequestContext) -> None:
         _bind_terminal_context(ctx)
 
@@ -746,7 +744,6 @@ _DEFAULT_OUTPUT_LINES = 200
 class TerminalOutputTool(Tool):
     _scopes = {"core", "subagent"}
     config_key = "terminal_output"
-    subscription_required = True
     def set_context(self, ctx: RequestContext) -> None:
         _bind_terminal_context(ctx)
 
@@ -836,7 +833,6 @@ class TerminalOutputTool(Tool):
 class TerminalUploadTool(Tool):
     _scopes = {"core", "subagent"}
     config_key = "terminal_upload"
-    subscription_required = True
     def set_context(self, ctx: RequestContext) -> None:
         _bind_terminal_context(ctx)
 

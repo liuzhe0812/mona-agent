@@ -116,11 +116,8 @@ export function IdeLayout({ sessionId, active = true, showFileTree = true }: Ide
   const renderDragHandle = (panel: "fileTree" | "systemMonitor") => (
     <div
       onMouseDown={(e) => handleDragStart(panel, e)}
-      className="relative w-0 shrink-0 cursor-col-resize"
-    >
-      <div className="absolute -left-1.5 top-0 bottom-0 w-3 bg-border/0 hover:bg-primary/40 active:bg-primary/40" />
-      <div className="absolute left-0 top-0 bottom-0 w-px bg-border" />
-    </div>
+      className="mona-resize-handle relative w-0 shrink-0 cursor-col-resize"
+    />
   );
 
   return (

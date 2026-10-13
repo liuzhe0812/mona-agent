@@ -86,6 +86,20 @@ describe("AppRail", () => {
     expect(messages.querySelector("[aria-hidden]"))?.toHaveClass("text-theme");
   });
 
+  it("opens settings while logged out without opening login", () => {
+    const onOpenSettings = vi.fn();
+    const onOpenLogin = vi.fn();
+    renderRail({ onOpenSettings, onOpenLogin });
+
+    const login = screen.getByRole("button", { name: "Log in" });
+    const settings = screen.getByRole("button", { name: "Settings", exact: true });
+    expect(settings.closest("div")).toBe(login.closest("div"));
+    fireEvent.click(settings);
+
+    expect(onOpenSettings).toHaveBeenCalledWith("general");
+    expect(onOpenLogin).not.toHaveBeenCalled();
+  });
+
   it.each(["ssh", "db"] as const)("uses the same operations entry for %s", (activeView) => {
     const onOpenDb = vi.fn();
     renderRail({ activeView, onOpenDb });

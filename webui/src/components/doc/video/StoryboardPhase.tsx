@@ -3,9 +3,7 @@ import type { ReactNode } from "react";
 import {
   AlertCircle,
   ArrowDown,
-  ArrowRight,
   ArrowUp,
-  Check,
   ImageIcon,
   ImagePlus,
   Loader2,
@@ -26,23 +24,31 @@ import {
   AlertDialogTitle,
 } from "@/components/ui/alert-dialog";
 import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
+import {
   ResizableHandle,
   ResizablePanel,
   ResizablePanelGroup,
 } from "@/components/ui/resizable";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
-import { Select } from "@/components/ui/select";
 import { Textarea } from "@/components/ui/textarea";
 import { useClient } from "@/providers/ClientProvider";
 import {
+  ApiError,
   addVideoScene,
   deleteVideoScene,
   fetchSceneNarrationBytes,
+  fetchVideoProject,
   fetchVideoProjectAssets,
   fetchVideoStoryboard,
   importVideoProjectAsset,
-  lockVideoStoryboard,
   reorderVideoScenes,
   updateVideoScene,
   updateVideoProjectAsset,
@@ -54,78 +60,51 @@ import { isTauri } from "@/lib/tauri";
 import { cn } from "@/lib/utils";
 import { AssetRightsDialog } from "./style/AssetRightsDialog";
 
-const SCENE_ROLES = [
-  ["cover", "封面", "cover-split"],
-  ["chapter", "章节", "content-standard"],
-  ["content", "内容", "content-standard"],
-  ["data", "数据", "metric-comparison"],
-  ["comparison", "对比", "comparison-columns"],
-  ["process", "流程", "content-standard"],
-  ["quote", "引用", "quote-focus"],
-  ["outro", "结尾", "outro-brand"],
-] as const;
-
-const LAYOUTS = [
-  ["cover-split", "封面分栏"],
-  ["content-standard", "标准内容"],
-  ["metric-comparison", "指标数据"],
-  ["comparison-columns", "双栏对比"],
-  ["quote-focus", "重点引用"],
-  ["outro-brand", "品牌结尾"],
-] as const;
-
 function subtitleTimingLabel(scene: VideoScene): string {
-  if (scene.audioTimingSource === "provider-boundary") return "字幕精确同步";
+  if (scene.audioTimingSource === "provider-boundary") return "字幕已同步";
   if (scene.audioTimingSource === "acoustic-sentence-alignment") {
     return scene.audioAlignmentConfidence === "high"
-      ? "字幕声学同步"
-      : "字幕对齐待复核";
+      ? "字幕已同步"
+      : "字幕待检查";
   }
-  if (scene.audioTimingSource === "estimated") return "字幕时间估算";
+  if (scene.audioTimingSource === "estimated") return "字幕待检查";
   return "字幕待生成";
 }
 
 function subtitleTimingHint(scene: VideoScene): string {
   if (scene.audioTimingSource === "provider-boundary") {
-    return "字幕时间来自本次配音的词级边界";
+    return "字幕已与配音同步";
   }
   if (scene.audioTimingSource === "acoustic-sentence-alignment") {
     return scene.audioAlignmentConfidence === "high"
-      ? "字幕句子已与实际语音和静音区间匹配"
-      : "字幕已按实际语音区间对齐，但正式版前仍需复核";
+      ? "字幕已与配音同步"
+      : "字幕已对齐，请播放检查效果";
   }
   if (scene.audioTimingSource === "estimated") {
-    return "当前按场景时长估算，生成配音后会自动校准";
+    return "制作配音后会自动同步字幕";
   }
-  return "场景制作时生成字幕时间轴";
+  return "配音制作时生成字幕";
 }
 
 interface StoryboardPhaseProps {
   projectName: string;
-  onLocked: () => void;
-  /** Incremented by parent when AI finishes a reply (streaming → false). */
+  section?: "content" | "assets";
   refreshTrigger?: number;
-  /** 项目已过分镜锁定阶段（制作/导出中回看编辑）：底部按钮变为「返回制作」，
-   * 不再重复调用锁定 API，避免服务端 phase 回退。 */
-  alreadyLocked?: boolean;
-  /** The parent detected that the storyboard turn was rejected before it ran. */
-  generationError?: string | null;
-  /** Whether the Gateway has an active Agent turn for this video chat. */
-  generationRunning?: boolean;
-  /** Re-send the persisted project brief without creating a second project. */
-  onRetryGeneration?: () => void;
-  /** 右侧 AI 对话面板，作为第三栏渲染（可拖拽调整宽度）。 */
+  onSaveFlushReady?: (flush: (() => Promise<boolean>) | null) => void;
+  onPlanChange?: (plan: { planRevision: number | null; sceneCount: number; duration: number }) => void;
+  onPlanEdited?: () => void;
+  busy?: boolean;
   chatPanel?: ReactNode;
 }
 
 export function StoryboardPhase({
   projectName,
-  onLocked,
+  section = "content",
   refreshTrigger,
-  alreadyLocked = false,
-  generationError = null,
-  generationRunning = false,
-  onRetryGeneration,
+  onSaveFlushReady,
+  onPlanChange,
+  onPlanEdited,
+  busy = false,
   chatPanel,
 }: StoryboardPhaseProps) {
   const { client, token } = useClient();
@@ -134,8 +113,13 @@ export function StoryboardPhase({
   const [saveState, setSaveState] = useState<
     "idle" | "saving" | "saved" | "error"
   >("idle");
-  const [locking, setLocking] = useState(false);
   const [playingIndex, setPlayingIndex] = useState<number | null>(null);
+  const [narrationEnabled, setNarrationEnabled] = useState<boolean | null>(null);
+  const [planApproved, setPlanApproved] = useState(false);
+  const [playbackError, setPlaybackError] = useState<{
+    title: string;
+    description: string;
+  } | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [deleteConfirmOpen, setDeleteConfirmOpen] = useState(false);
   const [assets, setAssets] = useState<VideoProjectAsset[]>([]);
@@ -149,21 +133,34 @@ export function StoryboardPhase({
     null,
   );
   const [rightsUpdating, setRightsUpdating] = useState(false);
-  // null = unknown, true = storyboard.md exists, false = not yet
-  const [storyboardExists, setStoryboardExists] = useState<boolean | null>(
-    null,
-  );
   const [parseError, setParseError] = useState<string | null>(null);
-  const [generationMayNotHaveStarted, setGenerationMayNotHaveStarted] =
-    useState(false);
-  const [generationWatchToken, setGenerationWatchToken] = useState(0);
 
   // Save queue: per-scene pending field edits, merged and sent serially.
   const pendingRef = useRef<Map<number, Partial<VideoScene>>>(new Map());
+  const inFlightRef = useRef<{ index: number; fields: Partial<VideoScene> } | null>(null);
+  const reloadScenesRef = useRef<((silent?: boolean) => Promise<void>) | null>(null);
   const saveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const drainPromiseRef = useRef<Promise<boolean> | null>(null);
   const savedHideTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const mountedRef = useRef(true);
+  const scenesRef = useRef<VideoScene[]>([]);
+  const planRevisionRef = useRef<number | null>(null);
+
+  const publishPlan = useCallback((revision?: number, nextScenes = scenesRef.current) => {
+    if (typeof revision === "number") planRevisionRef.current = revision;
+    scenesRef.current = nextScenes;
+    onPlanChange?.({
+      planRevision: planRevisionRef.current,
+      sceneCount: nextScenes.length,
+      duration: nextScenes.reduce((total, scene) => total + scene.duration, 0),
+    });
+  }, [onPlanChange]);
+
+  useEffect(() => {
+    scenesRef.current = [];
+    planRevisionRef.current = null;
+    publishPlan(undefined, []);
+  }, [projectName, publishPlan]);
 
   useEffect(() => {
     mountedRef.current = true;
@@ -191,19 +188,28 @@ export function StoryboardPhase({
           Partial<VideoScene>,
         ];
         pendingRef.current.delete(index);
+        inFlightRef.current = { index, fields };
         try {
           const res = await updateVideoScene(token, projectName, {
             index,
             ...fields,
+            ...(planRevisionRef.current === null ? {} : { expectedPlanRevision: planRevisionRef.current }),
           });
           if (!res.ok) throw new Error(res.error || "save failed");
+          publishPlan(res.planRevision);
         } catch (e) {
           console.error("Failed to save scene", e);
           // Restore failed fields, keeping newer edits (they win on conflict)
           const newer = pendingRef.current.get(index) ?? {};
           pendingRef.current.set(index, { ...fields, ...newer });
+          if (e instanceof ApiError && e.status === 409) {
+            setError("分镜方案已更新，请检查最新内容后再确认。未保存的修改仍保留。");
+            void reloadScenesRef.current?.(true);
+          }
           ok = false;
           break;
+        } finally {
+          inFlightRef.current = null;
         }
       }
       drainPromiseRef.current = null;
@@ -221,7 +227,30 @@ export function StoryboardPhase({
     })();
     drainPromiseRef.current = p;
     return p;
-  }, [token, projectName]);
+  }, [token, projectName, publishPlan]);
+
+  useEffect(() => {
+    let cancelled = false;
+    setNarrationEnabled(null);
+    void fetchVideoProject(token, projectName)
+      .then((project) => {
+        if (!cancelled) {
+          setNarrationEnabled(Boolean(project.meta?.narrationEnabled));
+          setPlanApproved(!project.meta?.requirePlanApproval || project.meta.approvedPlanRevision === project.meta.planRevision);
+        }
+      })
+      .catch((projectError) => {
+        console.warn("[StoryboardPhase] load project settings failed:", projectError);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [projectName, token, refreshTrigger]);
+
+  useEffect(() => {
+    onSaveFlushReady?.(flushSaves);
+    return () => onSaveFlushReady?.(null);
+  }, [flushSaves, onSaveFlushReady]);
 
   // Flush pending saves when switching away or unmounting (best effort).
   useEffect(() => {
@@ -240,17 +269,17 @@ export function StoryboardPhase({
       if (!silent) setError(null);
       try {
         const res = await fetchVideoStoryboard(token, projectName);
-        setStoryboardExists(res.storyboardExists ?? null);
         setParseError(res.parseError ?? null);
         if (res.ok && res.scenes) {
           let next = res.scenes;
-          if (pendingRef.current.size > 0) {
+          if (pendingRef.current.size > 0 || inFlightRef.current) {
             next = next.map((s) => {
-              const pending = pendingRef.current.get(s.index);
-              return pending ? { ...s, ...pending } : s;
+              const inFlight = inFlightRef.current?.index === s.index ? inFlightRef.current.fields : {};
+              return { ...s, ...inFlight, ...(pendingRef.current.get(s.index) ?? {}) };
             });
           }
           setScenes(next);
+          publishPlan(res.planRevision, next);
           if (next.length > 0 && !next.some((s) => s.index === selectedIndex)) {
             setSelectedIndex(next[0].index);
           }
@@ -265,8 +294,9 @@ export function StoryboardPhase({
         if (!silent) setError(String(e));
       }
     },
-    [token, projectName, selectedIndex],
+    [token, projectName, selectedIndex, publishPlan],
   );
+  reloadScenesRef.current = loadScenes;
 
   useEffect(() => {
     loadScenes();
@@ -312,59 +342,6 @@ export function StoryboardPhase({
     });
   }, [client, projectName, loadAssets, loadScenes]);
 
-  // Fallback polling — pure backstop in case both the streaming event and the
-  // WS push are missed (e.g. component remount while AI is streaming).
-  // Stops once scenes appear or a parse error is detected.
-  useEffect(() => {
-    if (scenes.length > 0) return;
-    if (storyboardExists && parseError) return;
-    const timer = setInterval(() => {
-      loadScenes(true);
-    }, 10000);
-    return () => clearInterval(timer);
-  }, [scenes.length, storyboardExists, parseError, loadScenes]);
-
-  // Diagnostic: AI finished (refreshTrigger > 0) but scenes still empty after 2s
-  // → likely AI failed/refused/was interrupted. Surface this to the user.
-  const [aiFinishedEmpty, setAiFinishedEmpty] = useState(false);
-  useEffect(() => {
-    if (!refreshTrigger || refreshTrigger === 0) return;
-    if (scenes.length > 0) {
-      setAiFinishedEmpty(false);
-      return;
-    }
-    setAiFinishedEmpty(false);
-    const t = setTimeout(() => {
-      if (scenes.length === 0) setAiFinishedEmpty(true);
-    }, 2000);
-    return () => clearTimeout(t);
-  }, [refreshTrigger, scenes.length]);
-
-  // A project with no scenes and no active turn must not retain an unbounded
-  // loading spinner. Wait briefly for the Gateway status event, then offer a
-  // deliberate retry using the saved project brief.
-  useEffect(() => {
-    if (
-      scenes.length > 0 ||
-      storyboardExists ||
-      parseError ||
-      generationError ||
-      generationRunning
-    ) {
-      setGenerationMayNotHaveStarted(false);
-      return;
-    }
-    const timer = setTimeout(() => setGenerationMayNotHaveStarted(true), 8_000);
-    return () => clearTimeout(timer);
-  }, [
-    generationError,
-    generationRunning,
-    generationWatchToken,
-    parseError,
-    scenes.length,
-    storyboardExists,
-  ]);
-
   const selectedScene = scenes.find((s) => s.index === selectedIndex) ?? null;
 
   // Debounced merge-save: update UI immediately, queue the field, and send
@@ -372,10 +349,14 @@ export function StoryboardPhase({
   const handleFieldChange = useCallback(
     <K extends keyof VideoScene>(field: K, value: VideoScene[K]) => {
       if (!selectedScene) return;
+      onPlanEdited?.();
+      setPlanApproved(false);
       const idx = selectedIndex;
-      setScenes((prev) =>
-        prev.map((s) => (s.index === idx ? { ...s, [field]: value } : s)),
-      );
+      setScenes((prev) => {
+        const next = prev.map((s) => (s.index === idx ? { ...s, [field]: value } : s));
+        scenesRef.current = next;
+        return next;
+      });
       const existing = pendingRef.current.get(idx) ?? {};
       pendingRef.current.set(idx, { ...existing, [field]: value });
       setSaveState("saving");
@@ -385,7 +366,7 @@ export function StoryboardPhase({
         void flushSaves();
       }, 600);
     },
-    [selectedScene, selectedIndex, flushSaves],
+    [selectedScene, selectedIndex, flushSaves, onPlanEdited],
   );
 
   const handlePickAsset = useCallback(async () => {
@@ -428,7 +409,7 @@ export function StoryboardPhase({
   }, []);
 
   const handleConfirmAssetImport = useCallback(async () => {
-    if (!assetImportPath || !selectedScene || assetImporting) return;
+    if (!assetImportPath || assetImporting) return;
     setAssetImporting(true);
     setError(null);
     try {
@@ -474,7 +455,7 @@ export function StoryboardPhase({
             )
           : [...current, imported];
       });
-      if (!selectedScene.assets.includes(imported.id)) {
+      if (section === "content" && selectedScene && !selectedScene.assets.includes(imported.id)) {
         handleFieldChange("assets", [...selectedScene.assets, imported.id]);
       }
       setAssetImportOpen(false);
@@ -493,6 +474,7 @@ export function StoryboardPhase({
     handleFieldChange,
     projectName,
     selectedScene,
+    section,
     token,
   ]);
 
@@ -570,9 +552,12 @@ export function StoryboardPhase({
       if (currentIdx < 0) return;
       const targetIdx = direction === "up" ? currentIdx - 1 : currentIdx + 1;
       if (targetIdx < 0 || targetIdx >= scenes.length) return;
-      // Indices shift on reorder — persist pending edits first, then drop leftovers.
-      await flushSaves();
-      pendingRef.current.clear();
+      // Indices shift on reorder; do not replace local scenes until edits persist.
+      const saved = await flushSaves();
+      if (!saved || pendingRef.current.size > 0) {
+        setError("有修改尚未保存成功，请先重试保存");
+        return;
+      }
       const newOrder = [...scenes];
       [newOrder[currentIdx], newOrder[targetIdx]] = [
         newOrder[targetIdx],
@@ -585,35 +570,42 @@ export function StoryboardPhase({
         const res = await reorderVideoScenes(token, projectName, indices);
         if (res.ok && res.scenes) {
           setScenes(res.scenes);
+          publishPlan(res.planRevision, res.scenes);
+          onPlanEdited?.();
         } else {
           throw new Error(res.error || "reorder failed");
         }
       } catch (e) {
         console.error("Failed to reorder", e);
-        setError("排序保存失败，已重新加载分镜");
+        setError("排序保存失败，已重新读取内容");
         void loadScenes(true);
       }
     },
-    [scenes, selectedIndex, token, projectName, loadScenes, flushSaves],
+    [scenes, selectedIndex, token, projectName, loadScenes, flushSaves, publishPlan, onPlanEdited],
   );
 
   const handleDelete = useCallback(async () => {
     if (scenes.length <= 1) return;
     if (!selectedScene) return;
-    // Indices shift on delete — persist pending edits first, then drop leftovers.
-    await flushSaves();
-    pendingRef.current.clear();
+    // Deleting changes scene indices; keep edits until they have persisted.
+    const saved = await flushSaves();
+    if (!saved || pendingRef.current.size > 0) {
+      setError("有修改尚未保存成功，请先重试保存");
+      return;
+    }
     try {
       const res = await deleteVideoScene(token, projectName, selectedIndex);
       if (res.ok && res.scenes) {
         setScenes(res.scenes);
+        publishPlan(res.planRevision, res.scenes);
+        onPlanEdited?.();
         setSelectedIndex(res.scenes[0].index);
       } else {
         throw new Error(res.error || "delete failed");
       }
     } catch (e) {
       console.error("Failed to delete scene", e);
-      setError("删除失败，已重新加载分镜");
+      setError("删除失败，已重新读取内容");
       void loadScenes(true);
     }
   }, [
@@ -624,81 +616,201 @@ export function StoryboardPhase({
     selectedIndex,
     loadScenes,
     flushSaves,
+    publishPlan,
+    onPlanEdited,
   ]);
 
   const handleAdd = useCallback(async () => {
     try {
       const res = await addVideoScene(token, projectName);
       if (res.ok && res.scene) {
-        setScenes((prev) => [...prev, res.scene!]);
+        const next = [...scenesRef.current, res.scene];
+        setScenes(next);
+        publishPlan(res.planRevision, next);
+        onPlanEdited?.();
         setSelectedIndex(res.scene.index);
       } else {
         throw new Error(res.error || "add failed");
       }
     } catch (e) {
       console.error("Failed to add scene", e);
-      setError("新增场景失败，已重新加载分镜");
+      setError("新增场景失败，已重新读取内容");
       void loadScenes(true);
     }
-  }, [token, projectName, loadScenes]);
+  }, [token, projectName, loadScenes, publishPlan, onPlanEdited]);
 
   const handlePlayNarration = useCallback(
     async (index: number) => {
-      if (playingIndex !== null) return;
+      if (playingIndex !== null || narrationEnabled === false) return;
       setPlayingIndex(index);
+      let objectUrl: string | null = null;
+      let audio: HTMLAudioElement | null = null;
+      let failed = false;
+      const failPlayback = () => {
+        if (failed) return;
+        failed = true;
+        audio?.pause();
+        if (objectUrl) URL.revokeObjectURL(objectUrl);
+        objectUrl = null;
+        setPlayingIndex(null);
+        setPlaybackError({
+          title: "试听旁白失败",
+          description: "试听旁白失败。请检查网络连接后重试。",
+        });
+      };
       try {
+        const saved = await flushSaves();
+        if (!saved || pendingRef.current.size > 0) {
+          setPlayingIndex(null);
+          setError("有修改尚未保存成功，请先重试保存");
+          return;
+        }
         const blob = await fetchSceneNarrationBytes(token, projectName, index);
         if (blob) {
-          const url = URL.createObjectURL(blob);
-          const audio = new Audio(url);
+          objectUrl = URL.createObjectURL(blob);
+          audio = new Audio(objectUrl);
           audio.onended = () => {
-            URL.revokeObjectURL(url);
+            if (objectUrl) URL.revokeObjectURL(objectUrl);
+            objectUrl = null;
             setPlayingIndex(null);
           };
-          audio.onerror = () => {
-            URL.revokeObjectURL(url);
-            setPlayingIndex(null);
-          };
-          await audio.play();
+          audio.onerror = failPlayback;
+          await audio.play().catch(failPlayback);
         } else {
           setPlayingIndex(null);
         }
       } catch (e) {
         console.error("Narration playback failed", e);
+        if (objectUrl) URL.revokeObjectURL(objectUrl);
         setPlayingIndex(null);
+        setPlaybackError({
+          title: "试听旁白失败",
+          description: e instanceof ApiError && e.code?.startsWith("TTS_") ? e.message : "试听旁白失败。请检查网络连接后重试。",
+        });
       }
     },
-    [playingIndex, token, projectName],
+    [flushSaves, narrationEnabled, playingIndex, token, projectName],
   );
 
-  const handleLock = useCallback(async () => {
-    setLocking(true);
-    setError(null);
-    try {
-      // Flush pending saves before leaving; block when any edit failed.
-      const saved = await flushSaves();
-      if (!saved || pendingRef.current.size > 0) {
-        setError("有修改尚未保存成功，请先重试保存");
-        return;
-      }
-      if (alreadyLocked) {
-        // 项目已进入制作阶段：分镜编辑走自动保存生效，这里只切回制作视图，
-        // 不重复锁定（否则服务端 phase 会从 done/exportable 回退到 producing）。
-        onLocked();
-        return;
-      }
-      const res = await lockVideoStoryboard(token, projectName);
-      if (res.ok) {
-        onLocked();
-      } else {
-        setError(res.error || "锁定失败");
-      }
-    } catch (e) {
-      setError(String(e));
-    } finally {
-      setLocking(false);
-    }
-  }, [token, projectName, onLocked, flushSaves, alreadyLocked]);
+  const assetsPanel = (
+                  <div className="rounded-lg border border-border/70 p-3">
+                    <div className="flex items-center justify-between gap-2">
+                      <div>
+                        <div className="text-caption font-medium">可用素材</div>
+                        <div className="mt-0.5 text-micro text-muted-foreground">
+                          自己的图片、视频和声音都可以添加。
+                        </div>
+                      </div>
+                      <Button
+                        type="button"
+                        variant="outline"
+                        size="sm"
+                        onClick={() => void handlePickAsset()}
+                        disabled={assetImporting}
+                      >
+                        <ImagePlus className="mr-1.5 h-3.5 w-3.5" />
+                        导入素材
+                      </Button>
+                    </div>
+                    {assetsLoading ? (
+                      <div className="mt-3 flex items-center text-micro text-muted-foreground">
+                        <Loader2 className="mr-1.5 h-3 w-3 animate-spin" />
+                        加载素材…
+                      </div>
+                    ) : assets.length === 0 ? (
+                      <div className="mt-3 rounded-md bg-muted/40 px-3 py-2 text-micro text-muted-foreground">
+                        还没有素材，可以添加文件让 Mona 使用。
+                      </div>
+                    ) : (
+                      <div className="mt-3 grid gap-1.5">
+                        {assets.map((asset) => {
+                          const selected = selectedScene?.assets.includes(
+                            asset.id,
+                          );
+                          return (
+                            <div
+                              key={asset.id}
+                              className={cn(
+                                "flex items-center gap-1 rounded-md border border-border/70 p-1",
+                                selected && "border-primary bg-primary/5",
+                              )}
+                            >
+                              <Button
+                                type="button"
+                                variant="ghost"
+                                aria-pressed={selected}
+                                onClick={() => section === "content" && handleToggleAsset(asset.id)}
+                                disabled={section === "assets"}
+                                className="h-auto min-w-0 flex-1 justify-start gap-2 px-2 py-1.5 text-left"
+                              >
+                                <ImageIcon className="h-4 w-4 shrink-0 text-muted-foreground" />
+                                <span className="min-w-0 flex-1">
+                                  <span className="block truncate text-caption font-medium">
+                                    {asset.originalName}
+                                  </span>
+                                  <span className="block text-micro text-muted-foreground">
+                                    {asset.kind === "image"
+                                      ? "图片"
+                                      : asset.kind === "video"
+                                        ? "视频"
+                                        : "音频"}
+                                  </span>
+                                </span>
+                              </Button>
+                              <Button
+                                type="button"
+                                variant="ghost"
+                                size="sm"
+                                className={cn(
+                                  "h-7 shrink-0 rounded-full px-2 text-micro",
+                                  !asset.commercialUse
+                                    ? "bg-amber-500/10 text-amber-700"
+                                    : "bg-emerald-500/10 text-emerald-700",
+                                )}
+                                onClick={() => {
+                                  setRightsAsset(asset);
+                                  setAssetRights(asset.rightsStatus);
+                                }}
+                              >
+                                {!asset.commercialUse ? "权利待确认" : "可商用"}
+                              </Button>
+                            </div>
+                          );
+                        })}
+                      </div>
+                    )}
+                  </div>
+
+  );
+  const assetDialogs = (<>
+              <AssetRightsDialog
+                open={assetImportOpen}
+                fileName={assetImportPath?.split(/[\\/]/).pop() ?? "所选素材"}
+                value={assetRights}
+                loading={assetImporting}
+                onChange={setAssetRights}
+                onCancel={() => {
+                  setAssetImportOpen(false);
+                  setAssetImportPath(null);
+                }}
+                onConfirm={() => void handleConfirmAssetImport()}
+              />
+              <AssetRightsDialog
+                open={rightsAsset !== null}
+                fileName={rightsAsset?.originalName ?? "项目素材"}
+                value={assetRights}
+                loading={rightsUpdating}
+                title="更新素材使用权"
+                onChange={setAssetRights}
+                onCancel={() => setRightsAsset(null)}
+                onConfirm={() => void handleUpdateAssetRights()}
+              />
+
+  </>);
+
+  if (section === "assets") {
+    return <div className="min-h-0 overflow-y-auto p-1">{assetsPanel}{error ? <p className="mt-2 text-caption text-destructive" role="alert">{error}</p> : null}{assetDialogs}</div>;
+  }
 
   // Always render the full layout — empty state shows placeholder inside each pane
   // instead of a full-screen "loading" overlay. AI-generated scenes flow in smoothly.
@@ -719,9 +831,9 @@ export function StoryboardPhase({
           </div>
           <div className="min-h-0 flex-1 overflow-y-auto scrollbar-hover p-2">
             {scenes.length === 0 ? (
-              <div className="flex h-full flex-col items-center justify-center gap-1.5 px-2 text-center text-micro text-muted-foreground">
-                <Loader2 className="h-4 w-4 animate-spin" />
-                <div>AI 正在生成分镜...</div>
+              <div className="flex h-full flex-col items-center justify-center gap-1.5 px-2 text-center text-caption text-muted-foreground">
+                {busy ? <Loader2 className="h-4 w-4 animate-spin" /> : null}
+                <div>{busy ? "正在准备分镜方案" : "还没有分镜"}</div>
               </div>
             ) : (
               scenes.map((s) => (
@@ -765,7 +877,7 @@ export function StoryboardPhase({
               size="sm"
               className="w-full justify-start text-caption"
               onClick={handleAdd}
-              disabled={scenes.length === 0}
+              disabled={busy}
             >
               <Plus className="mr-1.5 h-3.5 w-3.5" />
               新增场景
@@ -821,7 +933,7 @@ export function StoryboardPhase({
                     size="sm"
                     className="h-7 w-7 p-0"
                     onClick={() => handleMove("up")}
-                    disabled={selectedIndex === 1}
+                    disabled={busy || selectedIndex === 1}
                     title="上移"
                   >
                     <ArrowUp className="h-3.5 w-3.5" />
@@ -831,7 +943,7 @@ export function StoryboardPhase({
                     size="sm"
                     className="h-7 w-7 p-0"
                     onClick={() => handleMove("down")}
-                    disabled={selectedIndex === scenes.length}
+                    disabled={busy || selectedIndex === scenes.length}
                     title="下移"
                   >
                     <ArrowDown className="h-3.5 w-3.5" />
@@ -841,7 +953,7 @@ export function StoryboardPhase({
                     size="sm"
                     className="h-7 w-7 p-0 text-destructive hover:text-destructive"
                     onClick={() => setDeleteConfirmOpen(true)}
-                    disabled={scenes.length <= 1}
+                    disabled={busy || scenes.length <= 1}
                     title="删除场景"
                     aria-label="删除场景"
                   >
@@ -851,12 +963,13 @@ export function StoryboardPhase({
               </div>
 
               <div className="min-h-0 flex-1 overflow-y-auto scrollbar-hover p-4">
-                <div className="space-y-4">
+                <fieldset className="space-y-4" disabled={busy}>
                   <div>
-                    <label className="mb-1 block text-micro font-medium text-muted-foreground">
+                    <label htmlFor="video-scene-title" className="mb-1 block text-caption font-medium text-muted-foreground">
                       标题
                     </label>
                     <Input
+                      id="video-scene-title"
                       value={selectedScene.title}
                       onChange={(e) =>
                         handleFieldChange("title", e.target.value)
@@ -866,73 +979,13 @@ export function StoryboardPhase({
                     />
                   </div>
 
-                  <div className="grid grid-cols-3 gap-2">
-                    <label className="text-caption font-medium text-muted-foreground">
-                      场景角色
-                      <Select
-                        className="mt-1 h-8 text-caption"
-                        value={selectedScene.role ?? "content"}
-                        aria-label="场景角色"
-                        onValueChange={(role) => {
-                          const config = SCENE_ROLES.find(
-                            (item) => item[0] === role,
-                          );
-                          handleFieldChange("role", role);
-                          if (config) handleFieldChange("layout", config[2]);
-                          handleFieldChange(
-                            "backgroundSlot",
-                            role === "cover" || role === "outro"
-                              ? role
-                              : "content",
-                          );
-                        }}
-                        options={SCENE_ROLES.map(([value, label]) => ({
-                          value,
-                          label,
-                        }))}
-                      />
-                    </label>
-                    <label className="text-caption font-medium text-muted-foreground">
-                      布局
-                      <Select
-                        className="mt-1 h-8 text-caption"
-                        value={selectedScene.layout ?? "content-standard"}
-                        aria-label="场景布局"
-                        onValueChange={(value) =>
-                          handleFieldChange("layout", value)
-                        }
-                        options={LAYOUTS.map(([value, label]) => ({
-                          value,
-                          label,
-                        }))}
-                      />
-                    </label>
-                    <label className="text-caption font-medium text-muted-foreground">
-                      背景槽位
-                      <Select
-                        className="mt-1 h-8 text-caption"
-                        value={selectedScene.backgroundSlot ?? "content"}
-                        aria-label="背景槽位"
-                        onValueChange={(value) =>
-                          handleFieldChange("backgroundSlot", value)
-                        }
-                        options={[
-                          "cover",
-                          "chapter",
-                          "content",
-                          "data",
-                          "outro",
-                        ].map((value) => ({ value, label: value }))}
-                      />
-                    </label>
-                  </div>
-
                   <div>
-                    <label className="mb-1 block text-micro font-medium text-muted-foreground">
+                    <label htmlFor="video-scene-duration" className="mb-1 block text-caption font-medium text-muted-foreground">
                       时长（秒）
                     </label>
                     <div className="flex items-center gap-2">
                       <input
+                        id="video-scene-duration"
                         type="range"
                         min={1}
                         max={30}
@@ -943,7 +996,7 @@ export function StoryboardPhase({
                             parseInt(e.target.value, 10),
                           )
                         }
-                        className="flex-1 accent-primary"
+                        className="flex-1 accent-[hsl(var(--brand-red))]"
                       />
                       <span className="w-12 text-right text-caption font-mono">
                         {selectedScene.duration}s
@@ -952,123 +1005,9 @@ export function StoryboardPhase({
                   </div>
 
                   <div>
-                    <label className="mb-1 block text-micro font-medium text-muted-foreground">
-                      画面描述
-                    </label>
-                    <Textarea
-                      value={selectedScene.visual}
-                      onChange={(e) =>
-                        handleFieldChange("visual", e.target.value)
-                      }
-                      className="min-h-[60px] resize-none text-caption"
-                      placeholder="描述这一场景的画面内容、布局、视觉元素..."
-                    />
-                  </div>
-
-                  <div className="rounded-lg border border-border/70 p-3">
-                    <div className="flex items-center justify-between gap-2">
-                      <div>
-                        <div className="text-caption font-medium">场景素材</div>
-                        <div className="mt-0.5 text-micro text-muted-foreground">
-                          素材来源和商业使用权会写入最终质量报告
-                        </div>
-                      </div>
-                      <Button
-                        type="button"
-                        variant="outline"
-                        size="sm"
-                        onClick={() => void handlePickAsset()}
-                        disabled={assetImporting}
-                      >
-                        <ImagePlus className="mr-1.5 h-3.5 w-3.5" />
-                        导入素材
-                      </Button>
-                    </div>
-                    {assetsLoading ? (
-                      <div className="mt-3 flex items-center text-micro text-muted-foreground">
-                        <Loader2 className="mr-1.5 h-3 w-3 animate-spin" />
-                        加载素材台账...
-                      </div>
-                    ) : assets.length === 0 ? (
-                      <div className="mt-3 rounded-md bg-muted/40 px-3 py-2 text-micro text-muted-foreground">
-                        尚未导入素材。场景可以继续使用模板图形与背景。
-                      </div>
-                    ) : (
-                      <div className="mt-3 grid gap-1.5">
-                        {assets.map((asset) => {
-                          const selected = selectedScene.assets.includes(
-                            asset.id,
-                          );
-                          return (
-                            <div
-                              key={asset.id}
-                              className={cn(
-                                "flex items-center gap-1 rounded-md border border-border/70 p-1",
-                                selected && "border-primary bg-primary/5",
-                              )}
-                            >
-                              <Button
-                                type="button"
-                                variant="ghost"
-                                aria-pressed={selected}
-                                onClick={() => handleToggleAsset(asset.id)}
-                                className="h-auto min-w-0 flex-1 justify-start gap-2 px-2 py-1.5 text-left"
-                              >
-                                <ImageIcon className="h-4 w-4 shrink-0 text-muted-foreground" />
-                                <span className="min-w-0 flex-1">
-                                  <span className="block truncate text-caption font-medium">
-                                    {asset.originalName}
-                                  </span>
-                                  <span className="block text-micro text-muted-foreground">
-                                    {asset.kind === "image"
-                                      ? "图片"
-                                      : asset.kind === "video"
-                                        ? "视频"
-                                        : "音频"}
-                                  </span>
-                                </span>
-                              </Button>
-                              <Button
-                                type="button"
-                                variant="ghost"
-                                size="sm"
-                                className={cn(
-                                  "h-7 shrink-0 rounded-full px-2 text-micro",
-                                  !asset.commercialUse
-                                    ? "bg-amber-500/10 text-amber-700"
-                                    : "bg-emerald-500/10 text-emerald-700",
-                                )}
-                                onClick={() => {
-                                  setRightsAsset(asset);
-                                  setAssetRights(asset.rightsStatus);
-                                }}
-                              >
-                                {!asset.commercialUse ? "权利待确认" : "可商用"}
-                              </Button>
-                            </div>
-                          );
-                        })}
-                      </div>
-                    )}
-                  </div>
-
-                  <div className="rounded-md border border-border/70 px-3 py-2.5">
-                    <div className="flex items-center justify-between gap-2">
-                      <span className="text-caption font-medium">动画节奏</span>
-                      <span className="rounded-full bg-muted px-2 py-0.5 text-micro text-muted-foreground">
-                        系统生成
-                      </span>
-                    </div>
-                    <div className="mt-1.5 text-caption text-muted-foreground">
-                      {selectedScene.motionPlanSummary ??
-                        "进入场景制作后，系统会根据旁白句子和场景角色生成动画节拍。"}
-                    </div>
-                  </div>
-
-                  <div>
                     <div className="mb-1 flex items-center justify-between">
                       <div className="flex items-center gap-2">
-                        <label className="text-caption font-medium text-muted-foreground">
+                        <label htmlFor="video-scene-narration" className="text-caption font-medium text-muted-foreground">
                           旁白文本
                         </label>
                         <span
@@ -1098,7 +1037,14 @@ export function StoryboardPhase({
                         size="sm"
                         className="h-6 px-2 text-micro"
                         onClick={() => handlePlayNarration(selectedScene.index)}
-                        disabled={playingIndex !== null}
+                        disabled={
+                          playingIndex !== null || narrationEnabled === false || !planApproved
+                        }
+                        title={
+                          narrationEnabled === false
+                            ? "当前项目未启用旁白"
+                            : !planApproved ? "确认分镜后制作配音" : undefined
+                        }
                       >
                         {playingIndex === selectedScene.index ? (
                           <Loader2 className="mr-1 h-3 w-3 animate-spin" />
@@ -1107,10 +1053,13 @@ export function StoryboardPhase({
                         )}
                         {playingIndex === selectedScene.index
                           ? "播放中"
-                          : "试听"}
+                          : narrationEnabled === false
+                            ? "未启用旁白"
+                            : !planApproved ? "确认后生成配音" : "试听"}
                       </Button>
                     </div>
                     <Textarea
+                      id="video-scene-narration"
                       value={selectedScene.narration}
                       onChange={(e) =>
                         handleFieldChange("narration", e.target.value)
@@ -1119,7 +1068,36 @@ export function StoryboardPhase({
                       placeholder="旁白文本（中文约 4 字/秒，需与时长匹配）..."
                     />
                   </div>
-                </div>
+
+                  <div>
+                    <label htmlFor="video-scene-visual" className="mb-1 block text-caption font-medium text-muted-foreground">
+                      画面描述
+                    </label>
+                    <Textarea
+                      id="video-scene-visual"
+                      value={selectedScene.visual}
+                      onChange={(e) =>
+                        handleFieldChange("visual", e.target.value)
+                      }
+                      className="min-h-[60px] resize-none text-caption"
+                      placeholder="描述这一场景的画面内容、布局、视觉元素..."
+                    />
+                  </div>
+
+                  <div>
+                    <label htmlFor="video-scene-animation" className="mb-1 block text-caption font-medium text-muted-foreground">画面如何变化</label>
+                    <Textarea
+                      id="video-scene-animation"
+                      value={selectedScene.animation ?? ""}
+                      onChange={(event) => handleFieldChange("animation", event.target.value)}
+                      className="min-h-[80px] resize-none text-caption"
+                      placeholder="例如：讲到每个步骤时逐一展开流程，关键选择放大，最后连成完整路径。"
+                    />
+                  </div>
+
+                  {assetsPanel}
+
+                </fieldset>
               </div>
 
               <div className="shrink-0 border-t border-border/70 p-3">
@@ -1137,65 +1115,24 @@ export function StoryboardPhase({
                     role="alert"
                   >
                     <AlertCircle className="mt-0.5 h-3 w-3 shrink-0" />
-                    <span className="flex-1">{parseError}</span>
+                    <span className="flex-1">内容读取失败，请重试。</span>
                     <Button
                       variant="ghost"
                       size="sm"
                       className="h-5 px-1.5 text-micro"
                       onClick={() => {
                         setParseError(null);
-                        setStoryboardExists(null);
                         loadScenes();
                       }}
-                      aria-label="重试加载分镜"
+                      aria-label="重试读取内容"
                     >
                       <RefreshCw className="h-3 w-3" />
                     </Button>
                   </div>
                 )}
-                <Button
-                  className="w-full"
-                  onClick={handleLock}
-                  disabled={
-                    locking ||
-                    saveState === "saving" ||
-                    saveState === "error" ||
-                    scenes.length === 0
-                  }
-                >
-                  {locking ? (
-                    <Loader2 className="mr-1.5 h-4 w-4 animate-spin" />
-                  ) : alreadyLocked ? (
-                    <ArrowRight className="mr-1.5 h-4 w-4" />
-                  ) : (
-                    <Check className="mr-1.5 h-4 w-4" />
-                  )}
-                  {alreadyLocked ? "返回制作" : "确认分镜，进入制作"}
-                </Button>
               </div>
 
-              <AssetRightsDialog
-                open={assetImportOpen}
-                fileName={assetImportPath?.split(/[\\/]/).pop() ?? "所选素材"}
-                value={assetRights}
-                loading={assetImporting}
-                onChange={setAssetRights}
-                onCancel={() => {
-                  setAssetImportOpen(false);
-                  setAssetImportPath(null);
-                }}
-                onConfirm={() => void handleConfirmAssetImport()}
-              />
-              <AssetRightsDialog
-                open={rightsAsset !== null}
-                fileName={rightsAsset?.originalName ?? "项目素材"}
-                value={assetRights}
-                loading={rightsUpdating}
-                title="更新素材使用权"
-                onChange={setAssetRights}
-                onCancel={() => setRightsAsset(null)}
-                onConfirm={() => void handleUpdateAssetRights()}
-              />
+              {assetDialogs}
 
               <AlertDialog
                 open={deleteConfirmOpen}
@@ -1224,6 +1161,24 @@ export function StoryboardPhase({
                   </AlertDialogFooter>
                 </AlertDialogContent>
               </AlertDialog>
+              <Dialog
+                open={playbackError !== null}
+                onOpenChange={(open) => {
+                  if (!open) setPlaybackError(null);
+                }}
+              >
+                <DialogContent>
+                  <DialogHeader>
+                    <DialogTitle>{playbackError?.title}</DialogTitle>
+                    <DialogDescription>
+                      {playbackError?.description}
+                    </DialogDescription>
+                  </DialogHeader>
+                  <DialogFooter>
+                    <Button onClick={() => setPlaybackError(null)}>关闭</Button>
+                  </DialogFooter>
+                </DialogContent>
+              </Dialog>
             </>
           ) : (
             <div className="flex flex-1 flex-col items-center justify-center gap-3 px-6 text-center text-ui text-muted-foreground">
@@ -1231,10 +1186,10 @@ export function StoryboardPhase({
                 <>
                   <AlertCircle className="h-6 w-6 text-destructive" />
                   <div className="font-medium text-foreground">
-                    分镜解析失败
+                    内容暂时无法读取
                   </div>
                   <div className="max-w-md text-caption leading-relaxed">
-                    {parseError}
+                    内容读取失败，请重试或在对话中告诉 Mona。
                   </div>
                   <Button
                     variant="outline"
@@ -1242,7 +1197,6 @@ export function StoryboardPhase({
                     className="mt-1 h-8 text-caption"
                     onClick={() => {
                       setParseError(null);
-                      setStoryboardExists(null);
                       loadScenes();
                     }}
                   >
@@ -1250,43 +1204,8 @@ export function StoryboardPhase({
                     重新加载
                   </Button>
                 </>
-              ) : generationError || aiFinishedEmpty || generationMayNotHaveStarted ? (
-                <>
-                  <AlertCircle className="h-6 w-6 text-amber-500" />
-                  <div className="font-medium text-foreground">
-                    {generationError
-                      ? "分镜生成未能启动"
-                      : aiFinishedEmpty
-                        ? "AI 已完成回复，但未检测到分镜文件"
-                        : "未检测到正在执行的分镜任务"}
-                  </div>
-                  <div className="max-w-md text-caption leading-relaxed">
-                    {generationError ?? "请重新发送分镜任务；不会创建新的视频项目。"}
-                  </div>
-                  <Button
-                    variant="outline"
-                    size="sm"
-                    className="mt-1 h-8 text-caption"
-                    onClick={() => {
-                      if (onRetryGeneration) {
-                        setGenerationMayNotHaveStarted(false);
-                        setGenerationWatchToken((current) => current + 1);
-                        onRetryGeneration();
-                        return;
-                      }
-                      loadScenes();
-                    }}
-                  >
-                    <RefreshCw className="mr-1.5 h-3.5 w-3.5" />
-                    {onRetryGeneration ? "重新发送分镜任务" : "重新加载"}
-                  </Button>
-                </>
               ) : (
-                <>
-                  <Loader2 className="h-5 w-5 animate-spin" />
-                  <div>AI 正在生成分镜草稿...</div>
-                  <div className="text-micro">完成后会自动显示在此处</div>
-                </>
+                <><div>{busy ? "Mona 正在准备分镜方案…" : "还没有分镜方案"}</div><div className="text-caption">方案会显示在这里。确认和调整后再生成视频。</div></>
               )}
             </div>
           )}

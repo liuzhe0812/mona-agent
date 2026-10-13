@@ -392,7 +392,7 @@ export function DataGrid({ tab, onBrowse, onRefresh }: { tab: QueryTab; onBrowse
                       </>}
                     </div>
                     <div role="separator" aria-label={`调整 ${col.name} 列宽`} aria-orientation="vertical" tabIndex={0}
-                      className="absolute inset-y-0 right-0 w-1 cursor-col-resize hover:bg-info/30 focus-visible:bg-info/30"
+                      className="mona-resize-handle absolute inset-y-0 right-0 w-1 cursor-col-resize"
                       onMouseDown={(e) => { e.preventDefault(); resize.current = { name: col.name, x: e.clientX, width: widthFor(col.name) }; }}
                       onKeyDown={(e) => { if (e.key === "ArrowLeft" || e.key === "ArrowRight") { e.preventDefault(); setWidths((old) => ({ ...old, [col.name]: Math.max(100, widthFor(col.name) + (e.key === "ArrowRight" ? 20 : -20)) })); } }} />
                   </th>)}

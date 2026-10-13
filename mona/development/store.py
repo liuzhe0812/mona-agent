@@ -638,7 +638,7 @@ class DevelopmentStore:
             self._event(db, session, "collaboration.continuing", {"inputId": request_id}, run)
             return value
 
-    def record_collaboration_result_read(self, identifier: str, parent_run_id: str) -> None:
+    def record_collaboration_result_read(self, identifier: str, parent_run_id: str, *, preview_received: bool = False) -> None:
         with self._connection(write=True) as db:
             record = self._get(db, Collaboration, identifier)
             run = self._get(db, Run, parent_run_id)
@@ -647,8 +647,11 @@ class DevelopmentStore:
                 raise ConflictError("结果接收方不是当前主任务。")
             if not record.return_message_id:
                 raise ConflictError("子任务结果尚未保存，不能标记为已返回主任务。")
-            if record.result_received_by_run_id != run.id:
+            if (record.result_received_by_run_id != run.id
+                    or preview_received and record.result_preview_received_by_run_id != run.id):
                 record.result_received_by_run_id = run.id
+                if preview_received:
+                    record.result_preview_received_by_run_id = run.id
                 self._save(db, record)
                 session = self._get(db, DevelopmentSession, run.session_id)
                 self._event(db, session, "collaboration.result_read", {"collaborationId": record.id}, run)
@@ -788,6 +791,7 @@ class DevelopmentStore:
             self._save(db, session)
             self._event(db, session, "run.closed_unknown", {"status": run.status.value, "revision": run.revision,
                 "bindingId": binding_id, "outcomeVerified": False, "requestReplayed": False}, run)
+            self._cancel_unapplied_steering(db, session, run)
             return run
 
     def create_run(self, session_id: str, request_id: str, message_id: str,
@@ -934,7 +938,20 @@ class DevelopmentStore:
                        (event_id, session.project_id, session.id, run.id, run.executor.value, kind, now().isoformat(), raw))
             session.updated_at = now()
             self._save(db, session)
+            if run.status in TERMINAL_RUN_STATUSES:
+                self._cancel_unapplied_steering(db, session, run)
             return True
+
+    def _cancel_unapplied_steering(self, db, session, run) -> None:
+        for row in db.execute("SELECT payload FROM inputs WHERE run_id=? AND state='pending'", (run.id,)).fetchall():
+            value = RunInput.model_validate_json(row[0])
+            if value.intent != "steering" or value.follow_up_allowed:
+                continue
+            value.state = InputState.CANCELLED
+            value.revision += 1
+            self._save(db, value)
+            self._event(db, session, "input.cancelled", {"inputId": value.id, "revision": value.revision,
+                "reason": "turn_finished_before_steering", "message": "子任务已结束，纠偏未送入原轮次；没有启动后续任务。"}, run)
 
     def transition_run(self, run_id: str, expected_revision: int, status: RunStatus,
                        *, error_code: str | None = None) -> Run:
@@ -955,6 +972,8 @@ class DevelopmentStore:
             session = self._get(db, DevelopmentSession, run.session_id)
             self._event(db, session, "run.completed" if status == RunStatus.SUCCEEDED else f"run.{status.value}",
                         {"status": status.value, "revision": run.revision, "errorCode": error_code}, run)
+            if status in TERMINAL_RUN_STATUSES:
+                self._cancel_unapplied_steering(db, session, run)
             return run
 
     def enqueue_input(self, value: RunInput) -> RunInput:
@@ -968,7 +987,7 @@ class DevelopmentStore:
             row = db.execute("SELECT payload FROM inputs WHERE id=?", (value.id,)).fetchone()
             if row:
                 previous = RunInput.model_validate_json(row[0])
-                if (previous.session_id, previous.run_id, previous.message_id, previous.intent) != (value.session_id, value.run_id, value.message_id, value.intent):
+                if (previous.session_id, previous.run_id, previous.message_id, previous.intent, previous.follow_up_allowed) != (value.session_id, value.run_id, value.message_id, value.intent, value.follow_up_allowed):
                     raise ConflictError("输入标识已经被其他内容使用。")
                 return previous
             if run.status in TERMINAL_RUN_STATUSES:
@@ -1137,7 +1156,7 @@ class DevelopmentStore:
             value = self._get(db, RunInput, input_id)
             self._revision(value.revision, expected_revision)
             run = self._get(db, Run, value.run_id)
-            if value.state != InputState.PENDING or run.status != RunStatus.SUCCEEDED:
+            if value.state != InputState.PENDING or run.status != RunStatus.SUCCEEDED or not value.follow_up_allowed:
                 raise ConflictError("仅自动派发成功轮次之后尚未发送的后续消息。")
             if value.intent == "steering":
                 session = self._get(db, DevelopmentSession, value.session_id)
@@ -1155,6 +1174,8 @@ class DevelopmentStore:
                 raise ConflictError("排队消息不能跨会话转移。")
             for row in db.execute("SELECT payload FROM inputs WHERE run_id=? AND state='pending'", (source.id,)).fetchall():
                 value = RunInput.model_validate_json(row[0])
+                if not value.follow_up_allowed:
+                    continue
                 value.run_id = target.id
                 value.revision += 1
                 db.execute("UPDATE inputs SET run_id=?, payload=? WHERE id=?", (target.id, value.model_dump_json(), value.id))

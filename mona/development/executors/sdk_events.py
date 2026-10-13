@@ -9,7 +9,13 @@ from typing import Any
 
 from mona.development.display_content import display_content
 from mona.development.executors.base import NativeEvent
-from mona.development.executors.host_tools import SDK_HOST_TOOL, host_servers_valid
+from mona.development.executors.host_tools import (
+    HOST_SERVER,
+    SDK_HOST_TOOL,
+    SDK_WORK_TOOL,
+    WORK_SERVER,
+    host_servers_valid,
+)
 from mona.development.executors.rpc import RpcError
 
 
@@ -47,10 +53,14 @@ def _field(value: Any, *names: str) -> Any:
 
 
 class SDKEventProjector:
-    def __init__(self, native_session_id: str, *, host_collaboration: bool = False, resuming: bool = False):
+    def __init__(self, native_session_id: str, *, host_collaboration: bool = False,
+                 work_tool: bool = False, resuming: bool = False):
         self.native_session_id = native_session_id
         self.resuming = resuming
         self.host_collaboration = host_collaboration
+        self.work_tool = work_tool
+        self.host_tool = SDK_WORK_TOOL if work_tool else SDK_HOST_TOOL if host_collaboration else None
+        self.host_server = WORK_SERVER if work_tool else HOST_SERVER
         self.turn_id: str | None = None
         self.ordinal = 0
         self.item_id = ""
@@ -150,7 +160,7 @@ class SDKEventProjector:
         if kind == "system" and data.get("subtype") == "init":
             details = data.get("data", data)
             servers = details.get("mcp_servers", [])
-            if not host_servers_valid(servers, self.host_collaboration):
+            if not host_servers_valid(servers, self.host_tool is not None, server=self.host_server):
                 raise RpcError("native_policy_violation", "原生执行者加载了项目白名单之外的 MCP。", outcome_unknown=True)
             if not native_id:
                 raise RpcError("native_identity_unconfirmed", "原生初始化消息缺少会话标识。", outcome_unknown=True)
@@ -213,7 +223,8 @@ class SDKEventProjector:
                     tool_id, tool = block.get("id"), block.get("name", "")
                     if not isinstance(tool_id, str):
                         raise RpcError("native_tool_identity", "原生工具调用缺少标识。", outcome_unknown=True)
-                    if tool.startswith("mcp__") and not (self.host_collaboration and tool == SDK_HOST_TOOL):
+                    if (self.work_tool and tool != SDK_WORK_TOOL
+                            or tool.startswith("mcp__") and tool != self.host_tool):
                         raise RpcError("native_policy_violation", "检测到未授权的外部工具调用。", outcome_unknown=True)
                     arguments = block.get("input", {})
                     if not isinstance(arguments, dict):
@@ -333,7 +344,8 @@ class SDKEventProjector:
                 tool_id, tool = block.get("id"), block.get("name", "")
                 if not isinstance(tool_id, str):
                     raise RpcError("native_tool_identity", "原生工具调用缺少标识。", outcome_unknown=True)
-                if tool.startswith("mcp__") and not (self.host_collaboration and tool == SDK_HOST_TOOL):
+                if (self.work_tool and tool != SDK_WORK_TOOL
+                        or tool.startswith("mcp__") and tool != self.host_tool):
                     raise RpcError("native_policy_violation", "检测到未授权的外部工具调用。", outcome_unknown=True)
                 self.tool_ids.add(tool_id)
                 streamed = tool_id in self.streamed_tool_ids

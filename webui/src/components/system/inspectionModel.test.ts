@@ -65,8 +65,8 @@ describe("buildInspectionCards", () => {
     expect(large.find((card) => card.id === "storage")).toMatchObject({
       tone: "info",
       metric: "2.5 GB",
-      goal: "释放磁盘可清理空间",
-      actionLabel: "生成清理方案",
+      goal: null,
+      actionLabel: "清理",
       tab: "storage",
     });
   });
@@ -106,6 +106,17 @@ describe("buildInspectionCards", () => {
       actionLabel: "查看启动项",
       tab: "startup",
     });
+  });
+
+  it("can return every inspection issue for the overview table", () => {
+    const cards = buildInspectionCards(emptyInput({
+      diagnostics: [attentionCheck("pending_reboot"), attentionCheck("driver_issues")],
+      startup: { items: [{ id: "s1", name: "NewApp", isNew: true }] } as InspectionInput["startup"],
+      software: { updates: [{ id: "a", name: "App" }] } as InspectionInput["software"],
+    }), Infinity);
+
+    expect(cards).toHaveLength(4);
+    expect(cards.map((card) => card.id)).toEqual(["diagnostic:pending_reboot", "diagnostic:driver_issues", "software", "startup"]);
   });
 
   it("creates a boot slowdown card only when delta exceeds the threshold", () => {

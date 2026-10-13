@@ -36,7 +36,6 @@ def _db_metadata() -> dict[str, Any]:
 class DbQueryTool(Tool):
     config_key = "db_query"
     _scopes = {"core"}
-    subscription_required = True
     def set_context(self, ctx: RequestContext) -> None:
         _DB_REQUEST_CONTEXT.set(ctx)
 
@@ -99,7 +98,6 @@ class DbQueryTool(Tool):
 class DbInspectTool(Tool):
     config_key = "db_inspect"
     _scopes = {"core"}
-    subscription_required = True
     def set_context(self, ctx: RequestContext) -> None:
         _DB_REQUEST_CONTEXT.set(ctx)
 
@@ -173,7 +171,6 @@ class DbInspectTool(Tool):
 class DbSqlDraftTool(Tool):
     config_key = "db_sql_draft"
     _scopes = {"core"}
-    subscription_required = True
 
     @property
     def name(self) -> str:

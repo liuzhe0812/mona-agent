@@ -520,12 +520,13 @@ def _channels_payload(config: Any) -> dict[str, Any]:
     reports its enabled state and (for channels that support interactive
     login) whether saved credentials exist on disk.
     """
-    from mona.channels.registry import discover_all
+    from mona.channels.registry import discover_enabled
     from mona.webui.weixin_login import WeixinLoginSession
 
     available: list[dict[str, Any]] = []
+    exposed = ("weixin", "wecom", "qq", "feishu")
     try:
-        all_channels = discover_all()
+        all_channels = discover_enabled(set(exposed))
     except Exception:
         all_channels = {}
 
@@ -536,7 +537,6 @@ def _channels_payload(config: Any) -> dict[str, Any]:
         "qq": ("app_id", "secret"),
         "feishu": ("app_id", "app_secret"),
     }
-    exposed = ("weixin", "wecom", "qq", "feishu")
     for name in exposed:
         cls = all_channels.get(name)
         if cls is None:
@@ -720,8 +720,8 @@ def _preset_capabilities_payload(config: Any, preset: Any) -> dict[str, Any]:
     ).to_dict()
 
 
-def settings_payload(*, requires_restart: bool = False) -> dict[str, Any]:
-    config = load_config()
+def settings_payload(*, requires_restart: bool = False, config: Any = None) -> dict[str, Any]:
+    config = config if config is not None else load_config()
     defaults = config.agents.defaults
     active_preset_name = defaults.model_preset or "default"
     try:
@@ -858,6 +858,10 @@ def settings_payload(*, requires_restart: bool = False) -> dict[str, Any]:
     return {
         "agent": {
             "model": effective_preset.model,
+            "executor": defaults.executor,
+            "native_model": defaults.native_model,
+            "native_reasoning_effort": defaults.native_reasoning_effort,
+            "native_context_window_tokens": defaults.native_context_window_tokens,
             "provider": selected_provider,
             "resolved_provider": provider_name,
             "has_api_key": bool(provider and provider.api_key),
@@ -990,6 +994,10 @@ def update_agent_settings(query: QueryParams) -> dict[str, Any]:
     defaults = config.agents.defaults
     changed = False
     restart_required = False
+
+    if any(key in query for key in ("provider", "model", "model_preset", "modelPreset")) and defaults.executor != "mona":
+        defaults.executor = "mona"
+        changed = True
 
     if "model_preset" in query or "modelPreset" in query:
         preset = (_query_first_alias(query, "model_preset", "modelPreset") or "").strip()
@@ -1381,7 +1389,7 @@ def update_provider_settings(query: QueryParams) -> dict[str, Any]:
                 was_default = False
         config.providers.cindy.pop(provider_name, None)
         # Clear a legacy fixed-field entry with the same public ID as well;
-        # otherwise a deleted Cindy provider would reappear as configured.
+        # otherwise a deleted dynamic provider would reappear as configured.
         if isinstance(legacy_config, ProviderConfig):
             setattr(config.providers, provider_name, ProviderConfig())
         if was_default:
@@ -1428,7 +1436,7 @@ def update_provider_settings(query: QueryParams) -> dict[str, Any]:
         save_config(config)
         return settings_payload()
 
-    # Cindy IDs are persisted in their keyed map even when a legacy fixed
+    # Dynamic IDs are persisted in their keyed map even when a legacy fixed
     # provider with the same public name exists (for example ``deepseek``).
     if provider_config is None:
         provider_config = (
@@ -1440,7 +1448,7 @@ def update_provider_settings(query: QueryParams) -> dict[str, Any]:
         if catalog_entry is None:
             raise WebUISettingsError("unknown provider")
         # Copy legacy credentials on first edit so existing Mona configs keep
-        # working while all new Cindy state uses the dynamic map.
+        # working while all new provider state uses the dynamic map.
         provider_config = (
             legacy_config.model_copy(deep=True)
             if isinstance(legacy_config, ProviderConfig)
@@ -2202,19 +2210,19 @@ def update_stock_settings(
 
 
 def _provider_config(config: Any, provider_name: str) -> Any:
-    """Resolve fixed-schema and Cindy dynamic provider configs uniformly."""
+    """Resolve fixed-schema and dynamic provider configs uniformly."""
     providers = config.providers
     getter = getattr(providers, "get_provider_config", None)
     return getter(provider_name) if getter else getattr(providers, provider_name, None)
 
 
 def _chat_provider_config(config: Any, provider_name: str) -> Any:
-    """Resolve only the Cindy chat-provider entry for a catalog ID."""
+    """Resolve the dynamic chat-provider entry for a catalog ID."""
     dynamic = config.providers.cindy.get(provider_name)
     if dynamic is not None:
         return dynamic
     # Read legacy fixed fields for backwards compatibility; first mutation
-    # above migrates a copy into the Cindy map.
+    # above migrates a copy into the dynamic map.
     return getattr(config.providers, provider_name, None)
 
 

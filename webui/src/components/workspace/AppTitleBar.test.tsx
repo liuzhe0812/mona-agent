@@ -1,13 +1,24 @@
-import { fireEvent, render, screen } from "@testing-library/react";
+import { act, fireEvent, render, screen } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const startDragging = vi.fn().mockResolvedValue(undefined);
+const windowState = vi.hoisted(() => ({ maximized: false, onResize: undefined as (() => void) | undefined }));
+const unlistenResize = vi.hoisted(() => vi.fn());
+const toggleMaximize = vi.hoisted(() => vi.fn(async () => { windowState.maximized = !windowState.maximized; }));
 
 vi.mock("@/components/ConnectionBadge", () => ({ ConnectionBadge: () => null }));
 vi.mock("@/components/browser/BrowserTab", () => ({ BrowserTabItem: () => null }));
 vi.mock("@/lib/tauri", () => ({ isTauri: () => true }));
 vi.mock("@tauri-apps/api/window", () => ({
-  getCurrentWindow: () => ({ startDragging }),
+  getCurrentWindow: () => ({
+    startDragging,
+    toggleMaximize,
+    isMaximized: async () => windowState.maximized,
+    onResized: async (handler: () => void) => {
+      windowState.onResize = handler;
+      return unlistenResize;
+    },
+  }),
 }));
 
 import { AppTitleBar } from "./AppTitleBar";
@@ -16,6 +27,10 @@ import { useVideoRuntimeDownloadStore } from "@/lib/video-runtime-download-store
 describe("AppTitleBar", () => {
   beforeEach(() => {
     startDragging.mockClear();
+    windowState.maximized = false;
+    windowState.onResize = undefined;
+    unlistenResize.mockClear();
+    toggleMaximize.mockClear();
     useVideoRuntimeDownloadStore.setState({ jobs: [], error: null });
   });
 
@@ -105,4 +120,27 @@ describe("AppTitleBar", () => {
     expect(screen.getAllByText("42%").length).toBeGreaterThan(0);
   });
 
+  it("switches between maximize and restore when the window is toggled", async () => {
+    render(<AppTitleBar tabs={[]} activeTabId="mona" onTabClick={vi.fn()} onTabClose={vi.fn()} onNewTab={vi.fn()} />);
+
+    fireEvent.click(screen.getByRole("button", { name: "最大化" }));
+    expect(await screen.findByRole("button", { name: "还原" })).toHaveAttribute("title", "还原");
+    fireEvent.click(screen.getByRole("button", { name: "还原" }));
+    expect(await screen.findByRole("button", { name: "最大化" })).toHaveAttribute("title", "最大化");
+    expect(toggleMaximize).toHaveBeenCalledTimes(2);
+  });
+
+  it("reads the initial window state and follows native window resize events", async () => {
+    windowState.maximized = true;
+    const { unmount } = render(<AppTitleBar tabs={[]} activeTabId="mona" onTabClick={vi.fn()} onTabClose={vi.fn()} onNewTab={vi.fn()} />);
+    expect(await screen.findByRole("button", { name: "还原" })).toBeInTheDocument();
+
+    await act(async () => {
+      windowState.maximized = false;
+      windowState.onResize?.();
+    });
+    expect(screen.getByRole("button", { name: "最大化" })).toBeInTheDocument();
+    unmount();
+    expect(unlistenResize).toHaveBeenCalledTimes(1);
+  });
 });

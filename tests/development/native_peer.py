@@ -253,6 +253,8 @@ for raw in sys.stdin.buffer:
         persist_peer_state()
         text = params["input"][0]["text"].rsplit("[/Mona handoff — current user request follows]", 1)[-1].strip()
         text = text.rsplit("[/Runtime Context]", 1)[-1].strip()
+        if text.startswith("协作目标：hold\n"):
+            text = "hold"
         if text == "history_only":
             turn["status"] = "completed"
             threads[owner]["status"] = {"type": "idle"}
@@ -301,10 +303,21 @@ for raw in sys.stdin.buffer:
             sys.exit(0)
         result(identifier, {"turn": dict(turn)})
     elif method == "turn/steer":
+        steering_settings = root / "steering-behavior.json"
+        steering_behavior = json.loads(steering_settings.read_text(encoding="utf8")) if steering_settings.exists() else {}
+        if steering_behavior.get("loseReceipt"):
+            continue
         if any(isinstance(item, dict) and item.get("text") == "steer_no_ack"
                for item in params.get("input", [])):
             continue
         result(identifier, {"turnId": params["expectedTurnId"]})
+        if steering_behavior.get("respond"):
+            def steering_response(owner=params["threadId"], turn_id=params["expectedTurnId"]):
+                time.sleep(0.05)
+                item = {"id": turn_id + "-steering", "type": "agentMessage", "text": "Steering observed"}
+                notification("item/started", {"threadId": owner, "turnId": turn_id, "item": {**item, "text": ""}})
+                notification("item/completed", {"threadId": owner, "turnId": turn_id, "item": item})
+            threading.Thread(target=steering_response, daemon=True).start()
     elif method == "turn/interrupt":
         result(identifier, {})
         def interrupted(owner=params["threadId"], turn_id=params["turnId"]):

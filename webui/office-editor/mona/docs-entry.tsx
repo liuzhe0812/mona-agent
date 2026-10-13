@@ -27,6 +27,7 @@ import '@genoffice/ui/color-picker.css'
 import '@genoffice/ui/dropdown.css'
 import '../vendor/genoffice/apps/docs/src/renderer/styles.css'
 import './ribbon-overflow.css'
+import './resize-handles.css'
 
 if (typeof document.addEventListener === 'function') installScreenTips()
 

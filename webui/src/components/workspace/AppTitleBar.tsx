@@ -1,5 +1,5 @@
-import type { ReactNode } from "react";
-import { Globe2, Maximize2, Minus, X } from "lucide-react";
+import { useEffect, useState, type ReactNode } from "react";
+import { Copy, Globe2, Minus, Square, X } from "lucide-react";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { useTranslation } from "react-i18next";
 
@@ -56,6 +56,32 @@ export function AppTitleBar({
   onRevealMdInExplorer,
 }: AppTitleBarProps) {
   const { t } = useTranslation();
+  const [maximized, setMaximized] = useState(false);
+
+  useEffect(() => {
+    let mounted = true;
+    let unlisten: (() => void) | undefined;
+    void withCurrentWindow(async (win) => {
+      const syncMaximized = async () => {
+        const value = await win.isMaximized();
+        if (mounted) setMaximized(value);
+      };
+      const stop = await win.onResized(() => {
+        void withCurrentWindow(() => syncMaximized());
+      });
+      if (!mounted) {
+        stop();
+        return;
+      }
+      unlisten = stop;
+      await syncMaximized();
+    });
+    return () => {
+      mounted = false;
+      unlisten?.();
+    };
+  }, []);
+
   return (
     <header
       data-tauri-drag-region="deep"
@@ -110,12 +136,15 @@ export function AppTitleBar({
           <Minus className="h-3.5 w-3.5" />
         </TitleBarButton>
         <TitleBarButton
-          label="最大化"
+          label={maximized ? "还原" : "最大化"}
           onClick={() => {
-            void withCurrentWindow((win) => win.toggleMaximize());
+            void withCurrentWindow(async (win) => {
+              await win.toggleMaximize();
+              setMaximized(await win.isMaximized());
+            });
           }}
         >
-          <Maximize2 className="h-3.5 w-3.5" />
+          {maximized ? <Copy className="h-3.5 w-3.5 -scale-x-100" /> : <Square className="h-3.5 w-3.5" />}
         </TitleBarButton>
         <TitleBarButton
           label="关闭"

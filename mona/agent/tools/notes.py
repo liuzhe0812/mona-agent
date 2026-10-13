@@ -198,7 +198,6 @@ class NotesReadTool(Tool):
     _scopes = {"core", "subagent"}
     _plugin_discoverable = True
     read_only = True
-    subscription_required = True
 
     @classmethod
     def enabled(cls, ctx: Any) -> bool:
@@ -277,7 +276,6 @@ class NotesSaveImageTool(Tool):
 
     _scopes = {"core", "subagent"}
     _plugin_discoverable = True
-    subscription_required = True
 
     @classmethod
     def enabled(cls, ctx: Any) -> bool:

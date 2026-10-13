@@ -56,7 +56,6 @@ import {
   TooltipTrigger,
 } from "@/components/ui/tooltip";
 import { useEmailStore, resolveSenderDisplay } from "./store/emailStore";
-import { useLicense } from "@/hooks/useLicense";
 import type { EmailAnalysis, EmailAttachment, EmailKeyInfo, EmailMessage } from "./lib/types";
 import { getFolderDisplayName, sortFolders } from "./lib/folderUtils";
 import * as emailApi from "./lib/emailApi";
@@ -127,8 +126,7 @@ function parseAddressListWithContacts(
   });
 }
 
-export function MailView({ onOpenSubscribe }: { onOpenSubscribe?: () => void }) {
-  const { licenseActive } = useLicense();
+export function MailView() {
   const selectedMessage = useEmailStore((s) => s.selectedMessage);
   const toggleRead = useEmailStore((s) => s.toggleRead);
   const toggleStarred = useEmailStore((s) => s.toggleStarred);
@@ -548,10 +546,6 @@ export function MailView({ onOpenSubscribe }: { onOpenSubscribe?: () => void }) 
 
   // 手动触发 AI 日程提取
   const handleExtractSchedule = async () => {
-    if (!licenseActive) {
-      onOpenSubscribe?.();
-      return;
-    }
     setExtractingSchedule(true);
     try {
       const base = await getServicesHttpBase();

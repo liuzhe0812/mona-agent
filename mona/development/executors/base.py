@@ -28,6 +28,7 @@ class SessionStart:
     # Only a durable absence of runs permits reopening an allocated SDK ID as new.
     resume_history: bool = True
     context_window_tokens: int | None = None
+    work_prompt: str | None = None
 
 
 class ExecutorModel(Contract):

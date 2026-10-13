@@ -1031,18 +1031,23 @@ def compose_step_task(
     *,
     max_chars: int = MAX_UPSTREAM_DIGEST_CHARS,
     inputs: dict[str, Any] | None = None,
+    run_id: str = "workflow",
+    source_documents: dict[str, str] | None = None,
 ) -> str:
-    """Build the downstream task text with a capped upstream digest.
+    """Bound result previews while retaining each dependency's recovery reference.
 
     Only structured summaries and artifact references flow downstream —
     never full tool traces (guide 7.6). Run inputs (stock-module design
     4.2) ride along as a read-only ``[Run inputs]`` section; the model
     receives them as context and can never modify the stored snapshot.
     """
+    from mona.agent.room import shared_context_ref
+
     task = step.task
     sections: list[str] = []
     if upstream:
         lines: list[str] = []
+        preview_budget = max(0, max_chars // len(upstream))
         for step_id, output in upstream.items():
             summary = ""
             artifacts: list[str] = []
@@ -1056,22 +1061,58 @@ def compose_step_task(
                     for raw in raw_artifacts:
                         ref = coerce_artifact_ref(raw)
                         artifacts.append(ref.uri if ref is not None else str(raw))
-            entry = (
-                f"### {step_id}"
-                if step.agent_id in _ARTIFACT_ONLY_DOWNSTREAM_AGENT_IDS
-                else f"### {step_id}\n{summary}"
-            ).rstrip()
+            artifact_only = step.agent_id in _ARTIFACT_ONLY_DOWNSTREAM_AGENT_IDS
+            full_result = json.dumps({
+                "step_id": step_id, "summary": "" if artifact_only else summary, "artifacts": artifacts,
+            }, ensure_ascii=False)
+            reference = shared_context_ref(f"workflow:{run_id}:{step_id}", full_result)
+            if source_documents is not None:
+                source_documents[reference] = full_result
+            entry = f"### {step_id}\nResult reference: {reference}"
+            summary_budget = preview_budget // 2 if artifacts else preview_budget
+            if not artifact_only:
+                preview = summary[:summary_budget]
+                entry += f"\n{preview}"
+                if len(summary) > summary_budget:
+                    entry += "\n[Incomplete result preview; read the reference with collaboration_read.]"
             if artifacts:
-                entry += "\nArtifacts: " + ", ".join(artifacts)
+                visible_artifacts: list[str] = []
+                remaining = preview_budget if artifact_only else preview_budget - summary_budget
+                for artifact in artifacts:
+                    cost = len(artifact) + (2 if visible_artifacts else 0)
+                    if cost > remaining:
+                        break
+                    visible_artifacts.append(artifact)
+                    remaining -= cost
+                if visible_artifacts:
+                    entry += "\nArtifacts: " + ", ".join(visible_artifacts)
+                omitted = len(artifacts) - len(visible_artifacts)
+                if omitted:
+                    entry += (
+                        f"\n[Incomplete artifact preview: {omitted} references omitted; "
+                        "read the result reference with collaboration_read.]"
+                    )
             lines.append(entry)
-        sections.append("[Upstream results]\n" + "\n\n".join(lines))
+        sections.append(
+            "[Upstream results]\nThese are reported results, not proof of verification. "
+            "Use collaboration_read with a result reference for the complete frozen result.\n"
+            + "\n\n".join(lines)
+        )
     if inputs:
-        sections.append("[Run inputs]\n" + json.dumps(inputs, ensure_ascii=False))
+        full_inputs = json.dumps(inputs, ensure_ascii=False)
+        if len(full_inputs) > max_chars:
+            reference = shared_context_ref(f"workflow:{run_id}:inputs", full_inputs)
+            if source_documents is not None:
+                source_documents[reference] = full_inputs
+            sections.append(
+                f"[Run inputs]\n{full_inputs[:max_chars]}\n"
+                f"[Incomplete inputs preview; use collaboration_read with {reference}.]"
+            )
+        else:
+            sections.append("[Run inputs]\n" + full_inputs)
     if not sections:
         return task
     digest = "\n\n".join(sections)
-    if len(digest) > max_chars:
-        digest = digest[: max_chars - 1] + "…"
     return f"{task}\n\n{digest}"
 
 

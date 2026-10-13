@@ -116,6 +116,8 @@ bash "$repo_root/webui/office-editor/scripts/build-xlsx-sidecar.sh"
 sign_file "$office_sidecar"
 verify_office_manifest
 
+npm --prefix "$repo_root/webui" run build:video-runtime
+
 case "$gateway_resource" in
   "$repo_root"/src-tauri/resources/mona-gateway) ;;
   *) die "gateway resource path is outside the repository" ;;

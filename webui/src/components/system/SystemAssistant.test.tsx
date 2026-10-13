@@ -1,13 +1,13 @@
-import { fireEvent, render, screen } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import type { ComponentProps } from "react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import { SystemAssistant } from "./SystemAssistant";
-import type { StorageAnalysisEvidence, SystemEvidence } from "./systemAgentApi";
+import type { StorageAnalysisEvidence, SystemAgentPlan, SystemEvidence } from "./systemAgentApi";
 
 const systemAgentMock = vi.hoisted(() => ({
   collect: vi.fn(() => Promise.resolve({} as SystemEvidence)),
-  plan: vi.fn(() => Promise.resolve({ summary: "方案", findings: [], actions: [] })),
+  plan: vi.fn<(goal: string, evidence: SystemEvidence, signal?: AbortSignal) => Promise<SystemAgentPlan>>(() => Promise.resolve({ summary: "方案", findings: [], actions: [] })),
   diagnose: vi.fn(() => Promise.resolve({
     summary: "开机变慢与新增启动项相关",
     hypotheses: [{
@@ -93,19 +93,16 @@ const storageStub = (result: ComponentProps<typeof SystemAssistant>["storage"]["
 
 describe("SystemAssistant", () => {
   beforeEach(() => {
-    systemAgentMock.collect.mockClear();
-    systemAgentMock.plan.mockClear();
-    systemAgentMock.diagnose.mockClear();
-    systemAgentMock.storageAnalyze.mockClear();
-    systemAgentMock.execute.mockClear();
+    vi.clearAllMocks();
+    vi.stubGlobal("fetch", vi.fn(async () => new Response(JSON.stringify({ icons: [], agents: [] }))));
   });
 
-  it("keeps the wide right rail constrained so its content can scroll", () => {
+  it("keeps the wide right rail constrained so its content can scroll", async () => {
     render(
       <SystemAssistant
         tab="software"
         storage={storageStub()}
-        software={null}
+        diagnosticChecks={[]}
         onNavigate={vi.fn()}
         collapsed={false}
         handoffTask={null}
@@ -116,14 +113,15 @@ describe("SystemAssistant", () => {
     );
 
     expect(screen.getByRole("complementary", { name: "Mona 系统管家" }).className).toContain("min-h-0");
+    expect(screen.getByRole("heading", { name: "Mona", exact: true })).toBeInTheDocument();
   });
 
-  it("shows the inspection empty state when no issue is found", async () => {
+  it("keeps inspection hints out of the AI sidebar", () => {
     render(
       <SystemAssistant
         tab="software"
         storage={storageStub()}
-        software={null}
+        diagnosticChecks={[]}
         onNavigate={vi.fn()}
         collapsed={false}
         handoffTask={null}
@@ -133,7 +131,9 @@ describe("SystemAssistant", () => {
       />,
     );
 
-    expect(await screen.findByText("系统状态良好，暂无需要处理的事项。")).toBeTruthy();
+    expect(screen.queryByText("巡检发现")).toBeNull();
+    expect(screen.queryByText("系统状态良好，暂无需要处理的事项。")).toBeNull();
+    expect(screen.getByLabelText("描述系统维护目标")).toBeEnabled();
   });
 
   it("opens the embedded Agent for a handoff and keeps the planner available", async () => {
@@ -141,7 +141,7 @@ describe("SystemAssistant", () => {
       <SystemAssistant
         tab="software"
         storage={storageStub()}
-        software={null}
+        diagnosticChecks={[]}
         onNavigate={vi.fn()}
         collapsed={false}
         handoffTask={{ id: "failed-uninstall", title: "卸载 Notepad++", action: "卸载软件", target: "Notepad++", arguments: { id: null, name: "Notepad++" }, error: "WinGet exit code 1603" }}
@@ -153,7 +153,9 @@ describe("SystemAssistant", () => {
 
     expect(await screen.findByText("WinGet exit code 1603")).toBeTruthy();
     fireEvent.click(screen.getByRole("button", { name: "返回维护建议" }));
-    expect(await screen.findByText("系统状态良好，暂无需要处理的事项。")).toBeTruthy();
+    expect(screen.queryByText("巡检发现")).toBeNull();
+    expect(screen.queryByText("系统状态良好，暂无需要处理的事项。")).toBeNull();
+    expect(screen.getByLabelText("描述系统维护目标")).toBeEnabled();
   });
 
   it("routes diagnostic questions to the diagnosis API and renders hypothesis cards", async () => {
@@ -161,7 +163,7 @@ describe("SystemAssistant", () => {
       <SystemAssistant
         tab="startup"
         storage={storageStub()}
-        software={null}
+        diagnosticChecks={[]}
         onNavigate={vi.fn()}
         collapsed={false}
         handoffTask={null}
@@ -178,6 +180,7 @@ describe("SystemAssistant", () => {
     expect(systemAgentMock.diagnose).toHaveBeenCalledWith(
       "为什么开机变慢了",
       expect.objectContaining({ checks: expect.any(Array) }),
+      expect.any(AbortSignal),
     );
     expect(systemAgentMock.plan).not.toHaveBeenCalled();
     expect(screen.getByText("新增启动项拖慢开机")).toBeTruthy();
@@ -192,7 +195,7 @@ describe("SystemAssistant", () => {
       <SystemAssistant
         tab="storage"
         storage={storageStub()}
-        software={null}
+        diagnosticChecks={[]}
         onNavigate={vi.fn()}
         collapsed={false}
         handoffTask={null}
@@ -206,7 +209,7 @@ describe("SystemAssistant", () => {
     fireEvent.click(screen.getByRole("button", { name: "生成维护方案" }));
 
     expect(await screen.findByText("方案")).toBeTruthy();
-    expect(systemAgentMock.plan).toHaveBeenCalledWith("清理磁盘空间", expect.anything());
+    expect(systemAgentMock.plan).toHaveBeenCalledWith("清理磁盘空间", expect.anything(), expect.any(AbortSignal));
     expect(systemAgentMock.diagnose).not.toHaveBeenCalled();
   });
 
@@ -216,7 +219,7 @@ describe("SystemAssistant", () => {
       <SystemAssistant
         tab="storage"
         storage={storageStub()}
-        software={null}
+        diagnosticChecks={[]}
         onNavigate={vi.fn()}
         collapsed={false}
         handoffTask={null}
@@ -230,6 +233,7 @@ describe("SystemAssistant", () => {
     expect(systemAgentMock.diagnose).toHaveBeenCalledWith(
       "请逐一评估这些大文件是否可以安全删除",
       expect.objectContaining({ checks: expect.any(Array) }),
+      expect.any(AbortSignal),
     );
     expect(systemAgentMock.plan).not.toHaveBeenCalled();
     // 假设卡不提供执行能力
@@ -241,7 +245,7 @@ describe("SystemAssistant", () => {
       <SystemAssistant
         tab="storage"
         storage={storageStub()}
-        software={null}
+        diagnosticChecks={[]}
         onNavigate={vi.fn()}
         collapsed={false}
         handoffTask={null}
@@ -252,7 +256,7 @@ describe("SystemAssistant", () => {
     );
 
     expect(await screen.findByText("方案")).toBeTruthy();
-    expect(systemAgentMock.plan).toHaveBeenCalledWith("清理磁盘空间", expect.anything());
+    expect(systemAgentMock.plan).toHaveBeenCalledWith("清理磁盘空间", expect.anything(), expect.any(AbortSignal));
     expect(systemAgentMock.diagnose).not.toHaveBeenCalled();
   });
 
@@ -283,7 +287,7 @@ describe("SystemAssistant", () => {
       <SystemAssistant
         tab="storage"
         storage={storage}
-        software={null}
+        diagnosticChecks={[]}
         onNavigate={vi.fn()}
         collapsed={false}
         handoffTask={null}
@@ -300,5 +304,86 @@ describe("SystemAssistant", () => {
     expect(JSON.stringify(evidence)).not.toContain("SecretProject");
     expect(evidence.scope.id).toBe("dir-project");
     expect(screen.getByText("审查长期未修改文件")).toBeTruthy();
+  });
+
+  it("stops evidence collection before it can start an AI request", async () => {
+    let finishCollection!: (value: SystemEvidence) => void;
+    systemAgentMock.collect.mockReturnValueOnce(new Promise((resolve) => { finishCollection = resolve; }));
+    render(
+      <SystemAssistant
+        tab="software"
+        storage={storageStub()}
+        diagnosticChecks={[]}
+        onNavigate={vi.fn()}
+        collapsed={false}
+        handoffTask={null}
+        onHandoffTaskHandled={vi.fn()}
+        onCollapse={vi.fn()}
+        analysisRequest={{ goal: "生成维护建议", nonce: 10 }}
+      />,
+    );
+
+    const stop = await screen.findByRole("button", { name: "停止任务" });
+    expect(stop).toBeEnabled();
+    fireEvent.click(stop);
+    expect(screen.getByRole("status")).toHaveTextContent("已停止");
+    expect(screen.getByLabelText("描述系统维护目标")).toBeEnabled();
+
+    await act(async () => finishCollection({} as SystemEvidence));
+    expect(systemAgentMock.plan).not.toHaveBeenCalled();
+    expect(systemAgentMock.diagnose).not.toHaveBeenCalled();
+    expect(screen.queryByRole("button", { name: "停止任务" })).toBeNull();
+  });
+
+  it("aborts a plan request and ignores its late result while a new task is running", async () => {
+    let finishOld!: (value: SystemAgentPlan) => void;
+    let finishNew!: (value: SystemAgentPlan) => void;
+    systemAgentMock.plan.mockReturnValueOnce(new Promise((resolve) => { finishOld = resolve; }));
+    systemAgentMock.plan.mockReturnValueOnce(new Promise((resolve) => { finishNew = resolve; }));
+    render(
+      <SystemAssistant
+        tab="software"
+        storage={storageStub()}
+        diagnosticChecks={[]}
+        onNavigate={vi.fn()}
+        collapsed={false}
+        handoffTask={null}
+        onHandoffTaskHandled={vi.fn()}
+        onCollapse={vi.fn()}
+        analysisRequest={null}
+      />,
+    );
+
+    const input = screen.getByLabelText("描述系统维护目标");
+    fireEvent.change(input, { target: { value: "检查软件更新" } });
+    fireEvent.click(screen.getByRole("button", { name: "生成维护方案" }));
+    await waitFor(() => expect(systemAgentMock.plan).toHaveBeenCalledTimes(1));
+    const oldSignal = systemAgentMock.plan.mock.calls[0][2]!;
+    fireEvent.click(screen.getByRole("button", { name: "停止任务" }));
+    expect(oldSignal.aborted).toBe(true);
+
+    fireEvent.change(input, { target: { value: "检查启动项\n保留必要项目" } });
+    fireEvent.click(screen.getByRole("button", { name: "生成维护方案" }));
+    await waitFor(() => expect(systemAgentMock.plan).toHaveBeenCalledTimes(2));
+    expect(systemAgentMock.plan).toHaveBeenLastCalledWith("检查启动项\n保留必要项目", expect.anything(), expect.any(AbortSignal));
+
+    await act(async () => finishOld({ summary: "旧任务结果", findings: [], actions: [] }));
+    expect(screen.queryByText("旧任务结果")).toBeNull();
+    expect(screen.getByRole("button", { name: "停止任务" })).toBeEnabled();
+    await act(async () => finishNew({ summary: "新任务结果", findings: [], actions: [] }));
+    expect(screen.getByText("新任务结果")).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "停止任务" })).toBeNull();
+  });
+
+  it("retains an uncertain operation result and prevents replay when execution or recheck rejects", async () => {
+    const action = { id: "update-1", type: "software_update" as const, targetIds: ["app-1"], targetNames: ["应用"], title: "更新应用", reason: "有可用更新", risk: "medium" as const, evidenceTab: "software" as const };
+    systemAgentMock.plan.mockResolvedValueOnce({ summary: "更新方案", findings: [], actions: [action, { ...action, id: "update-2", title: "更新其他应用" }] });
+    systemAgentMock.execute.mockRejectedValueOnce(new Error("复检失败"));
+    render(<SystemAssistant tab="software" storage={storageStub()} diagnosticChecks={[]} onNavigate={vi.fn()} collapsed={false} handoffTask={null} onHandoffTaskHandled={vi.fn()} onCollapse={vi.fn()} analysisRequest={{ goal: "更新软件", nonce: 20 }} />);
+
+    fireEvent.click(await screen.findByRole("button", { name: "确认并执行" }));
+    expect(await screen.findByText(/未能确认“更新应用”的结果/)).toBeInTheDocument();
+    expect(systemAgentMock.execute).toHaveBeenCalledTimes(1);
+    expect(screen.queryByRole("button", { name: "确认并执行" })).toBeNull();
   });
 });

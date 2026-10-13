@@ -81,14 +81,6 @@ if TYPE_CHECKING:
     from mona.session.manager import SessionManager
 
 
-async def _has_subscription_access() -> bool:
-    try:
-        from mona.agent.tools.tauri_ipc import check_subscription_access
-
-        return bool(await asyncio.to_thread(check_subscription_access))
-    except Exception as exc:
-        logger.debug("subscription access check failed, failing closed: {}", exc)
-        return False
 
 
 def _strip_trailing_slash(path: str) -> str:
@@ -593,6 +585,7 @@ class WebSocketChannel(BaseChannel):
         self._stop_event: asyncio.Event | None = None
         self._server_task: asyncio.Task[None] | None = None
         self._artifact_watch_task: asyncio.Task[None] | None = None
+        self._list_summary_flush_task: asyncio.Task[None] | None = None
         self._media_cleanup_task: asyncio.Task[None] | None = None
         self._media_cleanup_state = MediaCleanupState()
         self._session_manager = session_manager
@@ -867,7 +860,12 @@ class WebSocketChannel(BaseChannel):
 
         # 3. REST handlers co-located with this channel (sessions, settings, …).
         if got == "/api/sessions":
-            return self._handle_sessions_list(request)
+            if not self._check_api_token(request):
+                return _http_error(401, "Unauthorized")
+            response = await asyncio.to_thread(self._handle_sessions_list, request)
+            if response.status_code == 200:
+                self._schedule_list_summary_flush()
+            return response
 
         if got == "/api/agents":
             return self._handle_agents_list(request)
@@ -909,13 +907,19 @@ class WebSocketChannel(BaseChannel):
             return self._handle_runtime_cleanup(request)
 
         if got == "/api/settings":
-            return self._handle_settings(request)
+            if not self._check_api_token(request):
+                return _http_error(401, "Unauthorized")
+            # Config loading updates shared network policy; keep it on this loop.
+            from mona.config.loader import load_config
+
+            config = load_config()
+            return await asyncio.to_thread(self._handle_settings, request, config)
 
         if got == "/api/commands":
             return self._handle_commands(request)
 
         if got == "/api/webui/sidebar-state":
-            return self._handle_webui_sidebar_state(request)
+            return await asyncio.to_thread(self._handle_webui_sidebar_state, request)
 
         if got == "/api/webui/sidebar-state/update":
             return self._handle_webui_sidebar_state_update(request)
@@ -968,15 +972,6 @@ class WebSocketChannel(BaseChannel):
         if got == "/api/channels/weixin/logout":
             return self._handle_weixin_logout(request)
 
-        pro_document_http = got in {"/api/video/download", "/api/video/delete-project"}
-        if pro_document_http and not await _has_subscription_access():
-            return _http_json_response(
-                {
-                    "error": "membership_required",
-                    "detail": "AI文档需要有效的 Mona Pro 订阅或试用",
-                },
-                status=403,
-            )
 
         if got == "/api/video/broadcast-change":
             return await self._handle_video_broadcast_change(connection, request)
@@ -1093,6 +1088,21 @@ class WebSocketChannel(BaseChannel):
         )
         response.headers["Cache-Control"] = "no-store"
         return response
+
+    def _schedule_list_summary_flush(self) -> None:
+        persist = getattr(self._session_manager, "persist_list_summaries", None)
+        if not callable(persist) or (
+            self._list_summary_flush_task is not None and not self._list_summary_flush_task.done()
+        ):
+            return
+
+        async def flush() -> None:
+            try:
+                await asyncio.to_thread(persist)
+            except Exception as exc:
+                self.logger.warning("Session list summary cache could not be saved ({})", type(exc).__name__)
+
+        self._list_summary_flush_task = asyncio.create_task(flush())
 
     def _handle_sessions_list(self, request: WsRequest) -> Response:
         if not self._check_api_token(request):
@@ -1472,10 +1482,11 @@ class WebSocketChannel(BaseChannel):
             return _http_error(400, str(exc))
         return _http_error(404, "Not Found")
 
-    def _handle_settings(self, request: WsRequest) -> Response:
+    def _handle_settings(self, request: WsRequest, config: Any = None) -> Response:
         if not self._check_api_token(request):
             return _http_error(401, "Unauthorized")
-        return _http_json_response(self._with_settings_restart_state(settings_payload()))
+        payload = settings_payload(config=config) if config is not None else settings_payload()
+        return _http_json_response(self._with_settings_restart_state(payload))
 
     def _with_settings_restart_state(
         self,
@@ -5106,19 +5117,7 @@ class WebSocketChannel(BaseChannel):
                 request_id=request_id,
             )
             return None
-        from mona.agent.pack_bootstrap import STOCK_DIAGNOSIS_ROOM_ID
 
-        if chat_id == STOCK_DIAGNOSIS_ROOM_ID and not await _has_subscription_access():
-            await self._send_event(
-                connection,
-                result_event,
-                ok=False,
-                code="membership_required",
-                detail="AI诊股需要有效的 Mona Pro 订阅或试用",
-                chat_id=chat_id,
-                request_id=request_id,
-            )
-            return None
         session = self._session_manager.get_or_create(f"websocket:{chat_id}")
         conversation = session.conversation_metadata
         if conversation.type != "room":
@@ -6120,14 +6119,6 @@ class WebSocketChannel(BaseChannel):
             agent_kind = agent_kind.strip() if agent_kind else None
             if agent_kind not in (*DOCUMENT_PROFILES.keys(), None):
                 agent_kind = None
-            if agent_kind is not None and not await _has_subscription_access():
-                await self._send_event(
-                    connection,
-                    "error",
-                    detail="membership_required",
-                    reason="AI文档需要有效的 Mona Pro 订阅或试用",
-                )
-                return
             self._attach(connection, new_id)
             if (
                 workspace is not None or agent_kind is not None
@@ -6149,19 +6140,11 @@ class WebSocketChannel(BaseChannel):
             if not _is_valid_chat_id(cid):
                 await self._send_event(connection, "error", detail="invalid chat_id")
                 return
-            from mona.agent.pack_bootstrap import STOCK_DIAGNOSIS_ROOM_ID
 
-            if cid == STOCK_DIAGNOSIS_ROOM_ID and not await _has_subscription_access():
-                await self._send_event(connection, "error", detail="membership_required")
-                return
             self._attach(connection, cid)
             await self._send_event(connection, "attached", chat_id=cid)
             await self._hydrate_after_subscribe(cid)
             return
-        if t == "doc_upload":
-            if not await _has_subscription_access():
-                await self._send_event(connection, "error", detail="membership_required")
-                return
         if t == "doc_upload":
             await self._handle_doc_upload_envelope(connection, envelope)
             return
@@ -6286,11 +6269,6 @@ class WebSocketChannel(BaseChannel):
                 and session is not None
                 and not session.messages
             ):
-                if not await _has_subscription_access():
-                    await self._send_event(
-                        connection, "error", chat_id=cid, detail="membership_required"
-                    )
-                    return
                 session.metadata["agent_kind"] = message_agent_kind
                 self._session_manager.save(session)
                 session_agent_kind = message_agent_kind
@@ -6300,11 +6278,6 @@ class WebSocketChannel(BaseChannel):
                     "error",
                     chat_id=cid,
                     detail="invalid_agent_kind_context",
-                )
-                return
-            if session_agent_kind and not await _has_subscription_access():
-                await self._send_event(
-                    connection, "error", chat_id=cid, detail="membership_required"
                 )
                 return
 
@@ -6545,6 +6518,9 @@ class WebSocketChannel(BaseChannel):
             except asyncio.CancelledError:
                 pass
             self._artifact_watch_task = None
+        if self._list_summary_flush_task:
+            await self._list_summary_flush_task
+            self._list_summary_flush_task = None
         self._subs.clear()
         self._conn_chats.clear()
         self._conn_default.clear()

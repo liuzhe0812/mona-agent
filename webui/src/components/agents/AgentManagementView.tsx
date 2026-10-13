@@ -1215,7 +1215,6 @@ export function AgentManagementView({
             </ResizablePanel>
             <ResizableHandle
               aria-label="调整资料列表宽度"
-              className="data-[separator=hover]:bg-ring/35 data-[separator=active]:bg-ring/50"
             />
             <ResizablePanel
               id="knowledge-content"

@@ -90,7 +90,7 @@ def test_lock_creates_immutable_version_and_new_draft(tmp_path: Path) -> None:
     css = tmp_path / "video_series" / "course" / "styles" / "v1" / "theme.css"
     assert "--mona-colors-primary" in css.read_text(encoding="utf-8")
     previews = css.parent / "previews"
-    for role in ("cover", "content", "data", "outro"):
+    for role in ("cover", "chapter", "content", "data", "comparison", "process", "quote", "outro"):
         preview = (previews / f"{role}.html").read_text(encoding="utf-8")
         assert f'data-role="{role}"' in preview
         assert "window.__timelines" in preview
@@ -104,6 +104,23 @@ def test_lock_creates_immutable_version_and_new_draft(tmp_path: Path) -> None:
     assert second["version"] == 2
     assert json.dumps(read_style_version(tmp_path, "course", 1), sort_keys=True) == first_snapshot
     assert read_style_version(tmp_path, "course", 1)["version"] == 1
+
+
+def test_lock_requires_series_default_aspect_to_remain_enabled(tmp_path: Path) -> None:
+    series = create_series(tmp_path, series_id="portrait", template_id="tech-dark", default_aspect_ratio="9:16")
+    draft = save_style_draft(tmp_path, series["id"], {"aspectVariants": {"9:16": {"enabled": False}}}, expected_revision=0)
+    result = validate_style(draft, tmp_path, series["id"])
+    assert any(issue["code"] == "DEFAULT_ASPECT_DISABLED" and issue["field"] == "aspectVariants.9:16.enabled" for issue in result["errors"])
+    with pytest.raises(StyleValidationError):
+        lock_style(tmp_path, series["id"], expected_revision=draft["revision"])
+    assert not (tmp_path / "video_series" / series["id"] / "styles" / "v1").exists()
+
+
+def test_style_rejects_an_unsupported_scene_transition() -> None:
+    style = get_builtin_template("tech-dark")
+    style["motion"]["transitionPreset"] = "soft-pulse"
+    result = validate_style(style)
+    assert any(issue["field"] == "motion.transitionPreset" and issue["code"] == "INVALID_TRANSITION_PRESET" for issue in result["errors"])
 
 
 def test_background_import_normalizes_to_webp_and_snapshot_is_protected(tmp_path: Path) -> None:

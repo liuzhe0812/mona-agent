@@ -6,21 +6,34 @@ import { useWorkspaceStore } from "@/lib/workspace-store";
 import { DocMakerView } from "./DocMakerView";
 
 const mocks = vi.hoisted(() => ({
+  archiveVideoProject: vi.fn(),
+  buildVideoDownloadUrl: vi.fn(() => "http://download/video"),
+  copyVideoProject: vi.fn(),
   createOfficeSession: vi.fn(),
   getOfficeSession: vi.fn(),
   importOfficeSession: vi.fn(),
   deleteOfficeSession: vi.fn(),
   deleteVideoProject: vi.fn(),
   fetchVideoProjects: vi.fn(),
+  fetchVideoProjectsIncludingArchived: vi.fn(),
+  getApiBase: vi.fn(async () => "http://localhost:8765"),
   newChat: vi.fn(),
+  renameVideoProject: vi.fn(),
   sendMessage: vi.fn(),
   saveWorkspaceCanvas: vi.fn(),
   revealItemInDir: vi.fn(),
+  upgradeVideoProjectStyle: vi.fn(),
+  upgradeVideoSeriesProjects: vi.fn(),
 }));
 
 vi.mock("@/providers/ClientProvider", () => ({
   useClient: () => ({
-    client: { newChat: mocks.newChat, sendMessage: mocks.sendMessage },
+    client: {
+      newChat: mocks.newChat,
+      sendMessage: mocks.sendMessage,
+      onVideoProjectChanged: vi.fn(() => () => {}),
+      onRunStatus: vi.fn(() => () => {}),
+    },
     token: "token",
   }),
 }));
@@ -33,8 +46,16 @@ vi.mock("@/lib/office-client", () => ({
 }));
 
 vi.mock("@/lib/api", () => ({
+  archiveVideoProject: mocks.archiveVideoProject,
+  buildVideoDownloadUrl: mocks.buildVideoDownloadUrl,
+  copyVideoProject: mocks.copyVideoProject,
   fetchVideoProjects: mocks.fetchVideoProjects,
+  fetchVideoProjectsIncludingArchived: mocks.fetchVideoProjectsIncludingArchived,
+  getApiBase: mocks.getApiBase,
   deleteVideoProject: mocks.deleteVideoProject,
+  renameVideoProject: mocks.renameVideoProject,
+  upgradeVideoProjectStyle: mocks.upgradeVideoProjectStyle,
+  upgradeVideoSeriesProjects: mocks.upgradeVideoSeriesProjects,
 }));
 
 vi.mock("@/lib/tauri", async (importOriginal) => ({
@@ -60,7 +81,31 @@ vi.mock("@/components/doc/DocChatPanel", () => ({
 }));
 
 vi.mock("@/components/doc/video/VideoMakerView", () => ({
-  VideoMakerView: () => <div>视频工作流</div>,
+  VideoMakerView: ({
+    onProjectChange,
+  }: {
+    onProjectChange?: (project: {
+      name: string;
+      phase: "done";
+      chatId: string;
+    }) => void;
+  }) => (
+    <div>
+      视频工作流
+      <button
+        type="button"
+        onClick={() =>
+          onProjectChange?.({
+            name: "新建完成的视频",
+            phase: "done",
+            chatId: "chat-1",
+          })
+        }
+      >
+        模拟视频导出完成
+      </button>
+    </div>
+  ),
 }));
 
 vi.mock("@/components/canvas/CanvasFileView", () => ({
@@ -91,6 +136,10 @@ describe("DocMakerView", () => {
     mocks.deleteOfficeSession.mockReset().mockResolvedValue(undefined);
     mocks.deleteVideoProject.mockReset().mockResolvedValue({ ok: true });
     mocks.fetchVideoProjects.mockReset().mockResolvedValue({ projects: [] });
+    mocks.fetchVideoProjectsIncludingArchived.mockReset().mockResolvedValue({ projects: [] });
+    mocks.archiveVideoProject.mockReset().mockResolvedValue({ ok: true });
+    mocks.renameVideoProject.mockReset().mockResolvedValue({ ok: true });
+    mocks.copyVideoProject.mockReset().mockResolvedValue({ ok: true });
     mocks.newChat.mockReset().mockResolvedValue("chat-1");
     mocks.sendMessage.mockReset();
     mocks.saveWorkspaceCanvas.mockReset().mockImplementation(async (_root, canvas) => ({
@@ -112,7 +161,7 @@ describe("DocMakerView", () => {
     expect(screen.getByRole("button", { name: /Word/ })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: /Excel/ })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: /PPT/ })).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: /视频/ })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /^视频$/ })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: /思维导图/ })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: /流程图/ })).toBeInTheDocument();
     expect(screen.getByRole("tab", { name: "最近" })).toBeInTheDocument();
@@ -144,7 +193,7 @@ describe("DocMakerView", () => {
     });
     fireEvent.click(sidebarToggle);
     const sidebar = screen.getByRole("complementary", { name: "MONA AI 文档助手" });
-    expect(sidebar.parentElement).toBe(screen.getByTestId("document-workspace"));
+    expect(screen.getByTestId("document-workspace").contains(sidebar)).toBe(true);
     expect(screen.getByRole("button", { name: "收起 MONA AI" })).toBe(sidebarToggle);
     await waitFor(() => expect(screen.queryByText("正在加载历史…")).not.toBeInTheDocument());
   });
@@ -174,6 +223,81 @@ describe("DocMakerView", () => {
       officeDocumentType: "docs",
       officeDisplayName: "新建文档",
     }));
+  });
+
+  it("refreshes the start history when an embedded video finishes exporting", async () => {
+    const finishedProject = {
+      name: "新建完成的视频",
+      createdAt: Date.now(),
+      resolution: "1920x1080",
+      phase: "done" as const,
+      hasVideo: true,
+      outputStale: false,
+      chatId: "chat-1",
+    };
+    mocks.fetchVideoProjects
+      .mockResolvedValueOnce({ projects: [] })
+      .mockResolvedValue({ projects: [finishedProject] });
+    render(<DocMakerView />);
+
+    fireEvent.click(screen.getByRole("button", { name: /^视频$/ }));
+    fireEvent.click(await screen.findByRole("button", { name: "模拟视频导出完成" }));
+    fireEvent.click(screen.getByRole("tab", { name: "开始" }));
+
+    expect(
+      await screen.findByTestId("document-history-row-video:新建完成的视频"),
+    ).toHaveTextContent("视频 · 已完成");
+    expect(mocks.fetchVideoProjects).toHaveBeenCalledTimes(2);
+  });
+
+  it("opens the director panel for a video selected from history and keeps it closed after refresh", async () => {
+    mocks.fetchVideoProjects.mockResolvedValue({
+      projects: [{
+        name: "季度培训",
+        createdAt: Date.now(),
+        resolution: "1920x1080",
+        phase: "producing",
+        hasVideo: false,
+        outputStale: false,
+        chatId: "video-chat",
+      }],
+    });
+    render(<DocMakerView />);
+
+    const row = await screen.findByTestId("document-history-row-video:季度培训");
+    fireEvent.click(within(row).getByText("季度培训"));
+
+    const directorPanel = await screen.findByRole("complementary", { name: "制作对话" });
+    expect(within(directorPanel).getByText("制作对话")).toBeInTheDocument();
+    const divider = screen.getByRole("separator", { name: "调整右侧栏宽度" });
+    expect(divider).toHaveAttribute("aria-orientation", "vertical");
+    expect(divider).toHaveAttribute("tabindex", "0");
+    fireEvent.click(screen.getByRole("button", { name: "收起制作对话" }));
+    expect(screen.queryByRole("complementary", { name: "制作对话" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("separator", { name: "调整右侧栏宽度" })).not.toBeInTheDocument();
+
+    fireEvent.click(await screen.findByRole("button", { name: "模拟视频导出完成" }));
+    await waitFor(() => expect(screen.getByRole("button", { name: "展开制作对话" })).toBeInTheDocument());
+    expect(screen.queryByRole("complementary", { name: "制作对话" })).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "展开制作对话" }));
+    expect(await screen.findByRole("separator", { name: "调整右侧栏宽度" })).toBeInTheDocument();
+  });
+
+  it("opens the director panel when restoring the active video tab", async () => {
+    localStorage.setItem("mona.ai-docs.workspace.v1", JSON.stringify([{
+      id: "video:恢复的视频",
+      kind: "video-workflow",
+      title: "恢复的视频",
+      chatId: "video-chat",
+      project: { name: "恢复的视频", phase: "producing", chatId: "video-chat" },
+      createdAt: Date.now(),
+    }]));
+    localStorage.setItem("mona.ai-docs.active-tab.v1", "video:恢复的视频");
+    render(<DocMakerView />);
+
+    expect(await screen.findByRole("tab", { name: /恢复的视频/ })).toHaveAttribute("aria-selected", "true");
+    expect(await screen.findByRole("complementary", { name: "制作对话" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "收起制作对话" })).toBeInTheDocument();
   });
 
   it("drops obsolete PPT workflow tabs from the saved workspace", async () => {
@@ -290,6 +414,95 @@ describe("DocMakerView", () => {
     });
     expect(screen.queryByTestId("document-history-row-video:5个分镜介绍AI模型技术")).not.toBeInTheDocument();
     expect(screen.queryByRole("tab", { name: /5个分镜介绍AI模型技术/ })).not.toBeInTheDocument();
+    expect(screen.getByRole("tab", { name: "开始" })).toHaveAttribute("aria-selected", "true");
+  });
+
+  it("renames an open video tab from the reusable video manager", async () => {
+    const original = {
+      name: "季度培训",
+      createdAt: Date.now(),
+      resolution: "1920x1080",
+      phase: "storyboard" as const,
+      hasVideo: false,
+      outputStale: false,
+      chatId: "video-chat",
+    };
+    let projects = [original];
+    mocks.fetchVideoProjects.mockImplementation(async () => ({ projects }));
+    mocks.renameVideoProject.mockImplementation(
+      async (_token: string, oldName: string, newName: string) => {
+        expect(oldName).toBe("季度培训");
+        projects = [{ ...original, name: newName }];
+        return { ok: true };
+      },
+    );
+    render(<DocMakerView />);
+
+    const row = await screen.findByTestId("document-history-row-video:季度培训");
+    fireEvent.click(within(row).getByText("季度培训"));
+    await screen.findByRole("tab", { name: /季度培训/ });
+    fireEvent.click(screen.getByRole("button", { name: "管理视频" }));
+
+    const projectButton = await screen.findByRole("button", {
+      name: /打开项目 季度培训/,
+    });
+    fireEvent.contextMenu(projectButton);
+    fireEvent.click(await screen.findByRole("menuitem", { name: "重命名" }));
+    fireEvent.change(screen.getByRole("textbox", { name: "项目名称" }), {
+      target: { value: "季度培训新版" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "保存名称" }));
+    await waitFor(() => expect(mocks.renameVideoProject).toHaveBeenCalledOnce());
+    fireEvent.click(screen.getByRole("button", { name: "Close" }));
+
+    await waitFor(() =>
+      expect(screen.getByRole("tab", { name: /季度培训新版/ })).toBeInTheDocument(),
+    );
+    expect(screen.queryByRole("tab", { name: /季度培训(?!新版)/ })).not.toBeInTheDocument();
+    expect(mocks.renameVideoProject).toHaveBeenCalledWith(
+      "token",
+      "季度培训",
+      "季度培训新版",
+    );
+  });
+
+  it("closes an open video tab when that project is archived", async () => {
+    const project = {
+      name: "待归档视频",
+      createdAt: Date.now(),
+      resolution: "1920x1080",
+      phase: "producing" as const,
+      hasVideo: false,
+      outputStale: false,
+      chatId: "video-chat",
+    };
+    let projects = [project];
+    mocks.fetchVideoProjects.mockImplementation(async () => ({ projects }));
+    mocks.archiveVideoProject.mockImplementation(async () => {
+      projects = [];
+      return { ok: true };
+    });
+    render(<DocMakerView />);
+
+    const row = await screen.findByTestId("document-history-row-video:待归档视频");
+    fireEvent.click(within(row).getByText("待归档视频"));
+    await screen.findByRole("tab", { name: /待归档视频/ });
+    fireEvent.click(screen.getByRole("button", { name: "管理视频" }));
+
+    const projectButton = await screen.findByRole("button", {
+      name: /打开项目 待归档视频/,
+    });
+    fireEvent.contextMenu(projectButton);
+    fireEvent.click(await screen.findByRole("menuitem", { name: "归档项目" }));
+
+    await waitFor(() =>
+      expect(mocks.archiveVideoProject).toHaveBeenCalledWith(
+        "token",
+        "待归档视频",
+        true,
+      ),
+    );
+    expect(screen.queryByRole("tab", { name: /待归档视频/ })).not.toBeInTheDocument();
     expect(screen.getByRole("tab", { name: "开始" })).toHaveAttribute("aria-selected", "true");
   });
 

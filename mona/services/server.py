@@ -15,7 +15,6 @@ they exist exactly once per process.
 from __future__ import annotations
 
 import asyncio
-import inspect
 import threading
 from typing import Any
 
@@ -128,14 +127,12 @@ from mona.api.server import (
     handle_todo_to_schedule,
     handle_todo_update,
     handle_url2note_extract,
-    handle_video_ai_scene_html,
-    handle_video_ai_scene_rewrite,
     handle_video_project,
     handle_video_project_archive,
     handle_video_project_asset_import,
     handle_video_project_asset_update,
     handle_video_project_assets,
-    handle_video_project_change_aspect,
+    handle_video_project_confirm,
     handle_video_project_copy,
     handle_video_project_create,
     handle_video_project_export,
@@ -143,9 +140,6 @@ from mona.api.server import (
     handle_video_project_export_preflight,
     handle_video_project_export_status,
     handle_video_project_file,
-    handle_video_project_localize,
-    handle_video_project_lock_storyboard,
-    handle_video_project_plan,
     handle_video_project_preview_full,
     handle_video_project_rename,
     handle_video_project_review_create,
@@ -153,14 +147,13 @@ from mona.api.server import (
     handle_video_project_reviews,
     handle_video_project_save_chat_id,
     handle_video_project_scene_add,
-    handle_video_project_scene_confirm,
     handle_video_project_scene_delete,
     handle_video_project_scene_narration,
     handle_video_project_scene_preview,
-    handle_video_project_scene_regenerate,
     handle_video_project_scene_reorder,
     handle_video_project_scene_timeline,
     handle_video_project_scene_update,
+    handle_video_project_settings,
     handle_video_project_storyboard,
     handle_video_project_upgrade_style,
     handle_video_project_version_restore,
@@ -169,7 +162,9 @@ from mona.api.server import (
     handle_video_runtime_check,
     handle_video_runtime_download,
     handle_video_series_projects_upgrade,
+    handle_video_voice_preview,
 )
+from mona.api.video_director import handle_video_agent
 from mona.api.video_runtime_jobs import (
     handle_video_runtime_download_cancel,
     handle_video_runtime_download_start,
@@ -248,46 +243,6 @@ from mona.services.stock.api import (
     handle_stock_screen_templates,
 )
 
-_PRO_ROUTE_PREFIXES = (
-    "/api/video",
-    "/api/stock/diagnosis",
-    "/email/analyze",
-    "/email/schedule/",
-    "/api/email/schedule/",
-)
-
-
-async def _has_subscription_access(request: web.Request) -> bool:
-    resolver = request.app.get("subscription_access_resolver")
-    try:
-        if resolver is None:
-            from mona.agent.tools.tauri_ipc import check_subscription_access
-
-            return bool(await asyncio.to_thread(check_subscription_access))
-        result = resolver()
-        if inspect.isawaitable(result):
-            result = await result
-        return result is True
-    except Exception:
-        logger.exception("subscription access check failed")
-        return False
-
-
-@web.middleware
-async def _subscription_middleware(
-    request: web.Request, handler: Any
-) -> web.StreamResponse:
-    if request.method != "OPTIONS" and request.path.startswith(_PRO_ROUTE_PREFIXES):
-        if not await _has_subscription_access(request):
-            return web.json_response(
-                {
-                    "error": "membership_required",
-                    "detail": "该功能需要有效的 Mona Pro 订阅或试用",
-                },
-                status=403,
-            )
-    return await handler(request)
-
 
 async def handle_services_health(request: web.Request) -> web.Response:
     """Identify a compatible services process, not merely a live HTTP server."""
@@ -323,7 +278,6 @@ def create_services_app(
         client_max_size=20 * 1024 * 1024,
         middlewares=[
             _cors_middleware,
-            _subscription_middleware,
             materials_auth_middleware,
             office_error_middleware,
         ],
@@ -542,6 +496,7 @@ def create_services_app(
     app.router.add_post("/api/profile/distill", handle_profile_distill)
 
     # Video project routes + url2note + doc2note
+    app.router.add_post("/api/video/voice-preview", handle_video_voice_preview)
     app.router.add_get("/api/video/runtime-check", handle_video_runtime_check)
     app.router.add_post("/api/video/runtime-download", handle_video_runtime_download)
     app.router.add_post(
@@ -619,14 +574,11 @@ def create_services_app(
         "/api/video/series/{series_id}/background-assets/{asset_id}/preview",
         handle_video_background_asset_preview,
     )
-    app.router.add_post("/api/video/project/plan", handle_video_project_plan)
     app.router.add_post("/api/video/project/create", handle_video_project_create)
+    app.router.add_post("/api/video/agent", handle_video_agent)
     app.router.add_post("/api/video/project/rename", handle_video_project_rename)
     app.router.add_post("/api/video/project/copy", handle_video_project_copy)
     app.router.add_post("/api/video/project/archive", handle_video_project_archive)
-    app.router.add_post(
-        "/api/video/project/change-aspect", handle_video_project_change_aspect
-    )
     app.router.add_post(
         "/api/video/project/upgrade-style", handle_video_project_upgrade_style
     )
@@ -650,6 +602,8 @@ def create_services_app(
         "/api/video/project/storyboard", handle_video_project_storyboard
     )
     app.router.add_put("/api/video/project/scene", handle_video_project_scene_update)
+    app.router.add_post("/api/video/project/confirm", handle_video_project_confirm)
+    app.router.add_put("/api/video/project/settings", handle_video_project_settings)
     app.router.add_delete(
         "/api/video/project/scene", handle_video_project_scene_delete
     )
@@ -658,31 +612,17 @@ def create_services_app(
         "/api/video/project/scene/reorder", handle_video_project_scene_reorder
     )
     app.router.add_post(
-        "/api/video/project/lock-storyboard", handle_video_project_lock_storyboard
-    )
-    app.router.add_post(
-        "/api/video/project/localize", handle_video_project_localize
-    )
-    app.router.add_post(
         "/api/video/project/scene/narration", handle_video_project_scene_narration
     )
     app.router.add_get(
         "/api/video/project/scene/narration", handle_video_project_scene_narration
     )
-    app.router.add_post("/api/video/ai/scene-html", handle_video_ai_scene_html)
     app.router.add_get(
         "/api/video/project/scene/preview", handle_video_project_scene_preview
     )
     app.router.add_get(
         "/api/video/project/scene/timeline", handle_video_project_scene_timeline
     )
-    app.router.add_post(
-        "/api/video/project/scene/confirm", handle_video_project_scene_confirm
-    )
-    app.router.add_post(
-        "/api/video/project/scene/regenerate", handle_video_project_scene_regenerate
-    )
-    app.router.add_post("/api/video/ai/scene-rewrite", handle_video_ai_scene_rewrite)
     app.router.add_post("/api/video/project/export", handle_video_project_export)
     app.router.add_post(
         "/api/video/project/export/cancel", handle_video_project_export_cancel

@@ -115,7 +115,7 @@ span[class*="rounded"][class*="px-"] {
     --interaction-hover: 60 12.8% 92.35%;
     --interaction-pressed: 60 10% 89%;
 
-    /* 白底输入区使用白色内芯＋最细黑色外轮廓，其余 cursor 保持系统原生样式。 */
+    /* 白底输入区使用白色内芯＋最细黑色外轮廓；分割线光标只将原生资源改黑。 */
     --mona-cursor-text: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='16' height='22' viewBox='0 0 16 22'%3E%3Cpath d='M4 2h8v2H9v14h3v2H4v-2h3V4H4z' fill='%23fff' stroke='%23000' stroke-width='1' stroke-linejoin='round'/%3E%3C/svg%3E") 8 11, text;
 
     /* ─── 语义状态色（design §4.4）：取自第一屏基准值，组件消费 Token，
@@ -161,7 +161,7 @@ span[class*="rounded"][class*="px-"] {
     --ease-standard: cubic-bezier(0.25, 1, 0.5, 1); /* 状态变化 */
     --ease-entrance: cubic-bezier(0.16, 1, 0.3, 1); /* 入场 */
 
-    /* Cindy-inspired neutral canvas: the shell is ivory, the work surface stays #FFFEFA. */
+    /* Ivory shell with a neutral work surface. */
     --canvas-top: 60 16.129% 93.922%;
     --canvas-bottom: 60 12.821% 92.353%;
     --content-surface: 48 100% 99.02%;
@@ -231,7 +231,7 @@ span[class*="rounded"][class*="px-"] {
     --stock-up: 4 80% 68%; /* #F06666 上涨 */
     --stock-down: 158 64% 52%; /* #34D399 下跌 */
 
-    /* Mona Night keeps Cindy's neutral black stack; brand red/cyan remain accents. */
+    /* Neutral dark surfaces with brand colors reserved for accents. */
     --canvas-top: 0 0% 9.412%;
     --canvas-bottom: 0 0% 11.373%;
     --content-surface: 0 0% 12.157%;
@@ -1181,25 +1181,17 @@ span[class*="rounded"][class*="px-"] {
 .notes-prosemirror .selectedCell {
   background: hsl(var(--accent)) !important;
 }
-/* 列宽拖拽手柄：默认不可见，cell hover 或拖拽中时显示品牌色提示 */
+/* 表格列宽拖拽使用同一分割线规范。 */
 .notes-prosemirror .column-resize-handle {
   position: absolute;
-  right: -2px;
+  right: -4px;
   top: 0;
   bottom: 0;
-  width: 4px;
+  width: 8px;
   background: transparent;
   cursor: col-resize;
   z-index: 5;
   pointer-events: auto;
-  transition: background-color 150ms ease;
-}
-.notes-prosemirror td:hover .column-resize-handle,
-.notes-prosemirror th:hover .column-resize-handle {
-  background: hsl(var(--primary) / 0.35);
-}
-.notes-prosemirror .column-resize-dragging .column-resize-handle {
-  background: hsl(var(--primary) / 0.6);
 }
 
 /* ─── 流程图主题 token（design §8.4）──────────────────────────────────

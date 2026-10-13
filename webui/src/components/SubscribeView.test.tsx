@@ -31,15 +31,15 @@ vi.mock("@/hooks/useLicense", () => ({
 }));
 
 describe("SubscribeView", () => {
-  it("shows Pro benefits before early-user pricing", () => {
+  it("sells devices and cloud workspace without locking local AI or gifting tokens", () => {
     render(<SubscribeView userEmail="user@example.com" onBackToLogin={vi.fn()} />);
 
-    expect(screen.getByText("让 Mona 理解你的工作上下文")).toBeTruthy();
-    expect(screen.getByText("解锁笔记 AI、邮件 AI 与知识库 AI")).toBeTruthy();
-    expect(screen.getByText("解锁数据库 AI 与终端 AI")).toBeTruthy();
-    expect(screen.queryByText("使用完整文档模块（PPT 与视频）")).toBeNull();
-    expect(screen.getByText("使用股票工作台 AI 诊股")).toBeTruthy();
-    expect(screen.getByText(/Pro 为软件功能权益/)).toBeTruthy();
+    expect(screen.getByText("最多 3 台设备登录")).toBeTruthy();
+    expect(screen.getByText("10GB 个人云空间")).toBeTruthy();
+    expect(screen.getByText("Work 会话与关联文件同步")).toBeTruthy();
+    expect(screen.queryByText("解锁笔记 AI、邮件 AI 与知识库 AI")).toBeNull();
+    expect(screen.queryByText("解锁数据库 AI 与终端 AI")).toBeNull();
+    expect(screen.getByText(/本地 AI 功能免费；Pro 不含模型额度/)).toBeTruthy();
     expect(screen.getByText("早期用户价")).toBeTruthy();
   });
 });

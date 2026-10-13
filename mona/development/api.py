@@ -67,6 +67,13 @@ class PermissionBody(Contract):
     confirmed: bool = False
 
 
+class WorkModelSourceBody(Contract):
+    executor: ExecutorId
+    model: str = Field(min_length=1, max_length=200)
+    provider: str | None = Field(default=None, max_length=200)
+    effort: str | None = Field(default=None, max_length=32)
+
+
 class ForkBody(Contract):
     revision: int = Field(ge=0)
     request_id: Identifier
@@ -222,6 +229,40 @@ async def provider_executors(request):
     # Read-only detection. Merely opening settings never starts or logs in a CLI.
     runtime = get_runtime(request)
     return web.json_response({"executors": await asyncio.to_thread(runtime.native.describe)})
+
+
+async def select_work_model_source(request):
+    from mona.config.loader import save_config
+    from mona.webui.settings_api import settings_payload, update_agent_settings
+
+    body = await _body(request, WorkModelSourceBody)
+    runtime = get_runtime(request)
+    if body.executor == ExecutorId.MONA:
+        resolve_coding_model(runtime.config_loader(), body.model, body.provider, body.effort, require_visible=True)
+        query = {"provider": [body.provider], "model": [body.model], "provider_model": [body.model],
+                 "reasoning_effort": [body.effort or "none"]}
+        return web.json_response(update_agent_settings(query))
+    if body.provider is not None:
+        raise DevelopmentError("invalid_model_source", "请选择该引擎自身的模型来源。")
+    source = next((item for item in await asyncio.to_thread(runtime.native.describe)
+                   if item["id"] == body.executor.value), None)
+    if not source or not source["available"]:
+        raise DevelopmentError("executor_unavailable", "此模型来源不可用，请在模型设置中检查连接。")
+    if source["probe"].get("authentication") != "ready":
+        raise DevelopmentError("authentication_required", "请先在模型设置中连接此账号。")
+    choice = next((item for item in source["models"] if item["id"] == body.model), None)
+    if not choice:
+        raise DevelopmentError("invalid_model", "模型目录已变化，请刷新后重新选择。")
+    if body.effort is not None and body.effort not in choice.get("reasoningEfforts", []):
+        raise DevelopmentError("unsupported_reasoning_effort", "当前模型不支持所选思考强度。")
+    config = runtime.config_loader()
+    config.agents.defaults.executor = body.executor.value
+    config.agents.defaults.native_model = body.model
+    config.agents.defaults.native_reasoning_effort = body.effort
+    config.agents.defaults.native_context_window_tokens = choice.get("contextWindow")
+    config.agents.defaults.model_preset = None
+    await asyncio.to_thread(save_config, config)
+    return web.json_response(await asyncio.to_thread(settings_payload))
 
 
 async def capabilities(request):
@@ -519,6 +560,7 @@ def register_development_routes(app: web.Application) -> None:
     app.router.add_put(PREFIX + "/sessions/{session_id}/model-source", select_model_source)
     app.router.add_put(PREFIX + "/sessions/{session_id}/permissions", update_permissions)
     app.router.add_get(PREFIX + "/provider-executors", provider_executors)
+    app.router.add_put(PREFIX + "/work-model-source", select_work_model_source)
     app.router.add_get(PREFIX + "/provider-executors/{executor}/usage", native_account_usage)
     app.router.add_get(PREFIX + "/provider-executors/{executor}/usage/changes", native_account_usage_changes)
     app.router.add_post(PREFIX + "/provider-executors/{executor}/{action:probe|login|logout}", native_probe)

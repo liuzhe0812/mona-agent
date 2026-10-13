@@ -4,7 +4,7 @@ import type { JSONContent } from "@tiptap/core";
 import { X, GitFork } from "lucide-react";
 
 import { cn } from "@/lib/utils";
-import { Button } from "@/components/ui/button";
+import { TooltipButton } from "@/components/ui/tooltip";
 import { NoteTabBar } from "./NoteTabBar";
 import { NoteEditor } from "./NoteEditor";
 import { GraphViewDialog } from "./GraphViewDialog";
@@ -265,7 +265,7 @@ function PaneLeafView({
             {...tabMenuCallbacks}
           />
           {leaf.graphOpen && (
-            <Button
+            <TooltipButton
               type="button"
               variant="ghost"
               title="关系图谱"
@@ -289,7 +289,7 @@ function PaneLeafView({
               >
                 <X className="h-3 w-3" />
               </span>
-            </Button>
+            </TooltipButton>
           )}
         </div>
         {isPrimary && toolbarTrailing && (
@@ -575,9 +575,10 @@ function SplitView({
             <div
               key={`handle-${child.id}`}
               className={cn(
-                "shrink-0 bg-border/40 hover:bg-primary/40",
+                "mona-resize-handle relative shrink-0",
                 isHorizontal ? "w-1 cursor-col-resize" : "h-1 cursor-row-resize",
               )}
+              data-resize-direction={isHorizontal ? undefined : "row"}
               onMouseDown={handleResizeStart(index)}
             />,
           );

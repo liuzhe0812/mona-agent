@@ -83,4 +83,16 @@ describe("useStorageScan 多盘扫描", () => {
     });
     expect(result.current.status).toBe("done");
   });
+
+  it("clears the previous drive's result immediately when changing drives", async () => {
+    vi.mocked(invoke).mockImplementation((command: string) => Promise.resolve(command === "scan_storage" ? scanResult("C:") : null));
+    const { result } = renderHook(() => useStorageScan());
+    await act(async () => { await result.current.start(); });
+    expect(result.current.result?.scanSummary?.scannedDisk).toBe("C:");
+
+    act(() => result.current.selectDrive("D:"));
+    expect(result.current.selectedDrive).toBe("D:");
+    expect(result.current.result).toBeNull();
+    expect(result.current.lastScanAt).toBeNull();
+  });
 });

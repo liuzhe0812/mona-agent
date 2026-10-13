@@ -30,8 +30,13 @@ from mona.development.executors.host_tools import (
     HOST_SERVER,
     HOST_TOOL,
     SDK_HOST_TOOL,
+    SDK_WORK_TOOL,
     SUBAGENT_INSTRUCTIONS,
+    WORK_DESCRIPTION,
+    WORK_SERVER,
+    WORK_TOOL,
     HostToolCall,
+    WorkToolCall,
     host_servers_valid,
     tool_unavailable,
 )
@@ -144,7 +149,9 @@ class Worker:
 
     async def host_collaboration(self, arguments: dict) -> dict:
         turn_id = self.active
-        if not self._current_turn(turn_id) or not self.start or not self.start.get("hostCollaboration") or self.start["readonly"]:
+        work_mode = bool(self.start and self.start.get("workPrompt") is not None)
+        collaboration = bool(self.start and self.start.get("hostCollaboration") and not self.start["readonly"])
+        if not self._current_turn(turn_id) or not self.start or not (work_mode or collaboration):
             return tool_unavailable()
         self.projector.resuming = False
         reply = await self.ask("host/collaboration", {"turnId": turn_id, "arguments": arguments})
@@ -159,6 +166,10 @@ class Worker:
         if not self._current_turn(turn_id):
             return sdk.PermissionResultDeny(message="原任务已结束、正在关闭或结果待核对，未接受本次操作。")
         self.projector.resuming = False
+        if start.get("workPrompt") is not None:
+            if name == SDK_WORK_TOOL:
+                return sdk.PermissionResultAllow(updated_input=arguments)
+            return sdk.PermissionResultDeny(message="Work 工具只允许通过 Mona 工具通道调用。")
         if name == "AskUserQuestion":
             questions = arguments.get("questions")
             if (not isinstance(questions, list) or not 1 <= len(questions) <= 20
@@ -286,17 +297,24 @@ class Worker:
         if start["permissionMode"] not in self.permission_modes:
             raise ValueError("sdk_contract_incompatible")
         permission_mode = _sdk_permission_mode(start, cls)
+        work_mode = start.get("workPrompt") is not None
+        if work_mode and (not isinstance(start["workPrompt"], str) or not start["workPrompt"].strip()
+                          or start.get("hostCollaboration") or start.get("isSubagent")):
+            raise ValueError("invalid_worker_options")
+        if work_mode and executor == ExecutorId.CLAUDE and "tools" not in fields:
+            raise ValueError("sdk_isolation_unsupported")
         host_tools = start.get("hostCollaboration") is True and not start["readonly"] and start.get("isSubagent") is not True
-        system_prompt_append = start["context"]
+        system_prompt_append = start["context"] if not work_mode else start["workPrompt"]
         if host_tools:
             system_prompt_append = f"{system_prompt_append}\n\n{DELEGATION_INSTRUCTIONS}"
         elif start.get("isSubagent") is True:
             system_prompt_append = f"{system_prompt_append}\n\n{SUBAGENT_INSTRUCTIONS}"
-        if executor == ExecutorId.CODEBUDDY and sys.platform == "win32":
+        if not work_mode and executor == ExecutorId.CODEBUDDY and sys.platform == "win32":
             system_prompt_append = f"{system_prompt_append}\n\n{CODEBUDDY_WINDOWS_INSTRUCTIONS}"
-        if executor == ExecutorId.CODEBUDDY and start["readonly"]:
+        if not work_mode and executor == ExecutorId.CODEBUDDY and start["readonly"]:
             system_prompt_append = f"{system_prompt_append}\n\n{CODEBUDDY_READONLY_INSTRUCTIONS}"
-        settings = {"disableAllHooks": not start["readonly"], "autoMemoryEnabled": False, "disableClaudeAiConnectors": True}
+        settings = {"disableAllHooks": work_mode or not start["readonly"], "autoMemoryEnabled": False,
+                    "disableClaudeAiConnectors": True}
         options = {"cwd": start["cwd"], "setting_sources": [], "mcp_servers": {}, "hooks": {},
             "can_use_tool": self.permission, "include_partial_messages": True,
             "permission_mode": permission_mode, "allowed_tools": [],
@@ -316,7 +334,8 @@ class Worker:
                 raise ValueError("sdk_isolation_unsupported")
             options.update({"cli_path": start["executable"], "strict_mcp_config": True,
                 "settings": json.dumps(settings), "plugins": [],
-                "system_prompt": {"type": "preset", "preset": "claude_code", "append": system_prompt_append}})
+                "system_prompt": start["workPrompt"] if work_mode else {
+                    "type": "preset", "preset": "claude_code", "append": system_prompt_append}})
             if "skills" in fields:
                 options["skills"] = []
             if start.get("resume"):
@@ -329,7 +348,7 @@ class Worker:
             if "codebuddy_code_path" not in fields:
                 raise ValueError("sdk_cli_path_unsupported")
             options["codebuddy_code_path"] = start["executable"]
-            options["system_prompt"] = sdk.AppendSystemPrompt(append=system_prompt_append)
+            options["system_prompt"] = start["workPrompt"] if work_mode else sdk.AppendSystemPrompt(append=system_prompt_append)
             # Official CodeBuddy supports custom session IDs; unsupported native
             # versions reject startup instead of silently using another identity.
             options["extra_args"] = {"strict-mcp-config": None, "settings": json.dumps(settings)}
@@ -337,7 +356,20 @@ class Worker:
                 options["resume"] = start["nativeSessionId"]
             else:
                 options["extra_args"]["session-id"] = start["nativeSessionId"]
-        if host_tools:
+        if work_mode:
+            if not callable(getattr(sdk, "tool", None)) or not callable(getattr(sdk, "create_sdk_mcp_server", None)):
+                raise ValueError("sdk_host_tools_unsupported")
+            async def call_work_tool(arguments: dict) -> dict:
+                return await self.host_collaboration(arguments)
+            tool = sdk.tool(WORK_TOOL, WORK_DESCRIPTION, WorkToolCall.model_json_schema())(call_work_tool)
+            options["mcp_servers"] = {WORK_SERVER: sdk.create_sdk_mcp_server(name=WORK_SERVER, version="1.0.0", tools=[tool])}
+            options["allowed_tools"] = [SDK_WORK_TOOL]
+            if "tools" in fields:
+                options["tools"] = []
+            else:
+                options["extra_args"]["tools"] = ""
+            options["disallowed_tools"] = [name for name in options["disallowed_tools"] if name != "mcp__*"]
+        elif host_tools:
             if not callable(getattr(sdk, "tool", None)) or not callable(getattr(sdk, "create_sdk_mcp_server", None)):
                 raise ValueError("sdk_host_tools_unsupported")
             async def collaborate(arguments: dict) -> dict:
@@ -350,6 +382,7 @@ class Worker:
         if getattr(self.options, "permission_mode", None) != permission_mode:
             raise ValueError("sdk_contract_incompatible")
         self.projector = SDKEventProjector(start["nativeSessionId"], host_collaboration=host_tools,
+                                           work_tool=work_mode,
                                            resuming=start.get("resume") is True)
         client_cls = sdk.ClaudeSDKClient if executor == ExecutorId.CLAUDE else sdk.CodeBuddySDKClient
         return client_cls(options=self.options), version
@@ -382,12 +415,17 @@ class Worker:
         try:
             self.client, version = self.build_options(start)
             info = await self.connect_client(start)
-            if not host_servers_valid(info.get("mcp_servers", info.get("mcpServers", [])), self.projector.host_collaboration):
+            work_mode = self.projector.work_tool
+            expected_server = WORK_SERVER if work_mode else HOST_SERVER
+            server_enabled = work_mode or self.projector.host_collaboration
+            if not host_servers_valid(info.get("mcp_servers", info.get("mcpServers", [])), server_enabled,
+                                      server=expected_server):
                 raise ValueError("sdk_unexpected_mcp")
             self.ready.set_result({"sdkVersion": version, "nativeSessionId": start["nativeSessionId"],
                 "identityConfirmed": False, "models": info.get("models", []),
                 "effortSupported": self.effort_supported,
                 "hostCollaboration": self.projector.host_collaboration,
+                "workMode": self.projector.work_tool,
                 "permissionModes": self.permission_modes,
                 "permissionMode": start["permissionMode"]})
             receiver = asyncio.create_task(self.receive())
@@ -513,7 +551,7 @@ class Worker:
         if method == "initialize":
             if self.owner:
                 raise ValueError("worker_already_initialized")
-            if set(params) - {"executor", "cwd", "executable", "nativeSessionId", "readonly", "isSubagent", "context", "model", "resume", "hostCollaboration", "effort", "permissionMode"}:
+            if set(params) - {"executor", "cwd", "executable", "nativeSessionId", "readonly", "isSubagent", "context", "model", "resume", "hostCollaboration", "workPrompt", "effort", "permissionMode"}:
                 raise ValueError("invalid_worker_options")
             if params["executor"] not in {"claude", "codebuddy"} or not Path(params["cwd"]).is_dir():
                 raise ValueError("invalid_worker_options")
@@ -522,6 +560,10 @@ class Worker:
             if type(params.get("hostCollaboration", False)) is not bool:
                 raise ValueError("invalid_worker_options")
             if type(params.get("isSubagent", False)) is not bool or params.get("isSubagent") and params.get("hostCollaboration"):
+                raise ValueError("invalid_worker_options")
+            work_prompt = params.get("workPrompt")
+            if work_prompt is not None and (not isinstance(work_prompt, str) or not work_prompt.strip()
+                                            or params.get("hostCollaboration")):
                 raise ValueError("invalid_worker_options")
             if params.get("effort") is not None and (not isinstance(params["effort"], str) or not 0 < len(params["effort"]) <= 32):
                 raise ValueError("invalid_worker_options")

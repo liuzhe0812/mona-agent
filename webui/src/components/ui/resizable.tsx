@@ -10,6 +10,8 @@ import {
 
 import { cn } from "@/lib/utils"
 
+const resizeHandleInteractionClass = "mona-resize-handle"
+
 function ResizablePanelGroup({
   className,
   direction,
@@ -43,17 +45,18 @@ function ResizableHandle({
     <Separator
       data-slot="resizable-handle"
       className={cn(
-        "group relative flex shrink-0 items-center justify-center bg-border",
+        "group relative flex shrink-0 items-center justify-center",
+        resizeHandleInteractionClass,
         // Vertical split (default between side-by-side panels): visible 1px line + 8px hit area
         "w-px cursor-col-resize after:absolute after:inset-y-0 after:left-1/2 after:w-2 after:-translate-x-1/2 after:bg-transparent",
         // Horizontal split (between vertically stacked panels)
-        "data-[orientation=vertical]:h-px data-[orientation=vertical]:w-full data-[orientation=vertical]:cursor-row-resize data-[orientation=vertical]:after:inset-x-0 data-[orientation=vertical]:after:top-1/2 data-[orientation=vertical]:after:h-2 data-[orientation=vertical]:after:w-full data-[orientation=vertical]:after:-translate-y-1/2 data-[orientation=vertical]:after:translate-x-0",
+        "aria-[orientation=horizontal]:h-px aria-[orientation=horizontal]:w-full",
         className
       )}
       {...props}
     >
       {withHandle && (
-        <div className="z-10 flex h-7 w-5 shrink-0 items-center justify-center rounded-full border bg-background shadow-sm transition-colors group-hover:border-primary/40 group-hover:text-primary group-active:border-primary/40 group-active:text-primary group-data-[orientation=vertical]:rotate-90">
+        <div className="z-10 flex h-7 w-5 shrink-0 items-center justify-center rounded-full border bg-background shadow-sm group-aria-[orientation=horizontal]:rotate-90">
           <GripVertical className="h-3.5 w-3.5 text-muted-foreground" />
         </div>
       )}
@@ -61,4 +64,4 @@ function ResizableHandle({
   )
 }
 
-export { ResizableHandle, ResizablePanel, ResizablePanelGroup }
+export { ResizableHandle, ResizablePanel, ResizablePanelGroup, resizeHandleInteractionClass }

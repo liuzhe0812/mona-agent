@@ -1,11 +1,11 @@
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
-import { Loader2, Send, Square } from "lucide-react";
+import { Loader2 } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
 import { StatusNotice } from "@/components/ui/status-notice";
-import { Textarea } from "@/components/ui/textarea";
+import { ThreadComposer } from "@/components/thread/ThreadComposer";
 import { ThreadMessages } from "@/components/thread/ThreadMessages";
-import { useMonaStream } from "@/hooks/useMonaStream";
+import { useMonaStream, type SendImage, type SendOptions } from "@/hooks/useMonaStream";
 import { useSessionHistory } from "@/hooks/useSessions";
 import { useClientOptional } from "@/providers/ClientProvider";
 
@@ -19,7 +19,6 @@ interface SystemAgentChatProps {
 }
 
 export function SystemAgentChat({ chatId, task, onChatCreated, onTaskHandled }: SystemAgentChatProps) {
-  const [draft, setDraft] = useState("");
   const [creating, setCreating] = useState(false);
   const [creationError, setCreationError] = useState("");
   const bottomRef = useRef<HTMLDivElement>(null);
@@ -28,7 +27,7 @@ export function SystemAgentChat({ chatId, task, onChatCreated, onTaskHandled }: 
   const { client } = useClientOptional();
   const historyKey = chatId ? `websocket:${chatId}` : null;
   const { messages: historical, loading, error: historyError, hasPendingToolCalls, version: historyVersion } = useSessionHistory(historyKey);
-  const { messages, isStreaming, send, stop, setMessages, streamError, dismissStreamError } = useMonaStream(chatId, historical, hasPendingToolCalls);
+  const { messages, isStreaming, stopping, send, stop, setMessages, streamError, dismissStreamError } = useMonaStream(chatId, historical, hasPendingToolCalls);
 
   useEffect(() => {
     if (!chatId || loading) return;
@@ -61,12 +60,10 @@ export function SystemAgentChat({ chatId, task, onChatCreated, onTaskHandled }: 
     bottomRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [messageCount]);
 
-  const sendDraft = useCallback(() => {
-    const content = draft.trim();
-    if (!content || !chatId || isStreaming) return;
-    setDraft("");
-    send(content);
-  }, [chatId, draft, isStreaming, send]);
+  const sendDraft = useCallback((content: string, images?: SendImage[], options?: SendOptions) => {
+    if (!chatId || isStreaming || stopping) return;
+    send(content, images, options);
+  }, [chatId, isStreaming, stopping, send]);
 
   return (
     <div className="flex min-h-0 flex-1 flex-col">
@@ -83,34 +80,19 @@ export function SystemAgentChat({ chatId, task, onChatCreated, onTaskHandled }: 
         </div>
       </div>
 
-      <div className="shrink-0 p-2">
-        <div className="flex min-h-[52px] items-end gap-1.5 rounded-xl border border-border/75 bg-background px-2.5 py-1.5 shadow-sm">
-          <Textarea
-            value={draft}
-            onChange={(event) => setDraft(event.target.value)}
-            onKeyDown={(event) => {
-              if ((event.ctrlKey || event.metaKey) && event.key === "Enter") {
-                event.preventDefault();
-                sendDraft();
-              }
-            }}
-            disabled={!chatId || isStreaming || creating}
-            className="min-h-[36px] flex-1 resize-none rounded-none border-0 bg-transparent px-0 py-0 text-caption leading-5 shadow-none focus-visible:ring-0 focus-visible:ring-offset-0 placeholder:text-muted-foreground disabled:cursor-not-allowed disabled:opacity-60"
-            rows={2}
-            placeholder="继续告诉 Mona..."
-          />
-          <Button
-            type="button"
-            aria-label={isStreaming ? "停止执行" : "发送给 Mona"}
-            variant={isStreaming ? "destructive" : "default"}
-            size="icon"
-            disabled={isStreaming ? false : !chatId || !draft.trim() || creating}
-            onClick={isStreaming ? stop : sendDraft}
-            className="h-6 w-6 shrink-0 rounded-lg"
-          >
-            {isStreaming ? <Square className="h-3 w-3" /> : <Send className="h-3.5 w-3.5" />}
-          </Button>
-        </div>
+      <div className="shrink-0 p-3">
+        <ThreadComposer
+          chatId={chatId}
+          onSend={sendDraft}
+          placeholder="继续告诉 Mona..."
+          sendLabel="发送给 Mona"
+          stopLabel="停止执行"
+          disabled={!chatId || creating}
+          sendDisabled={isStreaming || stopping}
+          isStreaming={isStreaming}
+          stopping={stopping}
+          onStop={stop}
+        />
       </div>
     </div>
   );

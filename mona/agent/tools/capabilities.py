@@ -25,7 +25,7 @@ CAPABILITY_TOOL_GROUPS: dict[str, frozenset[str]] = {
     "http": frozenset({"http_request"}),
     "office": frozenset({"document", "generate_report", "office", "pdf"}),
     "image": frozenset({"generate_image", "message"}),
-    "video": frozenset({"generate_video", "message", "video_extract_frame"}),
+    "video": frozenset({"video", "generate_video", "message", "video_extract_frame"}),
     "email": frozenset({"email_action", "email_read", "email_search"}),
     "database": frozenset({"db_inspect", "db_query", "db_sql_draft"}),
     "terminal": frozenset(
@@ -61,6 +61,8 @@ _ACTIVE_CAPABILITIES: ContextVar[set[str] | None] = ContextVar(
 
 def _metadata_capabilities(metadata: dict[str, Any]) -> set[str]:
     active: set[str] = set()
+    if metadata.get("agent_kind") == "video":
+        active.update({"video", "development", "skill_resources", "image"})
     if metadata.get("office_session_id") or metadata.get("office_document_type"):
         active.add("office")
     attachments = metadata.get("_attachment_paths")

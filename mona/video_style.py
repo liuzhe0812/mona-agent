@@ -531,7 +531,7 @@ def save_style_draft(
                 version = int(value.get("version") or 0)
             except (TypeError, ValueError) as exc:
                 raise BrandKitError(
-                    "品牌套件绑定版本无效", code="BRAND_KIT_BINDING_INVALID"
+                    "保存的标识与配色已失效", code="BRAND_KIT_BINDING_INVALID"
                 ) from exc
             return (
                 str(value.get("id") or ""),
@@ -543,7 +543,7 @@ def save_style_draft(
             and binding_key(current_binding) != binding_key(saved_binding)
         ):
             raise BrandKitError(
-                "品牌套件只能通过专用操作切换",
+                "请在标识与配色设置中切换",
                 code="BRAND_BINDING_CHANGE_REQUIRES_ACTION",
                 status_code=409,
             )
@@ -668,7 +668,7 @@ def _enabled_aspects(style: Mapping[str, Any]) -> set[str]:
     variants = style.get("aspectVariants")
     if not isinstance(variants, Mapping):
         return {"16:9"}
-    return {str(key) for key, value in variants.items() if isinstance(value, Mapping) and value.get("enabled", False)} or {"16:9"}
+    return {str(key) for key, value in variants.items() if isinstance(value, Mapping) and value.get("enabled", False)}
 
 
 def _asset_metadata(directory: Path, asset_id: str) -> dict[str, Any] | None:
@@ -711,11 +711,15 @@ def validate_style(
         issues.append({"code": "MISSING_TYPOGRAPHY", "field": "tokens.typography", "message": "缺少字体配置"})
     elif any("://" in str(typography.get(key, "")) for key in ("headingFamily", "bodyFamily")):
         issues.append({"code": "EXTERNAL_FONT_FORBIDDEN", "field": "tokens.typography", "message": "字体必须使用本地名称"})
+    if isinstance(typography, Mapping) and typography.get("scale", "standard") not in ("compact", "standard", "large"):
+        issues.append({"code": "INVALID_TYPOGRAPHY_SCALE", "field": "tokens.typography.scale", "message": "不支持的字号层级"})
     shape = tokens.get("shape") if isinstance(tokens, Mapping) else {}
     if not isinstance(shape, Mapping) or shape.get("cardStyle") not in {"solid", "outline", "glass", "none"}:
         issues.append({"code": "INVALID_CARD_STYLE", "field": "tokens.shape.cardStyle", "message": "不支持的卡片风格"})
     if isinstance(shape, Mapping) and (not isinstance(shape.get("cardRadius"), (int, float)) or not 0 <= float(shape["cardRadius"]) <= 48):
         issues.append({"code": "INVALID_CARD_RADIUS", "field": "tokens.shape.cardRadius", "message": "卡片圆角必须在 0 到 48 之间"})
+    if isinstance(shape, Mapping) and shape.get("density", "standard") not in ("compact", "standard", "spacious"):
+        issues.append({"code": "INVALID_DENSITY", "field": "tokens.shape.density", "message": "不支持的信息密度"})
     required_components = {"cover", "chapter", "content", "data", "comparison", "process", "quote", "outro"}
     components = style.get("components")
     if not isinstance(components, Mapping):
@@ -733,6 +737,12 @@ def validate_style(
         for key in ("enterPreset", "emphasisPreset", "transitionPreset"):
             if motion.get(key) not in allowed_animations:
                 issues.append({"code": "UNKNOWN_MOTION_PRESET", "field": f"motion.{key}", "message": f"动效预设未列入允许列表: {motion.get(key)}"})
+    if isinstance(motion, Mapping) and motion.get("transitionPreset") not in ("cross-fade", "fade-rise", "stagger-rise"):
+        issues.append({"code": "INVALID_TRANSITION_PRESET", "field": "motion.transitionPreset", "message": "不支持的场景切换效果"})
+    if isinstance(motion, Mapping) and "transitionDurationMs" in motion:
+        transition_ms = motion["transitionDurationMs"]
+        if isinstance(transition_ms, bool) or not isinstance(transition_ms, (int, float)) or not 0 <= transition_ms <= 5000:
+            issues.append({"code": "INVALID_MOTION_DURATION", "field": "motion.transitionDurationMs", "message": "场景切换时长必须在 0 到 5000ms 之间"})
     backgrounds = style.get("backgrounds")
     if not isinstance(backgrounds, Mapping) or not isinstance(backgrounds.get("default"), Mapping):
         issues.append({"code": "MISSING_BACKGROUND", "field": "backgrounds.default", "message": "缺少默认背景槽位"})
@@ -756,11 +766,17 @@ def validate_style(
     variants = style.get("aspectVariants")
     if variants is not None and not isinstance(variants, Mapping):
         issues.append({"code": "INVALID_ASPECT_VARIANTS", "field": "aspectVariants", "message": "画面比例变体必须是对象"})
+    if not enabled:
+        issues.append({"code": "NO_ENABLED_ASPECT", "field": "aspectVariants", "message": "至少启用一个画面比例"})
     for aspect in enabled:
         if aspect not in {"16:9", "9:16", "1:1"}:
             issues.append({"code": "INVALID_ASPECT", "field": "aspectVariants", "message": f"不支持的画面比例: {aspect}"})
     if root is not None and series_id is not None:
         directory = _require_series(root, series_id)
+        series = _read_json(directory / "series.json")
+        default_aspect = str(series.get("defaultAspectRatio") or "16:9")
+        if default_aspect not in enabled:
+            issues.append({"code": "DEFAULT_ASPECT_DISABLED", "field": f"aspectVariants.{default_aspect}.enabled", "message": f"系列默认比例 {default_aspect} 必须保持启用"})
         for asset_id in sorted(_asset_ids(style)):
             if not re.fullmatch(r"[a-zA-Z0-9][a-zA-Z0-9_-]{0,63}", asset_id):
                 issues.append({"code": "INVALID_BACKGROUND_ASSET_ID", "field": "backgrounds", "message": f"背景资产 id 不安全: {asset_id}"})
@@ -836,45 +852,16 @@ def _as_mapping(value: Any) -> Mapping[str, Any]:
 def _style_preview_html(style: Mapping[str, Any], role: str) -> str:
     """Compile the same production scene used by the interactive preview."""
 
-    from mona.video_scene_compiler import compile_scene_spec
+    from mona.video_scene_compiler import compile_scene_spec, style_preview_spec
+    from mona.video_timeline import build_motion_plan, build_subtitle_track
 
-    layout = {
-        "cover": "cover-split",
-        "content": "content-standard",
-        "data": "metric-comparison",
-        "outro": "outro-brand",
-    }[role]
-    content: dict[str, Any] = {
-        "eyebrow": "系列风格预览",
-        "title": {
-            "cover": "让复杂知识变得清晰",
-            "content": "稳定的视觉语言",
-            "data": "效率持续提升",
-            "outro": "下一期见",
-        }[role],
-        "body": "配色、组件、背景、字幕和动效规则自动继承",
-    }
-    if role == "content":
-        content["bullets"] = ["统一标题层级", "统一信息组件", "统一字幕安全区"]
-    if role == "data":
-        content["metrics"] = [
-            {"value": "72%", "label": "制作效率"},
-            {"value": "3.6×", "label": "内容产能"},
-            {"value": "98%", "label": "风格一致"},
-        ]
-    spec = {
-        "schemaVersion": 1,
-        "sceneIndex": {"cover": 1, "content": 2, "data": 3, "outro": 4}[role],
-        "role": role,
-        "layout": layout,
-        "backgroundSlot": role,
-        "animationPreset": str(
-            (_as_mapping(style.get("motion")).get("enterPreset")) or "fade-rise"
-        ),
-        "duration": 6,
-        "start": 0,
-        "content": content,
-    }
+    spec = style_preview_spec(style, role)
+    motion = build_motion_plan(
+        {"index": spec["sceneIndex"], "role": role},
+        build_subtitle_track(str(spec["content"]["subtitle"]), 6000),
+        allowed_effects=style.get("allowedAnimations") or ("fade-rise", "stagger-rise", "soft-pulse", "cross-fade"),
+        motion_preferences=_as_mapping(style.get("motion")),
+    )
     backgrounds = _as_mapping(style.get("backgrounds"))
     slot = dict(_as_mapping(backgrounds.get("default")))
     slot.update(_as_mapping(_as_mapping(backgrounds.get("roles")).get(role)))
@@ -887,9 +874,11 @@ def _style_preview_html(style: Mapping[str, Any], role: str) -> str:
     return compile_scene_spec(
         spec,
         style,
-        resolution="960x540",
+        resolution="1920x1080",
         background_path=background_path,
         brand_logo_path=f"../{logo_path}" if logo_path.startswith("assets/") else None,
+        motion_plan=motion,
+        preview=True,
     )
 
 
@@ -974,7 +963,7 @@ def lock_style(
         _atomic_write_json(staging / "design-system.json", immutable)
         _atomic_write_bytes(staging / "theme.css", _theme_css(immutable).encode("utf-8"))
         (staging / "previews").mkdir(parents=True, exist_ok=True)
-        for role in ("cover", "content", "data", "outro"):
+        for role in ("cover", "chapter", "content", "data", "comparison", "process", "quote", "outro"):
             _atomic_write_bytes(
                 staging / "previews" / f"{role}.html",
                 _style_preview_html(immutable, role).encode("utf-8"),

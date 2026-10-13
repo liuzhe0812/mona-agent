@@ -13,6 +13,7 @@ from mona.video_scene_compiler import (
     SceneCompileError,
     compile_scene_spec,
     parse_scene_spec,
+    style_preview_spec,
     validate_scene_spec,
 )
 from mona.video_style import get_builtin_template
@@ -20,9 +21,11 @@ from mona.video_timeline import build_motion_plan, build_subtitle_track
 
 LAYOUTS = [
     "cover-split",
+    "chapter-title",
     "content-standard",
     "metric-comparison",
     "comparison-columns",
+    "process-steps",
     "quote-focus",
     "outro-brand",
 ]
@@ -61,9 +64,11 @@ def style() -> dict:
             },
             "roles": {
                 "cover": {"inherit": "default"},
+                "chapter": {"inherit": "default"},
                 "content": {"inherit": "default"},
                 "data": {"inherit": "default"},
                 "comparison": {"inherit": "default"},
+                "process": {"inherit": "default"},
                 "quote": {"inherit": "default"},
                 "outro": {"inherit": "default"},
             },
@@ -134,6 +139,12 @@ def test_all_supported_layouts_compile(style: dict, layout: str) -> None:
         spec["backgroundSlot"] = "comparison"
         spec["content"]["left"] = {"title": "之前", "items": ["手工"]}
         spec["content"]["right"] = {"title": "现在", "items": ["自动"]}
+    elif layout == "chapter-title":
+        spec["role"] = "chapter"
+        spec["content"]["chapterNumber"] = 2
+    elif layout == "process-steps":
+        spec["role"] = "process"
+        spec["content"]["steps"] = ["明确目标", "预览修改", "导出交付"]
     output = compile_scene_spec(spec, style, resolution="1280x720", background_path="assets/bg.webp")
     assert 'width: 1280px; height: 720px;' in output
     assert f'data-layout="{layout}"' in output
@@ -146,6 +157,101 @@ def test_all_supported_layouts_compile(style: dict, layout: str) -> None:
     assert "Timeline.prototype.duration" in output
 
 
+@pytest.mark.parametrize(
+    "layout",
+    ["process-horizontal", "process-node-line", "process-numbered", "process-step-cards"],
+)
+def test_process_aliases_compile_as_numbered_connected_steps_and_accept_bullets(
+    style: dict, layout: str
+) -> None:
+    spec = _spec(
+        layout,
+        bullets=[
+            "明确目标",
+            {"title": "预览画面", "body": "检查每一幕的内容"},
+            "导出交付",
+        ],
+    )
+    spec["role"] = "process"
+
+    normalized = validate_scene_spec(spec, style)
+    assert normalized["layout"] == "process-steps"
+    landscape = compile_scene_spec(spec, style, resolution="1920x1080")
+    assert 'data-layout="process-steps"' in landscape
+    assert landscape.count('class="process-step"') == 3
+    assert '<span class="process-step-number" aria-hidden="true">1</span>' in landscape
+    assert '<h2>明确目标</h2>' in landscape
+    assert "检查每一幕的内容" in landscape
+    assert "导出交付" in landscape
+    assert ".process-step:not(:last-child)::after" in landscape
+
+    portrait = compile_scene_spec(spec, style, resolution="1080x1920")
+    assert ".process-step-list { grid-template-columns: 1fr;" in portrait
+    assert "left: 1.05em; width: 2px; height: auto;" in portrait
+
+
+def test_process_layout_rejects_non_list_steps(style: dict) -> None:
+    spec = _spec("process-node-line", bullets="明确目标")
+    spec["role"] = "process"
+
+    with pytest.raises(SceneCompileError) as exc:
+        validate_scene_spec(spec, style)
+
+    assert exc.value.code == "SCENE_SPEC_INVALID_CONTENT"
+    assert exc.value.details["path"] == "$.content.bullets"
+
+
+def test_process_layout_can_turn_existing_body_into_a_single_step(style: dict) -> None:
+    spec = _spec("process-numbered", body="输入 & 输出")
+    spec["role"] = "process"
+
+    output = compile_scene_spec(spec, style)
+
+    assert "<h2>输入 &amp; 输出</h2>" in output
+    assert "&amp;amp;" not in output
+
+
+@pytest.mark.parametrize(
+    "layout",
+    ["chapter-numbered", "chapter-glow", "chapter-rule", "chapter-sticker"],
+)
+def test_chapter_aliases_compile_as_numbered_chapter_titles(
+    style: dict, layout: str
+) -> None:
+    spec = _spec(layout, title="从想法到作品", body="开始新的章节。")
+    spec["role"] = "chapter"
+
+    normalized = validate_scene_spec(spec, style)
+    output = compile_scene_spec(
+        spec, style, scene={"index": 5}, resolution="1920x1080"
+    )
+
+    assert normalized["layout"] == "chapter-title"
+    assert 'data-layout="chapter-title"' in output
+    assert '<div class="chapter-number" data-motion-target="chapter.number">第 5 章</div>' in output
+    assert '<h1 data-motion-target="title">从想法到作品</h1>' in output
+    assert "开始新的章节。" in output
+
+
+def test_style_preview_uses_canonical_chapter_and_process_layouts() -> None:
+    for template_id in (
+        "tech-dark",
+        "minimal-business",
+        "knowledge-cards",
+        "editorial-magazine",
+    ):
+        style = get_builtin_template(template_id)
+        for role, layout in (("chapter", "chapter-title"), ("process", "process-steps")):
+            spec = style_preview_spec(style, role)
+            assert spec["role"] == role
+            assert spec["layout"] == layout
+            normalized = validate_scene_spec(spec, style)
+            assert normalized["layout"] == layout
+            output = compile_scene_spec(spec, style, resolution="1080x1920")
+            assert f'data-role="{role}"' in output
+            assert f'data-layout="{layout}"' in output
+
+
 def test_compile_escapes_all_text_and_is_deterministic(style: dict) -> None:
     spec = _spec(title='<img src=x onerror="bad">', body="<script>alert(1)</script>")
     spec["content"]["bullets"] = ["<b>not markup</b>"]
@@ -156,6 +262,127 @@ def test_compile_escapes_all_text_and_is_deterministic(style: dict) -> None:
     assert "&lt;img src=x onerror=&quot;bad&quot;&gt;" in first
     assert "&lt;script&gt;alert(1)&lt;/script&gt;" in first
     assert "<b>not markup</b>" not in first
+
+
+def test_cover_consumes_keyword_columns_without_exposing_production_notes(style: dict) -> None:
+    spec = _spec("cover-split", columns=[
+        {"title": "Journey", "body": "用户旅程"},
+        {"title": "Engagement", "text": "深度互动"},
+        {"heading": "Value", "items": ["价值转化"]},
+    ])
+    output = compile_scene_spec(spec, style, scene={"visual": "左侧大标题，右侧三个关键词卡片"})
+    assert "左侧大标题" not in output
+    assert output.count('class="card keyword-card"') == 3
+    for title, text in (("Journey", "用户旅程"), ("Engagement", "深度互动"), ("Value", "价值转化")):
+        assert f"<h2>{title}</h2>" in output
+        assert text in output
+    spec["content"]["columns"] = [{"body": "没有标题"}]
+    with pytest.raises(SceneCompileError) as exc:
+        compile_scene_spec(spec, style)
+    assert exc.value.details["path"] == "$.content.columns[0].title"
+
+
+def test_style_font_scale_card_style_and_density_change_compiled_layout(style: dict) -> None:
+    compact = compile_scene_spec(_spec(), style, resolution="1920x1080")
+    style["tokens"]["typography"]["scale"] = "large"
+    style["tokens"]["shape"].update({"cardStyle": "none", "density": "spacious"})
+    spacious = compile_scene_spec(_spec(), style, resolution="1920x1080")
+    assert ".scene h1 { font-size: 86px; }" in compact
+    assert ".scene h1 { font-size: 98px; }" in spacious
+    assert ".scene .scene-content { padding: 103px 185px; }" in spacious
+    assert ".scene .card, .scene .cover-visual, .scene .scene-media { background: transparent; border: 0; box-shadow: none;" in spacious
+
+
+def test_style_typography_spacing_and_safe_area_are_used(style: dict) -> None:
+    style["tokens"]["typography"].update(
+        {
+            "headingWeight": 800,
+            "bodyWeight": 500,
+            "headingLineHeight": 1.3,
+            "bodyLineHeight": 1.8,
+        }
+    )
+    style["tokens"]["spacing"] = {"unit": 12, "contentPadding": 120}
+    style["tokens"]["shape"].update(
+        {"borderWidth": 2, "shadow": "soft", "shadowOpacity": 0.2}
+    )
+    style["backgrounds"]["default"]["safeArea"] = {
+        "top": 0.12,
+        "right": 0.08,
+        "bottom": 0.1,
+        "left": 0.1,
+    }
+    style["backgrounds"]["roles"]["content"] = {"inherit": "default"}
+    style["subtitle"] = {
+        "fontSize": 42,
+        "lineHeight": 1.4,
+        "safeAreaTop": 0.1,
+        "safeAreaRight": 0.06,
+        "safeAreaBottom": 0.12,
+        "safeAreaLeft": 0.07,
+    }
+
+    output = compile_scene_spec(
+        _spec(subtitle="字幕留在安全区"), style, resolution="1920x1080"
+    )
+
+    assert "--mona-heading-weight: 800;" in output
+    assert "--mona-body-weight: 500;" in output
+    assert "--mona-heading-line-height: 1.3;" in output
+    assert "--mona-body-line-height: 1.8;" in output
+    assert "--mona-spacing-unit: 24px;" in output
+    assert "--mona-border-width: 2px;" in output
+    assert "--mona-shadow-opacity: 0.2;" in output
+    assert ".scene .scene-content { padding: 130px 192px; }" in output
+    assert "--mona-subtitle-font-size: 42px;" in output
+    assert "--mona-subtitle-safe-bottom: 130px;" in output
+    assert "--mona-subtitle-safe-left: 134px;" in output
+
+
+def test_subtitle_minimum_size_adapts_to_portrait_and_landscape(style: dict) -> None:
+    spec = _spec(subtitle="清晰字幕")
+    landscape = compile_scene_spec(spec, style, resolution="1920x1080")
+    portrait = compile_scene_spec(spec, style, resolution="1080x1920")
+
+    assert "--mona-subtitle-font-size: 36px;" in landscape
+    assert "--mona-subtitle-font-size: 48px;" in portrait
+    assert "--mona-subtitle-safe-bottom: 86px;" in landscape
+    assert "--mona-subtitle-safe-bottom: 154px;" in portrait
+
+
+def test_cover_without_visuals_uses_clean_title_layout(style: dict) -> None:
+    output = compile_scene_spec(
+        _spec("cover-split", title="从这里开始", body="用清楚的内容讲解主题。"),
+        style,
+        resolution="1920x1080",
+    )
+
+    assert "cover-simple" in output
+    assert 'class="scene-content cover-copy cover-simple-copy"' in output
+    assert 'class="scene-visual cover-visual"' not in output
+    assert "visual-orbit" not in output
+
+
+def test_background_preview_accepts_only_controlled_bitmap_data(style: dict) -> None:
+    output = compile_scene_spec(_spec(), style, background_data_uri="data:image/webp;base64,UklGRg==")
+    assert 'url("data:image/webp;base64,UklGRg==")' in output
+    with pytest.raises(SceneCompileError):
+        compile_scene_spec(_spec(), style, background_data_uri="data:image/svg+xml;base64,PHN2Zz4=")
+
+
+def test_motion_plan_and_compiler_consume_style_preferences(style: dict) -> None:
+    track = build_subtitle_track("第一句。第二句。", 6000)
+    style["motion"] = {"enterPreset": "stagger-rise", "emphasisPreset": "cross-fade", "transitionPreset": "fade-rise", "transitionDurationMs": 300, "intensity": "restrained"}
+    plan = build_motion_plan(
+        {"index": 1, "role": "cover"}, track,
+        allowed_effects=style["allowedAnimations"], motion_preferences=style["motion"],
+    )
+    assert next(beat for beat in plan["beats"] if beat["target"] == "title")["effect"] == "stagger-rise"
+    assert next(beat for beat in plan["beats"] if beat["target"] == "visual")["effect"] == "cross-fade"
+    assert all(beat["intensity"] == "restrained" for beat in plan["beats"])
+    output = compile_scene_spec(_spec("cover-split"), style, motion_plan=plan, preview=True)
+    assert 'data-transition-preset="fade-rise" data-transition-duration-ms="300"' in output
+    assert "window.requestAnimationFrame(animatePreview)" in output
 
 
 def test_subtitle_uses_locked_position_style_and_line_limit(style: dict) -> None:
@@ -331,7 +558,9 @@ def test_four_builtin_templates_compile_distinct_real_component_packs() -> None:
             output = compile_scene_spec(spec, template, resolution="1920x1080")
             assert f'data-template="{theme}"' in output
             assert f'data-component="{template["components"][role]}"' in output
-            assert 'class="template-decor"' in output
+            assert 'class="template-decor"' not in output
+            assert "radial-gradient(" not in output
+            assert "visual-orbit" not in output
             outputs[f"{template_id}:{role}"] = output
     assert len({outputs[f"{template_id}:content"] for template_id in expected_themes}) == 4
 

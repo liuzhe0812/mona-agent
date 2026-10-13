@@ -108,6 +108,20 @@ pub struct UpgradeResult {
     pub residuals: Vec<ResidualCandidate>,
 }
 
+#[derive(Debug, Serialize)]
+pub struct UninstallResult {
+    #[serde(flatten)]
+    result: UpgradeResult,
+    pending: bool,
+}
+
+#[derive(Debug)]
+#[cfg(windows)]
+enum UninstallCommandError {
+    NotStarted(String),
+    Unconfirmed(String),
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct SoftwareFailure {
@@ -1571,29 +1585,91 @@ fn normalize_msi_uninstall_args(args: &mut [String]) {
 async fn run_registry_uninstaller(
     command: String,
     uninstall_kind: String,
-) -> Result<std::process::Output, String> {
+) -> Result<std::process::Output, UninstallCommandError> {
     let expanded = expand_uninstall_environment(command.trim());
-    let mut parts = split_windows_command_line(&expanded)?;
+    let mut parts = split_windows_command_line(&expanded).map_err(UninstallCommandError::NotStarted)?;
     if parts.is_empty() || parts[0].trim().is_empty() {
-        return Err("卸载命令为空".to_string());
+        return Err(UninstallCommandError::NotStarted("卸载命令为空".to_string()));
     }
     let program = parts.remove(0);
     if uninstall_kind == "msi" {
         normalize_msi_uninstall_args(&mut parts);
     }
+    run_uninstall_command(program, parts).await
+}
+
+#[cfg(windows)]
+async fn run_uninstall_command(program: String, args: Vec<String>) -> Result<std::process::Output, UninstallCommandError> {
     tokio::task::spawn_blocking(move || {
-        std::process::Command::new(&program)
-            .args(parts)
+        let child = std::process::Command::new(&program)
+            .args(args)
             .creation_flags(CREATE_NO_WINDOW)
-            .output()
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::piped())
+            .spawn()
+            .map_err(|error| UninstallCommandError::NotStarted(format!("无法启动卸载程序：{error}")))?;
+        child.wait_with_output().map_err(|error| UninstallCommandError::Unconfirmed(format!("无法读取卸载结果：{error}")))
     })
     .await
-    .map_err(|error| format!("卸载程序执行失败：{error}"))?
-    .map_err(|error| format!("无法启动卸载程序：{error}"))
+    .map_err(|error| UninstallCommandError::Unconfirmed(format!("卸载程序执行中断：{error}")))?
 }
 
 fn uninstall_exit_succeeded(exit_code: Option<i32>) -> bool {
     matches!(exit_code, Some(0 | 1641 | 3010))
+}
+
+#[cfg(windows)]
+fn uninstall_registration_present(hive: &str, path: &str) -> Result<bool, String> {
+    use windows::Win32::Foundation::{ERROR_FILE_NOT_FOUND, ERROR_KEY_DELETED, ERROR_PATH_NOT_FOUND};
+    use windows_registry::{CURRENT_USER, LOCAL_MACHINE};
+    let root = match hive {
+        "HKCU" => CURRENT_USER,
+        "HKLM" => LOCAL_MACHINE,
+        _ => return Err("无法识别卸载登记位置".to_string()),
+    };
+    let missing = |error: &windows_result::Error| {
+        [ERROR_FILE_NOT_FOUND, ERROR_PATH_NOT_FOUND, ERROR_KEY_DELETED]
+            .iter()
+            .any(|code| error.code() == windows_result::HRESULT::from_win32(code.0))
+    };
+    match root.open(path) {
+        Ok(key) => match key.get_string("DisplayName") {
+            Ok(name) => Ok(!name.trim().is_empty()),
+            Err(error) if missing(&error) => Ok(false),
+            Err(error) => Err(format!("无法核对软件卸载登记：{error}")),
+        },
+        Err(error) if missing(&error) => Ok(false),
+        Err(error) => Err(format!("无法读取软件卸载登记：{error}")),
+    }
+}
+
+#[cfg(windows)]
+fn wait_for_uninstall_registration_removed(hive: &str, path: &str, timeout: Duration) -> Result<bool, String> {
+    let started = Instant::now();
+    loop {
+        if !uninstall_registration_present(hive, path)? {
+            return Ok(true);
+        }
+        if started.elapsed() >= timeout {
+            return Ok(false);
+        }
+        std::thread::sleep(Duration::from_millis(250).min(timeout.saturating_sub(started.elapsed())));
+    }
+}
+
+#[cfg(windows)]
+async fn verify_uninstall_attempt(software: &InstalledSoftware, exit_code: Option<i32>) -> Result<bool, String> {
+    if matches!(exit_code, Some(1641 | 3010)) {
+        return Ok(true);
+    }
+    let hive = software.uninstall_registry_hive.clone();
+    let path = software.uninstall_registry_path.clone();
+    // 启动器退出可能只是拉起了另一个卸载进程，登记移除才表示卸载已完成。
+    let timeout = Duration::from_secs(if uninstall_exit_succeeded(exit_code) { 300 } else { 2 });
+    tokio::task::spawn_blocking(move || wait_for_uninstall_registration_removed(&hive, &path, timeout))
+        .await
+        .map_err(|error| format!("卸载结果核对中断：{error}"))?
 }
 
 /// 流式执行 winget，逐行回调 stdout（兼容 \r 进度条刷新），返回 (exit_status, stderr_text)
@@ -1794,7 +1870,7 @@ pub async fn system_uninstall_software(
     id: Option<String>,
     name: String,
     install_location: Option<String>,
-) -> Result<UpgradeResult, String> {
+) -> Result<UninstallResult, String> {
     #[cfg(not(windows))]
     {
         let _ = (app, state, id, name, install_location);
@@ -1850,9 +1926,22 @@ pub async fn system_uninstall_software(
         );
 
         let mut success = false;
+        let mut pending = false;
         let mut exit_code = None;
         let mut direct_details = Vec::new();
         for (index, command) in uninstall_commands.into_iter().enumerate() {
+            match uninstall_registration_present(&selected.uninstall_registry_hive, &selected.uninstall_registry_path) {
+                Ok(false) => {
+                    success = true;
+                    break;
+                }
+                Err(error) => {
+                    log::warn!("uninstall verification pending for {package_id}: {error}");
+                    pending = true;
+                    break;
+                }
+                Ok(true) => {}
+            }
             if index > 0 {
                 let _ = app.emit(
                     "software-uninstall-progress",
@@ -1868,19 +1957,33 @@ pub async fn system_uninstall_software(
                     exit_code = output.status.code();
                     let command_success = uninstall_exit_succeeded(exit_code);
                     let command_detail = command_message(&output.stdout, &output.stderr);
-                    if command_success {
-                        success = true;
-                        direct_details.clear();
-                        if !command_detail.trim().is_empty() {
-                            direct_details.push(command_detail);
+                    match verify_uninstall_attempt(&selected, exit_code).await {
+                        Ok(true) => {
+                            success = true;
+                            direct_details.clear();
+                            break;
                         }
-                        break;
+                        Ok(false) if command_success => {
+                            pending = true;
+                            break;
+                        }
+                        Err(error) => {
+                            log::warn!("uninstall verification pending for {package_id}: {error}");
+                            pending = true;
+                            break;
+                        }
+                        Ok(false) => {}
                     }
                     if !command_detail.trim().is_empty() {
                         direct_details.push(command_detail);
                     }
                 }
-                Err(error) => direct_details.push(error),
+                Err(UninstallCommandError::NotStarted(error)) => direct_details.push(error),
+                Err(UninstallCommandError::Unconfirmed(error)) => {
+                    log::warn!("uninstall result pending for {package_id}: {error}");
+                    pending = true;
+                    break;
+                }
             }
         }
         let direct_detail = direct_details.join("\n");
@@ -1890,7 +1993,7 @@ pub async fn system_uninstall_software(
             direct_detail.clone()
         };
 
-        if !success {
+        if !success && !pending {
             let _ = app.emit(
                 "software-uninstall-progress",
                 UpgradeProgress {
@@ -1899,7 +2002,7 @@ pub async fn system_uninstall_software(
                     status: "running".to_string(),
                 },
             );
-            let fallback = run_winget(vec![
+            let fallback = run_uninstall_command("winget".to_string(), vec![
                 "uninstall".to_string(),
                 "--name".to_string(),
                 display_name.clone(),
@@ -1911,7 +2014,17 @@ pub async fn system_uninstall_software(
             match fallback {
                 Ok(output) => {
                     exit_code = output.status.code();
-                    success = uninstall_exit_succeeded(exit_code);
+                    let command_success = uninstall_exit_succeeded(exit_code);
+                    match verify_uninstall_attempt(&selected, exit_code).await {
+                        Ok(removed) => {
+                            success = removed;
+                            pending = command_success && !removed;
+                        }
+                        Err(error) => {
+                            log::warn!("uninstall verification pending for {package_id}: {error}");
+                            pending = true;
+                        }
+                    }
                     let fallback_detail = hide_internal_store_name(&command_message(
                         &output.stdout,
                         &output.stderr,
@@ -1926,12 +2039,16 @@ pub async fn system_uninstall_software(
                         };
                     }
                 }
-                Err(error) => {
+                Err(UninstallCommandError::NotStarted(error)) => {
                     detail = if direct_detail.trim().is_empty() {
                         error
                     } else {
                         format!("{direct_detail}\n备用卸载方式：{error}")
                     };
+                }
+                Err(UninstallCommandError::Unconfirmed(error)) => {
+                    log::warn!("uninstall result pending for {package_id}: {error}");
+                    pending = true;
                 }
             }
         }
@@ -1940,31 +2057,26 @@ pub async fn system_uninstall_software(
         } else {
             detail
         };
-        if success {
-            let verify_id = package_id.clone();
-            let still_installed = tokio::task::spawn_blocking(move || {
-                read_installed_software()
-                    .into_iter()
-                    .any(|software| software.id == verify_id)
-            })
-            .await
-            .unwrap_or(true);
-            if still_installed {
-                success = false;
-                message = "卸载程序已结束，但软件仍在已安装列表中，请刷新后重试".to_string();
-            }
+        let restart_required = success && matches!(exit_code, Some(1641 | 3010));
+        if pending {
+            log::info!("uninstall result not yet confirmed: {package_id}");
+            message = "尚未确认卸载完成，请完成卸载程序的操作后刷新列表核对。".to_string();
+        } else if restart_required {
+            message = "卸载程序已完成，需要重启后生效。".to_string();
         }
-        persist_operation(
-            &state,
-            &package_id,
-            &display_name,
-            "uninstall",
-            success,
-            exit_code,
-            &message,
-        );
+        if !pending {
+            persist_operation(
+                &state,
+                &package_id,
+                &display_name,
+                "uninstall",
+                success,
+                exit_code,
+                &message,
+            );
+        }
         let residual_software_id = package_id.clone();
-        let residuals = if success {
+        let residuals = if success && !restart_required {
             tokio::task::spawn_blocking(move || {
                 let mut candidates = scan_residual_candidates(
                     &residual_software_id,
@@ -1990,14 +2102,12 @@ pub async fn system_uninstall_software(
             UpgradeProgress {
                 id: package_id,
                 line: message.clone(),
-                status: if success { "done" } else { "failed" }.to_string(),
+                status: if success { "done" } else if pending { "pending" } else { "failed" }.to_string(),
             },
         );
-        Ok(UpgradeResult {
-            success,
-            message,
-            exit_code,
-            residuals,
+        Ok(UninstallResult {
+            result: UpgradeResult { success, message, exit_code, residuals },
+            pending,
         })
     }
 }
@@ -2232,6 +2342,105 @@ WeChat                       Tencent.WeChat.DevTools        3.9.12.57    Tag: �
         assert!(super::uninstall_exit_succeeded(Some(1641)));
         assert!(super::uninstall_exit_succeeded(Some(3010)));
         assert!(!super::uninstall_exit_succeeded(Some(1)));
+    }
+
+    #[test]
+    fn pending_uninstall_serializes_without_a_failed_completion_claim() {
+        let result = super::UninstallResult {
+            result: super::UpgradeResult {
+                success: false,
+                message: "卸载结果待确认".to_string(),
+                exit_code: Some(0),
+                residuals: vec![],
+            },
+            pending: true,
+        };
+        let value = serde_json::to_value(result).unwrap();
+        assert_eq!(value["pending"], true);
+        assert_eq!(value["success"], false);
+        assert_eq!(value["exitCode"], 0);
+        assert!(value.get("result").is_none());
+    }
+
+    #[cfg(windows)]
+    struct UninstallRegistrationFixture {
+        path: String,
+    }
+
+    #[cfg(windows)]
+    impl UninstallRegistrationFixture {
+        fn new() -> Self {
+            let path = format!("Software\\MonaUninstallTests\\{}", uuid::Uuid::new_v4());
+            windows_registry::CURRENT_USER.create(&path).unwrap()
+                .set_string("DisplayName", "Mona uninstall verification test").unwrap();
+            Self { path }
+        }
+    }
+
+    #[cfg(windows)]
+    impl Drop for UninstallRegistrationFixture {
+        fn drop(&mut self) {
+            assert!(self.path.starts_with("Software\\MonaUninstallTests\\"));
+            let _ = windows_registry::CURRENT_USER.remove_tree(&self.path);
+        }
+    }
+
+    #[test]
+    #[cfg(windows)]
+    fn uninstall_waits_for_the_registration_removed_by_a_delayed_uninstaller() {
+        let fixture = UninstallRegistrationFixture::new();
+        assert!(super::uninstall_registration_present("HKCU", &fixture.path).unwrap());
+        let path = fixture.path.clone();
+        let removal = std::thread::spawn(move || {
+            std::thread::sleep(std::time::Duration::from_millis(80));
+            assert!(path.starts_with("Software\\MonaUninstallTests\\"));
+            windows_registry::CURRENT_USER.remove_tree(&path).unwrap();
+        });
+        let removed = super::wait_for_uninstall_registration_removed(
+            "HKCU", &fixture.path, std::time::Duration::from_secs(2),
+        ).unwrap();
+        removal.join().unwrap();
+        assert!(removed);
+    }
+
+    #[test]
+    #[cfg(windows)]
+    fn uninstall_wait_timeout_does_not_report_a_still_present_registration_removed() {
+        let fixture = UninstallRegistrationFixture::new();
+        assert!(!super::wait_for_uninstall_registration_removed(
+            "HKCU", &fixture.path, std::time::Duration::from_millis(50),
+        ).unwrap());
+        assert!(super::uninstall_registration_present("HKCU", &fixture.path).unwrap());
+    }
+
+    #[test]
+    #[cfg(windows)]
+    fn uninstall_verification_read_errors_are_not_treated_as_removed() {
+        let fixture = UninstallRegistrationFixture::new();
+        windows_registry::CURRENT_USER.create(&fixture.path).unwrap()
+            .set_u32("DisplayName", 42).unwrap();
+        assert!(super::uninstall_registration_present("HKCU", &fixture.path).is_err());
+        assert!(super::wait_for_uninstall_registration_removed(
+            "HKCU", &fixture.path, std::time::Duration::from_millis(50),
+        ).is_err());
+    }
+
+    #[test]
+    #[cfg(windows)]
+    fn uninstall_registration_with_no_display_name_is_no_longer_installed() {
+        let fixture = UninstallRegistrationFixture::new();
+        windows_registry::CURRENT_USER.create(&fixture.path).unwrap()
+            .remove_value("DisplayName").unwrap();
+        assert!(!super::uninstall_registration_present("HKCU", &fixture.path).unwrap());
+    }
+
+    #[tokio::test]
+    #[cfg(windows)]
+    async fn uninstall_command_that_cannot_start_is_safe_to_try_a_registered_alternative() {
+        let directory = tempfile::tempdir().unwrap();
+        let missing_program = directory.path().join("missing-uninstaller.exe").to_string_lossy().to_string();
+        let error = super::run_uninstall_command(missing_program, vec![]).await.unwrap_err();
+        assert!(matches!(error, super::UninstallCommandError::NotStarted(_)));
     }
 
     #[test]

@@ -2284,11 +2284,10 @@ async def test_message_route_errors_carry_chat_id(bus: MagicMock) -> None:
 
 
 @pytest.mark.asyncio
-async def test_message_route_promotion_requires_subscription(
+async def test_message_route_promotion_is_free(
     bus: MagicMock, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """Promoting an empty chat to a document agent is gated on membership."""
-    from mona.channels import websocket as websocket_module
+    """Promoting an explicitly selected empty chat does not require membership."""
     from mona.session.manager import SessionManager
 
     sessions = SessionManager(tmp_path / "sessions")
@@ -2298,9 +2297,6 @@ async def test_message_route_promotion_requires_subscription(
     channel._handle_message = AsyncMock()
     connection = MagicMock()
     connection.send = AsyncMock()
-    monkeypatch.setattr(
-        websocket_module, "_has_subscription_access", AsyncMock(return_value=False)
-    )
 
     await channel._dispatch_envelope(
         connection,
@@ -2313,13 +2309,11 @@ async def test_message_route_promotion_requires_subscription(
         },
     )
 
-    channel._handle_message.assert_not_awaited()
-    # Nothing is persisted: the promotion is refused before the profile is saved.
-    assert sessions.read_session_file("websocket:chat-nosub") is None
+    channel._handle_message.assert_awaited_once()
+    session = sessions.read_session_file("websocket:chat-nosub")
+    assert session is not None and session["metadata"]["agent_kind"] == "video"
     sent = [json.loads(call.args[0]) for call in connection.send.await_args_list]
-    error = next(item for item in sent if item.get("event") == "error")
-    assert error["detail"] == "membership_required"
-    assert error["chat_id"] == "chat-nosub"
+    assert not any(item.get("event") == "error" for item in sent)
 
 
 @pytest.mark.asyncio
@@ -2327,7 +2321,6 @@ async def test_message_route_promotes_empty_chat_to_video_agent(
     bus: MagicMock, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """A video tab whose chat lost its profile recovers on the next turn."""
-    from mona.channels import websocket as websocket_module
     from mona.session.manager import SessionManager
 
     sessions = SessionManager(tmp_path / "sessions")
@@ -2337,9 +2330,6 @@ async def test_message_route_promotes_empty_chat_to_video_agent(
     channel._handle_message = AsyncMock()
     connection = MagicMock()
     connection.send = AsyncMock()
-    monkeypatch.setattr(
-        websocket_module, "_has_subscription_access", AsyncMock(return_value=True)
-    )
 
     await channel._dispatch_envelope(
         connection,
@@ -2363,7 +2353,6 @@ async def test_message_route_rejects_video_turn_on_nonempty_chat(
     bus: MagicMock, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """An ordinary conversation must not be silently converted to a video agent."""
-    from mona.channels import websocket as websocket_module
     from mona.session.manager import SessionManager
 
     sessions = SessionManager(tmp_path / "sessions")
@@ -2376,9 +2365,6 @@ async def test_message_route_rejects_video_turn_on_nonempty_chat(
     channel._handle_message = AsyncMock()
     connection = MagicMock()
     connection.send = AsyncMock()
-    monkeypatch.setattr(
-        websocket_module, "_has_subscription_access", AsyncMock(return_value=True)
-    )
 
     await channel._dispatch_envelope(
         connection,

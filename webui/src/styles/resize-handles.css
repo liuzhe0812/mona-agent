@@ -1,0 +1,92 @@
+:root {
+  --mona-cursor-col-resize: url("../assets/cursors/col-resize-black.cur"), col-resize;
+  --mona-cursor-row-resize: url("../assets/cursors/row-resize-black.cur"), row-resize;
+}
+
+/* 所有可拖拽分割线共用视觉层；命中热区不参与高亮或布局变化。 */
+:is(.mona-resize-handle, .column-resize-handle, .tableResizeHandle, .thumb-resizer, .ai-panel-resizer, .notes-resize-handle, .notes-pull-zone, [role="separator"][aria-label="Resize sidebar"]) {
+  background: transparent;
+}
+:is(.mona-resize-handle, .column-resize-handle, .tableResizeHandle, .thumb-resizer, .ai-panel-resizer, .notes-resize-handle, .notes-pull-zone, [role="separator"][aria-label="Resize sidebar"])::before {
+  content: "";
+  position: absolute;
+  z-index: 1;
+  pointer-events: none;
+  top: 0;
+  bottom: 0;
+  left: 50%;
+  width: 1px;
+  transform: translateX(-50%);
+  background: var(--mona-resize-border, hsl(var(--border) / 0.6));
+  transition: background-color var(--motion-instant);
+}
+:is(.mona-resize-handle, .column-resize-handle, .tableResizeHandle, .thumb-resizer, .ai-panel-resizer, .notes-resize-handle, .notes-pull-zone, [role="separator"][aria-label="Resize sidebar"])::after {
+  content: "";
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: 50%;
+  width: 8px;
+  transform: translateX(-50%);
+  background: transparent;
+}
+:is(.mona-resize-handle, .column-resize-handle, .tableResizeHandle, .thumb-resizer, .ai-panel-resizer, .notes-resize-handle, .notes-pull-zone, [role="separator"][aria-label="Resize sidebar"]):is(:hover, :focus-visible, [data-separator="hover"])::before {
+  width: 3px;
+  background: var(--mona-resize-hover, hsl(var(--primary) / 0.1));
+}
+:is(.mona-resize-handle, .column-resize-handle, .tableResizeHandle, .thumb-resizer, .ai-panel-resizer, .notes-resize-handle, .notes-pull-zone, [role="separator"][aria-label="Resize sidebar"]):is(:active, [data-separator="active"], [data-resizing="true"])::before,
+.notes-prosemirror .column-resize-dragging .column-resize-handle::before {
+  width: 3px;
+  background: var(--mona-resize-active, hsl(var(--primary) / 0.2));
+}
+:is(.mona-resize-handle[data-resize-direction="row"], .mona-resize-handle[aria-orientation="horizontal"], .notes-resize-handle, .notes-pull-zone)::before,
+:is(.mona-resize-handle[data-resize-direction="row"], .mona-resize-handle[aria-orientation="horizontal"], .notes-resize-handle, .notes-pull-zone)::after {
+  top: 50%;
+  bottom: auto;
+  left: 0;
+  width: 100%;
+  transform: translateY(-50%);
+}
+:is(.mona-resize-handle[data-resize-direction="row"], .mona-resize-handle[aria-orientation="horizontal"], .notes-resize-handle, .notes-pull-zone)::before {
+  height: 1px;
+}
+:is(.mona-resize-handle[data-resize-direction="row"], .mona-resize-handle[aria-orientation="horizontal"], .notes-resize-handle, .notes-pull-zone)::after {
+  height: 8px;
+}
+:is(.mona-resize-handle[data-resize-direction="row"], .mona-resize-handle[aria-orientation="horizontal"], .notes-resize-handle, .notes-pull-zone):is(:hover, :focus-visible, :active, [data-separator="hover"], [data-separator="active"], [data-resizing="true"])::before {
+  width: 100%;
+  height: 3px;
+}
+@media (prefers-reduced-motion: reduce) {
+  :is(.mona-resize-handle, .column-resize-handle, .tableResizeHandle, .thumb-resizer, .ai-panel-resizer, .notes-resize-handle, .notes-pull-zone, [role="separator"][aria-label="Resize sidebar"])::before {
+    transition: none;
+  }
+}
+
+/* 分割线保留原生像素形状、尺寸和热点，仅固定为黑色；拖动中覆盖库的反色光标。 */
+.cursor-col-resize,
+.column-resize-handle,
+.tableResizeHandle,
+.thumb-resizer,
+.ai-panel-resizer,
+.ai-panel-resizing,
+.ai-panel-resizing *,
+.doc-page.resize-cursor,
+[role="separator"][aria-label="Resize sidebar"],
+body[style*="cursor: col-resize"],
+body[style*="cursor: col-resize"] *,
+body:has(.cursor-col-resize:active) *,
+body:has([data-slot="resizable-handle"][aria-orientation="vertical"]:is([data-separator="hover"], [data-separator="active"])) * {
+  cursor: var(--mona-cursor-col-resize) !important;
+}
+.cursor-row-resize,
+.notes-resize-handle,
+.notes-pull-zone,
+[data-resize-direction="row"],
+[data-slot="resizable-handle"][aria-orientation="horizontal"],
+body[style*="cursor: row-resize"],
+body[style*="cursor: row-resize"] *,
+body:has(.cursor-row-resize:active) *,
+body:has([data-slot="resizable-handle"][aria-orientation="horizontal"]:is([data-separator="hover"], [data-separator="active"])) * {
+  cursor: var(--mona-cursor-row-resize) !important;
+}

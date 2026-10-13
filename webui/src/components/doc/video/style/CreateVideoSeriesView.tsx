@@ -17,27 +17,33 @@ import { useClient } from "@/providers/ClientProvider";
 const TEMPLATES = [
   {
     id: "minimal-business",
-    name: "山河新章",
-    description: "暖调东方编辑版式",
+    name: "简洁浅色",
+    description: "浅底色、稳重字体",
     preview: "/video-templates/minimal-business.png",
   },
   {
     id: "tech-dark",
-    name: "霓虹智核",
-    description: "深色科技发布版式",
+    name: "专业深色",
+    description: "深底色、清晰对比",
     preview: "/video-templates/tech-dark.png",
   },
   {
     id: "editorial-magazine",
-    name: "时代切片",
-    description: "高对比纪实编辑版式",
+    name: "编辑排版",
+    description: "衬线正文、清晰层级",
     preview: "/video-templates/editorial-magazine.png",
   },
   {
     id: "knowledge-cards",
-    name: "奇想实验室",
-    description: "清晰知识卡片版式",
+    name: "清晰教学",
+    description: "适合步骤和知识讲解",
     preview: "/video-templates/knowledge-cards.png",
+  },
+  {
+    id: "custom",
+    name: "自定义",
+    description: "自选颜色、字体和背景",
+    preview: null,
   },
 ] as const;
 
@@ -95,7 +101,7 @@ export function CreateVideoSeriesView({
           : {}),
       });
       if (!result.ok || !result.series || !result.draft) {
-        throw new Error(result.error || "创建系列失败");
+        throw new Error(result.error || "新建风格失败");
       }
       onCreated(result.series, result.draft);
     } catch (e) {
@@ -118,25 +124,25 @@ export function CreateVideoSeriesView({
       </Button>
       <div className="mx-auto max-w-[820px]">
         <div className="text-center">
-          <h1 className="text-title-sm font-semibold">创建系列</h1>
+          <h1 className="text-title-sm font-semibold">新建风格</h1>
           <p className="mt-1 text-caption text-muted-foreground">
-            先确定系列身份与视觉起点，后续每期自动继承
+            设定常用画面样式，之后可以在创作时选用；新视频也可直接开始。
           </p>
         </div>
 
         <div className="mt-6 space-y-5">
           <section>
-            <label className="mb-1.5 block text-ui font-medium">系列名称</label>
+            <label className="mb-1.5 block text-ui font-medium">风格名称</label>
             <Input
               value={name}
               onChange={(event) => setName(event.target.value)}
-              placeholder="例如：AI 编程实战课"
+              placeholder="例如：品牌宣传视频"
               autoFocus
             />
           </section>
 
           <section>
-            <div className="mb-1.5 text-ui font-medium">默认画面比例</div>
+            <div className="mb-1.5 text-ui font-medium">常用画幅</div>
             <div className="grid grid-cols-3 gap-1 rounded-lg bg-muted p-1">
               {(["16:9", "9:16", "1:1"] as VideoAspectVariant[]).map(
                 (value) => (
@@ -164,7 +170,7 @@ export function CreateVideoSeriesView({
           </section>
 
           <section>
-            <div className="mb-1.5 text-ui font-medium">选择基础风格</div>
+            <div className="mb-1.5 text-ui font-medium">选择一个起始风格</div>
             <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
               {TEMPLATES.map((template) => {
                 const selected = template.id === templateId;
@@ -185,11 +191,17 @@ export function CreateVideoSeriesView({
                     {selected ? (
                       <Check className="absolute right-2 top-2 h-3.5 w-3.5" />
                     ) : null}
-                    <img
-                      src={template.preview}
-                      alt={`${template.name}真实编译预览`}
-                      className="aspect-video w-full rounded-md border border-black/10 object-cover"
-                    />
+                    {template.preview ? (
+                      <img
+                        src={template.preview}
+                        alt={`${template.name}效果预览`}
+                        className="aspect-video w-full rounded-md border border-black/10 object-cover"
+                      />
+                    ) : (
+                      <div className="flex aspect-video w-full items-center justify-center rounded-md border border-border/70 bg-muted/30 text-micro text-muted-foreground">
+                        自行调整颜色和背景
+                      </div>
+                    )}
                     <span className="px-1">
                       <span className="block font-medium">{template.name}</span>
                       <span className="mt-0.5 block text-micro text-muted-foreground">
@@ -203,65 +215,64 @@ export function CreateVideoSeriesView({
           </section>
 
           {brandKits.length > 0 ? (
-            <section>
-              <div className="mb-1.5 flex items-center justify-between gap-3">
-                <div className="text-ui font-medium">品牌套件</div>
-                <div className="text-micro text-muted-foreground">
-                  可选 · 锁定品牌色、字体与 Logo
+            <details className="rounded-md border border-border/70 px-3 py-2">
+              <summary className="cursor-pointer text-ui font-medium">
+                标识与配色（可选）
+              </summary>
+              <div className="mt-3">
+                <div className="grid gap-2 sm:grid-cols-2">
+                  <Button
+                    type="button"
+                    variant="ghost"
+                    aria-pressed={brandKitId === null}
+                    className={cn(
+                      "h-auto min-h-16 items-start justify-start rounded-lg border p-3 text-left",
+                      brandKitId === null
+                        ? "border-foreground bg-accent"
+                        : "border-border/70",
+                    )}
+                    onClick={() => setBrandKitId(null)}
+                  >
+                    <span>
+                      <span className="block text-caption font-medium">
+                        暂不使用
+                      </span>
+                      <span className="mt-1 block text-micro text-muted-foreground">
+                        先使用所选风格，之后仍可添加
+                      </span>
+                    </span>
+                  </Button>
+                  {brandKits.map((kit) => {
+                    const selected = brandKitId === kit.id;
+                    return (
+                      <Button
+                        key={kit.id}
+                        type="button"
+                        variant="ghost"
+                        aria-pressed={selected}
+                        className={cn(
+                          "h-auto min-h-16 items-start justify-start gap-2 rounded-lg border p-3 text-left",
+                          selected
+                            ? "border-foreground bg-accent"
+                            : "border-border/70",
+                        )}
+                        onClick={() => setBrandKitId(kit.id)}
+                      >
+                        <ShieldCheck className="mt-0.5 h-4 w-4 shrink-0" />
+                        <span className="min-w-0">
+                          <span className="block truncate text-caption font-medium">
+                            {kit.name}
+                          </span>
+                          <span className="mt-1 block text-micro text-muted-foreground">
+                            使用已保存的颜色和图片
+                          </span>
+                        </span>
+                      </Button>
+                    );
+                  })}
                 </div>
               </div>
-              <div className="grid gap-2 sm:grid-cols-2">
-                <Button
-                  type="button"
-                  variant="ghost"
-                  aria-pressed={brandKitId === null}
-                  className={cn(
-                    "h-auto min-h-16 items-start justify-start rounded-lg border p-3 text-left",
-                    brandKitId === null
-                      ? "border-foreground bg-accent"
-                      : "border-border/70",
-                  )}
-                  onClick={() => setBrandKitId(null)}
-                >
-                  <span>
-                    <span className="block text-caption font-medium">
-                      暂不绑定
-                    </span>
-                    <span className="mt-1 block text-micro text-muted-foreground">
-                      只使用基础风格，之后仍可绑定
-                    </span>
-                  </span>
-                </Button>
-                {brandKits.map((kit) => {
-                  const selected = brandKitId === kit.id;
-                  return (
-                    <Button
-                      key={kit.id}
-                      type="button"
-                      variant="ghost"
-                      aria-pressed={selected}
-                      className={cn(
-                        "h-auto min-h-16 items-start justify-start gap-2 rounded-lg border p-3 text-left",
-                        selected
-                          ? "border-foreground bg-accent"
-                          : "border-border/70",
-                      )}
-                      onClick={() => setBrandKitId(kit.id)}
-                    >
-                      <ShieldCheck className="mt-0.5 h-4 w-4 shrink-0" />
-                      <span className="min-w-0">
-                        <span className="block truncate text-caption font-medium">
-                          {kit.name}
-                        </span>
-                        <span className="mt-1 block text-micro text-muted-foreground">
-                          当前发布版 v{kit.latestVersion}
-                        </span>
-                      </span>
-                    </Button>
-                  );
-                })}
-              </div>
-            </section>
+            </details>
           ) : null}
 
           {error ? (
@@ -276,7 +287,7 @@ export function CreateVideoSeriesView({
               disabled={!name.trim() || creating}
               onClick={() => void handleCreate()}
             >
-              {creating ? "创建中…" : "下一步：编辑风格"}
+              {creating ? "创建中…" : "继续编辑风格"}
             </Button>
           </div>
         </div>

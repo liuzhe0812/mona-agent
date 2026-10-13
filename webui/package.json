@@ -15,11 +15,18 @@
     "check:ui:scan": "node scripts/ui-debt.mjs scan",
     "check:ui:update": "node scripts/ui-debt.mjs baseline",
     "build:zcode-stream-css": "node scripts/build-zcode-stream-css.mjs",
-    "predev": "npm run build:zcode-stream-css",
-    "prebuild": "npm run build:zcode-stream-css",
-    "prebuild:tauri": "npm run build:zcode-stream-css"
+    "build:video-runtime": "node scripts/build-video-runtime.mjs",
+    "predev": "npm run build:zcode-stream-css && npm run build:video-runtime",
+    "prebuild": "npm run build:zcode-stream-css && npm run build:video-runtime",
+    "prebuild:tauri": "npm run build:zcode-stream-css && npm run build:video-runtime"
   },
   "dependencies": {
+    "@babel/standalone": "7.28.5",
+    "@remotion/player": "4.0.534",
+    "@remotion/paths": "4.0.534",
+    "@remotion/shapes": "4.0.534",
+    "@remotion/transitions": "4.0.534",
+    "remotion": "4.0.534",
     "@codemirror/autocomplete": "^6.20.2",
     "@codemirror/commands": "^6.10.3",
     "@codemirror/lang-sql": "^6.10.0",

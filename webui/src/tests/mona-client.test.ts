@@ -168,6 +168,20 @@ describe("MonaClient", () => {
     expect(client.getRunStartedAt("chat-strip")).toBeNull();
   });
 
+  it("clears a finished video run without a mounted chat panel or idle event", () => {
+    const client = new MonaClient({ url: "ws://test", reconnect: false, socketFactory: (url) => new FakeSocket(url) as unknown as WebSocket });
+    const status = vi.fn();
+    client.onRunStatus(status);
+    client.connect();
+    lastSocket().fakeOpen();
+    lastSocket().fakeMessage({ event: "goal_status", chat_id: "video", status: "running", started_at: 12345 });
+    lastSocket().fakeMessage({ event: "stream_end", chat_id: "video" });
+    expect(client.getRunStartedAt("video")).toBe(12345);
+    lastSocket().fakeMessage({ event: "turn_end", chat_id: "video" });
+    expect(client.getRunStartedAt("video")).toBeNull();
+    expect(status).toHaveBeenLastCalledWith("video", null);
+  });
+
   it("notifies run status subscribers and replays running chats", () => {
     const client = new MonaClient({
       url: "ws://test",

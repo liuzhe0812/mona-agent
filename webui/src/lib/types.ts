@@ -832,6 +832,10 @@ export interface SettingsPayload {
   agent: {
     model: string;
     provider: string;
+    executor?: "mona" | "codex" | "claude" | "codebuddy";
+    native_model?: string | null;
+    native_reasoning_effort?: string | null;
+    native_context_window_tokens?: number | null;
     resolved_provider: string | null;
     has_api_key: boolean;
     model_preset: string | null;

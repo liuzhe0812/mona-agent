@@ -40,7 +40,8 @@ describe("Toolbar desktop entry", () => {
     render(<Toolbar embedded={embedded} />);
 
     expect(screen.queryByRole("button", { name: "SFTP", exact: true })).not.toBeInTheDocument();
-    for (const name of ["批量", "桌面", "Docker", "设置"]) {
+    expect(screen.queryByRole("button", { name: "批量", exact: true })).not.toBeInTheDocument();
+    for (const name of ["桌面", "Docker", "设置"]) {
       expect(screen.getByRole("button", { name, exact: true })).toBeInTheDocument();
     }
     expect(useTerminalStore.getState().sessions).toHaveLength(1);

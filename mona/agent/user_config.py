@@ -83,6 +83,7 @@ COMMON_AGENT_TOOLS = frozenset({
     "generate_image",
     "generate_video",
     "office",
+    "video",
     "url2note",
     "video_extract_frame",
 })
@@ -194,6 +195,7 @@ MONA_CONTEXTUAL_TOOLS = (
     "run_collaboration",
     "spawn",
     "update_plan",
+    "video",
 )
 
 # Query permissions are intentionally atomic: search without evidence reading

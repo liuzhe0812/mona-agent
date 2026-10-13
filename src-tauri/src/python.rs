@@ -389,13 +389,25 @@ fn find_gateway_resource_dir(app_handle: &tauri::AppHandle) -> Result<PathBuf, S
     ))
 }
 
-/// Find system Python (dev mode only — release builds never call this).
+/// Find the source environment's Python, then a system Python (dev mode only).
 ///
 /// 项目要求 Python >= 3.11（mona/__init__.py 使用 tomllib 标准库）。
 /// PATH 里可能存在不满足要求的 Python（如 TRAE/Conda 自带的 3.10），
 /// 因此对每个候选都验证版本，跳过 < 3.11 的。
 pub fn find_system_python() -> Option<PathBuf> {
     let mut candidates: Vec<PathBuf> = Vec::new();
+
+    #[cfg(debug_assertions)]
+    if let Some(source_root) = Path::new(env!("CARGO_MANIFEST_DIR")).parent() {
+        let source_python = source_root.join(if cfg!(windows) {
+            ".venv/Scripts/python.exe"
+        } else {
+            ".venv/bin/python"
+        });
+        if source_python.is_file() {
+            candidates.push(source_python);
+        }
+    }
 
     let python_name = if cfg!(windows) {
         "python.exe"
@@ -504,6 +516,21 @@ mod gateway_rotation_tests {
         rename_gateway_dir, GATEWAY_EXE_NAME,
     };
     use std::sync::{Arc, Barrier};
+
+    #[test]
+    fn development_prefers_source_python_environment() {
+        let source_root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .parent()
+            .unwrap();
+        let source_python = source_root.join(if cfg!(windows) {
+            ".venv/Scripts/python.exe"
+        } else {
+            ".venv/bin/python"
+        });
+        if source_python.is_file() && super::python_version_ok(&source_python) {
+            assert_eq!(super::find_system_python(), Some(source_python));
+        }
+    }
 
     #[test]
     fn app_upgrade_invalidates_gateway_even_when_executable_size_is_unchanged() {

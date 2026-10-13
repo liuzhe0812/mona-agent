@@ -32,8 +32,11 @@ SERVICES_TOKEN_HEADER = "X-Mona-Token"
 _TOKEN_FILE_NAME = "services.token"
 
 # 受保护的路由前缀
-_PROTECTED_PREFIXES = ("/api/materials", "/api/profile", "/api/office")
-_PROTECTED_EXACT_PATHS = {"/api/stock/research/preflight"}
+_PROTECTED_PREFIXES = ("/api/materials", "/api/profile", "/api/office", "/api/video/agent")
+_PROTECTED_EXACT_PATHS = {
+    "/api/stock/research/preflight",
+    "/api/video/voice-preview",
+}
 _TOKEN_EXEMPT_PATHS = {"/api/office/ws"}
 
 

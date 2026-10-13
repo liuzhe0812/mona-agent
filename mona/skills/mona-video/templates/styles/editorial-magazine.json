@@ -1,20 +1,20 @@
 {
   "schemaVersion": 1,
   "id": "editorial-magazine",
-  "name": "时代切片",
-  "description": "高对比纪实编辑风格，以稳定栅格、单一强调色和纸张内容卡承载观察、案例与人物故事。",
+  "name": "编辑排版",
+  "description": "简洁纸白底色、清晰文字层级与单一红色重点，适合案例和故事讲解。",
   "baseTemplateId": "editorial-magazine",
   "mode": "dark",
   "tokens": {
     "colors": {
-      "primary": "#E54B16",
-      "secondary": "#7D201C",
-      "accent": "#42576B",
-      "background": "#131211",
-      "surface": "#E7DDCA",
-      "textPrimary": "#F5ECDD",
-      "textSecondary": "#CBBCA5",
-      "border": "#42576B",
+      "primary": "#A93A25",
+      "secondary": "#6B645D",
+      "accent": "#A93A25",
+      "background": "#F6F5F2",
+      "surface": "#FFFFFF",
+      "textPrimary": "#1D1C1A",
+      "textSecondary": "#57534E",
+      "border": "#DFDAD3",
       "success": "#5E8A67",
       "warning": "#D39A2C",
       "error": "#E54B16"
@@ -22,15 +22,19 @@
     "typography": {
       "headingFamily": "Noto Sans SC",
       "bodyFamily": "Noto Serif SC",
-      "scale": "large"
+      "scale": "standard",
+      "headingWeight": 700,
+      "bodyWeight": 400,
+      "headingLineHeight": 1.15,
+      "bodyLineHeight": 1.6
     },
     "shape": {
-      "cardRadius": 0,
+      "cardRadius": 4,
       "cardStyle": "solid",
       "density": "spacious",
-      "shadow": "paper",
-      "borderWidth": 0,
-      "shadowOpacity": 0.4
+      "shadow": "none",
+      "borderWidth": 1,
+      "shadowOpacity": 0
     },
     "spacing": {
       "unit": 8,
@@ -57,27 +61,27 @@
     "quote-pull",
     "outro-editorial"
   ],
-  "allowedAnimations": ["fade-rise", "stagger-rise", "soft-pulse", "cross-fade"],
+  "allowedAnimations": ["fade-rise", "stagger-rise", "cross-fade"],
   "motion": {
-    "intensity": "standard",
+    "intensity": "restrained",
     "enterPreset": "fade-rise",
-    "emphasisPreset": "soft-pulse",
+    "emphasisPreset": "fade-rise",
     "transitionPreset": "cross-fade",
-    "enterDurationMs": 620,
-    "staggerMs": 110,
-    "transitionDurationMs": 680
+    "enterDurationMs": 420,
+    "staggerMs": 0,
+    "transitionDurationMs": 420
   },
   "backgrounds": {
     "default": {
       "assetPolicy": "none",
       "fit": "cover",
       "focalPoint": {"x": 0.5, "y": 0.5},
-      "overlay": {"type": "solid", "color": "#131211", "opacity": 0.78, "direction": "none"},
+      "overlay": {"type": "solid", "color": "#F6F5F2", "opacity": 0.92, "direction": "none"},
       "blur": 0,
       "tint": 0,
       "contrastMode": "auto",
       "safeArea": {"top": 0.1, "right": 0.1, "bottom": 0.12, "left": 0.1},
-      "fallback": "#131211"
+      "fallback": "#F6F5F2"
     },
     "roles": {
       "cover": {"inherit": "default"},
@@ -90,7 +94,7 @@
       "outro": {"inherit": "default"}
     }
   },
-  "subtitle": {"position": "bottom-center", "style": "caption-rail", "maxLines": 2},
+  "subtitle": {"position": "bottom-center", "style": "caption-rail", "fontSize": 36, "lineHeight": 1.35, "safeAreaBottom": 0.08, "maxLines": 2},
   "aspectVariants": {
     "16:9": {"enabled": true},
     "9:16": {"enabled": true},

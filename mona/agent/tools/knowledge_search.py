@@ -296,7 +296,6 @@ class MaterialsReadTool(Tool):
     _plugin_discoverable = True
     model_visible = False
     read_only = True
-    subscription_required = True
 
     def __init__(self, agent_id: str = "mona") -> None:
         self._agent_id = agent_id
@@ -508,7 +507,6 @@ class NotesSearchTool(Tool):
     _scopes = {"core", "subagent"}
     _plugin_discoverable = True
     read_only = True
-    subscription_required = True
 
     @classmethod
     def enabled(cls, ctx: Any) -> bool:
@@ -547,7 +545,6 @@ class MaterialsSearchTool(Tool):
     _plugin_discoverable = True
     model_visible = False
     read_only = True
-    subscription_required = True
 
     def __init__(self, agent_id: str = "mona") -> None:
         self._agent_id = agent_id
@@ -600,7 +597,6 @@ class WikiSearchTool(Tool):
     _plugin_discoverable = True
     model_visible = False
     read_only = True
-    subscription_required = True
 
     def __init__(self, agent_id: str = "mona") -> None:
         self._agent_id = agent_id
@@ -661,7 +657,6 @@ class KnowledgeSearchTool(Tool):
     _scopes = {"core", "subagent"}
     _plugin_discoverable = True
     read_only = True
-    subscription_required = True
 
     def __init__(self, agent_id: str = "mona") -> None:
         self._agent_id = agent_id

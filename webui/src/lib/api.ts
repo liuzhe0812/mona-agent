@@ -42,9 +42,11 @@ import {
 
 export class ApiError extends Error {
   status: number;
-  constructor(status: number, message: string) {
+  code?: string;
+  constructor(status: number, message: string, code?: string) {
     super(message);
     this.status = status;
+    this.code = code;
     this.name = "ApiError";
   }
 }
@@ -152,6 +154,7 @@ async function request<T>(
   });
   if (!res.ok) {
     let message = `HTTP ${res.status}`;
+    let code: string | undefined;
     try {
       const contentType = res.headers.get("content-type") ?? "";
       if (contentType.includes("text/plain")) {
@@ -160,14 +163,16 @@ async function request<T>(
       } else {
         const payload = (await res.json()) as {
           error?: string | { message?: string };
+          code?: string;
         };
+        code = payload.code;
         const error = payload.error;
         message = typeof error === "string" ? error : (error?.message ?? message);
       }
     } catch {
       // Keep the HTTP fallback when the response body cannot be read.
     }
-    throw new ApiError(res.status, message);
+    throw new ApiError(res.status, message, code);
   }
   const contentType = res.headers.get("content-type") ?? "";
   if (contentType.includes("text/html")) {
@@ -1166,6 +1171,7 @@ export interface VideoStyleConfig {
 }
 
 export interface VideoStyleSummary {
+  enabledAspectRatios?: VideoAspectVariant[];
   version?: number | null;
   name?: string | null;
   baseTemplateId?: string | null;
@@ -1286,12 +1292,14 @@ export interface VideoStyleDraftUpdate extends Partial<VideoStyleConfig> {
 }
 
 export interface VideoProjectCreateOptions extends VideoTtsConfig {
+  requirePlanApproval?: boolean;
+  templateId?: string;
+  styleSeriesId?: string | null;
   seriesId?: string | null;
   styleVersion?: number | null;
   episodeNumber?: number | null;
   aspectVariant?: VideoAspectVariant | null;
   backgroundBindings?: Record<string, string>;
-  plan?: VideoProjectPlan;
   sourcePaths?: string[];
   music?: {
     preset: "none" | "ambient" | "rhythmic" | "brand";
@@ -1300,27 +1308,6 @@ export interface VideoProjectCreateOptions extends VideoTtsConfig {
     rightsStatus?: VideoAssetRightsStatus;
     licenseName?: string;
   };
-}
-
-export interface VideoPlanOutlineItem {
-  id: string;
-  title: string;
-  goal: string;
-  keyPoints: string[];
-  sourceRefs: string[];
-  estimatedSeconds: number;
-  role: string;
-}
-
-export interface VideoProjectPlan {
-  schemaVersion: number;
-  contentSummary: string;
-  outline: VideoPlanOutlineItem[];
-  estimatedSceneCount: number;
-  estimatedDurationSeconds: number;
-  estimatedAssetCount: number;
-  stages: string[];
-  billing: { monaCredits: number; note: string };
 }
 
 export interface VideoProject {
@@ -1333,6 +1320,10 @@ export interface VideoProject {
   hasStoryboard?: boolean;
   hasIndex?: boolean;
   sceneCount?: number;
+  draftSceneCount?: number;
+  planRevision?: number;
+  approvedPlanRevision?: number | null;
+  requirePlanApproval?: boolean;
   chatId: string | null;
   seriesId?: string | null;
   seriesName?: string | null;
@@ -1768,7 +1759,7 @@ export async function previewVideoStyle(
   token: string,
   seriesId: string,
   style: VideoStyleDraftUpdate | Partial<VideoStyleConfig>,
-  role: "cover" | "content" | "data" | "outro",
+  role: "cover" | "chapter" | "content" | "data" | "comparison" | "process" | "quote" | "outro",
   aspectRatio: VideoAspectVariant,
   base?: string,
 ): Promise<{ ok: boolean; html: string }> {
@@ -1975,6 +1966,12 @@ export interface VideoTtsConfig {
   subtitleMode?: "burned" | "external" | "off";
 }
 
+export interface VideoPlanState {
+  planRevision: number;
+  approvedPlanRevision: number | null;
+  requirePlanApproval: boolean;
+}
+
 export async function createVideoProject(
   token: string,
   name: string,
@@ -1994,50 +1991,16 @@ export async function createVideoProject(
   );
 }
 
-export async function planVideoProject(
-  token: string,
-  options: { topic: string; sourcePaths?: string[] },
-  base?: string,
-): Promise<{
-  ok: boolean;
-  plan?: VideoProjectPlan;
-  error?: string;
-  code?: string;
-}> {
-  const effectiveBase = base ?? (await getServicesHttpBase());
-  return request(`${effectiveBase}/api/video/project/plan`, token, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(options),
-  });
-}
-
-export async function changeVideoProjectAspect(
-  token: string,
-  name: string,
-  aspectVariant: VideoAspectVariant,
-  base?: string,
-): Promise<{
-  ok: boolean;
-  aspectVariant?: VideoAspectVariant;
-  resolution?: string;
-  phase?: VideoProjectPhase;
-  error?: string;
-}> {
-  const effectiveBase = base ?? (await getServicesHttpBase());
-  return request(`${effectiveBase}/api/video/project/change-aspect`, token, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ name, aspectVariant }),
-  });
-}
-
 export async function fetchVideoProject(
   token: string,
   name: string,
   base?: string,
 ): Promise<
-  VideoProject & { previewPort?: number | null; videoUrl?: string | null }
+  VideoProject & {
+    previewPort?: number | null;
+    videoUrl?: string | null;
+    meta?: VideoTtsConfig & Partial<VideoPlanState>;
+  }
 > {
   const effectiveBase = base ?? (await getServicesHttpBase());
   const query = new URLSearchParams();
@@ -2045,26 +2008,34 @@ export async function fetchVideoProject(
   return request(`${effectiveBase}/api/video/project?${query}`, token);
 }
 
+export async function confirmVideoProjectPlan(
+  token: string,
+  name: string,
+  expectedPlanRevision: number,
+  base?: string,
+): Promise<{ ok: boolean; planRevision: number; error?: string }> {
+  const effectiveBase = base ?? (await getServicesHttpBase());
+  return request(`${effectiveBase}/api/video/project/confirm`, token, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ name, expectedPlanRevision }),
+  });
+}
+
 export type VideoLanguage =
   "zh-CN" | "zh-TW" | "en-US" | "ja-JP" | "ko-KR" | "es-ES" | "fr-FR" | "de-DE";
 
-export async function localizeVideoProject(
+export async function updateVideoProjectSettings(
   token: string,
   name: string,
-  targetLanguage: VideoLanguage,
+  settings: VideoTtsConfig,
   base?: string,
-): Promise<{
-  ok: boolean;
-  name?: string;
-  language?: VideoLanguage;
-  project?: VideoProject;
-  error?: string;
-}> {
+): Promise<{ ok: boolean; meta?: VideoTtsConfig; error?: string }> {
   const effectiveBase = base ?? (await getServicesHttpBase());
-  return request(`${effectiveBase}/api/video/project/localize`, token, {
-    method: "POST",
+  return request(`${effectiveBase}/api/video/project/settings`, token, {
+    method: "PUT",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ name, targetLanguage }),
+    body: JSON.stringify({ name, ...settings }),
   });
 }
 
@@ -2405,6 +2376,7 @@ export async function fetchVideoStoryboard(
   error?: string;
   storyboardExists?: boolean;
   parseError?: string | null;
+  planRevision?: number;
 }> {
   const effectiveBase = base ?? (await getServicesHttpBase());
   const query = new URLSearchParams();
@@ -2418,9 +2390,9 @@ export async function fetchVideoStoryboard(
 export async function updateVideoScene(
   token: string,
   name: string,
-  scene: Partial<VideoScene> & { index: number },
+  scene: Partial<VideoScene> & { index: number; expectedPlanRevision?: number },
   base?: string,
-): Promise<{ ok: boolean; scene?: VideoScene; error?: string }> {
+): Promise<{ ok: boolean; scene?: VideoScene; planRevision?: number; error?: string }> {
   const effectiveBase = base ?? (await getServicesHttpBase());
   return request(`${effectiveBase}/api/video/project/scene`, token, {
     method: "PUT",
@@ -2434,7 +2406,7 @@ export async function deleteVideoScene(
   name: string,
   index: number,
   base?: string,
-): Promise<{ ok: boolean; scenes?: VideoScene[]; error?: string }> {
+): Promise<{ ok: boolean; scenes?: VideoScene[]; planRevision?: number; error?: string }> {
   const effectiveBase = base ?? (await getServicesHttpBase());
   const query = new URLSearchParams();
   query.set("name", name);
@@ -2449,7 +2421,7 @@ export async function addVideoScene(
   name: string,
   scene?: Partial<VideoScene>,
   base?: string,
-): Promise<{ ok: boolean; scene?: VideoScene; error?: string }> {
+): Promise<{ ok: boolean; scene?: VideoScene; planRevision?: number; error?: string }> {
   const effectiveBase = base ?? (await getServicesHttpBase());
   return request(`${effectiveBase}/api/video/project/scene/add`, token, {
     method: "POST",
@@ -2463,7 +2435,7 @@ export async function reorderVideoScenes(
   name: string,
   indices: number[],
   base?: string,
-): Promise<{ ok: boolean; scenes?: VideoScene[]; error?: string }> {
+): Promise<{ ok: boolean; scenes?: VideoScene[]; planRevision?: number; error?: string }> {
   const effectiveBase = base ?? (await getServicesHttpBase());
   return request(`${effectiveBase}/api/video/project/scene/reorder`, token, {
     method: "POST",
@@ -2472,17 +2444,45 @@ export async function reorderVideoScenes(
   });
 }
 
-export async function lockVideoStoryboard(
+async function speechPreviewBlob(res: Response): Promise<Blob> {
+  if (!res.ok) {
+    let message = `HTTP ${res.status}`;
+    let code: string | undefined;
+    try {
+      const contentType = res.headers.get("content-type") ?? "";
+      if (contentType.includes("text/plain")) {
+        message = (await res.text()).trim() || message;
+      } else {
+        const payload = (await res.json()) as {
+          error?: string | { message?: string };
+          code?: string;
+        };
+        code = payload.code;
+        const error = payload.error;
+        message = typeof error === "string" ? error : (error?.message ?? message);
+      }
+    } catch {
+      // Keep the HTTP fallback when the response body cannot be read.
+    }
+    throw new ApiError(res.status, message, code);
+  }
+  const blob = await res.blob();
+  if (blob.size === 0) throw new Error("服务器没有返回可播放的旁白音频");
+  return blob;
+}
+
+export async function fetchVoicePreviewBytes(
   token: string,
-  name: string,
+  settings: Pick<VideoTtsConfig, "ttsProvider" | "ttsVoice" | "ttsRate">,
+  signal?: AbortSignal,
   base?: string,
-): Promise<{ ok: boolean; phase?: string; error?: string }> {
+): Promise<Blob> {
   const effectiveBase = base ?? (await getServicesHttpBase());
-  return request(`${effectiveBase}/api/video/project/lock-storyboard`, token, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ name }),
+  const response = await httpFetch(`${effectiveBase}/api/video/voice-preview`, {
+    method: "POST", headers: {"Content-Type": "application/json", Authorization: `Bearer ${token}`},
+    body: JSON.stringify(settings), signal,
   });
+  return speechPreviewBlob(response);
 }
 
 export async function fetchSceneNarrationBytes(
@@ -2490,7 +2490,7 @@ export async function fetchSceneNarrationBytes(
   name: string,
   index: number,
   base?: string,
-): Promise<Blob | null> {
+): Promise<Blob> {
   const effectiveBase = base ?? (await getServicesHttpBase());
   const res = await fetch(
     `${effectiveBase}/api/video/project/scene/narration`,
@@ -2503,8 +2503,7 @@ export async function fetchSceneNarrationBytes(
       body: JSON.stringify({ name, index }),
     },
   );
-  if (!res.ok) return null;
-  return res.blob();
+  return speechPreviewBlob(res);
 }
 
 // ---------------------------------------------------------------------------
@@ -2520,25 +2519,6 @@ export interface VideoSceneWithHtml extends VideoScene {
   htmlMtime?: number;
   confirmedAt?: string;
   confirmedMtime?: number;
-}
-
-export async function generateSceneHtml(
-  token: string,
-  name: string,
-  index: number,
-  base?: string,
-): Promise<{
-  ok: boolean;
-  scene?: VideoSceneWithHtml;
-  htmlPath?: string;
-  error?: string;
-}> {
-  const effectiveBase = base ?? (await getServicesHttpBase());
-  return request(`${effectiveBase}/api/video/ai/scene-html`, token, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ name, index }),
-  });
 }
 
 export function buildScenePreviewUrl(
@@ -2577,35 +2557,6 @@ export async function fetchScenePreviewHtml(
   const html = await res.text();
   return { html, needsGeneration: false };
 }
-
-export async function confirmVideoScene(
-  token: string,
-  name: string,
-  index: number,
-  expectedMtime?: number,
-  base?: string,
-): Promise<{
-  ok: boolean;
-  scene?: VideoSceneWithHtml;
-  allConfirmed?: boolean;
-  phase?: string;
-  error?: string;
-}> {
-  const effectiveBase = base ?? (await getServicesHttpBase());
-  return request(`${effectiveBase}/api/video/project/scene/confirm`, token, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({
-      name,
-      index,
-      ...(expectedMtime !== undefined ? { expectedMtime } : {}),
-    }),
-  });
-}
-
-// ---------------------------------------------------------------------------
-// Skill lifecycle (settings panel)
-// ---------------------------------------------------------------------------
 
 export interface SkillUsageRow {
   name: string;
@@ -2903,40 +2854,6 @@ export async function reloadMcpServers(
 }> {
   const effectiveBase = base ?? (await getGatewayHttpBase());
   return request(`${effectiveBase}/api/mcp/reload`, token, { method: "POST" });
-}
-
-export async function regenerateVideoScene(
-  token: string,
-  name: string,
-  index: number,
-  base?: string,
-): Promise<{ ok: boolean; scene?: VideoSceneWithHtml; error?: string }> {
-  const effectiveBase = base ?? (await getServicesHttpBase());
-  return request(`${effectiveBase}/api/video/project/scene/regenerate`, token, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ name, index }),
-  });
-}
-
-export async function rewriteVideoScene(
-  token: string,
-  name: string,
-  index: number,
-  requirement: string,
-  base?: string,
-): Promise<{
-  ok: boolean;
-  scene?: VideoSceneWithHtml;
-  undoVersionId?: string;
-  error?: string;
-}> {
-  const effectiveBase = base ?? (await getServicesHttpBase());
-  return request(`${effectiveBase}/api/video/ai/scene-rewrite`, token, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ name, index, requirement }),
-  });
 }
 
 // ---------------------------------------------------------------------------

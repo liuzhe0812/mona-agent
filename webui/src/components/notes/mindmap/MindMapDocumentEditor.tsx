@@ -18,6 +18,7 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { Button } from "@/components/ui/button";
+import { TooltipButton } from "@/components/ui/tooltip";
 import {
   Undo2,
   Redo2,
@@ -2354,12 +2355,12 @@ export const MindMapDocumentEditor = forwardRef<MindMapDocumentEditorHandle, Min
             <div className="mx-1 h-4 w-px bg-border" />
           </>
         ) : null}
-        <Button variant="ghost" size="icon" className="h-7 w-7" onClick={handleUndo} title="撤销">
+        <TooltipButton variant="ghost" size="icon" className="h-7 w-7" onClick={handleUndo} title="撤销">
           <Undo2 className="h-3.5 w-3.5" />
-        </Button>
-        <Button variant="ghost" size="icon" className="h-7 w-7" onClick={handleRedo} title="重做">
+        </TooltipButton>
+        <TooltipButton variant="ghost" size="icon" className="h-7 w-7" onClick={handleRedo} title="重做">
           <Redo2 className="h-3.5 w-3.5" />
-        </Button>
+        </TooltipButton>
 
         <div className="mx-1 h-4 w-px bg-border" />
 
@@ -2375,7 +2376,7 @@ export const MindMapDocumentEditor = forwardRef<MindMapDocumentEditorHandle, Min
         <div className="mx-1 h-4 w-px bg-border" />
 
         {/* 查找 */}
-        <Button
+        <TooltipButton
           variant="ghost"
           size="icon"
           className="h-7 w-7"
@@ -2384,13 +2385,13 @@ export const MindMapDocumentEditor = forwardRef<MindMapDocumentEditorHandle, Min
           aria-label="查找与替换"
         >
           <Search className="h-3.5 w-3.5" />
-        </Button>
+        </TooltipButton>
 
         <div className="flex-1" />
 
         {/* 缩放控制：百分比点击重置，配合滚轮缩放与 Ctrl+0 快捷键 */}
         <div className="flex items-center gap-0.5">
-          <Button
+          <TooltipButton
             variant="ghost"
             size="sm"
             className="h-7 min-w-[48px] px-1 text-caption tabular-nums"
@@ -2398,8 +2399,8 @@ export const MindMapDocumentEditor = forwardRef<MindMapDocumentEditorHandle, Min
             title="重置缩放 (Ctrl+0)"
           >
             {zoomPercent}%
-          </Button>
-          <Button
+          </TooltipButton>
+          <TooltipButton
             variant="ghost"
             size="icon"
             className="h-7 w-7"
@@ -2408,21 +2409,21 @@ export const MindMapDocumentEditor = forwardRef<MindMapDocumentEditorHandle, Min
             aria-label="适应画布"
           >
             <Crosshair className="h-3.5 w-3.5" />
-          </Button>
+          </TooltipButton>
         </div>
 
         <div className="mx-1 h-4 w-px bg-border" />
 
         <DropdownMenu>
           <DropdownMenuTrigger asChild>
-            <Button
+            <TooltipButton
               variant="ghost"
               size="icon"
               className="h-7 w-7"
               title="配色方案"
             >
               <Palette className="h-3.5 w-3.5" />
-            </Button>
+            </TooltipButton>
           </DropdownMenuTrigger>
           <DropdownMenuContent align="end" className="w-40">
             <DropdownMenuRadioGroup
@@ -2447,7 +2448,7 @@ export const MindMapDocumentEditor = forwardRef<MindMapDocumentEditorHandle, Min
         </DropdownMenu>
         <DropdownMenu>
           <DropdownMenuTrigger asChild>
-            <Button
+            <TooltipButton
               variant="ghost"
               size="icon"
               className="h-7 w-7"
@@ -2459,7 +2460,7 @@ export const MindMapDocumentEditor = forwardRef<MindMapDocumentEditorHandle, Min
               ) : (
                 <Download className="h-3.5 w-3.5" />
               )}
-            </Button>
+            </TooltipButton>
           </DropdownMenuTrigger>
           <DropdownMenuContent align="end" className="w-44">
             <DropdownMenuItem className="text-xs" onClick={handleExportPng}>

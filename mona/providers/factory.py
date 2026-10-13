@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any
 
@@ -123,7 +123,7 @@ def _make_provider_core(
             extra_headers=p.extra_headers if p else None,
             spec=spec,
             extra_body=p.extra_body if p else None,
-            # Optional-key endpoints (including custom Cindy endpoints) still
+            # Optional-key endpoints (including custom chat endpoints) still
             # need their Authorization header when the user supplied a key;
             # only keyless free providers should strip auth.
             no_auth=(not spec.api_key_required and not api_key) if spec else False,
@@ -274,6 +274,26 @@ def build_provider_snapshot(
     preset_name: str | None = None,
     preset: ModelPresetConfig | None = None,
 ) -> ProviderSnapshot:
+    if preset_name is None and preset is None and config.agents.defaults.executor != "mona":
+        from mona.providers.context_window import DEFAULT_CONTEXT_WINDOW_TOKENS
+        from mona.providers.native_work_provider import NativeWorkProvider
+
+        defaults = config.agents.defaults
+        if not defaults.native_model:
+            raise ValueError("原生模型尚未选择，请在模型设置中选择模型。")
+        provider = NativeWorkProvider(config, config.workspace_path)
+        provider.generation = config.resolve_default_preset().to_generation_settings()
+        provider.generation = replace(provider.generation, reasoning_effort=defaults.native_reasoning_effort)
+        return ProviderSnapshot(
+            provider=provider,
+            model=defaults.native_model,
+            context_provider=f"native:{defaults.executor}",
+            context_window_tokens=defaults.native_context_window_tokens or DEFAULT_CONTEXT_WINDOW_TOKENS,
+            context_window_verified=defaults.native_context_window_tokens is not None,
+            signature=("native_work", defaults.executor, defaults.native_model, defaults.native_reasoning_effort,
+                       defaults.native_context_window_tokens, config.development.model_dump_json()),
+            auto_compact_token_limit=defaults.auto_compact_token_limit,
+        )
     resolved = _resolve_model_preset(config, preset_name=preset_name, preset=preset)
     fallback_presets = _resolve_fallback_presets(config, resolved)
     fallback_windows = [resolve_model_context_window(config, fallback) for fallback in fallback_presets]

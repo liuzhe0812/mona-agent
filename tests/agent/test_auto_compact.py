@@ -533,11 +533,15 @@ class TestAutoCompactEdgeCases:
 
     @pytest.mark.asyncio
     async def test_auto_compact_with_nothing_summary(self, tmp_path):
-        """Auto-new should not inject when archive produces '(nothing)'."""
+        """An unusable summary preserves history, cursor and saved summaries."""
         loop = _make_loop(tmp_path, session_ttl_minutes=15)
         session = loop.sessions.get_or_create("cli:test")
         _add_turns(session, 6, prefix="thanks")
         session.updated_at = datetime.now() - timedelta(minutes=20)
+        session.last_consolidated = 2
+        session.metadata["_last_summary"] = {"text": "Previous handoff"}
+        session.metadata["_shared_room_summary"] = {"text": "Previous public handoff"}
+        original_messages = [message.copy() for message in session.messages]
         loop.sessions.save(session)
 
         loop.provider.chat_with_retry = AsyncMock(
@@ -547,19 +551,26 @@ class TestAutoCompactEdgeCases:
         await loop.auto_compact._archive("cli:test")
 
         session_after = loop.sessions.get_or_create("cli:test")
-        assert len(session_after.messages) == loop.auto_compact._RECENT_SUFFIX_MESSAGES
+        assert session_after.messages == original_messages
+        assert session_after.last_consolidated == 2
+        assert session_after.metadata["_last_summary"]["text"] == "Previous handoff"
+        assert session_after.metadata["_shared_room_summary"]["text"] == "Previous public handoff"
         # "(nothing)" summary should not be stored
         assert "cli:test" not in loop.auto_compact._summaries
 
         await loop.close_mcp()
 
     @pytest.mark.asyncio
-    async def test_auto_compact_archive_failure_still_keeps_recent_suffix(self, tmp_path):
-        """Auto-new should keep the recent suffix even if LLM archive falls back to raw dump."""
+    async def test_auto_compact_archive_failure_preserves_history(self, tmp_path):
+        """Archive failure leaves the original history and saved handoffs intact."""
         loop = _make_loop(tmp_path, session_ttl_minutes=15)
         session = loop.sessions.get_or_create("cli:test")
         _add_turns(session, 6, prefix="important")
         session.updated_at = datetime.now() - timedelta(minutes=20)
+        session.last_consolidated = 2
+        session.metadata["_last_summary"] = {"text": "Previous handoff"}
+        session.metadata["_shared_room_summary"] = {"text": "Previous public handoff"}
+        original_messages = [message.copy() for message in session.messages]
         loop.sessions.save(session)
 
         loop.provider.chat_with_retry = AsyncMock(side_effect=Exception("API down"))
@@ -568,7 +579,10 @@ class TestAutoCompactEdgeCases:
         await loop.auto_compact._archive("cli:test")
 
         session_after = loop.sessions.get_or_create("cli:test")
-        assert len(session_after.messages) == loop.auto_compact._RECENT_SUFFIX_MESSAGES
+        assert session_after.messages == original_messages
+        assert session_after.last_consolidated == 2
+        assert session_after.metadata["_last_summary"]["text"] == "Previous handoff"
+        assert session_after.metadata["_shared_room_summary"]["text"] == "Previous public handoff"
 
         await loop.close_mcp()
 

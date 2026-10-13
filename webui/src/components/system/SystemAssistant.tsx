@@ -1,12 +1,13 @@
-import { Check, HardDrive, Loader2, Send, ShieldCheck, Stethoscope } from "lucide-react";
+import { Check, HardDrive, Loader2, ShieldCheck, Stethoscope } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import { cn } from "@/lib/utils";
 
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
-import { Input } from "@/components/ui/input";
+import { ThreadComposer } from "@/components/thread/ThreadComposer";
 import { StatusNotice } from "@/components/ui/status-notice";
+import { RightSidebarToggleIcon } from "@/components/notes/RightSidebarToggleIcon";
 import {
   collectSystemEvidence,
   buildStorageAnalysisContext,
@@ -20,19 +21,14 @@ import {
   type SystemEvidenceStage,
   type StorageAssessment,
 } from "./systemAgentApi";
-import { buildInspectionCards, diagnosticLabel, type InspectionCard } from "./inspectionModel";
-import { InspectionCards } from "./InspectionCards";
+import { diagnosticLabel } from "./inspectionModel";
 import type { SystemAgentHandoffTask } from "./systemAgentHandoff";
 import { SystemAgentChat } from "./SystemAgentChat";
 import type { SystemTab } from "./systemTabs";
 import { StatusPill } from "./SystemUi";
 import {
-  useBootHistory,
-  useMaintenanceHistory,
-  useStartupItems,
-  useSystemDiagnostics,
+  type DiagnosticCheck,
   type DirectorySize,
-  type SoftwareCheckResult,
   type useStorageScan,
 } from "./useSystemData";
 
@@ -41,8 +37,7 @@ type AssistantViewMode = "planner" | "agent";
 interface SystemAssistantProps {
   tab: SystemTab;
   storage: ReturnType<typeof useStorageScan>;
-  /** 软件更新数据由 SystemView 传入（winget 检查较重，避免重复调用） */
-  software: SoftwareCheckResult | null;
+  diagnosticChecks: DiagnosticCheck[];
   onNavigate: (tab: SystemTab) => void;
   collapsed: boolean;
   onCollapse: () => void;
@@ -72,9 +67,10 @@ const CONFIDENCE_STYLES: Record<SystemDiagnosisResult["hypotheses"][number]["con
 export function SystemAssistant({
   tab,
   storage,
-  software,
+  diagnosticChecks,
   onNavigate,
   collapsed,
+  onCollapse,
   handoffTask,
   onHandoffTaskHandled,
   analysisRequest,
@@ -97,6 +93,7 @@ export function SystemAssistant({
   const [selectedIds, setSelectedIds] = useState<string[]>([]);
   const [executing, setExecuting] = useState(false);
   const [results, setResults] = useState<SystemActionResult[]>([]);
+  const planningRequestRef = useRef<AbortController | null>(null);
   const lastAnalysisNonceRef = useRef<number | null>(null);
   const storageContextKeyRef = useRef("");
   if (storage.result) {
@@ -109,29 +106,16 @@ export function SystemAssistant({
   }
   const previousStorageContextKeyRef = useRef(storageContextKeyRef.current);
 
-  // 巡检数据源：轻量命令组件内自取，与 SystemView 解耦；software 由 props 传入避免重复 winget 检查
-  const diagnostics = useSystemDiagnostics();
-  const startup = useStartupItems();
-  const boot = useBootHistory();
-  const maintenance = useMaintenanceHistory();
 
-  const cards = useMemo(
-    () =>
-      buildInspectionCards({
-        diagnostics: diagnostics.checks,
-        storage: storage.result,
-        software,
-        startup: startup.data,
-        boot: boot.data,
-        maintenance: maintenance.data,
-      }),
-    [diagnostics.checks, storage.result, software, startup.data, boot.data, maintenance.data],
-  );
   const storageContext = useMemo(
     () => storage.result ? buildStorageAnalysisContext(storage.result, storageSelection) : null,
     [storage.result, storageSelection],
   );
-  const inspectionPending = diagnostics.loading || startup.loading;
+
+  useEffect(() => () => {
+    planningRequestRef.current?.abort();
+    planningRequestRef.current = null;
+  }, []);
 
   useEffect(() => {
     if (!handoffTask) return;
@@ -149,7 +133,10 @@ export function SystemAssistant({
   const requestPlan = useCallback(
     async (rawGoal: string, forceChannel?: "plan" | "diagnose" | "storage") => {
       const trimmed = rawGoal.trim();
-      if (!trimmed || planning) return;
+      if (!trimmed || planningRequestRef.current || executing) return;
+      const controller = new AbortController();
+      const { signal } = controller;
+      planningRequestRef.current = controller;
       setPlanning(true);
       setError(null);
       setPlan(null);
@@ -166,40 +153,56 @@ export function SystemAssistant({
           const context = buildStorageAnalysisContext(storage.result, storageSelection);
           const requestedContextKey = storageContextKeyRef.current;
           setStorageEvidenceLabels(context.labels);
-          const nextAssessment = await requestStorageAnalysis(trimmed, context.evidence);
+          const nextAssessment = await requestStorageAnalysis(trimmed, context.evidence, signal);
+          signal.throwIfAborted();
           if (nextAssessment.scanId !== storage.result.scanId || storageContextKeyRef.current !== requestedContextKey) return;
           setStorageAssessment(nextAssessment);
           return;
         }
-        const evidence = await collectSystemEvidence(storage.result, (s) =>
-          setStage(evidenceStageLabels[s]),
-        );
+        const evidence = await collectSystemEvidence(storage.result, (s) => {
+          if (!signal.aborted) setStage(evidenceStageLabels[s]);
+        });
+        signal.throwIfAborted();
         const useDiagnose = forceChannel === "diagnose" || (!forceChannel && DIAGNOSTIC_INTENT.test(trimmed));
         if (useDiagnose) {
           setStage("正在生成诊断结论");
           // 诊断需要健康检查快照校验 evidenceIds
-          setDiagnosis(await requestSystemDiagnosis(trimmed, { ...evidence, checks: diagnostics.checks }));
+          const nextDiagnosis = await requestSystemDiagnosis(trimmed, { ...evidence, checks: diagnosticChecks }, signal);
+          signal.throwIfAborted();
+          setDiagnosis(nextDiagnosis);
         } else {
           setStage("正在生成维护方案");
-          const nextPlan = await requestSystemPlan(trimmed, evidence);
+          const nextPlan = await requestSystemPlan(trimmed, evidence, signal);
+          signal.throwIfAborted();
           setPlan(nextPlan);
           setSelectedIds(nextPlan.actions.map((action) => action.id));
         }
       } catch (cause) {
-        setError(cause instanceof Error ? cause.message : "方案生成失败，请稍后重试");
+        if (!signal.aborted) setError(cause instanceof Error ? cause.message : "方案生成失败，请稍后重试");
       } finally {
-        setPlanning(false);
-        setStage(null);
+        if (planningRequestRef.current === controller) {
+          planningRequestRef.current = null;
+          setPlanning(false);
+          setStage(null);
+        }
       }
     },
-    [planning, storage.result, storageSelection, diagnostics.checks, tab],
+    [executing, storage.result, storageSelection, diagnosticChecks, tab],
   );
+
+  const stopPlanning = useCallback(() => {
+    planningRequestRef.current?.abort();
+    planningRequestRef.current = null;
+    setPlanning(false);
+    setStage("已停止");
+  }, []);
 
   // 面板内“交给 Mona 分析”入口：nonce 变化代表一次新的分析请求
   useEffect(() => {
     if (!analysisRequest) return;
     if (lastAnalysisNonceRef.current === analysisRequest.nonce) return;
     lastAnalysisNonceRef.current = analysisRequest.nonce;
+    setAgentDismissed(true);
     void requestPlan(analysisRequest.goal, analysisRequest.channel);
   }, [analysisRequest, requestPlan]);
 
@@ -207,19 +210,6 @@ export function SystemAssistant({
     setAgentDismissed(true);
     if (agentTask) onHandoffTaskHandled(agentTask.id);
   }, [agentTask, onHandoffTaskHandled]);
-
-  // 巡检卡动作：有 goal 交给 planner 生成方案，无 goal 仅跳转对应 Tab 查看
-  const handleCardAction = useCallback(
-    (card: InspectionCard) => {
-      if (!card.goal) {
-        onNavigate(card.tab);
-        return;
-      }
-      setGoal(card.goal);
-      void requestPlan(card.goal);
-    },
-    [onNavigate, requestPlan],
-  );
 
   const toggleAction = (actionId: string, checked: boolean) => {
     setSelectedIds((previous) =>
@@ -236,10 +226,15 @@ export function SystemAssistant({
     try {
       const nextResults: SystemActionResult[] = [];
       for (const action of selected) {
-        const result = await executeSystemAction(action);
+        let result: SystemActionResult;
+        try {
+          result = await executeSystemAction(action);
+        } catch {
+          result = { actionId: action.id, success: false, verified: false, detail: `未能确认“${action.title}”的结果，请先查看依据并重新检查，避免重复执行。` };
+        }
         nextResults.push(result);
         setResults([...nextResults]);
-        if (!result.success && !result.verified) break;
+        if (!result.verified) break;
       }
     } finally {
       setExecuting(false);
@@ -249,7 +244,7 @@ export function SystemAssistant({
   const tabLabel = (target: SystemTab) =>
     ({ overview: "概览", storage: "存储空间", software: "软件管理", startup: "启动项", optimization: "系统优化", maintenance: "维护记录" })[target];
 
-  const showStorageSection = (id: "storage-distribution" | "storage-large-files") => {
+  const showStorageSection = (id: "storage-distribution" | "storage-large-files" | "storage-cleanup") => {
     onNavigate("storage");
     window.requestAnimationFrame?.(() => document.getElementById(id)?.scrollIntoView?.({ block: "start" }));
   };
@@ -260,14 +255,12 @@ export function SystemAssistant({
       aria-label="Mona 系统管家"
       aria-hidden={collapsed}
       className={cn(
-        "flex min-h-0 flex-col border-l border-border/60 bg-card",
+        "flex h-full min-h-0 flex-col bg-card",
         collapsed && "hidden",
       )}
     >
-      <div className="flex h-11 shrink-0 items-center gap-2 border-b border-border/60 px-4">
-        <h2 className="flex-1 text-ui font-semibold">
-          {tab === "storage" ? "Mona 存储助手" : "Mona 系统管家"}
-        </h2>
+      <header className="flex h-11 shrink-0 items-center gap-2 border-b border-border/60 pl-4 pr-3">
+        <h2 className="flex-1 text-ui font-semibold">Mona</h2>
         {viewMode === "agent" && (
           <Button
             variant="ghost"
@@ -278,7 +271,19 @@ export function SystemAssistant({
             返回维护建议
           </Button>
         )}
-      </div>
+        <Button
+          variant="ghost"
+          size="icon"
+          title="收起 Mona"
+          aria-label="收起 Mona 系统管家"
+          aria-expanded
+          aria-controls="system-assistant-panel"
+          onClick={onCollapse}
+          className="h-7 w-7 text-muted-foreground hover:text-foreground"
+        >
+          <RightSidebarToggleIcon open className="h-3.5 w-3.5" />
+        </Button>
+      </header>
 
       <div className="min-h-0 flex-1 overflow-y-auto scrollbar-hover">
         {viewMode === "agent" ? (
@@ -334,14 +339,7 @@ export function SystemAssistant({
                   </p>
                 </div>
               )
-            ) : (
-              <InspectionCards
-                cards={cards}
-                pending={inspectionPending}
-                onAction={handleCardAction}
-                disabled={planning || executing}
-              />
-            )}
+            ) : null}
 
             {error ? (
               <StatusNotice tone="danger">{error}</StatusNotice>
@@ -434,12 +432,12 @@ export function SystemAssistant({
                     {finding.action !== "none" ? (
                       <Button
                         type="button"
-                        variant="interaction"
+                        variant="outline"
                         size="sm"
                         className="mt-3 w-full"
                         onClick={() => {
                           if (finding.action === "plan_cleanup") {
-                            void requestPlan("释放磁盘可安全清理空间", "plan");
+                            showStorageSection("storage-cleanup");
                           } else if (finding.action === "review_files") {
                             showStorageSection("storage-large-files");
                           } else {
@@ -447,7 +445,7 @@ export function SystemAssistant({
                           }
                         }}
                       >
-                        {finding.action === "plan_cleanup" ? "生成清理方案" : finding.action === "review_files" ? "查看大文件" : "继续查看"}
+                        {finding.action === "plan_cleanup" ? "查看清理项" : finding.action === "review_files" ? "查看大文件" : "继续查看"}
                       </Button>
                     ) : null}
                   </div>
@@ -496,8 +494,8 @@ export function SystemAssistant({
                             <div className="mt-2 flex items-center gap-2">
                               <Button variant="link" size="xs" className="h-auto px-0" onClick={() => onNavigate(action.evidenceTab)}>查看{tabLabel(action.evidenceTab)}依据</Button>
                               {result ? (
-                                <span className={`inline-flex items-center gap-1 text-caption ${result.success ? "text-success" : "text-destructive"}`}>
-                                  {result.success ? <Check className="h-3 w-3" /> : null}
+                                <span className={`inline-flex items-center gap-1 text-caption ${result.verified ? "text-success" : result.success ? "text-warning" : "text-destructive"}`}>
+                                  {result.verified ? <Check className="h-3 w-3" /> : null}
                                   <span>{result.detail}</span>
                                   {result.verified ? <span>验证完成</span> : null}
                                 </span>
@@ -523,27 +521,22 @@ export function SystemAssistant({
       </div>
 
       {viewMode === "planner" ? (
-        <div className="shrink-0 border-t border-border/60 p-3">
-          <div className="flex items-center gap-2">
-            <Input
-              value={goal}
-              onChange={(event) => setGoal(event.target.value)}
-              onKeyDown={(event) => { if (event.key === "Enter") void requestPlan(goal); }}
-              placeholder={tab === "storage" ? "询问本次扫描或当前目录" : `描述目标，当前上下文：${tabLabel(tab)}`}
-              aria-label="描述系统维护目标"
-              disabled={planning}
-              className="flex-1"
-            />
-            <Button
-              size="icon"
-              onClick={() => void requestPlan(goal)}
-              disabled={planning || !goal.trim()}
-              aria-label="生成维护方案"
-            >
-              {planning ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Send className="h-3.5 w-3.5" />}
-            </Button>
-          </div>
-          {stage ? <p className="mt-2 text-caption text-muted-foreground">{stage}</p> : null}
+        <div className="shrink-0 p-3">
+          <ThreadComposer
+            value={goal}
+            onValueChange={setGoal}
+            onSend={(content) => requestPlan(content)}
+            placeholder={tab === "storage" ? "询问本次扫描或当前目录" : `描述目标，当前上下文：${tabLabel(tab)}`}
+            inputLabel="描述系统维护目标"
+            sendLabel="生成维护方案"
+            stopLabel="停止任务"
+            disabled={executing}
+            sendDisabled={planning}
+            isStreaming={planning}
+            onStop={stopPlanning}
+            attachmentsEnabled={false}
+          />
+          {stage ? <p role="status" className="mt-2 text-caption text-muted-foreground">{stage}</p> : null}
         </div>
       ) : null}
     </aside>

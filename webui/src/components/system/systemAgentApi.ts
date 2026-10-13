@@ -223,6 +223,7 @@ function isStorageFindingAction(value: unknown): value is StorageFindingAction {
 export async function requestStorageAnalysis(
   goal: string,
   evidence: StorageAnalysisEvidence,
+  signal?: AbortSignal,
 ): Promise<StorageAssessment> {
   const base = await getGatewayHttpBase();
   if (!base) throw new Error("Mona 服务未就绪，请稍后重试");
@@ -230,6 +231,7 @@ export async function requestStorageAnalysis(
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ goal, evidence }),
+    signal,
   });
   const payload = await response.json() as Partial<StorageAssessment> & { error?: string };
   if (!response.ok) throw new Error(payload.error || "存储分析失败");
@@ -258,13 +260,14 @@ export async function requestStorageAnalysis(
   };
 }
 
-export async function requestSystemPlan(goal: string, evidence: SystemEvidence): Promise<SystemAgentPlan> {
+export async function requestSystemPlan(goal: string, evidence: SystemEvidence, signal?: AbortSignal): Promise<SystemAgentPlan> {
   const base = await getGatewayHttpBase();
   if (!base) throw new Error("Mona 服务未就绪，请稍后重试");
   const response = await httpFetch(`${base}/api/system/plan`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ goal, evidence }),
+    signal,
   });
   const payload = await response.json() as Partial<SystemAgentPlan> & { error?: string };
   if (!response.ok) throw new Error(payload.error || "系统方案生成失败");
@@ -340,6 +343,7 @@ export interface SystemDiagnosisResult {
 export async function requestSystemDiagnosis(
   symptom: string,
   evidence: SystemEvidence,
+  signal?: AbortSignal,
 ): Promise<SystemDiagnosisResult> {
   const base = await getGatewayHttpBase();
   if (!base) throw new Error("Mona 服务未就绪，请稍后重试");
@@ -347,6 +351,7 @@ export async function requestSystemDiagnosis(
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ symptom, evidence }),
+    signal,
   });
   const payload = await response.json() as Partial<SystemDiagnosisResult> & { error?: string };
   if (!response.ok) throw new Error(payload.error || "系统诊断生成失败");
@@ -400,13 +405,13 @@ export async function executeSystemAction(action: SystemAgentAction): Promise<Sy
     // 复检必须拿到最新数据，先让证据缓存失效
     softwareEvidenceCache = null;
     const current = await invoke<SoftwareCheckResult>("system_check_updates");
-    const verified = action.targetIds.every((id) => !current.updates.some((update) => update.id === id));
+    const verified = success && current.wingetAvailable && action.targetIds.every((id) => !current.updates.some((update) => update.id === id));
     return {
       actionId: action.id,
       success,
       verified,
       detail: success
-        ? (verified ? `${completed} 项更新完成，已复检` : `${completed} 项更新完成，但复检仍显示待更新`)
+        ? (verified ? `${completed} 项更新完成，已复检` : current.wingetAvailable ? `${completed} 项更新完成，但复检仍显示待更新` : `${completed} 项更新请求完成，复检不可用，请重新检查软件列表`)
         : `${completed} 项完成；${errors.join("；")}`,
     };
   }

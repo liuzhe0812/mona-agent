@@ -6,7 +6,7 @@ import math
 from typing import Any
 
 from mona.development.executors.base import NativeEvent
-from mona.development.executors.host_tools import HOST_TOOL
+from mona.development.executors.host_tools import HOST_TOOL, WORK_TOOL
 
 
 def thread_id(method: str, params: dict[str, Any]) -> str | None:
@@ -21,7 +21,8 @@ def _nonnegative_int(value: Any) -> int | None:
     return value if isinstance(value, int) and not isinstance(value, bool) and value >= 0 else None
 
 
-def normalize_codex_event(method: str, params: dict[str, Any], *, host_tools: bool = False) -> NativeEvent | None:
+def normalize_codex_event(method: str, params: dict[str, Any], *, host_tools: bool = False,
+                          work_tools: bool = False) -> NativeEvent | None:
     turn = params.get("turn") if isinstance(params.get("turn"), dict) else {}
     turn_id = params.get("turnId") or turn.get("id")
     turn_id = turn_id if isinstance(turn_id, str) else None
@@ -94,10 +95,11 @@ def normalize_codex_event(method: str, params: dict[str, Any], *, host_tools: bo
         return NativeEvent(native_turn_id=turn_id, type=kind,
                            payload={"itemId": item_id, "changes": item.get("changes", []), "status": item.get("status"),
                                     "attribution": "native_report_not_exclusive_workspace_ownership"})
-    if item_type == "dynamicToolCall" and host_tools and item.get("tool") == HOST_TOOL and item.get("namespace") is None:
+    host_tool = WORK_TOOL if work_tools else HOST_TOOL
+    if item_type == "dynamicToolCall" and host_tools and item.get("tool") == host_tool and item.get("namespace") is None:
         content = "\n".join(str(c.get("text", "")) for c in (item.get("contentItems") or []) if isinstance(c, dict))
         return NativeEvent(native_turn_id=turn_id, type="tool.completed" if done else "tool.started",
-                           payload={"itemId": item_id, "name": HOST_TOOL, "arguments": item.get("arguments", {}),
+                           payload={"itemId": item_id, "name": host_tool, "arguments": item.get("arguments", {}),
                                     "content": content, "isError": item.get("success") is False})
     if item_type in {"mcpToolCall", "dynamicToolCall"}:
         # These capabilities are not part of this product's project-only policy.

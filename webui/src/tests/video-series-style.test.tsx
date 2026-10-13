@@ -1,18 +1,23 @@
 import {
+  act,
   fireEvent,
   render,
   screen,
   waitFor,
   within,
 } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import { SeriesStyleEditor } from "@/components/doc/video/style/SeriesStyleEditor";
+import { CreateVideoSeriesView } from "@/components/doc/video/style/CreateVideoSeriesView";
+import { VideoSeriesSelector } from "@/components/doc/video/style/VideoSeriesSelector";
 import type { VideoStyleDraft } from "@/lib/api";
 import { ClientProvider } from "@/providers/ClientProvider";
 
 const mocks = vi.hoisted(() => ({
   applyVideoBrandKit: vi.fn(),
+  createVideoSeries: vi.fn(),
   createVideoBrandKit: vi.fn(),
   fetchVideoBrandKits: vi.fn(async () => ({ brandKits: [] })),
   fetchVideoStyleDraft: vi.fn(),
@@ -119,6 +124,7 @@ function wrap(node: React.ReactNode) {
 describe("SeriesStyleEditor", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    mocks.saveVideoStyleDraft.mockReset();
     mocks.isTauri.mockReturnValue(false);
     mocks.previewVideoStyle.mockResolvedValue({
       ok: true,
@@ -127,13 +133,35 @@ describe("SeriesStyleEditor", () => {
     mocks.fetchVideoBrandKits.mockResolvedValue({ brandKits: [] });
   });
 
+  it("labels reusable styles in plain language", () => {
+    render(
+      <VideoSeriesSelector
+        labelMode="style"
+        series={[
+          {
+            id: "saved-style",
+            name: "培训视频",
+            latestStyleVersion: 1,
+            episodeCount: 2,
+          },
+        ]}
+        onSelect={vi.fn()}
+        onCreate={vi.fn()}
+      />,
+    );
+
+    expect(screen.getByText("已用于 2 个视频")).toBeInTheDocument();
+    expect(screen.getByText("可用于新视频")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "新建风格" })).toBeInTheDocument();
+  });
+
   it("uses progressive sections and the production compiler preview", async () => {
     render(
       wrap(<SeriesStyleEditor seriesId="ai-course" initialDraft={draft} />),
     );
 
-    expect(screen.getByText("实时预览")).toBeInTheDocument();
-    expect(screen.getByText("与最终场景使用同一个编译器")).toBeInTheDocument();
+    expect(screen.getByText("样式预览")).toBeInTheDocument();
+    expect(screen.getByText("预览会随设置更新")).toBeInTheDocument();
     await waitFor(() => expect(mocks.previewVideoStyle).toHaveBeenCalled());
     expect(screen.getByTitle("封面真实预览")).toBeInTheDocument();
     fireEvent.click(screen.getByRole("button", { name: "数据" }));
@@ -149,7 +177,7 @@ describe("SeriesStyleEditor", () => {
     const settingsNav = screen.getByRole("navigation", { name: "风格设置" });
     fireEvent.click(within(settingsNav).getByRole("button", { name: /背景/ }));
     expect(
-      screen.getByRole("heading", { name: "自定义背景图片" }),
+      screen.getByRole("heading", { name: "背景图片" }),
     ).toBeInTheDocument();
     expect(
       screen.getByRole("button", { name: "选择图片" }),
@@ -172,7 +200,7 @@ describe("SeriesStyleEditor", () => {
     });
     expect(mocks.saveVideoStyleDraft.mock.calls[0][2]).toMatchObject({
       revision: 0,
-      tokens: { colors: { primary: "#2563EB" } },
+      tokens: { colors: { primary: "#315F9A" } },
     });
   });
 
@@ -225,8 +253,9 @@ describe("SeriesStyleEditor", () => {
     render(
       wrap(<SeriesStyleEditor seriesId="ai-course" initialDraft={draft} />),
     );
+    fireEvent.click(await screen.findByText("标识与配色（可选）"));
     fireEvent.click(
-      await screen.findByRole("button", { name: "应用品牌套件：企业品牌" }),
+      await screen.findByRole("button", { name: "应用标识与配色：企业品牌" }),
     );
 
     await waitFor(() =>
@@ -237,11 +266,11 @@ describe("SeriesStyleEditor", () => {
         1,
       ),
     );
-    expect(await screen.findByText(/已锁定 2 项/)).toBeInTheDocument();
+    expect(await screen.findByText(/已固定 2 项设置/)).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "主色常用色 1" })).toBeDisabled();
     const settingsNav = screen.getByRole("navigation", { name: "风格设置" });
     fireEvent.click(
-      within(settingsNav).getByRole("button", { name: /文字与组件/ }),
+      within(settingsNav).getByRole("button", { name: /文字/ }),
     );
     expect(screen.getByRole("button", { name: "标题字体" })).toBeDisabled();
   });
@@ -268,13 +297,14 @@ describe("SeriesStyleEditor", () => {
     render(
       wrap(<SeriesStyleEditor seriesId="ai-course" initialDraft={draft} />),
     );
+    fireEvent.click(await screen.findByText("标识与配色（可选）"));
 
     fireEvent.click(
-      await screen.findByRole("button", { name: "企业品牌深色背景 Logo" }),
+      await screen.findByRole("button", { name: "企业品牌深色背景标识图片" }),
     );
 
     expect(
-      await screen.findByRole("heading", { name: "确认品牌 Logo 使用权" }),
+      await screen.findByRole("heading", { name: "确认标识图片使用权" }),
     ).toBeInTheDocument();
     expect(screen.getByText(/logo\.png将复制到项目/)).toBeInTheDocument();
     expect(mocks.uploadVideoBrandLogo).not.toHaveBeenCalled();
@@ -283,17 +313,18 @@ describe("SeriesStyleEditor", () => {
     );
   });
 
-  it("offers localized presets instead of technical free-form fields", () => {
+  it("offers localized presets instead of technical free-form fields", async () => {
     render(
       wrap(<SeriesStyleEditor seriesId="ai-course" initialDraft={draft} />),
     );
+    await screen.findByTitle("封面真实预览");
 
     const settingsNav = screen.getByRole("navigation", { name: "风格设置" });
     fireEvent.click(
-      within(settingsNav).getByRole("button", { name: /动效与字幕/ }),
+      within(settingsNav).getByRole("button", { name: /字幕与动效/ }),
     );
     const section = screen
-      .getByRole("heading", { name: "动效与字幕" })
+      .getByRole("heading", { name: "字幕与动效" })
       .closest("section");
     expect(section).not.toBeNull();
     expect(within(section!).queryByRole("textbox")).not.toBeInTheDocument();
@@ -302,7 +333,7 @@ describe("SeriesStyleEditor", () => {
       "淡入上浮",
     );
     expect(screen.getByRole("button", { name: "强调方式" })).toHaveTextContent(
-      "轻微呼吸",
+      "淡入强调",
     );
     expect(screen.getByRole("button", { name: "场景切换" })).toHaveTextContent(
       "交叉淡化",
@@ -335,7 +366,7 @@ describe("SeriesStyleEditor", () => {
       ),
     );
 
-    fireEvent.click(screen.getByRole("button", { name: "确认并锁定风格" }));
+    fireEvent.click(screen.getByRole("button", { name: "保存风格" }));
 
     await waitFor(() =>
       expect(onLocked).toHaveBeenCalledWith(
@@ -366,16 +397,313 @@ describe("SeriesStyleEditor", () => {
       ),
     );
 
-    fireEvent.click(screen.getByRole("button", { name: "确认并锁定风格" }));
+    fireEvent.click(screen.getByRole("button", { name: "保存风格" }));
     expect(
-      screen.getByRole("heading", { name: "创建风格 v2" }),
+      screen.getByRole("heading", { name: "保存为风格版本 2" }),
     ).toBeInTheDocument();
     expect(
-      screen.getByText(/不会影响仍使用 v1 的已完成视频/),
+      screen.getByText(/已经完成的视频保持不变/),
     ).toBeInTheDocument();
     expect(mocks.lockVideoStyle).not.toHaveBeenCalled();
 
-    fireEvent.click(screen.getByRole("button", { name: "创建 v2" }));
+    fireEvent.click(screen.getByRole("button", { name: "保存版本 2" }));
     await waitFor(() => expect(mocks.lockVideoStyle).toHaveBeenCalled());
+  });
+
+  it("waits for the newest draft to save before canceling", async () => {
+    let resolveSave!: (value: { ok: boolean; revision: number }) => void;
+    mocks.saveVideoStyleDraft.mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          resolveSave = resolve;
+        }),
+    );
+    const onCancel = vi.fn();
+    render(
+      wrap(
+        <SeriesStyleEditor
+          seriesId="ai-course"
+          initialDraft={draft}
+          onCancel={onCancel}
+        />,
+      ),
+    );
+    await screen.findByTitle("封面真实预览");
+
+    fireEvent.click(screen.getByRole("button", { name: "主色常用色 1" }));
+    fireEvent.click(screen.getByRole("button", { name: "取消" }));
+    await waitFor(() => expect(mocks.saveVideoStyleDraft).toHaveBeenCalledOnce());
+    expect(mocks.saveVideoStyleDraft.mock.calls[0][2].revision).toBe(0);
+    expect(onCancel).not.toHaveBeenCalled();
+
+    await act(async () => resolveSave({ ok: true, revision: 1 }));
+    await waitFor(() => expect(onCancel).toHaveBeenCalledOnce());
+  });
+
+  it("blocks cancel after a failed save and does not retry an unknown write", async () => {
+    let rejectSave!: (error: Error) => void;
+    mocks.saveVideoStyleDraft.mockImplementationOnce(
+      () =>
+        new Promise((_, reject) => {
+          rejectSave = reject;
+        }),
+    );
+    const onCancel = vi.fn();
+    render(
+      wrap(
+        <SeriesStyleEditor
+          seriesId="ai-course"
+          initialDraft={draft}
+          onCancel={onCancel}
+        />,
+      ),
+    );
+    await screen.findByTitle("封面真实预览");
+
+    fireEvent.click(screen.getByRole("button", { name: "主色常用色 1" }));
+    await waitFor(() => expect(mocks.saveVideoStyleDraft).toHaveBeenCalledOnce(), {
+      timeout: 2500,
+    });
+    fireEvent.click(screen.getByRole("button", { name: "辅助色常用色 2" }));
+    await act(async () => rejectSave(new Error("save timeout")));
+    expect(await screen.findByText("save timeout")).toBeInTheDocument();
+    expect(onCancel).not.toHaveBeenCalled();
+    expect(screen.getByRole("button", { name: "重试保存" })).toBeInTheDocument();
+    await act(async () => new Promise((resolve) => setTimeout(resolve, 750)));
+    expect(mocks.saveVideoStyleDraft).toHaveBeenCalledOnce();
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: "取消" }));
+    });
+    expect(onCancel).not.toHaveBeenCalled();
+  });
+
+  it("serializes automatic saves and uses the returned revision for later edits", async () => {
+    let resolveFirst!: (value: { ok: boolean; revision: number }) => void;
+    let resolveSecond!: (value: { ok: boolean; revision: number }) => void;
+    mocks.saveVideoStyleDraft
+      .mockImplementationOnce(
+        () =>
+          new Promise((resolve) => {
+            resolveFirst = resolve;
+          }),
+      )
+      .mockImplementationOnce(
+        () =>
+          new Promise((resolve) => {
+            resolveSecond = resolve;
+          }),
+      );
+    render(
+      wrap(<SeriesStyleEditor seriesId="ai-course" initialDraft={draft} />),
+    );
+    await screen.findByTitle("封面真实预览");
+
+    fireEvent.click(screen.getByRole("button", { name: "主色常用色 1" }));
+    await waitFor(() => expect(mocks.saveVideoStyleDraft).toHaveBeenCalledOnce(), {
+      timeout: 2500,
+    });
+    expect(mocks.saveVideoStyleDraft.mock.calls[0][2].revision).toBe(0);
+    fireEvent.click(screen.getByRole("button", { name: "辅助色常用色 2" }));
+
+    await act(async () => resolveFirst({ ok: true, revision: 1 }));
+    await waitFor(() => expect(mocks.saveVideoStyleDraft).toHaveBeenCalledTimes(2));
+    expect(mocks.saveVideoStyleDraft.mock.calls[1][2].revision).toBe(1);
+    await act(async () => resolveSecond({ ok: true, revision: 2 }));
+    await waitFor(() => expect(screen.getByText("已保存")).toBeInTheDocument());
+  });
+
+  it("shows each aspect's own enabled state and keeps the series default enabled", async () => {
+    render(
+      wrap(
+        <SeriesStyleEditor
+          seriesId="ai-course"
+          initialDraft={{
+            ...draft,
+            aspectVariants: {
+              "16:9": { enabled: true },
+              "9:16": { enabled: false },
+              "1:1": { enabled: false },
+            },
+          }}
+          defaultAspectRatio="9:16"
+        />,
+      ),
+    );
+    await screen.findByTitle("封面真实预览");
+    fireEvent.click(screen.getByRole("button", { name: /更多设置/ }));
+
+    expect(screen.getByRole("checkbox", { name: "启用横屏" })).toBeChecked();
+    expect(screen.getByRole("checkbox", { name: "启用竖屏" })).toBeChecked();
+    expect(screen.getByRole("checkbox", { name: "启用竖屏" })).toBeDisabled();
+    expect(screen.getByRole("checkbox", { name: "启用方形" })).not.toBeChecked();
+    expect(screen.getByText("默认，始终启用")).toBeInTheDocument();
+  });
+
+  it("offers compiler previews for all eight scene roles", async () => {
+    render(
+      wrap(<SeriesStyleEditor seriesId="ai-course" initialDraft={draft} />),
+    );
+    await screen.findByTitle("封面真实预览");
+
+    for (const role of [
+      "封面",
+      "章节",
+      "内容",
+      "数据",
+      "对比",
+      "流程",
+      "引用",
+      "片尾",
+    ]) {
+      expect(screen.getByRole("button", { name: role })).toBeInTheDocument();
+    }
+    fireEvent.click(screen.getByRole("button", { name: "引用" }));
+    await waitFor(() =>
+      expect(mocks.previewVideoStyle).toHaveBeenLastCalledWith(
+        "tok",
+        "ai-course",
+        expect.any(Object),
+        "quote",
+        "16:9",
+      ),
+    );
+  });
+
+  it("creates a custom reusable style", async () => {
+    const onCreated = vi.fn();
+    mocks.createVideoSeries.mockResolvedValue({
+      ok: true,
+      series: { id: "custom-series" },
+      draft: { ...draft, seriesId: "custom-series", baseTemplateId: "custom" },
+    });
+    render(
+      wrap(
+        <CreateVideoSeriesView onCancel={vi.fn()} onCreated={onCreated} />,
+      ),
+    );
+
+    fireEvent.change(await screen.findByPlaceholderText("例如：品牌宣传视频"), {
+      target: { value: "自定义课程" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: /自定义/ }));
+    fireEvent.click(screen.getByRole("button", { name: "继续编辑风格" }));
+
+    await waitFor(() =>
+      expect(mocks.createVideoSeries).toHaveBeenCalledWith(
+        "tok",
+        expect.objectContaining({
+          name: "自定义课程",
+          baseTemplateId: "custom",
+          defaultAspectRatio: "16:9",
+        }),
+      ),
+    );
+    expect(onCreated).toHaveBeenCalledOnce();
+  });
+
+  it("keeps role background edits explicit and mode changes on the series default", async () => {
+    const user = userEvent.setup();
+    const backgroundDraft: VideoStyleDraft = {
+      ...draft,
+      backgrounds: {
+        default: {
+          ...draft.backgrounds?.default,
+          assetId: "series-background",
+          fit: "cover",
+        },
+        roles: { content: { assetPolicy: "episode-replaceable" } },
+      },
+    };
+    mocks.saveVideoStyleDraft.mockResolvedValue({ ok: true, revision: 1 });
+    render(
+      wrap(
+        <SeriesStyleEditor
+          seriesId="ai-course"
+          initialDraft={backgroundDraft}
+        />,
+      ),
+    );
+    await screen.findByTitle("封面真实预览");
+    const settingsNav = screen.getByRole("navigation", { name: "风格设置" });
+    fireEvent.click(within(settingsNav).getByRole("button", { name: /背景/ }));
+    await user.click(screen.getByRole("button", { name: "应用到" }));
+    await user.click(await screen.findByRole("menuitem", { name: "普通内容" }));
+    await user.click(screen.getByRole("button", { name: "图片适配" }));
+    await user.click(await screen.findByRole("menuitem", { name: "完整显示" }));
+
+    await waitFor(() => expect(mocks.saveVideoStyleDraft).toHaveBeenCalledOnce(), {
+      timeout: 2500,
+    });
+    await waitFor(() => expect(screen.getByText("已保存")).toBeInTheDocument());
+    expect(mocks.saveVideoStyleDraft.mock.calls[0][2].backgrounds?.roles).toEqual(
+      { content: { assetPolicy: "episode-replaceable", fit: "contain" } },
+    );
+
+    fireEvent.click(within(settingsNav).getByRole("button", { name: /配色/ }));
+    fireEvent.click(screen.getByRole("button", { name: "浅色" }));
+    await waitFor(() => expect(mocks.saveVideoStyleDraft).toHaveBeenCalledTimes(2), {
+      timeout: 2500,
+    });
+    await waitFor(() => expect(screen.getByText("已保存")).toBeInTheDocument());
+    const savedBackgrounds = mocks.saveVideoStyleDraft.mock.calls[1][2].backgrounds;
+    expect(savedBackgrounds?.default).toMatchObject({
+      assetId: "series-background",
+      fit: "cover",
+      fallback: "#FFFFFF",
+    });
+    expect(savedBackgrounds?.roles).toEqual({
+      content: { assetPolicy: "episode-replaceable", fit: "contain" },
+    });
+  });
+
+  it("removes a role image and restores that role to the series default", async () => {
+    const user = userEvent.setup();
+    const backgroundDraft: VideoStyleDraft = {
+      ...draft,
+      backgrounds: {
+        default: {
+          ...draft.backgrounds?.default,
+          assetId: "series-background",
+        },
+        roles: {
+          content: {
+            assetPolicy: "episode-replaceable",
+            fit: "contain",
+            assetId: "content-background",
+          },
+        },
+      },
+    };
+    mocks.saveVideoStyleDraft.mockResolvedValue({ ok: true, revision: 1 });
+    render(
+      wrap(
+        <SeriesStyleEditor
+          seriesId="ai-course"
+          initialDraft={backgroundDraft}
+        />,
+      ),
+    );
+    await screen.findByTitle("封面真实预览");
+    const settingsNav = screen.getByRole("navigation", { name: "风格设置" });
+    fireEvent.click(within(settingsNav).getByRole("button", { name: /背景/ }));
+    await user.click(screen.getByRole("button", { name: "应用到" }));
+    await user.click(await screen.findByRole("menuitem", { name: "普通内容" }));
+
+    fireEvent.click(screen.getByRole("button", { name: "移除图片" }));
+    await waitFor(() => expect(mocks.saveVideoStyleDraft).toHaveBeenCalledOnce(), {
+      timeout: 2500,
+    });
+    await waitFor(() => expect(screen.getByText("已保存")).toBeInTheDocument());
+    expect(
+      mocks.saveVideoStyleDraft.mock.calls[0][2].backgrounds?.roles?.content,
+    ).toMatchObject({ assetId: null, fit: "contain" });
+
+    fireEvent.click(screen.getByRole("button", { name: "恢复默认" }));
+    await waitFor(() => expect(mocks.saveVideoStyleDraft).toHaveBeenCalledTimes(2), {
+      timeout: 2500,
+    });
+    await waitFor(() => expect(screen.getByText("已保存")).toBeInTheDocument());
+    expect(mocks.saveVideoStyleDraft.mock.calls[1][2].backgrounds?.roles?.content)
+      .toBeNull();
   });
 });

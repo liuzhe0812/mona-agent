@@ -491,6 +491,7 @@ class Consolidator:
             weakref.WeakValueDictionary()
         )
         self._retry_after: dict[str, float] = {}
+        self._pending_room_summaries: dict[str, dict[str, Any]] = {}
 
     def set_provider(
         self,
@@ -548,13 +549,27 @@ class Consolidator:
             include_timestamps=include_timestamps,
         )
 
-    def _persist_last_summary(self, session: Session, summary: str | None) -> None:
+    def _persist_last_summary(
+        self, session: Session, summary: str | None, *, last_active: datetime | None = None,
+    ) -> None:
         if summary:
+            previous_metadata = session.metadata.copy()
             session.metadata["_last_summary"] = {
                 "text": summary,
-                "last_active": session.updated_at.isoformat(),
+                "last_active": (last_active or session.updated_at).isoformat(),
             }
-            self.sessions.save(session)
+            shared = self._pending_room_summaries.pop(session.key, None)
+            if shared is not None and shared.pop("_private_summary") != summary:
+                shared = None
+            if shared is not None:
+                session.metadata["_shared_room_summary"] = {
+                    **shared, "through_cursor": session.last_consolidated,
+                }
+            try:
+                self.sessions.save(session)
+            except BaseException:
+                session.metadata = previous_metadata
+                raise
 
     @staticmethod
     def _summary_text(session: Session) -> str | None:
@@ -615,7 +630,49 @@ class Consolidator:
         previous_summary: str | None = None,
     ) -> str | None:
         provider, model = self.provider, self.model
-        summary = await self.archive(messages, previous_summary=previous_summary)
+        self._pending_room_summaries.pop(session.key, None)
+        is_room = session.conversation_metadata.type == "room"
+        if is_room:
+            from mona.agent.room import project_history_for_agent
+
+            previous_shared = session.metadata.get("_shared_room_summary")
+            shared_text = previous_shared.get("text") if isinstance(previous_shared, dict) else None
+            shared_text = shared_text if isinstance(shared_text, str) else None
+            legacy_gap = previous_summary is not None and shared_text is None
+            public_source = messages
+            if legacy_gap:
+                public_source = session.messages[:session.last_consolidated] + messages
+            public_messages = project_history_for_agent(
+                public_source, viewer_agent_id="room-context-viewer", max_messages=0,
+            )
+            summary = await self.archive(messages, previous_summary=previous_summary, persist=False)
+            if summary:
+                public_summary = (
+                    await self.archive(public_messages, previous_summary=shared_text, persist=False)
+                    if public_messages else shared_text or ""
+                )
+                if public_summary is None:
+                    summary = None
+                else:
+                    shared = {
+                        "text": public_summary,
+                        "_private_summary": summary,
+                        "through_timestamp": messages[-1].get("timestamp"),
+                        "coverage": (
+                            "retained_history" if legacy_gap
+                            else previous_shared.get("coverage", "complete")
+                            if isinstance(previous_shared, dict) else "complete"
+                        ),
+                    }
+                    try:
+                        self.store.append_history(summary, max_chars=_ARCHIVE_SUMMARY_MAX_CHARS)
+                    except Exception as exc:
+                        logger.warning("Room summary persistence failed (exception={})", type(exc).__name__)
+                        summary = None
+                    else:
+                        self._pending_room_summaries[session.key] = shared
+        else:
+            summary = await self.archive(messages, previous_summary=previous_summary)
         if provider is not self.provider or model != self.model:
             return summary
         if summary:
@@ -629,6 +686,7 @@ class Consolidator:
         messages: list[dict],
         *,
         previous_summary: str | None = None,
+        persist: bool = True,
     ) -> str | None:
         """Summarize messages via LLM and append to history.jsonl.
 
@@ -675,7 +733,8 @@ class Consolidator:
             if not summary or summary == "(nothing)" or len(summary) > _ARCHIVE_SUMMARY_MAX_CHARS:
                 logger.warning("Consolidation returned an unusable handoff summary")
                 return None
-            self.store.append_history(summary, max_chars=_ARCHIVE_SUMMARY_MAX_CHARS)
+            if persist:
+                self.store.append_history(summary, max_chars=_ARCHIVE_SUMMARY_MAX_CHARS)
             return summary
         except Exception as exc:
             logger.warning(
@@ -778,17 +837,26 @@ class Consolidator:
                 if on_compaction is not None:
                     await on_compaction(True)
                 try:
-                    summary = await self._archive_session(session, chunk, previous_summary=last_summary)
-                finally:
-                    if on_compaction is not None:
-                        await on_compaction(False)
+                    try:
+                        summary = await self._archive_session(session, chunk, previous_summary=last_summary)
+                    finally:
+                        if on_compaction is not None:
+                            await on_compaction(False)
+                except BaseException:
+                    self._pending_room_summaries.pop(session.key, None)
+                    raise
                 if not summary:
                     # Keep the source in the session so a later turn can retry
                     # without silently discarding task context.
                     break
                 last_summary = summary
+                previous_cursor = session.last_consolidated
                 session.last_consolidated = end_idx
-                self._persist_last_summary(session, last_summary)
+                try:
+                    self._persist_last_summary(session, last_summary)
+                except BaseException:
+                    session.last_consolidated = previous_cursor
+                    raise
 
                 try:
                     estimated, source = self.estimate_session_prompt_tokens(
@@ -823,6 +891,8 @@ class Consolidator:
         async with lock:
             self.sessions.invalidate(session_key)
             session = self.sessions.get_or_create(session_key)
+            if time.monotonic() < self._retry_after.get(session.key, 0):
+                return None
 
             tail = list(session.messages[session.last_consolidated:])
             if not tail:
@@ -851,24 +921,29 @@ class Consolidator:
             last_active = session.updated_at
             summary: str | None = ""
             if archive_msgs:
-                summary = await self.archive(
-                    archive_msgs,
+                summary = await self._archive_session(
+                    session, archive_msgs,
                     previous_summary=self._summary_text(session),
                 )
 
             if archive_msgs and summary is None:
                 return None
 
-            if summary and summary != "(nothing)":
-                session.metadata["_last_summary"] = {
-                    "text": summary,
-                    "last_active": last_active.isoformat(),
-                }
-
+            original_messages = session.messages
+            original_cursor = session.last_consolidated
             session.messages = kept
             session.last_consolidated = 0
             session.updated_at = datetime.now()
-            self.sessions.save(session)
+            try:
+                if summary:
+                    self._persist_last_summary(session, summary, last_active=last_active)
+                else:
+                    self.sessions.save(session)
+            except BaseException:
+                session.messages = original_messages
+                session.last_consolidated = original_cursor
+                session.updated_at = last_active
+                raise
 
             if archive_msgs:
                 logger.info(

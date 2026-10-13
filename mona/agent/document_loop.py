@@ -21,14 +21,20 @@ from mona.agent.document_context import DocumentContextBuilder
 from mona.agent.loop import AgentLoop
 from mona.agent.tools.registry import ToolRegistry
 
-# 视频渲染依赖通过 exec / skill_script_run 调用统一运行时。
-# 保留 generate_image 供场景素材生成。
+# The creator uses the normal execution loop and controlled video operations.
 _VIDEO_TOOLS: frozenset[str] = frozenset({
     "read_file",
     "write_file",
     "edit_file",
-    "list_files",
+    "list_dir",
+    "find_files",
+    "grep",
+    "apply_patch",
     "exec",
+    "write_stdin",
+    "list_exec_sessions",
+    "deliver_file",
+    "video",
     "web_search",
     "web_fetch",
     "generate_image",

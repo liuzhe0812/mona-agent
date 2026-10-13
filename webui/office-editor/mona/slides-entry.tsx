@@ -80,6 +80,7 @@ import '@genoffice/ui/color-picker.css'
 import '@genoffice/ui/dropdown.css'
 import '../vendor/genoffice/apps/slides/src/renderer/styles.css'
 import './ribbon-overflow.css'
+import './resize-handles.css'
 
 try {
   localStorage.setItem('ai-slides-show-ai', '0')

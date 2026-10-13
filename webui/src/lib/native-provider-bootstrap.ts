@@ -1,6 +1,6 @@
 import { developmentApi, type ExecutorId } from "@/lib/development-api";
 
-const AUTO_PROBE_EXECUTORS: ExecutorId[] = ["codex", "codebuddy"];
+const AUTO_PROBE_EXECUTORS: ExecutorId[] = ["codex", "claude", "codebuddy"];
 
 let pending: Promise<void> | null = null;
 

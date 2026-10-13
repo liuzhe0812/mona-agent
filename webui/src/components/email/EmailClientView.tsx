@@ -6,12 +6,10 @@ import {
   ReplyAll,
   Forward,
   Loader2,
-  LockKeyhole,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { AgentLogo } from "@/components/AgentLogo";
 import { cn } from "@/lib/utils";
-import { useLicense } from "@/hooks/useLicense";
 import { getServicesHttpBase } from "@/lib/api";
 import { useEmailStore } from "./store/emailStore";
 import { FolderTree } from "./FolderTree";
@@ -28,11 +26,10 @@ const MIN_LIST_WIDTH = 240;
 const MAX_LIST_WIDTH = 600;
 const FOLDER_TREE_WIDTH = 180;
 
-export function EmailClientView({ onOpenSubscribe, onOpenEmailExtraction }: {
+export function EmailClientView({ onOpenEmailExtraction }: {
   onOpenSubscribe?: () => void;
   onOpenEmailExtraction?: () => void;
 }) {
-  const { licenseActive } = useLicense();
   const loadAccounts = useEmailStore((s) => s.loadAccounts);
   const selectedAccountId = useEmailStore((s) => s.selectedAccountId);
   const selectedFolder = useEmailStore((s) => s.selectedFolder);
@@ -308,11 +305,11 @@ export function EmailClientView({ onOpenSubscribe, onOpenEmailExtraction }: {
             "h-7 w-7 p-0",
             agentPanelVisible ? "text-foreground" : "text-muted-foreground hover:text-foreground",
           )}
-          onClick={licenseActive ? () => setAgentPanelVisible((v) => !v) : onOpenSubscribe}
-          aria-label={licenseActive ? (agentPanelVisible ? "隐藏 AI 面板" : "显示 AI 面板") : "升级 Pro 解锁邮件 AI"}
-          title={licenseActive ? (agentPanelVisible ? "隐藏 AI 面板" : "显示 AI 面板") : "升级 Pro 解锁邮件 AI"}
+          onClick={() => setAgentPanelVisible((v) => !v)}
+          aria-label={agentPanelVisible ? "隐藏 AI 面板" : "显示 AI 面板"}
+          title={agentPanelVisible ? "隐藏 AI 面板" : "显示 AI 面板"}
         >
-          {licenseActive ? <AgentLogo state="idle" className="h-5 w-5" /> : <LockKeyhole className="h-4 w-4" />}
+          <AgentLogo state="idle" className="h-5 w-5" />
         </Button>
       </div>
 
@@ -340,17 +337,15 @@ export function EmailClientView({ onOpenSubscribe, onOpenEmailExtraction }: {
               />
             </div>
             <div
-              className={cn(
-                "w-px shrink-0 cursor-col-resize bg-border transition-colors hover:bg-primary/40 active:bg-primary/60",
-                resizing && "bg-primary/60",
-              )}
+              className="mona-resize-handle relative w-px shrink-0 cursor-col-resize"
+              data-separator={resizing ? "active" : undefined}
               onMouseDown={() => setResizing(true)}
               title="拖动调整宽度"
             />
             <div className="min-w-0 flex-1 bg-background">
-              <MailView onOpenSubscribe={onOpenSubscribe} />
+              <MailView />
             </div>
-            {licenseActive && agentPanelVisible && (
+            {agentPanelVisible && (
               <div className="w-[320px] shrink-0 border-l border-border bg-card">
                 <MailAgentPanel />
               </div>

@@ -1,4 +1,4 @@
-"""Reuse the local Claude Code account, following Cindy's credential adapter.
+"""Reuse the local Claude Code account.
 
 Only the app binding is persisted here. System credentials remain owned by the CLI.
 """
@@ -19,7 +19,7 @@ _BINDING = "claude-local-account.json"
 
 
 def read_local_account() -> dict:
-    """Same stores as Cindy's claude-credentials-store; never load CLI settings."""
+    """Read local CLI credentials without loading CLI settings."""
     try:
         if sys.platform == "darwin":
             result = subprocess.run(
@@ -65,7 +65,6 @@ def local_account_env(home: Path) -> dict[str, str]:
     if not is_local_account_bound(home):
         return {}
     oauth = read_local_account()
-    # Field mapping matches Cindy's claude-oauth-spawn-env.ts.
     env = {"CLAUDE_CODE_OAUTH_TOKEN": oauth["accessToken"]}
     scopes = oauth.get("scopes")
     if isinstance(scopes, list) and scopes and all(isinstance(scope, str) for scope in scopes):

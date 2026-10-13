@@ -1,6 +1,10 @@
+import asyncio
 import json
+from types import SimpleNamespace
 
 import pytest
+from aiohttp import web
+from aiohttp.test_utils import TestClient, TestServer
 
 from mona.providers.base import LLMResponse
 from mona.system_agent import (
@@ -8,6 +12,7 @@ from mona.system_agent import (
     generate_storage_assessment,
     generate_system_plan,
     handle_storage_analyze,
+    handle_system_diagnose,
     handle_system_plan,
 )
 
@@ -23,6 +28,22 @@ class FakeProvider:
 
     def get_default_model(self) -> str:
         return "test-model"
+
+
+class WaitingProvider(FakeProvider):
+    def __init__(self) -> None:
+        super().__init__("")
+        self.started = asyncio.Event()
+        self.cancelled = asyncio.Event()
+
+    async def chat(self, **kwargs):
+        self.calls.append(kwargs)
+        self.started.set()
+        try:
+            await asyncio.Future()
+        except asyncio.CancelledError:
+            self.cancelled.set()
+            raise
 
 
 @pytest.mark.asyncio
@@ -233,3 +254,35 @@ async def test_storage_assessment_endpoint_requires_scan_id():
     response = await handle_storage_analyze(Request())
 
     assert response.status == 400
+
+
+@pytest.mark.parametrize(
+    ("path", "handler", "payload"),
+    [
+        ("/api/system/plan", handle_system_plan, {"goal": "优化电脑", "evidence": {}}),
+        ("/api/system/diagnose", handle_system_diagnose, {"symptom": "电脑变慢", "evidence": {}}),
+        (
+            "/api/system/storage/analyze",
+            handle_storage_analyze,
+            {"goal": "分析存储", "evidence": {"scanId": "scan-1"}},
+        ),
+    ],
+)
+@pytest.mark.asyncio
+async def test_analysis_endpoint_cancels_provider_when_client_disconnects(path, handler, payload):
+    provider = WaitingProvider()
+    app = web.Application()
+    app["agent_loop"] = SimpleNamespace(
+        provider=provider,
+        config=SimpleNamespace(model="test-model"),
+    )
+    app.router.add_post(path, handler)
+
+    async with TestClient(TestServer(app)) as client:
+        request_task = asyncio.create_task(client.post(path, json=payload))
+        await asyncio.wait_for(provider.started.wait(), timeout=2)
+        request_task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await request_task
+
+        await asyncio.wait_for(provider.cancelled.wait(), timeout=2)

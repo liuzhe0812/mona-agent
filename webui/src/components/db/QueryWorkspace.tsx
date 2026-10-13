@@ -63,7 +63,7 @@ export function QueryWorkspace({ tab }: { tab: QueryTab }) {
       <div className="min-h-0 flex-1">
         <ResizablePanelGroup direction="vertical">
           <ResizablePanel defaultSize="50%" minSize="20%"><SqlEditor ref={editor} tab={tab} onHasTextChange={onHasTextChange} onSave={() => { void saveQuery(); }} /></ResizablePanel>
-          <ResizableHandle aria-label="调整查询编辑器和结果区高度" className="bg-border/80 transition-colors hover:bg-info/60 active:bg-info" />
+          <ResizableHandle aria-label="调整查询编辑器和结果区高度" />
           <ResizablePanel defaultSize="50%" minSize="20%"><ResultPanel tab={tab} /></ResizablePanel>
         </ResizablePanelGroup>
       </div>

@@ -145,6 +145,7 @@ class Collaboration(Contract):
     parent_run_id: Identifier | None = None
     required: bool = False
     result_received_by_run_id: Identifier | None = None
+    result_preview_received_by_run_id: Identifier | None = None
     created_at: datetime = Field(default_factory=now)
 
 
@@ -262,6 +263,7 @@ class RunInput(Contract):
     run_id: Identifier
     message_id: Identifier
     intent: Literal["steering", "follow_up"] = "follow_up"
+    follow_up_allowed: bool = True
     state: InputState = InputState.PENDING
     revision: int = Field(default=0, ge=0)
     created_at: datetime = Field(default_factory=now)

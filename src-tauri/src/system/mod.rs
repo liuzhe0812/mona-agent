@@ -100,6 +100,7 @@ mod tests {
         bytes_per_second, cleanup_is_allowed, cleanup_path, decode_windows_output, file_type_category,
         generated_artifact_kind, history_window_secs, is_thumbcache_file, modified_bucket,
         normalize_scan_drive, refresh_readings, sample, scan_directory_tree, storage_entry_id,
+        wait_for_cleanup_command,
         prepare_terminal_command, trash_path_check, whole_machine_cpu_percent, Connection, Disks, Inner, Networks,
         DirectoryInsightSummary, DirectorySize, FileExtensionBucket, FileTypeSize,
         ScanProgressEmitter, StorageSizeBucket, System, HISTORY_WINDOW_SECS,
@@ -228,6 +229,42 @@ mod tests {
             assert!(cleanup_path("thumbcache").is_some());
         }
         assert!(cleanup_path("windows_old").is_none());
+    }
+
+    #[cfg(windows)]
+    fn harmless_cleanup_child(script: &str) -> std::process::Child {
+        use std::os::windows::process::CommandExt;
+        std::process::Command::new("powershell.exe")
+            .args(["-NoProfile", "-NonInteractive", "-Command", script])
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .creation_flags(windows::Win32::System::Threading::CREATE_NO_WINDOW.0)
+            .spawn()
+            .expect("spawn harmless cleanup child")
+    }
+
+    #[test]
+    #[cfg(windows)]
+    fn cleanup_command_checks_the_exit_status() {
+        for (script, succeeds) in [("exit 0", true), ("exit 7", false)] {
+            let mut child = harmless_cleanup_child(script);
+            let result = wait_for_cleanup_command(&mut child, std::time::Duration::from_secs(5));
+            assert_eq!(result.is_ok(), succeeds);
+            if !succeeds {
+                assert!(result.unwrap_err().contains('7'));
+            }
+        }
+    }
+
+    #[test]
+    #[cfg(windows)]
+    fn cleanup_command_timeout_ends_its_child() {
+        let mut child = harmless_cleanup_child("Start-Sleep -Seconds 5");
+        let error = wait_for_cleanup_command(&mut child, std::time::Duration::from_millis(100))
+            .expect_err("unfinished cleanup command must time out");
+        assert!(error.contains("超时"));
+        assert!(child.try_wait().expect("check child status").is_some());
     }
 
     #[test]
@@ -2105,15 +2142,51 @@ fn cleanup_path(id: &str) -> Option<PathBuf> {
     }
 }
 
+fn wait_for_cleanup_command(child: &mut std::process::Child, timeout: Duration) -> Result<(), String> {
+    let started = Instant::now();
+    loop {
+        match child.try_wait() {
+            Ok(Some(status)) => {
+                return if status.success() {
+                    Ok(())
+                } else {
+                    Err(format!("清理命令未完成，退出码 {:?}", status.code()))
+                };
+            }
+            Ok(None) if started.elapsed() >= timeout => {
+                child.kill().map_err(|error| format!("清理等待超时，无法结束子进程：{error}"))?;
+                child.wait().map_err(|error| format!("无法确认清理子进程的结束状态：{error}"))?;
+                return Err("回收站清理等待超时，请重新检查剩余内容".into());
+            }
+            Ok(None) => std::thread::sleep(Duration::from_millis(50)),
+            Err(error) => {
+                let _ = child.kill();
+                let _ = child.wait();
+                return Err(format!("无法读取清理子进程状态：{error}"));
+            }
+        }
+    }
+}
+
 /// 清理单个候选目录并返回 before/after 真实测量值
 fn clear_directory_with_verification(id: &str) -> Result<CleanupVerification, String> {
     // 回收站走 PowerShell Clear-RecycleBin
     if id == "trash" {
         let recycle_bin = PathBuf::from("C:\\$Recycle.Bin");
         let before = if recycle_bin.exists() { dir_size(&recycle_bin).0 } else { 0 };
-        let _ = std::process::Command::new("powershell")
-            .args(["-NoProfile", "-NonInteractive", "-Command", "Clear-RecycleBin -Force -ErrorAction SilentlyContinue"])
-            .output();
+        let mut command = std::process::Command::new("powershell.exe");
+        command
+            .args(["-NoProfile", "-NonInteractive", "-Command", "Clear-RecycleBin -DriveLetter C -Force -ErrorAction Stop"])
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null());
+        #[cfg(windows)]
+        {
+            use std::os::windows::process::CommandExt;
+            command.creation_flags(windows::Win32::System::Threading::CREATE_NO_WINDOW.0);
+        }
+        let mut child = command.spawn().map_err(|error| format!("无法启动回收站清理：{error}"))?;
+        wait_for_cleanup_command(&mut child, Duration::from_secs(60))?;
         let after = if recycle_bin.exists() { dir_size(&recycle_bin).0 } else { 0 };
         return Ok(CleanupVerification {
             id: id.to_string(),
@@ -2204,13 +2277,19 @@ pub async fn clean_storage(
         let mut failures = Vec::new();
         let mut verification: Vec<CleanupVerification> = Vec::new();
         for id in ids {
+            log::info!("storage cleanup started: {id}");
             match clear_directory_with_verification(&id) {
                 Ok(v) => {
-                    freed += v.before_bytes.saturating_sub(v.after_bytes);
+                    let released = v.before_bytes.saturating_sub(v.after_bytes);
+                    log::info!("storage cleanup completed: {id}, released {released} bytes");
+                    freed += released;
                     cleaned_ids.push(id);
                     verification.push(v);
                 }
-                Err(error) => failures.push(error),
+                Err(error) => {
+                    log::warn!("storage cleanup failed: {id}: {error}");
+                    failures.push(error);
+                }
             }
         }
         (freed, cleaned_ids, failures, verification)

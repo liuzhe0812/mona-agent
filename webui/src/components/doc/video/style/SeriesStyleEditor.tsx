@@ -6,7 +6,6 @@ import {
   CheckCircle2,
   ImagePlus,
   Loader2,
-  LockKeyhole,
   Palette,
   Save,
   ShieldCheck,
@@ -66,19 +65,28 @@ export interface SeriesStyleEditorProps {
   onCancel?: () => void;
   onDraftChange?: (draft: VideoStyleDraft) => void;
   currentVersion?: number;
+  defaultAspectRatio?: VideoAspectVariant;
   className?: string;
 }
 
 type EditorSection =
   "basics" | "background" | "components" | "motion" | "advanced";
-type PreviewRole = "cover" | "content" | "data" | "outro";
+type PreviewRole =
+  | "cover"
+  | "chapter"
+  | "content"
+  | "data"
+  | "comparison"
+  | "process"
+  | "quote"
+  | "outro";
 
 const SECTIONS = [
-  { id: "basics", label: "基础", hint: "配色与卡片", icon: SlidersHorizontal },
+  { id: "basics", label: "配色", hint: "颜色与卡片", icon: SlidersHorizontal },
   { id: "background", label: "背景", hint: "图片与可读性", icon: Image },
-  { id: "components", label: "文字与组件", hint: "字体与版式", icon: Type },
-  { id: "motion", label: "动效与字幕", hint: "节奏与字幕", icon: Sparkles },
-  { id: "advanced", label: "高级", hint: "更多控制", icon: Settings2 },
+  { id: "components", label: "文字", hint: "字体与字号", icon: Type },
+  { id: "motion", label: "字幕与动效", hint: "字幕和切换", icon: Sparkles },
+  { id: "advanced", label: "更多设置", hint: "补充颜色", icon: Settings2 },
 ] as const;
 
 const ASPECTS: Array<{ value: VideoAspectVariant; label: string }> = [
@@ -89,8 +97,12 @@ const ASPECTS: Array<{ value: VideoAspectVariant; label: string }> = [
 
 const PREVIEW_ROLES: Array<{ value: PreviewRole; label: string }> = [
   { value: "cover", label: "封面" },
+  { value: "chapter", label: "章节" },
   { value: "content", label: "内容" },
   { value: "data", label: "数据" },
+  { value: "comparison", label: "对比" },
+  { value: "process", label: "流程" },
+  { value: "quote", label: "引用" },
   { value: "outro", label: "片尾" },
 ];
 
@@ -104,22 +116,22 @@ const PREVIEW_DIMENSIONS: Record<
 };
 
 const TEMPLATE_NAMES: Record<string, string> = {
-  "minimal-business": "山河新章",
-  "tech-dark": "霓虹智核",
-  "editorial-magazine": "时代切片",
-  "knowledge-cards": "奇想实验室",
-  custom: "自定义风格",
+  "minimal-business": "简洁浅色",
+  "tech-dark": "专业深色",
+  "editorial-magazine": "编辑排版",
+  "knowledge-cards": "清晰教学",
+  custom: "自定义",
 };
 
 const COLOR_PRESETS = [
-  "#2563EB",
-  "#6C5CE7",
-  "#00A88F",
-  "#F06A4F",
-  "#A62920",
-  "#E54B16",
-  "#0E1016",
-  "#F7F8FA",
+  "#315F9A",
+  "#526A5D",
+  "#A93A25",
+  "#6B5A45",
+  "#243243",
+  "#1A1F27",
+  "#F5F7FA",
+  "#FFFFFF",
 ] as const;
 
 const FONT_OPTIONS = [
@@ -137,9 +149,8 @@ const ENTER_PRESET_OPTIONS = [
 ];
 
 const EMPHASIS_PRESET_OPTIONS = [
-  { value: "soft-pulse", label: "轻微呼吸" },
   { value: "stagger-rise", label: "依次强调" },
-  { value: "fade-rise", label: "上浮强调" },
+  { value: "fade-rise", label: "淡入强调" },
 ];
 
 const TRANSITION_PRESET_OPTIONS = [
@@ -155,13 +166,13 @@ const SUBTITLE_STYLE_OPTIONS = [
 ];
 
 const DEFAULT_COLORS: Record<string, string> = {
-  primary: "#6C5CE7",
-  secondary: "#00C2A8",
-  background: "#0E1016",
-  surface: "#171A23",
-  textPrimary: "#FFFFFF",
-  textSecondary: "#B7BCCB",
-  border: "#2B3040",
+  primary: "#91B2E8",
+  secondary: "#A6C8EF",
+  background: "#101318",
+  surface: "#1A1F27",
+  textPrimary: "#F2F4F7",
+  textSecondary: "#C0C5CE",
+  border: "#333B46",
 };
 
 const DEFAULT_COMPONENTS: Record<string, string> = {
@@ -172,14 +183,6 @@ const DEFAULT_COMPONENTS: Record<string, string> = {
   outro: "outro-brand-v1",
 };
 
-const COMPONENT_ROLES = [
-  { key: "cover", label: "封面", fallback: "cover-split-v1" },
-  { key: "content", label: "内容", fallback: "content-outline-v1" },
-  { key: "data", label: "数据", fallback: "metric-large-number-v1" },
-  { key: "comparison", label: "对比", fallback: "comparison-columns-v1" },
-  { key: "outro", label: "片尾", fallback: "outro-brand-v1" },
-] as const;
-
 function defaultBackground(mode: string): VideoBackgroundSlot {
   const dark = mode === "dark";
   return {
@@ -188,21 +191,22 @@ function defaultBackground(mode: string): VideoBackgroundSlot {
     fit: "cover",
     focalPoint: { x: 0.5, y: 0.45 },
     overlay: {
-      type: "linear-gradient",
-      color: dark ? "#0E1016" : "#FFFFFF",
+      type: "solid",
+      color: dark ? "#101318" : "#F5F7FA",
       opacity: 0.56,
-      direction: "left-to-right",
+      direction: "none",
     },
     blur: 0,
-    tint: 0.12,
+    tint: 0,
     contrastMode: "auto",
-    fallback: dark ? "#0E1016" : "#FFFFFF",
+    fallback: dark ? "#101318" : "#F5F7FA",
   };
 }
 
 function makeDraft(
   seriesId: string,
   source?: VideoStyleDraft | null,
+  defaultAspectRatio: VideoAspectVariant = "16:9",
 ): VideoStyleDraft {
   const mode = source?.mode ?? "dark";
   const sourceTokens = source?.tokens;
@@ -232,11 +236,14 @@ function makeDraft(
     },
     components: { ...DEFAULT_COMPONENTS, ...(source?.components ?? {}) },
     motion: {
-      intensity: "restrained",
-      enterPreset: "fade-rise",
-      emphasisPreset: "soft-pulse",
-      transitionPreset: "cross-fade",
       ...(source?.motion ?? {}),
+      intensity: source?.motion?.intensity ?? "restrained",
+      enterPreset: source?.motion?.enterPreset ?? "fade-rise",
+      emphasisPreset:
+        source?.motion?.emphasisPreset === "soft-pulse"
+          ? "fade-rise"
+          : (source?.motion?.emphasisPreset ?? "fade-rise"),
+      transitionPreset: source?.motion?.transitionPreset ?? "cross-fade",
     },
     subtitle: {
       position: "bottom-center",
@@ -257,6 +264,10 @@ function makeDraft(
       "9:16": { enabled: false },
       "1:1": { enabled: false },
       ...(source?.aspectVariants ?? {}),
+      [defaultAspectRatio]: {
+        ...(source?.aspectVariants?.[defaultAspectRatio] ?? {}),
+        enabled: true,
+      },
     },
   };
 }
@@ -402,13 +413,17 @@ export function SeriesStyleEditor({
   onCancel,
   onDraftChange,
   currentVersion = 0,
+  defaultAspectRatio = "16:9",
   className,
 }: SeriesStyleEditorProps) {
   const { token } = useClient();
-  const [draft, setDraft] = useState(() => makeDraft(seriesId, initialDraft));
+  const [draft, setDraft] = useState(() =>
+    makeDraft(seriesId, initialDraft, defaultAspectRatio),
+  );
   const [activeSection, setActiveSection] = useState<EditorSection>("basics");
   const [backgroundRole, setBackgroundRole] = useState("default");
-  const [previewRatio, setPreviewRatio] = useState<VideoAspectVariant>("16:9");
+  const [previewRatio, setPreviewRatio] =
+    useState<VideoAspectVariant>(defaultAspectRatio);
   const [previewRole, setPreviewRole] = useState<PreviewRole>("cover");
   const [previewMode, setPreviewMode] = useState<"scene" | "background">(
     "scene",
@@ -421,6 +436,7 @@ export function SeriesStyleEditor({
   const [saveState, setSaveState] = useState<"saved" | "unsaved" | "error">(
     "saved",
   );
+  const [canceling, setCanceling] = useState(false);
   const [validating, setValidating] = useState(false);
   const [locking, setLocking] = useState(false);
   const [uploading, setUploading] = useState(false);
@@ -448,6 +464,8 @@ export function SeriesStyleEditor({
   const latestDraftRef = useRef(draft);
   const saveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const savedHideTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const savePromiseRef = useRef<Promise<boolean> | null>(null);
+  const saveBlockedRef = useRef(false);
   const brandBinding = draft.brandKit as
     | { id?: string; version?: number; name?: string; lockedFields?: string[] }
     | undefined;
@@ -456,6 +474,10 @@ export function SeriesStyleEditor({
   useEffect(() => {
     latestDraftRef.current = draft;
   }, [draft]);
+
+  useEffect(() => {
+    setPreviewRatio(defaultAspectRatio);
+  }, [defaultAspectRatio]);
 
   useEffect(() => {
     let cancelled = false;
@@ -514,7 +536,7 @@ export function SeriesStyleEditor({
     setSaveState("saved");
     setIssues([]);
     if (initialDraft) {
-      const next = makeDraft(seriesId, initialDraft);
+      const next = makeDraft(seriesId, initialDraft, defaultAspectRatio);
       setDraft(next);
       latestDraftRef.current = next;
       setLoading(false);
@@ -526,7 +548,7 @@ export function SeriesStyleEditor({
     fetchVideoStyleDraft(token, seriesId)
       .then((value) => {
         if (cancelled) return;
-        const next = makeDraft(seriesId, value);
+        const next = makeDraft(seriesId, value, defaultAspectRatio);
         setDraft(next);
         latestDraftRef.current = next;
         setError(null);
@@ -540,31 +562,38 @@ export function SeriesStyleEditor({
     return () => {
       cancelled = true;
     };
-  }, [initialDraft, seriesId, token]);
+  }, [defaultAspectRatio, initialDraft, seriesId, token]);
 
-  const persistDraft = useCallback(
-    async (value: VideoStyleDraft): Promise<boolean> => {
+  const persistDraft = useCallback((): Promise<boolean> => {
+    if (savePromiseRef.current) return savePromiseRef.current;
+    if (!dirtyRef.current || saveBlockedRef.current)
+      return Promise.resolve(!saveBlockedRef.current);
+
+    const saveLoop = async (): Promise<boolean> => {
       setSaving(true);
-      setSaveState("unsaved");
       try {
-        const result = await saveVideoStyleDraft(
-          token,
-          seriesId,
-          draftPayload(value),
-        );
-        if (!result.ok) throw new Error(result.error || "保存风格失败");
-        const latest = latestDraftRef.current;
-        const isCurrent = latest === value;
-        if (isCurrent) {
-          dirtyRef.current = false;
+        while (dirtyRef.current) {
+          const value = latestDraftRef.current;
+          setSaveState("unsaved");
+          const result = await saveVideoStyleDraft(
+            token,
+            seriesId,
+            draftPayload(value),
+          );
+          if (!result.ok) throw new Error(result.error || "保存风格失败");
           const nextRevision = result.revision ?? result.draft?.revision;
-          if (nextRevision !== undefined) {
-            const next = { ...latest, revision: nextRevision };
-            latestDraftRef.current = next;
-            setDraft(next);
-          }
+          if (nextRevision === undefined)
+            throw new Error("保存风格失败，请重试");
+
+          const latest = latestDraftRef.current;
+          const changedDuringSave = latest !== value;
+          const next = { ...latest, revision: nextRevision };
+          latestDraftRef.current = next;
+          dirtyRef.current = changedDuringSave;
+          setDraft(next);
+          setSaveState(changedDuringSave ? "unsaved" : "saved");
         }
-        setSaveState("saved");
+        saveBlockedRef.current = false;
         if (savedHideTimerRef.current) clearTimeout(savedHideTimerRef.current);
         savedHideTimerRef.current = setTimeout(
           () => setSaveState("saved"),
@@ -572,22 +601,29 @@ export function SeriesStyleEditor({
         );
         return true;
       } catch (e) {
+        saveBlockedRef.current = true;
         setError(e instanceof Error ? e.message : String(e));
         setSaveState("error");
         return false;
       } finally {
         setSaving(false);
       }
-    },
-    [seriesId, token],
-  );
+    };
+
+    const pending = saveLoop();
+    savePromiseRef.current = pending;
+    void pending.finally(() => {
+      if (savePromiseRef.current === pending) savePromiseRef.current = null;
+    });
+    return pending;
+  }, [seriesId, token]);
 
   useEffect(() => {
-    if (loading || !dirtyRef.current) return;
+    if (loading || !dirtyRef.current || saveBlockedRef.current) return;
     if (saveTimerRef.current) clearTimeout(saveTimerRef.current);
     saveTimerRef.current = setTimeout(() => {
       saveTimerRef.current = null;
-      void persistDraft(draft);
+      void persistDraft();
     }, 650);
     return () => {
       if (saveTimerRef.current) clearTimeout(saveTimerRef.current);
@@ -610,11 +646,37 @@ export function SeriesStyleEditor({
         return next;
       });
       dirtyRef.current = true;
-      setSaveState("unsaved");
-      setError(null);
+      if (savedHideTimerRef.current) {
+        clearTimeout(savedHideTimerRef.current);
+        savedHideTimerRef.current = null;
+      }
+      if (!saveBlockedRef.current) {
+        setSaveState("unsaved");
+        setError(null);
+      }
     },
     [onDraftChange],
   );
+
+  const handleCancel = useCallback(async () => {
+    if (canceling) return;
+    setCanceling(true);
+    if (saveTimerRef.current) {
+      clearTimeout(saveTimerRef.current);
+      saveTimerRef.current = null;
+    }
+    const saved = await persistDraft();
+    setCanceling(false);
+    if (saved) onCancel?.();
+  }, [canceling, onCancel, persistDraft]);
+
+  const handleRetrySave = useCallback(async () => {
+    if (saving || !saveBlockedRef.current) return;
+    saveBlockedRef.current = false;
+    setError(null);
+    setSaveState("unsaved");
+    await persistDraft();
+  }, [persistDraft, saving]);
 
   const updateColor = useCallback(
     (key: string, value: string) => {
@@ -641,12 +703,12 @@ export function SeriesStyleEditor({
 
   const handleApplyBrandKit = useCallback(
     async (kit: VideoBrandKit) => {
-      if (brandLoading || kit.latestVersion < 1) return;
+      if (brandLoading || saveBlockedRef.current || kit.latestVersion < 1)
+        return;
       setBrandLoading(true);
       setError(null);
       try {
-        if (dirtyRef.current && !(await persistDraft(latestDraftRef.current)))
-          return;
+        if (dirtyRef.current && !(await persistDraft())) return;
         const result = await applyVideoBrandKit(
           token,
           seriesId,
@@ -654,7 +716,7 @@ export function SeriesStyleEditor({
           kit.latestVersion,
         );
         if (!result.ok || !result.draft) {
-          throw new Error(result.error || "应用品牌套件失败");
+          throw new Error(result.error || "应用标识与配色失败");
         }
         applyBrandDraft(result.draft);
       } catch (brandError) {
@@ -669,15 +731,14 @@ export function SeriesStyleEditor({
   );
 
   const handleCreateBrandKit = useCallback(async () => {
-    if (brandLoading) return;
+    if (brandLoading || saveBlockedRef.current) return;
     setBrandLoading(true);
     setError(null);
     try {
-      if (dirtyRef.current && !(await persistDraft(latestDraftRef.current)))
-        return;
+      if (dirtyRef.current && !(await persistDraft())) return;
       const displayName = String(draft.name || seriesId);
       const result = await createVideoBrandKit(token, {
-        name: `${displayName} 品牌套件`,
+        name: `${displayName} 标识与配色`,
         displayName,
         tokens: {
           colors: draft.tokens?.colors,
@@ -685,7 +746,7 @@ export function SeriesStyleEditor({
         },
       });
       if (!result.ok || !result.brandKit || !result.version) {
-        throw new Error(result.error || "创建品牌套件失败");
+        throw new Error(result.error || "保存标识与配色失败");
       }
       const kit = {
         ...result.brandKit,
@@ -699,7 +760,7 @@ export function SeriesStyleEditor({
         kit.latestVersion,
       );
       if (!applied.ok || !applied.draft) {
-        throw new Error(applied.error || "应用品牌套件失败");
+        throw new Error(applied.error || "应用标识与配色失败");
       }
       applyBrandDraft(applied.draft);
     } catch (brandError) {
@@ -722,7 +783,7 @@ export function SeriesStyleEditor({
   const handlePickBrandLogo = useCallback(
     async (kit: VideoBrandKit, variant: "light" | "dark") => {
       if (!isTauri()) {
-        setError("请在 Mona 桌面端选择 Logo 图片");
+        setError("请在 Mona 桌面端选择标识图片");
         return;
       }
       try {
@@ -730,7 +791,7 @@ export function SeriesStyleEditor({
         const selected = await open({
           multiple: false,
           filters: [
-            { name: "品牌 Logo", extensions: ["png", "jpg", "jpeg", "webp"] },
+            { name: "标识图片", extensions: ["png", "jpg", "jpeg", "webp"] },
           ],
         });
         const path = Array.isArray(selected) ? selected[0] : selected;
@@ -759,7 +820,7 @@ export function SeriesStyleEditor({
         brandLogoRights,
       );
       if (!uploaded.ok || !uploaded.brandKit) {
-        throw new Error(uploaded.error || "Logo 上传失败");
+        throw new Error(uploaded.error || "图片上传失败");
       }
       const locked = await lockVideoBrandKit(
         token,
@@ -767,7 +828,7 @@ export function SeriesStyleEditor({
         uploaded.brandKit.revision,
       );
       if (!locked.ok || !locked.version) {
-        throw new Error(locked.error || "品牌新版本创建失败");
+        throw new Error(locked.error || "保存标识与配色失败");
       }
       const nextKit: VideoBrandKit = {
         ...uploaded.brandKit,
@@ -785,7 +846,7 @@ export function SeriesStyleEditor({
           nextKit.latestVersion,
         );
         if (!applied.ok || !applied.draft) {
-          throw new Error(applied.error || "品牌新版本应用失败");
+          throw new Error(applied.error || "应用标识与配色失败");
         }
         applyBrandDraft(applied.draft);
       }
@@ -887,11 +948,14 @@ export function SeriesStyleEditor({
         backgrounds: {
           ...(draft.backgrounds ?? {}),
           ...(backgroundRole === "default"
-            ? { default: { ...backgroundSlot, focalPoint: { x, y } } }
+            ? { default: { ...defaultBackgroundSlot, focalPoint: { x, y } } }
             : {
                 roles: {
                   ...(draft.backgrounds?.roles ?? {}),
-                  [backgroundRole]: { ...backgroundSlot, focalPoint: { x, y } },
+                  [backgroundRole]: {
+                    ...(draft.backgrounds?.roles?.[backgroundRole] ?? {}),
+                    focalPoint: { x, y },
+                  },
                 },
               }),
         },
@@ -900,7 +964,7 @@ export function SeriesStyleEditor({
     [
       activeSection,
       backgroundRole,
-      backgroundSlot,
+      defaultBackgroundSlot,
       draft.backgrounds,
       updateDraft,
     ],
@@ -921,7 +985,7 @@ export function SeriesStyleEditor({
         setError(
           result.error ||
             nextIssues.find((issue) => issue.severity === "error")?.message ||
-            "风格校验未通过",
+            "请调整未通过的文字可读性设置",
         );
         return false;
       }
@@ -935,18 +999,17 @@ export function SeriesStyleEditor({
   }, [seriesId, token]);
 
   const handleValidate = useCallback(async () => {
-    if (dirtyRef.current && !(await persistDraft(latestDraftRef.current)))
-      return;
+    if (saveBlockedRef.current) return;
+    if (dirtyRef.current && !(await persistDraft())) return;
     await validateDraft();
   }, [persistDraft, validateDraft]);
 
   const handleLock = useCallback(async () => {
-    if (locking) return;
+    if (locking || saveBlockedRef.current) return;
     setLocking(true);
     setError(null);
     try {
-      if (dirtyRef.current && !(await persistDraft(latestDraftRef.current)))
-        return;
+      if (dirtyRef.current && !(await persistDraft())) return;
       if (!(await validateDraft())) return;
       const result = await lockVideoStyle(
         token,
@@ -954,7 +1017,7 @@ export function SeriesStyleEditor({
         draftPayload(latestDraftRef.current),
       );
       if (!result.ok || !result.version) {
-        throw new Error(result.error || "锁定风格失败");
+        throw new Error(result.error || "保存风格失败");
       }
       onLocked?.(result.version);
     } catch (e) {
@@ -1029,12 +1092,17 @@ export function SeriesStyleEditor({
         backgrounds: {
           ...(draft.backgrounds ?? {}),
           ...(backgroundRole === "default"
-            ? { default: { ...backgroundSlot, assetId: result.asset.id } }
+            ? {
+                default: {
+                  ...defaultBackgroundSlot,
+                  assetId: result.asset.id,
+                },
+              }
             : {
                 roles: {
                   ...(draft.backgrounds?.roles ?? {}),
                   [backgroundRole]: {
-                    ...backgroundSlot,
+                    ...(draft.backgrounds?.roles?.[backgroundRole] ?? {}),
                     assetId: result.asset.id,
                   },
                 },
@@ -1050,7 +1118,7 @@ export function SeriesStyleEditor({
   }, [
     backgroundRights,
     backgroundRole,
-    backgroundSlot,
+    defaultBackgroundSlot,
     draft.backgrounds,
     pendingBackgroundPath,
     seriesId,
@@ -1065,20 +1133,44 @@ export function SeriesStyleEditor({
         backgrounds: {
           ...(draft.backgrounds ?? {}),
           ...(backgroundRole === "default"
-            ? { default: { ...backgroundSlot, ...patch } }
+            ? { default: { ...defaultBackgroundSlot, ...patch } }
             : {
                 roles: {
                   ...(draft.backgrounds?.roles ?? {}),
-                  [backgroundRole]: { ...backgroundSlot, ...patch },
+                  [backgroundRole]: {
+                    ...(draft.backgrounds?.roles?.[backgroundRole] ?? {}),
+                    ...patch,
+                  },
                 },
               }),
         },
       });
     },
-    [backgroundRole, backgroundSlot, draft.backgrounds, updateDraft],
+    [
+      backgroundRole,
+      defaultBackgroundSlot,
+      draft.backgrounds,
+      updateDraft,
+    ],
   );
 
-  const currentAspect = draft.aspectVariants?.[previewRatio];
+  const resetBackgroundRole = useCallback(() => {
+    if (backgroundRole === "default") return;
+    // null replaces the server's deep-merged role override; omission would retain it.
+    updateDraft({
+      backgrounds: {
+        ...(draft.backgrounds ?? {}),
+        roles: {
+          ...(draft.backgrounds?.roles ?? {}),
+          [backgroundRole]: null,
+        } as unknown as NonNullable<VideoStyleConfig["backgrounds"]>["roles"],
+      },
+    });
+  }, [backgroundRole, draft.backgrounds, updateDraft]);
+
+  const hasRoleBackgroundOverride =
+    backgroundRole !== "default" &&
+    Object.keys(draft.backgrounds?.roles?.[backgroundRole] ?? {}).length > 0;
 
   if (loading) {
     return (
@@ -1101,9 +1193,9 @@ export function SeriesStyleEditor({
       <div className="flex min-h-0 flex-1 flex-col lg:flex-row">
         <aside className="w-full shrink-0 border-b border-border/70 lg:w-[188px] lg:border-b-0 lg:border-r">
           <div className="border-b border-border/70 px-3 py-2.5">
-            <div className="text-ui font-medium">系列风格</div>
+            <div className="text-ui font-medium">我的风格</div>
             <div className="mt-1 truncate text-micro text-muted-foreground">
-              {seriesId}
+              {draft.name || "风格设置"}
             </div>
           </div>
           <nav
@@ -1148,132 +1240,132 @@ export function SeriesStyleEditor({
               >
                 <SectionHeading
                   id="style-basics-heading"
-                  title="基础风格"
-                  description="调整后会同步更新右侧四类场景预览。"
+                  title="配色与样式"
+                  description="这里保存一套可复用的画面颜色、字体和背景。"
                 />
                 <label className="block text-micro font-medium text-muted-foreground">
                   风格名称
                   <Input
                     className="mt-1 text-caption"
                     value={draft.name ?? ""}
-                    placeholder="例如：AI 编程实战课"
+                    placeholder="例如：品牌宣传视频"
                     onChange={(event) =>
                       updateDraft({ name: event.target.value })
                     }
                   />
                 </label>
-                <div className="rounded-lg border border-border/70 p-3">
-                  <div className="flex items-start justify-between gap-3">
-                    <div>
-                      <div className="flex items-center gap-1.5 text-caption font-medium">
-                        <ShieldCheck className="h-4 w-4 text-primary" />
-                        品牌套件
+                <details className="rounded-lg border border-border/70 p-3">
+                  <summary className="flex cursor-pointer items-center gap-1.5 text-caption font-medium">
+                    <ShieldCheck className="h-4 w-4 text-primary" />
+                    标识与配色（可选）
+                  </summary>
+                  <div className="mt-3">
+                    <div className="flex items-start justify-between gap-3">
+                      <div>
+                        <div className="text-micro text-muted-foreground">
+                          保存常用颜色和标识图片，之后可在其他风格中复用。
+                        </div>
                       </div>
-                      <div className="mt-1 text-micro text-muted-foreground">
-                        品牌套件独立于模板，可跨系列复用并锁定已发布的颜色与字体。
-                      </div>
+                      <Button
+                        type="button"
+                        variant="outline"
+                        size="sm"
+                        onClick={() => void handleCreateBrandKit()}
+                        disabled={brandLoading}
+                      >
+                        {brandLoading ? (
+                          <Loader2 className="mr-1.5 h-3.5 w-3.5 animate-spin" />
+                        ) : (
+                          <Save className="mr-1.5 h-3.5 w-3.5" />
+                        )}
+                        保存到我的标识与配色
+                      </Button>
                     </div>
-                    <Button
-                      type="button"
-                      variant="outline"
-                      size="sm"
-                      onClick={() => void handleCreateBrandKit()}
-                      disabled={brandLoading}
-                    >
-                      {brandLoading ? (
-                        <Loader2 className="mr-1.5 h-3.5 w-3.5 animate-spin" />
-                      ) : (
-                        <Save className="mr-1.5 h-3.5 w-3.5" />
-                      )}
-                      保存当前品牌
-                    </Button>
+                    {brandBinding ? (
+                      <div className="mt-3 rounded-md bg-primary/5 px-3 py-2 text-caption">
+                        <span className="font-medium">
+                          {brandBinding.name ?? brandBinding.id}
+                        </span>
+                        <span className="ml-1 text-muted-foreground">
+                          版本 {brandBinding.version} · 已固定 {lockedBrandFields.size} 项设置
+                        </span>
+                      </div>
+                    ) : null}
+                    {brandKits.length > 0 ? (
+                      <div className="mt-3 grid gap-1.5">
+                        {brandKits.map((kit) => {
+                          const applied = brandBinding?.id === kit.id;
+                          return (
+                            <div
+                              key={kit.id}
+                              className="flex items-center gap-1 rounded-md border border-border/70 p-1"
+                            >
+                              <Button
+                                type="button"
+                                variant="ghost"
+                                aria-label={`应用标识与配色：${kit.name}`}
+                                disabled={
+                                  brandLoading || kit.latestVersion < 1 || applied
+                                }
+                                onClick={() => void handleApplyBrandKit(kit)}
+                                className="h-auto min-w-0 flex-1 justify-between px-2 py-1.5 text-left"
+                              >
+                                <span>
+                                  <span className="block text-caption font-medium">
+                                    {kit.name}
+                                  </span>
+                                  <span className="block text-micro text-muted-foreground">
+                                    已保存版本 {kit.latestVersion} · 固定 {kit.lockedFields.length} 项设置
+                                  </span>
+                                </span>
+                                <span className="text-micro">
+                                  {applied ? "已应用" : "应用"}
+                                </span>
+                              </Button>
+                              <Button
+                                type="button"
+                                variant="ghost"
+                                size="sm"
+                                className="h-7 px-2 text-micro"
+                                aria-label={`${kit.name}深色背景标识图片`}
+                                disabled={brandLoading}
+                                onClick={() =>
+                                  void handlePickBrandLogo(kit, "light")
+                                }
+                              >
+                                <ImagePlus className="mr-1 h-3 w-3" />
+                                深色背景图片
+                              </Button>
+                              <Button
+                                type="button"
+                                variant="ghost"
+                                size="sm"
+                                className="h-7 px-2 text-micro"
+                                aria-label={`${kit.name}浅色背景标识图片`}
+                                disabled={brandLoading}
+                                onClick={() =>
+                                  void handlePickBrandLogo(kit, "dark")
+                                }
+                              >
+                                <ImagePlus className="mr-1 h-3 w-3" />
+                                浅色背景图片
+                              </Button>
+                            </div>
+                          );
+                        })}
+                      </div>
+                    ) : null}
                   </div>
-                  {brandBinding ? (
-                    <div className="mt-3 rounded-md bg-primary/5 px-3 py-2 text-caption">
-                      <span className="font-medium">
-                        {brandBinding.name ?? brandBinding.id}
-                      </span>
-                      <span className="ml-1 text-muted-foreground">
-                        v{brandBinding.version} · 已锁定{" "}
-                        {lockedBrandFields.size} 项
-                      </span>
-                    </div>
-                  ) : null}
-                  {brandKits.length > 0 ? (
-                    <div className="mt-3 grid gap-1.5">
-                      {brandKits.map((kit) => {
-                        const applied = brandBinding?.id === kit.id;
-                        return (
-                          <div
-                            key={kit.id}
-                            className="flex items-center gap-1 rounded-md border border-border/70 p-1"
-                          >
-                            <Button
-                              type="button"
-                              variant="ghost"
-                              aria-label={`应用品牌套件：${kit.name}`}
-                              disabled={
-                                brandLoading || kit.latestVersion < 1 || applied
-                              }
-                              onClick={() => void handleApplyBrandKit(kit)}
-                              className="h-auto min-w-0 flex-1 justify-between px-2 py-1.5 text-left"
-                            >
-                              <span>
-                                <span className="block text-caption font-medium">
-                                  {kit.name}
-                                </span>
-                                <span className="block text-micro text-muted-foreground">
-                                  最新 v{kit.latestVersion} · 锁定{" "}
-                                  {kit.lockedFields.length} 项
-                                </span>
-                              </span>
-                              <span className="text-micro">
-                                {applied ? "已应用" : "应用"}
-                              </span>
-                            </Button>
-                            <Button
-                              type="button"
-                              variant="ghost"
-                              size="sm"
-                              className="h-7 px-2 text-micro"
-                              aria-label={`${kit.name}深色背景 Logo`}
-                              disabled={brandLoading}
-                              onClick={() =>
-                                void handlePickBrandLogo(kit, "light")
-                              }
-                            >
-                              <ImagePlus className="mr-1 h-3 w-3" />
-                              深底 Logo
-                            </Button>
-                            <Button
-                              type="button"
-                              variant="ghost"
-                              size="sm"
-                              className="h-7 px-2 text-micro"
-                              aria-label={`${kit.name}浅色背景 Logo`}
-                              disabled={brandLoading}
-                              onClick={() =>
-                                void handlePickBrandLogo(kit, "dark")
-                              }
-                            >
-                              <ImagePlus className="mr-1 h-3 w-3" />
-                              浅底 Logo
-                            </Button>
-                          </div>
-                        );
-                      })}
-                    </div>
-                  ) : null}
-                </div>
+                </details>
                 <div className="rounded-md border border-border/70 px-3 py-2">
                   <div className="text-micro font-medium text-muted-foreground">
-                    基础模板
+                    起始风格
                   </div>
                   <div className="mt-1 text-caption font-medium">
-                    {TEMPLATE_NAMES[draft.baseTemplateId ?? ""] ?? "自定义风格"}
+                    {TEMPLATE_NAMES[draft.baseTemplateId ?? ""] ?? "自定义"}
                   </div>
                   <div className="mt-0.5 text-micro text-muted-foreground">
-                    模板决定组件结构；配色、字体、背景和动效可继续微调。
+                    仅提供画面风格参考，视频内容和排版由创作过程决定。
                   </div>
                 </div>
                 <div>
@@ -1298,9 +1390,9 @@ export function SeriesStyleEditor({
                             mode: value,
                             backgrounds: {
                               default: {
-                                ...backgroundSlot,
+                                ...defaultBackgroundSlot,
                                 overlay: {
-                                  ...(backgroundSlot.overlay ?? {}),
+                                  ...(defaultBackgroundSlot.overlay ?? {}),
                                   color:
                                     value === "dark"
                                       ? colors.background
@@ -1322,14 +1414,14 @@ export function SeriesStyleEditor({
                 </div>
                 <div>
                   <div className="mb-1 text-micro font-medium text-muted-foreground">
-                    主题色
+                    颜色
                   </div>
                   <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
                     {[
-                      ["primary", "主色", "#6C5CE7"],
-                      ["secondary", "辅助色", "#00C2A8"],
-                      ["background", "背景色", "#0E1016"],
-                      ["surface", "卡片色", "#171A23"],
+                      ["primary", "主色", DEFAULT_COLORS.primary],
+                      ["secondary", "辅助色", DEFAULT_COLORS.secondary],
+                      ["background", "背景色", DEFAULT_COLORS.background],
+                      ["surface", "卡片色", DEFAULT_COLORS.surface],
                     ].map(([key, label, fallback]) => (
                       <ColorPresetField
                         key={key}
@@ -1411,7 +1503,7 @@ export function SeriesStyleEditor({
                         },
                       })
                     }
-                    className="mt-2 w-full accent-primary"
+                    className="mt-2 w-full accent-[hsl(var(--brand-red))]"
                   />
                 </label>
               </section>
@@ -1424,23 +1516,23 @@ export function SeriesStyleEditor({
               >
                 <SectionHeading
                   id="style-background-heading"
-                  title="自定义背景图片"
-                  description="图片内容可以变化，但裁切、遮罩和文字安全区随系列风格继承。"
+                  title="背景图片"
+                  description="背景图片只影响画面；文字留白会自动调整。"
                 />
                 <label className="block text-micro font-medium text-muted-foreground">
-                  场景角色
+                  应用到
                   <Select
                     className="mt-1 h-8 !text-caption"
                     value={backgroundRole}
                     onValueChange={setBackgroundRole}
                     options={[
-                      { value: "default", label: "系列默认" },
+                      { value: "default", label: "全部画面" },
                       { value: "cover", label: "封面" },
                       { value: "chapter", label: "章节" },
                       { value: "content", label: "普通内容" },
                       { value: "data", label: "数据" },
                       { value: "comparison", label: "对比" },
-                      { value: "process", label: "流程" },
+                      { value: "process", label: "步骤" },
                       { value: "quote", label: "引用" },
                       { value: "outro", label: "结尾" },
                     ]}
@@ -1451,30 +1543,54 @@ export function SeriesStyleEditor({
                     <div>
                       <div className="text-caption font-medium">
                         {backgroundRole === "default"
-                          ? "系列默认背景"
-                          : "场景角色背景"}
+                          ? "默认背景"
+                          : `${PREVIEW_ROLES.find((role) => role.value === backgroundRole)?.label ?? "画面"}背景`}
                       </div>
                       <div className="mt-0.5 text-micro text-muted-foreground">
-                        {backgroundRole === "default"
-                          ? "没有场景专属背景时使用"
-                          : "未单独设置时继承系列默认背景"}
+                    {backgroundRole === "default"
+                      ? "其他画面没有单独背景时使用"
+                          : "其他画面继续使用默认背景"}
                       </div>
                     </div>
-                    <Button
-                      type="button"
-                      variant="outline"
-                      size="sm"
-                      className="h-8 !text-micro"
-                      onClick={() => void handleUploadBackground()}
-                      disabled={uploading}
-                    >
-                      {uploading ? (
-                        <Loader2 className="mr-1.5 h-3.5 w-3.5 animate-spin" />
-                      ) : (
-                        <ImagePlus className="mr-1.5 h-3.5 w-3.5" />
-                      )}
-                      {uploading ? "上传中…" : "选择图片"}
-                    </Button>
+                    <div className="flex shrink-0 flex-wrap items-center gap-1">
+                      {hasRoleBackgroundOverride ? (
+                        <Button
+                          type="button"
+                          variant="ghost"
+                          size="sm"
+                          className="h-8 !text-micro"
+                          onClick={resetBackgroundRole}
+                        >
+                          恢复默认
+                        </Button>
+                      ) : null}
+                      {backgroundSlot.assetId ? (
+                        <Button
+                          type="button"
+                          variant="ghost"
+                          size="sm"
+                          className="h-8 !text-micro"
+                          onClick={() => setBackgroundField({ assetId: null })}
+                        >
+                          移除图片
+                        </Button>
+                      ) : null}
+                      <Button
+                        type="button"
+                        variant="outline"
+                        size="sm"
+                        className="h-8 !text-micro"
+                        onClick={() => void handleUploadBackground()}
+                        disabled={uploading}
+                      >
+                        {uploading ? (
+                          <Loader2 className="mr-1.5 h-3.5 w-3.5 animate-spin" />
+                        ) : (
+                          <ImagePlus className="mr-1.5 h-3.5 w-3.5" />
+                        )}
+                        {uploading ? "上传中…" : "选择图片"}
+                      </Button>
+                    </div>
                   </div>
                   <div className="mt-3 flex items-center gap-2">
                     <span className="text-micro text-muted-foreground">
@@ -1487,7 +1603,7 @@ export function SeriesStyleEditor({
                         setBackgroundField({ assetPolicy: value })
                       }
                       options={[
-                        { value: "fixed", label: "系列固定" },
+                        { value: "fixed", label: "固定背景" },
                         { value: "episode-replaceable", label: "每期可替换" },
                       ]}
                     />
@@ -1506,7 +1622,7 @@ export function SeriesStyleEditor({
                     )}
                   </div>
                   <div className="mt-2 text-micro text-muted-foreground">
-                    支持 PNG、JPG、JPEG、WebP；上传后会复制到系列资产目录。
+                    支持 PNG、JPG、JPEG、WebP。
                   </div>
                 </div>
                 <div className="grid gap-3 sm:grid-cols-2">
@@ -1536,7 +1652,7 @@ export function SeriesStyleEditor({
                       onChange={(event) =>
                         setBackgroundField({ tint: Number(event.target.value) })
                       }
-                      className="mt-2 w-full accent-primary"
+                      className="mt-2 w-full accent-[hsl(var(--brand-red))]"
                     />
                   </label>
                   <label className="text-micro font-medium text-muted-foreground">
@@ -1559,7 +1675,7 @@ export function SeriesStyleEditor({
                           },
                         })
                       }
-                      className="mt-2 w-full accent-primary"
+                      className="mt-2 w-full accent-[hsl(var(--brand-red))]"
                     />
                   </label>
                   <label className="text-micro font-medium text-muted-foreground">
@@ -1582,7 +1698,7 @@ export function SeriesStyleEditor({
                           },
                         })
                       }
-                      className="mt-2 w-full accent-primary"
+                      className="mt-2 w-full accent-[hsl(var(--brand-red))]"
                     />
                   </label>
                   <label className="text-micro font-medium text-muted-foreground">
@@ -1605,7 +1721,7 @@ export function SeriesStyleEditor({
                           },
                         })
                       }
-                      className="mt-2 w-full accent-primary"
+                      className="mt-2 w-full accent-[hsl(var(--brand-red))]"
                     />
                   </label>
                   <label className="text-micro font-medium text-muted-foreground">
@@ -1619,13 +1735,12 @@ export function SeriesStyleEditor({
                       onChange={(event) =>
                         setBackgroundField({ blur: Number(event.target.value) })
                       }
-                      className="mt-2 w-full accent-primary"
+                      className="mt-2 w-full accent-[hsl(var(--brand-red))]"
                     />
                   </label>
                 </div>
                 <div className="rounded-md bg-muted/50 px-3 py-2 text-micro text-muted-foreground">
-                  文字可读性由服务端校验；修改背景只在保存风格草稿时写入，不会调用
-                  LLM。
+                  保存风格后，会检查文字是否清楚易读。
                 </div>
               </section>
             )}
@@ -1637,8 +1752,8 @@ export function SeriesStyleEditor({
               >
                 <SectionHeading
                   id="style-components-heading"
-                  title="文字与组件"
-                  description="选择常用字体；组件结构由模板锁定，保证系列每期一致。"
+                  title="文字与字号"
+                  description="选择标题和正文使用的字体、字号。"
                 />
                 <div className="grid gap-3 sm:grid-cols-2">
                   <label className="text-micro font-medium text-muted-foreground">
@@ -1718,26 +1833,6 @@ export function SeriesStyleEditor({
                     ]}
                   />
                 </label>
-                <div className="rounded-md border border-border/70">
-                  <div className="border-b border-border/70 px-3 py-2 text-caption font-medium">
-                    模板组件
-                  </div>
-                  {COMPONENT_ROLES.map((item) => (
-                    <div
-                      key={item.key}
-                      className="flex items-center justify-between gap-3 border-b border-border/50 px-3 py-2 text-micro last:border-b-0"
-                    >
-                      <span className="text-muted-foreground">
-                        {item.label}
-                      </span>
-                      <span className="font-medium">
-                        {componentDisplayName(
-                          draft.components?.[item.key] ?? item.fallback,
-                        )}
-                      </span>
-                    </div>
-                  ))}
-                </div>
               </section>
             )}
 
@@ -1748,11 +1843,11 @@ export function SeriesStyleEditor({
               >
                 <SectionHeading
                   id="style-motion-heading"
-                  title="动效与字幕"
-                  description="从常用预设中选择，系列内每期自动沿用。"
+                  title="字幕与动效"
+                  description="默认使用简单淡入；字幕会自动留在清晰、安全的位置。"
                 />
                 <label className="block text-micro font-medium text-muted-foreground">
-                  动效强度
+                  动效多少
                   <Select
                     className="mt-1 h-8 !text-caption"
                     value={String(draft.motion?.intensity ?? "restrained")}
@@ -1770,7 +1865,7 @@ export function SeriesStyleEditor({
                 </label>
                 <div className="grid gap-3 sm:grid-cols-2">
                   <label className="text-micro font-medium text-muted-foreground">
-                    入场方式
+                    画面出现
                     <Select
                       aria-label="入场方式"
                       className="mt-1 h-8 !text-caption"
@@ -1787,7 +1882,7 @@ export function SeriesStyleEditor({
                     />
                   </label>
                   <label className="text-micro font-medium text-muted-foreground">
-                    强调方式
+                    重点提示
                     <Select
                       aria-label="强调方式"
                       className="mt-1 h-8 !text-caption"
@@ -1806,7 +1901,7 @@ export function SeriesStyleEditor({
                     />
                   </label>
                   <label className="text-micro font-medium text-muted-foreground">
-                    场景切换
+                    场景之间的切换
                     <Select
                       aria-label="场景切换"
                       className="mt-1 h-8 !text-caption"
@@ -1910,11 +2005,11 @@ export function SeriesStyleEditor({
               >
                 <SectionHeading
                   id="style-advanced-heading"
-                  title="高级设置"
-                  description="高级参数仍受风格契约校验，锁定后会随版本快照保存。"
+                  title="其他颜色与画幅"
+                  description="常用设置已够用；需要时可在这里调整更多颜色和比例。"
                 />
                 <div className="rounded-md border border-border/70 px-3 py-2 text-micro text-muted-foreground">
-                  这些设置会随下一版系列风格一起保存，不影响已经完成的视频。
+                  保存新风格后，不会改变已经完成的视频。
                 </div>
                 <div className="grid gap-3 sm:grid-cols-2">
                   {[
@@ -1936,36 +2031,51 @@ export function SeriesStyleEditor({
                   <div className="mb-2 text-micro font-medium text-muted-foreground">
                     启用画面比例
                   </div>
+                  <div className="mb-2 text-micro text-muted-foreground">
+                    默认画幅始终启用，确保风格始终能用于创作。
+                  </div>
                   <div className="space-y-2">
-                    {ASPECTS.map((aspect) => (
-                      <label
-                        key={aspect.value}
-                        className="flex items-center justify-between rounded-md border border-border/70 px-3 py-2 text-caption"
-                      >
-                        <span>
-                          {aspect.label}{" "}
-                          <span className="ml-1 text-micro text-muted-foreground">
-                            {aspect.value}
+                    {ASPECTS.map((aspect) => {
+                      const aspectState =
+                        draft.aspectVariants?.[aspect.value];
+                      const isDefaultAspect =
+                        aspect.value === defaultAspectRatio;
+                      return (
+                        <label
+                          key={aspect.value}
+                          className="flex items-center justify-between rounded-md border border-border/70 px-3 py-2 text-caption"
+                        >
+                          <span>
+                            {aspect.label}{" "}
+                            <span className="ml-1 text-micro text-muted-foreground">
+                              {aspect.value}
+                            </span>
+                            {isDefaultAspect ? (
+                              <span className="ml-2 text-micro text-muted-foreground">
+                                默认，始终启用
+                              </span>
+                            ) : null}
                           </span>
-                        </span>
-                        <Checkbox
-                          checked={currentAspect?.enabled !== false}
-                          onCheckedChange={(checked) =>
-                            updateDraft({
-                              aspectVariants: {
-                                ...(draft.aspectVariants ?? {}),
-                                [aspect.value]: {
-                                  ...(draft.aspectVariants?.[aspect.value] ??
-                                    {}),
-                                  enabled: checked === true,
+                          <Checkbox
+                            checked={aspectState?.enabled !== false}
+                            disabled={isDefaultAspect}
+                            onCheckedChange={(checked) => {
+                              if (isDefaultAspect) return;
+                              updateDraft({
+                                aspectVariants: {
+                                  ...(draft.aspectVariants ?? {}),
+                                  [aspect.value]: {
+                                    ...(aspectState ?? {}),
+                                    enabled: checked === true,
+                                  },
                                 },
-                              },
-                            })
-                          }
-                          aria-label={`启用${aspect.label}`}
-                        />
-                      </label>
-                    ))}
+                              });
+                            }}
+                            aria-label={`启用${aspect.label}`}
+                          />
+                        </label>
+                      );
+                    })}
                   </div>
                 </div>
               </section>
@@ -1974,13 +2084,13 @@ export function SeriesStyleEditor({
 
           <section
             className="flex min-h-[320px] w-full shrink-0 flex-col border-t border-border/70 bg-muted/20 p-4 lg:w-[48%] lg:border-l lg:border-t-0"
-            aria-label="风格实时预览"
+            aria-label="样式预览"
           >
             <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
               <div>
-                <div className="text-caption font-medium">实时预览</div>
+                <div className="text-caption font-medium">样式预览</div>
                 <div className="text-micro text-muted-foreground">
-                  与最终场景使用同一个编译器
+                  预览会随设置更新
                 </div>
               </div>
               <div className="flex gap-1 rounded-md bg-muted p-1">
@@ -2018,7 +2128,7 @@ export function SeriesStyleEditor({
                     )}
                     onClick={() => setPreviewMode(mode)}
                   >
-                    {mode === "scene" ? "场景成片" : "背景定位"}
+                    {mode === "scene" ? "看整体效果" : "调整背景位置"}
                   </Button>
                 ))}
               </div>
@@ -2161,14 +2271,27 @@ export function SeriesStyleEditor({
             )}
           </div>
           <div className="flex gap-2">
+            {saveState === "error" ? (
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                className="h-8 !text-caption"
+                onClick={() => void handleRetrySave()}
+                disabled={saving}
+              >
+                重试保存
+              </Button>
+            ) : null}
             <Button
               type="button"
               variant="ghost"
               size="sm"
               className="h-8 !text-caption"
-              onClick={onCancel}
+              onClick={() => void handleCancel()}
+              disabled={canceling}
             >
-              取消
+              {canceling ? "保存后返回…" : "取消"}
             </Button>
             <Button
               type="button"
@@ -2179,7 +2302,7 @@ export function SeriesStyleEditor({
               disabled={validating || saving}
             >
               <Save className="mr-1.5 h-3.5 w-3.5" />
-              {validating ? "校验中…" : "校验风格"}
+              {validating ? "检查中…" : "检查文字可读性"}
             </Button>
             <Button
               type="button"
@@ -2192,8 +2315,8 @@ export function SeriesStyleEditor({
               }
               disabled={locking || saving || validating}
             >
-              <LockKeyhole className="mr-1.5 h-3.5 w-3.5" />
-              {locking ? "锁定中…" : "确认并锁定风格"}
+              <Save className="mr-1.5 h-3.5 w-3.5" />
+              {locking ? "保存中…" : "保存风格"}
             </Button>
           </div>
         </div>
@@ -2212,10 +2335,10 @@ export function SeriesStyleEditor({
 
       <AssetRightsDialog
         open={pendingBrandLogo !== null}
-        fileName={pendingBrandLogo?.path.split(/[\\/]/).pop() ?? "品牌 Logo"}
+        fileName={pendingBrandLogo?.path.split(/[\\/]/).pop() ?? "标识图片"}
         value={brandLogoRights}
         loading={brandLoading}
-        title="确认品牌 Logo 使用权"
+        title="确认标识图片使用权"
         onChange={setBrandLogoRights}
         onCancel={() => setPendingBrandLogo(null)}
         onConfirm={() => void handleConfirmBrandLogo()}
@@ -2224,10 +2347,9 @@ export function SeriesStyleEditor({
       <Dialog open={versionConfirmOpen} onOpenChange={setVersionConfirmOpen}>
         <DialogContent className="max-w-lg">
           <DialogHeader>
-            <DialogTitle>创建风格 v{currentVersion + 1}</DialogTitle>
+            <DialogTitle>保存为风格版本 {currentVersion + 1}</DialogTitle>
             <DialogDescription>
-              当前修改将保存为新版本，不会影响仍使用 v{currentVersion}{" "}
-              的已完成视频。
+              保存为新版本后，已经完成的视频保持不变。
             </DialogDescription>
           </DialogHeader>
           <div className="space-y-2 text-caption">
@@ -2238,15 +2360,15 @@ export function SeriesStyleEditor({
               />
               <span>
                 <span className="block font-medium">
-                  仅后续视频使用 v{currentVersion + 1}
+                  新视频使用版本 {currentVersion + 1}
                 </span>
                 <span className="mt-0.5 block text-micro text-muted-foreground">
-                  推荐，不触发旧视频重新生成
+                  已完成的视频不会自动重新生成
                 </span>
               </span>
             </div>
             <div className="rounded-md border border-border/70 p-3 text-muted-foreground">
-              创建后可在系列版本记录中选择旧视频升级。
+              如果需要，也可以之后单独更新某个视频。
             </div>
           </div>
           <DialogFooter>
@@ -2264,7 +2386,7 @@ export function SeriesStyleEditor({
                 void handleLock();
               }}
             >
-              创建 v{currentVersion + 1}
+              保存版本 {currentVersion + 1}
             </Button>
           </DialogFooter>
         </DialogContent>
@@ -2290,26 +2412,4 @@ function SectionHeading({
       <p className="mt-1 text-micro text-muted-foreground">{description}</p>
     </div>
   );
-}
-
-function componentDisplayName(componentId: string): string {
-  const names: Record<string, string> = {
-    "cover-split-v1": "左右分栏",
-    "cover-title-right-v1": "标题牌匾",
-    "cover-editorial-masthead-v1": "杂志大标题",
-    "cover-card-stack-v1": "立体卡片",
-    "content-outline-v1": "科技描边",
-    "content-column-v1": "编辑分栏",
-    "content-card-grid-v1": "知识卡片",
-    "metric-large-number-v1": "大数字指标",
-    "data-editorial-stat-v1": "编辑部数据",
-    "data-pill-row-v1": "立体指标卡",
-    "comparison-columns-v1": "双栏对比",
-    "comparison-ledger-v1": "清单对比",
-    "comparison-card-pair-v1": "卡片对比",
-    "outro-brand-v1": "品牌片尾",
-    "outro-editorial-v1": "杂志片尾",
-    "outro-card-v1": "卡片片尾",
-  };
-  return names[componentId] ?? "模板内置";
 }

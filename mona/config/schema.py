@@ -149,6 +149,10 @@ class AgentDefaults(Base):
     model_preset: str | None = None  # Active preset name — takes precedence over fields below
     model: str = "deepseek-v4-flash"
     provider: str = "auto"  # Provider name (e.g. "anthropic", "openrouter") or "auto" for auto-detection
+    executor: Literal["mona", "codex", "claude", "codebuddy"] = "mona"
+    native_model: str | None = Field(default=None, min_length=1, max_length=200)
+    native_reasoning_effort: str | None = Field(default=None, max_length=32)
+    native_context_window_tokens: int | None = Field(default=None, gt=0)
     max_tokens: int = 8192
     auto_compact_token_limit: int | None = Field(
         default=None,
@@ -214,7 +218,7 @@ class ModelGenerationParameters(Base):
 class ProviderConfig(Base):
     """LLM provider configuration."""
 
-    # Display name for user-created Cindy-compatible chat providers.
+    # Display name for user-created chat providers.
     display_name: str | None = None
     api_key: str | None = None
     api_base: str | None = None
@@ -279,12 +283,12 @@ class ProvidersConfig(Base):
     github_copilot: ProviderConfig = Field(default_factory=ProviderConfig, exclude=True)  # Github Copilot (OAuth)
     qianfan: ProviderConfig = Field(default_factory=ProviderConfig)  # Qianfan (百度千帆)
     nvidia: ProviderConfig = Field(default_factory=ProviderConfig)  # NVIDIA NIM (nvapi- keys)
-    # Cindy presets use hyphenated IDs, so they live in a keyed map instead of
+    # Dynamic presets use hyphenated IDs, so they live in a keyed map instead of
     # becoming one Python field per preset.
     cindy: dict[str, ProviderConfig] = Field(default_factory=dict)
 
     def get_provider_config(self, name: str) -> ProviderConfig | None:
-        """Return a built-in or Cindy chat provider config by public ID."""
+        """Return a built-in or dynamic chat provider config by public ID."""
         dynamic = self.cindy.get(name)
         if isinstance(dynamic, ProviderConfig):
             return dynamic

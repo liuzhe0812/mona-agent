@@ -102,18 +102,26 @@ function normalizedSoftwareName(value: string): string {
   return value.toLocaleLowerCase().replace(/[\s._\-()（）]+/g, "");
 }
 
+function failureMatchesSoftware(failure: SoftwareFailure, software: InstalledSoftware): boolean {
+  return failure.packageId.toLocaleLowerCase() === software.id.toLocaleLowerCase()
+    || normalizedSoftwareName(failure.name) === normalizedSoftwareName(software.name);
+}
+
 interface SoftwarePanelProps {
+  software: ReturnType<typeof useSoftwareManagement>;
   onHandoff: (task: SystemAgentHandoffTask) => void;
   showUpdatesRequest?: number;
   showStoreDetails?: boolean;
 }
 
-export function SoftwarePanel({ onHandoff, showUpdatesRequest = 0, showStoreDetails = true }: SoftwarePanelProps) {
+export function SoftwarePanel({ software, onHandoff, showUpdatesRequest = 0, showStoreDetails = true }: SoftwarePanelProps) {
   const {
     data,
     loading,
     error,
     workingIds,
+    updatingIds,
+    uninstallingId,
     lastAction,
     lastUninstall,
     progressMap,
@@ -122,11 +130,12 @@ export function SoftwarePanel({ onHandoff, showUpdatesRequest = 0, showStoreDeta
     uninstall,
     deleteResiduals,
     revealInExplorer,
-  } = useSoftwareManagement();
+  } = software;
   const maintenance = useMaintenanceHistory();
   const [activeSection, setActiveSection] = useState<SoftwareSection>("store");
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [selectedInstalledId, setSelectedInstalledId] = useState("");
+  const [lastUninstallTarget, setLastUninstallTarget] = useState<InstalledSoftware | null>(null);
   const [mineQuery, setMineQuery] = useState("");
   const [mineFilter, setMineFilter] = useState<MineFilter>("all");
   const [confirmingUninstall, setConfirmingUninstall] = useState(false);
@@ -148,7 +157,7 @@ export function SoftwarePanel({ onHandoff, showUpdatesRequest = 0, showStoreDeta
   }, [showUpdatesRequest]);
 
   useEffect(() => {
-    const candidates = lastUninstall?.success ? lastUninstall.residuals : [];
+    const candidates = lastUninstall?.success && !lastUninstall.pending ? lastUninstall.residuals : [];
     setSelectedResidualIds(new Set(candidates.filter((candidate) => candidate.recommended && candidate.canDelete).map((candidate) => candidate.id)));
     setRemovedResidualIds(new Set());
     setResidualDeleteResult(null);
@@ -169,7 +178,15 @@ export function SoftwarePanel({ onHandoff, showUpdatesRequest = 0, showStoreDeta
   const selectedInstalled = installed.find((software) => software.id === selectedInstalledId) ?? null;
   const uninstallEvents = (maintenance.data?.events ?? []).filter((event) => event.category === "卸载");
   const busy = workingIds.size > 0;
-  const visibleFailures = (data?.failures ?? []).filter((failure) => !handedOffFailures.has(dismissKey(failure)));
+  const visibleFailures = (data?.failures ?? []).filter((failure) => {
+    if (handedOffFailures.has(dismissKey(failure))) return false;
+    const matchesLastTarget = Boolean(lastUninstallTarget && failureMatchesSoftware(failure, lastUninstallTarget));
+    if (matchesLastTarget && (uninstallingId === lastUninstallTarget?.id || lastUninstall?.pending)) return false;
+    if (failure.action !== "uninstall") return true;
+    const installedMatch = installed.find((software) => failureMatchesSoftware(failure, software));
+    if (!installedMatch) return false;
+    return !(matchesLastTarget && lastUninstall !== null);
+  });
   const softwareRows = useMemo<MySoftwareRow[]>(() => {
     const matchedUpdateIds = new Set<string>();
     const rows: MySoftwareRow[] = installed.map((software) => {
@@ -232,7 +249,9 @@ export function SoftwarePanel({ onHandoff, showUpdatesRequest = 0, showStoreDeta
     });
   }, [mineFilter, mineQuery, softwareRows]);
   const visibleUpdates = filteredSoftwareRows.flatMap((row) => row.update ? [row.update] : []);
-  const residuals = lastUninstall?.success ? lastUninstall.residuals : [];
+  const residuals = lastUninstall?.success && !lastUninstall.pending ? lastUninstall.residuals : [];
+  const uninstallNeedsRestart = lastUninstall?.success && !lastUninstall.pending
+    && (lastUninstall.exitCode === 1641 || lastUninstall.exitCode === 3010);
   const visibleResiduals = residuals.filter((candidate) => !removedResidualIds.has(candidate.id));
   const recommendedResiduals = visibleResiduals.filter((candidate) => candidate.recommended && candidate.canDelete);
   const selectedResiduals = visibleResiduals.filter((candidate) => candidate.canDelete && selectedResidualIds.has(candidate.id));
@@ -256,12 +275,14 @@ export function SoftwarePanel({ onHandoff, showUpdatesRequest = 0, showStoreDeta
     return new Set(visibleUpdates.map((software) => software.id));
   });
 
-  const handleUninstall = async () => {
-    if (!selectedInstalled) return;
+  const handleUninstall = async (target: InstalledSoftware | null = selectedInstalled) => {
+    if (!target || busy || uninstallingId) return;
+    setLastUninstallTarget(target);
     setUninstallHandedOff(false);
     setUninstallDismissed(false);
-    await uninstall(selectedInstalled);
     setConfirmingUninstall(false);
+    const result = await uninstall(target);
+    if (!result) return;
     void maintenance.refresh();
   };
 
@@ -330,7 +351,7 @@ export function SoftwarePanel({ onHandoff, showUpdatesRequest = 0, showStoreDeta
         ))}
       </div>
 
-      {error && activeSection !== "store" && (
+      {error && activeSection !== "store" && !lastUninstall?.pending && (
         <StatusNotice tone="danger">软件信息读取失败：{error}</StatusNotice>
       )}
 
@@ -384,7 +405,8 @@ export function SoftwarePanel({ onHandoff, showUpdatesRequest = 0, showStoreDeta
               </thead>
               <tbody>
                 {filteredSoftwareRows.map((row) => {
-                  const isWorking = Boolean(row.update && workingIds.has(row.update.id));
+                  const isUninstalling = Boolean(row.installed && uninstallingId === row.installed.id);
+                  const isUpdating = Boolean(row.update && updatingIds.has(row.update.id));
                   const latest = row.update ? (progressMap[row.update.id] ?? []).at(-1) : undefined;
                   return (
                     <Fragment key={row.key}>
@@ -397,28 +419,29 @@ export function SoftwarePanel({ onHandoff, showUpdatesRequest = 0, showStoreDeta
                         <td>{row.update?.currentVersion || row.installed?.version || "未知"}</td>
                         <td>{row.update?.nextVersion || "—"}</td>
                         <td>{row.installed?.estimatedSizeBytes != null ? formatBytes(row.installed.estimatedSizeBytes) : "—"}</td>
-                        <td><StatusPill tone={row.failure ? "red" : isWorking ? "orange" : row.update ? "brand" : "neutral"}>{row.failure ? "处理失败" : isWorking ? "更新中" : row.update ? "可更新" : "已安装"}</StatusPill></td>
+                        <td><StatusPill tone={isUninstalling || isUpdating ? "orange" : row.failure ? "red" : row.update ? "brand" : "neutral"}>{isUninstalling ? "正在卸载" : isUpdating ? "更新中" : row.failure ? "处理失败" : row.update ? "可更新" : "已安装"}</StatusPill></td>
                         <td className="text-right">
                           <span className="inline-flex items-center justify-end gap-1">
                             {row.update ? <Button
-                              variant="interaction"
+                              variant="outline"
                               size="icon"
-                              aria-label={`${isWorking ? "正在更新" : "更新"} ${row.name}`}
-                              title={`${isWorking ? "正在更新" : "更新"} ${row.name}`}
+                              aria-label={`${isUpdating ? "正在更新" : "更新"} ${row.name}`}
+                              title={`${isUpdating ? "正在更新" : "更新"} ${row.name}`}
                               onClick={() => upgrade([row.update!])}
                               disabled={busy}
                             >
-                              {isWorking ? <Loader2 className="h-4 w-4 animate-spin" aria-hidden="true" /> : <CircleArrowUp className="h-4 w-4" aria-hidden="true" />}
+                              {isUpdating ? <Loader2 className="h-4 w-4 animate-spin" aria-hidden="true" /> : <CircleArrowUp className="h-4 w-4" aria-hidden="true" />}
                             </Button> : null}
                             {row.installed ? <Button
                               variant="dangerSoft"
                               size="icon"
-                              aria-label={`卸载 ${row.installed.name}`}
+                              aria-label={`${isUninstalling ? "正在卸载" : "卸载"} ${row.installed.name}`}
+                              aria-busy={isUninstalling}
                               aria-disabled={busy || !row.installed.canUninstall}
                               title={row.installed.canUninstall ? `卸载 ${row.installed.name}` : "该软件未提供卸载方式"}
                               disabled={busy || !row.installed.canUninstall}
                               onClick={() => { setSelectedInstalledId(row.installed!.id); setConfirmingUninstall(true); }}
-                            ><Trash2 className="h-4 w-4" aria-hidden="true" /></Button> : null}
+                            >{isUninstalling ? <Loader2 className="h-4 w-4 animate-spin" aria-hidden="true" /> : <Trash2 className="h-4 w-4" aria-hidden="true" />}</Button> : null}
                           </span>
                         </td>
                       </tr>
@@ -446,14 +469,27 @@ export function SoftwarePanel({ onHandoff, showUpdatesRequest = 0, showStoreDeta
 
           {updates.length > 0 && <div className="mt-3 flex flex-wrap items-center justify-between gap-3 rounded-lg bg-muted/30 p-2.5 text-caption">
             <span>已选择 {selectedUpdates.length} 项更新</span>
-            <Button size="sm" onClick={() => upgrade(selectedUpdates)} disabled={selectedUpdates.length === 0 || busy}>{busy ? "处理中" : "更新所选"}</Button>
+            <Button variant="outline" size="sm" onClick={() => upgrade(selectedUpdates)} disabled={selectedUpdates.length === 0 || busy}>{busy ? "处理中" : "更新所选"}</Button>
           </div>}
-          {lastAction && <p role="status" className="mt-2 text-caption text-success">{lastAction}</p>}
+          {lastAction && <p role="status" className="mt-2 text-caption text-muted-foreground">{lastAction}</p>}
+
+          {lastUninstall?.pending && <StatusNotice
+            tone="info"
+            title="卸载结果待确认"
+            className="mt-3"
+            action={<Button variant="outline" size="sm" onClick={() => void refresh()} disabled={loading || busy}>重新扫描</Button>}
+          >
+            已请求卸载“{lastUninstallTarget?.name ?? "软件"}”，目前无法确认结果。请刷新列表核对当前状态；系统不会自动重复卸载。
+            {lastUninstall.diagnostic && <details className="mt-1 text-micro">
+              <summary className="cursor-pointer">查看详情</summary>
+              <p className="mt-1 break-words">{displaySoftwareText(lastUninstall.diagnostic)}</p>
+            </details>}
+          </StatusNotice>}
 
           {confirmingUninstall && selectedInstalled && <div className="mt-3 flex flex-wrap items-center gap-3 rounded-lg border border-warning/30 bg-warning/5 p-3 text-caption">
             <AlertTriangle className="h-4 w-4 text-warning" /><span className="flex-1">将精确匹配并卸载“{selectedInstalled.name}”。卸载后仅展示检测到的残留候选，不会自动删除。</span>
-            <Button variant="outline" size="sm" onClick={() => setConfirmingUninstall(false)}>取消</Button>
-            <Button variant="destructive" size="sm" onClick={handleUninstall} aria-label={`确认卸载 ${selectedInstalled.name}`}>确认卸载</Button>
+            <Button variant="outline" size="sm" onClick={() => setConfirmingUninstall(false)} disabled={busy}>取消</Button>
+            <Button variant="destructive" size="sm" onClick={() => void handleUninstall()} disabled={busy} aria-label={`确认卸载 ${selectedInstalled.name}`}>确认卸载</Button>
           </div>}
         </PanelCard>
       )}
@@ -486,9 +522,12 @@ export function SoftwarePanel({ onHandoff, showUpdatesRequest = 0, showStoreDeta
 
       {activeSection === "mine" && <PanelCard title="卸载与残留检测">
         {!lastUninstall && <p className="text-caption text-muted-foreground">完成卸载后，将在此显示检测到的残留候选；系统不会自动删除任何文件。</p>}
-        {lastUninstall?.success && residuals.length === 0 && !residualDeleteResult && (
+        {lastUninstall?.success && !lastUninstall.pending && residuals.length === 0 && !residualDeleteResult && !uninstallNeedsRestart && (
           <p role="status" className="text-caption text-success">已确认卸载完成，未发现高置信度残留候选。</p>
         )}
+        {uninstallNeedsRestart && <StatusNotice tone="info" title="卸载已完成，需要重启" className="mt-3">
+          重启电脑后即可完成卸载。{lastUninstall?.message ? ` ${displaySoftwareText(lastUninstall.message)}` : ""}
+        </StatusNotice>}
         {lastUninstall?.success && visibleResiduals.length > 0 && (
           <div className="space-y-2">
             <div className="flex flex-wrap items-center gap-2 text-caption font-medium text-warning">
@@ -580,22 +619,24 @@ export function SoftwarePanel({ onHandoff, showUpdatesRequest = 0, showStoreDeta
           </StatusNotice>
         )}
         {residualActionError && <StatusNotice tone="danger" className="mt-3">{residualActionError}</StatusNotice>}
-        {lastUninstall && !lastUninstall.success && !uninstallHandedOff && !uninstallDismissed && (
+        {lastUninstall && !lastUninstall.success && !lastUninstall.pending && !uninstallHandedOff && !uninstallDismissed && (
           <TaskFailureNotice
-            title={`卸载 ${selectedInstalled?.name ?? "软件"} 失败`}
+            title={`卸载 ${lastUninstallTarget?.name ?? selectedInstalled?.name ?? "软件"} 失败`}
             detail={displaySoftwareText(lastUninstall.message) || "安装服务未返回详细原因"}
-            onRetry={() => void handleUninstall()}
+            onRetry={lastUninstallTarget && installed.some((software) => software.id === lastUninstallTarget.id)
+              ? () => void handleUninstall(lastUninstallTarget)
+              : undefined}
             onHandoff={() => {
               setUninstallHandedOff(true);
               onHandoff({
                 id: crypto.randomUUID(),
-                title: `卸载 ${selectedInstalled?.name ?? "软件"}`,
+                title: `卸载 ${lastUninstallTarget?.name ?? selectedInstalled?.name ?? "软件"}`,
                 action: "卸载软件",
-                target: selectedInstalled?.name ?? "软件",
+                target: lastUninstallTarget?.name ?? selectedInstalled?.name ?? "软件",
                 arguments: {
-                  id: selectedInstalled?.id ?? null,
-                  name: selectedInstalled?.name ?? null,
-                  installLocation: selectedInstalled?.installLocation || null,
+                  id: lastUninstallTarget?.id ?? selectedInstalled?.id ?? null,
+                  name: lastUninstallTarget?.name ?? selectedInstalled?.name ?? null,
+                  installLocation: lastUninstallTarget?.installLocation || selectedInstalled?.installLocation || null,
                 },
                 error: displaySoftwareText(lastUninstall.message) || "安装服务未返回详细原因",
               });

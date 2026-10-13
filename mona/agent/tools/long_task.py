@@ -1,4 +1,4 @@
-﻿"""Sustained goal tools on the main agent (Codex-style).
+﻿"""Sustained goal tools on the main agent.
 
 Follow the built-in **long-goal** skill for lifecycle rules and how to phrase
 objectives (especially **idempotent**, compaction-safe goals). Load that skill

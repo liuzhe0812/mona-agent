@@ -1,14 +1,14 @@
 {
   "schemaVersion": 1,
   "id": "minimal-business",
-  "name": "山河新章",
-  "description": "暖调东方编辑风格，以克制的竖向标尺、印章色块和纸张层次承载文化、城市与品牌叙事。",
+  "name": "简洁浅色",
+  "description": "浅色背景、衬线标题与克制的红色重点，适合讲解和分享。",
   "baseTemplateId": "minimal-business",
   "mode": "light",
   "tokens": {
     "colors": {
       "primary": "#A62920",
-      "secondary": "#174F43",
+      "secondary": "#67584A",
       "accent": "#C69A4B",
       "background": "#F2E5CC",
       "surface": "#FFF8E9",
@@ -24,17 +24,17 @@
       "bodyFamily": "Noto Sans SC",
       "scale": "large",
       "headingWeight": 700,
-      "bodyWeight": 500,
-      "headingLineHeight": 1.15,
+      "bodyWeight": 400,
+      "headingLineHeight": 1.2,
       "bodyLineHeight": 1.55
     },
     "shape": {
       "cardRadius": 4,
       "cardStyle": "solid",
       "density": "spacious",
-      "shadow": "paper",
-      "borderWidth": 2,
-      "shadowOpacity": 0.18
+      "shadow": "none",
+      "borderWidth": 1,
+      "shadowOpacity": 0
     },
     "spacing": {
       "unit": 8,
@@ -61,15 +61,15 @@
     "quote-accent",
     "outro-brand"
   ],
-  "allowedAnimations": ["fade-rise", "stagger-rise", "soft-pulse", "cross-fade"],
+  "allowedAnimations": ["fade-rise", "stagger-rise", "cross-fade"],
   "motion": {
-    "intensity": "standard",
-    "enterPreset": "stagger-rise",
-    "emphasisPreset": "soft-pulse",
+    "intensity": "restrained",
+    "enterPreset": "fade-rise",
+    "emphasisPreset": "fade-rise",
     "transitionPreset": "cross-fade",
     "enterDurationMs": 520,
-    "staggerMs": 95,
-    "transitionDurationMs": 560
+    "staggerMs": 0,
+    "transitionDurationMs": 420
   },
   "backgrounds": {
     "default": {
@@ -94,7 +94,7 @@
       "outro": {"inherit": "default"}
     }
   },
-  "subtitle": {"position": "bottom-center", "style": "caption-rail", "maxLines": 2},
+  "subtitle": {"position": "bottom-center", "style": "caption-rail", "fontSize": 36, "lineHeight": 1.35, "safeAreaBottom": 0.08, "maxLines": 2},
   "aspectVariants": {
     "16:9": {"enabled": true},
     "9:16": {"enabled": true},

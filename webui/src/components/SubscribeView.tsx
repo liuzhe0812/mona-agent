@@ -6,10 +6,10 @@ import { Check, Copy, Loader2, Mail, RotateCcw, Zap } from "lucide-react";
 import { isTauri } from "@/lib/tauri";
 
 const PRO_BENEFITS = [
-  "让 Mona 理解你的工作上下文",
-  "解锁笔记 AI、邮件 AI 与知识库 AI",
-  "解锁数据库 AI 与终端 AI",
-  "使用股票工作台 AI 诊股",
+  "最多 3 台设备登录",
+  "10GB 个人云空间",
+  "Work 会话与关联文件同步",
+  "云端历史版本恢复",
 ];
 
 interface SubscribeViewProps {
@@ -179,7 +179,7 @@ export function SubscribeView({
           </div>
         ))}
         <p className="pt-1 text-xs text-muted-foreground">
-          Pro 为软件功能权益；Mona AI 模型调用余额需单独充值，我的 API Key 不扣余额。
+          本地 AI 功能免费；Pro 不含模型额度，自带 API Key 或 CLI 不扣 Mona 余额。云同步以账户设置中的服务可用状态为准。
         </p>
       </div>
 
@@ -288,7 +288,7 @@ export function SubscribeView({
 
       {licenseActive && serverTrial && (
         <p className="text-center text-sm text-amber-600">
-          当前为 Mona Pro 全功能试用，购买后可延续全部权益。
+          历史软件试用不包含多设备登录和云空间权益。
         </p>
       )}
 

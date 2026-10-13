@@ -116,6 +116,10 @@ def _cues_from_words(words: list[dict[str, Any]], max_chars: int) -> list[dict[s
                 }
             )
             group = []
+    # Provider rounding can make adjacent word groups overlap by a millisecond.
+    for cue, following in zip(cues, cues[1:]):
+        if cue["startMs"] < following["startMs"] < cue["endMs"]:
+            cue["endMs"] = following["startMs"]
     return cues
 
 
@@ -212,7 +216,7 @@ def _effect(allowed: set[str], *preferences: str) -> str:
     for candidate in preferences:
         if candidate in allowed:
             return candidate
-    return "fade-rise"
+    return "fade-rise" if "fade-rise" in allowed else sorted(allowed)[0]
 
 
 def _cue_start(cues: list[Mapping[str, Any]], index: int, fallback: int) -> int:
@@ -225,6 +229,7 @@ def build_motion_plan(
     *,
     allowed_effects: Iterable[str] = _EFFECTS,
     intensity: str = "standard",
+    motion_preferences: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Build semantic, script-aligned motion beats for one scene."""
 
@@ -235,6 +240,10 @@ def build_motion_plan(
     allowed = {str(item) for item in allowed_effects if str(item) in _EFFECTS}
     if not allowed:
         allowed = {"fade-rise"}
+    preferences = motion_preferences or {}
+    enter = str(preferences.get("enterPreset") or "")
+    emphasis = str(preferences.get("emphasisPreset") or "")
+    intensity = str(preferences.get("intensity") or intensity)
     beats: list[dict[str, Any]] = []
 
     def add(target: str, effect: str, start_ms: int, length_ms: int, trigger: str) -> None:
@@ -252,17 +261,17 @@ def build_motion_plan(
             }
         )
 
-    add("title", _effect(allowed, "fade-rise", "cross-fade"), 0, 720, "scene-start")
+    add("title", _effect(allowed, enter, "fade-rise", "cross-fade"), 0, 720, "scene-start")
     if role == "cover":
-        add("visual", _effect(allowed, "soft-pulse", "fade-rise"), _cue_start(cues, 0, 700), 900, "cue-01")
-        add("body", _effect(allowed, "cross-fade", "fade-rise"), _cue_start(cues, 1, 1300), 650, "cue-02")
+        add("visual", _effect(allowed, emphasis, "soft-pulse", "fade-rise"), _cue_start(cues, 0, 700), 900, "cue-01")
+        add("body", _effect(allowed, enter, "cross-fade", "fade-rise"), _cue_start(cues, 1, 1300), 650, "cue-02")
     elif role in {"data", "comparison"}:
-        add("body", _effect(allowed, "cross-fade", "fade-rise"), _cue_start(cues, 0, 600), 550, "cue-01")
+        add("body", _effect(allowed, enter, "cross-fade", "fade-rise"), _cue_start(cues, 0, 600), 550, "cue-01")
         target_prefix = "metric" if role == "data" else "comparison"
         for index in range(min(3, max(1, len(cues)))):
             add(
                 f"{target_prefix}.{index}",
-                _effect(allowed, "count-up", "stagger-rise", "fade-rise"),
+                _effect(allowed, emphasis, "count-up", "stagger-rise", "fade-rise"),
                 _cue_start(cues, index, 900 + index * 500),
                 700,
                 f"cue-{index + 1:02d}",
@@ -271,19 +280,19 @@ def build_motion_plan(
         for index in range(min(4, max(1, len(cues)))):
             add(
                 f"step.{index}",
-                _effect(allowed, "stagger-rise", "fade-rise"),
+                _effect(allowed, enter, "stagger-rise", "fade-rise"),
                 _cue_start(cues, index, 650 + index * 550),
                 650,
                 f"cue-{index + 1:02d}",
             )
     elif role == "outro":
-        add("brand", _effect(allowed, "soft-pulse", "cross-fade"), _cue_start(cues, 0, 700), 850, "cue-01")
+        add("brand", _effect(allowed, emphasis, "soft-pulse", "cross-fade"), _cue_start(cues, 0, 700), 850, "cue-01")
     else:
-        add("body", _effect(allowed, "cross-fade", "fade-rise"), _cue_start(cues, 0, 650), 600, "cue-01")
+        add("body", _effect(allowed, enter, "cross-fade", "fade-rise"), _cue_start(cues, 0, 650), 600, "cue-01")
         for index in range(min(3, max(0, len(cues) - 1))):
             add(
                 f"item.{index}",
-                _effect(allowed, "stagger-rise", "fade-rise"),
+                _effect(allowed, enter, "stagger-rise", "fade-rise"),
                 _cue_start(cues, index + 1, 1100 + index * 500),
                 600,
                 f"cue-{index + 2:02d}",
@@ -296,6 +305,12 @@ def build_motion_plan(
         "scriptHash": str(subtitle_track.get("sourceTextHash") or ""),
         "beats": sorted(beats, key=lambda item: (item["startMs"], item["id"])),
     }
+    if preferences:
+        transition_ms = preferences.get("transitionDurationMs", 420)
+        if isinstance(transition_ms, bool) or not isinstance(transition_ms, (int, float)) or not 0 <= transition_ms <= 5000:
+            raise VideoTimelineError("场景切换时长必须在 0 到 5000ms 之间", path="$.transitionDurationMs")
+        plan["transitionPreset"] = _effect(allowed, str(preferences.get("transitionPreset") or ""), "cross-fade")
+        plan["transitionDurationMs"] = min(duration_ms, int(transition_ms))
     validate_motion_plan(plan, allowed_effects=allowed)
     return plan
 
