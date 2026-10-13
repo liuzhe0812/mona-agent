@@ -194,6 +194,7 @@ def _sha256(path: Path) -> str:
                 ),
                 "presetFamily": StringSchema("For capabilities: optional preset family filter", nullable=True),
                 "presetTheme": StringSchema("For capabilities: dark-product or light-editorial", nullable=True),
+                "presetScenario": StringSchema("For capabilities: scenario ID from presetScenarios; filters templates by presentation purpose", nullable=True),
                 "slideIds": ArraySchema(
                     StringSchema("Stable slide ID"),
                     description="Slides to inspect, up to 50",

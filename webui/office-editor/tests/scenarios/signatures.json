@@ -1,0 +1,236 @@
+{
+  "schemaVersion": 1,
+  "decks": [
+    {
+      "name": "scenario-signatures",
+      "pages": [
+        {
+          "name": "report-project-status",
+          "presetId": "report-project-status",
+          "content": {
+            "title": "项目工作进展与问题",
+            "summary": "目标、当前进展与待处理事项并列呈现。",
+            "takeaway": "先解决依赖阻塞，再推进试点交付。",
+            "theme": "light-editorial",
+            "relation": "parallel",
+            "nodes": ["已完成", "进行中", "待解决"],
+            "items": [
+              "需求范围与验收口径已对齐，主要材料完成整理。",
+              "核心流程完成联调，正在检查关键路径。",
+              "测试环境访问权限待确认，影响试点启动。"
+            ]
+          }
+        },
+        {
+          "name": "product-feature-proof",
+          "presetId": "product-feature-proof",
+          "content": {
+            "title": "产品能力与界面证据",
+            "summary": "使用实际工作台截图说明可见功能。",
+            "takeaway": "每条说明都对应真实界面内容。",
+            "theme": "dark-product",
+            "relation": "none",
+            "nodes": ["主题入口", "画幅设置", "项目继续"],
+            "items": [
+              "输入视频主题，明确希望制作的内容。",
+              "选择画面比例，匹配不同发布渠道。",
+              "从历史项目列表继续已有工作。"
+            ],
+            "image": {
+              "assetPath": "../presets/assets/product-workspace.png",
+              "width": 2880,
+              "height": 1704,
+              "fit": "contain"
+            }
+          }
+        },
+        {
+          "name": "technical-layer-stack",
+          "presetId": "technical-layer-stack",
+          "content": {
+            "title": "三层服务架构",
+            "summary": "请求由界面进入服务，再访问持久化数据。",
+            "takeaway": "各层职责清楚，交互方向保持单向。",
+            "theme": "dark-product",
+            "relation": "sequence",
+            "nodes": ["交互层", "服务层", "数据层"],
+            "items": [
+              "界面收集主题与参数后发起任务。",
+              "服务校验输入，组织生成与状态流转。",
+              "数据层保存任务记录和可交付内容。"
+            ]
+          }
+        },
+        {
+          "name": "data-driver-review",
+          "presetId": "data-driver-review",
+          "content": {
+            "title": "关键驱动指标复盘",
+            "summary": "图中数值均为演示数据，用于说明趋势解读。",
+            "takeaway": "先核对波动来源，再讨论增长原因。",
+            "theme": "light-editorial",
+            "relation": "none",
+            "items": [
+              "四季度触达指数最高，整体走势回升。",
+              "三季度短暂回落，值得核对活动安排。",
+              "内容复用是待验证的解释假设，不代表因果。"
+            ],
+            "chart": {
+              "kind": "bar",
+              "categories": ["一季度", "二季度", "三季度", "四季度"],
+              "series": [
+                {"name": "触达指数（演示）", "values": [62, 74, 69, 86]}
+              ],
+              "legendPos": "none",
+              "gridlines": true,
+              "dataLabels": true,
+              "catAxisTitle": "季度（演示）",
+              "valAxisTitle": "指数（演示）"
+            }
+          }
+        },
+        {
+          "name": "strategy-decision-options",
+          "presetId": "strategy-decision-options",
+          "content": {
+            "title": "三种推进方案",
+            "summary": "并列查看推进节奏、资源要求与适用条件。",
+            "takeaway": "按紧迫度和可用资源选择试点路径。",
+            "theme": "dark-product",
+            "relation": "parallel",
+            "nodes": ["稳步推进", "快速试点", "合作交付"],
+            "items": [
+              "先补齐流程与材料，适合需求稳定的团队。",
+              "聚焦核心场景验证，适合时间较紧的团队。",
+              "与现有伙伴分工，适合内部资源有限时。"
+            ]
+          }
+        },
+        {
+          "name": "research-method-findings",
+          "presetId": "research-method-findings",
+          "content": {
+            "title": "研究方法与主要发现",
+            "summary": "把采集方式和观察结果分开表达。",
+            "takeaway": "结论只覆盖当前样本与观察范围。",
+            "theme": "light-editorial",
+            "relation": "parallel",
+            "nodes": ["研究方法", "主要发现"],
+            "items": [
+              "访谈一线使用者，并对照任务记录梳理共性问题。",
+              "重复出现的等待集中在资料整理与交接环节。"
+            ]
+          }
+        },
+        {
+          "name": "pitch-business-model",
+          "presetId": "pitch-business-model",
+          "content": {
+            "title": "业务模式的三个组成部分",
+            "summary": "从客户价值连接交付方式与收入来源。",
+            "takeaway": "三部分需相互支撑，形成可持续服务。",
+            "theme": "light-editorial",
+            "relation": "parallel",
+            "nodes": ["客户价值", "服务交付", "收入来源"],
+            "items": [
+              "帮助团队减少重复整理，集中精力完成决策。",
+              "通过标准流程与专业支持完成实际部署。",
+              "按持续服务范围收取订阅或项目费用。"
+            ]
+          }
+        },
+        {
+          "name": "investment-risk-scenarios",
+          "presetId": "investment-risk-scenarios",
+          "content": {
+            "title": "投资回报情景分析",
+            "summary": "周期为测算演示值，不代表投资预测。",
+            "takeaway": "按假设变化准备应对区间，不承诺单点结果。",
+            "theme": "dark-product",
+            "relation": "parallel",
+            "nodes": ["谨慎情景", "基准情景", "积极情景"],
+            "items": [
+              "需求放缓，回收期约30个月（演示）；先保障现金流。",
+              "按计划推进，回收期约24个月（演示）；控制扩张节奏。",
+              "需求增长较快，回收期约18个月（演示）；提前准备交付。"
+            ]
+          }
+        },
+        {
+          "name": "brand-concept-proposal",
+          "presetId": "brand-concept-proposal",
+          "content": {
+            "title": "Mona 品牌创意主张",
+            "summary": "黑猫意象表达专注、可靠与清晰行动。",
+            "takeaway": "保留鲜明识别，减少多余装饰。",
+            "theme": "light-editorial",
+            "relation": "none",
+            "nodes": ["识别主张", "应用延展"],
+            "items": [
+              "青色眼睛与黑猫轮廓建立稳定识别。",
+              "红色几何底形强化行动感，界面保持克制。"
+            ],
+            "image": {
+              "assetPath": "../presets/assets/brand-square.png",
+              "width": 512,
+              "height": 512,
+              "fit": "contain"
+            }
+          }
+        },
+        {
+          "name": "story-milestones",
+          "presetId": "story-milestones",
+          "content": {
+            "title": "产品成长关键节点",
+            "summary": "时间节点与工作成果均为演示，不对应真实版本记录。",
+            "takeaway": "每个阶段都为下一步积累可复用经验。",
+            "theme": "dark-product",
+            "relation": "sequence",
+            "nodes": ["2024年（演示）", "2025年（演示）", "2026年（演示）"],
+            "items": [
+              "完成核心工作台的方向验证。",
+              "围绕使用反馈补齐内容流程。",
+              "将成熟流程推广到更多工作场景。"
+            ]
+          }
+        },
+        {
+          "name": "event-run-of-show",
+          "presetId": "event-run-of-show",
+          "content": {
+            "title": "发布会流程安排",
+            "summary": "以下时段为活动编排演示，可按现场情况调整。",
+            "takeaway": "为转场与现场提问预留弹性。",
+            "theme": "dark-product",
+            "relation": "sequence",
+            "nodes": ["09:00（演示）", "09:20（演示）", "10:00（演示）", "10:30（演示）"],
+            "items": [
+              "签到入场：引导来宾就座并领取资料。",
+              "开场致辞：介绍活动目标与参与嘉宾。",
+              "主题分享：展示方案背景和核心内容。",
+              "交流答疑：整理问题并说明后续沟通。"
+            ]
+          }
+        },
+        {
+          "name": "education-practice",
+          "presetId": "education-practice",
+          "content": {
+            "title": "从问题到练习检查",
+            "summary": "先明确难点，再练习并检查理解。",
+            "takeaway": "检查点用于发现误解并指导下一步练习。",
+            "theme": "light-editorial",
+            "relation": "sequence",
+            "nodes": ["识别问题", "完成练习", "检查理解"],
+            "items": [
+              "指出题目中最难理解的概念或条件。",
+              "按示范方法独立完成同类任务。",
+              "对照检查点说明依据并修正错误。"
+            ]
+          }
+        }
+      ]
+    }
+  ]
+}

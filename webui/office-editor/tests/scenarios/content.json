@@ -1,0 +1,3341 @@
+{
+  "schemaVersion": 1,
+  "note": "12 个原生 PPT 场景的代表页；示例文字、数值与产品界面素材仅用于排版验收。",
+  "decks": [
+    {
+      "name": "business-report",
+      "pages": [
+        {
+          "name": "light-cover-split",
+          "presetId": "light-cover-split",
+          "content": {
+            "title": "第三季度经营复盘",
+            "summary": "样例数据；配图为历史界面演示素材。",
+            "takeaway": "先稳交付，再看增长",
+            "relation": "none",
+            "role": "cover",
+            "scenario": "business-report",
+            "theme": "light-editorial",
+            "images": [
+              {
+                "assetPath": "assets/product-workspace.png",
+                "width": 2880,
+                "height": 1704,
+                "fit": "contain"
+              }
+            ]
+          }
+        },
+        {
+          "name": "light-editorial-essay",
+          "presetId": "light-editorial-essay",
+          "content": {
+            "title": "交付目标与统计口径",
+            "summary": "季度经营样例；数值仅作排版演示。",
+            "takeaway": "先稳交付，再看增长",
+            "items": [
+              "重点项目每周核对里程碑。",
+              "延期事项标出负责人和时间。",
+              "先保障高价值客户按期交付。"
+            ],
+            "relation": "none",
+            "role": "context",
+            "scenario": "business-report",
+            "theme": "light-editorial"
+          }
+        },
+        {
+          "name": "light-metric-spotlight",
+          "presetId": "light-metric-spotlight",
+          "content": {
+            "title": "交付与回款关键指标",
+            "summary": "季度经营样例；数值仅作排版演示。",
+            "takeaway": "示例 +8%",
+            "items": [
+              "统一季度收入和回款口径。",
+              "重点项目每周核对里程碑。",
+              "延期事项标出负责人和时间。"
+            ],
+            "relation": "none",
+            "role": "metrics",
+            "scenario": "business-report",
+            "theme": "light-editorial"
+          }
+        },
+        {
+          "name": "light-timeline",
+          "presetId": "light-timeline",
+          "content": {
+            "title": "按期交付逐季改善",
+            "summary": "季度经营样例；数值仅作排版演示。",
+            "takeaway": "先稳交付，再看增长",
+            "items": [
+              "重点项目每周核对里程碑。",
+              "延期事项标出负责人和时间。",
+              "先保障高价值客户按期交付。",
+              "复核成本变化与项目毛利。"
+            ],
+            "nodes": [
+              "进度跟踪",
+              "成本复核",
+              "交付确认",
+              "风险排序"
+            ],
+            "relation": "sequence",
+            "role": "trend",
+            "scenario": "business-report",
+            "theme": "light-editorial"
+          }
+        },
+        {
+          "name": "light-chart-evidence",
+          "presetId": "light-chart-evidence",
+          "content": {
+            "title": "平均交付周期变化",
+            "summary": "季度经营样例；数值仅作排版演示。",
+            "takeaway": "先稳交付，再看增长",
+            "items": [
+              "统一季度收入和回款口径。",
+              "重点项目每周核对里程碑。",
+              "延期事项标出负责人和时间。"
+            ],
+            "nodes": [
+              "目标口径",
+              "进度跟踪",
+              "成本复核"
+            ],
+            "relation": "none",
+            "role": "observation",
+            "scenario": "business-report",
+            "theme": "light-editorial",
+            "chart": {
+              "kind": "bar",
+              "categories": [
+                "一季度",
+                "二季度",
+                "三季度"
+              ],
+              "series": [
+                {
+                  "name": "按期交付（演示）",
+                  "values": [
+                    78,
+                    82,
+                    87
+                  ]
+                },
+                {
+                  "name": "计划完成（演示）",
+                  "values": [
+                    80,
+                    84,
+                    88
+                  ]
+                }
+              ],
+              "legendPos": "b",
+              "gridlines": true,
+              "dataLabels": true,
+              "valAxisTitle": "演示值"
+            }
+          }
+        },
+        {
+          "name": "light-comparison-split",
+          "presetId": "light-comparison-split",
+          "content": {
+            "title": "目标与实际完成情况",
+            "summary": "季度经营样例；数值仅作排版演示。",
+            "takeaway": "先稳交付，再看增长",
+            "items": [
+              "重点项目每周核对里程碑。",
+              "延期事项标出负责人和时间。"
+            ],
+            "nodes": [
+              "进度跟踪",
+              "成本复核"
+            ],
+            "relation": "parallel",
+            "role": "comparison",
+            "scenario": "business-report",
+            "theme": "light-editorial"
+          }
+        },
+        {
+          "name": "light-process-steps",
+          "presetId": "light-process-steps",
+          "content": {
+            "title": "延期项目逐项定责",
+            "summary": "季度经营样例；数值仅作排版演示。",
+            "takeaway": "先稳交付，再看增长",
+            "items": [
+              "统一季度收入和回款口径。",
+              "重点项目每周核对里程碑。",
+              "延期事项标出负责人和时间。",
+              "先保障高价值客户按期交付。"
+            ],
+            "nodes": [
+              "目标口径",
+              "进度跟踪",
+              "成本复核",
+              "交付确认"
+            ],
+            "relation": "sequence",
+            "role": "actions",
+            "scenario": "business-report",
+            "theme": "light-editorial"
+          }
+        },
+        {
+          "name": "light-closing-callout",
+          "presetId": "light-closing-callout",
+          "content": {
+            "title": "结论与请求",
+            "summary": "季度经营样例；数值仅作排版演示。",
+            "takeaway": "先稳交付，再看增长",
+            "items": [
+              "重点项目每周核对里程碑。",
+              "延期事项标出负责人和时间。",
+              "先保障高价值客户按期交付。"
+            ],
+            "relation": "none",
+            "role": "closing",
+            "scenario": "business-report",
+            "theme": "light-editorial"
+          }
+        },
+        {
+          "name": "light-overview",
+          "presetId": "light-overview",
+          "content": {
+            "title": "经营概览网格",
+            "summary": "季度经营样例；数值仅作排版演示。",
+            "items": [
+              "统一季度收入和回款口径。",
+              "重点项目每周核对里程碑。",
+              "延期事项标出负责人和时间。",
+              "先保障高价值客户按期交付。"
+            ],
+            "nodes": [
+              "目标口径",
+              "进度跟踪",
+              "成本复核",
+              "交付确认"
+            ],
+            "relation": "parallel",
+            "role": "breakdown",
+            "scenario": "business-report",
+            "theme": "light-editorial"
+          }
+        },
+        {
+          "name": "light-metric",
+          "presetId": "light-metric",
+          "content": {
+            "title": "交付与回款关键指标",
+            "summary": "季度经营样例；数值仅作排版演示。",
+            "takeaway": "示例8%",
+            "items": [
+              "重点项目每周核对里程碑。",
+              "延期事项标出负责人和时间。"
+            ],
+            "relation": "none",
+            "role": "metrics",
+            "scenario": "business-report",
+            "theme": "light-editorial"
+          }
+        },
+        {
+          "name": "light-chart-insight",
+          "presetId": "light-chart-insight",
+          "content": {
+            "title": "平均交付周期变化",
+            "summary": "季度经营样例；数值仅作排版演示。",
+            "takeaway": "示例 +8%",
+            "items": [
+              "统一季度收入和回款口径。",
+              "重点项目每周核对里程碑。"
+            ],
+            "relation": "none",
+            "role": "observation",
+            "scenario": "business-report",
+            "theme": "light-editorial",
+            "chart": {
+              "kind": "bar",
+              "categories": [
+                "一季度",
+                "二季度",
+                "三季度"
+              ],
+              "series": [
+                {
+                  "name": "按期交付（演示）",
+                  "values": [
+                    78,
+                    82,
+                    87
+                  ]
+                },
+                {
+                  "name": "计划完成（演示）",
+                  "values": [
+                    80,
+                    84,
+                    88
+                  ]
+                }
+              ],
+              "legendPos": "b",
+              "gridlines": true,
+              "dataLabels": true,
+              "valAxisTitle": "演示值"
+            }
+          }
+        },
+        {
+          "name": "report-project-status",
+          "presetId": "report-project-status",
+          "content": {
+            "title": "项目工作进展与问题",
+            "summary": "目标、当前进展与待处理事项并列呈现。",
+            "takeaway": "先解决依赖阻塞，再推进试点交付。",
+            "theme": "light-editorial",
+            "relation": "parallel",
+            "nodes": [
+              "已完成",
+              "进行中",
+              "待解决"
+            ],
+            "items": [
+              "需求范围与验收口径已对齐，主要材料完成整理。",
+              "核心流程完成联调，正在检查关键路径。",
+              "测试环境访问权限待确认，影响试点启动。"
+            ],
+            "scenario": "business-report",
+            "role": "metrics"
+          }
+        }
+      ]
+    },
+    {
+      "name": "product-showcase",
+      "pages": [
+        {
+          "name": "dark-cover-split",
+          "presetId": "dark-cover-split",
+          "content": {
+            "title": "让任务与成果留在同一工作台",
+            "summary": "样例数据；配图为历史界面演示素材。",
+            "takeaway": "减少重复准备",
+            "relation": "none",
+            "role": "cover",
+            "scenario": "product-showcase",
+            "theme": "dark-product",
+            "images": [
+              {
+                "assetPath": "assets/product-workspace.png",
+                "width": 2880,
+                "height": 1704,
+                "fit": "contain"
+              }
+            ]
+          }
+        },
+        {
+          "name": "dark-editorial-essay",
+          "presetId": "dark-editorial-essay",
+          "content": {
+            "title": "从输入主题到继续编辑",
+            "summary": "产品功能与指标均为排版演示。",
+            "takeaway": "减少重复准备",
+            "items": [
+              "集中整理可用素材与来源。",
+              "逐页制作并检查内容。",
+              "保存可编辑成果供后续复用。"
+            ],
+            "relation": "none",
+            "role": "statement",
+            "scenario": "product-showcase",
+            "theme": "dark-product"
+          }
+        },
+        {
+          "name": "dark-parallel-grid",
+          "presetId": "dark-parallel-grid",
+          "content": {
+            "title": "工作台的四项能力",
+            "summary": "产品功能与指标均为排版演示。",
+            "takeaway": "减少重复准备",
+            "items": [
+              "围绕交付目标组织工作。",
+              "集中整理可用素材与来源。",
+              "逐页制作并检查内容。",
+              "保存可编辑成果供后续复用。",
+              "保留任务状态和修改入口。",
+              "示例截图为历史界面素材。"
+            ],
+            "nodes": [
+              "主题输入",
+              "素材整理",
+              "场景制作",
+              "文件检查",
+              "结果复用",
+              "团队协作"
+            ],
+            "relation": "parallel",
+            "role": "breakdown",
+            "scenario": "product-showcase",
+            "theme": "dark-product"
+          }
+        },
+        {
+          "name": "dark-metric-spotlight",
+          "presetId": "dark-metric-spotlight",
+          "content": {
+            "title": "制作准备时间对照",
+            "summary": "产品功能与指标均为排版演示。",
+            "takeaway": "示例 3步",
+            "items": [
+              "集中整理可用素材与来源。",
+              "逐页制作并检查内容。",
+              "保存可编辑成果供后续复用。"
+            ],
+            "relation": "none",
+            "role": "metrics",
+            "scenario": "product-showcase",
+            "theme": "dark-product"
+          }
+        },
+        {
+          "name": "dark-hierarchy-branch",
+          "presetId": "dark-hierarchy-branch",
+          "content": {
+            "title": "内容、任务与文件协作",
+            "summary": "产品功能与指标均为排版演示。",
+            "takeaway": "减少重复准备",
+            "items": [
+              "围绕交付目标组织工作。",
+              "集中整理可用素材与来源。"
+            ],
+            "nodes": [
+              "主题输入",
+              "素材整理",
+              "场景制作"
+            ],
+            "relation": "hierarchy",
+            "role": "relationship",
+            "scenario": "product-showcase",
+            "theme": "dark-product"
+          }
+        },
+        {
+          "name": "dark-gallery",
+          "presetId": "dark-gallery",
+          "content": {
+            "title": "实际界面与使用场景",
+            "summary": "样例数据；配图为历史界面演示素材。",
+            "takeaway": "减少重复准备",
+            "items": [
+              "集中整理可用素材与来源。",
+              "逐页制作并检查内容。"
+            ],
+            "nodes": [
+              "素材整理",
+              "场景制作"
+            ],
+            "relation": "parallel",
+            "role": "image",
+            "scenario": "product-showcase",
+            "theme": "dark-product",
+            "images": [
+              {
+                "assetPath": "assets/product-workspace.png",
+                "width": 2880,
+                "height": 1704,
+                "fit": "contain"
+              },
+              {
+                "assetPath": "assets/brand-square.png",
+                "width": 512,
+                "height": 512,
+                "fit": "contain"
+              }
+            ]
+          }
+        },
+        {
+          "name": "dark-comparison-split",
+          "presetId": "dark-comparison-split",
+          "content": {
+            "title": "人工准备与流程复用",
+            "summary": "产品功能与指标均为排版演示。",
+            "takeaway": "减少重复准备",
+            "items": [
+              "围绕交付目标组织工作。",
+              "集中整理可用素材与来源。"
+            ],
+            "nodes": [
+              "主题输入",
+              "素材整理"
+            ],
+            "relation": "parallel",
+            "role": "comparison",
+            "scenario": "product-showcase",
+            "theme": "dark-product"
+          }
+        },
+        {
+          "name": "dark-process-steps",
+          "presetId": "dark-process-steps",
+          "content": {
+            "title": "从主题推进到交付",
+            "summary": "产品功能与指标均为排版演示。",
+            "takeaway": "减少重复准备",
+            "items": [
+              "集中整理可用素材与来源。",
+              "逐页制作并检查内容。",
+              "保存可编辑成果供后续复用。",
+              "保留任务状态和修改入口。"
+            ],
+            "nodes": [
+              "素材整理",
+              "场景制作",
+              "文件检查",
+              "结果复用"
+            ],
+            "relation": "sequence",
+            "role": "process",
+            "scenario": "product-showcase",
+            "theme": "dark-product"
+          }
+        },
+        {
+          "name": "dark-product-hero",
+          "presetId": "dark-product-hero",
+          "content": {
+            "title": "让任务与成果留在同一工作台",
+            "summary": "样例数据；配图为历史界面演示素材。",
+            "items": [
+              "围绕交付目标组织工作。",
+              "集中整理可用素材与来源。"
+            ],
+            "relation": "none",
+            "role": "cover",
+            "scenario": "product-showcase",
+            "theme": "dark-product",
+            "image": {
+              "assetPath": "assets/product-workspace.png",
+              "width": 2880,
+              "height": 1704,
+              "fit": "contain"
+            }
+          }
+        },
+        {
+          "name": "dark-metric",
+          "presetId": "dark-metric",
+          "content": {
+            "title": "制作准备时间对照",
+            "summary": "产品功能与指标均为排版演示。",
+            "takeaway": "3步演示",
+            "items": [
+              "集中整理可用素材与来源。",
+              "逐页制作并检查内容。"
+            ],
+            "relation": "none",
+            "role": "metrics",
+            "scenario": "product-showcase",
+            "theme": "dark-product"
+          }
+        },
+        {
+          "name": "dark-case",
+          "presetId": "dark-case",
+          "content": {
+            "title": "功能如何解决具体问题",
+            "summary": "样例数据；配图为历史界面演示素材。",
+            "items": [
+              "围绕交付目标组织工作。",
+              "集中整理可用素材与来源。",
+              "逐页制作并检查内容。"
+            ],
+            "nodes": [
+              "主题输入",
+              "素材整理",
+              "场景制作"
+            ],
+            "relation": "parallel",
+            "role": "case",
+            "scenario": "product-showcase",
+            "theme": "dark-product",
+            "image": {
+              "assetPath": "assets/product-workspace.png",
+              "width": 2880,
+              "height": 1704,
+              "fit": "contain"
+            }
+          }
+        },
+        {
+          "name": "product-feature-proof",
+          "presetId": "product-feature-proof",
+          "content": {
+            "title": "产品能力与界面证据",
+            "summary": "使用实际工作台截图说明可见功能。配图为历史界面演示素材。",
+            "takeaway": "每条说明都对应真实界面内容。",
+            "theme": "dark-product",
+            "relation": "none",
+            "nodes": [
+              "主题入口",
+              "画幅设置",
+              "项目继续"
+            ],
+            "items": [
+              "输入视频主题，明确希望制作的内容。",
+              "选择画面比例，匹配不同发布渠道。",
+              "从历史项目列表继续已有工作。"
+            ],
+            "image": {
+              "assetPath": "assets/product-workspace.png",
+              "width": 2880,
+              "height": 1704,
+              "fit": "contain"
+            },
+            "scenario": "product-showcase",
+            "role": "case"
+          }
+        }
+      ]
+    },
+    {
+      "name": "technical-proposal",
+      "pages": [
+        {
+          "name": "dark-cover-split",
+          "presetId": "dark-cover-split",
+          "content": {
+            "title": "桌面工作台技术方案",
+            "summary": "样例数据；配图为历史界面演示素材。",
+            "takeaway": "边界清楚，逐步交付",
+            "relation": "none",
+            "role": "cover",
+            "scenario": "technical-proposal",
+            "theme": "dark-product",
+            "images": [
+              {
+                "assetPath": "assets/product-workspace.png",
+                "width": 2880,
+                "height": 1704,
+                "fit": "contain"
+              }
+            ]
+          }
+        },
+        {
+          "name": "dark-editorial-essay",
+          "presetId": "dark-editorial-essay",
+          "content": {
+            "title": "现状、约束与目标",
+            "summary": "压测与架构数字均为排版演示。",
+            "takeaway": "边界清楚，逐步交付",
+            "items": [
+              "服务校验请求后执行业务。",
+              "数据层保存检查点与结果。",
+              "限制文件范围和调用权限。"
+            ],
+            "relation": "none",
+            "role": "context",
+            "scenario": "technical-proposal",
+            "theme": "dark-product"
+          }
+        },
+        {
+          "name": "dark-hierarchy-branch",
+          "presetId": "dark-hierarchy-branch",
+          "content": {
+            "title": "交互、服务与数据分层",
+            "summary": "压测与架构数字均为排版演示。",
+            "takeaway": "边界清楚，逐步交付",
+            "items": [
+              "界面收集输入并展示进度。",
+              "服务校验请求后执行业务。"
+            ],
+            "nodes": [
+              "交互层",
+              "服务层",
+              "数据层"
+            ],
+            "relation": "hierarchy",
+            "role": "relationship",
+            "scenario": "technical-proposal",
+            "theme": "dark-product"
+          }
+        },
+        {
+          "name": "dark-process-steps",
+          "presetId": "dark-process-steps",
+          "content": {
+            "title": "请求校验与执行路径",
+            "summary": "压测与架构数字均为排版演示。",
+            "takeaway": "边界清楚，逐步交付",
+            "items": [
+              "服务校验请求后执行业务。",
+              "数据层保存检查点与结果。",
+              "限制文件范围和调用权限。",
+              "记录错误来源便于排查。"
+            ],
+            "nodes": [
+              "服务层",
+              "数据层",
+              "授权边界",
+              "运行监控"
+            ],
+            "relation": "sequence",
+            "role": "process",
+            "scenario": "technical-proposal",
+            "theme": "dark-product"
+          }
+        },
+        {
+          "name": "dark-comparison-split",
+          "presetId": "dark-comparison-split",
+          "content": {
+            "title": "部署方式与取舍",
+            "summary": "压测与架构数字均为排版演示。",
+            "takeaway": "边界清楚，逐步交付",
+            "items": [
+              "界面收集输入并展示进度。",
+              "服务校验请求后执行业务。"
+            ],
+            "nodes": [
+              "交互层",
+              "服务层"
+            ],
+            "relation": "parallel",
+            "role": "comparison",
+            "scenario": "technical-proposal",
+            "theme": "dark-product"
+          }
+        },
+        {
+          "name": "dark-matrix-2x2",
+          "presetId": "dark-matrix-2x2",
+          "content": {
+            "title": "按影响与难度排序风险",
+            "summary": "压测与架构数字均为排版演示。",
+            "takeaway": "边界清楚，逐步交付",
+            "items": [
+              "服务校验请求后执行业务。",
+              "数据层保存检查点与结果。",
+              "限制文件范围和调用权限。",
+              "记录错误来源便于排查。"
+            ],
+            "nodes": [
+              "服务层",
+              "数据层",
+              "授权边界",
+              "运行监控"
+            ],
+            "relation": "matrix",
+            "role": "risks",
+            "scenario": "technical-proposal",
+            "theme": "dark-product",
+            "axes": {
+              "x": "影响范围",
+              "y": "实施风险"
+            }
+          }
+        },
+        {
+          "name": "dark-chart-evidence",
+          "presetId": "dark-chart-evidence",
+          "content": {
+            "title": "请求耗时压测样例",
+            "summary": "压测与架构数字均为排版演示。",
+            "takeaway": "边界清楚，逐步交付",
+            "items": [
+              "界面收集输入并展示进度。",
+              "服务校验请求后执行业务。",
+              "数据层保存检查点与结果。"
+            ],
+            "nodes": [
+              "交互层",
+              "服务层",
+              "数据层"
+            ],
+            "relation": "none",
+            "role": "observation",
+            "scenario": "technical-proposal",
+            "theme": "dark-product",
+            "chart": {
+              "kind": "bar",
+              "categories": [
+                "首次请求",
+                "缓存命中",
+                "保存重开"
+              ],
+              "series": [
+                {
+                  "name": "耗时毫秒（演示）",
+                  "values": [
+                    420,
+                    260,
+                    310
+                  ]
+                },
+                {
+                  "name": "目标毫秒（演示）",
+                  "values": [
+                    500,
+                    300,
+                    350
+                  ]
+                }
+              ],
+              "legendPos": "b",
+              "gridlines": true,
+              "dataLabels": true,
+              "valAxisTitle": "演示值"
+            }
+          }
+        },
+        {
+          "name": "dark-timeline",
+          "presetId": "dark-timeline",
+          "content": {
+            "title": "分阶段验证里程碑",
+            "summary": "压测与架构数字均为排版演示。",
+            "takeaway": "边界清楚，逐步交付",
+            "items": [
+              "服务校验请求后执行业务。",
+              "数据层保存检查点与结果。",
+              "限制文件范围和调用权限。",
+              "记录错误来源便于排查。"
+            ],
+            "nodes": [
+              "服务层",
+              "数据层",
+              "授权边界",
+              "运行监控"
+            ],
+            "relation": "sequence",
+            "role": "trend",
+            "scenario": "technical-proposal",
+            "theme": "dark-product"
+          }
+        },
+        {
+          "name": "dark-architecture",
+          "presetId": "dark-architecture",
+          "content": {
+            "title": "交互、服务与数据分层",
+            "summary": "压测与架构数字均为排版演示。",
+            "items": [
+              "界面收集输入并展示进度。",
+              "服务校验请求后执行业务。",
+              "数据层保存检查点与结果。"
+            ],
+            "nodes": [
+              "交互层",
+              "服务层",
+              "数据层",
+              "授权边界"
+            ],
+            "relation": "hierarchy",
+            "role": "relationship",
+            "scenario": "technical-proposal",
+            "theme": "dark-product"
+          }
+        },
+        {
+          "name": "dark-process-long",
+          "presetId": "dark-process-long",
+          "content": {
+            "title": "请求校验与执行路径",
+            "summary": "压测与架构数字均为排版演示。",
+            "items": [
+              "服务校验请求后执行业务。",
+              "数据层保存检查点与结果。",
+              "限制文件范围和调用权限。"
+            ],
+            "nodes": [
+              "服务层",
+              "数据层",
+              "授权边界"
+            ],
+            "relation": "sequence",
+            "role": "process",
+            "scenario": "technical-proposal",
+            "theme": "dark-product"
+          }
+        },
+        {
+          "name": "dark-process-map",
+          "presetId": "dark-process-map",
+          "content": {
+            "title": "请求校验与执行路径",
+            "summary": "压测与架构数字均为排版演示。",
+            "items": [
+              "界面收集输入并展示进度。",
+              "服务校验请求后执行业务。",
+              "数据层保存检查点与结果。"
+            ],
+            "nodes": [
+              "交互层",
+              "服务层",
+              "数据层"
+            ],
+            "relation": "sequence",
+            "role": "process",
+            "scenario": "technical-proposal",
+            "theme": "dark-product"
+          }
+        },
+        {
+          "name": "technical-layer-stack",
+          "presetId": "technical-layer-stack",
+          "content": {
+            "title": "三层服务架构",
+            "summary": "请求由界面进入服务，再访问持久化数据。",
+            "takeaway": "各层职责清楚，交互方向保持单向。",
+            "theme": "dark-product",
+            "relation": "sequence",
+            "nodes": [
+              "交互层",
+              "服务层",
+              "数据层"
+            ],
+            "items": [
+              "界面收集主题与参数后发起任务。",
+              "服务校验输入，组织生成与状态流转。",
+              "数据层保存任务记录和可交付内容。"
+            ],
+            "scenario": "technical-proposal",
+            "role": "relationship"
+          }
+        }
+      ]
+    },
+    {
+      "name": "data-review",
+      "pages": [
+        {
+          "name": "light-cover-split",
+          "presetId": "light-cover-split",
+          "content": {
+            "title": "季度经营指标复盘",
+            "summary": "样例数据；配图为历史界面演示素材。",
+            "takeaway": "先核对口径，再解释变化",
+            "relation": "none",
+            "role": "cover",
+            "scenario": "data-review",
+            "theme": "light-editorial",
+            "images": [
+              {
+                "assetPath": "assets/product-workspace.png",
+                "width": 2880,
+                "height": 1704,
+                "fit": "contain"
+              }
+            ]
+          }
+        },
+        {
+          "name": "light-metric-spotlight",
+          "presetId": "light-metric-spotlight",
+          "content": {
+            "title": "收入、回款与交付指标",
+            "summary": "指标与趋势数值仅作排版演示。",
+            "takeaway": "指数 +8%",
+            "items": [
+              "拆分主要产品和区域贡献。",
+              "核对变化对应的时间范围。",
+              "异常项补充来源与解释。"
+            ],
+            "relation": "none",
+            "role": "metrics",
+            "scenario": "data-review",
+            "theme": "light-editorial"
+          }
+        },
+        {
+          "name": "light-timeline",
+          "presetId": "light-timeline",
+          "content": {
+            "title": "触达走势逐季回升",
+            "summary": "指标与趋势数值仅作排版演示。",
+            "takeaway": "先核对口径，再解释变化",
+            "items": [
+              "同一口径对比目标与实际。",
+              "拆分主要产品和区域贡献。",
+              "核对变化对应的时间范围。",
+              "异常项补充来源与解释。"
+            ],
+            "nodes": [
+              "收入变化",
+              "客户触达",
+              "交付质量",
+              "成本控制"
+            ],
+            "relation": "sequence",
+            "role": "trend",
+            "scenario": "data-review",
+            "theme": "light-editorial"
+          }
+        },
+        {
+          "name": "light-chart-evidence",
+          "presetId": "light-chart-evidence",
+          "content": {
+            "title": "触达指数季度变化",
+            "summary": "指标与趋势数值仅作排版演示。",
+            "takeaway": "先核对口径，再解释变化",
+            "items": [
+              "拆分主要产品和区域贡献。",
+              "核对变化对应的时间范围。",
+              "异常项补充来源与解释。"
+            ],
+            "nodes": [
+              "客户触达",
+              "交付质量",
+              "成本控制"
+            ],
+            "relation": "none",
+            "role": "observation",
+            "scenario": "data-review",
+            "theme": "light-editorial",
+            "chart": {
+              "kind": "bar",
+              "categories": [
+                "一季度",
+                "二季度",
+                "三季度"
+              ],
+              "series": [
+                {
+                  "name": "触达指数（演示）",
+                  "values": [
+                    62,
+                    74,
+                    69
+                  ]
+                },
+                {
+                  "name": "目标指数（演示）",
+                  "values": [
+                    66,
+                    72,
+                    78
+                  ]
+                }
+              ],
+              "legendPos": "b",
+              "gridlines": true,
+              "dataLabels": true,
+              "valAxisTitle": "演示值"
+            }
+          }
+        },
+        {
+          "name": "light-parallel-grid",
+          "presetId": "light-parallel-grid",
+          "content": {
+            "title": "各业务线贡献对照",
+            "summary": "指标与趋势数值仅作排版演示。",
+            "takeaway": "先核对口径，再解释变化",
+            "items": [
+              "同一口径对比目标与实际。",
+              "拆分主要产品和区域贡献。",
+              "核对变化对应的时间范围。",
+              "异常项补充来源与解释。",
+              "回款风险匹配跟进负责人。",
+              "每月复核已完成的动作。"
+            ],
+            "nodes": [
+              "收入变化",
+              "客户触达",
+              "交付质量",
+              "成本控制",
+              "回款进度",
+              "行动跟踪"
+            ],
+            "relation": "parallel",
+            "role": "distribution",
+            "scenario": "data-review",
+            "theme": "light-editorial"
+          }
+        },
+        {
+          "name": "light-comparison-split",
+          "presetId": "light-comparison-split",
+          "content": {
+            "title": "目标与实际差异",
+            "summary": "指标与趋势数值仅作排版演示。",
+            "takeaway": "先核对口径，再解释变化",
+            "items": [
+              "拆分主要产品和区域贡献。",
+              "核对变化对应的时间范围。"
+            ],
+            "nodes": [
+              "客户触达",
+              "交付质量"
+            ],
+            "relation": "parallel",
+            "role": "comparison",
+            "scenario": "data-review",
+            "theme": "light-editorial"
+          }
+        },
+        {
+          "name": "light-process-steps",
+          "presetId": "light-process-steps",
+          "content": {
+            "title": "把复盘结论变成行动",
+            "summary": "指标与趋势数值仅作排版演示。",
+            "takeaway": "先核对口径，再解释变化",
+            "items": [
+              "同一口径对比目标与实际。",
+              "拆分主要产品和区域贡献。",
+              "核对变化对应的时间范围。",
+              "异常项补充来源与解释。"
+            ],
+            "nodes": [
+              "收入变化",
+              "客户触达",
+              "交付质量",
+              "成本控制"
+            ],
+            "relation": "sequence",
+            "role": "actions",
+            "scenario": "data-review",
+            "theme": "light-editorial"
+          }
+        },
+        {
+          "name": "light-closing-callout",
+          "presetId": "light-closing-callout",
+          "content": {
+            "title": "下一阶段关注回款质量",
+            "summary": "指标与趋势数值仅作排版演示。",
+            "takeaway": "先核对口径，再解释变化",
+            "items": [
+              "拆分主要产品和区域贡献。",
+              "核对变化对应的时间范围。",
+              "异常项补充来源与解释。"
+            ],
+            "relation": "none",
+            "role": "result",
+            "scenario": "data-review",
+            "theme": "light-editorial"
+          }
+        },
+        {
+          "name": "data-driver-review",
+          "presetId": "data-driver-review",
+          "content": {
+            "title": "关键驱动指标复盘",
+            "summary": "图中数值均为演示数据，用于说明趋势解读。",
+            "takeaway": "先核对波动来源，再讨论增长原因。",
+            "theme": "light-editorial",
+            "relation": "none",
+            "items": [
+              "四季度触达指数最高，整体走势回升。",
+              "三季度短暂回落，值得核对活动安排。",
+              "内容复用是待验证的解释假设，不代表因果。"
+            ],
+            "chart": {
+              "kind": "bar",
+              "categories": [
+                "一季度",
+                "二季度",
+                "三季度",
+                "四季度"
+              ],
+              "series": [
+                {
+                  "name": "触达指数（演示）",
+                  "values": [
+                    62,
+                    74,
+                    69,
+                    86
+                  ]
+                }
+              ],
+              "legendPos": "none",
+              "gridlines": true,
+              "dataLabels": true,
+              "catAxisTitle": "季度（演示）",
+              "valAxisTitle": "指数（演示）"
+            },
+            "scenario": "data-review",
+            "role": "observation"
+          }
+        }
+      ]
+    },
+    {
+      "name": "strategy-planning",
+      "pages": [
+        {
+          "name": "dark-cover-split",
+          "presetId": "dark-cover-split",
+          "content": {
+            "title": "下一年度战略规划",
+            "summary": "样例数据；配图为历史界面演示素材。",
+            "takeaway": "先试点，再扩大投入",
+            "relation": "none",
+            "role": "cover",
+            "scenario": "strategy-planning",
+            "theme": "dark-product",
+            "images": [
+              {
+                "assetPath": "assets/product-workspace.png",
+                "width": 2880,
+                "height": 1704,
+                "fit": "contain"
+              }
+            ]
+          }
+        },
+        {
+          "name": "dark-editorial-essay",
+          "presetId": "dark-editorial-essay",
+          "content": {
+            "title": "外部变化与内部目标",
+            "summary": "目标、情景与数据仅作排版演示。",
+            "takeaway": "先试点，再扩大投入",
+            "items": [
+              "为主力产品明确季度目标。",
+              "渠道投入随验证结果调整。",
+              "资源配置与交付能力匹配。"
+            ],
+            "relation": "none",
+            "role": "context",
+            "scenario": "strategy-planning",
+            "theme": "dark-product"
+          }
+        },
+        {
+          "name": "dark-metric-spotlight",
+          "presetId": "dark-metric-spotlight",
+          "content": {
+            "title": "战略目标与关键结果",
+            "summary": "目标、情景与数据仅作排版演示。",
+            "takeaway": "示例 4季",
+            "items": [
+              "先验证重点客群的真实需求。",
+              "为主力产品明确季度目标。",
+              "渠道投入随验证结果调整。"
+            ],
+            "relation": "none",
+            "role": "metrics",
+            "scenario": "strategy-planning",
+            "theme": "dark-product"
+          }
+        },
+        {
+          "name": "dark-hierarchy-branch",
+          "presetId": "dark-hierarchy-branch",
+          "content": {
+            "title": "业务组合相互支撑",
+            "summary": "目标、情景与数据仅作排版演示。",
+            "takeaway": "先试点，再扩大投入",
+            "items": [
+              "为主力产品明确季度目标。",
+              "渠道投入随验证结果调整。"
+            ],
+            "nodes": [
+              "产品验证",
+              "渠道拓展",
+              "组织配套"
+            ],
+            "relation": "hierarchy",
+            "role": "relationship",
+            "scenario": "strategy-planning",
+            "theme": "dark-product"
+          }
+        },
+        {
+          "name": "dark-matrix-2x2",
+          "presetId": "dark-matrix-2x2",
+          "content": {
+            "title": "机会与风险情景",
+            "summary": "目标、情景与数据仅作排版演示。",
+            "takeaway": "先试点，再扩大投入",
+            "items": [
+              "先验证重点客群的真实需求。",
+              "为主力产品明确季度目标。",
+              "渠道投入随验证结果调整。",
+              "资源配置与交付能力匹配。"
+            ],
+            "nodes": [
+              "市场选择",
+              "产品验证",
+              "渠道拓展",
+              "组织配套"
+            ],
+            "relation": "matrix",
+            "role": "risks",
+            "scenario": "strategy-planning",
+            "theme": "dark-product",
+            "axes": {
+              "x": "战略价值",
+              "y": "落地难度"
+            }
+          }
+        },
+        {
+          "name": "dark-timeline",
+          "presetId": "dark-timeline",
+          "content": {
+            "title": "分阶段推进路线图",
+            "summary": "目标、情景与数据仅作排版演示。",
+            "takeaway": "先试点，再扩大投入",
+            "items": [
+              "为主力产品明确季度目标。",
+              "渠道投入随验证结果调整。",
+              "资源配置与交付能力匹配。",
+              "重大风险设置触发条件。"
+            ],
+            "nodes": [
+              "产品验证",
+              "渠道拓展",
+              "组织配套",
+              "风险复核"
+            ],
+            "relation": "sequence",
+            "role": "trend",
+            "scenario": "strategy-planning",
+            "theme": "dark-product"
+          }
+        },
+        {
+          "name": "dark-process-steps",
+          "presetId": "dark-process-steps",
+          "content": {
+            "title": "将战略重点转为行动",
+            "summary": "目标、情景与数据仅作排版演示。",
+            "takeaway": "先试点，再扩大投入",
+            "items": [
+              "先验证重点客群的真实需求。",
+              "为主力产品明确季度目标。",
+              "渠道投入随验证结果调整。",
+              "资源配置与交付能力匹配。"
+            ],
+            "nodes": [
+              "市场选择",
+              "产品验证",
+              "渠道拓展",
+              "组织配套"
+            ],
+            "relation": "sequence",
+            "role": "actions",
+            "scenario": "strategy-planning",
+            "theme": "dark-product"
+          }
+        },
+        {
+          "name": "dark-chart-evidence",
+          "presetId": "dark-chart-evidence",
+          "content": {
+            "title": "阶段目标达成趋势",
+            "summary": "目标、情景与数据仅作排版演示。",
+            "takeaway": "先试点，再扩大投入",
+            "items": [
+              "为主力产品明确季度目标。",
+              "渠道投入随验证结果调整。",
+              "资源配置与交付能力匹配。"
+            ],
+            "nodes": [
+              "产品验证",
+              "渠道拓展",
+              "组织配套"
+            ],
+            "relation": "none",
+            "role": "observation",
+            "scenario": "strategy-planning",
+            "theme": "dark-product",
+            "chart": {
+              "kind": "bar",
+              "categories": [
+                "第一阶段",
+                "第二阶段",
+                "第三阶段"
+              ],
+              "series": [
+                {
+                  "name": "目标进度（演示）",
+                  "values": [
+                    22,
+                    48,
+                    73
+                  ]
+                },
+                {
+                  "name": "计划进度（演示）",
+                  "values": [
+                    25,
+                    50,
+                    75
+                  ]
+                }
+              ],
+              "legendPos": "b",
+              "gridlines": true,
+              "dataLabels": true,
+              "valAxisTitle": "演示值"
+            }
+          }
+        },
+        {
+          "name": "dark-chart-insight",
+          "presetId": "dark-chart-insight",
+          "content": {
+            "title": "阶段目标达成趋势",
+            "summary": "目标、情景与数据仅作排版演示。",
+            "takeaway": "示例 4季",
+            "items": [
+              "先验证重点客群的真实需求。",
+              "为主力产品明确季度目标。"
+            ],
+            "relation": "none",
+            "role": "observation",
+            "scenario": "strategy-planning",
+            "theme": "dark-product",
+            "chart": {
+              "kind": "bar",
+              "categories": [
+                "第一阶段",
+                "第二阶段",
+                "第三阶段"
+              ],
+              "series": [
+                {
+                  "name": "目标进度（演示）",
+                  "values": [
+                    22,
+                    48,
+                    73
+                  ]
+                },
+                {
+                  "name": "计划进度（演示）",
+                  "values": [
+                    25,
+                    50,
+                    75
+                  ]
+                }
+              ],
+              "legendPos": "b",
+              "gridlines": true,
+              "dataLabels": true,
+              "valAxisTitle": "演示值"
+            }
+          }
+        },
+        {
+          "name": "dark-comparison",
+          "presetId": "dark-comparison",
+          "content": {
+            "title": "战略选项与资源取舍",
+            "summary": "目标、情景与数据仅作排版演示。",
+            "items": [
+              "为主力产品明确季度目标。",
+              "渠道投入随验证结果调整。"
+            ],
+            "relation": "parallel",
+            "role": "comparison",
+            "scenario": "strategy-planning",
+            "theme": "dark-product"
+          }
+        },
+        {
+          "name": "dark-overview",
+          "presetId": "dark-overview",
+          "content": {
+            "title": "战略议题概览",
+            "summary": "目标、情景与数据仅作排版演示。",
+            "items": [
+              "先验证重点客群的真实需求。",
+              "为主力产品明确季度目标。",
+              "渠道投入随验证结果调整。",
+              "资源配置与交付能力匹配。"
+            ],
+            "nodes": [
+              "市场选择",
+              "产品验证",
+              "渠道拓展",
+              "组织配套"
+            ],
+            "relation": "parallel",
+            "role": "breakdown",
+            "scenario": "strategy-planning",
+            "theme": "dark-product"
+          }
+        },
+        {
+          "name": "strategy-decision-options",
+          "presetId": "strategy-decision-options",
+          "content": {
+            "title": "三种推进方案",
+            "summary": "并列查看推进节奏、资源要求与适用条件。",
+            "takeaway": "按紧迫度和可用资源选择试点路径。",
+            "theme": "dark-product",
+            "relation": "parallel",
+            "nodes": [
+              "稳步推进",
+              "快速试点",
+              "合作交付"
+            ],
+            "items": [
+              "先补齐流程与材料，适合需求稳定的团队。",
+              "聚焦核心场景验证，适合时间较紧的团队。",
+              "与现有伙伴分工，适合内部资源有限时。"
+            ],
+            "scenario": "strategy-planning",
+            "role": "comparison"
+          }
+        }
+      ]
+    },
+    {
+      "name": "research-report",
+      "pages": [
+        {
+          "name": "light-cover-split",
+          "presetId": "light-cover-split",
+          "content": {
+            "title": "用户协作流程调研",
+            "summary": "样例数据；配图为历史界面演示素材。",
+            "takeaway": "结论只覆盖当前样本",
+            "relation": "none",
+            "role": "cover",
+            "scenario": "research-report",
+            "theme": "light-editorial",
+            "images": [
+              {
+                "assetPath": "assets/product-workspace.png",
+                "width": 2880,
+                "height": 1704,
+                "fit": "contain"
+              }
+            ]
+          }
+        },
+        {
+          "name": "light-editorial-essay",
+          "presetId": "light-editorial-essay",
+          "content": {
+            "title": "研究问题与观察范围",
+            "summary": "样本与发现均为排版演示。",
+            "takeaway": "结论只覆盖当前样本",
+            "items": [
+              "观察记录按统一表格整理。",
+              "相似问题合并并保留原文。",
+              "比较不同任务的等待环节。"
+            ],
+            "relation": "none",
+            "role": "context",
+            "scenario": "research-report",
+            "theme": "light-editorial"
+          }
+        },
+        {
+          "name": "light-parallel-columns",
+          "presetId": "light-parallel-columns",
+          "content": {
+            "title": "从任务到交接的研究框架",
+            "summary": "样本与发现均为排版演示。",
+            "takeaway": "结论只覆盖当前样本",
+            "items": [
+              "访谈对象按角色分层抽取。",
+              "观察记录按统一表格整理。",
+              "相似问题合并并保留原文。"
+            ],
+            "nodes": [
+              "研究问题",
+              "样本选择",
+              "任务观察"
+            ],
+            "relation": "parallel",
+            "role": "breakdown",
+            "scenario": "research-report",
+            "theme": "light-editorial"
+          }
+        },
+        {
+          "name": "light-process-steps",
+          "presetId": "light-process-steps",
+          "content": {
+            "title": "访谈与记录分析方法",
+            "summary": "样本与发现均为排版演示。",
+            "takeaway": "结论只覆盖当前样本",
+            "items": [
+              "观察记录按统一表格整理。",
+              "相似问题合并并保留原文。",
+              "比较不同任务的等待环节。",
+              "异常样本单独说明原因。"
+            ],
+            "nodes": [
+              "样本选择",
+              "任务观察",
+              "资料编码",
+              "差异复核"
+            ],
+            "relation": "sequence",
+            "role": "process",
+            "scenario": "research-report",
+            "theme": "light-editorial"
+          }
+        },
+        {
+          "name": "light-chart-evidence",
+          "presetId": "light-chart-evidence",
+          "content": {
+            "title": "等待集中在资料交接",
+            "summary": "样本与发现均为排版演示。",
+            "takeaway": "结论只覆盖当前样本",
+            "items": [
+              "访谈对象按角色分层抽取。",
+              "观察记录按统一表格整理。",
+              "相似问题合并并保留原文。"
+            ],
+            "nodes": [
+              "研究问题",
+              "样本选择",
+              "任务观察"
+            ],
+            "relation": "none",
+            "role": "observation",
+            "scenario": "research-report",
+            "theme": "light-editorial",
+            "chart": {
+              "kind": "bar",
+              "categories": [
+                "资料准备",
+                "过程协作",
+                "结果交接"
+              ],
+              "series": [
+                {
+                  "name": "等待次数（演示）",
+                  "values": [
+                    18,
+                    27,
+                    12
+                  ]
+                },
+                {
+                  "name": "任务数量（演示）",
+                  "values": [
+                    32,
+                    32,
+                    32
+                  ]
+                }
+              ],
+              "legendPos": "b",
+              "gridlines": true,
+              "dataLabels": true,
+              "valAxisTitle": "演示值"
+            }
+          }
+        },
+        {
+          "name": "light-comparison-split",
+          "presetId": "light-comparison-split",
+          "content": {
+            "title": "不同角色的使用差异",
+            "summary": "样本与发现均为排版演示。",
+            "takeaway": "结论只覆盖当前样本",
+            "items": [
+              "观察记录按统一表格整理。",
+              "相似问题合并并保留原文。"
+            ],
+            "nodes": [
+              "样本选择",
+              "任务观察"
+            ],
+            "relation": "parallel",
+            "role": "comparison",
+            "scenario": "research-report",
+            "theme": "light-editorial"
+          }
+        },
+        {
+          "name": "light-gallery",
+          "presetId": "light-gallery",
+          "content": {
+            "title": "典型任务场景观察",
+            "summary": "样例数据；配图为历史界面演示素材。",
+            "takeaway": "结论只覆盖当前样本",
+            "items": [
+              "访谈对象按角色分层抽取。",
+              "观察记录按统一表格整理。"
+            ],
+            "nodes": [
+              "研究问题",
+              "样本选择"
+            ],
+            "relation": "parallel",
+            "role": "case",
+            "scenario": "research-report",
+            "theme": "light-editorial",
+            "images": [
+              {
+                "assetPath": "assets/product-workspace.png",
+                "width": 2880,
+                "height": 1704,
+                "fit": "contain"
+              },
+              {
+                "assetPath": "assets/brand-square.png",
+                "width": 512,
+                "height": 512,
+                "fit": "contain"
+              }
+            ]
+          }
+        },
+        {
+          "name": "light-closing-callout",
+          "presetId": "light-closing-callout",
+          "content": {
+            "title": "建议先验证交接改进",
+            "summary": "样本与发现均为排版演示。",
+            "takeaway": "结论只覆盖当前样本",
+            "items": [
+              "观察记录按统一表格整理。",
+              "相似问题合并并保留原文。",
+              "比较不同任务的等待环节。"
+            ],
+            "relation": "none",
+            "role": "actions",
+            "scenario": "research-report",
+            "theme": "light-editorial"
+          }
+        },
+        {
+          "name": "light-comparison",
+          "presetId": "light-comparison",
+          "content": {
+            "title": "不同角色的使用差异",
+            "summary": "样本与发现均为排版演示。",
+            "items": [
+              "访谈对象按角色分层抽取。",
+              "观察记录按统一表格整理。"
+            ],
+            "relation": "parallel",
+            "role": "comparison",
+            "scenario": "research-report",
+            "theme": "light-editorial"
+          }
+        },
+        {
+          "name": "light-process-map",
+          "presetId": "light-process-map",
+          "content": {
+            "title": "访谈与记录分析方法",
+            "summary": "样本与发现均为排版演示。",
+            "items": [
+              "观察记录按统一表格整理。",
+              "相似问题合并并保留原文。",
+              "比较不同任务的等待环节。"
+            ],
+            "nodes": [
+              "样本选择",
+              "任务观察",
+              "资料编码"
+            ],
+            "relation": "sequence",
+            "role": "process",
+            "scenario": "research-report",
+            "theme": "light-editorial"
+          }
+        },
+        {
+          "name": "light-architecture",
+          "presetId": "light-architecture",
+          "content": {
+            "title": "研究框架层级",
+            "summary": "样本与发现均为排版演示。",
+            "items": [
+              "访谈对象按角色分层抽取。",
+              "观察记录按统一表格整理。",
+              "相似问题合并并保留原文。"
+            ],
+            "nodes": [
+              "研究问题",
+              "样本选择",
+              "任务观察",
+              "资料编码"
+            ],
+            "relation": "hierarchy",
+            "role": "relationship",
+            "scenario": "research-report",
+            "theme": "light-editorial"
+          }
+        },
+        {
+          "name": "research-method-findings",
+          "presetId": "research-method-findings",
+          "content": {
+            "title": "研究方法与主要发现",
+            "summary": "把采集方式和观察结果分开表达。",
+            "takeaway": "结论只覆盖当前样本与观察范围。",
+            "theme": "light-editorial",
+            "relation": "parallel",
+            "nodes": [
+              "研究方法",
+              "主要发现"
+            ],
+            "items": [
+              "访谈一线使用者，并对照任务记录梳理共性问题。",
+              "重复出现的等待集中在资料整理与交接环节。"
+            ],
+            "scenario": "research-report",
+            "role": "observation"
+          }
+        }
+      ]
+    },
+    {
+      "name": "business-pitch",
+      "pages": [
+        {
+          "name": "light-cover-split",
+          "presetId": "light-cover-split",
+          "content": {
+            "title": "轻禾协作产品路演",
+            "summary": "样例数据；配图为历史界面演示素材。",
+            "takeaway": "从高频小场景开始验证",
+            "relation": "none",
+            "role": "cover",
+            "scenario": "business-pitch",
+            "theme": "light-editorial",
+            "images": [
+              {
+                "assetPath": "assets/product-workspace.png",
+                "width": 2880,
+                "height": 1704,
+                "fit": "contain"
+              }
+            ]
+          }
+        },
+        {
+          "name": "light-transition-statement",
+          "presetId": "light-transition-statement",
+          "content": {
+            "title": "团队需要更顺畅的交付",
+            "summary": "虚构项目与数据仅作路演演示。",
+            "takeaway": "从高频小场景开始验证",
+            "relation": "none",
+            "role": "statement",
+            "scenario": "business-pitch",
+            "theme": "light-editorial"
+          }
+        },
+        {
+          "name": "light-editorial-essay",
+          "presetId": "light-editorial-essay",
+          "content": {
+            "title": "重复整理带来的时间成本",
+            "summary": "虚构项目与数据仅作路演演示。",
+            "takeaway": "从高频小场景开始验证",
+            "items": [
+              "聚焦项目协作频繁的小团队。",
+              "用统一入口减少资料分散。",
+              "按团队规模提供实施支持。"
+            ],
+            "relation": "none",
+            "role": "context",
+            "scenario": "business-pitch",
+            "theme": "light-editorial"
+          }
+        },
+        {
+          "name": "light-hierarchy-branch",
+          "presetId": "light-hierarchy-branch",
+          "content": {
+            "title": "客户、服务与收入闭环",
+            "summary": "虚构项目与数据仅作路演演示。",
+            "takeaway": "从高频小场景开始验证",
+            "items": [
+              "用统一入口减少资料分散。",
+              "按团队规模提供实施支持。"
+            ],
+            "nodes": [
+              "协作工具",
+              "实施服务",
+              "订阅收入"
+            ],
+            "relation": "hierarchy",
+            "role": "relationship",
+            "scenario": "business-pitch",
+            "theme": "light-editorial"
+          }
+        },
+        {
+          "name": "light-metric-spotlight",
+          "presetId": "light-metric-spotlight",
+          "content": {
+            "title": "试点转化与留存样例",
+            "summary": "虚构项目与数据仅作路演演示。",
+            "takeaway": "试点 27组",
+            "items": [
+              "聚焦项目协作频繁的小团队。",
+              "用统一入口减少资料分散。",
+              "按团队规模提供实施支持。"
+            ],
+            "relation": "none",
+            "role": "metrics",
+            "scenario": "business-pitch",
+            "theme": "light-editorial"
+          }
+        },
+        {
+          "name": "light-chart-evidence",
+          "presetId": "light-chart-evidence",
+          "content": {
+            "title": "试点用户持续增加",
+            "summary": "虚构项目与数据仅作路演演示。",
+            "takeaway": "从高频小场景开始验证",
+            "items": [
+              "用统一入口减少资料分散。",
+              "按团队规模提供实施支持。",
+              "订阅收入支持持续维护。"
+            ],
+            "nodes": [
+              "协作工具",
+              "实施服务",
+              "订阅收入"
+            ],
+            "relation": "none",
+            "role": "observation",
+            "scenario": "business-pitch",
+            "theme": "light-editorial",
+            "chart": {
+              "kind": "bar",
+              "categories": [
+                "试点月",
+                "第二月",
+                "第三月"
+              ],
+              "series": [
+                {
+                  "name": "活跃团队（演示）",
+                  "values": [
+                    12,
+                    19,
+                    27
+                  ]
+                },
+                {
+                  "name": "目标团队（演示）",
+                  "values": [
+                    15,
+                    22,
+                    30
+                  ]
+                }
+              ],
+              "legendPos": "b",
+              "gridlines": true,
+              "dataLabels": true,
+              "valAxisTitle": "演示值"
+            }
+          }
+        },
+        {
+          "name": "light-comparison-split",
+          "presetId": "light-comparison-split",
+          "content": {
+            "title": "自建与协作交付取舍",
+            "summary": "虚构项目与数据仅作路演演示。",
+            "takeaway": "从高频小场景开始验证",
+            "items": [
+              "聚焦项目协作频繁的小团队。",
+              "用统一入口减少资料分散。"
+            ],
+            "nodes": [
+              "目标团队",
+              "协作工具"
+            ],
+            "relation": "parallel",
+            "role": "comparison",
+            "scenario": "business-pitch",
+            "theme": "light-editorial"
+          }
+        },
+        {
+          "name": "light-team-grid",
+          "presetId": "light-team-grid",
+          "content": {
+            "title": "产品与交付协作分工",
+            "summary": "虚构项目与数据仅作路演演示。",
+            "takeaway": "从高频小场景开始验证",
+            "items": [
+              "用统一入口减少资料分散。",
+              "按团队规模提供实施支持。",
+              "订阅收入支持持续维护。",
+              "跟踪试点后的真实使用情况。"
+            ],
+            "nodes": [
+              "协作工具",
+              "实施服务",
+              "订阅收入",
+              "客户反馈"
+            ],
+            "relation": "hierarchy",
+            "role": "team",
+            "scenario": "business-pitch",
+            "theme": "light-editorial"
+          }
+        },
+        {
+          "name": "light-closing-callout",
+          "presetId": "light-closing-callout",
+          "content": {
+            "title": "融资用途聚焦产品验证",
+            "summary": "虚构项目与数据仅作路演演示。",
+            "takeaway": "从高频小场景开始验证",
+            "items": [
+              "聚焦项目协作频繁的小团队。",
+              "用统一入口减少资料分散。",
+              "按团队规模提供实施支持。"
+            ],
+            "relation": "none",
+            "role": "result",
+            "scenario": "business-pitch",
+            "theme": "light-editorial"
+          }
+        },
+        {
+          "name": "light-product-hero",
+          "presetId": "light-product-hero",
+          "content": {
+            "title": "轻禾协作产品路演",
+            "summary": "样例数据；配图为历史界面演示素材。",
+            "items": [
+              "用统一入口减少资料分散。",
+              "按团队规模提供实施支持。"
+            ],
+            "relation": "none",
+            "role": "cover",
+            "scenario": "business-pitch",
+            "theme": "light-editorial",
+            "image": {
+              "assetPath": "assets/product-workspace.png",
+              "width": 2880,
+              "height": 1704,
+              "fit": "contain"
+            }
+          }
+        },
+        {
+          "name": "light-case",
+          "presetId": "light-case",
+          "content": {
+            "title": "商业案例图片页",
+            "summary": "样例数据；配图为历史界面演示素材。",
+            "items": [
+              "聚焦项目协作频繁的小团队。",
+              "用统一入口减少资料分散。",
+              "按团队规模提供实施支持。"
+            ],
+            "nodes": [
+              "目标团队",
+              "协作工具",
+              "实施服务"
+            ],
+            "relation": "parallel",
+            "role": "case",
+            "scenario": "business-pitch",
+            "theme": "light-editorial",
+            "image": {
+              "assetPath": "assets/product-workspace.png",
+              "width": 2880,
+              "height": 1704,
+              "fit": "contain"
+            }
+          }
+        },
+        {
+          "name": "pitch-business-model",
+          "presetId": "pitch-business-model",
+          "content": {
+            "title": "业务模式的三个组成部分",
+            "summary": "从客户价值连接交付方式与收入来源。",
+            "takeaway": "三部分需相互支撑，形成可持续服务。",
+            "theme": "light-editorial",
+            "relation": "parallel",
+            "nodes": [
+              "客户价值",
+              "服务交付",
+              "收入来源"
+            ],
+            "items": [
+              "帮助团队减少重复整理，集中精力完成决策。",
+              "通过标准流程与专业支持完成实际部署。",
+              "按持续服务范围收取订阅或项目费用。"
+            ],
+            "scenario": "business-pitch",
+            "role": "relationship"
+          }
+        }
+      ]
+    },
+    {
+      "name": "investment-report",
+      "pages": [
+        {
+          "name": "dark-cover-split",
+          "presetId": "dark-cover-split",
+          "content": {
+            "title": "示例制造企业投研",
+            "summary": "样例数据；配图为历史界面演示素材。",
+            "takeaway": "按假设变化准备区间",
+            "relation": "none",
+            "role": "cover",
+            "scenario": "investment-report",
+            "theme": "dark-product",
+            "images": [
+              {
+                "assetPath": "assets/product-workspace.png",
+                "width": 2880,
+                "height": 1704,
+                "fit": "contain"
+              }
+            ]
+          }
+        },
+        {
+          "name": "dark-editorial-essay",
+          "presetId": "dark-editorial-essay",
+          "content": {
+            "title": "行业假设与研究边界",
+            "summary": "标的与回报均为情景演示，不构成预测。",
+            "takeaway": "按假设变化准备区间",
+            "items": [
+              "成本变动关注原料和运费。",
+              "回款进度影响现金流判断。",
+              "扩产节奏与实际需求匹配。"
+            ],
+            "relation": "none",
+            "role": "context",
+            "scenario": "investment-report",
+            "theme": "dark-product"
+          }
+        },
+        {
+          "name": "dark-metric-spotlight",
+          "presetId": "dark-metric-spotlight",
+          "content": {
+            "title": "收入、利润与现金流",
+            "summary": "标的与回报均为情景演示，不构成预测。",
+            "takeaway": "演示区间",
+            "items": [
+              "收入假设需由订单数据验证。",
+              "成本变动关注原料和运费。",
+              "回款进度影响现金流判断。"
+            ],
+            "relation": "none",
+            "role": "metrics",
+            "scenario": "investment-report",
+            "theme": "dark-product"
+          }
+        },
+        {
+          "name": "dark-chart-evidence",
+          "presetId": "dark-chart-evidence",
+          "content": {
+            "title": "订单与回款走势样例",
+            "summary": "标的与回报均为情景演示，不构成预测。",
+            "takeaway": "按假设变化准备区间",
+            "items": [
+              "成本变动关注原料和运费。",
+              "回款进度影响现金流判断。",
+              "扩产节奏与实际需求匹配。"
+            ],
+            "nodes": [
+              "毛利变化",
+              "现金回收",
+              "资本开支"
+            ],
+            "relation": "none",
+            "role": "observation",
+            "scenario": "investment-report",
+            "theme": "dark-product",
+            "chart": {
+              "kind": "bar",
+              "categories": [
+                "谨慎情景",
+                "基准情景",
+                "积极情景"
+              ],
+              "series": [
+                {
+                  "name": "收入指数（演示）",
+                  "values": [
+                    82,
+                    100,
+                    118
+                  ]
+                },
+                {
+                  "name": "现金流指数（演示）",
+                  "values": [
+                    76,
+                    96,
+                    112
+                  ]
+                }
+              ],
+              "legendPos": "b",
+              "gridlines": true,
+              "dataLabels": true,
+              "valAxisTitle": "演示值"
+            }
+          }
+        },
+        {
+          "name": "dark-timeline",
+          "presetId": "dark-timeline",
+          "content": {
+            "title": "产能利用逐季改善",
+            "summary": "标的与回报均为情景演示，不构成预测。",
+            "takeaway": "按假设变化准备区间",
+            "items": [
+              "收入假设需由订单数据验证。",
+              "成本变动关注原料和运费。",
+              "回款进度影响现金流判断。",
+              "扩产节奏与实际需求匹配。"
+            ],
+            "nodes": [
+              "收入假设",
+              "毛利变化",
+              "现金回收",
+              "资本开支"
+            ],
+            "relation": "sequence",
+            "role": "trend",
+            "scenario": "investment-report",
+            "theme": "dark-product"
+          }
+        },
+        {
+          "name": "dark-comparison-split",
+          "presetId": "dark-comparison-split",
+          "content": {
+            "title": "估值区间与可比口径",
+            "summary": "标的与回报均为情景演示，不构成预测。",
+            "takeaway": "按假设变化准备区间",
+            "items": [
+              "成本变动关注原料和运费。",
+              "回款进度影响现金流判断。"
+            ],
+            "nodes": [
+              "毛利变化",
+              "现金回收"
+            ],
+            "relation": "parallel",
+            "role": "comparison",
+            "scenario": "investment-report",
+            "theme": "dark-product"
+          }
+        },
+        {
+          "name": "dark-matrix-2x2",
+          "presetId": "dark-matrix-2x2",
+          "content": {
+            "title": "需求与成本风险情景",
+            "summary": "标的与回报均为情景演示，不构成预测。",
+            "takeaway": "按假设变化准备区间",
+            "items": [
+              "收入假设需由订单数据验证。",
+              "成本变动关注原料和运费。",
+              "回款进度影响现金流判断。",
+              "扩产节奏与实际需求匹配。"
+            ],
+            "nodes": [
+              "收入假设",
+              "毛利变化",
+              "现金回收",
+              "资本开支"
+            ],
+            "relation": "matrix",
+            "role": "risks",
+            "scenario": "investment-report",
+            "theme": "dark-product",
+            "axes": {
+              "x": "潜在收益",
+              "y": "风险程度"
+            }
+          }
+        },
+        {
+          "name": "dark-parallel-grid",
+          "presetId": "dark-parallel-grid",
+          "content": {
+            "title": "组合配置",
+            "summary": "标的与回报均为情景演示，不构成预测。",
+            "takeaway": "按假设变化准备区间",
+            "items": [
+              "成本变动关注原料和运费。",
+              "回款进度影响现金流判断。",
+              "扩产节奏与实际需求匹配。",
+              "政策变化设置压力测试。",
+              "估值结论保留上下行情景。",
+              "收入假设需由订单数据验证。"
+            ],
+            "nodes": [
+              "毛利变化",
+              "现金回收",
+              "资本开支",
+              "政策风险",
+              "估值复核",
+              "收入假设"
+            ],
+            "relation": "parallel",
+            "role": "distribution",
+            "scenario": "investment-report",
+            "theme": "dark-product"
+          }
+        },
+        {
+          "name": "dark-closing-callout",
+          "presetId": "dark-closing-callout",
+          "content": {
+            "title": "保留安全边际再决策",
+            "summary": "标的与回报均为情景演示，不构成预测。",
+            "takeaway": "按假设变化准备区间",
+            "items": [
+              "收入假设需由订单数据验证。",
+              "成本变动关注原料和运费。",
+              "回款进度影响现金流判断。"
+            ],
+            "relation": "none",
+            "role": "result",
+            "scenario": "investment-report",
+            "theme": "dark-product"
+          }
+        },
+        {
+          "name": "dark-parallel-columns",
+          "presetId": "dark-parallel-columns",
+          "content": {
+            "title": "估值区间与可比口径",
+            "summary": "标的与回报均为情景演示，不构成预测。",
+            "takeaway": "按假设变化准备区间",
+            "items": [
+              "成本变动关注原料和运费。",
+              "回款进度影响现金流判断。",
+              "扩产节奏与实际需求匹配。"
+            ],
+            "nodes": [
+              "毛利变化",
+              "现金回收",
+              "资本开支"
+            ],
+            "relation": "parallel",
+            "role": "comparison",
+            "scenario": "investment-report",
+            "theme": "dark-product"
+          }
+        },
+        {
+          "name": "investment-risk-scenarios",
+          "presetId": "investment-risk-scenarios",
+          "content": {
+            "title": "投资回报情景分析",
+            "summary": "周期为测算演示值，不代表投资预测。",
+            "takeaway": "按假设变化准备应对区间，不承诺单点结果。",
+            "theme": "dark-product",
+            "relation": "parallel",
+            "nodes": [
+              "谨慎情景",
+              "基准情景",
+              "积极情景"
+            ],
+            "items": [
+              "需求放缓，回收期约30个月（演示）；先保障现金流。",
+              "按计划推进，回收期约24个月（演示）；控制扩张节奏。",
+              "需求增长较快，回收期约18个月（演示）；提前准备交付。"
+            ],
+            "scenario": "investment-report",
+            "role": "risks"
+          }
+        }
+      ]
+    },
+    {
+      "name": "brand-proposal",
+      "pages": [
+        {
+          "name": "light-cover-split",
+          "presetId": "light-cover-split",
+          "content": {
+            "title": "青屿茶饮品牌提案",
+            "summary": "品牌与配图均为演示素材。",
+            "takeaway": "清晰识别，克制表达",
+            "relation": "none",
+            "role": "cover",
+            "scenario": "brand-proposal",
+            "theme": "light-editorial",
+            "images": [
+              {
+                "assetPath": "assets/product-workspace.png",
+                "width": 2880,
+                "height": 1704,
+                "fit": "contain"
+              }
+            ]
+          }
+        },
+        {
+          "name": "light-transition-statement",
+          "presetId": "light-transition-statement",
+          "content": {
+            "title": "让日常饮茶回到轻松本味",
+            "summary": "品牌方向、画面与文案均为演示素材。",
+            "takeaway": "清晰识别，克制表达",
+            "relation": "none",
+            "role": "statement",
+            "scenario": "brand-proposal",
+            "theme": "light-editorial"
+          }
+        },
+        {
+          "name": "light-editorial-essay",
+          "presetId": "light-editorial-essay",
+          "content": {
+            "title": "年轻客群与门店体验",
+            "summary": "品牌方向、画面与文案均为演示素材。",
+            "takeaway": "清晰识别，克制表达",
+            "items": [
+              "以青绿色表达清新与安静。",
+              "包装信息先满足快速识别。",
+              "门店动线突出主打产品。"
+            ],
+            "relation": "none",
+            "role": "context",
+            "scenario": "brand-proposal",
+            "theme": "light-editorial"
+          }
+        },
+        {
+          "name": "light-hierarchy-branch",
+          "presetId": "light-hierarchy-branch",
+          "content": {
+            "title": "品牌主张延伸到触点",
+            "summary": "品牌方向、画面与文案均为演示素材。",
+            "takeaway": "清晰识别，克制表达",
+            "items": [
+              "包装信息先满足快速识别。",
+              "门店动线突出主打产品。"
+            ],
+            "nodes": [
+              "包装触点",
+              "门店体验",
+              "社交内容"
+            ],
+            "relation": "hierarchy",
+            "role": "relationship",
+            "scenario": "brand-proposal",
+            "theme": "light-editorial"
+          }
+        },
+        {
+          "name": "light-gallery",
+          "presetId": "light-gallery",
+          "content": {
+            "title": "包装与视觉方向示意",
+            "summary": "品牌与配图均为演示素材。",
+            "takeaway": "清晰识别，克制表达",
+            "items": [
+              "以青绿色表达清新与安静。",
+              "包装信息先满足快速识别。"
+            ],
+            "nodes": [
+              "品牌识别",
+              "包装触点"
+            ],
+            "relation": "parallel",
+            "role": "image",
+            "scenario": "brand-proposal",
+            "theme": "light-editorial",
+            "images": [
+              {
+                "assetPath": "assets/product-workspace.png",
+                "width": 2880,
+                "height": 1704,
+                "fit": "contain"
+              },
+              {
+                "assetPath": "assets/brand-square.png",
+                "width": 512,
+                "height": 512,
+                "fit": "contain"
+              }
+            ]
+          }
+        },
+        {
+          "name": "light-comparison-split",
+          "presetId": "light-comparison-split",
+          "content": {
+            "title": "传统厚重与轻盈表达",
+            "summary": "品牌方向、画面与文案均为演示素材。",
+            "takeaway": "清晰识别，克制表达",
+            "items": [
+              "包装信息先满足快速识别。",
+              "门店动线突出主打产品。"
+            ],
+            "nodes": [
+              "包装触点",
+              "门店体验"
+            ],
+            "relation": "parallel",
+            "role": "comparison",
+            "scenario": "brand-proposal",
+            "theme": "light-editorial"
+          }
+        },
+        {
+          "name": "light-timeline",
+          "presetId": "light-timeline",
+          "content": {
+            "title": "从试点门店逐步铺开",
+            "summary": "品牌方向、画面与文案均为演示素材。",
+            "takeaway": "清晰识别，克制表达",
+            "items": [
+              "以青绿色表达清新与安静。",
+              "包装信息先满足快速识别。",
+              "门店动线突出主打产品。",
+              "社交内容保持真实轻松。"
+            ],
+            "nodes": [
+              "品牌识别",
+              "包装触点",
+              "门店体验",
+              "社交内容"
+            ],
+            "relation": "sequence",
+            "role": "trend",
+            "scenario": "brand-proposal",
+            "theme": "light-editorial"
+          }
+        },
+        {
+          "name": "light-team-grid",
+          "presetId": "light-team-grid",
+          "content": {
+            "title": "品牌、门店与供应协作",
+            "summary": "品牌方向、画面与文案均为演示素材。",
+            "takeaway": "清晰识别，克制表达",
+            "items": [
+              "包装信息先满足快速识别。",
+              "门店动线突出主打产品。",
+              "社交内容保持真实轻松。",
+              "试点门店收集顾客反馈。"
+            ],
+            "nodes": [
+              "包装触点",
+              "门店体验",
+              "社交内容",
+              "试点反馈"
+            ],
+            "relation": "hierarchy",
+            "role": "team",
+            "scenario": "brand-proposal",
+            "theme": "light-editorial"
+          }
+        },
+        {
+          "name": "brand-concept-proposal",
+          "presetId": "brand-concept-proposal",
+          "content": {
+            "title": "Mona 品牌创意主张",
+            "summary": "黑猫意象表达专注、可靠与清晰行动。配图为演示素材。",
+            "takeaway": "保留鲜明识别，减少多余装饰。",
+            "theme": "light-editorial",
+            "relation": "none",
+            "nodes": [
+              "识别主张",
+              "应用延展"
+            ],
+            "items": [
+              "青色眼睛与黑猫轮廓建立稳定识别。",
+              "红色几何底形强化行动感，界面保持克制。"
+            ],
+            "image": {
+              "assetPath": "assets/brand-square.png",
+              "width": 512,
+              "height": 512,
+              "fit": "contain"
+            },
+            "scenario": "brand-proposal",
+            "role": "statement"
+          }
+        }
+      ]
+    },
+    {
+      "name": "company-story",
+      "pages": [
+        {
+          "name": "dark-cover-split",
+          "presetId": "dark-cover-split",
+          "content": {
+            "title": "海风智造成长故事",
+            "summary": "样例数据；配图为历史界面演示素材。",
+            "takeaway": "每一步都为下一程积累",
+            "relation": "none",
+            "role": "cover",
+            "scenario": "company-story",
+            "theme": "dark-product",
+            "images": [
+              {
+                "assetPath": "assets/product-workspace.png",
+                "width": 2880,
+                "height": 1704,
+                "fit": "contain"
+              }
+            ]
+          }
+        },
+        {
+          "name": "dark-transition-statement",
+          "presetId": "dark-transition-statement",
+          "content": {
+            "title": "从一线问题出发",
+            "summary": "公司名称与阶段成果均为故事演示。",
+            "takeaway": "每一步都为下一程积累",
+            "relation": "none",
+            "role": "statement",
+            "scenario": "company-story",
+            "theme": "dark-product"
+          }
+        },
+        {
+          "name": "dark-editorial-essay",
+          "presetId": "dark-editorial-essay",
+          "content": {
+            "title": "制造现场的协作难点",
+            "summary": "公司名称与阶段成果均为故事演示。",
+            "takeaway": "每一步都为下一程积累",
+            "items": [
+              "记录现场反复发生的难题。",
+              "选一个班组验证解决办法。",
+              "把有效步骤沉淀为作业方法。"
+            ],
+            "relation": "none",
+            "role": "context",
+            "scenario": "company-story",
+            "theme": "dark-product"
+          }
+        },
+        {
+          "name": "dark-timeline",
+          "presetId": "dark-timeline",
+          "content": {
+            "title": "团队逐步扩展服务范围",
+            "summary": "公司名称与阶段成果均为故事演示。",
+            "takeaway": "每一步都为下一程积累",
+            "items": [
+              "选一个班组验证解决办法。",
+              "把有效步骤沉淀为作业方法。",
+              "与客户共同检查使用反馈。",
+              "谨慎拓展到相邻生产场景。"
+            ],
+            "nodes": [
+              "小组试验",
+              "流程沉淀",
+              "客户共创",
+              "能力扩展"
+            ],
+            "relation": "sequence",
+            "role": "trend",
+            "scenario": "company-story",
+            "theme": "dark-product"
+          }
+        },
+        {
+          "name": "dark-team-grid",
+          "presetId": "dark-team-grid",
+          "content": {
+            "title": "一线、产品与交付同行",
+            "summary": "公司名称与阶段成果均为故事演示。",
+            "takeaway": "每一步都为下一程积累",
+            "items": [
+              "记录现场反复发生的难题。",
+              "选一个班组验证解决办法。",
+              "把有效步骤沉淀为作业方法。",
+              "与客户共同检查使用反馈。"
+            ],
+            "nodes": [
+              "发现问题",
+              "小组试验",
+              "流程沉淀",
+              "客户共创"
+            ],
+            "relation": "hierarchy",
+            "role": "team",
+            "scenario": "company-story",
+            "theme": "dark-product"
+          }
+        },
+        {
+          "name": "dark-gallery",
+          "presetId": "dark-gallery",
+          "content": {
+            "title": "客户与实践故事",
+            "summary": "样例数据；配图为历史界面演示素材。",
+            "takeaway": "每一步都为下一程积累",
+            "items": [
+              "选一个班组验证解决办法。",
+              "把有效步骤沉淀为作业方法。"
+            ],
+            "nodes": [
+              "小组试验",
+              "流程沉淀"
+            ],
+            "relation": "parallel",
+            "role": "case",
+            "scenario": "company-story",
+            "theme": "dark-product",
+            "images": [
+              {
+                "assetPath": "assets/product-workspace.png",
+                "width": 2880,
+                "height": 1704,
+                "fit": "contain"
+              },
+              {
+                "assetPath": "assets/brand-square.png",
+                "width": 512,
+                "height": 512,
+                "fit": "contain"
+              }
+            ]
+          }
+        },
+        {
+          "name": "dark-metric-spotlight",
+          "presetId": "dark-metric-spotlight",
+          "content": {
+            "title": "服务覆盖阶段样例",
+            "summary": "公司名称与阶段成果均为故事演示。",
+            "takeaway": "示例 4程",
+            "items": [
+              "记录现场反复发生的难题。",
+              "选一个班组验证解决办法。",
+              "把有效步骤沉淀为作业方法。"
+            ],
+            "relation": "none",
+            "role": "metrics",
+            "scenario": "company-story",
+            "theme": "dark-product"
+          }
+        },
+        {
+          "name": "dark-hierarchy-branch",
+          "presetId": "dark-hierarchy-branch",
+          "content": {
+            "title": "能力积累支撑新场景",
+            "summary": "公司名称与阶段成果均为故事演示。",
+            "takeaway": "每一步都为下一程积累",
+            "items": [
+              "选一个班组验证解决办法。",
+              "把有效步骤沉淀为作业方法。"
+            ],
+            "nodes": [
+              "小组试验",
+              "流程沉淀",
+              "客户共创"
+            ],
+            "relation": "hierarchy",
+            "role": "relationship",
+            "scenario": "company-story",
+            "theme": "dark-product"
+          }
+        },
+        {
+          "name": "dark-closing-callout",
+          "presetId": "dark-closing-callout",
+          "content": {
+            "title": "继续围绕客户问题前进",
+            "summary": "公司名称与阶段成果均为故事演示。",
+            "takeaway": "每一步都为下一程积累",
+            "items": [
+              "记录现场反复发生的难题。",
+              "选一个班组验证解决办法。",
+              "把有效步骤沉淀为作业方法。"
+            ],
+            "relation": "none",
+            "role": "closing",
+            "scenario": "company-story",
+            "theme": "dark-product"
+          }
+        },
+        {
+          "name": "story-milestones",
+          "presetId": "story-milestones",
+          "content": {
+            "title": "产品成长关键节点",
+            "summary": "时间节点与工作成果均为演示，不对应真实版本记录。",
+            "takeaway": "每个阶段都为下一步积累可复用经验。",
+            "theme": "dark-product",
+            "relation": "sequence",
+            "nodes": [
+              "2024年（演示）",
+              "2025年（演示）",
+              "2026年（演示）"
+            ],
+            "items": [
+              "完成核心工作台的方向验证。",
+              "围绕使用反馈补齐内容流程。",
+              "将成熟流程推广到更多工作场景。"
+            ],
+            "scenario": "company-story",
+            "role": "trend"
+          }
+        }
+      ]
+    },
+    {
+      "name": "event-planning",
+      "pages": [
+        {
+          "name": "dark-cover-split",
+          "presetId": "dark-cover-split",
+          "content": {
+            "title": "城市智造共创日",
+            "summary": "活动与配图均为演示素材。",
+            "takeaway": "留出转场和交流时间",
+            "relation": "none",
+            "role": "cover",
+            "scenario": "event-planning",
+            "theme": "dark-product",
+            "images": [
+              {
+                "assetPath": "assets/product-workspace.png",
+                "width": 2880,
+                "height": 1704,
+                "fit": "contain"
+              }
+            ]
+          }
+        },
+        {
+          "name": "dark-transition-statement",
+          "presetId": "dark-transition-statement",
+          "content": {
+            "title": "连接想法与现场实践",
+            "summary": "流程、时间与现场内容均为活动演示素材。",
+            "takeaway": "留出转场和交流时间",
+            "relation": "none",
+            "role": "statement",
+            "scenario": "event-planning",
+            "theme": "dark-product"
+          }
+        },
+        {
+          "name": "dark-parallel-grid",
+          "presetId": "dark-parallel-grid",
+          "content": {
+            "title": "参会者的三条交流路径",
+            "summary": "流程、时间与现场内容均为活动演示素材。",
+            "takeaway": "留出转场和交流时间",
+            "items": [
+              "签到区核对来宾与资料。",
+              "主持人说明议程和交流规则。",
+              "分享围绕实际项目经验展开。",
+              "分组记录问题和可行想法。",
+              "预留提问及设备切换时间。",
+              "整理共创结果并通知参与者。"
+            ],
+            "nodes": [
+              "嘉宾签到",
+              "开场介绍",
+              "主题分享",
+              "分组共创",
+              "成果交流",
+              "会后跟进"
+            ],
+            "relation": "parallel",
+            "role": "breakdown",
+            "scenario": "event-planning",
+            "theme": "dark-product"
+          }
+        },
+        {
+          "name": "dark-timeline",
+          "presetId": "dark-timeline",
+          "content": {
+            "title": "活动筹备按周推进",
+            "summary": "流程、时间与现场内容均为活动演示素材。",
+            "takeaway": "留出转场和交流时间",
+            "items": [
+              "主持人说明议程和交流规则。",
+              "分享围绕实际项目经验展开。",
+              "分组记录问题和可行想法。",
+              "预留提问及设备切换时间。"
+            ],
+            "nodes": [
+              "开场介绍",
+              "主题分享",
+              "分组共创",
+              "成果交流"
+            ],
+            "relation": "sequence",
+            "role": "trend",
+            "scenario": "event-planning",
+            "theme": "dark-product"
+          }
+        },
+        {
+          "name": "dark-team-grid",
+          "presetId": "dark-team-grid",
+          "content": {
+            "title": "主持、场务与技术协作",
+            "summary": "流程、时间与现场内容均为活动演示素材。",
+            "takeaway": "留出转场和交流时间",
+            "items": [
+              "签到区核对来宾与资料。",
+              "主持人说明议程和交流规则。",
+              "分享围绕实际项目经验展开。",
+              "分组记录问题和可行想法。"
+            ],
+            "nodes": [
+              "嘉宾签到",
+              "开场介绍",
+              "主题分享",
+              "分组共创"
+            ],
+            "relation": "hierarchy",
+            "role": "team",
+            "scenario": "event-planning",
+            "theme": "dark-product"
+          }
+        },
+        {
+          "name": "dark-gallery",
+          "presetId": "dark-gallery",
+          "content": {
+            "title": "会场布置与展示区域",
+            "summary": "活动与配图均为演示素材。",
+            "takeaway": "留出转场和交流时间",
+            "items": [
+              "主持人说明议程和交流规则。",
+              "分享围绕实际项目经验展开。"
+            ],
+            "nodes": [
+              "开场介绍",
+              "主题分享"
+            ],
+            "relation": "parallel",
+            "role": "image",
+            "scenario": "event-planning",
+            "theme": "dark-product",
+            "images": [
+              {
+                "assetPath": "assets/product-workspace.png",
+                "width": 2880,
+                "height": 1704,
+                "fit": "contain"
+              },
+              {
+                "assetPath": "assets/brand-square.png",
+                "width": 512,
+                "height": 512,
+                "fit": "contain"
+              }
+            ]
+          }
+        },
+        {
+          "name": "dark-process-steps",
+          "presetId": "dark-process-steps",
+          "content": {
+            "title": "从签到到成果回顾",
+            "summary": "流程、时间与现场内容均为活动演示素材。",
+            "takeaway": "留出转场和交流时间",
+            "items": [
+              "签到区核对来宾与资料。",
+              "主持人说明议程和交流规则。",
+              "分享围绕实际项目经验展开。",
+              "分组记录问题和可行想法。"
+            ],
+            "nodes": [
+              "嘉宾签到",
+              "开场介绍",
+              "主题分享",
+              "分组共创"
+            ],
+            "relation": "sequence",
+            "role": "process",
+            "scenario": "event-planning",
+            "theme": "dark-product"
+          }
+        },
+        {
+          "name": "dark-matrix-2x2",
+          "presetId": "dark-matrix-2x2",
+          "content": {
+            "title": "现场风险与应急准备",
+            "summary": "流程、时间与现场内容均为活动演示素材。",
+            "takeaway": "留出转场和交流时间",
+            "items": [
+              "主持人说明议程和交流规则。",
+              "分享围绕实际项目经验展开。",
+              "分组记录问题和可行想法。",
+              "预留提问及设备切换时间。"
+            ],
+            "nodes": [
+              "开场介绍",
+              "主题分享",
+              "分组共创",
+              "成果交流"
+            ],
+            "relation": "matrix",
+            "role": "risks",
+            "scenario": "event-planning",
+            "theme": "dark-product",
+            "axes": {
+              "x": "现场影响",
+              "y": "处理难度"
+            }
+          }
+        },
+        {
+          "name": "dark-metric-spotlight",
+          "presetId": "dark-metric-spotlight",
+          "content": {
+            "title": "报名与到场样例",
+            "summary": "流程、时间与现场内容均为活动演示素材。",
+            "takeaway": "示例 4场",
+            "items": [
+              "签到区核对来宾与资料。",
+              "主持人说明议程和交流规则。",
+              "分享围绕实际项目经验展开。"
+            ],
+            "relation": "none",
+            "role": "metrics",
+            "scenario": "event-planning",
+            "theme": "dark-product"
+          }
+        },
+        {
+          "name": "event-run-of-show",
+          "presetId": "event-run-of-show",
+          "content": {
+            "title": "发布会流程安排",
+            "summary": "以下时段为活动编排演示，可按现场情况调整。本页为演示素材。",
+            "takeaway": "为转场与现场提问预留弹性。",
+            "theme": "dark-product",
+            "relation": "sequence",
+            "nodes": [
+              "09:00（演示）",
+              "09:20（演示）",
+              "10:00（演示）",
+              "10:30（演示）"
+            ],
+            "items": [
+              "签到入场：引导来宾就座并领取资料。",
+              "开场致辞：介绍活动目标与参与嘉宾。",
+              "主题分享：展示方案背景和核心内容。",
+              "交流答疑：整理问题并说明后续沟通。"
+            ],
+            "scenario": "event-planning",
+            "role": "process"
+          }
+        }
+      ]
+    },
+    {
+      "name": "education-training",
+      "pages": [
+        {
+          "name": "light-cover-split",
+          "presetId": "light-cover-split",
+          "content": {
+            "title": "从问题到可验证原型",
+            "summary": "课程与配图均为演示素材。",
+            "takeaway": "先说清问题，再检查结果",
+            "relation": "none",
+            "role": "cover",
+            "scenario": "education-training",
+            "theme": "light-editorial",
+            "images": [
+              {
+                "assetPath": "assets/product-workspace.png",
+                "width": 2880,
+                "height": 1704,
+                "fit": "contain"
+              }
+            ]
+          }
+        },
+        {
+          "name": "light-transition-statement",
+          "presetId": "light-transition-statement",
+          "content": {
+            "title": "把想法变成可以检查的成果",
+            "summary": "课程练习、步骤与素材均为教学演示。本页为演示素材。",
+            "takeaway": "先说清问题，再检查结果",
+            "relation": "none",
+            "role": "statement",
+            "scenario": "education-training",
+            "theme": "light-editorial"
+          }
+        },
+        {
+          "name": "light-parallel-grid",
+          "presetId": "light-parallel-grid",
+          "content": {
+            "title": "课程的四个学习模块",
+            "summary": "课程练习、步骤与素材均为教学演示。本页为演示素材。",
+            "takeaway": "先说清问题，再检查结果",
+            "items": [
+              "说明谁遇到什么具体困难。",
+              "拆成可以逐项完成的小步骤。",
+              "制作最小可操作原型。",
+              "邀请同伴按任务实际尝试。",
+              "对照验收条件检查结果。",
+              "依据反馈修正并再次验证。"
+            ],
+            "nodes": [
+              "识别问题",
+              "拆分步骤",
+              "制作原型",
+              "邀请反馈",
+              "检查结果",
+              "复盘改进"
+            ],
+            "relation": "parallel",
+            "role": "breakdown",
+            "scenario": "education-training",
+            "theme": "light-editorial"
+          }
+        },
+        {
+          "name": "light-hierarchy-branch",
+          "presetId": "light-hierarchy-branch",
+          "content": {
+            "title": "问题、原型与反馈相连",
+            "summary": "课程练习、步骤与素材均为教学演示。本页为演示素材。",
+            "takeaway": "先说清问题，再检查结果",
+            "items": [
+              "拆成可以逐项完成的小步骤。",
+              "制作最小可操作原型。"
+            ],
+            "nodes": [
+              "拆分步骤",
+              "制作原型",
+              "邀请反馈"
+            ],
+            "relation": "hierarchy",
+            "role": "relationship",
+            "scenario": "education-training",
+            "theme": "light-editorial"
+          }
+        },
+        {
+          "name": "light-gallery",
+          "presetId": "light-gallery",
+          "content": {
+            "title": "讲解示例",
+            "summary": "课程与配图均为演示素材。",
+            "takeaway": "先说清问题，再检查结果",
+            "items": [
+              "说明谁遇到什么具体困难。",
+              "拆成可以逐项完成的小步骤。"
+            ],
+            "nodes": [
+              "识别问题",
+              "拆分步骤"
+            ],
+            "relation": "parallel",
+            "role": "case",
+            "scenario": "education-training",
+            "theme": "light-editorial",
+            "images": [
+              {
+                "assetPath": "assets/product-workspace.png",
+                "width": 2880,
+                "height": 1704,
+                "fit": "contain"
+              },
+              {
+                "assetPath": "assets/brand-square.png",
+                "width": 512,
+                "height": 512,
+                "fit": "contain"
+              }
+            ]
+          }
+        },
+        {
+          "name": "light-comparison-split",
+          "presetId": "light-comparison-split",
+          "content": {
+            "title": "模糊需求与明确任务",
+            "summary": "课程练习、步骤与素材均为教学演示。本页为演示素材。",
+            "takeaway": "先说清问题，再检查结果",
+            "items": [
+              "拆成可以逐项完成的小步骤。",
+              "制作最小可操作原型。"
+            ],
+            "nodes": [
+              "拆分步骤",
+              "制作原型"
+            ],
+            "relation": "parallel",
+            "role": "comparison",
+            "scenario": "education-training",
+            "theme": "light-editorial"
+          }
+        },
+        {
+          "name": "light-process-steps",
+          "presetId": "light-process-steps",
+          "content": {
+            "title": "从问题拆解到成果检查",
+            "summary": "课程练习、步骤与素材均为教学演示。本页为演示素材。",
+            "takeaway": "先说清问题，再检查结果",
+            "items": [
+              "说明谁遇到什么具体困难。",
+              "拆成可以逐项完成的小步骤。",
+              "制作最小可操作原型。",
+              "邀请同伴按任务实际尝试。"
+            ],
+            "nodes": [
+              "识别问题",
+              "拆分步骤",
+              "制作原型",
+              "邀请反馈"
+            ],
+            "relation": "sequence",
+            "role": "process",
+            "scenario": "education-training",
+            "theme": "light-editorial"
+          }
+        },
+        {
+          "name": "light-metric-spotlight",
+          "presetId": "light-metric-spotlight",
+          "content": {
+            "title": "练习完成度样例",
+            "summary": "课程练习、步骤与素材均为教学演示。本页为演示素材。",
+            "takeaway": "练习 3步",
+            "items": [
+              "拆成可以逐项完成的小步骤。",
+              "制作最小可操作原型。",
+              "邀请同伴按任务实际尝试。"
+            ],
+            "relation": "none",
+            "role": "metrics",
+            "scenario": "education-training",
+            "theme": "light-editorial"
+          }
+        },
+        {
+          "name": "light-closing-callout",
+          "presetId": "light-closing-callout",
+          "content": {
+            "title": "用反馈安排下一轮练习",
+            "summary": "课程练习、步骤与素材均为教学演示。本页为演示素材。",
+            "takeaway": "先说清问题，再检查结果",
+            "items": [
+              "说明谁遇到什么具体困难。",
+              "拆成可以逐项完成的小步骤。",
+              "制作最小可操作原型。"
+            ],
+            "relation": "none",
+            "role": "result",
+            "scenario": "education-training",
+            "theme": "light-editorial"
+          }
+        },
+        {
+          "name": "light-process-long",
+          "presetId": "light-process-long",
+          "content": {
+            "title": "从问题拆解到成果检查",
+            "summary": "课程练习、步骤与素材均为教学演示。本页为演示素材。",
+            "items": [
+              "拆成可以逐项完成的小步骤。",
+              "制作最小可操作原型。",
+              "邀请同伴按任务实际尝试。"
+            ],
+            "nodes": [
+              "拆分步骤",
+              "制作原型",
+              "邀请反馈"
+            ],
+            "relation": "sequence",
+            "role": "process",
+            "scenario": "education-training",
+            "theme": "light-editorial"
+          }
+        },
+        {
+          "name": "light-matrix-2x2",
+          "presetId": "light-matrix-2x2",
+          "content": {
+            "title": "模糊需求与明确任务",
+            "summary": "课程练习、步骤与素材均为教学演示。本页为演示素材。",
+            "takeaway": "先说清问题，再检查结果",
+            "items": [
+              "说明谁遇到什么具体困难。",
+              "拆成可以逐项完成的小步骤。",
+              "制作最小可操作原型。",
+              "邀请同伴按任务实际尝试。"
+            ],
+            "nodes": [
+              "识别问题",
+              "拆分步骤",
+              "制作原型",
+              "邀请反馈"
+            ],
+            "relation": "matrix",
+            "role": "comparison",
+            "scenario": "education-training",
+            "theme": "light-editorial",
+            "axes": {
+              "x": "学习价值",
+              "y": "练习难度"
+            }
+          }
+        },
+        {
+          "name": "education-practice",
+          "presetId": "education-practice",
+          "content": {
+            "title": "从问题到练习检查",
+            "summary": "先明确难点，再练习并检查理解。本页为演示素材。",
+            "takeaway": "检查点用于发现误解并指导下一步练习。",
+            "theme": "light-editorial",
+            "relation": "sequence",
+            "nodes": [
+              "识别问题",
+              "完成练习",
+              "检查理解"
+            ],
+            "items": [
+              "指出题目中最难理解的概念或条件。",
+              "按示范方法独立完成同类任务。",
+              "对照检查点说明依据并修正错误。"
+            ],
+            "scenario": "education-training",
+            "role": "actions"
+          }
+        }
+      ]
+    }
+  ]
+}

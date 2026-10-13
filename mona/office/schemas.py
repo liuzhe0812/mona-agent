@@ -168,6 +168,7 @@ class CapabilitiesQuery(OfficeWireModel):
     preset_content_ref: str | None = None
     preset_family: str | None = None
     preset_theme: str | None = None
+    preset_scenario: str | None = None
 
 
 class VisualRegion(OfficeWireModel):
@@ -401,6 +402,7 @@ class CapabilitiesResult(OfficeWireModel):
     presets: list[dict[str, object]] | None = None
     content_ref: str | None = None
     preset_roles: list[dict[str, object]] | None = None
+    preset_scenarios: list[dict[str, object]] | None = None
     preset_diagnostics: list[dict[str, object]] | None = None
 
 

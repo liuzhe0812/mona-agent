@@ -15,6 +15,7 @@ import { presetBoundaryContent } from './slides-preset-capacity'
 import qualityFixture from '../tests/presets/quality-content.json'
 import workflowFixture from '../tests/presets/workflow-content.json'
 import designFixture from '../tests/design/components.json'
+import legacyPresetCatalog from './presets/catalog.json'
 
 interface TestBridgeLike {
   emit: (message: unknown) => void
@@ -201,6 +202,43 @@ async function inspectError(bridge: TestBridgeLike, sessionId: string, requestId
 }
 
 describe('Slides Mona entry', () => {
+  it('filters scenarios and inherits the successful scene without rebuilding existing pages', async () => {
+    vi.resetModules()
+    harness.posts = []; harness.cleanups = []; harness.bridge = undefined
+    ;(globalThis as { document?: unknown }).document = { getElementById: () => ({}), fonts: { load: async () => [] } }
+    ;(globalThis as { window?: unknown }).window = { addEventListener: vi.fn(), removeEventListener: vi.fn(), devicePixelRatio: 1 }
+    await import('./slides-entry')
+    const bridge = harness.bridge!
+    const sessionId = 'scenario-session'
+    let version = { editorEpoch: 'scenario-epoch', modelRevision: 0 }
+    bridge.emit({ type: 'office_open', sessionId, documentType: 'slides', version, file: asArrayBuffer(await fsPromises.readFile(bundledBlankPath)) })
+    await waitForPost((message) => message.type === 'office_editor_ready')
+    const pages = await inspect(bridge, sessionId, version, 'scenario-pages', { mode: 'slides' })
+    const firstId = String((pages.slides as Array<Record<string, unknown>>)[0]!.id)
+    const catalog = await inspect(bridge, sessionId, version, 'scenario-catalog', { mode: 'capabilities', presetScenario: 'education-training' })
+    expect(catalog.presetScenarios).toHaveLength(12)
+    expect((catalog.presets as Array<{scenarios: string[]}>).every((preset) => preset.scenarios.includes('education-training'))).toBe(true)
+    const first = await apply(bridge, sessionId, version, 'scenario-first', [{ op: 'slide_add_preset', payload: {
+      slideId: firstId, presetId: 'education-practice', content: { title: '练习：复核证据', scenario: 'education-training', relation: 'sequence',
+        nodes: ['观察', '练习', '检查'], items: ['阅读原始资料', '独立解释结论', '复核数字和口径'], takeaway: '保留判断依据' },
+    } }])
+    expect(first.ok, JSON.stringify(first.error)).toBe(true)
+    expect((first.presetPages as Array<{scenario: string}>)[0]!.scenario).toBe('education-training')
+    version = first.version as typeof version
+    const before = await inspect(bridge, sessionId, version, 'scenario-before', { mode: 'slides', slideId: firstId })
+    const added = await apply(bridge, sessionId, version, 'scenario-add', [{op:'slide_add',payload:{slideId:firstId}}])
+    version = added.version as typeof version
+    const secondId = String((added.createdSlides as Array<{id:string}>)[0]!.id)
+    const second = await apply(bridge, sessionId, version, 'scenario-second', [{op:'slide_add_preset',payload:{slideId:secondId,
+      presetId:'light-transition-statement',content:{title:'练习之后，检查依据',summary:'每个结论对应证据',takeaway:'逐项复核'}}}])
+    expect(second.ok, JSON.stringify(second.error)).toBe(true)
+    expect((second.presetPages as Array<{scenario:string}>)[0]!.scenario).toBe('education-training')
+    version = second.version as typeof version
+    const after = await inspect(bridge, sessionId, version, 'scenario-after', {mode:'slides',slideId:firstId})
+    expect((after.slides as Array<{id:string}>).find((slide) => slide.id === firstId))
+      .toEqual((before.slides as Array<{id:string}>).find((slide) => slide.id === firstId))
+  })
+
   it('recolors the same document after human edits, preserving IDs, layout, data, exclusions and undo', async () => {
     vi.resetModules()
     harness.posts = []; harness.cleanups = []; harness.bridge = undefined
@@ -1712,7 +1750,7 @@ interface PresetRenderSnapshot {
  * 否则快照用例直接失败——这就是"变体清单驱动"，避免漏测。
  */
 const PRESET_SAMPLES: Record<string, { content: PresetContent; expects: string[] }> = Object.fromEntries(
-  PRESETS.filter((preset) => !preset.elements.some((element) => element.kind === 'layout')).map((preset) => {
+  PRESETS.filter((preset) => legacyPresetCatalog.presets.some((item) => item.id === preset.id)).map((preset) => {
     const pages = qualityFixture.decks.flatMap((deck) => deck.pages)
     const match = pages.find((page) => page.presetId === preset.id)
       ?? pages.find((page) => PRESETS.find((item) => item.id === page.presetId)?.family === preset.family)
@@ -1827,7 +1865,7 @@ describe('预设页面渲染快照（CI 回归）', () => {
     // 变体清单驱动：逐个预索取代表内容，缺一条就失败，不会静默漏测。
     const productBytes = await fsPromises.readFile(pathModule.resolve(pathModule.dirname(here), '../tests/presets/assets/product-workspace.png'))
     // 新布局由 extended-content 的真实浏览器图集验收；此快照保留旧目录回归。
-    const samples = PRESETS.filter((preset) => !preset.elements.some((element) => element.kind === 'layout')).map((preset) => {
+    const samples = PRESETS.filter((preset) => legacyPresetCatalog.presets.some((item) => item.id === preset.id)).map((preset) => {
       const sample = PRESET_SAMPLES[preset.id]
       if (!sample) throw new Error(`缺少 ${preset.id} 的代表内容：新增变体必须补 PRESET_SAMPLES`)
       if (preset.capacity.imageRequired) sample.content.image = {dataUrl: `data:image/png;base64,${Buffer.from(productBytes).toString('base64')}`,width:2880,height:1704,fit:'contain'}
@@ -1957,6 +1995,6 @@ describe('预设页面渲染快照（CI 回归）', () => {
         .filter(isBlockingLayoutWarning)
         .map((warning) => `${PRESETS[index]!.id}: ${warning}`)
     ))
-    expect(violations).toEqual([])
+    expect(violations, violations.join('\n')).toEqual([])
   }, 20000)
 })

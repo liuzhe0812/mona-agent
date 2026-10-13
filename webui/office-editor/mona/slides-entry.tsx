@@ -58,7 +58,7 @@ import {
   type SlidesDocument,
 } from './slides-engine'
 import { composeSlide, isBlockingLayoutWarning, slideLayoutWarnings } from './slides-layout'
-import { expandPreset, rankPresets, presetCatalog, presetDiagnostics, findPreset, resolvePresetTheme, PRESET_ROLES, type PresetContent, type PresetRelation } from './slides-presets'
+import { expandPreset, rankPresets, presetCatalog, presetDiagnostics, findPreset, findPresetScenario, resolvePresetTheme, PRESET_ROLES, type PresetContent, type PresetRelation } from './slides-presets'
 import { PresetContentStore } from './slides-preset-content'
 import { dataUrlImage, svgImage } from './slides-assets'
 import { getSlidesCapabilities } from './slides-capabilities'
@@ -379,7 +379,7 @@ function translateOperation(
     presetId: string
     slideId: string
     roles: string[]
-    design: Pick<PresetContent, 'theme' | 'accentColor'>
+    design: Pick<PresetContent, 'theme' | 'accentColor' | 'scenario'>
     pendingChartStyles: Array<{ role: string; style: Record<string, unknown> }>
   }
 } {
@@ -439,7 +439,8 @@ function translateOperation(
       ops: translated.flatMap((item) => item.ops ?? (item.op ? [item.op] : [])),
       targets: [String(payload.slideId)],
       preset: { presetId: expanded.presetId, slideId: String(payload.slideId), roles: expanded.roles,
-        design:{theme:expanded.theme,accentColor:(payload.content as unknown as PresetContent).accentColor}, pendingChartStyles: expanded.pendingChartStyles },
+        design:{theme:expanded.theme,accentColor:(payload.content as unknown as PresetContent).accentColor,
+          scenario:(payload.content as unknown as PresetContent).scenario}, pendingChartStyles: expanded.pendingChartStyles },
     }
   }
   if (operation.op === 'slide_apply_txn') {
@@ -785,7 +786,7 @@ function MonaSlidesEditor(): React.JSX.Element {
   const operationCacheRef = useRef(new Map<string, { fingerprint: string; result: unknown }>())
   const presetContentsRef = useRef(new PresetContentStore())
   const presetHistoryRef = useRef(new Map<string, { presetId: string; anchor: string }>())
-  const presetDesignRef = useRef<Pick<PresetContent, 'theme' | 'accentColor'>>({})
+  const presetDesignRef = useRef<Pick<PresetContent, 'theme' | 'accentColor' | 'scenario'>>({})
   const undoRef = useRef<SlidesSnapshot[]>([])
   const redoRef = useRef<SlidesSnapshot[]>([])
   const deckListenersRef = useRef(new Set<(state: { slides: RenderSlide[]; size: { cx: number; cy: number } }) => void>())
@@ -1016,7 +1017,10 @@ function MonaSlidesEditor(): React.JSX.Element {
             : (() => { throw new Error('operations 必须是字符串数组。') })()
         const capabilities = getSlidesCapabilities(elementType, requestedOperations)
         if (isRecord(command.query.presetContent) || typeof command.query.presetContentRef === 'string') {
-          const content = {...presetDesignRef.current,...presetContentsRef.current.resolve(command.query.presetContent, command.query.presetContentRef)}
+          const requestedContent = presetContentsRef.current.resolve(command.query.presetContent, command.query.presetContentRef)
+          const content = {...presetDesignRef.current,...requestedContent}
+          if (typeof command.query.presetScenario === 'string') content.scenario = findPresetScenario(command.query.presetScenario).id
+          if (content.scenario !== presetDesignRef.current.scenario && requestedContent.theme === undefined) content.theme = undefined
           if (typeof command.query.presetTheme === 'string') content.theme = command.query.presetTheme as PresetContent['theme']
           content.theme = resolvePresetTheme(content).id
           if (typeof command.query.presetRelation === 'string') {
@@ -1038,17 +1042,18 @@ function MonaSlidesEditor(): React.JSX.Element {
             limit: typeof command.query.presetLimit === 'number' ? command.query.presetLimit : undefined,
           })
           const presets: Array<Record<string,unknown>> = candidates.map(({preset,score,reasons})=>({id:preset.id,family:preset.family,theme:preset.theme,
-            roles:preset.roles,relation:preset.relation,composition:preset.composition,capacity:preset.capacity,score,reasons}))
+            roles:preset.roles,scenarios:preset.scenarios,relation:preset.relation,composition:preset.composition,capacity:preset.capacity,score,reasons}))
           const diagnostics = candidates.length ? [] : presetDiagnostics(content,
             typeof command.query.presetFamily === 'string' ? command.query.presetFamily : undefined, content.theme)
           result = {...capabilities, contentRef: presetContentsRef.current.register(content),presets,
             ...(diagnostics.length ? {presetDiagnostics:diagnostics} : {})}
         } else {
           const theme = typeof command.query.presetTheme === 'string' ? command.query.presetTheme : undefined
+          const scenario = typeof command.query.presetScenario === 'string' ? findPresetScenario(command.query.presetScenario) : undefined
           result = {
             ...capabilities,
             presetRoles: PRESET_ROLES,
-            presets: presetCatalog().filter((item) => !theme || item.theme === theme),
+            presets: presetCatalog().filter((item) => (!theme || item.theme === theme) && (!scenario || scenario.templateIds.includes(item.id))),
           }
         }
       } else if (mode === 'summary') {
@@ -1310,8 +1315,9 @@ function MonaSlidesEditor(): React.JSX.Element {
         if (operation.op !== 'slide_add_preset' || !isRecord(operation.payload)) return operation
         const {contentRef, content, ...payload} = operation.payload
         const explicitPreset = typeof payload.presetId === 'string' ? findPreset(payload.presetId) : undefined
-        const canonical = {...presetDesignRef.current,...(explicitPreset ? {theme:explicitPreset.theme} : {}),
-          ...presetContentsRef.current.resolve(content,contentRef)}
+        const requestedContent = presetContentsRef.current.resolve(content,contentRef)
+        const canonical = {...presetDesignRef.current,...(explicitPreset ? {theme:explicitPreset.theme} : {}), ...requestedContent}
+        if (canonical.scenario !== presetDesignRef.current.scenario && requestedContent.theme === undefined) canonical.theme = undefined
         canonical.theme = resolvePresetTheme(canonical).id
         const presetId = payload.presetId === undefined || payload.presetId === 'auto'
           ? rankPresets(canonical,{theme:canonical.theme,usedPresetIds:[...presetHistoryRef.current.values()].map((entry)=>entry.presetId),limit:1})[0]?.preset.id ?? 'auto'
@@ -1444,6 +1450,7 @@ function MonaSlidesEditor(): React.JSX.Element {
         presetDesignRef.current = plan.design
         return {
           presetId: plan.presetId,
+          ...(plan.design.scenario ? {scenario:plan.design.scenario} : {}),
           slideId: plan.slideId,
           roles: plan.roles,
           elements,

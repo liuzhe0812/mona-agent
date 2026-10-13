@@ -1,11 +1,50 @@
 {
   "skill": [
-    "design/overview.png"
+    "scenarios/overview.png"
   ],
   "references": {
     "components.md": [
       "design/overview.png",
       "design/composition.png"
+    ],
+    "scenarios.md": [
+      "scenarios/overview.png"
+    ],
+    "scenarios/business-report.md": [
+      "presets/report-project-status.png"
+    ],
+    "scenarios/product-showcase.md": [
+      "presets/product-feature-proof.png"
+    ],
+    "scenarios/technical-proposal.md": [
+      "presets/technical-layer-stack.png"
+    ],
+    "scenarios/data-review.md": [
+      "presets/data-driver-review.png"
+    ],
+    "scenarios/strategy-planning.md": [
+      "presets/strategy-decision-options.png"
+    ],
+    "scenarios/research-report.md": [
+      "presets/research-method-findings.png"
+    ],
+    "scenarios/business-pitch.md": [
+      "presets/pitch-business-model.png"
+    ],
+    "scenarios/investment-report.md": [
+      "presets/investment-risk-scenarios.png"
+    ],
+    "scenarios/brand-proposal.md": [
+      "presets/brand-concept-proposal.png"
+    ],
+    "scenarios/company-story.md": [
+      "presets/story-milestones.png"
+    ],
+    "scenarios/event-planning.md": [
+      "presets/event-run-of-show.png"
+    ],
+    "scenarios/education-training.md": [
+      "presets/education-practice.png"
     ]
   }
 }

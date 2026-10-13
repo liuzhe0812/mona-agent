@@ -24,6 +24,23 @@ def test_candidate_rejection_diagnostics_survive_wire_contract() -> None:
     ]
 
 
+def test_scenario_catalog_and_filter_survive_wire_contract() -> None:
+    request = CapabilitiesQuery.model_validate({
+        "mode": "capabilities", "presetScenario": "education-training",
+        "presetContent": {"title": "实践练习", "scenario": "education-training"},
+    })
+    assert request.preset_scenario == "education-training"
+    assert request.model_dump(by_alias=True)["presetContent"]["scenario"] == "education-training"
+    result = CapabilitiesResult.model_validate({
+        "mode": "capabilities", "documentType": "slides", "operations": [],
+        "presetScenarios": [{"id": "education-training", "label": "教学培训", "templateIds": ["education-practice"]}],
+        "presets": [{"id": "education-practice", "scenarios": ["education-training"]}],
+    })
+    wire = result.model_dump(by_alias=True)
+    assert wire["presetScenarios"][0]["id"] == "education-training"
+    assert wire["presets"][0]["scenarios"] == ["education-training"]
+
+
 def test_preset_selection_query_reference_round_trips_with_aliases() -> None:
     request = OfficeInspectRequest.model_validate(
         {
@@ -59,6 +76,7 @@ def test_preset_selection_query_reference_round_trips_with_aliases() -> None:
         "presetContentRef": "preset-content-1",
         "presetFamily": None,
         "presetTheme": None,
+        "presetScenario": None,
     }
 
     visual = OfficeInspectRequest.model_validate(

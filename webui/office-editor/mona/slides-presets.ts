@@ -2,6 +2,8 @@ import catalog from './presets/catalog.json'
 import extended from './presets/extended.json'
 import roleCatalog from './presets/roles.json'
 import legacySemantics from './presets/legacy-semantics.json'
+import scenarioCatalog from './presets/scenarios.json'
+import scenarioPages from './presets/scenario-pages.json'
 import { expandAdditionalLayout, type AdditionalLayoutElement } from './slides-preset-layouts'
 import { missingRequiredFacts, preparePresetContent } from './slides-preset-content'
 import { expandContentPage } from './slides-content-page'
@@ -90,7 +92,20 @@ export interface PresetContent {
   relation?: PresetRelation
   axes?: { x: string; y: string }
   theme?: PresetThemeId
+  scenario?: string
   accentColor?: string
+}
+
+export interface PresetScenario {
+  id: string
+  label: string
+  description: string
+  sourceThemes: string[]
+  defaultTheme: PresetThemeId
+  templateIds: string[]
+  recommendedRoles: string[]
+  signaturePages: Array<{ id: string; label: string; role: string; relation: PresetRelation; preferredPresetId: string }>
+  palette: Record<PresetColorRole, string> & { seriesColors: string[] }
 }
 
 type PresetElement =
@@ -138,6 +153,7 @@ export interface PresetDefinition {
   id: string
   family: string
   roles?: string[]
+  scenarios?: string[]
   relation?: PresetRelation
   composition?: string
   theme: PresetThemeId
@@ -169,16 +185,36 @@ export interface ExpandedPreset {
 // Geometry and theme definitions have a single, data-only source.
 export const PRESET_THEMES = catalog.themes as Record<PresetThemeId, PresetTheme>
 export const PRESET_ROLES = roleCatalog
+export const PRESET_SCENARIOS = scenarioCatalog.scenarios as PresetScenario[]
 export const PRESETS: PresetDefinition[] = [
   ...catalog.presets.map((preset) => ({ ...preset, ...((legacySemantics as Record<string, object>)[preset.id] ?? {}) })),
   ...extended.presets,
-] as PresetDefinition[]
+  ...scenarioPages.presets,
+].map((preset) => ({ ...preset, scenarios: PRESET_SCENARIOS.filter((scenario) => scenario.templateIds.includes(preset.id)).map((scenario) => scenario.id) })) as PresetDefinition[]
 
 const ICONS = { target: targetIcon, layers: layersIcon, workflow: workflowIcon, check: checkIcon }
 
+export function findPresetScenario(id: string): PresetScenario {
+  const scenario = PRESET_SCENARIOS.find((item) => item.id === id)
+  if (!scenario) throw new Error(`未知 PPT 场景：${id}。请从 presetScenarios 目录选择。`)
+  return scenario
+}
+
+export function presetScenarioCatalog() {
+  return PRESET_SCENARIOS.map(({ id, label, description, defaultTheme, templateIds }) => ({
+    id, label, description, defaultTheme, templateCount: templateIds.length,
+  }))
+}
+
 export function resolvePresetTheme(content: PresetContent, fallback: PresetThemeId = 'light-editorial'): PresetTheme {
-  const base = PRESET_THEMES[content.theme ?? fallback]
+  const scenario = content.scenario === undefined ? undefined : findPresetScenario(content.scenario)
+  let base = PRESET_THEMES[content.theme ?? scenario?.defaultTheme ?? fallback]
   if (!base) throw new Error('theme 必须是 light-editorial 或 dark-product。')
+  if (scenario && (!content.theme || content.theme === scenario.defaultTheme)) {
+    const { seriesColors, ...colors } = scenario.palette
+    base = { ...base, ...colors, chart: { ...base.chart, textColor: colors.text, axisLabelColor: colors.muted,
+      legendColor: colors.muted, dataLabelColor: colors.text, gridColor: colors.line, axisLineColor: colors.line, seriesColors } }
+  }
   if (content.accentColor === undefined) return base
   if (!/^#[0-9a-f]{6}$/i.test(content.accentColor)) throw new Error('accentColor 必须是 #RRGGBB 颜色。')
   return {...base,accent:content.accentColor,chart:{...base.chart,seriesColors:[content.accentColor,...base.chart.seriesColors.slice(1)]}}
@@ -186,21 +222,25 @@ export function resolvePresetTheme(content: PresetContent, fallback: PresetTheme
 
 /** Capacity and declared relationships are hard constraints; roles and rhythm are preferences. */
 export function rankPresets(input: PresetContent, options: {
-  family?: string; theme?: string; role?: string; relation?: PresetRelation; usedPresetIds?: string[]; limit?: number
+  family?: string; theme?: string; scenario?: string; role?: string; relation?: PresetRelation; usedPresetIds?: string[]; limit?: number
 } = {}): Array<{ preset: PresetDefinition; score: number; reasons: string[] }> {
   const content = preparePresetContent(input)
   resolvePresetTheme(content)
   const theme = options.theme ?? content.theme
+  const scenarioId = options.scenario ?? content.scenario
+  const scenario = scenarioId === undefined ? undefined : findPresetScenario(scenarioId)
   const role = options.role ?? content.role
   const relation = options.relation ?? content.relation
   if (content.nodes?.length && !relation) return []
   const history = (options.usedPresetIds ?? []).map((id) => findPreset(id)).filter((item): item is PresetDefinition => !!item)
   return PRESETS.filter((preset) => (!options.family || preset.family === options.family)
+    && (!scenario || scenario.templateIds.includes(preset.id))
     && (!theme || preset.theme === theme) && (!relation || preset.relation === relation)
     && presetWarnings(preset, content).length === 0)
     .map((preset) => {
       const reasons = ['容量与必需对象匹配']
       let score = 100
+      if (scenario) { score += 20; reasons.push(`${scenario.label}场景适用`) }
       if (role && preset.roles?.includes(role)) { score += 40; reasons.push('页面用途匹配') }
       if (content.items?.length) score += Math.round(20 * content.items.length / Math.max(1, preset.capacity.itemsMax))
       if (content.nodes?.length) score += Math.round(15 * content.nodes.length / Math.max(1, preset.capacity.nodesMax))
@@ -218,6 +258,7 @@ export function rankPresets(input: PresetContent, options: {
 export function presetDiagnostics(content: PresetContent, family?: string, theme?: string): Array<{id:string;reasons:string[]}> {
   if (content.nodes?.length && !content.relation) return [{ id: 'content', reasons: ['节点选版需要声明真实 relation（如 parallel、sequence）；也可直接使用原生操作自由构图。'] }]
   return PRESETS.filter((preset) => (!family || preset.family === family) && (!theme || preset.theme === theme))
+    .filter((preset) => !content.scenario || preset.scenarios?.includes(content.scenario))
     .map((preset) => ({id:preset.id,reasons:presetWarnings(preset,content)}))
     .filter((entry) => entry.reasons.length).sort((a,b) => a.reasons.length-b.reasons.length).slice(0,3)
 }
@@ -237,10 +278,11 @@ export function presetCatalog(): Array<{
   theme: PresetThemeId
   relation?: PresetRelation
   roles?: string[]
+  scenarios?: string[]
   capacity: PresetCapacity
 }> {
-  return PRESETS.map(({ id, family, theme, relation, roles, capacity }) => ({
-    id, family, theme, relation, roles, capacity,
+  return PRESETS.map(({ id, family, theme, relation, roles, scenarios, capacity }) => ({
+    id, family, theme, relation, roles, scenarios, capacity,
   }))
 }
 
@@ -261,7 +303,7 @@ export function presetWarnings(preset: PresetDefinition, content: PresetContent)
   const warnings: string[] = []
   if (!content || typeof content !== 'object' || Array.isArray(content)) return ['content 必须是对象']
   try { content = preparePresetContent(content) } catch (error) { return [error instanceof Error ? error.message : '内容无效'] }
-  const allowed = ['title', 'summary', 'takeaway', 'items', 'nodes', 'chart', 'image', 'images', 'facts', 'role', 'relation', 'axes', 'theme', 'accentColor']
+  const allowed = ['title', 'summary', 'takeaway', 'items', 'nodes', 'chart', 'image', 'images', 'facts', 'role', 'relation', 'axes', 'theme', 'scenario', 'accentColor']
   try { resolvePresetTheme(content) } catch (error) { return [String(error)] }
   for (const key of Object.keys(content)) if (!allowed.includes(key)) warnings.push(`不支持内容字段：${key}`)
   for (const key of ['title', 'summary', 'takeaway'] as const) {
@@ -399,7 +441,7 @@ export function presetWarnings(preset: PresetDefinition, content: PresetContent)
   if (flexible && !warnings.length) {
     try {
       const rendered = preset.elements.flatMap((element) => element.kind === 'layout'
-        ? expandAdditionalLayout(element, content, PRESET_THEMES[preset.theme], 'capacity-check', 1) : [])
+        ? expandAdditionalLayout(element, content, resolvePresetTheme(content, preset.theme), 'capacity-check', 1) : [])
       const text = rendered.map((item) => String(item.payload.text ?? '')).join('\n')
       for (const value of [...(content.items ?? []), ...(content.nodes ?? [])]) {
         if (!text.includes(value)) warnings.push(`内容没有可见落点：${value}；请换布局。`)

@@ -1,5 +1,5 @@
 import { COMPOSE_FIELDS } from './slides-layout'
-import { PRESETS } from './slides-presets'
+import { PRESETS, PRESET_SCENARIOS, presetScenarioCatalog } from './slides-presets'
 import { DESIGN_CATALOG } from './slides-design'
 import { replaceColorsCapability } from './slides-colors'
 import { designCapability, pathCapability, richTextFields } from './slides-design-schema'
@@ -15,6 +15,7 @@ export interface SlidesCapabilitiesResult {
   mode: 'capabilities'
   documentType: 'slides'
   designs?: Array<{ id: string; label: string; use: string }>
+  presetScenarios?: ReturnType<typeof presetScenarioCatalog>
   operations: Array<Pick<SlidesCapability, 'op' | 'description'> & { payloadSchema?: Record<string, unknown> }>
   availableOperations: string[]
   unsupportedOperations: string[]
@@ -369,6 +370,7 @@ const directCapabilities: SlidesCapability[] = [
           description: '本页真实内容；几何、字号、颜色和对象由预设生成，不要重复提供坐标或样式。',
           properties: {
             title: { type: 'string' },
+            scenario: {type:'string',enum:PRESET_SCENARIOS.map((scenario) => scenario.id),description:'按用途选择 presetScenarios 中的场景；后续预设页继承，可自由原生定制。'},
             theme: {type:'string',enum:['light-editorial','dark-product'],description:'整稿视觉方向；首个成功页面后自动继承'},
             accentColor: {type:'string',description:'用户品牌强调色 #RRGGBB；同一编辑器会话后续页面继承'},
             role: { type: 'string', description: '页面用途，取自 presetRoles 目录；用于软排序' },
@@ -447,5 +449,6 @@ export function getSlidesCapabilities(
     nextOperations: requested.slice(3),
     note: '未指定 operations 时仅返回操作目录；指定实际名称读取参数，每次最多3项，剩余见 nextOperations。未知名称列在 unsupportedOperations，不影响已知项。改品牌色用 inspect palette + slide_replace_colors 原位修改，不需要关闭或新建文稿。',
     ...(!names.length ? { designs: [...DESIGN_CATALOG] } : {}),
+    presetScenarios: presetScenarioCatalog(),
   }
 }

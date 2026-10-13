@@ -1,0 +1,378 @@
+{
+  "schemaVersion": 1,
+  "scenarios": [
+    {
+      "id": "business-report",
+      "label": "企业汇报",
+      "description": "汇报经营状况、关键指标、项目推进、差距和后续行动。",
+      "sourceThemes": ["theme01"],
+      "defaultTheme": "light-editorial",
+      "palette": {
+        "background": "#F5F3ED",
+        "surface": "#FFFFFF",
+        "text": "#20242B",
+        "muted": "#5A6270",
+        "accent": "#5B8DEF",
+        "line": "#D8D2C4",
+        "seriesColors": ["#5B8DEF", "#46B083", "#E0A23A", "#E8503A", "#7A5AE0"]
+      },
+      "templateIds": ["light-cover-split", "light-editorial-essay", "light-metric-spotlight", "light-timeline", "light-chart-evidence", "light-comparison-split", "light-process-steps", "light-closing-callout", "light-overview", "light-metric", "light-chart-insight", "report-project-status"],
+      "recommendedRoles": ["cover", "context", "metrics", "trend", "observation", "comparison", "actions", "result", "closing"],
+      "signaturePages": [
+        {"id": "business-report-cover", "label": "年度或阶段汇报封面", "role": "cover", "relation": "none", "preferredPresetId": "light-cover-split"},
+        {"id": "business-report-context", "label": "经营背景与目标", "role": "context", "relation": "none", "preferredPresetId": "light-editorial-essay"},
+        {"id": "business-report-kpis", "label": "关键指标总览", "role": "metrics", "relation": "none", "preferredPresetId": "light-metric-spotlight"},
+        {"id": "business-report-trend", "label": "指标变化趋势", "role": "trend", "relation": "sequence", "preferredPresetId": "light-timeline"},
+        {"id": "business-report-evidence", "label": "经营数据证据", "role": "observation", "relation": "none", "preferredPresetId": "light-chart-evidence"},
+        {"id": "business-report-comparison", "label": "目标与实际对照", "role": "comparison", "relation": "parallel", "preferredPresetId": "light-comparison-split"},
+        {"id": "business-report-actions", "label": "问题与行动计划", "role": "actions", "relation": "sequence", "preferredPresetId": "light-process-steps"},
+        {"id": "business-report-closing", "label": "结论与请求", "role": "closing", "relation": "none", "preferredPresetId": "light-closing-callout"},
+        {"id": "business-report-legacy-overview", "label": "经营概览网格", "role": "breakdown", "relation": "parallel", "preferredPresetId": "light-overview"},
+        {"id": "business-report-legacy-metric", "label": "单项经营指标", "role": "metrics", "relation": "none", "preferredPresetId": "light-metric"},
+        {"id": "business-report-legacy-chart", "label": "经营图表洞察", "role": "observation", "relation": "none", "preferredPresetId": "light-chart-insight"},
+        {"id": "report-project-status", "label": "项目状态总览", "role": "metrics", "relation": "parallel", "preferredPresetId": "report-project-status"}
+      ]
+    },
+    {
+      "id": "product-showcase",
+      "label": "产品展示",
+      "description": "说明产品价值、核心能力、使用场景、效果证据和发布计划。",
+      "sourceThemes": ["theme02", "theme04"],
+      "defaultTheme": "dark-product",
+      "palette": {
+        "background": "#0B1020",
+        "surface": "#141B30",
+        "text": "#F5F7FA",
+        "muted": "#9AA6BD",
+        "accent": "#72DFC1",
+        "line": "#27324A",
+        "seriesColors": ["#72DFC1", "#6C7CFF", "#FFB86B", "#B9F24A", "#E86FAE"]
+      },
+      "templateIds": ["dark-cover-split", "dark-editorial-essay", "dark-parallel-grid", "dark-metric-spotlight", "dark-hierarchy-branch", "dark-gallery", "dark-comparison-split", "dark-process-steps", "dark-product-hero", "dark-metric", "dark-case", "product-feature-proof"],
+      "recommendedRoles": ["cover", "statement", "context", "breakdown", "metrics", "relationship", "image", "case", "comparison", "process"],
+      "signaturePages": [
+        {"id": "product-showcase-cover", "label": "产品主视觉封面", "role": "cover", "relation": "none", "preferredPresetId": "dark-cover-split"},
+        {"id": "product-showcase-value", "label": "产品价值主张", "role": "statement", "relation": "none", "preferredPresetId": "dark-editorial-essay"},
+        {"id": "product-showcase-features", "label": "核心能力矩阵", "role": "breakdown", "relation": "parallel", "preferredPresetId": "dark-parallel-grid"},
+        {"id": "product-showcase-metrics", "label": "产品效果指标", "role": "metrics", "relation": "none", "preferredPresetId": "dark-metric-spotlight"},
+        {"id": "product-showcase-architecture", "label": "产品组成与模块关系", "role": "relationship", "relation": "hierarchy", "preferredPresetId": "dark-hierarchy-branch"},
+        {"id": "product-showcase-uses", "label": "典型使用场景", "role": "image", "relation": "parallel", "preferredPresetId": "dark-gallery"},
+        {"id": "product-showcase-comparison", "label": "方案或版本对照", "role": "comparison", "relation": "parallel", "preferredPresetId": "dark-comparison-split"},
+        {"id": "product-showcase-rollout", "label": "发布与采用路径", "role": "process", "relation": "sequence", "preferredPresetId": "dark-process-steps"},
+        {"id": "product-showcase-legacy-hero", "label": "产品主张与主视觉", "role": "cover", "relation": "none", "preferredPresetId": "dark-product-hero"},
+        {"id": "product-showcase-legacy-metric", "label": "产品指标侧栏", "role": "metrics", "relation": "none", "preferredPresetId": "dark-metric"},
+        {"id": "product-showcase-legacy-case", "label": "产品案例与图片", "role": "case", "relation": "parallel", "preferredPresetId": "dark-case"},
+        {"id": "product-feature-proof", "label": "功能与用户价值证据", "role": "case", "relation": "none", "preferredPresetId": "product-feature-proof"}
+      ]
+    },
+    {
+      "id": "technical-proposal",
+      "label": "技术方案",
+      "description": "呈现技术背景、系统分层、方案取舍、风险和实施路线。",
+      "sourceThemes": ["theme03"],
+      "defaultTheme": "dark-product",
+      "palette": {
+        "background": "#0B1020",
+        "surface": "#141B30",
+        "text": "#F5F7FA",
+        "muted": "#9AA6BD",
+        "accent": "#6C7CFF",
+        "line": "#27324A",
+        "seriesColors": ["#6C7CFF", "#72DFC1", "#B9F24A", "#FFB86B", "#E86FAE"]
+      },
+      "templateIds": ["dark-cover-split", "dark-editorial-essay", "dark-hierarchy-branch", "dark-process-steps", "dark-comparison-split", "dark-matrix-2x2", "dark-chart-evidence", "dark-timeline", "dark-architecture", "dark-process-long", "dark-process-map", "technical-layer-stack"],
+      "recommendedRoles": ["cover", "context", "relationship", "process", "comparison", "risks", "metrics", "trend", "actions", "result"],
+      "signaturePages": [
+        {"id": "technical-proposal-cover", "label": "技术方案封面", "role": "cover", "relation": "none", "preferredPresetId": "dark-cover-split"},
+        {"id": "technical-proposal-context", "label": "现状与约束", "role": "context", "relation": "none", "preferredPresetId": "dark-editorial-essay"},
+        {"id": "technical-proposal-architecture", "label": "系统关系图", "role": "relationship", "relation": "hierarchy", "preferredPresetId": "dark-hierarchy-branch"},
+        {"id": "technical-proposal-dataflow", "label": "数据流与处理步骤", "role": "process", "relation": "sequence", "preferredPresetId": "dark-process-steps"},
+        {"id": "technical-proposal-options", "label": "备选方案对比", "role": "comparison", "relation": "parallel", "preferredPresetId": "dark-comparison-split"},
+        {"id": "technical-proposal-risks", "label": "技术风险矩阵", "role": "risks", "relation": "matrix", "preferredPresetId": "dark-matrix-2x2"},
+        {"id": "technical-proposal-benchmark", "label": "性能与验证证据", "role": "observation", "relation": "none", "preferredPresetId": "dark-chart-evidence"},
+        {"id": "technical-proposal-roadmap", "label": "实施里程碑", "role": "trend", "relation": "sequence", "preferredPresetId": "dark-timeline"},
+        {"id": "technical-proposal-legacy-architecture", "label": "系统架构层级", "role": "relationship", "relation": "hierarchy", "preferredPresetId": "dark-architecture"},
+        {"id": "technical-proposal-legacy-process-long", "label": "纵向实施流程", "role": "process", "relation": "sequence", "preferredPresetId": "dark-process-long"},
+        {"id": "technical-proposal-legacy-process-map", "label": "横向技术流程", "role": "process", "relation": "sequence", "preferredPresetId": "dark-process-map"},
+        {"id": "technical-layer-stack", "label": "技术分层堆栈", "role": "relationship", "relation": "sequence", "preferredPresetId": "technical-layer-stack"}
+      ]
+    },
+    {
+      "id": "data-review",
+      "label": "经营数据",
+      "description": "复盘指标走势、分部表现、关键驱动因素和经营动作。",
+      "sourceThemes": ["theme05", "theme06"],
+      "defaultTheme": "light-editorial",
+      "palette": {
+        "background": "#F5F3ED",
+        "surface": "#FFFFFF",
+        "text": "#20242B",
+        "muted": "#5A6270",
+        "accent": "#D8402E",
+        "line": "#D8D2C4",
+        "seriesColors": ["#D8402E", "#E2742C", "#EFBE2E", "#3C9A52", "#4DA0C6"]
+      },
+      "templateIds": ["light-cover-split", "light-metric-spotlight", "light-timeline", "light-chart-evidence", "light-parallel-grid", "light-comparison-split", "light-process-steps", "light-closing-callout", "data-driver-review"],
+      "recommendedRoles": ["cover", "metrics", "trend", "distribution", "comparison", "relationship", "observation", "actions", "result"],
+      "signaturePages": [
+        {"id": "data-review-cover", "label": "经营复盘封面", "role": "cover", "relation": "none", "preferredPresetId": "light-cover-split"},
+        {"id": "data-review-scorecard", "label": "核心指标记分板", "role": "metrics", "relation": "none", "preferredPresetId": "light-metric-spotlight"},
+        {"id": "data-review-trend", "label": "指标趋势", "role": "trend", "relation": "sequence", "preferredPresetId": "light-timeline"},
+        {"id": "data-review-evidence", "label": "图表证据与结论", "role": "observation", "relation": "none", "preferredPresetId": "light-chart-evidence"},
+        {"id": "data-review-segments", "label": "区域或产品表现", "role": "distribution", "relation": "parallel", "preferredPresetId": "light-parallel-grid"},
+        {"id": "data-review-variance", "label": "目标与实际差异", "role": "comparison", "relation": "parallel", "preferredPresetId": "light-comparison-split"},
+        {"id": "data-review-actions", "label": "复盘后的经营动作", "role": "actions", "relation": "sequence", "preferredPresetId": "light-process-steps"},
+        {"id": "data-review-closing", "label": "结论摘要", "role": "result", "relation": "none", "preferredPresetId": "light-closing-callout"},
+        {"id": "data-driver-review", "label": "经营驱动因素拆解", "role": "observation", "relation": "none", "preferredPresetId": "data-driver-review"}
+      ]
+    },
+    {
+      "id": "strategy-planning",
+      "label": "战略规划",
+      "description": "梳理战略背景、选择依据、风险情景、路线图和执行安排。",
+      "sourceThemes": ["theme06"],
+      "defaultTheme": "dark-product",
+      "palette": {
+        "background": "#0B1020",
+        "surface": "#141B30",
+        "text": "#F5F7FA",
+        "muted": "#9AA6BD",
+        "accent": "#D2FB30",
+        "line": "#27324A",
+        "seriesColors": ["#D2FB30", "#72DFC1", "#6C7CFF", "#FFB86B", "#E86FAE"]
+      },
+      "templateIds": ["dark-cover-split", "dark-editorial-essay", "dark-metric-spotlight", "dark-hierarchy-branch", "dark-matrix-2x2", "dark-timeline", "dark-process-steps", "dark-chart-evidence", "dark-chart-insight", "dark-comparison", "dark-overview", "strategy-decision-options"],
+      "recommendedRoles": ["cover", "context", "metrics", "relationship", "comparison", "risks", "trend", "process", "actions", "result"],
+      "signaturePages": [
+        {"id": "strategy-planning-cover", "label": "战略规划封面", "role": "cover", "relation": "none", "preferredPresetId": "dark-cover-split"},
+        {"id": "strategy-planning-context", "label": "战略背景与目标", "role": "context", "relation": "none", "preferredPresetId": "dark-editorial-essay"},
+        {"id": "strategy-planning-goals", "label": "目标与关键结果", "role": "metrics", "relation": "none", "preferredPresetId": "dark-metric-spotlight"},
+        {"id": "strategy-planning-portfolio", "label": "业务组合与相互关系", "role": "relationship", "relation": "hierarchy", "preferredPresetId": "dark-hierarchy-branch"},
+        {"id": "strategy-planning-risks", "label": "机会与风险情景", "role": "risks", "relation": "matrix", "preferredPresetId": "dark-matrix-2x2"},
+        {"id": "strategy-planning-roadmap", "label": "战略路线图", "role": "trend", "relation": "sequence", "preferredPresetId": "dark-timeline"},
+        {"id": "strategy-planning-execution", "label": "执行步骤", "role": "actions", "relation": "sequence", "preferredPresetId": "dark-process-steps"},
+        {"id": "strategy-planning-evidence", "label": "战略指标与证据", "role": "observation", "relation": "none", "preferredPresetId": "dark-chart-evidence"},
+        {"id": "strategy-planning-legacy-chart", "label": "战略图表洞察", "role": "observation", "relation": "none", "preferredPresetId": "dark-chart-insight"},
+        {"id": "strategy-planning-legacy-comparison", "label": "战略方案比较", "role": "comparison", "relation": "parallel", "preferredPresetId": "dark-comparison"},
+        {"id": "strategy-planning-legacy-overview", "label": "战略议题概览", "role": "breakdown", "relation": "parallel", "preferredPresetId": "dark-overview"},
+        {"id": "strategy-decision-options", "label": "战略选项决策矩阵", "role": "comparison", "relation": "parallel", "preferredPresetId": "strategy-decision-options"}
+      ]
+    },
+    {
+      "id": "research-report",
+      "label": "调研报告",
+      "description": "呈现研究问题、方法、证据、比较分析、发现和建议。",
+      "sourceThemes": ["theme07"],
+      "defaultTheme": "light-editorial",
+      "palette": {
+        "background": "#F5F3ED",
+        "surface": "#FFFFFF",
+        "text": "#20242B",
+        "muted": "#5A6270",
+        "accent": "#8FD400",
+        "line": "#D8D2C4",
+        "seriesColors": ["#8FD400", "#3458B4", "#E8741C", "#4DA0C6", "#7A3C90"]
+      },
+      "templateIds": ["light-cover-split", "light-editorial-essay", "light-parallel-columns", "light-process-steps", "light-chart-evidence", "light-comparison-split", "light-gallery", "light-closing-callout", "light-comparison", "light-process-map", "light-architecture", "research-method-findings"],
+      "recommendedRoles": ["cover", "breakdown", "context", "process", "metrics", "comparison", "case", "observation", "actions", "closing"],
+      "signaturePages": [
+        {"id": "research-report-cover", "label": "调研报告封面", "role": "cover", "relation": "none", "preferredPresetId": "light-cover-split"},
+        {"id": "research-report-question", "label": "研究问题与范围", "role": "context", "relation": "none", "preferredPresetId": "light-editorial-essay"},
+        {"id": "research-report-design", "label": "调研框架", "role": "breakdown", "relation": "parallel", "preferredPresetId": "light-parallel-columns"},
+        {"id": "research-report-method", "label": "研究流程", "role": "process", "relation": "sequence", "preferredPresetId": "light-process-steps"},
+        {"id": "research-report-evidence", "label": "证据图表", "role": "observation", "relation": "none", "preferredPresetId": "light-chart-evidence"},
+        {"id": "research-report-comparison", "label": "对象或样本比较", "role": "comparison", "relation": "parallel", "preferredPresetId": "light-comparison-split"},
+        {"id": "research-report-cases", "label": "案例材料", "role": "case", "relation": "parallel", "preferredPresetId": "light-gallery"},
+        {"id": "research-report-recommendations", "label": "研究建议", "role": "actions", "relation": "none", "preferredPresetId": "light-closing-callout"},
+        {"id": "research-report-legacy-comparison", "label": "研究对象对比", "role": "comparison", "relation": "parallel", "preferredPresetId": "light-comparison"},
+        {"id": "research-report-legacy-process", "label": "研究执行流程", "role": "process", "relation": "sequence", "preferredPresetId": "light-process-map"},
+        {"id": "research-report-legacy-architecture", "label": "研究框架层级", "role": "relationship", "relation": "hierarchy", "preferredPresetId": "light-architecture"},
+        {"id": "research-method-findings", "label": "方法与发现证据链", "role": "observation", "relation": "parallel", "preferredPresetId": "research-method-findings"}
+      ]
+    },
+    {
+      "id": "business-pitch",
+      "label": "商业路演",
+      "description": "讲清用户问题、商业模式、增长证据、团队能力和融资诉求。",
+      "sourceThemes": ["theme02", "theme11"],
+      "defaultTheme": "light-editorial",
+      "palette": {
+        "background": "#F5F3ED",
+        "surface": "#FFFFFF",
+        "text": "#20242B",
+        "muted": "#5A6270",
+        "accent": "#F15A29",
+        "line": "#D8D2C4",
+        "seriesColors": ["#F15A29", "#5A138E", "#3BB6EC", "#1F6B2A", "#F6B84A"]
+      },
+      "templateIds": ["light-cover-split", "light-transition-statement", "light-editorial-essay", "light-hierarchy-branch", "light-metric-spotlight", "light-chart-evidence", "light-comparison-split", "light-team-grid", "light-closing-callout", "light-product-hero", "light-case", "pitch-business-model"],
+      "recommendedRoles": ["cover", "statement", "context", "relationship", "metrics", "observation", "comparison", "team", "result", "closing"],
+      "signaturePages": [
+        {"id": "business-pitch-cover", "label": "路演封面", "role": "cover", "relation": "none", "preferredPresetId": "light-cover-split"},
+        {"id": "business-pitch-problem", "label": "用户问题与主张", "role": "statement", "relation": "none", "preferredPresetId": "light-transition-statement"},
+        {"id": "business-pitch-market", "label": "市场背景", "role": "context", "relation": "none", "preferredPresetId": "light-editorial-essay"},
+        {"id": "business-pitch-model", "label": "商业模式", "role": "relationship", "relation": "hierarchy", "preferredPresetId": "light-hierarchy-branch"},
+        {"id": "business-pitch-traction", "label": "增长与验证指标", "role": "metrics", "relation": "none", "preferredPresetId": "light-metric-spotlight"},
+        {"id": "business-pitch-evidence", "label": "市场与增长证据", "role": "observation", "relation": "none", "preferredPresetId": "light-chart-evidence"},
+        {"id": "business-pitch-competition", "label": "竞争格局", "role": "comparison", "relation": "parallel", "preferredPresetId": "light-comparison-split"},
+        {"id": "business-pitch-team", "label": "核心团队", "role": "team", "relation": "hierarchy", "preferredPresetId": "light-team-grid"},
+        {"id": "business-pitch-financing", "label": "融资计划与资金用途", "role": "result", "relation": "none", "preferredPresetId": "light-closing-callout"},
+        {"id": "business-pitch-legacy-hero", "label": "商业主张封面", "role": "cover", "relation": "none", "preferredPresetId": "light-product-hero"},
+        {"id": "business-pitch-legacy-case", "label": "商业案例图片页", "role": "case", "relation": "parallel", "preferredPresetId": "light-case"},
+        {"id": "pitch-business-model", "label": "商业模式与收入闭环", "role": "relationship", "relation": "parallel", "preferredPresetId": "pitch-business-model"}
+      ]
+    },
+    {
+      "id": "investment-report",
+      "label": "金融投研",
+      "description": "组织投资论点、市场数据、估值比较、风险情景和决策依据。",
+      "sourceThemes": ["theme05", "theme06", "theme10"],
+      "defaultTheme": "dark-product",
+      "palette": {
+        "background": "#0B1020",
+        "surface": "#141B30",
+        "text": "#F5F7FA",
+        "muted": "#9AA6BD",
+        "accent": "#D6A84F",
+        "line": "#27324A",
+        "seriesColors": ["#D6A84F", "#72DFC1", "#6C7CFF", "#E8741C", "#E86FAE"]
+      },
+      "templateIds": ["dark-cover-split", "dark-editorial-essay", "dark-metric-spotlight", "dark-chart-evidence", "dark-timeline", "dark-comparison-split", "dark-matrix-2x2", "dark-parallel-grid", "dark-closing-callout", "dark-parallel-columns", "investment-risk-scenarios"],
+      "recommendedRoles": ["cover", "context", "metrics", "trend", "observation", "comparison", "distribution", "risks", "result", "closing"],
+      "signaturePages": [
+        {"id": "investment-report-cover", "label": "投研封面", "role": "cover", "relation": "none", "preferredPresetId": "dark-cover-split"},
+        {"id": "investment-report-thesis", "label": "投资论点", "role": "context", "relation": "none", "preferredPresetId": "dark-editorial-essay"},
+        {"id": "investment-report-returns", "label": "核心财务指标", "role": "metrics", "relation": "none", "preferredPresetId": "dark-metric-spotlight"},
+        {"id": "investment-report-performance", "label": "业绩与市场走势", "role": "trend", "relation": "sequence", "preferredPresetId": "dark-timeline"},
+        {"id": "investment-report-evidence", "label": "估值与市场证据", "role": "observation", "relation": "none", "preferredPresetId": "dark-chart-evidence"},
+        {"id": "investment-report-comps", "label": "可比公司与估值对照", "role": "comparison", "relation": "parallel", "preferredPresetId": "dark-comparison-split"},
+        {"id": "investment-report-risk-matrix", "label": "风险分类矩阵", "role": "risks", "relation": "matrix", "preferredPresetId": "dark-matrix-2x2"},
+        {"id": "investment-report-allocation", "label": "组合配置", "role": "distribution", "relation": "parallel", "preferredPresetId": "dark-parallel-grid"},
+        {"id": "investment-report-conclusion", "label": "投资结论", "role": "result", "relation": "none", "preferredPresetId": "dark-closing-callout"},
+        {"id": "investment-report-legacy-comparison", "label": "投资论点横向比较", "role": "comparison", "relation": "parallel", "preferredPresetId": "dark-parallel-columns"},
+        {"id": "investment-risk-scenarios", "label": "风险与情景分析", "role": "risks", "relation": "parallel", "preferredPresetId": "investment-risk-scenarios"}
+      ]
+    },
+    {
+      "id": "brand-proposal",
+      "label": "品牌提案",
+      "description": "呈现品牌主张、受众定位、创意概念、视觉方向和传播计划。",
+      "sourceThemes": ["theme04", "theme08"],
+      "defaultTheme": "light-editorial",
+      "palette": {
+        "background": "#F5F3ED",
+        "surface": "#FFFFFF",
+        "text": "#20242B",
+        "muted": "#5A6270",
+        "accent": "#C9A227",
+        "line": "#D8D2C4",
+        "seriesColors": ["#C9A227", "#27E021", "#FF9FE2", "#15A7F0", "#5A138E"]
+      },
+      "templateIds": ["light-cover-split", "light-transition-statement", "light-editorial-essay", "light-hierarchy-branch", "light-gallery", "light-comparison-split", "light-timeline", "light-team-grid", "brand-concept-proposal"],
+      "recommendedRoles": ["cover", "statement", "context", "relationship", "image", "comparison", "trend", "team", "actions", "closing"],
+      "signaturePages": [
+        {"id": "brand-proposal-cover", "label": "品牌提案封面", "role": "cover", "relation": "none", "preferredPresetId": "light-cover-split"},
+        {"id": "brand-proposal-promise", "label": "品牌主张", "role": "statement", "relation": "none", "preferredPresetId": "light-transition-statement"},
+        {"id": "brand-proposal-audience", "label": "受众与市场背景", "role": "context", "relation": "none", "preferredPresetId": "light-editorial-essay"},
+        {"id": "brand-proposal-platform", "label": "品牌价值结构", "role": "relationship", "relation": "hierarchy", "preferredPresetId": "light-hierarchy-branch"},
+        {"id": "brand-proposal-moodboard", "label": "视觉方向与情绪板", "role": "image", "relation": "parallel", "preferredPresetId": "light-gallery"},
+        {"id": "brand-proposal-positioning", "label": "品牌定位比较", "role": "comparison", "relation": "parallel", "preferredPresetId": "light-comparison-split"},
+        {"id": "brand-proposal-campaign", "label": "传播与发布节奏", "role": "trend", "relation": "sequence", "preferredPresetId": "light-timeline"},
+        {"id": "brand-proposal-team", "label": "创意与执行团队", "role": "team", "relation": "hierarchy", "preferredPresetId": "light-team-grid"},
+        {"id": "brand-concept-proposal", "label": "品牌概念与创意论证", "role": "statement", "relation": "none", "preferredPresetId": "brand-concept-proposal"}
+      ]
+    },
+    {
+      "id": "company-story",
+      "label": "企业故事",
+      "description": "讲述企业起点、关键里程碑、团队成长和客户实践。",
+      "sourceThemes": ["theme09"],
+      "defaultTheme": "dark-product",
+      "palette": {
+        "background": "#0B1020",
+        "surface": "#141B30",
+        "text": "#F5F7FA",
+        "muted": "#9AA6BD",
+        "accent": "#FFB27A",
+        "line": "#27324A",
+        "seriesColors": ["#FFB27A", "#72DFC1", "#6C7CFF", "#E86FAE", "#B9F24A"]
+      },
+      "templateIds": ["dark-cover-split", "dark-transition-statement", "dark-editorial-essay", "dark-timeline", "dark-team-grid", "dark-gallery", "dark-metric-spotlight", "dark-hierarchy-branch", "dark-closing-callout", "story-milestones"],
+      "recommendedRoles": ["cover", "statement", "context", "trend", "team", "case", "image", "metrics", "relationship", "closing"],
+      "signaturePages": [
+        {"id": "company-story-cover", "label": "企业故事封面", "role": "cover", "relation": "none", "preferredPresetId": "dark-cover-split"},
+        {"id": "company-story-purpose", "label": "使命与初心", "role": "statement", "relation": "none", "preferredPresetId": "dark-transition-statement"},
+        {"id": "company-story-origin", "label": "企业起点与背景", "role": "context", "relation": "none", "preferredPresetId": "dark-editorial-essay"},
+        {"id": "company-story-team", "label": "团队与组织", "role": "team", "relation": "hierarchy", "preferredPresetId": "dark-team-grid"},
+        {"id": "company-story-cases", "label": "客户与实践故事", "role": "case", "relation": "parallel", "preferredPresetId": "dark-gallery"},
+        {"id": "company-story-timeline", "label": "发展历程时间线", "role": "trend", "relation": "sequence", "preferredPresetId": "dark-timeline"},
+        {"id": "company-story-growth", "label": "成长数据", "role": "metrics", "relation": "none", "preferredPresetId": "dark-metric-spotlight"},
+        {"id": "company-story-values", "label": "企业价值与能力", "role": "relationship", "relation": "hierarchy", "preferredPresetId": "dark-hierarchy-branch"},
+        {"id": "company-story-closing", "label": "未来愿景", "role": "closing", "relation": "none", "preferredPresetId": "dark-closing-callout"},
+        {"id": "story-milestones", "label": "企业发展里程碑", "role": "trend", "relation": "sequence", "preferredPresetId": "story-milestones"}
+      ]
+    },
+    {
+      "id": "event-planning",
+      "label": "活动策划",
+      "description": "组织活动目标、议程、嘉宾阵容、现场执行、风险和效果指标。",
+      "sourceThemes": ["theme12", "theme08"],
+      "defaultTheme": "dark-product",
+      "palette": {
+        "background": "#0B1020",
+        "surface": "#141B30",
+        "text": "#F5F7FA",
+        "muted": "#9AA6BD",
+        "accent": "#D61FB5",
+        "line": "#27324A",
+        "seriesColors": ["#D61FB5", "#3BB6EC", "#Baf04f", "#FFB86B", "#5A138E"]
+      },
+      "templateIds": ["dark-cover-split", "dark-transition-statement", "dark-parallel-grid", "dark-timeline", "dark-team-grid", "dark-gallery", "dark-process-steps", "dark-matrix-2x2", "dark-metric-spotlight", "event-run-of-show"],
+      "recommendedRoles": ["cover", "statement", "breakdown", "trend", "team", "image", "process", "risks", "metrics", "closing"],
+      "signaturePages": [
+        {"id": "event-planning-cover", "label": "活动主视觉封面", "role": "cover", "relation": "none", "preferredPresetId": "dark-cover-split"},
+        {"id": "event-planning-purpose", "label": "活动主张与目标", "role": "statement", "relation": "none", "preferredPresetId": "dark-transition-statement"},
+        {"id": "event-planning-overview", "label": "活动内容板块", "role": "breakdown", "relation": "parallel", "preferredPresetId": "dark-parallel-grid"},
+        {"id": "event-planning-agenda", "label": "活动议程", "role": "trend", "relation": "sequence", "preferredPresetId": "dark-timeline"},
+        {"id": "event-planning-lineup", "label": "嘉宾与演出阵容", "role": "team", "relation": "hierarchy", "preferredPresetId": "dark-team-grid"},
+        {"id": "event-planning-experience", "label": "现场体验与场景", "role": "image", "relation": "parallel", "preferredPresetId": "dark-gallery"},
+        {"id": "event-planning-journey", "label": "观众体验流程", "role": "process", "relation": "sequence", "preferredPresetId": "dark-process-steps"},
+        {"id": "event-planning-risks", "label": "现场风险预案", "role": "risks", "relation": "matrix", "preferredPresetId": "dark-matrix-2x2"},
+        {"id": "event-planning-impact", "label": "触达与活动效果", "role": "metrics", "relation": "none", "preferredPresetId": "dark-metric-spotlight"},
+        {"id": "event-run-of-show", "label": "现场执行流程表", "role": "process", "relation": "sequence", "preferredPresetId": "event-run-of-show"}
+      ]
+    },
+    {
+      "id": "education-training",
+      "label": "教学培训",
+      "description": "设计学习目标、知识结构、讲解示例、练习实验和学习检查。",
+      "sourceThemes": ["theme01", "theme03", "theme07"],
+      "defaultTheme": "light-editorial",
+      "palette": {
+        "background": "#F5F3ED",
+        "surface": "#FFFFFF",
+        "text": "#20242B",
+        "muted": "#5A6270",
+        "accent": "#3458B4",
+        "line": "#D8D2C4",
+        "seriesColors": ["#3458B4", "#8FD400", "#E8741C", "#4DA0C6", "#7A3C90"]
+      },
+      "templateIds": ["light-cover-split", "light-transition-statement", "light-parallel-grid", "light-hierarchy-branch", "light-gallery", "light-comparison-split", "light-process-steps", "light-metric-spotlight", "light-closing-callout", "light-process-long", "light-matrix-2x2", "education-practice"],
+      "recommendedRoles": ["cover", "statement", "breakdown", "context", "relationship", "case", "comparison", "process", "metrics", "actions", "result"],
+      "signaturePages": [
+        {"id": "education-training-cover", "label": "课程或培训封面", "role": "cover", "relation": "none", "preferredPresetId": "light-cover-split"},
+        {"id": "education-training-objectives", "label": "学习目标", "role": "statement", "relation": "none", "preferredPresetId": "light-transition-statement"},
+        {"id": "education-training-outline", "label": "课程结构", "role": "breakdown", "relation": "parallel", "preferredPresetId": "light-parallel-grid"},
+        {"id": "education-training-concepts", "label": "核心概念关系图", "role": "relationship", "relation": "hierarchy", "preferredPresetId": "light-hierarchy-branch"},
+        {"id": "education-training-example", "label": "讲解示例", "role": "case", "relation": "parallel", "preferredPresetId": "light-gallery"},
+        {"id": "education-training-experiment", "label": "实验对照", "role": "comparison", "relation": "parallel", "preferredPresetId": "light-comparison-split"},
+        {"id": "education-training-sequence", "label": "课堂讲解流程", "role": "process", "relation": "sequence", "preferredPresetId": "light-process-steps"},
+        {"id": "education-training-checkpoint", "label": "学习检查点", "role": "metrics", "relation": "none", "preferredPresetId": "light-metric-spotlight"},
+        {"id": "education-training-summary", "label": "知识回顾", "role": "result", "relation": "none", "preferredPresetId": "light-closing-callout"},
+        {"id": "education-training-legacy-process-long", "label": "长流程教学步骤", "role": "process", "relation": "sequence", "preferredPresetId": "light-process-long"},
+        {"id": "education-training-legacy-matrix", "label": "知识掌握四象限", "role": "comparison", "relation": "matrix", "preferredPresetId": "light-matrix-2x2"},
+        {"id": "education-practice", "label": "课堂练习与反馈", "role": "actions", "relation": "sequence", "preferredPresetId": "education-practice"}
+      ]
+    }
+  ]
+}
