@@ -13,7 +13,7 @@ fn route_allowed(method: &str, path: &str) -> bool {
     let parts: Vec<_> = base.split('/').collect();
     let allowed = match (method, parts.as_slice()) {
         ("GET", ["", "space"]) | ("GET", ["", "changes"]) => true,
-        ("GET", ["", "trash"]) => true,
+        ("GET", ["", "trash"]) | ("GET", ["", "usage"]) => true,
         ("POST", ["", "trash", "preview" | "apply"]) => query.is_empty(),
         ("GET" | "POST", ["", "cleanup"]) => query.is_empty(),
         ("GET", ["", "retention"]) | ("POST", ["", "retention"]) => query.is_empty(),
@@ -28,11 +28,17 @@ fn route_allowed(method: &str, path: &str) -> bool {
     if !query.is_empty() {
         if method != "GET" { return false; }
         let keys = if base == "/changes" { vec!["after", "limit"] }
+            else if base == "/usage" { vec!["period"] }
             else if base.ends_with("/history") || base == "/trash" { vec!["before"] } else { return false; };
         let mut seen = std::collections::HashSet::new();
         for pair in query.split('&') {
             let Some((key, value)) = pair.split_once('=') else { return false; };
-            if !keys.contains(&key) || !seen.insert(key) || value.parse::<u64>().is_err() { return false; }
+            if !keys.contains(&key) || !seen.insert(key) { return false; }
+            if key == "period" {
+                if value.len() != 7 || !value.bytes().enumerate().all(|(i,b)| if i == 4 { b == b'-' } else { b.is_ascii_digit() })
+                    || value[..4].parse::<u16>().ok().filter(|v| *v >= 1000).is_none()
+                    || value[5..].parse::<u8>().ok().filter(|v| (1..=12).contains(v)).is_none() { return false; }
+            } else if value.parse::<u64>().is_err() { return false; }
         }
     }
     true
@@ -216,6 +222,12 @@ mod tests {
         assert!(!route_allowed("DELETE", "/retention"));
         assert!(!route_allowed("POST", "/retention?all=1"));
         assert!(route_allowed("GET", "/cleanup"));
+        assert!(route_allowed("GET", "/usage"));
+        assert!(route_allowed("GET", "/usage?period=2026-10"));
+        assert!(!route_allowed("GET", "/usage?period=2026-13"));
+        assert!(!route_allowed("GET", "/usage?period=20é-10"));
+        assert!(!route_allowed("POST", "/usage"));
+        assert!(!route_allowed("GET", "/usage?period=2026-10&period=2026-11"));
         assert!(route_allowed("POST", "/cleanup"));
         assert!(!route_allowed("DELETE", "/cleanup"));
         assert!(!route_allowed("GET", "/cleanup?user_id=1"));

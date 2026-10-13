@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import re
+from typing import Callable
 from urllib.parse import urlsplit
 
 import httpx
@@ -11,17 +12,22 @@ from mona.cloud.crypto import MAX_CIPHERTEXT
 from mona.cloud.transfer import CloudTransferError
 from mona.security.network import validate_url_target
 
-_CONTROL_PATH = re.compile(r"^/(?:space|objects/reserve|objects/[a-f0-9]{64}/(?:confirm|download|release)|resources/commit|changes(?:\?after=[0-9]+&limit=[0-9]+)?|resources/[a-f0-9]{32}/history(?:\?before=[0-9]+)?)$")
+_CONTROL_PATHS = {
+    "GET": re.compile(r"^/(?:space|cleanup|retention|usage(?:\?period=[1-9][0-9]{3}-(?:0[1-9]|1[0-2]))?|trash(?:\?before=[0-9]+)?|changes(?:\?after=[0-9]+&limit=[0-9]+)?|resources/[a-f0-9]{32}/history(?:\?before=[0-9]+)?)$"),
+    "POST": re.compile(r"^/(?:space|cleanup|retention|trash/(?:preview|apply)|objects/reserve|objects/[a-f0-9]{64}/(?:confirm|download|release)|resources/commit)$"),
+}
 
 
 class BridgeCloudTransport:
-    def __init__(self, account_binding: str):
+    def __init__(self, account_binding: str, *, download_recorder: Callable[[int, bool], None] | None = None):
         if not isinstance(account_binding, str) or not re.fullmatch(r"[a-f0-9]{64}", account_binding):
             raise CloudTransferError("account_required", "请先登录并开启云同步。")
         self.binding = account_binding
+        self.download_recorder = download_recorder
 
     def control(self, method: str, path: str, payload: dict | None = None) -> dict:
-        if method not in {"GET", "POST"} or not _CONTROL_PATH.fullmatch(path):
+        allowed = _CONTROL_PATHS.get(method)
+        if allowed is None or len(path) > 256 or not allowed.fullmatch(path):
             raise CloudTransferError("invalid_request", "云同步请求无效。")
         result = tauri_invoke("cloud_sync_request", {
             "binding": self.binding, "method": method, "path": path, "payload": payload,
@@ -88,17 +94,23 @@ class BridgeCloudTransport:
         if type(expected) is not int or not 35 <= expected <= MAX_CIPHERTEXT:
             raise CloudTransferError("invalid_authorization", "云文件下载大小无效。")
         result = bytearray()
+        received, complete = 0, False
         try:
             with httpx.Client(timeout=httpx.Timeout(60, connect=10), follow_redirects=False, trust_env=False) as client:
                 with client.stream("GET", url, headers={"Accept-Encoding": "identity"}) as response:
                     if response.status_code != 200 or response.headers.get("content-encoding", "identity") != "identity":
                         raise CloudTransferError("download_unavailable", "云文件暂时无法下载。")
-                    for chunk in response.iter_bytes(chunk_size=64 * 1024):
+                    for chunk in response.iter_bytes():
+                        received += len(chunk)
                         if len(result) + len(chunk) > expected:
                             raise CloudTransferError("download_size_mismatch", "云文件下载大小不一致。")
                         result.extend(chunk)
+            if len(result) != expected:
+                raise CloudTransferError("download_incomplete", "云文件下载不完整，请重试。")
+            complete = True
         except httpx.HTTPError:
             raise CloudTransferError("download_unavailable", "云文件暂时无法下载。") from None
-        if len(result) != expected:
-            raise CloudTransferError("download_incomplete", "云文件下载不完整，请重试。")
+        finally:
+            if self.download_recorder is not None:
+                self.download_recorder(received, complete)
         return bytes(result)

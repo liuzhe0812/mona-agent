@@ -7,6 +7,7 @@ import os
 import sqlite3
 import tempfile
 from contextlib import contextmanager
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Callable
 
@@ -65,6 +66,10 @@ class LocalCloudStore:
                 CREATE TABLE IF NOT EXISTS history_journal (
                     local_key TEXT PRIMARY KEY, old_session BLOB, old_display BLOB,
                     new_session_hash TEXT NOT NULL, new_display_hash TEXT NOT NULL);
+                CREATE TABLE IF NOT EXISTS download_observations (
+                    account TEXT NOT NULL, period TEXT NOT NULL, received_bytes INTEGER NOT NULL,
+                    complete_downloads INTEGER NOT NULL, incomplete_downloads INTEGER NOT NULL,
+                    PRIMARY KEY(account, period));
             """)
 
     @contextmanager
@@ -85,6 +90,25 @@ class LocalCloudStore:
     def owners(self) -> dict[str, str]:
         with self.connection() as db:
             return dict(db.execute("SELECT local_key,vault FROM sync_positions").fetchall())
+
+    def record_download(self, account: str, received_bytes: int, complete: bool) -> None:
+        period = datetime.now(timezone.utc).strftime("%Y-%m")
+        with self.connection() as db:
+            db.execute("""INSERT INTO download_observations VALUES(?,?,?,?,?)
+                ON CONFLICT(account,period) DO UPDATE SET
+                received_bytes=received_bytes+excluded.received_bytes,
+                complete_downloads=complete_downloads+excluded.complete_downloads,
+                incomplete_downloads=incomplete_downloads+excluded.incomplete_downloads""",
+                (account, period, received_bytes, int(complete), int(not complete)))
+
+    def download_usage(self, account: str) -> dict:
+        period = datetime.now(timezone.utc).strftime("%Y-%m")
+        with self.connection() as db:
+            row = db.execute("SELECT * FROM download_observations WHERE account=? AND period=?",
+                             (account, period)).fetchone()
+        return {"period": period, "period_timezone": "UTC", "source": "client_observed",
+                **{key: row[key] if row else 0 for key in (
+                    "received_bytes", "complete_downloads", "incomplete_downloads")}}
 
     @staticmethod
     def _put(db, vault: str, resource: str, local_key: str, local_digest: str,

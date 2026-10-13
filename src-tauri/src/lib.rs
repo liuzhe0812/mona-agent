@@ -861,7 +861,7 @@ pub fn run() {
     #[cfg(debug_assertions)]
     {
         let settings = settings::load_settings();
-        if settings.auto_start_gateway && settings::check_mona_config().has_provider {
+        if settings.auto_start_gateway {
             if let Err(e) =
                 settings::ensure_desktop_config(settings.gateway_port, settings.services_port)
             {
@@ -1364,11 +1364,9 @@ pub fn run() {
             });
 
             if settings.auto_start_gateway {
-                let config_status = settings::check_mona_config();
-                if config_status.has_provider {
-                    if let Err(e) = settings::ensure_desktop_config(settings.gateway_port, settings.services_port) {
-                        log::error!("Failed to ensure desktop config: {}", e);
-                    }
+                if let Err(e) = settings::ensure_desktop_config(settings.gateway_port, settings.services_port) {
+                    log::error!("Failed to ensure desktop config: {}", e);
+                } else {
                     let state = gateway_state.clone();
                     let settings_clone = settings.clone();
                     let app_handle_clone = app.handle().clone();
@@ -1397,8 +1395,6 @@ pub fn run() {
                             log::error!("Failed to start gateway: {}", e);
                         }
                     }
-                } else {
-                    log::debug!("No provider configured, skipping gateway auto-start");
                 }
             }
 

@@ -91,6 +91,13 @@ class CloudCoordinator:
             raise CloudTransferError("account_required", "请登录并联网核对账号后再同步。")
         return context
 
+    def _transport(self, context: dict):
+        transport = self.transport_factory(context["binding"])
+        if isinstance(transport, BridgeCloudTransport):
+            account = context["account_id"]
+            transport.download_recorder = lambda size, complete: self.store.record_download(account, size, complete)
+        return transport
+
     @staticmethod
     def _cloud_ready(context: dict) -> None:
         if context.get("cloud_status") != 200:
@@ -126,6 +133,7 @@ class CloudCoordinator:
             # binding remain confined to the desktop/Python boundary.
             public_space = {k: space[k] for k in ("quota_bytes", "used_bytes", "reserved_bytes", "object_count") if k in space} if isinstance(space, dict) else None
             result.update(available=True, plan=context.get("plan"), space=public_space,
+                local_download_usage=await asyncio.to_thread(self.store.download_usage, context["account_id"]),
                 enabled=same and config.enabled and config.vault_id == vault,
                 needs_key=bool(space) and not context.get("recovery"),
                 candidates=await asyncio.to_thread(self._candidates, vault),
@@ -151,7 +159,7 @@ class CloudCoordinator:
             self._cloud_ready(context)
             if not isinstance(context.get("space"), dict):
                 raise CloudTransferError("cloud_space_missing", "当前账号尚未创建云空间。")
-            transport = self.transport_factory(context["binding"])
+            transport = self._transport(context)
             data = await asyncio.to_thread(transport.control, "GET", "/cleanup")
             current = await self._context()
             if current["binding"] != context["binding"]:
@@ -187,7 +195,7 @@ class CloudCoordinator:
                 raise CloudTransferError("account_changed", "账号已变化，请重新检查可释放空间。")
             if draft["result"] is not None:
                 return copy.deepcopy(draft["result"])
-            result = await asyncio.to_thread(self.transport_factory(context["binding"]).control,
+            result = await asyncio.to_thread(self._transport(context).control,
                 "POST", "/cleanup", {"receipt": draft["receipt"], "confirmed": True})
             current = await self._context()
             if current["binding"] != context["binding"]:
@@ -241,7 +249,7 @@ class CloudCoordinator:
                 raise CloudTransferError("account_changed", "账号已变化，请重新确认同步范围。")
             cipher = draft["cipher"]
             notes_vault = await self._notes_scope(context) if sync_notes else ""
-            transport = self.transport_factory(context["binding"])
+            transport = self._transport(context)
             if draft["new"]:
                 await asyncio.to_thread(transport.control, "POST", "/space",
                     {"vault_id": cipher.vault_id, "key_check": cipher.key_check()})
@@ -329,7 +337,7 @@ class CloudCoordinator:
         if not cipher.matches_key_check(space.get("key_check")):
             raise CloudTransferError("recovery_required", "请先导入当前云空间的恢复密钥。")
         self.cancelled.clear()
-        return context, mapping, WorkTransfer(cipher, self.transport_factory(context["binding"]), self.cancelled)
+        return context, mapping, WorkTransfer(cipher, self._transport(context), self.cancelled)
 
     async def history(self, resource: str, before: int = 2_147_483_647) -> dict:
         async with self.lock:
@@ -421,7 +429,7 @@ class CloudCoordinator:
                 raise CloudTransferError("recovery_required", "请在云同步设置中导入原恢复密钥后再打开文件。")
             from threading import Event as ReadEvent
             request_cancelled = ReadEvent()
-            transfer = WorkTransfer(cipher, self.transport_factory(context["binding"]), request_cancelled)
+            transfer = WorkTransfer(cipher, self._transport(context), request_cancelled)
 
             def before_publish():
                 transfer._check_cancel()
@@ -612,7 +620,7 @@ class CloudCoordinator:
                 cipher = VaultCipher.from_recovery(context.get("recovery"))
                 if not cipher.matches_key_check(context["space"].get("key_check")):
                     raise CloudTransferError("recovery_required", "请导入当前云空间的恢复密钥。")
-                transport = self.transport_factory(context["binding"])
+                transport = self._transport(context)
                 transfer = WorkTransfer(cipher, transport, self.cancelled)
                 cursor = await asyncio.to_thread(self.store.cursor, config.vault_id)
                 planning = await self._planning_sync(context, transfer) if config.sync_planning else None

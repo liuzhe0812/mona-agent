@@ -91,7 +91,7 @@ class CloudRecycle:
             invalid()
         async with self.owner.lock:
             context = await self.context()
-            transport = self.owner.transport_factory(context["binding"])
+            transport = self.owner._transport(context)
             data = await asyncio.to_thread(transport.control, "GET", f"/trash?before={before}")
             if (not isinstance(data, dict) or not isinstance(data.get("items"), list) or len(data["items"]) > 10
                     or type(data.get("has_more")) is not bool or type(data.get("next_before")) is not int):
@@ -146,7 +146,7 @@ class CloudRecycle:
             self.draft = None
             context = await self.context()
             body = {"resource_id": resource_id, "version": version, "action": action}
-            data = await asyncio.to_thread(self.owner.transport_factory(context["binding"]).control, "POST", "/trash/preview", body)
+            data = await asyncio.to_thread(self.owner._transport(context).control, "POST", "/trash/preview", body)
             await self.check(context)
             if (not isinstance(data, dict) or any(data.get(k) != v for k, v in body.items())
                     or not isinstance(data.get("kind"), str) or data["kind"] not in KINDS

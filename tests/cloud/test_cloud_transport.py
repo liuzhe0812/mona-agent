@@ -1,10 +1,13 @@
 import hashlib
+from types import SimpleNamespace
 
 import httpx
 import pytest
 
 import mona.cloud.transport as transport
+from mona.cloud.coordinator import CloudCoordinator
 from mona.cloud.crypto import VaultCipher
+from mona.cloud.local_state import LocalCloudStore
 from mona.cloud.transfer import CloudTransferError, WorkTransfer
 from mona.cloud.transport import BridgeCloudTransport
 
@@ -22,6 +25,36 @@ def test_control_forwards_only_bound_metadata_not_account_credentials(monkeypatc
     command, args = captured[0]
     assert command == "cloud_sync_request" and args["binding"] == BINDING
     assert "token" not in args and "authorization" not in args
+
+
+@pytest.mark.parametrize("method,path", [
+    ("GET", "/cleanup"), ("POST", "/cleanup"),
+    ("GET", "/retention"), ("POST", "/retention"),
+    ("GET", "/trash"), ("GET", "/trash?before=10"), ("GET", "/usage?period=2026-10"),
+    ("POST", "/trash/preview"), ("POST", "/trash/apply"),
+])
+def test_confirmed_management_routes_reach_the_authenticated_native_bridge(monkeypatch, method, path):
+    captured = []
+    def invoke(command, args, **kwargs):
+        captured.append(args)
+        return {"status": 200, "data": {"complete": True}}
+    monkeypatch.setattr(transport, "tauri_invoke", invoke)
+    payload = {"confirmed": True} if method == "POST" else None
+    assert BridgeCloudTransport(BINDING).control(method, path, payload) == {"complete": True}
+    assert captured == [{"binding": BINDING, "method": method, "path": path, "payload": payload}]
+
+
+@pytest.mark.parametrize("method,path", [
+    ("GET", "/trash/apply"), ("POST", "/trash"), ("POST", "/changes"),
+    ("GET", "/resources/commit"), ("POST", "/cleanup?all=1"),
+    ("GET", "/retention?user_id=1"), ("GET", "/trash?before=1&before=2"),
+    ("GET", "/changes?after=" + "1" * 256 + "&limit=1"),
+])
+def test_management_routes_reject_wrong_methods_queries_and_oversized_paths(monkeypatch, method, path):
+    monkeypatch.setattr(transport, "tauri_invoke", lambda *a, **k: pytest.fail("IPC must not be called"))
+    with pytest.raises(CloudTransferError) as error:
+        BridgeCloudTransport(BINDING).control(method, path)
+    assert error.value.code == "invalid_request"
 
 
 @pytest.mark.parametrize("path", ["https://evil.invalid", "/../../auth", "/space#fragment", "/changes?after=x&limit=1"])
@@ -105,6 +138,46 @@ def test_download_returns_only_exact_expected_bytes(monkeypatch):
     mock_http(monkeypatch, lambda request: httpx.Response(200, content=payload))
     result = BridgeCloudTransport(BINDING).download({"url": "https://files.example.invalid/object", "size": len(payload)})
     assert result == payload
+
+
+def test_interrupted_download_records_observed_bytes_and_a_retry_is_not_deduplicated(monkeypatch, tmp_path):
+    store = LocalCloudStore(tmp_path / "sync.db")
+    observed = []
+    class Interrupted(httpx.SyncByteStream):
+        def __iter__(self):
+            yield b"x" * 17
+            raise httpx.ReadError("synthetic interruption")
+    attempts = []
+    def handler(request):
+        attempts.append(str(request.url))
+        return httpx.Response(200, stream=Interrupted()) if len(attempts) == 1 else httpx.Response(200, content=b"x" * 40)
+    mock_http(monkeypatch, handler)
+    def record(size, complete):
+        observed.append((size, complete))
+        store.record_download("1", size, complete)
+    client = BridgeCloudTransport(BINDING, download_recorder=record)
+    authorization = {"url": "https://files.example.invalid/object", "size": 40}
+    with pytest.raises(CloudTransferError):
+        client.download(authorization)
+    assert client.download(authorization) == b"x" * 40
+    assert observed == [(17, False), (40, True)]
+    assert attempts == [authorization["url"]] * 2
+    reopened = LocalCloudStore(tmp_path / "sync.db")
+    usage = reopened.download_usage("1")
+    assert usage["received_bytes"] == 57 and usage["complete_downloads"] == 1 and usage["incomplete_downloads"] == 1
+    assert reopened.download_usage("2")["received_bytes"] == 0
+
+
+def test_download_recording_stays_with_original_account_after_a_switch(monkeypatch, tmp_path):
+    store = LocalCloudStore(tmp_path / "sync.db")
+    owner = SimpleNamespace(store=store, transport_factory=BridgeCloudTransport)
+    context = {"account_id": "1", "binding": BINDING}
+    client = CloudCoordinator._transport(owner, context)
+    context["account_id"] = "2"
+    mock_http(monkeypatch, lambda request: httpx.Response(200, content=b"x" * 40))
+    client.download({"url": "https://files.example.invalid/object", "size": 40})
+    assert store.download_usage("1")["received_bytes"] == 40
+    assert store.download_usage("2")["received_bytes"] == 0
 
 
 def test_upload_posts_encrypted_bytes_and_scoped_object_authorization_only(monkeypatch):
