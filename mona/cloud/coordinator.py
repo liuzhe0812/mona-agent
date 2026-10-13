@@ -81,6 +81,8 @@ class CloudCoordinator:
         self.cleanup_draft = None
         from mona.cloud.history_retention import HistoryRetention
         self.history_retention = HistoryRetention(self)
+        from mona.cloud.recycle import CloudRecycle
+        self.recycle = CloudRecycle(self)
 
     async def _context(self) -> dict:
         context = await asyncio.to_thread(self.invoke, "cloud_sync_context", timeout=65)
@@ -135,7 +137,8 @@ class CloudCoordinator:
             rows = await asyncio.to_thread(self.store.mappings, vault) if vault else []
             result["conversations"] = [{"key": row["local_key"], "resource_id": row["resource"],
                 "version": row["version"]["version"] if row["version"] and row["version"]["resource_id"] == row["resource"] else 0,
-                "conflict_copy": bool(row["conflict_of"])} for row in rows]
+                "conflict_copy": bool(row["conflict_of"]),
+                "trashed": self.recycle.deleted_version(vault, row["resource"]) > 0} for row in rows]
         except Exception as exc:
             result.update(available=False, problem={"code": getattr(exc, "code", "service_unavailable"),
                 "message": str(exc) if isinstance(exc, CloudTransferError) else "暂时无法读取云空间，请登录并联网后重试。"})
@@ -496,7 +499,7 @@ class CloudCoordinator:
             return WorkExport(exported.snapshot, exported.sources, hashlib.sha256(canonical_bytes(exported.snapshot)).hexdigest())
         return exported
 
-    async def _apply(self, downloaded, context: dict, mapping: dict | None) -> bool:
+    async def _apply(self, downloaded, context: dict, mapping: dict | None, *, revive_missing=False) -> bool:
         resource, vault = downloaded.version["resource_id"], downloaded.snapshot["vault_id"]
         key = mapping["local_key"] if mapping else f"websocket:cloud-{vault[:12]}-{resource}"
         if mapping is None and await asyncio.to_thread(self.manager.read_session_file, key) is not None:
@@ -507,15 +510,18 @@ class CloudCoordinator:
         if mapping:
             current = await asyncio.to_thread(self.manager.read_session_file, key)
             if current is None:
-                return True  # Local deletion never authorizes resurrection or cloud deletion.
-            exported = await asyncio.to_thread(self._export, key, vault, resource, mapping.get("conflict_of"))
-            before = work_content_fingerprint(exported.snapshot)
-            if before == work_content_fingerprint(downloaded.snapshot):
-                await asyncio.to_thread(self.store.put, vault, resource, key, before, downloaded.version, mapping.get("conflict_of"))
-                return True
-            if before != mapping["local_digest"]:
-                fork = uuid.uuid4().hex
-                key = f"websocket:cloud-{uuid.uuid4().hex}"
+                if not revive_missing:
+                    return True  # Local deletion alone does not authorize resurrection.
+                key = f"websocket:restored-{uuid.uuid4().hex}"
+            else:
+                exported = await asyncio.to_thread(self._export, key, vault, resource, mapping.get("conflict_of"))
+                before = work_content_fingerprint(exported.snapshot)
+                if before == work_content_fingerprint(downloaded.snapshot):
+                    await asyncio.to_thread(self.store.put, vault, resource, key, before, downloaded.version, mapping.get("conflict_of"))
+                    return True
+                if before != mapping["local_digest"]:
+                    fork = uuid.uuid4().hex
+                    key = f"websocket:cloud-{uuid.uuid4().hex}"
         restore = prepare_work_restore(downloaded.snapshot, vault_id=vault, resource_id=resource,
             workspace=self.manager.workspace, media_root=self.media_root, target_key=key)
         if fork:
@@ -619,9 +625,19 @@ class CloudCoordinator:
                 for version in rows:
                     if not isinstance(version, dict) or type(version.get("sequence")) is not int or version["sequence"] <= cursor:
                         raise CloudTransferError("invalid_response", "云同步游标无效。")
+                    if version.get("kind") == "work_conversation" and version.get("deleted") is True:
+                        await self._guard(context["binding"])
+                        self.recycle.remember(config.vault_id, version)
                     if version.get("kind") == "work_conversation" and version.get("deleted") is False:
                         mappings = {row["resource"]: row for row in await asyncio.to_thread(self.store.mappings, config.vault_id)}
                         mapping = mappings.get(version.get("resource_id"))
+                        deleted_version = self.recycle.deleted_version(config.vault_id, version.get("resource_id"))
+                        if type(version.get("version")) is not int:
+                            raise CloudTransferError("invalid_response", "云会话版本无效。")
+                        if deleted_version >= version["version"]:
+                            cursor = version["sequence"]
+                            await asyncio.to_thread(self.store.cursor, config.vault_id, cursor)
+                            continue
                         config = await asyncio.to_thread(self.preferences.read)
                         if not config.enabled or self.cancelled.is_set():
                             self.phase = "paused"
@@ -634,9 +650,10 @@ class CloudCoordinator:
                         if (not local_version or local_version.get("resource_id") != version.get("resource_id")
                                 or local_version["version"] < version.get("version", 0)):
                             downloaded = await asyncio.to_thread(transfer.pull, version)
-                            if not await self._apply(downloaded, context, mapping):
+                            if not await self._apply(downloaded, context, mapping, revive_missing=deleted_version > 0):
                                 self.phase = "waiting"
                                 return
+                            self.recycle.forget(config.vault_id, version["resource_id"], version["version"])
                     if planning is not None and version.get("kind") in ("todo", "calendar_event"):
                         await planning.receive(version)
                     if notes is not None and version.get("kind") == "note":
@@ -677,6 +694,8 @@ class CloudCoordinator:
                         if data is None or not is_work_session(key, data.get("metadata")):
                             continue
                         mapping = mapped.get(key)
+                        if mapping and self.recycle.deleted_version(config.vault_id, mapping["resource"]):
+                            continue  # Keep local edits without republishing a trashed cloud copy.
                         resource = mapping["resource"] if mapping else uuid.uuid4().hex
                         exported = await asyncio.to_thread(self._export, key, config.vault_id, resource,
                             mapping.get("conflict_of") if mapping else None)

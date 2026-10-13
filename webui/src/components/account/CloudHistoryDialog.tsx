@@ -6,6 +6,8 @@ import { Select } from "@/components/ui/select";
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { cloudSyncApi, type CloudCandidate, type CloudConversation, type CloudFile, type CloudHistoryPage, type CloudHistoryVersion } from "@/lib/cloud-sync";
 
+import { CloudTrashDialog } from "./CloudTrashDialog";
+
 function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : "操作尚未确认，请稍后重试。";
 }
@@ -37,7 +39,8 @@ export function CloudHistoryDialog({ conversations, candidates, onRestored }: {
   const abort = useRef<AbortController | null>(null);
   const alive = useRef(false);
   const mutation = useRef(false);
-  const known = conversations.filter((item) => item.version > 0);
+  const known = conversations.filter((item) => item.version > 0 && !item.trashed);
+  const selectedConversation = known.find((item) => item.resource_id === resource);
   const titles = new Map(candidates.map((item) => [item.key, item.title]));
 
   useEffect(() => {
@@ -148,6 +151,8 @@ export function CloudHistoryDialog({ conversations, candidates, onRestored }: {
             <Button disabled={busy} onClick={restore}>{busy && <Loader2 className="mr-1.5 h-4 w-4 animate-spin" />}{busy ? "恢复中…" : "确认恢复"}</Button>
           </> : <>
             {error && <Button variant="outline" disabled={busy || loading} onClick={() => void read(resource, tab)}>重新读取</Button>}
+            {selectedConversation && <CloudTrashDialog disabled={busy || loading} onChanged={onRestored} target={{ resource_id: resource,
+              version: selectedConversation.version, title: titles.get(selectedConversation.key) || "未命名会话" }} />}
             <Button variant="outline" disabled={busy} onClick={close}>关闭</Button>
           </>}
         </DialogFooter>

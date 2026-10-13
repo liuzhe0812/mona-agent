@@ -13,6 +13,8 @@ fn route_allowed(method: &str, path: &str) -> bool {
     let parts: Vec<_> = base.split('/').collect();
     let allowed = match (method, parts.as_slice()) {
         ("GET", ["", "space"]) | ("GET", ["", "changes"]) => true,
+        ("GET", ["", "trash"]) => true,
+        ("POST", ["", "trash", "preview" | "apply"]) => query.is_empty(),
         ("GET" | "POST", ["", "cleanup"]) => query.is_empty(),
         ("GET", ["", "retention"]) | ("POST", ["", "retention"]) => query.is_empty(),
         ("POST", ["", "space"]) | ("POST", ["", "objects", "reserve"])
@@ -26,7 +28,7 @@ fn route_allowed(method: &str, path: &str) -> bool {
     if !query.is_empty() {
         if method != "GET" { return false; }
         let keys = if base == "/changes" { vec!["after", "limit"] }
-            else if base.ends_with("/history") { vec!["before"] } else { return false; };
+            else if base.ends_with("/history") || base == "/trash" { vec!["before"] } else { return false; };
         let mut seen = std::collections::HashSet::new();
         for pair in query.split('&') {
             let Some((key, value)) = pair.split_once('=') else { return false; };
@@ -203,6 +205,12 @@ mod tests {
     #[test]
     fn only_bounded_cloud_control_routes_are_allowed() {
         assert!(route_allowed("GET", "/space"));
+        assert!(route_allowed("GET", "/trash?before=123"));
+        assert!(route_allowed("POST", "/trash/preview"));
+        assert!(route_allowed("POST", "/trash/apply"));
+        assert!(!route_allowed("DELETE", "/trash"));
+        assert!(!route_allowed("GET", "/trash?user_id=1"));
+        assert!(!route_allowed("POST", "/trash/apply?all=1"));
         assert!(route_allowed("GET", "/retention"));
         assert!(route_allowed("POST", "/retention"));
         assert!(!route_allowed("DELETE", "/retention"));

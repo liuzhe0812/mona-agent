@@ -1,6 +1,8 @@
 """Authenticated local cloud settings, separate from the VPS control API."""
 from __future__ import annotations
 
+from typing import Literal
+
 from aiohttp import web
 from loguru import logger
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator
@@ -52,6 +54,15 @@ class Enable(Scope):
 
 class Resource(RequestBody):
     resource_id: str = Field(pattern=r"^[a-f0-9]{32}$")
+
+
+class TrashList(RequestBody):
+    before: int = Field(default=9_007_199_254_740_991, ge=1, le=9_007_199_254_740_991)
+
+
+class TrashPreview(Resource):
+    version: int = Field(ge=1, le=2_000_000_000)
+    action: Literal["trash", "restore", "purge"]
 
 
 class History(Resource):
@@ -137,6 +148,21 @@ async def cleanup_preview(request):
 async def cleanup_uploads(request):
     data = await body(request, CleanupRequest)
     return web.json_response(await (await get_coordinator(request)).cleanup_uploads(data.draft_id, data.confirmed))
+
+
+async def trash_list(request):
+    data = await body(request, TrashList)
+    return web.json_response(await (await get_coordinator(request)).recycle.list(data.before))
+
+
+async def trash_preview(request):
+    data = await body(request, TrashPreview)
+    return web.json_response(await (await get_coordinator(request)).recycle.preview(data.resource_id, data.version, data.action))
+
+
+async def trash_apply(request):
+    data = await body(request, CleanupRequest)
+    return web.json_response(await (await get_coordinator(request)).recycle.apply(data.draft_id, data.confirmed))
 
 
 async def retention_preview(request):
@@ -260,5 +286,8 @@ def register_cloud_routes(app: web.Application) -> None:
         app.router.add_post(PREFIX + "/" + path, handler)
     app.router.add_post(PREFIX + "/retention-preview", retention_preview)
     app.router.add_post(PREFIX + "/retention", retention_apply)
+    app.router.add_post(PREFIX + "/trash", trash_list)
+    app.router.add_post(PREFIX + "/trash-preview", trash_preview)
+    app.router.add_post(PREFIX + "/trash-apply", trash_apply)
     app.on_startup.append(startup)
     app.on_cleanup.append(cleanup)
