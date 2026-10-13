@@ -59,7 +59,7 @@ class SyncPreferences:
 class CloudCoordinator:
     def __init__(self, agent_loop, *, config_path: Path, state_path: Path,
                  media_root: Path, transcript_for: Callable[[str], Path],
-                 invoke=tauri_invoke, transport_factory=BridgeCloudTransport, planning_client=None, notes_client=None):
+                 invoke=tauri_invoke, transport_factory=BridgeCloudTransport, planning_client=None, notes_client=None, preferences_client=None):
         self.loop, self.manager = agent_loop, agent_loop.sessions
         self.media_root, self.transcript_for = media_root, transcript_for
         self.preferences = SyncPreferences(config_path)
@@ -67,6 +67,7 @@ class CloudCoordinator:
         self.invoke, self.transport_factory = invoke, transport_factory
         self.planning_client = planning_client
         self.notes_client = notes_client
+        self.preferences_client = preferences_client
         self._updated_work_keys: set[str] = set()
         self.cancelled = Event()
         self.wake = asyncio.Event()
@@ -127,6 +128,7 @@ class CloudCoordinator:
                 selected_keys=config.session_keys if same else [],
                 sync_new_conversations=config.sync_new_conversations if same else False,
                 sync_planning=config.sync_planning if same else False,
+                sync_preferences=config.sync_preferences if same else False,
                 sync_notes=config.sync_notes if same else False)
             rows = await asyncio.to_thread(self.store.mappings, vault) if vault else []
             result["conversations"] = [{"key": row["local_key"], "resource_id": row["resource"],
@@ -221,7 +223,7 @@ class CloudCoordinator:
 
     async def enable(self, draft_id: str, keys: list[str], confirmed: bool,
                      sync_new_conversations: bool = False, sync_planning: bool = False,
-                     sync_notes: bool = False) -> dict:
+                     sync_notes: bool = False, sync_preferences: bool = False) -> dict:
         async with self.lock:
             draft = self.draft
             if not confirmed or not draft or draft["id"] != draft_id or draft["expires"] < time.monotonic():
@@ -245,6 +247,7 @@ class CloudCoordinator:
             config = await asyncio.to_thread(self.preferences.read)
             if (set(keys).difference(config.session_keys)
                     or sync_planning and not config.sync_planning
+                    or sync_preferences and not config.sync_preferences
                     or sync_notes and (not config.sync_notes or config.notes_vault_token != notes_vault)):
                 # Earlier changes may have been intentionally skipped before this
                 # data type was selected. Re-read them without replaying writes.
@@ -254,6 +257,7 @@ class CloudCoordinator:
             config.sync_new_conversations = sync_new_conversations
             config.sync_planning = sync_planning
             config.sync_notes = sync_notes
+            config.sync_preferences = sync_preferences
             config.notes_vault_token = notes_vault
             config.excluded_session_keys = [item["key"] for item in draft["candidates"] if item["key"] not in keys]
             await asyncio.to_thread(self.preferences.write, config)
@@ -274,7 +278,8 @@ class CloudCoordinator:
             return {"enabled": False}
 
     async def select(self, keys: list[str], sync_new_conversations: bool | None = None,
-                     sync_planning: bool | None = None, sync_notes: bool | None = None) -> dict:
+                     sync_planning: bool | None = None, sync_notes: bool | None = None,
+                     sync_preferences: bool | None = None) -> dict:
         async with self.lock:
             context = await self._context()
             config = await asyncio.to_thread(self.preferences.read)
@@ -288,6 +293,8 @@ class CloudCoordinator:
                 config.sync_new_conversations = sync_new_conversations
             if sync_planning is not None:
                 config.sync_planning = sync_planning
+            if sync_preferences is not None:
+                config.sync_preferences = sync_preferences
             if sync_notes is not None:
                 config.sync_notes = sync_notes
                 config.notes_vault_token = await self._notes_scope(context) if sync_notes else ""
@@ -296,7 +303,8 @@ class CloudCoordinator:
             self.wake.set()
             await asyncio.to_thread(self.store.cursor, config.vault_id, 0)
             return {"selected_keys": config.session_keys, "sync_new_conversations": config.sync_new_conversations,
-                    "sync_planning": config.sync_planning, "sync_notes": config.sync_notes}
+                    "sync_planning": config.sync_planning, "sync_notes": config.sync_notes,
+                    "sync_preferences": config.sync_preferences}
 
     async def _owned_reader(self, resource: str):
         if not isinstance(resource, str) or not ID32.fullmatch(resource):
@@ -571,6 +579,11 @@ class CloudCoordinator:
             raise CloudTransferError("notes_vault_changed", "本机笔记仓库已更换，请重新确认同步范围。")
         return NotesSync(self.store, client, transfer, lambda: self._guard(context["binding"]))
 
+    async def _preferences_sync(self, context, transfer):
+        from mona.cloud.preferences import PreferencesClient, PreferencesSync
+        client = self.preferences_client or PreferencesClient(self.invoke, context["binding"])
+        return PreferencesSync(self.store, client, transfer, lambda: self._guard(context["binding"]))
+
     async def run_once(self) -> None:
         if self.lock.locked():
             return
@@ -580,7 +593,7 @@ class CloudCoordinator:
                 return
             self.cancelled.clear()
             self.phase, self.problem = "syncing", None
-            context, planning, notes = None, None, None
+            context, planning, notes, ui_preferences = None, None, None, None
             self._updated_work_keys.clear()
             try:
                 context = await self._context()
@@ -596,6 +609,7 @@ class CloudCoordinator:
                 cursor = await asyncio.to_thread(self.store.cursor, config.vault_id)
                 planning = await self._planning_sync(context, transfer) if config.sync_planning else None
                 notes = await self._notes_sync(context, transfer, config) if config.sync_notes else None
+                ui_preferences = await self._preferences_sync(context, transfer) if config.sync_preferences else None
                 page = await asyncio.to_thread(transport.control, "GET", f"/changes?after={cursor}&limit=100")
                 rows = page.get("items")
                 if not isinstance(rows, list) or len(rows) > 100:
@@ -625,6 +639,8 @@ class CloudCoordinator:
                         await planning.receive(version)
                     if notes is not None and version.get("kind") == "note":
                         await notes.receive(version)
+                    if ui_preferences is not None and version.get("kind") == "preferences":
+                        await ui_preferences.receive(version)
                     cursor = version["sequence"]
                     await asyncio.to_thread(self.store.cursor, config.vault_id, cursor)
                 if page.get("has_more"):
@@ -685,6 +701,8 @@ class CloudCoordinator:
                 if planning is not None and context.get("plan") == "pro":
                     planning_done = await planning.send()
                 notes_done = await notes.send() if notes is not None and context.get("plan") == "pro" else True
+                if ui_preferences is not None and context.get("plan") == "pro":
+                    await ui_preferences.send()
                 self.transferred_bytes = transfer.transferred_bytes
                 self.phase = "pending" if not planning_done or not notes_done else "waiting" if waiting_for_task else "idle"
                 if not waiting_for_task and planning_done and notes_done:

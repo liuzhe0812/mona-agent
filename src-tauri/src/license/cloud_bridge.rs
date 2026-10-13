@@ -128,6 +128,22 @@ pub(crate) async fn store_key(args: &Value) -> Result<Value, String> {
     Ok(json!({"saved":true}))
 }
 
+pub(crate) async fn preferences_request(app: &tauri::AppHandle, args: &Value) -> Result<Value, String> {
+    use tauri::Emitter;
+    let _guard = device_sessions::ACCOUNT_LOCK.lock().await;
+    bound_token(args["binding"].as_str().ok_or("缺少账号绑定。")?)?;
+    if args.to_string().len() > 16 * 1024 { return Err("使用偏好同步请求过大。".into()); }
+    let request = args.clone();
+    let result = tauri::async_runtime::spawn_blocking(move || crate::settings::sync::request(&request)).await
+        .map_err(|_| "使用偏好同步尚未完成，请稍后核对。")??;
+    if args["action"] == "apply" && result["applied"] == true && result["reused"] == false {
+        if app.emit("desktop-preferences-changed", json!({})).is_err() {
+            log::warn!("Desktop preferences committed; view notification deferred");
+        }
+    }
+    Ok(result)
+}
+
 pub(crate) async fn notes_request(app: &tauri::AppHandle, args: &Value) -> Result<Value, String> {
     use tauri::Emitter;
     let _guard = device_sessions::ACCOUNT_LOCK.lock().await;

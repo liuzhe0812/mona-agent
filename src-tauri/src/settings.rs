@@ -4,6 +4,8 @@ use std::fs::{self, OpenOptions};
 use std::io::Write;
 use std::path::{Path, PathBuf};
 
+pub(crate) mod sync;
+
 const SETTINGS_FILE: &str = "settings.json";
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -64,6 +66,8 @@ impl Default for SendMessageShortcut {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AppSettings {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub preferences_revision: Option<String>,
     #[serde(default = "default_run_in_background")]
     pub run_in_background: bool,
     #[serde(default = "default_auto_start_gateway")]
@@ -137,6 +141,7 @@ impl Default for AppSettings {
     fn default() -> Self {
         Self {
             run_in_background: default_run_in_background(),
+            preferences_revision: None,
             auto_start_gateway: default_auto_start_gateway(),
             gateway_port: default_gateway_port(),
             services_port: default_services_port(),
@@ -315,8 +320,11 @@ pub fn load_settings() -> AppSettings {
     let path = settings_path();
     if path.exists() {
         match fs::read_to_string(&path) {
-            Ok(content) => match serde_json::from_str(&content) {
-                Ok(settings) => return settings,
+            Ok(content) => match serde_json::from_str::<AppSettings>(&content) {
+                Ok(mut settings) => {
+                    settings.preferences_revision = sync::revision(&settings).ok();
+                    return settings;
+                }
                 Err(e) => {
                     log::warn!("Failed to parse settings: {}", e);
                 }
@@ -326,15 +334,13 @@ pub fn load_settings() -> AppSettings {
             }
         }
     }
-    AppSettings::default()
+    let mut settings = AppSettings::default();
+    settings.preferences_revision = sync::revision(&settings).ok();
+    settings
 }
 
 pub fn save_settings(settings: &AppSettings) -> Result<(), String> {
-    let dir = app_data_dir();
-    fs::create_dir_all(&dir).map_err(|e| format!("Failed to create settings dir: {}", e))?;
-    let content =
-        serde_json::to_string_pretty(settings).map_err(|e| format!("Failed to serialize: {}", e))?;
-    fs::write(settings_path(), content).map_err(|e| format!("Failed to write settings: {}", e))
+    sync::save_at(&settings_path(), settings)
 }
 
 pub fn mona_config_path() -> PathBuf {

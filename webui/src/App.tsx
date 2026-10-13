@@ -1,3 +1,4 @@
+import { useDesktopPreferenceUpdates } from "@/hooks/useDesktopPreferenceUpdates";
 import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { getCurrentWindow } from "@tauri-apps/api/window";
@@ -1607,6 +1608,8 @@ function Shell({
       }
     }).catch(() => {});
   }, []);
+
+  useDesktopPreferenceUpdates((settings) => setSidebarModules(settings.sidebar_modules));
 
   // 私聊确认卡（T22d）：跳转股票工作台并自动启动单股深度投研
   useEffect(() => {

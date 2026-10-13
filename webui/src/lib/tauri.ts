@@ -207,6 +207,7 @@ export type SendMessageShortcut = "enter" | "ctrl_enter";
 export const SEND_MESSAGE_SHORTCUT_EVENT = "mona:send-message-shortcut";
 
 export interface DesktopAppSettings {
+  preferences_revision?: string | null;
   run_in_background: boolean;
   auto_start_gateway: boolean;
   gateway_port: number;

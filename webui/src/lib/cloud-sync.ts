@@ -13,6 +13,7 @@ export interface CloudStatus {
   sync_new_conversations?: boolean;
   sync_planning?: boolean;
   sync_notes?: boolean;
+  sync_preferences?: boolean;
   conversations?: { key: string; resource_id: string; version: number; conflict_copy: boolean }[];
 }
 export interface CloudDraft { draft_id: string; new_space: boolean; recovery: string | null; candidates: CloudCandidate[] }
@@ -137,14 +138,16 @@ export const cloudSyncApi = {
   cleanup: cleanupUploads,
   status: (signal?: AbortSignal) => request<CloudStatus>("status", "GET", undefined, signal),
   prepare: (recovery?: string) => request<CloudDraft>("prepare", "POST", { recovery: recovery || null }),
-  enable: (draft_id: string, session_keys: string[], sync_new_conversations?: boolean, sync_planning?: boolean, sync_notes?: boolean) => request<{ enabled: boolean }>("enable", "POST", { draft_id, session_keys, confirmed: true,
+  enable: (draft_id: string, session_keys: string[], sync_new_conversations?: boolean, sync_planning?: boolean, sync_notes?: boolean, sync_preferences?: boolean) => request<{ enabled: boolean }>("enable", "POST", { draft_id, session_keys, confirmed: true,
     ...(sync_new_conversations === undefined ? {} : { sync_new_conversations }),
     ...(sync_planning === undefined ? {} : { sync_planning }),
-    ...(sync_notes === undefined ? {} : { sync_notes }) }),
-  scope: (session_keys: string[], sync_new_conversations?: boolean, sync_planning?: boolean, sync_notes?: boolean) => request<{ selected_keys: string[]; sync_new_conversations: boolean; sync_planning: boolean }>("scope", "POST", { session_keys,
+    ...(sync_notes === undefined ? {} : { sync_notes }),
+    ...(sync_preferences === undefined ? {} : { sync_preferences }) }),
+  scope: (session_keys: string[], sync_new_conversations?: boolean, sync_planning?: boolean, sync_notes?: boolean, sync_preferences?: boolean) => request<{ selected_keys: string[]; sync_new_conversations: boolean; sync_planning: boolean; sync_preferences: boolean }>("scope", "POST", { session_keys,
     ...(sync_new_conversations === undefined ? {} : { sync_new_conversations }),
     ...(sync_planning === undefined ? {} : { sync_planning }),
-    ...(sync_notes === undefined ? {} : { sync_notes }) }),
+    ...(sync_notes === undefined ? {} : { sync_notes }),
+    ...(sync_preferences === undefined ? {} : { sync_preferences }) }),
   pause: () => request<{ enabled: boolean }>("pause", "POST", {}),
   sync: () => request<{ scheduled: boolean }>("sync", "POST", {}),
   history: readHistory,

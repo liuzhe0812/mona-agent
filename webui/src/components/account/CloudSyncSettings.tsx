@@ -26,6 +26,7 @@ export function CloudSyncSettings({ onUpgrade }: { onUpgrade?: () => void }) {
   const [syncNew, setSyncNew] = useState(false);
   const [syncPlanning, setSyncPlanning] = useState(false);
   const [syncNotes, setSyncNotes] = useState(false);
+  const [syncPreferences, setSyncPreferences] = useState(false);
   const generation = useRef(0);
   const mutation = useRef(false);
   const alive = useRef(false);
@@ -78,6 +79,7 @@ export function CloudSyncSettings({ onUpgrade }: { onUpgrade?: () => void }) {
     setSyncNew(state?.space ? state.sync_new_conversations === true : true);
     setSyncPlanning(state?.space ? state.sync_planning === true : false);
     setSyncNotes(state?.space ? state.sync_notes === true : false);
+    setSyncPreferences(state?.space ? state.sync_preferences === true : false);
   });
   const candidates = draft?.candidates ?? state?.candidates ?? [];
   const space = state?.space;
@@ -118,7 +120,7 @@ export function CloudSyncSettings({ onUpgrade }: { onUpgrade?: () => void }) {
         <Button size="sm" disabled={busy || state.phase === "syncing"} onClick={() => void operate(async () => {
           const result = await cloudSyncApi.sync(); if (!result.scheduled) throw new Error("同步请求尚未确认。"); await refresh();
         })}>{state.phase === "syncing" && <Loader2 className="mr-1.5 h-3.5 w-3.5 animate-spin" />}立即同步</Button>
-        <Button size="sm" variant="outline" disabled={busy} onClick={() => { setKeys(state.selected_keys ?? []); setSyncNew(state.sync_new_conversations === true); setSyncPlanning(state.sync_planning === true); setSyncNotes(state.sync_notes === true); setView("scope"); }}>同步范围</Button>
+        <Button size="sm" variant="outline" disabled={busy} onClick={() => { setKeys(state.selected_keys ?? []); setSyncNew(state.sync_new_conversations === true); setSyncPlanning(state.sync_planning === true); setSyncNotes(state.sync_notes === true); setSyncPreferences(state.sync_preferences === true); setView("scope"); }}>同步范围</Button>
         {state.last_sync && <span className="text-caption text-muted-foreground">最近同步 {new Date(state.last_sync * 1000).toLocaleString("zh-CN")}</span>}
       </div>}
       {state?.available && space && <div className="mt-3"><CloudCleanupDialog disabled={busy} onCleaned={() => void refresh()} /></div>}
@@ -153,6 +155,10 @@ export function CloudSyncSettings({ onUpgrade }: { onUpgrade?: () => void }) {
             <Checkbox checked={syncNotes} disabled={busy} onCheckedChange={(value) => setSyncNotes(value === true)} />
             同步本机笔记仓库及关联附件
           </label>
+          <label className="flex items-center gap-2 pb-2 text-caption">
+            <Checkbox checked={syncPreferences} disabled={busy} onCheckedChange={(value) => setSyncPreferences(value === true)} />
+            同步侧栏布局、默认页面、发送按键和快捷问答显示模式
+          </label>
           <div className="flex justify-between text-caption"><span>工作会话（{keys.length}）</span>
             <Button variant="ghost" size="sm" disabled={busy} onClick={() => setKeys(keys.length === candidates.length ? [] : candidates.map((item) => item.key))}>{keys.length === candidates.length ? "取消全选" : "全选"}</Button></div>
           <div className="max-h-64 space-y-2 overflow-y-auto">
@@ -166,8 +172,8 @@ export function CloudSyncSettings({ onUpgrade }: { onUpgrade?: () => void }) {
         {error && <p className="text-caption text-destructive" role="alert">{error}</p>}
         <DialogFooter><Button variant="outline" disabled={busy} onClick={close}>取消</Button>
           {(draft || view === "scope") && <Button disabled={busy || !!draft?.new_space && !savedKey} onClick={() => void operate(async () => {
-            if (view === "scope") await cloudSyncApi.scope(keys, syncNew, syncPlanning, syncNotes);
-            else if (draft) { const result = await cloudSyncApi.enable(draft.draft_id, keys, syncNew, syncPlanning, syncNotes); if (!result.enabled) throw new Error("尚未确认开启同步。"); }
+            if (view === "scope") await cloudSyncApi.scope(keys, syncNew, syncPlanning, syncNotes, syncPreferences);
+            else if (draft) { const result = await cloudSyncApi.enable(draft.draft_id, keys, syncNew, syncPlanning, syncNotes, syncPreferences); if (!result.enabled) throw new Error("尚未确认开启同步。"); }
             if (!alive.current) return;
             setView(null); setDraft(null); setRecovery(""); setSavedKey(false); await refresh();
           })}>{busy ? "保存中…" : view === "scope" ? "保存范围" : "确认开启"}</Button>}
