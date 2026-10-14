@@ -32,6 +32,32 @@ fn portable_roundtrip_retains_body_but_no_local_authority() {
 }
 
 #[test]
+fn remote_image_titles_are_not_local_attachments() {
+    let dir = tempfile::tempdir().unwrap();
+    let content = "![图片](https://example.invalid/login.png \"assets/login_page.png\")\n![图片](https://example.invalid/login.png 'assets/login_page.png')";
+    write_original(dir.path(), "one", "第一课", content);
+    let index = request_at(dir.path(), &json!({"action":"index"})).unwrap();
+    assert_eq!(index["items"].as_array().unwrap().len(), 1);
+    let row = &index["items"][0];
+    let read = request_at(dir.path(), &json!({"action":"read","vault":index["vault"],
+        "note_id":row["id"],"expected":row["fingerprint"]})).unwrap();
+    assert_eq!(read["data"]["content"], content);
+    assert_eq!(read["data"]["assets"], json!([]));
+}
+
+#[test]
+fn local_markdown_wiki_and_html_destinations_remain_attachments() {
+    for content in ["![图片](assets/local.png)", "[附件](../assets/local.png)",
+                    "![[assets/local.png]]", "<img src=\"assets/local.png\">",
+                    "<IMG SRC = 'assets/local.png'>", "<a href=\"assets/local.png\">附件</a>"] {
+        assert_eq!(asset_references(content).unwrap(), HashMap::from([("local.png".into(), "local.png".into())]));
+    }
+    let dir = tempfile::tempdir().unwrap();
+    write_original(dir.path(), "one", "第一课", "![图片](assets/missing.png)");
+    assert!(request_at(dir.path(), &json!({"action":"index"})).is_err());
+}
+
+#[test]
 fn file_revisions_prevent_stale_ui_saves_and_accept_own_confirmed_save() {
     let dir = tempfile::tempdir().unwrap();
     let path = write_original(dir.path(), "one", "第一课", "original");

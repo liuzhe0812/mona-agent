@@ -160,3 +160,9 @@ Auth 新增 `cloud_download_months`、`cloud_access_log_imports`，迁移为 `cl
 首次公网立即检查发生在 Nginx 重载切换期间并触发保护回退；保留新增表，恢复云关闭和原站点配置。核对状态后加入有限等待再次切换，公网及实际业务验收通过。最终 PM2 启动配置已保存，临时检查进程已移除。回退时恢复备份中的原启动参数、云关闭配置和原站点配置，保留新增云表及已有数据，不执行破坏性 downgrade 或清空私有空间。
 
 证据目录：`output/pro-cloud/production-enable-20261014-c159e9a4/`。最终状态为 `production-cloud-final-report.json`；验收为 `production-cloud-acceptance.json` 及其保留的已通过检查报告。错误提示的开发修复另有协调器 33 项、设置组件 17 项及实际原生响应解码器的独立 Rust 2 项通过；Ruff 和差异检查通过，不声称执行全量桌面构建。现有客户端可在云同步页面刷新后按原有确认流程开启同步。
+
+## 2026-10-14 笔记图片标题识别修复
+
+用户在确认开启笔记同步时报告本地仓库不可用。实际原生读取复现为缺失附件：图片链接的远程地址后带有 `"assets/login_page.png"` 标题，旧扫描器把标题中的路径误认为本地附件。修复仅调整原生附件地址识别：Markdown/Wiki 的实际目标和 HTML 的 src/href 属性仍识别；远程链接的标题不作为附件。原笔记、图片链接及其标题均不修改，真正缺失的本地附件仍阻止发布不完整内容。
+
+实际 Rust Notes/附件/CAS 的 23 项及 Python 笔记同步 16 项通过。另使用修改后的实际附件扫描及路径校验函数，对当前仓库 47 篇笔记的 3 个真实附件引用只读检查通过，前后文件指纹一致；该检查不冒称完整原生索引、内容上传或物理多机通过。证据为 `output/pro-cloud/notes-title-regression-20261014/report.json` 和 `output/pro-cloud/notes-title-reference-probe-20261014/report.json`。没有重新打包或修改正式云服务。当前开发宿主默认 `--no-watch`，原生修复须结束当前开发运行并重新启动开发模式后加载，单独前端热更新不会加载新的 Rust 逻辑。

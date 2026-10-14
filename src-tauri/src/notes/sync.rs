@@ -159,7 +159,11 @@ fn asset_references(markdown: &str) -> Result<HashMap<String, String>, String> {
     let mut refs = HashMap::new();
     for (start, _) in markdown.match_indices("assets/") {
         let head = &markdown[..start];
-        if !head.ends_with(['(', '\"', '\'']) && !head.ends_with("(../") && !head.ends_with("(./") && !head.ends_with("[[") { continue; }
+        let html_target = head.ends_with(['\"', '\''])
+            && head[..head.len() - 1].trim_end().strip_suffix('=')
+                .and_then(|prefix| prefix.split_whitespace().next_back())
+                .is_some_and(|attribute| attribute.eq_ignore_ascii_case("src") || attribute.eq_ignore_ascii_case("href"));
+        if !head.ends_with('(') && !head.ends_with("(../") && !head.ends_with("(./") && !head.ends_with("[[") && !html_target { continue; }
         let raw = markdown[start + 7..].split([')', '\"', '\'', ']', '<', '>', '\r', '\n']).next().unwrap_or("").trim();
         let mut bytes = Vec::new();
         let mut source = raw.as_bytes().iter().copied();
