@@ -23,10 +23,14 @@ beforeEach(() => {
 });
 
 describe("cloud sync settings", () => {
-  it("shows unavailable service without implying that cloud storage works", async () => {
-    api.status.mockResolvedValue({ ...inactive, available: false, problem: { message: "云同步服务尚未配置完成。" } });
+  it.each([
+    ["cloud_not_configured", "云同步服务尚未配置完成。"],
+    ["cloud_service_not_ready", "云同步服务尚未就绪，本地资料仍可正常使用。"],
+  ])("shows %s without asking an authenticated user to log in again", async (code, message) => {
+    api.status.mockResolvedValue({ ...inactive, available: false, problem: { code, message } });
     render(<CloudSyncSettings />);
-    expect(await screen.findByText("云同步服务尚未配置完成。")).toBeInTheDocument();
+    expect(await screen.findByText(message)).toBeInTheDocument();
+    expect(screen.queryByText(/请登录并联网/)).not.toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "开启同步" })).not.toBeInTheDocument();
     expect(api.prepare).not.toHaveBeenCalled();
     expect(api.enable).not.toHaveBeenCalled();

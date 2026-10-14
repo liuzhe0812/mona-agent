@@ -52,6 +52,17 @@ fn bound_token(binding: &str) -> Result<String, String> {
     Ok(token)
 }
 
+fn control_response(status: u16, bytes: &[u8]) -> Value {
+    let data = match serde_json::from_slice::<Value>(bytes) {
+        Ok(data) if data.is_object() => data,
+        _ => {
+            log::warn!("Cloud endpoint returned an invalid response (HTTP {status})");
+            return json!({"status":503,"data":{"error":"cloud_service_not_ready"}});
+        }
+    };
+    json!({"status":status,"data":data})
+}
+
 async fn control(token: &str, method: &str, path: &str, payload: &Value) -> Result<Value, String> {
     if !route_allowed(method, path) || payload.to_string().len() > 256 * 1024 {
         return Err("云同步请求无效。".into());
@@ -74,9 +85,7 @@ async fn control(token: &str, method: &str, path: &str, payload: &Value) -> Resu
             if bytes.len() + chunk.len() > 16 * 1024 * 1024 { return Err("同步目录过大，请分批读取。".into()); }
             bytes.extend_from_slice(&chunk);
         }
-        let data: Value = serde_json::from_slice(&bytes).map_err(|_| "云同步服务响应异常。")?;
-        if !data.is_object() { return Err("云同步服务响应异常。".into()); }
-        return Ok(json!({"status":status,"data":data}));
+        return Ok(control_response(status, &bytes));
     }
     Err("暂时无法连接云同步服务。".into())
 }
@@ -196,6 +205,26 @@ pub(crate) async fn notify(app: &tauri::AppHandle, args: &Value) -> Result<Value
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn non_json_cloud_endpoints_report_service_readiness() {
+        for bytes in [b"<!doctype html><title>Mona</title>".as_slice(), b"[]", b"null", b"{", b""] {
+            for status in [200, 404, 502] {
+                assert_eq!(control_response(status, bytes),
+                    json!({"status":503,"data":{"error":"cloud_service_not_ready"}}));
+            }
+        }
+    }
+
+    #[test]
+    fn cloud_json_responses_keep_their_status_and_error() {
+        for (status, body) in [(200, json!({"exists":false,"space":null})),
+                              (503, json!({"error":"cloud_unavailable"})),
+                              (401, json!({"error":"invalid_credentials"}))] {
+            assert_eq!(control_response(status, &serde_json::to_vec(&body).unwrap()),
+                json!({"status":status,"data":body}));
+        }
+    }
+
     #[test]
     fn sync_notifications_carry_only_bounded_view_invalidations() {
         let data = update_payload(&json!({"binding": "private", "work_keys": ["websocket:one"],

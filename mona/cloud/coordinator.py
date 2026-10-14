@@ -101,7 +101,15 @@ class CloudCoordinator:
     @staticmethod
     def _cloud_ready(context: dict) -> None:
         if context.get("cloud_status") != 200:
-            raise CloudTransferError("cloud_unavailable", "云同步服务尚未开放或配置完成。")
+            messages = {
+                "cloud_unavailable": "云同步服务尚未开放，本地资料仍可正常使用。",
+                "cloud_not_configured": "云同步服务尚未配置完成，本地资料仍可正常使用。",
+                "cloud_service_not_ready": "云同步服务尚未就绪，本地资料仍可正常使用。",
+            }
+            code = context.get("error")
+            if not isinstance(code, str) or code not in messages:
+                raise CloudTransferError("cloud_unavailable", "云同步服务尚未开放或配置完成。")
+            raise CloudTransferError(code, messages[code])
 
     async def _guard(self, binding: str) -> None:
         if self.cancelled.is_set():
@@ -148,6 +156,8 @@ class CloudCoordinator:
                 "conflict_copy": bool(row["conflict_of"]),
                 "trashed": self.recycle.deleted_version(vault, row["resource"]) > 0} for row in rows]
         except Exception as exc:
+            if not isinstance(exc, CloudTransferError):
+                logger.warning("Cloud status unavailable ({})", type(exc).__name__)
             result.update(available=False, problem={"code": getattr(exc, "code", "service_unavailable"),
                 "message": str(exc) if isinstance(exc, CloudTransferError) else "暂时无法读取云空间，请登录并联网后重试。"})
         return result

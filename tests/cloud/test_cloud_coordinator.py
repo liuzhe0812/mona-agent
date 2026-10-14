@@ -159,6 +159,34 @@ async def initial_pair(desktops):
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("code, message", [
+    ("cloud_service_not_ready", "云同步服务尚未就绪，本地资料仍可正常使用。"),
+    ("cloud_unavailable", "云同步服务尚未开放，本地资料仍可正常使用。"),
+    ("cloud_not_configured", "云同步服务尚未配置完成，本地资料仍可正常使用。"),
+])
+async def test_unready_cloud_reports_service_problem_without_enabling(desktops, code, message):
+    service, create = desktops
+    coordinator, native = create("a")
+    invoke = native.invoke
+
+    def unready_context(command, args=None, **kwargs):
+        context = invoke(command, args, **kwargs)
+        if command == "cloud_sync_context":
+            context.update(cloud_status=503, error=code)
+        return context
+
+    coordinator.invoke = unready_context
+    state = await coordinator.status()
+    assert state["available"] is False and state["enabled"] is False
+    assert state["problem"] == {"code": code, "message": message}
+    with pytest.raises(CloudTransferError) as failure:
+        await coordinator.prepare()
+    assert failure.value.code == code
+    assert not coordinator.preferences.read().enabled
+    assert service.space is None and not service.objects and native.recovery is None
+
+
+@pytest.mark.asyncio
 async def test_disabled_and_prepare_never_upload_until_explicit_confirmation(desktops):
     service, create = desktops
     a, native = create("a")
