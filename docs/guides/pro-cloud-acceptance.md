@@ -117,3 +117,22 @@ Auth 新增 `cloud_download_months`、`cloud_access_log_imports`，迁移为 `cl
 必要验证：云模块 251 passed、1 skipped（Windows 符号链接权限），之后新增新设备启动回归 1 passed；Auth/协调器/SQLite 迁移组合 97 passed；共享模型网关 27 passed；最后补充日志路径范围校验后的定点 6 passed；实际原生路由函数与其现有断言的独立 Rust 检查 1 passed。上述为不同运行，不累计成一轮全量测试。Rust 启动文件仅验证语法，不声称全桌面构建通过；日志仅用合成格式夹具，未声称生产日志或本次新增表的真实 MariaDB 演练已经通过。源码指纹和定点报告在 `output/pro-cloud/dev-continuation-20261014/`。
 
 本阶段按约定停止在开发与必要测试完成处。每月10GB下载仍为测算口径，严格硬限制需要另行确定政策和实现方式；物理设备人工验收、正式日志接入/迁移部署和安装包发布都等待用户通知。
+
+## 2026-10-14 正式登录修复
+
+用户报告新版客户端提示“账号服务尚未支持设备登录”，并明确授权备份正式库、仅新增设备会话表和更新账号服务。修复前两个正式域名的 `/auth/desktop/login`、`/auth/desktop/status` 都返回 404；正式库为 `promotion_singleton`，没有 `account_device_sessions`。
+
+本次正式部署范围：
+
+- PM2 进程 `mona-auth` 的发布目录切换至 `/opt/mona-auth-releases/20261014-device-login-d85081c`。运行的 68 个 Python 文件与 Auth 独立仓库提交 `d85081c94e8c5ba2dc571425f8cc255a0bf1f542` 逐一核对一致。管理页面 `app/admin/index.html` 保留原线上文件，并单独记录指纹，避免夹带页面更新。
+- MariaDB 正式库 `mona_auth` 仅从 `promotion_singleton` 升级至 `desktop_device_sessions`，新增设备会话表及其索引。没有执行后续云迁移。部署前后原账户、订阅、旧设备、套餐行数及套餐价格核对一致，没有调整真实用户权益。
+- 继续使用原 `.env`、签名密钥和持久资料目录，模型及支付服务就绪。新增的公开配置为 `MONA_AUTH_CLOUD_SYNC_ENABLED=false` 和 `MONA_AUTH_LEGACY_MODEL_ACCESS_UNTIL=2026-10-21T06:35:52+00:00`。旧客户端模型访问过渡期截至北京时间 **2026-10-21 14:35:52**；该过渡不开放云同步，不绕过新设备令牌的撤销检查。
+- Nginx 配置没有修改。检查用的临时账号服务进程已移除，正式 PM2 启动快照已保存并核对，不在快照中写入 Auth 凭据。
+
+更新前的正式库 SQL 和 PM2 启动快照已加密保存到 `/var/backups/mona-auth/login-20261014-d85081c/`，目录权限 0700、文件权限 0600；两份文件均已实际读取、解密及检查内容。备份格式为 `MONA-AUTH-BACKUP1`、32 字节盐、12 字节 nonce 和 AES-GCM 密文；使用既有 JWT secret 经 HKDF-SHA256（info 为 `mona-auth-login-backup-v1`）派生密钥，文件名作为 AAD，明文为 gzip。恢复时只在受控进程内读取既有凭据及处理明文，不在参数、日志或文件中暴露它们。本次没有向正式库执行恢复演练。
+
+原发布目录 `/opt/mona-auth-releases/20260909T092437Z-payment-sync-return` 保留。失败回退使用备份中的原启动参数、原环境来源和原发布目录恢复 `mona-auth`，验证就绪后保存启动快照；保留新增设备表，不做破坏性 downgrade。部署入口已包含切换失败时的回退处理，本次切换成功，没有触发实际回退。
+
+真实检查结果：`https://mona-ai.cn` 与 `https://www.mona-ai.cn` 的健康接口均为 200；空登录请求为 422，未认证设备状态为 401，完整格式的随机不存在账号登录为 401 且错误为 `invalid_credentials`，证明请求已进入新的账号校验逻辑。没有使用用户密码、创建测试账号、请求真实收费模型或付款。内部就绪检查确认模型与支付依赖可用；云同步关闭、所有云表仍不存在。
+
+证据位于 `output/pro-cloud/login-diagnosis-20261014/`：`production-login-repair-report.json`、`production-login-repair-verification.json`、`production-admin-preservation.json`。首次备份读取位置的校验错误发生在任何正式数据库或服务修改之前，已修正并验证加密备份，记录在 `encrypted-backup-first-attempt.json`。这次不重新打包、不安装、不发布客户端，真实用户登录及物理设备人工验收仍未代替用户执行。个人云的正式部署和人工验收继续等待用户通知。
