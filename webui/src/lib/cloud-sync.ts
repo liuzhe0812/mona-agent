@@ -16,7 +16,7 @@ export interface CloudStatus {
   sync_preferences?: boolean;
   conversations?: CloudConversation[];
 }
-export interface CloudDraft { draft_id: string; new_space: boolean; recovery: string | null; candidates: CloudCandidate[] }
+export interface CloudDraft { draft_id: string; new_space: boolean; candidates: CloudCandidate[] }
 export interface CloudConversation { key: string; resource_id: string; version: number; conflict_copy: boolean; trashed?: boolean }
 export interface CloudHistoryVersion { version: number; created_at: string; deleted: boolean }
 export interface CloudHistoryPage { items: CloudHistoryVersion[]; has_more: boolean; next_before: number }

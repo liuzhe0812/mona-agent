@@ -10,7 +10,7 @@ const inactive = { available: true, enabled: false, phase: "idle", plan: "pro", 
 const active = { ...inactive, enabled: true, last_sync: 1791780000,
   selected_keys: [candidates[0].key], space: { quota_bytes: 10_000_000_000, used_bytes: 2_000_000_000,
     reserved_bytes: 500_000_000, object_count: 3 } };
-const draft = { draft_id: "a".repeat(32), new_space: true, recovery: "SYNTHETIC_RECOVERY_FOR_UI_ONLY", candidates };
+const draft = { draft_id: "a".repeat(32), new_space: true, candidates };
 
 beforeEach(() => {
   for (const method of Object.values(api)) method.mockReset();
@@ -46,15 +46,15 @@ describe("cloud sync settings", () => {
     expect(api.enable).not.toHaveBeenCalled();
   });
 
-  it("requires saved recovery key and explicit confirmation before enabling", async () => {
+  it("enables only after scope confirmation without displaying a key", async () => {
     render(<CloudSyncSettings />);
     fireEvent.click(await screen.findByRole("button", { name: "开启同步" }));
     expect(api.prepare).not.toHaveBeenCalled();
-    fireEvent.click(screen.getByRole("button", { name: "继续", exact: true }));
-    expect(await screen.findByLabelText("请保存恢复密钥")).toHaveValue(draft.recovery);
-    expect(screen.getByRole("button", { name: "确认开启" })).toBeDisabled();
+    fireEvent.click(screen.getByRole("button", { name: "选择同步内容", exact: true }));
+    expect(await screen.findByRole("button", { name: "确认开启" })).toBeEnabled();
+    expect(screen.queryByLabelText("请保存恢复密钥")).not.toBeInTheDocument();
+    expect(screen.queryByRole("checkbox", { name: "我已将恢复密钥保存到安全位置" })).not.toBeInTheDocument();
     expect(api.enable).not.toHaveBeenCalled();
-    fireEvent.click(screen.getByRole("checkbox", { name: "我已将恢复密钥保存到安全位置" }));
     api.status.mockResolvedValue(active);
     fireEvent.click(screen.getByRole("button", { name: "确认开启" }));
     await waitFor(() => expect(api.enable).toHaveBeenCalledWith(draft.draft_id, candidates.map((c) => c.key), true, false, false, false));
@@ -67,8 +67,8 @@ describe("cloud sync settings", () => {
   it("cancelling setup never enables synchronization", async () => {
     render(<CloudSyncSettings />);
     fireEvent.click(await screen.findByRole("button", { name: "开启同步" }));
-    fireEvent.click(screen.getByRole("button", { name: "继续", exact: true }));
-    await screen.findByLabelText("请保存恢复密钥");
+    fireEvent.click(screen.getByRole("button", { name: "选择同步内容", exact: true }));
+    await screen.findByRole("button", { name: "确认开启" });
     fireEvent.click(screen.getByRole("button", { name: "取消", exact: true }));
     expect(api.enable).not.toHaveBeenCalled();
     expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
@@ -76,12 +76,12 @@ describe("cloud sync settings", () => {
 
   it("imports existing key without exposing a stored key in ordinary settings", async () => {
     api.status.mockResolvedValue({ ...active, enabled: false, needs_key: true });
-    api.prepare.mockResolvedValue({ ...draft, new_space: false, recovery: null });
+    api.prepare.mockResolvedValue({ ...draft, new_space: false });
     render(<CloudSyncSettings />);
     fireEvent.click(await screen.findByRole("button", { name: "开启同步" }));
-    expect(screen.getByRole("button", { name: "核对恢复密钥" })).toBeDisabled();
-    fireEvent.change(screen.getByLabelText("云空间恢复密钥"), { target: { value: "synthetic-input-key" } });
-    fireEvent.click(screen.getByRole("button", { name: "核对恢复密钥" }));
+    expect(screen.getByRole("button", { name: "迁移旧云空间" })).toBeDisabled();
+    fireEvent.change(screen.getByLabelText("旧云空间恢复密钥"), { target: { value: "synthetic-input-key" } });
+    fireEvent.click(screen.getByRole("button", { name: "迁移旧云空间" }));
     await screen.findByRole("button", { name: "确认开启" });
     expect(api.prepare).toHaveBeenCalledWith("synthetic-input-key");
     expect(screen.queryByLabelText("请保存恢复密钥")).not.toBeInTheDocument();
@@ -111,16 +111,15 @@ describe("cloud sync settings", () => {
     expect(api.status).toHaveBeenCalledTimes(1);
   });
 
-  it("invalid success never dismisses the key confirmation", async () => {
+  it("invalid success never dismisses scope confirmation", async () => {
     api.enable.mockResolvedValue({ enabled: false });
     render(<CloudSyncSettings />);
     fireEvent.click(await screen.findByRole("button", { name: "开启同步" }));
-    fireEvent.click(screen.getByRole("button", { name: "继续", exact: true }));
-    await screen.findByLabelText("请保存恢复密钥");
-    fireEvent.click(screen.getByRole("checkbox", { name: "我已将恢复密钥保存到安全位置" }));
+    fireEvent.click(screen.getByRole("button", { name: "选择同步内容", exact: true }));
+    await screen.findByRole("button", { name: "确认开启" });
     fireEvent.click(screen.getByRole("button", { name: "确认开启" }));
     expect(await screen.findByRole("alert")).toHaveTextContent("尚未确认开启同步。");
-    expect(screen.getByLabelText("请保存恢复密钥")).toHaveValue(draft.recovery);
+    expect(screen.getByRole("button", { name: "确认开启" })).toBeInTheDocument();
   });
 
   it("preserves an intentionally empty selection when resuming sync", async () => {
@@ -128,7 +127,7 @@ describe("cloud sync settings", () => {
     api.prepare.mockResolvedValue({ ...draft, new_space: false, recovery: null });
     render(<CloudSyncSettings />);
     fireEvent.click(await screen.findByRole("button", { name: "开启同步" }));
-    fireEvent.click(screen.getByRole("button", { name: "继续", exact: true }));
+    fireEvent.click(screen.getByRole("button", { name: "选择同步内容", exact: true }));
     await screen.findByRole("button", { name: "确认开启" });
     expect(screen.getByRole("checkbox", { name: "工作会话一" })).not.toBeChecked();
     expect(screen.getByRole("checkbox", { name: "自动同步此后新建的工作会话" })).not.toBeChecked();

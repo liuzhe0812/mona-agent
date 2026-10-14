@@ -24,7 +24,6 @@ export function CloudSyncSettings({ onUpgrade }: { onUpgrade?: () => void }) {
   const [view, setView] = useState<"setup" | "scope" | null>(null);
   const [draft, setDraft] = useState<CloudDraft | null>(null);
   const [recovery, setRecovery] = useState("");
-  const [savedKey, setSavedKey] = useState(false);
   const [keys, setKeys] = useState<string[]>([]);
   const [syncNew, setSyncNew] = useState(false);
   const [syncPlanning, setSyncPlanning] = useState(false);
@@ -72,7 +71,7 @@ export function CloudSyncSettings({ onUpgrade }: { onUpgrade?: () => void }) {
   };
   const close = () => {
     if (mutation.current) return;
-    setView(null); setDraft(null); setRecovery(""); setSavedKey(false); setError("");
+    setView(null); setDraft(null); setRecovery(""); setError("");
   };
   const prepare = () => operate(async () => {
     const value = await cloudSyncApi.prepare(recovery);
@@ -108,7 +107,7 @@ export function CloudSyncSettings({ onUpgrade }: { onUpgrade?: () => void }) {
           ? <Button size="sm" variant="outline" onClick={onUpgrade}>查看 Pro</Button>
           : <Button size="sm" variant="outline" disabled={busy} onClick={() => {
             if (state.enabled) void operate(async () => { const result = await cloudSyncApi.pause(); if (result.enabled !== false) throw new Error("暂停结果尚未确认。"); await refresh(); });
-            else { setView("setup"); setDraft(null); setSavedKey(false); setRecovery(""); }
+            else { setView("setup"); setDraft(null); setRecovery(""); }
           }}>{state.enabled ? "暂停同步" : "开启同步"}</Button>)}
       </div>
       {space && <div className="mt-4">
@@ -135,16 +134,15 @@ export function CloudSyncSettings({ onUpgrade }: { onUpgrade?: () => void }) {
     <Dialog open={view !== null} onOpenChange={(open) => { if (!open) close(); }}>
       <DialogContent className="sm:max-w-lg" showCloseButton={!busy}>
         <DialogHeader><DialogTitle>{view === "scope" ? "同步范围" : "开启云同步"}</DialogTitle>
-          <DialogDescription>{view === "scope" ? "选择需要同步的内容。取消选择不会删除本地资料或已有云版本。" : "文件在本机加密后上传。恢复密钥用于在其他设备解密，重置账号密码不能找回丢失的密钥。"}</DialogDescription>
+          <DialogDescription>文件加密后上传，密钥由账号服务加密保管。同一账号可自动取得密钥并恢复所选内容。取消选择不会删除本地资料或已有云版本。</DialogDescription>
         </DialogHeader>
         {view === "setup" && !draft && <>
-          {state?.needs_key && <Input type="password" autoComplete="off" aria-label="云空间恢复密钥" placeholder="粘贴恢复密钥" value={recovery} onChange={(event) => setRecovery(event.target.value)} disabled={busy} />}
-          <Button disabled={busy || !!state?.needs_key && !recovery.trim()} onClick={() => void prepare()}>{busy ? "正在核对…" : state?.needs_key ? "核对恢复密钥" : "继续"}</Button>
+          {state?.needs_key && <>
+            <p className="text-caption text-muted-foreground">此空间使用旧密钥。可在原设备开启账号自动恢复，或在这里输入旧密钥完成一次迁移。</p>
+            <Input type="password" autoComplete="off" aria-label="旧云空间恢复密钥" placeholder="输入旧密钥，仅迁移时需要" value={recovery} onChange={(event) => setRecovery(event.target.value)} disabled={busy} />
+          </>}
+          <Button disabled={busy || !!state?.needs_key && !recovery.trim()} onClick={() => void prepare()}>{busy ? "正在核对…" : state?.needs_key ? "迁移旧云空间" : "选择同步内容"}</Button>
         </>}
-        {draft?.new_space && draft.recovery && <div className="space-y-3">
-          <Input readOnly aria-label="请保存恢复密钥" value={draft.recovery} onFocus={(event) => event.currentTarget.select()} />
-          <label className="flex items-center gap-2 text-caption"><Checkbox checked={savedKey} onCheckedChange={(value) => setSavedKey(value === true)} disabled={busy} />我已将恢复密钥保存到安全位置</label>
-        </div>}
         {(draft || view === "scope") && <div className="space-y-2">
           <label className="flex items-center gap-2 pb-2 text-caption">
             <Checkbox checked={syncNew} disabled={busy} onCheckedChange={(value) => setSyncNew(value === true)} />
@@ -174,11 +172,11 @@ export function CloudSyncSettings({ onUpgrade }: { onUpgrade?: () => void }) {
         </div>}
         {error && <p className="text-caption text-destructive" role="alert">{error}</p>}
         <DialogFooter><Button variant="outline" disabled={busy} onClick={close}>取消</Button>
-          {(draft || view === "scope") && <Button disabled={busy || !!draft?.new_space && !savedKey} onClick={() => void operate(async () => {
+          {(draft || view === "scope") && <Button disabled={busy} onClick={() => void operate(async () => {
             if (view === "scope") await cloudSyncApi.scope(keys, syncNew, syncPlanning, syncNotes, syncPreferences);
             else if (draft) { const result = await cloudSyncApi.enable(draft.draft_id, keys, syncNew, syncPlanning, syncNotes, syncPreferences); if (!result.enabled) throw new Error("尚未确认开启同步。"); }
             if (!alive.current) return;
-            setView(null); setDraft(null); setRecovery(""); setSavedKey(false); await refresh();
+            setView(null); setDraft(null); setRecovery(""); await refresh();
           })}>{busy ? "保存中…" : view === "scope" ? "保存范围" : "确认开启"}</Button>}
         </DialogFooter>
       </DialogContent>

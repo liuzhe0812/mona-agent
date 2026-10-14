@@ -143,7 +143,7 @@ class CloudCoordinator:
             result.update(available=True, plan=context.get("plan"), space=public_space,
                 local_download_usage=await asyncio.to_thread(self.store.download_usage, context["account_id"]),
                 enabled=same and config.enabled and config.vault_id == vault,
-                needs_key=bool(space) and not context.get("recovery"),
+                needs_key=bool(space) and not space.get("key_managed") and not context.get("recovery"),
                 candidates=await asyncio.to_thread(self._candidates, vault),
                 selected_keys=config.session_keys if same else [],
                 sync_new_conversations=config.sync_new_conversations if same else False,
@@ -233,7 +233,9 @@ class CloudCoordinator:
                 raise CloudTransferError("cloud_pro_required", "创建云空间需要 Pro，基础本地功能不受影响。")
             supplied = recovery or context.get("recovery")
             if space and not supplied:
-                raise CloudTransferError("recovery_required", "请提供这个云空间原来的恢复密钥。")
+                if space.get("key_managed"):
+                    raise CloudTransferError("cloud_key_unavailable", "账号密钥尚未加载，请重新打开 Mona 后重试。")
+                raise CloudTransferError("recovery_required", "请在原设备启用账号自动恢复，或导入旧密钥完成一次迁移。")
             cipher = VaultCipher.from_recovery(supplied) if supplied else VaultCipher.generate()
             if space and (space.get("vault_id") != cipher.vault_id or not cipher.matches_key_check(space.get("key_check"))):
                 raise CloudTransferError("recovery_required", "请提供这个云空间原来的恢复密钥。")
@@ -241,7 +243,6 @@ class CloudCoordinator:
                 "binding": context["binding"], "account_id": context["account_id"], "cipher": cipher,
                 "candidates": await asyncio.to_thread(self._candidates, cipher.vault_id), "new": not bool(space)}
             return {"draft_id": self.draft["id"], "new_space": self.draft["new"],
-                "recovery": cipher.recovery_text() if self.draft["new"] else None,
                 "candidates": self.draft["candidates"]}
 
     async def enable(self, draft_id: str, keys: list[str], confirmed: bool,
@@ -258,11 +259,18 @@ class CloudCoordinator:
                 self.draft = None
                 raise CloudTransferError("account_changed", "账号已变化，请重新确认同步范围。")
             cipher = draft["cipher"]
+            space = context.get("space")
             notes_vault = await self._notes_scope(context) if sync_notes else ""
             transport = self._transport(context)
             if draft["new"]:
-                await asyncio.to_thread(transport.control, "POST", "/space",
-                    {"vault_id": cipher.vault_id, "key_check": cipher.key_check()})
+                registered = await asyncio.to_thread(transport.control, "POST", "/space",
+                    {"vault_id": cipher.vault_id, "key_check": cipher.key_check(), "recovery": cipher.recovery_text()})
+                if registered.get("key_managed") is not True:
+                    raise CloudTransferError("cloud_key_unavailable", "账号自动恢复尚未确认，未开启同步。")
+            elif not space.get("key_managed"):
+                registered = await asyncio.to_thread(transport.control, "POST", "/space/key", {"recovery": cipher.recovery_text()})
+                if registered.get("managed") is not True or registered.get("vault_id") != cipher.vault_id:
+                    raise CloudTransferError("cloud_key_unavailable", "旧云空间迁移尚未确认，未开启同步。")
             saved = await asyncio.to_thread(self.invoke, "cloud_sync_store_key",
                 {"binding": context["binding"], "vault_id": cipher.vault_id, "recovery": cipher.recovery_text()}, timeout=65)
             if not isinstance(saved, dict) or saved.get("saved") is not True:
@@ -322,6 +330,12 @@ class CloudCoordinator:
                 config.sync_notes = sync_notes
                 config.notes_vault_token = await self._notes_scope(context) if sync_notes else ""
             config.excluded_session_keys = sorted(candidates.difference(keys))
+            space = context.get("space")
+            if space and not space.get("key_managed"):
+                cipher = VaultCipher.from_recovery(context.get("recovery"))
+                registered = await asyncio.to_thread(self._transport(context).control, "POST", "/space/key", {"recovery": cipher.recovery_text()})
+                if registered.get("managed") is not True or registered.get("vault_id") != config.vault_id:
+                    raise CloudTransferError("cloud_key_unavailable", "旧云空间迁移尚未确认，未保存同步范围。")
             await asyncio.to_thread(self.preferences.write, config)
             self.wake.set()
             await asyncio.to_thread(self.store.cursor, config.vault_id, 0)

@@ -20,6 +20,7 @@ class CloudService(ObjectService):
     def __init__(self):
         super().__init__()
         self.space = None
+        self.recovery = None
 
     def control(self, method, path, payload=None):
         parsed = urlsplit(path)
@@ -29,7 +30,9 @@ class CloudService(ObjectService):
                     assert self.space["vault_id"] == payload["vault_id"]
                     assert self.space["key_check"] == payload["key_check"]
                 else:
-                    self.space = {**payload, "quota_bytes": self.quota, "used_bytes": 0,
+                    self.recovery = payload.get("recovery")
+                    self.space = {"vault_id":payload["vault_id"],"key_check":payload["key_check"],
+                                  "key_managed":bool(self.recovery),"quota_bytes": self.quota, "used_bytes": 0,
                                   "reserved_bytes": 0, "object_count": 0}
                 return copy.deepcopy(self.space)
             return {"exists": bool(self.space), "space": copy.deepcopy(self.space)}
@@ -62,6 +65,8 @@ class DesktopBoundary:
         if self.hook:
             self.hook(command)
         if command == "cloud_sync_context":
+            if self.recovery is None and self.server.space and self.server.space.get("key_managed"):
+                self.recovery = self.server.recovery
             return {"account_id": self.account_id, "binding": self.binding, "plan": self.plan,
                 "cloud_status": 200, "space": copy.deepcopy(self.server.space), "exists": bool(self.server.space),
                 "recovery": self.recovery}
@@ -151,7 +156,7 @@ async def initial_pair(desktops):
     await enable(a, [session.key])
     await a.run_once()
     assert a.problem is None, a.problem
-    await enable(b, [], native_a.recovery)
+    await enable(b, [])
     await b.run_once()
     assert b.problem is None, b.problem
     imported = b.manager.list_sessions()[0]["key"]
@@ -194,7 +199,7 @@ async def test_disabled_and_prepare_never_upload_until_explicit_confirmation(des
     await a.run_once()
     assert native.calls == [] and service.space is None
     draft = await a.prepare()
-    assert draft["recovery"] and service.space is None and not service.objects
+    assert "recovery" not in draft and service.space is None and not service.objects
     with pytest.raises(CloudTransferError):
         await a.enable(draft["draft_id"], [session.key], False)
     assert not a.preferences.read().enabled
@@ -342,14 +347,15 @@ async def test_busy_session_defers_remote_update_until_current_task_ends(desktop
 
 
 @pytest.mark.asyncio
-async def test_same_account_on_new_device_requires_recovery_key(desktops):
+async def test_same_account_on_new_device_automatically_recovers_key(desktops):
     service, create = desktops
     a, _ = create("a")
     await enable(a, [])
     b, _ = create("b")
-    with pytest.raises(CloudTransferError) as exc:
-        await b.prepare()
-    assert exc.value.code == "recovery_required"
+    draft = await b.prepare()
+    assert draft["new_space"] is False and "recovery" not in draft
+    await b.enable(draft["draft_id"], [], True)
+    assert b.preferences.read().enabled
     assert service.space is not None
 
 

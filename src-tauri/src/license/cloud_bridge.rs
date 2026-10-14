@@ -13,6 +13,7 @@ fn route_allowed(method: &str, path: &str) -> bool {
     let parts: Vec<_> = base.split('/').collect();
     let allowed = match (method, parts.as_slice()) {
         ("GET", ["", "space"]) | ("GET", ["", "changes"]) => true,
+        ("GET" | "POST", ["", "space", "key"]) => query.is_empty(),
         ("GET", ["", "trash"]) | ("GET", ["", "usage"]) => true,
         ("POST", ["", "trash", "preview" | "apply"]) => query.is_empty(),
         ("GET" | "POST", ["", "cleanup"]) => query.is_empty(),
@@ -100,19 +101,39 @@ fn account_id(token: &str) -> Result<String, String> {
     Ok(id.to_string())
 }
 
+fn valid_recovery(vault: &str, value: &str) -> bool {
+    if value.len() > 160 { return false; }
+    let parts: Vec<_> = value.split(':').collect();
+    if parts.len() != 4 || parts[0] != "mona-v1" || parts[1] != vault || !hex(vault,32) { return false; }
+    let Ok(key) = URL_SAFE_NO_PAD.decode(parts[2]) else { return false; };
+    key.len() == 32 && URL_SAFE_NO_PAD.encode(&key) == parts[2]
+        && super::token_fingerprint(&parts[..3].join(":"))[..12] == *parts[3]
+}
+
 pub(crate) async fn context() -> Result<Value, String> {
     let _guard = device_sessions::ACCOUNT_LOCK.lock().await;
     let token = load_auth_token().ok_or("请先登录 Mona。")?;
     let cache = device_sessions::status(&token).await.map_err(|_| "请联网核对账号后再同步。")?;
     let user = account_id(&token)?;
-    let response = control(&token, "GET", "/space", &Value::Null).await?;
+    let response = control(&token, "GET", "/space/key", &Value::Null).await?;
     if response["status"] != 200 {
         return Ok(json!({"binding":token_fingerprint(&token),"account_id":user,
             "plan":cache.plan,"cloud_status":response["status"],"error":response["data"]["error"]}));
     }
     let space = &response["data"]["space"];
     let recovery = if let Some(vault) = space["vault_id"].as_str().filter(|v| hex(v,32)) {
-        crate::terminal::credential_store::load_secret(&format!("mona_cloud_{user}_{vault}"))?
+        let name = format!("mona_cloud_{user}_{vault}");
+        let local = crate::terminal::credential_store::load_secret(&name)?;
+        if let Some(remote) = response["data"]["recovery"].as_str() {
+            if !valid_recovery(vault,remote) {
+                return Err("账号密钥返回异常，未覆盖本机密钥。".into());
+            }
+            if local.as_deref().is_some_and(|key| key != remote) {
+                return Err("账号密钥与本机密钥不一致，未覆盖本机密钥。".into());
+            }
+            if local.is_none() { crate::terminal::credential_store::store_secret(&name,remote)?; }
+            Some(remote.to_string())
+        } else { local }
     } else { None };
     Ok(json!({"binding":token_fingerprint(&token),"account_id":user,"plan":cache.plan,
         "cloud_status":200,"exists":response["data"]["exists"],"space":space,"recovery":recovery}))
@@ -134,8 +155,7 @@ pub(crate) async fn store_key(args: &Value) -> Result<Value, String> {
     let user = account_id(&token)?;
     let vault = args["vault_id"].as_str().filter(|v| hex(v,32)).ok_or("云空间标识无效。")?;
     let recovery = args["recovery"].as_str().ok_or("恢复密钥无效。")?;
-    if recovery.len() > 160 || !recovery.starts_with(&format!("mona-v1:{vault}:"))
-        || !recovery.bytes().all(|b| b.is_ascii_alphanumeric() || matches!(b, b':'|b'-'|b'_')) {
+    if !valid_recovery(vault,recovery) {
         return Err("恢复密钥格式无效。".into());
     }
     let name = format!("mona_cloud_{user}_{vault}");
@@ -206,6 +226,18 @@ pub(crate) async fn notify(app: &tauri::AppHandle, args: &Value) -> Result<Value
 mod tests {
     use super::*;
     #[test]
+    fn account_keys_are_validated_before_caching() {
+        let vault = "a".repeat(32);
+        let mut key = [0u8;32]; getrandom::fill(&mut key).unwrap();
+        let body = format!("mona-v1:{vault}:{}",URL_SAFE_NO_PAD.encode(key));
+        let value = format!("{body}:{}",&super::super::token_fingerprint(&body)[..12]);
+        assert!(valid_recovery(&vault,&value));
+        assert!(!valid_recovery(&"b".repeat(32),&value));
+        assert!(!valid_recovery(&vault,&format!("{value}x")));
+        assert!(!valid_recovery(&vault,&format!("mona-v1:{vault}:short:000000000000")));
+    }
+
+    #[test]
     fn non_json_cloud_endpoints_report_service_readiness() {
         for bytes in [b"<!doctype html><title>Mona</title>".as_slice(), b"[]", b"null", b"{", b""] {
             for status in [200, 404, 502] {
@@ -240,6 +272,10 @@ mod tests {
     #[test]
     fn only_bounded_cloud_control_routes_are_allowed() {
         assert!(route_allowed("GET", "/space"));
+        assert!(route_allowed("GET", "/space/key"));
+        assert!(route_allowed("POST", "/space/key"));
+        assert!(!route_allowed("GET", "/space/key?user_id=1"));
+        assert!(!route_allowed("DELETE", "/space/key"));
         assert!(route_allowed("GET", "/trash?before=123"));
         assert!(route_allowed("POST", "/trash/preview"));
         assert!(route_allowed("POST", "/trash/apply"));

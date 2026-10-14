@@ -13,8 +13,8 @@ from mona.cloud.transfer import CloudTransferError
 from mona.security.network import validate_url_target
 
 _CONTROL_PATHS = {
-    "GET": re.compile(r"^/(?:space|cleanup|retention|usage(?:\?period=[1-9][0-9]{3}-(?:0[1-9]|1[0-2]))?|trash(?:\?before=[0-9]+)?|changes(?:\?after=[0-9]+&limit=[0-9]+)?|resources/[a-f0-9]{32}/history(?:\?before=[0-9]+)?)$"),
-    "POST": re.compile(r"^/(?:space|cleanup|retention|trash/(?:preview|apply)|objects/reserve|objects/[a-f0-9]{64}/(?:confirm|download|release)|resources/commit)$"),
+    "GET": re.compile(r"^/(?:space(?:/key)?|cleanup|retention|usage(?:\?period=[1-9][0-9]{3}-(?:0[1-9]|1[0-2]))?|trash(?:\?before=[0-9]+)?|changes(?:\?after=[0-9]+&limit=[0-9]+)?|resources/[a-f0-9]{32}/history(?:\?before=[0-9]+)?)$"),
+    "POST": re.compile(r"^/(?:space(?:/key)?|cleanup|retention|trash/(?:preview|apply)|objects/reserve|objects/[a-f0-9]{64}/(?:confirm|download|release)|resources/commit)$"),
 }
 
 
