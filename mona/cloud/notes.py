@@ -28,7 +28,7 @@ def note_data(value):
                          ("created_at", 64), ("updated_at", 64), ("note_type", 32)):
         if not isinstance(value[field], str) or len(value[field].encode()) > limit:
             fail()
-    if not value["title"] or type(value["favorite"]) is not bool or value["note_type"] not in {
+    if type(value["favorite"]) is not bool or value["note_type"] not in {
             "note", "moc", "daily", "template", "agent-experience", "flowchart", "mindmap", "diagram"}:
         fail()
     if (not isinstance(value["aliases"], list) or len(value["aliases"]) > 100

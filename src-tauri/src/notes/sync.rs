@@ -210,7 +210,7 @@ fn projection(root: &Path, note: &OperationNote) -> Result<(Value, HashMap<Strin
 
 fn validate(data: &PortableNote) -> Result<(), String> {
     if (!data.notebook.is_empty() && (!component(&data.notebook) || !is_notebook_folder(&data.notebook)))
-        || data.title.is_empty() || data.title.len() > 4096 || data.title.chars().any(char::is_control)
+        || data.title.len() > 4096 || data.title.chars().any(char::is_control)
         || data.content.len() as u64 > MAX_NOTE || data.assets.len() > 128 || data.aliases.len() > 100
         || data.aliases.iter().any(|a| a.len() > 1024 || a.chars().any(char::is_control))
         || data.created_at.len() > 64 || data.updated_at.len() > 64

@@ -154,6 +154,25 @@ async def test_real_encryption_two_devices_preserve_text_assets_and_followup_edi
 
 
 @pytest.mark.asyncio
+async def test_empty_title_syncs_with_other_notes_and_can_be_renamed(notes_pair):
+    service, a, b = notes_pair
+    a[2].rows["untitled"] = note("没有标题的正文", title="")
+    a[2].put("titled", content="其他笔记")
+    original = copy.deepcopy(a[2].rows)
+    await enable(a)
+    await enable(b)
+    assert a[2].rows == original
+    assert sorted(b[2].rows.values(), key=lambda row: row["content"]) == sorted(
+        original.values(), key=lambda row: row["content"])
+    imported = next(row for row in b[2].rows.values() if row["title"] == "")
+    imported["title"] = "补上标题"
+    await settle(b, a)
+    assert a[2].rows["untitled"]["title"] == "补上标题"
+    assert a[2].rows["untitled"]["content"] == "没有标题的正文"
+    assert versions(service) == 3
+
+
+@pytest.mark.asyncio
 async def test_notes_are_opt_in_and_disabling_does_not_delete_local_or_cloud_data(notes_pair):
     service, a, b = notes_pair
     a[2].put()

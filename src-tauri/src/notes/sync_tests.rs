@@ -46,6 +46,30 @@ fn remote_image_titles_are_not_local_attachments() {
 }
 
 #[test]
+fn empty_titles_do_not_block_inventory_and_roundtrip_without_changes() {
+    let a = tempfile::tempdir().unwrap();
+    let b = tempfile::tempdir().unwrap();
+    let body = "# 正文\n\n空标题仍保留完整内容。\n";
+    let path = write_original(a.path(), "empty-title", "第一课", body);
+    let original = fs::read_to_string(&path).unwrap().replace("title: 第一课\n", "title: \"\"\n");
+    fs::write(&path, &original).unwrap();
+    write_original(a.path(), "titled", "第二课", "其他笔记");
+    let index = request_at(a.path(), &json!({"action": "index"})).unwrap();
+    let items = index["items"].as_array().unwrap();
+    assert_eq!(items.len(), 2);
+    let row = items.iter().find(|row| row["id"] == "empty-title").unwrap();
+    let read = request_at(a.path(), &json!({"action": "read", "vault": index["vault"],
+        "note_id": row["id"], "expected": row["fingerprint"]})).unwrap();
+    assert_eq!(read["data"]["title"], "");
+    assert_eq!(read["data"]["content"], body);
+    apply(b.path(), "imported", &fingerprint(&Value::Null), &read["data"]).unwrap();
+    let (imported_path, imported) = scan(b.path()).unwrap().remove("imported").unwrap();
+    assert!(imported_path.file_name().unwrap().to_str().unwrap().starts_with("untitled_"));
+    assert_eq!(projection(b.path(), &imported).unwrap().0, read["data"]);
+    assert_eq!(fs::read_to_string(&path).unwrap(), original);
+}
+
+#[test]
 fn local_markdown_wiki_and_html_destinations_remain_attachments() {
     for content in ["![图片](assets/local.png)", "[附件](../assets/local.png)",
                     "![[assets/local.png]]", "<img src=\"assets/local.png\">",
