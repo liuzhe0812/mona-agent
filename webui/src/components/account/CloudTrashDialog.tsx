@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { Loader2, RotateCcw, Trash2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import { TooltipButton } from "@/components/ui/tooltip";
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { cloudSyncApi, type CloudTrashAction, type CloudTrashDraft, type CloudTrashItem, type CloudTrashPage } from "@/lib/cloud-sync";
 
@@ -79,9 +80,9 @@ export function CloudTrashDialog({ disabled, target, onChanged }: { disabled?: b
     if (target) void select(target, "trash"); else void read();
   };
   return <>
-    <Button size="sm" variant={target ? "ghost" : "outline"} disabled={disabled} onClick={begin}>
+    <TooltipButton size={target ? "sm" : "xs"} variant="ghost" title={target ? "将云端副本移至回收站，保留本地资料" : "找回或管理已删除的云内容"} aria-label={target ? "移至云回收站" : "回收站"} disabled={disabled} onClick={begin}>
       <Trash2 className="mr-1.5 h-3.5 w-3.5" aria-hidden="true" />{target ? "移至云回收站" : "回收站"}
-    </Button>
+    </TooltipButton>
     <Dialog open={open} onOpenChange={(value) => { if (!value) close(); }}>
       <DialogContent className="sm:max-w-xl" showCloseButton={!busy}>
         <DialogHeader><DialogTitle>{selection ? `${names[selection.action]}？` : "云回收站"}</DialogTitle>

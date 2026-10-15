@@ -5,6 +5,7 @@ import { Input } from "@/components/ui/input";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { SubsectionLabel } from "@/components/ui/page-header";
+import { TooltipButton } from "@/components/ui/tooltip";
 import { cloudSyncApi, type CloudDraft, type CloudStatus } from "@/lib/cloud-sync";
 import { CloudHistoryDialog } from "./CloudHistoryDialog";
 import { CloudCleanupDialog } from "./CloudCleanupDialog";
@@ -87,13 +88,14 @@ export function CloudSyncSettings({ onUpgrade }: { onUpgrade?: () => void }) {
   const candidates = draft?.candidates ?? state?.candidates ?? [];
   const space = state?.space;
   const occupied = space ? space.used_bytes + space.reserved_bytes : 0;
+  const hasHistory = !!state?.conversations?.some((item) => item.version > 0);
 
   return <section aria-label="云同步">
     <div className="mb-2 flex items-center justify-between gap-3 px-1">
       <SubsectionLabel>云同步</SubsectionLabel>
-      <Button variant="ghost" size="sm" disabled={loading || busy} onClick={() => void refresh()} aria-label="刷新云空间">
-        <RefreshCw className="mr-1.5 h-3.5 w-3.5" />刷新
-      </Button>
+      <TooltipButton variant="ghost" size="xs" title="刷新云空间用量和同步状态" disabled={loading || busy} onClick={() => void refresh()} aria-label="刷新云空间">
+        <RefreshCw className="h-3.5 w-3.5" />
+      </TooltipButton>
     </div>
     <div className="rounded-lg border border-border/60 bg-card px-4 py-4 sm:px-5">
       <div className="flex items-start justify-between gap-4">
@@ -106,10 +108,10 @@ export function CloudSyncSettings({ onUpgrade }: { onUpgrade?: () => void }) {
         </div>
         {!loading && state?.available && (state.plan === "free" && !state.space
           ? <Button size="sm" variant="outline" onClick={onUpgrade}>查看 Pro</Button>
-          : <Button size="sm" variant="outline" disabled={busy} onClick={() => {
+          : <TooltipButton size="xs" variant="ghost" title={state.enabled ? "暂停本机同步，保留本地和云端资料" : "选择内容并开启云同步"} aria-label={state.enabled ? "暂停同步" : "开启同步"} disabled={busy} onClick={() => {
             if (state.enabled) void operate(async () => { const result = await cloudSyncApi.pause(); if (result.enabled !== false) throw new Error("暂停结果尚未确认。"); await refresh(); });
             else { setView("setup"); setDraft(null); setRecovery(""); }
-          }}>{state.enabled ? "暂停同步" : "开启同步"}</Button>)}
+          }}>{state.enabled ? "暂停同步" : "开启同步"}</TooltipButton>)}
       </div>
       {space && <div className="mt-4">
         <div className="mb-1.5 flex justify-between text-caption text-muted-foreground"><span>空间使用</span><span>{size(space.used_bytes)} / {size(space.quota_bytes)}</span></div>
@@ -119,27 +121,23 @@ export function CloudSyncSettings({ onUpgrade }: { onUpgrade?: () => void }) {
         {space.reserved_bytes > 0 && <p className="mt-1.5 text-caption text-muted-foreground">上传预留 {size(space.reserved_bytes)}</p>}
       </div>}
       {state?.available && <p className="mt-3 text-caption text-muted-foreground">同步工作会话及关联文件，可选笔记、日程与待办；不包含开发会话、项目目录和 AI 自动任务。</p>}
-      {state?.enabled && <div className="mt-3 flex flex-wrap items-center gap-2">
-        <Button size="sm" disabled={busy || state.phase === "syncing"} onClick={() => void operate(async () => {
+      {state?.available && (state.enabled || space || hasHistory) && <div role="group" aria-label="云同步操作" className="mt-3 flex items-center gap-1 overflow-x-auto">
+        {state.enabled && <>
+        <TooltipButton size="xs" title="立即检查并同步已选内容" aria-label="立即同步" disabled={busy || state.phase === "syncing"} onClick={() => void operate(async () => {
           const result = await cloudSyncApi.sync(); if (!result.scheduled) throw new Error("同步请求尚未确认。"); await refresh();
-        })}>{state.phase === "syncing" && <Loader2 className="mr-1.5 h-3.5 w-3.5 animate-spin" />}立即同步</Button>
-        <Button size="sm" variant="outline" disabled={busy} onClick={() => { setKeys(state.selected_keys ?? []); setSyncNew(state.sync_new_conversations === true); setSyncPlanning(state.sync_planning === true); setSyncNotes(state.sync_notes === true); setSyncPreferences(state.sync_preferences === true); setView("scope"); }}>同步范围</Button>
-        {state.last_sync && <span className="text-caption text-muted-foreground">最近同步 {new Date(state.last_sync * 1000).toLocaleString("zh-CN")}</span>}
+        })}>{state.phase === "syncing" && <Loader2 className="mr-1.5 h-3.5 w-3.5 animate-spin" />}立即同步</TooltipButton>
+        <TooltipButton size="xs" variant="ghost" title="选择要同步的会话、笔记、日程和偏好" aria-label="同步范围" disabled={busy} onClick={() => { setKeys(state.selected_keys ?? []); setSyncNew(state.sync_new_conversations === true); setSyncPlanning(state.sync_planning === true); setSyncNotes(state.sync_notes === true); setSyncPreferences(state.sync_preferences === true); setView("scope"); }}>同步范围</TooltipButton>
+        </>}
+        {space && <CloudTrashDialog disabled={busy} onChanged={() => void refresh()} />}
+        {hasHistory && <CloudHistoryDialog conversations={state.conversations ?? []} candidates={state.candidates ?? []} onRestored={() => void refresh()} />}
+        {space && <TooltipButton size="xs" variant="ghost" title="展开历史版本和未使用文件的清理操作" aria-label="空间管理" aria-expanded={showManagement} aria-controls="cloud-space-management" onClick={() => setShowManagement((value) => !value)}>
+          空间管理<ChevronDown className={`ml-1.5 h-3.5 w-3.5 ${showManagement ? "rotate-180" : ""}`} />
+        </TooltipButton>}
       </div>}
-      {state?.available && space && <>
-        <div className="mt-3 flex flex-wrap items-center gap-2">
-          <CloudTrashDialog disabled={busy} onChanged={() => void refresh()} />
-          <Button size="sm" variant="ghost" aria-expanded={showManagement} aria-controls="cloud-space-management" onClick={() => setShowManagement((value) => !value)}>
-            空间管理<ChevronDown className={`ml-1.5 h-3.5 w-3.5 ${showManagement ? "rotate-180" : ""}`} />
-          </Button>
-        </div>
-        {showManagement && <div id="cloud-space-management" className="mt-3 space-y-2">
-          <p className="text-caption text-muted-foreground">按需清理过期旧版本，或回收未被引用的上传文件。检查后仍需确认才会清理。</p>
-          <div className="flex flex-wrap gap-2"><CloudHistoryRetentionDialog disabled={busy} onChanged={() => void refresh()} /><CloudCleanupDialog disabled={busy} onCleaned={() => void refresh()} /></div>
-        </div>}
-      </>}
-      {state?.available && !!state.conversations?.some((item) => item.version > 0) && <div className="mt-3">
-        <CloudHistoryDialog conversations={state.conversations} candidates={state.candidates ?? []} onRestored={() => void refresh()} />
+      {state?.enabled && state.last_sync && <p className="mt-2 text-caption text-muted-foreground">最近同步 {new Date(state.last_sync * 1000).toLocaleString("zh-CN")}</p>}
+      {state?.available && space && showManagement && <div id="cloud-space-management" className="mt-3 space-y-2">
+        <p className="text-caption text-muted-foreground">按需清理过期旧版本，或回收未被引用的上传文件。检查后仍需确认才会清理。</p>
+        <div className="flex items-center gap-1 overflow-x-auto"><CloudHistoryRetentionDialog disabled={busy} onChanged={() => void refresh()} /><CloudCleanupDialog disabled={busy} onCleaned={() => void refresh()} /></div>
       </div>}
       {state?.enabled && state.problem && <p className="mt-3 text-caption text-destructive" role="status">{state.problem.message}</p>}
     </div>

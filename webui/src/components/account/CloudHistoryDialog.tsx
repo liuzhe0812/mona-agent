@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { Download, History, Loader2, RotateCcw } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import { TooltipButton } from "@/components/ui/tooltip";
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Select } from "@/components/ui/select";
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
@@ -106,9 +107,9 @@ export function CloudHistoryDialog({ conversations, candidates, onRestored }: {
   };
 
   return <>
-    <Button size="sm" variant="outline" disabled={!known.length} onClick={() => {
+    <TooltipButton size="xs" variant="ghost" title="查看云会话、关联文件和历史版本" aria-label="会话与历史" disabled={!known.length} onClick={() => {
       setResource(known[0].resource_id); setTab("history"); setOpen(true);
-    }}><History className="mr-1.5 h-3.5 w-3.5" aria-hidden="true" />会话与历史</Button>
+    }}><History className="mr-1.5 h-3.5 w-3.5" aria-hidden="true" />会话与历史</TooltipButton>
     <Dialog open={open} onOpenChange={(value) => { if (!value) close(); }}>
       <DialogContent className="sm:max-w-xl" showCloseButton={!busy}>
         <DialogHeader>

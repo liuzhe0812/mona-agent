@@ -1,4 +1,4 @@
-import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const api = vi.hoisted(() => ({ status: vi.fn(), prepare: vi.fn(), enable: vi.fn(), scope: vi.fn(), pause: vi.fn(), sync: vi.fn() }));
@@ -222,6 +222,19 @@ describe("cloud sync settings", () => {
     fireEvent.click(screen.getByRole("button", { name: "同步范围" }));
     expect(screen.getByRole("checkbox", { name: /工作会话一.*关联文件缺失/ })).toBeChecked();
     expect(screen.getByRole("checkbox", { name: "工作会话二" })).not.toBeChecked();
+    expect(api.scope).not.toHaveBeenCalled();
+  });
+
+  it("groups the actions together and explains them on hover", async () => {
+    api.status.mockResolvedValue({ ...active, conversations: [{ key: candidates[0].key,
+      resource_id: "a".repeat(32), version: 1, conflict_copy: false, trashed: false }] });
+    render(<CloudSyncSettings />);
+    const actions = within(await screen.findByRole("group", { name: "云同步操作" }));
+    for (const name of ["立即同步", "同步范围", "回收站", "会话与历史", "空间管理"]) {
+      expect(actions.getByRole("button", { name, exact: true })).toBeInTheDocument();
+    }
+    fireEvent.pointerMove(actions.getByRole("button", { name: "同步范围" }), { pointerType: "mouse" });
+    expect(await screen.findByRole("tooltip", { name: "选择要同步的会话、笔记、日程和偏好" })).toBeInTheDocument();
     expect(api.scope).not.toHaveBeenCalled();
   });
 

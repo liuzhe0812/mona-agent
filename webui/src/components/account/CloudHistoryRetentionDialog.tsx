@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { History, Loader2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import { TooltipButton } from "@/components/ui/tooltip";
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { cloudSyncApi, type CloudRetentionPreview, type CloudRetentionResult } from "@/lib/cloud-sync";
 
@@ -55,7 +56,7 @@ export function CloudHistoryRetentionDialog({ disabled, onChanged }: { disabled?
     } finally { mutation.current = false; if (alive.current) setBusy(false); }
   };
   return <>
-    <Button size="sm" variant="outline" disabled={disabled} onClick={() => { setOpen(true); void read(); }}><History className="mr-1.5 h-3.5 w-3.5" />清理过期历史</Button>
+    <TooltipButton size="xs" variant="ghost" title="清理过期旧版本，保留最新内容" aria-label="清理过期历史" disabled={disabled} onClick={() => { setOpen(true); void read(); }}><History className="mr-1.5 h-3.5 w-3.5" />清理过期历史</TooltipButton>
     <Dialog open={open} onOpenChange={(value) => { if (!value) close(); }}>
       <DialogContent showCloseButton={!busy}>
         <DialogHeader><DialogTitle>清理过期历史</DialogTitle>

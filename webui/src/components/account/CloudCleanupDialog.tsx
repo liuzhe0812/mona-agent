@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { Loader2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import { TooltipButton } from "@/components/ui/tooltip";
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { cloudSyncApi, type CloudCleanupPreview, type CloudCleanupResult } from "@/lib/cloud-sync";
 
@@ -68,7 +69,7 @@ export function CloudCleanupDialog({ disabled = false, onCleaned }: { disabled?:
   const close = () => { if (!running.current) { generation.current += 1; setOpen(false); setPlan(null); setResult(null); setError(""); } };
 
   return <>
-    <Button size="sm" variant="outline" disabled={disabled || busy} onClick={() => { setOpen(true); void preview(); }}>清理上传残留</Button>
+    <TooltipButton size="xs" variant="ghost" title="回收不再被任何云版本引用的文件" aria-label="清理上传残留" disabled={disabled || busy} onClick={() => { setOpen(true); void preview(); }}>清理上传残留</TooltipButton>
     <Dialog open={open} onOpenChange={(value) => { if (!value) close(); }}>
       <DialogContent className="sm:max-w-md" showCloseButton={!busy}>
         <DialogHeader>
