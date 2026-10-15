@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { Cloud, Loader2, RefreshCw } from "lucide-react";
+import { ChevronDown, Cloud, Loader2, RefreshCw } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Checkbox } from "@/components/ui/checkbox";
@@ -12,7 +12,7 @@ import { CloudCleanupDialog } from "./CloudCleanupDialog";
 import { CloudHistoryRetentionDialog } from "./CloudHistoryRetentionDialog";
 import { CloudTrashDialog } from "./CloudTrashDialog";
 
-const phases: Record<string, string> = { idle: "已同步", syncing: "同步中", paused: "已暂停", waiting: "等待当前任务结束", pending: "等待继续同步", error: "同步未完成" };
+const phases: Record<string, string> = { idle: "已同步", syncing: "同步中", paused: "已暂停", waiting: "等待当前任务结束", pending: "等待继续同步", partial: "部分内容待处理", error: "同步未完成" };
 function size(bytes: number) { return `${(bytes / 1_000_000_000).toLocaleString("zh-CN", { maximumFractionDigits: 2 })} GB`; }
 function message(error: unknown) { return error instanceof Error ? error.message : "操作尚未完成，请稍后重试。"; }
 
@@ -29,6 +29,7 @@ export function CloudSyncSettings({ onUpgrade }: { onUpgrade?: () => void }) {
   const [syncPlanning, setSyncPlanning] = useState(false);
   const [syncNotes, setSyncNotes] = useState(false);
   const [syncPreferences, setSyncPreferences] = useState(false);
+  const [showManagement, setShowManagement] = useState(false);
   const generation = useRef(0);
   const mutation = useRef(false);
   const alive = useRef(false);
@@ -125,7 +126,18 @@ export function CloudSyncSettings({ onUpgrade }: { onUpgrade?: () => void }) {
         <Button size="sm" variant="outline" disabled={busy} onClick={() => { setKeys(state.selected_keys ?? []); setSyncNew(state.sync_new_conversations === true); setSyncPlanning(state.sync_planning === true); setSyncNotes(state.sync_notes === true); setSyncPreferences(state.sync_preferences === true); setView("scope"); }}>同步范围</Button>
         {state.last_sync && <span className="text-caption text-muted-foreground">最近同步 {new Date(state.last_sync * 1000).toLocaleString("zh-CN")}</span>}
       </div>}
-      {state?.available && space && <div className="mt-3 flex flex-wrap gap-2"><CloudTrashDialog disabled={busy} onChanged={() => void refresh()} /><CloudHistoryRetentionDialog disabled={busy} onChanged={() => void refresh()} /><CloudCleanupDialog disabled={busy} onCleaned={() => void refresh()} /></div>}
+      {state?.available && space && <>
+        <div className="mt-3 flex flex-wrap items-center gap-2">
+          <CloudTrashDialog disabled={busy} onChanged={() => void refresh()} />
+          <Button size="sm" variant="ghost" aria-expanded={showManagement} aria-controls="cloud-space-management" onClick={() => setShowManagement((value) => !value)}>
+            空间管理<ChevronDown className={`ml-1.5 h-3.5 w-3.5 ${showManagement ? "rotate-180" : ""}`} />
+          </Button>
+        </div>
+        {showManagement && <div id="cloud-space-management" className="mt-3 space-y-2">
+          <p className="text-caption text-muted-foreground">按需清理过期旧版本，或回收未被引用的上传文件。检查后仍需确认才会清理。</p>
+          <div className="flex flex-wrap gap-2"><CloudHistoryRetentionDialog disabled={busy} onChanged={() => void refresh()} /><CloudCleanupDialog disabled={busy} onCleaned={() => void refresh()} /></div>
+        </div>}
+      </>}
       {state?.available && !!state.conversations?.some((item) => item.version > 0) && <div className="mt-3">
         <CloudHistoryDialog conversations={state.conversations} candidates={state.candidates ?? []} onRestored={() => void refresh()} />
       </div>}
@@ -165,7 +177,9 @@ export function CloudSyncSettings({ onUpgrade }: { onUpgrade?: () => void }) {
           <div className="max-h-64 space-y-2 overflow-y-auto">
             {candidates.map((item) => <label key={item.key} className="flex items-center gap-2 text-body">
               <Checkbox checked={keys.includes(item.key)} disabled={busy} onCheckedChange={(value) => setKeys((current) => value === true ? [...current, item.key] : current.filter((key) => key !== item.key))} />
-              <span className="truncate">{item.title}</span>
+              <span className="min-w-0"><span className="block truncate">{item.title}</span>
+                {state?.blocked_keys?.includes(item.key) && <span className="block text-caption text-destructive">关联文件缺失或过大，暂未同步；恢复文件或取消选择此会话。</span>}
+              </span>
             </label>)}
             {!candidates.length && <p className="text-caption text-muted-foreground">本机暂无可同步会话，仍可接收云端已有记录。</p>}
           </div>

@@ -4,6 +4,7 @@ import { httpFetch } from "@/lib/tauri";
 export interface CloudCandidate { key: string; title: string }
 export interface CloudStatus {
   available: boolean; enabled: boolean; phase: string;
+  blocked_keys?: string[];
   plan?: "free" | "pro";
   space?: { quota_bytes: number; used_bytes: number; reserved_bytes: number; object_count: number } | null;
   needs_key?: boolean;

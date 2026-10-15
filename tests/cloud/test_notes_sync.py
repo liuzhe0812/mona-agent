@@ -10,6 +10,7 @@ import hashlib
 import json
 
 import pytest
+from test_cloud_coordinator import add_conversation
 from test_cloud_coordinator import desktops as desktops
 
 from mona.cloud.notes import CHUNK, NotesClient, note_data
@@ -151,6 +152,22 @@ async def test_real_encryption_two_devices_preserve_text_assets_and_followup_edi
     await settle(a, b)
     assert versions(service) == count == 2
     assert len(service.uploads) == len(set(service.uploads))
+
+
+@pytest.mark.asyncio
+async def test_missing_work_attachment_does_not_block_note_upload(notes_pair):
+    service, a, _ = notes_pair
+    coordinator = a[0]
+    session = add_conversation(coordinator)
+    (coordinator.media_root / "data.txt").unlink()
+    a[2].put()
+    draft = await coordinator.prepare()
+    await coordinator.enable(draft["draft_id"], [session.key], True, sync_notes=True)
+    await coordinator.run_once()
+    assert coordinator.phase == "partial" and coordinator.last_sync is None
+    assert coordinator.blocked_keys == [session.key]
+    assert {version["kind"] for rows in service.versions.values() for version in rows} == {"note"}
+    assert a[2].rows["note-a"]["content"] == "PRIVATE_NOTE_BODY"
 
 
 @pytest.mark.asyncio

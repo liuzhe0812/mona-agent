@@ -209,6 +209,8 @@ def _env_replace(match: re.Match[str]) -> str:
 
 def _migrate_config(data: dict) -> dict:
     """Migrate old config formats to current."""
+    if "cloudSync" in data:
+        data["cloud_sync"] = data.pop("cloudSync")
     defaults = data.get("agents", {}).get("defaults", {})
     defaults.pop("contextWindowTokens", None)
     defaults.pop("context_window_tokens", None)

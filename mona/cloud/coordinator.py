@@ -9,6 +9,7 @@ import time
 import uuid
 from pathlib import Path
 from threading import Event
+from traceback import extract_tb
 from typing import Callable
 
 from loguru import logger
@@ -51,8 +52,8 @@ class SyncPreferences:
             data = json.loads(self.path.read_text(encoding="utf-8")) if self.path.exists() else {}
             if not isinstance(data, dict):
                 raise CloudTransferError("config_invalid", "设置文件无效，未覆盖现有配置。")
-            data.pop("cloud_sync", None)
-            data["cloudSync"] = config.model_dump(by_alias=True, mode="json")
+            data.pop("cloudSync", None)
+            data["cloud_sync"] = config.model_dump(by_alias=True, mode="json")
             _atomic_write_json(self.path, data)
 
 
@@ -76,6 +77,7 @@ class CloudCoordinator:
         self.task = None
         self.closed = False
         self.phase, self.problem, self.last_sync = "idle", None, None
+        self.blocked_keys: list[str] = []
         self.transferred_bytes = 0
         self.draft = None
         self.cleanup_draft = None
@@ -149,7 +151,9 @@ class CloudCoordinator:
                 sync_new_conversations=config.sync_new_conversations if same else False,
                 sync_planning=config.sync_planning if same else False,
                 sync_preferences=config.sync_preferences if same else False,
-                sync_notes=config.sync_notes if same else False)
+                sync_notes=config.sync_notes if same else False,
+                blocked_keys=[key for key in self.blocked_keys if key in config.session_keys]
+                    if same and config.vault_id == vault else [])
             rows = await asyncio.to_thread(self.store.mappings, vault) if vault else []
             result["conversations"] = [{"key": row["local_key"], "resource_id": row["resource"],
                 "version": row["version"]["version"] if row["version"] and row["version"]["resource_id"] == row["resource"] else 0,
@@ -633,6 +637,7 @@ class CloudCoordinator:
                 return
             self.cancelled.clear()
             self.phase, self.problem = "syncing", None
+            self.blocked_keys = []
             context, planning, notes, ui_preferences = None, None, None, None
             self._updated_work_keys.clear()
             try:
@@ -746,7 +751,13 @@ class CloudCoordinator:
                             previous.version["resource_id"] = resource
                             previous.snapshot["resource_id"] = resource
                             base_version = 0
-                        version = await asyncio.to_thread(transfer.push, exported, base_version=base_version, previous=previous)
+                        try:
+                            version = await asyncio.to_thread(transfer.push, exported, base_version=base_version, previous=previous)
+                        except CloudTransferError as exc:
+                            if exc.code != "associated_file_unavailable":
+                                raise
+                            self.blocked_keys.append(key)
+                            continue
                         await self._guard(context["binding"])
                         await asyncio.to_thread(self.store.put, config.vault_id, resource, key, content_digest, version,
                             mapping.get("conflict_of") if mapping else None)
@@ -757,8 +768,11 @@ class CloudCoordinator:
                 if ui_preferences is not None and context.get("plan") == "pro":
                     await ui_preferences.send()
                 self.transferred_bytes = transfer.transferred_bytes
-                self.phase = "pending" if not planning_done or not notes_done else "waiting" if waiting_for_task else "idle"
-                if not waiting_for_task and planning_done and notes_done:
+                self.phase = "partial" if self.blocked_keys else "pending" if not planning_done or not notes_done else "waiting" if waiting_for_task else "idle"
+                if self.blocked_keys:
+                    self.problem = {"code": "associated_file_unavailable",
+                        "message": f"{len(self.blocked_keys)} 个会话因关联文件缺失或过大暂未同步，其他内容会继续同步。请在“同步范围”中查看，恢复文件或取消选择这些会话。"}
+                if not self.blocked_keys and not waiting_for_task and planning_done and notes_done:
                     self.last_sync = time.time()
                 if page.get("has_more"):
                     self.wake.set()
@@ -766,7 +780,9 @@ class CloudCoordinator:
                 self.phase = "paused" if self.cancelled.is_set() else "error"
                 self.problem = {"code": getattr(exc, "code", "sync_unavailable"),
                     "message": str(exc) if isinstance(exc, (CloudTransferError, CloudCryptoError)) else "同步尚未完成，本地内容已保留，请稍后重试。"}
-                logger.warning("Cloud sync stopped ({})", type(exc).__name__)
+                frame = extract_tb(exc.__traceback__, limit=-1)[0]
+                logger.warning("Cloud sync stopped ({}) at {}:{} in {}", type(exc).__name__,
+                               Path(frame.filename).name, frame.lineno, frame.name)
             finally:
                 if context is not None:
                     await self._notify_views(context, self._updated_work_keys,

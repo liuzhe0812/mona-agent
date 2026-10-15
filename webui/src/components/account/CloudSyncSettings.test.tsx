@@ -199,6 +199,32 @@ describe("cloud sync settings", () => {
     expect(screen.queryByText("已同步", { exact: true })).not.toBeInTheDocument();
   });
 
+  it("keeps trash visible and reveals cleanup only in space management", async () => {
+    api.status.mockResolvedValue(active);
+    render(<CloudSyncSettings />);
+    expect(await screen.findByRole("button", { name: "回收站", exact: true })).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "清理过期历史", exact: true })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "清理上传残留", exact: true })).not.toBeInTheDocument();
+    const toggle = screen.getByRole("button", { name: "空间管理", exact: true });
+    expect(toggle).toHaveAttribute("aria-expanded", "false");
+    fireEvent.click(toggle);
+    expect(toggle).toHaveAttribute("aria-expanded", "true");
+    expect(screen.getByRole("button", { name: "清理过期历史", exact: true })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "清理上传残留", exact: true })).toBeInTheDocument();
+    fireEvent.click(toggle);
+    expect(screen.queryByRole("button", { name: "清理上传残留", exact: true })).not.toBeInTheDocument();
+  });
+
+  it("identifies the affected conversation without clearing its selection", async () => {
+    api.status.mockResolvedValue({ ...active, phase: "partial", blocked_keys: [candidates[0].key] });
+    render(<CloudSyncSettings />);
+    expect(await screen.findByText("部分内容待处理")).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "同步范围" }));
+    expect(screen.getByRole("checkbox", { name: /工作会话一.*关联文件缺失/ })).toBeChecked();
+    expect(screen.getByRole("checkbox", { name: "工作会话二" })).not.toBeChecked();
+    expect(api.scope).not.toHaveBeenCalled();
+  });
+
   it("unmount aborts reads and does not bring back account information", async () => {
     let resolve!: (value: unknown) => void;
     api.status.mockImplementation(() => new Promise((done) => { resolve = done; }));

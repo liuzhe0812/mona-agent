@@ -409,6 +409,31 @@ async def test_lost_commit_response_reconciles_without_duplicate_cloud_version(d
 
 
 @pytest.mark.asyncio
+async def test_unexpected_failure_logs_location_without_exception_payload(desktops, monkeypatch):
+    from loguru import logger
+
+    _, create = desktops
+    coordinator, _ = create("a")
+    await enable(coordinator, [])
+
+    def raise_unexpected(_):
+        raise RuntimeError("PRIVATE_EXCEPTION_PAYLOAD")
+
+    monkeypatch.setattr(coordinator, "_cloud_ready", raise_unexpected)
+    messages = []
+    sink = logger.add(lambda entry: messages.append(entry.record["message"]))
+    try:
+        await coordinator.run_once()
+    finally:
+        logger.remove(sink)
+    assert coordinator.problem["code"] == "sync_unavailable"
+    assert "test_cloud_coordinator.py:" in messages[-1]
+    assert "raise_unexpected" in messages[-1]
+    assert "PRIVATE_EXCEPTION_PAYLOAD" not in "".join(messages)
+    assert "PRIVATE_EXCEPTION_PAYLOAD" not in coordinator.problem["message"]
+
+
+@pytest.mark.asyncio
 async def test_failed_local_apply_rolls_back_both_histories_and_position(desktops, monkeypatch):
     _, a, b, _, _, akey, bkey = await initial_pair(desktops)
     session_path = b.manager.sessions_dir / f"{b.manager.safe_key(bkey)}.jsonl"
@@ -664,19 +689,28 @@ async def test_local_deleted_history_is_not_silently_recreated(desktops):
 @pytest.mark.asyncio
 async def test_missing_selected_attachment_does_not_publish_or_report_complete(desktops):
     service, create = desktops
-    a, _ = create("a")
+    a, native = create("a")
     session = add_conversation(a)
     (a.media_root / "data.txt").unlink()
-    await enable(a, [session.key])
+    healthy = add_conversation(a, key="websocket:healthy", attachment=False)
+    await enable(a, [session.key, healthy.key])
     await a.run_once()
-    assert a.phase == "error" and a.last_sync is None
+    assert a.phase == "partial" and a.last_sync is None
     assert a.problem["code"] == "associated_file_unavailable"
-    assert not service.versions
+    assert a.blocked_keys == [session.key]
+    assert (await a.status())["blocked_keys"] == [session.key]
+    assert len(service.versions) == 1
+    assert next(row for row in a.store.mappings(a.preferences.read().vault_id)
+        if row["local_key"] == healthy.key)["version"]["version"] == 1
+    native.account_id = "2"
+    assert (await a.status())["blocked_keys"] == []
+    native.account_id = "1"
     assert a.manager.read_session_file(session.key)["messages"][0]["content"] == "first message"
     (a.media_root / "data.txt").write_text("ATTACHMENT_BODY", encoding="utf-8")
     await a.run_once()
     assert a.problem is None and a.phase == "idle" and a.last_sync is not None
-    assert len(service.versions) == 1
+    assert a.blocked_keys == []
+    assert len(service.versions) == 2
 
 
 @pytest.mark.asyncio
@@ -689,6 +723,6 @@ async def test_same_filename_never_hides_a_different_missing_attachment(desktops
     b.manager.save(session)
     previous_count = sum(map(len, service.versions.values()))
     await b.run_once()
-    assert b.phase == "error" and b.problem["code"] == "associated_file_unavailable"
+    assert b.phase == "partial" and b.problem["code"] == "associated_file_unavailable"
     assert sum(map(len, service.versions.values())) == previous_count
     assert b.manager.read_session_file(bkey)["messages"][-1]["content"] == "another attachment"
