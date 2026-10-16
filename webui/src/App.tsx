@@ -1375,7 +1375,7 @@ function Shell({
     if (!client) throw new Error(t("experts.customCreateError"));
     const agent = await client.createCustomAgent(
       input.displayName,
-      input.description,
+      "",
       input.instructions,
     );
     invalidateAgents();

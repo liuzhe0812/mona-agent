@@ -1,4 +1,4 @@
-import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { ChatProvidersSettings } from "./ChatProvidersSettings";
 import { developmentApi, type DevExecutor } from "@/lib/development-api";
@@ -50,16 +50,17 @@ function setup(executor = buddy) {
 describe("CodeBuddy native source entry", () => {
   afterEach(() => vi.restoreAllMocks());
 
-  it("opens a connection modal without navigating to the CodeBuddy detail page", async () => {
+  it("opens the CodeBuddy detail page directly with engine setup and account controls", async () => {
     const { login, changed } = setup();
     const source = await screen.findByRole("button", { name: "CodeBuddy 连接设置" });
+    expect(within(source).getByText("未登陆")).toBeInTheDocument();
     expect(login).not.toHaveBeenCalled();
     fireEvent.click(source);
-    const dialog = await screen.findByRole("dialog", { name: "连接 · CodeBuddy" });
-    expect(within(dialog).getByText("登录 CodeBuddy 账号连接。")).toBeInTheDocument();
-    expect(within(dialog).getByRole("button", { name: "连接 CodeBuddy" })).toBeInTheDocument();
-    expect(source).not.toHaveAttribute("aria-current", "true");
-    expect(screen.queryByRole("switch", { name: "CodeBuddy 默认模型 在选择器中显示" })).not.toBeInTheDocument();
+    expect(await screen.findByRole("heading", { name: "CodeBuddy", exact: true })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "引擎管理" })).toBeEnabled();
+    expect(screen.getByRole("button", { name: "连接 CodeBuddy" })).toBeInTheDocument();
+    expect(source).toHaveAttribute("aria-current", "true");
+    expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "删除供应商" })).not.toBeInTheDocument();
     expect(login).not.toHaveBeenCalled();
     expect(changed).not.toHaveBeenCalled();
@@ -111,12 +112,13 @@ describe("CodeBuddy native source entry", () => {
     expect(useModelPreferences.getState().hiddenNative).toEqual([modelPreference]);
   });
 
-  it("uses the official login in the modal and enters details only after the account is confirmed", async () => {
+  it("uses the official login from the detail page and stays there when the account is confirmed", async () => {
     const { login, status, probe, providers } = setup();
     const source = await screen.findByRole("button", { name: "CodeBuddy 连接设置" });
     fireEvent.click(source);
-    const dialog = await screen.findByRole("dialog", { name: "连接 · CodeBuddy" });
-    const connect = within(dialog).getByRole("button", { name: "连接 CodeBuddy" });
+    const connect = await screen.findByRole("button", { name: "连接 CodeBuddy" });
+    expect(screen.getByRole("heading", { name: "CodeBuddy", exact: true })).toBeInTheDocument();
+    expect(source).toHaveAttribute("aria-current", "true");
     await waitFor(() => expect(connect).not.toBeDisabled());
     const waiting = { loginId: "fixture-login", state: "waiting" as const,
       authUrl: "https://copilot.tencent.com/test-only-authorize", reason: "请在官方页面完成认证" };
@@ -147,11 +149,79 @@ describe("CodeBuddy native source entry", () => {
     expect(screen.getByRole("switch", { name: "CodeBuddy 目录模型 在选择器中显示" })).toBeInTheDocument();
   });
 
-  it("keeps discovery failure explicit and cannot start login without the required program", async () => {
-    const { login, probe } = setup({ ...buddy, available: false, executable: undefined, reason: "未找到本地程序" });
+  it("opens the official plan page and refreshes CodeBuddy on return without starting login", async () => {
+    const { login, probe } = setup(readyBuddy);
+    openExternalUrl.mockClear();
     fireEvent.click(await screen.findByRole("button", { name: "CodeBuddy 连接设置" }));
+
+    expect(await screen.findByText(/购买套餐时，请使用当前已连接的 CodeBuddy 账号/)).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "查看套餐" }));
+    await waitFor(() => expect(openExternalUrl).toHaveBeenCalledWith("https://www.codebuddy.cn/pricing/"));
+    await waitFor(() => expect(probe).toHaveBeenCalledTimes(1));
+
+    probe.mockClear();
+    act(() => {
+      fireEvent.focus(window);
+      fireEvent(document, new Event("visibilitychange"));
+    });
+    await waitFor(() => expect(probe).toHaveBeenCalledTimes(1));
+    expect(login).not.toHaveBeenCalled();
+  });
+
+  it("shows a retryable alert when the official plan page cannot open", async () => {
+    const { login } = setup(readyBuddy);
+    openExternalUrl.mockClear();
+    openExternalUrl.mockRejectedValueOnce(new Error("synthetic opener failure"));
+    fireEvent.click(await screen.findByRole("button", { name: "CodeBuddy 连接设置" }));
+    fireEvent.click(await screen.findByRole("button", { name: "查看套餐" }));
+
+    const dialog = await screen.findByRole("alertdialog", { name: "套餐页面打不开" });
+    expect(within(dialog).getByText("无法打开 CodeBuddy 套餐页面，请稍后重试。")).toBeInTheDocument();
+    expect(within(dialog).getByRole("button", { name: "关闭" })).toBeInTheDocument();
+    expect(within(dialog).getByRole("button", { name: "重试" })).toBeInTheDocument();
+    expect(dialog).not.toHaveTextContent("synthetic opener failure");
+    expect(openExternalUrl).toHaveBeenCalledWith("https://www.codebuddy.cn/pricing/");
+    expect(login).not.toHaveBeenCalled();
+
+    fireEvent.click(within(dialog).getByRole("button", { name: "重试" }));
+    await waitFor(() => expect(openExternalUrl).toHaveBeenCalledTimes(2));
+    await waitFor(() => expect(screen.queryByRole("alertdialog", { name: "套餐页面打不开" })).not.toBeInTheDocument());
+    expect(login).not.toHaveBeenCalled();
+  });
+
+  it("opens the detail page with engine setup available when the required program is missing", async () => {
+    vi.spyOn(developmentApi, "executorSettings").mockResolvedValue({
+      revision: "engine-revision", values: { codebuddyPath: null }, credentialPresent: {}, enabledEngines: [],
+    });
+    vi.spyOn(developmentApi, "engineResources").mockResolvedValue({ components: [], catalogAvailable: false });
+    const { login, probe } = setup({ ...buddy, available: false, executable: undefined, reason: "未找到本地程序" });
+    const source = await screen.findByRole("button", { name: "CodeBuddy 连接设置" });
+    expect(within(source).getByText("未安装")).toBeInTheDocument();
+    fireEvent.click(source);
     expect(await screen.findByRole("button", { name: "连接 CodeBuddy" })).toBeDisabled();
     expect(screen.getByText("需安装 CodeBuddy")).toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: "CodeBuddy", exact: true })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "引擎管理" })).toBeEnabled();
+    expect(screen.getByText(/尚未找到本机程序，可在引擎管理中设置路径或准备程序。/)).toBeInTheDocument();
+    expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+    expect(login).not.toHaveBeenCalled();
+    expect(probe).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByRole("button", { name: "引擎管理" }));
+    const engineDialog = await screen.findByRole("dialog", { name: "引擎管理 · CodeBuddy" });
+    await waitFor(() => expect(within(engineDialog).getByRole("textbox", { name: "CodeBuddy 程序路径" })).toBeEnabled());
+  });
+
+  it("opens unconfigured Anthropic details without a connection dialog", async () => {
+    const { login, probe } = setup({ ...buddy, id: "claude", name: "Claude Code",
+      available: false, executable: undefined, models: [] });
+    const source = await screen.findByRole("button", { name: /Anthropic/ });
+    expect(within(source).getByText("未安装")).toBeInTheDocument();
+    fireEvent.click(source);
+
+    expect(await screen.findByRole("heading", { name: "Anthropic", exact: true })).toBeInTheDocument();
+    expect(source).toHaveAttribute("aria-current", "true");
+    expect(screen.getByRole("button", { name: "引擎管理" })).toBeEnabled();
+    expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
     expect(login).not.toHaveBeenCalled();
     expect(probe).not.toHaveBeenCalled();
   });

@@ -6,6 +6,7 @@ import { mergeUniqueToolTraceLines, toolTraceLinesFromEvents } from "@/lib/tool-
 import type { StreamError } from "@/lib/mona-client";
 import type {
   InboundEvent,
+  AgentModelBinding,
   OutboundMedia,
   GoalStateWsPayload,
   TaskPlanWsPayload,
@@ -469,6 +470,7 @@ export interface SendOptions {
   canvasPath?: string;
   /** Route only this turn through a dedicated document Agent. */
   agentKind?: "video";
+  modelBinding?: AgentModelBinding | null;
   /** Structured ``@Agent`` targets in a room (multi-agent guide 7.5). */
   targetAgentIds?: string[];
   /** A bounded topic debate/discussion; rendered separately from workflows. */
@@ -1653,6 +1655,7 @@ export function useMonaStream(
           canvasId: options.canvasId,
           canvasPath: options.canvasPath,
           agentKind: options.agentKind,
+          modelBinding: options.modelBinding,
           docPaths: options.docPaths,
           targetAgentIds: options.targetAgentIds,
           discussion: options.discussion,

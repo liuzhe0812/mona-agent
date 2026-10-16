@@ -15,6 +15,7 @@ DocumentAgentLoop) so the partner agent itself executes the turn:
 from __future__ import annotations
 
 from copy import copy
+from dataclasses import replace
 from typing import Any
 
 from loguru import logger
@@ -53,11 +54,15 @@ class PartnerAgentLoop(AgentLoop):
         manifest_model = (definition.model or "").strip()
         preset_name = self._effective_config.model_preset
         available_presets = kwargs.get("model_presets") or {}
-        if preset_name and preset_name in available_presets:
+        if self._effective_config.model_binding is not None:
+            kwargs["model_preset"] = None
+        elif preset_name and preset_name in available_presets:
             kwargs["model_preset"] = preset_name
         elif manifest_model and manifest_model.lower() != "inherit":
             kwargs["model"] = manifest_model
         super().__init__(**kwargs)
+        if self._effective_config.model_binding is not None:
+            self._refresh_provider_snapshot()
         self._apply_user_generation_overrides()
         from mona.agent.context import ContextBuilder
 
@@ -108,13 +113,14 @@ class PartnerAgentLoop(AgentLoop):
             return
         try:
             provider = copy(self.provider)
-            provider.generation = copy(self.provider.generation)
-            if config.temperature is not None:
-                provider.generation.temperature = config.temperature
-            if config.max_tokens is not None:
-                provider.generation.max_tokens = config.max_tokens
-            if config.reasoning_effort is not None and hasattr(provider.generation, "reasoning_effort"):
-                provider.generation.reasoning_effort = config.reasoning_effort
+            overrides = {
+                name: value for name, value in (
+                    ("temperature", config.temperature),
+                    ("max_tokens", config.max_tokens),
+                    ("reasoning_effort", config.reasoning_effort),
+                ) if value is not None
+            }
+            provider.generation = replace(self.provider.generation, **overrides)
             self.provider = provider
             self.runner.provider = provider
             self.subagents.provider = provider

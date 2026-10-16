@@ -62,9 +62,12 @@ import {
   listAgentInstructions,
   listAgentSkills,
 } from "@/lib/api";
+import { developmentApi, executorLabels, isCodeBuddyConnected, type DevExecutor } from "@/lib/development-api";
 import { getAgentKnowledgeGraph } from "@/lib/materials-api";
 import { useMaterialsOpenStore } from "@/lib/materials-open-store";
+import { useNativeProviderState } from "@/lib/native-provider-state";
 import type {
+  AgentModelBinding,
   AgentDetailPayload,
   AgentInstruction,
   AgentInstructionHistoryItem,
@@ -87,6 +90,11 @@ const INSTRUCTION_LABELS: Record<AgentInstruction["key"], string> = {
 
 const MANAGEMENT_TAB_CLASS =
   "relative after:pointer-events-none after:absolute after:inset-x-2 after:-bottom-1 after:h-0.5 after:rounded-full after:bg-transparent after:content-[''] data-[state=active]:!bg-transparent data-[state=active]:text-foreground data-[state=active]:!shadow-none data-[state=active]:after:bg-[hsl(var(--brand-red))]";
+const INHERIT_MODEL = "__inherit__";
+
+function modelBindingValue(binding: Pick<AgentModelBinding, "executor" | "model" | "provider">): string {
+  return `binding:${JSON.stringify([binding.executor, binding.model, binding.provider])}`;
+}
 
 function formatBytes(bytes: number): string {
   if (bytes < 1024) return `${bytes} B`;
@@ -432,19 +440,79 @@ function computerStatusText(
 function ConfigFields({
   detail,
   modelPresets,
+  modelExecutors,
+  modelExecutorsLoading,
   onSave,
 }: {
   detail: AgentDetailPayload;
   modelPresets: Array<{ name: string; label: string; model: string; provider: string }>;
+  modelExecutors: DevExecutor[];
+  modelExecutorsLoading: boolean;
   onSave: (update: Record<string, unknown>) => Promise<void>;
 }) {
   const [name, setName] = useState(detail.config.displayName ?? detail.agent.displayName);
   const [avatar, setAvatar] = useState(detail.config.avatar ?? "");
   const [avatarError, setAvatarError] = useState<string | null>(null);
   const [enabled, setEnabled] = useState(detail.config.enabled);
-  const [modelPreset, setModelPreset] = useState(detail.config.modelPreset ?? "__inherit__");
+  const [modelPreset, setModelPreset] = useState(detail.config.modelPreset ?? INHERIT_MODEL);
+  const [modelBinding, setModelBinding] = useState<AgentModelBinding | null>(detail.config.modelBinding ?? null);
   const [saving, setSaving] = useState(false);
   const avatarInputRef = useRef<HTMLInputElement>(null);
+  const modelOptions = useMemo(() => {
+    const native = modelExecutors
+      .filter((executor) => executor.id !== "mona" && executor.id.trim())
+      .flatMap((executor) => executor.models.flatMap((model) => {
+        if (!model.id?.trim()) return [];
+        const binding: AgentModelBinding = {
+          executor: executor.id,
+          model: model.id,
+          provider: null,
+          effort: model.reasoningEffort ?? null,
+        };
+        const disabled = !executor.available
+          ? executor.reason || "此模型来源当前不可用，请在模型设置中检查连接。"
+          : executor.probe?.authentication !== "ready"
+            ? executor.probe?.reason || "请先在模型设置中连接此账号。"
+            : executor.id === "codebuddy" && !isCodeBuddyConnected(executor)
+              ? executor.probe?.reason || "模型目录暂不可用，请在模型设置中检查连接。"
+              : null;
+        return [{
+          value: modelBindingValue(binding),
+          label: `${executor.name} · ${model.label || model.id}`,
+          disabled: Boolean(disabled),
+          binding,
+        }];
+      }));
+    if (modelBinding && !native.some((option) => option.value === modelBindingValue(modelBinding))) {
+      native.push({
+        value: modelBindingValue(modelBinding),
+        label: `${modelExecutors.find((executor) => executor.id === modelBinding.executor)?.name ?? executorLabels[modelBinding.executor]} · ${modelBinding.model}`,
+        disabled: true,
+        binding: modelBinding,
+      });
+    }
+    return native;
+  }, [modelBinding, modelExecutors]);
+  const modelSelection = modelBinding
+    ? modelBindingValue(modelBinding)
+    : modelPreset === INHERIT_MODEL ? INHERIT_MODEL : `preset:${modelPreset}`;
+
+  const selectModel = (value: string) => {
+    if (value === INHERIT_MODEL) {
+      setModelPreset(INHERIT_MODEL);
+      setModelBinding(null);
+      return;
+    }
+    if (value.startsWith("preset:")) {
+      setModelPreset(value.slice("preset:".length));
+      setModelBinding(null);
+      return;
+    }
+    const selected = modelOptions.find((option) => option.value === value);
+    if (!selected || selected.disabled) return;
+    setModelPreset(INHERIT_MODEL);
+    setModelBinding(selected.binding);
+  };
 
   const chooseAvatar = (event: ChangeEvent<HTMLInputElement>) => {
     const file = event.target.files?.[0];
@@ -478,7 +546,8 @@ function ConfigFields({
         display_name: name || null,
         avatar: avatar || null,
         enabled,
-        model_preset: modelPreset === "__inherit__" ? null : modelPreset,
+        model_preset: modelBinding || modelPreset === INHERIT_MODEL ? null : modelPreset,
+        model_binding: modelBinding,
       });
     } finally {
       setSaving(false);
@@ -526,16 +595,18 @@ function ConfigFields({
         <span className="text-caption text-muted-foreground">绑定模型</span>
         <Select
           aria-label="绑定模型"
-          value={modelPreset}
-          onValueChange={setModelPreset}
+          value={modelSelection}
+          onValueChange={selectModel}
           options={[
-            { value: "__inherit__", label: "跟随全局默认模型" },
+            { value: INHERIT_MODEL, label: "跟随全局默认模型" },
             ...modelPresets.map((preset) => ({
-              value: preset.name,
+              value: `preset:${preset.name}`,
               label: `${preset.label} · ${preset.model}`,
             })),
+            ...modelOptions,
           ]}
         />
+        {modelExecutorsLoading ? <span className="text-micro text-muted-foreground">正在读取其他引擎模型…</span> : null}
         <span className="text-micro text-muted-foreground">群聊议题、协作任务和单独对话都会使用此模型。</span>
       </label>
       <div><Button onClick={() => void save()} disabled={saving}>{saving ? "保存中…" : "保存基本设置"}</Button></div>
@@ -979,8 +1050,12 @@ export function AgentManagementView({
   const [knowledgeSelection, setKnowledgeSelection] = useState<AgentKnowledgeSelection | null>(null);
   const [knowledgeGraphRevision, setKnowledgeGraphRevision] = useState(0);
   const [error, setError] = useState<string | null>(null);
+  const [modelExecutorsError, setModelExecutorsError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [modelPresets, setModelPresets] = useState<Array<{ name: string; label: string; model: string; provider: string }>>([]);
+  const [modelExecutors, setModelExecutors] = useState<DevExecutor[]>([]);
+  const [modelExecutorsLoading, setModelExecutorsLoading] = useState(true);
+  const nativeProviderRevision = useNativeProviderState((state) => state.revision);
   const pendingMaterialOpen = useMaterialsOpenStore((state) => state.pending);
 
   const token = context?.token ?? "";
@@ -1037,6 +1112,24 @@ export function AgentManagementView({
       .then((settings) => setModelPresets(settings.model_presets))
       .catch(() => setModelPresets([]));
   }, [token]);
+  useEffect(() => {
+    let cancelled = false;
+    setModelExecutorsLoading(true);
+    void developmentApi.providerExecutors()
+      .then(({ executors }) => {
+        if (!cancelled) {
+          setModelExecutors(executors);
+          setModelExecutorsError(null);
+        }
+      })
+      .catch((cause) => {
+        if (!cancelled) setModelExecutorsError(cause instanceof Error ? cause.message : "无法读取模型来源");
+      })
+      .finally(() => {
+        if (!cancelled) setModelExecutorsLoading(false);
+      });
+    return () => { cancelled = true; };
+  }, [nativeProviderRevision]);
   useEffect(() => {
     setTab("overview");
     setSelectedInstruction("soul");
@@ -1150,6 +1243,8 @@ export function AgentManagementView({
       setEditingSkill(null);
     }
   };
+
+  const visibleError = [error, modelExecutorsError].filter(Boolean).join(" · ");
   const saveSkill = async () => {
     if (!client || !editingSkill) return;
     setSkillSaving(true);
@@ -1181,11 +1276,11 @@ export function AgentManagementView({
         <div className="min-w-0 flex-1"><h1 className="truncate text-title-sm">{detail.agent.displayName}</h1></div>
         <Button size="sm" className="gap-1.5" onClick={onStartDirect} disabled={!detail.agent.enabled}><MessageSquarePlus className="h-4 w-4" />新建对话</Button>
       </header>
-      {error ? <div className="mx-5 mt-3 flex items-center justify-between rounded-md border border-destructive/35 bg-destructive/5 px-3 py-2 text-caption text-destructive"><span>{error}</span><button type="button" onClick={() => setError(null)} aria-label="关闭"><X className="h-3.5 w-3.5" /></button></div> : null}
+      {visibleError ? <div className="mx-5 mt-3 flex items-center justify-between rounded-md border border-destructive/35 bg-destructive/5 px-3 py-2 text-caption text-destructive"><span>{visibleError}</span><button type="button" onClick={() => { setError(null); setModelExecutorsError(null); }} aria-label="关闭"><X className="h-3.5 w-3.5" /></button></div> : null}
       <Tabs value={tab} onValueChange={(value) => setTab(value as Tab)} className="flex min-h-0 flex-1 flex-col">
          <div className="shrink-0 overflow-x-auto border-b border-border/45 px-5 py-2"><TabsList className="h-8 !bg-transparent p-0"><TabsTrigger className={MANAGEMENT_TAB_CLASS} value="overview">概览</TabsTrigger><TabsTrigger className={MANAGEMENT_TAB_CLASS} value="identity">个性化</TabsTrigger><TabsTrigger className={MANAGEMENT_TAB_CLASS} value="knowledge">知识</TabsTrigger><TabsTrigger className={MANAGEMENT_TAB_CLASS} value="permissions">工具</TabsTrigger><TabsTrigger className={MANAGEMENT_TAB_CLASS} value="skills">技能</TabsTrigger></TabsList></div>
         <TabsContent value="overview" className="m-0 min-h-0 flex-1 overflow-auto p-6">
-          <div className="mx-auto max-w-3xl"><ConfigFields key={`${agentId}:${detail.config.revision}`} detail={detail} modelPresets={modelPresets} onSave={saveConfig} /><section className="mt-8 rounded-lg border border-border/65 p-4"><h2 className="text-ui font-medium">来源</h2><dl className="mt-3 grid gap-2 text-caption sm:grid-cols-2"><div><dt className="text-muted-foreground">包</dt><dd>{detail.definition.packageId || "Mona 平台"}</dd></div><div><dt className="text-muted-foreground">版本</dt><dd>{detail.definition.packageVersion || "—"}</dd></div></dl></section><section className="mt-4 rounded-lg border border-border/65 p-4"><h2 className="text-ui font-medium">私有数据</h2><p className="mt-1 text-caption text-muted-foreground">停用不会删除这些数据；记忆可在“个性化”中查看、编辑和恢复历史。</p><dl className="mt-3 grid gap-2 text-caption sm:grid-cols-2"><div><dt className="text-muted-foreground">记忆</dt><dd>{detail.data.memoryFiles} 个文件 · {formatBytes(detail.data.memoryBytes)}</dd></div><div><dt className="text-muted-foreground">Skills</dt><dd>{detail.data.skillFiles} 个文件 · {formatBytes(detail.data.skillBytes)}</dd></div></dl></section></div>
+          <div className="mx-auto max-w-3xl"><ConfigFields key={`${agentId}:${detail.config.revision}`} detail={detail} modelPresets={modelPresets} modelExecutors={modelExecutors} modelExecutorsLoading={modelExecutorsLoading} onSave={saveConfig} /><section className="mt-8 rounded-lg border border-border/65 p-4"><h2 className="text-ui font-medium">来源</h2><dl className="mt-3 grid gap-2 text-caption sm:grid-cols-2"><div><dt className="text-muted-foreground">包</dt><dd>{detail.definition.packageId || "Mona 平台"}</dd></div><div><dt className="text-muted-foreground">版本</dt><dd>{detail.definition.packageVersion || "—"}</dd></div></dl></section><section className="mt-4 rounded-lg border border-border/65 p-4"><h2 className="text-ui font-medium">私有数据</h2><p className="mt-1 text-caption text-muted-foreground">停用不会删除这些数据；记忆可在“个性化”中查看、编辑和恢复历史。</p><dl className="mt-3 grid gap-2 text-caption sm:grid-cols-2"><div><dt className="text-muted-foreground">记忆</dt><dd>{detail.data.memoryFiles} 个文件 · {formatBytes(detail.data.memoryBytes)}</dd></div><div><dt className="text-muted-foreground">Skills</dt><dd>{detail.data.skillFiles} 个文件 · {formatBytes(detail.data.skillBytes)}</dd></div></dl></section></div>
         </TabsContent>
         <TabsContent value="identity" className="m-0 min-h-0 flex-1 overflow-auto p-6">
           <div className="mx-auto grid max-w-5xl gap-5 lg:grid-cols-[12rem_minmax(0,1fr)]"><aside className="flex flex-col gap-1">{(Object.keys(INSTRUCTION_LABELS) as AgentInstruction["key"][]).map((key) => <button key={key} type="button" onClick={() => setSelectedInstruction(key)} className={`relative rounded-md px-3 py-2 text-left text-ui before:pointer-events-none before:absolute before:left-0 before:top-1/2 before:h-4 before:w-0.5 before:-translate-y-1/2 before:rounded-r before:bg-transparent before:content-[''] ${selectedInstruction === key ? "bg-transparent text-foreground before:bg-[hsl(var(--brand-red))]" : "text-muted-foreground hover:bg-muted/60 hover:text-foreground"}`}>{INSTRUCTION_LABELS[key]}</button>)}</aside><div><div className="mb-3 flex items-center justify-between"><div><h2 className="text-ui font-medium">{INSTRUCTION_LABELS[selectedInstruction]}</h2><p className="text-caption text-muted-foreground">手动和 AI 修改都会自动记录版本，可随时恢复。</p></div><Button size="sm" className="gap-1.5" onClick={() => void saveInstruction()}><Save className="h-3.5 w-3.5" />保存</Button></div><Textarea value={draftInstruction} onChange={(event) => setDraftInstruction(event.target.value)} className="min-h-[22rem] font-mono text-caption" /><section className="mt-5"><h3 className="mb-2 flex items-center gap-1.5 text-ui font-medium"><FileClock className="h-4 w-4" />版本历史</h3><div className="grid gap-1">{history.length ? history.map((item) => <div key={item.sha} className="flex items-center gap-2 rounded-md border border-border/55 px-3 py-2 text-caption"><span className="min-w-0 flex-1 truncate">{item.message}</span><span className="shrink-0 text-muted-foreground">{item.timestamp}</span><Button size="sm" variant="ghost" onClick={() => void restoreInstruction(item.sha)}>恢复</Button></div>) : <p className="text-caption text-muted-foreground">保存后将显示版本历史。</p>}</div></section></div></div>

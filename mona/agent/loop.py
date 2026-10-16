@@ -38,7 +38,7 @@ from mona.agent.tools.self import MyTool
 from mona.bus.events import InboundMessage, OutboundMessage
 from mona.bus.queue import MessageBus
 from mona.command import CommandContext, CommandRouter, register_builtin_commands
-from mona.config.schema import AgentDefaults, ModelPresetConfig
+from mona.config.schema import AgentDefaults, AgentModelBinding, ModelPresetConfig
 from mona.providers.base import LLMProvider
 from mona.providers.context_window import DEFAULT_CONTEXT_WINDOW_TOKENS
 from mona.providers.factory import ProviderSnapshot
@@ -245,6 +245,7 @@ class AgentLoop:
         model_presets: dict[str, ModelPresetConfig] | None = None,
         model_preset: str | None = None,
         preset_snapshot_loader: preset_helpers.PresetSnapshotLoader | None = None,
+        model_binding_snapshot_loader: Callable[[AgentModelBinding, Path], ProviderSnapshot] | None = None,
         runtime_model_publisher: Callable[[str, str | None], None] | None = None,
         webui_turns: WebuiTurnCoordinator | None = None,
     ):
@@ -258,6 +259,7 @@ class AgentLoop:
         self._runtime_config_loader = runtime_config_loader
         self._provider_snapshot_loader = provider_snapshot_loader
         self._preset_snapshot_loader = preset_snapshot_loader
+        self._model_binding_snapshot_loader = model_binding_snapshot_loader
         self._runtime_model_publisher = runtime_model_publisher
         self._provider_signature = provider_signature
         self._default_selection_signature = preset_helpers.default_selection_signature(
@@ -394,6 +396,15 @@ class AgentLoop:
             model=self.model,
         )
         self.model_presets: dict[str, ModelPresetConfig] = model_presets or {}
+        self._inherited_provider_snapshot = ProviderSnapshot(
+            provider=copy(self.provider),
+            model=self.model,
+            context_window_tokens=self.context_window_tokens,
+            context_window_verified=self.context_window_verified,
+            context_provider=self.context_provider,
+            auto_compact_token_limit=self.auto_compact_token_limit,
+            signature=provider_signature or ("inherited", self.model),
+        )
         self._active_preset: str | None = None
         self._base_model_preset = model_preset
         if model_preset:
@@ -498,6 +509,15 @@ class AgentLoop:
             config,
             provider_snapshot_loader,
         )
+        from mona.agent.model_binding import build_agent_model_snapshot
+
+        def load_binding_snapshot(binding: AgentModelBinding, workspace: Path) -> ProviderSnapshot:
+            return build_agent_model_snapshot(
+                runtime_config_loader() if runtime_config_loader is not None else config,
+                binding,
+                workspace,
+            )
+
         return cls(
             bus=bus,
             provider=provider,
@@ -528,6 +548,7 @@ class AgentLoop:
             model_preset=defaults.model_preset,
             provider_snapshot_loader=provider_snapshot_loader,
             preset_snapshot_loader=preset_snapshot_loader,
+            model_binding_snapshot_loader=extra.pop("model_binding_snapshot_loader", None) or load_binding_snapshot,
             **extra,
         )
 
@@ -559,18 +580,44 @@ class AgentLoop:
             effective.max_tokens,
             effective.reasoning_effort,
         )
-        if effective.model_preset and effective.model_preset != self._active_preset:
-            self.set_model_preset(effective.model_preset, publish_update=False)
-        elif (
-            not effective.model_preset
-            and self._base_model_preset
-            and self._active_preset != self._base_model_preset
-        ):
-            self.set_model_preset(self._base_model_preset, publish_update=False)
+        had_model_selection = self._mona_effective_config is not None and (
+            self._mona_effective_config.model_binding is not None
+            or self._mona_effective_config.model_preset is not None
+        )
         self._mona_effective_config = effective
+        if effective.model_binding is not None or effective.model_preset:
+            self._refresh_provider_snapshot()
+        elif had_model_selection:
+            self._active_preset = None
+            self._apply_provider_snapshot(self._global_model_snapshot(), publish_update=False)
+        elif self._base_model_preset and self._active_preset != self._base_model_preset:
+            self.set_model_preset(self._base_model_preset, publish_update=False)
         self._mona_config_revision = config.revision
 
-    def _resolve_named_agent_runtime(self, definition: Any) -> tuple[LLMProvider, str, Any]:
+    def _build_agent_model_binding_snapshot(self, binding: AgentModelBinding) -> ProviderSnapshot:
+        workspace = get_current_workspace(self.workspace)
+        if self._model_binding_snapshot_loader is not None:
+            return self._model_binding_snapshot_loader(binding, workspace)
+        from mona.agent.model_binding import build_agent_model_snapshot
+        from mona.config.loader import load_config, resolve_config_env_vars
+
+        config = (
+            self._runtime_config_loader()
+            if self._runtime_config_loader is not None
+            else resolve_config_env_vars(load_config())
+        )
+        return build_agent_model_snapshot(config, binding, workspace)
+
+    def _global_model_snapshot(self) -> ProviderSnapshot:
+        return (
+            self._provider_snapshot_loader()
+            if self._provider_snapshot_loader is not None
+            else self._inherited_provider_snapshot
+        )
+
+    def _resolve_named_agent_runtime(
+        self, definition: Any,
+    ) -> tuple[LLMProvider, str, Any, ProviderSnapshot | None]:
         """Resolve a room agent's model and generation overrides for one job.
 
         The returned provider is job-local when a model preset is selected, so
@@ -583,12 +630,22 @@ class AgentLoop:
         )
         provider = self.provider
         model = self.model
-        if effective.model_preset:
+        snapshot: ProviderSnapshot | None = None
+        if self._mona_effective_config and (
+            self._mona_effective_config.model_binding is not None
+            or self._mona_effective_config.model_preset is not None
+        ):
+            snapshot = self._global_model_snapshot()
+            provider, model = snapshot.provider, snapshot.model
+        if effective.model_binding is not None:
+            snapshot = self._build_agent_model_binding_snapshot(effective.model_binding)
+            provider, model = snapshot.provider, snapshot.model
+        elif effective.model_preset:
             try:
                 snapshot = preset_helpers.build_runtime_preset_snapshot(
                     name=effective.model_preset,
                     presets=self.model_presets,
-                    provider=copy(self.provider),
+                    provider=copy(provider),
                     loader=self._preset_snapshot_loader,
                 )
                 provider, model = snapshot.provider, snapshot.model
@@ -600,7 +657,8 @@ class AgentLoop:
                 )
         elif (definition.model or "").strip().lower() != "inherit":
             model = definition.model
-        return provider, model, effective
+            snapshot = None
+        return provider, model, effective, snapshot
 
     def _apply_provider_snapshot(
         self,
@@ -645,6 +703,23 @@ class AgentLoop:
         logger.info("Runtime model switched for next turn: {} -> {}", old_model, model)
 
     def _refresh_provider_snapshot(self) -> None:
+        effective = (
+            getattr(self, "_effective_config", None)
+            if hasattr(self, "_partner_agent_id")
+            else getattr(self, "_mona_effective_config", None)
+        )
+        binding = getattr(effective, "model_binding", None)
+        pinned_preset = getattr(effective, "model_preset", None)
+        if binding is not None or pinned_preset:
+            snapshot = (
+                self._build_agent_model_binding_snapshot(binding)
+                if binding is not None
+                else self._build_model_preset_snapshot(pinned_preset)
+            )
+            self._active_preset = pinned_preset if binding is None else None
+            if snapshot.signature != self._provider_signature:
+                self._apply_provider_snapshot(snapshot, publish_update=False)
+            return
         if self._provider_snapshot_loader is None:
             return
         try:
@@ -843,7 +918,9 @@ class AgentLoop:
             break
         return messages
 
-    def _ensure_document_loop(self, agent_kind: str) -> AgentLoop:
+    def _ensure_document_loop(
+        self, agent_kind: str, model_binding: AgentModelBinding | None = None,
+    ) -> AgentLoop:
         """Lazily construct a document agent loop for the given kind.
 
         Document loops (currently video) share this loop's provider,
@@ -851,21 +928,25 @@ class AgentLoop:
         filtered tool registry and DocumentContextBuilder driven by the
         matching DocumentProfile. Raises if construction fails — no fallback.
         """
-        cached = self._doc_loops.get(agent_kind)
+        cache_key = agent_kind
+        if model_binding is not None:
+            cache_key += ":" + model_binding.model_dump_json(by_alias=False)
+        cached = self._doc_loops.get(cache_key)
         if cached is not None:
             return cached
         from mona.agent.document_loop import DocumentAgentLoop
 
+        snapshot = self._build_agent_model_binding_snapshot(model_binding) if model_binding else None
         loop = DocumentAgentLoop(
             bus=self.bus,
-            provider=self.provider,
+            provider=snapshot.provider if snapshot is not None else self.provider,
             workspace=self.workspace,
-            model=self.model,
+            model=snapshot.model if snapshot is not None else self.model,
             max_parallel_tool_calls=self.max_parallel_tool_calls,
-            context_window_tokens=self.context_window_tokens,
-            context_window_verified=self.context_window_verified,
-            context_provider=self.context_provider,
-            auto_compact_token_limit=self.auto_compact_token_limit,
+            context_window_tokens=snapshot.context_window_tokens if snapshot is not None else self.context_window_tokens,
+            context_window_verified=snapshot.context_window_verified if snapshot is not None else self.context_window_verified,
+            context_provider=snapshot.context_provider if snapshot is not None else self.context_provider,
+            auto_compact_token_limit=snapshot.auto_compact_token_limit if snapshot is not None else self.auto_compact_token_limit,
             max_tool_result_chars=self.max_tool_result_chars,
             restrict_to_workspace=self.restrict_to_workspace,
             session_manager=self.sessions,
@@ -876,12 +957,19 @@ class AgentLoop:
             image_generation_provider_configs=self._image_generation_provider_configs,
             video_generation_provider_configs=self._video_generation_provider_configs,
             runtime_config_loader=self._runtime_config_loader,
+            model_binding_snapshot_loader=self._model_binding_snapshot_loader,
+            provider_snapshot_loader=self._provider_snapshot_loader,
+            provider_signature=snapshot.signature if snapshot is not None else self._provider_signature,
+            model_presets=self.model_presets,
+            preset_snapshot_loader=self._preset_snapshot_loader,
+            model_preset=self.model_preset if model_binding is None else None,
+            document_model_binding=model_binding,
             hooks=list(self._extra_hooks) if self._extra_hooks else None,
             unified_session=self._unified_session,
             agent_kind=agent_kind,
             webui_turns=self._webui_turns,
         )
-        self._doc_loops[agent_kind] = loop
+        self._doc_loops[cache_key] = loop
         logger.info("DocumentAgentLoop({}) initialized with tool whitelist", agent_kind)
         return loop
 
@@ -918,18 +1006,26 @@ class AgentLoop:
             self._partner_loops.pop(agent_id, None)
         from mona.agent.partner_loop import PartnerAgentLoop
 
+        inherited = (
+            self._global_model_snapshot()
+            if self._mona_effective_config and (
+                self._mona_effective_config.model_binding is not None
+                or self._mona_effective_config.model_preset is not None
+            )
+            else None
+        )
         loop = PartnerAgentLoop(
             agent_id=agent_id,
             registry=registry,
             bus=self.bus,
-            provider=self.provider,
+            provider=inherited.provider if inherited is not None else self.provider,
             workspace=self.workspace,
-            model=self.model,
+            model=inherited.model if inherited is not None else self.model,
             max_parallel_tool_calls=self.max_parallel_tool_calls,
-            context_window_tokens=self.context_window_tokens,
-            context_window_verified=self.context_window_verified,
-            context_provider=self.context_provider,
-            auto_compact_token_limit=self.auto_compact_token_limit,
+            context_window_tokens=inherited.context_window_tokens if inherited is not None else self.context_window_tokens,
+            context_window_verified=inherited.context_window_verified if inherited is not None else self.context_window_verified,
+            context_provider=inherited.context_provider if inherited is not None else self.context_provider,
+            auto_compact_token_limit=inherited.auto_compact_token_limit if inherited is not None else self.auto_compact_token_limit,
             max_tool_result_chars=self.max_tool_result_chars,
             restrict_to_workspace=self.restrict_to_workspace,
             session_manager=self.sessions,
@@ -944,9 +1040,10 @@ class AgentLoop:
             consolidation_ratio=self._consolidation_ratio,
             session_ttl_minutes=self._session_ttl_minutes,
             provider_snapshot_loader=self._provider_snapshot_loader,
-            provider_signature=self._provider_signature,
+            provider_signature=inherited.signature if inherited is not None else self._provider_signature,
             model_presets=self.model_presets,
             preset_snapshot_loader=self._preset_snapshot_loader,
+            model_binding_snapshot_loader=self._model_binding_snapshot_loader,
             runtime_config_loader=self._runtime_config_loader,
             webui_turns=self._webui_turns,
         )
@@ -1509,6 +1606,22 @@ class AgentLoop:
             if pending_queue is None:
                 return []
 
+            def _different_video_model(pending_msg: InboundMessage) -> bool:
+                return (
+                    getattr(getattr(self, "_profile", None), "agent_kind", None) == "video"
+                    and pending_msg.metadata.get("agent_kind") == "video"
+                    and "model_binding" in pending_msg.metadata
+                    and pending_msg.metadata["model_binding"] != (metadata or {}).get("model_binding")
+                )
+
+            def _restore_pending_head(pending_msg: InboundMessage) -> None:
+                # Keep a different model's next turn queued, preserving FIFO.
+                remaining = [pending_msg]
+                while not pending_queue.empty():
+                    remaining.append(pending_queue.get_nowait())
+                for item in remaining:
+                    pending_queue.put_nowait(item)
+
             async def _to_user_message(pending_msg: InboundMessage) -> dict[str, Any]:
                 content = pending_msg.content
                 media = pending_msg.media if pending_msg.media else None
@@ -1537,17 +1650,24 @@ class AgentLoop:
                 return message
 
             items: list[dict[str, Any]] = []
+            model_boundary = False
             while len(items) < limit:
                 try:
-                    items.append(await _to_user_message(pending_queue.get_nowait()))
+                    pending = pending_queue.get_nowait()
                 except asyncio.QueueEmpty:
                     break
+                if _different_video_model(pending):
+                    _restore_pending_head(pending)
+                    model_boundary = True
+                    break
+                items.append(await _to_user_message(pending))
 
             # Block if nothing drained but sub-agents spawned in this dispatch
             # are still running.  Direct @Agent jobs post their own room result
             # instead of injecting one, so also stop waiting once they finish.
             if (
                 not items
+                and not model_boundary
                 and session is not None
                 and self.subagents.get_running_count_by_session(session.key) > 0
             ):
@@ -1566,12 +1686,19 @@ class AgentLoop:
                             session.key,
                         )
                         break
+                    if _different_video_model(msg):
+                        _restore_pending_head(msg)
+                        break
                     items.append(await _to_user_message(msg))
                     while len(items) < limit:
                         try:
-                            items.append(await _to_user_message(pending_queue.get_nowait()))
+                            pending = pending_queue.get_nowait()
                         except asyncio.QueueEmpty:
                             break
+                        if _different_video_model(pending):
+                            _restore_pending_head(pending)
+                            break
+                        items.append(await _to_user_message(pending))
                     break
 
             return items
@@ -2273,7 +2400,15 @@ class AgentLoop:
         message_agent_kind = msg.metadata.get("agent_kind")
         agent_kind = message_agent_kind or session.metadata.get("agent_kind")
         if agent_kind and agent_kind in DOCUMENT_PROFILES and not hasattr(self, "_profile"):
-            doc_loop = self._ensure_document_loop(agent_kind)
+            raw_binding = (
+                msg.metadata["model_binding"] if "model_binding" in msg.metadata
+                else session.metadata.get("model_binding")
+            )
+            binding = AgentModelBinding.model_validate(raw_binding) if raw_binding is not None else None
+            doc_loop = (
+                self._ensure_document_loop(agent_kind, binding)
+                if binding is not None else self._ensure_document_loop(agent_kind)
+            )
             return await doc_loop._process_message(
                 msg,
                 session_key=key,

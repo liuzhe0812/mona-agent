@@ -46,6 +46,13 @@ export interface AgentSummary {
   configRevision?: number;
 }
 
+export interface AgentModelBinding {
+  executor: "mona" | "codex" | "claude" | "codebuddy";
+  model: string;
+  provider: string | null;
+  effort: string | null;
+}
+
 export interface AgentUserConfigPayload {
   schemaVersion?: number;
   revision: number;
@@ -53,6 +60,7 @@ export interface AgentUserConfigPayload {
   displayName?: string | null;
   avatar?: string | null;
   modelPreset?: string | null;
+  modelBinding?: AgentModelBinding | null;
   reasoningEffort?: string | null;
   temperature?: number | null;
   maxTokens?: number | null;
@@ -77,6 +85,7 @@ export interface EffectiveAgentConfigPayload {
   displayName: string;
   avatar?: string | null;
   modelPreset?: string | null;
+  modelBinding?: AgentModelBinding | null;
   reasoningEffort?: string | null;
   temperature?: number | null;
   maxTokens?: number | null;
@@ -1216,7 +1225,8 @@ export type ConnectionStatus =
 
 export type InboundEvent =
   | { event: "ready"; chat_id: string; client_id: string }
-  | { event: "attached"; chat_id: string; request_id?: string }
+  | { event: "attached"; chat_id: string; request_id?: string; model_binding?: AgentModelBinding | null }
+  | { event: "video_model_binding_result"; ok: boolean; chat_id: string; request_id?: string; model_binding?: AgentModelBinding | null; detail?: string; code?: string }
   | {
       event: "message";
       chat_id: string;
@@ -1333,7 +1343,7 @@ export type InboundEvent =
   | { event: "artifact_task_started"; chat_id: string; task_id: string }
   | { event: "artifacts_changed"; chat_id?: string }
   | { event: "video_project_changed"; name?: string; hint?: string }
-  | { event: "error"; chat_id?: string; detail?: string }
+  | { event: "error"; chat_id?: string; detail?: string; request_id?: string; code?: string }
   | {
       event: "doc_upload_result";
       ok: boolean;
@@ -1472,6 +1482,7 @@ export type Outbound =
       ephemeral?: boolean;
       workspace?: string | null;
       agent_kind?: string | null;
+      model_binding?: AgentModelBinding | null;
       request_id?: string;
     }
   | {
@@ -1528,11 +1539,13 @@ export type Outbound =
       canvas_id?: string;
       canvas_path?: string;
       agent_kind?: "video";
+      model_binding?: AgentModelBinding | null;
       task_id?: string;
       origin?: "profile_advice";
       profile_advice_id?: string;
       target_agent_ids?: string[];
     }
+  | { type: "video_model_binding_update"; chat_id: string; model_binding: AgentModelBinding | null; request_id: string }
   | { type: "delete_chat"; chat_id: string }
   | {
       type: "doc_upload";

@@ -20,6 +20,7 @@ from loguru import logger
 from mona.agent.document_context import DocumentContextBuilder
 from mona.agent.loop import AgentLoop
 from mona.agent.tools.registry import ToolRegistry
+from mona.config.schema import AgentModelBinding
 
 # The creator uses the normal execution loop and controlled video operations.
 _VIDEO_TOOLS: frozenset[str] = frozenset({
@@ -54,6 +55,7 @@ class DocumentProfile:
     soul_template: str
     skill_name: str
     tools_whitelist: frozenset[str]
+    skill_references: tuple[str, ...] = ()
 
 
 DOCUMENT_PROFILES: dict[str, DocumentProfile] = {
@@ -62,6 +64,7 @@ DOCUMENT_PROFILES: dict[str, DocumentProfile] = {
         soul_template="agent/video_soul.md",
         skill_name="mona-video",
         tools_whitelist=_VIDEO_TOOLS,
+        skill_references=("creative-direction.md", "creative-library.md", "huashu/narration-grammars/index.md"),
     ),
 }
 
@@ -74,10 +77,14 @@ class DocumentAgentLoop(AgentLoop):
     - 按 profile.tools_whitelist 过滤工具注册表
     """
 
-    def __init__(self, *args: Any, agent_kind: str, **kwargs: Any) -> None:
+    def __init__(
+        self, *args: Any, agent_kind: str,
+        document_model_binding: AgentModelBinding | None = None, **kwargs: Any,
+    ) -> None:
         if agent_kind not in DOCUMENT_PROFILES:
             raise ValueError(f"Unknown agent_kind: {agent_kind!r}")
         self._profile = DOCUMENT_PROFILES[agent_kind]
+        self._document_model_binding = document_model_binding
         super().__init__(*args, **kwargs)
         self.context = DocumentContextBuilder(
             self.workspace,
@@ -86,6 +93,24 @@ class DocumentAgentLoop(AgentLoop):
             disabled_skills=None,
         )
         self._filter_tools_to_whitelist(self._profile.tools_whitelist)
+
+    def _refresh_provider_snapshot(self) -> None:
+        if self._document_model_binding is None:
+            super()._refresh_provider_snapshot()
+            return
+        snapshot = self._build_agent_model_binding_snapshot(self._document_model_binding)
+        self._active_preset = None
+        if snapshot.signature != self._provider_signature:
+            self._apply_provider_snapshot(snapshot, publish_update=False)
+
+    def _refresh_mona_user_config(self) -> None:
+        super()._refresh_mona_user_config()
+        if self._document_model_binding is not None:
+            self._refresh_provider_snapshot()
+            generation = self.provider.generation
+            self._mona_generation_overrides = (
+                generation.temperature, generation.max_tokens, generation.reasoning_effort,
+            )
 
     def _filter_tools_to_whitelist(self, whitelist: frozenset[str]) -> None:
         """Unregister every tool not in the given whitelist."""

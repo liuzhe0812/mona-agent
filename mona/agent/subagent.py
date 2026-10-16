@@ -60,6 +60,7 @@ from mona.bus.events import InboundMessage, OutboundMessage
 from mona.bus.queue import MessageBus
 from mona.config.schema import AgentDefaults, ToolsConfig
 from mona.providers.base import LLMProvider
+from mona.providers.factory import ProviderSnapshot
 from mona.utils.progress_events import (
     build_tool_event_finish_payloads,
     build_tool_event_start_payload,
@@ -180,7 +181,7 @@ class SubagentManager:
         max_iterations: int | None = None,
         llm_wall_timeout_for_session: Callable[[str | None], float | None] | None = None,
         session_manager: Any | None = None,
-        agent_runtime_resolver: Callable[[AgentDefinition], tuple[LLMProvider, str, Any]]
+        agent_runtime_resolver: Callable[[AgentDefinition], tuple[LLMProvider, str, Any, ProviderSnapshot | None]]
         | None = None,
         subscription_access_resolver: Callable[[], bool] | None = None,
     ):
@@ -1634,10 +1635,10 @@ class SubagentManager:
                 # Workflow jobs must not inherit a sustained-goal ``0.0``
                 # timeout or the normal interactive 300-second default.
                 llm_timeout = WORKFLOW_LLM_TIMEOUT_S
-            provider, model, effective = (
+            provider, model, effective, model_snapshot = (
                 self._agent_runtime_resolver(definition)
                 if self._agent_runtime_resolver is not None
-                else (self.provider, self.model, effective)
+                else (self.provider, self.model, effective, None)
             )
             # Workflow-step jobs stream their tool activity into the room so
             # the run feels like a group chat: each event updates the per-step
@@ -1689,6 +1690,9 @@ class SubagentManager:
                         temperature=effective.temperature,
                         max_tokens=effective.max_tokens,
                         reasoning_effort=effective.reasoning_effort,
+                        context_window_tokens=model_snapshot.context_window_tokens if model_snapshot else None,
+                        context_window_verified=model_snapshot.context_window_verified if model_snapshot else False,
+                        context_provider=model_snapshot.context_provider if model_snapshot else None,
                         hook=_SubagentHook(task_id, status, on_activity=on_activity),
                         max_iterations_message="Task completed but no final response was generated.",
                         error_message=None,

@@ -1,12 +1,27 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { ChevronDown, Cpu, LayoutGrid, Plus, Search } from "lucide-react";
+import { ChevronDown, Cpu, LayoutGrid, Loader2, Plus, Search } from "lucide-react";
 import { Input } from "@/components/ui/input";
 import { AlertDialog, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle } from "@/components/ui/alert-dialog";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuPortal, DropdownMenuSub, DropdownMenuSubContent, DropdownMenuSubTrigger, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
+import { ApiError } from "@/lib/api";
+import { DevelopmentApiError } from "@/lib/development-api";
 import { cn } from "@/lib/utils";
 import { ProviderMark } from "./ProviderMark";
 import { EffortSlider } from "./EffortSlider";
 import { PRIMARY_SOURCES, contextLabel, effortLabel, modelEffort, modelKey, orderedSources, sourceId, sourceLabel, useModelPreferences, type ModelOption } from "./model-sources";
+
+function selectionErrorMessage(error: unknown, option: ModelOption, close: boolean): string {
+  const changesModelAndEffort = !close && !option.active;
+  const actionMessage = changesModelAndEffort
+    ? "模型未切换，思考强度未保存。"
+    : close ? "" : "思考强度未保存。";
+  const apiMessage = error instanceof DevelopmentApiError || error instanceof ApiError
+    ? error.message.trim()
+    : "";
+  if (apiMessage) return actionMessage ? actionMessage + apiMessage : apiMessage;
+  if (changesModelAndEffort) return actionMessage + "请稍后重试。";
+  return close ? "模型未切换，设置未保存。请稍后重试。" : "思考强度未保存。请稍后重试。";
+}
 
 export function ModelSelector({ options, label, disabled, onSelect, onManage, className }: {
   options: ModelOption[]; label?: string | null; disabled?: boolean;
@@ -17,6 +32,8 @@ export function ModelSelector({ options, label, disabled, onSelect, onManage, cl
   const [query, setQuery] = useState("");
   const [filter, setFilter] = useState("all");
   const [selectionError, setSelectionError] = useState("");
+  const [selectionPending, setSelectionPending] = useState(false);
+  const selectionPendingRef = useRef(false);
   const search = useRef<HTMLInputElement>(null);
   const modelList = useRef<HTMLDivElement>(null);
   useEffect(() => {
@@ -41,29 +58,28 @@ export function ModelSelector({ options, label, disabled, onSelect, onManage, cl
     return !normalized || `${option.providerLabel} ${option.label} ${option.model} ${option.description ?? ""} ${(option.tags ?? []).join(" ")}`.toLocaleLowerCase().includes(normalized);
   });
   const groups = sources.map((id) => ({ id, label: names.get(id) ?? sourceLabel(id), options: visible.filter((o) => sourceId(o.provider, o.isBuiltin) === id) })).filter((g) => g.options.length);
-  const choose = (option: ModelOption, effort = modelEffort(option), close = true): Promise<void> => {
-    if (disabled || option.disabledReason) return Promise.resolve();
+  const choose = async (option: ModelOption, effort = modelEffort(option), close = true): Promise<void> => {
+    if (disabled || selectionPendingRef.current || option.disabledReason) return;
+    selectionPendingRef.current = true;
+    setSelectionPending(true);
     try {
-      const result = onSelect(option, effort);
+      await onSelect(option, effort);
       if (close) setOpen(false);
-      return Promise.resolve(result).catch(() => {
-        setOpen(false);
-        setSelectionError(close ? "模型未切换，请检查连接后重试。" : "思考强度未保存，请检查连接后重试。");
-        throw new Error("Model selection was not saved");
-      });
-    } catch {
-      setOpen(false);
-      setSelectionError(close ? "模型未切换，请检查连接后重试。" : "思考强度未保存，请检查连接后重试。");
-      return Promise.reject(new Error("Model selection was not saved"));
+    } catch (error) {
+      setSelectionError(selectionErrorMessage(error, option, close));
+      throw error;
+    } finally {
+      selectionPendingRef.current = false;
+      setSelectionPending(false);
     }
   };
   return <><DropdownMenu open={open} onOpenChange={(value) => { setOpen(value); if (value) setQuery(""); }}>
-    <DropdownMenuTrigger asChild><button type="button" disabled={disabled} aria-label={label ?? selected?.model ?? "选择模型"} title={label ?? selected?.model ?? "选择模型"}
+    <DropdownMenuTrigger asChild><button type="button" disabled={disabled || selectionPending} aria-label={label ?? selected?.model ?? "选择模型"} title={label ?? selected?.model ?? "选择模型"}
       className={cn("inline-flex h-8 min-w-0 max-w-72 items-center gap-2 rounded-full border border-border/70 bg-background px-3 text-caption font-medium text-foreground transition-colors hover:bg-muted focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring disabled:opacity-50", className)}>
       {selected && <ProviderMark provider={sourceId(selected.provider, selected.isBuiltin)} label={selected.providerLabel} className="h-4 w-4" />}
       <span className="truncate">{label ?? selected?.model ?? "选择模型"}</span>
       {selectedEffort && <span aria-hidden className="hidden shrink-0 items-center gap-1 text-muted-foreground sm:inline-flex"><Cpu className="h-3 w-3" />{effortLabel(selectedEffort)}</span>}
-      <ChevronDown className="h-3.5 w-3.5 shrink-0 text-muted-foreground" aria-hidden />
+      {selectionPending ? <Loader2 className="h-3.5 w-3.5 shrink-0 animate-spin text-muted-foreground" aria-label="正在切换模型" /> : <ChevronDown className="h-3.5 w-3.5 shrink-0 text-muted-foreground" aria-hidden />}
     </button></DropdownMenuTrigger>
     <DropdownMenuContent align="end" side="top" sideOffset={8} className="flex w-[350px] max-w-[calc(100vw-48px)] min-w-0 max-h-[min(560px,calc(100vh-120px))] min-h-0 flex-col overflow-hidden rounded-lg p-0">
       <div className="flex shrink-0 items-center gap-2 border-b border-border/70 px-3.5 py-3">
@@ -100,7 +116,7 @@ export function ModelSelector({ options, label, disabled, onSelect, onManage, cl
               const effort = modelEffort(option);
               return <div key={key} title={option.disabledReason || undefined} className={cn("flex items-center rounded-md [&+div]:mt-1", option.active && "bg-muted/80")}>
                 <DropdownMenuSub>
-                  <DropdownMenuSubTrigger data-model-choice aria-label={`${option.providerLabel} · ${option.label}`} aria-description={option.disabledReason || undefined} aria-current={option.active ? "true" : undefined} disabled={!!option.disabledReason}
+                  <DropdownMenuSubTrigger data-model-choice aria-label={`${option.providerLabel} · ${option.label}`} aria-description={option.disabledReason || undefined} aria-current={option.active ? "true" : undefined} disabled={selectionPending || !!option.disabledReason}
                     className="min-w-0 flex-1 gap-2 rounded-md px-3 py-2 text-body leading-5 [&>svg:last-child]:hidden"
                     onClick={() => { void choose(option).catch(() => undefined); }}
                     onKeyDown={(event) => { if (event.key === "Enter" || event.key === " ") { event.preventDefault(); void choose(option).catch(() => undefined); } }}>
@@ -120,7 +136,7 @@ export function ModelSelector({ options, label, disabled, onSelect, onManage, cl
                     {option.reasoningEfforts && option.reasoningEfforts.length > 1 ? <div className="mt-2 border-t border-border/70 pt-2"><p className="mb-1 text-caption text-muted-foreground">思考强度</p>
                       <EffortSlider key={`${key}:${option.reasoningEfforts.join(",")}`} stops={option.reasoningEfforts}
                         value={effort} recommended={option.defaultReasoningEffort}
-                        labelOf={effortLabel} disabled={disabled || !!option.disabledReason}
+                        labelOf={effortLabel} disabled={disabled || selectionPending || !!option.disabledReason}
                         onChange={(effort) => choose(option, effort, false)} />
                     </div> : null}
                     {(option.inputAmountPerMillion || option.outputAmountPerMillion || option.cachedInputAmountPerMillion) && <div className="mt-3 space-y-1 border-t border-border/70 pt-2 text-caption">

@@ -15,7 +15,6 @@ import { Textarea } from "@/components/ui/textarea";
 
 export interface CustomExpertInput {
   displayName: string;
-  description: string;
   instructions: string;
 }
 
@@ -32,7 +31,6 @@ export function CustomExpertDialog({
 }: CustomExpertDialogProps) {
   const { t } = useTranslation();
   const [displayName, setDisplayName] = useState("");
-  const [description, setDescription] = useState("");
   const [instructions, setInstructions] = useState("");
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -40,7 +38,6 @@ export function CustomExpertDialog({
   useEffect(() => {
     if (!open) {
       setDisplayName("");
-      setDescription("");
       setInstructions("");
       setError(null);
     }
@@ -53,7 +50,6 @@ export function CustomExpertDialog({
     try {
       await onSubmit({
         displayName: displayName.trim(),
-        description: description.trim(),
         instructions: instructions.trim(),
       });
       onOpenChange(false);
@@ -86,18 +82,6 @@ export function CustomExpertDialog({
             />
           </div>
           <div className="space-y-1.5">
-            <label className="text-sm font-medium" htmlFor="custom-expert-description">
-              {t("experts.customExpertise")}
-            </label>
-            <Input
-              id="custom-expert-description"
-              value={description}
-              maxLength={500}
-              onChange={(event) => setDescription(event.target.value)}
-              placeholder={t("experts.customExpertisePlaceholder")}
-            />
-          </div>
-          <div className="space-y-1.5">
             <label className="text-sm font-medium" htmlFor="custom-expert-instructions">
               {t("experts.customInstructions")}
             </label>
@@ -109,6 +93,7 @@ export function CustomExpertDialog({
               onChange={(event) => setInstructions(event.target.value)}
               placeholder={t("experts.customInstructionsPlaceholder")}
             />
+            <p className="text-caption text-muted-foreground">{t("experts.customInstructionsHelp")}</p>
           </div>
           {error ? <p className="text-sm text-destructive">{error}</p> : null}
         </div>

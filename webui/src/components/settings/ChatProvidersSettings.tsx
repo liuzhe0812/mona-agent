@@ -3,6 +3,7 @@ import { invoke } from "@tauri-apps/api/core";
 import openaiIcon from "@lobehub/icons-static-svg/icons/openai.svg";
 import anthropicIcon from "@lobehub/icons-static-svg/icons/anthropic.svg";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } from "@/components/ui/dialog";
+import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle } from "@/components/ui/alert-dialog";
 import { PRIMARY_SOURCES, modelKey, orderedSources, sourceId, useModelPreferences } from "@/components/models/model-sources";
 import { developmentApi, executorLabels, isCodeBuddyConnected, type DevExecutor, type ExecutorSettings, type NativeExecutorId } from "@/lib/development-api";
 import { useNativeProviderState } from "@/lib/native-provider-state";
@@ -62,7 +63,7 @@ import { Select } from "@/components/ui/select";
 import { Switch } from "@/components/ui/switch";
 import { useLicense } from "@/hooks/useLicense";
 import { formatBalanceAmount } from "@/lib/money";
-import { isTauri } from "@/lib/tauri";
+import { isTauri, openExternalUrl } from "@/lib/tauri";
 import {
   fetchProviderModels,
   fetchSettings,
@@ -87,6 +88,7 @@ const ENGINE_SOURCE_LABELS: Record<string, string> = {
   unavailable: "程序暂不可用",
   invalid_path: "程序路径需检查",
 };
+const CODEBUDDY_PRICING_URL = "https://www.codebuddy.cn/pricing/";
 const NATIVE_VERSION_MARKERS: Record<NativeExecutorId, RegExp> = {
   codex: /\bcodex(?:[_ -]cli(?:[_ -]rs)?|[_ -]rs)?[/\s]+v?(\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?)/i,
   claude: /\bclaude(?:[_ -]code)?[/\s]+v?(\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?)/i,
@@ -280,10 +282,11 @@ export function ChatProvidersSettings({
   const providerRevision = useNativeProviderState((state) => state.revision);
   const [nativeError, setNativeError] = useState("");
   const [engineError, setEngineError] = useState("");
+  const [pricingError, setPricingError] = useState(false);
   const [engineBusy, setEngineBusy] = useState<NativeExecutorId | null>(null);
   const [engineDialogTarget, setEngineDialogTarget] = useState<NativeExecutorId | null>(null);
-  const [connectionSource, setConnectionSource] = useState<"anthropic" | "codebuddy" | null>(null);
   const probedSources = useRef(new Set<string>());
+  const codebuddyResumeProbe = useRef({ pending: false, lastStartedAt: 0 });
   const primary = (name: string) => (PRIMARY_SOURCES as readonly string[]).includes(name);
   const nativeFor = (name: string) => nativeExecutors.find((item) => sourceId(`native:${item.id}`) === name);
   const nativeConnected = (name: string) => name === "native:codebuddy" ? isCodeBuddyConnected(codebuddy) : name === "openai"
@@ -296,8 +299,13 @@ export function ChatProvidersSettings({
     ? executorSettings.enabledEngines.includes(executor.id as NativeExecutorId)
     : executor.enabled ?? executor.available;
   const nativeProgramAvailable = (executor: DevExecutor) => executor.programAvailable ?? executor.available;
-  const connectionProvider = connectionSource ? providers.find((provider) => provider.name === connectionSource) : undefined;
-  const connectionExecutor = connectionSource === "codebuddy" ? codebuddy : connectionSource ? nativeFor(connectionSource) : undefined;
+  const openCodeBuddyPricing = async () => {
+    try {
+      await openExternalUrl(CODEBUDDY_PRICING_URL);
+    } catch {
+      setPricingError(true);
+    }
+  };
   useEffect(() => {
     let active = true;
     void developmentApi.providerExecutors().then((data) => { if (active) { setNativeExecutors(data.executors); setNativeError(""); } })
@@ -319,6 +327,32 @@ export function ChatProvidersSettings({
   }, [providers, providerOrder]);
   const [selectedId, setSelectedId] = useState<string | null>(builtinProvider?.name ?? configured[0]?.name ?? null);
   const selectedCodebuddy = selectedId === "native:codebuddy" ? codebuddy : undefined;
+  const codebuddyCanRefreshOnResume = selectedId === "native:codebuddy"
+    && !!codebuddy
+    && nativeProgramAvailable(codebuddy);
+  useEffect(() => {
+    if (!codebuddyCanRefreshOnResume) return;
+    const refreshOnResume = () => {
+      if (document.visibilityState !== "visible") return;
+      const guard = codebuddyResumeProbe.current;
+      const now = Date.now();
+      if (guard.pending || now - guard.lastStartedAt < 5_000) return;
+      guard.pending = true;
+      guard.lastStartedAt = now;
+      void developmentApi.probe(undefined, "codebuddy")
+        .catch(() => setNativeError("暂时无法刷新 CodeBuddy 账号状态，请稍后重试。"))
+        .finally(() => { guard.pending = false; });
+    };
+    const handleVisibilityChange = () => {
+      if (document.visibilityState === "visible") refreshOnResume();
+    };
+    window.addEventListener("focus", refreshOnResume);
+    document.addEventListener("visibilitychange", handleVisibilityChange);
+    return () => {
+      window.removeEventListener("focus", refreshOnResume);
+      document.removeEventListener("visibilitychange", handleVisibilityChange);
+    };
+  }, [codebuddyCanRefreshOnResume]);
   useEffect(() => {
     const executor = nativeFor(selectedId ?? "");
     if (!executor || !nativeProgramAvailable(executor) || probedSources.current.has(executor.id)) return;
@@ -360,19 +394,6 @@ export function ChatProvidersSettings({
       setSelectedId(builtinProvider?.name ?? configured[0]?.name ?? null);
     }
   }, [builtinProvider?.name, configured, selectedId, codebuddy]);
-  useEffect(() => {
-    const connected = connectionSource === "anthropic"
-      ? nativeFor("anthropic")?.probe?.authentication === "ready"
-      : connectionSource === "codebuddy"
-        ? codebuddy?.probe?.authentication === "ready"
-        : false;
-    if (!connectionSource || !connected) return;
-    const nextSource = connectionSource;
-    setConnectionSource(null);
-    setSelectedId(nextSource === "codebuddy" ? "native:codebuddy" : nextSource);
-    setModelQuery("");
-    setAdjustModels(false);
-  }, [connectionSource, nativeExecutors, codebuddy]);
   const [customApiBase, setCustomApiBase] = useState("");
   const [customApiKey, setCustomApiKey] = useState("");
   const [customModels, setCustomModels] = useState<string[]>([]);
@@ -1176,6 +1197,7 @@ export function ChatProvidersSettings({
     if (!provider && !buddy) return null;
     const label = buddy ? "CodeBuddy" : provider!.label;
     const suggested = isSuggestedSource(id);
+    const executor = nativeFor(id);
     const position = sortableSourceIds.indexOf(id);
     const active = buddy ? !!selectedCodebuddy : selected?.name === id;
     return <div key={id} data-provider-id={id} className="group relative mb-1" draggable={!suggested && sortableSourceIds.length > 1}
@@ -1201,13 +1223,12 @@ export function ChatProvidersSettings({
         }}><GripVertical className="h-3 w-3" /></button>}
       <button type="button" aria-label={buddy ? "CodeBuddy 连接设置" : undefined} aria-current={active ? "true" : undefined}
         onClick={() => {
-          if (suggested) { setConnectionSource(buddy ? "codebuddy" : "anthropic"); return; }
           setSelectedId(id); setModelQuery(""); setAdjustModels(false);
         }}
         className={cn("flex w-full items-center gap-2 rounded-xl py-2 pr-3 text-left transition-colors", suggested ? "pl-3" : "pl-4", active ? "bg-accent text-accent-foreground" : "hover:bg-accent/60")}>
         <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-white shadow-sm">{buddy ? <ProviderMark provider={id} label={label} /> : <ProviderIcon provider={provider!} size={22} />}</span>
         <span id={`source-name-${id}`} className="min-w-0 flex-1 truncate text-ui font-medium">{label}</span>
-        {suggested && <span className="shrink-0 rounded-full border border-border/70 px-2 py-0.5 text-micro text-muted-foreground">{buddy ? "连接账号" : "使用本机账号"}</span>}
+        {suggested && <span className="shrink-0 rounded-full border border-border/70 px-2 py-0.5 text-micro text-muted-foreground">{executor && nativeProgramAvailable(executor) ? "未登陆" : "未安装"}</span>}
       </button>
     </div>;
   };
@@ -1252,7 +1273,17 @@ export function ChatProvidersSettings({
           {selectedCodebuddy ? <>
             <header className="flex items-center gap-3 border-b border-border/70 p-5">
               <ProviderMark provider="native:codebuddy" label="CodeBuddy" className="h-9 w-9" />
-              <div className="min-w-0 flex-1"><h3 className="text-title-sm font-semibold">CodeBuddy</h3><p className="text-caption text-muted-foreground">默认连接国内服务，使用账号中的模型。</p></div>
+              <div className="min-w-0 flex-1">
+                <h3 className="text-title-sm font-semibold">CodeBuddy</h3>
+                <p className="text-caption text-muted-foreground">
+                  默认连接国内服务，使用账号中的模型。
+                  {selectedCodebuddy.probe?.authentication === "ready" ? "购买套餐时，请使用当前已连接的 CodeBuddy 账号。" : ""}
+                </p>
+              </div>
+              <Button type="button" variant="outline" size="sm" className="shrink-0"
+                onClick={() => void openCodeBuddyPricing()}>
+                查看套餐
+              </Button>
               <ProviderNativeConnection executor={selectedCodebuddy} showModels={false} onChanged={() => setNativeRefresh((n) => n + 1)} />
             </header>
             {renderNativeEngineSummary(selectedCodebuddy)}
@@ -1490,37 +1521,6 @@ export function ChatProvidersSettings({
         </section>
       </div>
 
-      {connectionSource ? (
-        <Dialog open onOpenChange={(open) => { if (!open) setConnectionSource(null); }}>
-          <DialogContent className="max-w-xl gap-5 rounded-2xl p-6" aria-label={`连接 · ${connectionSource === "anthropic" ? "Anthropic" : "CodeBuddy"}`}>
-            <DialogHeader>
-              <DialogTitle>连接 · {connectionSource === "anthropic" ? "Anthropic" : "CodeBuddy"}</DialogTitle>
-              <DialogDescription>{connectionSource === "anthropic" ? "使用 Claude Code 账号连接 Anthropic 模型。" : "登录账号后即可在开发任务中使用 CodeBuddy 模型。"}</DialogDescription>
-            </DialogHeader>
-            <div className="flex items-center gap-3">
-              <span className="flex h-11 w-11 shrink-0 items-center justify-center rounded-xl bg-white shadow-sm">
-                {connectionSource === "anthropic" && connectionProvider
-                  ? <ProviderIcon provider={connectionProvider} size={30} />
-                  : <ProviderMark provider="native:codebuddy" label="CodeBuddy" className="h-8 w-8" />}
-              </span>
-              <div className="min-w-0 flex-1">
-                <p className="text-title-sm font-semibold">{connectionSource === "anthropic" ? "Anthropic" : "CodeBuddy"}</p>
-                <p className="text-caption text-muted-foreground">{connectionSource === "anthropic" ? "使用本机 Claude Code 账号连接。" : "登录 CodeBuddy 账号连接。"}</p>
-              </div>
-            </div>
-            {connectionExecutor ? (
-              <ProviderNativeConnection executor={connectionExecutor} showModels={false} dialogLayout
-                loginActionLabel={connectionSource === "anthropic" ? "使用 Claude Code 登录" : "连接 CodeBuddy"}
-                onChanged={() => setNativeRefresh((value) => value + 1)} />
-            ) : (
-              <p className="text-caption text-muted-foreground">正在检查可用的登录方式…</p>
-            )}
-            <div className="flex justify-end">
-              <Button type="button" variant="outline" onClick={() => setConnectionSource(null)}>取消</Button>
-            </div>
-          </DialogContent>
-        </Dialog>
-      ) : null}
       {engineDialogTarget && <ModelEngineProgramDialog open executor={engineDialogTarget}
         onOpenChange={(open) => { if (!open) setEngineDialogTarget(null); }}
         onChanged={() => setNativeRefresh((value) => value + 1)} />}
@@ -1574,6 +1574,18 @@ export function ChatProvidersSettings({
           </DialogContent>
         </Dialog>
       ) : null}
+      <AlertDialog open={pricingError} onOpenChange={(open) => { if (!open) setPricingError(false); }}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>套餐页面打不开</AlertDialogTitle>
+            <AlertDialogDescription>无法打开 CodeBuddy 套餐页面，请稍后重试。</AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>关闭</AlertDialogCancel>
+            <AlertDialogAction onClick={() => { setPricingError(false); void openCodeBuddyPricing(); }}>重试</AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </div>
   );
 }

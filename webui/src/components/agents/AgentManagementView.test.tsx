@@ -1,6 +1,7 @@
-import { render, screen, waitFor, within } from "@testing-library/react";
-import { describe, expect, it, vi } from "vitest";
+import { act, render, screen, waitFor, within } from "@testing-library/react";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import userEvent from "@testing-library/user-event";
+import { nativeProvidersChanged, useNativeProviderState } from "@/lib/native-provider-state";
 
 const detail = {
   agent: { id: "agent.demo", displayName: "Demo Agent", enabled: true },
@@ -178,9 +179,46 @@ const clientMocks = vi.hoisted(() => ({
     createdAt: Date.now(),
     updatedAt: Date.now(),
   })),
-  updateAgentConfig: vi.fn(async () => undefined),
+  updateAgentConfig: vi.fn(async (_agentId: string, _update: Record<string, unknown>, _revision: number) => undefined),
   updateAgentSkill: vi.fn(async () => undefined),
 }));
+
+const developmentMocks = vi.hoisted(() => {
+  const executors = [
+      {
+        id: "codex",
+        name: "Codex",
+        available: true,
+        reason: "",
+        probe: { authentication: "ready" },
+        models: [{ id: "gpt-codex", label: "GPT Codex", reasoningEffort: "high" }],
+      },
+      {
+        id: "claude",
+        name: "Claude Code",
+        available: false,
+        reason: "引擎未安装",
+        probe: { authentication: "ready" },
+        models: [{ id: "claude-sonnet", label: "Claude Sonnet" }],
+      },
+      {
+        id: "codebuddy",
+        name: "CodeBuddy",
+        available: true,
+        reason: "",
+        probe: { authentication: "ready", protocolVerified: false, modelCatalogState: "unknown" },
+        models: [{ id: "codebuddy-model", label: "CodeBuddy Model" }],
+      },
+    ];
+  return { executors, providerExecutors: vi.fn(async () => ({ executors })) };
+});
+
+beforeEach(() => {
+  Object.assign(detail.config, { revision: 1, modelPreset: null, modelBinding: null });
+  useNativeProviderState.setState({ revision: 0 });
+  clientMocks.updateAgentConfig.mockReset().mockResolvedValue(undefined);
+  developmentMocks.providerExecutors.mockReset().mockResolvedValue({ executors: developmentMocks.executors });
+});
 
 vi.mock("@/lib/api", () => ({
   fetchAutomationStatus: vi.fn(async () => ({
@@ -273,6 +311,16 @@ vi.mock("@/lib/materials-api", () => ({
   getWikiPage: vi.fn(async () => ({ path: "", content: "" })),
   getEvidenceDetail: vi.fn(async () => ({})),
 }));
+vi.mock("@/lib/development-api", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@/lib/development-api")>();
+  return {
+    ...actual,
+    developmentApi: {
+      ...actual.developmentApi,
+      providerExecutors: developmentMocks.providerExecutors,
+    },
+  };
+});
 vi.mock("@/providers/ClientProvider", () => ({
   useClientContextOrNull: () => ({
     token: "test-token",
@@ -347,9 +395,109 @@ describe("AgentManagementView navigation surfaces", () => {
 
     await waitFor(() => expect(clientMocks.updateAgentConfig).toHaveBeenCalledWith(
       "agent.demo",
-      expect.objectContaining({ model_preset: "review" }),
+      expect.objectContaining({ model_preset: "review", model_binding: null }),
       1,
     ));
+  });
+
+  it("lists models from other engines while keeping inherit and presets", async () => {
+    const user = userEvent.setup();
+    render(<AgentManagementView agentId="agent.demo" onBack={() => {}} onStartDirect={() => {}} />);
+
+    await user.click(await screen.findByRole("button", { name: "绑定模型" }));
+
+    expect(await screen.findByRole("menuitem", { name: "Codex · GPT Codex" })).toBeInTheDocument();
+    expect(screen.getByRole("menuitem", { name: "Claude Code · Claude Sonnet" })).toHaveAttribute("aria-disabled", "true");
+    expect(screen.getByRole("menuitem", { name: "CodeBuddy · CodeBuddy Model" })).toHaveAttribute("aria-disabled", "true");
+    expect(screen.getByRole("menuitem", { name: "跟随全局默认模型" })).toBeInTheDocument();
+    expect(screen.getByRole("menuitem", { name: "评审模型 · review-model" })).toBeInTheDocument();
+  });
+
+  it("saves a native model binding to Agent config and reopens with it selected", async () => {
+    const user = userEvent.setup();
+    clientMocks.updateAgentConfig.mockImplementation(async (_agentId, update, revision) => {
+      Object.assign(detail.config, {
+        revision: revision + 1,
+        modelPreset: update.model_preset,
+        modelBinding: update.model_binding,
+      });
+    });
+    render(<AgentManagementView agentId="agent.demo" onBack={() => {}} onStartDirect={() => {}} />);
+
+    await user.click(await screen.findByRole("button", { name: "绑定模型" }));
+    await user.click(await screen.findByRole("menuitem", { name: "Codex · GPT Codex" }));
+    await user.click(screen.getByRole("button", { name: "保存基本设置" }));
+
+    const binding = { executor: "codex", model: "gpt-codex", provider: null, effort: "high" };
+    await waitFor(() => expect(clientMocks.updateAgentConfig).toHaveBeenCalledWith(
+      "agent.demo",
+      expect.objectContaining({ model_preset: null, model_binding: binding }),
+      1,
+    ));
+    expect(await screen.findByText("Codex · GPT Codex")).toBeInTheDocument();
+  });
+
+  it("restores inheritance by clearing the saved Agent binding", async () => {
+    const user = userEvent.setup();
+    const existingBinding = { executor: "codex", model: "gpt-codex", provider: null, effort: "high" };
+    Object.assign(detail.config, { modelBinding: existingBinding });
+    clientMocks.updateAgentConfig.mockImplementation(async (_agentId, update, revision) => {
+      Object.assign(detail.config, {
+        revision: revision + 1,
+        modelPreset: update.model_preset,
+        modelBinding: update.model_binding,
+      });
+    });
+    render(<AgentManagementView agentId="agent.demo" onBack={() => {}} onStartDirect={() => {}} />);
+
+    await user.click(await screen.findByRole("button", { name: "绑定模型" }));
+    await user.click(await screen.findByRole("menuitem", { name: "跟随全局默认模型" }));
+    await user.click(screen.getByRole("button", { name: "保存基本设置" }));
+
+    await waitFor(() => expect(clientMocks.updateAgentConfig).toHaveBeenCalledWith(
+      "agent.demo",
+      expect.objectContaining({ model_preset: null, model_binding: null }),
+      1,
+    ));
+    expect(await screen.findByText("跟随全局默认模型")).toBeInTheDocument();
+  });
+
+  it("reports a native catalog error but keeps an existing binding editable and saveable", async () => {
+    const user = userEvent.setup();
+    const existingBinding = { executor: "claude", model: "retired-model", provider: null, effort: "medium" };
+    Object.assign(detail.config, { modelBinding: existingBinding });
+    developmentMocks.providerExecutors.mockRejectedValueOnce(new Error("模型目录请求失败"));
+    render(<AgentManagementView agentId="agent.demo" onBack={() => {}} onStartDirect={() => {}} />);
+
+    expect(await screen.findByText("模型目录请求失败")).toBeInTheDocument();
+    expect(screen.getByText("Claude Code · retired-model")).toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "保存基本设置" }));
+
+    await waitFor(() => expect(clientMocks.updateAgentConfig).toHaveBeenCalledWith(
+      "agent.demo",
+      expect.objectContaining({ model_preset: null, model_binding: existingBinding }),
+      1,
+    ));
+  });
+
+  it("refreshes native models after provider bootstrap without resetting the draft", async () => {
+    const user = userEvent.setup();
+    developmentMocks.providerExecutors.mockReset()
+      .mockResolvedValueOnce({ executors: [] })
+      .mockResolvedValueOnce({ executors: developmentMocks.executors });
+    render(<AgentManagementView agentId="agent.demo" onBack={() => {}} onStartDirect={() => {}} />);
+
+    const displayName = await screen.findByLabelText("显示名称");
+    await user.clear(displayName);
+    await user.type(displayName, "Draft Agent");
+    await waitFor(() => expect(developmentMocks.providerExecutors).toHaveBeenCalledTimes(1));
+
+    act(() => nativeProvidersChanged());
+    await waitFor(() => expect(developmentMocks.providerExecutors).toHaveBeenCalledTimes(2));
+    await user.click(screen.getByRole("button", { name: "绑定模型" }));
+
+    expect(await screen.findByRole("menuitem", { name: "Codex · GPT Codex" })).toBeInTheDocument();
+    expect(displayName).toHaveValue("Draft Agent");
   });
 
   it("renders tools as compact name-and-switch rows", async () => {

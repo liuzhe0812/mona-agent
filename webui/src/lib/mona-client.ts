@@ -1,5 +1,6 @@
 import type {
   AgentInstruction,
+  AgentModelBinding,
   AgentSkillSetupJob,
   AgentSummary,
   AgentUserConfigPayload,
@@ -57,6 +58,9 @@ function wsInboundDebugEnabled(): boolean {
 
 /** Shorten streaming text fields so logging stays usable for huge deltas. */
 function summarizeInboundWsPayload(ev: InboundEvent): unknown {
+  if (ev.event === "widget") {
+    return { ...ev, widget: { ...ev.widget, code: `[${ev.widget.code.length} characters]` } };
+  }
   const kind = (ev as { event?: string }).event;
   if (kind !== "delta" && kind !== "reasoning_delta") return ev;
   const row = { ...(ev as object) } as Record<string, unknown>;
@@ -75,6 +79,7 @@ type RuntimeModelHandler = (modelName: string | null, modelPreset?: string | nul
 type SessionUpdateScope = "metadata" | "thread" | string;
 type SessionUpdateHandler = (chatId: string, scope?: SessionUpdateScope) => void;
 type RunStatusHandler = (chatId: string, startedAt: number | null) => void;
+
 type RoomUpdatedHandler = (chatId: string, state: RoomState) => void;
 type AgentJobUpdatedHandler = (chatId: string, job: AgentJobSummary) => void;
 type WorkflowUpdatedHandler = (chatId: string, payload: WorkflowUpdatedPayload) => void;
@@ -491,6 +496,12 @@ export class MonaClient {
     });
   }
 
+  updateVideoModelBinding(chatId: string, modelBinding: AgentModelBinding | null): Promise<AgentModelBinding | null> {
+    return this.sendAgentCommandRaw("video_model_binding_result", (requestId) => ({
+      type: "video_model_binding_update", chat_id: chatId, model_binding: modelBinding, request_id: requestId,
+    }), 45000).then((result) => (result as { model_binding?: AgentModelBinding | null }).model_binding ?? null);
+  }
+
   saveAgentInstruction(
     agentId: string,
     key: AgentInstruction["key"],
@@ -883,6 +894,7 @@ export class MonaClient {
     ephemeral = false,
     workspace?: string | null,
     agentKind?: string | null,
+    modelBinding?: AgentModelBinding | null,
   ): Promise<string> {
     if (this.pendingNewChat) {
       return Promise.reject(new Error("newChat already in flight"));
@@ -898,6 +910,7 @@ export class MonaClient {
       if (ephemeral) payload.ephemeral = true;
       if (workspace) payload.workspace = workspace;
       if (agentKind) payload.agent_kind = agentKind;
+      if (modelBinding !== undefined) payload.model_binding = modelBinding;
       this.queueSend(payload as Outbound);
     });
   }
@@ -975,6 +988,7 @@ export class MonaClient {
       canvasPath?: string;
       /** Route only this message through a dedicated document Agent. */
       agentKind?: "video";
+      modelBinding?: AgentModelBinding | null;
       taskId?: string;
       origin?: "profile_advice";
       profileAdviceId?: string;
@@ -1037,6 +1051,7 @@ export class MonaClient {
       ...(options?.canvasId ? { canvas_id: options.canvasId } : {}),
       ...(options?.canvasPath ? { canvas_path: options.canvasPath } : {}),
       ...(options?.agentKind ? { agent_kind: options.agentKind } : {}),
+      ...(options?.modelBinding !== undefined ? { model_binding: options.modelBinding } : {}),
       ...(options?.taskId ? { task_id: options.taskId } : {}),
       ...(options?.origin ? { origin: options.origin } : {}),
       ...(options?.profileAdviceId ? { profile_advice_id: options.profileAdviceId } : {}),
@@ -1108,6 +1123,13 @@ export class MonaClient {
       return;
     }
 
+    if (parsed.event === "error" && this.pendingNewChat && parsed.request_id === this.pendingNewChat.requestId) {
+      clearTimeout(this.pendingNewChat.timer);
+      this.pendingNewChat.reject(new RoomCommandError(parsed.detail || "视频会话未能创建，请重试。", parsed.code));
+      this.pendingNewChat = null;
+      return;
+    }
+
     if (parsed.event === "runtime_model_updated") {
       this.emitRuntimeModelUpdate(parsed.model_name || null, parsed.model_preset ?? null);
       return;
@@ -1162,6 +1184,7 @@ export class MonaClient {
       parsed.event === "resolve_workflow_approval_result" ||
       (parsed as unknown as { event?: string }).event === "sync_stock_selection_schedule_result" ||
       parsed.event === "agent_config_update_result" ||
+      parsed.event === "video_model_binding_result" ||
       parsed.event === "custom_agent_create_result" ||
       parsed.event === "agent_instruction_save_result" ||
       parsed.event === "agent_instruction_restore_result" ||
@@ -1288,13 +1311,14 @@ export class MonaClient {
   private sendRoomCommandRaw(
     resultEvent: string,
     build: (requestId: string) => Outbound,
+    timeoutMs = 10_000,
   ): Promise<AnyRoomCommandResult> {
     const requestId = `room_${Date.now().toString(36)}_${(this.roomCommandSeq++).toString(36)}`;
     return new Promise<AnyRoomCommandResult>((resolve, reject) => {
       const timer = setTimeout(() => {
         this.pendingRoomCommands.delete(requestId);
         reject(new Error(`${resultEvent} timed out`));
-      }, 10_000);
+      }, timeoutMs);
       this.pendingRoomCommands.set(requestId, { resolve, reject, timer });
       this.queueSend(build(requestId));
     });
@@ -1303,8 +1327,9 @@ export class MonaClient {
   private sendAgentCommandRaw(
     resultEvent: string,
     build: (requestId: string) => Outbound,
+    timeoutMs = 10_000,
   ): Promise<AnyRoomCommandResult> {
-    return this.sendRoomCommandRaw(resultEvent, build);
+    return this.sendRoomCommandRaw(resultEvent, build, timeoutMs);
   }
 
   private handleRoomCommandResult(ev: InboundEvent): void {

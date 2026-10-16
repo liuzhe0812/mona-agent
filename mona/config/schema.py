@@ -5,7 +5,7 @@ from enum import Enum
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Literal
 
-from pydantic import AliasChoices, BaseModel, ConfigDict, Field, model_validator
+from pydantic import AliasChoices, BaseModel, ConfigDict, Field, field_validator, model_validator
 from pydantic.alias_generators import to_camel
 from pydantic_settings import BaseSettings
 
@@ -140,6 +140,41 @@ class ModelPresetConfig(Base):
             max_tokens=self.max_tokens,
             reasoning_effort=self.reasoning_effort,
         )
+
+
+class AgentModelBinding(Base):
+    """An Agent-specific model source and model selection."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    executor: Literal["mona", "codex", "claude", "codebuddy"]
+    model: str = Field(min_length=1, max_length=200)
+    provider: str | None = Field(default=None, min_length=1, max_length=200)
+    effort: str | None = Field(default=None, max_length=32)
+
+    @field_validator("model")
+    @classmethod
+    def _trim_model(cls, value: str) -> str:
+        value = value.strip()
+        if not value:
+            raise ValueError("model must not be empty")
+        return value
+
+    @field_validator("provider", "effort")
+    @classmethod
+    def _trim_optional_route_text(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        value = value.strip()
+        return value or None
+
+    @model_validator(mode="after")
+    def _validate_source(self) -> "AgentModelBinding":
+        if self.executor == "mona" and self.provider is None:
+            raise ValueError("Mona model bindings require a provider")
+        if self.executor != "mona" and self.provider is not None:
+            raise ValueError("Only Mona model bindings may specify a provider")
+        return self
 
 
 class AgentDefaults(Base):

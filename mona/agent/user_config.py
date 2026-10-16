@@ -17,10 +17,10 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Literal
 
-from pydantic import Field, field_validator
+from pydantic import Field, field_validator, model_validator
 
 from mona.agent.partners import MONA_AGENT_ID, AgentDefinition, normalize_agent_id
-from mona.config.schema import Base
+from mona.config.schema import AgentModelBinding, Base
 
 AGENT_USER_CONFIG_SCHEMA_VERSION = 4
 _V2_EXPLICIT_PERMISSION_TOOLS = frozenset({"crypto", "config_set_provider"})
@@ -60,6 +60,8 @@ REQUIRED_AGENT_TOOLS = frozenset({
     "memory_search",
     "pdf",
     "read_file",
+    "read_me",
+    "show_widget",
     "skill_asset_copy",
     "skill_read",
     "skill_reference_read",
@@ -299,6 +301,7 @@ class AgentUserConfig(Base):
     avatar: str | None = Field(default=None, max_length=_MAX_AVATAR_CHARS)
     # Name of a configured global model preset; null inherits the package/global default.
     model_preset: str | None = Field(default=None, max_length=80)
+    model_binding: AgentModelBinding | None = None
     reasoning_effort: str | None = Field(default=None, max_length=40)
     temperature: float | None = Field(default=None, ge=0, le=2)
     max_tokens: int | None = Field(default=None, ge=1, le=200_000)
@@ -311,6 +314,12 @@ class AgentUserConfig(Base):
     script_enabled_skills: list[str] = Field(default_factory=list)
     script_enabled_skill_hashes: dict[str, str] = Field(default_factory=dict)
     updated_at: str | None = None
+
+    @model_validator(mode="after")
+    def _validate_model_selection(self) -> "AgentUserConfig":
+        if self.model_preset and self.model_binding is not None:
+            raise ValueError("model_preset and model_binding cannot both be set")
+        return self
 
     @field_validator("display_name", "avatar", "model_preset", "reasoning_effort")
     @classmethod
@@ -378,6 +387,7 @@ class EffectiveAgentConfig(Base):
     display_name: str
     avatar: str | None = None
     model_preset: str | None = None
+    model_binding: AgentModelBinding | None = None
     reasoning_effort: str | None = None
     temperature: float | None = None
     max_tokens: int | None = None
@@ -468,8 +478,13 @@ def save_agent_user_config(
     unknown = set(update) - permitted
     if unknown:
         raise ValueError(f"unsupported agent config fields: {', '.join(sorted(unknown))}")
+    normalized_update = AgentUserConfig.model_validate(update).model_dump(exclude_unset=True)
     payload = current.model_dump()
-    payload.update(update)
+    payload.update(normalized_update)
+    if normalized_update.get("model_binding") is not None:
+        payload["model_preset"] = None
+    elif "model_preset" in normalized_update:
+        payload["model_binding"] = None
     payload["revision"] = current.revision + 1
     payload["updated_at"] = datetime.now(timezone.utc).isoformat()
     saved = AgentUserConfig.model_validate(payload)
@@ -540,7 +555,12 @@ def resolve_effective_agent_config(
         display_name=config.display_name or definition.display_name,
         avatar=config.avatar if config.avatar is not None else definition.avatar,
         model_preset=config.model_preset,
-        reasoning_effort=config.reasoning_effort,
+        model_binding=config.model_binding,
+        reasoning_effort=(
+            config.model_binding.effort
+            if config.model_binding is not None
+            else config.reasoning_effort
+        ),
         temperature=config.temperature,
         max_tokens=config.max_tokens,
         allowed_tools=allowed_tools,

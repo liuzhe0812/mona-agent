@@ -39,7 +39,7 @@ from mona.bus.queue import MessageBus
 from mona.channels.base import BaseChannel
 from mona.command.builtin import builtin_command_palette
 from mona.config.paths import get_data_dir, get_media_dir
-from mona.config.schema import Base
+from mona.config.schema import AgentModelBinding, Base
 from mona.session.goal_state import goal_state_ws_blob
 from mona.session.task_plan import reset_task_plan, task_plan_ws_blob
 from mona.session.webui_turns import websocket_turn_wall_started_at
@@ -985,6 +985,10 @@ class WebSocketChannel(BaseChannel):
         m = re.match(r"^/api/sessions/([^/]+)/messages$", got)
         if m:
             return self._handle_session_messages(request, m.group(1))
+
+        m = re.match(r"^/api/sessions/([^/]+)/model-binding$", got)
+        if m:
+            return await asyncio.to_thread(self._handle_video_model_binding_get, request, m.group(1))
 
         m = re.match(r"^/api/sessions/([^/]+)/webui-thread$", got)
         if m:
@@ -1981,6 +1985,99 @@ class WebSocketChannel(BaseChannel):
         # the client never needs them once it has the signed fetch URL.
         self._augment_media_urls(data)
         return _http_json_response(data)
+
+    def _video_session_metadata(self, key: str) -> dict[str, Any] | None:
+        if self._session_manager is None or not self._is_websocket_channel_session_key(key):
+            return None
+        path = self._session_manager._get_session_path(key)
+        if not path.is_file():
+            return None
+        try:
+            with path.open(encoding="utf-8") as stream:
+                header = json.loads(stream.readline())
+            metadata = header.get("metadata")
+            return metadata if header.get("_type") == "metadata" and isinstance(metadata, dict) else None
+        except (OSError, ValueError):
+            logger.warning("Cannot read video model selection for {}", key)
+            return None
+
+    def _handle_video_model_binding_get(self, request: WsRequest, key: str) -> Response:
+        if not self._check_api_token(request):
+            return _http_error(401, "Unauthorized")
+        decoded = _decode_api_key(key)
+        if decoded is None:
+            return _http_error(400, "invalid session key")
+        metadata = self._video_session_metadata(decoded)
+        if metadata is None or metadata.get("agent_kind") != "video":
+            return _http_error(404, "video session not found")
+        return _http_json_response({"agentKind": "video", "modelBinding": metadata.get("model_binding")})
+
+    def _video_model_change_running(self, chat_id: str) -> bool:
+        if websocket_turn_wall_started_at(chat_id) is not None:
+            return True
+        count = getattr(self._subagent_manager, "get_running_count_by_session", None)
+        return callable(count) and bool(count(f"websocket:{chat_id}"))
+
+    async def _resolve_video_model_selection(
+        self, raw: Any, *, agent_kind: str | None, previous: Any = None,
+    ) -> dict | None:
+        if agent_kind != "video":
+            raise ValueError("此会话不支持单独选择视频制作模型。")
+        if raw is None:
+            return None
+        binding = AgentModelBinding.model_validate(raw).model_dump(mode="json", by_alias=False)
+        if binding == previous:
+            return copy.deepcopy(binding)
+        from mona.agent.video_model_binding import validate_video_model_binding
+        from mona.config.loader import load_config
+
+        return await validate_video_model_binding(binding, load_config())
+
+    async def _handle_video_model_binding_update(self, connection: Any, envelope: dict[str, Any]) -> None:
+        chat_id = envelope.get("chat_id")
+        fields = {"chat_id": chat_id, "request_id": self._room_request_id(envelope)}
+        if not _is_valid_chat_id(chat_id) or "model_binding" not in envelope:
+            await self._send_event(connection, "video_model_binding_result", ok=False,
+                                   code="invalid_request", detail="请选择视频会话及制作模型。", **fields)
+            return
+        metadata = self._video_session_metadata(f"websocket:{chat_id}")
+        if metadata is None or metadata.get("agent_kind") != "video":
+            await self._send_event(connection, "video_model_binding_result", ok=False,
+                                   code="video_session_not_found", detail="未找到对应的视频会话。", **fields)
+            return
+        if self._video_model_change_running(chat_id):
+            await self._send_event(connection, "video_model_binding_result", ok=False,
+                                   code="run_active", detail="当前任务正在制作，请等待完成或停止后再切换模型。", **fields)
+            return
+        try:
+            binding = await self._resolve_video_model_selection(
+                envelope["model_binding"], agent_kind="video", previous=metadata.get("model_binding"),
+            )
+        except (ValueError, OSError, TimeoutError) as exc:
+            logger.info("Video model selection rejected: {}", type(exc).__name__)
+            await self._send_event(connection, "video_model_binding_result", ok=False,
+                                   code="invalid_model_binding", detail=self._video_model_error_detail(exc), **fields)
+            return
+        if self._video_model_change_running(chat_id):
+            await self._send_event(connection, "video_model_binding_result", ok=False,
+                                   code="run_active", detail="当前任务正在制作，请等待完成或停止后再切换模型。", **fields)
+            return
+        session = self._session_manager.get_or_create(f"websocket:{chat_id}")
+        session.metadata["model_binding"] = copy.deepcopy(binding)
+        self._session_manager.save(session)
+        await self._send_event(connection, "video_model_binding_result", ok=True, model_binding=binding, **fields)
+
+    @staticmethod
+    def _video_model_error_detail(exc: Exception) -> str:
+        from pydantic import ValidationError
+
+        if isinstance(exc, ValidationError):
+            return "模型选择无效，请重新选择模型和思考强度。"
+        if isinstance(exc, TimeoutError):
+            return "检查模型来源超时，请在模型设置中检查连接后重试。"
+        if isinstance(exc, OSError):
+            return "检查模型来源失败，请在模型设置中检查程序连接后重试。"
+        return str(exc)
 
     def _handle_webui_thread_get(self, request: WsRequest, key: str) -> Response:
         from mona.webui.history_cache import (
@@ -3899,6 +3996,39 @@ class WebSocketChannel(BaseChannel):
                         "tools exceed the configurable agent boundary: " + ", ".join(unknown)
                     )
             preset = update.get("model_preset")
+            binding_raw = update.get("model_binding")
+            if binding_raw is not None:
+                binding = AgentModelBinding.model_validate(binding_raw)
+                if isinstance(preset, str) and preset.strip():
+                    raise ValueError("model_preset and model_binding cannot both be set")
+                from mona.config.loader import load_config
+
+                config = load_config()
+                if binding.executor == "mona":
+                    from mona.development.model_selection import resolve_coding_model
+
+                    resolve_coding_model(
+                        config,
+                        binding.model,
+                        binding.provider,
+                        binding.effort,
+                        require_visible=True,
+                    )
+                else:
+                    from mona.development.executors.discovery import discover_executors
+
+                    if binding.executor not in config.development.enabled_engines:
+                        raise ValueError("此模型来源已停用，请在模型设置中启用后再选择。")
+                    probes = await asyncio.to_thread(
+                        discover_executors,
+                        config.development,
+                    )
+                    probe = next(
+                        (item for item in probes if item.executor.value == binding.executor),
+                        None,
+                    )
+                    if probe is None or probe.state != "detected" or not probe.executable:
+                        raise ValueError("未找到此模型来源的本地程序，请在模型设置中检查连接。")
             if isinstance(preset, str) and preset.strip():
                 from mona.agent import model_presets
                 from mona.config.loader import load_config
@@ -6048,7 +6178,7 @@ class WebSocketChannel(BaseChannel):
         new_key = f"websocket:{new_chat_id}"
         metadata = {
             key: copy.deepcopy(source_session.metadata[key])
-            for key in ("webui", "workspace", "agent_kind", "conversation")
+            for key in ("webui", "workspace", "agent_kind", "conversation", "model_binding")
             if key in source_session.metadata
         }
         metadata["webui"] = True
@@ -6077,6 +6207,8 @@ class WebSocketChannel(BaseChannel):
 
         self._attach(connection, new_chat_id)
         attached_fields: dict[str, Any] = {"chat_id": new_chat_id}
+        if metadata.get("agent_kind") == "video":
+            attached_fields["model_binding"] = metadata.get("model_binding")
         if request_id is not None:
             attached_fields["request_id"] = request_id
         await self._send_event(connection, "attached", **attached_fields)
@@ -6092,6 +6224,9 @@ class WebSocketChannel(BaseChannel):
         t = envelope.get("type")
         if t == "branch_chat":
             await self._handle_branch_chat_envelope(connection, envelope)
+            return
+        if t == "video_model_binding_update":
+            await self._handle_video_model_binding_update(connection, envelope)
             return
         if t == "new_chat":
             request_id = self._room_request_id(envelope)
@@ -6119,6 +6254,18 @@ class WebSocketChannel(BaseChannel):
             agent_kind = agent_kind.strip() if agent_kind else None
             if agent_kind not in (*DOCUMENT_PROFILES.keys(), None):
                 agent_kind = None
+            binding = None
+            if "model_binding" in envelope:
+                try:
+                    if self._session_manager is None:
+                        raise ValueError("视频会话暂时不可用，请稍后重试。")
+                    binding = await self._resolve_video_model_selection(
+                        envelope["model_binding"], agent_kind=agent_kind,
+                    )
+                except (ValueError, OSError, TimeoutError) as exc:
+                    await self._send_event(connection, "error", request_id=request_id,
+                                           code="invalid_model_binding", detail=self._video_model_error_detail(exc))
+                    return
             self._attach(connection, new_id)
             if (
                 workspace is not None or agent_kind is not None
@@ -6128,8 +6275,12 @@ class WebSocketChannel(BaseChannel):
                     session.metadata["workspace"] = workspace
                 if agent_kind is not None:
                     session.metadata["agent_kind"] = agent_kind
+                if agent_kind == "video":
+                    session.metadata["model_binding"] = copy.deepcopy(binding)
                 self._session_manager.save(session)
             attached_fields: dict[str, Any] = {"chat_id": new_id}
+            if agent_kind == "video":
+                attached_fields["model_binding"] = binding
             if request_id is not None:
                 attached_fields["request_id"] = request_id
             await self._send_event(connection, "attached", **attached_fields)
@@ -6142,7 +6293,11 @@ class WebSocketChannel(BaseChannel):
                 return
 
             self._attach(connection, cid)
-            await self._send_event(connection, "attached", chat_id=cid)
+            attached_fields = {"chat_id": cid}
+            stored = self._video_session_metadata(f"websocket:{cid}")
+            if stored is not None and stored.get("agent_kind") == "video":
+                attached_fields["model_binding"] = stored.get("model_binding")
+            await self._send_event(connection, "attached", **attached_fields)
             await self._hydrate_after_subscribe(cid)
             return
         if t == "doc_upload":
@@ -6263,14 +6418,13 @@ class WebSocketChannel(BaseChannel):
             # turn enters the Agent loop. This recovers a tab created during a
             # reconnect without allowing an ordinary conversation to switch
             # agent types mid-history.
-            if (
+            promote_document = (
                 message_agent_kind is not None
                 and session_agent_kind is None
                 and session is not None
                 and not session.messages
-            ):
-                session.metadata["agent_kind"] = message_agent_kind
-                self._session_manager.save(session)
+            )
+            if promote_document:
                 session_agent_kind = message_agent_kind
             if message_agent_kind is not None and message_agent_kind != session_agent_kind:
                 await self._send_event(
@@ -6280,6 +6434,31 @@ class WebSocketChannel(BaseChannel):
                     detail="invalid_agent_kind_context",
                 )
                 return
+
+            binding = copy.deepcopy(session.metadata.get("model_binding")) if session is not None else None
+            if "model_binding" in envelope:
+                try:
+                    previous_binding = binding
+                    raw_selection = envelope["model_binding"]
+                    selection = (
+                        AgentModelBinding.model_validate(raw_selection).model_dump(mode="json", by_alias=False)
+                        if raw_selection is not None else None
+                    )
+                    if selection != binding and self._video_model_change_running(cid):
+                        await self._send_event(connection, "error", chat_id=cid, code="run_active",
+                                               detail="当前任务正在制作，请等待完成或停止后再切换模型。")
+                        return
+                    binding = await self._resolve_video_model_selection(
+                        selection, agent_kind=session_agent_kind, previous=binding,
+                    )
+                    if binding != previous_binding and self._video_model_change_running(cid):
+                        await self._send_event(connection, "error", chat_id=cid, code="run_active",
+                                               detail="当前任务正在制作，请等待完成或停止后再切换模型。")
+                        return
+                except (ValueError, OSError, TimeoutError) as exc:
+                    await self._send_event(connection, "error", chat_id=cid,
+                                           code="invalid_model_binding", detail=self._video_model_error_detail(exc))
+                    return
 
             raw_media = envelope.get("media")
             media_paths: list[str] = []
@@ -6338,6 +6517,12 @@ class WebSocketChannel(BaseChannel):
                 return
 
             # Auto-attach on first use so clients can one-shot without a separate attach.
+            if session is not None and (promote_document or "model_binding" in envelope):
+                if promote_document:
+                    session.metadata["agent_kind"] = session_agent_kind
+                if session_agent_kind == "video":
+                    session.metadata["model_binding"] = copy.deepcopy(binding)
+                self._session_manager.save(session)
             self._attach(connection, cid)
             await self._hydrate_after_subscribe(cid)
             metadata: dict[str, Any] = {"remote": getattr(connection, "remote_address", None)}
@@ -6345,6 +6530,8 @@ class WebSocketChannel(BaseChannel):
                 metadata["webui"] = True
             if session_agent_kind is not None:
                 metadata["agent_kind"] = session_agent_kind
+            if session_agent_kind == "video":
+                metadata["model_binding"] = copy.deepcopy(binding)
             task_id = envelope.get("task_id")
             if isinstance(task_id, str) and _API_KEY_RE.fullmatch(task_id.strip()):
                 metadata["task_id"] = task_id.strip()
