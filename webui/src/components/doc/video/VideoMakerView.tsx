@@ -8,11 +8,15 @@ import {
   PanelLeft,
   PanelLeftClose,
   Plus,
+  RectangleHorizontal,
+  RectangleVertical,
+  Square,
   Trash2,
 } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import { Checkbox } from "@/components/ui/checkbox";
 import { Select } from "@/components/ui/select";
 import { Textarea } from "@/components/ui/textarea";
 import {
@@ -38,6 +42,7 @@ import {
   fetchVideoProject,
   fetchVideoProjects,
   fetchVideoSeries,
+  fetchVideoStyleTemplates,
   saveVideoChatId,
   updateVideoSeries,
   updateVideoProjectSettings,
@@ -47,24 +52,31 @@ import {
   type VideoProjectPhase,
   type VideoProjectCreateOptions,
   type VideoSeries,
-  type VideoStyleDraft,
+  type VideoStyleTemplate,
   type VideoStyleVersion,
   type VideoTtsConfig,
 } from "@/lib/api";
 import { generateProjectName } from "@/lib/project-name";
+import type { AgentModelBinding } from "@/lib/types";
+import { RoomCommandError } from "@/lib/mona-client";
 import { useBreakpoint } from "@/hooks/useBreakpoint";
 import { cn } from "@/lib/utils";
 import { isTauri } from "@/lib/tauri";
 import { DocChatPanel } from "../DocChatPanel";
 import { StoryboardPhase } from "./StoryboardPhase";
 import { ProducingPhase } from "./ProducingPhase";
+import { VideoWorkbenchHeader, videoFocusQuote, type VideoFocus } from "./VideoWorkbenchHeader";
+import { VideoStyleGallery } from "./VideoStyleGallery";
 import { VideoHistory } from "./VideoHistory";
-import { CreateVideoSeriesView } from "./style/CreateVideoSeriesView";
-import { SeriesStyleEditor } from "./style/SeriesStyleEditor";
+import { VideoStyleWorkspace, type StyleConversationState } from "./style/VideoStyleWorkspace";
+import { SavedVideoStyleGallery } from "./style/SavedVideoStyleGallery";
+import { copyVideoStyle } from "@/lib/video-style-api";
+import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { AssetRightsDialog } from "./style/AssetRightsDialog";
-import { VideoSeriesSelector } from "./style/VideoSeriesSelector";
 import { VideoNarrationSettingsDialog } from "./VideoNarrationSettingsDialog";
 import { VoicePreviewButton } from "./VoicePreviewButton";
+import { useVideoModelBinding } from "./useVideoModelBinding";
+import { VideoModelControl } from "./VideoModelControl";
 import {
   EDGE_TTS_VOICES,
   TTS_PROVIDERS,
@@ -85,6 +97,7 @@ interface PendingVideoGeneration {
   displayText: string;
   chatId: string | null;
   chatIdSaved: boolean;
+  modelBinding: AgentModelBinding | null;
   creation?: { resolution: string; options: VideoProjectCreateOptions };
 }
 
@@ -100,8 +113,12 @@ interface VideoMakerViewProps {
   hostIsStreaming?: boolean;
   initialProject?: EmbeddedVideoProject | null;
   onProjectChange?: (project: EmbeddedVideoProject | null) => void;
-  onSendVideoTurn?: (content: string, displayContent?: string) => void;
+  onSendVideoTurn?: (content: string, displayContent?: string, modelBinding?: AgentModelBinding | null) => void;
+  onFocusChange?: (focus: VideoFocus | null) => void;
   onOpenChat?: () => void;
+  visible?: boolean;
+  onStyleWorkspaceChange?: (state: StyleConversationState | null) => void;
+  styleConversationRequest?: number;
 }
 
 const RATIOS: Array<{ value: VideoRatio; label: string }> =
@@ -111,28 +128,6 @@ const RATIOS: Array<{ value: VideoRatio; label: string }> =
     { value: "1:1", label: "方形" },
   ];
 
-const SINGLE_VIDEO_TEMPLATES = [
-  {
-    id: "minimal-business",
-    name: "简洁浅色",
-    description: "浅色背景与清晰文字",
-  },
-  {
-    id: "tech-dark",
-    name: "专业深色",
-    description: "深色背景与醒目标题",
-  },
-  {
-    id: "editorial-magazine",
-    name: "编辑排版",
-    description: "对比鲜明的文字层级",
-  },
-  {
-    id: "knowledge-cards",
-    name: "清晰教学",
-    description: "清晰分组的信息样式",
-  },
-] as const;
 
 const RATIO_RESOLUTION_MAP: Record<VideoRatio, string> = {
   "16:9": "1920x1080",
@@ -167,8 +162,18 @@ export function VideoMakerView({
   onProjectChange,
   onSendVideoTurn,
   onOpenChat,
+  onFocusChange,
+  visible = true,
+  onStyleWorkspaceChange,
+  styleConversationRequest,
 }: VideoMakerViewProps = {}) {
   const { client, token } = useClient();
+  const focusRef = useRef<VideoFocus | null>(null);
+  const handleFocusChange = useCallback((focus: VideoFocus | null) => {
+    focusRef.current = focus;
+    onFocusChange?.(focus);
+  }, [onFocusChange]);
+  useEffect(() => () => { onFocusChange?.(null); }, [onFocusChange]);
   const bp = useBreakpoint();
   const [topic, setTopic] = useState("");
   const [sourcePaths, setSourcePaths] = useState<string[]>([]);
@@ -176,10 +181,24 @@ export function VideoMakerView({
   const [moreSettingsOpen, setMoreSettingsOpen] = useState(false);
   const [draftProjectName, setDraftProjectName] = useState("");
   const [ratio, setRatio] = useState<VideoRatio>("16:9");
-  const [templateId, setTemplateId] = useState<string>("tech-dark");
+  const [templateId, setTemplateId] = useState<string>("auto");
+  const [styleTemplates, setStyleTemplates] = useState<VideoStyleTemplate[]>([]);
+  const [styleTemplatesError, setStyleTemplatesError] = useState(false);
+  const [styleLoadKey, setStyleLoadKey] = useState(0);
+  useEffect(() => {
+    let active = true;
+    setStyleTemplatesError(false);
+    void Promise.resolve().then(() => fetchVideoStyleTemplates(token)).then(({templates}) => {
+      if (active) setStyleTemplates(templates);
+    }).catch(() => { if (active) setStyleTemplatesError(true); });
+    return () => { active = false; };
+  }, [token, styleLoadKey]);
   const [singleStyleSource, setSingleStyleSource] = useState<"template" | "series">("template");
   const [styleSeriesId, setStyleSeriesId] = useState<string | null>(null);
   const [configSubview, setConfigSubview] = useState<ConfigSubview>("video");
+  const [styleLibraryTab, setStyleLibraryTab] = useState("builtin");
+  const [creatingBaseStyle, setCreatingBaseStyle] = useState<VideoStyleTemplate>();
+  const [restoredStyleId, setRestoredStyleId] = useState<string | null>(null);
   const [series, setSeries] = useState<VideoSeries[]>([]);
   const [seriesLoading, setSeriesLoading] = useState(true);
   const [seriesError, setSeriesError] = useState<string | null>(null);
@@ -198,7 +217,6 @@ export function VideoMakerView({
   );
   const [seriesRenameValue, setSeriesRenameValue] = useState("");
   const [seriesUpdating, setSeriesUpdating] = useState(false);
-  const [styleDraft, setStyleDraft] = useState<VideoStyleDraft | null>(null);
   const [narrationEnabled, setNarrationEnabled] = useState(true);
   const [ttsProvider, setTtsProvider] = useState<TtsProvider>("edge");
   const [ttsVoice, setTtsVoice] = useState("");
@@ -217,6 +235,7 @@ export function VideoMakerView({
   const [workspaceView, setWorkspaceView] = useState<"director" | "preview">(initialProject?.phase && initialProject.phase !== "storyboard" ? "preview" : "director");
   const [contentOpen, setContentOpen] = useState(false);
   const [chatId, setChatId] = useState<string | null>(initialProject?.chatId ?? hostChatId);
+  const videoModel = useVideoModelBinding(chatId);
   const [projectName, setProjectName] = useState<string | null>(initialProject?.name ?? null);
   const [createError, setCreateError] = useState<string | null>(null);
 
@@ -236,6 +255,10 @@ export function VideoMakerView({
   const [agentStartedAt, setAgentStartedAt] = useState<number | null>(null);
   const onProjectChangeRef = useRef(onProjectChange);
   const pendingGenerationRef = useRef<PendingVideoGeneration | null>(null);
+  const changeVideoModel = useCallback(async (value: AgentModelBinding | null) => {
+    const saved = await videoModel.changeBinding(value);
+    if (pendingGenerationRef.current) pendingGenerationRef.current.modelBinding = saved;
+  }, [videoModel.changeBinding]);
   const storyboardFlushRef = useRef<(() => Promise<boolean>) | null>(null);
   const [leavingStoryboard, setLeavingStoryboard] = useState(false);
   const [planDetails, setPlanDetails] = useState({ planRevision: null as number | null, sceneCount: 0, duration: 0 });
@@ -273,7 +296,8 @@ export function VideoMakerView({
 
   useEffect(() => {
     if (!embedded) return;
-    setChatId(initialProject?.chatId ?? hostChatId);
+    const boundChatId = initialProject?.chatId ?? hostChatId;
+    if (boundChatId) setChatId(boundChatId);
     if (initialProject) {
       setProjectName(initialProject.name);
       setPhase(initialProject.phase);
@@ -336,7 +360,8 @@ export function VideoMakerView({
         const action = parameters?.action;
         const index = parameters?.scene_index;
         if (action === "plan") setAgentActivity("正在整理旁白与动画方案");
-        if (action === "preview" && typeof index === "number") setAgentActivity(`正在检查第 ${index} 段画面和声音`);
+        if (action === "audio" && typeof index === "number") setAgentActivity(`正在生成第 ${index} 段配音`);
+        if (action === "preview" && typeof index === "number") setAgentActivity(`正在检查第 ${index} 段动画`);
         if (action === "sync" && typeof index === "number") setAgentActivity(`正在处理第 ${index} 段画面`);
         if (action === "export") setAgentActivity("正在导出视频");
       }
@@ -346,6 +371,7 @@ export function VideoMakerView({
   const refreshProject = useCallback(async () => {
     if (!projectName) return;
     const project = await fetchVideoProject(token, projectName);
+    if (project.styleAuthoring?.seriesId) setRestoredStyleId(project.styleAuthoring.seriesId);
     if (activeProjectRef.current !== projectName) return;
     setProjectSettings(project.meta ?? {});
     const needsApproval = project.meta?.requirePlanApproval ?? project.requirePlanApproval ?? false;
@@ -398,25 +424,8 @@ export function VideoMakerView({
   }, [refreshSeries]);
 
   const handleSelectStyleSeries = useCallback((value: VideoSeries) => {
+    setSingleStyleSource("series");
     setStyleSeriesId(value.id);
-    const enabled = value.styleSummary?.enabledAspectRatios?.filter(
-      (aspect): aspect is VideoRatio =>
-        aspect === "16:9" || aspect === "9:16" || aspect === "1:1",
-    );
-    const defaultAspect = value.defaultAspectRatio;
-    if (enabled?.length) {
-      setRatio(
-        defaultAspect && enabled.includes(defaultAspect)
-          ? defaultAspect
-          : enabled[0],
-      );
-    } else if (
-      defaultAspect === "16:9" ||
-      defaultAspect === "9:16" ||
-      defaultAspect === "1:1"
-    ) {
-      setRatio(defaultAspect);
-    }
   }, []);
 
   const handleDeleteSeries = useCallback(async () => {
@@ -451,33 +460,6 @@ export function VideoMakerView({
     }
   }, [refreshSeries, seriesDeleting, seriesToDelete, token]);
 
-  const handleArchiveSeries = useCallback(
-    async (value: VideoSeries, archived: boolean) => {
-      if (seriesUpdating) return;
-      setSeriesUpdating(true);
-      setSeriesError(null);
-      try {
-        const result = await updateVideoSeries(token, value.id, { archived });
-        if (!result.ok) throw new Error(result.error || "风格归档失败");
-        if (archived) {
-          setSelectedSeries((current) =>
-            current?.id === value.id ? null : current,
-          );
-        }
-        await refreshSeries();
-      } catch (archiveError) {
-        setSeriesError(
-          archiveError instanceof Error
-            ? archiveError.message
-            : String(archiveError),
-        );
-      } finally {
-        setSeriesUpdating(false);
-      }
-    },
-    [refreshSeries, seriesUpdating, token],
-  );
-
   const handleRenameSeries = useCallback(async () => {
     if (!seriesToRename || !seriesRenameValue.trim() || seriesUpdating) return;
     setSeriesUpdating(true);
@@ -506,27 +488,13 @@ export function VideoMakerView({
     }
   }, [refreshSeries, seriesRenameValue, seriesToRename, seriesUpdating, token]);
 
-  const handleSeriesCreated = useCallback(
-    (value: VideoSeries, draft: VideoStyleDraft) => {
-      setSeries((current) => [
-        ...current.filter((item) => item.id !== value.id),
-        value,
-      ]);
-      setSelectedSeries(value);
-      setStyleDraft(draft);
-      setSingleStyleSource("series");
-      setStyleSeriesId(value.id);
-      setConfigSubview("style-editor");
-      const aspect = value.defaultAspectRatio;
-      if (aspect === "16:9" || aspect === "9:16" || aspect === "1:1") {
-        setRatio(aspect);
-      }
-    },
-    [],
-  );
-
   const handleStyleLocked = useCallback(
     (version: VideoStyleVersion) => {
+      setSingleStyleSource("series");
+      setStyleSeriesId(version.seriesId);
+      setStyleLibraryTab("mine");
+      setRestoredStyleId(null);
+      if (projectName && restoredStyleId) { setProjectName(null); setPhase("config"); }
       setSeries((current) =>
         current.map((item) =>
           item.id === version.seriesId
@@ -539,11 +507,10 @@ export function VideoMakerView({
           ? { ...current, latestStyleVersion: version.version }
           : current,
       );
-      setStyleDraft(null);
       setConfigSubview("video");
       void refreshSeries();
     },
-    [refreshSeries],
+    [refreshSeries, projectName, restoredStyleId],
   );
 
   // 初始化侧边栏折叠状态与宽度（从 localStorage 读取）
@@ -649,7 +616,7 @@ export function VideoMakerView({
     }
     const newChatId =
       pending.chatId ??
-      (embedded ? hostChatId : await client.newChat(5_000, false, null, "video"));
+      (embedded && hostChatId ? hostChatId : await client.newChat(45_000, false, null, "video", pending.modelBinding));
     if (!newChatId) throw new Error("当前视频会话尚未就绪");
     pending.chatId = newChatId;
     setChatId(newChatId);
@@ -658,11 +625,12 @@ export function VideoMakerView({
       if (!saved?.ok) throw new Error("视频项目已创建，但会话信息尚未保存。请重试。");
       pending.chatIdSaved = true;
     }
-    if (embedded && onSendVideoTurn) {
-      onSendVideoTurn(pending.prompt, pending.displayText);
+    if (embedded && onSendVideoTurn && hostChatId === newChatId) {
+      onSendVideoTurn(pending.prompt, pending.displayText, pending.modelBinding);
     } else {
       client.sendMessage(newChatId, pending.prompt, undefined, {
         agentKind: "video",
+        modelBinding: pending.modelBinding,
         displayContent: pending.displayText,
       });
     }
@@ -674,6 +642,7 @@ export function VideoMakerView({
 
   const handleStartGeneration = useCallback(async () => {
     if (generatingRef.current) return;
+    if (videoModel.loading || videoModel.saving || videoModel.error) return;
     setCreateError(null);
     generatingRef.current = true;
     setStarting(true);
@@ -717,7 +686,7 @@ export function VideoMakerView({
         name,
         styleName: singleStyleSource === "series"
           ? selectedStyleSeries?.name
-          : SINGLE_VIDEO_TEMPLATES.find((style) => style.id === templateId)?.name,
+          : templateId === "auto" ? "由 Mona 根据内容推荐" : styleTemplates.find((style) => style.id === templateId)?.name,
         narrationEnabled,
         sourceCount: sourcePaths.length,
         hasMusic: musicPreset !== "none",
@@ -759,6 +728,7 @@ export function VideoMakerView({
         displayText,
         chatId: null,
         chatIdSaved: false,
+        modelBinding: videoModel.binding,
         creation: { resolution, options },
       };
       const created = await createVideoProject(token, name, resolution, options);
@@ -785,7 +755,7 @@ export function VideoMakerView({
         setProjectName(pending.name);
         setPhase("storyboard");
         setGenerationError(
-          pending.creation
+          e instanceof RoomCommandError && e.code === "invalid_model_binding" ? e.message : pending.creation
             ? "视频创建情况暂时无法确认，请点击继续准备分镜检查。"
             : "视频已创建，分镜方案尚未准备。请点击继续准备分镜。",
         );
@@ -801,8 +771,8 @@ export function VideoMakerView({
     }
   }, [
     topic, draftProjectName, ratio, singleStyleSource, selectedStyleSeries,
-    templateId, narrationEnabled, ttsProvider, ttsVoice, ttsRate, subtitleMode,
-    sourcePaths, musicFilePath, musicPreset, musicRights, resumePendingGeneration, token,
+    templateId, styleTemplates, narrationEnabled, ttsProvider, ttsVoice, ttsRate, subtitleMode,
+    sourcePaths, musicFilePath, musicPreset, musicRights, resumePendingGeneration, token, videoModel.binding, videoModel.loading, videoModel.saving, videoModel.error,
   ]);
 
   // Detect AI turn completion: streaming transitions from true → false.
@@ -840,12 +810,13 @@ export function VideoMakerView({
         displayText: "继续准备分镜",
         chatId: null,
         chatIdSaved: false,
+        modelBinding: videoModel.binding,
       };
       void handleStartGeneration();
       return;
     }
     const prompt = buildVideoResumePrompt(projectName);
-    if (embedded && onSendVideoTurn) {
+    if (embedded && onSendVideoTurn && hostChatId === chatId) {
       onSendVideoTurn(prompt, "继续准备分镜");
       return;
     }
@@ -853,13 +824,13 @@ export function VideoMakerView({
       agentKind: "video",
       displayContent: "继续准备分镜",
     });
-  }, [chatId, client, embedded, handleStartGeneration, onSendVideoTurn, projectName]);
+  }, [chatId, client, embedded, handleStartGeneration, hostChatId, onSendVideoTurn, projectName, videoModel.binding]);
 
   const handleRequestAgent = useCallback(async (request: string, displayText = request) => {
     if (!projectName || isChatRunning || hostIsStreaming) return;
-    const currentChatId = chatId ?? (embedded
+    const currentChatId = chatId ?? (embedded && hostChatId
       ? hostChatId
-      : await client.newChat(5_000, false, null, "video"));
+      : await client.newChat(45_000, false, null, "video", videoModel.binding));
     if (!currentChatId) throw new Error("视频会话尚未就绪，请稍后重试。");
     if (!chatId) {
       const saved = await saveVideoChatId(token, projectName, currentChatId);
@@ -868,7 +839,7 @@ export function VideoMakerView({
     }
     setGenerationError(null);
     const prompt = `当前视频：${projectName}\n${request}`;
-    if (embedded && onSendVideoTurn) {
+    if (embedded && onSendVideoTurn && hostChatId === currentChatId) {
       onSendVideoTurn(prompt, displayText);
     } else {
       client.sendMessage(currentChatId, prompt, undefined, {
@@ -876,7 +847,7 @@ export function VideoMakerView({
         displayContent: displayText,
       });
     }
-  }, [chatId, client, embedded, hostChatId, hostIsStreaming, isChatRunning, onSendVideoTurn, projectName, token]);
+  }, [chatId, client, embedded, hostChatId, hostIsStreaming, isChatRunning, onSendVideoTurn, projectName, token, videoModel.binding]);
 
   const handleConfirmPlan = useCallback(async () => {
     if (!projectName || confirming || isChatRunning || hostIsStreaming) return;
@@ -986,12 +957,13 @@ export function VideoMakerView({
       pendingGenerationRef.current = null;
       setProjectName(null);
       setChatId(null);
+      videoModel.setBinding(null);
       setCreateError(null);
       try {
         localStorage.removeItem(ACTIVE_PROJECT_KEY);
       } catch {}
     });
-  }, [leaveStoryboardWhenSaved]);
+  }, [leaveStoryboardWhenSaved, videoModel.setBinding]);
 
   const handleProjectRenamed = useCallback(
     (oldName: string, newName: string) => {
@@ -1226,25 +1198,23 @@ export function VideoMakerView({
         ))}
 
         <div className="flex min-h-0 flex-1 flex-col">
-          {phase === "config" && configSubview === "create-series" ? (
-            <CreateVideoSeriesView
-              onCancel={() => setConfigSubview("video")}
-              onCreated={handleSeriesCreated}
-            />
-          ) : phase === "config" &&
-            configSubview === "style-editor" &&
-            selectedSeries ? (
-            <SeriesStyleEditor
-              seriesId={selectedSeries.id}
-              initialDraft={styleDraft}
-              currentVersion={selectedSeries.latestStyleVersion ?? 0}
-              defaultAspectRatio={selectedSeries.defaultAspectRatio ?? "16:9"}
-              onCancel={() => setConfigSubview("video")}
-              onLocked={handleStyleLocked}
+          {(configSubview === "create-series" || configSubview === "style-editor" || restoredStyleId) ? (
+            <VideoStyleWorkspace
+              key={restoredStyleId ?? (configSubview === "style-editor" ? selectedSeries?.id : "new")}
+              initialSeriesId={restoredStyleId ?? (configSubview === "style-editor" ? selectedSeries?.id : null)}
+              baseStyle={creatingBaseStyle} aspectRatio={ratio} topic={topic} visible={visible} useOnSave={!restoredStyleId}
+              initialModelBinding={videoModel.binding}
+              tts={{ narrationEnabled, ttsProvider, ttsVoice, ttsRate, subtitleMode }}
+              onConversationChange={onStyleWorkspaceChange}
+              conversationRequest={styleConversationRequest}
+              uploadChatId={hostChatId}
+              onBack={() => { setConfigSubview("video"); if (restoredStyleId) { setRestoredStyleId(null); setProjectName(null); setPhase("config"); } void refreshSeries(); }}
+              onSaved={handleStyleLocked}
             />
           ) : phase === "config" ? (
-            <div className="flex min-h-0 flex-1 flex-col items-center overflow-y-auto scrollbar-hover px-4 py-8">
-              <div className="w-full max-w-xl space-y-5">
+            <div className="flex min-h-0 flex-1 flex-col">
+            <div className="min-h-0 flex-1 overflow-y-auto scrollbar-hover px-4 py-6">
+              <div className="mx-auto w-full max-w-4xl space-y-5">
                 <div>
                   <h2 className="text-title-sm font-medium">制作视频</h2>
                   <p className="mt-2 text-caption text-muted-foreground">先准备分镜方案，在导演台确认和调整后，再生成视频。</p>
@@ -1253,12 +1223,50 @@ export function VideoMakerView({
                   <label htmlFor="video-brief" className="mb-2 block text-ui font-medium">想做什么视频？</label>
                   <Textarea
                     id="video-brief"
-                    className="min-h-32 resize-none text-ui"
+                    className="min-h-24 resize-none text-ui"
                     placeholder="例如：做一段一分钟的产品介绍，面向第一次了解它的人，清楚介绍用途和使用方法。"
                     value={topic}
                     onChange={(event) => setTopic(event.target.value)}
                     disabled={starting}
                   />
+                </section>
+                <div className="flex flex-wrap items-center justify-between gap-3">
+                  <div className="flex items-center gap-1" role="group" aria-label="画面方向">
+                    {RATIOS.map((option) => {
+                      const Icon = option.value === "16:9" ? RectangleHorizontal : option.value === "9:16" ? RectangleVertical : Square;
+                      return <Button key={option.value} variant="outline" size="sm" aria-label={option.label} aria-pressed={ratio === option.value}
+                        disabled={starting} onClick={() => setRatio(option.value)} className={cn(ratio === option.value && "border-foreground/50 bg-accent")}>
+                        <Icon className="mr-1.5 h-3.5 w-3.5" />{option.label}<span className="ml-1 text-micro text-muted-foreground">{option.value}</span>
+                      </Button>;
+                    })}
+                  </div>
+                  <Button variant="outline" size="sm" disabled={!isTauri() || starting} onClick={() => void handleAddSources()}><FilePlus2 className="mr-1.5 h-3.5 w-3.5" />添加资料</Button>
+                </div>
+                {sourcePaths.length ? <div className="flex flex-wrap gap-2">
+                  {sourcePaths.map((path) => <span key={path} className="flex min-w-0 max-w-full items-center gap-1 rounded-md border border-border px-2 py-1 text-caption">
+                    <span className="truncate">{path.split(/[\\/]/).pop()}</span><Button variant="ghost" size="icon" className="h-5 w-5" aria-label={`移除 ${path.split(/[\\/]/).pop()}`} onClick={() => setSourcePaths((current) => current.filter((item) => item !== path))}><Trash2 className="h-3 w-3" /></Button>
+                  </span>)}
+                </div> : null}
+                <section className="space-y-3" aria-label="选择视频风格">
+                  <div className="flex flex-wrap items-center justify-between gap-2">
+                    <div className="flex items-center gap-3"><h3 className="text-ui font-medium">风格</h3><Tabs value={styleLibraryTab} onValueChange={setStyleLibraryTab}><TabsList><TabsTrigger value="builtin">内置</TabsTrigger><TabsTrigger value="mine">我的</TabsTrigger></TabsList></Tabs></div>
+                    <div className="flex gap-2">
+                      <Button variant="outline" size="sm" aria-pressed={singleStyleSource === "template" && templateId === "auto"} onClick={() => { setSingleStyleSource("template"); setTemplateId("auto"); }}>由 Mona 推荐</Button>
+                      <Button variant="outline" size="sm" onClick={() => { setCreatingBaseStyle(undefined); setConfigSubview("create-series"); }}>创建风格</Button>
+                    </div>
+                  </div>
+                  {styleLibraryTab === "builtin" ? <VideoStyleGallery templates={styleTemplates} showHeader={false} selectedId={singleStyleSource === "template" ? templateId : null} disabled={starting}
+                    onSelect={(id) => { setSingleStyleSource("template"); setTemplateId(id); }}
+                    onCreateFrom={(style) => { setCreatingBaseStyle(style); setConfigSubview("create-series"); }} /> :
+                    <SavedVideoStyleGallery token={token} series={series} selectedId={singleStyleSource === "series" ? styleSeriesId : null} loading={seriesLoading} disabled={seriesUpdating || starting}
+                      onSelect={(value) => { handleSelectStyleSeries(value); setSelectedSeries(value); }}
+                      onEdit={(value) => { setSelectedSeries(value); setCreatingBaseStyle(undefined); setConfigSubview("style-editor"); }}
+                      onCreate={() => { setCreatingBaseStyle(undefined); setConfigSubview("create-series"); }}
+                      onCopy={(value) => { void copyVideoStyle(token, value.id).then(async () => { await refreshSeries(); }).catch(() => { void refreshSeries(); setCreateError("风格复制结果暂时无法确认，请刷新列表后查看。"); }); }}
+                      onDelete={(value) => { setSeriesDeleteError(null); setSeriesToDelete(value); }}
+                      onRename={(value) => { setSeriesToRename(value); setSeriesRenameValue(value.name); }} />}
+                  {styleTemplatesError ? <div className="flex items-center gap-2 text-caption text-muted-foreground">风格列表暂时无法读取<Button variant="outline" size="sm" onClick={() => setStyleLoadKey((value) => value + 1)}>重试</Button></div> : null}
+                  {seriesError && styleLibraryTab === "mine" ? <p className="text-caption text-destructive">风格加载失败，请重试。</p> : null}
                 </section>
                 <Button
                   variant="ghost"
@@ -1277,77 +1285,8 @@ export function VideoMakerView({
                       <Input id="video-name" value={draftProjectName} onChange={(event) => setDraftProjectName(event.target.value)} placeholder="留空会根据描述命名" disabled={starting} />
                     </section>
                     <section>
-                      <h3 className="mb-1.5 text-caption font-medium">画面方向</h3>
-                      <div className="grid grid-cols-3 gap-2">
-                        {RATIOS.map((option) => (
-                          <Button
-                            key={option.value}
-                            variant="outline"
-                            aria-pressed={ratio === option.value}
-                            disabled={starting}
-                            onClick={() => setRatio(option.value)}
-                            className={cn(ratio === option.value && "border-primary bg-accent")}
-                          >{option.label}</Button>
-                        ))}
-                      </div>
-                    </section>
-                    <section>
-                      <h3 className="mb-1.5 text-caption font-medium">风格</h3>
-                      <p className="mb-2 text-micro text-muted-foreground">统一配色和字体，画面根据内容安排。</p>
-                      <div className="grid grid-cols-2 gap-2">
-                        {SINGLE_VIDEO_TEMPLATES.map((style) => (
-                          <Button
-                            key={style.id}
-                            variant="outline"
-                            aria-pressed={singleStyleSource === "template" && templateId === style.id}
-                            onClick={() => { setSingleStyleSource("template"); setTemplateId(style.id); }}
-                            className={cn("h-auto flex-col items-start gap-1 px-3 py-2", singleStyleSource === "template" && templateId === style.id && "border-primary bg-accent")}
-                          >
-                            <span>{style.name}</span>
-                            <span className="text-micro font-normal text-muted-foreground">{style.description}</span>
-                          </Button>
-                        ))}
-                      </div>
-                      <Button variant="ghost" size="sm" className="mt-2" aria-pressed={singleStyleSource === "series"} onClick={() => setSingleStyleSource("series")}>我的风格</Button>
-                      {singleStyleSource === "series" ? (
-                        <div className="mt-2 space-y-2">
-                          <VideoSeriesSelector
-                            labelMode="style"
-                            series={series}
-                            selectedSeriesId={styleSeriesId}
-                            loading={seriesLoading}
-                            disabled={seriesUpdating || starting}
-                            onSelect={(value) => { handleSelectStyleSeries(value); setSelectedSeries(value); }}
-                            onDelete={(value) => { setSeriesDeleteError(null); setSeriesToDelete(value); }}
-                            onRename={(value) => { setSeriesToRename(value); setSeriesRenameValue(value.name); }}
-                            onArchive={(value, archived) => void handleArchiveSeries(value, archived)}
-                            onCreate={() => setConfigSubview("create-series")}
-                          />
-                          {selectedStyleSeries ? (
-                            <Button variant="outline" size="sm" onClick={() => { setSelectedSeries(selectedStyleSeries); setStyleDraft(selectedStyleSeries.draft ?? null); setConfigSubview("style-editor"); }}>编辑风格</Button>
-                          ) : null}
-                          {seriesError ? <p className="text-caption text-destructive">风格加载失败，请重试。</p> : null}
-                        </div>
-                      ) : null}
-                    </section>
-                    <section>
-                      <div className="flex items-center justify-between gap-3">
-                        <div>
-                          <h3 className="text-caption font-medium">参考资料</h3>
-                          <p className="mt-0.5 text-micro text-muted-foreground">可以添加文档，让 Mona 根据已有内容制作。</p>
-                        </div>
-                        <Button variant="outline" size="sm" disabled={!isTauri() || starting} onClick={() => void handleAddSources()}><FilePlus2 className="mr-1.5 h-3.5 w-3.5" />添加资料</Button>
-                      </div>
-                      {sourcePaths.map((path) => (
-                        <div key={path} className="mt-2 flex items-center gap-2 text-caption">
-                          <span className="min-w-0 flex-1 truncate">{path.split(/[\\/]/).pop()}</span>
-                          <Button variant="ghost" size="icon" className="h-7 w-7" aria-label={`移除 ${path.split(/[\\/]/).pop()}`} onClick={() => setSourcePaths((current) => current.filter((item) => item !== path))}><Trash2 className="h-3.5 w-3.5" /></Button>
-                        </div>
-                      ))}
-                    </section>
-                    <section>
                       <label className="flex items-center gap-2 text-caption font-medium">
-                        <input type="checkbox" checked={narrationEnabled} onChange={(event) => setNarrationEnabled(event.target.checked)} />
+                        <Checkbox checked={narrationEnabled} disabled={starting} onCheckedChange={(checked) => setNarrationEnabled(checked === true)} aria-label="配音" />
                         配音
                       </label>
                       {narrationEnabled ? (
@@ -1384,31 +1323,34 @@ export function VideoMakerView({
                   </div>
                 ) : null}
                 {createError ? <p className="text-caption text-destructive" role="alert">{createError}</p> : null}
+              </div>
+            </div>
+              <div className="shrink-0 border-t border-border/70 px-4 py-2">
+                <div className="mx-auto flex max-w-4xl items-center justify-between gap-3">
+                <VideoModelControl token={token} value={videoModel.binding} onChange={changeVideoModel} disabled={starting} loading={videoModel.loading} error={videoModel.error} onRetry={videoModel.reload} />
                 <Button
-                  className="w-full"
-                  disabled={starting || (!topic.trim() && sourcePaths.length === 0) || (singleStyleSource === "series" && !selectedStyleSeries) || (musicPreset !== "none" && !musicFilePath)}
+                  size="sm"
+                  disabled={starting || videoModel.loading || videoModel.saving || Boolean(videoModel.error) || (!topic.trim() && sourcePaths.length === 0) || (singleStyleSource === "series" && !selectedStyleSeries) || (musicPreset !== "none" && !musicFilePath)}
                   onClick={() => void handleStartGeneration()}
                 >
                   {starting ? <Loader2 className="mr-1.5 h-4 w-4 animate-spin" /> : <Clapperboard className="mr-1.5 h-4 w-4" />}
                   {starting ? "正在准备…" : "准备分镜"}
                 </Button>
+                </div>
               </div>
             </div>
           ) : workspaceView === "director" ? (
             <div className="flex min-h-0 flex-1 flex-col">
-              <div className="flex shrink-0 items-center justify-between gap-3 border-b border-border/70 px-4 py-2">
-                <div className="min-w-0">
-                  <h2 className="truncate text-ui font-medium">导演台 · {projectName}</h2>
-                </div>
-                <div className="flex shrink-0 items-center gap-1">
+              <VideoWorkbenchHeader projectName={projectName ?? ""} activeView="director"
+                previewAvailable={!requiresApproval || approvedRevision !== null && approvedRevision === currentPlanRevision}
+                onViewChange={(view) => leaveStoryboardWhenSaved(() => setWorkspaceView(view))}>
+                  <VideoModelControl token={token} value={videoModel.binding} onChange={changeVideoModel} disabled={isChatRunning || hostIsStreaming || confirming} loading={videoModel.loading} error={videoModel.error} onRetry={videoModel.reload} />
                   <Button variant="ghost" size="sm" onClick={() => { setNarrationSettingsError(null); setNarrationSettingsOpen(true); }} disabled={isChatRunning || hostIsStreaming}>声音与字幕</Button>
-                  <Button variant="outline" size="sm" disabled={requiresApproval && (approvedRevision === null || approvedRevision !== planDetails.planRevision) || leavingStoryboard} onClick={() => leaveStoryboardWhenSaved(() => setWorkspaceView("preview"))}>预览视频</Button>
-                </div>
-              </div>
+              </VideoWorkbenchHeader>
               {isChatRunning || hostIsStreaming ? (
                 <div className="flex shrink-0 items-center gap-2 border-b border-border/70 px-4 py-2 text-caption text-muted-foreground" role="status">
                   <Loader2 className="h-3.5 w-3.5 animate-spin" />
-                  <span>{agentActivity ?? "Mona 正在准备旁白和动画方案，完成后请在这里确认。"}</span>
+                  <span>{agentActivity ?? (approvedRevision !== null && approvedRevision === currentPlanRevision ? "Mona 正在制作视频，这里是已确认的方案。" : "Mona 正在准备旁白和动画方案，完成后请在这里确认。")}</span>
                   {agentStartedAt !== null ? <span>已用时 {Math.floor(elapsed / 60)} 分 {elapsed % 60} 秒</span> : null}
                 </div>
               ) : null}
@@ -1420,26 +1362,30 @@ export function VideoMakerView({
                   onSaveFlushReady={registerStoryboardFlush}
                   onPlanChange={handlePlanChange}
                   onPlanEdited={handlePlanEdited}
+                  onFocusChange={handleFocusChange}
+                  readOnly={approvedRevision !== null && approvedRevision === currentPlanRevision}
                   busy={isChatRunning || hostIsStreaming || confirming}
-                  chatPanel={embedded ? undefined : <DocChatPanel chatId={chatId} getSendOptions={() => ({ agentKind: "video" })} onStreamingChange={handleStreamingChange} placeholder="告诉 Mona 分镜和动画要怎么调整…" />}
+                  chatPanel={embedded ? undefined : <DocChatPanel chatId={chatId} getSendOptions={() => ({ agentKind: "video", quote: videoFocusQuote(focusRef.current) })} onStreamingChange={handleStreamingChange} placeholder="告诉 Mona 分镜和动画要怎么调整…" />}
                 />
               </div>
               <div className="flex shrink-0 items-center justify-between gap-3 border-t border-border/70 px-4 py-1.5">
                 <div className="min-w-0 text-caption text-muted-foreground">
-                  {generationError ? <span className="text-destructive">{generationError}</span> : planDetails.sceneCount ? `${planDetails.sceneCount} 段 · 预计 ${planDetails.duration} 秒，修改会自动保存。` : "方案准备好后，会显示旁白和对应的动画安排。"}
+                  {generationError ? <span className="text-destructive">{generationError}</span> : planDetails.sceneCount ? approvedRevision !== null && approvedRevision === currentPlanRevision ? `${planDetails.sceneCount} 段 · ${planDetails.duration} 秒，可在对话中告诉 Mona 要改哪里。` : `${planDetails.sceneCount} 段 · 预计 ${planDetails.duration} 秒，修改会自动保存。` : "方案准备好后，会显示旁白和对应的动画安排。"}
                 </div>
                 {planDetails.sceneCount === 0 || generationError ? <Button variant="outline" size="sm" onClick={handleRetryStoryboardGeneration} disabled={isChatRunning || hostIsStreaming || starting}>继续准备分镜</Button> : null}
-                <Button size="sm" disabled={isChatRunning || hostIsStreaming || confirming || planDetails.sceneCount === 0 || planDetails.planRevision === null} onClick={() => void handleConfirmPlan()}>
+                {approvedRevision !== null && approvedRevision === currentPlanRevision ? null : <Button size="sm" disabled={isChatRunning || hostIsStreaming || confirming || planDetails.sceneCount === 0 || planDetails.planRevision === null} onClick={() => void handleConfirmPlan()}>
                   {confirming ? <Loader2 className="mr-1.5 h-4 w-4 animate-spin" /> : <Clapperboard className="mr-1.5 h-4 w-4" />}
                   {confirming ? "正在开始…" : "确认并生成"}
-                </Button>
+                </Button>}
               </div>
             </div>
           ) : (
             <ProducingPhase
               projectName={projectName ?? ""}
+              modelControl={<VideoModelControl token={token} value={videoModel.binding} onChange={changeVideoModel} disabled={isChatRunning || hostIsStreaming} loading={videoModel.loading} error={videoModel.error} onRetry={videoModel.reload} />}
               onPhaseChange={handleProjectPhaseChange}
               onRequestAgent={handleRequestAgent}
+              onFocusChange={handleFocusChange}
               agentRunning={isChatRunning || hostIsStreaming}
               agentActivity={agentActivity}
               agentStartedAt={agentStartedAt}
@@ -1449,7 +1395,7 @@ export function VideoMakerView({
               onRetryGeneration={handleContinueProduction}
               onEditContent={(section) => { if (section === "assets") setContentOpen(true); else setWorkspaceView("director"); }}
               chatPanel={embedded ? undefined : (
-                <DocChatPanel chatId={chatId} getSendOptions={() => ({ agentKind: "video" })} onStreamingChange={handleStreamingChange} placeholder="告诉 Mona 你想调整哪里…" />
+                <DocChatPanel chatId={chatId} getSendOptions={() => ({ agentKind: "video", quote: videoFocusQuote(focusRef.current) })} onStreamingChange={handleStreamingChange} placeholder="告诉 Mona 你想调整哪里…" />
               )}
             />
           )}

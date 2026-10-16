@@ -1,5 +1,6 @@
 import type {
   AgentDetailPayload,
+  AgentModelBinding,
   AgentInstruction,
   AgentInstructionHistoryItem,
   AgentSkill,
@@ -194,6 +195,7 @@ export async function listSessions(
   const effectiveBase = base ?? (await getApiBase());
   type Row = {
     key: string;
+    agent_kind?: string | null;
     created_at: string | null;
     updated_at: string | null;
     title?: string;
@@ -216,6 +218,7 @@ export async function listSessions(
   return body.sessions.map((s) => ({
     key: s.key,
     ...splitKey(s.key),
+    agentKind: s.agent_kind ?? null,
     createdAt: s.created_at,
     updatedAt: s.updated_at,
     title: s.title ?? "",
@@ -231,6 +234,14 @@ export async function listSessions(
     runStartedAt: s.run_started_at ?? null,
     conversation: s.conversation ?? null,
   }));
+}
+
+export async function fetchVideoSessionModelBinding(token: string, chatId: string): Promise<AgentModelBinding | null> {
+  const base = await getApiBase();
+  const body = await request<{ agentKind: "video"; modelBinding: AgentModelBinding | null }>(
+    `${base}/api/sessions/${encodeURIComponent(`websocket:${chatId}`)}/model-binding`, token,
+  );
+  return body.modelBinding;
 }
 
 /** List all installed agents (multi-agent phase 2d; ``GET /api/agents``). */
@@ -1151,6 +1162,7 @@ export interface VideoStyleBackgrounds {
 }
 
 export interface VideoStyleConfig {
+  authoring?: { projectName?: string; description?: string; rules?: string; modelBinding?: AgentModelBinding | null; [key: string]: unknown };
   schemaVersion?: number;
   baseTemplateId?: string | null;
   mode?: VideoStyleMode | string;
@@ -1171,6 +1183,7 @@ export interface VideoStyleConfig {
 }
 
 export interface VideoStyleSummary {
+  preview?: { poster: string; motion: string };
   enabledAspectRatios?: VideoAspectVariant[];
   version?: number | null;
   name?: string | null;
@@ -1278,6 +1291,7 @@ export interface VideoSeries {
 }
 
 export interface CreateVideoSeriesOptions {
+  id?: string;
   name: string;
   baseTemplateId?: string;
   defaultAspectRatio?: VideoAspectVariant;
@@ -1311,6 +1325,7 @@ export interface VideoProjectCreateOptions extends VideoTtsConfig {
 }
 
 export interface VideoProject {
+  styleAuthoring?: { seriesId: string; name?: string; available?: boolean; draftRevision?: number; description?: string } | null;
   name: string;
   createdAt: number;
   resolution: string;
@@ -1321,6 +1336,7 @@ export interface VideoProject {
   hasIndex?: boolean;
   sceneCount?: number;
   draftSceneCount?: number;
+  workbench?: { stage: string; sceneCount: number; readySceneCount: number; audioReadySceneCount: number; planRevision: number };
   planRevision?: number;
   approvedPlanRevision?: number | null;
   requirePlanApproval?: boolean;
@@ -1338,6 +1354,18 @@ export interface VideoProject {
   sourceProject?: string | null;
   archived?: boolean;
   styleSummary?: VideoStyleSummary | null;
+}
+
+export interface VideoStyleTemplate {
+  id: string;
+  name: string;
+  description: string;
+  preview?: { poster: string; motion: string };
+  tokens?: { colors?: Record<string, string> };
+}
+
+export async function fetchVideoStyleTemplates(token: string): Promise<{templates: VideoStyleTemplate[]}> {
+  return request(`${await getServicesHttpBase()}/api/video/style/templates`, token);
 }
 
 export async function fetchVideoRuntimeCheck(
@@ -2028,7 +2056,7 @@ export type VideoLanguage =
 export async function updateVideoProjectSettings(
   token: string,
   name: string,
-  settings: VideoTtsConfig,
+  settings: VideoTtsConfig & { resolution?: string },
   base?: string,
 ): Promise<{ ok: boolean; meta?: VideoTtsConfig; error?: string }> {
   const effectiveBase = base ?? (await getServicesHttpBase());
@@ -2185,15 +2213,21 @@ export async function fetchVideoExportStatus(
   );
 }
 
-export function buildVideoPreviewFullUrl(
-  base: string,
-  token: string,
-  name: string,
-): string {
-  const query = new URLSearchParams();
-  query.set("name", name);
-  query.set("token", token);
-  return `${base}/api/video/project/preview-full?${query}`;
+export async function fetchVideoPreviewFullHtml(token: string, name: string, signal?: AbortSignal): Promise<string> {
+  const base = await getServicesHttpBase();
+  const response = await httpFetch(`${base}/api/video/project/preview-full?${new URLSearchParams({ name })}`, {
+    headers: { Authorization: `Bearer ${token}` }, signal,
+  });
+  if (!response.ok) {
+    const payload = await response.json().catch(() => ({}));
+    const message = response.status < 500 ? payload.message ?? payload.error : undefined;
+    throw new ApiError(response.status, typeof message === "string" && /[\u4e00-\u9fff]/.test(message) ? message : "整片预览未能准备，请稍后重试。", payload.code);
+  }
+  const html = await response.text();
+  if (!response.headers.get("content-type")?.includes("text/html") || !html.trim()) {
+    throw new Error("没有收到可播放的整片内容，请重试预览。");
+  }
+  return html;
 }
 
 // ---------------------------------------------------------------------------
@@ -2201,6 +2235,7 @@ export function buildVideoPreviewFullUrl(
 // ---------------------------------------------------------------------------
 
 export interface VideoScene {
+  id?: string;
   index: number;
   title: string;
   role: VideoSceneRole;
@@ -2504,6 +2539,18 @@ export async function fetchSceneNarrationBytes(
     },
   );
   return speechPreviewBlob(res);
+}
+
+export async function fetchSceneAudioMixBytes(
+  token: string, name: string, index: number, signal?: AbortSignal,
+): Promise<Blob | null> {
+  const base = await getServicesHttpBase();
+  const response = await httpFetch(`${base}/api/video/project/audio-preview`, {
+    method: "POST", headers: {"Content-Type": "application/json", Authorization: `Bearer ${token}`},
+    body: JSON.stringify({name, index}), signal,
+  });
+  if (response.status === 204) return null;
+  return speechPreviewBlob(response);
 }
 
 // ---------------------------------------------------------------------------
@@ -2926,22 +2973,6 @@ export async function fetchVideoReviews(
   const effectiveBase = base ?? (await getServicesHttpBase());
   const query = new URLSearchParams({ name });
   return request(`${effectiveBase}/api/video/project/reviews?${query}`, token);
-}
-
-export async function createVideoReview(
-  token: string,
-  name: string,
-  sceneIndex: number,
-  timeMs: number,
-  text: string,
-  base?: string,
-): Promise<{ ok: boolean; review?: VideoReview; error?: string }> {
-  const effectiveBase = base ?? (await getServicesHttpBase());
-  return request(`${effectiveBase}/api/video/project/review`, token, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ name, sceneIndex, timeMs, text }),
-  });
 }
 
 export async function resolveVideoReview(

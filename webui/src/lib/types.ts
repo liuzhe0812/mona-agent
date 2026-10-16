@@ -779,6 +779,8 @@ export interface ChatSummary {
   /** Local channel + chat_id parts derived from ``key`` for convenience. */
   channel: string;
   chatId: string;
+  /** Persisted workflow profile; video conversations open their project workspace. */
+  agentKind?: string | null;
   createdAt: string | null;
   updatedAt: string | null;
   title?: string;

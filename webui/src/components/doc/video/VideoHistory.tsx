@@ -156,7 +156,7 @@ export function VideoHistory({
         const res = showArchived
           ? await fetchVideoProjectsIncludingArchived(token)
           : await fetchVideoProjects(token);
-        setProjects(res.projects ?? []);
+        setProjects((res.projects ?? []).filter((project) => !project.styleAuthoring));
         setLoadError(null);
       } catch (e) {
         setLoadError(e instanceof Error ? e.message : "加载历史项目失败");

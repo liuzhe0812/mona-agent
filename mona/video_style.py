@@ -267,6 +267,8 @@ def list_builtin_templates() -> list[dict[str, Any]]:
 
 def get_builtin_template(template_id: str) -> dict[str, Any]:
     canonical = _canonical_template_id(template_id)
+    if not _SERIES_ID_RE.fullmatch(canonical):
+        raise VideoStyleError("内置风格名称无效", code="INVALID_TEMPLATE_ID")
     path = _template_directory() / f"{canonical}.json"
     if not path.is_file():
         raise VideoStyleError(
@@ -946,6 +948,7 @@ def lock_style(
     result = validate_style(draft, root, series_id)
     if not result["valid"]:
         raise StyleValidationError("风格未通过锁定校验", details=result)
+    sample_draft = draft
     draft = _derive_design_system(draft)
     derived_result = validate_style(draft, root, series_id)
     if not derived_result["valid"]:
@@ -960,14 +963,26 @@ def lock_style(
         immutable["seriesId"] = validate_series_id(series_id)
         immutable["version"] = version
         immutable["lockedAt"] = _now()
+        authored_sample = bool((draft.get("authoring") or {}).get("projectName"))
+        if authored_sample:
+            from mona.video_style_authoring import snapshot_style_sample
+
+            immutable["authoring"] = snapshot_style_sample(root, series_id, sample_draft, staging)
+            previous_version = int(_read_json(directory / "series.json").get("latestStyleVersion") or 0)
+            if previous_version:
+                previous = read_style_version(root, series_id, previous_version)
+                if (previous.get("authoring") or {}).get("captureHash") == immutable["authoring"]["captureHash"]:
+                    shutil.rmtree(staging)
+                    return previous
         _atomic_write_json(staging / "design-system.json", immutable)
         _atomic_write_bytes(staging / "theme.css", _theme_css(immutable).encode("utf-8"))
-        (staging / "previews").mkdir(parents=True, exist_ok=True)
-        for role in ("cover", "chapter", "content", "data", "comparison", "process", "quote", "outro"):
-            _atomic_write_bytes(
-                staging / "previews" / f"{role}.html",
-                _style_preview_html(immutable, role).encode("utf-8"),
-            )
+        if not authored_sample:
+            (staging / "previews").mkdir(parents=True, exist_ok=True)
+            for role in ("cover", "chapter", "content", "data", "comparison", "process", "quote", "outro"):
+                _atomic_write_bytes(
+                    staging / "previews" / f"{role}.html",
+                    _style_preview_html(immutable, role).encode("utf-8"),
+                )
         if version_directory.exists():
             raise ImmutableStyleError("风格版本已存在且不可覆盖", details={"version": version})
         os.rename(staging, version_directory)

@@ -78,6 +78,7 @@ import type { ArtifactRef, ChatSummary, DeliveredFile } from "@/lib/types";
 import { isTauri, startGateway, getServicesStatus, startServices, getDesktopSettings, readGatewayLog, createNoteFromChat, revealItemInDir, openPathWithSystemApp, type GatewayLog, type SidebarShortcuts, type SidebarModuleConfig, type UpdateCheckResult } from "@/lib/tauri";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import type { VideoConversationRequest } from "@/components/doc/DocMakerView";
 
 type BootState =
   | { status: "loading" }
@@ -584,6 +585,21 @@ function Shell({
   const [view, setView] = useState<ShellView>(
     new URLSearchParams(window.location.search).get("noteId") ? "note" : "chat",
   );
+  const [videoConversationRequest, setVideoConversationRequest] = useState<VideoConversationRequest | null>(null);
+  const videoConversationRequestId = useRef(0);
+  const [documentVideoChatIds, setDocumentVideoChatIds] = useState<string[]>([]);
+  const [visibleDocumentChatId, setVisibleDocumentChatId] = useState<string | null>(null);
+  const sessionsWithDocumentKinds = useMemo(() => sessions.map((session) =>
+    documentVideoChatIds.includes(session.chatId) && session.agentKind !== "video" ? { ...session, agentKind: "video" } : session,
+  ), [documentVideoChatIds, sessions]);
+  const handleVideoConversationHandled = useCallback((requestId: number) => {
+    setVideoConversationRequest((current) => current?.requestId === requestId ? null : current);
+  }, []);
+  const showChatHistory = useCallback((chatId: string) => {
+    setVideoConversationRequest(null);
+    setActiveKey(`websocket:${chatId}`);
+    setView("chat");
+  }, []);
   const [emailExtractionOpen, setEmailExtractionOpen] = useState(false);
   const [newEmailAccountOpen, setNewEmailAccountOpen] = useState(false);
   const emailGatewayUrl = useEmailStore((state) => state.gatewayUrl);
@@ -976,6 +992,7 @@ function Shell({
   const onMarkAllRead = useCallback(() => {
     void updateSidebarState((current) => markAllSessionsRead(current, sessions));
   }, [sessions, updateSidebarState]);
+  const visibleSession = view === "chat" ? activeSession : view === "doc" && visibleDocumentChatId ? sessions.find((session) => session.chatId === visibleDocumentChatId) ?? null : null;
   const messageAttentionCount = useMemo(() => {
     const attentionKeys = new Set(unreadSessionKeys);
     for (const session of sessions) {
@@ -987,12 +1004,11 @@ function Shell({
   useEffect(() => {
     if (
       sidebarStateLoading
-      || !activeSession?.previewAt
+      || !visibleSession?.previewAt
       || activeBrowserTab.type !== "mona"
-      || view !== "chat"
       || !isSessionUnread(
-        activeSession,
-        sidebarState.last_read_at_by_key[activeSession.key],
+        visibleSession,
+        sidebarState.last_read_at_by_key[visibleSession.key],
       )
     ) {
       return;
@@ -1001,7 +1017,7 @@ function Shell({
     const markIfVisible = () => {
       if (document.visibilityState !== "visible" || !document.hasFocus()) return;
       void updateSidebarState((current) =>
-        markSessionRead(current, activeSession.key, activeSession.previewAt),
+        markSessionRead(current, visibleSession.key, visibleSession.previewAt),
       );
     };
 
@@ -1014,7 +1030,7 @@ function Shell({
     };
   }, [
     activeBrowserTab.type,
-    activeSession,
+    visibleSession,
     sidebarState.last_read_at_by_key,
     sidebarStateLoading,
     updateSidebarState,
@@ -1384,7 +1400,8 @@ function Shell({
 
   const onSelectChat = useCallback(
     (key: string) => {
-      const selectedChatId = sessions.find((session) => session.key === key)?.chatId;
+      const selectedSession = sessionsWithDocumentKinds.find((session) => session.key === key);
+      const selectedChatId = selectedSession?.chatId ?? (key.startsWith("websocket:") ? key.slice("websocket:".length) : undefined);
       if (selectedChatId) {
         setCompletedChatIds((current) => {
           if (!current.has(selectedChatId)) return current;
@@ -1397,11 +1414,17 @@ function Shell({
       setPendingDirectAgentId(null);
       setPendingDirectAgentName(null);
       setActiveKey(key);
-      setView("chat");
+      if (selectedChatId && (selectedSession?.agentKind === "video" || documentVideoChatIds.includes(selectedChatId))) {
+        setVideoConversationRequest({ chatId: selectedChatId, requestId: ++videoConversationRequestId.current });
+        setView("doc");
+      } else {
+        setVideoConversationRequest(null);
+        setView("chat");
+      }
       switchToMonaTab();
       setMobileSidebarOpen(false);
     },
-    [sessions, switchToMonaTab],
+    [documentVideoChatIds, sessionsWithDocumentKinds, switchToMonaTab],
   );
 
   const onOpenProfileArtifact = useCallback(
@@ -1653,10 +1676,7 @@ function Shell({
         const payload = event.payload as { chatId?: string } | undefined;
         const chatId = payload?.chatId;
         if (!chatId) return;
-        setActiveKey(`websocket:${chatId}`);
-        setView("chat");
-        switchToMonaTab();
-        setMobileSidebarOpen(false);
+        onSelectChat(`websocket:${chatId}`);
         void refresh();
       });
       const un4 = await listen<string>("md-file-open", (event) => {
@@ -1724,7 +1744,7 @@ function Shell({
       cancelled = true;
       unlisteners.forEach((fn) => fn());
     };
-  }, [onOpenNote, onOpenSSHAndNew, refresh, addCanvasReaderTab, addMdReaderTab, onOpenEmail, onOpenSchedule, onOpenStock]);
+  }, [onOpenNote, onOpenSSHAndNew, onSelectChat, refresh, addCanvasReaderTab, addMdReaderTab, onOpenEmail, onOpenSchedule, onOpenStock, switchToMonaTab]);
 
   // 监听浏览器 WebView 内的 Ctrl+J/Ctrl+H 快捷键，打开下载/历史记录页面
   useEffect(() => {
@@ -1815,15 +1835,17 @@ function Shell({
   }, []);
 
   const onBackToChat = useCallback(() => {
+    setVideoConversationRequest(null);
     setView("chat");
     switchToMonaTab();
     setMobileSidebarOpen(false);
     setActiveKey((current) => {
       if (!current) return null;
-      if (sessions.some((session) => session.key === current)) return current;
-      return sessions[0]?.key ?? null;
+      const session = sessionsWithDocumentKinds.find((item) => item.key === current);
+      if (session) return session.agentKind === "video" ? null : current;
+      return sessionsWithDocumentKinds.find((item) => item.agentKind !== "video")?.key ?? null;
     });
-  }, [sessions]);
+  }, [sessionsWithDocumentKinds, switchToMonaTab]);
 
   const onRestart = useCallback(() => {
     if (!client) return;
@@ -1990,7 +2012,7 @@ function Shell({
   }, [activeSession, headerTitle, i18n.resolvedLanguage, t, view]);
 
   const sessionListProps = {
-    sessions,
+    sessions: sessionsWithDocumentKinds,
     activeKey,
     loading,
     error: sessionError,
@@ -2338,7 +2360,12 @@ function Shell({
               {client ? (
                 <div className={cn("absolute inset-0 flex flex-col bg-background", (view !== "doc" || isBrowserTabActive) && "invisible pointer-events-none")}>
                   <Suspense fallback={<ModuleLoading title="正在打开文档" />}>
-                    <DocMakerView />
+                    <DocMakerView visible={view === "doc" && !isBrowserTabActive}
+                      videoConversationRequest={videoConversationRequest}
+                      onVideoConversationHandled={handleVideoConversationHandled}
+                      onVisibleConversationChange={setVisibleDocumentChatId}
+                      onVideoChatsChange={setDocumentVideoChatIds}
+                      onShowChatHistory={showChatHistory} />
                   </Suspense>
                 </div>
               ) : null}

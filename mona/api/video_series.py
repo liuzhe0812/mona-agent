@@ -2,16 +2,22 @@
 
 from __future__ import annotations
 
+import asyncio
 import base64
+import copy
+import hashlib
 import json
+import math
 import os
 import re
+import shutil
 import tempfile
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from typing import Any
 
 from aiohttp import web
 from loguru import logger
+from PIL import Image, UnidentifiedImageError
 
 from mona.config.paths import get_workspace_path
 from mona.video_scene_compiler import (
@@ -22,6 +28,7 @@ from mona.video_scene_compiler import (
 )
 from mona.video_style import (
     VideoStyleError,
+    _atomic_write_json,
     create_series,
     create_style_draft_from_version,
     delete_background_asset,
@@ -43,6 +50,50 @@ from mona.video_style import (
 from mona.video_timeline import VideoTimelineError, build_motion_plan, build_subtitle_track
 
 _ASSET_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$")
+_DASHI_ASSET_ROOT = (
+    Path(__file__).resolve().parents[1]
+    / "skills"
+    / "mona-video"
+    / "assets"
+    / "dashi-animationstyle"
+)
+_DASHI_TEMPLATE_PREVIEWS: dict[str, dict[str, tuple[str, str]]] = {
+    "dashi-notebook": {
+        "poster": ("styles/手绘笔记/静帧/手绘笔记_12.85s.jpg", "JPEG"),
+        "motion": ("docs/7_手绘笔记.gif", "GIF"),
+    },
+    "dashi-flow": {
+        "poster": ("styles/扁平流程图/静帧/扁平流程图_12.40s.jpg", "JPEG"),
+        "motion": ("docs/6_扁平流程图.gif", "GIF"),
+    },
+    "dashi-cartoon": {
+        "poster": ("styles/立体卡通/静帧/立体卡通_13.68s.jpg", "JPEG"),
+        "motion": ("docs/1_立体卡通.gif", "GIF"),
+    },
+    "dashi-collage": {
+        "poster": ("styles/超现实拼贴/静帧/超现实拼贴_12.55s.jpg", "JPEG"),
+        "motion": ("docs/3_超现实拼贴.gif", "GIF"),
+    },
+    "dashi-paper": {
+        "poster": ("styles/复古剪纸/静帧/复古剪纸_13.70s.jpg", "JPEG"),
+        "motion": ("docs/4_复古剪纸.gif", "GIF"),
+    },
+    "dashi-editorial": {
+        "poster": ("styles/复古报刊/静帧/复古报刊_13.68s.jpg", "JPEG"),
+        "motion": ("docs/5_复古报刊.gif", "GIF"),
+    },
+    "dashi-tech": {
+        "poster": ("styles/黑底科技/静帧/黑底科技_13.75s.jpg", "JPEG"),
+        "motion": ("docs/2_黑底科技.gif", "GIF"),
+    },
+}
+_PREVIEW_MIME_TYPES = {"JPEG": (".jpg", "image/jpeg"), "GIF": (".gif", "image/gif")}
+_STYLE_REFERENCE_IMAGE_TYPES = {
+    "PNG": "image/png",
+    "JPEG": "image/jpeg",
+    "WEBP": "image/webp",
+}
+_STYLE_REFERENCE_MAX_BYTES = 20 * 1024 * 1024
 
 
 def _root() -> Path:
@@ -65,7 +116,76 @@ async def _json_body(request: web.Request) -> dict[str, Any]:
 
 async def handle_video_style_templates(request: web.Request) -> web.Response:
     del request
-    return web.json_response({"templates": list_builtin_templates()})
+    templates = []
+    for template in list_builtin_templates():
+        item = dict(template)
+        template_id = str(item.get("id") or "")
+        if template_id in _DASHI_TEMPLATE_PREVIEWS:
+            item["preview"] = {
+                kind: f"/api/video/style/templates/{template_id}/preview?kind={kind}"
+                for kind in ("poster", "motion")
+            }
+        templates.append(item)
+    return web.json_response({"templates": templates})
+
+
+async def handle_video_style_template_preview(request: web.Request) -> web.StreamResponse:
+    template_id = request.match_info.get("template_id", "")
+    kind = request.query.get("kind", "")
+    if kind not in {"poster", "motion"}:
+        return web.json_response(
+            {"error": "STYLE_PREVIEW_KIND_INVALID", "message": "预览类型无效"},
+            status=400,
+        )
+    preview = _DASHI_TEMPLATE_PREVIEWS.get(template_id)
+    if preview is None:
+        return web.json_response(
+            {"error": "STYLE_PREVIEW_NOT_FOUND", "message": "风格预览不存在"},
+            status=404,
+        )
+
+    relative_path, image_format = preview[kind]
+    extension_and_mime = _PREVIEW_MIME_TYPES.get(image_format)
+    if extension_and_mime is None:
+        return web.json_response(
+            {"error": "STYLE_PREVIEW_INVALID", "message": "内置预览资源无效"},
+            status=500,
+        )
+    expected_extension, mime_type = extension_and_mime
+    asset_root = _DASHI_ASSET_ROOT.resolve()
+    path = (asset_root / relative_path).resolve()
+    if not path.is_relative_to(asset_root):
+        return web.json_response(
+            {"error": "STYLE_PREVIEW_NOT_FOUND", "message": "风格预览不存在"},
+            status=404,
+        )
+    if not path.is_file():
+        return web.json_response(
+            {"error": "STYLE_PREVIEW_NOT_FOUND", "message": "风格预览不存在"},
+            status=404,
+        )
+    if path.suffix.lower() != expected_extension:
+        return web.json_response(
+            {"error": "STYLE_PREVIEW_INVALID", "message": "内置预览资源无效"},
+            status=500,
+        )
+    try:
+        with Image.open(path) as image:
+            if image.format != image_format:
+                raise UnidentifiedImageError("preview format mismatch")
+            image.verify()
+    except (OSError, UnidentifiedImageError):
+        return web.json_response(
+            {"error": "STYLE_PREVIEW_INVALID", "message": "内置预览资源无效"},
+            status=500,
+        )
+
+    response = web.FileResponse(
+        path,
+        headers={"X-Content-Type-Options": "nosniff", "Cache-Control": "public, max-age=3600"},
+    )
+    response.content_type = mime_type
+    return response
 
 
 def _series_summary(series: dict[str, Any]) -> dict[str, Any]:
@@ -90,6 +210,17 @@ def _series_summary(series: dict[str, Any]) -> dict[str, Any]:
                     if ((style.get("aspectVariants") or {}).get(aspect) or {}).get("enabled")
                 ],
             }
+            authoring = style.get("authoring")
+            if (
+                isinstance(authoring, dict)
+                and authoring.get("samplePath") == "authoring/sample.json"
+                and authoring.get("poster") == "authoring/previews/poster.png"
+                and authoring.get("motion") == "authoring/previews/motion.gif"
+            ):
+                result["styleSummary"]["preview"] = {
+                    kind: f"/api/video/series/{series['id']}/styles/{version}/preview?kind={kind}"
+                    for kind in ("poster", "motion")
+                }
         except VideoStyleError:
             pass
     return result
@@ -321,6 +452,70 @@ async def handle_video_style_draft_get(request: web.Request) -> web.Response:
         return _domain_error(exc)
 
 
+async def handle_video_style_reference(request: web.Request) -> web.StreamResponse:
+    try:
+        raw_index = request.query.get("index")
+        try:
+            index = int(raw_index) if raw_index is not None else -1
+        except ValueError as exc:
+            raise VideoStyleError("参考图编号无效", code="STYLE_REFERENCE_INDEX_INVALID") from exc
+        if index < 0:
+            raise VideoStyleError("参考图编号无效", code="STYLE_REFERENCE_INDEX_INVALID")
+
+        root = _root().resolve()
+        draft = read_style_draft(root, request.match_info["series_id"])
+        authoring = draft.get("authoring")
+        paths = authoring.get("referencePaths") if isinstance(authoring, dict) else None
+        if not isinstance(paths, list) or index >= len(paths):
+            raise VideoStyleError("参考图不存在", code="STYLE_REFERENCE_NOT_FOUND", status_code=404)
+        raw_path = paths[index]
+        if not isinstance(raw_path, str) or not raw_path.strip():
+            raise VideoStyleError("参考图不存在", code="STYLE_REFERENCE_NOT_FOUND", status_code=404)
+
+        uploads_root = (root / "uploads").resolve()
+        if not uploads_root.is_relative_to(root):
+            raise VideoStyleError("参考图路径无效", code="STYLE_REFERENCE_PATH_INVALID", status_code=404)
+        reference = Path(raw_path.strip()).expanduser()
+        if ".." in reference.parts:
+            raise VideoStyleError("参考图路径无效", code="STYLE_REFERENCE_PATH_INVALID", status_code=404)
+        if not reference.is_absolute():
+            reference = root / reference
+        try:
+            path = reference.resolve(strict=True)
+        except (OSError, RuntimeError, ValueError) as exc:
+            raise VideoStyleError(
+                "参考图不存在", code="STYLE_REFERENCE_NOT_FOUND", status_code=404
+            ) from exc
+        if path == uploads_root or not path.is_relative_to(uploads_root):
+            raise VideoStyleError("参考图路径无效", code="STYLE_REFERENCE_PATH_INVALID", status_code=404)
+        if not path.is_file():
+            raise VideoStyleError("参考图不存在", code="STYLE_REFERENCE_NOT_FOUND", status_code=404)
+        if path.stat().st_size > _STYLE_REFERENCE_MAX_BYTES:
+            raise VideoStyleError("参考图过大", code="STYLE_REFERENCE_TOO_LARGE", status_code=413)
+
+        try:
+            with Image.open(path) as image:
+                image_format = image.format
+                if image_format not in _STYLE_REFERENCE_IMAGE_TYPES:
+                    raise UnidentifiedImageError("unsupported reference image format")
+                if Image.MAX_IMAGE_PIXELS and image.width * image.height > Image.MAX_IMAGE_PIXELS:
+                    raise UnidentifiedImageError("reference image dimensions are too large")
+                image.verify()
+        except (OSError, ValueError, SyntaxError, Image.DecompressionBombError) as exc:
+            raise VideoStyleError(
+                "参考图无法读取", code="STYLE_REFERENCE_INVALID", status_code=422
+            ) from exc
+
+        response = web.FileResponse(
+            path,
+            headers={"X-Content-Type-Options": "nosniff", "Cache-Control": "private, no-store"},
+        )
+        response.content_type = _STYLE_REFERENCE_IMAGE_TYPES[image_format]
+        return response
+    except VideoStyleError as exc:
+        return _domain_error(exc)
+
+
 async def handle_video_style_draft_put(request: web.Request) -> web.Response:
     try:
         body = await _json_body(request)
@@ -340,6 +535,953 @@ async def handle_video_style_draft_put(request: web.Request) -> web.Response:
         )
     except VideoStyleError as exc:
         return _domain_error(exc)
+
+
+async def handle_video_style_sample_bind(request: web.Request) -> web.Response:
+    try:
+        from mona.video_style_authoring import bind_style_sample
+
+        body = await _json_body(request)
+        revision = body.get("revision")
+        if isinstance(revision, bool) or not isinstance(revision, int):
+            raise VideoStyleError("revision 必须是整数", code="INVALID_STYLE_REVISION")
+        raw_project_name = body.get("projectName")
+        if not isinstance(raw_project_name, str):
+            raise VideoStyleError("projectName 不能为空", code="STYLE_SAMPLE_PROJECT_REQUIRED")
+        project_name = raw_project_name.strip()
+        if not project_name:
+            raise VideoStyleError("projectName 不能为空", code="STYLE_SAMPLE_PROJECT_REQUIRED")
+        description = body.get("description")
+        if description is not None and not isinstance(description, str):
+            raise VideoStyleError("description 必须是文本", code="STYLE_SAMPLE_DESCRIPTION_INVALID")
+        refresh = body.get("refresh", False)
+        if not isinstance(refresh, bool):
+            raise VideoStyleError("refresh 必须是布尔值", code="STYLE_SAMPLE_REFRESH_INVALID")
+        seed_version = body.get("seedVersion")
+        if seed_version is not None and (
+            isinstance(seed_version, bool) or not isinstance(seed_version, int) or seed_version < 1
+        ):
+            raise VideoStyleError("seedVersion 必须是正整数", code="STYLE_SAMPLE_SEED_VERSION_INVALID")
+        root = _root()
+        series_id = request.match_info["series_id"]
+        seed = _load_style_sample_seed(root, series_id, seed_version) if seed_version is not None else None
+        if seed_version is not None:
+            project = _sample_project_path(root, project_name)
+            meta = _read_project_meta_for_sample(project)
+            binding = meta.get("styleAuthoring") or {}
+            if binding.get("seriesId") not in (None, series_id):
+                raise VideoStyleError(
+                    "这个样片已用于其他风格",
+                    code="STYLE_SAMPLE_BINDING_CONFLICT",
+                    status_code=409,
+                )
+            _ensure_sample_project_idle(project)
+        draft = bind_style_sample(
+            root,
+            series_id,
+            project_name,
+            expected_revision=revision,
+            description=description or "",
+        )
+        refreshed = (
+            await _refresh_bound_style_sample(root, series_id, project_name, draft, seed=seed)
+            if refresh or seed is not None
+            else False
+        )
+        return web.json_response({"ok": True, "draft": draft, "refreshed": refreshed, "seeded": seed is not None})
+    except VideoStyleError as exc:
+        return _domain_error(exc)
+
+
+def _read_project_meta_for_sample(project: Path) -> dict[str, Any]:
+    try:
+        value = json.loads((project / "meta.json").read_text(encoding="utf-8"))
+    except (OSError, UnicodeError, json.JSONDecodeError) as exc:
+        raise VideoStyleError("样片项目无法读取", code="STYLE_SAMPLE_NOT_FOUND", status_code=404) from exc
+    if not isinstance(value, dict):
+        raise VideoStyleError("样片项目无法读取", code="STYLE_SAMPLE_NOT_FOUND", status_code=404)
+    return value
+
+
+def _ensure_sample_project_idle(project: Path) -> None:
+    status_path = project / ".render_status.json"
+    if not status_path.is_file():
+        return
+    try:
+        status = json.loads(status_path.read_text(encoding="utf-8"))
+    except (OSError, UnicodeError, json.JSONDecodeError) as exc:
+        raise VideoStyleError("样片项目状态无法读取", code="STYLE_SAMPLE_PROJECT_BUSY", status_code=409) from exc
+    if isinstance(status, dict) and status.get("stage") in {"rendering", "queued", "cancelling"}:
+        raise VideoStyleError("样片正在处理，完成后可恢复风格版本", code="STYLE_SAMPLE_PROJECT_BUSY", status_code=409)
+
+
+def _load_style_sample_seed(root: Path, series_id: str, version: int) -> dict[str, Any] | None:
+    from mona.video_style_authoring import resolve_style_sample_media
+
+    style = read_style_version(root, series_id, version)
+    authoring = style.get("authoring")
+    if not isinstance(authoring, dict) or not authoring.get("samplePath"):
+        return None
+    if authoring.get("samplePath") != "authoring/sample.json":
+        raise VideoStyleError("风格样片快照无效", code="STYLE_SAMPLE_SNAPSHOT_INVALID")
+    try:
+        sample_path = resolve_style_sample_media(root, series_id, version, "authoring/sample.json")
+        sample = json.loads(sample_path.read_text(encoding="utf-8"))
+    except (OSError, UnicodeError, json.JSONDecodeError, VideoStyleError) as exc:
+        raise VideoStyleError("风格样片快照无法读取", code="STYLE_SAMPLE_SNAPSHOT_INVALID") from exc
+    if not isinstance(sample, dict) or sample.get("schemaVersion") != 1:
+        raise VideoStyleError("风格样片快照无效", code="STYLE_SAMPLE_SNAPSHOT_INVALID")
+    resolution = re.fullmatch(r"\s*(\d+)\s*x\s*(\d+)\s*", str(sample.get("resolution") or ""))
+    if resolution is None or int(resolution.group(1)) < 1 or int(resolution.group(2)) < 1:
+        raise VideoStyleError("风格样片画幅无效", code="STYLE_SAMPLE_SNAPSHOT_INVALID")
+    scenes = sample.get("scenes")
+    files = sample.get("files")
+    assets = sample.get("assets") or []
+    if (
+        not isinstance(scenes, list)
+        or not scenes
+        or not isinstance(files, dict)
+        or not isinstance(sample.get("narrationEnabled", False), bool)
+        or sample.get("subtitleMode", "burned") not in {"burned", "external", "off"}
+        or not isinstance(assets, list)
+    ):
+        raise VideoStyleError("风格样片快照不完整", code="STYLE_SAMPLE_SNAPSHOT_INVALID")
+    asset_paths: set[str] = set()
+    for asset in assets:
+        relative = PurePosixPath(str(asset.get("path") or "")) if isinstance(asset, dict) else PurePosixPath("")
+        if (
+            not isinstance(asset, dict)
+            or not _ASSET_ID_RE.fullmatch(str(asset.get("id") or ""))
+            or not relative.is_relative_to("assets")
+            or relative.as_posix() == "assets"
+            or any(part in {"", ".", ".."} for part in relative.parts)
+        ):
+            raise VideoStyleError("风格样片素材清单无效", code="STYLE_SAMPLE_SNAPSHOT_INVALID")
+        asset_paths.add(relative.as_posix())
+    indexes: set[int] = set()
+    for scene in scenes:
+        if not isinstance(scene, dict) or not scene.get("authored"):
+            raise VideoStyleError("风格样片片段无效", code="STYLE_SAMPLE_SNAPSHOT_INVALID")
+        try:
+            index = int(scene["index"])
+        except (KeyError, TypeError, ValueError) as exc:
+            raise VideoStyleError("风格样片片段无效", code="STYLE_SAMPLE_SNAPSHOT_INVALID") from exc
+        if index < 1 or index in indexes:
+            raise VideoStyleError("风格样片片段无效", code="STYLE_SAMPLE_SNAPSHOT_INVALID")
+        duration = scene.get("duration")
+        if isinstance(duration, bool) or not isinstance(duration, (int, float)) or not math.isfinite(duration) or duration <= 0:
+            raise VideoStyleError("风格样片片段时长无效", code="STYLE_SAMPLE_SNAPSHOT_INVALID")
+        indexes.add(index)
+
+    resolved_files: dict[str, Path] = {}
+    frame_counts = {index: 0 for index in indexes}
+    for raw_relative, expected_hash in files.items():
+        if not isinstance(raw_relative, str) or not isinstance(expected_hash, str) or not re.fullmatch(r"[0-9a-f]{64}", expected_hash):
+            raise VideoStyleError("风格样片文件清单无效", code="STYLE_SAMPLE_SNAPSHOT_INVALID")
+        relative = PurePosixPath(raw_relative)
+        if (
+            not raw_relative
+            or "\\" in raw_relative
+            or ":" in raw_relative
+            or relative.is_absolute()
+            or any(part in {"", ".", ".."} for part in relative.parts)
+            or relative.as_posix() != raw_relative
+        ):
+            raise VideoStyleError("风格样片文件路径无效", code="STYLE_SAMPLE_SNAPSHOT_INVALID")
+        allowed = False
+        match = re.fullmatch(r"scene_sources/scene_(\d+)\.(?:tsx|html)", raw_relative)
+        if match:
+            index = int(match.group(1))
+            allowed = index in indexes and match.group(1) == f"{index:02d}"
+        match = re.fullmatch(r"scenes/scene_(\d+)\.html", raw_relative)
+        if match:
+            index = int(match.group(1))
+            allowed = index in indexes and match.group(1) == f"{index:02d}"
+        match = re.fullmatch(r"audio/scene_(\d+)\.(?:mp3|timing\.json)", raw_relative)
+        if match:
+            index = int(match.group(1))
+            allowed = index in indexes and match.group(1) == f"{index:02d}"
+        match = re.fullmatch(r"renders/previews/scene_(\d+)/sample_\d+\.png", raw_relative)
+        if match:
+            index = int(match.group(1))
+            allowed = index in indexes and match.group(1) == f"{index:02d}"
+            if allowed:
+                frame_counts[index] += 1
+        allowed = allowed or raw_relative == "style/theme.css"
+        allowed = allowed or raw_relative.startswith("style/assets/") or raw_relative.startswith("style/draft/assets/")
+        allowed = allowed or raw_relative in asset_paths
+        if not allowed:
+            raise VideoStyleError("风格样片文件路径无效", code="STYLE_SAMPLE_SNAPSHOT_INVALID")
+        try:
+            source = resolve_style_sample_media(root, series_id, version, f"authoring/{raw_relative}")
+            if hashlib.sha256(source.read_bytes()).hexdigest() != expected_hash:
+                raise VideoStyleError("风格样片文件校验失败", code="STYLE_SAMPLE_SNAPSHOT_INVALID")
+        except (OSError, VideoStyleError) as exc:
+            raise VideoStyleError("风格样片文件校验失败", code="STYLE_SAMPLE_SNAPSHOT_INVALID") from exc
+        resolved_files[raw_relative] = source
+    for index in indexes:
+        scene_data = next(item for item in scenes if int(item["index"]) == index)
+        source_suffix = ".tsx" if scene_data.get("authoredRuntime") == "remotion" else ".html"
+        if (
+            f"scene_sources/scene_{index:02d}{source_suffix}" not in resolved_files
+            or f"scenes/scene_{index:02d}.html" not in resolved_files
+            or frame_counts[index] < 2
+        ):
+            raise VideoStyleError("风格样片文件不完整", code="STYLE_SAMPLE_SNAPSHOT_INVALID")
+        if scene_data.get("sourceHash") != files.get(f"scene_sources/scene_{index:02d}{source_suffix}"):
+            raise VideoStyleError("风格样片源码校验失败", code="STYLE_SAMPLE_SNAPSHOT_INVALID")
+
+    try:
+        manifest_path = resolve_style_sample_media(root, series_id, version, "authoring/assets/manifest.json")
+        asset_manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    except (OSError, UnicodeError, json.JSONDecodeError, VideoStyleError) as exc:
+        raise VideoStyleError("风格样片素材清单无效", code="STYLE_SAMPLE_SNAPSHOT_INVALID") from exc
+    if (
+        not isinstance(assets, list)
+        or not isinstance(asset_manifest, dict)
+        or asset_manifest.get("assets") != assets
+    ):
+        raise VideoStyleError("风格样片素材清单无效", code="STYLE_SAMPLE_SNAPSHOT_INVALID")
+    for asset in assets:
+        if (
+            str(asset.get("path") or "") not in resolved_files
+            or asset.get("sha256") not in (None, files.get(str(asset.get("path") or "")))
+        ):
+            raise VideoStyleError("风格样片素材清单无效", code="STYLE_SAMPLE_SNAPSHOT_INVALID")
+
+    support_files = {}
+    for relative in (
+        "authoring/sample.json", "authoring/rules.md", "authoring/previews/poster.png",
+        "authoring/previews/motion.gif", "authoring/assets/manifest.json",
+    ):
+        try:
+            support_files[relative.removeprefix("authoring/")] = resolve_style_sample_media(
+                root, series_id, version, relative
+            )
+        except VideoStyleError as exc:
+            raise VideoStyleError("风格样片快照不完整", code="STYLE_SAMPLE_SNAPSHOT_INVALID") from exc
+    return {
+        "version": version,
+        "sample": sample,
+        "files": resolved_files,
+        "hashes": files,
+        "supportFiles": support_files,
+    }
+
+
+def _refresh_scene_source_hash(project: Path, scene: dict[str, Any]) -> str:
+    from mona.video_authoring import authored_scene_source_path
+
+    source = authored_scene_source_path(project, scene)
+    digest = hashlib.sha256(source.read_bytes()).hexdigest()
+    if digest != scene.get("sourceHash"):
+        raise VideoStyleError(
+            "样片源码已变化，已保留原样片；请重新检查动画后重试",
+            code="STYLE_SAMPLE_REVISION_CONFLICT",
+            status_code=409,
+        )
+    return digest
+
+
+def _refresh_input_signature(meta: dict[str, Any]) -> str:
+    return json.dumps(
+        {
+            key: meta.get(key)
+            for key in (
+                "styleAuthoring", "resolution", "language", "narrationEnabled",
+                "ttsProvider", "ttsVoice", "ttsRate", "subtitleMode", "audioTracks", "scenes",
+            )
+        },
+        ensure_ascii=False,
+        sort_keys=True,
+    )
+
+
+def _copy_refresh_inputs(
+    source: Path, target: Path, scenes: list[dict[str, Any]], meta: dict[str, Any]
+) -> None:
+    target.mkdir(parents=True, exist_ok=False)
+    _write_project_meta(target / "meta.json", meta)
+
+    def copy_tree(source_dir: Path, target_dir: Path) -> None:
+        root = source_dir.resolve()
+        if not source_dir.is_dir():
+            return
+        for current, directories, files in os.walk(source_dir, followlinks=False):
+            current_path = Path(current)
+            relative = current_path.relative_to(source_dir)
+            destination = target_dir / relative
+            destination.mkdir(parents=True, exist_ok=True)
+            for directory in tuple(directories):
+                path = current_path / directory
+                if path.is_symlink() or not path.resolve().is_relative_to(root):
+                    raise VideoStyleError("样片素材路径无效", code="STYLE_SAMPLE_PATH_INVALID")
+            for filename in files:
+                path = current_path / filename
+                if path.is_symlink() or not path.resolve().is_relative_to(root) or not path.is_file():
+                    raise VideoStyleError("样片素材路径无效", code="STYLE_SAMPLE_PATH_INVALID")
+                target_file = destination / filename
+                if source_dir.name == "scenes":
+                    shutil.copy2(path, target_file)
+                    continue
+                try:
+                    os.link(path, target_file)
+                except OSError:
+                    shutil.copy2(path, target_file)
+
+    for directory in ("assets", "audio", "scene_sources", "scenes", "style"):
+        copy_tree(source / directory, target / directory)
+        (target / directory).mkdir(exist_ok=True)
+    (target / "renders" / "previews").mkdir(parents=True)
+
+
+def _apply_style_sample_seed(project: Path, meta: dict[str, Any], seed: dict[str, Any]) -> None:
+    from mona.video_project import ensure_scene_ids
+    from mona.video_style_authoring import materialize_style_sample_assets
+
+    sample = seed["sample"]
+    for directory, pattern in (
+        (project / "scene_sources", re.compile(r"scene_\d+\.(?:tsx|html)$")),
+        (project / "scenes", re.compile(r"scene_\d+\.html$")),
+        (project / "audio", re.compile(r"scene_\d+\.(?:mp3|timing\.json)$")),
+    ):
+        if directory.is_dir():
+            for path in directory.iterdir():
+                if pattern.fullmatch(path.name) and path.is_file():
+                    path.unlink()
+    previews = project / "renders" / "previews"
+    if previews.is_dir():
+        for path in previews.iterdir():
+            if re.fullmatch(r"scene_\d+", path.name) and path.is_dir():
+                shutil.rmtree(path)
+
+    for relative, source in seed["files"].items():
+        destination = project.joinpath(*PurePosixPath(relative).parts)
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        if destination.is_file():
+            destination.unlink()
+        shutil.copy2(source, destination)
+        if hashlib.sha256(destination.read_bytes()).hexdigest() != seed["hashes"][relative]:
+            raise VideoStyleError("风格样片文件校验失败", code="STYLE_SAMPLE_SNAPSHOT_INVALID")
+
+    sample_root = project / "style" / "authoring"
+    if sample_root.exists():
+        shutil.rmtree(sample_root)
+    for relative, source in seed["supportFiles"].items():
+        destination = sample_root / relative
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(source, destination)
+    for relative, source in seed["files"].items():
+        path = PurePosixPath(relative)
+        if path.parts[0] == "assets":
+            destination = sample_root / path
+            destination.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(source, destination)
+
+    scenes = copy.deepcopy(sample["scenes"])
+    for scene in scenes:
+        index = int(scene["index"])
+        source_suffix = ".tsx" if scene.get("authoredRuntime") == "remotion" else ".html"
+        scene.pop("id", None)
+        scene.pop("motionReview", None)
+        scene.pop("motionReviewSourceHash", None)
+        scene.pop("confirmedAt", None)
+        scene.pop("confirmedMtime", None)
+        scene["sourcePath"] = f"scene_sources/scene_{index:02d}{source_suffix}"
+        source = project / "scene_sources" / f"scene_{index:02d}{source_suffix}"
+        if hashlib.sha256(source.read_bytes()).hexdigest() != scene["sourceHash"]:
+            raise VideoStyleError("风格样片源码校验失败", code="STYLE_SAMPLE_SNAPSHOT_INVALID")
+        scene["htmlStatus"] = "previewing"
+        scene["htmlPath"] = f"scenes/scene_{index:02d}.html"
+        scene.pop("htmlMtime", None)
+
+    meta["scenes"] = scenes
+    meta["resolution"] = sample["resolution"]
+    meta["narrationEnabled"] = bool(sample.get("narrationEnabled"))
+    meta["subtitleMode"] = sample.get("subtitleMode") or "burned"
+    width, height = (int(value) for value in re.fullmatch(r"\s*(\d+)\s*x\s*(\d+)\s*", sample["resolution"]).groups())
+    meta.pop("aspectVariant", None)
+    if width * 9 == height * 16:
+        meta["aspectVariant"] = "16:9"
+    elif width * 16 == height * 9:
+        meta["aspectVariant"] = "9:16"
+    elif width == height:
+        meta["aspectVariant"] = "1:1"
+    meta["outputStale"] = bool(meta.get("outputStale") or (project / "renders" / "output.mp4").is_file())
+    authoring = meta.setdefault("styleAuthoring", {})
+    authoring["seedVersion"] = seed["version"]
+    ensure_scene_ids(meta, project.resolve().as_uri())
+    materialize_style_sample_assets(project)
+
+
+def _replace_refresh_output(source: Path, target: Path, backup: Path) -> tuple[Path, Path, bool]:
+    backup.parent.mkdir(parents=True, exist_ok=True)
+    had_old = target.exists()
+    if had_old:
+        os.replace(target, backup)
+    try:
+        target.parent.mkdir(parents=True, exist_ok=True)
+        os.replace(source, target)
+    except Exception:
+        if had_old and backup.exists():
+            os.replace(backup, target)
+        raise
+    return target, backup, had_old
+
+
+def _restore_refresh_outputs(replacements: list[tuple[Path, Path, bool]]) -> None:
+    for target, backup, had_old in reversed(replacements):
+        if target.is_dir():
+            shutil.rmtree(target, ignore_errors=True)
+        else:
+            target.unlink(missing_ok=True)
+        if had_old and backup.exists():
+            os.replace(backup, target)
+
+
+async def _refresh_bound_style_sample(
+    root: Path,
+    series_id: str,
+    project_name: str,
+    draft: dict[str, Any],
+    *,
+    seed: dict[str, Any] | None = None,
+) -> bool:
+    from mona.api import server
+    from mona.api.video_director import _capture_frames
+    from mona.video_authoring import refresh_authored_scene
+    from mona.video_style import read_style_draft
+
+    project = _sample_project_path(root, project_name)
+    live_meta = server._load_video_meta(project)
+    scenes = live_meta.get("scenes") or []
+    seeded = seed is not None
+    if not seeded and not scenes:
+        return False
+    if not seeded and (not isinstance(scenes, list) or any(
+        not isinstance(scene, dict)
+        or not scene.get("authored")
+        or not server._video_scene_ready(project, scene)
+        for scene in scenes
+    )):
+        raise VideoStyleError(
+            "样片尚未完整生成，已保留原样片；请完成制作后重试",
+            code="STYLE_SAMPLE_NOT_READY",
+            status_code=409,
+        )
+
+    expected_revision = int(draft["revision"])
+    expected_signature = _refresh_input_signature(live_meta)
+    source_hashes = {} if seeded else {
+        int(scene["index"]): _refresh_scene_source_hash(project, scene)
+        for scene in scenes
+    }
+
+    projects_dir = (root / "video_projects").resolve()
+    try:
+        with tempfile.TemporaryDirectory(prefix="_style_sample_refresh_", dir=projects_dir) as temporary:
+            stage_project = Path(temporary) / project.name
+            _copy_refresh_inputs(project, stage_project, scenes, live_meta)
+            staged_meta = server._load_video_meta(stage_project)
+            if seeded:
+                _apply_style_sample_seed(stage_project, staged_meta, seed)
+            staged_scenes = staged_meta.get("scenes") or []
+            if not staged_scenes or any(
+                not isinstance(scene, dict)
+                or not scene.get("authored")
+                or not server._video_scene_ready(stage_project, scene)
+                for scene in staged_scenes
+            ):
+                raise VideoStyleError(
+                    "恢复的风格版本缺少可预览的动画样片",
+                    code="STYLE_SAMPLE_SNAPSHOT_INVALID" if seeded else "STYLE_SAMPLE_NOT_READY",
+                    status_code=409,
+                )
+            if seeded:
+                source_hashes = {
+                    int(scene["index"]): _refresh_scene_source_hash(stage_project, scene)
+                    for scene in staged_scenes
+                }
+            for scene in staged_scenes:
+                if not refresh_authored_scene(stage_project, scene, staged_meta):
+                    raise VideoStyleError(
+                        "样片动画无法更新，已保留原样片",
+                        code="STYLE_SAMPLE_REFRESH_FAILED",
+                        status_code=503,
+                    )
+                captured = await _capture_frames(stage_project, scene, staged_meta)
+                if not captured.get("motionReviewUpdated") or not isinstance(captured.get("motionReview"), dict):
+                    raise VideoStyleError(
+                        "样片画面检查未完成，已保留原样片",
+                        code="STYLE_SAMPLE_REFRESH_FAILED",
+                        status_code=503,
+                    )
+                index = int(scene["index"])
+                if _refresh_scene_source_hash(stage_project, scene) != source_hashes[index]:
+                    raise VideoStyleError(
+                        "样片源码已变化，已保留原样片；请重新检查动画后重试",
+                        code="STYLE_SAMPLE_REVISION_CONFLICT",
+                        status_code=409,
+                    )
+                scene_path = stage_project / "scenes" / f"scene_{index:02d}.html"
+                scene["htmlStatus"] = "previewing"
+                scene["htmlPath"] = scene_path.relative_to(stage_project).as_posix()
+                scene["htmlMtime"] = scene_path.stat().st_mtime
+                scene["motionReview"] = captured["motionReview"]
+                scene["motionReviewSourceHash"] = scene["sourceHash"]
+
+            current_draft = read_style_draft(root, series_id)
+            current_meta = server._load_video_meta(project)
+            if int(current_draft.get("revision", 0)) != expected_revision or _refresh_input_signature(current_meta) != expected_signature:
+                raise VideoStyleError(
+                    "风格或样片已变化，已保留原样片；请重新读取后重试",
+                    code="STYLE_SAMPLE_REVISION_CONFLICT",
+                    status_code=409,
+                )
+
+            task = asyncio.current_task()
+            if task is not None and task.cancelling():
+                raise asyncio.CancelledError
+
+            backup_root = Path(temporary) / "previous"
+            replacements: list[tuple[Path, Path, bool]] = []
+            bound_meta = copy.deepcopy(live_meta)
+            try:
+                if seeded:
+                    for directory in ("assets", "audio", "scene_sources", "scenes", "style"):
+                        replacements.append(
+                            _replace_refresh_output(
+                                stage_project / directory,
+                                project / directory,
+                                backup_root / directory,
+                            )
+                        )
+                    replacements.append(
+                        _replace_refresh_output(
+                            stage_project / "renders" / "previews",
+                            project / "renders" / "previews",
+                            backup_root / "renders" / "previews",
+                        )
+                    )
+                else:
+                    for scene in staged_scenes:
+                        index = int(scene["index"])
+                        staged_html = stage_project / "scenes" / f"scene_{index:02d}.html"
+                        live_html = project / "scenes" / f"scene_{index:02d}.html"
+                        replacements.append(
+                            _replace_refresh_output(
+                                staged_html,
+                                live_html,
+                                backup_root / "scenes" / live_html.name,
+                            )
+                        )
+                        staged_frames = stage_project / "renders" / "previews" / f"scene_{index:02d}"
+                        live_frames = project / "renders" / "previews" / f"scene_{index:02d}"
+                        replacements.append(
+                            _replace_refresh_output(
+                                staged_frames,
+                                live_frames,
+                                backup_root / "renders" / "previews" / live_frames.name,
+                            )
+                        )
+                server._save_video_meta(project, staged_meta)
+            except Exception:
+                _restore_refresh_outputs(replacements)
+                _write_project_meta(project / "meta.json", bound_meta)
+                raise
+            return True
+    except VideoStyleError:
+        raise
+    except asyncio.CancelledError:
+        raise
+    except Exception as exc:
+        logger.exception("video style sample refresh failed")
+        raise VideoStyleError(
+            "样片更新检查失败，已保留原样片，请重试",
+            code="STYLE_SAMPLE_REFRESH_FAILED",
+            status_code=503,
+        ) from exc
+
+
+def _sample_project_path(root: Path, project_name: str) -> Path:
+    if not project_name or "/" in project_name or "\\" in project_name or project_name in {".", ".."}:
+        raise VideoStyleError("样片项目名称无效", code="STYLE_SAMPLE_PROJECT_REQUIRED")
+    projects = (root / "video_projects").resolve()
+    project = (projects / project_name).resolve()
+    if not project.is_relative_to(projects) or not (project / "meta.json").is_file():
+        raise VideoStyleError(
+            "样片项目不存在，请重新生成样片",
+            code="STYLE_SAMPLE_NOT_FOUND",
+            status_code=404,
+        )
+    return project
+
+
+def _style_sample_html(
+    root: Path,
+    series_id: str,
+    sample: dict[str, Any],
+    sample_root: Path,
+    *,
+    version: int | None,
+    project_name: str,
+    revision: int,
+    muted: bool,
+) -> dict[str, Any]:
+    from mona.api import server
+    from mona.video_style_authoring import resolve_style_sample_media
+
+    resolution = re.match(r"(\d+)\s*x\s*(\d+)", str(sample.get("resolution") or ""))
+    if resolution is None:
+        raise VideoStyleError("样片画幅无效", code="STYLE_SAMPLE_PREVIEW_INVALID", status_code=409)
+    width, height = int(resolution.group(1)), int(resolution.group(2))
+    scenes = sample.get("scenes")
+    if not isinstance(scenes, list) or not scenes:
+        raise VideoStyleError("样片尚未生成画面", code="STYLE_SAMPLE_NOT_READY", status_code=409)
+
+    entries: list[tuple[int, float, str]] = []
+    scene_audio: dict[int, str] = {}
+    total_duration = 0.0
+    narration_enabled = bool(sample.get("narrationEnabled"))
+    for scene in sorted(scenes, key=lambda item: int(item.get("index") or 0) if isinstance(item, dict) else 0):
+        if not isinstance(scene, dict):
+            raise VideoStyleError("样片片段无效", code="STYLE_SAMPLE_PREVIEW_INVALID", status_code=409)
+        try:
+            index = int(scene.get("index"))
+            duration = float(scene.get("duration") or 5)
+        except (TypeError, ValueError) as exc:
+            raise VideoStyleError("样片片段无效", code="STYLE_SAMPLE_PREVIEW_INVALID", status_code=409) from exc
+        if index < 1 or isinstance(scene.get("duration"), bool) or not math.isfinite(duration) or duration <= 0:
+            raise VideoStyleError("样片片段无效", code="STYLE_SAMPLE_PREVIEW_INVALID", status_code=409)
+
+        relative_html = f"authoring/scenes/scene_{index:02d}.html" if version is not None else f"scenes/scene_{index:02d}.html"
+        if version is not None:
+            html_path = resolve_style_sample_media(root, series_id, version, relative_html)
+        else:
+            html_path = (sample_root / relative_html).resolve()
+            if not html_path.is_relative_to(sample_root.resolve()) or not html_path.is_file():
+                raise VideoStyleError("样片画面不存在，请重新生成样片", code="STYLE_SAMPLE_NOT_READY", status_code=409)
+        scene_html = html_path.read_text(encoding="utf-8")
+        prepared_html = server._prepare_scene_html_for_preview(
+            scene_html,
+            project_name,
+            width,
+            height,
+            project_dir=sample_root,
+        )
+        entries.append((index, duration, prepared_html))
+        total_duration += duration
+
+        narration = str(scene.get("narration") or "").strip()
+        if muted or not narration_enabled or not narration:
+            continue
+        relative_audio = f"authoring/audio/scene_{index:02d}.mp3" if version is not None else f"audio/scene_{index:02d}.mp3"
+        if version is not None:
+            audio_path = resolve_style_sample_media(root, series_id, version, relative_audio)
+        else:
+            audio_path = (sample_root / relative_audio).resolve()
+            if not audio_path.is_relative_to(sample_root.resolve()) or not audio_path.is_file():
+                raise VideoStyleError("样片旁白尚未准备完成", code="STYLE_SAMPLE_AUDIO_NOT_READY", status_code=409)
+        try:
+            audio = audio_path.read_bytes()
+        except OSError as exc:
+            raise VideoStyleError("样片旁白无法读取", code="STYLE_SAMPLE_AUDIO_UNAVAILABLE", status_code=503) from exc
+        if not audio:
+            raise VideoStyleError("样片旁白文件为空", code="STYLE_SAMPLE_AUDIO_UNAVAILABLE", status_code=503)
+        scene_audio[index] = "data:audio/mpeg;base64," + base64.b64encode(audio).decode("ascii")
+
+    html = server._build_video_preview_html(
+        width,
+        height,
+        total_duration,
+        entries,
+        project_name=project_name,
+        scene_audio=scene_audio,
+    )
+    editable_fields = _style_sample_editable_fields(root, series_id, sample, sample_root, version=version)
+    return {
+        "ok": True,
+        "html": html,
+        "duration": total_duration,
+        "revision": revision,
+        "editableFields": editable_fields,
+    }
+
+
+def _style_sample_editable_fields(
+    root: Path,
+    series_id: str,
+    sample: dict[str, Any],
+    sample_root: Path,
+    *,
+    version: int | None,
+) -> list[str]:
+    from mona.video_style_authoring import resolve_style_sample_media
+
+    fields: set[str] = set()
+    for scene in sample.get("scenes") or []:
+        if not isinstance(scene, dict):
+            continue
+        try:
+            index = int(scene.get("index"))
+            if version is None:
+                from mona.video_authoring import authored_scene_source_path
+
+                source = authored_scene_source_path(sample_root, scene)
+            else:
+                suffix = Path(str(scene.get("sourcePath") or "")).suffix.lower()
+                if suffix not in {".tsx", ".html"}:
+                    continue
+                source = resolve_style_sample_media(
+                    root,
+                    series_id,
+                    version,
+                    f"authoring/scene_sources/scene_{index:02d}{suffix}",
+                )
+            code = source.read_text(encoding="utf-8")
+        except (OSError, UnicodeError, TypeError, ValueError, VideoStyleError):
+            continue
+        if "--mona-primary" in code:
+            fields.add("primaryColor")
+        if "--mona-bg" in code:
+            fields.add("backgroundColor")
+        if "--mona-heading-family" in code or "--mona-body-family" in code:
+            fields.add("fontFamily")
+    order = ("primaryColor", "backgroundColor", "fontFamily")
+    return [field for field in order if field in fields]
+
+
+async def handle_video_style_sample_preview(request: web.Request) -> web.Response:
+    try:
+        root = _root()
+        series_id = request.match_info["series_id"]
+        raw_version = request.query.get("version")
+        muted = request.query.get("muted") == "1"
+        if raw_version is not None:
+            try:
+                version = int(raw_version)
+            except (TypeError, ValueError) as exc:
+                raise VideoStyleError("风格版本无效", code="STYLE_VERSION_NOT_FOUND", status_code=404) from exc
+            style = read_style_version(root, series_id, version)
+            authoring = style.get("authoring")
+            if not isinstance(authoring, dict) or authoring.get("samplePath") != "authoring/sample.json":
+                raise VideoStyleError("该风格版本没有动画样片", code="STYLE_SAMPLE_NOT_FOUND", status_code=404)
+            from mona.video_style_authoring import resolve_style_sample_media
+
+            sample_path = resolve_style_sample_media(root, series_id, version, "authoring/sample.json")
+            sample = json.loads(sample_path.read_text(encoding="utf-8"))
+            return web.json_response(
+                _style_sample_html(
+                    root,
+                    series_id,
+                    sample,
+                    sample_path.parent,
+                    version=version,
+                    project_name="",
+                    revision=version,
+                    muted=muted,
+                )
+            )
+
+        draft = read_style_draft(root, series_id)
+        authoring = draft.get("authoring") or {}
+        project_name = str(authoring.get("projectName") or "")
+        if not project_name:
+            raise VideoStyleError("尚未绑定动画样片", code="STYLE_SAMPLE_NOT_FOUND", status_code=404)
+        project = _sample_project_path(root, project_name)
+        meta = json.loads((project / "meta.json").read_text(encoding="utf-8"))
+        binding = meta.get("styleAuthoring") or {}
+        if binding.get("seriesId") != series_id or binding.get("styleInputHash") is None:
+            raise VideoStyleError("样片绑定已失效，请重新生成", code="STYLE_SAMPLE_BINDING_INVALID", status_code=409)
+        sample = {
+            "resolution": meta.get("resolution"),
+            "scenes": meta.get("scenes"),
+            "narrationEnabled": meta.get("narrationEnabled", False),
+        }
+        return web.json_response(
+            _style_sample_html(
+                root,
+                series_id,
+                sample,
+                project,
+                version=None,
+                project_name=project_name,
+                revision=int(binding.get("draftRevision") or 0),
+                muted=muted,
+            )
+        )
+    except VideoStyleError as exc:
+        return _domain_error(exc)
+    except (OSError, UnicodeError, json.JSONDecodeError):
+        logger.exception("video style sample preview read error")
+        return web.json_response(
+            {"error": "STYLE_SAMPLE_PREVIEW_READ_FAILED", "message": "样片无法读取，请重试"},
+            status=503,
+        )
+    except Exception:
+        logger.exception("video style sample preview error")
+        return web.json_response(
+            {"error": "STYLE_SAMPLE_PREVIEW_FAILED", "message": "样片预览失败，请重试"},
+            status=500,
+        )
+
+
+async def handle_video_style_version_preview(request: web.Request) -> web.StreamResponse:
+    try:
+        kind = request.query.get("kind", "")
+        paths = {
+            "poster": ("authoring/previews/poster.png", "image/png"),
+            "motion": ("authoring/previews/motion.gif", "image/gif"),
+        }
+        if kind not in paths:
+            raise VideoStyleError("预览类型无效", code="STYLE_PREVIEW_KIND_INVALID")
+        series_id = request.match_info["series_id"]
+        version = int(request.match_info["version"])
+        style = read_style_version(_root(), series_id, version)
+        authoring = style.get("authoring")
+        relative, mime_type = paths[kind]
+        if not isinstance(authoring, dict) or authoring.get("poster" if kind == "poster" else "motion") != relative:
+            raise VideoStyleError("风格预览不存在", code="STYLE_PREVIEW_NOT_FOUND", status_code=404)
+        from mona.video_style_authoring import resolve_style_sample_media
+
+        path = resolve_style_sample_media(_root(), series_id, version, relative)
+        response = web.FileResponse(
+            path,
+            headers={"X-Content-Type-Options": "nosniff", "Cache-Control": "public, max-age=3600"},
+        )
+        response.content_type = mime_type
+        return response
+    except (TypeError, ValueError):
+        return web.json_response(
+            {"error": "STYLE_VERSION_NOT_FOUND", "message": "风格版本不存在"}, status=404
+        )
+    except VideoStyleError as exc:
+        return _domain_error(exc)
+
+
+def _copy_style_version_tree(source: Path, destination: Path) -> None:
+    source_root = source.resolve()
+    if source.is_symlink() or not source_root.is_dir():
+        raise VideoStyleError("已保存风格快照不存在", code="STYLE_VERSION_NOT_FOUND", status_code=404)
+    destination.mkdir(parents=True, exist_ok=False)
+    destination_root = destination.resolve()
+    for current, directories, files in os.walk(source_root, followlinks=False):
+        current_path = Path(current)
+        relative = current_path.relative_to(source_root)
+        output_dir = destination_root / relative
+        output_dir.mkdir(parents=True, exist_ok=True)
+        for directory in tuple(directories):
+            path = current_path / directory
+            if path.is_symlink() or not path.resolve().is_relative_to(source_root):
+                raise VideoStyleError("风格快照路径无效", code="STYLE_SNAPSHOT_PATH_INVALID")
+            (output_dir / directory).mkdir(exist_ok=True)
+        for filename in files:
+            path = current_path / filename
+            resolved = path.resolve()
+            target = output_dir / filename
+            if (
+                path.is_symlink()
+                or not resolved.is_relative_to(source_root)
+                or not resolved.is_file()
+                or not target.resolve().is_relative_to(destination_root)
+            ):
+                raise VideoStyleError("风格快照路径无效", code="STYLE_SNAPSHOT_PATH_INVALID")
+            shutil.copy2(resolved, target)
+
+
+def _clear_copied_style_binding(style: dict[str, Any]) -> dict[str, Any]:
+    copied = copy.deepcopy(style)
+    for key in ("projectName", "chatId", "chat_id"):
+        copied.pop(key, None)
+    authoring = copied.get("authoring")
+    if isinstance(authoring, dict):
+        authoring = dict(authoring)
+        for key in ("projectName", "chatId", "chat_id"):
+            authoring.pop(key, None)
+        copied["authoring"] = authoring
+    return copied
+
+
+async def handle_video_series_copy(request: web.Request) -> web.Response:
+    root = _root()
+    created_id: str | None = None
+    try:
+        body = await _json_body(request)
+        source_id = validate_series_id(request.match_info["series_id"])
+        source_series = get_series(root, source_id)
+        try:
+            source_version = int(source_series.get("latestStyleVersion") or 0)
+        except (TypeError, ValueError) as exc:
+            raise VideoStyleError("已保存风格版本无效", code="STYLE_VERSION_NOT_FOUND", status_code=404) from exc
+        if source_version < 1:
+            raise VideoStyleError("风格尚无已保存版本，暂不能复制", code="STYLE_NOT_SAVED", status_code=409)
+        source_style = read_style_version(root, source_id, source_version)
+        source_series_dir = (series_directory(root) / source_id).resolve()
+        source_version_dir = (source_series_dir / "styles" / f"v{source_version}").resolve()
+        if not source_version_dir.is_relative_to(source_series_dir):
+            raise VideoStyleError("风格快照路径无效", code="STYLE_SNAPSHOT_PATH_INVALID")
+
+        requested_name = body.get("name")
+        if requested_name is not None and (not isinstance(requested_name, str) or not requested_name.strip()):
+            raise VideoStyleError("新风格名称不能为空", code="INVALID_SERIES_NAME")
+        base_name = requested_name.strip() if isinstance(requested_name, str) else f"{source_series.get('name') or '风格'} 副本"
+        builtins = {str(item.get("id") or "") for item in list_builtin_templates()}
+        base_template = str(source_style.get("baseTemplateId") or source_style.get("id") or "")
+        template_id = base_template if base_template in builtins else None
+        aspect = str(source_series.get("defaultAspectRatio") or "16:9")
+        copied_series = None
+        for attempt in range(1, 101):
+            name = base_name if requested_name is not None or attempt == 1 else f"{base_name} {attempt}"
+            try:
+                copied_series = create_series(
+                    root,
+                    name=name,
+                    template_id=template_id,
+                    default_aspect_ratio=aspect,
+                )
+                break
+            except VideoStyleError as exc:
+                if requested_name is not None or exc.code != "SERIES_EXISTS":
+                    raise
+        if copied_series is None:
+            raise VideoStyleError("无法生成唯一的风格副本", code="SERIES_COPY_FAILED", status_code=409)
+
+        created_id = str(copied_series["id"])
+        target_series_dir = series_directory(root) / created_id
+        target_version_dir = target_series_dir / "styles" / "v1"
+        _copy_style_version_tree(source_version_dir, target_version_dir)
+        copied_style = _clear_copied_style_binding(
+            json.loads((target_version_dir / "design-system.json").read_text(encoding="utf-8"))
+        )
+        copied_style["seriesId"] = created_id
+        copied_style["version"] = 1
+        _atomic_write_json(target_version_dir / "design-system.json", copied_style)
+
+        copied_series = get_series(root, created_id)
+        copied_series["latestStyleVersion"] = 1
+        _atomic_write_json(target_series_dir / "series.json", copied_series)
+        draft = create_style_draft_from_version(root, created_id, 1)
+        return web.json_response(
+            {"ok": True, "series": _series_summary(get_series(root, created_id)), "draft": draft},
+            status=201,
+        )
+    except VideoStyleError as exc:
+        if created_id is not None:
+            try:
+                delete_series(root, created_id)
+            except VideoStyleError:
+                logger.exception("video style copy rollback error")
+        return _domain_error(exc)
+    except Exception:
+        if created_id is not None:
+            try:
+                delete_series(root, created_id)
+            except VideoStyleError:
+                logger.exception("video style copy rollback error")
+        logger.exception("video style copy error")
+        return web.json_response(
+            {"error": "STYLE_COPY_FAILED", "message": "复制风格失败，请重试"}, status=500
+        )
 
 
 async def handle_video_style_validate(request: web.Request) -> web.Response:

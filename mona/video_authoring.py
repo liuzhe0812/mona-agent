@@ -16,6 +16,22 @@ def _script_json(value: Any) -> str:
     return json.dumps(value, ensure_ascii=False).replace("<", "\\u003c")
 
 
+def _font_stack(value: str, field: str) -> str:
+    from mona.video_scene_compiler import _font
+
+    preferred = _font(value, field)
+    if any(name in preferred.lower() for name in ("hannotate", "hand", "kaiti", "kai ti")):
+        fallbacks = ["Kaiti SC", "KaiTi", "STKaiti", "Microsoft YaHei", "PingFang SC"]
+    elif "yuanti" in preferred.lower():
+        fallbacks = ["YouYuan", "Microsoft YaHei", "PingFang SC"]
+    elif any(name in preferred.lower() for name in ("serif", "songti", "times")):
+        fallbacks = ["Noto Serif SC", "Source Han Serif SC", "Songti SC", "SimSun"]
+    else:
+        fallbacks = ["Noto Sans SC", "PingFang SC", "Microsoft YaHei"]
+    families = list(dict.fromkeys([preferred, *fallbacks]))
+    return ",".join(json.dumps(family, ensure_ascii=False) for family in families) + ",sans-serif"
+
+
 def _embed_media(source: str, project_dir: Path) -> str:
     types = {".png": "image/png", ".jpg": "image/jpeg", ".jpeg": "image/jpeg",
              ".webp": "image/webp", ".gif": "image/gif", ".mp4": "video/mp4",
@@ -55,7 +71,7 @@ def authored_scene_html(
     track: Mapping[str, Any] | None = None,
 ) -> str:
     """Apply shared style/subtitles without prescribing the scene's composition."""
-    from mona.video_scene_compiler import _color, _fallback_gsap, _font, _tokens
+    from mona.video_scene_compiler import _color, _fallback_gsap, _tokens
 
     if not isinstance(source, str) or not source.strip():
         raise ValueError("场景代码不能为空")
@@ -76,8 +92,8 @@ def authored_scene_html(
 --mona-accent:{tokens['accent']}; --mona-bg:{tokens['background']};
 --mona-surface:{tokens['surface']}; --mona-text-primary:{tokens['textPrimary']};
 --mona-text-secondary:{tokens['textSecondary']}; --mona-border:{tokens['border']};
---mona-heading-family:{json.dumps(_font(typography.get('headingFamily') or 'Microsoft YaHei', 'headingFamily'))};
---mona-body-family:{json.dumps(_font(typography.get('bodyFamily') or 'Microsoft YaHei', 'bodyFamily'))};
+--mona-heading-family:{_font_stack(typography.get('headingFamily') or 'Microsoft YaHei', 'headingFamily')};
+--mona-body-family:{_font_stack(typography.get('bodyFamily') or 'Microsoft YaHei', 'bodyFamily')};
 --mona-title-size:96px; --mona-body-size:{48 if height > width else 38}px;
 --mona-spacing-unit:{tokens['spacingUnit']}px; --mona-content-padding:{tokens['contentPadding']}px;
 --mona-card-radius:{tokens['radius']};
@@ -90,7 +106,7 @@ h1,h2,h3 {{ font-family:var(--mona-heading-family),'Microsoft YaHei','PingFang S
 h1 {{ font-size:var(--mona-title-size); }}
 #mona-subtitles {{ position:absolute; z-index:2147483640; left:8%; right:8%; bottom:{bottom * 100}%;
 font-family:var(--mona-body-family),sans-serif; font-size:{font_size}px; line-height:1.4;
-color:var(--mona-text-primary); background:var(--mona-bg); padding:.25em .5em; text-align:center;
+color:var(--mona-text-primary); background:var(--mona-bg); padding:.25em .5em; text-align:center; text-wrap:balance;
 pointer-events:none; }} #mona-subtitles:empty {{ display:none; }}
 """
     if remotion:
@@ -177,7 +193,7 @@ def _remotion_scene_html(
     engine = bundle.read_text(encoding="utf-8").replace("</script", "<\\/script")
     inner = f'''<!doctype html><html><head><meta charset="utf-8"><meta http-equiv="Content-Security-Policy" content="{policy}"><style>{style_css}</style></head><body><div id="root"></div><div id="mona-subtitles"></div><script>window.__monaRemotion={_script_json(payload)};</script><script>{engine}</script></body></html>'''
     return f'''<!doctype html><html><head><meta charset="utf-8">
-<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'unsafe-inline' 'unsafe-eval'; style-src 'unsafe-inline'; frame-src about: data: blob:; connect-src 'none'; object-src 'none'; base-uri 'none'">
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'unsafe-inline' 'unsafe-eval'; style-src 'unsafe-inline'; img-src data: blob:; media-src data: blob:; font-src data:; frame-src about: data: blob:; connect-src 'none'; object-src 'none'; base-uri 'none'">
 <style>html,body{{margin:0;width:{width}px;height:{height}px;overflow:hidden;background:{background}}}iframe{{width:100%;height:100%;border:0}}</style></head><body>
 <iframe id="canvas" sandbox="allow-scripts" srcdoc="{html.escape(inner, quote=True)}"></iframe>
 <script>

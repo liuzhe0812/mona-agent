@@ -4,21 +4,16 @@ import {
   AlertCircle,
   Check,
   CheckCircle,
-  Clapperboard,
   Download,
   Eye,
-  FileText,
   Film,
   FolderOpen,
-  Image,
   History,
-  Languages,
   Loader2,
-  MessageSquarePlus,
+  MoreHorizontal,
   Pause,
   Play,
   RefreshCw,
-  Ratio,
   Settings2,
   Square,
   Volume2,
@@ -26,6 +21,8 @@ import {
 } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
+import { Slider } from "@/components/ui/slider";
+import { Select } from "@/components/ui/select";
 import {
   Tooltip,
   TooltipContent,
@@ -45,27 +42,26 @@ import {
   ResizablePanel,
   ResizablePanelGroup,
 } from "@/components/ui/resizable";
-import { Textarea } from "@/components/ui/textarea";
+import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
 import { useClient } from "@/providers/ClientProvider";
 import {
   ApiError,
   buildVideoDownloadUrl,
-  buildVideoPreviewFullUrl,
   cancelVideoExport,
-  createVideoReview,
   exportVideoProject,
   fetchSceneNarrationBytes,
+  fetchSceneAudioMixBytes,
   fetchScenePreviewHtml,
   fetchVideoExportStatus,
   fetchVideoExportPreflight,
   fetchVideoProject,
+  fetchVideoPreviewFullHtml,
   fetchVideoProjectVersions,
   fetchVideoReviews,
   fetchVideoRuntimeCheck,
   fetchVideoSceneTimeline,
   fetchVideoStoryboard,
   getApiBase,
-  getServicesHttpBase,
   restoreVideoProjectVersion,
   resolveVideoReview,
   updateVideoProjectSettings,
@@ -86,7 +82,8 @@ import { downloadMediaUrl, revealItemInDir } from "@/lib/tauri";
 import { useWorkspaceStore } from "@/lib/workspace-store";
 import { cn } from "@/lib/utils";
 import { VideoRuntimeDialog, type RuntimeDepKey } from "./VideoRuntimeDialog";
-import { VideoNarrationSettingsDialog } from "./VideoNarrationSettingsDialog";
+import { VideoProjectSettingsDialog, VIDEO_LANGUAGE_OPTIONS, type VideoProjectSettingsValue } from "./VideoProjectSettingsDialog";
+import { VideoWorkbenchHeader, type VideoFocus } from "./VideoWorkbenchHeader";
 import {
   startVideoRuntimeDownloads,
   useVideoRuntimeDownloadStore,
@@ -96,7 +93,8 @@ interface ProducingPhaseProps {
   projectName: string;
   /** Persisted project changes refresh history without changing the workspace. */
   onPhaseChange?: (phase: VideoProjectPhase) => void;
-  onRequestAgent?: (prompt: string) => void | Promise<void>;
+  onRequestAgent?: (prompt: string, displayText?: string) => void | Promise<void>;
+  onFocusChange?: (focus: VideoFocus | null) => void;
   agentRunning?: boolean;
   agentActivity?: string | null;
   agentStartedAt?: number | null;
@@ -106,33 +104,19 @@ interface ProducingPhaseProps {
   onRetryGeneration?: () => void;
   onEditContent?: (section: "content" | "assets") => void;
   chatPanel?: ReactNode;
+  modelControl?: ReactNode;
 }
 
 type ExportQuality = "draft" | "standard" | "high";
-type ReleaseType = "draft" | "final";
-
-const VIDEO_LANGUAGE_OPTIONS: Array<{
-  value: VideoLanguage;
-  label: string;
-}> = [
-  { value: "zh-CN", label: "简体中文" },
-  { value: "zh-TW", label: "繁体中文" },
-  { value: "en-US", label: "English" },
-  { value: "ja-JP", label: "日本語" },
-  { value: "ko-KR", label: "한국어" },
-  { value: "es-ES", label: "Español" },
-  { value: "fr-FR", label: "Français" },
-  { value: "de-DE", label: "Deutsch" },
-];
 
 const EXPORT_QUALITY_OPTIONS: Array<{
   value: ExportQuality;
   label: string;
   hint: string;
 }> = [
-  { value: "draft", label: "快速草稿", hint: "适合先看效果，导出更快" },
-  { value: "standard", label: "标准成片", hint: "清晰画面，适合日常分享" },
-  { value: "high", label: "高质量成片", hint: "动作更流畅，导出时间更长" },
+  { value: "draft", label: "快速预览", hint: "适合先看效果，导出更快" },
+  { value: "standard", label: "标准（推荐）", hint: "清晰画面，适合日常分享" },
+  { value: "high", label: "高质量", hint: "动作更流畅，导出时间更长" },
 ];
 
 const DEFAULT_RUNTIME_STATUS: VideoRuntimeStatus = {
@@ -286,6 +270,7 @@ export function ProducingPhase({
   projectName,
   onPhaseChange,
   onRequestAgent,
+  onFocusChange,
   agentRunning = false,
   agentActivity = null,
   agentStartedAt = null,
@@ -295,6 +280,7 @@ export function ProducingPhase({
   onRetryGeneration,
   onEditContent,
   chatPanel,
+  modelControl,
 }: ProducingPhaseProps) {
   const { client, token } = useClient();
   const workspacePath = useWorkspaceStore((s) => s.workspacePath);
@@ -311,7 +297,6 @@ export function ProducingPhase({
   const [narrationEnabled, setNarrationEnabled] = useState(false);
   const [narrationSettings, setNarrationSettings] =
     useState<VideoTtsConfig>(() => normalizeVideoTtsConfig());
-  const [narrationSettingsOpen, setNarrationSettingsOpen] = useState(false);
   const [narrationSettingsSaving, setNarrationSettingsSaving] = useState(false);
   const [narrationSettingsError, setNarrationSettingsError] = useState<
     string | null
@@ -319,10 +304,9 @@ export function ProducingPhase({
   const [playbackError, setPlaybackError] = useState<{
     title: string;
     description: string;
+    retryWholeProduction?: boolean;
   } | null>(null);
-  const [rewriteOpen, setRewriteOpen] = useState(false);
-  const [rewriteText, setRewriteText] = useState("");
-  const [rewriteLoading, setRewriteLoading] = useState(false);
+  const generationErrorRef = useRef<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [fullscreen, setFullscreen] = useState(false);
   const [fullFilmOpen, setFullFilmOpen] = useState(false);
@@ -332,16 +316,10 @@ export function ProducingPhase({
   const [restoringVersionId, setRestoringVersionId] = useState<string | null>(
     null,
   );
-  const [localizeOpen, setLocalizeOpen] = useState(false);
   const [projectLanguage, setProjectLanguage] =
     useState<VideoLanguage>("zh-CN");
-  const [targetLanguage, setTargetLanguage] = useState<VideoLanguage>("en-US");
-  const [localizing, setLocalizing] = useState(false);
-  const [aspectOpen, setAspectOpen] = useState(false);
   const [projectAspect, setProjectAspect] =
     useState<VideoAspectVariant>("16:9");
-  const [targetAspect, setTargetAspect] = useState<VideoAspectVariant>("16:9");
-  const [aspectChanging, setAspectChanging] = useState(false);
   const [fineTimelineOpen, setFineTimelineOpen] = useState(false);
   const [sceneTimeline, setSceneTimeline] = useState<VideoSceneTimeline | null>(
     null,
@@ -350,11 +328,16 @@ export function ProducingPhase({
   const [timelinePlaying, setTimelinePlaying] = useState(false);
   const [timelineAudioUrl, setTimelineAudioUrl] = useState<string | null>(null);
   const [timelineAudioLoading, setTimelineAudioLoading] = useState(false);
+  const [timelineAudioFailed, setTimelineAudioFailed] = useState(false);
+  const timelineRetryIntentRef = useRef<number | null>(null);
   const [timelineAudioRetryCount, setTimelineAudioRetryCount] = useState(0);
   const timelineAudioRef = useRef<HTMLAudioElement>(null);
   const timelinePlaybackIntentRef = useRef(0);
 
-  const [fullPreviewUrl, setFullPreviewUrl] = useState<string | null>(null);
+  const [fullPreviewHtml, setFullPreviewHtml] = useState<string | null>(null);
+  const [fullPreviewLoading, setFullPreviewLoading] = useState(false);
+  const [fullPreviewError, setFullPreviewError] = useState<string | null>(null);
+  const [fullPreviewRequest, setFullPreviewRequest] = useState(0);
   const fullPreviewFrameRef = useRef<HTMLIFrameElement>(null);
 
   // Project-level metadata: resolution drives preview aspect ratio,
@@ -375,8 +358,8 @@ export function ProducingPhase({
   const [seriesSummary, setSeriesSummary] = useState<string | null>(null);
 
   const [exportQuality, setExportQuality] = useState<ExportQuality>("standard");
-  const [releaseType, setReleaseType] = useState<ReleaseType>("draft");
   const [exportDialogOpen, setExportDialogOpen] = useState(false);
+  const [deliveryOpen, setDeliveryOpen] = useState(false);
   const [exportStatus, setExportStatus] = useState<VideoExportStatus>({
     stage: "idle",
     progress: 0,
@@ -390,7 +373,6 @@ export function ProducingPhase({
   );
   const exportPollRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const [reviews, setReviews] = useState<VideoReview[]>([]);
-  const [reviewText, setReviewText] = useState("");
   const [reviewLoading, setReviewLoading] = useState(false);
 
   // Runtime dependency gate (checked lazily right before export)
@@ -405,16 +387,14 @@ export function ProducingPhase({
   const refreshProjectMeta = useCallback(async () => {
     try {
       const p = await fetchVideoProject(token, projectName);
-      setRatio(parseResolution(p.resolution));
+      const currentResolution = parseResolution(p.resolution);
+      setRatio(currentResolution);
       setOutputStale(Boolean(p.outputStale));
       setDraftSceneCount(p.draftSceneCount ?? 0);
       const ttsConfig = normalizeVideoTtsConfig(p.meta);
       setNarrationSettings(ttsConfig);
       setNarrationEnabled(ttsConfig.narrationEnabled === true);
-      if (p.aspectVariant) {
-        setProjectAspect(p.aspectVariant);
-        setTargetAspect(p.aspectVariant);
-      }
+      setProjectAspect(p.aspectVariant ?? (currentResolution.w === currentResolution.h ? "1:1" : currentResolution.w > currentResolution.h ? "16:9" : "9:16"));
       if (
         p.language &&
         VIDEO_LANGUAGE_OPTIONS.some((option) => option.value === p.language)
@@ -427,8 +407,10 @@ export function ProducingPhase({
           : null,
       );
       if (p.phase) onPhaseChange?.(p.phase);
+      return true;
     } catch {
       // keep defaults — project detail is best-effort here
+      return false;
     }
   }, [token, projectName, onPhaseChange]);
 
@@ -472,65 +454,15 @@ export function ProducingPhase({
     }
   }, [token, projectName, selectedIndex]);
 
-  const handleSaveNarrationSettings = useCallback(
-    async (settings: VideoTtsConfig) => {
-      if (narrationSettingsSaving) return;
-      setNarrationSettingsSaving(true);
-      setNarrationSettingsError(null);
-      try {
-        const result = await updateVideoProjectSettings(
-          token,
-          projectName,
-          settings,
-        );
-        if (!result.ok) {
-          setNarrationSettingsError("配音设置保存失败，请检查后重试。");
-          return;
-        }
-
-        const savedSettings = normalizeVideoTtsConfig({
-          ...settings,
-          ...(result.meta ?? {}),
-        });
-        setNarrationSettings(savedSettings);
-        setNarrationEnabled(savedSettings.narrationEnabled === true);
-        setNarrationSettingsOpen(false);
-        timelinePlaybackIntentRef.current += 1;
-        timelineAudioRef.current?.pause();
-        setTimelinePlaying(false);
-        setPlayheadMs(0);
-        setTimelineAudioRetryCount((count) => count + 1);
-
-        await Promise.all([
-          refreshProjectMeta(),
-          loadScenes(),
-          fetchVideoSceneTimeline(token, projectName, selectedIndex)
-            .then(setSceneTimeline)
-            .catch(() => setSceneTimeline(null)),
-        ]);
-      } catch {
-        setNarrationSettingsError("配音设置保存失败，请检查后重试。");
-      } finally {
-        setNarrationSettingsSaving(false);
-      }
-    },
-    [
-      loadScenes,
-      narrationSettingsSaving,
-      projectName,
-      refreshProjectMeta,
-      selectedIndex,
-      token,
-      onEditContent,
-    ],
-  );
-
   useEffect(() => {
     loadScenes();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [token, projectName]);
 
   const selectedScene = scenes.find((s) => s.index === selectedIndex) ?? null;
+  useEffect(() => {
+    onFocusChange?.(selectedScene ? {projectName, sceneIndex: selectedIndex, sceneTitle: selectedScene.title, seconds: playheadMs / 1000} : null);
+  }, [onFocusChange, projectName, selectedIndex, selectedScene?.title, playheadMs]);
   const isSceneReady = (s: VideoSceneWithHtml) =>
     s.htmlStatus === "previewing" || s.htmlStatus === "confirmed";
   const readyCount = scenes.filter(isSceneReady).length;
@@ -586,6 +518,7 @@ export function ProducingPhase({
   useEffect(() => {
     let cancelled = false;
     timelinePlaybackIntentRef.current += 1;
+    timelineRetryIntentRef.current = null;
     setPlayheadMs(0);
     setTimelinePlaying(false);
     if (!selectedScene) {
@@ -611,22 +544,34 @@ export function ProducingPhase({
     let objectUrl: string | null = null;
     timelineAudioRef.current?.pause();
     setTimelineAudioUrl(null);
-    if (!narrationEnabled || !selectedScene?.narration?.trim()) {
+    setTimelineAudioFailed(false);
+    if (!selectedScene?.htmlPath || !["previewing", "confirmed"].includes(selectedScene.htmlStatus ?? "pending")) {
       setTimelineAudioLoading(false);
       return;
     }
     setTimelineAudioLoading(true);
-    void fetchSceneNarrationBytes(token, projectName, selectedIndex)
+    const abort = new AbortController();
+    let timedOut = false;
+    const timeout = setTimeout(() => { timedOut = true; abort.abort(); }, 120_000);
+    void fetchSceneAudioMixBytes(token, projectName, selectedIndex, abort.signal)
       .then((blob) => {
         if (cancelled || !blob) return;
         objectUrl = URL.createObjectURL(blob);
         setTimelineAudioUrl(objectUrl);
       })
-      .catch(() => {})
+      .catch((error: unknown) => {
+        if (!cancelled) {
+          setTimelineAudioFailed(true);
+          setPlaybackError({title: "视频声音未能准备", description: timedOut ? "视频声音准备超时，已保留当前内容，请重试播放。" : error instanceof Error ? error.message : "视频声音未能准备，已保留当前内容，请重试。"});
+        }
+      })
       .finally(() => {
+        clearTimeout(timeout);
         if (!cancelled) setTimelineAudioLoading(false);
       });
     return () => {
+      clearTimeout(timeout);
+      abort.abort();
       cancelled = true;
       timelineAudioRef.current?.pause();
       if (objectUrl) URL.revokeObjectURL(objectUrl);
@@ -636,6 +581,8 @@ export function ProducingPhase({
     projectName,
     selectedIndex,
     selectedScene?.narration,
+    selectedScene?.htmlPath,
+    selectedScene?.htmlStatus,
     timelineAudioRetryCount,
     refreshTrigger,
     token,
@@ -684,26 +631,30 @@ export function ProducingPhase({
       setTimelinePlaying(false);
       return;
     }
+    if (timelineAudioFailed) {
+      timelineRetryIntentRef.current = ++timelinePlaybackIntentRef.current;
+      setTimelineAudioRetryCount((count) => count + 1);
+      return;
+    }
     const intent = ++timelinePlaybackIntentRef.current;
     const startMs = playheadMs >= durationMs ? 0 : playheadMs;
     setPlayheadMs(startMs);
-    if (narrationEnabled && selectedScene?.narration?.trim()) {
-      if (!timelineAudioUrl || !audio) {
-        setPlaybackError({
-          title: "场景播放失败",
-          description: "场景旁白暂不可用。请打开设置试听旁白后重试。",
-        });
-        return;
-      }
+    if (narrationEnabled && selectedScene?.narration?.trim() && (!timelineAudioUrl || !audio)) {
+      setPlaybackError({title: "场景播放失败", description: "视频声音尚未就绪，请重试播放。"});
+      setTimelineAudioFailed(true);
+      return;
+    }
+    if (timelineAudioUrl && audio) {
       audio.currentTime = startMs / 1000;
       try {
         await audio.play();
       } catch {
         if (intent !== timelinePlaybackIntentRef.current) return;
         audio.pause();
+        setTimelineAudioFailed(true);
         setPlaybackError({
           title: "场景播放失败",
-          description: "旁白无法播放。请打开设置试听旁白后重试。",
+          description: "视频声音未能播放，画面已暂停，请重试播放。",
         });
         return;
       }
@@ -719,21 +670,39 @@ export function ProducingPhase({
     selectedScene?.narration,
     narrationEnabled,
     timelineAudioUrl,
+    timelineAudioFailed,
     timelinePlaying,
   ]);
 
-  // Build full-preview URL on mount / project change
   useEffect(() => {
+    if (timelineAudioLoading || timelineRetryIntentRef.current === null) return;
+    const intent = timelineRetryIntentRef.current;
+    timelineRetryIntentRef.current = null;
+    if (intent === timelinePlaybackIntentRef.current && !timelineAudioFailed) {
+      void toggleTimelinePlayback();
+    }
+  }, [timelineAudioLoading, timelineAudioFailed, toggleTimelinePlayback]);
+
+  useEffect(() => {
+    if (!fullFilmOpen || (exportStatus.stage === "done" && exportStatus.hasVideo && !outputStale && exportDownloadUrl)) return;
     let cancelled = false;
-    (async () => {
-      const base = await getServicesHttpBase();
-      if (cancelled) return;
-      setFullPreviewUrl(buildVideoPreviewFullUrl(base, token, projectName));
-    })();
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 120_000);
+    setFullPreviewLoading(true);
+    setFullPreviewError(null);
+    setFullPreviewHtml(null);
+    void fetchVideoPreviewFullHtml(token, projectName, controller.signal)
+      .then((html) => { if (!cancelled) setFullPreviewHtml(html); })
+      .catch((error: unknown) => {
+        if (!cancelled) setFullPreviewError(controller.signal.aborted ? "整片预览准备超时，请重试。" : error instanceof Error ? error.message : "整片预览未能准备，请重试。");
+      })
+      .finally(() => { clearTimeout(timeout); if (!cancelled) setFullPreviewLoading(false); });
     return () => {
       cancelled = true;
+      clearTimeout(timeout);
+      controller.abort();
     };
-  }, [token, projectName]);
+  }, [fullFilmOpen, fullPreviewRequest, exportStatus.stage, exportStatus.hasVideo, outputStale, exportDownloadUrl, token, projectName]);
 
   useEffect(() => {
     if (!fullFilmOpen) return;
@@ -780,21 +749,27 @@ export function ProducingPhase({
 
   const refreshFullPreview = useCallback(async () => {
     if (!allReady) return;
-    const base = await getServicesHttpBase();
-    setFullPreviewUrl(
-      buildVideoPreviewFullUrl(base, token, projectName) + `&_t=${Date.now()}`,
-    );
-  }, [allReady, token, projectName]);
+    setFullPreviewRequest((value) => value + 1);
+  }, [allReady]);
 
   // 打开整片预览弹窗时刷新 URL,确保看到最新场景内容
   const openFullFilm = useCallback(async () => {
     if (!allReady) return;
-    const base = await getServicesHttpBase();
-    setFullPreviewUrl(
-      buildVideoPreviewFullUrl(base, token, projectName) + `&_t=${Date.now()}`,
-    );
+    timelinePlaybackIntentRef.current += 1;
+    timelineAudioRef.current?.pause();
+    setTimelinePlaying(false);
     setFullFilmOpen(true);
-  }, [allReady, token, projectName]);
+  }, [allReady]);
+
+  const changeFullscreen = (open: boolean) => {
+    setFullscreen(open);
+    if (!open) {
+      timelinePlaybackIntentRef.current += 1;
+      timelineRetryIntentRef.current = null;
+      timelineAudioRef.current?.pause();
+      setTimelinePlaying(false);
+    }
+  };
 
   // Initial export status + download URL
   useEffect(() => {
@@ -839,8 +814,7 @@ export function ProducingPhase({
     }
   }, [token, projectName, refreshProjectMeta]);
 
-  // Poll while rendering — 10s backstop only; live frame-level progress and
-  // the done/error transition arrive via WS video_project_changed pushes.
+  // Worker-thread progress must remain visible even without a WS push.
   useEffect(() => {
     if (
       exportStatus.stage !== "rendering" &&
@@ -858,10 +832,10 @@ export function ProducingPhase({
       if (cancelled) return;
       await refreshExportStatus();
       if (!cancelled) {
-        exportPollRef.current = setTimeout(poll, 10000);
+        exportPollRef.current = setTimeout(poll, 2000);
       }
     };
-    exportPollRef.current = setTimeout(poll, 10000);
+    exportPollRef.current = setTimeout(poll, 2000);
     return () => {
       cancelled = true;
       if (exportPollRef.current) {
@@ -903,13 +877,13 @@ export function ProducingPhase({
     refreshReviews,
   ]);
 
-  const requestAgent = useCallback(async (prompt: string) => {
+  const requestAgent = useCallback(async (prompt: string, displayText = prompt) => {
     if (actionLoading || agentRunning) return false;
     setActionLoading(true);
     setActionLabel("正在发送制作要求…");
     try {
       if (!onRequestAgent) throw new Error("视频会话尚未就绪，请稍后重试。");
-      await onRequestAgent(prompt);
+      await onRequestAgent(prompt, displayText);
       return true;
     } catch (requestError) {
       console.error("Video request failed", requestError);
@@ -932,6 +906,21 @@ export function ProducingPhase({
   const handleGenerateAll = useCallback(() => {
     void requestAgent("请按已确认分镜完成尚未制作的口播动画，按实际旁白时间安排动画，逐一预览检查并修正。若分镜已变化，停下等待导演台确认。");
   }, [requestAgent]);
+  const retryWholeProduction = onRetryGeneration ?? handleGenerateAll;
+
+  useEffect(() => {
+    if (!generationError) {
+      generationErrorRef.current = null;
+      return;
+    }
+    if (agentRunning || generationErrorRef.current === generationError) return;
+    generationErrorRef.current = generationError;
+    setPlaybackError({
+      title: "视频制作遇到问题",
+      description: generationError,
+      retryWholeProduction: true,
+    });
+  }, [agentRunning, generationError]);
 
   const handleRegenerate = useCallback(() => {
     if (!selectedScene) return;
@@ -998,18 +987,6 @@ export function ProducingPhase({
     timelineAudioUrl,
   ]);
 
-  const handleRewriteSubmit = useCallback(async () => {
-    if (!rewriteText.trim() || rewriteLoading || agentRunning) return;
-    setRewriteLoading(true);
-    const sent = await requestAgent(`请调整场景 ${selectedIndex} 的分镜方案：${rewriteText.trim()}。完善旁白、画面与动画安排，用 video.plan 保存并保留其他场景。本轮只修改方案，不写场景源码或生成配音和视频，等待用户在导演台确认。`);
-    if (sent) {
-      setRewriteOpen(false);
-      setRewriteText("");
-      onEditContent?.("content");
-    }
-    setRewriteLoading(false);
-  }, [agentRunning, requestAgent, rewriteText, rewriteLoading, selectedIndex, onEditContent]);
-
   const handleOpenVersions = useCallback(async () => {
     setSettingsOpen(false);
     setVersionsOpen(true);
@@ -1059,28 +1036,61 @@ export function ProducingPhase({
     ],
   );
 
-  const handleLocalizeProject = useCallback(async () => {
-    if (localizing || agentRunning || targetLanguage === projectLanguage) return;
-    setLocalizing(true);
-    const language = VIDEO_LANGUAGE_OPTIONS.find((option) => option.value === targetLanguage)?.label ?? targetLanguage;
-    const sent = await requestAgent(`请把分镜方案改成${language}，保存新的语言设置并调整旁白与画面文字，保留内容含义与动画意图。用 video.plan 保存，本轮只准备方案，不写场景源码或生成配音和视频，等待导演台确认。`);
-    if (sent) { setLocalizeOpen(false); onEditContent?.("content"); }
-    setLocalizing(false);
-  }, [agentRunning, localizing, projectLanguage, requestAgent, targetLanguage, onEditContent]);
-
-  const handleChangeAspect = useCallback(async () => {
-    if (aspectChanging || agentRunning || targetAspect === projectAspect) return;
-    setAspectChanging(true);
-    const direction = targetAspect === "9:16" ? "竖屏（1080×1920）" : targetAspect === "1:1" ? "方形（1080×1080）" : "横屏（1920×1080）";
-    const sent = await requestAgent(`请把分镜方案改成${direction}，保存新的画面尺寸，重新安排适合这个方向的构图与动画。用 video.plan 保存，本轮只准备方案，不写场景源码或生成配音和视频，等待导演台确认。`);
-    if (sent) { setAspectOpen(false); onEditContent?.("content"); }
-    setAspectChanging(false);
-  }, [agentRunning, aspectChanging, projectAspect, requestAgent, targetAspect, onEditContent]);
+  const handleSaveSettings = useCallback(async (value: VideoProjectSettingsValue) => {
+    if (narrationSettingsSaving || actionLoading || agentRunning || exportStatus.stage === "rendering" || exportStatus.stage === "cancelling") return;
+    setNarrationSettingsSaving(true);
+    setNarrationSettingsError(null);
+    try {
+      const nextVoice = normalizeVideoTtsConfig(value);
+      const voiceChanged = JSON.stringify(nextVoice) !== JSON.stringify(narrationSettings);
+      if (voiceChanged) {
+        const result = await updateVideoProjectSettings(token, projectName, nextVoice);
+        if (!result.ok) {
+          setNarrationSettingsError("设置未能保存，当前修改已保留，请重试。");
+          return;
+        }
+        const saved = normalizeVideoTtsConfig({ ...nextVoice, ...(result.meta ?? {}) });
+        setNarrationSettings(saved);
+        setNarrationEnabled(saved.narrationEnabled === true);
+        timelinePlaybackIntentRef.current += 1;
+        timelineAudioRef.current?.pause();
+        setTimelinePlaying(false);
+        setPlayheadMs(0);
+        setTimelineAudioRetryCount((count) => count + 1);
+        await Promise.all([refreshProjectMeta(), loadScenes(), fetchVideoSceneTimeline(token, projectName, selectedIndex).then(setSceneTimeline).catch(() => setSceneTimeline(null))]);
+      }
+      setFineTimelineOpen(value.showTimeline);
+      const changes: string[] = [];
+      if (value.aspect !== projectAspect) {
+        const direction = value.aspect === "9:16" ? "竖屏（1080×1920）" : value.aspect === "1:1" ? "方形（1080×1080）" : "横屏（1920×1080）";
+        changes.push(`画面改成${direction}，保存新的画面尺寸，重新安排构图与动画`);
+      }
+      if (value.language !== projectLanguage) {
+        const language = VIDEO_LANGUAGE_OPTIONS.find((option) => option.value === value.language)?.label ?? value.language;
+        changes.push(`语言改成${language}，保存新的语言设置并调整旁白与画面文字`);
+      }
+      if (changes.length) {
+        const sent = await requestAgent(
+          `请更新当前视频的分镜方案：${changes.join("；")}。保留原内容含义与动画意图。用 video.plan 保存，本轮只准备方案，不写场景源码或生成配音和视频，等待导演台确认。`,
+          `更新视频设置：${changes.map((change) => change.split("，")[0]).join("；")}。`,
+        );
+        if (sent) {
+          setSettingsOpen(false);
+          onEditContent?.("content");
+        }
+      } else {
+        setSettingsOpen(false);
+      }
+    } catch {
+      setNarrationSettingsError("设置保存结果未确认，当前修改已保留，可重试保存。");
+    } finally {
+      setNarrationSettingsSaving(false);
+    }
+  }, [actionLoading, agentRunning, exportStatus.stage, loadScenes, narrationSettings, narrationSettingsSaving, onEditContent, projectAspect, projectLanguage, projectName, refreshProjectMeta, requestAgent, selectedIndex, token]);
 
   const doExport = useCallback(async () => {
     const res = await exportVideoProject(token, projectName, {
       quality: exportQuality,
-      releaseType,
     });
     if (!res.ok) {
       setExportError(res.error ?? "导出失败");
@@ -1093,39 +1103,7 @@ export function ProducingPhase({
       message: "准备导出...",
       requestedEngine: res.requestedEngine,
     });
-  }, [token, projectName, exportQuality, releaseType]);
-
-  const handleAddReview = useCallback(async () => {
-    const text = reviewText.trim();
-    if (!text || reviewLoading) return;
-    setReviewLoading(true);
-    try {
-      const result = await createVideoReview(
-        token,
-        projectName,
-        selectedIndex,
-        Math.round(playheadMs),
-        text,
-      );
-      if (result.ok && result.review) {
-        setReviews((current) => [...current, result.review!]);
-        setReviewText("");
-      } else {
-        setError(result.error ?? "添加审阅意见失败");
-      }
-    } catch (e) {
-      setError(e instanceof Error ? e.message : String(e));
-    } finally {
-      setReviewLoading(false);
-    }
-  }, [
-    playheadMs,
-    projectName,
-    reviewLoading,
-    reviewText,
-    selectedIndex,
-    token,
-  ]);
+  }, [token, projectName, exportQuality]);
 
   const handleResolveReview = useCallback(
     async (reviewId: string) => {
@@ -1189,22 +1167,23 @@ export function ProducingPhase({
   const handleCancelExport = useCallback(async () => {
     if (
       exportActionLoading ||
-      (exportStatus.stage !== "rendering" &&
-        exportStatus.stage !== "cancelling")
+      exportStatus.stage !== "rendering"
     ) {
       return;
     }
     setExportActionLoading(true);
     try {
-      await cancelVideoExport(token, projectName);
-      setExportStatus((current) => ({
+      const result = await cancelVideoExport(token, projectName);
+      if (!result.ok) throw new Error("Export cancellation was not confirmed");
+      setExportStatus((current) => current.stage === "rendering" ? ({
         ...current,
         stage: "cancelling",
         message: "正在安全停止导出...",
         recoverable: true,
-      }));
+      }) : current);
     } catch (e) {
-      setExportError(e instanceof Error ? e.message : String(e));
+      console.error("Failed to confirm video export cancellation", e);
+      setPlaybackError({ title: "停止导出未能确认", description: "停止请求的结果尚未确认，将继续更新导出进度，请稍后重试。" });
     } finally {
       setExportActionLoading(false);
     }
@@ -1333,23 +1312,37 @@ export function ProducingPhase({
   const isRendering = exportStatus.stage === "rendering" || isCancelling;
   const isExportDone = exportStatus.stage === "done" && exportStatus.hasVideo;
   const hasExportError = exportStatus.stage === "error";
+  const toolbarExportLabel = outputStale ? "重新导出" : "导出视频";
   const selectedStatus = selectedScene?.htmlStatus ?? "pending";
   const timelineDurationMs =
     sceneTimeline?.durationMs ?? (selectedScene?.duration ?? 5) * 1000;
-  const openReviews = reviews.filter((review) => review.status === "open");
+  const scenePlayLabel = timelineAudioLoading ? "正在准备声音" : timelineAudioFailed ? "重试播放" : timelinePlaying ? "暂停当前场景" : "播放当前场景";
+  const scenePlaybackControls = (
+    <div className="flex items-center gap-2">
+      <Button variant="ghost" size="sm" className="h-7 w-7 p-0" title={scenePlayLabel} aria-label={scenePlayLabel}
+        onClick={() => void toggleTimelinePlayback()} disabled={!previewHtml || timelineAudioLoading}>
+        {timelineAudioLoading ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : timelinePlaying ? <Pause className="h-3.5 w-3.5" /> : <Play className="h-3.5 w-3.5" />}
+      </Button>
+      <span className="w-20 text-caption tabular-nums text-muted-foreground">{(playheadMs / 1000).toFixed(1)}s / {(timelineDurationMs / 1000).toFixed(1)}s</span>
+      <Slider min={0} max={timelineDurationMs} step={50} value={Math.min(playheadMs, timelineDurationMs)}
+        onChange={(event) => {
+          timelinePlaybackIntentRef.current += 1;
+          timelineAudioRef.current?.pause();
+          setTimelinePlaying(false);
+          const nextMs = Number(event.target.value);
+          setPlayheadMs(nextMs);
+          if (timelineAudioRef.current) timelineAudioRef.current.currentTime = nextMs / 1000;
+        }} className="flex-1" aria-label="场景播放位置" />
+      {timelineAudioLoading ? <span className="text-caption text-muted-foreground" role="status">正在准备声音…</span> : null}
+    </div>
+  );
   const progressText = agentActivity ?? (scenes.length === 0
     ? "正在准备视频内容，画面尚未生成"
     : readyCount < scenes.length
       ? `正在制作画面，已完成 ${readyCount}/${scenes.length} 段`
       : "画面已完成，正在检查效果和声音");
   const elapsed = agentStartedAt === null ? 0 : Math.max(0, Math.floor(progressNow / 1000 - agentStartedAt));
-  const selectedReviews = reviews.filter(
-    (review) => review.sceneIndex === selectedIndex,
-  );
-  const finalDeliveryBlocked =
-    openReviews.length > 0 ||
-    exportPreflight === null ||
-    !exportPreflight.assetRights.readyForCommercialUse;
+  const exportStatusText = isRendering ? `${exportStatus.message ?? "正在导出"} · ${Math.round(exportStatus.progress)}%` : hasExportError ? "视频未能导出" : isExportDone ? outputStale ? "内容已修改，之前的视频需要重新导出" : "视频已导出" : "";
 
   return (
     <div className="flex h-full min-h-0 flex-col">
@@ -1361,29 +1354,49 @@ export function ProducingPhase({
           if (!timelinePlaying) return;
           timelineAudioRef.current?.pause();
           setTimelinePlaying(false);
+          setTimelineAudioFailed(true);
           setPlaybackError({
             title: "场景播放失败",
-            description: "旁白无法播放。请打开设置试听旁白后重试。",
+            description: "视频声音未能播放，画面已暂停，请重试播放。",
           });
         }}
       />
-      <div className="flex shrink-0 items-center justify-between gap-3 border-b border-border/70 px-3 py-2">
-        <div className="min-w-0 truncate text-ui font-medium">{projectName}</div>
-        <div className="flex shrink-0 items-center gap-1.5">
-          {onEditContent ? <>
-            <Button variant="ghost" size="sm" onClick={() => onEditContent("content")} disabled={agentRunning}><FileText className="mr-1.5 h-3.5 w-3.5" />导演台</Button>
-            <Button variant="ghost" size="sm" onClick={() => onEditContent("assets")}><Image className="mr-1.5 h-3.5 w-3.5" />素材</Button>
-          </> : null}
-          <Button variant="ghost" size="sm" onClick={() => setSettingsOpen(true)}><Settings2 className="mr-1.5 h-3.5 w-3.5" />设置</Button>
-          <Button size="sm" disabled={!allReady || isRendering || exportActionLoading || agentRunning} onClick={() => { setExportError(null); setSettingsOpen(false); setExportDialogOpen(true); }}>
-            {isRendering ? <Loader2 className="mr-1.5 h-3.5 w-3.5 animate-spin" /> : <Download className="mr-1.5 h-3.5 w-3.5" />}
-            {isRendering ? "正在导出…" : outputStale ? "重新导出" : "导出视频"}
+      <VideoWorkbenchHeader projectName={projectName} activeView="preview" onViewChange={onEditContent ? (view) => { if (view === "director") onEditContent("content"); } : undefined}>
+        {modelControl}
+          <Button variant="ghost" size="xs" onClick={handleOpenVersions}><History className="mr-1.5 h-3.5 w-3.5" />版本历史</Button>
+          <Button variant="ghost" size="xs" onClick={async () => {
+            if (await refreshProjectMeta()) { setNarrationSettingsError(null); setSettingsOpen(true); }
+            else setPlaybackError({ title: "视频设置未能打开", description: "视频设置暂时无法读取，请稍后重试。" });
+          }}><Settings2 className="mr-1.5 h-3.5 w-3.5" />设置</Button>
+          {isRendering || hasExportError || isExportDone ? <div className="flex min-w-0 items-center gap-1 text-caption text-muted-foreground" role={hasExportError ? "alert" : "status"}>
+            <span className="max-w-48 truncate" title={exportStatusText}>{exportStatusText}</span>
+            {hasExportError || isExportDone ? <Button variant="ghost" size="xs" onClick={() => setDeliveryOpen(true)}>{hasExportError ? "查看原因" : "查看结果"}</Button> : null}
+          </div> : null}
+          <Button
+            type="button"
+            size="xs"
+            variant={isRendering ? "outline" : "default"}
+            aria-label={isRendering ? isCancelling ? "正在停止..." : "停止导出" : toolbarExportLabel}
+            aria-busy={isCancelling || exportActionLoading}
+            disabled={isRendering ? isCancelling || exportActionLoading : !allReady || exportActionLoading || agentRunning}
+            onClick={() => {
+              if (isRendering) { void handleCancelExport(); return; }
+              setExportError(null);
+              if (isExportDone && !outputStale) setDeliveryOpen(true);
+              else setExportDialogOpen(true);
+            }}
+          >
+            {isCancelling || exportActionLoading ? (
+              <Loader2 className="mr-1.5 h-3.5 w-3.5 animate-spin" />
+            ) : isRendering ? (
+              <Square className="mr-1.5 h-3.5 w-3.5" />
+            ) : (
+              <Download className="mr-1.5 h-3.5 w-3.5" />
+            )}
+            {isRendering ? isCancelling ? "正在停止..." : "停止导出" : toolbarExportLabel}
           </Button>
-        </div>
-      </div>
+      </VideoWorkbenchHeader>
       {agentRunning || actionLoading ? <div className="flex shrink-0 items-center gap-2 px-3 py-2 text-caption text-muted-foreground" role="status"><Loader2 className="h-3.5 w-3.5 animate-spin" /><span>{actionLabel ?? progressText}</span>{agentStartedAt !== null ? <span>已用时 {Math.floor(elapsed / 60)} 分 {elapsed % 60} 秒</span> : null}{onOpenChat ? <Button variant="ghost" size="sm" onClick={onOpenChat}>查看进展</Button> : null}</div> : null}
-      {isRendering ? <div className="flex shrink-0 items-center gap-2 px-3 py-2 text-caption text-muted-foreground" role="status">正在导出 {Math.round(exportStatus.progress)}%<Button variant="ghost" size="sm" onClick={() => setSettingsOpen(true)}>查看进度</Button></div> : null}
-      {isExportDone && !outputStale ? <div className="flex shrink-0 items-center gap-2 px-3 py-2 text-caption" role="status">视频已导出<Button variant="outline" size="sm" onClick={handleDownload} disabled={downloadLoading}><Download className="mr-1.5 h-3.5 w-3.5" />保存视频</Button></div> : null}
       <ResizablePanelGroup direction="horizontal" className="min-h-0 flex-1">
         {/* 左:场景状态列表 */}
         <ResizablePanel
@@ -1508,7 +1521,13 @@ export function ProducingPhase({
                             size="sm"
                             className="h-7 w-7 p-0"
                             aria-label="全屏预览当前场景"
-                            onClick={() => setFullscreen(true)}
+                            onClick={() => {
+                              setFullscreen(true);
+                              if (!timelinePlaying) {
+                                if (timelineAudioLoading) timelineRetryIntentRef.current = ++timelinePlaybackIntentRef.current;
+                                else void toggleTimelinePlayback();
+                              }
+                            }}
                           >
                             <Eye className="h-3.5 w-3.5" />
                           </Button>
@@ -1540,6 +1559,13 @@ export function ProducingPhase({
                       <TooltipContent>{fullPreviewHelp}</TooltipContent>
                     </Tooltip>
                   </TooltipProvider>
+                  <DropdownMenu>
+                    <DropdownMenuTrigger asChild><Button variant="ghost" size="xs" className="w-6 px-0" aria-label="片段操作"><MoreHorizontal className="h-3.5 w-3.5" /></Button></DropdownMenuTrigger>
+                    <DropdownMenuContent align="end">
+                      <DropdownMenuItem disabled={actionLoading || agentRunning || !selectedScene || selectedStatus === "pending" || selectedStatus === "generating"} onSelect={handleRegenerate}><RefreshCw className="h-3.5 w-3.5" />重新制作当前片段</DropdownMenuItem>
+                      <DropdownMenuItem disabled={!narrationEnabled || playingIndex !== null || !selectedScene?.narration?.trim()} onSelect={() => void handlePlayNarration()}><Volume2 className="h-3.5 w-3.5" />试听这段旁白</DropdownMenuItem>
+                    </DropdownMenuContent>
+                  </DropdownMenu>
                 </div>
               </div>
             </div>
@@ -1561,13 +1587,12 @@ export function ProducingPhase({
                 />
               ) : (
                 <div className="flex h-full flex-col items-center justify-center gap-2 text-ui text-muted-foreground">
-                  <div>{sceneLoadError ? "视频内容暂时无法读取" : generationError ? "制作未能开始" : agentRunning ? "画面准备好后会逐段显示在这里" : draftSceneCount > 0 ? `已保存 ${draftSceneCount} 段草稿，尚未生成可预览画面` : selectedScene ? "这个场景还没有画面" : "还没有可预览画面"}</div>
+                  <div>{sceneLoadError ? "视频内容暂时无法读取" : agentRunning ? "画面准备好后会逐段显示在这里" : draftSceneCount > 0 ? `已保存 ${draftSceneCount} 段草稿，尚未生成可预览画面` : selectedScene ? "这个场景还没有画面" : "还没有可预览画面"}</div>
                   {agentRunning ? <p className="max-w-md text-center text-caption">可以在与 Mona 的对话中查看制作进展或暂停任务。</p> : null}
-                  {generationError ? <p className="max-w-md text-center text-caption">{generationError}</p> : null}
                   <Button
                     variant="outline"
                     size="sm"
-                    onClick={agentRunning && onOpenChat ? onOpenChat : sceneLoadError ? () => void loadScenes() : selectedScene ? handleGenerate : onRetryGeneration ?? handleGenerateAll}
+                    onClick={agentRunning && onOpenChat ? onOpenChat : sceneLoadError ? () => void loadScenes() : generationError ? retryWholeProduction : selectedScene ? handleGenerate : retryWholeProduction}
                     disabled={actionLoading || (!sceneLoadError && agentRunning && !onOpenChat)}
                   >
                     {actionLoading ? (
@@ -1575,67 +1600,14 @@ export function ProducingPhase({
                     ) : (
                       <Wand2 className="mr-1.5 h-3.5 w-3.5" />
                     )}
-                    {agentRunning && onOpenChat ? "查看制作进展" : sceneLoadError ? "重新加载" : selectedScene ? "制作这个场景" : "继续制作"}
+                    {agentRunning && onOpenChat ? "查看制作进展" : sceneLoadError ? "重新加载" : generationError ? "继续制作" : selectedScene ? "制作这个场景" : "继续制作"}
                   </Button>
                 </div>
               )}
             </div>
             {previewHtml ? (
               <div className="shrink-0 border-t border-border/70 bg-background px-3 py-2.5">
-                <div className="flex items-center gap-2">
-                  <Button
-                    variant="ghost"
-                    size="sm"
-                    className="h-7 w-7 p-0"
-                    title={
-                      timelineAudioLoading
-                        ? "正在准备旁白"
-                        : timelinePlaying
-                          ? "暂停当前场景"
-                          : "播放当前场景"
-                    }
-                    aria-label={
-                      timelineAudioLoading
-                        ? "正在准备旁白"
-                        : timelinePlaying
-                          ? "暂停当前场景"
-                          : "播放当前场景"
-                    }
-                    onClick={() => void toggleTimelinePlayback()}
-                    disabled={!previewHtml || timelineAudioLoading}
-                  >
-                    {timelineAudioLoading ? (
-                      <Loader2 className="h-3.5 w-3.5 animate-spin" />
-                    ) : timelinePlaying ? (
-                      <Pause className="h-3.5 w-3.5" />
-                    ) : (
-                      <Play className="h-3.5 w-3.5" />
-                    )}
-                  </Button>
-                  <span className="w-20 text-xs tabular-nums text-muted-foreground">
-                    {(playheadMs / 1000).toFixed(1)}s /{" "}
-                    {(timelineDurationMs / 1000).toFixed(1)}s
-                  </span>
-                  <input
-                    type="range"
-                    min={0}
-                    max={timelineDurationMs}
-                    step={50}
-                    value={Math.min(playheadMs, timelineDurationMs)}
-                    onChange={(event) => {
-                      timelinePlaybackIntentRef.current += 1;
-                      timelineAudioRef.current?.pause();
-                      setTimelinePlaying(false);
-                      const nextMs = Number(event.target.value);
-                      setPlayheadMs(nextMs);
-                      if (timelineAudioRef.current) {
-                        timelineAudioRef.current.currentTime = nextMs / 1000;
-                      }
-                    }}
-                    className="flex-1 accent-[hsl(var(--brand-red))]"
-                    aria-label="场景播放位置"
-                  />
-                </div>
+                {scenePlaybackControls}
                 {fineTimelineOpen ? (
                   <div className="mt-2 grid grid-cols-[52px_1fr] gap-x-2 gap-y-1.5 text-micro">
                     <span className="pt-1 text-muted-foreground">
@@ -1689,176 +1661,17 @@ export function ProducingPhase({
         ) : null}
       </ResizablePanelGroup>
 
-      <Dialog open={settingsOpen} onOpenChange={setSettingsOpen}>
+      <VideoProjectSettingsDialog
+        open={settingsOpen} onOpenChange={setSettingsOpen}
+        value={{ ...narrationSettings, aspect: projectAspect, language: projectLanguage, showTimeline: fineTimelineOpen }}
+        saving={narrationSettingsSaving} busy={agentRunning || actionLoading || isRendering}
+        error={narrationSettingsError} onSave={(value) => void handleSaveSettings(value)}
+      />
+
+      <Dialog open={deliveryOpen} onOpenChange={setDeliveryOpen}>
         <DialogContent className="flex max-h-[85vh] max-w-lg flex-col">
-          <DialogHeader><DialogTitle>视频设置</DialogTitle><DialogDescription>调整声音、查看版本或导出视频。</DialogDescription></DialogHeader>
-          <div className="grid grid-cols-2 gap-2">
-            <Button variant="outline" size="sm" onClick={() => { setNarrationSettingsError(null); setSettingsOpen(false); setNarrationSettingsOpen(true); }}>配音设置</Button>
-            <Button variant="outline" size="sm" onClick={handleOpenVersions}>版本历史</Button>
-            <Button variant="outline" size="sm" onClick={() => { setTargetAspect(projectAspect); setSettingsOpen(false); setAspectOpen(true); }}>横屏与竖屏</Button>
-            <Button variant="outline" size="sm" onClick={() => { const next = VIDEO_LANGUAGE_OPTIONS.find((option) => option.value !== projectLanguage); if (next) setTargetLanguage(next.value); setSettingsOpen(false); setLocalizeOpen(true); }}>换语言</Button>
-            <Button variant="outline" size="sm" aria-pressed={fineTimelineOpen} onClick={() => { setFineTimelineOpen((open) => !open); setSettingsOpen(false); }}>显示字幕与动画位置</Button>
-          </div>
-          <div className="min-h-0 overflow-y-auto">
-          <div className="flex h-full min-h-0 flex-col bg-background">
-            <div className="min-h-0 flex-1 overflow-y-auto scrollbar-hover p-3">
-              {/* 场景操作 */}
-              <div className="mb-5">
-                <div className="mb-2 flex items-center gap-1.5 text-caption font-medium text-muted-foreground">
-                  <Clapperboard className="h-3.5 w-3.5" />
-                  场景操作
-                </div>
-                {actionLoading && actionLabel && (
-                  <div
-                    className="mb-2 flex items-center gap-2 text-micro text-muted-foreground"
-                    role="status"
-                  >
-                    <Loader2 className="h-3 w-3 animate-spin" />
-                    <span>{actionLabel}</span>
-                  </div>
-                )}
-                <div className="space-y-1.5">
-                  <Button
-                    size="sm"
-                    className="w-full text-caption"
-                    onClick={handleGenerate}
-                    disabled={
-                      actionLoading || agentRunning ||
-                      !selectedScene ||
-                      selectedStatus !== "pending"
-                    }
-                  >
-                    {actionLoading ? (
-                      <Loader2 className="mr-1.5 h-3.5 w-3.5 animate-spin" />
-                    ) : (
-                      <Wand2 className="mr-1.5 h-3.5 w-3.5" />
-                    )}
-                    生成场景画面
-                  </Button>
-                  <div className="grid grid-cols-2 gap-1.5">
-                    <Button
-                      variant="ghost"
-                      size="sm"
-                      className="text-caption"
-                      onClick={handleRegenerate}
-                      disabled={
-                        actionLoading || agentRunning ||
-                        !selectedScene ||
-                        selectedStatus === "pending" ||
-                        selectedStatus === "generating"
-                      }
-                    >
-                      <RefreshCw className="mr-1.5 h-3.5 w-3.5" />
-                      重新生成
-                    </Button>
-                    <Button
-                      variant="ghost"
-                      size="sm"
-                      className="text-caption"
-                      onClick={() => setRewriteOpen(true)}
-                      disabled={!selectedScene || agentRunning}
-                    >
-                      <Wand2 className="mr-1.5 h-3.5 w-3.5" />
-                      调整内容
-                    </Button>
-                  </div>
-                  <div className="grid grid-cols-2 gap-1.5">
-                    <Button
-                      variant="ghost"
-                      size="sm"
-                      className="text-caption"
-                      onClick={handlePlayNarration}
-                      disabled={
-                        !narrationEnabled ||
-                        playingIndex !== null ||
-                        !selectedScene?.narration?.trim()
-                      }
-                    >
-                      {playingIndex === selectedIndex ? (
-                        <Loader2 className="mr-1.5 h-3.5 w-3.5 animate-spin" />
-                      ) : (
-                        <Volume2 className="mr-1.5 h-3.5 w-3.5" />
-                      )}
-                      试听旁白
-                    </Button>
-                  </div>
-                </div>
-              </div>
-
-              <div className="mb-5 border-t border-border/70 pt-4">
-                <div className="mb-2 flex items-center justify-between gap-2 text-caption font-medium text-muted-foreground">
-                  <span className="flex items-center gap-1.5">
-                    <MessageSquarePlus className="h-3.5 w-3.5" />
-                    审阅意见
-                  </span>
-                  <span className="text-micro font-normal">
-                    {openReviews.length} 条未解决
-                  </span>
-                </div>
-                <Textarea
-                  value={reviewText}
-                  onChange={(event) => setReviewText(event.target.value)}
-                  className="min-h-[64px] resize-none text-caption"
-                  placeholder={`在场景 ${selectedIndex} · ${(playheadMs / 1000).toFixed(1)}s 添加意见`}
-                  aria-label="审阅意见"
-                />
-                <Button
-                  variant="outline"
-                  size="sm"
-                  className="mt-1.5 w-full text-caption"
-                  onClick={handleAddReview}
-                  disabled={!reviewText.trim() || reviewLoading}
-                >
-                  {reviewLoading ? (
-                    <Loader2 className="mr-1.5 h-3.5 w-3.5 animate-spin" />
-                  ) : (
-                    <MessageSquarePlus className="mr-1.5 h-3.5 w-3.5" />
-                  )}
-                  记录当前时间点
-                </Button>
-                {selectedReviews.length > 0 && (
-                  <div className="mt-2 space-y-1.5">
-                    {selectedReviews
-                      .slice(-4)
-                      .reverse()
-                      .map((review) => (
-                        <div
-                          key={review.id}
-                          className={cn(
-                            "rounded-md border p-2 text-micro",
-                            review.status === "resolved"
-                              ? "border-border/50 text-muted-foreground"
-                              : "border-amber-500/30 bg-amber-500/5",
-                          )}
-                        >
-                          <div className="flex items-start justify-between gap-2">
-                            <div className="min-w-0">
-                              <div className="text-micro text-muted-foreground">
-                                {(review.timeMs / 1000).toFixed(1)}s
-                              </div>
-                              <div className="mt-0.5 break-words">
-                                {review.text}
-                              </div>
-                            </div>
-                            {review.status === "open" && (
-                              <Button
-                                type="button"
-                                variant="ghost"
-                                size="sm"
-                                className="h-6 shrink-0 px-1.5 text-micro text-primary"
-                                onClick={() => handleResolveReview(review.id)}
-                                disabled={reviewLoading}
-                              >
-                                解决
-                              </Button>
-                            )}
-                          </div>
-                        </div>
-                      ))}
-                  </div>
-                )}
-              </div>
-
+          <DialogHeader><DialogTitle>导出结果</DialogTitle><DialogDescription>查看导出进度，或保存已完成的视频和文件。</DialogDescription></DialogHeader>
+          <div className="min-h-0 overflow-y-auto scrollbar-hover">
               {/* 全局导出 */}
               <div>
                 <div className="mb-2 flex items-center gap-1.5 text-caption font-medium text-muted-foreground">
@@ -1946,7 +1759,7 @@ export function ProducingPhase({
                         <button
                           type="button"
                           className="text-primary hover:underline"
-                          onClick={() => setRuntimeDialogOpen(true)}
+                          onClick={() => { setDeliveryOpen(false); setRuntimeDialogOpen(true); }}
                         >
                           点击安装视频运行环境
                         </button>
@@ -1996,16 +1809,6 @@ export function ProducingPhase({
                           </span>
                         </>
                       )}
-                      {exportStatus.releaseType && (
-                        <>
-                          <span>交付版本</span>
-                          <span className="text-foreground">
-                            {exportStatus.releaseType === "final"
-                              ? "正式版"
-                              : "草稿版"}
-                          </span>
-                        </>
-                      )}
                       <span>声音</span>
                       <span className="text-foreground">
                         {exportStatus.audio ? "已包含" : "无"}
@@ -2021,8 +1824,8 @@ export function ProducingPhase({
                         )}
                       >
                         {exportStatus.qualityStatus === "passed"
-                          ? "交付检查已通过"
-                          : "交付完成，建议复核字幕时间"}
+                          ? "导出检查已通过"
+                          : "导出完成，有事项需要检查"}
                         {exportStatus.deliveryWarnings?.[0] ? (
                           <div className="mt-0.5 text-muted-foreground">
                             {exportStatus.deliveryWarnings[0]}
@@ -2049,7 +1852,7 @@ export function ProducingPhase({
                       className="w-full text-caption"
                       onClick={() => {
                         setExportError(null);
-                        setSettingsOpen(false); setExportDialogOpen(true);
+                        setDeliveryOpen(false); setExportDialogOpen(true);
                       }}
                       disabled={isRendering || exportActionLoading || !allReady}
                     >
@@ -2078,7 +1881,7 @@ export function ProducingPhase({
                       className="w-full text-caption"
                       onClick={() => {
                         setExportError(null);
-                        setSettingsOpen(false); setExportDialogOpen(true);
+                        setDeliveryOpen(false); setExportDialogOpen(true);
                       }}
                       disabled={isRendering || exportActionLoading}
                     >
@@ -2148,7 +1951,7 @@ export function ProducingPhase({
                       className="w-full text-caption"
                       onClick={() => {
                         setExportError(null);
-                        setSettingsOpen(false); setExportDialogOpen(true);
+                        setDeliveryOpen(false); setExportDialogOpen(true);
                       }}
                       disabled={isRendering || exportActionLoading}
                     >
@@ -2158,17 +1961,8 @@ export function ProducingPhase({
                   </div>
                 )}
               </div>
-            </div>
-
-            {/* 底部全局进度提示 */}
-            {allReady && !isExportDone && !isRendering && (
-              <div className="shrink-0 border-t border-border/70 p-3 text-micro text-muted-foreground">
-                全部场景已生成，可以导出视频
-              </div>
-            )}
           </div>
-          </div>
-          <DialogFooter><Button variant="ghost" onClick={() => setSettingsOpen(false)}>返回视频</Button></DialogFooter>
+          <DialogFooter><Button variant="ghost" size="sm" onClick={() => setDeliveryOpen(false)}>返回视频</Button></DialogFooter>
         </DialogContent>
       </Dialog>
 
@@ -2179,134 +1973,8 @@ export function ProducingPhase({
         </DialogContent>
       </Dialog>
 
-      <Dialog open={aspectOpen} onOpenChange={setAspectOpen}>
-        <DialogContent className="max-w-md">
-          <DialogHeader>
-            <DialogTitle>横屏与竖屏</DialogTitle>
-            <DialogDescription>
-              Mona 会保留视频内容，重新安排适合新方向的画面。
-            </DialogDescription>
-          </DialogHeader>
-          <div
-            className="grid grid-cols-3 gap-2"
-            role="radiogroup"
-            aria-label="画面比例"
-          >
-            {(
-              [
-                { value: "16:9", label: "横屏", hint: "1920×1080" },
-                { value: "9:16", label: "竖屏", hint: "1080×1920" },
-                { value: "1:1", label: "方形", hint: "1080×1080" },
-              ] as const
-            ).map((option) => (
-              <Button
-                key={option.value}
-                type="button"
-                variant="outline"
-                role="radio"
-                aria-checked={targetAspect === option.value}
-                disabled={aspectChanging}
-                onClick={() => setTargetAspect(option.value)}
-                className={cn(
-                  "h-auto flex-col gap-1 py-3",
-                  targetAspect === option.value &&
-                    "border-primary bg-primary/5",
-                )}
-              >
-                <span>{option.label}</span>
-                <span className="text-micro font-normal text-muted-foreground">
-                  {option.hint}
-                </span>
-              </Button>
-            ))}
-          </div>
-          <div className="rounded-md bg-muted/40 px-3 py-2 text-micro text-muted-foreground">
-            先调整分镜方案，在导演台确认后再生成画面。
-          </div>
-          <DialogFooter>
-            <Button
-              variant="ghost"
-              onClick={() => setAspectOpen(false)}
-              disabled={aspectChanging}
-            >
-              取消
-            </Button>
-            <Button
-              onClick={() => void handleChangeAspect()}
-              disabled={aspectChanging || targetAspect === projectAspect}
-            >
-              {aspectChanging ? (
-                <Loader2 className="mr-1.5 h-3.5 w-3.5 animate-spin" />
-              ) : (
-                <Ratio className="mr-1.5 h-3.5 w-3.5" />
-              )}
-              {aspectChanging ? "正在调整方案…" : "调整分镜方案"}
-            </Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
-
-      <Dialog open={localizeOpen} onOpenChange={setLocalizeOpen}>
-        <DialogContent className="max-w-md">
-          <DialogHeader>
-            <DialogTitle>换语言</DialogTitle>
-            <DialogDescription>
-              Mona 会调整这个视频的文字、配音和字幕，保留原内容含义与风格。
-            </DialogDescription>
-          </DialogHeader>
-          <div
-            className="grid grid-cols-2 gap-2"
-            role="radiogroup"
-            aria-label="目标语言"
-          >
-            {VIDEO_LANGUAGE_OPTIONS.map((option) => (
-              <Button
-                key={option.value}
-                type="button"
-                variant="outline"
-                role="radio"
-                aria-checked={targetLanguage === option.value}
-                disabled={option.value === projectLanguage || localizing}
-                onClick={() => setTargetLanguage(option.value)}
-                className={cn(
-                  "justify-start",
-                  targetLanguage === option.value &&
-                    "border-primary bg-primary/5",
-                )}
-              >
-                {option.label}
-                {option.value === projectLanguage ? "（当前）" : ""}
-              </Button>
-            ))}
-          </div>
-          <div className="rounded-md bg-muted/40 px-3 py-2 text-micro text-muted-foreground">
-            先调整旁白和画面文字，在导演台确认后再生成视频。
-          </div>
-          <DialogFooter>
-            <Button
-              variant="ghost"
-              onClick={() => setLocalizeOpen(false)}
-              disabled={localizing}
-            >
-              取消
-            </Button>
-            <Button
-              onClick={() => void handleLocalizeProject()}
-              disabled={localizing || targetLanguage === projectLanguage}
-            >
-              {localizing ? (
-                <Loader2 className="mr-1.5 h-3.5 w-3.5 animate-spin" />
-              ) : (
-                <Languages className="mr-1.5 h-3.5 w-3.5" />
-              )}
-              {localizing ? "正在翻译..." : "换语言"}
-            </Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
-
       <Dialog open={versionsOpen} onOpenChange={setVersionsOpen}>
-        <DialogContent className="max-w-lg">
+        <DialogContent className="flex max-h-[85vh] max-w-lg flex-col">
           <DialogHeader>
             <DialogTitle>项目版本历史</DialogTitle>
             <DialogDescription>
@@ -2358,47 +2026,16 @@ export function ProducingPhase({
               ))
             )}
           </div>
+          {reviews.length ? <section className="max-h-48 shrink-0 space-y-2 overflow-y-auto border-t border-border/70 pt-3" aria-label="以前保存的修改备注">
+            <h3 className="text-caption font-medium">以前保存的修改备注</h3>
+            {reviews.map((review) => <div key={review.id} className="flex items-start justify-between gap-3 text-caption">
+              <div><p className="text-muted-foreground">第 {review.sceneIndex} 段 · {(review.timeMs / 1000).toFixed(1)} 秒</p><p className="mt-1 break-words">{review.text}</p></div>
+              {review.status === "open" ? <Button variant="outline" size="xs" disabled={reviewLoading} onClick={() => void handleResolveReview(review.id)}>标记已处理</Button> : <span className="shrink-0 text-muted-foreground">已处理</span>}
+            </div>)}
+          </section> : null}
           <DialogFooter>
             <Button variant="ghost" onClick={() => setVersionsOpen(false)}>
               关闭
-            </Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
-
-      {/* 调整内容对话框 */}
-      <Dialog open={rewriteOpen} onOpenChange={setRewriteOpen}>
-        <DialogContent>
-          <DialogHeader>
-            <DialogTitle>调整场景 {selectedIndex}</DialogTitle>
-            <DialogDescription>
-              描述你希望修改的地方，Mona 会结合当前视频调整并检查结果。
-            </DialogDescription>
-          </DialogHeader>
-          <Textarea
-            value={rewriteText}
-            onChange={(e) => setRewriteText(e.target.value)}
-            className="min-h-[100px] resize-none text-caption"
-            placeholder="例如：把开场改成产品 logo 从中心放大的动效，旁白改成'欢迎体验...'"
-            aria-label="调整要求"
-            autoFocus
-          />
-          <DialogFooter>
-            <Button
-              variant="ghost"
-              onClick={() => setRewriteOpen(false)}
-              disabled={rewriteLoading}
-            >
-              取消
-            </Button>
-            <Button
-              onClick={handleRewriteSubmit}
-              disabled={!rewriteText.trim() || rewriteLoading || agentRunning}
-            >
-              {rewriteLoading && (
-                <Loader2 className="mr-1.5 h-3.5 w-3.5 animate-spin" />
-              )}
-              发送要求
             </Button>
           </DialogFooter>
         </DialogContent>
@@ -2413,96 +2050,17 @@ export function ProducingPhase({
       >
         <DialogContent className="max-w-md">
           <DialogHeader>
-            <DialogTitle>导出与交付</DialogTitle>
+            <DialogTitle>导出视频</DialogTitle>
             <DialogDescription>
-              先选择交付版本，再选择质量。正式版要求全部审阅意见已解决。
+              选择视频质量，导出为 MP4。
             </DialogDescription>
           </DialogHeader>
-          <div className="space-y-1.5">
-            <div className="text-caption font-medium text-muted-foreground">
-              交付版本
-            </div>
-            <div
-              className="grid grid-cols-2 gap-2"
-              role="radiogroup"
-              aria-label="交付版本"
-            >
-              <Button
-                type="button"
-                variant="outline"
-                role="radio"
-                aria-checked={releaseType === "draft"}
-                onClick={() => setReleaseType("draft")}
-                className={cn(
-                  "rounded-lg border px-3 py-2 text-left",
-                  releaseType === "draft"
-                    ? "border-primary bg-primary/5"
-                    : "border-border/60",
-                )}
-              >
-                <span className="block text-ui font-medium">草稿版</span>
-                <span className="text-micro text-muted-foreground">
-                  允许未解决意见
-                </span>
-              </Button>
-              <Button
-                type="button"
-                variant="outline"
-                role="radio"
-                aria-checked={releaseType === "final"}
-                aria-disabled={finalDeliveryBlocked}
-                disabled={finalDeliveryBlocked}
-                onClick={() => setReleaseType("final")}
-                className={cn(
-                  "rounded-lg border px-3 py-2 text-left disabled:cursor-not-allowed disabled:opacity-50",
-                  releaseType === "final"
-                    ? "border-primary bg-primary/5"
-                    : "border-border/60",
-                )}
-              >
-                <span className="block text-ui font-medium">正式版</span>
-                <span className="text-micro text-muted-foreground">
-                  {openReviews.length > 0
-                    ? `先解决 ${openReviews.length} 条意见`
-                    : exportPreflight === null
-                      ? "正在检查交付条件"
-                      : !exportPreflight.assetRights.readyForCommercialUse
-                        ? `先确认 ${
-                            exportPreflight.assetRights.unconfirmedAssets
-                              .length +
-                            exportPreflight.assetRights.missingAssetIds.length
-                          } 个素材权利`
-                        : "审阅与素材使用权已确认"}
-                </span>
-              </Button>
-            </div>
-          </div>
-          <div className="text-caption font-medium text-muted-foreground">
-            导出质量
-          </div>
-          <div role="radiogroup" aria-label="导出质量" className="space-y-1.5">
-            {EXPORT_QUALITY_OPTIONS.map((opt) => (
-              <Button
-                key={opt.value}
-                type="button"
-                variant="outline"
-                role="radio"
-                aria-checked={exportQuality === opt.value}
-                disabled={exportActionLoading}
-                onClick={() => setExportQuality(opt.value)}
-                className={cn(
-                  "flex w-full items-center justify-between rounded-lg border px-3 py-2 text-left transition-colors",
-                  exportQuality === opt.value
-                    ? "border-primary bg-primary/5"
-                    : "border-border/60 hover:bg-accent",
-                )}
-              >
-                <span className="text-ui font-medium">{opt.label}</span>
-                <span className="text-micro text-muted-foreground">
-                  {opt.hint}
-                </span>
-              </Button>
-            ))}
+          <div className="space-y-4">
+            <label className="block space-y-1.5 text-caption font-medium">导出质量
+              <Select aria-label="导出质量" value={exportQuality} disabled={exportActionLoading}
+                onValueChange={(value) => setExportQuality(value as ExportQuality)} options={EXPORT_QUALITY_OPTIONS} />
+            </label>
+            <p className="text-caption text-muted-foreground">{EXPORT_QUALITY_OPTIONS.find((option) => option.value === exportQuality)?.hint}</p>
           </div>
           {exportPreflight && (
             <div className="rounded-lg border border-border/70 bg-muted/30 p-3 text-micro">
@@ -2558,10 +2116,7 @@ export function ProducingPhase({
             </Button>
             <Button
               onClick={handleExportSubmit}
-              disabled={
-                exportActionLoading ||
-                (releaseType === "final" && finalDeliveryBlocked)
-              }
+              disabled={exportActionLoading}
             >
               {exportActionLoading ? (
                 <Loader2 className="mr-1.5 h-3.5 w-3.5 animate-spin" />
@@ -2583,18 +2138,18 @@ export function ProducingPhase({
       />
 
       {/* 全屏预览:当前场景 */}
-      <Dialog open={fullscreen} onOpenChange={setFullscreen}>
+      <Dialog open={fullscreen} onOpenChange={changeFullscreen}>
         <DialogContent className="h-[90vh] max-w-[95vw] gap-0 p-0">
           <div className="flex h-full flex-col">
             <div className="flex shrink-0 items-center justify-between border-b border-border/70 px-4 py-2">
-              <div className="text-ui font-medium">
+              <DialogTitle className="text-ui font-medium">
                 场景 {selectedScene?.index} 全屏预览
-              </div>
+              </DialogTitle>
               <Button
                 variant="ghost"
                 size="sm"
                 className="h-7 px-2 text-micro"
-                onClick={() => setFullscreen(false)}
+                onClick={() => changeFullscreen(false)}
               >
                 关闭
               </Button>
@@ -2611,6 +2166,7 @@ export function ProducingPhase({
                 />
               )}
             </div>
+            <div className="shrink-0 border-t border-border/70 px-3 py-2.5">{scenePlaybackControls}</div>
           </div>
         </DialogContent>
       </Dialog>
@@ -2627,28 +2183,33 @@ export function ProducingPhase({
             <DialogDescription>{playbackError?.description}</DialogDescription>
           </DialogHeader>
           <DialogFooter>
-            <Button onClick={() => setPlaybackError(null)}>关闭</Button>
+            <Button
+              variant={playbackError?.retryWholeProduction ? "ghost" : "default"}
+              onClick={() => setPlaybackError(null)}
+            >
+              关闭
+            </Button>
+            {playbackError?.retryWholeProduction ? (
+              <Button
+                onClick={() => {
+                  setPlaybackError(null);
+                  retryWholeProduction();
+                }}
+              >
+                继续制作
+              </Button>
+            ) : null}
           </DialogFooter>
         </DialogContent>
       </Dialog>
 
-      <VideoNarrationSettingsDialog
-        open={narrationSettingsOpen}
-        value={narrationSettings}
-        saving={narrationSettingsSaving}
-        error={narrationSettingsError}
-        onOpenChange={setNarrationSettingsOpen}
-        onSave={handleSaveNarrationSettings}
-      />
-
-      {/* 整片预览:弹窗播放全片 */}
       <Dialog open={fullFilmOpen} onOpenChange={setFullFilmOpen}>
         <DialogContent className="h-[90vh] max-w-[95vw] gap-0 p-0">
           <div className="flex h-full flex-col">
             <div className="flex shrink-0 items-center justify-between border-b border-border/70 px-4 py-2">
-              <div className="text-ui font-medium">
+              <DialogTitle className="text-ui font-medium">
                 {projectName} · 整片预览
-              </div>
+              </DialogTitle>
               <Button
                 variant="ghost"
                 size="sm"
@@ -2666,10 +2227,15 @@ export function ProducingPhase({
                   controls
                   autoPlay
                 />
-              ) : fullPreviewUrl ? (
+              ) : fullPreviewError ? (
+                <div className="flex h-full flex-col items-center justify-center gap-3 bg-background text-ui">
+                  <p role="alert" className="text-muted-foreground">{fullPreviewError}</p>
+                  <Button variant="outline" size="sm" onClick={() => setFullPreviewRequest((value) => value + 1)}>重试预览</Button>
+                </div>
+              ) : fullPreviewHtml && !fullPreviewLoading ? (
                 <iframe
                   ref={fullPreviewFrameRef}
-                  src={fullPreviewUrl}
+                  srcDoc={fullPreviewHtml}
                   title={`${projectName} 整片预览`}
                   onLoad={() => {
                     void Promise.all([
@@ -2686,7 +2252,7 @@ export function ProducingPhase({
               ) : (
                 <div className="flex h-full items-center justify-center text-ui text-muted-foreground">
                   <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-                  加载整片预览...
+                  正在准备整片画面与声音…
                 </div>
               )}
             </div>

@@ -61,6 +61,7 @@ async def test_preview_http_contract_uses_context_owner_fixed_local_endpoint_and
     result = await tool.execute("preview", "demo", scene_index=1)
 
     assert isinstance(result, list)
+    assert json.loads(result[0]["text"])["frames"] == frames
     image_blocks = [block for block in result if block.get("type") == "image_url"]
     assert len(image_blocks) == 3
     assert [base64.b64decode(block["image_url"]["url"].split(",", 1)[1]) for block in image_blocks] == pngs
@@ -71,6 +72,48 @@ async def test_preview_http_contract_uses_context_owner_fixed_local_endpoint_and
     assert request.headers["x-mona-video-chat-id"] == "bound-chat"
     assert request.headers["x-mona-token"] == "runtime-token"
     assert json.loads(request.content) == {"action": "preview", "name": "demo", "scene_index": 1}
+
+
+async def test_preview_forwards_selected_timestamps_and_returns_each_native_image(
+    tool_workspace: tuple[Path, Path], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    workspace, project = tool_workspace
+    preview_dir = project / "renders" / "previews" / "scene_01"
+    pngs = [(preview_dir / f"sample_{i}.png").read_bytes() for i in range(2)]
+    timestamps = [0.375, 2.125]
+    frames = [
+        {"timestamp": timestamp, "seconds": timestamp, "path": str(preview_dir / f"sample_{i}.png")}
+        for i, timestamp in enumerate(timestamps)
+    ]
+    requests: list[httpx.Request] = []
+
+    async def respond(request: httpx.Request) -> httpx.Response:
+        requests.append(request)
+        return httpx.Response(200, json={
+            "ok": True, "frames": frames, "observationScope": "selected-timestamps",
+            "motionReviewUpdated": False,
+        })
+
+    original_client = httpx.AsyncClient
+
+    def make_client(*args, **kwargs):
+        return original_client(*args, transport=httpx.MockTransport(respond), **kwargs)
+
+    monkeypatch.setattr("mona.agent.tools.video.httpx.AsyncClient", make_client)
+    monkeypatch.setenv("MONA_SERVICES_TOKEN", "runtime-token")
+    tool = VideoTool(workspace, services_port=17374, restrict_to_workspace=False)
+    tool.set_context(RequestContext(channel="web", chat_id="bound-chat"))
+
+    result = await tool.execute("preview", "demo", scene_index=1, timestamps=timestamps)
+
+    assert isinstance(result, list)
+    payload = json.loads(result[0]["text"])
+    assert payload["observationScope"] == "selected-timestamps"
+    assert payload["motionReviewUpdated"] is False
+    assert [frame["timestamp"] for frame in payload["frames"]] == timestamps
+    image_blocks = [block for block in result if block.get("type") == "image_url"]
+    assert [base64.b64decode(block["image_url"]["url"].split(",", 1)[1]) for block in image_blocks] == pngs
+    assert json.loads(requests[0].content)["timestamps"] == timestamps
 
 
 async def test_video_tool_rejects_model_supplied_owner_url_and_token(
@@ -144,10 +187,157 @@ def test_video_tool_stays_hidden_outside_director_context(tool_workspace):
 def test_video_tool_exposes_planning_and_timed_audio_without_user_confirmation_action(tool_workspace):
     workspace, _project = tool_workspace
     schema = VideoTool(workspace).parameters["properties"]
-    assert {"plan", "audio", "sync", "preview"} <= set(schema["action"]["enum"])
+    assert {"style", "plan", "edit", "audio", "sync", "preview"} <= set(schema["action"]["enum"])
     assert "confirm" not in schema["action"]["enum"]
     assert "animation" in schema["scenes"]["items"]["properties"]
     assert schema["plan_revision"]["type"] == "integer"
+    assert schema["style_id"]["type"] == "string"
+    assert schema["instruction"]["minLength"] == 1
+    assert schema["timestamps"]["maxItems"] == 8
+    assert schema["timestamps"]["items"]["type"] == "number"
+    assert schema["instruction"]["maxLength"] == 8000
+
+
+async def test_auto_video_workbench_inspects_and_selects_an_available_style(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from aiohttp import web
+    from aiohttp.test_utils import TestServer
+
+    import mona.api.server as server
+    from mona.api.video_director import handle_video_agent
+
+    monkeypatch.setattr(server, "_video_projects_dir", lambda: tmp_path / "video_projects")
+    monkeypatch.setenv("MONA_SERVICES_TOKEN", "auto-style-runtime-token")
+    app = web.Application()
+    app.router.add_post("/api/video/project/create", server.handle_video_project_create)
+    app.router.add_post("/api/video/project-save-chat-id", server.handle_video_project_save_chat_id)
+    app.router.add_post("/api/video/agent", handle_video_agent)
+
+    async with TestServer(app) as service:
+        async with httpx.AsyncClient(trust_env=False) as client:
+            created = await client.post(str(service.make_url("/api/video/project/create")), json={
+                "name": "automatic-style", "templateId": "auto",
+            })
+            assert created.status_code == 200
+            bound = await client.post(str(service.make_url("/api/video/project-save-chat-id")), json={
+                "name": "automatic-style", "chatId": "style-chat",
+            })
+            assert bound.status_code == 200
+
+        tool = VideoTool(tmp_path, services_port=service.port, restrict_to_workspace=False)
+        tool.set_context(RequestContext(channel="websocket", chat_id="style-chat"))
+        inspected = await tool.execute("inspect", "automatic-style")
+        assert isinstance(inspected, str)
+        current = json.loads(inspected)
+        assert current["stylePreference"] == "auto"
+        dashi_style = next(style for style in current["availableStyles"] if style["id"] == "dashi-flow")
+        assert {"id", "name", "description", "mode"} <= set(dashi_style)
+
+        selected = await tool.execute(
+            "style", "automatic-style", plan_revision=current["planRevision"],
+            style_id=dashi_style["id"],
+        )
+
+    assert isinstance(selected, str)
+    result = json.loads(selected)
+    assert result["ok"] is True
+    assert result["style"]["id"] == "dashi-flow"
+    assert result["planRevision"] == current["planRevision"] + 1
+    saved = server._load_video_meta(tmp_path / "video_projects" / "automatic-style")
+    assert saved["stylePreference"] == "auto"
+    assert saved["templateId"] == "dashi-flow"
+    assert saved["approvedPlanRevision"] is None
+
+
+@pytest.mark.parametrize("timestamps", [[], [0] * 9, [float("nan")], [float("inf")], [10**400], [-0.1], [True]])
+async def test_video_tool_rejects_invalid_selected_timestamps_before_service_call(
+    tool_workspace, monkeypatch: pytest.MonkeyPatch, timestamps,
+) -> None:
+    workspace, _project = tool_workspace
+    requests: list[httpx.Request] = []
+
+    async def respond(request: httpx.Request) -> httpx.Response:
+        requests.append(request)
+        return httpx.Response(200, json={"ok": True})
+
+    original_client = httpx.AsyncClient
+
+    def make_client(*args, **kwargs):
+        return original_client(*args, transport=httpx.MockTransport(respond), **kwargs)
+
+    monkeypatch.setattr("mona.agent.tools.video.httpx.AsyncClient", make_client)
+    tool = VideoTool(workspace, restrict_to_workspace=False)
+    tool.set_context(RequestContext(channel="web", chat_id="bound-chat"))
+
+    result = await tool.execute("preview", "demo", scene_index=1, timestamps=timestamps)
+
+    assert isinstance(result, str)
+    assert json.loads(result)["code"] == "VIDEO_ARGUMENTS_INVALID"
+    assert requests == []
+
+
+async def test_video_tool_edit_reaches_real_services_with_user_instruction_and_scene_fields(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from aiohttp import web
+    from aiohttp.test_utils import TestServer
+
+    import mona.api.server as server
+    from mona.api.video_director import handle_video_agent
+
+    monkeypatch.setattr(server, "_video_projects_dir", lambda: tmp_path / "video_projects")
+    monkeypatch.setenv("MONA_SERVICES_TOKEN", "video-edit-runtime-token")
+    app = web.Application()
+    app.router.add_post("/api/video/project/create", server.handle_video_project_create)
+    app.router.add_post("/api/video/project-save-chat-id", server.handle_video_project_save_chat_id)
+    app.router.add_post("/api/video/agent", handle_video_agent)
+    app.router.add_post("/api/video/project/confirm", server.handle_video_project_confirm)
+
+    async with TestServer(app) as service:
+        async with httpx.AsyncClient(trust_env=False) as client:
+            created = await client.post(str(service.make_url("/api/video/project/create")), json={"name": "edit-contract"})
+            assert created.status_code == 200
+            bound = await client.post(str(service.make_url("/api/video/project-save-chat-id")), json={
+                "name": "edit-contract", "chatId": "edit-chat",
+            })
+            assert bound.status_code == 200
+            headers = {
+                "x-mona-token": "video-edit-runtime-token",
+                "X-Mona-Video-Chat-Id": "edit-chat",
+            }
+            planned = await client.post(str(service.make_url("/api/video/agent")), headers=headers, json={
+                "action": "plan", "name": "edit-contract", "scenes": [{
+                    "title": "第一段", "duration": 3, "visual": "先展示两个方案",
+                    "animation": "两个方案依次出现", "narration": "这里展示两个方案。", "assets": [],
+                }],
+            })
+            assert planned.status_code == 200
+            plan_revision = planned.json()["planRevision"]
+            confirmed = await client.post(str(service.make_url("/api/video/project/confirm")), json={
+                "name": "edit-contract", "expectedPlanRevision": plan_revision,
+            })
+            assert confirmed.status_code == 200
+
+        tool = VideoTool(tmp_path, services_port=service.port, restrict_to_workspace=False)
+        tool.set_context(RequestContext(channel="websocket", chat_id="edit-chat"))
+        instruction = "把两个方案改成并排卡片，并在讲解优势时点亮对应卡片。"
+        change = {"visual": "并排卡片呈现两个方案", "animation": "讲到优势时对应卡片逐步点亮"}
+        result = await tool.execute(
+            "edit", "edit-contract", scene_index=1, plan_revision=plan_revision,
+            instruction=instruction, scene=change,
+        )
+
+    assert isinstance(result, str)
+    payload = json.loads(result)
+    assert payload["ok"] is True
+    assert payload["changedFields"] == ["animation", "visual"]
+    assert payload["planRevision"] == plan_revision + 1
+    saved = server._load_video_meta(tmp_path / "video_projects" / "edit-contract")
+    assert saved["approvedPlanRevision"] == saved["planRevision"]
+    assert saved["lastEdit"]["instruction"] == instruction
+    assert saved["scenes"][0]["visual"] == change["visual"]
+    assert saved["scenes"][0]["animation"] == change["animation"]
 
 
 async def test_director_agent_plans_then_waits_for_frontend_confirmation_through_real_service(

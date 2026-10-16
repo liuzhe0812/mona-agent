@@ -5,6 +5,7 @@ import json
 import pytest
 
 from mona.video_timeline import (
+    SUBTITLE_GROUPING_VERSION,
     VideoTimelineError,
     build_motion_plan,
     build_subtitle_track,
@@ -52,10 +53,104 @@ def test_provider_word_boundaries_are_grouped_into_cues() -> None:
         audio_hash="audio-hash",
     )
     assert track["timingSource"] == "provider-boundary"
+    assert track["groupingVersion"] == SUBTITLE_GROUPING_VERSION
     assert len(track["cues"]) == 2
     assert track["cues"][0]["startMs"] == 120
     assert track["cues"][1]["endMs"] == 3200
     assert track["audioHash"] == "audio-hash"
+
+
+def test_provider_words_restore_script_punctuation_and_english_spacing_only_on_exact_alignment() -> None:
+    narration = "AI 模型通过 5.5 倍权重，提高指标权重的比例。"
+    words = [
+        {"text": text, "startMs": index * 300, "endMs": index * 300 + 200}
+        for index, text in enumerate(("AI", "模型", "通过", "5.5", "倍", "权重", "提高", "指标", "权重", "的", "比例"))
+    ]
+    track = build_subtitle_track(narration, 4_000, word_timings=words)
+
+    assert [cue["text"] for cue in track["cues"]] == [
+        "AI 模型通过 5.5 倍权重，",
+        "提高指标权重的比例。",
+    ]
+    assert [word for cue in track["cues"] for word in cue["words"]] == words
+
+    mismatch = build_subtitle_track(
+        "这个比例很重要。",
+        1_500,
+        word_timings=[
+            {"text": "这个", "startMs": 0, "endMs": 400},
+            {"text": "比例也", "startMs": 410, "endMs": 800},
+            {"text": "很重要", "startMs": 810, "endMs": 1_200},
+        ],
+    )
+    assert "".join(cue["text"] for cue in mismatch["cues"]) == "这个比例也很重要"
+    assert "。" not in "".join(cue["text"] for cue in mismatch["cues"])
+
+
+def test_long_provider_sentence_splits_near_longest_central_word_gap_without_orphan_tail() -> None:
+    narration = "权重表示每项数据对选择结果的影响程度需要结合当前预算与业务目标综合判断。"
+    assert 18 < len(narration.rstrip("。")) < 36
+    words = []
+    cursor = 300
+    for index, character in enumerate(narration.rstrip("。")):
+        words.append({"text": character, "startMs": cursor, "endMs": cursor + 80})
+        cursor += 780 if index == 17 else 100
+
+    track = build_subtitle_track(
+        narration,
+        cursor + 500,
+        word_timings=words,
+        max_chars=18,
+    )
+    cues = track["cues"]
+
+    assert len(cues) == 2
+    assert "".join(word["text"] for word in cues[0]["words"]) == narration[0:18]
+    assert "".join(word["text"] for word in cues[1]["words"]) == narration[18:-1]
+    assert all(len(cue["words"]) > 1 for cue in cues)
+    assert cues[0]["words"][-1]["endMs"] < cues[1]["words"][0]["startMs"]
+    assert "".join(cue["text"] for cue in cues) == narration
+    assert [word for cue in cues for word in cue["words"]] == words
+
+
+@pytest.mark.parametrize(
+    ("prefix_words", "tail", "tail_start", "tail_end"),
+    [
+        (("权重", "会", "综合考虑", "各项指标", "对", "最终评价", "结果"), "的比例", 9_762, 10_212),
+        (("产品界面", "通过", "真实操作", "展示", "用户", "如何", "配置"), "说明", 6_750, 7_188),
+    ],
+)
+def test_long_weighted_and_product_phrases_do_not_orphan_provider_tail_words(
+    prefix_words: tuple[str, ...], tail: str, tail_start: int, tail_end: int
+) -> None:
+    prefix = "".join(prefix_words)
+    assert len(prefix) == 18
+    narration = f"{prefix}{tail}。"
+    words = [
+        {"text": word, "startMs": index * 700, "endMs": index * 700 + 400}
+        for index, word in enumerate(prefix_words)
+    ]
+    words.append({"text": tail, "startMs": tail_start, "endMs": tail_end})
+    track = build_subtitle_track(narration, 12_000, word_timings=words)
+    tail_cue = next(
+        cue for cue in track["cues"] if any(word["text"] == tail for word in cue["words"])
+    )
+
+    assert len(tail_cue["words"]) > 1
+    assert tail_cue["text"].endswith(f"{tail}。")
+    assert "".join(cue["text"] for cue in track["cues"]) == narration
+    assert [word for cue in track["cues"] for word in cue["words"]] == words
+
+
+def test_short_complete_provider_sentence_is_not_forced_to_maximum_length() -> None:
+    track = build_subtitle_track(
+        "好。",
+        900,
+        word_timings=[{"text": "好", "startMs": 100, "endMs": 500}],
+    )
+
+    assert [cue["text"] for cue in track["cues"]] == ["好。"]
+    assert track["cues"][0]["words"] == [{"text": "好", "startMs": 100, "endMs": 500}]
 
 
 def test_acoustic_alignment_source_and_confidence_are_not_mislabeled() -> None:

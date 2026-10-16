@@ -164,6 +164,7 @@ from mona.api.server import (
     handle_video_series_projects_upgrade,
     handle_video_voice_preview,
 )
+from mona.api.video_audio import handle_video_audio_preview
 from mona.api.video_director import handle_video_agent
 from mona.api.video_runtime_jobs import (
     handle_video_runtime_download_cancel,
@@ -179,6 +180,7 @@ from mona.api.video_series import (
     handle_video_brand_kits,
     handle_video_brand_logo_import,
     handle_video_series_apply_brand_kit,
+    handle_video_series_copy,
     handle_video_series_create,
     handle_video_series_delete,
     handle_video_series_get,
@@ -188,8 +190,13 @@ from mona.api.video_series import (
     handle_video_style_draft_put,
     handle_video_style_lock,
     handle_video_style_preview,
+    handle_video_style_reference,
+    handle_video_style_sample_bind,
+    handle_video_style_sample_preview,
+    handle_video_style_template_preview,
     handle_video_style_templates,
     handle_video_style_validate,
+    handle_video_style_version_preview,
     handle_video_style_version_to_draft,
     handle_video_style_versions,
 )
@@ -521,6 +528,10 @@ def create_services_app(
     app.router.add_post("/api/notes/export-docx", handle_notes_export_docx)
     app.router.add_get("/api/video/projects", handle_video_projects)
     app.router.add_get("/api/video/style/templates", handle_video_style_templates)
+    app.router.add_get(
+        "/api/video/style/templates/{template_id}/preview",
+        handle_video_style_template_preview,
+    )
     app.router.add_get("/api/video/series", handle_video_series_list)
     app.router.add_post("/api/video/series", handle_video_series_create)
     app.router.add_patch(
@@ -535,6 +546,9 @@ def create_services_app(
         "/api/video/brand-kits/{kit_id}/lock", handle_video_brand_kit_lock
     )
     app.router.add_get("/api/video/series/{series_id}", handle_video_series_get)
+    app.router.add_post(
+        "/api/video/series/{series_id}/copy", handle_video_series_copy
+    )
     app.router.add_delete("/api/video/series/{series_id}", handle_video_series_delete)
     app.router.add_post(
         "/api/video/series/{series_id}/brand-kit",
@@ -542,6 +556,9 @@ def create_services_app(
     )
     app.router.add_get(
         "/api/video/series/{series_id}/style/draft", handle_video_style_draft_get
+    )
+    app.router.add_get(
+        "/api/video/series/{series_id}/style/reference", handle_video_style_reference
     )
     app.router.add_put(
         "/api/video/series/{series_id}/style/draft", handle_video_style_draft_put
@@ -552,6 +569,16 @@ def create_services_app(
     app.router.add_post(
         "/api/video/series/{series_id}/style/preview", handle_video_style_preview
     )
+    app.router.add_route(
+        "POST",
+        "/api/video/series/{series_id}/style/sample",
+        handle_video_style_sample_bind,
+    )
+    app.router.add_route(
+        "GET",
+        "/api/video/series/{series_id}/style/sample",
+        handle_video_style_sample_preview,
+    )
     app.router.add_post(
         "/api/video/series/{series_id}/style/lock", handle_video_style_lock
     )
@@ -561,6 +588,10 @@ def create_services_app(
     app.router.add_post(
         "/api/video/series/{series_id}/styles/{version}/draft",
         handle_video_style_version_to_draft,
+    )
+    app.router.add_get(
+        "/api/video/series/{series_id}/styles/{version}/preview",
+        handle_video_style_version_preview,
     )
     app.router.add_post(
         "/api/video/series/{series_id}/background-assets",
@@ -576,6 +607,7 @@ def create_services_app(
     )
     app.router.add_post("/api/video/project/create", handle_video_project_create)
     app.router.add_post("/api/video/agent", handle_video_agent)
+    app.router.add_post("/api/video/project/audio-preview", handle_video_audio_preview)
     app.router.add_post("/api/video/project/rename", handle_video_project_rename)
     app.router.add_post("/api/video/project/copy", handle_video_project_copy)
     app.router.add_post("/api/video/project/archive", handle_video_project_archive)

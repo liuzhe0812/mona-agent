@@ -6,8 +6,10 @@ import json
 from pathlib import Path
 
 import pytest
+from aiohttp.test_utils import TestClient, TestServer
 from PIL import Image
 
+from mona.api import video_series
 from mona.video_style import (
     BackgroundAssetError,
     BackgroundAssetInUseError,
@@ -34,17 +36,92 @@ def _image(path: Path, *, size: tuple[int, int] = (1920, 1080), fmt: str = "PNG"
     Image.new("RGB", size, (28, 36, 52)).save(path, format=fmt)
 
 
-def test_templates_cover_four_complete_visual_systems() -> None:
+@pytest.fixture
+async def services_client(monkeypatch: pytest.MonkeyPatch, tmp_path: Path):
+    import mona.services.server as services
+
+    monkeypatch.setenv("MONA_APP_DATA_DIR", str(tmp_path / "app-data"))
+    monkeypatch.setenv("MONA_SERVICES_TOKEN", "video-style-preview-test-token")
+    monkeypatch.setattr(services.imap_pool_manager, "keepalive", lambda *_args: None)
+    monkeypatch.setattr(services._idle_manager, "set_loop", lambda _loop: None)
+    async with TestClient(TestServer(services.create_services_app())) as client:
+        yield client
+
+
+def test_templates_include_core_and_copied_dashi_styles() -> None:
     templates = list_builtin_templates()
-    assert {item["id"] for item in templates} == {
+    assert {
         "minimal-business",
         "tech-dark",
         "editorial-magazine",
         "knowledge-cards",
-    }
+    } <= {item["id"] for item in templates}
+    assert {"dashi-notebook", "dashi-flow", "dashi-cartoon", "dashi-collage", "dashi-paper", "dashi-editorial", "dashi-tech"} <= {item["id"] for item in templates}
     required = {"cover", "chapter", "content", "data", "comparison", "process", "quote", "outro"}
     assert all(required <= set(item["components"]) for item in templates)
     assert get_builtin_template("technology-dark")["id"] == "tech-dark"
+
+
+async def test_style_template_list_includes_only_real_dashi_preview_urls(
+    services_client: TestClient,
+) -> None:
+    response = await services_client.get("/api/video/style/templates")
+    assert response.status == 200
+    templates = {item["id"]: item for item in (await response.json())["templates"]}
+
+    assert templates["dashi-notebook"]["preview"] == {
+        "poster": "/api/video/style/templates/dashi-notebook/preview?kind=poster",
+        "motion": "/api/video/style/templates/dashi-notebook/preview?kind=motion",
+    }
+    assert "preview" not in templates["minimal-business"]
+
+
+async def test_dashi_preview_endpoint_serves_the_copied_assets(
+    services_client: TestClient,
+) -> None:
+    mime_types = {"JPEG": "image/jpeg", "GIF": "image/gif"}
+    for template_id, previews in video_series._DASHI_TEMPLATE_PREVIEWS.items():
+        for kind, (relative_path, image_format) in previews.items():
+            response = await services_client.get(
+                f"/api/video/style/templates/{template_id}/preview",
+                params={"kind": kind},
+            )
+            source = (video_series._DASHI_ASSET_ROOT / relative_path).read_bytes()
+            assert response.status == 200
+            assert response.content_type == mime_types[image_format]
+            assert await response.read() == source
+
+
+async def test_dashi_preview_rejects_invalid_ids_kinds_and_escaped_resources(
+    services_client: TestClient,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    unknown = await services_client.get(
+        "/api/video/style/templates/not-a-template/preview?kind=poster"
+    )
+    invalid_kind = await services_client.get(
+        "/api/video/style/templates/dashi-notebook/preview?kind=html"
+    )
+    traversal_id = await services_client.get(
+        "/api/video/style/templates/%2E%2E%2Foutside/preview?kind=poster"
+    )
+    ignored_path = await services_client.get(
+        "/api/video/style/templates/dashi-notebook/preview?kind=poster&path=../../outside"
+    )
+    assert unknown.status == 404
+    assert invalid_kind.status == 400
+    assert 400 <= traversal_id.status < 500
+    assert ignored_path.status == 200
+
+    monkeypatch.setitem(
+        video_series._DASHI_TEMPLATE_PREVIEWS["dashi-notebook"],
+        "poster",
+        ("../../outside.jpg", "JPEG"),
+    )
+    escaped_resource = await services_client.get(
+        "/api/video/style/templates/dashi-notebook/preview?kind=poster"
+    )
+    assert escaped_resource.status == 404
 
 
 def test_series_and_draft_revision_are_atomic_and_conflict_safe(tmp_path: Path) -> None:

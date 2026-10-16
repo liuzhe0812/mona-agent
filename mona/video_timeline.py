@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import math
 import os
 import re
 import tempfile
@@ -25,8 +26,11 @@ class VideoTimelineError(ValueError):
 
 _SENTENCE_END_RE = re.compile(r"(?<=[。！？!?；;])\s*")
 _CLAUSE_END_RE = re.compile(r"(?<=[，,：:])\s*")
+_ALIGNMENT_IGNORED_RE = re.compile(r"[\s，。！？；：、,.!?;:…—“”\"'‘’（）()《》「」『』【】〈〉\[\]]")
+_ALIGNMENT_UNIT_RE = re.compile(r"[A-Za-z0-9]+(?:[.'][A-Za-z0-9]+)*|[\s\S]")
 _TARGET_RE = re.compile(r"^[a-z][a-z0-9]*(?:[._-][a-z0-9]+)*$")
 _EFFECTS = {"fade-rise", "stagger-rise", "soft-pulse", "cross-fade", "count-up", "draw-line"}
+SUBTITLE_GROUPING_VERSION = 3
 
 
 def _hash_text(value: str) -> str:
@@ -96,26 +100,108 @@ def _normalize_word_timings(values: Iterable[Mapping[str, Any]]) -> list[dict[st
     return words
 
 
-def _cues_from_words(words: list[dict[str, Any]], max_chars: int) -> list[dict[str, Any]]:
+def _alignment_chars(text: str) -> tuple[list[str], list[int]]:
+    characters: list[str] = []
+    positions: list[int] = []
+    for index, character in enumerate(text):
+        if _ALIGNMENT_IGNORED_RE.fullmatch(character):
+            continue
+        characters.append(character.lower() if character.isascii() else character)
+        positions.append(index)
+    return characters, positions
+
+
+def _aligned_word_display_texts(text: str, words: list[dict[str, Any]]) -> list[str] | None:
+    """Restore script punctuation/spacing only when provider text aligns exactly."""
+    script_chars, script_positions = _alignment_chars(text)
+    word_chars = [_alignment_chars(word["text"])[0] for word in words]
+    if not script_chars or any(not chars for chars in word_chars):
+        return None
+    if [character for chars in word_chars for character in chars] != script_chars:
+        return None
+
+    display: list[str] = []
+    cursor = 0
+    for index, chars in enumerate(word_chars):
+        next_cursor = cursor + len(chars)
+        start = 0 if index == 0 else script_positions[cursor]
+        end = len(text) if index == len(words) - 1 else script_positions[next_cursor]
+        display.append(text[start:end])
+        cursor = next_cursor
+    return display
+
+
+def _subtitle_unit_count(text: str) -> int:
+    return sum(
+        1
+        for unit in _ALIGNMENT_UNIT_RE.findall(text)
+        if not _ALIGNMENT_IGNORED_RE.fullmatch(unit)
+    )
+
+
+def _split_overlong_word_group(
+    group: list[tuple[dict[str, Any], str]], max_chars: int
+) -> list[list[tuple[dict[str, Any], str]]]:
+    total = sum(_subtitle_unit_count(display) for _, display in group)
+    if total <= max_chars or len(group) < 2:
+        return [group]
+
+    lower = math.ceil(total * 0.3)
+    upper = math.floor(total * 0.7)
+    candidates: list[tuple[int, int, int]] = []
+    cumulative = 0
+    for index, (word, display) in enumerate(group[:-1], 1):
+        cumulative += _subtitle_unit_count(display)
+        if lower <= cumulative <= upper:
+            next_word = group[index][0]
+            pause = int(next_word["startMs"]) - int(word["endMs"])
+            candidates.append((index, cumulative, pause))
+    if not candidates:
+        return [group]
+
+    pauses = [candidate for candidate in candidates if candidate[2] > 0]
+    if pauses:
+        split_at = max(pauses, key=lambda item: (item[2], -abs(item[1] - total / 2)))[0]
+    else:
+        split_at = min(candidates, key=lambda item: abs(item[1] - total / 2))[0]
+    return _split_overlong_word_group(group[:split_at], max_chars) + _split_overlong_word_group(
+        group[split_at:], max_chars
+    )
+
+
+def _cues_from_words(
+    words: list[dict[str, Any]], max_chars: int, display_texts: list[str]
+) -> list[dict[str, Any]]:
+    # Adapted from Dashi Animationstyle pipeline/字幕.mjs units()/splitCues() (MIT).
+    # Provider word boundaries stay indivisible; overlong lines split at a balanced
+    # central word gap, matching Dashi's 30%-70% longest-pause rule.
     cues: list[dict[str, Any]] = []
-    group: list[dict[str, Any]] = []
-    for index, word in enumerate(words):
-        group.append(word)
-        text = "".join(item["text"] for item in group)
-        next_word = words[index + 1] if index + 1 < len(words) else None
-        boundary = bool(re.search(r"[。！？!?；;，,：:]$", word["text"]))
-        long_gap = bool(next_word and next_word["startMs"] - word["endMs"] >= 450)
-        if boundary or long_gap or len(text) >= max_chars or next_word is None:
+    groups: list[list[tuple[dict[str, Any], str]]] = []
+    group: list[tuple[dict[str, Any], str]] = []
+    for word, display in zip(words, display_texts, strict=True):
+        group.append((word, display))
+        ending = display.rstrip()
+        sentence_end = bool(re.search(r"[。！？!?…\n]$", ending))
+        clause_end = bool(re.search(r"[，,；;：:]$", ending))
+        if sentence_end or clause_end:
+            groups.append(group)
+            group = []
+    if group:
+        groups.append(group)
+
+    for boundary_group in groups:
+        for part in _split_overlong_word_group(boundary_group, max_chars):
+            cue_words = [word for word, _ in part]
             cues.append(
                 {
                     "id": f"cue-{len(cues) + 1:02d}",
-                    "startMs": group[0]["startMs"],
-                    "endMs": max(group[-1]["endMs"], group[0]["startMs"] + 300),
-                    "text": text,
-                    "words": [dict(item) for item in group],
+                    "startMs": cue_words[0]["startMs"],
+                    "endMs": max(cue_words[-1]["endMs"], cue_words[0]["startMs"] + 300),
+                    "text": "".join(display for _, display in part),
+                    "words": [dict(item) for item in cue_words],
+                    "displayWords": [display for _, display in part],
                 }
             )
-            group = []
     # Provider rounding can make adjacent word groups overlap by a millisecond.
     for cue, following in zip(cues, cues[1:]):
         if cue["startMs"] < following["startMs"] < cue["endMs"]:
@@ -170,7 +256,12 @@ def build_subtitle_track(
         raise VideoTimelineError("字幕轨道时长必须至少为 300ms", path="$.durationMs")
     words = _normalize_word_timings(word_timings or [])
     if words:
-        cues = _cues_from_words(words, max_chars)
+        display_texts = _aligned_word_display_texts(narration, words)
+        cues = _cues_from_words(
+            words,
+            max_chars,
+            display_texts or [word["text"] for word in words],
+        )
         duration_ms = max(duration_ms, cues[-1]["endMs"])
         actual_timing_source = timing_source or "provider-boundary"
     else:
@@ -184,6 +275,7 @@ def build_subtitle_track(
         "audioHash": audio_hash,
         "timingSource": actual_timing_source,
         "alignmentConfidence": alignment_confidence,
+        "groupingVersion": SUBTITLE_GROUPING_VERSION,
         "cues": cues,
     }
     validate_subtitle_track(track)

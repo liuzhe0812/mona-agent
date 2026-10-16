@@ -11,8 +11,8 @@
   自动读取同一 ``services.token`` 文件并附带 ``X-Mona-Token`` 头，
   前端无需感知令牌。
 
-校验 ``/api/materials/*``、``/api/profile/*``、``/api/office/*`` 以及会触发外部数据抓取
-和上下文写入的 ``POST /api/stock/research/preflight``。Office WebSocket 使用一次性 ticket，
+校验 ``/api/materials/*``、``/api/profile/*``、``/api/office/*``、``/api/video/series/*``
+以及会触发外部数据抓取和上下文写入的 ``POST /api/stock/research/preflight``。Office WebSocket 使用一次性 ticket，
 不重复要求浏览器无法附加的自定义请求头。
 """
 
@@ -32,10 +32,16 @@ SERVICES_TOKEN_HEADER = "X-Mona-Token"
 _TOKEN_FILE_NAME = "services.token"
 
 # 受保护的路由前缀
-_PROTECTED_PREFIXES = ("/api/materials", "/api/profile", "/api/office", "/api/video/agent")
+_PROTECTED_PREFIXES = (
+    "/api/materials",
+    "/api/profile",
+    "/api/office",
+    "/api/video/agent",
+)
 _PROTECTED_EXACT_PATHS = {
     "/api/stock/research/preflight",
     "/api/video/voice-preview",
+    "/api/video/project/audio-preview",
 }
 _TOKEN_EXEMPT_PATHS = {"/api/office/ws"}
 
@@ -90,6 +96,8 @@ def _requires_services_token(path: str) -> bool:
         return False
     return (
         any(path.startswith(prefix) for prefix in _PROTECTED_PREFIXES)
+        or path == "/api/video/series"
+        or path.startswith("/api/video/series/")
         or path in _PROTECTED_EXACT_PATHS
     )
 

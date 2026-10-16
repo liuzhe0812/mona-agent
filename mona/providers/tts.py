@@ -147,6 +147,10 @@ class EdgeTTSProvider(TTSProvider):
         except ImportError as exc:
             logger.error("Speech component missing in the application environment")
             raise TTSError("配音组件未准备好，请更新应用后重试。", code="TTS_COMPONENT_MISSING") from exc
+        version = re.match(r"^(\d+)\.(\d+)\.(\d+)", getattr(edge_tts, "__version__", ""))
+        if version and tuple(map(int, version.groups())) < (7, 3, 1):
+            logger.error("Speech component is outdated: {}", edge_tts.__version__)
+            raise TTSError("配音组件版本过旧，请更新应用并重新启动后重试。", code="TTS_COMPONENT_OUTDATED")
         chosen_voice = voice or self.voice
         for attempt in range(_MAX_RETRIES + 1):
             chunks: list[bytes] = []

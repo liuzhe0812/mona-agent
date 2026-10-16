@@ -504,6 +504,10 @@ mod local_http_auth_tests {
         assert!(needs_services_token("/api/cloud-sync/enable"));
         assert!(!needs_services_token("/api/cloud-sync-other"));
         assert!(needs_services_token("/api/video/voice-preview"));
+        assert!(needs_services_token("/api/video/project/audio-preview"));
+        assert!(needs_services_token("/api/video/series/example/style/reference"));
+        assert!(!needs_services_token("/api/video/series-other/style/reference"));
+        assert!(!needs_services_token("/api/video/project/audio-preview-other"));
         assert!(!needs_services_token("/api/video/voice-preview-other"));
     }
 }
@@ -537,6 +541,9 @@ fn needs_services_token(path: &str) -> bool {
         || (path.starts_with("/api/office") && path != "/api/office/ws")
         || path == "/api/stock/research/preflight"
         || path == "/api/video/voice-preview"
+        || path == "/api/video/project/audio-preview"
+        || path == "/api/video/series"
+        || path.starts_with("/api/video/series/")
 }
 
 #[tauri::command]
@@ -617,7 +624,7 @@ async fn perform_local_http_request(
         .map_err(|e| format!("Invalid HTTP method: {}", e))?;
     let client = local_http_client()?;
 
-    // 受保护的 services 路由自动附带本地令牌：资料库、用户画像、Office，
+    // 受保护的 services 路由自动附带本地令牌：资料库、用户画像、Office、视频风格，
     // 以及会触发外部抓取和写入预检上下文的精确股票预检路径。
     // 与 mona/materials/auth.py 的 X-Mona-Token 校验对应。
     let needs_token = needs_services_token(parsed.path())

@@ -83,7 +83,7 @@ from mona.services.stock.api import (
 )
 from mona.system_agent import handle_storage_analyze, handle_system_diagnose, handle_system_plan
 from mona.usage import get_usage_summary
-from mona.utils.helpers import safe_filename
+from mona.utils.helpers import replace_file_with_retry, safe_filename
 from mona.utils.media_decode import (
     MAX_FILE_SIZE,
 )
@@ -5875,14 +5875,13 @@ def _get_video_project_status(project_dir: Path) -> dict:
     )
     has_render = output_mp4.is_file()
 
-    meta_file = project_dir / "meta.json"
-    meta = {}
-    if meta_file.is_file():
-        try:
-            meta = _json.loads(meta_file.read_text(encoding="utf-8"))
-        except Exception:
-            pass
-    meta = _normalize_video_meta(project_dir, meta)
+    meta = _normalize_video_meta(project_dir, _load_video_meta(project_dir))
+    from mona.video_project import workbench_state
+
+    planned = meta.get("scenes") or []
+    workbench = workbench_state(meta,
+                               {int(scene["index"]) for scene in planned if _video_scene_ready(project_dir, scene)},
+                               {int(scene["index"]) for scene in planned if scene.get("audioInputHash") and (project_dir / "audio" / f"scene_{int(scene['index']):02d}.mp3").is_file()})
 
     latest_style_version = None
     if meta.get("seriesId"):
@@ -5892,6 +5891,16 @@ def _get_video_project_status(project_dir: Path) -> dict:
         except VideoStyleError:
             pass
 
+    style_authoring = meta.get("styleAuthoring")
+    if isinstance(style_authoring, dict):
+        style_authoring = dict(style_authoring)
+        try:
+            style_authoring["name"] = get_video_series(get_workspace_path(), str(style_authoring.get("seriesId") or ""))["name"]
+            style_authoring["available"] = True
+        except VideoStyleError:
+            style_authoring["name"] = "自定义风格"
+            style_authoring["available"] = False
+
     return {
         "status": meta.get("phase", "storyboard"),
         "phase": meta.get("phase", "storyboard"),
@@ -5900,6 +5909,7 @@ def _get_video_project_status(project_dir: Path) -> dict:
         "outputStale": meta.get("outputStale", False),
         "sceneCount": scene_count,
         "draftSceneCount": sum(path.is_file() for path in (project_dir / "drafts").glob("scene_*.*") if path.suffix in {".html", ".tsx"}),
+        "workbench": workbench,
         "hasStoryboard": storyboard.exists(),
         "hasIndex": index_html.exists(),
         "seriesId": meta.get("seriesId"),
@@ -5916,6 +5926,7 @@ def _get_video_project_status(project_dir: Path) -> dict:
         "language": meta.get("language", "zh-CN"),
         "localeGroupId": meta.get("localeGroupId", project_dir.name),
         "sourceProject": meta.get("sourceProject"),
+        "styleAuthoring": style_authoring,
     }
 
 
@@ -6262,7 +6273,10 @@ async def handle_video_project_create(request: web.Request) -> web.Response:
             )
         attached_series_id = str(body.get("seriesId") or "").strip()
         series_id = attached_series_id or str(body.get("styleSeriesId") or "").strip()
-        template_id = str(body.get("templateId") or "tech-dark").strip()
+        style_preference = "auto" if body.get("templateId", "auto") == "auto" and not series_id else "fixed"
+        template_id = str(body.get("templateId") or "auto").strip()
+        if template_id == "auto":
+            template_id = "minimal-business"
         single_style: dict[str, Any] | None = None
         if not series_id:
             from mona.video_style import get_builtin_template
@@ -6367,6 +6381,9 @@ async def handle_video_project_create(request: web.Request) -> web.Response:
         project_style_asset_registry_ids: dict[str, str] = {}
         if series is not None and locked_style is not None and style_source is not None:
             shutil.copytree(style_source, project_dir / "style")
+            from mona.video_style_authoring import materialize_style_sample_assets
+
+            materialize_style_sample_assets(project_dir)
             style_backgrounds = locked_style.get("backgrounds") or {}
 
             def collect_style_asset_ids(value: Any) -> set[str]:
@@ -6573,7 +6590,7 @@ async def handle_video_project_create(request: web.Request) -> web.Response:
                      "requirePlanApproval": True, "planRevision": 0,
                      "approvedPlanRevision": None})
         if series is None:
-            meta.update({"templateId": template_id})
+            meta.update({"templateId": template_id, "stylePreference": style_preference})
         if narration_enabled:
             meta["narrationEnabled"] = True
             meta["ttsProvider"] = tts_provider or "edge"
@@ -7230,6 +7247,7 @@ def _invalidate_video_outputs(
     scene_indexes: set[int] | None,
     *,
     reset_html: bool,
+    reset_audio: bool = True,
 ) -> None:
     """Invalidate video outputs after content changes.
 
@@ -7263,11 +7281,12 @@ def _invalidate_video_outputs(
             "motionReviewSourceHash",
             "motionReview",
         ):
+            if key.startswith("audio") and not reset_audio:
+                continue
             scene.pop(key, None)
         try:
-            (project_dir / "audio" / f"scene_{int(idx):02d}.timing.json").unlink(
-                missing_ok=True
-            )
+            if reset_audio:
+                (project_dir / "audio" / f"scene_{int(idx):02d}.timing.json").unlink(missing_ok=True)
             (
                 project_dir / "scene_specs" / f"scene_{int(idx):02d}.motion.json"
             ).unlink(missing_ok=True)
@@ -7296,17 +7315,26 @@ def _load_video_meta(project_dir: Path) -> dict:
         return {}
     try:
         meta = _json.loads(meta_file.read_text(encoding="utf-8"))
+        if not isinstance(meta, dict):
+            raise ValueError("视频项目信息格式无效，请从版本记录恢复")
         meta.setdefault("requirePlanApproval", False)
         meta.setdefault("planRevision", 0)
         meta.setdefault("approvedPlanRevision", None)
+        from mona.video_project import ensure_scene_ids
+
+        ensure_scene_ids(meta, project_dir.resolve().as_uri())
         return meta
-    except Exception:
-        return {}
+    except (OSError, UnicodeError, _json.JSONDecodeError, TypeError, KeyError) as exc:
+        raise ValueError("视频项目信息无法读取，请从版本记录恢复或重新打开项目") from exc
 
 
 def _save_video_meta(project_dir: Path, meta: dict) -> None:
     """Save meta.json atomically."""
     import os
+
+    from mona.video_project import ensure_scene_ids
+
+    ensure_scene_ids(meta, project_dir.resolve().as_uri())
 
     # scenes 变更时同步时间戳，供 storyboard GET 做 mtime 仲裁：
     # AI 会话裸写 storyboard.md 后 mtime > scenesUpdatedAt → 触发重解析。
@@ -7331,13 +7359,17 @@ def _scene_content(scene: Mapping[str, Any]) -> dict[str, Any]:
 
 
 def _video_plan_changed(meta: dict) -> None:
-    meta["requirePlanApproval"] = True
+    meta["requirePlanApproval"] = not bool(meta.get("styleAuthoring"))
     meta["planRevision"] = int(meta.get("planRevision") or 0) + 1
     meta["approvedPlanRevision"] = None
     meta["phase"] = "storyboard"
 
 
 def _require_video_plan_approval(meta: Mapping[str, Any], revision: Any = None, *, check_revision: bool = False) -> None:
+    if meta.get("styleAuthoring") and check_revision and (
+        isinstance(revision, bool) or not isinstance(revision, int) or revision != int(meta.get("planRevision") or 0)
+    ):
+        raise ValueError("样片内容已更新，请读取当前样片后继续")
     if not meta.get("requirePlanApproval"):
         return
     current = int(meta.get("planRevision") or 0)
@@ -7380,7 +7412,7 @@ async def handle_video_project_confirm(request: web.Request) -> web.Response:
 def _video_export_input_hash(project_dir: Path, meta: Mapping[str, Any]) -> str:
     payload = {
         key: meta.get(key)
-        for key in ("resolution", "narrationEnabled", "ttsProvider", "ttsVoice", "ttsRate", "subtitleMode", "musicPreset", "musicAssetId", "backgroundBindings", "styleVersion")
+        for key in ("resolution", "narrationEnabled", "ttsProvider", "ttsVoice", "ttsRate", "subtitleMode", "musicPreset", "musicAssetId", "audioTracks", "backgroundBindings", "styleVersion")
     }
     payload["scenes"] = [_scene_content(scene) for scene in meta.get("scenes") or []]
     files = [project_dir / "storyboard.md", project_dir / "style" / "design-system.json", project_dir / "assets" / "manifest.json"]
@@ -7651,6 +7683,14 @@ async def handle_video_project_settings(request: web.Request) -> web.Response:
     keys = {"narrationEnabled", "ttsProvider", "ttsVoice", "ttsRate", "subtitleMode"}
     try:
         settings = _video_settings_payload(body)
+        meta = _load_video_meta(project_dir)
+        if "resolution" in body:
+            if not meta.get("styleAuthoring"):
+                raise ValueError("请在导演台调整视频画幅并确认方案")
+            if body["resolution"] not in {"1920x1080", "1080x1920", "1080x1080"}:
+                raise ValueError("请选择可用画幅")
+            settings["resolution"] = body["resolution"]
+            keys.add("resolution")
     except ValueError as exc:
         return web.json_response({"error": str(exc)}, status=400)
     try:
@@ -7659,7 +7699,7 @@ async def handle_video_project_settings(request: web.Request) -> web.Response:
         if changed:
             meta.update(settings)
             scenes = meta.get("scenes") or []
-            audio_changed = bool(changed - {"subtitleMode"})
+            audio_changed = bool(changed - {"subtitleMode", "resolution"})
             if audio_changed:
                 _invalidate_video_outputs(project_dir, meta, None, reset_html=False)
                 for scene in scenes:
@@ -8384,13 +8424,24 @@ async def _synthesize_scene_narration(
             ):
                 audio_bytes = cache_path.read_bytes()
                 duration_changed = await _extend_scene_for_audio(scene, cache_path)
-                if not timing_path.is_file() or duration_changed:
+                cached_track = (
+                    _json.loads(timing_path.read_text(encoding="utf-8"))
+                    if timing_path.is_file()
+                    else None
+                )
+                from mona.video_timeline import SUBTITLE_GROUPING_VERSION
+
+                regroup_cached_timing = (
+                    cached_track is not None
+                    and cached_track.get("groupingVersion") != SUBTITLE_GROUPING_VERSION
+                )
+                rebuild_timing = cached_track is None or duration_changed or regroup_cached_timing
+                if rebuild_timing:
                     scene.pop("motionReviewSourceHash", None)
                     scene.pop("motionReview", None)
-                    if timing_path.is_file():
-                        track = _json.loads(timing_path.read_text(encoding="utf-8"))
-                        boundaries = [word for cue in track.get("cues", []) for word in cue.get("words", [])]
-                        timing_source, confidence = track.get("timingSource"), track.get("alignmentConfidence")
+                    if cached_track is not None:
+                        boundaries = [word for cue in cached_track.get("cues", []) for word in cue.get("words", [])]
+                        timing_source, confidence = cached_track.get("timingSource"), cached_track.get("alignmentConfidence")
                     else:
                         boundaries, timing_source, confidence = await _align_tts_scene_audio(cache_path, text)
                     ensure_inputs_current()
@@ -8408,6 +8459,7 @@ async def _synthesize_scene_narration(
                     )
                 if duration_changed:
                     _sync_storyboard(project_dir, meta.get("scenes") or [scene])
+                if rebuild_timing:
                     if (project_dir / "renders" / "output.mp4").is_file():
                         meta["outputStale"] = True
                 else:
@@ -8670,7 +8722,7 @@ def _write_render_status(project_dir: Path, status: dict) -> None:
         temporary.write_text(
             _json.dumps(status, ensure_ascii=False, indent=2), encoding="utf-8"
         )
-        temporary.replace(status_file)
+        replace_file_with_retry(temporary, status_file)
     finally:
         temporary.unlink(missing_ok=True)
 
@@ -8873,6 +8925,7 @@ async def _write_video_delivery_artifacts(
     if ffmpeg_path and render_result.get("audio"):
         audio_process = await asyncio.create_subprocess_exec(
             ffmpeg_path,
+            "-nostdin",
             "-y",
             "-i",
             str(output),
@@ -8880,6 +8933,7 @@ async def _write_video_delivery_artifacts(
             "-c:a",
             "copy",
             str(audio_path),
+            stdin=asyncio.subprocess.DEVNULL,
             stdout=asyncio.subprocess.DEVNULL,
             stderr=asyncio.subprocess.PIPE,
             creationflags=0x08000000 if sys.platform == "win32" else 0,
@@ -8899,6 +8953,7 @@ async def _write_video_delivery_artifacts(
     if ffmpeg_path:
         cover_process = await asyncio.create_subprocess_exec(
             ffmpeg_path,
+            "-nostdin",
             "-y",
             "-ss",
             "0.1",
@@ -8907,6 +8962,7 @@ async def _write_video_delivery_artifacts(
             "-frames:v",
             "1",
             str(cover_path),
+            stdin=asyncio.subprocess.DEVNULL,
             stdout=asyncio.subprocess.DEVNULL,
             stderr=asyncio.subprocess.PIPE,
             creationflags=0x08000000 if sys.platform == "win32" else 0,
@@ -9020,29 +9076,30 @@ def _prepare_hyperframes_snapshot(
 async def _communicate_video_subprocess(
     process: asyncio.subprocess.Process,
     cancel_event: threading.Event | None = None,
+    *,
+    timeout: float = 120.0,
 ) -> tuple[bytes, bytes]:
     communicate = asyncio.create_task(process.communicate())
+    deadline = asyncio.get_running_loop().time() + timeout
     try:
         while not communicate.done():
             if cancel_event is not None and cancel_event.is_set():
-                process.terminate()
-                try:
-                    await asyncio.wait_for(process.wait(), timeout=3)
-                except asyncio.TimeoutError:
-                    process.kill()
-                    await process.wait()
-                communicate.cancel()
-                await asyncio.gather(communicate, return_exceptions=True)
                 raise _VideoRenderCancelledError("视频导出已取消")
+            if asyncio.get_running_loop().time() >= deadline:
+                logger.error("Video post-processing timed out after {} seconds", timeout)
+                raise TimeoutError("视频处理超时，已停止，请重试导出")
             await asyncio.sleep(0.1)
         return await communicate
-    except asyncio.CancelledError:
-        process.terminate()
-        try:
-            await asyncio.wait_for(process.wait(), timeout=3)
-        except asyncio.TimeoutError:
-            process.kill()
-            await process.wait()
+    except (asyncio.CancelledError, _VideoRenderCancelledError, TimeoutError):
+        if process.returncode is None:
+            with contextlib.suppress(ProcessLookupError):
+                process.terminate()
+            try:
+                await asyncio.wait_for(process.wait(), timeout=3)
+            except asyncio.TimeoutError:
+                with contextlib.suppress(ProcessLookupError):
+                    process.kill()
+                await process.wait()
         communicate.cancel()
         await asyncio.gather(communicate, return_exceptions=True)
         raise
@@ -9069,6 +9126,7 @@ async def _probe_video_output(
     ]
     process = await asyncio.create_subprocess_exec(
         *command,
+        stdin=asyncio.subprocess.DEVNULL,
         stdout=asyncio.subprocess.PIPE,
         stderr=asyncio.subprocess.PIPE,
         creationflags=0x08000000 if sys.platform == "win32" else 0,
@@ -9098,6 +9156,7 @@ async def _video_output_has_audio(
         "-of",
         "csv=p=0",
         str(path),
+        stdin=asyncio.subprocess.DEVNULL,
         stdout=asyncio.subprocess.PIPE,
         stderr=asyncio.subprocess.PIPE,
         creationflags=0x08000000 if sys.platform == "win32" else 0,
@@ -9149,95 +9208,116 @@ async def _validate_rendered_video(
     })
 
 
-async def _mix_project_background_music(
+async def _mix_project_audio(
     project_dir: Path,
     meta: Mapping[str, Any],
     render_result: dict[str, Any],
     cancel_event: threading.Event,
 ) -> None:
-    preset = str(meta.get("musicPreset") or "none")
-    asset_id = str(meta.get("musicAssetId") or "")
-    if preset == "none" or not asset_id:
-        return
-    from mona.api.video_runtime import VideoRuntime
-    from mona.video_assets import list_project_assets
+    scenes = meta.get("scenes") or []
+    has_narration = bool(meta.get("narrationEnabled")) and any(
+        str(scene.get("narration") or "").strip() for scene in scenes
+    )
+    voice_path = project_dir / "audio" / "narration.mp3" if has_narration else None
+    if has_narration and (voice_path is None or not voice_path.is_file()):
+        raise RuntimeError("旁白未能合成，视频未导出。请试听旁白后重试导出。")
 
-    record = next(
-        (item for item in list_project_assets(project_dir) if item.get("id") == asset_id),
-        None,
-    )
-    if record is None:
-        raise RuntimeError("背景音乐不在项目素材台账中")
-    music_path = project_dir / str(record.get("path") or "")
-    if not music_path.is_file():
-        raise RuntimeError("背景音乐文件不存在")
-    runtime = VideoRuntime()
-    ffmpeg_path = runtime.get_ffmpeg_path()
-    ffprobe_path = runtime.get_ffprobe_path()
-    if not ffmpeg_path or not ffprobe_path:
-        raise RuntimeError("背景音乐混音需要 FFmpeg 和 FFprobe")
-    output = project_dir / str(
-        render_result.get("output") or "renders/output.pending.mp4"
-    )
-    duration = max(0.3, float(render_result.get("duration") or 0))
-    has_voice = await _video_output_has_audio(output, ffprobe_path, cancel_event)
-    volume = {"ambient": 0.10, "rhythmic": 0.15, "brand": 0.20}.get(
-        preset, 0.10
-    )
-    fade_out_start = max(0.0, duration - 1.0)
-    music_filter = (
-        f"[1:a]volume={volume},afade=t=in:st=0:d=0.5,"
-        f"afade=t=out:st={fade_out_start}:d=1,atrim=0:{duration}[music]"
-    )
-    if has_voice:
-        audio_filter = (
-            music_filter
-            + ";[music][0:a]sidechaincompress=threshold=0.03:ratio=8:attack=20:release=300[ducked]"
-            + ";[0:a][ducked]amix=inputs=2:duration=first:normalize=0[aout]"
+    tracks = meta.get("audioTracks")
+    music_requested = (meta.get("musicPreset") or "none") != "none"
+    if not has_narration and not music_requested and not tracks:
+        return
+
+    from mona.api.video_audio import mix_project_audio
+    from mona.api.video_runtime import VideoRuntime
+    output_value = render_result.get("output") or "renders/output.pending.mp4"
+    project_root = project_dir.resolve()
+    try:
+        output = (project_dir / str(output_value)).resolve(strict=True)
+        output.relative_to(project_root)
+    except (OSError, ValueError) as exc:
+        raise RuntimeError("视频导出失败：画面文件不存在或路径无效，无法合成声音。请重试。") from exc
+    if not output.is_file():
+        raise RuntimeError("视频导出失败：画面文件不存在，无法合成声音。请重试。")
+
+    duration = float(render_result.get("duration") or 0)
+    if not math.isfinite(duration) or duration <= 0:
+        raise RuntimeError("视频导出失败：视频时长无效，无法合成声音。请重试。")
+
+    render_dir = (project_dir / "renders").resolve(strict=True)
+    try:
+        render_dir.relative_to(project_root)
+    except ValueError as exc:
+        raise RuntimeError("视频导出失败：渲染目录路径无效，无法合成声音。请重试。") from exc
+    audio_mix = render_dir / "audio-mix.pending.m4a"
+    muxed_output = render_dir / "audio-mixed.pending.mp4"
+    audio_mix.unlink(missing_ok=True)
+    muxed_output.unlink(missing_ok=True)
+    try:
+        await mix_project_audio(
+            project_dir,
+            meta,
+            audio_mix,
+            voice_path=voice_path,
+            cancel_event=cancel_event,
         )
-    else:
-        audio_filter = music_filter.replace("[music]", "[aout]")
-    temporary = project_dir / "renders" / "music-mix.pending.mp4"
-    temporary.unlink(missing_ok=True)
-    process = await asyncio.create_subprocess_exec(
-        ffmpeg_path,
-        "-y",
-        "-i",
-        str(output),
-        "-stream_loop",
-        "-1",
-        "-i",
-        str(music_path),
-        "-filter_complex",
-        audio_filter,
-        "-map",
-        "0:v:0",
-        "-map",
-        "[aout]",
-        "-c:v",
-        "copy",
-        "-c:a",
-        "aac",
-        "-b:a",
-        "192k",
-        "-t",
-        str(duration),
-        "-movflags",
-        "+faststart",
-        str(temporary),
-        stdout=asyncio.subprocess.DEVNULL,
-        stderr=asyncio.subprocess.PIPE,
-        creationflags=0x08000000 if sys.platform == "win32" else 0,
-    )
-    _, stderr = await _communicate_video_subprocess(process, cancel_event)
-    if process.returncode != 0 or not temporary.is_file():
-        temporary.unlink(missing_ok=True)
-        raise RuntimeError(
-            "背景音乐混音失败："
-            + (stderr or b"").decode("utf-8", "replace")[-300:]
+        ffmpeg_path = VideoRuntime().get_ffmpeg_path()
+        if not ffmpeg_path:
+            raise RuntimeError("声音处理组件尚未就绪，请准备视频组件后重试。")
+        mux_started = time.monotonic()
+        logger.info("Video audio mux started (duration={}s)", duration)
+        process = await asyncio.create_subprocess_exec(
+            ffmpeg_path,
+            "-nostdin",
+            "-y",
+            "-i",
+            str(output),
+            "-i",
+            str(audio_mix),
+            "-map",
+            "0:v:0",
+            "-map",
+            "1:a:0",
+            "-map_metadata",
+            "0",
+            "-c:v",
+            "copy",
+            "-c:a",
+            "copy",
+            "-t",
+            str(duration),
+            "-movflags",
+            "+faststart",
+            str(muxed_output),
+            stdin=asyncio.subprocess.DEVNULL,
+            stdout=asyncio.subprocess.DEVNULL,
+            stderr=asyncio.subprocess.PIPE,
+            creationflags=0x08000000 if sys.platform == "win32" else 0,
         )
-    temporary.replace(output)
-    render_result["audio"] = True
+        _, _stderr = await _communicate_video_subprocess(process, cancel_event)
+        if process.returncode != 0 or not muxed_output.is_file() or muxed_output.stat().st_size <= 0:
+            logger.error("Video audio mux failed (exit code {})", process.returncode)
+            raise RuntimeError("视频导出失败：声音未能合成，已保留当前内容，请重试。")
+        logger.info("Video audio mux finished in {:.3f}s", time.monotonic() - mux_started)
+        muxed_output.replace(output)
+        render_result["audio"] = True
+    except _VideoRenderCancelledError:
+        raise
+    except TimeoutError as exc:
+        raise RuntimeError("视频导出失败：合并声音超时，已停止，请重试导出。") from exc
+    except Exception as exc:
+        if cancel_event.is_set():
+            raise _VideoRenderCancelledError("视频导出已取消") from exc
+        if isinstance(exc, RuntimeError):
+            message = str(exc)
+            if message.startswith(("旁白", "视频导出失败")):
+                raise
+            if message.startswith("声音处理组件"):
+                raise RuntimeError(f"视频导出失败：{message}") from exc
+        logger.error("Video audio export failed ({})", type(exc).__name__)
+        raise RuntimeError("视频导出失败：声音未能合成，已保留当前内容，请重试。") from exc
+    finally:
+        audio_mix.unlink(missing_ok=True)
+        muxed_output.unlink(missing_ok=True)
 
 
 async def _run_hyperframes_engine(
@@ -9333,6 +9413,7 @@ async def _run_hyperframes_engine(
             progress_cb("muxing", 96, "正在合成旁白音轨...")
         process = await asyncio.create_subprocess_exec(
             ffmpeg_path,
+            "-nostdin",
             "-y",
             "-i",
             str(silent_output),
@@ -9346,6 +9427,7 @@ async def _run_hyperframes_engine(
             "apad",
             "-shortest",
             str(output),
+            stdin=asyncio.subprocess.DEVNULL,
             stdout=asyncio.subprocess.DEVNULL,
             stderr=asyncio.subprocess.PIPE,
             creationflags=0x08000000 if sys.platform == "win32" else 0,
@@ -9565,9 +9647,18 @@ async def _run_render_task(
         _raise_if_video_render_cancelled(cancel_event)
 
         if result.get("ok"):
-            if meta.get("musicAssetId"):
-                _on_render_progress("mixing", 97, "正在混合背景音乐...")
-                await _mix_project_background_music(snapshot_root, meta, result, cancel_event)
+            has_narration = bool(meta.get("narrationEnabled")) and any(
+                str(scene.get("narration") or "").strip()
+                for scene in meta.get("scenes") or []
+            )
+            needs_audio_mix = (
+                has_narration
+                or bool(meta.get("audioTracks"))
+                or (meta.get("musicPreset") or "none") != "none"
+            )
+            if needs_audio_mix:
+                _on_render_progress("mixing", 97, "正在合成视频声音...")
+                await _mix_project_audio(snapshot_root, meta, result, cancel_event)
             await _validate_rendered_video(snapshot_root, meta, result, cancel_event)
             try:
                 _on_render_progress("packaging", 98, "正在生成字幕、封面与交付包...")
@@ -10610,6 +10701,10 @@ async def handle_video_project_preview_full(request: web.Request) -> web.Respons
             if meta.get("narrationEnabled", False)
             else set()
         )
+        from mona.api.video_audio import prepare_preview_audio
+
+        mixed_audio = await prepare_preview_audio(project_dir)
+        master_audio = "data:audio/mp4;base64," + base64.b64encode(mixed_audio.read_bytes()).decode("ascii") if mixed_audio else None
         preview_html = _build_video_preview_html(
             width,
             height,
@@ -10619,6 +10714,7 @@ async def handle_video_project_preview_full(request: web.Request) -> web.Respons
             token=str(request.query.get("token", "") or ""),
             audio_scene_indices=audio_scene_indices,
             scene_transitions=scene_transitions,
+            master_audio=master_audio,
         )
         return web.Response(body=preview_html, content_type="text/html")
     except TTSError as exc:
@@ -10726,6 +10822,8 @@ def _build_video_preview_html(
     token: str = "",
     audio_scene_indices: set[int] | None = None,
     scene_transitions: dict[int, tuple[str, float]] | None = None,
+    master_audio: str | None = None,
+    scene_audio: dict[int, str] | None = None,
 ) -> str:
     """Return a self-contained HTML page that plays scenes sequentially.
 
@@ -10744,7 +10842,7 @@ def _build_video_preview_html(
                 num,
                 duration,
                 srcdoc,
-                (
+                (scene_audio or {}).get(num) or (
                     "/api/video/project/scene/narration?"
                     f"name={quote(project_name)}&index={num}&token={quote(token)}"
                     if num in audible and project_name
@@ -10813,7 +10911,12 @@ def _build_video_preview_html(
       font: 14px/1.2 system-ui, sans-serif;
       transform: translateX(-50%);
       backdrop-filter: blur(10px);
+      transition: opacity .15s;
     }}
+    #controls.idle {{ opacity: 0; pointer-events: none; }}
+    #controls.idle:has(:focus-visible) {{ opacity: 1; pointer-events: auto; }}
+    #wake-controls {{ display: none; position: absolute; inset: 0; z-index: 11; }}
+    #wake-controls.active {{ display: block; }}
     #play-toggle {{
       min-width: 78px;
       padding: 7px 12px;
@@ -10823,6 +10926,7 @@ def _build_video_preview_html(
       background: #fff;
       font: inherit;
       cursor: pointer;
+      white-space: nowrap;
     }}
     #time {{ min-width: 92px; color: rgba(255,255,255,.78); font-variant-numeric: tabular-nums; }}
     #playback-error {{ position:absolute; left:20px; right:20px; bottom:80px; z-index:12; padding:12px; color:#fff; background:rgba(12,12,14,.78); font:14px/1.5 system-ui,sans-serif; }}
@@ -10831,6 +10935,7 @@ def _build_video_preview_html(
 <body>
   <div id="stage"></div>
   <div id="progress"></div>
+  <div id="wake-controls" aria-hidden="true"></div>
   <div id="playback-error" role="alert" hidden></div>
   <div id="controls">
     <button id="play-toggle" type="button">播放预览</button>
@@ -10842,7 +10947,11 @@ def _build_video_preview_html(
     const progress = document.getElementById('progress');
     const playToggle = document.getElementById('play-toggle');
     const timeLabel = document.getElementById('time');
+    const controls = document.getElementById('controls');
+    const wakeControls = document.getElementById('wake-controls');
     const totalDuration = {total_duration};
+    const masterSource = {_json.dumps(master_audio)};
+    const masterAudio = masterSource ? new Audio(masterSource) : null;
 
     const audioTracks = [];
     entries.forEach(([num, duration, srcdoc, audioUrl], index) => {{
@@ -10854,7 +10963,7 @@ def _build_video_preview_html(
       iframe.style.zIndex = index;
       if (index === 0) iframe.classList.add('active');
       stage.appendChild(iframe);
-      const audio = audioUrl ? new Audio(audioUrl) : null;
+      const audio = masterAudio || (audioUrl ? new Audio(audioUrl) : null);
       if (audio) audio.preload = 'auto';
       if (audio) audio.addEventListener('error', () => {{
         if ((playing || preparing) && currentIndex === index) playbackError(index);
@@ -10870,6 +10979,21 @@ def _build_video_preview_html(
     let preparing = false;
     let operation = 0;
     let animationFrame = 0;
+    let controlsTimer = 0;
+
+    function revealControls() {{
+      clearTimeout(controlsTimer);
+      controls.classList.remove('idle');
+      wakeControls.classList.remove('active');
+      if (playing) controlsTimer = setTimeout(() => {{
+        controls.classList.add('idle');
+        wakeControls.classList.add('active');
+      }}, 1500);
+    }}
+    wakeControls.addEventListener('pointermove', revealControls);
+    wakeControls.addEventListener('pointerdown', revealControls);
+    controls.addEventListener('pointermove', revealControls);
+    document.addEventListener('keydown', revealControls);
 
     function seekFrame(frame, time) {{
       try {{
@@ -10910,8 +11034,9 @@ def _build_video_preview_html(
       if (!audio) return;
       await waitForAudio(audio);
       if (requestId !== operation) return;
-      if (Number.isFinite(audio.duration) && localTime >= audio.duration) return;
-      audio.currentTime = Math.max(0, localTime);
+      const audioTime = localTime + (masterAudio ? entries.slice(0, index).reduce((sum, entry) => sum + entry[1], 0) : 0);
+      if (Number.isFinite(audio.duration) && audioTime >= audio.duration) return;
+      audio.currentTime = Math.max(0, audioTime);
       await audio.play();
       if (requestId !== operation && (audioTracks[currentIndex] !== audio || (!playing && !preparing))) audio.pause();
     }}
@@ -10962,11 +11087,12 @@ def _build_video_preview_html(
     }}
 
     function stopPlayback() {{
-      if (playing) elapsedBeforePlay = Math.min(totalDuration, elapsedBeforePlay+(performance.now()-startedAt)/1000);
+      if (playing) elapsedBeforePlay = Math.min(totalDuration, masterAudio ? masterAudio.currentTime : elapsedBeforePlay+(performance.now()-startedAt)/1000);
       operation++;
       cancelAnimationFrame(animationFrame);
       playing = false;
       preparing = false;
+      revealControls();
       pauseAudio();
       playToggle.textContent = elapsedBeforePlay >= totalDuration ? '重新播放' : '继续播放';
     }}
@@ -10974,7 +11100,7 @@ def _build_video_preview_html(
     function playbackError(index) {{
       stopPlayback();
       const sceneIndex = entries[index][0];
-      const message = '场景 '+sceneIndex+' 的旁白播放失败，画面已暂停，请重试。';
+      const message = '第 '+sceneIndex+' 段的声音播放失败，画面已暂停，请重试。';
       if (window.parent !== window) window.parent.postMessage({{type:'mona-video-playback-error',sceneIndex,message}}, '*');
       else {{
         const error = document.getElementById('playback-error');
@@ -10999,6 +11125,7 @@ def _build_video_preview_html(
         startedAt = performance.now();
         preparing = false;
         playing = true;
+        revealControls();
         playToggle.textContent = '暂停';
         animationFrame = requestAnimationFrame(tick);
       }} catch (_error) {{
@@ -11008,11 +11135,11 @@ def _build_video_preview_html(
 
     function tick(now) {{
       if (!playing) return;
-      const elapsed = Math.min(totalDuration, elapsedBeforePlay + (now - startedAt) / 1000);
+      const elapsed = Math.min(totalDuration, masterAudio ? masterAudio.currentTime : elapsedBeforePlay + (now - startedAt) / 1000);
       const position = renderAt(elapsed);
       if (position.index !== currentIndex && elapsed < totalDuration) {{
-        void startPlayback(elapsed);
-        return;
+        if (masterAudio) currentIndex = position.index;
+        else {{ void startPlayback(elapsed); return; }}
       }}
       if (elapsed < totalDuration) {{
         animationFrame = requestAnimationFrame(tick);

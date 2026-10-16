@@ -38,6 +38,7 @@ import {
 } from "@/components/ui/resizable";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import { Slider } from "@/components/ui/slider";
 import { Textarea } from "@/components/ui/textarea";
 import { useClient } from "@/providers/ClientProvider";
 import {
@@ -59,6 +60,7 @@ import {
 import { isTauri } from "@/lib/tauri";
 import { cn } from "@/lib/utils";
 import { AssetRightsDialog } from "./style/AssetRightsDialog";
+import type { VideoFocus } from "./VideoWorkbenchHeader";
 
 function subtitleTimingLabel(scene: VideoScene): string {
   if (scene.audioTimingSource === "provider-boundary") return "字幕已同步";
@@ -94,7 +96,9 @@ interface StoryboardPhaseProps {
   onPlanChange?: (plan: { planRevision: number | null; sceneCount: number; duration: number }) => void;
   onPlanEdited?: () => void;
   busy?: boolean;
+  readOnly?: boolean;
   chatPanel?: ReactNode;
+  onFocusChange?: (focus: VideoFocus | null) => void;
 }
 
 export function StoryboardPhase({
@@ -105,11 +109,18 @@ export function StoryboardPhase({
   onPlanChange,
   onPlanEdited,
   busy = false,
+  readOnly = false,
   chatPanel,
+  onFocusChange,
 }: StoryboardPhaseProps) {
   const { client, token } = useClient();
   const [scenes, setScenes] = useState<VideoScene[]>([]);
   const [selectedIndex, setSelectedIndex] = useState(1);
+  useEffect(() => {
+    const current = scenes.find((scene) => scene.index === selectedIndex);
+    onFocusChange?.(current ? {projectName, sceneIndex: selectedIndex, sceneTitle: current.title, seconds: null} : null);
+  }, [scenes, selectedIndex, projectName, onFocusChange]);
+  const [durationInput, setDurationInput] = useState<{index: number; value: string} | null>(null);
   const [saveState, setSaveState] = useState<
     "idle" | "saving" | "saved" | "error"
   >("idle");
@@ -145,6 +156,8 @@ export function StoryboardPhase({
   const mountedRef = useRef(true);
   const scenesRef = useRef<VideoScene[]>([]);
   const planRevisionRef = useRef<number | null>(null);
+  const readOnlyRef = useRef(readOnly);
+  readOnlyRef.current = readOnly;
 
   const publishPlan = useCallback((revision?: number, nextScenes = scenesRef.current) => {
     if (typeof revision === "number") planRevisionRef.current = revision;
@@ -173,6 +186,9 @@ export function StoryboardPhase({
   // merged into the map and picked up by the loop. Returns true when all
   // pending edits were persisted.
   const flushSaves = useCallback((): Promise<boolean> => {
+    if (readOnlyRef.current) {
+      return drainPromiseRef.current ?? Promise.resolve(pendingRef.current.size === 0 && !inFlightRef.current);
+    }
     if (saveTimerRef.current) {
       clearTimeout(saveTimerRef.current);
       saveTimerRef.current = null;
@@ -182,7 +198,7 @@ export function StoryboardPhase({
     const p = (async (): Promise<boolean> => {
       setSaveState("saving");
       let ok = true;
-      while (pendingRef.current.size > 0) {
+      while (!readOnlyRef.current && pendingRef.current.size > 0) {
         const [index, fields] = pendingRef.current.entries().next().value as [
           number,
           Partial<VideoScene>,
@@ -248,15 +264,15 @@ export function StoryboardPhase({
   }, [projectName, token, refreshTrigger]);
 
   useEffect(() => {
-    onSaveFlushReady?.(flushSaves);
+    onSaveFlushReady?.(readOnly ? null : flushSaves);
     return () => onSaveFlushReady?.(null);
-  }, [flushSaves, onSaveFlushReady]);
+  }, [flushSaves, onSaveFlushReady, readOnly]);
 
   // Flush pending saves when switching away or unmounting (best effort).
   useEffect(() => {
     return () => {
       if (saveTimerRef.current) clearTimeout(saveTimerRef.current);
-      if (pendingRef.current.size > 0) void flushSaves();
+      if (!readOnlyRef.current && pendingRef.current.size > 0) void flushSaves();
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [projectName]);
@@ -348,7 +364,7 @@ export function StoryboardPhase({
   // one merged request per scene 600ms after typing stops.
   const handleFieldChange = useCallback(
     <K extends keyof VideoScene>(field: K, value: VideoScene[K]) => {
-      if (!selectedScene) return;
+      if (readOnlyRef.current || !selectedScene) return;
       onPlanEdited?.();
       setPlanApproved(false);
       const idx = selectedIndex;
@@ -410,6 +426,11 @@ export function StoryboardPhase({
 
   const handleConfirmAssetImport = useCallback(async () => {
     if (!assetImportPath || assetImporting) return;
+    if (readOnlyRef.current && section !== "assets") {
+      setAssetImportOpen(false);
+      setAssetImportPath(null);
+      return;
+    }
     setAssetImporting(true);
     setError(null);
     try {
@@ -455,7 +476,7 @@ export function StoryboardPhase({
             )
           : [...current, imported];
       });
-      if (section === "content" && selectedScene && !selectedScene.assets.includes(imported.id)) {
+      if (section === "content" && !readOnlyRef.current && selectedScene && !selectedScene.assets.includes(imported.id)) {
         handleFieldChange("assets", [...selectedScene.assets, imported.id]);
       }
       setAssetImportOpen(false);
@@ -494,6 +515,10 @@ export function StoryboardPhase({
 
   const handleUpdateAssetRights = useCallback(async () => {
     if (!rightsAsset || rightsUpdating) return;
+    if (readOnlyRef.current && section !== "assets") {
+      setRightsAsset(null);
+      return;
+    }
     setRightsUpdating(true);
     setError(null);
     try {
@@ -534,7 +559,7 @@ export function StoryboardPhase({
     } finally {
       setRightsUpdating(false);
     }
-  }, [assetRights, projectName, rightsAsset, rightsUpdating, token]);
+  }, [assetRights, projectName, rightsAsset, rightsUpdating, section, token]);
 
   // Switching scenes flushes pending edits for the previous scene first.
   const handleSelectScene = useCallback(
@@ -548,6 +573,7 @@ export function StoryboardPhase({
 
   const handleMove = useCallback(
     async (direction: "up" | "down") => {
+      if (readOnlyRef.current) return;
       const currentIdx = scenes.findIndex((s) => s.index === selectedIndex);
       if (currentIdx < 0) return;
       const targetIdx = direction === "up" ? currentIdx - 1 : currentIdx + 1;
@@ -585,6 +611,7 @@ export function StoryboardPhase({
   );
 
   const handleDelete = useCallback(async () => {
+    if (readOnlyRef.current) return;
     if (scenes.length <= 1) return;
     if (!selectedScene) return;
     // Deleting changes scene indices; keep edits until they have persisted.
@@ -621,6 +648,7 @@ export function StoryboardPhase({
   ]);
 
   const handleAdd = useCallback(async () => {
+    if (readOnlyRef.current) return;
     try {
       const res = await addVideoScene(token, projectName);
       if (res.ok && res.scene) {
@@ -701,16 +729,18 @@ export function StoryboardPhase({
                           自己的图片、视频和声音都可以添加。
                         </div>
                       </div>
-                      <Button
-                        type="button"
-                        variant="outline"
-                        size="sm"
-                        onClick={() => void handlePickAsset()}
-                        disabled={assetImporting}
-                      >
-                        <ImagePlus className="mr-1.5 h-3.5 w-3.5" />
-                        导入素材
-                      </Button>
+                      {(!readOnly || section === "assets") ? (
+                        <Button
+                          type="button"
+                          variant="outline"
+                          size="sm"
+                          onClick={() => void handlePickAsset()}
+                          disabled={assetImporting}
+                        >
+                          <ImagePlus className="mr-1.5 h-3.5 w-3.5" />
+                          导入素材
+                        </Button>
+                      ) : null}
                     </div>
                     {assetsLoading ? (
                       <div className="mt-3 flex items-center text-micro text-muted-foreground">
@@ -740,8 +770,11 @@ export function StoryboardPhase({
                                 variant="ghost"
                                 aria-pressed={selected}
                                 onClick={() => section === "content" && handleToggleAsset(asset.id)}
-                                disabled={section === "assets"}
-                                className="h-auto min-w-0 flex-1 justify-start gap-2 px-2 py-1.5 text-left"
+                                disabled={section === "assets" || readOnly}
+                                className={cn(
+                                  "h-auto min-w-0 flex-1 justify-start gap-2 px-2 py-1.5 text-left",
+                                  readOnly && "disabled:opacity-100",
+                                )}
                               >
                                 <ImageIcon className="h-4 w-4 shrink-0 text-muted-foreground" />
                                 <span className="min-w-0 flex-1">
@@ -766,7 +799,9 @@ export function StoryboardPhase({
                                   !asset.commercialUse
                                     ? "bg-amber-500/10 text-amber-700"
                                     : "bg-emerald-500/10 text-emerald-700",
+                                  readOnly && section !== "assets" && "disabled:opacity-100",
                                 )}
+                                disabled={readOnly && section !== "assets"}
                                 onClick={() => {
                                   setRightsAsset(asset);
                                   setAssetRights(asset.rightsStatus);
@@ -871,18 +906,20 @@ export function StoryboardPhase({
               ))
             )}
           </div>
-          <div className="shrink-0 border-t border-border/70 p-2">
-            <Button
-              variant="ghost"
-              size="sm"
-              className="w-full justify-start text-caption"
-              onClick={handleAdd}
-              disabled={busy}
-            >
-              <Plus className="mr-1.5 h-3.5 w-3.5" />
-              新增场景
-            </Button>
-          </div>
+          {!readOnly ? (
+            <div className="shrink-0 border-t border-border/70 p-2">
+              <Button
+                variant="ghost"
+                size="sm"
+                className="w-full justify-start text-caption"
+                onClick={handleAdd}
+                disabled={busy}
+              >
+                <Plus className="mr-1.5 h-3.5 w-3.5" />
+                新增场景
+              </Button>
+            </div>
+          ) : null}
         </div>
       </ResizablePanel>
 
@@ -900,17 +937,17 @@ export function StoryboardPhase({
               <div className="flex shrink-0 items-center justify-between border-b border-border/70 px-4 py-2">
                 <div className="flex items-center text-ui font-medium">
                   场景 {selectedScene.index} / {scenes.length}
-                  {saveState === "saving" && (
+                  {!readOnly && saveState === "saving" && (
                     <span className="ml-2 text-micro font-normal text-muted-foreground">
                       保存中…
                     </span>
                   )}
-                  {saveState === "saved" && (
+                  {!readOnly && saveState === "saved" && (
                     <span className="ml-2 text-micro font-normal text-muted-foreground">
                       已保存
                     </span>
                   )}
-                  {saveState === "error" && (
+                  {!readOnly && saveState === "error" && (
                     <span
                       className="ml-2 flex items-center gap-1 text-micro font-normal text-destructive"
                       role="alert"
@@ -927,39 +964,41 @@ export function StoryboardPhase({
                     </span>
                   )}
                 </div>
-                <div className="flex items-center gap-1">
-                  <Button
-                    variant="ghost"
-                    size="sm"
-                    className="h-7 w-7 p-0"
-                    onClick={() => handleMove("up")}
-                    disabled={busy || selectedIndex === 1}
-                    title="上移"
-                  >
-                    <ArrowUp className="h-3.5 w-3.5" />
-                  </Button>
-                  <Button
-                    variant="ghost"
-                    size="sm"
-                    className="h-7 w-7 p-0"
-                    onClick={() => handleMove("down")}
-                    disabled={busy || selectedIndex === scenes.length}
-                    title="下移"
-                  >
-                    <ArrowDown className="h-3.5 w-3.5" />
-                  </Button>
-                  <Button
-                    variant="ghost"
-                    size="sm"
-                    className="h-7 w-7 p-0 text-destructive hover:text-destructive"
-                    onClick={() => setDeleteConfirmOpen(true)}
-                    disabled={busy || scenes.length <= 1}
-                    title="删除场景"
-                    aria-label="删除场景"
-                  >
-                    <Trash2 className="h-3.5 w-3.5" />
-                  </Button>
-                </div>
+                {!readOnly ? (
+                  <div className="flex items-center gap-1">
+                    <Button
+                      variant="ghost"
+                      size="sm"
+                      className="h-7 w-7 p-0"
+                      onClick={() => handleMove("up")}
+                      disabled={busy || selectedIndex === 1}
+                      title="上移"
+                    >
+                      <ArrowUp className="h-3.5 w-3.5" />
+                    </Button>
+                    <Button
+                      variant="ghost"
+                      size="sm"
+                      className="h-7 w-7 p-0"
+                      onClick={() => handleMove("down")}
+                      disabled={busy || selectedIndex === scenes.length}
+                      title="下移"
+                    >
+                      <ArrowDown className="h-3.5 w-3.5" />
+                    </Button>
+                    <Button
+                      variant="ghost"
+                      size="sm"
+                      className="h-7 w-7 p-0 text-destructive hover:text-destructive"
+                      onClick={() => setDeleteConfirmOpen(true)}
+                      disabled={busy || scenes.length <= 1}
+                      title="删除场景"
+                      aria-label="删除场景"
+                    >
+                      <Trash2 className="h-3.5 w-3.5" />
+                    </Button>
+                  </div>
+                ) : null}
               </div>
 
               <div className="min-h-0 flex-1 overflow-y-auto scrollbar-hover p-4">
@@ -971,6 +1010,7 @@ export function StoryboardPhase({
                     <Input
                       id="video-scene-title"
                       value={selectedScene.title}
+                      readOnly={readOnly}
                       onChange={(e) =>
                         handleFieldChange("title", e.target.value)
                       }
@@ -984,24 +1024,40 @@ export function StoryboardPhase({
                       时长（秒）
                     </label>
                     <div className="flex items-center gap-2">
-                      <input
+                      <Slider
                         id="video-scene-duration"
-                        type="range"
                         min={1}
-                        max={30}
+                        max={Math.max(120, selectedScene.duration)}
+                        step={0.5}
                         value={selectedScene.duration}
+                        disabled={readOnly}
                         onChange={(e) =>
                           handleFieldChange(
                             "duration",
-                            parseInt(e.target.value, 10),
+                            Number(e.target.value),
                           )
                         }
-                        className="flex-1 accent-[hsl(var(--brand-red))]"
+                        className="flex-1"
                       />
-                      <span className="w-12 text-right text-caption font-mono">
-                        {selectedScene.duration}s
-                      </span>
+                      <Input
+                        type="number"
+                        readOnly={readOnly}
+                        min={0}
+                        step="any"
+                        aria-label="场景时长（秒）"
+                        className="h-8 w-20 text-caption"
+                        value={!readOnly && durationInput?.index === selectedScene.index ? durationInput.value : selectedScene.duration}
+                        onChange={(event) => {
+                          setDurationInput({index: selectedScene.index, value: event.target.value});
+                          const seconds = Number(event.target.value);
+                          if (Number.isFinite(seconds) && seconds > 0) handleFieldChange("duration", seconds);
+                        }}
+                        onBlur={() => setDurationInput(null)}
+                      />
                     </div>
+                    {!readOnly && durationInput?.index === selectedScene.index && !(Number(durationInput.value) > 0) ? (
+                      <p className="mt-1 text-micro text-destructive">请输入大于零的秒数。</p>
+                    ) : null}
                   </div>
 
                   <div>
@@ -1061,6 +1117,7 @@ export function StoryboardPhase({
                     <Textarea
                       id="video-scene-narration"
                       value={selectedScene.narration}
+                      readOnly={readOnly}
                       onChange={(e) =>
                         handleFieldChange("narration", e.target.value)
                       }
@@ -1076,6 +1133,7 @@ export function StoryboardPhase({
                     <Textarea
                       id="video-scene-visual"
                       value={selectedScene.visual}
+                      readOnly={readOnly}
                       onChange={(e) =>
                         handleFieldChange("visual", e.target.value)
                       }
@@ -1089,6 +1147,7 @@ export function StoryboardPhase({
                     <Textarea
                       id="video-scene-animation"
                       value={selectedScene.animation ?? ""}
+                      readOnly={readOnly}
                       onChange={(event) => handleFieldChange("animation", event.target.value)}
                       className="min-h-[80px] resize-none text-caption"
                       placeholder="例如：讲到每个步骤时逐一展开流程，关键选择放大，最后连成完整路径。"
@@ -1134,33 +1193,35 @@ export function StoryboardPhase({
 
               {assetDialogs}
 
-              <AlertDialog
-                open={deleteConfirmOpen}
-                onOpenChange={setDeleteConfirmOpen}
-              >
-                <AlertDialogContent>
-                  <AlertDialogHeader>
-                    <AlertDialogTitle>删除场景</AlertDialogTitle>
-                    <AlertDialogDescription>
-                      确定删除「
-                      {selectedScene.title || `场景 ${selectedScene.index}`}
-                      」吗？
-                      删除后所有场景将重新编号，已生成的预览和导出结果会失效。
-                    </AlertDialogDescription>
-                  </AlertDialogHeader>
-                  <AlertDialogFooter>
-                    <AlertDialogCancel>取消</AlertDialogCancel>
-                    <AlertDialogAction
-                      onClick={() => {
-                        setDeleteConfirmOpen(false);
-                        void handleDelete();
-                      }}
-                    >
-                      删除
-                    </AlertDialogAction>
-                  </AlertDialogFooter>
-                </AlertDialogContent>
-              </AlertDialog>
+              {!readOnly ? (
+                <AlertDialog
+                  open={deleteConfirmOpen}
+                  onOpenChange={setDeleteConfirmOpen}
+                >
+                  <AlertDialogContent>
+                    <AlertDialogHeader>
+                      <AlertDialogTitle>删除场景</AlertDialogTitle>
+                      <AlertDialogDescription>
+                        确定删除「
+                        {selectedScene.title || `场景 ${selectedScene.index}`}
+                        」吗？
+                        删除后所有场景将重新编号，已生成的预览和导出结果会失效。
+                      </AlertDialogDescription>
+                    </AlertDialogHeader>
+                    <AlertDialogFooter>
+                      <AlertDialogCancel>取消</AlertDialogCancel>
+                      <AlertDialogAction
+                        onClick={() => {
+                          setDeleteConfirmOpen(false);
+                          void handleDelete();
+                        }}
+                      >
+                        删除
+                      </AlertDialogAction>
+                    </AlertDialogFooter>
+                  </AlertDialogContent>
+                </AlertDialog>
+              ) : null}
               <Dialog
                 open={playbackError !== null}
                 onOpenChange={(open) => {

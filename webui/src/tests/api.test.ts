@@ -12,6 +12,7 @@ import {
   fetchSidebarState,
   fetchWebuiThread,
   fetchFilePreviewBlob,
+  fetchVideoPreviewFullHtml,
   listSessions,
   listSlashCommands,
   removeProject,
@@ -51,6 +52,34 @@ describe("webui API helpers", () => {
       body: JSON.stringify({ name: "演示视频", narrationEnabled: true, ttsProvider: "custom", ttsVoice: "", ttsRate: "+10%", subtitleMode: "external" }),
       headers: expect.objectContaining({ Authorization: "Bearer tok" }),
     }));
+  });
+
+  it("preserves the video profile in session navigation metadata", async () => {
+    vi.mocked(fetch).mockResolvedValueOnce(new Response(JSON.stringify({ sessions: [
+      { key: "websocket:video-chat", agent_kind: "video", created_at: null, updated_at: null },
+      { key: "websocket:ordinary-chat", created_at: null, updated_at: null },
+    ] }), { headers: { "Content-Type": "application/json" } }));
+    const rows = await listSessions("tok");
+    expect(rows[0]).toMatchObject({ chatId: "video-chat", agentKind: "video" });
+    expect(rows[1]).toMatchObject({ chatId: "ordinary-chat", agentKind: null });
+  });
+
+  it("loads full video preview with authorization and an abort signal", async () => {
+    const html = "<!doctype html><html><body>动画预览</body></html>";
+    vi.mocked(fetch).mockResolvedValueOnce(new Response(html, { headers: { "Content-Type": "text/html" } }));
+    const controller = new AbortController();
+    expect(await fetchVideoPreviewFullHtml("tok", "整片预览", controller.signal)).toBe(html);
+    const [url, init] = vi.mocked(fetch).mock.calls[0];
+    expect(String(url)).toContain("/api/video/project/preview-full?name=");
+    expect(String(url)).not.toContain("token=");
+    expect(init).toMatchObject({ headers: { Authorization: "Bearer tok" }, signal: controller.signal });
+  });
+
+  it("does not treat an error response or JSON page as playable preview", async () => {
+    vi.mocked(fetch).mockResolvedValueOnce(new Response(JSON.stringify({ message: "请先确认导演方案" }), { status: 409, headers: { "Content-Type": "application/json" } }));
+    await expect(fetchVideoPreviewFullHtml("tok", "预览")).rejects.toThrow("请先确认导演方案");
+    vi.mocked(fetch).mockResolvedValueOnce(new Response("{}", { headers: { "Content-Type": "application/json" } }));
+    await expect(fetchVideoPreviewFullHtml("tok", "预览")).rejects.toThrow("没有收到可播放的整片内容");
   });
 
   it("confirms the observed video plan revision through the services API", async () => {

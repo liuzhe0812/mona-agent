@@ -48,6 +48,19 @@ async def test_missing_speech_component_is_non_retryable_and_does_not_create_aud
     assert not (tmp_path / "missing.mp3").exists()
 
 
+async def test_old_edge_protocol_is_reported_before_any_synthesis(monkeypatch, tmp_path) -> None:
+    from unittest.mock import Mock
+
+    communicate = Mock()
+    monkeypatch.setitem(sys.modules, "edge_tts", types.SimpleNamespace(__version__="7.2.8", Communicate=communicate))
+    with pytest.raises(tts.TTSError) as raised:
+        await EdgeTTSProvider().synthesize("验证", tmp_path / "old.mp3")
+    assert raised.value.code == "TTS_COMPONENT_OUTDATED"
+    assert raised.value.retryable is False
+    communicate.assert_not_called()
+    assert not (tmp_path / "old.mp3").exists()
+
+
 async def test_edge_tts_collects_audio_and_word_boundaries_from_one_stream(
     monkeypatch,
 ) -> None:

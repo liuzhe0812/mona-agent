@@ -1,8 +1,8 @@
 """Services 本地 API 令牌鉴权测试（阶段 0 / P0-1）。
 
 令牌来源优先级：环境变量 MONA_SERVICES_TOKEN > app data 目录下 services.token
-文件 > 随机生成并持久化。`/api/materials/*`、`/api/profile/*`、`/api/office/*`
-与股票预检路由必须校验 X-Mona-Token；Office WebSocket 改用一次性 ticket。
+文件 > 随机生成并持久化。`/api/materials/*`、`/api/profile/*`、`/api/office/*`、
+`/api/video/series/*` 与股票预检路由必须校验 X-Mona-Token；Office WebSocket 改用一次性 ticket。
 """
 
 from __future__ import annotations
@@ -72,6 +72,8 @@ async def _make_client() -> TestClient:
     app.router.add_post("/api/stock/research/preflight", ok_handler)
     app.router.add_post("/api/office/sessions", ok_handler)
     app.router.add_get("/api/office/ws", ok_handler)
+    app.router.add_get("/api/video/series/example/style/reference", ok_handler)
+    app.router.add_get("/api/video/series-other/style/reference", ok_handler)
     return TestClient(TestServer(app))
 
 
@@ -155,3 +157,18 @@ async def test_office_http_requires_token_but_socket_uses_ticket_auth(auth_env):
             )
         ).status == 200
         assert (await client.get("/api/office/ws")).status == 200
+
+
+async def test_video_series_routes_require_and_accept_valid_token(auth_env):
+    auth, _ = auth_env
+    token = auth.get_services_token()
+    path = "/api/video/series/example/style/reference"
+    async with await _make_client() as client:
+        assert (await client.get(path)).status == 401
+        assert (
+            await client.get(path, headers={"X-Mona-Token": "bad"})
+        ).status == 401
+        assert (
+            await client.get(path, headers={"X-Mona-Token": token})
+        ).status == 200
+        assert (await client.get("/api/video/series-other/style/reference")).status == 200

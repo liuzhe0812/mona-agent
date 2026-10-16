@@ -499,6 +499,18 @@ def _patch_render_module(
     monkeypatch.setattr(server, "_validate_rendered_video", AsyncMock())
 
 
+def _isolate_project_audio_mix(monkeypatch: pytest.MonkeyPatch) -> AsyncMock:
+    """Keep non-media render-task tests outside the real FFmpeg mix boundary.
+
+    Real narration mixing and media validation are covered by
+    tests/test_video_audio_render.py; these workflow tests use fake TTS bytes
+    and fake rendered video, so they must not pass those fixtures to FFmpeg.
+    """
+    mixer = AsyncMock()
+    monkeypatch.setattr(server, "_mix_project_audio", mixer)
+    return mixer
+
+
 async def test_render_task_success_marks_project_done(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
@@ -1338,6 +1350,7 @@ async def test_render_task_synthesizes_narration_per_scene(
     _patch_render_module(
         monkeypatch, {"ok": True, "output": "renders/output.mp4", "audio": True}
     )
+    mixer = _isolate_project_audio_mix(monkeypatch)
 
     calls: list[int] = []
 
@@ -1354,6 +1367,7 @@ async def test_render_task_synthesizes_narration_per_scene(
     await server._run_render_task(project_dir, 0, "standard")
 
     assert calls == [1, 2]
+    mixer.assert_awaited_once()
     assert (project_dir / "audio" / "scene_01.mp3").is_file()
     assert (project_dir / "audio" / "scene_02.mp3").is_file()
     persisted = _read_meta(project_dir)
@@ -1438,6 +1452,7 @@ async def test_render_task_removes_orphan_and_stale_audio(
     _patch_render_module(
         monkeypatch, {"ok": True, "output": "renders/output.mp4", "audio": True}
     )
+    mixer = _isolate_project_audio_mix(monkeypatch)
 
     async def _fake_tts(pdir: Path, scene: dict, m: dict, *, force: bool = False):
         p = pdir / "audio" / f"scene_{scene['index']:02d}.mp3"
@@ -1448,6 +1463,7 @@ async def test_render_task_removes_orphan_and_stale_audio(
     monkeypatch.setattr(server, "_synthesize_scene_narration", _fake_tts)
     await server._run_render_task(project_dir, 0, "standard")
 
+    mixer.assert_awaited_once()
     assert not (audio_dir / "scene_99.mp3").exists()
     assert not (audio_dir / "narration.mp3").exists()  # 删除后由 render 重拼
     assert (audio_dir / "scene_01.mp3").is_file()
@@ -1470,13 +1486,19 @@ async def test_render_task_rejects_output_without_required_narration(
         monkeypatch,
         {"ok": True, "output": "renders/output.pending.mp4", "audio": False},
     )
-    monkeypatch.setattr(server, "_validate_rendered_video", AsyncMock(side_effect=RuntimeError("旁白未加入视频，视频未导出。请重试导出。")))
+    mixer = _isolate_project_audio_mix(monkeypatch)
+    validator = AsyncMock(
+        side_effect=RuntimeError("旁白未加入视频，视频未导出。请重试导出。")
+    )
+    monkeypatch.setattr(server, "_validate_rendered_video", validator)
     monkeypatch.setattr(
         server, "_synthesize_scene_narration", AsyncMock(return_value=b"mp3")
     )
 
     await server._run_render_task(project_dir, 0, "standard")
 
+    mixer.assert_awaited_once()
+    validator.assert_awaited_once()
     status = server._read_render_status(project_dir)
     assert status["stage"] == "error"
     assert "旁白未加入视频" in status["message"]
@@ -2263,3 +2285,53 @@ async def test_director_rejects_invalid_combined_settings_without_partial_change
     response = await handle_video_agent(request)
     assert response.status == 422
     assert not (tmp_path / "video_projects" / "another-project").exists()
+
+
+async def test_style_sample_resolution_settings_preserve_existing_voice(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(server, "_video_projects_dir", lambda: tmp_path / "video_projects")
+    monkeypatch.setattr(server, "_schedule_video_push", lambda *_args: None)
+    project = tmp_path / "video_projects" / "style-resolution"
+    (project / "audio").mkdir(parents=True)
+    audio = project / "audio" / "narration.mp3"
+    audio.write_bytes(b"existing sample narration")
+    meta = {"name": project.name, "resolution": "1920x1080", "styleAuthoring": {"seriesId": "paper"}, "requirePlanApproval": False, "scenes": []}
+    server._save_video_meta(project, meta)
+    response = await server.handle_video_project_settings(_post_request({"name": project.name, "resolution": "1080x1920"}))
+    assert response.status == 200
+    assert server._load_video_meta(project)["resolution"] == "1080x1920"
+    assert json.loads(response.body)["meta"]["resolution"] == "1080x1920"
+    assert audio.read_bytes() == b"existing sample narration"
+    assert server._load_video_meta(project)["requirePlanApproval"] is False
+    meta = server._load_video_meta(project)
+    meta.pop("styleAuthoring")
+    server._save_video_meta(project, meta)
+    refused = await server.handle_video_project_settings(_post_request({"name": project.name, "resolution": "1920x1080"}))
+    assert refused.status == 400
+    assert server._load_video_meta(project)["resolution"] == "1080x1920"
+
+
+async def test_preview_controls_hide_during_playback_and_wake_on_pointer() -> None:
+    playwright = pytest.importorskip("playwright.async_api")
+    from mona.api.video_runtime import VideoRuntime
+
+    browser_path = VideoRuntime().get_chrome_path()
+    if not browser_path:
+        pytest.skip("The existing browser runtime is required")
+    html = server._build_video_preview_html(1080, 1920, 5, [(1, 5, "<main>实际动画和字幕</main>")])
+    async with playwright.async_playwright() as runtime:
+        browser = await runtime.chromium.launch(executable_path=browser_path, headless=True)
+        try:
+            page = await browser.new_page(viewport={"width": 405, "height": 720})
+            await page.set_content(html, wait_until="domcontentloaded")
+            await page.locator("#play-toggle").click()
+            await page.wait_for_function("getComputedStyle(controls).opacity === '0'", timeout=4000)
+            assert await page.locator("#wake-controls").is_visible()
+            await page.mouse.move(20, 20)
+            await page.wait_for_function("getComputedStyle(controls).opacity === '1'")
+            await page.locator("#play-toggle").click()
+            assert await page.evaluate("playing") is False
+            await page.wait_for_timeout(1700)
+            assert await page.evaluate("getComputedStyle(controls).opacity") == "1"
+            assert not await page.locator("#wake-controls").is_visible()
+        finally:
+            await browser.close()
