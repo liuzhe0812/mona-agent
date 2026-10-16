@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { ChevronDown, Cloud, Loader2, RefreshCw } from "lucide-react";
+import { ChevronDown, Cloud, Info, Loader2, RefreshCw } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Checkbox } from "@/components/ui/checkbox";
@@ -26,6 +26,7 @@ export function CloudSyncSettings({ onUpgrade }: { onUpgrade?: () => void }) {
   const [draft, setDraft] = useState<CloudDraft | null>(null);
   const [recovery, setRecovery] = useState("");
   const [keys, setKeys] = useState<string[]>([]);
+  const [scopeBlockedKeys, setScopeBlockedKeys] = useState<string[]>([]);
   const [syncNew, setSyncNew] = useState(false);
   const [syncPlanning, setSyncPlanning] = useState(false);
   const [syncNotes, setSyncNotes] = useState(false);
@@ -85,7 +86,25 @@ export function CloudSyncSettings({ onUpgrade }: { onUpgrade?: () => void }) {
     setSyncNotes(state?.space ? state.sync_notes === true : false);
     setSyncPreferences(state?.space ? state.sync_preferences === true : false);
   });
+  const openScope = () => {
+    if (!state) return;
+    setKeys(state.selected_keys ?? []);
+    setScopeBlockedKeys(state.blocked_keys ?? []);
+    setSyncNew(state.sync_new_conversations === true);
+    setSyncPlanning(state.sync_planning === true);
+    setSyncNotes(state.sync_notes === true);
+    setSyncPreferences(state.sync_preferences === true);
+    setView("scope");
+  };
   const candidates = draft?.candidates ?? state?.candidates ?? [];
+  const blockedKeys = state?.blocked_keys ?? [];
+  const scopeBlocked = new Set(view === "scope" ? scopeBlockedKeys : blockedKeys);
+  const orderedCandidates = view === "scope" ? [
+    ...candidates.filter((item) => scopeBlocked.has(item.key)),
+    ...candidates.filter((item) => !scopeBlocked.has(item.key)),
+  ] : candidates;
+  const hasFileIssues = blockedKeys.length > 0
+    || (state?.blocked_keys === undefined && state?.problem?.code === "associated_file_unavailable");
   const space = state?.space;
   const occupied = space ? space.used_bytes + space.reserved_bytes : 0;
   const hasHistory = !!state?.conversations?.some((item) => item.version > 0);
@@ -126,12 +145,15 @@ export function CloudSyncSettings({ onUpgrade }: { onUpgrade?: () => void }) {
         <TooltipButton size="xs" title="立即检查并同步已选内容" aria-label="立即同步" disabled={busy || state.phase === "syncing"} onClick={() => void operate(async () => {
           const result = await cloudSyncApi.sync(); if (!result.scheduled) throw new Error("同步请求尚未确认。"); await refresh();
         })}>{state.phase === "syncing" && <Loader2 className="mr-1.5 h-3.5 w-3.5 animate-spin" />}立即同步</TooltipButton>
-        <TooltipButton size="xs" variant="ghost" title="选择要同步的会话、笔记、日程和偏好" aria-label="同步范围" disabled={busy} onClick={() => { setKeys(state.selected_keys ?? []); setSyncNew(state.sync_new_conversations === true); setSyncPlanning(state.sync_planning === true); setSyncNotes(state.sync_notes === true); setSyncPreferences(state.sync_preferences === true); setView("scope"); }}>同步范围</TooltipButton>
+        <TooltipButton size="xs" variant="ghost" title="选择要同步的会话、笔记、日程和偏好" aria-label="同步范围" disabled={busy} onClick={openScope}>同步范围</TooltipButton>
         </>}
         {space && <CloudTrashDialog disabled={busy} onChanged={() => void refresh()} />}
         {hasHistory && <CloudHistoryDialog conversations={state.conversations ?? []} candidates={state.candidates ?? []} onRestored={() => void refresh()} />}
         {space && <TooltipButton size="xs" variant="ghost" title="展开历史版本和未使用文件的清理操作" aria-label="空间管理" aria-expanded={showManagement} aria-controls="cloud-space-management" onClick={() => setShowManagement((value) => !value)}>
           空间管理<ChevronDown className={`ml-1.5 h-3.5 w-3.5 ${showManagement ? "rotate-180" : ""}`} />
+        </TooltipButton>}
+        {state.enabled && hasFileIssues && <TooltipButton size="xs" variant="ghost" className="text-muted-foreground" title="部分关联文件缺失或过大，查看会话并调整同步范围" aria-label="查看待处理会话" disabled={busy} onClick={openScope}>
+          <Info className="mr-1.5 h-3.5 w-3.5" aria-hidden="true" />{blockedKeys.length ? `${blockedKeys.length} 个会话待处理` : "部分会话待处理"}
         </TooltipButton>}
       </div>}
       {state?.enabled && state.last_sync && <p className="mt-2 text-caption text-muted-foreground">最近同步 {new Date(state.last_sync * 1000).toLocaleString("zh-CN")}</p>}
@@ -139,7 +161,7 @@ export function CloudSyncSettings({ onUpgrade }: { onUpgrade?: () => void }) {
         <p className="text-caption text-muted-foreground">按需清理过期旧版本，或回收未被引用的上传文件。检查后仍需确认才会清理。</p>
         <div className="flex items-center gap-1 overflow-x-auto"><CloudHistoryRetentionDialog disabled={busy} onChanged={() => void refresh()} /><CloudCleanupDialog disabled={busy} onCleaned={() => void refresh()} /></div>
       </div>}
-      {state?.enabled && state.problem && <p className="mt-3 text-caption text-destructive" role="status">{state.problem.message}</p>}
+      {state?.enabled && state.problem && state.problem.code !== "associated_file_unavailable" && <p className="mt-3 text-caption text-destructive" role="status">{state.problem.message}</p>}
     </div>
     <Dialog open={view !== null} onOpenChange={(open) => { if (!open) close(); }}>
       <DialogContent className="sm:max-w-lg" showCloseButton={!busy}>
@@ -170,13 +192,17 @@ export function CloudSyncSettings({ onUpgrade }: { onUpgrade?: () => void }) {
             <Checkbox checked={syncPreferences} disabled={busy} onCheckedChange={(value) => setSyncPreferences(value === true)} />
             同步侧栏布局、默认页面、发送按键和快捷问答显示模式
           </label>
+          {view === "scope" && scopeBlocked.size > 0 && <div className="space-y-1">
+            <p className="text-caption text-muted-foreground">待处理会话已置顶。请恢复原附件后重试，或取消选择这些会话并保存范围；其他内容继续同步。</p>
+            <Button variant="ghost" size="xs" disabled={busy || !keys.some((key) => scopeBlocked.has(key))} onClick={() => setKeys((current) => current.filter((key) => !scopeBlocked.has(key)))}>取消选择待处理会话</Button>
+          </div>}
           <div className="flex justify-between text-caption"><span>工作会话（{keys.length}）</span>
             <Button variant="ghost" size="sm" disabled={busy} onClick={() => setKeys(keys.length === candidates.length ? [] : candidates.map((item) => item.key))}>{keys.length === candidates.length ? "取消全选" : "全选"}</Button></div>
           <div className="max-h-64 space-y-2 overflow-y-auto">
-            {candidates.map((item) => <label key={item.key} className="flex items-center gap-2 text-body">
+            {orderedCandidates.map((item) => <label key={item.key} className="flex items-center gap-2 text-body">
               <Checkbox checked={keys.includes(item.key)} disabled={busy} onCheckedChange={(value) => setKeys((current) => value === true ? [...current, item.key] : current.filter((key) => key !== item.key))} />
               <span className="min-w-0"><span className="block truncate">{item.title}</span>
-                {state?.blocked_keys?.includes(item.key) && <span className="block text-caption text-destructive">关联文件缺失或过大，暂未同步；恢复文件或取消选择此会话。</span>}
+                {scopeBlocked.has(item.key) && <span className="block text-caption text-destructive">关联文件缺失或过大，暂未同步；恢复文件或取消选择此会话。</span>}
               </span>
             </label>)}
             {!candidates.length && <p className="text-caption text-muted-foreground">本机暂无可同步会话，仍可接收云端已有记录。</p>}

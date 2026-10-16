@@ -225,6 +225,51 @@ describe("cloud sync settings", () => {
     expect(api.scope).not.toHaveBeenCalled();
   });
 
+  it.each(["取消", "保存范围"])("handles pending conversations only after %s", async (action) => {
+    const problemMessage = "1 个会话因关联文件缺失或过大暂未同步，其他内容会继续同步。";
+    api.status.mockResolvedValue({ ...active, phase: "partial", selected_keys: candidates.map((item) => item.key),
+      blocked_keys: [candidates[1].key], sync_new_conversations: true, sync_planning: true,
+      sync_notes: true, sync_preferences: true, problem: { code: "associated_file_unavailable", message: problemMessage } });
+    render(<CloudSyncSettings />);
+    const pending = await screen.findByRole("button", { name: "查看待处理会话" });
+    expect(pending).toHaveTextContent("1 个会话待处理");
+    expect(screen.queryByText(problemMessage)).not.toBeInTheDocument();
+    fireEvent.click(pending);
+    const choices = screen.getAllByRole("checkbox", { name: /^工作会话/ });
+    expect(choices[0]).toHaveAccessibleName(/工作会话二.*关联文件缺失/);
+    expect(choices[0]).toBeChecked();
+    expect(choices[1]).toBeChecked();
+    fireEvent.click(screen.getByRole("button", { name: "取消选择待处理会话" }));
+    expect(choices[0]).not.toBeChecked();
+    expect(choices[1]).toBeChecked();
+    expect(api.scope).not.toHaveBeenCalled();
+    if (action === "保存范围") {
+      api.scope.mockImplementation(async () => {
+        api.status.mockResolvedValue({ ...active, phase: "partial", blocked_keys: [],
+          problem: { code: "associated_file_unavailable", message: problemMessage } });
+        return { selected_keys: [candidates[0].key] };
+      });
+    }
+    fireEvent.click(screen.getByRole("button", { name: action, exact: true }));
+    if (action === "保存范围") {
+      await waitFor(() => expect(api.scope).toHaveBeenCalledWith([candidates[0].key], true, true, true, true));
+      await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
+      expect(screen.queryByRole("button", { name: "查看待处理会话" })).not.toBeInTheDocument();
+    } else {
+      expect(api.scope).not.toHaveBeenCalled();
+      fireEvent.click(screen.getByRole("button", { name: "查看待处理会话" }));
+      expect(screen.getByRole("checkbox", { name: /工作会话二.*关联文件缺失/ })).toBeChecked();
+    }
+  });
+
+  it("continues showing errors that require an immediate response", async () => {
+    const problem = { code: "cloud_quota_exceeded", message: "云空间不足，请清理空间后重试。" };
+    api.status.mockResolvedValue({ ...active, phase: "error", problem });
+    render(<CloudSyncSettings />);
+    expect(await screen.findByRole("status")).toHaveTextContent(problem.message);
+    expect(screen.queryByRole("button", { name: "查看待处理会话" })).not.toBeInTheDocument();
+  });
+
   it("groups the actions together and explains them on hover", async () => {
     api.status.mockResolvedValue({ ...active, conversations: [{ key: candidates[0].key,
       resource_id: "a".repeat(32), version: 1, conflict_copy: false, trashed: false }] });
