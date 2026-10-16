@@ -95,7 +95,8 @@ describe("MessageBubble", () => {
       "href",
       "/api/media/signed/reference",
     );
-    expect(container.querySelector("img")).not.toBeInTheDocument();
+    expect(container.querySelector('img[src="/api/media/signed/reference"]')).not.toBeInTheDocument();
+    expect(container.querySelector('img[aria-hidden="true"]')).toHaveAttribute("width", "16");
   });
 
   it("shows only Copy for selected message text in the context menu", async () => {

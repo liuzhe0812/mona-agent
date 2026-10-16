@@ -6545,6 +6545,8 @@ class WebSocketChannel(BaseChannel):
             metadata: dict[str, Any] = {"remote": getattr(connection, "remote_address", None)}
             if envelope.get("webui") is True:
                 metadata["webui"] = True
+            if envelope.get("ui_theme") in ("dark", "light"):
+                metadata["ui_theme"] = envelope["ui_theme"]
             if session_agent_kind is not None:
                 metadata["agent_kind"] = session_agent_kind
             if session_agent_kind == "video":
@@ -6868,6 +6870,20 @@ class WebSocketChannel(BaseChannel):
 
         # Snapshot the subscriber set so ConnectionClosed cleanups mid-iteration are safe.
         conns = list(self._subs.get(msg.chat_id, ()))
+        if msg.metadata.get("_widget_events"):
+            for widget in msg.metadata["_widget_events"]:
+                payload = {
+                    "event": "widget", "chat_id": msg.chat_id, "widget": widget,
+                    "author_id": msg.metadata.get("author_id") or MONA_AGENT_ID,
+                    "task_id": msg.metadata.get("task_id"),
+                }
+                # Only confirmed results survive replay; previews stay transient.
+                if widget.get("status") != "streaming":
+                    self._try_append_webui_transcript(msg.chat_id, payload)
+                raw = json.dumps(payload, ensure_ascii=False)
+                for connection in conns:
+                    await self._safe_send_to(connection, raw, label="widget")
+            return
         if msg.metadata.get("_context_usage"):
             raw = json.dumps({"event": "context_usage", "chat_id": msg.chat_id,
                               "token_usage": msg.metadata.get("token_usage"),

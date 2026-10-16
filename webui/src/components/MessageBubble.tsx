@@ -6,7 +6,8 @@ import {
   type MouseEvent as ReactMouseEvent,
   type ReactNode,
 } from "react";
-import { Check, ChevronRight, ChevronUp, Copy, CornerDownLeft, Download, FileIcon, FolderOpen, GitFork, ImageIcon, MoreHorizontal, PlaySquare, Share2, Sparkles, Wrench, BookmarkCheck, Bookmark } from "lucide-react";
+import { Check, ChevronRight, ChevronUp, Copy, CornerDownLeft, Download, FolderOpen, GitFork, MoreHorizontal, Share2, Sparkles, Wrench, BookmarkCheck, Bookmark } from "lucide-react";
+import { FileSystemIcon } from "@/components/ui/file-system-icon";
 import { useTranslation } from "react-i18next";
 
 import { ImageLightbox } from "@/components/ImageLightbox";
@@ -36,6 +37,8 @@ import { formatTurnLatency } from "@/lib/format";
 import { deriveNoteTitle } from "@/lib/note-title";
 import { createNoteFromChat, downloadMediaUrl, isTauri, revealItemInDir } from "@/lib/tauri";
 import type { UIImage, UIMediaAttachment, UIMessage } from "@/lib/types";
+import { InlineWidget } from "@/components/visualizer/InlineWidget";
+import { openExternalUrl } from "@/lib/tauri";
 
 const MIME_TO_EXT: Record<string, string> = {
   "image/png": "png",
@@ -79,6 +82,7 @@ interface MessageBubbleProps {
   authorName?: string;
   /** Start a new task using this reply as its branch context. */
   onBranch?: (message: UIMessage, author: string) => void;
+  onWidgetPrompt?: (text: string) => void;
 }
 
 const LONG_REPLY_CHAR_THRESHOLD = 1_600;
@@ -256,6 +260,7 @@ export function MessageBubble({
   onQuote,
   authorName,
   onBranch,
+  onWidgetPrompt,
 }: MessageBubbleProps) {
   const { t } = useTranslation();
   const [copied, setCopied] = useState(false);
@@ -415,6 +420,14 @@ export function MessageBubble({
         </div>
       </MessageContextMenu>
     );
+  }
+
+  if (message.kind === "widget" && message.widget) {
+    const widget = message.widget;
+    return <InlineWidget id={message.id} title={widget.title} code={widget.code}
+      loadingMessages={widget.loadingMessages} streaming={widget.status === "streaming"}
+      error={widget.error} onSendPrompt={onWidgetPrompt}
+      onOpenLink={(url) => { if (/^https?:\/\//i.test(url)) void openExternalUrl(url); }} />;
   }
 
   const empty = message.content.trim().length === 0;
@@ -690,11 +703,10 @@ function MediaCell({ media }: { media: UIMediaAttachment }) {
     media.kind === "video"
       ? t("message.videoAttachment", { defaultValue: "Video attachment" })
       : t("message.fileAttachment", { defaultValue: "File attachment" });
-  const Icon = media.kind === "video" ? PlaySquare : FileIcon;
 
   const inner = (
     <>
-      <Icon className="h-4 w-4 flex-none" aria-hidden />
+      <FileSystemIcon name={media.name ?? (media.kind === "video" ? "video.mp4" : "file")} />
       <span className="truncate">{media.name ?? label}</span>
     </>
   );
@@ -948,7 +960,7 @@ function UserImageCell({
         className="flex h-full w-full flex-col items-center justify-center gap-1 px-2 text-[11px] text-muted-foreground"
         aria-label={placeholderLabel}
       >
-        <ImageIcon className="h-4 w-4 flex-none" aria-hidden />
+        <FileSystemIcon name={image.name ?? "image.png"} />
         <span className="line-clamp-2 text-center leading-tight">
           {image.name ?? placeholderLabel}
         </span>

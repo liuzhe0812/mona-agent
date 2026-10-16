@@ -3,6 +3,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { useClientOptional } from "@/providers/ClientProvider";
 import { toMediaAttachment } from "@/lib/media";
 import { mergeUniqueToolTraceLines, toolTraceLinesFromEvents } from "@/lib/tool-traces";
+import { finishPendingWidgets, upsertInlineWidgetMessage } from "@/lib/inline-widget-events";
 import type { StreamError } from "@/lib/mona-client";
 import type {
   InboundEvent,
@@ -115,7 +116,7 @@ function findStreamingAssistantIndex(
 ): number | null {
   for (let i = prev.length - 1; i >= 0; i -= 1) {
     const m = prev[i];
-    if (m.kind === "trace") continue;
+    if (m.kind === "trace" || m.kind === "widget") continue;
     if (m.role === "assistant" && m.isStreaming && !closedStreamIds.has(m.id)) return i;
     if (m.role === "user") break;
   }
@@ -146,7 +147,7 @@ function attachReasoningChunk(
     // A trace row (e.g. Used tools) is also a phase boundary. Reasoning after
     // tools belongs to the next assistant iteration, not the assistant turn
     // that produced those tool calls.
-    if (candidate.kind === "trace") break;
+    if (candidate.kind === "trace" || candidate.kind === "widget") break;
     if (candidate.role !== "assistant") continue;
     const activitySegmentId = candidate.activitySegmentId ?? segments?.ensure();
     const hasAnswer = candidate.content.length > 0;
@@ -204,7 +205,7 @@ function attachReasoningChunk(
 function findActiveAssistantPlaceholderIndex(prev: UIMessage[]): number | null {
   const last = prev[prev.length - 1];
   if (!last) return null;
-  if (last.role !== "assistant" || last.kind === "trace") return null;
+  if (last.role !== "assistant" || last.kind === "trace" || last.kind === "widget") return null;
   if (last.content.length > 0) return null;
   if (!last.isStreaming) return null;
   return prev.length - 1;
@@ -255,7 +256,7 @@ function appendDeliveredFilesToLastAssistant(
   for (let i = prev.length - 1; i >= 0; i -= 1) {
     const message = prev[i];
     if (message.role === "user") break;
-    if (message.role === "assistant" && message.kind !== "trace") {
+    if (message.role === "assistant" && message.kind !== "trace" && message.kind !== "widget") {
       return replaceMessageAt(prev, i, {
         ...message,
         deliveredFiles: mergeDeliveredFiles(message.deliveredFiles, files),
@@ -861,7 +862,7 @@ export function useMonaStream(
             for (let j = draft.length - 1; j >= 0; j -= 1) {
               const candidate = draft[j];
               if (candidate.role === "user") break;
-              if (candidate.kind === "trace") break;
+              if (candidate.kind === "trace" || candidate.kind === "widget") break;
               if (candidate.role !== "assistant") continue;
               const activitySegmentId = candidate.activitySegmentId ?? ensureActivitySegmentId();
               const hasAnswer = candidate.content.length > 0;
@@ -1069,6 +1070,13 @@ export function useMonaStream(
 
       flushPendingStreamEvents();
 
+      if (ev.event === "widget") {
+        if (suppressStreamUntilTurnEndRef.current && ev.widget.status === "streaming") return;
+        setIsAwaitingModelResponse(false);
+        setMessages((previous) => upsertInlineWidgetMessage(previous, ev.widget, identity));
+        return;
+      }
+
       if (ev.event === "reasoning_end") {
         if (suppressStreamUntilTurnEndRef.current) return;
         setMessages((prev) => closeReasoningStream(prev));
@@ -1171,6 +1179,7 @@ export function useMonaStream(
       }
 
       if (ev.event === "turn_end") {
+        setMessages((previous) => finishPendingWidgets(previous));
         setLiveTokenUsage(normalizedTokenUsage(ev.token_usage));
         if ("goal_state" in ev && ev.goal_state != null && typeof ev.goal_state === "object") {
           setGoalState(ev.goal_state);
@@ -1720,7 +1729,7 @@ export function useMonaStream(
       pendingDeliveredFilesRef.current = [];
       pendingDeliveredMediaRef.current = [];
       clearActivitySegment();
-      return prev.map((m) => (m.isStreaming ? { ...m, isStreaming: false } : m));
+      return finishPendingWidgets(prev).map((m) => (m.isStreaming ? { ...m, isStreaming: false } : m));
     });
     suppressStreamUntilTurnEndRef.current = true;
     const taskId = currentTaskIdRef.current;

@@ -52,6 +52,11 @@ from mona.utils.runtime import (
     is_blank_text,
     repeated_workspace_violation_error,
 )
+from mona.utils.widget_events import (
+    StreamingWidgetTracker,
+    accepts_widget_events,
+    publish_widget_events,
+)
 
 _DEFAULT_ERROR_MESSAGE = "Sorry, I encountered an error calling the AI model."
 _PERSISTED_MODEL_ERROR_PLACEHOLDER = "[Assistant reply unavailable due to model error.]"
@@ -1086,6 +1091,13 @@ class AgentRunner:
 
         progress_state: dict[str, bool] | None = None
         live_file_edits: StreamingFileEditTracker | None = None
+        live_widgets: StreamingWidgetTracker | None = None
+
+        if accepts_widget_events(spec.progress_callback):
+            async def _emit_live_widgets(events: list[dict[str, Any]]) -> None:
+                await publish_widget_events(spec.progress_callback, events)
+
+            live_widgets = StreamingWidgetTracker(tools=spec.tools, emit=_emit_live_widgets)
 
         if spec.progress_callback is not None and on_progress_accepts_file_edit_events(
             spec.progress_callback
@@ -1103,6 +1115,8 @@ class AgentRunner:
         async def _tool_call_delta(delta: dict[str, Any]) -> None:
             if live_file_edits is not None:
                 await live_file_edits.update(delta)
+            if live_widgets is not None:
+                await live_widgets.update(delta)
 
         if wants_streaming:
 
@@ -1121,7 +1135,7 @@ class AgentRunner:
                 **kwargs,
                 on_content_delta=_stream,
                 on_thinking_delta=_thinking,
-                on_tool_call_delta=_tool_call_delta if live_file_edits is not None else None,
+                on_tool_call_delta=_tool_call_delta if live_file_edits is not None or live_widgets is not None else None,
             )
         elif wants_progress_streaming:
             stream_buf = ""
@@ -1151,7 +1165,7 @@ class AgentRunner:
             coro = self.provider.chat_stream_with_retry(
                 **kwargs,
                 on_content_delta=_stream_progress,
-                on_tool_call_delta=_tool_call_delta if live_file_edits is not None else None,
+                on_tool_call_delta=_tool_call_delta if live_file_edits is not None or live_widgets is not None else None,
             )
         else:
             coro = self.provider.chat_with_retry(**kwargs)

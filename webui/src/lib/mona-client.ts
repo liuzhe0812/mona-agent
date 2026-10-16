@@ -1064,6 +1064,7 @@ export class MonaClient {
         ? { target_agent_ids: options.targetAgentIds }
         : {}),
       webui: true,
+      ui_theme: document.documentElement.classList.contains("dark") ? "dark" : "light",
     };
     this.queueSend(frame);
   }

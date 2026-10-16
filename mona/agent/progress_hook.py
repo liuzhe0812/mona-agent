@@ -17,6 +17,7 @@ from mona.utils.progress_events import (
     on_progress_accepts_tool_events,
 )
 from mona.utils.tool_hints import format_tool_hints
+from mona.utils.widget_events import accepts_widget_events, publish_widget_events, widget_event
 
 
 class AgentProgressHook(AgentHook):
@@ -113,19 +114,29 @@ class AgentProgressHook(AgentHook):
                 thought = self._strip_think(context.response.content if context.response else None)
                 if thought:
                     await self._on_progress(thought)
-            tool_hint = self._strip_think(self._tool_hint(context.tool_calls))
-            tool_events = [build_tool_event_start_payload(tc) for tc in context.tool_calls]
-            await invoke_on_progress(
-                self._on_progress,
-                tool_hint,
-                tool_hint=True,
-                tool_events=tool_events,
-            )
+            inline_widgets = accepts_widget_events(self._on_progress)
+            calls = [tc for tc in context.tool_calls if not (inline_widgets and tc.name == "show_widget")]
+            if inline_widgets:
+                await publish_widget_events(self._on_progress, [
+                    widget_event(tc) for tc in context.tool_calls if tc.name == "show_widget"
+                ])
+            tool_hint = self._strip_think(self._tool_hint(calls))
+            tool_events = [build_tool_event_start_payload(tc) for tc in calls]
+            if calls:
+                await invoke_on_progress(
+                    self._on_progress,
+                    tool_hint,
+                    tool_hint=True,
+                    tool_events=tool_events,
+                )
         from mona.agent.tool_privacy import redact_tool_arguments
 
         for tc in context.tool_calls:
+            safe_arguments = redact_tool_arguments(tc.name, tc.arguments)
+            if tc.name == "show_widget" and "widget_code" in safe_arguments:
+                safe_arguments["widget_code"] = f"[{len(str(safe_arguments['widget_code']))} characters]"
             args_str = json.dumps(
-                redact_tool_arguments(tc.name, tc.arguments), ensure_ascii=False
+                safe_arguments, ensure_ascii=False
             )
             logger.debug("Tool call: {}({})", tc.name, args_str[:200])
         if self._set_tool_context:
@@ -160,10 +171,16 @@ class AgentProgressHook(AgentHook):
             self._on_progress
             and context.tool_calls
             and context.tool_events
-            and on_progress_accepts_tool_events(self._on_progress)
         ):
             tool_events = build_tool_event_finish_payloads(context)
-            if tool_events:
+            if accepts_widget_events(self._on_progress):
+                await publish_widget_events(self._on_progress, [
+                    widget_event(tc, result, status="complete")
+                    for tc, result in zip(context.tool_calls, context.tool_results)
+                    if tc.name == "show_widget"
+                ])
+                tool_events = [event for event in tool_events if event.get("name") != "show_widget"]
+            if tool_events and on_progress_accepts_tool_events(self._on_progress):
                 await invoke_on_progress(
                     self._on_progress,
                     "",

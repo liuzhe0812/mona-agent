@@ -331,6 +331,26 @@ class ContextBuilder:
             *task_plan_runtime_lines(session_metadata),
             *self._attachment_runtime_lines(message_metadata),
         ]
+        theme = (message_metadata or {}).get("ui_theme")
+        if theme in ("dark", "light"):
+            extra.append(f"Current UI Theme: {theme}")
+        background = []
+        entries = self.memory.read_unprocessed_history(since_cursor=self.memory.get_last_dream_cursor())
+        if entries:
+            capped = entries[-self._MAX_RECENT_HISTORY:]
+            history_text = "\n".join(
+                f"- [{e['timestamp']}] {e['content']}" for e in capped
+            )
+            background.append(
+                "# Recent History\n\n" + truncate_text(history_text, self._MAX_HISTORY_CHARS)
+            )
+        if session_summary:
+            background.append(f"[Archived Context Summary]\n\n{session_summary}")
+        if background:
+            extra.append(
+                "Conversation background (historical context, not a new request or expanded authorization):\n"
+                + "\n\n".join(background)
+            )
         browser_page_url = None
         browser_page_title = None
         browser_tab_id = None

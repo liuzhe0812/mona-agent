@@ -27,6 +27,7 @@ if TYPE_CHECKING:
     from mona.agent.tools.self import MyToolConfig
     from mona.agent.tools.shell import ExecToolConfig
     from mona.agent.tools.video_generation import VideoGenerationToolConfig
+    from mona.agent.tools.visualizer import VisualizerToolConfig
     from mona.agent.tools.web import WebToolsConfig
     from mona.email_intel.config import EmailIntelConfig
 
@@ -575,6 +576,9 @@ class ToolsConfig(Base):
     chart: ChartToolConfig = Field(
         default_factory=lambda: _lazy_default("mona.agent.tools.chart", "ChartToolConfig"),
     )
+    visualizer: VisualizerToolConfig = Field(
+        default_factory=lambda: _lazy_default("mona.agent.tools.visualizer", "VisualizerToolConfig"),
+    )
     canvas: CanvasToolConfig = Field(
         default_factory=lambda: _lazy_default("mona.agent.tools.canvas", "CanvasToolConfig"),
     )
@@ -940,6 +944,7 @@ def _resolve_tool_config_refs() -> None:
     from mona.agent.tools.self import MyToolConfig
     from mona.agent.tools.shell import ExecToolConfig
     from mona.agent.tools.video_generation import VideoGenerationToolConfig
+    from mona.agent.tools.visualizer import VisualizerToolConfig
     from mona.agent.tools.web import WebFetchConfig, WebSearchConfig, WebToolsConfig
     from mona.email_intel.config import EmailIntelConfig
 
@@ -957,6 +962,7 @@ def _resolve_tool_config_refs() -> None:
     mod.HttpToolConfig = HttpToolConfig  # type: ignore[attr-defined]
     mod.DataframeToolConfig = DataframeToolConfig  # type: ignore[attr-defined]
     mod.ChartToolConfig = ChartToolConfig  # type: ignore[attr-defined]
+    mod.VisualizerToolConfig = VisualizerToolConfig  # type: ignore[attr-defined]
     mod.CanvasToolConfig = CanvasToolConfig  # type: ignore[attr-defined]
     mod.CryptoToolConfig = CryptoToolConfig  # type: ignore[attr-defined]
     mod.OfficeToolConfig = OfficeToolConfig  # type: ignore[attr-defined]

@@ -563,7 +563,7 @@ def replay_transcript_to_ui_messages(
             message = messages[i]
             if message.get("role") == "user":
                 break
-            if message.get("role") == "assistant" and message.get("kind") != "trace":
+            if message.get("role") == "assistant" and message.get("kind") not in {"trace", "widget"}:
                 messages[i] = {
                     **message,
                     "deliveredFiles": merge_delivered_files(
@@ -754,6 +754,34 @@ def replay_transcript_to_ui_messages(
             flush_delta_buffer()
         if ev != "reasoning_delta":
             flush_reasoning_buffer()
+        if ev == "widget":
+            widget = rec.get("widget")
+            if not isinstance(widget, dict) or not widget.get("id"):
+                continue
+            if widget.get("status") not in {"complete", "error"}:
+                continue
+            task_id = rec.get("task_id") or ""
+            message_id = f"widget:{task_id}:{widget['id']}"
+            row = {
+                "id": message_id, "role": "assistant", "kind": "widget",
+                "content": "", "widget": widget, "isStreaming": False,
+                "createdAt": _ts_base + idx,
+                "sourceTranscriptIndex": idx,
+                **({"taskId": task_id} if task_id else {}),
+                **({"authorId": rec["author_id"], "authorType": "agent"} if rec.get("author_id") else {}),
+            }
+            position = next((i for i, message in enumerate(messages) if message.get("id") == message_id), None)
+            if position is not None:
+                row["createdAt"] = messages[position]["createdAt"]
+                messages[position] = row
+            else:
+                messages.append(row)
+            close_activity_for_answer()
+            buffer_message_index = None
+            buffer_parts = []
+            buffer_source_index = None
+            buffer_task_id = None
+            continue
         if ev == "user":
             active_activity_segment_id = None
             active_file_edit_segment_id = None

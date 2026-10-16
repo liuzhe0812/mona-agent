@@ -2,7 +2,7 @@ export type Role = "user" | "assistant" | "tool" | "system";
 
 /** "trace" rows are intermediate agent breadcrumbs (tool-call hints,
  * progress pings) that should not be rendered as conversational replies. */
-export type MessageKind = "message" | "trace" | "workflowRun" | "discussion";
+export type MessageKind = "message" | "trace" | "workflowRun" | "discussion" | "widget";
 
 /** Multi-agent author kinds (phase 0, multi-agent-development-guide 5.3). */
 export type AuthorType = "user" | "agent" | "system";
@@ -651,6 +651,7 @@ export interface UIMessage {
   /** The quoted message preview shown above this user turn. */
   quote?: MessageQuote;
   kind?: MessageKind;
+  widget?: InlineWidgetData;
   isStreaming?: boolean;
   createdAt: number;
   /** For trace rows: each individual hint line, so consecutive hints can
@@ -703,6 +704,15 @@ export interface UIMessage {
   toolEvents?: ToolProgressEvent[];
   /** Structured payload for non-``message`` kinds (job snapshot, run summary…). */
   payload?: unknown;
+}
+
+export interface InlineWidgetData {
+  id: string;
+  title: string;
+  code: string;
+  loadingMessages: string[];
+  status: "streaming" | "complete" | "error";
+  error?: string;
 }
 
 /** Structured UI blob on ``progress`` WS frames; channels may add more ``kind`` values later. */
@@ -1225,6 +1235,7 @@ export type ConnectionStatus =
   | "error";
 
 export type InboundEvent =
+  | { event: "widget"; chat_id: string; widget: InlineWidgetData; task_id?: string; author_id?: string }
   | { event: "ready"; chat_id: string; client_id: string }
   | { event: "attached"; chat_id: string; request_id?: string; model_binding?: AgentModelBinding | null }
   | { event: "video_model_binding_result"; ok: boolean; chat_id: string; request_id?: string; model_binding?: AgentModelBinding | null; detail?: string; code?: string }
@@ -1518,6 +1529,7 @@ export type Outbound =
       content: string;
       media?: OutboundMedia[];
       webui?: true;
+      ui_theme?: "dark" | "light";
       /** IMPORTANT: Short display text for the user message bubble (e.g. action label).
        *  When set, the frontend renders this instead of the full `content`.
        *  This field is persisted to the server so history replay also shows the short version.

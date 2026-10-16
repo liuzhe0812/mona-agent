@@ -106,6 +106,45 @@ async function flushStreamFrame() {
 }
 
 describe("useMonaStream", () => {
+  it("keeps inline widget updates separate from the following answer and delivered files", async () => {
+    const fake = fakeClient();
+    const { result } = renderHook(() => useMonaStream("widget-chat", EMPTY_MESSAGES), {
+      wrapper: wrap(fake.client),
+    });
+    const widget = { id: "diagram", title: "流程图", code: "<svg />", loadingMessages: [], status: "streaming" as const };
+    act(() => {
+      result.current.send("解释流程");
+      fake.emit("widget-chat", { event: "widget", chat_id: "widget-chat", widget });
+      fake.emit("widget-chat", { event: "widget", chat_id: "widget-chat", widget: { ...widget, status: "complete" } });
+      fake.emit("widget-chat", { event: "delta", text: "这是图后的说明。" });
+    });
+    await flushStreamFrame();
+    const assistants = result.current.messages.filter((message) => message.role === "assistant");
+    expect(assistants).toHaveLength(2);
+    expect(assistants[0].kind).toBe("widget");
+    expect(assistants[1].content).toBe("这是图后的说明。");
+    expect(assistants[0].widget?.status).toBe("complete");
+    act(() => fake.emit("widget-chat", {
+      event: "deliver_files", chat_id: "widget-chat",
+      files: [{ path: "flow.svg", name: "flow.svg", size: 20, size_human: "20 B", mime: "image/svg+xml" }],
+    }));
+    expect(result.current.messages.find((message) => message.kind === "widget")?.deliveredFiles).toBeUndefined();
+  });
+
+  it("does not execute an unconfirmed widget after a turn is interrupted", () => {
+    const fake = fakeClient();
+    const { result } = renderHook(() => useMonaStream("widget-interrupted", EMPTY_MESSAGES), {
+      wrapper: wrap(fake.client),
+    });
+    act(() => {
+      fake.emit("widget-interrupted", { event: "widget", chat_id: "widget-interrupted", widget: {
+        id: "unfinished", title: "未完成", code: "<script>partial", loadingMessages: [], status: "streaming",
+      } });
+      fake.emit("widget-interrupted", { event: "turn_end", chat_id: "widget-interrupted" });
+    });
+    expect(result.current.messages[0].widget?.status).toBe("error");
+  });
+
   it("updates context usage without adding messages and clears it when changing chats", () => {
     const fake = fakeClient();
     const { result, rerender } = renderHook(({ chat }) => useMonaStream(chat, EMPTY_MESSAGES), {
