@@ -472,6 +472,7 @@ async def test_readonly_context_and_external_executor_no_model_fallback(tmp_path
     use_missing_programs(tmp_path, monkeypatch)
     model = Model()
     runtime, project, session, _ = make_runtime(tmp_path, monkeypatch, model)
+    runtime.config_loader().development.enabled_engines = ["codex"]
     child = runtime.store.create_session(project.id, readonly=True, parent_session_id=session.id)
     external = runtime.store.create_session(project.id, ExecutorId.CODEX)
     try:

@@ -418,6 +418,7 @@ def test_delegated_partner_loop_shares_the_turn_coordinator(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """The same contract holds for direct-chat partner agents."""
+    from mona.agent import partner_loop
     from mona.agent.partners import AgentDefinition
 
     parent = _make_full_loop(tmp_path)
@@ -447,7 +448,7 @@ def test_delegated_partner_loop_shares_the_turn_coordinator(
         "mona.agent.user_config.load_agent_user_config",
         lambda agent_id: _UserConfig(),
     )
-    monkeypatch.setattr("mona.agent.partner_loop.PartnerAgentLoop", _FakePartnerLoop)
+    monkeypatch.setattr(partner_loop, "PartnerAgentLoop", _FakePartnerLoop)
 
     parent._ensure_partner_loop("com.mona.probe")
 
