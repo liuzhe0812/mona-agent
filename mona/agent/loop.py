@@ -43,7 +43,12 @@ from mona.providers.base import LLMProvider
 from mona.providers.context_window import DEFAULT_CONTEXT_WINDOW_TOKENS
 from mona.providers.factory import ProviderSnapshot
 from mona.session.goal_state import runner_wall_llm_timeout_s
-from mona.session.manager import Session, SessionManager, normalize_message_author
+from mona.session.manager import (
+    Session,
+    SessionManager,
+    SessionSaveError,
+    normalize_message_author,
+)
 from mona.session.task_plan import task_plan_ws_blob
 from mona.session.webui_turns import (
     WebuiTurnCoordinator,
@@ -1851,13 +1856,18 @@ class AgentLoop:
                             exc_info=True,
                         )
                     raise
-                except Exception:
+                except Exception as exc:
                     logger.exception("Error processing message for session {}", session_key)
+                    content = (
+                        "会话记录暂时无法保存，本次任务已中断。已生成的文件仍保留，请稍后继续。"
+                        if isinstance(exc, SessionSaveError)
+                        else "本次任务遇到问题，暂时无法完成，请稍后重试。"
+                    )
                     await self.bus.publish_outbound(
                         OutboundMessage(
                             channel=msg.channel,
                             chat_id=msg.chat_id,
-                            content="Sorry, I encountered an error.",
+                            content=content,
                         )
                     )
         finally:

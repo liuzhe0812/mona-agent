@@ -16,6 +16,18 @@ describe("overlayScrollbarGeometry", () => {
 });
 
 describe("ChatList context menu", () => {
+  it("identifies a video project while retaining its original conversation key", () => {
+    const onSelect = vi.fn();
+    render(createElement(ChatList, {
+      sessions: [{ key: "websocket:video", channel: "websocket", chatId: "video", agentKind: "video", createdAt: null, updatedAt: null, title: "产品视频", preview: "画面已准备好" }],
+      activeKey: null, onSelect, onRequestDelete: vi.fn(), onTogglePin: vi.fn(), onRequestRename: vi.fn(), onToggleArchive: vi.fn(),
+    }));
+    const icon = screen.getByRole("img", { name: "视频项目" });
+    expect(icon).toHaveAttribute("src", "/brand/document-video-icon.png");
+    fireEvent.click(icon.closest("button")!);
+    expect(onSelect).toHaveBeenCalledWith("websocket:video");
+  });
+
   it("shows a retryable error instead of an empty-session state", () => {
     const onRetry = vi.fn();
     render(createElement(ChatList, {

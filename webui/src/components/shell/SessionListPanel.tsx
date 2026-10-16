@@ -161,16 +161,16 @@ export function SessionListPanel(props: SessionListPanelProps) {
         props.className,
       )}
     >
-      <div className="flex h-11 shrink-0 items-center gap-2 border-b border-border/35 px-3">
-        <div className="flex h-8 min-w-0 flex-1 items-center gap-2 rounded-md border border-border/55 bg-muted/45 px-2.5 transition-colors focus-within:bg-background">
-          <Search className="h-4 w-4 shrink-0 text-muted-foreground" aria-hidden />
-          <input
+      <div className="flex h-11 shrink-0 items-center gap-2 border-b border-border/55 px-2">
+        <div className="flex h-8 min-w-0 flex-1 items-center gap-1 rounded-md bg-muted/35 px-2">
+          <Search className="h-3.5 w-3.5 shrink-0 text-muted-foreground" aria-hidden />
+          <Input
             type="search"
             value={query}
             onChange={(event) => setQuery(event.target.value)}
             placeholder={t("sidebar.searchPlaceholder")}
             aria-label={t("sidebar.searchAria")}
-            className="min-w-0 flex-1 bg-transparent text-[13px] text-foreground outline-none placeholder:text-muted-foreground/75 [&::-webkit-search-cancel-button]:hidden"
+            className="h-auto min-w-0 flex-1 border-0 bg-transparent px-0 py-0 text-caption shadow-none focus-visible:ring-0 [&::-webkit-search-cancel-button]:hidden"
           />
           {hasQuery ? (
             <button
@@ -193,13 +193,13 @@ export function SessionListPanel(props: SessionListPanelProps) {
           <DropdownMenuTrigger asChild>
             <Button
               type="button"
-              variant="outline"
+              variant="ghost"
               size="icon"
               aria-label={t("chat.createConversation")}
               title={t("chat.createConversation")}
-              className="shrink-0 border-border/55 bg-muted/35 text-muted-foreground"
+              className="h-7 w-7 shrink-0 rounded-md text-muted-foreground hover:bg-accent hover:text-foreground"
             >
-              <Plus className="h-4 w-4" aria-hidden />
+              <Plus className="h-3.5 w-3.5" aria-hidden />
             </Button>
           </DropdownMenuTrigger>
           <DropdownMenuContent align="end" className="w-64 p-1.5">

@@ -62,6 +62,23 @@ class DocumentContextBuilder(ContextBuilder):
         if always_content:
             parts.append(f"# Active Skills\n\n{always_content}")
 
+        # Core creative knowledge must be present when planning starts. Detailed
+        # art recipes remain available through progressive reference reads.
+        if self._profile.skill_references:
+            skill_dir = doc_skills.resolve_skill_dir(self._profile.skill_name)
+            if skill_dir is None:
+                raise ValueError("视频创作技能未准备好，请更新应用后重试。")
+            reference_root = (skill_dir / "references").resolve()
+            for reference in self._profile.skill_references:
+                path = (reference_root / reference).resolve()
+                if not path.is_relative_to(reference_root):
+                    raise ValueError("视频创作资料路径无效。")
+                if not path.is_file() and doc_skills.builtin_skills:
+                    path = doc_skills.builtin_skills / self._profile.skill_name / "references" / reference
+                if not path.is_file():
+                    raise ValueError("视频创作资料未准备好，请更新应用后重试。")
+                parts.append(f"# Creative Reference: {reference}\n\n{path.read_text(encoding='utf-8')}")
+
         if session_summary:
             parts.append(f"[Archived Context Summary]\n\n{session_summary}")
 

@@ -143,7 +143,13 @@ function makeClient() {
     defaultChatId: null as string | null,
     onStatus: () => () => {},
     onRuntimeModelUpdate: () => () => {},
+    onWorkflowRunUpdated: () => () => {},
+    onWorkflowUpdated: () => () => {},
+    onApprovalRequested: () => () => {},
+    onRoomUpdated: () => () => {},
     getRunStartedAt: () => null,
+    getRoomState: () => new Promise<never>(() => {}),
+    getWorkflow: async () => ({ draft: null, active: null, activeRevision: null }),
     getGoalState: (chatId: string) => goalStateByChatId.get(chatId),
     onChat: (chatId: string, handler: (ev: import("@/lib/types").InboundEvent) => void) => {
       let handlers = chatHandlers.get(chatId);
@@ -1407,6 +1413,133 @@ describe("ThreadShell", () => {
       expect(screen.getByText("first message should stay")).toBeInTheDocument(),
     );
     expect(screen.queryByText("What can I do for you?")).not.toBeInTheDocument();
+  });
+
+  it("shows assigned quarrel roles in the launch summary and reconciles a full replay", async () => {
+    const client = makeClient();
+    const chatId = "room-full-discussion-history";
+    const topic = "Zhang San thinks Li Si took credit for his work.";
+    let historyCalls = 0;
+    let displayContent = "";
+    let taskId = "";
+    vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.includes(`/api/sessions/websocket%3A${chatId}/webui-thread`)) {
+        historyCalls += 1;
+        if (url.includes("limit=160")) {
+          return httpJson({
+            schemaVersion: 3,
+            messages: [
+              {
+                id: "history-answer",
+                role: "assistant",
+                content: "Previous answer",
+                createdAt: 2,
+                historyPosition: 1,
+              },
+            ],
+            pagination: { hasMore: true, before: 1, revision: "rev-1", total: 2 },
+          });
+        }
+        return httpJson({
+          schemaVersion: 3,
+          messages: [
+            {
+              id: "history-question",
+              role: "user",
+              content: "Previous question",
+              createdAt: 1,
+              historyPosition: 0,
+            },
+            {
+              id: "history-answer",
+              role: "assistant",
+              content: "Previous answer",
+              createdAt: 2,
+              historyPosition: 1,
+            },
+            {
+              id: "canonical-topic",
+              role: "user",
+              content: topic,
+              ...(displayContent ? { displayContent } : {}),
+              ...(taskId ? { taskId } : {}),
+              createdAt: 3,
+              historyPosition: 2,
+            },
+          ],
+          pagination: { hasMore: false, before: null, revision: "rev-1", total: 3 },
+        });
+      }
+      return { ok: false, status: 404, json: async () => ({}) };
+    }));
+
+    render(wrap(
+      client,
+      <ThreadShell
+        session={{
+          ...session(chatId),
+          conversation: { type: "room", title: "Quarrel room", agentIds: ["agent-a", "agent-b"] },
+        }}
+        title="Quarrel room"
+        onToggleSidebar={() => {}}
+        onNewChat={() => {}}
+      />,
+    ));
+
+    await screen.findByText("Previous answer");
+    fireEvent.click(screen.getByRole("button", { name: "Start topic" }));
+    fireEvent.click(screen.getByRole("button", { name: /Quarrel/ }));
+    expect(screen.getByText("Background")).toBeInTheDocument();
+    fireEvent.change(
+      screen.getByPlaceholderText("For example: Zhang San thinks Li Si took credit for his work, and they start arguing."),
+      { target: { value: topic } },
+    );
+    fireEvent.change(screen.getByPlaceholderText("Assign a role to agent-a, for example: Zhang San"), {
+      target: { value: "Zhang San" },
+    });
+    fireEvent.change(screen.getByPlaceholderText("Assign a role to agent-b, for example: Zhang San"), {
+      target: { value: "Li Si" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Start discussion" }));
+
+    await waitFor(() => expect(client.sendMessage).toHaveBeenCalledTimes(1));
+    const sendCall = client.sendMessage.mock.calls.at(-1) as unknown as [
+      string,
+      string,
+      unknown,
+      {
+        displayContent?: string;
+        taskId?: string;
+        discussion?: {
+          mode: string;
+          positions: Record<string, string>;
+          roles?: Record<string, string>;
+        };
+      },
+    ] | undefined;
+    const options = sendCall?.[3];
+    expect(options?.displayContent).toContain("Quarrel background:");
+    expect(options?.displayContent).toContain("agent-a → Zhang San");
+    expect(options?.displayContent).toContain("agent-b → Li Si");
+    expect(options?.taskId).toMatch(/^task_/);
+    expect(options?.discussion).toMatchObject({
+      mode: "quarrel",
+      positions: {},
+      roles: { "agent-a": "Zhang San", "agent-b": "Li Si" },
+    });
+    displayContent = options?.displayContent ?? "";
+    taskId = options?.taskId ?? "";
+    await screen.findByText(/Quarrel background:/);
+    expect(historyCalls).toBe(1);
+
+    fireEvent.click(screen.getByRole("button", { name: "用户输入历史" }));
+    const historyDialog = await screen.findByRole("dialog", { name: "用户输入历史" });
+    await waitFor(() => expect(historyCalls).toBe(2));
+    fireEvent.click(within(historyDialog).getByRole("button", { name: "Close" }));
+    await waitFor(() => expect(historyDialog).not.toBeInTheDocument());
+
+    expect(screen.getAllByText(/Quarrel background:/)).toHaveLength(1);
   });
 
   it("sends quick action prompts from the empty thread landing", async () => {

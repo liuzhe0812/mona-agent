@@ -29,6 +29,7 @@ interface ThreadMessagesProps {
   onLoadEarlier?: () => void;
   onQuote?: (message: UIMessage, author: string) => void;
   onBranch?: (message: UIMessage, author: string) => void;
+  onWidgetPrompt?: (text: string) => void;
 }
 
 export type DisplayUnit =
@@ -226,6 +227,7 @@ export function ThreadMessages({
   onLoadEarlier,
   onQuote,
   onBranch,
+  onWidgetPrompt,
 }: ThreadMessagesProps) {
   const { t } = useTranslation();
   // Tolerates bare renders (no ClientProvider in unit tests): agent names
@@ -332,6 +334,7 @@ export function ThreadMessages({
                     authorName={quoteAuthorName(unit.message, agentsById, isGroupChat)}
                     onQuote={onQuote}
                     onBranch={onBranch}
+                    onWidgetPrompt={onWidgetPrompt}
                   />
                   {unit.message.toolEvents && unit.message.toolEvents.length > 0 ? (
                     <StepActivityTrace events={unit.message.toolEvents} />
@@ -351,6 +354,7 @@ export function ThreadMessages({
                   authorName={quoteAuthorName(unit.message, agentsById, isGroupChat)}
                   onQuote={onQuote}
                   onBranch={onBranch}
+                  onWidgetPrompt={onWidgetPrompt}
                 />
                 {unit.message.toolEvents && unit.message.toolEvents.length > 0 ? (
                   <StepActivityTrace events={unit.message.toolEvents} />

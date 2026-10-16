@@ -22,6 +22,7 @@ from mona.utils.helpers import (
     estimate_message_tokens,
     find_legal_message_start,
     image_placeholder_text,
+    replace_file_with_retry,
     safe_filename,
 )
 from mona.utils.subagent_channel_display import scrub_subagent_announce_body
@@ -460,6 +461,10 @@ class SessionDeletedError(RuntimeError):
     """A late write attempted to recreate a permanently deleted conversation."""
 
 
+class SessionSaveError(OSError):
+    """Conversation persistence failed; already completed tools must not be replayed."""
+
+
 class SessionManager:
     """
     Manages conversation sessions.
@@ -716,10 +721,14 @@ class SessionManager:
         if session.key in self._deleted_keys:
             raise SessionDeletedError("Session has been permanently deleted")
         path = self._get_session_path(session.key)
-        tmp_path = path.with_suffix(".jsonl.tmp")
+        tmp_path: Path | None = None
 
         try:
-            with open(tmp_path, "w", encoding="utf-8") as f:
+            with tempfile.NamedTemporaryFile(
+                mode="w", encoding="utf-8", dir=path.parent,
+                prefix=f".{path.name}.", suffix=".tmp", delete=False,
+            ) as f:
+                tmp_path = Path(f.name)
                 metadata_line = {
                     "_type": "metadata",
                     "key": session.key,
@@ -735,7 +744,7 @@ class SessionManager:
                     f.flush()
                     os.fsync(f.fileno())
 
-            os.replace(tmp_path, path)
+            replace_file_with_retry(tmp_path, path)
 
             if fsync:
                 # fsync the directory so the rename is durable.
@@ -748,9 +757,12 @@ class SessionManager:
                         os.fsync(fd)
                     finally:
                         os.close(fd)
-        except BaseException:
-            tmp_path.unlink(missing_ok=True)
-            raise
+        except OSError as exc:
+            raise SessionSaveError("Conversation history could not be saved") from exc
+        finally:
+            if tmp_path is not None:
+                with suppress(OSError):
+                    tmp_path.unlink(missing_ok=True)
 
         self._cache[session.key] = session
         try:
@@ -922,6 +934,7 @@ class SessionManager:
                                 "preview_author_id": summary.get("preview_author_id"),
                                 "preview_message_type": summary.get("preview_message_type"),
                                 "workspace": metadata.get("workspace"),
+                                "agent_kind": metadata.get("agent_kind"),
                                 "path": str(path)
                             }
                             # Multi-agent conversation shape (phase 2d): stored
@@ -951,6 +964,7 @@ class SessionManager:
                         "preview_author_id": summary.get("preview_author_id"),
                         "preview_message_type": summary.get("preview_message_type"),
                         "workspace": repaired.metadata.get("workspace"),
+                        "agent_kind": repaired.metadata.get("agent_kind"),
                         "path": str(path)
                     })
                 continue

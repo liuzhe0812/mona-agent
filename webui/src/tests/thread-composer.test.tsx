@@ -653,6 +653,28 @@ describe("ThreadComposer", () => {
 
     view.rerender(<ThreadComposer {...props} value="" />);
     expect(input).toHaveValue("");
+    expect(input.style.height).toBe("auto");
+  });
+
+  it("restores the compact height after deleting or submitting a long draft", async () => {
+    const onSend = vi.fn();
+    render(<ThreadComposer onSend={onSend} autoFocus={false} />);
+    const input = screen.getByRole("textbox", { name: "Message input" });
+    Object.defineProperty(input, "scrollHeight", { configurable: true, get: () => 260 });
+    const text = "Long draft\n".repeat(20);
+
+    fireEvent.input(input, { target: { value: text } });
+    expect(input.style.height).toBe("260px");
+    fireEvent.input(input, { target: { value: "" } });
+    expect(input.style.height).toBe("auto");
+
+    fireEvent.input(input, { target: { value: text } });
+    fireEvent.keyDown(input, { key: "Enter" });
+    await waitFor(() => {
+      expect(input).toHaveValue("");
+      expect(input.style.height).toBe("auto");
+    });
+    expect(onSend).toHaveBeenCalledOnce();
   });
 
   it("keeps the ordinary uncontrolled hero composer free of an initial inline height", () => {

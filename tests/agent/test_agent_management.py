@@ -305,6 +305,7 @@ def test_create_custom_agent_is_local_and_registry_loadable(
     agents_dir = tmp_path / "agents"
     agents_dir.mkdir()
     monkeypatch.setattr(agent_management, "get_agents_dir", lambda: agents_dir)
+    monkeypatch.setattr(agent_management, "get_agent_memory_dir", paths.get_agent_memory_dir)
 
     definition = create_custom_agent(
         "法律文书专家",
@@ -317,13 +318,47 @@ def test_create_custom_agent_is_local_and_registry_loadable(
     assert (package_root / "agent.json").is_file()
     prompt = (package_root / "prompt.md").read_text(encoding="utf-8")
     assert "user-created local partner" in prompt
-    assert "识别风险" in prompt
+    assert "识别风险" not in prompt
+    personality = agent_management.read_instruction(definition.id, "soul")
+    assert personality["content"] == "识别风险并用通俗语言解释，不替代律师意见。"
+    assert any(
+        entry["message"] == "创建个性"
+        for entry in agent_management.instruction_history(definition.id, "soul")
+    )
     registry = AgentRegistry(
         builtin_dir=tmp_path / "builtin",
         installed_dir=agents_dir,
         package_store_dir=tmp_path / "packages",
     )
     assert registry.require(definition.id).display_name == "法律文书专家"
+    from mona.agent.context import ContextBuilder
+
+    context = ContextBuilder(tmp_path, agent_id=definition.id, agent_registry=registry)
+    assert "识别风险" in context.build_private_bootstrap_context()
+    agent_management.write_instruction(
+        definition.id, "soul", "回答简洁直接，使用自然口语。", message="edit personality",
+    )
+    personalized = context.build_private_bootstrap_context()
+    assert "回答简洁直接" in personalized
+    assert "识别风险" not in personalized
+
+
+def test_custom_agent_creation_rolls_back_when_personality_save_fails(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    agents_dir = tmp_path / "agents"
+    agents_dir.mkdir()
+    monkeypatch.setattr(agent_management, "get_agents_dir", lambda: agents_dir)
+
+    def fail_save(*args, **kwargs):
+        raise PermissionError("cannot save personality")
+
+    monkeypatch.setattr(agent_management, "write_instruction", fail_save)
+
+    with pytest.raises(PermissionError, match="cannot save personality"):
+        create_custom_agent("Partner", instructions="A concise personality.")
+
+    assert list(agents_dir.iterdir()) == []
 
 
 async def test_websocket_starts_skill_setup_without_waiting_for_install() -> None:

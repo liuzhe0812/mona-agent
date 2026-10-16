@@ -69,6 +69,48 @@ afterEach(() => {
 });
 
 describe("MonaClient", () => {
+  it("transports video model binding and preserves the difference between omitted and inherited", async () => {
+    const client = new MonaClient({ url: "ws://test", reconnect: false, socketFactory: (url) => new FakeSocket(url) as unknown as WebSocket });
+    client.connect(); lastSocket().fakeOpen();
+    const binding = { executor: "codex", model: "gpt-6.1-sol", provider: null, effort: "high" } as const;
+    const created = client.newChat(45000, false, null, "video", binding);
+    const request = JSON.parse(lastSocket().sent.at(-1)!);
+    expect(request).toMatchObject({ type: "new_chat", agent_kind: "video", model_binding: binding });
+    lastSocket().fakeMessage({ event: "attached", chat_id: "video-chat", request_id: request.request_id, model_binding: binding });
+    await expect(created).resolves.toBe("video-chat");
+    client.sendMessage("video-chat", "继续", undefined, { agentKind: "video" });
+    expect(JSON.parse(lastSocket().sent.at(-1)!)).not.toHaveProperty("model_binding");
+    client.sendMessage("video-chat", "跟随默认", undefined, { agentKind: "video", modelBinding: null });
+    expect(JSON.parse(lastSocket().sent.at(-1)!)).toHaveProperty("model_binding", null);
+    client.close();
+  });
+
+  it("waits for a video model selection receipt without broadcasting a global model change", async () => {
+    const client = new MonaClient({ url: "ws://test", reconnect: false, socketFactory: (url) => new FakeSocket(url) as unknown as WebSocket });
+    client.connect(); lastSocket().fakeOpen();
+    const globalChange = vi.fn(); client.onRuntimeModelUpdate(globalChange);
+    const binding = { executor: "codex", model: "gpt-6.1-sol", provider: null, effort: "high" } as const;
+    const changed = client.updateVideoModelBinding("video-chat", binding);
+    const request = JSON.parse(lastSocket().sent.at(-1)!);
+    expect(request).toMatchObject({ type: "video_model_binding_update", chat_id: "video-chat", model_binding: binding });
+    await vi.advanceTimersByTimeAsync(12000);
+    lastSocket().fakeMessage({ event: "video_model_binding_result", ok: true, chat_id: "video-chat", request_id: request.request_id, model_binding: binding });
+    await expect(changed).resolves.toEqual(binding);
+    expect(globalChange).not.toHaveBeenCalled();
+    client.close();
+  });
+
+  it("rejects a failed video chat selection immediately using its request id", async () => {
+    const client = new MonaClient({ url: "ws://test", reconnect: false, socketFactory: (url) => new FakeSocket(url) as unknown as WebSocket });
+    client.connect(); lastSocket().fakeOpen();
+    const created = client.newChat(45000, false, null, "video", null);
+    const rejected = expect(created).rejects.toThrow("模型暂不可用");
+    const request = JSON.parse(lastSocket().sent.at(-1)!);
+    lastSocket().fakeMessage({ event: "error", request_id: request.request_id, detail: "模型暂不可用" });
+    await rejected;
+    client.close();
+  });
+
   it("starts and follows a persistent skill setup job", async () => {
     const client = new MonaClient({
       url: "ws://test",
@@ -462,7 +504,7 @@ describe("MonaClient", () => {
     // Attach is sent first because sendMessage adds to knownChats, which
     // handleOpen re-attaches; then the queued message follows.
     expect(lastSocket().sent).toContain(
-      JSON.stringify({ type: "message", chat_id: "chat-x", content: "hello", webui: true }),
+      JSON.stringify({ type: "message", chat_id: "chat-x", content: "hello", webui: true, ui_theme: "light" }),
     );
   });
 
@@ -543,6 +585,7 @@ describe("MonaClient", () => {
       content: "look",
       media: [{ data_url: "data:image/png;base64,AAAA", name: "shot.png" }],
       webui: true,
+      ui_theme: "light",
     });
   });
 
@@ -562,6 +605,7 @@ describe("MonaClient", () => {
       chat_id: "chat-x",
       content: "hello",
       webui: true,
+      ui_theme: "light",
     });
   });
 
@@ -584,6 +628,22 @@ describe("MonaClient", () => {
       content: "inspect this page",
       browser_tab_id: "tab-123",
     });
+  });
+
+  it("sends the current theme as message metadata for generated visual colors", () => {
+    const client = new MonaClient({
+      url: "ws://test", reconnect: false,
+      socketFactory: (url) => new FakeSocket(url) as unknown as WebSocket,
+    });
+    client.connect();
+    lastSocket().fakeOpen();
+    document.documentElement.classList.add("dark");
+    try {
+      client.sendMessage("theme-chat", "画图");
+      expect(JSON.parse(lastSocket().sent.at(-1) as string).ui_theme).toBe("dark");
+    } finally {
+      document.documentElement.classList.remove("dark");
+    }
   });
 
   it("includes the active Office document in the message envelope", () => {
@@ -793,6 +853,34 @@ describe("MonaClient", () => {
       type: "start_discussion",
       discussion: {
         summary_agent_id: "agent.judge",
+      },
+    });
+
+    client.sendMessage("room-1", "增长还是利润？", undefined, {
+      targetAgentIds: ["agent.a", "agent.b"],
+      taskId: "task-quarrel-1",
+      discussion: {
+        mode: "quarrel",
+        maxRounds: 3,
+        participantIds: ["agent.a", "agent.b"],
+        positions: {},
+        roles: { "agent.a": "张三", "agent.b": "李四" },
+        styles: {},
+        summaryAgentId: null,
+      },
+    });
+
+    expect(JSON.parse(lastSocket().sent.at(-1) as string)).toMatchObject({
+      type: "start_discussion",
+      target_agent_ids: ["agent.a", "agent.b"],
+      task_id: "task-quarrel-1",
+      discussion: {
+        mode: "quarrel",
+        max_rounds: 3,
+        positions: {},
+        roles: { "agent.a": "张三", "agent.b": "李四" },
+        styles: {},
+        summary_agent_id: null,
       },
     });
   });

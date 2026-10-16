@@ -208,6 +208,7 @@ def build_bus_progress_callback(
         tool_hint: bool = False,
         tool_events: list[dict[str, Any]] | None = None,
         file_edit_events: list[dict[str, Any]] | None = None,
+        widget_events: list[dict[str, Any]] | None = None,
         token_usage: dict[str, Any] | None = None,
         reasoning: bool = False,
         reasoning_end: bool = False,
@@ -228,6 +229,8 @@ def build_bus_progress_callback(
             meta["_tool_events"] = tool_events
         if file_edit_events:
             meta["_file_edit_events"] = file_edit_events
+        if widget_events:
+            meta["_widget_events"] = widget_events
         if token_usage:
             meta["token_usage"] = dict(token_usage)
             meta["_context_usage"] = True
@@ -247,6 +250,7 @@ def build_bus_progress_callback(
             tool_hint: bool = False,
             tool_events: list[dict[str, Any]] | None = None,
             file_edit_events: list[dict[str, Any]] | None = None,
+            widget_events: list[dict[str, Any]] | None = None,
             token_usage: dict[str, Any] | None = None,
             reasoning: bool = False,
             reasoning_end: bool = False,
@@ -257,6 +261,7 @@ def build_bus_progress_callback(
                 tool_hint=tool_hint,
                 tool_events=tool_events,
                 file_edit_events=file_edit_events,
+                widget_events=widget_events,
                 token_usage=token_usage,
                 reasoning=reasoning,
                 reasoning_end=reasoning_end,

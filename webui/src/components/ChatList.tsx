@@ -459,7 +459,7 @@ export const ChatList = memo(function ChatList({
                   ? [statusLabel, previewText].filter(Boolean).join(" · ")
                   : [
                       s.workspace ? workspaceLabel(s.workspace) : "",
-                      isRoom ? `${speakerPrefix}${previewText}` : agentName,
+                      isRoom ? `${speakerPrefix}${previewText}` : s.agentKind === "video" ? "视频项目" : agentName,
                       isRoom ? "" : previewText,
                     ].filter(Boolean).join(" · ");
                 const summaryText = summaryTextWithStatus.trim();
@@ -488,13 +488,13 @@ export const ChatList = memo(function ChatList({
                           active && "opacity-0",
                         )}
                       />
-                      <span className="relative flex h-10 w-10 shrink-0 self-center rounded-md">
-                        <ConversationAvatar
+                      <span className="relative flex h-10 w-10 shrink-0 items-center justify-center self-center rounded-md">
+                        {s.agentKind === "video" ? <img src="/brand/document-video-icon.png" alt="视频项目" className="h-6 w-6 rounded-md object-contain" /> : <ConversationAvatar
                           conversation={conv}
                           agentsById={agentsById}
                           className="h-10 w-10 justify-center overflow-hidden rounded-md"
                           avatarClassName="h-6 w-6 rounded-md text-micro"
-                        />
+                        />}
                         {isUnread ? (
                           <span
                             aria-label={t("chat.unread")}

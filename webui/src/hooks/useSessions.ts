@@ -317,6 +317,29 @@ function samePersistedMessage(left: UIMessage, right: UIMessage): boolean {
   return left.createdAt === right.createdAt;
 }
 
+function matchesCanonicalUserEcho(
+  optimistic: UIMessage,
+  canonical: UIMessage,
+  latestCurrentHistoryPosition: number | null,
+): boolean {
+  if (
+    optimistic.historyPosition != null
+    || canonical.historyPosition == null
+    || optimistic.role !== "user"
+    || canonical.role !== "user"
+    || optimistic.kind !== canonical.kind
+    || optimistic.content !== canonical.content
+    || optimistic.displayContent !== canonical.displayContent
+  ) {
+    return false;
+  }
+  if (optimistic.taskId && canonical.taskId && optimistic.taskId !== canonical.taskId) return false;
+  if (latestCurrentHistoryPosition != null) {
+    return canonical.historyPosition > latestCurrentHistoryPosition;
+  }
+  return canonical.createdAt >= optimistic.createdAt;
+}
+
 function isActiveLiveMessage(
   message: UIMessage,
   options: { isStreaming?: boolean; currentTaskId?: string | null },
@@ -330,12 +353,58 @@ function unmatchedLiveTail(
   current: UIMessage[],
   incoming: UIMessage[],
   options: { isStreaming?: boolean; currentTaskId?: string | null },
+  allowOrderedUserEchoFallback = true,
 ): UIMessage[] {
-  return current.filter((message) =>
-    message.historyPosition == null
-    && isActiveLiveMessage(message, options)
-    && !incoming.some((canonical) => samePersistedMessage(message, canonical)),
-  );
+  const live = current.flatMap((message, index) => (
+    message.historyPosition == null && isActiveLiveMessage(message, options)
+      ? [{ message, index }]
+      : []
+  ));
+  const matchedCurrent = new Set<number>();
+  const matchedCanonical = new Set<number>();
+
+  // Prefer explicit message identity before using the ordered user-echo
+  // fallback, so an older task row cannot consume a canonical row belonging
+  // to a later optimistic send.
+  for (const { message, index } of live) {
+    const canonicalIndex = incoming.findIndex((canonical, candidateIndex) => (
+      !matchedCanonical.has(candidateIndex) && samePersistedMessage(message, canonical)
+    ));
+    if (canonicalIndex >= 0) {
+      matchedCurrent.add(index);
+      matchedCanonical.add(canonicalIndex);
+    }
+  }
+
+  if (!allowOrderedUserEchoFallback) {
+    return live
+      .filter(({ index }) => !matchedCurrent.has(index))
+      .map(({ message }) => message);
+  }
+
+  let latestCurrentHistoryPosition: number | null = null;
+  for (const message of current) {
+    if (message.historyPosition != null) {
+      latestCurrentHistoryPosition = latestCurrentHistoryPosition == null
+        ? message.historyPosition
+        : Math.max(latestCurrentHistoryPosition, message.historyPosition);
+    }
+  }
+  for (const { message, index } of live) {
+    if (matchedCurrent.has(index)) continue;
+    const canonicalIndex = incoming.findIndex((canonical, candidateIndex) => (
+      !matchedCanonical.has(candidateIndex)
+      && matchesCanonicalUserEcho(message, canonical, latestCurrentHistoryPosition)
+    ));
+    if (canonicalIndex >= 0) {
+      matchedCurrent.add(index);
+      matchedCanonical.add(canonicalIndex);
+    }
+  }
+
+  return live
+    .filter(({ index }) => !matchedCurrent.has(index))
+    .map(({ message }) => message);
 }
 
 /** Reconcile a refreshed page from the same revision, preserving loaded prefix rows. */
@@ -360,7 +429,7 @@ export function replaceHistoryRevision(
   options: { isStreaming?: boolean; currentTaskId?: string | null; missing?: boolean } = {},
 ): UIMessage[] {
   if (!incoming.length) return options.missing ? current.filter((message) => isActiveLiveMessage(message, options)) : [];
-  return mergeHistoryMessages([], [...incoming, ...unmatchedLiveTail(current, incoming, options)]);
+  return mergeHistoryMessages([], [...incoming, ...unmatchedLiveTail(current, incoming, options, false)]);
 }
 
 /** Return the server's global branch ordinal, falling back only for live tail rows. */

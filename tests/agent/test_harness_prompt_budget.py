@@ -488,6 +488,15 @@ def test_document_loop_preloads_pipeline_tools_and_matching_contract(tmp_path) -
     assert "## Process Execution" in messages[0]["content"]
     assert "## Browser Use" not in messages[0]["content"]
     assert "## Computer Use" not in messages[0]["content"]
+    # Planning receives the complete creative essentials, not only a skill link.
+    from mona.agent.skills import SkillsLoader
+
+    skill = SkillsLoader(tmp_path).load_skill("mona-video")
+    assert skill is not None
+    assert skill.split("---", 2)[2].strip() in messages[0]["content"]
+    skill_dir = SkillsLoader(tmp_path).resolve_skill_dir("mona-video")
+    for reference in DOCUMENT_PROFILES["video"].skill_references:
+        assert (skill_dir / "references" / reference).read_text(encoding="utf-8") in messages[0]["content"]
 
 
 def test_ui_context_and_media_preload_capabilities() -> None:

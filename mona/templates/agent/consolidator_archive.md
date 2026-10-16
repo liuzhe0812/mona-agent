@@ -8,5 +8,10 @@ constraints and corrections, completed and pending work, decisions and their
 evidence, relevant files or artifacts, failed attempts, and the next useful
 step. Keep concrete paths and identifiers when they are needed to resume work.
 
+Preserve the authorized scope and any pending approval. Distinguish confirmed
+results from operations whose outcome is still unknown. For an unconfirmed
+write or external action, record what must be checked before retrying; do not
+infer success or failure from missing confirmation.
+
 Do not include secrets, passwords, API keys, private tokens, transient runtime
 noise, or speculation. Return non-empty plain text in concise bullet points.

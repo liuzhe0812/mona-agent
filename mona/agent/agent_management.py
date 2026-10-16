@@ -170,6 +170,7 @@ def create_custom_agent(
     root = get_agents_dir()
     destination = root / agent_id
     staging = Path(tempfile.mkdtemp(prefix=".custom-agent-", dir=root))
+    published = False
     try:
         _atomic_write(
             staging / "agent.json",
@@ -177,16 +178,19 @@ def create_custom_agent(
         )
         prompt = [
             f"You are {name}, a user-created local partner in Mona.",
-            "Follow the user's current request and the local partner instructions below.",
+            "Follow the user's current request and your private personality and preferences.",
         ]
         if summary:
             prompt.append(f"Expertise: {summary}")
-        if role:
-            prompt.extend(["", role])
         _atomic_write(staging / "prompt.md", "\n".join(prompt).rstrip() + "\n")
         os.replace(staging, destination)
+        published = True
+        if role:
+            write_instruction(agent_id, "soul", role, message="创建个性")
     except Exception:
         shutil.rmtree(staging, ignore_errors=True)
+        if published and destination.resolve().parent == root.resolve():
+            shutil.rmtree(destination, ignore_errors=True)
         raise
     return definition
 

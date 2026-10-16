@@ -35,6 +35,7 @@ interface ThreadViewportProps {
   onLoadEarlier?: () => Promise<boolean>;
   onQuote?: (message: UIMessage, author: string) => void;
   onBranch?: (message: UIMessage, author: string) => void;
+  onWidgetPrompt?: (text: string) => void;
 }
 
 const NEAR_BOTTOM_PX = 48;
@@ -72,6 +73,7 @@ export function ThreadViewport({
   onLoadEarlier,
   onQuote,
   onBranch,
+  onWidgetPrompt,
 }: ThreadViewportProps) {
   const { t } = useTranslation();
   const scrollRef = useRef<HTMLDivElement>(null);
@@ -347,6 +349,7 @@ export function ThreadViewport({
                   onLoadEarlier={loadEarlierMessages}
                   onQuote={onQuote}
                   onBranch={onBranch}
+                  onWidgetPrompt={onWidgetPrompt}
                 />
               </div>
             </div>

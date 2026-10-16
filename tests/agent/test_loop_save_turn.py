@@ -38,6 +38,8 @@ from mona.session.webui_turns import (
     maybe_generate_webui_title,
 )
 from mona.utils.llm_runtime import LLMRuntime
+from mona.utils.prompt_templates import render_template
+from mona.utils.subagent_channel_display import scrub_subagent_announce_body
 
 
 def _mk_loop() -> AgentLoop:
@@ -46,6 +48,79 @@ def _mk_loop() -> AgentLoop:
 
     loop.max_tool_result_chars = AgentDefaults().max_tool_result_chars
     return loop
+
+
+@pytest.mark.parametrize("with_media", [False, True])
+def test_conversation_background_is_not_saved_as_user_input(tmp_path, with_media) -> None:
+    builder = ContextBuilder(tmp_path)
+    builder.memory.append_history("Previous task background.")
+    media = None
+    if with_media:
+        image = tmp_path / "chart.png"
+        image.write_bytes(b"\x89PNG\r\n\x1a\n" + b"\x00" * 16)
+        media = [str(image)]
+    projected = builder.build_messages(
+        [], "Review this chart", media=media, session_summary="A revision is still pending."
+    )
+    assert "Previous task background." not in projected[0]["content"]
+    assert "A revision is still pending." not in projected[0]["content"]
+    current_input = json.dumps(projected[-1]["content"], ensure_ascii=False)
+    assert "Previous task background." in current_input
+    assert "A revision is still pending." in current_input
+    session = Session(key="cli:background")
+
+    _mk_loop()._save_turn(session, projected, 1)
+
+    assert len(session.messages) == 1
+    saved = json.dumps(session.messages[0], ensure_ascii=False)
+    assert "Review this chart" in saved
+    assert "Previous task background." not in saved
+    assert "A revision is still pending." not in saved
+    assert ContextBuilder._RUNTIME_CONTEXT_TAG not in saved
+    if with_media:
+        assert "chart.png" in saved
+
+
+def test_history_and_handoff_changes_keep_system_prompt_stable(tmp_path) -> None:
+    builder = ContextBuilder(tmp_path)
+    builder.memory.memory_file.write_text("User prefers metric units.", encoding="utf-8")
+    builder.memory.append_history("The first draft is ready.")
+    first = builder.build_messages([], "Continue", session_summary="Review is pending.")
+
+    builder.memory.append_history("The user approved the layout.")
+    second = builder.build_messages([], "Export it", session_summary="Export is pending.")
+
+    assert first[0] == second[0]
+    assert "User prefers metric units." in second[0]["content"]
+    assert "The first draft is ready." not in second[0]["content"]
+    assert "Export is pending." not in second[0]["content"]
+    assert "The user approved the layout." not in first[-1]["content"]
+    assert "Review is pending." not in second[-1]["content"]
+    assert "The first draft is ready." in second[-1]["content"]
+    assert "The user approved the layout." in second[-1]["content"]
+    assert "Export is pending." in second[-1]["content"]
+    assert second[-1]["content"].startswith("Export it\n\n" + ContextBuilder._RUNTIME_CONTEXT_TAG)
+
+
+def test_rendered_announce_preserves_result_and_hides_prompt_scaffolding() -> None:
+    result = (
+        "The report is ready in report.docx.\n"
+        "The source totals match the report and the document opens correctly.\n"
+        "The recipient list is still unconfirmed, so delivery remains pending."
+    )
+    announcement = render_template(
+        "agent/subagent_announce.md",
+        label="report review",
+        status_text="completed successfully",
+        task="Review the report and verify its totals.",
+        result=result,
+    )
+
+    visible = scrub_subagent_announce_body(announcement)
+
+    assert visible == f"[Subagent 'report review' completed successfully]\n\n{result}"
+    assert "Review the report and verify its totals." not in visible
+    assert "Summarize this naturally" not in visible
 
 
 def _make_full_loop(tmp_path: Path) -> AgentLoop:

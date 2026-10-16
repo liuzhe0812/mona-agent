@@ -2,6 +2,7 @@
 
 import base64
 import json
+import os
 import re
 import shutil
 import time
@@ -304,11 +305,26 @@ def _cleanup_tool_result_buckets(root: Path, current_bucket: Path) -> None:
         shutil.rmtree(path, ignore_errors=True)
 
 
+_REPLACE_RETRY_DELAYS = (0.025, 0.05, 0.1, 0.2, 0.4)
+
+
+def replace_file_with_retry(source: Path, target: Path) -> None:
+    """Keep replacement atomic while Windows readers briefly deny deletion."""
+    for attempt in range(len(_REPLACE_RETRY_DELAYS) + 1):
+        try:
+            os.replace(source, target)
+            return
+        except OSError as exc:
+            if getattr(exc, "winerror", None) not in {5, 32, 33} or attempt == len(_REPLACE_RETRY_DELAYS):
+                raise
+            time.sleep(_REPLACE_RETRY_DELAYS[attempt])
+
+
 def _write_text_atomic(path: Path, content: str) -> None:
     tmp = path.with_name(f".{path.name}.{uuid.uuid4().hex}.tmp")
     try:
         tmp.write_text(content, encoding="utf-8")
-        tmp.replace(path)
+        replace_file_with_retry(tmp, path)
     finally:
         if tmp.exists():
             tmp.unlink(missing_ok=True)

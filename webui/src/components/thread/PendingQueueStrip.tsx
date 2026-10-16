@@ -54,20 +54,6 @@ export function PendingQueueStrip({
               <span className="min-w-0 flex-1 truncate text-caption text-foreground/75">
                 {msg.content || msg.options?.documentNames?.join("、") || t("thread.composer.pendingQueue.images", { count: msg.images?.length ?? 0 })}
               </span>
-              {onAppend ? (
-                <Button
-                  type="button"
-                  variant="ghost"
-                  size="xs"
-                  className="h-7 shrink-0 gap-1 px-2 text-muted-foreground"
-                  disabled={msg.locked}
-                  onClick={() => onAppend(msg.id)}
-                  aria-label={isChinese ? "引导到当前任务" : t("thread.composer.pendingQueue.appendAria")}
-                >
-                  <CornerDownRight className="h-3.5 w-3.5" aria-hidden />
-                  {isChinese ? "引导" : t("thread.composer.pendingQueue.append")}
-                </Button>
-              ) : null}
               <div
                 className={cn(
                   "ml-1 flex shrink-0 items-center gap-0.5 transition-opacity",
@@ -76,6 +62,20 @@ export function PendingQueueStrip({
                     : "opacity-0 group-hover:opacity-100 group-focus-within:opacity-100",
                 )}
               >
+                {onAppend ? (
+                  <Button
+                    type="button"
+                    variant="ghost"
+                    size="xs"
+                    className="h-7 shrink-0 gap-1 px-2 text-muted-foreground"
+                    disabled={msg.locked}
+                    onClick={() => onAppend(msg.id)}
+                    aria-label={isChinese ? "引导到当前任务" : t("thread.composer.pendingQueue.appendAria")}
+                  >
+                    <CornerDownRight className="h-3.5 w-3.5" aria-hidden />
+                    {isChinese ? "引导" : t("thread.composer.pendingQueue.append")}
+                  </Button>
+                ) : null}
                 <Tooltip>
                   <TooltipTrigger asChild>
                     <Button

@@ -66,7 +66,8 @@ export function WorkflowPanel({ chatId, members, className }: WorkflowPanelProps
         id: `workflow-approval-${payload.runId}`,
         title: t("room.workflow.approval.notifyTitle"),
         body: payload.approvals[0].message || t("room.workflow.approval.notifyBody"),
-        icon: "warning",
+        clickAction: "open-chat",
+        clickData: { chatId: payload.chatId },
       }).catch(() => {});
     }),
     [client, chatId, t],

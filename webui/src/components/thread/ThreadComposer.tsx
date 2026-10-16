@@ -26,7 +26,6 @@ import {
   Folder,
   Globe,
   History,
-  ImageIcon,
   Layers,
   Loader2,
   Mail,
@@ -44,6 +43,7 @@ import {
 import { useTranslation } from "react-i18next";
 
 import { Button } from "@/components/ui/button";
+import { FileSystemIcon } from "@/components/ui/file-system-icon";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
 import { OfficeDocChip } from "@/components/doc/office/OfficeDocChip";
 import {
@@ -143,6 +143,7 @@ interface ThreadComposerProps {
   onDocumentDraftChange?: (value: AttachedDocument[]) => void;
   value?: string;
   onValueChange?: (value: string) => void;
+  suggestedPrompt?: { text: string; requestId: string };
   clearOnSend?: boolean;
   disabled?: boolean;
   sendDisabled?: boolean;
@@ -612,6 +613,7 @@ export function ThreadComposer({
   onPendingEdit,
   quote = null,
   onClearQuote,
+  suggestedPrompt,
 }: ThreadComposerProps) {
   const { t } = useTranslation();
   const fileAttachLabel = t("thread.composer.attachFile");
@@ -655,6 +657,12 @@ export function ThreadComposer({
    * the text) are filtered out at submit time. */
   const mentionedRef = useRef(new Map<string, string>());
   const textareaRef = useRef<HTMLTextAreaElement>(null);
+  useEffect(() => {
+    if (!suggestedPrompt) return;
+    setValue((current) => current.trim()
+      ? `${current}\n${suggestedPrompt.text}` : suggestedPrompt.text);
+    textareaRef.current?.focus();
+  }, [suggestedPrompt, setValue]);
   const formRef = useRef<HTMLFormElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const chipRefs = useRef(new Map<string, HTMLButtonElement>());
@@ -687,7 +695,7 @@ export function ThreadComposer({
     const el = textareaRef.current;
     if (!el) return;
     el.style.height = "auto";
-    el.style.height = `${Math.min(el.scrollHeight, 260)}px`;
+    if (el.value) el.style.height = `${Math.min(el.scrollHeight, 260)}px`;
   }, [isControlled, value]);
 
   useEffect(() => {
@@ -911,7 +919,7 @@ export function ThreadComposer({
       const el = textareaRef.current;
       if (!el) return;
       el.style.height = "auto";
-      el.style.height = `${Math.min(el.scrollHeight, 260)}px`;
+      if (el.value) el.style.height = `${Math.min(el.scrollHeight, 260)}px`;
       el.focus();
     });
   }, []);
@@ -1153,7 +1161,7 @@ export function ThreadComposer({
   const onInput: React.FormEventHandler<HTMLTextAreaElement> = (e) => {
     const el = e.currentTarget;
     el.style.height = "auto";
-    el.style.height = `${Math.min(el.scrollHeight, 260)}px`;
+    if (el.value) el.style.height = `${Math.min(el.scrollHeight, 260)}px`;
   };
 
   const onFilePick: React.ChangeEventHandler<HTMLInputElement> = (e) => {
@@ -1850,7 +1858,7 @@ function AttachmentChip({
           />
         ) : (
           <div className="flex h-full w-full items-center justify-center">
-            <ImageIcon className="h-4 w-4 text-muted-foreground" aria-hidden />
+            <FileSystemIcon name={image.file.name} />
           </div>
         )}
         {image.status === "encoding" ? (

@@ -119,14 +119,21 @@ class TestConsolidatorArchiveErrorHandling:
         )
 
         result = await consolidator.archive(
-            [{"role": "user", "content": "finish the remaining migration"}],
+            [
+                {"role": "assistant", "content": "The migration command was sent; its result is unconfirmed."},
+                {"role": "user", "content": "finish the remaining migration"},
+            ],
             previous_summary="Earlier decision: keep the existing API.",
         )
 
         assert result == "Combined handoff."
-        source = mock_provider.chat_with_retry.call_args.kwargs["messages"][1]["content"]
+        messages = mock_provider.chat_with_retry.call_args.kwargs["messages"]
+        source = messages[1]["content"]
         assert "Earlier decision: keep the existing API." in source
         assert "finish the remaining migration" in source
+        assert "The migration command was sent; its result is unconfirmed." in source
+        assert "authorized scope and any pending approval" in messages[0]["content"]
+        assert "operations whose outcome is still unknown" in messages[0]["content"]
 
 
 class TestConsolidatorTokenBudget:

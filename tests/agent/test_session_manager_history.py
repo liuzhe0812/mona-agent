@@ -1,3 +1,5 @@
+import json
+
 import pytest
 
 from mona.session.manager import Session, SessionManager
@@ -43,6 +45,46 @@ def test_list_sessions_includes_metadata_title(tmp_path):
 
     assert rows[0]["key"] == "websocket:chat-title"
     assert rows[0]["title"] == "自动生成标题"
+
+
+def test_list_sessions_includes_agent_kind_and_defaults_none(tmp_path):
+    manager = SessionManager(tmp_path)
+    video = manager.get_or_create("websocket:chat-video")
+    video.metadata["agent_kind"] = "video"
+    video.add_message("user", "制作视频")
+    manager.save(video)
+
+    ordinary = manager.get_or_create("websocket:chat-ordinary")
+    ordinary.add_message("user", "普通会话")
+    manager.save(ordinary)
+
+    rows = {row["key"]: row for row in manager.list_sessions()}
+
+    assert rows["websocket:chat-video"]["agent_kind"] == "video"
+    assert rows["websocket:chat-ordinary"]["agent_kind"] is None
+
+
+def test_list_sessions_repair_preserves_agent_kind(tmp_path):
+    manager = SessionManager(tmp_path)
+    session = manager.get_or_create("websocket:chat-repair")
+    session.metadata["agent_kind"] = "video"
+    session.add_message("user", "制作视频")
+    manager.save(session)
+
+    path = manager._get_session_path(session.key)
+    lines = path.read_text(encoding="utf-8").splitlines()
+    metadata_line = json.loads(lines[0])
+    metadata_line["metadata"].pop("ui_summary", None)
+    path.write_text(
+        "\n".join([json.dumps(metadata_line, ensure_ascii=False), *lines[1:], "{broken-json"])
+        + "\n",
+        encoding="utf-8",
+    )
+
+    rows = manager.list_sessions()
+
+    assert rows[0]["key"] == session.key
+    assert rows[0]["agent_kind"] == "video"
 
 
 def test_list_sessions_includes_user_preview(tmp_path):

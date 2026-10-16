@@ -51,6 +51,208 @@ describe("assistantOrdinalForMessage", () => {
 });
 
 describe("reconcileHistoryMessages", () => {
+  it("replaces an optimistic discussion bubble when canonical history keeps its raw text and display label", () => {
+    const displayContent = "Started topic: growth or profit? · Debate · 3 rounds · Analyst A, Analyst B";
+    const result = reconcileHistoryMessages(
+      [
+        {
+          id: "optimistic-discussion",
+          role: "user",
+          content: "growth or profit?",
+          displayContent,
+          taskId: "task-discussion",
+          createdAt: 10,
+        },
+      ],
+      [
+        {
+          id: "canonical-discussion",
+          role: "user",
+          content: "growth or profit?",
+          displayContent,
+          createdAt: 11,
+          historyPosition: 0,
+        },
+      ],
+      { isStreaming: true, currentTaskId: "task-discussion" },
+    );
+
+    expect(result).toHaveLength(1);
+    expect(result[0]).toMatchObject({
+      id: "canonical-discussion",
+      content: "growth or profit?",
+      displayContent,
+    });
+  });
+
+  it("reconciles by matching task identity even when the canonical timestamp differs", () => {
+    const result = reconcileHistoryMessages(
+      [
+        {
+          id: "optimistic-discussion",
+          role: "user",
+          content: "growth or profit?",
+          displayContent: "Started topic: growth or profit?",
+          taskId: "task-discussion",
+          createdAt: 10,
+        },
+      ],
+      [
+        {
+          id: "canonical-discussion",
+          role: "user",
+          content: "growth or profit?",
+          displayContent: "Started topic: growth or profit?",
+          taskId: "task-discussion",
+          createdAt: 11,
+          historyPosition: 0,
+        },
+      ],
+      { isStreaming: true, currentTaskId: "task-discussion" },
+    );
+
+    expect(result.map((message) => message.id)).toEqual(["canonical-discussion"]);
+  });
+
+  it("does not match identical text when both task identities differ", () => {
+    const result = reconcileHistoryMessages(
+      [
+        {
+          id: "optimistic-current",
+          role: "user",
+          content: "same topic",
+          displayContent: "same topic label",
+          taskId: "task-current",
+          createdAt: 20,
+        },
+      ],
+      [
+        {
+          id: "canonical-other-task",
+          role: "user",
+          content: "same topic",
+          displayContent: "same topic label",
+          taskId: "task-other",
+          createdAt: 21,
+          historyPosition: 0,
+        },
+      ],
+      { isStreaming: true, currentTaskId: "task-current" },
+    );
+
+    expect(result.map((message) => message.id)).toEqual([
+      "canonical-other-task",
+      "optimistic-current",
+    ]);
+  });
+
+  it("keeps two intentional identical user sends when the second canonical row arrives", () => {
+    const result = reconcileHistoryMessages(
+      [
+        {
+          id: "canonical-first",
+          role: "user",
+          content: "same topic",
+          displayContent: "same topic",
+          createdAt: 10,
+          historyPosition: 0,
+        },
+        {
+          id: "optimistic-second",
+          role: "user",
+          content: "same topic",
+          displayContent: "same topic",
+          taskId: "task-second",
+          createdAt: 20,
+        },
+      ],
+      [
+        {
+          id: "canonical-first",
+          role: "user",
+          content: "same topic",
+          displayContent: "same topic",
+          createdAt: 10,
+          historyPosition: 0,
+        },
+        {
+          id: "canonical-second",
+          role: "user",
+          content: "same topic",
+          displayContent: "same topic",
+          createdAt: 21,
+          historyPosition: 1,
+        },
+      ],
+      { isStreaming: true, currentTaskId: "task-second" },
+    );
+
+    expect(result.map((message) => message.id)).toEqual([
+      "canonical-first",
+      "canonical-second",
+    ]);
+  });
+
+  it("does not treat an older same-text history row as the echo of the active send", () => {
+    const previous = {
+      id: "canonical-old",
+      role: "user" as const,
+      content: "same topic",
+      displayContent: "same topic label",
+      createdAt: 10,
+      historyPosition: 4,
+    };
+    const optimistic = {
+      id: "optimistic-current",
+      role: "user" as const,
+      content: "same topic",
+      displayContent: "same topic label",
+      taskId: "task-current",
+      createdAt: 20,
+    };
+    const result = reconcileHistoryMessages(
+      [previous, optimistic],
+      [previous],
+      { isStreaming: true, currentTaskId: "task-current" },
+    );
+
+    expect(result.map((message) => message.id)).toEqual([
+      "canonical-old",
+      "optimistic-current",
+    ]);
+  });
+
+  it("does not match an older canonical row when no current history position is loaded", () => {
+    const result = reconcileHistoryMessages(
+      [
+        {
+          id: "optimistic-current",
+          role: "user",
+          content: "same topic",
+          displayContent: "same topic label",
+          taskId: "task-current",
+          createdAt: 20,
+        },
+      ],
+      [
+        {
+          id: "canonical-old",
+          role: "user",
+          content: "same topic",
+          displayContent: "same topic label",
+          createdAt: 10,
+          historyPosition: 4,
+        },
+      ],
+      { isStreaming: true, currentTaskId: "task-current" },
+    );
+
+    expect(result.map((message) => message.id)).toEqual([
+      "canonical-old",
+      "optimistic-current",
+    ]);
+  });
+
   it("replaces a live final answer with its canonical row without duplicating the turn", () => {
     const result = reconcileHistoryMessages(
       [
@@ -101,5 +303,35 @@ describe("reconcileHistoryMessages", () => {
     );
 
     expect(merged.map((message) => message.id)).toEqual(["canonical", "live"]);
+  });
+
+  it("does not collapse an active send into an older page with the same text", () => {
+    const merged = mergeHistoryMessages(
+      [
+        {
+          id: "optimistic-current",
+          role: "user",
+          content: "same topic",
+          displayContent: "same topic label",
+          taskId: "task-current",
+          createdAt: 20,
+        },
+      ],
+      [
+        {
+          id: "canonical-from-earlier-page",
+          role: "user",
+          content: "same topic",
+          displayContent: "same topic label",
+          createdAt: 20,
+          historyPosition: 4,
+        },
+      ],
+    );
+
+    expect(merged.map((message) => message.id)).toEqual([
+      "canonical-from-earlier-page",
+      "optimistic-current",
+    ]);
   });
 });

@@ -108,7 +108,6 @@ class ContextBuilder:
         self,
         skill_names: list[str] | None = None,
         channel: str | None = None,
-        session_summary: str | None = None,
         user_profile_fields: Sequence[str] | None = None,
         tool_names: set[str] | None = None,
     ) -> str:
@@ -143,18 +142,6 @@ class ContextBuilder:
         skills_summary = self.skills.build_skills_summary(exclude=set(active_skills))
         if skills_summary:
             parts.append(render_template("agent/skills_section.md", skills_summary=skills_summary))
-
-        entries = self.memory.read_unprocessed_history(since_cursor=self.memory.get_last_dream_cursor())
-        if entries:
-            capped = entries[-self._MAX_RECENT_HISTORY:]
-            history_text = "\n".join(
-                f"- [{e['timestamp']}] {e['content']}" for e in capped
-            )
-            history_text = truncate_text(history_text, self._MAX_HISTORY_CHARS)
-            parts.append("# Recent History\n\n" + history_text)
-
-        if session_summary:
-            parts.append(f"[Archived Context Summary]\n\n{session_summary}")
 
         return "\n\n---\n\n".join(parts)
 
@@ -392,7 +379,6 @@ class ContextBuilder:
                 "content": self.build_system_prompt(
                     skill_names,
                     channel=channel,
-                    session_summary=session_summary,
                     user_profile_fields=user_profile_fields,
                     tool_names=tool_names,
                 ),
