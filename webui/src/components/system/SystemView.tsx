@@ -22,17 +22,20 @@ import { StartupPanel } from "./StartupPanel";
 import { StoragePanel } from "./StoragePanel";
 import { SystemAssistant } from "./SystemAssistant";
 import type { SystemAgentHandoffTask } from "./systemAgentHandoff";
+import { STORAGE_DIRECTORY_ANALYSIS_PROMPT, STORAGE_FILE_ANALYSIS_PROMPT, type SystemAnalysisRequest } from "./systemAgentApi";
 import { SystemOptimizationPanel } from "./SystemOptimizationPanel";
 import { systemTabs, type SystemTab } from "./systemTabs";
-import { formatStorage, useSoftwareManagement, useStorageScan, useSystemDiagnostics, type CleanupItem, type DirectorySize } from "./useSystemData";
+import { formatStorage, useSoftwareManagement, useStorageScan, useSystemDiagnostics, type CleanupItem, type DirectorySize, type TopFileInfo } from "./useSystemData";
 
 export function SystemView({ initialTab = "overview" }: { initialTab?: SystemTab }) {
   const [activeTab, setActiveTab] = useState<SystemTab>(initialTab);
   const [hasVisitedStorage, setHasVisitedStorage] = useState(initialTab === "storage");
   const [hasVisitedSoftware, setHasVisitedSoftware] = useState(initialTab === "software");
   const [handoffTask, setHandoffTask] = useState<SystemAgentHandoffTask | null>(null);
-  const [analysisRequest, setAnalysisRequest] = useState<{ goal: string; nonce: number; channel?: "plan" | "diagnose" | "storage" } | null>(null);
   const [storageSelection, setStorageSelection] = useState<DirectorySize | null>(null);
+  const [analysisRequest, setAnalysisRequest] = useState<SystemAnalysisRequest | null>(null);
+  const [analyzingFileId, setAnalyzingFileId] = useState<string | null>(null);
+  const analysisNonceRef = useRef(0);
   const [showSoftwareUpdatesRequest, setShowSoftwareUpdatesRequest] = useState(0);
   const [requestedScanDrive, setRequestedScanDrive] = useState<string | null>(null);
   const [cleanupTargets, setCleanupTargets] = useState<CleanupItem[] | null>(null);
@@ -71,12 +74,6 @@ export function SystemView({ initialTab = "overview" }: { initialTab?: SystemTab
     });
   };
 
-  const openAssistant = () => {
-    if (!assistantCollapsed) return;
-    localStorage.setItem("system.assistantCollapsed", "false");
-    setAssistantCollapsed(false);
-  };
-
   const handleAssistantNavigate = (tab: SystemTab) => {
     if (tab === "software") setShowSoftwareUpdatesRequest(Date.now());
     switchTab(tab);
@@ -85,6 +82,21 @@ export function SystemView({ initialTab = "overview" }: { initialTab?: SystemTab
   const handleHandoff = (task: SystemAgentHandoffTask) => {
     setHandoffTask(task);
     if (assistantCollapsed) toggleAssistant();
+  };
+
+  const analyzeFile = (file: TopFileInfo) => {
+    if (!storage.result || analyzingFileId === file.id) return;
+    setAssistantCollapsed(false);
+    localStorage.setItem("system.assistantCollapsed", "false");
+    setAnalyzingFileId(file.id);
+    setAnalysisRequest({ goal: STORAGE_FILE_ANALYSIS_PROMPT, nonce: ++analysisNonceRef.current, channel: "storage", fileId: file.id, scanId: storage.result.scanId });
+  };
+  const analyzeDirectory = (directory: DirectorySize) => {
+    if (!storage.result) return;
+    setAssistantCollapsed(false);
+    localStorage.setItem("system.assistantCollapsed", "false");
+    setStorageSelection(directory);
+    setAnalysisRequest({ goal: STORAGE_DIRECTORY_ANALYSIS_PROMPT, nonce: ++analysisNonceRef.current, channel: "storage", directoryId: directory.id, scanId: storage.result.scanId });
   };
 
   const confirmCleanup = async () => {
@@ -197,16 +209,10 @@ export function SystemView({ initialTab = "overview" }: { initialTab?: SystemTab
                     <StoragePanel
                       scan={storage}
                       onHandoff={handleHandoff}
-                      onAnalyzeScope={(directory) => {
-                        setStorageSelection(directory);
-                        openAssistant();
-                        setAnalysisRequest({
-                          goal: "分析当前存储范围的主要占用、长期未修改大文件和可处理方向",
-                          nonce: Date.now(),
-                          channel: "storage",
-                        });
-                      }}
                       onSelectionChange={setStorageSelection}
+                      onAnalyzeFile={analyzeFile}
+                      onAnalyzeDirectory={analyzeDirectory}
+                      analyzingFileId={analyzingFileId}
                     />
                   </div>
                 ) : null}
@@ -266,6 +272,7 @@ export function SystemView({ initialTab = "overview" }: { initialTab?: SystemTab
               setHandoffTask((current) => (current?.id === taskId ? null : current))
             }
             analysisRequest={analysisRequest}
+            onFileAnalysisChange={setAnalyzingFileId}
             storageSelection={storageSelection}
           />
         </ResizablePanel>

@@ -17,6 +17,7 @@ const storageScanMock = vi.hoisted(() => vi.fn<() => Promise<StorageScanResult>>
 
 const startupIssueMock = vi.hoisted(() => ({ isNew: false, reviewFailure: false }));
 const overviewDriveMock = vi.hoisted(() => ({ value: "C 盘" }));
+const overviewDisksMock = vi.hoisted(() => ({ value: null as null | Array<{ driveLetter: string; usagePercent: number; usedGb: number; totalGb: number; availableGb: number }> }));
 const bootDeltaMock = vi.hoisted(() => ({ value: null as number | null }));
 const overviewFailureMock = vi.hoisted(() => ({ message: "" }));
 const configurationApplyMock = vi.hoisted(() => vi.fn(() => Promise.resolve({ itemId: "privacy_advertising_id", success: true, detail: "操作已完成", requiresRestart: false })));
@@ -215,7 +216,7 @@ vi.mock("@tauri-apps/api/core", () => ({
     return Promise.resolve({
       cpu: { usagePercent: 18, frequencyGhz: 2.1, coreCount: 8 },
       memory: { usagePercent: 62, usedGb: 9.9, totalGb: 15.8 },
-      disks: [{ driveLetter: overviewDriveMock.value, usagePercent: 81, usedGb: 86.5, totalGb: 106.1, availableGb: 19.6 }],
+      disks: overviewDisksMock.value ?? [{ driveLetter: overviewDriveMock.value, usagePercent: 81, usedGb: 86.5, totalGb: 106.1, availableGb: 19.6 }],
       network: { totalMbps: 2.4, uploadMbps: 1.2, downloadMbps: 1.2 },
       topProcesses: [
         { pid: 2, name: "Chrome.exe", cpuPercent: 11.2, memoryMb: 800, diskReadBytesPerSec: 1_200_000, diskWriteBytesPerSec: 300_000 },
@@ -247,11 +248,16 @@ function makeSoftwareCheck(overrides: Partial<SoftwareCheckResult> = {}): Softwa
   };
 }
 
+function getStartStorageScanButton() {
+  return screen.findByRole("button", { name: /开始扫描/ });
+}
+
 describe("SystemView", () => {
   beforeEach(() => {
     startupIssueMock.isNew = false;
     startupIssueMock.reviewFailure = false;
     overviewDriveMock.value = "C 盘";
+    overviewDisksMock.value = null;
     bootDeltaMock.value = null;
     vi.clearAllMocks();
     softwareCheckControl.results = [];
@@ -378,7 +384,7 @@ describe("SystemView", () => {
     expect(screen.getByRole("tablist", { name: "系统模块导航" })).toBeTruthy();
 
     fireEvent.click(screen.getByRole("tab", { name: "存储空间" }));
-    expect(screen.getByText(/尚未扫描/)).toBeTruthy();
+    expect(screen.getByText(/选择磁盘并开始扫描/)).toBeTruthy();
 
     fireEvent.click(screen.getByRole("tab", { name: "软件管理" }));
     expect(screen.getByRole("heading", { name: "国内常用" })).toBeTruthy();
@@ -443,7 +449,7 @@ describe("SystemView", () => {
       ],
     });
     render(<SystemView initialTab="storage" />);
-    fireEvent.click(screen.getByRole("button", { name: "开始扫描" }));
+    fireEvent.click(await getStartStorageScanButton());
     await screen.findByText("临时文件");
     fireEvent.click(screen.getByRole("tab", { name: "概览" }));
     const row = await screen.findByTestId("inspection-card-storage");
@@ -471,7 +477,7 @@ describe("SystemView", () => {
       cleanupItems: [{ id: "temp", name: "临时文件", sizeGb: 1.5, path: "C:\\Temp", cleanable: true, recommended: true, reason: "缓存" }],
     });
     render(<SystemView initialTab="storage" />);
-    fireEvent.click(screen.getByRole("button", { name: "开始扫描" }));
+    fireEvent.click(await getStartStorageScanButton());
     await screen.findByText("临时文件");
     fireEvent.click(screen.getByRole("tab", { name: "概览" }));
 
@@ -508,28 +514,39 @@ describe("SystemView", () => {
     expect(within(returnedRow).getByText("1.0 GB")).toBeInTheDocument();
   });
 
-  it("closes storage-panel cleanup confirmation and shows its busy action until the result arrives", async () => {
+  it("confirms one cleanup item and keeps row progress independent in the background", async () => {
     let resolveCleanup!: (result: StorageCleanupResult) => void;
+    overviewDisksMock.value = [{ driveLetter: "C:\\", usagePercent: 81, usedGb: 86.5, totalGb: 106.1, availableGb: 19.6 }];
     cleanupMock.mockReturnValueOnce(new Promise<StorageCleanupResult>((resolve) => { resolveCleanup = resolve; }));
     storageScanMock.mockResolvedValueOnce({
       scanId: "pending-panel-cleanup",
       disks: [], directories: [], fileTypes: [], totalScannedGb: 2,
-      cleanupItems: [{ id: "temp", name: "临时文件", sizeGb: 1.5, path: "C:\\Temp", cleanable: true, recommended: true, reason: "缓存" }],
+      cleanupItems: [
+        { id: "temp", name: "临时文件", sizeGb: 1.5, path: "C:\\Temp", cleanable: true, recommended: true, reason: "缓存" },
+        { id: "edge_cache", name: "Edge 缓存", sizeGb: 0.8, path: "C:\\EdgeCache", cleanable: true, recommended: false, reason: "浏览器缓存" },
+      ],
     });
     render(<SystemView initialTab="storage" />);
-    fireEvent.click(screen.getByRole("button", { name: "开始扫描" }));
+    fireEvent.click(await getStartStorageScanButton());
     await screen.findByText("临时文件");
-    fireEvent.click(screen.getByRole("checkbox", { name: "选择 临时文件" }));
-    fireEvent.click(screen.getByRole("button", { name: "安全清理" }));
-    expect(await screen.findByText(/这些文件将被直接删除，不经过回收站/)).toBeInTheDocument();
-    fireEvent.click(screen.getByRole("button", { name: "确认清理" }));
+    expect(screen.queryByRole("checkbox")).toBeNull();
+    expect(screen.queryByRole("button", { name: "预览清单" })).toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: "清理临时文件" }));
+    const dialog = await screen.findByRole("alertdialog");
+    expect(within(dialog).getByText(/将直接删除临时文件，预计释放 1.5 GB/)).toBeInTheDocument();
+    expect(cleanupMock).not.toHaveBeenCalled();
+    fireEvent.click(within(dialog).getByRole("button", { name: "确认清理" }));
 
     await waitFor(() => expect(vi.mocked(invoke)).toHaveBeenCalledWith("clean_storage", { ids: ["temp"] }));
-    expect(screen.queryByText(/这些文件将被直接删除，不经过回收站/)).toBeNull();
-    const busyButton = screen.getByRole("button", { name: "正在清理" });
+    expect(screen.queryByRole("alertdialog")).toBeNull();
+    const row = screen.getByRole("button", { name: "正在清理临时文件" });
+    const otherRow = screen.getByRole("button", { name: "清理Edge 缓存" });
+    const busyButton = row;
     expect(busyButton).toBeDisabled();
     expect(busyButton).toHaveAttribute("aria-busy", "true");
     expect(busyButton.querySelector("svg.animate-spin")).toBeTruthy();
+    expect(otherRow).toBeEnabled();
+    expect(screen.getByText("清理在后台进行，可继续操作其他内容。")).toBeInTheDocument();
 
     await act(async () => {
       resolveCleanup({
@@ -539,7 +556,7 @@ describe("SystemView", () => {
         verification: [{ id: "temp", path: "C:\\Temp", beforeBytes: 1_610_612_736, afterBytes: 1_073_741_824 }],
       });
     });
-    expect(await screen.findByText("清理完成，实际释放 0.5 GB")).toBeInTheDocument();
+    expect(await screen.findByText("C: 临时文件清理完成，实际释放 0.5 GB")).toBeInTheDocument();
   });
 
   it.each(["failed", "unknown"])("shows an incomplete native update with a link to verify its result: %s", async (status) => {
@@ -564,7 +581,7 @@ describe("SystemView", () => {
     });
     cleanupMock.mockResolvedValueOnce({ freedGb: 0, cleanedIds: [], failures: ["清理项无法读取"], verification: [] });
     render(<SystemView initialTab="storage" />);
-    fireEvent.click(screen.getByRole("button", { name: "开始扫描" }));
+    fireEvent.click(await getStartStorageScanButton());
     await screen.findByText("临时文件");
     fireEvent.click(screen.getByRole("tab", { name: "概览" }));
     const row = await screen.findByTestId("inspection-card-storage");
@@ -689,7 +706,7 @@ describe("SystemView", () => {
       expect(within(row).getByRole("button", { name: "查看并扫描" })).not.toHaveAttribute("aria-expanded");
       expect(storageScanMock).not.toHaveBeenCalled();
       fireEvent.click(screen.getByRole("button", { name: "查看并扫描" }));
-      expect(await screen.findByRole("heading", { name: "重点路径占用" })).toBeTruthy();
+      expect(await screen.findByRole("tablist", { name: "存储文件操作" })).toBeTruthy();
 
   } finally {
       localStorage.removeItem("system.storageScan");
@@ -1123,40 +1140,118 @@ describe("SystemView", () => {
     expect(name.className).toContain("truncate");
   });
 
-  it("shows live storage capacity before a deep scan", async () => {
+  it("shows live per-drive cards before a deep scan", async () => {
+    overviewDisksMock.value = [
+      { driveLetter: "C:\\", usagePercent: 81, usedGb: 86.5, totalGb: 106.1, availableGb: 19.6 },
+      { driveLetter: "D:\\", usagePercent: 42, usedGb: 84, totalGb: 200, availableGb: 116 },
+    ];
     const scanCallsBeforeRender = storageScanMock.mock.calls.length;
     render(<SystemView initialTab="storage" />);
 
-    expect(await screen.findByText("106.1 GB")).toBeTruthy();
-    expect(screen.getByText("86.5 GB")).toBeTruthy();
-    expect(screen.getByText("19.6 GB")).toBeTruthy();
-    // 指标卡口径为系统盘（无扫描数据时回退 C:），不再是全盘聚合
-    expect(screen.getAllByText("系统盘 C:").length).toBeGreaterThan(0);
+    const diskGroup = await screen.findByRole("group", { name: "磁盘" });
+    expect(await within(diskGroup).findByRole("button", { name: "查看 C: 磁盘" })).toBeTruthy();
+    expect(within(diskGroup).getByRole("button", { name: "查看 D: 磁盘" })).toBeTruthy();
+    expect(within(diskGroup).getByText("81%")).toBeTruthy();
+    expect(within(diskGroup).getByText("42%")).toBeTruthy();
+    expect(within(diskGroup).getByText("可用 19.6 GB / 共 106.1 GB")).toBeTruthy();
+    expect(within(diskGroup).getByText("可用 116.0 GB / 共 200.0 GB")).toBeTruthy();
+    expect(within(diskGroup).getByRole("button", { name: "开始扫描" })).toBeTruthy();
+    expect(within(diskGroup).getByRole("button", { name: "D: 开始扫描" })).toBeTruthy();
+    const storageMain = screen.getByRole("main");
+    expect(within(storageMain).queryByRole("combobox")).toBeNull();
+    expect(within(storageMain).queryByText("总容量", { exact: true })).toBeNull();
+    expect(within(storageMain).queryByText("已使用", { exact: true })).toBeNull();
+    expect(within(storageMain).queryByText("可安全释放", { exact: true })).toBeNull();
+    expect(within(storageMain).queryByRole("heading", { name: "Mona 发现" })).toBeNull();
+    expect(within(storageMain).queryByRole("button", { name: "分析当前范围" })).toBeNull();
     expect(storageScanMock).toHaveBeenCalledTimes(scanCallsBeforeRender);
   });
 
-  it("keeps the complete storage prototype structure visible before scanning", async () => {
+  it("shows the storage actions before scanning without duplicate analysis panels", async () => {
     render(<SystemView initialTab="storage" />);
 
-    expect(await screen.findByRole("heading", { name: "重点路径占用" })).toBeTruthy();
-    expect(screen.getByRole("heading", { name: /空间分布/ })).toBeTruthy();
-    expect(screen.getByRole("heading", { name: "安全清理" })).toBeTruthy();
-    expect(screen.getByText("待分析")).toBeTruthy();
+    expect(await screen.findByRole("button", { name: /查看 C/ })).toBeTruthy();
+    expect(screen.getByRole("tablist", { name: "存储文件操作" })).toBeTruthy();
+    expect(screen.getByRole("tab", { name: "清理空间" })).toBeTruthy();
+    expect(screen.getByRole("tab", { name: "大文件" })).toBeTruthy();
+    expect(screen.queryByRole("heading", { name: /重点路径占用|空间分布|目录占用|安全清理/ })).toBeNull();
+    expect(screen.queryByRole("heading", { name: "Mona 发现" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "分析当前范围" })).toBeNull();
+    expect(screen.queryByText("待分析")).toBeNull();
+  });
+
+  it("opens Mona and analyzes only the explicitly clicked large file with one click", async () => {
+    localStorage.setItem("system.assistantCollapsed", "true");
+    storageScanMock.mockResolvedValueOnce({
+      scanId: "scan-complete", disks: [], directories: [], cleanupItems: [], fileTypes: [], totalScannedGb: 10,
+      topFiles: [
+        { id: "file-db", path: "C:\\Users\\PrivateUser\\.codex\\thread_history.sqlite", parentDirName: ".codex", extension: "sqlite", sizeGb: 4.1, modifiedBucket: "recent" },
+        { id: "file-bin", path: "C:\\Data\\model.bin", parentDirName: "Data", extension: "bin", sizeGb: 1.2, modifiedBucket: "old" },
+      ],
+    });
+    let finish!: (result: { scanId: string; summary: string; findings: []; cautions: [] }) => void;
+    systemAgentMock.storageAnalyze.mockReturnValueOnce(new Promise((resolve) => { finish = resolve; }));
+    render(<SystemView initialTab="storage" />);
+    fireEvent.click(await getStartStorageScanButton());
+    fireEvent.mouseDown(await screen.findByRole("tab", { name: "大文件" }), { button: 0, ctrlKey: false });
+    const analyze = await screen.findByRole("button", { name: "分析 thread_history.sqlite" });
+    expect(systemAgentMock.storageAnalyze).not.toHaveBeenCalled();
+    expect(screen.getByRole("button", { name: "展开 Mona 系统管家" })).toBeInTheDocument();
+    fireEvent.click(analyze);
+    await waitFor(() => expect(systemAgentMock.storageAnalyze).toHaveBeenCalledTimes(1));
+    expect(localStorage.getItem("system.assistantCollapsed")).toBe("false");
+    expect(screen.getByRole("button", { name: "收起 Mona 系统管家" })).toBeInTheDocument();
+    expect(analyze).toBeDisabled();
+    expect(screen.getByRole("button", { name: "分析 model.bin" })).toBeEnabled();
+    const evidence = systemAgentMock.storageAnalyze.mock.calls[0][1];
+    expect(evidence.selectedFile).toMatchObject({ id: "file-db", name: "thread_history.sqlite", location: "~/.codex" });
+    expect(evidence.largeFiles).toHaveLength(1);
+    expect(JSON.stringify(evidence)).not.toMatch(/PrivateUser|C:|model.bin|"path"/);
+    await act(async () => finish({ scanId: "scan-complete", summary: "这是会话历史数据库，建议保留。", findings: [], cautions: [] }));
+    expect(await screen.findByText("这是会话历史数据库，建议保留。")).toBeInTheDocument();
+    expect(analyze).toBeEnabled();
+    expect(systemAgentMock.storageAnalyze).toHaveBeenCalledTimes(1);
+  });
+
+  it.each(["directory list", "treemap"])("starts scoped conversation analysis directly from the %s context menu", async (entry) => {
+    localStorage.setItem("system.assistantCollapsed", "true");
+    storageScanMock.mockResolvedValueOnce({
+      scanId: "scan-complete", disks: [], cleanupItems: [], fileTypes: [], totalScannedGb: 8,
+      directories: [{ id: "dir-data", path: "C:\\Data", sizeGb: 8, fileCount: 4, directSizeGb: 8 }],
+    });
+    render(<SystemView initialTab="storage" />);
+    fireEvent.click(await getStartStorageScanButton());
+    const table = await screen.findByRole("treegrid", { name: "目录占用" });
+    if (entry === "directory list") {
+      fireEvent.contextMenu(within(table).getByRole("row", { name: /Data/ }), { clientX: 200, clientY: 200 });
+    } else {
+      fireEvent.contextMenu(screen.getByRole("button", { name: "Data，8.0 GB" }), { clientX: 500, clientY: 200 });
+    }
+    expect(systemAgentMock.storageAnalyze).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByRole(entry === "directory list" ? "button" : "menuitem", { name: "占用分析" }));
+    await waitFor(() => expect(systemAgentMock.storageAnalyze).toHaveBeenCalledTimes(1));
+    expect(localStorage.getItem("system.assistantCollapsed")).toBe("false");
+    expect(screen.getByRole("button", { name: "收起 Mona 系统管家" })).toBeInTheDocument();
+    expect(systemAgentMock.storageAnalyze.mock.calls[0][1]).toMatchObject({ scope: { id: "dir-data", sizeGb: 8 }, selectedDirectory: { id: "dir-data", name: "Data" } });
+    expect(systemAgentMock.storageAnalyze.mock.calls[0][0]).toContain("可执行的清理步骤");
+    expect(await screen.findByText("主要空间来自当前目录。")).toBeInTheDocument();
+    expect(screen.queryByRole("dialog")).toBeNull();
   });
 
   it("retains an active storage scan and its result across tab switches", async () => {
     let resolveScan!: (value: StorageScanResult) => void;
+    overviewDisksMock.value = [{ driveLetter: "C:\\", usagePercent: 50, usedGb: 50, totalGb: 100, availableGb: 50 }];
     storageScanMock.mockReturnValueOnce(new Promise((resolve) => { resolveScan = resolve; }));
     render(<SystemView initialTab="storage" />);
 
-    fireEvent.click(screen.getByRole("button", { name: "开始扫描" }));
-    expect(screen.getAllByText("正在扫描磁盘...").length).toBeGreaterThan(0);
+    fireEvent.click(await getStartStorageScanButton());
+    expect(screen.getAllByText(/正在扫描磁盘/).length).toBeGreaterThan(0);
 
-    fireEvent.click(screen.getByRole("tab", { name: "软件管理" }));
-    fireEvent.click(screen.getByRole("tab", { name: "存储空间" }));
-    expect(screen.getAllByText("正在扫描磁盘...").length).toBeGreaterThan(0);
+    fireEvent.click(await screen.findByRole("tab", { name: /软件管理/ }));
+    fireEvent.click(await screen.findByRole("tab", { name: /存储空间/ }));
+    expect(screen.getAllByText(/正在扫描磁盘/).length).toBeGreaterThan(0);
 
-    fireEvent.click(screen.getByRole("tab", { name: "软件管理" }));
+    fireEvent.click(await screen.findByRole("tab", { name: /软件管理/ }));
     await act(async () => resolveScan({
       scanId: "scan-complete",
       disks: [{ driveLetter: "C:\\", usagePercent: 50, usedGb: 50, totalGb: 100, availableGb: 50 }],
@@ -1165,25 +1260,27 @@ describe("SystemView", () => {
       fileTypes: [{ category: "应用", sizeGb: 12 }],
       totalScannedGb: 20,
     }));
-    fireEvent.click(screen.getByRole("tab", { name: "存储空间" }));
-    // WizTree 布局：CleanupPanel 中的清理项 + FileTypePanel 中的类型
-    expect((await screen.findAllByText("1.5 GB")).length).toBeGreaterThan(0);
-    expect(screen.getByRole("heading", { name: "Mona 发现" })).toBeTruthy();
-    expect(screen.getAllByRole("button", { name: "分析当前范围" }).length).toBeGreaterThan(0);
+    fireEvent.click(await screen.findByRole("tab", { name: /存储空间/ }));
+    expect(await screen.findByText("系统临时文件")).toBeTruthy();
+    expect(screen.getByRole("tablist", { name: "存储文件操作" })).toBeTruthy();
+    expect(screen.getByRole("button", { name: "清理系统临时文件" })).toBeTruthy();
+    expect(screen.queryByRole("heading", { name: "Mona 发现" })).toBeNull();
+    expect(screen.queryByRole("heading", { name: /空间分布|目录占用/ })).toBeNull();
+    expect(screen.queryByRole("button", { name: "分析当前范围" })).toBeNull();
     expect(screen.queryByRole("button", { name: "生成清理方案" })).toBeNull();
-    expect(screen.getByRole("button", { name: "安全清理" })).toBeTruthy();
-    expect(screen.getByText("应用")).toBeTruthy();
-    // 扫描覆盖率说明：totalScannedGb(20) / 系统盘已用(50) = 40%
-    expect((await screen.findAllByText(/约占 C: 已用的 40%/)).length).toBeGreaterThan(0);
+    expect(screen.queryByText(/已扫描区域|约占本盘已用空间/)).toBeNull();
+    expect(screen.queryByText(/单击选择.*双击或按 Enter/)).toBeNull();
+    expect(screen.queryByRole("button", { name: "在资源管理器中打开所选目录" })).toBeNull();
   });
 
-  it("cancels an active storage scan and keeps the partial result marked as cancelled", async () => {
+  it("cancels an active scan without failure and preserves its result and rescan action", async () => {
     let resolveScan!: (value: StorageScanResult) => void;
+    overviewDisksMock.value = [{ driveLetter: "C:\\", usagePercent: 50, usedGb: 50, totalGb: 100, availableGb: 50 }];
     storageScanMock.mockReturnValueOnce(new Promise((resolve) => { resolveScan = resolve; }));
     render(<SystemView initialTab="storage" />);
 
-    fireEvent.click(screen.getByRole("button", { name: "开始扫描" }));
-    expect(screen.getAllByText("正在扫描磁盘...").length).toBeGreaterThan(0);
+    fireEvent.click(await getStartStorageScanButton());
+    expect(screen.getAllByText(/正在扫描磁盘/).length).toBeGreaterThan(0);
 
     fireEvent.click(screen.getByRole("button", { name: "取消扫描" }));
     expect(vi.mocked(invoke)).toHaveBeenCalledWith("cancel_storage_scan");
@@ -1198,18 +1295,22 @@ describe("SystemView", () => {
       scanSummary: { totalFiles: 4, totalDirs: 2, scanDurationSecs: 1.2, scannedDisk: "C:", cancelled: true },
     }));
 
-    // 取消后状态回落到 done，状态栏标记部分结果而非失败
-    expect((await screen.findAllByText(/扫描已取消 · 部分结果/)).length).toBeGreaterThan(0);
+    // 取消后保留已完成的扫描数据，清除正在扫描状态而不增加失败或覆盖提示。
+    expect((await screen.findAllByText("Users")).length).toBeGreaterThan(0);
+    expect((await screen.findAllByText("8.0 GB")).length).toBeGreaterThan(0);
+    expect(screen.queryByText(/正在扫描磁盘/)).toBeNull();
+    expect(screen.queryByText(/扫描已取消|部分结果|已扫描区域|约占本盘已用空间/)).toBeNull();
+    expect(screen.queryByText(/扫描失败|扫描未完成/)).toBeNull();
     expect(screen.queryByRole("button", { name: "取消扫描" })).toBeNull();
     expect(screen.getByRole("button", { name: "重新扫描" })).toBeTruthy();
   });
 
-  it("shows a real cleanup preview list and warns that cache cleanup bypasses the recycle bin", async () => {
+  it("shows per-item cleanup actions without bulk selection or a preview list", async () => {
     let resolveScan!: (value: StorageScanResult) => void;
     storageScanMock.mockReturnValueOnce(new Promise((resolve) => { resolveScan = resolve; }));
     render(<SystemView initialTab="storage" />);
 
-    fireEvent.click(screen.getByRole("button", { name: "开始扫描" }));
+    fireEvent.click(await getStartStorageScanButton());
     await act(async () => resolveScan({
       scanId: "scan-cleanup",
       disks: [{ driveLetter: "C:\\", usagePercent: 50, usedGb: 50, totalGb: 100, availableGb: 50 }],
@@ -1222,24 +1323,12 @@ describe("SystemView", () => {
       totalScannedGb: 8,
     }));
 
-    // Windows.old 仅提示，不提供 Mona 内删除（reason 经 title 提示暴露）
-    expect(await screen.findByText("Windows.old（旧系统文件）")).toBeTruthy();
-    expect(screen.getByText("交由 Windows")).toBeTruthy();
-    expect(screen.getByTitle(/建议通过系统「存储感知」清理/)).toBeTruthy();
-
-    // 勾选可清理项（挂载时 items 为空，初始选中集不含扫描后到达的项）
-    fireEvent.click(screen.getByRole("checkbox", { name: "选择 系统临时文件" }));
-
-    // 预览清单为真清单（项目名 + 路径 + 大小 + reason），不再是 notice 拼文本
-    // Radix DropdownMenu 在 jsdom 中通过键盘事件打开（pointerdown 依赖 PointerEvent）
-    fireEvent.keyDown(screen.getByRole("button", { name: "预览清单" }), { key: "Enter" });
-    expect(await screen.findByText("C:\\Windows\\Temp")).toBeTruthy();
-    expect(screen.getByText("应用未占用的临时文件可安全清理")).toBeTruthy();
-
-    // 确认弹窗文案明示直接删除语义（与产物区回收站语义区分）
-    fireEvent.keyDown(document.body, { key: "Escape" });
-    fireEvent.click(screen.getByRole("button", { name: "安全清理" }));
-    expect(await screen.findByText(/这些文件将被直接删除，不经过回收站/)).toBeTruthy();
+    expect(await screen.findByText("系统临时文件")).toBeTruthy();
+    expect(screen.queryByText("Windows.old（旧系统文件）")).toBeNull();
+    expect(screen.queryByRole("checkbox")).toBeNull();
+    expect(screen.queryByRole("button", { name: "预览清单" })).toBeNull();
+    expect(screen.getByRole("button", { name: "清理系统临时文件" })).toBeTruthy();
+    expect(screen.queryByRole("heading", { name: "安全清理" })).toBeNull();
   });
 
   it("removes a handed-off software failure from the current task list", async () => {

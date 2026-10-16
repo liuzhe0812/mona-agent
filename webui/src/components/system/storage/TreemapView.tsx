@@ -3,13 +3,14 @@ import { hierarchy, treemap } from "d3-hierarchy";
 import { ChevronRight, Home } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
+import { ContextMenu, ContextMenuContent, ContextMenuItem, ContextMenuTrigger } from "@/components/ui/context-menu";
 import { cn } from "@/lib/utils";
 
-import { PanelCard } from "../SystemUi";
 import type { DirectorySize } from "../useSystemData";
 import { formatStorage } from "../useSystemData";
+import { openDirectoryInExplorer, StorageOpenErrorDialog } from "./DirectoryTreeView";
 
-const TREEMAP_HEIGHT = 320;
+const TREEMAP_HEIGHT = 288;
 const DEFAULT_WIDTH = 800;
 /** 与后端 MIN_SIZE_TO_KEEP_CHILDREN_GB 对齐：低于该值的未展开空间不单独成块 */
 const OTHER_TILE_MIN_GB = 0.05;
@@ -81,6 +82,7 @@ interface Props {
   onSelect?: (path: string) => void;
   /** 点击地址栏项回退 */
   onNavigate: (path: string | null) => void;
+  onAnalyze?: (path: string) => void;
 }
 
 interface TreemapNode {
@@ -103,9 +105,11 @@ export function TreemapView({
   selectedPath = null,
   onSelect,
   onNavigate,
+  onAnalyze,
 }: Props) {
   const containerRef = useRef<HTMLDivElement>(null);
   const [width, setWidth] = useState(DEFAULT_WIDTH);
+  const [openError, setOpenError] = useState<string | null>(null);
 
   // 响应式：容器实际宽度驱动 treemap 布局，替换固定 viewBox 拉伸
   useEffect(() => {
@@ -185,10 +189,8 @@ export function TreemapView({
     });
   }, [directories, currentTotalGb, width]);
 
-  const title = "空间分布";
-
-  // 面包屑导航（放在标题右侧，点击回退）
-  const breadcrumbEl = (
+  // 根目录不显示路径行；下钻后用紧凑面包屑返回。
+  const breadcrumbEl = breadcrumb.length > 0 ? (
     <div className="flex items-center gap-0.5 overflow-x-auto text-micro scrollbar-none select-none">
       <Button
         variant="ghost"
@@ -222,25 +224,26 @@ export function TreemapView({
         );
       })}
     </div>
-  );
+  ) : null;
 
   return (
-    <PanelCard title={title} className="h-full" action={breadcrumbEl}>
+    <div className="w-full">
+      {breadcrumbEl && <div className="mb-2">{breadcrumbEl}</div>}
       {loading ? (
-        <div className="flex h-[320px] items-center justify-center text-caption text-muted-foreground">
+        <div className="flex h-[288px] items-center justify-center text-caption text-muted-foreground">
           正在扫描子目录...
         </div>
       ) : error ? (
-        <div className="flex h-[320px] items-center justify-center text-caption text-destructive">
+        <div className="flex h-[288px] items-center justify-center text-caption text-destructive">
           {error}
         </div>
       ) : tiles.length === 0 ? (
-        <div className="flex h-[320px] items-center justify-center text-caption text-muted-foreground">
+        <div className="flex h-[288px] items-center justify-center text-caption text-muted-foreground">
           暂无数据
         </div>
       ) : (
-        <div ref={containerRef} className="h-[320px] w-full">
-          <svg width={width} height={TREEMAP_HEIGHT} className="block rounded-lg">
+        <div ref={containerRef} className="h-[288px] w-full">
+          <svg width={width} height={TREEMAP_HEIGHT} className="block">
             {tiles.map((tile) => {
               const w = tile.x1 - tile.x0;
               const h = tile.y1 - tile.y0;
@@ -251,68 +254,96 @@ export function TreemapView({
               const selected = selectedPath === tile.data.path;
               const showLabel = w > 60 && h > 28;
               const showSize = w > 60 && h > 44;
-              const activate = () => {
+              const select = () => {
                 if (!selectable) return;
                 onSelect?.(tile.data.path);
-                if (clickable) onDrillDown(tile.data.path);
+              };
+              const drillDown = () => {
+                if (!clickable) return;
+                onSelect?.(tile.data.path);
+                onDrillDown(tile.data.path);
               };
               return (
-                <g
-                  key={tile.data.path}
-                  role={selectable ? "button" : undefined}
-                  tabIndex={selectable ? 0 : undefined}
-                  aria-label={selectable ? `${tile.data.name}，${formatStorage(tile.data.sizeGb)}` : undefined}
-                  className={selectable ? "cursor-pointer" : "cursor-default"}
-                  onClick={activate}
-                  onKeyDown={(event) => {
-                    if ((event.key === "Enter" || event.key === " ") && selectable) {
-                      event.preventDefault();
-                      activate();
-                    }
-                  }}
-                >
-                  <title>{tile.data.path}</title>
-                  <rect
-                    x={tile.x0}
-                    y={tile.y0}
-                    width={w}
-                    height={h}
-                    fill={tile.color}
-                    fillOpacity={fillOpacity}
-                    stroke={selected ? "hsl(var(--foreground))" : "hsl(var(--background))"}
-                    strokeWidth={selected ? 2 : 1}
-                    className={clickable ? "transition-all hover:fill-opacity-100 hover:stroke-2" : undefined}
-                  />
-                  {showLabel && (
-                    <text
-                      x={tile.x0 + 6}
-                      y={tile.y0 + 16}
-                      fill={textColor}
-                      fontSize={12}
-                      fontWeight={600}
-                      className="pointer-events-none select-none"
+                <ContextMenu key={tile.data.path}>
+                  <ContextMenuTrigger asChild disabled={!selectable}>
+                    <g
+                      role={selectable ? "button" : undefined}
+                      tabIndex={selectable ? 0 : undefined}
+                      aria-label={selectable ? `${tile.data.name}，${formatStorage(tile.data.sizeGb)}` : undefined}
+                      className={selectable ? "group cursor-pointer focus:outline-none" : "cursor-default"}
+                      onClick={select}
+                      onDoubleClick={drillDown}
+                      onContextMenu={(event) => {
+                        if (selectable) select();
+                        else event.preventDefault();
+                      }}
+                      onKeyDown={(event) => {
+                        if (event.key === "Enter" && selectable) {
+                          event.preventDefault();
+                          if (clickable) drillDown();
+                          else select();
+                        } else if (event.key === " " && selectable) {
+                          event.preventDefault();
+                          select();
+                        }
+                      }}
                     >
-                      {truncateToWidth(tile.data.name, w - 12, 12)}
-                    </text>
-                  )}
-                  {showSize && (
-                    <text
-                      x={tile.x0 + 6}
-                      y={tile.y0 + 32}
-                      fill={textColor}
-                      fillOpacity={0.9}
-                      fontSize={11}
-                      className="pointer-events-none select-none"
-                    >
-                      {formatStorage(tile.data.sizeGb)}
-                    </text>
-                  )}
-                </g>
+                      <title>{tile.data.path}</title>
+                      <rect
+                        x={tile.x0}
+                        y={tile.y0}
+                        width={w}
+                        height={h}
+                        fill={tile.color}
+                        fillOpacity={fillOpacity}
+                        stroke={selected ? "hsl(var(--foreground))" : "hsl(var(--background))"}
+                        strokeWidth={selected ? 2 : 1}
+                        className={cn(
+                          clickable && "transition-all hover:fill-opacity-100 hover:stroke-2",
+                          selectable && "group-focus-visible:stroke-foreground group-focus-visible:stroke-[3px]",
+                        )}
+                      />
+                      {showLabel && (
+                        <text
+                          x={tile.x0 + 6}
+                          y={tile.y0 + 16}
+                          fill={textColor}
+                          fontSize={12}
+                          fontWeight={600}
+                          className="pointer-events-none select-none"
+                        >
+                          {truncateToWidth(tile.data.name, w - 12, 12)}
+                        </text>
+                      )}
+                      {showSize && (
+                        <text
+                          x={tile.x0 + 6}
+                          y={tile.y0 + 32}
+                          fill={textColor}
+                          fillOpacity={0.9}
+                          fontSize={11}
+                          className="pointer-events-none select-none"
+                        >
+                          {formatStorage(tile.data.sizeGb)}
+                        </text>
+                      )}
+                    </g>
+                  </ContextMenuTrigger>
+                  {selectable && <ContextMenuContent className="w-44" onCloseAutoFocus={(event) => event.preventDefault()}>
+                    <ContextMenuItem className="text-caption" disabled={!clickable} onSelect={drillDown}>打开</ContextMenuItem>
+                    <ContextMenuItem className="text-caption" onSelect={() => {
+                      void openDirectoryInExplorer(tile.data.path).catch((error: unknown) => setOpenError(String(error)));
+                    }}>在资源管理器中打开</ContextMenuItem>
+                    <ContextMenuItem className="text-caption" onSelect={() => { navigator.clipboard?.writeText(tile.data.path).catch(() => {}); }}>复制路径</ContextMenuItem>
+                    {onAnalyze && <ContextMenuItem className="text-caption" onSelect={() => onAnalyze(tile.data.path)}>占用分析</ContextMenuItem>}
+                  </ContextMenuContent>}
+                </ContextMenu>
               );
             })}
           </svg>
         </div>
       )}
-    </PanelCard>
+      <StorageOpenErrorDialog error={openError} onOpenChange={(open) => { if (!open) setOpenError(null); }} />
+    </div>
   );
 }

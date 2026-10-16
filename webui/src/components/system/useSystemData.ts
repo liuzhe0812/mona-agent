@@ -632,8 +632,12 @@ export function useStorageScan() {
   const [lastScanAt, setLastScanAt] = useState<number | null>(null);
   const [progress, setProgress] = useState<ScanProgress | null>(null);
   const [error, setError] = useState<string | null>(null);
-  const [cleaning, setCleaning] = useState(false);
+  const [cleaningIds, setCleaningIds] = useState<Set<string>>(() => new Set());
   const [selectedDrive, setSelectedDrive] = useState<string>("C:");
+  const driveRef = useRef("C:");
+  const scanningRef = useRef(false);
+  const cleaningIdsRef = useRef(new Set<string>());
+  const driveCaches = useRef(new Map<string, StorageCache>());
 
   // 扫描会话标记：start() 递增，晚到的缓存加载结果不得覆盖更新的扫描结果
   const scanSessionRef = useRef(0);
@@ -642,9 +646,11 @@ export function useStorageScan() {
   useEffect(() => {
     let active = true;
     const session = scanSessionRef.current;
+    if (scanningRef.current) return;
     (async () => {
-      const cached = await loadStorageCache(selectedDrive);
+      const stored = driveCaches.current.get(selectedDrive) ?? await loadStorageCache(selectedDrive);
       if (!active || session !== scanSessionRef.current) return;
+      const cached = driveCaches.current.get(selectedDrive) ?? stored;
       if (cached) {
         setResult(cached.result);
         setLastScanAt(cached.lastScanAt);
@@ -658,39 +664,52 @@ export function useStorageScan() {
     return () => { active = false; };
   }, [selectedDrive]);
 
-  const start = async () => {
+  const start = async (drive = driveRef.current) => {
+    if (scanningRef.current) return null;
+    scanningRef.current = true;
+    if (drive !== driveRef.current) {
+      driveRef.current = drive;
+      setSelectedDrive(drive);
+      setResult(null);
+      setLastScanAt(null);
+    }
     scanSessionRef.current += 1;
     // 保留上次扫描结果显示，扫描完成后才覆盖
     setStatus("scanning");
     setProgress(null);
     setError(null);
     try {
-      const res = await invoke<StorageScanResult>("scan_storage", { drive: selectedDrive });
+      const res = await invoke<StorageScanResult>("scan_storage", { drive });
       const now = Date.now();
+      driveCaches.current.set(drive, { version: STORAGE_CACHE_VERSION, result: res, lastScanAt: now });
       setResult(res);
       setLastScanAt(now);
       setStatus("done");
       setProgress(null);
-      void saveStorageCache(selectedDrive, { result: res, lastScanAt: now });
+      void saveStorageCache(drive, { result: res, lastScanAt: now });
       return res;
     } catch (e) {
       setError(String(e));
       setStatus("error");
       return null;
+    } finally {
+      scanningRef.current = false;
     }
   };
 
   const clean = async (ids: string[]) => {
-    setCleaning(true);
+    const drive = driveRef.current;
+    const snapshot = result;
+    if (drive !== selectedDrive || !snapshot || ids.length === 0 || ids.some((id) => !snapshot.cleanupItems.some((item) => item.id === id && item.cleanable))) {
+      throw new Error("清理项已变化，请重新查看后再操作。");
+    }
+    if (ids.some((id) => cleaningIdsRef.current.has(id))) throw new Error("该项目正在清理。");
+    ids.forEach((id) => cleaningIdsRef.current.add(id));
+    setCleaningIds(new Set(cleaningIdsRef.current));
     try {
       const cleanup = await invoke<StorageCleanupResult>("clean_storage", { ids });
-      setResult((current) => {
-        if (!current) return current;
-        // 基于 verification 数组的 afterBytes 更新真实剩余大小，避免虚报为 0
-        const afterBytesById = new Map(
-          (cleanup.verification ?? []).map((v) => [v.id, v.afterBytes]),
-        );
-        const next: StorageScanResult = {
+      const afterBytesById = new Map((cleanup.verification ?? []).map((v) => [v.id, v.afterBytes]));
+      const update = (current: StorageScanResult): StorageScanResult => ({
           ...current,
           cleanupItems: current.cleanupItems.map((item) => {
             if (!cleanup.cleanedIds.includes(item.id)) return item;
@@ -700,30 +719,35 @@ export function useStorageScan() {
               : 0;
             return { ...item, sizeGb };
           }),
-        };
-        void saveStorageCache(selectedDrive, { result: next, lastScanAt: lastScanAt ?? Date.now() });
-        return next;
       });
+      const next = update(driveCaches.current.get(drive)?.result ?? snapshot);
+      const timestamp = lastScanAt ?? Date.now();
+      driveCaches.current.set(drive, { version: STORAGE_CACHE_VERSION, result: next, lastScanAt: timestamp });
+      void saveStorageCache(drive, { result: next, lastScanAt: timestamp });
+      if (driveRef.current === drive) setResult((current) => update(current ?? next));
       return cleanup;
     } finally {
-      setCleaning(false);
+      ids.forEach((id) => cleaningIdsRef.current.delete(id));
+      setCleaningIds(new Set(cleaningIdsRef.current));
     }
   };
 
   /** 大文件移至回收站（系统回收站可恢复）；成功后从 topFiles 移除并同步缓存 */
   const trashFiles = async (paths: string[]) => {
+    const drive = driveRef.current;
+    const snapshot = result;
     const trash = await invoke<StorageTrashResult>("system_trash_storage_files", { paths });
-    if (trash.trashed.length > 0) {
+    if (trash.trashed.length > 0 && snapshot) {
       const trashedPaths = new Set(trash.trashed.map((item) => item.path));
-      setResult((current) => {
-        if (!current) return current;
-        const next: StorageScanResult = {
+      const update = (current: StorageScanResult): StorageScanResult => ({
           ...current,
           topFiles: (current.topFiles ?? []).filter((file) => !trashedPaths.has(file.path)),
-        };
-        void saveStorageCache(selectedDrive, { result: next, lastScanAt: lastScanAt ?? Date.now() });
-        return next;
       });
+      const next = update(driveCaches.current.get(drive)?.result ?? snapshot);
+      const timestamp = lastScanAt ?? Date.now();
+      driveCaches.current.set(drive, { version: STORAGE_CACHE_VERSION, result: next, lastScanAt: timestamp });
+      void saveStorageCache(drive, { result: next, lastScanAt: timestamp });
+      if (driveRef.current === drive) setResult((current) => update(current ?? next));
     }
     return trash;
   };
@@ -747,7 +771,8 @@ export function useStorageScan() {
   };
 
   const selectDrive = (drive: string) => {
-    if (drive === selectedDrive || status === "scanning" || cleaning) return;
+    if (drive === driveRef.current || scanningRef.current) return;
+    driveRef.current = drive;
     scanSessionRef.current += 1;
     setResult(null);
     setLastScanAt(null);
@@ -757,7 +782,7 @@ export function useStorageScan() {
     setSelectedDrive(drive);
   };
 
-  return { status, result, lastScanAt, progress, error, cleaning, start, cancel, clean, trashFiles, selectedDrive, selectDrive };
+  return { status, result, lastScanAt, progress, error, cleaning: cleaningIds.size > 0, cleaningIds, start, cancel, clean, trashFiles, selectedDrive, selectDrive };
 }
 
 // ===== 启动项管理 =====

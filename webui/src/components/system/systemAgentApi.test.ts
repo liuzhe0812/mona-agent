@@ -3,6 +3,8 @@ import { describe, expect, it, vi } from "vitest";
 
 import {
   buildStorageAnalysisContext,
+  buildStorageDirectoryAnalysisContext,
+  buildStorageFileAnalysisContext,
   collectSystemEvidence,
   executeSystemAction,
   requestStorageAnalysis,
@@ -98,6 +100,49 @@ describe("executeSystemAction", () => {
 });
 
 describe("collectSystemEvidence", () => {
+  it("includes the chosen directory identity and only cleanup evidence inside it", () => {
+    const directory = {
+      id: "dir-appdata", path: "C:\\Users\\PrivateUser\\AppData", sizeGb: 10, fileCount: 10, directSizeGb: 1,
+      children: [{ id: "dir-local", path: "C:\\Users\\PrivateUser\\AppData\\Local", sizeGb: 8, fileCount: 8, directSizeGb: 8 }],
+    };
+    const storage: StorageScanResult = {
+      scanId: "scan-dir", disks: [], directories: [directory], fileTypes: [], totalScannedGb: 20,
+      topFiles: [
+        { id: "file-inside", path: "C:\\Users\\PrivateUser\\AppData\\Local\\data.db", parentDirName: "Local", extension: "db", sizeGb: 1, modifiedBucket: "old" },
+        { id: "file-outside", path: "C:\\Windows\\system.db", parentDirName: "Windows", extension: "db", sizeGb: 2, modifiedBucket: "old" },
+      ],
+      cleanupItems: [
+        { id: "temp", name: "临时文件", sizeGb: 2, path: "C:\\Users\\PrivateUser\\AppData\\Local\\Temp", cleanable: true, recommended: true, reason: "缓存" },
+        { id: "outside", name: "其他目录", sizeGb: 3, path: "C:\\Users\\PrivateUser\\AppData-old\\Temp", cleanable: true, recommended: true, reason: "缓存" },
+        { id: "system", name: "系统缓存", sizeGb: 4, path: "C:\\Windows\\Cache", cleanable: true, recommended: true, reason: "缓存" },
+      ],
+      scanSummary: { scannedDisk: "C:", totalFiles: 10, totalDirs: 2, scanDurationSecs: 1, cancelled: true },
+    };
+    const { evidence } = buildStorageDirectoryAnalysisContext(storage, directory);
+    expect(evidence.selectedDirectory).toEqual({ id: "dir-appdata", name: "AppData", location: "~", scanIncomplete: true, children: [{ id: "dir-local", name: "Local" }] });
+    expect(evidence.scope).toMatchObject({ id: "dir-appdata", sizeGb: 10, directSizeGb: 1 });
+    expect(evidence.cleanupItems.map((item) => item.id)).toEqual(["temp"]);
+    expect(evidence.largeFiles.map((item) => item.id)).toEqual(["file-inside"]);
+    expect(JSON.stringify(evidence)).not.toMatch(/PrivateUser|C:|AppData-old|Windows|"path"/);
+    const userDirectory = { ...directory, path: "C:\\Users\\PrivateUser", children: [] };
+    expect(buildStorageDirectoryAnalysisContext(storage, userDirectory).evidence.selectedDirectory?.name).toBe("用户目录");
+  });
+
+  it("includes only the explicitly selected file and removes its personal directory prefix", () => {
+    const selected = { id: "file-db", path: "C:\\Users\\PrivateUser\\.codex\\thread_history.sqlite", parentDirName: ".codex", extension: "sqlite", sizeGb: 4.1, modifiedBucket: "recent" };
+    const storage: StorageScanResult = {
+      scanId: "scan-file", disks: [], directories: [], cleanupItems: [], fileTypes: [], totalScannedGb: 10,
+      topFiles: [selected, { ...selected, id: "other-file", path: "C:\\private-other.zip" }],
+    };
+    const { evidence } = buildStorageFileAnalysisContext(storage, selected);
+    expect(evidence.selectedFile).toEqual({ id: "file-db", name: "thread_history.sqlite", location: "~/.codex", extension: "sqlite", sizeGb: 4.1, modifiedBucket: "recent" });
+    expect(evidence.largeFiles).toHaveLength(1);
+    expect(evidence.scope.id).toBe("file-db");
+    expect(evidence.children).toEqual([]);
+    expect(evidence.cleanupItems).toEqual([]);
+    expect(JSON.stringify(evidence)).not.toMatch(/PrivateUser|C:|private-other|"path"/);
+  });
+
   it("keeps only the startup fields required for planning", async () => {
     const evidence = await collectSystemEvidence(null);
 
@@ -139,7 +184,15 @@ describe("collectSystemEvidence", () => {
           topExtensions: [{ extension: "zip", count: 2, sizeGb: 3 }],
         },
       }],
-      cleanupItems: [],
+      cleanupItems: [{
+        id: "temp-cleanup",
+        name: "系统临时文件",
+        sizeGb: 1.5,
+        path: "C:\\Users\\Mona\\AppData\\Local\\Temp",
+        cleanable: true,
+        recommended: true,
+        reason: "可重建的临时数据",
+      }],
       fileTypes: [],
       totalScannedGb: 10,
       topFiles: [{
@@ -166,8 +219,16 @@ describe("collectSystemEvidence", () => {
       sizeGb: 3,
       modifiedBucket: "old",
     }]);
+    expect(context.evidence.cleanupItems).toEqual([{
+      id: "temp-cleanup",
+      name: "系统临时文件",
+      sizeGb: 1.5,
+      cleanable: true,
+      reason: "可重建的临时数据",
+    }]);
     expect(serialized).not.toContain("SecretProject");
     expect(serialized).not.toContain("private-backup.zip");
+    expect(serialized).not.toContain("AppData");
     expect(serialized).not.toContain("path");
   });
 });
@@ -192,6 +253,42 @@ describe("system analysis cancellation", () => {
 });
 
 describe("requestStorageAnalysis", () => {
+  it("sends prior user and assistant text with the current question", async () => {
+    const evidence: StorageAnalysisEvidence = {
+      scanId: "scan-1",
+      scope: {
+        id: "dir-root",
+        sizeGb: 10,
+        fileCount: 12,
+        directSizeGb: 1,
+        artifactKind: null,
+        fileTypes: [],
+        modifiedBuckets: [],
+        topExtensions: [],
+      },
+      children: [],
+      largeFiles: [],
+      cleanupItems: [],
+    };
+    const history = [
+      { role: "user" as const, content: "C 盘空间不足。" },
+      { role: "assistant" as const, content: "主要占用来自 Users。" },
+    ];
+    httpFetchMock.mockResolvedValueOnce({
+      ok: true,
+      json: () => Promise.resolve({ scanId: "scan-1", summary: "说明如上。", findings: [], cautions: [] }),
+    });
+
+    await requestStorageAnalysis("这里能清理吗？", evidence, undefined, history);
+
+    const [, request] = httpFetchMock.mock.calls.at(-1)!;
+    expect(JSON.parse(request.body)).toMatchObject({
+      goal: "这里能清理吗？",
+      evidence,
+      history,
+    });
+  });
+
   it("uses the dedicated Gateway route and keeps only evidence-linked findings", async () => {
     const evidence: StorageAnalysisEvidence = {
       scanId: "scan-1",

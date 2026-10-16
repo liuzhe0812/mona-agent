@@ -1,5 +1,5 @@
 import { Check, HardDrive, Loader2, ShieldCheck, Stethoscope } from "lucide-react";
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 
 import { cn } from "@/lib/utils";
 
@@ -20,10 +20,12 @@ import {
   type SystemDiagnosisResult,
   type SystemEvidenceStage,
   type StorageAssessment,
+  type SystemAnalysisRequest,
 } from "./systemAgentApi";
 import { diagnosticLabel } from "./inspectionModel";
 import type { SystemAgentHandoffTask } from "./systemAgentHandoff";
 import { SystemAgentChat } from "./SystemAgentChat";
+import { StorageConversation } from "./StorageConversation";
 import type { SystemTab } from "./systemTabs";
 import { StatusPill } from "./SystemUi";
 import {
@@ -43,7 +45,8 @@ interface SystemAssistantProps {
   onCollapse: () => void;
   handoffTask: SystemAgentHandoffTask | null;
   onHandoffTaskHandled: (taskId: string) => void;
-  analysisRequest: { goal: string; nonce: number; channel?: "plan" | "diagnose" | "storage" } | null;
+  analysisRequest: SystemAnalysisRequest | null;
+  onFileAnalysisChange?: (fileId: string | null) => void;
   storageSelection?: DirectorySize | null;
 }
 
@@ -74,6 +77,7 @@ export function SystemAssistant({
   handoffTask,
   onHandoffTaskHandled,
   analysisRequest,
+  onFileAnalysisChange,
   storageSelection = null,
 }: SystemAssistantProps) {
   // Agent 接管状态：handoffTask 到达后保持 agent 视图，即使用户切走再回来。
@@ -106,11 +110,6 @@ export function SystemAssistant({
   }
   const previousStorageContextKeyRef = useRef(storageContextKeyRef.current);
 
-
-  const storageContext = useMemo(
-    () => storage.result ? buildStorageAnalysisContext(storage.result, storageSelection) : null,
-    [storage.result, storageSelection],
-  );
 
   useEffect(() => () => {
     planningRequestRef.current?.abort();
@@ -200,11 +199,16 @@ export function SystemAssistant({
   // 面板内“交给 Mona 分析”入口：nonce 变化代表一次新的分析请求
   useEffect(() => {
     if (!analysisRequest) return;
+    if (tab === "storage") {
+      if (analysisRequest.fileId || analysisRequest.directoryId) setAgentDismissed(true);
+      return;
+    }
+    if (analysisRequest.channel === "storage") return;
     if (lastAnalysisNonceRef.current === analysisRequest.nonce) return;
     lastAnalysisNonceRef.current = analysisRequest.nonce;
     setAgentDismissed(true);
     void requestPlan(analysisRequest.goal, analysisRequest.channel);
-  }, [analysisRequest, requestPlan]);
+  }, [analysisRequest, requestPlan, tab]);
 
   const handleReturnToPlanner = useCallback(() => {
     setAgentDismissed(true);
@@ -285,7 +289,10 @@ export function SystemAssistant({
         </Button>
       </header>
 
-      <div className="min-h-0 flex-1 overflow-y-auto scrollbar-hover">
+      <div hidden={tab !== "storage" || viewMode !== "planner"} className={cn("min-h-0 flex-1 flex-col", tab === "storage" && viewMode === "planner" ? "flex" : "hidden")}>
+        <StorageConversation storage={storage} selection={storageSelection} analysisRequest={tab === "storage" ? analysisRequest : null} onFileAnalysisChange={onFileAnalysisChange} />
+      </div>
+      <div className={cn("min-h-0 flex-1 overflow-y-auto scrollbar-hover", tab === "storage" && viewMode === "planner" && "hidden")}>
         {viewMode === "agent" ? (
           <div className="flex min-h-full flex-col">
             <p className="border-b border-border/40 px-4 py-2 text-caption text-muted-foreground">
@@ -300,46 +307,6 @@ export function SystemAssistant({
           </div>
         ) : (
           <div className="space-y-4 p-4">
-            {tab === "storage" ? (
-              storageContext ? (
-                <div className="rounded-lg border border-border/60 p-3">
-                  <div className="flex items-start gap-2.5">
-                    <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-info/10 text-info">
-                      <HardDrive className="h-4 w-4" />
-                    </span>
-                    <div className="min-w-0 flex-1">
-                      <p className="text-ui font-medium">当前范围：{storageContext.scopeName}</p>
-                      <p className="mt-1 text-caption text-muted-foreground">
-                        {storageContext.evidence.scope.sizeGb.toFixed(1)} GB · {storageContext.evidence.scope.fileCount.toLocaleString()} 个文件
-                      </p>
-                      {storageContext.evidence.scope.artifactKind ? (
-                        <p className="mt-1 text-caption text-muted-foreground">
-                          本机识别：{storageContext.evidence.scope.artifactKind}
-                        </p>
-                      ) : null}
-                    </div>
-                  </div>
-                  <Button
-                    type="button"
-                    variant="interaction"
-                    size="sm"
-                    className="mt-3 w-full"
-                    disabled={planning || executing}
-                    onClick={() => void requestPlan("分析当前存储范围的主要占用、长期未修改大文件和可处理方向", "storage")}
-                  >
-                    分析当前范围
-                  </Button>
-                </div>
-              ) : (
-                <div className="rounded-lg border border-border/60 p-3">
-                  <p className="text-caption text-muted-foreground">
-                    {storage.status === "scanning"
-                      ? "正在等待本次扫描完成，完成后可分析当前目录。"
-                      : "请先在主区域完成存储扫描，Mona 会结合当前目录给出分析。"}
-                  </p>
-                </div>
-              )
-            ) : null}
 
             {error ? (
               <StatusNotice tone="danger">{error}</StatusNotice>
@@ -520,13 +487,13 @@ export function SystemAssistant({
         )}
       </div>
 
-      {viewMode === "planner" ? (
+      {viewMode === "planner" && tab !== "storage" ? (
         <div className="shrink-0 p-3">
           <ThreadComposer
             value={goal}
             onValueChange={setGoal}
             onSend={(content) => requestPlan(content)}
-            placeholder={tab === "storage" ? "询问本次扫描或当前目录" : `描述目标，当前上下文：${tabLabel(tab)}`}
+            placeholder={`描述目标，当前上下文：${tabLabel(tab)}`}
             inputLabel="描述系统维护目标"
             sendLabel="生成维护方案"
             stopLabel="停止任务"
