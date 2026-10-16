@@ -229,7 +229,7 @@ pub fn set_tray_unread_count(app: tauri::AppHandle, count: u32) -> Result<(), St
 /// 注册 AUMID 到 Windows 注册表，使 WinRT Toast 通知能正确显示应用名和图标，
 /// 而不是回退到 PowerShell 通知。仅注册一次。
 #[cfg(windows)]
-fn ensure_aumid_registered() -> &'static str {
+pub(crate) fn ensure_aumid_registered() -> &'static str {
     use std::os::windows::process::CommandExt;
     use std::process::Command;
     use std::sync::Once;
@@ -258,86 +258,33 @@ fn ensure_aumid_registered() -> &'static str {
     AUMID
 }
 
-/// 在主线程上创建并显示 WinRT Toast 通知。
-/// Toast 不是 Send，必须在主线程上创建和显示。
-#[cfg(windows)]
-fn show_windows_toast(
-    app: tauri::AppHandle,
-    title: String,
-    body: String,
-    pending: Arc<Mutex<bool>>,
-) {
-    use tauri_winrt_notification::Toast;
-
-    let aumid = ensure_aumid_registered();
-    let app_handle = app;
-
-    let toast = Toast::new(aumid)
-        .title(&title)
-        .text1(&body)
-        .on_activated(move |_action| {
-            // 通知被点击：设置 pending 标志并激活主窗口
-            if let Ok(mut flag) = pending.lock() {
-                *flag = true;
-            }
-            if let Some(window) = app_handle.get_webview_window("main") {
-                let _ = window.show();
-                let _ = window.unminimize();
-                let _ = window.set_focus();
-            }
-            Ok(())
-        });
-
-    if let Err(e) = toast.show() {
-        log::error!("Failed to show Windows toast: {}", e);
-    }
-}
-
-/// 显示一个通用系统 Toast 通知（不跟踪点击跳转状态）。
-/// 供日程提醒等模块通过后台轮询触发，即使窗口最小化到托盘也能弹出。
+/// 所有桌面提醒使用统一原生通知入口。
 pub fn show_generic_toast(app: &tauri::AppHandle, title: String, body: String) {
-    #[cfg(windows)]
-    {
-        let pending = Arc::new(Mutex::new(false));
-        let app_handle = app.clone();
-        let _ = app.run_on_main_thread(move || {
-            show_windows_toast(app_handle, title, body, pending);
-        });
-    }
-
-    #[cfg(not(windows))]
-    {
-        let _ = (app, title, body);
-    }
+    let app = app.clone();
+    tauri::async_runtime::spawn(async move {
+        let payload = crate::native_notification::NotificationPayload {
+            id: format!("reminder-{}", uuid::Uuid::new_v4()),
+            title, body, only_when_background: false, actions: vec![], click_action: None, click_data: None,
+        };
+        if let Err(error) = crate::native_notification::show_native(&app, payload).await {
+            log::error!("Native reminder notification failed: {error}");
+        }
+    });
 }
 
-/// 发送新邮件通知。
-/// Windows 上使用 WinRT Toast（应用级通知，非 PowerShell），点击后激活窗口并设置 pending 标志。
 #[tauri::command]
 pub async fn send_mail_notification(
     app: tauri::AppHandle,
-    state: tauri::State<'_, PendingMailNavigation>,
     title: String,
     body: String,
 ) -> Result<(), String> {
-    #[cfg(windows)]
-    {
-        let pending = state.0.clone();
-        let app_handle = app.clone();
-        // Toast 不是 Send，必须在主线程上创建
-        let _ = app.run_on_main_thread(move || {
-            show_windows_toast(app_handle, title, body, pending);
-        });
-        return Ok(());
-    }
-
-    #[cfg(not(windows))]
-    {
-        let _ = (state, app, title, body);
-        Ok(())
-    }
+    let payload = crate::native_notification::NotificationPayload {
+        id: format!("mail-{}", uuid::Uuid::new_v4()),
+        title, body, only_when_background: false, actions: vec![],
+        click_action: Some("open-email".into()), click_data: None,
+    };
+    crate::native_notification::show_native(&app, payload).await
 }
-
 /// 前端在窗口获得焦点时调用，检查是否有 pending 邮件导航
 #[tauri::command]
 pub fn check_and_clear_pending_mail(

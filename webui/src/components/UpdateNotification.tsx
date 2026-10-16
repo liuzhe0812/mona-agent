@@ -125,15 +125,14 @@ export function UpdateNotification({
               setView((current) => current.kind === "updating" ? current : { kind: "available", info });
               availableInfoRef.current = info;
               onUpdateAvailable?.(info);
-              // 弹出全局右下角通知（独立窗口）
+              // 发送原生系统通知
               if (shouldNotify) void showNotification({
                 id: `update-${info.latest_version}-${Date.now()}`,
                 title: `发现新版本 v${info.latest_version}`,
                 body: `当前版本 v${info.current_version}${
                   info.size ? ` · ${formatSize(info.size)}` : ""
                 }`,
-                icon: "update",
-                autoCloseMs: 0,
+                clickAction: "update-now",
                 actions: [
                   { label: "立即更新", action: "update-now", primary: true },
                   { label: "稍后", action: "update-dismiss" },

@@ -1,17 +1,14 @@
 //! Schedule reminder notifier.
 //!
 //! Polls the Python services process's ``/api/schedule/notifications`` endpoint on a
-//! background tokio task and fires the same in-app notification windows used
-//! by mail notifications. These are independent Tauri windows (borderless,
-//! always-on-top, skip taskbar) so they pop up even when the main window is
-//! minimized to the tray, and they render the Mona logo and custom styling
-//! via the ``#/notification`` route.
+//! background tokio task and sends native desktop notifications through the
+//! same entry point used by mail and other application reminders.
 
 use std::time::Duration;
 
 use serde::Deserialize;
 
-use crate::notification_window::{self, NotificationPayload};
+use crate::native_notification::{self, NotificationPayload};
 
 #[derive(Deserialize)]
 struct NotificationsResponse {
@@ -30,7 +27,7 @@ struct NotificationEntry {
     click_data: Option<serde_json::Value>,
 }
 
-/// Start a background polling task that fires notification windows for
+/// Start a background polling task that sends native notifications for
 /// schedule reminders. Should be called once after the gateway is ready.
 pub fn start_polling(app: tauri::AppHandle, port: u16) {
     let url = format!("http://127.0.0.1:{}/api/schedule/notifications", port);
@@ -46,9 +43,8 @@ pub fn start_polling(app: tauri::AppHandle, port: u16) {
                                 id: format!("schedule-{}", uuid::Uuid::new_v4()),
                                 title: n.title,
                                 body: n.body,
-                                icon: "schedule".to_string(),
+                                only_when_background: false,
                                 actions: vec![],
-                                auto_close_ms: 8000,
                                 click_action: Some(
                                     n.click_action
                                         .unwrap_or_else(|| "open-schedule".to_string()),
@@ -56,7 +52,7 @@ pub fn start_polling(app: tauri::AppHandle, port: u16) {
                                 click_data: n.click_data,
                             };
                             if let Err(e) =
-                                notification_window::show_notification_inner(&app, payload)
+                                native_notification::show_native(&app, payload).await
                             {
                                 log::error!("Failed to show schedule notification: {}", e);
                             }

@@ -6,24 +6,11 @@ import "./globals.css";
 import "./styles/resize-handles.css";
 import "./i18n";
 
-const NotificationWindow = lazy(() =>
-  import("./components/notification/NotificationWindow").then((module) => ({
-    default: module.NotificationWindow,
-  })),
-);
-
 const StandaloneTerminalWindow = lazy(() =>
   import("./components/terminal/StandaloneTerminalWindow").then((module) => ({
     default: module.StandaloneTerminalWindow,
   })),
 );
-
-function isNotificationRoute(): boolean {
-  return (
-    typeof window !== "undefined" &&
-    window.location.hash.startsWith("#/notification")
-  );
-}
 
 function isStandaloneTerminalRoute(): boolean {
   return (
@@ -113,15 +100,7 @@ document.addEventListener("keydown", (e) => {
 const root = document.getElementById("root");
 if (!root) throw new Error("root element missing");
 
-// 通知窗口是独立的 Tauri 窗口，跳过 App 的 bootstrap 逻辑，直接渲染通知组件。
-// 这样通知窗口加载更快，不依赖 runtime 连接。
-if (isNotificationRoute()) {
-  ReactDOM.createRoot(root).render(
-    <Suspense fallback={null}>
-      <NotificationWindow />
-    </Suspense>,
-  );
-} else if (isStandaloneTerminalRoute()) {
+if (isStandaloneTerminalRoute()) {
   ReactDOM.createRoot(root).render(
     <Suspense fallback={null}>
       <StandaloneTerminalWindow />

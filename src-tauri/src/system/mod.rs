@@ -2084,7 +2084,7 @@ pub async fn system_open_in_terminal(path: String) -> Result<bool, String> {
 pub async fn system_open_in_explorer(path: String) -> Result<bool, String> {
     tokio::task::spawn_blocking(move || -> Result<bool, String> {
         let target = PathBuf::from(&path);
-        if !target.exists() {
+        if path != "shell:RecycleBinFolder" && !target.exists() {
             return Err(format!("路径不存在: {path}"));
         }
         // explorer.exe 直接打开，支持任意路径（包括 C:\Windows、C:\Program Files 等）

@@ -11,7 +11,7 @@ mod license;
 mod materials;
 mod notes;
 mod notes_links;
-mod notification_window;
+mod native_notification;
 mod python;
 mod quick_ask;
 mod schedule_notifier;
@@ -934,7 +934,6 @@ pub fn run() {
         .manage(PendingMdFiles::default())
         .manage(PendingCanvasFiles::default())
         .manage(tray::PendingMailNavigation::default())
-        .manage(notification_window::NotificationWindowState::new())
         .manage(system::SystemState::new())
         .invoke_handler(tauri::generate_handler![
             get_settings,
@@ -1295,10 +1294,7 @@ pub fn run() {
             tray::set_tray_unread_count,
             tray::send_mail_notification,
             tray::check_and_clear_pending_mail,
-            notification_window::show_notification,
-            notification_window::show_notification_window,
-            notification_window::close_notification_window,
-            notification_window::emit_notification_action,
+            native_notification::show_notification,
             system::system_get_overview,
             system::system_get_history,
             system::scan_storage,

@@ -805,7 +805,7 @@ export async function takeUpdateError(): Promise<string | null> {
 }
 
 // ---------------------------------------------------------------------------
-// 全局右下角通知弹窗（独立 Tauri 窗口）
+// 系统通知
 // ---------------------------------------------------------------------------
 
 export interface NotificationActionInput {
@@ -818,16 +818,12 @@ export interface NotificationPayloadInput {
   id: string;
   title: string;
   body: string;
-  /** mail / schedule / update / success / warning / error / info */
-  icon?: string;
+  /** Let the desktop process check focus across all Mona windows before delivery. */
+  onlyWhenBackground?: boolean;
   actions?: NotificationActionInput[];
-  /** 自动关闭毫秒，0 不自动关闭，默认 6000 */
-  autoCloseMs?: number;
-  /** 点击卡片本身触发的 action */
+  /** Clicking the notification body triggers this action. */
   clickAction?: string;
-  /** 点击通知时携带的结构化数据，随 notification-action 事件一并 emit。
-   *  例如邮件通知携带 { type: "mail", accountId, uid, folder, subject }，
-   *  让监听方打开独立预览窗口而非主窗口。 */
+  /** Structured data emitted alongside the notification-action event. */
   clickData?: unknown;
 }
 
@@ -835,10 +831,6 @@ export async function showNotification(
   payload: NotificationPayloadInput,
 ): Promise<void> {
   return invoke<void>("show_notification", { payload });
-}
-
-export async function closeNotificationWindow(label: string): Promise<void> {
-  return invoke<void>("close_notification_window", { label });
 }
 
 // ---------------------------------------------------------------------------

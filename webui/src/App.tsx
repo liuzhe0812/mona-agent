@@ -198,12 +198,6 @@ const MailPreviewWindow = lazy(() =>
   })),
 );
 
-const NotificationWindow = lazy(() =>
-  import("@/components/notification/NotificationWindow").then((module) => ({
-    default: module.NotificationWindow,
-  })),
-);
-
 const DownloadsWindow = lazy(() =>
   import("@/components/browser/DownloadsWindow").then((module) => ({
     default: module.DownloadsWindow,
@@ -220,10 +214,6 @@ function isComposeRoute(): boolean {
 
 function isMailPreviewRoute(): boolean {
   return typeof window !== "undefined" && window.location.hash.startsWith("#/mailview");
-}
-
-function isNotificationRoute(): boolean {
-  return typeof window !== "undefined" && window.location.hash.startsWith("#/notification");
 }
 
 function isDownloadsRoute(): boolean {
@@ -461,7 +451,6 @@ export default function App() {
   const quickAskRoute = isQuickAskRoute();
   const composeRoute = isComposeRoute();
   const mailPreviewRoute = isMailPreviewRoute();
-  const notificationRoute = isNotificationRoute();
   const downloadsRoute = isDownloadsRoute();
 
   return (
@@ -475,10 +464,6 @@ export default function App() {
       {downloadsRoute ? (
         <Suspense fallback={null}>
           <DownloadsWindow />
-        </Suspense>
-      ) : notificationRoute ? (
-        <Suspense fallback={null}>
-          <NotificationWindow />
         </Suspense>
       ) : composeRoute ? (
         <Suspense fallback={<ModuleLoading title="正在打开写邮件" />}>
@@ -1692,7 +1677,7 @@ function Shell({
       const un6 = await listen<{ action: string; data?: unknown }>("notification-action", async (event) => {
         const action = event.payload?.action;
         const data = event.payload?.data as
-          | { type?: string; accountId?: string; uid?: string; folder?: string; subject?: string }
+          | { type?: string; accountId?: string; uid?: string; folder?: string; subject?: string; chatId?: string; sessionKey?: string; runId?: string }
           | undefined;
         // 邮件通知点击：携带邮件标识时，直接打开独立预览窗口，不唤醒主窗口
         if (action === "open-email" && data?.type === "mail" && data.accountId && data.uid && data.folder) {
@@ -1710,7 +1695,8 @@ function Shell({
           }
           return;
         }
-        if (action === "open-email" || action === "open-schedule" || action === "open-stock") {
+        if (action === "open-chat" && !data?.chatId) return;
+        if (action === "open-chat" || action === "open-email" || action === "open-schedule" || action === "open-stock") {
           try {
             const { getCurrentWindow } = await import("@tauri-apps/api/window");
             const mainWin = getCurrentWindow();
@@ -1720,7 +1706,10 @@ function Shell({
           } catch {
             // ignore
           }
-          if (action === "open-email") onOpenEmail();
+          if (action === "open-chat" && data?.chatId) {
+            onSelectChat(data.sessionKey || `websocket:${data.chatId}`);
+            void refresh();
+          } else if (action === "open-email") onOpenEmail();
           else if (action === "open-schedule") onOpenSchedule();
           else if (action === "open-stock") {
             // 股票复盘通知（T20）：携带 runId 时聚焦对应复盘简报。

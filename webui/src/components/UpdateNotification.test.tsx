@@ -35,7 +35,7 @@ describe("UpdateNotification", () => {
     mocks.showNotification.mockClear();
   });
 
-  it("keeps the new-version notification visible until the user chooses an action", async () => {
+  it("sends a native new-version notification with click and button actions", async () => {
     render(<UpdateNotification />);
 
     await waitFor(() => expect(mocks.listeners.has("update-available")).toBe(true));
@@ -55,7 +55,7 @@ describe("UpdateNotification", () => {
     expect(mocks.showNotification).toHaveBeenCalledWith(
       expect.objectContaining({
         title: "发现新版本 v1.1.0",
-        autoCloseMs: 0,
+        clickAction: "update-now",
         actions: [
           { label: "立即更新", action: "update-now", primary: true },
           { label: "稍后", action: "update-dismiss" },
