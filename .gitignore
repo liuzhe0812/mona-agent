@@ -19,6 +19,7 @@ AGENTS.md
 
 # 临时调试/部署产物
 .codex_tmp/
+/webui/.tmp-verify/
 
 # 开发计划文档（不进远程仓库）
 *PLAN*.md
