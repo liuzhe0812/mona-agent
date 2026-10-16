@@ -2,7 +2,6 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   MailOpen,
   Star,
-  Paperclip,
   Download,
   Loader2,
   Sparkles,
@@ -62,11 +61,7 @@ import * as emailApi from "./lib/emailApi";
 import { save, open as openDialog } from "@tauri-apps/plugin-dialog";
 import { writeFile } from "@tauri-apps/plugin-fs";
 import { tempDir, join } from "@tauri-apps/api/path";
-import {
-  getIcon,
-  extractExtension,
-  getCachedIcon,
-} from "../terminal/FileManager/iconCache";
+import { FileSystemIcon } from "@/components/ui/file-system-icon";
 import { openPathWithSystemApp, isTauri, httpFetch } from "@/lib/tauri";
 import { getServicesHttpBase } from "@/lib/api";
 import { SenderPopover } from "./SenderPopover";
@@ -163,7 +158,6 @@ export function MailView() {
     description: string;
   } | null>(null);
   // 附件系统图标缓存：key = filename，value = dataUrl（系统默认应用图标）
-  const [attIcons, setAttIcons] = useState<Record<string, string>>({});
   // 邮件正文图片：左键点击直接打开预览
   const [imagePreviewSrc, setImagePreviewSrc] = useState<string | null>(null);
   // 邮件正文图片：右键自定义菜单（替代 WebView2 原生菜单）
@@ -203,36 +197,6 @@ export function MailView() {
     }
     void openPathWithSystemApp(url);
   }, []);
-
-  // 附件列表变化时，异步加载系统文件类型图标（已缓存的同步显示，未缓存的加载后显示）
-  useEffect(() => {
-    if (!selectedMessage?.attachments) return;
-    const atts = selectedMessage.attachments;
-    let cancelled = false;
-    void (async () => {
-      const updates: Record<string, string> = {};
-      for (const att of atts) {
-        const ext = extractExtension(att.filename);
-        const cached = getCachedIcon(ext, false);
-        if (cached) {
-          updates[att.filename] = cached;
-        } else if (ext) {
-          try {
-            const icon = await getIcon(ext, false);
-            if (icon && !cancelled) updates[att.filename] = icon;
-          } catch {
-            // 获取图标失败时静默忽略，用回退图标
-          }
-        }
-      }
-      if (!cancelled && Object.keys(updates).length > 0) {
-        setAttIcons((prev) => ({ ...prev, ...updates }));
-      }
-    })();
-    return () => {
-      cancelled = true;
-    };
-  }, [selectedMessage?.attachments]);
 
   // 选中邮件时，若未读则自动标记为已读
   // 本地优先：即使 gateway 离线，Rust 侧也会先更新 SQLite，gateway 失败不报错
@@ -873,15 +837,8 @@ export function MailView() {
                     >
                       {downloading === att.filename ? (
                         <Loader2 className="h-4 w-4 shrink-0 animate-spin text-muted-foreground" />
-                      ) : attIcons[att.filename] ? (
-                        <img
-                          src={attIcons[att.filename]}
-                          alt=""
-                          className="h-4 w-4 shrink-0 object-contain"
-                          draggable={false}
-                        />
                       ) : (
-                        <Paperclip className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
+                        <FileSystemIcon name={att.filename} />
                       )}
                       <span className="min-w-0 flex-1 truncate text-caption text-foreground" title={att.filename}>
                         {att.filename}

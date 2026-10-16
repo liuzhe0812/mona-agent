@@ -42,9 +42,6 @@ async function notifyNewMail(
       id: `mail-${firstMessage.uid}-${Date.now()}`,
       title,
       body,
-      icon: "mail",
-      // 0 = 不自动隐藏，常驻显示直到用户点击打开或手动关闭
-      autoCloseMs: 0,
       clickAction: "open-email",
       // 点击通知时携带邮件标识，监听方据此打开独立预览窗口（而非主窗口）
       // 多封新邮件时只打开最新一封的预览，符合通知 body 中展示的是"最新: xxx"

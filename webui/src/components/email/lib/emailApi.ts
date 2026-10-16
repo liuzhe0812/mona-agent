@@ -458,7 +458,7 @@ export async function downloadAttachmentToFile(
 
 /// 按需拉取单封邮件的完整正文
 /// 优先走本地 Tauri IPC（读 .eml + mailparse，毫秒级）
-/// 本地 .eml 不存在或解析失败时，回退到邮件服务 HTTP 拉取（需传 serviceUrl）
+/// 本地 .eml 不存在或解析失败时，回退到邮件服务 HTTP 拉取（未传 serviceUrl 时由 Rust 解析）
 export async function fetchEmailBody(
   accountId: string,
   uid: string,

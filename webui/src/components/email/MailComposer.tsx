@@ -8,12 +8,12 @@ import {
   Camera,
   ChevronDown,
   X,
-  File as FileIcon,
   FileText,
   Clock,
 } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
+import { FileSystemIcon } from "@/components/ui/file-system-icon";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { StatusNotice } from "@/components/ui/status-notice";
@@ -678,7 +678,7 @@ export function MailComposer({
               key={`${att.filename}-${idx}`}
               className="flex items-center gap-1.5 rounded-xs border border-border/60 bg-muted/30 px-2 py-0.5 text-micro text-muted-foreground"
             >
-              <FileIcon className="h-3 w-3 shrink-0" />
+              <FileSystemIcon name={att.filename} />
               <span className="max-w-[160px] truncate">{att.filename}</span>
               <span className="shrink-0">{formatFileSize(Math.ceil(att.data.length * 0.75))}</span>
               <Button

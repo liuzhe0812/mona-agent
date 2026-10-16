@@ -60,10 +60,13 @@ fn eml_relative_path(account_id: &str, folder: &str, uid: &str) -> String {
 /// 将相对路径转为绝对路径
 /// skill 第二节：路径解析必须限制在邮件数据目录内，阻止 `..` 穿越
 fn eml_absolute_path(relative_path: &str) -> PathBuf {
-    let root = mail_root();
+    eml_absolute_path_under(&mail_root(), relative_path)
+}
+
+fn eml_absolute_path_under(root: &Path, relative_path: &str) -> PathBuf {
     let joined = root.join(relative_path);
-    // 校验结果仍在 mail_root 之下，阻止路径穿越
-    let canonical_root = root.canonicalize().unwrap_or_else(|_| root.clone());
+    // 校验结果仍在邮件根目录之下，阻止路径穿越
+    let canonical_root = root.canonicalize().unwrap_or_else(|_| root.to_path_buf());
     if let Ok(canonical_joined) = joined.canonicalize() {
         if !canonical_joined.starts_with(&canonical_root) {
             log::warn!(
@@ -102,8 +105,18 @@ fn write_eml_file(
     uid: &str,
     bytes: &[u8],
 ) -> Result<String, String> {
+    write_eml_file_under(&mail_root(), account_id, folder, uid, bytes)
+}
+
+fn write_eml_file_under(
+    root: &Path,
+    account_id: &str,
+    folder: &str,
+    uid: &str,
+    bytes: &[u8],
+) -> Result<String, String> {
     let rel = eml_relative_path(account_id, folder, uid);
-    let abs = eml_absolute_path(&rel);
+    let abs = eml_absolute_path_under(root, &rel);
     atomic_write_file(&abs, bytes).map_err(|e| format!("写入 .eml 文件失败: {e}"))?;
     Ok(rel)
 }
@@ -198,8 +211,12 @@ fn meta_relative_path(account_id: &str, folder: &str, uid: &str) -> String {
 
 /// 写入 .meta.json sidecar 文件
 fn write_meta_json(meta: &EmlMeta) -> Result<(), String> {
+    write_meta_json_under(&mail_root(), meta)
+}
+
+fn write_meta_json_under(root: &Path, meta: &EmlMeta) -> Result<(), String> {
     let rel = meta_relative_path(&meta.account_id, &meta.folder, &meta.uid);
-    let abs = eml_absolute_path(&rel);
+    let abs = eml_absolute_path_under(root, &rel);
     let json = serde_json::to_string_pretty(meta).map_err(|e| format!("序列化 meta 失败: {e}"))?;
     atomic_write_file(&abs, json.as_bytes()).map_err(|e| format!("写入 .meta.json 失败: {e}"))?;
     Ok(())
@@ -4499,9 +4516,14 @@ async fn sync_folder_internal(
                             }
                         }
                     };
-                    if let Err(e) =
-                        prefetch_unread_bodies(&state_clone, &gw, &account, &plain_password, &mailbox)
-                            .await
+                    if let Err(e) = prefetch_unread_bodies(
+                        &state_clone,
+                        &gw,
+                        &account,
+                        &plain_password,
+                        &mailbox,
+                    )
+                    .await
                     {
                         log::debug!("[email-sync] prefetch unread bodies failed: {}", e);
                     }
@@ -4949,10 +4971,12 @@ async fn run_bg_sync_cycle(
                 last_uid,
             };
 
+            let sync_added_new;
             match sync_folder_internal(&email_state, gateway_url, req, true).await {
                 Ok(result) => {
                     // 同步成功，清除 IMAP 冷却期（如果之前有）
                     clear_account_cooldown(&email_state, &account.id, "imap");
+                    sync_added_new = result.new_count > 0;
                     if result.new_count > 0 {
                         log::debug!(
                             "[email-bg] account={} folder={} new={}",
@@ -5001,8 +5025,17 @@ async fn run_bg_sync_cycle(
 
             // P1-1: 正文预下载（仅 INBOX，最近 N 封未读且未拉取正文的邮件）
             // 用户大概率会查看未读邮件，提前下载避免点击时的等待
-            if folder == "INBOX" {
-                if let Err(e) = prefetch_unread_bodies(&email_state, gateway_url, &account, &plain_password, folder).await {
+            // 有新增邮件时 sync_folder_internal 已启动正文处理；无新增时补齐之前失败或遗漏项。
+            if folder == "INBOX" && !sync_added_new {
+                if let Err(e) = prefetch_unread_bodies(
+                    &email_state,
+                    gateway_url,
+                    &account,
+                    &plain_password,
+                    folder,
+                )
+                .await
+                {
                     log::warn!(
                         "[email-bg] account={} folder={} prefetch unread bodies failed: {}",
                         account.id,
@@ -5188,6 +5221,81 @@ async fn try_recover_services(app_handle: &tauri::AppHandle) {
 
 const PREFETCH_UNREAD_LIMIT: u32 = 20;
 
+fn decode_prefetched_raw_bytes(body: &Value) -> Result<Vec<u8>, String> {
+    let raw_b64 = body
+        .get("rawBytes")
+        .and_then(Value::as_str)
+        .filter(|raw| !raw.is_empty())
+        .ok_or_else(|| "gateway 响应缺少完整 RFC822 原文 rawBytes".to_string())?;
+    let bytes = base64::engine::general_purpose::STANDARD
+        .decode(raw_b64)
+        .map_err(|e| format!("解码 rawBytes 失败: {e}"))?;
+    if bytes.is_empty() {
+        return Err("gateway 返回的 RFC822 原文为空".into());
+    }
+    Ok(bytes)
+}
+
+fn cache_prefetched_body_under(
+    state: &EmailState,
+    mail_root: &Path,
+    account_id: &str,
+    folder: &str,
+    uid: &str,
+    bytes: &[u8],
+) -> Result<(), String> {
+    if bytes.is_empty() {
+        return Err("RFC822 原文为空".into());
+    }
+
+    let eml_path = write_eml_file_under(mail_root, account_id, folder, uid, bytes)?;
+    let mut conn = state.conn()?;
+    let tx = conn.transaction().map_err(|e| format!("开启邮件缓存事务失败: {e}"))?;
+    let (is_read, is_starred, has_attachments, message_id): (i32, i32, i32, Option<String>) = tx
+        .query_row(
+            "SELECT is_read, is_starred, has_attachments, message_id FROM messages
+             WHERE uid = ?1 AND account_id = ?2 AND folder = ?3",
+            params![uid, account_id, folder],
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
+        )
+        .map_err(|e| format!("读取邮件缓存状态失败: {e}"))?;
+    let updated = tx
+        .execute(
+            "UPDATE messages SET body_fetched = 1, eml_path = ?1
+             WHERE uid = ?2 AND account_id = ?3 AND folder = ?4",
+            params![eml_path, uid, account_id, folder],
+        )
+        .map_err(|e| format!("更新邮件正文状态失败: {e}"))?;
+    if updated != 1 {
+        return Err("更新邮件正文状态失败：本地邮件记录已不存在".into());
+    }
+
+    let meta = EmlMeta {
+        uid: uid.to_string(),
+        account_id: account_id.to_string(),
+        folder: folder.to_string(),
+        is_read: is_read != 0,
+        is_starred: is_starred != 0,
+        has_attachments: has_attachments != 0,
+        body_fetched: true,
+        message_id: message_id.unwrap_or_default(),
+        eml_mtime: chrono::Utc::now().timestamp(),
+    };
+    write_meta_json_under(mail_root, &meta)?;
+    if let Err(e) = tx.commit() {
+        let mut incomplete_meta = meta;
+        incomplete_meta.body_fetched = false;
+        return match write_meta_json_under(mail_root, &incomplete_meta) {
+            Ok(()) => Err(format!("提交邮件正文状态失败: {e}")),
+            Err(rollback_error) => Err(format!(
+                "提交邮件正文状态失败: {e}; 恢复未完成 meta 状态失败: {rollback_error}"
+            )),
+        };
+    }
+
+    Ok(())
+}
+
 /// 预下载未读邮件的正文（仅 INBOX，最近 20 封未读且 body_fetched=0）。
 ///
 /// 同步时只拉取 HEADER + FLAGS，正文按需拉取。但未读邮件用户大概率会查看，
@@ -5253,6 +5361,7 @@ async fn prefetch_unread_bodies(
         "imapPassword": plain_password,
         "mailbox": folder,
         "useSsl": account.imap_use_ssl,
+        "includeRawBytes": true,
     });
 
     let mut success = 0u32;
@@ -5284,52 +5393,38 @@ async fn prefetch_unread_bodies(
                         continue;
                     }
                 };
-                // Foxmail 风格：如果 gateway 返回 rawBytes，落盘为 .eml 文件
-                let raw_b64 = body.get("rawBytes").and_then(|v| v.as_str()).unwrap_or("");
-                let eml_path = if !raw_b64.is_empty() {
-                    match base64::engine::general_purpose::STANDARD.decode(raw_b64) {
-                        Ok(bytes) => match write_eml_file(&account.id, folder, uid, &bytes) {
-                            Ok(rel) => rel,
-                            Err(e) => {
-                                log::warn!(
-                                    "[email-bg] account={} uid={} write eml failed: {}",
-                                    account.id,
-                                    uid,
-                                    e
-                                );
-                                String::new()
-                            }
-                        },
-                        Err(e) => {
-                            log::warn!(
-                                "[email-bg] account={} uid={} decode rawBytes failed: {}",
-                                account.id,
-                                uid,
-                                e
-                            );
-                            String::new()
-                        }
+                let bytes = match decode_prefetched_raw_bytes(&body) {
+                    Ok(bytes) => bytes,
+                    Err(e) => {
+                        log::warn!(
+                            "[email-bg] account={} uid={} prefetch body incomplete: {}",
+                            account.id,
+                            uid,
+                            e
+                        );
+                        failed += 1;
+                        continue;
                     }
-                } else {
-                    String::new()
                 };
-                // 更新 SQLite：eml_path + body_fetched=1（不再写 body_text）
-                if let Ok(conn) = state.conn() {
-                    if eml_path.is_empty() {
-                        let _ = conn.execute(
-                            "UPDATE messages SET body_fetched = 1
-                             WHERE uid = ?1 AND account_id = ?2 AND folder = ?3",
-                            params![uid, &account.id, folder],
+                match cache_prefetched_body_under(
+                    state,
+                    &mail_root(),
+                    &account.id,
+                    folder,
+                    uid,
+                    &bytes,
+                ) {
+                    Ok(()) => success += 1,
+                    Err(e) => {
+                        log::warn!(
+                            "[email-bg] account={} uid={} cache prefetched body failed: {}",
+                            account.id,
+                            uid,
+                            e
                         );
-                    } else {
-                        let _ = conn.execute(
-                            "UPDATE messages SET body_fetched = 1, eml_path = ?1
-                             WHERE uid = ?2 AND account_id = ?3 AND folder = ?4",
-                            params![eml_path, uid, &account.id, folder],
-                        );
+                        failed += 1;
                     }
                 }
-                success += 1;
             }
             Ok(resp) => {
                 log::warn!(
@@ -5360,6 +5455,183 @@ async fn prefetch_unread_bodies(
         failed
     );
     Ok(())
+}
+
+#[cfg(test)]
+mod prefetch_cache_tests {
+    use super::{
+        cache_prefetched_body_under, decode_prefetched_raw_bytes, eml_relative_path,
+        meta_relative_path, EmailState,
+    };
+    use rusqlite::params;
+    use serde_json::json;
+    use std::path::Path;
+    use std::sync::{
+        atomic::AtomicBool,
+        Arc,
+    };
+
+    fn isolated_state(root: &Path) -> EmailState {
+        let state = EmailState {
+            db_path: root.join("email.sqlite3"),
+            schema_initialized: Arc::new(AtomicBool::new(false)),
+            user_fetch_in_progress: Arc::new(AtomicBool::new(false)),
+        };
+        let conn = state.conn().unwrap();
+        conn.execute(
+            "INSERT INTO messages
+             (uid, uid_int, account_id, folder, subject, from_address, to_addresses, date,
+              is_read, is_starred, has_attachments, message_id, body_fetched, eml_path)
+             VALUES (?1, 42, 'test-account', 'INBOX', 'test', 'sender@example.com', '',
+                     '2026-10-16T00:00:00Z', 0, 1, 1, '<test@example.com>', 0, '')",
+            params!["42"],
+        )
+        .unwrap();
+        state
+    }
+
+    #[test]
+    fn prefetched_response_requires_nonempty_valid_raw_bytes() {
+        assert!(decode_prefetched_raw_bytes(&json!({})).is_err());
+        assert!(decode_prefetched_raw_bytes(&json!({ "rawBytes": "not-base64!" })).is_err());
+        assert!(decode_prefetched_raw_bytes(&json!({ "rawBytes": "" })).is_err());
+    }
+
+    #[test]
+    fn complete_eml_and_meta_are_committed_with_the_database_state() {
+        let temp = tempfile::tempdir().unwrap();
+        let state = isolated_state(temp.path());
+        let mail_root = temp.path().join("mail");
+        let raw = b"From: sender@example.com\r\nSubject: test\r\n\r\nfull body";
+
+        cache_prefetched_body_under(
+            &state,
+            &mail_root,
+            "test-account",
+            "INBOX",
+            "42",
+            raw,
+        )
+        .unwrap();
+
+        let eml_path = eml_relative_path("test-account", "INBOX", "42");
+        assert_eq!(std::fs::read(mail_root.join(&eml_path)).unwrap(), raw);
+        let conn = state.conn().unwrap();
+        let (body_fetched, saved_path): (i32, String) = conn
+            .query_row(
+                "SELECT body_fetched, eml_path FROM messages
+                 WHERE uid = '42' AND account_id = 'test-account' AND folder = 'INBOX'",
+                [],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .unwrap();
+        assert_eq!(body_fetched, 1);
+        assert_eq!(saved_path, eml_path);
+
+        let meta_path = mail_root.join(meta_relative_path("test-account", "INBOX", "42"));
+        let meta: serde_json::Value =
+            serde_json::from_slice(&std::fs::read(meta_path).unwrap()).unwrap();
+        assert_eq!(meta["bodyFetched"], true);
+        assert_eq!(meta["isStarred"], true);
+        assert_eq!(meta["hasAttachments"], true);
+    }
+
+    #[test]
+    fn disk_write_failure_leaves_message_and_meta_incomplete() {
+        let temp = tempfile::tempdir().unwrap();
+        let state = isolated_state(temp.path());
+        let mail_root = temp.path().join("mail-root-is-a-file");
+        std::fs::write(&mail_root, b"not a directory").unwrap();
+
+        assert!(cache_prefetched_body_under(
+            &state,
+            &mail_root,
+            "test-account",
+            "INBOX",
+            "42",
+            b"full RFC822",
+        )
+        .is_err());
+
+        let conn = state.conn().unwrap();
+        let body_fetched = conn
+            .query_row(
+                "SELECT body_fetched FROM messages WHERE uid = '42' AND account_id = 'test-account'",
+                [],
+                |row| row.get::<_, i32>(0),
+            )
+            .unwrap();
+        assert_eq!(body_fetched, 0);
+        assert!(!mail_root.join(meta_relative_path("test-account", "INBOX", "42")).exists());
+    }
+
+    #[test]
+    fn meta_write_failure_rolls_back_database_completion() {
+        let temp = tempfile::tempdir().unwrap();
+        let state = isolated_state(temp.path());
+        let mail_root = temp.path().join("mail");
+        let meta_path = mail_root.join(meta_relative_path("test-account", "INBOX", "42"));
+        std::fs::create_dir_all(&meta_path).unwrap();
+
+        assert!(cache_prefetched_body_under(
+            &state,
+            &mail_root,
+            "test-account",
+            "INBOX",
+            "42",
+            b"full RFC822",
+        )
+        .is_err());
+
+        let conn = state.conn().unwrap();
+        let (body_fetched, eml_path): (i32, String) = conn
+            .query_row(
+                "SELECT body_fetched, eml_path FROM messages
+                 WHERE uid = '42' AND account_id = 'test-account'",
+                [],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .unwrap();
+        assert_eq!(body_fetched, 0);
+        assert!(eml_path.is_empty());
+        assert!(meta_path.is_dir());
+    }
+
+    #[test]
+    fn database_update_failure_rolls_back_complete_meta_state() {
+        let temp = tempfile::tempdir().unwrap();
+        let state = isolated_state(temp.path());
+        let mail_root = temp.path().join("mail");
+        state
+            .conn()
+            .unwrap()
+            .execute_batch(
+                "CREATE TRIGGER fail_prefetch_update BEFORE UPDATE OF body_fetched ON messages
+                 BEGIN SELECT RAISE(ABORT, 'forced test failure'); END;",
+            )
+            .unwrap();
+
+        assert!(cache_prefetched_body_under(
+            &state,
+            &mail_root,
+            "test-account",
+            "INBOX",
+            "42",
+            b"full RFC822",
+        )
+        .is_err());
+
+        let conn = state.conn().unwrap();
+        let body_fetched = conn
+            .query_row(
+                "SELECT body_fetched FROM messages WHERE uid = '42' AND account_id = 'test-account'",
+                [],
+                |row| row.get::<_, i32>(0),
+            )
+            .unwrap();
+        assert_eq!(body_fetched, 0);
+        assert!(!mail_root.join(meta_relative_path("test-account", "INBOX", "42")).exists());
+    }
 }
 
 /// 对一批邮件应用规则动作。
@@ -7071,6 +7343,19 @@ async fn update_local_cache(
     Ok(())
 }
 
+fn resolve_email_service_base_url(
+    gateway_url: Option<&str>,
+    services_port: Option<u16>,
+) -> Result<String, String> {
+    if let Some(url) = gateway_url.filter(|url| !url.is_empty()) {
+        return Ok(url.to_string());
+    }
+
+    services_port
+        .map(|port| format!("http://127.0.0.1:{port}"))
+        .ok_or_else(|| "本地无 .eml 缓存且邮件服务未就绪，无法拉取正文".into())
+}
+
 /// 按需读取单封邮件正文（Offline-First：本地 .eml 优先，缺失时才调 gateway）。
 ///
 /// 三段式逻辑：
@@ -7179,10 +7464,8 @@ pub async fn email_fetch_body(
             "stage": "network",
         }),
     );
-    let gateway_url = match gateway_url.as_deref().filter(|s| !s.is_empty()) {
-        Some(u) => u,
-        None => return Err("本地无 .eml 缓存且邮件服务未就绪，无法拉取正文".into()),
-    };
+    let services_port = app_handle.state::<crate::ServicesState>().port();
+    let gateway_url = resolve_email_service_base_url(gateway_url.as_deref(), services_port)?;
 
     // 抢占标志：prefetch 检测到此标志时让出 IMAP 锁，避免阻塞用户请求
     let _guard = UserFetchGuard::new(state.user_fetch_in_progress.clone());
@@ -7734,7 +8017,34 @@ pub async fn email_rebuild_index(
 
 #[cfg(test)]
 mod tests {
-    use super::email_header_json;
+    use super::{email_header_json, resolve_email_service_base_url};
+
+    #[test]
+    fn email_service_base_url_prefers_explicit_url() {
+        let url =
+            resolve_email_service_base_url(Some("http://127.0.0.1:18080/"), Some(17174)).unwrap();
+
+        assert_eq!(url, "http://127.0.0.1:18080/");
+    }
+
+    #[test]
+    fn email_service_base_url_uses_ready_services_port_when_url_is_missing() {
+        assert_eq!(
+            resolve_email_service_base_url(None, Some(17174)).unwrap(),
+            "http://127.0.0.1:17174"
+        );
+        assert_eq!(
+            resolve_email_service_base_url(Some(""), Some(17174)).unwrap(),
+            "http://127.0.0.1:17174"
+        );
+    }
+
+    #[test]
+    fn email_service_base_url_errors_when_services_are_not_ready() {
+        let error = resolve_email_service_base_url(None, None).unwrap_err();
+
+        assert!(error.contains("邮件服务未就绪"));
+    }
 
     #[test]
     fn email_body_header_preserves_cached_date() {

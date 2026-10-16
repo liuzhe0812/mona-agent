@@ -1,9 +1,11 @@
 import { useEffect, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
+import { listen } from "@tauri-apps/api/event";
 import { save } from "@tauri-apps/plugin-dialog";
 import { tempDir, join } from "@tauri-apps/api/path";
-import { Loader2, Paperclip, Download, ExternalLink } from "lucide-react";
+import { Loader2, Download, ExternalLink } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import { FileSystemIcon } from "@/components/ui/file-system-icon";
 import {
   ContextMenu,
   ContextMenuContent,
@@ -56,32 +58,56 @@ export function MailPreviewWindow() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [downloadingAtt, setDownloadingAtt] = useState<string | null>(null);
+  const [loadAttempt, setLoadAttempt] = useState(0);
+  const [showProgress, setShowProgress] = useState(false);
   // 正文加载阶段：'local'=读本地，'network'=走邮件服务器
   const [bodyStage, setBodyStage] = useState<"local" | "network">("local");
   const bodyLoadingText = bodyStage === "network" ? "正在请求邮件..." : "正在加载正文...";
 
-  const params = parsePreviewParams();
+  const [params] = useState(parsePreviewParams);
+
+  useEffect(() => {
+    if (!loading) {
+      setShowProgress(false);
+      return;
+    }
+    const timer = window.setTimeout(() => setShowProgress(true), 400);
+    return () => window.clearTimeout(timer);
+  }, [loading]);
 
   // 监听 Rust 端 email-body-stage 事件：本地未命中时切为 'network'，切换提示文案
   useEffect(() => {
     if (!params) return;
     let unlisten: (() => void) | null = null;
+    let cancelled = false;
     void (async () => {
       try {
-        const { listen } = await import("@tauri-apps/api/event");
-        unlisten = await listen<{ stage: "local" | "network" }>(
+        const stop = await listen<{
+          accountId: string;
+          uid: string;
+          mailbox: string;
+          stage: "local" | "network";
+        }>(
           "email-body-stage",
           (event) => {
-            if (event.payload?.stage === "network") {
+            const payload = event.payload;
+            if (
+              payload?.accountId === params.accountId &&
+              payload.uid === params.uid && payload.mailbox === params.folder &&
+              payload.stage === "network"
+            ) {
               setBodyStage("network");
             }
           },
         );
+        if (cancelled) stop();
+        else unlisten = stop;
       } catch {
         // 非桌面环境忽略
       }
     })();
     return () => {
+      cancelled = true;
       if (unlisten) unlisten();
     };
   }, [params]);
@@ -94,80 +120,60 @@ export function MailPreviewWindow() {
     }
 
     let cancelled = false;
+    setLoading(true);
+    setError(null);
+    setBodyStage("local");
+
+    // Rust 先读本地，未命中时自行取得邮件服务地址并拉取；合法空正文也只读一次。
+    const bodyRequest = fetchEmailBody(params.accountId, params.uid, params.folder);
+    // 附件和已读同步所需的信息并行准备，不阻塞本地正文。
+    const resources = Promise.all([
+      getServicesStatus().catch(() => null),
+      listAccounts().catch(() => []),
+    ]).then(([status, accounts]) => {
+      const url = status?.running && status.port ? `http://127.0.0.1:${status.port}` : "";
+      const acc = accounts.find((a) => a.id === params.accountId) ?? null;
+      if (!cancelled) {
+        setGatewayUrl(url);
+        setAccount(acc);
+      }
+      return { url, acc };
+    });
 
     (async () => {
       try {
-        // 并行：gateway 状态 + 账号列表（互不依赖）
-        // listAccounts 仅用于附件下载，可延迟；getMessages 去掉：fetchEmailBody 会返回 header
-        const [gw, accounts] = await Promise.all([
-          getServicesStatus().catch(() => null),
-          listAccounts().catch(() => []),
-        ]);
-        const url =
-          gw?.running && gw?.port ? `http://127.0.0.1:${gw.port}` : "";
+        const body = await bodyRequest;
         if (!cancelled) {
-          setGatewayUrl(url);
-          const acc = accounts.find((a) => a.id === params.accountId);
-          setAccount(acc ?? null);
-        }
-
-        // fetchEmailBody 优先读本地 .eml（毫秒级），本地失败时回退到邮件服务 HTTP 拉取
-        // 本地 .eml 是 HEADER-only 时 body 为空，自动重试一次（fetchEmailBody 会走 HTTP fallback）
-        try {
-          let body = await fetchEmailBody(
-            params.accountId,
-            params.uid,
-            params.folder,
-            url,
-          );
-          // 空 body 自动重试一次（本地 .eml 是 HEADER-only 或解析失败）
-          if (!body.bodyText && !body.bodyHtml) {
-            console.warn("[MailPreviewWindow] 本地 body 为空，自动重试一次");
-            await new Promise((r) => setTimeout(r, 200));
-            body = await fetchEmailBody(
-              params.accountId,
-              params.uid,
-              params.folder,
-              url,
-            );
-          }
-          if (!cancelled) {
-            setMessage(() => ({
-              uid: params.uid,
-              accountId: params.accountId,
-              folder: params.folder,
-              subject: body.header?.subject ?? "",
-              fromAddress: body.header?.fromAddress ?? "",
-              fromName: body.header?.fromName ?? "",
-              toAddresses: body.header?.toAddresses ?? "",
-              ccAddresses: body.header?.ccAddresses ?? "",
-              date: body.header?.date ?? "",
-              hasAttachments: (body.attachments?.length ?? 0) > 0,
-              isRead: true,
-              isStarred: false,
-              rawSize: 0,
-              messageId: "",
-              attachments: body.attachments ?? [],
-              bodyText: body.bodyText,
-              bodyHtml: body.bodyHtml,
-              bodyFetched: true,
-            }));
-            // 打开即视为已读（与主窗口选中邮件行为一致）
-            // 本地优先：Rust 侧先更新 SQLite，IMAP \Seen 标志后台同步，不阻塞显示
-            const acc = accounts.find((a) => a.id === params.accountId);
-            if (acc) {
-              void markRead(url, acc, params.folder, params.uid, true).catch((e) => {
-                console.warn("[MailPreviewWindow] 标记已读失败:", e);
-              });
-            }
-          }
-        } catch (e) {
-          if (!cancelled) {
-            setError(`加载邮件失败: ${e instanceof Error ? e.message : String(e)}`);
-          }
+          setMessage({
+            uid: params.uid,
+            accountId: params.accountId,
+            folder: params.folder,
+            subject: body.header?.subject ?? "",
+            fromAddress: body.header?.fromAddress ?? "",
+            fromName: body.header?.fromName ?? "",
+            toAddresses: body.header?.toAddresses ?? "",
+            ccAddresses: body.header?.ccAddresses ?? "",
+            date: body.header?.date ?? "",
+            hasAttachments: (body.attachments?.length ?? 0) > 0,
+            isRead: true,
+            isStarred: false,
+            rawSize: 0,
+            messageId: "",
+            attachments: body.attachments ?? [],
+            bodyText: body.bodyText,
+            bodyHtml: body.bodyHtml,
+            bodyFetched: true,
+          });
+          // 本地优先：已读标志后台同步，不阻塞正文显示。
+          void resources.then(({ url, acc }) => {
+            if (!cancelled && acc) return markRead(url, acc, params.folder, params.uid, true);
+          }).catch((e) => {
+            console.warn("[MailPreviewWindow] 标记已读失败:", e);
+          });
         }
       } catch (e) {
-        if (!cancelled) setError(String(e));
+        console.warn("[MailPreviewWindow] 加载邮件失败:", e instanceof Error ? e.name : "Error");
+        if (!cancelled) setError("暂时无法加载这封邮件，请稍后重试。");
       } finally {
         if (!cancelled) setLoading(false);
       }
@@ -176,8 +182,7 @@ export function MailPreviewWindow() {
     return () => {
       cancelled = true;
     };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+  }, [params, loadAttempt]);
 
   // 同步窗口标题为邮件主题
   useEffect(() => {
@@ -241,8 +246,23 @@ export function MailPreviewWindow() {
 
   if (loading) {
     return (
-      <div className="flex h-screen items-center justify-center">
-        <Loader2 className="h-6 w-6 animate-spin text-muted-foreground" />
+      <div className="flex h-screen flex-col bg-background" aria-busy="true">
+        <div className="space-y-3 border-b border-border px-6 py-4" aria-hidden="true">
+          <div className="h-5 w-3/5 rounded bg-muted" />
+          <div className="h-3 w-2/5 rounded bg-muted" />
+          <div className="h-3 w-1/3 rounded bg-muted" />
+        </div>
+        <div className="space-y-3 px-6 py-4" aria-hidden="true">
+          <div className="h-3 w-full rounded bg-muted" />
+          <div className="h-3 w-full rounded bg-muted" />
+          <div className="h-3 w-4/5 rounded bg-muted" />
+        </div>
+        {showProgress && (
+          <div role="status" className="flex items-center gap-2 px-6 text-ui text-muted-foreground">
+            <Loader2 className="h-4 w-4 animate-spin" />
+            {bodyLoadingText}
+          </div>
+        )}
       </div>
     );
   }
@@ -253,15 +273,23 @@ export function MailPreviewWindow() {
         <p className="text-body text-muted-foreground">
           {error || "邮件不存在"}
         </p>
-        <Button variant="outline" size="sm" onClick={handleClose}>
-          关闭
-        </Button>
+        <div className="flex gap-2">
+          {params && (
+            <Button variant="outline" size="sm" onClick={() => setLoadAttempt((attempt) => attempt + 1)}>
+              重试
+            </Button>
+          )}
+          <Button variant="outline" size="sm" onClick={handleClose}>
+            关闭
+          </Button>
+        </div>
       </div>
     );
   }
 
   const fromName = message.fromName?.trim() || message.fromAddress;
   const attachments = message.attachments ?? [];
+  const attachmentsReady = Boolean(account && gatewayUrl);
 
   return (
     <div className="flex h-screen flex-col bg-background">
@@ -297,12 +325,13 @@ export function MailPreviewWindow() {
                       <div
                         className="group flex w-[220px] cursor-pointer items-center gap-2 rounded px-2 py-1 transition-colors hover:bg-muted/60"
                         onDoubleClick={() => void handleOpenAttachment(att)}
-                        title="双击打开"
+                        aria-disabled={!attachmentsReady}
+                        title={attachmentsReady ? "双击打开" : "正在准备附件..."}
                       >
                         {downloadingAtt === att.filename ? (
                           <Loader2 className="h-4 w-4 shrink-0 animate-spin text-muted-foreground" />
                         ) : (
-                          <Paperclip className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
+                          <FileSystemIcon name={att.filename} />
                         )}
                         <span
                           className="min-w-0 flex-1 truncate text-caption text-foreground"
@@ -316,11 +345,11 @@ export function MailPreviewWindow() {
                       </div>
                     </ContextMenuTrigger>
                     <ContextMenuContent className="min-w-[160px]">
-                      <ContextMenuItem onClick={() => void handleOpenAttachment(att)}>
+                      <ContextMenuItem disabled={!attachmentsReady} onClick={() => void handleOpenAttachment(att)}>
                         <ExternalLink className="mr-2 h-3.5 w-3.5" />
                         打开
                       </ContextMenuItem>
-                      <ContextMenuItem onClick={() => void handleDownloadAttachment(att.filename)}>
+                      <ContextMenuItem disabled={!attachmentsReady} onClick={() => void handleDownloadAttachment(att.filename)}>
                         <Download className="mr-2 h-3.5 w-3.5" />
                         另存为...
                       </ContextMenuItem>
