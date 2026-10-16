@@ -8,7 +8,6 @@ import {
   Pause,
   Play,
   FolderOpen,
-  FileIcon,
   CheckCircle2,
   AlertCircle,
   Loader2,
@@ -16,6 +15,7 @@ import {
   Trash2,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import { FileSystemIcon } from "@/components/ui/file-system-icon";
 import { EmptyState } from "@/components/ui/empty-state";
 import { Progress } from "@/components/ui/progress";
 import {
@@ -112,7 +112,7 @@ function DownloadCardItem({
   return (
     <div className="group flex items-center gap-3 px-3 py-2 hover:bg-muted/40 transition-colors">
       <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-md bg-muted/60">
-        <FileIcon className="h-4 w-4 text-muted-foreground" />
+        <FileSystemIcon name={filename} />
       </div>
 
       <div className="flex-1 min-w-0">

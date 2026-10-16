@@ -1095,12 +1095,6 @@ export function NotesView({
         });
         setNotice(`已从网页创建笔记：${title}`);
         setNoticeType("info");
-        void showNotification({
-          id: `url-note-${nextNote.id}`,
-          title: "网页转笔记完成",
-          body: title,
-          icon: "success",
-        }).catch(() => {});
       } catch (e) {
         const message = e instanceof Error ? e.message : "网页转笔记失败";
         notifyError(message);
@@ -1108,7 +1102,6 @@ export function NotesView({
           id: `url-note-error-${Date.now()}`,
           title: "网页转笔记失败",
           body: message,
-          icon: "error",
         }).catch(() => {});
       } finally {
         setUrlNoteLoading(false);

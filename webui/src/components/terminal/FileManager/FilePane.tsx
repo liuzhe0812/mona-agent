@@ -8,8 +8,6 @@ import {
   Trash2,
   Pencil,
   Download,
-  Folder,
-  File,
   Eye,
   EyeOff,
   Search,
@@ -22,6 +20,7 @@ import {
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import { FileSystemIcon } from "@/components/ui/file-system-icon";
 import {
   ContextMenu,
   ContextMenuContent,
@@ -29,7 +28,6 @@ import {
   ContextMenuSeparator,
   ContextMenuTrigger,
 } from "@/components/ui/context-menu";
-import { getCachedIcon, getIcon, extractExtension } from "./iconCache";
 
 export interface UnifiedFileItem {
   name: string;
@@ -116,77 +114,6 @@ function formatSize(size: number | null): string {
   return `${(size / (1024 * 1024 * 1024)).toFixed(1)} GB`;
 }
 
-function useFileIcons(files: UnifiedFileItem[]) {
-  const [resolved, setResolved] = useState<Record<string, string>>({});
-
-  useEffect(() => {
-    let cancelled = false;
-
-    const toLoad: UnifiedFileItem[] = [];
-    const cachedEntries: Record<string, string> = {};
-
-    for (const f of files) {
-      const ext = extractExtension(f.name);
-      const cached = getCachedIcon(ext, f.isDir);
-      if (cached) {
-        cachedEntries[f.path] = cached;
-      } else {
-        toLoad.push(f);
-      }
-    }
-
-    // Reset resolved to only contain cached icons for current files.
-    // This avoids accumulating stale entries from previous directories
-    // and prevents O(N²) spread operations from repeated setResolved calls.
-    setResolved(cachedEntries);
-
-    if (toLoad.length > 0) {
-      let idx = 0;
-      const batchSize = 6;
-
-      async function loadBatch() {
-        if (cancelled) return;
-        const batch = toLoad.slice(idx, idx + batchSize);
-        idx += batchSize;
-        if (batch.length === 0) return;
-
-        const entries: Record<string, string> = {};
-        const results = await Promise.allSettled(
-          batch.map(async (f) => {
-            const ext = extractExtension(f.name);
-            const dataUrl = await getIcon(ext, f.isDir);
-            return { path: f.path, dataUrl };
-          }),
-        );
-
-        if (cancelled) return;
-
-        for (const r of results) {
-          if (r.status === "fulfilled" && r.value.dataUrl) {
-            entries[r.value.path] = r.value.dataUrl;
-          }
-        }
-
-        if (Object.keys(entries).length > 0) {
-          setResolved((prev) => ({ ...prev, ...entries }));
-        }
-
-        if (idx < toLoad.length) {
-          requestAnimationFrame(loadBatch);
-        }
-      }
-
-      loadBatch();
-    }
-
-    return () => {
-      cancelled = true;
-    };
-  }, [files]);
-
-  return resolved;
-}
-
 export function FilePane({
   label,
   currentPath,
@@ -229,8 +156,6 @@ export function FilePane({
     : { icon: 28, name: 200, size: 80, modified: 140 };
   const [colWidths, setColWidths] = useState<Record<string, number>>(defaultColWidths);
   const resizeRef = useRef<{ key: string; startX: number; startWidth: number } | null>(null);
-
-  const iconMap = useFileIcons(files);
 
   const displayFiles = useMemo(() => {
     let result = files;
@@ -681,7 +606,6 @@ export function FilePane({
                       file={file}
                       side={side}
                       selected={selectedPaths.has(file.path)}
-                      iconSrc={iconMap[file.path]}
                       onSelect={(e) => handleSelect(file, index, e)}
                       onOpen={onOpen}
                       onDelete={onDelete}
@@ -772,7 +696,6 @@ function FileRow({
   file,
   side,
   selected,
-  iconSrc,
   onSelect,
   onOpen,
   onDelete,
@@ -793,7 +716,6 @@ function FileRow({
   file: UnifiedFileItem;
   side: "local" | "remote";
   selected: boolean;
-  iconSrc: string | undefined;
   onSelect: (e: React.MouseEvent) => void;
   onOpen: (file: UnifiedFileItem) => void;
   onDelete: (file: UnifiedFileItem) => void;
@@ -824,13 +746,7 @@ function FileRow({
           onDoubleClick={() => onOpen(file)}
         >
           <td className="px-1.5 py-1">
-            {iconSrc ? (
-              <img src={iconSrc} alt="" className="h-4 w-4" draggable={false} />
-            ) : file.isDir ? (
-              <Folder className="h-4 w-4 text-blue-400" />
-            ) : (
-              <File className="h-4 w-4 text-muted-foreground" />
-            )}
+            <FileSystemIcon name={file.name} isDirectory={file.isDir} />
           </td>
           <td className="truncate px-1.5 py-1 font-medium" title={file.name}>
             {file.name}

@@ -3,13 +3,11 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const localDesktopDir = vi.hoisted(() => vi.fn());
 const localListDir = vi.hoisted(() => vi.fn());
-const getFileTypeIcon = vi.hoisted(() => vi.fn());
 const sftpCanonicalize = vi.hoisted(() => vi.fn());
 const sftpList = vi.hoisted(() => vi.fn());
 const sftpRemove = vi.hoisted(() => vi.fn());
 
 vi.mock("../ipc", () => ({
-  getFileTypeIcon,
   localDesktopDir,
   localListDir,
   onTransferProgress: vi.fn().mockResolvedValue(() => {}),
@@ -19,11 +17,10 @@ vi.mock("../ipc", () => ({
 }));
 
 import { FileManager } from "./FileManager";
+import { getFileIconSource } from "@/lib/file-icons";
 
 describe("FileManager", () => {
   beforeEach(() => {
-    getFileTypeIcon.mockReset();
-    getFileTypeIcon.mockResolvedValue(null);
     localDesktopDir.mockResolvedValue("C:\\Users\\Test\\Desktop");
     localListDir.mockResolvedValue([]);
     sftpCanonicalize.mockResolvedValue("/root");
@@ -57,9 +54,7 @@ describe("FileManager", () => {
     expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
   });
 
-  it("uses the local system icon associated with a remote file extension", async () => {
-    const icon = "c3lzdGVtLWljb24=";
-    getFileTypeIcon.mockResolvedValue(icon);
+  it("uses the shared file icon parser for remote files", async () => {
     sftpList.mockResolvedValue([
       {
         name: "deploy.py",
@@ -76,10 +71,6 @@ describe("FileManager", () => {
     render(<FileManager sessionId="session-1" />);
 
     const file = await screen.findByText("deploy.py");
-    await waitFor(() => expect(getFileTypeIcon).toHaveBeenCalledWith("py", false));
-    expect(file.closest("tr")?.querySelector("img")).toHaveAttribute(
-      "src",
-      `data:image/png;base64,${icon}`,
-    );
+    expect(file.closest("tr")?.querySelector("img")).toHaveAttribute("src", getFileIconSource("deploy.py"));
   });
 });

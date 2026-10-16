@@ -1,11 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import {
   ChevronRight,
-  FileText,
-  Folder,
-  FolderOpen,
-  Image as ImageIcon,
-  FileCode,
   Package,
   AlertTriangle,
   FolderOpen as FolderOpenIcon,
@@ -37,16 +32,12 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { Button } from "@/components/ui/button";
+import { FileSystemIcon } from "@/components/ui/file-system-icon";
 import { Input } from "@/components/ui/input";
 import { EmptyState } from "@/components/ui/empty-state";
 import { RightSidebarToggleIcon } from "@/components/notes/RightSidebarToggleIcon";
 import { useFilePreviewStore, type PreviewScope } from "./filePreviewStore";
 import { isTauri, openPathWithSystemApp, revealItemInDir } from "@/lib/tauri";
-import {
-  getCachedIcon,
-  getIcon as getSystemIcon,
-  extractExtension,
-} from "@/components/terminal/FileManager/iconCache";
 import { cn } from "@/lib/utils";
 import type { DeliveredFile } from "@/lib/types";
 
@@ -110,63 +101,12 @@ interface FileSelection {
   onDelete: (files: DeliveredFile[]) => void;
 }
 
-const IMAGE_EXTS = new Set([".png", ".jpg", ".jpeg", ".gif", ".webp", ".bmp", ".svg"]);
-const CODE_EXTS = new Set([
-  ".py", ".js", ".ts", ".tsx", ".jsx", ".rs", ".go", ".java", ".c", ".cpp",
-  ".html", ".css", ".scss", ".json", ".yaml", ".yml", ".toml", ".sql",
-]);
 const EMPTY_COLLAPSED_PATHS: string[] = [];
-
-function extOf(name: string): string {
-  const dot = name.lastIndexOf(".");
-  return dot < 0 ? "" : name.slice(dot).toLowerCase();
-}
 
 /** Stable identity of a delivered file across scan results and live
  *  deliver events (absolute path preferred). */
 function fileKey(f: DeliveredFile): string {
   return f.absolute_path || f.path || f.name;
-}
-
-/** Fallback lucide icon when no system icon is available (non-Tauri or
- *  extraction failure). */
-function FallbackFileIcon({ name }: { name: string }) {
-  const ext = extOf(name);
-  if (IMAGE_EXTS.has(ext))
-    return <ImageIcon className="h-4 w-4 shrink-0 text-emerald-500" />;
-  if (CODE_EXTS.has(ext))
-    return <FileCode className="h-4 w-4 shrink-0 text-blue-500" />;
-  return <FileText className="h-4 w-4 shrink-0 text-sky-500" />;
-}
-
-/** Resolves the OS default file icon for a file name (by extension).
- *  Returns ``null`` until the async lookup completes; caller should
- *  render a fallback in the meantime. Empty ``name`` returns ``null``
- *  without triggering a lookup (used for directory rows). */
-function useFileIconUrl(name: string): string | null {
-  const [url, setUrl] = useState<string | null>(() => {
-    if (!isTauri() || !name) return null;
-    return getCachedIcon(extractExtension(name), false);
-  });
-  useEffect(() => {
-    if (!isTauri() || !name) {
-      setUrl(null);
-      return;
-    }
-    let cancelled = false;
-    const cached = getCachedIcon(extractExtension(name), false);
-    if (cached) {
-      setUrl(cached);
-      return;
-    }
-    getSystemIcon(extractExtension(name), false).then((dataUrl) => {
-      if (!cancelled && dataUrl) setUrl(dataUrl);
-    });
-    return () => {
-      cancelled = true;
-    };
-  }, [name]);
-  return url;
 }
 
 /** 将扁平的工作区条目列表构建为树形结构。
@@ -1023,10 +963,6 @@ function TreeRow({
 }) {
   const openPreview = useFilePreviewStore((s) => s.open);
   const indent = 8 + depth * 14;
-  // Hook must run unconditionally before any early return (Rules of Hooks).
-  const fileName = node.isDir ? "" : (node.file?.name ?? "");
-  const fileIconUrl = useFileIconUrl(fileName);
-
   if (node.isDir) {
     const isCollapsed = collapsed.has(node.path);
     const childCount = node.children?.length ?? 0;
@@ -1035,17 +971,15 @@ function TreeRow({
         type="button"
         variant="ghost"
         onClick={() => onToggle(node.path)}
+        aria-expanded={!isCollapsed}
         className={cn(
           "h-auto w-full justify-start gap-1 rounded-sm py-1 pr-2 text-left font-normal",
           "text-foreground/90 hover:bg-muted/60 hover:text-foreground",
         )}
         style={{ paddingLeft: indent }}
       >
-        {isCollapsed ? (
-          <Folder className="h-4 w-4 shrink-0 text-amber-500" />
-        ) : (
-          <FolderOpen className="h-4 w-4 shrink-0 text-amber-500" />
-        )}
+        <ChevronRight className={cn("h-3 w-3 shrink-0 text-muted-foreground", !isCollapsed && "rotate-90")} aria-hidden="true" />
+        <FileSystemIcon name={node.name} isDirectory expanded={!isCollapsed} />
         <span className="min-w-0 truncate font-medium">{node.name}</span>
         <span className="shrink-0 text-micro text-muted-foreground">
           {childCount}
@@ -1185,16 +1119,7 @@ function TreeRow({
             className="h-1.5 w-1.5 shrink-0 rounded-full bg-primary"
           />
         ) : null}
-        {fileIconUrl ? (
-          <img
-            src={fileIconUrl}
-            alt=""
-            className="h-4 w-4 shrink-0 object-contain"
-            draggable={false}
-          />
-        ) : (
-          <FallbackFileIcon name={file.name} />
-        )}
+        <FileSystemIcon name={file.name} />
         <span
           className={cn(
             "min-w-0 flex-1 truncate text-foreground",

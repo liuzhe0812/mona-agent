@@ -3,7 +3,8 @@
  */
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { FileText, Loader2 } from "lucide-react";
+import { Loader2 } from "lucide-react";
+import { FileSystemIcon } from "@/components/ui/file-system-icon";
 
 import { PdfPreview } from "@/components/common/PdfPreview";
 import { OfficeFileEditor, officeDocumentType } from "@/components/office/OfficeFileEditor";
@@ -160,7 +161,7 @@ function OfficeRawPreview({ path, knowledgeBaseId, agentId }: { path: string; kn
   return (
     <div className="flex min-h-0 flex-1 flex-col">
       <div className="flex h-9 shrink-0 items-center gap-2 border-b border-border/70 px-3">
-        <FileText className="h-3.5 w-3.5 text-muted-foreground" />
+        <FileSystemIcon name={rawRel} />
         <span className="min-w-0 flex-1 truncate text-[13px]">{rawRel}</span>
         <div ref={setToolbarContainer} className="flex shrink-0 items-center" />
       </div>
@@ -274,7 +275,7 @@ function TextRawPreview({
   return (
     <div className="flex min-h-0 flex-1 flex-col">
       <div className="flex h-9 shrink-0 items-center gap-2 border-b border-border/70 px-3">
-        <FileText className="h-3.5 w-3.5 text-muted-foreground" />
+        <FileSystemIcon name={rawRel} />
         <span className="truncate text-[13px]">{rawRel}</span>
       </div>
       <div className="min-h-0 flex-1 overflow-y-auto px-6 py-4 scrollbar-hover">
@@ -425,7 +426,7 @@ function WikiPreview({ path, knowledgeBaseId, agentId }: { path: string; knowled
   return (
     <div className="flex min-h-0 flex-1 flex-col">
       <div className="flex h-9 shrink-0 items-center gap-2 border-b border-border/70 px-3">
-        <FileText className="h-3.5 w-3.5 text-muted-foreground" />
+        <FileSystemIcon name={path} />
         <span className="truncate text-[13px]">{path}</span>
       </div>
       <div

@@ -1,5 +1,4 @@
 import { useCallback } from "react";
-import { FileText, Image, FileCode } from "lucide-react";
 import {
   ContextMenu,
   ContextMenuContent,
@@ -7,30 +6,11 @@ import {
   ContextMenuTrigger,
 } from "@/components/ui/context-menu";
 import { Button } from "@/components/ui/button";
+import { FileSystemIcon } from "@/components/ui/file-system-icon";
 import { isTauri, openPathWithSystemApp, revealItemInDir } from "@/lib/tauri";
 import { useFilePreviewStore, type PreviewScope } from "./filePreviewStore";
 import { cn } from "@/lib/utils";
 import type { DeliveredFile } from "@/lib/types";
-
-const IMAGE_EXTS = new Set([".png", ".jpg", ".jpeg", ".gif", ".webp", ".bmp", ".svg"]);
-const CODE_EXTS = new Set([
-  ".py", ".js", ".ts", ".tsx", ".jsx", ".rs", ".go", ".java", ".c", ".cpp",
-  ".html", ".css", ".scss", ".json", ".yaml", ".yml", ".toml", ".sql",
-]);
-
-function extOf(name: string): string {
-  const dot = name.lastIndexOf(".");
-  return dot < 0 ? "" : name.slice(dot).toLowerCase();
-}
-
-function KindIcon({ name }: { name: string }) {
-  const ext = extOf(name);
-  if (IMAGE_EXTS.has(ext))
-    return <Image className="h-4 w-4 shrink-0 text-emerald-500" />;
-  if (CODE_EXTS.has(ext))
-    return <FileCode className="h-4 w-4 shrink-0 text-blue-500" />;
-  return <FileText className="h-4 w-4 shrink-0 text-sky-500" />;
-}
 
 interface DeliveredFileCardProps {
   file: DeliveredFile;
@@ -74,7 +54,7 @@ export function DeliveredFileCard({
         className,
       )}
     >
-      <KindIcon name={file.name} />
+      <FileSystemIcon name={file.name} />
       <span className="min-w-0 truncate text-ui font-medium text-foreground">
         {file.name}
       </span>

@@ -2,9 +2,6 @@ import { useState, useCallback, useEffect, useRef } from "react";
 import {
   ChevronRight,
   ChevronDown,
-  Folder,
-  FolderOpen,
-  File,
   Loader2,
   RefreshCw,
   FilePlus,
@@ -30,6 +27,7 @@ import {
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
 import { Progress } from "@/components/ui/progress";
+import { FileSystemIcon } from "@/components/ui/file-system-icon";
 import {
   AlertDialog,
   AlertDialogAction,
@@ -41,11 +39,6 @@ import {
   AlertDialogTitle,
 } from "@/components/ui/alert-dialog";
 import { useIdeStore, type FileTreeNode } from "./useIdeStore";
-import {
-  getCachedIcon,
-  getIcon,
-  extractExtension,
-} from "../terminal/FileManager/iconCache";
 
 /* ------------------------------------------------------------------ */
 /*  Inline rename / create input                                      */
@@ -90,48 +83,18 @@ function InlineInput({
 /* ------------------------------------------------------------------ */
 
 function FileIcon({ node, expanded }: { node: FileTreeNode; expanded: boolean }) {
-  const [iconSrc, setIconSrc] = useState<string | null>(() => {
-    if (node.isLoading || node.isDir) return null;
-    const ext = extractExtension(node.name);
-    return getCachedIcon(ext, false);
-  });
-
-  useEffect(() => {
-    if (node.isLoading || node.isDir) return;
-    const ext = extractExtension(node.name);
-    let cancelled = false;
-    getIcon(ext, false).then((url) => {
-      if (!cancelled && url) setIconSrc(url);
-    });
-    return () => {
-      cancelled = true;
-    };
-  }, [node.name, node.isDir, node.isLoading]);
-
   if (node.isLoading) {
     return <Loader2 className="mr-1.5 h-4 w-4 shrink-0 animate-spin text-muted-foreground" />;
   }
 
-  if (node.isDir) {
-    return expanded ? (
-      <FolderOpen className="mr-1.5 h-4 w-4 shrink-0 text-warning" />
-    ) : (
-      <Folder className="mr-1.5 h-4 w-4 shrink-0 text-warning" />
-    );
-  }
-
-  if (iconSrc) {
-    return (
-      <img
-        src={iconSrc}
-        alt=""
-        className="mr-1.5 h-4 w-4 shrink-0"
-        draggable={false}
-      />
-    );
-  }
-
-  return <File className="mr-1.5 h-4 w-4 shrink-0 text-muted-foreground" />;
+  return (
+    <FileSystemIcon
+      name={node.name}
+      isDirectory={node.isDir}
+      expanded={expanded}
+      className="mr-1.5"
+    />
+  );
 }
 
 /* ------------------------------------------------------------------ */

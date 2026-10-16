@@ -6,8 +6,6 @@ import { useCallback, useEffect, useState, forwardRef, useImperativeHandle } fro
 import {
   BookOpen,
   ChevronRight,
-  FileText,
-  Folder,
   Loader2,
   Pencil,
   Plus,
@@ -24,6 +22,7 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { Button } from "@/components/ui/button";
+import { FileSystemIcon } from "@/components/ui/file-system-icon";
 import { Input } from "@/components/ui/input";
 import { cn } from "@/lib/utils";
 import { PromptDialog, ConfirmDialog } from "../NotesDialogs";
@@ -648,7 +647,7 @@ export const MaterialsSidebar = forwardRef<MaterialsSidebarHandle, MaterialsSide
                 className="flex w-full flex-col gap-0.5 px-3 py-1.5 text-left hover:bg-accent"
               >
                 <div className="flex items-center gap-1.5">
-                  <FileText className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
+                  <FileSystemIcon name={r.path} />
                   <span className="min-w-0 flex-1 truncate text-caption">{r.title}</span>
                   {r.locationLabel ? (
                     <span className="shrink-0 rounded-md bg-accent px-1 py-px text-[10px] text-muted-foreground">
@@ -932,7 +931,7 @@ function MoveTargetDialog({ open, srcPath, onConfirm, onOpenChange }: MoveTarget
                 isDisabledTarget("") && "opacity-40",
               )}
             >
-              <Folder className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
+              <FileSystemIcon name="资料库根目录" isDirectory />
               <span className="flex-1">资料库根目录</span>
             </button>
             {loading ? (
@@ -961,7 +960,7 @@ function MoveTargetDialog({ open, srcPath, onConfirm, onOpenChange }: MoveTarget
                       disabled && "opacity-40",
                     )}
                   >
-                    <Folder className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
+                    <FileSystemIcon name={name} isDirectory />
                     <span className="min-w-0 flex-1 truncate">{name}</span>
                     <span className="shrink-0 text-[10px] text-muted-foreground truncate">
                       {d}

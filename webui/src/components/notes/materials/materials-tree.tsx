@@ -5,10 +5,8 @@
 import { useCallback, useEffect, useState } from "react";
 import {
   ChevronRight,
-  FileText,
   FolderInput,
   FolderPlus,
-  Folder,
   RefreshCw,
   Trash2,
   Upload,
@@ -23,8 +21,7 @@ import {
   ContextMenuTrigger,
 } from "@/components/ui/context-menu";
 import { cn } from "@/lib/utils";
-import { isTauri } from "@/lib/tauri";
-import { getFileTypeIcon } from "@/components/terminal/ipc";
+import { FileSystemIcon } from "@/components/ui/file-system-icon";
 import type { MaterialsExtractStatus, MaterialsFileEntry } from "@/lib/materials-api";
 import type { MaterialsSelection, TreeNode } from "./types";
 
@@ -116,23 +113,7 @@ export function TreeRow(props: TreeRowProps) {
   const isExpanded = expandedPaths.has(node.entry.path);
   const [children, setChildren] = useState<TreeNode[]>([]);
   const [childrenLoaded, setChildrenLoaded] = useState(false);
-  const [iconData, setIconData] = useState<string | null>(null);
   const [dragOver, setDragOver] = useState(false);
-
-  // 加载系统默认应用图标（仅文件类型）
-  useEffect(() => {
-    if (isDir || !isTauri()) return;
-    let cancelled = false;
-    const ext = node.entry.name.split(".").pop() ?? "";
-    getFileTypeIcon(ext, false)
-      .then((data) => {
-        if (!cancelled) setIconData(data);
-      })
-      .catch(() => {});
-    return () => {
-      cancelled = true;
-    };
-  }, [isDir, node.entry.name]);
 
   const loadAndToggle = useCallback(async () => {
     if (isDir && !childrenLoaded) {
@@ -222,18 +203,12 @@ export function TreeRow(props: TreeRowProps) {
             ) : (
               <span className="inline-block w-3.5 shrink-0" />
             )}
-            {isDir ? (
-              <Folder className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
-            ) : iconData ? (
-              <img
-                src={`data:image/png;base64,${iconData}`}
-                alt=""
-                className="h-4 w-4 shrink-0 object-contain"
-                draggable={false}
-              />
-            ) : (
-              <FileText className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
-            )}
+            <FileSystemIcon
+              name={node.entry.name}
+              isDirectory={isDir}
+              expanded={isExpanded}
+              className="shrink-0"
+            />
             <span className="min-w-0 flex-1 truncate">{node.entry.name}</span>
             {!isDir && statusLabel(node.entry.extractStatus) ? (
               <span className={cn(

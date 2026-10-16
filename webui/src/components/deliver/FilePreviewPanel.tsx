@@ -4,13 +4,9 @@ import {
   ChevronDown,
   ChevronLeft,
   ChevronUp,
-  FileText,
-  Image as ImageIcon,
-  FileCode,
   File,
   Maximize2,
   Minimize2,
-  PlaySquare,
 } from "lucide-react";
 import { useFilePreviewStore, type PreviewScope } from "./filePreviewStore";
 import { isTauri, openPathWithSystemApp, revealItemInDir } from "@/lib/tauri";
@@ -22,6 +18,7 @@ import { CodeBlock } from "@/components/CodeBlock";
 import MarkdownTextRenderer from "@/components/MarkdownTextRenderer";
 import { Button } from "@/components/ui/button";
 import { EmptyState } from "@/components/ui/empty-state";
+import { FileSystemIcon } from "@/components/ui/file-system-icon";
 import { getCodeLanguage } from "@/lib/file-types";
 import type { DeliveredFile } from "@/lib/types";
 
@@ -226,15 +223,6 @@ async function inlineHtmlResources(
     }),
   );
   return `<!doctype html>${document.documentElement.outerHTML}`;
-}
-
-function FileIcon({ file }: { file: DeliveredFile }) {
-  const ext = extOf(file.name);
-  if (IMAGE_EXTS.has(ext)) return <ImageIcon className="h-4 w-4" />;
-  if (VIDEO_EXTS.has(ext)) return <PlaySquare className="h-4 w-4" />;
-  if ([".py", ".js", ".ts", ".tsx", ".jsx", ".rs", ".go"].includes(ext))
-    return <FileCode className="h-4 w-4" />;
-  return <FileText className="h-4 w-4" />;
 }
 
 export function FilePreviewPanel({
@@ -452,7 +440,7 @@ export function FilePreviewPanel({
       >
         <ChevronLeft className="h-4 w-4" />
       </Button>
-      <FileIcon file={file} />
+      <FileSystemIcon name={file.name} />
       <span className="flex-1 truncate text-body font-medium">{file.name}</span>
       <span className="shrink-0 text-micro text-muted-foreground">{file.size_human}</span>
       {canNav ? (
