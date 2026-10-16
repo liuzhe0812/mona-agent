@@ -55,6 +55,11 @@ const EXCLUDE_FILE = [
 /** 路径白名单：只覆盖 refactor-plan §3.3 定义的真实特殊区域 */
 const ALLOWLIST = [
   {
+    path: "src/components/visualizer/widget-sandbox.ts",
+    categories: ["hex-color"],
+    reason: "隔离图形文档的 WorkBuddy 兼容数据色板；聊天组件外壳使用 Mona 语义 Token",
+  },
+  {
     path: "src/components/development/zcode",
     categories: "*",
     reason: "用户要求直接保留 ZCode 首版实现；隔离的第三方源码及必要宿主适配，来源和哈希见同目录 NOTICE",
@@ -105,9 +110,9 @@ const ALLOWLIST = [
     reason: "视频风格令牌编辑器的颜色值、范围滑杆与版本单选控件",
   },
   {
-    path: "src/components/doc/video/ProducingPhase.tsx",
+    path: "src/components/ui/slider.tsx",
     categories: ["native-input"],
-    reason: "场景精细时间轴的原生 range 播放头，保留键盘与无障碍语义",
+    reason: "共享 Slider 内部封装原生 range，统一语义 Token、键盘与无障碍行为",
   },
   {
     path: "src/lib/codemirror",

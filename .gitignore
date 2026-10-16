@@ -66,6 +66,8 @@ design-assets/
 !/tests/development/test_native_collaboration_flow.py
 !/tests/development/test_collaboration_steering.py
 !/tests/development/test_permissions.py
+!/tests/development/test_coding_exec_sessions.py
+!/tests/development/test_background_commands.py
 !/tests/development/test_sandbox.py
 !/tests/development/test_fork.py
 !/tests/development/test_fork_native.py
@@ -85,6 +87,10 @@ design-assets/
 !/tests/test_video_render_transitions.py
 !/tests/test_video_preview_playback.py
 !/tests/test_video_audio_render.py
+!/tests/test_video_encoding_progress.py
+!/tests/test_video_postprocess.py
+!/tests/test_video_style_authoring.py
+!/tests/test_video_style_authoring_api.py
 !/tests/test_tts_timing.py
 !/tests/test_video_series_api.py
 !/tests/test_video_project_workflow.py
@@ -120,8 +126,10 @@ design-assets/
 !tests/tools/test_scientific_tool.py
 !tests/tools/test_scientific_backend.py
 !tests/tools/test_video_workbench.py
+!tests/tools/test_visualizer.py
 !/tests/agent/
 /tests/agent/*
+!/tests/agent/test_video_model_binding.py
 !/tests/agent/test_shared_room_context.py
 !tests/agent/test_consolidation_backoff.py
 !tests/agent/conftest.py
@@ -130,6 +138,8 @@ design-assets/
 !tests/agent/test_loop_consolidation_tokens.py
 !tests/agent/test_max_messages_config.py
 !tests/agent/test_session_manager_history.py
+!tests/agent/test_session_atomic_save.py
+!tests/agent/test_loop_dispatch_errors.py
 !tests/agent/test_auto_compact.py
 !tests/agent/test_message_flow_recovery.py
 !tests/agent/test_tool_dispatch_recovery.py
@@ -150,11 +160,14 @@ design-assets/
 !tests/agent/test_office_review.py
 !tests/agent/test_canvas_tool.py
 !tests/agent/test_runner_persistence.py
+!tests/agent/test_inline_widget_pipeline.py
 !tests/agent/test_loop_save_turn.py
 !tests/agent/test_attachment_access.py
 !tests/agent/test_pdf_visual.py
 !tests/agent/test_agent_package_store.py
 !tests/agent/test_agent_management.py
+!tests/agent/test_agent_model_binding_config.py
+!tests/agent/test_agent_model_binding_runtime.py
 !tests/agent/test_expert_catalog.py
 !tests/agent/test_expert_installer.py
 !tests/agent/test_expert_jobs.py
@@ -217,7 +230,9 @@ design-assets/
 !tests/evals/canvas/**
 !/tests/channels/
 /tests/channels/*
+!/tests/channels/test_video_model_binding.py
 !tests/channels/test_websocket_channel.py
+!tests/channels/test_agent_model_binding.py
 !tests/channels/test_websocket_file_upload.py
 !tests/channels/test_file_preview_performance.py
 !/tests/office/
@@ -236,6 +251,7 @@ design-assets/
 !tests/runtime/test_runtime_jobs.py
 !tests/runtime/test_skill_env.py
 !tests/runtime/test_project_env.py
+!tests/runtime/test_project_env_process.py
 !tests/runtime/test_agent_env.py
 !/tests/distill/
 /tests/distill/*
@@ -459,6 +475,8 @@ webui/task-test.png
 /.workbuddy/
 /cron/
 /output/
+!/webui/office-editor/scripts/import-dashi-presets.mjs
+!/webui/office-editor/scripts/pack-dashi-media.py
 /renders/
 /sessions/
 /src-tauri/target-*/
@@ -467,3 +485,11 @@ webui/task-test.png
 !/tests/test_video_voice_preview.py
 !/webui/scripts/build-video-runtime.mjs
 !/docs/design/video-director-motion-redesign.md
+!/docs/design/video-workbench-rebuild.md
+!/docs/design/video-custom-style-authoring.md
+!/docs/design/video-workbench-model-selection.md
+!/docs/design/video-custom-style-ui.png
+!/docs/plans/video-custom-style-acceptance-20261015.md
+!/tests/test_video_audio.py
+!/tests/test_video_audio_api.py
+!/docs/plans/video-workbench-rebuild-acceptance-20261015.md

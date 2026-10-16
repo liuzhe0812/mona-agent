@@ -191,10 +191,6 @@
     "src/components/notes/NotesView.tsx": {
       "hex-color": 12
     },
-    "src/components/notification/NotificationWindow.tsx": {
-      "arbitrary-text": 3,
-      "native-button": 1
-    },
     "src/components/PaymentDialog.tsx": {
       "hex-color": 2
     },
