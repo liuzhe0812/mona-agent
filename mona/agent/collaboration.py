@@ -46,6 +46,19 @@ class DiscussionMode(str, Enum):
 
     DEBATE = "debate"
     DISCUSSION = "discussion"
+    QUARREL = "quarrel"
+
+
+QUARREL_INSTRUCTION = (
+    "这是按给定背景演的一场吵架，像熟人拌嘴一样有火气、有来有回。"
+    "以第一人称说话，按角色在背景中的关系和经历接话，不要替其他角色编台词，也别出戏成旁观者分析。"
+    "每次只说一到三句，揪住对方刚才一个具体说法，直接反问、吐槽或反驳，再用一句理由撑住自己的话。"
+    "本场还没人发言时，就从背景里的冲突开口；别编造背景之外的关键情节或对方没说过的话。"
+    "可以语气冲、带点调侃，但火气只冲观点和具体事情，不做人身攻击、威胁或歧视。"
+    "角色只在当前场景生效，不用修改自己的名字或长期设定，也不用固定站正方或反方。"
+    "直接接话，别先客套夸人，别反复介绍自己扮演谁，更别写成长篇辩论稿。"
+    "禁止编号、分点、标题、表格和书面汇报，别硬凑共识或替全场总结。"
+)
 
 
 class DebateStyle(str, Enum):
@@ -135,7 +148,8 @@ def infer_collaboration_mode(
 
 def _agent_task(agent_id: str, content: str, role: str) -> str:
     return (
-        f"你是本步骤的 Agent {agent_id}，职责是{role}。"
+        f"你是本步骤的 Agent {agent_id}，负责{role}。"
+        "请像在群聊里接话一样，用自然口语说清你负责的部分；不要编号、分点、加标题或写成报告。"
         f"只完成属于 {agent_id} 的任务，不要代替其他 Agent 作答。"
         f"用户原始要求：{content}"
     )
@@ -199,8 +213,9 @@ def build_collaboration_workflow(
                 (
                     f"你是本步骤的 Agent {MONA_AGENT_ID}，职责是唯一最终总结。"
                     f"只完成属于 {MONA_AGENT_ID} 的任务，不要代替其他 Agent 作答。"
-                    f"仅根据上游步骤 {', '.join(partner_step_ids)} 的结果，"
-                    "给出一份唯一、清晰的最终结论；保留重要分歧、失败和缺失信息。"
+                    f"只看上游步骤 {', '.join(partner_step_ids)} 的结果，"
+                    "用群聊里的自然口语讲清唯一的最终结论，也把重要分歧、失败和缺失信息说出来。"
+                    "不要编号、分点、加标题或写成报告。"
                     "不要重新代答上游 Agent 的独立任务，也不要创建新的协作任务。"
                     f"用户原始要求：{text}"
                 ),
@@ -255,6 +270,7 @@ def build_discussion_workflow(
     mode: DiscussionMode | str,
     max_rounds: int,
     positions: Mapping[str, str] | None = None,
+    roles: Mapping[str, str] | None = None,
     styles: Mapping[str, str] | None = None,
     summary_agent_id: str | None = MONA_AGENT_ID,
 ) -> WorkflowDefinition:
@@ -284,7 +300,11 @@ def build_discussion_workflow(
     raw_positions = positions or {}
     if not isinstance(raw_positions, Mapping):
         raise ValueError("positions must be an object")
+    raw_roles = roles or {}
+    if not isinstance(raw_roles, Mapping):
+        raise ValueError("roles must be an object")
     normalized_positions: dict[str, str] = {}
+    normalized_roles: dict[str, str] = {}
     for agent_id in targets:
         raw_position = raw_positions.get(agent_id, "")
         if raw_position is not None and not isinstance(raw_position, str):
@@ -293,11 +313,18 @@ def build_discussion_workflow(
         if selected_mode is DiscussionMode.DEBATE and not position:
             raise ValueError(f"debate position is required for {agent_id!r}")
         normalized_positions[agent_id] = position
+        raw_role = raw_roles.get(agent_id, "")
+        if raw_role is not None and not isinstance(raw_role, str):
+            raise ValueError(f"role for {agent_id!r} must be a string")
+        character_role = (raw_role or "").strip()
+        if selected_mode is DiscussionMode.QUARREL and not character_role:
+            raise ValueError(f"quarrel role is required for {agent_id!r}")
+        normalized_roles[agent_id] = character_role
 
     raw_styles = styles or {}
     if not isinstance(raw_styles, Mapping):
         raise ValueError("styles must be an object")
-    if selected_mode is DiscussionMode.DISCUSSION and raw_styles:
+    if selected_mode is not DiscussionMode.DEBATE and raw_styles:
         raise ValueError("debate styles are only available in debate mode")
     for raw_agent_id, raw_style in raw_styles.items():
         if not isinstance(raw_agent_id, str) or raw_agent_id not in targets:
@@ -310,43 +337,53 @@ def build_discussion_workflow(
             raise ValueError(f"unsupported debate style {raw_style!r}") from exc
 
     text = topic.strip()
+    context_label = "背景" if selected_mode is DiscussionMode.QUARREL else "议题"
+    activity = {
+        DiscussionMode.DEBATE: "结构化辩论",
+        DiscussionMode.DISCUSSION: "结构化讨论",
+        DiscussionMode.QUARREL: "吵架",
+    }[selected_mode]
     steps: list[WorkflowStep] = []
     previous_step_id: str | None = None
     first_round_step_ids: list[str] = []
     for round_number in range(1, max_rounds + 1):
         for speaker_number, agent_id in enumerate(targets, start=1):
             step_id = f"round-{round_number}-speaker-{speaker_number}"
-            if selected_mode is DiscussionMode.DEBATE:
+            if selected_mode is DiscussionMode.QUARREL:
+                role = f"你在这场吵架里扮演“{normalized_roles[agent_id]}”。{QUARREL_INSTRUCTION}"
+                if round_number == max_rounds:
+                    role += "这是最后一轮，接住对方的话再回一句就收住，不用正式结辩，也别强行和解。"
+            elif selected_mode is DiscussionMode.DEBATE:
                 role = (
-                    f"你的唯一立场是：{normalized_positions[agent_id]}。"
-                    "第一句话必须直接重申这一选择，之后只能为该立场辩护并反驳对方。"
-                    "不得客观分析双方、不得中立、不得改换立场，也不得建议折中或兼得。"
+                    f"你在这场辩论里只站在“{normalized_positions[agent_id]}”这一边。"
+                    "开口就自然说清自己站哪边，接着讲理由，也认真回应对方。"
+                    "不要变成中立评析、替双方各说一遍、临时改立场，或建议折中、兼得。"
                 )
             else:
                 if round_number == 1:
                     role = (
-                        "这是独立发散阶段。请从自身专业角色出发独立提出不同方向，"
-                        "暂不评价其他参与者；给出方案价值、关键组成和主要约束。"
+                        "这是独立发散阶段。先从自己的专业角度聊聊几个确实不同的方向，"
+                        "这一轮先不评价或复述其他参与者；顺着说清各方向为什么值得考虑、大概怎么做和现实限制。"
                     )
                 elif round_number == max_rounds:
                     role = (
-                        "这是方案收敛阶段。停止继续增加无关分支，综合此前有效观点，"
-                        "提出推荐方案、关键取舍、实施步骤和仍待确认的问题。"
+                        "这是方案收敛阶段。别再增加无关分支，把此前有效的想法收拢起来，"
+                        "明确推荐一个可执行的办法，并自然讲清选择原因、需要做什么、有哪些取舍和待确认的问题。"
                     )
                 else:
                     role = (
-                        "这是交叉评审阶段。明确选择此前至少一个方案进行评价，"
-                        "指出优势、风险和冲突，去除重复内容并尝试组合互补部分。"
+                        "这是交叉评审阶段。挑此前至少一个具体方案接着聊，说说它的优点、风险和冲突；"
+                        "把重复想法收一收，也看看互补的部分能不能合起来。别只附和，也别另开无关方向。"
                     )
             task = (
-                f"你正在参加群聊中的结构化{('辩论' if selected_mode is DiscussionMode.DEBATE else '讨论')}。"
-                f"议题：{text}\n"
-                f"当前是第 {round_number}/{max_rounds} 轮，你是本轮第 {speaker_number}/{len(targets)} 位发言者。"
-                f"{role}阅读共享群聊快照中的此前发言后直接发表本轮观点。"
-                "不要代替其他 Agent 发言，不要提前生成全场总结。"
+                f"你正在群聊里参加这场{activity}，{context_label}是：{text}\n"
+                f"现在到第 {round_number}/{max_rounds} 轮，轮到你（第 {speaker_number}/{len(targets)} 位）接着聊。"
+                "先看看共享群聊里大家实际说过什么，再自然地接上。每次发言都要口语化，"
+                "不要编号、分点、加标题或写成报告，也不用复述轮次或发言顺序；直接说本轮该说的内容。"
+                f"{role}只代表自己发言，别替其他 Agent 说话，也别提前替全场总结。"
                 + (
-                    "这是最后一轮结辩：请收束本方完整论证，回应对方最关键的攻击，"
-                    "比较双方的判断标准并说明本方为何应当获胜；原则上不要引入此前未铺垫的新主论点。"
+                    "这是最后一轮结辩：把本方已经讲过的理由自然收住，接住对方最有力的质疑，"
+                    "说清双方判断标准的区别，以及为什么按这个标准本方更占理；原则上别临时引入此前没铺垫的新主张。"
                     if selected_mode is DiscussionMode.DEBATE and round_number == max_rounds
                     else ""
                 )
@@ -376,21 +413,28 @@ def build_discussion_workflow(
 
     if selected_mode is DiscussionMode.DEBATE:
         final_task = (
-            "你是本次结构化辩论的中立裁判。"
-            f"议题：{text}\n"
-            "请只根据共享群聊中的实际发言完成裁决：先公平综述双方核心主张和主要交锋，"
-            "再从论点清晰度、论据质量、回应对方的有效性、前后一致性四个方面进行比较，"
-            "最后明确判定哪一方更胜一筹并解释决定性原因。"
-            "只有双方确实势均力敌时才可判平；不得回避裁决，也不得补写未出现的观点。"
+            "你是这场辩论的中立裁判，来给大家做裁决，议题是："
+            f"{text}。只看群聊里双方实际说过的话，像在群里收个尾一样，用口语讲清双方在争什么、各自最有力的理由和关键交锋。"
+            "再说说哪边的理由更站得住脚，判断时留意论点清不清楚、论据靠不靠谱、有没有接住对方、前后是否一致。"
+            "只有双方实际表现确实难分高下时才判平。结尾按“裁决：<胜方立场>胜”或“裁决：平局”的格式作出裁决；"
+            "其中“<胜方立场>”是占位符，必须替换成实际获胜的立场，不能照抄占位符，并说明决定性理由。"
+            "不要回避判定、补造没出现过的观点，也不要编号、分点、加标题或写成报告。"
         )
         final_output = "中立裁判结论（双方综述、比较评估与胜负判定）"
+    elif selected_mode is DiscussionMode.QUARREL:
+        final_task = (
+            f"你来给这场角色吵架收个尾，背景是：{text}。"
+            "只根据给定背景和群里的实际对话，用两三句口语讲清这些角色为什么吵起来、各自在意什么，还有哪些事没说开。"
+            "别硬凑共识、教训参与者或套用正式辩论的裁决，也别补造没人说过的观点。"
+            "不要编号、分点、加标题或写成书面报告。"
+        )
+        final_output = "吵架收尾（角色冲突与未说开的事）"
     else:
         final_task = (
-            "你是本次结构化方案讨论的总结者。"
-            f"议题：{text}\n"
-            "请根据共享群聊中各 Agent 的实际发言，整理一份可执行的最终方案，依次说明："
-            "目标与约束、候选方向、采用的最终方案、核心组成、关键取舍、实施步骤、"
-            "主要风险、待确认问题。不要补写参与者未表达过的观点。"
+            "你来帮大家把这场讨论收个尾，议题是："
+            f"{text}。只根据群里各 Agent 实际说过的话，用自然口语讲清大家想解决什么、最后推荐什么办法、为什么这样选、"
+            "接下来怎么推进，以及还要留意的风险和没确认的问题。把这些顺着说出来，不要照目录逐项念；"
+            "不要编号、分点、加标题或写成书面报告，也别补造参与者没提过的观点。"
         )
         final_output = "最终方案（目标、方案、取舍、步骤、风险与待确认问题）"
     if summary_agent is not None:

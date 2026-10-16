@@ -56,6 +56,19 @@ const DISCUSSION_RUN: WorkflowRun = {
   },
 };
 
+const QUARREL_RUN: WorkflowRun = {
+  ...DISCUSSION_RUN,
+  inputs: {
+    discussion: {
+      mode: "quarrel",
+      maxRounds: 2,
+      participantIds: ["mona", INTERNAL_AGENT.id],
+      positions: { mona: "救猫", [INTERNAL_AGENT.id]: "救画" },
+      summaryAgentId: null,
+    },
+  },
+};
+
 vi.mock("@/lib/api", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@/lib/api")>();
   return {
@@ -128,5 +141,22 @@ describe("RoomContextPanel (stock-module design §4.4)", () => {
     expect(screen.getByText("20%")).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "End topic" })).toBeInTheDocument();
     expect(screen.queryByText("unused static goal")).not.toBeInTheDocument();
+  });
+
+  it("keeps quarrel runs labeled as quarrel in room progress", async () => {
+    render(
+      <RoomContextPanel
+        chatId="room-1"
+        conversation={{
+          type: "room",
+          title: "Quarrel room",
+          agentIds: ["mona", INTERNAL_AGENT.id],
+        }}
+        discussionRun={QUARREL_RUN}
+      />,
+    );
+
+    expect(await screen.findByText("Quarrel")).toBeInTheDocument();
+    expect(screen.queryByText("Open discussion")).not.toBeInTheDocument();
   });
 });

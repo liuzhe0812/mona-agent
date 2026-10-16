@@ -915,10 +915,106 @@ def test_discussion_workflow_rotates_speakers_then_summarizes() -> None:
     ]
     assert "优先增长" in speaker_steps[0].task
     assert "优先利润" in speaker_steps[1].task
+    assert "自然地接上" in speaker_steps[0].task
+    assert "不要编号、分点、加标题或写成报告" in speaker_steps[0].task
     assert workflow.steps[-1].id == "summary"
     assert workflow.steps[-1].agent_id == MONA_AGENT_ID
     assert "中立裁判" in workflow.steps[-1].task
-    assert "明确判定哪一方更胜一筹" in workflow.steps[-1].task
+    assert "哪边的理由更站得住脚" in workflow.steps[-1].task
+    assert "裁决：<胜方立场>胜" in workflow.steps[-1].task
+    assert "必须替换成实际获胜的立场" in workflow.steps[-1].task
+
+
+def test_quarrel_uses_background_and_character_roles_with_serial_short_replies() -> None:
+    workflow = build_discussion_workflow(
+        ROOM_ID,
+        "张三借了李四的车没按时归还，两人吵了起来",
+        [AGENT_A, AGENT_B],
+        mode=DiscussionMode.QUARREL,
+        max_rounds=2,
+        roles={AGENT_A: "张三", AGENT_B: "李四"},
+        summary_agent_id=None,
+    )
+
+    assert workflow.id.startswith("discussion-quarrel-")
+    assert [step.agent_id for step in workflow.steps] == [AGENT_A, AGENT_B, AGENT_A, AGENT_B]
+    assert [step.depends_on for step in workflow.steps] == [
+        [], ["round-1-speaker-1"], ["round-1-speaker-2"], ["round-2-speaker-1"],
+    ]
+    assert all("每次只说一到三句" in step.task for step in workflow.steps)
+    assert all("火气只冲观点" in step.task for step in workflow.steps)
+    assert "背景是：张三借了李四的车没按时归还" in workflow.steps[0].task
+    assert "你在这场吵架里扮演“张三”" in workflow.steps[0].task
+    assert "你在这场吵架里扮演“李四”" in workflow.steps[1].task
+    assert all("以第一人称" in step.task for step in workflow.steps)
+    assert all("站在“" not in step.task for step in workflow.steps)
+    assert "这是最后一轮" not in workflow.steps[0].task
+    assert "不用正式结辩" in workflow.steps[-1].task
+    assert "最后一轮结辩" not in workflow.steps[-1].task
+
+
+def test_quarrel_requires_roles_and_does_not_accept_debate_styles() -> None:
+    with pytest.raises(ValueError, match="quarrel role is required"):
+        build_discussion_workflow(
+            ROOM_ID, "张三和李四吵架", [AGENT_A, AGENT_B], mode="quarrel", max_rounds=1,
+            roles={AGENT_A: "张三"},
+        )
+    with pytest.raises(ValueError, match="quarrel role is required"):
+        build_discussion_workflow(
+            ROOM_ID, "张三和李四吵架", [AGENT_A, AGENT_B], mode="quarrel", max_rounds=1,
+            positions={AGENT_A: "支持", AGENT_B: "反对"},
+        )
+    with pytest.raises(ValueError, match="roles must be an object"):
+        build_discussion_workflow(
+            ROOM_ID, "张三和李四吵架", [AGENT_A, AGENT_B], mode="quarrel", max_rounds=1,
+            roles=["张三", "李四"],
+        )
+    with pytest.raises(ValueError, match="role .* must be a string"):
+        build_discussion_workflow(
+            ROOM_ID, "张三和李四吵架", [AGENT_A, AGENT_B], mode="quarrel", max_rounds=1,
+            roles={AGENT_A: 3, AGENT_B: "李四"},
+        )
+    with pytest.raises(ValueError, match="only available in debate mode"):
+        build_discussion_workflow(
+            ROOM_ID, "张三和李四吵架", [AGENT_A, AGENT_B], mode="quarrel", max_rounds=1,
+            roles={AGENT_A: "张三", AGENT_B: "李四"},
+            styles={AGENT_A: "everyday_spicy"},
+        )
+
+
+def test_quarrel_scene_and_wrapup_do_not_become_a_formal_debate() -> None:
+    roles = {AGENT_A: "张三", AGENT_B: "李四"}
+    workflow = build_discussion_workflow(
+        ROOM_ID, "张三借了李四的车没按时归还，两人吵了起来", [AGENT_A, AGENT_B], mode="quarrel", max_rounds=2,
+        roles=roles,
+    )
+    run = SimpleNamespace(workflow=workflow, inputs={"discussion": {
+        "mode": "quarrel", "maxRounds": 2, "participantIds": [AGENT_A, AGENT_B],
+        "positions": {}, "roles": roles, "styles": {},
+    }})
+
+    first = SubagentManager._discussion_system_instruction(run, workflow.steps[0])
+    last = SubagentManager._discussion_system_instruction(run, workflow.steps[-2])
+    wrapup = SubagentManager._discussion_system_instruction(run, workflow.steps[-1])
+
+    assert "这是群聊里的吵架" in first
+    assert "背景是“张三借了李四的车没按时归还" in first
+    assert f"{AGENT_A}扮演‘张三’" in first
+    assert f"{AGENT_B}扮演‘李四’" in first
+    assert "你在这场吵架里扮演“张三”" in first
+    assert "以第一人称" in first
+    assert "各方立场" not in first
+    assert "站在“" not in first
+    assert "每次只说一到三句" in first
+    assert "对方刚才一个具体说法" in first
+    assert "不做人身攻击" in first
+    assert "这是最后一轮" not in first
+    assert "不用正式结辩" in last
+    for text in [wrapup, workflow.steps[-1].task]:
+        assert "两三句口语" in text
+        assert "哪些事没说开" in text
+        assert "裁决：" not in text
+        assert "中立裁判" not in text
 
 
 def test_free_discussion_starts_in_parallel_and_waits_for_the_full_first_round() -> None:
@@ -983,7 +1079,7 @@ def test_three_round_discussion_prompts_move_from_divergence_to_review_to_conver
     assert "方案收敛阶段" in convergence_prompt
 
 
-def test_discussion_summary_requires_constraints_solution_steps_risks_and_questions() -> None:
+def test_discussion_summary_uses_conversational_prose_and_covers_decisions() -> None:
     workflow = build_discussion_workflow(
         ROOM_ID,
         "如何改善交付质量",
@@ -993,11 +1089,13 @@ def test_discussion_summary_requires_constraints_solution_steps_risks_and_questi
     )
 
     summary_task = workflow.steps[-1].task
-    assert "目标与约束" in summary_task
-    assert "最终方案" in summary_task
-    assert "实施步骤" in summary_task
-    assert "主要风险" in summary_task
-    assert "待确认问题" in summary_task
+    assert "用自然口语讲清" in summary_task
+    assert "最后推荐什么办法" in summary_task
+    assert "为什么这样选" in summary_task
+    assert "接下来怎么推进" in summary_task
+    assert "风险和没确认的问题" in summary_task
+    assert "不要照目录逐项念" in summary_task
+    assert "不要编号、分点、加标题或写成书面报告" in summary_task
 
 
 def test_discussion_workflow_validates_positions_and_round_limit() -> None:
@@ -1136,27 +1234,29 @@ def test_debate_stance_is_a_system_level_non_neutral_contract() -> None:
 
     instruction = SubagentManager._discussion_system_instruction(run, workflow.steps[0])
 
-    assert "# 议题活动背景" in instruction
-    assert "议题：名画和猫只能救一个" in instruction
-    assert "模式：立场辩论" in instruction
-    assert "当前进度：第 1/1 轮" in instruction
-    assert "必须且只能主张：必须救名画" in instruction
-    assert "禁止中立" in instruction
-    assert "禁止同时论证双方" in instruction
+    assert "群聊里的结构化立场辩论" in instruction
+    assert "议题是“名画和猫只能救一个”" in instruction
+    assert "现在到第 1/1 轮" in instruction
+    assert "唯一立场是“必须救名画”" in instruction
+    assert "不要中立" in instruction
+    assert "两边都说" in instruction
     assert "没有标准答案" in instruction
-    assert "# 可选表达风格（软约束）" in instruction
+    assert "这只是说话方式上的建议" in instruction
     assert "重新解释辩题中的关键词" in instruction
-    assert "不要模仿任何真人的口头禅" in instruction
-    assert "# 当前阶段：结辩" in instruction
-    assert "# 结辩要求（最后一轮）" in instruction
-    assert "不得临时引入此前未铺垫的新主论点" in instruction
+    assert "不用模仿任何真人的口头禅" in instruction
+    assert "这是本方最后一次发言" in instruction
+    assert "别临时引入此前没铺垫的新主张" in instruction
+    assert "禁止编号、分点、加标题或写成报告" in instruction
     summary_instruction = SubagentManager._discussion_system_instruction(
         run, workflow.steps[-1]
     )
-    assert "# 当前阶段：中立裁判" in summary_instruction
-    assert "所有预定轮次均已结束" in summary_instruction
+    assert "做中立裁判" in summary_instruction
+    assert "预定轮次都结束了" in summary_instruction
     assert "裁决：<胜方立场>胜" in summary_instruction
-    assert "不得以‘各有道理’回避裁决" in summary_instruction
+    assert "裁决：平局" in summary_instruction
+    assert "必须替换成实际获胜的立场" in summary_instruction
+    assert "不要拿‘各有道理’搪塞" in summary_instruction
+    assert "不要编号、分点、加标题或写成报告" in summary_instruction
     assert "可选表达风格" not in summary_instruction
 
 
@@ -1183,24 +1283,26 @@ def test_free_discussion_system_prompt_explains_context_and_response_duty() -> N
 
     instruction = SubagentManager._discussion_system_instruction(run, workflow.steps[1])
 
-    assert "模式：自由讨论" in instruction
+    assert "结构化自由讨论" in instruction
     assert "第 1/2 轮" in instruction
     assert "独立发散阶段" in instruction
-    assert "独立提出多个有明显差异的方案方向" in instruction
-    assert "暂不评价其他参与者" in instruction
-    assert "不要复述其观点" in instruction
-    assert "核心价值、关键组成和主要约束" in instruction
+    assert "聊聊几个明显不同的方向" in instruction
+    assert "暂不评价或复述其他参与者" in instruction
+    assert "为什么值得考虑、关键怎么做、有什么现实限制" in instruction
+    assert "不要列成清单" in instruction
 
 
 @pytest.mark.asyncio
-async def test_six_round_discussion_executes_all_turns_before_summary(tmp_path: Path) -> None:
+@pytest.mark.parametrize("mode", ["debate", "quarrel"])
+async def test_six_round_discussion_executes_all_turns_before_summary(tmp_path: Path, mode: str) -> None:
     workflow = build_discussion_workflow(
         ROOM_ID,
         "名画和猫只能救一个",
         [AGENT_A, AGENT_B],
-        mode="debate",
+        mode=mode,
         max_rounds=6,
-        positions={AGENT_A: "必须救名画", AGENT_B: "必须救猫"},
+        positions={AGENT_A: "必须救名画", AGENT_B: "必须救猫"} if mode == "debate" else {},
+        roles={AGENT_A: "张三", AGENT_B: "李四"} if mode == "quarrel" else None,
     )
     executed: list[str] = []
 

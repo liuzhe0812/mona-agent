@@ -43,6 +43,7 @@ export function DiscussionDialog({ members, disabled, onStart }: DiscussionDialo
   const [mode, setMode] = useState<DiscussionMode>("debate");
   const [participantIds, setParticipantIds] = useState<string[]>([]);
   const [positions, setPositions] = useState<Record<string, string>>({});
+  const [roles, setRoles] = useState<Record<string, string>>({});
   const [styles, setStyles] = useState<Partial<Record<string, DebateStyle>>>({});
   const [maxRounds, setMaxRounds] = useState(3);
   const [summaryAgentId, setSummaryAgentId] = useState(NO_JUDGE);
@@ -55,6 +56,7 @@ export function DiscussionDialog({ members, disabled, onStart }: DiscussionDialo
     setMode("debate");
     setParticipantIds(initialParticipants);
     setPositions({});
+    setRoles({});
     setStyles({});
     setMaxRounds(3);
     setSummaryAgentId(NO_JUDGE);
@@ -65,7 +67,9 @@ export function DiscussionDialog({ members, disabled, onStart }: DiscussionDialo
     () => [
       ...(mode === "debate"
         ? [{ value: NO_JUDGE, label: t("room.discussion.noJudge") }]
-        : []),
+        : mode === "quarrel"
+          ? [{ value: NO_JUDGE, label: t("room.discussion.noSummary") }]
+          : []),
       ...members.map((member) => ({ value: member.id, label: member.displayName })),
     ],
     [members, mode, t],
@@ -91,7 +95,7 @@ export function DiscussionDialog({ members, disabled, onStart }: DiscussionDialo
   const start = () => {
     const trimmedTopic = topic.trim();
     if (!trimmedTopic) {
-      setError(t("room.discussion.validation.topic"));
+      setError(t(mode === "quarrel" ? "room.discussion.validation.background" : "room.discussion.validation.topic"));
       return;
     }
     if (participantIds.length < 2) {
@@ -105,6 +109,13 @@ export function DiscussionDialog({ members, disabled, onStart }: DiscussionDialo
         return;
       }
     }
+    if (mode === "quarrel") {
+      const missing = participantIds.find((id) => !roles[id]?.trim());
+      if (missing) {
+        setError(t("room.discussion.validation.roles"));
+        return;
+      }
+    }
     if (mode === "discussion" && summaryAgentId === NO_JUDGE) {
       setError(t("room.discussion.validation.summary"));
       return;
@@ -113,10 +124,17 @@ export function DiscussionDialog({ members, disabled, onStart }: DiscussionDialo
       mode,
       maxRounds,
       participantIds,
-      positions: Object.fromEntries(participantIds.map((id) => [id, positions[id]?.trim() ?? ""])),
-      styles: Object.fromEntries(
-        participantIds.flatMap((id) => styles[id] ? [[id, styles[id]]] : []),
-      ),
+      positions: mode === "quarrel"
+        ? {}
+        : Object.fromEntries(participantIds.map((id) => [id, positions[id]?.trim() ?? ""])),
+      ...(mode === "quarrel"
+        ? { roles: Object.fromEntries(participantIds.map((id) => [id, roles[id]?.trim() ?? ""])) }
+        : {}),
+      styles: mode === "debate"
+        ? Object.fromEntries(
+            participantIds.flatMap((id) => styles[id] ? [[id, styles[id]]] : []),
+          )
+        : {},
       summaryAgentId: summaryAgentId === NO_JUDGE ? null : summaryAgentId,
     });
     setOpen(false);
@@ -143,27 +161,29 @@ export function DiscussionDialog({ members, disabled, onStart }: DiscussionDialo
         </DialogHeader>
         <div className="min-h-0 flex-1 space-y-5 overflow-y-auto px-6 py-5 scrollbar-hover">
           <label className="grid gap-1.5 text-ui">
-            <span className="text-caption font-medium text-muted-foreground">{t("room.discussion.topic")}</span>
+            <span className="text-caption font-medium text-muted-foreground">
+              {t(mode === "quarrel" ? "room.discussion.background" : "room.discussion.topic")}
+            </span>
             <Textarea
               value={topic}
               onChange={(event) => { setTopic(event.target.value); setError(null); }}
               maxLength={2000}
-              placeholder={t("room.discussion.topicPlaceholder")}
+              placeholder={t(mode === "quarrel" ? "room.discussion.backgroundPlaceholder" : "room.discussion.topicPlaceholder")}
               className="min-h-24 resize-none"
             />
           </label>
 
           <div className="grid gap-2">
             <span className="text-caption font-medium text-muted-foreground">{t("room.discussion.mode")}</span>
-            <div className="grid grid-cols-2 gap-2">
-              {(["debate", "discussion"] as DiscussionMode[]).map((value) => (
+            <div className="grid grid-cols-1 gap-2 sm:grid-cols-3">
+              {(["debate", "quarrel", "discussion"] as DiscussionMode[]).map((value) => (
                 <Button
                   key={value}
                   type="button"
                   variant="outline"
                   onClick={() => {
                     setMode(value);
-                    if (value === "debate") setSummaryAgentId(NO_JUDGE);
+                    if (value !== "discussion") setSummaryAgentId(NO_JUDGE);
                     else if (summaryAgentId === NO_JUDGE) {
                       setSummaryAgentId(
                         members.find((member) => member.id === "mona")?.id
@@ -196,37 +216,46 @@ export function DiscussionDialog({ members, disabled, onStart }: DiscussionDialo
                       <AgentAvatar agentId={member.id} displayName={member.displayName} className="h-6 w-6" />
                       <span className="font-medium">{member.displayName}</span>
                     </label>
-                    {checked && mode === "debate" ? (
+                    {checked && mode !== "discussion" ? (
                       <div className="mt-2 grid gap-2">
                         <Input
-                          value={positions[member.id] ?? ""}
+                          value={mode === "quarrel" ? roles[member.id] ?? "" : positions[member.id] ?? ""}
                           onChange={(event) => {
-                            setPositions((current) => ({ ...current, [member.id]: event.target.value }));
+                            if (mode === "quarrel") {
+                              setRoles((current) => ({ ...current, [member.id]: event.target.value }));
+                            } else {
+                              setPositions((current) => ({ ...current, [member.id]: event.target.value }));
+                            }
                             setError(null);
                           }}
                           maxLength={240}
-                          placeholder={t("room.discussion.positionPlaceholder", { agent: member.displayName })}
+                          placeholder={t(
+                            mode === "quarrel" ? "room.discussion.rolePlaceholder" : "room.discussion.positionPlaceholder",
+                            { agent: member.displayName },
+                          )}
                           className="h-8 text-caption"
                         />
-                        <div className="grid gap-1">
-                          <Select
-                            aria-label={t("room.discussion.styleAria", { agent: member.displayName })}
-                            value={styles[member.id] ?? FREE_STYLE}
-                            onValueChange={(value) => setStyles((current) => {
-                              const next = { ...current };
-                              if (value === FREE_STYLE) delete next[member.id];
-                              else next[member.id] = value as DebateStyle;
-                              return next;
-                            })}
-                            options={styleOptions}
-                            className="h-8 text-caption"
-                          />
-                          {styles[member.id] ? (
-                            <span className="text-micro leading-4 text-muted-foreground">
-                              {t(`room.discussion.styles.${styles[member.id]}Hint`)}
-                            </span>
-                          ) : null}
-                        </div>
+                        {mode === "debate" ? (
+                          <div className="grid gap-1">
+                            <Select
+                              aria-label={t("room.discussion.styleAria", { agent: member.displayName })}
+                              value={styles[member.id] ?? FREE_STYLE}
+                              onValueChange={(value) => setStyles((current) => {
+                                const next = { ...current };
+                                if (value === FREE_STYLE) delete next[member.id];
+                                else next[member.id] = value as DebateStyle;
+                                return next;
+                              })}
+                              options={styleOptions}
+                              className="h-8 text-caption"
+                            />
+                            {styles[member.id] ? (
+                              <span className="text-micro leading-4 text-muted-foreground">
+                                {t(`room.discussion.styles.${styles[member.id]}Hint`)}
+                              </span>
+                            ) : null}
+                          </div>
+                        ) : null}
                       </div>
                     ) : null}
                   </div>

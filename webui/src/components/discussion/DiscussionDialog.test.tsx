@@ -148,4 +148,61 @@ describe("DiscussionDialog", () => {
       }),
     );
   });
+
+  it("uses role identities separately from debate positions and requires one for every quarrel participant", async () => {
+    const user = userEvent.setup();
+    const onStart = vi.fn();
+    render(<DiscussionDialog members={members} onStart={onStart} />);
+
+    await user.click(screen.getByRole("button", { name: "Start topic" }));
+    await user.type(
+      screen.getByPlaceholderText(
+        "For example: should a new product prioritize growth or cost control?",
+      ),
+      "Should we prioritize growth or profit?",
+    );
+    await user.click(screen.getByRole("button", { name: "Debate style for Analyst A" }));
+    await user.click(screen.getByRole("menuitem", { name: "Sharp punchlines" }));
+    await user.type(screen.getByPlaceholderText("Assign a position to Analyst A"), "Prioritize growth");
+    await user.type(screen.getByPlaceholderText("Assign a position to Analyst B"), "Prioritize profit");
+    await user.click(screen.getByRole("button", { name: /Quarrel/ }));
+
+    expect(screen.getByText("No wrap-up")).toBeInTheDocument();
+    expect(screen.getByText("Background")).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Debate style for Analyst A" })).not.toBeInTheDocument();
+    const roleA = screen.getByPlaceholderText("Assign a role to Analyst A, for example: Zhang San");
+    const roleB = screen.getByPlaceholderText("Assign a role to Analyst B, for example: Zhang San");
+    const background = screen.getByPlaceholderText(
+      "For example: Zhang San thinks Li Si took credit for his work, and they start arguing.",
+    );
+    expect(roleA).toHaveValue("");
+    expect(roleB).toHaveValue("");
+    fireEvent.change(background, { target: { value: "" } });
+    await user.click(screen.getByRole("button", { name: "Start discussion" }));
+    expect(screen.getByText("Enter the quarrel background.")).toBeInTheDocument();
+    expect(onStart).not.toHaveBeenCalled();
+    fireEvent.change(background, { target: { value: "张三和李四因借车未还吵起来" } });
+    await user.click(screen.getByRole("button", { name: "Start discussion" }));
+    expect(screen.getByText("Assign a role to every participant in the quarrel.")).toBeInTheDocument();
+    expect(onStart).not.toHaveBeenCalled();
+    await user.type(roleA, "Zhang San");
+    await user.type(roleB, "Li Si");
+    await user.click(screen.getByRole("button", { name: "Start discussion" }));
+
+    expect(onStart).toHaveBeenCalledWith(
+      "张三和李四因借车未还吵起来",
+      {
+        mode: "quarrel",
+        maxRounds: 3,
+        participantIds: ["com.example.agent-a", "com.example.agent-b"],
+        positions: {},
+        roles: {
+          "com.example.agent-a": "Zhang San",
+          "com.example.agent-b": "Li Si",
+        },
+        styles: {},
+        summaryAgentId: null,
+      },
+    );
+  });
 });

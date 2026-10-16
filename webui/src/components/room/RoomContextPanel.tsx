@@ -96,8 +96,11 @@ function RoomTaskProgress({
           participantIds?: unknown;
         }
       : {};
-    const isDebate = discussion.mode === "debate";
-    kindLabel = t(isDebate ? "room.discussion.debate" : "room.discussion.discussion");
+    const mode = discussion.mode === "debate" || discussion.mode === "quarrel"
+      ? discussion.mode
+      : "discussion";
+    const isDebate = mode === "debate";
+    kindLabel = t(`room.discussion.${mode}`);
     const maxRounds = typeof discussion.maxRounds === "number" ? discussion.maxRounds : 1;
     const participantCount = Array.isArray(discussion.participantIds)
       ? discussion.participantIds.length

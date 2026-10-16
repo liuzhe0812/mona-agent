@@ -8,6 +8,7 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 
 from mona.agent.jobs import AgentJobStore
+from mona.agent.loop import AgentLoop
 from mona.agent.memory import Consolidator, MemoryStore
 from mona.agent.partners import AgentDefinition, ConversationMetadata
 from mona.agent.room import CollaborationReadTool
@@ -24,6 +25,7 @@ from mona.agent.workflow import (
 from mona.bus.queue import MessageBus
 from mona.providers.base import LLMResponse
 from mona.session.manager import SessionManager
+from mona.utils.prompt_templates import render_template
 
 PRIVATE_TOOL_MARKER = "PRIVATE_TOOL_MARKER"
 RUNTIME_PRIVATE_MARKER = "RUNTIME_PRIVATE_MARKER"
@@ -48,6 +50,55 @@ def room_runtime(tmp_path):
         max_tool_result_chars=16_000, session_manager=sessions,
     )
     return manager, session, registry, definition
+
+
+@pytest.mark.parametrize("conversation_type", ["room", "direct", "hidden"])
+def test_room_style_is_added_only_to_visible_group_prompts(room_runtime, conversation_type):
+    _, session, registry, definition = room_runtime
+    if conversation_type == "direct":
+        conversation = ConversationMetadata.direct(definition.id)
+    else:
+        conversation = ConversationMetadata.room(["mona", definition.id])
+        conversation.hidden = conversation_type == "hidden"
+    session.metadata["conversation"] = conversation.to_session_metadata()
+    loop = object.__new__(AgentLoop)
+    loop._room_agent_registry = registry
+    messages = [{"role": "system", "content": "Fixed identity."}]
+
+    rendered = loop._append_room_members_context(deepcopy(messages), session)
+
+    style = render_template("agent/room_conversation.md")
+    assert (style in rendered[0]["content"]) is (conversation_type == "room")
+    assert messages[0]["content"] == "Fixed identity."
+    if conversation_type == "room":
+        assert "发言必须口语化" in rendered[0]["content"]
+        assert "禁止书面汇报、文章腔、编号列表、项目符号、分点罗列、标题和表格" in rendered[0]["content"]
+    if conversation_type == "direct":
+        assert rendered == messages
+
+
+@pytest.mark.parametrize("conversation_type", ["room", "direct", "hidden"])
+def test_named_group_agent_speaks_to_the_room_instead_of_reporting_to_mona(
+    room_runtime, monkeypatch, conversation_type,
+):
+    manager, session, registry, definition = room_runtime
+    if conversation_type == "direct":
+        conversation = ConversationMetadata.direct(definition.id)
+    else:
+        conversation = ConversationMetadata.room(["mona", definition.id])
+        conversation.hidden = conversation_type == "hidden"
+    session.metadata["conversation"] = conversation.to_session_metadata()
+    registry.load_prompt.return_value = "You are Researcher."
+    registry.resolve_skill_dirs.return_value = []
+    monkeypatch.setattr("mona.agent.user_config.load_agent_user_config", lambda _: AgentUserConfig())
+
+    rendered = manager._build_named_agent_prompt(definition, registry, {}, "room")
+
+    group_chat = conversation_type == "room"
+    assert (render_template("agent/room_conversation.md") in rendered) is group_chat
+    assert ("You are a subagent spawned by the main agent" in rendered) is not group_chat
+    assert ("Your final response will be reported back to the main agent" in rendered) is not group_chat
+    assert "You are Researcher." in rendered
 
 
 async def test_room_preview_and_read_share_only_frozen_public_data(room_runtime):
@@ -173,7 +224,8 @@ async def test_collaboration_step_gets_room_data_in_user_context_and_read_tool(
     monkeypatch.setattr(manager, "run_store_for_room", lambda _: run_store)
     monkeypatch.setattr("mona.agent.user_config.load_agent_user_config", lambda _: AgentUserConfig())
     monkeypatch.setattr(manager, "_build_named_agent_tools", lambda *args, **kwargs: ToolRegistry())
-    monkeypatch.setattr(manager, "_build_named_agent_prompt", lambda *args: "Fixed system prompt.")
+    registry.load_prompt.return_value = "You are Researcher."
+    registry.resolve_skill_dirs.return_value = []
     manager.runner.run = AsyncMock(return_value=AgentRunResult(
         final_content="Report completed.", messages=[], stop_reason="done",
     ))
@@ -185,13 +237,51 @@ async def test_collaboration_step_gets_room_data_in_user_context_and_read_tool(
 
     assert result == "Report completed."
     spec = manager.runner.run.call_args.args[0]
-    assert spec.initial_messages[0]["content"] == "Fixed system prompt."
+    system_prompt = spec.initial_messages[0]["content"]
+    assert render_template("agent/room_conversation.md") in system_prompt
+    assert "Your final response will be reported back to the main agent" not in system_prompt
+    assert PUBLIC_CONSTRAINT not in system_prompt
     assert PUBLIC_CONSTRAINT in spec.initial_messages[1]["content"]
     assert "Runtime Context" in spec.initial_messages[1]["content"]
     reader = spec.tools.get("collaboration_read")
     assert reader is not None
     reference = next(ref for ref in reader._sources if ref.startswith(f"workflow:{run.id}:research:"))
     assert "Evidence summary." in (await reader.execute(reference))
+
+
+async def test_collaboration_step_keeps_bound_model_context_metadata(
+    room_runtime, tmp_path, monkeypatch,
+):
+    from mona.agent.user_config import resolve_effective_agent_config
+    from mona.providers.factory import ProviderSnapshot
+
+    manager, _, registry, definition = room_runtime
+    job_store = AgentJobStore(tmp_path / "jobs")
+    run_store = WorkflowRunStore(tmp_path / "runs")
+    step = WorkflowStep(id="report", agent_id=definition.id, task="Write report.")
+    workflow = WorkflowDefinition(id="collab-bound", room_id="room", revision=1, steps=[step])
+    run = run_store.create(room_id="room", workflow=workflow, user_profile_snapshot={})
+    monkeypatch.setattr(manager, "job_store_for_room", lambda _: job_store)
+    monkeypatch.setattr(manager, "run_store_for_room", lambda _: run_store)
+    monkeypatch.setattr(manager, "_build_named_agent_tools", lambda *args, **kwargs: ToolRegistry())
+    monkeypatch.setattr(manager, "_build_named_agent_prompt", lambda *args: "Fixed identity.")
+    snapshot = ProviderSnapshot(
+        provider=manager.provider, model="bound-native", signature=("bound",),
+        context_window_tokens=32768, context_window_verified=True, context_provider="native:codex",
+    )
+    effective = resolve_effective_agent_config(definition, AgentUserConfig())
+    manager._agent_runtime_resolver = lambda _: (manager.provider, "bound-native", effective, snapshot)
+    manager.runner.run = AsyncMock(return_value=AgentRunResult(
+        final_content="Completed.", messages=[], stop_reason="completed",
+    ))
+
+    await manager.execute_workflow_step(run=run, step=step, room_id="room", upstream={}, registry=registry)
+
+    spec = manager.runner.run.call_args.args[0]
+    assert spec.model == "bound-native"
+    assert spec.context_window_tokens == 32768
+    assert spec.context_window_verified is True
+    assert spec.context_provider == "native:codex"
 
 
 def _consolidator(manager):

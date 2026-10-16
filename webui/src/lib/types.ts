@@ -326,7 +326,7 @@ export interface RoomAgentInfo {
   displayName: string;
 }
 
-export type DiscussionMode = "debate" | "discussion";
+export type DiscussionMode = "debate" | "discussion" | "quarrel";
 export type DebateStyle =
   | "sharp_punchline"
   | "value_reframe"
@@ -340,6 +340,7 @@ export interface DiscussionLaunchOptions {
   maxRounds: number;
   participantIds: string[];
   positions: Record<string, string>;
+  roles?: Record<string, string>;
   styles: Partial<Record<string, DebateStyle>>;
   summaryAgentId: string | null;
 }
@@ -1497,11 +1498,13 @@ export type Outbound =
       type: "start_discussion";
       chat_id: string;
       content: string;
+      task_id?: string;
       target_agent_ids: string[];
       discussion: {
         mode: DiscussionMode;
         max_rounds: number;
         positions: Record<string, string>;
+        roles?: Record<string, string>;
         styles: Partial<Record<string, DebateStyle>>;
         summary_agent_id: string | null;
       };

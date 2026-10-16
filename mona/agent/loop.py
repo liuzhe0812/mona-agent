@@ -65,6 +65,7 @@ from mona.utils.helpers import (
 from mona.utils.helpers import truncate_text as truncate_text_fn
 from mona.utils.image_generation_intent import image_generation_prompt
 from mona.utils.llm_runtime import LLMRuntime
+from mona.utils.prompt_templates import render_template
 from mona.utils.runtime import EMPTY_FINAL_RESPONSE_MESSAGE
 from mona.utils.video_generation_intent import (
     is_video_generation_request,
@@ -887,6 +888,8 @@ class AgentLoop:
             f"Room goal: {conversation.goal or '(no room goal set)'}\n"
             "Members:\n" + ("\n".join(members) if members else "(no members listed)")
         )
+        if not conversation.hidden:
+            context = f"{render_template('agent/room_conversation.md')}\n\n{context}"
         if getattr(self, "_partner_agent_id", None) is None:
             context += (
                 "\n\n# Mona delegation rule\n"

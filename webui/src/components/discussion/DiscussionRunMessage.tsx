@@ -14,11 +14,15 @@ function discussionSpec(run: WorkflowRun): DiscussionLaunchOptions | null {
   if (!value || typeof value !== "object") return null;
   const raw = value as Partial<DiscussionLaunchOptions>;
   if (!Array.isArray(raw.participantIds) || typeof raw.maxRounds !== "number") return null;
+  const roles = raw.roles && typeof raw.roles === "object"
+    ? Object.fromEntries(Object.entries(raw.roles).filter((entry): entry is [string, string] => typeof entry[1] === "string"))
+    : undefined;
   return {
-    mode: raw.mode === "debate" ? "debate" : "discussion",
+    mode: raw.mode === "debate" || raw.mode === "quarrel" ? raw.mode : "discussion",
     maxRounds: raw.maxRounds,
     participantIds: raw.participantIds.filter((id): id is string => typeof id === "string"),
     positions: raw.positions && typeof raw.positions === "object" ? raw.positions : {},
+    ...(roles ? { roles } : {}),
     styles: raw.styles && typeof raw.styles === "object" ? raw.styles : {},
     summaryAgentId: typeof raw.summaryAgentId === "string" ? raw.summaryAgentId : null,
   };
@@ -64,7 +68,7 @@ export function DiscussionRunMessage({ run }: { run: WorkflowRun }) {
         <div className="min-w-0 flex-1">
           <div className="flex flex-wrap items-center gap-2">
             <span className="text-caption font-medium text-muted-foreground">
-              {spec?.mode === "debate" ? t("room.discussion.debate") : t("room.discussion.discussion")}
+              {t(`room.discussion.${spec?.mode ?? "discussion"}`)}
             </span>
             <span className="rounded-full bg-muted px-2 py-0.5 text-micro text-muted-foreground">
               {terminal
@@ -80,10 +84,11 @@ export function DiscussionRunMessage({ run }: { run: WorkflowRun }) {
                 const name = agent
                   ? resolveAgentDisplayName(agentsById, id)
                   : fallbackAgentName(id);
+                const role = spec?.mode === "quarrel" ? spec.roles?.[id] : undefined;
                 return (
                   <span key={id} className="flex items-center gap-1 rounded-full border border-border/60 bg-background px-1.5 py-1 text-micro text-muted-foreground">
                     <AgentAvatar agentId={id} displayName={name} avatarUrl={agent?.avatarUrl} className="h-4 w-4" />
-                    {name}
+                    {role ? `${name} → ${role}` : name}
                   </span>
                 );
               })}

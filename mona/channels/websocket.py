@@ -4669,6 +4669,9 @@ class WebSocketChannel(BaseChannel):
             await self._send_event(connection, "error", detail="discussion topic is required")
             return
         metadata: dict[str, Any] = {"webui": envelope.get("webui") is True}
+        task_id = envelope.get("task_id")
+        if isinstance(task_id, str) and _API_KEY_RE.fullmatch(task_id.strip()):
+            metadata["task_id"] = task_id.strip()
         display_content = envelope.get("display_content")
         if isinstance(display_content, str) and display_content:
             metadata["display_content"] = display_content
@@ -4738,6 +4741,12 @@ class WebSocketChannel(BaseChannel):
         mona_targeted = MONA_AGENT_ID in targets
         from mona.agent import collaboration
 
+        task_id = metadata.get("task_id")
+        user_identity = (
+            {"task_id": task_id.strip()}
+            if isinstance(task_id, str) and _API_KEY_RE.fullmatch(task_id.strip())
+            else {}
+        )
         discussion_payload: dict[str, Any] | None = None
         discussion_mode: collaboration.DiscussionMode | None = None
         if raw_discussion is not None:
@@ -4798,6 +4807,7 @@ class WebSocketChannel(BaseChannel):
                     "event": "user",
                     "chat_id": chat_id,
                     "text": content,
+                    **user_identity,
                 }
                 if isinstance(display_content, str) and display_content:
                     user_obj["display_content"] = display_content
@@ -4808,7 +4818,7 @@ class WebSocketChannel(BaseChannel):
                     user_obj["media_paths"] = list(media_paths)
                 self._try_append_webui_transcript(chat_id, user_obj)
 
-            extra: dict[str, Any] = {}
+            extra: dict[str, Any] = dict(user_identity)
             if media_paths:
                 extra["media"] = list(media_paths)
             if isinstance(display_content, str) and display_content:
@@ -4844,6 +4854,7 @@ class WebSocketChannel(BaseChannel):
                         mode=discussion_mode,
                         max_rounds=discussion_payload.get("max_rounds"),
                         positions=discussion_payload.get("positions"),
+                        roles=discussion_payload.get("roles"),
                         styles=discussion_payload.get("styles"),
                         summary_agent_id=summary_agent,
                     )
@@ -4869,6 +4880,11 @@ class WebSocketChannel(BaseChannel):
                                 "maxRounds": discussion_payload.get("max_rounds"),
                                 "participantIds": list(targets),
                                 "positions": discussion_payload.get("positions") or {},
+                                **(
+                                    {"roles": discussion_payload.get("roles") or {}}
+                                    if discussion_mode is collaboration.DiscussionMode.QUARREL
+                                    else {}
+                                ),
                                 "styles": discussion_payload.get("styles") or {},
                                 "summaryAgentId": summary_agent,
                             }
@@ -4915,6 +4931,7 @@ class WebSocketChannel(BaseChannel):
                 "event": "user",
                 "chat_id": chat_id,
                 "text": content,
+                **user_identity,
             }
             if isinstance(display_content, str) and display_content:
                 user_obj["display_content"] = display_content
@@ -4928,7 +4945,7 @@ class WebSocketChannel(BaseChannel):
         # Persist the user message once. When Mona is also targeted the
         # normal flow persists it, so skip here to avoid a duplicate.
         if not mona_targeted:
-            extra: dict[str, Any] = {}
+            extra: dict[str, Any] = dict(user_identity)
             if media_paths:
                 extra["media"] = list(media_paths)
             if isinstance(display_content, str) and display_content:

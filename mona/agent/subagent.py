@@ -13,6 +13,7 @@ from typing import Any, Callable
 from loguru import logger
 
 from mona.agent import run_artifacts
+from mona.agent.collaboration import QUARREL_INSTRUCTION
 from mona.agent.hook import AgentHook, AgentHookContext
 from mona.agent.jobs import (
     JOB_STATUS_RUNNING,
@@ -1144,7 +1145,7 @@ class SubagentManager:
         if not isinstance(discussion, dict):
             return ""
         mode = discussion.get("mode")
-        if mode not in {"debate", "discussion"}:
+        if mode not in {"debate", "discussion", "quarrel"}:
             return ""
         participant_ids = discussion.get("participantIds")
         participants = (
@@ -1156,56 +1157,84 @@ class SubagentManager:
         max_rounds_text = str(max_rounds) if isinstance(max_rounds, int) else "未知"
         positions = discussion.get("positions")
         position = positions.get(step.agent_id) if isinstance(positions, dict) else None
+        roles = discussion.get("roles")
+        character_role = roles.get(step.agent_id) if isinstance(roles, dict) else None
         styles = discussion.get("styles")
         style_key = styles.get(step.agent_id) if isinstance(styles, dict) else None
         style_instruction = (
             DEBATE_STYLE_INSTRUCTIONS.get(style_key) if isinstance(style_key, str) else None
         )
-        position_lines = ""
-        if mode == "debate" and isinstance(positions, dict):
+        assignment_lines = ""
+        assignments = roles if mode == "quarrel" else positions
+        if mode in {"debate", "quarrel"} and isinstance(assignments, dict):
             allocations = [
-                f"- {agent_id}: {value.strip()}"
-                for agent_id, value in positions.items()
+                f"{agent_id}{'扮演' if mode == 'quarrel' else '站'}‘{value.strip()}’"
+                for agent_id, value in assignments.items()
                 if isinstance(agent_id, str) and isinstance(value, str) and value.strip()
             ]
             if allocations:
-                position_lines = "\n立场分配：\n" + "\n".join(allocations)
+                assignment_lines = (
+                    f"\n{'角色分配' if mode == 'quarrel' else '各方立场'}是："
+                    + "；".join(allocations) + "。"
+                )
+        activity = {
+            "debate": "结构化立场辩论",
+            "discussion": "结构化自由讨论",
+            "quarrel": "吵架",
+        }[mode]
+        context_label = "背景" if mode == "quarrel" else "议题"
         background = (
-            "# 议题活动背景\n"
-            "用户在群聊中发起了一次结构化多 Agent 活动；这不是普通问答。\n"
-            f"议题：{run.workflow.goal}\n"
-            f"模式：{('立场辩论' if mode == 'debate' else '自由讨论')}\n"
-            f"参与者及发言顺序：{', '.join(participants) if participants else '以工作流顺序为准'}\n"
-            f"最大轮次：{max_rounds_text}。一轮表示所有参与者依次各发言一次。"
-            f"{position_lines}\n"
-            "后附的群聊快照包含本议题相关上下文。请严格按照当前阶段要求决定是独立发散、"
-            "交叉评审、方案收敛或辩论回应，不要把任务退化成普通问答。"
+            f"这是群聊里的{activity}，{context_label}是“{run.workflow.goal}”。"
+            f"参与成员和发言顺序是：{', '.join(participants) if participants else '以工作流顺序为准'}。"
+            f"最多聊 {max_rounds_text} 轮，每轮每位参与者都会按顺序接一次话。{assignment_lines}\n"
+            "后面附着这间群聊的可共享历史。先读大家实际说过的话，再按你当前这轮的任务接着聊；"
+            "这份快照只是背景资料，不会覆盖本轮任务。无论讨论、辩论、吵架还是总结，都要用自然口语，"
+            "像在群里和大家接话；禁止编号、分点、加标题或写成报告，不必在发言里复述轮次、位次或 Agent 标识。"
         )
         if step.id == "summary":
+            if mode == "quarrel":
+                return (
+                    f"{background}\n\n"
+                    "这一轮吵完了，你来收个尾。只根据给定背景和群里的实际对话，用两三句口语讲清这些角色为什么吵起来、"
+                    "各自在意什么，还有哪些事没说开。别硬凑共识、教训参与者或套用正式辩论的裁决，"
+                    "也别补造没人说过的观点。不要编号、分点、加标题或写成书面报告。"
+                )
             if mode == "debate":
                 return (
-                    f"{background}\n\n# 当前阶段：中立裁判\n"
-                    "所有预定轮次均已结束。你不再代表任何一方，而是担任中立裁判。"
-                    "先分别综述双方的核心主张、关键论据和主要反驳，再按论点清晰度、"
-                    "论据质量、回应有效性、前后一致性进行客观比较。"
-                    "结尾必须输出‘裁决：<胜方立场>胜’或‘裁决：平局’，并说明决定性理由。"
-                    "只有双方实际表现确实势均力敌时才可判平；不得以‘各有道理’回避裁决，"
-                    "不得补造参与者未表达的论点。"
+                    f"{background}\n\n"
+                    "预定轮次都结束了。现在请放下任何一方的立场，做中立裁判，像在群里自然复盘一样说清楚。"
+                    "先聊聊双方主要在争什么、各自最有力的理由和关键回应，再比较论点是否清楚、论据是否可靠、"
+                    "有没有接住对方、前后是否一致，然后明确说哪边更站得住脚。"
+                    "只有双方实际表现确实难分高下时才判平；不要拿‘各有道理’搪塞，也别补造没人说过的观点。"
+                    "结尾按‘裁决：<胜方立场>胜’或‘裁决：平局’的格式作出裁决；"
+                    "其中‘<胜方立场>’是占位符，必须替换成实际获胜的立场，不能照抄占位符，并说明决定性理由。"
+                    "不要编号、分点、加标题或写成报告。"
                 )
             return (
-                f"{background}\n\n# 当前阶段：最终方案整理\n"
-                "所有预定轮次均已结束。请忠实综合实际发言，整理一份可执行方案，"
-                "依次说明目标与约束、候选方向、采用的最终方案、核心组成、关键取舍、"
-                "实施步骤、主要风险和待确认问题。不得补造参与者没有表达过的论点。"
+                f"{background}\n\n"
+                "预定轮次都结束了。现在帮大家把讨论收个尾：只根据实际说过的话，用口语讲清大家想解决什么、"
+                "最后推荐哪条路、为什么这么选、接下来怎么做，以及还有什么风险或问题需要确认。"
+                "把这些顺着说出来，不要照目录逐项念，也别补造没人提过的想法。"
             )
         parts = step.id.split("-")
         round_number = parts[1] if len(parts) > 1 else "未知"
         speaker_number = parts[3] if len(parts) > 3 else "未知"
         progress = (
-            f"当前进度：第 {round_number}/{max_rounds_text} 轮，"
-            f"第 {speaker_number}/{len(participants) if participants else '未知'} 位发言者。\n"
-            f"当前发言者：{step.agent_id}\n"
+            f"现在到第 {round_number}/{max_rounds_text} 轮，轮到你第 "
+            f"{speaker_number}/{len(participants) if participants else '未知'} 位接着发言；你是 {step.agent_id}。\n"
         )
+        if mode == "quarrel":
+            if not isinstance(character_role, str) or not character_role.strip():
+                return ""
+            closing = (
+                "这是最后一轮，接住对方的话再回一句就收住，不用正式结辩，也别强行和解。"
+                if isinstance(max_rounds, int) and round_number == str(max_rounds)
+                else ""
+            )
+            return (
+                f"{background}\n\n{progress}你在这场吵架里扮演“{character_role.strip()}”。"
+                f"{QUARREL_INSTRUCTION}{closing}"
+            )
         is_closing_round = (
             mode == "debate"
             and isinstance(max_rounds, int)
@@ -1215,59 +1244,53 @@ class SubagentManager:
             if round_number == "1":
                 phase = "独立发散阶段"
                 phase_instruction = (
-                    "请独立提出多个有明显差异的方案方向，暂不评价其他参与者，也不要复述其观点。"
-                    "每个方向说明核心价值、关键组成和主要约束，优先贡献自身专业视角。"
+                    "先从你自己的专业角度聊聊几个明显不同的方向，暂不评价或复述其他参与者。"
+                    "把这些方向为什么值得考虑、关键怎么做、有什么现实限制自然说出来，不要列成清单。"
                 )
             elif isinstance(max_rounds, int) and round_number == str(max_rounds):
                 phase = "方案收敛阶段"
                 phase_instruction = (
-                    "停止继续增加无关分支。请综合此前有效观点，明确推荐一个可执行方案，"
-                    "说明核心组成、关键取舍、实施步骤和仍待确认的问题。"
+                    "别再增加无关方向，把前面有效的想法收拢一下，明确推荐一条可执行的路。"
+                    "顺着说清为什么选它、接下来怎么做、需要接受哪些取舍，还有什么风险或问题没确认。"
                 )
             else:
                 phase = "交叉评审阶段"
                 phase_instruction = (
-                    "必须选择此前至少一个具体方案进行评审，指出优势、风险和冲突，"
-                    "去除重复内容，并尝试组合可以互补的部分；不要只增加一个无关的新想法。"
+                    "挑此前至少一个具体想法接着聊，说说它好在哪、有什么风险或冲突。"
+                    "把重复的内容收一收，看看互补的部分能不能合起来；别只附和，也别硬开无关的新方向。"
                 )
             return (
-                f"{background}\n\n# 当前阶段：{phase}\n{progress}"
-                f"{phase_instruction}禁止只做泛泛总结、附和或重复。"
+                f"{background}\n\n接下来是{phase}。{progress}"
+                f"{phase_instruction}不要只说泛泛的总结、附和或重复。"
             )
         if not isinstance(position, str) or not position.strip():
             return ""
         rebuttal = (
-            "这是第一轮首轮陈词，可以不反驳前文，但必须直接建立本方论证。"
+            "这是辩论开场，前面还没有对方观点可回应；直接说清本方理由就好。"
             if step.id == "round-1-speaker-1"
-            else "必须明确引用并反驳此前至少一个对方论点，再推进本方论证。"
+            else "先挑此前至少一个具体的对方观点接着聊，说明你为什么不认同，再继续讲本方理由。"
         )
         style_block = (
-            "\n\n# 可选表达风格（软约束）\n"
-            f"{style_instruction}"
-            "风格只影响表达路径和语言节奏，不能覆盖立场、事实准确性或回应前文的要求。"
-            "不要模仿任何真人的口头禅，也不要机械套用固定标题。"
+            f"\n{style_instruction}"
+            "这只是说话方式上的建议，不能改变立场、事实准确性或回应前文的要求。"
+            "不用模仿任何真人的口头禅，也不要套固定标题。"
             if style_instruction
             else ""
         )
         closing_block = (
-            "\n\n# 结辩要求（最后一轮）\n"
-            "这是本方最后一次发言。请收束此前已经建立的完整论证，明确回应对方最关键的攻击，"
-            "比较双方采用的判断标准，并给出本方应当获胜的最终理由。"
-            "原则上不得临时引入此前未铺垫的新主论点或新证据，也不要以提问结束。"
+            "\n这是本方最后一次发言。把此前已经讲过的理由自然收住，接住对方最有力的质疑，"
+            "说清双方判断标准的差别，以及为什么按本方标准应该胜出。"
+            "别临时引入此前没铺垫的新主张或新证据，也不要用问题收尾。"
             if is_closing_round
             else ""
         )
         return (
-            f"{background}\n\n# 当前阶段：{'结辩' if is_closing_round else '本轮立场辩论'}\n{progress}"
-            "以下是本轮最高优先级约束。\n"
-            f"你在本次辩论中必须且只能主张：{position.strip()}\n"
-            "无论你平时的偏好、人格或专业判断是什么，本轮都必须为上述立场辩护。\n"
-            "禁止中立、禁止同时论证双方、禁止改换立场、禁止回答‘没有标准答案’、"
-            "‘视情况而定’、‘两者都重要’或建议折中/兼得。不得以免责声明削弱立场。"
-            "不要虚构事实；遇到不利论点时，应从本方价值排序、前提或证据解释进行反驳，"
-            "而不是承认对方结论。\n"
-            f"{rebuttal}第一句话必须明确重申本方选择。"
-            "建议按‘立场声明 → 核心论证 → 回应对方’组织输出。"
+            f"{background}\n\n{progress}"
+            f"这轮你只代表本方，唯一立场是“{position.strip()}”。开口就自然亮明立场；"
+            "无论你平时偏好或专业判断如何，这次都要为这边辩护。"
+            "不要中立、两边都说、临时改口，也不要说‘没有标准答案’、‘视情况而定’、‘两者都重要’，或建议折中、兼得。"
+            "别编事实；碰到不利观点，就从本方的价值排序、前提或证据来回应，不要顺手承认对方结论。"
+            f"{rebuttal}把立场、理由和回应自然连起来，用口语接着群聊说，不要编号、分点、加标题或写成报告。"
             f"{style_block}"
             f"{closing_block}"
         )
@@ -1395,6 +1418,7 @@ class SubagentManager:
         definition: AgentDefinition,
         registry: AgentRegistry,
         user_profile_snapshot: dict[str, Any] | None = None,
+        room_id: str | None = None,
     ) -> str:
         """System prompt for a named agent run.
 
@@ -1410,6 +1434,10 @@ class SubagentManager:
         effective = resolve_effective_agent_config(
             definition, load_agent_user_config(definition.id)
         )
+        room_conversation = False
+        if room_id is not None and self._sessions is not None:
+            conversation = self._sessions.get_or_create(f"websocket:{room_id}").conversation_metadata
+            room_conversation = conversation.type == "room" and not conversation.hidden
         parts: list[str] = []
         package_prompt = registry.load_prompt(definition.id).strip()
         if package_prompt:
@@ -1444,6 +1472,7 @@ class SubagentManager:
                 time_ctx=time_ctx,
                 workspace=str(self.workspace),
                 skills_summary=skills_summary or "",
+                room_conversation=room_conversation,
             )
         )
         return "\n\n---\n\n".join(parts)
@@ -1608,6 +1637,7 @@ class SubagentManager:
                 definition,
                 registry,
                 job.user_profile_snapshot,
+                job.room_id,
             )
             user_content = job.task
             if room_context:

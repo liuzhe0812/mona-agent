@@ -1016,11 +1016,15 @@ export class MonaClient {
           mode: options.discussion.mode,
           max_rounds: options.discussion.maxRounds,
           positions: options.discussion.positions,
+          ...(options.discussion.mode === "quarrel" && options.discussion.roles
+            ? { roles: options.discussion.roles }
+            : {}),
           styles: options.discussion.styles,
           summary_agent_id: options.discussion.summaryAgentId,
         },
         ...(options.displayContent ? { display_content: options.displayContent } : {}),
         ...(options.quote ? { quote: options.quote } : {}),
+        ...(options.taskId ? { task_id: options.taskId } : {}),
         webui: true,
       };
       this.queueSend(frame);

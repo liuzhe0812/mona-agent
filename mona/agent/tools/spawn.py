@@ -53,7 +53,9 @@ class SpawnTool(Tool, ContextAware):
         return (
             "Spawn a subagent to handle a task in the background. "
             "Use this for complex or time-consuming tasks that can run independently. "
-            "The subagent will complete the task and report back when done. "
+            "Keep simple or tightly coupled work local. Give the subagent a self-contained task "
+            "with its relevant inputs, scope, expected result, and completion criteria. "
+            "The subagent will report back for your review. "
             "For deliverables or existing projects, inspect the workspace first "
             "and use a dedicated subdirectory when helpful."
         )
