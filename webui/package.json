@@ -9,6 +9,7 @@
     "build:tauri": "tsc -p tsconfig.build.json && vite build --mode tauri && npm --prefix office-editor run build:tauri",
     "preview": "vite preview",
     "test": "vitest run",
+    "test:video-runtime": "vitest run --config video-runtime/huashu/vitest.config.mjs",
     "test:watch": "vitest",
     "lint": "eslint src --max-warnings 0",
     "check:ui": "node scripts/ui-debt.mjs check",

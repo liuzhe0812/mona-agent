@@ -1,0 +1,619 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<title>复古报刊 · 通用模板</title>
+<!--
+  复古报刊（S06）的通用模板：能吃任何口播的 timeline.js（和本页放在同一个文件夹，由 pipeline/生成timeline.mjs 生成）。
+  一整版竖长的周日报纸科普专版：上半白报纸（灰色衬线刊名、藏蓝长宋大标题、两栏正文），海面以下整块深蓝插图区，镜头从报头往下「潜」。
+  文件分两块：「底座：换内容时不用改」（字体、配色、小工具、文字排版、引线、报纸栏目、海、行李箱和油墨章、页眉、字幕）和「场景：按新分镜重写」。
+  报纸上半版的文字（刊名、大标题、导语、两栏正文）现在从 MAST、TL.title、口播第一句、各镜头的标题和要讲清自动排，正式做时按内容改。
+  强调色 A = 红 #bb3633、B = 藏蓝 #1d3d8a。渲染时 --no-subtitle 会加 ?nosub=1（连底部纸色字幕带一起不画）。
+  v1.3 默认动效（开关 FX_DEFAULT，在下面脚本开头；设成 false 就回到 v1.2 的样子）：一直在动的背景层（白报纸上的纤维和光斑，
+  海里的光柱、波纹、远处气泡）；开场印刷滚筒把整版「印」出来；每个镜头交界按 TL.shots 自动轮换 3 种转场（往下潜 → 翻报纸 → 版面推移）；
+  每个镜头慢推，长镜头推近再拉开。写场景的人在 fxBefore / fxAfter 里加的调用照常生效。
+-->
+<style>
+  html, body { margin: 0; padding: 0; background: #fdfdfb; overflow: hidden; }
+  #stage { position: relative; width: 1920px; height: 1080px; overflow: hidden; }
+  #stage canvas { position: absolute; left: 0; top: 0; }
+</style>
+</head>
+<body>
+<div id="stage"><canvas id="c" width="1920" height="1080"></canvas></div>
+<script src="timeline.js"></script>
+<script src="动效部件.js"></script>
+<script>
+'use strict';
+// ===== 底座：换内容时不用改 =====
+const FX_DEFAULT = true;   // v1.3 默认动效开关：true = 背景层一直动 + 镜头交界自动转场 + 每个镜头慢推；false = 和 v1.2 一样
+const W = 1920, H = 1080, TAU = Math.PI * 2;
+const TL = window.TL;
+const M = (k) => TL.mark(k), ME = (k) => TL.markEnd(k);
+const SH = (k) => TL.shots[k - 1];
+const NOSUB = /[?&]nosub=1/.test(location.search);   // 渲染时 render.mjs --no-subtitle 会在地址后加 ?nosub=1：不画字幕，回剪映统一加
+
+// ---------- 字体：全部是 macOS 自带（换台 Mac 也有） ----------
+// 宋体-简：大标题（Black，压窄成长宋）、导语、栏目小标题、Token 块、结论；Times New Roman：AI、TOKEN、Prompt；
+// 正文、标注、字幕：西文 Helvetica Neue，中文苹方（参考图正文是 Helvetica）
+const SONG = '"Songti SC", "STSong", serif';
+const TIMES = '"Times New Roman", "Times", serif';
+const SANS = '"Helvetica Neue", "PingFang SC", sans-serif';
+const fSong = (w, s) => `${w} ${s}px ${SONG}`;
+const fTimes = (w, s, it) => `${it ? 'italic ' : ''}${w} ${s}px ${TIMES}`;
+const fSans = (w, s) => `${w} ${s}px ${SANS}`;
+
+// ---------- 配色（取自参考图，pipeline/取色.mjs） ----------
+const C = {
+  paper: '#fdfdfb', ink: '#1a1a1a', ink2: '#2e2e2e', gray: '#737574', rule: '#ceced0', shadow: '#e4e4e2',
+  head: '#1d3d8a',                                   // 大标题藏蓝（JELLYFISH）
+  sea: '#1b4282', seaTop: '#21508f', seaDeep: '#172f5c',   // 海水
+  peri: '#5e74a5', peri2: '#8096c1', lav: '#a4b1ce', pale: '#d3e2f7',
+  waveL: '#9fb0d8', waveM: '#4f66a3', waveHi: '#c6d3ee',  // 海面三道
+  sand: '#e7d3b5', sand2: '#d3ab7d',
+  red: '#bb3633', blue: '#1d3d8a',                    // 强调色 A / B（分镜.json「高亮」的两个词全片固定；Token 例子里是成都、旅行）：参考图自己的红和大标题的藏蓝
+  tokA: '#cfd6ee', tokB: '#ead8bb',                   // 其余 6 块：浅紫蓝（水母伞盖）、沙色（海底沙）
+};
+// ---------- 小工具 ----------
+const clamp = (x, a = 0, b = 1) => Math.min(b, Math.max(a, x));
+const lerp = (a, b, p) => a + (b - a) * p;
+const P = (t, a, d) => clamp((t - a) / d);
+const outC = (p) => 1 - Math.pow(1 - p, 3);
+const inOutC = (p) => (p < 0.5 ? 4 * p * p * p : 1 - Math.pow(-2 * p + 2, 3) / 2);
+const outBack = (p) => { const c1 = 1.4, c3 = c1 + 1; return 1 + c3 * Math.pow(p - 1, 3) + c1 * Math.pow(p - 1, 2); };
+const inQ = (p) => p * p;
+const sine = (p) => 0.5 - 0.5 * Math.cos(Math.PI * p);
+const qb = (a, c, b, u) => (1 - u) * (1 - u) * a + 2 * (1 - u) * u * c + u * u * b;   // 二次贝塞尔
+function hex(h) { const n = parseInt(h.slice(1), 16); return [n >> 16 & 255, n >> 8 & 255, n & 255]; }
+function mix(a, b, p) { const A = hex(a), B = hex(b); return '#' + A.map((v, i) => Math.round(v + (B[i] - v) * p).toString(16).padStart(2, '0')).join(''); }
+function rgba(h, a) { const [r, gg, b] = hex(h); return `rgba(${r},${gg},${b},${a})`; }
+function mulberry32(a) { return function () { a |= 0; a = a + 0x6D2B79F5 | 0; let t = Math.imul(a ^ a >>> 15, 1 | a); t = t + Math.imul(t ^ t >>> 7, 61 | t) ^ t; return ((t ^ t >>> 14) >>> 0) / 4294967296; }; }
+
+const cv = document.getElementById('c');
+const main = cv.getContext('2d');
+let g = main;                       // 当前画布（预渲染报纸上半版时临时换成离屏画布）
+const wCache = new Map();
+function tw(s, f) { const k = f + '|' + s; let v = wCache.get(k); if (v === undefined) { main.save(); main.font = f; v = main.measureText(s).width; main.restore(); wCache.set(k, v); } return v; }
+function rrect(x, y, w, h, r) { g.beginPath(); g.roundRect(x, y, w, h, r); }
+function text(s, x, y, f, col, align = 'center', base = 'middle', sx = 1) {
+  g.font = f; g.fillStyle = col; g.textAlign = align; g.textBaseline = base;
+  if (sx === 1) g.fillText(s, x, y);
+  else { g.save(); g.translate(x, y); g.scale(sx, 1); g.fillText(s, 0, 0); g.restore(); }
+}
+function textLS(s, x, y, f, col, ls, align = 'left', base = 'middle') { g.save(); g.letterSpacing = ls + 'px'; text(s, x, y, f, col, align, base); g.restore(); }
+// 细引线：按长度画到 q，画完在端点加小圆点（参考图图解的引线）
+function leader(pts, q, col, lw = 2, dot = 4.5) {
+  if (q <= 0) return;
+  g.strokeStyle = col; g.lineWidth = lw; g.lineJoin = 'miter'; g.lineCap = 'butt';
+  let total = 0; for (let i = 1; i < pts.length; i++) total += Math.hypot(pts[i][0] - pts[i - 1][0], pts[i][1] - pts[i - 1][1]);
+  let left = total * q; g.beginPath(); g.moveTo(pts[0][0], pts[0][1]);
+  for (let i = 1; i < pts.length && left > 0; i++) {
+    const sl = Math.hypot(pts[i][0] - pts[i - 1][0], pts[i][1] - pts[i - 1][1]), k = Math.min(1, left / sl);
+    g.lineTo(lerp(pts[i - 1][0], pts[i][0], k), lerp(pts[i - 1][1], pts[i][1], k)); left -= sl;
+  }
+  g.stroke();
+  if (q >= 1 && dot) { g.fillStyle = col; const e = pts[pts.length - 1]; g.beginPath(); g.arc(e[0], e[1], dot, 0, TAU); g.fill(); }
+}
+// 圆角矩形描边按周长画出来（p 0–1）
+function strokeReveal(x, y, w, h, r, p) {
+  if (p <= 0) return;
+  const L = 2 * (w + h) - (8 - 2 * Math.PI) * r;
+  g.setLineDash([L * p, L + 10]); rrect(x, y, w, h, r); g.stroke(); g.setLineDash([]);
+}
+// 白色弧形箭头（参考图生命周期圆里的白箭头）：n 段，每段占 span 比例
+function ringArrows(cx, cy, R, n, rot, w, col, span = 0.62) {
+  g.strokeStyle = col; g.fillStyle = col; g.lineWidth = w; g.lineCap = 'butt';
+  const hl = w * 2.3, da = hl * 0.55 / R;
+  for (let k = 0; k < n; k++) {
+    const a0 = rot + k * TAU / n, a1 = a0 + TAU / n * span;
+    g.beginPath(); g.arc(cx, cy, R, a0, a1 - da); g.stroke();
+    const ex = cx + R * Math.cos(a1), ey = cy + R * Math.sin(a1), tx = -Math.sin(a1), ty = Math.cos(a1), nx = Math.cos(a1), ny = Math.sin(a1);
+    g.beginPath(); g.moveTo(ex + tx * hl * 0.45, ey + ty * hl * 0.45);
+    g.lineTo(ex - tx * hl * 0.6 + nx * hl * 0.62, ey - ty * hl * 0.6 + ny * hl * 0.62);
+    g.lineTo(ex - tx * hl * 0.6 - nx * hl * 0.62, ey - ty * hl * 0.6 - ny * hl * 0.62); g.closePath(); g.fill();
+  }
+}
+// 白色粗弧线箭头（沿二次曲线，画到 p）
+function curveArrow(x0, y0, cx, cy, x1, y1, p, w, col) {
+  if (p <= 0) return;
+  const N = 40, u1 = p, pts = [];
+  for (let i = 0; i <= N; i++) { const u = u1 * i / N; pts.push([qb(x0, cx, x1, u), qb(y0, cy, y1, u)]); }
+  const ex = pts[N][0], ey = pts[N][1];
+  const dx = 2 * (1 - u1) * (cx - x0) + 2 * u1 * (x1 - cx), dy = 2 * (1 - u1) * (cy - y0) + 2 * u1 * (y1 - cy), L = Math.hypot(dx, dy) || 1, ux = dx / L, uy = dy / L, hl = w * 2.3;
+  g.strokeStyle = col; g.lineWidth = w; g.lineCap = 'butt'; g.lineJoin = 'round';
+  g.beginPath(); pts.forEach(([x, y], i) => (i ? g.lineTo(x, y) : g.moveTo(x, y))); g.lineTo(ex - ux * hl * 0.5, ey - uy * hl * 0.5); g.stroke();
+  g.fillStyle = col; g.beginPath(); g.moveTo(ex + ux * hl * 0.5, ey + uy * hl * 0.5);
+  g.lineTo(ex - ux * hl * 0.6 - uy * hl * 0.62, ey - uy * hl * 0.6 + ux * hl * 0.62);
+  g.lineTo(ex - ux * hl * 0.6 + uy * hl * 0.62, ey - uy * hl * 0.6 - ux * hl * 0.62); g.closePath(); g.fill();
+}
+
+// ---------- 正文排版：逐字折行（西文单词不拆、行首不放标点）+ 两端对齐 ----------
+const NO_START = '，。、；：！？）」』”…';
+function units(str) { return str.match(/[A-Za-z0-9]+|./gu) || []; }
+function wrapLines(str, f, maxW) {
+  const lines = []; let cur = [];
+  for (const u of units(str)) {
+    const next = [...cur, u];
+    if (tw(next.join(''), f) > maxW && cur.length) {
+      if (NO_START.includes(u[0])) { cur.push(u); lines.push(cur); cur = []; continue; }
+      lines.push(cur); cur = u.trim() ? [u] : [];
+    } else cur = next;
+  }
+  if (cur.length) lines.push(cur);
+  return lines;
+}
+function para(str, x, y, w, f, lh, col) {   // y 是第一行基线；返回最后一行基线
+  const lines = wrapLines(str, f, w);
+  g.font = f; g.fillStyle = col; g.textAlign = 'left'; g.textBaseline = 'alphabetic';
+  lines.forEach((ls, li) => {
+    const ws = ls.map((u) => tw(u, f)), sum = ws.reduce((a, b) => a + b, 0);
+    const gap = li === lines.length - 1 || ls.length < 2 ? 0 : (w - sum) / (ls.length - 1);
+    let xx = x; ls.forEach((u, k) => { g.fillText(u, xx, y + li * lh); xx += ws[k] + gap; });
+  });
+  return y + (lines.length - 1) * lh;
+}
+// 参考图海水里的白字说明：粗体开头 + 常规正文（左对齐，不两端对齐）
+function leadPara(lead, body, x, y, w, size, lh, col, a = 1) {
+  if (a <= 0) return;
+  g.save(); g.globalAlpha *= a;
+  const fb = fSans(700, size), fr = fSans(400, size);
+  const lines = wrapLines(lead + ' ' + body, fr, w);
+  let consumed = 0;
+  lines.forEach((ls, li) => {
+    let xx = x;
+    for (const u of ls) {
+      const bold = consumed < lead.length;
+      const f = bold ? fb : fr;
+      text(u, xx, y + li * lh, f, col, 'left', 'alphabetic');
+      xx += tw(u, f) + (bold ? 0.6 : 0); consumed += u.length;
+    }
+  });
+  g.restore();
+}
+
+// ---------- 版面（世界坐标：整版报纸宽 1920，竖着往下排）：上面是白报纸，海面以下每个镜头一段 ----------
+const FOCUS_Y = 455;                              // 镜头焦点在画面 (960, 455)：字幕带以上区域的中线
+const TOP_H = 1132, SEC_H = 900;                  // 海面以上（白纸部分）；海里每个镜头一段的高度
+const NS = TL.shots.length;
+const SEA = { x0: 56, x1: 1864, y0: TOP_H, y1: TOP_H + Math.max(1, NS - 1) * SEC_H + 520 };
+const CARD0 = { x: 960, y: 676, w: 1000, h: 420 };                 // 第 1 个镜头：报纸版心的「本期要点」卡
+const secY = (i) => (i === 0 ? CARD0.y : TOP_H + 360 + (i - 1) * SEC_H);   // 各镜头内容的中心 y
+// 刊名、副标题、版次（按内容改）；大标题用 TL.title，导语用口播第一句，两栏正文用各镜头的标题和要讲清
+const MAST = { a: 'AI', b: '万象', sub: '探索语言、数据与推理的奥秘', date: '第 1 版' };
+const TITLE = TL.title || (TL.shots[0] && TL.shots[0].title) || '';
+const LEAD = (() => { const s = (TL.text || '').split(/[。！？!?]/)[0] || ''; const a = [...s]; return a.length <= 24 ? [s] : [a.slice(0, 24).join(''), a.slice(24, 47).join('') + (a.length > 47 ? '……' : '')]; })();
+const shortHead = (x) => { const h = (x || '').split(/[，,：:。]/)[0]; return [...h].length > 8 ? [...h].slice(0, 8).join('') : h; };   // 栏目小标题只有 336 像素宽，放 8 个字以内
+const ARTS = TL.shots.map((s) => [shortHead(s.title), s['要讲清'] || TL.cues.filter((c) => (s.cues || []).includes(c.id)).map((c) => c.text).join('，') + '。']);
+const LEFT_COL = ARTS.filter((_, i) => i % 2 === 0).slice(0, 4), RIGHT_COL = ARTS.filter((_, i) => i % 2 === 1).slice(0, 4);
+
+// ---------- 镜头交界的默认转场（v1.3，FX_DEFAULT）：按 TL.shots 自动轮换 往下潜 → 翻报纸 → 版面推移 ----------
+// 第 1 个交界（白报纸 → 海里第 1 段）总是往下潜；之后 3 种轮着用，同一种不会连着出现。想换某个交界的转场，改 FX_CUTS 里那一项的 kind。
+const FX_KINDS = ['往下潜', '翻报纸', '版面推移'];
+const FX_CUTS = FX_DEFAULT ? TL.shots.slice(1).map((s, k) => ({ i: k + 1, c: s.start, kind: FX_KINDS[k % 3] })) : [];
+const TURN_D = 0.6, SLIDE_D = 0.5, GUT = 90;   // 翻报纸、版面推移的时长（秒）；两版之间版缝宽
+
+// ---------- 镜头：开场看整版报纸慢推；之后每个镜头开始时往下潜到那一段 ----------
+// FX_DEFAULT 时：翻报纸、版面推移的交界在切点硬切（画面被盖住或推走时换位置）；每段镜头慢推到 1.06 倍，长镜头（6 秒以上）后半段再慢慢拉开
+const CAM0 = FX_DEFAULT ? { x: 960, y: 462, z: 1.06 } : { x: 960, y: 466, z: 1.0 };
+const CAM = FX_DEFAULT ? [[0, 0.75, 960, 462, 1.0, 'out'], [0.75, Math.max(0.9, TL.shots[0].end - 0.3), 960, 560, 1.08, 'sine']]
+  : [[0, Math.max(0.6, TL.shots[0].end - 0.3), 960, 560, 1.08, 'sine']];
+TL.shots.forEach((s, i) => {
+  if (!i) return;
+  const y = secY(i) + 30;
+  if (!FX_DEFAULT) { CAM.push([s.start - 0.15, s.start + 0.5, 960, y, 1.0, 'out'], [s.start + 0.52, Math.max(s.start + 0.6, s.end - 0.1), 960, y, 1.03, 'sine']); return; }
+  const kind = FX_CUTS[i - 1].kind, t1 = kind === '往下潜' ? s.start + 0.5 : s.start + 0.002, len = s.end - t1;
+  if (kind === '往下潜') CAM.push([s.start - 0.15, t1, 960, y, 1.0, 'out']);
+  else CAM.push([s.start, s.start + 0.001, 960, y, 1.0]);
+  const pk = t1 + Math.min(5, len > 6 ? len * 0.55 : len - 0.1);
+  CAM.push([t1 + 0.001, pk, 960, y, 1.06, 'sine']);
+  if (len > 6) CAM.push([pk, s.end - 0.12, 960, y - 16, 1.015, 'sine']);   // 长镜头：推近后再慢慢拉开
+});
+function camAt(t) {
+  let c = { ...CAM0 };
+  for (const [t0, t1, x, y, z, e] of CAM) {
+    if (t <= t0) break;
+    const p = P(t, t0, t1 - t0), q = e === 'sine' ? sine(p) : e === 'out' ? outC(p) : inOutC(p);
+    c = { x: lerp(c.x, x, q), y: lerp(c.y, y, q), z: lerp(c.z, z, q) };
+  }
+  return c;
+}
+
+// ---------- 报纸上半版（静态，预渲染一次，2 倍清晰度，推近也不糊） ----------
+const PS = 2;
+const pageCv = document.createElement('canvas');
+
+function column(x, w, y, secs) {
+  for (const [h, b] of secs) {
+    text(h, x, y + 32, fSong(400, 38), C.ink, 'left', 'alphabetic');
+    y = para(b, x, y + 72, w, fSans(400, 22), 35, C.ink2) + 34;
+  }
+  return y;
+}
+function silhouette(x, y) {   // 刊名旁的黑色剪影（参考图那组「大小对比」剪影）：一句话 → 碎片
+  g.fillStyle = C.ink; rrect(x, y, 76, 48, 10); g.fill();
+  g.beginPath(); g.moveTo(x + 16, y + 46); g.lineTo(x + 10, y + 64); g.lineTo(x + 34, y + 46); g.closePath(); g.fill();
+  g.fillStyle = C.paper; for (let k = 0; k < 3; k++) { g.beginPath(); g.arc(x + 22 + k * 16, y + 24, 4.5, 0, TAU); g.fill(); }
+  g.strokeStyle = C.ink; g.lineWidth = 3; g.beginPath(); g.moveTo(x + 86, y + 26); g.lineTo(x + 108, y + 26); g.stroke();
+  g.fillStyle = C.ink; g.beginPath(); g.moveTo(x + 116, y + 26); g.lineTo(x + 105, y + 18); g.lineTo(x + 105, y + 34); g.closePath(); g.fill();
+  [[124, 6, 18], [146, 12, 14], [126, 30, 14], [144, 32, 18], [166, 20, 12]].forEach(([dx, dy, s]) => g.fillRect(x + dx, y + dy, s, s));
+}
+// 海里的悬浮颗粒（带种子的随机数，位置固定，只随 t 缓慢上漂）
+const SNOW = (() => { const r = mulberry32(11), out = []; for (let i = 0; i < 300; i++) out.push({ x: SEA.x0 + 14 + r() * (SEA.x1 - SEA.x0 - 28), y: r(), s: 1.1 + r() * 2.4, a: 0.08 + r() * 0.2, v: 5 + r() * 12 }); return out; })();
+// ---------- v1.3 默认背景层（FX_DEFAULT）：一直在动。都只生成一次，逐帧只描几十条线、贴两张小图（满屏逐像素颗粒会慢一倍，所以不用） ----------
+const FIBP = [];                                   // 报纸纤维：230 根短弧线（1920×1080 一块，循环拼接），按颜色深浅分组，每组一个 Path2D
+const SPOT = document.createElement('canvas');    // 光斑贴图（小图放大，渐变的抖动噪点被抹平）
+const SHAFT = document.createElement('canvas');   // 海面光柱贴图
+const fmod = (v, m) => ((v % m) + m) % m;
+function buildBg() {
+  const r = mulberry32(23), groups = new Map();
+  for (let i = 0; i < 230; i++) {
+    const px = r() * 1920, py = r() * 1080, L = 6 + r() * 18, a = r() * TAU, warm = r() < 0.3, k = Math.floor(r() * 3);
+    const key = `${warm ? 1 : 0}${k}`; if (!groups.has(key)) groups.set(key, { p: new Path2D(), col: warm ? `rgba(150,128,96,${0.08 + 0.035 * k})` : `rgba(84,96,124,${0.07 + 0.035 * k})` });
+    const q = groups.get(key).p; q.moveTo(px, py);
+    q.quadraticCurveTo(px + Math.cos(a) * L * 0.5 + (r() - 0.5) * 6, py + Math.sin(a) * L * 0.5 + (r() - 0.5) * 6, px + Math.cos(a) * L, py + Math.sin(a) * L);
+  }
+  FIBP.push(...groups.values());
+  SPOT.width = SPOT.height = 96;
+  const s = SPOT.getContext('2d'), rg = s.createRadialGradient(48, 48, 0, 48, 48, 48);
+  rg.addColorStop(0, 'rgba(96,112,150,1)'); rg.addColorStop(0.55, 'rgba(96,112,150,0.45)'); rg.addColorStop(1, 'rgba(96,112,150,0)');
+  s.fillStyle = rg; s.fillRect(0, 0, 96, 96);
+  SHAFT.width = 48; SHAFT.height = 128;
+  const h = SHAFT.getContext('2d'), hg = h.createLinearGradient(0, 0, 48, 0);
+  hg.addColorStop(0, 'rgba(255,255,255,0)'); hg.addColorStop(0.5, 'rgba(255,255,255,1)'); hg.addColorStop(1, 'rgba(255,255,255,0)');
+  h.fillStyle = hg; h.fillRect(0, 0, 48, 128);
+  h.globalCompositeOperation = 'destination-in';
+  const vg = h.createLinearGradient(0, 0, 0, 128); vg.addColorStop(0, 'rgba(0,0,0,1)'); vg.addColorStop(1, 'rgba(0,0,0,0)');
+  h.fillStyle = vg; h.fillRect(0, 0, 48, 128);
+}
+// 白报纸的背景（屏幕坐标，画在报纸字下面）：纤维跟镜头 0.3 倍视差、另外慢慢飘 + 两团淡光影飘过。只画在看得见白纸的地方
+function drawPaperBg(t, cam) {
+  const z = cam.z, yS = FOCUS_Y + (SEA.y0 + 30 - cam.y) * z, xl = 960 + (SEA.x0 - cam.x) * z, xr = 960 + (SEA.x1 - cam.x) * z, y0 = Math.max(0, yS);
+  g.save(); g.beginPath();
+  if (yS > 0) g.rect(0, 0, W, Math.min(H, yS));
+  if (y0 < H && xl > 0) g.rect(0, y0, xl, H - y0);
+  if (y0 < H && xr < W) g.rect(xr, y0, W - xr, H - y0);
+  g.clip();
+  const ox = fmod(-(cam.x * 0.3 + t * 7), 1920), oy = fmod(-(cam.y * 0.3 + t * 4), 1080);
+  g.lineWidth = 1.6; g.lineCap = 'round';
+  for (const dx of [ox - 1920, ox]) for (const dy of [oy - 1080, oy]) {
+    if (!(dy < y0 || dx + 1920 > xr || dx < xl)) continue;
+    g.translate(dx, dy); for (const f of FIBP) { g.strokeStyle = f.col; g.stroke(f.p); } g.translate(-dx, -dy);
+  }
+  if (yS > 0) for (let k = 0; k < 2; k++) {
+    const sx = 960 + 760 * Math.sin(0.23 * t + k * 2.6) - cam.x * 0.15, sy = 430 + 240 * Math.sin(0.17 * t + k * 1.4) - (cam.y - 455) * 0.15, R = 380 + 50 * k;
+    if (sy - R > yS) continue;
+    g.globalAlpha = 0.06; g.drawImage(SPOT, sx - R, sy - R, 2 * R, 2 * R);
+  }
+  g.restore();
+}
+// 远处气泡（0.4 倍视差：画的位置跟着镜头挪 0.6 倍，看上去比近处的颗粒慢）
+const BUB = (() => { const r = mulberry32(31), out = []; for (let i = 0; i < 34; i++) out.push({ x: SEA.x0 + 40 + r() * (SEA.x1 - SEA.x0 - 80), y: r(), s: 5 + r() * 11, v: 18 + r() * 26, ph: r() * TAU }); return out; })();
+// 海里的光柱、波纹、远处气泡（世界坐标，画在海水上、海里的东西下面）
+function drawSeaFx(t, vy0, vy1, cam) {
+  const { x0, x1, y0, y1 } = SEA;
+  if (vy1 < y0 || vy0 > y1) return;
+  g.save(); g.beginPath(); g.rect(x0, y0 + 36, x1 - x0, y1 - y0 - 36); g.clip();
+  if (vy0 < y0 + 1150) {   // 光柱：从海面斜着照下来，左右慢慢摆
+    for (let k = 0; k < 5; k++) {
+      const cx = x0 + 170 + k * 390 + 70 * Math.sin(0.45 * t + k * 1.7), w = 90 + 40 * Math.sin(0.7 * t + k * 2.3), sk = 0.22 + 0.08 * Math.sin(0.33 * t + k);
+      g.save(); g.globalAlpha = 0.085 + 0.035 * Math.sin(0.9 * t + k * 1.1);
+      g.setTransform(g.getTransform().multiply(new DOMMatrix([w / 48, 0, sk, 1100 / 128, cx - w / 2, y0 + 30])));
+      g.drawImage(SHAFT, 0, 0); g.restore();
+    }
+  }
+  g.strokeStyle = 'rgba(214,226,250,0.10)'; g.lineWidth = 2.2; g.lineCap = 'round';   // 海水波纹：一道道很淡的白色虚线波纹，横着流
+  for (let k = 0; k < 60; k++) {
+    const yy = y0 + 150 + k * 128; if (yy > y1 - 40) break; if (yy < vy0 - 20 || yy > vy1 + 20) continue;
+    g.setLineDash([46 + (k % 3) * 14, 70 + (k % 4) * 18]); g.lineDashOffset = (k % 2 ? 1 : -1) * t * (34 + (k % 5) * 6);
+    g.beginPath();
+    for (let x = x0; x <= x1; x += 24) { const y = yy + 4 * Math.sin(x * 0.011 + t * 1.3 + k * 1.9); x === x0 ? g.moveTo(x, y) : g.lineTo(x, y); }
+    g.stroke();
+  }
+  g.setLineDash([]);
+  const span = y1 - y0 - 120, shiftY = (cam.y - y0) * 0.6;
+  for (const b of BUB) {
+    const y = y0 + 90 + fmod(b.y * span + shiftY - t * b.v, span), x = b.x + 8 * Math.sin(0.8 * t + b.ph);
+    if (y < vy0 - 30 || y > vy1 + 30) continue;
+    g.strokeStyle = 'rgba(220,232,255,0.22)'; g.lineWidth = 1.6; g.beginPath(); g.arc(x, y, b.s, 0, TAU); g.stroke();
+    g.fillStyle = 'rgba(235,242,255,0.28)'; g.beginPath(); g.arc(x - b.s * 0.35, y - b.s * 0.35, b.s * 0.22, 0, TAU); g.fill();
+  }
+  g.restore();
+}
+function drawSea(t, vy0, vy1) {
+  if (vy1 < SEA.y0 - 30 || vy0 > SEA.y1) return;
+  const { x0, x1, y0, y1 } = SEA;
+  const gr = g.createLinearGradient(0, y0, 0, y1);
+  gr.addColorStop(0, C.seaTop); gr.addColorStop(0.16, C.sea); gr.addColorStop(1, C.seaDeep);
+  g.fillStyle = gr; g.fillRect(x0, y0 + 30, x1 - x0, y1 - y0 - 30);
+  if (vy0 < y0 + 80) {
+    const wav = (yb, amp, k, ph) => { g.beginPath(); g.moveTo(x0, y0 + 60); for (let x = x0; x <= x1 + 16; x += 16) g.lineTo(Math.min(x, x1), yb + amp * Math.sin(x * k + ph + t * 0.55) + amp * 0.45 * Math.sin(x * k * 2.7 + ph * 1.7)); g.lineTo(x1, y0 + 60); g.closePath(); g.fill(); };
+    g.fillStyle = C.waveL; wav(y0 + 2, 7, 0.0042, 0.3);
+    g.fillStyle = C.waveM; wav(y0 + 20, 5, 0.0061, 1.9);
+    g.fillStyle = C.seaTop; g.fillRect(x0, y0 + 33, x1 - x0, 30);
+    g.strokeStyle = C.waveHi; g.lineWidth = 2.5; g.beginPath();
+    for (let x = x0; x <= x1; x += 16) { const y = y0 + 33 + 1.4 * Math.sin(x * 0.009 + t * 0.7); x === x0 ? g.moveTo(x, y) : g.lineTo(x, y); }
+    g.stroke();
+  }
+  const span = y1 - y0 - 70;
+  for (const s of SNOW) {
+    const y = y0 + 60 + ((s.y * span - t * s.v) % span + span) % span;
+    if (y < vy0 - 10 || y > vy1 + 10) continue;
+    g.fillStyle = `rgba(220,232,255,${s.a})`; g.beginPath(); g.arc(s.x, y, s.s, 0, TAU); g.fill();
+  }
+}
+function suitcase(x, y, s) {   // 行李箱（参考图插画那种浅紫蓝、白高光）
+  g.save(); g.translate(x, y); g.scale(s, s);
+  g.strokeStyle = C.head; g.lineWidth = 7; rrect(-24, -66, 48, 32, 10); g.stroke();
+  const gr = g.createLinearGradient(0, -46, 0, 50); gr.addColorStop(0, '#e3e8f7'); gr.addColorStop(1, '#a7b4da');
+  g.fillStyle = gr; rrect(-62, -46, 124, 94, 14); g.fill();
+  g.strokeStyle = C.head; g.lineWidth = 3; g.stroke();
+  g.fillStyle = C.peri; g.fillRect(-36, -46, 11, 94); g.fillRect(25, -46, 11, 94);
+  g.strokeStyle = 'rgba(255,255,255,0.85)'; g.lineWidth = 4; g.beginPath(); g.moveTo(-50, -34); g.lineTo(-50, 30); g.stroke();
+  g.restore();
+}
+function stamp(x, y, p) {   // 藏蓝油墨圆章 + 对勾
+  if (p <= 0) return;
+  const s = lerp(1.6, 1, outC(p));
+  g.save(); g.globalAlpha = clamp(p * 3) * 0.92; g.translate(x, y); g.rotate(-0.22); g.scale(s, s);
+  g.strokeStyle = C.head; g.lineWidth = 6; g.beginPath(); g.arc(0, 0, 58, 0, TAU); g.stroke();
+  g.lineWidth = 2.5; g.beginPath(); g.arc(0, 0, 47, 0, TAU); g.stroke();
+  g.lineWidth = 12; g.lineCap = 'round'; g.lineJoin = 'round';
+  g.beginPath(); g.moveTo(-24, 2); g.lineTo(-7, 20); g.lineTo(26, -18); g.stroke();
+  g.restore();
+}
+// （Token 例子里的圆形图解 drawCircle、推断 drawInfer 是场景，这里删了；要用照 示例_Token.html 抄过来改）
+
+function buildPage() {
+  pageCv.width = W * PS; pageCv.height = TOP_H * PS;
+  const p = pageCv.getContext('2d'); p.scale(PS, PS);
+  const keep = g; g = p;
+  g.fillStyle = C.rule; g.fillRect(419, 30, 1.5, 1072); g.fillRect(1500, 30, 1.5, 1072);   // 栏线
+  textLS(MAST.date, 64, 44, fSans(500, 20), C.ink, 1, 'left');
+  column(64, 336, 76, LEFT_COL);
+  column(1524, 332, 24, RIGHT_COL);
+  const fA = fTimes(400, 100, true), fB = fSong(300, 92), wa = tw(MAST.a, fA), wb = tw(MAST.b, fB), gp = 18, mx = 960 - (wa + gp + wb) / 2;   // 刊名
+  text(MAST.a, mx, 112, fA, C.gray, 'left', 'alphabetic');
+  text(MAST.b, mx + wa + gp, 112, fB, C.gray, 'left', 'alphabetic');
+  textLS(MAST.sub, 963, 146, fSans(500, 19), C.ink, 6, 'center');
+  silhouette(1290, 36);
+  text(`本期：${TITLE}`.slice(0, 18), 1290, 120, fSans(400, 15), C.ink2, 'left');
+  const fH = fSong(900, 168); let sx = 0.8; const hw = tw(TITLE, fH) * sx; if (hw > 1010) sx *= 1010 / hw;   // 大标题：宋体-简 Black 压窄成长宋
+  text(TITLE, 960, 318, fH, C.head, 'center', 'alphabetic', sx);
+  text('文·图／本刊编辑部', 1480, 350, fSans(400, 18), C.ink2, 'right', 'alphabetic');
+  LEAD.forEach((ln, k) => text(ln, 960, 390 + k * 42, fSong(400, 34), C.ink, 'center', 'alphabetic'));   // 导语
+  g = keep;
+}
+
+// ===== 场景：按新分镜重写 =====
+// 下面是能吃任何分镜的通用骨架：第 1 个镜头在报纸版心画一张「本期要点」卡（藏蓝顶条 + 宋体标题 + 关键词色块），
+// 之后每个镜头镜头往下潜到海里的一段：白色宋体大标题 + 白引线连到一排剪报纸条（关键词，卡在 TL.mark(词) 上弹出）。
+// 「高亮」的词：A 红底白字、B 藏蓝底白字加白纸边；其余在纸上用浅紫蓝 / 沙色块，在海里用白色剪报纸条。
+// 正式做新内容时，照新分镜把每段换成真正演内容的图解（参考 示例_Token.html：聊天框图解、名词解释卡、AI 圆盘、带刀横梁、分类广告格 + 放大镜、圆形图解 + 盖章）。
+const hasMark = (k) => (typeof TL.has === 'function' ? TL.has(k) : !!(TL.marks && TL.marks[k]));
+const MS = (k, dflt) => (hasMark(k) ? TL.mark(k) : dflt);   // 关键词开始说的时间；没有这个词就用默认值，不抛错
+const roleOf = (w) => { const h = (TL.highlights || []).find((x) => x.text === w); return h ? h.role : null; };
+const KF = fSong(900, 54), KH = 90, KG = 26;
+const SECS = TL.shots.map((s, i) => {
+  const kws = (s.keywords || []).filter(Boolean);
+  const items = kws.map((w, j) => ({ w, role: roleOf(w), t0: MS(w, s.start + 0.4 + 0.45 * j) - 0.05, wd: tw(w, KF) + 56, alt: j % 2 }));
+  const maxW = i === 0 ? CARD0.w - 80 : 1500;
+  const rows = []; let row = [], rw = 0;
+  for (const it of items) { if (row.length && rw + it.wd + KG > maxW) { rows.push(row); row = []; rw = 0; } row.push(it); rw += it.wd + KG; }
+  if (row.length) rows.push(row);
+  const y0 = secY(i) + (i === 0 ? 86 : 150) - (rows.length - 1) * (KH + 26) / 2;
+  rows.forEach((r, ri) => { const tot = r.reduce((a, it) => a + it.wd, 0) + KG * (r.length - 1); let x = 960 - tot / 2;
+    r.forEach((it) => { it.x = x + it.wd / 2; it.y = y0 + ri * (KH + 26); x += it.wd + KG; }); });
+  const title = s.title || `第 ${i + 1} 段`, n = Math.max(1, [...title].length);
+  return { s, i, items, title, tf: fSong(900, Math.min(i === 0 ? 60 : 76, Math.floor((i === 0 ? 900 : 1500) / n))) };
+});
+function drawKey(it, t, onSea) {
+  const a = P(t, it.t0, 0.12); if (a <= 0) return;
+  const k = outBack(P(t, it.t0, 0.32));
+  g.save(); g.globalAlpha *= a; g.translate(it.x, it.y); g.scale(k, k);
+  const w = it.wd, h = KH;
+  if (it.role) {
+    if (it.role === 'B' || onSea) { g.fillStyle = C.paper; g.fillRect(-w / 2 - 6, -h / 2 - 6, w + 12, h + 12); }   // 白纸边
+    g.fillStyle = it.role === 'B' ? C.blue : C.red; g.fillRect(-w / 2, -h / 2, w, h);
+    text(it.w, 0, 3, KF, '#ffffff');
+  } else if (onSea) {
+    g.fillStyle = 'rgba(8,18,48,0.4)'; g.fillRect(-w / 2 + 4, -h / 2 + 6, w, h);
+    g.fillStyle = C.paper; g.fillRect(-w / 2, -h / 2, w, h);
+    text(it.w, 0, 3, KF, C.ink);
+  } else {
+    g.fillStyle = it.alt ? C.tokB : C.tokA; g.fillRect(-w / 2, -h / 2, w, h);
+    text(it.w, 0, 3, KF, C.head);
+  }
+  g.restore();
+}
+function drawCard0(t) {
+  const sc = SECS[0], s = sc.s, p = P(t, s.start + 0.1, 0.4); if (p <= 0) return;
+  const { x, y, w, h } = CARD0, x0 = x - w / 2, y0 = y - h / 2;
+  g.save(); g.globalAlpha = clamp(p * 2);
+  g.fillStyle = C.shadow; g.fillRect(x0 + 8, y0 + 10, w, h);
+  g.fillStyle = C.paper; g.fillRect(x0, y0, w, h);
+  g.strokeStyle = C.ink; g.lineWidth = 2; strokeReveal(x0, y0, w, h, 2, outC(p));
+  g.fillStyle = C.head; g.fillRect(x0, y0, w, 56);
+  textLS('本 期 要 点', x0 + 28, y0 + 29, fSans(700, 26), '#ffffff', 4, 'left');
+  g.restore();
+  g.save(); g.beginPath(); g.rect(x0, y0, (w) * outC(P(t, s.start + 0.25, 0.5)), h); g.clip();
+  text(sc.title, x, y0 + 130, sc.tf, C.ink);
+  g.restore();
+  for (const it of sc.items) drawKey(it, t, false);
+}
+function drawSeaSection(sc, t) {
+  const { s, i, items, title, tf } = sc, y = secY(i);
+  if (t < s.start - 0.2) return;
+  const pa = P(t, s.start + 0.15, 0.45);
+  g.save(); g.beginPath(); g.rect(160, y - 200, 1600 * outC(pa), 140); g.clip();
+  text(title, 960, y - 130, tf, '#ffffff');
+  g.restore();
+  g.fillStyle = 'rgba(255,255,255,0.85)'; g.fillRect(960 - 320 * outC(pa), y - 72, 640 * outC(pa), 2.5);   // 标题下的白细线
+  for (const it of items) {   // 白引线：标题下细线 → 每个纸条
+    const q = outC(P(t, it.t0 - 0.12, 0.3));
+    if (q > 0) leader([[it.x, y - 70], [it.x, it.y - KH / 2 - 10]], q, 'rgba(255,255,255,0.9)', 2, 4.5);
+    drawKey(it, t, true);
+  }
+}
+function drawRunningHead(t) {   // 潜到海里以后，顶上出现一条报纸页眉
+  const t0 = SECS[1] ? SECS[1].s.start + 0.05 : TL.duration + 1;
+  const p = outC(P(t, t0, 0.35)); if (p <= 0) return;
+  g.save(); g.translate(0, -62 * (1 - p));
+  g.fillStyle = C.paper; g.fillRect(0, 0, W, 60);
+  text(`${MAST.a} ${MAST.b}`, 64, 29, fSong(400, 28), C.gray, 'left');
+  if (TITLE) text(TITLE, 960, 29, fSong(900, 26), C.head);
+  text(MAST.date, 1856, 30, fSans(400, 19), C.ink2, 'right');
+  g.fillStyle = C.ink; g.fillRect(56, 53, W - 112, 2); g.fillRect(56, 57, W - 112, 1);
+  g.restore();
+}
+// 字幕关键词：「高亮」A 红底白字、B 藏蓝底白字（和画面一致）；「字幕强调」的词淡紫蓝底（报纸的加重）
+const SUB_KW = (TL.emphasis || []).filter(Boolean);
+const SUB_HL = (TL.highlights || []).filter((h) => h.text).map((h) => [h.text, h.role === 'B' ? C.blue : C.red]);
+// 字幕换条不「眨」（v1.1）：紧接着上一条（上一条的 hide ≥ 这一条的 show，字幕.mjs 出的字幕都是这样）就直接换字、不淡入；
+// 只有第一条、或者和上一条中间有空档时，才从透明淡入 d 秒。
+function subIn(c, t, d) { const k = TL.cues.indexOf(c), prev = k > 0 ? TL.cues[k - 1] : null; return prev && prev.hide >= c.show - 1e-3 ? 1 : P(t, c.show, d); }
+function drawSubtitle(t) {
+  if (NOSUB) return;
+  g.fillStyle = C.paper; g.fillRect(0, 910, W, 170);
+  g.fillStyle = C.ink; g.fillRect(56, 913, W - 112, 2); g.fillRect(56, 918, W - 112, 1);
+  const c = TL.cueAt(t); if (!c) return;
+  const str = c.text, f0 = fSans(600, 64), w0 = tw(str, f0), f = w0 > 1780 ? fSans(600, Math.floor(64 * 1780 / w0)) : f0;
+  const a = subIn(c, t, 0.08), y = 1000, x0 = 960 - tw(str, f) / 2;
+  const st = new Array(str.length).fill('');   // ''：普通；'kw'：强调；颜色值：强调色 A / B（后标的盖前标的）
+  for (const k of SUB_KW) { let j = str.indexOf(k); while (j >= 0) { for (let q = j; q < j + k.length; q++) st[q] = 'kw'; j = str.indexOf(k, j + k.length); } }
+  for (const [k, cc] of SUB_HL) { let j = str.indexOf(k); while (j >= 0) { for (let q = j; q < j + k.length; q++) st[q] = cc; j = str.indexOf(k, j + k.length); } }
+  g.save(); g.globalAlpha = a;
+  let j = 0;
+  while (j < str.length) {
+    let e = j + 1; while (e < str.length && st[e] === st[j]) e++;
+    const s = str.slice(j, e), xx = x0 + tw(str.slice(0, j), f), ww = tw(s, f), k = st[j];
+    if (k === 'kw') { g.fillStyle = C.tokA; g.fillRect(xx - 4, y + 4, ww + 8, 32); text(s, xx, y, f, C.ink, 'left'); }
+    else if (k) { g.fillStyle = k; rrect(xx - 7, y - 40, ww + 14, 80, 6); g.fill(); text(s, xx, y, f, '#ffffff', 'left'); }
+    else text(s, xx, y, f, C.ink, 'left');
+    j = e;
+  }
+  g.restore();
+}
+
+// ===== 底座（续）：v1.3 默认动效和「一帧」的画法，换内容时不用改（场景入口在 drawView 里，见「← 场景入口」那行） =====
+// ---------- 开场印刷、翻报纸、版面推移（v1.3，FX_DEFAULT） ----------
+// 开场：印刷滚筒从上往下滚过，整版报纸「印」出来（第 0 帧已经印出报头）
+function drawPageImg(t, vx0, vx1, vy0, vy1) {
+  const ry = FX_DEFAULT ? TOP_H * (0.1 + 0.9 * inOutC(P(t, 0, 0.55))) : TOP_H;
+  const sx0 = clamp(vx0, 0, W), sx1 = clamp(vx1, 0, W), sy0 = clamp(vy0, 0, TOP_H), sy1 = clamp(Math.min(vy1, ry), 0, TOP_H);
+  if (sx1 > sx0 && sy1 > sy0) g.drawImage(pageCv, sx0 * PS, sy0 * PS, (sx1 - sx0) * PS, (sy1 - sy0) * PS, sx0, sy0, sx1 - sx0, sy1 - sy0);
+  if (ry < TOP_H && ry > vy0 - 40) {   // 滚筒：一根灰色金属辊 + 下沿一道藏蓝油墨
+    const gr = g.createLinearGradient(0, ry - 30, 0, ry + 4);
+    gr.addColorStop(0, 'rgba(160,166,180,0)'); gr.addColorStop(0.35, '#c9ced8'); gr.addColorStop(0.75, '#8e96a8'); gr.addColorStop(1, '#5d6579');
+    g.fillStyle = gr; g.fillRect(-60, ry - 30, W + 120, 34);
+    g.fillStyle = rgba(C.head, 0.8); g.fillRect(-60, ry + 4, W + 120, 3);
+    g.fillStyle = 'rgba(255,255,255,0.55)'; g.fillRect(-60, ry - 20, W + 120, 2);
+  }
+}
+const TURNCV = document.createElement('canvas');   // 翻过来的那张报纸（背面也印着字），只画一次；标题条上的字逐次现写
+function buildTurn() {
+  const w = W + 700, X = 420; TURNCV.width = w; TURNCV.height = H;   // 切点盖满时纸的左边在画面外约 390 像素，版面从 X 起排
+  const x = TURNCV.getContext('2d'), r = mulberry32(57);
+  x.fillStyle = C.paper; x.fillRect(0, 0, w, H);
+  x.font = fSong(400, 30); x.fillStyle = C.gray; x.textBaseline = 'middle'; x.fillText(`${MAST.a} ${MAST.b}`, X, 42);
+  x.fillStyle = C.ink; x.fillRect(X, 70, 1760, 3); x.fillRect(X, 77, 1760, 1.2);
+  x.fillStyle = C.head; x.fillRect(X, 108, 820, 78);
+  const gr = x.createLinearGradient(0, 230, 0, 640); gr.addColorStop(0, C.seaTop); gr.addColorStop(1, C.seaDeep);
+  x.fillStyle = gr; x.fillRect(X + 1120, 230, 640, 410); x.fillStyle = C.waveL; x.fillRect(X + 1120, 230, 640, 10);
+  x.strokeStyle = 'rgba(255,255,255,0.85)'; x.lineWidth = 5; x.beginPath(); x.arc(X + 1440, 450, 90, 0, TAU); x.stroke();
+  for (let c = 0; c < 5; c++) {
+    const cx = X + c * 360;
+    if (c) { x.fillStyle = C.rule; x.fillRect(cx - 18, 220, 1.5, H - 280); }
+    for (let y = 238; y < H - 70; y += 26) {
+      if (c >= 3 && y < 670) continue;
+      if (r() < 0.08) { y += 18; x.fillStyle = '#9da0a8'; x.fillRect(cx, y, 140 + r() * 120, 12); y += 10; continue; }
+      x.fillStyle = '#c9cacf'; x.fillRect(cx, y, (r() < 0.15 ? 120 + r() * 160 : 320), 8);
+    }
+  }
+}
+// 翻报纸：一整张报纸从右往左翻过去，切点时盖满（动效部件.js pageTurn 的几何，纸上印着字，标题条写下一段的标题）
+function drawTurn(t) {
+  for (const cu of FX_CUTS) {
+    if (cu.kind !== '翻报纸') continue;
+    const p = P(t, cu.c - TURN_D / 2, TURN_D); if (p <= 0 || p >= 1) continue;
+    const s = inOutC(p), L = W + 220 - s * (2 * W + 900), R = L + W + 440, ttl = [...(SECS[cu.i].title || '')].slice(0, 13).join('');
+    g.save(); g.setTransform(1, 0, 0, 1, 0, 0); g.globalAlpha = 1;
+    const sh = g.createLinearGradient(L - 120, 0, L - 50, 0); sh.addColorStop(0, 'rgba(10,20,50,0)'); sh.addColorStop(1, 'rgba(10,20,50,0.3)');
+    g.fillStyle = sh; g.fillRect(L - 120, 0, 70, H);
+    g.beginPath(); g.moveTo(L - 160, 0); g.lineTo(R - 160, 0); g.lineTo(R + 60, H); g.lineTo(L + 60, H); g.closePath();
+    g.save(); g.clip(); g.drawImage(TURNCV, L - 160, 0);
+    text(ttl, L - 160 + 452, 149, fSong(900, 50), '#ffffff', 'left');
+    text(`第 ${cu.i + 1} 版`, L - 160 + 2180, 44, fSans(400, 19), C.ink2, 'right');
+    const fold = g.createLinearGradient(L - 50, 0, L + 120, 0);
+    fold.addColorStop(0, 'rgba(10,20,50,0.2)'); fold.addColorStop(0.3, 'rgba(255,255,255,0.4)'); fold.addColorStop(1, 'rgba(255,255,255,0)');
+    g.fillStyle = fold; g.fillRect(L - 160, 0, 320, H);
+    g.restore(); g.restore();
+  }
+}
+function slideAt(t) { for (const cu of FX_CUTS) if (cu.kind === '版面推移' && t > cu.c - SLIDE_D / 2 && t < cu.c + SLIDE_D / 2) return cu; return null; }
+function drawGutter(x, w) {   // 版面推移时两版之间的白色版缝：纸色 + 两边的折痕阴影
+  if (x > W || x + w < 0) return;
+  g.save(); g.setTransform(1, 0, 0, 1, 0, 0);
+  g.fillStyle = C.paper; g.fillRect(x, 0, w, H);
+  const a = g.createLinearGradient(x, 0, x + 26, 0); a.addColorStop(0, 'rgba(10,20,50,0.28)'); a.addColorStop(1, 'rgba(10,20,50,0)');
+  g.fillStyle = a; g.fillRect(x, 0, 26, H);
+  const b = g.createLinearGradient(x + w - 26, 0, x + w, 0); b.addColorStop(0, 'rgba(10,20,50,0)'); b.addColorStop(1, 'rgba(10,20,50,0.2)');
+  g.fillStyle = b; g.fillRect(x + w - 26, 0, 26, H);
+  g.fillStyle = C.rule; g.fillRect(x + w / 2 - 1, 0, 2, H);
+  g.restore();
+}
+
+// ---------- 一帧 ----------
+// ---------- 动效入口（v1.2）：转场、次要动作写在这两个函数里，调 动效部件.js（用法见那个文件开头、knowledge/动效和画面变化.md 第八节）；空着画面不变 ----------
+function fxBefore(t) { }   // 画场景之前、镜头已设好：推移（动效.push + 动效.shift）、慢推、震屏、整体抖
+function fxAfter(t) { }    // 场景画完、页眉字幕之前，已是屏幕坐标：故障、擦除、翻页、纸片盖屏、粒子、泛光
+function resetCtx(x) {   // 每帧开头把画布状态全部复位：上一帧留下的线头、拐角、虚线会让同一个 t 画出不同的帧
+  if (x.reset) x.reset();
+  x.setTransform(1, 0, 0, 1, 0, 0); x.globalAlpha = 1; x.globalCompositeOperation = 'source-over'; x.filter = 'none';
+  x.lineWidth = 1; x.lineJoin = 'miter'; x.lineCap = 'butt'; x.miterLimit = 10; x.setLineDash([]); x.lineDashOffset = 0;
+  x.textAlign = 'start'; x.textBaseline = 'alphabetic'; x.letterSpacing = '0px'; x.shadowBlur = 0; x.shadowColor = 'rgba(0,0,0,0)';
+}
+// 一个「版」：给定镜头把背景层和世界里的东西画出来；ox 是这一版在屏幕上的横向偏移（版面推移时两版并排）
+function drawView(t, cam, ox) {
+  const z = cam.z;
+  const vx0 = cam.x - 960 / z, vx1 = cam.x + 960 / z, vy0 = cam.y - FOCUS_Y / z, vy1 = cam.y + (H - FOCUS_Y) / z;
+  if (FX_DEFAULT) { g.setTransform(1, 0, 0, 1, ox, 0); drawPaperBg(t, cam); }
+  g.setTransform(z, 0, 0, z, ox + 960 - cam.x * z, FOCUS_Y - cam.y * z);
+  fxBefore(t);   // 动效入口（v1.2）
+  if (vy0 < TOP_H) {   // 报纸上半版（预渲染图，只取看得见的那块）+ 第 1 个镜头的卡
+    drawPageImg(t, vx0, vx1, vy0, vy1);
+    drawCard0(t);
+  }
+  drawSea(t, vy0, vy1);
+  if (FX_DEFAULT) drawSeaFx(t, vy0, vy1, cam);
+  for (const sc of SECS.slice(1)) { const y = secY(sc.i); if (y + 450 > vy0 && y - 450 < vy1) drawSeaSection(sc, t); }   // ← 场景入口（v1.1 提醒）：上面的 drawCard0 和这一行是骨架，换成自己的绘制函数
+  g.setTransform(1, 0, 0, 1, 0, 0); g.globalAlpha = 1;
+}
+function render(t) {
+  g = main;
+  resetCtx(g);
+  g.fillStyle = C.paper; g.fillRect(0, 0, W, H);
+  const sl = slideAt(t);
+  if (!sl) drawView(t, camAt(t), 0);
+  else {   // 版面推移：旧版（停在切点前一刻）往左推走，新版（切点后一刻）从右边跟进来，中间是白色版缝
+    const u = inOutC(P(t, sl.c - SLIDE_D / 2, SLIDE_D)), off = (W + GUT) * u, bx = W + GUT - off;
+    const tA = Math.min(t, sl.c - 0.001), tB = Math.max(t, sl.c);
+    g.save(); g.beginPath(); g.rect(0, 0, Math.max(0, W - off), H); g.clip(); drawView(tA, camAt(tA), -off); g.restore();
+    if (bx < W) { g.save(); g.beginPath(); g.rect(bx, 0, W - bx, H); g.clip(); g.fillStyle = C.paper; g.fillRect(bx, 0, W - bx, H); drawView(tB, camAt(Math.max(t, sl.c + 0.003)), bx); g.restore(); }
+    drawGutter(W - off, GUT);
+  }
+  g.save(); g.setTransform(1, 0, 0, 1, 0, 0); fxAfter(t); g.restore();   // 动效入口（v1.2）
+  drawRunningHead(t);
+  if (FX_DEFAULT) drawTurn(t);
+  drawSubtitle(t);
+}
+
+let inited = false;
+function init() { if (inited) return; inited = true; buildPage(); if (FX_DEFAULT) { buildBg(); buildTurn(); } }
+window.DURATION = TL.duration;
+window.seek = (t) => { init(); render(t); };
+window.ready = false;
+const FONTS = [fSong(900, 54), fSong(400, 36), fSong(300, 96), fTimes(700, 150), fTimes(400, 100, true), fSans(400, 22), fSans(500, 42), fSans(600, 64), fSans(700, 52)];
+Promise.all(FONTS.map((f) => document.fonts.load(f, '中文AI Token'))).catch(() => {}).then(() => { init(); render(0); window.ready = true; });
+</script>
+</body>
+</html>

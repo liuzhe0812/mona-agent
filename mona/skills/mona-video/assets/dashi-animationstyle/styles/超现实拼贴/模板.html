@@ -1,0 +1,706 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<title>超现实拼贴 · 通用模板</title>
+<!--
+  超现实拼贴（S44）的通用模板：能吃任何口播的 timeline.js（和本页放在同一个文件夹，由 pipeline/生成timeline.mjs 生成）。
+  米灰纸海报上的超现实概念拼贴：特粗高反差衬线大标题（一个字桃橙渐变、压橙色干笔刷）、手写批注 + 手绘箭头、撕边纸条和纸胶带，背后太阳、青条、方格纸。
+  文件分两块：「底座：换内容时不用改」（字体、配色、小工具、质感缓存、笔刷、标题、拍上动作、批注、纸胶带、罗盘、背包小人、骨牌、放大镜、剪刀、石头人头、镜头、背景纸片、页眉、字幕）
+  和「场景：按新分镜重写」。场景区现在是通用骨架（每个镜头一张海报：大标题 + 撕边纸条关键词）；这套要先想一个超现实比喻再画，见 风格卡.md「换内容时怎么改」。
+  强调色 A = 红 #a02503、B = 蓝 #3aa6c0。满屏颗粒，出片用 --format jpeg（新建作品.mjs 已写进 作品.json）。
+  v1.3 默认动效（开关 FX_DEFAULT，在脚本开头）：背景四层一直轻轻动（纸面光影、太阳、青条和方格纸、远处小纸屑）；
+  每个镜头交界自动轮换转场（撕海报 → 纸条斜扫 → 钻进去，FX_PLAN 可逐个指定或关掉）；每个镜头慢推。
+  场景入口在 paint(t) 里（「← 场景入口」那行）：换成自己的场景后，默认转场照样按 TL.shots 自动加在每个镜头交界。
+-->
+<style>
+  html, body { margin: 0; padding: 0; background: #e9e5d9; overflow: hidden; }
+  #stage { position: relative; width: 1920px; height: 1080px; overflow: hidden; }
+  #stage canvas { position: absolute; left: 0; top: 0; }
+</style>
+</head>
+<body>
+<div id="stage"><canvas id="c" width="1920" height="1080"></canvas></div>
+<script src="timeline.js"></script>
+<script src="动效部件.js"></script>
+<script>
+'use strict';
+// ===== 底座：换内容时不用改 =====
+const W = 1920, H = 1080, TAU = Math.PI * 2;
+const TL = window.TL;
+const NOSUB = /[?&]nosub=1/.test(location.search);   // 不画字幕：render.mjs --no-subtitle 会在地址后加 ?nosub=1
+const M = (k) => TL.mark(k), ME = (k) => TL.markEnd(k);
+const SH = (k) => TL.shots[k - 1];
+// ---------- v1.3 默认动效开关 ----------
+// true：背景四层一直轻轻动 + 每个镜头交界自动轮换转场 + 每个镜头慢推；false：回到 v1.2 的样子（逐像素一样）。
+// 自己在 fxBefore / fxAfter 里写的调用，两种情况都照常生效。
+const FX_DEFAULT = true;
+const FX_KINDS = ['撕海报', '纸条斜扫', '钻进去'];   // 默认转场按镜头交界轮流用（第 1 个交界撕海报、第 2 个纸条斜扫、第 3 个钻进去……）
+const FX_PLAN = {};                                   // 指定某个交界（从 1 数）：例 { 2: '钻进去', 5: '无' }；'无' = 硬切
+
+// ---------- 字体（每种都写了 macOS 自带的替代） ----------
+// 大标题、字幕、骨牌、纸条例句：特粗衬线。英文落在 Hoefler Text Black（macOS 自带）；中文落在思源宋体 Heavy（用户装的，开源），
+// 没有思源宋体的 Mac 落到宋体-简 Black（macOS 自带）。
+const F_HEAD = '"Hoefler Text", "Source Han Serif SC", "Songti SC", serif';
+const F_SLIP = '"Source Han Serif SC", "Songti SC", serif';                     // 数据纸条：思源宋体 Bold → 宋体-简 Bold
+const F_LABEL = '"Montserrat", "Avenir Next", "PingFang SC", sans-serif';       // 宽字距小标签：Montserrat（用户装的）→ Avenir Next；中文苹方
+const F_HAND = '"HanziPen SC", "Hannotate SC", cursive';                       // 手写批注：翩翩体-简（自带）→ 手札体-简（自带）
+const F_UI = '"PingFang SC", sans-serif';                                      // 聊天卡片界面字：苹方（自带）
+const fHead = (s) => `900 ${s}px ${F_HEAD}`;
+const fSlip = (s) => `700 ${s}px ${F_SLIP}`;
+const fLabel = (s, w = 500) => `${w} ${s}px ${F_LABEL}`;
+const fHand = (s) => `700 ${s}px ${F_HAND}`;
+const fUI = (s, w = 500) => `${w} ${s}px ${F_UI}`;
+
+// ---------- 配色（取自参考图） ----------
+const C = {
+  paper: '#e9e5d9', card: '#f6f3ea', slip: '#f4f0e5', strip: '#f8f5ec', sub: '#f7f3e9',
+  ink: '#0b1615', ink2: '#1e2523', grey: '#4f5550', mute: '#8c8c82', head: '#1f2624',
+  orange: '#f75e18', brush: '#ef7e40', peachA: '#f2784a', peachB: '#f9cdae',
+  mustard: '#f2ab11', teal: '#43a9ad', path: '#d6ccb8',
+  red: '#a02503', blue: '#3aa6c0',          // 强调色 A / B（分镜.json「高亮」的两个词全片固定；Token 例子里成都 = 参考图红骨牌、旅行 = 参考图蓝骨牌）
+};
+// 骨牌的配色和点数（Token 例子里 8 张骨牌用；新内容要用 domino 时照这个配）
+const OTHER = [
+  { c: '#f0a91c', ink: '#1d2321', pip: '#fbf6e9' },   // 芥末黄
+  { c: '#7d9a58', ink: '#ffffff', pip: '#f4f1e6' },   // 橄榄绿
+  { c: '#e3901e', ink: '#1d2321', pip: '#fbf6e9' },   // 橙
+  { c: '#2b2e2a', ink: '#f3eee2', pip: '#f3eee2' },   // 炭黑（石头色）
+  { c: '#efe9da', ink: '#1d2321', pip: '#1d2321' },   // 象牙白
+  { c: '#2f6b48', ink: '#ffffff', pip: '#f4f1e6' },   // 墨绿
+];
+const PIPS = [2, 4, 1, 3, 5, 2, 3, 6];
+
+// ---------- 小工具 ----------
+const clamp = (x, a = 0, b = 1) => Math.min(b, Math.max(a, x));
+const lerp = (a, b, p) => a + (b - a) * p;
+const P = (t, a, d) => clamp((t - a) / d);
+const outC = (p) => 1 - Math.pow(1 - p, 3);
+const inOutC = (p) => (p < 0.5 ? 4 * p * p * p : 1 - Math.pow(-2 * p + 2, 3) / 2);
+const outBack = (p, k = 1.70158) => { const c3 = k + 1; return 1 + c3 * Math.pow(p - 1, 3) + k * Math.pow(p - 1, 2); };
+const inQ = (p) => p * p;
+const inC = (p) => p * p * p;
+const sine = (p) => 0.5 - 0.5 * Math.cos(Math.PI * p);
+const qb = (a, c, b, u) => (1 - u) * (1 - u) * a + 2 * (1 - u) * u * c + u * u * b;   // 二次贝塞尔
+function mulberry32(a) { return function () { a |= 0; a = a + 0x6D2B79F5 | 0; let t = Math.imul(a ^ a >>> 15, 1 | a); t = t + Math.imul(t ^ t >>> 7, 61 | t) ^ t; return ((t ^ t >>> 14) >>> 0) / 4294967296; }; }
+function hex(h) { const n = parseInt(h.slice(1), 16); return [n >> 16 & 255, n >> 8 & 255, n & 255]; }
+function mix(a, b, p) { const A = hex(a), B = hex(b); return `rgb(${A.map((v, i) => Math.round(v + (B[i] - v) * p)).join(',')})`; }
+function rgba(h, a) { const [r, gg, b] = hex(h); return `rgba(${r},${gg},${b},${a})`; }
+function mk(w, h) { const c = document.createElement('canvas'); c.width = Math.ceil(w); c.height = Math.ceil(h); return c; }
+const cv = document.getElementById('c');
+const MAIN = cv.getContext('2d');
+let g = MAIN;                         // 撕海报时临时换成离屏画布（把上一镜头最后一帧画进去），画完换回来
+const wCache = new Map();
+function tw(s, f) { const k = f + '|' + s; let v = wCache.get(k); if (v === undefined) { g.save(); g.font = f; g.letterSpacing = '0px'; v = g.measureText(s).width; g.restore(); wCache.set(k, v); } return v; }
+function text(s, x, y, f, col, align = 'center', base = 'middle') { g.font = f; g.fillStyle = col; g.textAlign = align; g.textBaseline = base; g.fillText(s, x, y); }
+// 宽字距小字（左对齐）
+function spaced(s, x, y, f, col, sp) { g.save(); g.font = f; g.letterSpacing = sp + 'px'; g.fillStyle = col; g.textAlign = 'left'; g.textBaseline = 'middle'; g.fillText(s, x, y); g.restore(); }
+function spacedW(s, f, sp) { return tw(s, f) + sp * s.length; }
+function poly(pts, dx = 0, dy = 0) { g.beginPath(); pts.forEach(([x, y], i) => (i ? g.lineTo(x + dx, y + dy) : g.moveTo(x + dx, y + dy))); g.closePath(); }
+// 撕边纸片的轮廓：上下边轻微起伏，左右两端锯齿（ends 为 0 的一端是直边）
+function tornRect(w, h, seed, o = {}) {
+  const r = mulberry32(seed), e = o.edge ?? 1.2, el = o.endL ?? 7, er = o.endR ?? 7, pts = [];
+  const nx = Math.max(3, Math.round(w / 60)), ny = Math.max(3, Math.round(h / 9));
+  for (let i = 0; i <= nx; i++) pts.push([-w / 2 + w * i / nx, -h / 2 + (r() - 0.5) * 2 * e]);
+  for (let i = 1; i < ny; i++) pts.push([w / 2 + (r() - 0.5) * 2 * er, -h / 2 + h * i / ny]);
+  for (let i = nx; i >= 0; i--) pts.push([-w / 2 + w * i / nx, h / 2 + (r() - 0.5) * 2 * e]);
+  for (let i = ny - 1; i >= 1; i--) pts.push([-w / 2 + (r() - 0.5) * 2 * el, -h / 2 + h * i / ny]);
+  return pts;
+}
+
+// ---------- 质感：全部只生成一次，缓存到离屏 canvas ----------
+// 细颗粒（黑白随机点，透明度很低），给纸、卡片、骨牌叠一层
+const GRAIN = (() => { const n = 256, c = mk(n, n), x = c.getContext('2d'), id = x.createImageData(n, n), d = id.data, r = mulberry32(11);
+  for (let by = 0; by < n; by += 3) for (let bx = 0; bx < n; bx += 3) { const v = r() < 0.5 ? 0 : 255, al = Math.floor(r() * r() * 0.38 * 255);   // 3×3 一块：颗粒感还在，逐帧截图压缩快得多
+    for (let y = by; y < Math.min(n, by + 3); y++) for (let x2 = bx; x2 < Math.min(n, bx + 3); x2++) { const i = y * n + x2; d[i * 4] = d[i * 4 + 1] = d[i * 4 + 2] = v; d[i * 4 + 3] = al; } }
+  x.putImageData(id, 0, 0); return c; })();
+const grainPat = g.createPattern(GRAIN, 'repeat');
+// 纸底：米灰 + 两层斑驳 + 颗粒 + 纤维 + 很轻的暗角
+const PAPER = (() => {
+  const c = mk(W, H), x = c.getContext('2d'), id = x.createImageData(W, H), d = id.data, r = mulberry32(5);
+  const grid = (S) => { const gx = Math.ceil(W / S) + 2, gy = Math.ceil(H / S) + 2, a = new Float32Array(gx * gy); for (let i = 0; i < a.length; i++) a[i] = r() - 0.5; return { a, gx, S }; };
+  const smp = ({ a, gx, S }, px, py) => { const fx = px / S, fy = py / S, ix = fx | 0, iy = fy | 0, ux = fx - ix, uy = fy - iy, sx = ux * ux * (3 - 2 * ux), sy = uy * uy * (3 - 2 * uy);
+    const p = a[iy * gx + ix], q = a[iy * gx + ix + 1], s = a[(iy + 1) * gx + ix], u = a[(iy + 1) * gx + ix + 1]; return p + (q - p) * sx + (s - p) * sy + (p - q - s + u) * sx * sy; };
+  const G1 = grid(90), G2 = grid(22);   // 不加逐像素噪点：H.264 下看不出来，还会让逐帧 PNG 截图变大变慢
+  for (let y = 0; y < H; y++) for (let xx = 0; xx < W; xx++) {
+    const i = (y * W + xx) * 4, vx = xx / W - 0.5, vy = y / H - 0.5;
+    const m = smp(G1, xx, y) * 10 + smp(G2, xx, y) * 4 - 16 * (vx * vx * 0.7 + vy * vy * 0.5);
+    d[i] = 233 + m; d[i + 1] = 229 + m; d[i + 2] = 217 + m * 0.9; d[i + 3] = 255;
+  }
+  x.putImageData(id, 0, 0);
+  x.lineCap = 'round';
+  for (let k = 0; k < 1100; k++) { const px = r() * W, py = r() * H, a = r() * TAU, L = 4 + r() * 16;
+    x.strokeStyle = r() < 0.5 ? 'rgba(255,255,255,0.12)' : 'rgba(120,105,80,0.07)'; x.lineWidth = 0.6 + r();
+    x.beginPath(); x.moveTo(px, py); x.quadraticCurveTo(px + Math.cos(a) * L / 2 + (r() - 0.5) * 4, py + Math.sin(a) * L / 2 + (r() - 0.5) * 4, px + Math.cos(a) * L, py + Math.sin(a) * L); x.stroke(); }
+  return c;
+})();
+// 拼贴纸片：芥末黄太阳（圆）、青色长条（矩形）。2 倍分辨率，边缘稍不规则，带水彩斑驳和颗粒
+function makePiece(kind, w, h, base, light, dark, seed) {
+  const s = 2, pad = 8, c = mk((w + pad * 2) * s, (h + pad * 2) * s), x = c.getContext('2d'), r = mulberry32(seed);
+  x.scale(s, s); x.translate(pad + w / 2, pad + h / 2);
+  x.beginPath();
+  if (kind === 'circle') { const R = w / 2; for (let i = 0; i <= 200; i++) { const a = i / 200 * TAU, rr = R + Math.sin(a * 6 + seed) * 0.9 + (r() - 0.5) * 1.4; i ? x.lineTo(Math.cos(a) * rr, Math.sin(a) * rr) : x.moveTo(Math.cos(a) * rr, Math.sin(a) * rr); } }
+  else tornRect(w, h, seed, { edge: 1.3, endL: 1.3, endR: 1.3 }).forEach(([px, py], i) => (i ? x.lineTo(px, py) : x.moveTo(px, py)));
+  x.closePath(); x.save(); x.clip();
+  const gr = x.createLinearGradient(-w / 2, -h / 2, w / 2, h / 2); gr.addColorStop(0, light); gr.addColorStop(0.5, base); gr.addColorStop(1, dark);
+  x.fillStyle = gr; x.fillRect(-w / 2 - 2, -h / 2 - 2, w + 4, h + 4);
+  for (let k = 0; k < 90; k++) { const bx = (r() - 0.5) * w, by = (r() - 0.5) * h, br = 8 + r() * Math.min(w, h) * 0.3, l = r() < 0.5;
+    const bg = x.createRadialGradient(bx, by, 0, bx, by, br); bg.addColorStop(0, rgba(l ? light : dark, 0.22)); bg.addColorStop(1, rgba(l ? light : dark, 0)); x.fillStyle = bg; x.fillRect(bx - br, by - br, br * 2, br * 2); }
+  x.globalAlpha = 0.7; x.fillStyle = x.createPattern(GRAIN, 'repeat'); x.fillRect(-w / 2 - 2, -h / 2 - 2, w + 4, h + 4);
+  x.restore();
+  return { c, w, h, pad };
+}
+const SUN = makePiece('circle', 500, 500, '#f2ab11', '#f8c445', '#e39608', 21);
+const TEAL = makePiece('rect', 230, 470, '#43a9ad', '#55b8bb', '#2f9196', 22);
+// 撕边方格纸：米白底、蓝绿格线、铅笔乱涂
+const GRAPH = (() => {
+  const w = 440, h = 240, s = 2, pad = 10, c = mk((w + pad * 2) * s, (h + pad * 2) * s), x = c.getContext('2d'), r = mulberry32(23);
+  x.scale(s, s); x.translate(pad + w / 2, pad + h / 2);
+  const pts = tornRect(w, h, 24, { edge: 3, endL: 6, endR: 9 });
+  x.beginPath(); pts.forEach(([px, py], i) => (i ? x.lineTo(px, py) : x.moveTo(px, py))); x.closePath();
+  x.fillStyle = '#ece8dc'; x.fill(); x.save(); x.clip();
+  x.strokeStyle = 'rgba(58,160,182,0.5)'; x.lineWidth = 1.1;
+  for (let gx = -w / 2 + 6; gx < w / 2; gx += 21) { x.beginPath(); x.moveTo(gx, -h / 2); x.lineTo(gx + 2, h / 2); x.stroke(); }
+  for (let gy = -h / 2 + 8; gy < h / 2; gy += 21) { x.beginPath(); x.moveTo(-w / 2, gy); x.lineTo(w / 2, gy + 1.5); x.stroke(); }
+  x.strokeStyle = 'rgba(62,78,84,0.75)'; x.lineWidth = 1.5; x.lineCap = 'round'; x.beginPath();
+  for (let i = 0; i <= 260; i++) { const u = i / 260, a = u * TAU * 5.2, R = 46 + 14 * Math.sin(u * 9);
+    const px = -40 + u * 120 + Math.cos(a) * R * 1.25 + (r() - 0.5) * 2, py = 6 + Math.sin(a) * R * 0.42 - u * 20 + (r() - 0.5) * 2; i ? x.lineTo(px, py) : x.moveTo(px, py); }
+  x.stroke();
+  x.globalAlpha = 0.6; x.fillStyle = x.createPattern(GRAIN, 'repeat'); x.fillRect(-w / 2, -h / 2, w, h);
+  x.restore();
+  return { c, w, h, pad, pts };
+})();
+// 橙色干笔刷：中间实、两头细、带浅色和深色的丝、后半段有飞白
+function makeBrush(seed) {
+  const w = 1000, h = 70, c = mk(w, h), x = c.getContext('2d'), r = mulberry32(seed), top = [], bot = [];
+  for (let i = 0; i <= 60; i++) { const u = i / 60, taper = Math.min(1, u / 0.05, (1 - u) / 0.12), th = 34 * (0.3 + 0.7 * Math.pow(taper, 0.6));
+    const cy = h / 2 + Math.sin(u * 5 + seed) * 3 + (u - 0.5) * 5; top.push([u * w, cy - th / 2 + (r() - 0.5) * 2.5]); bot.push([u * w, cy + th / 2 + (r() - 0.5) * 2.5]); }
+  x.fillStyle = 'rgba(239,126,64,0.92)'; x.beginPath(); top.forEach(([a, b], i) => (i ? x.lineTo(a, b) : x.moveTo(a, b))); bot.reverse().forEach(([a, b]) => x.lineTo(a, b)); x.closePath(); x.fill();
+  x.lineCap = 'round';
+  for (let k = 0; k < 130; k++) { const y0 = h / 2 + (r() - 0.5) * 30, x0 = r() * w * 0.15, x1 = w - r() * w * 0.2;
+    x.strokeStyle = r() < 0.55 ? `rgba(247,165,110,${0.2 + r() * 0.35})` : `rgba(222,96,40,${0.15 + r() * 0.3})`; x.lineWidth = 0.6 + r() * 2.2;
+    x.beginPath(); x.moveTo(x0, y0); x.bezierCurveTo(x0 + (x1 - x0) * 0.3, y0 + (r() - 0.5) * 4, x0 + (x1 - x0) * 0.7, y0 + (r() - 0.5) * 4, x1, y0 + (r() - 0.5) * 5); x.stroke(); }
+  x.globalCompositeOperation = 'destination-out';
+  for (let k = 0; k < 45; k++) { const y0 = h / 2 + (r() - 0.5) * 28, x0 = w * (0.5 + r() * 0.5), L = 40 + r() * 220;
+    x.strokeStyle = `rgba(0,0,0,${0.3 + r() * 0.5})`; x.lineWidth = 0.6 + r() * 1.6; x.beginPath(); x.moveTo(x0, y0); x.lineTo(Math.min(w, x0 + L), y0 + (r() - 0.5) * 3); x.stroke(); }
+  return c;
+}
+const BRUSH = [makeBrush(3), makeBrush(8), makeBrush(13)];
+// 石头人头（AI）：侧脸朝右、头顶切开。世界坐标；切口中心 (400,360)
+const HEAD = { ox: 400, oy: 360, rx: 260, ry: 78, rxo: 276, ryo: 88 };
+function headPath(c) {
+  const { ox, oy, rxo, ryo } = HEAD;
+  c.beginPath(); c.moveTo(ox - rxo, oy);
+  c.ellipse(ox, oy, rxo, ryo, 0, Math.PI, 2 * Math.PI);            // 切口外沿（上半圈）
+  c.bezierCurveTo(688, 392, 698, 440, 696, 478);                   // 额头
+  c.bezierCurveTo(700, 492, 708, 500, 706, 512);                   // 眉骨
+  c.bezierCurveTo(703, 526, 698, 538, 700, 548);                   // 眼窝
+  c.bezierCurveTo(712, 575, 738, 606, 744, 628);                   // 鼻梁 → 鼻尖
+  c.bezierCurveTo(748, 640, 728, 652, 714, 652);                   // 鼻底
+  c.bezierCurveTo(708, 656, 708, 664, 710, 672);                   // 人中
+  c.bezierCurveTo(714, 676, 722, 682, 720, 688);                   // 上唇
+  c.bezierCurveTo(716, 694, 706, 697, 702, 700);                   // 嘴
+  c.bezierCurveTo(710, 704, 716, 710, 714, 718);                   // 下唇
+  c.bezierCurveTo(710, 728, 700, 732, 700, 740);
+  c.bezierCurveTo(704, 748, 716, 760, 712, 772);                   // 下巴
+  c.bezierCurveTo(704, 790, 678, 800, 650, 800);
+  c.bezierCurveTo(622, 800, 600, 804, 590, 812);                   // 下颌 → 喉
+  c.bezierCurveTo(578, 840, 570, 880, 568, 900);                   // 脖子前面
+  c.lineTo(300, 900);                                              // 平切的底
+  c.bezierCurveTo(296, 860, 286, 812, 282, 780);                   // 脖子后面
+  c.bezierCurveTo(230, 740, 182, 700, 160, 640);                   // 后颈
+  c.bezierCurveTo(128, 560, 112, 430, ox - rxo, oy);               // 后脑
+  c.closePath();
+}
+const HB = { x0: 96, y0: 266, x1: 762, y1: 904, s: 2.4 };   // 头像贴图的范围（世界坐标）和放大倍数（镜头会推到 2.4 倍）
+const HEADTEX = (() => {
+  const c = mk((HB.x1 - HB.x0) * HB.s, (HB.y1 - HB.y0) * HB.s), x = c.getContext('2d'), r = mulberry32(31);
+  x.setTransform(HB.s, 0, 0, HB.s, -HB.x0 * HB.s, -HB.y0 * HB.s);
+  headPath(x); x.save(); x.clip();
+  const gr = x.createRadialGradient(650, 600, 10, 600, 610, 540);
+  gr.addColorStop(0, '#5f6158'); gr.addColorStop(0.3, '#3a3c35'); gr.addColorStop(0.7, '#1f221e'); gr.addColorStop(1, '#101311');
+  x.fillStyle = gr; x.fillRect(HB.x0, HB.y0, HB.x1 - HB.x0, HB.y1 - HB.y0);
+  for (let k = 0; k < 140; k++) { const bx = lerp(HB.x0, HB.x1, r()), by = lerp(HB.y0, HB.y1, r()), br = 8 + r() * 60, l = r() < 0.5;
+    const bg = x.createRadialGradient(bx, by, 0, bx, by, br); bg.addColorStop(0, l ? 'rgba(150,150,138,0.10)' : 'rgba(0,0,0,0.16)'); bg.addColorStop(1, 'rgba(0,0,0,0)'); x.fillStyle = bg; x.fillRect(bx - br, by - br, br * 2, br * 2); }
+  for (let k = 0; k < 5200; k++) { const px = lerp(HB.x0, HB.x1, r()), py = lerp(HB.y0, HB.y1, r());
+    x.fillStyle = r() < 0.55 ? `rgba(205,203,190,${0.05 + r() * 0.16})` : `rgba(0,0,0,${0.1 + r() * 0.25})`; x.beginPath(); x.arc(px, py, 0.25 + r() * 0.8, 0, TAU); x.fill(); }
+  x.lineWidth = 7; x.strokeStyle = 'rgba(200,198,184,0.16)'; headPath(x); x.stroke();          // 脸侧受光的浅边
+  x.lineWidth = 2.2; x.strokeStyle = 'rgba(225,222,208,0.22)'; headPath(x); x.stroke();
+  const sg = x.createLinearGradient(0, 760, 0, 900); sg.addColorStop(0, 'rgba(0,0,0,0)'); sg.addColorStop(0.3, 'rgba(0,0,0,0.35)'); sg.addColorStop(1, 'rgba(0,0,0,0.15)');
+  x.fillStyle = sg; x.fillRect(HB.x0, 760, HB.x1 - HB.x0, 140);                                 // 下巴下面背光
+  const bg2 = x.createLinearGradient(110, 0, 430, 0); bg2.addColorStop(0, 'rgba(0,0,0,0.38)'); bg2.addColorStop(1, 'rgba(0,0,0,0)');
+  x.fillStyle = bg2; x.fillRect(HB.x0, HB.y0, 340, HB.y1 - HB.y0);                              // 后脑更暗
+  x.restore();
+  const { ox, oy, rx, ry, rxo, ryo } = HEAD;                                                    // 切口一圈石头边
+  x.beginPath(); x.ellipse(ox, oy, rxo, ryo, 0, 0, TAU); x.moveTo(ox + rx, oy); x.ellipse(ox, oy, rx, ry, 0, 0, TAU, true);
+  const rg = x.createLinearGradient(0, oy - ryo, 0, oy + ryo); rg.addColorStop(0, '#77796f'); rg.addColorStop(0.45, '#a3a397'); rg.addColorStop(1, '#d6d1c2');
+  x.fillStyle = rg; x.fill();
+  x.save(); x.clip();
+  for (let k = 0; k < 1200; k++) { const a = r() * TAU, rr = lerp(0.94, 1.03, r()); x.fillStyle = r() < 0.5 ? 'rgba(255,255,255,0.18)' : 'rgba(40,40,36,0.22)'; x.beginPath(); x.arc(ox + Math.cos(a) * rxo * rr, oy + Math.sin(a) * ryo * rr, 0.3 + r() * 0.7, 0, TAU); x.fill(); }
+  x.restore();
+  x.lineWidth = 1.4; x.strokeStyle = 'rgba(20,22,20,0.6)'; x.beginPath(); x.ellipse(ox, oy, rx, ry, 0, 0, TAU); x.stroke();
+  x.lineWidth = 1.2; x.strokeStyle = 'rgba(240,236,224,0.55)'; x.beginPath(); x.ellipse(ox, oy, rxo - 0.6, ryo - 0.6, 0, Math.PI, TAU); x.stroke();
+  return c;
+})();
+// 聊天卡片的柔和投影（模糊只做一次）
+const CARD = { cx: 1310, cy: 510, w: 960, h: 640, rot: -0.02 };
+const CARD_SH = (() => { const pad = 60, c = mk(CARD.w + pad * 2, CARD.h + pad * 2), x = c.getContext('2d');
+  x.filter = 'blur(16px)'; x.fillStyle = 'rgba(45,35,15,0.45)'; x.beginPath(); x.roundRect(pad, pad, CARD.w, CARD.h, 20); x.fill(); return { c, pad }; })();
+// ---------- v1.3 默认动效用的缓存（FX_DEFAULT 为 false 时不生成） ----------
+// 纸面光影：1/8 分辨率的暖光、冷影斑驳，很淡地盖在纸上慢慢漂
+const LIGHT = FX_DEFAULT ? (() => { const w = 300, h = 170, c = mk(w, h), x = c.getContext('2d'), r = mulberry32(61);
+  for (let k = 0; k < 16; k++) { const bx = r() * w, by = r() * h, br = 22 + r() * 46, warm = k % 2 === 0;
+    const gr = x.createRadialGradient(bx, by, 0, bx, by, br);
+    gr.addColorStop(0, warm ? 'rgba(255,248,226,0.55)' : 'rgba(112,94,64,0.30)'); gr.addColorStop(1, warm ? 'rgba(255,248,226,0)' : 'rgba(112,94,64,0)');
+    x.fillStyle = gr; x.fillRect(bx - br, by - br, br * 2, br * 2); }
+  return c; })() : null;
+// 远处浮着的小纸屑：撕边小纸片（米白、芥末黄、桃橙、炭黑；不用青绿，免得像强调色 B）
+const SCRAPS = FX_DEFAULT ? (() => { const cols = ['#f6f3ea', '#f2ab11', '#f2784a', '#efe9da', '#2b2e2a', '#f9cdae'], r = mulberry32(83), out = [];
+  for (let k = 0; k < 12; k++) { const w = 14 + r() * 26, h = w * (0.45 + r() * 0.5), s = 2, c = mk(w * s + 8, h * s + 8), x = c.getContext('2d');
+    x.translate(c.width / 2, c.height / 2); x.scale(s, s);
+    const pts = tornRect(w, h, 300 + k, { edge: 1, endL: 2, endR: 2 });
+    x.fillStyle = cols[k % cols.length]; x.beginPath(); pts.forEach(([a, b], i) => (i ? x.lineTo(a, b) : x.moveTo(a, b))); x.closePath(); x.fill();
+    x.save(); x.clip(); x.globalAlpha = 0.6; x.fillStyle = x.createPattern(GRAIN, 'repeat'); x.fillRect(-w, -h, w * 2, h * 2); x.restore();
+    out.push({ c, w: c.width / s, h: c.height / s, x0: r() * 2200, y0: 150 + r() * 720, vx: 9 + r() * 14, vy: -(3 + r() * 6), spin: (r() - 0.5) * 0.8, ph: r() * TAU, a: 0.35 + r() * 0.25 }); }
+  return out; })() : [];
+// 纸条斜扫用的 4 条长纸条（米白、芥末黄、桃橙、炭黑），撕边、斑驳、颗粒
+const SWEEP = FX_DEFAULT ? [['#f4f0e5', '#fbf8ef', '#e3ddcc'], ['#f2ab11', '#f8c445', '#e39608'], ['#f2784a', '#f9a07a', '#e0602e'], ['#22282a', '#363c3c', '#151918']].map(([base, light, dark], k) => {
+  const w = 3400, h = 500, c = mk(w, h + 24), x = c.getContext('2d'), r = mulberry32(140 + k);
+  x.translate(w / 2, (h + 24) / 2);
+  const pts = tornRect(w, h, 150 + k, { edge: 7, endL: 3, endR: 3 });
+  x.beginPath(); pts.forEach(([a, b], i) => (i ? x.lineTo(a, b) : x.moveTo(a, b))); x.closePath(); x.save(); x.clip();
+  const gr = x.createLinearGradient(0, -h / 2, 0, h / 2); gr.addColorStop(0, light); gr.addColorStop(0.55, base); gr.addColorStop(1, dark);
+  x.fillStyle = gr; x.fillRect(-w / 2, -h / 2 - 12, w, h + 24);
+  for (let i = 0; i < 70; i++) { const bx = (r() - 0.5) * w, by = (r() - 0.5) * h, br = 30 + r() * 120, l = r() < 0.5;
+    const bg = x.createRadialGradient(bx, by, 0, bx, by, br); bg.addColorStop(0, rgba(l ? light : dark, 0.25)); bg.addColorStop(1, rgba(l ? light : dark, 0)); x.fillStyle = bg; x.fillRect(bx - br, by - br, br * 2, br * 2); }
+  x.globalAlpha = 0.55; x.fillStyle = x.createPattern(GRAIN, 'repeat'); x.fillRect(-w / 2, -h / 2 - 12, w, h + 24);
+  x.restore();
+  x.strokeStyle = k === 3 ? 'rgba(255,255,255,0.18)' : 'rgba(255,255,255,0.55)'; x.lineWidth = 3;
+  x.beginPath(); pts.forEach(([a, b], i) => (i ? x.lineTo(a, b) : x.moveTo(a, b))); x.closePath(); x.stroke();
+  return { c, w, h: h + 24, pts };
+}) : [];
+// 撕海报用的离屏画布
+const LAYER = FX_DEFAULT ? mk(W, H) : null, LG = LAYER ? LAYER.getContext('2d') : null;
+
+// ---------- 通用部件 ----------
+// 干笔刷：从左往右刷出来，p 是进度
+function brush(x, y, w, h, p, k = 0, a = 1) {
+  if (p <= 0 || a <= 0) return; const B = BRUSH[k % BRUSH.length];
+  g.save(); g.globalAlpha *= a; g.drawImage(B, 0, 0, B.width * p, B.height, x, y - h / 2, w * p, h); g.restore();
+}
+// 特粗衬线标题（左对齐、竖直居中）；acc = [起, 止)：这几个字填桃橙渐变（参考图的「O」）
+function headline(str, x, y, size, acc, col = C.ink) {
+  const f = fHead(size); g.font = f; g.textAlign = 'left'; g.textBaseline = 'middle';
+  if (!acc) { g.fillStyle = col; g.fillText(str, x, y); return; }
+  const [a, b] = acc, w1 = tw(str.slice(0, a), f), w2 = tw(str.slice(a, b), f);
+  g.fillStyle = col; g.fillText(str.slice(0, a), x, y); g.fillText(str.slice(b), x + w1 + w2, y);
+  const gr = g.createLinearGradient(0, y - size * 0.42, 0, y + size * 0.36); gr.addColorStop(0, C.peachA); gr.addColorStop(1, C.peachB);
+  g.fillStyle = gr; g.fillText(str.slice(a, b), x + w1, y);
+}
+// 「贴上去」：像剪下来的纸拍到海报上（略大、略斜 → 落定）
+function paste(t, t0, x, y, draw, d = 0.3) {
+  const p = P(t, t0, d); if (p <= 0) return;
+  const s = lerp(1.16, 1, outC(p));
+  g.save(); g.globalAlpha *= clamp(p * 3); g.translate(x, y); g.rotate(lerp(-0.06, 0, outBack(p, 1.4))); g.scale(s, s); g.translate(-x, -y);
+  draw(); g.restore();
+}
+// 手绘箭头：二次曲线 + 轻微抖动 + 开口箭头，p 是画出来的比例
+function handArrow(x0, y0, cx, cy, x1, y1, p, o = {}) {
+  if (p <= 0) return;
+  const N = 48, n = Math.ceil(N * p), wob = o.wob ?? 1.6, seed = o.seed ?? 1;
+  const pt = (u) => { const x = qb(x0, cx, x1, u), y = qb(y0, cy, y1, u), dx = 2 * (1 - u) * (cx - x0) + 2 * u * (x1 - cx), dy = 2 * (1 - u) * (cy - y0) + 2 * u * (y1 - cy);
+    const L = Math.hypot(dx, dy) || 1, k = wob * Math.sin(u * 9 + seed) * Math.sin(Math.PI * u); return [x - dy / L * k, y + dx / L * k, dx / L, dy / L]; };
+  g.save(); g.strokeStyle = o.col ?? C.ink2; g.lineWidth = o.w ?? 4.5; g.lineCap = 'round'; g.lineJoin = 'round';
+  g.beginPath(); for (let i = 0; i <= n; i++) { const [x, y] = pt(Math.min(p, i / N)); i ? g.lineTo(x, y) : g.moveTo(x, y); } g.stroke();
+  const hp = P(p, 0.85, 0.15);
+  if (hp > 0) { const [ex, ey, ux, uy] = pt(p), hl = (o.head ?? 22) * hp;
+    g.beginPath(); for (const s of [-1, 1]) { const a = Math.atan2(-uy, -ux) + s * 0.5; g.moveTo(ex, ey); g.lineTo(ex + Math.cos(a) * hl, ey + Math.sin(a) * hl); } g.stroke(); }
+  g.restore();
+}
+// 手写字：从左往右「写」出来
+function handText(s, x, y, size, p, o = {}) {
+  if (p <= 0) return; const f = fHand(size), w = tw(s, f), al = o.align ?? 'left', x0 = al === 'left' ? x : al === 'center' ? x - w / 2 : x - w;
+  g.save(); g.beginPath(); g.rect(x0 - 14, y - size, (w + 28) * p, size * 2); g.clip();
+  g.translate(x0, y); g.rotate(o.rot ?? -0.03); text(s, 0, 0, f, o.col ?? C.ink2, 'left'); g.restore();
+}
+// 手绘墨线圈：略不规则的椭圆，转 1.15 圈，p 是画出来的比例
+function inkLoop(cx, cy, rx, ry, p, seed, o = {}) {
+  if (p <= 0) return; const r = mulberry32(seed), a0 = -2.4 + r() * 0.6, ph = r() * 6, N = 90, gr = o.grow ?? 0.07;
+  g.save(); g.strokeStyle = o.col ?? C.ink2; g.lineWidth = o.w ?? 5; g.lineCap = 'round'; g.lineJoin = 'round'; g.beginPath();
+  for (let i = 0; i <= N * p; i++) { const u = i / N, a = a0 + u * TAU * 1.15, k = 1 + 0.04 * Math.sin(a * 3 + ph) + gr * u;
+    const x = cx + rx * k * Math.cos(a), y = cy + ry * k * Math.sin(a); i ? g.lineTo(x, y) : g.moveTo(x, y); }
+  g.stroke(); g.restore();
+}
+// 纸胶带（半透明米色，两端锯齿）
+function tape(x, y, w, h, rot, a = 1) {
+  if (a <= 0) return;
+  g.save(); g.globalAlpha *= a; g.translate(x, y); g.rotate(rot); g.fillStyle = 'rgba(232,218,178,0.8)';
+  poly(tornRect(w, h, Math.round(w * 7 + h), { edge: 0.6, endL: 3, endR: 3 })); g.fill(); g.restore();
+}
+// 罗盘星标志（参考图左上角）；onDark：画在深色标题栏里的小头像
+function compassMark(x, y, r, onDark) {
+  g.save(); g.translate(x, y);
+  if (onDark) { g.fillStyle = C.teal; g.beginPath(); g.arc(0, 0, r, 0, TAU); g.fill(); }
+  else { g.strokeStyle = C.ink; g.lineWidth = 2; g.beginPath(); g.arc(0, 0, r, 0, TAU); g.stroke(); }
+  const cols = onDark ? [['#f6f1e4', '#d7cfbb']] : [[C.mustard, '#c88a0b'], [C.teal, '#2b7d81'], [C.orange, '#c4470f'], ['#2a2f2c', '#121614']];
+  for (const [R, wd, off] of [[r * 0.84, r * 0.2, 0], [r * 0.52, r * 0.13, Math.PI / 4]]) for (let k = 0; k < 4; k++) {
+    const a = k * Math.PI / 2 - Math.PI / 2 + off, [c1, c2] = off ? (onDark ? ['#cfe9ea', '#9fd0d2'] : ['#3c4440', '#1b201e']) : cols[k % cols.length];
+    const tx = Math.cos(a) * R, ty = Math.sin(a) * R, lx = Math.cos(a - Math.PI / 2) * wd, ly = Math.sin(a - Math.PI / 2) * wd;
+    g.fillStyle = c1; g.beginPath(); g.moveTo(0, 0); g.lineTo(tx, ty); g.lineTo(lx, ly); g.closePath(); g.fill();
+    g.fillStyle = c2; g.beginPath(); g.moveTo(0, 0); g.lineTo(tx, ty); g.lineTo(-lx, -ly); g.closePath(); g.fill();
+  }
+  g.restore();
+}
+// 背包小人（参考图站在头顶的人）：脚底中点在原点，高约 165，面朝右（dir = -1 镜像）
+function rr(x, y, w, h, r) { g.beginPath(); g.roundRect(x, y, w, h, r); g.fill(); }
+function traveler(x, y, s, dir = 1, a = 1) {
+  if (a <= 0 || s <= 0) return;
+  g.save(); g.globalAlpha *= a; g.translate(x, y); g.scale(s * dir, s);
+  g.fillStyle = 'rgba(40,34,22,0.28)'; g.beginPath(); g.ellipse(-3, 1, 26, 4.5, 0, 0, TAU); g.fill();
+  g.fillStyle = '#23272c'; poly([[-10, -76], [0, -76], [-4, -7], [-13, -7]]); g.fill();          // 后腿
+  g.fillStyle = '#2e333b'; poly([[-2, -76], [10, -76], [11, -7], [2, -7]]); g.fill();             // 前腿
+  g.fillStyle = '#e4e0d6'; rr(-17, -9, 16, 9, 3); rr(1, -9, 19, 9, 3);                          // 白球鞋
+  g.fillStyle = '#d6982c'; g.beginPath(); g.moveTo(-14, -134); g.quadraticCurveTo(0, -141, 13, -133); g.lineTo(14, -74); g.lineTo(-13, -72); g.closePath(); g.fill();   // 芥末色外套
+  g.fillStyle = 'rgba(110,62,8,0.28)'; g.beginPath(); g.moveTo(-14, -134); g.lineTo(-3, -136); g.lineTo(-4, -73); g.lineTo(-13, -72); g.closePath(); g.fill();
+  g.fillStyle = '#2b2f2e'; rr(-32, -130, 21, 54, 8); g.fillStyle = '#3c4240'; rr(-30, -112, 16, 20, 4);                  // 背包
+  g.strokeStyle = '#191c1b'; g.lineWidth = 3.5; g.beginPath(); g.moveTo(-11, -131); g.quadraticCurveTo(-2, -116, 4, -100); g.stroke();
+  g.fillStyle = '#c3871f'; g.beginPath(); g.moveTo(5, -130); g.quadraticCurveTo(16, -112, 11, -86); g.lineTo(4, -86); g.quadraticCurveTo(8, -108, -2, -126); g.closePath(); g.fill();   // 胳膊
+  g.fillStyle = '#c69172'; g.beginPath(); g.arc(8, -83, 4, 0, TAU); g.fill(); rr(-3, -146, 8, 10, 2);
+  g.beginPath(); g.ellipse(2, -156, 10, 12, 0, 0, TAU); g.fill();                                // 头
+  g.fillStyle = '#1e1915'; g.beginPath(); g.ellipse(0, -161, 11, 8.5, -0.25, Math.PI * 0.95, TAU * 1.02); g.fill();
+  g.beginPath(); g.ellipse(-6, -155, 5, 8, 0, 0, TAU); g.fill();                                 // 头发
+  g.restore();
+}
+// 多米诺骨牌（「头里」坐标）：正面 124×218，左侧面、顶面露出厚度；上半写 Token，下半是点
+const DOM = { w: 124, h: 218, sd: 15, tp: 9 };
+const PIP_POS = { 1: [[0, 0]], 2: [[-1, -1], [1, 1]], 3: [[-1, -1], [0, 0], [1, 1]], 4: [[-1, -1], [1, -1], [-1, 1], [1, 1]],
+  5: [[-1, -1], [1, -1], [0, 0], [-1, 1], [1, 1]], 6: [[-1, -1], [1, -1], [-1, 0], [1, 0], [-1, 1], [1, 1]] };
+function domino(tk, cx, yb, s = 1, a = 1, o = {}) {
+  if (a <= 0 || s <= 0) return;
+  const { w, h, sd, tp } = DOM, L = -w / 2, T = -h;
+  g.save(); g.globalAlpha *= a; g.translate(cx, yb); g.rotate(o.rot ?? 0); g.scale(s * (o.sx ?? 1), s * (o.sy ?? 1));
+  g.fillStyle = mix(tk.c, '#000000', 0.4); poly([[L, T], [L - sd, T - tp], [L - sd, -tp], [L, 0]]); g.fill();          // 左侧面
+  g.fillStyle = mix(tk.c, '#ffffff', 0.25); poly([[L, T], [L - sd, T - tp], [L + w - sd, T - tp], [L + w, T]]); g.fill(); // 顶面
+  g.fillStyle = tk.c; g.beginPath(); g.rect(L, T, w, h); g.fill();
+  const sh = g.createLinearGradient(0, T, 0, 0); sh.addColorStop(0, 'rgba(255,255,255,0.12)'); sh.addColorStop(1, 'rgba(0,0,0,0.14)');
+  g.fillStyle = sh; g.fill();
+  g.save(); g.clip(); g.globalAlpha *= 0.6; g.fillStyle = grainPat; g.fillRect(L, T, w, h); g.restore();
+  text(tk.t, 0, T + 60, fHead(tk.t.length > 1 ? 50 : 56), tk.ink);
+  g.fillStyle = rgba(tk.pip, 0.8); g.fillRect(-w * 0.32, T + 112, w * 0.64, 4);
+  g.fillStyle = tk.pip;
+  for (const [px, py] of PIP_POS[tk.pips]) { g.beginPath(); g.arc(px * 30, T + 164 + py * 30, 9.5, 0, TAU); g.fill(); }
+  if (o.ring > 0) { g.strokeStyle = rgba('#ffffff', o.ring); g.lineWidth = 7; g.strokeRect(L - sd - 9, T - tp - 9, w + sd + 18, h + tp + 18); }
+  g.restore();
+}
+// 放大镜：黑框 + 黄铜内圈 + 淡青镜片 + 白色高光 + 黑柄
+function magnifier(x, y, a, s = 1) {
+  if (a <= 0) return;
+  g.save(); g.globalAlpha *= a; g.translate(x, y); g.scale(s, s);
+  g.fillStyle = 'rgba(45,36,20,0.18)'; g.beginPath(); g.arc(12, 16, 84, 0, TAU); g.fill();
+  g.save(); g.rotate(0.78); g.fillStyle = '#c9a24a'; g.fillRect(70, -17, 18, 34); g.fillStyle = '#242522'; rr(86, -14, 128, 28, 13); g.restore();
+  g.fillStyle = 'rgba(214,238,240,0.26)'; g.beginPath(); g.arc(0, 0, 76, 0, TAU); g.fill();
+  g.strokeStyle = '#242522'; g.lineWidth = 13; g.stroke();
+  g.strokeStyle = '#c9a24a'; g.lineWidth = 4; g.beginPath(); g.arc(0, 0, 66, 0, TAU); g.stroke();
+  g.strokeStyle = 'rgba(255,255,255,0.75)'; g.lineWidth = 6; g.lineCap = 'round'; g.beginPath(); g.arc(0, 0, 50, Math.PI * 1.08, Math.PI * 1.42); g.stroke();
+  g.restore();
+}
+// 剪刀（分词器）：支点在原点，刀尖朝下，整体放大 1.2 倍；th 是张开的半角；左手柄用一根线挂一块「分词器」小纸牌
+function scissors(x, y, th, rot, a, tagA, swing) {
+  if (a <= 0) return;
+  g.save(); g.globalAlpha *= a; g.translate(x, y); g.rotate(rot); g.scale(1.2, 1.2);
+  if (tagA > 0) {                                                                       // 小纸牌先画（在剪刀后面）
+    g.save(); g.rotate(-th); g.translate(-40, -96); g.rotate(swing); g.globalAlpha *= tagA;
+    g.strokeStyle = C.ink2; g.lineWidth = 2; g.beginPath(); g.moveTo(0, 0); g.lineTo(-46, 44); g.stroke();
+    g.translate(-46, 44); g.rotate(0.1); g.translate(-92, 0);
+    const tp2 = tornRect(196, 76, 41, { edge: 1, endL: 3, endR: 0.5 });
+    g.fillStyle = 'rgba(45,36,20,0.22)'; poly(tp2, 4, 5); g.fill(); g.fillStyle = '#f6f2e6'; poly(tp2); g.fill();
+    g.fillStyle = C.ink2; g.beginPath(); g.arc(84, 0, 5, 0, TAU); g.fill();
+    text('分词器', -8, 3, fHead(46), C.ink);
+    g.restore();
+  }
+  for (const sgn of [-1, 1]) {
+    g.save(); g.rotate(sgn * th);
+    const bl = g.createLinearGradient(-16, 0, 16, 0); bl.addColorStop(0, '#f2f4f2'); bl.addColorStop(0.45, '#c3c8c8'); bl.addColorStop(1, '#7c8384');
+    g.fillStyle = bl; g.beginPath(); g.moveTo(-18 * sgn, -18); g.lineTo(20 * sgn, -18); g.quadraticCurveTo(22 * sgn, 60, 4 * sgn, 224); g.lineTo(-2 * sgn, 224); g.quadraticCurveTo(-12 * sgn, 90, -18 * sgn, -18); g.closePath(); g.fill();
+    g.strokeStyle = 'rgba(40,44,44,0.6)'; g.lineWidth = 1.6; g.stroke();
+    g.fillStyle = '#9aa0a0'; g.fillRect(-8, -46, 16, 32);
+    g.strokeStyle = C.orange; g.lineWidth = 17; g.beginPath(); g.ellipse(36 * sgn, -92, 29, 38, -sgn * 0.35, 0, TAU); g.stroke();   // 朱橙手柄
+    g.strokeStyle = 'rgba(150,40,0,0.35)'; g.lineWidth = 4; g.beginPath(); g.ellipse(36 * sgn, -92, 36, 45, -sgn * 0.35, 0.2, 2.2); g.stroke();
+    g.restore();
+  }
+  g.fillStyle = '#4a4f4f'; g.beginPath(); g.arc(0, 0, 10, 0, TAU); g.fill(); g.fillStyle = '#d8dcdc'; g.beginPath(); g.arc(-2, -2, 3.5, 0, TAU); g.fill();
+  g.restore();
+}
+// ---------- 镜头 ----------
+// 世界坐标：总览时镜头在 (960,540)、1 倍。DIVE / toDive / W2D / D2W 是「钻进人头顶开口」那套坐标（新比喻也用头 / 脑子时留着用）
+const OVER = { x: 960, y: 540, z: 1 };
+const DIVE = { x: HEAD.ox, y: HEAD.oy - 100 / 2.4, z: 2.4 };
+const CAM0 = { x: 960, y: 540, z: 1 };
+// 通用骨架的镜头：每个镜头里慢慢推近一点，换镜头时拉回
+const CAM = [];
+TL.shots.forEach((s) => { CAM.push([s.start, s.start + 0.4, 960, 540, 1], [s.start + 0.42, Math.max(s.start + 0.5, s.end - 0.05), 968, 532, 1.035, 'sine']); });
+// v1.3 镜头交界和每个交界用哪种默认转场
+const CUTS = TL.shots.slice(1).map((s) => s.start);
+const CUT_KIND = CUTS.map((c, i) => FX_PLAN[i + 1] ?? FX_KINDS[i % FX_KINDS.length]);
+// 镜头里的「推近再拉开」节拍：这个镜头里第 2 条起每条字幕开头一个；两个节拍隔了 2.8 秒以上就在中间平均补上。
+// 节拍轮流：推近一点（偏左上）→ 拉开 → 推近一点（偏右下）→ 拉开……长镜头里也每 2–3 秒有一次看得见的变化
+const BEATS = TL.shots.map((s) => {
+  const cues = TL.cues.map((c) => c.show).filter((x) => x > s.start + 0.6 && x < s.end - 0.6), pts = [s.start, ...cues, s.end], out = [];
+  for (let i = 0; i < pts.length - 1; i++) { const gap = pts[i + 1] - pts[i], n = Math.floor(gap / 2.8); for (let k = 1; k <= n; k++) out.push(pts[i] + gap * k / (n + 1)); if (i < pts.length - 2) out.push(pts[i + 1]); }
+  return out.filter((x) => x < s.end - 0.6);
+});
+const BEAT_POSE = [{ x: 960, y: 540, z: 1 }, { x: 928, y: 526, z: 1.08 }, { x: 960, y: 540, z: 1 }, { x: 994, y: 552, z: 1.08 }];
+function camFx(t) {
+  let k = 0; TL.shots.forEach((s, i) => { if (t >= s.start) k = i; });
+  const u = Math.min(Math.max(0, t - TL.shots[k].start), 5);
+  let f = { ...BEAT_POSE[0] };
+  BEATS[k].forEach((b, j) => { if (t < b - 0.05) return; const p = inOutC(P(t, b - 0.05, 0.6)), q = BEAT_POSE[(j + 1) % 4];
+    f = { x: lerp(f.x, q.x, p), y: lerp(f.y, q.y, p), z: lerp(f.z, q.z, p) }; });
+  let z = f.z * 动效.zoom(t, TL.shots[k].start, { rate: 0.012, max: 5 });   // 每个镜头慢推：每秒 1.2%，5 秒封顶
+  CUTS.forEach((c, i) => { if (CUT_KIND[i] !== '钻进去') return;            // 钻进去：切点前 0.3 秒猛推进画面中间，切点后从里面拉出来
+    if (t >= c - 0.3 && t < c) z *= 1 + 2.2 * inC(P(t, c - 0.3, 0.3));
+    else if (t >= c && t < c + 0.45) z *= 1 + 2.2 * (1 - outC(P(t, c, 0.45))); });
+  return { x: f.x + 1.6 * u, y: f.y - 1.2 * u, z };
+}
+function camAt(t) {
+  if (FX_DEFAULT) return camFx(t);
+  let c = { ...CAM0 };
+  for (const [t0, t1, x, y, z, e] of CAM) {
+    if (t <= t0) break;
+    const p = P(t, t0, t1 - t0), q = e === 'sine' ? sine(p) : inOutC(p);
+    c = { x: lerp(c.x, x, q), y: lerp(c.y, y, q), z: lerp(c.z, z, q) };
+  }
+  return c;
+}
+// depth < 1：远处的纸片（太阳、青条）跟镜头动得少一点，有一点前后层次
+function setCam(cam, depth = 1) {
+  const z = 1 + (cam.z - 1) * depth, cx = cam.x * depth + 960 * (1 - depth), cy = cam.y * depth + 540 * (1 - depth);
+  g.setTransform(z, 0, 0, z, 960 - cx * z, 540 - cy * z);
+}
+function toDive(cam) { setCam(cam); g.translate(DIVE.x - 960 / DIVE.z, DIVE.y - 540 / DIVE.z); g.scale(1 / DIVE.z, 1 / DIVE.z); }
+const W2D = (x, y) => ({ x: 960 + (x - DIVE.x) * DIVE.z, y: 540 + (y - DIVE.y) * DIVE.z });
+const D2W = (x, y) => ({ x: DIVE.x + (x - 960) / DIVE.z, y: DIVE.y + (y - 540) / DIVE.z });
+
+// ---------- 背景纸片：太阳、青色长条、方格纸（太阳每个镜头换一个位置，换镜头时滑过去） ----------
+const SUNP = [{ x: 1720, y: 292, r: 215 }, { x: 1600, y: 200, r: 150 }, { x: 1530, y: 430, r: 250 }];
+function sunAt(t) {
+  let k = 0; TL.shots.forEach((s, i) => { if (t >= s.start) k = i; });
+  const a = SUNP[Math.max(0, k - 1) % SUNP.length], b = SUNP[k % SUNP.length], p = k ? inOutC(P(t, TL.shots[k].start, 0.8)) : 1;
+  return { x: lerp(a.x, b.x, p), y: lerp(a.y, b.y, p), r: lerp(a.r, b.r, p) };
+}
+
+function drawTex(pc, x, y, s, rot, a = 1) {
+  const { c, w, h, pad } = pc; g.save(); g.globalAlpha *= a; g.translate(x, y); g.rotate(rot); g.scale(s, s);
+  g.drawImage(c, -w / 2 - pad, -h / 2 - pad, w + pad * 2, h + pad * 2); g.restore();
+}
+const GR = { x: 820, y: 776, rot: -0.07 };
+// 开场拍上（背景纸片）：从略大、略斜、透明落到原位
+function pasteTex(pc, t, t0, x, y, s, rot, d = 0.32) {
+  const p = P(t, t0, d); if (p <= 0) return;
+  drawTex(pc, x, y, s * lerp(1.22, 1, outC(p)), rot + lerp(-0.07, 0, outBack(p, 1.4)), clamp(p * 3));
+}
+const SUNP_FX = [{ x: 1720, y: 314, r: 215 }, { x: 1600, y: 272, r: 150 }, { x: 1530, y: 430, r: 250 }];   // 顶边都在页眉带下面
+function sunFx(t) {
+  let k = 0; TL.shots.forEach((s, i) => { if (t >= s.start) k = i; });
+  const a = SUNP_FX[Math.max(0, k - 1) % 3], b = SUNP_FX[k % 3], p = k ? inOutC(P(t, TL.shots[k].start, 0.8)) : 1;
+  return { x: lerp(a.x, b.x, p), y: lerp(a.y, b.y, p), r: lerp(a.r, b.r, p) };
+}
+function drawBackPiecesFx(t, cam) {                       // 太阳呼吸、慢慢漂、纹理慢转；青条、方格纸轻轻摇；开场依次拍上
+  setCam(cam, 0.82); const sn = sunFx(t); pasteTex(SUN, t, 0, sn.x, sn.y + 5 * Math.sin(0.9 * t), sn.r / 250 * (1 + 0.012 * Math.sin(1.3 * t)), 0.04 * t, 0.36);
+  setCam(cam, 0.93); pasteTex(TEAL, t, 0.1, 690, 640 + 4 * Math.sin(1.1 * t + 1), 1, -0.045 + 0.009 * Math.sin(0.8 * t + 1));
+  setCam(cam);
+  const gp = P(t, 0.2, 0.32); if (gp <= 0) return;
+  const gy = GR.y + 3 * Math.sin(0.9 * t + 2), gr = GR.rot + 0.006 * Math.sin(0.7 * t + 2), gs = lerp(1.22, 1, outC(gp));
+  g.save(); g.globalAlpha *= clamp(gp * 3); g.translate(GR.x, gy); g.rotate(gr + lerp(-0.07, 0, outBack(gp, 1.4))); g.scale(gs, gs);
+  g.fillStyle = 'rgba(50,40,20,0.15)'; poly(GRAPH.pts, 6 + 10 * (1 - gp), 8 + 12 * (1 - gp)); g.fill(); g.restore();
+  pasteTex(GRAPH, t, 0.2, GR.x, gy, 1, gr);
+}
+// 最底下两层：纸面光影（视差 0.3）、远处小纸屑（视差 0.45），一直在动；纸屑不进页眉带和字幕带
+function drawAmbient(t, cam) {
+  const z = 1 + (cam.z - 1) * 0.3, cx = cam.x * 0.3 + 960 * 0.7, cy = cam.y * 0.3 + 540 * 0.7, kx = LIGHT.width / 2260, ky = LIGHT.height / 1320;
+  const X0 = -170 + 52 * Math.sin(0.13 * t), Y0 = -120 + 38 * Math.sin(0.17 * t + 1);
+  const sx = clamp((cx - 960 / z - X0) * kx, 0, LIGHT.width), sy = clamp((cy - 540 / z - Y0) * ky, 0, LIGHT.height);
+  const sw = Math.max(1, Math.min(W / z * kx, LIGHT.width - sx)), sh = Math.max(1, Math.min(H / z * ky, LIGHT.height - sy));
+  g.save(); g.setTransform(1, 0, 0, 1, 0, 0); g.globalAlpha = 0.34 + 0.1 * Math.sin(0.6 * t); g.drawImage(LIGHT, sx, sy, sw, sh, 0, 0, W, H); g.restore();
+  g.save(); g.setTransform(1, 0, 0, 1, 0, 0); g.beginPath(); g.rect(0, 128, W, 772); g.clip();
+  setCam(cam, 0.45);
+  for (const s of SCRAPS) {
+    const x = ((s.x0 + s.vx * t) % 2200 + 2200) % 2200 - 140, y = 150 + (((s.y0 - 150 + s.vy * t) % 730) + 730) % 730 + 8 * Math.sin(0.7 * t + s.ph);
+    const a = s.a * clamp((y - 150) / 70) * clamp((880 - y) / 70); if (a <= 0) continue;
+    g.save(); g.globalAlpha = a; g.translate(x, y); g.rotate(s.spin * t + s.ph); g.drawImage(s.c, -s.w / 2, -s.h / 2, s.w, s.h); g.restore();
+  }
+  g.restore();
+}
+function drawBackPieces(t, cam) {
+  if (FX_DEFAULT) { drawAmbient(t, cam); drawBackPiecesFx(t, cam); return; }
+  setCam(cam, 0.82); const sn = sunAt(t); drawTex(SUN, sn.x, sn.y, sn.r / 250, 0);
+  setCam(cam, 0.93); drawTex(TEAL, 690, 640, 1, -0.045);
+  setCam(cam);
+  g.save(); g.translate(GR.x, GR.y); g.rotate(GR.rot); g.fillStyle = 'rgba(50,40,20,0.15)'; poly(GRAPH.pts, 6, 8); g.fill(); g.restore();
+  drawTex(GRAPH, GR.x, GR.y, 1, GR.rot);
+}
+
+// ---------- 页眉、字幕（画面坐标，不跟镜头动） ----------
+function drawHeader() {                                    // 罗盘标志 + 两行粗体（栏目名，按需要改），右上宽字距小字 = 标题 + 细线
+  if (FX_DEFAULT) {                                         // v1.3：字先描一圈纸色的边（纸上看不出来），深色东西从页眉后面经过时也读得清
+    g.save(); g.strokeStyle = C.paper; g.lineWidth = 5; g.lineJoin = 'round'; g.font = fUI(30, 600); g.textAlign = 'left'; g.textBaseline = 'middle';
+    g.strokeText('知识', 146, 64); g.strokeText('图鉴', 146, 98);
+    if (TL.title) { g.font = fLabel(22); g.letterSpacing = '7px'; g.strokeText(TL.title, 1690 - spacedW(TL.title, fLabel(22), 7), 80); }
+    g.restore();
+  }
+  compassMark(96, 80, 36, false);
+  text('知识', 146, 64, fUI(30, 600), C.ink, 'left'); text('图鉴', 146, 98, fUI(30, 600), C.ink, 'left');
+  if (TL.title) { const f = fLabel(22), lw = spacedW(TL.title, f, 7); spaced(TL.title, 1690 - lw, 80, f, C.ink2, 7); g.fillStyle = C.ink2; g.fillRect(1710, 79, 130, 1.6); }
+}
+// 字幕：撕边米白纸条 + 特粗衬线 64 像素；「字幕强调」的词在被念到时刷上橙色干笔刷，「高亮」的词用强调色 A 红 / B 蓝字
+const SUB_BRUSH = (TL.emphasis || []).filter(Boolean).slice().sort((a, b) => b.length - a.length);
+const SUB_COL = (TL.highlights || []).filter((h) => h.text).map((h) => [h.text, h.role === 'B' ? C.blue : C.red]);
+const SUBF = fHead(64);
+const SUBS = TL.cues.map((c) => {
+  const offs = []; let o = 0; for (const x of TL.chars.filter((x) => x.cue === c.id)) { offs.push([o, x.start]); o += x.text.length; }
+  const timeAt = (j) => { let best = c.show; for (const [oo, st] of offs) if (oo <= j) best = st; return best; };
+  const n = c.text.length, col = new Array(n).fill(null), used = new Array(n).fill(false), br = [];
+  for (const [w, cc] of SUB_COL) for (let j = c.text.indexOf(w); j >= 0; j = c.text.indexOf(w, j + w.length)) for (let k = 0; k < w.length; k++) col[j + k] = cc;
+  for (const w of SUB_BRUSH) for (let j = c.text.indexOf(w); j >= 0; j = c.text.indexOf(w, j + w.length)) {
+    if (used.slice(j, j + w.length).some(Boolean)) continue; br.push({ j, n: w.length, t: timeAt(j) }); for (let k = 0; k < w.length; k++) used[j + k] = true; }
+  const segs = []; let s = 0; for (let j = 1; j <= n; j++) if (j === n || col[j] !== col[s]) { segs.push({ s: c.text.slice(s, j), j: s, col: col[s] }); s = j; }
+  const r = mulberry32(c.id * 97 + 3);
+  return { id: c.id, segs, br, rot: (r() - 0.5) * 0.012, seed: c.id * 31 + 7 };
+});
+// 字幕换条不「眨」（v1.1）：紧接着上一条（上一条的 hide ≥ 这一条的 show，字幕.mjs 出的字幕都是这样）就直接换字、不淡入；
+// 只有第一条、或者和上一条中间有空档时，才从透明淡入 d 秒。
+function subIn(c, t, d) { const k = TL.cues.indexOf(c), prev = k > 0 ? TL.cues[k - 1] : null; return prev && prev.hide >= c.show - 1e-3 ? 1 : P(t, c.show, d); }
+function drawSubtitle(t) {
+  if (NOSUB) return;
+  const c = TL.cueAt(t); if (!c) return; const S = SUBS.find((x) => x.id === c.id); if (!S) return;
+  const w0 = tw(c.text, SUBF), pw = w0 + 100, ph = 104;
+  g.save(); g.globalAlpha = subIn(c, t, 0.08); g.translate(960, 994); g.rotate(S.rot);
+  const pts = tornRect(pw, ph, S.seed, { edge: 1.2, endL: 7, endR: 7 });
+  g.fillStyle = 'rgba(40,32,18,0.24)'; poly(pts, 4, 6); g.fill();
+  g.fillStyle = C.sub; poly(pts); g.fill();
+  g.save(); g.clip(); g.globalAlpha *= 0.4; g.fillStyle = grainPat; g.fillRect(-pw / 2, -ph / 2, pw, ph); g.restore();
+  const x0 = -w0 / 2;
+  for (const b of S.br) { const bx = x0 + tw(c.text.slice(0, b.j), SUBF), bw = tw(c.text.substr(b.j, b.n), SUBF); brush(bx - 8, 22, bw + 16, 32, outC(P(t, b.t - 0.06, 0.28)), b.j % 3, 0.95); }
+  g.font = SUBF; g.textAlign = 'left'; g.textBaseline = 'middle';
+  for (const sg of S.segs) { g.fillStyle = sg.col || C.ink; g.fillText(sg.s, x0 + tw(c.text.slice(0, sg.j), SUBF), 4); }
+  g.restore();
+}
+
+// ===== 场景：按新分镜重写 =====
+// 下面是能吃任何分镜的通用骨架：每个镜头一张「海报」——左上特粗衬线大标题（第一个字桃橙渐变）+ 橙色干笔刷，
+// 下面一排撕边纸条（关键词，卡在 TL.mark(词) 上「拍」上来，纸胶带贴住；「高亮」的词用强调色 A 红 / B 蓝纸条白字），
+// 手绘箭头从标题指向纸条，右下手写批注「#N」。换镜头时上一张淡出。
+// 正式做新内容时先想一个超现实比喻（Token 例子：AI = 开顶石头人头、Token = 头里的骨牌、海量数据 = 从头顶喷出的纸条），
+// 再用底座里的部件演（drawHead / drawInterior 人头、domino 骨牌、scissors 剪刀、magnifier 放大镜、traveler 背包小人、inkLoop 墨线圈），不要只留纸条。
+const hasMark = (k) => (typeof TL.has === 'function' ? TL.has(k) : !!(TL.marks && TL.marks[k]));
+const MS = (k, dflt) => (hasMark(k) ? TL.mark(k) : dflt);   // 关键词开始说的时间；没有这个词就用默认值，不抛错
+const SLF = fSlip(52), SLH = 88, SLG = 30;
+const SECS = TL.shots.map((s, i) => {
+  const kws = (s.keywords || []).filter(Boolean);
+  const items = kws.map((w, j) => { const h = (TL.highlights || []).find((x) => x.text === w);
+    return { w, col: h ? (h.role === 'B' ? C.blue : C.red) : (j % 2 ? C.slip : C.strip), ink: h ? '#ffffff' : C.ink, t0: MS(w, s.start + 0.4 + 0.45 * j) - 0.05,
+      wd: tw(w, SLF) + 64, rot: ((i * 7 + j * 3) % 5 - 2) * 0.012, seed: 500 + i * 37 + j * 11 }; });
+  const rows = []; let row = [], rw = 0;
+  for (const it of items) { if (row.length && rw + it.wd + SLG > 1400) { rows.push(row); row = []; rw = 0; } row.push(it); rw += it.wd + SLG; }
+  if (row.length) rows.push(row);
+  const y0 = 600 - (rows.length - 1) * (SLH + 34) / 2;
+  rows.forEach((r, ri) => { let x = 300; r.forEach((it) => { it.x = x + it.wd / 2; it.y = y0 + ri * (SLH + 34); x += it.wd + SLG; }); });
+  const title = s.title || `第 ${i + 1} 张`, n = Math.max(1, [...title].length), size = Math.min(110, Math.floor(1450 / n));
+  return { s, i, items, title, size };
+});
+function drawPoster(sc, t) {
+  const { s, i, items, title, size } = sc, next = SECS[i + 1];
+  const out = next ? (FX_DEFAULT ? (t >= next.s.start ? 1 : 0) : P(t, next.s.start - 0.05, 0.25)) : 0;   // v1.3：开了默认转场就不淡出，到点交给转场
+  if (out >= 1 || t < s.start - (FX_DEFAULT ? 0 : 0.05)) return;
+  g.save(); g.globalAlpha *= 1 - out;
+  const tx = 240, ty = 300;
+  const t1 = s.start + (i ? (FX_DEFAULT ? 0.3 : 0.22) : 0);   // 上一张淡完（开了默认转场：转场走开）再拍新标题，免得两个标题叠在一起
+  paste(t, t1, tx + 400, ty, () => headline(title, tx, ty, size, [0, 1]));
+  brush(tx - 10, ty + size * 0.62, Math.min(900, tw(title, fHead(size)) * 0.6), 34, outC(P(t, t1 + 0.25, 0.4)), i % 3);
+  const first = items[0];
+  if (first) handArrow(tx + 60, ty + size * 0.75, tx + 20, first.y - 60, first.x - first.wd / 2 + 30, first.y - SLH / 2 - 12, outC(P(t, first.t0 - 0.25, 0.3)), { seed: i + 1 });
+  for (const it of items) {
+    const sw = FX_DEFAULT ? 动效.sway(t, it.seed, { dy: 2, deg: 0.6, breath: 0 }) : { dy: 0, r: 0 };   // v1.3：落定后轻轻摇
+    paste(t, it.t0, it.x, it.y, () => {
+      g.save(); g.translate(it.x, it.y + sw.dy); g.rotate(it.rot + sw.r);
+      const pts = tornRect(it.wd, SLH, it.seed, { edge: 1.2, endL: 4, endR: 4 });
+      g.fillStyle = 'rgba(40,32,18,0.22)'; poly(pts, 5, 7); g.fill();
+      g.fillStyle = it.col; poly(pts); g.fill();
+      text(it.w, 0, 4, SLF, it.ink, 'center');
+      g.restore();
+      tape(it.x - it.wd / 2 + 18, it.y - SLH / 2 + 4 + sw.dy, 70, 22, -0.5, 0.9);
+    }, 0.28);
+  }
+  handText(`#${i + 1}`, 1560, 760, 56, P(t, s.start + 0.5, 0.4), { col: C.orange });
+  g.restore();
+}
+
+// ---------- 一帧 ----------
+// ---------- 动效入口（v1.2）：转场、次要动作写在这两个函数里，调 动效部件.js（用法见那个文件开头、knowledge/动效和画面变化.md 第八节）；空着画面不变 ----------
+function fxBefore(t) { }   // 画场景之前、镜头已设好：推移（动效.push + 动效.shift）、慢推、震屏、整体抖
+function fxAfter(t) { }    // 场景画完、页眉字幕之前，已是屏幕坐标：故障、擦除、翻页、纸片盖屏、粒子、泛光
+// ---------- v1.3 默认转场（FX_DEFAULT 为 true 时，按 CUT_KIND 加在每个镜头交界；「钻进去」的猛推在 camFx 里） ----------
+// 撕海报：上一镜头最后一帧（paint 画进离屏画布）沿中间一条撕边撕成两半，各自抬起、转着往左右飞出，露出下一镜头。0.45 秒
+const TEAR_EDGE = (() => { const r = mulberry32(71), pts = []; for (let i = 0; i <= 30; i++) { const u = i / 30; pts.push([lerp(990, 930, u) + (r() - 0.5) * 22 + 16 * Math.sin(u * 11), lerp(-60, 1140, u)]); } return pts; })();
+function tearHalf(side) { g.beginPath(); g.moveTo(side < 0 ? -80 : W + 80, -60); for (const [x, y] of TEAR_EDGE) g.lineTo(x, y); g.lineTo(side < 0 ? -80 : W + 80, 1140); g.closePath(); }
+function tearCut(t, c) {
+  const p = P(t, c, 0.45); if (p <= 0 || p >= 1) return;
+  const keep = g; g = LG; g.setTransform(1, 0, 0, 1, 0, 0); g.globalAlpha = 1; g.clearRect(0, 0, W, H); paint(c - 0.001); g = keep;
+  for (const side of [-1, 1]) {
+    const q = P(p, side < 0 ? 0 : 0.08, 0.92), lift = outC(P(q, 0, 0.3)), fly = inQ(P(q, 0.08, 0.92)), px = side < 0 ? 900 : 1020;
+    g.save(); g.setTransform(1, 0, 0, 1, 0, 0);
+    g.translate(px + side * (1300 * fly + 14 * lift), 540 + 150 * fly); g.rotate(side * (0.05 * lift + 0.32 * fly)); g.scale(1 + 0.04 * lift, 1 + 0.04 * lift); g.translate(-px, -540);
+    g.save(); g.translate(side * 10 + 16 * lift, 20 + 30 * lift); g.fillStyle = `rgba(40,30,12,${0.3 * lift})`; tearHalf(side); g.fill(); g.restore();
+    g.save(); tearHalf(side); g.clip(); g.drawImage(LAYER, 0, 0); g.restore();
+    g.strokeStyle = '#fbf8ef'; g.lineWidth = 7; g.lineJoin = 'round'; g.beginPath(); TEAR_EDGE.forEach(([x, y], i) => (i ? g.lineTo(x, y) : g.moveTo(x, y))); g.stroke();
+    g.restore();
+  }
+}
+// 纸条斜扫：4 条撕边长纸条斜着（约 -19 度）从下往上交错扫进来盖满，盖满那一刻换镜头，再扫出去。切点前 0.32 秒到切点后 0.4 秒
+function sweepCut(t, c) {
+  if (t < c - 0.34 || t > c + 0.5) return;
+  g.save(); g.setTransform(1, 0, 0, 1, 0, 0); g.globalAlpha = 1; g.translate(960, 540); g.rotate(-0.33);
+  for (let k = 0; k < SWEEP.length; k++) {
+    const o = SWEEP.length - 1 - k, pin = outC(P(t, c - 0.32 + 0.05 * o, 0.3 - 0.05 * o)), pout = inQ(P(t, c + 0.02 + 0.035 * o, 0.28)); if (pin <= 0 || pout >= 1) continue;
+    const dir = k % 2 ? -1 : 1, u = dir * (-(1 - pin) * 3500 + pout * 3500), v = (k - 1.5) * 410, S = SWEEP[k];
+    g.save(); g.translate(u + 12, v + 16); g.fillStyle = 'rgba(40,30,12,0.26)'; poly(S.pts); g.fill(); g.restore();
+    g.drawImage(S.c, u - S.w / 2, v - S.h / 2);
+  }
+  g.restore();
+}
+// 钻进去：镜头猛推（camFx）到最深时盖一层纸色，切点那一刻整屏是纸，换镜头后从里面拉出来
+function diveCut(t, c) {
+  const a = 1 - Math.abs(t - c) / 0.12; if (a <= 0) return;
+  g.save(); g.setTransform(1, 0, 0, 1, 0, 0); g.globalAlpha = a; g.fillStyle = C.paper; g.fillRect(0, 0, W, H); g.restore();
+}
+function fxDefault(t) {
+  CUTS.forEach((c, i) => { const k = CUT_KIND[i];
+    if (k === '撕海报') tearCut(t, c); else if (k === '纸条斜扫') sweepCut(t, c); else if (k === '钻进去') diveCut(t, c); });
+}
+// 画一帧里除默认转场、页眉、字幕以外的全部（撕海报要用它把上一镜头最后一帧画进离屏画布，所以场景只写在这里）
+function paint(t) {
+  g.setTransform(1, 0, 0, 1, 0, 0);
+  g.globalAlpha = 1; g.globalCompositeOperation = 'source-over'; g.letterSpacing = '0px';
+  g.drawImage(PAPER, 0, 0);
+  const cam = camAt(t);
+  drawBackPieces(t, cam);               // 太阳、青色长条、方格纸（FX_DEFAULT 时还有纸面光影、小纸屑，都轻轻动）
+  setCam(cam); fxBefore(t); for (const sc of SECS) drawPoster(sc, t);   // ← 场景入口（v1.1 提醒）：写了自己的场景，就把 drawPoster 这句换成自己的绘制函数，骨架的 SECS / drawPoster 删掉
+  g.setTransform(1, 0, 0, 1, 0, 0); g.globalAlpha = 1;
+  g.save(); g.setTransform(1, 0, 0, 1, 0, 0); fxAfter(t); g.restore();   // 动效入口（v1.2）
+}
+function render(t) {
+  g = MAIN;
+  动效.resetCtx(g);                    // v1.3：每帧开头把画布状态整套复位（见 SKILL.md 页面约定）
+  paint(t);
+  if (FX_DEFAULT) fxDefault(t);         // v1.3 默认转场：撕海报、纸条斜扫、钻进去轮流
+  drawHeader();
+  drawSubtitle(t);
+}
+
+window.DURATION = TL.duration;
+window.seek = (t) => render(t);
+render(0);
+window.ready = true;
+</script>
+</body>
+</html>

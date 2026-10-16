@@ -1,0 +1,925 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<title>扁平流程图 · Token 示例页（v1.3）</title>
+<!--
+  S19 扁平流程科普信息图（参考的是一张扁平流程科普信息图）
+  奶油底 + 琥珀黄标题带 + 特粗黑字 + 带尖角的编号圆标 + 渐变弧形箭头 + 带网格的立体圆台 + 彩色小球 + 琥珀色说明框和细黑折线。
+  画面只由时间 t 计算：window.seek(t)。内容和时间全部来自同目录的 timeline.js（window.TL）：
+  镜头起止用 TL.shots，动作卡在 TL.mark('关键词') 上，例句和切分用 TL.example，数据用 TL.data，字幕用 TL.cueAt(t)。
+  整张流程图铺在一条横向的「世界」上：聊天框 → ① 提示词 → ② 分词器 → ③ Token → ④ 翻找 → ⑤ 推断，镜头依次移过去。
+  v1.3：背景三层一直在动（钟面秒针、漂浮小几何、箭头上的流动小珠），转场轮换（形状变形、沿流程横移、色块横扫、推近、圆形遮罩），每个镜头慢推或推近再拉开。
+  转场和次要动作用到同目录的 动效部件.js（新建作品.mjs 会复制进作品目录）。
+-->
+<style>
+  html, body { margin: 0; padding: 0; background: #fcf9ec; overflow: hidden; }
+  #stage { position: relative; width: 1920px; height: 1080px; overflow: hidden; }
+  #stage canvas { position: absolute; left: 0; top: 0; }
+</style>
+</head>
+<body>
+<div id="stage"><canvas id="c" width="1920" height="1080"></canvas></div>
+<script src="timeline.js"></script>
+<script src="动效部件.js"></script>
+<script>
+'use strict';
+const W = 1920, H = 1080, TAU = Math.PI * 2;
+// 字体：本机装的 MiSans（小米，免费商用）。没有 MiSans 的 Mac 上自动换成系统自带的：
+// 特粗（800–900）用兰亭黑-简 Heavy，其余用苹方（Lantinghei SC 只有 Extralight/Demibold/Heavy 三档，不能拿来排正文）
+const FONT_HEAVY = '"MiSans", "Lantinghei SC", "PingFang SC", sans-serif';
+const FONT_BODY = '"MiSans", "PingFang SC", sans-serif';
+const font = (w, s) => `${w} ${s}px ${w >= 800 ? FONT_HEAVY : FONT_BODY}`;
+const TL = window.TL;
+const NOSUB = /[?&]nosub=1/.test(location.search);   // 渲染时 render.mjs --no-subtitle 会加 ?nosub=1：不画字幕，回剪映统一加
+const M = (k) => TL.mark(k), ME = (k) => TL.markEnd(k);
+const SH = (k) => TL.shots[k - 1];
+
+// ---------- 配色（取自参考图） ----------
+const C = {
+  bg: '#fcf9ec', paper: '#fffdf6', amber: '#fbbf2f', amber2: '#f7a30e', amberD: '#e08a06', amberL: '#fde7a0',
+  ring: '#efe8d6', shadow: '#efe3c2', ink: '#1a1410', ink2: '#2b241b', mute: '#7d7363', faint: '#b9b09c', text2: '#5f574a',
+  red: '#d41928', blue: '#2373ce', orange: '#ee8013', green: '#4f9d34', gold: '#d98e04', pill: '#f5eedb',
+};
+// 例句切出的 8 个 Token：成都红、旅行蓝（全片固定），其余按 橙 / 绿 / 金 轮流（参考图分子小球的颜色）
+const TOK = (() => { const other = [C.orange, C.green, C.gold]; let k = 0;
+  return TL.example.tokens.map((t) => ({ t, c: t === '成都' ? C.red : t === '旅行' ? C.blue : other[k++ % 3] })); })();
+const NT = TOK.length;
+const I_CD = TOK.findIndex((k) => k.t === '成都'), I_LX = TOK.findIndex((k) => k.t === '旅行');
+
+// ---------- 小工具 ----------
+const clamp = (x, a = 0, b = 1) => Math.min(b, Math.max(a, x));
+const lerp = (a, b, p) => a + (b - a) * p;
+const P = (t, a, d) => clamp((t - a) / d);
+const outC = (p) => 1 - Math.pow(1 - p, 3);
+const inOutC = (p) => (p < 0.5 ? 4 * p * p * p : 1 - Math.pow(-2 * p + 2, 3) / 2);
+const outBack = (p) => { const c1 = 1.70158, c3 = c1 + 1; return 1 + c3 * Math.pow(p - 1, 3) + c1 * Math.pow(p - 1, 2); };
+const inQ = (p) => p * p;
+const sine = (p) => 0.5 - 0.5 * Math.cos(Math.PI * p);
+const qb = (a, c, b, u) => (1 - u) * (1 - u) * a + 2 * (1 - u) * u * c + u * u * b;   // 二次贝塞尔
+function hex(h) { const n = parseInt(h.slice(1), 16); return [n >> 16 & 255, n >> 8 & 255, n & 255]; }
+function mix(a, b, p) { const A = hex(a), B = hex(b); return `rgb(${A.map((v, i) => Math.round(v + (B[i] - v) * p)).join(',')})`; }
+function rgba(h, a) { const [r, gg, b] = hex(h); return `rgba(${r},${gg},${b},${a})`; }
+const cv = document.getElementById('c');
+const g = cv.getContext('2d');
+const wCache = new Map();
+function tw(s, f) { const k = f + '|' + s; let v = wCache.get(k); if (v === undefined) { g.save(); g.font = f; v = g.measureText(s).width; g.restore(); wCache.set(k, v); } return v; }
+function rrect(x, y, w, h, r) { g.beginPath(); g.roundRect(x, y, w, h, r); }
+function text(s, x, y, f, col, align = 'center', base = 'middle') { g.font = f; g.fillStyle = col; g.textAlign = align; g.textBaseline = base; g.fillText(s, x, y); }
+// 弹出：scale 用 outBack，透明度更快到 1
+function popS(t, t0, d = 0.35) { return outBack(P(t, t0, d)); }
+function popA(t, t0, d = 0.35) { return P(t, t0, d * 0.45); }
+
+// ---------- 通用部件 ----------
+// 编号圆标：琥珀圆 + 白色数字 + 朝右的小尖角（参考图 ①②③④）
+function badge(x, y, n, s = 1, a = 1) {
+  if (a <= 0) return;
+  g.save(); g.globalAlpha *= a; g.translate(x, y); g.scale(s, s);
+  g.fillStyle = C.amber;
+  g.beginPath(); g.moveTo(20, -15); g.lineTo(42, 0); g.lineTo(20, 15); g.closePath(); g.fill();
+  g.beginPath(); g.arc(0, 0, 28, 0, TAU); g.fill();
+  text(String(n), 0, 2, font(900, 34), '#ffffff');
+  g.restore();
+}
+// 步骤标签：编号圆标 + 粗黑标题 + 灰色说明（说明放下一行或同一行）
+function stepLabel(x, y, n, title, desc, t0, t, opts = {}) {
+  const a = popA(t, t0) * (opts.fade ?? 1); if (a <= 0) return;
+  const s = 0.6 + 0.4 * popS(t, t0);
+  g.save(); g.globalAlpha = a;
+  badge(x, y, n, s);
+  g.translate(x + 62, y);
+  text(title, 0, 3, font(900, 52), C.ink, 'left');
+  if (desc) {
+    if (opts.inline) text(desc, tw(title, font(900, 52)) + 22, 6, font(500, 30), C.mute, 'left');
+    else text(desc, 0, 50, font(500, 30), C.mute, 'left');
+  }
+  g.restore();
+}
+// 渐变弧形箭头：沿二次曲线，从透明奶黄渐变到琥珀，末端实心三角；p 是画出来的比例
+function arrow(x0, y0, cx, cy, x1, y1, p, w = 18) {
+  if (p <= 0) return;
+  const N = 64, pts = [];
+  for (let i = 0; i <= N * p; i++) { const u = i / N; pts.push([qb(x0, cx, x1, u), qb(y0, cy, y1, u)]); }
+  const u = p, ex = qb(x0, cx, x1, u), ey = qb(y0, cy, y1, u);
+  const dx = 2 * (1 - u) * (cx - x0) + 2 * u * (x1 - cx), dy = 2 * (1 - u) * (cy - y0) + 2 * u * (y1 - cy), L = Math.hypot(dx, dy) || 1, ux = dx / L, uy = dy / L;
+  const gr = g.createLinearGradient(x0, y0, ex, ey);
+  gr.addColorStop(0, 'rgba(252,236,190,0)'); gr.addColorStop(0.35, '#fbe3a0'); gr.addColorStop(1, C.amber2);
+  const hl = w * 2.1;
+  g.strokeStyle = gr; g.lineWidth = w; g.lineCap = 'butt'; g.lineJoin = 'round';
+  g.beginPath(); pts.forEach(([x, y], i) => (i ? g.lineTo(x, y) : g.moveTo(x, y))); g.lineTo(ex - ux * hl * 0.6, ey - uy * hl * 0.6); g.stroke();
+  g.fillStyle = C.amber2; g.beginPath();
+  g.moveTo(ex + ux * hl * 0.55, ey + uy * hl * 0.55);
+  g.lineTo(ex - ux * hl * 0.7 - uy * hl * 0.85, ey - uy * hl * 0.7 + ux * hl * 0.85);
+  g.lineTo(ex - ux * hl * 0.7 + uy * hl * 0.85, ey - uy * hl * 0.7 - ux * hl * 0.85);
+  g.closePath(); g.fill();
+}
+// 细黑折线（按长度画到 q，画完在端点加一个小圆点）
+function connector(pts, q) {
+  if (q <= 0) return;
+  g.strokeStyle = C.ink2; g.lineWidth = 2.5; g.lineJoin = 'miter';
+  let total = 0; for (let i = 1; i < pts.length; i++) total += Math.hypot(pts[i][0] - pts[i - 1][0], pts[i][1] - pts[i - 1][1]);
+  let left = total * q; g.beginPath(); g.moveTo(pts[0][0], pts[0][1]);
+  for (let i = 1; i < pts.length && left > 0; i++) {
+    const sl = Math.hypot(pts[i][0] - pts[i - 1][0], pts[i][1] - pts[i - 1][1]), k = Math.min(1, left / sl);
+    g.lineTo(lerp(pts[i - 1][0], pts[i][0], k), lerp(pts[i - 1][1], pts[i][1], k)); left -= sl;
+  }
+  g.stroke();
+  if (q >= 1) { g.fillStyle = C.ink2; const e = pts[pts.length - 1]; g.beginPath(); g.arc(e[0], e[1], 5, 0, TAU); g.fill(); }
+}
+// 琥珀色说明框 + 细黑折线（参考图下方的两个说明框）；p 是出现进度 0–1
+function callout(x, y, w, h, draw, p, conn) {
+  if (p <= 0) return;
+  if (conn) connector(conn, outC(P(p, 0.25, 0.75)));
+  const s = 0.7 + 0.3 * outBack(clamp(p / 0.6)), a = clamp(p / 0.25);
+  g.save(); g.globalAlpha *= a; g.translate(x + w / 2, y + h / 2); g.scale(s, s);
+  g.fillStyle = C.shadow; rrect(-w / 2 + 5, -h / 2 + 7, w, h, 12); g.fill();
+  g.fillStyle = C.amber; rrect(-w / 2, -h / 2, w, h, 12); g.fill();
+  draw(w, h);
+  g.restore();
+}
+// Token 小块（彩色圆角块 + 白色特粗字）
+const CH = { size: 56, h: 90, r: 20 };
+function chipW(tk) { return tw(tk.t, font(900, CH.size)) + CH.size; }
+function chip(tk, x, y, s = 1, a = 1, opts = {}) {
+  if (a <= 0 || s <= 0) return;
+  const w = chipW(tk), h = CH.h, col = tk.c;
+  g.save(); g.globalAlpha *= a; g.translate(x, y); g.scale(s, s);
+  g.fillStyle = mix(col, '#000000', 0.22); rrect(-w / 2, -h / 2 + 7, w, h, CH.r); g.fill();
+  g.fillStyle = col; rrect(-w / 2, -h / 2, w, h, CH.r); g.fill();
+  g.fillStyle = 'rgba(255,255,255,0.16)'; rrect(-w / 2 + 6, -h / 2 + 6, w - 12, h * 0.38, 14); g.fill();
+  if (opts.ring) { g.strokeStyle = rgba('#ffffff', opts.ring); g.lineWidth = 6; rrect(-w / 2 - 7, -h / 2 - 7, w + 14, h + 14, CH.r + 6); g.stroke(); }
+  text(tk.t, 0, 4, font(900, CH.size), '#ffffff');
+  g.restore();
+}
+// 光面小球（参考图里的分子小球）
+function ball(x, y, r, col, a = 1) {
+  if (a <= 0) return;
+  const gr = g.createRadialGradient(x - r * 0.35, y - r * 0.4, r * 0.1, x, y, r);
+  gr.addColorStop(0, mix(col, '#ffffff', 0.45)); gr.addColorStop(0.55, col); gr.addColorStop(1, mix(col, '#000000', 0.18));
+  g.save(); g.globalAlpha *= a; g.fillStyle = gr; g.beginPath(); g.arc(x, y, r, 0, TAU); g.fill(); g.restore();
+}
+
+// ---------- 各站位置（世界坐标） ----------
+const WIN = { x: 240, y: 170, w: 760, h: 620, head: 88, r: 30 };          // 聊天窗口
+const WCX = WIN.x + WIN.w / 2, WCY = WIN.y + WIN.h / 2;
+const ICON = { s: 170 };                                                   // 开窗前的 app 图标（在窗口中心）
+const GREET = { text: '你好，有什么可以帮你？', y: 310, f: font(500, 34) };  // AI 的招呼气泡
+const UB = { y: 440, h: 76, f: font(600, 40) };                            // 用户发出的消息气泡
+const UBW = tw(TL.example.text, UB.f) + 56, UBX = WIN.x + WIN.w - 28 - UBW;
+const INPUT = { x: WIN.x + 28, y: 728, w: WIN.w - 56, h: 72, f: font(600, 40) };
+const PTAG = { w: 440, h: 88, y: 568 }; PTAG.x = UBX + UBW / 2 - PTAG.w / 2;   // 「提示词 = Prompt」说明框，在消息正下方
+const CHIPAI = { x: 1500, y: 480 };
+const PLAT = { x: 1500, y: 380, rx: 420, ry: 78, h: 90 };
+const ROW_Y = 770, ROW_GAP = 16;
+const ROW = (() => { const ws = TOK.map(chipW); const tot = ws.reduce((a, b) => a + b, 0) + ROW_GAP * (NT - 1); let x = PLAT.x - tot / 2; return ws.map((w) => { const c = x + w / 2; x += w + ROW_GAP; return { x: c, w }; }); })();
+const STRIP = { y: 330, h: 84, pad: 30, f: font(900, 48) };
+const PANEL = { x: 2500, y: 290, w: 1100, h: 540, head: 78 }; PANEL.cam = PANEL.x + 590;
+const BAR = { x: 2810, y: 171, w: 790, h: 88 };
+const D = { a: { x: 4230, y: 545 }, b: { x: 4490, y: 545 }, card: { x: 5000, y: 545, w: 420, h: 310 }, cam: 4660, label: { x: 4140, y: 405 } };
+// 例句在长条上切成 8 段（按字宽；第一段带左边距，最后一段带右边距）
+const SLICES = (() => {
+  const f = STRIP.f; let x = 0; const out = TOK.map((k) => { const w = tw(k.t, f); const s = { x0: x, x1: x + w }; x += w; return s; });
+  const W0 = x + STRIP.pad * 2;
+  out.forEach((s, i) => { s.l = i === 0 ? 0 : STRIP.pad + s.x0; s.r = i === NT - 1 ? W0 : STRIP.pad + s.x1; s.cx = (s.l + s.r) / 2 - W0 / 2; s.w = s.r - s.l; s.tdx = i === 0 ? STRIP.pad / 2 : i === NT - 1 ? -STRIP.pad / 2 : 0; });
+  out.total = W0; return out;
+})();
+
+// ---------- 关键时刻（全部从 TL 来） ----------
+const OPEN = M('打开') - 0.04;                       // 点开 app，聊天窗口弹出
+const TYPED = TL.chars.filter((c) => c.cue === TL.shots[0].cues[1]);   // 例句的 14 个字，各有自己的念到时刻
+const SENDMSG = ME('例句') + 0.03;                   // 念完例句，按发送
+const SEND = M('接收到'), LAND = SEND + 0.78;         // 消息飞向 AI，落到分词器台面上
+const CUT = M('拆分'), SPLIT = CUT + 0.22;            // 7 刀 → 分开
+const SINK = M('更小的单位');                         // 掉进分词器、从下面出来
+
+// ---------- 镜头（世界坐标 → 画面） ----------
+// 每段 [起, 止, x, y, 缩放, 缓动]；画面焦点固定在 (960, 515)。v1.3：每个镜头都在推，镜头 1、2、5、7 推近再拉开
+const TYPE0 = M('例句'), TYPE1 = ME('例句');
+const CUT56 = SH(6).start, CUT78 = SH(8).start;   // 色块横扫、圆形遮罩的切点
+const CAM0 = { x: WCX, y: WCY, z: 1.06 };
+const CAM = [
+  [0, 0.75, WCX, WCY, 1.14, 'sine'],                                     // 开场：圆洞放大的同时慢推
+  [M('聊天框') - 0.06, M('聊天框') + 0.45, WCX, WCY + 20, 1.22],         // 「聊天框」：推近一级（窗口顶刚好贴着标题带）
+  [TYPE0 - 0.25, TYPE0 + 0.25, WCX - 150, INPUT.y - 40, 1.55],          // 打字：推近输入框
+  [TYPE0 + 0.25, TYPE1, WCX + 90, INPUT.y - 40, 1.6, 'sine'],           // 镜头跟着光标往右走
+  [SENDMSG - 0.02, SENDMSG + 0.55, WCX, WCY - 15, 1.12],                // 发出后拉回，看见消息
+  [SENDMSG + 0.6, M('提示词') - 0.12, WCX, WCY - 40, 1.22, 'sine'],      // 慢推近消息
+  [M('提示词') - 0.12, M('提示词') + 0.4, WCX, WCY - 25, 1.06],           // 拉开看说明框
+  [M('提示词') + 0.4, SH(2).end, WCX, WCY - 25, 1.1, 'sine'],
+  [SH(3).start, SH(3).start + 0.6, 1090, 470, 1],                       // 镜头 3：沿流程横移，看见 AI
+  [SH(3).start + 0.6, SH(3).end, 1110, 470, 1.03, 'sine'],
+  [SH(4).start, SH(4).start + 0.64, PLAT.x, 515, 1],                    // 镜头 4：分词器
+  [SH(4).start + 0.64, SH(4).end, PLAT.x, 525, 1.06, 'sine'],
+  [SH(5).start, SH(5).start + 0.7, PLAT.x, 630, 1.16],                  // 镜头 5：往下、推近一排 Token（圆台顶不出画）
+  [M('Token') - 0.3, M('Token') + 0.3, PLAT.x, 650, 1],                 // 「Token」拉开看 ③
+  [CUT56, CUT56 + 0.6, PANEL.cam, 515, 1],                             // 镜头 6：色块横扫底下横移到海量数据
+  [CUT56 + 0.65, SH(6).end, PANEL.cam, 515, 1.04, 'sine'],
+  [SH(7).start, M('成都') - 0.05, PANEL.cam - 40, 525, 1.12],           // 镜头 7：推近看数据亮起
+  [M('常常在一起出现') - 0.1, M('常常在一起出现') + 0.45, PANEL.cam + 40, 515, 1],   // 拉开看说明框
+  [CUT78, CUT78 + 0.001, D.cam, 515, 1],                                // 镜头 8：圆形遮罩里直接是推断站
+  [CUT78 + 0.05, TL.duration, D.cam, 515, 1.06, 'sine'],
+];
+function camAt(t) {
+  let c = { ...CAM0 };
+  for (const [t0, t1, x, y, z, e] of CAM) {
+    if (t <= t0) break;
+    const p = P(t, t0, t1 - t0), q = e === 'sine' ? sine(p) : inOutC(p);
+    c = { x: lerp(c.x, x, q), y: lerp(c.y, y, q), z: lerp(c.z, z, q) };
+  }
+  return c;
+}
+// 震屏：「拆分」下刀、结论卡打勾砸下（各 0.18 秒，衰减）
+const STAMP = M('旅行的需求') + 0.36;
+function shakeAt(t) {
+  const a = 动效.shake(t, CUT + 0.08, { amp: 8, d: 0.18 }), b = 动效.shake(t, STAMP, { amp: 11, d: 0.2 });
+  return { dx: a.dx + b.dx, dy: a.dy + b.dy };
+}
+
+// ---------- 数据面板：12 句样例（3 列 × 4 行）+ 上下填充的看不清的数据 ----------
+const COLW = 340, COLG = 20, PITCH = 84, PILLH = 64;
+const BODY = { x: PANEL.x, y: PANEL.y + PANEL.head, w: PANEL.w, h: PANEL.h - PANEL.head };
+const colX = (k) => BODY.x + (BODY.w - (3 * COLW + 2 * COLG)) / 2 + COLW / 2 + k * (COLW + COLG);
+const rowY0 = BODY.y + BODY.h / 2;   // 4 行样例的中心
+const FILL = ['北京烤鸭怎么做', '如何学好英语', '周末去哪里玩', '上海迪士尼门票', '猫咪不吃饭怎么办', '红烧肉的做法', '西安美食推荐', '手机充电很慢',
+  '高铁票怎么改签', '重庆火锅底料', '考研复习计划', '杭州西湖景点', '跑步膝盖疼', '怎样早睡早起', '云南七天行程', '面试自我介绍',
+  '家里养什么花', '电脑开不了机', '今天吃什么', '孩子不爱写作业', '咖啡的种类', '春节放假安排', '怎么做蛋糕', '演唱会抢票',
+  '世界上最高的山', '牛肉怎么炖烂', '新手学吉他', '护肤的步骤', '厦门鼓浪屿', '租房注意事项', '雨天穿什么', '历史上的今天'];
+const fillText = (r, k) => FILL[((r * 7 + k * 11) % FILL.length + FILL.length) % FILL.length];
+const PAIRS = TL.data.map((d, i) => ({ ...d, i, col: i % 3, row: Math.floor(i / 3), both: d['成都'] && d['旅行'] }));
+const BOTH = PAIRS.filter((d) => d.both);
+
+// ---------- 背景（v1.3，三层一直在动）----------
+// 远景：浅灰钟面圆环（视差 0.5，跟参考图的钟面呼应）；秒针一直转、刻度圈慢慢转
+const RINGS = [[-260, 470], [PLAT.x, 520], [PANEL.cam, 470], [D.cam, 500]];
+function drawRings(t, cam) {
+  g.strokeStyle = C.ring; g.lineCap = 'round';
+  RINGS.forEach(([sx, sy], i) => {
+    const x = (sx - cam.x) * 0.5 + 960, y = (sy - cam.y) * 0.5 + 515;
+    if (x < -500 || x > W + 500) return;
+    g.strokeStyle = C.ring; g.lineWidth = 4; g.beginPath(); g.arc(x, y, 400, 0, TAU); g.stroke();
+    g.lineWidth = 12;
+    const rot = t * 0.12 + i * 0.4;
+    for (let k = 0; k < 12; k++) {
+      const a = k * TAU / 12 - Math.PI / 2 + rot, r0 = 330, r1 = k % 3 === 0 ? 374 : 362;
+      g.beginPath(); g.moveTo(x + Math.cos(a) * r0, y + Math.sin(a) * r0); g.lineTo(x + Math.cos(a) * r1, y + Math.sin(a) * r1); g.stroke();
+    }
+    const hs = t * 0.9 + i * 1.7, hm = t * 0.15 + i * 2.3;   // 秒针、分针
+    g.strokeStyle = C.shadow; g.lineWidth = 10;
+    g.beginPath(); g.moveTo(x, y); g.lineTo(x + Math.cos(hm) * 190, y + Math.sin(hm) * 190); g.stroke();
+    g.lineWidth = 6; g.beginPath(); g.moveTo(x - Math.cos(hs) * 40, y - Math.sin(hs) * 40); g.lineTo(x + Math.cos(hs) * 290, y + Math.sin(hs) * 290); g.stroke();
+    g.fillStyle = C.shadow; g.beginPath(); g.arc(x, y, 16, 0, TAU); g.fill();
+  });
+}
+// 中景：扁平小几何（视差 0.3），慢慢往左漂、上下浮、转；颜色只用浅琥珀 / 浅橙 / 浅绿 / 钟面灰（避开强调色 A/B 的红蓝）
+const BG_COLS = ['#f8e2a6', '#f6d9bd', '#dcead0', '#efe3c2', '#fbe9b8'];
+const SHAPES = Array.from({ length: 30 }, (_, i) => {
+  const h = (k) => 动效.hash(i * 9.13 + k * 3.71);
+  return { x: h(1) * 2300, y: 150 + h(2) * 720, r: 10 + h(3) * 22, kind: Math.floor(h(4) * 5), col: BG_COLS[Math.floor(h(5) * BG_COLS.length)], ph: h(6) * TAU, spin: (h(7) - 0.5) * 1.2, v: 8 + h(8) * 14 };
+});
+function drawShapes(t, cam) {
+  const mod = (v, m) => ((v % m) + m) % m;
+  for (const s of SHAPES) {
+    const x = mod(s.x - cam.x * 0.3 - s.v * t, 2300) - 190, y = s.y - (cam.y - 515) * 0.3 + 9 * Math.sin(0.9 * t + s.ph);
+    if (y > 880 || y < 128) continue;
+    g.save(); g.translate(x, y); g.rotate(s.ph + s.spin * t); g.fillStyle = s.col; g.strokeStyle = s.col;
+    const r = s.r;
+    if (s.kind === 0) { g.beginPath(); g.arc(0, 0, r, 0, TAU); g.fill(); }
+    else if (s.kind === 1) { g.lineWidth = 7; g.beginPath(); g.arc(0, 0, r, 0, TAU); g.stroke(); }
+    else if (s.kind === 2) { rrect(-r, -r, 2 * r, 2 * r, r * 0.35); g.fill(); }
+    else if (s.kind === 3) { const a = r * 0.34; g.fillRect(-r, -a, 2 * r, 2 * a); g.fillRect(-a, -r, 2 * a, 2 * r); }
+    else { g.beginPath(); g.moveTo(0, -r); g.lineTo(r * 0.9, r * 0.6); g.lineTo(-r * 0.9, r * 0.6); g.closePath(); g.fill(); }
+    g.restore();
+  }
+}
+// 流程线上：画完的箭头上有一颗奶白小珠，从尾到头流（每 1.6 秒一颗）
+function arrowFlow(x0, y0, cx, cy, x1, y1, t, t0, a = 1) {
+  if (t < t0 || a <= 0) return;
+  const u = ((t - t0) / 1.6) % 1, k = 0.12 + 0.78 * u;
+  const x = qb(x0, cx, x1, k), y = qb(y0, cy, y1, k), al = Math.sin(Math.PI * u) * a;
+  g.save(); g.globalAlpha *= al; g.fillStyle = '#fffaf0'; g.beginPath(); g.arc(x, y, 7, 0, TAU); g.fill(); g.restore();
+}
+
+// ---------- 聊天框（镜头 1–3） ----------
+const leaveA = (t) => 1 - P(t, SH(4).start + 0.1, 0.35);   // 镜头离开后淡出，免得在画面边上留半截字
+// 镜头 2「每天听到的最多的」：窗口两边一个个弹出别人每天发的提示词小气泡，慢慢往上飘，说到「提示词」前淡出
+const GHOST_T0 = (TL.chars.find((c) => c.cue === TL.shots[1].cues[0] && c.text === '每') || { start: SH(2).start + 1 }).start - 0.05;
+const GHOSTS = [['帮我写一份周报', 0, 250], ['翻译成英文', 1, 300], ['总结这篇文章', 0, 470], ['推荐一部电影', 1, 520], ['这道题怎么做', 0, 680], ['写一句生日祝福', 1, 740]];
+function drawGhosts(t) {
+  const out = 1 - P(t, M('提示词') - 0.25, 0.35); if (t < GHOST_T0 || out <= 0) return;
+  const f = font(500, 36);
+  GHOSTS.forEach(([str, side, y0], i) => {
+    const t0 = GHOST_T0 + i * 0.14, a = popA(t, t0) * out; if (a <= 0) return;
+    const s = 0.6 + 0.4 * popS(t, t0, 0.4), w = tw(str, f) + 48, h = 64;
+    const x = side ? WIN.x + WIN.w + 40 : WIN.x - 40 - w, y = y0 - 26 * (t - t0) + 4 * Math.sin(2.1 * t + i);
+    g.save(); g.globalAlpha = a * 0.92; g.translate(x + (side ? 0 : w), y); g.scale(s, s); g.translate(-(side ? 0 : w), 0);
+    g.fillStyle = C.shadow; rrect(6, -h / 2 + 8, w, h, side ? [22, 22, 22, 6] : [22, 22, 6, 22]); g.fill();
+    g.fillStyle = C.pill; rrect(0, -h / 2, w, h, side ? [22, 22, 22, 6] : [22, 22, 6, 22]); g.fill();
+    text(str, 24, 2, f, C.text2, 'left');
+    g.restore();
+  });
+}
+function drawAppIcon(t) {
+  const a = popA(t, 0.1) * (1 - P(t, OPEN, 0.12)); if (a <= 0) return;
+  const tap = t > OPEN - 0.16 && t < OPEN ? 1 - 0.1 * Math.sin(Math.PI * P(t, OPEN - 0.16, 0.16)) : 1;
+  const s = (0.6 + 0.4 * popS(t, 0.1, 0.4)) * tap * lerp(1, 1.6, P(t, OPEN, 0.12)), S = ICON.s;
+  const bob = 7 * Math.sin(2.6 * t) * P(t, 0.4, 0.3);   // v1.3：开窗前轻轻上下浮
+  g.save(); g.globalAlpha = a; g.translate(WCX, WCY + bob); g.scale(s, s);
+  g.fillStyle = C.shadow; rrect(-S / 2 + 6, -S / 2 + 10, S, S, 40); g.fill();
+  const gr = g.createLinearGradient(0, -S / 2, 0, S / 2); gr.addColorStop(0, '#fcca45'); gr.addColorStop(1, C.amber2);
+  g.fillStyle = gr; rrect(-S / 2, -S / 2, S, S, 40); g.fill();
+  // 白色对话气泡 + 「AI」
+  g.fillStyle = '#ffffff'; rrect(-52, -42, 104, 74, 22); g.fill();
+  g.beginPath(); g.moveTo(-26, 28); g.lineTo(-40, 50); g.lineTo(-4, 30); g.closePath(); g.fill();
+  text('AI', 0, -4, font(900, 42), C.amber2);
+  g.restore();
+}
+function drawWindow(t) {
+  const op = P(t, OPEN, 0.45); if (op <= 0) return;
+  const a = clamp(op * 4) * leaveA(t); if (a <= 0) return;
+  const s = lerp(0.3, 1, outBack(op));
+  const { x, y, w, h, head, r } = WIN;
+  g.save(); g.globalAlpha = a; g.translate(WCX, WCY); g.scale(s, s); g.translate(-WCX, -WCY);
+  // 窗口：白底圆角 + 浅投影 + 琥珀标题栏
+  g.fillStyle = C.shadow; rrect(x + 8, y + 12, w, h, r); g.fill();
+  g.fillStyle = C.paper; rrect(x, y, w, h, r); g.fill();
+  g.save(); rrect(x, y, w, h, r); g.clip(); g.fillStyle = C.amber; g.fillRect(x, y, w, head); g.restore();
+  g.strokeStyle = '#f3dfa6'; g.lineWidth = 3; rrect(x, y, w, h, r); g.stroke();
+  g.fillStyle = C.ink; g.beginPath(); g.arc(x + 58, y + head / 2, 28, 0, TAU); g.fill();
+  text('AI', x + 58, y + head / 2 + 2, font(900, 26), C.amber);
+  text('AI 助手', x + 102, y + head / 2 + 2, font(900, 40), C.ink, 'left');
+  for (let k = 0; k < 3; k++) { g.fillStyle = 'rgba(26,20,16,0.35)'; g.beginPath(); g.arc(x + w - 46 - k * 22, y + head / 2, 6, 0, TAU); g.fill(); }
+  // AI 的招呼
+  const ga = popA(t, OPEN + 0.35), gs = 0.7 + 0.3 * popS(t, OPEN + 0.35);
+  if (ga > 0) {
+    const gw = tw(GREET.text, GREET.f) + 44;
+    g.save(); g.globalAlpha *= ga; g.translate(x + 28, GREET.y); g.scale(gs, gs);
+    g.fillStyle = C.pill; rrect(0, -34, gw, 68, [22, 22, 22, 6]); g.fill();
+    text(GREET.text, 22, 2, GREET.f, C.text2, 'left');
+    g.restore();
+  }
+  // 用户发出的消息气泡（念完例句后出现，留在对话里）
+  const ba = popA(t, SENDMSG + 0.04), bs = 0.7 + 0.3 * popS(t, SENDMSG + 0.04);
+  if (ba > 0) {
+    g.save(); g.globalAlpha *= ba; g.translate(UBX + UBW, UB.y); g.scale(bs, bs); g.translate(-(UBX + UBW), -UB.y);
+    // 「这句话」：琥珀色圈出来
+    const hp = P(t, M('这句话') - 0.04, 0.25);
+    if (hp > 0) {
+      const pulse = 1 + 0.05 * Math.sin(Math.PI * P(t, M('这句话') - 0.04, 0.4));
+      g.save(); g.translate(UBX + UBW / 2, UB.y); g.scale(pulse, pulse);
+      g.strokeStyle = rgba(C.amber2, hp); g.lineWidth = 6; rrect(-UBW / 2 - 12, -UB.h / 2 - 12, UBW + 24, UB.h + 24, 32); g.stroke();
+      g.restore();
+    }
+    g.fillStyle = mix(C.amber, '#000000', 0.12); rrect(UBX, UB.y - UB.h / 2 + 5, UBW, UB.h, [24, 24, 6, 24]); g.fill();
+    g.fillStyle = C.amber; rrect(UBX, UB.y - UB.h / 2, UBW, UB.h, [24, 24, 6, 24]); g.fill();
+    text(TL.example.text, UBX + 28, UB.y + 3, UB.f, C.ink, 'left');
+    g.restore();
+  }
+  // 输入框：例句逐字打出（每个字在它被念到时出现），念完按发送
+  const glow = P(t, M('聊天框') - 0.05, 0.25) * (1 - P(t, SENDMSG, 0.25));   // v1.3：「聊天框」时输入框描边亮成琥珀
+  g.fillStyle = '#ffffff'; rrect(INPUT.x, INPUT.y - INPUT.h / 2, INPUT.w, INPUT.h, INPUT.h / 2); g.fill();
+  g.strokeStyle = mix('#f3dfa6', C.amber2, glow); g.lineWidth = 3 + 3 * glow; g.stroke();
+  const tx = INPUT.x + 32;
+  if (t < SENDMSG) {
+    const s14 = TYPED.filter((c) => c.start - 0.02 <= t).map((c) => c.text).join('');
+    if (s14) text(s14, tx, INPUT.y + 2, INPUT.f, C.ink, 'left');
+    else text('发消息…', tx, INPUT.y + 2, font(500, 36), C.faint, 'left');
+    const typing = t >= M('例句') - 0.1;
+    if (t > OPEN + 0.4 && (typing || Math.floor(t * 3) % 2 === 0)) { g.fillStyle = C.amber2; g.fillRect(tx + (s14 ? tw(s14, INPUT.f) + 4 : 0), INPUT.y - 22, 5, 46); }
+  } else {
+    text('发消息…', tx, INPUT.y + 2, font(500, 36), C.faint, 'left');
+  }
+  const press = t > SENDMSG - 0.06 && t < SENDMSG + 0.16 ? 1 - 0.16 * Math.sin(Math.PI * P(t, SENDMSG - 0.06, 0.22)) : 1;
+  g.save(); g.translate(INPUT.x + INPUT.w - 40, INPUT.y); g.scale(press, press);
+  g.fillStyle = C.amber; g.beginPath(); g.arc(0, 0, 29, 0, TAU); g.fill();
+  g.strokeStyle = '#ffffff'; g.lineWidth = 6; g.lineCap = 'round'; g.lineJoin = 'round';
+  g.beginPath(); g.moveTo(0, 12); g.lineTo(0, -11); g.moveTo(-9, -1); g.lineTo(0, -12); g.lineTo(9, -1); g.stroke();
+  g.restore();
+  // ① 提示词 = Prompt（说明框 + 细折线连到消息）
+  const pp = P(t, M('提示词') - 0.06, 0.55);
+  if (pp > 0) {
+    const cxm = PTAG.x + PTAG.w / 2;
+    callout(PTAG.x, PTAG.y, PTAG.w, PTAG.h, (bw, bh) => {
+      const f = font(900, 50), wa = tw('提示词', f), wb = tw(' = Prompt', f), x0 = -(wa + wb) / 2;
+      text('提示词', x0, 4, f, C.ink, 'left');
+      const q = popA(t, M('Prompt') - 0.04), qs = 0.6 + 0.4 * popS(t, M('Prompt') - 0.04);
+      if (q > 0) { g.save(); g.globalAlpha *= q; g.translate(x0 + wa + wb / 2, 4); g.scale(qs, qs); text(' = Prompt', 0, 0, f, C.ink); g.restore(); }
+    }, pp, [[cxm, PTAG.y], [cxm, UB.y + UB.h / 2 + 14]]);
+    badge(PTAG.x - 36, PTAG.y + PTAG.h / 2, 1, 0.6 + 0.4 * popS(t, M('提示词') - 0.06), popA(t, M('提示词') - 0.06));
+  }
+  g.restore();
+}
+function drawAIChip(t) {
+  const t0 = M('AI') - 0.02;
+  const s = popS(t, t0, 0.4) * (1 - inQ(P(t, LAND - 0.2, 0.2))) * (1 + 0.07 * Math.sin(Math.PI * P(t, LAND - 0.34, 0.16)));
+  const a = popA(t, t0) * (1 - P(t, LAND - 0.14, 0.12));
+  if (s <= 0.01 || a <= 0) return;
+  const S = 210, r = 36;
+  g.save(); g.globalAlpha = a; g.translate(CHIPAI.x, CHIPAI.y); g.scale(s, s);
+  g.fillStyle = C.amberD;
+  for (let k = -1.5; k <= 1.5; k++) {
+    rrect(k * 44 - 9, -S / 2 - 26, 18, 34, 6); g.fill(); rrect(k * 44 - 9, S / 2 - 8, 18, 34, 6); g.fill();
+    rrect(-S / 2 - 26, k * 44 - 9, 34, 18, 6); g.fill(); rrect(S / 2 - 8, k * 44 - 9, 34, 18, 6); g.fill();
+  }
+  g.fillStyle = C.shadow; rrect(-S / 2 + 6, -S / 2 + 10, S, S, r); g.fill();
+  const gr = g.createLinearGradient(0, -S / 2, 0, S / 2); gr.addColorStop(0, '#fcca45'); gr.addColorStop(1, C.amber2);
+  g.fillStyle = gr; rrect(-S / 2, -S / 2, S, S, r); g.fill();
+  g.strokeStyle = 'rgba(255,255,255,0.45)'; g.lineWidth = 5; rrect(-S / 2 + 22, -S / 2 + 22, S - 44, S - 44, 18); g.stroke();
+  text('AI', 0, 6, font(900, 92), '#ffffff');
+  g.restore();
+}
+
+// ---------- ② 分词器圆台 ----------
+const PLAT_IN = LAND - 0.14;
+function drawPlatform(t) {
+  const a = P(t, PLAT_IN, 0.12); if (a <= 0) return;
+  const s = 0.45 + 0.55 * outBack(P(t, PLAT_IN, 0.45));
+  const { x, y, rx, ry, h } = PLAT;
+  g.save(); g.globalAlpha = a;
+  g.translate(CHIPAI.x, CHIPAI.y); g.scale(s, s); g.translate(-CHIPAI.x, -CHIPAI.y);
+  g.fillStyle = 'rgba(190,150,60,0.13)'; g.beginPath(); g.ellipse(x, y + h + 18, rx * 1.02, ry * 0.95, 0, 0, TAU); g.fill();
+  // 侧面（左右暗、中间亮，像圆柱）
+  const sg = g.createLinearGradient(x - rx, 0, x + rx, 0);
+  sg.addColorStop(0, '#ef9a06'); sg.addColorStop(0.3, '#fbb321'); sg.addColorStop(0.55, '#fcbd34'); sg.addColorStop(1, '#ec9405');
+  g.fillStyle = sg; g.beginPath(); g.moveTo(x - rx, y); g.lineTo(x - rx, y + h); g.ellipse(x, y + h, rx, ry, 0, Math.PI, 0, true); g.lineTo(x + rx, y); g.ellipse(x, y, rx, ry, 0, 0, Math.PI, false); g.closePath(); g.fill();
+  g.strokeStyle = 'rgba(200,110,0,0.35)'; g.lineWidth = 3; g.beginPath(); g.ellipse(x, y + h, rx, ry, 0, Math.PI, 0, true); g.stroke();
+  // 顶面：奶黄径向渐变 + 网格
+  const tg = g.createRadialGradient(x, y - ry * 0.3, 20, x, y, rx);
+  tg.addColorStop(0, '#fffaf0'); tg.addColorStop(0.7, '#fbeec6'); tg.addColorStop(1, '#f6dc96');
+  g.fillStyle = tg; g.beginPath(); g.ellipse(x, y, rx, ry, 0, 0, TAU); g.fill();
+  g.save(); g.beginPath(); g.ellipse(x, y, rx, ry, 0, 0, TAU); g.clip();
+  g.strokeStyle = 'rgba(240,190,90,0.55)'; g.lineWidth = 2;
+  for (let k = -10; k <= 10; k++) { g.beginPath(); g.moveTo(x + k * rx / 10, y - ry); g.lineTo(x + k * rx / 10, y + ry); g.stroke(); }
+  for (let k = -4; k <= 4; k++) { g.beginPath(); g.moveTo(x - rx, y + k * ry / 4); g.lineTo(x + rx, y + k * ry / 4); g.stroke(); }
+  // 中间的入口（Token 从这里掉下去）
+  const op = outC(P(t, SINK - 0.14, 0.16)) * (1 - inOutC(P(t, SINK + 0.6, 0.22)));
+  if (op > 0) {
+    const hg = g.createRadialGradient(x, y + 4, 4, x, y, 170);
+    hg.addColorStop(0, '#b86a00'); hg.addColorStop(0.7, '#e08a06'); hg.addColorStop(1, '#f5b23a');
+    g.fillStyle = hg; g.beginPath(); g.ellipse(x, y + 2, 170 * op, 36 * op, 0, 0, TAU); g.fill();
+  }
+  g.restore();
+  g.strokeStyle = '#f9cf6a'; g.lineWidth = 3; g.beginPath(); g.ellipse(x, y, rx, ry, 0, 0, TAU); g.stroke();
+  // 侧面文字「分词器」（白字 + 柔和投影，同参考图「鲜肉酶解技术」）
+  const ta = popA(t, M('分词器') - 0.08), ts = 0.6 + 0.4 * popS(t, M('分词器') - 0.08);
+  if (ta > 0) {
+    g.save(); g.globalAlpha *= ta; g.translate(x, y + ry + h / 2 - 2); g.scale(ts, ts);
+    g.shadowColor = 'rgba(150,80,0,0.5)'; g.shadowBlur = 8; g.shadowOffsetY = 3;
+    text('分词器', 0, 3, font(900, 58), '#ffffff');
+    g.restore();
+  }
+  // 侧面左边的「AI」小牌：接住镜头 3 的 AI 芯片
+  const aa = P(t, PLAT_IN + 0.16, 0.2);
+  if (aa > 0) {
+    const ax = x - rx * 0.66, ay = y + ry * Math.sqrt(1 - 0.66 * 0.66) + h / 2 - 2, sc = 0.7 + 0.3 * outBack(aa);
+    g.save(); g.globalAlpha *= aa; g.translate(ax, ay); g.scale(sc, sc);
+    g.fillStyle = C.ink; rrect(-44, -27, 88, 54, 14); g.fill();
+    text('AI', 0, 3, font(900, 36), C.amber);
+    g.restore();
+  }
+  g.restore();
+}
+// 圆台下方的螺旋光带和小球
+function drawSpiral(t) {
+  const a = P(t, LAND + 0.1, 0.3); if (a <= 0) return;
+  const x0 = PLAT.x, y0 = PLAT.y + PLAT.ry + PLAT.h - 10, y1 = ROW_Y - 56;
+  const pt = (u, ph) => { const th = u * 3.0 * Math.PI + t * 1.6 + ph, R = lerp(170, 64, u); return [x0 + R * Math.sin(th), y0 + u * (y1 - y0) + 12 * Math.cos(th), Math.cos(th)]; };
+  g.save(); g.globalAlpha = a; g.lineCap = 'round';
+  const gr = g.createLinearGradient(0, y0, 0, y1); gr.addColorStop(0, 'rgba(249,205,95,0.85)'); gr.addColorStop(1, 'rgba(249,205,95,0.05)');
+  const seg = (front) => {
+    g.beginPath(); let on = false;
+    for (let k = 0; k <= 90; k++) { const [px, py, c] = pt(k / 90, 0); if ((c > 0) === front) { on ? g.lineTo(px, py) : g.moveTo(px, py); on = true; } else on = false; }
+  };
+  g.strokeStyle = gr; g.lineWidth = 16; seg(false); g.stroke();
+  g.lineWidth = 24; seg(true); g.stroke();
+  g.strokeStyle = 'rgba(255,250,232,0.9)'; g.lineWidth = 5; seg(true); g.stroke();
+  const cols = [C.orange, '#85c05a', '#f3dfae', C.orange, '#85c05a', '#f8c35a', '#f3dfae', '#85c05a'];
+  for (let i = 0; i < 8; i++) {
+    const u = (t * 0.22 + i / 8) % 1, [px, py] = pt(u, 1.3 + i * 0.4);
+    ball(px, py, i % 3 === 2 ? 8 : 11, cols[i], Math.sin(Math.PI * u));
+  }
+  g.restore();
+}
+
+// ---------- 例句：消息飞向 AI → 整条落到台面 → 7 刀切成 8 块 → 掉下去落成一排 Token ----------
+function stripState(t) {
+  if (t < SEND || t >= SPLIT) return null;
+  if (t < LAND) {   // 从对话里的消息气泡飞出来，路上从琥珀气泡变成白色长条
+    const p = P(t, SEND, LAND - SEND), q = inOutC(p);
+    const fx = UBX + UBW / 2, fy = UB.y;
+    return { x: qb(fx, (fx + PLAT.x) / 2, PLAT.x, q), y: qb(fy, 200, STRIP.y, q), s: lerp(1, 0.94, Math.sin(Math.PI * p)), m: outC(P(t, SEND + 0.05, 0.45)), a: 1 };
+  }
+  return { x: PLAT.x, y: STRIP.y, s: 1 + 0.06 * Math.sin(Math.PI * P(t, LAND, 0.18)), m: 1, a: 1 };
+}
+function drawStrip(t) {
+  const st = stripState(t); if (!st) return;
+  const m = st.m, w = lerp(UBW, SLICES.total, m), h = lerp(UB.h, STRIP.h, m), fs = lerp(40, 48, m);
+  g.save(); g.globalAlpha = st.a; g.translate(st.x, st.y); g.scale(st.s, st.s);
+  g.fillStyle = mix(mix(C.amber, '#000000', 0.12), '#efe2bd', m); rrect(-w / 2, -h / 2 + 7, w, h, 16); g.fill();
+  g.fillStyle = mix(C.amber, '#ffffff', m); rrect(-w / 2, -h / 2, w, h, 16); g.fill();
+  if (m > 0.5) { g.strokeStyle = rgba('#f0d27e', (m - 0.5) * 2); g.lineWidth = 3; g.stroke(); }
+  text(TL.example.text, 0, 3, font(lerp(600, 900, m), fs), C.ink);
+  g.restore();
+}
+function pieceState(t, i) {
+  if (t < SPLIT) return null;
+  const sl = SLICES[i], row = ROW[i];
+  const dIn = SINK + i * 0.035, dOut = dIn + 0.24, land = dOut + 0.4;
+  if (t < dOut) {   // 还在台面上：分开、字变成各自的颜色，然后掉进入口
+    const sep = outC(P(t, SPLIT, 0.3)), colP = outC(P(t, SPLIT + 0.04, 0.3));
+    let x = PLAT.x + sl.cx + (i - (NT - 1) / 2) * 12 * sep, y = STRIP.y - 10 * Math.sin(Math.PI * sep), s = 1, a = 1;
+    if (t >= dIn) { const p = inQ(P(t, dIn, 0.18)); x = lerp(x, PLAT.x, p); y = lerp(y, PLAT.y + 4, p); s = lerp(1, 0.25, p); a = 1 - P(t, dIn + 0.12, 0.06); }
+    return { kind: 'piece', x, y, s, a, colP, sep };
+  }
+  // 从台下顺着螺旋落下来，排成一排
+  const p = P(t, dOut, land - dOut);
+  let x = lerp(PLAT.x, row.x, outC(p)) + (1 - p) * 70 * Math.sin(p * 2.6 * Math.PI + i * 1.3);
+  let y = lerp(PLAT.y + PLAT.ry + PLAT.h - 6, ROW_Y, outBack(p));
+  let s = lerp(0.3, 1, outC(P(t, dOut, 0.3))), a = P(t, dOut, 0.06);
+  y -= 24 * Math.sin(Math.PI * P(t, M('最小的语言碎片') + i * 0.1, 0.26));        // 镜头 5：依次轻跳
+  y += 4 * Math.sin(2.4 * t + i * 0.8) * P(t, land, 0.3);                           // v1.3：落定后轻轻上下浮
+  const fly = P(t, SH(6).start + i * 0.03, 0.72);                                   // 镜头 6：飞进搜索条
+  if (fly > 0) {
+    const q = inOutC(fly), tgt = barChipPos(i);
+    x = qb(row.x, (row.x + tgt.x) / 2, tgt.x, q); y = qb(ROW_Y, 120, tgt.y, q); s = lerp(1, 0.5, q);
+  }
+  if (i === I_CD || i === I_LX) {                                                   // 镜头 8：成都、旅行飞到推断站（旅行先走）
+    const f2 = P(t, SH(8).start + (i === I_LX ? 0.01 : 0.09), 0.62);
+    if (f2 > 0) {
+      const q = inOutC(f2), from = barChipPos(i), to = i === I_CD ? D.a : D.b;
+      x = qb(from.x, (from.x + to.x) / 2, to.x, q); y = qb(from.y, to.y + 60, to.y, q); s = lerp(0.5, 1, q);
+    }
+  }
+  return { kind: 'chip', x, y, s, a };
+}
+function barChipPos(i) {
+  const s = 0.5, gap = 10; let x = BAR.x + 80;
+  for (let k = 0; k < i; k++) x += ROW[k].w * s + gap;
+  return { x: x + ROW[i].w * s / 2, y: BAR.y + BAR.h / 2 };
+}
+function drawPiece(i, st) {
+  const tk = TOK[i], sl = SLICES[i], cp = st.colP, R = 16;
+  const rl = i === 0 ? R : 12 * st.sep, rr = i === NT - 1 ? R : 12 * st.sep;
+  g.save(); g.globalAlpha *= st.a; g.translate(st.x, st.y); g.scale(st.s, st.s);
+  g.fillStyle = '#efe2bd'; g.beginPath(); g.roundRect(-sl.w / 2, -STRIP.h / 2 + 7, sl.w, STRIP.h, [rl, rr, rr, rl]); g.fill();
+  g.fillStyle = '#ffffff'; g.beginPath(); g.roundRect(-sl.w / 2, -STRIP.h / 2, sl.w, STRIP.h, [rl, rr, rr, rl]); g.fill();
+  g.strokeStyle = mix('#f0d27e', tk.c, cp); g.lineWidth = lerp(3, 5, cp); g.stroke();
+  text(tk.t, sl.tdx * (1 - cp), 3, STRIP.f, mix(C.ink, tk.c, cp));
+  g.restore();
+}
+function drawPieces(t) {
+  drawStrip(t);
+  for (let i = 0; i < NT; i++) {
+    const st = pieceState(t, i); if (!st) continue;
+    if (st.kind === 'piece') { drawPiece(i, st); continue; }
+    let ring = 0;
+    if (t >= M('Token') - 0.05 && t < SH(6).start + 0.3) ring = 0.9 * Math.sin(Math.PI * P(t, M('Token') - 0.05 + i * 0.04, 0.4));
+    let s = st.s;
+    if (i === I_CD || i === I_LX) s *= 1 + 0.16 * Math.sin(Math.PI * P(t, M('这两个Token') + (i === I_LX ? 0.18 : 0), 0.32));   // 「这两个Token」
+    const dim = i !== I_CD && i !== I_LX && t > SH(8).start ? 1 - 0.5 * P(t, SH(8).start, 0.4) : 1;
+    chip(TOK[i], st.x, st.y, s, st.a * dim, { ring });
+  }
+}
+// 7 刀（落在 8 块之间）
+function drawCuts(t) {
+  for (let k = 0; k < NT - 1; k++) {
+    const t0 = CUT + k * 0.03, p = P(t, t0, 0.1), fade = 1 - P(t, t0 + 0.12, 0.18);
+    if (p <= 0 || fade <= 0) continue;
+    const bx = PLAT.x - SLICES.total / 2 + SLICES[k].r, y0 = STRIP.y - 68, y1 = STRIP.y + 68;
+    const ye = lerp(y0, y1, outC(p));
+    g.save(); g.globalAlpha = fade; g.lineCap = 'round';
+    g.strokeStyle = 'rgba(247,163,14,0.45)'; g.lineWidth = 14; g.beginPath(); g.moveTo(bx, y0); g.lineTo(bx, ye); g.stroke();
+    g.strokeStyle = '#ffffff'; g.lineWidth = 4.5; g.beginPath(); g.moveTo(bx, y0); g.lineTo(bx, ye); g.stroke();
+    for (let j = 0; j < 3; j++) {
+      const q = P(t, t0 + 0.06, 0.25), ang = -Math.PI / 2 + (j - 1) * 0.9 + k;
+      if (q > 0 && q < 1) { g.fillStyle = rgba(C.amber2, 1 - q); g.beginPath(); g.arc(bx + Math.cos(ang) * 44 * q, ye + Math.sin(ang) * 36 * q, 5 * (1 - q), 0, TAU); g.fill(); }
+    }
+    g.restore();
+  }
+}
+
+// ---------- ③ Token 标注 ----------
+function drawTokenLabel(t) {
+  const t0 = M('Token');
+  const left = ROW[0].x - ROW[0].w / 2, right = ROW[NT - 1].x + ROW[NT - 1].w / 2, cx = (left + right) / 2, yb = ROW_Y + 70;
+  const p = outC(P(t, t0 - 0.12, 0.3)), fade = 1 - P(t, SH(6).start, 0.3);
+  if (p > 0 && fade > 0) {
+    g.save(); g.globalAlpha = fade; g.strokeStyle = C.amber2; g.lineWidth = 8; g.lineCap = 'round'; g.lineJoin = 'round';
+    const hw = (right - left) / 2 * p;
+    g.beginPath(); g.moveTo(cx - hw, yb - 18); g.lineTo(cx - hw, yb); g.lineTo(cx + hw, yb); g.lineTo(cx + hw, yb - 18); g.stroke();
+    g.beginPath(); g.moveTo(cx, yb); g.lineTo(cx, yb + 18 * p); g.stroke();
+    g.restore();
+  }
+  const a = popA(t, t0) * fade; if (a <= 0) return;
+  const s = 0.5 + 0.5 * popS(t, t0, 0.4);
+  g.save(); g.globalAlpha = a; g.translate(cx, yb + 74); g.scale(s, s);
+  const w0 = tw('Token', font(900, 80));
+  badge(-w0 / 2 - 52, 0, 3, 1);
+  text('Token', 18, 4, font(900, 80), C.ink);
+  g.restore();
+}
+
+// ---------- ④ 海量数据面板 ----------
+function drawPanel(t, cam) {
+  const { x, y, w, h, head } = PANEL;
+  if ((x + w + 60 - cam.x) * cam.z + 960 < 0 || (x - 60 - cam.x) * cam.z + 960 > W) return;   // 不在画面里就不画
+  for (const k of [2, 1]) { g.fillStyle = k === 2 ? '#f3e8c8' : '#f8f0d8'; rrect(x + 18 * k, y - 16 * k + 8, w, h, 22); g.fill(); }   // 后面叠两张，表示很多
+  g.fillStyle = C.shadow; rrect(x + 6, y + 10, w, h, 22); g.fill();
+  g.fillStyle = C.paper; rrect(x, y, w, h, 22); g.fill();
+  g.save(); rrect(x, y, w, h, 22); g.clip(); g.fillStyle = C.amber; g.fillRect(x, y, w, head); g.restore();
+  const pulse = 1 + 0.08 * Math.sin(Math.PI * P(t, M('海量数据') - 0.05, 0.35));   // 说到「海量数据」时跳一下
+  g.save(); g.translate(x + 64, y + head / 2); g.scale(pulse, pulse);
+  g.fillStyle = C.ink;
+  for (let k = 1; k >= -1; k--) { g.beginPath(); g.ellipse(0, k * 14, 22, 8, 0, 0, TAU); g.fill(); g.fillRect(-22, k * 14 - 2, 44, 10); }
+  g.beginPath(); g.ellipse(0, -18, 22, 8, 0, 0, TAU); g.fillStyle = C.amberL; g.fill();
+  g.restore();
+  g.save(); g.translate(x + 104, y + head / 2); g.scale(pulse, pulse); text('海量数据', 0, 3, font(900, 46), C.ink, 'left'); g.restore();
+  text('AI 自己学过的文字', x + w - 36, y + head / 2 + 3, font(600, 30), 'rgba(26,20,16,0.62)', 'right');
+  // 内容：滚动的列表，停下时 12 句样例正好在中间
+  g.save(); rrect(BODY.x, BODY.y, BODY.w, BODY.h, [0, 0, 22, 22]); g.clip();
+  const off = 2352 * (1 - outC(P(t, SH(6).start + 0.04, 2.15)));
+  const hl = P(t, M('常常在一起出现'), 0.4);
+  for (let r = -32; r <= 5; r++) {
+    const cy = rowY0 + (r - 1.5) * PITCH + off;
+    if (cy < BODY.y - 50 || cy > BODY.y + BODY.h + 50) continue;
+    for (let k = 0; k < 3; k++) {
+      const sample = r >= 0 && r <= 3 ? PAIRS[r * 3 + k] : null;
+      const alpha = sample ? (sample.both ? 1 : 1 - 0.65 * hl) : 0.55 * (1 - 0.6 * hl);
+      drawPill(t, colX(k), cy, sample ? sample.text : fillText(r, k), sample, alpha);
+    }
+  }
+  g.restore();
+  // 放大镜：说到「翻找」前后在数据里来回扫
+  const m0 = SH(6).start + 1.04, ma = P(t, m0, 0.25) * (1 - P(t, SH(7).start + 0.15, 0.25));
+  if (ma > 0) {
+    const u = t - m0;
+    magnifier(x + w / 2 + 360 * Math.sin(u * TAU * 0.62), BODY.y + BODY.h / 2 + 120 * Math.sin(u * TAU * 1.15 + 0.6), ma);
+  }
+}
+function drawPill(t, cx, cy, str, sample, alpha) {
+  const f = font(600, 32), w = COLW, h = PILLH;
+  const k = sample && sample.both ? BOTH.indexOf(sample) : -1;
+  const hp = k >= 0 ? outC(P(t, M('常常在一起出现') + 0.02 + k * 0.12, 0.25)) : 0;
+  g.save(); g.globalAlpha = alpha;
+  g.fillStyle = hp > 0 ? mix(C.pill, '#ffe7a1', hp) : C.pill; rrect(cx - w / 2, cy - h / 2, w, h, h / 2); g.fill();
+  if (hp > 0) { g.strokeStyle = rgba(C.amber2, hp); g.lineWidth = 4; rrect(cx - w / 2, cy - h / 2, w, h, h / 2); g.stroke(); }
+  const x0 = cx - tw(str, f) / 2;
+  const marks = [];   // 「成都」「旅行」亮起：彩色底块 + 白字
+  if (sample) for (const [word, col, tm] of [['成都', C.red, M('成都')], ['旅行', C.blue, M('旅行')]]) {
+    const j = str.indexOf(word); if (j < 0) continue;
+    const t0 = tm - 0.04 + (sample.i % 6) * 0.025, a = popA(t, t0, 0.3); if (a <= 0) continue;
+    marks.push({ j, word, col, a, p: popS(t, t0, 0.3), wx: x0 + tw(str.slice(0, j), f), ww: tw(word, f) });
+  }
+  for (const m of marks) { g.save(); g.globalAlpha *= m.a; g.translate(m.wx + m.ww / 2, cy); g.scale(m.p, m.p); g.fillStyle = m.col; rrect(-m.ww / 2 - 7, -24, m.ww + 14, 48, 10); g.fill(); g.restore(); }
+  g.font = f; g.textAlign = 'left'; g.textBaseline = 'middle';
+  let xx = x0;
+  for (let j = 0; j < str.length;) {
+    const m = marks.find((mm) => mm.j === j);
+    if (m) { g.fillStyle = mix(C.text2, '#ffffff', m.a); g.fillText(m.word, xx, cy + 2); xx += m.ww; j += m.word.length; }
+    else { g.fillStyle = C.text2; g.fillText(str[j], xx, cy + 2); xx += tw(str[j], f); j++; }
+  }
+  if (hp > 0) {   // 同时出现：「成都旅行」下面画一道琥珀色连线
+    const j = str.indexOf('成都'), wx = x0 + tw(str.slice(0, j), f), ww = tw('成都旅行', f);
+    g.strokeStyle = C.amber2; g.lineWidth = 6; g.lineCap = 'round';
+    g.beginPath(); g.moveTo(wx - 4, cy + 25); g.lineTo(wx - 4 + (ww + 8) * hp, cy + 25); g.stroke();
+  }
+  g.restore();
+}
+function magnifier(x, y, a) {
+  g.save(); g.globalAlpha = a; g.translate(x, y);
+  g.strokeStyle = C.ink; g.lineWidth = 20; g.lineCap = 'round'; g.beginPath(); g.moveTo(52, 52); g.lineTo(96, 96); g.stroke();
+  g.fillStyle = 'rgba(255,255,255,0.35)'; g.beginPath(); g.arc(0, 0, 66, 0, TAU); g.fill();
+  g.strokeStyle = C.amber2; g.lineWidth = 16; g.beginPath(); g.arc(0, 0, 66, 0, TAU); g.stroke();
+  g.strokeStyle = 'rgba(255,255,255,0.8)'; g.lineWidth = 6; g.beginPath(); g.arc(0, 0, 46, Math.PI * 1.1, Math.PI * 1.45); g.stroke();
+  g.restore();
+}
+function drawBar(t) {
+  const t0 = SH(6).start + 0.24, a = popA(t, t0, 0.35); if (a <= 0) return;
+  const s = 0.85 + 0.15 * popS(t, t0, 0.35), cx = BAR.x + BAR.w / 2, cy = BAR.y + BAR.h / 2;
+  g.save(); g.globalAlpha = a; g.translate(cx, cy); g.scale(s, s); g.translate(-cx, -cy);
+  g.fillStyle = C.shadow; rrect(BAR.x + 5, BAR.y + 8, BAR.w, BAR.h, BAR.h / 2); g.fill();
+  g.fillStyle = '#ffffff'; rrect(BAR.x, BAR.y, BAR.w, BAR.h, BAR.h / 2); g.fill();
+  g.strokeStyle = '#f3dfa6'; g.lineWidth = 3; g.stroke();
+  g.translate(BAR.x + 44, cy);
+  g.strokeStyle = C.amber2; g.lineWidth = 6; g.beginPath(); g.arc(-3, -3, 14, 0, TAU); g.stroke();
+  g.strokeStyle = C.ink; g.lineCap = 'round'; g.beginPath(); g.moveTo(8, 8); g.lineTo(18, 18); g.stroke();
+  g.restore();
+}
+function drawCooccurCallout(t) {
+  const p = P(t, M('常常在一起出现') + 0.05, 0.55), fade = 1 - P(t, SH(8).start, 0.3);
+  if (p <= 0 || fade <= 0) return;
+  const bx = PANEL.x + PANEL.w + 35, by = 462, bw = 330, bh = 184;
+  const tgt = PAIRS[8];   // 第一次去成都旅行（第 3 行第 3 列）
+  const ex = colX(2) + COLW / 2, ey = rowY0 + (tgt.row - 1.5) * PITCH;
+  g.save(); g.globalAlpha = fade;
+  callout(bx, by, bw, bh, (w, h) => {
+    chip(TOK[I_CD], -84, -h / 2 + 56, 0.72); chip(TOK[I_LX], 84, -h / 2 + 56, 0.72);
+    text('+', 0, -h / 2 + 54, font(900, 46), C.ink);
+    text('常常一起出现', 0, h / 2 - 46, font(900, 46), C.ink);
+  }, p, [[bx, by + bh - 40], [bx - 18, by + bh - 40], [bx - 18, ey], [ex + 4, ey]]);
+  g.restore();
+}
+
+// ---------- ⑤ 推断 ----------
+function drawInfer(t) {
+  const pa = popA(t, SH(8).start + 0.49);
+  if (pa > 0) { g.save(); g.globalAlpha = pa; text('+', (D.a.x + D.b.x) / 2, D.a.y + 2, font(900, 64), C.ink); g.restore(); }
+  const ap = outC(P(t, M('推断') + 0.1, 0.5));
+  const ai = [D.b.x + 112, D.a.y, (D.b.x + D.card.x) / 2 + 10, D.a.y - 46, D.card.x - D.card.w / 2 - 44, D.a.y];
+  arrow(...ai, ap, 22);
+  arrowFlow(...ai, t, M('推断') + 0.7);
+  const t0 = M('旅行的需求') - 0.06, a = popA(t, t0, 0.4); if (a <= 0) return;
+  const s = (0.5 + 0.5 * popS(t, t0, 0.45)) * (1 + 0.012 * Math.sin(2.4 * (t - STAMP)) * P(t, STAMP + 0.2, 0.4));   // v1.3：打勾后轻轻呼吸
+  const { x, y, w, h } = D.card;
+  g.save(); g.globalAlpha = a; g.translate(x, y); g.scale(s, s);
+  g.fillStyle = C.shadow; rrect(-w / 2 + 8, -h / 2 + 12, w, h, 28); g.fill();
+  const gr = g.createLinearGradient(0, -h / 2, 0, h / 2); gr.addColorStop(0, '#fcca45'); gr.addColorStop(1, C.amber2);
+  g.fillStyle = gr; rrect(-w / 2, -h / 2, w, h, 28); g.fill();
+  g.save(); g.translate(0, -52);   // 行李箱图标
+  g.strokeStyle = '#ffffff'; g.lineWidth = 9; rrect(-30, -62, 60, 34, 12); g.stroke();
+  g.fillStyle = '#ffffff'; rrect(-74, -40, 148, 96, 16); g.fill();
+  g.fillStyle = C.amber2; g.fillRect(-42, -40, 12, 96); g.fillRect(30, -40, 12, 96);
+  g.restore();
+  text('旅行需求', 0, 92, font(900, 76), C.ink);
+  const cp = P(t, M('旅行的需求') + 0.28, 0.3);   // 打勾印章
+  if (cp > 0) {
+    const cs = lerp(1.7, 1, outBack(cp));
+    g.save(); g.globalAlpha = clamp(cp * 3); g.translate(w / 2 - 14, -h / 2 + 14); g.scale(cs, cs);
+    g.fillStyle = C.ink; g.beginPath(); g.arc(0, 0, 44, 0, TAU); g.fill();
+    g.strokeStyle = '#ffffff'; g.lineWidth = 10; g.lineCap = 'round'; g.lineJoin = 'round';
+    g.beginPath(); g.moveTo(-20, 1); g.lineTo(-5, 17); g.lineTo(22, -14); g.stroke();
+    g.restore();
+  }
+  g.restore();
+  drawBurst(t, x + w / 2 - 14, y - h / 2 + 14);
+}
+// v1.3：打勾砸下时迸出一圈扁平小纸屑（圆点、方块、三角，参考图里的彩色小球的颜色），0.9 秒落下淡出
+function drawBurst(t, bx, by) {
+  const q = P(t, STAMP - 0.04, 0.9); if (q <= 0 || q >= 1) return;
+  const cols = [C.orange, C.green, C.gold, C.amber, C.amber2];
+  for (let k = 0; k < 16; k++) {
+    const h = (j) => 动效.hash(k * 5.3 + j * 1.9), ang = -Math.PI * (0.05 + 0.9 * h(1)) - (h(2) > 0.7 ? Math.PI * 0.35 : 0), sp = 230 + 260 * h(3);
+    const e = outC(q), x = bx + Math.cos(ang) * sp * e, y = by + Math.sin(ang) * sp * e + 260 * q * q, r = 7 + 7 * h(4);
+    g.save(); g.globalAlpha = 1 - inQ(q); g.translate(x, y); g.rotate(q * 6 * (h(5) - 0.5)); g.fillStyle = cols[k % cols.length];
+    if (k % 3 === 0) { g.beginPath(); g.arc(0, 0, r, 0, TAU); g.fill(); }
+    else if (k % 3 === 1) g.fillRect(-r, -r * 0.6, 2 * r, 1.2 * r);
+    else { g.beginPath(); g.moveTo(0, -r); g.lineTo(r, r * 0.8); g.lineTo(-r, r * 0.8); g.closePath(); g.fill(); }
+    g.restore();
+  }
+}
+
+// ---------- 标题带、字幕（画面坐标，不跟镜头动） ----------
+function drawHeader() {
+  g.fillStyle = C.amber; g.fillRect(0, 0, W, 112);
+  g.fillStyle = 'rgba(160,100,0,0.12)'; g.fillRect(0, 112, W, 5);
+  text('AI 怎么读懂一句话', 84, 60, font(900, 62), C.ink, 'left');
+}
+// 字幕关键词：有颜色的用该颜色写字（成都红、旅行蓝，和画面一致），没颜色的加琥珀色马克笔底。按字幕文字找，不按编号
+const SUB_HL = [['旅行的需求'], ['常常在一起出现'], ['提示词'], ['Prompt'], ['分词器'], ['Token'], ['海量数据'], ['成都', C.red], ['旅行', C.blue]];
+// 字幕换条不「眨」（v1.1 模板的做法，v1.3 示例页也用上）：紧接着上一条就直接换字，只有第一条、或和上一条中间有空档时才淡入
+function subIn(c, t, d) { const k = TL.cues.indexOf(c), prev = k > 0 ? TL.cues[k - 1] : null; return prev && prev.hide >= c.show - 1e-3 ? 1 : P(t, c.show, d); }
+function drawSubtitle(t) {
+  if (NOSUB) return;
+  const c = TL.cueAt(t); if (!c) return;
+  const a = subIn(c, t, 0.08), f = font(800, 64), y = 993;
+  const str = c.text, x0 = W / 2 - tw(str, f) / 2;
+  // 从左到右找关键词（长的优先，例如「旅行的需求」先于「旅行」）
+  const segs = []; let j = 0, plain = '';
+  while (j < str.length) {
+    const m = SUB_HL.find(([w0]) => str.startsWith(w0, j));
+    if (m) { if (plain) { segs.push([plain]); plain = ''; } segs.push(m); j += m[0].length; } else { plain += str[j]; j++; }
+  }
+  if (plain) segs.push([plain]);
+  g.save(); g.globalAlpha = a;
+  let xx = x0;
+  for (const [s, col] of segs) {   // 先画马克笔底
+    const ww = tw(s, f);
+    if (SUB_HL.some(([w0, c0]) => w0 === s && !c0)) { g.fillStyle = 'rgba(251,191,47,0.85)'; rrect(xx - 6, y + 2, ww + 12, 30, 8); g.fill(); }
+    xx += ww;
+  }
+  xx = x0; g.font = f; g.textBaseline = 'middle'; g.textAlign = 'left';
+  for (const [s, col] of segs) { g.fillStyle = col || C.ink; g.fillText(s, xx, y); xx += tw(s, f); }
+  g.restore();
+}
+
+// ---------- 转场（v1.3，画面坐标；只盖标题带和字幕区之间 y 112–908，字幕区不经过） ----------
+const STAGE_Y0 = 112, STAGE_Y1 = 908;
+function clipStage() { g.beginPath(); g.rect(0, STAGE_Y0, W, STAGE_Y1 - STAGE_Y0); g.clip(); }
+// 圆形遮罩：琥珀盖在外面，中间一个圆洞放大（开场）；或圆里是下一站、圆边一道琥珀环（镜头 7 → 8）
+function irisRing(cx, cy, R) {
+  g.lineWidth = 16; g.strokeStyle = C.shadow; g.beginPath(); g.arc(cx + 6, cy + 9, R + 8, 0, TAU); g.stroke();
+  g.strokeStyle = C.amber2; g.beginPath(); g.arc(cx, cy, R + 8, 0, TAU); g.stroke();
+}
+function drawOpenIris(t) {
+  const p = P(t, 0, 0.62); if (p >= 1) return;
+  const R = 1080 * outC(p), cx = 960, cy = 515;
+  g.save(); g.setTransform(1, 0, 0, 1, 0, 0); clipStage();
+  g.fillStyle = C.amber; g.beginPath(); g.rect(0, 0, W, H); if (R > 0) g.arc(cx, cy, R, 0, TAU, true); g.fill('evenodd');
+  if (R > 0) irisRing(cx, cy, R);
+  g.restore();
+}
+// 色块横扫（镜头 5 → 6）：琥珀色块从左往右扫进来盖满，底下镜头横移，再从左往右扫走；块上有白色流程箭头。Token 块画在色块上面
+function sweepEdges(t) {
+  const lead = lerp(-260, W + 260, inOutC(P(t, CUT56 - 0.28, 0.32)));
+  const tail = lerp(-260, W + 260, inOutC(P(t, CUT56 + 0.36, 0.34)));
+  return { lead, tail, on: t > CUT56 - 0.28 && t < CUT56 + 0.7 };
+}
+function drawSweep(t) {
+  const e = sweepEdges(t); if (!e.on) return;
+  const sl = 150;   // 斜边
+  const band = (x0, x1, col) => { if (x1 <= x0) return; g.fillStyle = col; g.beginPath(); g.moveTo(x0 + sl, STAGE_Y0); g.lineTo(x1 + sl, STAGE_Y0); g.lineTo(x1 - sl, STAGE_Y1); g.lineTo(x0 - sl, STAGE_Y1); g.closePath(); g.fill(); };
+  g.save(); g.setTransform(1, 0, 0, 1, 0, 0); clipStage();
+  band(e.tail - 60, e.lead + 60, C.shadow);
+  band(e.tail, e.lead, C.amber);
+  band(e.lead - 46, e.lead, C.amber2);
+  band(e.tail, e.tail + 36, C.amberL);
+  // 块上的白色流程箭头 »»（跟着往右走）
+  g.save(); g.beginPath(); g.moveTo(e.tail + sl, STAGE_Y0); g.lineTo(e.lead - 46 + sl, STAGE_Y0); g.lineTo(e.lead - 46 - sl, STAGE_Y1); g.lineTo(e.tail - sl, STAGE_Y1); g.closePath(); g.clip();
+  g.strokeStyle = 'rgba(255,255,255,0.42)'; g.lineWidth = 34; g.lineCap = 'round'; g.lineJoin = 'round';
+  const off = ((t - CUT56) * 900) % 360;
+  for (let x = -360 + off; x < W + 360; x += 360) for (const y of [330, 690]) { g.beginPath(); g.moveTo(x - 50, y - 90); g.lineTo(x + 40, y); g.lineTo(x - 50, y + 90); g.stroke(); }
+  g.restore();
+  g.restore();
+}
+
+// ---------- 一帧 ----------
+function setCam(cam, sh) { g.setTransform(cam.z, 0, 0, cam.z, 960 - cam.x * cam.z + sh.dx, 515 - cam.y * cam.z + sh.dy); }
+function drawBack(t, cam) {
+  g.setTransform(1, 0, 0, 1, 0, 0); g.globalAlpha = 1;
+  g.fillStyle = C.bg; g.fillRect(0, 0, W, H);
+  drawRings(t, cam);
+  drawShapes(t, cam);
+}
+function drawWorld(t, cam, sh) {
+  setCam(cam, sh);
+  // 聊天框 → AI
+  const a1 = [WIN.x + WIN.w + 16, UB.y, 1200, 390, CHIPAI.x - 132, CHIPAI.y - 10];
+  arrow(...a1, outC(P(t, M('AI') + 0.08, 0.42)));
+  arrowFlow(...a1, t, M('AI') + 0.55);
+  drawAppIcon(t);
+  drawGhosts(t);
+  drawWindow(t);
+  // ② 分词器
+  stepLabel(860, 196, 2, '分词器', '把一句话切成更小的单位', M('分词器') - 0.06, t, { fade: 1 - P(t, SH(5).start, 0.3) });
+  drawSpiral(t);
+  drawPlatform(t);
+  drawAIChip(t);
+  // ③ 说明框「最小的语言碎片」+ Token
+  const cp = P(t, M('最小的语言碎片') - 0.05, 0.55) * (1 - P(t, SH(6).start, 0.3));
+  const bx = 1880, by = 590, bw = 360, bh = 84;
+  callout(bx, by, bw, bh, () => text('最小的语言碎片', 0, 3, font(800, 40), C.ink), cp,
+    [[ROW[NT - 1].x, by + bh], [ROW[NT - 1].x, ROW_Y - CH.h / 2 - 6]]);
+  drawTokenLabel(t);
+  const a3 = [2200, 760, 2360, 860, 2440, 640];
+  arrow(...a3, outC(P(t, SH(6).start + 0.04, 0.5)));     // ③ → ④
+  arrowFlow(...a3, t, SH(6).start + 0.6);
+  // ④ 海量数据
+  stepLabel(2530, 215, 4, '翻找', '', SH(6).start + 0.44, t);
+  drawPanel(t, cam);
+  drawBar(t);
+  drawCooccurCallout(t);
+  const a4 = [3950, 690, 4070, 750, 4120, 615];
+  arrow(...a4, outC(P(t, SH(8).start + 0.04, 0.45)));   // ④ → ⑤
+  arrowFlow(...a4, t, SH(8).start + 0.6);
+  // ⑤ 推断
+  stepLabel(D.label.x, D.label.y, 5, '推断', '读懂你想要什么', M('推断') - 0.04, t, { inline: true });
+  drawInfer(t);
+}
+function drawTop(t, cam, sh) {   // 消息长条、碎块、Token 永远在最上层
+  setCam(cam, sh);
+  drawPieces(t);
+  drawCuts(t);
+}
+const IRIS_C = { x: PANEL.x + PANEL.w + 35 + 165, y: 516 };   // 圆形遮罩从说明框「成都 + 旅行」的加号处开
+function render(t) {
+  动效.resetCtx(g);                    // v1.3：每帧开头把画布状态整套复位（见 SKILL.md 页面约定）
+  g.setTransform(1, 0, 0, 1, 0, 0);
+  g.globalAlpha = 1;
+  const cam = camAt(t), sh = shakeAt(t);
+  const ip = P(t, CUT78, 0.55);
+  if (ip > 0 && ip < 1) {   // 圆形遮罩：外面是上一站（镜头停在切点前），圆里是推断站
+    const old = camAt(CUT78 - 0.001);
+    drawBack(t, old); drawWorld(t, old, sh); drawTop(t, old, sh);
+    const cx = (IRIS_C.x - old.x) * old.z + 960, cy = (IRIS_C.y - old.y) * old.z + 515, R = 1760 * inOutC(ip);
+    g.save(); g.setTransform(1, 0, 0, 1, 0, 0); clipStage(); g.beginPath(); g.arc(cx, cy, R, 0, TAU); g.clip();
+    drawBack(t, cam); drawWorld(t, cam, sh); drawTop(t, cam, sh);
+    g.restore();
+    g.save(); g.setTransform(1, 0, 0, 1, 0, 0); clipStage(); irisRing(cx, cy, R); g.restore();
+  } else {
+    drawBack(t, cam); drawWorld(t, cam, sh);
+    drawSweep(t);
+    drawTop(t, cam, sh);
+  }
+  drawOpenIris(t);
+  g.setTransform(1, 0, 0, 1, 0, 0);
+  g.globalAlpha = 1;
+  drawHeader();
+  drawSubtitle(t);
+}
+
+window.DURATION = TL.duration;
+window.seek = (t) => render(t);
+render(0);
+window.ready = true;
+</script>
+</body>
+</html>

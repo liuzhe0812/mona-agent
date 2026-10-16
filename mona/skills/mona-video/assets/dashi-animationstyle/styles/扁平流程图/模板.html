@@ -1,0 +1,418 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<title>扁平流程图 · 通用模板</title>
+<!--
+  扁平流程图（S19）的通用模板：能吃任何口播的 timeline.js（和本页放在同一个文件夹，由 pipeline/生成timeline.mjs 生成）。
+  文件分两块：「底座：换内容时不用改」（配色、字体栈、小工具、通用部件、背景圆环、标题带、字幕）和「场景：按新分镜重写」。
+  场景区现在是一个通用骨架：每个镜头一站，编号圆标 + 镜头标题 + 关键词色块（卡在 TL.mark(词) 上），镜头横移换站。
+  正式做新内容时照 风格卡.md「换内容时怎么改」把场景区换成真正演内容的画面；底座里的函数在 示例_Token.html 里有完整用法。
+  画面只由 t 决定：window.seek(t)。渲染时 --no-subtitle 会加 ?nosub=1，NOSUB 开关不画字幕（这套字幕没有底带，整块不画）。
+  v1.3 默认动效（FX_DEFAULT，脚本第一行）：背景钟面秒针转、扁平小几何漂；镜头交界轮换 沿流程横移 / 色块横扫 / 圆形遮罩，开场圆洞放大；每个镜头慢推。
+  设成 false 回到 v1.2 的样子。自己在 fxBefore / fxAfter 里加的调用照常生效。
+-->
+<style>
+  html, body { margin: 0; padding: 0; background: #fcf9ec; overflow: hidden; }
+  #stage { position: relative; width: 1920px; height: 1080px; overflow: hidden; }
+  #stage canvas { position: absolute; left: 0; top: 0; }
+</style>
+</head>
+<body>
+<div id="stage"><canvas id="c" width="1920" height="1080"></canvas></div>
+<script src="timeline.js"></script>
+<script src="动效部件.js"></script>
+<script>
+'use strict';
+const FX_DEFAULT = true;   // v1.3 默认动效开关：背景一直动 + 镜头交界自动转场 + 每镜慢推；false = 回到 v1.2 的样子
+// ===== 底座：换内容时不用改 =====
+const W = 1920, H = 1080, TAU = Math.PI * 2;
+// 字体：本机装的 MiSans（小米，免费商用）。没有 MiSans 的 Mac 上自动换成系统自带的：
+// 特粗（800–900）用兰亭黑-简 Heavy，其余用苹方（Lantinghei SC 只有 Extralight/Demibold/Heavy 三档，不能拿来排正文）
+const FONT_HEAVY = '"MiSans", "Lantinghei SC", "PingFang SC", sans-serif';
+const FONT_BODY = '"MiSans", "PingFang SC", sans-serif';
+const font = (w, s) => `${w} ${s}px ${w >= 800 ? FONT_HEAVY : FONT_BODY}`;
+const TL = window.TL;
+const NOSUB = /[?&]nosub=1/.test(location.search);   // 渲染时 render.mjs --no-subtitle 会加 ?nosub=1：不画字幕，回剪映统一加
+
+// ---------- 配色（取自参考图） ----------
+const C = {
+  bg: '#fcf9ec', paper: '#fffdf6', amber: '#fbbf2f', amber2: '#f7a30e', amberD: '#e08a06', amberL: '#fde7a0',
+  ring: '#efe8d6', shadow: '#efe3c2', ink: '#1a1410', ink2: '#2b241b', mute: '#7d7363', faint: '#b9b09c', text2: '#5f574a',
+  red: '#d41928', blue: '#2373ce', orange: '#ee8013', green: '#4f9d34', gold: '#d98e04', pill: '#f5eedb',
+};
+// ---------- 小工具 ----------
+const clamp = (x, a = 0, b = 1) => Math.min(b, Math.max(a, x));
+const lerp = (a, b, p) => a + (b - a) * p;
+const P = (t, a, d) => clamp((t - a) / d);
+const outC = (p) => 1 - Math.pow(1 - p, 3);
+const inOutC = (p) => (p < 0.5 ? 4 * p * p * p : 1 - Math.pow(-2 * p + 2, 3) / 2);
+const outBack = (p) => { const c1 = 1.70158, c3 = c1 + 1; return 1 + c3 * Math.pow(p - 1, 3) + c1 * Math.pow(p - 1, 2); };
+const inQ = (p) => p * p;
+const sine = (p) => 0.5 - 0.5 * Math.cos(Math.PI * p);
+const qb = (a, c, b, u) => (1 - u) * (1 - u) * a + 2 * (1 - u) * u * c + u * u * b;   // 二次贝塞尔
+function hex(h) { const n = parseInt(h.slice(1), 16); return [n >> 16 & 255, n >> 8 & 255, n & 255]; }
+function mix(a, b, p) { const A = hex(a), B = hex(b); return `rgb(${A.map((v, i) => Math.round(v + (B[i] - v) * p)).join(',')})`; }
+function rgba(h, a) { const [r, gg, b] = hex(h); return `rgba(${r},${gg},${b},${a})`; }
+const cv = document.getElementById('c');
+const g = cv.getContext('2d');
+const wCache = new Map();
+function tw(s, f) { const k = f + '|' + s; let v = wCache.get(k); if (v === undefined) { g.save(); g.font = f; v = g.measureText(s).width; g.restore(); wCache.set(k, v); } return v; }
+function rrect(x, y, w, h, r) { g.beginPath(); g.roundRect(x, y, w, h, r); }
+function text(s, x, y, f, col, align = 'center', base = 'middle') { g.font = f; g.fillStyle = col; g.textAlign = align; g.textBaseline = base; g.fillText(s, x, y); }
+// 弹出：scale 用 outBack，透明度更快到 1
+function popS(t, t0, d = 0.35) { return outBack(P(t, t0, d)); }
+function popA(t, t0, d = 0.35) { return P(t, t0, d * 0.45); }
+
+// ---------- 通用部件 ----------
+// 编号圆标：琥珀圆 + 白色数字 + 朝右的小尖角（参考图 ①②③④）
+function badge(x, y, n, s = 1, a = 1) {
+  if (a <= 0) return;
+  g.save(); g.globalAlpha *= a; g.translate(x, y); g.scale(s, s);
+  g.fillStyle = C.amber;
+  g.beginPath(); g.moveTo(20, -15); g.lineTo(42, 0); g.lineTo(20, 15); g.closePath(); g.fill();
+  g.beginPath(); g.arc(0, 0, 28, 0, TAU); g.fill();
+  text(String(n), 0, 2, font(900, 34), '#ffffff');
+  g.restore();
+}
+// 步骤标签：编号圆标 + 粗黑标题 + 灰色说明（说明放下一行或同一行）
+function stepLabel(x, y, n, title, desc, t0, t, opts = {}) {
+  const a = popA(t, t0) * (opts.fade ?? 1); if (a <= 0) return;
+  const s = 0.6 + 0.4 * popS(t, t0);
+  g.save(); g.globalAlpha = a;
+  badge(x, y, n, s);
+  g.translate(x + 62, y);
+  text(title, 0, 3, font(900, 52), C.ink, 'left');
+  if (desc) {
+    if (opts.inline) text(desc, tw(title, font(900, 52)) + 22, 6, font(500, 30), C.mute, 'left');
+    else text(desc, 0, 50, font(500, 30), C.mute, 'left');
+  }
+  g.restore();
+}
+// 渐变弧形箭头：沿二次曲线，从透明奶黄渐变到琥珀，末端实心三角；p 是画出来的比例
+function arrow(x0, y0, cx, cy, x1, y1, p, w = 18) {
+  if (p <= 0) return;
+  const N = 64, pts = [];
+  for (let i = 0; i <= N * p; i++) { const u = i / N; pts.push([qb(x0, cx, x1, u), qb(y0, cy, y1, u)]); }
+  const u = p, ex = qb(x0, cx, x1, u), ey = qb(y0, cy, y1, u);
+  const dx = 2 * (1 - u) * (cx - x0) + 2 * u * (x1 - cx), dy = 2 * (1 - u) * (cy - y0) + 2 * u * (y1 - cy), L = Math.hypot(dx, dy) || 1, ux = dx / L, uy = dy / L;
+  const gr = g.createLinearGradient(x0, y0, ex, ey);
+  gr.addColorStop(0, 'rgba(252,236,190,0)'); gr.addColorStop(0.35, '#fbe3a0'); gr.addColorStop(1, C.amber2);
+  const hl = w * 2.1;
+  g.strokeStyle = gr; g.lineWidth = w; g.lineCap = 'butt'; g.lineJoin = 'round';
+  g.beginPath(); pts.forEach(([x, y], i) => (i ? g.lineTo(x, y) : g.moveTo(x, y))); g.lineTo(ex - ux * hl * 0.6, ey - uy * hl * 0.6); g.stroke();
+  g.fillStyle = C.amber2; g.beginPath();
+  g.moveTo(ex + ux * hl * 0.55, ey + uy * hl * 0.55);
+  g.lineTo(ex - ux * hl * 0.7 - uy * hl * 0.85, ey - uy * hl * 0.7 + ux * hl * 0.85);
+  g.lineTo(ex - ux * hl * 0.7 + uy * hl * 0.85, ey - uy * hl * 0.7 - ux * hl * 0.85);
+  g.closePath(); g.fill();
+}
+// 细黑折线（按长度画到 q，画完在端点加一个小圆点）
+function connector(pts, q) {
+  if (q <= 0) return;
+  g.strokeStyle = C.ink2; g.lineWidth = 2.5; g.lineJoin = 'miter';
+  let total = 0; for (let i = 1; i < pts.length; i++) total += Math.hypot(pts[i][0] - pts[i - 1][0], pts[i][1] - pts[i - 1][1]);
+  let left = total * q; g.beginPath(); g.moveTo(pts[0][0], pts[0][1]);
+  for (let i = 1; i < pts.length && left > 0; i++) {
+    const sl = Math.hypot(pts[i][0] - pts[i - 1][0], pts[i][1] - pts[i - 1][1]), k = Math.min(1, left / sl);
+    g.lineTo(lerp(pts[i - 1][0], pts[i][0], k), lerp(pts[i - 1][1], pts[i][1], k)); left -= sl;
+  }
+  g.stroke();
+  if (q >= 1) { g.fillStyle = C.ink2; const e = pts[pts.length - 1]; g.beginPath(); g.arc(e[0], e[1], 5, 0, TAU); g.fill(); }
+}
+// 琥珀色说明框 + 细黑折线（参考图下方的两个说明框）；p 是出现进度 0–1
+function callout(x, y, w, h, draw, p, conn) {
+  if (p <= 0) return;
+  if (conn) connector(conn, outC(P(p, 0.25, 0.75)));
+  const s = 0.7 + 0.3 * outBack(clamp(p / 0.6)), a = clamp(p / 0.25);
+  g.save(); g.globalAlpha *= a; g.translate(x + w / 2, y + h / 2); g.scale(s, s);
+  g.fillStyle = C.shadow; rrect(-w / 2 + 5, -h / 2 + 7, w, h, 12); g.fill();
+  g.fillStyle = C.amber; rrect(-w / 2, -h / 2, w, h, 12); g.fill();
+  draw(w, h);
+  g.restore();
+}
+// Token 小块（彩色圆角块 + 白色特粗字）
+const CH = { size: 56, h: 90, r: 20 };
+function chipW(tk) { return tw(tk.t, font(900, CH.size)) + CH.size; }
+function chip(tk, x, y, s = 1, a = 1, opts = {}) {
+  if (a <= 0 || s <= 0) return;
+  const w = chipW(tk), h = CH.h, col = tk.c;
+  g.save(); g.globalAlpha *= a; g.translate(x, y); g.scale(s, s);
+  g.fillStyle = mix(col, '#000000', 0.22); rrect(-w / 2, -h / 2 + 7, w, h, CH.r); g.fill();
+  g.fillStyle = col; rrect(-w / 2, -h / 2, w, h, CH.r); g.fill();
+  g.fillStyle = 'rgba(255,255,255,0.16)'; rrect(-w / 2 + 6, -h / 2 + 6, w - 12, h * 0.38, 14); g.fill();
+  if (opts.ring) { g.strokeStyle = rgba('#ffffff', opts.ring); g.lineWidth = 6; rrect(-w / 2 - 7, -h / 2 - 7, w + 14, h + 14, CH.r + 6); g.stroke(); }
+  text(tk.t, 0, 4, font(900, CH.size), '#ffffff');
+  g.restore();
+}
+// 光面小球（参考图里的分子小球）
+function ball(x, y, r, col, a = 1) {
+  if (a <= 0) return;
+  const gr = g.createRadialGradient(x - r * 0.35, y - r * 0.4, r * 0.1, x, y, r);
+  gr.addColorStop(0, mix(col, '#ffffff', 0.45)); gr.addColorStop(0.55, col); gr.addColorStop(1, mix(col, '#000000', 0.18));
+  g.save(); g.globalAlpha *= a; g.fillStyle = gr; g.beginPath(); g.arc(x, y, r, 0, TAU); g.fill(); g.restore();
+}
+
+
+// ---------- 强调色、关键词时间（通用） ----------
+// 强调色 A / B：分镜.json「高亮」里的两个词全片固定用这两种颜色（Token 例子里成都红、旅行蓝）；其余关键词按 橙 / 绿 / 金 轮流
+const ROLE = { A: C.red, B: C.blue };
+const OTHER = [C.orange, C.green, C.gold];
+function wordColor(w, i = 0) { const h = (TL.highlights || []).find((x) => x.text === w); return h ? (ROLE[h.role] || C.red) : OTHER[i % OTHER.length]; }
+const hasMark = (k) => (typeof TL.has === 'function' ? TL.has(k) : !!(TL.marks && TL.marks[k]));
+const MS = (k, dflt) => (hasMark(k) ? TL.mark(k) : dflt);   // 关键词开始说的时间；没有这个词就用默认值，不抛错
+
+// ---------- 背景：浅灰钟面圆环（视差 0.5，跟参考图的钟面呼应）；centers 是世界坐标里的圆心 ----------
+// v1.3：给了 t 且 FX_DEFAULT 时，刻度圈慢慢转、秒针和分针一直转
+function drawRings(cam, centers, t) {
+  const fx = FX_DEFAULT && t !== undefined;
+  g.strokeStyle = C.ring; g.lineCap = 'round';
+  centers.forEach(([sx, sy], i) => {
+    const x = (sx - cam.x) * 0.5 + 960, y = (sy - cam.y) * 0.5 + 515;
+    if (x < -500 || x > W + 500) return;
+    g.strokeStyle = C.ring; g.lineWidth = 4; g.beginPath(); g.arc(x, y, 400, 0, TAU); g.stroke();
+    g.lineWidth = 12;
+    const rot = fx ? t * 0.12 + i * 0.4 : 0;
+    for (let k = 0; k < 12; k++) {
+      const a = k * TAU / 12 - Math.PI / 2 + rot, r0 = 330, r1 = k % 3 === 0 ? 374 : 362;
+      g.beginPath(); g.moveTo(x + Math.cos(a) * r0, y + Math.sin(a) * r0); g.lineTo(x + Math.cos(a) * r1, y + Math.sin(a) * r1); g.stroke();
+    }
+    if (!fx) return;
+    const hs = t * 0.9 + i * 1.7, hm = t * 0.15 + i * 2.3;   // 秒针、分针
+    g.strokeStyle = C.shadow; g.lineWidth = 10;
+    g.beginPath(); g.moveTo(x, y); g.lineTo(x + Math.cos(hm) * 190, y + Math.sin(hm) * 190); g.stroke();
+    g.lineWidth = 6; g.beginPath(); g.moveTo(x - Math.cos(hs) * 40, y - Math.sin(hs) * 40); g.lineTo(x + Math.cos(hs) * 290, y + Math.sin(hs) * 290); g.stroke();
+    g.fillStyle = C.shadow; g.beginPath(); g.arc(x, y, 16, 0, TAU); g.fill();
+  });
+}
+
+// ---------- 默认动效（v1.3）：FX_DEFAULT = true 时自动生效，吃任何时间线；false 时下面的函数什么都不做 ----------
+// 中景：扁平小几何（圆点、圆环、圆角方块、加号、三角），视差 0.3，慢慢往左漂、上下浮、转；只用浅琥珀 / 浅橙 / 浅绿 / 钟面灰，避开强调色 A/B
+const BG_COLS = ['#f8e2a6', '#f6d9bd', '#dcead0', '#efe3c2', '#fbe9b8'];
+const SHAPES = Array.from({ length: 30 }, (_, i) => {
+  const h = (k) => 动效.hash(i * 9.13 + k * 3.71);
+  return { x: h(1) * 2300, y: 150 + h(2) * 720, r: 10 + h(3) * 22, kind: Math.floor(h(4) * 5), col: BG_COLS[Math.floor(h(5) * BG_COLS.length)], ph: h(6) * TAU, spin: (h(7) - 0.5) * 1.2, v: 8 + h(8) * 14 };
+});
+function drawShapes(t, cam) {
+  if (!FX_DEFAULT) return;
+  const mod = (v, m) => ((v % m) + m) % m;
+  for (const s of SHAPES) {
+    const x = mod(s.x - cam.x * 0.3 - s.v * t, 2300) - 190, y = s.y - ((cam.y ?? 515) - 515) * 0.3 + 9 * Math.sin(0.9 * t + s.ph);
+    if (y > 880 || y < 128) continue;
+    g.save(); g.translate(x, y); g.rotate(s.ph + s.spin * t); g.fillStyle = s.col; g.strokeStyle = s.col;
+    const r = s.r;
+    if (s.kind === 0) { g.beginPath(); g.arc(0, 0, r, 0, TAU); g.fill(); }
+    else if (s.kind === 1) { g.lineWidth = 7; g.beginPath(); g.arc(0, 0, r, 0, TAU); g.stroke(); }
+    else if (s.kind === 2) { rrect(-r, -r, 2 * r, 2 * r, r * 0.35); g.fill(); }
+    else if (s.kind === 3) { const a = r * 0.34; g.fillRect(-r, -a, 2 * r, 2 * a); g.fillRect(-a, -r, 2 * a, 2 * r); }
+    else { g.beginPath(); g.moveTo(0, -r); g.lineTo(r * 0.9, r * 0.6); g.lineTo(-r * 0.9, r * 0.6); g.closePath(); g.fill(); }
+    g.restore();
+  }
+}
+// 流程线上：画完的箭头上一颗奶白小珠从尾到头流（每 1.6 秒一颗）；参数和 arrow 前 6 个一样，t0 = 箭头画完的时刻
+function arrowFlow(x0, y0, cx, cy, x1, y1, t, t0, a = 1) {
+  if (!FX_DEFAULT || t < t0 || a <= 0) return;
+  const u = ((t - t0) / 1.6) % 1, k = 0.12 + 0.78 * u;
+  g.save(); g.globalAlpha *= Math.sin(Math.PI * u) * a; g.fillStyle = '#fffaf0';
+  g.beginPath(); g.arc(qb(x0, cx, x1, k), qb(y0, cy, y1, k), 7, 0, TAU); g.fill(); g.restore();
+}
+// 镜头交界的转场：第 k 个交界（0 起）用 FX_KINDS[k % 3]；同一种不会连用。横移 = 镜头沿流程平滑移到下一站（camAt 里用 fxCamP），
+// 色块横扫 / 圆形遮罩 = 切点前后盖住画面，镜头在被盖住时直接跳到下一站。只盖标题带和字幕区之间（y 112–908），字幕区不经过
+const FX_KINDS = ['横移', '色块横扫', '圆形遮罩'];
+const FX_CUTS = TL.shots.slice(1).map((s) => s.start);
+const fxKind = (k) => FX_KINDS[k % FX_KINDS.length];
+function fxCamP(t, k) {   // 镜头移向第 k+1 站的进度 0–1
+  const c = FX_CUTS[k];
+  if (FX_DEFAULT && fxKind(k) !== '横移') return t >= c ? 1 : 0;
+  return inOutC(P(t, c - 0.15, 0.6));
+}
+// 镜头呼吸（每句一拍）：按字幕句子交替「推近 + 往右挪」/「拉开 + 往左挪」，句中用 sine 缓动一直在慢慢动，句界前后慢下来；
+// 横移换站照常走 camAt。FX_PUSH 推近多少、FX_DRIFT 横向挪多少像素（画面边上有东西时调小）
+const FX_PUSH = 0.1, FX_DRIFT = 70;
+const FX_KEYS = (() => {
+  const ks = [0];
+  for (const c of TL.cues) if (c.show - ks[ks.length - 1] >= 1.2 && TL.duration - c.show >= 1.2) ks.push(c.show);
+  ks.push(Math.max(TL.duration, ks[ks.length - 1] + 1));
+  return ks;
+})();
+function fxView(t) {   // 返回 {z, dx}：z 乘到镜头缩放上，dx 是画面横向偏移（像素）
+  if (!FX_DEFAULT) return { z: 1, dx: 0 };
+  let j = 0; while (j + 2 < FX_KEYS.length && t >= FX_KEYS[j + 1]) j++;
+  const p = sine(P(t, FX_KEYS[j], FX_KEYS[j + 1] - FX_KEYS[j]));
+  const key = (k) => (k % 2 ? { z: 1 + FX_PUSH, dx: FX_DRIFT } : { z: 1, dx: -FX_DRIFT });   // 推近时往右挪，左上角的站名不被推出画
+  const A = key(j), B = key(j + 1);
+  return { z: lerp(A.z, B.z, p), dx: lerp(A.dx, B.dx, p) };
+}
+const FX_Y0 = 112, FX_Y1 = 908;
+function fxRing(cx, cy, R) {   // 圆洞边：琥珀环 + 不模糊的错位投影
+  g.lineWidth = 16; g.strokeStyle = C.shadow; g.beginPath(); g.arc(cx + 6, cy + 9, R + 8, 0, TAU); g.stroke();
+  g.strokeStyle = C.amber2; g.beginPath(); g.arc(cx, cy, R + 8, 0, TAU); g.stroke();
+}
+function fxIris(R) {   // 琥珀盖满、中间开一个半径 R 的圆洞
+  g.fillStyle = C.amber; g.beginPath(); g.rect(0, 0, W, H); if (R > 0) g.arc(960, 515, R, 0, TAU, true); g.fill('evenodd');
+  if (R > 0) fxRing(960, 515, R);
+}
+function fxSweep(t, c) {   // 琥珀色块从左往右扫进来盖满，切点后从左往右扫走；块上有白色流程箭头
+  const lead = lerp(-260, W + 260, inOutC(P(t, c - 0.32, 0.32))), tail = lerp(-260, W + 260, inOutC(P(t, c + 0.04, 0.34)));
+  const sl = 150, band = (x0, x1, col) => { if (x1 <= x0) return; g.fillStyle = col; g.beginPath(); g.moveTo(x0 + sl, FX_Y0); g.lineTo(x1 + sl, FX_Y0); g.lineTo(x1 - sl, FX_Y1); g.lineTo(x0 - sl, FX_Y1); g.closePath(); g.fill(); };
+  band(tail - 60, lead + 60, C.shadow); band(tail, lead, C.amber); band(lead - 46, lead, C.amber2); band(tail, tail + 36, C.amberL);
+  g.save(); g.beginPath(); g.moveTo(tail + sl, FX_Y0); g.lineTo(lead - 46 + sl, FX_Y0); g.lineTo(lead - 46 - sl, FX_Y1); g.lineTo(tail - sl, FX_Y1); g.closePath(); g.clip();
+  g.strokeStyle = 'rgba(255,255,255,0.42)'; g.lineWidth = 34; g.lineCap = 'round'; g.lineJoin = 'round';
+  const off = (((t - c) * 900) % 360 + 360) % 360;
+  for (let x = -360 + off; x < W + 360; x += 360) for (const y of [330, 690]) { g.beginPath(); g.moveTo(x - 50, y - 90); g.lineTo(x + 40, y); g.lineTo(x - 50, y + 90); g.stroke(); }
+  g.restore();
+}
+function fxDefaultAfter(t) {   // 在 render 里 fxAfter 之后、页眉字幕之前调，屏幕坐标
+  if (!FX_DEFAULT) return;
+  g.save(); g.setTransform(1, 0, 0, 1, 0, 0); g.globalAlpha = 1; g.beginPath(); g.rect(0, FX_Y0, W, FX_Y1 - FX_Y0); g.clip();
+  if (t < 0.62) fxIris(1080 * outC(P(t, 0, 0.62)));   // 开场：琥珀里开一个圆洞放大
+  FX_CUTS.forEach((c, k) => {
+    if (t < c - 0.35 || t > c + 0.45) return;
+    const kind = fxKind(k);
+    if (kind === '色块横扫') fxSweep(t, c);
+    else if (kind === '圆形遮罩') fxIris(t < c ? 1100 * (1 - Math.pow(P(t, c - 0.3, 0.3), 3)) : 1100 * outC(P(t, c, 0.42)));
+  });
+  g.restore();
+}
+
+// ---------- 标题带、字幕（画面坐标，不跟镜头动） ----------
+function drawHeader() {
+  g.fillStyle = C.amber; g.fillRect(0, 0, W, 112);
+  g.fillStyle = 'rgba(160,100,0,0.12)'; g.fillRect(0, 112, W, 5);
+  if (TL.title) text(TL.title, 84, 60, font(900, 62), C.ink, 'left');
+}
+// 字幕关键词：「高亮」的词用强调色写字；「字幕强调」的词加琥珀色马克笔底。长的词优先匹配
+const SUB_HL = [...(TL.emphasis || []).map((w) => [w]), ...(TL.highlights || []).map((h) => [h.text, ROLE[h.role] || C.red])]
+  .filter(([w]) => w).sort((a, b) => b[0].length - a[0].length);
+// 字幕换条不「眨」（v1.1）：紧接着上一条（上一条的 hide ≥ 这一条的 show，字幕.mjs 出的字幕都是这样）就直接换字、不淡入；
+// 只有第一条、或者和上一条中间有空档时，才从透明淡入 d 秒。
+function subIn(c, t, d) { const k = TL.cues.indexOf(c), prev = k > 0 ? TL.cues[k - 1] : null; return prev && prev.hide >= c.show - 1e-3 ? 1 : P(t, c.show, d); }
+function drawSubtitle(t) {
+  if (NOSUB) return;
+  const c = TL.cueAt(t); if (!c) return;
+  const str = c.text, base = font(800, 64), w0 = tw(str, base);
+  const size = w0 > 1800 ? Math.floor(64 * 1800 / w0) : 64;   // 太长就缩字号，保证单行
+  const a = subIn(c, t, 0.08), f = font(800, size), y = 993;
+  const x0 = W / 2 - tw(str, f) / 2;
+  const segs = []; let j = 0, plain = '';
+  while (j < str.length) {
+    const m = SUB_HL.find(([w]) => str.startsWith(w, j));
+    if (m) { if (plain) { segs.push([plain]); plain = ''; } segs.push(m); j += m[0].length; } else { plain += str[j]; j++; }
+  }
+  if (plain) segs.push([plain]);
+  g.save(); g.globalAlpha = a;
+  let xx = x0;
+  for (const [s, col] of segs) {   // 先画马克笔底
+    const ww = tw(s, f);
+    if (SUB_HL.some(([w, c0]) => w === s && !c0)) { g.fillStyle = 'rgba(251,191,47,0.85)'; rrect(xx - 6, y + 2, ww + 12, 30, 8); g.fill(); }
+    xx += ww;
+  }
+  xx = x0; g.font = f; g.textBaseline = 'middle'; g.textAlign = 'left';
+  for (const [s, col] of segs) { g.fillStyle = col || C.ink; g.fillText(s, xx, y); xx += tw(s, f); }
+  g.restore();
+}
+
+// ===== 场景：按新分镜重写 =====
+// 下面是能吃任何分镜的通用骨架：每个镜头一「站」，在世界坐标里横着排（间隔 STEP_X），换镜头时镜头横移过去；
+// 每站：编号圆标 + 镜头标题（stepLabel）、一块纸面板、面板上一排关键词色块（chip，卡在 TL.mark(词) 上弹出）；站和站之间一条渐变弧形箭头。
+// 正式做新内容时，照新分镜把每站换成真正演内容的画面（参考 示例_Token.html：聊天窗口 drawWindow、分词器圆台 drawPlatform、
+// 数据面板 drawPanel、说明框 callout、推断 drawInfer），不要只留色块。
+const STEP_X = 1900, ROW_H = 122, MAXW = 1440;
+const ST = TL.shots.map((s, i) => {
+  const cx = 960 + i * STEP_X;
+  const kws = (s.keywords || []).filter(Boolean);
+  const items = kws.map((w, j) => ({ tk: { t: w, c: wordColor(w, j) }, t0: MS(w, s.start + 0.3 + 0.4 * j) - 0.05 }));
+  items.forEach((it) => { it.w = chipW(it.tk); });
+  // 一行放不下就换行，每行居中
+  const rows = []; let row = [], rw = 0;
+  for (const it of items) { if (row.length && rw + it.w + 24 > MAXW) { rows.push(row); row = []; rw = 0; } row.push(it); rw += it.w + 24; }
+  if (row.length) rows.push(row);
+  const y0 = 560 - (rows.length - 1) * ROW_H / 2;
+  rows.forEach((r, ri) => { const tot = r.reduce((a, it) => a + it.w, 0) + 24 * (r.length - 1); let x = cx - tot / 2;
+    r.forEach((it) => { it.x = x + it.w / 2; it.y = y0 + ri * ROW_H; x += it.w + 24; }); });
+  const panelH = Math.max(1, rows.length) * ROW_H + 110;
+  const cues = (s.cues || []).map((id) => TL.cues.find((c) => c.id === id)).filter(Boolean);   // 这个镜头的几句字幕（下面一排小站点用）
+  return { s, i, cx, items, cues, panel: { x: cx - MAXW / 2 - 40, y: 560 - panelH / 2 - (FX_DEFAULT ? 34 : 0), w: MAXW + 80, h: panelH + (FX_DEFAULT ? 34 : 0) } };
+});
+function camAt(t) {
+  let x = ST[0].cx;
+  for (let i = 1; i < ST.length; i++) x = lerp(x, ST[i].cx, fxCamP(t, i - 1));   // v1.3：横移 / 被转场盖住时直接跳（见「默认动效」）
+  return { x, y: 515, z: 1 };
+}
+function drawStation(st, t) {
+  const { s, i, cx, items, panel } = st;
+  stepLabel(cx - 720, 236, i + 1, s.title || `镜头 ${i + 1}`, '', s.start + 0.05, t);
+  const pa = popA(t, s.start + 0.2); if (pa <= 0) return;
+  const ps = 0.85 + 0.15 * popS(t, s.start + 0.2);
+  g.save(); g.globalAlpha = pa; g.translate(cx, panel.y + panel.h / 2); g.scale(ps, ps); g.translate(-cx, -(panel.y + panel.h / 2));
+  g.fillStyle = C.shadow; rrect(panel.x + 8, panel.y + 12, panel.w, panel.h, 30); g.fill();
+  g.fillStyle = C.paper; rrect(panel.x, panel.y, panel.w, panel.h, 30); g.fill();
+  if (FX_DEFAULT) {   // v1.3：琥珀标题栏（同聊天窗口、数据面板），镜头动的时候看得出面板在动
+    g.save(); rrect(panel.x, panel.y, panel.w, panel.h, 30); g.clip(); g.fillStyle = C.amber; g.fillRect(panel.x, panel.y, panel.w, 56); g.restore();
+    for (let k = 0; k < 3; k++) { g.fillStyle = 'rgba(26,20,16,0.35)'; g.beginPath(); g.arc(panel.x + panel.w - 46 - k * 22, panel.y + 28, 6, 0, TAU); g.fill(); }
+  }
+  g.strokeStyle = '#f3dfa6'; g.lineWidth = 3; rrect(panel.x, panel.y, panel.w, panel.h, 30); g.stroke();
+  g.restore();
+  if (FX_DEFAULT) drawCueDots(st, t, pa);   // v1.3
+  for (const it of items) {
+    const a = popA(t, it.t0), sc = popS(t, it.t0);
+    const ring = t > it.t0 + 0.15 ? 1 - P(t, it.t0 + 0.35, 0.5) : 0;
+    const bob = FX_DEFAULT ? 4 * Math.sin(2.4 * t + it.x * 0.01) * P(t, it.t0 + 0.4, 0.3) : 0;   // v1.3：弹出后轻轻上下浮
+    chip(it.tk, it.x, it.y + bob, sc, a, { ring: ring > 0 ? ring * 0.9 : 0 });
+  }
+}
+// 面板下面一排小站点：这个镜头有几句字幕就几个点，说到哪句哪个点亮成琥珀、跳一下，一颗小珠沿线走过去（编号横向流程的缩小版）
+function drawCueDots(st, t, a) {
+  const n = st.cues.length; if (n < 2 || a <= 0) return;
+  const gap = 110, y = st.panel.y + st.panel.h + 58, x0 = st.cx - gap * (n - 1) / 2;
+  g.save(); g.globalAlpha *= a;
+  g.strokeStyle = C.ring; g.lineWidth = 8; g.lineCap = 'round'; g.beginPath(); g.moveTo(x0, y); g.lineTo(x0 + gap * (n - 1), y); g.stroke();
+  let cur = 0; st.cues.forEach((c, k) => { if (t >= c.show - 0.05) cur = k; });
+  const mv = cur > 0 ? outC(P(t, st.cues[cur].show - 0.05, 0.4)) : 1;
+  g.strokeStyle = C.amber; g.beginPath(); g.moveTo(x0, y); g.lineTo(x0 + gap * (cur - 1 + mv), y); g.stroke();
+  st.cues.forEach((c, k) => {
+    const on = k < cur || (k === cur && mv >= 1), jump = k === cur ? 1 + 0.25 * Math.sin(Math.PI * P(t, c.show + 0.3, 0.3)) : 1;
+    g.save(); g.translate(x0 + gap * k, y); g.scale(jump, jump);
+    g.fillStyle = C.shadow; g.beginPath(); g.arc(4, 6, 18, 0, TAU); g.fill();
+    g.fillStyle = on ? C.amber : C.paper; g.beginPath(); g.arc(0, 0, 18, 0, TAU); g.fill();
+    g.strokeStyle = on ? C.amber2 : C.ring; g.lineWidth = 4; g.stroke();
+    if (on) text(String(k + 1), 0, 1, font(900, 20), '#ffffff');
+    g.restore();
+  });
+  if (mv < 1) { g.fillStyle = C.amber2; g.beginPath(); g.arc(x0 + gap * (cur - 1 + mv), y, 11, 0, TAU); g.fill(); }
+  g.restore();
+}
+// ---------- 动效入口（v1.2）：转场、次要动作写在这两个函数里，调 动效部件.js（用法见那个文件开头、knowledge/动效和画面变化.md 第八节）；空着画面不变 ----------
+function fxBefore(t) { }   // 画场景之前、镜头已设好：推移（动效.push + 动效.shift）、慢推、震屏、整体抖
+function fxAfter(t) { }    // 场景画完、页眉字幕之前，已是屏幕坐标：故障、擦除、翻页、纸片盖屏、粒子、泛光
+function render(t) {
+  动效.resetCtx(g);                    // v1.3：每帧开头把画布状态整套复位（见 SKILL.md 页面约定）
+  g.setTransform(1, 0, 0, 1, 0, 0);
+  g.globalAlpha = 1;
+  g.fillStyle = C.bg; g.fillRect(0, 0, W, H);
+  const cam = camAt(t), fv = fxView(t), z = (cam.z ?? 1) * fv.z, cy = cam.y ?? 515;   // fxView：v1.3 每句推近 / 拉开交替 + 横向慢移（FX_DEFAULT 关掉时 z=1、dx=0）
+  drawRings(cam, ST.map((st) => [st.cx + 420, 560]), t);
+  drawShapes(t, cam);   // v1.3 背景中景：扁平小几何漂浮（FX_DEFAULT 关掉时不画）
+  g.setTransform(z, 0, 0, z, 960 - cam.x * z + fv.dx, 515 - cy * z);
+  fxBefore(t);   // 动效入口（v1.2）
+  for (let i = 1; i < ST.length; i++) {   // 上一站 → 这一站的箭头，换镜头时画出来
+    const a = ST[i - 1], b = ST[i];
+    const ar = [a.cx + 780, 700, (a.cx + b.cx) / 2, 860, b.cx - 760, 300];
+    arrow(...ar, outC(P(t, b.s.start - 0.2, 0.55)));
+    arrowFlow(...ar, t, b.s.start + 0.4);   // v1.3：箭头上的流动小珠
+  }
+  for (const st of ST) if (Math.abs(st.cx - cam.x) < 2100) drawStation(st, t);   // ← 场景入口（v1.1 提醒）：写了自己的各站，就把上面的箭头循环和这一行换成自己的绘制函数，骨架的 ST / drawStation 删掉
+  g.setTransform(1, 0, 0, 1, 0, 0);
+  g.save(); g.setTransform(1, 0, 0, 1, 0, 0); fxAfter(t); g.restore();   // 动效入口（v1.2）
+  fxDefaultAfter(t);   // v1.3 默认转场（开场圆洞、色块横扫、圆形遮罩）；FX_DEFAULT 关掉时什么都不做
+  drawHeader();
+  drawSubtitle(t);
+}
+
+window.DURATION = TL.duration;
+window.seek = (t) => render(t);
+render(0);
+window.ready = true;
+</script>
+</body>
+</html>

@@ -1,0 +1,1245 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<title>复古报刊 · Token 示例页（v1.3）</title>
+<!--
+  S06 复古报刊科普信息图（参考图：复古报刊科普信息图_水母知识.jpg，一份周日报纸的科普专版）
+  白报纸 + 灰色衬线刊名 + 藏蓝长宋大标题 + 分栏正文（宋体小标题、黑体正文、两端对齐）+ 带引线的图解标注
+  + 整块深蓝「海水」插图区（白字说明、白色引线）+ 浅紫蓝圆形图解 + 白色弧形箭头 + 底部双线页脚。
+  整版是一张竖长的报纸，镜头从报头一路往下「潜」：
+    报头和「聊天框图解」→ 名词解释「提示词 Prompt」→ 海面下的 AI → 分词器落刀 → 8 块 Token
+    → 海量数据（分类广告式的文字格，深蓝海水 = 「海量」）→ 圆形图解里推断出「旅行需求」，盖章。
+  v1.3：背景一直在动（白报纸上的稀疏纤维和光斑，海里的光柱、波纹、远处气泡，都有视差）；镜头交界用 5 种转场轮换
+    （栏框伸缩、往下潜、翻报纸、推近再拉开、版面推移），每个镜头慢推；变化清单见作品目录的 变化清单.md。
+  画面只由时间 t 计算：window.seek(t)。内容和时间全部来自 timeline.js（window.TL，和本页放在同一个文件夹）：
+  镜头起止用 TL.shots，动作卡在 TL.mark('关键词') 上，例句和切分用 TL.example，数据用 TL.data，字幕用 TL.cueAt(t)。
+  字体全部是 macOS 自带：宋体-简（Songti SC）、Times New Roman、Helvetica Neue + 苹方（PingFang SC）。
+-->
+<style>
+  html, body { margin: 0; padding: 0; background: #fdfdfb; overflow: hidden; }
+  #stage { position: relative; width: 1920px; height: 1080px; overflow: hidden; }
+  #stage canvas { position: absolute; left: 0; top: 0; }
+</style>
+</head>
+<body>
+<div id="stage"><canvas id="c" width="1920" height="1080"></canvas></div>
+<script src="timeline.js"></script>
+<script src="动效部件.js"></script>
+<script>
+'use strict';
+const W = 1920, H = 1080, TAU = Math.PI * 2;
+const TL = window.TL;
+const M = (k) => TL.mark(k), ME = (k) => TL.markEnd(k);
+const SH = (k) => TL.shots[k - 1];
+const NOSUB = /[?&]nosub=1/.test(location.search);   // 渲染时 render.mjs --no-subtitle 会在地址后加 ?nosub=1：不画字幕，回剪映统一加
+
+// ---------- 字体：全部是 macOS 自带（换台 Mac 也有） ----------
+// 宋体-简：大标题（Black，压窄成长宋）、导语、栏目小标题、Token 块、结论；Times New Roman：AI、TOKEN、Prompt；
+// 正文、标注、字幕：西文 Helvetica Neue，中文苹方（参考图正文是 Helvetica）
+const SONG = '"Songti SC", "STSong", serif';
+const TIMES = '"Times New Roman", "Times", serif';
+const SANS = '"Helvetica Neue", "PingFang SC", sans-serif';
+const fSong = (w, s) => `${w} ${s}px ${SONG}`;
+const fTimes = (w, s, it) => `${it ? 'italic ' : ''}${w} ${s}px ${TIMES}`;
+const fSans = (w, s) => `${w} ${s}px ${SANS}`;
+
+// ---------- 配色（取自参考图，pipeline/取色.mjs） ----------
+const C = {
+  paper: '#fdfdfb', ink: '#1a1a1a', ink2: '#2e2e2e', gray: '#737574', rule: '#ceced0', shadow: '#e4e4e2',
+  head: '#1d3d8a',                                   // 大标题藏蓝（JELLYFISH）
+  sea: '#1b4282', seaTop: '#21508f', seaDeep: '#172f5c',   // 海水
+  peri: '#5e74a5', peri2: '#8096c1', lav: '#a4b1ce', pale: '#d3e2f7',
+  waveL: '#9fb0d8', waveM: '#4f66a3', waveHi: '#c6d3ee',  // 海面三道
+  sand: '#e7d3b5', sand2: '#d3ab7d',
+  red: '#bb3633', blue: '#1d3d8a',                    // 成都、旅行（全片固定）：参考图自己的红和大标题的藏蓝
+  tokA: '#cfd6ee', tokB: '#ead8bb',                   // 其余 6 块：浅紫蓝（水母伞盖）、沙色（海底沙）
+};
+// 例句切出的 8 个 Token：成都红、旅行蓝（全片固定），其余 6 块浅紫蓝 / 沙色轮流，藏蓝字
+const TOK = (() => { const other = [C.tokA, C.tokB]; let k = 0;
+  return TL.example.tokens.map((t) => t === '成都' ? { t, c: C.red, tc: '#ffffff' } : t === '旅行' ? { t, c: C.blue, tc: '#ffffff' } : { t, c: other[k++ % 2], tc: C.head }); })();
+const NT = TOK.length;
+const I_CD = TOK.findIndex((k) => k.t === '成都'), I_LX = TOK.findIndex((k) => k.t === '旅行');
+
+// ---------- 小工具 ----------
+const clamp = (x, a = 0, b = 1) => Math.min(b, Math.max(a, x));
+const lerp = (a, b, p) => a + (b - a) * p;
+const P = (t, a, d) => clamp((t - a) / d);
+const outC = (p) => 1 - Math.pow(1 - p, 3);
+const inOutC = (p) => (p < 0.5 ? 4 * p * p * p : 1 - Math.pow(-2 * p + 2, 3) / 2);
+const outBack = (p) => { const c1 = 1.4, c3 = c1 + 1; return 1 + c3 * Math.pow(p - 1, 3) + c1 * Math.pow(p - 1, 2); };
+const inQ = (p) => p * p;
+const sine = (p) => 0.5 - 0.5 * Math.cos(Math.PI * p);
+const qb = (a, c, b, u) => (1 - u) * (1 - u) * a + 2 * (1 - u) * u * c + u * u * b;   // 二次贝塞尔
+function hex(h) { const n = parseInt(h.slice(1), 16); return [n >> 16 & 255, n >> 8 & 255, n & 255]; }
+function mix(a, b, p) { const A = hex(a), B = hex(b); return '#' + A.map((v, i) => Math.round(v + (B[i] - v) * p).toString(16).padStart(2, '0')).join(''); }
+function rgba(h, a) { const [r, gg, b] = hex(h); return `rgba(${r},${gg},${b},${a})`; }
+function mulberry32(a) { return function () { a |= 0; a = a + 0x6D2B79F5 | 0; let t = Math.imul(a ^ a >>> 15, 1 | a); t = t + Math.imul(t ^ t >>> 7, 61 | t) ^ t; return ((t ^ t >>> 14) >>> 0) / 4294967296; }; }
+
+const cv = document.getElementById('c');
+const main = cv.getContext('2d');
+let g = main;                       // 当前画布（预渲染报纸上半版时临时换成离屏画布）
+const wCache = new Map();
+function tw(s, f) { const k = f + '|' + s; let v = wCache.get(k); if (v === undefined) { main.save(); main.font = f; v = main.measureText(s).width; main.restore(); wCache.set(k, v); } return v; }
+function rrect(x, y, w, h, r) { g.beginPath(); g.roundRect(x, y, w, h, r); }
+function text(s, x, y, f, col, align = 'center', base = 'middle', sx = 1) {
+  g.font = f; g.fillStyle = col; g.textAlign = align; g.textBaseline = base;
+  if (sx === 1) g.fillText(s, x, y);
+  else { g.save(); g.translate(x, y); g.scale(sx, 1); g.fillText(s, 0, 0); g.restore(); }
+}
+function textLS(s, x, y, f, col, ls, align = 'left', base = 'middle') { g.save(); g.letterSpacing = ls + 'px'; text(s, x, y, f, col, align, base); g.restore(); }
+// 细引线：按长度画到 q，画完在端点加小圆点（参考图图解的引线）
+function leader(pts, q, col, lw = 2, dot = 4.5) {
+  if (q <= 0) return;
+  g.strokeStyle = col; g.lineWidth = lw; g.lineJoin = 'miter'; g.lineCap = 'butt';
+  let total = 0; for (let i = 1; i < pts.length; i++) total += Math.hypot(pts[i][0] - pts[i - 1][0], pts[i][1] - pts[i - 1][1]);
+  let left = total * q; g.beginPath(); g.moveTo(pts[0][0], pts[0][1]);
+  for (let i = 1; i < pts.length && left > 0; i++) {
+    const sl = Math.hypot(pts[i][0] - pts[i - 1][0], pts[i][1] - pts[i - 1][1]), k = Math.min(1, left / sl);
+    g.lineTo(lerp(pts[i - 1][0], pts[i][0], k), lerp(pts[i - 1][1], pts[i][1], k)); left -= sl;
+  }
+  g.stroke();
+  if (q >= 1 && dot) { g.fillStyle = col; const e = pts[pts.length - 1]; g.beginPath(); g.arc(e[0], e[1], dot, 0, TAU); g.fill(); }
+}
+// 圆角矩形描边按周长画出来（p 0–1）
+function strokeReveal(x, y, w, h, r, p) {
+  if (p <= 0) return;
+  const L = 2 * (w + h) - (8 - 2 * Math.PI) * r;
+  g.setLineDash([L * p, L + 10]); rrect(x, y, w, h, r); g.stroke(); g.setLineDash([]);
+}
+// 白色弧形箭头（参考图生命周期圆里的白箭头）：n 段，每段占 span 比例
+function ringArrows(cx, cy, R, n, rot, w, col, span = 0.62) {
+  g.strokeStyle = col; g.fillStyle = col; g.lineWidth = w; g.lineCap = 'butt';
+  const hl = w * 2.3, da = hl * 0.55 / R;
+  for (let k = 0; k < n; k++) {
+    const a0 = rot + k * TAU / n, a1 = a0 + TAU / n * span;
+    g.beginPath(); g.arc(cx, cy, R, a0, a1 - da); g.stroke();
+    const ex = cx + R * Math.cos(a1), ey = cy + R * Math.sin(a1), tx = -Math.sin(a1), ty = Math.cos(a1), nx = Math.cos(a1), ny = Math.sin(a1);
+    g.beginPath(); g.moveTo(ex + tx * hl * 0.45, ey + ty * hl * 0.45);
+    g.lineTo(ex - tx * hl * 0.6 + nx * hl * 0.62, ey - ty * hl * 0.6 + ny * hl * 0.62);
+    g.lineTo(ex - tx * hl * 0.6 - nx * hl * 0.62, ey - ty * hl * 0.6 - ny * hl * 0.62); g.closePath(); g.fill();
+  }
+}
+// 白色粗弧线箭头（沿二次曲线，画到 p）
+function curveArrow(x0, y0, cx, cy, x1, y1, p, w, col) {
+  if (p <= 0) return;
+  const N = 40, u1 = p, pts = [];
+  for (let i = 0; i <= N; i++) { const u = u1 * i / N; pts.push([qb(x0, cx, x1, u), qb(y0, cy, y1, u)]); }
+  const ex = pts[N][0], ey = pts[N][1];
+  const dx = 2 * (1 - u1) * (cx - x0) + 2 * u1 * (x1 - cx), dy = 2 * (1 - u1) * (cy - y0) + 2 * u1 * (y1 - cy), L = Math.hypot(dx, dy) || 1, ux = dx / L, uy = dy / L, hl = w * 2.3;
+  g.strokeStyle = col; g.lineWidth = w; g.lineCap = 'butt'; g.lineJoin = 'round';
+  g.beginPath(); pts.forEach(([x, y], i) => (i ? g.lineTo(x, y) : g.moveTo(x, y))); g.lineTo(ex - ux * hl * 0.5, ey - uy * hl * 0.5); g.stroke();
+  g.fillStyle = col; g.beginPath(); g.moveTo(ex + ux * hl * 0.5, ey + uy * hl * 0.5);
+  g.lineTo(ex - ux * hl * 0.6 - uy * hl * 0.62, ey - uy * hl * 0.6 + ux * hl * 0.62);
+  g.lineTo(ex - ux * hl * 0.6 + uy * hl * 0.62, ey - uy * hl * 0.6 - ux * hl * 0.62); g.closePath(); g.fill();
+}
+
+// ---------- 正文排版：逐字折行（西文单词不拆、行首不放标点）+ 两端对齐 ----------
+const NO_START = '，。、；：！？）」』”…';
+function units(str) { return str.match(/[A-Za-z0-9]+|./gu) || []; }
+function wrapLines(str, f, maxW) {
+  const lines = []; let cur = [];
+  for (const u of units(str)) {
+    const next = [...cur, u];
+    if (tw(next.join(''), f) > maxW && cur.length) {
+      if (NO_START.includes(u[0])) { cur.push(u); lines.push(cur); cur = []; continue; }
+      lines.push(cur); cur = u.trim() ? [u] : [];
+    } else cur = next;
+  }
+  if (cur.length) lines.push(cur);
+  return lines;
+}
+function para(str, x, y, w, f, lh, col) {   // y 是第一行基线；返回最后一行基线
+  const lines = wrapLines(str, f, w);
+  g.font = f; g.fillStyle = col; g.textAlign = 'left'; g.textBaseline = 'alphabetic';
+  lines.forEach((ls, li) => {
+    const ws = ls.map((u) => tw(u, f)), sum = ws.reduce((a, b) => a + b, 0);
+    const gap = li === lines.length - 1 || ls.length < 2 ? 0 : (w - sum) / (ls.length - 1);
+    let xx = x; ls.forEach((u, k) => { g.fillText(u, xx, y + li * lh); xx += ws[k] + gap; });
+  });
+  return y + (lines.length - 1) * lh;
+}
+// 参考图海水里的白字说明：粗体开头 + 常规正文（左对齐，不两端对齐）
+function leadPara(lead, body, x, y, w, size, lh, col, a = 1) {
+  if (a <= 0) return;
+  g.save(); g.globalAlpha *= a;
+  const fb = fSans(700, size), fr = fSans(400, size);
+  const lines = wrapLines(lead + ' ' + body, fr, w);
+  let consumed = 0;
+  lines.forEach((ls, li) => {
+    let xx = x;
+    for (const u of ls) {
+      const bold = consumed < lead.length;
+      const f = bold ? fb : fr;
+      text(u, xx, y + li * lh, f, col, 'left', 'alphabetic');
+      xx += tw(u, f) + (bold ? 0.6 : 0); consumed += u.length;
+    }
+  });
+  g.restore();
+}
+
+// ---------- 版面（世界坐标：整版报纸宽 1920，竖着往下排） ----------
+const FOCUS_Y = 455;                              // 镜头焦点在画面 (960, 455)：字幕带以上区域的中线
+const TOP_H = 1132;                               // 海面以上（白纸部分）
+const SEA = { x0: 56, x1: 1864, y0: 1132, y1: 4120 };
+const ICON = { x: 960, y: 676, s: 150 };          // 开窗前的 app 图标
+const WIN = { x: 600, y: 466, w: 720, h: 420, head: 66, r: 18 };   // 聊天窗口
+const INP = { x: WIN.x + 22, y: WIN.y + WIN.h - 50, w: WIN.w - 44 - 84, h: 64, f: fSans(500, 40) };
+const SNDB = { x: WIN.x + WIN.w - 22 - 34, y: WIN.y + WIN.h - 50, s: 66 };
+const GREET = { text: '你好！今天想聊点什么？', x: WIN.x + 26, y: WIN.y + 128, f: fSans(400, 30) };
+const UB = { y: WIN.y + 244, h: 74, f: fSans(500, 38) };          // 用户发出的消息气泡
+const DEF = { x: 1506, y: 754, w: 372, h: 296, bar: 46 };          // 名词解释卡（放在右栏下方的空白处）
+const AIC = { x: 960, y: 1322, r: 148 };                           // 海面下的 AI 圆盘
+const STRIP = { y: 1690, h: 86, pad: 30, f: fSong(900, 54) };      // 例句纸条
+const DEV = { y: 1548, w: 940, h: 74, blade: 54 };                 // 分词器（带 7 片刀的横梁）
+const CHIP = { f: fSong(900, 54), h: 90, pad: 24, gap: 22 };       // Token 块
+const ROW_Y = 1836;
+const QY = 2340, QS = 0.72;                                        // 镜头 6–7：Token 排在数据上方
+const GRID = { x0: 452, x1: 1852, cy: 2726, pitch: 96, top: 2410, bot: 3104 };   // 海量数据：3 栏分类广告格
+const GCW = (GRID.x1 - GRID.x0) / 3;
+const gcx = (k) => GRID.x0 + GCW * (k + 0.5);
+const CELL_F = fSans(500, 48);
+const CIR = { x: 960, y: 3565, r: 400 };                           // 推断：浅紫蓝圆形图解（离数据格远一点，镜头 7 里看不见）
+const D_CD = { x: 848, y: CIR.y - 250 }, D_LX = { x: 1072, y: CIR.y - 250 };
+const CARD = { x: 960, y: CIR.y + 50, w: 600, h: 192 };
+
+let UBW, UBX, SLICES, ROW;
+function layout() {
+  UBW = tw(TL.example.text, UB.f) + 48; UBX = WIN.x + WIN.w - 26 - UBW;
+  FR = { x: UBX - 14, y: UB.y - UB.h / 2 - 14, w: UBW + 28, h: UB.h + 28 };
+  for (let k = 0; k <= 120; k++) { const tt = SEND + (ARRIVE - SEND) * k / 120, [x, y] = tripPose(tt); if (y >= SEA.y0 + 33) { SPLASH = { t: tt, x }; break; } }
+  // 例句在纸条上切成 8 段（按字宽；第一段带左边距，最后一段带右边距）
+  SLICES = (() => {
+    let x = 0; const out = TOK.map((k) => { const w = tw(k.t, STRIP.f); const s = { x0: x, x1: x + w }; x += w; return s; });
+    const W0 = x + STRIP.pad * 2;
+    out.forEach((s, i) => { s.l = i === 0 ? 0 : STRIP.pad + s.x0; s.r = i === NT - 1 ? W0 : STRIP.pad + s.x1; s.cx = (s.l + s.r) / 2 - W0 / 2; s.w = s.r - s.l; s.tx = STRIP.pad + (s.x0 + s.x1) / 2 - W0 / 2; });
+    out.total = W0; return out;
+  })();
+  ROW = (() => { const ws = TOK.map((k) => tw(k.t, CHIP.f) + CHIP.pad * 2); const tot = ws.reduce((a, b) => a + b, 0) + CHIP.gap * (NT - 1); let x = 960 - tot / 2; return ws.map((w) => { const c = x + w / 2; x += w + CHIP.gap; return { x: c, w }; }); })();
+}
+function queryPos(i) {   // 查找行里第 i 块的位置（缩小到 QS）
+  const ws = ROW.map((r) => r.w * QS), gap = 12, tot = ws.reduce((a, b) => a + b, 0) + gap * (NT - 1);
+  let x = 960 - tot / 2; for (let k = 0; k < i; k++) x += ws[k] + gap;
+  return { x: x + ws[i] / 2, y: QY };
+}
+
+// ---------- 关键时刻（全部从 TL 来） ----------
+const OPEN = M('打开') - 0.04;                       // 点开 app，聊天窗口展开
+const LBL = M('聊天框') - 0.04;                      // 图解标注
+const TYPED = TL.chars.filter((c) => c.cue === TL.shots[0].cues[1]);   // 例句的 14 个字，各有自己的念到时刻
+const SENDMSG = ME('例句') + 0.03;                   // 念完例句，按发送
+const THIS = M('这句话') - 0.04;
+const DEF_T = M('提示词') - 0.08, PROMPT_T = M('Prompt') - 0.05;
+const AI_T = M('AI') - 0.06;
+const SEND = M('接收到') - 0.02, ARRIVE = SEND + 0.66;   // 消息沿引线沉进 AI
+const STRIP_T0 = SH(4).start - 0.02;                 // 纸条从 AI 下面出来
+const DEV_T = M('分词器') - 0.1;
+const CUT = M('拆分'), SPLIT = CUT + 0.06;            // 落刀 → 分开
+const DROP = M('更小的单位');                         // 落成一排
+const SHARD = M('最小的语言碎片') - 0.06;
+const TOKEN_T = M('Token') - 0.05;
+const DIVE = SH(6).start;                             // 潜到海量数据
+const SEA_T = M('海量数据') - 0.06;
+const CD_T = M('成都') - 0.04, LX_T = M('旅行') - 0.04, TWO_T = M('这两个Token');
+const CO_T = M('常常在一起出现');
+const INF = SH(8).start, INFER_T = M('推断') - 0.04, NEED_T = M('旅行的需求') - 0.06;
+
+// ---------- v1.3 转场时刻（7 个镜头交界，5 种轮换；见 变化清单.md） ----------
+const FRAME_T = SH(2).start;                          // 1 → 2 栏框伸缩：藏蓝双线框从画面四边收拢到消息上
+const CLIP0 = THIS + 0.62, CLIP1 = DEF_T - 0.5;        // 剪刀沿裁切线剪一圈（「我们每天听到的最多的」）
+const LIFT = CLIP1 + 0.04;                            // 剪下来的剪报抬起
+const TURN = { c: SH(4).start, d: 0.6 };              // 3 → 4 翻报纸：盖满那一刻换到内页
+const PUSHIN = DROP + 0.05;                           // 4 → 5 推近这一排，说到 Token 再拉开
+const FRAME2_T = SH(7).start;                         // 6 → 7 栏框伸缩：白色分栏框收拢到 12 条真数据上
+const SLIDE = { c: SH(8).start, d: 0.5 };             // 7 → 8 版面推移：整版左移露出下一版
+const STAMP_LBL = CO_T + 0.3, STAMP_END = M('旅行的需求') + 0.3;   // 两次「盖章」：左栏「常常一起出现」、结论卡圆章（落下时震屏）
+
+// ---------- 镜头：世界坐标 → 画面；每段 [起, 止, x, y, 缩放, 缓动]；起止相差 0.001 的是盖住时的硬切 ----------
+const CAM0 = { x: 960, y: 462, z: 1.08 };
+const CAM = [
+  [0, 0.75, 960, 462, 1.0, 'out'],                              // 开场：一边印出整版一边拉开
+  [0.75, M('例句') - 0.32, 960, 466, 1.03, 'sine'],              // 整版报纸慢推（聊天框图解整个在画面里）
+  [M('例句') - 0.32, M('例句') + 0.1, 960, 747, 1.6],            // 打字时推近输入框
+  [M('例句') + 0.1, SENDMSG, 960, 752, 1.64, 'sine'],            // 打字时继续慢推
+  [SENDMSG + 0.05, SENDMSG + 0.6, 1160, 725, 1.22],              // 发出后拉开（栏框同时收拢到消息上）
+  [SENDMSG + 0.62, ME('Prompt'), 1160, 705, 1.29, 'sine'],       // 镜头 2：慢推
+  [ME('Prompt') + 0.01, ME('Prompt') + 0.56, 960, 1108, 0.95, 'out'],   // 镜头 3：往下潜到海面，AI 浮现
+  [ME('Prompt') + 0.57, TURN.c, 960, 1116, 0.98, 'sine'],
+  [TURN.c, TURN.c + 0.001, 960, 1640, 1.0],                      // 翻报纸盖满：换到内页的分词器
+  [TURN.c + 0.002, PUSHIN, 960, 1648, 1.035, 'sine'],
+  [PUSHIN, SH(5).start + 0.35, 960, 1770, 1.14],                 // 镜头 4 → 5：推近这一排
+  [SH(5).start + 0.35, TOKEN_T - 0.12, 960, 1776, 1.17, 'sine'],
+  [TOKEN_T - 0.12, TOKEN_T + 0.4, 960, 1800, 1.0, 'out'],        // 说到 Token 拉开，看全「TOKEN」
+  [TOKEN_T + 0.4, DIVE, 960, 1806, 1.02, 'sine'],
+  [DIVE, DIVE + 0.8, 960, 2680, 1.0],                            // 镜头 6：潜到海量数据
+  [DIVE + 0.8, FRAME2_T, 965, 2680, 1.02, 'sine'],
+  [FRAME2_T, FRAME2_T + 0.5, 970, 2672, 1.03],                   // 镜头 7：栏框收紧时推近一点
+  [FRAME2_T + 0.5, SLIDE.c - SLIDE.d / 2, 970, 2672, 1.045, 'sine'],
+  [SLIDE.c, SLIDE.c + 0.001, 960, 3570, 0.97],                   // 版面推移：新的一版（圆形图解）
+  [SLIDE.c + 0.002, TL.duration, 960, 3570, 1.03, 'sine'],
+];
+function camAt(t) {
+  let c = { ...CAM0 };
+  for (const [t0, t1, x, y, z, e] of CAM) {
+    if (t <= t0) break;
+    const p = P(t, t0, t1 - t0), q = e === 'sine' ? sine(p) : e === 'out' ? outC(p) : inOutC(p);
+    c = { x: lerp(c.x, x, q), y: lerp(c.y, y, q), z: lerp(c.z, z, q) };
+  }
+  return c;
+}
+
+// ---------- 报纸上半版（静态，预渲染一次，2 倍清晰度，推近也不糊） ----------
+const PS = 2;
+const pageCv = document.createElement('canvas');
+const LEFT_COL = [
+  ['你每天都在用', '打开手机或电脑里的 AI 应用，在聊天框里敲一句话、点一下发送，几秒钟后就能收到回答。写邮件、查资料、做计划，很多人每天都离不开它。'],
+  ['一句话的工序', '这句话发出去以后，AI 并不是一眼就看懂了。它要先把句子拆开，再到自己学过的文字里找线索，最后才猜出你想要什么。'],
+  ['问得越具体', '说清楚地点、天数和想做的事，AI 就不用瞎猜，给出的回答也更贴近你的需要。'],
+  ['小贴士', '一次只问一件事；不满意就接着追问，AI 会顺着前面的对话继续回答。'],
+];
+const RIGHT_COL = [
+  ['说清楚更重要', '同一件事换个说法，AI 给出的回答可能完全不同。把时间、地点、要求都写进去，往往能得到更合用的结果。'],
+  ['冷知识', 'AI 读过的文字，比一个人一辈子能读完的还要多得多：新闻、百科、小说、论坛帖子……都是它的「课本」。'],
+  ['越用越顺手', '多试几种问法，记下效果好的说法，下次直接拿来用，能省下不少来回修改的工夫。'],
+  ['下期预告', 'AI 是怎样一个字一个字写出回答的？下期《AI 万象》接着讲。'],
+];
+function column(x, w, y, secs) {
+  for (const [h, b] of secs) {
+    text(h, x, y + 32, fSong(400, 38), C.ink, 'left', 'alphabetic');
+    y = para(b, x, y + 72, w, fSans(400, 22), 35, C.ink2) + 34;
+  }
+  return y;
+}
+function silhouette(x, y) {   // 刊名旁的黑色剪影（参考图那组「大小对比」剪影）：一句话 → 碎片
+  g.fillStyle = C.ink; rrect(x, y, 76, 48, 10); g.fill();
+  g.beginPath(); g.moveTo(x + 16, y + 46); g.lineTo(x + 10, y + 64); g.lineTo(x + 34, y + 46); g.closePath(); g.fill();
+  g.fillStyle = C.paper; for (let k = 0; k < 3; k++) { g.beginPath(); g.arc(x + 22 + k * 16, y + 24, 4.5, 0, TAU); g.fill(); }
+  g.strokeStyle = C.ink; g.lineWidth = 3; g.beginPath(); g.moveTo(x + 86, y + 26); g.lineTo(x + 108, y + 26); g.stroke();
+  g.fillStyle = C.ink; g.beginPath(); g.moveTo(x + 116, y + 26); g.lineTo(x + 105, y + 18); g.lineTo(x + 105, y + 34); g.closePath(); g.fill();
+  [[124, 6, 18], [146, 12, 14], [126, 30, 14], [144, 32, 18], [166, 20, 12]].forEach(([dx, dy, s]) => g.fillRect(x + dx, y + dy, s, s));
+}
+// v1.3 开场：印刷滚筒从上往下滚过，整版报纸「印」出来；大标题随后从 1.15 倍压下
+const PRINT_D = 0.55, HEAD_T = 0.24, ICON_T = 0.42;
+const HEAD = { s: 'AI 怎样读懂你', f: fSong(900, 168) };
+const HEAD_SX = (() => { let sx = 0.8; const hw = tw(HEAD.s, HEAD.f) * sx; if (hw > 1010) sx *= 1010 / hw; return sx; })();
+function drawPageImg(t, vx0, vx1, vy0, vy1) {
+  const ry = TOP_H * (0.1 + 0.9 * inOutC(P(t, 0, PRINT_D)));   // 印到哪一行（第 0 帧已经印出报头）
+  const sx0 = clamp(vx0, 0, W), sx1 = clamp(vx1, 0, W), sy0 = clamp(vy0, 0, TOP_H), sy1 = clamp(Math.min(vy1, ry), 0, TOP_H);
+  if (sx1 > sx0 && sy1 > sy0) g.drawImage(pageCv, sx0 * PS, sy0 * PS, (sx1 - sx0) * PS, (sy1 - sy0) * PS, sx0, sy0, sx1 - sx0, sy1 - sy0);
+  const hp = P(t, HEAD_T, 0.24);
+  if (hp > 0 && vy0 < 340) {
+    const k = lerp(1.15, 1, outC(hp));
+    g.save(); g.globalAlpha = clamp(hp * 4); g.translate(960, 268); g.scale(k, k);
+    text(HEAD.s, 0, 50, HEAD.f, C.head, 'center', 'alphabetic', HEAD_SX);
+    g.restore();
+  }
+  if (ry < TOP_H && ry > vy0 - 40) {   // 滚筒：一根灰色金属辊 + 下沿一道藏蓝油墨
+    const gr = g.createLinearGradient(0, ry - 30, 0, ry + 4);
+    gr.addColorStop(0, 'rgba(160,166,180,0)'); gr.addColorStop(0.35, '#c9ced8'); gr.addColorStop(0.75, '#8e96a8'); gr.addColorStop(1, '#5d6579');
+    g.fillStyle = gr; g.fillRect(-60, ry - 30, W + 120, 34);
+    g.fillStyle = rgba(C.head, 0.8); g.fillRect(-60, ry + 4, W + 120, 3);
+    g.fillStyle = 'rgba(255,255,255,0.55)'; g.fillRect(-60, ry - 20, W + 120, 2);
+  }
+}
+function buildPage() {
+  pageCv.width = W * PS; pageCv.height = TOP_H * PS;
+  const p = pageCv.getContext('2d'); p.scale(PS, PS);
+  const keep = g; g = p;
+  // 栏线（参考图右栏左边那道细灰线）
+  g.fillStyle = C.rule; g.fillRect(419, 30, 1.5, 1072); g.fillRect(1500, 30, 1.5, 1072);
+  // 左栏：日期 + 四节；右栏：四节
+  textLS('2026 年 10 月 7 日　星期三', 64, 44, fSans(500, 20), C.ink, 1, 'left');
+  column(64, 336, 76, LEFT_COL);
+  column(1524, 332, 24, RIGHT_COL);
+  // 刊名「AI 万象」：灰色衬线，AI 用斜体（参考图 World of Wonder 里的斜体 of）
+  const fA = fTimes(400, 100, true), fB = fSong(300, 92), wa = tw('AI', fA), wb = tw('万象', fB), gp = 18, mx = 960 - (wa + gp + wb) / 2;
+  text('AI', mx, 112, fA, C.gray, 'left', 'alphabetic');
+  text('万象', mx + wa + gp, 112, fB, C.gray, 'left', 'alphabetic');
+  textLS('探索语言、数据与推理的奥秘', 963, 146, fSans(500, 19), C.ink, 6, 'center');
+  silhouette(1290, 36);
+  text('本期：一句话进了 AI 之后', 1290, 120, fSans(400, 15), C.ink2, 'left');
+  // 大标题：宋体-简 Black 压窄成长宋，藏蓝（参考图 JELLYFISH）
+  // 大标题不进预渲染：每帧现画（开场从 1.15 倍压下，像印上去），见 drawPageImg
+  text('文·图／本刊编辑部', 1480, 350, fSans(400, 18), C.ink2, 'right', 'alphabetic');
+  // 导语（宋体常规，居中两行）
+  text('你在聊天框里敲下的一句话，要经过好几道工序，', 960, 390, fSong(400, 34), C.ink, 'center', 'alphabetic');
+  text('AI 才能明白你真正想要什么。', 960, 432, fSong(400, 34), C.ink, 'center', 'alphabetic');
+  // 图注
+  text('图①　一个 AI 聊天框', WIN.x, 932, fSans(400, 21), C.ink2, 'left');
+  g = keep;
+}
+
+// 海里的悬浮颗粒（带种子的随机数，位置固定，只随 t 缓慢上漂）
+const SNOW = (() => { const r = mulberry32(11), out = []; for (let i = 0; i < 300; i++) out.push({ x: SEA.x0 + 14 + r() * (SEA.x1 - SEA.x0 - 28), y: r(), s: 1.1 + r() * 2.4, a: 0.08 + r() * 0.2, v: 5 + r() * 12 }); return out; })();
+
+// ---------- v1.3 背景层：一直在动。都只生成一次，逐帧只贴图、画几十条线（满屏逐像素颗粒会慢一倍，所以不用） ----------
+// 报纸纤维：960×540 的稀疏浅灰短纤维图，按 2 倍贴满屏（四块拼接循环），跟镜头 0.3 倍视差、另外每秒往左上飘几像素
+const FIBP = [];   // 报纸纤维（Path2D 分组）
+const SPOT = document.createElement('canvas');    // 光斑贴图（小图放大，渐变的抖动噪点被抹平，PNG 压得动）
+const SHAFT = document.createElement('canvas');   // 海面光柱贴图
+function buildBg() {
+  // 纤维：230 根短弧线（1920×1080 一块，循环拼接），按颜色和深浅分 6 组，每组一个 Path2D，逐帧描线（比贴整屏图快）
+  const r = mulberry32(23), groups = new Map();
+  for (let i = 0; i < 230; i++) {
+    const px = r() * 1920, py = r() * 1080, L = 6 + r() * 18, a = r() * TAU, warm = r() < 0.3, k = Math.floor(r() * 3);
+    const key = `${warm ? 1 : 0}${k}`; if (!groups.has(key)) groups.set(key, { p: new Path2D(), col: warm ? `rgba(150,128,96,${0.08 + 0.035 * k})` : `rgba(84,96,124,${0.07 + 0.035 * k})` });
+    const q = groups.get(key).p; q.moveTo(px, py);
+    q.quadraticCurveTo(px + Math.cos(a) * L * 0.5 + (r() - 0.5) * 6, py + Math.sin(a) * L * 0.5 + (r() - 0.5) * 6, px + Math.cos(a) * L, py + Math.sin(a) * L);
+  }
+  FIBP.push(...groups.values());
+  SPOT.width = SPOT.height = 96;
+  const s = SPOT.getContext('2d'), rg = s.createRadialGradient(48, 48, 0, 48, 48, 48);
+  rg.addColorStop(0, 'rgba(96,112,150,1)'); rg.addColorStop(0.55, 'rgba(96,112,150,0.45)'); rg.addColorStop(1, 'rgba(96,112,150,0)');
+  s.fillStyle = rg; s.fillRect(0, 0, 96, 96);
+  SHAFT.width = 48; SHAFT.height = 128;
+  const h = SHAFT.getContext('2d'), hg = h.createLinearGradient(0, 0, 48, 0);
+  hg.addColorStop(0, 'rgba(255,255,255,0)'); hg.addColorStop(0.5, 'rgba(255,255,255,1)'); hg.addColorStop(1, 'rgba(255,255,255,0)');
+  h.fillStyle = hg; h.fillRect(0, 0, 48, 128);
+  h.globalCompositeOperation = 'destination-in';
+  const vg = h.createLinearGradient(0, 0, 0, 128); vg.addColorStop(0, 'rgba(0,0,0,1)'); vg.addColorStop(1, 'rgba(0,0,0,0)');
+  h.fillStyle = vg; h.fillRect(0, 0, 48, 128);
+}
+const fmod = (v, m) => ((v % m) + m) % m;
+// 白报纸部分的背景（屏幕坐标，画在报纸字下面）：纤维 + 两团慢慢飘过的淡光影。只画在看得见白纸的地方
+// （海面以上、海两边的白纸边），镜头在海里时只剩两条窄边，省时间
+function drawPaperBg(t, cam) {
+  const z = cam.z, yS = FOCUS_Y + (SEA.y0 + 30 - cam.y) * z, xl = 960 + (SEA.x0 - cam.x) * z, xr = 960 + (SEA.x1 - cam.x) * z, y0 = Math.max(0, yS);
+  g.save(); g.beginPath();
+  if (yS > 0) g.rect(0, 0, W, Math.min(H, yS));
+  if (y0 < H && xl > 0) g.rect(0, y0, xl, H - y0);
+  if (y0 < H && xr < W) g.rect(xr, y0, W - xr, H - y0);
+  g.clip();
+  const ox = fmod(-(cam.x * 0.3 + t * 7), 1920), oy = fmod(-(cam.y * 0.3 + t * 4), 1080);
+  g.lineWidth = 1.6; g.lineCap = 'round';
+  for (const dx of [ox - 1920, ox]) for (const dy of [oy - 1080, oy]) {
+    if (!(dy < Math.max(yS, 0) || dx + 1920 > xr || dx < xl)) continue;
+    g.translate(dx, dy); for (const f of FIBP) { g.strokeStyle = f.col; g.stroke(f.p); } g.translate(-dx, -dy);
+  }
+  if (yS > 0) for (let k = 0; k < 2; k++) {
+    const sx = 960 + 760 * Math.sin(0.23 * t + k * 2.6) - cam.x * 0.15, sy = 430 + 240 * Math.sin(0.17 * t + k * 1.4) - (cam.y - 455) * 0.15, R = 380 + 50 * k;
+    if (sy - R > yS) continue;
+    g.globalAlpha = 0.06; g.drawImage(SPOT, sx - R, sy - R, 2 * R, 2 * R);
+  }
+  g.restore();
+}
+// 远处气泡（海里，0.4 倍视差：画的位置跟着镜头挪 0.6 倍，看上去比近处的颗粒慢）
+const BUB = (() => { const r = mulberry32(31), out = []; for (let i = 0; i < 34; i++) out.push({ x: SEA.x0 + 40 + r() * (SEA.x1 - SEA.x0 - 80), y: r(), s: 5 + r() * 11, v: 18 + r() * 26, ph: r() * TAU }); return out; })();
+// 海里的光柱、波纹、远处气泡（世界坐标，画在海水上、海里的东西下面）
+function drawSeaFx(t, vy0, vy1, cam) {
+  const { x0, x1, y0, y1 } = SEA;
+  if (vy1 < y0 || vy0 > y1) return;
+  g.save(); g.beginPath(); g.rect(x0, y0 + 36, x1 - x0, y1 - y0 - 36); g.clip();
+  if (vy0 < y0 + 1150) {   // 光柱：从海面斜着照下来，左右慢慢摆
+    for (let k = 0; k < 5; k++) {
+      const cx = x0 + 170 + k * 390 + 70 * Math.sin(0.45 * t + k * 1.7), w = 90 + 40 * Math.sin(0.7 * t + k * 2.3), sk = 0.22 + 0.08 * Math.sin(0.33 * t + k);
+      g.save(); g.globalAlpha = 0.085 + 0.035 * Math.sin(0.9 * t + k * 1.1);
+      g.setTransform(g.getTransform().multiply(new DOMMatrix([w / 48, 0, sk, 1100 / 128, cx - w / 2, y0 + 30])));
+      g.drawImage(SHAFT, 0, 0); g.restore();
+    }
+  }
+  // 海水波纹：一道道很淡的白色虚线波纹，横着流（相邻两道方向相反）
+  g.strokeStyle = 'rgba(214,226,250,0.10)'; g.lineWidth = 2.2; g.lineCap = 'round';
+  for (let k = 0; k < 40; k++) {
+    const yy = y0 + 150 + k * 128; if (yy > y1 - 40) break; if (yy < vy0 - 20 || yy > vy1 + 20) continue;
+    g.setLineDash([46 + (k % 3) * 14, 70 + (k % 4) * 18]); g.lineDashOffset = (k % 2 ? 1 : -1) * t * (34 + (k % 5) * 6);
+    g.beginPath();
+    for (let x = x0; x <= x1; x += 24) { const y = yy + 4 * Math.sin(x * 0.011 + t * 1.3 + k * 1.9); x === x0 ? g.moveTo(x, y) : g.lineTo(x, y); }
+    g.stroke();
+  }
+  g.setLineDash([]);
+  // 远处气泡：空心小圈 + 一点高光，往上浮
+  const span = y1 - y0 - 120, shiftY = (cam.y - y0) * 0.6;
+  for (const b of BUB) {
+    const y = y0 + 90 + fmod(b.y * span + shiftY - t * b.v, span), x = b.x + 8 * Math.sin(0.8 * t + b.ph);
+    if (y < vy0 - 30 || y > vy1 + 30) continue;
+    g.strokeStyle = 'rgba(220,232,255,0.22)'; g.lineWidth = 1.6; g.beginPath(); g.arc(x, y, b.s, 0, TAU); g.stroke();
+    g.fillStyle = 'rgba(235,242,255,0.28)'; g.beginPath(); g.arc(x - b.s * 0.35, y - b.s * 0.35, b.s * 0.22, 0, TAU); g.fill();
+  }
+  g.restore();
+}
+
+// ---------- 镜头 1：app 图标、指针、聊天窗口、图解标注 ----------
+function drawIcon(t) {
+  const a = (1 - P(t, OPEN + 0.02, 0.1)) * P(t, ICON_T, 0.08); if (a <= 0) return;
+  const pop = outBack(P(t, ICON_T, 0.32)), breath = 1 + 0.025 * Math.sin(5.5 * (t - ICON_T));   // v1.3：弹出 + 点开前轻轻呼吸
+  const tap = (t > OPEN - 0.12 && t < OPEN + 0.04 ? 1 - 0.08 * Math.sin(Math.PI * P(t, OPEN - 0.12, 0.16)) : 1) * pop * breath;
+  const S = ICON.s;
+  g.save(); g.globalAlpha = a; g.translate(ICON.x, ICON.y); g.scale(tap, tap);
+  g.fillStyle = C.shadow; rrect(-S / 2 + 7, -S / 2 + 9, S, S, 34); g.fill();
+  const gr = g.createLinearGradient(0, -S / 2, 0, S / 2); gr.addColorStop(0, '#c6cfea'); gr.addColorStop(1, C.peri2);
+  g.fillStyle = gr; rrect(-S / 2, -S / 2, S, S, 34); g.fill();
+  g.strokeStyle = '#5d6c9e'; g.lineWidth = 2.5; g.stroke();
+  g.strokeStyle = 'rgba(255,255,255,0.75)'; g.lineWidth = 3; g.beginPath(); g.moveTo(-S / 2 + 30, -S / 2 + 12); g.lineTo(S / 2 - 30, -S / 2 + 12); g.stroke();
+  g.fillStyle = '#ffffff'; rrect(-48, -38, 96, 66, 16); g.fill();
+  g.beginPath(); g.moveTo(-22, 26); g.lineTo(-34, 46); g.lineTo(-2, 27); g.closePath(); g.fill();
+  text('AI', 0, -3, fTimes(700, 46), C.head);
+  g.restore();
+  g.save(); g.globalAlpha = a * P(t, ICON_T + 0.12, 0.15); text('AI 助手', ICON.x, ICON.y + S / 2 + 38, fSans(500, 26), C.ink); g.restore();
+}
+function drawPointer(t) {   // 黑色剪影指针：移过来点一下
+  const a = P(t, 0.1, 0.15) * (1 - P(t, OPEN + 0.2, 0.15)); if (a <= 0) return;
+  const p = outC(P(t, 0.12, 0.5));
+  const x = lerp(1240, 992, p), y = lerp(930, 722, p), press = t > OPEN - 0.12 && t < OPEN + 0.04 ? 0.85 : 1;
+  g.save(); g.globalAlpha = a; g.translate(x, y); g.scale(press, press);
+  g.fillStyle = C.ink; g.strokeStyle = '#ffffff'; g.lineWidth = 3; g.lineJoin = 'round';
+  g.beginPath(); g.moveTo(0, 0); g.lineTo(0, 48); g.lineTo(12, 37); g.lineTo(20, 56); g.lineTo(29, 52); g.lineTo(21, 33); g.lineTo(36, 33); g.closePath();
+  g.stroke(); g.fill();
+  g.restore();
+}
+function winRect(t) {   // 展开：先横向拉成标题栏，再往下展开窗体
+  const p1 = inOutC(P(t, OPEN, 0.22)), p2 = outC(P(t, OPEN + 0.12, 0.42)), S = ICON.s;
+  const x0 = lerp(ICON.x - S / 2, WIN.x, p1), x1 = lerp(ICON.x + S / 2, WIN.x + WIN.w, p1);
+  return { x: x0, y: lerp(ICON.y - S / 2, WIN.y, p1), w: x1 - x0, h: lerp(lerp(S, WIN.head, p1), WIN.h, p2) };
+}
+function paperPlane(x, y, s, col) {
+  g.save(); g.translate(x, y); g.scale(s, s); g.fillStyle = col;
+  g.beginPath(); g.moveTo(-17, -1); g.lineTo(18, -15); g.lineTo(6, 17); g.lineTo(1, 4); g.closePath(); g.fill();
+  g.restore();
+}
+function drawWindow(t) {
+  if (t < OPEN) return;
+  const r = winRect(t), a = clamp((t - OPEN) / 0.06);
+  g.save(); g.globalAlpha = a;
+  g.fillStyle = C.shadow; rrect(r.x + 9, r.y + 11, r.w, r.h, WIN.r); g.fill();
+  g.fillStyle = '#f2f4fa'; rrect(r.x, r.y, r.w, r.h, WIN.r); g.fill();
+  g.save(); rrect(r.x, r.y, r.w, r.h, WIN.r); g.clip();
+  // 标题栏：浅紫蓝渐变 + 一道高光，白色头像「AI」+「AI 助手」
+  const hy = r.y + WIN.head / 2;
+  const hg = g.createLinearGradient(0, r.y, 0, r.y + WIN.head); hg.addColorStop(0, '#7a8fc0'); hg.addColorStop(1, C.peri);
+  g.fillStyle = hg; g.fillRect(r.x, r.y, r.w, WIN.head);
+  g.fillStyle = 'rgba(255,255,255,0.4)'; g.fillRect(r.x, r.y + 4, r.w, 2);
+  g.fillStyle = '#ffffff'; g.beginPath(); g.arc(WIN.x + 46, hy, 22, 0, TAU); g.fill();
+  text('AI', WIN.x + 46, hy + 1, fTimes(700, 24), C.head);
+  text('AI 助手', WIN.x + 82, hy + 1, fSans(600, 30), '#ffffff', 'left');
+  for (let k = 0; k < 3; k++) { g.fillStyle = 'rgba(255,255,255,0.65)'; g.beginPath(); g.arc(WIN.x + WIN.w - 40 - k * 20, hy, 5, 0, TAU); g.fill(); }
+  // AI 的招呼
+  const ga = P(t, OPEN + 0.32, 0.2);
+  if (ga > 0) {
+    const gw = tw(GREET.text, GREET.f) + 40;
+    g.save(); g.globalAlpha *= ga;
+    g.fillStyle = '#ffffff'; rrect(GREET.x, GREET.y - 32, gw, 64, [18, 18, 18, 4]); g.fill();
+    g.strokeStyle = C.lav; g.lineWidth = 2; g.stroke();
+    text(GREET.text, GREET.x + 20, GREET.y + 1, GREET.f, '#3a3a3a', 'left');
+    g.restore();
+  }
+  // 用户发出的消息气泡：念完例句后从输入框升上来
+  const bp = P(t, SENDMSG, 0.16), by = lerp(INP.y, UB.y, outC(bp));
+  if (bp > 0 && t >= LIFT) {   // v1.3：剪报已经剪下来，原处留一个虚线框（剪掉的洞）
+    g.save(); g.strokeStyle = rgba(C.head, 0.35); g.lineWidth = 2; g.setLineDash([10, 7]); g.strokeRect(FR.x, FR.y, FR.w, FR.h); g.setLineDash([]); g.restore();
+  } else if (bp > 0) {
+    const bump = 1 + 0.04 * Math.sin(Math.PI * P(t, THIS, 0.3));
+    g.save(); g.globalAlpha *= clamp(bp * 3);
+    g.translate(UBX + UBW, by); g.scale(bump, bump); g.translate(-(UBX + UBW), -by);
+    g.fillStyle = C.peri; rrect(UBX, by - UB.h / 2, UBW, UB.h, [18, 18, 4, 18]); g.fill();
+    text(TL.example.text, UBX + 24, by + 1, UB.f, '#ffffff', 'left');
+    g.restore();
+  }
+  // 输入框：例句逐字打出（每个字在它被念到时出现）
+  g.fillStyle = '#ffffff'; rrect(INP.x, INP.y - INP.h / 2, INP.w, INP.h, 12); g.fill();
+  g.strokeStyle = C.peri2; g.lineWidth = 2; g.stroke();
+  const tx = INP.x + 22;
+  if (t < SENDMSG) {
+    const typed = TYPED.filter((c) => c.start - 0.02 <= t).map((c) => c.text).join('');
+    if (typed) text(typed, tx, INP.y + 1, INP.f, C.ink, 'left');
+    else text('输入你的问题……', tx, INP.y + 1, fSans(400, 32), '#9a9ca6', 'left');
+    const typing = t >= M('例句') - 0.1;
+    if (t > OPEN + 0.45 && (typing || Math.floor(t * 2.5) % 2 === 0)) { g.fillStyle = C.head; g.fillRect(tx + (typed ? tw(typed, INP.f) + 4 : 0), INP.y - 22, 4, 44); }
+  } else text('输入你的问题……', tx, INP.y + 1, fSans(400, 32), '#9a9ca6', 'left');
+  // 发送键：藏蓝方块 + 白色纸飞机
+  const press = t > SENDMSG - 0.06 && t < SENDMSG + 0.16 ? 1 - 0.14 * Math.sin(Math.PI * P(t, SENDMSG - 0.06, 0.22)) : 1;
+  g.save(); g.translate(SNDB.x, SNDB.y); g.scale(press, press);
+  g.fillStyle = C.head; rrect(-SNDB.s / 2, -SNDB.s / 2, SNDB.s, SNDB.s, 14); g.fill();
+  paperPlane(-1, 1, 1.05, '#ffffff');
+  g.restore();
+  g.restore();
+  g.strokeStyle = '#5d6c9e'; g.lineWidth = 2.5; rrect(r.x, r.y, r.w, r.h, WIN.r); g.stroke();
+  g.restore();
+  if (t < SEND) drawClipState(t);   // v1.3：「这句话」的栏框、剪刀、剪报（SEND 以后剪报由 drawTrip 沿引线送进海里）
+}
+// ---------- v1.3 镜头 2：栏框收拢到消息上 → 剪刀沿框剪一圈 → 剪下来的剪报抬起 ----------
+const FRAME_LAND = FRAME_T + 0.45;
+let FR;   // 消息外面那一圈框（世界坐标），layout() 里算
+function perimPt(R, u) {
+  const L = 2 * (R.w + R.h); let d = fmod(u, 1) * L;
+  if (d < R.w) return [R.x + d, R.y, 0];
+  d -= R.w; if (d < R.h) return [R.x + R.w, R.y + d, Math.PI / 2];
+  d -= R.h; if (d < R.w) return [R.x + R.w - d, R.y + R.h, Math.PI];
+  d -= R.w; return [R.x, R.y + R.h - d, -Math.PI / 2];
+}
+function perimPath(R, u0, u1) {
+  const L = 2 * (R.w + R.h), cs = [R.w / L, (R.w + R.h) / L, (2 * R.w + R.h) / L];
+  g.beginPath(); let q = perimPt(R, u0); g.moveTo(q[0], q[1]);
+  for (const c of cs) if (c > u0 && c < u1) { q = perimPt(R, c); g.lineTo(q[0], q[1]); }
+  q = perimPt(R, Math.min(u1, 0.99999)); g.lineTo(q[0], q[1]);
+}
+function scissors(x, y, ang, op, s) {   // 黑色剪影剪刀（白描边），刀尖朝前进方向
+  g.save(); g.translate(x, y); g.rotate(ang); g.scale(s, s); g.lineJoin = 'round'; g.lineCap = 'round';
+  for (const sg of [-1, 1]) {
+    g.save(); g.rotate(sg * op);
+    g.fillStyle = C.ink; g.strokeStyle = '#ffffff'; g.lineWidth = 2.5;
+    g.beginPath(); g.moveTo(-6, sg * -5); g.lineTo(50, sg * 1); g.lineTo(-6, sg * 7); g.closePath(); g.stroke(); g.fill();
+    g.beginPath(); g.ellipse(-30, sg * 11, 14, 9, sg * 0.35, 0, TAU);
+    g.strokeStyle = '#ffffff'; g.lineWidth = 8; g.stroke(); g.strokeStyle = C.ink; g.lineWidth = 5; g.stroke();
+    g.beginPath(); g.moveTo(-5, sg * 2); g.lineTo(-17, sg * 7); g.lineWidth = 6; g.stroke();
+    g.restore();
+  }
+  g.fillStyle = '#ffffff'; g.beginPath(); g.arc(0, 0, 3, 0, TAU); g.fill();
+  g.restore();
+}
+function drawClipping(cx, cy, rot, s, lift) {   // 剪下来的剪报：白纸 + 虚线剪边 + 消息气泡；lift 0–1 投影越来越远
+  g.save(); g.translate(cx, cy); g.rotate(rot); g.scale(s, s);
+  const w = FR.w, h = FR.h;
+  g.fillStyle = `rgba(20,30,60,${0.12 + 0.16 * lift})`; g.fillRect(-w / 2 + 3 + 8 * lift, -h / 2 + 4 + 11 * lift, w, h);
+  g.fillStyle = C.paper; g.fillRect(-w / 2, -h / 2, w, h);
+  g.strokeStyle = C.head; g.lineWidth = 2.5; g.setLineDash([10, 7]); g.strokeRect(-w / 2 + 1, -h / 2 + 1, w - 2, h - 2); g.setLineDash([]);
+  g.fillStyle = C.peri; rrect(-UBW / 2, -UB.h / 2, UBW, UB.h, [18, 18, 4, 18]); g.fill();
+  text(TL.example.text, -UBW / 2 + 24, 1, UB.f, '#ffffff', 'left');
+  g.restore();
+}
+function clipLift(t) { return outBack(P(t, LIFT, 0.3)); }
+function drawClipState(t) {
+  if (t < FRAME_LAND) return;
+  if (t >= LIFT) {   // 剪下来、抬起
+    const lp = clipLift(t);
+    drawClipping(FR.x + FR.w / 2 - 8 * lp, FR.y + FR.h / 2 - 12 * lp, -0.035 * lp, 1 + 0.02 * lp, clamp(lp));
+    return;
+  }
+  const u = sine(P(t, CLIP0, CLIP1 - CLIP0));
+  g.save(); g.strokeStyle = C.head; g.lineCap = 'butt';
+  if (u < 1) { g.lineWidth = 4.5; perimPath(FR, u, 1); g.stroke(); }
+  const ia = 1 - P(t, CLIP0, 0.2);
+  if (ia > 0) { g.globalAlpha = ia; g.lineWidth = 1.5; g.strokeRect(FR.x + 7, FR.y + 7, FR.w - 14, FR.h - 14); g.globalAlpha = 1; }
+  if (u > 0) { g.lineWidth = 2.5; g.setLineDash([10, 7]); perimPath(FR, 0, u); g.stroke(); g.setLineDash([]); }
+  g.restore();
+  const sa = P(t, CLIP0 - 0.12, 0.12) * (1 - P(t, CLIP1, 0.1));
+  if (sa > 0) { const [x, y, a] = perimPt(FR, Math.min(u, 0.9999)); g.save(); g.globalAlpha = sa; scissors(x, y, a, 0.06 + 0.26 * (0.5 + 0.5 * Math.sin(t * 26)), 1.25); g.restore(); }
+}
+function drawFrameIn(t) {   // 1 → 2 栏框伸缩（屏幕坐标）：藏蓝双线框从画面四边收拢到消息外面那一圈
+  const p = P(t, FRAME_T, FRAME_LAND - FRAME_T); if (p <= 0 || p >= 1) return;
+  const cam = camAt(t), q = inOutC(p), [ax, ay] = w2s(cam, FR.x, FR.y), [bx, by] = w2s(cam, FR.x + FR.w, FR.y + FR.h);
+  const x0 = lerp(26, ax, q), y0 = lerp(26, ay, q), x1 = lerp(W - 26, bx, q), y1 = lerp(884, by, q);
+  g.save(); g.globalAlpha = clamp(p * 6); g.strokeStyle = C.head;
+  g.lineWidth = lerp(9, 4.5 * cam.z, q); g.strokeRect(x0, y0, x1 - x0, y1 - y0);
+  const d = lerp(14, 7 * cam.z, q); g.lineWidth = lerp(3, 1.5 * cam.z, q); g.strokeRect(x0 + d, y0 + d, x1 - x0 - 2 * d, y1 - y0 - 2 * d);
+  g.restore();
+}
+// 图解标注（参考图 Anatomy 101 的引线标注）
+const LABELS = [
+  { s: '对话窗口', x: 434, y: 600, pts: [[562, 600], [596, 600], [648, 646]] },
+  { s: '输入框', x: 434, y: 836, pts: [[532, 836], [630, 836]] },
+  { s: '发送键', x: 1486, y: 836, right: true, pts: [[1390, 836], [1300, 836]] },
+];
+function drawLabels(t) {
+  LABELS.forEach((L, k) => {
+    const t0 = LBL + k * 0.08, q = outC(P(t, t0, 0.3)), a = P(t, t0, 0.15);
+    if (a <= 0) return;
+    g.save(); g.globalAlpha = a;
+    text(L.s, L.x, L.y + 1, fSans(700, 30), C.ink, L.right ? 'right' : 'left');
+    leader(L.pts, q, C.ink, 2, 4.5);
+    g.restore();
+  });
+}
+// 名词解释卡：从上往下「印」出来；说到 Prompt 时英文从左往右印上
+function drawDef(t) {
+  const p = P(t, DEF_T, 0.3); if (p <= 0) return;
+  leader([[DEF.x, DEF.y + DEF.bar / 2], [DEF.x - 70, DEF.y + DEF.bar / 2], [FR.x + FR.w - 8 * clipLift(t) + 4, UB.y - 12 * clipLift(t)]], outC(P(t, DEF_T + 0.12, 0.32)), C.ink, 2, 4.5);
+  const h = DEF.h * outC(p);
+  g.save(); g.beginPath(); g.rect(DEF.x - 4, DEF.y - 4, DEF.w + 20, h + 16); g.clip();
+  g.fillStyle = C.shadow; g.fillRect(DEF.x + 7, DEF.y + 9, DEF.w, DEF.h);
+  g.fillStyle = '#ffffff'; g.fillRect(DEF.x, DEF.y, DEF.w, DEF.h);
+  g.strokeStyle = C.head; g.lineWidth = 2; g.strokeRect(DEF.x, DEF.y, DEF.w, DEF.h);
+  g.fillStyle = C.head; g.fillRect(DEF.x, DEF.y, DEF.w, DEF.bar);
+  textLS('名词解释', DEF.x + 20, DEF.y + DEF.bar / 2 + 1, fSans(600, 24), '#ffffff', 6, 'left');
+  text('提示词', DEF.x + 22, DEF.y + 138, fSong(900, 78), C.ink, 'left', 'alphabetic');
+  const q = P(t, PROMPT_T, 0.22);
+  if (q > 0) {
+    g.save(); g.beginPath(); g.rect(DEF.x, DEF.y + 150, 22 + (DEF.w - 22) * outC(q), 92); g.clip();
+    text('Prompt', DEF.x + 22, DEF.y + 218, fTimes(400, 74, true), C.head, 'left', 'alphabetic');
+    g.restore();
+  }
+  g.fillStyle = C.rule; g.fillRect(DEF.x + 22, DEF.y + 240, DEF.w - 44, 1.5);
+  text('你发给 AI 的这句话', DEF.x + 22, DEF.y + 276, fSans(400, 26), C.ink2, 'left', 'alphabetic');
+  g.restore();
+}
+
+// ---------- 海：海面三道波浪 + 深蓝海水 + 悬浮颗粒（参考图的海水插图区） ----------
+function drawSea(t, vy0, vy1) {
+  if (vy1 < SEA.y0 - 30 || vy0 > SEA.y1) return;
+  const { x0, x1, y0, y1 } = SEA;
+  const gr = g.createLinearGradient(0, y0, 0, y1);
+  gr.addColorStop(0, C.seaTop); gr.addColorStop(0.16, C.sea); gr.addColorStop(1, C.seaDeep);
+  g.fillStyle = gr; g.fillRect(x0, y0 + 30, x1 - x0, y1 - y0 - 30);
+  if (vy0 < y0 + 80) {
+    const wav = (yb, amp, k, ph) => { g.beginPath(); g.moveTo(x0, y0 + 60); for (let x = x0; x <= x1 + 16; x += 16) g.lineTo(Math.min(x, x1), yb + amp * Math.sin(x * k + ph + t * 0.55) + amp * 0.45 * Math.sin(x * k * 2.7 + ph * 1.7)); g.lineTo(x1, y0 + 60); g.closePath(); g.fill(); };
+    g.fillStyle = C.waveL; wav(y0 + 2, 7, 0.0042, 0.3);
+    g.fillStyle = C.waveM; wav(y0 + 20, 5, 0.0061, 1.9);
+    g.fillStyle = C.seaTop; g.fillRect(x0, y0 + 33, x1 - x0, 30);
+    g.strokeStyle = C.waveHi; g.lineWidth = 2.5; g.beginPath();
+    for (let x = x0; x <= x1; x += 16) { const y = y0 + 33 + 1.4 * Math.sin(x * 0.009 + t * 0.7); x === x0 ? g.moveTo(x, y) : g.lineTo(x, y); }
+    g.stroke();
+  }
+  const span = y1 - y0 - 70;
+  for (const s of SNOW) {
+    const y = y0 + 60 + ((s.y * span - t * s.v) % span + span) % span;
+    if (y < vy0 - 10 || y > vy1 + 10) continue;
+    g.fillStyle = `rgba(220,232,255,${s.a})`; g.beginPath(); g.arc(s.x, y, s.s, 0, TAU); g.fill();
+  }
+}
+// 参考图海里的白字说明块（粗体开头 + 白色细引线连到要说明的东西）
+function drawNotes(t) {
+  const out = 1 - P(t, SH(5).start - 0.1, 0.3);
+  const a1 = P(t, AI_T + 0.25, 0.3) * out;
+  if (a1 > 0) {
+    leadPara('AI', '收到这句话以后，不会马上回答，而是先在内部做几道工序。', 120, 1306, 380, 28, 42, '#ffffff', a1);
+    g.save(); g.globalAlpha = a1; leader([[505, 1340], [600, 1340], [AIC.x - AIC.r - 8, AIC.y + 6]], outC(P(t, AI_T + 0.35, 0.35)), 'rgba(255,255,255,0.85)', 1.8, 4); g.restore();
+  }
+  const a2 = P(t, DEV_T + 0.2, 0.3) * out;
+  if (a2 > 0) {
+    leadPara('分词器', 'AI 的第一道工序：把一句话切成更小的单位。', 1420, 1306, 380, 28, 42, '#ffffff', a2);
+    const la = a2 * (1 - P(t, DROP + 0.05, 0.25));   // 分词器收走时引线一起消失
+    if (la > 0) { g.save(); g.globalAlpha = la; leader([[1415, 1340], [1360, 1340], [1330, DEV.y + devOffset(t) - DEV.h / 2 - 4]], outC(P(t, DEV_T + 0.3, 0.35)), 'rgba(255,255,255,0.85)', 1.8, 4); g.restore(); }
+  }
+}
+
+// ---------- 镜头 3：AI 圆盘；消息沿引线沉下去 ----------
+function drawAIDisc(t) {
+  const p = P(t, AI_T, 0.36); if (p <= 0) return;
+  const pulse = 1 + 0.07 * Math.sin(Math.PI * P(t, ARRIVE - 0.04, 0.3));
+  const s = (0.8 + 0.2 * outBack(p)) * pulse;
+  g.save(); g.globalAlpha = clamp(p * 3); g.translate(AIC.x, AIC.y);
+  g.save(); g.scale(s, s);
+  const gr = g.createRadialGradient(-50, -60, 20, 0, 0, AIC.r); gr.addColorStop(0, '#7c91c2'); gr.addColorStop(1, C.peri);
+  g.fillStyle = gr; g.beginPath(); g.arc(0, 0, AIC.r, 0, TAU); g.fill();
+  g.strokeStyle = 'rgba(255,255,255,0.92)'; g.lineWidth = 3; g.beginPath(); g.arc(0, 0, AIC.r - 14, 0, TAU); g.stroke();
+  text('AI', 0, 10, fTimes(700, 156), '#ffffff', 'center', 'middle', 0.86);
+  g.restore();
+  g.globalAlpha *= outC(P(t, AI_T + 0.1, 0.4));
+  ringArrows(0, 0, AIC.r + 24, 3, -1.2 + t * 0.55, 9, 'rgba(255,255,255,0.9)', 0.58);
+  g.restore();
+}
+function tripPt(u) {   // 消息气泡 → AI 的路线
+  const ax = UBX + UBW / 2, ay = UB.y + UB.h / 2 + 14, bx = AIC.x, by = AIC.y - AIC.r - 10;
+  return [qb(ax, ax + 30, bx, u), qb(ay, (ay + by) / 2 + 40, by, u)];
+}
+function drawTrip(t) {
+  // 引线：海面以上是黑色、以下是白色（参考图 Lion's mane 那根引线）
+  const lp = outC(P(t, AI_T + 0.12, 0.38)) * (1 - P(t, SH(4).start + 0.3, 0.3));
+  if (lp > 0) {
+    const pts = []; for (let i = 0; i <= 40; i++) pts.push(tripPt(lp * i / 40));
+    for (const [col, top] of [[C.ink, true], ['#ffffff', false]]) {
+      g.save(); g.beginPath(); top ? g.rect(0, 0, W, SEA.y0 + 30) : g.rect(0, SEA.y0 + 30, W, 5000); g.clip();
+      g.strokeStyle = col; g.lineWidth = 2.5; g.setLineDash([10, 8]); g.beginPath(); pts.forEach(([x, y], i) => (i ? g.lineTo(x, y) : g.moveTo(x, y))); g.stroke(); g.setLineDash([]);
+      g.restore();
+    }
+  }
+  if (t >= SEND && t < ARRIVE) {   // v1.3：剪报沿引线沉进 AI，越来越小（从抬起的位置出发）
+    const [x, y, s, r] = tripPose(t);
+    g.save(); g.globalAlpha = 1 - P(t, ARRIVE - 0.1, 0.1); drawClipping(x, y, r, s, 1); g.restore();
+  }
+  drawSplash(t);
+}
+function tripPose(t) {
+  const u = inOutC(P(t, SEND, ARRIVE - SEND)), [x, y0] = tripPt(u), y = y0 - (UB.h / 2 + 14) * (1 - u) * (1 - u);
+  return [x - 8 * (1 - u), y - 12 * (1 - u), lerp(1.02, 0.16, u), -0.035 * (1 - u)];
+}
+// 剪报穿过海面时荡开两圈波纹（时刻和位置在 layout() 里按 tripPose 逐帧找出来）
+let SPLASH = null;
+function drawSplash(t) {
+  if (!SPLASH) return;
+  for (let k = 0; k < 2; k++) {
+    const q = P(t, SPLASH.t + k * 0.13, 0.7); if (q <= 0 || q >= 1) continue;
+    const rx = 24 + 190 * outC(q);
+    g.save(); g.globalAlpha = 0.85 * (1 - q); g.strokeStyle = '#ffffff'; g.lineWidth = 3.5 - 1.5 * q;
+    g.beginPath(); g.ellipse(SPLASH.x, SEA.y0 + 33, rx, rx * 0.2, 0, 0, TAU); g.stroke(); g.restore();
+  }
+}
+
+// ---------- 镜头 4–5：纸条 → 分词器落刀 → 8 块 Token ----------
+function devOffset(t) {
+  const slide = 1 - outC(P(t, DEV_T, 0.32));
+  const down = inQ(P(t, CUT - 0.08, 0.1)), up = outC(P(t, CUT + 0.06, 0.26));
+  const ret = inOutC(P(t, DROP + 0.05, 0.4));
+  return -80 * slide + 106 * down * (1 - up) - 170 * ret;
+}
+function drawDevice(t) {
+  const a = P(t, DEV_T, 0.16) * (1 - P(t, DROP + 0.2, 0.25)); if (a <= 0) return;
+  const y = DEV.y + devOffset(t), x0 = 960 - DEV.w / 2, by = y + DEV.h / 2;
+  g.save(); g.globalAlpha = a;
+  g.fillStyle = 'rgba(8,18,48,0.4)'; rrect(x0 + 5, y - DEV.h / 2 + 9, DEV.w, DEV.h, 14); g.fill();
+  const gr = g.createLinearGradient(0, y - DEV.h / 2, 0, y + DEV.h / 2); gr.addColorStop(0, '#eef1fa'); gr.addColorStop(1, '#aab7dc');
+  g.fillStyle = gr; rrect(x0, y - DEV.h / 2, DEV.w, DEV.h, 14); g.fill();
+  g.strokeStyle = '#ffffff'; g.lineWidth = 2; g.stroke();
+  for (const sx of [x0 + 32, x0 + DEV.w - 32]) { g.fillStyle = C.peri; g.beginPath(); g.arc(sx, y, 9, 0, TAU); g.fill(); g.strokeStyle = '#ffffff'; g.lineWidth = 2; g.beginPath(); g.moveTo(sx - 5, y); g.lineTo(sx + 5, y); g.stroke(); }
+  const ts = 1 + 0.08 * Math.sin(Math.PI * P(t, M('分词器') - 0.04, 0.3));
+  g.save(); g.translate(960, y + 3); g.scale(ts, ts); text('分词器', 0, 0, fSong(900, 52), C.head); g.restore();
+  g.restore();
+  // 落刀的一瞬：7 道白光
+  for (let k = 0; k < NT - 1; k++) {
+    const f = Math.sin(Math.PI * P(t, CUT - 0.03 + k * 0.01, 0.13)); if (f <= 0) continue;
+    const bx = 960 - SLICES.total / 2 + SLICES[k].r;
+    g.save(); g.globalAlpha = f; g.strokeStyle = '#ffffff'; g.lineWidth = 4; g.beginPath(); g.moveTo(bx, STRIP.y - 64); g.lineTo(bx, STRIP.y + 64); g.stroke();
+    g.strokeStyle = 'rgba(255,255,255,0.35)'; g.lineWidth = 14; g.stroke(); g.restore();
+  }
+}
+function drawBlades(t) {   // 7 片刀，正好落在 8 块之间；画在纸条前面
+  const a = P(t, DEV_T, 0.16) * (1 - P(t, DROP + 0.2, 0.25)); if (a <= 0) return;
+  const by = DEV.y + devOffset(t) + DEV.h / 2;
+  g.save(); g.globalAlpha = a;
+  for (let k = 0; k < NT - 1; k++) {
+    const bx = 960 - SLICES.total / 2 + SLICES[k].r;
+    const gr = g.createLinearGradient(bx - 12, 0, bx + 12, 0); gr.addColorStop(0, '#ffffff'); gr.addColorStop(1, '#a6b3d8');
+    g.fillStyle = gr; g.beginPath(); g.moveTo(bx - 12, by - 6); g.lineTo(bx + 12, by - 6); g.lineTo(bx + 2, by + DEV.blade); g.lineTo(bx - 2, by + DEV.blade); g.closePath(); g.fill();
+    g.strokeStyle = '#33467a'; g.lineWidth = 1.5; g.stroke();
+  }
+  g.restore();
+}
+function drawStrip(t) {
+  if (t < STRIP_T0 || t >= SPLIT) return;
+  const p = outC(P(t, STRIP_T0, 0.55)), y = lerp(AIC.y + AIC.r - 20, STRIP.y, p), s = lerp(0.22, 1, p);
+  const w = SLICES.total, h = STRIP.h;
+  g.save(); g.globalAlpha = clamp(p * 4); g.translate(960, y); g.scale(s, s);
+  g.fillStyle = 'rgba(8,18,48,0.45)'; rrect(-w / 2 + 5, -h / 2 + 9, w, h, 4); g.fill();
+  g.fillStyle = C.paper; rrect(-w / 2, -h / 2, w, h, 4); g.fill();
+  for (let i = 0; i < NT; i++) text(TOK[i].t, SLICES[i].tx, 3, STRIP.f, C.ink);
+  const gp = P(t, DEV_T + 0.25, 0.3);   // 剪报式的裁切虚线
+  if (gp > 0) {
+    g.strokeStyle = rgba(C.head, 0.75 * gp); g.lineWidth = 2.5; g.setLineDash([7, 6]);
+    for (let k = 0; k < NT - 1; k++) { const bx = -w / 2 + SLICES[k].r; g.beginPath(); g.moveTo(bx, -h / 2 + 6); g.lineTo(bx, h / 2 - 6); g.stroke(); }
+    g.setLineDash([]);
+  }
+  g.restore();
+}
+function chipPose(t, i) {
+  if (t < SPLIT) return null;
+  const sl = SLICES[i], row = ROW[i];
+  const sep = outC(P(t, SPLIT, 0.34)), colP = outC(P(t, SPLIT + 0.06, 0.3));
+  let x = 960 + sl.cx + (i - (NT - 1) / 2) * 28 * sep, y = STRIP.y, w = sl.w, h = STRIP.h, txo = sl.tx - sl.cx, s = 1, a = 1;
+  const dp = P(t, DROP + i * 0.035, 0.45);
+  if (dp > 0) { const q = outC(dp); x = lerp(x, row.x, q); y = lerp(STRIP.y, ROW_Y, outBack(dp)); w = lerp(w, row.w, q); h = lerp(STRIP.h, CHIP.h, q); txo = lerp(txo, 0, q); }
+  y -= 22 * Math.sin(Math.PI * P(t, SHARD + 0.06 + i * 0.1, 0.28));                 // 镜头 5：依次轻跳
+  const fly = P(t, DIVE + i * 0.03, 0.5);                                          // 镜头 6：排到数据上方（每块都比下潜的镜头先到，不会被甩出画面）
+  if (fly > 0) { const q = inOutC(fly), tg = queryPos(i); x = lerp(x, tg.x, q); y = lerp(y, tg.y, q); s = lerp(1, QS, q); }
+  if (i === I_CD || i === I_LX) {
+    y -= 18 * QS * Math.sin(Math.PI * P(t, TWO_T + (i === I_LX ? 0.16 : 0), 0.3));   // 「这两个Token」各跳一下
+    if (t >= SLIDE.c) { const tg = i === I_CD ? D_CD : D_LX; x = tg.x; y = tg.y; s = 1; }   // 镜头 8：版面推移时在屏幕上跳到新版（drawHop），落定在圆形图解上部
+  } else if (t > INF) a = 1 - 0.6 * P(t, INF, 0.4);
+  return { x, y, w, h, colP, txo, s, a };
+}
+function drawChip(i, ps, ring = 0) {
+  const tk = TOK[i], { x, y, w, h, colP, txo, s, a } = ps;
+  if (a <= 0) return;
+  const fill = mix(C.paper, tk.c, colP), tcol = mix(C.ink, tk.tc, colP);
+  g.save(); g.globalAlpha *= a; g.translate(x, y); g.scale(s, s);
+  g.fillStyle = 'rgba(8,18,48,0.45)'; rrect(-w / 2 + 5, -h / 2 + 9, w, h, 5); g.fill();
+  g.fillStyle = C.paper; rrect(-w / 2, -h / 2, w, h, 5); g.fill();          // 白纸边（票据式）
+  const b = 6 * colP;
+  g.fillStyle = fill; rrect(-w / 2 + b, -h / 2 + b, w - 2 * b, h - 2 * b, 3); g.fill();
+  if (colP > 0) { g.strokeStyle = rgba(tk.tc === '#ffffff' ? '#ffffff' : C.head, 0.45 * colP); g.lineWidth = 1.4; rrect(-w / 2 + 11, -h / 2 + 11, w - 22, h - 22, 2); g.stroke(); }
+  if (ring > 0) { g.strokeStyle = rgba('#ffffff', ring); g.lineWidth = 4; rrect(-w / 2 - 8, -h / 2 - 8, w + 16, h + 16, 9); g.stroke(); }
+  text(tk.t, txo, 3, CHIP.f, tcol);
+  g.restore();
+}
+function drawChips(t) {
+  drawStrip(t);
+  for (let i = 0; i < NT; i++) {
+    if (HOP && (i === I_CD || i === I_LX)) continue;
+    const ps = chipPose(t, i); if (!ps) continue;
+    const lq = P(t, DROP + i * 0.035 + 0.27, 0.4);   // v1.3：落成一排时每块带一圈白色墨环
+    if (lq > 0 && lq < 1 && t < DIVE) { const e = 6 + 22 * outC(lq); g.save(); g.globalAlpha = 0.75 * (1 - lq); g.strokeStyle = '#ffffff'; g.lineWidth = 2.5; g.strokeRect(ROW[i].x - ROW[i].w / 2 - e, ROW_Y - CHIP.h / 2 - e, ROW[i].w + 2 * e, CHIP.h + 2 * e); g.restore(); }
+    const ring = t >= TOKEN_T && t < DIVE + 0.2 ? 0.95 * Math.sin(Math.PI * P(t, TOKEN_T + i * 0.035, 0.42)) : 0;
+    drawChip(i, ps, ring);
+  }
+}
+function rowSpan() { return [ROW[0].x - ROW[0].w / 2, ROW[NT - 1].x + ROW[NT - 1].w / 2]; }
+function drawShardLabel(t) {   // 「最小的语言碎片」：白色括线 + 白字
+  const a = P(t, SHARD, 0.2) * (1 - P(t, DIVE, 0.3)); if (a <= 0) return;
+  const [L, R] = rowSpan(), cx = (L + R) / 2, yb = ROW_Y - 74, p = outC(P(t, SHARD, 0.32)), hw = (R - L) / 2 * p;
+  g.save(); g.globalAlpha = a; g.strokeStyle = '#ffffff'; g.lineWidth = 3;
+  g.beginPath(); g.moveTo(cx - hw, yb + 14); g.lineTo(cx - hw, yb); g.lineTo(cx + hw, yb); g.lineTo(cx + hw, yb + 14); g.stroke();
+  g.beginPath(); g.moveTo(cx, yb); g.lineTo(cx, yb - 16 * p); g.stroke();
+  text('最小的语言碎片', cx, yb - 48, fSans(700, 54), '#ffffff');
+  g.restore();
+}
+function drawTokenLabel(t) {   // 「TOKEN」：参考图 JELLYFISH 那种窄体衬线大字，白色
+  const fade = 1 - P(t, DIVE, 0.3); if (fade <= 0) return;
+  const [L, R] = rowSpan(), cx = (L + R) / 2, yb = ROW_Y + 76, p = outC(P(t, TOKEN_T - 0.04, 0.3));
+  if (p > 0) {
+    const hw = (R - L) / 2 * p;
+    g.save(); g.globalAlpha = fade; g.strokeStyle = '#ffffff'; g.lineWidth = 3;
+    g.beginPath(); g.moveTo(cx - hw, yb - 14); g.lineTo(cx - hw, yb); g.lineTo(cx + hw, yb); g.lineTo(cx + hw, yb - 14); g.stroke();
+    g.beginPath(); g.moveTo(cx, yb); g.lineTo(cx, yb + 18 * p); g.stroke();
+    g.restore();
+  }
+  const a = P(t, TOKEN_T, 0.1) * fade; if (a <= 0) return;
+  const s = lerp(1.12, 1, outC(P(t, TOKEN_T, 0.24)));
+  g.save(); g.globalAlpha = a; g.translate(cx, yb + 98); g.scale(s, s);
+  text('TOKEN', 0, 0, fTimes(700, 150), '#ffffff', 'center', 'middle', 0.82);
+  g.restore();
+}
+
+// ---------- 镜头 6–7：海量数据（3 栏分类广告格，先快速滚动再停住） ----------
+const FILL = ['明天会下雨吗', '番茄炒蛋的做法', '怎么写请假条', '北京到上海多远', '感冒了吃什么', '如何养多肉', '周末看什么电影', '英语单词怎么背',
+  '火锅蘸料搭配', '小猫为什么打呼噜', '高考志愿怎么填', '早餐吃什么好', '西湖十景有哪些', '怎样写年终总结', '房间怎么收纳', '跑步前要热身吗',
+  '咖啡和茶哪个提神', '手机内存不够了', '端午节的由来', '如何练好书法', '长城有多长', '牛排几分熟', '怎么挑西瓜', '孩子几岁学游泳',
+  '电动车怎么保养', '睡前喝牛奶好吗', '哪里看日出最美', '月饼有哪些口味', '怎么写一首诗', '飞机为什么能飞', '家常豆腐做法', '面试穿什么'];
+const fillText = (r, k) => FILL[((r * 5 + k * 13) % FILL.length + FILL.length) % FILL.length];
+const DATA = TL.data.map((d, i) => ({ ...d, i, col: i % 3, row: Math.floor(i / 3), both: d['成都'] && d['旅行'] }));
+const BOTH = DATA.filter((d) => d.both);
+const gridOff = (t) => 2400 * (1 - outC(P(t, DIVE + 0.06, 1.18)));
+function drawCell(t, cx, cy, str, d, hl) {
+  const f = CELL_F, both = d && d.both, k = both ? BOTH.indexOf(d) : -1;
+  let a = d ? 1 : 0.5 * FILL_DIM;   // v1.3：栏框收紧后填充行更淡
+  if (hl > 0 && !both) a *= 1 - (d ? 0.68 : 0.6) * hl;
+  g.save(); g.globalAlpha *= a;
+  const sw = GCW - 30, sh = GRID.pitch - 22;   // 剪报纸条
+  g.fillStyle = 'rgba(8,18,48,0.4)'; g.fillRect(cx - sw / 2 + 4, cy - sh / 2 + 6, sw, sh);
+  g.fillStyle = C.paper; g.fillRect(cx - sw / 2, cy - sh / 2, sw, sh);
+  const bp = k >= 0 ? outC(P(t, CO_T + 0.02 + k * 0.1, 0.28)) : 0;
+  if (bp > 0) {   // 同时有「成都」「旅行」：纸条外面用白线框一圈（按周长画出来）
+    g.strokeStyle = '#ffffff'; g.lineWidth = 4; strokeReveal(cx - sw / 2 - 9, cy - sh / 2 - 9, sw + 18, sh + 18, 3, bp);
+  }
+  const x0 = cx - tw(str, f) / 2, marks = [];
+  if (d) for (const [word, col, tm] of [['成都', C.red, CD_T], ['旅行', C.blue, LX_T]]) {   // 说到时亮起（红 / 蓝底块）
+    const j = str.indexOf(word); if (j < 0) continue;
+    const t0 = tm + (d.i % 6) * 0.025, pa = P(t, t0, 0.12); if (pa <= 0) continue;
+    marks.push({ j, word, col, a: pa, s: outBack(P(t, t0, 0.3)), wx: x0 + tw(str.slice(0, j), f), ww: tw(word, f) });
+  }
+  for (const m of marks) { g.save(); g.globalAlpha *= m.a; g.translate(m.wx + m.ww / 2, cy); g.scale(m.s, m.s); g.fillStyle = m.col; rrect(-m.ww / 2 - 7, -30, m.ww + 14, 60, 4); g.fill(); g.restore(); }
+  g.font = f; g.textAlign = 'left'; g.textBaseline = 'middle';
+  let xx = x0;
+  for (let j = 0; j < str.length;) {
+    const m = marks.find((mm) => mm.j === j);
+    if (m) { g.fillStyle = mix(C.ink, '#ffffff', m.a); g.fillText(m.word, xx, cy + 1); xx += m.ww; j += m.word.length; }
+    else { g.fillStyle = C.ink; g.fillText(str[j], xx, cy + 1); xx += tw(str[j], f); j++; }
+  }
+  g.restore();
+}
+function drawCells(t, y0, y1, x0 = -1e9, x1 = 1e9) {
+  const off = gridOff(t), hl = P(t, CO_T, 0.4);
+  FILL_DIM = 1 - 0.5 * inOutC(P(t, FRAME2_T, 0.5));
+  for (let r = -27; r <= 7; r++) {
+    const cy = GRID.cy + (r - 1.5) * GRID.pitch + off;
+    if (cy < y0 - GRID.pitch || cy > y1 + GRID.pitch) continue;
+    for (let k = 0; k < 3; k++) {
+      const cx = gcx(k); if (cx + GCW / 2 < x0 || cx - GCW / 2 > x1) continue;
+      const d = r >= 0 && r <= 3 ? DATA[r * 3 + k] : null;
+      drawCell(t, cx, cy, d ? d.text : fillText(r, k), d, hl);
+    }
+  }
+}
+let FILL_DIM = 1;
+function drawGrid(t, vy0, vy1) {
+  if (vy1 < GRID.top - 40 || vy0 > GRID.bot + 40) return;
+  g.save(); g.beginPath(); g.rect(GRID.x0, GRID.top, GRID.x1 - GRID.x0, GRID.bot - GRID.top); g.clip();
+  drawCells(t, GRID.top, GRID.bot);
+  g.restore();
+  // 框：报纸分栏框（白线）。镜头 7 开头（栏框伸缩）从整片数据收拢到中间 4 行真数据外面，两边竖线同时长出来
+  const fp = inOutC(P(t, FRAME2_T, 0.5)), cy0 = GRID.cy - 1.5 * GRID.pitch, cy1 = GRID.cy + 1.5 * GRID.pitch, hh = (GRID.pitch - 22) / 2;
+  const x0 = lerp(GRID.x0, GRID.x0 - 12, fp), x1 = lerp(GRID.x1, GRID.x1 + 12, fp);
+  const y0 = lerp(GRID.top - 3, cy0 - hh - 14, fp), y1 = lerp(GRID.bot, cy1 + hh + 11, fp);
+  g.fillStyle = 'rgba(255,255,255,0.9)'; g.fillRect(x0, y0, x1 - x0, 3); g.fillRect(x0, y1, x1 - x0, 3);
+  if (fp > 0) {
+    const sl = (y1 + 3 - y0) * fp;
+    g.fillRect(x0, y0, 3, sl); g.fillRect(x1 - 3, y1 + 3 - sl, 3, sl);
+    g.save(); g.globalAlpha = fp * 0.8; g.strokeStyle = '#ffffff'; g.lineWidth = 1.2; g.strokeRect(x0 + 8, y0 + 8, x1 - x0 - 16, y1 - y0 - 13); g.restore();
+  }
+}
+function magnifier(t) {   // 放大镜：说到「翻找」前后在数据里来回扫，镜片里的字放大 1.35 倍
+  const t0 = M('翻找') - 0.45, a = P(t, t0, 0.2) * (1 - P(t, SH(7).start + 0.12, 0.25)); if (a <= 0) return;
+  const e = outC(P(t, t0, ME('翻找') + 0.08 - t0)), ph = e * 5.2;
+  const x = 1150 + 460 * Math.sin(ph), y = GRID.cy + 150 * Math.sin(ph * 1.7 + 0.8), R = 96;
+  g.save(); g.globalAlpha = a;
+  // 手柄
+  g.lineCap = 'round'; g.strokeStyle = '#ffffff'; g.lineWidth = 30; g.beginPath(); g.moveTo(x + R * 0.74, y + R * 0.74); g.lineTo(x + R * 1.62, y + R * 1.62); g.stroke();
+  g.strokeStyle = C.peri; g.lineWidth = 24; g.stroke();
+  g.strokeStyle = 'rgba(255,255,255,0.5)'; g.lineWidth = 5; g.beginPath(); g.moveTo(x + R * 0.86, y + R * 0.8); g.lineTo(x + R * 1.5, y + R * 1.44); g.stroke();
+  // 镜片
+  g.save(); g.beginPath(); g.arc(x, y, R, 0, TAU); g.clip();
+  g.fillStyle = '#1d4a8e'; g.fillRect(x - R, y - R, 2 * R, 2 * R);
+  g.translate(x, y); g.scale(1.35, 1.35); g.translate(-x, -y);
+  drawCells(t, y - R, y + R, x - R, x + R);
+  g.restore();
+  g.fillStyle = 'rgba(255,255,255,0.1)'; g.beginPath(); g.arc(x, y, R, 0, TAU); g.fill();
+  g.strokeStyle = '#ffffff'; g.lineWidth = 12; g.beginPath(); g.arc(x, y, R + 4, 0, TAU); g.stroke();
+  g.strokeStyle = C.lav; g.lineWidth = 3; g.beginPath(); g.arc(x, y, R - 3, 0, TAU); g.stroke();
+  g.strokeStyle = 'rgba(255,255,255,0.75)'; g.lineWidth = 5; g.lineCap = 'round'; g.beginPath(); g.arc(x, y, R - 22, Math.PI * 1.08, Math.PI * 1.42); g.stroke();
+  g.restore();
+}
+function drawDataLabels(t) {   // 左边一栏的白字（参考图海水左边那一栏说明）
+  const fade = 1 - P(t, INF, 0.3); if (fade <= 0) return;
+  const a1 = P(t, SEA_T, 0.2) * fade;
+  if (a1 > 0) {
+    const s = 1 + 0.06 * Math.sin(Math.PI * P(t, SEA_T, 0.3));
+    g.save(); g.globalAlpha = a1; g.translate(96, 2490); g.scale(s, s); text('海量数据', 0, 0, fSans(700, 60), '#ffffff', 'left', 'alphabetic'); g.restore();
+    g.save(); g.globalAlpha = a1 * 0.92;
+    text('AI 自己学过的文字，', 96, 2548, fSans(400, 30), '#ffffff', 'left', 'alphabetic');
+    text('多到数不清。', 96, 2592, fSans(400, 30), '#ffffff', 'left', 'alphabetic');
+    g.restore();
+  }
+  const a2 = P(t, CO_T + 0.05, 0.25) * fade;
+  if (a2 > 0) {
+    const s2 = 0.85 + 0.15 * outBack(P(t, CO_T + 0.05, 0.35));
+    g.save(); g.globalAlpha = a2;
+    g.fillStyle = 'rgba(255,255,255,0.6)'; g.fillRect(96, 2662, 300, 2);
+    g.save(); g.translate(96, 2752); g.scale(s2, s2);
+    drawChip(I_CD, { x: 52, y: 0, w: ROW[I_CD].w, h: CHIP.h, colP: 1, txo: 0, s: 0.66, a: 1 });
+    text('+', 128, 0, fSans(700, 46), '#ffffff');
+    drawChip(I_LX, { x: 204, y: 0, w: ROW[I_LX].w, h: CHIP.h, colP: 1, txo: 0, s: 0.66, a: 1 });
+    g.restore();
+    g.restore();
+    const sp = P(t, STAMP_LBL, 0.12);   // v1.3：「常常一起出现」像印章一样从 1.9 倍盖下（白色印泥，双线框），落下时震屏
+    if (sp > 0) {
+      g.save(); g.globalAlpha = clamp(sp * 3) * 0.95 * fade; g.translate(254, 2838); g.rotate(-0.05); g.scale(lerp(1.9, 1, outC(sp)), lerp(1.9, 1, outC(sp)));
+      g.strokeStyle = '#ffffff'; g.lineWidth = 4; g.strokeRect(-170, -46, 340, 92); g.lineWidth = 1.5; g.strokeRect(-162, -38, 324, 76);
+      text('常常一起出现', 0, 2, fSans(700, 50), '#ffffff');
+      g.restore();
+    }
+  }
+}
+
+// ---------- 镜头 8：圆形图解（参考图生命周期圆）里推断出「旅行需求」 ----------
+function suitcase(x, y, s) {   // 行李箱（参考图插画那种浅紫蓝、白高光）
+  g.save(); g.translate(x, y); g.scale(s, s);
+  g.strokeStyle = C.head; g.lineWidth = 7; rrect(-24, -66, 48, 32, 10); g.stroke();
+  const gr = g.createLinearGradient(0, -46, 0, 50); gr.addColorStop(0, '#e3e8f7'); gr.addColorStop(1, '#a7b4da');
+  g.fillStyle = gr; rrect(-62, -46, 124, 94, 14); g.fill();
+  g.strokeStyle = C.head; g.lineWidth = 3; g.stroke();
+  g.fillStyle = C.peri; g.fillRect(-36, -46, 11, 94); g.fillRect(25, -46, 11, 94);
+  g.strokeStyle = 'rgba(255,255,255,0.85)'; g.lineWidth = 4; g.beginPath(); g.moveTo(-50, -34); g.lineTo(-50, 30); g.stroke();
+  g.restore();
+}
+function stamp(x, y, p) {   // 藏蓝油墨圆章 + 对勾
+  if (p <= 0) return;
+  const s = lerp(1.6, 1, outC(p));
+  g.save(); g.globalAlpha = clamp(p * 3) * 0.92; g.translate(x, y); g.rotate(-0.22); g.scale(s, s);
+  g.strokeStyle = C.head; g.lineWidth = 6; g.beginPath(); g.arc(0, 0, 58, 0, TAU); g.stroke();
+  g.lineWidth = 2.5; g.beginPath(); g.arc(0, 0, 47, 0, TAU); g.stroke();
+  g.lineWidth = 12; g.lineCap = 'round'; g.lineJoin = 'round';
+  g.beginPath(); g.moveTo(-24, 2); g.lineTo(-7, 20); g.lineTo(26, -18); g.stroke();
+  g.restore();
+}
+function drawCircle(t, vy0, vy1) {
+  const { x, y, r } = CIR;
+  if (vy1 < y - r - 60 || vy0 > y + r + 60) return;
+  const gr = g.createRadialGradient(x - 120, y - 170, 40, x, y, r); gr.addColorStop(0, '#7186b8'); gr.addColorStop(1, '#566b9d');
+  g.fillStyle = gr; g.beginPath(); g.arc(x, y, r, 0, TAU); g.fill();
+  // 圆底的沙地（参考图圆形图底部的沙）
+  g.save(); g.beginPath(); g.arc(x, y, r, 0, TAU); g.clip();
+  g.fillStyle = C.sand; g.beginPath(); g.moveTo(x - r, y + r);
+  for (let xx = x - r; xx <= x + r; xx += 20) g.lineTo(xx, y + 262 + 14 * Math.sin(xx * 0.012) + 8 * Math.sin(xx * 0.031 + 1));
+  g.lineTo(x + r, y + r); g.closePath(); g.fill();
+  const rnd = mulberry32(77); g.fillStyle = 'rgba(150,110,60,0.45)';
+  for (let i = 0; i < 160; i++) { const sx = x - r + rnd() * 2 * r, sy = y + 282 + rnd() * 120; g.beginPath(); g.arc(sx, sy, 1 + rnd() * 2.2, 0, TAU); g.fill(); }
+  g.strokeStyle = 'rgba(255,255,255,0.4)'; g.lineWidth = 2;   // v1.3：沙地上冒起的小气泡（次要动作）
+  for (let k = 0; k < 9; k++) {
+    const h = fmod(t * (34 + 7 * (k % 3)) + k * 61, 430), bx = x - 280 + k * 70 + 10 * Math.sin(1.6 * t + k), by = y + 268 - h;
+    g.globalAlpha = clamp(h / 60) * clamp((430 - h) / 120); g.beginPath(); g.arc(bx, by, 4 + (k % 4) * 1.6, 0, TAU); g.stroke();
+  }
+  g.globalAlpha = 1;
+  g.restore();
+  // 内圈慢慢转的白色弧形箭头
+  ringArrows(x, y, r - 34, 3, 0.35 + t * 0.22, 11, 'rgba(255,255,255,0.88)', 0.42);
+  // 左右两段白字说明（参考图海里的说明块）
+  const na = P(t, INF + 0.4, 0.4);
+  leadPara('推断', '同一类词总是一起出现，AI 就能顺着这条线索，猜出你真正想要什么。', 110, y - 160, 330, 28, 42, '#ffffff', na);
+  leadPara('下一步', '猜出需求以后，AI 才开始组织回答，一个字一个字地写给你。', 1480, y - 160, 330, 28, 42, '#ffffff', na);
+}
+function drawInfer(t) {
+  // 成都 + 旅行 之间的「+」
+  const pa = P(t, INF + 0.55, 0.2);
+  if (pa > 0) { g.save(); g.globalAlpha = pa; text('+', 960, D_CD.y + 2, fSong(900, 64), '#ffffff'); g.restore(); }
+  // 「推断」：白色弧形箭头往下伸 + 白字
+  const ap = outC(P(t, INFER_T, 0.42));
+  curveArrow(960, D_CD.y + 64, 900, (D_CD.y + CARD.y) / 2 - 10, 960, CARD.y - CARD.h / 2 - 22, ap, 13, '#ffffff');
+  const la = P(t, INFER_T + 0.06, 0.2);
+  if (la > 0) { g.save(); g.globalAlpha = la; g.translate(1004, (D_CD.y + CARD.y) / 2 - 40); g.scale(0.9 + 0.1 * outBack(P(t, INFER_T + 0.06, 0.3)), 0.9 + 0.1 * outBack(P(t, INFER_T + 0.06, 0.3))); text('推断', 0, 0, fSans(700, 54), '#ffffff', 'left'); g.restore(); }
+  // 结论卡：白纸 + 藏蓝双线框，从左往右「印」出来；随后盖章
+  const cp = P(t, NEED_T, 0.32); if (cp <= 0) return;
+  const { x, y, w, h } = CARD;
+  g.save(); g.beginPath(); g.rect(x - w / 2 - 6, y - h / 2 - 6, (w + 30) * outC(cp), h + 30); g.clip();
+  g.fillStyle = 'rgba(8,18,48,0.4)'; g.fillRect(x - w / 2 + 7, y - h / 2 + 10, w, h);
+  g.fillStyle = C.paper; g.fillRect(x - w / 2, y - h / 2, w, h);
+  g.strokeStyle = C.head; g.lineWidth = 3; g.strokeRect(x - w / 2 + 8, y - h / 2 + 8, w - 16, h - 16);
+  g.lineWidth = 1.2; g.strokeRect(x - w / 2 + 15, y - h / 2 + 15, w - 30, h - 30);
+  suitcase(x - w / 2 + 120, y + 8, 1.0);
+  text('旅行需求', x + 70, y + 6, fSong(900, 100), C.head, 'center', 'middle', 0.92);
+  g.restore();
+  stamp(x + w / 2 - 22, y - h / 2 + 4, P(t, M('旅行的需求') + 0.3, 0.16));
+}
+
+// ---------- v1.3 转场：翻报纸、版面推移的版缝、推移时跳过去的两块 ----------
+const TURNCV = document.createElement('canvas');   // 翻过来的那张报纸（背面也印着字），只画一次
+function buildTurn() {
+  const w = W + 700, X = 420; TURNCV.width = w; TURNCV.height = H;   // 切点盖满时纸的左边在画面外约 390 像素，版面从 X 起排
+  const x = TURNCV.getContext('2d'), r = mulberry32(57);
+  x.fillStyle = C.paper; x.fillRect(0, 0, w, H);
+  x.font = fSong(400, 30); x.fillStyle = C.gray; x.textBaseline = 'middle'; x.fillText('AI 万象', X, 42);
+  x.font = fSans(400, 19); x.fillStyle = C.ink2; x.textAlign = 'right'; x.fillText('第 3 版', X + 1760, 44); x.textAlign = 'left';
+  x.fillStyle = C.ink; x.fillRect(X, 70, 1760, 3); x.fillRect(X, 77, 1760, 1.2);
+  x.fillStyle = C.head; x.fillRect(X, 108, 820, 78);
+  x.font = fSong(900, 50); x.fillStyle = '#ffffff'; x.fillText('一句话的几道工序', X + 32, 149);
+  const gr = x.createLinearGradient(0, 230, 0, 640); gr.addColorStop(0, C.seaTop); gr.addColorStop(1, C.seaDeep);
+  x.fillStyle = gr; x.fillRect(X + 1120, 230, 640, 410);
+  x.fillStyle = C.waveL; x.fillRect(X + 1120, 230, 640, 10);
+  x.strokeStyle = 'rgba(255,255,255,0.85)'; x.lineWidth = 5; x.beginPath(); x.arc(X + 1440, 450, 90, 0, TAU); x.stroke();
+  for (let c = 0; c < 5; c++) {
+    const cx = X + c * 360;
+    if (c) { x.fillStyle = C.rule; x.fillRect(cx - 18, 220, 1.5, H - 280); }
+    for (let y = 238; y < H - 70; y += 26) {
+      if (c >= 3 && y < 670) continue;
+      if (r() < 0.08) { y += 18; x.fillStyle = '#9da0a8'; x.fillRect(cx, y, 140 + r() * 120, 12); y += 10; continue; }
+      x.fillStyle = '#c9cacf'; x.fillRect(cx, y, (r() < 0.15 ? 120 + r() * 160 : 320), 8);
+    }
+  }
+}
+function drawTurn(t) {   // 3 → 4 翻报纸：一整张报纸从右往左翻过去，切点时盖满（动效部件.js pageTurn 的几何，纸上印着字）
+  const d = TURN.d, p = P(t, TURN.c - d / 2, d); if (p <= 0 || p >= 1) return;
+  const s = inOutC(p), L = W + 220 - s * (2 * W + 900), R = L + W + 440;
+  g.save(); g.setTransform(1, 0, 0, 1, 0, 0); g.globalAlpha = 1;
+  const sh = g.createLinearGradient(L - 120, 0, L - 50, 0); sh.addColorStop(0, 'rgba(10,20,50,0)'); sh.addColorStop(1, 'rgba(10,20,50,0.3)');
+  g.fillStyle = sh; g.fillRect(L - 120, 0, 70, H);
+  g.beginPath(); g.moveTo(L - 160, 0); g.lineTo(R - 160, 0); g.lineTo(R + 60, H); g.lineTo(L + 60, H); g.closePath();
+  g.save(); g.clip(); g.drawImage(TURNCV, L - 160, 0);
+  const fold = g.createLinearGradient(L - 50, 0, L + 120, 0);
+  fold.addColorStop(0, 'rgba(10,20,50,0.2)'); fold.addColorStop(0.3, 'rgba(255,255,255,0.4)'); fold.addColorStop(1, 'rgba(255,255,255,0)');
+  g.fillStyle = fold; g.fillRect(L - 160, 0, 320, H);
+  g.restore(); g.restore();
+}
+function drawGutter(x, w) {   // 两版之间的白色版缝：纸色 + 两边的折痕阴影
+  if (x > W || x + w < 0) return;
+  g.save(); g.setTransform(1, 0, 0, 1, 0, 0);
+  g.fillStyle = C.paper; g.fillRect(x, 0, w, H);
+  const a = g.createLinearGradient(x, 0, x + 26, 0); a.addColorStop(0, 'rgba(10,20,50,0.28)'); a.addColorStop(1, 'rgba(10,20,50,0)');
+  g.fillStyle = a; g.fillRect(x, 0, 26, H);
+  const b = g.createLinearGradient(x + w - 26, 0, x + w, 0); b.addColorStop(0, 'rgba(10,20,50,0)'); b.addColorStop(1, 'rgba(10,20,50,0.2)');
+  g.fillStyle = b; g.fillRect(x + w - 26, 0, 26, H);
+  g.fillStyle = C.rule; g.fillRect(x + w / 2 - 1, 0, 2, H);
+  g.restore();
+}
+function drawHop(t, u, camA, oxA, camB, oxB) {   // 「成都」「旅行」从旧版的查询行跳到新版圆形图解的上部（屏幕坐标，不跟着版走，不会被推出画面）
+  for (const i of [I_CD, I_LX]) {
+    const q = queryPos(i), tg = i === I_CD ? D_CD : D_LX, [ax, ay] = w2s(camA, q.x, q.y), [bx, by] = w2s(camB, tg.x, tg.y);
+    const x = lerp(ax + oxA, bx + oxB, u), y = lerp(ay, by, u) + 90 * Math.sin(Math.PI * u);
+    const s = lerp(QS * camA.z, camB.z, u) * (1 + 0.12 * Math.sin(Math.PI * u));
+    g.save(); g.setTransform(1, 0, 0, 1, 0, 0); g.translate(x, y); g.rotate((i === I_CD ? -1 : 1) * 0.1 * Math.sin(Math.PI * u));
+    drawChip(i, { x: 0, y: 0, w: ROW[i].w, h: CHIP.h, colP: 1, txo: 0, s, a: 1 });
+    g.restore();
+  }
+}
+
+// ---------- 画面固定层：页眉（进海以后出现）、页脚字幕带 ----------
+function drawRunningHead(t) {
+  const p = outC(P(t, SH(4).start + 0.05, 0.35)); if (p <= 0) return;
+  g.save(); g.translate(0, -62 * (1 - p));
+  g.fillStyle = C.paper; g.fillRect(0, 0, W, 60);
+  text('AI 万象', 64, 29, fSong(400, 28), C.gray, 'left');
+  text('AI 怎样读懂你', 960, 29, fSong(900, 26), C.head);
+  text('2026 年 10 月 7 日　星期三　第 3 版', 1856, 30, fSans(400, 19), C.ink2, 'right');
+  g.fillStyle = C.ink; g.fillRect(56, 53, W - 112, 2); g.fillRect(56, 57, W - 112, 1);
+  g.restore();
+}
+// 字幕关键词：成都红、旅行蓝（和画面一致）；其余关键词藏蓝字 + 下划线（报纸的加重）
+const SUB_KW = ['旅行的需求', '常常在一起出现', '提示词', 'Prompt', '分词器', 'Token', '海量数据'];
+// 字幕换条不「眨」（v1.1 模板起就这样，v1.3 示例页也改了）：紧接着上一条就直接换字，只有第一条、或和上一条中间有空档时才淡入
+function subIn(c, t, d) { const k = TL.cues.indexOf(c), prev = k > 0 ? TL.cues[k - 1] : null; return prev && prev.hide >= c.show - 1e-3 ? 1 : P(t, c.show, d); }
+function drawSubtitle(t) {
+  if (NOSUB) return;
+  g.fillStyle = C.paper; g.fillRect(0, 910, W, 170);
+  g.fillStyle = C.ink; g.fillRect(56, 913, W - 112, 2); g.fillRect(56, 918, W - 112, 1);
+  const c = TL.cueAt(t); if (!c) return;
+  const a = subIn(c, t, 0.08), f = fSans(600, 64), y = 1000, str = c.text, x0 = 960 - tw(str, f) / 2;
+  const st = new Array(str.length).fill('');   // ''：普通；'kw'：关键词；颜色值：成都 / 旅行
+  for (const k of SUB_KW) { let j = str.indexOf(k); while (j >= 0) { for (let q = j; q < j + k.length; q++) st[q] = 'kw'; j = str.indexOf(k, j + k.length); } }
+  for (const [k, cc] of [['成都', C.red], ['旅行', C.blue]]) { let j = str.indexOf(k); while (j >= 0) { for (let q = j; q < j + k.length; q++) st[q] = cc; j = str.indexOf(k, j + k.length); } }
+  g.save(); g.globalAlpha = a;
+  let j = 0;
+  while (j < str.length) {
+    let e = j + 1; while (e < str.length && st[e] === st[j]) e++;
+    const s = str.slice(j, e), xx = x0 + tw(str.slice(0, j), f), ww = tw(s, f), k = st[j];
+    if (k === 'kw') { g.fillStyle = C.tokA; g.fillRect(xx - 4, y + 4, ww + 8, 32); text(s, xx, y, f, C.ink, 'left'); }
+    else if (k) { g.fillStyle = k; rrect(xx - 7, y - 40, ww + 14, 80, 6); g.fill(); text(s, xx, y, f, '#ffffff', 'left'); }
+    else text(s, xx, y, f, C.ink, 'left');
+    j = e;
+  }
+  g.restore();
+}
+
+// ---------- 一帧 ----------
+// 一个「版」：给定镜头，把背景层和世界里的东西画出来；ox 是这一版在屏幕上的横向偏移（版面推移时两版并排）
+let HOP = false;   // 版面推移时「成都」「旅行」两块不在世界里画，改在屏幕坐标里从旧版跳到新版（drawHop）
+function shakeAt(t) {   // 两次盖章落下时震一下（动效部件.js 的 shake）
+  const a = 动效.shake(t, STAMP_LBL + 0.12, { amp: 9, d: 0.22 }), b = 动效.shake(t, STAMP_END + 0.16, { amp: 12, d: 0.24 });
+  return { dx: a.dx + b.dx, dy: a.dy + b.dy };
+}
+function w2s(cam, x, y) { return [960 + (x - cam.x) * cam.z, FOCUS_Y + (y - cam.y) * cam.z]; }
+function drawView(t, cam, ox) {
+  const z = cam.z, sk = shakeAt(t);
+  const vx0 = cam.x - 960 / z, vx1 = cam.x + 960 / z, vy0 = cam.y - FOCUS_Y / z, vy1 = cam.y + (H - FOCUS_Y) / z;
+  g.setTransform(1, 0, 0, 1, ox + sk.dx, sk.dy); g.globalAlpha = 1;
+  drawPaperBg(t, cam);
+  g.setTransform(z, 0, 0, z, ox + sk.dx + 960 - cam.x * z, sk.dy + FOCUS_Y - cam.y * z);
+  // 报纸上半版（预渲染图，只取看得见的那块）
+  if (vy0 < TOP_H) {
+    drawPageImg(t, vx0, vx1, vy0, vy1);
+    const dim = 0.86 * P(t, M('例句') - 0.45, 0.4);
+    if (dim > 0) { g.fillStyle = rgba(C.paper, dim); g.fillRect(-200, 0, 618, TOP_H); g.fillRect(1502, 0, 618, TOP_H); }
+    drawIcon(t); drawPointer(t); drawWindow(t); drawLabels(t); drawDef(t);
+  }
+  drawSea(t, vy0, vy1);
+  drawSeaFx(t, vy0, vy1, cam);
+  if (vy1 > SEA.y0 && vy0 < 2300) { drawNotes(t); drawAIDisc(t); }
+  drawGrid(t, vy0, vy1);
+  drawDataLabels(t);
+  drawCircle(t, vy0, vy1);
+  drawTrip(t);
+  drawDevice(t);
+  drawChips(t);
+  drawBlades(t);
+  drawShardLabel(t);
+  drawTokenLabel(t);
+  magnifier(t);
+  drawInfer(t);
+  g.setTransform(1, 0, 0, 1, 0, 0); g.globalAlpha = 1;
+}
+function resetCtx(x) {   // 每帧开头把画布状态全部复位：上一帧留下的线头、拐角、虚线（例如 curveArrow 的圆拐角）会让同一个 t 画出不同的帧
+  if (x.reset) x.reset();
+  x.setTransform(1, 0, 0, 1, 0, 0); x.globalAlpha = 1; x.globalCompositeOperation = 'source-over'; x.filter = 'none';
+  x.lineWidth = 1; x.lineJoin = 'miter'; x.lineCap = 'butt'; x.miterLimit = 10; x.setLineDash([]); x.lineDashOffset = 0;
+  x.textAlign = 'start'; x.textBaseline = 'alphabetic'; x.letterSpacing = '0px'; x.shadowBlur = 0; x.shadowColor = 'rgba(0,0,0,0)';
+}
+function render(t) {
+  g = main;
+  resetCtx(g);
+  g.fillStyle = C.paper; g.fillRect(0, 0, W, H);
+  const h = SLIDE.d / 2;
+  if (t <= SLIDE.c - h || t >= SLIDE.c + h) drawView(t, camAt(t), 0);
+  else {   // 版面推移：旧版（停在切点前一刻）往左推走，新版（切点后一刻）从右边跟进来，中间是白色版缝
+    const u = inOutC(P(t, SLIDE.c - h, SLIDE.d)), GUT = 90, off = (W + GUT) * u;
+    const tA = Math.min(t, SLIDE.c - 0.001), tB = Math.max(t, SLIDE.c), camA = camAt(tA), camB = camAt(Math.max(t, SLIDE.c + 0.003));
+    HOP = true;
+    g.save(); g.beginPath(); g.rect(0, 0, Math.max(0, W - off), H); g.clip(); drawView(tA, camA, -off); g.restore();
+    const bx = W + GUT - off;
+    if (bx < W) { g.save(); g.beginPath(); g.rect(bx, 0, W - bx, H); g.clip(); g.fillStyle = C.paper; g.fillRect(bx, 0, W - bx, H); drawView(tB, camB, bx); g.restore(); }
+    HOP = false;
+    drawGutter(W - off, GUT);
+    drawHop(t, u, camA, -off, camB, bx);
+  }
+  drawFrameIn(t);
+  drawRunningHead(t);
+  drawTurn(t);
+  drawSubtitle(t);
+}
+
+let inited = false;
+function init() {
+  if (inited) return; inited = true;
+  layout(); buildPage(); buildBg(); buildTurn();
+}
+window.DURATION = TL.duration;
+window.seek = (t) => { init(); render(t); };
+window.ready = false;
+const FONTS = [fSong(900, 54), fSong(400, 36), fSong(300, 96), fTimes(700, 150), fTimes(400, 100, true), fSans(400, 22), fSans(500, 42), fSans(600, 64), fSans(700, 52)];
+Promise.all(FONTS.map((f) => document.fonts.load(f, '中文AI Token'))).catch(() => {}).then(() => { init(); render(0); window.ready = true; });
+</script>
+</body>
+</html>

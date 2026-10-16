@@ -1,0 +1,150 @@
+{
+  "schemaVersion": 1,
+  "id": "dashi-cartoon",
+  "name": "立体卡通",
+  "description": "炭黑底、钴蓝光晕与立体插画色，适合科学原理、实验与操作讲解。",
+  "baseTemplateId": "dashi-cartoon",
+  "mode": "dark",
+  "tokens": {
+    "colors": {
+      "primary": "#4c6cc8",
+      "secondary": "#b8cde2",
+      "accent": "#6fd47a",
+      "background": "#2f2e2f",
+      "surface": "#262527",
+      "textPrimary": "#f3f4f8",
+      "textSecondary": "#b8cde2",
+      "border": "#5b78c8",
+      "success": "#44E0B6",
+      "warning": "#FFC857",
+      "error": "#FF6B9A"
+    },
+    "typography": {
+      "headingFamily": "Lantinghei SC",
+      "bodyFamily": "PingFang SC",
+      "scale": "standard",
+      "headingWeight": 700,
+      "bodyWeight": 400,
+      "headingLineHeight": 1.15,
+      "bodyLineHeight": 1.5
+    },
+    "shape": {
+      "cardRadius": 12,
+      "cardStyle": "glass",
+      "density": "standard",
+      "shadow": "none",
+      "borderWidth": 1,
+      "shadowOpacity": 0
+    },
+    "spacing": {
+      "unit": 8,
+      "contentPadding": 72
+    }
+  },
+  "components": {
+    "cover": "cover-split-v1",
+    "chapter": "chapter-glow-v1",
+    "content": "content-outline-v1",
+    "data": "metric-large-number-v1",
+    "comparison": "comparison-columns-v1",
+    "process": "process-node-line-v1",
+    "quote": "quote-terminal-v1",
+    "outro": "outro-brand-v1"
+  },
+  "allowedLayouts": [
+    "cover-split",
+    "chapter-glow",
+    "content-outline",
+    "metric-large-number",
+    "comparison-columns",
+    "process-node-line",
+    "quote-terminal",
+    "outro-brand"
+  ],
+  "allowedAnimations": [
+    "fade-rise",
+    "stagger-rise",
+    "cross-fade"
+  ],
+  "motion": {
+    "intensity": "restrained",
+    "enterPreset": "fade-rise",
+    "emphasisPreset": "fade-rise",
+    "transitionPreset": "cross-fade",
+    "enterDurationMs": 420,
+    "staggerMs": 0,
+    "transitionDurationMs": 420
+  },
+  "backgrounds": {
+    "default": {
+      "assetPolicy": "fixed",
+      "fit": "cover",
+      "focalPoint": {
+        "x": 0.5,
+        "y": 0.45
+      },
+      "overlay": {
+        "type": "solid",
+        "color": "#2f2e2f",
+        "opacity": 0.9,
+        "direction": "none"
+      },
+      "blur": 0,
+      "tint": 0,
+      "contrastMode": "auto",
+      "safeArea": {
+        "top": 0.1,
+        "right": 0.08,
+        "bottom": 0.12,
+        "left": 0.08
+      },
+      "fallback": "#2f2e2f"
+    },
+    "roles": {
+      "cover": {
+        "inherit": "default"
+      },
+      "chapter": {
+        "inherit": "default"
+      },
+      "content": {
+        "inherit": "default",
+        "assetPolicy": "episode-replaceable"
+      },
+      "data": {
+        "inherit": "default"
+      },
+      "comparison": {
+        "inherit": "default"
+      },
+      "process": {
+        "inherit": "default"
+      },
+      "quote": {
+        "inherit": "default"
+      },
+      "outro": {
+        "inherit": "default"
+      }
+    }
+  },
+  "subtitle": {
+    "position": "bottom-center",
+    "style": "caption-rail",
+    "fontSize": 36,
+    "lineHeight": 1.35,
+    "safeAreaBottom": 0.08,
+    "maxLines": 2
+  },
+  "aspectVariants": {
+    "16:9": {
+      "enabled": true
+    },
+    "9:16": {
+      "enabled": true
+    },
+    "1:1": {
+      "enabled": true
+    }
+  }
+}

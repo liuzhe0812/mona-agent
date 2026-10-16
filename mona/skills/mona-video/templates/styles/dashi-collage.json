@@ -1,0 +1,150 @@
+{
+  "schemaVersion": 1,
+  "id": "dashi-collage",
+  "name": "超现实拼贴",
+  "description": "米灰纸底、桃橙和深墨色，适合概念、思维与认知类内容。",
+  "baseTemplateId": "dashi-collage",
+  "mode": "light",
+  "tokens": {
+    "colors": {
+      "primary": "#ef7e40",
+      "secondary": "#4f5550",
+      "accent": "#f75e18",
+      "background": "#e9e5d9",
+      "surface": "#f6f3ea",
+      "textPrimary": "#0b1615",
+      "textSecondary": "#4f5550",
+      "border": "#d6ccb8",
+      "success": "#2B6B54",
+      "warning": "#C69A4B",
+      "error": "#A62920"
+    },
+    "typography": {
+      "headingFamily": "Source Han Serif SC",
+      "bodyFamily": "PingFang SC",
+      "scale": "large",
+      "headingWeight": 700,
+      "bodyWeight": 400,
+      "headingLineHeight": 1.2,
+      "bodyLineHeight": 1.55
+    },
+    "shape": {
+      "cardRadius": 20,
+      "cardStyle": "solid",
+      "density": "spacious",
+      "shadow": "none",
+      "borderWidth": 1,
+      "shadowOpacity": 0
+    },
+    "spacing": {
+      "unit": 8,
+      "contentPadding": 80
+    }
+  },
+  "components": {
+    "cover": "cover-title-right-v1",
+    "chapter": "chapter-numbered-v1",
+    "content": "content-outline-v1",
+    "data": "data-metric-row-v1",
+    "comparison": "comparison-columns-v1",
+    "process": "process-horizontal-v1",
+    "quote": "quote-accent-v1",
+    "outro": "outro-brand-light-v1"
+  },
+  "allowedLayouts": [
+    "cover-title-right",
+    "chapter-numbered",
+    "content-outline",
+    "data-metric-row",
+    "comparison-columns",
+    "process-horizontal",
+    "quote-accent",
+    "outro-brand"
+  ],
+  "allowedAnimations": [
+    "fade-rise",
+    "stagger-rise",
+    "cross-fade"
+  ],
+  "motion": {
+    "intensity": "restrained",
+    "enterPreset": "fade-rise",
+    "emphasisPreset": "fade-rise",
+    "transitionPreset": "cross-fade",
+    "enterDurationMs": 520,
+    "staggerMs": 0,
+    "transitionDurationMs": 420
+  },
+  "backgrounds": {
+    "default": {
+      "assetPolicy": "none",
+      "fit": "cover",
+      "focalPoint": {
+        "x": 0.5,
+        "y": 0.5
+      },
+      "overlay": {
+        "type": "solid",
+        "color": "#e9e5d9",
+        "opacity": 0.92,
+        "direction": "none"
+      },
+      "blur": 0,
+      "tint": 0,
+      "contrastMode": "auto",
+      "safeArea": {
+        "top": 0.08,
+        "right": 0.08,
+        "bottom": 0.1,
+        "left": 0.08
+      },
+      "fallback": "#e9e5d9"
+    },
+    "roles": {
+      "cover": {
+        "inherit": "default"
+      },
+      "chapter": {
+        "inherit": "default"
+      },
+      "content": {
+        "inherit": "default",
+        "assetPolicy": "episode-replaceable"
+      },
+      "data": {
+        "inherit": "default"
+      },
+      "comparison": {
+        "inherit": "default"
+      },
+      "process": {
+        "inherit": "default"
+      },
+      "quote": {
+        "inherit": "default"
+      },
+      "outro": {
+        "inherit": "default"
+      }
+    }
+  },
+  "subtitle": {
+    "position": "bottom-center",
+    "style": "caption-rail",
+    "fontSize": 36,
+    "lineHeight": 1.35,
+    "safeAreaBottom": 0.08,
+    "maxLines": 2
+  },
+  "aspectVariants": {
+    "16:9": {
+      "enabled": true
+    },
+    "9:16": {
+      "enabled": true
+    },
+    "1:1": {
+      "enabled": true
+    }
+  }
+}

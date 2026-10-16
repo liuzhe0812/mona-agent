@@ -1,0 +1,150 @@
+{
+  "schemaVersion": 1,
+  "id": "dashi-paper",
+  "name": "复古剪纸",
+  "description": "奶油纸、橙色和藏蓝纸片，适合观点与知识讲解。",
+  "baseTemplateId": "dashi-paper",
+  "mode": "light",
+  "tokens": {
+    "colors": {
+      "primary": "#ef7200",
+      "secondary": "#636a75",
+      "accent": "#132d4a",
+      "background": "#e8e0d0",
+      "surface": "#f4ecdb",
+      "textPrimary": "#221414",
+      "textSecondary": "#636a75",
+      "border": "#cbbda7",
+      "success": "#2B6B54",
+      "warning": "#C69A4B",
+      "error": "#A62920"
+    },
+    "typography": {
+      "headingFamily": "Source Han Sans CN",
+      "bodyFamily": "Source Han Sans CN",
+      "scale": "standard",
+      "headingWeight": 700,
+      "bodyWeight": 400,
+      "headingLineHeight": 1.2,
+      "bodyLineHeight": 1.55
+    },
+    "shape": {
+      "cardRadius": 0,
+      "cardStyle": "solid",
+      "density": "spacious",
+      "shadow": "none",
+      "borderWidth": 1,
+      "shadowOpacity": 0
+    },
+    "spacing": {
+      "unit": 8,
+      "contentPadding": 80
+    }
+  },
+  "components": {
+    "cover": "cover-title-right-v1",
+    "chapter": "chapter-numbered-v1",
+    "content": "content-outline-v1",
+    "data": "data-metric-row-v1",
+    "comparison": "comparison-columns-v1",
+    "process": "process-horizontal-v1",
+    "quote": "quote-accent-v1",
+    "outro": "outro-brand-light-v1"
+  },
+  "allowedLayouts": [
+    "cover-title-right",
+    "chapter-numbered",
+    "content-outline",
+    "data-metric-row",
+    "comparison-columns",
+    "process-horizontal",
+    "quote-accent",
+    "outro-brand"
+  ],
+  "allowedAnimations": [
+    "fade-rise",
+    "stagger-rise",
+    "cross-fade"
+  ],
+  "motion": {
+    "intensity": "restrained",
+    "enterPreset": "fade-rise",
+    "emphasisPreset": "fade-rise",
+    "transitionPreset": "cross-fade",
+    "enterDurationMs": 520,
+    "staggerMs": 0,
+    "transitionDurationMs": 420
+  },
+  "backgrounds": {
+    "default": {
+      "assetPolicy": "none",
+      "fit": "cover",
+      "focalPoint": {
+        "x": 0.5,
+        "y": 0.5
+      },
+      "overlay": {
+        "type": "solid",
+        "color": "#e8e0d0",
+        "opacity": 0.92,
+        "direction": "none"
+      },
+      "blur": 0,
+      "tint": 0,
+      "contrastMode": "auto",
+      "safeArea": {
+        "top": 0.08,
+        "right": 0.08,
+        "bottom": 0.1,
+        "left": 0.08
+      },
+      "fallback": "#e8e0d0"
+    },
+    "roles": {
+      "cover": {
+        "inherit": "default"
+      },
+      "chapter": {
+        "inherit": "default"
+      },
+      "content": {
+        "inherit": "default",
+        "assetPolicy": "episode-replaceable"
+      },
+      "data": {
+        "inherit": "default"
+      },
+      "comparison": {
+        "inherit": "default"
+      },
+      "process": {
+        "inherit": "default"
+      },
+      "quote": {
+        "inherit": "default"
+      },
+      "outro": {
+        "inherit": "default"
+      }
+    }
+  },
+  "subtitle": {
+    "position": "bottom-center",
+    "style": "caption-rail",
+    "fontSize": 36,
+    "lineHeight": 1.35,
+    "safeAreaBottom": 0.08,
+    "maxLines": 2
+  },
+  "aspectVariants": {
+    "16:9": {
+      "enabled": true
+    },
+    "9:16": {
+      "enabled": true
+    },
+    "1:1": {
+      "enabled": true
+    }
+  }
+}

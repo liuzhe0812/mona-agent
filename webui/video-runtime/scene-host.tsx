@@ -10,6 +10,9 @@ import * as Fade from '@remotion/transitions/fade';
 import * as Slide from '@remotion/transitions/slide';
 import * as Wipe from '@remotion/transitions/wipe';
 import * as Babel from '@babel/standalone';
+import {bindMotionCanvas} from './motion-canvas';
+import {createMotionToolkit} from './huashu-runtime';
+import {dashiMotionEffects} from './dashi/motion-effects';
 
 // This bundle runs only inside an opaque, network-disabled scene iframe.
 const config = (window as any).__monaRemotion;
@@ -30,8 +33,25 @@ const asset = (id: string) => {
   return source;
 };
 const normalize = (text: string) => text.replace(/[\s，。！？、；：,.!?;:]/g, '');
+const styleVariablesWithoutFallback = (source: string) => {
+  const variables = new Set<string>();
+  const matches = source.matchAll(/var\s*\(\s*(--mona-[\w-]+)/gi);
+  for (const match of matches) {
+    const opening = match.index! + match[0].lastIndexOf('(');
+    let depth = 1;
+    let hasFallback = false;
+    for (let index = opening + 1; index < source.length && depth; index++) {
+      if (source[index] === '(') depth++;
+      else if (source[index] === ')') depth--;
+      else if (source[index] === ',' && depth === 1) hasFallback = true;
+    }
+    if (!hasFallback) variables.add(match[1]);
+  }
+  return [...variables];
+};
 const cue = (phrase: string) => {
-  const entries = config.track.words?.length ? config.track.words : config.track.cues || [];
+  const entries = config.track.words?.length ? config.track.words : (config.track.cues || [])
+    .flatMap((item: any) => item.words?.length ? item.words : [item]);
   const text = entries.map((entry: any) => normalize(entry.text)).join('');
   const wanted = normalize(phrase);
   const start = wanted ? text.indexOf(wanted) : -1;
@@ -51,7 +71,7 @@ const modules: Record<string, any> = {
   react: React, remotion: Remotion, '@remotion/shapes': Shapes, '@remotion/paths': Paths,
   '@remotion/transitions': Transitions, '@remotion/transitions/fade': Fade,
   '@remotion/transitions/slide': Slide, '@remotion/transitions/wipe': Wipe,
-  'mona-video': {asset, cue},
+  'mona-video': {asset, cue, MotionCanvas: bindMotionCanvas(asset, cue), createMotionToolkit, Dashi: dashiMotionEffects},
 };
 const load = (id: string) => {
   if (!Object.hasOwn(modules, id)) throw new Error(`这个片段不支持导入: ${id}`);
@@ -101,7 +121,11 @@ const seek = async (seconds: number) => {
   if (failure) throw new Error(failure);
   const current = (config.track.cues || []).find((item: any) => seconds * 1000 >= item.startMs && seconds * 1000 < item.endMs);
   const caption = document.getElementById('mona-subtitles')!;
-  caption.textContent = config.showCaptions ? current?.text || '' : '';
+  const spokenText = current?.text || '', words = current?.words || [];
+  const displayedWords = Array.isArray(current?.displayWords) ? current.displayWords : words.map((word: any) => word.text);
+  const displayText = displayedWords.length > 1 && displayedWords.every((word: unknown) => typeof word === 'string') && displayedWords.join('') === spokenText
+    ? displayedWords.map((word: string) => Array.from(word).join('\u2060')).join('') : spokenText;
+  caption.textContent = config.showCaptions ? displayText : '';
   const nodes = [...document.querySelectorAll<HTMLElement>('#root *')];
   const visible = nodes.filter((node) => {
     const css = getComputedStyle(node), r = node.getBoundingClientRect();
@@ -122,8 +146,43 @@ const seek = async (seconds: number) => {
   let signature = 2166136261;
   for (const char of JSON.stringify(state)) signature = Math.imul(signature ^ char.charCodeAt(0), 16777619);
   const bounds = caption.getBoundingClientRect();
+  const captionIsVisible = Boolean(caption.textContent?.trim()) && bounds.width > 0 && bounds.height > 0;
+  const textObservations = visible
+    .filter((node) => /^(H[123]|P|LI|TEXT)$/.test(node.tagName.toUpperCase()))
+    .filter((node) => {
+      let opacity = 1;
+      for (let ancestor: Element | null = node; ancestor; ancestor = ancestor.parentElement) {
+        opacity *= Number(getComputedStyle(ancestor).opacity);
+        if (opacity <= .1) return false;
+      }
+      return true;
+    })
+    .map((node) => {
+      const text = (node.textContent || '').replace(/\s+/g, ' ').trim();
+      if (!text) return null;
+      const rect = node.getBoundingClientRect(), css = getComputedStyle(node);
+      const overlapWidth = captionIsVisible ? Math.max(0, Math.min(rect.right, bounds.right) - Math.max(rect.left, bounds.left)) : 0;
+      const overlapHeight = captionIsVisible ? Math.max(0, Math.min(rect.bottom, bounds.bottom) - Math.max(rect.top, bounds.top)) : 0;
+      return {
+        text: text.length > 120 ? `${text.slice(0, 120)}…` : text,
+        fontSizePx: Number.parseFloat(css.fontSize) || null,
+        overlapsCaption: overlapWidth > 0 && overlapHeight > 0,
+      };
+    })
+    .filter((item): item is NonNullable<typeof item> => item !== null)
+    .slice(0, 40);
+  const scope = [document.documentElement, document.body, document.getElementById('root'), ...nodes];
+  const undefinedStyleVariables = styleVariablesWithoutFallback(config.source).filter((variable) =>
+    !scope.some((node) => node && getComputedStyle(node).getPropertyValue(variable).trim()),
+  );
+  const invalidSvgPaths = nodes.filter((node) => node.tagName.toUpperCase() === 'PATH')
+    .map((node) => node.getAttribute('d') || '').filter((d) => d.includes('${')).map((d) => d.slice(0, 200));
+  const captionRange = document.createRange();
+  captionRange.selectNodeContents(caption);
   report({seconds, frame, outside, motionSignature: signature >>> 0,
-    captionBounds: bounds.width && bounds.height ? [bounds.left, bounds.top, bounds.right, bounds.bottom] : null});
+    captionBounds: bounds.width && bounds.height ? [bounds.left, bounds.top, bounds.right, bounds.bottom] : null,
+    captionLineWidths: captionIsVisible ? [...captionRange.getClientRects()].map((rect) => rect.width) : [],
+    undefinedStyleVariables, invalidSvgPaths, textObservations});
 };
 
 try {

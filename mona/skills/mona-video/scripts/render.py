@@ -24,10 +24,12 @@ import base64
 import io
 import json
 import os
+import queue
 import socket
 import subprocess
 import sys
 import tempfile
+import threading
 import time
 from collections.abc import Callable
 from pathlib import Path
@@ -51,6 +53,7 @@ __all__ = ("render_project", "render_project_async")
 # Called from a worker thread (server wraps render in asyncio.to_thread), so
 # implementations must be thread-safe and non-blocking (file write is fine).
 ProgressCb = Callable[[str, float, str], None]
+_FFMPEG_STALL_TIMEOUT_SECONDS = 120
 
 
 class RenderCancelledError(RuntimeError):
@@ -80,23 +83,61 @@ def _terminate_process_tree(proc: subprocess.Popen) -> None:
         proc.wait(timeout=3)
 
 
-def _run_ffmpeg(cmd: list[str], cancel_event: Any | None = None) -> None:
+def _run_ffmpeg(
+    cmd: list[str], cancel_event: Any | None = None,
+    frame_cb: Callable[[int], None] | None = None,
+) -> None:
     """Run FFmpeg while keeping cancellation responsive during long encodes."""
     creationflags = subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0  # type: ignore[attr-defined]
     with tempfile.TemporaryFile() as stderr_file:
         proc = subprocess.Popen(
             cmd,
-            stdout=subprocess.DEVNULL,
+            stdin=subprocess.DEVNULL,
+            stdout=subprocess.PIPE if frame_cb else subprocess.DEVNULL,
             stderr=stderr_file,
             creationflags=creationflags,
         )
+        frames: queue.SimpleQueue[int] = queue.SimpleQueue()
+        reader = None
+        if frame_cb:
+            def collect_frames() -> None:
+                assert proc.stdout is not None
+                for line in proc.stdout:
+                    if line.startswith(b"frame=") and line[6:].strip().isdigit():
+                        frames.put(int(line[6:].strip()))
+
+            reader = threading.Thread(target=collect_frames, daemon=True)
+            reader.start()
+        last_frame = -1
+        last_progress = time.monotonic()
+
+        def report_frames() -> None:
+            nonlocal last_frame, last_progress
+            while not frames.empty():
+                frame = frames.get_nowait()
+                if frame > last_frame:
+                    last_frame = frame
+                    last_progress = time.monotonic()
+                    if frame_cb:
+                        frame_cb(frame)
+
         try:
             while proc.poll() is None:
                 _raise_if_cancelled(cancel_event)
+                report_frames()
+                if frame_cb and time.monotonic() - last_progress >= _FFMPEG_STALL_TIMEOUT_SECONDS:
+                    raise TimeoutError("Video encoding stopped making progress")
                 time.sleep(0.1)
-        except RenderCancelledError:
-            _terminate_process_tree(proc)
+        except BaseException:
+            if proc.poll() is None:
+                _terminate_process_tree(proc)
             raise
+        finally:
+            if reader:
+                reader.join(timeout=3)
+            if proc.stdout is not None:
+                proc.stdout.close()
+        report_frames()
         stderr_file.seek(0)
         stderr = stderr_file.read()
         if proc.returncode != 0:
@@ -482,6 +523,9 @@ def _encode_mp4(
     crf: int,
     cancel_event: Any | None = None,
     ffmpeg_path: str | None = None,
+    *,
+    total_frames: int = 0,
+    progress_cb: ProgressCb | None = None,
 ) -> bool:
     """Encode PNG sequence → MP4 via FFmpeg."""
     ffmpeg = _resolve_ffmpeg(ffmpeg_path)
@@ -490,6 +534,7 @@ def _encode_mp4(
     cmd = [
         ffmpeg,
         "-y",
+        "-nostdin", "-nostats", "-progress", "pipe:1",
         "-framerate", str(fps),
         "-i", str(frames_dir / "frame_%06d.png"),
         "-c:v", "libx264",
@@ -499,8 +544,18 @@ def _encode_mp4(
         "-movflags", "+faststart",
         str(output_mp4),
     ]
+    total_frames = total_frames or sum(1 for _ in frames_dir.glob("frame_*.png"))
+
+    def report_encoded(frame: int) -> None:
+        if progress_cb:
+            done = min(frame, total_frames)
+            progress_cb(
+                "encoding", round(92 + 3 * done / max(1, total_frames), 1),
+                f"正在保存视频（{done / fps:.1f}/{total_frames / fps:.1f} 秒）...",
+            )
+
     try:
-        _run_ffmpeg(cmd, cancel_event)
+        _run_ffmpeg(cmd, cancel_event, report_encoded)
         return True
     except subprocess.CalledProcessError as e:
         stderr = e.stderr.decode("utf-8", errors="replace") if e.stderr else ""
@@ -597,7 +652,8 @@ async def render_project_async(
     """Render all scenes in a project to MP4 via headless Chromium + CDP.
 
     progress_cb(stage, percent, message) reports fine-grained progress:
-    15-90% per-frame capture, 90-97% encoding, 97-100% audio muxing.
+    15-90% frame capture, 92-95% encoding, 95.5-96% audio muxing.
+    The owning service completes mixing, validation and delivery afterward.
 
     scenes_dir optionally points at a snapshot of the project's scenes
     (e.g. renders/snapshot/scenes) so rendering is isolated from edits
@@ -720,7 +776,10 @@ async def render_project_async(
         if progress_cb is not None:
             progress_cb("encoding", 92, "正在保存视频...")
         _raise_if_cancelled(cancel_event)
-        _encode_mp4(frames_dir, silent_mp4, fps, crf, cancel_event, ffmpeg)
+        _encode_mp4(
+            frames_dir, silent_mp4, fps, crf, cancel_event, ffmpeg,
+            total_frames=frame_offset, progress_cb=progress_cb,
+        )
 
         # Mux audio if narration exists
         narration_mp3 = project / "audio" / "narration.mp3"
@@ -730,7 +789,7 @@ async def render_project_async(
             scene_mp3s = [project / "audio" / f"scene_{num:02d}.mp3" for num, *_rest in timeline]
             if any(path.is_file() for path in scene_mp3s):
                 if progress_cb is not None:
-                    progress_cb("muxing", 97, "正在准备声音...")
+                    progress_cb("muxing", 95.5, "正在准备声音...")
                 _concat_scene_audio(
                     [path if path.is_file() else None for path in scene_mp3s],
                     narration_mp3, cancel_event, ffmpeg,
@@ -738,7 +797,7 @@ async def render_project_async(
                 )
         if narration_mp3.is_file():
             if progress_cb is not None:
-                progress_cb("muxing", 98, "正在为视频加入声音...")
+                progress_cb("muxing", 96, "正在为视频加入声音...")
             _mux_audio(
                 silent_mp4, narration_mp3, output_mp4, cancel_event, ffmpeg
             )

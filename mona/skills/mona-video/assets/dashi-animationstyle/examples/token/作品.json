@@ -1,0 +1,10 @@
+{
+  "说明": "Token 例子的作品配置。新建作品.mjs --example token 会把这个文件夹复制成一个作品目录；路径都相对于本文件所在目录。",
+  "style": "",
+  "audio": "口播.wav",
+  "subtitles": "字幕.json",
+  "storyboard": "分镜.json",
+  "timeline": "timeline.js",
+  "page": "index.html",
+  "output": "成片.mp4"
+}

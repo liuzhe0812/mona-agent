@@ -1,0 +1,700 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<title>霓虹赛博 · 实测页（Token 前 4 个镜头）</title>
+<!--
+  【霓虹赛博实测页，v1.2，2026-10-09】从黑底科技 模板.html 改来（用法三走了一遍）：换了字体两行（第 42–43 行）、
+  第 485 行起加了「霓虹赛博底座」（DIRS、配色、夜空、城市剪影、流动网格、霓虹线和字、HUD）和 Token 例子前 4 个镜头的场景、
+  镜头和转场（fxBefore / fxAfter 调 动效部件.js）、新的 render。第 5 个镜头起没写，用下面原来的黑底科技骨架。
+  要和 timeline.js、动效部件.js 放在一个文件夹里才能打开。怎么用见 styles/霓虹赛博/风格卡.md。以下是黑底科技模板原来的说明：
+  黑底科技（11）的通用模板：能吃任何口播的 timeline.js（和本页放在同一个文件夹，由 pipeline/生成timeline.mjs 生成）。
+  文件分两块：「底座：换内容时不用改」（配色、字体栈、小工具、逐字浮现、背景和光的缓存、镜头工具、左上编号、右上标题、
+  字幕、闪白、金线圆、色块）和「场景：按新分镜重写」。
+  场景区现在是一个通用骨架：每个镜头一屏——金线圆环一笔画出、镜头标题金色渐变逐字浮现、标题下一道细线、
+  关键词做成色块（「高亮」A = 印章红块、B = 金块，其余深色玻璃块；卡在 TL.mark(词) 上出现）；镜头内很慢地推近，
+  换镜头时往里一推 + 一下暖白闪光（这套的换场方式）；最后一个镜头停到片尾。
+  正式做新内容时照 风格卡.md「换内容时怎么改」把场景区换成真正演内容的画面；示例_Token.html 里有完整用法
+  （金线大圆环 drawWheel、金线框和竖线 drawTokenizer、两层滚动小字 drawField、分叉汇合 drawInference、结论标题卡 drawConclusion）。
+  画面只由 t 决定：window.seek(t)。渲染时 --no-subtitle 会加 ?nosub=1，NOSUB 开关不画字幕。
+-->
+<style>
+  html, body { margin: 0; padding: 0; background: #06080c; overflow: hidden; }
+  #stage { position: relative; width: 1920px; height: 1080px; overflow: hidden; }
+  #stage canvas { position: absolute; left: 0; top: 0; }
+</style>
+</head>
+<body>
+<div id="stage"><canvas id="c" width="1920" height="1080"></canvas></div>
+<script src="timeline.js"></script>
+<script src="动效部件.js"></script>
+<script>
+'use strict';
+// ===== 底座：换内容时不用改 =====
+const W = 1920, H = 1080, TAU = Math.PI * 2;
+const TL = window.TL;
+const M = (k) => TL.mark(k), ME = (k) => TL.markEnd(k);
+const SH = (k) => TL.shots[k - 1];
+
+// ---------- 字体 ----------
+// 中文：思源宋体（用户装在 ~/Library/Fonts，开源）→ 没有时换成系统自带的宋体-简（Light/Regular/Bold/Black 四档）
+// 西文和数字：Baskerville（macOS 自带）；斜体也用它
+const F_CN = '"PingFang SC", "Hiragino Sans GB", sans-serif';
+const F_LAT = '"DIN Condensed", "Avenir Next Condensed", "PingFang SC", sans-serif';
+const fcn = (w, s) => `${w} ${s}px ${F_CN}`;
+const flat = (w, s, it) => `${it ? 'italic ' : ''}${w} ${s}px ${F_LAT}`;
+
+// ---------- 配色（见 风格卡.md） ----------
+const C = {
+  bg0: '#05070b', bg1: '#0b0f15', bg2: '#090d13',          // 深藏青近黑（引语那场 #06080d / #090d13）
+  glow: [62, 50, 32],                                        // 暖金光晕（标题后面 #2e281e、#403726）
+  gold: '#e5cf95',                                           // 年份数字、金色关键词（最亮处 #e5cf95）
+  goldHi: '#faefcc', goldLt: '#f2e3b8', goldMid: '#ddc994', goldDeep: '#ae915c', goldDk: '#5e4f32',   // 标题金色渐变
+  coin1: '#f7e9bc', coin2: '#e5ca89', coin3: '#cdac6a', coin4: '#b28e4f', coin5: '#8c6330',          // 金币
+  line: '#c1bea8', line2: '#a19c85', line3: '#746f61', rule: '#554e39',                             // 细线：分叉树 / 钉板框 / 命运之轮 / 年份下的横线
+  cream: '#e2dfd3', white: '#f1efe4', gray: '#8c877b', gray2: '#625b52',                            // 字幕米白 / 引语白 / 说明灰 / 小字灰
+  card: '#1a1713', cardLine: '#373334',                                                             // 数据卡片底和边
+  red: '#b1312a', redDk: '#962621', redTx: '#fee5d5', redLn: '#fcd0c0',                             // 印章红（强调色 A）
+  ivoryHi: '#f5ebd5', ivory: '#ede5ca', ivoryMid: '#d9cca9', ivoryDk: '#6a5c3c',                    // 象牙色骰子
+  dot: '#7b7a76', ball: '#fcfbe4', ink: '#1a130a',                                                  // 点阵粒子 / 钉板珠子 / 金底上的深字
+};
+// ---------- 强调色、关键词时间（通用） ----------
+// 「高亮」的词（TL.highlights）：role A = 印章红块（C.red），B = 金块（金币渐变）；「字幕强调」的词（TL.emphasis）= 金字带光
+const ROLE_KIND = { A: 'red', B: 'gold' };
+const kindOf = (w) => { const h = (TL.highlights || []).find((x) => x.text === w); return h ? (ROLE_KIND[h.role] || 'red') : 'dark'; };
+const hasMark = (k) => (typeof TL.has === 'function' ? TL.has(k) : !!(TL.marks && TL.marks[k]));
+const MS = (k, dflt) => (hasMark(k) ? TL.mark(k) : dflt);   // 关键词开始说的时间；没有这个词就用默认值，不抛错
+// 镜头表：没有镜头时整段算一个镜头
+const SHOT_SRC = (TL.shots && TL.shots.length) ? TL.shots : [{ id: 1, start: 0, end: TL.duration, title: TL.title || '', keywords: [] }];
+
+// ---------- 小工具 ----------
+const clamp = (x, a = 0, b = 1) => Math.min(b, Math.max(a, x));
+const lerp = (a, b, p) => a + (b - a) * p;
+const P = (t, a, d) => clamp((t - a) / d);
+const outC = (p) => 1 - Math.pow(1 - p, 3);
+const outQ = (p) => 1 - Math.pow(1 - p, 5);
+const inQ = (p) => p * p;
+const inOutC = (p) => (p < 0.5 ? 4 * p * p * p : 1 - Math.pow(-2 * p + 2, 3) / 2);
+const outBack = (p, k = 1.4) => 1 + (k + 1) * Math.pow(p - 1, 3) + k * Math.pow(p - 1, 2);
+const sine = (p) => 0.5 - 0.5 * Math.cos(Math.PI * p);
+const bump = (t, a, d) => Math.sin(Math.PI * P(t, a, d));      // 0 → 1 → 0
+const qb = (a, c, b, u) => (1 - u) * (1 - u) * a + 2 * (1 - u) * u * c + u * u * b;
+const cb = (a, c1, c2, b, u) => { const v = 1 - u; return v * v * v * a + 3 * v * v * u * c1 + 3 * v * u * u * c2 + u * u * u * b; };
+function hex(h) { const n = parseInt(h.slice(1), 16); return [n >> 16 & 255, n >> 8 & 255, n & 255]; }
+function rgba(h, a) { const [r, gg, b] = Array.isArray(h) ? h : hex(h); return `rgba(${r},${gg},${b},${a})`; }
+function mix(a, b, p) { const A = hex(a), B = hex(b); return `rgb(${A.map((v, i) => Math.round(v + (B[i] - v) * p)).join(',')})`; }
+function mulberry32(a) { return function () { a |= 0; a = a + 0x6D2B79F5 | 0; let t = Math.imul(a ^ a >>> 15, 1 | a); t = t + Math.imul(t ^ t >>> 7, 61 | t) ^ t; return ((t ^ t >>> 14) >>> 0) / 4294967296; }; }
+
+const cv = document.getElementById('c');
+const g = cv.getContext('2d');
+const wCache = new Map();
+function tw(s, f) { const k = f + '|' + s; let v = wCache.get(k); if (v === undefined) { g.save(); g.font = f; v = g.measureText(s).width; g.restore(); wCache.set(k, v); } return v; }
+function text(s, x, y, f, col, align = 'center', base = 'middle') { g.font = f; g.fillStyle = col; g.textAlign = align; g.textBaseline = base; g.fillText(s, x, y); }
+function rrect(x, y, w, h, r) { g.beginPath(); g.roundRect(x, y, w, h, r); }
+function canvas(w, h) { const c = document.createElement('canvas'); c.width = w; c.height = h; return c; }
+// 按长度画出一条路径的前 p（用虚线技巧）：细线「一笔画出来」全靠它
+function strokeP(pathFn, len, p, width, col, cap = 'round') {
+  if (p <= 0) return;
+  g.save(); g.lineWidth = width; g.strokeStyle = col; g.lineCap = cap; g.lineJoin = 'round';
+  if (p < 1) g.setLineDash([len * p, len + 10]);
+  pathFn(); g.stroke(); g.restore();
+}
+// 金色渐变填充（上亮下深，像原片的标题字）
+function goldGrad(y0, y1) {
+  const gr = g.createLinearGradient(0, y0, 0, y1);
+  gr.addColorStop(0, C.goldHi); gr.addColorStop(0.42, C.goldMid); gr.addColorStop(0.78, C.goldDeep); gr.addColorStop(1, C.coin5);
+  return gr;
+}
+function coinGrad(y0, y1) {
+  const gr = g.createLinearGradient(0, y0, 0, y1);
+  gr.addColorStop(0, C.coin1); gr.addColorStop(0.35, C.coin2); gr.addColorStop(0.75, C.coin3); gr.addColorStop(1, C.coin4);
+  return gr;
+}
+
+// ---------- 逐字虚化浮现（原片字幕、引语、标题都是这样一个字一个字出来的） ----------
+// 每个字：透明度 0→1、模糊 b→0、往上浮 dy→0；stag 是字与字的间隔
+function revealText(str, x, y, f, fill, t, t0, opts = {}) {
+  const { align = 'center', dur = 0.22, stag = 0.035, blur = 7, dy = 10, glow = 0, glowCol = null, alpha = 1 } = opts;
+  if (alpha <= 0 || t < t0) return;
+  const total = tw(str, f);
+  const x0 = align === 'center' ? x - total / 2 : align === 'right' ? x - total : x;
+  g.save(); g.font = f; g.textAlign = 'left'; g.textBaseline = 'middle';
+  const done = t >= t0 + stag * (str.length - 1) + dur;
+  if (glow > 0) { g.shadowColor = glowCol || rgba(C.gold, 0.5); g.shadowBlur = glow; }
+  g.fillStyle = typeof fill === 'function' ? fill() : fill;
+  if (done) { g.globalAlpha = alpha; g.fillText(str, x0, y); g.restore(); return; }
+  let xx = x0;
+  for (let i = 0; i < str.length; i++) {
+    const ch = str[i], cw = tw(ch, f);
+    const p = P(t, t0 + i * stag, dur);
+    if (p > 0) {
+      const q = outC(p);
+      g.globalAlpha = alpha * q;
+      if (q < 0.98) g.filter = `blur(${((1 - q) * blur).toFixed(2)}px)`;
+      g.fillText(ch, xx, y + (1 - q) * dy);
+      g.filter = 'none';
+    }
+    xx += cw;
+  }
+  g.restore();
+}
+
+
+// ---------- 背景：深藏青近黑 + 颗粒（只生成一次） ----------
+const BG = canvas(W, H);
+(() => {
+  const b = BG.getContext('2d');
+  const lg = b.createLinearGradient(0, 0, W * 0.4, H);
+  lg.addColorStop(0, C.bg1); lg.addColorStop(0.55, C.bg2); lg.addColorStop(1, C.bg0);
+  b.fillStyle = lg; b.fillRect(0, 0, W, H);
+  // 颗粒：半分辨率随机灰点，放大两倍铺上去（原片有很细的胶片颗粒）
+  const gw = W / 2, gh = H / 2, gc = canvas(gw, gh), gx = gc.getContext('2d'), id = gx.createImageData(gw, gh), rnd = mulberry32(7);
+  for (let i = 0; i < gw * gh; i++) { const v = rnd() * 255; id.data[i * 4] = v; id.data[i * 4 + 1] = v; id.data[i * 4 + 2] = v; id.data[i * 4 + 3] = 13; }
+  gx.putImageData(id, 0, 0);
+  b.imageSmoothingEnabled = false; b.drawImage(gc, 0, 0, W, H);
+})();
+// 暗角（四周压暗），盖在画面内容上面
+const VIG = canvas(W, H);
+(() => {
+  const v = VIG.getContext('2d');
+  const rg = v.createRadialGradient(W / 2, H * 0.45, H * 0.35, W / 2, H * 0.45, H * 1.05);
+  rg.addColorStop(0, 'rgba(0,0,0,0)'); rg.addColorStop(0.7, 'rgba(1,2,4,0.35)'); rg.addColorStop(1, 'rgba(1,2,4,0.72)');
+  v.fillStyle = rg; v.fillRect(0, 0, W, H);
+})();
+// 暖金光晕精灵图（缓存，逐帧只缩放贴上去）
+const GLOW = canvas(512, 512);
+(() => {
+  const x = GLOW.getContext('2d'), rg = x.createRadialGradient(256, 256, 0, 256, 256, 256);
+  rg.addColorStop(0, rgba(C.glow, 0.62)); rg.addColorStop(0.35, rgba(C.glow, 0.34)); rg.addColorStop(0.7, rgba(C.glow, 0.1)); rg.addColorStop(1, rgba(C.glow, 0));
+  x.fillStyle = rg; x.fillRect(0, 0, 512, 512);
+})();
+// 亮点精灵（虚化光点、金粉、辉光）
+const SPOT = canvas(128, 128);
+(() => {
+  const x = SPOT.getContext('2d'), rg = x.createRadialGradient(64, 64, 0, 64, 64, 64);
+  rg.addColorStop(0, 'rgba(255,246,222,1)'); rg.addColorStop(0.18, 'rgba(250,236,200,0.75)'); rg.addColorStop(0.5, 'rgba(229,207,149,0.22)'); rg.addColorStop(1, 'rgba(229,207,149,0)');
+  x.fillStyle = rg; x.fillRect(0, 0, 128, 128);
+})();
+const BOKEH = canvas(64, 64);
+(() => {
+  const x = BOKEH.getContext('2d'), rg = x.createRadialGradient(32, 32, 0, 32, 32, 32);
+  rg.addColorStop(0, 'rgba(214,200,170,0.9)'); rg.addColorStop(0.55, 'rgba(214,200,170,0.5)'); rg.addColorStop(1, 'rgba(214,200,170,0)');
+  x.fillStyle = rg; x.fillRect(0, 0, 64, 64);
+})();
+// 字幕区底下一层很淡的暗带，保证字幕对比
+const SUBBAND = canvas(W, 240);
+(() => {
+  const x = SUBBAND.getContext('2d'), lg = x.createLinearGradient(0, 0, 0, 240);
+  lg.addColorStop(0, 'rgba(2,3,5,0)'); lg.addColorStop(0.45, 'rgba(2,3,5,0.45)'); lg.addColorStop(1, 'rgba(2,3,5,0.7)');
+  x.fillStyle = lg; x.fillRect(0, 0, W, 240);
+})();
+function glowAt(x, y, rx, ry, a) { if (a <= 0) return; g.save(); g.globalAlpha = a; g.drawImage(GLOW, x - rx, y - ry, rx * 2, ry * 2); g.restore(); }
+function spot(x, y, r, a) { if (a <= 0 || r <= 0) return; g.save(); g.globalAlpha = Math.min(1, a); g.drawImage(SPOT, x - r, y - r, r * 2, r * 2); g.restore(); }
+
+// 虚化光点：原片画面里总飘着几颗大小不一的虚光点，很慢地漂
+const BOK = (() => { const r = mulberry32(11), a = []; for (let i = 0; i < 34; i++) a.push({ x: r() * W, y: r() * H, s: 3 + Math.pow(r(), 2.2) * 26, a: 0.05 + r() * 0.16, vx: (r() - 0.5) * 14, vy: -3 - r() * 9, ph: r() * TAU, par: 0.04 + r() * 0.16 }); return a; })();
+function drawBokeh(t, cam) {
+  for (const b of BOK) {
+    let x = (b.x + b.vx * t - (cam.x - 960) * b.par) % (W + 80), y = (b.y + b.vy * t) % (H + 80);
+    if (x < -40) x += W + 80; if (y < -40) y += H + 80;
+    const a = b.a * (0.75 + 0.25 * Math.sin(t * 0.9 + b.ph));
+    g.globalAlpha = a; g.drawImage(BOKEH, x - b.s, y - b.s, b.s * 2, b.s * 2);
+  }
+  g.globalAlpha = 1;
+}
+
+// ---------- 镜头：世界坐标 → 画面，焦点固定在 (960, 470)（下面 170 像素留给字幕） ----------
+const FX = 960, FY = 470;
+function camPath(t, start, keys) {
+  let c = { ...start };
+  for (const [t0, t1, x, y, z, e] of keys) {
+    if (t <= t0) break;
+    const p = P(t, t0, t1 - t0), q = e === 'sine' ? sine(p) : e === 'in' ? inQ(p) * p : e === 'out' ? outC(p) : inOutC(p);
+    c = { x: lerp(c.x, x, q), y: lerp(c.y, y, q), z: lerp(c.z, z, q) };
+  }
+  return c;
+}
+function applyCam(cam) { g.setTransform(cam.z, 0, 0, cam.z, FX - cam.x * cam.z, FY - cam.y * cam.z); }
+const toScreen = (cam, x, y) => [(x - cam.x) * cam.z + FX, (y - cam.y) * cam.z + FY];
+
+// ---------- 左上角：大号金色编号（换镜头时数字像里程表一样滚动）+ 细横线 + 小字（镜头标题的前半句） ----------
+const shortTitle = (s) => { const a = String(s || ''), b = a.split(/[：:，,。！？!?]/)[0], u = b.length >= 2 ? b : a; return u.length > 12 ? u.slice(0, 11) + '…' : u; };
+const STEPS = SHOT_SRC.map((s, i) => ({ n: String(i + 1).padStart(2, '0'), cn: shortTitle(s.title) || `镜头 ${i + 1}`, en: '', t: i === 0 ? 0 : s.start }));
+const HUD_IN = TL.cues[0].show + 0.1;
+function drawStepLabel(t) {
+  const a = P(t, HUD_IN, 0.5); if (a <= 0) return;
+  let k = 0; for (let i = 0; i < STEPS.length; i++) if (t >= STEPS[i].t) k = i;
+  const x = 108, y = 112, f = flat(600, 96), lh = 110;
+  g.save(); g.globalAlpha = a;
+  // 数字：每一位单独画，换段时旧数字往上滚走、新数字从下面滚上来（带一点运动模糊）
+  let xx = x;
+  const cur = STEPS[k], prev = k > 0 ? STEPS[k - 1] : null;
+  for (let j = 0; j < cur.n.length; j++) {
+    const dw = tw(cur.n[j], f) + 4;
+    const roll = prev ? inOutC(P(t, cur.t + j * 0.07, 0.5)) : 1;
+    g.save(); g.beginPath(); g.rect(xx - 6, y - 64, dw + 12, 118); g.clip();
+    g.shadowColor = rgba(C.gold, 0.35); g.shadowBlur = 18;
+    const draw = (ch, dy, al) => {
+      if (al <= 0) return;
+      g.globalAlpha = a * al; g.font = f; g.textAlign = 'left'; g.textBaseline = 'middle';
+      g.fillStyle = goldGrad(y - 40 + dy, y + 40 + dy);
+      const mb = Math.sin(Math.PI * roll) * 3;
+      if (mb > 0.3 && roll < 1) g.filter = `blur(${mb.toFixed(1)}px)`;
+      g.fillText(ch, xx, y + dy); g.filter = 'none';
+    };
+    if (prev && prev.n[j] !== cur.n[j] && roll < 1) { draw(prev.n[j], -roll * lh, 1 - roll); draw(cur.n[j], (1 - roll) * lh, roll); }
+    else draw(cur.n[j], 0, 1);
+    g.restore();
+    xx += dw;
+  }
+  // 细横线：从左往右画出来，右端渐隐
+  const lp = outC(P(t, HUD_IN + 0.15, 0.6));
+  if (lp > 0) { const lg = g.createLinearGradient(x - 2, 0, x + 300, 0); lg.addColorStop(0, rgba(C.rule, 1)); lg.addColorStop(0.6, rgba(C.rule, 0.7)); lg.addColorStop(1, rgba(C.rule, 0)); g.fillStyle = lg; g.fillRect(x - 2, y + 56, 300 * lp, 2); }
+  // 小字：镜头标题的前半句（STEPS.cn），有英文（STEPS.en）就跟在后面；换段时交叉淡入淡出
+  const capY = y + 96;
+  const capDraw = (s, al, t0) => {
+    if (al <= 0) return;
+    revealText(s.cn, x, capY, fcn(500, 32), C.cream, t, t0, { align: 'left', stag: 0.05, dur: 0.25, alpha: al });
+    const cw = tw(s.cn, fcn(500, 32)); if (!s.en) return;   // 没有英文就只写中文
+    revealText('·', x + cw + 14, capY, fcn(500, 32), C.gray, t, t0 + 0.08, { align: 'left', alpha: al });
+    revealText(s.en, x + cw + 38, capY + 1, flat(400, 33, true), C.gray, t, t0 + 0.12, { align: 'left', stag: 0.03, alpha: al });
+  };
+  if (prev && t < cur.t + 0.25) capDraw(prev, 1 - P(t, cur.t, 0.2), prev.t === 0 ? HUD_IN + 0.3 : prev.t + 0.2);
+  capDraw(cur, 1, k === 0 ? HUD_IN + 0.3 : cur.t + 0.2);
+  g.restore();
+}
+// 右上角：一行斜体西文 + 细横线（对应原片右上角的文献斜体），片尾淡出
+// 右上角：标题（TL.title，空串就不画）+ 一道往左渐隐的细横线（对应原片右上角的文献名）
+function drawCorner(t) {
+  if (!TL.title) return;
+  const a = P(t, HUD_IN + 0.3, 0.6); if (a <= 0) return;
+  const f = fcn(500, 30), lw = Math.max(240, Math.min(900, tw(TL.title, f)));
+  g.save(); g.globalAlpha = a;
+  revealText(TL.title, 1812, 78, f, C.gray, t, HUD_IN + 0.3, { align: 'right', stag: 0.02, alpha: 1 });
+  const lg = g.createLinearGradient(1812, 0, 1812 - lw, 0); lg.addColorStop(0, rgba(C.rule, 1)); lg.addColorStop(1, rgba(C.rule, 0));
+  g.fillStyle = lg; g.fillRect(1812 - lw, 104, lw * outC(P(t, HUD_IN + 0.5, 0.6)), 1.5);
+  g.restore();
+}
+
+// ---------- 字幕：底部居中单行，米白衬线粗体，逐字虚化浮现 ----------
+// 关键词：「高亮」role A = 印章红底 + 浅字，B = 金底 + 深字；「字幕强调」= 金字带辉光。长的词优先匹配
+const SUB_KEYS = [...(TL.highlights || []).map((h) => [h.text, ROLE_KIND[h.role] || 'red']), ...(TL.emphasis || []).map((w) => [w, 'g'])]
+  .filter(([w]) => w).sort((a, b) => b[0].length - a[0].length);
+function subSegs(str) {
+  const segs = []; let j = 0, plain = '';
+  while (j < str.length) {
+    const m = SUB_KEYS.find(([w]) => str.startsWith(w, j));
+    if (m) { if (plain) { segs.push({ s: plain, k: 'n' }); plain = ''; } segs.push({ s: m[0], k: m[1] }); j += m[0].length; }
+    else { plain += str[j]; j++; }
+  }
+  if (plain) segs.push({ s: plain, k: 'n' });
+  return segs;
+}
+const SUB_F = fcn(900, 64), SUB_Y = 992;
+function sealBlock(x, y, w, h, kind, a = 1, s = 1) {   // 红印章 / 金块（字幕、数据里共用）
+  if (a <= 0) return;
+  g.save(); g.globalAlpha *= a; g.translate(x + w / 2, y + h / 2); g.scale(s, s);
+  if (kind === 'red') {
+    g.fillStyle = C.redDk; rrect(-w / 2, -h / 2 + 2, w, h, 6); g.fill();
+    g.fillStyle = C.red; rrect(-w / 2, -h / 2, w, h, 6); g.fill();
+    g.strokeStyle = rgba(C.redLn, 0.55); g.lineWidth = 1.5; rrect(-w / 2 + 4, -h / 2 + 4, w - 8, h - 8, 3); g.stroke();
+  } else {
+    g.fillStyle = C.coin5; rrect(-w / 2, -h / 2 + 2, w, h, 6); g.fill();
+    g.fillStyle = coinGrad(-h / 2, h / 2); rrect(-w / 2, -h / 2, w, h, 6); g.fill();
+    g.strokeStyle = rgba(C.ink, 0.35); g.lineWidth = 1.5; rrect(-w / 2 + 4, -h / 2 + 4, w - 8, h - 8, 3); g.stroke();
+  }
+  g.restore();
+}
+const NOSUB = /[?&]nosub=1/.test(location.search);
+// 字幕换条不「眨」（v1.1）：紧接着上一条（上一条的 hide ≥ 这一条的 show，字幕.mjs 出的字幕都是这样）就直接换字；
+// 只有第一条、或者和上一条中间有空档时，才逐字由虚到实浮现（这套的招牌动作）。想每条都浮现，把下面 jump 改成 false。
+function drawSubtitle(t) {
+  if (NOSUB) return;
+  const c = TL.cueAt(t); if (!c) return;
+  const k = TL.cues.indexOf(c), jump = k > 0 && TL.cues[k - 1].hide >= c.show - 1e-3;   // 紧接着上一条：直接换字，不逐字浮现
+  const segs = subSegs(c.text), f = SUB_F, y = SUB_Y;
+  const total = segs.reduce((s, sg) => s + tw(sg.s, f) + (sg.k === 'red' || sg.k === 'gold' ? 20 : 0), 0);
+  const n = c.text.length, stag = Math.min(0.03, 0.34 / n), dur = 0.2;
+  let x = W / 2 - total / 2, ci = 0;
+  g.save(); g.font = f; g.textBaseline = 'middle'; g.textAlign = 'left';
+  for (const sg of segs) {
+    const blockW = tw(sg.s, f) + (sg.k === 'red' || sg.k === 'gold' ? 20 : 0);
+    if (sg.k === 'red' || sg.k === 'gold') {
+      const p = jump ? 1 : outC(P(t, c.show + ci * stag, dur + 0.05));
+      sealBlock(x, y - 40, blockW, 80, sg.k, p, 0.92 + 0.08 * p);
+    }
+    let xx = x + (sg.k === 'red' || sg.k === 'gold' ? 10 : 0);
+    for (const ch of sg.s) {
+      const p = jump ? 1 : outC(P(t, c.show + ci * stag, dur));
+      if (p > 0) {
+        g.globalAlpha = p;
+        if (sg.k === 'red') g.fillStyle = C.redTx;
+        else if (sg.k === 'gold') g.fillStyle = C.ink;
+        else if (sg.k === 'g') g.fillStyle = C.gold;
+        else g.fillStyle = C.cream;
+        if (sg.k === 'g') { g.shadowColor = rgba(C.gold, 0.45); g.shadowBlur = 16; }
+        else if (sg.k === 'n') { g.shadowColor = 'rgba(0,0,0,0.8)'; g.shadowBlur = 10; }
+        else { g.shadowColor = 'transparent'; g.shadowBlur = 0; }
+        if (p < 0.98) g.filter = `blur(${((1 - p) * 7).toFixed(2)}px)`;
+        g.fillText(ch, xx, y + 2 + (1 - p) * 8);
+        g.filter = 'none';
+      }
+      xx += tw(ch, f); ci++;
+    }
+    x += blockW;
+  }
+  g.restore();
+}
+
+// ---------- 闪白（原片换大段落时有一下暖白闪光） ----------
+function drawFlash(t, t0, peak = 0.82) {
+  const a = t < t0 ? outC(P(t, t0 - 0.1, 0.1)) : 1 - outC(P(t, t0, 0.4));
+  if (a <= 0 || t < t0 - 0.1) return;
+  g.save(); g.globalAlpha = a * peak; g.fillStyle = '#efe5cc'; g.fillRect(0, 0, W, H);
+  g.globalCompositeOperation = 'lighter'; g.globalAlpha = a * 0.6; g.drawImage(SPOT, FX - 900, FY - 900, 1800, 1800);
+  g.restore();
+}
+
+// ---------- 通用部件：一笔画出的金线圆、色块（深色玻璃 / 印章红 / 金） ----------
+const TILE = { pad: 26, h: 108, gap: 16, r: 14 };
+function circleP(x, y, r, p, w, col, a0 = -Math.PI / 2) {
+  strokeP(() => { g.beginPath(); g.arc(x, y, r, a0, a0 + TAU); }, TAU * r, p, w, col, 'butt');
+}
+function tileShape(x, y, w, h, kind, a, opts = {}) {
+  const r = TILE.r * (h / TILE.h);
+  g.save(); g.globalAlpha *= a;
+  if (kind === 'dark') {
+    g.shadowColor = 'rgba(0,0,0,0.55)'; g.shadowBlur = 24; g.shadowOffsetY = 10;
+    const lg = g.createLinearGradient(0, y - h / 2, 0, y + h / 2); lg.addColorStop(0, '#26231e'); lg.addColorStop(1, '#15130f');
+    g.fillStyle = lg; rrect(x - w / 2, y - h / 2, w, h, r); g.fill();
+    g.shadowColor = 'transparent';
+    g.strokeStyle = rgba(C.line2, 0.5 + 0.5 * (opts.rim || 0)); g.lineWidth = 1.5 + (opts.rim || 0); g.stroke();
+    g.fillStyle = 'rgba(255,248,230,0.07)'; g.fillRect(x - w / 2 + r, y - h / 2 + 1.5, w - 2 * r, 1.5);
+  } else if (kind === 'red') {
+    g.shadowColor = rgba(C.red, 0.45); g.shadowBlur = 30; g.shadowOffsetY = 6;
+    g.fillStyle = C.redDk; rrect(x - w / 2, y - h / 2 + 5 * (h / TILE.h), w, h, r); g.fill();
+    g.shadowColor = 'transparent';
+    const lg = g.createLinearGradient(0, y - h / 2, 0, y + h / 2); lg.addColorStop(0, mix(C.red, '#ffffff', 0.08)); lg.addColorStop(1, C.red);
+    g.fillStyle = lg; rrect(x - w / 2, y - h / 2, w, h, r); g.fill();
+    g.strokeStyle = rgba(C.redLn, 0.55); g.lineWidth = 1.5; rrect(x - w / 2 + 6 * (h / TILE.h), y - h / 2 + 6 * (h / TILE.h), w - 12 * (h / TILE.h), h - 12 * (h / TILE.h), r * 0.55); g.stroke();
+    if (opts.rim) { g.strokeStyle = rgba(C.goldLt, opts.rim); g.lineWidth = 2.5; rrect(x - w / 2 - 5, y - h / 2 - 5, w + 10, h + 10, r + 4); g.stroke(); }
+  } else {
+    g.shadowColor = rgba(C.gold, 0.45); g.shadowBlur = 30; g.shadowOffsetY = 6;
+    g.fillStyle = C.coin5; rrect(x - w / 2, y - h / 2 + 5 * (h / TILE.h), w, h, r); g.fill();
+    g.shadowColor = 'transparent';
+    g.fillStyle = coinGrad(y - h / 2, y + h / 2); rrect(x - w / 2, y - h / 2, w, h, r); g.fill();
+    g.strokeStyle = rgba(C.ink, 0.3); g.lineWidth = 1.5; rrect(x - w / 2 + 6 * (h / TILE.h), y - h / 2 + 6 * (h / TILE.h), w - 12 * (h / TILE.h), h - 12 * (h / TILE.h), r * 0.55); g.stroke();
+    if (opts.rim) { g.strokeStyle = rgba(C.goldLt, opts.rim); g.lineWidth = 2.5; rrect(x - w / 2 - 5, y - h / 2 - 5, w + 10, h + 10, r + 4); g.stroke(); }
+  }
+  // 一道斜光扫过（opts.glint 0→1 时从左扫到右）
+  if (opts.glint > 0 && opts.glint < 1) {
+    g.save(); rrect(x - w / 2, y - h / 2, w, h, r); g.clip();
+    const bx = x - w / 2 - 60 + (w + 120) * opts.glint;
+    const lg = g.createLinearGradient(bx - 50, 0, bx + 50, 0);
+    lg.addColorStop(0, 'rgba(255,250,235,0)'); lg.addColorStop(0.5, 'rgba(255,250,235,0.32)'); lg.addColorStop(1, 'rgba(255,250,235,0)');
+    g.fillStyle = lg; g.beginPath(); g.moveTo(bx - 40, y - h / 2); g.lineTo(bx + 60, y - h / 2); g.lineTo(bx + 40, y + h / 2); g.lineTo(bx - 60, y + h / 2); g.closePath(); g.fill();
+    g.restore();
+  }
+  g.restore();
+}
+const tileTextCol = (kind) => (kind === 'red' ? C.redTx : kind === 'gold' ? C.ink : C.white);
+
+// ===== 场景：按新分镜重写 =====
+// 下面是能吃任何分镜的通用骨架：每个镜头一屏，画面焦点 (FX, FY) = (960, 470)，底部 170 像素留给字幕。
+// 每屏：金线圆环（一笔画出、刻度慢慢转）+ 金色渐变的镜头标题（逐字浮现）+ 标题下一道细线 + 关键词色块（卡在 TL.mark(词) 上出现）。
+// 镜头内很慢地推近；换镜头前 0.24 秒越推越快，新镜头开始时一下暖白闪光（drawFlash），新的一屏从头浮现。
+// 正式做新内容时，照新分镜把每屏换成真正演内容的画面，不要只留色块。
+const KF = fcn(700, 60), KH = 96, KGAP = 22, KROW = 122, KMAXW = 1500, TITLE_Y = 300;
+let SHOTS = [];
+function buildShots() {   // 等字体加载好以后再量字宽
+  SHOTS = SHOT_SRC.map((s, i) => {
+    const next = SHOT_SRC[i + 1], start = i === 0 ? 0 : s.start, end = next ? next.start : TL.duration;
+    const title = s.title || '';
+    let ts = 84; while (ts > 44 && tw(title, fcn(900, ts)) > 1500) ts -= 4;   // 标题太长就缩字号
+    const lo = start + 0.3, hi = Math.max(lo, end - 0.6);
+    const items = [...new Set((s.keywords || []).filter(Boolean))].map((w, j) => ({
+      w, kind: kindOf(w), ww: tw(w, KF) + TILE.pad * 2,
+      t0: clamp(MS(w, start + 0.3 + 0.4 * j) - 0.05, lo, hi),   // 有这个关键词就卡在说到它的时刻，没有就依次出
+    }));
+    const rows = []; let row = [], rw = 0;   // 一行放不下就换行，每行居中
+    for (const it of items) { if (row.length && rw + it.ww + KGAP > KMAXW) { rows.push(row); row = []; rw = 0; } row.push(it); rw += it.ww + KGAP; }
+    if (row.length) rows.push(row);
+    const y0 = Math.max(470, Math.min(580, 850 - KH / 2 - (rows.length - 1) * KROW));   // 行多就往上提，不压字幕区
+    rows.forEach((r, ri) => { const tot = r.reduce((a, it) => a + it.ww, 0) + KGAP * (r.length - 1); let x = 960 - tot / 2;
+      r.forEach((it) => { it.x = x + it.ww / 2; it.y = y0 + ri * KROW; x += it.ww + KGAP; }); });
+    return { s, i, start, end, next, title, ts, items };
+  });
+}
+function shotAt(t) { let k = 0; for (let i = 0; i < SHOTS.length; i++) if (t >= SHOTS[i].start) k = i; return SHOTS[k]; }
+function camOf(sh, t) {
+  let z = lerp(1, 1.06, sine(P(t, sh.start, Math.max(0.5, sh.end - sh.start))));   // 镜头内很慢地推
+  if (sh.next) z *= 1 + 0.6 * inQ(P(t, sh.end - 0.24, 0.24));                     // 换镜头前往里一推
+  return { x: FX, y: FY, z };
+}
+function drawRingDeco(sh, t) {   // 金线圆环：一笔画出来，刻度和小圆慢慢转（对应原片的命运之轮）
+  const t0 = sh.start + 0.1, rot = (t - sh.start) * 0.05;
+  circleP(FX, FY, 360, outC(P(t, t0, 0.7)), 1.2, rgba(C.line3, 0.55));
+  circleP(FX, FY, 385, outC(P(t, t0 + 0.12, 0.7)), 1.2, rgba(C.line3, 0.45), -Math.PI / 2 + 0.6);
+  const a = P(t, t0 + 0.4, 0.5); if (a <= 0) return;
+  g.save(); g.globalAlpha *= a; g.strokeStyle = rgba(C.line3, 0.5); g.lineWidth = 1.2;
+  for (let k = 0; k < 120; k++) {
+    const an = rot + k * TAU / 120, r0 = 385, r1 = k % 10 === 0 ? 408 : 396;
+    g.beginPath(); g.moveTo(FX + Math.cos(an) * r0, FY + Math.sin(an) * r0); g.lineTo(FX + Math.cos(an) * r1, FY + Math.sin(an) * r1); g.stroke();
+  }
+  for (let k = 0; k < 8; k++) {
+    const an = -rot * 1.6 + k * TAU / 8;
+    g.fillStyle = C.bg0; g.strokeStyle = rgba(C.line2, 0.6); g.beginPath(); g.arc(FX + Math.cos(an) * 372, FY + Math.sin(an) * 372, 6, 0, TAU); g.fill(); g.stroke();
+  }
+  g.restore();
+}
+function drawShotTitle(sh, t, fa) {   // 镜头标题：金色渐变大字逐字浮现，下面一道细线从中间往两边画开，两端冒金色小菱形
+  if (!sh.title) return;
+  const t0 = sh.start + 0.15, f = fcn(900, sh.ts), y = TITLE_Y;
+  revealText(sh.title, 960, y, f, () => goldGrad(y - sh.ts * 0.5, y + sh.ts * 0.5), t, t0,
+    { stag: Math.min(0.06, 0.9 / sh.title.length), dur: 0.3, blur: 12, dy: 16, glow: 18, alpha: fa });
+  const half = Math.min(640, tw(sh.title, f) / 2 + 60), p = outC(P(t, t0 + 0.25, 0.6)), ly = y + sh.ts * 0.5 + 34;
+  if (p <= 0) return;
+  g.save(); g.globalAlpha = fa;
+  for (const sx of [1, -1]) strokeP(() => { g.beginPath(); g.moveTo(960, ly); g.lineTo(960 + sx * half, ly); }, half, p, 1.5, C.line2);
+  const d = P(t, t0 + 0.75, 0.25);
+  if (d > 0) for (const sx of [-1, 1]) { g.save(); g.globalAlpha = fa * d; g.translate(960 + sx * half, ly); g.rotate(Math.PI / 4); g.fillStyle = C.gold; g.fillRect(-4.5, -4.5, 9, 9); g.restore(); }
+  g.restore();
+}
+function drawKeyword(it, t, fa) {
+  const p = P(t, it.t0, 0.35); if (p <= 0) return;
+  g.save(); g.globalAlpha = fa;
+  if (it.kind === 'dark') {   // 普通关键词：深色玻璃块淡入，字逐字浮现
+    tileShape(it.x, it.y, it.ww, KH, 'dark', outC(p));
+    revealText(it.w, it.x, it.y + 3, KF, C.white, t, it.t0 + 0.05, { stag: 0.04, dur: 0.22, alpha: fa });
+  } else {                    // 「高亮」的词：像盖印章一样从 1.4 倍砸下来，亮一圈边
+    const s = 1 + 0.4 * (1 - outC(P(t, it.t0, 0.22))), a = Math.min(1, p * 3), rim = Math.max(0, 1 - P(t, it.t0 + 0.25, 0.6)) * 0.9;
+    g.translate(it.x, it.y); g.scale(s, s); g.translate(-it.x, -it.y);
+    tileShape(it.x, it.y, it.ww, KH, it.kind, a, { rim });
+    g.globalAlpha = fa * a; text(it.w, it.x, it.y + 3, KF, tileTextCol(it.kind));
+  }
+  g.restore();
+}
+function drawShot(sh, t) {
+  const fa = sh.next ? 1 - P(t, sh.end - 0.2, 0.2) : 1;   // 换镜头时这一屏跟着往里推、淡掉
+  if (fa <= 0) return;
+  g.save(); g.globalAlpha = fa; drawRingDeco(sh, t); g.restore();
+  drawShotTitle(sh, t, fa);
+  for (const it of sh.items) drawKeyword(it, t, fa);
+}
+
+// ===== 霓虹赛博底座（v1.2 实测，起步：黑底科技模板；改了字体、配色、背景、HUD、render） =====
+const DIR = 'A';   // 方向：A 雨夜城市霓虹 / B 冷色终端（用法三比方向用，挑定后删掉另一套）
+const DIRS = {
+  A: { sky: ['#05030f', '#120a2e', '#2a0b45'], hz: 'rgba(255,63,164,0.34)', grid: '#8a5cff', city: true, rain: '#a0c8ff', line: '#b78cff', sign: '#f5e663' },
+  B: { sky: ['#010806', '#03130e', '#06281f'], hz: 'rgba(39,225,255,0.2)', grid: '#1fbf8f', city: false, rain: '#7fffd4', line: '#5ff2c2', sign: '#7dffb0' },
+};
+const D = DIRS[DIR];
+const N = { A: '#d6177e', Ahi: '#ff3fa4', B: '#27e1ff', ink: '#061018', white: '#f2f8ff', line: D.line, sign: D.sign, red: '#ff3b5c' };
+// 字幕和色块沿用模板的 sealBlock / drawSubtitle，只换颜色：A 品红块白字（4.9:1）、B 青块深字、字幕强调 = 电黄
+Object.assign(C, { cream: N.white, gold: '#f5e663', red: N.A, redDk: '#8e0f55', redTx: '#ffffff', redLn: '#ff9fd0', ink: N.ink,
+  coin1: '#a8f5ff', coin2: '#6ae9ff', coin3: '#27e1ff', coin4: '#16b5d4', coin5: '#0e7f95' });
+const F_COND = '"DIN Condensed", "Avenir Next Condensed", sans-serif', F_MONO = 'Menlo, monospace';
+const HZ = 700;   // 地平线
+const SKY = canvas(W, H);
+(() => {
+  const x = SKY.getContext('2d'); let gr = x.createLinearGradient(0, 0, 0, H);
+  gr.addColorStop(0, D.sky[0]); gr.addColorStop(0.45, D.sky[1]); gr.addColorStop(HZ / H, D.sky[2]); gr.addColorStop(HZ / H + 0.004, '#06040d'); gr.addColorStop(1, '#030208');
+  x.fillStyle = gr; x.fillRect(0, 0, W, H);
+  gr = x.createRadialGradient(W / 2, HZ, 0, W / 2, HZ, 1000);
+  gr.addColorStop(0, D.hz); gr.addColorStop(0.35, 'rgba(138,92,255,0.1)'); gr.addColorStop(1, 'rgba(0,0,0,0)');
+  x.fillStyle = gr; x.fillRect(0, 0, W, H);
+})();
+// 城市剪影：一条比画面宽的长图只画一次，每帧按 t 左移、首尾接上（视差背景层）
+const CITY = (() => {
+  const r = mulberry32(21), cw = W + 420, ch = 420, c = canvas(cw, ch), x = c.getContext('2d'); let bx = 0, i = 0;
+  while (bx < cw) {
+    const w = 50 + r() * 110, h = 90 + r() * 310, y = ch - h;
+    x.fillStyle = '#0b0622'; x.fillRect(bx, y, w, h);
+    x.fillStyle = i % 3 ? 'rgba(255,63,164,0.45)' : 'rgba(39,225,255,0.4)'; x.fillRect(bx, y, w, 2);
+    for (let yy = y + 12; yy < ch - 20; yy += 26) for (let xx = bx + 8; xx < bx + w - 12; xx += 18) {
+      const k = r(); if (k > 0.74) { x.fillStyle = k > 0.94 ? 'rgba(39,225,255,0.5)' : 'rgba(245,230,99,0.28)'; x.fillRect(xx, yy, 7, 11); }
+    }
+    bx += w + 6; i++;
+  }
+  return c;
+})();
+function drawNeonBG(t) {
+  g.drawImage(SKY, 0, 0);
+  if (D.city) { const off = (t * 14) % CITY.width; g.drawImage(CITY, -off, HZ - CITY.height); g.drawImage(CITY, CITY.width - off, HZ - CITY.height); }
+  g.save(); g.lineWidth = 2; g.strokeStyle = D.grid;   // 流动网格地面：横线往镜头流、越近越亮；竖线从灭点放射
+  for (let i = 0; i < 16; i++) { const u = ((i + t * 1.1) % 16) / 16, y = HZ + (H - HZ) * u * u; g.globalAlpha = 0.1 + 0.45 * u; g.beginPath(); g.moveTo(0, y); g.lineTo(W, y); g.stroke(); }
+  g.globalAlpha = 0.3; for (let j = -14; j <= 14; j++) { g.beginPath(); g.moveTo(W / 2 + j * 30, HZ); g.lineTo(W / 2 + j * 260, H); g.stroke(); }
+  g.restore();
+}
+// 霓虹线：宽的低透明度（光）+ 本色 + 发白的芯，不用 shadowBlur（快）；pathFn 只建路径
+function nLine(pathFn, col, w = 3, a = 1) {
+  g.save(); g.lineCap = 'round'; g.lineJoin = 'round'; g.strokeStyle = col;
+  g.globalAlpha = a * 0.22; g.lineWidth = w * 4; pathFn(); g.stroke();
+  g.globalAlpha = a; g.lineWidth = w; pathFn(); g.stroke();
+  g.globalAlpha = a * 0.8; g.strokeStyle = '#ffffff'; g.lineWidth = Math.max(1, w * 0.35); pathFn(); g.stroke(); g.restore();
+}
+// 霓虹字：彩色光 + 发白的芯（只给大字；字幕实心无光）
+function nText(s, x, y, size, col, o = {}) {
+  g.save(); g.globalAlpha = o.a ?? 1; g.font = `${o.w ?? 800} ${size}px ${o.f ?? F_CN}`; g.textAlign = o.al ?? 'center'; g.textBaseline = 'middle';
+  g.shadowColor = col; g.shadowBlur = o.b ?? size * 0.35; g.fillStyle = col; g.fillText(s, x, y);
+  g.shadowBlur = 0; g.fillStyle = o.core ?? 'rgba(255,255,255,0.78)'; g.fillText(s, x, y); g.restore();
+}
+// HUD：左上镜头号 + 标题，右上日志名 + 时间码 + 闪的 REC 灯，四角括号（一直在动的次要动作）
+function drawHud(t) {
+  const sh = TL.shotAt(t) || TL.shots[0];
+  nText(String(sh.id).padStart(2, '0'), 70, 80, 64, N.line, { f: F_COND, w: 700, al: 'left', b: 14 });
+  g.save(); g.font = `500 26px ${F_MONO}`; g.fillStyle = 'rgba(242,248,255,0.82)'; g.textAlign = 'left'; g.textBaseline = 'middle';
+  g.fillText(sh.title, 150, 80); g.textAlign = 'right';
+  g.fillText(`TOKEN.LOG  00:${String(Math.floor(t)).padStart(2, '0')}:${String(Math.floor((t % 1) * 30)).padStart(2, '0')}`, W - 70, 80);
+  g.fillStyle = N.red; g.globalAlpha = 动效.blink(t, { period: 1, duty: 0.6 }); g.beginPath(); g.arc(W - 390, 80, 9, 0, TAU); g.fill();
+  g.restore(); g.save(); g.strokeStyle = rgba(N.line, 0.55); g.lineWidth = 2;
+  for (const [x, y, sx, sy] of [[40, 40, 1, 1], [W - 40, 40, -1, 1], [40, 880, 1, -1], [W - 40, 880, -1, -1]]) { g.beginPath(); g.moveTo(x, y + sy * 40); g.lineTo(x, y); g.lineTo(x + sx * 40, y); g.stroke(); }
+  g.restore();
+}
+// ===== 场景：Token 例子前 4 个镜头（每个镜头的变化清单见 分镜.json「变化」） =====
+const EX = TL.example.text, TOK = TL.example.tokens;
+const cueChars = (id) => TL.chars.filter((c) => c.cue === id);
+const typed = (id, t) => cueChars(id).filter((c) => c.start <= t + 0.02).length;   // 第 id 条字幕念到第几个字
+function nBox(x, y, w, h, r, col, p, wd = 3, a = 1) {   // 霓虹圆角框，按进度 p 描出来
+  if (p <= 0) return; const L = 2 * (w + h);
+  nLine(() => { g.beginPath(); g.setLineDash([L * p, L]); g.roundRect(x, y, w, h, r); }, col, wd, a);
+}
+// 镜头 1：聊天框描出来 →「聊天框」时通电 + AI 打招呼 → 念到哪个字打到哪个字，光标闪，打完发送键亮
+function shot1(t) {
+  const t0 = MS('打开', 0.76), t1 = MS('聊天框', 1.6), x = 400, y = 190, w = 1120, h = 470;
+  const on = t < t1 ? 0.5 : t < t1 + 0.25 ? [1, 0.3, 1, 0.4, 1][Math.floor((t - t1) / 0.05)] : 1;
+  if (t >= t1) { g.fillStyle = 'rgba(12,6,34,0.72)'; rrect(x, y, w, h, 26); g.fill(); }
+  nBox(x, y, w, h, 26, N.line, outC(P(t, t0 - 0.05, 0.6)), 3, on);
+  if (t < t1) return;
+  nLine(() => { g.beginPath(); g.moveTo(x, y + 72); g.lineTo(x + w, y + 72); }, N.line, 2, on * 0.7);
+  text('AI 助手', x + 36, y + 37, `600 30px ${F_CN}`, N.white, 'left');
+  g.save(); g.fillStyle = '#3dff9a'; g.globalAlpha = 0.45 + 0.55 * 动效.blink(t, { period: 1.6, smooth: true });
+  g.beginPath(); g.arc(x + 172, y + 37, 7, 0, TAU); g.fill(); g.restore();
+  const b = outBack(P(t, t1 + 0.3, 0.35));
+  if (b > 0) { g.save(); g.translate(x + 50, y + 140); g.scale(b, b); g.fillStyle = 'rgba(183,140,255,0.18)'; rrect(0, -36, 400, 72, 18); g.fill(); text('有什么可以帮你？', 28, 1, `600 36px ${F_CN}`, N.white, 'left'); g.restore(); }
+  // 输入框：念到哪个字打到哪个字；末尾光标一秒闪两次；打完发送键变黄
+  const n = typed(2, t), done = n >= EX.length;
+  nBox(x + 40, y + h - 120, w - 80, 84, 16, N.line, 1, 2, 0.8);
+  g.save(); g.font = `700 48px ${F_CN}`; g.textBaseline = 'middle'; g.fillStyle = N.white;
+  const s = EX.slice(0, n); g.fillText(s, x + 70, y + h - 77);
+  if (动效.blink(t, { period: 0.5 }) && !done) { g.fillStyle = N.sign; g.fillRect(x + 76 + g.measureText(s).width, y + h - 102, 22, 50); }
+  g.restore();
+  const sx = x + w - 100, sy = y + h - 78, lit = done ? 1 : 0.35;
+  nLine(() => { g.beginPath(); g.moveTo(sx - 18, sy - 22); g.lineTo(sx + 22, sy); g.lineTo(sx - 18, sy + 22); g.closePath(); }, done ? N.sign : N.line, 3, lit);
+}
+function card(cx, cy, s, a = 1) {   // 例句卡片（镜头 2、3 共用：东西能留就留）
+  if (a <= 0 || s <= 0) return;
+  g.save(); g.globalAlpha = a; g.translate(cx, cy); g.scale(s, s); g.fillStyle = 'rgba(12,6,34,0.88)'; rrect(-560, -62, 1120, 124, 18); g.fill();
+  nBox(-560, -62, 1120, 124, 18, N.line, 1, 2.5); g.globalAlpha = a; if (a > 0.5) text(EX, 0, 3, `700 58px ${F_CN}`, N.white); g.restore();   // 重影只留框，不叠字
+}
+// 镜头 2：卡片从输入框的位置飞上来 →「最多的」时身后一层层冒重影 →「提示词」黄灯管逐字通电 →「Prompt」紫灯管
+function shot2(t) {
+  const t0 = TL.shots[1].start, cy = lerp(560, 300, outBack(P(t, t0 + 0.02, 0.45), 1.2));
+  const tm = (cueChars(3).find((c) => c.text === '最') || { start: t0 + 1.5 }).start;
+  for (let k = 4; k >= 1; k--) { const q = outC(P(t, tm - 0.25 + k * 0.08, 0.4)); card(960, cy - k * 30 * q, 1 - k * 0.04, 0.22 * q * (1 - k * 0.15)); }
+  card(960, cy, 1);
+  const tp = MS('提示词', 6.8), tq = MS('Prompt', 7.28);
+  动效.neonText(g, t, '提示词', 960, 545, TL.chars.filter((c) => c.start >= tp - 0.01).slice(0, 3).map((c) => c.start), { size: 150, color: N.sign });
+  动效.neonText(g, t, 'PROMPT', 960, 705, tq, { size: 110, color: N.line, family: F_COND, weight: 700, step: 0.05 });
+}
+// 镜头 3：推移进来一块 AI 芯片（引脚一直闪）→「接收到」卡片先往后一缩、沿弧线飞进芯片 → 芯片一亮、扫描线扫过、RECEIVED
+function shot3(t) {
+  const tr = MS('接收到', 8.12), cx = 1240, cy = 440, hit = bump(t, tr + 0.35, 0.45);
+  g.fillStyle = 'rgba(12,6,34,0.9)'; rrect(cx - 170, cy - 170, 340, 340, 24); g.fill();
+  nBox(cx - 170, cy - 170, 340, 340, 24, N.line, 1, 3 + 3 * hit);
+  for (let i = 0; i < 6; i++) for (const sd of [-1, 1]) {
+    const a = 0.35 + 0.65 * 动效.blink(t, { period: 0.9, ph: i * 0.15 + (sd > 0 ? 0.45 : 0), smooth: true }), k = -125 + i * 50;
+    nLine(() => { g.beginPath(); g.moveTo(cx + k, cy + sd * 172); g.lineTo(cx + k, cy + sd * 215); }, N.line, 3, a);
+    nLine(() => { g.beginPath(); g.moveTo(cx + sd * 172, cy + k); g.lineTo(cx + sd * 215, cy + k); }, N.line, 3, a);
+  }
+  nText('AI', cx, cy + 10, 160, N.white, { f: F_COND, w: 700, b: 24 + 40 * hit });
+  const p = 动效.anticipate(P(t, tr - 0.2, 0.6), { back: 0.1 }), q = clamp(p);
+  card(lerp(560, cx, p), qb(440, 150, cy, q), 0.5 * (1 - 0.85 * q), 1 - P(q, 0.85, 0.15));
+  if (t > tr + 0.4) {
+    const sy = lerp(cy - 165, cy + 165, P(t, tr + 0.4, 0.4));
+    if (sy < cy + 165) nLine(() => { g.beginPath(); g.moveTo(cx - 160, sy); g.lineTo(cx + 160, sy); }, N.sign, 2, 0.9);
+    const b = outBack(P(t, tr + 0.45, 0.3));
+    if (b > 0) { g.save(); g.translate(cx, cy - 250); g.scale(b, b); nText('RECEIVED ✓', 0, 0, 40, N.sign, { f: F_MONO, w: 700, b: 12 }); g.restore(); }
+  }
+}
+// 镜头 4：例句长条亮出来 →「分词器」黄色激光从左扫到右、扫过处打切口 →「拆分」裂成 8 块、成都填品红（A）、旅行填青（B），各块轻轻浮动 →「更小的单位」编号和 × 8 TOKENS
+function shot4(t) {
+  const t0 = TL.shots[3].start, ts = MS('分词器', 9.7), tc = MS('拆分', 10.38), tu = MS('更小的单位', 10.9);
+  const f = `700 60px ${F_CN}`, ws = TOK.map((s) => tw(s, f) + 44), sp = outBack(P(t, tc, 0.5), 1.3), gap = 28 * sp;
+  const w0 = ws.reduce((a, b) => a + b, 0), total = w0 + gap * (TOK.length - 1), y = 420, ap = outC(P(t, t0 + 0.05, 0.4));
+  if (ap <= 0) return;
+  if (sp < 1) nBox(960 - w0 / 2 - 12, y - 62, w0 + 24, 124, 18, N.line, ap, 3, 1 - sp);
+  let x = 960 - total / 2, x0 = 960 - w0 / 2;
+  const scanX = lerp(x0, x0 + w0, inOutC(P(t, ts, tc - ts)));
+  TOK.forEach((s, i) => {
+    const w = ws[i], k = s === TL.highlights[0].text ? 'A' : s === TL.highlights[1].text ? 'B' : 'n';
+    const fill = P(t, tc + 0.25 + i * 0.05, 0.25), dy = 动效.sway(t, i * 0.9, { dy: 6 }).dy * sp + (i % 2 ? -12 : 12) * clamp(sp);
+    g.save(); g.globalAlpha = ap; g.translate(x + w / 2, y + dy);
+    if (k !== 'n' && fill > 0) { g.globalAlpha = ap * fill; g.fillStyle = k === 'A' ? N.A : N.B; rrect(-w / 2, -52, w, 104, 14); g.fill(); g.globalAlpha = ap; }
+    if (sp > 0) nBox(-w / 2, -52, w, 104, 14, k === 'A' ? N.Ahi : k === 'B' ? N.B : N.line, clamp(sp), 2.5);
+    text(s, 0, 3, f, k === 'B' && fill > 0.5 ? N.ink : N.white);
+    const ni = P(t, tu + i * 0.06, 0.2);
+    if (ni > 0) { g.globalAlpha = ni; text(String(i + 1).padStart(2, '0'), 0, -86, `600 26px ${F_MONO}`, N.line); }
+    g.restore();
+    x += w + gap;
+  });
+  if (t > ts && t < tc + 0.15) {   // 激光：扫过的块边上打一道切口
+    const a = 1 - P(t, tc, 0.15);
+    nLine(() => { g.beginPath(); g.moveTo(scanX, y - 100); g.lineTo(scanX, y + 100); }, N.sign, 3, a);
+    let bx = x0; for (let i = 0; i < TOK.length - 1; i++) { bx += ws[i]; if (bx < scanX) nLine(() => { g.beginPath(); g.moveTo(bx, y - 76); g.lineTo(bx, y - 60); g.moveTo(bx, y + 60); g.lineTo(bx, y + 76); }, N.sign, 3, a); }
+    g.save(); g.globalAlpha = a * outC(P(t, ts, 0.2)); text('TOKENIZER', scanX, y - 130, `700 30px ${F_MONO}`, N.sign); g.restore();
+  }
+  const c = outBack(P(t, tu + 0.3, 0.35));
+  if (c > 0) { g.save(); g.translate(960, 640); g.scale(c, c); nText('× 8  TOKENS', 0, 0, 96, N.sign, { f: F_COND, w: 700, b: 26 }); g.restore(); }
+}
+function drawNeonScene(t, sh) {
+  const id = (TL.shotAt(t) || TL.shots[0]).id;
+  if (id === 1) shot1(t); else if (id === 2) shot2(t); else if (id === 3) shot3(t); else if (id === 4) shot4(t);
+  else { applyCam(camOf(sh, t)); drawShot(sh, t); }   // 5 以后这次没写，用模板骨架
+}
+// ===== 镜头和转场（调 动效部件.js）：每镜头慢推；1→2 故障撕裂；2→3 推移；3→4 钻进芯片；4→5 故障；开头 CRT 开机 =====
+function fxBefore(t) {
+  const sh = TL.shotAt(t) || TL.shots[0], c4 = TL.shots[3].start;
+  let z = 动效.zoom(t, sh.start, { rate: 0.01 }), cx = 960, cy = 470;
+  if (t > c4 - 0.3 && t < c4) { z *= 1 + 3.5 * 动效.ease.inCubic(P(t, c4 - 0.3, 0.3)); cx = 1240; cy = 440; }
+  if (t >= c4 && t < c4 + 0.35) z *= lerp(0.82, 1, outC(P(t, c4, 0.35)));
+  g.translate(cx, cy); g.scale(z, z); g.translate(-cx, -cy);
+  const p = 动效.push(t, [TL.shots[2].start]); if (p) 动效.shift(g, p);
+}
+function fxAfter(t) {
+  动效.particles(g, t, { kind: '雨', n: 140, color: D.rain, area: [0, 0, W, H] });
+  动效.glitch(g, t, [TL.shots[1].start, TL.shots[4].start], { colors: [N.Ahi, N.B] });
+  动效.bloom(g, { alpha: 0.4 });
+  动效.scan(g, { alpha: 0.16, vignette: 0.55 });
+  if (t < 0.3) {   // CRT 开机：一条亮线从中间撑开
+    const k = outC(P(t, 0, 0.3)), h = H * k; g.fillStyle = '#000'; g.fillRect(0, 0, W, (H - h) / 2); g.fillRect(0, (H + h) / 2, W, (H - h) / 2 + 1);
+    g.fillStyle = `rgba(220,250,255,${0.8 * (1 - k)})`; g.fillRect(0, (H - h) / 2 - 3, W, 6); g.fillRect(0, (H + h) / 2 - 3, W, 6);
+  }
+}
+function render(t) {
+  if (!SHOTS.length) buildShots();
+  g.setTransform(1, 0, 0, 1, 0, 0); g.globalAlpha = 1; g.filter = 'none'; g.globalCompositeOperation = 'source-over';
+  drawNeonBG(t);
+  const sh = shotAt(t);
+  fxBefore(t);
+  drawNeonScene(t, sh);   // ← 场景入口
+  g.setTransform(1, 0, 0, 1, 0, 0); g.globalAlpha = 1;
+  g.save(); fxAfter(t); g.restore();
+  g.drawImage(SUBBAND, 0, H - 240);
+  drawHud(t);
+  drawSubtitle(t);
+}
+
+// ---------- 一帧 ----------
+// ---------- 动效入口（v1.2）：转场、次要动作写在这两个函数里，调 动效部件.js（用法见那个文件开头、knowledge/动效和画面变化.md 第八节）；空着画面不变 ----------
+   // 画场景之前、镜头已设好：推移（动效.push + 动效.shift）、慢推、震屏、整体抖
+    // 场景画完、页眉字幕之前，已是屏幕坐标：故障、擦除、翻页、纸片盖屏、粒子、泛光
+window.DURATION = TL.duration;
+window.ready = false;
+window.seek = (t) => render(t);
+// 等本机字体加载好再量字宽、开始画（不然第一帧可能用了替代字体）
+Promise.all([fcn(900, 64), fcn(700, 64), fcn(500, 32), flat(600, 96), flat(400, 33, true)].map((f) => document.fonts.load(f, '字幕Ag01')))
+  .catch(() => {}).then(() => { buildShots(); render(0); window.ready = true; });
+</script>
+</body>
+</html>
