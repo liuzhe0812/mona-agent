@@ -1,7 +1,8 @@
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { ThreadComposer } from "@/components/thread/ThreadComposer";
+import i18n from "@/i18n";
 import { SEND_MESSAGE_SHORTCUT_EVENT } from "@/lib/tauri";
 import type { RoomAgentInfo, SlashCommand } from "@/lib/types";
 
@@ -728,7 +729,12 @@ describe("ThreadComposer", () => {
       onPendingEdit={onPendingEdit} onPendingRemove={onPendingRemove} />);
 
     const input = screen.getByRole("textbox", { name: "Message input" });
-    fireEvent.click(screen.getByRole("button", { name: "Edit message" }));
+    const pendingMessage = screen.getByRole("listitem");
+    fireEvent.pointerDown(within(pendingMessage).getByRole("button", { name: /^(More actions|更多操作)$/ }), {
+      button: 0,
+      ctrlKey: false,
+    });
+    fireEvent.click(await screen.findByRole("menuitem", { name: i18n.t("thread.composer.pendingQueue.editAria") }));
     expect(onPendingEdit).toHaveBeenCalledWith("pending-a", "Queued text");
     expect(onPendingRemove).not.toHaveBeenCalled();
     expect(input).not.toHaveFocus();
@@ -737,13 +743,19 @@ describe("ThreadComposer", () => {
     await waitFor(() => expect(input).toHaveFocus());
   });
 
-  it("keeps the ordinary pending edit behavior when no delegate is supplied", () => {
+  it("keeps the ordinary pending edit behavior when no delegate is supplied", async () => {
     const onPendingRemove = vi.fn();
     render(<ThreadComposer onSend={vi.fn()} autoFocus={false} pendingMessages={[{ id: "pending-b", content: "Move to draft" }]}
       onPendingRemove={onPendingRemove} />);
-    fireEvent.click(screen.getByRole("button", { name: "Edit message" }));
+    const pendingMessage = screen.getByRole("listitem");
+    fireEvent.pointerDown(within(pendingMessage).getByRole("button", { name: /^(More actions|更多操作)$/ }), {
+      button: 0,
+      ctrlKey: false,
+    });
+    fireEvent.click(await screen.findByRole("menuitem", { name: i18n.t("thread.composer.pendingQueue.editAria") }));
     expect(screen.getByRole("textbox", { name: "Message input" })).toHaveValue("Move to draft");
     expect(onPendingRemove).toHaveBeenCalledWith("pending-b");
+    await waitFor(() => expect(screen.getByRole("textbox", { name: "Message input" })).toHaveFocus());
   });
 
   it("forwards the full model option and active executor to the shared selector", async () => {

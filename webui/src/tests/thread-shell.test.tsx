@@ -3,6 +3,7 @@ import { useEffect, useState, type ReactNode } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { ThreadShell } from "@/components/thread/ThreadShell";
+import i18n from "@/i18n";
 import { DeliveredFileCard } from "@/components/deliver/DeliveredFileCard";
 import { invalidateAgents } from "@/components/room/useAgents";
 import { useFilePreviewStore } from "@/components/deliver/filePreviewStore";
@@ -1235,7 +1236,7 @@ describe("ThreadShell", () => {
       expect(screen.queryByText("delete me cleanly")).not.toBeInTheDocument();
     });
     expect(
-      screen.getByPlaceholderText("有什么事情，交给Mona吧"),
+      screen.getByRole("textbox", { name: i18n.t("thread.composer.inputAria") }),
     ).toBeInTheDocument();
   });
 
@@ -1815,10 +1816,10 @@ describe("ThreadShell", () => {
     expect(screen.queryByText("old answer")).not.toBeInTheDocument();
     await waitFor(() =>
       expect(
-        screen.getByPlaceholderText("有什么事情，交给Mona吧"),
+        screen.getByRole("textbox", { name: i18n.t("thread.composer.inputAria") }),
       ).toBeInTheDocument(),
     );
-    const input = screen.getByPlaceholderText("有什么事情，交给Mona吧");
+    const input = screen.getByRole("textbox", { name: i18n.t("thread.composer.inputAria") });
     expect(input.className).toContain("min-h-[78px]");
     expect(screen.queryByText("old answer")).not.toBeInTheDocument();
   });

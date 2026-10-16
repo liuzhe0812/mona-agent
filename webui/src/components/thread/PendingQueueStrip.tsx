@@ -1,3 +1,4 @@
+import { useRef } from "react";
 import { CornerDownRight, ListStart, MoreHorizontal, Pencil, Trash2 } from "lucide-react";
 import { useTranslation } from "react-i18next";
 
@@ -28,6 +29,7 @@ export function PendingQueueStrip({
   isFull,
 }: PendingQueueStripProps) {
   const { t, i18n } = useTranslation();
+  const suppressTriggerFocusRef = useRef(false);
   const isChinese = (i18n.resolvedLanguage ?? i18n.language).startsWith("zh");
 
   if (messages.length === 0) return null;
@@ -109,9 +111,22 @@ export function PendingQueueStrip({
                     </TooltipTrigger>
                     <TooltipContent>{moreLabel}</TooltipContent>
                   </Tooltip>
-                  <DropdownMenuContent align="end">
+                  <DropdownMenuContent
+                    align="end"
+                    onCloseAutoFocus={(event) => {
+                      if (!suppressTriggerFocusRef.current) return;
+                      suppressTriggerFocusRef.current = false;
+                      event.preventDefault();
+                    }}
+                  >
                     {canEdit ? (
-                      <DropdownMenuItem disabled={msg.locked} onSelect={() => onEdit(msg.id)}>
+                      <DropdownMenuItem
+                        disabled={msg.locked}
+                        onSelect={() => {
+                          suppressTriggerFocusRef.current = true;
+                          onEdit(msg.id);
+                        }}
+                      >
                         <Pencil className="h-4 w-4" aria-hidden />
                         {t("thread.composer.pendingQueue.editAria")}
                       </DropdownMenuItem>
