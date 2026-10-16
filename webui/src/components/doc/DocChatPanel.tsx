@@ -13,16 +13,22 @@ interface DocChatPanelProps {
   chatId: string | null;
   /** Adds document- or workflow-specific context to composer sends. */
   getSendOptions?: (content: string) => SendOptions | undefined;
+  prepareContent?: (content: string) => string;
   placeholder?: string;
   /** Notified when streaming state changes (true = AI replying, false = idle). */
   onStreamingChange?: (streaming: boolean) => void;
+  onReadyChange?: (chatId: string | null) => void;
+  hideStop?: boolean;
 }
 
 export function DocChatPanel({
   chatId,
   getSendOptions,
+  prepareContent,
   placeholder,
   onStreamingChange,
+  onReadyChange,
+  hideStop = false,
 }: DocChatPanelProps) {
   const [quote, setQuote] = useState<MessageQuote | null>(null);
   const bottomRef = useRef<HTMLDivElement>(null);
@@ -55,6 +61,11 @@ export function DocChatPanel({
   } = useMonaStream(chatId, historical, hasPendingToolCalls);
 
   useEffect(() => {
+    onReadyChange?.(loading || historyError ? null : chatId);
+    return () => onReadyChange?.(null);
+  }, [chatId, historyError, loading, onReadyChange]);
+
+  useEffect(() => {
     onStreamingChangeRef.current?.(isStreaming);
   }, [isStreaming]);
 
@@ -82,17 +93,19 @@ export function DocChatPanel({
   ) => {
     if (!chatId) return;
     const contextOptions = getSendOptions?.(content);
+    const sendContent = prepareContent?.(content) ?? content;
     const options: SendOptions = {
       ...contextOptions,
       ...composerOptions,
       displayContent: composerOptions?.displayContent ?? contextOptions?.displayContent ?? content,
+      quote: composerOptions?.quote ?? contextOptions?.quote,
     };
     if (isStreaming) {
-      pendingQueue.enqueue(content, images, options);
+      pendingQueue.enqueue(sendContent, images, options);
       return;
     }
-    send(content, images, options);
-  }, [chatId, getSendOptions, isStreaming, pendingQueue, send]);
+    send(sendContent, images, options);
+  }, [chatId, getSendOptions, isStreaming, pendingQueue, prepareContent, send]);
 
   const handlePendingAppend = useCallback((id: string) => {
     const pending = pendingQueue.messages.find((message) => message.id === id);
@@ -152,7 +165,7 @@ export function DocChatPanel({
           isStreaming={isStreaming}
           isAwaitingModelResponse={isAwaitingModelResponse}
           stopping={stopping}
-          onStop={stop}
+          onStop={hideStop ? undefined : stop}
           disabled={!chatId}
           placeholder={placeholder ?? "输入消息..."}
           quote={quote}

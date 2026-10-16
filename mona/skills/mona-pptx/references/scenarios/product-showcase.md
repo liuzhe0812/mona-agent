@@ -14,7 +14,7 @@
 
 ## 页面表达
 
-| 页面用途 | 原生预设 | 内容关系 |
+| 页面用途 | 通用原生回退 | 内容关系 |
 |---|---|---|
 | 产品主视觉封面 | `dark-cover-split` | `none` |
 | 产品价值主张 | `dark-editorial-essay` | `none` |
@@ -31,6 +31,18 @@
 
 正文写用户提供的实际内容；所有图片路径必须指向已取得的真实素材。数组、数字、单位、来源和关系遵守当前预设容量；不适配时组合原生对象，不删事实或缩小整页。
 
-下图为 `product-feature-proof` 的真实 Office 渲染；示例资料仅验证构图，不代表业务结论。
 
-![产品展示特色页](../../assets/presets/product-feature-proof.png)
+## 选定的 Dashi 源页
+
+以下8页是本场景从 Dashi 真实来源模板中选出的候选；不代表全部来源页已迁入。先用 `inspect capabilities` 的 `presetScenario` 查询，再指定某个 `templateId` 查看真实文本字段与字数限制。需要看画面时，用 `inspect` 的 `mode:"visual"`、`templateId` 和能力回执中的字段进行隔离预览；写入前仍应确认字段名、证据与布局。
+
+| 用途 | Dashi 页 ID | 来源页名 | 页面角色 | 选择理由 |
+|---|---|---|---|---|
+| cover | `theme02_page001` | 封面 · Cover | cover、image | 封面：产品发布主视觉，可替换封面媒体。 |
+| body | `theme02_page006` | 研究方法 · Method | context | 正文：拆解产品方法、机制与能力模块。 |
+| metrics | `theme04_page032` | 资本计分卡 | metrics、result | 指标：用能力记分卡总结产品表现维度。 |
+| chart | `theme02_page072` | 主题河流 · Stream | trend | 图表：展示主题或功能采用趋势。 |
+| comparison | `theme02_page054` | 差距图 · Dumbbell | comparison | 对比：比较产品方案或版本差距。 |
+| process | `theme02_page056` | 策略路线 · Roadmap | relationship、process、actions | 流程：说明发布、部署或采用路线。 |
+| case-image | `theme02_page013` | 案例图景 · Showcase | case、image | 图片案例：展示产品在真实使用场景中的效果。 |
+| closing | `theme04_page074` | 核心结论 | data、report、statement、metrics、observation、result | 结尾：归纳产品核心结论与价值。 |

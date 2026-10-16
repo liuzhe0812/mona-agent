@@ -40,6 +40,6 @@
 
 ## 参考怎么用
 
-[完整原生示例](native-design-examples.md)提供编辑式证据页、五项并列页和产品大图页的 JSON 与真实预览。先看适合当前内容的一页，提取比例、阅读路径和强调方式，再修改内容与布局；不是原样填空。
+[完整原生示例](native-design-examples.md)提供编辑式证据页、五项并列页和产品大图页的操作 JSON。需要看实际效果时，在隔离临时文稿中运行选中的操作并用 `inspect` 的 `mode:"visual"` 检查；然后提取比例、阅读路径和强调方式，再按当前内容调整，不要原样填空。
 
-[预设索引](preset-index.md)提供更多已经设计好的原生页。预设命中时可以直接使用，容量不合适时改用原生构图，不连续试字段、不删除事实、不把未知内容统一降级为双栏。
+[预设索引](preset-index.md)提供通用原生构图的 ID。Dashi 源页使用 `inspect capabilities` 的 `presetScenario` 过滤，查询具体 `templateId` 后可用 `inspect` 的 `mode:"visual"` 和 `templateFields` 在隔离副本中按需预览。实际字段名和 `maxChars` 以能力回执为准。源页不适配时可以回到通用原生构图，不连续试字段、不删除事实、不把未知内容统一降级为双栏。

@@ -171,6 +171,8 @@ def _sha256(path: Path) -> str:
                 ),
                 "includeData": BooleanSchema(description="For slides, false returns chart text style without categories and series; default true"),
                 "presetId": StringSchema("For visual: render this preset in an isolated copy; does not change or review the live deck", nullable=True),
+                "templateId": StringSchema("For capabilities: inspect actual Dashi text fields; for visual: preview this template in an isolated copy", nullable=True),
+                "templateFields": ObjectSchema({}, description="Registered Dashi template text fields for visual preview", additional_properties=True),
                 "presetContent": ObjectSchema({}, description="Real preset content for capacity matching or visual preview; image.assetPath uses the workspace", additional_properties=True),
                 "presetRole": StringSchema("For capabilities: optional preset role filter", nullable=True),
                 "presetRelation": StringSchema(
@@ -434,7 +436,20 @@ class OfficeTool(Tool, ContextAware):
                 continue
 
             copied_payload = dict(payload)
-            if operation.get("op") == "slide_add_image" and "assetPath" in payload:
+            if operation.get("op") == "slide_add_template":
+                from mona.office.ppt_templates import prepare_ppt_template_assets
+
+                copied_payload["templateAssets"] = prepare_ppt_template_assets(
+                    payload.get("templateId")
+                )
+            elif operation.get("op") == "slide_add_image" and "assetId" in payload:
+                from mona.office.ppt_assets import get_ppt_asset_data_url
+
+                if "assetPath" in payload or "dataUrl" in payload:
+                    raise ValueError("Choose one of assetId, assetPath or dataUrl")
+                copied_payload["dataUrl"] = get_ppt_asset_data_url(payload["assetId"])
+                copied_payload.pop("assetId", None)
+            elif operation.get("op") == "slide_add_image" and "assetPath" in payload:
                 copied_payload["dataUrl"] = _asset_data_url(payload["assetPath"], workspace)
                 copied_payload.pop("assetPath", None)
             elif operation.get("op") == "slide_compose":
@@ -828,6 +843,13 @@ class OfficeTool(Tool, ContextAware):
         if action == "inspect":
             if query is None:
                 return "Error: 'query' is required for 'inspect'"
+            if query.get("mode") == "visual" and query.get("templateId"):
+                from mona.office.ppt_templates import prepare_ppt_template_assets
+
+                query = {
+                    **query,
+                    "templateAssets": prepare_ppt_template_assets(query["templateId"]),
+                }
             if isinstance(query.get("presetContent"), dict):
                 prepared = self._prepare_slide_assets([{
                     "op": "slide_add_preset", "payload": {"content": query["presetContent"]},

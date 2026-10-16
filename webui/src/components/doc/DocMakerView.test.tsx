@@ -1,4 +1,4 @@
-import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import type { OfficeSessionState } from "@/components/office/types";
@@ -71,34 +71,69 @@ vi.mock("@/components/office/OfficeEditorHost", () => ({
   ),
 }));
 
-vi.mock("@/components/doc/DocChatPanel", () => ({
-  DocChatPanel: ({ chatId, getSendOptions }: { chatId: string; getSendOptions?: (content: string) => Record<string, unknown> | undefined }) => (
-    <div>
-      <span>AI 对话：{chatId}</span>
-      <button type="button" onClick={() => mocks.sendMessage(chatId, "修改当前文档", undefined, getSendOptions?.("修改当前文档"))}>发送测试消息</button>
-    </div>
-  ),
-}));
+vi.mock("@/components/doc/DocChatPanel", async () => {
+  const { useEffect } = await import("react");
+  return {
+    DocChatPanel: ({ chatId, getSendOptions, onReadyChange }: {
+      chatId: string;
+      getSendOptions?: (content: string) => Record<string, unknown> | undefined;
+      onReadyChange?: (chatId: string | null) => void;
+    }) => {
+      useEffect(() => {
+        onReadyChange?.(chatId);
+        return () => onReadyChange?.(null);
+      }, [chatId, onReadyChange]);
+      return (
+        <div>
+          <span>AI 对话：{chatId}</span>
+          <button type="button" onClick={() => mocks.sendMessage(chatId, "修改当前文档", undefined, getSendOptions?.("修改当前文档"))}>发送测试消息</button>
+        </div>
+      );
+    },
+  };
+});
 
 vi.mock("@/components/doc/video/VideoMakerView", () => ({
   VideoMakerView: ({
     onProjectChange,
+    initialProject,
+    onStyleWorkspaceChange,
+    styleConversationRequest,
   }: {
     onProjectChange?: (project: {
       name: string;
-      phase: "done";
-      chatId: string;
+      phase: "storyboard" | "done";
+      chatId: string | null;
     }) => void;
+    initialProject?: { name: string; phase: string; chatId: string | null } | null;
+    onStyleWorkspaceChange?: (state: { chatId: string; visible: boolean; ready: boolean } | null) => void;
+    styleConversationRequest?: number;
   }) => (
     <div>
       视频工作流
+      <span data-testid="style-conversation-request">{styleConversationRequest}</span>
+      <button onClick={() => onStyleWorkspaceChange?.({ chatId: "style-chat", visible: true, ready: true })}>打开风格对话</button>
+      <button onClick={() => onStyleWorkspaceChange?.({ chatId: "style-chat", visible: false, ready: true })}>隐藏风格对话</button>
+      <span data-testid="embedded-video-project-chat-id">{initialProject?.chatId}</span>
       <button
         type="button"
         onClick={() =>
           onProjectChange?.({
-            name: "新建完成的视频",
+            name: "新建视频",
+            phase: "storyboard",
+            chatId: "storyboard-chat",
+          })
+        }
+      >
+        模拟确认分镜
+      </button>
+      <button
+        type="button"
+        onClick={() =>
+          onProjectChange?.({
+            name: initialProject?.name ?? "新建完成的视频",
             phase: "done",
-            chatId: "chat-1",
+            chatId: initialProject?.chatId ?? null,
           })
         }
       >
@@ -125,6 +160,30 @@ function officeSession(type: "docs" | "sheets" | "slides", name: string): Office
     saveState: "clean",
     lastError: null,
   };
+}
+
+function videoProject(name: string, chatId: string) {
+  return {
+    name,
+    createdAt: Date.now(),
+    resolution: "1920x1080",
+    phase: "producing" as const,
+    hasVideo: false,
+    outputStale: false,
+    chatId,
+  };
+}
+
+function storeVideoTab(project: ReturnType<typeof videoProject>, activeTabId = `video:${project.name}`) {
+  localStorage.setItem("mona.ai-docs.workspace.v1", JSON.stringify([{
+    id: `video:${project.name}`,
+    kind: "video-workflow",
+    title: project.name,
+    chatId: project.chatId,
+    project: { name: project.name, phase: project.phase, chatId: project.chatId },
+    createdAt: project.createdAt,
+  }]));
+  localStorage.setItem("mona.ai-docs.active-tab.v1", activeTabId);
 }
 
 describe("DocMakerView", () => {
@@ -227,13 +286,13 @@ describe("DocMakerView", () => {
 
   it("refreshes the start history when an embedded video finishes exporting", async () => {
     const finishedProject = {
-      name: "新建完成的视频",
+      name: "新建视频",
       createdAt: Date.now(),
       resolution: "1920x1080",
       phase: "done" as const,
       hasVideo: true,
       outputStale: false,
-      chatId: "chat-1",
+      chatId: "storyboard-chat",
     };
     mocks.fetchVideoProjects
       .mockResolvedValueOnce({ projects: [] })
@@ -241,13 +300,100 @@ describe("DocMakerView", () => {
     render(<DocMakerView />);
 
     fireEvent.click(screen.getByRole("button", { name: /^视频$/ }));
+    fireEvent.click(await screen.findByRole("button", { name: "模拟确认分镜" }));
     fireEvent.click(await screen.findByRole("button", { name: "模拟视频导出完成" }));
     fireEvent.click(screen.getByRole("tab", { name: "开始" }));
 
     expect(
-      await screen.findByTestId("document-history-row-video:新建完成的视频"),
+      await screen.findByTestId("document-history-row-video:新建视频"),
     ).toHaveTextContent("视频 · 已完成");
-    expect(mocks.fetchVideoProjects).toHaveBeenCalledTimes(2);
+    expect(mocks.fetchVideoProjects).toHaveBeenCalledTimes(3);
+  });
+
+  it("opens, restores, and closes a new video tab without creating a chat", async () => {
+    const onVisibleConversationChange = vi.fn();
+    const onVideoChatsChange = vi.fn();
+    const renderView = () => (
+      <DocMakerView
+        onVisibleConversationChange={onVisibleConversationChange}
+        onVideoChatsChange={onVideoChatsChange}
+      />
+    );
+    const view = render(renderView());
+
+    fireEvent.click(screen.getByRole("button", { name: /^视频$/ }));
+    expect(await screen.findByRole("tab", { name: "新建视频" })).toHaveAttribute("aria-selected", "true");
+    expect(screen.queryByRole("complementary", { name: "制作对话" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /制作对话/ })).not.toBeInTheDocument();
+    await waitFor(() => {
+      expect(JSON.parse(localStorage.getItem("mona.ai-docs.workspace.v1") ?? "[]")).toEqual([
+        expect.objectContaining({
+          kind: "video-workflow",
+          chatId: null,
+          project: null,
+        }),
+      ]);
+    });
+    expect(mocks.newChat).not.toHaveBeenCalled();
+    expect(mocks.sendMessage).not.toHaveBeenCalled();
+    expect(onVideoChatsChange).toHaveBeenLastCalledWith([]);
+    expect(onVideoChatsChange.mock.calls.flatMap(([chatIds]) => chatIds)).not.toContain(null);
+    expect(onVisibleConversationChange).toHaveBeenLastCalledWith(null);
+
+    view.unmount();
+    render(renderView());
+    expect(await screen.findByRole("tab", { name: "新建视频" })).toHaveAttribute("aria-selected", "true");
+    expect(screen.queryByRole("complementary", { name: "制作对话" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /制作对话/ })).not.toBeInTheDocument();
+    expect(mocks.newChat).not.toHaveBeenCalled();
+    expect(mocks.sendMessage).not.toHaveBeenCalled();
+
+    fireEvent.click(screen.getByRole("button", { name: "关闭 新建视频" }));
+    await waitFor(() => expect(screen.queryByRole("tab", { name: "新建视频" })).not.toBeInTheDocument());
+    expect(mocks.newChat).not.toHaveBeenCalled();
+    expect(mocks.sendMessage).not.toHaveBeenCalled();
+    expect(onVideoChatsChange.mock.calls.flatMap(([chatIds]) => chatIds)).not.toContain(null);
+  });
+
+  it("binds the first confirmed storyboard chat to the parent tab and registers it", async () => {
+    const onVisibleConversationChange = vi.fn();
+    const onVideoChatsChange = vi.fn();
+    render(
+      <DocMakerView
+        onVisibleConversationChange={onVisibleConversationChange}
+        onVideoChatsChange={onVideoChatsChange}
+      />,
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: /^视频$/ }));
+    await screen.findByRole("tab", { name: "新建视频" });
+    expect(screen.queryByRole("complementary", { name: "制作对话" })).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "模拟确认分镜" }));
+
+    const panel = await screen.findByRole("complementary", { name: "制作对话" });
+    expect(within(panel).getByText("AI 对话：storyboard-chat")).toBeInTheDocument();
+    await waitFor(() => expect(onVisibleConversationChange).toHaveBeenLastCalledWith("storyboard-chat"));
+    await waitFor(() => expect(onVideoChatsChange).toHaveBeenLastCalledWith(["storyboard-chat"]));
+    expect(screen.getByTestId("embedded-video-project-chat-id")).toHaveTextContent("storyboard-chat");
+    expect(mocks.newChat).not.toHaveBeenCalled();
+  });
+
+  it("does not reopen a manually collapsed director panel when the bound chat changes phase", async () => {
+    render(<DocMakerView />);
+
+    fireEvent.click(screen.getByRole("button", { name: /^视频$/ }));
+    await screen.findByRole("tab", { name: "新建视频" });
+    fireEvent.click(screen.getByRole("button", { name: "模拟确认分镜" }));
+    expect(await screen.findByRole("complementary", { name: "制作对话" })).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: "收起制作对话" }));
+    expect(screen.queryByRole("complementary", { name: "制作对话" })).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "模拟视频导出完成" }));
+
+    await waitFor(() => expect(screen.getByRole("button", { name: "展开制作对话" })).toBeInTheDocument());
+    expect(screen.queryByRole("complementary", { name: "制作对话" })).not.toBeInTheDocument();
+    expect(screen.getByTestId("embedded-video-project-chat-id")).toHaveTextContent("storyboard-chat");
+    expect(mocks.newChat).not.toHaveBeenCalled();
   });
 
   it("opens the director panel for a video selected from history and keeps it closed after refresh", async () => {
@@ -281,6 +427,129 @@ describe("DocMakerView", () => {
     expect(screen.queryByRole("complementary", { name: "制作对话" })).not.toBeInTheDocument();
     fireEvent.click(screen.getByRole("button", { name: "展开制作对话" }));
     expect(await screen.findByRole("separator", { name: "调整右侧栏宽度" })).toBeInTheDocument();
+  });
+
+  it("reuses an already-open video tab for a requested chat", async () => {
+    const project = videoProject("季度培训", "video-chat");
+    storeVideoTab(project, "start");
+    mocks.fetchVideoProjects.mockResolvedValue({ projects: [project] });
+    const onHandled = vi.fn();
+
+    render(
+      <DocMakerView
+        videoConversationRequest={{ chatId: project.chatId, requestId: 1 }}
+        onVideoConversationHandled={onHandled}
+      />,
+    );
+
+    await waitFor(() => expect(screen.getByRole("tab", { name: project.name })).toHaveAttribute("aria-selected", "true"));
+    await waitFor(() => expect(onHandled).toHaveBeenCalledWith(1));
+    expect(screen.getAllByRole("tab", { name: project.name })).toHaveLength(1);
+    expect(mocks.fetchVideoProjects).toHaveBeenCalledOnce();
+    expect(mocks.newChat).not.toHaveBeenCalled();
+    expect(mocks.sendMessage).not.toHaveBeenCalled();
+  });
+
+  it("opens a video project by chatId and deduplicates a repeated request", async () => {
+    const project = videoProject("历史培训", "history-video-chat");
+    mocks.fetchVideoProjects.mockResolvedValue({ projects: [project] });
+    const onHandled = vi.fn();
+    const request = (requestId: number) => (
+      <DocMakerView
+        videoConversationRequest={{ chatId: project.chatId, requestId }}
+        onVideoConversationHandled={onHandled}
+      />
+    );
+    const view = render(request(1));
+
+    await waitFor(() => expect(screen.getByRole("tab", { name: project.name })).toHaveAttribute("aria-selected", "true"));
+    expect(await screen.findByTestId("embedded-video-project-chat-id")).toHaveTextContent(project.chatId);
+    await waitFor(() => expect(onHandled).toHaveBeenCalledWith(1));
+    const lookupCount = mocks.fetchVideoProjects.mock.calls.length;
+
+    view.rerender(request(2));
+
+    await waitFor(() => expect(onHandled).toHaveBeenCalledWith(2));
+    expect(screen.getAllByRole("tab", { name: project.name })).toHaveLength(1);
+    expect(mocks.fetchVideoProjects).toHaveBeenCalledTimes(lookupCount);
+    expect(mocks.newChat).not.toHaveBeenCalled();
+    expect(mocks.sendMessage).not.toHaveBeenCalled();
+  });
+
+  it("reports a video chat as visible only while the module and conversation are visible", async () => {
+    const project = videoProject("可见性测试", "visible-video-chat");
+    const nextProject = videoProject("目标视频", "target-video-chat");
+    storeVideoTab(project);
+    mocks.fetchVideoProjects.mockResolvedValue({ projects: [project] });
+    const onVisibleConversationChange = vi.fn();
+    const onVideoConversationHandled = vi.fn();
+    const renderView = (visible: boolean, request: { chatId: string; requestId: number } | null = null) => (
+      <DocMakerView
+        visible={visible}
+        videoConversationRequest={request}
+        onVideoConversationHandled={onVideoConversationHandled}
+        onVisibleConversationChange={onVisibleConversationChange}
+      />
+    );
+    const view = render(renderView(false));
+
+    await screen.findByRole("complementary", { name: "制作对话" });
+    await waitFor(() => expect(onVisibleConversationChange).toHaveBeenLastCalledWith(null));
+    expect(onVisibleConversationChange).not.toHaveBeenCalledWith(project.chatId);
+
+    view.rerender(renderView(true));
+    await waitFor(() => expect(onVisibleConversationChange).toHaveBeenLastCalledWith(project.chatId));
+    fireEvent.click(screen.getByRole("button", { name: "收起制作对话" }));
+    await waitFor(() => expect(onVisibleConversationChange).toHaveBeenLastCalledWith(null));
+
+    fireEvent.click(screen.getByRole("button", { name: "展开制作对话" }));
+    await waitFor(() => expect(onVisibleConversationChange).toHaveBeenLastCalledWith(project.chatId));
+    const requestCallStart = onVisibleConversationChange.mock.calls.length;
+    let resolveLookup!: (result: { projects: ReturnType<typeof videoProject>[] }) => void;
+    const pendingLookup = new Promise<{ projects: ReturnType<typeof videoProject>[] }>((resolve) => {
+      resolveLookup = resolve;
+    });
+    mocks.fetchVideoProjects.mockImplementationOnce(() => pendingLookup);
+
+    view.rerender(renderView(true, { chatId: nextProject.chatId, requestId: 17 }));
+    await waitFor(() => expect(mocks.fetchVideoProjects).toHaveBeenCalledTimes(2));
+    await waitFor(() => expect(onVisibleConversationChange).toHaveBeenLastCalledWith(null));
+    expect(onVisibleConversationChange.mock.calls.slice(requestCallStart)).not.toContainEqual([project.chatId]);
+
+    await act(async () => resolveLookup({ projects: [project, nextProject] }));
+    await waitFor(() => expect(onVideoConversationHandled).toHaveBeenCalledWith(17));
+    expect(onVisibleConversationChange).toHaveBeenLastCalledWith(null);
+    await waitFor(() => expect(
+      screen.getAllByTestId("embedded-video-project-chat-id").some((element) => element.textContent === nextProject.chatId),
+    ).toBe(true));
+
+    view.rerender(renderView(true, null));
+    await waitFor(() => expect(onVisibleConversationChange).toHaveBeenLastCalledWith(nextProject.chatId));
+    expect(onVisibleConversationChange.mock.calls.slice(requestCallStart)).not.toContainEqual([project.chatId]);
+    expect(mocks.newChat).not.toHaveBeenCalled();
+    expect(mocks.sendMessage).not.toHaveBeenCalled();
+  });
+
+  it("offers history navigation when no video project matches the requested chat", async () => {
+    mocks.fetchVideoProjects.mockResolvedValue({ projects: [] });
+    const onHandled = vi.fn();
+    const onShowChatHistory = vi.fn();
+
+    render(
+      <DocMakerView
+        videoConversationRequest={{ chatId: "unlinked-video-chat", requestId: 7 }}
+        onVideoConversationHandled={onHandled}
+        onShowChatHistory={onShowChatHistory}
+      />,
+    );
+
+    expect(await screen.findByRole("dialog", { name: "视频项目未能打开" })).toHaveTextContent("没有找到这段对话关联的视频项目");
+    await waitFor(() => expect(onHandled).toHaveBeenCalledWith(7));
+    fireEvent.click(screen.getByRole("button", { name: "查看历史对话" }));
+
+    expect(onShowChatHistory).toHaveBeenCalledWith("unlinked-video-chat");
+    expect(mocks.newChat).not.toHaveBeenCalled();
+    expect(mocks.sendMessage).not.toHaveBeenCalled();
   });
 
   it("opens the director panel when restoring the active video tab", async () => {
@@ -619,4 +888,22 @@ describe("DocMakerView", () => {
       officeDisplayName: "新建演示文稿",
     }));
   });
+  it("routes a style chat back to its existing editor and reads only its visible conversation", async () => {
+    const project = videoProject("风格入口测试", "video-chat");
+    storeVideoTab(project);
+    mocks.fetchVideoProjects.mockResolvedValue({ projects: [project] });
+    const onVisible = vi.fn();
+    const onHandled = vi.fn();
+    const view = render(<DocMakerView onVisibleConversationChange={onVisible} />);
+    fireEvent.click(await screen.findByRole("button", { name: "打开风格对话" }));
+    await waitFor(() => expect(onVisible).toHaveBeenLastCalledWith("style-chat"));
+    expect(screen.queryByRole("complementary", { name: "制作对话" })).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "隐藏风格对话" }));
+    await waitFor(() => expect(onVisible).toHaveBeenLastCalledWith(null));
+    view.rerender(<DocMakerView onVisibleConversationChange={onVisible} videoConversationRequest={{ chatId: "style-chat", requestId: 7 }} onVideoConversationHandled={onHandled} />);
+    await waitFor(() => expect(onHandled).toHaveBeenCalledWith(7));
+    expect(screen.getByTestId("style-conversation-request")).toHaveTextContent("7");
+    expect(mocks.newChat).not.toHaveBeenCalled();
+  });
+
 });

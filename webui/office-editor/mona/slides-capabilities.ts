@@ -2,6 +2,7 @@ import { COMPOSE_FIELDS } from './slides-layout'
 import { PRESETS, PRESET_SCENARIOS, presetScenarioCatalog } from './slides-presets'
 import { DESIGN_CATALOG } from './slides-design'
 import { replaceColorsCapability } from './slides-colors'
+import { dashiCapability, dashiScenarioCatalog } from './slides-dashi'
 import { designCapability, pathCapability, richTextFields } from './slides-design-schema'
 
 export interface SlidesCapability {
@@ -16,6 +17,7 @@ export interface SlidesCapabilitiesResult {
   documentType: 'slides'
   designs?: Array<{ id: string; label: string; use: string }>
   presetScenarios?: ReturnType<typeof presetScenarioCatalog>
+  templateScenarios?: ReturnType<typeof dashiScenarioCatalog>
   operations: Array<Pick<SlidesCapability, 'op' | 'description'> & { payloadSchema?: Record<string, unknown> }>
   availableOperations: string[]
   unsupportedOperations: string[]
@@ -84,6 +86,7 @@ const chartFields = {
 }
 
 const directCapabilities: SlidesCapability[] = [
+  dashiCapability,
   replaceColorsCapability,
   designCapability,
   pathCapability,
@@ -231,12 +234,13 @@ const directCapabilities: SlidesCapability[] = [
     payloadSchema: {
       type: 'object',
       required: ['slideId', 'x', 'y', 'width', 'height'],
-      oneOf: [{ required: ['assetPath'] }, { required: ['dataUrl'] }],
+      oneOf: [{ required: ['assetPath'] }, { required: ['dataUrl'] }, { required: ['assetId'] }],
       properties: {
         slideId,
         ...geometry,
         dataUrl: { type: 'string', description: '受支持图片格式的 base64 data URL' },
         assetPath: { type: 'string', description: '优先使用当前工作区的图片路径，由 office 工具读取并转为 dataUrl' },
+        assetId: {type:'string',enum:Array.from({length:12},(_,index)=>`theme03-3d-${String(index+1).padStart(2,'0')}`),description:'可复用的 Dashi 原始完整3D图组；由 Office 解码为无损PNG后插入，不能同时提供路径或dataUrl。'},
       },
     },
     description: '插入可移动、可缩放的图片。',
@@ -450,5 +454,6 @@ export function getSlidesCapabilities(
     note: '未指定 operations 时仅返回操作目录；指定实际名称读取参数，每次最多3项，剩余见 nextOperations。未知名称列在 unsupportedOperations，不影响已知项。改品牌色用 inspect palette + slide_replace_colors 原位修改，不需要关闭或新建文稿。',
     ...(!names.length ? { designs: [...DESIGN_CATALOG] } : {}),
     presetScenarios: presetScenarioCatalog(),
+    templateScenarios: dashiScenarioCatalog(),
   }
 }

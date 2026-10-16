@@ -24,15 +24,15 @@ function textLayout(lines: Array<{ text: string; top: number; height: number; wi
   }
 }
 
-function textNode(id: string, x: number, y: number, w: number, h: number, text: RenderTextLayout): RenderNode {
+function textNode(id: string, x: number, y: number, w: number, h: number, text: RenderTextLayout, rotationDeg = 0): RenderNode {
   return {
-    id, durableId: id, sourceId: id, type: 'text', box: placedBox(x, y, w, h),
+    id, durableId: id, sourceId: id, type: 'text', box: placedBox(x, y, w, h, rotationDeg),
     fill: { kind: 'none' }, text,
   } as RenderNode
 }
 
-function placedBox(x: number, y: number, w: number, h: number) {
-  return { x, y, w, h, rotationDeg: 0, flipH: false, flipV: false, centerX: x + w / 2, centerY: y + h / 2 }
+function placedBox(x: number, y: number, w: number, h: number, rotationDeg = 0) {
+  return { x, y, w, h, rotationDeg, flipH: false, flipV: false, centerX: x + w / 2, centerY: y + h / 2 }
 }
 
 function renderSlide(nodes: RenderNode[]): RenderSlide {
@@ -116,6 +116,67 @@ describe('native mixed slide composition', () => {
     expect(warnings.filter(isBlockingLayoutWarning)).toHaveLength(2)
   })
 
+  it('checks rotated vertical text overflow against its local glyph ink without applying node rotation', () => {
+    const text = textLayout([{ text: '商业兑现→', top: 0, height: 26, width: 95 }])
+    const run = text.lines[0]!.runs[0]!
+    run.x = 26
+    run.baselineY = 0
+    run.rotate90 = true
+    const vertical = textNode('e_vertical', 300, 300, 27, 97, text, 180)
+
+    expect(slideLayoutWarnings(renderSlide([vertical]), new Set(['e_vertical']))).toEqual([])
+
+    run.x = 28
+    expect(slideLayoutWarnings(renderSlide([vertical]), new Set(['e_vertical']))).toEqual([
+      expect.stringContaining('[错误] e_vertical 文字溢出'),
+    ])
+  })
+
+  it('rotates vertical glyph runs before testing overlap with a title', () => {
+    for (const rotation of ['rotate90', 'rotate270'] as const) {
+      const sidebarText = textLayout([{ text: 'PROCESS', top: 0, height: 20, width: 150 }])
+      sidebarText.lines[0]!.runs[0]![rotation] = true
+      sidebarText.lines[0]!.runs[0]!.x = rotation === 'rotate90' ? 20 : 154
+      sidebarText.lines[0]!.runs[0]!.baselineY = rotation === 'rotate90' ? 0 : 150
+      const sidebarY = rotation === 'rotate90' ? 100 : 250
+      const sidebar = textNode('sidebar', 100, sidebarY, 30, 200, sidebarText)
+      const title = textNode('title', 140, sidebarY, 100, 30, textLayout([
+        { text: '标题', top: 0, height: 20, width: 80 },
+      ]))
+
+      expect(slideLayoutWarnings(renderSlide([sidebar, title]), new Set(['sidebar', 'title']))).toEqual([])
+    }
+  })
+
+  it('rotates a text node around its box center before testing overlap', () => {
+    const sidebar = textNode('sidebar', 100, 100, 200, 30, textLayout([
+      { text: 'PROCESS', top: 0, height: 20, width: 150 },
+    ]), 90)
+    const title = textNode('title', 220, 100, 100, 30, textLayout([
+      { text: '标题', top: 0, height: 20, width: 80 },
+    ]))
+
+    expect(slideLayoutWarnings(renderSlide([sidebar, title]), new Set(['sidebar', 'title']))).toEqual([])
+  })
+
+  it('checks page edges against ink for borderless text but still blocks ink outside the page', () => {
+    const decorative = textNode('decorative', 1160, 620, 200, 200, textLayout([
+      { text: '03', top: 10, height: 80, width: 80 },
+    ], 90))
+    const emptyFrame = textNode('empty', 1200, 700, 200, 100, textLayout([
+      { text: '', top: 0, height: 20, width: 0 },
+    ], 20))
+    const overflowingInk = textNode('overflowing-ink', 1250, 90, 100, 40, textLayout([
+      { text: 'outside', top: 0, height: 20, width: 60 },
+    ], 20))
+    const warnings = slideLayoutWarnings(
+      renderSlide([decorative, emptyFrame, overflowingInk]),
+      new Set(['decorative', 'empty', 'overflowing-ink']),
+    )
+
+    expect(warnings).toEqual([expect.stringContaining('[错误] overflowing-ink 超出页面边界')])
+  })
+
   it('reports text placed over a picture as a visual-review issue', () => {
     const picture = {
       id: 'pic', durableId: 'e_picture', sourceId: 'pic', type: 'picture',
@@ -129,6 +190,17 @@ describe('native mixed slide composition', () => {
       expect.stringContaining('[需检查] e_caption 的文字与图片 e_picture 交叠'),
     ])
     expect(warnings.some(isBlockingLayoutWarning)).toBe(false)
+  })
+
+  it('allows a separate label in the empty gap between two text lines', () => {
+    const lines = textNode('lines', 100, 100, 300, 180, textLayout([
+      { text: '第一行', top: 0, height: 24, width: 120 },
+      { text: '第二行', top: 140, height: 24, width: 120 },
+    ]))
+    const label = textNode('label', 100, 160, 300, 40, textLayout([
+      { text: '行间独立标签', top: 0, height: 24, width: 160 },
+    ]))
+    expect(slideLayoutWarnings(renderSlide([lines, label]), new Set(['lines', 'label']))).toEqual([])
   })
 
   it('checks text inside groups using its absolute slide position', () => {

@@ -1,7 +1,10 @@
-import type { RenderNode, RenderSlide, RenderTextLayout } from '@genoffice/pptx-render'
+import type { GlyphRun, RenderNode, RenderSlide, RenderTextLayout } from '@genoffice/pptx-render'
+import { glyphToDraw } from '../vendor/genoffice/apps/slides/src/renderer/konva-adapter'
 
 type Payload = Record<string, unknown>
 type AddOperation = { op: string; payload: Payload }
+type Box = { x: number; y: number; w: number; h: number }
+type TextBoundsRotation = { centerX: number; centerY: number; rotationDeg: number }
 
 export const COMPOSE_FIELDS = {
   slideId: 'Stable slide ID',
@@ -95,15 +98,16 @@ export function composeSlide(payload: Payload, slide: Pick<RenderSlide, 'widthPx
 }
 
 export function slideLayoutWarnings(slide: RenderSlide, elementIds: ReadonlySet<string>): string[] {
-  type Box = { x: number; y: number; w: number; h: number }
-  type Item = { id: string; node: RenderNode; box: Box; textBox?: Box }
+  type Item = { id: string; node: RenderNode; box: Box; textBoxes: Box[] }
   const items: Item[] = []
   const visit = (nodes: RenderNode[], offsetX = 0, offsetY = 0): void => {
     for (const node of nodes) {
       const box = { x: node.box.x + offsetX, y: node.box.y + offsetY, w: node.box.w, h: node.box.h }
       if (!node.decoration && node.durableId) {
         const text = (node.type === 'text' || node.type === 'shape') ? node.text : undefined
-        items.push({ id: node.durableId, node, box, textBox: textBounds(text, box.x, box.y) })
+        items.push({ id: node.durableId, node, box, textBoxes: renderedTextBounds(text, box.x, box.y, {
+          centerX: box.x + box.w / 2, centerY: box.y + box.h / 2, rotationDeg: node.box.rotationDeg,
+        }) })
       }
       if (node.type === 'group') visit(node.children, box.x, box.y)
     }
@@ -112,16 +116,20 @@ export function slideLayoutWarnings(slide: RenderSlide, elementIds: ReadonlySet<
 
   const warnings: string[] = []
   const contentItems = items.filter((item) => !item.node.background
-    && (item.textBox || ['picture', 'chart', 'table'].includes(item.node.type)))
-  const textOnly = contentItems.length <= 2 && contentItems.every((item) => !!item.textBox)
+    && (item.textBoxes.length || ['picture', 'chart', 'table'].includes(item.node.type)))
+  const textOnly = contentItems.length <= 2 && contentItems.every((item) => item.textBoxes.length)
   for (const item of items) {
     if (!elementIds.has(item.id)) continue
     const { box, node } = item
-    if (box.x < -0.5 || box.y < -0.5 || box.x + box.w > slide.widthPx + 0.5 || box.y + box.h > slide.heightPx + 0.5) {
+    const text = (node.type === 'text' || node.type === 'shape') ? node.text : undefined
+    const inkOnly = (node.type === 'text' || node.type === 'shape')
+      && !!text && node.fill.kind === 'none' && !node.stroke
+    const boundaryBoxes = inkOnly ? item.textBoxes : [box]
+    if (boundaryBoxes.some((bounds) => bounds.x < -0.5 || bounds.y < -0.5
+      || bounds.x + bounds.w > slide.widthPx + 0.5 || bounds.y + bounds.h > slide.heightPx + 0.5)) {
       warnings.push(`[错误] ${item.id} 超出页面边界。`)
     }
-    const text = (node.type === 'text' || node.type === 'shape') ? node.text : undefined
-    if (text && item.textBox) {
+    if (text && item.textBoxes.length) {
       const lines = text.lines.map((line) => line.runs.map((run) => run.text).join(''))
       if (lines.filter((line) => /[█▓▒■▬━]{3,}/u.test(line) && /\d/u.test(line)).length >= 2) {
         warnings.push(`[需检查] ${item.id} 使用字符条模拟数值图表，长度可能不对应数值；请用 slide_add_chart 保留分类、系列和数值，若是原文引用请说明。`)
@@ -137,9 +145,15 @@ export function slideLayoutWarnings(slide: RenderSlide, elementIds: ReadonlySet<
       const right = Math.max(...visibleRuns.map((run) => run.x + run.widthPx))
       const actualWidth = Math.max(0, right - left)
       const actualHeight = text.contentHeight
-      if (actualHeight > availableHeight + 1
-        || left < -1 || right > availableWidth + 1
-        || text.lines.some((line) => line.top < -1 || line.top + line.height > availableHeight + 1)) {
+      const rotatedVertical = visibleRuns.some((run) => run.rotate90 || run.rotate270)
+      const overflows = rotatedVertical
+        ? renderedTextBounds(text, 0, 0).some((bounds) => bounds.x < text.insets.l - 1
+          || bounds.y < text.insets.t - 1
+          || bounds.x + bounds.w > box.w - text.insets.r + 1
+          || bounds.y + bounds.h > box.h - text.insets.b + 1)
+        : actualHeight > availableHeight + 1 || left < -1 || right > availableWidth + 1
+          || text.lines.some((line) => line.top < -1 || line.top + line.height > availableHeight + 1)
+      if (overflows) {
         warnings.push(`[错误] ${item.id} 文字溢出：实际约 ${Math.ceil(actualWidth)}×${Math.ceil(actualHeight)}px，`
           + `可用 ${Math.floor(availableWidth)}×${Math.floor(availableHeight)}px；请增大文本区域、调整位置或缩短内容。`)
       }
@@ -151,16 +165,16 @@ export function slideLayoutWarnings(slide: RenderSlide, elementIds: ReadonlySet<
     for (let otherIndex = index + 1; otherIndex < items.length; otherIndex += 1) {
       const second = items[otherIndex]!
       if (!elementIds.has(first.id) && !elementIds.has(second.id)) continue
-      if (first.textBox && second.textBox) {
-        const overlap = intersection(first.textBox, second.textBox)
+      if (first.textBoxes.length && second.textBoxes.length) {
+        const overlap = first.textBoxes.flatMap((box) => second.textBoxes.map((other) => intersection(box, other))).find(Boolean)
         if (overlap) warnings.push(`[错误] ${first.id} 与 ${second.id} 的文字相互重叠`
           + `（约 ${Math.ceil(overlap.w)}×${Math.ceil(overlap.h)}px）；请调整文本区域、位置或文案。`)
         continue
       }
-      const textItem = first.textBox ? first : second.textBox ? second : undefined
+      const textItem = first.textBoxes.length ? first : second.textBoxes.length ? second : undefined
       const pictureItem = first.node.type === 'picture' ? first : second.node.type === 'picture' ? second : undefined
-      if (!textItem?.textBox || !pictureItem || pictureItem.node.background) continue
-      const overlap = intersection(textItem.textBox, pictureItem.box)
+      if (!textItem || !pictureItem || pictureItem.node.background) continue
+      const overlap = textItem.textBoxes.map((box) => intersection(box, pictureItem.box)).find(Boolean)
       if (overlap) warnings.push(`[需检查] ${textItem.id} 的文字与图片 ${pictureItem.id} 交叠`
         + `（约 ${Math.ceil(overlap.w)}×${Math.ceil(overlap.h)}px）；请确认这是有意叠字且文字可读，否则分开图文区域。`)
     }
@@ -172,22 +186,78 @@ export function isBlockingLayoutWarning(warning: string): boolean {
   return warning.startsWith('[错误]')
 }
 
-function textBounds(text: RenderTextLayout | undefined, offsetX: number, offsetY: number): { x: number; y: number; w: number; h: number } | undefined {
-  if (!text) return undefined
-  const runs = text.lines.flatMap((line) => line.runs
-    .filter((run) => run.text.trim())
-    .map((run) => ({ x: run.x, y: line.top, right: run.x + run.widthPx, bottom: line.top + line.height })))
-  if (!runs.length) return undefined
-  const left = Math.min(...runs.map((run) => run.x))
-  const top = Math.min(...runs.map((run) => run.y))
-  const right = Math.max(...runs.map((run) => run.right))
-  const bottom = Math.max(...runs.map((run) => run.bottom))
-  return {
-    x: offsetX + text.insets.l + left,
-    y: offsetY + text.insets.t + top,
-    w: right - left,
-    h: bottom - top,
+let glyphContext: CanvasRenderingContext2D | null | undefined
+
+function rotateBounds(bounds: Box, centerX: number, centerY: number, rotationDeg: number): Box {
+  const rotation = ((rotationDeg % 360) + 360) % 360
+  if (rotation === 0) return bounds
+  const radians = rotation * Math.PI / 180
+  const cos = Math.cos(radians)
+  const sin = Math.sin(radians)
+  const corners = [
+    [bounds.x, bounds.y],
+    [bounds.x + bounds.w, bounds.y],
+    [bounds.x, bounds.y + bounds.h],
+    [bounds.x + bounds.w, bounds.y + bounds.h],
+  ].map(([x, y]) => {
+    const dx = x! - centerX
+    const dy = y! - centerY
+    return { x: centerX + dx * cos - dy * sin, y: centerY + dx * sin + dy * cos }
+  })
+  const left = Math.min(...corners.map((point) => point.x))
+  const top = Math.min(...corners.map((point) => point.y))
+  const right = Math.max(...corners.map((point) => point.x))
+  const bottom = Math.max(...corners.map((point) => point.y))
+  return { x: left, y: top, w: right - left, h: bottom - top }
+}
+
+function glyphBounds(run: GlyphRun, top: number, height: number): Box {
+  let bounds = { x: run.x, y: top, w: run.widthPx, h: height }
+  let rotationTop=run.baselineY
+  if (glyphContext === undefined) glyphContext = typeof document === 'undefined' || typeof CanvasRenderingContext2D === 'undefined' ? null : document.createElement('canvas').getContext('2d')
+  if (glyphContext) {
+    const draw=glyphToDraw(run)
+    glyphContext.font = `${draw.fontStyle} ${run.fontSizePx}px ${draw.fontFamily}`
+    rotationTop=draw.y
+    const spacing = (run.letterSpacingPx ?? 0) + (run.justifyExtraPx ?? 0)
+    glyphContext.letterSpacing = `${spacing}px`
+    glyphContext.fontKerning = run.kerningOff || spacing ? 'none' : 'normal'
+    glyphContext.textBaseline = 'alphabetic'
+    glyphContext.textAlign = 'left'
+    const metrics = glyphContext.measureText(run.text)
+    if (Number.isFinite(metrics.actualBoundingBoxAscent) && Number.isFinite(metrics.actualBoundingBoxDescent)) {
+      const horizontalInk = !run.rtl && Number.isFinite(metrics.actualBoundingBoxLeft) && Number.isFinite(metrics.actualBoundingBoxRight)
+      bounds = {
+        x: horizontalInk ? run.x - metrics.actualBoundingBoxLeft : run.x,
+        y: run.baselineY - metrics.actualBoundingBoxAscent,
+        w: horizontalInk ? metrics.actualBoundingBoxLeft + metrics.actualBoundingBoxRight : run.widthPx,
+        h: metrics.actualBoundingBoxAscent + metrics.actualBoundingBoxDescent,
+      }
+    }
   }
+  if (run.rotate90) bounds = rotateBounds(bounds, run.x, rotationTop, 90)
+  else if (run.rotate270) bounds = rotateBounds(bounds, run.x, rotationTop, -90)
+  return bounds
+}
+
+/** Returns one rendered ink box per visible glyph run, including run and text-frame rotations. */
+export function renderedTextBounds(
+  text: RenderTextLayout | undefined,
+  offsetX: number,
+  offsetY: number,
+  nodeRotation?: TextBoundsRotation,
+): Box[] {
+  if (!text) return []
+  return text.lines.flatMap((line) => line.runs
+    .filter((run) => run.text.trim())
+    .map((run) => {
+      const ink = glyphBounds(run, line.top, line.height)
+      const positioned = { x: offsetX + text.insets.l + ink.x, y: offsetY + text.insets.t + ink.y,
+        w: ink.w, h: ink.h }
+      return nodeRotation
+        ? rotateBounds(positioned, nodeRotation.centerX, nodeRotation.centerY, nodeRotation.rotationDeg)
+        : positioned
+    }))
 }
 
 function intersection(first: { x: number; y: number; w: number; h: number }, second: { x: number; y: number; w: number; h: number }): { w: number; h: number } | undefined {

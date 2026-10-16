@@ -34,6 +34,7 @@ Options:
   --deck <name>          Run one named deck from a multi-deck fixture
   --max-pages <count>    Bound pages per deck (default: all, max: ${maxPages})
   --check-candidates      Validate up to ${maxCandidatePages} read-only preset candidates first
+  --audit-warnings        Keep capturing/checkpointing/reopening when visual hard warnings occur
   --headed               Show Edge while running
   --list-presets         Print the current preset catalog and exit
   --help                 Show this help
@@ -49,6 +50,7 @@ function parseArgs(argv) {
     deck: null,
     maxPages: maxPages,
     checkCandidates: false,
+    auditWarnings: false,
     headed: false,
     listPresets: false,
   }
@@ -65,6 +67,10 @@ function parseArgs(argv) {
     }
     if (arg === '--check-candidates') {
       options.checkCandidates = true
+      continue
+    }
+    if (arg === '--audit-warnings') {
+      options.auditWarnings = true
       continue
     }
     const [key, inlineValue] = arg.split('=', 2)
@@ -520,14 +526,22 @@ function blockingWarnings(warnings) {
   ))
 }
 
-async function writeVisual(outputDirectory, fileName, result, label = fileName) {
+async function writeVisual(outputDirectory, fileName, result, label = fileName, auditWarnings = false) {
   const filePath = resolve(outputDirectory, fileName)
   const bytes = pngBytes(result.dataUrl)
   const warnings = Array.isArray(result.warnings) ? result.warnings : []
   const blocking = blockingWarnings(warnings)
   await writeFile(filePath, bytes)
-  if (blocking.length > 0) {
-    await writeFile(`${filePath}.warnings.json`, JSON.stringify({ label, warnings, passed: false }, null, 2))
+  if (blocking.length > 0 || auditWarnings) {
+    await writeFile(`${filePath}.warnings.json`, JSON.stringify({
+      label,
+      warnings,
+      hardWarnings: blocking,
+      passed: blocking.length === 0,
+      auditMode: auditWarnings,
+    }, null, 2))
+  }
+  if (blocking.length > 0 && !auditWarnings) {
     throw new Error(`${label} 存在阻塞性布局警告：${jsonError(blocking)}`)
   }
   return {
@@ -538,6 +552,7 @@ async function writeVisual(outputDirectory, fileName, result, label = fileName) 
     sha256: sha256(bytes),
     warnings,
     pendingVisualSlideIds: result.pendingVisualSlideIds ?? [],
+    ...(auditWarnings ? { passed: blocking.length === 0, hardWarnings: blocking } : {}),
   }
 }
 
@@ -655,7 +670,18 @@ async function runCandidates(page, blankBytes, decks, outputRoot, runId, catalog
   return results
 }
 
-async function runDeck(page, blankBytes, deck, outputRoot, runId) {
+function warningObjects(warnings, elements) {
+  return (Array.isArray(warnings) ? warnings : []).map((warning) => ({
+    warning,
+    objects: elements.filter((element) => {
+      if (typeof element.id !== 'string') return false
+      const escaped = element.id.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+      return new RegExp(`(^|[^\\w-])${escaped}(?=$|[^\\w-])`).test(warning)
+    }),
+  }))
+}
+
+async function runDeck(page, blankBytes, deck, outputRoot, runId, auditWarnings = false) {
   const deckDirectoryName = safeName(deck.name, 'deck.name')
   const deckDirectory = resolve(outputRoot, deckDirectoryName)
   await mkdir(deckDirectory, { recursive: true })
@@ -698,10 +724,21 @@ async function runDeck(page, blankBytes, deck, outputRoot, runId) {
     pages.push({
       index: pageIndex,
       presetId: pageValue.presetId ?? null,
+      templateId: pageValue.templateId ?? null,
       scenario: typeof pageValue.content?.scenario === 'string' ? pageValue.content.scenario : null,
       slideId: currentSlideId,
       pendingChartStyles: pendingStyles.map((item) => ({ role: item.role, elementId: item.elementId, style: item.style })),
     })
+  }
+
+  if (auditWarnings) {
+    const snapshot = await inspect(page, sessionId, version, `${deckDirectoryName}-audit-object-details`, {
+      mode: 'slides', limit: 100, includeData: true,
+    })
+    const structures = slideStructure(snapshot)
+    for (const pageRecord of pages) {
+      pageRecord.objectDetails = structures.find((slide) => slide.id === pageRecord.slideId)?.elements ?? []
+    }
   }
 
   // Capture every page after the deck has reached one exact revision. The
@@ -720,7 +757,12 @@ async function runDeck(page, blankBytes, deck, outputRoot, runId) {
       `${String(pageRecord.index + 1).padStart(2, '0')}-live.png`,
       captured,
       `${deckDirectoryName} 第 ${pageRecord.index + 1} 页 live`,
+      auditWarnings,
     )
+    if (auditWarnings) {
+      pageRecord.liveWarningObjects = warningObjects(pageRecord.live.hardWarnings, pageRecord.objectDetails ?? [])
+      pageRecord.passed = pageRecord.live.passed
+    }
   }
 
   const checkpointBytes = await checkpoint(page, sessionId, version)
@@ -739,15 +781,23 @@ async function runDeck(page, blankBytes, deck, outputRoot, runId) {
       `${String(pageIndex + 1).padStart(2, '0')}-reopened.png`,
       captured,
       `${deckDirectoryName} 第 ${pageIndex + 1} 页 reopened`,
+      auditWarnings,
     )
-    if (pageRecord.live.sha256 !== reopened.sha256
-      || pageRecord.live.width !== reopened.width
-      || pageRecord.live.height !== reopened.height) {
+    const saveReopenMatches = pageRecord.live.sha256 === reopened.sha256
+      && pageRecord.live.width === reopened.width
+      && pageRecord.live.height === reopened.height
+    if (!saveReopenMatches
+      && !auditWarnings) {
       throw new Error(`${deckDirectoryName} 第 ${pageIndex + 1} 页 live/reopened PNG 不一致。`)
     }
     pageRecord.reopened = reopened
     pageRecord.reopenedVersion = { ...version }
     pageRecord.reopenedSlideId = reopenedSlideId
+    if (auditWarnings) {
+      pageRecord.saveReopenMatches = saveReopenMatches
+      pageRecord.reopenedWarningObjects = warningObjects(reopened.hardWarnings, pageRecord.objectDetails ?? [])
+      pageRecord.passed = pageRecord.passed && reopened.passed && saveReopenMatches
+    }
   }
 
   return {
@@ -814,11 +864,11 @@ async function main() {
       ? await runCandidates(page, blankBytes, boundedDecks, outputRoot, runId, catalog)
       : []
     const decks = []
-    for (const deck of boundedDecks) decks.push(await runDeck(page, blankBytes, deck, outputRoot, runId))
+    for (const deck of boundedDecks) decks.push(await runDeck(page, blankBytes, deck, outputRoot, runId, options.auditWarnings))
     const previewIndexPath = resolve(repoRoot, 'mona/skills/mona-pptx/assets/presets/index.json')
     const previewIndex = JSON.parse(await readFile(previewIndexPath, 'utf8'))
     const catalogById = new Map(catalogInfo.presets.map((item) => [item.id, item]))
-    const baselineDiffs = decks.flatMap((deck) => deck.pages.map((item) => {
+    const baselineDiffs = decks.flatMap((deck) => deck.pages.filter((item) => item.presetId).map((item) => {
       const definition = catalogById.get(item.presetId)
       const sourceGroup = definition?.sourceGroup ?? 'unknown'
       const previousGroup = previewIndex.groups?.[sourceGroup]
@@ -836,17 +886,45 @@ async function main() {
           && previous?.sha256 !== item.live.sha256,
       }
     }))
-    const fixtureGroups = Object.fromEntries(
-      [...new Set(decks.flatMap((deck) => deck.pages.map((item) => (
-        catalogById.get(item.presetId)?.sourceGroup ?? 'unknown'
-      ))))].map((group) => [group, {
+    const fixtureGroups = options.auditWarnings
+      ? Object.fromEntries(decks.map((deck) => [deck.name, {
         fixtureSha256,
-        presetIds: decks.flatMap((deck) => deck.pages
-          .filter((item) => (catalogById.get(item.presetId)?.sourceGroup ?? 'unknown') === group)
-          .map((item) => item.presetId)),
-      }]),
+        templateIds: deck.pages.map((item) => item.templateId),
+      }]))
+      : Object.fromEntries(
+        [...new Set(decks.flatMap((deck) => deck.pages.map((item) => (
+          catalogById.get(item.presetId)?.sourceGroup ?? 'unknown'
+        ))))].map((group) => [group, {
+          fixtureSha256,
+          presetIds: decks.flatMap((deck) => deck.pages
+            .filter((item) => (catalogById.get(item.presetId)?.sourceGroup ?? 'unknown') === group)
+            .map((item) => item.presetId)),
+        }]),
+      )
+    const dashiTemplatePath = resolve(repoRoot, 'mona/skills/mona-pptx/assets/dashi/templates.json')
+    const dashiTemplateAssetsPath = resolve(repoRoot, 'mona/skills/mona-pptx/assets/dashi/template-assets.json')
+    const dashiAssetManifestPath = resolve(repoRoot, 'mona/skills/mona-pptx/assets/dashi/manifest.json')
+    const dashiOperationPath = resolve(officeRoot, 'mona/slides-dashi.ts')
+    const auditedPages = decks.flatMap((deck) => deck.pages)
+    const hardWarningCount = auditedPages.reduce((count, item) => (
+      count + (item.live?.hardWarnings?.length ?? 0) + (item.reopened?.hardWarnings?.length ?? 0)
+    ), 0)
+    const saveReopenMismatchCount = auditedPages.filter((item) => item.saveReopenMatches === false).length
+    const automatedAssertionsPassed = !options.auditWarnings || (
+      hardWarningCount === 0
+      && saveReopenMismatchCount === 0
+      && consoleErrors.length === 0
+      && auditedPages.every((item) => item.passed === true)
     )
     const report = {
+      ...(options.auditWarnings ? {
+        auditMode: true,
+        auditCompleted: true,
+        automatedAssertionsPassed,
+        manualVisualReviewRequired: true,
+        hardWarningCount,
+        saveReopenMismatchCount,
+      } : {}),
       fixture: fixturePath,
       fixtureSha256,
       blank: { path: blankPath, sha256: blankSha256 },
@@ -860,6 +938,10 @@ async function main() {
         nativePath: { path: resolve(officeRoot, 'vendor/genoffice/packages/pptx-engine/src/custom-path.ts'), sha256: sha256(await readFile(resolve(officeRoot, 'vendor/genoffice/packages/pptx-engine/src/custom-path.ts'))) },
         presetBuilder: { path: resolve(officeRoot, 'mona/slides-presets.ts'), sha256: sha256(await readFile(resolve(officeRoot, 'mona/slides-presets.ts'))) },
         presetLayouts: { path: resolve(officeRoot, 'mona/slides-preset-layouts.ts'), sha256: sha256(await readFile(resolve(officeRoot, 'mona/slides-preset-layouts.ts'))) },
+        dashiOperation: { path: dashiOperationPath, sha256: sha256(await readFile(dashiOperationPath)) },
+        dashiTemplates: { path: dashiTemplatePath, sha256: sha256(await readFile(dashiTemplatePath)) },
+        dashiTemplateAssets: { path: dashiTemplateAssetsPath, sha256: sha256(await readFile(dashiTemplateAssetsPath)) },
+        dashiAssetManifest: { path: dashiAssetManifestPath, sha256: sha256(await readFile(dashiAssetManifestPath)) },
         fixture: { path: fixturePath, sha256: fixtureSha256 },
         blank: { path: blankPath, sha256: blankSha256 },
       },
@@ -880,6 +962,13 @@ async function main() {
     process.stdout.write(`${JSON.stringify({
       output: resolve(outputRoot, 'report.json'),
       candidates: candidateChecks.length,
+      ...(options.auditWarnings ? {
+        auditCompleted: true,
+        automatedAssertionsPassed,
+        manualVisualReviewRequired: true,
+        hardWarningCount,
+        saveReopenMismatchCount,
+      } : {}),
       decks: decks.map((deck) => ({ name: deck.name, pages: deck.pages.length, version: deck.version })),
     }, null, 2)}\n`)
   } finally {

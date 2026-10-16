@@ -1,6 +1,7 @@
-import { FileText, X } from "lucide-react";
+import { X } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
+import { FileSystemIcon } from "@/components/ui/file-system-icon";
 
 interface OfficeDocChipProps {
   name: string;
@@ -29,7 +30,7 @@ export function OfficeDocChip({ name, size, onRemove, onClick }: OfficeDocChipPr
       onClick={onClick}
       title={name}
     >
-      <FileText className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
+      <FileSystemIcon name={name} />
       <span className="max-w-[160px] truncate text-foreground/85">{name}</span>
       {sizeLabel ? (
         <span className="text-muted-foreground">{sizeLabel}</span>

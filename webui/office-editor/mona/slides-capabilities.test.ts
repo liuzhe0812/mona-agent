@@ -9,6 +9,7 @@ describe('Slides capabilities', () => {
     expect(result.mode).toBe('capabilities')
     expect(result.documentType).toBe('slides')
     expect(result.operations.map(({ op }) => op)).toEqual([
+      'slide_add_template',
       'slide_replace_colors',
       'slide_add_design',
       'slide_add_path',
@@ -33,7 +34,7 @@ describe('Slides capabilities', () => {
       'slide_add_preset',
     ])
     expect(result.operations.every((operation) => operation.payloadSchema === undefined)).toBe(true)
-    expect(JSON.stringify(result).length).toBeLessThan(8000)
+    expect(JSON.stringify(result).length).toBeLessThan(12000)
     const detail = getSlidesCapabilities(undefined, ['slide_add_svg', 'slide_add_text'])
     expect(detail.operations.every((operation) => operation.payloadSchema?.type === 'object')).toBe(true)
     expect(detail.operations.find((operation) => operation.op === 'slide_add_svg')?.payloadSchema).toEqual(
@@ -83,6 +84,7 @@ describe('Slides capabilities', () => {
       'slide_add_svg',
     ]))
     expect(getSlidesCapabilities('unsupported').operations.map(({ op }) => op)).toEqual([
+      'slide_add_template',
       'slide_add_design',
       'slide_add',
       'slide_duplicate',

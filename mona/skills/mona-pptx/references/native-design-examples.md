@@ -4,25 +4,25 @@
 
 ## 选择参考
 
-| 页面 | 适合表达 | 借鉴重点 | 完整操作资源 | 真实画面 |
+| 页面 | 适合表达 | 借鉴重点 | 完整操作资源 | 预览方式 |
 |---|---|---|---|---|
-| 编辑式证据页 | 变化、经营指标、评估结果 | 原生图表占主区；大数字形成焦点；原因独立排版 | `native/editorial-evidence.json` | `native/editorial-evidence.png` |
-| 五项并列页 | 能力拆解、课程模块、多项分析 | 短标签与解释逐项对齐；细分隔而非卡片墙；五项全部保留 | `native/parallel-five.json` | `native/parallel-five.png` |
-| 产品大图页 | 产品介绍、工作场景、案例引入 | 不对称图文比例；真实截图为视觉重心；标题与说明为原生文本 | `native/product-story.json` | `native/product-story.png` |
+| 编辑式证据页 | 变化、经营指标、评估结果 | 原生图表占主区；大数字形成焦点；原因独立排版 | `native/editorial-evidence.json` | 在隔离文稿中运行操作后 `inspect visual` |
+| 五项并列页 | 能力拆解、课程模块、多项分析 | 短标签与解释逐项对齐；细分隔而非卡片墙；五项全部保留 | `native/parallel-five.json` | 在隔离文稿中运行操作后 `inspect visual` |
+| 产品大图页 | 产品介绍、工作场景、案例引入 | 不对称图文比例；真实截图为视觉重心；标题与说明为原生文本 | `native/product-story.json` | 在隔离文稿中运行操作后 `inspect visual` |
 
 ## 读取与使用
 
-通过 `skill_asset_copy` 复制所需资源，再用 `read_file` 查看。例：
+需要复制可执行操作 JSON 时，用 `skill_asset_copy` 复制后通过 `read_file` 阅读。例：
 
 ```json
 {"skill":"mona-pptx","asset":"native/editorial-evidence.json","dest":"design-reference/editorial-evidence.json"}
 ```
 
-相应 PNG 同样复制并读取，单独看到 Markdown 路径不等于看过设计。无需一次读取全部示例。
+需要看画面时，先在隔离临时文稿中执行选定 JSON 的操作，再用 `inspect` 的 `mode:"visual"` 查看 Office 实际渲染；静态预览图不再作为选页依据。无需一次读取全部示例。
 
 JSON 的 `operations` 是 `office.apply` 可执行的原生操作。使用前把所有 `$slideId` 替换为当前编辑器返回的真实页面 ID，将示例文字和数据换为本页内容，并根据当前页面尺寸调整坐标；然后带最新 `expected_version` 写入。不要把这些示例当成另一套整稿生成器。
 
-产品页使用 `native/product-workspace.png`，是本仓库既有的产品历史界面截图。使用该示例时先复制图片到实际工作区，再将 `assetPath` 改成复制回执里的路径。不得把它冒充当前版本界面或用户产品的截图。其他页面不需要这张图片。
+产品页操作会用到 `native/product-workspace.png`，它是本仓库既有的产品历史界面素材，不是预览图。使用该示例时先复制图片到隔离文稿可访问的工作区，再将 `assetPath` 改成复制回执里的路径。不得把它冒充当前版本界面或用户产品的截图。其他页面不需要这张图片。
 
 ## 原生图表与自由构图
 

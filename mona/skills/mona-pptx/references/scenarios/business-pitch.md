@@ -14,7 +14,7 @@
 
 ## 页面表达
 
-| 页面用途 | 原生预设 | 内容关系 |
+| 页面用途 | 通用原生回退 | 内容关系 |
 |---|---|---|
 | 路演封面 | `light-cover-split` | `none` |
 | 用户问题与主张 | `light-transition-statement` | `none` |
@@ -31,6 +31,18 @@
 
 正文写用户提供的实际内容；所有图片路径必须指向已取得的真实素材。数组、数字、单位、来源和关系遵守当前预设容量；不适配时组合原生对象，不删事实或缩小整页。
 
-下图为 `pitch-business-model` 的真实 Office 渲染；示例资料仅验证构图，不代表业务结论。
 
-![商业路演特色页](../../assets/presets/pitch-business-model.png)
+## 选定的 Dashi 源页
+
+以下8页是本场景从 Dashi 真实来源模板中选出的候选；不代表全部来源页已迁入。先用 `inspect capabilities` 的 `presetScenario` 查询，再指定某个 `templateId` 查看真实文本字段与字数限制。需要看画面时，用 `inspect` 的 `mode:"visual"`、`templateId` 和能力回执中的字段进行隔离预览；写入前仍应确认字段名、证据与布局。
+
+| 用途 | Dashi 页 ID | 来源页名 | 页面角色 | 选择理由 |
+|---|---|---|---|---|
+| cover | `theme02_page001` | 封面 · Cover | cover、image | 封面：呈现商业路演的产品或项目主视觉。 |
+| body | `theme02_page055` | 结论主张 · Manifesto | statement、observation、result | 正文：用主张页讲清用户问题与价值命题。 |
+| metrics | `theme11_page034` | 指标 | data、report、metrics | 指标：总结商业模式或增长的核心指标。 |
+| chart | `theme02_page072` | 主题河流 · Stream | trend | 图表：展示增长或市场趋势。 |
+| comparison | `theme11_page051` | 对比 | comparison | 对比：对比商业方案的关键差异。 |
+| process | `theme11_page023` | 流程 | process | 流程：说明服务交付和采用步骤。 |
+| case-image | `theme02_page013` | 案例图景 · Showcase | case、image | 图片案例：呈现产品或客户场景。 |
+| closing | `theme11_page014` | 成果 | image、result | 结尾：用成果页收束路演证据与诉求。 |

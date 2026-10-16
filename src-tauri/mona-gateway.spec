@@ -26,6 +26,8 @@ block_cipher = None
 
 PROJECT_ROOT = Path(SPECPATH).resolve().parent
 MONA_PKG = PROJECT_ROOT / "mona"
+sys.path.insert(0, str(PROJECT_ROOT))
+from mona.office.ppt_packaging import should_include_mona_pptx_package_resource
 
 # ============== Hidden Imports ==============
 
@@ -237,6 +239,18 @@ excludes = [
 # ============== Data Files ==============
 
 datas = []
+# PPT Skill assets are read by package-relative paths. Keep previews out of both specs.
+for source, destination in collect_data_files("mona"):
+    normalized_destination = str(destination).replace("\\", "/").rstrip("/")
+    if normalized_destination != "mona/skills/mona-pptx" and not normalized_destination.startswith("mona/skills/mona-pptx/"):
+        continue
+    if {"tests", "test", "testing", "__pycache__", "node_modules", ".git"}.intersection(
+        Path(normalized_destination).parts
+    ):
+        continue
+    if should_include_mona_pptx_package_resource(source, destination):
+        datas.append((source, destination))
+
 video_runtime = MONA_PKG / "skills/mona-video/runtime"
 if not (video_runtime / "remotion.js").is_file():
     raise FileNotFoundError("Video animation runtime missing: run npm run build:video-runtime in webui")

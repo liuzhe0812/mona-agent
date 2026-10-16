@@ -169,6 +169,7 @@ class CapabilitiesQuery(OfficeWireModel):
     preset_family: str | None = None
     preset_theme: str | None = None
     preset_scenario: str | None = None
+    template_id: str | None = None
 
 
 class VisualRegion(OfficeWireModel):
@@ -192,6 +193,9 @@ class VisualQuery(OfficeWireModel):
     preset_id: str | None = None
     preset_content: dict[str, object] | None = None
     preset_content_ref: str | None = None
+    template_id: str | None = None
+    template_fields: dict[str, str] | None = None
+    template_assets: dict[str, str] | None = None
 
 
 class ReviewQuery(OfficeWireModel):
@@ -404,6 +408,8 @@ class CapabilitiesResult(OfficeWireModel):
     preset_roles: list[dict[str, object]] | None = None
     preset_scenarios: list[dict[str, object]] | None = None
     preset_diagnostics: list[dict[str, object]] | None = None
+    templates: list[dict[str, object]] | None = None
+    template_scenarios: list[dict[str, object]] | None = None
 
 
 class SelectionResult(OfficeWireModel):
@@ -594,6 +600,7 @@ class SlidesOperation(OfficeWireModel):
         "slide_add_svg",
         "slide_compose",
         "slide_add_preset",
+        "slide_add_template",
         "slide_delete_element",
         "slide_add_design",
         "slide_add_path",

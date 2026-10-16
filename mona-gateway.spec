@@ -1,6 +1,7 @@
 # -*- mode: python ; coding: utf-8 -*-
 
 import tomllib
+import sys
 from pathlib import Path
 
 from packaging.version import Version
@@ -10,6 +11,9 @@ from PyInstaller.utils.hooks import (
     collect_submodules,
     copy_metadata,
 )
+
+sys.path.insert(0, str(Path(SPECPATH)))
+from mona.office.ppt_packaging import should_include_mona_pptx_package_resource
 
 datas = []
 binaries = []
@@ -31,6 +35,7 @@ for package in (
                 str(item[1]).replace("\\", "/").rstrip("/") == "mona/web/dist"
                 or str(item[1]).replace("\\", "/").startswith("mona/web/dist/")
             )
+            and should_include_mona_pptx_package_resource(item[0], item[1])
             and "ai-image-comparison" not in str(item[0]).lower()
             and "ai-image-comparison" not in str(item[1]).lower()
         ]

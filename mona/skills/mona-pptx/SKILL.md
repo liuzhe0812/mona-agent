@@ -8,11 +8,11 @@ description: >
 
 # Mona PPTX
 
-用 `office` 实时制作原生可编辑 PPT。附带图片只是设计完成度的参照，不是待复刻的答案，也不是版式清单。根据用户内容、受众和展示场景提出自己的表达；学习参考中的主次、比例和细节，不照搬其布局、装饰或配色。你负责叙事和视觉判断，组件减少机械排版；不需要审批、冻结主题或额外 design brief。
+用 `office` 实时制作原生可编辑 PPT。根据用户内容、受众和展示场景，选择适合的场景模板或自由构图；可直接复用模板的版式、装饰和配色，同时保留真实内容与证据。用实际预览检查主次、比例和细节。你负责叙事和视觉判断，组件减少机械排版；不需要审批、冻结主题或额外 design brief。
 
 ## 设计判断
 
-按用途选择场景，而不是先选浅色或深色。内置场景覆盖企业汇报、产品展示、技术方案、经营数据、战略规划、调研报告、商业路演、金融投研、品牌提案、企业故事、活动策划和教学培训。场景共享通用页型，并有各自的特色页；不为套模板改变事实或教学内容。`slide_add_preset` 的 `content.scenario` 可指定场景并用于后续预设页继承；真实 ID、用途和参考图见 [场景目录](references/scenarios.md)。需要候选时用 `inspect capabilities` 的 `presetScenario` 过滤。用户品牌优先，场景不是原生自由构图的限制。
+按用途选择场景，而不是先选浅色或深色。`presetScenario` 可筛出该场景选定的8个 Dashi 原生页；当前共96个场景引用、81个唯一页 ID，是从12个来源主题中筛出的可用子集，不代表全部1020个来源页已迁入。先用 `inspect capabilities` 的 `presetScenario` 看候选；指定 `templateId` 再读取实际文本字段、例值和字数上限。需要预览时用 `inspect` 的 `mode:"visual"`、`templateId` 和 `templateFields`，它会在隔离副本中渲染，不改当前文稿。字段名必须照能力回执填写，例如实际返回的 `titleTop` 或 `meta[0].label`；再用 `slide_add_template` 写入空白16:9页。文字和形状保持可编辑；部分复杂 SVG 图形以图片保留，不含原生图表数据表，不能绑定其中的数字；需要可编辑数据时改用原生图表。场景内容与真实证据优先，不为套模板改变事实或教学内容；不适配时使用通用原生构图。场景与页型见 [场景目录](references/scenarios.md)。
 
 围绕用户目的、受众、资料和页数组织整稿。每页明确主信息与证据，用构图表现信息权重：主图表、大数字、对照、时间线、关系图、案例大图或编辑式文字均可。统一字体层级、配色、对齐与图片处理，变化来自内容，不为求变化硬换版式；比较同类信息时可以重复构图。
 
@@ -24,7 +24,7 @@ description: >
 
 品牌改色先 `inspect` 的 `query:{mode:"palette"}` 读取实际颜色与对象，再 `slide_replace_colors`，如 `payload:{replacements:[{from:"#实际旧色",to:"#实际橙色"}]}`；可用 slideIds/elementIds/excludeElementIds 限定范围。只改品牌强调色，保留正负值、警告、正文对比度与人工特殊配色；不重放原设计内容。`palette` 是创建参数，不是已有文稿自动换肤开关。详见 [原位续编](references/in-place-editing.md)。
 
-内容适合时，用 `slide_add_design` 复用已打磨的表达：`statement` 大观点、`metric` 主指标、`evidence` 图表解读、`waterfall` 变化瀑布、`sankey` 流向、`agenda` 信息地图、`comparison` 对照、`roadmap` 路线、`matrix` 象限、`image` 主图、`items` 编辑式列表。它不是填空模板：可改 palette、focusIndex，或指定 region 组合局部区域。详细字段与参考图见 [原生设计组件](references/components.md)。简单调用形式是 `{op:"slide_add_design",payload:{slideId:"真实ID",design:"metric",content:{title:"有证据的判断",metric:{label:"指标名",value:实际值,unit:"单位",detail:"解释"},items:[{label:"辅助指标",value:实际值,unit:"单位"}],source:"真实来源"}}}`。
+内容适合时，用 `slide_add_design` 复用已打磨的表达：`statement` 大观点、`metric` 主指标、`evidence` 图表解读、`waterfall` 变化瀑布、`sankey` 流向、`agenda` 信息地图、`comparison` 对照、`roadmap` 路线、`matrix` 象限、`image` 主图、`items` 编辑式列表。它不是填空模板：可改 palette、focusIndex，或指定 region 组合局部区域。详细字段与构图说明见 [原生设计组件](references/components.md)。简单调用形式是 `{op:"slide_add_design",payload:{slideId:"真实ID",design:"metric",content:{title:"有证据的判断",metric:{label:"指标名",value:实际值,unit:"单位",detail:"解释"},items:[{label:"辅助指标",value:实际值,unit:"单位"}],source:"真实来源"}}}`。
 
 组件只是起点：即使能够套入，也可以为更好的叙事自由组合、修改或原生定制；不要把所有任务都压成经营汇报，不为使用组件改变内容。不重复试字段。`slide_compose` 提供网格，原生文字支持 paragraphs/runs、局部强调、基线和内边距；`slide_add_path` 可创建独立曲线形状。标准图表保留数据模型；瀑布/桑基等组件是可编辑形状与文本，不能声称具有 PowerPoint 原生图表数据表。
 
@@ -36,11 +36,12 @@ description: >
 
 ## 按需资源
 
-- [12个用途场景](references/scenarios.md)：场景定位、共享页型、特色原生页与真实参考。
+- [12个用途场景](references/scenarios.md)：场景定位、Dashi 源模板页 ID 与按需 Office 预览流程。
+- [Dashi 设计规则](references/dashi-design-profiles.md)：12 个来源主题的真实配色、字体层级、间距、图表和装饰规则，用于模板之外的原生构图。
 
-- [原生设计组件](references/components.md)：成熟构图、真实预览和内容字段，读取时直接获得图像。
+- [原生设计组件](references/components.md)：成熟构图、内容字段和在隔离文稿中按需查看 Office 预览的方法。
 - [视觉语言与构图](references/visual-recipes.md)：两类设计方向、层级和页面表达；不是风格限制。
-- [完整原生设计示例](references/native-design-examples.md)：可组合、可调整的原生构图与真实预览。
-- [预设预览索引](references/preset-index.md)：需要参考现成页面时选读；用 `skill_asset_copy` 复制后通过 `read_file` 实际看图。
+- [完整原生设计示例](references/native-design-examples.md)：可组合、可调整的原生构图与隔离文稿预览步骤。
+- [预设预览索引](references/preset-index.md)：按能力回执选择候选，并通过 Office 实际渲染预览；不依赖静态 PNG 路径。
 - [Office 操作](references/office-operations.md)：打开、构建、检查和导出。`capabilities` 默认给短目录；指定实际 operations 获取参数。未知名称看 unsupportedOperations 和 availableOperations，剩余参数见 nextOperations；查询失败不代表文稿不能修改。
 - [内容设计](references/design-method.md)、[高级对象](references/advanced-operations.md)、[审核与恢复](references/visual-review.md)：按问题选读，不必全部加载。

@@ -1,5 +1,4 @@
 import ast
-import runpy
 import sys
 import tomllib
 import types
@@ -39,7 +38,7 @@ def test_default_tts_dependency_and_gateway_specs_include_edge_tts() -> None:
     root = Path(__file__).resolve().parents[1]
     project = tomllib.loads((root / "pyproject.toml").read_text(encoding="utf-8"))
 
-    assert "edge-tts==7.2.8" in project["project"]["dependencies"]
+    assert "edge-tts==7.3.1" in project["project"]["dependencies"]
 
     for spec_path in (root / "mona-gateway.spec", root / "src-tauri" / "mona-gateway.spec"):
         tree = ast.parse(spec_path.read_text(encoding="utf-8"))
@@ -148,11 +147,12 @@ def _run_root_spec(monkeypatch, tmp_path):
         "EXE": stub_object,
         "COLLECT": collect_artifacts,
         "workpath": str(tmp_path / "work"),
+        "SPECPATH": str(Path(__file__).resolve().parents[1]),
     }
 
     monkeypatch.chdir(tmp_path)
     spec_path = Path(__file__).resolve().parents[1] / "mona-gateway.spec"
-    runpy.run_path(str(spec_path), run_name="__main__", init_globals=spec_globals)
+    exec(compile(spec_path.read_text(encoding="utf-8"), str(spec_path), "exec"), spec_globals)
     return captured["datas"]
 
 

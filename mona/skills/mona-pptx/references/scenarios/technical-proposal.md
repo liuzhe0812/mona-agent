@@ -14,7 +14,7 @@
 
 ## 页面表达
 
-| 页面用途 | 原生预设 | 内容关系 |
+| 页面用途 | 通用原生回退 | 内容关系 |
 |---|---|---|
 | 技术方案封面 | `dark-cover-split` | `none` |
 | 现状与约束 | `dark-editorial-essay` | `none` |
@@ -31,6 +31,18 @@
 
 正文写用户提供的实际内容；所有图片路径必须指向已取得的真实素材。数组、数字、单位、来源和关系遵守当前预设容量；不适配时组合原生对象，不删事实或缩小整页。
 
-下图为 `technical-layer-stack` 的真实 Office 渲染；示例资料仅验证构图，不代表业务结论。
 
-![技术方案特色页](../../assets/presets/technical-layer-stack.png)
+## 选定的 Dashi 源页
+
+以下8页是本场景从 Dashi 真实来源模板中选出的候选；不代表全部来源页已迁入。先用 `inspect capabilities` 的 `presetScenario` 查询，再指定某个 `templateId` 查看真实文本字段与字数限制。需要看画面时，用 `inspect` 的 `mode:"visual"`、`templateId` 和能力回执中的字段进行隔离预览；写入前仍应确认字段名、证据与布局。
+
+| 用途 | Dashi 页 ID | 来源页名 | 页面角色 | 选择理由 |
+|---|---|---|---|---|
+| cover | `theme03_page001` | 封面 | cover、image | 封面：使用技术主视觉与主题文字。 |
+| body | `theme03_page039` | 金句页 | statement、observation | 正文：提出技术方案的核心判断与原则。 |
+| metrics | `theme03_page065` | 投资记分卡 | metrics、result | 指标：按检查维度汇总技术成熟度或方案得分。 |
+| chart | `theme03_page061` | 资金版图 | distribution、relationship | 图表：表达资金、资源或技术组件的分布。 |
+| comparison | `theme03_page021` | 案例对比 | comparison、case | 对比：并列展示两种技术案例或路径。 |
+| process | `theme03_page048` | 旅程图 | process | 流程：展示系统旅程、处理阶段和节点说明。 |
+| case-image | `theme03_page019` | 案例聚焦 | case、image | 图片案例：展示实验室、产品或技术现场。 |
+| closing | `theme03_page077` | 封底 | closing | 结尾：以封底页收束技术方案。 |

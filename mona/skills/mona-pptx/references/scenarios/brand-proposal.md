@@ -14,7 +14,7 @@
 
 ## 页面表达
 
-| 页面用途 | 原生预设 | 内容关系 |
+| 页面用途 | 通用原生回退 | 内容关系 |
 |---|---|---|
 | 品牌提案封面 | `light-cover-split` | `none` |
 | 品牌主张 | `light-transition-statement` | `none` |
@@ -28,6 +28,18 @@
 
 正文写用户提供的实际内容；所有图片路径必须指向已取得的真实素材。数组、数字、单位、来源和关系遵守当前预设容量；不适配时组合原生对象，不删事实或缩小整页。
 
-下图为 `brand-concept-proposal` 的真实 Office 渲染；示例资料仅验证构图，不代表业务结论。
 
-![品牌提案特色页](../../assets/presets/brand-concept-proposal.png)
+## 选定的 Dashi 源页
+
+以下8页是本场景从 Dashi 真实来源模板中选出的候选；不代表全部来源页已迁入。先用 `inspect capabilities` 的 `presetScenario` 查询，再指定某个 `templateId` 查看真实文本字段与字数限制。需要看画面时，用 `inspect` 的 `mode:"visual"`、`templateId` 和能力回执中的字段进行隔离预览；写入前仍应确认字段名、证据与布局。
+
+| 用途 | Dashi 页 ID | 来源页名 | 页面角色 | 选择理由 |
+|---|---|---|---|---|
+| cover | `theme08_page005` | ① 封面 · Cover | cover、image | 封面：高对比品牌主视觉，可替换封面媒体。 |
+| body | `theme04_page007` | 研究方法 | context、image | 正文：说明研究方法和创意概念的推导过程。 |
+| metrics | `theme08_page078` | (84) 大数字 · Gauge | metrics | 指标：用仪表结构表达品牌目标或评估结果。 |
+| chart | `theme08_page024` | ㉒ 贡献瀑布 · Waterfall | data、distribution | 图表：展示品牌贡献或传播阶段变化。 |
+| comparison | `theme04_page053` | 估值跃迁 | comparison | 对比：比较品牌定位、价值主张或创意方向。 |
+| process | `theme08_page081` | (87) 路线图 · Roadmap | relationship、process、actions | 流程：表达品牌传播与发布路线图。 |
+| case-image | `theme04_page059` | 焦点机位 | case、image | 图片案例：用真实视觉素材论证品牌概念。 |
+| closing | `theme04_page074` | 核心结论 | data、report、statement、metrics、observation、result | 结尾：归纳品牌主张与提案结论。 |

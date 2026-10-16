@@ -14,7 +14,7 @@
 
 ## 页面表达
 
-| 页面用途 | 原生预设 | 内容关系 |
+| 页面用途 | 通用原生回退 | 内容关系 |
 |---|---|---|
 | 年度或阶段汇报封面 | `light-cover-split` | `none` |
 | 经营背景与目标 | `light-editorial-essay` | `none` |
@@ -31,6 +31,18 @@
 
 正文写用户提供的实际内容；所有图片路径必须指向已取得的真实素材。数组、数字、单位、来源和关系遵守当前预设容量；不适配时组合原生对象，不删事实或缩小整页。
 
-下图为 `report-project-status` 的真实 Office 渲染；示例资料仅验证构图，不代表业务结论。
 
-![企业汇报特色页](../../assets/presets/report-project-status.png)
+## 选定的 Dashi 源页
+
+以下8页是本场景从 Dashi 真实来源模板中选出的候选；不代表全部来源页已迁入。先用 `inspect capabilities` 的 `presetScenario` 查询，再指定某个 `templateId` 查看真实文本字段与字数限制。需要看画面时，用 `inspect` 的 `mode:"visual"`、`templateId` 和能力回执中的字段进行隔离预览；写入前仍应确认字段名、证据与布局。
+
+| 用途 | Dashi 页 ID | 来源页名 | 页面角色 | 选择理由 |
+|---|---|---|---|---|
+| cover | `theme01_page001` | 封面 · 编辑式双栏 | cover | 汇报封面：标明汇报主题与阶段范围。 |
+| body | `theme01_page010` | 横纵分析法 | context | 正文：用横纵分析法说明经营口径与分析框架。 |
+| metrics | `theme01_page007` | 关键数字一览 | data、report、metrics | 指标：并列呈现项目进度与核心指标。 |
+| chart | `theme01_page079` | 甜甜圈 · 资金来源占比 | data、distribution | 图表：展示资金或指标结构占比。 |
+| comparison | `theme01_page075` | 同比对比 · 分组柱状图 | comparison | 对比：展示目标与实际的同期差异。 |
+| process | `theme01_page040` | 阶段性策略路线图 | relationship、process、actions | 流程：列出阶段路线与关键推进节点。 |
+| case-image | `theme01_page026` | 典型案例 | case、image | 图片案例：用真实项目或客户图片支撑进展说明。 |
+| closing | `theme01_page050` | 标的评分卡 · 尽调五维 | metrics、result | 结尾：用多维评分汇总审查与待决事项。 |

@@ -136,6 +136,7 @@ include = [
     "mona/skills/**/*.csv",
     "mona/skills/**/*.svg",
     "mona/skills/**/*.png",
+    "mona/skills/**/*.webp",
     "mona/skills/**/*.pptx",
     "mona/skills/**/*.html",
     "mona/skills/**/*.css",
@@ -151,6 +152,19 @@ include = [
 
 [tool.hatch.build.targets.wheel]
 packages = ["mona"]
+exclude = [
+    "mona/skills/mona-pptx/assets/previews.json",
+    "mona/skills/mona-pptx/assets/dashi/templates.json",
+    "mona/skills/mona-pptx/assets/native/editorial-evidence.png",
+    "mona/skills/mona-pptx/assets/native/parallel-five.png",
+    "mona/skills/mona-pptx/assets/native/product-story.png",
+    "mona/skills/mona-pptx/assets/presets/*.png",
+    "mona/skills/mona-pptx/assets/presets/**/*.png",
+    "mona/skills/mona-pptx/assets/design/*.png",
+    "mona/skills/mona-pptx/assets/design/**/*.png",
+    "mona/skills/mona-pptx/assets/scenarios/*.png",
+    "mona/skills/mona-pptx/assets/scenarios/**/*.png",
+]
 
 [tool.hatch.build.targets.wheel.sources]
 "mona" = "mona"

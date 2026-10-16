@@ -14,7 +14,7 @@
 
 ## 页面表达
 
-| 页面用途 | 原生预设 | 内容关系 |
+| 页面用途 | 通用原生回退 | 内容关系 |
 |---|---|---|
 | 经营复盘封面 | `light-cover-split` | `none` |
 | 核心指标记分板 | `light-metric-spotlight` | `none` |
@@ -28,6 +28,18 @@
 
 正文写用户提供的实际内容；所有图片路径必须指向已取得的真实素材。数组、数字、单位、来源和关系遵守当前预设容量；不适配时组合原生对象，不删事实或缩小整页。
 
-下图为 `data-driver-review` 的真实 Office 渲染；示例资料仅验证构图，不代表业务结论。
 
-![经营数据特色页](../../assets/presets/data-driver-review.png)
+## 选定的 Dashi 源页
+
+以下8页是本场景从 Dashi 真实来源模板中选出的候选；不代表全部来源页已迁入。先用 `inspect capabilities` 的 `presetScenario` 查询，再指定某个 `templateId` 查看真实文本字段与字数限制。需要看画面时，用 `inspect` 的 `mode:"visual"`、`templateId` 和能力回执中的字段进行隔离预览；写入前仍应确认字段名、证据与布局。
+
+| 用途 | Dashi 页 ID | 来源页名 | 页面角色 | 选择理由 |
+|---|---|---|---|---|
+| cover | `theme06_page005` | 01 · 封面 / COVER | cover、image | 封面：深色图谱主题的报告开场。 |
+| body | `theme05_page017` | 策略 Outlook | report、actions | 正文：说明策略、经营解释与执行重点。 |
+| metrics | `theme05_page086` | 综合评分 Scorecard | metrics、result | 指标：用综合评分结构汇总核心表现。 |
+| chart | `theme05_page029` | 累计曲线 Cumulative | trend | 图表：展示累计指标随时间的变化。 |
+| comparison | `theme05_page022` | 环比对比 Delta | comparison | 对比：显示环比差异、变化方向与数值依据。 |
+| process | `theme05_page052` | 评测流程 Shield | process | 流程：拆解指标评测或数据复核步骤。 |
+| image | `theme05_page061` | 地理身份 Region | image | 图片：展示区域、聚类或分布身份图像。 |
+| closing | `theme06_page071` | 67 · 结论 / CONCLUSION | statement、observation、result | 结尾：归纳数据复盘结论和经营判断。 |

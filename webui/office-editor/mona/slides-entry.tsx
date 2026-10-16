@@ -62,6 +62,7 @@ import { expandPreset, rankPresets, presetCatalog, presetDiagnostics, findPreset
 import { PresetContentStore } from './slides-preset-content'
 import { dataUrlImage, svgImage } from './slides-assets'
 import { getSlidesCapabilities } from './slides-capabilities'
+import { dashiOperation, dashiTemplateCatalog } from './slides-dashi'
 import {
   clearSlidePending,
   createSlidesReviewState,
@@ -442,6 +443,10 @@ function translateOperation(
         design:{theme:expanded.theme,accentColor:(payload.content as unknown as PresetContent).accentColor,
           scenario:(payload.content as unknown as PresetContent).scenario}, pendingChartStyles: expanded.pendingChartStyles },
     }
+  }
+  if (operation.op === 'slide_add_template') {
+    slideIndex(document, payload.slideId)
+    return {op: dashiOperation(payload), targets: [String(payload.slideId)]}
   }
   if (operation.op === 'slide_apply_txn') {
     if (!Array.isArray(payload.ops) || payload.ops.length === 0 || payload.ops.length > 50
@@ -1016,6 +1021,10 @@ function MonaSlidesEditor(): React.JSX.Element {
             ? command.query.operations.map((operation, index) => requiredText(operation, `operations[${index}]`))
             : (() => { throw new Error('operations 必须是字符串数组。') })()
         const capabilities = getSlidesCapabilities(elementType, requestedOperations)
+        if (command.query.presetScenario || command.query.templateId) Object.assign(capabilities, {templates: dashiTemplateCatalog(
+          typeof command.query.presetScenario === 'string' ? command.query.presetScenario : undefined,
+          typeof command.query.templateId === 'string' ? command.query.templateId : undefined,
+        )})
         if (isRecord(command.query.presetContent) || typeof command.query.presetContentRef === 'string') {
           const requestedContent = presetContentsRef.current.resolve(command.query.presetContent, command.query.presetContentRef)
           const content = {...presetDesignRef.current,...requestedContent}
@@ -1164,12 +1173,25 @@ function MonaSlidesEditor(): React.JSX.Element {
           warnings: reviewWarnings(document, slideIdsOf(document)),
         }
       } else if (mode === 'visual' && Array.isArray(command.query.slideIds) && command.query.slideIds.length) {
-        if (command.query.slideIds.length > 12 || command.query.slideId || command.query.presetId || command.query.region || command.query.acceptWarnings || (Array.isArray(command.query.elementIds) && command.query.elementIds.length)) throw new Error('总览请只提供 1–12 个 slideIds；不能代替单页验收或接受警告。')
+        if (command.query.slideIds.length > 12 || command.query.slideId || command.query.presetId || command.query.templateId || command.query.region || command.query.acceptWarnings || (Array.isArray(command.query.elementIds) && command.query.elementIds.length)) throw new Error('总览请只提供 1–12 个 slideIds；不能代替单页验收或接受警告。')
         const indexes = pageIndexes(command.query)
         const pages = indexes.map((index) => ({ id: slideId(document, index), slide: document.slides[index]! }))
         const captured = await captureContactSheet(pages, version, () => versionRef.current, command.query.columns === undefined ? 2 : Number(command.query.columns))
         result = { mode: 'visual', ...captured, target: 'overview', overview: true, slideIds: pages.map((p) => p.id),
           warnings: reviewWarnings(document, pages.map((p) => p.id)), pendingVisualSlideIds: currentPendingVisualSlideIds(document) }
+      } else if (mode === 'visual' && command.query.templateId) {
+        if (command.query.acceptWarnings || command.query.region || command.query.presetId || command.query.slideId || (Array.isArray(command.query.elementIds) && command.query.elementIds.length)) throw new Error('模板候选只支持独立整页预览，不能接受当前文档审核提示。')
+        const scratch = await openSlidesDocument(await snapshotSlidesDocument(document.opened)())
+        const blank = runTxn(scratch.opened, {isolation:'atomic',ops:[{op:'addBlankSlide',target:{slide:0}}]})
+        if (!blank.applied) throw new Error('无法创建模板预览页。')
+        const prepared = refreshSlidesDocument(scratch)
+        const target = slideId(prepared, 1)
+        const op = dashiOperation({slideId:target,templateId:command.query.templateId,fields:command.query.templateFields,templateAssets:command.query.templateAssets})
+        const outcome = runTxn(prepared.opened, {isolation:'atomic',ops:[op]})
+        if (!outcome.applied) throw new Error(outcome.failures?.map((failure)=>failure.error).join('\n') || '模板预览失败。')
+        const rendered = refreshSlidesDocument(prepared).slides[1]!
+        const captured = await captureSlide(rendered,version,()=>versionRef.current)
+        result = {mode:'visual',...captured,target:`template:${String(command.query.templateId)}`,warnings:slideLayoutWarnings(rendered,slideElementIds(rendered))}
       } else if (mode === 'visual' && command.query.presetId) {
         const content = presetContentsRef.current.resolve(command.query.presetContent, command.query.presetContentRef)
         if (command.query.acceptWarnings || command.query.region || (Array.isArray(command.query.elementIds) && command.query.elementIds.length)) throw new Error('预设候选只支持整页预览，不能接受当前文档的审核提示。')
@@ -1842,10 +1864,11 @@ function MonaSlidesEditor(): React.JSX.Element {
         if (!current || !session || !currentVersion || operations.length === 0 || operations.length > 50) {
           return null
         }
+        const isolation = request.isolation === 'per_op' && !operations.some((operation) => operation.op === 'monaDashiTemplate') ? 'per_op' : 'atomic'
         if (request.dryRun) {
           const preview = runTxn(current.opened, {
             ops: operations,
-            isolation: request.isolation === 'per_op' ? 'per_op' : 'atomic',
+            isolation,
             dryRun: true,
           })
           return {
@@ -1858,7 +1881,7 @@ function MonaSlidesEditor(): React.JSX.Element {
         const before = takeSnapshot(current)
         const outcome = runTxn(current.opened, {
           ops: operations,
-          isolation: request.isolation === 'per_op' ? 'per_op' : 'atomic',
+          isolation,
         })
         if (!outcome.applied) return { applied: false, failures: outcome.failures }
         undoRef.current.push(before)
