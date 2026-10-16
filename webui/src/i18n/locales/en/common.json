@@ -1,4 +1,39 @@
 {
+  "visualizer": {
+    "title": "Visual",
+    "actions": {
+      "label": "Visual actions"
+    },
+    "source": {
+      "view": "View source",
+      "hide": "Hide source",
+      "copy": "Copy source",
+      "copied": "Source copied",
+      "failed": "Could not copy source"
+    },
+    "status": {
+      "generating": "Generating visual…",
+      "loading": "Loading visual"
+    },
+    "render": {
+      "timeout": "This visual could not be displayed. View its source or ask Mona to adjust it.",
+      "failed": "This visual could not be displayed. Ask Mona to adjust it."
+    },
+    "export": {
+      "html": "Download HTML",
+      "svg": "Download SVG",
+      "png": "Download PNG",
+      "htmlDone": "HTML exported",
+      "svgDone": "SVG exported",
+      "pngDone": "PNG exported",
+      "pngWorking": "Exporting PNG…",
+      "svgWorking": "Exporting SVG…",
+      "failed": "Export failed. Please try again.",
+      "pngFailed": "PNG export failed. Check the visual's external resources.",
+      "svgFailed": "SVG export failed. View the source."
+    },
+    "openLink": "Open link"
+  },
   "app": {
     "brand": "mona",
     "loading": {
@@ -504,15 +539,14 @@
     "catalogError": "Could not load the partner list",
     "unavailable": "No official partners are currently available",
     "custom": "Custom partner",
-    "customDescription": "Set the partner's name, area of expertise, and working instructions.",
+    "customDescription": "Give your partner a name and personality.",
     "customAction": "New",
     "customTitle": "Custom partner",
     "customName": "Partner name",
     "customNamePlaceholder": "For example: Contract reviewer",
-    "customExpertise": "Expertise",
-    "customExpertisePlaceholder": "Briefly describe what this partner handles",
-    "customInstructions": "Instructions",
-    "customInstructionsPlaceholder": "Describe how it should analyze, answer, and what rules it must follow",
+    "customInstructions": "Personality",
+    "customInstructionsPlaceholder": "For example: Direct and concise, with clear examples.",
+    "customInstructionsHelp": "After creation, view and edit this under Personalization → Personality.",
     "customCreating": "Creating…",
     "customCreateAndSummon": "Create and summon",
     "customCreateError": "Could not create the custom partner",
@@ -560,20 +594,26 @@
     "discussion": {
       "launch": "Start topic",
       "title": "Start a topic",
-      "description": "Let room members take turns debating or freely discussing one topic.",
+      "description": "Let room members debate, quarrel, or freely discuss one topic in turns.",
       "topic": "Topic",
       "topicPlaceholder": "For example: should a new product prioritize growth or cost control?",
+      "background": "Background",
+      "backgroundPlaceholder": "For example: Zhang San thinks Li Si took credit for his work, and they start arguing.",
       "mode": "Format",
       "debate": "Debate",
       "debateHint": "Assign each Agent a position and let them respond in order.",
+      "quarrel": "Quarrel",
+      "quarrelHint": "Set the quarrel's background, then assign each Agent a person to play.",
       "discussion": "Open discussion",
       "discussionHint": "Members contribute and respond from their professional roles.",
       "participants": "Participants",
       "positionPlaceholder": "Assign a position to {{agent}}",
+      "rolePlaceholder": "Assign a role to {{agent}}, for example: Zhang San",
       "rounds": "Maximum rounds",
       "roundsHint": "One round gives every participant one turn, up to 99 rounds.",
       "judgeAgent": "Judge Agent (optional)",
       "noJudge": "No judge",
+      "noSummary": "No wrap-up",
       "summaryAgent": "Summarizer",
       "modelHint": "Each Agent uses the model bound in its settings.",
       "styleAria": "Debate style for {{agent}}",
@@ -598,15 +638,18 @@
       "ending": "Ending…",
       "roundProgress": "Round {{current}} / {{total}}",
       "userMessage": "Started topic: {{topic}}\n{{mode}} · {{rounds}} rounds · {{participants}}",
+      "quarrelUserMessage": "Quarrel background: {{topic}}\n{{mode}} · {{rounds}} rounds · {{participants}}",
       "status": {
         "succeeded": "Discussion complete",
         "failed": "Discussion interrupted",
         "cancelled": "Ended early"
       },
       "validation": {
+        "background": "Enter the quarrel background.",
         "topic": "Enter a topic.",
         "participants": "Select at least two participants.",
         "positions": "A debate requires a position for every participant.",
+        "roles": "Assign a role to every participant in the quarrel.",
         "summary": "Select an Agent to summarize the discussion."
       }
     },

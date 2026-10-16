@@ -12,6 +12,7 @@ import { cn } from "@/lib/utils";
 export interface SelectOption {
   value: string;
   label: string;
+  disabled?: boolean;
 }
 
 export interface SelectProps {
@@ -51,6 +52,7 @@ export const Select = React.forwardRef<HTMLButtonElement, SelectProps>(
           {options.map((option) => (
             <DropdownMenuItem
               key={option.value}
+              disabled={option.disabled}
               onClick={() => onValueChange?.(option.value)}
               className="gap-2"
             >

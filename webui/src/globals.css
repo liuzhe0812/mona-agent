@@ -312,12 +312,6 @@ span[class*="rounded"][class*="px-"] {
     background: transparent;
   }
 
-  body.notification-body,
-  body.notification-body #root {
-    background: transparent !important;
-    overflow: hidden;
-  }
-
   body.address-suggestions-body,
   body.address-suggestions-body #root {
     background: transparent !important;

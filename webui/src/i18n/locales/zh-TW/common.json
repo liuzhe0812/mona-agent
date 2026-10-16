@@ -1,4 +1,39 @@
 {
+  "visualizer": {
+    "title": "圖形",
+    "actions": {
+      "label": "圖形操作"
+    },
+    "source": {
+      "view": "檢視原始碼",
+      "hide": "收起原始碼",
+      "copy": "複製原始碼",
+      "copied": "原始碼已複製",
+      "failed": "無法複製原始碼"
+    },
+    "status": {
+      "generating": "正在產生圖形…",
+      "loading": "正在載入圖形"
+    },
+    "render": {
+      "timeout": "圖形暫時無法顯示，可檢視原始碼或讓 Mona 調整。",
+      "failed": "圖形暫時無法顯示，請讓 Mona 調整。"
+    },
+    "export": {
+      "html": "下載 HTML",
+      "svg": "下載 SVG",
+      "png": "下載 PNG",
+      "htmlDone": "HTML 已匯出",
+      "svgDone": "SVG 已匯出",
+      "pngDone": "PNG 已匯出",
+      "pngWorking": "正在匯出 PNG…",
+      "svgWorking": "正在匯出 SVG…",
+      "failed": "匯出失敗，請稍後重試。",
+      "pngFailed": "無法匯出 PNG，請檢查圖形中的外部資源。",
+      "svgFailed": "無法匯出 SVG，請檢視圖形原始碼。"
+    },
+    "openLink": "開啟連結"
+  },
   "app": {
     "brand": "mona",
     "loading": {
@@ -455,15 +490,14 @@
     "catalogError": "暫時無法取得夥伴清單",
     "unavailable": "暫無可用的官方夥伴",
     "custom": "自訂夥伴",
-    "customDescription": "設定夥伴的名稱、擅長領域和工作要求。",
+    "customDescription": "只需填寫夥伴名稱與個性。",
     "customAction": "新增",
     "customTitle": "自訂夥伴",
     "customName": "夥伴名稱",
     "customNamePlaceholder": "例如：合約審閱夥伴",
-    "customExpertise": "擅長領域",
-    "customExpertisePlaceholder": "簡要說明這個夥伴擅長處理什麼",
-    "customInstructions": "工作要求",
-    "customInstructionsPlaceholder": "說明它應如何分析、回答以及需要遵守的規則",
+    "customInstructions": "個性",
+    "customInstructionsPlaceholder": "例如：說話簡潔直接，善於用例子解釋問題。",
+    "customInstructionsHelp": "建立後可在管理頁面的「個性化 → 個性」中檢視和修改。",
     "customCreating": "正在建立…",
     "customCreateAndSummon": "建立並召喚",
     "customCreateError": "無法建立自訂夥伴",
@@ -511,20 +545,26 @@
     "discussion": {
       "launch": "發起議題",
       "title": "發起議題",
-      "description": "讓群聊成員圍繞同一議題輪流辯論或自由討論。",
+      "description": "讓群聊成員圍繞同一議題輪流辯論、吵架或自由討論。",
       "topic": "議題",
       "topicPlaceholder": "例如：新產品應該優先追求成長，還是先控制成本？",
+      "background": "背景",
+      "backgroundPlaceholder": "例如：張三覺得李四搶了他的功勞，兩人吵了起來。",
       "mode": "討論方式",
       "debate": "觀點辯論",
       "debateHint": "為每位 Agent 指定立場，按順序交鋒。",
+      "quarrel": "吵架模式",
+      "quarrelHint": "寫清吵架背景，再為每位 Agent 指定扮演角色。",
       "discussion": "自由討論",
       "discussionHint": "成員從各自專業角色出發補充和回應。",
       "participants": "參與成員",
       "positionPlaceholder": "為 {{agent}} 指定立場",
+      "rolePlaceholder": "為 {{agent}} 指定角色身分，例如：張三",
       "rounds": "最大輪次",
       "roundsHint": "一輪表示所有參與成員各發言一次，最多 99 輪。",
       "judgeAgent": "裁判 Agent（選填）",
       "noJudge": "不設定裁判",
+      "noSummary": "不收尾",
       "summaryAgent": "總結成員",
       "modelHint": "每位 Agent 使用其設定中綁定的模型。",
       "styleAria": "{{agent}} 的辯論風格",
@@ -549,15 +589,18 @@
       "ending": "正在結束…",
       "roundProgress": "第 {{current}} / {{total}} 輪",
       "userMessage": "發起議題：{{topic}}\n{{mode}} · {{rounds}} 輪 · {{participants}}",
+      "quarrelUserMessage": "吵架背景：{{topic}}\n{{mode}} · {{rounds}} 輪 · {{participants}}",
       "status": {
         "succeeded": "討論完成",
         "failed": "討論中斷",
         "cancelled": "已提前結束"
       },
       "validation": {
+        "background": "請輸入吵架背景。",
         "topic": "請輸入議題。",
         "participants": "請至少選擇兩位參與成員。",
         "positions": "觀點辯論需要為每位參與成員指定立場。",
+        "roles": "吵架模式需要為每位參與成員指定角色身分。",
         "summary": "請選擇負責總結的成員。"
       }
     },

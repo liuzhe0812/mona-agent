@@ -21,6 +21,7 @@ const buttonVariants = cva(
         interaction:
           "mona-interaction-button border disabled:opacity-100",
         ghost: "hover:bg-accent hover:text-accent-foreground active:bg-accent/70",
+        text: "border-0 bg-transparent font-normal text-foreground underline-offset-4 hover:underline active:opacity-70",
         link: "text-primary underline-offset-4 hover:underline",
       },
       size: {
